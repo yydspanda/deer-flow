@@ -1,3 +1,4 @@
+# yyds: 技能模块入口，导出技能系统的核心类型、存储和验证接口
 from __future__ import annotations
 
 from .installer import SkillAlreadyExistsError, SkillSecurityScanError

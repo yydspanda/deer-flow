@@ -1,3 +1,15 @@
+# yyds: ═══════════════════════════════════════════════════════════════════
+# yyds: 消息预处理 —— 过滤 + 信号检测（correction / reinforcement）
+# yyds: ═══════════════════════════════════════════════════════════════════
+# yyds:
+# yyds: filter_messages_for_memory(): 只保留 human + 无 tool_calls 的 ai 消息，过滤纯上传消息
+# yyds: detect_correction(): 检测最近 6 条消息中的纠正信号（中英文）
+# yyds: detect_reinforcement(): 检测最近 6 条消息中的正面强化信号（中英文）
+# yyds:
+# yyds: 信号检测结果影响 MemoryUpdater 的 prompt：
+# yyds:   correction=True → 提示 LLM 用 confidence>=0.95 记录纠正
+# yyds:   reinforcement=True → 提示 LLM 用 confidence>=0.9 记录偏好
+# yyds: ═══════════════════════════════════════════════════════════════════
 """Shared helpers for turning conversations into memory update inputs."""
 
 from __future__ import annotations

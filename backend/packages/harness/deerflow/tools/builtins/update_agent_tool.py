@@ -1,3 +1,4 @@
+# yyds: Agent更新工具，采用临时文件两阶段写入确保原子性，仅自定义Agent可用（默认Agent不可见）
 """update_agent tool — let a custom agent persist updates to its own SOUL.md / config.
 
 Bound to the lead agent only when ``runtime.context['agent_name']`` is set
@@ -33,6 +34,7 @@ from deerflow.tools.types import Runtime
 logger = logging.getLogger(__name__)
 
 
+# yyds: 将内容写入同级临时文件，后续由调用方通过Path.replace原子替换目标文件
 def _stage_temp(path: Path, text: str) -> Path:
     """Write ``text`` into a sibling temp file and return its path.
 
@@ -58,6 +60,7 @@ def _stage_temp(path: Path, text: str) -> Path:
         raise
 
 
+# yyds: 尽力清理已暂存的临时文件，忽略清理失败
 def _cleanup_temps(temps: list[Path]) -> None:
     """Best-effort removal of staged temp files."""
     for tmp in temps:
@@ -67,6 +70,7 @@ def _cleanup_temps(temps: list[Path]) -> None:
             logger.debug("Failed to clean up temp file %s", tmp, exc_info=True)
 
 
+# yyds: 持久化更新当前自定义Agent的SOUL.md和config.yaml，仅显式传入的字段会被更新，支持部分更新语义
 @tool(parse_docstring=True)
 def update_agent(
     runtime: Runtime,

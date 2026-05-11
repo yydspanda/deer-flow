@@ -1,3 +1,12 @@
+# yyds: exceptions.py — 沙箱异常体系
+#      SandboxError (基类)
+#        ├── SandboxNotFoundError   — 沙箱不存在
+#        ├── SandboxRuntimeError    — 运行时状态异常（如 thread_data 缺失）
+#        ├── SandboxCommandError    — 命令执行失败（含 exit_code）
+#        └── SandboxFileError       — 文件操作失败
+#              ├── SandboxPermissionError  — 权限拒绝
+#              └── SandboxFileNotFoundError — 文件不存在
+#      所有异常都带结构化 details 字典，方便日志分析
 """Sandbox-related exceptions with structured error information."""
 
 

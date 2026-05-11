@@ -1,3 +1,4 @@
+# yyds: 运行事件捕获器，基于LangChain回调机制将LLM调用、工具调用等事件标准化后写入RunEventStore
 """Run event capture via LangChain callbacks.
 
 RunJournal sits between LangChain's callback mechanism and the pluggable
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# yyds: 核心回调处理类，继承BaseCallbackHandler，通过缓冲+异步刷写机制持久化事件，累积token用量
 class RunJournal(BaseCallbackHandler):
     """LangChain callback handler that captures events to RunEventStore."""
 
@@ -96,6 +98,7 @@ class RunJournal(BaseCallbackHandler):
 
     # -- Lifecycle callbacks --
 
+
     @staticmethod
     def _message_text(message: BaseMessage) -> str:
         """Extract displayable text from a message's mixed content shape."""
@@ -140,6 +143,7 @@ class RunJournal(BaseCallbackHandler):
             if text:
                 self._last_ai_msg = text[:2000]
 
+    # yyds: 根链调用开始回调，仅在根节点(parent_run_id=None)时发出run.start事件
     def on_chain_start(
         self,
         serialized: dict[str, Any],
@@ -162,10 +166,12 @@ class RunJournal(BaseCallbackHandler):
                 metadata={"caller": caller, **(metadata or {})},
             )
 
+    # yyds: 链调用结束回调，发出run.end事件并同步刷写缓冲区
     def on_chain_end(self, outputs: Any, *, run_id: UUID, **kwargs: Any) -> None:
         self._put(event_type="run.end", category="outputs", content=outputs, metadata={"status": "success"})
         self._flush_sync()
 
+    # yyds: 链调用错误回调，发出run.error事件
     def on_chain_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
         self._put(
             event_type="run.error",
@@ -177,6 +183,7 @@ class RunJournal(BaseCallbackHandler):
 
     # -- LLM callbacks --
 
+    # yyds: LLM调用开始回调，记录延迟计时起点并提取首条HumanMessage作为运行输入
     def on_chat_model_start(
         self,
         serialized: dict,
@@ -223,10 +230,12 @@ class RunJournal(BaseCallbackHandler):
                 if self._first_human_msg:
                     break
 
+    # yyds: LLM纯文本模式开始回调，仅用于延迟追踪（优先使用on_chat_model_start）
     def on_llm_start(self, serialized: dict, prompts: list[str], *, run_id: UUID, parent_run_id: UUID | None = None, tags: list[str] | None = None, metadata: dict[str, Any] | None = None, **kwargs: Any) -> None:
         # Fallback: on_chat_model_start is preferred. This just tracks latency.
         self._llm_start_times[str(run_id)] = time.monotonic()
 
+    # yyds: LLM调用结束回调，发出llm.ai.response事件，累积token用量，计算延迟
     def on_llm_end(
         self,
         response: Any,
@@ -307,15 +316,18 @@ class RunJournal(BaseCallbackHandler):
         if messages:
             self._counted_message_llm_run_ids.add(str(run_id))
 
+    # yyds: LLM调用错误回调，清理延迟追踪并发出llm.error事件
     def on_llm_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
         self._llm_start_times.pop(str(run_id), None)
         self._put(event_type="llm.error", category="trace", content=str(error))
 
+    # yyds: 工具调用开始回调，缓存tool_call_id用于后续关联
     def on_tool_start(self, serialized, input_str, *, run_id, parent_run_id=None, tags=None, metadata=None, inputs=None, **kwargs):
         """Handle tool start event, cache tool call ID for later correlation"""
         tool_call_id = str(run_id)
         logger.debug("Tool start for node %s, tool_call_id=%s, tags=%s", run_id, tool_call_id, tags)
 
+    # yyds: 工具调用结束回调，处理ToolMessage和Command类型输出，发出llm.tool.result事件
     def on_tool_end(self, output, *, run_id, parent_run_id=None, **kwargs):
         """Handle tool end event, append message and clear node data"""
         try:
@@ -339,6 +351,7 @@ class RunJournal(BaseCallbackHandler):
 
     # -- Internal methods --
 
+    # yyds: 将事件写入缓冲区，达到阈值时自动刷写
     def _put(self, *, event_type: str, category: str, content: str | dict = "", metadata: dict | None = None) -> None:
         self._buffer.append(
             {
@@ -354,6 +367,7 @@ class RunJournal(BaseCallbackHandler):
         if len(self._buffer) >= self._flush_threshold:
             self._flush_sync()
 
+    # yyds: 尽力将缓冲区刷写到RunEventStore，同步方法中调度异步任务，避免并发写SQLite
     def _flush_sync(self) -> None:
         """Best-effort flush of buffer to RunEventStore.
 
@@ -379,6 +393,7 @@ class RunJournal(BaseCallbackHandler):
         self._pending_flush_tasks.add(task)
         task.add_done_callback(self._on_flush_done)
 
+    # yyds: 异步刷写批次事件到存储，失败时将事件放回缓冲区重试
     async def _flush_async(self, batch: list[dict]) -> None:
         try:
             await self._store.put_batch(batch)
@@ -392,6 +407,7 @@ class RunJournal(BaseCallbackHandler):
             # Return failed events to buffer for retry on next flush
             self._buffer = batch + self._buffer
 
+    # yyds: 刷写任务完成回调，清理pending集合并记录异常
     def _on_flush_done(self, task: asyncio.Task) -> None:
         self._pending_flush_tasks.discard(task)
         if task.cancelled():
@@ -400,6 +416,7 @@ class RunJournal(BaseCallbackHandler):
         if exc:
             logger.warning("Journal flush task failed: %s", exc)
 
+    # yyds: 从tags中识别调用者身份（lead_agent/subagent:{name}/middleware:{name}），默认为lead_agent
     def _identify_caller(self, tags: list[str] | None) -> str:
         _tags = tags or []
         for tag in _tags:
@@ -457,10 +474,12 @@ class RunJournal(BaseCallbackHandler):
 
             self._schedule_progress_flush()
 
+    # yyds: 记录首条HumanMessage内容，用于运行摘要展示，截断至2000字符
     def set_first_human_message(self, content: str) -> None:
         """Record the first human message for convenience fields."""
         self._first_human_msg = content[:2000] if content else None
 
+    # yyds: 记录中间件状态变更事件（标题生成、摘要、人机审批等）
     def record_middleware(self, tag: str, *, name: str, hook: str, action: str, changes: dict) -> None:
         """Record a middleware state-change event.
 
@@ -482,6 +501,7 @@ class RunJournal(BaseCallbackHandler):
             content={"name": name, "hook": hook, "action": action, "changes": changes},
         )
 
+    # yyds: 强制异步刷写剩余缓冲区，在worker的finally块中调用
     async def flush(self) -> None:
         """Force flush remaining buffer. Called in worker's finally block."""
         if self._pending_flush_tasks:
@@ -555,6 +575,7 @@ class RunJournal(BaseCallbackHandler):
             self._pending_progress_task = None
             self._schedule_delayed_progress_flush(self._progress_flush_interval)
 
+    # yyds: 返回累积的token用量和消息数据，用于运行完成时持久化
     def get_completion_data(self) -> dict:
         """Return accumulated token and message data for run completion."""
         return {

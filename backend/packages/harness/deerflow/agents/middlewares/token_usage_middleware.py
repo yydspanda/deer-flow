@@ -1,4 +1,26 @@
-"""Middleware for logging token usage and annotating step attribution."""
+"""yyds: Token 用量追踪中间件 — 记录每次 LLM 调用的 token 消耗，并标注步骤归因信息。
+
+【做什么】在模型响应后，提取 token 用量元数据（input_tokens/output_tokens/total_tokens）记录到日志，
+   同时为该 AI 消息附加详细的步骤归因信息（token_usage_attribution），描述模型这次调用做了什么。
+【为什么存在】token 消耗是 LLM 应用的核心成本指标，需要精确追踪。步骤归因信息告诉前端每一步
+   是"最终答案"、"工具批量调用"、"子代理分发"还是"待办更新"，帮助用户理解 Agent 的工作过程。
+【在链中的位置】after_model 阶段执行，模型返回响应后运行。
+【关键设计】
+   - 归因信息（attribution）是一个结构化字典，包含 version、kind、tool_call_ids、actions 等字段。
+   - 步骤类型（kind）推断逻辑：
+     - 有工具调用 → tool_batch（批量工具调用）
+     - 唯一工具是子代理 → subagent_dispatch（子代理分发）
+     - 唯一操作是待办更新 → todo_update（待办更新）
+     - 无工具调用但有文本内容 → final_answer（最终答案）
+     - 无内容 → thinking（纯思考）
+   - 特别处理 write_todos 工具：对比前后待办列表差异，精确识别"新建/开始/完成/更新/删除"操作。
+   - 特别处理 task/web_search/image_search 等工具，提取描述信息用于前端展示。
+   - 归因信息存储在 AIMessage.additional_kwargs["token_usage_attribution"] 中，前端可直接读取。
+
+---
+
+Middleware for logging token usage and annotating step attribution.
+"""
 
 from __future__ import annotations
 

@@ -1,3 +1,4 @@
+# yyds: vLLM 模型提供者，保留跨轮次的推理字段，支持 Qwen 思维模式参数标准化
 """Custom vLLM provider built on top of LangChain ChatOpenAI.
 
 vLLM 0.19.0 exposes reasoning models through an OpenAI-compatible API, but
@@ -36,6 +37,7 @@ from langchain_openai import ChatOpenAI
 from langchain_openai.chat_models.base import _create_usage_metadata
 
 
+# yyds: 将 DeerFlow 的 thinking 参数标准化为 vLLM/Qwen 的 enable_thinking
 def _normalize_vllm_chat_template_kwargs(payload: dict[str, Any]) -> None:
     """Map DeerFlow's legacy ``thinking`` toggle to vLLM/Qwen's ``enable_thinking``.
 
@@ -62,6 +64,7 @@ def _normalize_vllm_chat_template_kwargs(payload: dict[str, Any]) -> None:
     extra_body["chat_template_kwargs"] = normalized_chat_template_kwargs
 
 
+# yyds: 从 vLLM 推理字段中提取可读文本，支持字符串、列表和字典格式
 def _reasoning_to_text(reasoning: Any) -> str:
     """Best-effort extraction of readable reasoning text from vLLM payloads."""
     if isinstance(reasoning, str):
@@ -91,6 +94,7 @@ def _reasoning_to_text(reasoning: Any) -> str:
         return str(reasoning)
 
 
+# yyds: 将流式 delta 转换为 LangChain 消息块，同时保留 reasoning 和 reasoning_content
 def _convert_delta_to_message_chunk_with_reasoning(_dict: Mapping[str, Any], default_class: type[BaseMessageChunk]) -> BaseMessageChunk:
     """Convert a streaming delta to a LangChain message chunk while preserving reasoning."""
     id_ = _dict.get("id")
@@ -147,6 +151,7 @@ def _convert_delta_to_message_chunk_with_reasoning(_dict: Mapping[str, Any], def
     return default_class(content=content, id=id_)  # type: ignore[call-arg]
 
 
+# yyds: 将 AIMessage 中的推理字段重新注入到请求负载的 assistant 消息中
 def _restore_reasoning_field(payload_msg: dict[str, Any], orig_msg: AIMessage) -> None:
     """Re-inject vLLM reasoning onto outgoing assistant messages."""
     reasoning = orig_msg.additional_kwargs.get("reasoning")
@@ -156,6 +161,7 @@ def _restore_reasoning_field(payload_msg: dict[str, Any], orig_msg: AIMessage) -
         payload_msg["reasoning"] = reasoning
 
 
+# yyds: vLLM 聊天模型类，保留跨轮次的推理字段并标准化 Qwen 思维参数
 class VllmChatModel(ChatOpenAI):
     """ChatOpenAI variant that preserves vLLM reasoning fields across turns."""
 

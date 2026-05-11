@@ -1,3 +1,4 @@
+# yyds: 修补版 DeepSeek 模型，确保多轮对话中 reasoning_content 正确传递给 API
 """Patched ChatDeepSeek that preserves reasoning_content in multi-turn conversations.
 
 This module provides a patched version of ChatDeepSeek that properly handles
@@ -14,6 +15,7 @@ from langchain_core.messages import AIMessage
 from langchain_deepseek import ChatDeepSeek
 
 
+# yyds: 修补版 DeepSeek 模型类，确保 reasoning_content 在多轮 API 请求中正确传递
 class PatchedChatDeepSeek(ChatDeepSeek):
     """ChatDeepSeek with proper reasoning_content preservation.
 
@@ -31,6 +33,7 @@ class PatchedChatDeepSeek(ChatDeepSeek):
     def lc_secrets(self) -> dict[str, str]:
         return {"api_key": "DEEPSEEK_API_KEY", "openai_api_key": "DEEPSEEK_API_KEY"}
 
+    # yyds: 重写请求负载构建，将 AIMessage 中的 reasoning_content 注入到 assistant 消息中
     def _get_request_payload(
         self,
         input_: LanguageModelInput,

@@ -1,3 +1,7 @@
+# yyds: file_operation_lock.py — 文件操作并发锁
+#      解决 str_replace_tool 的并发安全问题：多个工具同时写同一个文件会冲突
+#      按 (sandbox_id, path) 粒度加锁 — 同一个文件的写操作串行化
+#      用 WeakValueDictionary 避免长期运行时的内存泄漏（锁用完自动回收）
 import threading
 import weakref
 

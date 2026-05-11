@@ -1,3 +1,9 @@
+# yyds: clarification_tool.py — 向用户提问确认工具
+#      Agent 遇到不确定的情况时调用此工具
+#      注意：这个工具本身只返回占位字符串
+#      真正的拦截逻辑在 ClarificationMiddleware（after_model 钩子）
+#      中间件检测到 ask_clarification 的 tool_call → 中断执行 → 把问题展示给用户
+#      return_direct=True 表示 LLM 返回这个 tool_call 后不继续执行
 from typing import Literal
 
 from langchain.tools import tool

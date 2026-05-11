@@ -1,3 +1,4 @@
+# yyds: 技能安全扫描器，使用LLM对技能内容进行安全审查，检测提示注入、权限提升等风险
 """Security screening for agent-managed skill writes."""
 
 from __future__ import annotations
@@ -15,12 +16,14 @@ from deerflow.skills.types import SKILL_MD_FILE
 logger = logging.getLogger(__name__)
 
 
+# yyds: 安全扫描结果数据类，包含决策（allow/warn/block）和原因
 @dataclass(slots=True)
 class ScanResult:
     decision: str
     reason: str
 
 
+# yyds: 从LLM响应文本中提取JSON对象，兼容纯JSON和嵌入JSON两种格式
 def _extract_json_object(raw: str) -> dict | None:
     raw = raw.strip()
 
@@ -67,6 +70,7 @@ def _extract_json_object(raw: str) -> dict | None:
     return None
 
 
+# yyds: 异步扫描技能内容，调用LLM判断是否安全，扫描失败时默认阻止写入
 async def scan_skill_content(content: str, *, executable: bool = False, location: str = SKILL_MD_FILE, app_config: AppConfig | None = None) -> ScanResult:
     """Screen skill content before it is written to disk."""
     rubric = (

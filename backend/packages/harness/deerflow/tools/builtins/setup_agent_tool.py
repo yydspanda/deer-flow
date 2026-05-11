@@ -1,3 +1,4 @@
+# yyds: Agent创建工具，在用户隔离目录下写入SOUL.md和config.yaml，失败时自动清理已创建的目录
 import logging
 
 import yaml
@@ -13,6 +14,7 @@ from deerflow.tools.types import Runtime
 logger = logging.getLogger(__name__)
 
 
+# yyds: 创建自定义DeerFlow Agent，写入SOUL.md定义人格行为，config.yaml存储描述和技能配置
 @tool(parse_docstring=True)
 def setup_agent(
     soul: str,

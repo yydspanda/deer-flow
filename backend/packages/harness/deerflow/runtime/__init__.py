@@ -1,3 +1,4 @@
+# yyds: 运行时核心模块入口，统一导出 runs/stream_bridge/checkpointer/store/serialization 的公共API
 """LangGraph-compatible runtime — runs, streaming, and lifecycle management.
 
 Re-exports the public API of :mod:`~deerflow.runtime.runs` and

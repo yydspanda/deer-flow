@@ -1,3 +1,4 @@
+# yyds: 异步SQLAlchemy引擎生命周期管理，支持SQLite/PostgreSQL/内存三种后端
 """Async SQLAlchemy engine lifecycle management.
 
 Initializes at Gateway startup, provides session factory for

@@ -1,3 +1,4 @@
+# yyds: 技能安装器，处理ZIP技能包的安全解压、内容扫描和原子化安装
 """Shared skill archive installation logic.
 
 Pure business logic — no FastAPI/HTTP dependencies.
@@ -22,14 +23,17 @@ _PROMPT_INPUT_DIRS = {"references", "templates"}
 _PROMPT_INPUT_SUFFIXES = frozenset({".json", ".markdown", ".md", ".rst", ".txt", ".yaml", ".yml"})
 
 
+# yyds: 技能已存在的错误，安装同名技能时抛出
 class SkillAlreadyExistsError(ValueError):
     """Raised when a skill with the same name is already installed."""
 
 
+# yyds: 技能安全扫描失败的错误，内容被阻止时抛出
 class SkillSecurityScanError(ValueError):
     """Raised when a skill archive fails security scanning."""
 
 
+# yyds: 检查ZIP成员路径是否包含绝对路径或目录遍历（..）攻击
 def is_unsafe_zip_member(info: zipfile.ZipInfo) -> bool:
     """Return True if the zip member path is absolute or attempts directory traversal."""
     name = info.filename
@@ -48,17 +52,20 @@ def is_unsafe_zip_member(info: zipfile.ZipInfo) -> bool:
     return False
 
 
+# yyds: 检测ZIP条目是否为符号链接
 def is_symlink_member(info: zipfile.ZipInfo) -> bool:
     """Detect symlinks based on the external attributes stored in the ZipInfo."""
     mode = info.external_attr >> 16
     return stat.S_ISLNK(mode)
 
 
+# yyds: 判断是否应忽略macOS元数据目录和隐藏文件
 def should_ignore_archive_entry(path: Path) -> bool:
     """Return True for macOS metadata dirs and dotfiles."""
     return path.name.startswith(".") or path.name == "__MACOSX"
 
 
+# yyds: 从解压后的归档内容中定位技能根目录，过滤macOS元数据和隐藏文件
 def resolve_skill_dir_from_archive(temp_path: Path) -> Path:
     """Locate the skill root directory from extracted archive contents.
 
@@ -78,6 +85,7 @@ def resolve_skill_dir_from_archive(temp_path: Path) -> Path:
     return temp_path
 
 
+# yyds: 安全解压技能ZIP包，阻止路径遍历、符号链接和ZIP炸弹攻击
 def safe_extract_skill_archive(
     zip_ref: zipfile.ZipFile,
     dest_path: Path,
@@ -122,16 +130,19 @@ def safe_extract_skill_archive(
                 dst.write(chunk)
 
 
+# yyds: 判断文件是否位于scripts目录下（脚本支持文件）
 def _is_script_support_file(rel_path: Path) -> bool:
     return bool(rel_path.parts) and rel_path.parts[0] == "scripts"
 
 
+# yyds: 判断文件是否需要安全扫描（scripts目录或references/templates下的文本文件）
 def _should_scan_support_file(rel_path: Path) -> bool:
     if _is_script_support_file(rel_path):
         return True
     return bool(rel_path.parts) and rel_path.parts[0] in _PROMPT_INPUT_DIRS and rel_path.suffix.lower() in _PROMPT_INPUT_SUFFIXES
 
 
+# yyds: 将暂存目录中的技能文件原子化移动到目标目录，失败时自动回滚
 def _move_staged_skill_into_reserved_target(staging_target: Path, target: Path) -> None:
     installed = False
     reserved = False
@@ -149,6 +160,7 @@ def _move_staged_skill_into_reserved_target(staging_target: Path, target: Path) 
             shutil.rmtree(target)
 
 
+# yyds: 扫描单个技能文件的内容，不通过则抛出SkillSecurityScanError
 async def _scan_skill_file_or_raise(skill_dir: Path, path: Path, skill_name: str, *, executable: bool) -> None:
     rel_path = path.relative_to(skill_dir).as_posix()
     location = f"{skill_name}/{rel_path}"
@@ -174,6 +186,7 @@ async def _scan_skill_file_or_raise(skill_dir: Path, path: Path, skill_name: str
         raise SkillSecurityScanError(f"Security scan failed for {location}: invalid scanner decision {decision!r}")
 
 
+# yyds: 遍历技能目录中的所有文本和脚本文件，逐一执行安全扫描
 async def _scan_skill_archive_contents_or_raise(skill_dir: Path, skill_name: str) -> None:
     """Run the skill security scanner against all installable text and script files."""
     skill_md = skill_dir / "SKILL.md"
@@ -194,6 +207,7 @@ async def _scan_skill_archive_contents_or_raise(skill_dir: Path, skill_name: str
         await _scan_skill_file_or_raise(skill_dir, path, skill_name, executable=_is_script_support_file(rel_path))
 
 
+# yyds: 在同步上下文中运行异步安装协程，处理事件循环兼容性
 def _run_async_install(coro):
     try:
         loop = asyncio.get_running_loop()

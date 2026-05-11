@@ -1,3 +1,12 @@
+# yyds: sandbox_provider.py — 沙箱提供者（工厂模式 + 单例）
+#      acquire(thread_id) → 创建/获取沙箱，返回 sandbox_id
+#      get(sandbox_id)    → 按 ID 获取沙箱实例
+#      release(sandbox_id) → 释放沙箱资源
+#
+#      哪个 Provider 被使用由 config.yaml 的 sandbox.use 决定：
+#        - "deerflow.sandbox.local:LocalSandboxProvider" → 本地沙箱
+#        - "deerflow.community.aio_sandbox:AioSandboxProvider" → Docker 沙箱
+#      通过 resolve_class() 动态加载，实现可插拔
 import asyncio
 from abc import ABC, abstractmethod
 

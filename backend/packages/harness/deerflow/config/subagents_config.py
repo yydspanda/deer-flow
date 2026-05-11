@@ -1,3 +1,6 @@
+# yyds: 子 Agent 系统配置，支持内置子 Agent 的逐项覆盖（超时/轮次/模型/技能白名单）
+# yyds: 以及用户自定义子 Agent 类型（CustomSubagentConfig：描述/系统提示词/工具白名单/模型）
+# yyds: 设计采用分层覆盖策略：per-agent override → global default → builtin default
 """Configuration for the subagent system loaded from config.yaml."""
 
 import logging

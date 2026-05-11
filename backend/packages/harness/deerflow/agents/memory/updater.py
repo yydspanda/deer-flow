@@ -1,3 +1,18 @@
+# yyds: ═══════════════════════════════════════════════════════════════════
+# yyds: Memory 更新器 —— 用 LLM 从对话中提取用户画像并持久化
+# yyds: ═══════════════════════════════════════════════════════════════════
+# yyds:
+# yyds: MemoryUpdater 核心流程：
+# yyds:   1. _prepare_update_prompt: 加载当前 memory + 格式化对话 → 构造 prompt
+# yyds:   2. model.invoke(prompt): LLM 返回 JSON 更新指令
+# yyds:   3. _finalize_update: 解析 JSON → _apply_updates 合并 → storage.save 持久化
+# yyds:
+# yyds: 关键设计：
+# yyds:   - 用 sync model.invoke() 而非 async，避免跨 event loop 的 httpx 连接复用 bug
+# yyds:   - 在 event loop 内时自动 offload 到 _SYNC_MEMORY_UPDATER_EXECUTOR 线程池
+# yyds:   - _apply_updates: 更新 user(3段) + history(3段) + facts(增删去重) + max_facts 上限
+# yyds:   - _strip_upload_mentions_from_memory: 清除上传文件相关的临时记忆
+# yyds: ═══════════════════════════════════════════════════════════════════
 """Memory updater for reading, writing, and updating memory data."""
 
 import asyncio
@@ -26,6 +41,8 @@ from deerflow.models import create_chat_model
 logger = logging.getLogger(__name__)
 
 
+# yyds: 同步线程池 —— 用于在 async 上下文中 offload sync model.invoke() 调用
+# yyds: 用线程池而非 asyncio.run()，避免创建新 event loop 导致跨 loop httpx 连接复用问题
 # Thread pool for offloading sync memory updates when called from an async
 # context.  Unlike the previous asyncio.run() approach, this runs *sync*
 # model.invoke() calls — no event loop is created, so the langchain async
@@ -48,16 +65,17 @@ def _save_memory_to_file(memory_data: dict[str, Any], agent_name: str | None = N
     return get_memory_storage().save(memory_data, agent_name, user_id=user_id)
 
 
+# yyds: 获取当前 memory 数据（通过 storage provider，支持缓存）
 def get_memory_data(agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
-    """Get the current memory data via storage provider."""
     return get_memory_storage().load(agent_name, user_id=user_id)
 
 
+# yyds: 强制重新加载 memory（绕过缓存，从文件重新读取）
 def reload_memory_data(agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
-    """Reload memory data via storage provider."""
     return get_memory_storage().reload(agent_name, user_id=user_id)
 
 
+# yyds: 导入外部 memory 数据（用于 memory 迁移或 API 导入）
 def import_memory_data(memory_data: dict[str, Any], agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
     """Persist imported memory data via storage provider.
 
@@ -78,21 +96,22 @@ def import_memory_data(memory_data: dict[str, Any], agent_name: str | None = Non
     return storage.load(agent_name, user_id=user_id)
 
 
+# yyds: 清空所有 memory 数据（重置为空结构）
 def clear_memory_data(agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
-    """Clear all stored memory data and persist an empty structure."""
     cleared_memory = create_empty_memory()
     if not _save_memory_to_file(cleared_memory, agent_name, user_id=user_id):
         raise OSError("Failed to save cleared memory data")
     return cleared_memory
 
 
+# yyds: 验证 confidence 值必须在 [0, 1] 且有限（排除 NaN/inf）
 def _validate_confidence(confidence: float) -> float:
-    """Validate persisted fact confidence so stored JSON stays standards-compliant."""
     if not math.isfinite(confidence) or confidence < 0 or confidence > 1:
         raise ValueError("confidence")
     return confidence
 
 
+# yyds: 手动创建一条 fact 并持久化（API 用，非 LLM 提取）
 def create_memory_fact(
     content: str,
     category: str = "context",
@@ -130,8 +149,8 @@ def create_memory_fact(
     return updated_memory
 
 
+# yyds: 删除指定 fact（按 fact_id）
 def delete_memory_fact(fact_id: str, agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
-    """Delete a fact by its id and persist the updated memory data."""
     memory_data = get_memory_data(agent_name, user_id=user_id)
     facts = memory_data.get("facts", [])
     updated_facts = [fact for fact in facts if fact.get("id") != fact_id]
@@ -147,6 +166,7 @@ def delete_memory_fact(fact_id: str, agent_name: str | None = None, *, user_id: 
     return updated_memory
 
 
+# yyds: 更新已有 fact 的 content/category/confidence
 def update_memory_fact(
     fact_id: str,
     content: str | None = None,
@@ -190,6 +210,7 @@ def update_memory_fact(
     return updated_memory
 
 
+# yyds: 从 LLM 响应中提取纯文本（处理 str / list[dict] / list[str] 三种格式）
 def _extract_text(content: Any) -> str:
     """Extract plain text from LLM response content (str or list of content blocks).
 
@@ -331,6 +352,8 @@ def _parse_memory_update_response(response_content: Any) -> dict[str, Any]:
     raise json.JSONDecodeError("No valid memory update JSON object found", response_text, 0)
 
 
+# yyds: 匹配文件上传相关句子的正则 —— 用于从 memory 中清除临时上传事件
+# yyds: 上传文件是 session 级别的，记录到 memory 会导致下次对话找不到文件
 # Matches sentences that describe a file-upload *event* rather than general
 # file-related work.  Deliberately narrow to avoid removing legitimate facts
 # such as "User works with CSV files" or "prefers PDF export".
@@ -345,12 +368,8 @@ _UPLOAD_SENTENCE_RE = re.compile(
 )
 
 
+# yyds: 从 memory 的所有 summary 和 facts 中清除上传文件相关的句子
 def _strip_upload_mentions_from_memory(memory_data: dict[str, Any]) -> dict[str, Any]:
-    """Remove sentences about file uploads from all memory summaries and facts.
-
-    Uploaded files are session-scoped; persisting upload events in long-term
-    memory causes the agent to search for non-existent files in future sessions.
-    """
     # Scrub summaries in user/history sections
     for section in ("user", "history"):
         section_data = memory_data.get(section, {})
@@ -368,6 +387,7 @@ def _strip_upload_mentions_from_memory(memory_data: dict[str, Any]) -> dict[str,
     return memory_data
 
 
+# yyds: fact 去重键 —— content 转 casefold 后比较（忽略大小写）
 def _fact_content_key(content: Any) -> str | None:
     if not isinstance(content, str):
         return None
@@ -377,9 +397,9 @@ def _fact_content_key(content: Any) -> str | None:
     return stripped.casefold()
 
 
+# yyds: 核心类 —— 用 LLM 分析对话并更新 memory
+# yyds: 三步走：准备 prompt → LLM 调用 → 解析并持久化
 class MemoryUpdater:
-    """Updates memory using LLM based on conversation context."""
-
     def __init__(self, model_name: str | None = None):
         """Initialize the memory updater.
 
@@ -394,6 +414,7 @@ class MemoryUpdater:
         model_name = self._model_name or config.model_name
         return create_chat_model(name=model_name, thinking_enabled=False)
 
+    # yyds: 构建修正/强化提示词 —— 如果用户纠正了 agent，提示 LLM 用更高置信度记录
     def _build_correction_hint(
         self,
         correction_detected: bool,
@@ -419,6 +440,7 @@ class MemoryUpdater:
 
         return correction_hint
 
+    # yyds: 准备更新 prompt：加载当前 memory + 格式化对话 + 修正提示 → 返回 (current_memory, prompt)
     def _prepare_update_prompt(
         self,
         messages: list[Any],
@@ -448,6 +470,7 @@ class MemoryUpdater:
         )
         return current_memory, prompt
 
+    # yyds: 解析 LLM 响应 JSON → 深拷贝 current_memory → _apply_updates 合并 → 清除上传提及 → 保存
     def _finalize_update(
         self,
         current_memory: dict[str, Any],
@@ -464,6 +487,7 @@ class MemoryUpdater:
         updated_memory = _strip_upload_mentions_from_memory(updated_memory)
         return get_memory_storage().save(updated_memory, agent_name, user_id=user_id)
 
+    # yyds: 异步更新入口 —— asyncio.to_thread 调用 sync 路径，避免跨 loop 问题
     async def aupdate_memory(
         self,
         messages: list[Any],
@@ -491,6 +515,7 @@ class MemoryUpdater:
             user_id=user_id,
         )
 
+    # yyds: 纯同步更新 —— model.invoke() 走 sync HTTP，不触碰 async httpx 连接池
     def _do_update_memory_sync(
         self,
         messages: list[Any],
@@ -536,6 +561,7 @@ class MemoryUpdater:
             logger.exception("Memory update failed: %s", e)
             return False
 
+    # yyds: 同步更新入口 —— 如果在 event loop 内则 offload 到线程池，否则直接调用
     def update_memory(
         self,
         messages: list[Any],
@@ -597,6 +623,9 @@ class MemoryUpdater:
             user_id=user_id,
         )
 
+    # yyds: 合并 LLM 返回的更新到 current_memory
+    # yyds: 更新 user(3段) + history(3段) + 删除旧 facts + 添加新 facts（去重 + confidence 阈值过滤）
+    # yyds: max_facts 限制：超过则按 confidence 排序只保留 top N
     def _apply_updates(
         self,
         current_memory: dict[str, Any],
@@ -684,6 +713,7 @@ class MemoryUpdater:
         return current_memory
 
 
+# yyds: 便捷函数 —— 创建 MemoryUpdater 并调用 update_memory
 def update_memory_from_conversation(
     messages: list[Any],
     thread_id: str | None = None,

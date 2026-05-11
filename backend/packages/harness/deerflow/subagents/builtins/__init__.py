@@ -1,3 +1,5 @@
+# yyds: 内置 sub-agent 注册表 —— 两个内置 agent：general-purpose（全能型）和 bash（命令执行型）
+# yyds: BUILTIN_SUBAGENTS 是 dict，key=sub-agent 名称，value=SubagentConfig
 """Built-in subagent configurations."""
 
 from .bash_agent import BASH_AGENT_CONFIG

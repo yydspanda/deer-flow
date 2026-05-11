@@ -1,4 +1,31 @@
-"""Tool error handling middleware and shared runtime middleware builders."""
+"""Tool error handling middleware and shared runtime middleware builders.
+
+yyds: 这个文件做两件事：
+
+1. ToolErrorHandlingMiddleware — 工具错误降级中间件
+   Agent 调用工具时，如果工具抛异常（网络错误、API 限流等），
+   这个中间件把异常"降级"为 ToolMessage(status="error")，
+   而不是让整个 Agent 崩溃。
+
+   这就是你之前遇到的 summarization bug 的"对偶"——
+   summarization 错误地截断了 ToolMessage，而这个中间件的职责是
+   在工具出错时生成 ToolMessage。
+
+   原理：它包裹了每个工具调用的 handler，用 try/except 捕获异常，
+   把异常信息变成一条"错误 ToolMessage"，LLM 看到后可以换一个工具重试。
+
+2. build_lead_runtime_middlewares() / build_subagent_runtime_middlewares()
+   基础中间件链的构建函数，被 agent.py 的 _build_middlewares() 调用。
+   组装顺序：
+     ① ThreadDataMiddleware  → 设置 thread_id、工作目录
+     ② UploadsMiddleware     → 处理上传文件（仅 lead agent）
+     ③ SandboxMiddleware     → 沙箱生命周期管理
+     ④ DanglingToolCallMiddleware → 修补缺失的 ToolMessage
+     ⑤ LLMErrorHandlingMiddleware → LLM 调用错误处理
+     ⑥ GuardrailMiddleware   → 安全护栏（如果配置了）
+     ⑦ SandboxAuditMiddleware → 沙箱审计日志
+     ⑧ ToolErrorHandlingMiddleware → 工具错误降级
+"""
 
 import logging
 from collections.abc import Awaitable, Callable
@@ -19,9 +46,24 @@ _MISSING_TOOL_CALL_ID = "missing_tool_call_id"
 
 
 class ToolErrorHandlingMiddleware(AgentMiddleware[AgentState]):
-    """Convert tool exceptions into error ToolMessages so the run can continue."""
+    """Convert tool exceptions into error ToolMessages so the run can continue.
+
+    yyds: 核心设计——"一个工具挂了，不应该让整个 Agent 崩溃"。
+
+    工作流程：
+      LLM 发出 tool_call → 中间件链层层包裹 → 最终到达实际工具 handler
+      如果 handler 抛异常 → 这个中间件捕获 → 生成错误 ToolMessage
+      LLM 看到错误 ToolMessage → 可以选择换一个工具或告知用户
+
+    两种异常不捕获：
+      GraphBubbleUp → LangGraph 的控制流信号（中断/暂停/恢复），必须透传
+    """
 
     def _build_error_message(self, request: ToolCallRequest, exc: Exception) -> ToolMessage:
+        """yyds: 把工具异常转换为错误 ToolMessage。
+        错误信息截断到 500 字符（避免超长错误吃掉上下文）。
+        status="error" 告诉 LLM 这个工具调用失败了，可以用别的方式继续。
+        """
         tool_name = str(request.tool_call.get("name") or "unknown_tool")
         tool_call_id = str(request.tool_call.get("id") or _MISSING_TOOL_CALL_ID)
         detail = str(exc).strip() or exc.__class__.__name__
@@ -74,7 +116,20 @@ def _build_runtime_middlewares(
     include_dangling_tool_call_patch: bool,
     lazy_init: bool = True,
 ) -> list[AgentMiddleware]:
-    """Build shared base middlewares for agent execution."""
+    """Build shared base middlewares for agent execution.
+
+    yyds: 基础中间件链构建器。lead agent 和 subagent 共用大部分中间件，
+          只有少数不同（比如 subagent 不需要 UploadsMiddleware）。
+          组装顺序在 agent.py 的注释里已经画过了，这里补充每个的作用：
+            ThreadDataMiddleware  → 设置 thread_id + 工作目录路径
+            UploadsMiddleware     → 处理用户上传文件（insert 到第 2 位）
+            SandboxMiddleware     → 沙箱容器生命周期（获取/释放）
+            DanglingToolCallMiddleware → 修复 LLM history 里缺失的 ToolMessage
+            LLMErrorHandlingMiddleware → LLM API 调用失败时的处理
+            GuardrailMiddleware   → 安全护栏（可选，配置了才加）
+            SandboxAuditMiddleware → 记录沙箱操作审计日志
+            ToolErrorHandlingMiddleware → 工具执行异常降级
+    """
     from deerflow.agents.middlewares.llm_error_handling_middleware import LLMErrorHandlingMiddleware
     from deerflow.agents.middlewares.thread_data_middleware import ThreadDataMiddleware
     from deerflow.sandbox.middleware import SandboxMiddleware
@@ -97,6 +152,10 @@ def _build_runtime_middlewares(
     middlewares.append(LLMErrorHandlingMiddleware(app_config=app_config))
 
     # Guardrail middleware (if configured)
+    # yyds: 安全护栏中间件——可以在 LLM 调用前后执行安全检查。
+    #       比如：输入过滤（检测恶意 prompt）、输出过滤（检测敏感信息泄露）。
+    #       这和你的安全预警系统设计直接相关！
+    #       fail_closed=True 时，检查失败会阻止响应返回（安全优先）。
     guardrails_config = app_config.guardrails
     if guardrails_config.enabled and guardrails_config.provider:
         import inspect
@@ -127,7 +186,12 @@ def _build_runtime_middlewares(
 
 
 def build_lead_runtime_middlewares(*, app_config: AppConfig, lazy_init: bool = True) -> list[AgentMiddleware]:
-    """Middlewares shared by lead agent runtime before lead-only middlewares."""
+    """Middlewares shared by lead agent runtime before lead-only middlewares.
+
+    yyds: Lead Agent 的基础中间件链。被 agent.py 的 _build_middlewares() 第一步调用。
+          include_uploads=True → 有上传文件处理
+          include_dangling_tool_call_patch=True → 有 ToolMessage 修补
+    """
     return _build_runtime_middlewares(
         app_config=app_config,
         include_uploads=True,
@@ -142,7 +206,13 @@ def build_subagent_runtime_middlewares(
     model_name: str | None = None,
     lazy_init: bool = True,
 ) -> list[AgentMiddleware]:
-    """Middlewares shared by subagent runtime before subagent-only middlewares."""
+    """Middlewares shared by subagent runtime before subagent-only middlewares.
+
+    yyds: SubAgent（子 Agent）的基础中间件链。和 Lead Agent 的区别：
+          - include_uploads=False → 子 Agent 不处理用户上传
+          - 额外加了 ViewImageMiddleware（如果模型支持视觉）
+          子 Agent 是 Lead Agent 用 task() 工具派出去的，架构更轻量。
+    """
     if app_config is None:
         from deerflow.config import get_app_config
 

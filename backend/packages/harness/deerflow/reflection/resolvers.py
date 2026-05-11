@@ -1,3 +1,17 @@
+# yyds: reflection/resolvers.py — 字符串到代码的动态加载器
+#      核心能力：把 "module.path:variable_name" 格式的字符串解析为 Python 对象
+#
+#      例：resolve_variable("deerflow.sandbox.tools:bash_tool") → bash_tool 函数
+#          resolve_class("langchain_openai:ChatOpenAI") → ChatOpenAI 类
+#
+#      为什么需要这个？
+#      config.yaml 里所有工具、模型、MCP server 都用字符串配置
+#      运行时需要动态加载，不能硬编码 import
+#
+#      格式说明：
+#      - "module.path:variable" → 冒号分隔，左边是模块路径，右边是变量名
+#      - 支持类型校验（expected_type 参数）
+#      - 导入失败时给出友好的安装提示（uv add xxx）
 from importlib import import_module
 
 MODULE_TO_PACKAGE_HINTS = {

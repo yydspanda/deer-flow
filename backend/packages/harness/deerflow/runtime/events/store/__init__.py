@@ -1,7 +1,9 @@
+# yyds: 事件存储工厂，根据run_events.backend配置创建memory/db/jsonl后端实例
 from deerflow.runtime.events.store.base import RunEventStore
 from deerflow.runtime.events.store.memory import MemoryRunEventStore
 
 
+# yyds: 根据配置创建RunEventStore实例，支持memory/db/jsonl三种后端
 def make_run_event_store(config=None) -> RunEventStore:
     """Create a RunEventStore based on run_events.backend configuration."""
     if config is None or config.backend == "memory":

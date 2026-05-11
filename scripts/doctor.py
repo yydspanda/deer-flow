@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 """DeerFlow Health Check (make doctor).
 
+yyds: 项目健康检查工具，被 `make doctor` 调用。
+      比 check.sh/check.py 更深入——不光检查工具是否安装，
+      还检查配置文件是否存在、API key 是否设置、模型包是否安装、沙箱是否配置等。
+
+      检查 5 大类：
+        1. 系统依赖：Python(≥3.12) / Node.js(≥22) / pnpm / uv / nginx
+        2. 配置文件：.env / frontend/.env / config.yaml / 版本号 / 是否可加载
+        3. LLM 提供商：API key 是否设置 / provider 包是否安装 / auth 是否就绪
+        4. Web 能力：web_search / web_fetch 工具是否配置
+        5. 沙箱：sandbox.use 是否配置、容器运行时是否可用
+
+      退出码：0 = 全部通过（warn 可以），1 = 有 fail
+
 Checks system requirements, configuration, LLM provider, and optional
 components, then prints an actionable report.
 
@@ -21,6 +34,7 @@ from typing import Literal
 
 # ---------------------------------------------------------------------------
 # Helpers
+# yyds: 颜色输出、版本号解析、YAML 加载等工具函数
 # ---------------------------------------------------------------------------
 
 Status = Literal["ok", "warn", "fail", "skip"]
@@ -101,6 +115,8 @@ def _split_use_path(use: str) -> tuple[str, str] | None:
 
 # ---------------------------------------------------------------------------
 # Check result container
+# yyds: 每个检查项的结果对象。status 有 4 种：ok / warn / fail / skip
+#       fail 会阻止启动，warn 只是提示，skip 表示跳过检查。
 # ---------------------------------------------------------------------------
 
 class CheckResult:
@@ -127,6 +143,7 @@ class CheckResult:
 
 # ---------------------------------------------------------------------------
 # Individual checks
+# yyds: 每个 check_xxx 函数检查一个具体项目，返回 CheckResult
 # ---------------------------------------------------------------------------
 
 def check_python() -> CheckResult:
@@ -287,7 +304,11 @@ def check_config_loadable(config_path: Path) -> CheckResult:
 
 
 def check_llm_api_key(config_path: Path) -> list[CheckResult]:
-    """Check that each model's env var is set in the environment."""
+    """Check that each model's env var is set in the environment.
+
+    yyds: 遍历 config.yaml 里每个模型的配置，找出所有 $VAR 形式的环境变量引用，
+          然后检查这些环境变量是否真的设置了。比如 $OPENAI_API_KEY / $DEEPSEEK_API_KEY。
+    """
     if not config_path.exists():
         return []
 
@@ -338,7 +359,11 @@ def check_llm_api_key(config_path: Path) -> list[CheckResult]:
 
 
 def check_llm_package(config_path: Path) -> list[CheckResult]:
-    """Check that the LangChain provider package is installed."""
+    """Check that the LangChain provider package is installed.
+
+    yyds: 检查 config.yaml 里 models[].use 引用的 Python 包是否已安装。
+          比如 use: "langchain_openai:ChatOpenAI" → 检查 langchain_openai 能不能 import。
+    """
     if not config_path.exists():
         return []
 

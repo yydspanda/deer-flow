@@ -1,3 +1,4 @@
+# yyds: agents 包入口 — 导出核心 Agent 构建函数、运行时特性、状态模型，并预热技能缓存
 from .factory import create_deerflow_agent
 from .features import Next, Prev, RuntimeFeatures
 from .lead_agent import make_lead_agent

@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+# yyds: Docker 开发模式管理脚本。被 make docker-init / docker-start / docker-stop 调用。
+#       和 deploy.sh 的区别：这个用 docker-compose-dev.yaml（开发配置），
+#       deploy.sh 用 docker-compose.yaml（生产配置）。
+#
+#       5 个子命令：
+#         init    → 预拉沙箱镜像（首次运行前执行一次）
+#         start   → 构建并启动容器（frontend + gateway + nginx）
+#         stop    → 停止容器 + 清理沙箱
+#         restart → 重启容器
+#         logs    → 查看日志（支持按服务过滤）
 set -e
 
 # Colors for output
@@ -85,6 +95,9 @@ docker_available() {
 }
 
 # Initialize: pre-pull the sandbox image so first Pod startup is fast
+# yyds: 预拉沙箱镜像。Agent 执行代码时在沙箱容器里隔离运行，
+#       这个命令提前拉好镜像，避免第一次用沙箱时等太久。
+#       local 模式不需要拉镜像，直接跳过。
 init() {
     echo "=========================================="
     echo "  DeerFlow Init — Pull Sandbox Image"
@@ -148,6 +161,9 @@ init() {
 }
 
 # Start Docker development environment
+# yyds: 启动 Docker 开发环境。自动检测沙箱模式，按需启动对应服务。
+#       核心服务永远是 frontend + gateway + nginx，
+#       provisioner 模式额外加 provisioner 容器。
 start() {
     local sandbox_mode
     local services

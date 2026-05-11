@@ -1,3 +1,4 @@
+# yyds: 凭证加载器，自动从 Claude Code CLI 和 Codex CLI 加载 OAuth/API 密钥
 """Auto-load credentials from Claude Code CLI and Codex CLI.
 
 Implements two credential strategies:
@@ -26,12 +27,14 @@ logger = logging.getLogger(__name__)
 OAUTH_ANTHROPIC_BETAS = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14"
 
 
+# yyds: 检测令牌是否为 Claude Code OAuth 令牌（包含 sk-ant-oat 前缀）
 def is_oauth_token(token: str) -> bool:
     """Check if a token is a Claude Code OAuth token (not a standard API key)."""
     return isinstance(token, str) and "sk-ant-oat" in token
 
 
 @dataclass
+# yyds: Claude Code CLI OAuth 凭证数据类
 class ClaudeCodeCredential:
     """Claude Code CLI OAuth credential."""
 
@@ -48,6 +51,7 @@ class ClaudeCodeCredential:
 
 
 @dataclass
+# yyds: Codex CLI 凭证数据类
 class CodexCliCredential:
     """Codex CLI credential."""
 
@@ -56,6 +60,7 @@ class CodexCliCredential:
     source: str = ""
 
 
+# yyds: 解析凭证文件路径，优先使用环境变量，回退到主目录下的默认路径
 def _resolve_credential_path(env_var: str, default_relative_path: str) -> Path:
     configured_path = os.getenv(env_var)
     if configured_path:
@@ -70,6 +75,7 @@ def _home_dir() -> Path:
     return Path.home()
 
 
+# yyds: 安全读取 JSON 文件，处理文件不存在或格式错误的情况
 def _load_json_file(path: Path, label: str) -> dict[str, Any] | None:
     if not path.exists():
         logger.debug(f"{label} not found: {path}")
@@ -85,6 +91,7 @@ def _load_json_file(path: Path, label: str) -> dict[str, Any] | None:
         return None
 
 
+# yyds: 从文件描述符读取密钥，支持安全的密钥传递方式
 def _read_secret_from_file_descriptor(env_var: str) -> str | None:
     fd_value = os.getenv(env_var)
     if not fd_value:
@@ -105,6 +112,7 @@ def _read_secret_from_file_descriptor(env_var: str) -> str | None:
     return secret or None
 
 
+# yyds: 从直接传入的令牌字符串创建凭证对象
 def _credential_from_direct_token(access_token: str, source: str) -> ClaudeCodeCredential | None:
     token = access_token.strip()
     if not token:
@@ -146,6 +154,7 @@ def _extract_claude_code_credential(data: dict[str, Any], source: str) -> Claude
     return cred
 
 
+# yyds: 按优先级加载 Claude Code OAuth 凭证（环境变量 > 文件描述符 > 凭证文件）
 def load_claude_code_credential() -> ClaudeCodeCredential | None:
     """Load OAuth credential from explicit Claude Code handoff sources.
 
@@ -195,6 +204,7 @@ def load_claude_code_credential() -> ClaudeCodeCredential | None:
     return None
 
 
+# yyds: 从 ~/.codex/auth.json 加载 Codex CLI 凭证
 def load_codex_cli_credential() -> CodexCliCredential | None:
     """Load credential from Codex CLI (~/.codex/auth.json)."""
     cred_path = _resolve_credential_path("CODEX_AUTH_PATH", ".codex/auth.json")

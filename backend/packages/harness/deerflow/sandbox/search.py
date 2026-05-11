@@ -1,3 +1,15 @@
+# yyds: search.py — 文件搜索引擎（glob + grep）
+#      glob_tool 和 grep_tool 的底层实现
+#
+#      glob 实现：os.walk 遍历 + fnmatch 匹配
+#      grep 实现：os.walk 遍历 + 逐行正则匹配
+#
+#      安全设计：
+#      - IGNORE_PATTERNS 跳过 .git/node_modules/__pycache__ 等（性能+安全）
+#      - is_binary_file() 跳过二进制文件（避免 grep 卡死）
+#      - 跳过符号链接（防止路径逃逸）
+#      - max_file_size 跳过大文件（默认 1MB）
+#      - _max_line_chars 跳过超长行（防止 ReDoS）
 import fnmatch
 import os
 import re

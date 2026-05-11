@@ -1,3 +1,4 @@
+# yyds: 流桥接模块入口，解耦agent worker(生产者)和SSE端点(消费者)，基于asyncio.Queue
 """Stream bridge — decouples agent workers from SSE endpoints.
 
 A ``StreamBridge`` sits between the background task that runs an agent

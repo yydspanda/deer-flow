@@ -1,3 +1,4 @@
+# yyds: 基于DuckDuckGo的网页搜索工具，无需API密钥
 """
 Web Search Tool - Search the web using DuckDuckGo (no API key required).
 """

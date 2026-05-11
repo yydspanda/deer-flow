@@ -1,3 +1,4 @@
+# yyds: 运行事件存储的抽象接口定义，统一消息展示和执行追踪的存储契约
 """Abstract interface for run event storage.
 
 RunEventStore is the unified storage interface for run event streams.
@@ -14,6 +15,7 @@ from __future__ import annotations
 import abc
 
 
+# yyds: 运行事件流存储抽象基类，保证seq单调递增、消息/事件分类查询
 class RunEventStore(abc.ABC):
     """Run event stream storage interface.
 

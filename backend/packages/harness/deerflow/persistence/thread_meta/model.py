@@ -1,3 +1,4 @@
+# yyds: 线程元数据ORM模型，包含显示名称、状态和JSON元数据
 """ORM model for thread metadata."""
 
 from __future__ import annotations

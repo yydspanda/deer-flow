@@ -1,4 +1,8 @@
-"""Step: Web search configuration."""
+"""Step: Web search configuration.
+
+yyds: 向导第二步——配置 web_search 和 web_fetch 工具。
+      可选提供商：Tavily/DuckDuckGo(免费)/Exa 等。可以跳过。
+"""
 
 from __future__ import annotations
 

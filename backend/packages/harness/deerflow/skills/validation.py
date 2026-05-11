@@ -1,3 +1,4 @@
+# yyds: 技能frontmatter验证工具，校验SKILL.md中的字段合法性和命名规范
 """Skill frontmatter validation utilities.
 
 Pure-logic validation of SKILL.md frontmatter — no FastAPI or HTTP dependencies.
@@ -12,9 +13,11 @@ from deerflow.skills.parser import parse_allowed_tools
 from deerflow.skills.types import SKILL_MD_FILE
 
 # Allowed properties in SKILL.md frontmatter
+# yyds: SKILL.md中允许出现的frontmatter属性白名单
 ALLOWED_FRONTMATTER_PROPERTIES = {"name", "description", "license", "allowed-tools", "metadata", "compatibility", "version", "author"}
 
 
+# yyds: 验证技能目录中的SKILL.md frontmatter，返回是否合法及错误信息
 def _validate_skill_frontmatter(skill_dir: Path) -> tuple[bool, str, str | None]:
     """Validate a skill directory's SKILL.md frontmatter.
 

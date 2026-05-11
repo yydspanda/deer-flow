@@ -1,3 +1,4 @@
+# yyds: 同步Store工厂，提供单例和上下文管理器，后端与checkpointer共享配置
 """Sync Store factory.
 
 Provides a **sync singleton** and a **sync context manager** for CLI tools
@@ -46,6 +47,7 @@ POSTGRES_CONN_REQUIRED = "checkpointer.connection_string is required for the pos
 # ---------------------------------------------------------------------------
 
 
+# yyds: 同步Store上下文管理器，根据配置创建对应后端并在退出时清理
 @contextlib.contextmanager
 def _sync_store_cm(config) -> Iterator[BaseStore]:
     """Context manager that creates and tears down a sync Store.
@@ -102,6 +104,7 @@ _store: BaseStore | None = None
 _store_ctx = None  # open context manager keeping the connection alive
 
 
+# yyds: 获取全局同步Store单例，首次调用时根据配置创建
 def get_store() -> BaseStore:
     """Return the global sync Store singleton, creating it on first call.
 
@@ -143,6 +146,7 @@ def get_store() -> BaseStore:
     return _store
 
 
+# yyds: 重置Store单例，关闭连接并清除缓存
 def reset_store() -> None:
     """Reset the sync singleton, forcing recreation on the next call.
 
@@ -164,6 +168,7 @@ def reset_store() -> None:
 # ---------------------------------------------------------------------------
 
 
+# yyds: 同步上下文管理器，每次with创建独立连接，不缓存实例
 @contextlib.contextmanager
 def store_context() -> Iterator[BaseStore]:
     """Sync context manager that yields a Store and cleans up on exit.

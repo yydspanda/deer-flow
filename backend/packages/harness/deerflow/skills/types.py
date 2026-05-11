@@ -1,3 +1,4 @@
+# yyds: 技能数据类型定义，包含技能类别枚举和技能数据类
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -5,6 +6,7 @@ from pathlib import Path
 SKILL_MD_FILE = "SKILL.md"
 
 
+# yyds: 技能来源类别——PUBLIC为内置只读技能，CUSTOM为用户自定义技能
 class SkillCategory(StrEnum):
     """Source category for a skill.
 
@@ -16,6 +18,7 @@ class SkillCategory(StrEnum):
     CUSTOM = "custom"
 
 
+# yyds: 技能数据类，封装技能的元数据、文件路径、所属类别和允许使用的工具列表
 @dataclass
 class Skill:
     """Represents a skill with its metadata and file path"""
@@ -30,12 +33,14 @@ class Skill:
     allowed_tools: list[str] | None = None
     enabled: bool = False  # Whether this skill is enabled
 
+    # yyds: 返回技能在类别根目录下的相对路径字符串
     @property
     def skill_path(self) -> str:
         """Returns the relative path from the category root (skills/{category}) to this skill's directory"""
         path = self.relative_path.as_posix()
         return "" if path == "." else path
 
+    # yyds: 获取技能在沙箱容器中的完整目录路径
     def get_container_path(self, container_base_path: str = "/mnt/skills") -> str:
         """
         Get the full path to this skill in the container.
@@ -52,6 +57,7 @@ class Skill:
             return f"{category_base}/{skill_path}"
         return category_base
 
+    # yyds: 获取技能SKILL.md在沙箱容器中的完整文件路径
     def get_container_file_path(self, container_base_path: str = "/mnt/skills") -> str:
         """
         Get the full path to this skill's main file (SKILL.md) in the container.

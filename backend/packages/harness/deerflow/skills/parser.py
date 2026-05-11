@@ -1,3 +1,4 @@
+# yyds: 技能文件解析器，从SKILL.md的YAML frontmatter中提取技能元数据
 import logging
 import re
 from pathlib import Path
@@ -9,6 +10,7 @@ from .types import SKILL_MD_FILE, Skill, SkillCategory
 logger = logging.getLogger(__name__)
 
 
+# yyds: 解析allowed-tools字段，返回允许的工具名称列表
 def parse_allowed_tools(raw: object, skill_file: Path) -> list[str] | None:
     """Parse the optional allowed-tools frontmatter field.
 
@@ -32,6 +34,7 @@ def parse_allowed_tools(raw: object, skill_file: Path) -> list[str] | None:
     return allowed_tools
 
 
+# yyds: 解析SKILL.md文件，提取名称、描述、许可证等元数据并构建Skill对象
 def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: Path | None = None) -> Skill | None:
     """Parse a SKILL.md file and extract metadata.
 

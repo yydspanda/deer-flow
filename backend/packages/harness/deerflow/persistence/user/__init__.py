@@ -1,3 +1,4 @@
+# yyds: 用户存储子包，导出用户表ORM模型
 """User storage subpackage.
 
 Holds the ORM model for the ``users`` table. The concrete repository

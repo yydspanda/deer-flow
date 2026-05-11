@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """Export Claude Code OAuth credentials from macOS Keychain on purpose.
 
+yyds: macOS 专用工具。Claude Code 的 OAuth token 存在 macOS Keychain 里，
+      这个脚本把它导出来，供 DeerFlow 使用。
+      DeerFlow 运行时不会直接访问 Keychain，所以需要手动跑这个脚本导出一次。
+
+      用法：
+        --print-export       打印 export CLAUDE_CODE_OAUTH_TOKEN=xxx
+        --write-credentials  写入到 ~/.claude/.credentials.json
+
+      只在 macOS 上工作（需要 security 命令访问 Keychain）。
+
 This helper is intentionally manual. DeerFlow runtime does not probe Keychain.
 Use this script when you want to bridge an existing Claude Code login into an
 environment variable or an exported credentials file for DeerFlow.

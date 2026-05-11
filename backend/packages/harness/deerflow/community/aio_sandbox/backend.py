@@ -1,3 +1,4 @@
+# yyds: 沙箱后端抽象基类，定义创建、销毁、发现和健康检查接口
 """Abstract base class for sandbox provisioning backends."""
 
 from __future__ import annotations

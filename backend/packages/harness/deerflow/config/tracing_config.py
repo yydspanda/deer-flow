@@ -1,3 +1,7 @@
+# yyds: 分布式追踪配置，支持 LangSmith 和 Langfuse 两个追踪提供商。
+# yyds: 通过环境变量自动检测配置(LANGSMITH_*/LANGCHAIN_* 或 LANGFUSE_*)。
+# yyds: 使用线程锁实现双重检查锁定单例模式，确保并发安全。
+# yyds: 支持多提供商同时启用，validate() 方法在启动时校验必填字段完整性。
 import os
 import threading
 

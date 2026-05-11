@@ -1,3 +1,4 @@
+# yyds: Agent 工厂模块 — 提供纯参数式的 Agent 创建入口，支持特性驱动的中间件链组装与 @Next/@Prev 定位插入
 """Pure-argument factory for DeerFlow agents.
 
 ``create_deerflow_agent`` accepts plain Python arguments — no YAML files, no
@@ -58,6 +59,7 @@ _TODO_TOOL_DESCRIPTION = "Use this tool to create and manage a structured task l
 # ---------------------------------------------------------------------------
 
 
+# yyds: 核心 Agent 工厂函数 — 根据参数组装工具列表和中间件链，委托 langchain.agents.create_agent 创建 LangGraph 状态图
 def create_deerflow_agent(
     model: BaseChatModel,
     tools: list[BaseTool] | None = None,
@@ -152,6 +154,7 @@ def create_deerflow_agent(
 # ---------------------------------------------------------------------------
 
 
+# yyds: 特性驱动的中间件链组装 — 按固定顺序构建 14 个中间件，并根据 RuntimeFeatures 动态注入额外工具
 def _assemble_from_features(
     feat: RuntimeFeatures,
     *,
@@ -303,6 +306,7 @@ def _assemble_from_features(
 # ---------------------------------------------------------------------------
 
 
+# yyds: 额外中间件插入算法 — 解析 @Next/@Prev 装饰器的锚点声明，迭代式插入到链中并检测循环依赖
 def _insert_extra(chain: list[AgentMiddleware], extras: list[AgentMiddleware]) -> None:
     """Insert extra middlewares into *chain* using ``@Next``/``@Prev`` anchors.
 

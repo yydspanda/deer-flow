@@ -1,3 +1,7 @@
+# yyds: 对话自动摘要配置，用于长对话的上下文管理。
+# yyds: trigger 支持三种触发阈值：messages(消息数)、tokens(Token数)、fraction(模型上下文占比)。
+# yyds: keep 控制摘要后保留的历史量。preserve_recent_skill_* 系列参数确保最近加载的技能文件不被摘要吞掉。
+# yyds: 核心设计：当任一 trigger 阈值命中时自动触发摘要，避免超出模型上下文窗口。
 """Configuration for conversation summarization."""
 
 from typing import Literal

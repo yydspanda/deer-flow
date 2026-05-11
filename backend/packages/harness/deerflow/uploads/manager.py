@@ -1,3 +1,4 @@
+# yyds: 上传文件管理逻辑，包含安全写入、文件列表、路径验证等功能
 """Shared upload management logic.
 
 Pure business logic — no FastAPI/HTTP dependencies.

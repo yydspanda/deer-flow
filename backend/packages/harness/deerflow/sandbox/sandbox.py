@@ -1,3 +1,7 @@
+# yyds: sandbox.py — 沙箱抽象基类
+#      定义了所有沙箱必须实现的 7 个操作：
+#      execute_command / read_file / list_dir / write_file / glob / grep / update_file
+#      工具函数（tools.py）通过这个抽象接口操作沙箱，不直接依赖具体实现
 from abc import ABC, abstractmethod
 
 from deerflow.sandbox.search import GrepMatch

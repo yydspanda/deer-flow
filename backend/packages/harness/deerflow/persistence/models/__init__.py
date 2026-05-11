@@ -1,3 +1,4 @@
+# yyds: ORM模型注册入口，导入此模块确保所有模型被Base.metadata发现
 """ORM model registration entry point.
 
 Importing this module ensures all ORM models are registered with

@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Load the Memory Settings review sample into a local DeerFlow runtime."""
+"""Load the Memory Settings review sample into a local DeerFlow runtime.
+
+yyds: 加载示例记忆数据。DeerFlow 的记忆系统会把对话记忆存到 memory.json，
+      这个脚本把 backend/docs/memory-settings-sample.json 复制到
+      backend/.deer-flow/memory.json，让你体验记忆功能的效果。
+      覆盖前会自动备份（加 --no-backup 跳过备份）。
+"""
 
 from __future__ import annotations
 

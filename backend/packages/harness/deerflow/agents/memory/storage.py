@@ -1,3 +1,20 @@
+# yyds: ═══════════════════════════════════════════════════════════════════
+# yyds: Memory 存储层 —— 抽象接口 + 默认文件实现（FileMemoryStorage）
+# yyds: ═══════════════════════════════════════════════════════════════════
+# yyds:
+# yyds: MemoryStorage 接口：load / reload / save 三个方法
+# yyds: FileMemoryStorage 实现：
+# yyds:   - 文件路径解析：支持 user_id + agent_name 组合 → 不同路径
+# yyds:   - 缓存：按 (user_id, agent_name) 缓存 memory_data + file_mtime
+# yyds:   - 原子写入：temp file + rename，防止写入一半崩溃
+# yyds:   - mtime 检测：load 时检查文件修改时间，变化则重新读取
+# yyds:
+# yyds: 存储位置（优先级）：
+# yyds:   1. user_id + agent_name → user_dir/{user_id}/memory/{agent_name}.json
+# yyds:   2. user_id only → user_dir/{user_id}/memory.json
+# yyds:   3. agent_name only → agent_memory/{agent_name}.json
+# yyds:   4. 默认 → paths.memory_file（全局 memory.json）
+# yyds: ═══════════════════════════════════════════════════════════════════
 """Memory storage providers."""
 
 import abc
@@ -16,13 +33,13 @@ from deerflow.config.paths import get_paths
 logger = logging.getLogger(__name__)
 
 
+# yyds: UTC 时间戳工具（ISO-8601 带 Z 后缀）
 def utc_now_iso_z() -> str:
-    """Current UTC time as ISO-8601 with ``Z`` suffix (matches prior naive-UTC output)."""
     return datetime.now(UTC).isoformat().removesuffix("+00:00") + "Z"
 
 
+# yyds: 空 memory 结构 —— user(3段) + history(3段) + facts(空列表)
 def create_empty_memory() -> dict[str, Any]:
-    """Create an empty memory structure."""
     return {
         "version": "1.0",
         "lastUpdated": utc_now_iso_z(),
@@ -40,9 +57,8 @@ def create_empty_memory() -> dict[str, Any]:
     }
 
 
+# yyds: 抽象存储接口 —— load/reload/save，支持按 user_id + agent_name 隔离
 class MemoryStorage(abc.ABC):
-    """Abstract base class for memory storage providers."""
-
     @abc.abstractmethod
     def load(self, agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
         """Load memory data for the given agent."""
@@ -59,9 +75,8 @@ class MemoryStorage(abc.ABC):
         pass
 
 
+# yyds: 文件存储实现 —— memory.json 读写 + mtime 缓存 + 原子写入
 class FileMemoryStorage(MemoryStorage):
-    """File-based memory storage provider."""
-
     def __init__(self):
         """Initialize the file memory storage."""
         # Per-user/agent memory cache: keyed by (user_id, agent_name) tuple (None = global)
@@ -81,8 +96,8 @@ class FileMemoryStorage(MemoryStorage):
         if not AGENT_NAME_PATTERN.match(agent_name):
             raise ValueError(f"Invalid agent name {agent_name!r}: names must match {AGENT_NAME_PATTERN.pattern}")
 
+    # yyds: 路径解析 —— 根据 user_id/agent_name 组合返回不同文件路径
     def _get_memory_file_path(self, agent_name: str | None = None, *, user_id: str | None = None) -> Path:
-        """Get the path to the memory file."""
         if user_id is not None:
             if agent_name is not None:
                 self._validate_agent_name(agent_name)
@@ -120,8 +135,8 @@ class FileMemoryStorage(MemoryStorage):
     def _cache_key(agent_name: str | None = None, *, user_id: str | None = None) -> tuple[str | None, str | None]:
         return (user_id, agent_name)
 
+    # yyds: 带缓存的加载 —— 检查 mtime 是否变化，没变则返回缓存
     def load(self, agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
-        """Load memory data (cached with file modification time check)."""
         file_path = self._get_memory_file_path(agent_name, user_id=user_id)
         cache_key = self._cache_key(agent_name, user_id=user_id)
 
@@ -142,8 +157,8 @@ class FileMemoryStorage(MemoryStorage):
 
         return memory_data
 
+    # yyds: 强制重载 —— 绕过缓存，从文件重新读取
     def reload(self, agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
-        """Reload memory data from file, forcing cache invalidation."""
         file_path = self._get_memory_file_path(agent_name, user_id=user_id)
         memory_data = self._load_memory_from_file(agent_name, user_id=user_id)
         cache_key = self._cache_key(agent_name, user_id=user_id)
@@ -157,8 +172,8 @@ class FileMemoryStorage(MemoryStorage):
             self._memory_cache[cache_key] = (memory_data, mtime)
         return memory_data
 
+    # yyds: 原子写入 —— 写到 .tmp 文件 → rename 覆盖，防止写入一半崩溃导致数据丢失
     def save(self, memory_data: dict[str, Any], agent_name: str | None = None, *, user_id: str | None = None) -> bool:
-        """Save memory data to file and update cache."""
         file_path = self._get_memory_file_path(agent_name, user_id=user_id)
         cache_key = self._cache_key(agent_name, user_id=user_id)
 
@@ -193,8 +208,8 @@ _storage_instance: MemoryStorage | None = None
 _storage_lock = threading.Lock()
 
 
+# yyds: 全局存储单例 —— 通过 config 的 storage_class 动态加载，失败则回退到 FileMemoryStorage
 def get_memory_storage() -> MemoryStorage:
-    """Get the configured memory storage instance."""
     global _storage_instance
     if _storage_instance is not None:
         return _storage_instance

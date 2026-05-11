@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """DeerFlow Interactive Setup Wizard.
 
+yyds: 交互式配置向导，被 `make setup` 调用。
+      分 4 步引导你配置项目：
+        Step 1: LLM 提供商（选模型、填 API key）
+        Step 2: 搜索能力（web_search / web_fetch，可选）
+        Step 3: 执行模式（本地沙箱 / 容器沙箱、bash/文件写入开关）
+        Step 4: 写入配置（生成 config.yaml + .env + frontend/.env）
+
+      代码结构：wizard/ 子目录里有 UI、步骤、写入器等模块。
+      这个文件是入口，wizard/ 里是具体实现。
+
 Usage:
     uv run python scripts/setup_wizard.py
 """

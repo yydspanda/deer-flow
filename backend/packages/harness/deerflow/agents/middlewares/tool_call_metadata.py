@@ -1,3 +1,4 @@
+# yyds: 工具调用元数据同步工具 — 克隆 AIMessage 时保持 tool_calls 与底层 provider 的原始元数据（additional_kwargs、response_metadata）一致
 """Helpers for keeping AIMessage tool-call metadata consistent."""
 
 from __future__ import annotations
@@ -7,6 +8,7 @@ from typing import Any
 from langchain_core.messages import AIMessage
 
 
+# yyds: 从原始 provider 工具调用字典中安全提取 id 字段
 def _raw_tool_call_id(raw_tool_call: Any) -> str | None:
     if not isinstance(raw_tool_call, dict):
         return None
@@ -15,6 +17,7 @@ def _raw_tool_call_id(raw_tool_call: Any) -> str | None:
     return raw_id if isinstance(raw_id, str) and raw_id else None
 
 
+# yyds: 克隆 AIMessage 并同步过滤 tool_calls — 仅保留指定 tool_calls 对应的原始元数据，清理无效的 function_call 和 finish_reason
 def clone_ai_message_with_tool_calls(
     message: AIMessage,
     tool_calls: list[dict[str, Any]],

@@ -1,3 +1,4 @@
+# yyds: 流桥接抽象协议，定义StreamEvent数据结构和publish/subscribe/cleanup接口
 """Abstract stream bridge protocol.
 
 StreamBridge decouples agent workers (producers) from SSE endpoints
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
+# yyds: 单个流事件数据结构，包含单调递增ID、SSE事件名和JSON载荷
 @dataclass(frozen=True)
 class StreamEvent:
     """Single stream event.
@@ -34,6 +36,7 @@ HEARTBEAT_SENTINEL = StreamEvent(id="", event="__heartbeat__", data=None)
 END_SENTINEL = StreamEvent(id="", event="__end__", data=None)
 
 
+# yyds: 流桥接抽象基类，定义生产者(publish)和消费者(subscribe)接口
 class StreamBridge(abc.ABC):
     """Abstract base for stream bridges."""
 

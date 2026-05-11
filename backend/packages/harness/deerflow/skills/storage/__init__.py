@@ -1,3 +1,4 @@
+# yyds: 技能存储模块入口，提供单例工厂方法创建和管理技能存储后端实例
 """SkillStorage singleton + reflection-based factory.
 
 Mirrors the pattern used by ``deerflow/sandbox/sandbox_provider.py``.
@@ -12,6 +13,7 @@ _default_skill_storage: SkillStorage | None = None
 _default_skill_storage_config: object | None = None  # AppConfig identity the singleton was built from
 
 
+# yyds: 获取或创建技能存储单例，支持显式路径、请求级配置和进程级缓存三种模式
 def get_or_new_skill_storage(**kwargs) -> SkillStorage:
     """Return a ``SkillStorage`` instance — either a new one or the process singleton.
 
@@ -68,6 +70,7 @@ def get_or_new_skill_storage(**kwargs) -> SkillStorage:
     return _default_skill_storage
 
 
+# yyds: 重置技能存储单例缓存，用于测试和热重载场景
 def reset_skill_storage() -> None:
     """Clear the cached singleton (used in tests and hot-reload scenarios)."""
     global _default_skill_storage, _default_skill_storage_config

@@ -1,3 +1,29 @@
+"""yyds: 悬空工具调用修复中间件 — 在 LLM 调用前修补消息历史中缺失的 ToolMessage。
+
+【做什么】扫描消息历史，找到那些发出了工具调用（AIMessage.tool_calls）但没有对应 ToolMessage 回复的
+   "悬空"调用，为它们插入合成的错误 ToolMessage（内容为"[Tool call was interrupted...]"）。
+【为什么存在】当用户中断对话或请求取消时，AIMessage 中的 tool_calls 可能没有对应的 ToolMessage。
+   这会导致 LLM API 报错（OpenAI 等提供商要求每个 tool_call 都必须有对应的 ToolMessage 回复），
+   此中间件确保消息格式始终正确。
+【在链中的位置】wrap_model_call 阶段执行，即拦截模型调用，在实际发送给 LLM 之前修补消息列表。
+   - 使用 wrap_model_call 而非 before_model 是因为需要精确插入位置（紧接在悬空 AIMessage 之后），
+     而 before_model + add_messages reducer 只能追加到消息列表末尾。
+【关键设计】
+   - 合成 ToolMessage 的 status 设为 "error"，明确标记为异常。
+   - 支持从结构化字段（tool_calls）和原始 provider 负载（additional_kwargs.tool_calls）两种来源提取工具调用。
+   - 使用 patched_ids 集合避免重复插入。
+"""
+
+import json
+import logging
+from collections.abc import Awaitable, Callable
+from typing import override
+
+from langchain.agents import AgentState
+from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware.types import ModelCallResult, ModelRequest, ModelResponse
+from langchain_core.messages import ToolMessage
+
 """Middleware to fix dangling tool calls in message history.
 
 A dangling tool call occurs when an AIMessage contains tool_calls but there are

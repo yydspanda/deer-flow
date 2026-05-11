@@ -2,6 +2,15 @@
 #
 # deploy.sh - Build, start, or stop DeerFlow production services
 #
+# yyds: Docker 生产部署脚本。被 `make up` / `make down` 调用。
+#       和 serve.sh（开发模式）的区别：这个用 docker compose 管理容器，
+#       适合部署到服务器上 7×24 运行。
+#
+#       三种沙箱模式自动检测（从 config.yaml 的 sandbox 段读取）：
+#       - local:     不用沙箱，工具直接在宿主机跑
+#       - aio:       AioSandboxProvider，Docker-in-Docker（DooD）
+#       - provisioner: 外部沙箱服务，额外启动 provisioner 容器
+#
 # Commands:
 #   deploy.sh                    — build + start
 #   deploy.sh build              — build all images (mode-agnostic)
@@ -109,8 +118,9 @@ fi
 
 
 # ── BETTER_AUTH_SECRET ───────────────────────────────────────────────────────
-# Required by Next.js in production. Generated once and persisted so auth
-# sessions survive container restarts.
+# yyds: Next.js 生产模式必须的认证密钥。自动生成并持久化到文件，
+#       这样容器重启后 auth session 不会失效。
+#       开发模式下可以直接设环境变量，生产模式用这个文件机制。
 
 _secret_file="$DEER_FLOW_HOME/.better-auth-secret"
 if [ -z "$BETTER_AUTH_SECRET" ]; then
@@ -173,6 +183,8 @@ if  [ "$CMD" != "down" ] && [ -z "$DEER_FLOW_INTERNAL_AUTH_TOKEN" ]; then
 fi
 
 # ── detect_sandbox_mode ───────────────────────────────────────────────────────
+# yyds: 从 config.yaml 里读 sandbox.use 字段，判断用哪种沙箱模式
+#       用 awk 解析 YAML（不依赖 Python），简单粗暴但够用
 
 detect_sandbox_mode() {
     local sandbox_use=""

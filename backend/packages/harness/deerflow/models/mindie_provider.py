@@ -1,3 +1,4 @@
+# yyds: MindIE 模型提供者，处理 XML 格式工具调用解析、消息兼容性修复和模拟流式输出
 import ast
 import html
 import json
@@ -11,6 +12,7 @@ from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
 
 
+# yyds: 修复消息兼容性，将多模态内容和工具调用转换为 MindIE 可处理的纯文本/XML 格式
 def _fix_messages(messages: list) -> list:
     """Sanitize incoming messages for MindIE compatibility.
 
@@ -58,6 +60,7 @@ def _fix_messages(messages: list) -> list:
     return fixed
 
 
+# yyds: 解析模型输出中的 XML 格式工具调用，转换为 LangChain 工具调用字典
 def _parse_xml_tool_call_to_dict(content: str) -> tuple[str, list[dict]]:
     """Parse XML-style tool calls from model output into LangChain dicts.
 
@@ -120,6 +123,7 @@ def _parse_xml_tool_call_to_dict(content: str) -> tuple[str, list[dict]]:
     return "".join(clean_parts).strip(), tool_calls
 
 
+# yyds: 迭代 XML tool_call 块，支持嵌套结构
 def _iter_tool_call_blocks(content: str) -> Iterator[tuple[int, int, str]]:
     """Iterate `<tool_call>...</tool_call>` blocks and tolerate nesting."""
     token_pattern = re.compile(r"</?tool_call>")
@@ -146,6 +150,7 @@ def _iter_tool_call_blocks(content: str) -> Iterator[tuple[int, int, str]]:
             block_start = -1
 
 
+# yyds: 解码代码块外的转义换行符 \n，保留代码块内的原始内容
 def _decode_escaped_newlines_outside_fences(content: str) -> str:
     """Decode literal `\\n` outside fenced code blocks."""
     if "\\n" not in content:
@@ -159,6 +164,7 @@ def _decode_escaped_newlines_outside_fences(content: str) -> str:
     return "".join(parts)
 
 
+# yyds: MindIE 聊天模型类，处理 XML 工具调用解析、消息修复和工具场景下的模拟流式输出
 class MindIEChatModel(ChatOpenAI):
     """Chat model adapter for MindIE engine.
 
@@ -188,6 +194,7 @@ class MindIEChatModel(ChatOpenAI):
         )
         super().__init__(**kwargs)
 
+    # yyds: 对生成结果进行后处理，修复转义换行符并提取 XML 工具调用
     def _patch_result_with_tools(self, result: ChatResult) -> ChatResult:
         """Apply post-generation fixes to the model result."""
         for gen in result.generations:
@@ -207,14 +214,17 @@ class MindIEChatModel(ChatOpenAI):
                         msg.tool_calls.extend(extracted_tools)
         return result
 
+    # yyds: 同步生成方法，先修复消息格式再调用父类生成，最后修补结果
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         result = super()._generate(_fix_messages(messages), stop=stop, run_manager=run_manager, **kwargs)
         return self._patch_result_with_tools(result)
 
+    # yyds: 异步生成方法，先修复消息格式再调用父类生成，最后修补结果
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
         result = await super()._agenerate(_fix_messages(messages), stop=stop, run_manager=run_manager, **kwargs)
         return self._patch_result_with_tools(result)
 
+    # yyds: 异步流式输出，无工具时走原生流式，有工具时回退到完整生成后模拟分块输出
     async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
         # Route standard queries to native streaming for lower TTFB
         if not kwargs.get("tools"):

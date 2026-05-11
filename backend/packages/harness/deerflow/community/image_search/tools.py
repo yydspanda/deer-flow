@@ -1,3 +1,4 @@
+# yyds: 基于DuckDuckGo的图片搜索工具，为图像生成提供参考图片
 """
 Image Search Tool - Search images using DuckDuckGo for reference in image generation.
 """

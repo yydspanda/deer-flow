@@ -1,3 +1,4 @@
+# yyds: 基于SQLAlchemy的RunEventStore实现，将事件持久化到run_events表，支持trace内容截断
 """SQLAlchemy-backed RunEventStore implementation.
 
 Persists events to the ``run_events`` table. Trace content is truncated
@@ -22,11 +23,13 @@ from deerflow.utils.time import coerce_iso
 logger = logging.getLogger(__name__)
 
 
+# yyds: 数据库事件存储实现，使用FOR UPDATE锁保证seq单调递增，支持trace内容截断
 class DbRunEventStore(RunEventStore):
     def __init__(self, session_factory: async_sessionmaker[AsyncSession], *, max_trace_content: int = 10240):
         self._sf = session_factory
         self._max_trace_content = max_trace_content
 
+    # yyds: 将数据库行转为API返回的dict，反序列化JSON内容并重命名metadata字段
     @staticmethod
     def _row_to_dict(row: RunEventRow) -> dict:
         d = row.to_dict()
@@ -49,6 +52,7 @@ class DbRunEventStore(RunEventStore):
                 logger.debug("Failed to deserialize content as JSON for event seq=%s", d.get("seq"))
         return d
 
+    # yyds: 截断trace类型事件的content，防止大内容撑爆数据库
     def _truncate_trace(self, category: str, content: Any, metadata: dict | None) -> tuple[Any, dict]:
         if category == "trace":
             text = content if isinstance(content, str) else json.dumps(content, default=str, ensure_ascii=False)
@@ -59,6 +63,7 @@ class DbRunEventStore(RunEventStore):
                 metadata = {**(metadata or {}), "content_truncated": True, "original_byte_length": len(encoded)}
         return content, metadata or {}
 
+    # yyds: 将结构化content转为JSON字符串存入数据库，标记content_is_json元数据
     @staticmethod
     def _content_to_db(content: Any, metadata: dict | None) -> tuple[str, dict]:
         metadata = metadata or {}
@@ -71,6 +76,7 @@ class DbRunEventStore(RunEventStore):
             metadata["content_is_dict"] = True
         return db_content, metadata
 
+    # yyds: 从上下文软读取user_id，HTTP请求自动盖章，后台worker返回None
     @staticmethod
     def _user_id_from_context() -> str | None:
         """Soft read of user_id from contextvar for write paths.
@@ -111,6 +117,7 @@ class DbRunEventStore(RunEventStore):
 
         return await session.scalar(stmt.with_for_update())
 
+    # yyds: 写入单个事件，使用FOR UPDATE锁分配单调seq，仅用于低频路径
     async def put(self, *, thread_id, run_id, event_type, category, content="", metadata=None, created_at=None):  # noqa: D401
         """Write a single event — low-frequency path only.
 
@@ -141,6 +148,7 @@ class DbRunEventStore(RunEventStore):
                 session.add(row)
             return self._row_to_dict(row)
 
+    # yyds: 批量写入事件，单次获取FOR UPDATE锁分配连续seq，高频路径
     async def put_batch(self, events):
         if not events:
             return []
@@ -177,6 +185,7 @@ class DbRunEventStore(RunEventStore):
                     rows.append(row)
             return [self._row_to_dict(r) for r in rows]
 
+    # yyds: 按线程查询category=message的事件，支持双向游标分页
     async def list_messages(
         self,
         thread_id,
@@ -209,6 +218,7 @@ class DbRunEventStore(RunEventStore):
                 rows = list(result.scalars())
                 return [self._row_to_dict(r) for r in reversed(rows)]
 
+    # yyds: 查询指定run的全部事件流，支持按event_types过滤
     async def list_events(
         self,
         thread_id,
@@ -229,6 +239,7 @@ class DbRunEventStore(RunEventStore):
             result = await session.execute(stmt)
             return [self._row_to_dict(r) for r in result.scalars()]
 
+    # yyds: 按run查询message类型事件，支持双向游标分页
     async def list_messages_by_run(
         self,
         thread_id,
@@ -264,6 +275,7 @@ class DbRunEventStore(RunEventStore):
                 rows = list(result.scalars())
                 return [self._row_to_dict(r) for r in reversed(rows)]
 
+    # yyds: 统计线程内message类型事件数量
     async def count_messages(
         self,
         thread_id,
@@ -277,6 +289,7 @@ class DbRunEventStore(RunEventStore):
         async with self._sf() as session:
             return await session.scalar(stmt) or 0
 
+    # yyds: 删除线程全部事件并返回删除数量
     async def delete_by_thread(
         self,
         thread_id,
@@ -295,6 +308,7 @@ class DbRunEventStore(RunEventStore):
                 await session.commit()
             return count
 
+    # yyds: 删除指定run的事件并返回删除数量
     async def delete_by_run(
         self,
         thread_id,

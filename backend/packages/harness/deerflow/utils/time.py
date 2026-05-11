@@ -1,3 +1,4 @@
+# yyds: ISO 8601时间戳工具，提供统一的时间格式化和兼容性转换
 """ISO 8601 timestamp helpers for the Gateway and embedded runtime.
 
 DeerFlow stores and serializes thread/run timestamps as ISO 8601 UTC

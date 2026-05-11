@@ -1,3 +1,4 @@
+# yyds: 运行元数据存储的抽象接口，RunManager依赖此接口实现可选持久化
 """Abstract interface for run metadata storage.
 
 RunManager depends on this interface. Implementations:
@@ -14,6 +15,7 @@ import abc
 from typing import Any
 
 
+# yyds: 运行元数据存储抽象基类，定义CRUD和token聚合接口
 class RunStore(abc.ABC):
     @abc.abstractmethod
     async def put(

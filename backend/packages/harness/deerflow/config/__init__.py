@@ -1,3 +1,4 @@
+# yyds: config 包的公共导出入口，统一暴露所有配置模块（AppConfig / Paths / Memory / Extensions / Tracing 等）
 from .app_config import get_app_config
 from .extensions_config import ExtensionsConfig, get_extensions_config
 from .loop_detection_config import LoopDetectionConfig

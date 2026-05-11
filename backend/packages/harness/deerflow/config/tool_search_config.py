@@ -1,3 +1,5 @@
+# yyds: 工具延迟加载配置，启用后 MCP 工具不直接注入 agent 上下文
+# yyds: 而是通过 tool_search 工具在运行时按需发现和调用，减少 token 消耗
 """Configuration for deferred tool loading via tool_search."""
 
 from pydantic import BaseModel, Field

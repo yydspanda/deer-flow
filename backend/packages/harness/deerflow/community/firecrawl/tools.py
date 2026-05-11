@@ -1,3 +1,4 @@
+# yyds: 基于Firecrawl的网页搜索和内容抓取工具
 import json
 
 from firecrawl import FirecrawlApp

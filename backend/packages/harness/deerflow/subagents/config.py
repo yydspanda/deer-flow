@@ -1,3 +1,6 @@
+# yyds: Sub-Agent 配置定义 —— 每个 sub-agent 的"身份证"
+# yyds: 关键字段：tools(允许的工具白名单) / disallowed_tools(黑名单，默认禁用 task 防递归) / model(默认 inherit 继承父 agent)
+# yyds: 模型解析优先级：config.model != "inherit" → 用 config 自身的 → parent_model → app_config.models[0]
 """Subagent configuration definitions."""
 
 from dataclasses import dataclass, field
@@ -35,12 +38,14 @@ class SubagentConfig:
     timeout_seconds: int = 900
 
 
+# yyds: 兜底函数 —— 当没有 parent_model 且 config.model=="inherit" 时，取 config.yaml 第一个模型
 def _default_model_name(app_config: "AppConfig") -> str:
     if not app_config.models:
         raise ValueError("No chat models are configured. Please configure at least one model in config.yaml.")
     return app_config.models[0].name
 
 
+# yyds: 模型名解析 —— 三级优先级：config.model(显式指定) > parent_model(继承父 agent) > _default_model_name(config.yaml 第一个)
 def resolve_subagent_model_name(config: SubagentConfig, parent_model: str | None, *, app_config: "AppConfig | None" = None) -> str:
     """Resolve the effective model name a subagent should use."""
     if config.model != "inherit":

@@ -1,3 +1,4 @@
+# yyds: 后台代理执行器，在asyncio.Task中运行agent graph并通过StreamBridge发布SSE事件
 """Background agent execution.
 
 Runs an agent graph inside an ``asyncio.Task``, publishing events to
@@ -45,6 +46,7 @@ logger = logging.getLogger(__name__)
 _VALID_LG_MODES = {"values", "updates", "checkpoints", "tasks", "debug", "messages", "custom"}
 
 
+# yyds: 构建ToolRuntime.context字典，包含thread_id/run_id/app_config等运行时上下文
 def _build_runtime_context(
     thread_id: str,
     run_id: str,
@@ -72,6 +74,7 @@ def _build_runtime_context(
     return runtime_ctx
 
 
+# yyds: 单次代理运行的基础设施依赖容器，打包checkpointer/store/event_store等
 @dataclass(frozen=True)
 class RunContext:
     """Infrastructure dependencies for a single agent run.
@@ -89,6 +92,7 @@ class RunContext:
     app_config: AppConfig | None = field(default=None)
 
 
+# yyds: 将runtime_context注入到config['context']中，供中间件和工具访问
 def _install_runtime_context(config: dict, runtime_context: dict[str, Any]) -> None:
     existing_context = config.get("context")
     if isinstance(existing_context, dict):
@@ -101,6 +105,7 @@ def _install_runtime_context(config: dict, runtime_context: dict[str, Any]) -> N
     config["context"] = dict(runtime_context)
 
 
+# yyds: 检查agent_factory是否接受app_config参数，带LRU缓存
 def _compute_agent_factory_supports_app_config(agent_factory: Any) -> bool:
     try:
         return "app_config" in inspect.signature(agent_factory).parameters
@@ -108,11 +113,13 @@ def _compute_agent_factory_supports_app_config(agent_factory: Any) -> bool:
         return False
 
 
+# yyds: agent factory的app_config支持检测缓存版本
 @lru_cache(maxsize=128)
 def _cached_agent_factory_supports_app_config(agent_factory: Any) -> bool:
     return _compute_agent_factory_supports_app_config(agent_factory)
 
 
+# yyds: agent factory的app_config支持检测入口，不可哈希对象降级到直接检查
 def _agent_factory_supports_app_config(agent_factory: Any) -> bool:
     try:
         return _cached_agent_factory_supports_app_config(agent_factory)
@@ -121,6 +128,7 @@ def _agent_factory_supports_app_config(agent_factory: Any) -> bool:
         return _compute_agent_factory_supports_app_config(agent_factory)
 
 
+# yyds: 核心函数：在后台Task中执行agent，处理流式输出、取消、回滚、错误和完成清理
 async def run_agent(
     bridge: StreamBridge,
     run_manager: RunManager,
@@ -433,6 +441,7 @@ async def run_agent(
 # ---------------------------------------------------------------------------
 
 
+# yyds: 调用checkpointer方法，同时支持async和sync变体
 async def _call_checkpointer_method(checkpointer: Any, async_name: str, sync_name: str, *args: Any, **kwargs: Any) -> Any:
     """Call a checkpointer method, supporting async and sync variants."""
     method = getattr(checkpointer, async_name, None) or getattr(checkpointer, sync_name, None)
@@ -444,6 +453,7 @@ async def _call_checkpointer_method(checkpointer: Any, async_name: str, sync_nam
     return result
 
 
+# yyds: 回滚线程状态到运行前的检查点快照，恢复checkpoint/metadata/pending_writes
 async def _rollback_to_pre_run_checkpoint(
     *,
     checkpointer: Any,
@@ -537,11 +547,13 @@ async def _rollback_to_pre_run_checkpoint(
         )
 
 
+# yyds: 创建新检查点标记（id+timestamp），用于回滚时生成恢复检查点
 def _new_checkpoint_marker() -> dict[str, str]:
     marker = empty_checkpoint()
     return {"id": marker["id"], "ts": marker["ts"]}
 
 
+# yyds: 将LangGraph内部stream_mode名映射为SSE事件名
 def _lg_mode_to_sse_event(mode: str) -> str:
     """Map LangGraph internal stream_mode name to SSE event name.
 
@@ -554,6 +566,7 @@ def _lg_mode_to_sse_event(mode: str) -> str:
     return mode
 
 
+# yyds: 从graph_input中提取HumanMessage用于事件记录
 def _extract_human_message(graph_input: dict) -> HumanMessage | None:
     """Extract or construct a HumanMessage from graph_input for event recording.
 
@@ -579,6 +592,7 @@ def _extract_human_message(graph_input: dict) -> HumanMessage | None:
     return None
 
 
+# yyds: 解包多模式或子图流式输出的(item)为(mode, chunk)元组
 def _unpack_stream_item(
     item: Any,
     lg_modes: list[str],

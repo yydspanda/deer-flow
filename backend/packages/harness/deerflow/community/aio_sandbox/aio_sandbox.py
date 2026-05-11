@@ -1,3 +1,4 @@
+# yyds: AIO沙箱实现，通过HTTP API与Docker容器交互执行命令和文件操作
 import base64
 import errno
 import logging

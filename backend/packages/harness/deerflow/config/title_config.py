@@ -6,6 +6,10 @@ from pydantic import BaseModel, Field
 class TitleConfig(BaseModel):
     """Configuration for automatic thread title generation."""
 
+    # yyds: 自动生成对话线程标题的配置。
+    # yyds: 可配置标题的最大词数/字符数、使用的 LLM 模型及提示词模板。
+    # yyds: enabled=True 时，每次对话自动调用 LLM 生成简短标题。
+
     enabled: bool = Field(
         default=True,
         description="Whether to enable automatic title generation",

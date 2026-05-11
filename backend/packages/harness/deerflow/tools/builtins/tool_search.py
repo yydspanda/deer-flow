@@ -1,3 +1,4 @@
+# yyds: 延迟工具发现机制，Agent通过tool_search按需获取MCP工具的完整schema，避免一次性注入过多工具定义
 """Tool search — deferred tool discovery at runtime.
 
 Contains:
@@ -27,6 +28,7 @@ MAX_RESULTS = 5  # Max tools returned per search
 # ── Registry ──
 
 
+# yyds: 延迟工具条目，存储工具名、描述和完整工具对象（仅在搜索匹配时返回）
 @dataclass
 class DeferredToolEntry:
     """Lightweight metadata for a deferred tool (no full schema in context)."""
@@ -36,12 +38,14 @@ class DeferredToolEntry:
     tool: BaseTool  # Full tool object, returned only on search match
 
 
+# yyds: 延迟工具注册中心，支持正则/关键词/精确名三种搜索模式，匹配后自动提升为活跃工具
 class DeferredToolRegistry:
     """Registry of deferred tools, searchable by regex pattern."""
 
     def __init__(self):
         self._entries: list[DeferredToolEntry] = []
 
+    # yyds: 注册一个延迟工具，提取名称和描述用于后续搜索
     def register(self, tool: BaseTool) -> None:
         self._entries.append(
             DeferredToolEntry(
@@ -51,6 +55,7 @@ class DeferredToolRegistry:
             )
         )
 
+    # yyds: 将匹配的工具从延迟列表提升为活跃状态，后续不再被DeferredToolFilterMiddleware过滤
     def promote(self, names: set[str]) -> None:
         """Remove tools from the deferred registry so they pass through the filter.
 
@@ -66,6 +71,7 @@ class DeferredToolRegistry:
         if promoted:
             logger.debug(f"Promoted {promoted} tool(s) from deferred to active: {names}")
 
+    # yyds: 核心搜索方法，支持select:精确选择、+keyword必选关键词、正则通配三种查询形式
     def search(self, query: str) -> list[BaseTool]:
         """Search deferred tools by regex pattern against name + description.
 
@@ -125,6 +131,7 @@ class DeferredToolRegistry:
         return len(self._entries)
 
 
+# yyds: 计算正则匹配得分，用于搜索结果排序
 def _regex_score(pattern: str, entry: DeferredToolEntry) -> int:
     try:
         regex = re.compile(pattern, re.IGNORECASE)
@@ -145,14 +152,17 @@ def _regex_score(pattern: str, entry: DeferredToolEntry) -> int:
 _registry_var: contextvars.ContextVar[DeferredToolRegistry | None] = contextvars.ContextVar("deferred_tool_registry", default=None)
 
 
+# yyds: 获取当前异步上下文的延迟工具注册中心
 def get_deferred_registry() -> DeferredToolRegistry | None:
     return _registry_var.get()
 
 
+# yyds: 设置当前异步上下文的延迟工具注册中心
 def set_deferred_registry(registry: DeferredToolRegistry) -> None:
     _registry_var.set(registry)
 
 
+# yyds: 重置当前异步上下文的延迟工具注册中心，防止跨请求状态污染
 def reset_deferred_registry() -> None:
     """Reset the deferred registry for the current async context."""
     _registry_var.set(None)
@@ -161,6 +171,7 @@ def reset_deferred_registry() -> None:
 # ── Tool ──
 
 
+# yyds: 延迟工具搜索工具，Agent调用后获取匹配工具的完整OpenAI function schema并自动提升为可调用状态
 @tool
 def tool_search(query: str) -> str:
     """Fetches full schema definitions for deferred tools so they can be called.

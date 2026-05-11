@@ -1,3 +1,4 @@
+# yyds: 异步Store工厂，后端与checkpointer共享配置，支持memory/sqlite/postgres
 """Async Store factory — backend mirrors the configured checkpointer.
 
 The store and checkpointer share the same ``checkpointer`` section in
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+# yyds: 内部异步Store工厂，根据配置创建对应后端并在退出时清理连接
 @contextlib.asynccontextmanager
 async def _async_store(config) -> AsyncIterator[BaseStore]:
     """Async context manager that constructs and tears down a Store.
@@ -85,6 +87,7 @@ async def _async_store(config) -> AsyncIterator[BaseStore]:
 # ---------------------------------------------------------------------------
 
 
+# yyds: 公共异步Store工厂，与checkpointer共用配置节，未配置时返回InMemoryStore
 @contextlib.asynccontextmanager
 async def make_store(app_config: AppConfig | None = None) -> AsyncIterator[BaseStore]:
     """Async context manager that yields a Store whose backend matches the

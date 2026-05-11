@@ -2,8 +2,11 @@
 #
 # cleanup-containers.sh - Clean up DeerFlow sandbox containers
 #
-# This script cleans up both Docker and Apple Container runtime containers
-# to ensure compatibility across different container runtimes.
+# yyds: 清理沙箱容器。Agent 执行代码时会在隔离容器里跑（安全隔离），
+#       这个脚本把遗留的沙箱容器停掉。
+#       支持两种容器运行时：Docker（Linux/WSL）和 Apple Container（macOS）。
+#       容器名都以 deer-flow-sandbox 为前缀，按前缀过滤批量清理。
+#       用法：./cleanup-containers.sh [前缀]  默认前缀是 deer-flow-sandbox
 #
 
 set -e
@@ -19,6 +22,7 @@ NC='\033[0m' # No Color
 echo "Cleaning up sandbox containers with prefix: ${PREFIX}"
 
 # Function to clean up Docker containers
+# yyds: Docker 清理——查找名字匹配前缀的容器，批量 stop
 cleanup_docker() {
     if command -v docker &> /dev/null; then
         echo -n "Checking Docker containers... "
@@ -40,6 +44,7 @@ cleanup_docker() {
 }
 
 # Function to clean up Apple Container containers
+# yyds: Apple Container 清理——macOS 上的轻量级容器运行时（不是 Docker）
 cleanup_apple_container() {
     if command -v container &> /dev/null; then
         echo -n "Checking Apple Container containers... "

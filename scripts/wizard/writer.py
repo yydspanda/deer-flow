@@ -1,5 +1,9 @@
 """Config file writer for the Setup Wizard.
 
+yyds: 向导的配置写入器。
+      write_config_yaml() → 生成最小可用的 config.yaml
+      write_env_file()    → 追加/更新 .env 里的 API key（不覆盖已有的）
+
 Writes config.yaml as a minimal working configuration and updates .env
 without wiping existing user customisations where possible.
 """

@@ -1,3 +1,5 @@
+# yyds: 运行时路径解析工具，提供项目根目录和 .deer-flow 状态目录的定位
+# yyds: 支持 DEER_FLOW_PROJECT_ROOT / DEER_FLOW_HOME 环境变量覆盖，harness 包可独立使用
 """Runtime path resolution for standalone harness usage."""
 
 import os

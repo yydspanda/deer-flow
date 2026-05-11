@@ -1,3 +1,4 @@
+# yyds: 核心工具装配模块，从配置加载工具、去重、按条件添加内置/MCP/ACP工具，是Agent获取可用工具的入口
 import logging
 
 from langchain.tools import BaseTool
@@ -23,6 +24,7 @@ SUBAGENT_TOOLS = [
 ]
 
 
+# yyds: 判断工具配置是否为主机bash执行面，用于LocalSandbox激活时默认隐藏主机bash工具
 def _is_host_bash_tool(tool: object) -> bool:
     """Return True if the tool config represents a host-bash execution surface."""
     group = getattr(tool, "group", None)
@@ -41,6 +43,7 @@ def _ensure_sync_invocable_tool(tool: BaseTool) -> BaseTool:
     return tool
 
 
+# yyds: 获取所有可用工具的主函数，按优先级合并配置加载工具、内置工具、MCP工具和ACP工具，并按名称去重
 def get_available_tools(
     groups: list[str] | None = None,
     include_mcp: bool = True,

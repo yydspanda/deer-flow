@@ -1,3 +1,4 @@
+# yyds: 用户反馈ORM模型，记录对运行结果的评分和评论
 """ORM model for user feedback on runs."""
 
 from __future__ import annotations

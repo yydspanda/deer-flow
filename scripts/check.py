@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Cross-platform dependency checker for DeerFlow."""
+"""Cross-platform dependency checker for DeerFlow.
+
+yyds: check.sh 的 Python 版本，功能完全一样。
+      存在两个版本是因为 Windows 原生不支持 bash，
+      所以 Windows 用户（不用 WSL）用这个 .py 版本。
+      WSL/Linux/macOS 用户用 check.sh 更快。
+      被 `make check` 调用。
+"""
 
 from __future__ import annotations
 
@@ -10,7 +17,10 @@ from pathlib import Path
 
 
 def configure_stdio() -> None:
-    """Prefer UTF-8 output so Unicode status markers render on Windows."""
+    """Prefer UTF-8 output so Unicode status markers render on Windows.
+
+    yyds: 解决 Windows 终端不认 UTF-8 字符（如 ✓ ✗）导致乱码的问题。
+    """
     for stream_name in ("stdout", "stderr"):
         stream = getattr(sys, stream_name, None)
         if hasattr(stream, "reconfigure"):
@@ -30,7 +40,13 @@ def run_command(command: list[str]) -> str | None:
 
 
 def find_pnpm_command() -> list[str] | None:
-    """Return a pnpm-compatible command that exists on this machine."""
+    """Return a pnpm-compatible command that exists on this machine.
+
+    yyds: 按优先级查找 pnpm：
+      1. 直接找 pnpm 可执行文件
+      2. 找 pnpm.cmd（Windows 上的 .cmd 包装器）
+      3. 找 corepack（Node.js 自带的包管理器代理），用 corepack pnpm 间接调用
+    """
     pnpm_path = shutil.which("pnpm")
     if pnpm_path:
         return [str(Path(pnpm_path))]

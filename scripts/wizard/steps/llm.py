@@ -1,4 +1,8 @@
-"""Step 1: LLM provider selection."""
+"""Step 1: LLM provider selection.
+
+yyds: 向导第一步——选 LLM 提供商（OpenAI/DeepSeek/Claude 等），
+      选模型（从提供商的模型列表里选），填 API key。
+"""
 
 from __future__ import annotations
 

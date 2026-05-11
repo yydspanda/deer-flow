@@ -1,3 +1,4 @@
+# yyds: 远程沙箱后端，通过Provisioner服务管理K8s Pod和NodePort Service
 """Remote sandbox backend — delegates Pod lifecycle to the provisioner service.
 
 The provisioner dynamically creates per-sandbox-id Pods + NodePort Services

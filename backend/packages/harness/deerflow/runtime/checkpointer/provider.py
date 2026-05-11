@@ -1,3 +1,4 @@
+# yyds: 同步检查点工厂，提供单例和上下文管理器两种模式，支持memory/sqlite/postgres后端
 """Sync checkpointer factory.
 
 Provides a **sync singleton** and a **sync context manager** for LangGraph
@@ -46,6 +47,7 @@ POSTGRES_CONN_REQUIRED = "checkpointer.connection_string is required for the pos
 # ---------------------------------------------------------------------------
 
 
+# yyds: 同步检查点上下文管理器，根据config创建对应后端并在退出时清理连接
 @contextlib.contextmanager
 def _sync_checkpointer_cm(config: CheckpointerConfig) -> Iterator[Checkpointer]:
     """Context manager that creates and tears down a sync checkpointer.
@@ -102,6 +104,7 @@ _checkpointer: Checkpointer | None = None
 _checkpointer_ctx = None  # open context manager keeping the connection alive
 
 
+# yyds: 获取全局同步检查点单例，首次调用时根据配置创建，未配置则返回InMemorySaver
 def get_checkpointer() -> Checkpointer:
     """Return the global sync checkpointer singleton, creating it on first call.
 
@@ -148,6 +151,7 @@ def get_checkpointer() -> Checkpointer:
     return _checkpointer
 
 
+# yyds: 重置同步检查点单例，关闭连接并清除缓存，用于测试或配置变更后重建
 def reset_checkpointer() -> None:
     """Reset the sync singleton, forcing recreation on the next call.
 
@@ -169,6 +173,7 @@ def reset_checkpointer() -> None:
 # ---------------------------------------------------------------------------
 
 
+# yyds: 同步上下文管理器，每次with创建独立连接并在退出时清理，不缓存实例
 @contextlib.contextmanager
 def checkpointer_context() -> Iterator[Checkpointer]:
     """Sync context manager that yields a checkpointer and cleans up on exit.

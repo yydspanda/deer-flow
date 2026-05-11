@@ -1,3 +1,15 @@
+# yyds: ═══════════════════════════════════════════════════════════════════
+# yyds: Memory Prompt 模板 + 格式化函数
+# yyds: ═══════════════════════════════════════════════════════════════════
+# yyds:
+# yyds: 两个 prompt 模板：
+# yyds:   MEMORY_UPDATE_PROMPT: 全量更新（对话 → LLM → JSON 更新指令）
+# yyds:   FACT_EXTRACTION_PROMPT: 单条消息提取 fact（备用）
+# yyds:
+# yyds: 两个格式化函数：
+# yyds:   format_memory_for_injection(): memory → 注入 system prompt 的文本（top facts by confidence）
+# yyds:   format_conversation_for_update(): 对话消息 → 给 LLM 的文本（截断 + 过滤上传）
+# yyds: ═══════════════════════════════════════════════════════════════════
 """Prompt templates for memory update and injection."""
 
 import math
@@ -160,6 +172,7 @@ Rules:
 Return ONLY valid JSON."""
 
 
+# yyds: token 计数 —— 用 tiktoken 精确计算，不可用时按 len/4 估算
 def _count_tokens(text: str, encoding_name: str = "cl100k_base") -> int:
     """Count tokens in text using tiktoken.
 
@@ -198,6 +211,8 @@ def _coerce_confidence(value: Any, default: float = 0.0) -> float:
     return max(0.0, min(1.0, confidence))
 
 
+# yyds: 格式化 memory 用于注入 system prompt —— 按 confidence 排序取 top facts，控制在 max_tokens 内
+# yyds: 输出格式：User Context + History + Facts（带 category 和 confidence 分数）
 def format_memory_for_injection(memory_data: dict[str, Any], max_tokens: int = 2000) -> str:
     """Format memory data for injection into system prompt.
 
@@ -317,6 +332,7 @@ def format_memory_for_injection(memory_data: dict[str, Any], max_tokens: int = 2
     return result
 
 
+# yyds: 格式化对话消息用于 memory update prompt —— 只保留 human/ai，过滤上传文件，截断长消息
 def format_conversation_for_update(messages: list[Any]) -> str:
     """Format conversation messages for memory update prompt.
 

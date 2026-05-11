@@ -1,3 +1,4 @@
+# yyds: 沙箱元数据数据类，支持跨进程发现和状态持久化
 """Sandbox metadata for cross-process discovery and state persistence."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# yyds: SQLAlchemy声明式基类，提供自动to_dict序列化和__repr__支持
 """SQLAlchemy declarative base with automatic to_dict support.
 
 All DeerFlow ORM models inherit from this Base. It provides a generic

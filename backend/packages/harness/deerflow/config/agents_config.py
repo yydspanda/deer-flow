@@ -1,3 +1,6 @@
+# yyds: 自定义 Agent 配置加载器，负责从文件系统读取用户创建的 Agent 定义
+# yyds: 每个 Agent 由 config.yaml（名称/描述/模型/工具组/技能）和 SOUL.md（人格提示词）组成
+# yyds: 采用用户隔离布局 {base_dir}/users/{user_id}/agents/{name}/，兼容旧版共享布局
 """Configuration and loaders for custom agents.
 
 Custom agents are stored per-user under ``{base_dir}/users/{user_id}/agents/{name}/``.

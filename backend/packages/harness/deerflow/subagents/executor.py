@@ -1,3 +1,32 @@
+# yyds: ═══════════════════════════════════════════════════════════════════
+# yyds: Sub-Agent 执行引擎 —— Lead Agent 的"子进程管理器"
+# yyds: ═══════════════════════════════════════════════════════════════════
+# yyds:
+# yyds: 核心架构图：
+# yyds:
+# yyds:   task_tool(task_desc)
+# yyds:     │
+# yyds:     ├─ 创建 SubagentExecutor(config, tools, sandbox_state, ...)
+# yyds:     ├─ execute_async(task) → 提交到 _scheduler_pool 线程池
+# yyds:     │     │
+# yyds:     │     ├─ run_task() → _submit_to_isolated_loop_in_context()
+# yyds:     │     │     │
+# yyds:     │     │     └─ _aexecute(task) 在 isolated event loop 上运行
+# yyds:     │     │           ├─ _build_initial_state() → 加载 skills + 构造 messages
+# yyds:     │     │           ├─ _create_agent() → create_agent(model, tools, middlewares)
+# yyds:     │     │           └─ agent.astream(state) → 逐 chunk 收集 AI 消息
+# yyds:     │     │
+# yyds:     │     └─ future.result(timeout=900s) → 超时则 cancel
+# yyds:     │
+# yyds:     └─ 返回 task_id，task_tool 每隔 5s 轮询 get_background_task_result()
+# yyds:
+# yyds: 关键设计：
+# yyds:   - _scheduler_pool(max_workers=3): 最多 3 个 sub-agent 并发调度
+# yyds:   - _isolated_subagent_loop: 持久化 event loop，避免每次执行创建新 loop
+# yyds:   - cancel_event: 协作式取消，在 astream 迭代边界检查
+# yyds:   - disallowed_tools=["task"]: 递归防护，sub-agent 不能再创建 sub-agent
+# yyds:   - Context 传播: copy_context() 保留父线程的 ContextVar（如 trace_id）
+# yyds: ═══════════════════════════════════════════════════════════════════
 """Subagent execution engine."""
 
 import asyncio
@@ -37,6 +66,7 @@ if callable(_previous_shutdown_isolated_subagent_loop):
     _previous_shutdown_isolated_subagent_loop()
 
 
+# yyds: sub-agent 执行状态枚举：PENDING → RUNNING → COMPLETED/FAILED/CANCELLED/TIMED_OUT
 class SubagentStatus(Enum):
     """Status of a subagent execution."""
 
@@ -57,6 +87,8 @@ class SubagentStatus(Enum):
         }
 
 
+# yyds: sub-agent 执行结果数据类，包含 task_id/trace_id/status/result/error/ai_messages
+# yyds: cancel_event: threading.Event，用于协作式取消（astream 迭代边界检查）
 @dataclass
 class SubagentResult:
     """Result of a subagent execution.
@@ -126,6 +158,11 @@ class SubagentResult:
             return True
 
 
+# yyds: ──── 全局存储 ────
+# yyds: _background_tasks: 所有后台任务的 result 存储，task_id → SubagentResult
+# yyds: _scheduler_pool: 调度线程池，max_workers=3，控制并发 sub-agent 数量
+# yyds: _isolated_subagent_loop: 持久化 event loop，避免每次执行都创建新的 asyncio loop
+
 # Global storage for background task results
 _background_tasks: dict[str, SubagentResult] = {}
 _background_tasks_lock = threading.Lock()
@@ -142,6 +179,7 @@ _isolated_subagent_loop_started: threading.Event | None = None
 _isolated_subagent_loop_lock = threading.Lock()
 
 
+# yyds: 在独立守护线程中运行持久化 event loop，通过 started_event 同步启动状态
 def _run_isolated_subagent_loop(
     loop: asyncio.AbstractEventLoop,
     started_event: threading.Event,
@@ -155,6 +193,7 @@ def _run_isolated_subagent_loop(
         started_event.clear()
 
 
+# yyds: 进程退出时清理：停止 isolated loop → join 线程 → 关闭 loop
 def _shutdown_isolated_subagent_loop() -> None:
     """Stop and close the persistent isolated subagent loop."""
     global _isolated_subagent_loop, _isolated_subagent_loop_thread, _isolated_subagent_loop_started
@@ -192,6 +231,8 @@ def _shutdown_isolated_subagent_loop() -> None:
 atexit.register(_shutdown_isolated_subagent_loop)
 
 
+# yyds: 获取或创建持久化 isolated event loop（懒初始化，线程安全）
+# yyds: 如果 loop 不可用（关闭/未运行/线程死掉），创建新的 loop + daemon thread
 def _get_isolated_subagent_loop() -> asyncio.AbstractEventLoop:
     """Return the persistent event loop used by isolated subagent executions."""
     global _isolated_subagent_loop, _isolated_subagent_loop_thread, _isolated_subagent_loop_started
@@ -223,6 +264,8 @@ def _get_isolated_subagent_loop() -> asyncio.AbstractEventLoop:
         return _isolated_subagent_loop
 
 
+# yyds: 将协程提交到 isolated loop，同时保留 ContextVar 状态（如 trace_id）
+# yyds: 关键：用 context.run() 包裹 asyncio.run_coroutine_threadsafe()，确保子线程能看到父线程的 context vars
 def _submit_to_isolated_loop_in_context(
     context: Context,
     coro_factory: Callable[[], Coroutine[Any, Any, SubagentResult]],
@@ -236,6 +279,8 @@ def _submit_to_isolated_loop_in_context(
     )
 
 
+# yyds: 工具过滤器 —— 按 sub-agent 配置的 allowlist/denylist 过滤可用工具
+# yyds: 先白名单（tools），再黑名单（disallowed_tools），注意顺序
 def _filter_tools(
     all_tools: list[BaseTool],
     allowed: list[str] | None,
@@ -266,9 +311,10 @@ def _filter_tools(
     return filtered
 
 
+# yyds: ──── SubagentExecutor 核心 ────
+# yyds: 每次派发子任务时创建一个实例，持有 config + tools + sandbox_state + thread_data
+# yyds: 两种执行模式：execute()(同步等待) / execute_async()(后台异步，返回 task_id)
 class SubagentExecutor:
-    """Executor for running subagents."""
-
     def __init__(
         self,
         config: SubagentConfig,
@@ -319,8 +365,10 @@ class SubagentExecutor:
 
         logger.info(f"[trace={self.trace_id}] SubagentExecutor initialized: {config.name} with {len(self.tools)} tools")
 
+    # yyds: 创建 LangGraph agent 实例，使用 build_subagent_runtime_middlewares 构建中间件链
+    # yyds: sub-agent 的中间件比 lead agent 少（只有 ThreadData/Sandbox/Guardrail/ToolErrorHandling）
+    # yyds: thinking_enabled=False：sub-agent 不启用 thinking 模式（节省 token）
     def _create_agent(self, tools: list[BaseTool] | None = None):
-        """Create the agent instance."""
         app_config = self.app_config or get_app_config()
         if self.model_name is None:
             self.model_name = resolve_subagent_model_name(self.config, self.parent_model, app_config=app_config)
@@ -341,8 +389,9 @@ class SubagentExecutor:
             state_schema=ThreadState,
         )
 
+    # yyds: 从磁盘加载 skill 元数据，支持白名单过滤（config.skills）
+    # yyds: 用 asyncio.to_thread 避免阻塞 event loop（LangGraph ASGI 要求）
     async def _load_skills(self) -> list[Skill]:
-        """Load enabled skill metadata based on config.skills."""
         if self.config.skills is not None and len(self.config.skills) == 0:
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} skills=[] — skipping skill loading")
             return []
@@ -369,9 +418,12 @@ class SubagentExecutor:
             return [s for s in all_skills if s.name in allowed]
         return all_skills
 
+    # yyds: 根据 skill 的 allowed_tools 进一步过滤工具（skill 可以限定只暴露部分工具）
     def _apply_skill_allowed_tools(self, skills: list[Skill]) -> list[BaseTool]:
         return filter_tools_by_skill_allowed_tools(self._base_tools, skills)
 
+    # yyds: 读取每个 skill 的 SKILL.md 内容，包装为 SystemMessage 注入到对话中
+    # yyds: 模式：skills 不写入 system_prompt，而是作为 developer message 注入（Codex 风格）
     async def _load_skill_messages(self, skills: list[Skill]) -> list[SystemMessage]:
         """Load skill content as conversation items based on config.skills.
 
@@ -403,6 +455,8 @@ class SubagentExecutor:
 
         return messages
 
+    # yyds: 构建初始 state：加载 skills → 过滤 tools → 构建 messages → 传入 sandbox/thread_data
+    # yyds: 消息顺序：[skill_messages...] + [HumanMessage(task)]
     async def _build_initial_state(self, task: str) -> tuple[dict[str, Any], list[BaseTool]]:
         """Build the initial state for agent execution.
 
@@ -446,16 +500,11 @@ class SubagentExecutor:
 
         return state, filtered_tools
 
+    # yyds: 异步执行核心 —— 在 isolated loop 上跑 agent.astream()，逐 chunk 收集结果
+    # yyds: 关键流程：_build_initial_state → _create_agent → astream → 提取最后一个 AIMessage
+    # yyds: 协作式取消：每个 chunk 迭代检查 cancel_event，如果被父 agent 取消则提前返回
+    # yyds: 去重：通过 message id 或完整 dict 比较，避免重复收集 AI 消息
     async def _aexecute(self, task: str, result_holder: SubagentResult | None = None) -> SubagentResult:
-        """Execute a task asynchronously.
-
-        Args:
-            task: The task description for the subagent.
-            result_holder: Optional pre-created result object to update during execution.
-
-        Returns:
-            SubagentResult with the execution result.
-        """
         if result_holder is not None:
             # Use the provided result holder (for async execution with real-time updates)
             result = result_holder
@@ -641,15 +690,9 @@ class SubagentExecutor:
 
         return result
 
+    # yyds: 在 isolated loop 上同步执行，保留 ContextVar，带超时控制
+    # yyds: 超时时设置 cancel_event + 取消 future，触发协作式停止
     def _execute_in_isolated_loop(self, task: str, result_holder: SubagentResult | None = None) -> SubagentResult:
-        """Execute the subagent on the persistent isolated event loop.
-
-        This method is used by the sync ``execute()`` path when the caller is
-        already running inside an event loop. Because ``execute()`` is a sync
-        API, this path blocks the caller while the actual coroutine runs on the
-        long-lived isolated loop. Reusing that loop keeps shared async clients
-        from being tied to a short-lived loop that gets closed per execution.
-        """
         future: Future[SubagentResult] | None = None
         parent_context = copy_context()
         try:
@@ -677,24 +720,10 @@ class SubagentExecutor:
                 )
             raise
 
+    # yyds: 同步执行入口 —— 两条路径：
+    # yyds:   1. 如果已在 event loop 中（如 LangGraph 异步节点）→ _execute_in_isolated_loop
+    # yyds:   2. 否则 → asyncio.run()（全新 loop）
     def execute(self, task: str, result_holder: SubagentResult | None = None) -> SubagentResult:
-        """Execute a task synchronously (wrapper around async execution).
-
-        This method runs the async execution in a new event loop, allowing
-        asynchronous tools (like MCP tools) to be used within the thread pool.
-
-        When called from within an already-running event loop (e.g., when the
-        parent agent is async), this method synchronously waits on the
-        persistent isolated loop to avoid event loop conflicts with shared
-        async primitives like httpx clients.
-
-        Args:
-            task: The task description for the subagent.
-            result_holder: Optional pre-created result object to update during execution.
-
-        Returns:
-            SubagentResult with the execution result.
-        """
         try:
             try:
                 loop = asyncio.get_running_loop()
@@ -721,16 +750,10 @@ class SubagentExecutor:
             result.try_set_terminal(SubagentStatus.FAILED, error=str(e))
             return result
 
+    # yyds: 异步后台执行 —— task_tool 的调用入口
+    # yyds: 流程：创建 SubagentResult → 存入 _background_tasks → 提交到 _scheduler_pool → 返回 task_id
+    # yyds: task_tool 拿到 task_id 后每 5s 轮询 get_background_task_result()
     def execute_async(self, task: str, task_id: str | None = None) -> str:
-        """Start a task execution in the background.
-
-        Args:
-            task: The task description for the subagent.
-            task_id: Optional task ID to use. If not provided, a random UUID will be generated.
-
-        Returns:
-            Task ID that can be used to check status later.
-        """
         # Use provided task_id or generate a new one
         if task_id is None:
             task_id = str(uuid.uuid4())[:8]
@@ -785,20 +808,16 @@ class SubagentExecutor:
         return task_id
 
 
+# yyds: ──── 后台任务管理函数 ────
+# yyds: request_cancel_background_task: 设置 cancel_event，协作式取消
+# yyds: get_background_task_result: task_tool 每 5s 调用此函数轮询结果
+# yyds: cleanup_background_task: task_tool 完成后清理，防止内存泄漏（只删终态任务）
+
 MAX_CONCURRENT_SUBAGENTS = 3
 
 
+# yyds: 协作式取消 —— 设置 cancel_event，_aexecute 在 astream 迭代边界检查
 def request_cancel_background_task(task_id: str) -> None:
-    """Signal a running background task to stop.
-
-    Sets the cancel_event on the task, which is checked cooperatively
-    by ``_aexecute`` during ``agent.astream()`` iteration.  This allows
-    subagent threads — which cannot be force-killed via ``Future.cancel()``
-    — to stop at the next iteration boundary.
-
-    Args:
-        task_id: The task ID to cancel.
-    """
     with _background_tasks_lock:
         result = _background_tasks.get(task_id)
         if result is not None:
@@ -806,41 +825,20 @@ def request_cancel_background_task(task_id: str) -> None:
             logger.info("Requested cancellation for background task %s", task_id)
 
 
+# yyds: 按 task_id 获取后台任务结果（task_tool 轮询用）
 def get_background_task_result(task_id: str) -> SubagentResult | None:
-    """Get the result of a background task.
-
-    Args:
-        task_id: The task ID returned by execute_async.
-
-    Returns:
-        SubagentResult if found, None otherwise.
-    """
     with _background_tasks_lock:
         return _background_tasks.get(task_id)
 
 
+# yyds: 列出所有后台任务（调试用）
 def list_background_tasks() -> list[SubagentResult]:
-    """List all background tasks.
-
-    Returns:
-        List of all SubagentResult instances.
-    """
     with _background_tasks_lock:
         return list(_background_tasks.values())
 
 
+# yyds: 清理已完成的任务，防止内存泄漏。只删终态任务（COMPLETED/FAILED/CANCELLED/TIMED_OUT）
 def cleanup_background_task(task_id: str) -> None:
-    """Remove a completed task from background tasks.
-
-    Should be called by task_tool after it finishes polling and returns the result.
-    This prevents memory leaks from accumulated completed tasks.
-
-    Only removes tasks that are in a terminal state (COMPLETED/FAILED/TIMED_OUT)
-    to avoid race conditions with the background executor still updating the task entry.
-
-    Args:
-        task_id: The task ID to remove.
-    """
     with _background_tasks_lock:
         result = _background_tasks.get(task_id)
         if result is None:

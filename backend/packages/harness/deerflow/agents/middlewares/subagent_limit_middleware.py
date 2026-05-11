@@ -1,4 +1,15 @@
-"""Middleware to enforce maximum concurrent subagent tool calls per model response."""
+"""yyds: 子代理并发限制中间件 — 限制模型单次响应中可发出的并发子代理（task）调用数量。
+
+【做什么】当模型在一次响应中生成超过上限的 "task" 工具调用时，截断多余的调用，只保留前 N 个。
+【为什么存在】大模型有时会一次性生成过多并行子代理调用（如5-6个），超出系统合理负载能力。
+   与其靠 prompt 限制（不可靠），不如在中间件层面硬性截断，更加稳定。
+【在链中的位置】after_model 阶段执行，模型返回响应后、工具执行前介入。
+【关键设计】
+   - 只针对名为 "task" 的工具调用进行截断，其他工具不受影响。
+   - 默认最大并发数为 MAX_CONCURRENT_SUBAGENTS（通常为3），限制范围 [2, 4]。
+   - 截断后用 model_copy 替换原消息（保持相同 id 触发替换语义），确保工具节点只执行保留的调用。
+   - 记录警告日志，便于监控模型是否频繁尝试超出限制。
+"""
 
 import logging
 from typing import override

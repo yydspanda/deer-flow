@@ -1,3 +1,4 @@
+# yyds: 线程元数据持久化子包，提供SQL和内存两种存储实现
 """Thread metadata persistence — ORM, abstract store, and concrete implementations."""
 
 from __future__ import annotations

@@ -1,3 +1,18 @@
+# yyds: task_tool.py — Sub-Agent 任务委派工具（Ultra 模式的核心）
+#      Lead Agent 通过调用 task_tool 把子任务派给 sub-agent
+#
+#      执行流程：
+#      1. 获取 sub-agent 配置（从 registry 或 config.yaml 的 custom_agents）
+#      2. 获取可用工具（排除 task_tool，防止递归嵌套）
+#      3. 创建 SubagentExecutor → execute_async() 在后台线程池执行
+#      4. 每 5 秒轮询结果 → 通过 SSE 发送 task_started/task_running/task_completed 事件
+#      5. 完成/失败/超时 → 返回结果给 Lead Agent
+#
+#      关键设计：
+#      - sub-agent 不能再创建 sub-agent（递归防护）
+#      - bash 类型 sub-agent 需要配置 allow_host_bash
+#      - 技能白名单：子 agent 只能用父 agent 允许的技能的交集
+#      - 超时：配置的 timeout_seconds + 60s 缓冲
 """Task tool for delegating work to subagents."""
 
 import asyncio

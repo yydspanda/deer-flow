@@ -1,3 +1,4 @@
+# yyds: 基于Serper的Google搜索工具，通过JSON API获取实时搜索结果
 """
 Web Search Tool - Search the web using Serper (Google Search API).
 

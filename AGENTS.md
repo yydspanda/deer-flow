@@ -13,11 +13,11 @@ make setup              # Interactive config wizard → config.yaml + .env
 make doctor             # Validate config and system requirements
 ```
 
-### Run
+### Run (from repo root)
 
 ```
-make dev                # Dev mode: LangGraph(2024) + Gateway(8001) + Frontend(3000) + nginx(2026)
-make dev-pro            # Dev + Gateway mode (no LangGraph server, 3 processes)
+make dev                # Gateway(8001) + Frontend(3000) + nginx(2026)
+make dev-daemon         # Same as dev but in background
 make stop               # Stop all local services
 ```
 
@@ -46,6 +46,7 @@ Single test: `cd backend && PYTHONPATH=. uv run pytest tests/test_foo.py -v`
 pnpm lint               # ESLint
 pnpm typecheck          # tsc --noEmit
 pnpm test               # vitest run (tests/unit/**/*.test.ts)
+pnpm test:e2e           # Playwright E2E tests (tests/e2e/**/*.spec.ts)
 pnpm format:write       # Prettier
 ```
 
@@ -62,13 +63,12 @@ Build requires `BETTER_AUTH_SECRET=local-dev-secret pnpm build` (fails without i
 
 ```
 Browser → nginx(:2026)
-  ├── /api/langgraph/*  → LangGraph Server (:2024)   [standard mode]
-  │                      or Gateway (:8001)           [gateway mode]
+  ├── /api/langgraph/*  → Gateway (:8001) embedded agent runtime
   ├── /api/*            → Gateway API (:8001)
   └── /*                → Frontend (:3000)
 ```
 
-Gateway mode (`make dev-pro`) embeds the agent runtime in the Gateway process — no LangGraph server needed.
+`make dev` runs the agent runtime inside Gateway — no separate LangGraph server process. Gateway embeds the runtime via `RunManager` + `run_agent()` + `StreamBridge`.
 
 ### Key directories
 
@@ -78,11 +78,12 @@ Gateway mode (`make dev-pro`) embeds the agent runtime in the Gateway process �
 | `extensions_config.json` | MCP servers + skills config (gitignored) |
 | `backend/packages/harness/deerflow/` | Publishable harness package (`deerflow-harness`, import as `deerflow.*`) |
 | `backend/app/` | Unpublished application layer — Gateway API, IM channels (import as `app.*`) |
-| `backend/langgraph.json` | LangGraph entrypoint: `deerflow.agents:make_lead_agent` |
+| `backend/langgraph.json` | LangGraph Studio entrypoint: `deerflow.agents:make_lead_agent` (only used by LangGraph Studio, not by `make dev`) |
 | `backend/tests/` | Backend tests (pytest) |
 | `frontend/src/core/` | Frontend business logic (threads, api, artifacts, i18n) |
 | `frontend/src/components/ui/` | Shadcn-generated (do not manually edit) |
-| `frontend/tests/unit/` | Frontend tests (Vitest, mirrors `src/` layout) |
+| `frontend/tests/unit/` | Unit tests (Vitest, mirrors `src/` layout) |
+| `frontend/tests/e2e/` | E2E tests (Playwright, Chromium, mocked backend) |
 | `skills/public/` | Built-in skills |
 | `skills/custom/` | User skills (gitignored) |
 
@@ -101,15 +102,17 @@ Gateway mode (`make dev-pro`) embeds the agent runtime in the Gateway process �
 ## Toolchain
 
 - Python 3.12+, `uv` package manager
-- Node.js 22+, pnpm 10.26.2
+- Node.js 22+, pnpm 10.26.2 (pinned via `packageManager` in `frontend/package.json`)
 - nginx (required for `make dev`)
 - ruff for backend lint/format (line-length 240, double quotes, spaces)
 
 ## CI (all PRs)
 
 - **Lint check**: backend `make lint`, frontend `pnpm format && pnpm lint && pnpm typecheck && pnpm build`
-- **Backend tests**: `uv sync --group dev && make test`
-- **Frontend tests**: `pnpm install --frozen-lockfile && pnpm test`
+- **Backend tests**: `cd backend && uv sync --group dev && make test`
+- **Frontend tests**: `cd frontend && pnpm install --frozen-lockfile && pnpm test`
+- **E2E tests**: triggered only on `frontend/**` changes
+- Draft PRs skip backend/frontend/E2E test jobs
 
 ## Gotchas
 
@@ -121,3 +124,4 @@ Gateway mode (`make dev-pro`) embeds the agent runtime in the Gateway process �
 - Frontend `@/*` path alias maps to `src/*`.
 - Backend `PYTHONPATH=.` is required for `pytest` (tests import from repo root).
 - `packages/harness` is a uv workspace member; its `pyproject.toml` holds the real dependency list.
+- `langgraph.json` is only used by LangGraph Studio. `make dev` runs the agent in Gateway directly via `make_lead_agent`.

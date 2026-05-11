@@ -1,4 +1,9 @@
-"""Terminal UI helpers for the Setup Wizard."""
+"""Terminal UI helpers for the Setup Wizard.
+
+yyds: 向导的终端 UI 工具集。
+      提供：颜色输出、用户输入（文本/密码/选择/确认）、列表选择、
+      标题/分隔线打印等。兼容 Unix (termios) 和 Windows。
+"""
 
 from __future__ import annotations
 

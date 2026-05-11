@@ -1,3 +1,6 @@
+# yyds: 循环检测中间件配置，防止 agent 陷入重复工具调用的死循环
+# yyds: 双层阈值设计：warn_threshold 注入警告提示，hard_limit 强制中断执行
+# yyds: 支持按工具名单独配置频率阈值（tool_freq_overrides），如 bash 可设置更高上限
 """Configuration for loop detection middleware."""
 
 from pydantic import BaseModel, Field, model_validator

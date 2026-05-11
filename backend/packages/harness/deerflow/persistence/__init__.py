@@ -1,3 +1,4 @@
+# yyds: 应用持久化层入口，管理数据库引擎和会话工厂
 """DeerFlow application persistence layer (SQLAlchemy 2.0 async ORM).
 
 This module manages DeerFlow's own application data -- runs metadata,

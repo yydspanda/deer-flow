@@ -1,3 +1,7 @@
+# yyds: 统一数据库后端配置，同时控制 LangGraph 检查点和 DeerFlow 应用持久化层。
+# yyds: 三种模式：memory(开发用，无持久化)、sqlite(单节点，WAL模式并发安全)、postgres(生产多节点)。
+# yyds: SQLite 模式下检查点和应用共享 .db 文件，WAL 日志允许并发读写不阻塞。
+# yyds: Postgres 模式共享数据库 URL 但维护独立连接池。敏感值用 $VAR 语法引用环境变量。
 """Unified database backend configuration.
 
 Controls BOTH the LangGraph checkpointer and the DeerFlow application

@@ -2,6 +2,18 @@
 #
 # serve.sh — Unified DeerFlow service launcher
 #
+# yyds: 这是 `make dev` 的核心脚本，启动本地开发环境。
+#       按顺序启动 3 个进程：Gateway(8001) → Frontend(3000) → Nginx(2026)
+#       就是架构图里的三件套。
+#
+#       关键行为：
+#       - 启动前先 stop 已有的服务（所以 make dev 日志里有 interrupt 噪音是正常的）
+#       - 自动跑 config-upgrade.sh 升级配置（如果版本落后）
+#       - 自动 sync 依赖（uv sync + pnpm install），--skip-install 可跳过
+#       - dev 模式下 Gateway 开了 --reload，改 .yaml/.env 自动重启
+#       - 用 wait-for-port.sh 等每个服务就绪再启动下一个
+#       - Ctrl+C 时自动 stop_all 清理所有进程
+#
 # Usage:
 #   ./scripts/serve.sh [--dev|--prod] [--daemon] [--stop|--restart]
 #
@@ -30,6 +42,8 @@ REPO_ROOT="$(builtin cd "$(dirname "${BASH_SOURCE[0]}")/.." >/dev/null 2>&1 && p
 cd "$REPO_ROOT"
 
 # ── Load .env ────────────────────────────────────────────────────────────────
+# yyds: 加载 .env 文件到环境变量。set -a 让所有变量自动 export，set +a 关闭。
+#       config.yaml 里的 $VAR 引用就是从这里取值的。
 
 if [ -f "$REPO_ROOT/.env" ]; then
     set -a
@@ -61,6 +75,8 @@ for arg in "$@"; do
 done
 
 # ── Stop helper ──────────────────────────────────────────────────────────────
+# yyds: stop_all() 杀掉所有 DeerFlow 进程：
+#       uvicorn(Gateway) + next(Frontend) + nginx → 清理沙箱容器 → 强杀端口残留
 
 _is_repo_pid() {
     local pid=$1
@@ -230,6 +246,10 @@ else
 fi
 
 # Extra flags for uvicorn
+# yyds: dev 模式下给 uvicorn 加热重载参数：
+#       --reload-include='*.yaml' 改配置自动重启 Gateway
+#       --reload-include='.env'    改环境变量也重启
+#       排除 .pyc / __pycache__ / sandbox / .deer-flow 这些无关文件
 if $DEV_MODE && ! $DAEMON_MODE; then
     GATEWAY_EXTRA_FLAGS="--reload --reload-include='*.yaml' --reload-include='.env' --reload-exclude='*.pyc' --reload-exclude='__pycache__' --reload-exclude='sandbox/' --reload-exclude='.deer-flow/'"
 else
@@ -358,11 +378,18 @@ run_service() {
 }
 
 # ── Start services ───────────────────────────────────────────────────────────
+# yyds: 按顺序启动 3 个服务，每个服务等端口就绪再启动下一个：
+#       1. Gateway(8001)  ← Agent 运行时 + REST API，30秒超时
+#       2. Frontend(3000) ← Next.js 开发服务器，120秒超时（首次构建慢）
+#       3. Nginx(2026)    ← 反向代理，10秒超时
 
 mkdir -p logs
 mkdir -p temp/client_body_temp temp/proxy_temp temp/fastcgi_temp temp/uwsgi_temp temp/scgi_temp
 
 # 1. Gateway API
+# yyds: PYTHONPATH=. 让 uvicorn 能从项目根目录 import backend 下的模块
+#      uv run uvicorn → 用 uv 管理的虚拟环境跑 uvicorn
+#      app.gateway.app:app → backend/app/gateway/app.py 里的 app 对象
 run_service "Gateway" \
     "cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 $GATEWAY_EXTRA_FLAGS > ../logs/gateway.log 2>&1" \
     8001 30

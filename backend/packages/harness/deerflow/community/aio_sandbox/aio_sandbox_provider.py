@@ -1,3 +1,4 @@
+# yyds: AIO沙箱提供者，编排容器生命周期、空闲超时管理和跨进程发现
 """AIO Sandbox Provider — orchestrates sandbox lifecycle with pluggable backends.
 
 This provider composes:

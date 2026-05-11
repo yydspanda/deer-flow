@@ -1,3 +1,5 @@
+# yyds: MCP工具加载核心模块 - 从所有已启用的MCP服务器发现并加载工具，转换为LangChain BaseTool格式
+# yyds: 关键设计：使用全局线程池解决异步工具在同步上下文中的调用问题，支持OAuth拦截器和自定义拦截器链
 """Load MCP tools using langchain-mcp-adapters with stdio session pooling."""
 
 from __future__ import annotations
@@ -170,6 +172,7 @@ def _make_session_pool_tool(
     )
 
 
+# yyds: MCP工具加载主入口 - 读取extensions_config.json配置，构建多服务器客户端，注入OAuth头和自定义拦截器，返回LangChain工具列表
 async def get_mcp_tools() -> list[BaseTool]:
     """Get all tools from enabled MCP servers.
 

@@ -1,3 +1,23 @@
+# yyds:
+# 本文件实现了 DeerFlowClient —— DeerFlow 的嵌入式 Python 客户端。
+# 核心设计理念：CLI-first（命令行优先），无需启动 LangGraph Server 或 Gateway API 即可直接调用 Agent。
+#
+# 架构概览：
+#   DeerFlowClient
+#     ├── 同步 API（stream / chat）：内部直接调用 agent.stream()，调用方无需接触 asyncio
+#     ├── 线程管理：list_threads / get_thread，通过 checkpointer 持久化多轮对话状态
+#     ├── 配置查询：list_models / list_skills / get_memory 等，与 Gateway API 返回格式一致
+#     ├── MCP & Skills 管理：动态更新 extensions_config.json 并热重载
+#     ├── 文件上传：支持 PDF/PPT/Excel/Word 自动转换为 Markdown
+#     └── Artifacts：读取 Agent 生成的产物文件
+#
+# 关键设计决策：
+#   1. Agent 延迟创建（lazy init）—— 首次调用时才构建，配置变更时自动重建
+#   2. 流式事件类型与 LangGraph SSE 协议对齐，方便 HTTP/嵌入式模式切换
+#   3. 不复用 Gateway 的 run_agent 流水线，因为同步生成器 vs async、
+#      进程内直接传递 Python 对象 vs JSON/SSE 序列化等差异使得共享代码得不偿失
+#   4. 消息去重：messages 模式和 values 模式会产生重叠内容，通过 seen_ids / streamed_ids 去重
+
 """DeerFlowClient — Embedded Python client for DeerFlow agent system.
 
 Provides direct programmatic access to DeerFlow's agent capabilities
@@ -61,6 +81,7 @@ logger = logging.getLogger(__name__)
 StreamEventType = Literal["values", "messages-tuple", "custom", "end"]
 
 
+# yyds: 流式事件的数据结构，与 LangGraph SSE 协议的 event type 对齐，用于统一的流式消费接口
 @dataclass
 class StreamEvent:
     """A single event from the streaming agent response.
@@ -79,6 +100,8 @@ class StreamEvent:
     data: dict[str, Any] = field(default_factory=dict)
 
 
+# yyds: 核心客户端类 —— 封装 Agent 创建、对话流、线程管理、配置查询、文件上传等全部能力，
+# 提供 Pythonic 的同步 API，可通过 `from deerflow import DeerFlowClient` 直接编程调用
 class DeerFlowClient:
     """Embedded Python client for DeerFlow agent system.
 
@@ -113,6 +136,7 @@ class DeerFlowClient:
         print(client.list_skills())
     """
 
+    # yyds: 延迟初始化构造器 —— 仅加载配置和保存参数，Agent 在首次调用时按需构建（避免 import 时就触发 LLM 连接）
     def __init__(
         self,
         config_path: str | None = None,
@@ -171,6 +195,8 @@ class DeerFlowClient:
         self._agent = None
         self._agent_config_key: tuple | None = None
 
+        # yyds: 强制重建 Agent —— 长运行进程中外部变更（如 memory 更新、skill 安装）后调用以刷新系统提示词和工具集
+
     def reset_agent(self) -> None:
         """Force the internal agent to be recreated on the next call.
 
@@ -185,6 +211,7 @@ class DeerFlowClient:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    # yyds: 原子写入 JSON —— 先写临时文件再 replace，防止写入中途崩溃导致配置文件损坏
     @staticmethod
     def _atomic_write_json(path: Path, data: dict) -> None:
         """Write JSON to *path* atomically (temp file + replace)."""
@@ -203,6 +230,8 @@ class DeerFlowClient:
             Path(fd.name).unlink(missing_ok=True)
             raise
 
+        # yyds: 构建 RunnableConfig —— 将 thread_id、model、thinking 等运行参数打包为 LangGraph agent 所需的配置对象
+
     def _get_runnable_config(self, thread_id: str, **overrides) -> RunnableConfig:
         """Build a RunnableConfig for agent invocation."""
         configurable = {
@@ -216,6 +245,9 @@ class DeerFlowClient:
             configurable=configurable,
             recursion_limit=overrides.get("recursion_limit", 100),
         )
+
+        # yyds: Agent 懒加载 + 配置缓存 —— 根据模型名、thinking、plan_mode 等参数生成 cache key，
+        # 仅在 key 变化时重建 Agent，避免每次调用都重新创建（系统提示词、工具集等构建成本高）
 
     def _ensure_agent(self, config: RunnableConfig):
         """Create (or recreate) the agent when config-dependent params change."""
@@ -265,6 +297,8 @@ class DeerFlowClient:
         self._agent_config_key = key
         logger.info("Agent created: agent_name=%s, model=%s, thinking=%s", self._agent_name, model_name, thinking_enabled)
 
+        # yyds: 延迟导入工具列表 —— 避免模块级循环依赖（deerflow.tools 可能反向引用 client 相关模块）
+
     @staticmethod
     def _get_tools(*, model_name: str | None, subagent_enabled: bool):
         """Lazy import to avoid circular dependency at module level."""
@@ -272,10 +306,14 @@ class DeerFlowClient:
 
         return get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled)
 
+        # yyds: 序列化 tool_calls —— 将 LangChain 内部的 tool_calls 结构转为与 Gateway API 一致的线格式
+
     @staticmethod
     def _serialize_tool_calls(tool_calls) -> list[dict]:
         """Reshape LangChain tool_calls into the wire format used in events."""
         return [{"name": tc["name"], "args": tc["args"], "id": tc.get("id")} for tc in tool_calls]
+
+        # yyds: 提取消息的 additional_kwargs（如 reasoning_content 等扩展字段），仅在有值时返回
 
     @staticmethod
     def _serialize_additional_kwargs(msg) -> dict[str, Any] | None:
@@ -284,6 +322,8 @@ class DeerFlowClient:
         if isinstance(additional_kwargs, dict) and additional_kwargs:
             return dict(additional_kwargs)
         return None
+
+        # yyds: 构建 AI 文本流式事件 —— 携带 token delta、usage 统计和 additional_kwargs 增量
 
     @staticmethod
     def _ai_text_event(msg_id: str | None, text: str, usage: dict | None, additional_kwargs: dict[str, Any] | None = None) -> "StreamEvent":
@@ -294,6 +334,8 @@ class DeerFlowClient:
         if additional_kwargs:
             data["additional_kwargs"] = additional_kwargs
         return StreamEvent(type="messages-tuple", data=data)
+
+        # yyds: 构建 AI 工具调用事件 —— 当 Agent 决定调用工具时发出，包含工具名、参数和调用 ID
 
     @staticmethod
     def _ai_tool_calls_event(msg_id: str | None, tool_calls, additional_kwargs: dict[str, Any] | None = None) -> "StreamEvent":
@@ -308,6 +350,8 @@ class DeerFlowClient:
             data["additional_kwargs"] = additional_kwargs
         return StreamEvent(type="messages-tuple", data=data)
 
+        # yyds: 构建工具结果事件 —— 将 ToolMessage（工具执行返回值）转为统一的流式事件格式
+
     @staticmethod
     def _tool_message_event(msg: ToolMessage) -> "StreamEvent":
         """Build a ``messages-tuple`` tool-result event from a ToolMessage."""
@@ -321,6 +365,8 @@ class DeerFlowClient:
                 "id": msg.id,
             },
         )
+
+        # yyds: 消息序列化 —— 将 LangChain Message 对象转为纯 dict，用于 values 事件中的完整状态快照
 
     @staticmethod
     def _serialize_message(msg) -> dict:
@@ -356,6 +402,9 @@ class DeerFlowClient:
                 d["additional_kwargs"] = additional_kwargs
             return d
         return {"type": "unknown", "content": str(msg), "id": getattr(msg, "id", None)}
+
+        # yyds: 从消息 content 中提取纯文本 —— 处理 str、list[str]（delta 块）和 list[dict]（结构化块）三种格式，
+        # 对短 chunk-like 字符串用空拼接（避免破坏 JSON/代码片段），对完整文本块用换行拼接
 
     @staticmethod
     def _extract_text(content) -> str:
@@ -398,6 +447,8 @@ class DeerFlowClient:
     # Public API — threads
     # ------------------------------------------------------------------
 
+    # yyds: 列出最近 N 条线程 —— 遍历 checkpointer 的所有 checkpoint，按 thread_id 聚合，
+    # 并按创建时间降序排列，确保返回最新的对话记录
     def list_threads(self, limit: int = 10) -> dict:
         """List the recent N threads.
 
@@ -454,6 +505,9 @@ class DeerFlowClient:
 
         return {"thread_list": threads[:limit]}
 
+        # yyds: 获取单个线程的完整检查点历史 —— 包括所有节点执行记录（messages、artifacts、pending_writes），
+        # 按时间戳全局排序以避免子图命名空间导致的部分乱序问题
+
     def get_thread(self, thread_id: str) -> dict:
         """Get the complete thread record, including all node execution records.
 
@@ -500,6 +554,9 @@ class DeerFlowClient:
     # Public API — conversation
     # ------------------------------------------------------------------
 
+    # yyds: 核心流式对话方法 —— 订阅 LangGraph 的 values + messages + custom 三种 stream mode，
+    # 通过 seen_ids / streamed_ids 双重去重机制避免 messages 模式和 values 模式的消息重复投递，
+    # 并累积 usage 统计在 end 事件中一次性返回。同步生成器设计使得调用方无需接触 asyncio。
     def stream(
         self,
         message: str,
@@ -795,6 +852,9 @@ class DeerFlowClient:
 
         yield StreamEvent(type="end", data={"usage": cumulative_usage})
 
+        # yyds: 简单对话接口 —— 包装 stream()，按消息 ID 累积所有 delta 块，只返回最后一条 AI 消息的完整文本。
+        # 用 list.append + join 代替 str += str，避免长回复时的 O(n²) 拼接开销。
+
     def chat(self, message: str, *, thread_id: str | None = None, **kwargs) -> str:
         """Send a message and return the final text response.
 
@@ -831,6 +891,7 @@ class DeerFlowClient:
     # Public API — configuration queries
     # ------------------------------------------------------------------
 
+    # yyds: 列出配置中所有可用模型 —— 返回格式与 Gateway API ModelsListResponse 一致，包含 thinking/reasoning 支持信息
     def list_models(self) -> dict:
         """List available models from configuration.
 
@@ -857,6 +918,8 @@ class DeerFlowClient:
             "token_usage": {"enabled": token_usage_enabled},
         }
 
+        # yyds: 列出所有技能（skills） —— 从 SkillStorage 加载，可选只返回已启用的，格式与 Gateway API 对齐
+
     def list_skills(self, enabled_only: bool = False) -> dict:
         """List available skills.
 
@@ -880,6 +943,8 @@ class DeerFlowClient:
             ]
         }
 
+        # yyds: 获取当前用户的记忆数据 —— 委托给 memory.updater，记忆用于跨对话的个性化上下文保持
+
     def get_memory(self) -> dict:
         """Get current memory data.
 
@@ -890,17 +955,23 @@ class DeerFlowClient:
 
         return get_memory_data(user_id=get_effective_user_id())
 
+        # yyds: 导出记忆数据 —— 用于备份或迁移到其他实例
+
     def export_memory(self) -> dict:
         """Export current memory data for backup or transfer."""
         from deerflow.agents.memory.updater import get_memory_data
 
         return get_memory_data(user_id=get_effective_user_id())
 
+        # yyds: 导入并持久化记忆数据 —— 从外部来源恢复完整的记忆状态
+
     def import_memory(self, memory_data: dict) -> dict:
         """Import and persist full memory data."""
         from deerflow.agents.memory.updater import import_memory_data
 
         return import_memory_data(memory_data, user_id=get_effective_user_id())
+
+        # yyds: 按名称查询单个模型的配置详情 —— 返回 None 表示未找到
 
     def get_model(self, name: str) -> dict | None:
         """Get a specific model's configuration by name.
@@ -928,6 +999,7 @@ class DeerFlowClient:
     # Public API — MCP configuration
     # ------------------------------------------------------------------
 
+    # yyds: 获取 MCP（Model Context Protocol）服务器配置 —— 返回所有已注册的 MCP 服务器及其连接参数
     def get_mcp_config(self) -> dict:
         """Get MCP server configurations.
 
@@ -937,6 +1009,9 @@ class DeerFlowClient:
         """
         config = get_extensions_config()
         return {"mcp_servers": {name: server.model_dump() for name, server in config.mcp_servers.items()}}
+
+        # yyds: 更新 MCP 配置 —— 原子写入 extensions_config.json，清除 Agent 缓存并热重载配置，
+        # 确保下次调用时 Agent 使用新的 MCP 工具集
 
     def update_mcp_config(self, mcp_servers: dict[str, dict]) -> dict:
         """Update MCP server configurations.
@@ -976,6 +1051,7 @@ class DeerFlowClient:
     # Public API — skills management
     # ------------------------------------------------------------------
 
+    # yyds: 按名称查询单个技能的详细信息
     def get_skill(self, name: str) -> dict | None:
         """Get a specific skill by name.
 
@@ -997,6 +1073,8 @@ class DeerFlowClient:
             "category": skill.category,
             "enabled": skill.enabled,
         }
+
+        # yyds: 更新技能启用状态 —— 修改 extensions_config.json 后强制重建 Agent，因为工具集会随技能启停变化
 
     def update_skill(self, name: str, *, enabled: bool) -> dict:
         """Update a skill's enabled status.
@@ -1048,6 +1126,8 @@ class DeerFlowClient:
             "enabled": updated.enabled,
         }
 
+        # yyds: 从 .skill 归档文件安装技能 —— 支持 ZIP 格式的技能包导入
+
     def install_skill(self, skill_path: str | Path) -> dict:
         """Install a skill from a .skill archive (ZIP).
 
@@ -1067,6 +1147,7 @@ class DeerFlowClient:
     # Public API — memory management
     # ------------------------------------------------------------------
 
+    # yyds: 强制从磁盘重新加载记忆数据 —— 使缓存失效，获取最新的记忆状态
     def reload_memory(self) -> dict:
         """Reload memory data from file, forcing cache invalidation.
 
@@ -1077,11 +1158,15 @@ class DeerFlowClient:
 
         return reload_memory_data(user_id=get_effective_user_id())
 
+        # yyds: 清除所有持久化的记忆数据 —— 慎用，不可逆
+
     def clear_memory(self) -> dict:
         """Clear all persisted memory data."""
         from deerflow.agents.memory.updater import clear_memory_data
 
         return clear_memory_data(user_id=get_effective_user_id())
+
+        # yyds: 手动创建单条记忆事实 —— 用于程序化注入用户偏好、上下文等长期知识
 
     def create_memory_fact(self, content: str, category: str = "context", confidence: float = 0.5) -> dict:
         """Create a single fact manually."""
@@ -1089,11 +1174,15 @@ class DeerFlowClient:
 
         return create_memory_fact(content=content, category=category, confidence=confidence)
 
+        # yyds: 按 ID 删除单条记忆事实
+
     def delete_memory_fact(self, fact_id: str) -> dict:
         """Delete a single fact from memory by fact id."""
         from deerflow.agents.memory.updater import delete_memory_fact
 
         return delete_memory_fact(fact_id)
+
+        # yyds: 更新单条记忆事实 —— 仅更新传入的字段，未传入的字段保持原值不变
 
     def update_memory_fact(
         self,
@@ -1111,6 +1200,8 @@ class DeerFlowClient:
             category=category,
             confidence=confidence,
         )
+
+        # yyds: 获取记忆系统的运行配置 —— 包括启用状态、存储路径、去抖时间、最大事实数、注入限制等
 
     def get_memory_config(self) -> dict:
         """Get memory system configuration.
@@ -1131,6 +1222,8 @@ class DeerFlowClient:
             "max_injection_tokens": config.max_injection_tokens,
         }
 
+        # yyds: 获取记忆状态总览 —— 配置 + 当前数据的组合视图
+
     def get_memory_status(self) -> dict:
         """Get memory status: config + current data.
 
@@ -1146,6 +1239,8 @@ class DeerFlowClient:
     # Public API — file uploads
     # ------------------------------------------------------------------
 
+    # yyds: 上传文件到线程目录 —— 先批量校验文件存在性和文件名唯一性，避免部分上传的尴尬状态；
+    # 对 PDF/PPT/Excel/Word 自动调用 asyncio.run 转换为 Markdown，已处于事件循环中时用线程池执行
     def upload_files(self, thread_id: str, files: list[str | Path]) -> dict:
         """Upload local files into a thread's uploads directory.
 
@@ -1245,6 +1340,8 @@ class DeerFlowClient:
             "message": f"Successfully uploaded {len(uploaded_files)} file(s)",
         }
 
+        # yyds: 列出线程上传目录中的所有文件 —— 包含文件大小、虚拟路径、artifact URL 等元信息
+
     def list_uploads(self, thread_id: str) -> dict:
         """List files in a thread's uploads directory.
 
@@ -1258,6 +1355,8 @@ class DeerFlowClient:
         uploads_dir = get_uploads_dir(thread_id)
         result = list_files_in_dir(uploads_dir)
         return enrich_file_listing(result, thread_id)
+
+        # yyds: 删除线程中的指定上传文件 —— 同时清理原始文件和转换后的 Markdown 文件
 
     def delete_upload(self, thread_id: str, filename: str) -> dict:
         """Delete a file from a thread's uploads directory.
@@ -1283,6 +1382,8 @@ class DeerFlowClient:
     # Public API — artifacts
     # ------------------------------------------------------------------
 
+    # yyds: 读取 Agent 生成的产物文件 —— 通过虚拟路径解析实际文件位置，防止路径遍历攻击，
+    # 返回 (文件字节, MIME 类型) 元组，用于 HTTP 下载或本地处理
     def get_artifact(self, thread_id: str, path: str) -> tuple[bytes, str]:
         """Read an artifact file produced by the agent.
 
