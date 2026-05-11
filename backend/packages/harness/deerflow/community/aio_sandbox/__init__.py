@@ -1,3 +1,4 @@
+# yyds: AIO Docker沙箱模块，提供基于容器的隔离执行环境
 from .aio_sandbox import AioSandbox
 from .aio_sandbox_provider import AioSandboxProvider
 from .backend import SandboxBackend

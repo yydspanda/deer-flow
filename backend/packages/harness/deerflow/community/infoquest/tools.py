@@ -1,3 +1,4 @@
+# yyds: InfoQuest 搜索工具 —— 通过 InfoQuest API 搜索并提取网页内容
 from langchain.tools import tool
 
 from deerflow.config import get_app_config

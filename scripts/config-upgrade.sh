@@ -2,9 +2,16 @@
 #
 # config-upgrade.sh - Upgrade config.yaml to match config.example.yaml
 #
-# 1. Runs version-specific migrations (value replacements, renames, etc.)
-# 2. Merges missing fields from the example into the user config
-# 3. Backs up config.yaml to config.yaml.bak before modifying.
+# yyds: 配置文件升级工具。upstream 新版本加了新的配置项时，用这个升级你的 config.yaml。
+#       被内部联 `make config-upgrade` 调用。
+#
+#       做三件事：
+#       1. 跑版本迁移脚本（比如 v0→v1 把 src.* 改名成 deerflow.*）
+#       2. 把 config.example.yaml 里有但你没有的字段合并进来（只加不覆盖）
+#       3. 改之前先备份 config.yaml → config.yaml.bak
+#
+#       配置文件查找顺序：环境变量 DEER_FLOW_CONFIG_PATH → backend/config.yaml → 项目根/config.yaml
+#
 
 set -e
 
@@ -35,6 +42,8 @@ if [ -z "$CONFIG" ]; then
 fi
 
 # Use inline Python to do migrations + recursive merge with PyYAML
+# yyds: 用内联 Python 处理 YAML 解析和合并，因为 bash 处理 YAML 太痛苦
+#       cygpath 是 Git Bash/Windows 上的路径转换工具（把 /c/xxx 转成 C:\xxx）
 if command -v cygpath >/dev/null 2>&1; then
     CONFIG_WIN="$(cygpath -w "$CONFIG")"
     EXAMPLE_WIN="$(cygpath -w "$EXAMPLE")"

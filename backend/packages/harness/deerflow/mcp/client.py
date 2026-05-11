@@ -1,3 +1,5 @@
+# yyds: MCP客户端配置模块 - 将extensions_config.json中的MCP服务器配置转换为langchain-mcp-adapters所需的连接参数格式
+# yyds: 支持三种传输协议：stdio（本地进程）、sse（Server-Sent Events）、http（HTTP流式）
 """MCP client using langchain-mcp-adapters."""
 
 import logging
@@ -8,6 +10,7 @@ from deerflow.config.extensions_config import ExtensionsConfig, McpServerConfig
 logger = logging.getLogger(__name__)
 
 
+# yyds: 构建单个MCP服务器的连接参数，根据传输类型（stdio/sse/http）提取命令、URL、环境变量和请求头
 def build_server_params(server_name: str, config: McpServerConfig) -> dict[str, Any]:
     """Build server parameters for MultiServerMCPClient.
 
@@ -42,6 +45,7 @@ def build_server_params(server_name: str, config: McpServerConfig) -> dict[str, 
     return params
 
 
+# yyds: 从扩展配置构建所有已启用MCP服务器的参数字典，跳过配置错误的服务器并记录日志
 def build_servers_config(extensions_config: ExtensionsConfig) -> dict[str, dict[str, Any]]:
     """Build servers configuration for MultiServerMCPClient.
 

@@ -1,3 +1,4 @@
+# yyds: 工具模块公共接口，导出工具注册/发现功能，skill_manage_tool通过懒加载避免循环依赖
 from .tools import get_available_tools
 
 __all__ = ["get_available_tools", "skill_manage_tool"]

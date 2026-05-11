@@ -1,3 +1,4 @@
+# yyds: LangChain消息转OpenAI格式的纯函数转换器，用于兼容OpenAI Chat Completions协议
 """Pure functions to convert LangChain message objects to OpenAI Chat Completions format.
 
 Utility for translating LangChain message types to OpenAI-compatible dicts.
@@ -18,6 +19,7 @@ _ROLE_MAP = {
 }
 
 
+# yyds: 将单个LangChain消息转为OpenAI格式的dict，处理Human/AI/System/Tool等所有消息类型
 def langchain_to_openai_message(message: Any) -> dict:
     """Convert a single LangChain BaseMessage to an OpenAI message dict.
 
@@ -71,6 +73,7 @@ def langchain_to_openai_message(message: Any) -> dict:
     return {"role": role, "content": content}
 
 
+# yyds: 从AIMessage推断OpenAI finish_reason，优先返回tool_calls，其次查response_metadata
 def _infer_finish_reason(message: Any) -> str:
     """Infer OpenAI finish_reason from an AIMessage.
 
@@ -88,6 +91,7 @@ def _infer_finish_reason(message: Any) -> str:
     return "stop"
 
 
+# yyds: 将AIMessage及其元数据转换为完整的OpenAI completion response格式，包含usage和choices
 def langchain_to_openai_completion(message: Any) -> dict:
     """Convert an AIMessage and its metadata to an OpenAI completion response dict.
 
@@ -131,6 +135,7 @@ def langchain_to_openai_completion(message: Any) -> dict:
     }
 
 
+# yyds: 批量将LangChain消息列表转换为OpenAI消息dict列表
 def langchain_messages_to_openai(messages: list) -> list[dict]:
     """Convert a list of LangChain BaseMessages to OpenAI message dicts."""
     return [langchain_to_openai_message(m) for m in messages]

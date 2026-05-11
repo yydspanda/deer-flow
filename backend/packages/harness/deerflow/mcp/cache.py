@@ -1,3 +1,5 @@
+# yyds: MCP工具缓存模块 - 通过mtime检测配置文件变更自动失效缓存，支持懒加载和多进程间配置同步
+# yyds: 关键设计：Gateway API修改配置后，LangGraph Server进程通过检测mtime自动重新加载MCP工具
 """Cache for MCP tools to avoid repeated loading."""
 
 import asyncio
@@ -8,12 +10,14 @@ from langchain_core.tools import BaseTool
 
 logger = logging.getLogger(__name__)
 
+# yyds: 全局缓存状态 - 存储已加载的MCP工具列表、初始化标志、异步锁和配置文件修改时间戳
 _mcp_tools_cache: list[BaseTool] | None = None
 _cache_initialized = False
 _initialization_lock = asyncio.Lock()
 _config_mtime: float | None = None  # Track config file modification time
 
 
+# yyds: 获取extensions_config.json文件的修改时间，用于检测配置是否被外部进程更新
 def _get_config_mtime() -> float | None:
     """Get the modification time of the extensions config file.
 
@@ -28,6 +32,7 @@ def _get_config_mtime() -> float | None:
     return None
 
 
+# yyds: 判断缓存是否过期 - 比较当前配置文件mtime与缓存时的mtime，检测外部进程（如Gateway API）的配置变更
 def _is_cache_stale() -> bool:
     """Check if the cache is stale due to config file changes.
 
@@ -53,6 +58,7 @@ def _is_cache_stale() -> bool:
     return False
 
 
+# yyds: 初始化并缓存MCP工具 - 应用启动时调用一次，使用异步锁保证并发安全，加载后记录配置文件mtime
 async def initialize_mcp_tools() -> list[BaseTool]:
     """Initialize and cache MCP tools.
 
@@ -79,6 +85,7 @@ async def initialize_mcp_tools() -> list[BaseTool]:
         return _mcp_tools_cache
 
 
+# yyds: 获取缓存的MCP工具（懒加载入口）- 自动检测配置变更并重新加载，兼容有/无事件循环的调用环境
 def get_cached_mcp_tools() -> list[BaseTool]:
     """Get cached MCP tools with lazy initialization.
 
@@ -129,6 +136,7 @@ def get_cached_mcp_tools() -> list[BaseTool]:
     return _mcp_tools_cache or []
 
 
+# yyds: 重置MCP工具缓存，清空工具列表、初始化标志和mtime记录，用于测试或强制重新加载
 def reset_mcp_tools_cache() -> None:
     """Reset the MCP tools cache.
 

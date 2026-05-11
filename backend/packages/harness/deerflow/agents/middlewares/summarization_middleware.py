@@ -1,4 +1,36 @@
-"""Summarization middleware extensions for DeerFlow."""
+"""Summarization middleware extensions for DeerFlow.
+
+yyds: 上下文压缩中间件——你踩过 bug 的那个！
+
+这个中间件继承自 LangChain 的 SummarizationMiddleware，增加了 DeerFlow 特有的功能：
+
+1. Skill Rescue（Skill 保护）
+   压缩上下文时，Agent 之前加载的 skill 文件内容会被当作普通消息一起压缩掉。
+   但 skill 内容通常很长且重要（包含了工作流指引），压缩掉后 Agent 就"忘了"怎么用 skill。
+   所以这个中间件会在压缩时"拯救"最近的 N 个 skill bundle，不被压缩。
+
+2. BeforeSummarization Hooks（压缩前回调）
+   压缩发生前，触发钩子函数。当前唯一的钩子是 memory_flush_hook：
+   把即将被压缩掉的消息持久化到记忆系统（.deer-flow/memory.json），
+   这样即使对话被压缩了，记忆系统里还保留着关键信息。
+
+3. 你踩过的 bug：
+   当 skill rescue 把 AIMessage 的 tool_calls 拆分后（保留 skill 相关的，移除非 skill 的），
+   如果有 ToolMessage 对应被移除的 tool_call，就会出现"孤儿 ToolMessage"。
+   LLM 看到 ToolMessage 但没有对应的 AIMessage(tool_calls)，就会报 400 错误。
+   这就是为什么你的对话会崩——新建 thread 能规避是因为新对话还没触发压缩。
+
+文件结构：
+  ├── SummarizationEvent         压缩事件的上下文数据
+  ├── BeforeSummarizationHook    压缩前钩子接口（Protocol）
+  ├── DeerFlowSummarizationMiddleware 主类
+  │   ├── _maybe_summarize()        压缩入口（before_model 钩子）
+  │   ├── _partition_with_skill_rescue()  分区 + skill 保护
+  │   ├── _find_skill_bundles()     找到所有 skill 相关的消息组
+  │   ├── _select_bundles_to_rescue() 选择要保护的 bundle（按预算）
+  │   └── _fire_hooks()            触发压缩前钩子
+  └── 辅助函数（_resolve_thread_id, _clone_ai_message 等）
+"""
 
 from __future__ import annotations
 
@@ -97,7 +129,13 @@ class _SkillBundle:
 
 
 class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
-    """Summarization middleware with pre-compression hook dispatch and skill rescue."""
+    """Summarization middleware with pre-compression hook dispatch and skill rescue.
+
+    yyds: DeerFlow 的压缩中间件，继承 LangChain 的 SummarizationMiddleware。
+          在 before_model 钩子里执行（LLM 调用前），检查是否需要压缩。
+          压缩流程：token 数超过阈值 → 确定切割点 → 分区 + skill 保护
+          → 触发钩子 → 用 LLM 生成摘要 → 替换旧消息。
+    """
 
     def __init__(
         self,
@@ -193,6 +231,14 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
         return await self._amaybe_summarize(state, runtime)
 
     def _maybe_summarize(self, state: AgentState, runtime: Runtime) -> dict | None:
+        """yyds: 压缩入口。在 before_model 钩子里被调用（每次 LLM 调用前都会检查）。
+        1. 算总 token 数 → 没超阈值就跳过
+        2. 确定切割点（哪些消息要压缩，哪些保留）
+        3. 分区 + skill 保护（skill bundle 不被压缩）
+        4. 触发 before_summarization 钩子
+        5. 用 LLM 生成摘要
+        6. 返回新消息列表（RemoveAll + 摘要 + 保留的消息）
+        """
         messages = state["messages"]
         self._ensure_message_ids(messages)
 
@@ -247,6 +293,11 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
     @override
     def _build_new_messages(self, summary: str) -> list[HumanMessage]:
         """Override the base implementation to let the human message with the special name 'summary'.
+
+        yyds: 摘要消息用 name="summary" 标记。
+              前端看到这个 name 就不展示这条消息（它是给 LLM 看的上下文，不是给用户看的）。
+              但 LLM 在后续对话中能看到这个摘要作为上下文。
+
         And this message will be ignored to display in the frontend, but still can be used as context for the model.
         """
         return [HumanMessage(content=f"Here is a summary of the conversation to date:\n\n{summary}", name="summary")]
@@ -274,7 +325,17 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
         messages: list[AnyMessage],
         cutoff_index: int,
     ) -> tuple[list[AnyMessage], list[AnyMessage]]:
-        """Partition like the parent, then rescue recently-loaded skill bundles."""
+        """Partition like the parent, then rescue recently-loaded skill bundles.
+
+        yyds: 这是 Skill Rescue 的核心逻辑。
+              先按切割点分区（要压缩的 vs 保留的），
+              然后从"要压缩的"部分里找出最近的 skill bundle，把它们"救"回到保留区。
+
+              tricky 的部分：一个 AIMessage 可能有多个 tool_calls（有些是 skill 有些不是），
+              这时需要把 AIMessage 拆成两个：一个只保留 skill 的 tool_calls（被救），
+              一个保留非 skill 的 tool_calls（继续被压缩）。
+              这就是你踩的 bug 的来源——拆分后可能出现 ToolMessage 和 AIMessage 不匹配。
+        """
         to_summarize, preserved = self._partition_messages(messages, cutoff_index)
 
         if self._preserve_recent_skill_count == 0 or self._preserve_recent_skill_tokens == 0 or not to_summarize:
@@ -380,7 +441,15 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
         return bundles
 
     def _select_bundles_to_rescue(self, bundles: list[_SkillBundle]) -> list[_SkillBundle]:
-        """Pick bundles to keep, walking newest-first under count/token budgets."""
+        """Pick bundles to keep, walking newest-first under count/token budgets.
+
+        yyds: 按预算选择要保护的 skill bundle。从最新的开始往前挑：
+              - 最多保护 N 个 bundle（preserve_recent_skill_count）
+              - 总 token 不超过上限（preserve_recent_skill_tokens）
+              - 单个 skill token 不超过上限（preserve_recent_skill_tokens_per_skill）
+              - 同一个 skill 只保护一次（去重）
+              这保证 skill 保护不会占用太多上下文空间。
+        """
         selected: list[_SkillBundle] = []
         if not bundles:
             return selected
@@ -424,6 +493,11 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
         preserved_messages: list[AnyMessage],
         runtime: Runtime,
     ) -> None:
+        """yyds: 触发压缩前钩子。当前唯一的钩子是 memory_flush_hook（在 agent.py 里注册的）。
+        它把即将被压缩掉的消息提取关键信息，持久化到记忆系统。
+        这样即使对话被压缩了，Agent 下次对话还能从记忆里找回重要信息。
+        钩子失败不影响压缩流程（try/except 兜底）。
+        """
         if not self._before_summarization_hooks:
             return
 

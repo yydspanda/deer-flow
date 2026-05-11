@@ -1,3 +1,4 @@
+# yyds: 修补版 MiniMax 模型，提取 reasoning_details 并映射到 reasoning_content
 """Patched ChatOpenAI adapter for MiniMax reasoning output.
 
 MiniMax's OpenAI-compatible chat completions API can return structured
@@ -28,6 +29,7 @@ from langchain_openai.chat_models.base import (
 _THINK_TAG_RE = re.compile(r"<think>\s*(.*?)\s*</think>", re.DOTALL)
 
 
+# yyds: 从 MiniMax 的 reasoning_details 结构中提取推理文本
 def _extract_reasoning_text(
     reasoning_details: Any,
     *,
@@ -49,6 +51,7 @@ def _extract_reasoning_text(
     return "\n\n".join(parts) if parts else None
 
 
+# yyds: 移除内容中内嵌的 <think/> 标签并提取为独立推理文本
 def _strip_inline_think_tags(content: str) -> tuple[str, str | None]:
     reasoning_parts: list[str] = []
 
@@ -63,6 +66,7 @@ def _strip_inline_think_tags(content: str) -> tuple[str, str | None]:
     return cleaned, reasoning
 
 
+# yyds: 合并多个推理文本片段，去重并用双换行连接
 def _merge_reasoning(*values: str | None) -> str | None:
     merged: list[str] = []
     for value in values:
@@ -74,6 +78,7 @@ def _merge_reasoning(*values: str | None) -> str | None:
     return "\n\n".join(merged) if merged else None
 
 
+# yyds: 将推理内容写入消息的 additional_kwargs.reasoning_content
 def _with_reasoning_content(
     message: AIMessage | AIMessageChunk,
     reasoning: str | None,
@@ -95,6 +100,7 @@ def _with_reasoning_content(
     return message.model_copy(update={"additional_kwargs": additional_kwargs})
 
 
+# yyds: MiniMax 适配器，注入 reasoning_split 参数并从流式/非流式响应中提取推理内容
 class PatchedChatMiniMax(ChatOpenAI):
     """ChatOpenAI adapter that preserves MiniMax reasoning output."""
 

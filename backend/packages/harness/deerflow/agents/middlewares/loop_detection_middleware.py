@@ -1,4 +1,25 @@
-"""Middleware to detect and break repetitive tool call loops.
+"""yyds: 循环检测中间件 — 检测并打断 Agent 的重复工具调用死循环。
+
+【做什么】在每次模型响应后，检查 Agent 是否陷入了重复调用同一组工具的死循环，并在必要时强制终止。
+【为什么存在】这是 P0 级安全机制。大模型有时会反复调用相同的工具（相同参数），直到递归上限耗尽才停止，
+   浪费大量 token 和时间。此中间件通过两层检测机制提前发现并打断循环。
+【在链中的位置】after_model 阶段执行，即模型返回响应后、工具执行前介入。
+【检测策略】
+   第一层：基于哈希的精确匹配。对每次工具调用集（名称+关键参数）生成哈希，在滑动窗口内跟踪。
+     - 达到 warn_threshold（默认3次）时注入警告消息，提示模型停止。
+     - 达到 hard_limit（默认5次）时直接剥离所有 tool_calls，强制模型输出文本答案。
+   第二层：基于工具类型频率检测。即使参数不同，同一个工具被调用太多次也会触发警告/强制停止。
+     - 默认：同一工具调用30次警告，50次强制停止。
+     - 支持按工具名自定义阈值（tool_freq_overrides），例如 bash 可以设更高的阈值。
+【关键设计】
+   - 使用线程安全的 OrderedDict + LRU 淘汰，最多追踪 max_tracked_threads（默认100）个线程。
+   - 对 read_file 工具做了特殊处理：按行号分桶（200行一桶），避免读取相邻行被误判为重复。
+   - 对 write_file/str_replace 工具使用完整参数哈希，因为同一文件可能被多次更新不同内容。
+   - 目前将警告追加到 AIMessage.content 而非注入独立的 HumanMessage（临时方案，参见 #2724）。
+
+---
+
+Middleware to detect and break repetitive tool call loops.
 
 P0 safety: prevents the agent from calling the same tool with the same
 arguments indefinitely until the recursion limit kills the run.

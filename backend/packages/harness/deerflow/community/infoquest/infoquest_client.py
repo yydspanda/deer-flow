@@ -1,3 +1,4 @@
+# yyds: InfoQuest 搜索 API 客户端 —— BytePlus 的企业级搜索服务
 """Util that calls InfoQuest Search And Fetch API.
 
 In order to set this up, follow instructions at:

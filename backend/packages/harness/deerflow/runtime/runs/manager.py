@@ -1,3 +1,4 @@
+# yyds: 运行管理器，内存注册表+可选持久化RunStore，管理run的创建/取消/状态转换
 """In-memory run registry with optional persistent RunStore backing."""
 
 from __future__ import annotations
@@ -71,6 +72,7 @@ class PersistenceRetryPolicy:
     backoff_factor: float = 2.0
 
 
+# yyds: 单次运行的可变记录，包含run_id/thread_id/状态/取消事件等全部运行时信息
 @dataclass
 class RunRecord:
     """Mutable record for a single run."""
@@ -104,6 +106,7 @@ class RunRecord:
     first_human_message: str | None = None
 
 
+# yyds: 运行管理器核心类，asyncio Lock保护所有变更，支持可选持久化到RunStore
 class RunManager:
     """In-memory run registry with optional persistent RunStore backing.
 
@@ -296,6 +299,7 @@ class RunManager:
             first_human_message=row.get("first_human_message"),
         )
 
+    # yyds: 持久化运行完成数据（token用量等）到后备存储
     async def update_run_completion(self, run_id: str, **kwargs) -> None:
         """Persist token usage and completion data to the backing store."""
         row_recovery_payload: dict[str, Any] | None = None
@@ -351,6 +355,7 @@ class RunManager:
             except Exception:
                 logger.warning("Failed to persist run progress for %s", run_id, exc_info=True)
 
+    # yyds: 创建新的pending状态运行并注册到内存字典
     async def create(
         self,
         thread_id: str,
@@ -396,6 +401,7 @@ class RunManager:
         logger.info("Run created: run_id=%s thread_id=%s", run_id, thread_id)
         return record
 
+    # yyds: 按ID获取运行记录（支持持久化回填），不存在返回None
     async def get(self, run_id: str, *, user_id: str | None = None) -> RunRecord | None:
         """Return a run record by ID, or ``None``.
 
@@ -467,6 +473,7 @@ class RunManager:
                     logger.warning("Failed to map store row for run %s", run_id, exc_info=True)
         return sorted(records_by_id.values(), key=lambda record: record.created_at, reverse=True)[:limit]
 
+    # yyds: 转换运行状态，同步更新内存和持久化存储
     async def set_status(self, run_id: str, status: RunStatus, *, error: str | None = None) -> None:
         """Transition a run to a new status."""
         async with self._lock:
@@ -506,6 +513,7 @@ class RunManager:
         await self._persist_model_name(run_id, model_name)
         logger.info("Run %s model_name=%s", run_id, model_name)
 
+    # yyds: 取消运行，设置abort事件并取消asyncio Task，支持interrupt和rollback动作
     async def cancel(self, run_id: str, *, action: str = "interrupt") -> bool:
         """Request cancellation of a run.
 
@@ -537,6 +545,7 @@ class RunManager:
         logger.info("Run %s cancelled (action=%s)", run_id, action)
         return True
 
+    # yyds: 原子化检查+创建运行，reject策略冲突报错，interrupt/rollback策略先取消现有运行
     async def create_or_reject(
         self,
         thread_id: str,
@@ -679,11 +688,13 @@ class RunManager:
             logger.warning("Recovered %d orphaned inflight run(s) as error", len(recovered))
         return recovered
 
+    # yyds: 检查线程是否有pending或running的运行
     async def has_inflight(self, thread_id: str) -> bool:
         """Return ``True`` if *thread_id* has a pending or running run."""
         async with self._lock:
             return any(r.status in (RunStatus.pending, RunStatus.running) for r in self._thread_records_locked(thread_id))
 
+    # yyds: 延迟清理运行记录，防止内存泄漏
     async def cleanup(self, run_id: str, *, delay: float = 300) -> None:
         """Remove a run record after an optional delay."""
         if delay > 0:
@@ -787,9 +798,11 @@ class RunManager:
         logger.info("Drained %d in-flight run(s) on shutdown (%d settled within %.1fs)", len(inflight), len(inflight) - len(pending), timeout)
 
 
+# yyds: 线程已有活跃运行时使用reject策略抛出的冲突错误
 class ConflictError(Exception):
     """Raised when multitask_strategy=reject and thread has inflight runs."""
 
 
+# yyds: 不支持的多任务策略错误
 class UnsupportedStrategyError(Exception):
     """Raised when a multitask_strategy value is not yet implemented."""

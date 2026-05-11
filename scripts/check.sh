@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# yyds: 检查系统依赖是否安装且版本满足要求
+# 被 `make check` 调用，检查 4 个工具：Node.js(≥22) / pnpm / uv / nginx
+# 任何一个缺失或版本不达标就报错退出
 set -euo pipefail
 
 echo "=========================================="

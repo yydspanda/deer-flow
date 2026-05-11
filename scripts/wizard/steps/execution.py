@@ -1,4 +1,11 @@
-"""Step: execution mode and safety-related capabilities."""
+"""Step: execution mode and safety-related capabilities.
+
+yyds: 向导第三步——选择执行模式和安全选项。
+      - 沙箱类型：LocalSandboxProvider（本地）vs AioSandboxProvider（容器隔离）
+      - bash 工具开关：是否允许 Agent 执行 bash 命令
+      - 文件写入开关：是否允许 Agent 写文件
+      这些都是安全相关的配置，跟你的安全预警系统设计直接相关。
+"""
 
 from __future__ import annotations
 

@@ -1,3 +1,6 @@
+# yyds: LLM 模型配置定义，每个模型条目包含 provider 类路径、模型名、thinking/vision 能力等
+# yyds: 通过 supports_thinking / when_thinking_enabled 实现模型的 thinking 模式动态切换
+# yyds: extra="allow" 允许透传 provider 特有的额外参数（如 temperature / api_key 等）
 from pydantic import BaseModel, ConfigDict, Field
 
 

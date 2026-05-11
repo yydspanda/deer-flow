@@ -2,6 +2,10 @@
 #
 # wait-for-port.sh - Wait for a TCP port to become available
 #
+# yyds: 等待端口就绪的工具。被 serve.sh 的 run_service() 调用。
+#       每秒检查一次端口是否在监听，超时就报错。
+#       用三种方式检测（按优先级）：lsof → ss → netstat，兼容不同系统。
+#
 # Usage: ./scripts/wait-for-port.sh <port> [timeout_seconds] [service_name]
 #
 # Arguments:

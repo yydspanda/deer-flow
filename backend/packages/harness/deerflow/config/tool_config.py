@@ -1,3 +1,5 @@
+# yyds: 工具和工具组配置定义，ToolConfig 指定工具名称、所属组和 provider 类路径
+# yyds: ToolGroupConfig 用于工具的逻辑分组，extra="allow" 透传未知字段
 from pydantic import BaseModel, ConfigDict, Field
 
 

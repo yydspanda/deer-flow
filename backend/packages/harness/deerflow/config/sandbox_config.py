@@ -1,3 +1,6 @@
+# yyds: 沙箱执行环境配置，支持 LocalSandboxProvider（本地直接执行）和 Docker 容器沙箱
+# yyds: Docker 模式支持副本池管理（replicas）、LRU 淘汰、空闲超时、自定义卷挂载
+# yyds: 可配置各工具输出的字符截断上限（bash / read_file / ls），防止 token 爆炸
 from pydantic import BaseModel, ConfigDict, Field
 
 

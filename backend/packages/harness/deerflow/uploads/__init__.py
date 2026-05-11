@@ -1,3 +1,4 @@
+# yyds: 文件上传管理模块，提供文件名验证、路径遍历防护和目录管理
 from .manager import (
     PathTraversalError,
     claim_unique_filename,

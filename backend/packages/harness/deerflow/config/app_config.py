@@ -1,3 +1,7 @@
+# yyds: 核心应用配置模块，负责从 config.yaml 加载并缓存全局 AppConfig 单例
+# yyds: 架构设计：(1) 支持环境变量 $VAR 自动解析 (2) 文件 mtime 变化时自动热重载
+# yyds: (3) 提供 ContextVar 上下文覆盖机制，用于请求级别的配置注入（如测试场景）
+# yyds: AppConfig 聚合了 models / tools / skills / memory / sandbox / subagents 等所有子配置
 import logging
 import os
 from collections.abc import Mapping

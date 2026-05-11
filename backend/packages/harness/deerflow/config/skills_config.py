@@ -1,3 +1,7 @@
+# yyds: 技能系统存储和路径解析配置。
+# yyds: 路径解析优先级：显式 path > 环境变量 DEER_FLOW_SKILLS_PATH > 项目根目录/skills > 旧版仓库根目录。
+# yyds: container_path 定义沙箱容器内的技能挂载路径，支持 public/custom 两种分类。
+# yyds: use 字段指定 SkillStorage 实现类，默认使用本地文件系统存储。
 import os
 from pathlib import Path
 

@@ -1,3 +1,5 @@
+# yyds: MCP OAuth认证模块 - 为需要认证的MCP HTTP/SSE服务器提供token获取、缓存、自动刷新和请求拦截功能
+# yyds: 支持client_credentials和refresh_token两种授权模式，通过拦截器链自动注入Authorization头
 """OAuth token support for MCP HTTP/SSE servers."""
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from deerflow.config.extensions_config import ExtensionsConfig, McpOAuthConfig
 logger = logging.getLogger(__name__)
 
 
+# yyds: OAuth令牌数据类，缓存access_token、token类型和过期时间，用于判断是否需要刷新
 @dataclass
 class _OAuthToken:
     """Cached OAuth token."""
@@ -22,6 +25,7 @@ class _OAuthToken:
     expires_at: datetime
 
 
+# yyds: OAuth令牌管理器 - 为每个MCP服务器维护独立的token缓存和异步锁，支持并发安全的token获取和自动刷新
 class OAuthTokenManager:
     """Acquire/cache/refresh OAuth tokens for MCP servers."""
 
@@ -69,6 +73,7 @@ class OAuthTokenManager:
         now = datetime.now(UTC)
         return token.expires_at <= now + timedelta(seconds=max(oauth.refresh_skew_seconds, 0))
 
+    # yyds: 通过httpx向OAuth服务器请求新token，支持client_credentials和refresh_token两种模式，解析响应并计算过期时间
     async def _fetch_token(self, oauth: McpOAuthConfig) -> _OAuthToken:
         import httpx  # pyright: ignore[reportMissingImports]
 
@@ -119,6 +124,7 @@ class OAuthTokenManager:
         return _OAuthToken(access_token=access_token, token_type=token_type, expires_at=expires_at)
 
 
+# yyds: 构建OAuth工具拦截器，在每次MCP工具调用前自动注入最新的Authorization头到请求中
 def build_oauth_tool_interceptor(extensions_config: ExtensionsConfig) -> Any | None:
     """Build a tool interceptor that injects OAuth Authorization headers."""
     token_manager = OAuthTokenManager.from_extensions_config(extensions_config)
@@ -137,6 +143,7 @@ def build_oauth_tool_interceptor(extensions_config: ExtensionsConfig) -> Any | N
     return oauth_interceptor
 
 
+# yyds: 获取所有需要OAuth认证的MCP服务器的初始Authorization头，用于建立SSE/HTTP连接时的工具发现阶段
 async def get_initial_oauth_headers(extensions_config: ExtensionsConfig) -> dict[str, str]:
     """Get initial OAuth Authorization headers for MCP server connections."""
     token_manager = OAuthTokenManager.from_extensions_config(extensions_config)

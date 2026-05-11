@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Detect whether the current branch has working tool-failure downgrade:
-# - Lead agent middleware chain includes error-handling
-# - Subagent middleware chain includes error-handling
-# - Failing tool call does not abort the whole call sequence
-# - Subsequent successful tool call result is still preserved
+# yyds: 工具错误降级检测脚本（CI / 开发者自测用）。
+#       验证中间件链的错误处理是否正常工作：
+#       模拟第一个工具调用抛 SSL 错误，第二个工具调用成功，
+#       检查结果是否两个都保留了（第一个标记为 error，第二个正常）。
+#       如果整个对话因第一个工具失败而中断 = FAIL。
+#       如果错误被捕获并降级为 ToolMessage(error) = PASS。
+#
+#       这是 DeerFlow 的关键安全特性：一个工具挂了不应该让整个 Agent 崩溃。
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_DIR="${ROOT_DIR}/backend"

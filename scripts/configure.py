@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Cross-platform config bootstrap script for DeerFlow."""
+"""Cross-platform config bootstrap script for DeerFlow.
+
+yyds: 首次配置工具。把示例配置文件复制为正式配置文件。
+      被 `make config` 调用。
+      只做三件事：
+        1. config.example.yaml → config.yaml
+        2. .env.example → .env
+        3. frontend/.env.example → frontend/.env
+      如果 config.yaml 已存在，直接拒绝（防止覆盖你的配置）。
+      已有配置想升级用 config-upgrade.sh，不要用这个。
+"""
 
 from __future__ import annotations
 

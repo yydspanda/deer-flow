@@ -1,3 +1,4 @@
+# yyds: 文件转换工具，将PDF/Office文档转换为Markdown格式
 """File conversion utilities.
 
 Converts document files (PDF, PPT, Excel, Word) to Markdown.

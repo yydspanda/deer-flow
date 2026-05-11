@@ -1,3 +1,7 @@
+# yyds: present_file_tool.py — 文件展示工具
+#      Agent 创建文件后调用此工具，将文件路径写入 state["artifacts"]
+#      前端读取 artifacts 列表并在 UI 中渲染（PDF、图片、代码高亮等）
+#      只允许展示 /mnt/user-data/outputs/ 下的文件
 from pathlib import Path
 from typing import Annotated
 

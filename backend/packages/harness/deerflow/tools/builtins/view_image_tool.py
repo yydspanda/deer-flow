@@ -1,3 +1,8 @@
+# yyds: view_image_tool.py — 图片查看工具
+#      让 Agent 能"看到"用户上传的图片
+#      流程：验证路径 → 读取图片 → base64 编码 → 写入 state["viewed_images"]
+#      前端将 base64 数据展示给用户，LLM 也能理解图片内容
+#      安全限制：只允许 workspace/uploads/outputs 下的图片，最大 20MB
 import base64
 import mimetypes
 from pathlib import Path

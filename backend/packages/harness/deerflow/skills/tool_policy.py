@@ -1,3 +1,4 @@
+# yyds: 工具策略模块，根据技能的allowed-tools声明过滤可用工具集
 import logging
 from typing import Protocol
 
@@ -6,10 +7,12 @@ from deerflow.skills.types import Skill
 logger = logging.getLogger(__name__)
 
 
+# yyds: 具有name属性的工具协议接口
 class NamedTool(Protocol):
     name: str
 
 
+# yyds: 汇总所有技能声明的allowed-tools，返回允许的工具名称集合；无声明时返回None表示不限制
 def allowed_tool_names_for_skills(skills: list[Skill]) -> set[str] | None:
     """Return the union of explicit skill allowed-tools declarations.
 
@@ -36,6 +39,7 @@ def allowed_tool_names_for_skills(skills: list[Skill]) -> set[str] | None:
     return allowed
 
 
+# yyds: 根据技能的allowed-tools过滤工具列表，未声明限制时保留全部工具
 def filter_tools_by_skill_allowed_tools[ToolT: NamedTool](tools: list[ToolT], skills: list[Skill]) -> list[ToolT]:
     allowed = allowed_tool_names_for_skills(skills)
     if allowed is None:

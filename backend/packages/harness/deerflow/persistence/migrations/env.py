@@ -1,3 +1,5 @@
+# yyds: Alembic 数据库迁移环境 —— 只管 DeerFlow 自己的表（runs, threads_meta, cron_jobs, users）
+# yyds: LangGraph 的 checkpointer 表由 LangGraph 自行管理，不走 Alembic
 """Alembic environment for DeerFlow application tables.
 
 ONLY manages DeerFlow's tables (runs, threads_meta, cron_jobs, users).

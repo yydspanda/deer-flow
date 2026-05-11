@@ -1,3 +1,7 @@
+# yyds: 扩展配置模块，统一管理 MCP 服务器和 Skills 的启用状态
+# yyds: 从 extensions_config.json 加载，支持 stdio/sse/http 三种 MCP 传输类型
+# yyds: 内置 OAuth 令牌注入机制（McpOAuthConfig），支持 client_credentials 和 refresh_token 两种授权模式
+# yyds: 环境变量 $VAR 自动解析，单例缓存支持热重载
 """Unified extensions configuration for MCP servers and skills."""
 
 import json

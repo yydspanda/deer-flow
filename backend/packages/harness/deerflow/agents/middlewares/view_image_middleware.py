@@ -1,4 +1,18 @@
-"""Middleware for injecting image details into conversation before LLM call."""
+"""yyds: 图片查看中间件 — 在 LLM 调用前，将 view_image 工具获取的图片详情（含 base64 数据）注入上下文。
+
+【做什么】当上一轮助手消息中包含 view_image 工具调用，且所有工具调用都已完成（收到了 ToolMessage）时，
+   从 state.viewed_images 中提取图片的 base64 数据，构造一个包含图片的多模态 HumanMessage 注入到消息列表中，
+   使 LLM 在下一次调用时能"看到"并分析这些图片。
+【为什么存在】LLM 本身不能直接访问文件系统中的图片。view_image 工具读取图片并存储到 state 中，
+   但工具返回的是文本描述。要让 LLM 真正"看到"图片内容，需要将 base64 编码的图片数据以多模态
+   image_url 的形式注入消息。此中间件负责在适当时机完成这个注入。
+【在链中的位置】before_model 阶段执行，在模型调用前、工具执行后介入。
+【关键设计】
+   - 仅在所有 view_image 工具调用都完成后才注入（避免部分图片未就绪）。
+   - 使用幂等性检查：如果已经注入过图片详情消息则不再重复注入。
+   - 注入的消息格式为多模态 content blocks（text + image_url），支持多种图片格式。
+   - 同时支持同步（before_model）和异步（abefore_model）两个入口。
+"""
 
 import logging
 from typing import override

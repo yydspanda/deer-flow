@@ -1,3 +1,4 @@
+# yyds: 基于SQLAlchemy的用户反馈存储仓库，支持创建、查询、聚合等操作
 """SQLAlchemy-backed feedback storage.
 
 Each method acquires its own short-lived session.

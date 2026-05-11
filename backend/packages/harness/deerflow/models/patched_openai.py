@@ -1,3 +1,4 @@
+# yyds: 修补版 OpenAI 模型，保留 Gemini 思维模式下的 thought_signature 以避免 API 报错
 """Patched ChatOpenAI that preserves thought_signature for Gemini thinking models.
 
 When using Gemini with thinking enabled via an OpenAI-compatible gateway (e.g.
@@ -30,6 +31,7 @@ from langchain_openai import ChatOpenAI
 from deerflow.models.assistant_payload_replay import restore_assistant_payloads
 
 
+# yyds: 修补版 OpenAI 模型类，保留 Gemini 思维模式下的 thought_signature 防止 API 400 错误
 class PatchedChatOpenAI(ChatOpenAI):
     """ChatOpenAI with ``thought_signature`` preservation for Gemini thinking via OpenAI gateway.
 
@@ -56,6 +58,7 @@ class PatchedChatOpenAI(ChatOpenAI):
                 type: enabled
     """
 
+    # yyds: 重写请求负载构建，恢复 AIMessage 中被序列化丢弃的 thought_signature
     def _get_request_payload(
         self,
         input_: LanguageModelInput,
@@ -82,6 +85,7 @@ class PatchedChatOpenAI(ChatOpenAI):
         return payload
 
 
+# yyds: 通过 ID 或位置匹配原始工具调用，将 thought_signature 回写到序列化后的负载中
 def _restore_tool_call_signatures(payload_msg: dict, orig_msg: AIMessage) -> None:
     """Re-inject ``thought_signature`` onto tool-call objects in *payload_msg*.
 

@@ -1,3 +1,4 @@
+# yyds: 内存运行元数据存储，用于开发测试，等效于原始RunManager._runs字典
 """In-memory RunStore. Used when database.backend=memory (default) and in tests.
 
 Equivalent to the original RunManager._runs dict behavior.
@@ -11,6 +12,7 @@ from typing import Any
 from deerflow.runtime.runs.store.base import RunStore
 
 
+# yyds: 内存运行存储实现，按run_id索引，支持按线程查询和token聚合统计
 class MemoryRunStore(RunStore):
     def __init__(self) -> None:
         self._runs: dict[str, dict[str, Any]] = {}

@@ -1,4 +1,9 @@
-"""LLM and search provider definitions for the Setup Wizard."""
+"""LLM and search provider definitions for the Setup Wizard.
+
+yyds: 所有支持的 LLM 和搜索提供商的注册表。
+      定义了每个提供商的名称、use 路径、模型列表、API key 字段等。
+      向导在 Step 1/2 里让用户选择提供商时，就是从这里读的定义。
+"""
 
 from __future__ import annotations
 

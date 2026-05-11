@@ -1,4 +1,16 @@
-"""Middleware for automatic thread title generation."""
+"""yyds: 标题生成中间件 — 在首次对话交互后自动为会话生成标题。
+
+【做什么】在用户发送第一条消息且 Agent 回复后，调用 LLM 根据对话内容自动生成一个简洁的会话标题。
+【为什么存在】用户创建新会话时没有标题，需要自动生成一个有意义的标题以便在会话列表中区分。
+【在链中的位置】after_model 阶段执行，即模型返回响应后触发。
+【关键设计】
+   - 只在"首次交互"时生成：恰好有1条用户消息 + 至少1条助手回复时触发。
+   - 同步版本（after_model）使用本地回退策略：直接截取用户消息前50字符作为标题（不调用 LLM）。
+   - 异步版本（aafter_model）优先调用 LLM 生成高质量标题，失败时回退到本地截取策略。
+   - 通过 RunnableConfig 的 tags 标记为 "middleware:title"，避免与主 Agent 的 LLM 调用混淆。
+   - 支持去除推理模型的 <think/> 标签（如 DeepSeek-R1、minimax 等），避免标签内容污染标题。
+   - 标题长度受 max_chars 配置限制。
+"""
 
 import logging
 import re

@@ -1,3 +1,4 @@
+# yyds: ACP(Agent Client Protocol)外部Agent调用工具，支持生成动态描述、隔离工作空间、流式收集响应和权限自动审批
 """Built-in tool for invoking external ACP-compatible agents."""
 
 import logging
@@ -12,11 +13,13 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 
+# yyds: ACP Agent调用输入模型，指定目标Agent名和任务提示
 class _InvokeACPAgentInput(BaseModel):
     agent: str = Field(description="Name of the ACP agent to invoke")
     prompt: str = Field(description="The concise task prompt to send to the agent")
 
 
+# yyds: 获取每线程隔离的ACP工作空间目录，回退到全局目录当线程ID不可用时
 def _get_work_dir(thread_id: str | None) -> str:
     """Get the per-thread ACP workspace directory.
 
@@ -50,6 +53,7 @@ def _get_work_dir(thread_id: str | None) -> str:
     return str(work_dir)
 
 
+# yyds: 从DeerFlow已启用的MCP服务器构建ACP所需的mcpServers配置
 def _build_mcp_servers() -> dict[str, dict[str, Any]]:
     """Build ACP ``mcpServers`` config from DeerFlow's enabled MCP servers."""
     from deerflow.config.extensions_config import ExtensionsConfig
@@ -58,6 +62,7 @@ def _build_mcp_servers() -> dict[str, dict[str, Any]]:
     return build_servers_config(ExtensionsConfig.from_file())
 
 
+# yyds: 将启用的MCP服务器转换为ACP线协议格式，支持stdio/http/sse三种传输类型
 def _build_acp_mcp_servers() -> list[dict[str, Any]]:
     """Build ACP ``mcpServers`` payload for ``new_session``.
 
@@ -94,6 +99,7 @@ def _build_acp_mcp_servers() -> list[dict[str, Any]]:
     return mcp_servers
 
 
+# yyds: 构建ACP权限响应，auto_approve时选择allow_once/allow_always，否则拒绝
 def _build_permission_response(options: list[Any], *, auto_approve: bool) -> Any:
     """Build an ACP permission response.
 
@@ -124,6 +130,7 @@ def _build_permission_response(options: list[Any], *, auto_approve: bool) -> Any
     return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
 
 
+# yyds: 格式化ACP调用错误消息，提供可操作的修复建议（如安装适配器或更新配置）
 def _format_invocation_error(agent: str, cmd: str, exc: Exception) -> str:
     """Return a user-facing ACP invocation error with actionable remediation."""
     if not isinstance(exc, FileNotFoundError):
@@ -136,6 +143,7 @@ def _format_invocation_error(agent: str, cmd: str, exc: Exception) -> str:
     return f"{message} Install the agent binary or update `acp_agents.{agent}.command` in config.yaml."
 
 
+# yyds: 工厂函数，根据配置的ACP Agent列表动态生成invoke_acp_agent工具，描述中包含可用Agent清单
 def build_invoke_acp_agent_tool(agents: dict) -> BaseTool:
     """Create the ``invoke_acp_agent`` tool with a description generated from configured agents.
 
@@ -178,6 +186,7 @@ def build_invoke_acp_agent_tool(agents: dict) -> BaseTool:
         except ImportError:
             return "Error: agent-client-protocol package is not installed. Run `uv sync` to install project dependencies."
 
+        # yyds: 最小ACP客户端实现，收集会话流式文本并处理权限请求
         class _CollectingClient(Client):
             """Minimal ACP Client that collects streamed text from session updates."""
 

@@ -1,4 +1,18 @@
-"""Middleware to inject uploaded files information into agent context."""
+"""yyds: 文件上传中间件 — 处理用户上传的文件，将文件列表和结构大纲注入到对话上下文中。
+
+【做什么】在 Agent 执行前，检测用户消息中附带的文件上传信息，扫描上传目录中的历史文件，
+   生成格式化的文件列表（包含文件名、大小、路径、文档大纲），并注入到最后一条用户消息中。
+【为什么存在】模型需要知道有哪些文件可用才能正确回答问题。此中间件将文件信息以结构化方式呈现，
+   包括文档大纲（标题+行号），让模型能精准定位到需要阅读的章节。
+【在链中的位置】before_agent 阶段执行，在 Agent 开始处理前注入文件上下文。
+【关键设计】
+   - 区分"新上传文件"（来自当前消息的 additional_kwargs.files）和"历史文件"（扫描 uploads 目录）。
+   - 对 Markdown 转换后的文件提取文档大纲（heading → line number），帮助模型用 read_file 精确定位。
+   - 无大纲时退化为读取文件前5行作为预览（outline_preview）。
+   - 支持多模态消息格式：纯文本内容直接拼接，列表内容（含图片等）在头部插入文本块。
+   - 文件路径使用沙箱虚拟路径 /mnt/user-data/uploads/，与实际物理路径隔离。
+   - 保留原始 additional_kwargs（含 files 元数据），前端可从流式消息中读取结构化文件信息。
+"""
 
 import logging
 from pathlib import Path

@@ -1,3 +1,4 @@
+# yyds: 基于内存事件日志的流桥接实现，支持事件重放和Last-Event-ID重连
 """In-memory stream bridge backed by an in-process event log."""
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from .base import END_SENTINEL, HEARTBEAT_SENTINEL, StreamBridge, StreamEvent
 logger = logging.getLogger(__name__)
 
 
+# yyds: 每个run的事件流状态，包含事件列表、asyncio条件变量和结束标志
 @dataclass
 class _RunStream:
     events: list[StreamEvent] = field(default_factory=list)
@@ -22,6 +24,7 @@ class _RunStream:
     start_offset: int = 0
 
 
+# yyds: 内存流桥接实现，每个run一个事件日志，支持有界缓冲和心跳保活
 class MemoryStreamBridge(StreamBridge):
     """Per-run in-memory event log implementation.
 
@@ -36,18 +39,21 @@ class MemoryStreamBridge(StreamBridge):
 
     # -- helpers ---------------------------------------------------------------
 
+    # yyds: 获取或创建run的事件流
     def _get_or_create_stream(self, run_id: str) -> _RunStream:
         if run_id not in self._streams:
             self._streams[run_id] = _RunStream()
             self._counters[run_id] = 0
         return self._streams[run_id]
 
+    # yyds: 生成下一个事件ID（timestamp-seq格式）
     def _next_id(self, run_id: str) -> str:
         self._counters[run_id] = self._counters.get(run_id, 0) + 1
         ts = int(time.time() * 1000)
         seq = self._counters[run_id] - 1
         return f"{ts}-{seq}"
 
+    # yyds: 根据Last-Event-ID计算订阅起始偏移，支持断线重连
     def _resolve_start_offset(self, stream: _RunStream, last_event_id: str | None) -> int:
         if last_event_id is None:
             return stream.start_offset
@@ -65,6 +71,7 @@ class MemoryStreamBridge(StreamBridge):
 
     # -- StreamBridge API ------------------------------------------------------
 
+    # yyds: 发布事件到run的事件日志，超出maxsize时丢弃最早的事件
     async def publish(self, run_id: str, event: str, data: Any) -> None:
         stream = self._get_or_create_stream(run_id)
         entry = StreamEvent(id=self._next_id(run_id), event=event, data=data)
@@ -76,12 +83,14 @@ class MemoryStreamBridge(StreamBridge):
                 stream.start_offset += overflow
             stream.condition.notify_all()
 
+    # yyds: 标记run流结束，通知所有等待的消费者
     async def publish_end(self, run_id: str) -> None:
         stream = self._get_or_create_stream(run_id)
         async with stream.condition:
             stream.ended = True
             stream.condition.notify_all()
 
+    # yyds: 订阅run的事件流，支持从Last-Event-ID恢复，心跳保活，END终止
     async def subscribe(
         self,
         run_id: str,
@@ -122,12 +131,14 @@ class MemoryStreamBridge(StreamBridge):
                 return
             yield entry
 
+    # yyds: 延迟清理run的事件流资源，给迟到的订阅者留出时间
     async def cleanup(self, run_id: str, *, delay: float = 0) -> None:
         if delay > 0:
             await asyncio.sleep(delay)
         self._streams.pop(run_id, None)
         self._counters.pop(run_id, None)
 
+    # yyds: 关闭桥接，清空所有run流和计数器
     async def close(self) -> None:
         self._streams.clear()
         self._counters.clear()

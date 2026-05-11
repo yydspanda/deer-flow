@@ -1,3 +1,6 @@
+# yyds: LangGraph 状态持久化检查点配置。
+# yyds: 支持三种后端：memory(进程内，重启丢失)、sqlite(本地文件)、postgres(生产级)。
+# yyds: connection_string 为 sqlite 文件路径或 postgres DSN。
 """Configuration for LangGraph checkpointer."""
 
 from typing import Literal

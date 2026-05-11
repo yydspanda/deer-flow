@@ -1,3 +1,4 @@
+# yyds: 模型工厂核心模块，根据配置名称和思维模式创建 ChatModel 实例
 import logging
 
 from langchain.chat_models import BaseChatModel
@@ -10,6 +11,7 @@ from deerflow.tracing import build_tracing_callbacks
 logger = logging.getLogger(__name__)
 
 
+# yyds: 递归合并两个字典，不修改原始输入
 def _deep_merge_dicts(base: dict | None, override: dict) -> dict:
     """Recursively merge two dictionaries without mutating the inputs."""
     merged = dict(base or {})
@@ -21,6 +23,7 @@ def _deep_merge_dicts(base: dict | None, override: dict) -> dict:
     return merged
 
 
+# yyds: 构建 vLLM/Qwen 禁用思维模式的 chat_template_kwargs 参数
 def _vllm_disable_chat_template_kwargs(chat_template_kwargs: dict) -> dict:
     """Build the disable payload for vLLM/Qwen chat template kwargs."""
     disable_kwargs: dict[str, bool] = {}
@@ -31,6 +34,7 @@ def _vllm_disable_chat_template_kwargs(chat_template_kwargs: dict) -> dict:
     return disable_kwargs
 
 
+# yyds: 为使用自定义 base_url 的 OpenAI 兼容模型默认启用 stream_usage 以追踪 token 用量
 def _enable_stream_usage_by_default(model_use_path: str, model_settings_from_config: dict) -> None:
     """Enable stream usage for OpenAI-compatible models unless explicitly configured.
 
@@ -45,6 +49,7 @@ def _enable_stream_usage_by_default(model_use_path: str, model_settings_from_con
         return
     if "base_url" in model_settings_from_config or "openai_api_base" in model_settings_from_config:
         model_settings_from_config["stream_usage"] = True
+
 
 
 # Default chunk-gap budget for OpenAI-compatible streaming responses.
@@ -77,7 +82,7 @@ def _apply_stream_chunk_timeout_default(model_use_path: str, model_settings_from
     if "stream_chunk_timeout" in model_settings_from_config:
         return
     model_settings_from_config["stream_chunk_timeout"] = _DEFAULT_STREAM_CHUNK_TIMEOUT_SECONDS
-
+# yyds: 核心工厂函数，根据模型名称和思维模式配置创建 ChatModel 实例
 
 def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *, app_config: AppConfig | None = None, attach_tracing: bool = True, **kwargs) -> BaseChatModel:
     """Create a chat model instance from the config.

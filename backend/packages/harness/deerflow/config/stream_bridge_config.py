@@ -1,3 +1,6 @@
+# yyds: 流式桥接配置，连接 Agent 工作进程与 SSE 推送端点。
+# yyds: 支持两种后端：memory(asyncio.Queue，单进程)、redis(Redis Streams，规划中)。
+# yyds: queue_maxsize 控制每次运行的事件缓冲上限，防止内存溢出。
 """Configuration for stream bridge."""
 
 from typing import Literal

@@ -1,3 +1,4 @@
+# yyds: 延迟工具发现机制，Agent通过tool_search按需获取MCP工具的完整schema，避免一次性注入过多工具定义
 """Tool search — deferred tool discovery at runtime.
 
 Contains:
@@ -47,6 +48,7 @@ def _compile_catalog_regex(pattern: str) -> re.Pattern[str]:
         return re.compile(re.escape(pattern), re.IGNORECASE)
 
 
+
 # ── Catalog ──
 
 
@@ -56,8 +58,12 @@ def _compile_catalog_regex(pattern: str) -> re.Pattern[str]:
 @dataclass(frozen=True)
 class DeferredToolCatalog:
     """Immutable catalog of deferred tools. Pure search, no mutation."""
+# yyds: 延迟工具条目，存储工具名、描述和完整工具对象（仅在搜索匹配时返回）
+# yyds: 延迟工具注册中心，支持正则/关键词/精确名三种搜索模式，匹配后自动提升为活跃工具
+
 
     tools: tuple[BaseTool, ...]
+
 
     @cached_property
     def names(self) -> frozenset[str]:
@@ -68,7 +74,11 @@ class DeferredToolCatalog:
         canon = [{"name": t.name, "schema": convert_to_openai_function(t)} for t in sorted(self.tools, key=lambda t: t.name)]
         blob = json.dumps(canon, sort_keys=True, ensure_ascii=False, default=str)
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+    # yyds: 注册一个延迟工具，提取名称和描述用于后续搜索
+    # yyds: 将匹配的工具从延迟列表提升为活跃状态，后续不再被DeferredToolFilterMiddleware过滤
 
+
+    # yyds: 核心搜索方法，支持select:精确选择、+keyword必选关键词、正则通配三种查询形式
     def search(self, query: str) -> list[BaseTool]:
         query = query.strip()
         if not query:
@@ -98,19 +108,26 @@ class DeferredToolCatalog:
         return [t for _, t in scored][:MAX_RESULTS]
 
 
+
 def _catalog_regex_score(pattern: str, t: BaseTool) -> int:
     regex = _compile_catalog_regex(pattern)
     return len(regex.findall(f"{t.name} {t.description or ''}"))
+# yyds: 计算正则匹配得分，用于搜索结果排序
+
 
 
 # ── Setup / tool ──
 
 
+
 @dataclass(frozen=True)
 class DeferredToolSetup:
     """Result of assembling deferred-tool support for one agent build.
+# yyds: 获取当前异步上下文的延迟工具注册中心
+
 
     The three fields move as a unit, so callers branch on ``tool_search_tool``:
+
 
     - **Empty** ``(None, frozenset(), None)``: deferral is disabled, or no MCP
       tool survived policy filtering. Nothing is deferred — bind tools as-is.
@@ -120,6 +137,10 @@ class DeferredToolSetup:
 
     Invariant: ``tool_search_tool is None`` ⟺ ``deferred_names`` is empty ⟺
     ``catalog_hash is None``.
+# yyds: 设置当前异步上下文的延迟工具注册中心
+# yyds: 重置当前异步上下文的延迟工具注册中心，防止跨请求状态污染
+# yyds: 延迟工具搜索工具，Agent调用后获取匹配工具的完整OpenAI function schema并自动提升为可调用状态
+
     """
 
     tool_search_tool: BaseTool | None

@@ -1,3 +1,4 @@
+# yyds: 本地容器后端，使用Docker或Apple Container管理沙箱容器生命周期
 """Local container backend for sandbox provisioning.
 
 Manages sandbox containers using Docker or Apple Container on the local machine.

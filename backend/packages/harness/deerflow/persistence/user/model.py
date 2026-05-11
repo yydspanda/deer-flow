@@ -1,3 +1,4 @@
+# yyds: 用户表ORM模型，支持密码认证和OAuth登录，包含角色和生命周期标志
 """ORM model for the users table.
 
 Lives in the harness persistence package so it is picked up by

@@ -1,3 +1,4 @@
+# yyds: 运行事件ORM模型，记录对话中的消息、追踪和生命周期事件
 """ORM model for run events."""
 
 from __future__ import annotations

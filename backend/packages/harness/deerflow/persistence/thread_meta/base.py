@@ -1,3 +1,4 @@
+# yyds: 线程元数据存储的抽象接口，定义CRUD和权限检查方法
 """Abstract interface for thread metadata storage.
 
 Implementations:

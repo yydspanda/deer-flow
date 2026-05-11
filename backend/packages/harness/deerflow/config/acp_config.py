@@ -1,3 +1,7 @@
+# yyds: ACP(Agent Client Protocol)外部 Agent 子进程配置。
+# yyds: 每个外部 Agent 定义启动命令、参数、环境变量及能力描述。
+# yyds: auto_approve_permissions 控制是否自动批准 Agent 的权限请求，默认拒绝以确保安全。
+# yyds: 配置从 config.yaml 的 acp_agents 字段加载，支持多个独立 Agent 同时运行。
 """ACP (Agent Client Protocol) agent configuration loaded from config.yaml."""
 
 import logging

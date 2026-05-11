@@ -1,4 +1,24 @@
-"""Middleware that extends TodoListMiddleware with context-loss detection and premature-exit prevention.
+"""yyds: 待办事项中间件 — 管理 Pro/Ultra 模式下的任务待办列表，防止上下文丢失和过早退出。
+
+【做什么】扩展 LangChain 的 TodoListMiddleware，增加两个核心能力：
+   1. 上下文丢失检测：当消息历史被截断（如摘要中间件压缩后），原始的 write_todos 工具调用可能
+      已不在上下文窗口中，此中间件检测并注入提醒消息，让模型仍能感知待办列表。
+   2. 过早退出预防：当模型试图给出最终回复（无工具调用）但仍有未完成的待办项时，强制跳回模型节点
+      继续工作，直到所有任务完成或达到重试上限。
+【为什么存在】在长对话中，SummarizationMiddleware 会压缩历史消息，导致 write_todos 调用被截断，
+   模型会"遗忘"待办列表。此外，模型有时会在任务未完成时就输出最终答案，此中间件防止这种行为。
+【在链中的位置】
+   - before_model 阶段：在模型调用前检测上下文丢失，注入待办列表提醒。
+   - after_model 阶段：在模型响应后检测是否有过早退出，使用 jump_to="model" 跳回模型节点。
+【关键设计】
+   - 继承自 TodoListMiddleware，保留基类的并行 write_todos 检测逻辑。
+   - 使用 hook_config(can_jump_to=["model"]) 声明跳转能力。
+   - _MAX_COMPLETION_REMINDERS=2 限制最大提醒次数，防止无限循环（当模型确实无法完成时允许退出）。
+   - 提醒消息使用 <system_reminder> 标签包裹，以 HumanMessage 形式注入。
+
+---
+
+Middleware that extends TodoListMiddleware with context-loss detection and premature-exit prevention.
 
 When the message history is truncated (e.g., by SummarizationMiddleware), the
 original `write_todos` tool call and its ToolMessage can be scrolled out of the

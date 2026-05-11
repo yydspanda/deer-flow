@@ -1,3 +1,4 @@
+# yyds: 本地文件系统技能存储实现，管理public/custom目录下的技能文件和历史记录
 """Local-filesystem implementation of ``SkillStorage``."""
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ DEFAULT_SKILLS_CONTAINER_PATH = "/mnt/skills"
 _INSTALL_TMP_CLEANUP_TIMEOUT_SECONDS = 5.0
 
 
+# yyds: 基于本地文件系统的技能存储实现，管理public/custom目录结构和JSONL历史文件
 class LocalSkillStorage(SkillStorage):
     """Skill storage backed by the local filesystem.
 
@@ -56,16 +58,20 @@ class LocalSkillStorage(SkillStorage):
     # Abstract operation implementations
     # ------------------------------------------------------------------
 
+    # yyds: 返回技能根目录的宿主机路径
     def get_skills_root_path(self) -> Path:
         return self._host_root
 
+    # yyds: 判断指定名称的自定义技能是否存在
     def custom_skill_exists(self, name: str) -> bool:
         return self.get_custom_skill_file(name).exists()
 
+    # yyds: 判断指定名称的内置技能是否存在
     def public_skill_exists(self, name: str) -> bool:
         normalized_name = self.validate_skill_name(name)
         return (self._host_root / SkillCategory.PUBLIC.value / normalized_name / SKILL_MD_FILE).exists()
 
+    # yyds: 递归遍历public/custom目录，找出所有包含SKILL.md的技能目录
     def _iter_skill_files(self) -> Iterable[tuple[SkillCategory, Path, Path]]:
         if not self._host_root.exists():
             return
@@ -79,11 +85,13 @@ class LocalSkillStorage(SkillStorage):
                     continue
                 yield category, category_path, Path(current_root) / SKILL_MD_FILE
 
+    # yyds: 读取自定义技能的SKILL.md文件内容
     def read_custom_skill(self, name: str) -> str:
         if not self.custom_skill_exists(name):
             raise FileNotFoundError(f"Custom skill '{name}' not found.")
         return (self.get_custom_skill_dir(name) / SKILL_MD_FILE).read_text(encoding="utf-8")
 
+    # yyds: 原子化写入自定义技能目录下的文件，使用临时文件+rename保证一致性
     def write_custom_skill(self, name: str, relative_path: str, content: str) -> None:
         target = self.validate_relative_path(relative_path, self.get_custom_skill_dir(name))
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -98,6 +106,7 @@ class LocalSkillStorage(SkillStorage):
         tmp_path.replace(target)
         make_skill_written_path_sandbox_readable(self.get_custom_skill_dir(name), target)
 
+    # yyds: 异步从.skill ZIP包安装技能，包含解压、验证、安全扫描和原子化部署
     async def ainstall_skill_from_archive(self, archive_path: str | Path) -> dict:
         from deerflow.skills.installer import _scan_skill_archive_contents_or_raise
 
@@ -191,6 +200,7 @@ class LocalSkillStorage(SkillStorage):
             shutil.copytree(skill_dir, staging_target)
             _move_staged_skill_into_reserved_target(staging_target, target)
 
+    # yyds: 删除自定义技能目录，可选记录删除前内容到历史
     def delete_custom_skill(self, name: str, *, history_meta: dict | None = None) -> None:
         self.validate_skill_name(name)
         self.ensure_custom_skill_is_editable(name)
@@ -210,6 +220,7 @@ class LocalSkillStorage(SkillStorage):
         if target.exists():
             shutil.rmtree(target)
 
+    # yyds: 追加一条JSONL格式的历史记录到技能历史文件
     def append_history(self, name: str, record: dict) -> None:
         self.validate_skill_name(name)
         payload = {"ts": datetime.now(UTC).isoformat(), **record}
@@ -219,6 +230,7 @@ class LocalSkillStorage(SkillStorage):
             f.write(json.dumps(payload, ensure_ascii=False))
             f.write("\n")
 
+    # yyds: 读取技能的所有JSONL历史记录，按时间正序返回
     def read_history(self, name: str) -> list[dict]:
         self.validate_skill_name(name)
         history_path = self.get_skill_history_file(name)

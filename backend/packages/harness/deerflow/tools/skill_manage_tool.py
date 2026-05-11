@@ -1,3 +1,4 @@
+# yyds: 技能管理工具，支持Agent动态创建/编辑/补丁/删除自定义技能，包含安全扫描和并发锁机制
 """Tool for creating and evolving custom skills."""
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 _skill_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 
 
+# yyds: 按技能名获取异步锁，使用WeakValueDictionary避免内存泄漏，确保同一技能的并发操作串行化
 def _get_lock(name: str) -> asyncio.Lock:
     lock = _skill_locks.get(name)
     if lock is None:
@@ -30,6 +32,7 @@ def _get_lock(name: str) -> asyncio.Lock:
     return lock
 
 
+# yyds: 从ToolRuntime上下文中提取当前线程ID，用于操作历史记录关联
 def _get_thread_id(runtime: Runtime | None) -> str | None:
     if runtime is None:
         return None
@@ -38,6 +41,7 @@ def _get_thread_id(runtime: Runtime | None) -> str | None:
     return runtime.config.get("configurable", {}).get("thread_id")
 
 
+# yyds: 构建技能操作历史记录字典，包含操作类型、文件路径、前后内容和安全扫描结果
 def _history_record(*, action: str, file_path: str, prev_content: str | None, new_content: str | None, thread_id: str | None, scanner: dict[str, Any]) -> dict[str, Any]:
     return {
         "action": action,
@@ -50,6 +54,7 @@ def _history_record(*, action: str, file_path: str, prev_content: str | None, ne
     }
 
 
+# yyds: 执行安全扫描，可执行内容要求必须通过否则抛出异常，非可执行内容允许warn级别
 async def _scan_or_raise(content: str, *, executable: bool, location: str) -> dict[str, str]:
     result = await scan_skill_content(content, executable=executable, location=location)
     if result.decision == "block":
@@ -63,6 +68,7 @@ async def _to_thread(func, /, *args, **kwargs):
     return await asyncio.to_thread(func, *args, **kwargs)
 
 
+# yyds: 技能管理核心实现，支持create/edit/patch/delete/write_file/remove_file六种操作，每种都包含验证、扫描和历史记录
 async def _skill_manage_impl(
     runtime: Runtime,
     action: str,

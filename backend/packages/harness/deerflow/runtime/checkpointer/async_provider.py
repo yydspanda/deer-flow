@@ -1,3 +1,4 @@
+# yyds: 异步检查点工厂，提供async context manager用于FastAPI lifespan等长生命周期场景
 """Async checkpointer factory.
 
 Provides an **async context manager** for long-running async servers that need
@@ -87,6 +88,7 @@ def _ensure_postgres_imports():
 # ---------------------------------------------------------------------------
 
 
+# yyds: 异步检查点内部工厂，根据配置创建memory/sqlite/postgres后端
 @contextlib.asynccontextmanager
 async def _async_checkpointer(config) -> AsyncIterator[Checkpointer]:
     """Async context manager that constructs and tears down a checkpointer."""

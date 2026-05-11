@@ -1,4 +1,24 @@
-"""LLM error handling middleware with retry/backoff and user-facing fallbacks."""
+"""yyds: LLM 错误处理中间件 — 处理 LLM API 调用失败（速率限制、超时、服务不可用等），提供重试和熔断机制。
+
+【做什么】包装模型调用，捕获异常并进行分类：暂时性错误（超时、429限速、503服务不可用）自动重试，
+   不可恢复错误（认证失败、配额不足）返回友好的中文/英文错误消息给用户。
+【为什么存在】LLM API 调用不稳定是常态——网络超时、服务商过载、API Key 过期等情况都会发生。
+   此中间件确保 Agent 不会因单次 API 失败而崩溃，同时通过熔断器保护系统免受持续失败的影响。
+【在链中的位置】wrap_model_call 阶段执行，包裹整个模型调用过程，是最外层的错误防线。
+【关键设计】
+   - 错误分类：通过状态码、异常类型、错误消息模式匹配将错误分为四类：
+     quota（配额不足）、auth（认证失败）、transient/busy（可重试）、generic（未知错误）。
+   - 重试策略：指数退避（1s→2s→4s→8s封顶），最多重试3次。尊重 Retry-After 响应头。
+   - 熔断器（Circuit Breaker）：三态模式 closed→open→half_open。
+     连续失败超过阈值时"跳闸"（open），快速失败避免无效请求；
+     超时后进入"半开"（half_open）状态尝试探测，成功则恢复，失败则继续跳闸。
+   - 支持中英文错误消息模式匹配（如"服务繁忙"、"rate limit"等），覆盖国内外常见 LLM 提供商。
+   - 通过流式写入器（stream_writer）发送 llm_retry 事件，前端可展示重试进度。
+
+---
+
+LLM error handling middleware with retry/backoff and user-facing fallbacks.
+"""
 
 from __future__ import annotations
 

@@ -1,3 +1,4 @@
+# yyds: 线程安全的网络工具，提供端口分配和释放功能
 """Thread-safe network utilities."""
 
 import socket

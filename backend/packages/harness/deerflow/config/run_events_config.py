@@ -1,3 +1,6 @@
+# yyds: 运行事件(消息+执行追踪)持久化存储配置。
+# yyds: 三种后端：memory(开发测试)、db(SQLAlchemy ORM，生产查询)、jsonl(单节点轻量持久化)。
+# yyds: max_trace_content 控制追踪内容截断阈值，track_token_usage 开关是否累计 Token 计数。
 """Run event storage configuration.
 
 Controls where run events (messages + execution traces) are persisted.

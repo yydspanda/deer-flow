@@ -1,3 +1,4 @@
+# yyds: 护栏中间件，在工具执行前拦截并评估安全性，拒绝的调用返回错误ToolMessage让Agent自适应调整策略
 """GuardrailMiddleware - evaluates tool calls against a GuardrailProvider before execution."""
 
 import logging
@@ -17,6 +18,7 @@ from deerflow.guardrails.provider import GuardrailDecision, GuardrailProvider, G
 logger = logging.getLogger(__name__)
 
 
+# yyds: Agent中间件实现，拦截每次工具调用进行安全评估，支持fail_closed模式（提供者异常时默认拒绝）
 class GuardrailMiddleware(AgentMiddleware[AgentState]):
     """Evaluate tool calls against a GuardrailProvider before execution.
 
@@ -31,6 +33,7 @@ class GuardrailMiddleware(AgentMiddleware[AgentState]):
         self.fail_closed = fail_closed
         self.passport = passport
 
+    # yyds: 将LangGraph工具调用请求转换为护栏评估所需的GuardrailRequest对象
     def _build_request(self, request: ToolCallRequest) -> GuardrailRequest:
         return GuardrailRequest(
             tool_name=str(request.tool_call.get("name", "")),
@@ -39,6 +42,7 @@ class GuardrailMiddleware(AgentMiddleware[AgentState]):
             timestamp=datetime.now(UTC).isoformat(),
         )
 
+    # yyds: 构建被拒绝时的错误ToolMessage，包含拒绝原因和错误码，引导Agent选择替代方案
     def _build_denied_message(self, request: ToolCallRequest, decision: GuardrailDecision) -> ToolMessage:
         tool_name = str(request.tool_call.get("name", "unknown_tool"))
         tool_call_id = str(request.tool_call.get("id", "missing_id"))
@@ -51,6 +55,7 @@ class GuardrailMiddleware(AgentMiddleware[AgentState]):
             status="error",
         )
 
+    # yyds: 同步工具调用拦截，评估通过则执行原始handler，拒绝则返回错误消息；保留GraphBubbleUp信号不中断
     @override
     def wrap_tool_call(
         self,
@@ -74,6 +79,7 @@ class GuardrailMiddleware(AgentMiddleware[AgentState]):
             return self._build_denied_message(request, decision)
         return handler(request)
 
+    # yyds: 异步工具调用拦截，逻辑与同步版本一致但支持异步提供者评估
     @override
     async def awrap_tool_call(
         self,

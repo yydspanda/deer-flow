@@ -1,3 +1,4 @@
+# yyds: 基于JSONL文件的事件存储实现，每个run一个文件，适合轻量级单节点部署
 """JSONL file-backed RunEventStore implementation.
 
 Each run's events are stored in a single file:
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 _SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-]+$")
 
 
+# yyds: JSONL文件事件存储实现，按线程目录组织，seq在内存中维护
 class JsonlRunEventStore(RunEventStore):
     def __init__(self, base_dir: str | Path | None = None):
         self._base_dir = Path(base_dir) if base_dir else Path(".deer-flow")
@@ -46,6 +48,7 @@ class JsonlRunEventStore(RunEventStore):
     def _get_write_lock(self, thread_id: str) -> asyncio.Lock:
         return self._write_locks.setdefault(thread_id, asyncio.Lock())
 
+    # yyds: 验证ID只含安全字符，防止路径遍历攻击
     @staticmethod
     def _validate_id(value: str, label: str) -> str:
         """Validate that an ID is safe for use in filesystem paths."""
@@ -53,18 +56,22 @@ class JsonlRunEventStore(RunEventStore):
             raise ValueError(f"Invalid {label}: must be alphanumeric/dash/underscore, got {value!r}")
         return value
 
+    # yyds: 返回线程目录路径 .deer-flow/threads/{thread_id}/runs/
     def _thread_dir(self, thread_id: str) -> Path:
         self._validate_id(thread_id, "thread_id")
         return self._base_dir / "threads" / thread_id / "runs"
 
+    # yyds: 返回run文件路径 {thread_dir}/{run_id}.jsonl
     def _run_file(self, thread_id: str, run_id: str) -> Path:
         self._validate_id(run_id, "run_id")
         return self._thread_dir(thread_id) / f"{run_id}.jsonl"
 
+    # yyds: 分配下一个seq编号，按线程递增
     def _next_seq(self, thread_id: str) -> int:
         self._seq_counters[thread_id] = self._seq_counters.get(thread_id, 0) + 1
         return self._seq_counters[thread_id]
 
+    # yyds: 从磁盘扫描所有run文件，计算当前最大seq值（阻塞I/O，由异步版本包装调用）
     def _compute_max_seq(self, thread_id: str) -> int:
         """Scan all run files for a thread and return the current max seq (blocking I/O)."""
         max_seq = 0
@@ -86,12 +93,14 @@ class JsonlRunEventStore(RunEventStore):
         max_seq = await asyncio.to_thread(self._compute_max_seq, thread_id)
         self._seq_counters[thread_id] = max_seq
 
+    # yyds: 将事件记录追加写入JSONL文件
     def _write_record(self, record: dict) -> None:
         path = self._run_file(record["thread_id"], record["run_id"])
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, default=str, ensure_ascii=False) + "\n")
 
+    # yyds: 读取线程所有事件并按seq排序，需扫描所有run文件
     def _read_thread_events(self, thread_id: str) -> list[dict]:
         """Read all events for a thread, sorted by seq (blocking I/O)."""
         events = []
@@ -109,6 +118,7 @@ class JsonlRunEventStore(RunEventStore):
         events.sort(key=lambda e: e.get("seq", 0))
         return events
 
+    # yyds: 读取单个run文件的事件，快速路径
     def _read_run_events(self, thread_id: str, run_id: str) -> list[dict]:
         """Read events for a specific run file (blocking I/O)."""
         path = self._run_file(thread_id, run_id)

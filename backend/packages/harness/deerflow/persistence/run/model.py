@@ -1,3 +1,4 @@
+# yyds: 运行元数据ORM模型，包含状态、Token用量、关联信息等字段
 """ORM model for run metadata."""
 
 from __future__ import annotations

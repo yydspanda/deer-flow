@@ -1,4 +1,23 @@
-"""SandboxAuditMiddleware - bash command security auditing."""
+"""yyds: 沙箱审计中间件 — 对 bash 工具执行的安全审计和命令拦截。
+
+【做什么】拦截所有 bash 工具调用，对 shell 命令进行安全分类（block/warn/pass），
+   阻止高危命令执行，对中危命令追加警告，并记录所有 bash 调用的结构化审计日志。
+【为什么存在】Agent 拥有执行 shell 命令的能力，存在安全风险。如果模型被诱导执行
+   "rm -rf /" 或 "curl ... | bash" 等破坏性命令，会造成严重后果。此中间件是安全防线。
+【在链中的位置】wrap_tool_call 阶段执行，包裹 bash 工具的调用过程，在命令实际执行前拦截。
+【关键设计】
+   - 命令分类策略：
+     - 高危（block）：rm -rf /、curl|bash、dd if=、mkfs、fork bomb、LD_PRELOAD、/dev/tcp 等，
+       直接阻止执行，返回错误 ToolMessage。
+     - 中危（warn）：pip install、apt install、chmod 777、sudo/su、PATH= 等，
+       正常执行但在结果中追加警告文本，提醒模型注意。
+     - 安全（pass）：正常执行。
+   - 输入清洗：拒绝空命令、超长命令（>10000字符）、包含 null 字节的命令。
+   - 支持复合命令拆分（以 &&、||、; 分隔），对每个子命令独立分类，取最严重结果。
+   - 使用 shlex 解析 + 正则匹配双保险，即使引号未闭合也能安全处理。
+   - 审计日志为结构化 JSON，包含时间戳、线程ID、命令内容、分类结果，写入 langgraph.log。
+   - 同时覆盖同步（wrap_tool_call）和异步（awrap_tool_call）两条调用路径。
+"""
 
 import json
 import logging

@@ -1,3 +1,7 @@
+# yyds: security.py — 沙箱安全开关
+#      核心问题：local 模式下 bash 在宿主机执行，不是安全边界
+#      所以默认禁止 bash，除非配置 sandbox.allow_host_bash: true
+#      Docker 模式（AioSandboxProvider）在容器里执行，天然隔离，默认允许
 """Security helpers for sandbox capability gating."""
 
 from deerflow.config import get_app_config

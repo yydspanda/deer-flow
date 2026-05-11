@@ -1,3 +1,9 @@
+# yyds: Sub-Agent 注册表 —— 管理"有哪些 sub-agent 可用"以及"config.yaml 覆盖规则"
+# yyds: 三层配置合并（类似 Codex 的 config layering）：
+# yyds:   1. 内置 sub-agent（general-purpose, bash）→ BUILTIN_SUBAGENTS
+# yyds:   2. config.yaml 的 custom_agents 段 → 用户自定义 sub-agent
+# yyds:   3. config.yaml 的 agents 段 → 按名称覆盖 timeout/max_turns/model/skills
+# yyds: 可用性过滤：如果 sandbox 不允许 host bash，bash sub-agent 会被隐藏
 """Subagent registry for managing available subagents."""
 
 import logging
@@ -11,6 +17,7 @@ from deerflow.subagents.config import SubagentConfig
 logger = logging.getLogger(__name__)
 
 
+# yyds: 解析 app_config 中的 subagents 子配置，延迟加载避免循环导入
 def _resolve_subagents_app_config(app_config: Any | None = None):
     if app_config is None:
         from deerflow.config.subagents_config import get_subagents_app_config
@@ -19,6 +26,7 @@ def _resolve_subagents_app_config(app_config: Any | None = None):
     return getattr(app_config, "subagents", app_config)
 
 
+# yyds: 从 config.yaml 的 custom_agents 段构建 SubagentConfig（用户自定义 sub-agent）
 def _build_custom_subagent_config(name: str, *, app_config: Any | None = None) -> SubagentConfig | None:
     """Build a SubagentConfig from config.yaml custom_agents section.
 
@@ -47,6 +55,9 @@ def _build_custom_subagent_config(name: str, *, app_config: Any | None = None) -
     )
 
 
+# yyds: 核心：按名称获取 sub-agent 配置，三层合并（内置 → custom_agents → per-agent overrides）
+# yyds: override 规则：per-agent override > global default(仅 builtin) > config 自身值
+# yyds: 注意：custom_agents 的自身值不会被 global default 覆盖（只有 builtin 才受 global default 影响）
 def get_subagent_config(name: str, *, app_config: Any | None = None) -> SubagentConfig | None:
     """Get a subagent configuration by name, with config.yaml overrides applied.
 
@@ -116,6 +127,7 @@ def get_subagent_config(name: str, *, app_config: Any | None = None) -> Subagent
     return config
 
 
+# yyds: 列出所有 sub-agent 配置（内置 + 自定义，已应用 override）
 def list_subagents(*, app_config: Any | None = None) -> list[SubagentConfig]:
     """List all available subagent configurations (with config.yaml overrides applied).
 
@@ -130,6 +142,7 @@ def list_subagents(*, app_config: Any | None = None) -> list[SubagentConfig]:
     return configs
 
 
+# yyds: 获取所有 sub-agent 名称（内置 + custom_agents），不去重（后面 list_subagents 去重）
 def get_subagent_names(*, app_config: Any | None = None) -> list[str]:
     """Get all available subagent names (built-in + custom).
 
@@ -147,6 +160,7 @@ def get_subagent_names(*, app_config: Any | None = None) -> list[str]:
     return names
 
 
+# yyds: 获取当前运行时可见的 sub-agent 名称（过滤掉不可用的，如 sandbox 不允许 host bash 时隐藏 bash agent）
 def get_available_subagent_names(*, app_config: Any | None = None) -> list[str]:
     """Get subagent names that should be exposed to the active runtime.
 

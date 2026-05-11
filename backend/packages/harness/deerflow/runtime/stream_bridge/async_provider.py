@@ -1,3 +1,4 @@
+# yyds: 异步流桥接工厂，提供async context manager用于FastAPI lifespan
 """Async stream bridge factory.
 
 Provides an **async context manager** aligned with
@@ -25,6 +26,7 @@ from .base import StreamBridge
 logger = logging.getLogger(__name__)
 
 
+# yyds: 创建StreamBridge实例，目前支持memory后端，Redis计划在Phase 2实现
 @contextlib.asynccontextmanager
 async def make_stream_bridge(app_config: AppConfig | None = None) -> AsyncIterator[StreamBridge]:
     """Async context manager that yields a :class:`StreamBridge`.

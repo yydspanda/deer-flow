@@ -1,3 +1,6 @@
+# yyds: 记忆子系统配置，控制 agent 的长期记忆（用户偏好/事实）存储与注入
+# yyds: 支持按用户隔离的文件存储（FileMemoryStorage），可配置 debounce 防抖、置信度阈值、最大事实数
+# yyds: injection_enabled 控制是否将记忆注入系统提示词，max_injection_tokens 限制注入 token 量
 """Configuration for memory mechanism."""
 
 from typing import Literal

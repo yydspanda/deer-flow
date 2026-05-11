@@ -1,3 +1,7 @@
+# yyds: 通用型 sub-agent —— 能做任何事（探索+修改+推理），适合复杂多步骤任务
+# yyds: 工具限制：tools=None（继承父 agent 所有工具），但禁用 task（防递归）+ ask_clarification + present_files
+# yyds: max_turns=100（比 bash agent 多，因为复杂任务需要更多轮次）
+# yyds: system_prompt 强调"不要问问题，用现有信息自主完成"——这是 sub-agent 的设计哲学
 """General-purpose subagent configuration."""
 
 from deerflow.subagents.config import SubagentConfig

@@ -1,4 +1,16 @@
-"""Middleware for memory mechanism."""
+"""yyds: 记忆中间件 — 在每次对话交互后，将对话内容异步持久化到记忆系统。
+
+【做什么】Agent 执行完成后，将本轮对话中的用户输入和最终助手回复过滤出来，放入记忆队列进行异步更新。
+【为什么存在】为了实现跨会话的长期记忆。Agent 需要记住用户偏好、历史决策等上下文信息，此中间件负责
+   将对话内容提交给记忆系统进行 LLM 摘要和存储，与 summarization_middleware（摘要中间件）配合工作。
+【在链中的位置】after_agent 阶段执行，即整个 Agent 执行完毕后运行。
+【关键设计】
+   - 只保留用户消息（human）和最终助手回复（ai），过滤掉工具调用等中间步骤。
+   - 使用队列（MemoryQueue）进行异步批量更新，内置防抖（debounce）机制避免频繁更新。
+   - 支持检测"纠正"（correction）和"强化"（reinforcement）语义，帮助记忆系统更准确地更新。
+   - agent_name 参数支持按 Agent 名称隔离记忆（多 Agent 场景）。
+   - 在入队时捕获 user_id，因为后续 Timer 线程中 ContextVar 不会传播。
+"""
 
 import logging
 from typing import TYPE_CHECKING, override

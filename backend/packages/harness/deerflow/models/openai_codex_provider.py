@@ -1,3 +1,4 @@
+# yyds: OpenAI Codex 模型提供者，通过 ChatGPT Codex Responses API 实现工具调用和流式输出
 """Custom OpenAI Codex provider using ChatGPT Codex Responses API.
 
 Uses Codex CLI OAuth tokens with chatgpt.com/backend-api/codex/responses endpoint.
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 
 
+# yyds: 将 Codex/Responses API 的 token 用量转换为 LangChain usage_metadata 格式
 def _build_usage_metadata(oai_usage: dict) -> dict:
     """Convert Codex/Responses API usage dict to LangChain usage_metadata format.
 
@@ -58,6 +60,7 @@ def _build_usage_metadata(oai_usage: dict) -> dict:
 MAX_RETRIES = 3
 
 
+# yyds: 基于 ChatGPT Codex Responses API 的 LangChain 聊天模型，支持工具调用和流式推理
 class CodexChatModel(BaseChatModel):
     """LangChain chat model using ChatGPT Codex Responses API.
 
@@ -88,6 +91,7 @@ class CodexChatModel(BaseChatModel):
         if self.retry_max_attempts < 1:
             raise ValueError("retry_max_attempts must be >= 1")
 
+    # yyds: 初始化后自动从 ~/.codex/auth.json 加载 Codex CLI 凭证
     def model_post_init(self, __context: Any) -> None:
         """Auto-load Codex CLI credentials."""
         self._validate_retry_config()
@@ -134,6 +138,7 @@ class CodexChatModel(BaseChatModel):
         except TypeError:
             return str(content)
 
+    # yyds: 将 LangChain 消息格式转换为 Codex Responses API 的 instructions + input_items 格式
     def _convert_messages(self, messages: list[BaseMessage]) -> tuple[str, list[dict]]:
         """Convert LangChain messages to Responses API format.
 
@@ -177,6 +182,7 @@ class CodexChatModel(BaseChatModel):
 
         return instructions, input_items
 
+    # yyds: 将 LangChain 工具格式转换为 Responses API 的 function 工具格式
     def _convert_tools(self, tools: list[dict]) -> list[dict]:
         """Convert LangChain tool format to Responses API format."""
         responses_tools = []
@@ -202,6 +208,7 @@ class CodexChatModel(BaseChatModel):
                 )
         return responses_tools
 
+    # yyds: 调用 Codex Responses API，支持重试和指数退避
     def _call_codex_api(self, messages: list[BaseMessage], tools: list[dict] | None = None) -> dict:
         """Call the Codex Responses API and return the completed response."""
         instructions, input_items = self._convert_messages(messages)
@@ -245,6 +252,7 @@ class CodexChatModel(BaseChatModel):
 
         raise last_error
 
+    # yyds: 通过 SSE 流式接收 Codex API 响应并合并流事件到最终结果
     def _stream_response(self, headers: dict, payload: dict) -> dict:
         """Stream SSE from Codex API and collect the final response."""
         completed_response = None
@@ -339,6 +347,7 @@ class CodexChatModel(BaseChatModel):
 
         return parsed_arguments, None
 
+    # yyds: 将 Codex Responses API 响应解析为 LangChain ChatResult，提取文本、工具调用和推理内容
     def _parse_response(self, response: dict) -> ChatResult:
         """Parse Codex Responses API response into LangChain ChatResult."""
         content = ""
@@ -403,6 +412,7 @@ class CodexChatModel(BaseChatModel):
             },
         )
 
+    # yyds: LangChain 生成接口，调用 Codex API 并解析结果
     def _generate(
         self,
         messages: list[BaseMessage],
@@ -415,6 +425,7 @@ class CodexChatModel(BaseChatModel):
         response = self._call_codex_api(messages, tools=tools)
         return self._parse_response(response)
 
+    # yyds: 绑定工具用于函数调用，转换为 Responses API 工具格式
     def bind_tools(self, tools: list, **kwargs: Any) -> Any:
         """Bind tools for function calling."""
         from langchain_core.runnables import RunnableBinding

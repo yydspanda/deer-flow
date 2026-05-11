@@ -1,3 +1,21 @@
+# yyds: ═══════════════════════════════════════════════════════════════════
+# yyds: Memory 更新队列 —— 去抖动 + 批处理
+# yyds: ═══════════════════════════════════════════════════════════════════
+# yyds:
+# yyds: 设计目的：避免每次对话都触发 LLM 提取（太贵），攒够一批再处理
+# yyds:
+# yyds: 工作流程：
+# yyds:   MemoryMiddleware(after_agent) → queue.add() → 重置 30s 定时器
+# yyds:     → 30s 内没有新消息 → _process_queue() → 逐个调 MemoryUpdater.update_memory()
+# yyds:
+# yyds: 去抖动：每次 add() 都重置定时器，所以连续对话只会触发一次处理
+# yyds: 去重：同一 thread_id 的旧 context 会被新 context 替换
+# yyds: 批处理：30s 内积累的所有 thread 的 context 一起处理，每个间隔 0.5s（避免限流）
+# yyds:
+# yyds: 两种入队模式：
+# yyds:   add()      → 去抖动（30s 延迟），用于 MemoryMiddleware
+# yyds:   add_nowait() → 立即处理（0s 延迟），用于 summarization_hook（消息即将被删除）
+# yyds: ═══════════════════════════════════════════════════════════════════
 """Memory update queue with debounce mechanism."""
 
 import logging
@@ -12,10 +30,9 @@ from deerflow.config.memory_config import get_memory_config
 logger = logging.getLogger(__name__)
 
 
+# yyds: 对话上下文 —— 记录 thread_id + messages + 信号检测（correction/reinforcement）
 @dataclass
 class ConversationContext:
-    """Context for a conversation to be processed for memory update."""
-
     thread_id: str
     messages: list[Any]
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -25,14 +42,8 @@ class ConversationContext:
     reinforcement_detected: bool = False
 
 
+# yyds: 去抖动队列核心 —— _queue + _lock + _timer + _processing 四件套
 class MemoryUpdateQueue:
-    """Queue for memory updates with debounce mechanism.
-
-    This queue collects conversation contexts and processes them after
-    a configurable debounce period. Multiple conversations received within
-    the debounce window are batched together.
-    """
-
     def __init__(self):
         """Initialize the memory update queue."""
         self._queue: list[ConversationContext] = []
@@ -49,6 +60,7 @@ class MemoryUpdateQueue:
         """Return the debounce identity for a memory update target."""
         return (thread_id, user_id, agent_name)
 
+    # yyds: 去抖动入队 —— 每次 add 都重置 30s 定时器，到期后 _process_queue
     def add(
         self,
         thread_id: str,
@@ -87,6 +99,7 @@ class MemoryUpdateQueue:
 
         logger.info("Memory update queued for thread %s, queue size: %d", thread_id, len(self._queue))
 
+    # yyds: 立即处理入队 —— 设置 0s 定时器，用于 summarization_hook（消息即将被删除，不能等）
     def add_nowait(
         self,
         thread_id: str,
@@ -114,6 +127,7 @@ class MemoryUpdateQueue:
 
         logger.info("Memory update queued for immediate processing on thread %s, queue size: %d", thread_id, len(self._queue))
 
+    # yyds: 入队核心逻辑 —— 同 thread_id 去重（新 context 替换旧的），合并 correction/reinforcement 信号
     def _enqueue_locked(
         self,
         *,
@@ -163,8 +177,8 @@ class MemoryUpdateQueue:
         self._timer.daemon = True
         self._timer.start()
 
+    # yyds: 处理队列 —— 取出所有 context，逐个调 MemoryUpdater.update_memory()，每个间隔 0.5s
     def _process_queue(self) -> None:
-        """Process all queued conversation contexts."""
         # Import here to avoid circular dependency
         from deerflow.agents.memory.updater import MemoryUpdater
 
@@ -213,11 +227,8 @@ class MemoryUpdateQueue:
             with self._lock:
                 self._processing = False
 
+    # yyds: 强制立即处理（同步等待完成），用于测试或优雅关闭
     def flush(self) -> None:
-        """Force immediate processing of the queue.
-
-        This is useful for testing or graceful shutdown.
-        """
         with self._lock:
             if self._timer is not None:
                 self._timer.cancel()
@@ -257,6 +268,7 @@ class MemoryUpdateQueue:
             return self._processing
 
 
+# yyds: 全局单例 —— get_memory_queue() 懒初始化，reset_memory_queue() 用于测试
 # Global singleton instance
 _memory_queue: MemoryUpdateQueue | None = None
 _queue_lock = threading.Lock()

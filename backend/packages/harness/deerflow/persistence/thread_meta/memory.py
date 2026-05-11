@@ -1,3 +1,4 @@
+# yyds: 基于LangGraph BaseStore的内存线程元数据存储实现
 """In-memory ThreadMetaStore backed by LangGraph BaseStore.
 
 Used when database.backend=memory. Delegates to the LangGraph Store's

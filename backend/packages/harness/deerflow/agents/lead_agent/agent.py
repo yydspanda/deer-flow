@@ -1,4 +1,33 @@
-"""Lead agent factory.
+"""
+yyds 学习笔记：agent.py — DeerFlow 的心脏
+
+这个文件做一件事：把模型、工具、中间件、提示词组装成一个可执行的 Agent。
+
+调用链：
+  Gateway 收到请求
+    → services.py 调用 make_lead_agent(config)
+      → _make_lead_agent() 做组装
+        ① 从 config 提取运行时参数（thinking/plan/subagent 模式）
+        ② 解析模型名（用户指定 → agent 配置 → 全局默认，三级回退）
+        ③ 获取工具列表 + 按 skill 过滤
+        ④ 组装中间件链（17+ 个，顺序很重要）
+        ⑤ 生成 system prompt（根据模式和 skill 动态拼接）
+        ⑥ 调用 LangGraph 的 create_agent() 返回可执行 Agent
+
+文件结构：
+  ├── 工具函数（给主函数用的）
+  │   ├── _get_runtime_config()              提取运行时参数
+  │   ├── _resolve_model_name()              解析模型名（三级回退）
+  │   ├── _create_summarization_middleware()  创建上下文压缩中间件
+  │   ├── _create_todo_list_middleware()      创建待办列表中间件
+  │   ├── _build_middlewares()               组装中间件链（核心！）
+  │   ├── _available_skill_names()           获取可用 skill 名
+  │   └── _load_enabled_skills_for_tool_policy() 加载 skill 用于工具过滤
+  └── 入口函数
+      ├── make_lead_agent()                  外部入口（Gateway 调这个）
+      └── _make_lead_agent()                 真正干活的
+
+Lead agent factory.
 
 INVARIANT — tracing callback placement
 ======================================
@@ -16,6 +45,34 @@ path from firing, so ``session_id`` / ``user_id`` never reach the trace.
 The four current sites are: bootstrap agent, default agent, summarization
 middleware, and the async path inside ``TitleMiddleware``. Any new in-graph
 ``create_chat_model`` call must add to this list and pass the flag.
+"""
+yyds 学习笔记：agent.py — DeerFlow 的心脏
+
+这个文件做一件事：把模型、工具、中间件、提示词组装成一个可执行的 Agent。
+
+调用链：
+  Gateway 收到请求
+    → services.py 调用 make_lead_agent(config)
+      → _make_lead_agent() 做组装
+        ① 从 config 提取运行时参数（thinking/plan/subagent 模式）
+        ② 解析模型名（用户指定 → agent 配置 → 全局默认，三级回退）
+        ③ 获取工具列表 + 按 skill 过滤
+        ④ 组装中间件链（17+ 个，顺序很重要）
+        ⑤ 生成 system prompt（根据模式和 skill 动态拼接）
+        ⑥ 调用 LangGraph 的 create_agent() 返回可执行 Agent
+
+文件结构：
+  ├── 工具函数（给主函数用的）
+  │   ├── _get_runtime_config()              提取运行时参数
+  │   ├── _resolve_model_name()              解析模型名（三级回退）
+  │   ├── _create_summarization_middleware()  创建上下文压缩中间件
+  │   ├── _create_todo_list_middleware()      创建待办列表中间件
+  │   ├── _build_middlewares()               组装中间件链（核心！）
+  │   ├── _available_skill_names()           获取可用 skill 名
+  │   └── _load_enabled_skills_for_tool_policy() 加载 skill 用于工具过滤
+  └── 入口函数
+      ├── make_lead_agent()                  外部入口（Gateway 调这个）
+      └── _make_lead_agent()                 真正干活的
 """
 
 from __future__ import annotations
@@ -53,7 +110,13 @@ _BOOTSTRAP_SKILL_NAMES = {"bootstrap"}
 
 
 def _get_runtime_config(config: RunnableConfig) -> dict:
-    """Merge legacy configurable options with LangGraph runtime context."""
+    """Merge legacy configurable options with LangGraph runtime context.
+
+    yyds: 这个函数把两个地方的配置合并成一个 dict：
+      - config["configurable"] → LangGraph 的传统配置（旧接口）
+      - config["context"]      → 运行时上下文（新接口）
+    两个合并后返回，后面的函数都用 cfg.get("xxx") 取值。
+    """
     cfg = dict(config.get("configurable", {}) or {})
     context = config.get("context", {}) or {}
     if isinstance(context, dict):
@@ -62,7 +125,16 @@ def _get_runtime_config(config: RunnableConfig) -> dict:
 
 
 def _resolve_model_name(requested_model_name: str | None = None, *, app_config: AppConfig | None = None) -> str:
-    """Resolve a runtime model name safely, falling back to default if invalid. Returns None if no models are configured."""
+    """Resolve a runtime model name safely, falling back to default if invalid. Returns None if no models are configured.
+
+    yyds: 模型名三级回退策略：
+      第1级：用户请求指定的 model_name → 如果 config.yaml 里有，用这个
+      第2级：agent 配置里的 model → 由调用方在传入前合并到 requested_model_name
+      第3级：config.yaml 里第一个模型（全局默认）
+
+      如果用户指定了但找不到，打个 warning 然后用默认模型，不会报错。
+      这是"宽容策略"——宁可降级也不崩。
+    """
     app_config = app_config or get_app_config()
     default_model_name = app_config.models[0].name if app_config.models else None
     if default_model_name is None:
@@ -77,7 +149,20 @@ def _resolve_model_name(requested_model_name: str | None = None, *, app_config: 
 
 
 def _create_summarization_middleware(*, app_config: AppConfig | None = None) -> DeerFlowSummarizationMiddleware | None:
-    """Create and configure the summarization middleware from config."""
+    """Create and configure the summarization middleware from config.
+
+    yyds: 上下文压缩中间件的工厂函数。
+    当对话太长时，这个中间件会把历史消息压缩成摘要，节省 token。
+
+    关键参数：
+      - trigger: 什么时候触发压缩（比如消息数 > 40 或 token 数 > 8000）
+      - keep: 压缩时保留哪些消息（比如最近 10 条）
+      - model: 用哪个模型做摘要（可以和主模型不同，用便宜的）
+      - hooks: 压缩前的回调（memory_flush_hook 把摘要持久化到记忆系统）
+
+    注意：model 被标记了 "middleware:summarize" tag，
+    这样 LangSmith 追踪时能区分"这是压缩中间件的 LLM 调用"还是"主 Agent 的 LLM 调用"。
+    """
     resolved_app_config = app_config or get_app_config()
     config = resolved_app_config.summarization
 
@@ -144,6 +229,13 @@ def _create_summarization_middleware(*, app_config: AppConfig | None = None) -> 
 
 def _create_todo_list_middleware(is_plan_mode: bool) -> TodoMiddleware | None:
     """Create and configure the TodoList middleware.
+
+    yyds: 待办列表中间件，只在 plan mode 下启用。
+    它给 Agent 注入 write_todos 工具和对应的 system prompt，
+    让 Agent 能自动创建/更新待办列表来跟踪复杂任务。
+
+    对应 DeerFlow 的 Pro 和 Ultra 模式（is_plan_mode=True）。
+    Flash 和 Thinking 模式下返回 None，不加载这个中间件。
 
     Args:
         is_plan_mode: Whether to enable plan mode with TodoList middleware.
@@ -257,6 +349,7 @@ Being proactive with task management demonstrates thoroughness and ensures all r
     return TodoMiddleware(system_prompt=system_prompt, tool_description=tool_description)
 
 
+# yyds: 中间件组装顺序的注释（upstream 原有，解释了为什么这个顺序很重要）
 # ThreadDataMiddleware must be before SandboxMiddleware to ensure thread_id is available
 # UploadsMiddleware should be after ThreadDataMiddleware to access thread_id
 # DanglingToolCallMiddleware patches missing ToolMessages before model sees the history
@@ -283,6 +376,26 @@ def build_middlewares(
     ``make_lead_agent`` and by the embedded ``DeerFlowClient`` (a lead-agent variant
     that needs the identical chain). Keep this name stable: it is imported across a
     module boundary, so renames/signature changes ripple into ``client.py``.
+
+    yyds: 这是中间件组装的核心函数。中间件按顺序添加到列表里，
+    LangGraph 会按列表顺序执行 before_agent 钩子，反序执行 after_agent 钩子。
+
+    组装顺序（从上到下）：
+      ① build_lead_runtime_middlewares()   → 基础 7 层（ThreadData → Uploads → Sandbox → ...）
+      ② summarization_middleware（可选）    → 上下文压缩
+      ③ todo_list_middleware（plan mode）   → 待办列表
+      ④ TokenUsageMiddleware（可选）        → token 统计
+      ⑤ TitleMiddleware                    → 自动标题
+      ⑥ MemoryMiddleware                   → 记忆更新
+      ⑦ ViewImageMiddleware（vision 模型） → 图片理解
+      ⑧ DeferredToolFilterMiddleware（可选）→ 隐藏延迟工具
+      ⑨ SubagentLimitMiddleware（可选）    → 并发子 Agent 限制
+      ⑩ LoopDetectionMiddleware            → 循环检测
+      ⑪ custom_middlewares                 → ← 扩展点！你的自定义中间件插这里
+      ⑫ ClarificationMiddleware            → 必须最后，拦截确认请求
+
+    custom_middlewares 参数就是安全预警系统的注入点：
+      安全流程中间件放 app 层，通过 custom_middlewares 参数注入到倒数第二个位置。
 
     Args:
         config: Runtime configuration containing configurable options like is_plan_mode.
@@ -378,6 +491,11 @@ def build_middlewares(
 
 
 def _available_skill_names(agent_config, is_bootstrap: bool) -> set[str] | None:
+    """yyds: 确定当前 Agent 可以用哪些 skill。
+    - bootstrap 模式：只有 "bootstrap" 这一个 skill
+    - agent 配置了 skills 列表：用配置的
+    - 都没有：返回 None（表示不限制，全部可用）
+    """
     if is_bootstrap:
         return set(_BOOTSTRAP_SKILL_NAMES)
     if agent_config and agent_config.skills is not None:
@@ -386,6 +504,10 @@ def _available_skill_names(agent_config, is_bootstrap: bool) -> set[str] | None:
 
 
 def _load_enabled_skills_for_tool_policy(available_skills: set[str] | None, *, app_config: AppConfig) -> list[Skill]:
+    """yyds: 加载启用的 skill 对象，用于工具过滤策略。
+    每个 skill 可以声明 allowed_tools（只允许用这些工具），
+    这个函数把 skill 列表准备好，传给 filter_tools_by_skill_allowed_tools 做过滤。
+    """
     try:
         from deerflow.agents.lead_agent.prompt import get_enabled_skills_for_config
 
@@ -400,13 +522,43 @@ def _load_enabled_skills_for_tool_policy(available_skills: set[str] | None, *, a
 
 
 def make_lead_agent(config: RunnableConfig):
-    """LangGraph graph factory; keep the signature compatible with LangGraph Server."""
+    """LangGraph graph factory; keep the signature compatible with LangGraph Server.
+
+    yyds: 外部入口。Gateway 的 services.py 调的就是这个函数。
+    它只做一件事：从 config 里提取 app_config，然后调 _make_lead_agent。
+    签名固定为 (config: RunnableConfig) 是为了兼容 LangGraph Server 的工厂接口。
+    """
     runtime_config = _get_runtime_config(config)
     runtime_app_config = runtime_config.get("app_config")
     return _make_lead_agent(config, app_config=runtime_app_config or get_app_config())
 
 
 def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
+    """yyds: 真正的组装车间。6 步把 Agent 组装出来：
+
+    ① 提取运行时参数
+       从前端请求中取出 thinking_enabled, is_plan_mode, subagent_enabled 等，
+       这些参数决定 Agent 用什么模式（Flash/Thinking/Pro/Ultra）。
+
+    ② 解析模型名
+       三级回退：用户请求 → agent 配置 → 全局默认。
+       如果模型不支持 thinking 但开了 thinking 模式，自动降级。
+
+    ③ 组装工具列表
+       get_available_tools() 获取所有工具，filter_tools_by_skill_allowed_tools() 按 skill 过滤。
+       bootstrap 模式额外加 setup_agent 工具（用于创建自定义 Agent）。
+       有 agent_name 的自定义 Agent 额外加 update_agent 工具。
+
+    ④ 组装中间件链
+       _build_middlewares() 按顺序组装 17+ 个中间件。
+
+    ⑤ 生成 system prompt
+       apply_prompt_template() 根据模式、skill 动态拼接提示词。
+
+    ⑥ 调 create_agent() 返回可执行 Agent
+       传入 model + tools + middleware + system_prompt + state_schema，
+       LangGraph 返回一个可执行的 StateGraph。
+    """
     # Lazy import to avoid circular dependency
     from deerflow.tools import get_available_tools
     from deerflow.tools.builtins import setup_agent, update_agent

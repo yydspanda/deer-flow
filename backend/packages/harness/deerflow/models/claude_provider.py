@@ -1,3 +1,4 @@
+# yyds: Claude/Anthropic 模型提供者，支持 OAuth 认证、提示缓存和自动思维预算分配
 """Custom Claude provider with OAuth Bearer auth, prompt caching, and smart thinking.
 
 Supports two authentication modes:
@@ -41,6 +42,7 @@ _DEFAULT_BILLING_HEADER = "x-anthropic-billing-header: cc_version=2.1.85.351; cc
 OAUTH_BILLING_HEADER = os.environ.get("ANTHROPIC_BILLING_HEADER", _DEFAULT_BILLING_HEADER)
 
 
+# yyds: Claude 聊天模型类，扩展 ChatAnthropic 支持 OAuth 认证、提示缓存、自动思维预算和重试
 class ClaudeChatModel(ChatAnthropic):
     """ChatAnthropic with OAuth Bearer auth, prompt caching, and smart thinking.
 
@@ -62,10 +64,12 @@ class ClaudeChatModel(ChatAnthropic):
 
     model_config = {"arbitrary_types_allowed": True}
 
+    # yyds: 验证重试配置参数
     def _validate_retry_config(self) -> None:
         if self.retry_max_attempts < 1:
             raise ValueError("retry_max_attempts must be >= 1")
 
+    # yyds: 初始化后自动加载凭证，检测并配置 OAuth Bearer 认证
     def model_post_init(self, __context: Any) -> None:
         """Auto-load credentials and configure OAuth if needed."""
         from pydantic import SecretStr
@@ -125,12 +129,14 @@ class ClaudeChatModel(ChatAnthropic):
             self._patch_client_oauth(self._client)
             self._patch_client_oauth(self._async_client)
 
+    # yyds: 将 Anthropic SDK 客户端的 api_key 替换为 OAuth auth_token
     def _patch_client_oauth(self, client: Any) -> None:
         """Swap api_key → auth_token on an Anthropic SDK client for OAuth Bearer auth."""
         if hasattr(client, "api_key") and hasattr(client, "auth_token"):
             client.api_key = None
             client.auth_token = self._oauth_access_token
 
+    # yyds: 构建请求负载，注入提示缓存、思维预算和 OAuth 计费头
     def _get_request_payload(
         self,
         input_: Any,
@@ -152,6 +158,7 @@ class ClaudeChatModel(ChatAnthropic):
 
         return payload
 
+    # yyds: 注入 OAuth 计费头和 user_id 元数据，所有 OAuth 请求必需
     def _apply_oauth_billing(self, payload: dict) -> None:
         """Inject the billing header block required for all OAuth requests.
 
@@ -189,6 +196,7 @@ class ClaudeChatModel(ChatAnthropic):
                 }
             )
 
+    # yyds: 在系统提示、最近消息和工具定义上添加 ephemeral 缓存断点（最多4个）
     def _apply_prompt_caching(self, payload: dict) -> None:
         """Apply ephemeral cache_control to system, recent messages, and last tool definition.
 
@@ -247,6 +255,7 @@ class ClaudeChatModel(ChatAnthropic):
         for block in candidates[-MAX_CACHE_BREAKPOINTS:]:
             block["cache_control"] = {"type": "ephemeral"}
 
+    # yyds: 自动分配思维预算，默认为 max_tokens 的 80%
     def _apply_thinking_budget(self, payload: dict) -> None:
         """Auto-allocate thinking budget (80% of max_tokens)."""
         thinking = payload.get("thinking")
@@ -260,6 +269,7 @@ class ClaudeChatModel(ChatAnthropic):
         max_tokens = payload.get("max_tokens", 8192)
         thinking["budget_tokens"] = int(max_tokens * THINKING_BUDGET_RATIO)
 
+    # yyds: 静态方法，移除请求负载中的 cache_control 标记（OAuth 请求不支持缓存）
     @staticmethod
     def _strip_cache_control(payload: dict) -> None:
         """Remove cache_control markers before OAuth requests reach Anthropic."""
@@ -293,6 +303,7 @@ class ClaudeChatModel(ChatAnthropic):
             self._strip_cache_control(payload)
         return await super()._acreate(payload)
 
+    # yyds: 同步生成方法，包含 OAuth 补丁和指数退避重试逻辑
     def _generate(self, messages: list[BaseMessage], stop: list[str] | None = None, **kwargs: Any) -> Any:
         """Override with OAuth patching and retry logic."""
         if self._is_oauth:
@@ -318,6 +329,7 @@ class ClaudeChatModel(ChatAnthropic):
                 time.sleep(wait_ms / 1000)
         raise last_error
 
+    # yyds: 异步生成方法，包含 OAuth 补丁和异步指数退避重试逻辑
     async def _agenerate(self, messages: list[BaseMessage], stop: list[str] | None = None, **kwargs: Any) -> Any:
         """Async override with OAuth patching and retry logic."""
         import asyncio
@@ -345,6 +357,7 @@ class ClaudeChatModel(ChatAnthropic):
                 await asyncio.sleep(wait_ms / 1000)
         raise last_error
 
+    # yyds: 计算指数退避等待时间，支持 Retry-After 响应头
     @staticmethod
     def _calc_backoff_ms(attempt: int, error: Exception) -> int:
         """Exponential backoff with a fixed 20% buffer."""

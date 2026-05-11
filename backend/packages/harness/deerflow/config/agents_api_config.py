@@ -1,3 +1,5 @@
+# yyds: 自定义 Agent 管理 API 配置，控制 SOUL.md/USER.md 等路由的读写权限。
+# yyds: 默认关闭(enabled=False)，开启后网关才接受自定义 Agent 的配置读写请求。
 """Configuration for the custom agents management API."""
 
 from pydantic import BaseModel, Field

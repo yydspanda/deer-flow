@@ -1,3 +1,4 @@
+# yyds: 内存事件存储实现，用于开发测试，单进程异步安全
 """In-memory RunEventStore. Used when run_events.backend=memory (default) and in tests.
 
 Thread-safe for single-process async usage (no threading locks needed
@@ -12,6 +13,7 @@ from datetime import UTC, datetime
 from deerflow.runtime.events.store.base import RunEventStore
 
 
+# yyds: 内存事件存储，按thread_id分组，seq单调递增
 class MemoryRunEventStore(RunEventStore):
     def __init__(self) -> None:
         self._events: dict[str, list[dict]] = {}  # thread_id -> seq-sorted event list

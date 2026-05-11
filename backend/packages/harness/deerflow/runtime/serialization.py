@@ -1,3 +1,4 @@
+# yyds: LangChain/LangGraph对象的序列化工具，将消息、状态字典等转为JSON可序列化结构
 """Canonical serialization for LangChain / LangGraph objects.
 
 Provides a single source of truth for converting LangChain message
@@ -13,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 
+# yyds: 递归序列化LangChain对象，优先使用model_dump()，降级到dict()，最后str()
 def serialize_lc_object(obj: Any) -> Any:
     """Recursively serialize a LangChain object to a JSON-serialisable dict."""
     if obj is None:
@@ -42,6 +44,7 @@ def serialize_lc_object(obj: Any) -> Any:
         return repr(obj)
 
 
+# yyds: 序列化channel values，去除__pregel_*和__interrupt__等LangGraph内部键
 def serialize_channel_values(channel_values: dict[str, Any]) -> dict[str, Any]:
     """Serialize channel values, stripping internal LangGraph keys.
 
@@ -54,6 +57,7 @@ def serialize_channel_values(channel_values: dict[str, Any]) -> dict[str, Any]:
             continue
         result[key] = serialize_lc_object(value)
     return result
+
 
 
 def strip_data_url_image_blocks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -104,7 +108,7 @@ def serialize_channel_values_for_api(channel_values: dict[str, Any]) -> dict[str
     if isinstance(result.get("messages"), list):
         result["messages"] = strip_data_url_image_blocks(result["messages"])
     return result
-
+# yyds: 序列化messages模式的元组(chunk, metadata)
 
 def serialize_messages_tuple(obj: Any) -> Any:
     """Serialize a messages-mode tuple ``(chunk, metadata)``."""
@@ -114,6 +118,7 @@ def serialize_messages_tuple(obj: Any) -> Any:
     return serialize_lc_object(obj)
 
 
+# yyds: 根据stream mode选择对应的序列化策略：messages/values/默认递归
 def serialize(obj: Any, *, mode: str = "") -> Any:
     """Serialize LangChain objects with mode-specific handling.
 

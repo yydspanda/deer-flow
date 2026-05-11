@@ -1,3 +1,7 @@
+# yyds: 工具调用前的安全护栏配置。
+# yyds: 核心设计：每个工具调用先经过 GuardrailProvider 审批才执行。
+# yyds: 支持白名单(AcllowlistProvider)等策略，fail_closed=True 时 Provider 异常则默认拒绝。
+# yyds: 通过 passport 字段关联 OAP 护照，实现基于身份的细粒度权限控制。
 """Configuration for pre-tool-call authorization."""
 
 from pydantic import BaseModel, Field

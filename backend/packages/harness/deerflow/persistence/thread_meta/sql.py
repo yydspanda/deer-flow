@@ -1,3 +1,4 @@
+# yyds: 基于SQLAlchemy的线程元数据仓库，支持所有权过滤和元数据合并
 """SQLAlchemy-backed thread metadata repository."""
 
 from __future__ import annotations

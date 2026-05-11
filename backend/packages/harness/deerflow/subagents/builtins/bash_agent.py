@@ -1,3 +1,7 @@
+# yyds: Bash 命令执行专用 sub-agent —— 适合一系列相关的 bash 命令（git/npm/docker/构建部署等）
+# yyds: 工具限制：只有 sandbox 工具（bash/ls/read_file/write_file/str_replace）
+# yyds: 禁用 task（防递归）+ ask_clarification + present_files
+# yyds: max_turns=60（比 general-purpose 少，因为 bash 操作通常不需要太多轮次）
 """Bash command execution subagent configuration."""
 
 from deerflow.subagents.config import SubagentConfig
