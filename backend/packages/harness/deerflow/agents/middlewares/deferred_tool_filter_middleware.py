@@ -41,14 +41,15 @@ logger = logging.getLogger(__name__)
 
 
 class DeferredToolFilterMiddleware(AgentMiddleware[AgentState]):
-    """Remove deferred tools from request.tools before model binding.
+    """yyds: 延迟工具过滤中间件 — 双重拦截：模型侧隐藏 schema + 工具侧阻止未授权调用。
 
-    ToolNode still holds all tools (including deferred) for execution routing,
-    but the LLM only sees active tool schemas — deferred tools are discoverable
-    via tool_search at runtime.
+    两个拦截点：
+      wrap_model_call: 从 request.tools 中移除延迟工具 schema（LLM 看不到）
+      wrap_tool_call: 拦截直接调用延迟工具，返回错误提示"先调用 tool_search"
     """
 
     def _filter_tools(self, request: ModelRequest) -> ModelRequest:
+        """yyds: 从 model request 中移除延迟工具的 schema — LLM 只能看到活跃工具。"""
         from deerflow.tools.builtins.tool_search import get_deferred_registry
 
         registry = get_deferred_registry()
@@ -64,6 +65,9 @@ class DeferredToolFilterMiddleware(AgentMiddleware[AgentState]):
         return request.override(tools=active_tools)
 
     def _blocked_tool_message(self, request: ToolCallRequest) -> ToolMessage | None:
+        """yyds: 检查工具是否是延迟的且未被 promote — 是则返回错误 ToolMessage。
+        错误消息引导模型先调用 tool_search 来发现和激活该工具。
+        """
         from deerflow.tools.builtins.tool_search import get_deferred_registry
 
         registry = get_deferred_registry()

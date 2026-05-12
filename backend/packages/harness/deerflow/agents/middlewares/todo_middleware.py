@@ -49,7 +49,7 @@ from deerflow.agents.thread_state import ThreadState
 
 
 def _todos_in_messages(messages: list[Any]) -> bool:
-    """Return True if any AIMessage in *messages* contains a write_todos tool call."""
+    """yyds: 检查消息列表中是否还有可见的 write_todos 工具调用（没被摘要截断）。"""
     for msg in messages:
         if isinstance(msg, AIMessage) and msg.tool_calls:
             for tc in msg.tool_calls:
@@ -59,7 +59,7 @@ def _todos_in_messages(messages: list[Any]) -> bool:
 
 
 def _reminder_in_messages(messages: list[Any]) -> bool:
-    """Return True if a todo_reminder HumanMessage is already present in *messages*."""
+    """yyds: 检查是否已经注入过待办提醒（防止重复注入）。"""
     for msg in messages:
         if isinstance(msg, HumanMessage) and getattr(msg, "name", None) == "todo_reminder":
             return True
@@ -67,12 +67,12 @@ def _reminder_in_messages(messages: list[Any]) -> bool:
 
 
 def _completion_reminder_count(messages: list[Any]) -> int:
-    """Return the number of todo_completion_reminder HumanMessages in *messages*."""
+    """yyds: 统计已完成提醒的次数（用于限制最大提醒次数，防止无限循环）。"""
     return sum(1 for msg in messages if isinstance(msg, HumanMessage) and getattr(msg, "name", None) == "todo_completion_reminder")
 
 
 def _format_todos(todos: list[Todo]) -> str:
-    """Format a list of Todo items into a human-readable string."""
+    """yyds: 格式化待办列表为可读文本（每行 "- [status] content"）。"""
     lines: list[str] = []
     for todo in todos:
         status = todo.get("status", "pending")
@@ -127,12 +127,11 @@ def _has_tool_call_intent_or_error(message: AIMessage) -> bool:
 
 
 class TodoMiddleware(TodoListMiddleware):
-    """Extends TodoListMiddleware with `write_todos` context-loss detection.
+    """yyds: 待办事项中间件 — 继承 LangChain TodoListMiddleware，增加上下文丢失检测和过早退出预防。
 
-    When the original `write_todos` tool call has been truncated from the message
-    history (e.g., after summarization), the model loses awareness of the current
-    todo list. This middleware detects that gap in `before_model` / `abefore_model`
-    and injects a reminder message so the model can continue tracking progress.
+    两个钩子：
+      before_model: 检测 write_todos 被摘要截断 → 注入待办列表提醒
+      after_model: 检测模型过早给出最终答案（还有未完成待办）→ 跳回模型继续工作
     """
 
     state_schema = ThreadState
@@ -143,7 +142,11 @@ class TodoMiddleware(TodoListMiddleware):
         state: ThreadState,
         runtime: Runtime,
     ) -> dict[str, Any] | None:
-        """Inject a todo-list reminder when write_todos has left the context window."""
+        """yyds: 上下文丢失检测 — 当 write_tools 调用被摘要截断后，注入待办列表提醒。
+
+        触发条件：state 里有 todos，但消息列表中找不到 write_todos 调用（被截断了），
+        且还没注入过提醒。
+        """
         todos: list[Todo] = state.get("todos") or []  # type: ignore[assignment]
         if not todos:
             return None
@@ -186,7 +189,7 @@ class TodoMiddleware(TodoListMiddleware):
 
     # Maximum number of completion reminders before allowing the agent to exit.
     # This prevents infinite loops when the agent cannot make further progress.
-    _MAX_COMPLETION_REMINDERS = 2
+    _MAX_COMPLETION_REMINDERS = 2  # yyds: 最大完成提醒次数，防止无限循环
     # Hard cap for per-run reminder bookkeeping in long-lived middleware instances.
     _MAX_COMPLETION_REMINDER_KEYS = 4096
 
@@ -289,16 +292,16 @@ class TodoMiddleware(TodoListMiddleware):
         state: ThreadState,
         runtime: Runtime,
     ) -> dict[str, Any] | None:
-        """Prevent premature agent exit when todo items are still incomplete.
+        """yyds: 过早退出预防 — 当模型给出最终答案但还有未完成待办时，强制跳回模型继续工作。
 
-        In addition to the base class check for parallel ``write_todos`` calls,
-        this override intercepts model responses that have no tool calls while
-        there are still incomplete todo items. It injects a reminder
-        ``HumanMessage`` and jumps back to the model node so the agent
-        continues working through the todo list.
+        执行流程：
+          1. 先执行基类逻辑（并行 write_todos 检测）
+          2. 只干预"无工具调用"的响应（模型想退出）
+          3. 全部完成或无待办 → 允许退出
+          4. 提醒次数达上限 → 允许退出（防止死循环）
+          5. 注入提醒 + jump_to="model" → 强制继续
 
-        A retry cap of ``_MAX_COMPLETION_REMINDERS`` (default 2) prevents
-        infinite loops when the agent cannot make further progress.
+        @hook_config(can_jump_to=["model"]) 声明跳转能力，LangGraph 允许跳转到模型节点。
         """
         # 1. Preserve base class logic (parallel write_todos detection).
         base_result = super().after_model(state, runtime)

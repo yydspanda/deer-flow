@@ -7,11 +7,17 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class ToolFreqOverride(BaseModel):
-    """Per-tool frequency threshold override.
+    """yyds: 单个工具的频率阈值覆盖 — 让特定工具使用不同的警告/停止阈值。
 
-    Can be higher or lower than the global defaults. Commonly used to raise
-    thresholds for high-frequency tools like bash in batch workflows (e.g.
-    RNA-seq pipelines) without weakening protection on every other tool.
+    为什么需要？某些工具天然就会高频调用（如 bash 在批处理流水线里），
+    如果用全局的 30/50 阈值会误杀。通过 tool_freq_overrides 给它单独设更高的值。
+
+    示例（config.yaml）：
+      loop_detection:
+        tool_freq_overrides:
+          bash:
+            warn: 100
+            hard_limit: 150
     """
 
     warn: int = Field(ge=1)
@@ -25,7 +31,22 @@ class ToolFreqOverride(BaseModel):
 
 
 class LoopDetectionConfig(BaseModel):
-    """Configuration for repetitive tool-call loop detection."""
+    """yyds: 循环检测中间件的完整配置 — 对应 config.yaml 的 loop_detection 节。
+
+    参数分两组：
+      精确匹配组（第一层检测）：
+        - warn_threshold(3): 同一组工具调用重复 N 次后警告
+        - hard_limit(5): 重复 N 次后强制停止
+        - window_size(20): 滑动窗口大小（只看最近 N 次调用）
+      频率统计组（第二层检测）：
+        - tool_freq_warn(30): 同一工具（不管参数）调用 N 次后警告
+        - tool_freq_hard_limit(50): 调用 N 次后强制停止
+        - tool_freq_overrides: 按工具名单独覆盖频率阈值
+
+    校验规则（model_validator）：
+      - hard_limit 必须 ≥ warn_threshold（不能还没警告就停了）
+      - tool_freq_hard_limit 必须 ≥ tool_freq_warn
+    """
 
     enabled: bool = Field(
         default=True,
@@ -68,7 +89,7 @@ class LoopDetectionConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_thresholds(self) -> "LoopDetectionConfig":
-        """Ensure hard stop cannot happen before the warning threshold."""
+        """yyds: 确保强制停止阈值 ≥ 警告阈值 — 不能还没警告就直接停了。"""
         if self.hard_limit < self.warn_threshold:
             raise ValueError("hard_limit must be greater than or equal to warn_threshold")
         if self.tool_freq_hard_limit < self.tool_freq_warn:

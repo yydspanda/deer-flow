@@ -32,45 +32,38 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryMiddlewareState(AgentState):
-    """Compatible with the `ThreadState` schema."""
+    """yyds: Memory 中间件的状态扩展（无额外字段，只是为了类型兼容）。"""
 
     pass
 
 
 class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
-    """Middleware that queues conversation for memory update after agent execution.
+    """yyds: 记忆中间件 — Agent 执行完毕后，将对话内容异步入队到记忆系统。
 
-    This middleware:
-    1. After each agent execution, queues the conversation for memory update
-    2. Only includes user inputs and final assistant responses (ignores tool calls)
-    3. The queue uses debouncing to batch multiple updates together
-    4. Memory is updated asynchronously via LLM summarization
+    执行时机：after_agent（整个 Agent 执行完毕后）
+    做的事：过滤出用户消息+最终助手回复 → 检测纠正/强化语义 → 放入 MemoryQueue
+    MemoryQueue 有防抖机制，会批量调用 LLM 提取关键信息 → 持久化到 memory.json
     """
 
     state_schema = MemoryMiddlewareState
 
     def __init__(self, agent_name: str | None = None, *, memory_config: "MemoryConfig | None" = None):
-        """Initialize the MemoryMiddleware.
-
-        Args:
-            agent_name: If provided, memory is stored per-agent. If None, uses global memory.
-            memory_config: Explicit memory config. When omitted, legacy global
-                config fallback is used.
-        """
+        """yyds: 初始化 — agent_name 支持按 Agent 名称隔离记忆，memory_config 支持注入配置。"""
         super().__init__()
         self._agent_name = agent_name
         self._memory_config = memory_config
 
     @override
     def after_agent(self, state: MemoryMiddlewareState, runtime: Runtime) -> dict | None:
-        """Queue conversation for memory update after agent completes.
+        """yyds: 主入口 — Agent 执行完毕后，过滤对话内容并放入记忆队列。
 
-        Args:
-            state: The current agent state.
-            runtime: The runtime context.
-
-        Returns:
-            None (no state changes needed from this middleware).
+        执行流程：
+          1. 检查 memory 是否启用
+          2. 从 runtime.context 取 thread_id
+          3. 过滤消息（只保留用户消息 + 最终助手回复）
+          4. 检测纠正/强化语义
+          5. 在入队时捕获 user_id（Timer 线程中 ContextVar 不传播）
+          6. 放入 MemoryQueue（异步批量更新）
         """
         config = self._memory_config or get_memory_config()
         if not config.enabled:

@@ -24,25 +24,21 @@ from deerflow.subagents.executor import MAX_CONCURRENT_SUBAGENTS
 logger = logging.getLogger(__name__)
 
 # Valid range for max_concurrent_subagents
-MIN_SUBAGENT_LIMIT = 2
-MAX_SUBAGENT_LIMIT = 4
+MIN_SUBAGENT_LIMIT = 2  # yyds: 并发子代理最小值
+MAX_SUBAGENT_LIMIT = 4  # yyds: 并发子代理最大值
 
 
 def _clamp_subagent_limit(value: int) -> int:
-    """Clamp subagent limit to valid range [2, 4]."""
+    """yyds: 将并发限制钳位到 [2, 4] 范围内 — 防止配置过小或过大。"""
     return max(MIN_SUBAGENT_LIMIT, min(MAX_SUBAGENT_LIMIT, value))
 
 
 class SubagentLimitMiddleware(AgentMiddleware[AgentState]):
-    """Truncates excess 'task' tool calls from a single model response.
+    """yyds: 子代理并发限制中间件 — 截断超出的 task 工具调用。
 
-    When an LLM generates more than max_concurrent parallel task tool calls
-    in one response, this middleware keeps only the first max_concurrent and
-    discards the rest. This is more reliable than prompt-based limits.
-
-    Args:
-        max_concurrent: Maximum number of concurrent subagent calls allowed.
-            Defaults to MAX_CONCURRENT_SUBAGENTS (3). Clamped to [2, 4].
+    执行时机：after_model（模型返回响应后、工具执行前）
+    只针对 "task" 工具调用：超过 max_concurrent 的部分直接丢弃。
+    其他工具调用不受影响。
     """
 
     def __init__(self, max_concurrent: int = MAX_CONCURRENT_SUBAGENTS):
@@ -50,6 +46,9 @@ class SubagentLimitMiddleware(AgentMiddleware[AgentState]):
         self.max_concurrent = _clamp_subagent_limit(max_concurrent)
 
     def _truncate_task_calls(self, state: AgentState) -> dict | None:
+        """yyds: 截断多余的 task 调用 — 只保留前 max_concurrent 个，丢弃后面的。
+        用 model_copy 替换原消息（保持相同 id 触发替换语义）。
+        """
         messages = state.get("messages", [])
         if not messages:
             return None

@@ -44,8 +44,8 @@ from deerflow.config.app_config import AppConfig
 
 logger = logging.getLogger(__name__)
 
-_RETRIABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
-_BUSY_PATTERNS = (
+_RETRIABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}  # yyds: 可重试的 HTTP 状态码
+_BUSY_PATTERNS = (  # yyds: 服务繁忙模式（中英文，覆盖国内外 Provider）
     "server busy",
     "temporarily unavailable",
     "try again later",
@@ -59,7 +59,7 @@ _BUSY_PATTERNS = (
     "稍后重试",
     "请稍后重试",
 )
-_QUOTA_PATTERNS = (
+_QUOTA_PATTERNS = (  # yyds: 配额不足模式
     "insufficient_quota",
     "quota",
     "billing",
@@ -70,7 +70,7 @@ _QUOTA_PATTERNS = (
     "额度不足",
     "欠费",
 )
-_AUTH_PATTERNS = (
+_AUTH_PATTERNS = (  # yyds: 认证失败模式
     "authentication",
     "unauthorized",
     "invalid api key",
@@ -84,13 +84,25 @@ _AUTH_PATTERNS = (
 
 
 class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
-    """Retry transient LLM errors and surface graceful assistant messages."""
+    """yyds: LLM 错误处理中间件 — 重试 + 熔断 + 友好降级。
 
-    retry_max_attempts: int = 3
-    retry_base_delay_ms: int = 1000
-    retry_cap_delay_ms: int = 8000
+    执行时机：wrap_model_call（包裹整个模型调用）
+    三道防线：
+      1. 熔断器检查（_check_circuit）→ 连续失败时快速拒绝，不浪费 API 调用
+      2. 重试循环（最多 3 次，指数退避）→ 暂时性错误自动恢复
+      3. 降级返回（AIMessage 友好提示）→ 不可恢复错误不崩溃，返回可读消息
+
+    熔断器三态：
+      closed（正常）→ 连续失败达阈值 → open（跳闸，快速失败）
+      → 超时后 → half_open（放一个探测请求）→ 成功则 closed，失败则 open
+    """
+
+    retry_max_attempts: int = 3  # yyds: 最多重试 3 次
+    retry_base_delay_ms: int = 1000  # yyds: 初始退避 1 秒
+    retry_cap_delay_ms: int = 8000  # yyds: 退避上限 8 秒
 
     def __init__(self, *, app_config: AppConfig, **kwargs: Any) -> None:
+        # yyds: 从 config.yaml 读取熔断器参数（failure_threshold 和 recovery_timeout_sec）
         super().__init__(**kwargs)
 
         self.circuit_failure_threshold = app_config.circuit_breaker.failure_threshold
@@ -104,7 +116,14 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         self._circuit_probe_in_flight = False
 
     def _check_circuit(self) -> bool:
-        """Returns True if circuit is OPEN (fast fail), False otherwise."""
+        """yyds: 检查熔断器状态。返回 True = 跳闸中（快速失败），False = 正常。
+
+        closed → 正常放行
+        open + 未超时 → 快速失败（返回 True）
+        open + 已超时 → 转入 half_open，放一个探测请求
+        half_open + 探测中 → 快速失败（只允许一个探测）
+        half_open + 无探测 → 放行探测请求
+        """
         with self._circuit_lock:
             now = time.time()
 
@@ -123,6 +142,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
             return False
 
     def _record_success(self) -> None:
+        """yyds: 记录成功 — 重置熔断器为 closed 状态。"""
         with self._circuit_lock:
             if self._circuit_state != "closed" or self._circuit_failure_count > 0:
                 logger.info("Circuit breaker reset (Closed). LLM service recovered.")
@@ -132,6 +152,9 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
             self._circuit_probe_in_flight = False
 
     def _record_failure(self) -> None:
+        """yyds: 记录失败 — 累计失败次数，达阈值则跳闸（open）。
+        half_open 状态下失败 → 直接回 open，重置超时计时器。
+        """
         with self._circuit_lock:
             if self._circuit_state == "half_open":
                 self._circuit_open_until = time.time() + self.circuit_recovery_timeout_sec
@@ -156,6 +179,15 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
                     )
 
     def _classify_error(self, exc: BaseException) -> tuple[bool, str]:
+        """yyds: 错误分类 — 判断是否可重试 + 错误类别。
+
+        返回 (is_retriable, reason)：
+          (True, "transient") — 超时/网络错误/5xx，可重试
+          (True, "busy") — 服务繁忙/限速，可重试
+          (False, "quota") — 配额不足，不可重试
+          (False, "auth") — 认证失败，不可重试
+          (False, "generic") — 未知错误，不可重试
+        """
         detail = _extract_error_detail(exc)
         lowered = detail.lower()
         error_code = _extract_error_code(exc)
@@ -183,6 +215,9 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         return False, "generic"
 
     def _build_retry_delay_ms(self, attempt: int, exc: BaseException) -> int:
+        """yyds: 计算重试延迟 — 优先用服务端的 Retry-After 头，否则指数退避。
+        退避公式：base * 2^(attempt-1)，封顶 cap（默认 1s→2s→4s→8s）。
+        """
         retry_after = _extract_retry_after_ms(exc)
         if retry_after is not None:
             return retry_after
@@ -208,6 +243,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         return f"LLM request failed: {detail}"
 
     def _emit_retry_event(self, attempt: int, wait_ms: int, reason: str) -> None:
+        """yyds: 通过 stream_writer 发送 llm_retry 事件 — 前端可展示重试进度。"""
         try:
             from langgraph.config import get_stream_writer
 
@@ -231,6 +267,11 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelCallResult:
+        """yyds: 同步版主入口 — 熔断检查 → 重试循环 → 降级返回。
+
+        特殊处理 GraphBubbleUp：这是 LangGraph 的控制流信号（interrupt/pause/resume），
+        不能被错误处理吞掉，必须原样抛出。
+        """
         if self._check_circuit():
             return AIMessage(content=self._build_circuit_breaker_message())
 
@@ -277,6 +318,7 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelCallResult:
+        """yyds: 异步版主入口 — 同上逻辑，用 asyncio.sleep 替代 time.sleep。"""
         if self._check_circuit():
             return AIMessage(content=self._build_circuit_breaker_message())
 
@@ -319,10 +361,12 @@ class LLMErrorHandlingMiddleware(AgentMiddleware[AgentState]):
 
 
 def _matches_any(detail: str, patterns: tuple[str, ...]) -> bool:
+    """yyds: 检查 detail 是否匹配任一模式（子串匹配，大小写不敏感）。"""
     return any(pattern in detail for pattern in patterns)
 
 
 def _extract_error_code(exc: BaseException) -> Any:
+    """yyds: 从异常对象提取错误码 — 兼容多种异常结构（.code/.error_code/.body.error.code）。"""
     for attr in ("code", "error_code"):
         value = getattr(exc, attr, None)
         if value not in (None, ""):
@@ -340,6 +384,7 @@ def _extract_error_code(exc: BaseException) -> Any:
 
 
 def _extract_status_code(exc: BaseException) -> int | None:
+    """yyds: 从异常对象提取 HTTP 状态码 — 兼容 .status_code/.response.status_code。"""
     for attr in ("status_code", "status"):
         value = getattr(exc, attr, None)
         if isinstance(value, int):
@@ -350,6 +395,7 @@ def _extract_status_code(exc: BaseException) -> int | None:
 
 
 def _extract_retry_after_ms(exc: BaseException) -> int | None:
+    """yyds: 从响应头提取 Retry-After 值（毫秒）— 兼容秒数、毫秒数、HTTP 日期三种格式。"""
     response = getattr(exc, "response", None)
     headers = getattr(response, "headers", None)
     if headers is None:
@@ -379,6 +425,7 @@ def _extract_retry_after_ms(exc: BaseException) -> int | None:
 
 
 def _extract_error_detail(exc: BaseException) -> str:
+    """yyds: 从异常对象提取可读错误描述 — 兼容 .message 和 str(exc)。"""
     detail = str(exc).strip()
     if detail:
         return detail

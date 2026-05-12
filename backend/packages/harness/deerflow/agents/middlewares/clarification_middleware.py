@@ -38,39 +38,30 @@ logger = logging.getLogger(__name__)
 
 
 class ClarificationMiddlewareState(AgentState):
-    """Compatible with the `ThreadState` schema."""
-
-    pass
+    """yyds: Clarification 中间件状态（无额外字段，类型兼容）。"""
 
 
 class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
-    """Intercepts clarification tool calls and interrupts execution to present questions to the user.
+    """yyds: 确认中间件 — 必须放在最后！拦截 ask_clarification 工具调用并中断执行。
 
-    yyds: 核心机制——wrap_tool_call 里检查工具名是不是 "ask_clarification"：
-          - 是 → 拦截，格式化问题，返回 Command(goto=END) 中断执行
-          - 不是 → 正常执行 handler，透传给下一个中间件
-
-    This replaces the tool-based approach where clarification continued the conversation flow.
+    执行时机：wrap_tool_call（包裹工具调用）
+    核心机制：
+      - 工具名 == "ask_clarification" → 拦截，格式化问题，返回 Command(goto=END)
+      - 工具名 != "ask_clarification" → 正常执行，透传给下一个中间件
+    Command(goto=END) 是 LangGraph 的中断机制，停止整个 StateGraph，等用户回复后继续。
     """
 
     state_schema = ClarificationMiddlewareState
 
     def _stable_message_id(self, tool_call_id: str, formatted_message: str) -> str:
-        """Build a deterministic message ID so retried clarification calls replace, not append."""
+        """yyds: 生成确定性的消息 ID — 确保重试时替换（不是追加）同一条消息。"""
         if tool_call_id:
             return f"clarification:{tool_call_id}"
         digest = sha256(formatted_message.encode("utf-8")).hexdigest()[:16]
         return f"clarification:{digest}"
 
     def _is_chinese(self, text: str) -> bool:
-        """Check if text contains Chinese characters.
-
-        Args:
-            text: Text to check
-
-        Returns:
-            True if text contains Chinese characters
-        """
+        """yyds: 检测文本是否包含中文字符（Unicode 范围 \u4e00-\u9fff）。"""
         return any("\u4e00" <= char <= "\u9fff" for char in text)
 
     def _format_clarification_message(self, args: dict) -> str:
@@ -196,15 +187,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
     ) -> ToolMessage | Command:
-        """Intercept ask_clarification tool calls and interrupt execution (sync version).
-
-        Args:
-            request: Tool call request
-            handler: Original tool execution handler
-
-        Returns:
-            Command that interrupts execution with the formatted clarification message
-        """
+        """yyds: 同步版 — 拦截 ask_clarification，其他工具透传。"""
         # Check if this is an ask_clarification tool call
         if request.tool_call.get("name") != "ask_clarification":
             # Not a clarification call, execute normally
@@ -218,15 +201,7 @@ class ClarificationMiddleware(AgentMiddleware[ClarificationMiddlewareState]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command],
     ) -> ToolMessage | Command:
-        """Intercept ask_clarification tool calls and interrupt execution (async version).
-
-        Args:
-            request: Tool call request
-            handler: Original tool execution handler (async)
-
-        Returns:
-            Command that interrupts execution with the formatted clarification message
-        """
+        """yyds: 异步版 — 同上逻辑。"""
         # Check if this is an ask_clarification tool call
         if request.tool_call.get("name") != "ask_clarification":
             # Not a clarification call, execute normally

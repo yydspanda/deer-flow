@@ -33,13 +33,20 @@ logger = logging.getLogger(__name__)
 
 
 class TitleMiddlewareState(AgentState):
-    """Compatible with the `ThreadState` schema."""
+    """yyds: Title 中间件的状态扩展 — 在 AgentState 基础上加了 title 字段。"""
 
     title: NotRequired[str | None]
 
 
 class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
-    """Automatically generate a title for the thread after the first user message."""
+    """yyds: 标题生成中间件 — 首次交互后自动为会话生成标题。
+
+    执行时机：after_model（模型返回响应后）
+    触发条件：恰好 1 条用户消息 + 至少 1 条助手回复（首次交互）
+    生成策略：
+      同步版（after_model）：本地回退，截取用户消息前 50 字符
+      异步版（aafter_model）：调用 LLM 生成高质量标题，失败回退到本地策略
+    """
 
     state_schema = TitleMiddlewareState
 
@@ -56,6 +63,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         return get_title_config()
 
     def _normalize_content(self, content: object) -> str:
+        """yyds: 把消息内容统一转成字符串 — 处理 str/list/dict 三种 content 格式。"""
         if isinstance(content, str):
             return content
 
@@ -76,10 +84,11 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
 
     @staticmethod
     def _is_user_message_for_title(message: object) -> bool:
+        """yyds: 判断消息是否是真正的用户消息（排除动态上下文注入的系统提醒）。"""
         return getattr(message, "type", None) == "human" and not is_dynamic_context_reminder(message)
 
     def _should_generate_title(self, state: TitleMiddlewareState) -> bool:
-        """Check if we should generate a title for this thread."""
+        """yyds: 判断是否需要生成标题 — 必须是首次交互（1条用户消息 + ≥1条助手回复）且还没标题。"""
         config = self._get_title_config()
         if not config.enabled:
             return False
@@ -101,9 +110,8 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         return len(user_messages) == 1 and len(assistant_messages) >= 1
 
     def _build_title_prompt(self, state: TitleMiddlewareState) -> tuple[str, str]:
-        """Extract user/assistant messages and build the title prompt.
-
-        Returns (prompt_string, user_msg) so callers can use user_msg as fallback.
+        """yyds: 构建标题生成 prompt — 从对话中提取用户消息和助手回复，填入模板。
+        返回 (prompt, user_msg)，user_msg 用于 LLM 失败时的本地回退。
         """
         config = self._get_title_config()
         messages = state.get("messages", [])
@@ -126,7 +134,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         return re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
 
     def _parse_title(self, content: object) -> str:
-        """Normalize model output into a clean title string."""
+        """yyds: 清理模型输出 → 干净的标题字符串（去引号、截断到 max_chars）。"""
         config = self._get_title_config()
         title_content = self._normalize_content(content)
         title_content = self._strip_think_tags(title_content)
@@ -134,6 +142,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         return title[: config.max_chars] if len(title) > config.max_chars else title
 
     def _fallback_title(self, user_msg: str) -> str:
+        """yyds: 本地回退标题 — 截取用户消息前 50 字符 + "..."。"""
         config = self._get_title_config()
         fallback_chars = min(config.max_chars, 50)
         if len(user_msg) > fallback_chars:
@@ -141,11 +150,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         return user_msg if user_msg else "New Conversation"
 
     def _get_runnable_config(self) -> dict[str, Any]:
-        """Inherit the parent RunnableConfig and add middleware tag.
-
-        This ensures RunJournal identifies LLM calls from this middleware
-        as ``middleware:title`` instead of ``lead_agent``.
-        """
+        """yyds: 继承父 RunnableConfig 并添加 "middleware:title" tag — 让 RunJournal 区分标题生成的 LLM 调用。"""
         try:
             parent = get_config()
         except Exception:
@@ -156,7 +161,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         return config
 
     def _generate_title_result(self, state: TitleMiddlewareState) -> dict | None:
-        """Generate a local fallback title without blocking on an LLM call."""
+        """yyds: 同步版标题生成 — 本地回退策略，截取用户消息前50字符（不调用 LLM）。"""
         if not self._should_generate_title(state):
             return None
 
@@ -164,7 +169,7 @@ class TitleMiddleware(AgentMiddleware[TitleMiddlewareState]):
         return {"title": self._fallback_title(user_msg)}
 
     async def _agenerate_title_result(self, state: TitleMiddlewareState) -> dict | None:
-        """Generate a title asynchronously and fall back locally on failure."""
+        """yyds: 异步版标题生成 — 调用 LLM 生成高质量标题，失败时回退到本地策略。"""
         if not self._should_generate_title(state):
             return None
 
