@@ -53,11 +53,17 @@ logger = logging.getLogger(__name__)
 
 
 class DeferredToolFilterMiddleware(AgentMiddleware[AgentState]):
+
     """Hide deferred tool schemas from the bound model until promoted.
 
     ToolNode still holds all tools (including deferred) for execution routing,
     but the LLM only sees active tool schemas plus tools that have already been
     promoted (recorded in ``state["promoted"]`` under the current catalog hash).
+    """yyds: 延迟工具过滤中间件 — 双重拦截：模型侧隐藏 schema + 工具侧阻止未授权调用。
+    两个拦截点：
+      wrap_model_call: 从 request.tools 中移除延迟工具 schema（LLM 看不到）
+      wrap_tool_call: 拦截直接调用延迟工具，返回错误提示"先调用 tool_search"
+
     """
 
     def __init__(self, deferred_names: frozenset[str], catalog_hash: str | None):
@@ -75,7 +81,10 @@ class DeferredToolFilterMiddleware(AgentMiddleware[AgentState]):
         return set(self._deferred) - self._promoted(state)
 
     def _filter_tools(self, request: ModelRequest) -> ModelRequest:
+
         if not self._deferred:
+        """yyds: 从 model request 中移除延迟工具的 schema — LLM 只能看到活跃工具。"""
+
             return request
         hide = self._hidden(request.state)
         if not hide:
@@ -86,7 +95,11 @@ class DeferredToolFilterMiddleware(AgentMiddleware[AgentState]):
         return request.override(tools=active)
 
     def _blocked_tool_message(self, request: ToolCallRequest) -> ToolMessage | None:
+
         if not self._deferred:
+        """yyds: 检查工具是否是延迟的且未被 promote — 是则返回错误 ToolMessage。
+        错误消息引导模型先调用 tool_search 来发现和激活该工具。
+
             return None
         name = str(request.tool_call.get("name") or "")
         if not name or name not in self._hidden(request.state):

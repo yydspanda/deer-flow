@@ -32,22 +32,19 @@ from deerflow.utils.messages import ORIGINAL_USER_CONTENT_KEY, message_content_t
 logger = logging.getLogger(__name__)
 
 
-_OUTLINE_PREVIEW_LINES = 5
+_OUTLINE_PREVIEW_LINES = 5  # yyds: 无大纲时，读取文件前 5 行作为内容预览
 
 
 def _extract_outline_for_file(file_path: Path) -> tuple[list[dict], list[str]]:
-    """Return the document outline and fallback preview for *file_path*.
+    """yyds: 为单个文件提取文档大纲（标题+行号）或前几行预览。
 
-    Looks for a sibling ``<stem>.md`` file produced by the upload conversion
-    pipeline.
+    上传管道会把 PDF/Word 等文件转换成 Markdown（同名 .md 文件）。
+    这个函数读取那个 .md 文件，提取 heading 结构作为大纲。
 
-    Returns:
-        (outline, preview) where:
-        - outline: list of ``{title, line}`` dicts (plus optional sentinel).
-          Empty when no headings are found or no .md exists.
-        - preview: first few non-empty lines of the .md, used as a content
-          anchor when outline is empty so the agent has some context.
-          Empty when outline is non-empty (no fallback needed).
+    返回值: (outline, preview)
+      - 有大纲时: (outline 列表, []) — outline 是 [{"title": "...", "line": 42}] 格式
+      - 无大纲时: ([], preview 列表) — preview 是文件前 5 行非空内容
+      - 没有 .md 文件: ([], []) — 该文件不是文档类型（如图片）
     """
     md_path = file_path.with_suffix(".md")
     if not md_path.is_file():
@@ -74,32 +71,40 @@ def _extract_outline_for_file(file_path: Path) -> tuple[list[dict], list[str]]:
 
 
 class UploadsMiddlewareState(AgentState):
-    """State schema for uploads middleware."""
+    """yyds: Uploads 中间件的状态扩展 — 在 AgentState 基础上加了 uploaded_files 字段。
+    uploaded_files 存储本次消息上传的文件列表，供其他中间件（如 Memory）读取。
+    """
 
     uploaded_files: NotRequired[list[dict] | None]
 
 
 class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
-    """Middleware to inject uploaded files information into the agent context.
+    """yyds: 文件上传中间件 — 把用户上传的文件信息注入到对话上下文中。
 
-    Reads file metadata from the current message's additional_kwargs.files
-    (set by the frontend after upload) and prepends an <uploaded_files> block
-    to the last human message so the model knows which files are available.
+    执行时机：before_agent（Agent 开始处理前）
+    做两件事：
+      1. 从当前消息的 additional_kwargs.files 取"新上传文件"
+      2. 扫描 uploads 目录取"历史文件"（之前上传的还在的）
+    然后生成格式化的文件列表（含文件名、大小、路径、文档大纲），
+    插入到最后一条 HumanMessage.content 的前面，让模型知道有哪些文件可用。
+
+    为什么插到 content 里而不是注入新消息？
+      因为 AIMessage(tool_calls) 和 ToolMessage 有严格配对关系，
+      额外插入消息会破坏配对。修改现有消息的 content 最安全。
     """
 
     state_schema = UploadsMiddlewareState
 
     def __init__(self, base_dir: str | None = None):
-        """Initialize the middleware.
-
-        Args:
-            base_dir: Base directory for thread data. Defaults to Paths resolution.
-        """
+        """yyds: 初始化 — 获取路径管理器。base_dir 参数主要用于测试隔离。"""
         super().__init__()
         self._paths = Paths(base_dir) if base_dir else get_paths()
 
     def _format_file_entry(self, file: dict, lines: list[str]) -> None:
-        """Append a single file entry (name, size, path, optional outline) to lines."""
+        """yyds: 格式化单个文件条目 — 生成 "- filename (size) / Path: ... / outline..." 格式。
+        大纲格式：L{行号}: {标题}，模型看到后可以用 read_file(start_line=N) 精准定位。
+        无大纲时退化：显示前 5 行内容预览 + 提示用 grep 搜索。
+        """
         size_kb = file["size"] / 1024
         size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb / 1024:.1f} MB"
         lines.append(f"- {file['filename']} ({size_str})")
@@ -123,16 +128,8 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         lines.append("")
 
     def _create_files_message(self, new_files: list[dict], historical_files: list[dict]) -> str:
-        """Create a formatted message listing uploaded files.
-
-        Args:
-            new_files: Files uploaded in the current message.
-            historical_files: Files uploaded in previous messages.
-                Each file dict may contain an optional ``outline`` key — a list of
-                ``{title, line}`` dicts extracted from the converted Markdown file.
-
-        Returns:
-            Formatted string inside <uploaded_files> tags.
+        """yyds: 拼装完整的 <uploaded_files> XML 块 — 分两段：本次上传 + 历史文件。
+        末尾附带使用指引：先用 read_file 按大纲读，不确定用 grep 搜，最后才考虑 web search。
         """
         lines = ["<uploaded_files>"]
 
@@ -163,19 +160,16 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
         return "\n".join(lines)
 
     def _files_from_kwargs(self, message: HumanMessage, uploads_dir: Path | None = None) -> list[dict] | None:
-        """Extract file info from message additional_kwargs.files.
+        """yyds: 从 HumanMessage.additional_kwargs.files 提取文件信息。
 
-        The frontend sends uploaded file metadata in additional_kwargs.files
-        after a successful upload. Each entry has: filename, size (bytes),
-        path (virtual path), status.
+        前端上传文件后，把元数据放在 additional_kwargs.files 里：
+          [{"filename": "report.pdf", "size": 12345, "path": "...", "status": "ok"}, ...]
 
-        Args:
-            message: The human message to inspect.
-            uploads_dir: Physical uploads directory used to verify file existence.
-                         When provided, entries whose files no longer exist are skipped.
-
-        Returns:
-            List of file dicts with virtual paths, or None if the field is absent or empty.
+        这个函数做安全过滤：
+          - 只取 filename 是纯文件名的（拒绝路径遍历，如 "../../etc/passwd"）
+          - 如果传了 uploads_dir，还会检查文件是否真的存在于磁盘
+          - size 强制转 int（防止注入）
+          - 路径一律转换为虚拟路径 /mnt/user-data/uploads/{filename}
         """
         kwargs_files = (message.additional_kwargs or {}).get("files")
         if not isinstance(kwargs_files, list) or not kwargs_files:
@@ -202,22 +196,19 @@ class UploadsMiddleware(AgentMiddleware[UploadsMiddlewareState]):
 
     @override
     def before_agent(self, state: UploadsMiddlewareState, runtime: Runtime) -> dict | None:
-        """Inject uploaded files information before agent execution.
+        """yyds: 主入口 — 在 Agent 执行前注入文件上下文。
 
-        New files come from the current message's additional_kwargs.files.
-        Historical files are scanned from the thread's uploads directory,
-        excluding the new ones.
+        执行流程：
+          1. 取最后一条消息，只处理 HumanMessage
+          2. 从 runtime.context 拿 thread_id → 定位 uploads 目录
+          3. 从 additional_kwargs.files 取"新上传文件" → 做安全过滤 + 文件存在性检查
+          4. 扫描 uploads 目录取"历史文件" → 提取大纲/预览
+          5. 给新文件也附加大纲信息
+          6. 拼装 <uploaded_files> 消息 → 插入到 HumanMessage.content 前面
+          7. 返回更新后的 messages + uploaded_files
 
-        Prepends <uploaded_files> context to the last human message content.
-        The original additional_kwargs (including files metadata) is preserved
-        on the updated message so the frontend can read it from the stream.
-
-        Args:
-            state: Current agent state.
-            runtime: Runtime context containing thread_id.
-
-        Returns:
-            State updates including uploaded files list.
+        关键：保留原始 additional_kwargs（含 files 元数据），
+        前端可以从流式消息中读取结构化文件信息来渲染 UI。
         """
         messages = list(state.get("messages", []))
         if not messages:

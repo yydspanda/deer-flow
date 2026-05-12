@@ -36,10 +36,11 @@ from langgraph.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-TOKEN_USAGE_ATTRIBUTION_KEY = "token_usage_attribution"
+TOKEN_USAGE_ATTRIBUTION_KEY = "token_usage_attribution"  # yyds: 归因信息在 AIMessage.additional_kwargs 中的键名
 
 
 def _string_arg(value: Any) -> str | None:
+    """yyds: 安全提取字符串参数 — 空字符串返回 None。"""
     if isinstance(value, str):
         normalized = value.strip()
         return normalized or None
@@ -47,6 +48,7 @@ def _string_arg(value: Any) -> str | None:
 
 
 def _normalize_todos(value: Any) -> list[Todo]:
+    """yyds: 标准化待办列表 — 过滤非法条目，只保留合法的 content + status。"""
     if not isinstance(value, list):
         return []
 
@@ -70,6 +72,7 @@ def _normalize_todos(value: Any) -> list[Todo]:
 
 
 def _todo_action_kind(previous: Todo | None, current: Todo) -> str:
+    """yyds: 判断单条待办的操作类型 — 新建(todo_update)/开始(todo_start)/完成(todo_complete)。"""
     status = current.get("status")
     previous_content = previous.get("content") if previous else None
     current_content = current.get("content")
@@ -92,6 +95,9 @@ def _todo_action_kind(previous: Todo | None, current: Todo) -> str:
 
 
 def _build_todo_actions(previous_todos: list[Todo], next_todos: list[Todo]) -> list[dict[str, Any]]:
+    """yyds: 对比前后待办列表差异，生成精确的操作列表（新建/开始/完成/更新/删除）。
+    这是前端展示待办变化的唯一数据源。
+    """
     # This is the single source of truth for precise write_todos token
     # attribution. The frontend intentionally falls back to a generic
     # "Update to-do list" label when this metadata is missing or malformed.
@@ -155,6 +161,9 @@ def _build_todo_actions(previous_todos: list[Todo], next_todos: list[Todo]) -> l
 
 
 def _describe_tool_call(tool_call: dict[str, Any], todos: list[Todo]) -> list[dict[str, Any]]:
+    """yyds: 描述单个工具调用 — 返回结构化的操作信息。
+    特别处理 write_todos（对比前后差异）、task（子代理）、web_search/image_search（搜索）等。
+    """
     name = _string_arg(tool_call.get("name")) or "unknown"
     args = tool_call.get("args") if isinstance(tool_call.get("args"), dict) else {}
     tool_call_id = _string_arg(tool_call.get("id"))
@@ -226,6 +235,10 @@ def _describe_tool_call(tool_call: dict[str, Any], todos: list[Todo]) -> list[di
 
 
 def _infer_step_kind(message: AIMessage, actions: list[dict[str, Any]]) -> str:
+    """yyds: 推断步骤类型 — 从工具调用列表推断模型这次在做什么。
+    tool_batch（批量工具）/ subagent_dispatch（子代理分发）/ todo_update（待办更新）
+    / final_answer（最终答案）/ thinking（纯思考）
+    """
     if actions:
         first_kind = actions[0].get("kind")
         if len(actions) == 1 and first_kind in {"todo_start", "todo_complete", "todo_update", "todo_remove"}:
@@ -251,6 +264,9 @@ def _has_tool_call(message: AIMessage, tool_call_id: str) -> bool:
 
 
 def _build_attribution(message: AIMessage, todos: list[Todo]) -> dict[str, Any]:
+    """yyds: 构建完整的步骤归因信息 — 包含 version/kind/tool_call_ids/actions。
+    存储在 AIMessage.additional_kwargs["token_usage_attribution"] 中，前端可直接读取。
+    """
     tool_calls = getattr(message, "tool_calls", None) or []
     actions: list[dict[str, Any]] = []
     current_todos = list(todos)
@@ -287,9 +303,16 @@ def _build_attribution(message: AIMessage, todos: list[Todo]) -> dict[str, Any]:
 
 
 class TokenUsageMiddleware(AgentMiddleware):
-    """Logs token usage from model responses and annotates the AI step."""
+    """yyds: Token 用量追踪中间件 — 记录 token 消耗 + 标注步骤归因信息。
+
+    执行时机：after_model（模型返回响应后）
+    两件事：
+      1. 从 usage_metadata 提取 token 用量并记录日志
+      2. 生成步骤归因信息（这次调用做了什么）写入 additional_kwargs
+    """
 
     def _apply(self, state: AgentState) -> dict | None:
+        """yyds: 主逻辑 — 提取 token 用量 + 生成归因 + 更新 AIMessage。"""
         messages = state.get("messages", [])
         if not messages:
             return None
