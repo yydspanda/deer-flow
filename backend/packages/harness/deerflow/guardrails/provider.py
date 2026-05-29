@@ -1,5 +1,37 @@
-# yyds: 护栏提供者协议和数据结构定义，定义工具调用前授权检查的接口契约，与OAP标准对齐
-"""GuardrailProvider protocol and data structures for pre-tool-call authorization."""
+"""yyds: Guardrail 接口协议 + 数据结构 — 工具调用授权的"合同"。
+
+【大白话讲清楚】
+  这个文件定义了 Guardrails 系统的接口和数据结构。
+  任何想做"工具调用授权"的提供者，只要实现 GuardrailProvider 协议就行。
+
+  三个数据类：
+    GuardrailRequest：问"这个工具调用允许吗？"时附带的上下文
+      - tool_name: 想调什么工具
+      - tool_input: 工具参数是什么
+      - agent_id: 谁在调（Lead Agent 还是 sub-agent）
+      - is_subagent: 是不是 sub-agent 调的
+
+    GuardrailDecision：回答"允许"还是"拒绝"
+      - allow: True/False
+      - reasons: 为什么允许/拒绝（结构化原因）
+      - policy_id: 哪条策略触发的（审计用）
+
+    GuardrailReason：结构化原因
+      - code: 错误码（如 "oap.tool_not_allowed"）
+      - message: 人类可读的描述
+
+  一个协议：
+    GuardrailProvider：提供者必须实现 evaluate() 和 aevaluate()
+      - evaluate(): 同步评估
+      - aevaluate(): 异步评估
+
+  设计对齐 OAP（Open Agent Protocol）标准：
+    数据结构和 OAP 的 Decision/Reason 对象一致，
+    方便未来对接其他 OAP 兼容的授权服务。
+
+---
+GuardrailProvider protocol and data structures for pre-tool-call authorization.
+"""
 
 from __future__ import annotations
 
@@ -7,47 +39,43 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 
-# yyds: 护栏评估请求，包含工具名、输入参数、Agent身份和线程信息等上下文
 @dataclass
 class GuardrailRequest:
-    """Context passed to the provider for each tool call."""
+    """yyds: 护栏评估请求 — "这个工具调用允许吗？"时附带的上下文。"""
 
     tool_name: str
     tool_input: dict[str, Any]
     agent_id: str | None = None
     thread_id: str | None = None
-    is_subagent: bool = False
+    is_subagent: bool = False  # yyds: sub-agent 的调用可能需要更严格的限制
     timestamp: str = ""
 
 
-# yyds: 结构化拒绝/允许原因，包含错误码和描述消息，遵循OAP原因对象规范
 @dataclass
 class GuardrailReason:
-    """Structured reason for an allow/deny decision (OAP reason object)."""
+    """yyds: 结构化原因 — 错误码 + 描述，审计可追溯。"""
 
-    code: str
+    code: str  # yyds: 如 "oap.tool_not_allowed"、"oap.denied"
     message: str = ""
 
 
-# yyds: 护栏评估结果，包含允许/拒绝判定、原因列表和策略ID，与OAP Decision对象对齐
 @dataclass
 class GuardrailDecision:
-    """Provider's allow/deny verdict (aligned with OAP Decision object)."""
+    """yyds: 护栏评估结果 — 允许/拒绝 + 原因列表 + 策略 ID。"""
 
     allow: bool
     reasons: list[GuardrailReason] = field(default_factory=list)
-    policy_id: str | None = None
+    policy_id: str | None = None  # yyds: 审计用，知道是哪条策略触发的
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-# yyds: 可插拔工具调用授权协议，通过resolve_variable按类路径动态加载，与模型/工具/沙箱使用相同机制
 @runtime_checkable
 class GuardrailProvider(Protocol):
-    """Contract for pluggable tool-call authorization.
+    """yyds: 护栏提供者协议 — 任何类只要实现 evaluate + aevaluate 就行。
 
-    Any class with these methods works - no base class required.
-    Providers are loaded by class path via resolve_variable(),
-    the same mechanism DeerFlow uses for models, tools, and sandbox.
+    加载方式：通过 resolve_variable() 按类路径动态加载，
+    和 models/tools/sandbox 用的是同一套机制。
+    config.yaml 里写 guardrails.provider: "my_package.MyProvider" 即可。
     """
 
     name: str

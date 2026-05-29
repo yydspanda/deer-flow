@@ -1,4 +1,25 @@
-# yyds: 技能文件解析器，从SKILL.md的YAML frontmatter中提取技能元数据
+"""yyds: 技能文件解析器 — 从 SKILL.md 的 YAML frontmatter 提取技能元数据。
+
+SKILL.md 长什么样？
+  ---
+  name: my-skill
+  description: 一个数据分析技能
+  allowed-tools:
+    - search
+    - read_file
+  ---
+  # 技能正文（Markdown）
+  你是一个数据分析助手...
+
+这个文件做的事：
+  1. 正则匹配 --- 之间的 YAML 块
+  2. yaml.safe_load 解析成 dict
+  3. 提取 name、description、license、allowed-tools
+  4. 构造 Skill 对象返回
+
+解析失败时返回 None（不抛异常），调用方自己决定怎么处理。
+"""
+
 import logging
 import re
 from pathlib import Path
@@ -10,13 +31,17 @@ from .types import SKILL_MD_FILE, Skill, SkillCategory
 logger = logging.getLogger(__name__)
 
 
-# yyds: 解析allowed-tools字段，返回允许的工具名称列表
 def parse_allowed_tools(raw: object, skill_file: Path) -> list[str] | None:
-    """Parse the optional allowed-tools frontmatter field.
+    """解析 allowed-tools 字段。
 
-    Returns None when the field is omitted. Returns a list when the field is a
-    YAML sequence of strings, including an empty list for explicit no-tool
-    skills. Raises ValueError for malformed values.
+    返回值三态：
+      None → 字段不存在，不限制
+      []   → 字段存在但为空列表，不给用任何工具
+      ["search", "read"] → 允许用这些工具
+
+    为什么要单独一个函数？
+      因为 installer.py 的安全扫描也需要验证 allowed-tools 格式，
+      提取出来避免重复代码。
     """
     if raw is None:
         return None
@@ -34,18 +59,22 @@ def parse_allowed_tools(raw: object, skill_file: Path) -> list[str] | None:
     return allowed_tools
 
 
-# yyds: 解析SKILL.md文件，提取名称、描述、许可证等元数据并构建Skill对象
 def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: Path | None = None) -> Skill | None:
-    """Parse a SKILL.md file and extract metadata.
+    """解析 SKILL.md 文件，提取元数据并构造 Skill 对象。
 
-    Args:
-        skill_file: Path to the SKILL.md file.
-        category: Category of the skill.
-        relative_path: Relative path from the category root to the skill
-            directory.  Defaults to the skill directory name when omitted.
+    解析流程：
+      文件存在检查 → 正则提取 YAML → safe_load 解析 →
+      校验 name/description 必填 → 解析 allowed-tools → 构造 Skill
 
-    Returns:
-        Skill object if parsing succeeds, None otherwise.
+    为什么用正则 `^---\s*\n(.*?)\n---\s*\n` 而不是专门的 frontmatter 库？
+      因为 SKILL.md 的格式非常固定（YAML 在两个 --- 之间），
+      一个正则就够了，不引入额外依赖。
+
+    参数 relative_path：
+      技能目录相对于 skills/{category}/ 的路径。
+      比如技能在 skills/custom/my-org/my-skill/，
+      relative_path 就是 my-org/my-skill。
+      省略时取 skill_file.parent.name（最后一级目录名）。
     """
     if not skill_file.exists() or skill_file.name != SKILL_MD_FILE:
         return None
@@ -53,7 +82,6 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
     try:
         content = skill_file.read_text(encoding="utf-8")
 
-        # Extract YAML front-matter block between leading ``---`` fences.
         front_matter_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
         if not front_matter_match:
             return None
@@ -70,7 +98,6 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
             logger.error("Front-matter in %s is not a YAML mapping", skill_file)
             return None
 
-        # Extract required fields.  Both must be non-empty strings.
         name = metadata.get("name")
         description = metadata.get("description")
 
@@ -79,7 +106,6 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
         if not description or not isinstance(description, str):
             return None
 
-        # Normalise: strip surrounding whitespace that YAML may preserve.
         name = name.strip()
         description = description.strip()
 
@@ -105,7 +131,7 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
             relative_path=relative_path or Path(skill_file.parent.name),
             category=category,
             allowed_tools=allowed_tools,
-            enabled=True,  # Actual state comes from the extensions config file.
+            enabled=True,  # 实际启用状态从 extensions config 文件读，这里先默认 True
         )
 
     except Exception:

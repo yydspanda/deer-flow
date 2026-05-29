@@ -1,19 +1,51 @@
-# yyds: ═══════════════════════════════════════════════════════════════════
-# yyds: Memory 更新器 —— 用 LLM 从对话中提取用户画像并持久化
-# yyds: ═══════════════════════════════════════════════════════════════════
-# yyds:
-# yyds: MemoryUpdater 核心流程：
-# yyds:   1. _prepare_update_prompt: 加载当前 memory + 格式化对话 → 构造 prompt
-# yyds:   2. model.invoke(prompt): LLM 返回 JSON 更新指令
-# yyds:   3. _finalize_update: 解析 JSON → _apply_updates 合并 → storage.save 持久化
-# yyds:
-# yyds: 关键设计：
-# yyds:   - 用 sync model.invoke() 而非 async，避免跨 event loop 的 httpx 连接复用 bug
-# yyds:   - 在 event loop 内时自动 offload 到 _SYNC_MEMORY_UPDATER_EXECUTOR 线程池
-# yyds:   - _apply_updates: 更新 user(3段) + history(3段) + facts(增删去重) + max_facts 上限
-# yyds:   - _strip_upload_mentions_from_memory: 清除上传文件相关的临时记忆
-# yyds: ═══════════════════════════════════════════════════════════════════
-"""Memory updater for reading, writing, and updating memory data."""
+"""yyds: Memory 更新器 — 用 LLM 从对话中提取用户画像，合并写入 memory.json。
+
+【大白话讲清楚】
+  这个文件是 memory 系统的"大脑"。它决定：
+    ① 拿对话给 LLM 看，让它分析用户是谁、在做什么、喜欢什么
+    ② 把 LLM 返回的分析结果合并到现有 memory 里
+    ③ 持久化到文件
+
+  核心三步走（MemoryUpdater.update_memory）：
+    1. _prepare_update_prompt: 加载当前 memory + 格式化对话 → 构造 prompt
+    2. model.invoke(prompt): LLM 返回 JSON 更新指令
+    3. _finalize_update: 解析 JSON → _apply_updates 合并 → storage.save 持久化
+
+  为什么用 sync model.invoke() 不用 async？
+    memory 更新在后台线程跑（queue 的 _process_queue 在 Timer 线程里）。
+    如果用 async httpx，会跟主 event loop 的连接池冲突（跨 loop 复用连接导致 bug）。
+    所以走 sync HTTP，完全独立的连接池，互不干扰。
+
+【具体例子】
+  用户说了 5 轮对话：
+    "我在做一个 AI Agent 框架" "用 LangGraph" "不对，是 CrewAI" "帮我设计架构" "用中文回复"
+
+  三步走：
+    Step 1: 准备 prompt
+      当前 memory: {user: {workContext: ""}, facts: []}  （空的新用户）
+      对话文本: "User: 我在做一个 AI Agent 框架\nAssistant: 好的...\n..."
+      correction_hint: "用户纠正了你，用 confidence>=0.95 记录"
+
+    Step 2: LLM 返回 JSON
+      {
+        "user": {
+          "workContext": {"summary": "开发 AI Agent 框架，技术栈 CrewAI", "shouldUpdate": true},
+          "topOfMind": {"summary": "正在设计架构", "shouldUpdate": true}
+        },
+        "newFacts": [
+          {"content": "技术栈 CrewAI", "category": "knowledge", "confidence": 0.95},
+          {"content": "偏好中文回复", "category": "preference", "confidence": 0.9}
+        ]
+      }
+
+    Step 3: _apply_updates 合并
+      user.workContext = "开发 AI Agent 框架，技术栈 CrewAI" （覆盖空字符串）
+      facts += [两条新 fact]  （去重检查通过 → 加入）
+      → storage.save() → 写入 memory.json
+
+---
+Memory updater for reading, writing, and updating memory data.
+"""
 
 import asyncio
 import atexit
@@ -41,13 +73,6 @@ from deerflow.models import create_chat_model
 logger = logging.getLogger(__name__)
 
 
-# yyds: 同步线程池 —— 用于在 async 上下文中 offload sync model.invoke() 调用
-# yyds: 用线程池而非 asyncio.run()，避免创建新 event loop 导致跨 loop httpx 连接复用问题
-# Thread pool for offloading sync memory updates when called from an async
-# context.  Unlike the previous asyncio.run() approach, this runs *sync*
-# model.invoke() calls — no event loop is created, so the langchain async
-# httpx client pool (globally cached via @lru_cache) is never touched and
-# cross-loop connection reuse is impossible.
 _SYNC_MEMORY_UPDATER_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=4,
     thread_name_prefix="memory-updater-sync",
@@ -65,17 +90,22 @@ def _save_memory_to_file(memory_data: dict[str, Any], agent_name: str | None = N
     return get_memory_storage().save(memory_data, agent_name, user_id=user_id)
 
 
-# yyds: 获取当前 memory 数据（通过 storage provider，支持缓存）
 def get_memory_data(agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
+    """yyds: 获取当前 memory — 通过 storage provider（带缓存）。
+
+    谁调的？
+      - updater._prepare_update_prompt(): 准备 prompt 时读当前 memory
+      - prompt.format_memory_for_injection(): 注入 prompt 时读 memory
+      - 外部 API: GET /memory 接口
+    """
     return get_memory_storage().load(agent_name, user_id=user_id)
 
 
-# yyds: 强制重新加载 memory（绕过缓存，从文件重新读取）
 def reload_memory_data(agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
+    """yyds: 强制重载 — 绕过缓存，从文件重新读取。外部 API 修改后用。"""
     return get_memory_storage().reload(agent_name, user_id=user_id)
 
 
-# yyds: 导入外部 memory 数据（用于 memory 迁移或 API 导入）
 def import_memory_data(memory_data: dict[str, Any], agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
     """Persist imported memory data via storage provider.
 
@@ -96,22 +126,21 @@ def import_memory_data(memory_data: dict[str, Any], agent_name: str | None = Non
     return storage.load(agent_name, user_id=user_id)
 
 
-# yyds: 清空所有 memory 数据（重置为空结构）
 def clear_memory_data(agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
+    """yyds: 清空 memory — 重置为空结构。API 的 DELETE /memory 用。"""
     cleared_memory = create_empty_memory()
     if not _save_memory_to_file(cleared_memory, agent_name, user_id=user_id):
         raise OSError("Failed to save cleared memory data")
     return cleared_memory
 
 
-# yyds: 验证 confidence 值必须在 [0, 1] 且有限（排除 NaN/inf）
 def _validate_confidence(confidence: float) -> float:
+    """yyds: confidence 必须在 [0, 1] 且有限（排除 NaN/inf）。"""
     if not math.isfinite(confidence) or confidence < 0 or confidence > 1:
         raise ValueError("confidence")
     return confidence
 
 
-# yyds: 手动创建一条 fact 并持久化（API 用，非 LLM 提取）
 def create_memory_fact(
     content: str,
     category: str = "context",
@@ -120,7 +149,10 @@ def create_memory_fact(
     *,
     user_id: str | None = None,
 ) -> dict[str, Any]:
-    """Create a new fact and persist the updated memory data."""
+    """yyds: 手动创建一条 fact 并持久化 — API 的 POST /memory/facts 用。
+
+    和 LLM 提取的区别：LLM 提取是自动的，这个是人工指定。
+    """
     normalized_content = content.strip()
     if not normalized_content:
         raise ValueError("content")
@@ -149,8 +181,8 @@ def create_memory_fact(
     return updated_memory
 
 
-# yyds: 删除指定 fact（按 fact_id）
 def delete_memory_fact(fact_id: str, agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
+    """yyds: 删除指定 fact — API 的 DELETE /memory/facts/{id} 用。"""
     memory_data = get_memory_data(agent_name, user_id=user_id)
     facts = memory_data.get("facts", [])
     updated_facts = [fact for fact in facts if fact.get("id") != fact_id]
@@ -166,7 +198,6 @@ def delete_memory_fact(fact_id: str, agent_name: str | None = None, *, user_id: 
     return updated_memory
 
 
-# yyds: 更新已有 fact 的 content/category/confidence
 def update_memory_fact(
     fact_id: str,
     content: str | None = None,
@@ -210,18 +241,18 @@ def update_memory_fact(
     return updated_memory
 
 
-# yyds: 从 LLM 响应中提取纯文本（处理 str / list[dict] / list[str] 三种格式）
 def _extract_text(content: Any) -> str:
-    """Extract plain text from LLM response content (str or list of content blocks).
+    """yyds: 从 LLM 响应中提取纯文本。
 
-    Modern LLMs may return structured content as a list of blocks instead of a
-    plain string, e.g. [{"type": "text", "text": "..."}]. Using str() on such
-    content produces Python repr instead of the actual text, breaking JSON
-    parsing downstream.
+    LLM 返回的内容可能是三种格式：
+      str              → 直接返回
+      [{"type":"text","text":"..."}] → 拼接所有 text 字段
+      ["chunk1","chunk2"]           → 拼接字符串块
 
-    String chunks are concatenated without separators to avoid corrupting
-    chunked JSON/text payloads. Dict-based text blocks are treated as full text
-    blocks and joined with newlines for readability.
+    为什么不直接 str()？
+      str([{"type":"text","text":"hello"}])
+      → "[{'type': 'text', 'text': 'hello'}]"  ← Python repr，不是文本内容
+      而我们需要的是 "hello"。
     """
     if isinstance(content, str):
         return content
@@ -368,9 +399,17 @@ _UPLOAD_SENTENCE_RE = re.compile(
 )
 
 
-# yyds: 从 memory 的所有 summary 和 facts 中清除上传文件相关的句子
 def _strip_upload_mentions_from_memory(memory_data: dict[str, Any]) -> dict[str, Any]:
-    # Scrub summaries in user/history sections
+    """yyds: 清除 memory 中所有"上传了文件"的描述。
+
+    为什么？
+      文件上传是 session 级别的 — 这次对话传的文件，下次对话就找不到了。
+      如果 memory 记了"用户上传了 report.pdf"，下次对话 AI 会以为文件还在，去引用它 → 找不到 → 报错。
+
+    正则很窄：
+      只匹配"上传了某个文件"这种事件描述，
+      不匹配"用户喜欢 CSV 格式"这种一般性提及。
+    """
     for section in ("user", "history"):
         section_data = memory_data.get(section, {})
         for _key, val in section_data.items():
@@ -379,7 +418,6 @@ def _strip_upload_mentions_from_memory(memory_data: dict[str, Any]) -> dict[str,
                 cleaned = re.sub(r"  +", " ", cleaned)
                 val["summary"] = cleaned
 
-    # Also remove any facts that describe upload events
     facts = memory_data.get("facts", [])
     if facts:
         memory_data["facts"] = [f for f in facts if not _UPLOAD_SENTENCE_RE.search(f.get("content", ""))]
@@ -387,8 +425,13 @@ def _strip_upload_mentions_from_memory(memory_data: dict[str, Any]) -> dict[str,
     return memory_data
 
 
-# yyds: fact 去重键 —— content 转 casefold 后比较（忽略大小写）
 def _fact_content_key(content: Any) -> str | None:
+    """yyds: fact 去重键 — content 去空白后转小写比较。
+
+    为什么用 casefold 不用 lower？
+      casefold 处理更多 Unicode 情况（比如德语 ß → ss）。
+      虽然 memory 里主要是中英文，但用 casefold 更安全。
+    """
     if not isinstance(content, str):
         return None
     stripped = content.strip()
@@ -397,30 +440,63 @@ def _fact_content_key(content: Any) -> str | None:
     return stripped.casefold()
 
 
-# yyds: 核心类 —— 用 LLM 分析对话并更新 memory
-# yyds: 三步走：准备 prompt → LLM 调用 → 解析并持久化
 class MemoryUpdater:
-    def __init__(self, model_name: str | None = None):
-        """Initialize the memory updater.
+    """yyds: 记忆更新器 — 用 LLM 分析对话并更新 memory。
 
-        Args:
-            model_name: Optional model name to use. If None, uses config or default.
-        """
+    完整生命周期：
+
+    update_memory() 被调用（queue._process_queue 里逐个调）
+      │
+      在 event loop 内吗？
+      ├─ 不在 → 直接调 _do_update_memory_sync()
+      └─ 在 → offload 到线程池（避免阻塞 event loop）
+              → _do_update_memory_sync()
+      │
+      ▼
+    三步走：
+      Step 1: _prepare_update_prompt()
+        ├─ memory 系统关了？→ return None，不处理
+        ├─ 没有消息？→ return None
+        ├─ 读当前 memory + 格式化对话 + 纠正提示
+        └─ 返回 (current_memory, prompt)
+      │
+      Step 2: model.invoke(prompt)
+        ├─ LLM 返回 JSON 更新指令
+        └─ 解析失败？→ 记警告，return False
+      │
+      Step 3: _finalize_update()
+        ├─ _apply_updates(): 合并 user/history + 增删 facts
+        ├─ _strip_upload_mentions_from_memory(): 清除上传文件描述
+        └─ storage.save(): 原子写入 memory.json
+    """
+
+    def __init__(self, model_name: str | None = None):
         self._model_name = model_name
 
     def _get_model(self):
         """Get the model for memory updates."""
         config = get_memory_config()
         model_name = self._model_name or config.model_name
-        return create_chat_model(name=model_name, thinking_enabled=False)
+        return create_chat_model(name=model_name, thinking_enabled=False)  # yyds: memory 提取不需要 thinking，省 token
 
-    # yyds: 构建修正/强化提示词 —— 如果用户纠正了 agent，提示 LLM 用更高置信度记录
     def _build_correction_hint(
         self,
         correction_detected: bool,
         reinforcement_detected: bool,
     ) -> str:
-        """Build optional prompt hints for correction and reinforcement signals."""
+        """yyds: 构建 correction/reinforcement 提示 — 告诉 LLM 用多高的置信度记录。
+
+        correction（用户说"不对"）：
+          → 提示 LLM："用 confidence >= 0.95 记录为 category=correction"
+          → 高置信度确保纠正后的记忆不会被低置信度的新信息覆盖
+
+        reinforcement（用户说"对就是这样"）：
+          → 提示 LLM："用 confidence >= 0.9 记录为 preference/behavior"
+          → 用户明确肯定了 AI 的做法，值得记住
+
+        correction 优先级高于 reinforcement：
+          如果同时检测到纠正和肯定，以纠正为准。
+        """
         correction_hint = ""
         if correction_detected:
             correction_hint = (
@@ -440,7 +516,6 @@ class MemoryUpdater:
 
         return correction_hint
 
-    # yyds: 准备更新 prompt：加载当前 memory + 格式化对话 + 修正提示 → 返回 (current_memory, prompt)
     def _prepare_update_prompt(
         self,
         messages: list[Any],
@@ -449,7 +524,13 @@ class MemoryUpdater:
         reinforcement_detected: bool,
         user_id: str | None = None,
     ) -> tuple[dict[str, Any], str] | None:
-        """Load memory and build the update prompt for a conversation."""
+        """yyds: 准备给 LLM 的 prompt — 加载当前 memory + 格式化对话 + 纠正提示。
+
+        返回 None 的条件（任一满足就不处理）：
+          - memory 系统关了（config.enabled=False）
+          - 消息列表空
+          - 对话文本过滤后没内容（全是工具调用，没有人类对话）
+        """
         config = get_memory_config()
         if not config.enabled or not messages:
             return None
@@ -470,7 +551,6 @@ class MemoryUpdater:
         )
         return current_memory, prompt
 
-    # yyds: 解析 LLM 响应 JSON → 深拷贝 current_memory → _apply_updates 合并 → 清除上传提及 → 保存
     def _finalize_update(
         self,
         current_memory: dict[str, Any],
@@ -479,6 +559,9 @@ class MemoryUpdater:
         agent_name: str | None,
         user_id: str | None = None,
     ) -> bool:
+        # yyds: 解析 LLM 响应 → 合并 → 清理 → 存储。
+        # 步骤：① 提取纯文本 ② JSON 解析 ③ 深拷贝+合并 ④ 清除上传文件描述 ⑤ 持久化
+        # 为什么要深拷贝？_apply_updates 会原地修改，如果 save() 失败缓存不会被改坏。
         """Parse the model response, apply updates, and persist memory."""
         update_data = _parse_memory_update_response(response_content)
         # Deep-copy before in-place mutation so a subsequent save() failure
@@ -487,7 +570,6 @@ class MemoryUpdater:
         updated_memory = _strip_upload_mentions_from_memory(updated_memory)
         return get_memory_storage().save(updated_memory, agent_name, user_id=user_id)
 
-    # yyds: 异步更新入口 —— asyncio.to_thread 调用 sync 路径，避免跨 loop 问题
     async def aupdate_memory(
         self,
         messages: list[Any],
@@ -497,13 +579,14 @@ class MemoryUpdater:
         reinforcement_detected: bool = False,
         user_id: str | None = None,
     ) -> bool:
-        """Update memory asynchronously by delegating to the sync path.
+        """yyds: 异步更新入口 — asyncio.to_thread 调用 sync 路径。
 
-        Uses ``asyncio.to_thread`` to run the *sync* ``model.invoke()`` path
-        in a worker thread so no second event loop is created and the
-        langchain async httpx client pool (shared with the lead agent) is
-        never touched.  This eliminates the cross-loop connection-reuse bug
-        described in issue #2615.
+        为什么不直接用 async model.ainvoke()？
+          因为 async httpx 的连接池是全局缓存的（@lru_cache），
+          和主 event loop 共享。在后台线程创建新 loop 调 ainvoke
+          会导致跨 loop 复用连接 → bug。
+
+          用 to_thread + sync invoke = 新线程 + sync HTTP = 独立连接池 = 安全。
         """
         return await asyncio.to_thread(
             self._do_update_memory_sync,
@@ -515,7 +598,6 @@ class MemoryUpdater:
             user_id=user_id,
         )
 
-    # yyds: 纯同步更新 —— model.invoke() 走 sync HTTP，不触碰 async httpx 连接池
     def _do_update_memory_sync(
         self,
         messages: list[Any],
@@ -525,13 +607,12 @@ class MemoryUpdater:
         reinforcement_detected: bool = False,
         user_id: str | None = None,
     ) -> bool:
-        """Pure-sync memory update using ``model.invoke()``.
+        """yyds: 纯同步更新 — model.invoke() 走 sync HTTP，不触碰 async 连接池。
 
-        Uses the *sync* LLM call path so no event loop is created.  This
-        guarantees that the langchain provider's globally cached async
-        httpx ``AsyncClient`` / connection pool (the one shared with the
-        lead agent) is never touched — no cross-loop connection reuse is
-        possible.
+        三步走的核心实现：
+          ① _prepare_update_prompt: 准备 prompt
+          ② model.invoke(prompt): LLM 返回 JSON
+          ③ _finalize_update: 解析 + 合并 + 存储
         """
         try:
             prepared = self._prepare_update_prompt(
@@ -561,7 +642,6 @@ class MemoryUpdater:
             logger.exception("Memory update failed: %s", e)
             return False
 
-    # yyds: 同步更新入口 —— 如果在 event loop 内则 offload 到线程池，否则直接调用
     def update_memory(
         self,
         messages: list[Any],
@@ -571,27 +651,16 @@ class MemoryUpdater:
         reinforcement_detected: bool = False,
         user_id: str | None = None,
     ) -> bool:
-        """Synchronously update memory using the sync LLM path.
+        """yyds: 同步更新入口 — 自动检测是否在 event loop 内。
 
-        Uses ``model.invoke()`` (sync HTTP) which operates on a completely
-        separate connection pool from the async ``AsyncClient`` shared by
-        the lead agent.  This eliminates the cross-loop connection-reuse
-        bug described in issue #2615.
+        在 event loop 内？
+          → offload 到线程池（ThreadPoolExecutor），不阻塞 loop
+        不在 event loop 内？
+          → 直接调 _do_update_memory_sync()
 
-        When called from within a running event loop (e.g. from a LangGraph
-        node), the blocking sync call is offloaded to a thread pool so the
-        caller's loop is not blocked.
-
-        Args:
-            messages: List of conversation messages.
-            thread_id: Optional thread ID for tracking source.
-            agent_name: If provided, updates per-agent memory. If None, updates global memory.
-            correction_detected: Whether recent turns include an explicit correction signal.
-            reinforcement_detected: Whether recent turns include a positive reinforcement signal.
-            user_id: If provided, scopes memory to a specific user.
-
-        Returns:
-            True if update was successful, False otherwise.
+        谁调的？
+          queue._process_queue() — 在 Timer 线程里调（不在 event loop 内）→ 直接 sync
+          外部同步 API — 可能在 event loop 内 → offload
         """
         try:
             loop = asyncio.get_running_loop()
@@ -623,29 +692,59 @@ class MemoryUpdater:
             user_id=user_id,
         )
 
-    # yyds: 合并 LLM 返回的更新到 current_memory
-    # yyds: 更新 user(3段) + history(3段) + 删除旧 facts + 添加新 facts（去重 + confidence 阈值过滤）
-    # yyds: max_facts 限制：超过则按 confidence 排序只保留 top N
     def _apply_updates(
         self,
         current_memory: dict[str, Any],
         update_data: dict[str, Any],
         thread_id: str | None = None,
     ) -> dict[str, Any]:
-        """Apply LLM-generated updates to memory.
+        """yyds: ★★★ 记忆系统最核心的函数 — 把 LLM 返回的更新指令合并到现有 memory。
 
-        Args:
-            current_memory: Current memory data.
-            update_data: Updates from LLM.
-            thread_id: Optional thread ID for tracking.
+        LLM 返回的 update_data 长这样：
+          {
+            "user": {
+              "workContext": {"summary": "...", "shouldUpdate": true},
+              "personalContext": {"summary": "...", "shouldUpdate": false},
+              ...
+            },
+            "history": {
+              "recentMonths": {"summary": "...", "shouldUpdate": true},
+              ...
+            },
+            "newFacts": [
+              {"content": "技术栈 CrewAI", "category": "knowledge", "confidence": 0.95}
+            ],
+            "factsToRemove": ["fact_abc123"]
+          }
 
-        Returns:
-            Updated memory data.
+        合并规则：
+          user/history 的 6 个 section：
+            shouldUpdate=true + summary 非空 → 覆盖
+            shouldUpdate=false → 不动
+
+          facts 删除：
+            factsToRemove 里的 id → 移除
+            （LLM 判断某些旧 fact 已过时或被纠正了）
+
+          facts 添加：
+            新 fact 的 confidence >= 阈值（默认 0.5）→ 加入
+            content 去重（casefold 比较）→ 已存在则跳过
+            超过 max_facts → 按 confidence 排序只保留 top N
+
+        例子：
+          当前 facts: [
+            {id: "f1", content: "技术栈 LangGraph", confidence: 0.9}
+          ]
+          LLM 返回:
+            factsToRemove: ["f1"]  （旧的 LangGraph 被纠正了）
+            newFacts: [{content: "技术栈 CrewAI", confidence: 0.95}]
+          结果:
+            facts: [{id: "fact_xxx", content: "技术栈 CrewAI", confidence: 0.95}]
         """
         config = get_memory_config()
         now = utc_now_iso_z()
 
-        # Update user sections
+        # ① 更新 user 三段 — shouldUpdate=true 才覆盖
         user_updates = update_data.get("user", {})
         for section in ["workContext", "personalContext", "topOfMind"]:
             section_data = user_updates.get(section, {})
@@ -655,7 +754,7 @@ class MemoryUpdater:
                     "updatedAt": now,
                 }
 
-        # Update history sections
+        # ② 更新 history 三段 — 同理
         history_updates = update_data.get("history", {})
         for section in ["recentMonths", "earlierContext", "longTermBackground"]:
             section_data = history_updates.get(section, {})
@@ -665,23 +764,23 @@ class MemoryUpdater:
                     "updatedAt": now,
                 }
 
-        # Remove facts
+        # ③ 删除 facts — LLM 说哪些 id 过时了
         facts_to_remove = set(update_data.get("factsToRemove", []))
         if facts_to_remove:
             current_memory["facts"] = [f for f in current_memory.get("facts", []) if f.get("id") not in facts_to_remove]
 
-        # Add new facts
+        # ④ 添加新 facts — 去重 + confidence 阈值过滤
         existing_fact_keys = {fact_key for fact_key in (_fact_content_key(fact.get("content")) for fact in current_memory.get("facts", [])) if fact_key is not None}
         new_facts = update_data.get("newFacts", [])
         for fact in new_facts:
             confidence = fact.get("confidence", 0.5)
-            if confidence >= config.fact_confidence_threshold:
+            if confidence >= config.fact_confidence_threshold:  # yyds: 低置信度的不要，避免垃圾信息污染 memory
                 raw_content = fact.get("content", "")
                 if not isinstance(raw_content, str):
                     continue
                 normalized_content = raw_content.strip()
                 fact_key = _fact_content_key(normalized_content)
-                if fact_key is not None and fact_key in existing_fact_keys:
+                if fact_key is not None and fact_key in existing_fact_keys:  # yyds: 去重，已有的不重复加
                     continue
 
                 fact_entry = {
@@ -692,7 +791,7 @@ class MemoryUpdater:
                     "createdAt": now,
                     "source": thread_id or "unknown",
                 }
-                source_error = fact.get("sourceError")
+                source_error = fact.get("sourceError")  # yyds: correction 类型的 fact 可以附带"之前的错误是什么"
                 if isinstance(source_error, str):
                     normalized_source_error = source_error.strip()
                     if normalized_source_error:
@@ -701,9 +800,8 @@ class MemoryUpdater:
                 if fact_key is not None:
                     existing_fact_keys.add(fact_key)
 
-        # Enforce max facts limit
+        # ⑤ 超过上限 → 按 confidence 排序只保留 top N
         if len(current_memory["facts"]) > config.max_facts:
-            # Sort by confidence and keep top ones
             current_memory["facts"] = sorted(
                 current_memory["facts"],
                 key=lambda f: f.get("confidence", 0),
@@ -713,7 +811,6 @@ class MemoryUpdater:
         return current_memory
 
 
-# yyds: 便捷函数 —— 创建 MemoryUpdater 并调用 update_memory
 def update_memory_from_conversation(
     messages: list[Any],
     thread_id: str | None = None,
@@ -722,18 +819,9 @@ def update_memory_from_conversation(
     reinforcement_detected: bool = False,
     user_id: str | None = None,
 ) -> bool:
-    """Convenience function to update memory from a conversation.
+    """yyds: 便捷函数 — 创建 MemoryUpdater 并调用 update_memory。
 
-    Args:
-        messages: List of conversation messages.
-        thread_id: Optional thread ID.
-        agent_name: If provided, updates per-agent memory. If None, updates global memory.
-        correction_detected: Whether recent turns include an explicit correction signal.
-        reinforcement_detected: Whether recent turns include a positive reinforcement signal.
-        user_id: If provided, scopes memory to a specific user.
-
-    Returns:
-        True if successful, False otherwise.
+    谁调的？queue._process_queue() 里逐个处理时。
     """
     updater = MemoryUpdater()
     return updater.update_memory(messages, thread_id, agent_name, correction_detected, reinforcement_detected, user_id=user_id)
