@@ -1,4 +1,15 @@
-# yyds: 工具策略模块，根据技能的allowed-tools声明过滤可用工具集
+"""yyds: 工具策略 — 技能怎么限制 Agent 能用什么工具？
+
+问题：技能可能有危险，不该让加载了"数据分析"技能的 Agent 也能执行 shell 命令。
+方案：每个技能在 SKILL.md 里声明 allowed-tools（允许使用的工具列表），
+      多个技能的声明取并集，没声明的技能不参与限制。
+
+三种状态：
+  None → 没有任何技能声明 allowed-tools → 不限制，保留全部工具
+  set() → 有技能声明了但列表为空 → 不给用任何工具
+  set({"search", "read_file"}) → 只给用这几个工具
+"""
+
 import logging
 from typing import Protocol
 
@@ -7,19 +18,23 @@ from deerflow.skills.types import Skill
 logger = logging.getLogger(__name__)
 
 
-# yyds: 具有name属性的工具协议接口
 class NamedTool(Protocol):
+    """只要有 name 属性就算"工具"——Protocol 鸭子类型，不强制继承。"""
+
     name: str
 
 
-# yyds: 汇总所有技能声明的allowed-tools，返回允许的工具名称集合；无声明时返回None表示不限制
 def allowed_tool_names_for_skills(skills: list[Skill]) -> set[str] | None:
-    """Return the union of explicit skill allowed-tools declarations.
+    """汇总所有技能的 allowed-tools 声明。
 
-    None means legacy allow-all behavior. It is returned only when no loaded
-    skill declares allowed-tools. Once any skill declares the field, legacy
-    skills without the field contribute no tools instead of disabling the
-    explicit restrictions from other skills.
+    关键逻辑：
+      如果所有技能都没声明 allowed-tools → 返回 None（不限制）
+      只要有一个技能声明了 → 返回并集 set
+      声明了但列表为空 → 该技能不贡献任何工具名，但触发了限制模式
+
+    为什么是"并集"而不是"交集"？
+      因为 Agent 同时加载多个技能，任何一个技能需要的工具都应该可用。
+      比如技能 A 要 search，技能 B 要 read_file，那两个都该给。
     """
     if not skills:
         return None
@@ -39,8 +54,12 @@ def allowed_tool_names_for_skills(skills: list[Skill]) -> set[str] | None:
     return allowed
 
 
-# yyds: 根据技能的allowed-tools过滤工具列表，未声明限制时保留全部工具
 def filter_tools_by_skill_allowed_tools[ToolT: NamedTool](tools: list[ToolT], skills: list[Skill]) -> list[ToolT]:
+    """根据技能声明过滤工具列表。
+
+    泛型 ToolT: NamedTool — 只要工具有 name 属性就能被过滤。
+    返回值类型跟传入的工具类型一致（保持类型信息不丢失）。
+    """
     allowed = allowed_tool_names_for_skills(skills)
     if allowed is None:
         return tools

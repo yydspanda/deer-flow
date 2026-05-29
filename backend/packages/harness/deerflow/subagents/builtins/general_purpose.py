@@ -1,8 +1,29 @@
-# yyds: 通用型 sub-agent —— 能做任何事（探索+修改+推理），适合复杂多步骤任务
-# yyds: 工具限制：tools=None（继承父 agent 所有工具），但禁用 task（防递归）+ ask_clarification + present_files
-# yyds: max_turns=100（比 bash agent 多，因为复杂任务需要更多轮次）
-# yyds: system_prompt 强调"不要问问题，用现有信息自主完成"——这是 sub-agent 的设计哲学
-"""General-purpose subagent configuration."""
+"""yyds: 通用型 Sub-Agent — 能做任何事，适合复杂多步骤任务。
+
+【大白话讲清楚】
+  这是 task_tool 最常用的 sub-agent。它继承父 Agent 的所有工具，
+  在独立线程里自主完成任务，然后把结果交回给父 Agent。
+
+  设计哲学："不要问问题，用现有信息自主完成"
+  因为 sub-agent 运行在后台，没法和用户交互。如果它停下来问问题，
+  整个任务就卡住了。所以 system_prompt 明确告诉它"别问，直接做"。
+
+  工具限制的三条规则：
+    ① tools=None：继承父 Agent 所有工具（bash、read_file、write_file...）
+    ② 禁用 task：不能再创建 sub-agent，防递归
+    ③ 禁用 ask_clarification：不能追问用户（后台任务没法交互）
+    ④ 禁用 present_files：不需要展示文件给用户（它只汇报结果）
+
+【具体例子】
+  Lead Agent："帮我分析这个项目的测试覆盖率"
+    → 创建 general-purpose sub-agent
+    → sub-agent 自主执行：bash("pytest --cov") → read_file(覆盖率报告) → 分析
+    → 返回："测试覆盖率 72%，以下是未覆盖的模块..."
+    → Lead Agent 拿到结果，继续对话
+
+---
+General-purpose subagent configuration.
+"""
 
 from deerflow.subagents.config import SubagentConfig
 
@@ -58,8 +79,11 @@ You have access to the same sandbox environment as the parent agent:
 - Prefer relative paths from the workspace, such as `hello.txt`, `../uploads/input.csv`, and `../outputs/result.md`, when writing scripts or shell commands
 </working_directory>
 """,
-    tools=None,  # Inherit all tools from parent
-    disallowed_tools=["task", "ask_clarification", "present_files"],  # Prevent nesting and clarification
+    tools=None,  # yyds: None = 继承父 Agent 所有工具
+    disallowed_tools=["task", "ask_clarification", "present_files"],  # yyds: 禁递归 + 禁交互 + 禁展示
     model="inherit",
+
     max_turns=150,
+    max_turns=100,  # yyds: 比 bash agent 多，复杂任务需要更多轮次
+
 )

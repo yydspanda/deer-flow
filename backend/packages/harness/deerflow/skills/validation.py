@@ -1,7 +1,20 @@
-# yyds: 技能frontmatter验证工具，校验SKILL.md中的字段合法性和命名规范
-"""Skill frontmatter validation utilities.
+"""yyds: 技能验证 — SKILL.md 的 frontmatter 必须遵守什么规则？
 
-Pure-logic validation of SKILL.md frontmatter — no FastAPI or HTTP dependencies.
+parser.py 负责"解析"（提取字段），
+validation.py 负责"验证"（检查字段是否合法）。
+
+验证规则：
+  1. 必须有 YAML frontmatter（--- 包裹）
+  2. 只允许白名单里的字段（name/description/license/allowed-tools/metadata/compatibility/version/author）
+  3. name 和 description 必填
+  4. name 必须是 kebab-case（小写字母+数字+连字符），不超过 64 字符
+  5. description 不允许尖括号（防 XSS），不超过 1024 字符
+  6. allowed-tools 必须是字符串列表
+
+返回值：(is_valid, message, skill_name)
+  is_valid   — 是否通过
+  message    — 通过时 "Skill is valid!"，失败时是具体错误信息
+  skill_name — 通过时返回技能名，失败时 None
 """
 
 import re
@@ -12,20 +25,19 @@ import yaml
 from deerflow.skills.parser import parse_allowed_tools
 from deerflow.skills.types import SKILL_MD_FILE
 
-# Allowed properties in SKILL.md frontmatter
-# yyds: SKILL.md中允许出现的frontmatter属性白名单
 ALLOWED_FRONTMATTER_PROPERTIES = {"name", "description", "license", "allowed-tools", "metadata", "compatibility", "version", "author"}
 
 
-# yyds: 验证技能目录中的SKILL.md frontmatter，返回是否合法及错误信息
 def _validate_skill_frontmatter(skill_dir: Path) -> tuple[bool, str, str | None]:
-    """Validate a skill directory's SKILL.md frontmatter.
+    """验证技能目录下的 SKILL.md frontmatter 是否合法。
 
-    Args:
-        skill_dir: Path to the skill directory containing SKILL.md.
+    为什么 name 要 kebab-case？
+      技能名会变成目录名、URL 路径、Docker 标签，
+      kebab-case 是这些场景的通用规范，避免空格/大写/特殊字符问题。
 
-    Returns:
-        Tuple of (is_valid, message, skill_name).
+    为什么 description 禁止尖括号？
+      防止注入 HTML/XML 标签。技能描述可能被渲染到 Web UI，
+      尖括号可能被浏览器解析为 HTML 标签导致 XSS。
     """
     skill_md = skill_dir / SKILL_MD_FILE
     if not skill_md.exists():
@@ -35,14 +47,12 @@ def _validate_skill_frontmatter(skill_dir: Path) -> tuple[bool, str, str | None]
     if not content.startswith("---"):
         return False, "No YAML frontmatter found", None
 
-    # Extract frontmatter
     match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
     if not match:
         return False, "Invalid frontmatter format", None
 
     frontmatter_text = match.group(1)
 
-    # Parse YAML frontmatter
     try:
         frontmatter = yaml.safe_load(frontmatter_text)
         if not isinstance(frontmatter, dict):
@@ -50,18 +60,15 @@ def _validate_skill_frontmatter(skill_dir: Path) -> tuple[bool, str, str | None]
     except yaml.YAMLError as e:
         return False, f"Invalid YAML in frontmatter: {e}", None
 
-    # Check for unexpected properties
     unexpected_keys = set(frontmatter.keys()) - ALLOWED_FRONTMATTER_PROPERTIES
     if unexpected_keys:
         return False, f"Unexpected key(s) in SKILL.md frontmatter: {', '.join(sorted(unexpected_keys))}", None
 
-    # Check required fields
     if "name" not in frontmatter:
         return False, "Missing 'name' in frontmatter", None
     if "description" not in frontmatter:
         return False, "Missing 'description' in frontmatter", None
 
-    # Validate name
     name = frontmatter.get("name", "")
     if not isinstance(name, str):
         return False, f"Name must be a string, got {type(name).__name__}", None
@@ -69,7 +76,6 @@ def _validate_skill_frontmatter(skill_dir: Path) -> tuple[bool, str, str | None]
     if not name:
         return False, "Name cannot be empty", None
 
-    # Check naming convention (hyphen-case: lowercase with hyphens)
     if not re.match(r"^[a-z0-9-]+$", name):
         return False, f"Name '{name}' should be hyphen-case (lowercase letters, digits, and hyphens only)", None
     if name.startswith("-") or name.endswith("-") or "--" in name:
@@ -77,7 +83,6 @@ def _validate_skill_frontmatter(skill_dir: Path) -> tuple[bool, str, str | None]
     if len(name) > 64:
         return False, f"Name is too long ({len(name)} characters). Maximum is 64 characters.", None
 
-    # Validate description
     description = frontmatter.get("description", "")
     if not isinstance(description, str):
         return False, f"Description must be a string, got {type(description).__name__}", None

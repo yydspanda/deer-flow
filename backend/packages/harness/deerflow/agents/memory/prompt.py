@@ -1,16 +1,56 @@
-# yyds: ═══════════════════════════════════════════════════════════════════
-# yyds: Memory Prompt 模板 + 格式化函数
-# yyds: ═══════════════════════════════════════════════════════════════════
-# yyds:
-# yyds: 两个 prompt 模板：
-# yyds:   MEMORY_UPDATE_PROMPT: 全量更新（对话 → LLM → JSON 更新指令）
-# yyds:   FACT_EXTRACTION_PROMPT: 单条消息提取 fact（备用）
-# yyds:
-# yyds: 两个格式化函数：
-# yyds:   format_memory_for_injection(): memory → 注入 system prompt 的文本（top facts by confidence）
-# yyds:   format_conversation_for_update(): 对话消息 → 给 LLM 的文本（截断 + 过滤上传）
-# yyds: ═══════════════════════════════════════════════════════════════════
-"""Prompt templates for memory update and injection."""
+"""yyds: Memory Prompt 模板 + 格式化函数。
+
+【大白话讲清楚】
+  这个文件是 memory 系统的"翻译层"。它解决两个翻译问题：
+
+  ① memory → system prompt：怎么把 memory.json 的数据"翻译"成 Agent 能看懂的上下文？
+     format_memory_for_injection() 按 confidence 排序取 top facts，控制在 max_tokens 内，
+     输出 "User Context / History / Facts" 三段文本，注入到 system prompt 的 <memory> 标签里。
+
+  ② conversation → LLM prompt：怎么把对话"翻译"成给 LLM 的更新指令？
+     format_conversation_for_update() 过滤掉工具调用、文件上传，只保留用户输入和 AI 回复，
+     截断长消息（>1000 字符），输出 "User: ... Assistant: ..." 格式文本。
+
+  两个 prompt 模板：
+    MEMORY_UPDATE_PROMPT: 全量更新用的系统 prompt（对话 → LLM → JSON 更新指令）
+    FACT_EXTRACTION_PROMPT: 单条消息提取 fact（当前代码未使用，预留给未来功能）
+
+【具体例子】
+  format_memory_for_injection 例子：
+    memory.json 里有 30 条 facts（confidence 从 0.99 到 0.3）
+    max_tokens = 2000
+
+    ① User Context 段：
+      - Work: AI Agent 开发工程师，专注企业级 Agent 框架
+      - Personal: 中英双语，偏好中文交流
+      - Current Focus: 正在学习 DeerFlow 源码，计划构建通用 Agent 框架
+
+    ② History 段：
+      - Recent: 最近在学习 LangGraph 多 Agent 架构...
+      - Earlier: 之前有 AI 安全背景...
+      - Background: 长期关注 AI 应用层...
+
+    ③ Facts 段（按 confidence 排序，top N 塞满 2000 tokens）：
+      - [preference | 0.95] 偏好中文回复
+      - [knowledge | 0.90] 技术栈：Python + LangGraph
+      - [context | 0.85] 项目名：deer-flow
+      ... （一直加到 token 预算用完）
+
+  format_conversation_for_update 例子：
+    原始消息 [HumanMsg, AIMsg(tool_calls=[...]), ToolMsg, AIMsg, HumanMsg, AIMsg]
+    过滤后只保留 [HumanMsg, AIMsg, HumanMsg, AIMsg]
+    输出：
+      "User: 我在做一个 AI Agent 框架
+
+       Assistant: 好的，你打算用什么技术栈？
+
+       User: LangGraph
+
+       Assistant: LangGraph 是个好选择..."
+
+---
+Prompt templates and formatting helpers for memory update and injection.
+"""
 
 from __future__ import annotations
 
@@ -30,7 +70,6 @@ try:
 except ImportError:
     TIKTOKEN_AVAILABLE = False
 
-# Prompt template for updating memory based on conversation
 MEMORY_UPDATE_PROMPT = """You are a memory management system. Your task is to analyze a conversation and update the user's memory profile.
 
 Current Memory State:
@@ -150,7 +189,6 @@ Important Rules:
 Return ONLY valid JSON, no explanation or markdown."""
 
 
-# Prompt template for extracting facts from a single message
 FACT_EXTRACTION_PROMPT = """Extract factual information about the user from this message.
 
 Message:
@@ -177,6 +215,7 @@ Rules:
 - Skip vague or temporary information
 
 Return ONLY valid JSON."""
+
 
 
 
@@ -284,10 +323,17 @@ def _count_tokens(text: str, encoding_name: str = "cl100k_base", *, use_tiktoken
         use_tiktoken: When ``False``, skip tiktoken entirely and use the
             network-free character-based estimate. This guarantees no BPE
             download is attempted (see ``memory.token_counting`` config).
+    """yyds: token 计数 — tiktoken 精确计算，不可用时 len/4 估算。
+    cl100k_base 是 GPT-4/Claude 通用的 tokenizer。
+    fallback 用 len//4 是经验值（1 token ≈ 4 字符）。
 
-    Returns:
-        The number of tokens in the text.
+
+    为什么需要精确计数？
+      format_memory_for_injection 要把 memory 塞进 system prompt，
+      system prompt 有 token 上限（比如 4000），超出会被截断。
+      精确计数确保 facts 列表尽可能多塞，但不超限。
     """
+
     if not use_tiktoken:
         return _char_based_token_estimate(text)
 
@@ -297,9 +343,11 @@ def _count_tokens(text: str, encoding_name: str = "cl100k_base", *, use_tiktoken
         # available or the encoding failed to load.
         return _char_based_token_estimate(text)
 
+
     try:
         return len(encoding.encode(text))
     except Exception:
+
         # Fallback to CJK-aware character estimation on error.
         return _char_based_token_estimate(text)
 
@@ -315,12 +363,17 @@ def warm_tiktoken_cache() -> bool:
     return _get_tiktoken_encoding("cl100k_base") is not None
 
 
-def _coerce_confidence(value: Any, default: float = 0.0) -> float:
-    """Coerce a confidence-like value to a bounded float in [0, 1].
 
-    Non-finite values (NaN, inf, -inf) are treated as invalid and fall back
-    to the default before clamping, preventing them from dominating ranking.
-    The ``default`` parameter is assumed to be a finite value.
+def _coerce_confidence(value: Any, default: float = 0.0) -> float:
+    """yyds: 安全地转 confidence — 处理 NaN/inf/字符串/None 等异常值。
+
+    LLM 返回的 JSON 里 confidence 可能不是合法 float（比如 "high"、null）。
+    这个函数兜底：转失败 → 用 default，NaN/inf → 用 default，然后 clamp 到 [0,1]。
+
+    为什么不直接 float()？
+      float("high") → ValueError
+      float(None) → TypeError
+      float("nan") → nan（nan > 0.5 是 False，排序会出问题）
     """
     try:
         confidence = float(value)
@@ -329,6 +382,7 @@ def _coerce_confidence(value: Any, default: float = 0.0) -> float:
     if not math.isfinite(confidence):
         return max(0.0, min(1.0, default))
     return max(0.0, min(1.0, confidence))
+
 
 
 
@@ -344,16 +398,31 @@ def format_memory_for_injection(memory_data: dict[str, Any], max_tokens: int = 2
         use_tiktoken: When ``False``, all token counting uses the network-free
             character-based estimate instead of tiktoken (see
             ``memory.token_counting`` config). Defaults to ``True``.
+    """yyds: memory → system prompt 文本 — 按 confidence 排序取 top facts，控制在 max_tokens 内。
+    谁调的？MemoryMiddleware.attach() 里，把格式化后的 memory 注入到 system prompt 的 <memory> 标签。
 
-    Returns:
-        Formatted memory string for system prompt injection.
+
+    三段输出：
+      User Context: Work / Personal / Current Focus
+      History: Recent / Earlier / Background
+      Facts: 按 confidence 降序排列，token 预算用完为止
+
+    token 预算分配策略：
+      先把 User Context + History 的文本全部算进去（这是基础），
+      然后剩余预算塞 facts，按 confidence 从高到低逐条加，加不下就停。
+
+    例子（max_tokens=2000）：
+      User Context + History 占了 500 tokens → 剩 1500 tokens 给 facts
+      30 条 facts 按 confidence 排序，前 20 条总共 1400 tokens → 全塞
+      第 21 条 120 tokens → 1400+120=1520 < 1500 → 塞
+      第 22 条 130 tokens → 1520+130=1650 > 1500 → 停止
+      最终注入 22 条 facts
     """
     if not memory_data:
         return ""
 
     sections = []
 
-    # Format user context
     user_data = memory_data.get("user", {})
     if user_data:
         user_sections = []
@@ -373,7 +442,6 @@ def format_memory_for_injection(memory_data: dict[str, Any], max_tokens: int = 2
         if user_sections:
             sections.append("User Context:\n" + "\n".join(f"- {s}" for s in user_sections))
 
-    # Format history
     history_data = memory_data.get("history", {})
     if history_data:
         history_sections = []
@@ -393,7 +461,6 @@ def format_memory_for_injection(memory_data: dict[str, Any], max_tokens: int = 2
         if history_sections:
             sections.append("History:\n" + "\n".join(f"- {s}" for s in history_sections))
 
-    # Format facts (sorted by confidence; include as many as token budget allows)
     facts_data = memory_data.get("facts", [])
     if isinstance(facts_data, list) and facts_data:
         ranked_facts = sorted(
@@ -402,11 +469,11 @@ def format_memory_for_injection(memory_data: dict[str, Any], max_tokens: int = 2
             reverse=True,
         )
 
-        # Compute token count for existing sections once, then account
-        # incrementally for each fact line to avoid full-string re-tokenization.
         base_text = "\n\n".join(sections)
+
         base_tokens = _count_tokens(base_text, use_tiktoken=use_tiktoken) if base_text else 0
         # Account for the separator between existing sections and the facts section.
+
         facts_header = "Facts:\n"
         separator_tokens = _count_tokens("\n\n" + facts_header, use_tiktoken=use_tiktoken) if base_text else _count_tokens(facts_header, use_tiktoken=use_tiktoken)
         running_tokens = base_tokens + separator_tokens
@@ -427,7 +494,6 @@ def format_memory_for_injection(memory_data: dict[str, Any], max_tokens: int = 2
             else:
                 line = f"- [{category} | {confidence:.2f}] {content}"
 
-            # Each additional line is preceded by a newline (except the first).
             line_text = ("\n" + line) if fact_lines else line
             line_tokens = _count_tokens(line_text, use_tiktoken=use_tiktoken)
 
@@ -445,35 +511,42 @@ def format_memory_for_injection(memory_data: dict[str, Any], max_tokens: int = 2
 
     result = "\n\n".join(sections)
 
+
     # Use accurate token counting with tiktoken (or the char-based estimate
     # when use_tiktoken is False).
     token_count = _count_tokens(result, use_tiktoken=use_tiktoken)
+
     if token_count > max_tokens:
-        # Truncate to fit within token limit
-        # Estimate characters to remove based on token ratio
         char_per_token = len(result) / token_count
-        target_chars = int(max_tokens * char_per_token * 0.95)  # 95% to leave margin
+        target_chars = int(max_tokens * char_per_token * 0.95)
         result = result[:target_chars] + "\n..."
 
     return result
 
 
-# yyds: 格式化对话消息用于 memory update prompt —— 只保留 human/ai，过滤上传文件，截断长消息
 def format_conversation_for_update(messages: list[Any]) -> str:
-    """Format conversation messages for memory update prompt.
+    """yyds: 对话消息 → 给 LLM 的文本 — 只保留 human/ai，过滤上传，截断长消息。
 
-    Args:
-        messages: List of conversation messages.
+    谁调的？updater._prepare_update_prompt() 构造 MEMORY_UPDATE_PROMPT 时。
 
-    Returns:
-        Formatted conversation string.
+    过滤规则：
+      - human 消息：保留，但去掉 <uploaded_files> 标签（文件路径是临时的，不进 memory）
+      - ai 消息：保留，但如果有 tool_calls 就跳过（工具调用的中间过程不进 memory）
+      - 其他（tool/system）：全部跳过
+
+    截断规则：
+      单条消息超过 1000 字符 → 截断到 1000 + "..."
+
+    例子：
+      输入 [HumanMsg("你好"), AIMsg(tool_calls=[...]), ToolMsg("result"), AIMsg("你好！"), HumanMsg("帮我写代码")]
+      输出 "User: 你好\n\nAssistant: 你好！\n\nUser: 帮我写代码"
+      （tool_calls 的 AIMsg 和 ToolMsg 被过滤掉了）
     """
     lines = []
     for msg in messages:
         role = getattr(msg, "type", "unknown")
         content = getattr(msg, "content", str(msg))
 
-        # Handle content that might be a list (multimodal)
         if isinstance(content, list):
             text_parts = []
             for p in content:
@@ -485,15 +558,11 @@ def format_conversation_for_update(messages: list[Any]) -> str:
                         text_parts.append(text_val)
             content = " ".join(text_parts) if text_parts else str(content)
 
-        # Strip uploaded_files tags from human messages to avoid persisting
-        # ephemeral file path info into long-term memory.  Skip the turn entirely
-        # when nothing remains after stripping (upload-only message).
         if role == "human":
             content = re.sub(r"<uploaded_files>[\s\S]*?</uploaded_files>\n*", "", str(content)).strip()
             if not content:
                 continue
 
-        # Truncate very long messages
         if len(str(content)) > 1000:
             content = str(content)[:1000] + "..."
 

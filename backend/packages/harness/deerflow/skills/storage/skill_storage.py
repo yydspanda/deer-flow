@@ -1,5 +1,20 @@
-# yyds: 技能存储抽象基类，定义存储后端的原子操作接口和模板方法流程
-"""Abstract SkillStorage base class with template-method flows."""
+"""yyds: 技能存储抽象基类 — 模板方法模式。
+
+设计思路：
+  基类定义"做什么"（模板方法），子类定义"怎么做"（原子操作）。
+  这样新增存储后端（S3、数据库等）只需实现 ~10 个抽象方法，
+  就能复用基类的加载、验证、路径计算等逻辑。
+
+目录布局（协议的一部分）：
+  <root>/public/<name>/SKILL.md     内置技能
+  <root>/custom/<name>/SKILL.md     用户技能
+  <root>/custom/.history/<name>.jsonl  历史记录
+
+三大类方法：
+  1. 静态协议辅助 — validate_skill_name、validate_relative_path 等
+  2. 抽象原子操作 — 子类必须实现的存储介质相关方法
+  3. 具体模板方法 — load_skills（发现+解析+合并启用状态）
+"""
 
 from __future__ import annotations
 
@@ -16,27 +31,29 @@ logger = logging.getLogger(__name__)
 _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
-# yyds: 技能存储抽象基类，子类实现具体存储介质操作，基类提供加载、验证、路径等模板方法
 class SkillStorage(ABC):
-    """Abstract base for skill storage backends.
+    """技能存储抽象基类。
 
-    Subclasses implement a small set of storage-medium-specific atomic
-    operations; this base class provides final template-method flows
-    (load_skills, history serialisation, path helpers, validation) that
-    compose them with protocol-level helpers.
+    为什么用模板方法而不是直接继承？
+      因为 load_skills 的流程是固定的（遍历→解析→合并启用状态→排序），
+      只有"遍历文件"和"读写文件"跟存储介质相关。
+      把流程固化在基类，子类只需关注存储细节。
     """
 
     def __init__(self, container_path: str = "/mnt/skills") -> None:
         self._container_root = container_path
 
     # ------------------------------------------------------------------
-    # Static protocol helpers (not storage-specific)
+    # 静态协议辅助（不依赖存储介质）
     # ------------------------------------------------------------------
 
-    # yyds: 验证并规范化技能名称，要求小写字母+数字+连字符格式，最长64字符
     @staticmethod
     def validate_skill_name(name: str) -> str:
-        """Validate and normalise a skill name; return the normalised form."""
+        """验证并规范化技能名称。
+
+        规则：小写字母+数字，用连字符分隔，最长 64 字符。
+        比如 my-skill-2 合法，My_Skill 不合法。
+        """
         normalized = name.strip()
         if not _SKILL_NAME_PATTERN.fullmatch(normalized):
             raise ValueError("Skill name must be hyphen-case using lowercase letters, digits, and hyphens only.")
@@ -44,14 +61,13 @@ class SkillStorage(ABC):
             raise ValueError("Skill name must be 64 characters or fewer.")
         return normalized
 
-    # yyds: 验证相对路径不会逃逸出base_dir目录，防止路径遍历攻击
     @staticmethod
     def validate_relative_path(relative_path: str, base_dir: Path) -> Path:
-        """Validate *relative_path* against *base_dir* and return the resolved target.
+        """验证相对路径不会逃逸出 base_dir。
 
-        Checks that *relative_path* is non-empty, then joins it with *base_dir*
-        and resolves the result (following symlinks).  Raises ``ValueError`` if
-        the resolved target does not lie within *base_dir*.
+        为什么不直接 base_dir / relative_path？
+          如果 relative_path 包含 ../，拼接后可能跑出 base_dir。
+          resolve() 展开所有 .. 和符号链接，relative_to() 检查是否在范围内。
         """
         if not relative_path:
             raise ValueError("relative_path must not be empty.")
@@ -63,10 +79,15 @@ class SkillStorage(ABC):
             raise ValueError("relative_path must resolve within the skill directory.") from exc
         return target
 
-    # yyds: 验证SKILL.md内容的frontmatter格式和名称一致性
     @staticmethod
     def validate_skill_markdown_content(name: str, content: str) -> None:
-        """Validate SKILL.md content: parse frontmatter and check name matches."""
+        """验证 SKILL.md 内容，写到一个临时目录再跑验证。
+
+        为什么不直接解析 content 字符串？
+          因为 _validate_skill_frontmatter 接收的是目录路径，
+          它会构造 skill_md = skill_dir / SKILL.md 的路径。
+          所以需要临时目录 + 临时文件。这是验证逻辑复用的代价。
+        """
         import tempfile
 
         from deerflow.skills.validation import _validate_skill_frontmatter
@@ -81,9 +102,14 @@ class SkillStorage(ABC):
             if parsed_name != name:
                 raise ValueError(f"Frontmatter name '{parsed_name}' must match requested skill name '{name}'.")
 
-    # yyds: 验证技能辅助文件路径的合法性，限制在references/templates/scripts/assets子目录内
     def ensure_safe_support_path(self, name: str, relative_path: str) -> Path:
-        """Validate and return the resolved absolute path for a support file."""
+        """验证辅助文件路径，只允许在 references/templates/scripts/assets 下。
+
+        为什么限制子目录？
+          技能目录下有 SKILL.md（主文件）和辅助文件。
+          辅助文件必须放在指定子目录，不能随意创建目录结构，
+          防止把文件写到意外位置。
+        """
         _ALLOWED_SUPPORT_SUBDIRS = {"references", "templates", "scripts", "assets"}
         skill_dir = self.get_custom_skill_dir(self.validate_skill_name(name)).resolve()
         if not relative_path or relative_path.endswith("/"):
@@ -105,136 +131,96 @@ class SkillStorage(ABC):
         return target
 
     # ------------------------------------------------------------------
-    # Abstract atomic operations (storage-medium specific)
+    # 抽象原子操作（存储介质相关，子类必须实现）
     # ------------------------------------------------------------------
 
-    # yyds: 返回技能根目录的宿主机绝对路径，用于沙箱挂载
     @abstractmethod
     def get_skills_root_path(self) -> Path:
-        """Absolute host path to the skills root, used for sandbox mounts.
+        """技能根目录的宿主机绝对路径，用于沙箱挂载。"""
 
-        Origin: ``deerflow.skills.loader.get_skills_root_path``.
-        """
-
-    # yyds: 遍历所有SKILL.md文件，返回(类别, 类别根目录, 文件路径)元组
     @abstractmethod
     def _iter_skill_files(self) -> Iterable[tuple[SkillCategory, Path, Path]]:
-        """Yield ``(category, category_root, skill_md_path)`` for every SKILL.md.
+        """遍历所有 SKILL.md 文件，返回 (类别, 类别根目录, 文件路径) 元组。"""
 
-        Origin: extracted from directory-walk logic inside
-        ``deerflow.skills.loader.load_skills``.
-        """
-
-    # yyds: 读取自定义技能的SKILL.md内容
     @abstractmethod
     def read_custom_skill(self, name: str) -> str:
-        """Read SKILL.md content for a custom skill.
+        """读取自定义技能的 SKILL.md 内容。"""
 
-        Origin: ``deerflow.skills.manager.read_custom_skill_content``.
-        """
-
-    # yyds: 原子化写入自定义技能目录下的文本文件
     @abstractmethod
     def write_custom_skill(self, name: str, relative_path: str, content: str) -> None:
-        """Atomically write a text file under ``custom/<name>/<relative_path>``.
+        """原子化写入文件到 custom/<name>/<relative_path>。"""
 
-        Origin: ``deerflow.skills.manager.atomic_write``.
-        """
-
-    # yyds: 异步从.skill ZIP包安装技能
     @abstractmethod
     async def ainstall_skill_from_archive(self, archive_path: str | Path) -> dict:
-        """Async install of a skill from a ``.skill`` ZIP archive.
+        """异步安装 .skill ZIP 包。"""
 
-        Origin: ``deerflow.skills.installer.ainstall_skill_from_archive``.
-        """
-
-    # yyds: 同步包装器，在同步上下文中调用异步安装方法
     def install_skill_from_archive(self, archive_path: str | Path) -> dict:
-        """Sync wrapper — delegates to :meth:`ainstall_skill_from_archive`."""
+        """同步包装器，在同步上下文中调用异步安装。"""
         from deerflow.skills.installer import _run_async_install
 
         return _run_async_install(self.ainstall_skill_from_archive(archive_path))
 
-    # yyds: 删除自定义技能，可选记录操作历史
     @abstractmethod
     def delete_custom_skill(self, name: str, *, history_meta: dict | None = None) -> None:
-        """Delete a custom skill (validation + optional history + directory removal).
+        """删除自定义技能，可选记录操作历史。"""
 
-        Origin: ``app.gateway.routers.skills.delete_custom_skill`` + ``skill_manage_tool``.
-        """
-
-    # yyds: 判断自定义技能是否存在
     @abstractmethod
     def custom_skill_exists(self, name: str) -> bool:
-        """Origin: ``deerflow.skills.manager.custom_skill_exists``."""
+        """自定义技能是否存在。"""
 
-    # yyds: 判断内置技能是否存在
     @abstractmethod
     def public_skill_exists(self, name: str) -> bool:
-        """Origin: ``deerflow.skills.manager.public_skill_exists``."""
+        """内置技能是否存在。"""
 
-    # yyds: 追加一条JSONL历史记录到技能的历史文件中
     @abstractmethod
     def append_history(self, name: str, record: dict) -> None:
-        """Append a JSONL history entry for ``name``.
+        """追加 JSONL 历史记录。"""
 
-        Origin: ``deerflow.skills.manager.append_history``.
-        """
-
-    # yyds: 读取技能的所有历史记录，按时间正序返回
     @abstractmethod
     def read_history(self, name: str) -> list[dict]:
-        """Return all history records for ``name``, oldest first.
-
-        Origin: ``deerflow.skills.manager.read_history``.
-        """
+        """读取所有历史记录，按时间正序。"""
 
     # ------------------------------------------------------------------
-    # Concrete path helpers (layout is part of the SKILL.md protocol)
+    # 具体路径辅助方法（目录布局是协议的一部分）
     # ------------------------------------------------------------------
 
-    # yyds: 返回容器中的技能根挂载路径
     def get_container_root(self) -> str:
-        """Origin: ``deerflow.config.skills_config.SkillsConfig.container_path`` accessor."""
+        """容器中的技能根挂载路径。"""
         return self._container_root
 
-    # yyds: 获取自定义技能的目录路径，不创建目录
     def get_custom_skill_dir(self, name: str) -> Path:
-        """Path to ``custom/<name>``. Does not create the directory.
-
-        Origin: ``deerflow.skills.manager.get_custom_skill_dir``.
-        """
+        """自定义技能目录路径 custom/<name>，不创建目录。"""
         normalized_name = self.validate_skill_name(name)
         return self.get_skills_root_path() / SkillCategory.CUSTOM.value / normalized_name
 
-    # yyds: 获取自定义技能SKILL.md的文件路径
     def get_custom_skill_file(self, name: str) -> Path:
-        """Path to ``custom/<name>/SKILL.md``.
-
-        Origin: ``deerflow.skills.manager.get_custom_skill_file``.
-        """
+        """自定义技能 SKILL.md 文件路径。"""
         normalized_name = self.validate_skill_name(name)
         return self.get_custom_skill_dir(normalized_name) / SKILL_MD_FILE
 
-    # yyds: 获取技能历史JSONL文件路径
     def get_skill_history_file(self, name: str) -> Path:
-        """Path to ``custom/.history/<name>.jsonl``. Does not create parents.
-
-        Origin: ``deerflow.skills.manager.get_skill_history_file``.
-        """
+        """技能历史 JSONL 文件路径 custom/.history/<name>.jsonl。"""
         normalized_name = self.validate_skill_name(name)
         return self.get_skills_root_path() / SkillCategory.CUSTOM.value / ".history" / f"{normalized_name}.jsonl"
 
     # ------------------------------------------------------------------
-    # Final template-method flows
+    # 具体模板方法流程
     # ------------------------------------------------------------------
 
-    # yyds: 模板方法——发现所有技能，合并启用状态，按名称排序并可选过滤
     def load_skills(self, *, enabled_only: bool = False) -> list[Skill]:
-        """Discover all skills, merge enabled state, sort and optionally filter.
+        """发现所有技能，合并启用状态，排序后返回。
 
-        Origin: ``deerflow.skills.loader.load_skills``.
+        流程：
+          1. _iter_skill_files() 遍历所有 SKILL.md
+          2. parse_skill_file() 解析每个文件
+          3. 同名技能去重（后出现的覆盖前面的）
+          4. 从 extensions config 读取启用状态
+          5. 可选过滤 enabled_only
+          6. 按名称排序
+
+        为什么每次都重新读取 extensions config？
+          因为配置可能被其他进程修改了（热重载），
+          不重新读就会用过期状态。
         """
         from deerflow.skills.parser import parse_skill_file
 
@@ -250,8 +236,6 @@ class SkillStorage(ABC):
 
         skills = list(skills_by_name.values())
 
-        # Merge enabled state from extensions config (re-read every call so
-        # changes made by another process are picked up immediately).
         try:
             from deerflow.config.extensions_config import ExtensionsConfig
 
@@ -267,9 +251,12 @@ class SkillStorage(ABC):
         skills.sort(key=lambda s: s.name)
         return skills
 
-    # yyds: 确认自定义技能可编辑，内置技能不可直接修改
     def ensure_custom_skill_is_editable(self, name: str) -> None:
-        """Origin: ``deerflow.skills.manager.ensure_custom_skill_is_editable``."""
+        """确认技能可编辑：自定义技能可以，内置技能不行。
+
+        如果同名技能同时存在于 public 和 custom，custom 版本覆盖 public。
+        这允许用户"覆盖"内置技能来自定义行为。
+        """
         if self.custom_skill_exists(name):
             return
         if self.public_skill_exists(name):

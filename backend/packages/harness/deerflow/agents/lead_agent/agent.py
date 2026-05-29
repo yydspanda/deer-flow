@@ -1,17 +1,33 @@
 """
-yyds 学习笔记：agent.py — DeerFlow 的心脏
+yyds: agent.py — DeerFlow 的心脏，三条路的分岔口
 
 这个文件做一件事：把模型、工具、中间件、提示词组装成一个可执行的 Agent。
+
+但它不只是"一种"Agent — 根据 is_bootstrap 和 agent_name 走三条完全不同的路：
+
+  路径 A — bootstrap 模式（is_bootstrap=True）
+    用户在 Slack/Discord 输入 /bootstrap 告诉我你想要什么 Agent
+    → 创建一个最小化 Agent（只有 setup_agent 工具）
+    → LLM 生成 SOUL.md + config.yaml → 写磁盘 → 自定义 Agent 创建完成
+    → 触发位置：channels/manager.py 的 /bootstrap 命令处理
+
+  路径 B — 自定义 Agent（agent_name 有值）
+    用户跟已创建的自定义 Agent 聊天
+    → 加载 SOUL.md（人格）+ config.yaml（配置）
+    → 加 update_agent 工具（Agent 可以修改自己）
+
+  路径 C — 默认 Agent（agent_name=None）
+    普通聊天，DeerFlow 2.0 默认行为
 
 调用链：
   Gateway 收到请求
     → services.py 调用 make_lead_agent(config)
-      → _make_lead_agent() 做组装
+      → _make_lead_agent() 做 6 步组装
         ① 从 config 提取运行时参数（thinking/plan/subagent 模式）
         ② 解析模型名（用户指定 → agent 配置 → 全局默认，三级回退）
-        ③ 获取工具列表 + 按 skill 过滤
-        ④ 组装中间件链（17+ 个，顺序很重要）
-        ⑤ 生成 system prompt（根据模式和 skill 动态拼接）
+        ③ 确定可用 skill → 加载 skill 对象
+        ④ 组装工具列表（三条路径加的工具不同）
+        ⑤ 组装中间件链 + 生成 system prompt
         ⑥ 调用 LangGraph 的 create_agent() 返回可执行 Agent
 
 文件结构：
@@ -25,12 +41,12 @@ yyds 学习笔记：agent.py — DeerFlow 的心脏
   │   └── _load_enabled_skills_for_tool_policy() 加载 skill 用于工具过滤
   └── 入口函数
       ├── make_lead_agent()                  外部入口（Gateway 调这个）
-      └── _make_lead_agent()                 真正干活的
+      └── _make_lead_agent()                 真正干活的 / 三条路的分岔逻辑在这里
 
 Lead agent factory.
 
 INVARIANT — tracing callback placement
-======================================
+=====================================
 
 Tracing callbacks (Langfuse, LangSmith) are attached at the **graph
 invocation root** in :func:`_make_lead_agent` (see the
@@ -45,34 +61,6 @@ path from firing, so ``session_id`` / ``user_id`` never reach the trace.
 The four current sites are: bootstrap agent, default agent, summarization
 middleware, and the async path inside ``TitleMiddleware``. Any new in-graph
 ``create_chat_model`` call must add to this list and pass the flag.
-"""
-yyds 学习笔记：agent.py — DeerFlow 的心脏
-
-这个文件做一件事：把模型、工具、中间件、提示词组装成一个可执行的 Agent。
-
-调用链：
-  Gateway 收到请求
-    → services.py 调用 make_lead_agent(config)
-      → _make_lead_agent() 做组装
-        ① 从 config 提取运行时参数（thinking/plan/subagent 模式）
-        ② 解析模型名（用户指定 → agent 配置 → 全局默认，三级回退）
-        ③ 获取工具列表 + 按 skill 过滤
-        ④ 组装中间件链（17+ 个，顺序很重要）
-        ⑤ 生成 system prompt（根据模式和 skill 动态拼接）
-        ⑥ 调用 LangGraph 的 create_agent() 返回可执行 Agent
-
-文件结构：
-  ├── 工具函数（给主函数用的）
-  │   ├── _get_runtime_config()              提取运行时参数
-  │   ├── _resolve_model_name()              解析模型名（三级回退）
-  │   ├── _create_summarization_middleware()  创建上下文压缩中间件
-  │   ├── _create_todo_list_middleware()      创建待办列表中间件
-  │   ├── _build_middlewares()               组装中间件链（核心！）
-  │   ├── _available_skill_names()           获取可用 skill 名
-  │   └── _load_enabled_skills_for_tool_policy() 加载 skill 用于工具过滤
-  └── 入口函数
-      ├── make_lead_agent()                  外部入口（Gateway 调这个）
-      └── _make_lead_agent()                 真正干活的
 """
 
 from __future__ import annotations
@@ -492,9 +480,11 @@ def build_middlewares(
 
 def _available_skill_names(agent_config, is_bootstrap: bool) -> set[str] | None:
     """yyds: 确定当前 Agent 可以用哪些 skill。
-    - bootstrap 模式：只有 "bootstrap" 这一个 skill
-    - agent 配置了 skills 列表：用配置的
-    - 都没有：返回 None（表示不限制，全部可用）
+
+    三条路径，三个结果：
+      - bootstrap 模式：{"bootstrap"} — 只给创建 Agent 相关的提示词，减少干扰
+      - agent 配置了 skills 列表：用配置的 — 自定义 Agent 只能用白名单里的 skill
+      - 都没有：返回 None — 默认 Agent 不限制，全部 skill 可用
     """
     if is_bootstrap:
         return set(_BOOTSTRAP_SKILL_NAMES)
@@ -534,30 +524,37 @@ def make_lead_agent(config: RunnableConfig):
 
 
 def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
-    """yyds: 真正的组装车间。6 步把 Agent 组装出来：
+    """yyds: 真正的组装车间 — 根据 is_bootstrap 走三条完全不同的路。
 
-    ① 提取运行时参数
-       从前端请求中取出 thinking_enabled, is_plan_mode, subagent_enabled 等，
-       这些参数决定 Agent 用什么模式（Flash/Thinking/Pro/Ultra）。
+    三条路（互斥，只走一条）：
 
-    ② 解析模型名
-       三级回退：用户请求 → agent 配置 → 全局默认。
-       如果模型不支持 thinking 但开了 thinking 模式，自动降级。
+    ┌─ is_bootstrap=True（用户输入了 /bootstrap 命令）
+    │  "帮我创建一个自定义 Agent"
+    │  → 最小化 Agent：只有 setup_agent 一个额外工具
+    │  → 不加载 agent_config（Agent 还不存在，没有配置文件）
+    │  → 不加 update_agent（还没创建，没什么可更新的）
+    │  → skill 只有 "bootstrap"
+    │  → LLM 生成 SOUL.md + config.yaml → 调 setup_agent 写磁盘 → 创建完成
+    │
+    ├─ agent_name 有值（用户跟已创建的自定义 Agent 聊天）
+    │  "继续跟我的代码审查专家聊"
+    │  → 加载 agent_config（从 users/{uid}/agents/{name}/config.yaml 读取）
+    │  → 加载 SOUL.md 注入 system prompt（Agent 有了人格）
+    │  → 额外加 update_agent（Agent 可以修改自己的人格/配置）
+    │  → skill 由 agent_config.skills 决定（比如只有 ["code-review"]）
+    │
+    └─ 默认 Agent（agent_name=None，is_bootstrap=False）
+       "普通聊天"
+       → 不加载 agent_config
+       → 不加 update_agent（默认 Agent 不需要修改自己）
+       → 不加 setup_agent（不需要创建新 Agent）
+       → skill 不限制（全部可用）
 
-    ③ 组装工具列表
-       get_available_tools() 获取所有工具，filter_tools_by_skill_allowed_tools() 按 skill 过滤。
-       bootstrap 模式额外加 setup_agent 工具（用于创建自定义 Agent）。
-       有 agent_name 的自定义 Agent 额外加 update_agent 工具。
-
-    ④ 组装中间件链
-       _build_middlewares() 按顺序组装 17+ 个中间件。
-
-    ⑤ 生成 system prompt
-       apply_prompt_template() 根据模式、skill 动态拼接提示词。
-
-    ⑥ 调 create_agent() 返回可执行 Agent
-       传入 model + tools + middleware + system_prompt + state_schema，
-       LangGraph 返回一个可执行的 StateGraph。
+    组装步骤（三条路共用）：
+      ① 提取运行时参数（thinking_enabled, is_plan_mode, subagent_enabled...）
+      ② 解析模型名（三级回退：用户请求 → agent 配置 → 全局默认）
+      ③ 确定可用 skill → 加载 skill 对象用于工具过滤
+      ④ 组装工具列表 + 中间件链 + system prompt → create_agent()
     """
     # Lazy import to avoid circular dependency
     from deerflow.tools import get_available_tools
@@ -576,6 +573,9 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     is_bootstrap = cfg.get("is_bootstrap", False)
     agent_name = validate_agent_name(cfg.get("agent_name"))
 
+    # bootstrap 时不加载 agent_config — Agent 还不存在，没有配置文件
+    # 自定义 Agent（agent_name 有值）时加载 — 从 users/{uid}/agents/{name}/config.yaml 读取
+    # 默认 Agent（agent_name=None）时也加载 — 返回 None（没有配置文件）
     agent_config = load_agent_config(agent_name) if not is_bootstrap else None
     available_skills = _available_skill_names(agent_config, is_bootstrap)
     # Custom agent model from agent config (if any), or None to let _resolve_model_name pick the default
@@ -635,13 +635,24 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
 
     skills_for_tool_policy = _load_enabled_skills_for_tool_policy(available_skills, app_config=resolved_app_config)
 
+    # ── 路径 A：bootstrap 模式 ──────────────────────────────────────────
+    # 触发方式：用户在 IM 输入 /bootstrap 告诉我你想要什么 Agent
+    # 目的：让 LLM 帮用户"捏"一个自定义 Agent（写 SOUL.md + config.yaml）
+    # 为什么是最小化 Agent？
+    #   ① 不需要 agent_config — Agent 还不存在，没有配置文件可加载
+    #   ② 只加 setup_agent — LLM 唯一的"创建"动作就是调这个工具
+    #   ③ 不加 update_agent — 还没创建，没东西可更新
+    #   ④ skill 只有 "bootstrap" — 精简提示词，减少干扰
+    #   ⑤ 不传 reasoning_effort — bootstrap 任务简单，不需要深度推理
     if is_bootstrap:
+
         # Special bootstrap agent with minimal prompt for initial custom agent creation flow
         # Keep the bootstrap skill set intentionally narrow so agent creation
         # remains deterministic before the custom agent's own config exists.
         raw_tools = get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, app_config=resolved_app_config) + [setup_agent]
         filtered = filter_tools_by_skill_allowed_tools(raw_tools, skills_for_tool_policy)
         final_tools, setup = assemble_deferred_tools(filtered, enabled=resolved_app_config.tool_search.enabled)
+
         return create_agent(
             model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, app_config=resolved_app_config, attach_tracing=False),
             tools=final_tools,
@@ -662,13 +673,23 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             state_schema=ThreadState,
         )
 
-    # Custom agents can update their own SOUL.md / config via update_agent.
-    # The default agent (no agent_name) does not see this tool.
+    # ── 路径 B + C：自定义 Agent 或默认 Agent ──────────────────────────
+    # 路径 B（agent_name 有值）：用户跟自定义 Agent 聊天
+    #   → 加 update_agent（Agent 可以修改自己的 SOUL.md / config.yaml）
+    #   → skill 由 agent_config.skills 决定（比如 ["code-review"]）
+    #   → groups 由 agent_config.tool_groups 决定（工具权限隔离）
+    #
+    # 路径 C（agent_name=None）：默认 DeerFlow Agent
+    #   → 不加 update_agent（默认 Agent 没有可修改的配置文件）
+    #   → skill 不限制（None = 全部可用）
+    #   → groups 不限制（None = 全部工具可用）
     extra_tools = [update_agent] if agent_name else []
+
     # Default lead agent (unchanged behavior)
     raw_tools = get_available_tools(model_name=model_name, groups=agent_config.tool_groups if agent_config else None, subagent_enabled=subagent_enabled, app_config=resolved_app_config)
     filtered = filter_tools_by_skill_allowed_tools(raw_tools + extra_tools, skills_for_tool_policy)
     final_tools, setup = assemble_deferred_tools(filtered, enabled=resolved_app_config.tool_search.enabled)
+
     return create_agent(
         model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort, app_config=resolved_app_config, attach_tracing=False),
         tools=final_tools,

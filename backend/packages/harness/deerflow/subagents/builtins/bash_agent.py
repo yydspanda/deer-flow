@@ -1,8 +1,32 @@
-# yyds: Bash 命令执行专用 sub-agent —— 适合一系列相关的 bash 命令（git/npm/docker/构建部署等）
-# yyds: 工具限制：只有 sandbox 工具（bash/ls/read_file/write_file/str_replace）
-# yyds: 禁用 task（防递归）+ ask_clarification + present_files
-# yyds: max_turns=60（比 general-purpose 少，因为 bash 操作通常不需要太多轮次）
-"""Bash command execution subagent configuration."""
+"""yyds: Bash 命令执行专用 Sub-Agent — 适合一系列相关的终端操作。
+
+【大白话讲清楚】
+  专门跑命令的 sub-agent。和 general-purpose 的区别：
+    - 工具只有 sandbox 五件套（bash/ls/read_file/write_file/str_replace）
+    - 不能调 AI 工具（不能搜索、不能追问、不能创建 sub-agent）
+    - max_turns=60（比 general-purpose 的 100 少，命令操作通常不需要太多轮）
+
+  什么时候用它，什么时候直接用 bash 工具？
+    单条命令 → 直接用 bash 工具（更快，不用启动 sub-agent）
+    一系列相关命令 → 用 bash sub-agent（独立上下文，不污染主对话）
+
+  可用性过滤：
+    sandbox 不允许 host bash → 这个 sub-agent 从可用列表中隐藏
+    （因为它的唯一用途就是跑命令，没 bash 就没意义了）
+
+【具体例子】
+  Lead Agent："帮我构建项目并部署"
+    → 创建 bash sub-agent
+    → sub-agent 执行：bash("npm run build") → bash("docker build .") → bash("docker push ...")
+    → 返回："构建和部署完成，镜像已推送到 registry"
+    → Lead Agent 拿到结果
+
+  如果只是跑一条命令：
+    Lead Agent 直接调 bash 工具 → 不需要 sub-agent
+
+---
+Bash command execution subagent configuration.
+"""
 
 from deerflow.subagents.config import SubagentConfig
 
@@ -47,8 +71,8 @@ You have access to the sandbox environment:
 - Prefer relative paths from the workspace, such as `hello.txt`, `../uploads/input.csv`, and `../outputs/result.md`, when composing commands or helper scripts
 </working_directory>
 """,
-    tools=["bash", "ls", "read_file", "write_file", "str_replace"],  # Sandbox tools only
+    tools=["bash", "ls", "read_file", "write_file", "str_replace"],  # yyds: 只有 sandbox 五件套
     disallowed_tools=["task", "ask_clarification", "present_files"],
     model="inherit",
-    max_turns=60,
+    max_turns=60,  # yyds: 比 general-purpose 少，命令操作不需要太多轮
 )

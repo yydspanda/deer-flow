@@ -205,24 +205,32 @@ def get_effective_user_id() -> str:
 
 
 def resolve_runtime_user_id(runtime: object | None) -> str:
-    """Single source of truth for a tool/middleware's effective user_id.
+    """yyds: 工具/中间件获取 user_id 的首选入口 — 三级兜底。
 
-    Resolution order (most authoritative first):
-      1. ``runtime.context["user_id"]`` — set by ``inject_authenticated_user_context``
-          in the gateway from the auth-validated ``request.state.user``. This is
-          the only source that survives boundaries where the contextvar may have
-          been lost (background tasks scheduled outside the request task,
-          worker pools that don't copy_context, future cross-process drivers).
-      2. The ``_current_user`` ContextVar — set by the auth middleware at
-          request entry. Reliable for in-task work; copied by ``asyncio``
-          child tasks and by ``ContextThreadPoolExecutor``.
-      3. ``DEFAULT_USER_ID`` — last-resort fallback so unauthenticated
-          CLI / migration / test paths keep working without raising.
+    为什么不直接用 get_effective_user_id()（只读 ContextVar）？
+      因为有些场景 ContextVar 会丢：
+        - 工具被调度到其他线程执行
+        - 后台任务在请求结束后才跑
+      这时 ContextVar 已经是 None 了。
 
-    Tools that persist user-scoped state (custom agents, memory, uploads)
-    MUST call this instead of ``get_effective_user_id()`` directly so they
-    benefit from the runtime.context channel that ``setup_agent`` already
-    relies on.
+    所以多了一个备份来源：runtime.context["user_id"]。
+    runtime 是 Agent 运行时的上下文对象，user_id 在请求进来时就被塞进去了，
+    它跟着 runtime 对象走，不依赖 ContextVar。
+
+    三级查找（优先级从高到低）：
+      ① runtime.context["user_id"] → 最可靠，不依赖 ContextVar，跨线程也能用
+      ② _current_user ContextVar   → 正常请求内可用（auth_middleware 写的）
+      ③ "default"                  → 本地开发兜底（没登录就没前两个）
+
+    就像出差带两种证件：
+      runtime.context = 口袋里的身份证（什么时候都能用）
+      ContextVar      = 公司工牌（在公司里方便，出了公司就没了）
+
+    谁在调？工具（setup_agent、写文件）、Memory 系统 —
+    任何需要持久化用户数据的地方都用这个，不用 get_effective_user_id()。
+
+    ---
+    Single source of truth for a tool/middleware's effective user_id.
     """
     context = getattr(runtime, "context", None)
     if isinstance(context, dict):

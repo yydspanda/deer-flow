@@ -1,29 +1,52 @@
-"""yyds: 待办事项中间件 — 管理 Pro/Ultra 模式下的任务待办列表，防止上下文丢失和过早退出。
+"""yyds: 待办事项中间件 — 让 AI 按计划干活，不许偷懒也不许忘事。
 
-【做什么】扩展 LangChain 的 TodoListMiddleware，增加两个核心能力：
-   1. 上下文丢失检测：当消息历史被截断（如摘要中间件压缩后），原始的 write_todos 工具调用可能
-      已不在上下文窗口中，此中间件检测并注入提醒消息，让模型仍能感知待办列表。
-   2. 过早退出预防：当模型试图给出最终回复（无工具调用）但仍有未完成的待办项时，强制跳回模型节点
-      继续工作，直到所有任务完成或达到重试上限。
-【为什么存在】在长对话中，SummarizationMiddleware 会压缩历史消息，导致 write_todos 调用被截断，
-   模型会"遗忘"待办列表。此外，模型有时会在任务未完成时就输出最终答案，此中间件防止这种行为。
-【在链中的位置】
-   - before_model 阶段：在模型调用前检测上下文丢失，注入待办列表提醒。
-   - after_model 阶段：在模型响应后检测是否有过早退出，使用 jump_to="model" 跳回模型节点。
-【关键设计】
-   - 继承自 TodoListMiddleware，保留基类的并行 write_todos 检测逻辑。
-   - 使用 hook_config(can_jump_to=["model"]) 声明跳转能力。
-   - _MAX_COMPLETION_REMINDERS=2 限制最大提醒次数，防止无限循环（当模型确实无法完成时允许退出）。
-   - 提醒消息使用 <system_reminder> 标签包裹，以 HumanMessage 形式注入。
+【大白话讲清楚】
+  Pro/Ultra 模式下，AI 会拆分复杂任务成待办列表，逐个执行。
+  这个中间件解决两个实际问题：
 
----
+  问题 A — AI 忘了待办列表：
+    对话太长时，摘要中间件会压缩历史消息。如果"创建待办列表"的那条消息被删了，
+    AI 就"看不见"待办列表了（虽然数据还在 state 里）。
+    → before_model 检测到这个情况，重新给 AI 看一遍待办列表。
 
-Middleware that extends TodoListMiddleware with context-loss detection and premature-exit prevention.
+  问题 B — AI 偷懒提前交差：
+    AI 有时做了 3 个任务中的 2 个，就直接输出最终答案了。
+    → after_model 检测到"还有没做完的任务 + AI 想结束"，强制拉回来继续干活。
 
-When the message history is truncated (e.g., by SummarizationMiddleware), the
-original `write_todos` tool call and its ToolMessage can be scrolled out of the
-active context window. This middleware detects that situation and injects a
-reminder message so the model still knows about the outstanding todo list.
+【具体例子】
+  用户："调研 LangGraph 和 CrewAI 的架构对比"
+  AI 创建待办：
+    [pending] 搜索 LangGraph
+    [pending] 搜索 CrewAI
+    [pending] 对比差异
+    [pending] 写报告
+
+  正常流程：逐个完成 → 全部 completed → 输出最终答案 ✅
+
+  异常流程 A（忘了）：
+    搜索了 10 轮后，摘要中间件把早期消息删了 → AI 看不见待办列表了
+    → 本中间件注入提醒："你的待办列表还在！当前状态：..."
+    → AI 继续跟踪待办
+
+  异常流程 B（偷懒）：
+    AI 完成了搜索和对比，但还没写报告，就直接输出答案了
+    → 本中间件拉回 AI："你还有 1 个任务没做完！继续！"
+    → 最多拉回 2 次，超过就放行（防止真的卡死）
+
+  【加载条件】
+  只在 Pro/Ultra 模式加载（plan_mode=True）。
+  Flash/Thinking 模式不需要待办列表，所以不加这个中间件。
+
+  【基类 vs 本类的分工】
+  LangChain 自带的 TodoListMiddleware（基类）提供：
+    - write_todos 工具：让 AI 能创建/更新待办列表
+    - system prompt 注入：教 AI 什么时候用、怎么用
+    - 并行调用检测：如果 AI 同时调用 2 次 write_todos，报错拦截
+      （因为 write_todos 每次调用会替换整个列表，并行调用会冲突）
+
+  DeerFlow 的 TodoMiddleware（本文件）在基类基础上增加：
+    - before_model：上下文丢失检测（问题 A）
+    - after_model：过早退出预防（问题 B）
 
 Additionally, this middleware prevents the agent from exiting the loop while
 there are still incomplete todo items. When the model produces a final response
@@ -49,7 +72,13 @@ from deerflow.agents.thread_state import ThreadState
 
 
 def _todos_in_messages(messages: list[Any]) -> bool:
-    """yyds: 检查消息列表中是否还有可见的 write_todos 工具调用（没被摘要截断）。"""
+    """yyds: 检查对话历史里还能不能找到 write_todos 的调用记录。
+
+    找得到 → AI 还能"看见"待办列表，不需要提醒。
+    找不到 → 被摘要中间件删了，需要注入提醒。
+
+    怎么找的：遍历所有 AI 消息，看 tool_calls 里有没有 name="write_todos" 的。
+    """
     for msg in messages:
         if isinstance(msg, AIMessage) and msg.tool_calls:
             for tc in msg.tool_calls:
@@ -59,7 +88,12 @@ def _todos_in_messages(messages: list[Any]) -> bool:
 
 
 def _reminder_in_messages(messages: list[Any]) -> bool:
-    """yyds: 检查是否已经注入过待办提醒（防止重复注入）。"""
+    """yyds: 检查是否已经注入过"待办列表还在"的提醒。
+
+    防止重复注入：上一轮已经提醒过了，AI 还没来得及处理，不能再塞一条。
+
+    怎么判断的：找 name="todo_reminder" 的 HumanMessage。
+    """
     for msg in messages:
         if isinstance(msg, HumanMessage) and getattr(msg, "name", None) == "todo_reminder":
             return True
@@ -67,10 +101,22 @@ def _reminder_in_messages(messages: list[Any]) -> bool:
 
 
 
+    """yyds: 数一数已经催了 AI 几次"你还有任务没做完"。
+    催了 >= 2 次 → 放行，不再催了（AI 可能真的做不完，不能死循环）。
+    催了 < 2 次 → 继续催。
+    怎么数的：数 name="todo_completion_reminder" 的 HumanMessage 有几条。
+
+
     """yyds: 统计已完成提醒的次数（用于限制最大提醒次数，防止无限循环）。"""
 
 def _format_todos(todos: list[Todo]) -> str:
-    """yyds: 格式化待办列表为可读文本（每行 "- [status] content"）。"""
+    """yyds: 把待办列表转成人能读的文本。
+
+    输入：[{"status": "completed", "content": "搜索"}, {"status": "pending", "content": "写报告"}]
+    输出：
+      - [completed] 搜索
+      - [pending] 写报告
+    """
     lines: list[str] = []
     for todo in todos:
         status = todo.get("status", "pending")
@@ -125,11 +171,34 @@ def _has_tool_call_intent_or_error(message: AIMessage) -> bool:
 
 
 class TodoMiddleware(TodoListMiddleware):
-    """yyds: 待办事项中间件 — 继承 LangChain TodoListMiddleware，增加上下文丢失检测和过早退出预防。
+    """yyds: 待办事项中间件 — 解决 AI "忘事"和"偷懒"两个问题。
 
-    两个钩子：
-      before_model: 检测 write_todos 被摘要截断 → 注入待办列表提醒
-      after_model: 检测模型过早给出最终答案（还有未完成待办）→ 跳回模型继续工作
+    完整生命周期（Pro/Ultra 模式下）：
+
+    用户："调研 LangGraph 和 CrewAI"
+      │
+      │  ── before_model（模型调用前）──
+      │  AI 你还记得待办列表吗？
+      │  ├─ state 里没有 todos → 没有待办列表，跳过
+      │  ├─ 对话历史里有 write_todos → 还能看见，跳过
+      │  ├─ 已经提醒过了 → 不重复提醒，跳过
+      │  └─ 对话历史里找不到 write_todos → 注入提醒：
+      │      "你的待办列表还在！当前状态：[列表]"
+      │
+      │  ── LLM 调用 ──
+      │  模型生成响应
+      │
+      │  ── after_model（模型响应后）──
+      │  AI 你做完了吗？
+      │  ├─ 基类先检查：并行 write_todos？→ 是就报错拦截
+      │  ├─ AI 还在调工具（有 tool_calls）→ 还在干活，不干预
+      │  ├─ 所有待办都 completed → 真的做完了，允许退出
+      │  ├─ 已经催了 >= 2 次 → 放行（别死循环了）
+      │  └─ 还有没做完的 + AI 想结束 → 注入提醒 + 拉回继续干：
+      │      "你还有 N 个任务没做完！继续！"
+      │      jump_to="model" → 强制重新调用模型
+      │
+      └─ 循环，直到全部完成 or 催了 2 次后放行
     """
 
     state_schema = ThreadState
@@ -140,29 +209,39 @@ class TodoMiddleware(TodoListMiddleware):
         state: ThreadState,
         runtime: Runtime,
     ) -> dict[str, Any] | None:
-        """yyds: 上下文丢失检测 — 当 write_tools 调用被摘要截断后，注入待办列表提醒。
+        """yyds: 解决问题 A — AI 忘了待办列表。
 
-        触发条件：state 里有 todos，但消息列表中找不到 write_todos 调用（被截断了），
-        且还没注入过提醒。
+        例子：
+          第 5 轮对话：AI 调用 write_todos 创建待办 [搜索, 分析, 报告]
+          第 15 轮对话：摘要中间件把第 1-10 轮压缩了，write_todos 调用被删了
+          → state["todos"] 还有数据：[{completed, "搜索"}, {in_progress, "分析"}, ...]
+          → 但 AI 看不见 write_todos 那条消息了
+          → 注入一条 HumanMessage："你的待办列表还在！[列表]"
+
+        四个守卫条件（满足任何一个就不干预）：
+          ① state 里没有 todos → 根本没有待办列表
+          ② 对话历史里有 write_todos → AI 还能看见
+          ③ 已经注入过提醒了 → 不重复注入
+          ④ 以上都不满足 → 注入提醒
         """
+        # ① 没有 todos → 没有待办列表，不用管
         todos: list[Todo] = state.get("todos") or []  # type: ignore[assignment]
         if not todos:
             return None
 
         messages = state.get("messages") or []
+        # ② 对话历史里能找到 write_tools 调用 → AI 还看得见待办列表
         if _todos_in_messages(messages):
-            # write_todos is still visible in context — nothing to do.
             return None
 
+        # ③ 已经提醒过了 → 不重复注入
         if _reminder_in_messages(messages):
-            # A reminder was already injected and hasn't been truncated yet.
             return None
 
-        # The todo list exists in state but the original write_todos call is gone.
-        # Inject a reminder as a HumanMessage so the model stays aware.
+        # ④ 被摘要删了，AI 看不见了 → 注入一条"待办列表还在"的提醒
         formatted = _format_todos(todos)
         reminder = HumanMessage(
-            name="todo_reminder",
+            name="todo_reminder",  # yyds: 用 name 标记这条消息是"待办提醒"，不是用户发的
             additional_kwargs={"hide_from_ui": True},
             content=(
                 "<system_reminder>\n"
@@ -185,10 +264,7 @@ class TodoMiddleware(TodoListMiddleware):
         """Async version of before_model."""
         return self.before_model(state, runtime)
 
-    # Maximum number of completion reminders before allowing the agent to exit.
-    # This prevents infinite loops when the agent cannot make further progress.
-    _MAX_COMPLETION_REMINDERS = 2  # yyds: 最大完成提醒次数，防止无限循环
-    # Hard cap for per-run reminder bookkeeping in long-lived middleware instances.
+    _MAX_COMPLETION_REMINDERS = 2  # yyds: 最多催 2 次。超过就放行，防止 AI 真的做不完时死循环。
     _MAX_COMPLETION_REMINDER_KEYS = 4096
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -290,23 +366,33 @@ class TodoMiddleware(TodoListMiddleware):
         state: ThreadState,
         runtime: Runtime,
     ) -> dict[str, Any] | None:
-        """yyds: 过早退出预防 — 当模型给出最终答案但还有未完成待办时，强制跳回模型继续工作。
+        """yyds: 解决问题 B — AI 偷懒提前交差。
 
-        执行流程：
-          1. 先执行基类逻辑（并行 write_todos 检测）
-          2. 只干预"无工具调用"的响应（模型想退出）
-          3. 全部完成或无待办 → 允许退出
-          4. 提醒次数达上限 → 允许退出（防止死循环）
-          5. 注入提醒 + jump_to="model" → 强制继续
+        例子：
+          待办列表：[completed 搜索, completed 分析, pending 写报告]
+          AI 输出："好的，调研完成，总结如下..."（没有调用任何工具，想结束）
+          → 检测到"还有 1 个 pending + AI 没调工具"→ 注入"你还没做完！"+ 拉回继续干
+          → AI 被迫继续，写完报告后才输出最终答案
 
-        @hook_config(can_jump_to=["model"]) 声明跳转能力，LangGraph 允许跳转到模型节点。
+        jump_to="model" 的效果：
+          正常情况下，after_model 返回 None → 进入下一个阶段（可能结束对话）
+          返回 {"jump_to": "model"} → 跳回模型节点，重新调用 LLM
+          相当于对 AI 说"回去重做"
+
+        五层退出决策：
+          ① 基类检测到并行 write_todos → 返回错误（基类逻辑优先）
+          ② AI 还在调工具（有 tool_calls）→ 不干预，让它继续干活
+          ③ 所有 todos 都 completed → 真的做完了，允许退出
+          ④ 已经催了 >= 2 次 → 放行（别死循环了）
+          ⑤ 还有没做完的 + AI 想结束 → 注入提醒 + jump_to="model" 拉回来
         """
-        # 1. Preserve base class logic (parallel write_todos detection).
+        # ① 基类逻辑：如果 AI 同时调了 2 次 write_todos，返回错误 ToolMessage
         base_result = super().after_model(state, runtime)
         if base_result is not None:
             return base_result
 
-        # 2. Only intervene when the agent wants to exit cleanly. Tool-call
+        # ② AI 还有 tool_calls → 还在干活（调工具、搜索等），不想退出，不干预
+        # Only intervene when the agent wants to exit cleanly. Tool-call
         # intent or tool-call parse errors should be handled by the tool path
         # instead of being masked by todo reminders.
         messages = state.get("messages") or []
@@ -314,17 +400,17 @@ class TodoMiddleware(TodoListMiddleware):
         if not last_ai or _has_tool_call_intent_or_error(last_ai):
             return None
 
-        # 3. Allow exit when all todos are completed or there are no todos.
+        # ③ 全部 completed 或无待办 → 做完了，允许退出
         todos: list[Todo] = state.get("todos") or []  # type: ignore[assignment]
         if not todos or all(t.get("status") == "completed" for t in todos):
             return None
 
-        # 4. Enforce a reminder cap to prevent infinite re-engagement loops.
+        # ④ 催了 >= 2 次 → 放行。可能 AI 真的卡住了，不能无限循环。
         if self._completion_reminder_count_for_runtime(runtime) >= self._MAX_COMPLETION_REMINDERS:
             return None
 
-        # 5. Queue a reminder for the next model request and jump back. We must
-        # not persist this control prompt as a normal HumanMessage, otherwise it
+        # ⑤ 还有没做完的 + AI 想结束 → 注入提醒 + 拉回来继续干
+        # We must not persist this control prompt as a normal HumanMessage, otherwise it
         # can leak into user-visible message streams and saved transcripts.
         self._queue_completion_reminder(runtime, _format_completion_reminder(todos))
         return {"jump_to": "model"}

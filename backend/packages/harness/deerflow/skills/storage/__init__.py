@@ -1,7 +1,18 @@
-# yyds: 技能存储模块入口，提供单例工厂方法创建和管理技能存储后端实例
-"""SkillStorage singleton + reflection-based factory.
+"""yyds: 技能存储入口 — 单例工厂，按需创建 SkillStorage 实例。
 
-Mirrors the pattern used by ``deerflow/sandbox/sandbox_provider.py``.
+三种创建模式：
+  1. 显式路径（skills_path=...）→ 每次创建新实例，不缓存
+  2. 请求级配置（app_config=...）→ 每次创建新实例，不缓存
+  3. 无参数 → 进程级单例，首次创建后复用
+
+为什么需要三种模式？
+  - 测试/CLI：显式指定路径，不依赖全局配置
+  - Gateway 请求：每个请求可能用不同的 app_config（多租户）
+  - Client/普通使用：单例就够，避免重复读配置
+
+单例失效条件：
+  app_config 对象变了（is not 比较）→ 重新创建
+  这实现了"热重载"：配置文件修改后，下次调用自动用新配置。
 """
 
 from __future__ import annotations
@@ -10,22 +21,17 @@ from deerflow.skills.storage.local_skill_storage import LocalSkillStorage
 from deerflow.skills.storage.skill_storage import SkillStorage
 
 _default_skill_storage: SkillStorage | None = None
-_default_skill_storage_config: object | None = None  # AppConfig identity the singleton was built from
+_default_skill_storage_config: object | None = None
 
 
-# yyds: 获取或创建技能存储单例，支持显式路径、请求级配置和进程级缓存三种模式
 def get_or_new_skill_storage(**kwargs) -> SkillStorage:
-    """Return a ``SkillStorage`` instance — either a new one or the process singleton.
+    """获取或创建技能存储实例。
 
-    **New instance** is created (never cached) when:
-    - ``skills_path`` is provided — uses it as the ``host_path`` override (class still resolved via config).
-    - ``app_config`` is provided — constructs a storage from ``app_config.skills``
-      so that per-request config (e.g. Gateway ``Depends(get_config)``) is respected
-      without polluting the process-level singleton.
-
-    **Singleton** is returned (created on first call, then reused) when neither
-    ``skills_path`` nor ``app_config`` is given — uses ``get_app_config()`` to
-    resolve the active configuration.
+    反射机制：
+      config.skills.use 指定存储类名（如 "LocalSkillStorage"），
+      resolve_class() 动态加载，不需要硬编码 if/else。
+      以后加新的存储后端（S3、数据库等），只要实现 SkillStorage ABC，
+      改配置就行，不用改这里的代码。
     """
     global _default_skill_storage, _default_skill_storage_config
 
@@ -48,8 +54,6 @@ def get_or_new_skill_storage(**kwargs) -> SkillStorage:
     if skills_path is not None:
         if app_config is not None:
             return _make_storage(app_config.skills, host_path=str(skills_path), **kwargs)
-        # No app_config: use a default SkillsConfig so we never need to read config.yaml
-        # when the caller has already supplied an explicit host path.
         from deerflow.config.skills_config import SkillsConfig
 
         return _make_storage(SkillsConfig(), host_path=str(skills_path), **kwargs)
@@ -57,9 +61,6 @@ def get_or_new_skill_storage(**kwargs) -> SkillStorage:
     if app_config is not None:
         return _make_storage(app_config.skills, **kwargs)
 
-    # If the singleton was manually injected (e.g. in tests) without a config
-    # identity (_default_skill_storage_config is None), skip get_app_config()
-    # entirely to avoid requiring a config.yaml on disk.
     if _default_skill_storage is not None and _default_skill_storage_config is None:
         return _default_skill_storage
 
@@ -70,9 +71,8 @@ def get_or_new_skill_storage(**kwargs) -> SkillStorage:
     return _default_skill_storage
 
 
-# yyds: 重置技能存储单例缓存，用于测试和热重载场景
 def reset_skill_storage() -> None:
-    """Clear the cached singleton (used in tests and hot-reload scenarios)."""
+    """重置单例缓存，测试用。"""
     global _default_skill_storage, _default_skill_storage_config
     _default_skill_storage = None
     _default_skill_storage_config = None

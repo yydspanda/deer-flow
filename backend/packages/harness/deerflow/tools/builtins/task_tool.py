@@ -1,19 +1,58 @@
-# yyds: task_tool.py — Sub-Agent 任务委派工具（Ultra 模式的核心）
-#      Lead Agent 通过调用 task_tool 把子任务派给 sub-agent
-#
-#      执行流程：
-#      1. 获取 sub-agent 配置（从 registry 或 config.yaml 的 custom_agents）
-#      2. 获取可用工具（排除 task_tool，防止递归嵌套）
-#      3. 创建 SubagentExecutor → execute_async() 在后台线程池执行
-#      4. 每 5 秒轮询结果 → 通过 SSE 发送 task_started/task_running/task_completed 事件
-#      5. 完成/失败/超时 → 返回结果给 Lead Agent
-#
-#      关键设计：
-#      - sub-agent 不能再创建 sub-agent（递归防护）
-#      - bash 类型 sub-agent 需要配置 allow_host_bash
-#      - 技能白名单：子 agent 只能用父 agent 允许的技能的交集
-#      - 超时：配置的 timeout_seconds + 60s 缓冲
-"""Task tool for delegating work to subagents."""
+"""yyds: Sub-Agent 任务委派工具 — Ultra 模式的核心，Lead Agent 的"分身术"。
+
+【大白话讲清楚】
+  Lead Agent 一个人干不完所有事。Ultra 模式下，它可以"分身"——
+  把子任务派给专门的 sub-agent 去做，自己做总指挥。
+
+  sub-agent 在后台线程池里跑，task_tool 每 5 秒轮询一次结果，
+  同时通过 SSE 把进度推给前端（task_started → task_running → task_completed）。
+
+  三个关键设计：
+    ① 递归防护：sub-agent 不能再创建 sub-agent（get_available_tools(subagent_enabled=False)）
+    ② 技能白名单取交集：sub-agent 只能用父 agent 允许的技能的子集
+    ③ 双重超时：线程池 timeout + 轮询 timeout（config.timeout_seconds + 60s 缓冲）
+
+【具体例子】
+  用户："帮我调研 LangGraph 和 CrewAI，然后写对比报告"
+
+  Lead Agent 拆成两个 sub-agent 任务：
+    task(description="调研 LangGraph", prompt="搜索 LangGraph 架构特点...",
+         subagent_type="general-purpose")
+    task(description="调研 CrewAI", prompt="搜索 CrewAI 架构特点...",
+         subagent_type="general-purpose")
+
+  每个 sub-agent 独立执行：
+    → 后台线程池启动
+    → 每 5 秒轮询 → SSE 推送 task_running 事件
+    → 完成 → SSE 推送 task_completed → Lead Agent 拿到结果
+    → Lead Agent 汇总两个结果，写最终报告
+
+  异常流程 A（bash sub-agent 被禁）：
+    task(subagent_type="bash", prompt="rm -rf /")
+    → is_host_bash_allowed() 返回 False
+    → 返回 "Error: Host bash is disabled" → 不执行
+
+  异常流程 B（超时）：
+    sub-agent 执行了 20 分钟还没完成
+    → config.timeout_seconds=900（15分钟）+ 60s 缓冲 = 960s
+    → 轮询超过 (960/5)=192 次 → 判定超时
+    → SSE 推送 task_timed_out → Lead Agent 拿到超时错误
+
+  异常流程 C（用户取消）：
+    用户在 UI 上取消了任务
+    → asyncio.CancelledError 被捕获
+    → request_cancel_background_task() 通知 sub-agent 停
+    → 等 sub-agent 到达终态 → 报告 token 用量 → 清理
+
+【在链中的位置】
+  调用者：Lead Agent（Ultra 模式，subagent_enabled=True）
+  注册位置：tools.py 的 SUBAGENT_TOOLS（条件加载）
+  下游：SubagentExecutor → 后台线程池 → 独立的 Agent 实例
+  SSE 事件：task_started / task_running / task_completed / task_failed / task_cancelled / task_timed_out
+
+---
+Task tool for delegating work to subagents.
+"""
 
 import asyncio
 import logging
@@ -42,12 +81,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Cache subagent token usage by tool_call_id so TokenUsageMiddleware can
-# write it back to the triggering AIMessage's usage_metadata.
+# yyds: sub-agent 的 token 用量缓存（按 tool_call_id 索引）
+#   sub-agent 执行完后，token 用量先缓存到这里，
+#   TokenUsageMiddleware 后续从缓存取走，写回父 agent 的 AIMessage
 _subagent_usage_cache: dict[str, dict[str, int]] = {}
 
 
 def _token_usage_cache_enabled(app_config: "AppConfig | None") -> bool:
+    """yyds: 检查 config.yaml 的 token_usage.enabled 是否开启。"""
     if app_config is None:
         try:
             app_config = get_app_config()
@@ -57,21 +98,31 @@ def _token_usage_cache_enabled(app_config: "AppConfig | None") -> bool:
 
 
 def _cache_subagent_usage(tool_call_id: str, usage: dict | None, *, enabled: bool = True) -> None:
+    """yyds: 缓存 sub-agent 的 token 用量（如果开启的话）。"""
     if enabled and usage:
         _subagent_usage_cache[tool_call_id] = usage
 
 
 def pop_cached_subagent_usage(tool_call_id: str) -> dict | None:
+    """yyds: TokenUsageMiddleware 调这个取走缓存的 token 用量。"""
     return _subagent_usage_cache.pop(tool_call_id, None)
 
 
 def _is_subagent_terminal(result: Any) -> bool:
-    """Return whether a background subagent result is safe to clean up."""
+    """yyds: sub-agent 是否到了终态（可以安全清理了）。
+
+    四个终态：COMPLETED / FAILED / CANCELLED / TIMED_OUT
+    或者有 completed_at 时间戳（兜底）。
+    """
     return result.status in {SubagentStatus.COMPLETED, SubagentStatus.FAILED, SubagentStatus.CANCELLED, SubagentStatus.TIMED_OUT} or getattr(result, "completed_at", None) is not None
 
 
 async def _await_subagent_terminal(task_id: str, max_polls: int) -> Any | None:
-    """Poll until the background subagent reaches a terminal status or we run out of polls."""
+    """yyds: 轮询等待 sub-agent 到达终态（用于取消后等最终 token 用量）。
+
+    最多轮询 max_polls 次，每次等 5 秒。
+    到达终态 → 返回 result；超时 → 返回 None。
+    """
     for _ in range(max_polls):
         result = get_background_task_result(task_id)
         if result is None:
@@ -83,7 +134,11 @@ async def _await_subagent_terminal(task_id: str, max_polls: int) -> Any | None:
 
 
 async def _deferred_cleanup_subagent_task(task_id: str, trace_id: str, max_polls: int) -> None:
-    """Keep polling a cancelled subagent until it can be safely removed."""
+    """yyds: 延迟清理 — sub-agent 被取消后，等它到达终态再清理资源。
+
+    为什么需要延迟？取消只是发了个信号，sub-agent 可能还在跑。
+    等它真的停了再清理，避免资源泄露。
+    """
     cleanup_poll_count = 0
     while True:
         result = get_background_task_result(task_id)
@@ -109,13 +164,17 @@ def _log_cleanup_failure(cleanup_task: asyncio.Task[None], *, trace_id: str, tas
 
 
 def _schedule_deferred_subagent_cleanup(task_id: str, trace_id: str, max_polls: int) -> None:
+    """yyds: 创建一个后台 asyncio Task 来做延迟清理（不阻塞当前流程）。"""
     logger.debug(f"[trace={trace_id}] Scheduling deferred cleanup for cancelled task {task_id}")
     cleanup_task = asyncio.create_task(_deferred_cleanup_subagent_task(task_id, trace_id, max_polls))
     cleanup_task.add_done_callback(lambda task: _log_cleanup_failure(task, trace_id=trace_id, task_id=task_id))
 
 
 def _find_usage_recorder(runtime: Any) -> Any | None:
-    """Find a callback handler with ``record_external_llm_usage_records`` in the runtime config.
+    """yyds: 从 runtime.config["callbacks"] 里找到 token 用量记录器。
+
+    找到的是 RunJournal 回调，它有 record_external_llm_usage_records 方法，
+    可以把 sub-agent 的 token 用量汇总到父 agent 的运行记录里。
 
     LangChain may pass ``config["callbacks"]`` in three different shapes:
 
@@ -147,7 +206,10 @@ def _find_usage_recorder(runtime: Any) -> Any | None:
 
 
 def _summarize_usage(records: list[dict] | None) -> dict | None:
-    """Summarize token usage records into a compact dict for SSE events."""
+    """yyds: 把多条 token 用量记录汇总成一条（input/output/total 之和）。
+
+    sub-agent 可能调了多次 LLM，每次一条记录 → 汇总成一条给 SSE 事件。
+    """
     if not records:
         return None
     return {
@@ -158,9 +220,9 @@ def _summarize_usage(records: list[dict] | None) -> dict | None:
 
 
 def _report_subagent_usage(runtime: Any, result: Any) -> None:
-    """Report subagent token usage to the parent RunJournal, if available.
+    """yyds: 把 sub-agent 的 token 用量报告给父 agent 的 RunJournal。
 
-    Each subagent task must be reported only once (guarded by usage_reported).
+    防重复：usage_reported=True 表示已经报告过了，不会再报。
     """
     if getattr(result, "usage_reported", True):
         return
@@ -179,6 +241,7 @@ def _report_subagent_usage(runtime: Any, result: Any) -> None:
 
 
 def _get_runtime_app_config(runtime: Any) -> "AppConfig | None":
+    """yyds: 从 runtime.context 里取 app_config（如果有）。"""
     context = getattr(runtime, "context", None)
     if isinstance(context, dict):
         app_config = context.get("app_config")
@@ -188,7 +251,18 @@ def _get_runtime_app_config(runtime: Any) -> "AppConfig | None":
 
 
 def _merge_skill_allowlists(parent: list[str] | None, child: list[str] | None) -> list[str] | None:
-    """Return the effective subagent skill allowlist under the parent policy."""
+    """yyds: 技能白名单取交集 — sub-agent 只能用父 agent 允许的技能。
+
+    三个规则：
+      父 None → 子的列表（父不限制，用子的）
+      子 None → 父的列表（子不限制，用父的）
+      都有值 → 取交集（子想用的 ∩ 父允许的）
+
+    例子：
+      父 = ["web-search", "data-analysis", "code-gen"]
+      子 = ["web-search", "image-gen"]
+      → 交集 = ["web-search"]（image-gen 父没允许，不能用）
+    """
     if parent is None:
         return child
     if child is None:
@@ -206,7 +280,34 @@ async def task_tool(
     subagent_type: str,
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> str:
-    """Delegate a task to a specialized subagent that runs in its own context.
+    """yyds: Sub-Agent 委派工具 — Lead Agent 把子任务交给专门的 sub-agent。
+
+    内置 sub-agent 类型：
+      general-purpose — 万能型，能推理能调工具，适合复杂多步任务
+      bash — 命令执行专家，只在 allow_host_bash 或沙箱环境下可用
+
+    还可以在 config.yaml 的 subagents.custom_agents 里定义自定义类型。
+
+    参数：
+      description: 简短描述（3-5 个词），用于日志和前端显示
+      prompt: 给 sub-agent 的任务描述，越具体越好
+      subagent_type: sub-agent 类型（"general-purpose" / "bash" / 自定义名称）
+
+    例子：
+      task(description="搜索 LangGraph", prompt="搜索 LangGraph 架构...",
+           subagent_type="general-purpose")
+      → sub-agent 在后台执行 → 每 5s 轮询 → SSE 推进度 → 返回结果
+
+    执行步骤：
+      ① 获取 sub-agent 配置 + 安全检查
+      ② 从 runtime 提取父 agent 上下文（沙箱/线程/模型/技能）
+      ③ 技能白名单取交集
+      ④ 获取 sub-agent 的工具列表（subagent_enabled=False，防递归）
+      ⑤ 创建 SubagentExecutor → execute_async() 后台启动
+      ⑥ 轮询循环：每 5s 检查结果 → SSE 推进度 → 终态时返回
+
+    ---
+    Delegate a task to a specialized subagent that runs in its own context.
 
     Subagents help you:
     - Preserve context by keeping exploration and implementation separate
@@ -241,28 +342,26 @@ async def task_tool(
         prompt: The task description for the subagent. Be specific and clear about what needs to be done. ALWAYS PROVIDE THIS PARAMETER SECOND.
         subagent_type: The type of subagent to use. ALWAYS PROVIDE THIS PARAMETER THIRD.
     """
+    # ── ① 获取配置 + 安全检查 ──────────────────────────────────────
     runtime_app_config = _get_runtime_app_config(runtime)
     cache_token_usage = _token_usage_cache_enabled(runtime_app_config)
     available_subagent_names = get_available_subagent_names(app_config=runtime_app_config) if runtime_app_config is not None else get_available_subagent_names()
 
-    # Get subagent configuration
+    # 获取 sub-agent 的配置（超时、模型、技能等）
     config = get_subagent_config(subagent_type, app_config=runtime_app_config) if runtime_app_config is not None else get_subagent_config(subagent_type)
     if config is None:
         available = ", ".join(available_subagent_names)
         return f"Error: Unknown subagent type '{subagent_type}'. Available: {available}"
+
+    # bash 类型 sub-agent 需要额外检查：宿主机 bash 是否被允许
     if subagent_type == "bash":
         host_bash_allowed = is_host_bash_allowed(runtime_app_config) if runtime_app_config is not None else is_host_bash_allowed()
         if not host_bash_allowed:
             return f"Error: {LOCAL_BASH_SUBAGENT_DISABLED_MESSAGE}"
 
-    # Build config overrides
+    # ── ② 从 runtime 提取父 agent 上下文 ──────────────────────────
     overrides: dict = {}
 
-    # Skills are loaded by SubagentExecutor per-session (aligned with Codex's pattern:
-    # each subagent loads its own skills based on config, injected as conversation items).
-    # No longer appended to system_prompt here.
-
-    # Extract parent context from runtime
     sandbox_state = None
     thread_data = None
     thread_id = None
@@ -271,19 +370,23 @@ async def task_tool(
     metadata: dict = {}
 
     if runtime is not None:
+        # 提取沙箱状态（sub-agent 需要共享同一个沙箱）
         sandbox_state = runtime.state.get("sandbox")
+        # 提取工作目录（sub-agent 需要共享同一个工作空间）
         thread_data = runtime.state.get("thread_data")
+        # 提取线程 ID
         thread_id = runtime.context.get("thread_id") if runtime.context else None
         if thread_id is None:
             thread_id = runtime.config.get("configurable", {}).get("thread_id")
 
-        # Try to get parent model from configurable
+        # 提取父 agent 的模型名（sub-agent 可以继承）
         metadata = runtime.config.get("metadata", {})
         parent_model = metadata.get("model_name")
 
-        # Get or generate trace_id for distributed tracing
+        # 生成或复用 trace_id（分布式追踪用）
         trace_id = metadata.get("trace_id") or str(uuid.uuid4())[:8]
 
+    # ── ③ 技能白名单取交集 ──────────────────────────────────────────
     parent_available_skills = metadata.get("available_skills")
     if parent_available_skills is not None:
         overrides["skills"] = _merge_skill_allowlists(list(parent_available_skills), config.skills)
@@ -291,18 +394,16 @@ async def task_tool(
     if overrides:
         config = replace(config, **overrides)
 
-    # Get available tools (excluding task tool to prevent nesting)
-    # Lazy import to avoid circular dependency
+    # ── ④ 获取 sub-agent 的工具列表（防递归）─────────────────────
     from deerflow.tools import get_available_tools
 
-    # Inherit parent agent's tool_groups so subagents respect the same restrictions
     parent_tool_groups = metadata.get("tool_groups")
     resolved_app_config = runtime_app_config
     if config.model == "inherit" and parent_model is None and resolved_app_config is None:
         resolved_app_config = get_app_config()
     effective_model = resolve_subagent_model_name(config, parent_model, app_config=resolved_app_config)
 
-    # Subagents should not have subagent tools enabled (prevent recursive nesting)
+    # subagent_enabled=False → sub-agent 不会再拿到 task_tool → 无法递归嵌套
     available_tools_kwargs = {
         "model_name": effective_model,
         "groups": parent_tool_groups,
@@ -312,7 +413,7 @@ async def task_tool(
         available_tools_kwargs["app_config"] = resolved_app_config
     tools = get_available_tools(**available_tools_kwargs)
 
-    # Create executor
+    # ── ⑤ 创建 SubagentExecutor → 后台启动 ─────────────────────────
     executor_kwargs = {
         "config": config,
         "tools": tools,
@@ -326,43 +427,42 @@ async def task_tool(
         executor_kwargs["app_config"] = resolved_app_config
     executor = SubagentExecutor(**executor_kwargs)
 
-    # Start background execution (always async to prevent blocking)
-    # Use tool_call_id as task_id for better traceability
+    # execute_async() 把任务丢到后台线程池，立即返回 task_id
     task_id = executor.execute_async(prompt, task_id=tool_call_id)
 
-    # Poll for task completion in backend (removes need for LLM to poll)
+    # ── ⑥ 轮询循环 ──────────────────────────────────────────────────
     poll_count = 0
     last_status = None
-    last_message_count = 0  # Track how many AI messages we've already sent
-    # Polling timeout: execution timeout + 60s buffer, checked every 5s
+    last_message_count = 0
+    # 超时安全网：配置的超时 + 60s 缓冲，每 5s 检查一次
     max_poll_count = (config.timeout_seconds + 60) // 5
 
     logger.info(f"[trace={trace_id}] Started background task {task_id} (subagent={subagent_type}, timeout={config.timeout_seconds}s, polling_limit={max_poll_count} polls)")
 
     writer = get_stream_writer()
-    # Send Task Started message'
+    # 告诉前端：任务开始了
     writer({"type": "task_started", "task_id": task_id, "description": description})
 
     try:
         while True:
             result = get_background_task_result(task_id)
 
+            # sub-agent 任务消失了（不该发生）
             if result is None:
                 logger.error(f"[trace={trace_id}] Task {task_id} not found in background tasks")
                 writer({"type": "task_failed", "task_id": task_id, "error": "Task disappeared from background tasks"})
                 cleanup_background_task(task_id)
                 return f"Error: Task {task_id} disappeared from background tasks"
 
-            # Log status changes for debugging
+            # 状态变化时记日志
             if result.status != last_status:
                 logger.info(f"[trace={trace_id}] Task {task_id} status: {result.status.value}")
                 last_status = result.status
 
-            # Check for new AI messages and send task_running events
+            # 有新的 AI 消息 → 推给前端（task_running 事件）
             ai_messages = result.ai_messages or []
             current_message_count = len(ai_messages)
             if current_message_count > last_message_count:
-                # Send task_running event for each new message
                 for i in range(last_message_count, current_message_count):
                     message = ai_messages[i]
                     writer(
@@ -370,14 +470,14 @@ async def task_tool(
                             "type": "task_running",
                             "task_id": task_id,
                             "message": message,
-                            "message_index": i + 1,  # 1-based index for display
+                            "message_index": i + 1,
                             "total_messages": current_message_count,
                         }
                     )
                     logger.info(f"[trace={trace_id}] Task {task_id} sent message #{i + 1}/{current_message_count}")
                 last_message_count = current_message_count
 
-            # Check if task completed, failed, or timed out
+            # 检查终态
             usage = _summarize_usage(getattr(result, "token_usage_records", None))
             if result.status == SubagentStatus.COMPLETED:
                 _cache_subagent_usage(tool_call_id, usage, enabled=cache_token_usage)
@@ -408,7 +508,7 @@ async def task_tool(
                 cleanup_background_task(task_id)
                 return f"Task timed out. Error: {result.error}"
 
-            # Still running, wait before next poll
+            # 还在跑，等 5 秒再查
             await asyncio.sleep(5)
             poll_count += 1
 
@@ -428,26 +528,28 @@ async def task_tool(
                 request_cancel_background_task(task_id)
                 _schedule_deferred_subagent_cleanup(task_id, trace_id, max_poll_count)
                 return f"Task polling timed out after {timeout_minutes} minutes. This may indicate the background task is stuck. Status: {result.status.value}"
+
+    # ── 用户取消时的处理 ──────────────────────────────────────────────
     except asyncio.CancelledError:
-        # Signal the background subagent thread to stop cooperatively.
+        # 通知 sub-agent 停下来
         request_cancel_background_task(task_id)
 
-        # Wait (shielded) for the subagent to reach a terminal state so the
-        # final token usage snapshot is reported to the parent RunJournal
-        # before the parent worker persists get_completion_data().
+        # 等它到达终态（用 asyncio.shield 防止被二次取消打断）
+        # 这样能拿到最终的 token 用量快照
         terminal_result = None
         try:
             terminal_result = await asyncio.shield(_await_subagent_terminal(task_id, max_poll_count))
         except asyncio.CancelledError:
             pass
 
-        # Report whatever the subagent collected (even if we timed out).
+        # 报告 token 用量（即使超时也要报）
         final_result = terminal_result or get_background_task_result(task_id)
         if final_result is not None:
             _report_subagent_usage(runtime, final_result)
         if final_result is not None and _is_subagent_terminal(final_result):
             cleanup_background_task(task_id)
         else:
+            # 还没到终态 → 创建延迟清理任务，后台等它停了再清理
             _schedule_deferred_subagent_cleanup(task_id, trace_id, max_poll_count)
         _subagent_usage_cache.pop(tool_call_id, None)
         raise
