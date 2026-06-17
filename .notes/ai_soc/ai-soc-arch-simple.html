@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>AI SOC Agent 架构</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0d1117; display: flex; justify-content: center; padding: 40px 20px; }
+.mermaid { max-width: 1000px; width: 100%; }
+</style>
+</head>
+<body>
+<pre class="mermaid">
+flowchart TB
+    subgraph SOC["🛡️ AI SOC 研判 Agent"]
+        direction TB
+        D["🔄 告警去重 & 合并<br/>5min窗口 同IP+同IOC"]
+        M["🧠 场景记忆 & 专家偏好<br/>模拟分析师研判习惯"]
+        H["🪝 Hook Engine<br/>6个安全生命周期事件"]
+        S["🎮 Steering 中途接管<br/>运行中注入指令"]
+        A["🛡️ 三级审批流<br/>自动 / 通知 / 必须人工"]
+        CK["🔍 设备配置巡检<br/>防火墙/WAF/IDS 规则漂移"]
+        CL["⌨️ secops CLI<br/>triage / steer / approve"]
+        PL["🔌 Plugin 场景扩展<br/>phishing / malware / IR"]
+        D --- M --- H --- S --- A --- CK --- CL --- PL
+    end
+
+    SOC <-->|"A2A Protocol<br/>JSON-RPC 2.0"| IPA
+    SOC <-->|"A2A Protocol<br/>JSON-RPC 2.0"| UMA
+    SOC <-->|"A2A Protocol<br/>JSON-RPC 2.0"| ADA
+    SOC <-->|"A2A Protocol<br/>JSON-RPC 2.0"| EA
+
+    IPA["🌐 IP Agent<br/>归属查询 · 资产关联 · 子网拓扑"]
+    UMA["👤 UM Agent<br/>统一身份 · 权限验证 · 人员信息"]
+    ADA["🏢 AD Agent<br/>域控查询 · 异常登录 · 组策略"]
+    EA["📧 邮件 Agent<br/>邮件追踪 · SPF检查 · 附件分析"]
+
+    style SOC fill:#1c1208,stroke:#FF6B35,stroke-width:2px,color:#FFD699
+    style IPA fill:#14102a,stroke:#9580ff,stroke-width:2px,color:#c8b8ff
+    style UMA fill:#14102a,stroke:#9580ff,stroke-width:2px,color:#c8b8ff
+    style ADA fill:#14102a,stroke:#9580ff,stroke-width:2px,color:#c8b8ff
+    style EA fill:#14102a,stroke:#9580ff,stroke-width:2px,color:#c8b8ff
+    style D fill:#221a0a,stroke:#FF6B35,stroke-width:1px,color:#FFD699
+    style M fill:#221a0a,stroke:#FF6B35,stroke-width:1px,color:#FFD699
+    style H fill:#221a0a,stroke:#FF6B35,stroke-width:1px,color:#FFD699
+    style S fill:#221a0a,stroke:#FF6B35,stroke-width:1px,color:#FFD699
+    style A fill:#221a0a,stroke:#FF6B35,stroke-width:1px,color:#FFD699
+    style CK fill:#221a0a,stroke:#FF6B35,stroke-width:1px,color:#FFD699
+    style CL fill:#221a0a,stroke:#FF6B35,stroke-width:1px,color:#FFD699
+    style PL fill:#221a0a,stroke:#FF6B35,stroke-width:1px,color:#FFD699
+</pre>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'dark',
+  themeVariables: {
+    darkMode: true, background: '#0d1117',
+    primaryColor: '#1c1208', primaryTextColor: '#FFD699',
+    primaryBorderColor: '#FF6B35', lineColor: '#9580ff',
+    fontFamily: '-apple-system, sans-serif', fontSize: '14px',
+  },
+  flowchart: { htmlLabels: true, curve: 'basis', padding: 20, nodeSpacing: 30, rankSpacing: 50 }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI SOC Agent 平台</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #080b10;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(255,107,53,0.04) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 90% 90%, rgba(149,128,255,0.04) 0%, transparent 50%);
+  color: #c9d1d9;
+  font-family: 'Inter', -apple-system, sans-serif;
+  padding: 64px 48px;
+  min-height: 100vh;
+}
+
+.page-header { text-align: center; margin-bottom: 48px; }
+.page-tag { font-size: 11px; font-weight: 700; letter-spacing: 4px; text-transform: uppercase; color: #f0883e; margin-bottom: 12px; }
+.page-title { font-size: 28px; font-weight: 900; color: #f0f3f6; letter-spacing: -0.5px; }
+
+/* ===== Section Divider ===== */
+.section { max-width: 1100px; margin: 0 auto; }
+.section-gap { height: 64px; }
+.section-header { text-align: center; margin-bottom: 36px; }
+.section-tag { font-size: 11px; font-weight: 700; letter-spacing: 3px; margin-bottom: 10px; }
+.section-title { font-size: 24px; font-weight: 900; color: #f0f3f6; margin-bottom: 6px; }
+.section-sub { font-size: 13px; color: #484f58; line-height: 1.7; }
+
+/* ===== Architecture Layout ===== */
+.layout {
+  display: flex;
+  gap: 32px;
+  align-items: flex-start;
+}
+
+.soc-card {
+  flex: 1.6;
+  border-radius: 20px;
+  background: linear-gradient(170deg, #1a140a 0%, #0f0c07 100%);
+  border: 1px solid rgba(255,107,53,0.15);
+  box-shadow: 0 4px 32px rgba(0,0,0,0.5), 0 0 80px rgba(255,107,53,0.03), inset 0 1px 0 rgba(255,255,255,0.03);
+  overflow: hidden;
+  position: relative;
+}
+.soc-glow { position: absolute; top: 0; left: 0; right: 0; height: 140px; background: linear-gradient(180deg, rgba(255,107,53,0.06) 0%, transparent 100%); pointer-events: none; }
+.soc-head { padding: 28px 28px 0; position: relative; }
+.soc-icon { font-size: 32px; margin-bottom: 12px; }
+.soc-title { font-size: 22px; font-weight: 900; color: #FFD699; margin-bottom: 4px; }
+.soc-sub { font-size: 13px; color: #8b6a3d; padding-bottom: 20px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.soc-body { padding: 20px 28px 28px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.mod { padding: 14px 16px; border-radius: 12px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.04); transition: all 0.2s; }
+.mod:hover { background: rgba(255,107,53,0.05); border-color: rgba(255,107,53,0.15); transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,0.3); }
+.mod-icon { font-size: 20px; margin-bottom: 6px; }
+.mod-name { font-size: 13px; font-weight: 700; color: #FFD699; margin-bottom: 4px; }
+.mod-desc { font-size: 11px; color: #8b6a3d; line-height: 1.6; }
+
+.a2a-col { flex: 1; display: flex; flex-direction: column; gap: 14px; }
+.a2a-label { text-align: center; margin-bottom: 4px; }
+.a2a-label-tag { font-size: 10px; font-weight: 800; letter-spacing: 2px; color: #9580ff; padding: 5px 16px; background: rgba(149,128,255,0.08); border: 1px solid rgba(149,128,255,0.15); border-radius: 8px; display: inline-block; }
+.a2a-label-protocol { font-size: 11px; color: #5a4d7a; margin-top: 6px; }
+
+.agent-card { border-radius: 16px; padding: 20px 22px; background: linear-gradient(170deg, #14102a 0%, #0c0a18 100%); border: 1px solid rgba(149,128,255,0.12); box-shadow: 0 4px 20px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.02); transition: all 0.2s; position: relative; overflow: hidden; }
+.agent-card:hover { transform: translateY(-3px); border-color: rgba(149,128,255,0.25); box-shadow: 0 8px 32px rgba(149,128,255,0.06), inset 0 1px 0 rgba(255,255,255,0.03); }
+.agent-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 60px; background: linear-gradient(180deg, rgba(149,128,255,0.05) 0%, transparent 100%); pointer-events: none; }
+.agent-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; position: relative; }
+.agent-emoji { font-size: 24px; }
+.agent-name { font-size: 15px; font-weight: 800; color: #c8b8ff; }
+.agent-items { font-size: 12px; color: #7a6d9a; line-height: 1.7; position: relative; }
+
+.connector { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 0; color: #3d3555; font-size: 13px; font-weight: 700; letter-spacing: 1px; }
+.connector-line { flex: 1; height: 1px; background: linear-gradient(90deg, transparent, rgba(149,128,255,0.15), transparent); }
+
+/* ===== Data Flow ===== */
+.flow-stage {
+  display: flex;
+  align-items: stretch;
+  margin-bottom: 4px;
+}
+.flow-label {
+  width: 100px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 20px;
+}
+.flow-label span { font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; }
+.flow-box {
+  flex: 1;
+  border-radius: 14px;
+  padding: 18px 22px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  transition: transform 0.2s;
+}
+.flow-box:hover { transform: translateX(4px); }
+
+.s-input { background: linear-gradient(135deg, #0d1520, #0a1018); border: 1px solid rgba(56,139,253,0.15); }
+.s-input .flow-label span { color: #388bfd; }
+.s-gate { background: linear-gradient(135deg, #1a140a, #120e06); border: 1px solid rgba(255,107,53,0.15); }
+.s-gate .flow-label span { color: #f0883e; }
+.s-agent { background: linear-gradient(135deg, #0d1a10, #081208); border: 1px solid rgba(63,185,80,0.15); }
+.s-agent .flow-label span { color: #3fb950; }
+.s-human { background: linear-gradient(135deg, #1a1508, #12100a); border: 1px solid rgba(210,153,34,0.15); }
+.s-human .flow-label span { color: #d29922; }
+.s-out { background: linear-gradient(135deg, #14102a, #0c0a18); border: 1px solid rgba(149,128,255,0.15); }
+.s-out .flow-label span { color: #9580ff; }
+
+.node { padding: 10px 18px; border-radius: 10px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.s-input .node { background: rgba(56,139,253,0.08); border: 1px solid rgba(56,139,253,0.12); color: #79c0ff; }
+.s-gate .node { background: rgba(255,107,53,0.08); border: 1px solid rgba(255,107,53,0.12); color: #ffb080; }
+.s-agent .node { background: rgba(63,185,80,0.08); border: 1px solid rgba(63,185,80,0.12); color: #7ee787; }
+.s-agent .node-active { background: rgba(63,185,80,0.14); border-color: rgba(63,185,80,0.25); }
+.s-human .node { background: rgba(210,153,34,0.08); border: 1px solid rgba(210,153,34,0.12); color: #e3b341; }
+.s-out .node { background: rgba(149,128,255,0.08); border: 1px solid rgba(149,128,255,0.12); color: #c8b8ff; }
+
+.flow-desc { font-size: 11px; color: #484f58; margin-left: auto; flex-shrink: 0; }
+.flow-desc b { color: #6e7681; font-weight: 600; }
+
+.arrow-col { display: flex; justify-content: center; margin-bottom: 4px; margin-left: 100px; }
+.arrow-line { width: 2px; height: 20px; background: linear-gradient(180deg, rgba(48,54,61,0.8), rgba(48,54,61,0.3)); border-radius: 1px; }
+
+.branch { margin-left: 100px; padding: 0 22px; display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.branch-tag { font-size: 10px; font-weight: 700; letter-spacing: 1px; color: #484f58; padding: 3px 10px; border: 1px dashed #30363d; border-radius: 6px; }
+
+/* ===== Dedup / Memory Detail ===== */
+.detail-card {
+  display: flex;
+  gap: 20px;
+  border-radius: 16px;
+  padding: 24px;
+  transition: transform 0.2s;
+  margin-bottom: 16px;
+}
+.detail-card:hover { transform: translateX(4px); }
+
+.dl-green { background: linear-gradient(135deg, #0f1a14, #0a120e); border: 1px solid rgba(63,185,80,0.12); }
+.dl-yellow { background: linear-gradient(135deg, #14120a, #0e0d06); border: 1px solid rgba(210,153,34,0.12); }
+.dl-purple { background: linear-gradient(135deg, #16102a, #0c0a18); border: 1px solid rgba(149,128,255,0.12); box-shadow: 0 0 60px rgba(149,128,255,0.03); }
+
+.detail-num {
+  width: 48px; height: 48px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; font-weight: 900; flex-shrink: 0;
+}
+.dl-green .detail-num { background: rgba(63,185,80,0.1); color: #3fb950; border: 1px solid rgba(63,185,80,0.15); }
+.dl-yellow .detail-num { background: rgba(210,153,34,0.1); color: #d29922; border: 1px solid rgba(210,153,34,0.15); }
+.dl-purple .detail-num { background: rgba(149,128,255,0.1); color: #9580ff; border: 1px solid rgba(149,128,255,0.15); }
+
+.detail-body { flex: 1; }
+.detail-title { font-size: 16px; font-weight: 800; margin-bottom: 6px; }
+.dl-green .detail-title { color: #7ee787; }
+.dl-yellow .detail-title { color: #e3b341; }
+.dl-purple .detail-title { color: #c8b8ff; }
+
+.detail-desc { font-size: 13px; color: #6e7681; line-height: 1.7; margin-bottom: 14px; }
+
+.detail-tags { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+.dtag { font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 6px; }
+.dl-green .dtag { background: rgba(63,185,80,0.06); border: 1px solid rgba(63,185,80,0.1); color: rgba(63,185,80,0.6); }
+.dl-yellow .dtag { background: rgba(210,153,34,0.06); border: 1px solid rgba(210,153,34,0.1); color: rgba(210,153,34,0.6); }
+.dl-purple .dtag { background: rgba(149,128,255,0.06); border: 1px solid rgba(149,128,255,0.1); color: rgba(149,128,255,0.6); }
+
+.detail-result { margin-top: 12px; font-size: 12px; font-weight: 700; letter-spacing: 0.5px; }
+.dl-green .detail-result { color: rgba(63,185,80,0.5); }
+.dl-yellow .detail-result { color: rgba(210,153,34,0.5); }
+.dl-purple .detail-result { color: rgba(149,128,255,0.5); }
+
+.detail-arrow { display: flex; justify-content: center; padding: 4px 0; margin-left: 48px; }
+.detail-arrow-line { width: 2px; height: 16px; background: rgba(48,54,61,0.4); border-radius: 1px; }
+
+.code-block {
+  background: rgba(0,0,0,0.3); border-radius: 8px; padding: 14px 18px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 11px;
+  color: #8b949e; line-height: 2; overflow-x: auto;
+}
+.code-block .ck { color: #d29922; }
+.code-block .cs { color: #7ee787; }
+.code-block .cp { color: #c8b8ff; }
+.code-block .cn { color: #ffb080; }
+
+.sub-detail {
+  margin-top: 16px; padding: 16px 20px;
+  background: rgba(149,128,255,0.03); border: 1px solid rgba(149,128,255,0.08);
+  border-radius: 10px;
+}
+.sub-detail-green {
+  background: rgba(63,185,80,0.03); border: 1px solid rgba(63,185,80,0.08);
+}
+.sub-detail-title { font-size: 12px; font-weight: 700; color: rgba(149,128,255,0.5); margin-bottom: 10px; letter-spacing: 1px; }
+.sub-detail-green .sub-detail-title { color: rgba(63,185,80,0.5); }
+
+.flow-steps {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.fstep {
+  font-size: 12px; color: #8b949e; padding: 6px 14px;
+  background: rgba(149,128,255,0.05); border: 1px solid rgba(149,128,255,0.08); border-radius: 8px;
+}
+.fstep b { color: #c8b8ff; font-weight: 700; }
+.fstep-green { background: rgba(63,185,80,0.05); border-color: rgba(63,185,80,0.08); }
+.fstep-green b { color: #7ee787; }
+.farrow { color: rgba(149,128,255,0.25); font-size: 16px; }
+.farrow-green { color: rgba(63,185,80,0.25); }
+
+/* ===== Comparison Table ===== */
+.cmp-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+.cmp-table td { padding: 8px 12px; }
+.cmp-table th { padding: 8px 12px; text-align: left; }
+.cmp-row-head { border-bottom: 1px solid rgba(210,153,34,0.1); }
+.cmp-row-head td { color: #e3b341; font-weight: 700; }
+.cmp-row { border-bottom: 1px solid rgba(210,153,34,0.05); }
+.cmp-good { color: #7ee787; }
+.cmp-bad { color: #ff8888; }
+.cmp-neutral { color: #8b949e; }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- SECTION 1: Architecture -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+
+<div class="page-header">
+  <div class="page-tag">Architecture</div>
+  <div class="page-title">AI SOC Agent 平台架构</div>
+</div>
+
+<div class="section">
+  <div class="layout">
+
+    <div class="soc-card">
+      <div class="soc-glow"></div>
+      <div class="soc-head">
+        <div class="soc-icon">🛡️</div>
+        <div class="soc-title">AI SOC 研判 Agent</div>
+        <div class="soc-sub">安全业务层 · 核心竞争力</div>
+      </div>
+      <div class="soc-body">
+        <div class="mod">
+          <div class="mod-icon">🧠</div>
+          <div class="mod-name">场景记忆 & 告警去重</div>
+          <div class="mod-desc">DeerFlow 记忆系统直接复用<br/>LLM 看记忆 → 自己判断重复</div>
+        </div>
+        <div class="mod">
+          <div class="mod-icon">🪝</div>
+          <div class="mod-name">Hook Engine</div>
+          <div class="mod-desc">6个安全生命周期事件<br/>热加载 · 配置化</div>
+        </div>
+        <div class="mod">
+          <div class="mod-icon">🎮</div>
+          <div class="mod-name">Steering 中途接管</div>
+          <div class="mod-desc">运行中注入指令<br/>省 50% API 额度</div>
+        </div>
+        <div class="mod">
+          <div class="mod-icon">🛡️</div>
+          <div class="mod-name">三级审批流</div>
+          <div class="mod-desc">自动 / 通知可干预<br/>必须人工审批</div>
+        </div>
+        <div class="mod">
+          <div class="mod-icon">🔍</div>
+          <div class="mod-name">设备配置巡检</div>
+          <div class="mod-desc">防火墙/WAF/IDS<br/>规则漂移检测</div>
+        </div>
+        <div class="mod">
+          <div class="mod-icon">⌨️</div>
+          <div class="mod-name">secops CLI</div>
+          <div class="mod-desc">triage / steer / approve<br/>分析师一等公民</div>
+        </div>
+        <div class="mod">
+          <div class="mod-icon">🔌</div>
+          <div class="mod-name">Plugin 场景扩展</div>
+          <div class="mod-desc">phishing / malware<br/>Cmd+Agent+Skill+Hook</div>
+        </div>
+        <div class="mod">
+          <div class="mod-icon">📊</div>
+          <div class="mod-name">知识库 &  playbook</div>
+          <div class="mod-desc">历史 Incident 知识库<br/>标准操作流程</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="a2a-col">
+      <div class="a2a-label">
+        <div class="a2a-label-tag">A2A 联邦互联</div>
+        <div class="a2a-label-protocol">JSON-RPC 2.0 over HTTP</div>
+      </div>
+      <div class="connector">
+        <span class="connector-line"></span>⇋<span class="connector-line"></span>
+      </div>
+      <div class="agent-card">
+        <div class="agent-head"><span class="agent-emoji">🌐</span><span class="agent-name">IP Agent</span></div>
+        <div class="agent-items">IP 归属查询<br/>资产关联<br/>子网拓扑信息</div>
+      </div>
+      <div class="agent-card">
+        <div class="agent-head"><span class="agent-emoji">👤</span><span class="agent-name">UM Agent</span></div>
+        <div class="agent-items">统一身份查询<br/>权限验证<br/>人员信息关联</div>
+      </div>
+      <div class="agent-card">
+        <div class="agent-head"><span class="agent-emoji">🏢</span><span class="agent-name">AD Agent</span></div>
+        <div class="agent-items">域控账号查询<br/>异常登录检测<br/>组策略变更</div>
+      </div>
+      <div class="agent-card">
+        <div class="agent-head"><span class="agent-emoji">📧</span><span class="agent-name">邮件 Agent</span></div>
+        <div class="agent-items">邮件追踪溯源<br/>SPF / DKIM 检查<br/>附件安全分析</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- SECTION 2: End-to-End Data Flow -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+
+<div class="section-gap"></div>
+
+<div class="section">
+  <div class="section-header">
+    <div class="section-tag" style="color:#388bfd;">End-to-End Flow</div>
+    <div class="section-title">从告警到处置</div>
+  </div>
+
+  <div style="max-width:960px; margin:0 auto;">
+
+    <div class="flow-stage s-input">
+      <div class="flow-label"><span>告警入口</span></div>
+      <div class="flow-box">
+        <div class="node">📨 Kafka</div>
+        <div class="node">⌨️ secops CLI</div>
+        <div class="flow-desc"><b>事件驱动 + 人工主动</b>，统一汇入 Gateway</div>
+      </div>
+    </div>
+
+    <div class="arrow-col"><div class="arrow-line"></div></div>
+
+    <div class="flow-stage s-gate">
+      <div class="flow-label"><span>Gateway</span></div>
+      <div class="flow-box">
+        <div class="node">🧠 注入该规则记忆</div>
+        <div class="node">🪝 Hook</div>
+        <div class="node">🔀 路由</div>
+        <div class="flow-desc"><b>按规则ID加载对应记忆</b>，注入 system prompt</div>
+      </div>
+    </div>
+
+    <div class="arrow-col"><div class="arrow-line"></div></div>
+
+    <div class="flow-stage s-agent">
+      <div class="flow-label"><span>Agent 链</span></div>
+      <div class="flow-box" style="flex-wrap:wrap;">
+        <div class="node node-active">🔍 Triage 研判</div>
+        <div class="node">🔎 Investigate 调查</div>
+        <div class="node">🛡️ Response 处置</div>
+        <div class="flow-desc"><b>逐级升级</b>：误报→关闭 / 低优→记录 / 高优→处置</div>
+      </div>
+    </div>
+
+    <div class="branch">
+      <div class="branch-tag">随时注入</div>
+      <span style="color:#30363d;">→</span>
+      <span style="font-size:12px; color:#d29922; font-weight:600;">🎮 secops steer "这个 IP 是蜜罐，别封"</span>
+    </div>
+
+    <div class="arrow-col"><div class="arrow-line"></div></div>
+
+    <div class="flow-stage s-human">
+      <div class="flow-label"><span>人工审批</span></div>
+      <div class="flow-box">
+        <div class="node">⚠️ 封禁 IP</div>
+        <div class="node">⚠️ 隔离主机</div>
+        <div class="node">⚠️ 重置凭证</div>
+        <div class="flow-desc">敏感操作<b>必须审批</b>，CLI / API 多入口</div>
+      </div>
+    </div>
+
+    <div class="arrow-col"><div class="arrow-line"></div></div>
+
+    <div class="flow-stage s-out">
+      <div class="flow-label"><span>输出</span></div>
+      <div class="flow-box">
+        <div class="node">📋 研判报告</div>
+        <div class="node">🎫 工单</div>
+        <div class="node">🗄️ 审计日志</div>
+        <div class="flow-desc">全链路 <b>JSONL 可追溯</b></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- SECTION 3: Memory-Based Dedup Explained -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+
+<div class="section-gap"></div>
+
+<div class="section">
+  <div class="section-header">
+    <div class="section-tag" style="color:#f0883e;">Memory × Dedup</div>
+    <div class="section-title">LLM 看记忆，自己判断重复</div>
+    <div class="section-sub">
+      DeerFlow 已有完整的记忆系统，Agent 研判完 → 自动提取 fact → 下次告警进来 → fact 注入 system prompt → LLM 自己认出重复
+    </div>
+  </div>
+
+  <div style="max-width:960px; margin:0 auto;">
+
+    <!-- 每规则独立记忆 -->
+    <div class="detail-card dl-yellow">
+      <div class="detail-num">✦</div>
+      <div class="detail-body">
+        <div class="detail-title">每条规则一个独立记忆 · DeerFlow 原生支持</div>
+        <div class="detail-desc">
+          DeerFlow 按 <b>(user_id, agent_name)</b> 隔离记忆，存储为独立文件：<br>
+          <code style="color:#e3b341; font-size:12px;">user_dir/{user_id}/memory/{agent_name}.json</code><br>
+          在安全场景下，<b>agent_name = 规则ID</b>，每条规则有自己的 memory.json、自己的 facts 列表。<br>
+          好处：EDR-D盘规则的记忆不会污染暴力破解规则的记忆，各自积累各自的研判经验。
+        </div>
+
+        <div class="sub-detail" style="margin-bottom:16px; background:rgba(210,153,34,0.03); border-color:rgba(210,153,34,0.08);">
+          <div class="sub-detail-title" style="color:rgba(210,153,34,0.5);">记忆文件结构</div>
+          <div class="code-block" style="border:none; padding:0; background:none; margin-top:8px;">
+            <span style="color:#6e7681;">memory/</span><br>
+            &nbsp;&nbsp;<span class="cs">rule-edr-suspicious-process.json</span>&nbsp;&nbsp<span class="cn">← EDR 可疑进程规则的记忆</span><br>
+            &nbsp;&nbsp;<span class="cs">rule-brute-force.json</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cn">← 暴力破解规则的记忆</span><br>
+            &nbsp;&nbsp;<span class="cs">rule-c2-communication.json</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cn">← C2 通信规则的记忆</span><br>
+            &nbsp;&nbsp;<span class="cs">rule-lateral-movement.json</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="cn">← 横向移动规则的记忆</span><br>
+            &nbsp;&nbsp;<span style="color:#6e7681;">...</span><br>
+            &nbsp;&nbsp;<span style="color:#6e7681;">每个文件里是独立的 facts 列表，互不干扰</span>
+          </div>
+        </div>
+
+        <div class="detail-desc" style="margin-bottom:0;">
+          MemoryMiddleware 在 Agent 执行完后自动工作：<br>
+          ① after_agent 过滤对话 → ② 入队(30s去抖) → ③ LLM 提取 facts → ④ 存到<b>该规则的</b> memory.json<br>
+          下次同规则告警进来 → <b>format_memory_for_injection()</b> 加载<b>该规则的</b> facts 注入 system prompt
+        </div>
+        <div class="detail-tags" style="margin-top:12px;">
+          <span class="dtag">agent_name = 规则ID → 天然隔离</span>
+          <span class="dtag">storage.py — 按 agent_name 存独立文件</span>
+          <span class="dtag">updater.py — LLM 提取 facts</span>
+          <span class="dtag">prompt.py — 注入该规则的记忆</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail-arrow"><div class="detail-arrow-line"></div></div>
+
+    <!-- 去重机制 -->
+    <div class="detail-card dl-green">
+      <div class="detail-num">01</div>
+      <div class="detail-body">
+        <div class="detail-title">去重不需要新代码，LLM 看记忆就能判断</div>
+        <div class="detail-desc">
+          关键洞察：DeerFlow 的记忆是<b>给 LLM 看的</b>，不是给机器查的索引。<br>
+          Agent 的 system prompt 里已经注入了所有高置信度 facts。<br>
+          新告警进来 → Agent 看到 fact 里写过 "svchost_update.exe 是后门 INC-042" → <b>自己就能判断重复</b>。
+        </div>
+
+        <div class="sub-detail sub-detail-green" style="margin-bottom:16px;">
+          <div class="sub-detail-title">例子：EDR 可疑进程规则（rule-edr-suspicious-process）</div>
+
+          <div style="margin-bottom:20px;">
+            <div style="font-size:12px; font-weight:700; color:#7ee787; margin-bottom:8px;">⬇ 第一次告警</div>
+            <div style="font-size:12px; color:#8b949e; line-height:1.8; margin-bottom:8px;">
+              EDR 触发规则 <code style="color:#e3b341;">rule-edr-suspicious-process</code>：<code style="color:#79c0ff;">{process: "svchost_update.exe", path: "D:\\tools\\", host: "server-03"}</code>
+            </div>
+            <div style="font-size:12px; color:#8b949e; line-height:1.8; margin-bottom:8px;">
+              → 加载该规则的 memory.json → 空，没有相关 fact → Agent 研判 → "后门，伪装系统更新" → 开了 INC-042
+            </div>
+            <div style="font-size:12px; color:#8b949e; line-height:1.8; margin-bottom:8px;">
+              → MemoryMiddleware 自动提取 fact → 存进 <code style="color:#e3b341;">rule-edr-suspicious-process.json</code>：
+            </div>
+            <div class="code-block">
+              <span class="cp">"content"</span>: <span class="cs">"server-03 上发现 D:\\tools\\svchost_update.exe 后门，伪装系统更新 → INC-042"</span><br>
+              <span class="cp">"category"</span>: <span class="cs">"ioc"</span>,&nbsp; <span class="cp">"confidence"</span>: <span class="cn">0.95</span>
+            </div>
+          </div>
+
+          <div style="border-top:1px dashed rgba(63,185,80,0.12); padding-top:16px;">
+            <div style="font-size:12px; font-weight:700; color:#e3b341; margin-bottom:8px;">⬇ 第二次告警（同一规则，EDR 又报了）</div>
+            <div style="font-size:12px; color:#8b949e; line-height:1.8; margin-bottom:8px;">
+              EDR 再次触发规则 <code style="color:#e3b341;">rule-edr-suspicious-process</code>：<code style="color:#79c0ff;">{process: "svchost_update.exe", path: "D:\\tools\\", host: "server-04"}</code>
+            </div>
+            <div style="font-size:12px; color:#8b949e; line-height:1.8; margin-bottom:8px;">
+              → 加载 <code style="color:#e3b341;">rule-edr-suspicious-process.json</code> → 注入 system prompt：
+            </div>
+            <div class="code-block" style="margin-bottom:8px;">
+              <span style="color:#6e7681;">Facts:</span><br>
+              - [<span class="cs">ioc</span> | <span class="cn">0.95</span>] <span class="cs">server-03 上发现 D:\\tools\\svchost_update.exe 后门，伪装系统更新 → INC-042</span>
+            </div>
+            <div style="font-size:12px; color:#8b949e; line-height:1.8; margin-bottom:8px;">
+              → Agent 看到 system prompt 里这条 fact → "svchost_update.exe？我见过，INC-042 那个" → <span style="color:#3fb950; font-weight:700;">合并到 INC-042，不新建</span>
+            </div>
+            <div style="font-size:11px; color:#484f58;">
+              ↑ 记忆范围限定在该规则内 — 暴力破解规则的告警不会看到 EDR 规则的 fact，各自独立
+            </div>
+          </div>
+        </div>
+
+        <div class="detail-result">→ 零代码改动，只定制 Prompt 让 LLM 提取安全相关的 facts（进程名/IP/UM/IOC/Incident编号）</div>
+
+        <div class="sub-detail sub-detail-green">
+          <div class="sub-detail-title">唯一需要做的：定制 MEMORY_UPDATE_PROMPT</div>
+          <div style="font-size:12px; color:#8b949e; line-height:1.8;">
+            在安全场景的 fact 提取指令里加上：<br>
+            &nbsp;&nbsp;• fact.content 必须包含 <b>关键实体</b>（进程名/文件路径/IP/UM账号/域名）<br>
+            &nbsp;&nbsp;• fact.content 必须包含 <b>Incident 编号</b>（如 → INC-042），这样下次 Agent 看到 fact 就知道合并到哪个 Incident<br>
+            &nbsp;&nbsp;• category 使用安全分类：<b>ioc / asset / attack_pattern / affected_range / cve</b>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail-arrow"><div class="detail-arrow-line"></div></div>
+
+    <!-- 对比 -->
+    <div class="detail-card dl-purple">
+      <div class="detail-num">vs</div>
+      <div class="detail-body">
+        <div class="detail-title">为什么不造轮子：记忆 vs 向量数据库 vs 手写索引</div>
+        <div class="detail-desc" style="color:#8b949e;">
+          <table class="cmp-table">
+            <tr class="cmp-row-head">
+              <td>对比项</td>
+              <td>DeerFlow 记忆（本次方案）</td>
+              <td>手写 artifacts 索引</td>
+              <td>Qdrant 向量检索</td>
+            </tr>
+            <tr class="cmp-row">
+              <td>额外代码</td>
+              <td class="cmp-good">✅ 零，只改 Prompt</td>
+              <td class="cmp-neutral">要写索引+查询+维护</td>
+              <td class="cmp-bad">要写 embedding 管道</td>
+            </tr>
+            <tr class="cmp-row">
+              <td>匹配能力</td>
+              <td class="cmp-good">✅ LLM 理解语义，能关联变形</td>
+              <td class="cmp-neutral">精确匹配，变形就漏</td>
+              <td class="cmp-neutral">相似度匹配，但不可控</td>
+            </tr>
+            <tr class="cmp-row">
+              <td>可解释性</td>
+              <td class="cmp-good">✅ fact 是自然语言，人和 LLM 都能看</td>
+              <td class="cmp-good">结构化，可审计</td>
+              <td class="cmp-bad">❌ embedding 黑盒</td>
+            </tr>
+            <tr class="cmp-row">
+              <td>基础设施</td>
+              <td class="cmp-good">✅ 零，memory.json 已有</td>
+              <td class="cmp-good">内存索引即可</td>
+              <td class="cmp-bad">❌ 要部署 Qdrant + 模型</td>
+            </tr>
+            <tr>
+              <td>积累方式</td>
+              <td class="cmp-good">✅ 研判完自动提取，越用越准</td>
+              <td class="cmp-neutral">也要写提取逻辑</td>
+              <td class="cmp-neutral">要写 embedding 管道</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>
