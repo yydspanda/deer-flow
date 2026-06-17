@@ -3,10 +3,38 @@
 > 基于 DeerFlow 架构学习 + Claude Code 源码研究 + 业界调研（Dropzone AI、AgentSOC、Vigil SOC、Radiant Security、D3 Security）
 > 整理：2026-06-17 · v4（新增主 Agent + 子 Agent 编排层，吸收 Claude Code 设计模式）
 > 参考：`.notes/research/hermes-vs-deerflow-agent-patterns.md`（Claude Code 可借鉴设计模式清单）
+> 工程契约：`.notes/reference-index/soc-agent-engineering-contracts.md`（代码风格、API、通信协议、工具权限、测试门禁）
 
 ---
 
 ## 一、整体架构
+
+### 1.0 产品目标与目标用户
+
+SOC Agent 的第一目标不是替代分析师，也不是一上来做全自动 SOC，而是：
+
+> 帮 SOC 分析师更快、更一致地完成告警初筛、误报降噪、证据整理和经验沉淀，并保证每一次判断可审计、可纠正、可回滚。
+
+因此产品路径遵循“先可信单条研判，再关联降噪，再学习，再 7×24 自动化”的顺序：
+
+```text
+Phase 1：单条告警可信研判
+Phase 2：历史关联与重复告警降噪
+Phase 3：分析师反馈驱动的学习
+Phase 4：Daemon 自动处理 + 人工复查
+Phase 5：知识增强、威胁情报、复查大屏
+```
+
+目标用户：
+
+| 用户 | 核心任务 | 产品必须满足 |
+|---|---|---|
+| 一线 SOC 分析师 | 看告警、判断真假、写结论 | 快速获得 verdict、confidence、证据、解释；判断错了能马上纠正 |
+| 值班负责人 | 看低置信/高风险队列，做批量复查 | 能批量审核、发现误判模式、追踪分析质量 |
+| 安全平台管理员 | 配数据源、阈值、模型、知识和规则 | 可配置、可回滚、可审计，不因知识污染影响全局判断 |
+| 开发者/维护者 | 调试 pipeline、回放样例、验证效果 | CLI、样例数据、可重复测试、明确日志和错误 |
+
+Phase 1 的主用户是开发者/维护者 + 一线 SOC 分析师；Phase 4 以后再重点服务值班负责人和团队运营。
 
 ### 1.1 架构总图
 
@@ -18,8 +46,9 @@ graph TB
     end
 
     subgraph 运行模式
-        CLI_MODE["CLI 模式<br/>（分析师交互）"]
+        CLI_MODE["CLI 模式<br/>（开发/调试/单条研判）"]
         DAEMON_MODE["Daemon 模式<br/>（7×24 自动研判）"]
+        WEB_UI["Web UI<br/>（批量复查/可视化）"]
     end
 
     subgraph SOC_Agent["SOC Agent（Main Agent + Sub Agent 编排）"]
@@ -34,7 +63,7 @@ graph TB
 
     subgraph 存储层
         SOUL["soc_soul.md<br/>（部署时写一次）<br/>环境知识+分析原则"]
-        MEMORY["soc_memory.json<br/>（系统自动积累）<br/>模式级知识+纠正经验"]
+        MEMORY["soc_facts<br/>（PostgreSQL 动态知识）<br/>模式级知识+纠正经验"]
         DB[("PostgreSQL<br/>─────────<br/>alert_summaries<br/>（每条预警摘要）<br/><br/>lessons_learned<br/>（条件→动作规则）<br/><br/>review_queue<br/>（待复查记录）")]
     end
 
@@ -49,6 +78,7 @@ graph TB
 
     CLI_MODE --> MAIN
     DAEMON_MODE --> MAIN
+    WEB_UI -->|读 review_queue / alert_summaries| DB
 
     SUB -->|读| SOUL
     SUB -->|读| MEMORY
@@ -61,29 +91,107 @@ graph TB
     CORRECT -->|同步更新| MAIN
 
     DB -->|复查队列| REVIEW
-    REVIEW -->|确认/驳回| MEMORY
+    REVIEW -->|确认/驳回| DB
     REVIEW -->|提取规则| DB
     REVIEW -->|同步更新| MAIN
 ```
 
-### 1.2 两条运行模式
+### 1.2 三类入口
 
-| 维度 | Daemon 模式 | CLI 模式 |
+| 维度 | Daemon 模式 | CLI 模式 | Web UI |
 |---|---|---|
-| 触发 | Kafka 消费，7×24 | 分析师手动触发 |
-| 处理量 | 全量预警 | 单条/少量 |
-| 纠正方式 | 第二天大屏批量复查 | 当场追问对话 |
-| 适合场景 | 日常自动研判 | 深入调查 + 知识注入 |
-| 自动化程度 | 高置信自动处置 | 全部展示给人看 |
+| 触发 | Kafka 消费，7×24 | 分析师/开发者手动触发 | 分析师打开页面操作 |
+| 处理量 | 全量预警 | 单条/少量/replay | 批量复查/队列浏览 |
+| 纠正方式 | 写入 review_queue，事后复查 | 当场追问对话，深度提取知识 | 批量确认/驳回/补充备注 |
+| 适合场景 | 日常自动研判 | MVP 闭环、调试、知识注入、daemon 运维 | 团队日常运营和可视化调查 |
+| 自动化程度 | 高置信自动处置 | 默认展示给人看 | 人工审核为主 |
+
+**入口边界**：
+
+- Phase 1 先做轻量后端 CLI，不做 opencode/Codex 级全屏 TUI。
+- Web UI 等 `review_queue`、置信度、批量复查模型稳定后再做，避免早期 UI 返工。
+- CLI、API、Daemon 只做入口编排，业务逻辑全部放在 `core/agent/pipeline/db/memory`。
+
+### 1.2.1 生产级 Runtime 原则：硬骨架 + 软路由
+
+SOC Agent 的工程定位不是“让 LLM 自主完成一切”，而是：
+
+> 确定性 SOC Runtime 掌握控制流，LLM 处理局部不确定判断，人类接管高风险动作。
+
+主流程必须由系统掌握，不能让 LLM 自由决定是否跳过必要检查、是否结束任务、是否执行动作。LLM 的主动性只放在受限扩展点里，且每次选择必须可验证、可审计、可回放。
+
+```text
+Deterministic Backbone
+  normalize
+  -> entity_extract
+  -> dedup
+  -> lesson_match
+  -> history_query
+  -> llm_analyze
+  -> schema_validate
+  -> domain_validate
+  -> decide
+  -> audit
+  -> review/replay
+
+LLM Advisory Router（受限软路由）
+  - 从候选历史里选择最相关证据
+  - 判断是否需要补充查询
+  - 生成需要问人的澄清问题
+  - 提出新知识候选
+  - 总结证据和不确定性
+```
+
+控制权边界：
+
+| 层 | 谁掌握 | 允许做什么 | 不允许做什么 |
+|---|---|---|---|
+| 主流程 | Runtime 代码 | 固定步骤、状态流转、失败处理、审计写入 | 让 LLM 自由决定跳步、结束或重试 |
+| 模糊判断 | LLM 节点 | 在给定输入和候选集合内推理、排序、解释、提出建议 | 直接执行工具、修改数据库、改变权限策略 |
+| 动作执行 | Policy + Tool Registry | 按权限等级执行 L0-L2 低风险动作，记录审计 | 绕过审批执行 L3+ 或破坏性动作 |
+| 高风险决策 | 分析师/负责人 | 审批、驳回、纠正、升级规则 | 交给模型自动确认 |
+
+Phase 节奏：
+
+- Phase 1-2：流程定死，LLM 只做 `funnel` 和 `analyze` 两类固定节点。
+- Phase 3：引入受限 `LLM Advisory Router`，只允许从白名单 next steps 中选择，例如 `ask_human`、`fetch_more_history`、`mark_needs_review`。
+- Phase 4+：软路由必须具备 step trace、成本估算、replay diff 和评测指标后，才允许进入 daemon。
+
+### 1.2.2 Fork 维护原则：上游最小侵入 + SOC 增量扩展
+
+当前仓库是基于 DeerFlow 上游开源项目 fork 后的二次开发，因此 SOC Agent 的工程边界必须优先考虑长期同步 upstream 的成本。默认原则是：
+
+> DeerFlow 保持为通用 Agent 框架底座，SOC Agent 作为业务扩展层增量接入；除非确实需要修复框架缺陷或补通用扩展点，否则不改动上游原有核心代码。
+
+落地约束：
+
+| 类型 | 默认做法 | 说明 |
+|---|---|---|
+| SOC 业务逻辑 | 新增独立模块/包/目录 | pipeline、memory、db、policy、daemon、CLI 等放在 SOC 自己的边界内 |
+| 上游通用能力 | 优先 import / adapter / wrapper | 复用模型工厂、配置、LangGraph、middleware 思路，不直接改原实现 |
+| 必须改上游代码 | 只做小型、通用、可解释的扩展点 | 例如增加 hook、interface、配置项；避免写入 SOC 专有分支逻辑 |
+| API/Schema | 新增 SOC namespace | 避免污染 DeerFlow 原有 chat/thread/gateway 协议 |
+| 数据库 | SOC 独立 PostgreSQL schema / migrations | 不复用或改造 DeerFlow 原 persistence 表承载 SOC 告警 |
+| 前端 | 后期新增 SOC 专用页面/路由 | 不把 SOC 告警队列硬塞进通用聊天 UI 主流程 |
+| 上游同步 | 保持 rebase/merge 可控 | 每次改动应能解释“这是 SOC 增量”还是“这是通用框架修复” |
+
+判断标准：
+
+- 如果需求只服务 SOC 预警研判，优先放到 SOC 模块。
+- 如果能力对 DeerFlow 通用 Agent 也有价值，才考虑抽成上游风格的通用扩展点。
+- 如果需要改已有 DeerFlow 文件，先确认是否可以通过配置、adapter、hook、router 注册或新增入口绕开。
+- 如果必须改原文件，改动应小而稳定，并在 PR/提交说明里标明原因，降低未来同步 upstream 的冲突概率。
 
 ### 1.3 设计决策与依据
 
 | 决策 | 选择 | 依据 |
 |---|---|---|
+| Fork 维护 | **上游最小侵入 + SOC 增量扩展** | 当前仓库是 DeerFlow fork；SOC Agent 应作为业务层接入，尽量不改上游核心，降低后续同步 upstream 的冲突成本 |
 | Agent 架构 | **Main Agent (持久) + Sub Agent (per-alert)** | 主Agent维护短期上下文（滑动窗口+倒排索引）实现免LLM去重；子Agent独立流水线互不干扰。参考 Claude Code 的 Leader + Teammate 模式（`QueryEngine.ts:184-207`） |
+| 控制流 | **Runtime 固定主流程，LLM 受限软路由** | 生产系统需要可执行、可验证、可恢复、可追踪；LLM 只处理候选选择、解释归因、澄清建议等模糊环节 |
 | 去重策略 | 主Agent倒排索引 + 基于证据重叠度判定 | 同 rule + 同 exe + 同 src_ip 在短窗口内重复 → 直接 merge，不调 LLM。参考 Claude Code `bashPermissions.ts:1483-1587` 的 speculative classifier |
 | 子Agent生命周期 | 独立 AbortController + 超时 kill | 单个子Agent不响应 → kill，其他子Agent不受影响。参考 Claude Code `Task.ts:6-76` |
-| 知识存储 | soc_memory.json | 复用 DeerFlow memory.json 结构 + `_apply_updates()` 逻辑 |
+| 知识存储 | PostgreSQL `soc_facts` + 可选 JSON 快照 | 业务记忆会影响安全判断，必须可审计、可确认/驳回、可回滚；复用 DeerFlow LLM 抽取和合并思路 |
 | 预警摘要 | PostgreSQL | 需要按实体/时间窗口查询，文件做不到；生产环境同构 |
 | 经验规则 | PostgreSQL | 需要按 pattern 高效匹配；后续可加 trigram/JSONB 索引 |
 | 反馈方式 | 追问对话(CLI) + 批量复查(daemon) | CLI 可交互；daemon 只能事后复查 |
@@ -96,8 +204,8 @@ graph TB
 | DeerFlow | SOC Agent |
 |---|---|
 | SOUL.md | soc_soul.md（分析原则+环境知识） |
-| memory.json | soc_memory.json（facts 数组，同结构） |
-| `_apply_updates()` | 合并新旧 facts（同逻辑） |
+| memory.json | `soc_facts` 表 + `soc_memory_snapshot.json`（可选导出） |
+| `_apply_updates()` | 合并新旧 facts 的策略复用，但落库到 PostgreSQL |
 | `format_memory_for_injection()` | 注入 prompt（同逻辑） |
 | `detect_correction()` | 纠正对话 → confidence 覆盖 |
 | middleware 链 | 处理流水线（7 步） |
@@ -125,7 +233,7 @@ class MainAgentContext:
     soul: str                              # soc_soul.md 全文
     
     # === 准静资产（从存储加载，按需更新） ===
-    memory_facts: list[Fact]               # soc_memory.json 中 status=confirmed 的 facts
+    memory_facts: list[Fact]               # soc_facts 中 status=confirmed 的 facts
     
     # === 动资产（内存维护，重启时从 DB 重建） ===
     recent_window: deque[AlertDigest]      # 最近 200 条预警摘要（环形缓冲区）
@@ -280,11 +388,78 @@ def rebuild_main_agent_from_db() -> MainAgentContext:
 
 重启后滑动窗口短期可用（最多丢失重启间隔内的预警上下文，但 index 和 recent_window 都能从 DB 重建）。
 
+### 1.6 MVP 成功指标
+
+Phase 1 不以“自动化率”作为核心目标，而以“单条研判可信、可纠正、可审计”为目标。先记录 baseline，再逐步优化。
+
+| 指标 | Phase 1 目标 | 为什么重要 |
+|---|---|---|
+| 单条样例告警分析成功率 | > 90% | 证明 pipeline 能稳定跑完，不被字段缺失、模型输出、DB 写入打断 |
+| LLM JSON 可解析率 | > 95%（含 repair 后） | 结构化输出是落库、审计和后续自动化的基础 |
+| 每条结论 evidence 完整率 | > 90% | 分析师必须能理解为什么这么判 |
+| 审计可追踪率 | 100% | 每个 verdict 都能回看输入、注入知识、模型输出和最终决策 |
+| CLI 端到端耗时 | 记录 p50/p95，先不设硬目标 | Phase 1 先要可信；性能用于后续优化 |
+| 分析师纠正率 / override rate | 记录 baseline | 后续判断模型、规则和知识质量 |
+| `soc_facts` 候选生成率 | 纠正后能稳定生成候选知识 | 验证反馈闭环是否真的沉淀经验 |
+
+Phase 2 以后再关注重复告警 merge 率、LLM 调用节省率、confirmed facts 命中次数；Phase 4 以后再关注自动关闭准确率和 review_queue 采纳率。
+
+### 1.7 Phase 1 Non-goals
+
+Phase 1 的边界必须明确，避免把 MVP 做成不可验收的平台项目。
+
+- 不接生产 Kafka，只处理本地样例、手工 JSON 和可控测试数据。
+- 不做 Web UI，只做可脚本化 CLI。
+- 不做自动封禁、隔离主机、禁用账号等破坏性处置。
+- 不做 7×24 daemon，不承诺生产吞吐。
+- 不做 Knowledge RAG，不引入 PageIndex / GraphRAG。
+- 不让 LLM 自发现知识直接影响后续判断；自发现知识只能进入 `pending_review`。
+- 不做复杂多租户、权限系统、团队管理。
+- 不把单次分析师纠正直接升级为高风险自动处置规则。
+
 ---
 
 ## 二、处理流水线（7 步详解）
 
 每条预警进入后，依次走过 7 个步骤。大部分步骤是纯代码，只在④⑤两步调用 LLM。
+
+### 2.0 LLM 责任边界
+
+LLM 不是流程控制器，而是流水线中的可替换推理节点。每个节点必须声明输入、输出 schema、失败策略和是否允许软路由。
+
+| 步骤 | 类型 | 是否允许 LLM 主动路由 | 原则 |
+|---|---|---|---|
+| ① 实体提取 | 代码优先 | 否 | Phase 1 用规则/解析器；复杂日志后续可加 LLM extractor，但输出仍进 schema 校验 |
+| ② 经验快查 | 代码/DB | 否 | 命中 confirmed lesson 才能短路；LLM 不能自行创建可执行 lesson |
+| ③ 关联查询 | 代码/DB | 否 | 系统按实体和时间窗口查候选，LLM 不能决定“不查历史” |
+| ④ 漏斗关联 | LLM 节点 | 是，受限 | LLM 只在候选集合内挑相关历史、解释相关性、提出是否需要补充信息 |
+| ⑤ 综合分析 | LLM 节点 | 是，受限 | 输出 verdict/confidence/evidence/recommended_action/knowledge_candidates，不能直接执行动作 |
+| ⑥ 置信度决策 | 代码/Policy | 否 | Runtime 根据阈值、权限、证据、黑名单和 review 规则做最终分流 |
+| ⑦ 写入存储 | 代码/DB | 否 | 所有写入必须带来源、状态、审计信息；LLM 只能提供候选内容 |
+
+受限软路由的 next steps 必须来自白名单，例如：
+
+```text
+ask_human
+fetch_more_history
+fetch_process_tree
+mark_needs_review
+propose_knowledge_candidate
+```
+
+每个 soft route 输出必须包含：
+
+```json
+{
+  "next_step": "fetch_more_history",
+  "reason": "同一 src_ip 在 10 分钟内触发多条不同规则，需要确认是否同一攻击链",
+  "expected_information_gain": "high",
+  "risk_level": "L0",
+  "cost_estimate": "low"
+}
+```
+
+Runtime 负责决定是否采纳该建议。未通过白名单、权限、成本或状态校验的 soft route，一律转为 `needs_review` 或忽略并记录审计。
 
 ### 2.1 流程总图
 
@@ -488,7 +663,7 @@ PHASE2_PROMPT = """<alert_correlation_phase2>
 LLM 收到的输入：
 ├── [cacheable] System Prompt（含分析原则 + 输出格式要求）
 ├── [cacheable] soc_soul.md（全文注入，几乎不变 → 可缓存）
-├── [volatile]  soc_memory.json（status=confirmed 的 facts，按实体相关性筛选）
+├── [volatile]  soc_facts（status=confirmed 的 facts，按实体相关性筛选）
 ├── [volatile]  主Agent实时上下文（近5分钟趋势·context_ref）
 ├── [volatile]  关联结果（④的 Phase 2 产出，或空）
 └── [volatile]  当前预警完整数据
@@ -506,7 +681,7 @@ LLM 收到的输入：
 </soul>
 
 <memory>
-{soc_memory.json 中 status=confirmed 的 facts}
+{soc_facts 中 status=confirmed 的 facts}
 </memory>
 
 ## 判定标准
@@ -615,7 +790,7 @@ def decide(analysis: dict, mode: str,
 |---|---|---|
 | `alert_summaries` | 实体 + verdict + summary + alert_type | 每条预警都写 |
 | `review_queue` | alert_id + AI 判断 + 详细分析 | 仅 daemon 模式 + 低置信 |
-| `soc_memory.json` | new_knowledge（pending 状态） | 仅 LLM 主动发现时 |
+| `soc_facts` | new_knowledge（pending 状态） | 仅 LLM 主动发现时 |
 
 ```python
 def write_results(alert, entities, analysis, decision):
@@ -721,14 +896,14 @@ async def handle_alert_with_prejudge(alert):
    soc_soul.md        │     ← 部署时写一次，几乎不动
    （静态环境知识）     │        分析原则、网段说明、已知 IOC
                       │
-   soc_memory.json    │     ← 系统自动积累
-   （模式级知识）       │        从纠正对话和 LLM 发现中提取
-                      │        facts 数组，confidence + status 区分
-                      │
-   PostgreSQL ────────┤     ← 系统自动写入
-   ├ alert_summaries  │        每条预警的摘要 → ③关联查询读
+   PostgreSQL         │     ← 动态知识主存储
+   ├ soc_facts        │        模式级知识：纠正、环境、批准工具、威胁观察
+   ├ fact_evidence    │        fact 的来源证据，关联 alert / review / CLI 纠正
    ├ lessons_learned  │        条件→动作规则 → ②经验快查读
+   ├ alert_summaries  │        每条预警的摘要 → ③关联查询读
    └ review_queue     │        daemon 待复查 → 大屏复查读
+                      │
+   soc_memory_snapshot.json  ← 可选导出/备份/离线可读，不作为生产主存储
                       │
                     查询频率高
 ```
@@ -738,12 +913,12 @@ async def handle_alert_with_prejudge(alert):
 | 流水线步骤 | 读 | 写 |
 |---|---|---|
 | ① 实体提取 | — | — |
-| ② 经验快查 | lessons_learned | — |
+| ② 经验快查 | lessons_learned + soc_facts | — |
 | ③ 关联查询 | alert_summaries | — |
 | ④ 漏斗关联 | alert_summaries（拉完整日志） | — |
-| ⑤ LLM 综合分析 | soc_soul.md + soc_memory.json | soc_memory.json（LLM 发现时） |
+| ⑤ LLM 综合分析 | soc_soul.md + soc_facts | soc_facts（LLM 发现时，pending_review） |
 | ⑥ 置信度决策 | — | — |
-| ⑦ 写入存储 | — | alert_summaries + review_queue |
+| ⑦ 写入存储 | — | alert_summaries + review_queue + fact_evidence |
 
 ### 3.2 soc_soul.md — 部署时写一次
 
@@ -776,53 +951,67 @@ async def handle_alert_with_prejudge(alert):
 
 **注入方式**：⑤ LLM 综合分析时全文注入（通常几百行，~2-3K tokens）。
 
-### 3.3 soc_memory.json — 复用 DeerFlow 结构
+### 3.3 soc_facts — SOC 动态知识主表
+
+SOC memory 采用 PostgreSQL 主存储，不直接引入 mem0 / agentmemory / memU 作为 MVP 运行时依赖。外部 memory 框架可参考其抽取、检索、实体链接设计，但 SOC 业务记忆必须可审计、可确认/驳回、可回滚。
+
+```sql
+CREATE TABLE soc_facts (
+    id BIGSERIAL PRIMARY KEY,
+    content TEXT NOT NULL,
+    category TEXT NOT NULL,       -- environment / correction / approved / threat / observation
+    status TEXT NOT NULL DEFAULT 'pending_review',
+    confidence DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    source_type TEXT NOT NULL,    -- cli_correction / daemon_review / llm_discovery / manual_seed
+    source_alert_id TEXT,
+    entities JSONB NOT NULL DEFAULT '{}'::jsonb,
+    valid_from TIMESTAMPTZ,
+    valid_until TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_facts_status_category ON soc_facts(status, category);
+CREATE INDEX idx_facts_confidence ON soc_facts(confidence DESC);
+CREATE INDEX idx_facts_entities_gin ON soc_facts USING GIN (entities);
+CREATE INDEX idx_facts_content_fts ON soc_facts USING GIN (to_tsvector('simple', content));
+
+CREATE TABLE fact_evidence (
+    id BIGSERIAL PRIMARY KEY,
+    fact_id BIGINT NOT NULL REFERENCES soc_facts(id) ON DELETE CASCADE,
+    alert_id TEXT,
+    evidence_type TEXT NOT NULL,  -- alert / analyst_note / llm_reason / review
+    evidence_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_fact_evidence_fact ON fact_evidence(fact_id);
+CREATE INDEX idx_fact_evidence_alert ON fact_evidence(alert_id);
+```
+
+示例 fact：
 
 ```json
 {
-  "environment": {
-    "network_zones": "10.0.1.0/24 开发; 10.0.5.0/24 财务; 10.0.8.0/24 DMZ",
-    "approved_tools": "SecurityScan v2.3 漏扫; AngryIPScanner 资产盘点",
-    "known_threats": "185.220.101.35 C2; evil.exe SHA256:abc123 钓鱼",
-    "current_operations": "2026-06 AD迁移"
-  },
-  "facts": [
-    {
-      "id": "f001",
-      "content": "ProcExec-SuspiciousScanner 规则主要由 SecurityScan 触发，历史基本为 FP",
-      "category": "correction",
-      "confidence": 0.92,
-      "source": "ALT-0042",
-      "status": "confirmed",
-      "created_at": "2026-05-18"
-    },
-    {
-      "id": "f002",
-      "content": "10.0.5.0/24 财务网段月末对账期间数据库访问属正常业务",
-      "category": "environment",
-      "confidence": 0.85,
-      "source": "ALT-0038",
-      "status": "confirmed",
-      "created_at": "2026-05-15"
-    },
-    {
-      "id": "f010",
-      "content": "10.0.3.0/24 网段近期频繁触发 PowerShell 编码执行规则，可能存在新攻击",
-      "category": "observation",
-      "confidence": 0.55,
-      "source": "llm_discovery",
-      "status": "pending_review",
-      "created_at": "2026-05-17"
-    }
-  ]
+  "content": "ProcExec-SuspiciousScanner 规则主要由 SecurityScan 触发，历史基本为 FP",
+  "category": "correction",
+  "status": "confirmed",
+  "confidence": 0.92,
+  "source_type": "cli_correction",
+  "source_alert_id": "ALT-0042",
+  "entities": {
+    "rule_names": ["ProcExec-SuspiciousScanner"],
+    "tools": ["SecurityScan"]
+  }
 }
 ```
 
-**三个 status**：
+**四个 status**：
 
 | status | 含义 | 注入 prompt？ | 来源 |
 |---|---|---|---|
 | `confirmed` | 已确认 | **是** | 纠正对话提取 / 分析师确认 |
+| `confirmed_candidate` | CLI 深度纠正产生的高可信候选 | 默认否；可由配置决定是否在当前 CLI 会话引用 | CLI 纠正对话 |
 | `pending_review` | 待确认 | **否**（避免误导 LLM） | LLM 自发现 |
 | `rejected` | 已驳回 | **否** | 分析师驳回 |
 
@@ -831,7 +1020,25 @@ async def handle_alert_with_prejudge(alert):
 - ✅ "财务网段月末对账有异常流量"（适用整个网段）
 - ❌ "张三的 PC 有 USB 许可"（太具体，放 alert_summaries 关联查询即可）
 
-**注入方式**：⑤ LLM 综合分析时，只注入 `status=confirmed` 的 facts，按实体相关性排序。
+**注入方式**：⑤ LLM 综合分析时，只注入 `status=confirmed` 且未过期的 facts，按实体相关性、confidence、时间新鲜度排序。
+
+**检索策略**：
+
+| 阶段 | 策略 |
+|---|---|
+| Phase 1 | `status=confirmed` + rule/exe/ip/domain/user 精确过滤 |
+| Phase 2 | PostgreSQL full-text search + JSONB 实体索引 |
+| Phase 3 | `pg_trgm` 模糊匹配，可选 `pgvector` 语义召回 |
+| Phase 5 | 评估 mem0/memU 作为外部 memory engine 或知识库导入器 |
+
+**外部 memory 框架定位**：
+
+| 项目 | 定位 | SOC Agent 决策 |
+|---|---|---|
+| mem0 | 通用 AI Agent 长期记忆 | 参考检索/抽取思路，MVP 不引入运行时依赖 |
+| agentmemory | Codex/Claude/OpenCode 等编码 Agent 记忆 | 适合辅助开发，不作为 SOC 业务 memory |
+| LMCache | LLM KV cache / 推理加速 | 不是业务记忆；自建 vLLM/SGLang 后再评估 |
+| memU | workspace/source 到结构化 agent memory | 参考 typed memory / workspace ingestion，Phase 5 再评估 |
 
 ### 3.4 alert_summaries — 每条预警的摘要
 
@@ -923,6 +1130,125 @@ CREATE TABLE review_queue (
 CREATE INDEX idx_review_status ON review_queue(status, created_at);
 ```
 
+### 3.7 Knowledge RAG Layer — Phase 5 外部知识增强
+
+Knowledge RAG Layer 不属于 runtime memory，不参与 Phase 1-3 的核心告警闭环。它用于给 LLM 分析提供可引用的外部知识证据，例如安全制度、EDR/SIEM 手册、告警规则文档、威胁情报报告、MITRE ATT&CK 映射和历史复盘报告。
+
+边界：
+
+| 层 | 存什么 | 是否影响实时判定 | 存储/实现 |
+|---|---|---|---|
+| `soc_facts` | 已确认的模式级业务知识 | 是，直接注入分析 prompt | PostgreSQL |
+| `lessons_learned` | 条件→动作的可执行经验规则 | 是，可自动降噪/关闭 | PostgreSQL |
+| `alert_summaries` | 历史告警摘要 | 是，做实体/时间窗口关联 | PostgreSQL |
+| Knowledge RAG | 文档、报告、SOP、威胁知识图谱 | 否，作为证据补充和引用来源 | Phase 5 评估 PageIndex / GraphRAG |
+
+候选技术：
+
+| 项目 | 适合内容 | SOC 用法 | 引入时机 |
+|---|---|---|---|
+| VectifyAI PageIndex | 长 PDF、SOP、产品手册、规则说明、合规文档 | 把长文档转成树状索引，让 LLM 按章节/页码可解释检索 | Phase 5：安全制度/手册/报告问答 |
+| Microsoft GraphRAG | 威胁情报、MITRE ATT&CK、资产/业务/账号关系、历史事件复盘 | 构建实体-关系图，回答多跳关系问题，例如 IOC→APT→TTP→资产影响 | Phase 5：威胁知识图谱和复杂关联 |
+
+优先级：
+
+1. **GraphRAG 优先**：更贴近 SOC 的实体关系、攻击链、资产依赖和威胁情报关联。
+2. **PageIndex 次之**：适合长文档和报告的可解释章节检索。
+
+Phase 5 之前只预留接口，不引入运行时依赖：
+
+```python
+class KnowledgeRetriever(Protocol):
+    async def retrieve(self, query: str, entities: EntitySet) -> list[KnowledgeEvidence]:
+        ...
+```
+
+⑤ LLM 综合分析时，Knowledge RAG 只作为“外部证据”注入，不自动写入 `soc_facts`。只有分析师确认或纠正后，才通过反馈闭环转化为 confirmed fact 或 lesson。
+
+### 3.8 审计与回滚设计
+
+SOC Agent 的每次判断都必须能回答三个问题：当时看到了什么、为什么这么判、后来如果知识被撤销哪些结论受影响。因此审计不是日志附属品，而是产品可信度的一部分。
+
+#### decision_audit_log — 每次判定的证据链
+
+```sql
+CREATE TABLE decision_audit_log (
+    id BIGSERIAL PRIMARY KEY,
+    alert_id TEXT NOT NULL,
+    pipeline_version TEXT NOT NULL,
+    mode TEXT NOT NULL,              -- cli / daemon / replay
+    model_name TEXT,
+    input_hash TEXT NOT NULL,
+    prompt_hash TEXT,
+    injected_fact_ids BIGINT[] NOT NULL DEFAULT '{}',
+    matched_lesson_ids BIGINT[] NOT NULL DEFAULT '{}',
+    llm_raw_output TEXT,
+    repaired_output JSONB,
+    final_verdict TEXT NOT NULL,
+    final_confidence DOUBLE PRECISION NOT NULL,
+    decision_reason TEXT NOT NULL,
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_audit_alert ON decision_audit_log(alert_id);
+CREATE INDEX idx_audit_created ON decision_audit_log(created_at DESC);
+CREATE INDEX idx_audit_facts_gin ON decision_audit_log USING GIN (injected_fact_ids);
+```
+
+写入规则：
+
+- `soc analyze` 每次都写审计记录，即使 LLM 输出解析失败也记录 raw output 和错误。
+- `replay` 写新的审计记录，不覆盖历史记录。
+- prompt 全文可按环境配置保存或只保存 hash；但必须保存 injected fact ids、matched lesson ids 和最终决策原因。
+
+#### soc_fact_versions — 知识变更版本
+
+```sql
+CREATE TABLE soc_fact_versions (
+    id BIGSERIAL PRIMARY KEY,
+    fact_id BIGINT NOT NULL REFERENCES soc_facts(id),
+    old_status TEXT,
+    new_status TEXT,
+    old_content TEXT,
+    new_content TEXT,
+    changed_by TEXT NOT NULL,        -- cli / daemon_review / analyst / migration
+    reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_fact_versions_fact ON soc_fact_versions(fact_id, created_at DESC);
+```
+
+回滚规则：
+
+- fact 从 `confirmed` 改为 `rejected` 或内容发生实质变化时，查 `decision_audit_log.injected_fact_ids`，标记受影响历史结论。
+- 回滚不静默改写历史 verdict；只生成“受影响”标记，必要时通过 `soc replay ALERT_ID` 重新研判。
+- 自动关闭类 lesson 被撤销后，后续不再命中；历史自动关闭记录进入待抽样复查。
+
+#### automation_actions — 自动处置预留审计
+
+Phase 1 不做自动处置，但先预留自动动作审计模型，避免 Phase 4 后补时缺证据链。
+
+```sql
+CREATE TABLE automation_actions (
+    id BIGSERIAL PRIMARY KEY,
+    alert_id TEXT NOT NULL,
+    action_type TEXT NOT NULL,       -- auto_close / lower_priority / create_case / isolate_host
+    proposed_by TEXT NOT NULL,       -- lesson / classifier / analyst / llm
+    approved_by TEXT,
+    status TEXT NOT NULL DEFAULT 'proposed',
+    reason TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    executed_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_actions_alert ON automation_actions(alert_id);
+CREATE INDEX idx_actions_status ON automation_actions(status, created_at);
+```
+
+Phase 4 之前，只允许写 `proposed` 或 `dry_run`，不执行破坏性动作。
+
 ---
 
 ## 四、反馈闭环
@@ -940,7 +1266,7 @@ flowchart TD
     subgraph 入口2_CLI["入口 2a：CLI 纠正对话"]
         C1["分析师纠正"] --> C2["LLM 追问对话"]
         C2 --> C3["提取知识"]
-        C3 --> MEM["soc_memory.json<br/>facts[] · status: confirmed"]
+        C3 --> MEM["soc_facts<br/>status: confirmed"]
         C3 --> LESSON["lessons_learned<br/>条件→动作规则"]
     end
 
@@ -952,7 +1278,7 @@ flowchart TD
     end
 
     subgraph 入口3["入口 3：LLM 自发现"]
-        L1["⑤ LLM 分析中<br/>new_knowledge 非空"] --> L2["写入 facts[]"]
+        L1["⑤ LLM 分析中<br/>new_knowledge 非空"] --> L2["写入 soc_facts"]
         L2 --> PENDING["status: pending_review<br/>confidence: 0.5-0.6<br/>不注入 prompt"]
         PENDING -->|"分析师 review"| MEM
     end
@@ -979,7 +1305,7 @@ $ soc-agent correct ALT-0042 --verdict false_positive
 还有什么要补充的吗？（回车跳过）
   → 
 
-✅ 已保存 1 条知识到 soc_memory.json（status: confirmed）
+✅ 已保存 1 条知识到 soc_facts（status: confirmed）
 ✅ 已保存 1 条规则到 lessons_learned（以后同类自动关闭）
 ✅ 已更新 ALT-0042 verdict → false_positive
 ```
@@ -1041,7 +1367,7 @@ $ soc-agent knowledge review
 #### 路径 2：纠正对话末尾顺带问
 
 ```
-✅ 已保存 1 条知识到 soc_memory.json
+✅ 已保存 1 条知识到 soc_facts
 ✅ 已保存 1 条经验规则
 
 💡 顺便问一下，我之前有一个观察想确认：
@@ -1065,15 +1391,174 @@ $ soc-agent knowledge review
 
 ### 4.5 知识老化
 
-- facts 超过 180 天未命中 → 标记 `stale: true` → 降低注入优先级
+- soc_facts 超过 180 天未命中 → 降低注入优先级或标记待复查
 - lessons_learned 的 hit_count 连续 90 天为 0 → 标记待 review
-- soc_memory.json facts 数量超过 100 → 提醒分析师做一轮整理
+- confirmed facts 数量超过阈值 → 触发 dream/整理任务，合并重复知识并导出快照
+
+### 4.6 知识污染防线
+
+SOC 业务记忆会直接影响后续判断，因此知识写入必须比普通聊天记忆更保守。核心原则：LLM 可以提出候选知识，但不能自行把候选知识变成真理。
+
+| 来源 | 默认状态 | 是否注入 prompt | 晋级条件 |
+|---|---|---|---|
+| `soc_soul.md` 部署时手写 | 静态权威 | 是 | 安全负责人手工维护 |
+| CLI 深度纠正提取的 fact | `confirmed_candidate` 或 `confirmed` | 仅 `confirmed` 注入 | 分析师明确确认，且包含来源 alert/evidence |
+| Daemon 批量复查提取的 fact | `pending_review` | 否 | 二次确认或多次独立命中后确认 |
+| LLM 自发现 fact | `pending_review` | 否 | 分析师 review 确认 |
+| 自动关闭 lesson | `pending_review` | 否 | 命中多次、无人纠正、分析师确认后启用 |
+| 被驳回知识 | `rejected` | 否 | 默认进入抑制列表，避免反复提出 |
+
+为了支持 `confirmed_candidate`，`soc_facts.status` 可采用四态：
+
+| status | 含义 |
+|---|---|
+| `confirmed` | 已确认，可注入 prompt |
+| `confirmed_candidate` | CLI 纠正中高可信候选，默认不自动注入；可由配置决定是否在 CLI 单次会话内引用 |
+| `pending_review` | 待人工确认，不注入 |
+| `rejected` | 已驳回，不注入，并用于抑制重复建议 |
+
+自动关闭规则必须额外保守：
+
+- 单次纠正不能直接生成长期 `auto_close` 规则，只能生成候选 lesson。
+- 候选 lesson 需要至少命中多次，且没有被纠正，才允许转为启用。
+- 首次出现的模式、跨主机扩散、命中高危 IOC、置信度低于阈值时，一律不自动关闭。
+- 自动关闭只允许关闭或降级，不允许隔离、封禁、删除文件等破坏性动作。
+- 每条自动关闭都必须写 `automation_actions` 和 `decision_audit_log`。
+
+被驳回知识的抑制策略：
+
+- 同一 content + entities 的 LLM 自发现如果已被驳回，短期内不再重复提示。
+- 如果新 evidence 明显不同，可以重新进入 `pending_review`，但必须展示“曾被驳回”的历史。
+- rejected fact 不删除，保留为负样本和审计证据。
 
 ---
 
-## 五、Prompt 设计汇总
+## 五、入口设计：CLI / API / Daemon / Web UI
 
-### 5.1 纠正追问 Prompt
+### 5.1 Phase 1 先做轻量 CLI
+
+CLI 是 MVP 的最短闭环入口，用于开发调试、单条研判、知识纠正和 daemon 运维。它不做成 opencode/Codex 那种全屏 TUI，先保持命令式、可脚本化、可测试。
+
+第一版命令：
+
+```bash
+soc analyze ./samples/alert.json
+soc analyze --json '{"rule_name":"ProcExec-SuspiciousScanner","source_ip":"10.0.1.10"}'
+soc correct ALT-0001
+soc show ALT-0001
+soc memory list
+soc db migrate
+```
+
+Phase 2/4 扩展：
+
+```bash
+soc replay ALT-0001
+soc lessons list
+soc daemon start
+soc daemon status
+soc review list --status pending
+```
+
+### 5.2 Phase 1 验收标准
+
+Phase 1 完成的定义不是“CLI 命令能跑”，而是“单条告警能可信研判、能纠正、能审计、失败可解释”。
+
+| 场景 | Given | When | Then |
+|---|---|---|---|
+| 正常分析 | 一条字段完整的样例 EDR/SIEM 告警 JSON | 执行 `soc analyze alert.json` | 输出 verdict、confidence、summary、evidence、reason、suggested_action，并写入 `alert_summaries` 和 `decision_audit_log` |
+| 字段缺失 | 告警缺少非关键字段，如 `dst_port` 或 `domain` | 执行 `soc analyze` | 实体提取降级，输出 warning，但不中断整体分析 |
+| LLM JSON 损坏 | 模型返回带代码块、尾逗号或半截 JSON | 解析分析结果 | 先严格解析，失败后用 `json_repair` 修复；仍失败则返回明确错误并记录 raw output |
+| 数据库不可用 | PostgreSQL 连接失败 | 执行 `soc analyze` 或 `soc correct` | CLI 返回可读错误，不假装成功，不产生半写入状态 |
+| 分析师纠正 | 已有一条分析结果 | 执行 `soc correct ALERT_ID` | 更新 verdict/corrected_at/original_verdict，写入 correction evidence，并生成 candidate fact/lesson |
+| 审计追踪 | 任意一次分析或纠正 | 查询审计记录 | 能看到输入 hash、注入 fact ids、命中 lesson ids、模型原始输出/修复输出和最终决策 |
+| Step trace | 任意一次分析 | 查询 run trace | 能看到每个 pipeline step 的开始/结束时间、输入摘要、输出摘要、错误、重试次数和耗时 |
+| Domain validation | LLM 输出结构化结果 | 进入 `decide` 前校验 | verdict、confidence、evidence、recommended_action 必须通过 schema + 业务规则校验；不合法则进入 `needs_review` 或失败态 |
+| 不自动处置 | 任意 Phase 1 分析结果 | verdict 为高置信 FP 或 TP | 只输出建议动作，不执行隔离、封禁、删除、关闭生产告警等动作 |
+| replay 一致性 | 同一条 alert 和相同配置 | 执行 `soc replay ALERT_ID` | 生成新的审计记录，不覆盖历史记录，差异可比较 |
+| LLM 不掌握主流程 | 任意 Phase 1/2 分析 | 检查 trace 和配置 | pipeline 必经步骤不能被 LLM 跳过；LLM 只能在固定节点内输出结构化建议 |
+
+Phase 1 最小样例集：
+
+- 1 条明确误报：公司批准扫描器触发规则。
+- 1 条明确真阳性：命中已知恶意 IOC 或异常进程链。
+- 1 条低置信未知：缺少上下文，只能进入人工判断。
+- 1 条字段缺失/格式异常样例。
+- 1 条模型输出坏 JSON 的模拟样例。
+
+### 5.3 入口分层原则
+
+```
+soc_agent/core/          # 业务核心：pipeline、agent、db、memory
+soc_agent/cli.py         # Typer/Rich CLI，只调用 core
+soc_agent/api.py         # 后续 Web UI/Gateway 调用，同样只调用 core
+soc_agent/daemon.py      # Kafka consumer，也只调用 core
+```
+
+约束：
+
+- CLI、API、Daemon 都只是入口，不写业务判断逻辑。
+- 单条研判、Kafka 消费、Web UI 复查都复用同一套 `core` 服务。
+- Phase 1 不做复杂 TUI；Rich 只用于表格、颜色、进度条和 JSON 输出。
+- Web UI 放到 review_queue 和批量复查模型稳定后再做，避免早期返工。
+
+### 5.4 Web UI 的位置
+
+当前 DeerFlow 前端已有通用 Web UI，但 SOC 场景需要专用视图：告警队列、研判详情、证据时间线、实体关联、复查队列、批量确认/驳回。Web UI 不是 Phase 1 重点，应在 Phase 3/4 基于稳定的 `review_queue` 和 API 增量构建。
+
+### 5.5 任务队列选型：不上来不用 Celery
+
+预计规模是每天最多约 1 万条告警，平均吞吐约 7 条/分钟。瓶颈主要是 LLM/API 调用的并发、限流、重试和突发峰值吸收，不是队列框架调度性能。因此不在 MVP 引入 Celery。
+
+分阶段策略：
+
+| 阶段 | 队列方案 | 用途 | 理由 |
+|---|---|---|---|
+| Phase 1 | 进程内 `asyncio.Queue` / `PriorityQueue` + `Semaphore` | CLI 单条/少量分析、LLM 并发限流 | 零外部依赖，最容易调试 |
+| Phase 2 | 进程内优先级队列 + 去重 key | 主 Agent 去重、子 Agent 并行调度 | 支持高优/低优告警，避免重复 LLM 调用 |
+| Phase 4 | PostgreSQL-backed queue（优先 PgQueuer；备选 Procrastinate） | Daemon 消费 Kafka 后持久化派发子 Agent | 已经有 PostgreSQL，不额外引入 Redis/RabbitMQ；重启不丢任务 |
+| Phase 5+ | 再评估 Dramatiq/Celery | 多机高吞吐、复杂路由、统一监控 | 只有规模明显上升或需要复杂队列路由时再引入 |
+
+不选 Celery 的原因：
+
+- 对日 1 万告警是过重依赖，需要 Redis/RabbitMQ、worker、beat/flower 等运维面。
+- SOC Agent 已经依赖 PostgreSQL，PG-backed queue 可以复用同一基础设施。
+- 真实耗时主要在 LLM/API 调用，队列框架 no-op benchmark 的差异不是主要矛盾。
+
+队列抽象先自研一层接口，便于后续替换：
+
+```python
+class TaskQueue(Protocol):
+    async def enqueue(self, task: QueueTask) -> str: ...
+    async def claim(self, worker_id: str) -> QueueTask | None: ...
+    async def ack(self, task_id: str) -> None: ...
+    async def retry(self, task_id: str, reason: str) -> None: ...
+    async def fail(self, task_id: str, reason: str) -> None: ...
+```
+
+Phase 1 的进程内实现不保证持久化；Phase 4 的 PostgreSQL 实现必须支持任务状态、重试次数、优先级、租约超时和 worker 心跳。
+
+### 5.6 工具参考落地建议
+
+`/home/yydspei/projects/system-prompts-and-models-of-ai-tools/tools` 中的材料按“是否进入 SOC Agent 运行链路”分三类处理。
+
+| 工具/材料 | SOC Agent 价值 | 采用阶段 | 落地方式 |
+|---|---|---|---|
+| `json_repair` | 修复 LLM 输出中的尾逗号、代码块、半截 JSON 等问题 | Phase 1 | 放在 `llm/json_parser.py`：先严格解析 + Pydantic 校验，失败后 repair，再记录修复日志 |
+| LiteLLM | 统一不同模型提供商、token 计数、参数容错、异步批量调用 | Phase 1/2 评估 | 如果 DeerFlow `models/factory.py` 已满足则不强行替换；若要接 DeepSeek/自建 OpenAI-compatible 服务，可做 `LLMClient` 适配层 |
+| LangExtract | 对非结构化日志、告警描述、报告文本做高召回结构化提取，并保留字符级溯源 | Phase 2/5 | Phase 1 仍以纯代码实体提取为主；复杂原始文本再引入 `EntityExtractor` 的 LangExtract 实现 |
+| PageIndex | 长 PDF、SOP、产品手册、规则说明的可解释检索 | Phase 5 | 作为 Knowledge RAG Layer 的文档索引后端，不进入实时告警主路径 |
+| Python `ContextVar` / `Protocol` | 异步请求上下文隔离、可替换接口设计 | Phase 1 | `RequestContext` / `TaskQueue` / `MemoryStore` / `KnowledgeRetriever` 优先用 `Protocol` 定义边界 |
+| 代码质量材料 | ruff、pre-commit、CI 门禁，降低后期重构成本 | Phase 1 | 开发脚手架阶段就补 `ruff`、测试命令和 CI 检查 |
+| Makefile / Git 工作流 | 统一本地命令和 fork/upstream 同步流程 | 开发流程 | 作为工程协作规范，不放进运行时依赖 |
+
+关键原则：工具必须服务于流水线中的明确问题。MVP 不追求“工具全接入”，而是先把 `json_repair`、类型边界、代码质量和轻量队列打牢；长文档 RAG、多模型统一网关、复杂 LLM 提取放到有真实数据后再评估。
+
+---
+
+## 六、Prompt 设计汇总
+
+### 6.1 纠正追问 Prompt
 
 ```
 你判断错了。原始判断: {ai_verdict}，分析师纠正: {analyst_verdict}。
@@ -1090,7 +1575,7 @@ $ soc-agent knowledge review
 }
 ```
 
-### 5.2 知识提取 Prompt
+### 6.2 知识提取 Prompt
 
 ```
 以下是纠正对话记录：
@@ -1116,26 +1601,57 @@ $ soc-agent knowledge review
 
 ---
 
-## 六、项目结构与开发路线图
+## 七、项目结构与开发路线图
 
-### 6.1 项目结构
+### 7.1 项目结构
 
 ```
 soc-agent/
 ├── config.yaml              # 模型/API/阈值配置
 ├── soc_soul.md              # 静态环境知识（部署时写一次）
-├── soc_memory.json          # 动态知识（系统自动积累）
+├── soc_memory_snapshot.json # 可选导出快照（生产主存储在 PostgreSQL soc_facts）
 ├── docker-compose.yml       # 本地 PostgreSQL + Kafka/Redpanda 开发环境
 ├── .env.example             # DATABASE_URL / KAFKA_BROKERS 等本地配置示例
 │
 ├── cli.py                   # CLI 入口
+├── api.py                   # 后续 Web UI/Gateway 调用入口
 ├── daemon.py                # Daemon 入口（Kafka 消费 + 优雅关闭）
+│
+├── contracts/               # API/Kafka/Event/LLM/Tool schema，所有跨边界协议先落这里
+│   ├── api.py
+│   ├── events.py
+│   ├── kafka.py
+│   ├── llm.py
+│   └── tools.py
+│
+├── core/
+│   ├── service.py           # analyze/correct/show/replay 等应用服务
+│   ├── runtime.py           # SOC Runtime：固定控制流、状态迁移、错误恢复
+│   ├── state.py             # AnalysisRun / PipelineStep / RunStatus
+│   ├── validator.py         # schema_validate + domain_validate
+│   ├── router.py            # Phase 3+：受限 LLM Advisory Router（白名单 next steps）
+│   └── types.py             # Alert / Entity / Analysis / Decision 数据结构
+│
+├── queue/
+│   ├── base.py              # TaskQueue 协议
+│   ├── memory_queue.py      # Phase 1：进程内 asyncio/PriorityQueue
+│   └── pg_queue.py          # Phase 4：PostgreSQL-backed queue（PgQueuer/自研适配）
 │
 ├── agent/
 │   ├── main_agent.py        # Main Agent（持久·去重·编排）
 │   ├── main_context.py      # MainAgentContext 数据类
 │   ├── sub_agent.py         # Sub Agent（per-alert·7步流水线）
 │   └── agent_mailbox.py     # 主-子 Agent 通信
+│
+├── policy/
+│   ├── engine.py            # PermissionDecision / 动作权限 / risk gate
+│   ├── levels.py            # L0-L5 权限等级
+│   └── audit.py             # 权限决策审计
+│
+├── prompts/
+│   ├── versions.py          # prompt_version 管理
+│   ├── sanitizer.py         # PromptSanitizer：脱敏和敏感字段拦截
+│   └── templates/           # prompt 模板
 │
 ├── pipeline/
 │   ├── extractor.py         # ① 实体提取
@@ -1146,7 +1662,8 @@ soc-agent/
 │   ├── analyzer.py          # ⑤ LLM 综合分析
 │   ├── prompt_builder.py    # ⑤ prompt 组装（含缓存感知·新增）
 │   ├── decider.py           # ⑥ 置信度决策（5 层决策链）
-│   └── writer.py            # ⑦ 写入存储
+│   ├── writer.py            # ⑦ 写入存储
+│   └── trace.py             # step-level trace 采集
 │
 ├── events/
 │   ├── signal.py            # Signal 响应式事件（参考 Claude Code signal.ts）
@@ -1156,10 +1673,17 @@ soc-agent/
 │       └── audit_hook.py    # 审计日志
 │
 ├── memory/
-│   ├── memory.py            # soc_memory.json 管理（复用 DeerFlow 结构）
-│   ├── apply_updates.py     # 合并新旧 facts
+│   ├── store.py             # PostgreSQL SocMemoryStore（soc_facts/fact_evidence）
+│   ├── extractor.py         # 从纠正对话/LLM发现提取候选 facts
+│   ├── apply_updates.py     # 合并新旧 facts（复用 DeerFlow 思路）
 │   ├── inject.py            # 格式化注入 prompt
+│   ├── snapshot.py          # 导入/导出 soc_memory_snapshot.json
 │   └── dream.py             # 后台知识整合去重（参考 Claude Code autoDream.ts）
+│
+├── knowledge/               # Phase 5：外部知识增强，不参与 MVP 核心闭环
+│   ├── retriever.py         # KnowledgeRetriever 协议
+│   ├── pageindex_adapter.py # 长文档/SOP/报告树状检索（可选）
+│   └── graphrag_adapter.py  # 威胁情报/ATT&CK/资产关系图检索（可选）
 │
 ├── feedback/
 │   ├── correct_dialog.py    # CLI 纠正追问对话
@@ -1172,24 +1696,29 @@ soc-agent/
 │   ├── queries.py           # 查询函数
 │   └── models.py            # 数据模型
 │
+├── observability/
+│   ├── events.py            # event sink / SSE / CLI progress 统一事件
+│   ├── metrics.py           # Prometheus 指标
+│   └── replay_diff.py       # replay 结果比较
+│
 └── utils/
     ├── accumulator.py       # EndTruncatingAccumulator（安全截断·参考 Claude Code）
     └── shutdown.py          # 多级优雅关闭（参考 gracefulShutdown.ts）
 ```
 
-### 6.2 开发路线图
+### 7.2 开发路线图
 
 | Phase | 目标 | 周期 | 核心交付 |
 |---|---|---|---|
-| **Phase 1** | MVP — CLI 基本可用 | 2 周 | ①实体提取 + ⑤LLM分析（无关联）+ ⑦写入 + `analyze`/`correct` 命令 |
+| **Phase 1** | MVP — CLI + Runtime 可靠性闭环 | 2 周 | contracts schema + 固定 pipeline + ①实体提取 + ⑤LLM分析（无关联）+ PromptSanitizer + schema/domain validation + step trace + 审计落库 + rate limit + `analyze`/`correct`/`replay` |
 | **Phase 2** | 关联能力 + 主Agent去重 | 2 周 | ③关联查询 + ④漏斗关联 + ②经验快查 + MainAgent去重 + pattern_index |
-| **Phase 3** | 学习能力 + 分类器预判 | 2 周 | soc_memory.json 管理 + 纠正对话 + facts status 管理 + 异步分类器 |
-| **Phase 4** | Daemon 模式 + 子Agent并行 | 2 周 | Kafka 消费 + SubAgent并行 + review_queue + 优雅关闭 + 去重预判 |
-| **Phase 5** | 增强 | 按需 | 威胁情报集成 / 复查大屏 UI / MITRE ATT&CK / 知识老化 / Dream整合 |
+| **Phase 3** | 学习能力 + 受限软路由 | 2 周 | PostgreSQL SocMemoryStore + 纠正对话 + facts status 管理 + 异步分类器 + LLM Advisory Router 白名单 next steps + prompt/model replay evaluation |
+| **Phase 4** | Daemon 模式 + 子Agent并行 | 2 周 | Kafka 消费 + SubAgent并行 + review_queue + 优雅关闭 + 去重预判 + AsyncAPI/Kafka schema + metrics/readiness + replay diff / router 评测 |
+| **Phase 5** | 增强 | 按需 | Knowledge RAG Layer（GraphRAG 优先，PageIndex 次之）/ 威胁情报集成 / 复查大屏 UI / MITRE ATT&CK / 知识老化 / Dream整合 |
 
 ---
 
-## 七、业界调研摘要
+## 八、业界调研摘要
 
 | 来源 | 关键启示 |
 |---|---|
@@ -1198,14 +1727,22 @@ soc-agent/
 | [AgentSOC 论文](https://arxiv.org/html/2604.20134v1) | 四层架构；闭环 Sense→Reason→Act；506ms 延迟 |
 | [Vigil SOC](https://github.com/Vigil-SOC/vigil) | 12 Agent + Workflow；confidence 0.90 自动批准 |
 | [Radiant Security](https://thehackernews.com/expert-insights/2025/11/continuous-feedback-loops-why-training.html) | Day 90: 70-80% FP 降低；静态 AI 会退化 |
+| [D3 Security](https://d3security.com/resources/5-architectural-flaws-agentic-ai-soc/) | 多 Agent 5 个结构性缺陷；统一推理引擎更优 |
 
 ---
 
-## 八、技术实现：从 DeerFlow 拆零件
+## 九、技术实现：在 DeerFlow Fork 上增量扩展
 
-### 路线：引包搭新项目（不是 Fork，不是从零写）
+### 路线：业务模块增量接入，不侵入上游核心
 
-用 LangGraph 画自己的 SOC Agent 图（7 步流水线），从 DeerFlow 拆组件拼装。
+当前仓库本身是 DeerFlow fork，因此实现路线不是重写一个新框架，也不是把 SOC 逻辑散落改进 DeerFlow 原有主流程，而是在 fork 内新增 SOC 业务模块：
+
+1. 用 LangGraph 画 SOC Agent 自己的 7 步流水线。
+2. 通过 import、adapter、wrapper 复用 DeerFlow 已有模型、配置、middleware、工具桥接等能力。
+3. SOC 专有 CLI、daemon、PostgreSQL schema、Kafka 消费、审计和复查流程放在 SOC 模块内。
+4. 只有当现有 DeerFlow 缺少通用扩展点时，才对上游原文件做小范围、通用化改动。
+
+这样做的目标是同时满足两个条件：SOC Agent 能快速落地；未来同步 upstream 时不会因为大量业务侵入而难以 rebase。
 
 ### 复用的组件
 
@@ -1304,4 +1841,182 @@ async def async_classifier_prejudge(state: SubAgentState) -> SubAgentState:
     
     return state
 ```
-| [D3 Security](https://d3security.com/resources/5-architectural-flaws-agentic-ai-soc/) | 多 Agent 5 个结构性缺陷；统一推理引擎更优 |
+
+---
+
+## 十、长期演进：Security Agent Platform
+
+当前项目仍以 SOC 告警研判为第一个落地场景，但架构上应保留演进为综合安全智能体平台的空间。长期目标不是把所有能力塞进一个“万能 Agent”，而是：
+
+> 一个安全智能体平台 + 一个总控 Orchestrator + 多个专职 Agent + 共享 core 能力 + 严格权限和审计。
+
+这样既能复用实体、证据、审计、memory、工具和队列等基础设施，也能避免 SOC 防御判断、攻击模拟、检测工程、威胁狩猎之间互相污染。
+
+### 10.1 为什么不是单一 Agent
+
+不建议用一个超大 Agent 同时完成 SOC 研判、防御、渗透测试、F5/WAF 攻防、终端攻击分析和红蓝对抗。
+
+原因：
+
+- **目标冲突**：SOC 研判要保守、可解释、减少误报；攻击模拟要探索路径、寻找绕过，两者 prompt 目标不同。
+- **memory 污染**：攻击模拟经验不能直接变成 SOC 自动关闭规则；防御误报知识也不能影响攻击链规划。
+- **权限混乱**：只读日志分析和执行攻击/处置动作不是同一风险等级。
+- **审计困难**：出了误判或误操作时，必须知道是哪条 agent 链、哪类知识、哪个工具动作造成的。
+- **安全边界不足**：红队/攻击模拟属于高风险能力，必须独立授权、限定 scope、强审计。
+
+因此产品形态应是“综合入口 + 专职 Agent”，而不是一个全能 Agent。
+
+### 10.2 多 Agent 角色划分
+
+建议长期保留以下 Agent 角色，但不要在 Phase 1 一次性实现。SOC Agent 是第一个垂直 Agent。
+
+| Agent | 主要职责 | 引入时机 | 默认动作权限 |
+|---|---|---|---|
+| `soc_triage_agent` | 告警研判、误报降噪、证据整理、反馈学习 | Phase 1 起 | L0-L2，Phase 4 可有限 L3 |
+| `detection_engineering_agent` | 分析误报模式、建议规则调优、生成 Sigma/YARA/EDR 查询草案 | Phase 3/4 | L0-L2 |
+| `threat_hunting_agent` | 基于 IOC/TTP/实体关系做历史回溯和威胁狩猎 | Phase 4/5 | L0-L2 |
+| `incident_response_agent` | 事件响应 runbook、调查步骤、case 汇总和处置建议 | Phase 4/5 | L0-L3，破坏性动作审批 |
+| `threat_intel_agent` | 威胁情报、IOC、APT/TTP、MITRE ATT&CK 映射 | Phase 5 | L0-L1 |
+| `endpoint_security_agent` | 终端进程链、EDR 事件、文件/注册表/账号行为分析 | Phase 5 | L0-L2 |
+| `network_waf_agent` | F5/WAF/网络边界日志分析、攻击特征归因、规则建议 | Phase 5 | L0-L2 |
+| `attack_simulation_agent` | 授权范围内的攻击路径建模、靶场验证、检测验证 | Phase 5+ | 默认 L0-L1；执行需审批和 scope |
+
+各 Agent 必须共享实体和证据模型，但不能默认共享所有 memory。
+
+### 10.3 Orchestrator 与共享 Core
+
+长期项目结构可从 `soc-agent` 演进为 `security-agent-platform`：
+
+```text
+security-agent-platform/
+├── core/
+│   ├── entity/          # IP、domain、host、user、process、hash、rule、asset
+│   ├── evidence/        # 证据结构、引用、证据链渲染
+│   ├── case/            # alert / incident / finding 生命周期
+│   ├── audit/           # decision_audit_log / automation_actions
+│   ├── policy/          # 动作权限、安全边界、审批策略
+│   ├── memory/          # facts / lessons / memory scope / 版本回滚
+│   ├── knowledge/       # 文档、威胁情报、ATT&CK、SOP
+│   ├── queue/           # TaskQueue / lease / retry / heartbeat
+│   ├── llm/             # model gateway / json parser / prompt builder
+│   └── tools/           # 工具注册、权限声明、执行审计
+│
+├── agents/
+│   ├── soc_triage_agent/
+│   ├── detection_engineering_agent/
+│   ├── threat_hunting_agent/
+│   ├── incident_response_agent/
+│   ├── threat_intel_agent/
+│   ├── endpoint_security_agent/
+│   ├── network_waf_agent/
+│   └── attack_simulation_agent/
+│
+└── orchestrator/
+    ├── router.py        # 根据任务类型、风险等级、数据源路由到 Agent
+    ├── supervisor.py    # 多 Agent 编排、join、冲突处理
+    └── safety_gate.py   # 高风险动作审批、scope 校验、审计落库
+```
+
+Phase 1 不需要建立完整平台目录，但写代码时应把通用能力放在可迁移边界：
+
+- 实体抽取不要绑定 SOC pipeline。
+- evidence 和 audit 设计要能服务所有 Agent。
+- memory 必须带 scope/type/source，不能只有一张无边界 facts 表。
+- 工具执行必须走统一 tool registry 和 action policy。
+
+### 10.4 Memory 隔离策略
+
+综合安全智能体最容易出问题的是 memory 混用。必须从设计上把“环境事实、防御经验、攻击知识、case 上下文”分开。
+
+建议长期采用以下 memory scope：
+
+| Scope | 内容 | 默认可被谁使用 | 是否可影响自动决策 |
+|---|---|---|---|
+| `environment_facts` | 网段、资产、业务系统、批准工具、运维窗口 | 所有防御类 Agent | 是，但需 confirmed |
+| `detection_facts` | 告警规则、误报模式、检测经验、SOC 纠正知识 | SOC / Detection / Hunting | 是，但需 confirmed |
+| `attack_knowledge` | TTP、攻击链、验证方法、靶场经验 | Attack Simulation / Detection / Threat Intel | 默认否；转化后才能影响防御决策 |
+| `case_memory` | 某一次事件、告警、演练的临时上下文 | 当前 case 相关 Agent | 只影响当前 case |
+| `global_security_knowledge` | MITRE、CVE、厂商文档、F5/EDR/SIEM 手册 | 所有 Agent | 作为外部证据，不直接变成事实 |
+| `negative_memory` | 被驳回的 LLM 发现、错误规则、误判模式 | 所有相关 Agent | 用于抑制重复错误 |
+
+SOC 自动研判默认只能注入：
+
+- `environment_facts`
+- `detection_facts`
+- 当前 `case_memory`
+- 已确认的外部证据引用
+
+不能默认注入 `attack_knowledge`。如果攻击模拟结果要帮助 SOC，需要经过“检测知识转化”流程，进入 `detection_facts` 或 `lessons_learned`，并保留来源和审计。
+
+### 10.5 动作权限分级
+
+所有 Agent 的工具和动作必须按风险分级。权限等级不是技术细节，而是产品安全边界。
+
+| 等级 | 动作类型 | 示例 | 默认策略 |
+|---|---|---|---|
+| L0 | 只读分析 | 查日志、读告警、读知识库、生成解释 | 默认允许，记录审计 |
+| L1 | 生成建议 | 建议关闭、建议调查、建议检测规则、生成 runbook | 默认允许，需标注不执行 |
+| L2 | 低风险写入 | 写 `review_queue`、写 `pending_review` fact、创建草稿 case | 允许，但必须审计 |
+| L3 | 受控操作 | auto_close、lower_priority、创建正式 case | 需要策略命中和可回滚 |
+| L4 | 高风险生产操作 | 封禁账号、隔离主机、修改生产规则、阻断流量 | 默认人工审批 |
+| L5 | 攻击模拟执行 | 在靶场运行 PoC、扫描授权资产、模拟攻击链 | 仅授权 scope + 强审批 + 隔离环境 |
+
+阶段约束：
+
+- Phase 1：只允许 L0-L2，不执行自动处置。
+- Phase 4：SOC Agent 可在严格条件下执行有限 L3，例如高置信重复误报 auto_close。
+- Phase 5+：攻击模拟 Agent 默认只做 L0-L1；任何执行都必须绑定 scope、目标、时间窗、审批人和审计记录。
+
+红队/攻击模拟能力只能定位为“授权环境下的模拟、验证和检测评估”：
+
+- 允许：攻击路径建模、漏洞影响分析、检测规则验证建议、靶场验证计划。
+- 受控：在本地靶场/授权测试环境运行验证。
+- 默认禁止：对真实资产自动攻击、横向移动、破坏、持久化、绕过检测的实操自动化。
+
+### 10.6 路线图：SOC → Detection → Hunting → IR → Attack Simulation
+
+长期路线应保持从低风险、高复用能力开始：
+
+| 阶段 | 能力 | 原因 |
+|---|---|---|
+| Step 1 | SOC Triage Agent | 当前 MVP，先跑通可信研判、纠正、审计 |
+| Step 2 | Detection Engineering Agent | 与 SOC 数据最接近，直接复用误报、规则、证据和 lessons |
+| Step 3 | Threat Hunting Agent | 复用实体索引、历史摘要和 IOC/TTP 查询 |
+| Step 4 | Incident Response Agent | 复用 case、证据链、runbook 和处置建议 |
+| Step 5 | Threat Intel Agent | 接入外部知识、MITRE、CVE、厂商文档 |
+| Step 6 | Endpoint / Network / WAF Agents | 面向终端、F5/WAF、网络边界做领域化分析 |
+| Step 7 | Attack Simulation Agent | 最后引入，必须限定授权范围和执行审批 |
+
+近期最推荐的扩展顺序：
+
+1. 先完成 SOC Phase 1-3，把单条研判、反馈学习、审计做稳。
+2. 再做 Detection Engineering Agent，专门处理规则噪音、误报模式、检测建议。
+3. 然后做 Threat Hunting Agent，用 SOC 已沉淀的实体和历史数据做回溯。
+4. 最后再考虑攻击模拟和红蓝对抗能力。
+
+### 10.7 对当前方案的落地要求
+
+为了不在未来推倒重来，当前 SOC Agent 实现时必须保留这些扩展点：
+
+- `AlertEntities` 应升级为通用 `SecurityEntitySet`，覆盖 asset、network、identity、process、file、rule、vulnerability。
+- `AlertResult` 应抽象为 `SecurityFinding` 或保留可迁移字段：verdict、confidence、evidence、recommended_action、audit_id。
+- `soc_facts` 应预留 `scope` 字段，区分 `environment_facts`、`detection_facts`、`attack_knowledge` 等。
+- `decision_audit_log` 和 `automation_actions` 不要只服务 SOC，要能记录任何 Agent 的决策和动作。
+- 所有工具调用必须声明权限等级、作用域、是否可回滚。
+- prompt builder 必须支持按 Agent 类型注入不同 memory scope。
+- Web UI 后续应以 case/evidence/review 为核心，而不是只做 SOC 告警列表。
+
+最终形态：
+
+```text
+Security Agent Platform
+  = Orchestrator
+  + SOC Triage Agent
+  + Detection Engineering Agent
+  + Threat Hunting Agent
+  + Incident Response Agent
+  + Threat Intel Agent
+  + Endpoint / Network / WAF Agents
+  + Authorized Attack Simulation Agent
+  + Shared Core: entity / evidence / audit / policy / memory / tools
+```

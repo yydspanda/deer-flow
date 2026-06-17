@@ -6,7 +6,7 @@ It is the **monorepo orientation layer**: it maps the whole repo and points to t
 module guides that own the depth. For anything inside a module, read that module's
 guide rather than expecting full detail here:
 
-- **[backend/AGENTS.md](backend/AGENTS.md)** — backend depth: harness/app split, agent &
+- **[backend/AGENTS.md](backend/AGENTS.md)** — backend depth: harness/app split, agent and
   middleware chain, sandbox, MCP, skills, memory, IM channels, persistence/migrations,
   config system, test layout.
 - **[frontend/AGENTS.md](frontend/AGENTS.md)** — frontend depth: Next.js App Router layout,
@@ -114,8 +114,8 @@ These apply repo-wide; module guides own the module-specific detail.
 
 ## SOC Agent Branch Context
 
-This branch is used to build a SOC alert triage agent on top of DeerFlow + LangGraph.
-The current authoritative plan is
+This branch is used to design a SOC alert triage agent on top of DeerFlow + LangGraph.
+The SOC Agent is not implemented yet; the current authoritative plan is
 [.notes/ai_soc/soc-agent-solution.md](.notes/ai_soc/soc-agent-solution.md).
 
 Current SOC direction:
@@ -154,11 +154,9 @@ search alone. Use this order:
 2. Derive the smallest Phase-aligned implementation slice from those docs.
 3. Use CodeGraph only after the slice is clear, to verify DeerFlow code locations,
    reusable APIs, and low-intrusion integration points.
-4. Use Understand Anything for broad architecture exploration of reference projects or
-   large unfamiliar areas; use CodeGraph for exact symbol/function/class lookup.
-5. Implement SOC-specific behavior as incremental modules/adapters first; avoid changing
+4. Implement SOC-specific behavior as incremental modules/adapters first; avoid changing
    upstream DeerFlow core unless a small generic extension point is required.
-6. Update `.notes/ai_soc/progress.md` after each completed slice with status, changed
+5. Update `.notes/ai_soc/progress.md` after each completed slice with status, changed
    files, verification, and next step.
 
 Progress is not tracked in chat history. The durable task ledger is
