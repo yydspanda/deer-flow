@@ -35,7 +35,7 @@ graph TB
     subgraph 存储层
         SOUL["soc_soul.md<br/>（部署时写一次）<br/>环境知识+分析原则"]
         MEMORY["soc_memory.json<br/>（系统自动积累）<br/>模式级知识+纠正经验"]
-        DB[("alerts.db<br/>─────────<br/>alert_summaries<br/>（每条预警摘要）<br/><br/>lessons_learned<br/>（条件→动作规则）<br/><br/>review_queue<br/>（待复查记录）")]
+        DB[("PostgreSQL<br/>─────────<br/>alert_summaries<br/>（每条预警摘要）<br/><br/>lessons_learned<br/>（条件→动作规则）<br/><br/>review_queue<br/>（待复查记录）")]
     end
 
     subgraph 反馈闭环
@@ -84,8 +84,8 @@ graph TB
 | 去重策略 | 主Agent倒排索引 + 基于证据重叠度判定 | 同 rule + 同 exe + 同 src_ip 在短窗口内重复 → 直接 merge，不调 LLM。参考 Claude Code `bashPermissions.ts:1483-1587` 的 speculative classifier |
 | 子Agent生命周期 | 独立 AbortController + 超时 kill | 单个子Agent不响应 → kill，其他子Agent不受影响。参考 Claude Code `Task.ts:6-76` |
 | 知识存储 | soc_memory.json | 复用 DeerFlow memory.json 结构 + `_apply_updates()` 逻辑 |
-| 预警摘要 | SQLite | 需要按实体查询，文件做不到 |
-| 经验规则 | SQLite | 需要按 pattern 高效匹配 |
+| 预警摘要 | PostgreSQL | 需要按实体/时间窗口查询，文件做不到；生产环境同构 |
+| 经验规则 | PostgreSQL | 需要按 pattern 高效匹配；后续可加 trigram/JSONB 索引 |
 | 反馈方式 | 追问对话(CLI) + 批量复查(daemon) | CLI 可交互；daemon 只能事后复查 |
 | soul 维护 | 部署时写一次 | 运营分析师不会主动维护，后续学习走 memory |
 | memory 粒度 | 模式级，不存具体 IP/用户 | 具体实体的靠 alert_summaries 关联查询覆盖 |
@@ -725,7 +725,7 @@ async def handle_alert_with_prejudge(alert):
    （模式级知识）       │        从纠正对话和 LLM 发现中提取
                       │        facts 数组，confidence + status 区分
                       │
-   alerts.db ─────────┤     ← 系统自动写入
+   PostgreSQL ────────┤     ← 系统自动写入
    ├ alert_summaries  │        每条预警的摘要 → ③关联查询读
    ├ lessons_learned  │        条件→动作规则 → ②经验快查读
    └ review_queue     │        daemon 待复查 → 大屏复查读
@@ -841,7 +841,7 @@ async def handle_alert_with_prejudge(alert):
 CREATE TABLE alert_summaries (
     alert_id TEXT PRIMARY KEY,
     rule_name TEXT NOT NULL,
-    alert_time DATETIME NOT NULL,
+    alert_time TIMESTAMPTZ NOT NULL,
 
     exe_name TEXT,
     src_ip TEXT,
@@ -850,18 +850,18 @@ CREATE TABLE alert_summaries (
     domain TEXT,
     file_hash TEXT,
     user_name TEXT,
-    entities TEXT,              -- JSON
+    entities JSONB NOT NULL DEFAULT '{}'::jsonb,
 
     verdict TEXT NOT NULL,
-    confidence REAL NOT NULL,
+    confidence DOUBLE PRECISION NOT NULL,
     summary TEXT NOT NULL,
     alert_type TEXT,
     severity TEXT,
 
-    analyzed_at DATETIME,
-    corrected_at DATETIME,
+    analyzed_at TIMESTAMPTZ,
+    corrected_at TIMESTAMPTZ,
     original_verdict TEXT,
-    mode TEXT DEFAULT 'cli'
+    mode TEXT NOT NULL DEFAULT 'cli'
 );
 
 CREATE INDEX idx_sum_rule ON alert_summaries(rule_name);
@@ -869,6 +869,8 @@ CREATE INDEX idx_sum_exe ON alert_summaries(exe_name);
 CREATE INDEX idx_sum_ip ON alert_summaries(src_ip, dst_ip);
 CREATE INDEX idx_sum_domain ON alert_summaries(domain);
 CREATE INDEX idx_sum_user ON alert_summaries(user_name);
+CREATE INDEX idx_sum_time ON alert_summaries(alert_time DESC);
+CREATE INDEX idx_sum_entities_gin ON alert_summaries USING GIN (entities);
 ```
 
 ### 3.5 lessons_learned — 条件→动作规则
@@ -879,15 +881,18 @@ CREATE INDEX idx_sum_user ON alert_summaries(user_name);
 
 ```sql
 CREATE TABLE lessons_learned (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     pattern TEXT NOT NULL,
     action TEXT NOT NULL,       -- auto_close / lower_priority / flag
     lesson TEXT NOT NULL,
     source_alert_id TEXT,
-    hit_count INTEGER DEFAULT 0,
-    confidence REAL DEFAULT 0.8,
-    created_at DATETIME NOT NULL
+    hit_count INTEGER NOT NULL DEFAULT 0,
+    confidence DOUBLE PRECISION NOT NULL DEFAULT 0.8,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE INDEX idx_lessons_pattern ON lessons_learned(pattern);
+CREATE INDEX idx_lessons_confidence ON lessons_learned(confidence DESC);
 ```
 
 | pattern | action | lesson |
@@ -902,18 +907,20 @@ CREATE TABLE lessons_learned (
 
 ```sql
 CREATE TABLE review_queue (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     alert_id TEXT NOT NULL,
-    alert_time DATETIME NOT NULL,
+    alert_time TIMESTAMPTZ NOT NULL,
     ai_verdict TEXT NOT NULL,
-    ai_confidence REAL NOT NULL,
+    ai_confidence DOUBLE PRECISION NOT NULL,
     ai_summary TEXT NOT NULL,
     ai_investigation TEXT,
-    status TEXT DEFAULT 'pending',
-    reviewed_at DATETIME,
+    status TEXT NOT NULL DEFAULT 'pending',
+    reviewed_at TIMESTAMPTZ,
     reviewer_note TEXT,
-    created_at DATETIME NOT NULL
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE INDEX idx_review_status ON review_queue(status, created_at);
 ```
 
 ---
@@ -1118,7 +1125,8 @@ soc-agent/
 ├── config.yaml              # 模型/API/阈值配置
 ├── soc_soul.md              # 静态环境知识（部署时写一次）
 ├── soc_memory.json          # 动态知识（系统自动积累）
-├── alerts.db                # SQLite（摘要+规则+复查队列）
+├── docker-compose.yml       # 本地 PostgreSQL + Kafka/Redpanda 开发环境
+├── .env.example             # DATABASE_URL / KAFKA_BROKERS 等本地配置示例
 │
 ├── cli.py                   # CLI 入口
 ├── daemon.py                # Daemon 入口（Kafka 消费 + 优雅关闭）
@@ -1159,7 +1167,8 @@ soc-agent/
 │   └── review_processor.py  # Daemon 复查处理
 │
 ├── db/
-│   ├── schema.sql           # 建表
+│   ├── migrations/          # PostgreSQL schema 迁移
+│   ├── schema.sql           # 当前 PostgreSQL schema 快照
 │   ├── queries.py           # 查询函数
 │   └── models.py            # 数据模型
 │
@@ -1217,7 +1226,7 @@ soc-agent/
 | Gateway/Auth | 部署环境自己管 |
 | IM Channels | SOC 走 Kafka/大屏 |
 | Skills | 7 步流水线固定，不需要动态加载 |
-| Persistence | 用自己的 SQLite 存 alert |
+| Persistence | 用自己的 PostgreSQL schema 存 alert |
 | Sandbox | 除非要执行脚本分析日志 |
 
 ### SOC Agent 图（两层）
