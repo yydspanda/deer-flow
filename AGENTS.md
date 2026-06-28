@@ -114,8 +114,8 @@ These apply repo-wide; module guides own the module-specific detail.
 
 ## SOC Agent Branch Context
 
-This branch is used to design a SOC alert triage agent on top of DeerFlow + LangGraph.
-The SOC Agent is not implemented yet; the current authoritative plan is
+This branch is used to build a SOC alert triage agent on top of DeerFlow + LangGraph.
+The current authoritative plan is
 [.notes/ai_soc/soc-agent-solution.md](.notes/ai_soc/soc-agent-solution.md).
 
 Current SOC direction:
@@ -129,6 +129,8 @@ Current SOC direction:
 - SOC persistence code lives under `backend/soc_agent/db/` and implements repository
   protocols from `backend/soc_agent/protocols.py`; keep it separate from DeerFlow harness
   persistence unless a generic upstream extension point is genuinely needed.
+- SOC schema migrations live under `backend/soc_agent/db/migrations/` and are applied with
+  `soc db upgrade`; the migration version table is `soc_alembic_version`.
 - Kafka/Redpanda is planned for Phase 4 daemon ingestion; local broker default is `localhost:9092`.
 - Phase 1 target is CLI + Runtime reliability: fixed pipeline, schema/domain validation,
   step trace, audit logging, basic rate limiting, and `analyze` / `correct` / `replay`.

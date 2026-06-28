@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,7 +13,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from soc_agent.core import SocAnalysisService, SocServiceError
-from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
+from soc_agent.db import (
+    SqlAlchemyAlertRepository,
+    create_soc_tables,
+    resolve_database_url,
+    to_sync_database_url,
+    upgrade_soc_schema,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -29,6 +34,8 @@ def main(argv: list[str] | None = None) -> int:
         return _replay(args)
     if args.command == "db" and args.db_command == "init":
         return _db_init(args)
+    if args.command == "db" and args.db_command == "upgrade":
+        return _db_upgrade(args)
 
     parser.print_help()
     return 1
@@ -67,6 +74,9 @@ def _build_parser() -> argparse.ArgumentParser:
     db_subparsers = db.add_subparsers(dest="db_command")
     init = db_subparsers.add_parser("init", help="Create SOC database tables")
     _add_database_args(init)
+    upgrade = db_subparsers.add_parser("upgrade", help="Run SOC Alembic migrations")
+    upgrade.add_argument("revision", nargs="?", default="head", help="Alembic revision target")
+    _add_database_args(upgrade)
 
     return parser
 
@@ -141,6 +151,20 @@ def _db_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _db_upgrade(args: argparse.Namespace) -> int:
+    try:
+        database_url = resolve_database_url(args.database_url)
+        upgrade_soc_schema(database_url, revision=args.revision)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: report migration failure
+        print(f"error: database upgrade failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"SOC database schema upgraded to {args.revision}.")
+    return 0
+
+
 def _repository_from_args(args: argparse.Namespace) -> SqlAlchemyAlertRepository:
     engine = _engine_from_args(args)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -148,18 +172,8 @@ def _repository_from_args(args: argparse.Namespace) -> SqlAlchemyAlertRepository
 
 
 def _engine_from_args(args: argparse.Namespace):
-    database_url = args.database_url or os.environ.get("SOC_DATABASE_URL")
-    if not database_url:
-        raise ValueError("database URL required; pass --database-url or set SOC_DATABASE_URL")
-    return create_engine(_sync_database_url(database_url), pool_pre_ping=True)
-
-
-def _sync_database_url(database_url: str) -> str:
-    if database_url.startswith("postgresql+asyncpg://"):
-        return database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
-    if database_url.startswith("postgresql://"):
-        return database_url.replace("postgresql://", "postgresql+psycopg://", 1)
-    return database_url
+    database_url = resolve_database_url(args.database_url)
+    return create_engine(to_sync_database_url(database_url), pool_pre_ping=True)
 
 
 def _load_payload(path: str | None, json_payload: str | None) -> dict[str, Any]:

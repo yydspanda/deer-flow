@@ -178,6 +178,8 @@ SOC repository 实现约束：
 - SOC 业务表放在 `backend/soc_agent/db/`，不塞进 DeerFlow harness persistence。
 - repository 可以依赖 SQLAlchemy 和 `soc_agent.contracts`，不能 import `soc_agent.core`、`pipeline`、CLI/API/TUI/ingestion。
 - `soc_analysis_runs.run_payload` 保存完整 `AnalysisRun`，索引列只服务查询和筛选，不作为唯一事实来源。
+- SOC schema migrations 放在 `backend/soc_agent/db/migrations/`，使用独立版本表 `soc_alembic_version`。
+- 正式 schema 变更走 `soc db upgrade` / Alembic revision；`create_soc_tables()` 和 `soc db init` 只作为 Phase 1 本地开发辅助。
 - 单元测试可以用 SQLite in-memory 验证 SQLAlchemy 映射；运行时配置和正式部署必须指向 PostgreSQL。
 
 ### 三类模型必须分清

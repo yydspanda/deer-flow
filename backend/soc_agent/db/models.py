@@ -28,7 +28,7 @@ class SocAnalysisRunRow(SocBase):
     alert_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
     status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     input_hash: Mapped[str | None] = mapped_column(String(128), index=True)
-    replay_of_run_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    replay_of_run_id: Mapped[str | None] = mapped_column(String(64))
     pipeline_version: Mapped[str] = mapped_column(String(64), nullable=False)
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(128), nullable=False)

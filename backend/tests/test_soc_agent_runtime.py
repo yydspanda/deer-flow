@@ -217,7 +217,7 @@ def test_cli_analyze_file_outputs_json(capsys) -> None:
 def test_cli_persist_show_and_replay(tmp_path: Path, capsys) -> None:
     database_url = f"sqlite+pysqlite:///{tmp_path / 'soc.db'}"
 
-    assert main(["db", "init", "--database-url", database_url]) == 0
+    assert main(["db", "upgrade", "--database-url", database_url]) == 0
     capsys.readouterr()
 
     assert main(["analyze", str(SAMPLES / "approved_scanner.json"), "--persist", "--database-url", database_url]) == 0

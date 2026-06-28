@@ -17,7 +17,7 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1：CLI + Runtime 可靠性闭环 |
-| 当前目标 | 建立 SOC Agent 最小可靠闭环：contracts schema、Runtime 状态机、step trace、validator、headless CLI analyze、run 输入快照、replay contract、PostgreSQL 持久化接口 |
+| 当前目标 | 建立 SOC Agent 最小可靠闭环：contracts schema、Runtime 状态机、step trace、validator、headless CLI analyze、run 输入快照、replay contract、PostgreSQL repository、Alembic migration |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
@@ -33,7 +33,7 @@
 | 5 | golden alert samples | Partial | 覆盖批准扫描器误报、恶意 IOC、低置信未知、字段缺失；坏 JSON 模拟待补 |
 | 6 | Phase 1 最小测试 | Partial | 字段缺失不崩、输出过 schema/domain validation、每步有 trace、不执行自动处置；坏 JSON repair 待补 |
 | 7 | replay contract | Done | `AnalysisRun` 记录 input payload/hash；`SocAnalysisService.replay()` 通过 repository 生成新 run，不覆盖旧 run |
-| 8 | PostgreSQL run repository | Partial | 已有 SOC ORM row + SQLAlchemy repository + headless CLI wiring；正式 Alembic migration / config wiring 待补 |
+| 8 | PostgreSQL run repository | Done | SOC ORM row + SQLAlchemy repository + Alembic migration + headless CLI `show/replay` 已完成 |
 
 ## 进度记录
 
@@ -227,13 +227,17 @@
   - 架构测试增加 `db` 不 import core/pipeline/transport 的边界约束。
 - 新增 headless CLI 持久化闭环：
   - `soc db init`
+  - `soc db upgrade`
   - `soc analyze ALERT.json --persist`
   - `soc show RUN_ID`
   - `soc replay RUN_ID`
-  - 数据库 URL 通过 `--database-url` 或 `SOC_DATABASE_URL` 传入；PostgreSQL URL 会归一化为 sync `postgresql+psycopg://`。
+  - 数据库 URL 通过 `--database-url`、`SOC_DATABASE_URL` 或 DeerFlow `database.backend=postgres` / `database.postgres_url` 解析；PostgreSQL URL 会归一化为 sync `postgresql+psycopg://`。
+- 新增 SOC Alembic migration：
+  - `backend/soc_agent/db/migrations/versions/0001_soc_analysis_runs.py`
+  - 版本表使用 `soc_alembic_version`，不和 DeerFlow harness migration 混用。
 - 说明：
   - 测试使用 SQLite in-memory / temp file 只是 SQLAlchemy unit harness；SOC runtime 策略仍是 PostgreSQL。
-  - 下一步需要补正式 Alembic migration / config wiring，避免长期依赖 `soc db init` 的 `create_all`。
+  - `soc db init` 保留为开发辅助；正式路径使用 `soc db upgrade`。
 - 已验证：
   - `cd backend && ./.venv/bin/python -m ruff format --check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
   - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
