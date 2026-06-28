@@ -1,0 +1,4 @@
+interface:
+  display_name: "SOC Product Manager"
+  short_description: "SOC Agent product thinking"
+  default_prompt: "Use the SOC Product Manager skill to clarify a SOC Agent feature, define MVP scope, risks, metrics, and acceptance criteria."

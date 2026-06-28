@@ -1,0 +1,9 @@
+{
+  "alert_id": "ALT-SAMPLE-UNK-001",
+  "rule_name": "Unusual-Process-Execution",
+  "source_ip": "10.0.5.15",
+  "process_name": "custom-tool.exe",
+  "username": "bob",
+  "host_name": "workstation-11",
+  "severity": "low"
+}

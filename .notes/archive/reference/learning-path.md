@@ -1,8 +1,8 @@
 # DeerFlow 2.0 学习路径
 
 > 前提文档：`.notes/project-overview.md`
-> 架构图：`.notes/architecture-diagram.md`（增量更新，每完成一个模块追加）
-> 设计模式：`.notes/design-patterns.md`（Part 1: AI Agent 核心模式 8 个 + Part 2: 通用模式 4 个）
+> 架构图：`.notes/reference/architecture-diagram.md`（增量更新，每完成一个模块追加）
+> 设计模式：`.notes/reference/design-patterns.md`（Part 1: AI Agent 核心模式 8 个 + Part 2: 通用模式 4 个）
 
 ## 模块清单
 

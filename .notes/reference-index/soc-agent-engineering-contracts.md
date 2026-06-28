@@ -1,0 +1,708 @@
+# SOC Agent 工程契约方案
+
+> 目的：为 SOC Agent 后续扩展成多入口、多 Agent、Web UI、Daemon、攻击模拟/防御综合平台时，提前固定代码风格、架构边界、API、通信协议和质量门禁。
+>
+> 参考来源：DeerFlow `RunManager/run_agent/RunJournal` 生命周期，Hermes ACP `SessionManager` 持久化恢复，Claude Code `buildTool/checkPermissions/PermissionDecision/SendMessageTool` 权限和结构化消息设计。
+
+## 一、核心原则
+
+SOC Agent 不是“LLM 自主系统”，而是“生产级 Runtime + 受控 LLM 节点”。工程契约必须优先保证：
+
+1. **可扩展**：CLI、API、Daemon、Web UI、Kafka consumer 都调用同一套 core service。
+2. **可验证**：所有外部输入、LLM 输出、工具参数都必须 schema 校验 + domain 校验。
+3. **可审计**：每次 run、step、tool action、permission decision、memory update 都可追踪。
+4. **可恢复**：run 有状态机，失败不能半写入；replay 能比较旧结果和新结果。
+5. **可隔离**：SOC、防御工程、威胁狩猎、攻击模拟共享 core，但 memory scope、权限和工具能力隔离。
+
+## 二、代码风格与质量门禁
+
+### 后端 Python
+
+| 项 | 约定 |
+|---|---|
+| Python | 3.12+ |
+| 包管理 | `uv` |
+| 格式化/Lint | `ruff format` + `ruff check` |
+| 类型 | 所有 core/domain/protocol 层必须有类型标注 |
+| 数据模型 | Pydantic v2 用于 API/Kafka/LLM/配置边界；dataclass 可用于纯内部轻量状态 |
+| 时间 | 全部使用 timezone-aware UTC，落库 `TIMESTAMPTZ` |
+| ID | 外部可见对象用 `run_id` / `alert_id` / `case_id` / `fact_id`；内部事件带 `event_id` |
+| 错误 | 不吞异常；业务错误转成结构化 error code；原始异常写 trace/audit |
+
+### 推荐门禁
+
+Phase 1 就建立：
+
+```bash
+uv run ruff format --check .
+uv run ruff check .
+uv run pytest
+```
+
+Phase 2+ 增加：
+
+```bash
+uv run pyright
+uv run pytest tests/contracts
+uv run pytest tests/architecture
+```
+
+架构测试必须覆盖：
+
+- `api/cli/daemon` 可以 import `core`。
+- `core` 不 import `api/cli/daemon`。
+- `pipeline` 不直接 import FastAPI/Kafka/Typer。
+- `memory` 不能绕过 `soc_facts` 状态机直接注入 prompt。
+- `tools` 的执行必须经过 `policy`。
+
+## 三、项目分层
+
+建议目录：
+
+```text
+soc_agent/
+├── contracts/          # 所有跨边界 schema：API/Kafka/Event/LLM/Tool
+├── core/               # Runtime、状态机、service、validator、router
+├── pipeline/           # 7 步流水线节点
+├── policy/             # 权限等级、动作审批、risk gate
+├── tools/              # 工具注册和执行适配器
+├── memory/             # soc_facts / lessons / prompt 注入
+├── db/                 # repository + migrations
+├── queue/              # Phase 1 memory queue；Phase 4 PG queue
+├── api/                # FastAPI 入口，只做 transport
+├── cli/                # Typer/Rich 入口，只做 transport
+├── daemon/             # Kafka consumer，只做 transport
+└── observability/      # trace、metrics、audit writer
+```
+
+依赖方向：
+
+```text
+api / cli / daemon
+        ↓
+      core
+        ↓
+pipeline / memory / policy / tools / db / queue
+        ↓
+contracts
+```
+
+`contracts/` 是最低层，避免 API、Kafka、LLM、Web UI 各写一套字段。
+
+## 四、Runtime 状态机
+
+参考 DeerFlow `RunManager`：run 必须有明确状态，状态迁移可持久化。
+
+### AnalysisRunStatus
+
+```text
+pending
+running
+needs_review
+success
+failed
+interrupted
+rolled_back
+replayed
+```
+
+### PipelineStepStatus
+
+```text
+pending
+running
+skipped
+success
+failed
+retrying
+```
+
+每个 step trace 至少包含：
+
+| 字段 | 说明 |
+|---|---|
+| `run_id` | 本次分析 ID |
+| `alert_id` | 告警 ID |
+| `step_name` | `normalize/entity_extract/dedup/...` |
+| `status` | step 状态 |
+| `input_hash` | 输入摘要 hash |
+| `output_hash` | 输出摘要 hash |
+| `started_at/ended_at` | 时间 |
+| `duration_ms` | 耗时 |
+| `error_code/error_message` | 失败原因 |
+| `retry_count` | 重试次数 |
+| `model_name/token_usage` | LLM 节点才有 |
+
+## 五、数据模型边界
+
+### Pydantic 用在边界
+
+必须使用 Pydantic schema 的边界：
+
+- CLI 输入文件解析后的 `AlertInput`
+- FastAPI request/response
+- Kafka message payload
+- LLM structured output
+- Tool input/output
+- Config yaml
+
+### Domain model 用在内部
+
+内部领域模型应稳定，不被外部协议污染：
+
+```text
+SecurityEntitySet
+SecurityFinding
+AnalysisRun
+PipelineStep
+Evidence
+PermissionDecision
+ToolAction
+MemoryFact
+LessonRule
+```
+
+原则：外部协议可以 version bump，domain model 不跟着频繁改名。
+
+## 六、API 接口规范
+
+API 从第一天就加版本：
+
+```text
+/api/soc/v1/...
+```
+
+### Phase 1 API 草案
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `POST` | `/api/soc/v1/alerts/analyze` | 提交单条告警分析 |
+| `GET` | `/api/soc/v1/runs/{run_id}` | 查询 run 状态和摘要 |
+| `GET` | `/api/soc/v1/runs/{run_id}/steps` | 查询 step trace |
+| `POST` | `/api/soc/v1/runs/{run_id}/replay` | 回放分析 |
+| `GET` | `/api/soc/v1/alerts/{alert_id}` | 查看告警分析结果 |
+| `POST` | `/api/soc/v1/alerts/{alert_id}/corrections` | 提交人工纠正 |
+| `GET` | `/api/soc/v1/facts` | 查询 facts |
+| `PATCH` | `/api/soc/v1/facts/{fact_id}` | 确认/驳回/回滚 fact |
+
+### 响应格式
+
+业务成功：
+
+```json
+{
+  "data": {},
+  "meta": {
+    "request_id": "req_...",
+    "schema_version": "soc.api.v1"
+  }
+}
+```
+
+业务失败采用 Problem Details 风格：
+
+```json
+{
+  "error": {
+    "code": "LLM_OUTPUT_INVALID",
+    "message": "LLM output failed schema validation",
+    "details": {},
+    "retryable": false
+  },
+  "meta": {
+    "request_id": "req_...",
+    "run_id": "run_..."
+  }
+}
+```
+
+所有写接口支持：
+
+- `Idempotency-Key`
+- `X-Request-Id`
+- `X-Actor`
+
+## 七、事件与通信规范
+
+### 内部事件
+
+内部事件用于 CLI 进度、Web UI SSE、Daemon 观测、审计落库。事件必须结构化：
+
+```json
+{
+  "schema_version": "soc.event.v1",
+  "event_id": "evt_...",
+  "event_type": "pipeline.step.completed",
+  "run_id": "run_...",
+  "alert_id": "ALT-0001",
+  "trace_id": "trace_...",
+  "occurred_at": "2026-06-28T10:00:00Z",
+  "payload": {}
+}
+```
+
+推荐事件类型：
+
+```text
+analysis.run.created
+analysis.run.started
+pipeline.step.started
+pipeline.step.completed
+pipeline.step.failed
+llm.call.started
+llm.call.completed
+tool.action.proposed
+tool.action.approved
+tool.action.executed
+memory.fact.proposed
+memory.fact.confirmed
+memory.fact.rejected
+analysis.run.completed
+analysis.run.failed
+```
+
+### Web/CLI 流式输出
+
+参考 DeerFlow StreamBridge/SSE 思路：
+
+- API/Web UI 用 SSE 或 WebSocket 订阅 run events。
+- CLI Phase 1 可以直接消费 core event stream，不必绕 HTTP。
+- event payload 不放超大原始日志，只放摘要和引用 ID。
+
+## 八、Kafka 协议
+
+Phase 4 引入 Kafka/Redpanda。Kafka message 必须 versioned，不直接透传厂商原始字段作为内部模型。
+
+### 输入 topic
+
+```text
+soc.alerts.raw.v1
+```
+
+payload：
+
+```json
+{
+  "schema_version": "soc.alert.raw.v1",
+  "source": "edr",
+  "alert_id": "ALT-0001",
+  "dedup_key": "rule:exe:src",
+  "occurred_at": "2026-06-28T10:00:00Z",
+  "severity": "medium",
+  "raw": {},
+  "entities_hint": {}
+}
+```
+
+### 输出 topics
+
+```text
+soc.analysis.results.v1
+soc.analysis.review_required.v1
+soc.analysis.events.v1
+```
+
+Kafka consumer 约定：
+
+- 至少一次投递，必须靠 `alert_id + run_mode + pipeline_version` 做幂等。
+- DB 写入成功后再 commit offset。
+- 不在 Kafka callback 内执行长逻辑；只入队并由 Runtime worker 处理。
+- poison message 进入 dead-letter topic：`soc.alerts.dead_letter.v1`。
+
+## 九、工具与动作协议
+
+参考 Claude Code `buildTool + validateInput + checkPermissions + isReadOnly`，SOC 工具必须统一声明能力。
+
+```python
+class ToolSpec(BaseModel):
+    name: str
+    description: str
+    input_schema: dict
+    output_schema: dict
+    permission_level: Literal["L0", "L1", "L2", "L3", "L4", "L5"]
+    read_only: bool
+    idempotent: bool
+    timeout_seconds: int
+    side_effects: list[str]
+```
+
+执行前必须得到 `PermissionDecision`：
+
+```json
+{
+  "behavior": "allow | ask | deny",
+  "reason_type": "policy | rule | classifier | human | safety_check",
+  "reason": "L4 action requires human approval",
+  "approved_by": null
+}
+```
+
+Phase 1 只允许：
+
+- L0：读日志、读告警、读 DB
+- L1：生成建议
+- L2：写 `review_queue`、写 candidate fact、写 audit
+
+## 十、多 Agent 通信协议
+
+Phase 1 不做复杂多 Agent 通信。长期如果引入 Detection/Hunting/IR/Attack Simulation Agent，必须使用结构化消息，不用自由文本当协议。
+
+```json
+{
+  "schema_version": "soc.agent.message.v1",
+  "message_id": "msg_...",
+  "conversation_id": "case_...",
+  "from_agent": "soc_triage_agent",
+  "to_agent": "detection_engineering_agent",
+  "message_type": "request | response | broadcast | approval_request",
+  "summary": "Need rule tuning suggestion for repeated false positive",
+  "content": {},
+  "requires_response": true,
+  "expires_at": "2026-06-28T10:10:00Z"
+}
+```
+
+禁止：
+
+- 跨 Agent 直接共享所有 memory。
+- 用自然语言消息触发高风险动作。
+- 子 Agent 绕过 orchestrator 直接操作生产系统。
+
+## 十一、配置规范
+
+配置分三类：
+
+| 类型 | 示例 | 管理方式 |
+|---|---|---|
+| 静态配置 | 模型、阈值、队列、超时 | `config.yaml` + Pydantic 校验 |
+| 密钥配置 | API key、DB URL、Kafka password | `.env` / secret manager，不进 git |
+| 运行时策略 | fact 状态、lesson 启用、自动动作审批 | PostgreSQL，有审计版本 |
+
+所有配置变更必须能回答：
+
+- 谁改的？
+- 什么时候改的？
+- 改了什么？
+- 影响哪些 run？
+
+## 十二、身份、认证与授权
+
+Phase 1 CLI 可以先用本机用户和配置文件，不做完整用户体系；但 API、Web UI、Daemon 从设计上必须区分 actor。
+
+### Actor 模型
+
+| Actor | 说明 | 默认权限 |
+|---|---|---|
+| `system` | Runtime/daemon 内部动作 | 只能按 policy 执行 |
+| `analyst` | 一线分析师 | 分析、纠正、提交 review |
+| `shift_lead` | 值班负责人 | 批量确认/驳回、批准部分 L3 |
+| `admin` | 平台管理员 | 配置、数据源、模型、策略 |
+| `agent:<name>` | 子 Agent / 专职 Agent | 只能使用分配的 tool scope |
+| `service:<name>` | Kafka consumer / scheduler | 只能写入指定队列和事件 |
+
+所有写操作必须带：
+
+```text
+actor_id
+actor_type
+auth_source
+request_id
+```
+
+### 授权原则
+
+- API 入口做认证，core/policy 再做授权，不能只靠入口保护。
+- `PermissionDecision` 需要记录 actor、policy version、decision reason。
+- 自动动作即使由 daemon 触发，也必须能追踪到 policy 和候选证据。
+- 多 Agent 场景下，子 Agent 不继承用户全部权限，只继承本任务明确授予的 capability。
+
+## 十三、数据安全、脱敏与留存
+
+SOC 数据通常包含内网 IP、用户名、主机名、进程命令行、文件路径、hash、可能的业务系统名称。默认按敏感数据处理。
+
+### 数据分类
+
+| 级别 | 内容 | 处理 |
+|---|---|---|
+| S0 | 指标、计数、耗时、token usage | 可长期保留 |
+| S1 | 告警摘要、规则名、verdict、confidence | 可保留，注意访问控制 |
+| S2 | IP、主机名、用户名、进程路径、命令行 | 存储和日志需要脱敏策略 |
+| S3 | 原始日志、样本路径、凭证片段、业务数据 | 默认不进 prompt，不进普通日志 |
+| S4 | 密钥、token、密码、cookie、私钥 | 必须拦截、脱敏、拒绝进入 LLM |
+
+### Prompt 数据原则
+
+- 进入 LLM 的内容必须经过 `PromptSanitizer`。
+- 原始日志默认只截取必要片段，保留 evidence reference。
+- prompt 全文是否落库必须可配置；生产默认存 hash + injected ids + 摘要。
+- golden samples 必须脱敏后提交仓库。
+
+### 留存策略
+
+| 数据 | 默认留存 |
+|---|---|
+| `decision_audit_log` | 180-365 天，按磁盘和合规调整 |
+| `pipeline_step_trace` | 30-90 天，长期保留摘要 |
+| 原始 alert payload | 默认 30 天或只存引用 |
+| confirmed facts / lessons | 长期保留，但需要老化和复查 |
+| rejected facts | 保留摘要和 hash，用于抑制重复错误 |
+
+## 十四、Schema 版本与兼容策略
+
+所有跨边界协议都必须带 `schema_version`：
+
+```text
+soc.api.v1
+soc.event.v1
+soc.alert.raw.v1
+soc.analysis.result.v1
+soc.agent.message.v1
+soc.llm.triage_output.v1
+```
+
+兼容规则：
+
+- 小版本只允许新增 optional 字段。
+- 删除字段、改语义、改枚举含义必须升大版本。
+- API/Kafka/LLM schema 都要有 contract tests。
+- migrations 必须支持从前一个 release 升级，不允许只支持空库。
+- replay 时必须记录 `pipeline_version`、`schema_version`、`prompt_version`、`model_name`。
+
+建议维护：
+
+```text
+contracts/schemas/
+├── api/
+├── kafka/
+├── events/
+├── llm/
+└── tools/
+```
+
+Phase 2 起生成并提交 OpenAPI snapshot；Phase 4 起维护 AsyncAPI/Kafka schema 文档。
+
+## 十五、模型、Prompt 与评测治理
+
+模型和 prompt 不是代码外的“黑盒配置”，它们会直接影响判定结果，必须版本化。
+
+### 必须记录
+
+| 字段 | 说明 |
+|---|---|
+| `model_provider` | OpenAI / DeepSeek / vLLM / ... |
+| `model_name` | 实际调用模型 |
+| `model_parameters` | temperature、max tokens、reasoning 等 |
+| `prompt_version` | prompt 模板版本 |
+| `pipeline_version` | pipeline 版本 |
+| `parser_version` | JSON parser / repair 策略版本 |
+| `eval_set_version` | 使用的 golden set 版本 |
+
+### Prompt 约定
+
+- prompt 模板集中放在 `prompts/` 或 `pipeline/prompt_builder.py`，不要散落在节点里。
+- prompt 输出必须对应 `contracts/llm/*.py` 的 Pydantic schema。
+- prompt 修改必须跑 golden alert set。
+- 高风险 prompt 变更需要 replay 一批历史样本，比较 override rate、needs_review rate、parse rate。
+
+### Model fallback
+
+允许 fallback，但必须显式记录：
+
+```text
+requested_model
+actual_model
+fallback_reason
+```
+
+禁止静默换模型后仍把结果当成同一评测基线。
+
+## 十六、成本、限流与背压
+
+每天 1 万条告警不算大吞吐，但 LLM 调用会造成成本和速率瓶颈。成本控制是 Runtime 责任，不是后期优化。
+
+### 预算维度
+
+| 维度 | 示例 |
+|---|---|
+| per alert | 单条告警最大 LLM 调用次数、最大 token |
+| per run | replay / correction 的最大调用次数 |
+| per minute | provider rate limit |
+| per day | 日预算和告警降级策略 |
+| per tenant/env | 后续多环境或多团队隔离 |
+
+### 背压策略
+
+- 队列满时优先保留高 severity、低置信、未处理告警。
+- 重复告警优先 merge，不排队完整分析。
+- provider 限流时，低风险告警进入 delayed queue 或 review queue。
+- daemon 不允许无限并发；所有 LLM/tool 调用必须走 semaphore/rate limiter。
+- 超预算时明确产出 `needs_review`，不能假装分析成功。
+
+## 十七、部署、运维与恢复
+
+### 环境分层
+
+```text
+local       # 本地开发：PostgreSQL + Redpanda 可选
+dev         # 开发共享环境
+staging     # 接近生产数据结构，脱敏数据
+production  # 真实告警
+```
+
+### 健康检查
+
+至少提供：
+
+```text
+/healthz       # 进程是否存活
+/readyz        # DB/Kafka/model provider 是否可用
+/metrics       # Prometheus 指标
+```
+
+### 关键指标
+
+```text
+analysis_success_total
+analysis_failed_total
+analysis_needs_review_total
+pipeline_step_duration_ms
+llm_call_total
+llm_token_total
+llm_parse_failure_total
+tool_permission_denied_total
+queue_depth
+queue_lag_seconds
+kafka_consumer_lag
+```
+
+### 备份恢复
+
+- PostgreSQL 必须有备份策略。
+- migrations 先在 staging 跑。
+- fact/lesson 变更可回滚。
+- replay 不覆盖历史结论，只生成新 run。
+
+## 十八、扩展点与插件边界
+
+长期要服务 SOC、防御工程、威胁狩猎、IR、WAF/F5、攻击模拟，所以扩展点要提前固定，但不要过早做动态插件系统。
+
+### 稳定扩展点
+
+| 扩展点 | Protocol |
+|---|---|
+| 模型调用 | `LLMClient` |
+| 告警接入 | `AlertSource` |
+| 工具执行 | `ToolExecutor` |
+| 知识检索 | `KnowledgeRetriever` |
+| 记忆存储 | `MemoryStore` |
+| 队列 | `TaskQueue` |
+| 策略 | `PolicyEngine` |
+| 事件输出 | `EventSink` |
+
+Phase 1 用 Python `Protocol` + 显式 registry 即可，不做热插拔 marketplace。
+
+### 禁止的扩展方式
+
+- 插件直接拿 DB connection 任意写。
+- 插件直接拼 prompt 注入 LLM。
+- 插件绕过 `PolicyEngine` 执行动作。
+- 插件返回自由文本作为结构化事实。
+
+## 十九、并发、一致性与幂等
+
+必须提前定义哪些操作可以重复执行。
+
+| 操作 | 幂等键 |
+|---|---|
+| analyze alert | `alert_id + pipeline_version + mode` |
+| replay run | `source_run_id + replay_config_hash` |
+| confirm fact | `fact_id + target_status + actor_id` |
+| Kafka consume | `topic + partition + offset` 或 `alert_id + source` |
+| tool action | `action_id` |
+
+一致性原则：
+
+- `alert_summaries`、`decision_audit_log`、`pipeline_step_trace` 要么同事务写入关键结果，要么能通过 run 状态判断失败。
+- LLM 调用不可回滚，所以必须先记录 request metadata，再写 final decision。
+- 外部副作用动作必须先写 `automation_actions(proposed)`，批准后再执行。
+
+## 二十、测试与评测
+
+### 测试层级
+
+| 层 | 覆盖内容 |
+|---|---|
+| unit | extractor、validator、policy、dedup、lesson match |
+| contract | API schema、Kafka schema、LLM output schema |
+| integration | PostgreSQL repository、migration、replay |
+| golden | 固定样例告警的期望 verdict/evidence |
+| architecture | import 边界、工具必须经过 policy、memory 注入只读 confirmed |
+
+### Golden alert set
+
+Phase 1 最少维护：
+
+- 1 条明确误报
+- 1 条明确真阳性
+- 1 条低置信未知
+- 1 条字段缺失
+- 1 条坏 JSON 模拟
+
+指标：
+
+```text
+LLM JSON parse rate
+domain validation pass rate
+decision audit coverage
+replay diff rate
+analyst override rate
+duplicate merge rate
+review queue precision
+tool permission denial rate
+```
+
+## 二十一、Phase 切分
+
+### Phase 1 必须做
+
+- `contracts/` schema
+- `core/runtime.py` 固定状态机
+- `core/validator.py` schema/domain validation
+- `pipeline/trace.py` step trace
+- `decision_audit_log`
+- `PromptSanitizer` 基础脱敏
+- `prompt_version/model_name/pipeline_version` 审计字段
+- 基础 rate limiter / semaphore
+- CLI 调 core service
+- API schema 草案可先不暴露，但 contracts 要先定
+- 架构测试和 golden alert set
+
+### Phase 2 做
+
+- API v1 初版
+- history correlation contracts
+- dedup idempotency
+- OpenAPI snapshot test
+- 运行环境配置分层
+
+### Phase 3 做
+
+- LLM Advisory Router 白名单
+- router decision trace
+- memory/fact 版本回滚
+- prompt/model replay evaluation
+
+### Phase 4 做
+
+- Kafka topic schema
+- AsyncAPI/Kafka schema 文档
+- PostgreSQL-backed queue / lease / heartbeat
+- SSE/Web event stream
+- replay diff / router 评测
+- readiness/metrics/consumer lag 监控
+
+### Phase 5 做
+
+- 多 Agent message protocol
+- Knowledge RAG contracts
+- Attack Simulation Agent 的 L5 scope/approval protocol

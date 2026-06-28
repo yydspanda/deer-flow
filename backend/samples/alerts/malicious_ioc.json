@@ -1,0 +1,11 @@
+{
+  "alert_id": "ALT-SAMPLE-TP-001",
+  "rule_name": "Known-Malicious-IOC",
+  "source_ip": "10.0.9.9",
+  "destination_ip": "198.51.100.77",
+  "process_name": "powershell.exe",
+  "command_line": "powershell.exe -nop -w hidden Invoke-Mimikatz",
+  "username": "alice",
+  "host_name": "workstation-23",
+  "severity": "critical"
+}

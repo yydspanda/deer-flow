@@ -1,0 +1,5 @@
+{
+  "alert_id": "ALT-SAMPLE-MISSING-001",
+  "command_line": "unknown.exe /quiet",
+  "severity": "low"
+}

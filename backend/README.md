@@ -154,6 +154,28 @@ cd backend
 make install
 ```
 
+### Experimental SOC Agent CLI
+
+This branch includes an early Phase 1 SOC Agent runtime scaffold. It is isolated
+under `backend/soc_agent/` and does not change the DeerFlow harness runtime.
+
+Run a deterministic sample analysis:
+
+```bash
+cd backend
+python -m soc_agent.cli analyze samples/alerts/approved_scanner.json --pretty
+```
+
+When installed as a backend console script, the equivalent entry point is:
+
+```bash
+soc analyze samples/alerts/approved_scanner.json --pretty
+```
+
+The current implementation uses a fixed runtime pipeline and a deterministic
+stub analyzer. It does not call an LLM, write PostgreSQL data, consume Kafka, or
+perform automated response actions yet.
+
 ### Configuration
 
 Edit `config.yaml` in the project root:

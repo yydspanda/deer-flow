@@ -372,5 +372,6 @@ Phase 4（持续）：智能升级
 - [SamiGPT: AI SOC Agent (Blackhat 2025)](https://github.com/M507/AI-SOC-Agent)
 - [Building AI SOC Analyst with Splunk MCP + LangGraph (Omar Santos)](https://becomingahacker.org/building-an-ai-powered-soc-analyst-with-splunk-mcp-langchain-and-langgraph-22847005eaf1)
 - [LangGraph Multi-Agent with A2A](https://github.com/5enxia/langgraph-multiagent-with-a2a)
-- 内部设计文档：`.notes/security-agent-platform-design-v3.md`
+- 当前权威方案：`.notes/ai_soc/soc-agent-solution.md`
+- 历史设计草案：`.notes/archive/ai_soc/security-agent-platform-design-v3.md`
 - Claude Code SDK 调研：`.notes/research-claude-code-sdk.md`
