@@ -1,11 +1,31 @@
 {
   "alert_id": "ALT-SAMPLE-TP-001",
-  "rule_name": "Known-Malicious-IOC",
-  "source_ip": "10.0.9.9",
-  "destination_ip": "198.51.100.77",
-  "process_name": "powershell.exe",
-  "command_line": "powershell.exe -nop -w hidden Invoke-Mimikatz",
-  "username": "alice",
-  "host_name": "workstation-23",
-  "severity": "critical"
+  "source": {
+    "source_type": "edr",
+    "source_system": "sample-edr"
+  },
+  "detection": {
+    "rule_code": "EDR-IOC-001",
+    "rule_name": "Known-Malicious-IOC"
+  },
+  "classification": {
+    "severity": "critical",
+    "category": "malicious_ioc"
+  },
+  "entities": {
+    "network": {
+      "source_ip": "10.0.9.9",
+      "destination_ip": "198.51.100.77"
+    },
+    "process": {
+      "process_name": "powershell.exe",
+      "command_line": "powershell.exe -nop -w hidden Invoke-Mimikatz"
+    },
+    "user": {
+      "username": "alice"
+    },
+    "host": {
+      "host_name": "workstation-23"
+    }
+  }
 }

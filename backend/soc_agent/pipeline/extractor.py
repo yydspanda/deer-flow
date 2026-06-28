@@ -14,13 +14,21 @@ DOMAIN_RE = re.compile(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b")
 def extract_entities(alert: AlertInput) -> ExtractedEntities:
     warnings: list[str] = []
 
+    network = alert.entities.network
+    process = alert.entities.process
+    user = alert.entities.user
+    host = alert.entities.host
+    http = alert.entities.http
+
     ips = _valid_ips(
         [
             value
             for value in [
-                alert.source_ip,
-                alert.destination_ip,
-                *IP_RE.findall(alert.command_line or ""),
+                network.source_ip,
+                network.destination_ip,
+                http.x_forwarded_for,
+                *IP_RE.findall(process.command_line or ""),
+                *IP_RE.findall(process.parent_command_line or ""),
             ]
             if value
         ]
@@ -29,19 +37,36 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
         [
             value
             for value in [
-                alert.domain,
-                *DOMAIN_RE.findall(alert.command_line or ""),
+                network.domain,
+                http.host,
+                *DOMAIN_RE.findall(process.command_line or ""),
+                *DOMAIN_RE.findall(network.url or ""),
+                *DOMAIN_RE.findall(http.url or ""),
             ]
             if value
         ]
     )
-    processes = _dedupe([value for value in [alert.process_name] if value])
-    users = _dedupe([value for value in [alert.username] if value])
-    hosts = _dedupe([value for value in [alert.host_name] if value])
-    rules = _dedupe([value for value in [alert.rule_name] if value])
+    urls = _dedupe([value for value in [network.url, http.url] if value])
+    processes = _dedupe(
+        [
+            value
+            for value in [
+                process.process_name,
+                process.parent_process_name,
+            ]
+            if value
+        ]
+    )
+    users = _dedupe([value for value in [user.username, user.src_user, user.dst_user] if value])
+    hosts = _dedupe([value for value in [host.host_name, host.asset_id, host.asset_group] if value])
+    rule_codes = _dedupe([value for value in [alert.detection.rule_code] if value])
+    rule_names = _dedupe([value for value in [alert.detection.rule_name] if value])
+    rules = _dedupe([*rule_codes, *rule_names, alert.detection.detection_key])
 
-    if not alert.rule_name:
+    if not alert.detection.rule_name:
         warnings.append("missing optional field: rule_name")
+    if not alert.detection.rule_code:
+        warnings.append("missing optional field: rule_code")
     if not ips:
         warnings.append("no valid IP entity extracted")
     if not processes:
@@ -50,9 +75,12 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
     return ExtractedEntities(
         ips=ips,
         domains=domains,
+        urls=urls,
         processes=processes,
         users=users,
         hosts=hosts,
+        rule_codes=rule_codes,
+        rule_names=rule_names,
         rules=rules,
         warnings=warnings,
     )

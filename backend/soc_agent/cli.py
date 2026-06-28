@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from soc_agent.core.runtime import analyze_alert
+from soc_agent.core import SocAnalysisService
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,7 +45,7 @@ def _analyze(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    run = analyze_alert(payload)
+    run = SocAnalysisService().analyze(payload)
     print(
         run.model_dump_json(
             indent=2 if args.pretty else None,

@@ -1,5 +1,15 @@
 {
   "alert_id": "ALT-SAMPLE-MISSING-001",
-  "command_line": "unknown.exe /quiet",
-  "severity": "low"
+  "source": {
+    "source_type": "edr",
+    "source_system": "sample-edr"
+  },
+  "classification": {
+    "severity": "low"
+  },
+  "entities": {
+    "process": {
+      "command_line": "unknown.exe /quiet"
+    }
+  }
 }

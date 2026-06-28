@@ -1,11 +1,31 @@
 {
   "alert_id": "ALT-SAMPLE-FP-001",
-  "rule_name": "ProcExec-SuspiciousScanner",
-  "source_ip": "10.0.1.10",
-  "destination_ip": "10.0.2.20",
-  "process_name": "SecurityScan",
-  "command_line": "SecurityScan --approved --target 10.0.2.20",
-  "username": "svc-security",
-  "host_name": "scanner-01",
-  "severity": "medium"
+  "source": {
+    "source_type": "edr",
+    "source_system": "sample-edr"
+  },
+  "detection": {
+    "rule_code": "EDR-SCAN-001",
+    "rule_name": "ProcExec-SuspiciousScanner"
+  },
+  "classification": {
+    "severity": "medium",
+    "category": "process_execution"
+  },
+  "entities": {
+    "network": {
+      "source_ip": "10.0.1.10",
+      "destination_ip": "10.0.2.20"
+    },
+    "process": {
+      "process_name": "SecurityScan",
+      "command_line": "SecurityScan --approved --target 10.0.2.20"
+    },
+    "user": {
+      "username": "svc-security"
+    },
+    "host": {
+      "host_name": "scanner-01"
+    }
+  }
 }

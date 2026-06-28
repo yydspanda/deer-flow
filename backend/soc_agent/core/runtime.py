@@ -23,6 +23,7 @@ from soc_agent.contracts import (
     PipelineStepTrace,
 )
 from soc_agent.core.validator import validate_analysis_result, validate_decision
+from soc_agent.normalizers import normalize_alert_payload
 from soc_agent.pipeline.analyzer import analyze_stub
 from soc_agent.pipeline.extractor import extract_entities
 from soc_agent.utils.hashing import stable_hash
@@ -71,7 +72,7 @@ def analyze_alert(payload: Mapping[str, Any]) -> AnalysisRun:
 def _normalize_alert(payload: Mapping[str, Any]) -> AlertInput:
     if not isinstance(payload, Mapping):
         raise SocRuntimeError("alert payload must be a JSON object")
-    return AlertInput.model_validate(dict(payload))
+    return normalize_alert_payload(payload)
 
 
 def _decide(analysis: AnalysisResult) -> Decision:

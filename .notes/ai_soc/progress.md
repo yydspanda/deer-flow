@@ -81,3 +81,68 @@
 - 注意：
   - `uv run ...` 在当前沙箱中会尝试写 `~/.cache/uv` 或下载缺失依赖，验证时改用项目已有 `backend/.venv`。
   - 当前 analyzer 是 deterministic stub，不调用 LLM，不落库，不执行自动处置。
+
+### 2026-06-28 — AlertInput 多源告警契约升级
+
+- 将 `AlertInput` 从简单平铺字段升级为“通用 envelope + source/detection/event/classification/entities/extensions/raw”结构。
+- 新增 `DetectionRuleRef`：
+  - `rule_code` 是可选强标识，不作为必填字段。
+  - `detection_key` 由 runtime 归一化生成，按 `rule_code -> rule_name -> category -> raw fingerprint` 降级。
+- 新增 `AlertSourceRef` / `AlertSourceType`：
+  - 覆盖 SIEM、EDR、XDR、HIDS、NIDS、NDR、WAF、F5、IAM、Cloud、Threat Intel 等来源。
+  - 未知厂商/source type 自动降级为 `other`，原始值保留为 `source_system`，避免新客户接入时 schema 失败。
+- 新增标准实体集：
+  - network / process / user / host / file / http / threat。
+  - EDR/HIDS/NIDS/F5/WAF/APT 类告警可通过标准实体表达，特殊字段放 `extensions` 和 `raw`。
+- 将外部平铺字段兼容移出核心契约：
+  - `AlertInput` 只保留 canonical nested schema，并设置 `extra="forbid"`。
+  - 旧样例里的 `rule_name/source_ip/process_name/command_line/...` 由 `normalizers/alert.py` 映射为 canonical schema 后再进入 runtime。
+  - extractor/analyzer 只读取 `alert.detection`、`alert.entities`、`alert.classification` 等 canonical 字段。
+- 已将 `backend/samples/alerts/*.json` 改成 canonical nested 示例；flat/simple payload 只保留在 normalizer 测试里，用于验证外部接入兼容性。
+- 新增 normalizer 层：
+  - `backend/soc_agent/normalizers/alert.py`
+  - `normalize_alert_payload()` 负责 flat/simple/vendor-like payload 到 `AlertInput` 的转换。
+  - 后续 `pingan.py`、`f5.py`、`edr.py`、`nids.py` 等 source-specific adapter 应在该层扩展，不污染核心 schema。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py`
+- 下一步：
+  - 围绕该契约设计 PostgreSQL `alert_summaries` / `analysis_runs` / `pipeline_step_traces` 的字段映射。
+  - 后续 Kafka/API adapters 只做 source-specific mapping，不绕过 `AlertInput`。
+
+### 2026-06-28 — 模块接口与协议约束补充
+
+- 已将长期模块边界、public API、Protocol、normalizer、架构测试约束补入 `.notes/reference-index/soc-agent-engineering-contracts.md`。
+- 后续新增模块必须先明确：
+  - 模块职责、调用方、允许依赖层。
+  - 输入/输出 contract 或 domain model。
+  - 失败语义、审计事件、持久化边界、replay 行为。
+  - 是否读写 memory/facts/lessons，是否需要 human confirmation。
+- 固定后续实现原则：
+  - CLI/API/Daemon/Web UI 只调用 core service，不直接拼 pipeline。
+  - 可替换依赖先定义 `Protocol`，业务代码不直接依赖 PostgreSQL、Kafka、具体 LLM SDK。
+  - `AlertInput` 保持 canonical strict schema；flat/vendor payload 只允许在 `normalizers/` 层出现。
+  - 架构测试后续要覆盖 import 边界、public exports、contracts strict、pipeline 无 transport imports、tools 必须经过 policy。
+- 建议下一切片：
+  - 建立 `core/service.py`、`protocols/` 和 `tests/architecture/`，把当前 Runtime 包成稳定 public service。
+
+### 2026-06-28 — Core service 与架构测试切片完成
+
+- 新增稳定业务入口：
+  - `backend/soc_agent/core/service.py`
+  - `SocAnalysisService.analyze(payload)` 包装当前 deterministic runtime。
+- 新增可替换依赖协议：
+  - `backend/soc_agent/protocols.py`
+  - 当前包含 `AlertNormalizer`、`AnalysisRuntime`、`LLMAnalyzer`、`AlertRepository`。
+- CLI 已改为通过 `SocAnalysisService` 进入业务逻辑，不再直接 import `core.runtime`。
+- 新增架构边界测试：
+  - `backend/tests/architecture/test_soc_agent_boundaries.py`
+  - 覆盖 contracts 不 import runtime 层、core 不 import transport、pipeline 不 import transport/基础设施、CLI 通过 core service 进入、`AlertInput` 保持 strict。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format --check soc_agent tests/test_soc_agent_runtime.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 后续 API、Daemon、Web UI 均接 `SocAnalysisService`，不直接拼 pipeline。
+  - 如果协议继续膨胀，再将 `protocols.py` 拆成 `protocols/` 包。

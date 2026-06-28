@@ -19,16 +19,32 @@ TRUE_POSITIVE_HINTS = ("malicious", "mimikatz", "cobalt", "ransom", "ioc", "back
 
 
 def analyze_stub(alert: AlertInput, entities: ExtractedEntities) -> AnalysisResult:
+    detection = alert.detection
+    network = alert.entities.network
+    process = alert.entities.process
+    http = alert.entities.http
+
     haystack = " ".join(
         value.lower()
         for value in [
-            alert.rule_name or "",
-            alert.process_name or "",
-            alert.command_line or "",
-            alert.severity or "",
+            detection.rule_code or "",
+            detection.rule_name or "",
+            detection.detection_key or "",
+            detection.rule_category or "",
+            alert.source.source_type.value,
+            alert.source.source_system or "",
+            alert.classification.category or "",
+            process.process_name or "",
+            process.command_line or "",
+            network.url or "",
+            http.url or "",
+            network.domain or "",
+            http.host or "",
+            alert.classification.severity or "",
             *entities.rules,
             *entities.processes,
             *entities.domains,
+            *entities.urls,
         ]
     )
 
@@ -38,7 +54,11 @@ def analyze_stub(alert: AlertInput, entities: ExtractedEntities) -> AnalysisResu
             confidence=0.82,
             summary="告警命中已知扫描器或批准工具特征，Phase 1 判定为高概率误报候选。",
             evidence=[
-                EvidenceItem(source="rule_name", description="规则或命令包含扫描器线索", value=alert.rule_name),
+                EvidenceItem(
+                    source="detection",
+                    description="规则或命令包含扫描器线索",
+                    value=detection.detection_key,
+                ),
                 EvidenceItem(source="entities", description="抽取到的进程实体", value=", ".join(entities.processes)),
             ],
             reason="当前证据更符合授权扫描或安全工具活动，但 Phase 1 不自动关闭告警。",
@@ -51,8 +71,12 @@ def analyze_stub(alert: AlertInput, entities: ExtractedEntities) -> AnalysisResu
             confidence=0.9,
             summary="告警包含恶意 IOC、攻击工具或高危行为线索，Phase 1 判定为真阳性候选。",
             evidence=[
-                EvidenceItem(source="rule_name", description="规则命中高危攻击线索", value=alert.rule_name),
-                EvidenceItem(source="command_line", description="命令行或进程包含攻击特征", value=alert.command_line),
+                EvidenceItem(
+                    source="detection",
+                    description="规则命中高危攻击线索",
+                    value=detection.detection_key,
+                ),
+                EvidenceItem(source="command_line", description="命令行或进程包含攻击特征", value=process.command_line),
             ],
             reason="检测到高风险关键字，需要分析师优先复核和升级调查。",
             recommended_action="escalate_to_analyst",
