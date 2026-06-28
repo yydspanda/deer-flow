@@ -212,3 +212,26 @@ def test_cli_analyze_file_outputs_json(capsys) -> None:
     payload = json.loads(captured.out)
     assert payload["alert_id"] == "ALT-SAMPLE-FP-001"
     assert payload["analysis"]["verdict"] == "false_positive"
+
+
+def test_cli_persist_show_and_replay(tmp_path: Path, capsys) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'soc.db'}"
+
+    assert main(["db", "init", "--database-url", database_url]) == 0
+    capsys.readouterr()
+
+    assert main(["analyze", str(SAMPLES / "approved_scanner.json"), "--persist", "--database-url", database_url]) == 0
+    captured = capsys.readouterr()
+    original = json.loads(captured.out)
+
+    assert main(["show", original["run_id"], "--database-url", database_url]) == 0
+    captured = capsys.readouterr()
+    shown = json.loads(captured.out)
+    assert shown["run_id"] == original["run_id"]
+    assert shown["input_hash"] == original["input_hash"]
+
+    assert main(["replay", original["run_id"], "--database-url", database_url]) == 0
+    captured = capsys.readouterr()
+    replayed = json.loads(captured.out)
+    assert replayed["run_id"] != original["run_id"]
+    assert replayed["replay_of_run_id"] == original["run_id"]

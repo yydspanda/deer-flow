@@ -33,7 +33,7 @@
 | 5 | golden alert samples | Partial | 覆盖批准扫描器误报、恶意 IOC、低置信未知、字段缺失；坏 JSON 模拟待补 |
 | 6 | Phase 1 最小测试 | Partial | 字段缺失不崩、输出过 schema/domain validation、每步有 trace、不执行自动处置；坏 JSON repair 待补 |
 | 7 | replay contract | Done | `AnalysisRun` 记录 input payload/hash；`SocAnalysisService.replay()` 通过 repository 生成新 run，不覆盖旧 run |
-| 8 | PostgreSQL run repository | Next | 按 `AlertRepository` 保存/查询 `AnalysisRun`，支持后续 `soc show/replay` 跨进程工作 |
+| 8 | PostgreSQL run repository | Partial | 已有 SOC ORM row + SQLAlchemy repository + headless CLI wiring；正式 Alembic migration / config wiring 待补 |
 
 ## 进度记录
 
@@ -206,3 +206,35 @@
 - 下一步：
   - 实现 PostgreSQL `AlertRepository`，把 `AnalysisRun` 存到 SOC 自己的业务表。
   - repository 可用后再把 `soc show` / `soc replay` 挂到 headless CLI。
+
+### 2026-06-28 — SOC SQLAlchemy AlertRepository
+
+- 新增 SOC 自有持久化模块，未修改 DeerFlow harness 核心：
+  - `backend/soc_agent/db/base.py`
+  - `backend/soc_agent/db/models.py`
+  - `backend/soc_agent/db/repositories.py`
+- 新增 `SocAnalysisRunRow`：
+  - 表名：`soc_analysis_runs`
+  - 索引字段：`run_id`、`alert_id`、`status`、`input_hash`、`replay_of_run_id`
+  - 保存 `input_payload` 和完整 `run_payload`，保证后续 `show/replay` 不依赖临时内存。
+- 新增 `SqlAlchemyAlertRepository`：
+  - 实现 `save_run()` 和 `get_run()`。
+  - 支持保存、读取、同 run upsert、service replay。
+  - 当前以 sync `Session` factory 注入，适合 Phase 1 headless CLI；后续 Gateway async API 需要线程池调用或单独 async adapter。
+- 新增测试：
+  - `backend/tests/test_soc_agent_repository.py`
+  - 覆盖 save/get、upsert、service replay。
+  - 架构测试增加 `db` 不 import core/pipeline/transport 的边界约束。
+- 新增 headless CLI 持久化闭环：
+  - `soc db init`
+  - `soc analyze ALERT.json --persist`
+  - `soc show RUN_ID`
+  - `soc replay RUN_ID`
+  - 数据库 URL 通过 `--database-url` 或 `SOC_DATABASE_URL` 传入；PostgreSQL URL 会归一化为 sync `postgresql+psycopg://`。
+- 说明：
+  - 测试使用 SQLite in-memory / temp file 只是 SQLAlchemy unit harness；SOC runtime 策略仍是 PostgreSQL。
+  - 下一步需要补正式 Alembic migration / config wiring，避免长期依赖 `soc db init` 的 `create_all`。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format --check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`

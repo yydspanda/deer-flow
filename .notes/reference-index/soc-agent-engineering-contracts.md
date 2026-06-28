@@ -173,6 +173,13 @@ Replay 约束：
 - replay 不能覆盖历史 run；新 run 必须记录 `replay_of_run_id`。
 - 若旧 run 不存在，service 返回 not-found 语义；若旧 run 没有可 replay 输入，必须 fail-fast，不允许猜测输入。
 
+SOC repository 实现约束：
+
+- SOC 业务表放在 `backend/soc_agent/db/`，不塞进 DeerFlow harness persistence。
+- repository 可以依赖 SQLAlchemy 和 `soc_agent.contracts`，不能 import `soc_agent.core`、`pipeline`、CLI/API/TUI/ingestion。
+- `soc_analysis_runs.run_payload` 保存完整 `AnalysisRun`，索引列只服务查询和筛选，不作为唯一事实来源。
+- 单元测试可以用 SQLite in-memory 验证 SQLAlchemy 映射；运行时配置和正式部署必须指向 PostgreSQL。
+
 ### 三类模型必须分清
 
 | 类型 | 用途 | 示例 | 约束 |

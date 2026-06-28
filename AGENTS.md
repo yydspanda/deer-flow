@@ -126,6 +126,9 @@ Current SOC direction:
   for small, generic extension points or framework fixes that are clearly useful beyond
   SOC, and keep those changes easy to explain for future upstream sync.
 - PostgreSQL is the SOC business store; do not use SQLite/`alerts.db` for SOC runtime data.
+- SOC persistence code lives under `backend/soc_agent/db/` and implements repository
+  protocols from `backend/soc_agent/protocols.py`; keep it separate from DeerFlow harness
+  persistence unless a generic upstream extension point is genuinely needed.
 - Kafka/Redpanda is planned for Phase 4 daemon ingestion; local broker default is `localhost:9092`.
 - Phase 1 target is CLI + Runtime reliability: fixed pipeline, schema/domain validation,
   step trace, audit logging, basic rate limiting, and `analyze` / `correct` / `replay`.

@@ -74,6 +74,25 @@ def test_pipeline_has_no_transport_or_infrastructure_imports() -> None:
         assert not (_imports(module) & forbidden), f"{module} imports transport or infrastructure code"
 
 
+def test_db_does_not_import_runtime_or_transport_layers() -> None:
+    forbidden = {
+        "fastapi",
+        "kafka",
+        "typer",
+        "soc_agent.api",
+        "soc_agent.channels",
+        "soc_agent.cli",
+        "soc_agent.core",
+        "soc_agent.daemon",
+        "soc_agent.ingestion",
+        "soc_agent.pipeline",
+        "soc_agent.tui",
+    }
+
+    for module in _python_files(SOC_AGENT / "db"):
+        assert not (_imports(module) & forbidden), f"{module} imports runtime or transport code"
+
+
 def test_cli_enters_business_logic_through_core_service() -> None:
     imports = _imports(SOC_AGENT / "cli.py")
 
