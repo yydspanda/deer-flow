@@ -146,3 +146,34 @@
 - 下一步：
   - 后续 API、Daemon、Web UI 均接 `SocAnalysisService`，不直接拼 pipeline。
   - 如果协议继续膨胀，再将 `protocols.py` 拆成 `protocols/` 包。
+
+### 2026-06-28 — 多入口与 Core Services 方案更新
+
+- 已更新 `.notes/ai_soc/soc-agent-solution.md`：
+  - 将“三类入口”升级为 Kafka Daemon、API/Gateway、CLI、TUI/Operator Console、Web UI 多入口。
+  - 明确所有入口只做 transport / presentation / session 编排，统一进入 core services。
+  - 明确 TUI 可作为 Phase 3/4 的后端 Operator Console / Agent Console，用于值班运营、安全分析、检测工程、授权攻防交互。
+  - 补充 service layer：`SocAnalysisService`、`SocReviewService`、`SocMemoryService`、`SocDaemonService`、`SocAgentChatService`。
+  - 更新长期 Security Agent Platform 说明：综合入口不是单一 Agent，不同任务必须路由到不同 service/agent，并受 memory scope、tool permission、audit 约束。
+- 当前实现已先落地 `SocAnalysisService`；后续 API、Daemon、TUI、Web UI 都应接 service，不直接接 pipeline。
+
+### 2026-06-28 — DeerFlow/TUI 对齐与 Service Context 基座
+
+- 参考方式：
+  - 使用 Understand 查看 Hermes / claude-mem 的多入口与 service/runtime 分层。
+  - 使用 CodeGraph 查看 DeerFlow `deerflow.tui`、`run_agent`、`RunManager`、`StreamBridge`，确认 TUI 是入口层，底层仍走 runtime/run manager/event stream。
+  - 使用 CodeGraph 查看 Claude Code `QueryEngine`、openclaw `Agent.runWithLifecycle`、claude-mem `ServerBetaService` / `SessionManager`，确认统一 lifecycle、event stream、shared service 是可复用模式。
+- 已补充代码基座：
+  - `ActorContext`、`EntrySurface`、`ServiceRequestContext`、`SocEvent`、`SocEventType`。
+  - `SocAnalysisService` 支持 request context、event sink、repository 注入。
+  - 新增 `DeterministicAnalysisRuntime`、`NoopEventSink`。
+  - 新增 `SocReviewService`、`SocMemoryService`、`SocDaemonService`、`SocAgentChatService` 占位，未实现功能 fail-fast。
+  - 新增 `SocEventSink` 协议。
+- 已补充测试：
+  - `backend/tests/test_soc_agent_service.py`
+  - service 事件发送、repository 保存、未实现 service fail-fast。
+  - architecture test 增加 core public service exports。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format --check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`

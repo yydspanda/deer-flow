@@ -1,6 +1,8 @@
 """Public schemas shared by SOC Agent CLI, API, daemon, and core runtime."""
 
 from soc_agent.contracts.schemas import (
+    ActorContext,
+    ActorType,
     AlertClassification,
     AlertEntitySet,
     AlertEventRef,
@@ -12,6 +14,7 @@ from soc_agent.contracts.schemas import (
     AnalysisRunStatus,
     Decision,
     DetectionRuleRef,
+    EntrySurface,
     EvidenceItem,
     ExtractedEntities,
     FileEntityRef,
@@ -21,12 +24,17 @@ from soc_agent.contracts.schemas import (
     PipelineStepStatus,
     PipelineStepTrace,
     ProcessEntityRef,
+    ServiceRequestContext,
+    SocEvent,
+    SocEventType,
     ThreatEntityRef,
     UserEntityRef,
     Verdict,
 )
 
 __all__ = [
+    "ActorContext",
+    "ActorType",
     "AlertClassification",
     "AlertEntitySet",
     "AlertEventRef",
@@ -47,6 +55,10 @@ __all__ = [
     "PipelineStepStatus",
     "PipelineStepTrace",
     "ProcessEntityRef",
+    "EntrySurface",
+    "ServiceRequestContext",
+    "SocEvent",
+    "SocEventType",
     "ThreatEntityRef",
     "UserEntityRef",
     "Verdict",

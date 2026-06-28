@@ -1,14 +1,16 @@
 # SOC Agent 工程契约方案
 
-> 目的：为 SOC Agent 后续扩展成多入口、多 Agent、Web UI、Daemon、攻击模拟/防御综合平台时，提前固定代码风格、架构边界、API、通信协议和质量门禁。
+> 目的：为 SOC Agent 后续扩展成 DeerFlow-aligned 多入口、多 Agent、Web UI、后台 ingestion、攻击模拟/防御综合平台时，提前固定代码风格、架构边界、API、通信协议和质量门禁。
 >
 > 参考来源：DeerFlow `RunManager/run_agent/RunJournal` 生命周期，Hermes ACP `SessionManager` 持久化恢复，Claude Code `buildTool/checkPermissions/PermissionDecision/SendMessageTool` 权限和结构化消息设计。
+>
+> 文档边界：本文件只规定工程契约；产品方向、阶段优先级和入口取舍以 `.notes/ai_soc/soc-agent-solution.md` 为准。
 
 ## 一、核心原则
 
 SOC Agent 不是“LLM 自主系统”，而是“生产级 Runtime + 受控 LLM 节点”。工程契约必须优先保证：
 
-1. **可扩展**：CLI、API、Daemon、Web UI、Kafka consumer 都调用同一套 core service。
+1. **可扩展**：Headless CLI、TUI、Gateway API、Web UI、Channels、Kafka adapter 都调用同一套 core service。
 2. **可验证**：所有外部输入、LLM 输出、工具参数都必须 schema 校验 + domain 校验。
 3. **可审计**：每次 run、step、tool action、permission decision、memory update 都可追踪。
 4. **可恢复**：run 有状态机，失败不能半写入；replay 能比较旧结果和新结果。
@@ -49,8 +51,8 @@ uv run pytest tests/architecture
 
 架构测试必须覆盖：
 
-- `api/cli/daemon` 可以 import `core`。
-- `core` 不 import `api/cli/daemon`。
+- `api/cli/tui/channels/ingestion` 可以 import `core`。
+- `core` 不 import `api/cli/tui/channels/ingestion`。
 - `pipeline` 不直接 import FastAPI/Kafka/Typer。
 - `memory` 不能绕过 `soc_facts` 状态机直接注入 prompt。
 - `tools` 的执行必须经过 `policy`。
@@ -72,16 +74,18 @@ soc_agent/
 ├── memory/             # soc_facts / lessons / prompt 注入
 ├── db/                 # repository + migrations
 ├── queue/              # Phase 1 memory queue；Phase 4 PG queue
-├── api/                # FastAPI 入口，只做 transport
-├── cli/                # Typer/Rich 入口，只做 transport
-├── daemon/             # Kafka consumer，只做 transport
+├── api/                # Gateway/FastAPI 入口，只做 transport
+├── cli/                # Headless CLI 入口，只做 transport
+├── tui/                # DeerFlow-style terminal workbench，只做 presentation/session
+├── channels/           # IM channel adapter，只做 transport/session
+├── ingestion/          # Kafka/Redpanda consumer，只做后台 ingestion adapter
 └── observability/      # trace、metrics、audit writer
 ```
 
 依赖方向：
 
 ```text
-api / cli / daemon
+api / cli / tui / channels / ingestion
         ↓
       core
         ↓
@@ -94,9 +98,9 @@ contracts
 
 ### 模块边界规则
 
-- `contracts/` 只定义跨边界 schema、枚举和错误模型，不 import `core/pipeline/db/api/daemon/cli`。
+- `contracts/` 只定义跨边界 schema、枚举和错误模型，不 import `core/pipeline/db/api/cli/tui/channels/ingestion`。
 - `normalizers/` 是唯一允许接收 loose vendor payload、flat JSON、字段 alias 的层。核心 `AlertInput` 必须保持 canonical 且 strict。
-- `core/` 是唯一 orchestration 层。CLI、API、Daemon、Web UI 都只能调用 core service，不能直接拼 pipeline。
+- `core/` 是唯一 orchestration 层。Headless CLI、TUI、API、Web UI、Channels、Kafka adapter 都只能调用 core service，不能直接拼 pipeline。
 - `pipeline/` 只做纯业务步骤，不直接 import FastAPI、Kafka、Typer、SQLAlchemy、psycopg、具体 LLM SDK。
 - `db/` 只实现 repository，不承载业务决策；SQL row 和 domain/contract model 需要显式转换。
 - `memory/` 不能绕过事实状态机写 prompt；只能通过 `MemoryStore`/`LessonStore` 协议读写。
@@ -114,12 +118,27 @@ contracts
 ```python
 # soc_agent/core/service.py
 class SocAnalysisService:
-    def analyze(self, payload: Mapping[str, Any]) -> AnalysisRun: ...
+    def analyze(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> AnalysisRun: ...
     def replay(self, run_id: str) -> AnalysisRun: ...
     def correct(self, command: CorrectionCommand) -> CorrectionResult: ...
 ```
 
-CLI、API、Daemon、Web UI 只能调用 `SocAnalysisService` 或同等级 core service；不能直接调用 `pipeline.extract_entities()`、DB repository、LLM adapter 来绕过 runtime。
+Headless CLI、TUI、API、Web UI、Channels、Kafka adapter 只能调用 `SocAnalysisService` 或同等级 core service；不能直接调用 `pipeline.extract_entities()`、DB repository、LLM adapter 来绕过 runtime。
+
+每次 service 调用都应带 `ServiceRequestContext`，至少包含：
+
+| 字段 | 说明 |
+|---|---|
+| `request_id` | 本次入口请求 ID |
+| `actor` | 发起者：用户、系统、service |
+| `actor.surface` | `cli/api/tui/web/channel/daemon/test`；其中 `daemon` 只表示后台系统 actor，不是用户产品入口 |
+| `trace_id` | 跨服务/事件追踪 ID |
+| `idempotency_key` | 写操作幂等键 |
 
 ### Protocol 优先于具体实现
 
@@ -138,6 +157,10 @@ class MemoryStore(Protocol):
 
 class LLMAnalyzer(Protocol):
     def analyze(self, request: LLMAnalysisRequest) -> AnalysisResult: ...
+
+
+class SocEventSink(Protocol):
+    def emit(self, event: SocEvent) -> None: ...
 ```
 
 业务代码依赖协议，不依赖 PostgreSQL、Kafka、具体 LLM SDK、具体 vector DB。这样测试、替换供应商、本地模拟和后续多 Agent 扩展才不会牵一发动全身。

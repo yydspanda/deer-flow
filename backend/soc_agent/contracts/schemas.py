@@ -42,6 +42,56 @@ class PipelineStepStatus(StrEnum):
     RETRYING = "retrying"
 
 
+class ActorType(StrEnum):
+    USER = "user"
+    SYSTEM = "system"
+    SERVICE = "service"
+
+
+class EntrySurface(StrEnum):
+    CLI = "cli"
+    API = "api"
+    CHANNEL = "channel"
+    DAEMON = "daemon"
+    TUI = "tui"
+    WEB = "web"
+    TEST = "test"
+
+
+class SocEventType(StrEnum):
+    ANALYSIS_REQUESTED = "analysis.requested"
+    ANALYSIS_COMPLETED = "analysis.completed"
+    ANALYSIS_FAILED = "analysis.failed"
+    REVIEW_REQUESTED = "review.requested"
+    MEMORY_UPDATED = "memory.updated"
+
+
+class ActorContext(BaseModel):
+    actor_id: str = "anonymous"
+    actor_type: ActorType = ActorType.USER
+    surface: EntrySurface = EntrySurface.CLI
+    roles: list[str] = Field(default_factory=list)
+
+
+class ServiceRequestContext(BaseModel):
+    request_id: str = Field(default_factory=lambda: f"REQ-{uuid4().hex[:12].upper()}")
+    actor: ActorContext = Field(default_factory=ActorContext)
+    trace_id: str | None = None
+    idempotency_key: str | None = None
+
+
+class SocEvent(BaseModel):
+    schema_version: str = "soc.event.v1"
+    event_id: str = Field(default_factory=lambda: f"EVT-{uuid4().hex[:12].upper()}")
+    event_type: SocEventType
+    request_id: str
+    run_id: str | None = None
+    alert_id: str | None = None
+    actor: ActorContext
+    occurred_at: datetime = Field(default_factory=utc_now)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
 class AlertSourceType(StrEnum):
     UNKNOWN = "unknown"
     SIEM = "siem"

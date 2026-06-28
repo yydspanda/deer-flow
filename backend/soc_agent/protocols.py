@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol
 
-from soc_agent.contracts import AlertInput, AnalysisResult, AnalysisRun
+from soc_agent.contracts import AlertInput, AnalysisResult, AnalysisRun, SocEvent
 
 
 class AlertNormalizer(Protocol):
@@ -32,3 +32,9 @@ class AlertRepository(Protocol):
     def save_run(self, run: AnalysisRun) -> None: ...
 
     def get_run(self, run_id: str) -> AnalysisRun | None: ...
+
+
+class SocEventSink(Protocol):
+    """Event boundary for TUI/CLI progress, API SSE, channels, daemon logs, and audit."""
+
+    def emit(self, event: SocEvent) -> None: ...

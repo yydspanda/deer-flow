@@ -4,6 +4,13 @@ import ast
 from pathlib import Path
 
 from soc_agent.contracts import AlertInput
+from soc_agent.core import (
+    SocAgentChatService,
+    SocAnalysisService,
+    SocDaemonService,
+    SocMemoryService,
+    SocReviewService,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SOC_AGENT = PROJECT_ROOT / "soc_agent"
@@ -64,6 +71,14 @@ def test_cli_enters_business_logic_through_core_service() -> None:
 
 def test_alert_input_contract_is_strict() -> None:
     assert AlertInput.model_config.get("extra") == "forbid"
+
+
+def test_core_exports_planned_public_services() -> None:
+    assert SocAnalysisService.__name__ == "SocAnalysisService"
+    assert SocReviewService.__name__ == "SocReviewService"
+    assert SocMemoryService.__name__ == "SocMemoryService"
+    assert SocDaemonService.__name__ == "SocDaemonService"
+    assert SocAgentChatService.__name__ == "SocAgentChatService"
 
 
 def _python_files(path: Path) -> list[Path]:

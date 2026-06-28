@@ -4,8 +4,16 @@
 
 | 文档 | 状态 |
 |---|---|
-| `soc-agent-solution.md` | 当前权威方案，包含产品定位、CLI/API/Daemon/Web 边界、PostgreSQL 记忆、队列策略、长期 Security Agent Platform 演进 |
+| `soc-agent-solution.md` | 当前权威产品/系统方案，决定“做什么、先后顺序、用户入口和阶段边界” |
 | `progress.md` | 长期开发进度台账，记录当前 Phase、切片状态、完成记录和下一步 |
+
+## 执行规则
+
+1. 先看 `soc-agent-solution.md` 决定产品方向和阶段范围。
+2. 再看 `.notes/reference-index/soc-agent-engineering-contracts.md` 决定代码怎么分层、接口怎么设计、测试怎么约束。
+3. `reference-index` 是工程契约和参考索引，不覆盖 `soc-agent-solution.md` 的产品优先级。
+4. 若两份文档措辞冲突，以本目录的 `soc-agent-solution.md` 为方向源头，并同步修正 `reference-index`。
+5. 开发进度和 checkpoint 只写入 `progress.md`，不要散落到新文档。
 
 ## 已清理内容
 
