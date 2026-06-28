@@ -35,6 +35,7 @@
 | 7 | replay contract | Done | `AnalysisRun` 记录 input payload/hash；`SocAnalysisService.replay()` 通过 repository 生成新 run，不覆盖旧 run |
 | 8 | PostgreSQL run repository | Done | SOC ORM row + SQLAlchemy repository + Alembic migration + headless CLI `show/replay` 已完成 |
 | 9 | manual correction loop | Done | `soc correct RUN_ID` 更新 operational decision，保留原 AI verdict，追加 correction record，不自动写 confirmed memory |
+| 10 | decision audit log | Done | `soc_decision_audit_log` 独立表记录 analyze/replay/correct 的结构化审计记录 |
 
 ## 进度记录
 
@@ -263,6 +264,36 @@
 - 安全边界：
   - correction 不执行任何自动处置。
   - correction 不直接写 confirmed memory/fact/lesson；只作为后续 memory extraction 的 pending-review 来源。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format --check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+
+### 2026-06-28 — Decision audit log
+
+- 新增审计 contracts：
+  - `AuditAction`
+  - `DecisionAuditRecord`
+  - `DecisionAuditRepository` protocol
+- 新增 SOC 审计表：
+  - `soc_decision_audit_log`
+  - migration：`backend/soc_agent/db/migrations/versions/0002_decision_audit_log.py`
+  - 版本仍走 `soc_alembic_version`，与 DeerFlow harness migration 隔离。
+- 扩展 `SqlAlchemyAlertRepository`：
+  - `save_audit_record()`
+  - `list_audit_records(run_id)`
+- 扩展 service 审计写入：
+  - `SocAnalysisService.analyze()` 写 `AuditAction.ANALYSIS`
+  - `SocAnalysisService.replay()` 写 `AuditAction.REPLAY`
+  - `SocReviewService.correct()` 写 `AuditAction.CORRECTION`
+- 审计记录包含：
+  - `run_id`、`alert_id`、`actor`、`input_hash`
+  - previous/final verdict、confidence
+  - replay source、correction id
+  - pipeline/model/prompt version、step count、candidate knowledge status 等 payload。
+- 当前边界：
+  - 只写审计和 repository 查询测试，不做 CLI/UI 审计查询入口。
+  - 审计记录不替代 full `run_payload`；两者分别服务查询指标和完整回放。
 - 已验证：
   - `cd backend && ./.venv/bin/python -m ruff format --check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
   - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`

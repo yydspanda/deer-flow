@@ -1248,10 +1248,12 @@ class KnowledgeRetriever(Protocol):
 
 SOC Agent 的每次判断都必须能回答三个问题：当时看到了什么、为什么这么判、后来如果知识被撤销哪些结论受影响。因此审计不是日志附属品，而是产品可信度的一部分。
 
-#### decision_audit_log — 每次判定的证据链
+#### soc_decision_audit_log — 每次判定的证据链
+
+当前实现已先落地 `soc_decision_audit_log`，用于记录 analyze / replay / correct 的结构化审计摘要。完整 run 快照仍保存在 `soc_analysis_runs.run_payload`，审计表服务快速查询、质量指标和后续 Web/TUI 展示。
 
 ```sql
-CREATE TABLE decision_audit_log (
+CREATE TABLE soc_decision_audit_log (
     id BIGSERIAL PRIMARY KEY,
     alert_id TEXT NOT NULL,
     pipeline_version TEXT NOT NULL,

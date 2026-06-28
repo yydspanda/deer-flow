@@ -8,16 +8,18 @@ from typing import Any
 from soc_agent.contracts import (
     AnalysisRun,
     AnalysisRunStatus,
+    AuditAction,
     CorrectionCommand,
     CorrectionRecord,
     Decision,
+    DecisionAuditRecord,
     ServiceRequestContext,
     SocEvent,
     SocEventType,
     Verdict,
 )
 from soc_agent.core.runtime import analyze_alert
-from soc_agent.protocols import AlertRepository, AnalysisRuntime, SocEventSink
+from soc_agent.protocols import AlertRepository, AnalysisRuntime, DecisionAuditRepository, SocEventSink
 
 
 class SocServiceError(RuntimeError):
@@ -59,10 +61,12 @@ class SocAnalysisService:
         *,
         runtime: AnalysisRuntime | None = None,
         repository: AlertRepository | None = None,
+        audit_repository: DecisionAuditRepository | None = None,
         event_sink: SocEventSink | None = None,
     ) -> None:
         self._runtime = runtime or DeterministicAnalysisRuntime()
         self._repository = repository
+        self._audit_repository = audit_repository
         self._event_sink = event_sink or NoopEventSink()
 
     def analyze(
@@ -119,6 +123,14 @@ class SocAnalysisService:
         run.replay_of_run_id = replay_of_run_id
         if self._repository is not None:
             self._repository.save_run(run)
+        if self._audit_repository is not None:
+            self._audit_repository.save_audit_record(
+                _analysis_audit_record(
+                    run,
+                    actor=context.actor,
+                    action=AuditAction.REPLAY if replay_of_run_id else AuditAction.ANALYSIS,
+                )
+            )
 
         self._emit(
             SocEvent(
@@ -148,9 +160,11 @@ class SocReviewService:
         self,
         *,
         repository: AlertRepository | None = None,
+        audit_repository: DecisionAuditRepository | None = None,
         event_sink: SocEventSink | None = None,
     ) -> None:
         self._repository = repository
+        self._audit_repository = audit_repository
         self._event_sink = event_sink or NoopEventSink()
 
     def correct(
@@ -188,6 +202,8 @@ class SocReviewService:
             automation_allowed=False,
         )
         self._repository.save_run(run)
+        if self._audit_repository is not None:
+            self._audit_repository.save_audit_record(_correction_audit_record(run, record))
         self._event_sink.emit(
             SocEvent(
                 event_type=SocEventType.REVIEW_CORRECTED,
@@ -239,3 +255,52 @@ def _current_verdict(run: AnalysisRun) -> Verdict | None:
     if run.analysis is not None:
         return run.analysis.verdict
     return None
+
+
+def _current_confidence(run: AnalysisRun) -> float | None:
+    if run.decision is not None:
+        return run.decision.confidence
+    if run.analysis is not None:
+        return run.analysis.confidence
+    return None
+
+
+def _analysis_audit_record(run: AnalysisRun, *, actor, action: AuditAction) -> DecisionAuditRecord:
+    return DecisionAuditRecord(
+        action=action,
+        run_id=run.run_id,
+        alert_id=run.alert_id,
+        actor=actor,
+        input_hash=run.input_hash,
+        final_verdict=_current_verdict(run),
+        confidence=_current_confidence(run),
+        replay_of_run_id=run.replay_of_run_id,
+        payload={
+            "status": run.status.value,
+            "pipeline_version": run.pipeline_version,
+            "model_name": run.model_name,
+            "prompt_version": run.prompt_version,
+            "step_count": len(run.steps),
+        },
+    )
+
+
+def _correction_audit_record(run: AnalysisRun, record: CorrectionRecord) -> DecisionAuditRecord:
+    return DecisionAuditRecord(
+        action=AuditAction.CORRECTION,
+        run_id=run.run_id,
+        alert_id=run.alert_id,
+        actor=record.actor,
+        input_hash=run.input_hash,
+        previous_verdict=record.previous_verdict,
+        final_verdict=record.corrected_verdict,
+        confidence=record.corrected_confidence,
+        replay_of_run_id=run.replay_of_run_id,
+        correction_id=record.correction_id,
+        payload={
+            "reason": record.reason,
+            "candidate_knowledge_status": record.candidate_knowledge_status,
+            "evidence_count": len(record.evidence),
+            "automation_allowed": False,
+        },
+    )

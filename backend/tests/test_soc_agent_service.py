@@ -8,7 +8,9 @@ import pytest
 from soc_agent.contracts import (
     ActorContext,
     AnalysisRun,
+    AuditAction,
     CorrectionCommand,
+    DecisionAuditRecord,
     EntrySurface,
     ServiceRequestContext,
     SocEvent,
@@ -47,6 +49,17 @@ class InMemoryAlertRepository:
         return self.runs.get(run_id)
 
 
+class InMemoryAuditRepository:
+    def __init__(self) -> None:
+        self.records: list[DecisionAuditRecord] = []
+
+    def save_audit_record(self, record: DecisionAuditRecord) -> None:
+        self.records.append(record)
+
+    def list_audit_records(self, run_id: str) -> list[DecisionAuditRecord]:
+        return [record for record in self.records if record.run_id == run_id]
+
+
 def _sample(name: str) -> dict:
     return json.loads((SAMPLES / name).read_text(encoding="utf-8"))
 
@@ -73,6 +86,25 @@ def test_analysis_service_emits_events_and_saves_run() -> None:
     assert sink.events[0].actor.surface == EntrySurface.TUI
     assert sink.events[1].run_id == run.run_id
     assert sink.events[1].payload["idempotency_key"] == "idem-001"
+
+
+def test_analysis_service_writes_decision_audit_record() -> None:
+    audit_repository = InMemoryAuditRepository()
+    service = SocAnalysisService(
+        repository=InMemoryAlertRepository(),
+        audit_repository=audit_repository,
+    )
+
+    run = service.analyze(_sample("approved_scanner.json"))
+
+    assert len(audit_repository.records) == 1
+    record = audit_repository.records[0]
+    assert record.action == AuditAction.ANALYSIS
+    assert record.run_id == run.run_id
+    assert record.alert_id == run.alert_id
+    assert record.input_hash == run.input_hash
+    assert record.final_verdict == Verdict.FALSE_POSITIVE
+    assert record.payload["step_count"] == len(run.steps)
 
 
 def test_analysis_service_get_run_requires_repository() -> None:
@@ -136,6 +168,29 @@ def test_review_service_corrects_run_and_emits_event() -> None:
     assert repository.get_run(run.run_id) == corrected
     assert sink.events[0].event_type == SocEventType.REVIEW_CORRECTED
     assert sink.events[0].payload["corrected_verdict"] == "true_positive"
+
+
+def test_review_service_correct_writes_decision_audit_record() -> None:
+    audit_repository = InMemoryAuditRepository()
+    repository = InMemoryAlertRepository()
+    run = SocAnalysisService(repository=repository).analyze(_sample("approved_scanner.json"))
+
+    corrected = SocReviewService(repository=repository, audit_repository=audit_repository).correct(
+        CorrectionCommand(
+            run_id=run.run_id,
+            corrected_verdict=Verdict.TRUE_POSITIVE,
+            reason="Manual correction",
+        )
+    )
+
+    assert len(audit_repository.records) == 1
+    record = audit_repository.records[0]
+    assert record.action == AuditAction.CORRECTION
+    assert record.run_id == corrected.run_id
+    assert record.previous_verdict == Verdict.FALSE_POSITIVE
+    assert record.final_verdict == Verdict.TRUE_POSITIVE
+    assert record.correction_id == corrected.corrections[0].correction_id
+    assert record.payload["candidate_knowledge_status"] == "pending_review"
 
 
 def test_review_service_correct_requires_repository() -> None:

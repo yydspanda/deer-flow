@@ -67,6 +67,12 @@ class SocEventType(StrEnum):
     MEMORY_UPDATED = "memory.updated"
 
 
+class AuditAction(StrEnum):
+    ANALYSIS = "analysis"
+    REPLAY = "replay"
+    CORRECTION = "correction"
+
+
 class ActorContext(BaseModel):
     actor_id: str = "anonymous"
     actor_type: ActorType = ActorType.USER
@@ -306,6 +312,22 @@ class CorrectionRecord(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     candidate_knowledge_status: Literal["not_created", "pending_review"] = "not_created"
+
+
+class DecisionAuditRecord(BaseModel):
+    audit_id: str = Field(default_factory=lambda: f"AUD-{uuid4().hex[:12].upper()}")
+    action: AuditAction
+    run_id: str
+    alert_id: str
+    actor: ActorContext
+    occurred_at: datetime = Field(default_factory=utc_now)
+    input_hash: str | None = None
+    previous_verdict: Verdict | None = None
+    final_verdict: Verdict | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    replay_of_run_id: str | None = None
+    correction_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class PipelineStepTrace(BaseModel):

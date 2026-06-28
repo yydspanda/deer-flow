@@ -183,6 +183,14 @@ Correction 约束：
 - correction 只能把候选知识标记为 `pending_review`；不能直接生成 confirmed fact、lesson 或自动处置规则。
 - correction 后仍保持 `automation_allowed=False`。
 
+Decision audit 约束：
+
+- `DecisionAuditRecord` 是 analyze/replay/correct 的结构化审计摘要，不替代完整 `AnalysisRun.run_payload`。
+- `DecisionAuditRepository.save_audit_record()` 必须在 service 边界调用，入口层不能绕过 service 自己写审计。
+- `soc_decision_audit_log` 必须至少记录 `run_id`、`alert_id`、`actor`、`action`、`input_hash`、previous/final verdict、confidence 和可扩展 payload。
+- replay/correction 必须生成新的审计记录，不覆盖历史审计记录。
+- 审计写入失败在 Phase 1 应暴露为执行失败或明确错误，不允许假装成功。
+
 SOC repository 实现约束：
 
 - SOC 业务表放在 `backend/soc_agent/db/`，不塞进 DeerFlow harness persistence。
@@ -190,6 +198,7 @@ SOC repository 实现约束：
 - `soc_analysis_runs.run_payload` 保存完整 `AnalysisRun`，索引列只服务查询和筛选，不作为唯一事实来源。
 - SOC schema migrations 放在 `backend/soc_agent/db/migrations/`，使用独立版本表 `soc_alembic_version`。
 - 正式 schema 变更走 `soc db upgrade` / Alembic revision；`create_soc_tables()` 和 `soc db init` 只作为 Phase 1 本地开发辅助。
+- SOC 当前持久化表包括 `soc_analysis_runs` 和 `soc_decision_audit_log`。
 - 单元测试可以用 SQLite in-memory 验证 SQLAlchemy 映射；运行时配置和正式部署必须指向 PostgreSQL。
 
 ### 三类模型必须分清

@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from soc_agent.contracts import AnalysisRun
-from soc_agent.db.models import SocAnalysisRunRow
+from soc_agent.contracts import AnalysisRun, DecisionAuditRecord
+from soc_agent.db.models import SocAnalysisRunRow, SocDecisionAuditLogRow
 
 
 class SqlAlchemyAlertRepository:
@@ -47,6 +48,22 @@ class SqlAlchemyAlertRepository:
                 return None
             return AnalysisRun.model_validate(row.run_payload)
 
+    def save_audit_record(self, record: DecisionAuditRecord) -> None:
+        payload = record.model_dump(mode="json")
+        with self._session_factory() as session:
+            row = session.get(SocDecisionAuditLogRow, record.audit_id)
+            if row is None:
+                session.add(SocDecisionAuditLogRow(audit_id=record.audit_id, **_audit_row_values(record, payload)))
+            else:
+                for key, value in _audit_row_values(record, payload).items():
+                    setattr(row, key, value)
+            session.commit()
+
+    def list_audit_records(self, run_id: str) -> list[DecisionAuditRecord]:
+        with self._session_factory() as session:
+            result = session.execute(select(SocDecisionAuditLogRow).where(SocDecisionAuditLogRow.run_id == run_id).order_by(SocDecisionAuditLogRow.occurred_at.asc()))
+            return [DecisionAuditRecord.model_validate(row.record_payload) for row in result.scalars()]
+
 
 def _row_values(run: AnalysisRun, payload: dict, *, updated_at: datetime) -> dict:
     return {
@@ -62,4 +79,23 @@ def _row_values(run: AnalysisRun, payload: dict, *, updated_at: datetime) -> dic
         "input_payload": run.input_payload,
         "run_payload": payload,
         "updated_at": updated_at,
+    }
+
+
+def _audit_row_values(record: DecisionAuditRecord, payload: dict) -> dict:
+    return {
+        "action": record.action.value,
+        "run_id": record.run_id,
+        "alert_id": record.alert_id,
+        "actor_id": record.actor.actor_id,
+        "actor_type": record.actor.actor_type.value,
+        "actor_surface": record.actor.surface.value,
+        "occurred_at": record.occurred_at,
+        "input_hash": record.input_hash,
+        "previous_verdict": record.previous_verdict.value if record.previous_verdict is not None else None,
+        "final_verdict": record.final_verdict.value if record.final_verdict is not None else None,
+        "confidence": record.confidence,
+        "replay_of_run_id": record.replay_of_run_id,
+        "correction_id": record.correction_id,
+        "record_payload": payload,
     }
