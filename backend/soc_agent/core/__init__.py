@@ -9,6 +9,7 @@ from soc_agent.core.service import (
     SocMemoryService,
     SocReviewService,
     SocServiceError,
+    SocServiceNotFoundError,
     SocServiceNotImplementedError,
 )
 
@@ -22,4 +23,5 @@ __all__ = [
     "SocReviewService",
     "SocServiceError",
     "SocServiceNotImplementedError",
+    "SocServiceNotFoundError",
 ]

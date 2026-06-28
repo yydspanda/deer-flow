@@ -23,9 +23,12 @@ def _analyze(payload: dict) -> AnalysisRun:
 
 
 def test_approved_scanner_returns_false_positive_candidate() -> None:
-    run = _analyze(_sample("approved_scanner.json"))
+    payload = _sample("approved_scanner.json")
+    run = _analyze(payload)
 
     assert run.status == AnalysisRunStatus.SUCCESS
+    assert run.input_payload == payload
+    assert run.input_hash is not None
     assert run.analysis is not None
     assert run.decision is not None
     assert run.analysis.verdict == Verdict.FALSE_POSITIVE

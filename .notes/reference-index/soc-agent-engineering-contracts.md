@@ -147,6 +147,7 @@ Headless CLI、TUI、API、Web UI、Channels、Kafka adapter 只能调用 `SocAn
 ```python
 class AlertRepository(Protocol):
     def save_run(self, run: AnalysisRun) -> None: ...
+    def get_run(self, run_id: str) -> AnalysisRun | None: ...
     def find_recent_similar(self, query: SimilarAlertQuery) -> list[AlertSummary]: ...
 
 
@@ -164,6 +165,13 @@ class SocEventSink(Protocol):
 ```
 
 业务代码依赖协议，不依赖 PostgreSQL、Kafka、具体 LLM SDK、具体 vector DB。这样测试、替换供应商、本地模拟和后续多 Agent 扩展才不会牵一发动全身。
+
+Replay 约束：
+
+- `AnalysisRun` 必须保存 `input_payload` 和 `input_hash`，repository 不能只保存最终 verdict。
+- `SocAnalysisService.replay(run_id)` 必须通过 `AlertRepository.get_run()` 取回旧 run 的输入快照，生成新的 run。
+- replay 不能覆盖历史 run；新 run 必须记录 `replay_of_run_id`。
+- 若旧 run 不存在，service 返回 not-found 语义；若旧 run 没有可 replay 输入，必须 fail-fast，不允许猜测输入。
 
 ### 三类模型必须分清
 

@@ -305,6 +305,9 @@ class AnalysisRun(BaseModel):
     pipeline_version: str = "phase1-runtime-v0"
     model_name: str = "stub"
     prompt_version: str = "stub"
+    input_payload: dict[str, Any] | None = None
+    input_hash: str | None = None
+    replay_of_run_id: str | None = None
     started_at: datetime = Field(default_factory=utc_now)
     ended_at: datetime | None = None
     steps: list[PipelineStepTrace] = Field(default_factory=list)

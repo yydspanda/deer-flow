@@ -24,6 +24,10 @@ class SocServiceNotImplementedError(SocServiceError):
     """Raised when a planned service operation has no Phase 1 implementation."""
 
 
+class SocServiceNotFoundError(SocServiceError):
+    """Raised when a requested SOC resource does not exist."""
+
+
 class DeterministicAnalysisRuntime:
     """Adapter that exposes the current deterministic runtime as a protocol."""
 
@@ -64,34 +68,7 @@ class SocAnalysisService:
         context: ServiceRequestContext | None = None,
     ) -> AnalysisRun:
         request_context = context or ServiceRequestContext()
-        self._emit(
-            SocEvent(
-                event_type=SocEventType.ANALYSIS_REQUESTED,
-                request_id=request_context.request_id,
-                actor=request_context.actor,
-                payload={"surface": request_context.actor.surface.value},
-            )
-        )
-
-        run = self._runtime.analyze(payload)
-        if self._repository is not None:
-            self._repository.save_run(run)
-
-        self._emit(
-            SocEvent(
-                event_type=_completion_event_type(run),
-                request_id=request_context.request_id,
-                run_id=run.run_id,
-                alert_id=run.alert_id,
-                actor=request_context.actor,
-                payload={
-                    "status": run.status.value,
-                    "trace_id": request_context.trace_id,
-                    "idempotency_key": request_context.idempotency_key,
-                },
-            )
-        )
-        return run
+        return self._analyze(payload, context=request_context)
 
     def get_run(self, run_id: str) -> AnalysisRun | None:
         if self._repository is None:
@@ -104,7 +81,57 @@ class SocAnalysisService:
         *,
         context: ServiceRequestContext | None = None,
     ) -> AnalysisRun:
-        raise SocServiceNotImplementedError("replay is planned after run persistence is implemented")
+        if self._repository is None:
+            raise SocServiceNotImplementedError("replay requires an AlertRepository")
+        previous = self._repository.get_run(run_id)
+        if previous is None:
+            raise SocServiceNotFoundError(f"run {run_id} not found")
+        if previous.input_payload is None:
+            raise SocServiceNotImplementedError(f"run {run_id} has no replayable input payload")
+
+        request_context = context or ServiceRequestContext()
+        return self._analyze(previous.input_payload, context=request_context, replay_of_run_id=run_id)
+
+    def _analyze(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        context: ServiceRequestContext,
+        replay_of_run_id: str | None = None,
+    ) -> AnalysisRun:
+        self._emit(
+            SocEvent(
+                event_type=SocEventType.ANALYSIS_REQUESTED,
+                request_id=context.request_id,
+                actor=context.actor,
+                payload={
+                    "surface": context.actor.surface.value,
+                    "replay_of_run_id": replay_of_run_id,
+                },
+            )
+        )
+
+        run = self._runtime.analyze(payload)
+        run.replay_of_run_id = replay_of_run_id
+        if self._repository is not None:
+            self._repository.save_run(run)
+
+        self._emit(
+            SocEvent(
+                event_type=_completion_event_type(run),
+                request_id=context.request_id,
+                run_id=run.run_id,
+                alert_id=run.alert_id,
+                actor=context.actor,
+                payload={
+                    "status": run.status.value,
+                    "trace_id": context.trace_id,
+                    "idempotency_key": context.idempotency_key,
+                    "replay_of_run_id": replay_of_run_id,
+                },
+            )
+        )
+        return run
 
     def _emit(self, event: SocEvent) -> None:
         self._event_sink.emit(event)

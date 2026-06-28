@@ -10,6 +10,7 @@ from soc_agent.core import (
     SocDaemonService,
     SocMemoryService,
     SocReviewService,
+    SocServiceNotFoundError,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -19,15 +20,18 @@ SOC_AGENT = PROJECT_ROOT / "soc_agent"
 def test_contracts_do_not_import_runtime_layers() -> None:
     forbidden = {
         "soc_agent.api",
+        "soc_agent.channels",
         "soc_agent.cli",
         "soc_agent.core",
         "soc_agent.daemon",
         "soc_agent.db",
+        "soc_agent.ingestion",
         "soc_agent.memory",
         "soc_agent.normalizers",
         "soc_agent.pipeline",
         "soc_agent.policy",
         "soc_agent.queue",
+        "soc_agent.tui",
         "soc_agent.tools",
     }
 
@@ -36,7 +40,14 @@ def test_contracts_do_not_import_runtime_layers() -> None:
 
 
 def test_core_does_not_import_transport_layers() -> None:
-    forbidden = {"soc_agent.api", "soc_agent.cli", "soc_agent.daemon"}
+    forbidden = {
+        "soc_agent.api",
+        "soc_agent.channels",
+        "soc_agent.cli",
+        "soc_agent.daemon",
+        "soc_agent.ingestion",
+        "soc_agent.tui",
+    }
 
     for module in _python_files(SOC_AGENT / "core"):
         assert not (_imports(module) & forbidden), f"{module} imports a transport layer"
@@ -51,9 +62,12 @@ def test_pipeline_has_no_transport_or_infrastructure_imports() -> None:
         "sqlalchemy",
         "typer",
         "soc_agent.api",
+        "soc_agent.channels",
         "soc_agent.cli",
         "soc_agent.daemon",
         "soc_agent.db",
+        "soc_agent.ingestion",
+        "soc_agent.tui",
     }
 
     for module in _python_files(SOC_AGENT / "pipeline"):
@@ -79,6 +93,7 @@ def test_core_exports_planned_public_services() -> None:
     assert SocMemoryService.__name__ == "SocMemoryService"
     assert SocDaemonService.__name__ == "SocDaemonService"
     assert SocAgentChatService.__name__ == "SocAgentChatService"
+    assert SocServiceNotFoundError.__name__ == "SocServiceNotFoundError"
 
 
 def _python_files(path: Path) -> list[Path]:

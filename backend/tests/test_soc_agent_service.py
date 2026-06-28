@@ -19,6 +19,7 @@ from soc_agent.core import (
     SocDaemonService,
     SocMemoryService,
     SocReviewService,
+    SocServiceNotFoundError,
     SocServiceNotImplementedError,
 )
 
@@ -79,9 +80,31 @@ def test_analysis_service_get_run_requires_repository() -> None:
         service.get_run("RUN-UNKNOWN")
 
 
+def test_analysis_service_replays_saved_run_as_new_run() -> None:
+    sink = RecordingEventSink()
+    repository = InMemoryAlertRepository()
+    service = SocAnalysisService(repository=repository, event_sink=sink)
+
+    original = service.analyze(_sample("approved_scanner.json"))
+    replayed = service.replay(original.run_id)
+
+    assert replayed.run_id != original.run_id
+    assert replayed.replay_of_run_id == original.run_id
+    assert replayed.input_payload == original.input_payload
+    assert repository.get_run(original.run_id) == original
+    assert repository.get_run(replayed.run_id) == replayed
+    assert sink.events[-2].payload["replay_of_run_id"] == original.run_id
+    assert sink.events[-1].payload["replay_of_run_id"] == original.run_id
+
+
+def test_analysis_service_replay_requires_existing_run() -> None:
+    service = SocAnalysisService(repository=InMemoryAlertRepository())
+
+    with pytest.raises(SocServiceNotFoundError):
+        service.replay("RUN-UNKNOWN")
+
+
 def test_planned_services_fail_fast_until_implemented() -> None:
-    with pytest.raises(SocServiceNotImplementedError):
-        SocAnalysisService().replay("RUN-UNKNOWN")
     with pytest.raises(SocServiceNotImplementedError):
         SocReviewService().correct()
     with pytest.raises(SocServiceNotImplementedError):

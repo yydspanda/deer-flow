@@ -36,7 +36,13 @@ class SocRuntimeError(RuntimeError):
 def analyze_alert(payload: Mapping[str, Any]) -> AnalysisRun:
     """Analyze one alert through the fixed Phase 1 pipeline."""
 
-    run = AnalysisRun(alert_id="unknown", status=AnalysisRunStatus.RUNNING)
+    input_payload = _jsonable(payload)
+    run = AnalysisRun(
+        alert_id="unknown",
+        status=AnalysisRunStatus.RUNNING,
+        input_payload=input_payload,
+        input_hash=stable_hash(input_payload),
+    )
 
     try:
         alert = _run_step(run, "normalize", payload, _normalize_alert)

@@ -17,7 +17,7 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1：CLI + Runtime 可靠性闭环 |
-| 当前目标 | 建立 SOC Agent 最小可运行骨架：contracts schema、Runtime 状态机、step trace、validator、CLI analyze、golden samples、测试 |
+| 当前目标 | 建立 SOC Agent 最小可靠闭环：contracts schema、Runtime 状态机、step trace、validator、headless CLI analyze、run 输入快照、replay contract、PostgreSQL 持久化接口 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
@@ -32,6 +32,8 @@
 | 4 | CLI `soc analyze` | Done | 能读取 JSON 文件/字符串，输出结构化 JSON 结果和 step trace |
 | 5 | golden alert samples | Partial | 覆盖批准扫描器误报、恶意 IOC、低置信未知、字段缺失；坏 JSON 模拟待补 |
 | 6 | Phase 1 最小测试 | Partial | 字段缺失不崩、输出过 schema/domain validation、每步有 trace、不执行自动处置；坏 JSON repair 待补 |
+| 7 | replay contract | Done | `AnalysisRun` 记录 input payload/hash；`SocAnalysisService.replay()` 通过 repository 生成新 run，不覆盖旧 run |
+| 8 | PostgreSQL run repository | Next | 按 `AlertRepository` 保存/查询 `AnalysisRun`，支持后续 `soc show/replay` 跨进程工作 |
 
 ## 进度记录
 
@@ -177,3 +179,30 @@
   - `cd backend && ./.venv/bin/python -m ruff format --check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
   - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+
+### 2026-06-28 — 方向收敛与 replay contract
+
+- 已收敛文档关系：
+  - `.notes/ai_soc/soc-agent-solution.md` 决定产品方向、阶段顺序和入口取舍。
+  - `.notes/reference-index/soc-agent-engineering-contracts.md` 决定代码接口、协议、边界和测试约束。
+  - `.notes/ai_soc/README.md` 已写入执行规则，避免多份文档互相覆盖。
+- 已修正入口口径：
+  - SOC 对齐 DeerFlow 的 Web UI、Gateway API、TUI/Terminal Workbench、Headless CLI、Channels。
+  - Kafka/Redpanda 是后台 ingestion adapter，不是替代 Web/TUI 的用户入口。
+- 已补充 replay contract：
+  - `AnalysisRun.input_payload` 保存可 replay 的输入快照。
+  - `AnalysisRun.input_hash` 保存稳定输入 hash。
+  - `AnalysisRun.replay_of_run_id` 记录 replay 来源 run。
+  - `SocAnalysisService.replay(run_id)` 通过 repository 取回旧 run 输入，生成新的 run，不覆盖历史 run。
+  - 新增 `SocServiceNotFoundError` 表达 run 不存在。
+- 已补充测试：
+  - runtime 记录输入快照和 input hash。
+  - service replay 生成新 run，保留旧 run，事件 payload 标记 `replay_of_run_id`。
+  - replay 旧 run 不存在时 fail-fast。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format --check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 实现 PostgreSQL `AlertRepository`，把 `AnalysisRun` 存到 SOC 自己的业务表。
+  - repository 可用后再把 `soc show` / `soc replay` 挂到 headless CLI。
