@@ -12,7 +12,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
-from soc_agent.core import SocAnalysisService, SocServiceError
+from soc_agent.contracts import CorrectionCommand, Verdict
+from soc_agent.core import SocAnalysisService, SocReviewService, SocServiceError
 from soc_agent.db import (
     SqlAlchemyAlertRepository,
     create_soc_tables,
@@ -32,6 +33,8 @@ def main(argv: list[str] | None = None) -> int:
         return _show(args)
     if args.command == "replay":
         return _replay(args)
+    if args.command == "correct":
+        return _correct(args)
     if args.command == "db" and args.db_command == "init":
         return _db_init(args)
     if args.command == "db" and args.db_command == "upgrade":
@@ -69,6 +72,19 @@ def _build_parser() -> argparse.ArgumentParser:
     replay.add_argument("run_id", help="Run id to replay")
     replay.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(replay)
+
+    correct = subparsers.add_parser("correct", help="Record a manual verdict correction")
+    correct.add_argument("run_id", help="Run id to correct")
+    correct.add_argument(
+        "--verdict",
+        required=True,
+        choices=[verdict.value for verdict in Verdict],
+        help="Corrected verdict",
+    )
+    correct.add_argument("--reason", required=True, help="Analyst correction reason")
+    correct.add_argument("--confidence", type=float, default=None, help="Optional corrected confidence, 0..1")
+    correct.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(correct)
 
     db = subparsers.add_parser("db", help="SOC database helpers")
     db_subparsers = db.add_subparsers(dest="db_command")
@@ -135,6 +151,28 @@ def _replay(args: argparse.Namespace) -> int:
 
     print(run.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0 if run.status.value in {"success", "needs_review"} else 1
+
+
+def _correct(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        run = SocReviewService(repository=repository).correct(
+            CorrectionCommand(
+                run_id=args.run_id,
+                corrected_verdict=Verdict(args.verdict),
+                corrected_confidence=args.confidence,
+                reason=args.reason,
+            )
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(run.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
 
 
 def _db_init(args: argparse.Namespace) -> int:

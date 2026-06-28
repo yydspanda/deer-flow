@@ -235,3 +235,24 @@ def test_cli_persist_show_and_replay(tmp_path: Path, capsys) -> None:
     replayed = json.loads(captured.out)
     assert replayed["run_id"] != original["run_id"]
     assert replayed["replay_of_run_id"] == original["run_id"]
+
+    assert (
+        main(
+            [
+                "correct",
+                original["run_id"],
+                "--verdict",
+                "true_positive",
+                "--reason",
+                "Analyst confirmed malicious follow-up activity.",
+                "--database-url",
+                database_url,
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    corrected = json.loads(captured.out)
+    assert corrected["decision"]["verdict"] == "true_positive"
+    assert corrected["corrections"][0]["previous_verdict"] == "false_positive"
+    assert corrected["corrections"][0]["candidate_knowledge_status"] == "pending_review"

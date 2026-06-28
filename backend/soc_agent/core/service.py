@@ -8,9 +8,13 @@ from typing import Any
 from soc_agent.contracts import (
     AnalysisRun,
     AnalysisRunStatus,
+    CorrectionCommand,
+    CorrectionRecord,
+    Decision,
     ServiceRequestContext,
     SocEvent,
     SocEventType,
+    Verdict,
 )
 from soc_agent.core.runtime import analyze_alert
 from soc_agent.protocols import AlertRepository, AnalysisRuntime, SocEventSink
@@ -138,10 +142,68 @@ class SocAnalysisService:
 
 
 class SocReviewService:
-    """Review queue and correction service placeholder."""
+    """Review queue and correction service."""
 
-    def correct(self, *args: Any, **kwargs: Any) -> None:
-        raise SocServiceNotImplementedError("correction workflow is planned after persistence is implemented")
+    def __init__(
+        self,
+        *,
+        repository: AlertRepository | None = None,
+        event_sink: SocEventSink | None = None,
+    ) -> None:
+        self._repository = repository
+        self._event_sink = event_sink or NoopEventSink()
+
+    def correct(
+        self,
+        command: CorrectionCommand,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> AnalysisRun:
+        if self._repository is None:
+            raise SocServiceNotImplementedError("correct requires an AlertRepository")
+
+        run = self._repository.get_run(command.run_id)
+        if run is None:
+            raise SocServiceNotFoundError(f"run {command.run_id} not found")
+
+        request_context = context or ServiceRequestContext()
+        previous_verdict = _current_verdict(run)
+        record = CorrectionRecord(
+            run_id=run.run_id,
+            previous_verdict=previous_verdict,
+            corrected_verdict=command.corrected_verdict,
+            reason=command.reason,
+            corrected_confidence=command.corrected_confidence,
+            actor=request_context.actor,
+            evidence=command.evidence,
+            candidate_knowledge_status="pending_review",
+        )
+        run.corrections.append(record)
+        run.decision = Decision(
+            verdict=command.corrected_verdict,
+            confidence=command.corrected_confidence if command.corrected_confidence is not None else 1.0,
+            suggested_action=run.decision.suggested_action if run.decision is not None else "manual correction recorded",
+            needs_review=False,
+            reason=command.reason,
+            automation_allowed=False,
+        )
+        self._repository.save_run(run)
+        self._event_sink.emit(
+            SocEvent(
+                event_type=SocEventType.REVIEW_CORRECTED,
+                request_id=request_context.request_id,
+                run_id=run.run_id,
+                alert_id=run.alert_id,
+                actor=request_context.actor,
+                payload={
+                    "correction_id": record.correction_id,
+                    "previous_verdict": previous_verdict.value if previous_verdict is not None else None,
+                    "corrected_verdict": command.corrected_verdict.value,
+                    "candidate_knowledge_status": record.candidate_knowledge_status,
+                },
+            )
+        )
+        return run
 
 
 class SocMemoryService:
@@ -169,3 +231,11 @@ def _completion_event_type(run: AnalysisRun) -> SocEventType:
     if run.status is AnalysisRunStatus.FAILED:
         return SocEventType.ANALYSIS_FAILED
     return SocEventType.ANALYSIS_COMPLETED
+
+
+def _current_verdict(run: AnalysisRun) -> Verdict | None:
+    if run.decision is not None:
+        return run.decision.verdict
+    if run.analysis is not None:
+        return run.analysis.verdict
+    return None

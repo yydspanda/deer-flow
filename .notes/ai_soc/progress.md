@@ -34,6 +34,7 @@
 | 6 | Phase 1 最小测试 | Partial | 字段缺失不崩、输出过 schema/domain validation、每步有 trace、不执行自动处置；坏 JSON repair 待补 |
 | 7 | replay contract | Done | `AnalysisRun` 记录 input payload/hash；`SocAnalysisService.replay()` 通过 repository 生成新 run，不覆盖旧 run |
 | 8 | PostgreSQL run repository | Done | SOC ORM row + SQLAlchemy repository + Alembic migration + headless CLI `show/replay` 已完成 |
+| 9 | manual correction loop | Done | `soc correct RUN_ID` 更新 operational decision，保留原 AI verdict，追加 correction record，不自动写 confirmed memory |
 
 ## 进度记录
 
@@ -238,6 +239,30 @@
 - 说明：
   - 测试使用 SQLite in-memory / temp file 只是 SQLAlchemy unit harness；SOC runtime 策略仍是 PostgreSQL。
   - `soc db init` 保留为开发辅助；正式路径使用 `soc db upgrade`。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format --check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+
+### 2026-06-28 — Manual correction loop
+
+- 新增 correction contracts：
+  - `CorrectionCommand`
+  - `CorrectionRecord`
+  - `AnalysisRun.corrections`
+  - `SocEventType.REVIEW_CORRECTED`
+- 实现 `SocReviewService.correct()`：
+  - 通过 repository 读取目标 run。
+  - 保留原 AI verdict / previous verdict。
+  - 更新当前 `run.decision` 为分析师纠正后的 verdict。
+  - 追加 `CorrectionRecord`，`candidate_knowledge_status="pending_review"`。
+  - 保存 run 并发送 `review.corrected` 事件。
+- 新增 headless CLI：
+  - `soc correct RUN_ID --verdict false_positive --reason "..."`
+  - 纠正依赖 repository，因此需要 `--database-url`、`SOC_DATABASE_URL` 或 DeerFlow PostgreSQL config。
+- 安全边界：
+  - correction 不执行任何自动处置。
+  - correction 不直接写 confirmed memory/fact/lesson；只作为后续 memory extraction 的 pending-review 来源。
 - 已验证：
   - `cd backend && ./.venv/bin/python -m ruff format --check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
   - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`

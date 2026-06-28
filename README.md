@@ -19,6 +19,8 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > [!NOTE]
 > This fork branch is adding an experimental SOC Agent extension under `backend/soc_agent`.
 > The current design and progress ledger live in `.notes/ai_soc/`.
+> Current headless CLI slice: `soc db upgrade`, `soc analyze --persist`, `soc show`,
+> `soc replay`, and `soc correct`.
 
 ## Official Website
 

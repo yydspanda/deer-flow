@@ -6,7 +6,9 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from soc_agent.contracts import CorrectionCommand, Verdict
 from soc_agent.core import SocAnalysisService
+from soc_agent.core.service import SocReviewService
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
@@ -58,3 +60,23 @@ def test_sqlalchemy_alert_repository_supports_service_replay() -> None:
     assert replayed.replay_of_run_id == original.run_id
     assert repository.get_run(original.run_id) == original
     assert repository.get_run(replayed.run_id) == replayed
+
+
+def test_sqlalchemy_alert_repository_persists_corrections() -> None:
+    repository = _repository()
+    run = SocAnalysisService(repository=repository).analyze(_sample("approved_scanner.json"))
+
+    corrected = SocReviewService(repository=repository).correct(
+        CorrectionCommand(
+            run_id=run.run_id,
+            corrected_verdict=Verdict.TRUE_POSITIVE,
+            reason="Confirmed malicious behavior after host review.",
+        )
+    )
+
+    saved = repository.get_run(run.run_id)
+    assert saved == corrected
+    assert saved is not None
+    assert saved.decision is not None
+    assert saved.decision.verdict == Verdict.TRUE_POSITIVE
+    assert saved.corrections[0].previous_verdict == Verdict.FALSE_POSITIVE

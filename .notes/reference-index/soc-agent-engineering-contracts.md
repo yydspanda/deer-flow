@@ -125,7 +125,10 @@ class SocAnalysisService:
         context: ServiceRequestContext | None = None,
     ) -> AnalysisRun: ...
     def replay(self, run_id: str) -> AnalysisRun: ...
-    def correct(self, command: CorrectionCommand) -> CorrectionResult: ...
+
+
+class SocReviewService:
+    def correct(self, command: CorrectionCommand) -> AnalysisRun: ...
 ```
 
 Headless CLI、TUI、API、Web UI、Channels、Kafka adapter 只能调用 `SocAnalysisService` 或同等级 core service；不能直接调用 `pipeline.extract_entities()`、DB repository、LLM adapter 来绕过 runtime。
@@ -172,6 +175,13 @@ Replay 约束：
 - `SocAnalysisService.replay(run_id)` 必须通过 `AlertRepository.get_run()` 取回旧 run 的输入快照，生成新的 run。
 - replay 不能覆盖历史 run；新 run 必须记录 `replay_of_run_id`。
 - 若旧 run 不存在，service 返回 not-found 语义；若旧 run 没有可 replay 输入，必须 fail-fast，不允许猜测输入。
+
+Correction 约束：
+
+- correction 是人工覆盖当前 operational decision，不删除或覆盖原始 `AnalysisResult`。
+- 每次 correction 必须追加 `CorrectionRecord`，记录 previous verdict、corrected verdict、actor、reason、evidence 和时间。
+- correction 只能把候选知识标记为 `pending_review`；不能直接生成 confirmed fact、lesson 或自动处置规则。
+- correction 后仍保持 `automation_allowed=False`。
 
 SOC repository 实现约束：
 
@@ -360,7 +370,7 @@ API 从第一天就加版本：
 | `GET` | `/api/soc/v1/runs/{run_id}/steps` | 查询 step trace |
 | `POST` | `/api/soc/v1/runs/{run_id}/replay` | 回放分析 |
 | `GET` | `/api/soc/v1/alerts/{alert_id}` | 查看告警分析结果 |
-| `POST` | `/api/soc/v1/alerts/{alert_id}/corrections` | 提交人工纠正 |
+| `POST` | `/api/soc/v1/runs/{run_id}/corrections` | 提交人工纠正 |
 | `GET` | `/api/soc/v1/facts` | 查询 facts |
 | `PATCH` | `/api/soc/v1/facts/{fact_id}` | 确认/驳回/回滚 fact |
 

@@ -62,6 +62,7 @@ class SocEventType(StrEnum):
     ANALYSIS_REQUESTED = "analysis.requested"
     ANALYSIS_COMPLETED = "analysis.completed"
     ANALYSIS_FAILED = "analysis.failed"
+    REVIEW_CORRECTED = "review.corrected"
     REVIEW_REQUESTED = "review.requested"
     MEMORY_UPDATED = "memory.updated"
 
@@ -286,6 +287,27 @@ class Decision(BaseModel):
     automation_allowed: Literal[False] = False
 
 
+class CorrectionCommand(BaseModel):
+    run_id: str
+    corrected_verdict: Verdict
+    reason: str = Field(min_length=1)
+    corrected_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+
+
+class CorrectionRecord(BaseModel):
+    correction_id: str = Field(default_factory=lambda: f"COR-{uuid4().hex[:12].upper()}")
+    run_id: str
+    previous_verdict: Verdict | None = None
+    corrected_verdict: Verdict
+    reason: str
+    corrected_confidence: float | None = None
+    actor: ActorContext
+    created_at: datetime = Field(default_factory=utc_now)
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    candidate_knowledge_status: Literal["not_created", "pending_review"] = "not_created"
+
+
 class PipelineStepTrace(BaseModel):
     step_name: str
     status: PipelineStepStatus
@@ -314,3 +336,4 @@ class AnalysisRun(BaseModel):
     entities: ExtractedEntities | None = None
     analysis: AnalysisResult | None = None
     decision: Decision | None = None
+    corrections: list[CorrectionRecord] = Field(default_factory=list)
