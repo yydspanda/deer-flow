@@ -1,0 +1,74 @@
+{
+  "alert": {
+    "alertId": "1965810",
+    "alertCode": "PIE-2026-69431",
+    "alertName": "未知-10.43.107.39-可疑横向移动",
+    "riskLevel": "中危",
+    "status": "待审阅",
+    "primaryType": "入侵预警",
+    "secondaryType": "技术攻击",
+    "tertiaryType": "可疑横向移动",
+    "profileCode": "PPAADM_000880",
+    "profileName": "【联软edr】横向移动",
+    "createAt": "2026-04-01 08:48:46",
+    "hitLog": [
+      {
+        "topic": "leagsoft-edr",
+        "topicName": "联软edr",
+        "ruleCode": "RPAADM_002583",
+        "ruleName": "【联软edr】横向移动",
+        "zeusRawLogs": [
+          {
+            "str_source_ip": "10.43.107.39",
+            "str_attack_ip": "30.162.29.85",
+            "str_threat_value": "30.162.29.85",
+            "device__hostname": "HOST-L12267.example.local",
+            "device__ip": "10.43.107.39",
+            "str_agent_id": "3E418648-A4BB-4D1A-A4A3-A7A159C21212",
+            "str_user_agent": "analyst001",
+            "process__user__name": "LOCAL SERVICE",
+            "process__name": "svchost.exe",
+            "process__file__path": "C:\\WINDOWS\\System32\\svchost.exe",
+            "process__cmd_line": "C:\\windows\\system32\\svchost.exe -k localService -p -s RemoteRegistry",
+            "process__parent_process__file__path": "C:\\WINDOWS\\System32\\services.exe",
+            "process__parent_process__cmd_line": "C:\\windows\\system32\\services.exe",
+            "process__file__hashes__md5": "7B88D0896FBF43469A9959D59824A514",
+            "finding__title": "横向移动(开启远程注册表服务)",
+            "finding__desc": "在主机HOST-L12267.example.local(10.43.107.39)上，进程services.exe创建了进程svchost.exe，远端主机30.162.29.85可能为C2控制端",
+            "finding__type_name": "横向移动",
+            "str_tactic_id": "TA0008",
+            "str_technique_id": "T1021",
+            "severity": "High",
+            "risk_level": "Critical",
+            "t_detect_time": "2026-04-01 08:42:22",
+            "finding__uid": "d60e316356097837e7bd2de02003e008",
+            "appname": "leagsoft-edr",
+            "metadata__product__name": "leagsoft-edr"
+          }
+        ]
+      }
+    ],
+    "soar": [
+      {
+        "displayName": "IP查询-SOAR",
+        "data": {
+          "data": {
+            "rows": [
+              {
+                "uiddevrecordid": "3E418648-A4BB-4D1A-A4A3-A7A159C21212",
+                "uiduserid": "S-1-5-21-example",
+                "strdevname": "HOST-L12267.example.local",
+                "strdevip": "10.43.107.39",
+                "strusername": "analyst001",
+                "strdeptname": "Example Security Team"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "asset": [],
+    "content": []
+  },
+  "relatedAlertList": []
+}

@@ -204,6 +204,64 @@ def test_unknown_source_type_falls_back_to_other_without_breaking() -> None:
     assert alert.detection.detection_key == "fortigate:rule_code:1002003"
 
 
+def test_pingan_legacy_apt_alert_normalizes_platform_envelope() -> None:
+    alert = normalize_alert_payload(_sample("pingan_legacy_apt.json"))
+
+    assert alert.alert_id == "2026494"
+    assert alert.source.source_type == AlertSourceType.NDR
+    assert alert.source.source_system == "sec_guard_apt"
+    assert alert.source.product == "360天眼APT"
+    assert alert.detection.rule_code == "RPAADM_002635"
+    assert alert.detection.rule_name == "告警日志【天眼APT】失败企图"
+    assert alert.detection.detection_key == "sec_guard_apt:rule_code:rpaadm_002635"
+    assert alert.classification.severity == "高危"
+    assert alert.classification.category == "可疑操作行为"
+    assert alert.classification.tactic == ["TA0001"]
+    assert alert.classification.technique == ["T1190"]
+    assert alert.entities.network.source_ip == "30.180.248.178"
+    assert alert.entities.network.destination_ip == "30.185.76.75"
+    assert alert.entities.http.host == "app.example.internal"
+    assert alert.entities.http.status_code == 200
+
+    run = _analyze(_sample("pingan_legacy_apt.json"))
+    assert run.alert_id == "2026494"
+    assert run.entities is not None
+    assert "30.180.248.178" in run.entities.ips
+    assert "30.185.76.75" in run.entities.ips
+    assert "app.example.internal" in run.entities.domains
+    assert run.entities.rule_codes == ["RPAADM_002635"]
+
+
+def test_pingan_legacy_edr_alert_normalizes_platform_envelope() -> None:
+    alert = normalize_alert_payload(_sample("pingan_legacy_edr.json"))
+
+    assert alert.alert_id == "1965810"
+    assert alert.source.source_type == AlertSourceType.EDR
+    assert alert.source.source_system == "leagsoft-edr"
+    assert alert.detection.rule_code == "RPAADM_002583"
+    assert alert.detection.rule_name == "【联软edr】横向移动"
+    assert alert.classification.severity == "High"
+    assert alert.classification.category == "可疑横向移动"
+    assert alert.classification.tactic == ["TA0008"]
+    assert alert.classification.technique == ["T1021"]
+    assert alert.entities.network.source_ip == "10.43.107.39"
+    assert alert.entities.network.destination_ip == "30.162.29.85"
+    assert alert.entities.host.host_name == "HOST-L12267.example.local"
+    assert alert.entities.user.username == "analyst001"
+    assert alert.entities.process.process_name == "svchost.exe"
+    assert alert.entities.process.parent_process_name == "services.exe"
+    assert alert.entities.file.md5 == "7B88D0896FBF43469A9959D59824A514"
+
+    run = _analyze(_sample("pingan_legacy_edr.json"))
+    assert run.alert_id == "1965810"
+    assert run.entities is not None
+    assert run.entities.ips == ["10.43.107.39", "30.162.29.85"]
+    assert "svchost.exe" in run.entities.processes
+    assert "services.exe" in run.entities.processes
+    assert "analyst001" in run.entities.users
+    assert "HOST-L12267.example.local" in run.entities.hosts
+
+
 def test_cli_analyze_file_outputs_json(capsys) -> None:
     exit_code = main(["analyze", str(SAMPLES / "approved_scanner.json")])
 

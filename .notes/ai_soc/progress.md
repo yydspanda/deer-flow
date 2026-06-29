@@ -37,6 +37,7 @@
 | 9 | manual correction loop | Done | `soc correct RUN_ID` 更新 operational decision，保留原 AI verdict，追加 correction record，不自动写 confirmed memory |
 | 10 | decision audit log | Done | `soc_decision_audit_log` 独立表记录 analyze/replay/correct 的结构化审计记录 |
 | 11 | alert summary read model | Done | `soc_alert_summaries` 保存可查询摘要，analyze/replay/correct 通过 service 维护 summary |
+| 12 | legacy platform normalizer | Done | 平安旧预警平台 envelope 转 canonical `AlertInput`，APT/EDR demo 可提取核心实体 |
 
 ## 进度记录
 
@@ -333,3 +334,34 @@
 - 下一步：
   - 补 `ReviewQueue` 最小 contract/table/service，基于 `AlertSummary.needs_review` 和人工纠正结果沉淀待复查队列。
   - 或先补 `soc list` / future API list 的读取入口，验证 Web/TUI 列表需要的筛选字段是否足够。
+
+### 2026-06-29 — Legacy platform normalizer
+
+- 新增平安旧预警平台 adapter：
+  - `backend/soc_agent/normalizers/pingan_platform.py`
+  - 识别 `alert.hitLog[].zeusRawLogs[]` envelope。
+  - 映射 `alertId`、`ruleCode`、`ruleName`、`topic/topicName`、`riskLevel`、`primary/secondary/tertiaryType`。
+  - 映射 APT/NDR 类字段：`sip/dip/sport/dport/host/x_forwarded_for/payload.req_header/att_ck`。
+  - 映射 EDR 类字段：`str_source_ip/str_attack_ip/device__hostname/process__cmd_line/process__user__name/file md5/MITRE`。
+  - SOAR rows 仅作为 host/user fallback，不直接改变 verdict。
+- 通用 normalizer 更新：
+  - `normalize_alert_payload()` 在检测到旧平台 envelope 时自动分派到 adapter。
+  - `AlertInput` 仍保持 canonical strict；旧平台字段不进入 core schema。
+- 新增脱敏 golden samples：
+  - `backend/samples/alerts/pingan_legacy_apt.json`
+  - `backend/samples/alerts/pingan_legacy_edr.json`
+  - 原始 `alert_demo/` 含真实人员/组织/内网信息，仅作为本地参考，不提交入库。
+- 新增测试：
+  - APT demo 可提取 `alert_id/rule_code/rule_name/source/IP/domain/http/MITRE`。
+  - EDR demo 可提取 `alert_id/rule_code/rule_name/source/IP/host/user/process/file hash/MITRE`。
+  - 完整 runtime 后 `ExtractedEntities` 不再为空。
+- 已用原始本地 demo 验证：
+  - `alert_demo/apt-2026494.json` -> `2026494 / ndr / RPAADM_002635 / 30.180.248.178 / 30.185.76.75 / TA0001 / T1190`
+  - `alert_demo/edr-1965810.json` -> `1965810 / edr / RPAADM_002583 / 10.43.107.39 / 30.162.29.85 / svchost.exe / WANGJIAN191`
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 基于真实 normalizer 输出补 `soc list`，先验证 `AlertSummary` 对 Web/TUI 列表字段是否足够。
+  - 然后再补 `ReviewQueue`，避免在字段不稳定时提前固化复核队列结构。

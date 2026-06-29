@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from soc_agent.contracts import AlertInput, AlertSourceType
+from soc_agent.normalizers.pingan_platform import is_pingan_platform_payload, normalize_pingan_platform_payload
 
 
 def normalize_alert_payload(payload: Mapping[str, Any]) -> AlertInput:
@@ -16,6 +17,9 @@ def normalize_alert_payload(payload: Mapping[str, Any]) -> AlertInput:
     This function is intentionally permissive. Vendor adapters can be added
     later, but the core contract stays canonical and strict.
     """
+
+    if is_pingan_platform_payload(payload):
+        return normalize_pingan_platform_payload(payload)
 
     raw_payload = dict(payload)
     normalized: dict[str, Any] = {

