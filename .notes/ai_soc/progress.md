@@ -608,3 +608,33 @@
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
 - 下一步：
   - 补 `soc normalize inspect` CLI：对单个样本只跑 normalize + report + entity extract，方便接入新厂商和排查字段漂移。
+
+### 2026-06-29 — Normalize inspect CLI
+
+- 新增 inspect-only 输出 contract：
+  - `NormalizationInspectionResult`
+- 新增 core service：
+  - `SocNormalizationService.inspect(payload)`
+  - CLI/API/TUI 后续都应通过该 service 打开样本归一化检查，不能直接 import runtime/normalizer。
+- 新增 headless CLI：
+  - `soc normalize inspect sample.json`
+  - `soc normalize inspect --json '{...}' --pretty`
+- 输出内容：
+  - canonical `AlertInput`
+  - `ExtractedEntities`
+  - `NormalizationReport`
+  - `ExtractionReport`
+- 设计边界：
+  - 不跑 `analyze_stub`、decision、review queue 或 persistence。
+  - 用于新厂商样本接入、字段漂移排查、normalizer 回归测试。
+- 已同步工程契约：
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 已补充测试：
+  - CLI 输出 PingAn EDR normalized alert、entities、reports。
+  - 架构测试确认 CLI 仍通过 core service 进入业务逻辑。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 抽一个最小 mapping config spike：先不接 LLM，定义 mapping 文件格式和 `soc normalize inspect --mapping ...` 的接口草案。

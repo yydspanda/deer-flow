@@ -21,6 +21,7 @@ from soc_agent.contracts import (
     EntityKind,
     ExtractedEntities,
     ExtractionReport,
+    NormalizationInspectionResult,
     NormalizationReport,
     PipelineStepStatus,
     PipelineStepTrace,
@@ -34,6 +35,19 @@ from soc_agent.utils.hashing import stable_hash
 
 class SocRuntimeError(RuntimeError):
     """Raised when the deterministic runtime cannot complete a run."""
+
+
+def inspect_alert_normalization(payload: Mapping[str, Any]) -> NormalizationInspectionResult:
+    """Run deterministic normalization and entity extraction without analysis."""
+
+    alert = _normalize_alert(payload)
+    entities = extract_entities(alert)
+    return NormalizationInspectionResult(
+        alert=alert,
+        entities=entities,
+        normalization_report=_normalization_report(alert),
+        extraction_report=_extraction_report(entities),
+    )
 
 
 def analyze_alert(payload: Mapping[str, Any]) -> AnalysisRun:

@@ -340,6 +340,16 @@ class ExtractionReport(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class NormalizationInspectionResult(BaseModel):
+    """Output for inspect-only normalization and entity extraction."""
+
+    schema_version: str = "soc.normalization_inspection.v1"
+    alert: AlertInput
+    entities: ExtractedEntities
+    normalization_report: NormalizationReport
+    extraction_report: ExtractionReport
+
+
 class AnalysisResult(BaseModel):
     verdict: Verdict
     confidence: float = Field(ge=0.0, le=1.0)

@@ -368,6 +368,23 @@ def test_cli_analyze_file_outputs_json(capsys) -> None:
     assert payload["analysis"]["verdict"] == "false_positive"
 
 
+def test_cli_normalize_inspect_outputs_reports_without_analysis(capsys) -> None:
+    exit_code = main(["normalize", "inspect", str(SAMPLES / "pingan_legacy_edr.json")])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    payload = json.loads(captured.out)
+    assert payload["schema_version"] == "soc.normalization_inspection.v1"
+    assert payload["alert"]["alert_id"] == "1965810"
+    assert payload["alert"]["source"]["source_type"] == "edr"
+    assert payload["entities"]["ips"] == ["10.43.107.39", "30.162.29.85"]
+    assert payload["normalization_report"]["adapter"] == "pingan_platform"
+    assert "entities.user.user_id" in payload["normalization_report"]["normalized_fields"]
+    assert payload["extraction_report"]["entity_counts"]["user"] >= 2
+    assert "analysis" not in payload
+    assert "decision" not in payload
+
+
 def test_cli_persist_show_and_replay(tmp_path: Path, capsys) -> None:
     database_url = f"sqlite+pysqlite:///{tmp_path / 'soc.db'}"
 

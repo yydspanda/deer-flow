@@ -19,6 +19,7 @@ from soc_agent.contracts import (
     Decision,
     DecisionAuditRecord,
     InvestigationContext,
+    NormalizationInspectionResult,
     ReviewQueueCloseCommand,
     ReviewQueueItem,
     ReviewQueuePriority,
@@ -29,7 +30,7 @@ from soc_agent.contracts import (
     SocEventType,
     Verdict,
 )
-from soc_agent.core.runtime import analyze_alert
+from soc_agent.core.runtime import analyze_alert, inspect_alert_normalization
 from soc_agent.normalizers import normalize_alert_payload
 from soc_agent.protocols import (
     AlertRepository,
@@ -179,6 +180,13 @@ class SocAnalysisService:
 
     def _emit(self, event: SocEvent) -> None:
         self._event_sink.emit(event)
+
+
+class SocNormalizationService:
+    """Inspect-only normalization service for vendor onboarding and drift triage."""
+
+    def inspect(self, payload: Mapping[str, Any]) -> NormalizationInspectionResult:
+        return inspect_alert_normalization(payload)
 
 
 class SocReviewService:

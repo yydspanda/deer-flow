@@ -13,7 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from soc_agent.contracts import CorrectionCommand, ReviewQueueCloseCommand, ReviewQueueStatus, Verdict
-from soc_agent.core import SocAnalysisService, SocReviewService, SocServiceError
+from soc_agent.core import SocAnalysisService, SocNormalizationService, SocReviewService, SocServiceError
 from soc_agent.db import (
     SqlAlchemyAlertRepository,
     create_soc_tables,
@@ -37,6 +37,8 @@ def main(argv: list[str] | None = None) -> int:
         return _replay(args)
     if args.command == "correct":
         return _correct(args)
+    if args.command == "normalize" and args.normalize_command == "inspect":
+        return _normalize_inspect(args)
     if args.command == "review" and args.review_command == "list":
         return _review_list(args)
     if args.command == "review" and args.review_command == "context":
@@ -98,6 +100,13 @@ def _build_parser() -> argparse.ArgumentParser:
     correct.add_argument("--confidence", type=float, default=None, help="Optional corrected confidence, 0..1")
     correct.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(correct)
+
+    normalize = subparsers.add_parser("normalize", help="SOC normalization helpers")
+    normalize_subparsers = normalize.add_subparsers(dest="normalize_command")
+    normalize_inspect = normalize_subparsers.add_parser("inspect", help="Inspect normalized alert and extracted entities")
+    normalize_inspect.add_argument("path", nargs="?", help="Path to alert JSON file")
+    normalize_inspect.add_argument("--json", dest="json_payload", help="Inline alert JSON object")
+    normalize_inspect.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
     review = subparsers.add_parser("review", help="SOC review queue helpers")
     review_subparsers = review.add_subparsers(dest="review_command")
@@ -234,6 +243,21 @@ def _correct(args: argparse.Namespace) -> int:
         return 3
 
     print(run.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _normalize_inspect(args: argparse.Namespace) -> int:
+    try:
+        payload = _load_payload(args.path, args.json_payload)
+        result = SocNormalizationService().inspect(payload)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: report normalization failure
+        print(f"error: normalization inspect failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
 
 
