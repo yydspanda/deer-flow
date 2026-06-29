@@ -412,3 +412,36 @@
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
 - 下一步：
   - 做 `ReviewQueue` 最小 contract/table/service：由 `AlertSummary.needs_review`、low confidence、manual correction 和 high-risk source 生成复核队列。
+
+### 2026-06-29 — ReviewQueue minimal loop
+
+- 新增 ReviewQueue 最小闭环：
+  - `ReviewQueueItem` / `ReviewQueueCloseCommand` / `ReviewQueueStatus` / `ReviewQueuePriority` contract。
+  - `ReviewQueueRepository` protocol。
+  - `SocAnalysisService.analyze/replay()` 基于 `AlertSummary` 自动生成 open review item。
+  - `SocReviewService.correct()` 自动关闭该 run 的 open review item。
+  - `SocReviewService.list_queue()` 和 `close_queue_item()` 作为 CLI/API/TUI/daemon 统一服务入口。
+- 新增 PostgreSQL 业务表：
+  - `soc_review_queue`
+  - migration：`backend/soc_agent/db/migrations/versions/0004_review_queue.py`
+  - 仍走 SOC 独立 migrations 和 `soc_alembic_version`，不修改 DeerFlow harness persistence。
+- 新增 headless CLI：
+  - `soc review list --database-url ...`
+  - `soc review list --status closed --database-url ...`
+  - `soc review close REV-... --reason ... --database-url ...`
+- 设计边界：
+  - queue item 是人工复核待办读模型，不替代完整 `AnalysisRun`。
+  - close queue 只表示待办处理完成；修改 verdict 必须走 `soc correct` / `CorrectionCommand`。
+  - 自动入队 reason 目前为 `summary.needs_review`、`low_confidence`、`uncertain_verdict`、`high_severity`。
+- 已同步工程契约：
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 已补充测试：
+  - service：分析入队、correction 关队列、显式 list/close。
+  - repository：SQLAlchemy 保存/查询/关闭 review queue。
+  - CLI：`soc review list/close` 完整路径。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 基于 ReviewQueue 做 Phase 1 的 analyst triage surface：先补 API/TUI 可复用的 `review queue item -> investigation context` 查询服务，再进入实体/相似告警/规则记忆的相关性 slice。

@@ -13,6 +13,9 @@ from soc_agent.contracts import (
     CorrectionCommand,
     DecisionAuditRecord,
     EntrySurface,
+    ReviewQueueCloseCommand,
+    ReviewQueueItem,
+    ReviewQueueStatus,
     ServiceRequestContext,
     SocEvent,
     SocEventType,
@@ -73,6 +76,34 @@ class InMemorySummaryRepository:
 
     def list_alert_summaries(self, *, limit: int = 50) -> list[AlertSummary]:
         return list(self.summaries.values())[:limit]
+
+
+class InMemoryReviewQueueRepository:
+    def __init__(self) -> None:
+        self.items: dict[str, ReviewQueueItem] = {}
+
+    def save_review_item(self, item: ReviewQueueItem) -> None:
+        self.items[item.queue_id] = item
+
+    def get_review_item(self, queue_id: str) -> ReviewQueueItem | None:
+        return self.items.get(queue_id)
+
+    def get_open_review_item_by_run(self, run_id: str) -> ReviewQueueItem | None:
+        for item in self.items.values():
+            if item.run_id == run_id and item.status == ReviewQueueStatus.OPEN:
+                return item
+        return None
+
+    def list_review_items(
+        self,
+        *,
+        status: ReviewQueueStatus | None = None,
+        limit: int = 50,
+    ) -> list[ReviewQueueItem]:
+        items = list(self.items.values())
+        if status is not None:
+            items = [item for item in items if item.status == status]
+        return items[:limit]
 
 
 def _sample(name: str) -> dict:
@@ -139,6 +170,25 @@ def test_analysis_service_writes_alert_summary() -> None:
     assert summary.needs_review is False
     assert summary.detection_key == "sample-edr:rule_code:edr-scan-001"
     assert "ip:10.0.1.10" in summary.entity_keys
+
+
+def test_analysis_service_enqueues_review_item_from_summary() -> None:
+    review_repository = InMemoryReviewQueueRepository()
+    run = SocAnalysisService(
+        repository=InMemoryAlertRepository(),
+        review_queue_repository=review_repository,
+    ).analyze(_sample("pingan_legacy_apt.json"))
+
+    items = review_repository.list_review_items()
+    assert len(items) == 1
+    item = items[0]
+    assert item.run_id == run.run_id
+    assert item.alert_id == "2026494"
+    assert item.status == ReviewQueueStatus.OPEN
+    assert item.priority.value == "high"
+    assert item.reason == "summary.needs_review"
+    assert item.rule_code == "RPAADM_002635"
+    assert "ip:30.180.248.178" in item.entity_keys
 
 
 def test_analysis_service_get_run_requires_repository() -> None:
@@ -252,6 +302,53 @@ def test_review_service_correct_updates_alert_summary() -> None:
     assert summary.confidence == 1.0
     assert summary.needs_review is False
     assert summary.summary == corrected.analysis.summary
+
+
+def test_review_service_correct_closes_open_review_queue_item() -> None:
+    repository = InMemoryAlertRepository()
+    review_repository = InMemoryReviewQueueRepository()
+    run = SocAnalysisService(
+        repository=repository,
+        review_queue_repository=review_repository,
+    ).analyze(_sample("pingan_legacy_edr.json"))
+    open_item = review_repository.get_open_review_item_by_run(run.run_id)
+    assert open_item is not None
+
+    SocReviewService(
+        repository=repository,
+        review_queue_repository=review_repository,
+    ).correct(
+        CorrectionCommand(
+            run_id=run.run_id,
+            corrected_verdict=Verdict.FALSE_POSITIVE,
+            reason="Analyst confirmed authorized activity.",
+        )
+    )
+
+    closed = review_repository.get_review_item(open_item.queue_id)
+    assert closed is not None
+    assert closed.status == ReviewQueueStatus.CLOSED
+    assert closed.close_reason == "manual correction: Analyst confirmed authorized activity."
+    assert closed.closed_by is not None
+
+
+def test_review_service_lists_and_closes_queue_item() -> None:
+    review_repository = InMemoryReviewQueueRepository()
+    run = SocAnalysisService(
+        repository=InMemoryAlertRepository(),
+        review_queue_repository=review_repository,
+    ).analyze(_sample("pingan_legacy_edr.json"))
+    item = review_repository.get_open_review_item_by_run(run.run_id)
+    assert item is not None
+
+    service = SocReviewService(review_queue_repository=review_repository)
+    assert service.list_queue() == [item]
+
+    closed = service.close_queue_item(ReviewQueueCloseCommand(queue_id=item.queue_id, reason="Reviewed in queue"))
+    assert closed.status == ReviewQueueStatus.CLOSED
+    assert closed.close_reason == "Reviewed in queue"
+    assert service.list_queue() == []
+    assert service.list_queue(status=ReviewQueueStatus.CLOSED) == [closed]
 
 
 def test_review_service_correct_requires_repository() -> None:

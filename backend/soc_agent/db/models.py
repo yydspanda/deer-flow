@@ -99,3 +99,37 @@ class SocAlertSummaryRow(SocBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     summary_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SocReviewQueueRow(SocBase):
+    """Human review queue item derived from SOC alert summaries."""
+
+    __tablename__ = "soc_review_queue"
+    __table_args__ = (
+        Index("ix_soc_review_queue_status_priority", "status", "priority", "updated_at"),
+        Index("ix_soc_review_queue_alert_status", "alert_id", "status"),
+    )
+
+    queue_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    alert_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    tenant_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    priority: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    reason: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    source_system: Mapped[str | None] = mapped_column(String(128), index=True)
+    rule_code: Mapped[str | None] = mapped_column(String(128), index=True)
+    rule_name: Mapped[str | None] = mapped_column(String(256), index=True)
+    severity: Mapped[str | None] = mapped_column(String(32), index=True)
+    category: Mapped[str | None] = mapped_column(String(128), index=True)
+    verdict: Mapped[str | None] = mapped_column(String(32), index=True)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    entity_keys: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    closed_by_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    close_reason: Mapped[str | None] = mapped_column(Text)
+    item_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

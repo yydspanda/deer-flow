@@ -12,7 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
-from soc_agent.contracts import CorrectionCommand, Verdict
+from soc_agent.contracts import CorrectionCommand, ReviewQueueCloseCommand, ReviewQueueStatus, Verdict
 from soc_agent.core import SocAnalysisService, SocReviewService, SocServiceError
 from soc_agent.db import (
     SqlAlchemyAlertRepository,
@@ -37,6 +37,10 @@ def main(argv: list[str] | None = None) -> int:
         return _replay(args)
     if args.command == "correct":
         return _correct(args)
+    if args.command == "review" and args.review_command == "list":
+        return _review_list(args)
+    if args.command == "review" and args.review_command == "close":
+        return _review_close(args)
     if args.command == "db" and args.db_command == "init":
         return _db_init(args)
     if args.command == "db" and args.db_command == "upgrade":
@@ -93,6 +97,24 @@ def _build_parser() -> argparse.ArgumentParser:
     correct.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(correct)
 
+    review = subparsers.add_parser("review", help="SOC review queue helpers")
+    review_subparsers = review.add_subparsers(dest="review_command")
+    review_list = review_subparsers.add_parser("list", help="List SOC review queue items")
+    review_list.add_argument("--limit", type=int, default=50, help="Maximum queue items to return")
+    review_list.add_argument(
+        "--status",
+        choices=[status.value for status in ReviewQueueStatus],
+        default=ReviewQueueStatus.OPEN.value,
+        help="Queue item status to list",
+    )
+    review_list.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(review_list)
+    review_close = review_subparsers.add_parser("close", help="Close one SOC review queue item")
+    review_close.add_argument("queue_id", help="Review queue id to close")
+    review_close.add_argument("--reason", required=True, help="Reason for closing the queue item")
+    review_close.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(review_close)
+
     db = subparsers.add_parser("db", help="SOC database helpers")
     db_subparsers = db.add_subparsers(dest="db_command")
     init = db_subparsers.add_parser("init", help="Create SOC database tables")
@@ -124,6 +146,7 @@ def _analyze(args: argparse.Namespace) -> int:
         repository=repository,
         summary_repository=repository,
         audit_repository=repository,
+        review_queue_repository=repository,
     ).analyze(payload)
     print(
         run.model_dump_json(
@@ -168,6 +191,7 @@ def _replay(args: argparse.Namespace) -> int:
             repository=repository,
             summary_repository=repository,
             audit_repository=repository,
+            review_queue_repository=repository,
         ).replay(args.run_id)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -187,6 +211,7 @@ def _correct(args: argparse.Namespace) -> int:
             repository=repository,
             summary_repository=repository,
             audit_repository=repository,
+            review_queue_repository=repository,
         ).correct(
             CorrectionCommand(
                 run_id=args.run_id,
@@ -203,6 +228,36 @@ def _correct(args: argparse.Namespace) -> int:
         return 3
 
     print(run.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _review_list(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    items = SocReviewService(review_queue_repository=repository).list_queue(
+        status=ReviewQueueStatus(args.status),
+        limit=args.limit,
+    )
+    print(json.dumps([item.model_dump(mode="json", exclude_none=True) for item in items], ensure_ascii=False, indent=2 if args.pretty else None))
+    return 0
+
+
+def _review_close(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        item = SocReviewService(review_queue_repository=repository).close_queue_item(ReviewQueueCloseCommand(queue_id=args.queue_id, reason=args.reason))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(item.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
 
 

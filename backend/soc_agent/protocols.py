@@ -5,7 +5,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol
 
-from soc_agent.contracts import AlertInput, AlertSummary, AnalysisResult, AnalysisRun, DecisionAuditRecord, SocEvent
+from soc_agent.contracts import (
+    AlertInput,
+    AlertSummary,
+    AnalysisResult,
+    AnalysisRun,
+    DecisionAuditRecord,
+    ReviewQueueItem,
+    ReviewQueueStatus,
+    SocEvent,
+)
 
 
 class AlertNormalizer(Protocol):
@@ -50,6 +59,23 @@ class AlertSummaryRepository(Protocol):
     def get_alert_summary(self, run_id: str) -> AlertSummary | None: ...
 
     def list_alert_summaries(self, *, limit: int = 50) -> list[AlertSummary]: ...
+
+
+class ReviewQueueRepository(Protocol):
+    """Persistence boundary for human review queue items."""
+
+    def save_review_item(self, item: ReviewQueueItem) -> None: ...
+
+    def get_review_item(self, queue_id: str) -> ReviewQueueItem | None: ...
+
+    def get_open_review_item_by_run(self, run_id: str) -> ReviewQueueItem | None: ...
+
+    def list_review_items(
+        self,
+        *,
+        status: ReviewQueueStatus | None = None,
+        limit: int = 50,
+    ) -> list[ReviewQueueItem]: ...
 
 
 class SocEventSink(Protocol):

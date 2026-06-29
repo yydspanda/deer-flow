@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 from soc_agent.contracts import (
+    ActorContext,
     AlertInput,
     AlertSourceType,
     AlertSummary,
@@ -16,6 +18,10 @@ from soc_agent.contracts import (
     CorrectionRecord,
     Decision,
     DecisionAuditRecord,
+    ReviewQueueCloseCommand,
+    ReviewQueueItem,
+    ReviewQueuePriority,
+    ReviewQueueStatus,
     ServiceRequestContext,
     SocEvent,
     SocEventType,
@@ -28,6 +34,7 @@ from soc_agent.protocols import (
     AlertSummaryRepository,
     AnalysisRuntime,
     DecisionAuditRepository,
+    ReviewQueueRepository,
     SocEventSink,
 )
 
@@ -73,12 +80,14 @@ class SocAnalysisService:
         repository: AlertRepository | None = None,
         summary_repository: AlertSummaryRepository | None = None,
         audit_repository: DecisionAuditRepository | None = None,
+        review_queue_repository: ReviewQueueRepository | None = None,
         event_sink: SocEventSink | None = None,
     ) -> None:
         self._runtime = runtime or DeterministicAnalysisRuntime()
         self._repository = repository
         self._summary_repository = summary_repository
         self._audit_repository = audit_repository
+        self._review_queue_repository = review_queue_repository
         self._event_sink = event_sink or NoopEventSink()
 
     def analyze(
@@ -135,8 +144,11 @@ class SocAnalysisService:
         run.replay_of_run_id = replay_of_run_id
         if self._repository is not None:
             self._repository.save_run(run)
+        summary = _alert_summary_from_run(run)
         if self._summary_repository is not None:
-            self._summary_repository.save_alert_summary(_alert_summary_from_run(run))
+            self._summary_repository.save_alert_summary(summary)
+        if self._review_queue_repository is not None:
+            _upsert_review_queue_item(self._review_queue_repository, summary)
         if self._audit_repository is not None:
             self._audit_repository.save_audit_record(
                 _analysis_audit_record(
@@ -176,11 +188,13 @@ class SocReviewService:
         repository: AlertRepository | None = None,
         summary_repository: AlertSummaryRepository | None = None,
         audit_repository: DecisionAuditRepository | None = None,
+        review_queue_repository: ReviewQueueRepository | None = None,
         event_sink: SocEventSink | None = None,
     ) -> None:
         self._repository = repository
         self._summary_repository = summary_repository
         self._audit_repository = audit_repository
+        self._review_queue_repository = review_queue_repository
         self._event_sink = event_sink or NoopEventSink()
 
     def correct(
@@ -220,6 +234,13 @@ class SocReviewService:
         self._repository.save_run(run)
         if self._summary_repository is not None:
             self._summary_repository.save_alert_summary(_alert_summary_from_run(run))
+        if self._review_queue_repository is not None:
+            _close_open_review_item_for_run(
+                self._review_queue_repository,
+                run_id=run.run_id,
+                actor=request_context.actor,
+                reason=f"manual correction: {command.reason}",
+            )
         if self._audit_repository is not None:
             self._audit_repository.save_audit_record(_correction_audit_record(run, record))
         self._event_sink.emit(
@@ -238,6 +259,38 @@ class SocReviewService:
             )
         )
         return run
+
+    def list_queue(
+        self,
+        *,
+        status: ReviewQueueStatus | None = ReviewQueueStatus.OPEN,
+        limit: int = 50,
+    ) -> list[ReviewQueueItem]:
+        if self._review_queue_repository is None:
+            raise SocServiceNotImplementedError("list_queue requires a ReviewQueueRepository")
+        return self._review_queue_repository.list_review_items(status=status, limit=limit)
+
+    def close_queue_item(
+        self,
+        command: ReviewQueueCloseCommand,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> ReviewQueueItem:
+        if self._review_queue_repository is None:
+            raise SocServiceNotImplementedError("close_queue_item requires a ReviewQueueRepository")
+
+        item = self._review_queue_repository.get_review_item(command.queue_id)
+        if item is None:
+            raise SocServiceNotFoundError(f"review queue item {command.queue_id} not found")
+
+        request_context = context or ServiceRequestContext()
+        item.status = ReviewQueueStatus.CLOSED
+        item.closed_at = _utc_now()
+        item.closed_by = request_context.actor
+        item.close_reason = command.reason
+        item.updated_at = item.closed_at
+        self._review_queue_repository.save_review_item(item)
+        return item
 
 
 class SocMemoryService:
@@ -340,6 +393,89 @@ def _entity_keys(run: AnalysisRun) -> list[str]:
     return _dedupe(values)
 
 
+def _upsert_review_queue_item(repository: ReviewQueueRepository, summary: AlertSummary) -> None:
+    reason = _review_reason(summary)
+    if reason is None:
+        return
+
+    existing = repository.get_open_review_item_by_run(summary.run_id)
+    item = existing or ReviewQueueItem(
+        run_id=summary.run_id,
+        alert_id=summary.alert_id,
+        reason=reason,
+    )
+    item.tenant_id = summary.tenant_id
+    item.priority = _review_priority(summary)
+    item.reason = reason
+    item.source_type = summary.source_type
+    item.source_system = summary.source_system
+    item.rule_code = summary.rule_code
+    item.rule_name = summary.rule_name
+    item.severity = summary.severity
+    item.category = summary.category
+    item.verdict = summary.verdict
+    item.confidence = summary.confidence
+    item.entity_keys = summary.entity_keys
+    item.summary = summary.summary
+    item.updated_at = _utc_now()
+    repository.save_review_item(item)
+
+
+def _close_open_review_item_for_run(
+    repository: ReviewQueueRepository,
+    *,
+    run_id: str,
+    actor: ActorContext,
+    reason: str,
+) -> None:
+    item = repository.get_open_review_item_by_run(run_id)
+    if item is None:
+        return
+    item.status = ReviewQueueStatus.CLOSED
+    item.closed_at = _utc_now()
+    item.closed_by = actor
+    item.close_reason = reason
+    item.updated_at = item.closed_at
+    repository.save_review_item(item)
+
+
+def _review_reason(summary: AlertSummary) -> str | None:
+    if summary.needs_review:
+        return "summary.needs_review"
+    if summary.confidence is not None and summary.confidence < 0.75:
+        return "low_confidence"
+    if summary.verdict in {Verdict.UNKNOWN, Verdict.NEEDS_REVIEW, Verdict.SUSPICIOUS}:
+        return "uncertain_verdict"
+    if _severity_level(summary.severity) >= 2:
+        return "high_severity"
+    return None
+
+
+def _review_priority(summary: AlertSummary) -> ReviewQueuePriority:
+    if _severity_level(summary.severity) >= 2 or summary.verdict in {Verdict.TRUE_POSITIVE, Verdict.SUSPICIOUS}:
+        return ReviewQueuePriority.HIGH
+    if summary.confidence is not None and summary.confidence < 0.6:
+        return ReviewQueuePriority.HIGH
+    if summary.needs_review:
+        return ReviewQueuePriority.MEDIUM
+    return ReviewQueuePriority.LOW
+
+
+def _severity_level(value: str | None) -> int:
+    if value is None:
+        return 0
+    normalized = value.strip().lower()
+    if normalized in {"critical", "high", "高危", "严重"}:
+        return 2
+    if normalized in {"medium", "中危"}:
+        return 1
+    return 0
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 def _dedupe(values: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -350,7 +486,7 @@ def _dedupe(values: list[str]) -> list[str]:
     return result
 
 
-def _analysis_audit_record(run: AnalysisRun, *, actor, action: AuditAction) -> DecisionAuditRecord:
+def _analysis_audit_record(run: AnalysisRun, *, actor: ActorContext, action: AuditAction) -> DecisionAuditRecord:
     return DecisionAuditRecord(
         action=action,
         run_id=run.run_id,

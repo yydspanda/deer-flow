@@ -383,3 +383,53 @@ def test_cli_list_outputs_persisted_alert_summaries(tmp_path: Path, capsys) -> N
     corrected = next(summary for summary in summaries if summary["alert_id"] == "1965810")
     assert corrected["verdict"] == "true_positive"
     assert corrected["needs_review"] is False
+
+
+def test_cli_review_queue_lists_and_closes_items(tmp_path: Path, capsys) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'soc.db'}"
+
+    assert main(["db", "upgrade", "--database-url", database_url]) == 0
+    capsys.readouterr()
+
+    assert main(["analyze", str(SAMPLES / "pingan_legacy_apt.json"), "--persist", "--database-url", database_url]) == 0
+    capsys.readouterr()
+
+    assert main(["review", "list", "--database-url", database_url]) == 0
+    captured = capsys.readouterr()
+    open_items = json.loads(captured.out)
+    assert len(open_items) == 1
+    item = open_items[0]
+    assert item["alert_id"] == "2026494"
+    assert item["status"] == "open"
+    assert item["priority"] == "high"
+    assert item["reason"] == "summary.needs_review"
+    assert item["rule_code"] == "RPAADM_002635"
+
+    assert (
+        main(
+            [
+                "review",
+                "close",
+                item["queue_id"],
+                "--reason",
+                "Reviewed in CLI queue.",
+                "--database-url",
+                database_url,
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    closed = json.loads(captured.out)
+    assert closed["status"] == "closed"
+    assert closed["close_reason"] == "Reviewed in CLI queue."
+
+    assert main(["review", "list", "--database-url", database_url]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == []
+
+    assert main(["review", "list", "--status", "closed", "--database-url", database_url]) == 0
+    captured = capsys.readouterr()
+    closed_items = json.loads(captured.out)
+    assert len(closed_items) == 1
+    assert closed_items[0]["queue_id"] == item["queue_id"]

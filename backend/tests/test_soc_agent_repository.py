@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from soc_agent.contracts import AuditAction, CorrectionCommand, Verdict
+from soc_agent.contracts import AuditAction, CorrectionCommand, ReviewQueueStatus, Verdict
 from soc_agent.core import SocAnalysisService
 from soc_agent.core.service import SocReviewService
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
@@ -120,3 +120,61 @@ def test_sqlalchemy_alert_repository_persists_corrections() -> None:
     assert summary.verdict == Verdict.TRUE_POSITIVE
     assert summary.confidence == 1.0
     assert summary.needs_review is False
+
+
+def test_sqlalchemy_alert_repository_persists_review_queue_items() -> None:
+    repository = _repository()
+    run = SocAnalysisService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+    ).analyze(_sample("pingan_legacy_apt.json"))
+
+    items = repository.list_review_items(status=ReviewQueueStatus.OPEN)
+
+    assert len(items) == 1
+    item = items[0]
+    assert item.run_id == run.run_id
+    assert item.alert_id == "2026494"
+    assert item.status == ReviewQueueStatus.OPEN
+    assert item.reason == "summary.needs_review"
+    assert item.priority.value == "high"
+    assert item.rule_code == "RPAADM_002635"
+    assert "ip:30.180.248.178" in item.entity_keys
+    assert repository.get_open_review_item_by_run(run.run_id) == item
+    assert repository.get_review_item(item.queue_id) == item
+
+
+def test_sqlalchemy_alert_repository_closes_review_queue_after_correction() -> None:
+    repository = _repository()
+    run = SocAnalysisService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+    ).analyze(_sample("pingan_legacy_edr.json"))
+    open_item = repository.get_open_review_item_by_run(run.run_id)
+    assert open_item is not None
+
+    SocReviewService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+    ).correct(
+        CorrectionCommand(
+            run_id=run.run_id,
+            corrected_verdict=Verdict.FALSE_POSITIVE,
+            reason="Analyst confirmed authorized lateral movement test.",
+        )
+    )
+
+    assert repository.get_open_review_item_by_run(run.run_id) is None
+    closed = repository.get_review_item(open_item.queue_id)
+    assert closed is not None
+    assert closed.status == ReviewQueueStatus.CLOSED
+    assert closed.close_reason == "manual correction: Analyst confirmed authorized lateral movement test."
+    assert closed.closed_by is not None
+    assert repository.list_review_items(status=ReviewQueueStatus.OPEN) == []
+    assert repository.list_review_items(status=ReviewQueueStatus.CLOSED) == [closed]

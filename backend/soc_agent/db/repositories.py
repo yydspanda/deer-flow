@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from soc_agent.contracts import AlertSummary, AnalysisRun, DecisionAuditRecord
-from soc_agent.db.models import SocAlertSummaryRow, SocAnalysisRunRow, SocDecisionAuditLogRow
+from soc_agent.contracts import AlertSummary, AnalysisRun, DecisionAuditRecord, ReviewQueueItem, ReviewQueueStatus
+from soc_agent.db.models import SocAlertSummaryRow, SocAnalysisRunRow, SocDecisionAuditLogRow, SocReviewQueueRow
 
 
 class SqlAlchemyAlertRepository:
@@ -87,6 +87,43 @@ class SqlAlchemyAlertRepository:
             result = session.execute(select(SocAlertSummaryRow).order_by(SocAlertSummaryRow.updated_at.desc()).limit(limit))
             return [AlertSummary.model_validate(row.summary_payload) for row in result.scalars()]
 
+    def save_review_item(self, item: ReviewQueueItem) -> None:
+        payload = item.model_dump(mode="json")
+        with self._session_factory() as session:
+            row = session.get(SocReviewQueueRow, item.queue_id)
+            if row is None:
+                session.add(SocReviewQueueRow(queue_id=item.queue_id, **_review_queue_row_values(item, payload)))
+            else:
+                for key, value in _review_queue_row_values(item, payload).items():
+                    setattr(row, key, value)
+            session.commit()
+
+    def get_review_item(self, queue_id: str) -> ReviewQueueItem | None:
+        with self._session_factory() as session:
+            row = session.get(SocReviewQueueRow, queue_id)
+            if row is None:
+                return None
+            return ReviewQueueItem.model_validate(row.item_payload)
+
+    def get_open_review_item_by_run(self, run_id: str) -> ReviewQueueItem | None:
+        with self._session_factory() as session:
+            result = session.execute(select(SocReviewQueueRow).where(SocReviewQueueRow.run_id == run_id, SocReviewQueueRow.status == ReviewQueueStatus.OPEN.value).order_by(SocReviewQueueRow.updated_at.desc()).limit(1))
+            row = result.scalar_one_or_none()
+            return ReviewQueueItem.model_validate(row.item_payload) if row is not None else None
+
+    def list_review_items(
+        self,
+        *,
+        status: ReviewQueueStatus | None = None,
+        limit: int = 50,
+    ) -> list[ReviewQueueItem]:
+        with self._session_factory() as session:
+            query = select(SocReviewQueueRow)
+            if status is not None:
+                query = query.where(SocReviewQueueRow.status == status.value)
+            result = session.execute(query.order_by(SocReviewQueueRow.updated_at.desc()).limit(limit))
+            return [ReviewQueueItem.model_validate(row.item_payload) for row in result.scalars()]
+
 
 def _row_values(run: AnalysisRun, payload: dict, *, updated_at: datetime) -> dict:
     return {
@@ -147,4 +184,31 @@ def _summary_row_values(summary: AlertSummary, payload: dict) -> dict:
         "created_at": summary.created_at,
         "updated_at": summary.updated_at,
         "summary_payload": payload,
+    }
+
+
+def _review_queue_row_values(item: ReviewQueueItem, payload: dict) -> dict:
+    return {
+        "run_id": item.run_id,
+        "alert_id": item.alert_id,
+        "tenant_id": item.tenant_id,
+        "status": item.status.value,
+        "priority": item.priority.value,
+        "reason": item.reason,
+        "source_type": item.source_type.value,
+        "source_system": item.source_system,
+        "rule_code": item.rule_code,
+        "rule_name": item.rule_name,
+        "severity": item.severity,
+        "category": item.category,
+        "verdict": item.verdict.value if item.verdict is not None else None,
+        "confidence": item.confidence,
+        "entity_keys": item.entity_keys,
+        "summary": item.summary,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+        "closed_at": item.closed_at,
+        "closed_by_payload": item.closed_by.model_dump(mode="json") if item.closed_by is not None else None,
+        "close_reason": item.close_reason,
+        "item_payload": payload,
     }

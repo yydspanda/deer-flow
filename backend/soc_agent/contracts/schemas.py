@@ -73,6 +73,17 @@ class AuditAction(StrEnum):
     CORRECTION = "correction"
 
 
+class ReviewQueueStatus(StrEnum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+class ReviewQueuePriority(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class ActorContext(BaseModel):
     actor_id: str = "anonymous"
     actor_type: ActorType = ActorType.USER
@@ -360,6 +371,39 @@ class AlertSummary(BaseModel):
     replay_of_run_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class ReviewQueueItem(BaseModel):
+    """Human review queue item derived from an alert summary."""
+
+    schema_version: str = "soc.review_queue.v1"
+    queue_id: str = Field(default_factory=lambda: f"REV-{uuid4().hex[:12].upper()}")
+    run_id: str
+    alert_id: str
+    tenant_id: str | None = None
+    status: ReviewQueueStatus = ReviewQueueStatus.OPEN
+    priority: ReviewQueuePriority = ReviewQueuePriority.MEDIUM
+    reason: str
+    source_type: AlertSourceType = AlertSourceType.UNKNOWN
+    source_system: str | None = None
+    rule_code: str | None = None
+    rule_name: str | None = None
+    severity: str | None = None
+    category: str | None = None
+    verdict: Verdict | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    entity_keys: list[str] = Field(default_factory=list)
+    summary: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    closed_at: datetime | None = None
+    closed_by: ActorContext | None = None
+    close_reason: str | None = None
+
+
+class ReviewQueueCloseCommand(BaseModel):
+    queue_id: str
+    reason: str = Field(min_length=1)
 
 
 class PipelineStepTrace(BaseModel):
