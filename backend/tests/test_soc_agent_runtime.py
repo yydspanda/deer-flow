@@ -7,11 +7,12 @@ import pytest
 
 from soc_agent.cli import main
 from soc_agent.contracts import AlertInput, AlertSourceType, AnalysisRun, AnalysisRunStatus, Verdict
-from soc_agent.core import SocAnalysisService
+from soc_agent.core import SocAnalysisService, SocNormalizationService
 from soc_agent.core.runtime import analyze_alert
 from soc_agent.normalizers import normalize_alert_payload
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
+MAPPINGS = Path(__file__).resolve().parents[1] / "samples" / "mappings"
 
 
 def _sample(name: str) -> dict:
@@ -381,6 +382,53 @@ def test_cli_normalize_inspect_outputs_reports_without_analysis(capsys) -> None:
     assert payload["normalization_report"]["adapter"] == "pingan_platform"
     assert "entities.user.user_id" in payload["normalization_report"]["normalized_fields"]
     assert payload["extraction_report"]["entity_counts"]["user"] >= 2
+    assert "analysis" not in payload
+    assert "decision" not in payload
+
+
+def test_mapping_normalize_inspect_maps_simple_vendor_payload() -> None:
+    result = SocNormalizationService().inspect(
+        _sample("mapped_waf.json"),
+        mapping_path=MAPPINGS / "sample_waf.yaml",
+    )
+
+    assert result.alert.alert_id == "WAF-2026-0001"
+    assert result.alert.source.source_type == AlertSourceType.WAF
+    assert result.alert.source.source_system == "sample-waf"
+    assert result.alert.detection.rule_name == "SQL Injection Attempt"
+    assert result.alert.detection.detection_key == "sample-waf:rule_name:sql_injection_attempt"
+    assert result.alert.classification.severity == "high"
+    assert result.alert.entities.network.source_ip == "203.0.113.77"
+    assert result.alert.entities.network.destination_ip == "10.10.20.8"
+    assert result.alert.entities.http.x_forwarded_for == "198.51.100.23"
+    assert result.normalization_report.adapter == "mapping:sample-waf"
+    assert result.normalization_report.unmapped_field_count == 0
+    assert "entities.http.x_forwarded_for" in result.normalization_report.normalized_fields
+
+    by_key = {mention.key: mention for mention in result.entities.mentions}
+    assert by_key["ip:198.51.100.23"].role == "x_forwarded_for"
+    assert by_key["url:https://app.example.com/search?q=' or 1=1"].role == "http_url"
+
+
+def test_cli_normalize_inspect_supports_mapping_file(capsys) -> None:
+    exit_code = main(
+        [
+            "normalize",
+            "inspect",
+            str(SAMPLES / "mapped_waf.json"),
+            "--mapping",
+            str(MAPPINGS / "sample_waf.yaml"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    payload = json.loads(captured.out)
+    assert payload["alert"]["alert_id"] == "WAF-2026-0001"
+    assert payload["alert"]["source"]["source_type"] == "waf"
+    assert payload["alert"]["entities"]["http"]["x_forwarded_for"] == "198.51.100.23"
+    assert payload["normalization_report"]["adapter"] == "mapping:sample-waf"
+    assert payload["extraction_report"]["entity_counts"]["ip"] >= 3
     assert "analysis" not in payload
     assert "decision" not in payload
 

@@ -1,0 +1,28 @@
+{
+  "event": {
+    "id": "WAF-2026-0001",
+    "time": "2026-06-28T10:15:30Z"
+  },
+  "rule": {
+    "name": "SQL Injection Attempt",
+    "category": "web_attack"
+  },
+  "risk": {
+    "severity": "high"
+  },
+  "client": {
+    "ip": "203.0.113.77"
+  },
+  "server": {
+    "ip": "10.10.20.8"
+  },
+  "request": {
+    "method": "GET",
+    "url": "https://app.example.com/search?q=' OR 1=1",
+    "headers": {
+      "host": "app.example.com",
+      "x-forwarded-for": "198.51.100.23",
+      "user-agent": "curl/8.7.1"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+name: sample-waf
+source:
+  source_type: waf
+  source_system: sample-waf
+  vendor: Example
+  product: Example WAF
+fields:
+  alert_id: $.event.id
+  event.event_id: $.event.id
+  event.event_time: $.event.time
+  detection.rule_name: $.rule.name
+  detection.rule_category: $.rule.category
+  classification.severity: $.risk.severity
+  entities.network.source_ip: $.client.ip
+  entities.network.destination_ip: $.server.ip
+  entities.network.url: $.request.url
+  entities.http.method: $.request.method
+  entities.http.host: $.request.headers.host
+  entities.http.url: $.request.url
+  entities.http.x_forwarded_for: $.request.headers.x-forwarded-for
+  entities.http.user_agent: $.request.headers.user-agent

@@ -638,3 +638,35 @@
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
 - 下一步：
   - 抽一个最小 mapping config spike：先不接 LLM，定义 mapping 文件格式和 `soc normalize inspect --mapping ...` 的接口草案。
+
+### 2026-06-29 — Normalize mapping config MVP
+
+- 新增 YAML mapping 归一化器：
+  - `backend/soc_agent/normalizers/mapping.py`
+  - 只支持显式字段搬运：`canonical.target.path: $.source.path`
+  - 不做 LLM 猜测、不运行时修改 mapping。
+- 扩展 inspect service：
+  - `SocNormalizationService.inspect(..., mapping_path=...)`
+  - `SocNormalizationService.inspect(..., mapping_config=...)`
+  - CLI/API/TUI 后续继续通过 core service 入口复用。
+- 扩展 CLI：
+  - `soc normalize inspect sample.json --mapping vendor.yaml`
+- 新增样本：
+  - `backend/samples/alerts/mapped_waf.json`
+  - `backend/samples/mappings/sample_waf.yaml`
+- report 行为：
+  - mapping adapter 输出为 `mapping:<name>`。
+  - 缺失 source path 进入 `NormalizationReport.warnings` 和 `unmapped_fields`。
+- 已同步文档：
+  - `.notes/ai_soc/normalization-drift-strategy.md`
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 已补充测试：
+  - service 通过 mapping 文件 inspect 简单 WAF payload。
+  - CLI 通过 `--mapping` 输出 canonical alert、entities、reports。
+  - 架构测试继续确认 public service export。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 做 drift aggregation 的最小数据结构和查询入口，先基于 `NormalizationReport`/`ExtractionReport` 聚合，不接 LLM。

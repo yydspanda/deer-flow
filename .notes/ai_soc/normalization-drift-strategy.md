@@ -86,22 +86,59 @@ Phase 1 implements:
 - `NormalizationReport` on `AnalysisRun`
 - `ExtractionReport` on `AnalysisRun`
 - deterministic report generation in runtime
+- `soc normalize inspect sample.json --pretty`
+- minimal YAML mapping-file support through `soc normalize inspect sample.json --mapping vendor.yaml`
 - tests for missing fields, XFF alias normalization, UM/user identity handling, and entity counts
 
 Non-goals for this slice:
 
 - no real LLM calls
-- no YAML mapping engine yet
 - no drift scheduler yet
 - no automatic mapping changes
+
+## Mapping Config MVP
+
+Mapping config is the lightweight onboarding path for simpler vendors. It maps
+explicit source paths into canonical `AlertInput` paths, then reuses the same
+entity extractor and report generator as every other normalization path.
+
+Example:
+
+```yaml
+name: sample-waf
+source:
+  source_type: waf
+  source_system: sample-waf
+fields:
+  alert_id: $.event.id
+  detection.rule_name: $.rule.name
+  classification.severity: $.risk.severity
+  entities.network.source_ip: $.client.ip
+  entities.http.x_forwarded_for: $.request.headers.x-forwarded-for
+```
+
+Current command:
+
+```bash
+soc normalize inspect backend/samples/alerts/mapped_waf.json \
+  --mapping backend/samples/mappings/sample_waf.yaml \
+  --pretty
+```
+
+Constraints:
+
+- mapping files only move explicit fields; they do not infer fields
+- source paths use a minimal `$.a.b.c` path syntax, with list indexes allowed as numeric segments
+- target paths must be canonical `AlertInput` paths
+- missing source paths become `NormalizationReport.warnings` and `unmapped_fields`
+- report adapter is `mapping:<name>` so drift can be grouped by mapping file
+- LLM may propose mapping changes later, but a human must review and commit them
 
 ## Future Work
 
 Next increments:
 
-1. `soc normalize inspect sample.json --pretty`
-2. mapping-file support for simpler vendors
-3. drift aggregation over recent runs
-4. LLM-assisted `soc normalize suggest sample.json`
-5. human-reviewed mapping patch workflow
-
+1. drift aggregation over recent runs
+2. LLM-assisted `soc normalize suggest sample.json`
+3. human-reviewed mapping patch workflow
+4. richer path syntax if real vendor samples require it

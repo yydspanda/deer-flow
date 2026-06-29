@@ -106,6 +106,7 @@ def _build_parser() -> argparse.ArgumentParser:
     normalize_inspect = normalize_subparsers.add_parser("inspect", help="Inspect normalized alert and extracted entities")
     normalize_inspect.add_argument("path", nargs="?", help="Path to alert JSON file")
     normalize_inspect.add_argument("--json", dest="json_payload", help="Inline alert JSON object")
+    normalize_inspect.add_argument("--mapping", help="Path to SOC normalization mapping YAML")
     normalize_inspect.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
     review = subparsers.add_parser("review", help="SOC review queue helpers")
@@ -249,7 +250,7 @@ def _correct(args: argparse.Namespace) -> int:
 def _normalize_inspect(args: argparse.Namespace) -> int:
     try:
         payload = _load_payload(args.path, args.json_payload)
-        result = SocNormalizationService().inspect(payload)
+        result = SocNormalizationService().inspect(payload, mapping_path=args.mapping)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

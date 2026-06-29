@@ -27,7 +27,7 @@ from soc_agent.contracts import (
     PipelineStepTrace,
 )
 from soc_agent.core.validator import validate_analysis_result, validate_decision
-from soc_agent.normalizers import normalize_alert_payload
+from soc_agent.normalizers import normalize_alert_payload, normalize_with_mapping
 from soc_agent.pipeline.analyzer import analyze_stub
 from soc_agent.pipeline.extractor import extract_entities
 from soc_agent.utils.hashing import stable_hash
@@ -37,10 +37,14 @@ class SocRuntimeError(RuntimeError):
     """Raised when the deterministic runtime cannot complete a run."""
 
 
-def inspect_alert_normalization(payload: Mapping[str, Any]) -> NormalizationInspectionResult:
+def inspect_alert_normalization(
+    payload: Mapping[str, Any],
+    *,
+    mapping_config: Mapping[str, Any] | None = None,
+) -> NormalizationInspectionResult:
     """Run deterministic normalization and entity extraction without analysis."""
 
-    alert = _normalize_alert(payload)
+    alert = _normalize_alert(payload, mapping_config=mapping_config)
     entities = extract_entities(alert)
     return NormalizationInspectionResult(
         alert=alert,
@@ -94,9 +98,15 @@ def analyze_alert(payload: Mapping[str, Any]) -> AnalysisRun:
     return run
 
 
-def _normalize_alert(payload: Mapping[str, Any]) -> AlertInput:
+def _normalize_alert(
+    payload: Mapping[str, Any],
+    *,
+    mapping_config: Mapping[str, Any] | None = None,
+) -> AlertInput:
     if not isinstance(payload, Mapping):
         raise SocRuntimeError("alert payload must be a JSON object")
+    if mapping_config is not None:
+        return normalize_with_mapping(payload, mapping_config)
     return normalize_alert_payload(payload)
 
 
@@ -128,15 +138,32 @@ def _normalization_report(alert: AlertInput) -> NormalizationReport:
         ]
         if field not in normalized_fields
     ]
+    mapping_metadata = alert.extensions.get("normalization")
+    adapter = "pingan_platform" if "legacy_platform" in alert.extensions else "generic"
+    mapping_warnings: list[str] = []
+    unmapped_fields: list[str] = []
+    if isinstance(mapping_metadata, Mapping):
+        adapter_name = mapping_metadata.get("adapter")
+        mapping_name = mapping_metadata.get("mapping_name")
+        if adapter_name == "mapping":
+            adapter = f"mapping:{mapping_name or 'unnamed'}"
+        warnings_value = mapping_metadata.get("warnings")
+        if isinstance(warnings_value, list):
+            mapping_warnings = [str(warning) for warning in warnings_value]
+        missing_paths = mapping_metadata.get("missing_source_paths")
+        if isinstance(missing_paths, list):
+            unmapped_fields = [str(path) for path in missing_paths]
+
     warnings = [f"missing normalized field: {field}" for field in missing_fields]
+    warnings.extend(mapping_warnings)
     return NormalizationReport(
-        adapter="pingan_platform" if "legacy_platform" in alert.extensions else "generic",
+        adapter=adapter,
         source_type=alert.source.source_type,
         source_system=alert.source.source_system,
         missing_fields=missing_fields,
         normalized_fields=normalized_fields,
-        unmapped_fields=[],
-        unmapped_field_count=0,
+        unmapped_fields=unmapped_fields,
+        unmapped_field_count=len(unmapped_fields),
         warnings=warnings,
     )
 

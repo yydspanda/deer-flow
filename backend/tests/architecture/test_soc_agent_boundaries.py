@@ -9,6 +9,7 @@ from soc_agent.core import (
     SocAnalysisService,
     SocDaemonService,
     SocMemoryService,
+    SocNormalizationService,
     SocReviewService,
     SocServiceNotFoundError,
 )
@@ -109,6 +110,7 @@ def test_alert_input_contract_is_strict() -> None:
 def test_core_exports_planned_public_services() -> None:
     assert SocAnalysisService.__name__ == "SocAnalysisService"
     assert SocReviewService.__name__ == "SocReviewService"
+    assert SocNormalizationService.__name__ == "SocNormalizationService"
     assert SocMemoryService.__name__ == "SocMemoryService"
     assert SocDaemonService.__name__ == "SocDaemonService"
     assert SocAgentChatService.__name__ == "SocAgentChatService"

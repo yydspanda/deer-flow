@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from soc_agent.contracts import (
@@ -31,7 +32,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.core.runtime import analyze_alert, inspect_alert_normalization
-from soc_agent.normalizers import normalize_alert_payload
+from soc_agent.normalizers import load_mapping_config, normalize_alert_payload
 from soc_agent.protocols import (
     AlertRepository,
     AlertSummaryRepository,
@@ -185,8 +186,17 @@ class SocAnalysisService:
 class SocNormalizationService:
     """Inspect-only normalization service for vendor onboarding and drift triage."""
 
-    def inspect(self, payload: Mapping[str, Any]) -> NormalizationInspectionResult:
-        return inspect_alert_normalization(payload)
+    def inspect(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        mapping_path: str | Path | None = None,
+        mapping_config: Mapping[str, Any] | None = None,
+    ) -> NormalizationInspectionResult:
+        if mapping_path is not None and mapping_config is not None:
+            raise SocServiceError("mapping_path and mapping_config cannot both be provided")
+        loaded_mapping = load_mapping_config(mapping_path) if mapping_path is not None else mapping_config
+        return inspect_alert_normalization(payload, mapping_config=loaded_mapping)
 
 
 class SocReviewService:

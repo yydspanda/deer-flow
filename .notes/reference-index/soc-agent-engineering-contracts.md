@@ -287,9 +287,19 @@ normalizers/hids.py
 - `AnalysisRun.normalization_report` 记录 deterministic normalizer 的质量信号，不参与 verdict 决策。
 - `AnalysisRun.extraction_report` 记录 deterministic entity extraction 的质量信号，不替代 `ExtractedEntities.mentions`。
 - `SocNormalizationService.inspect()` 是 CLI/API/TUI 做样本归一化检查的统一 service 入口；入口层不能直接 import runtime 或 normalizer 拼结果。
+- `SocNormalizationService.inspect(..., mapping_path=...)` 是 mapping 文件归一化检查入口；CLI/API/TUI 不直接读取 normalizer 产物。
 - report 的主要用途是字段漂移检测、供应商 mapping 维护、离线 LLM 辅助分析和 replay 对比。
 - report 可以包含 missing fields、normalized fields、entity counts、warnings；不要塞完整 raw payload 或长解释。
 - LLM 可以读取 report 生成 mapping 建议，但不能直接基于 report 自动修改生产 mapping。
+
+### Mapping config 约束
+
+- mapping config 只用于确定性字段搬运：`canonical.target.path: $.source.path`。
+- mapping target 必须是 canonical `AlertInput` 字段路径，不能写厂商别名字段。
+- source path 当前只承诺最小 `$.a.b.c` 语法；带 `.` 的复杂 key 或需要条件解析的供应商格式，升级为 Python adapter。
+- mapping 文件可以声明 `name` 和 canonical `source` 默认值；report adapter 必须输出为 `mapping:<name>`。
+- 缺失 source path 必须进入 `NormalizationReport.warnings` / `unmapped_fields`，用于漂移检测。
+- mapping 文件变更需要测试样本覆盖，不能靠线上每条告警动态 LLM 解析。
 
 ### Entity extraction 约束
 
