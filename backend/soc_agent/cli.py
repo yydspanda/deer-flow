@@ -29,6 +29,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "analyze":
         return _analyze(args)
+    if args.command == "list":
+        return _list(args)
     if args.command == "show":
         return _show(args)
     if args.command == "replay":
@@ -62,6 +64,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Persist the run through AlertRepository",
     )
     _add_database_args(analyze)
+
+    list_cmd = subparsers.add_parser("list", help="List persisted SOC alert summaries")
+    list_cmd.add_argument("--limit", type=int, default=50, help="Maximum summaries to return")
+    list_cmd.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(list_cmd)
 
     show = subparsers.add_parser("show", help="Show one persisted SOC analysis run")
     show.add_argument("run_id", help="Run id to load")
@@ -139,6 +146,18 @@ def _show(args: argparse.Namespace) -> int:
         print(f"error: run {args.run_id} not found", file=sys.stderr)
         return 3
     print(run.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _list(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    summaries = repository.list_alert_summaries(limit=args.limit)
+    print(json.dumps([summary.model_dump(mode="json", exclude_none=True) for summary in summaries], ensure_ascii=False, indent=2 if args.pretty else None))
     return 0
 
 

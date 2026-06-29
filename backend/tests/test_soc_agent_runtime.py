@@ -332,3 +332,54 @@ def test_cli_persist_show_and_replay(tmp_path: Path, capsys) -> None:
     assert corrected["decision"]["verdict"] == "true_positive"
     assert corrected["corrections"][0]["previous_verdict"] == "false_positive"
     assert corrected["corrections"][0]["candidate_knowledge_status"] == "pending_review"
+
+
+def test_cli_list_outputs_persisted_alert_summaries(tmp_path: Path, capsys) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'soc.db'}"
+
+    assert main(["db", "upgrade", "--database-url", database_url]) == 0
+    capsys.readouterr()
+
+    assert main(["analyze", str(SAMPLES / "pingan_legacy_apt.json"), "--persist", "--database-url", database_url]) == 0
+    capsys.readouterr()
+    assert main(["analyze", str(SAMPLES / "pingan_legacy_edr.json"), "--persist", "--database-url", database_url]) == 0
+    captured = capsys.readouterr()
+    edr_run = json.loads(captured.out)
+
+    assert main(["list", "--database-url", database_url, "--limit", "10"]) == 0
+    captured = capsys.readouterr()
+    summaries = json.loads(captured.out)
+    by_alert_id = {summary["alert_id"]: summary for summary in summaries}
+
+    assert set(by_alert_id) == {"2026494", "1965810"}
+    assert by_alert_id["2026494"]["source_type"] == "ndr"
+    assert by_alert_id["2026494"]["rule_code"] == "RPAADM_002635"
+    assert "ip:30.180.248.178" in by_alert_id["2026494"]["entity_keys"]
+    assert "domain:app.example.internal" in by_alert_id["2026494"]["entity_keys"]
+    assert by_alert_id["1965810"]["source_type"] == "edr"
+    assert by_alert_id["1965810"]["rule_code"] == "RPAADM_002583"
+    assert "process:svchost.exe" in by_alert_id["1965810"]["entity_keys"]
+
+    assert (
+        main(
+            [
+                "correct",
+                edr_run["run_id"],
+                "--verdict",
+                "true_positive",
+                "--reason",
+                "Confirmed malicious lateral movement.",
+                "--database-url",
+                database_url,
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert main(["list", "--database-url", database_url]) == 0
+    captured = capsys.readouterr()
+    summaries = json.loads(captured.out)
+    corrected = next(summary for summary in summaries if summary["alert_id"] == "1965810")
+    assert corrected["verdict"] == "true_positive"
+    assert corrected["needs_review"] is False

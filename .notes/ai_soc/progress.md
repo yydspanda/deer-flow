@@ -38,6 +38,7 @@
 | 10 | decision audit log | Done | `soc_decision_audit_log` 独立表记录 analyze/replay/correct 的结构化审计记录 |
 | 11 | alert summary read model | Done | `soc_alert_summaries` 保存可查询摘要，analyze/replay/correct 通过 service 维护 summary |
 | 12 | legacy platform normalizer | Done | 平安旧预警平台 envelope 转 canonical `AlertInput`，APT/EDR demo 可提取核心实体 |
+| 13 | CLI summary list | Done | `soc list` 输出持久化 `AlertSummary`，用于验证 Web/TUI 列表字段 |
 
 ## 进度记录
 
@@ -389,3 +390,25 @@
   - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
   - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+
+### 2026-06-29 — CLI summary list
+
+- 新增 headless CLI：
+  - `soc list --database-url ...`
+  - `soc list --limit 10 --pretty`
+- 功能边界：
+  - 只读取已持久化的 `AlertSummary`，不直接读 DB row，不扫描完整 `AnalysisRun.run_payload`。
+  - 输出 JSON array，字段来自 `AlertSummary` contract，可作为 Web/TUI 列表字段验证。
+  - correction 后列表中的 operational verdict 会跟随 summary 更新。
+- 已补充测试：
+  - 持久化 PingAn APT/EDR golden samples 后，`soc list` 返回 `alert_id/source_type/rule_code/entity_keys`。
+  - 对 EDR run 执行 `soc correct` 后，`soc list` 返回 `verdict=true_positive` 且 `needs_review=false`。
+- 当前判断：
+  - `AlertSummary` 的基础列表字段已经能支撑 Phase 1/2 的 Web/TUI 告警列表原型。
+  - 平安平台特有的 `workflow/ownership/sensor/disposition` 暂时留在 `extensions.legacy_platform`，后续如果列表筛选需要，再提升到 summary 索引列。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 做 `ReviewQueue` 最小 contract/table/service：由 `AlertSummary.needs_review`、low confidence、manual correction 和 high-risk source 生成复核队列。
