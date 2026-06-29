@@ -445,3 +445,29 @@
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
 - 下一步：
   - 基于 ReviewQueue 做 Phase 1 的 analyst triage surface：先补 API/TUI 可复用的 `review queue item -> investigation context` 查询服务，再进入实体/相似告警/规则记忆的相关性 slice。
+
+### 2026-06-29 — Investigation context service
+
+- 新增分析师复核详情上下文：
+  - `InvestigationContext`
+  - 包含 `queue_item`、完整 `AnalysisRun`、可选 `AlertSummary`、可选 `DecisionAuditRecord[]`。
+- 新增统一 service 入口：
+  - `SocReviewService.get_investigation_context(queue_id)`
+  - API/TUI/Web/CLI 后续打开复核详情时都应调用这个入口，不自己拼 queue/run/summary/audit。
+- 新增 headless CLI：
+  - `soc review context REV-... --database-url ...`
+- 设计边界：
+  - context 是只读研判上下文，不产生新 verdict，不关闭队列，不写 memory。
+  - 后续相似告警、confirmed facts、lessons、threat intel 都作为这个 context 的增量字段接入。
+- 已同步工程契约：
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 已补充测试：
+  - service：context 返回 queue/run/summary/audit。
+  - service：未知 queue id 返回 not-found。
+  - CLI：`soc review context` 输出可复用详情 JSON。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 给 `InvestigationContext` 增加第一版 `similar_alerts`：基于 `detection_key`、`rule_code`、`entity_keys` 查询历史 `AlertSummary`，先服务人工研判，再为 Phase 2 去重/关联打基础。

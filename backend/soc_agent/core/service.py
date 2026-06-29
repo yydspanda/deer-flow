@@ -18,6 +18,7 @@ from soc_agent.contracts import (
     CorrectionRecord,
     Decision,
     DecisionAuditRecord,
+    InvestigationContext,
     ReviewQueueCloseCommand,
     ReviewQueueItem,
     ReviewQueuePriority,
@@ -291,6 +292,29 @@ class SocReviewService:
         item.updated_at = item.closed_at
         self._review_queue_repository.save_review_item(item)
         return item
+
+    def get_investigation_context(self, queue_id: str) -> InvestigationContext:
+        if self._review_queue_repository is None:
+            raise SocServiceNotImplementedError("get_investigation_context requires a ReviewQueueRepository")
+        if self._repository is None:
+            raise SocServiceNotImplementedError("get_investigation_context requires an AlertRepository")
+
+        item = self._review_queue_repository.get_review_item(queue_id)
+        if item is None:
+            raise SocServiceNotFoundError(f"review queue item {queue_id} not found")
+
+        run = self._repository.get_run(item.run_id)
+        if run is None:
+            raise SocServiceNotFoundError(f"run {item.run_id} not found")
+
+        summary = self._summary_repository.get_alert_summary(item.run_id) if self._summary_repository is not None else None
+        audit_records = self._audit_repository.list_audit_records(item.run_id) if self._audit_repository is not None else []
+        return InvestigationContext(
+            queue_item=item,
+            run=run,
+            summary=summary,
+            audit_records=audit_records,
+        )
 
 
 class SocMemoryService:

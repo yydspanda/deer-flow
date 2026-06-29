@@ -435,3 +435,13 @@ class AnalysisRun(BaseModel):
     analysis: AnalysisResult | None = None
     decision: Decision | None = None
     corrections: list[CorrectionRecord] = Field(default_factory=list)
+
+
+class InvestigationContext(BaseModel):
+    """Read model used by analyst surfaces to open one review item."""
+
+    schema_version: str = "soc.investigation_context.v1"
+    queue_item: ReviewQueueItem
+    run: AnalysisRun
+    summary: AlertSummary | None = None
+    audit_records: list[DecisionAuditRecord] = Field(default_factory=list)

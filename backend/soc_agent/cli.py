@@ -39,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
         return _correct(args)
     if args.command == "review" and args.review_command == "list":
         return _review_list(args)
+    if args.command == "review" and args.review_command == "context":
+        return _review_context(args)
     if args.command == "review" and args.review_command == "close":
         return _review_close(args)
     if args.command == "db" and args.db_command == "init":
@@ -109,6 +111,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     review_list.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(review_list)
+    review_context = review_subparsers.add_parser("context", help="Show analyst investigation context for a queue item")
+    review_context.add_argument("queue_id", help="Review queue id to open")
+    review_context.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(review_context)
     review_close = review_subparsers.add_parser("close", help="Close one SOC review queue item")
     review_close.add_argument("queue_id", help="Review queue id to close")
     review_close.add_argument("--reason", required=True, help="Reason for closing the queue item")
@@ -258,6 +264,26 @@ def _review_close(args: argparse.Namespace) -> int:
         return 3
 
     print(item.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _review_context(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        context = SocReviewService(
+            repository=repository,
+            summary_repository=repository,
+            audit_repository=repository,
+            review_queue_repository=repository,
+        ).get_investigation_context(args.queue_id)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(context.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
 
 

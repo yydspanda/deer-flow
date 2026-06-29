@@ -405,6 +405,15 @@ def test_cli_review_queue_lists_and_closes_items(tmp_path: Path, capsys) -> None
     assert item["reason"] == "summary.needs_review"
     assert item["rule_code"] == "RPAADM_002635"
 
+    assert main(["review", "context", item["queue_id"], "--database-url", database_url]) == 0
+    captured = capsys.readouterr()
+    context = json.loads(captured.out)
+    assert context["queue_item"]["queue_id"] == item["queue_id"]
+    assert context["run"]["run_id"] == item["run_id"]
+    assert context["summary"]["alert_id"] == "2026494"
+    assert context["audit_records"][0]["action"] == "analysis"
+    assert context["audit_records"][0]["run_id"] == item["run_id"]
+
     assert (
         main(
             [

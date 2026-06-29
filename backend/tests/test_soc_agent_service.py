@@ -351,6 +351,44 @@ def test_review_service_lists_and_closes_queue_item() -> None:
     assert service.list_queue(status=ReviewQueueStatus.CLOSED) == [closed]
 
 
+def test_review_service_gets_investigation_context() -> None:
+    repository = InMemoryAlertRepository()
+    summary_repository = InMemorySummaryRepository()
+    audit_repository = InMemoryAuditRepository()
+    review_repository = InMemoryReviewQueueRepository()
+    run = SocAnalysisService(
+        repository=repository,
+        summary_repository=summary_repository,
+        audit_repository=audit_repository,
+        review_queue_repository=review_repository,
+    ).analyze(_sample("pingan_legacy_apt.json"))
+    item = review_repository.get_open_review_item_by_run(run.run_id)
+    assert item is not None
+
+    context = SocReviewService(
+        repository=repository,
+        summary_repository=summary_repository,
+        audit_repository=audit_repository,
+        review_queue_repository=review_repository,
+    ).get_investigation_context(item.queue_id)
+
+    assert context.queue_item == item
+    assert context.run == run
+    assert context.summary is not None
+    assert context.summary.run_id == run.run_id
+    assert context.summary.alert_id == "2026494"
+    assert context.audit_records[0].action == AuditAction.ANALYSIS
+    assert context.audit_records[0].run_id == run.run_id
+
+
+def test_review_service_context_requires_existing_queue_item() -> None:
+    with pytest.raises(SocServiceNotFoundError):
+        SocReviewService(
+            repository=InMemoryAlertRepository(),
+            review_queue_repository=InMemoryReviewQueueRepository(),
+        ).get_investigation_context("REV-UNKNOWN")
+
+
 def test_review_service_correct_requires_repository() -> None:
     with pytest.raises(SocServiceNotImplementedError):
         SocReviewService().correct(
