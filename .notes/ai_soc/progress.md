@@ -532,3 +532,50 @@
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
 - 下一步：
   - 增加 `LLMEntityExtractor` protocol 和 fixed runtime enrichment step，占位实现先返回空补充；之后再接真实模型的结构化输出和 domain validator。
+
+### 2026-06-29 — UM account user identity support
+
+- 新增 canonical user 字段：
+  - `UserEntityRef.um_account`
+- 扩展 normalizer：
+  - 通用 flat payload 支持 `um_account`、`umAccount`、`um`、`um_id`、`umId` alias。
+  - PingAn adapter 只从明确 UM 字段映射 `um_account`。
+  - `uiduserid` / SID 类字段继续作为 `user_id`，不冒充 UM。
+- 扩展 extractor：
+  - `um_account` 生成 `EntityMention(kind=user, role=um_account, key=user:<value>)`。
+  - `user_id` 也生成 user mention，但 role 保持 `user_id`。
+- 设计边界：
+  - UM 账号是 user identity 的一种角色，不新增独立 `EntityKind.UM_ACCOUNT`。
+  - 处置人/审批人/分析师账号默认不进入核心 user 实体，避免污染攻击主体关联。
+- 已同步工程契约：
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 已补充测试：
+  - 通用 flat payload 的 `umAccount` 可规范化并提取为 `role=um_account`。
+  - PingAn EDR sample 的 SID 保持为 `role=user_id`。
+  - HTTP `x-forwarded-for` nested header alias 可归一为 `entities.http.x_forwarded_for` 并提取为 `role=x_forwarded_for`。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+
+### 2026-06-29 — Normalizer alias boundary hardening
+
+- 修正字段别名边界：
+  - `pipeline/extractor.py` 只读取 canonical `AlertInput`。
+  - `normalizers/alert.py` 负责把 root 或 nested 原始别名归一化到 canonical 字段。
+- 增强 HTTP alias：
+  - `x_forwarded_for`
+  - `xForwardedFor`
+  - `x-forwarded-for`
+  - `X-Forwarded-For`
+  - `xff`
+  - `XFF`
+- 设计边界：
+  - 不让 extractor 记住所有厂商字段名或 header 原名。
+  - 后续新增别名优先加 normalizer 测试，不直接往 pipeline 硬塞字段判断。
+- 已同步工程契约：
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`

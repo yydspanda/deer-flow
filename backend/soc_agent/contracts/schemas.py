@@ -214,6 +214,7 @@ class ProcessEntityRef(BaseModel):
 class UserEntityRef(BaseModel):
     username: str | None = None
     user_id: str | None = None
+    um_account: str | None = None
     src_user: str | None = None
     dst_user: str | None = None
 

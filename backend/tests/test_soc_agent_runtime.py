@@ -165,6 +165,34 @@ def test_f5_waf_alert_without_rule_code_uses_rule_name_detection_key() -> None:
     assert alert.detection.detection_key == "f5-asm-prod:rule_name:sql_injection_attempt"
 
 
+def test_http_x_forwarded_for_header_alias_normalizes_to_canonical_field() -> None:
+    alert = normalize_alert_payload(
+        {
+            "alert_id": "ALT-XFF-001",
+            "source": {
+                "source_type": "waf",
+                "source_system": "f5-asm-prod",
+            },
+            "detection": {"rule_name": "Suspicious Forwarded Client"},
+            "entities": {
+                "http": {
+                    "x-forwarded-for": "203.0.113.88",
+                    "host": "app.example.com",
+                    "url": "https://app.example.com/login",
+                }
+            },
+        }
+    )
+
+    assert alert.entities.http.x_forwarded_for == "203.0.113.88"
+
+    run = _analyze(alert.model_dump(mode="json"))
+    assert run.entities is not None
+    by_key = {mention.key: mention for mention in run.entities.mentions}
+    assert by_key["ip:203.0.113.88"].role == "x_forwarded_for"
+    assert by_key["ip:203.0.113.88"].evidence_path == "entities.http.x_forwarded_for"
+
+
 def test_alert_without_rule_identifiers_gets_fingerprint_detection_key() -> None:
     alert = normalize_alert_payload(
         {
@@ -202,6 +230,28 @@ def test_unknown_source_type_falls_back_to_other_without_breaking() -> None:
     assert alert.source.source_system == "fortigate"
     assert alert.detection.rule_code == "1002003"
     assert alert.detection.detection_key == "fortigate:rule_code:1002003"
+
+
+def test_user_um_account_normalizes_as_user_identity() -> None:
+    alert = normalize_alert_payload(
+        {
+            "alert_id": "ALT-UM-001",
+            "source_type": "iam",
+            "source_system": "iam-audit",
+            "rule_name": "Suspicious UM Login",
+            "umAccount": "UM123456",
+            "source_ip": "198.51.100.20",
+        }
+    )
+
+    assert alert.entities.user.um_account == "UM123456"
+
+    run = _analyze(alert.model_dump(mode="json"))
+    assert run.entities is not None
+    by_key = {mention.key: mention for mention in run.entities.mentions}
+    assert by_key["user:UM123456"].kind == "user"
+    assert by_key["user:UM123456"].role == "um_account"
+    assert by_key["user:UM123456"].evidence_path == "entities.user.um_account"
 
 
 def test_pingan_legacy_apt_alert_normalizes_platform_envelope() -> None:
@@ -267,6 +317,7 @@ def test_pingan_legacy_edr_alert_normalizes_platform_envelope() -> None:
     assert alert.entities.network.destination_ip == "30.162.29.85"
     assert alert.entities.host.host_name == "HOST-L12267.example.local"
     assert alert.entities.user.username == "analyst001"
+    assert alert.entities.user.user_id == "S-1-5-21-example"
     assert alert.entities.process.process_name == "svchost.exe"
     assert alert.entities.process.parent_process_name == "services.exe"
     assert alert.entities.file.md5 == "7B88D0896FBF43469A9959D59824A514"
@@ -283,11 +334,13 @@ def test_pingan_legacy_edr_alert_normalizes_platform_envelope() -> None:
     assert "svchost.exe" in run.entities.processes
     assert "services.exe" in run.entities.processes
     assert "analyst001" in run.entities.users
+    assert "S-1-5-21-example" in run.entities.users
     assert "HOST-L12267.example.local" in run.entities.hosts
     by_key = {mention.key: mention for mention in run.entities.mentions}
     assert by_key["process:svchost.exe"].role == "process_name"
     assert by_key["process:services.exe"].role == "parent_process_name"
     assert by_key["user:analyst001"].role == "username"
+    assert by_key["user:S-1-5-21-example"].role == "user_id"
     assert by_key["host:HOST-L12267.example.local"].role == "host_name"
     assert by_key["file_hash:7B88D0896FBF43469A9959D59824A514"].role == "md5"
 

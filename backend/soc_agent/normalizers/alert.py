@@ -155,6 +155,7 @@ def _merge_entities(data: dict[str, Any]) -> dict[str, Any]:
     for key, aliases in {
         "username": ("username", "user", "user_name", "userName"),
         "user_id": ("user_id", "userId"),
+        "um_account": ("um_account", "umAccount", "um", "um_id", "umId"),
         "src_user": ("src_user", "srcUser"),
         "dst_user": ("dst_user", "dstUser"),
     }.items():
@@ -184,7 +185,7 @@ def _merge_entities(data: dict[str, Any]) -> dict[str, Any]:
         "url": ("url", "request_url", "requestUrl"),
         "status_code": ("status_code", "statusCode", "http_status", "httpStatus"),
         "user_agent": ("user_agent", "userAgent"),
-        "x_forwarded_for": ("x_forwarded_for", "xForwardedFor"),
+        "x_forwarded_for": ("x_forwarded_for", "xForwardedFor", "x-forwarded-for", "X-Forwarded-For", "xff", "XFF"),
     }.items():
         _copy_first(http, key, data, aliases)
 
@@ -208,6 +209,10 @@ def _merge_entities(data: dict[str, Any]) -> dict[str, Any]:
 def _copy_first(target: dict[str, Any], target_key: str, source: dict[str, Any], aliases: tuple[str, ...]) -> None:
     if target.get(target_key) is not None:
         return
+    for alias in aliases:
+        if target.get(alias) is not None:
+            target[target_key] = target[alias]
+            return
     for alias in aliases:
         if source.get(alias) is not None:
             target[target_key] = source[alias]

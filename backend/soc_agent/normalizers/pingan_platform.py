@@ -188,6 +188,7 @@ def _entities(
         "user": {
             "username": _first_str(raw_event, ("str_user_agent", "process__user__name", "str_user_process")) or _first_str(soar_asset, ("strusername",)),
             "user_id": _first_str(soar_asset, ("uiduserid",)),
+            "um_account": _first_str(raw_event, ("um", "um_account", "umAccount", "str_um_account")),
         },
         "host": {
             "host_name": _first_str(raw_event, ("device__hostname", "str_source_host")) or _first_str(soar_asset, ("strdevname",)),

@@ -113,6 +113,8 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
     _add_mention(mentions, EntityKind.USER, user.username, role="username", evidence_path="entities.user.username")
     _add_mention(mentions, EntityKind.USER, user.src_user, role="src_user", evidence_path="entities.user.src_user")
     _add_mention(mentions, EntityKind.USER, user.dst_user, role="dst_user", evidence_path="entities.user.dst_user")
+    _add_mention(mentions, EntityKind.USER, user.user_id, role="user_id", evidence_path="entities.user.user_id")
+    _add_mention(mentions, EntityKind.USER, user.um_account, role="um_account", evidence_path="entities.user.um_account")
     _add_mention(mentions, EntityKind.HOST, host.host_name, role="host_name", evidence_path="entities.host.host_name")
     _add_mention(mentions, EntityKind.ASSET, host.asset_id, role="asset_id", evidence_path="entities.host.asset_id")
     _add_mention(mentions, EntityKind.ASSET, host.asset_group, role="asset_group", evidence_path="entities.host.asset_group")
