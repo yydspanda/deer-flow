@@ -113,7 +113,11 @@ def _analyze(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    run = SocAnalysisService(repository=repository, audit_repository=repository).analyze(payload)
+    run = SocAnalysisService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+    ).analyze(payload)
     print(
         run.model_dump_json(
             indent=2 if args.pretty else None,
@@ -141,7 +145,11 @@ def _show(args: argparse.Namespace) -> int:
 def _replay(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
-        run = SocAnalysisService(repository=repository, audit_repository=repository).replay(args.run_id)
+        run = SocAnalysisService(
+            repository=repository,
+            summary_repository=repository,
+            audit_repository=repository,
+        ).replay(args.run_id)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -156,7 +164,11 @@ def _replay(args: argparse.Namespace) -> int:
 def _correct(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
-        run = SocReviewService(repository=repository, audit_repository=repository).correct(
+        run = SocReviewService(
+            repository=repository,
+            summary_repository=repository,
+            audit_repository=repository,
+        ).correct(
             CorrectionCommand(
                 run_id=args.run_id,
                 corrected_verdict=Verdict(args.verdict),

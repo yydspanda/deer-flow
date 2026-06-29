@@ -17,7 +17,7 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1：CLI + Runtime 可靠性闭环 |
-| 当前目标 | 建立 SOC Agent 最小可靠闭环：contracts schema、Runtime 状态机、step trace、validator、headless CLI analyze、run 输入快照、replay contract、PostgreSQL repository、Alembic migration |
+| 当前目标 | 建立 SOC Agent 最小可靠闭环：contracts schema、Runtime 状态机、step trace、validator、headless CLI analyze、run 输入快照、replay contract、PostgreSQL repository、Alembic migration、alert summary 读模型 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
@@ -36,6 +36,7 @@
 | 8 | PostgreSQL run repository | Done | SOC ORM row + SQLAlchemy repository + Alembic migration + headless CLI `show/replay` 已完成 |
 | 9 | manual correction loop | Done | `soc correct RUN_ID` 更新 operational decision，保留原 AI verdict，追加 correction record，不自动写 confirmed memory |
 | 10 | decision audit log | Done | `soc_decision_audit_log` 独立表记录 analyze/replay/correct 的结构化审计记录 |
+| 11 | alert summary read model | Done | `soc_alert_summaries` 保存可查询摘要，analyze/replay/correct 通过 service 维护 summary |
 
 ## 进度记录
 
@@ -298,3 +299,37 @@
   - `cd backend && ./.venv/bin/python -m ruff format --check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
   - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+
+### 2026-06-29 — Alert summary read model
+
+- 新增 `AlertSummary` contract：
+  - 面向告警列表、review queue、dedup、correlation、Web/TUI 查询。
+  - 不替代 `AnalysisRun`；完整事实仍在 `soc_analysis_runs.run_payload`。
+  - 字段包括 source/detection/severity/category/entity_keys/verdict/confidence/needs_review/summary/recommended_action。
+- 新增 `AlertSummaryRepository` protocol：
+  - `save_alert_summary()`
+  - `get_alert_summary()`
+  - `list_alert_summaries(limit=...)`
+- 扩展 core service：
+  - `SocAnalysisService.analyze()` 写 run 后维护 summary。
+  - `SocAnalysisService.replay()` 为 replay run 写新 summary，并记录 `replay_of_run_id`。
+  - `SocReviewService.correct()` 更新同一 run summary 的 operational verdict。
+  - CLI/API/TUI/daemon 后续仍只调用 service，不自己拼 summary。
+- 新增 SOC 表：
+  - `soc_alert_summaries`
+  - migration：`backend/soc_agent/db/migrations/versions/0003_alert_summaries.py`
+  - 按 `alert_id`、`tenant_id`、`source_type`、`detection_key`、`rule_code`、`verdict`、`needs_review`、`updated_at` 建索引。
+- 扩展 `SqlAlchemyAlertRepository`：
+  - 实现 summary save/get/list。
+  - `soc analyze --persist`、`soc replay`、`soc correct` 均通过 service 注入同一个 repository 维护 summary。
+- 已补充测试：
+  - service 写 summary。
+  - correction 更新 summary。
+  - repository 持久化、replay summary、list summary、correction summary。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 补 `ReviewQueue` 最小 contract/table/service，基于 `AlertSummary.needs_review` 和人工纠正结果沉淀待复查队列。
+  - 或先补 `soc list` / future API list 的读取入口，验证 Web/TUI 列表需要的筛选字段是否足够。

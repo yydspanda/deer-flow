@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol
 
-from soc_agent.contracts import AlertInput, AnalysisResult, AnalysisRun, DecisionAuditRecord, SocEvent
+from soc_agent.contracts import AlertInput, AlertSummary, AnalysisResult, AnalysisRun, DecisionAuditRecord, SocEvent
 
 
 class AlertNormalizer(Protocol):
@@ -40,6 +40,16 @@ class DecisionAuditRepository(Protocol):
     def save_audit_record(self, record: DecisionAuditRecord) -> None: ...
 
     def list_audit_records(self, run_id: str) -> list[DecisionAuditRecord]: ...
+
+
+class AlertSummaryRepository(Protocol):
+    """Persistence boundary for queryable alert summaries."""
+
+    def save_alert_summary(self, summary: AlertSummary) -> None: ...
+
+    def get_alert_summary(self, run_id: str) -> AlertSummary | None: ...
+
+    def list_alert_summaries(self, *, limit: int = 50) -> list[AlertSummary]: ...
 
 
 class SocEventSink(Protocol):

@@ -330,6 +330,38 @@ class DecisionAuditRecord(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class AlertSummary(BaseModel):
+    """Queryable read model for alert queues, dedup, and review surfaces.
+
+    ``AnalysisRun`` remains the full source of truth. This model intentionally
+    keeps only indexed/list-friendly fields that UI, TUI, daemon, and future
+    correlation steps need to scan cheaply.
+    """
+
+    schema_version: str = "soc.alert_summary.v1"
+    run_id: str
+    alert_id: str
+    tenant_id: str | None = None
+    source_type: AlertSourceType = AlertSourceType.UNKNOWN
+    source_system: str | None = None
+    detection_key: str | None = None
+    rule_code: str | None = None
+    rule_name: str | None = None
+    severity: str | None = None
+    category: str | None = None
+    entity_keys: list[str] = Field(default_factory=list)
+    status: AnalysisRunStatus
+    verdict: Verdict | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    needs_review: bool = False
+    summary: str | None = None
+    recommended_action: str | None = None
+    input_hash: str | None = None
+    replay_of_run_id: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class PipelineStepTrace(BaseModel):
     step_name: str
     status: PipelineStepStatus

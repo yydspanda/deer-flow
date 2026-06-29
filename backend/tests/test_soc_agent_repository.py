@@ -27,19 +27,25 @@ def _repository() -> SqlAlchemyAlertRepository:
 
 def test_sqlalchemy_alert_repository_saves_and_gets_run() -> None:
     repository = _repository()
-    run = SocAnalysisService(repository=repository).analyze(_sample("approved_scanner.json"))
+    run = SocAnalysisService(repository=repository, summary_repository=repository).analyze(_sample("approved_scanner.json"))
 
     saved = repository.get_run(run.run_id)
+    summary = repository.get_alert_summary(run.run_id)
 
     assert saved == run
     assert saved is not None
     assert saved.input_payload == run.input_payload
     assert saved.input_hash == run.input_hash
+    assert summary is not None
+    assert summary.alert_id == run.alert_id
+    assert summary.verdict == Verdict.FALSE_POSITIVE
+    assert summary.rule_code == "EDR-SCAN-001"
+    assert "host:scanner-01" in summary.entity_keys
 
 
 def test_sqlalchemy_alert_repository_updates_existing_run() -> None:
     repository = _repository()
-    run = SocAnalysisService(repository=repository).analyze(_sample("approved_scanner.json"))
+    run = SocAnalysisService(repository=repository, summary_repository=repository).analyze(_sample("approved_scanner.json"))
     run.model_name = "updated-model"
 
     repository.save_run(run)
@@ -51,7 +57,11 @@ def test_sqlalchemy_alert_repository_updates_existing_run() -> None:
 
 def test_sqlalchemy_alert_repository_supports_service_replay() -> None:
     repository = _repository()
-    service = SocAnalysisService(repository=repository, audit_repository=repository)
+    service = SocAnalysisService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+    )
     original = service.analyze(_sample("approved_scanner.json"))
 
     replayed = service.replay(original.run_id)
@@ -67,12 +77,25 @@ def test_sqlalchemy_alert_repository_supports_service_replay() -> None:
     assert replay_records[0].action == AuditAction.REPLAY
     assert replay_records[0].replay_of_run_id == original.run_id
 
+    replay_summary = repository.get_alert_summary(replayed.run_id)
+    assert replay_summary is not None
+    assert replay_summary.replay_of_run_id == original.run_id
+    assert replayed.run_id in {summary.run_id for summary in repository.list_alert_summaries(limit=2)}
+
 
 def test_sqlalchemy_alert_repository_persists_corrections() -> None:
     repository = _repository()
-    run = SocAnalysisService(repository=repository, audit_repository=repository).analyze(_sample("approved_scanner.json"))
+    run = SocAnalysisService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+    ).analyze(_sample("approved_scanner.json"))
 
-    corrected = SocReviewService(repository=repository, audit_repository=repository).correct(
+    corrected = SocReviewService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+    ).correct(
         CorrectionCommand(
             run_id=run.run_id,
             corrected_verdict=Verdict.TRUE_POSITIVE,
@@ -91,3 +114,9 @@ def test_sqlalchemy_alert_repository_persists_corrections() -> None:
     assert [record.action for record in records] == [AuditAction.ANALYSIS, AuditAction.CORRECTION]
     assert records[1].previous_verdict == Verdict.FALSE_POSITIVE
     assert records[1].final_verdict == Verdict.TRUE_POSITIVE
+
+    summary = repository.get_alert_summary(run.run_id)
+    assert summary is not None
+    assert summary.verdict == Verdict.TRUE_POSITIVE
+    assert summary.confidence == 1.0
+    assert summary.needs_review is False

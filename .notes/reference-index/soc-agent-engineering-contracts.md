@@ -191,6 +191,15 @@ Decision audit 约束：
 - replay/correction 必须生成新的审计记录，不覆盖历史审计记录。
 - 审计写入失败在 Phase 1 应暴露为执行失败或明确错误，不允许假装成功。
 
+Alert summary 约束：
+
+- `AlertSummary` 是面向告警列表、review queue、dedup、correlation 和 Web/TUI 查询的读模型，不替代完整 `AnalysisRun`。
+- `AlertSummaryRepository.save_alert_summary()` 必须在 service 边界调用；CLI/API/TUI/daemon 入口不能自己拼 summary。
+- `soc_alert_summaries` 保存扁平索引字段和完整 `summary_payload`，字段应优先服务高频查询：`alert_id`、`tenant_id`、`source_type`、`detection_key`、`rule_code`、`verdict`、`needs_review`、`updated_at`。
+- correction 后必须更新同一个 run 的 summary，让 operational verdict 和 review 列表保持一致；原始 AI verdict 仍保留在 `AnalysisRun.analysis` 和 `soc_analysis_runs.run_payload`。
+- replay 必须生成新的 summary，记录 `replay_of_run_id`，不能覆盖原 run summary。
+- 方案文档中泛称的 `alert_summaries` 在当前实现里使用 SOC 前缀表名 `soc_alert_summaries`。
+
 SOC repository 实现约束：
 
 - SOC 业务表放在 `backend/soc_agent/db/`，不塞进 DeerFlow harness persistence。
@@ -198,7 +207,7 @@ SOC repository 实现约束：
 - `soc_analysis_runs.run_payload` 保存完整 `AnalysisRun`，索引列只服务查询和筛选，不作为唯一事实来源。
 - SOC schema migrations 放在 `backend/soc_agent/db/migrations/`，使用独立版本表 `soc_alembic_version`。
 - 正式 schema 变更走 `soc db upgrade` / Alembic revision；`create_soc_tables()` 和 `soc db init` 只作为 Phase 1 本地开发辅助。
-- SOC 当前持久化表包括 `soc_analysis_runs` 和 `soc_decision_audit_log`。
+- SOC 当前持久化表包括 `soc_analysis_runs`、`soc_decision_audit_log` 和 `soc_alert_summaries`。
 - 单元测试可以用 SQLite in-memory 验证 SQLAlchemy 映射；运行时配置和正式部署必须指向 PostgreSQL。
 
 ### 三类模型必须分清

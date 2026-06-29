@@ -7,6 +7,7 @@ import pytest
 
 from soc_agent.contracts import (
     ActorContext,
+    AlertSummary,
     AnalysisRun,
     AuditAction,
     CorrectionCommand,
@@ -60,6 +61,20 @@ class InMemoryAuditRepository:
         return [record for record in self.records if record.run_id == run_id]
 
 
+class InMemorySummaryRepository:
+    def __init__(self) -> None:
+        self.summaries: dict[str, AlertSummary] = {}
+
+    def save_alert_summary(self, summary: AlertSummary) -> None:
+        self.summaries[summary.run_id] = summary
+
+    def get_alert_summary(self, run_id: str) -> AlertSummary | None:
+        return self.summaries.get(run_id)
+
+    def list_alert_summaries(self, *, limit: int = 50) -> list[AlertSummary]:
+        return list(self.summaries.values())[:limit]
+
+
 def _sample(name: str) -> dict:
     return json.loads((SAMPLES / name).read_text(encoding="utf-8"))
 
@@ -105,6 +120,25 @@ def test_analysis_service_writes_decision_audit_record() -> None:
     assert record.input_hash == run.input_hash
     assert record.final_verdict == Verdict.FALSE_POSITIVE
     assert record.payload["step_count"] == len(run.steps)
+
+
+def test_analysis_service_writes_alert_summary() -> None:
+    summary_repository = InMemorySummaryRepository()
+    service = SocAnalysisService(
+        repository=InMemoryAlertRepository(),
+        summary_repository=summary_repository,
+    )
+
+    run = service.analyze(_sample("approved_scanner.json"))
+
+    summary = summary_repository.get_alert_summary(run.run_id)
+    assert summary is not None
+    assert summary.run_id == run.run_id
+    assert summary.alert_id == "ALT-SAMPLE-FP-001"
+    assert summary.verdict == Verdict.FALSE_POSITIVE
+    assert summary.needs_review is False
+    assert summary.detection_key == "sample-edr:rule_code:edr-scan-001"
+    assert "ip:10.0.1.10" in summary.entity_keys
 
 
 def test_analysis_service_get_run_requires_repository() -> None:
@@ -191,6 +225,33 @@ def test_review_service_correct_writes_decision_audit_record() -> None:
     assert record.final_verdict == Verdict.TRUE_POSITIVE
     assert record.correction_id == corrected.corrections[0].correction_id
     assert record.payload["candidate_knowledge_status"] == "pending_review"
+
+
+def test_review_service_correct_updates_alert_summary() -> None:
+    repository = InMemoryAlertRepository()
+    summary_repository = InMemorySummaryRepository()
+    run = SocAnalysisService(
+        repository=repository,
+        summary_repository=summary_repository,
+    ).analyze(_sample("approved_scanner.json"))
+
+    corrected = SocReviewService(
+        repository=repository,
+        summary_repository=summary_repository,
+    ).correct(
+        CorrectionCommand(
+            run_id=run.run_id,
+            corrected_verdict=Verdict.TRUE_POSITIVE,
+            reason="Manual correction",
+        )
+    )
+
+    summary = summary_repository.get_alert_summary(corrected.run_id)
+    assert summary is not None
+    assert summary.verdict == Verdict.TRUE_POSITIVE
+    assert summary.confidence == 1.0
+    assert summary.needs_review is False
+    assert summary.summary == corrected.analysis.summary
 
 
 def test_review_service_correct_requires_repository() -> None:

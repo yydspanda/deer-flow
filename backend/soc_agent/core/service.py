@@ -6,6 +6,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from soc_agent.contracts import (
+    AlertInput,
+    AlertSourceType,
+    AlertSummary,
     AnalysisRun,
     AnalysisRunStatus,
     AuditAction,
@@ -19,7 +22,14 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.core.runtime import analyze_alert
-from soc_agent.protocols import AlertRepository, AnalysisRuntime, DecisionAuditRepository, SocEventSink
+from soc_agent.normalizers import normalize_alert_payload
+from soc_agent.protocols import (
+    AlertRepository,
+    AlertSummaryRepository,
+    AnalysisRuntime,
+    DecisionAuditRepository,
+    SocEventSink,
+)
 
 
 class SocServiceError(RuntimeError):
@@ -61,11 +71,13 @@ class SocAnalysisService:
         *,
         runtime: AnalysisRuntime | None = None,
         repository: AlertRepository | None = None,
+        summary_repository: AlertSummaryRepository | None = None,
         audit_repository: DecisionAuditRepository | None = None,
         event_sink: SocEventSink | None = None,
     ) -> None:
         self._runtime = runtime or DeterministicAnalysisRuntime()
         self._repository = repository
+        self._summary_repository = summary_repository
         self._audit_repository = audit_repository
         self._event_sink = event_sink or NoopEventSink()
 
@@ -123,6 +135,8 @@ class SocAnalysisService:
         run.replay_of_run_id = replay_of_run_id
         if self._repository is not None:
             self._repository.save_run(run)
+        if self._summary_repository is not None:
+            self._summary_repository.save_alert_summary(_alert_summary_from_run(run))
         if self._audit_repository is not None:
             self._audit_repository.save_audit_record(
                 _analysis_audit_record(
@@ -160,10 +174,12 @@ class SocReviewService:
         self,
         *,
         repository: AlertRepository | None = None,
+        summary_repository: AlertSummaryRepository | None = None,
         audit_repository: DecisionAuditRepository | None = None,
         event_sink: SocEventSink | None = None,
     ) -> None:
         self._repository = repository
+        self._summary_repository = summary_repository
         self._audit_repository = audit_repository
         self._event_sink = event_sink or NoopEventSink()
 
@@ -202,6 +218,8 @@ class SocReviewService:
             automation_allowed=False,
         )
         self._repository.save_run(run)
+        if self._summary_repository is not None:
+            self._summary_repository.save_alert_summary(_alert_summary_from_run(run))
         if self._audit_repository is not None:
             self._audit_repository.save_audit_record(_correction_audit_record(run, record))
         self._event_sink.emit(
@@ -263,6 +281,73 @@ def _current_confidence(run: AnalysisRun) -> float | None:
     if run.analysis is not None:
         return run.analysis.confidence
     return None
+
+
+def _alert_summary_from_run(run: AnalysisRun) -> AlertSummary:
+    alert = _normalized_alert_from_run(run)
+    decision = run.decision
+    analysis = run.analysis
+    verdict = _current_verdict(run)
+    confidence = _current_confidence(run)
+
+    return AlertSummary(
+        run_id=run.run_id,
+        alert_id=run.alert_id,
+        tenant_id=alert.tenant_id if alert is not None else None,
+        source_type=alert.source.source_type if alert is not None else AlertSourceType.UNKNOWN,
+        source_system=alert.source.source_system if alert is not None else None,
+        detection_key=alert.detection.detection_key if alert is not None else None,
+        rule_code=alert.detection.rule_code if alert is not None else None,
+        rule_name=alert.detection.rule_name if alert is not None else None,
+        severity=alert.classification.severity if alert is not None else None,
+        category=alert.classification.category if alert is not None else None,
+        entity_keys=_entity_keys(run),
+        status=run.status,
+        verdict=verdict,
+        confidence=confidence,
+        needs_review=decision.needs_review if decision is not None else run.status is AnalysisRunStatus.NEEDS_REVIEW,
+        summary=analysis.summary if analysis is not None else None,
+        recommended_action=decision.suggested_action if decision is not None else None,
+        input_hash=run.input_hash,
+        replay_of_run_id=run.replay_of_run_id,
+        created_at=run.started_at,
+        updated_at=run.ended_at or run.started_at,
+    )
+
+
+def _normalized_alert_from_run(run: AnalysisRun) -> AlertInput | None:
+    if run.input_payload is None:
+        return None
+    try:
+        return normalize_alert_payload(run.input_payload)
+    except Exception:  # noqa: BLE001 - summary generation should preserve failed runs
+        return None
+
+
+def _entity_keys(run: AnalysisRun) -> list[str]:
+    if run.entities is None:
+        return []
+
+    values = [
+        *(f"ip:{value}" for value in run.entities.ips),
+        *(f"domain:{value}" for value in run.entities.domains),
+        *(f"url:{value}" for value in run.entities.urls),
+        *(f"process:{value}" for value in run.entities.processes),
+        *(f"user:{value}" for value in run.entities.users),
+        *(f"host:{value}" for value in run.entities.hosts),
+        *(f"rule:{value}" for value in run.entities.rules if value),
+    ]
+    return _dedupe(values)
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
 
 
 def _analysis_audit_record(run: AnalysisRun, *, actor, action: AuditAction) -> DecisionAuditRecord:

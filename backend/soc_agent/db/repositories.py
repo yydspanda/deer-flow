@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from soc_agent.contracts import AnalysisRun, DecisionAuditRecord
-from soc_agent.db.models import SocAnalysisRunRow, SocDecisionAuditLogRow
+from soc_agent.contracts import AlertSummary, AnalysisRun, DecisionAuditRecord
+from soc_agent.db.models import SocAlertSummaryRow, SocAnalysisRunRow, SocDecisionAuditLogRow
 
 
 class SqlAlchemyAlertRepository:
@@ -64,6 +64,29 @@ class SqlAlchemyAlertRepository:
             result = session.execute(select(SocDecisionAuditLogRow).where(SocDecisionAuditLogRow.run_id == run_id).order_by(SocDecisionAuditLogRow.occurred_at.asc()))
             return [DecisionAuditRecord.model_validate(row.record_payload) for row in result.scalars()]
 
+    def save_alert_summary(self, summary: AlertSummary) -> None:
+        payload = summary.model_dump(mode="json")
+        with self._session_factory() as session:
+            row = session.get(SocAlertSummaryRow, summary.run_id)
+            if row is None:
+                session.add(SocAlertSummaryRow(run_id=summary.run_id, **_summary_row_values(summary, payload)))
+            else:
+                for key, value in _summary_row_values(summary, payload).items():
+                    setattr(row, key, value)
+            session.commit()
+
+    def get_alert_summary(self, run_id: str) -> AlertSummary | None:
+        with self._session_factory() as session:
+            row = session.get(SocAlertSummaryRow, run_id)
+            if row is None:
+                return None
+            return AlertSummary.model_validate(row.summary_payload)
+
+    def list_alert_summaries(self, *, limit: int = 50) -> list[AlertSummary]:
+        with self._session_factory() as session:
+            result = session.execute(select(SocAlertSummaryRow).order_by(SocAlertSummaryRow.updated_at.desc()).limit(limit))
+            return [AlertSummary.model_validate(row.summary_payload) for row in result.scalars()]
+
 
 def _row_values(run: AnalysisRun, payload: dict, *, updated_at: datetime) -> dict:
     return {
@@ -98,4 +121,30 @@ def _audit_row_values(record: DecisionAuditRecord, payload: dict) -> dict:
         "replay_of_run_id": record.replay_of_run_id,
         "correction_id": record.correction_id,
         "record_payload": payload,
+    }
+
+
+def _summary_row_values(summary: AlertSummary, payload: dict) -> dict:
+    return {
+        "alert_id": summary.alert_id,
+        "tenant_id": summary.tenant_id,
+        "source_type": summary.source_type.value,
+        "source_system": summary.source_system,
+        "detection_key": summary.detection_key,
+        "rule_code": summary.rule_code,
+        "rule_name": summary.rule_name,
+        "severity": summary.severity,
+        "category": summary.category,
+        "entity_keys": summary.entity_keys,
+        "status": summary.status.value,
+        "verdict": summary.verdict.value if summary.verdict is not None else None,
+        "confidence": summary.confidence,
+        "needs_review": summary.needs_review,
+        "summary": summary.summary,
+        "recommended_action": summary.recommended_action,
+        "input_hash": summary.input_hash,
+        "replay_of_run_id": summary.replay_of_run_id,
+        "created_at": summary.created_at,
+        "updated_at": summary.updated_at,
+        "summary_payload": payload,
     }

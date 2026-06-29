@@ -1115,6 +1115,10 @@ CREATE INDEX idx_fact_evidence_alert ON fact_evidence(alert_id);
 
 写入：⑦ 写入存储。读取：③ 关联查询 + ④ 漏斗关联（Phase 2 拉完整日志时）。
 
+当前 Phase 1 实现已先落地 SOC 前缀表 `soc_alert_summaries`，由 `AlertSummary` contract 和 `AlertSummaryRepository` 维护。它是告警列表、review queue、dedup、correlation、Web/TUI 查询的读模型，不替代完整 run；完整事实仍在 `soc_analysis_runs.run_payload`。`analyze` / `replay` / `correct` 都通过 core service 更新 summary，入口层不能自行组装 summary。
+
+下面的 `alert_summaries` DDL 是长期草案；实际实现以 `backend/soc_agent/db/migrations/versions/0003_alert_summaries.py` 为准。
+
 ```sql
 CREATE TABLE alert_summaries (
     alert_id TEXT PRIMARY KEY,
