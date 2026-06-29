@@ -5,6 +5,7 @@
 | 文档 | 状态 |
 |---|---|
 | `soc-agent-solution.md` | 当前权威产品/系统方案，决定“做什么、先后顺序、用户入口和阶段边界” |
+| `normalization-drift-strategy.md` | 供应商日志归一化、漂移检测、LLM 低频辅助策略 |
 | `progress.md` | 长期开发进度台账，记录当前 Phase、切片状态、完成记录和下一步 |
 
 ## 执行规则

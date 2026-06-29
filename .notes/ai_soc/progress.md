@@ -579,3 +579,32 @@
   - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
   - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+
+### 2026-06-29 — Normalization drift strategy and runtime reports
+
+- 新增策略文档：
+  - `.notes/ai_soc/normalization-drift-strategy.md`
+  - 明确 LLM 不默认参与每条告警 normalize/entity extraction。
+  - LLM 定位为新供应商接入、字段漂移分析、mapping 建议、低频复核样本 enrichment 的辅助能力。
+- 新增 runtime report contracts：
+  - `NormalizationReport`
+  - `ExtractionReport`
+- 扩展 `AnalysisRun`：
+  - `normalization_report`
+  - `extraction_report`
+- Runtime 行为：
+  - normalize 后生成 normalization report，记录 adapter、source、missing fields、normalized fields、warnings。
+  - entity_extract 后生成 extraction report，记录 mention count、entity counts、missing entity kinds、warnings。
+  - report 只做观测和漂移检测，不参与 verdict 决策。
+- 已同步工程契约：
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 已补充测试：
+  - 正常样本包含 normalization/extraction report。
+  - 缺字段样本能暴露 missing normalized field 和 missing entity kind。
+  - `x-forwarded-for` alias 能进入 normalized fields。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 补 `soc normalize inspect` CLI：对单个样本只跑 normalize + report + entity extract，方便接入新厂商和排查字段漂移。

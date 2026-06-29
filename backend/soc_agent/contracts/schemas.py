@@ -316,6 +316,30 @@ class ExtractedEntities(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class NormalizationReport(BaseModel):
+    """Cheap quality report for deterministic alert normalization."""
+
+    schema_version: str = "soc.normalization_report.v1"
+    adapter: str
+    source_type: AlertSourceType = AlertSourceType.UNKNOWN
+    source_system: str | None = None
+    missing_fields: list[str] = Field(default_factory=list)
+    normalized_fields: list[str] = Field(default_factory=list)
+    unmapped_fields: list[str] = Field(default_factory=list)
+    unmapped_field_count: int = Field(default=0, ge=0)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ExtractionReport(BaseModel):
+    """Cheap quality report for deterministic entity extraction."""
+
+    schema_version: str = "soc.extraction_report.v1"
+    mention_count: int = Field(default=0, ge=0)
+    entity_counts: dict[str, int] = Field(default_factory=dict)
+    missing_entity_kinds: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class AnalysisResult(BaseModel):
     verdict: Verdict
     confidence: float = Field(ge=0.0, le=1.0)
@@ -491,6 +515,8 @@ class AnalysisRun(BaseModel):
     ended_at: datetime | None = None
     steps: list[PipelineStepTrace] = Field(default_factory=list)
     entities: ExtractedEntities | None = None
+    normalization_report: NormalizationReport | None = None
+    extraction_report: ExtractionReport | None = None
     analysis: AnalysisResult | None = None
     decision: Decision | None = None
     corrections: list[CorrectionRecord] = Field(default_factory=list)

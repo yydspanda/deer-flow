@@ -8,6 +8,7 @@
 |---|---|
 | `project-overview.md` | DeerFlow 2.0 项目全貌、分层、核心数据流 |
 | `ai_soc/soc-agent-solution.md` | SOC Agent 当前权威方案；后续产品和工程讨论优先更新这里 |
+| `ai_soc/normalization-drift-strategy.md` | 供应商日志归一化、字段漂移检测、LLM 低频辅助策略 |
 | `ai_soc/progress.md` | SOC Agent 长期开发进度台账；每个可验证切片完成后更新 |
 | `reference-index/soc-agent-engineering-contracts.md` | SOC Agent 代码风格、框架设计、API、通信协议和测试门禁 |
 | `reference/cross-project-workflow.md` | 跨项目参考工作流：先定义问题，再用 Understand Anything / CodeGraph 查参考项目 |

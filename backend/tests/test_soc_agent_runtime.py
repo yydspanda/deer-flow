@@ -33,6 +33,13 @@ def test_approved_scanner_returns_false_positive_candidate() -> None:
     assert run.decision is not None
     assert run.analysis.verdict == Verdict.FALSE_POSITIVE
     assert run.decision.automation_allowed is False
+    assert run.normalization_report is not None
+    assert run.normalization_report.adapter == "generic"
+    assert "detection.rule_code" in run.normalization_report.normalized_fields
+    assert "entities.network.source_ip" in run.normalization_report.normalized_fields
+    assert run.extraction_report is not None
+    assert run.extraction_report.entity_counts["ip"] >= 2
+    assert run.extraction_report.entity_counts["process"] == 1
     assert [step.step_name for step in run.steps] == [
         "normalize",
         "entity_extract",
@@ -66,6 +73,10 @@ def test_missing_fields_do_not_break_entity_extraction() -> None:
     assert run.status == AnalysisRunStatus.NEEDS_REVIEW
     assert run.entities is not None
     assert "missing optional field: rule_name" in run.entities.warnings
+    assert run.normalization_report is not None
+    assert "detection.rule_code_or_name" in run.normalization_report.missing_fields
+    assert run.extraction_report is not None
+    assert "process" in run.extraction_report.missing_entity_kinds
 
 
 def test_alert_input_contract_rejects_flat_source_fields() -> None:
@@ -188,6 +199,8 @@ def test_http_x_forwarded_for_header_alias_normalizes_to_canonical_field() -> No
 
     run = _analyze(alert.model_dump(mode="json"))
     assert run.entities is not None
+    assert run.normalization_report is not None
+    assert "entities.http.x_forwarded_for" in run.normalization_report.normalized_fields
     by_key = {mention.key: mention for mention in run.entities.mentions}
     assert by_key["ip:203.0.113.88"].role == "x_forwarded_for"
     assert by_key["ip:203.0.113.88"].evidence_path == "entities.http.x_forwarded_for"
