@@ -243,6 +243,12 @@ def test_pingan_legacy_apt_alert_normalizes_platform_envelope() -> None:
     assert "30.185.76.75" in run.entities.ips
     assert "app.example.internal" in run.entities.domains
     assert run.entities.rule_codes == ["RPAADM_002635"]
+    by_key = {mention.key: mention for mention in run.entities.mentions}
+    assert by_key["ip:30.180.248.178"].role == "source_ip"
+    assert by_key["ip:30.185.76.75"].role == "destination_ip"
+    assert by_key["domain:app.example.internal"].kind == "domain"
+    assert by_key["rule_code:RPAADM_002635"].evidence_path == "detection.rule_code"
+    assert by_key["mitre:T1190"].role == "technique"
 
 
 def test_pingan_legacy_edr_alert_normalizes_platform_envelope() -> None:
@@ -278,6 +284,12 @@ def test_pingan_legacy_edr_alert_normalizes_platform_envelope() -> None:
     assert "services.exe" in run.entities.processes
     assert "analyst001" in run.entities.users
     assert "HOST-L12267.example.local" in run.entities.hosts
+    by_key = {mention.key: mention for mention in run.entities.mentions}
+    assert by_key["process:svchost.exe"].role == "process_name"
+    assert by_key["process:services.exe"].role == "parent_process_name"
+    assert by_key["user:analyst001"].role == "username"
+    assert by_key["host:HOST-L12267.example.local"].role == "host_name"
+    assert by_key["file_hash:7B88D0896FBF43469A9959D59824A514"].role == "md5"
 
 
 def test_cli_analyze_file_outputs_json(capsys) -> None:

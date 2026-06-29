@@ -419,6 +419,9 @@ def _entity_keys(run: AnalysisRun) -> list[str]:
     if run.entities is None:
         return []
 
+    if run.entities.mentions:
+        return _dedupe([mention.key for mention in run.entities.mentions])
+
     values = [
         *(f"ip:{value}" for value in run.entities.ips),
         *(f"domain:{value}" for value in run.entities.domains),
@@ -426,6 +429,8 @@ def _entity_keys(run: AnalysisRun) -> list[str]:
         *(f"process:{value}" for value in run.entities.processes),
         *(f"user:{value}" for value in run.entities.users),
         *(f"host:{value}" for value in run.entities.hosts),
+        *(f"rule_code:{value}" for value in run.entities.rule_codes),
+        *(f"rule_name:{value}" for value in run.entities.rule_names),
         *(f"rule:{value}" for value in run.entities.rules if value),
     ]
     return _dedupe(values)

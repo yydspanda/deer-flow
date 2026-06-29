@@ -126,6 +126,29 @@ class AlertSourceType(StrEnum):
     OTHER = "other"
 
 
+class EntityKind(StrEnum):
+    IP = "ip"
+    DOMAIN = "domain"
+    URL = "url"
+    PROCESS = "process"
+    USER = "user"
+    HOST = "host"
+    FILE_HASH = "file_hash"
+    RULE_CODE = "rule_code"
+    RULE_NAME = "rule_name"
+    RULE = "rule"
+    MITRE = "mitre"
+    ASSET = "asset"
+    BEHAVIOR = "behavior"
+
+
+class EntityExtractionSource(StrEnum):
+    DETERMINISTIC = "deterministic"
+    LLM = "llm"
+    NORMALIZER = "normalizer"
+    ANALYST = "analyst"
+
+
 class AlertSourceRef(BaseModel):
     """Where the alert came from.
 
@@ -265,7 +288,21 @@ class AlertInput(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class EntityMention(BaseModel):
+    """Normalized entity mention produced by deterministic or LLM extraction."""
+
+    kind: EntityKind
+    value: str = Field(min_length=1)
+    key: str = Field(min_length=1)
+    role: str | None = None
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    source: EntityExtractionSource = EntityExtractionSource.DETERMINISTIC
+    evidence_path: str | None = None
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
 class ExtractedEntities(BaseModel):
+    mentions: list[EntityMention] = Field(default_factory=list)
     ips: list[str] = Field(default_factory=list)
     domains: list[str] = Field(default_factory=list)
     urls: list[str] = Field(default_factory=list)

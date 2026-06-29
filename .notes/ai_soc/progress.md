@@ -500,3 +500,35 @@
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
 - 下一步：
   - 设计 LLM-ready entity extraction contract：保留确定性 extractor 做 baseline，让 LLM 只补充 `EntityMention`、角色、置信度和来源，再经 schema/domain validate 后写入 `AnalysisRun` 与 `AlertSummary.entity_keys`。
+
+### 2026-06-29 — LLM-ready entity extraction contract
+
+- 新增实体提取 contract：
+  - `EntityKind`
+  - `EntityExtractionSource`
+  - `EntityMention`
+- 扩展 `ExtractedEntities`：
+  - 保留旧的 `ips/domains/urls/processes/users/hosts/rule_codes/rule_names/rules` 兼容字段。
+  - 新增 `mentions` 作为后续确定性 extractor 和 LLM enrichment 的统一主线。
+- 重构确定性 extractor：
+  - 为 IP、domain、URL、process、user、host、asset、file hash、rule_code、rule_name、detection_key、MITRE tactic/technique 生成结构化 mention。
+  - 每个 mention 包含 `kind/value/key/role/source/evidence_path/confidence`。
+  - 旧列表字段由 mentions 派生，保持 analyzer 和现有测试兼容。
+- 调整 summary 派生：
+  - `AlertSummary.entity_keys` 优先使用 `AnalysisRun.entities.mentions[].key`。
+  - 旧 run 没有 mentions 时才 fallback 到旧列表字段。
+- 设计边界：
+  - 当前不接真实 LLM。
+  - 后续 LLM entity extraction 只能补充 `EntityMention`，不能直接写 summary、review queue、memory 或 verdict。
+  - LLM 输出必须经过 schema/domain validate 和去重后，才允许进入 `AnalysisRun.entities.mentions`。
+- 已同步工程契约：
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 已补充测试：
+  - PingAn APT：验证 source/destination IP、domain、rule_code、MITRE technique mentions。
+  - PingAn EDR：验证 process、parent process、user、host、file hash mentions。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 增加 `LLMEntityExtractor` protocol 和 fixed runtime enrichment step，占位实现先返回空补充；之后再接真实模型的结构化输出和 domain validator。
