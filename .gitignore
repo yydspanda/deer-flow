@@ -60,3 +60,6 @@ config.yaml.bak
 /frontend/playwright-report/
 .gstack/
 .worktrees
+
+# Local raw SOC alert demos may contain internal asset/user data.
+alert_demo/

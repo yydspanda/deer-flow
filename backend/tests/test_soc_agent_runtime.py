@@ -222,6 +222,19 @@ def test_pingan_legacy_apt_alert_normalizes_platform_envelope() -> None:
     assert alert.entities.network.destination_ip == "30.185.76.75"
     assert alert.entities.http.host == "app.example.internal"
     assert alert.entities.http.status_code == 200
+    legacy = alert.extensions["legacy_platform"]
+    assert legacy["workflow"]["alert_code"] == "PIE-2026-127865"
+    assert legacy["workflow"]["status"] == "待审阅"
+    assert legacy["taxonomy"]["profile_code"] == "PPAADM_000890"
+    assert legacy["ownership"]["dst_bu_code"] == "PA011"
+    assert legacy["ownership"]["asset_group"] == "Example Business Unit"
+    assert legacy["sensor"]["device_ip"] == "30.176.240.70"
+    assert legacy["sensor"]["skyeye_type"] == "webids-webattack_dolog"
+    assert legacy["disposition"]["host_state"] == "企图"
+    assert legacy["disposition"]["is_blocked"] is True
+    assert legacy["disposition"]["is_white"] is False
+    assert legacy["disposition"]["repeat_count"] == 1
+    assert legacy["correlation"]["alert_hash"] == "20260617_b4c266bf0241cb9f589d80036cc3c44a"
 
     run = _analyze(_sample("pingan_legacy_apt.json"))
     assert run.alert_id == "2026494"
@@ -251,6 +264,11 @@ def test_pingan_legacy_edr_alert_normalizes_platform_envelope() -> None:
     assert alert.entities.process.process_name == "svchost.exe"
     assert alert.entities.process.parent_process_name == "services.exe"
     assert alert.entities.file.md5 == "7B88D0896FBF43469A9959D59824A514"
+    legacy = alert.extensions["legacy_platform"]
+    assert legacy["taxonomy"]["topic"] == "leagsoft-edr"
+    assert legacy["soar"]["display_names"] == ["IP查询-SOAR"]
+    assert legacy["soar"]["asset"]["device_name"] == "HOST-L12267.example.local"
+    assert legacy["soar"]["asset"]["username"] == "analyst001"
 
     run = _analyze(_sample("pingan_legacy_edr.json"))
     assert run.alert_id == "1965810"

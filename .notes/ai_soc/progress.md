@@ -365,3 +365,27 @@
 - 下一步：
   - 基于真实 normalizer 输出补 `soc list`，先验证 `AlertSummary` 对 Web/TUI 列表字段是否足够。
   - 然后再补 `ReviewQueue`，避免在字段不稳定时提前固化复核队列结构。
+
+### 2026-06-29 — Legacy platform context hardening
+
+- 已将本地原始 demo 目录加入 `.gitignore`：
+  - `alert_demo/`
+  - 原因：该目录可能包含真实人员、组织、内网资产和平台处置记录，只作为本机验证材料。
+- 扩展 `extensions.legacy_platform` 结构：
+  - `workflow`：`alert_code`、`alert_name`、`execute_type`、`status`、`created_at`、处理动作和处理人。
+  - `taxonomy`：`primary/secondary/tertiaryType`、`profileCode/profileName`、`topic/topicName`。
+  - `ownership`：`dst_BUcode`、目标公司/部门、资产组、行业、SOAR 资产归属。
+  - `sensor`：探针/节点字段，例如 `device_ip`、`node_ip`、`idc_location`、`vlan/vxlan`、`skyeye_type`。
+  - `disposition`：`host_state`、`is_blocked`、`is_banned`、`is_white`、`repeat_count`、`confidence`、风险等级。
+  - `correlation`：`alarm_id`、`alert_hash`、`logcloud_msgid`、raw event 数、related alert 数、SOAR 查询名。
+  - `soar`：SOAR display names 和脱敏后的资产摘要。
+- 设计边界：
+  - 平安运营字段仍不进入 `AlertInput` 顶层，避免污染跨供应商 canonical schema。
+  - 后续 `soc list` / ReviewQueue / CaseContext 如果需要高频查询，再从 `extensions.legacy_platform` 提升少量字段到 `AlertSummary`。
+- 已补充测试：
+  - APT golden sample 验证 workflow/taxonomy/ownership/sensor/disposition/correlation。
+  - EDR golden sample 验证 SOAR asset summary。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`

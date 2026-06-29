@@ -62,24 +62,92 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
         },
         "entities": _entities(source_type, raw_event, origin, http_payload, soar_asset),
         "evidence": _evidence(alert, hit_log, raw_event),
-        "extensions": {
-            "legacy_platform": {
-                "alert_code": _first_str(alert, ("alertCode",)),
-                "alert_name": _first_str(alert, ("alertName",)),
-                "status": _first_str(alert, ("status",)),
-                "profile_code": _first_str(alert, ("profileCode",)),
-                "profile_name": _first_str(alert, ("profileName",)),
-                "raw_event_count": len(hit_log.get("zeusRawLogs") or []),
-                "related_alert_count": len(original.get("relatedAlertList") or []),
-                "soar_display_names": _soar_display_names(alert.get("soar")),
-            }
-        },
+        "extensions": {"legacy_platform": _legacy_platform_context(original, alert, hit_log, raw_event, soar_asset)},
         "raw": original,
     }
 
     normalized = AlertInput.model_validate(_drop_none(canonical))
     normalized.detection.detection_key = normalized.detection.detection_key or _detection_key(normalized)
     return normalized
+
+
+def _legacy_platform_context(
+    original: dict[str, Any],
+    alert: dict[str, Any],
+    hit_log: dict[str, Any],
+    raw_event: dict[str, Any],
+    soar_asset: dict[str, Any],
+) -> dict[str, Any]:
+    content_items = _content_items(alert.get("content"))
+    soar_display_names = _soar_display_names(alert.get("soar"))
+    return _drop_none(
+        {
+            "workflow": {
+                "alert_code": _first_str(alert, ("alertCode",)),
+                "alert_name": _first_str(alert, ("alertName",)),
+                "execute_type": _first_str(alert, ("executeType",)),
+                "status": _first_str(alert, ("status",)),
+                "created_at": _first_str(alert, ("createAt",)),
+                "process_actions": _dedupe([item["process_action"] for item in content_items if item.get("process_action")]),
+                "handlers": _dedupe([item["user_name"] for item in content_items if item.get("user_name")]),
+                "content_count": len(content_items),
+            },
+            "taxonomy": {
+                "primary_type": _first_str(alert, ("primaryType",)),
+                "secondary_type": _first_str(alert, ("secondaryType",)),
+                "tertiary_type": _first_str(alert, ("tertiaryType",)),
+                "tertiary_type_id": _first_str(alert, ("tertiaryTypeId",)),
+                "profile_code": _first_str(alert, ("profileCode",)),
+                "profile_name": _first_str(alert, ("profileName",)),
+                "topic": _first_str(hit_log, ("topic",)),
+                "topic_name": _first_str(hit_log, ("topicName",)),
+            },
+            "ownership": {
+                "dst_bu_code": _first_str(raw_event, ("dst_BUcode",)),
+                "dst_company": _first_str(raw_event, ("zeus_company_dst_name", "device__org__ou_name", "str_dept_name")),
+                "asset_group": _first_str(raw_event, ("asset_group",)),
+                "dip_group": _first_str(raw_event, ("dip_group",)),
+                "industry": _first_str(raw_event, ("industry_sign",)),
+                "soar_asset_department": _first_str(soar_asset, ("strdeptname",)),
+                "soar_asset_owner": _first_str(soar_asset, ("strusername",)),
+            },
+            "sensor": {
+                "source": _first_str(raw_event, ("source",)),
+                "appname": _first_str(raw_event, ("appname",)),
+                "device_ip": _first_str(raw_event, ("device_ip",)),
+                "node_ip": _first_str(raw_event, ("node_ip",)),
+                "idc_location": _first_str(raw_event, ("idc_location",)),
+                "vlan_id": _first_str(raw_event, ("vlan_id",)),
+                "vxlan_id": _first_str(raw_event, ("vxlan_id",)),
+                "skyeye_type": _first_str(raw_event, ("skyeye_type",)),
+                "skyeye_serial_num": _first_str(raw_event, ("skyeye_serial_num", "serial_num")),
+            },
+            "disposition": {
+                "host_state": _first_str(raw_event, ("host_state",)),
+                "rule_state": _first_str(raw_event, ("rule_state",)),
+                "is_blocked": _boolish(_first_str(raw_event, ("is_blocked",))),
+                "is_banned": _boolish(_first_str(raw_event, ("is_banned",))),
+                "is_white": _boolish(_first_str(raw_event, ("is_white",))),
+                "repeat_count": _intish(_first_str(raw_event, ("repeat_count", "i_count"))),
+                "confidence": _first_str(raw_event, ("confidence",)),
+                "hazard_level": _first_str(raw_event, ("hazard_level",)),
+                "hazard_rating": _first_str(raw_event, ("hazard_rating",)),
+                "threat_level": _first_str(raw_event, ("threat_level",)),
+            },
+            "correlation": {
+                "alarm_id": _first_str(raw_event, ("alarm_id",)),
+                "alert_hash": _first_str(raw_event, ("alert_hash",)),
+                "logcloud_msgid": _first_str(raw_event, ("logcloud_msgid",)),
+                "raw_event_count": len(hit_log.get("zeusRawLogs") or []),
+                "related_alert_count": len(original.get("relatedAlertList") or []),
+                "soar_display_names": soar_display_names,
+            },
+            "soar": {
+                "display_names": soar_display_names,
+                "asset": _soar_asset_summary(soar_asset),
+            },
+        }
+    )
 
 
 def _entities(
@@ -234,10 +302,48 @@ def _first_soar_asset(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _soar_asset_summary(value: dict[str, Any]) -> dict[str, Any]:
+    return _drop_none(
+        {
+            "device_id": _first_str(value, ("uiddevrecordid", "strdevidentiy")),
+            "device_name": _first_str(value, ("strdevname",)),
+            "device_ip": _first_str(value, ("strdevip",)),
+            "username": _first_str(value, ("strusername",)),
+            "user_id": _first_str(value, ("uiduserid",)),
+            "department": _first_str(value, ("strdeptname",)),
+            "os": _first_str(value, ("stros",)),
+            "device_type": _first_str(value, ("strdevtype",)),
+            "status": _first_str(value, ("status", "idevstatus")),
+        }
+    )
+
+
 def _soar_display_names(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return _dedupe([str(item["displayName"]) for item in value if isinstance(item, dict) and item.get("displayName")])
+
+
+def _content_items(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        items.append(
+            _drop_none(
+                {
+                    "process": item.get("process"),
+                    "status": item.get("status"),
+                    "process_action": item.get("processAction"),
+                    "user_name": item.get("userName"),
+                    "created_at": item.get("createAt"),
+                    "updated_at": item.get("updateAt"),
+                }
+            )
+        )
+    return items
 
 
 def _parse_request_line(req_header: str) -> dict[str, str]:
@@ -302,6 +408,26 @@ def _basename(value: str | None) -> str | None:
     if value is None:
         return None
     return value.replace("/", "\\").rsplit("\\", 1)[-1]
+
+
+def _boolish(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y"}:
+        return True
+    if normalized in {"0", "false", "no", "n"}:
+        return False
+    return None
+
+
+def _intish(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 def _dedupe(values: list[str]) -> list[str]:
