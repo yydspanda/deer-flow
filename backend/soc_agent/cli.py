@@ -39,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
         return _correct(args)
     if args.command == "normalize" and args.normalize_command == "inspect":
         return _normalize_inspect(args)
+    if args.command == "normalize" and args.normalize_command == "drift":
+        return _normalize_drift(args)
     if args.command == "review" and args.review_command == "list":
         return _review_list(args)
     if args.command == "review" and args.review_command == "context":
@@ -108,6 +110,11 @@ def _build_parser() -> argparse.ArgumentParser:
     normalize_inspect.add_argument("--json", dest="json_payload", help="Inline alert JSON object")
     normalize_inspect.add_argument("--mapping", help="Path to SOC normalization mapping YAML")
     normalize_inspect.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    normalize_drift = normalize_subparsers.add_parser("drift", help="Aggregate normalization drift over alert JSON samples")
+    normalize_drift.add_argument("path", help="Path to an alert JSON file or directory")
+    normalize_drift.add_argument("--mapping", help="Path to SOC normalization mapping YAML")
+    normalize_drift.add_argument("--glob", default="*.json", help="Glob used when PATH is a directory")
+    normalize_drift.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
     review = subparsers.add_parser("review", help="SOC review queue helpers")
     review_subparsers = review.add_subparsers(dest="review_command")
@@ -262,6 +269,21 @@ def _normalize_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _normalize_drift(args: argparse.Namespace) -> int:
+    try:
+        samples = _load_payload_samples(args.path, args.glob)
+        result = SocNormalizationService().drift(samples, mapping_path=args.mapping)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: report drift failure
+        print(f"error: normalization drift failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if result.failure_count == 0 else 1
+
+
 def _review_list(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
@@ -368,6 +390,29 @@ def _load_payload(path: str | None, json_payload: str | None) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("alert JSON must be an object")
     return data
+
+
+def _load_payload_samples(path: str, glob_pattern: str) -> list[tuple[str, dict[str, Any]]]:
+    sample_path = Path(path)
+    if not sample_path.exists():
+        raise ValueError(f"path does not exist: {sample_path}")
+
+    files = [sample_path] if sample_path.is_file() else sorted(file for file in sample_path.glob(glob_pattern) if file.is_file())
+    if not files:
+        raise ValueError(f"no alert JSON files matched: {sample_path} ({glob_pattern})")
+
+    samples: list[tuple[str, dict[str, Any]]] = []
+    for file in files:
+        try:
+            data = json.loads(file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid JSON in {file}: {exc}") from exc
+        except OSError as exc:
+            raise ValueError(f"cannot read alert file {file}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ValueError(f"alert JSON must be an object: {file}")
+        samples.append((str(file), data))
+    return samples
 
 
 if __name__ == "__main__":

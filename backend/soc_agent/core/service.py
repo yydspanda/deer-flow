@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +21,8 @@ from soc_agent.contracts import (
     Decision,
     DecisionAuditRecord,
     InvestigationContext,
+    NormalizationDriftReport,
+    NormalizationDriftSample,
     NormalizationInspectionResult,
     ReviewQueueCloseCommand,
     ReviewQueueItem,
@@ -197,6 +200,83 @@ class SocNormalizationService:
             raise SocServiceError("mapping_path and mapping_config cannot both be provided")
         loaded_mapping = load_mapping_config(mapping_path) if mapping_path is not None else mapping_config
         return inspect_alert_normalization(payload, mapping_config=loaded_mapping)
+
+    def drift(
+        self,
+        samples: list[tuple[str, Mapping[str, Any]]],
+        *,
+        mapping_path: str | Path | None = None,
+        mapping_config: Mapping[str, Any] | None = None,
+    ) -> NormalizationDriftReport:
+        if mapping_path is not None and mapping_config is not None:
+            raise SocServiceError("mapping_path and mapping_config cannot both be provided")
+
+        loaded_mapping = load_mapping_config(mapping_path) if mapping_path is not None else mapping_config
+        sample_reports: list[NormalizationDriftSample] = []
+        adapter_counts: Counter[str] = Counter()
+        source_type_counts: Counter[str] = Counter()
+        missing_field_counts: Counter[str] = Counter()
+        unmapped_field_counts: Counter[str] = Counter()
+        entity_kind_counts: Counter[str] = Counter()
+        missing_entity_kind_counts: Counter[str] = Counter()
+        warning_counts: Counter[str] = Counter()
+
+        for sample_path, payload in samples:
+            try:
+                inspection = self.inspect(payload, mapping_config=loaded_mapping)
+            except Exception as exc:  # noqa: BLE001 - preserve per-sample failures in batch report
+                sample_report = NormalizationDriftSample(
+                    path=sample_path,
+                    status="failed",
+                    warnings=[str(exc)],
+                    error=str(exc),
+                )
+                warning_counts.update(sample_report.warnings)
+                sample_reports.append(sample_report)
+                continue
+
+            normalization = inspection.normalization_report
+            extraction = inspection.extraction_report
+            warnings = [*normalization.warnings, *extraction.warnings]
+            sample_report = NormalizationDriftSample(
+                path=sample_path,
+                status="success",
+                alert_id=inspection.alert.alert_id,
+                adapter=normalization.adapter,
+                source_type=normalization.source_type,
+                source_system=normalization.source_system,
+                missing_fields=normalization.missing_fields,
+                unmapped_fields=normalization.unmapped_fields,
+                entity_counts=extraction.entity_counts,
+                missing_entity_kinds=extraction.missing_entity_kinds,
+                warnings=warnings,
+            )
+            sample_reports.append(sample_report)
+            adapter_counts.update([normalization.adapter])
+            source_type_counts.update([normalization.source_type.value])
+            missing_field_counts.update(normalization.missing_fields)
+            unmapped_field_counts.update(normalization.unmapped_fields)
+            entity_kind_counts.update(extraction.entity_counts)
+            missing_entity_kind_counts.update(extraction.missing_entity_kinds)
+            warning_counts.update(warnings)
+
+        suspicious_samples = [sample for sample in sample_reports if sample.status == "failed" or sample.missing_fields or sample.unmapped_fields]
+
+        success_count = sum(1 for sample in sample_reports if sample.status == "success")
+        return NormalizationDriftReport(
+            sample_count=len(sample_reports),
+            success_count=success_count,
+            failure_count=len(sample_reports) - success_count,
+            adapter_counts=dict(adapter_counts),
+            source_type_counts=dict(source_type_counts),
+            missing_field_counts=dict(missing_field_counts),
+            unmapped_field_counts=dict(unmapped_field_counts),
+            entity_kind_counts=dict(entity_kind_counts),
+            missing_entity_kind_counts=dict(missing_entity_kind_counts),
+            warning_counts=dict(warning_counts),
+            suspicious_samples=suspicious_samples,
+            samples=sample_reports,
+        )
 
 
 class SocReviewService:

@@ -433,6 +433,49 @@ def test_cli_normalize_inspect_supports_mapping_file(capsys) -> None:
     assert "decision" not in payload
 
 
+def test_normalize_drift_aggregates_runtime_reports() -> None:
+    report = SocNormalizationService().drift(
+        [
+            ("approved_scanner.json", _sample("approved_scanner.json")),
+            ("missing_fields.json", _sample("missing_fields.json")),
+        ]
+    )
+
+    assert report.sample_count == 2
+    assert report.success_count == 2
+    assert report.failure_count == 0
+    assert report.adapter_counts == {"generic": 2}
+    assert report.source_type_counts["edr"] == 2
+    assert report.missing_field_counts["detection.rule_code_or_name"] == 1
+    assert report.entity_kind_counts["ip"] >= 2
+    assert report.warning_counts["missing optional field: rule_name"] == 1
+    assert [sample.path for sample in report.suspicious_samples] == ["missing_fields.json"]
+
+
+def test_cli_normalize_drift_supports_mapping_file(capsys) -> None:
+    exit_code = main(
+        [
+            "normalize",
+            "drift",
+            str(SAMPLES / "mapped_waf.json"),
+            "--mapping",
+            str(MAPPINGS / "sample_waf.yaml"),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    payload = json.loads(captured.out)
+    assert payload["schema_version"] == "soc.normalization_drift_report.v1"
+    assert payload["sample_count"] == 1
+    assert payload["success_count"] == 1
+    assert payload["adapter_counts"] == {"mapping:sample-waf": 1}
+    assert payload["source_type_counts"] == {"waf": 1}
+    assert payload["entity_kind_counts"]["ip"] == 3
+    assert payload["suspicious_samples"] == []
+    assert payload["samples"][0]["alert_id"] == "WAF-2026-0001"
+
+
 def test_cli_persist_show_and_replay(tmp_path: Path, capsys) -> None:
     database_url = f"sqlite+pysqlite:///{tmp_path / 'soc.db'}"
 

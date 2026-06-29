@@ -88,6 +88,7 @@ Phase 1 implements:
 - deterministic report generation in runtime
 - `soc normalize inspect sample.json --pretty`
 - minimal YAML mapping-file support through `soc normalize inspect sample.json --mapping vendor.yaml`
+- `soc normalize drift PATH --mapping vendor.yaml --pretty` for local sample aggregation
 - tests for missing fields, XFF alias normalization, UM/user identity handling, and entity counts
 
 Non-goals for this slice:
@@ -138,7 +139,7 @@ Constraints:
 
 Next increments:
 
-1. drift aggregation over recent runs
+1. drift aggregation over recent persisted runs
 2. LLM-assisted `soc normalize suggest sample.json`
 3. human-reviewed mapping patch workflow
 4. richer path syntax if real vendor samples require it

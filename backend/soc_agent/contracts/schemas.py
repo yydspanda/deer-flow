@@ -350,6 +350,41 @@ class NormalizationInspectionResult(BaseModel):
     extraction_report: ExtractionReport
 
 
+class NormalizationDriftSample(BaseModel):
+    """One sample's normalize/extract quality summary for drift triage."""
+
+    path: str
+    status: Literal["success", "failed"]
+    alert_id: str | None = None
+    adapter: str | None = None
+    source_type: AlertSourceType = AlertSourceType.UNKNOWN
+    source_system: str | None = None
+    missing_fields: list[str] = Field(default_factory=list)
+    unmapped_fields: list[str] = Field(default_factory=list)
+    entity_counts: dict[str, int] = Field(default_factory=dict)
+    missing_entity_kinds: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class NormalizationDriftReport(BaseModel):
+    """Batch report for spotting normalization and extraction drift."""
+
+    schema_version: str = "soc.normalization_drift_report.v1"
+    sample_count: int = Field(default=0, ge=0)
+    success_count: int = Field(default=0, ge=0)
+    failure_count: int = Field(default=0, ge=0)
+    adapter_counts: dict[str, int] = Field(default_factory=dict)
+    source_type_counts: dict[str, int] = Field(default_factory=dict)
+    missing_field_counts: dict[str, int] = Field(default_factory=dict)
+    unmapped_field_counts: dict[str, int] = Field(default_factory=dict)
+    entity_kind_counts: dict[str, int] = Field(default_factory=dict)
+    missing_entity_kind_counts: dict[str, int] = Field(default_factory=dict)
+    warning_counts: dict[str, int] = Field(default_factory=dict)
+    suspicious_samples: list[NormalizationDriftSample] = Field(default_factory=list)
+    samples: list[NormalizationDriftSample] = Field(default_factory=list)
+
+
 class AnalysisResult(BaseModel):
     verdict: Verdict
     confidence: float = Field(ge=0.0, le=1.0)

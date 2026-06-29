@@ -670,3 +670,40 @@
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
 - 下一步：
   - 做 drift aggregation 的最小数据结构和查询入口，先基于 `NormalizationReport`/`ExtractionReport` 聚合，不接 LLM。
+
+### 2026-06-29 — Normalize drift aggregation MVP
+
+- 新增 drift report contracts：
+  - `NormalizationDriftSample`
+  - `NormalizationDriftReport`
+- 扩展 normalization service：
+  - `SocNormalizationService.drift(samples, mapping_path=...)`
+  - 聚合逻辑复用 `SocNormalizationService.inspect()`，不重复实现 normalize/extract。
+- 新增 CLI：
+  - `soc normalize drift PATH`
+  - `soc normalize drift PATH --mapping vendor.yaml --pretty`
+  - `PATH` 可以是单个 JSON 文件或目录；目录默认匹配 `*.json`。
+- 输出内容：
+  - sample/success/failure counts
+  - adapter/source type 分布
+  - missing normalized fields / unmapped fields 分布
+  - entity kind / missing entity kind 分布
+  - warning 分布
+  - suspicious samples 和全量 sample summaries
+- 设计边界：
+  - 不接 DB、不接 LLM、不写 review queue/memory/verdict。
+  - CLI 只负责读取样本和输出 JSON；聚合规则在 core service。
+  - suspicious 只由 normalize 失败、missing canonical field、unmapped mapping field 触发；抽取 warning 只作为趋势信号，避免 WAF/账号类告警因没有 process 被误报。
+- 已同步文档：
+  - `.notes/ai_soc/normalization-drift-strategy.md`
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 已补充测试：
+  - service 聚合 generic 样本 report。
+  - CLI 聚合 mapping WAF 样本 report。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli normalize drift samples/alerts/mapped_waf.json --mapping samples/mappings/sample_waf.yaml --pretty`
+- 下一步：
+  - 把 drift aggregation 接到 persisted runs/recent runs 查询；仍先不接 LLM。
