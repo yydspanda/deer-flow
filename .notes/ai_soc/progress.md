@@ -471,3 +471,32 @@
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
 - 下一步：
   - 给 `InvestigationContext` 增加第一版 `similar_alerts`：基于 `detection_key`、`rule_code`、`entity_keys` 查询历史 `AlertSummary`，先服务人工研判，再为 Phase 2 去重/关联打基础。
+
+### 2026-06-29 — Similar alert retrieval contract
+
+- 新增相似告警 contract：
+  - `SimilarAlertQuery`
+  - `SimilarAlertMatch`
+- 扩展 `InvestigationContext`：
+  - 新增 `similar_alerts: list[SimilarAlertMatch]`
+- 扩展 repository protocol：
+  - `AlertSummaryRepository.find_similar_alert_summaries(query)`
+- 第一版仓储实现：
+  - SQL 读取最近候选窗口，排除当前 `run_id`。
+  - Python 规则打分：`detection_key`、`rule_code`、`source_type`、`category`、`entity_keys` 交集。
+  - 输出结构化 `matched_reasons`，便于分析师理解和后续 LLM rerank。
+- 设计边界：
+  - 当前不让 LLM 直接全库检索；LLM 后续只对 repository 返回的候选集合做排序/解释。
+  - PostgreSQL 正式优化时，在同一 repository 协议下替换为 JSONB/GIN 实体交集查询，上层 service/CLI/API/TUI 不变。
+- 已同步工程契约：
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 已补充测试：
+  - service：`InvestigationContext` 包含相似告警。
+  - repository：SQLAlchemy 直接返回 scored matches。
+  - CLI：`soc review context` 输出稳定包含 `similar_alerts` 字段。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 设计 LLM-ready entity extraction contract：保留确定性 extractor 做 baseline，让 LLM 只补充 `EntityMention`、角色、置信度和来源，再经 schema/domain validate 后写入 `AnalysisRun` 与 `AlertSummary.entity_keys`。

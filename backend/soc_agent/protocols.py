@@ -13,6 +13,8 @@ from soc_agent.contracts import (
     DecisionAuditRecord,
     ReviewQueueItem,
     ReviewQueueStatus,
+    SimilarAlertMatch,
+    SimilarAlertQuery,
     SocEvent,
 )
 
@@ -59,6 +61,8 @@ class AlertSummaryRepository(Protocol):
     def get_alert_summary(self, run_id: str) -> AlertSummary | None: ...
 
     def list_alert_summaries(self, *, limit: int = 50) -> list[AlertSummary]: ...
+
+    def find_similar_alert_summaries(self, query: SimilarAlertQuery) -> list[SimilarAlertMatch]: ...
 
 
 class ReviewQueueRepository(Protocol):

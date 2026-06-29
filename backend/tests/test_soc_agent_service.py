@@ -17,6 +17,8 @@ from soc_agent.contracts import (
     ReviewQueueItem,
     ReviewQueueStatus,
     ServiceRequestContext,
+    SimilarAlertMatch,
+    SimilarAlertQuery,
     SocEvent,
     SocEventType,
     Verdict,
@@ -76,6 +78,27 @@ class InMemorySummaryRepository:
 
     def list_alert_summaries(self, *, limit: int = 50) -> list[AlertSummary]:
         return list(self.summaries.values())[:limit]
+
+    def find_similar_alert_summaries(self, query: SimilarAlertQuery) -> list[SimilarAlertMatch]:
+        matches: list[SimilarAlertMatch] = []
+        for summary in self.summaries.values():
+            if summary.run_id == query.run_id:
+                continue
+            score = 0.0
+            reasons: list[str] = []
+            if query.detection_key and summary.detection_key == query.detection_key:
+                score += 50
+                reasons.append(f"detection_key:{query.detection_key}")
+            if query.rule_code and summary.rule_code == query.rule_code:
+                score += 40
+                reasons.append(f"rule_code:{query.rule_code}")
+            shared_entity_keys = sorted(set(query.entity_keys).intersection(summary.entity_keys))
+            if shared_entity_keys:
+                score += min(len(shared_entity_keys) * 15, 60)
+                reasons.extend(f"entity_key:{value}" for value in shared_entity_keys[:10])
+            if score:
+                matches.append(SimilarAlertMatch(summary=summary, score=score, matched_reasons=reasons))
+        return sorted(matches, key=lambda item: item.score, reverse=True)[: query.limit]
 
 
 class InMemoryReviewQueueRepository:
@@ -379,6 +402,37 @@ def test_review_service_gets_investigation_context() -> None:
     assert context.summary.alert_id == "2026494"
     assert context.audit_records[0].action == AuditAction.ANALYSIS
     assert context.audit_records[0].run_id == run.run_id
+
+
+def test_review_service_context_includes_similar_alerts() -> None:
+    repository = InMemoryAlertRepository()
+    summary_repository = InMemorySummaryRepository()
+    audit_repository = InMemoryAuditRepository()
+    review_repository = InMemoryReviewQueueRepository()
+    service = SocAnalysisService(
+        repository=repository,
+        summary_repository=summary_repository,
+        audit_repository=audit_repository,
+        review_queue_repository=review_repository,
+    )
+    similar_run = service.analyze(_sample("pingan_legacy_apt.json"))
+    current_run = service.analyze(_sample("pingan_legacy_apt.json"))
+    item = review_repository.get_open_review_item_by_run(current_run.run_id)
+    assert item is not None
+
+    context = SocReviewService(
+        repository=repository,
+        summary_repository=summary_repository,
+        audit_repository=audit_repository,
+        review_queue_repository=review_repository,
+    ).get_investigation_context(item.queue_id)
+
+    assert context.similar_alerts
+    match = context.similar_alerts[0]
+    assert match.summary.run_id == similar_run.run_id
+    assert match.score >= 90
+    assert "rule_code:RPAADM_002635" in match.matched_reasons
+    assert "entity_key:ip:30.180.248.178" in match.matched_reasons
 
 
 def test_review_service_context_requires_existing_queue_item() -> None:

@@ -373,6 +373,27 @@ class AlertSummary(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class SimilarAlertQuery(BaseModel):
+    """Candidate retrieval query derived from one alert summary."""
+
+    run_id: str
+    detection_key: str | None = None
+    rule_code: str | None = None
+    source_type: AlertSourceType | None = None
+    category: str | None = None
+    entity_keys: list[str] = Field(default_factory=list)
+    limit: int = Field(default=10, ge=1, le=100)
+    candidate_limit: int = Field(default=200, ge=1, le=1000)
+
+
+class SimilarAlertMatch(BaseModel):
+    """Scored historical alert summary match."""
+
+    summary: AlertSummary
+    score: float = Field(ge=0.0)
+    matched_reasons: list[str] = Field(default_factory=list)
+
+
 class ReviewQueueItem(BaseModel):
     """Human review queue item derived from an alert summary."""
 
@@ -445,3 +466,4 @@ class InvestigationContext(BaseModel):
     run: AnalysisRun
     summary: AlertSummary | None = None
     audit_records: list[DecisionAuditRecord] = Field(default_factory=list)
+    similar_alerts: list[SimilarAlertMatch] = Field(default_factory=list)

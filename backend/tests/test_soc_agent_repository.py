@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from soc_agent.contracts import AuditAction, CorrectionCommand, ReviewQueueStatus, Verdict
+from soc_agent.contracts import AuditAction, CorrectionCommand, ReviewQueueStatus, SimilarAlertQuery, Verdict
 from soc_agent.core import SocAnalysisService
 from soc_agent.core.service import SocReviewService
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
@@ -120,6 +120,40 @@ def test_sqlalchemy_alert_repository_persists_corrections() -> None:
     assert summary.verdict == Verdict.TRUE_POSITIVE
     assert summary.confidence == 1.0
     assert summary.needs_review is False
+
+
+def test_sqlalchemy_alert_repository_finds_similar_alert_summaries() -> None:
+    repository = _repository()
+    service = SocAnalysisService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+    )
+    similar = service.analyze(_sample("pingan_legacy_apt.json"))
+    current = service.analyze(_sample("pingan_legacy_apt.json"))
+    current_summary = repository.get_alert_summary(current.run_id)
+    assert current_summary is not None
+
+    matches = repository.find_similar_alert_summaries(
+        SimilarAlertQuery(
+            run_id=current_summary.run_id,
+            detection_key=current_summary.detection_key,
+            rule_code=current_summary.rule_code,
+            source_type=current_summary.source_type,
+            category=current_summary.category,
+            entity_keys=current_summary.entity_keys,
+            limit=5,
+        )
+    )
+
+    assert len(matches) == 1
+    match = matches[0]
+    assert match.summary.run_id == similar.run_id
+    assert match.score >= 90
+    assert "detection_key:sec_guard_apt:rule_code:rpaadm_002635" in match.matched_reasons
+    assert "rule_code:RPAADM_002635" in match.matched_reasons
+    assert "entity_key:ip:30.180.248.178" in match.matched_reasons
 
 
 def test_sqlalchemy_alert_repository_persists_review_queue_items() -> None:

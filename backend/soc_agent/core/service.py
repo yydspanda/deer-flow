@@ -24,6 +24,7 @@ from soc_agent.contracts import (
     ReviewQueuePriority,
     ReviewQueueStatus,
     ServiceRequestContext,
+    SimilarAlertQuery,
     SocEvent,
     SocEventType,
     Verdict,
@@ -309,11 +310,13 @@ class SocReviewService:
 
         summary = self._summary_repository.get_alert_summary(item.run_id) if self._summary_repository is not None else None
         audit_records = self._audit_repository.list_audit_records(item.run_id) if self._audit_repository is not None else []
+        similar_alerts = self._summary_repository.find_similar_alert_summaries(_similar_alert_query_from_summary(summary)) if self._summary_repository is not None and summary is not None else []
         return InvestigationContext(
             queue_item=item,
             run=run,
             summary=summary,
             audit_records=audit_records,
+            similar_alerts=similar_alerts,
         )
 
 
@@ -389,6 +392,17 @@ def _alert_summary_from_run(run: AnalysisRun) -> AlertSummary:
         replay_of_run_id=run.replay_of_run_id,
         created_at=run.started_at,
         updated_at=run.ended_at or run.started_at,
+    )
+
+
+def _similar_alert_query_from_summary(summary: AlertSummary) -> SimilarAlertQuery:
+    return SimilarAlertQuery(
+        run_id=summary.run_id,
+        detection_key=summary.detection_key,
+        rule_code=summary.rule_code,
+        source_type=summary.source_type,
+        category=summary.category,
+        entity_keys=summary.entity_keys,
     )
 
 

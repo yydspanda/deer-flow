@@ -413,6 +413,7 @@ def test_cli_review_queue_lists_and_closes_items(tmp_path: Path, capsys) -> None
     assert context["summary"]["alert_id"] == "2026494"
     assert context["audit_records"][0]["action"] == "analysis"
     assert context["audit_records"][0]["run_id"] == item["run_id"]
+    assert context["similar_alerts"] == []
 
     assert (
         main(
