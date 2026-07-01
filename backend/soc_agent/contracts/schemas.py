@@ -400,6 +400,23 @@ class ExtractedEntities(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class LLMAnalysisRequest(BaseModel):
+    """Bounded input contract for stub or future LLM analysis nodes."""
+
+    schema_version: str = "soc.llm_analysis_request.v1"
+    alert_id: str
+    source: AlertSourceRef = Field(default_factory=AlertSourceRef)
+    detection: DetectionRuleRef = Field(default_factory=DetectionRuleRef)
+    classification: AlertClassification = Field(default_factory=AlertClassification)
+    canonical_entities: AlertEntitySet = Field(default_factory=AlertEntitySet)
+    extracted_entities: ExtractedEntities = Field(default_factory=ExtractedEntities)
+    fact_reconstruction: FactReconstructionResult = Field(default_factory=FactReconstructionResult)
+    primary_evidence_path: str | None = None
+    conflict_count: int = Field(default=0, ge=0)
+    conflict_types: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class NormalizationReport(BaseModel):
     """Cheap quality report for deterministic alert normalization."""
 
@@ -648,6 +665,7 @@ class AnalysisRun(BaseModel):
     normalization_report: NormalizationReport | None = None
     extraction_report: ExtractionReport | None = None
     fact_reconstruction: FactReconstructionResult | None = None
+    llm_analysis_request: LLMAnalysisRequest | None = None
     analysis: AnalysisResult | None = None
     decision: Decision | None = None
     corrections: list[CorrectionRecord] = Field(default_factory=list)

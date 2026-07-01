@@ -22,6 +22,7 @@ from soc_agent.contracts import (
     ExtractedEntities,
     ExtractionReport,
     FactReconstructionResult,
+    LLMAnalysisRequest,
     NormalizationInspectionResult,
     NormalizationReport,
     PipelineStepStatus,
@@ -29,6 +30,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.core.validator import validate_analysis_result, validate_decision
 from soc_agent.normalizers import normalize_alert_payload, normalize_with_mapping
+from soc_agent.pipeline.analysis_context import build_llm_analysis_request
 from soc_agent.pipeline.analyzer import analyze_stub
 from soc_agent.pipeline.extractor import extract_entities
 from soc_agent.pipeline.fact_reconstructor import reconstruct_facts
@@ -76,11 +78,18 @@ def analyze_alert(payload: Mapping[str, Any]) -> AnalysisRun:
         run.extraction_report = _extraction_report(entities)
         fact_reconstruction = _run_step(run, "fact_reconstruct", alert, reconstruct_facts)
         run.fact_reconstruction = fact_reconstruction
+        analysis_request = _run_step(
+            run,
+            "build_analysis_input",
+            {"alert": alert, "entities": entities, "fact_reconstruction": fact_reconstruction},
+            lambda _: build_llm_analysis_request(alert, entities, fact_reconstruction),
+        )
+        run.llm_analysis_request = analysis_request
         analysis = _run_step(
             run,
             "analyze_stub",
-            {"alert": alert, "entities": entities},
-            lambda _: analyze_stub(alert, entities),
+            analysis_request,
+            analyze_stub,
         )
         run.analysis = _run_step(run, "schema_validate", analysis, validate_analysis_result)
         run.decision = _run_step(run, "decide", run.analysis, _decide)
@@ -255,6 +264,8 @@ def _run_step[T](
     if isinstance(output, ExtractedEntities):
         trace.warnings.extend(output.warnings)
     if isinstance(output, FactReconstructionResult):
+        trace.warnings.extend(output.warnings)
+    if isinstance(output, LLMAnalysisRequest):
         trace.warnings.extend(output.warnings)
 
     return output

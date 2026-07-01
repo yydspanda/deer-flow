@@ -55,6 +55,7 @@ def test_approved_scanner_returns_false_positive_candidate() -> None:
         "normalize",
         "entity_extract",
         "fact_reconstruct",
+        "build_analysis_input",
         "analyze_stub",
         "schema_validate",
         "decide",
@@ -325,6 +326,11 @@ def test_pingan_legacy_apt_alert_normalizes_platform_envelope() -> None:
     assert run.fact_reconstruction.evidence_policy.name == EvidenceInputPolicyName.STRUCTURED_FALLBACK
     assert run.fact_reconstruction.selected_input_available is True
     assert "evidence input policy selected low-trust structured fallback" in run.fact_reconstruction.warnings
+    assert run.llm_analysis_request is not None
+    assert run.llm_analysis_request.primary_evidence_path == "alert.hitLog[0].zeusRawLogs[0]"
+    assert "evidence input policy selected low-trust structured fallback" in run.llm_analysis_request.warnings
+    assert run.analysis is not None
+    assert any(item.description == "事实重建使用低可信 fallback" for item in run.analysis.evidence)
     assert "30.180.248.178" in run.entities.ips
     assert "30.185.76.75" in run.entities.ips
     assert "app.example.internal" in run.entities.domains
@@ -402,6 +408,9 @@ def test_pingan_legacy_alert_prefers_raw_message_for_reasoning_input() -> None:
     assert run.fact_reconstruction.evidence_policy.name == EvidenceInputPolicyName.RAW_MESSAGE_FIRST
     assert run.fact_reconstruction.selected_input_path == "alert.hitLog[0].zeusRawLogs[0].message"
     assert run.fact_reconstruction.selected_input_available is True
+    assert run.llm_analysis_request is not None
+    assert run.llm_analysis_request.primary_evidence_path == "alert.hitLog[0].zeusRawLogs[0].message"
+    assert run.llm_analysis_request.conflict_count >= 0
     field_trust_by_path = {trust.field_path: trust for trust in run.fact_reconstruction.field_trusts}
     assert field_trust_by_path["alert.hitLog[0].zeusRawLogs[0].message"].trust_level == EvidenceTrustLevel.HIGH
     assert field_trust_by_path["entities.network.source_ip"].participates_in_fact_reconstruction is False
@@ -422,6 +431,12 @@ def test_pingan_legacy_fact_reconstruction_reports_direction_conflicts() -> None
     conflict_types = {report.conflict_type for report in run.fact_reconstruction.conflict_reports}
     assert "attacker_source_mismatch" in conflict_types
     assert "victim_destination_mismatch" in conflict_types
+    assert run.llm_analysis_request is not None
+    assert "attacker_source_mismatch" in run.llm_analysis_request.conflict_types
+    assert "victim_destination_mismatch" in run.llm_analysis_request.conflict_types
+    assert run.analysis is not None
+    assert any(item.description == "事实重建发现字段冲突" for item in run.analysis.evidence)
+    assert "事实重建发现" in run.analysis.reason
     attacker_conflict = next(report for report in run.fact_reconstruction.conflict_reports if report.conflict_type == "attacker_source_mismatch")
     assert attacker_conflict.candidate_values["attacker"] == ["203.0.113.10"]
     assert "30.180.248.178" in attacker_conflict.candidate_values["source"]

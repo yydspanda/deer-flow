@@ -11,6 +11,7 @@ from soc_agent.contracts import (
     AnalysisResult,
     AnalysisRun,
     DecisionAuditRecord,
+    LLMAnalysisRequest,
     ReviewQueueItem,
     ReviewQueueStatus,
     SimilarAlertMatch,
@@ -34,7 +35,7 @@ class AnalysisRuntime(Protocol):
 class LLMAnalyzer(Protocol):
     """Bounded LLM analysis node used behind a fixed runtime step."""
 
-    def analyze(self, alert: AlertInput) -> AnalysisResult: ...
+    def analyze(self, request: LLMAnalysisRequest) -> AnalysisResult: ...
 
 
 class AlertRepository(Protocol):

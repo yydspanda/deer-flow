@@ -41,8 +41,36 @@
 | 13 | CLI summary list | Done | `soc list` 输出持久化 `AlertSummary`，用于验证 Web/TUI 列表字段 |
 | 14 | ZEUS evidence input policy | Done | 平安 ZEUS/天眼 raw message 优先，缺失时 fallback 到 `zeusRawLogs` 并显式降级可信度 |
 | 15 | fact reconstruction layer | Done | `entity_extract` 后生成 `FactReconstructionResult`，记录字段可信度、角色候选和冲突报告 |
+| 16 | LLM-ready analysis request | Done | `fact_reconstruct` 后生成 `LLMAnalysisRequest`，analyzer 只消费有界分析上下文 |
 
 ## 进度记录
+
+### 2026-07-01 — LLM-ready 分析输入切片
+
+- 新增 `LLMAnalysisRequest` contract：
+  - 包含 canonical source / detection / classification / entities。
+  - 包含 `ExtractedEntities` 和 `FactReconstructionResult`。
+  - 包含 `primary_evidence_path`、`conflict_count`、`conflict_types`、`warnings`。
+- 新增 deterministic builder：
+  - `backend/soc_agent/pipeline/analysis_context.py`
+  - runtime 顺序变为 `normalize -> entity_extract -> fact_reconstruct -> build_analysis_input -> analyze_stub -> schema_validate -> decide`。
+  - `AnalysisRun.llm_analysis_request` 随 run payload 一起持久化和 replay。
+- 调整 analyzer 边界：
+  - `analyze_stub()` 改为消费 `LLMAnalysisRequest`。
+  - `LLMAnalyzer` protocol 改为 `analyze(request: LLMAnalysisRequest)`。
+  - analyzer evidence/reason 会显式引用 fact layer 的低可信 fallback 和字段冲突。
+- 当前原则：
+  - 真实 LLM 只能消费 `LLMAnalysisRequest`。
+  - prompt builder 后续只能从该 request 生成 prompt，不直接塞完整 raw payload。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py -q`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+  - `codegraph status .` 显示 index up to date；当前统计为 1,158 files / 21,981 nodes / 49,444 edges。
+- 下一步：
+  - 补一个真实 LLM analyzer stub interface / prompt builder，但默认仍不调用外部模型。
+  - 为 PingAn raw message 样本增加 prompt golden case，验证冲突字段如何呈现给模型。
 
 ### 2026-07-01 — 事实重建最小切片
 

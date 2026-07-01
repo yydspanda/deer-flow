@@ -323,6 +323,21 @@ normalizers/hids.py
 - Phase 1 的事实重建只做 deterministic 规则；LLM 后续只能读取 fact layer 进行解释、补充候选或提出复核问题，不能绕过该层直接相信上游加工字段。
 - raw message 存在时，canonical processed fields 默认低可信且不作为主推理输入；raw message 缺失时 structured fallback 必须保留低可信 warning。
 
+### LLM analysis request 约束
+
+`LLMAnalysisRequest` 是 stub analyzer 和后续真实 LLM analyzer 的唯一输入 contract。它的目的不是扩大上下文，而是把脏输入收敛成可验证、可审计、可替换的分析请求。
+
+- runtime 固定在 `fact_reconstruct` 后执行 `build_analysis_input`，产出 `AnalysisRun.llm_analysis_request`。
+- `analyze_stub` 和后续真实 `llm_analyze` 只能消费 `LLMAnalysisRequest`，不能直接消费 raw payload 或自行重新解析 vendor 字段。
+- `LLMAnalysisRequest` 必须包含：
+  - canonical source / detection / classification / entities。
+  - `ExtractedEntities`。
+  - `FactReconstructionResult`。
+  - `primary_evidence_path`、`conflict_count`、`conflict_types`、`warnings`。
+- analyzer 输出的 `AnalysisResult.evidence` 必须能引用 fact layer 中的关键不确定性，例如低可信 fallback 和字段冲突。
+- 真实 LLM 接入前，先以 deterministic stub 验证 request 结构、trace、持久化、replay 和 review queue 不受影响。
+- 后续接模型时，prompt builder 只能从 `LLMAnalysisRequest` 生成 prompt；不能把完整 `AlertInput.raw` 自动塞入上下文。
+
 ### Mapping config 约束
 
 - mapping config 只用于确定性字段搬运：`canonical.target.path: $.source.path`。
