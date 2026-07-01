@@ -13,7 +13,16 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from soc_agent.contracts import AlertInput, AlertSourceType
+from soc_agent.contracts import (
+    AlertInput,
+    AlertSourceType,
+    EvidenceInputPolicy,
+    EvidenceInputPolicyName,
+    EvidenceLayer,
+    EvidenceTrustLevel,
+)
+
+RAW_MESSAGE_FIELD = "message"
 
 
 def is_pingan_platform_payload(payload: Mapping[str, Any]) -> bool:
@@ -24,8 +33,7 @@ def is_pingan_platform_payload(payload: Mapping[str, Any]) -> bool:
 def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
     original = dict(payload)
     alert = _as_dict(original.get("alert"))
-    hit_log = _first_dict(alert.get("hitLog"))
-    raw_event = _first_dict(hit_log.get("zeusRawLogs"))
+    hit_log_index, hit_log, raw_event_index, raw_event = _select_raw_event(alert)
     origin = _json_object(raw_event.get("_origin"))
     http_payload = _json_object(raw_event.get("payload"))
     soar_asset = _first_soar_asset(alert.get("soar"))
@@ -62,13 +70,46 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
         },
         "entities": _entities(source_type, raw_event, origin, http_payload, soar_asset),
         "evidence": _evidence(alert, hit_log, raw_event),
-        "extensions": {"legacy_platform": _legacy_platform_context(original, alert, hit_log, raw_event, soar_asset)},
+        "extensions": {
+            "legacy_platform": _legacy_platform_context(original, alert, hit_log, raw_event, soar_asset),
+            "evidence_input_policy": _evidence_input_policy(hit_log_index, raw_event_index, raw_event),
+        },
         "raw": original,
     }
 
     normalized = AlertInput.model_validate(_drop_none(canonical))
     normalized.detection.detection_key = normalized.detection.detection_key or _detection_key(normalized)
     return normalized
+
+
+def _evidence_input_policy(
+    hit_log_index: int | None,
+    raw_event_index: int | None,
+    raw_event: dict[str, Any],
+) -> dict[str, Any]:
+    raw_event_path = _raw_event_path(hit_log_index, raw_event_index)
+    if _has_raw_message(raw_event):
+        message_path = f"{raw_event_path}.{RAW_MESSAGE_FIELD}"
+        policy = EvidenceInputPolicy(
+            name=EvidenceInputPolicyName.RAW_MESSAGE_FIRST,
+            primary_input_path=message_path,
+            fallback_input_path=raw_event_path,
+            selected_input_path=message_path,
+            selected_layer=EvidenceLayer.RAW_MESSAGE,
+            ignore_processed_fields_for_reasoning=True,
+            trust_level=EvidenceTrustLevel.HIGH,
+        )
+    else:
+        policy = EvidenceInputPolicy(
+            name=EvidenceInputPolicyName.STRUCTURED_FALLBACK,
+            primary_input_path=raw_event_path,
+            selected_input_path=raw_event_path,
+            selected_layer=EvidenceLayer.RAW_STRUCTURED,
+            fallback_reason="raw_message_missing",
+            ignore_processed_fields_for_reasoning=False,
+            trust_level=EvidenceTrustLevel.LOW,
+        )
+    return policy.model_dump(mode="json", exclude_none=True)
 
 
 def _legacy_platform_context(
@@ -381,12 +422,65 @@ def _first_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _select_raw_event(alert: dict[str, Any]) -> tuple[int | None, dict[str, Any], int | None, dict[str, Any]]:
+    first_candidate: tuple[int | None, dict[str, Any], int | None, dict[str, Any]] | None = None
+    for hit_log_index, hit_log, raw_event_index, raw_event in _iter_raw_events(alert):
+        candidate = (hit_log_index, hit_log, raw_event_index, raw_event)
+        if first_candidate is None:
+            first_candidate = candidate
+        if _has_raw_message(raw_event):
+            return candidate
+    if first_candidate is not None:
+        return first_candidate
+    hit_log_index, hit_log = _first_hit_log(alert)
+    return (hit_log_index, hit_log, None, {})
+
+
+def _iter_raw_events(alert: dict[str, Any]) -> list[tuple[int, dict[str, Any], int, dict[str, Any]]]:
+    hit_logs = alert.get("hitLog")
+    if not isinstance(hit_logs, list):
+        return []
+    events: list[tuple[int, dict[str, Any], int, dict[str, Any]]] = []
+    for hit_log_index, hit_log_item in enumerate(hit_logs):
+        if not isinstance(hit_log_item, dict):
+            continue
+        hit_log = dict(hit_log_item)
+        raw_logs = hit_log.get("zeusRawLogs")
+        if not isinstance(raw_logs, list):
+            continue
+        for raw_event_index, raw_event_item in enumerate(raw_logs):
+            if isinstance(raw_event_item, dict):
+                events.append((hit_log_index, hit_log, raw_event_index, dict(raw_event_item)))
+    return events
+
+
+def _first_hit_log(alert: dict[str, Any]) -> tuple[int | None, dict[str, Any]]:
+    hit_logs = alert.get("hitLog")
+    if not isinstance(hit_logs, list):
+        return (None, {})
+    for hit_log_index, hit_log_item in enumerate(hit_logs):
+        if isinstance(hit_log_item, dict):
+            return (hit_log_index, dict(hit_log_item))
+    return (None, {})
+
+
+def _raw_event_path(hit_log_index: int | None, raw_event_index: int | None) -> str:
+    if hit_log_index is None or raw_event_index is None:
+        return "alert.hitLog[].zeusRawLogs[]"
+    return f"alert.hitLog[{hit_log_index}].zeusRawLogs[{raw_event_index}]"
+
+
 def _first_str(source: dict[str, Any], aliases: tuple[str, ...]) -> str | None:
     for alias in aliases:
         value = source.get(alias)
         if value is not None and value != "":
             return str(value)
     return None
+
+
+def _has_raw_message(source: dict[str, Any]) -> bool:
+    value = source.get(RAW_MESSAGE_FIELD)
+    return value is not None and value != ""
 
 
 def _json_object(value: Any) -> dict[str, Any]:

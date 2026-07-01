@@ -126,6 +126,28 @@ class AlertSourceType(StrEnum):
     OTHER = "other"
 
 
+class EvidenceLayer(StrEnum):
+    RAW_MESSAGE = "raw_message"
+    RAW_STRUCTURED = "raw_structured"
+    PROCESSED_FIELD = "processed_field"
+    AGENT_INFERENCE = "agent_inference"
+    HUMAN_CONFIRMED = "human_confirmed"
+
+
+class EvidenceTrustLevel(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    UNKNOWN = "unknown"
+
+
+class EvidenceInputPolicyName(StrEnum):
+    RAW_MESSAGE_FIRST = "raw_message_first"
+    STRUCTURED_FALLBACK = "structured_fallback"
+    CANONICAL_FIELDS_FIRST = "canonical_fields_first"
+    HYBRID_WITH_CONFLICT_CHECK = "hybrid_with_conflict_check"
+
+
 class EntityKind(StrEnum):
     IP = "ip"
     DOMAIN = "domain"
@@ -265,6 +287,23 @@ class EvidenceItem(BaseModel):
     source: str
     description: str
     value: str | int | float | bool | None = None
+
+
+class EvidenceInputPolicy(BaseModel):
+    """Which input should later reasoning nodes treat as the primary evidence.
+
+    This policy is source-adapter output. The runtime can inspect it before
+    fact reconstruction, while vendors with clean schemas can omit it.
+    """
+
+    name: EvidenceInputPolicyName
+    primary_input_path: str | None = None
+    fallback_input_path: str | None = None
+    selected_input_path: str | None = None
+    selected_layer: EvidenceLayer = EvidenceLayer.RAW_STRUCTURED
+    fallback_reason: str | None = None
+    ignore_processed_fields_for_reasoning: bool = False
+    trust_level: EvidenceTrustLevel = EvidenceTrustLevel.MEDIUM
 
 
 class AlertInput(BaseModel):

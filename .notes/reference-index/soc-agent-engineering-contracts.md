@@ -294,6 +294,20 @@ normalizers/hids.py
 - report 可以包含 missing fields、normalized fields、entity counts、warnings；不要塞完整 raw payload 或长解释。
 - LLM 可以读取 report 生成 mapping 建议，但不能直接基于 report 自动修改生产 mapping。
 
+### Evidence input policy 约束
+
+`EvidenceInputPolicy` 表达“后续事实重建/LLM 研判应该优先看哪份输入”，不是最终事实结论。
+
+- source-specific normalizer 可以在 `AlertInput.extensions["evidence_input_policy"]` 写入该策略；干净供应商可以省略。
+- `raw_message_first` 表示原始 message 是首选证据；`structured_fallback` 表示 raw message 缺失，只能退回原始结构化日志对象。
+- fallback 必须显式记录 `fallback_reason` 和较低 `trust_level`，不能伪装成 raw message 同等可信。
+- `ignore_processed_fields_for_reasoning=True` 只表示研判主输入不读加工字段；加工字段仍可保存在 `extensions` 中供审计、对比和冲突检测。
+- `EvidenceLayer` 当前至少区分 `raw_message`、`raw_structured`、`processed_field`、`agent_inference`、`human_confirmed`。
+- 平安 ZEUS/天眼 adapter 使用 `raw_message_first + structured_fallback`：
+  - 优先读取 `alert.hitLog[].zeusRawLogs[].message`。
+  - raw message 缺失时 fallback 到完整 `zeusRawLogs[]` 对象，并标记 `fallback_reason=raw_message_missing`、`trust_level=low`。
+- 后续 `FieldTrust` / `ConflictReport` 应建立在该 policy 之后：先决定主证据输入，再重建方向、角色、资产、处置目标，并记录字段冲突；不能在 normalizer 层直接下最终攻击方向结论。
+
 ### Mapping config 约束
 
 - mapping config 只用于确定性字段搬运：`canonical.target.path: $.source.path`。

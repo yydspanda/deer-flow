@@ -39,8 +39,27 @@
 | 11 | alert summary read model | Done | `soc_alert_summaries` 保存可查询摘要，analyze/replay/correct 通过 service 维护 summary |
 | 12 | legacy platform normalizer | Done | 平安旧预警平台 envelope 转 canonical `AlertInput`，APT/EDR demo 可提取核心实体 |
 | 13 | CLI summary list | Done | `soc list` 输出持久化 `AlertSummary`，用于验证 Web/TUI 列表字段 |
+| 14 | ZEUS evidence input policy | Done | 平安 ZEUS/天眼 raw message 优先，缺失时 fallback 到 `zeusRawLogs` 并显式降级可信度 |
 
 ## 进度记录
+
+### 2026-07-01 — ZEUS / 天眼证据输入策略
+
+- 根据同事反馈的上游日志方向不可靠、加工字段冲突问题，新增 `.notes/ai_soc/zeus-alert-flow-and-field-trust.md`：
+  - 梳理 ZEUS/天眼告警流程。
+  - 记录 raw message、结构化原始字段、加工字段、skills/记忆、人工复核的可信度分层。
+  - 补充 Mermaid 流程图和泳道图。
+- 在工程契约中补充 `EvidenceInputPolicy` 约束：
+  - policy 只决定事实重建/LLM 研判的主输入，不代表最终事实结论。
+  - 平安 adapter 使用 `raw_message_first + structured_fallback`。
+  - raw message 缺失时必须记录 `fallback_reason=raw_message_missing` 和较低 trust level。
+- 代码切片：
+  - `backend/soc_agent/contracts/schemas.py` 新增 `EvidenceLayer`、`EvidenceTrustLevel`、`EvidenceInputPolicyName`、`EvidenceInputPolicy`。
+  - `backend/soc_agent/normalizers/pingan_platform.py` 在 `extensions.evidence_input_policy` 写入主证据选择策略。
+  - 支持 `message`；没有 raw message 时 fallback 到完整 `zeusRawLogs`。
+- 下一步：
+  - 在事实重建节点引入 `FieldTrust` / `ConflictReport`，用于攻击方向、攻击源/受害方、影响资产、处置目标的冲突解释。
+  - LLM 只读取 policy 选择后的主证据和必要候选字段，不直接相信上游加工字段。
 
 ### 2026-06-28
 

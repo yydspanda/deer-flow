@@ -6,7 +6,17 @@ from pathlib import Path
 import pytest
 
 from soc_agent.cli import main
-from soc_agent.contracts import AlertInput, AlertSourceType, AnalysisRun, AnalysisRunStatus, Verdict
+from soc_agent.contracts import (
+    AlertInput,
+    AlertSourceType,
+    AnalysisRun,
+    AnalysisRunStatus,
+    EvidenceInputPolicy,
+    EvidenceInputPolicyName,
+    EvidenceLayer,
+    EvidenceTrustLevel,
+    Verdict,
+)
 from soc_agent.core import SocAnalysisService, SocNormalizationService
 from soc_agent.core.runtime import analyze_alert
 from soc_agent.normalizers import normalize_alert_payload
@@ -299,6 +309,12 @@ def test_pingan_legacy_apt_alert_normalizes_platform_envelope() -> None:
     assert legacy["disposition"]["is_white"] is False
     assert legacy["disposition"]["repeat_count"] == 1
     assert legacy["correlation"]["alert_hash"] == "20260617_b4c266bf0241cb9f589d80036cc3c44a"
+    policy = EvidenceInputPolicy.model_validate(alert.extensions["evidence_input_policy"])
+    assert policy.name == EvidenceInputPolicyName.STRUCTURED_FALLBACK
+    assert policy.selected_input_path == "alert.hitLog[0].zeusRawLogs[0]"
+    assert policy.selected_layer == EvidenceLayer.RAW_STRUCTURED
+    assert policy.fallback_reason == "raw_message_missing"
+    assert policy.trust_level == EvidenceTrustLevel.LOW
 
     run = _analyze(_sample("pingan_legacy_apt.json"))
     assert run.alert_id == "2026494"
@@ -357,6 +373,50 @@ def test_pingan_legacy_edr_alert_normalizes_platform_envelope() -> None:
     assert by_key["user:S-1-5-21-example"].role == "user_id"
     assert by_key["host:HOST-L12267.example.local"].role == "host_name"
     assert by_key["file_hash:7B88D0896FBF43469A9959D59824A514"].role == "md5"
+
+
+def test_pingan_legacy_alert_prefers_raw_message_for_reasoning_input() -> None:
+    payload = _sample("pingan_legacy_apt.json")
+    payload["alert"]["hitLog"][0]["zeusRawLogs"][0]["message"] = "<189> 2026-06-17 10:11:12 skyeye attack_type=webattack sip=30.180.248.178 dip=30.185.76.75"
+
+    alert = normalize_alert_payload(payload)
+
+    policy = EvidenceInputPolicy.model_validate(alert.extensions["evidence_input_policy"])
+    assert policy.name == EvidenceInputPolicyName.RAW_MESSAGE_FIRST
+    assert policy.primary_input_path == "alert.hitLog[0].zeusRawLogs[0].message"
+    assert policy.fallback_input_path == "alert.hitLog[0].zeusRawLogs[0]"
+    assert policy.selected_input_path == "alert.hitLog[0].zeusRawLogs[0].message"
+    assert policy.selected_layer == EvidenceLayer.RAW_MESSAGE
+    assert policy.ignore_processed_fields_for_reasoning is True
+    assert policy.trust_level == EvidenceTrustLevel.HIGH
+
+
+def test_pingan_legacy_alert_preserves_hit_log_when_raw_logs_missing() -> None:
+    alert = normalize_alert_payload(
+        {
+            "alert": {
+                "alertId": "ALT-HITLOG-ONLY",
+                "hitLog": [
+                    {
+                        "topic": "sec_guard_apt",
+                        "topicName": "360天眼APT",
+                        "ruleCode": "RPAADM_EMPTY_RAW",
+                        "ruleName": "天眼空原始日志",
+                        "zeusRawLogs": [],
+                    }
+                ],
+            }
+        }
+    )
+
+    assert alert.source.source_type == AlertSourceType.NDR
+    assert alert.source.source_system == "sec_guard_apt"
+    assert alert.source.product == "360天眼APT"
+    assert alert.detection.rule_code == "RPAADM_EMPTY_RAW"
+    assert alert.detection.rule_name == "天眼空原始日志"
+    policy = EvidenceInputPolicy.model_validate(alert.extensions["evidence_input_policy"])
+    assert policy.name == EvidenceInputPolicyName.STRUCTURED_FALLBACK
+    assert policy.primary_input_path == "alert.hitLog[].zeusRawLogs[]"
 
 
 def test_cli_analyze_file_outputs_json(capsys) -> None:
