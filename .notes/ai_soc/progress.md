@@ -707,3 +707,35 @@
   - `cd backend && ./.venv/bin/python -m soc_agent.cli normalize drift samples/alerts/mapped_waf.json --mapping samples/mappings/sample_waf.yaml --pretty`
 - 下一步：
   - 把 drift aggregation 接到 persisted runs/recent runs 查询；仍先不接 LLM。
+
+### 2026-07-01 — Persisted run drift aggregation
+
+- 扩展 repository 协议：
+  - `AlertRepository.list_runs(limit=50)`
+  - SQLAlchemy implementation 按 `updated_at desc` 返回最近 `AnalysisRun`。
+- 扩展 drift sample：
+  - `NormalizationDriftSample.run_id`
+  - 本地样本为空；持久化 run 模式填入 run id，方便后续 TUI/API 跳转详情。
+- 扩展 normalization service：
+  - `SocNormalizationService(repository=...).drift_recent(limit=...)`
+  - 只读取已持久化 run 上的 `normalization_report` / `extraction_report`，不重跑 normalize，不接 LLM。
+- 扩展 CLI：
+  - `soc normalize drift --recent-runs --limit N --database-url ...`
+  - `--recent-runs` 与 PATH / `--mapping` 互斥。
+- 设计边界：
+  - 本地样本聚合用于 vendor onboarding。
+  - persisted run 聚合用于线上/测试库最近告警的格式漂移观察。
+  - CLI 仍只做参数、repository 注入和 JSON 输出；聚合规则在 core service。
+- 已同步文档：
+  - `.notes/ai_soc/normalization-drift-strategy.md`
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 已补充测试：
+  - service 基于 in-memory repository 聚合最近 runs。
+  - SQLAlchemy repository 支持 `list_runs(limit=...)`。
+  - CLI 从 persisted runs 输出 drift report。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 进入 `soc normalize suggest` 的离线建议设计：只读 drift/sample report，输出候选 mapping patch，不自动应用。

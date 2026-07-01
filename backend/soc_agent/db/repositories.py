@@ -56,6 +56,11 @@ class SqlAlchemyAlertRepository:
                 return None
             return AnalysisRun.model_validate(row.run_payload)
 
+    def list_runs(self, *, limit: int = 50) -> list[AnalysisRun]:
+        with self._session_factory() as session:
+            result = session.execute(select(SocAnalysisRunRow).order_by(SocAnalysisRunRow.updated_at.desc(), SocAnalysisRunRow.created_at.desc()).limit(limit))
+            return [AnalysisRun.model_validate(row.run_payload) for row in result.scalars()]
+
     def save_audit_record(self, record: DecisionAuditRecord) -> None:
         payload = record.model_dump(mode="json")
         with self._session_factory() as session:

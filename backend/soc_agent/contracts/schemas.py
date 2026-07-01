@@ -355,6 +355,7 @@ class NormalizationDriftSample(BaseModel):
 
     path: str
     status: Literal["success", "failed"]
+    run_id: str | None = None
     alert_id: str | None = None
     adapter: str | None = None
     source_type: AlertSourceType = AlertSourceType.UNKNOWN

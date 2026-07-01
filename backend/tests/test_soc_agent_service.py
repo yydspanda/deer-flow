@@ -28,6 +28,7 @@ from soc_agent.core import (
     SocAnalysisService,
     SocDaemonService,
     SocMemoryService,
+    SocNormalizationService,
     SocReviewService,
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
@@ -53,6 +54,9 @@ class InMemoryAlertRepository:
 
     def get_run(self, run_id: str) -> AnalysisRun | None:
         return self.runs.get(run_id)
+
+    def list_runs(self, *, limit: int = 50) -> list[AnalysisRun]:
+        return list(self.runs.values())[-limit:][::-1]
 
 
 class InMemoryAuditRepository:
@@ -243,6 +247,23 @@ def test_analysis_service_replay_requires_existing_run() -> None:
 
     with pytest.raises(SocServiceNotFoundError):
         service.replay("RUN-UNKNOWN")
+
+
+def test_normalization_service_aggregates_recent_persisted_runs() -> None:
+    repository = InMemoryAlertRepository()
+    analysis_service = SocAnalysisService(repository=repository)
+    approved = analysis_service.analyze(_sample("approved_scanner.json"))
+    missing = analysis_service.analyze(_sample("missing_fields.json"))
+
+    report = SocNormalizationService(repository=repository).drift_recent(limit=1)
+
+    assert report.sample_count == 1
+    assert report.success_count == 1
+    assert report.samples[0].run_id == missing.run_id
+    assert report.samples[0].path == f"run:{missing.run_id}"
+    assert report.samples[0].alert_id == missing.alert_id
+    assert report.missing_field_counts["detection.rule_code_or_name"] == 1
+    assert approved.run_id not in {sample.run_id for sample in report.samples}
 
 
 def test_review_service_corrects_run_and_emits_event() -> None:

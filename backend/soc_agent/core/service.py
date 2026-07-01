@@ -20,10 +20,12 @@ from soc_agent.contracts import (
     CorrectionRecord,
     Decision,
     DecisionAuditRecord,
+    ExtractionReport,
     InvestigationContext,
     NormalizationDriftReport,
     NormalizationDriftSample,
     NormalizationInspectionResult,
+    NormalizationReport,
     ReviewQueueCloseCommand,
     ReviewQueueItem,
     ReviewQueuePriority,
@@ -189,6 +191,9 @@ class SocAnalysisService:
 class SocNormalizationService:
     """Inspect-only normalization service for vendor onboarding and drift triage."""
 
+    def __init__(self, *, repository: AlertRepository | None = None) -> None:
+        self._repository = repository
+
     def inspect(
         self,
         payload: Mapping[str, Any],
@@ -213,70 +218,130 @@ class SocNormalizationService:
 
         loaded_mapping = load_mapping_config(mapping_path) if mapping_path is not None else mapping_config
         sample_reports: list[NormalizationDriftSample] = []
-        adapter_counts: Counter[str] = Counter()
-        source_type_counts: Counter[str] = Counter()
-        missing_field_counts: Counter[str] = Counter()
-        unmapped_field_counts: Counter[str] = Counter()
-        entity_kind_counts: Counter[str] = Counter()
-        missing_entity_kind_counts: Counter[str] = Counter()
-        warning_counts: Counter[str] = Counter()
-
         for sample_path, payload in samples:
             try:
                 inspection = self.inspect(payload, mapping_config=loaded_mapping)
             except Exception as exc:  # noqa: BLE001 - preserve per-sample failures in batch report
-                sample_report = NormalizationDriftSample(
-                    path=sample_path,
-                    status="failed",
-                    warnings=[str(exc)],
-                    error=str(exc),
-                )
-                warning_counts.update(sample_report.warnings)
-                sample_reports.append(sample_report)
+                sample_reports.append(_drift_failure_sample(sample_path, str(exc)))
                 continue
 
-            normalization = inspection.normalization_report
-            extraction = inspection.extraction_report
-            warnings = [*normalization.warnings, *extraction.warnings]
-            sample_report = NormalizationDriftSample(
-                path=sample_path,
-                status="success",
-                alert_id=inspection.alert.alert_id,
-                adapter=normalization.adapter,
-                source_type=normalization.source_type,
-                source_system=normalization.source_system,
-                missing_fields=normalization.missing_fields,
-                unmapped_fields=normalization.unmapped_fields,
-                entity_counts=extraction.entity_counts,
-                missing_entity_kinds=extraction.missing_entity_kinds,
-                warnings=warnings,
+            sample_reports.append(
+                _drift_sample_from_reports(
+                    path=sample_path,
+                    alert_id=inspection.alert.alert_id,
+                    normalization=inspection.normalization_report,
+                    extraction=inspection.extraction_report,
+                )
             )
-            sample_reports.append(sample_report)
-            adapter_counts.update([normalization.adapter])
-            source_type_counts.update([normalization.source_type.value])
-            missing_field_counts.update(normalization.missing_fields)
-            unmapped_field_counts.update(normalization.unmapped_fields)
-            entity_kind_counts.update(extraction.entity_counts)
-            missing_entity_kind_counts.update(extraction.missing_entity_kinds)
-            warning_counts.update(warnings)
 
-        suspicious_samples = [sample for sample in sample_reports if sample.status == "failed" or sample.missing_fields or sample.unmapped_fields]
+        return _normalization_drift_report(sample_reports)
 
-        success_count = sum(1 for sample in sample_reports if sample.status == "success")
-        return NormalizationDriftReport(
-            sample_count=len(sample_reports),
-            success_count=success_count,
-            failure_count=len(sample_reports) - success_count,
-            adapter_counts=dict(adapter_counts),
-            source_type_counts=dict(source_type_counts),
-            missing_field_counts=dict(missing_field_counts),
-            unmapped_field_counts=dict(unmapped_field_counts),
-            entity_kind_counts=dict(entity_kind_counts),
-            missing_entity_kind_counts=dict(missing_entity_kind_counts),
-            warning_counts=dict(warning_counts),
-            suspicious_samples=suspicious_samples,
-            samples=sample_reports,
-        )
+    def drift_recent(self, *, limit: int = 50) -> NormalizationDriftReport:
+        if self._repository is None:
+            raise SocServiceNotImplementedError("drift_recent requires an AlertRepository")
+
+        sample_reports: list[NormalizationDriftSample] = []
+        for run in self._repository.list_runs(limit=limit):
+            if run.normalization_report is None or run.extraction_report is None:
+                sample_reports.append(
+                    _drift_failure_sample(
+                        f"run:{run.run_id}",
+                        "run is missing normalization or extraction reports",
+                        run_id=run.run_id,
+                        alert_id=run.alert_id,
+                    )
+                )
+                continue
+            sample_reports.append(
+                _drift_sample_from_reports(
+                    path=f"run:{run.run_id}",
+                    run_id=run.run_id,
+                    alert_id=run.alert_id,
+                    normalization=run.normalization_report,
+                    extraction=run.extraction_report,
+                )
+            )
+
+        return _normalization_drift_report(sample_reports)
+
+
+def _normalization_drift_report(sample_reports: list[NormalizationDriftSample]) -> NormalizationDriftReport:
+    adapter_counts: Counter[str] = Counter()
+    source_type_counts: Counter[str] = Counter()
+    missing_field_counts: Counter[str] = Counter()
+    unmapped_field_counts: Counter[str] = Counter()
+    entity_kind_counts: Counter[str] = Counter()
+    missing_entity_kind_counts: Counter[str] = Counter()
+    warning_counts: Counter[str] = Counter()
+
+    for sample in sample_reports:
+        if sample.adapter:
+            adapter_counts.update([sample.adapter])
+        source_type_counts.update([sample.source_type.value])
+        missing_field_counts.update(sample.missing_fields)
+        unmapped_field_counts.update(sample.unmapped_fields)
+        entity_kind_counts.update(sample.entity_counts)
+        missing_entity_kind_counts.update(sample.missing_entity_kinds)
+        warning_counts.update(sample.warnings)
+
+    suspicious_samples = [sample for sample in sample_reports if sample.status == "failed" or sample.missing_fields or sample.unmapped_fields]
+
+    success_count = sum(1 for sample in sample_reports if sample.status == "success")
+    return NormalizationDriftReport(
+        sample_count=len(sample_reports),
+        success_count=success_count,
+        failure_count=len(sample_reports) - success_count,
+        adapter_counts=dict(adapter_counts),
+        source_type_counts=dict(source_type_counts),
+        missing_field_counts=dict(missing_field_counts),
+        unmapped_field_counts=dict(unmapped_field_counts),
+        entity_kind_counts=dict(entity_kind_counts),
+        missing_entity_kind_counts=dict(missing_entity_kind_counts),
+        warning_counts=dict(warning_counts),
+        suspicious_samples=suspicious_samples,
+        samples=sample_reports,
+    )
+
+
+def _drift_sample_from_reports(
+    *,
+    path: str,
+    alert_id: str,
+    normalization: NormalizationReport,
+    extraction: ExtractionReport,
+    run_id: str | None = None,
+) -> NormalizationDriftSample:
+    return NormalizationDriftSample(
+        path=path,
+        status="success",
+        run_id=run_id,
+        alert_id=alert_id,
+        adapter=normalization.adapter,
+        source_type=normalization.source_type,
+        source_system=normalization.source_system,
+        missing_fields=normalization.missing_fields,
+        unmapped_fields=normalization.unmapped_fields,
+        entity_counts=extraction.entity_counts,
+        missing_entity_kinds=extraction.missing_entity_kinds,
+        warnings=[*normalization.warnings, *extraction.warnings],
+    )
+
+
+def _drift_failure_sample(
+    path: str,
+    error: str,
+    *,
+    run_id: str | None = None,
+    alert_id: str | None = None,
+) -> NormalizationDriftSample:
+    return NormalizationDriftSample(
+        path=path,
+        status="failed",
+        run_id=run_id,
+        alert_id=alert_id,
+        warnings=[error],
+        error=error,
+    )
 
 
 class SocReviewService:

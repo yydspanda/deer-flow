@@ -111,10 +111,13 @@ def _build_parser() -> argparse.ArgumentParser:
     normalize_inspect.add_argument("--mapping", help="Path to SOC normalization mapping YAML")
     normalize_inspect.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     normalize_drift = normalize_subparsers.add_parser("drift", help="Aggregate normalization drift over alert JSON samples")
-    normalize_drift.add_argument("path", help="Path to an alert JSON file or directory")
+    normalize_drift.add_argument("path", nargs="?", help="Path to an alert JSON file or directory")
     normalize_drift.add_argument("--mapping", help="Path to SOC normalization mapping YAML")
     normalize_drift.add_argument("--glob", default="*.json", help="Glob used when PATH is a directory")
+    normalize_drift.add_argument("--recent-runs", action="store_true", help="Aggregate persisted recent analysis runs")
+    normalize_drift.add_argument("--limit", type=int, default=50, help="Maximum persisted runs to aggregate with --recent-runs")
     normalize_drift.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(normalize_drift)
 
     review = subparsers.add_parser("review", help="SOC review queue helpers")
     review_subparsers = review.add_subparsers(dest="review_command")
@@ -271,8 +274,17 @@ def _normalize_inspect(args: argparse.Namespace) -> int:
 
 def _normalize_drift(args: argparse.Namespace) -> int:
     try:
-        samples = _load_payload_samples(args.path, args.glob)
-        result = SocNormalizationService().drift(samples, mapping_path=args.mapping)
+        if args.recent_runs:
+            if args.path:
+                raise ValueError("PATH cannot be used with --recent-runs")
+            if args.mapping:
+                raise ValueError("--mapping cannot be used with --recent-runs")
+            result = SocNormalizationService(repository=_repository_from_args(args)).drift_recent(limit=args.limit)
+        else:
+            if not args.path:
+                raise ValueError("provide PATH or --recent-runs")
+            samples = _load_payload_samples(args.path, args.glob)
+            result = SocNormalizationService().drift(samples, mapping_path=args.mapping)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

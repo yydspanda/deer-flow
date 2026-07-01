@@ -83,6 +83,18 @@ def test_sqlalchemy_alert_repository_supports_service_replay() -> None:
     assert replayed.run_id in {summary.run_id for summary in repository.list_alert_summaries(limit=2)}
 
 
+def test_sqlalchemy_alert_repository_lists_recent_runs() -> None:
+    repository = _repository()
+    service = SocAnalysisService(repository=repository, summary_repository=repository)
+    first = service.analyze(_sample("approved_scanner.json"))
+    second = service.analyze(_sample("missing_fields.json"))
+
+    recent = repository.list_runs(limit=1)
+
+    assert [run.run_id for run in recent] == [second.run_id]
+    assert first.run_id not in {run.run_id for run in recent}
+
+
 def test_sqlalchemy_alert_repository_persists_corrections() -> None:
     repository = _repository()
     run = SocAnalysisService(

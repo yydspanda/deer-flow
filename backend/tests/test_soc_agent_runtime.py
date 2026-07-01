@@ -476,6 +476,42 @@ def test_cli_normalize_drift_supports_mapping_file(capsys) -> None:
     assert payload["samples"][0]["alert_id"] == "WAF-2026-0001"
 
 
+def test_cli_normalize_drift_supports_recent_persisted_runs(tmp_path: Path, capsys) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'soc.db'}"
+
+    assert main(["db", "upgrade", "--database-url", database_url]) == 0
+    capsys.readouterr()
+
+    assert main(["analyze", str(SAMPLES / "approved_scanner.json"), "--persist", "--database-url", database_url]) == 0
+    capsys.readouterr()
+    assert main(["analyze", str(SAMPLES / "missing_fields.json"), "--persist", "--database-url", database_url]) == 0
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "normalize",
+                "drift",
+                "--recent-runs",
+                "--limit",
+                "1",
+                "--database-url",
+                database_url,
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert payload["schema_version"] == "soc.normalization_drift_report.v1"
+    assert payload["sample_count"] == 1
+    assert payload["success_count"] == 1
+    assert payload["samples"][0]["path"].startswith("run:")
+    assert payload["samples"][0]["run_id"] is not None
+    assert payload["missing_field_counts"]["detection.rule_code_or_name"] == 1
+
+
 def test_cli_persist_show_and_replay(tmp_path: Path, capsys) -> None:
     database_url = f"sqlite+pysqlite:///{tmp_path / 'soc.db'}"
 

@@ -44,6 +44,8 @@ class AlertRepository(Protocol):
 
     def get_run(self, run_id: str) -> AnalysisRun | None: ...
 
+    def list_runs(self, *, limit: int = 50) -> list[AnalysisRun]: ...
+
 
 class DecisionAuditRepository(Protocol):
     """Persistence boundary for decision audit records."""
