@@ -40,8 +40,33 @@
 | 12 | legacy platform normalizer | Done | 平安旧预警平台 envelope 转 canonical `AlertInput`，APT/EDR demo 可提取核心实体 |
 | 13 | CLI summary list | Done | `soc list` 输出持久化 `AlertSummary`，用于验证 Web/TUI 列表字段 |
 | 14 | ZEUS evidence input policy | Done | 平安 ZEUS/天眼 raw message 优先，缺失时 fallback 到 `zeusRawLogs` 并显式降级可信度 |
+| 15 | fact reconstruction layer | Done | `entity_extract` 后生成 `FactReconstructionResult`，记录字段可信度、角色候选和冲突报告 |
 
 ## 进度记录
+
+### 2026-07-01 — 事实重建最小切片
+
+- 新增事实重建契约：
+  - `FieldTrust`
+  - `RoleAssignment`
+  - `ConflictReport`
+  - `FactReconstructionResult`
+- 新增 deterministic pipeline 节点：
+  - `backend/soc_agent/pipeline/fact_reconstructor.py`
+  - runtime 顺序变为 `normalize -> entity_extract -> fact_reconstruct -> analyze_stub -> schema_validate -> decide`。
+  - `AnalysisRun.fact_reconstruction` 随 run payload 一起持久化和 replay。
+- 当前能力：
+  - 根据 `EvidenceInputPolicy` 判断主证据是否可用。
+  - raw message 存在时，将 canonical processed fields 标成低可信且不参与主事实重建。
+  - raw message 缺失时，structured fallback 会产生低可信 warning。
+  - 检测同一角色多候选值、`attacker/source` 不一致、`victim/destination` 不一致、source/destination 重叠。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py -q`
+  - `codegraph sync .`
+  - `codegraph status .` 显示 index up to date；当前统计为 1,157 files / 21,973 nodes / 49,491 edges。
+- 下一步：
+  - 把 fact layer 输入给后续真实 LLM analyzer，让模型基于“主证据 + 角色候选 + 冲突报告”输出结构化研判，而不是直接吃脏字段。
+  - 为 PingAn 真实 `raw_message` 样本增加 parser / LLM extraction 评测样例。
 
 ### 2026-07-01 — ZEUS / 天眼证据输入策略
 

@@ -306,6 +306,51 @@ class EvidenceInputPolicy(BaseModel):
     trust_level: EvidenceTrustLevel = EvidenceTrustLevel.MEDIUM
 
 
+class FieldTrust(BaseModel):
+    """Trust annotation for one field considered during fact reconstruction."""
+
+    field_path: str
+    layer: EvidenceLayer
+    trust_level: EvidenceTrustLevel = EvidenceTrustLevel.UNKNOWN
+    participates_in_fact_reconstruction: bool = True
+    reason: str | None = None
+
+
+class RoleAssignment(BaseModel):
+    """Deterministic candidate assignment for one security-investigation role."""
+
+    role: Literal["source", "destination", "attacker", "victim", "impacted_asset", "response_target"]
+    value: str = Field(min_length=1)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    evidence_path: str
+    source_layer: EvidenceLayer = EvidenceLayer.PROCESSED_FIELD
+    trust_level: EvidenceTrustLevel = EvidenceTrustLevel.UNKNOWN
+    rationale: str = Field(min_length=1)
+
+
+class ConflictReport(BaseModel):
+    """Structured conflict found before LLM analysis or human review."""
+
+    conflict_type: str = Field(min_length=1)
+    severity: Literal["info", "warning", "critical"] = "warning"
+    description: str = Field(min_length=1)
+    involved_fields: list[str] = Field(default_factory=list)
+    candidate_values: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class FactReconstructionResult(BaseModel):
+    """Pre-analysis fact layer built from evidence policy and normalized fields."""
+
+    schema_version: str = "soc.fact_reconstruction.v1"
+    evidence_policy: EvidenceInputPolicy | None = None
+    selected_input_path: str | None = None
+    selected_input_available: bool = False
+    field_trusts: list[FieldTrust] = Field(default_factory=list)
+    role_assignments: list[RoleAssignment] = Field(default_factory=list)
+    conflict_reports: list[ConflictReport] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class AlertInput(BaseModel):
     """Canonical alert input accepted by the SOC runtime.
 
@@ -602,6 +647,7 @@ class AnalysisRun(BaseModel):
     entities: ExtractedEntities | None = None
     normalization_report: NormalizationReport | None = None
     extraction_report: ExtractionReport | None = None
+    fact_reconstruction: FactReconstructionResult | None = None
     analysis: AnalysisResult | None = None
     decision: Decision | None = None
     corrections: list[CorrectionRecord] = Field(default_factory=list)

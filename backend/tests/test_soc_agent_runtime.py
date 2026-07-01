@@ -54,6 +54,7 @@ def test_approved_scanner_returns_false_positive_candidate() -> None:
     assert [step.step_name for step in run.steps] == [
         "normalize",
         "entity_extract",
+        "fact_reconstruct",
         "analyze_stub",
         "schema_validate",
         "decide",
@@ -319,6 +320,11 @@ def test_pingan_legacy_apt_alert_normalizes_platform_envelope() -> None:
     run = _analyze(_sample("pingan_legacy_apt.json"))
     assert run.alert_id == "2026494"
     assert run.entities is not None
+    assert run.fact_reconstruction is not None
+    assert run.fact_reconstruction.evidence_policy is not None
+    assert run.fact_reconstruction.evidence_policy.name == EvidenceInputPolicyName.STRUCTURED_FALLBACK
+    assert run.fact_reconstruction.selected_input_available is True
+    assert "evidence input policy selected low-trust structured fallback" in run.fact_reconstruction.warnings
     assert "30.180.248.178" in run.entities.ips
     assert "30.185.76.75" in run.entities.ips
     assert "app.example.internal" in run.entities.domains
@@ -389,6 +395,36 @@ def test_pingan_legacy_alert_prefers_raw_message_for_reasoning_input() -> None:
     assert policy.selected_layer == EvidenceLayer.RAW_MESSAGE
     assert policy.ignore_processed_fields_for_reasoning is True
     assert policy.trust_level == EvidenceTrustLevel.HIGH
+
+    run = _analyze(payload)
+    assert run.fact_reconstruction is not None
+    assert run.fact_reconstruction.evidence_policy is not None
+    assert run.fact_reconstruction.evidence_policy.name == EvidenceInputPolicyName.RAW_MESSAGE_FIRST
+    assert run.fact_reconstruction.selected_input_path == "alert.hitLog[0].zeusRawLogs[0].message"
+    assert run.fact_reconstruction.selected_input_available is True
+    field_trust_by_path = {trust.field_path: trust for trust in run.fact_reconstruction.field_trusts}
+    assert field_trust_by_path["alert.hitLog[0].zeusRawLogs[0].message"].trust_level == EvidenceTrustLevel.HIGH
+    assert field_trust_by_path["entities.network.source_ip"].participates_in_fact_reconstruction is False
+
+
+def test_pingan_legacy_fact_reconstruction_reports_direction_conflicts() -> None:
+    payload = _sample("pingan_legacy_apt.json")
+    raw_event = payload["alert"]["hitLog"][0]["zeusRawLogs"][0]
+    raw_event["message"] = "<189> skyeye conflict sample"
+    raw_event["attacker"] = "203.0.113.10"
+    raw_event["attack_sip"] = "203.0.113.10"
+    raw_event["victim"] = "198.51.100.22"
+    raw_event["alarm_sip"] = "198.51.100.22"
+
+    run = _analyze(payload)
+
+    assert run.fact_reconstruction is not None
+    conflict_types = {report.conflict_type for report in run.fact_reconstruction.conflict_reports}
+    assert "attacker_source_mismatch" in conflict_types
+    assert "victim_destination_mismatch" in conflict_types
+    attacker_conflict = next(report for report in run.fact_reconstruction.conflict_reports if report.conflict_type == "attacker_source_mismatch")
+    assert attacker_conflict.candidate_values["attacker"] == ["203.0.113.10"]
+    assert "30.180.248.178" in attacker_conflict.candidate_values["source"]
 
 
 def test_pingan_legacy_alert_preserves_hit_log_when_raw_logs_missing() -> None:

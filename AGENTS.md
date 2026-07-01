@@ -161,7 +161,9 @@ search alone. Use this order:
    reusable APIs, and low-intrusion integration points.
 4. Implement SOC-specific behavior as incremental modules/adapters first; avoid changing
    upstream DeerFlow core unless a small generic extension point is required.
-5. Update `.notes/ai_soc/progress.md` after each completed slice with status, changed
+5. After code changes, run `codegraph sync .` from the repo root so the local
+   CodeGraph index includes newly added or edited SOC symbols before the next slice.
+6. Update `.notes/ai_soc/progress.md` after each completed slice with status, changed
    files, verification, and next step.
 
 Progress is not tracked in chat history. The durable task ledger is

@@ -212,15 +212,16 @@ flowchart LR
 
 ### 需要补的 contract 概念
 
-后续 schema 设计可以考虑补以下概念，但本文件不要求立即实现：
+当前已落地最小事实重建契约，后续继续扩展冲突类型和 LLM 解释能力：
 
 | 概念 | 目的 |
 |---|---|
-| `EvidenceLayer` | 区分 raw message、raw field、processed field、agent inference、human confirmed |
-| `FieldTrust` | 表达字段可信度、来源、是否可直接作为事实 |
-| `ConflictReport` | 记录方向、资产、角色、处置目标之间的矛盾 |
-| `RoleAssignment` | 表达攻击源、受害资产、中转资产、处置目标等角色 |
-| `TriageOutputBundle` | 一次推理输出多个页面/流程产物，避免多个模块各说各话 |
+| `EvidenceLayer` | 已落地；区分 raw message、raw structured、processed field、agent inference、human confirmed |
+| `EvidenceInputPolicy` | 已落地；决定事实重建/LLM 研判优先读取哪份输入 |
+| `FieldTrust` | 已落地；表达字段可信度、来源、是否参与事实重建 |
+| `ConflictReport` | 已落地最小版；记录方向、角色、资产、处置目标之间的候选冲突 |
+| `RoleAssignment` | 已落地最小版；表达 source、destination、attacker、victim、impacted_asset、response_target |
+| `TriageOutputBundle` | 未落地；后续一次推理输出多个页面/流程产物，避免多个模块各说各话 |
 
 ### 对 normalization 的影响
 
@@ -230,6 +231,7 @@ flowchart LR
 - 加工字段应该进入 extensions 或 candidate evidence。
 - 攻击方向、资产角色、处置目标应由事实重建节点输出，并附 evidence。
 - 如果 raw message 与加工字段冲突，必须进入 `ConflictReport`，不能静默覆盖。
+- 当前 runtime 已在 `entity_extract` 后、`analyze_stub` 前加入 `fact_reconstruct` 节点，输出 `AnalysisRun.fact_reconstruction`。
 
 ### 平安 ZEUS / 天眼输入策略
 

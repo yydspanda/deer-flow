@@ -21,6 +21,7 @@ from soc_agent.contracts import (
     EntityKind,
     ExtractedEntities,
     ExtractionReport,
+    FactReconstructionResult,
     NormalizationInspectionResult,
     NormalizationReport,
     PipelineStepStatus,
@@ -30,6 +31,7 @@ from soc_agent.core.validator import validate_analysis_result, validate_decision
 from soc_agent.normalizers import normalize_alert_payload, normalize_with_mapping
 from soc_agent.pipeline.analyzer import analyze_stub
 from soc_agent.pipeline.extractor import extract_entities
+from soc_agent.pipeline.fact_reconstructor import reconstruct_facts
 from soc_agent.utils.hashing import stable_hash
 
 
@@ -72,6 +74,8 @@ def analyze_alert(payload: Mapping[str, Any]) -> AnalysisRun:
         entities = _run_step(run, "entity_extract", alert, extract_entities)
         run.entities = entities
         run.extraction_report = _extraction_report(entities)
+        fact_reconstruction = _run_step(run, "fact_reconstruct", alert, reconstruct_facts)
+        run.fact_reconstruction = fact_reconstruction
         analysis = _run_step(
             run,
             "analyze_stub",
@@ -249,6 +253,8 @@ def _run_step[T](
     trace.duration_ms = _duration_ms(trace.started_at, trace.ended_at)
 
     if isinstance(output, ExtractedEntities):
+        trace.warnings.extend(output.warnings)
+    if isinstance(output, FactReconstructionResult):
         trace.warnings.extend(output.warnings)
 
     return output

@@ -308,6 +308,21 @@ normalizers/hids.py
   - raw message 缺失时 fallback 到完整 `zeusRawLogs[]` 对象，并标记 `fallback_reason=raw_message_missing`、`trust_level=low`。
 - 后续 `FieldTrust` / `ConflictReport` 应建立在该 policy 之后：先决定主证据输入，再重建方向、角色、资产、处置目标，并记录字段冲突；不能在 normalizer 层直接下最终攻击方向结论。
 
+### Fact reconstruction 约束
+
+`FactReconstructionResult` 是 LLM 分析前的事实层，不是最终研判结论。它解决的是“哪些字段可信、哪些角色候选互相冲突、后续分析应该带着什么不确定性进入”。
+
+- runtime 固定在 `entity_extract` 后、`analyze_stub` / 后续 `llm_analyze` 前执行 `fact_reconstruct`。
+- `FactReconstructionResult` 必须保存到 `AnalysisRun.fact_reconstruction`，随 run payload 一起持久化、replay、审计。
+- `FieldTrust` 只表达字段可信度和是否参与事实重建；不能直接改变 verdict。
+- `RoleAssignment` 是候选角色分配，当前允许的角色包括 `source`、`destination`、`attacker`、`victim`、`impacted_asset`、`response_target`。
+- `ConflictReport` 必须结构化表达冲突类型、涉及字段和值，例如：
+  - 同一角色多个候选值：`source_candidate_conflict`、`victim_candidate_conflict`。
+  - 跨角色不一致：`attacker_source_mismatch`、`victim_destination_mismatch`。
+  - 源和目的重叠：`source_destination_overlap`。
+- Phase 1 的事实重建只做 deterministic 规则；LLM 后续只能读取 fact layer 进行解释、补充候选或提出复核问题，不能绕过该层直接相信上游加工字段。
+- raw message 存在时，canonical processed fields 默认低可信且不作为主推理输入；raw message 缺失时 structured fallback 必须保留低可信 warning。
+
 ### Mapping config 约束
 
 - mapping config 只用于确定性字段搬运：`canonical.target.path: $.source.path`。
