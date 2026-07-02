@@ -10,7 +10,9 @@
 2. 明确当前任务属于哪个 Phase、解决哪个用户/工程问题。
 3. 再用 CodeGraph / Understand Anything 查 DeerFlow 代码落点和参考实现。
 4. 优先新增 SOC 独立模块、adapter、schema、CLI/API 入口，不侵入 DeerFlow 上游核心。
-5. 完成后记录改动、验证命令、遗留风险和下一步。
+5. 如果切片改变产品方向、runtime pipeline、contract 语义、Phase 边界或下一步顺序，必须同步更新 `.notes/ai_soc/soc-agent-solution.md`；工程规则同步更新 `.notes/reference-index/soc-agent-engineering-contracts.md`。
+6. 代码改动后运行 `codegraph sync .`，确保新增/修改的 SOC 符号进入本地索引。
+7. 完成后记录改动、验证命令、遗留风险和下一步。
 
 ## 当前状态
 
@@ -21,6 +23,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
+| 当前下一刀 | LLM JSON output parser + schema validation + bad JSON repair golden sample；真实模型仍 behind flag，默认不影响 deterministic stub |
 
 ## Phase 1 切片计划
 
@@ -42,8 +45,50 @@
 | 14 | ZEUS evidence input policy | Done | 平安 ZEUS/天眼 raw message 优先，缺失时 fallback 到 `zeusRawLogs` 并显式降级可信度 |
 | 15 | fact reconstruction layer | Done | `entity_extract` 后生成 `FactReconstructionResult`，记录字段可信度、角色候选和冲突报告 |
 | 16 | LLM-ready analysis request | Done | `fact_reconstruct` 后生成 `LLMAnalysisRequest`，analyzer 只消费有界分析上下文 |
+| 17 | Prompt Builder + SOC prompt golden tests | Done | Prompt 只能从 `LLMAnalysisRequest` 生成；覆盖 PingAn APT/EDR、raw message 缺失 fallback、字段冲突；不把完整 raw payload 无脑塞进 prompt |
+| 18 | LLM JSON parser + bad JSON repair | Next | 先严格 JSON parse，再 repair，再 Pydantic/domain validation；覆盖代码块、尾逗号、半截 JSON、字段类型错误 |
 
 ## 进度记录
+
+### 2026-07-02 — SOC Lead Agent / Skill / MCP / Node Prompt 分层决策
+
+- 明确当前 `soc-analysis-v1` 是固定 Runtime 内的 analysis node prompt，不是 SOC Lead Agent 总控 prompt。
+- 在 `.notes/ai_soc/soc-agent-solution.md` 增加分层：
+  - SOC Lead Agent / Operator Agent：交互、任务理解、选择 skill、选择 MCP/tool、提出调查计划。
+  - SOC Runtime / Core Services：固定流水线、状态机、校验、审计、replay、权限和失败处理。
+  - Domain Skills：EDR、APT、F5/WAF、资产归属、攻击方向、处置剧本等领域知识。
+  - MCP / Tool Gateway：EDR、资产、SOAR、防火墙等外部能力调用。
+  - Node Prompts：`llm_analyze`、correlation rerank、knowledge extraction 等固定节点推理。
+- 在 `.notes/reference-index/soc-agent-engineering-contracts.md` 增加 Prompt / Skill / Tool 分层约束：
+  - 后续 `SocSkillResolver` 先用 deterministic 规则按 `source_type`、`detection_key`、category、entity kind 选择 skill。
+  - LLM 只能在白名单 skill 候选中 rerank 或提出建议，不能动态加载未知 skill 后直接影响决策。
+  - MCP/tool 调用必须经过 allowlist、policy、audit 和必要的人类审批。
+- 当前下一刀不变：
+  - 继续做 LLM JSON output parser + schema validation + bad JSON repair golden sample。
+
+### 2026-07-01 — SOC analysis Prompt Builder 切片
+
+- 新增 versioned prompt builder：
+  - `backend/soc_agent/prompts/analysis.py`
+  - `ANALYSIS_PROMPT_VERSION = "soc-analysis-v1"`
+  - `build_analysis_prompt(request: LLMAnalysisRequest)` 只消费 bounded request，不读取 raw vendor payload。
+- Prompt 结构：
+  - system prompt 固定 runtime/LLM 边界：Runtime 掌握流程，LLM 只输出结构化 JSON。
+  - user prompt 注入 bounded analysis context：source、detection、classification、canonical/extracted entities、evidence policy、field trusts、role assignments、conflict reports、warnings。
+  - response schema 明确 `AnalysisResult` 所需字段和 verdict 枚举。
+- 新增 golden tests：
+  - `backend/tests/test_soc_agent_prompts.py`
+  - 覆盖 PingAn APT 字段冲突、PingAn EDR 低可信 structured fallback、缺失 evidence policy。
+  - 验证 prompt 不把完整 raw payload 字段如 `process__cmd_line` / `finding__desc` 无脑塞入上下文。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/prompts tests/test_soc_agent_prompts.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_prompts.py -q`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/test_soc_agent_prompts.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/test_soc_agent_prompts.py tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+- 下一步：
+  - 做 LLM JSON output parser + schema validation + bad JSON repair golden sample。
+  - parser 完成前，不接真实 LLM analyzer。
 
 ### 2026-07-01 — LLM-ready 分析输入切片
 
@@ -69,8 +114,9 @@
   - `codegraph sync .`
   - `codegraph status .` 显示 index up to date；当前统计为 1,158 files / 21,981 nodes / 49,444 edges。
 - 下一步：
-  - 补一个真实 LLM analyzer stub interface / prompt builder，但默认仍不调用外部模型。
+  - 先补 Prompt Builder + SOC analysis prompt golden tests；真实 LLM analyzer 仍 behind flag，默认不调用外部模型。
   - 为 PingAn raw message 样本增加 prompt golden case，验证冲突字段如何呈现给模型。
+  - 后续顺序固定为：LLM JSON parser + schema validation + bad JSON repair golden sample -> 真实 LLM analyzer behind flag -> offline eval（stub / llm / replay diff）-> ReviewQueue UI 或 Kafka daemon。
 
 ### 2026-07-01 — 事实重建最小切片
 

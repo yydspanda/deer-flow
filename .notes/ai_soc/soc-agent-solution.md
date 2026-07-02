@@ -170,7 +170,133 @@ SOC Agent 的产品入口应和 DeerFlow 保持同构，而不是另起一套产
 
 当前已落地第一步：`backend/soc_agent/core/service.py` 中的 `SocAnalysisService.analyze()` 包装 deterministic runtime。后续入口都应优先接这个 service，而不是直接拼 pipeline。
 
-### 1.2.1 生产级 Runtime 原则：硬骨架 + 软路由
+### 1.2.0 SOC Lead Agent、Skill、MCP 与 Node Prompt 分层
+
+SOC Agent 的长期目标不是一个传统告警分类器，而是一个 DeerFlow-aligned 的安全运营智能体平台。必须区分“总控 Agent prompt”和“固定 Runtime 节点 prompt”，否则后续接 EDR skill、APT skill、资产归属、攻击方向判断、封禁 MCP 时会互相污染。
+
+分层原则：
+
+```text
+SOC Lead Agent / Operator Agent
+  -> 负责交互、任务理解、选择 domain skill、选择 MCP/tool、提出调查计划
+
+SOC Runtime / Core Services
+  -> 负责固定流水线、状态机、schema/domain validation、审计、replay、权限和失败处理
+
+Domain Skills
+  -> 负责提供 EDR / APT / F5-WAF / HIDS / NIDS / 资产归属 / 攻击方向 / 处置剧本等领域知识
+
+MCP / Tool Gateway
+  -> 负责调用 EDR、资产系统、SOAR、防火墙、Kafka、PostgreSQL 等外部能力
+
+Node Prompts
+  -> 负责固定节点内的结构化推理，例如 llm_analyze、correlation_rerank、knowledge_candidate_extract
+```
+
+这意味着：
+
+- `soc-analysis-v1` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。
+- Node prompt 只能在 Runtime 指定节点内运行，输出必须进入 schema/domain validation。
+- Domain skill 可以动态选择，但选择结果必须以受控 skill context 注入节点或交互 agent，不能绕过 Runtime 直接改 DB、memory 或执行处置。
+- MCP/tool 可以动态调用，但必须经过 Tool Gateway、权限策略、审计和必要的人类审批。
+- SOC Lead Agent 可以像 DeerFlow `lead_agent` 一样使用 skills、MCP、tool search、subagent，但它不能取代 core service 的状态机和安全边界。
+
+典型流程：
+
+```text
+EDR 告警进入
+  -> normalize / entity_extract / fact_reconstruct / build_analysis_input
+  -> SkillResolver 选择 edr-triage / lateral-movement / asset-ownership 等 skill
+  -> PromptBuilder 注入 bounded request + selected skill context
+  -> LLM 输出 AnalysisResult / action proposal
+  -> Policy 判定是否允许查询或处置
+  -> 低风险查询调用 EDR/资产 MCP；高风险封禁/隔离必须人工审批
+  -> audit / summary / review queue / replay
+```
+
+早期实现顺序：
+
+1. Phase 1 先把 node prompt、JSON parser、真实 LLM analyzer behind flag 做稳。
+2. Phase 2/3 再引入 `SocSkillResolver`，先用 deterministic 规则按 `source_type`、`detection_key`、category、entity kind 选择 skill。
+3. Phase 3/4 再让 SOC Lead Agent 在 TUI/Web/Chat 场景中做交互式调查和受限软路由。
+4. MCP/tool 处置能力最后接入；查询类工具先接，封禁/隔离/禁用账号必须默认需要审批。
+
+### 1.2.1 Phase 1 当前实际 Runtime Pipeline
+
+截至 2026-07-01，Phase 1 已落地的实际 runtime 不是早期草案里的简单 `normalize -> entity_extract -> analyze_stub -> validate -> decide`，而是已经补上了 ZEUS/天眼输入可信度治理和 LLM-ready 分析输入层：
+
+```text
+vendor/raw payload
+  -> normalize
+  -> entity_extract
+  -> fact_reconstruct
+  -> build_analysis_input
+  -> analyze_stub / later llm_analyze
+  -> schema_validate
+  -> decide
+  -> audit / summary / review queue
+```
+
+各步骤职责：
+
+| Step | 当前实现 | 输入 | 输出 | 职责边界 |
+|---|---|---|---|---|
+| `normalize` | Done | flat/vendor/raw payload | `AlertInput` + `NormalizationReport` | 只做确定性归一化；不判定攻击方向、受害方、处置目标 |
+| `entity_extract` | Done | `AlertInput` | `ExtractedEntities` + `ExtractionReport` | 从 canonical 字段提取实体 mention；不直接读取厂商字段 |
+| `fact_reconstruct` | Done | `AlertInput` | `FactReconstructionResult` | 根据证据策略生成字段可信度、角色候选、冲突报告；不直接下 verdict |
+| `build_analysis_input` | Done | `AlertInput` + `ExtractedEntities` + `FactReconstructionResult` | `LLMAnalysisRequest` | 收敛成 stub/LLM 唯一可消费的有界分析上下文 |
+| `analyze_stub` | Done | `LLMAnalysisRequest` | `AnalysisResult` | Phase 1 deterministic stub；后续可替换为真实 LLM analyzer |
+| `schema_validate` | Done | `AnalysisResult` | validated `AnalysisResult` | 校验 LLM/stub 输出结构，防止自然语言直接进入决策层 |
+| `decide` | Done | validated `AnalysisResult` | `Decision` | 只给建议和 review 分流；Phase 1 固定 `automation_allowed=False` |
+
+ZEUS/天眼输入可信度相关结构状态：
+
+| Contract | 状态 | 目的 |
+|---|---|---|
+| `EvidenceLayer` | Done | 区分 `raw_message`、`raw_structured`、`processed_field`、`agent_inference`、`human_confirmed` |
+| `EvidenceInputPolicy` | Done | 指定事实重建和后续分析优先看哪份输入；平安优先 `zeusRawLogs[].message`，缺失时 fallback 到 `zeusRawLogs[]` 并降级可信度 |
+| `FieldTrust` | Done | 标注字段来源、可信度、是否参与事实重建 |
+| `RoleAssignment` | Done | 记录 source、destination、attacker、victim、impacted_asset、response_target 等候选角色 |
+| `ConflictReport` | Done | 显式记录 attacker/source、victim/destination、同角色多候选等冲突 |
+| `FactReconstructionResult` | Done | LLM 分析前的事实层，保存 evidence policy、field trust、role assignment、conflict report 和 warning |
+| `LLMAnalysisRequest` | Done | stub/LLM analyzer 的唯一输入 contract，避免模型直接吃 raw payload 或未筛选加工字段 |
+
+这条链路的核心原则：
+
+- `normalize` 解决格式统一，不解决事实可信度。
+- `EvidenceInputPolicy` 解决主证据选择，不直接输出结论。
+- `fact_reconstruct` 解决字段可信度、角色候选和冲突显式化，不直接判定真假。
+- `LLMAnalysisRequest` 解决 LLM 上下文边界，不允许后续模型绕过它直接读取完整 raw payload。
+- 后续 `PromptBuilder` 必须只从 `LLMAnalysisRequest` 生成 prompt/messages。
+
+#### Phase 1 当前下一步固定顺序
+
+截至 2026-07-01，`ReviewQueue` 的基础 service 和 `InvestigationContext` 已经具备雏形；继续优先做 UI 的产品验证价值有限，因为队列里仍主要展示 deterministic stub 结论。当前阶段应先把 LLM 分析节点做成可控、可测试、可回放的工程节点，再放大到复核界面或 Kafka 后台流。
+
+固定顺序：
+
+1. **Prompt Builder + SOC analysis prompt golden tests**
+   - `PromptBuilder` 只能消费 `LLMAnalysisRequest`。
+   - 不允许直接把完整 `AlertInput.raw` 或 vendor payload 无脑塞进 prompt。
+   - Prompt 必须显式呈现主证据来源、字段可信度、角色候选、冲突报告、warnings 和 JSON 输出 schema。
+   - Golden tests 至少覆盖 PingAn APT/EDR、raw message 缺失 fallback、字段冲突场景。
+   - 当前状态：Done，已落地 `backend/soc_agent/prompts/analysis.py` 和 `backend/tests/test_soc_agent_prompts.py`。
+2. **LLM JSON output parser + schema validation + bad JSON repair golden sample**
+   - 先严格 JSON parse，再 repair，再 Pydantic / domain validation。
+   - repair 仍失败时必须进入明确失败态或 `needs_review`，不能假装成功。
+   - 当前状态：Next。
+3. **真实 LLM analyzer behind flag**
+   - 默认继续使用 deterministic stub。
+   - 只有显式配置开启时才调用真实模型。
+   - 必须记录 `prompt_version`、`prompt_hash`、`parser_version`、`model_name` 和必要 token/cost 信息。
+4. **Offline eval：stub / llm / replay diff**
+   - 同一批样本比较 verdict、confidence、needs_review、parse success、冲突字段处理质量。
+   - 评估结果决定真实 LLM 是否进入默认链路。
+5. **ReviewQueue UI 或 Kafka daemon**
+   - UI 依赖稳定可解释的研判结果。
+   - Kafka daemon 依赖稳定的 parse/repair/fallback/rate-limit 策略。
+
+### 1.2.2 生产级 Runtime 原则：硬骨架 + 软路由
 
 SOC Agent 的工程定位不是“让 LLM 自主完成一切”，而是：
 
@@ -182,9 +308,8 @@ SOC Agent 的工程定位不是“让 LLM 自主完成一切”，而是：
 Deterministic Backbone
   normalize
   -> entity_extract
-  -> dedup
-  -> lesson_match
-  -> history_query
+  -> fact_reconstruct
+  -> build_analysis_input
   -> llm_analyze
   -> schema_validate
   -> domain_validate
@@ -211,11 +336,12 @@ LLM Advisory Router（受限软路由）
 
 Phase 节奏：
 
-- Phase 1-2：流程定死，LLM 只做 `funnel` 和 `analyze` 两类固定节点。
+- Phase 1：流程定死，当前先用 deterministic `analyze_stub`；真实 LLM 接入前必须先经过 `LLMAnalysisRequest` 和后续 PromptBuilder。
+- Phase 2：在固定主流程中补 dedup、lesson_match、history_query、correlation 等节点；LLM 仍只处理受控分析或候选排序。
 - Phase 3：引入受限 `LLM Advisory Router`，只允许从白名单 next steps 中选择，例如 `ask_human`、`fetch_more_history`、`mark_needs_review`。
 - Phase 4+：软路由必须具备 step trace、成本估算、replay diff 和评测指标后，才允许进入 daemon。
 
-### 1.2.2 Fork 维护原则：上游最小侵入 + SOC 增量扩展
+### 1.2.3 Fork 维护原则：上游最小侵入 + SOC 增量扩展
 
 当前仓库是基于 DeerFlow 上游开源项目 fork 后的二次开发，因此 SOC Agent 的工程边界必须优先考虑长期同步 upstream 的成本。默认原则是：
 
