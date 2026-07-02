@@ -164,6 +164,12 @@ search alone. Use this order:
    orchestration, runtime lifecycle, streaming/event protocol, or reference-project
    pattern comparison. Do not run Understand mechanically for narrow local edits
    where the repo-local contract and CodeGraph lookup are sufficient.
+   When the SOC Agent subtree has changed materially, prefer a scoped Understand
+   rebuild for `backend/soc_agent` rather than pretending the stale root graph is
+   current:
+   `$understand-anything:understand /home/yydspei/projects/deer-flow/backend/soc_agent --full --language zh`.
+   Use `understand-chat`/`understand-explain` only after the relevant graph exists
+   and its `.understand-anything/meta.json` is current enough for the question.
 4. Implement SOC-specific behavior as incremental modules/adapters first; avoid changing
    upstream DeerFlow core unless a small generic extension point is required.
 5. If the slice changes product direction, runtime pipeline, contract semantics, phase
@@ -207,5 +213,9 @@ Cross-project rules:
 
 - Prefer Understand Anything for broad architecture exploration.
 - Prefer CodeGraph for exact symbol/function/class lookup.
-- Record reusable findings in `.notes/reference-index/`.
+- Consult reference projects only when the current slice needs a design pattern
+  that is not already settled locally, such as memory lifecycle, approval policy,
+  multi-agent orchestration, stream protocol, context compaction, or tool runtime.
+- Record reusable findings in `.notes/reference-index/` with the question, project,
+  concrete file/symbol, and what was reused or rejected.
 - Re-implement design ideas in this repo; do not copy reference-project code directly.

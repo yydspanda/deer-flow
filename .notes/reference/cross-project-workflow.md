@@ -27,6 +27,19 @@
 /understand /home/yydspei/projects/hermes-agent --language zh
 ```
 
+SOC Agent 本项目建议使用 scoped graph，而不是在 root graph 过期时强行增量：
+
+```text
+$understand-anything:understand /home/yydspei/projects/deer-flow/backend/soc_agent --full --language zh
+```
+
+使用规则：
+
+- `understand-chat` / `understand-explain` 前先看对应 `.understand-anything/meta.json`，确认图谱覆盖当前问题涉及的代码。
+- 如果 root graph 早于 SOC Agent 新增代码，不能用它回答 SOC 代码落点；先跑 SOC scoped rebuild，或明确记录“图谱过期，改用 CodeGraph”。
+- 如果变更集中在 `backend/soc_agent/**`，优先刷新 SOC scoped graph；只有跨 DeerFlow core/frontend/Gateway 架构变化时才考虑 root graph full rebuild。
+- 不为了一个局部函数改动启动 full Understand；局部落点继续用 CodeGraph。
+
 启动 Dashboard 交互浏览：
 
 ```text
@@ -117,6 +130,26 @@ codegraph callers -p /home/yydspei/projects/claude-mem "MemoryManager"
 ```
 
 每个文件一个主题，记录各项目的**最佳实现位置**（文件+行号+要点），不追求全面对比。
+
+## ⑤ 什么时候参考其他项目
+
+参考项目不是每个切片都要查。只有当前问题需要跨项目设计判断时才查，例如：
+
+| 问题类型 | 优先参考 |
+|---|---|
+| tool/action permission、approval、HITL | `claude-code-sourcemap`、DeerFlow ACP permission |
+| memory lifecycle、fact/lesson storage、回滚 | `claude-mem` |
+| multi-agent orchestration、agent lifecycle、event stream | `hermes-agent`、`openclaw` |
+| context compaction、long-running session | `claude-code-sourcemap`、`openclaw` |
+
+查完必须写入 `.notes/reference-index/`，至少包含：
+
+```markdown
+| 问题 | 参考项目/位置 | 采用点 | 未采用点 |
+|---|---|---|---|
+```
+
+没有记录到 reference-index 的跨项目发现，不能作为长期决策依据。
 
 ## 三条铁律
 

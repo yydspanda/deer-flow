@@ -11,6 +11,9 @@
 3. 再用 CodeGraph / Understand Anything 查 DeerFlow 代码落点和参考实现：
    - 局部实现切片优先 CodeGraph，用来定位本仓库符号、调用点和低侵入接入点。
    - 架构型或跨项目切片必须先考虑 Understand Anything / reference 项目，例如权限审批、memory、多 Agent、runtime lifecycle、stream/event protocol、跨项目设计模式。
+   - `backend/soc_agent` 发生大量结构变化时，不强行把旧 root graph 当作可用依据；优先做 SOC scoped rebuild：`$understand-anything:understand /home/yydspei/projects/deer-flow/backend/soc_agent --full --language zh`。
+   - `understand-chat` / `understand-explain` 只用于已有且足够新的图谱；如果 `.understand-anything/meta.json` 落后于当前设计代码，必须先更新图谱或记录“图谱过期，改用 CodeGraph”。
+   - 参考项目只在本地方案尚未定型时使用，常见触发点是 memory、approval policy、多 Agent、stream/event protocol、context compaction、tool runtime。
    - 不为窄小本地改动机械运行 Understand；如果现有方案和本仓库上下文已经足够，记录理由后继续实现。
 4. 优先新增 SOC 独立模块、adapter、schema、CLI/API 入口，不侵入 DeerFlow 上游核心。
 5. 如果切片改变产品方向、runtime pipeline、contract 语义、Phase 边界或下一步顺序，必须同步更新 `.notes/ai_soc/soc-agent-solution.md`；工程规则同步更新 `.notes/reference-index/soc-agent-engineering-contracts.md`。
