@@ -289,10 +289,11 @@ ZEUS/天眼输入可信度相关结构状态：
    - 默认继续使用 deterministic stub。
    - 只有显式配置开启时才调用真实模型。
    - 必须记录 `prompt_version`、`prompt_hash`、`parser_version`、`model_name` 和必要 token/cost 信息。
-   - 当前状态：Next。
+   - 当前状态：Done，已落地 `backend/soc_agent/llm/analyzer.py`、`AnalysisNodeOutput`、runtime analyzer 注入和 fake client 测试；默认 runtime 仍走 stub。
 4. **Offline eval：stub / llm / replay diff**
    - 同一批样本比较 verdict、confidence、needs_review、parse success、冲突字段处理质量。
    - 评估结果决定真实 LLM 是否进入默认链路。
+   - 当前状态：Next。
 5. **ReviewQueue UI 或 Kafka daemon**
    - UI 依赖稳定可解释的研判结果。
    - Kafka daemon 依赖稳定的 parse/repair/fallback/rate-limit 策略。

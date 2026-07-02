@@ -7,6 +7,7 @@ sample behavior while the runtime, contracts, trace, and CLI stabilize.
 from __future__ import annotations
 
 from soc_agent.contracts import (
+    AnalysisNodeOutput,
     AnalysisResult,
     EvidenceItem,
     LLMAnalysisRequest,
@@ -15,6 +16,22 @@ from soc_agent.contracts import (
 
 FALSE_POSITIVE_HINTS = ("approved", "scanner", "securityscan", "nmap", "nessus")
 TRUE_POSITIVE_HINTS = ("malicious", "mimikatz", "cobalt", "ransom", "ioc", "backdoor")
+STUB_ANALYZER_MODEL_NAME = "stub"
+STUB_ANALYZER_PROMPT_VERSION = "stub"
+
+
+class StubLLMAnalyzer:
+    """Deterministic analyzer used when the LLM feature path is disabled."""
+
+    step_name = "analyze_stub"
+
+    def analyze(self, request: LLMAnalysisRequest) -> AnalysisNodeOutput:
+        return AnalysisNodeOutput(
+            analysis=analyze_stub(request),
+            model_name=STUB_ANALYZER_MODEL_NAME,
+            prompt_version=STUB_ANALYZER_PROMPT_VERSION,
+            metadata={"analyzer": "stub"},
+        )
 
 
 def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:

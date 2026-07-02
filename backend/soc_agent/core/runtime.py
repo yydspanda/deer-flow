@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from soc_agent.contracts import (
     AlertInput,
+    AnalysisNodeOutput,
     AnalysisResult,
     AnalysisRun,
     AnalysisRunStatus,
@@ -31,9 +32,10 @@ from soc_agent.contracts import (
 from soc_agent.core.validator import validate_analysis_result, validate_decision
 from soc_agent.normalizers import normalize_alert_payload, normalize_with_mapping
 from soc_agent.pipeline.analysis_context import build_llm_analysis_request
-from soc_agent.pipeline.analyzer import analyze_stub
+from soc_agent.pipeline.analyzer import StubLLMAnalyzer
 from soc_agent.pipeline.extractor import extract_entities
 from soc_agent.pipeline.fact_reconstructor import reconstruct_facts
+from soc_agent.protocols import LLMAnalyzer
 from soc_agent.utils.hashing import stable_hash
 
 
@@ -58,10 +60,11 @@ def inspect_alert_normalization(
     )
 
 
-def analyze_alert(payload: Mapping[str, Any]) -> AnalysisRun:
+def analyze_alert(payload: Mapping[str, Any], *, analyzer: LLMAnalyzer | None = None) -> AnalysisRun:
     """Analyze one alert through the fixed Phase 1 pipeline."""
 
     input_payload = _jsonable(payload)
+    analysis_node = analyzer or StubLLMAnalyzer()
     run = AnalysisRun(
         alert_id="unknown",
         status=AnalysisRunStatus.RUNNING,
@@ -85,13 +88,15 @@ def analyze_alert(payload: Mapping[str, Any]) -> AnalysisRun:
             lambda _: build_llm_analysis_request(alert, entities, fact_reconstruction),
         )
         run.llm_analysis_request = analysis_request
-        analysis = _run_step(
+        analysis_output = _run_step(
             run,
-            "analyze_stub",
+            analysis_node.step_name,
             analysis_request,
-            analyze_stub,
+            analysis_node.analyze,
         )
-        run.analysis = _run_step(run, "schema_validate", analysis, validate_analysis_result)
+        run.model_name = analysis_output.model_name
+        run.prompt_version = analysis_output.prompt_version
+        run.analysis = _run_step(run, "schema_validate", analysis_output.analysis, validate_analysis_result)
         run.decision = _run_step(run, "decide", run.analysis, _decide)
         run.status = AnalysisRunStatus.NEEDS_REVIEW if run.decision.needs_review else AnalysisRunStatus.SUCCESS
     except Exception as exc:  # noqa: BLE001 - convert all runtime failures into run state
@@ -267,6 +272,16 @@ def _run_step[T](
         trace.warnings.extend(output.warnings)
     if isinstance(output, LLMAnalysisRequest):
         trace.warnings.extend(output.warnings)
+    if isinstance(output, AnalysisNodeOutput):
+        trace.metadata.update(
+            {
+                "model_name": output.model_name,
+                "prompt_version": output.prompt_version,
+            }
+        )
+        if output.parser_version is not None:
+            trace.metadata["parser_version"] = output.parser_version
+        trace.metadata.update(output.metadata)
 
     return output
 

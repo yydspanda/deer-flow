@@ -23,7 +23,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 真实 LLM analyzer behind flag；默认仍使用 deterministic stub，不影响现有 runtime |
+| 当前下一刀 | Offline eval：同一批样本跑 stub / llm / replay diff，评估真实 LLM 是否可进入默认链路 |
 
 ## Phase 1 切片计划
 
@@ -47,9 +47,33 @@
 | 16 | LLM-ready analysis request | Done | `fact_reconstruct` 后生成 `LLMAnalysisRequest`，analyzer 只消费有界分析上下文 |
 | 17 | Prompt Builder + SOC prompt golden tests | Done | Prompt 只能从 `LLMAnalysisRequest` 生成；覆盖 PingAn APT/EDR、raw message 缺失 fallback、字段冲突；不把完整 raw payload 无脑塞进 prompt |
 | 18 | LLM JSON parser + bad JSON repair | Done | 先严格 JSON parse，再 repair，再 Pydantic/domain validation；覆盖代码块、尾逗号、半截 JSON、字段类型错误 |
-| 19 | 真实 LLM analyzer behind flag | Next | 默认继续走 `analyze_stub`；显式配置开启后才调用模型；输出必须经过 prompt builder、JSON parser、schema/domain validation |
+| 19 | 真实 LLM analyzer behind flag | Done | 默认继续走 `analyze_stub`；显式配置开启后才调用模型；输出必须经过 prompt builder、JSON parser、schema/domain validation |
+| 20 | Offline eval：stub / llm / replay diff | Next | 同一批样本比较 verdict、confidence、needs_review、parse success、冲突字段处理质量 |
 
 ## 进度记录
+
+### 2026-07-02 — 真实 LLM analyzer behind flag 切片
+
+- 新增 bounded LLM analyzer：
+  - `backend/soc_agent/llm/analyzer.py`
+  - `JsonLLMAnalyzer` 只负责 `build_analysis_prompt()` -> injected chat client -> `parse_analysis_result_output()` -> `AnalysisNodeOutput`。
+  - `build_optional_llm_analyzer(enabled=False)` 默认返回 deterministic `StubLLMAnalyzer`；`enabled=True` 必须显式注入 client。
+- 调整 runtime analyzer 边界：
+  - `LLMAnalyzer` protocol 返回 `AnalysisNodeOutput`，包含 `AnalysisResult`、`model_name`、`prompt_version`、`parser_version` 和 metadata。
+  - `analyze_alert(payload, analyzer=None)` 默认仍使用 `StubLLMAnalyzer`。
+  - `DeterministicAnalysisRuntime(analyzer=...)` 可注入真实 analyzer，后续 API/CLI/daemon 都能共用同一个 runtime 入口。
+- 审计记录：
+  - `PipelineStepTrace.metadata` 记录 analyzer、`model_name`、`prompt_version`、`parser_version`、`prompt_hash`、`candidate_hash`、`repair_applied`、usage 和 response metadata。
+  - 不把完整 prompt 或 raw LLM 输出写入 step metadata，避免 trace 过大和敏感信息扩散。
+- 新增测试：
+  - `backend/tests/test_soc_agent_llm_analyzer.py`
+  - 覆盖默认 flag 返回 stub、enabled 缺 client 失败、fake chat client 走 prompt/parser/repair/runtime trace、默认 runtime 仍保持旧 step 顺序。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_llm_analyzer.py tests/test_soc_agent_llm_json_parser.py tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py -q`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_llm_analyzer.py tests/test_soc_agent_llm_json_parser.py tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 做 offline eval：同一批样本跑 stub / llm / replay diff。
+  - 先使用 fake/replayable LLM client，不默认调用真实外部模型；评估指标稳定后再接 CLI/API 配置开关。
 
 ### 2026-07-02 — SOC Lead Agent / Skill / MCP / Node Prompt 分层决策
 

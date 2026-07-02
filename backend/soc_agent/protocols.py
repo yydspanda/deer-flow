@@ -8,7 +8,7 @@ from typing import Any, Protocol
 from soc_agent.contracts import (
     AlertInput,
     AlertSummary,
-    AnalysisResult,
+    AnalysisNodeOutput,
     AnalysisRun,
     DecisionAuditRecord,
     LLMAnalysisRequest,
@@ -35,7 +35,9 @@ class AnalysisRuntime(Protocol):
 class LLMAnalyzer(Protocol):
     """Bounded LLM analysis node used behind a fixed runtime step."""
 
-    def analyze(self, request: LLMAnalysisRequest) -> AnalysisResult: ...
+    step_name: str
+
+    def analyze(self, request: LLMAnalysisRequest) -> AnalysisNodeOutput: ...
 
 
 class AlertRepository(Protocol):

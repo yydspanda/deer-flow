@@ -646,6 +646,17 @@ class PipelineStepTrace(BaseModel):
     duration_ms: int | None = None
     error: str | None = None
     warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AnalysisNodeOutput(BaseModel):
+    """Auditable output returned by a bounded SOC analysis node."""
+
+    analysis: AnalysisResult
+    model_name: str = Field(min_length=1)
+    prompt_version: str = Field(min_length=1)
+    parser_version: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnalysisRun(BaseModel):

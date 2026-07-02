@@ -43,6 +43,7 @@ from soc_agent.protocols import (
     AlertSummaryRepository,
     AnalysisRuntime,
     DecisionAuditRepository,
+    LLMAnalyzer,
     ReviewQueueRepository,
     SocEventSink,
 )
@@ -63,8 +64,11 @@ class SocServiceNotFoundError(SocServiceError):
 class DeterministicAnalysisRuntime:
     """Adapter that exposes the current deterministic runtime as a protocol."""
 
+    def __init__(self, *, analyzer: LLMAnalyzer | None = None) -> None:
+        self._analyzer = analyzer
+
     def analyze(self, payload: Mapping[str, Any]) -> AnalysisRun:
-        return analyze_alert(payload)
+        return analyze_alert(payload, analyzer=self._analyzer)
 
 
 class NoopEventSink:

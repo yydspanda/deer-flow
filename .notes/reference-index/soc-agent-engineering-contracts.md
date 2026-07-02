@@ -337,6 +337,12 @@ normalizers/hids.py
 - analyzer 输出的 `AnalysisResult.evidence` 必须能引用 fact layer 中的关键不确定性，例如低可信 fallback 和字段冲突。
 - 真实 LLM 接入前，先以 deterministic stub 验证 request 结构、trace、持久化、replay 和 review queue 不受影响。
 - 后续接模型时，prompt builder 只能从 `LLMAnalysisRequest` 生成 prompt；不能把完整 `AlertInput.raw` 自动塞入上下文。
+- analyzer public output 必须是 `AnalysisNodeOutput`：
+  - `analysis` 必须先经过 parser、Pydantic schema validation 和 domain validation。
+  - `model_name`、`prompt_version`、`parser_version` 必须进入 run/step trace。
+  - `PipelineStepTrace.metadata` 必须记录 `prompt_hash`、`candidate_hash`、`repair_applied`、usage/response metadata 等审计信息。
+  - step metadata 不保存完整 prompt、完整 raw LLM output 或完整 vendor payload；需要复盘时通过 replay 输入和版本重新生成。
+- 默认 runtime 必须继续使用 deterministic `StubLLMAnalyzer`；真实 LLM analyzer 只能通过显式 flag/config/client 注入。
 
 ### Mapping config 约束
 
