@@ -284,11 +284,12 @@ ZEUS/天眼输入可信度相关结构状态：
 2. **LLM JSON output parser + schema validation + bad JSON repair golden sample**
    - 先严格 JSON parse，再 repair，再 Pydantic / domain validation。
    - repair 仍失败时必须进入明确失败态或 `needs_review`，不能假装成功。
-   - 当前状态：Next。
+   - 当前状态：Done，已落地 `backend/soc_agent/llm/json_parser.py` 和 `backend/tests/test_soc_agent_llm_json_parser.py`。
 3. **真实 LLM analyzer behind flag**
    - 默认继续使用 deterministic stub。
    - 只有显式配置开启时才调用真实模型。
    - 必须记录 `prompt_version`、`prompt_hash`、`parser_version`、`model_name` 和必要 token/cost 信息。
+   - 当前状态：Next。
 4. **Offline eval：stub / llm / replay diff**
    - 同一批样本比较 verdict、confidence、needs_review、parse success、冲突字段处理质量。
    - 评估结果决定真实 LLM 是否进入默认链路。

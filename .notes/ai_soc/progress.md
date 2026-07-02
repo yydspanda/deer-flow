@@ -23,7 +23,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | LLM JSON output parser + schema validation + bad JSON repair golden sample；真实模型仍 behind flag，默认不影响 deterministic stub |
+| 当前下一刀 | 真实 LLM analyzer behind flag；默认仍使用 deterministic stub，不影响现有 runtime |
 
 ## Phase 1 切片计划
 
@@ -46,7 +46,8 @@
 | 15 | fact reconstruction layer | Done | `entity_extract` 后生成 `FactReconstructionResult`，记录字段可信度、角色候选和冲突报告 |
 | 16 | LLM-ready analysis request | Done | `fact_reconstruct` 后生成 `LLMAnalysisRequest`，analyzer 只消费有界分析上下文 |
 | 17 | Prompt Builder + SOC prompt golden tests | Done | Prompt 只能从 `LLMAnalysisRequest` 生成；覆盖 PingAn APT/EDR、raw message 缺失 fallback、字段冲突；不把完整 raw payload 无脑塞进 prompt |
-| 18 | LLM JSON parser + bad JSON repair | Next | 先严格 JSON parse，再 repair，再 Pydantic/domain validation；覆盖代码块、尾逗号、半截 JSON、字段类型错误 |
+| 18 | LLM JSON parser + bad JSON repair | Done | 先严格 JSON parse，再 repair，再 Pydantic/domain validation；覆盖代码块、尾逗号、半截 JSON、字段类型错误 |
+| 19 | 真实 LLM analyzer behind flag | Next | 默认继续走 `analyze_stub`；显式配置开启后才调用模型；输出必须经过 prompt builder、JSON parser、schema/domain validation |
 
 ## 进度记录
 
@@ -65,6 +66,33 @@
   - MCP/tool 调用必须经过 allowlist、policy、audit 和必要的人类审批。
 - 当前下一刀不变：
   - 继续做 LLM JSON output parser + schema validation + bad JSON repair golden sample。
+
+### 2026-07-02 — LLM JSON parser + bad JSON repair 切片
+
+- 新增依赖：
+  - `json-repair>=0.61.1`
+- 新增 SOC LLM parser：
+  - `backend/soc_agent/llm/json_parser.py`
+  - `ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v1"`
+  - `parse_analysis_result_output(response_content)` 返回 `ParsedAnalysisResult`，包含 `AnalysisResult` 和 parser audit metadata。
+- Parser 行为：
+  - 借鉴 DeerFlow memory updater / suggestions 的方式，先从 string 或 content blocks 提取文本。
+  - 去掉 `<think>...</think>` 和整段 markdown code fence。
+  - 先用 `json.JSONDecoder().raw_decode()` 抽取严格合法的顶层 `AnalysisResult` JSON object。
+  - 严格解析失败后，再调用 `json_repair.loads(..., logging=True, skip_json_loads=True)`。
+  - repair 后仍必须通过 raw shape check、`AnalysisResult.model_validate()` 和 `validate_analysis_result()`。
+  - 如果 repair 得到空对象、非对象、缺字段、空 evidence、字符串 confidence 等，显式抛 `LLMOutputParseError`，不假装成功。
+- 新增 bad JSON golden tests：
+  - `backend/tests/test_soc_agent_llm_json_parser.py`
+  - 覆盖 strict JSON、`<think>` + code fence、夹杂说明文本、尾逗号、未加引号 key、字符串 confidence、空 evidence、不可恢复文本。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_llm_json_parser.py -q`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/test_soc_agent_prompts.py tests/test_soc_agent_llm_json_parser.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/test_soc_agent_prompts.py tests/test_soc_agent_llm_json_parser.py tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+- 下一步：
+  - 接真实 LLM analyzer behind flag。
+  - 默认仍走 deterministic `analyze_stub`，真实模型输出必须经过 `build_analysis_prompt()` 和 `parse_analysis_result_output()`。
 
 ### 2026-07-01 — SOC analysis Prompt Builder 切片
 
