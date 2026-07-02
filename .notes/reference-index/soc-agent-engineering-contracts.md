@@ -230,6 +230,11 @@ SOC Agent chat stream 约束：
 - SOC 结构化上下文通过 `custom` event 暴露，例如 `{"kind": "soc.review_context", ...}`；不要塞进 `ThreadState.artifacts`。
 - `SocAgentChatService` 可以调用 `SocReviewService`、`SocAnalysisService`、`SocMemoryService` 等 core services，但不能直接读写 repository、直接改 verdict、直接写 memory。
 - Phase 1 的 chat stream 是 deterministic shell/context loader，不调用真实 SOC Lead Agent；后续接 LLM/skills/MCP 时必须保留 Runtime 固定控制流和人工审批边界。
+- `soc_agent.tui.chat_runtime` 是纯翻译层：
+  - 可以复用 DeerFlow TUI 的 `Action`、`RunStarted`、`RunEnded`、`AssistantDelta`、`SystemMessage`、`reduce()` 语义。
+  - 可以把 `custom kind=soc.review_context` 转成可读系统提示。
+  - 不能 import repository、normalizer、runtime pipeline、Gateway router 或 Textual app。
+  - 不能执行 close/correct/analyze/response action；这些只能由明确命令或 service 调用触发。
 
 Investigation context 约束：
 

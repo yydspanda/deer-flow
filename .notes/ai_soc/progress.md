@@ -23,7 +23,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | SOC Lead Agent TUI/chat adapter 或 ReviewQueue Web thin page |
+| 当前下一刀 | SOC Lead Agent TUI chat workbench 或 ReviewQueue Web thin page |
 
 ## Phase 1 切片计划
 
@@ -52,8 +52,35 @@
 | 21 | ReviewQueue API | Done | Gateway 暴露 review queue 列表、调查上下文、关闭、纠正接口；业务动作仍走 `SocReviewService` |
 | 22 | ReviewQueue TUI thin client | Done | 基于 service/API 展示 open queue、打开 context、关闭 item、发起 correction；不复制业务逻辑 |
 | 23 | SOC Agent chat stream contract | Done | `SocAgentChatService` 输出 DeerFlow-compatible stream event；可加载 ReviewQueue context；不调用 LLM、不替代 core service |
+| 24 | SOC TUI chat runtime adapter | Done | 将 `SocAgentStreamEvent` 翻译成 DeerFlow TUI reducer actions；支持 `soc.review_context` custom event；保持纯函数、无 Textual/DB 依赖 |
 
 ## 进度记录
+
+### 2026-07-02 — SOC TUI chat runtime adapter 切片
+
+- 背景：
+  - 上一刀已落地 `SocAgentChatService.stream()` 和 `SocAgentStreamEvent`。
+  - 这一刀把 SOC stream 接到 DeerFlow TUI 的纯 action/reducer 层，为后续主 SOC Agent terminal workbench 铺路。
+- 新增：
+  - `backend/soc_agent/tui/chat_runtime.py`
+  - `translate(event)`：复用 DeerFlow TUI 通用 `translate()` 处理 `values`、`messages-tuple`、`end`。
+  - `stream_actions(service, request, context=...)`：和 DeerFlow `stream_actions()` 一样输出 `RunStarted -> actions -> RunEnded`，异常转 `AssistantError`。
+  - `custom kind=soc.review_context` 转为 DeerFlow `SystemMessage`，用于 TUI 展示 queue/run/alert 上下文已加载。
+- 边界：
+  - 不启动 Textual。
+  - 不直接访问 repository。
+  - 不执行 close/correct/analyze 等业务动作。
+  - 不把 SOC 结构化上下文放进 artifacts。
+- 新增测试：
+  - `backend/tests/test_soc_tui_chat_runtime.py`
+  - 覆盖通用 DeerFlow-like 消息、SOC custom event、unknown custom ignore、service stream bracketing、reducer 集成、异常转 UI error。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_tui_chat_runtime.py tests/test_soc_review_tui.py tests/test_soc_agent_service.py tests/test_tui_runtime.py tests/architecture/test_soc_agent_boundaries.py -q`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_tui_chat_runtime.py tests/test_soc_review_tui.py tests/test_soc_agent_service.py tests/test_tui_runtime.py tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+- 下一步：
+  - 若继续 TUI 方向，做 SOC Agent chat workbench：复用 DeerFlow Textual app 结构、ComposerInput、view_state/reducer/render，接 `SocAgentChatService`。
+  - 若继续产品闭环，做 ReviewQueue Web thin page。
 
 ### 2026-07-02 — SOC Agent chat stream contract 切片
 
