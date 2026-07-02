@@ -164,12 +164,50 @@ search alone. Use this order:
    orchestration, runtime lifecycle, streaming/event protocol, or reference-project
    pattern comparison. Do not run Understand mechanically for narrow local edits
    where the repo-local contract and CodeGraph lookup are sufficient.
+   The repository root `.understand-anything` is a frozen whole-DeerFlow knowledge
+   graph for this fork and is one of the most important references for understanding
+   the upstream project architecture. Treat it like a static reference snapshot:
+   use it to study DeerFlow-wide layout, Gateway/TUI/frontend/backend relationships,
+   and upstream extension points, but do not update or incrementally refresh it.
+   Reference-project Understand graphs are also static snapshots and should not be
+   refreshed unless the user explicitly changes this rule.
    When the SOC Agent subtree has changed materially, prefer a scoped Understand
    rebuild for `backend/soc_agent` rather than pretending the stale root graph is
    current:
    `$understand-anything:understand /home/yydspei/projects/deer-flow/backend/soc_agent --full --language zh`.
+   If `backend/soc_agent/.understand-anything/knowledge-graph.json` and
+   `backend/soc_agent/.understand-anything/meta.json` already exist, use the scoped
+   graph for SOC architecture questions and prefer an incremental refresh before
+   asking broad questions:
+   `$understand-anything:understand /home/yydspei/projects/deer-flow/backend/soc_agent --language zh`.
+   Use `--full` only when the SOC subtree changed structurally enough that an
+   incremental update is suspect.
+   Understand Anything incremental updates are commit-based: if
+   `backend/soc_agent/.understand-anything/meta.json` already points at the current
+   `HEAD`, uncommitted working-tree edits may not be detected by the skill's
+   `git diff <metaCommit>..HEAD` path. For uncommitted SOC code edits, either rely on
+   CodeGraph/source reads until commit, or force a scoped rebuild with `--full` before
+   asking architecture questions from the graph.
+   For scoped graph updates, also verify changed-file paths are relative to
+   `backend/soc_agent`; raw Git output from the repository root can contain
+   `backend/soc_agent/...` paths, while the scoped scan inventory stores paths like
+   `core/service.py`. If the skill computes zero batches after a SOC code commit,
+   treat that as a path-scope mismatch and use CodeGraph/source reads or a full scoped
+   rebuild instead of trusting the stale graph.
+   The `$understand-anything:*` form is a Codex skill/slash workflow command, not a
+   shell command. When the user explicitly asks to execute it, first follow the skill's
+   own pre-flight/decision logic and execute what the current Codex environment can
+   execute automatically. Ask the user to run the command manually only if the current
+   environment lacks the required skill runner, subagent, tool, or permission surface.
    Use `understand-chat`/`understand-explain` only after the relevant graph exists
    and its `.understand-anything/meta.json` is current enough for the question.
+   Use the scoped graph as a navigation layer, not as the final source of code truth:
+   search relevant nodes/summaries/tags, follow 1-hop edges and layer context, identify
+   candidate files/symbols, then use CodeGraph or direct source reads for exact code
+   before designing or editing. For SOC questions, point the analysis at
+   `backend/soc_agent/.understand-anything/knowledge-graph.json`; when invoking
+   `understand-chat` or `understand-explain` directly, make clear that the SOC scoped
+   graph should be used instead of the stale repository root graph.
 4. Implement SOC-specific behavior as incremental modules/adapters first; avoid changing
    upstream DeerFlow core unless a small generic extension point is required.
 5. If the slice changes product direction, runtime pipeline, contract semantics, phase

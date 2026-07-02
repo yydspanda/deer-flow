@@ -36,6 +36,7 @@ from soc_agent.contracts import (
     SocAgentActionResult,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
+    SocAgentApprovedActionCommand,
     SocAgentChatRequest,
     SocAgentChatResponse,
     SocAgentPermissionDecision,
@@ -55,6 +56,7 @@ from soc_agent.protocols import (
     DecisionAuditRepository,
     LLMAnalyzer,
     ReviewQueueRepository,
+    SocAgentApprovalGrantRepository,
     SocEventSink,
 )
 
@@ -520,6 +522,9 @@ class SocAgentApprovalService:
 
     APPROVER_ROLES = frozenset({"soc_approver", "soc_admin"})
 
+    def __init__(self, *, grant_repository: SocAgentApprovalGrantRepository | None = None) -> None:
+        self._grant_repository = grant_repository
+
     def approve(
         self,
         approval_request: SocAgentApprovalRequest,
@@ -538,7 +543,7 @@ class SocAgentApprovalService:
             raise SocServiceError("approval requires actor role soc_approver or soc_admin")
 
         approved_at = datetime.now(UTC)
-        return SocAgentApprovalGrant(
+        grant = SocAgentApprovalGrant(
             approval_request_id=approval_request.approval_request_id,
             permission_decision_id=approval_request.permission_decision_id,
             route=approval_request.route,
@@ -551,9 +556,59 @@ class SocAgentApprovalService:
             approved_at=approved_at,
             expires_at=approved_at + timedelta(seconds=expires_in_seconds),
         )
+        if self._grant_repository is not None:
+            self._grant_repository.save_approval_grant(grant)
+        return grant
+
+    def dry_run_approved_action(
+        self,
+        command: SocAgentApprovedActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        """Validate an approval grant and return a non-side-effecting action result."""
+
+        if self._grant_repository is None:
+            raise SocServiceNotImplementedError("dry_run_approved_action requires a SocAgentApprovalGrantRepository")
+
+        grant = self._grant_repository.get_approval_grant_by_token(command.execution_token_id)
+        if grant is None:
+            raise SocServiceNotFoundError(f"approval execution token {command.execution_token_id} not found")
+        self._validate_grant_for_command(grant, command)
+
+        return SocAgentActionResult(
+            route=grant.route,
+            action=grant.action,
+            status="success",
+            message="Approved action dry-run validated; no external side effect executed.",
+            payload={
+                "dry_run": command.dry_run,
+                "approval_grant_id": grant.approval_grant_id,
+                "approval_request_id": grant.approval_request_id,
+                "execution_token_id": grant.execution_token_id,
+                "requested_by": grant.requested_by.model_dump(mode="json"),
+                "approved_by": grant.approved_by.model_dump(mode="json"),
+                "executed_by": context.actor.model_dump(mode="json"),
+                "idempotency_key": context.idempotency_key,
+                "expires_at": grant.expires_at.isoformat(),
+            },
+        )
 
     def _can_approve(self, actor: ActorContext) -> bool:
         return bool(self.APPROVER_ROLES.intersection(actor.roles))
+
+    def _validate_grant_for_command(
+        self,
+        grant: SocAgentApprovalGrant,
+        command: SocAgentApprovedActionCommand,
+    ) -> None:
+        now = datetime.now(UTC)
+        if grant.expires_at <= now:
+            raise SocServiceError(f"approval grant {grant.approval_grant_id} is expired")
+        if grant.route != command.route:
+            raise SocServiceError("approval grant route does not match requested action")
+        if grant.action != command.action:
+            raise SocServiceError("approval grant action does not match requested action")
 
 
 class SocAgentChatService:

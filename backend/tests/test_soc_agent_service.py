@@ -19,7 +19,9 @@ from soc_agent.contracts import (
     ServiceRequestContext,
     SimilarAlertMatch,
     SimilarAlertQuery,
+    SocAgentApprovalGrant,
     SocAgentApprovalRequest,
+    SocAgentApprovedActionCommand,
     SocAgentChatRequest,
     SocAgentPermissionDecision,
     SocAgentRiskLevel,
@@ -141,6 +143,23 @@ class InMemoryReviewQueueRepository:
         if status is not None:
             items = [item for item in items if item.status == status]
         return items[:limit]
+
+
+class InMemoryApprovalGrantRepository:
+    def __init__(self) -> None:
+        self.grants: dict[str, SocAgentApprovalGrant] = {}
+
+    def save_approval_grant(self, grant: SocAgentApprovalGrant) -> None:
+        self.grants[grant.approval_grant_id] = grant
+
+    def get_approval_grant(self, approval_grant_id: str) -> SocAgentApprovalGrant | None:
+        return self.grants.get(approval_grant_id)
+
+    def get_approval_grant_by_token(self, execution_token_id: str) -> SocAgentApprovalGrant | None:
+        for grant in self.grants.values():
+            if grant.execution_token_id == execution_token_id:
+                return grant
+        return None
 
 
 class _HighRiskRouter:
@@ -715,12 +734,13 @@ def test_agent_action_policy_denies_unknown_actions() -> None:
 
 
 def test_agent_approval_service_creates_one_time_grant_for_approver() -> None:
+    repository = InMemoryApprovalGrantRepository()
     context = ServiceRequestContext(
         actor=ActorContext(actor_id="approver-1", surface=EntrySurface.TUI, roles=["soc_approver"]),
         idempotency_key="idem-approval-1",
     )
 
-    grant = SocAgentApprovalService().approve(
+    grant = SocAgentApprovalService(grant_repository=repository).approve(
         _approval_request(),
         context=context,
         reason="Analyst verified emergency containment scope.",
@@ -740,6 +760,76 @@ def test_agent_approval_service_creates_one_time_grant_for_approver() -> None:
     assert grant.single_use is True
     assert grant.status == "approved"
     assert grant.expires_at > grant.approved_at
+    assert repository.get_approval_grant(grant.approval_grant_id) == grant
+    assert repository.get_approval_grant_by_token(grant.execution_token_id) == grant
+
+
+def test_agent_approval_service_dry_runs_approved_action_without_side_effect() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    approver_context = ServiceRequestContext(
+        actor=ActorContext(actor_id="approver-1", surface=EntrySurface.TUI, roles=["soc_approver"]),
+        idempotency_key="idem-approval-1",
+    )
+    grant = SocAgentApprovalService(grant_repository=repository).approve(
+        _approval_request(),
+        context=approver_context,
+        reason="approved containment scope",
+        expires_in_seconds=300,
+    )
+    operator_context = ServiceRequestContext(
+        actor=ActorContext(actor_id="analyst-2", surface=EntrySurface.TUI, roles=["analyst"]),
+        idempotency_key="idem-dry-run-1",
+    )
+
+    result = SocAgentApprovalService(grant_repository=repository).dry_run_approved_action(
+        SocAgentApprovedActionCommand(
+            execution_token_id=grant.execution_token_id,
+            route="response.block_ip",
+            action="response.block_ip",
+            payload={"ip": "203.0.113.8"},
+        ),
+        context=operator_context,
+    )
+
+    assert result.status == "success"
+    assert result.route == "response.block_ip"
+    assert result.action == "response.block_ip"
+    assert result.payload["dry_run"] is True
+    assert result.payload["approval_grant_id"] == grant.approval_grant_id
+    assert result.payload["approved_by"]["actor_id"] == "approver-1"
+    assert result.payload["executed_by"]["actor_id"] == "analyst-2"
+    assert "no external side effect" in result.message
+
+
+def test_agent_approval_service_dry_run_requires_repository() -> None:
+    with pytest.raises(SocServiceNotImplementedError, match="SocAgentApprovalGrantRepository"):
+        SocAgentApprovalService().dry_run_approved_action(
+            SocAgentApprovedActionCommand(
+                execution_token_id="SAT-UNKNOWN",
+                route="response.block_ip",
+                action="response.block_ip",
+            ),
+            context=ServiceRequestContext(),
+        )
+
+
+def test_agent_approval_service_dry_run_rejects_mismatched_action() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    grant = SocAgentApprovalService(grant_repository=repository).approve(
+        _approval_request(),
+        context=ServiceRequestContext(actor=ActorContext(actor_id="admin-1", roles=["soc_admin"])),
+        reason="approved containment scope",
+    )
+
+    with pytest.raises(SocServiceError, match="action"):
+        SocAgentApprovalService(grant_repository=repository).dry_run_approved_action(
+            SocAgentApprovedActionCommand(
+                execution_token_id=grant.execution_token_id,
+                route="response.block_ip",
+                action="endpoint.isolate_host",
+            ),
+            context=ServiceRequestContext(),
+        )
 
 
 def test_agent_approval_service_rejects_non_approver() -> None:

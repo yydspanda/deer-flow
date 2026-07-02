@@ -16,6 +16,7 @@ from soc_agent.contracts import (
     ReviewQueueStatus,
     SimilarAlertMatch,
     SimilarAlertQuery,
+    SocAgentApprovalGrant,
     SocEvent,
 )
 
@@ -85,6 +86,16 @@ class ReviewQueueRepository(Protocol):
         status: ReviewQueueStatus | None = None,
         limit: int = 50,
     ) -> list[ReviewQueueItem]: ...
+
+
+class SocAgentApprovalGrantRepository(Protocol):
+    """Persistence boundary for approved high-risk action grants."""
+
+    def save_approval_grant(self, grant: SocAgentApprovalGrant) -> None: ...
+
+    def get_approval_grant(self, approval_grant_id: str) -> SocAgentApprovalGrant | None: ...
+
+    def get_approval_grant_by_token(self, execution_token_id: str) -> SocAgentApprovalGrant | None: ...
 
 
 class SocEventSink(Protocol):

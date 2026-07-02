@@ -11,8 +11,18 @@
 3. 再用 CodeGraph / Understand Anything 查 DeerFlow 代码落点和参考实现：
    - 局部实现切片优先 CodeGraph，用来定位本仓库符号、调用点和低侵入接入点。
    - 架构型或跨项目切片必须先考虑 Understand Anything / reference 项目，例如权限审批、memory、多 Agent、runtime lifecycle、stream/event protocol、跨项目设计模式。
-   - `backend/soc_agent` 发生大量结构变化时，不强行把旧 root graph 当作可用依据；优先做 SOC scoped rebuild：`$understand-anything:understand /home/yydspei/projects/deer-flow/backend/soc_agent --full --language zh`。
+   - 项目顶层 `.understand-anything` 是当前 fork 的 DeerFlow 全仓静态知识图谱，是理解 DeerFlow 原架构、Gateway/TUI/frontend/backend 关系和低侵入扩展点的最重要参考之一；它不再增量更新。所有参考项目的 Understand 图也按静态快照使用，不再更新。
+   - SOC Agent 使用子目录 scoped graph，不把项目顶层 `.understand-anything` 当作 SOC 代码事实来源：
+     - 首次或结构大改强制重建：`$understand-anything:understand /home/yydspei/projects/deer-flow/backend/soc_agent --full --language zh`
+     - 日常增量刷新：`$understand-anything:understand /home/yydspei/projects/deer-flow/backend/soc_agent --language zh`
+     - 生成物位置：`backend/soc_agent/.understand-anything/{knowledge-graph.json,meta.json}`
+     - 注意：Understand incremental 是基于 commit 的；如果 `meta.json.gitCommitHash == HEAD`，未提交的 working-tree 改动不会被 `git diff <metaCommit>..HEAD` 发现。未提交代码变更期间先用 CodeGraph/源码确认，或显式 `--full` 重建 scoped graph。
+     - 注意：scoped graph 的 changed-files 必须相对 `backend/soc_agent`；repo-root 原始路径如 `backend/soc_agent/core/service.py` 可能导致 `compute-batches` 输出 0 batches。若发生这种情况，不要信任 stale graph；改用 CodeGraph/源码或 full scoped rebuild。
+   - `backend/soc_agent` 发生大量结构变化时，不强行把旧 root graph 当作可用依据；优先做 SOC scoped rebuild。
    - `understand-chat` / `understand-explain` 只用于已有且足够新的图谱；如果 `.understand-anything/meta.json` 落后于当前设计代码，必须先更新图谱或记录“图谱过期，改用 CodeGraph”。
+   - `$understand-anything:*` 是 Codex skill/slash workflow，不是 shell 命令；当用户明确要求执行时，agent 先按 skill 的 pre-flight/decision logic 自动执行当前环境能执行的部分。只有缺少 skill runner、subagent、工具或权限面时，才让用户手动运行命令，agent 再读取生成后的 scoped graph/meta。
+   - Understand 的使用不是“只生成图谱”：先用 `understand-chat` / `understand-explain` 在 scoped graph 中找相关节点、summary、tags、1-hop edges 和 layer；再把候选文件/符号交给 CodeGraph 或源码读取确认精确实现；最后才做设计或代码修改。
+   - SOC 问题默认使用 `backend/soc_agent/.understand-anything/knowledge-graph.json`；如果直接调用 `understand-chat` / `understand-explain`，必须明确使用 SOC scoped graph，避免误读项目顶层旧图。
    - 参考项目只在本地方案尚未定型时使用，常见触发点是 memory、approval policy、多 Agent、stream/event protocol、context compaction、tool runtime。
    - 不为窄小本地改动机械运行 Understand；如果现有方案和本仓库上下文已经足够，记录理由后继续实现。
 4. 优先新增 SOC 独立模块、adapter、schema、CLI/API 入口，不侵入 DeerFlow 上游核心。
@@ -29,7 +39,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | ReviewQueue Web thin page 或 approved-action persistence / execution dry-run 切片 |
+| 当前下一刀 | approved-action consume/audit 真实执行边界 或 ReviewQueue Web thin page |
 
 ## Phase 1 切片计划
 
@@ -65,8 +75,36 @@
 | 28 | SOC Agent action permission / human approval | Done | `SocAgentActionPolicy` 在 action dispatch 前输出 permission decision；read-only 允许、analyst-write 需 analyst 角色、高风险要求人工审批且不执行 |
 | 29 | SOC Agent approval request event | Done | 高风险 action 被拒绝时生成 `SocAgentApprovalRequest`；stream 发出 `soc.approval_request`；TUI 显示 pending approval request |
 | 30 | SOC Agent approval grant token | Done | `SocAgentApprovalService` 将 pending approval request 转成一次性 `SocAgentApprovalGrant`；仅 `soc_approver`/`soc_admin` 可批准；仍不执行真实动作 |
+| 31 | SOC Agent approval grant persistence / dry-run | Done | `approve()` 可保存 grant；`dry_run_approved_action()` 用 execution token 校验 route/action/expiry，只返回 dry-run result，不执行外部副作用 |
 
 ## 进度记录
+
+### 2026-07-02 — SOC Agent approval grant persistence / dry-run 切片
+
+- 背景：
+  - 上一刀已经能生成 `SocAgentApprovalGrant`，但 grant 还没有可替换持久化边界，也没有执行前 token 校验入口。
+  - 后续接真实封禁、隔离、MCP 调用前，必须先把“审批通过”和“真实执行”之间的 contract 固定下来。
+- 新增：
+  - `SocAgentApprovedActionCommand`，作为审批后执行/演练入口的显式 contract。
+  - `SocAgentApprovalGrantRepository` protocol，提供 `save_approval_grant()`、按 grant id 读取、按 execution token 读取。
+  - `SocAgentApprovalService(grant_repository=...)`，`approve()` 在 repository 存在时保存 grant。
+  - `SocAgentApprovalService.dry_run_approved_action()`，校验 execution token 存在、grant 未过期、route/action 与授权一致，返回 `SocAgentActionResult`。
+- 边界：
+  - dry-run 不调用外部工具、不封禁 IP、不隔离终端、不写生产状态。
+  - dry-run 当前不消费一次性 token；真实执行层后续必须补 token consume/used 状态、automation action audit、幂等检查和失败补偿。
+  - 无 repository 时 fail-fast，不在 service 内偷偷建隐式存储。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_service.py tests/test_soc_tui_chat_runtime.py tests/test_soc_tui_chat_app.py tests/test_soc_review_tui.py tests/architecture/test_soc_agent_boundaries.py -q`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_service.py tests/test_soc_tui_chat_runtime.py tests/test_soc_tui_chat_app.py tests/test_soc_review_tui.py tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+- Understand incremental 检查：
+  - 当前 `backend/soc_agent` 存在未提交代码变更，但 `backend/soc_agent/.understand-anything/meta.json.gitCommitHash` 与 `HEAD` 都是 `a8aaae4f...`。
+  - 按 Understand skill 的增量逻辑，`git diff <metaCommit>..HEAD --name-only` 为空，因此它不会识别未提交 working-tree 改动；结论是“提交前的增量更新不可靠，需提交后增量或显式 `--full` scoped rebuild”。
+  - 提交后再次检查，`git diff a8aaae4f..HEAD --name-only` 能识别本次 SOC 代码变更；但按 skill 原样传给 `backend/soc_agent` scoped `compute-batches` 时，路径是 repo-root 相对路径，scan inventory 是 scoped 相对路径，导致输出 0 batches。
+  - 将 changed-files 过滤为 `backend/soc_agent/**` 并 strip 前缀后，`compute-batches` 能输出 2 batches；说明 scoped 增量存在路径作用域要求，不能盲信原样增量结果。
+- 下一步：
+  - 若继续 Agent 能力，做 approved-action consume/audit 真实执行边界，仍默认 dry-run/无外部副作用。
+  - 若先补产品闭环，做 ReviewQueue Web thin page。
 
 ### 2026-07-02 — SOC Agent approval grant token 切片
 

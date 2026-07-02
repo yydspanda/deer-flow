@@ -210,6 +210,17 @@ class SocAgentApprovalGrant(BaseModel):
     policy_version: str = "soc.agent_action_policy.v1"
 
 
+class SocAgentApprovedActionCommand(BaseModel):
+    """Command to validate an approved high-risk action before execution."""
+
+    schema_version: str = "soc.agent_approved_action_command.v1"
+    execution_token_id: str = Field(min_length=1)
+    route: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    dry_run: Literal[True] = True
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
 class SocAgentActionResult(BaseModel):
     """Result of dispatching an allowed SOC Agent route to a service action."""
 

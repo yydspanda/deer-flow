@@ -251,6 +251,10 @@ SOC Agent chat stream 约束：
   - `SocAgentApprovalRequest` 只是审批请求，不是执行授权；后续执行必须另有 approval token、audit record、idempotency key。
   - `SocAgentApprovalService` 只能把 pending request 转成 `SocAgentApprovalGrant`；只有 `soc_approver` 或 `soc_admin` role 可以批准。
   - `SocAgentApprovalGrant.execution_token_id` 是一次性执行授权标识，不是 action result；生成 grant 仍不得执行封禁、隔离、MCP 调用等外部副作用。
+  - `SocAgentApprovalGrantRepository` 是 approval grant 的持久化边界；`approve()` 在 repository 存在时必须保存 grant。
+  - `SocAgentApprovedActionCommand` 是审批后执行入口的显式 contract；必须包含 `execution_token_id`、`route`、`action`，Phase 1 只允许 `dry_run=True`。
+  - `SocAgentApprovalService.dry_run_approved_action()` 只能做 token 存在性、过期时间、route/action 一致性校验，并返回 `SocAgentActionResult(status=success)`；不得调用外部工具、不得修改业务状态、不得把 dry-run 结果当作真实处置完成。
+  - dry-run 当前不消费一次性 token；后续真实执行层必须另补 token consume/used 状态、automation action audit、幂等检查和失败补偿。
   - 未注册 action 默认拒绝，不能因为 route allowed 就执行。
 - `soc_agent.tui.chat_runtime` 是纯翻译层：
   - 可以复用 DeerFlow TUI 的 `Action`、`RunStarted`、`RunEnded`、`AssistantDelta`、`SystemMessage`、`reduce()` 语义。

@@ -27,18 +27,61 @@
 /understand /home/yydspei/projects/hermes-agent --language zh
 ```
 
+### 静态图谱基线
+
+项目顶层 `.understand-anything` 是当前 DeerFlow fork 的全仓静态知识图谱，是理解上游架构的最重要参考之一。使用它回答：
+
+- DeerFlow 原有 backend / frontend / Gateway / TUI / channel / harness 的结构关系
+- SOC Agent 应该接入哪里才低侵入
+- 哪些能力应复用 DeerFlow 原有 stream、TUI、service、router、agent runtime 模式
+
+但它**不再增量更新**，不能代表最新 `backend/soc_agent` 代码事实。所有参考项目的 `.understand-anything` 也按静态快照使用，不再更新；需要最新代码事实时，用 CodeGraph 或源码读取。
+
 SOC Agent 本项目建议使用 scoped graph，而不是在 root graph 过期时强行增量：
 
 ```text
 $understand-anything:understand /home/yydspei/projects/deer-flow/backend/soc_agent --full --language zh
 ```
 
+日常更新 SOC Agent 子图时优先增量：
+
+```text
+$understand-anything:understand /home/yydspei/projects/deer-flow/backend/soc_agent --language zh
+```
+
+生成物必须位于 SOC 子目录，避免和项目顶层图混淆：
+
+```text
+/home/yydspei/projects/deer-flow/backend/soc_agent/.understand-anything/
+├── knowledge-graph.json
+└── meta.json
+```
+
 使用规则：
 
+- `$understand-anything:*` 是 Codex skill/slash workflow，不是 shell 命令；当用户明确要求执行时，agent 先按 skill 的 pre-flight/decision logic 自动执行当前环境能执行的部分。只有缺少 skill runner、subagent、工具或权限面时，才让用户手动运行命令。
 - `understand-chat` / `understand-explain` 前先看对应 `.understand-anything/meta.json`，确认图谱覆盖当前问题涉及的代码。
 - 如果 root graph 早于 SOC Agent 新增代码，不能用它回答 SOC 代码落点；先跑 SOC scoped rebuild，或明确记录“图谱过期，改用 CodeGraph”。
 - 如果变更集中在 `backend/soc_agent/**`，优先刷新 SOC scoped graph；只有跨 DeerFlow core/frontend/Gateway 架构变化时才考虑 root graph full rebuild。
+- Understand incremental 是基于 commit 的；如果 scoped `meta.json.gitCommitHash` 等于当前 `HEAD`，未提交 working-tree 改动不会被 `git diff <metaCommit>..HEAD` 发现。未提交代码期间不要把 graph 当最新事实源；先用 CodeGraph/源码，或显式 `--full` 重建 scoped graph。
+- Scoped graph 的 changed-files 必须相对 scoped root。若 `git diff` 输出 `backend/soc_agent/core/service.py`，而 scan inventory 中是 `core/service.py`，`compute-batches` 可能输出 0 batches。正确判断方式是确认 changed-files 已过滤为 `backend/soc_agent/**` 并 strip 掉 `backend/soc_agent/` 前缀；否则使用 full scoped rebuild 或 CodeGraph/源码。
+- `backend/soc_agent/.understand-anything/intermediate/*` 是本地 ignored 中间产物；不要把 `build_scoped_graph.py` 这类中间脚本当作团队流程或代码事实来源。刷新 SOC 图谱时以 `$understand-anything:understand ...` skill workflow 为准。
 - 不为了一个局部函数改动启动 full Understand；局部落点继续用 CodeGraph。
+
+Understand 查询参考的方式：
+
+1. **建图/刷新**：先对目标项目或 SOC 子目录运行 `understand`，确认 `meta.json` 的 scope、commit 和时间。
+2. **架构问答**：用 `understand-chat` 问“这个模块如何分层”“某能力的执行链路在哪里”“哪些节点和 permission/memory/stream 相关”。答案只作为导航，记录候选 layer、node、file、symbol。
+3. **组件深挖**：用 `understand-explain` 针对候选文件/函数做深挖，关注 incoming/outgoing edges、所在 layer、包含的函数/类、与其他组件关系。
+4. **精确验证**：用 CodeGraph 的 `query/context/callers/callees/impact` 或直接读源码确认真实签名、调用点、边界和测试位置。
+5. **沉淀索引**：如果查的是参考项目，把采用点/拒绝点写入 `.notes/reference-index/`；如果查的是 SOC Agent 本仓库，把结论写进 `.notes/ai_soc/progress.md` 或相关设计文档。
+
+示例问题：
+
+```text
+$understand-anything:understand-chat SOC Agent 的 approval request 到 approval grant 的边界在哪里？请基于 backend/soc_agent scoped graph 回答
+$understand-anything:understand-explain backend/soc_agent/core/service.py
+```
 
 启动 Dashboard 交互浏览：
 
