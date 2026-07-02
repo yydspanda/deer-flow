@@ -69,6 +69,18 @@ def _translate_custom(data: dict[str, Any]) -> list[Action]:
                 tone="info" if data.get("allowed") else "error",
             )
         ]
+    if kind == "soc.action_result":
+        status = _as_str(data.get("status"))
+        return [
+            SystemMessage(
+                _action_result_text(
+                    action=_as_str(data.get("action")),
+                    status=status,
+                    message=_as_str(data.get("message")),
+                ),
+                tone="error" if status in {"denied", "failed"} else "info",
+            )
+        ]
     return []
 
 
@@ -90,6 +102,17 @@ def _route_decision_text(*, route: str, allowed: bool, reason: str) -> str:
         parts.append(f"route={route}")
     if reason:
         parts.append(reason)
+    return " | ".join(parts)
+
+
+def _action_result_text(*, action: str, status: str, message: str) -> str:
+    parts = ["SOC action result"]
+    if action:
+        parts.append(f"action={action}")
+    if status:
+        parts.append(f"status={status}")
+    if message:
+        parts.append(message)
     return " | ".join(parts)
 
 

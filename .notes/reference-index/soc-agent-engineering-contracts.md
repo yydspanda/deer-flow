@@ -236,9 +236,15 @@ SOC Agent chat stream 约束：
   - `SocAgentChatRequest.allowed_routes` 只能收窄单次请求可用 route，不能扩大全局白名单。
   - route allowed 只代表可以进入下一层 service/action boundary，不代表允许执行处置、改判、写 memory 或调任意 MCP。
   - 每次 route decision 必须通过 `custom kind=soc.route_decision` 出现在 stream 中，便于 TUI/Web/Channels 和 replay 观察。
+- `SocAgentActionDispatcher` 是 route -> service/action 边界：
+  - dispatcher 可以调用 core service，例如 `SocReviewService.get_investigation_context()`。
+  - dispatcher 不能直接 import repository、normalizer、runtime pipeline、Gateway router、TUI app 或 MCP client。
+  - 每次 dispatch 必须返回 `SocAgentActionResult`，并通过 `custom kind=soc.action_result` 出现在 stream 中。
+  - 当前允许的真实 service action 只有 `review.open_context`；`chat.ready_message` 只是 deterministic shell message。
+  - 后续 `review.correct`、`analysis.replay`、封禁/隔离/下发规则等 action 必须先补 permission/human approval，再接 service command。
 - `soc_agent.tui.chat_runtime` 是纯翻译层：
   - 可以复用 DeerFlow TUI 的 `Action`、`RunStarted`、`RunEnded`、`AssistantDelta`、`SystemMessage`、`reduce()` 语义。
-  - 可以把 `custom kind=soc.review_context` / `custom kind=soc.route_decision` 转成可读系统提示。
+  - 可以把 `custom kind=soc.review_context` / `custom kind=soc.route_decision` / `custom kind=soc.action_result` 转成可读系统提示。
   - 不能 import repository、normalizer、runtime pipeline、Gateway router 或 Textual app。
   - 不能执行 close/correct/analyze/response action；这些只能由明确命令或 service 调用触发。
 - `soc chat tui` 是主 SOC Agent 的 terminal workbench shell：

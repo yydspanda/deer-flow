@@ -33,6 +33,7 @@ from soc_agent.contracts import (
     ReviewQueueStatus,
     ServiceRequestContext,
     SimilarAlertQuery,
+    SocAgentActionResult,
     SocAgentChatRequest,
     SocAgentChatResponse,
     SocAgentRouteDecision,
@@ -519,9 +520,11 @@ class SocAgentChatService:
         *,
         review_service: SocReviewService | None = None,
         capability_router: SocAgentCapabilityRouter | None = None,
+        action_dispatcher: SocAgentActionDispatcher | None = None,
     ) -> None:
         self._review_service = review_service
         self._capability_router = capability_router or SocAgentCapabilityRouter()
+        self._action_dispatcher = action_dispatcher or SocAgentActionDispatcher(review_service=review_service)
 
     def stream(
         self,
@@ -550,29 +553,16 @@ class SocAgentChatService:
             yield SocAgentStreamEvent(type="end", data={"usage": {}, "thread_id": thread_id})
             return
 
-        if chat_request.queue_id:
-            if self._review_service is None:
-                raise SocServiceNotImplementedError("agent chat review context requires SocReviewService")
-            investigation_context = self._review_service.get_investigation_context(chat_request.queue_id)
-            yield SocAgentStreamEvent(
-                type="custom",
-                data={
-                    "kind": "soc.review_context",
-                    "queue_id": investigation_context.queue_item.queue_id,
-                    "run_id": investigation_context.run.run_id,
-                    "alert_id": investigation_context.run.alert_id,
-                    "actor_surface": request_context.actor.surface.value,
-                },
-            )
-            yield _assistant_event(
-                _review_context_loaded_message(
-                    queue_id=investigation_context.queue_item.queue_id,
-                    run_id=investigation_context.run.run_id,
-                    alert_id=investigation_context.run.alert_id,
-                )
-            )
-        else:
-            yield _assistant_event("SOC investigation chat is ready. Phase 1 supports deterministic review context loading; future SOC Lead Agent routing will attach skills, MCP tools, and bounded LLM reasoning here.")
+        action_result = self._action_dispatcher.dispatch(chat_request, route_decision, context=request_context)
+        yield _action_result_event(action_result)
+        if action_result.status != "success":
+            yield _assistant_event(action_result.message)
+            yield SocAgentStreamEvent(type="end", data={"usage": {}, "thread_id": thread_id})
+            return
+
+        if action_result.action == "review.open_context":
+            yield SocAgentStreamEvent(type="custom", data={"kind": "soc.review_context", **action_result.payload})
+        yield _assistant_event(action_result.message)
 
         yield SocAgentStreamEvent(type="end", data={"usage": {}, "thread_id": thread_id})
 
@@ -617,6 +607,78 @@ class SocAgentCapabilityRouter:
         )
 
 
+class SocAgentActionDispatcher:
+    """Dispatch allowed SOC Agent routes to explicit service actions."""
+
+    def __init__(self, *, review_service: SocReviewService | None = None) -> None:
+        self._review_service = review_service
+
+    def dispatch(
+        self,
+        request: SocAgentChatRequest,
+        route_decision: SocAgentRouteDecision,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if not route_decision.allowed:
+            return SocAgentActionResult(
+                route=route_decision.route,
+                action="route.denied",
+                status="denied",
+                message=route_decision.reason,
+            )
+        if route_decision.route == "chat.freeform":
+            return SocAgentActionResult(
+                route=route_decision.route,
+                action="chat.ready_message",
+                status="success",
+                message="SOC investigation chat is ready. Phase 1 supports deterministic review context loading; future SOC Lead Agent routing will attach skills, MCP tools, and bounded LLM reasoning here.",
+            )
+        if route_decision.route == "review.open_context":
+            return self._open_review_context(request, route_decision=route_decision, context=context)
+        return SocAgentActionResult(
+            route=route_decision.route,
+            action="route.unsupported",
+            status="denied",
+            message=f"route {route_decision.route} has no service action mapping",
+        )
+
+    def _open_review_context(
+        self,
+        request: SocAgentChatRequest,
+        *,
+        route_decision: SocAgentRouteDecision,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if self._review_service is None:
+            raise SocServiceNotImplementedError("agent chat review context requires SocReviewService")
+        if not request.queue_id:
+            return SocAgentActionResult(
+                route=route_decision.route,
+                action="review.open_context",
+                status="failed",
+                message="review.open_context requires queue_id",
+            )
+        investigation_context = self._review_service.get_investigation_context(request.queue_id)
+        payload = {
+            "queue_id": investigation_context.queue_item.queue_id,
+            "run_id": investigation_context.run.run_id,
+            "alert_id": investigation_context.run.alert_id,
+            "actor_surface": context.actor.surface.value,
+        }
+        return SocAgentActionResult(
+            route=route_decision.route,
+            action="review.open_context",
+            status="success",
+            message=_review_context_loaded_message(
+                queue_id=investigation_context.queue_item.queue_id,
+                run_id=investigation_context.run.run_id,
+                alert_id=investigation_context.run.alert_id,
+            ),
+            payload=payload,
+        )
+
+
 def _coerce_chat_request(request: SocAgentChatRequest | str) -> SocAgentChatRequest:
     if isinstance(request, SocAgentChatRequest):
         return request
@@ -640,6 +702,20 @@ def _route_decision_event(decision: SocAgentRouteDecision) -> SocAgentStreamEven
             "allowed": decision.allowed,
             "reason": decision.reason,
             "requires_human_approval": decision.requires_human_approval,
+        },
+    )
+
+
+def _action_result_event(result: SocAgentActionResult) -> SocAgentStreamEvent:
+    return SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.action_result",
+            "route": result.route,
+            "action": result.action,
+            "status": result.status,
+            "message": result.message,
+            "requires_human_approval": result.requires_human_approval,
         },
     )
 

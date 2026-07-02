@@ -20,11 +20,13 @@ from soc_agent.contracts import (
     SimilarAlertMatch,
     SimilarAlertQuery,
     SocAgentChatRequest,
+    SocAgentRouteDecision,
     SocEvent,
     SocEventType,
     Verdict,
 )
 from soc_agent.core import (
+    SocAgentActionDispatcher,
     SocAgentCapabilityRouter,
     SocAgentChatService,
     SocAnalysisService,
@@ -471,15 +473,18 @@ def test_agent_chat_service_streams_deerflow_like_events() -> None:
 
     events = list(service.stream(SocAgentChatRequest(message="triage this alert", thread_id="soc-thread-1")))
 
-    assert [event.type for event in events] == ["values", "custom", "messages-tuple", "end"]
+    assert [event.type for event in events] == ["values", "custom", "custom", "messages-tuple", "end"]
     assert events[0].data["title"] == "triage this alert"
     assert events[0].data["thread_id"] == "soc-thread-1"
     assert events[0].data["artifacts"] == []
     assert events[1].data["kind"] == "soc.route_decision"
     assert events[1].data["route"] == "chat.freeform"
     assert events[1].data["allowed"] is True
-    assert events[2].data["type"] == "ai"
-    assert "deterministic review context loading" in events[2].data["content"]
+    assert events[2].data["kind"] == "soc.action_result"
+    assert events[2].data["action"] == "chat.ready_message"
+    assert events[2].data["status"] == "success"
+    assert events[3].data["type"] == "ai"
+    assert "deterministic review context loading" in events[3].data["content"]
     assert events[-1].data["thread_id"] == "soc-thread-1"
 
 
@@ -487,7 +492,7 @@ def test_agent_chat_service_materializes_response_from_same_stream() -> None:
     response = SocAgentChatService().send_message("hello soc")
 
     assert response.thread_id.startswith("SOC-TH-")
-    assert [event.type for event in response.events] == ["values", "custom", "messages-tuple", "end"]
+    assert [event.type for event in response.events] == ["values", "custom", "custom", "messages-tuple", "end"]
     assert "SOC investigation chat is ready" in response.final_text
 
 
@@ -519,19 +524,22 @@ def test_agent_chat_service_loads_review_context() -> None:
         )
     )
 
-    assert [event.type for event in events] == ["values", "custom", "custom", "messages-tuple", "end"]
+    assert [event.type for event in events] == ["values", "custom", "custom", "custom", "messages-tuple", "end"]
     assert events[0].data["title"] == f"SOC Review {item.queue_id}"
     assert events[1].data["kind"] == "soc.route_decision"
     assert events[1].data["route"] == "review.open_context"
     assert events[1].data["allowed"] is True
-    assert events[2].data == {
+    assert events[2].data["kind"] == "soc.action_result"
+    assert events[2].data["action"] == "review.open_context"
+    assert events[2].data["status"] == "success"
+    assert events[3].data == {
         "kind": "soc.review_context",
         "queue_id": item.queue_id,
         "run_id": run.run_id,
         "alert_id": run.alert_id,
         "actor_surface": "tui",
     }
-    assert f"Loaded review context {item.queue_id}" in events[3].data["content"]
+    assert f"Loaded review context {item.queue_id}" in events[4].data["content"]
 
 
 def test_agent_chat_service_denies_unlisted_route() -> None:
@@ -547,6 +555,28 @@ def test_agent_chat_service_denies_unlisted_route() -> None:
 def test_agent_chat_service_requires_review_service_for_queue_context() -> None:
     with pytest.raises(SocServiceNotImplementedError):
         list(SocAgentChatService().stream(SocAgentChatRequest(message="open", queue_id="REV-1")))
+
+
+def test_agent_action_dispatcher_maps_chat_route() -> None:
+    decision = SocAgentCapabilityRouter().route(SocAgentChatRequest(message="hello"))
+    result = SocAgentActionDispatcher().dispatch(SocAgentChatRequest(message="hello"), decision, context=ServiceRequestContext())
+
+    assert result.route == "chat.freeform"
+    assert result.action == "chat.ready_message"
+    assert result.status == "success"
+
+
+def test_agent_action_dispatcher_rejects_missing_queue_id() -> None:
+    decision = SocAgentRouteDecision(route="review.open_context", allowed=True, reason="test")
+    result = SocAgentActionDispatcher(review_service=SocReviewService()).dispatch(
+        SocAgentChatRequest(message="open"),
+        decision,
+        context=ServiceRequestContext(),
+    )
+
+    assert result.action == "review.open_context"
+    assert result.status == "failed"
+    assert "queue_id" in result.message
 
 
 def test_review_service_correct_requires_repository() -> None:

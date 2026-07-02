@@ -69,6 +69,34 @@ def test_soc_chat_runtime_translates_denied_route_as_error() -> None:
     assert translate(event) == [SystemMessage("SOC route denied | route=command.unknown | route command.unknown is not allowed", tone="error")]
 
 
+def test_soc_chat_runtime_translates_action_result_custom_event() -> None:
+    event = SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.action_result",
+            "action": "review.open_context",
+            "status": "success",
+            "message": "Loaded review context REV-1",
+        },
+    )
+
+    assert translate(event) == [SystemMessage("SOC action result | action=review.open_context | status=success | Loaded review context REV-1")]
+
+
+def test_soc_chat_runtime_translates_failed_action_result_as_error() -> None:
+    event = SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.action_result",
+            "action": "review.open_context",
+            "status": "failed",
+            "message": "queue_id is required",
+        },
+    )
+
+    assert translate(event) == [SystemMessage("SOC action result | action=review.open_context | status=failed | queue_id is required", tone="error")]
+
+
 class _FakeChatService:
     def __init__(self, events: list[SocAgentStreamEvent]) -> None:
         self._events = events
@@ -107,6 +135,7 @@ def test_soc_chat_runtime_reduces_to_deerflow_view_state() -> None:
     service = _FakeChatService(
         [
             SocAgentStreamEvent(type="custom", data={"kind": "soc.route_decision", "route": "review.open_context", "allowed": True}),
+            SocAgentStreamEvent(type="custom", data={"kind": "soc.action_result", "action": "review.open_context", "status": "success"}),
             SocAgentStreamEvent(type="custom", data={"kind": "soc.review_context", "queue_id": "REV-1"}),
             SocAgentStreamEvent(type="messages-tuple", data={"type": "ai", "id": "m1", "content": "Next step"}),
             SocAgentStreamEvent(type="end", data={"usage": {}}),
@@ -117,10 +146,11 @@ def test_soc_chat_runtime_reduces_to_deerflow_view_state() -> None:
     for action in stream_actions(service, "open REV-1"):
         state = reduce(state, action)
 
-    assert [row.kind for row in state.rows] == ["system", "system", "assistant"]
+    assert [row.kind for row in state.rows] == ["system", "system", "system", "assistant"]
     assert state.rows[0].text == "SOC route allowed | route=review.open_context"
-    assert state.rows[1].text == "SOC review context loaded | queue=REV-1"
-    assert state.rows[2].text == "Next step"
+    assert state.rows[1].text == "SOC action result | action=review.open_context | status=success"
+    assert state.rows[2].text == "SOC review context loaded | queue=REV-1"
+    assert state.rows[3].text == "Next step"
     assert state.streaming is False
 
 

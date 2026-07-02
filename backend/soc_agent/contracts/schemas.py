@@ -150,6 +150,18 @@ class SocAgentRouteDecision(BaseModel):
     input_text: str | None = None
 
 
+class SocAgentActionResult(BaseModel):
+    """Result of dispatching an allowed SOC Agent route to a service action."""
+
+    schema_version: str = "soc.agent_action_result.v1"
+    route: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    status: Literal["success", "denied", "failed"]
+    message: str = Field(min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    requires_human_approval: bool = False
+
+
 class AlertSourceType(StrEnum):
     UNKNOWN = "unknown"
     SIEM = "siem"

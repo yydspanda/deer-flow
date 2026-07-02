@@ -23,7 +23,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | ReviewQueue Web thin page 或 SOC Lead Agent route -> service/action 映射切片 |
+| 当前下一刀 | ReviewQueue Web thin page 或 SOC Lead Agent action permission / human approval 切片 |
 
 ## Phase 1 切片计划
 
@@ -55,8 +55,36 @@
 | 24 | SOC TUI chat runtime adapter | Done | 将 `SocAgentStreamEvent` 翻译成 DeerFlow TUI reducer actions；支持 `soc.review_context` custom event；保持纯函数、无 Textual/DB 依赖 |
 | 25 | SOC Agent chat TUI workbench shell | Done | `soc chat tui` 启动 DeerFlow-aligned Textual chat workbench；支持普通消息和 `/open REV-...` context loading；业务仍走 `SocAgentChatService` |
 | 26 | SOC Agent capability router MVP | Done | `SocAgentCapabilityRouter` 对 chat request 生成白名单 route decision；stream 发出 `soc.route_decision`；TUI 显示 allowed/denied |
+| 27 | SOC Agent route -> service/action dispatcher | Done | `SocAgentActionDispatcher` 将 allowed route 映射为显式 service action result；stream 发出 `soc.action_result`；`review.open_context` 通过 `SocReviewService` 执行 |
 
 ## 进度记录
+
+### 2026-07-02 — SOC Agent route -> service/action dispatcher 切片
+
+- 背景：
+  - 上一刀只做 route 白名单，仍需要明确“route 允许后调用哪个 service action”。
+  - 这一层是后续 review.correct、analysis.replay、MCP/tool route、人类审批的前置边界。
+- 新增：
+  - `SocAgentActionResult` contract。
+  - `SocAgentActionDispatcher`。
+  - `SocAgentChatService.stream()` 在 route decision 后调用 dispatcher。
+  - 每次 action dispatch 都通过 `custom kind=soc.action_result` 出现在 stream 中。
+  - `soc_agent.tui.chat_runtime` 将 `soc.action_result` 转成 DeerFlow `SystemMessage`，failed/denied 用 error tone。
+- 当前 action 映射：
+  - `chat.freeform` -> `chat.ready_message`，只返回 Phase 1 deterministic ready message。
+  - `review.open_context` -> `review.open_context`，通过 `SocReviewService.get_investigation_context()` 读取上下文，并继续发 `soc.review_context`。
+  - 未映射 route -> `route.unsupported` denied result。
+- 边界：
+  - dispatcher 只调用 core service，不直接读写 repository。
+  - action result 只是执行结果，不自动升级为 memory 或处置。
+  - 后续高风险 action 必须先扩展 permission/human approval，再接真实 service command。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_service.py tests/test_soc_tui_chat_runtime.py tests/test_soc_tui_chat_app.py tests/test_soc_review_tui.py tests/architecture/test_soc_agent_boundaries.py -q`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_service.py tests/test_soc_tui_chat_runtime.py tests/test_soc_tui_chat_app.py tests/test_soc_review_tui.py tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+- 下一步：
+  - 若继续 Agent 能力，做 action permission / human approval contract，把 review.correct、analysis.replay 这类高风险 action 先挡在审批边界外。
+  - 若先做产品闭环，做 ReviewQueue Web thin page。
 
 ### 2026-07-02 — SOC Agent capability router MVP 切片
 

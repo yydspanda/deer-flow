@@ -302,7 +302,7 @@ ZEUS/天眼输入可信度相关结构状态：
    - API 是 Web/TUI/外部系统统一入口，必须只调用 `SocReviewService`。
    - TUI 是 Phase 1/2 更合适的薄操作台，用于 open queue、context、close、correct、trace 调试。
    - Web UI 后续基于同一套 API 增量做列表和详情页，不复制业务逻辑。
-   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done；下一步做 ReviewQueue Web thin page 或 route -> service/action 映射。
+   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done；下一步做 ReviewQueue Web thin page 或 action permission / human approval。
 
 7. **SOC Agent chat stream contract**
    - `SocAgentChatService.stream()` 是后续 SOC Lead Agent TUI/Web/Channels 的统一流式入口。
@@ -312,6 +312,7 @@ ZEUS/天眼输入可信度相关结构状态：
    - 当前已落地 `soc_agent.tui.chat_runtime`，把 `SocAgentStreamEvent` 转成 DeerFlow TUI reducer actions；`soc.review_context` custom event 转为 TUI `SystemMessage`。
    - 当前已落地 `soc chat tui`，复用 DeerFlow Textual/ComposerInput/ViewState/reducer/render 语义，支持普通消息和 `/open REV-...` 加载 review context。
    - 当前已落地 `SocAgentCapabilityRouter`，先把请求映射到白名单 route，并通过 `custom kind=soc.route_decision` 暴露 allowed/denied；后续 skills/MCP/tool route 必须走这个边界。
+   - 当前已落地 `SocAgentActionDispatcher`，把 allowed route 映射到显式 service action result，并通过 `custom kind=soc.action_result` 暴露 action/status/message；`review.open_context` 当前唯一真实 service action。
 
 ReviewQueue TUI 实现边界：
 
