@@ -1013,6 +1013,14 @@ review queue precision
 tool permission denial rate
 ```
 
+### Offline eval 约束
+
+- `soc eval offline` 是真实 LLM 默认上线前的评测入口；它必须可重复运行、默认不调用外部模型。
+- replay response 使用 JSONL，按 `sample_id` 绑定样本；`content` 可以是字符串或 JSON object，但进入 analyzer 前必须走同一套 `JsonLLMAnalyzer`、parser、schema/domain validation。
+- 默认未提供 replay response 时，只允许把 stub 结果序列化后再走一遍 LLM parser/runtime 链路，用于 smoke-test 工程路径；不能把该结果解释为真实模型质量。
+- eval report 必须至少包含 parse success、repair count、failed count、verdict diff、needs_review diff、confidence delta。
+- eval 只读样本，不写业务库、不生成 memory、不入 review queue；需要持久化评测历史时另建 eval repository/schema。
+
 ## 二十二、Phase 切分
 
 ### Phase 1 必须做

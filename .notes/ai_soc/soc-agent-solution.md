@@ -293,10 +293,11 @@ ZEUS/天眼输入可信度相关结构状态：
 4. **Offline eval：stub / llm / replay diff**
    - 同一批样本比较 verdict、confidence、needs_review、parse success、冲突字段处理质量。
    - 评估结果决定真实 LLM 是否进入默认链路。
-   - 当前状态：Next。
+   - 当前状态：Done，已落地 `backend/soc_agent/eval/offline.py`、`soc eval offline`、JSONL replay response 和差异报告。
 5. **ReviewQueue UI 或 Kafka daemon**
    - UI 依赖稳定可解释的研判结果。
    - Kafka daemon 依赖稳定的 parse/repair/fallback/rate-limit 策略。
+   - 当前状态：Next，需要根据“先服务分析师复核闭环”还是“先验证后台流式接入”决定下一刀。
 
 ### 1.2.2 生产级 Runtime 原则：硬骨架 + 软路由
 

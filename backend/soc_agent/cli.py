@@ -21,6 +21,7 @@ from soc_agent.db import (
     to_sync_database_url,
     upgrade_soc_schema,
 )
+from soc_agent.eval import load_eval_responses_jsonl, run_offline_eval
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -47,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
         return _review_context(args)
     if args.command == "review" and args.review_command == "close":
         return _review_close(args)
+    if args.command == "eval" and args.eval_command == "offline":
+        return _eval_offline(args)
     if args.command == "db" and args.db_command == "init":
         return _db_init(args)
     if args.command == "db" and args.db_command == "upgrade":
@@ -140,6 +143,15 @@ def _build_parser() -> argparse.ArgumentParser:
     review_close.add_argument("--reason", required=True, help="Reason for closing the queue item")
     review_close.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(review_close)
+
+    eval_cmd = subparsers.add_parser("eval", help="SOC offline evaluation helpers")
+    eval_subparsers = eval_cmd.add_subparsers(dest="eval_command")
+    eval_offline = eval_subparsers.add_parser("offline", help="Run stub-vs-LLM replay diff over alert samples")
+    eval_offline.add_argument("path", help="Path to an alert JSON file or directory")
+    eval_offline.add_argument("--glob", default="*.json", help="Glob used when PATH is a directory")
+    eval_offline.add_argument("--llm-response-jsonl", help="Replayable LLM response JSONL keyed by sample_id")
+    eval_offline.add_argument("--model-name", default="replay-llm", help="Model name recorded for replayed LLM analyzer")
+    eval_offline.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
     db = subparsers.add_parser("db", help="SOC database helpers")
     db_subparsers = db.add_subparsers(dest="db_command")
@@ -344,6 +356,22 @@ def _review_context(args: argparse.Namespace) -> int:
 
     print(context.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
+
+
+def _eval_offline(args: argparse.Namespace) -> int:
+    try:
+        samples = _load_payload_samples(args.path, args.glob)
+        responses = load_eval_responses_jsonl(args.llm_response_jsonl) if args.llm_response_jsonl else None
+        report = run_offline_eval(samples, responses=responses, model_name=args.model_name)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: report eval failure
+        print(f"error: offline eval failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if report.failed_count == 0 else 1
 
 
 def _db_init(args: argparse.Namespace) -> int:

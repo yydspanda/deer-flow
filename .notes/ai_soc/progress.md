@@ -23,7 +23,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Offline eval：同一批样本跑 stub / llm / replay diff，评估真实 LLM 是否可进入默认链路 |
+| 当前下一刀 | ReviewQueue UI 或 Kafka daemon 二选一：先决定下一阶段产品验证入口 |
 
 ## Phase 1 切片计划
 
@@ -48,9 +48,35 @@
 | 17 | Prompt Builder + SOC prompt golden tests | Done | Prompt 只能从 `LLMAnalysisRequest` 生成；覆盖 PingAn APT/EDR、raw message 缺失 fallback、字段冲突；不把完整 raw payload 无脑塞进 prompt |
 | 18 | LLM JSON parser + bad JSON repair | Done | 先严格 JSON parse，再 repair，再 Pydantic/domain validation；覆盖代码块、尾逗号、半截 JSON、字段类型错误 |
 | 19 | 真实 LLM analyzer behind flag | Done | 默认继续走 `analyze_stub`；显式配置开启后才调用模型；输出必须经过 prompt builder、JSON parser、schema/domain validation |
-| 20 | Offline eval：stub / llm / replay diff | Next | 同一批样本比较 verdict、confidence、needs_review、parse success、冲突字段处理质量 |
+| 20 | Offline eval：stub / llm / replay diff | Done | 同一批样本比较 verdict、confidence、needs_review、parse success、冲突字段处理质量 |
 
 ## 进度记录
+
+### 2026-07-02 — Offline eval：stub / llm / replay diff 切片
+
+- 新增离线评测模块：
+  - `backend/soc_agent/eval/offline.py`
+  - `run_offline_eval(samples, responses=..., model_name=...)` 对同一批样本分别跑 deterministic stub 和 replayable `JsonLLMAnalyzer`，输出差异报告。
+  - `load_eval_responses_jsonl(path)` 支持按 `sample_id` 读取录制/模拟 LLM 输出，`content` 可以是字符串或 JSON object。
+- 新增评测 report：
+  - `OfflineEvalReport`
+  - `OfflineEvalSampleResult`
+  - `OfflineEvalResponse`
+  - 指标包括 `parse_success_count`、`repair_count`、`failed_count`、`verdict_diff_count`、`needs_review_diff_count`、`average_abs_confidence_delta`。
+- 新增 CLI：
+  - `soc eval offline PATH --glob "*.json" --llm-response-jsonl responses.jsonl --model-name replay-llm`
+  - 没有提供 `--llm-response-jsonl` 时，会把 stub 结果作为 replay response 再走一遍 prompt/parser/runtime，用于 smoke-test LLM 节点工程链路。
+  - 提供 JSONL 后，可以对真实模型录制输出或手写 golden 输出做 replay diff；默认仍不调用外部模型。
+- 新增测试：
+  - `backend/tests/test_soc_agent_offline_eval.py`
+  - 覆盖默认 stub replay、verdict diff + bad JSON repair、parse failure 不打断 batch、JSONL object content、CLI 输出。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_offline_eval.py tests/test_soc_agent_llm_analyzer.py tests/test_soc_agent_llm_json_parser.py tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_offline_eval.py tests/test_soc_agent_llm_analyzer.py tests/test_soc_agent_llm_json_parser.py tests/test_soc_agent_runtime.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py -q`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli eval offline samples/alerts --glob approved_scanner.json --pretty`
+- 下一步：
+  - Phase 1 固定链路已具备 prompt/parser/LLM adapter/offline eval 基础。
+  - 接下来在 `ReviewQueue UI` 与 `Kafka daemon` 之间做选择：如果先服务分析师闭环，做 ReviewQueue/API/Web/TUI；如果先验证流式接入和反压，做 Kafka daemon。
 
 ### 2026-07-02 — 真实 LLM analyzer behind flag 切片
 
