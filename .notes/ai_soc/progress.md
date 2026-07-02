@@ -23,7 +23,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | SOC Lead Agent TUI chat workbench 或 ReviewQueue Web thin page |
+| 当前下一刀 | ReviewQueue Web thin page 或 SOC Lead Agent capability router 设计/实现切片 |
 
 ## Phase 1 切片计划
 
@@ -53,8 +53,39 @@
 | 22 | ReviewQueue TUI thin client | Done | 基于 service/API 展示 open queue、打开 context、关闭 item、发起 correction；不复制业务逻辑 |
 | 23 | SOC Agent chat stream contract | Done | `SocAgentChatService` 输出 DeerFlow-compatible stream event；可加载 ReviewQueue context；不调用 LLM、不替代 core service |
 | 24 | SOC TUI chat runtime adapter | Done | 将 `SocAgentStreamEvent` 翻译成 DeerFlow TUI reducer actions；支持 `soc.review_context` custom event；保持纯函数、无 Textual/DB 依赖 |
+| 25 | SOC Agent chat TUI workbench shell | Done | `soc chat tui` 启动 DeerFlow-aligned Textual chat workbench；支持普通消息和 `/open REV-...` context loading；业务仍走 `SocAgentChatService` |
 
 ## 进度记录
+
+### 2026-07-02 — SOC Agent chat TUI workbench shell 切片
+
+- 新增：
+  - `backend/soc_agent/tui/chat_app.py`
+  - `SocAgentChatTUI`：基于 Textual 的主 SOC Agent chat workbench 壳。
+  - 复用 DeerFlow TUI 的 `ComposerInput`、`ViewState/reduce()`、`render_transcript()`、`render_status()`。
+  - `soc chat tui` CLI 入口。
+  - `run_chat_tui()` runner。
+- 当前能力：
+  - 普通消息进入 `SocAgentChatService.stream()`。
+  - `/open REV-...` 或 `soc chat tui --queue-id REV-...` 加载 review context。
+  - `--message` 可在启动时发送初始消息；与 `--queue-id` 同时使用时带上 queue context。
+  - TUI 自己生成稳定 `SOC-TUI-*` thread id，保证同一终端会话内多轮消息连续。
+- 边界：
+  - 这是 shell，不是真实 SOC Lead Agent。
+  - 不直接读写 repository；CLI 只构造 service。
+  - 不执行 close/correct/analyze。
+  - 不定义另一套 view-state；复用 DeerFlow TUI action/reducer/render 语义。
+- 新增测试：
+  - `backend/tests/test_soc_tui_chat_app.py`
+  - 覆盖 chat request 构造、`/open` 解析、显式 queue context、TUI actor surface、header render。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_tui_chat_app.py tests/test_soc_tui_chat_runtime.py tests/test_soc_agent_service.py tests/test_soc_review_tui.py -q`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_tui_chat_app.py tests/test_soc_tui_chat_runtime.py tests/test_soc_agent_service.py tests/test_soc_review_tui.py`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli chat tui --help`
+  - `codegraph sync .`
+- 下一步：
+  - 如果先补产品闭环，做 ReviewQueue Web thin page。
+  - 如果继续主 Agent 能力，做 capability router：把 `/open`、review context、未来 skills/MCP/tool route 变成可审计的白名单 route，不让 LLM 直接控制主流程。
 
 ### 2026-07-02 — SOC TUI chat runtime adapter 切片
 

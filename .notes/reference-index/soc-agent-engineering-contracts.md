@@ -235,6 +235,12 @@ SOC Agent chat stream 约束：
   - 可以把 `custom kind=soc.review_context` 转成可读系统提示。
   - 不能 import repository、normalizer、runtime pipeline、Gateway router 或 Textual app。
   - 不能执行 close/correct/analyze/response action；这些只能由明确命令或 service 调用触发。
+- `soc chat tui` 是主 SOC Agent 的 terminal workbench shell：
+  - 可以复用 DeerFlow Textual app、`ComposerInput`、`ViewState/reduce()`、`render_transcript()`、`render_status()`。
+  - 只能通过 `SocAgentChatService.stream()` 获取内容。
+  - `/open REV-...` 只能加载 review context，不能隐式关闭队列或修改 verdict。
+  - CLI 构造 repository/service 是入口组装；TUI app 内部不能直接 import repository。
+  - 后续 skills/MCP/tool route 必须走 capability router 白名单和 service 层，不能让 TUI 或 LLM 直接调任意工具。
 
 Investigation context 约束：
 

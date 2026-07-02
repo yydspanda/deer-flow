@@ -13,7 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from soc_agent.contracts import CorrectionCommand, ReviewQueueCloseCommand, ReviewQueueStatus, Verdict
-from soc_agent.core import SocAnalysisService, SocNormalizationService, SocReviewService, SocServiceError
+from soc_agent.core import SocAgentChatService, SocAnalysisService, SocNormalizationService, SocReviewService, SocServiceError
 from soc_agent.db import (
     SqlAlchemyAlertRepository,
     create_soc_tables,
@@ -50,6 +50,8 @@ def main(argv: list[str] | None = None) -> int:
         return _review_close(args)
     if args.command == "review" and args.review_command == "tui":
         return _review_tui(args)
+    if args.command == "chat" and args.chat_command == "tui":
+        return _chat_tui(args)
     if args.command == "eval" and args.eval_command == "offline":
         return _eval_offline(args)
     if args.command == "db" and args.db_command == "init":
@@ -147,6 +149,13 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_database_args(review_close)
     review_tui = review_subparsers.add_parser("tui", help="Open the SOC review queue terminal workbench")
     _add_database_args(review_tui)
+
+    chat = subparsers.add_parser("chat", help="SOC interactive agent helpers")
+    chat_subparsers = chat.add_subparsers(dest="chat_command")
+    chat_tui = chat_subparsers.add_parser("tui", help="Open the SOC agent chat terminal workbench")
+    chat_tui.add_argument("--queue-id", help="Open a review queue context on launch")
+    chat_tui.add_argument("--message", help="Send an initial message on launch")
+    _add_database_args(chat_tui)
 
     eval_cmd = subparsers.add_parser("eval", help="SOC offline evaluation helpers")
     eval_subparsers = eval_cmd.add_subparsers(dest="eval_command")
@@ -375,6 +384,31 @@ def _review_tui(args: argparse.Namespace) -> int:
                 review_queue_repository=repository,
             ),
             database_label=_database_label(args.database_url),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def _chat_tui(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        from soc_agent.tui.runner import run_chat_tui
+
+        review_service = SocReviewService(
+            repository=repository,
+            summary_repository=repository,
+            audit_repository=repository,
+            review_queue_repository=repository,
+        )
+        run_chat_tui(
+            SocAgentChatService(review_service=review_service),
+            initial_queue_id=args.queue_id,
+            initial_message=args.message,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
