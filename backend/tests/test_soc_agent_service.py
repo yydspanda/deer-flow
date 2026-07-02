@@ -20,6 +20,8 @@ from soc_agent.contracts import (
     SimilarAlertMatch,
     SimilarAlertQuery,
     SocAgentChatRequest,
+    SocAgentPermissionDecision,
+    SocAgentRiskLevel,
     SocAgentRouteDecision,
     SocEvent,
     SocEventType,
@@ -27,6 +29,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.core import (
     SocAgentActionDispatcher,
+    SocAgentActionPolicy,
     SocAgentCapabilityRouter,
     SocAgentChatService,
     SocAnalysisService,
@@ -473,18 +476,22 @@ def test_agent_chat_service_streams_deerflow_like_events() -> None:
 
     events = list(service.stream(SocAgentChatRequest(message="triage this alert", thread_id="soc-thread-1")))
 
-    assert [event.type for event in events] == ["values", "custom", "custom", "messages-tuple", "end"]
+    assert [event.type for event in events] == ["values", "custom", "custom", "custom", "messages-tuple", "end"]
     assert events[0].data["title"] == "triage this alert"
     assert events[0].data["thread_id"] == "soc-thread-1"
     assert events[0].data["artifacts"] == []
     assert events[1].data["kind"] == "soc.route_decision"
     assert events[1].data["route"] == "chat.freeform"
     assert events[1].data["allowed"] is True
-    assert events[2].data["kind"] == "soc.action_result"
+    assert events[2].data["kind"] == "soc.permission_decision"
     assert events[2].data["action"] == "chat.ready_message"
-    assert events[2].data["status"] == "success"
-    assert events[3].data["type"] == "ai"
-    assert "deterministic review context loading" in events[3].data["content"]
+    assert events[2].data["risk_level"] == "read_only"
+    assert events[2].data["allowed"] is True
+    assert events[3].data["kind"] == "soc.action_result"
+    assert events[3].data["action"] == "chat.ready_message"
+    assert events[3].data["status"] == "success"
+    assert events[4].data["type"] == "ai"
+    assert "deterministic review context loading" in events[4].data["content"]
     assert events[-1].data["thread_id"] == "soc-thread-1"
 
 
@@ -492,7 +499,7 @@ def test_agent_chat_service_materializes_response_from_same_stream() -> None:
     response = SocAgentChatService().send_message("hello soc")
 
     assert response.thread_id.startswith("SOC-TH-")
-    assert [event.type for event in response.events] == ["values", "custom", "custom", "messages-tuple", "end"]
+    assert [event.type for event in response.events] == ["values", "custom", "custom", "custom", "messages-tuple", "end"]
     assert "SOC investigation chat is ready" in response.final_text
 
 
@@ -524,22 +531,26 @@ def test_agent_chat_service_loads_review_context() -> None:
         )
     )
 
-    assert [event.type for event in events] == ["values", "custom", "custom", "custom", "messages-tuple", "end"]
+    assert [event.type for event in events] == ["values", "custom", "custom", "custom", "custom", "messages-tuple", "end"]
     assert events[0].data["title"] == f"SOC Review {item.queue_id}"
     assert events[1].data["kind"] == "soc.route_decision"
     assert events[1].data["route"] == "review.open_context"
     assert events[1].data["allowed"] is True
-    assert events[2].data["kind"] == "soc.action_result"
+    assert events[2].data["kind"] == "soc.permission_decision"
     assert events[2].data["action"] == "review.open_context"
-    assert events[2].data["status"] == "success"
-    assert events[3].data == {
+    assert events[2].data["risk_level"] == "read_only"
+    assert events[2].data["allowed"] is True
+    assert events[3].data["kind"] == "soc.action_result"
+    assert events[3].data["action"] == "review.open_context"
+    assert events[3].data["status"] == "success"
+    assert events[4].data == {
         "kind": "soc.review_context",
         "queue_id": item.queue_id,
         "run_id": run.run_id,
         "alert_id": run.alert_id,
         "actor_surface": "tui",
     }
-    assert f"Loaded review context {item.queue_id}" in events[4].data["content"]
+    assert f"Loaded review context {item.queue_id}" in events[5].data["content"]
 
 
 def test_agent_chat_service_denies_unlisted_route() -> None:
@@ -566,6 +577,29 @@ def test_agent_action_dispatcher_maps_chat_route() -> None:
     assert result.status == "success"
 
 
+def test_agent_action_dispatcher_denies_without_permission() -> None:
+    decision = SocAgentRouteDecision(route="response.block_ip", allowed=True, reason="test")
+    permission = SocAgentPermissionDecision(
+        route="response.block_ip",
+        action="response.block_ip",
+        allowed=False,
+        risk_level=SocAgentRiskLevel.HIGH_RISK,
+        reason="approval required",
+        requires_human_approval=True,
+    )
+
+    result = SocAgentActionDispatcher().dispatch(
+        SocAgentChatRequest(message="block ip"),
+        decision,
+        context=ServiceRequestContext(),
+        permission_decision=permission,
+    )
+
+    assert result.action == "response.block_ip"
+    assert result.status == "denied"
+    assert result.requires_human_approval is True
+
+
 def test_agent_action_dispatcher_rejects_missing_queue_id() -> None:
     decision = SocAgentRouteDecision(route="review.open_context", allowed=True, reason="test")
     result = SocAgentActionDispatcher(review_service=SocReviewService()).dispatch(
@@ -577,6 +611,64 @@ def test_agent_action_dispatcher_rejects_missing_queue_id() -> None:
     assert result.action == "review.open_context"
     assert result.status == "failed"
     assert "queue_id" in result.message
+
+
+def test_agent_action_policy_allows_read_only_actions() -> None:
+    decision = SocAgentActionPolicy().check(
+        action="review.open_context",
+        route="review.open_context",
+        request=SocAgentChatRequest(message="open"),
+        context=ServiceRequestContext(),
+    )
+
+    assert decision.allowed is True
+    assert decision.risk_level is SocAgentRiskLevel.READ_ONLY
+    assert decision.requires_human_approval is False
+
+
+def test_agent_action_policy_requires_analyst_role_for_write_actions() -> None:
+    denied = SocAgentActionPolicy().check(
+        action="review.correct",
+        route="review.correct",
+        request=SocAgentChatRequest(message="correct"),
+        context=ServiceRequestContext(),
+    )
+    allowed = SocAgentActionPolicy().check(
+        action="review.correct",
+        route="review.correct",
+        request=SocAgentChatRequest(message="correct"),
+        context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", roles=["analyst"])),
+    )
+
+    assert denied.allowed is False
+    assert denied.risk_level is SocAgentRiskLevel.ANALYST_WRITE
+    assert allowed.allowed is True
+    assert allowed.risk_level is SocAgentRiskLevel.ANALYST_WRITE
+
+
+def test_agent_action_policy_blocks_high_risk_actions_for_human_approval() -> None:
+    decision = SocAgentActionPolicy().check(
+        action="response.block_ip",
+        route="response.block_ip",
+        request=SocAgentChatRequest(message="block ip"),
+        context=ServiceRequestContext(),
+    )
+
+    assert decision.allowed is False
+    assert decision.risk_level is SocAgentRiskLevel.HIGH_RISK
+    assert decision.requires_human_approval is True
+
+
+def test_agent_action_policy_denies_unknown_actions() -> None:
+    decision = SocAgentActionPolicy().check(
+        action="unknown.action",
+        route="unknown.route",
+        request=SocAgentChatRequest(message="unknown"),
+        context=ServiceRequestContext(),
+    )
+
+    assert decision.allowed is False
+    assert decision.risk_level is SocAgentRiskLevel.UNKNOWN
 
 
 def test_review_service_correct_requires_repository() -> None:

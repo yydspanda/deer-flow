@@ -69,6 +69,42 @@ def test_soc_chat_runtime_translates_denied_route_as_error() -> None:
     assert translate(event) == [SystemMessage("SOC route denied | route=command.unknown | route command.unknown is not allowed", tone="error")]
 
 
+def test_soc_chat_runtime_translates_permission_decision_custom_event() -> None:
+    event = SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.permission_decision",
+            "action": "review.open_context",
+            "allowed": True,
+            "risk_level": "read_only",
+            "reason": "action review.open_context is read-only",
+        },
+    )
+
+    assert translate(event) == [SystemMessage("SOC permission allowed | action=review.open_context | risk=read_only | action review.open_context is read-only")]
+
+
+def test_soc_chat_runtime_translates_approval_required_permission_as_error() -> None:
+    event = SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.permission_decision",
+            "action": "response.block_ip",
+            "allowed": False,
+            "risk_level": "high_risk",
+            "reason": "action response.block_ip requires human approval",
+            "requires_human_approval": True,
+        },
+    )
+
+    assert translate(event) == [
+        SystemMessage(
+            "SOC permission denied | action=response.block_ip | risk=high_risk | approval_required | action response.block_ip requires human approval",
+            tone="error",
+        )
+    ]
+
+
 def test_soc_chat_runtime_translates_action_result_custom_event() -> None:
     event = SocAgentStreamEvent(
         type="custom",
@@ -135,6 +171,7 @@ def test_soc_chat_runtime_reduces_to_deerflow_view_state() -> None:
     service = _FakeChatService(
         [
             SocAgentStreamEvent(type="custom", data={"kind": "soc.route_decision", "route": "review.open_context", "allowed": True}),
+            SocAgentStreamEvent(type="custom", data={"kind": "soc.permission_decision", "action": "review.open_context", "allowed": True, "risk_level": "read_only"}),
             SocAgentStreamEvent(type="custom", data={"kind": "soc.action_result", "action": "review.open_context", "status": "success"}),
             SocAgentStreamEvent(type="custom", data={"kind": "soc.review_context", "queue_id": "REV-1"}),
             SocAgentStreamEvent(type="messages-tuple", data={"type": "ai", "id": "m1", "content": "Next step"}),
@@ -146,11 +183,12 @@ def test_soc_chat_runtime_reduces_to_deerflow_view_state() -> None:
     for action in stream_actions(service, "open REV-1"):
         state = reduce(state, action)
 
-    assert [row.kind for row in state.rows] == ["system", "system", "system", "assistant"]
+    assert [row.kind for row in state.rows] == ["system", "system", "system", "system", "assistant"]
     assert state.rows[0].text == "SOC route allowed | route=review.open_context"
-    assert state.rows[1].text == "SOC action result | action=review.open_context | status=success"
-    assert state.rows[2].text == "SOC review context loaded | queue=REV-1"
-    assert state.rows[3].text == "Next step"
+    assert state.rows[1].text == "SOC permission allowed | action=review.open_context | risk=read_only"
+    assert state.rows[2].text == "SOC action result | action=review.open_context | status=success"
+    assert state.rows[3].text == "SOC review context loaded | queue=REV-1"
+    assert state.rows[4].text == "Next step"
     assert state.streaming is False
 
 

@@ -242,9 +242,15 @@ SOC Agent chat stream 约束：
   - 每次 dispatch 必须返回 `SocAgentActionResult`，并通过 `custom kind=soc.action_result` 出现在 stream 中。
   - 当前允许的真实 service action 只有 `review.open_context`；`chat.ready_message` 只是 deterministic shell message。
   - 后续 `review.correct`、`analysis.replay`、封禁/隔离/下发规则等 action 必须先补 permission/human approval，再接 service command。
+- `SocAgentActionPolicy` 是 action 执行前权限闸门：
+  - 每次 allowed route 进入 dispatcher 前必须先得到 `SocAgentPermissionDecision`，并通过 `custom kind=soc.permission_decision` 出现在 stream 中。
+  - `read_only` action 可以直接执行，例如 `chat.ready_message`、`review.open_context`。
+  - `analyst_write` action 必须要求 actor 具备 `analyst` role，例如未来的 `review.correct`、`analysis.replay`。
+  - `high_risk` action 必须返回 `requires_human_approval=True` 且不执行，例如未来的封禁 IP、隔离终端、任意 MCP 调用。
+  - 未注册 action 默认拒绝，不能因为 route allowed 就执行。
 - `soc_agent.tui.chat_runtime` 是纯翻译层：
   - 可以复用 DeerFlow TUI 的 `Action`、`RunStarted`、`RunEnded`、`AssistantDelta`、`SystemMessage`、`reduce()` 语义。
-  - 可以把 `custom kind=soc.review_context` / `custom kind=soc.route_decision` / `custom kind=soc.action_result` 转成可读系统提示。
+  - 可以把 `custom kind=soc.review_context` / `custom kind=soc.route_decision` / `custom kind=soc.permission_decision` / `custom kind=soc.action_result` 转成可读系统提示。
   - 不能 import repository、normalizer、runtime pipeline、Gateway router 或 Textual app。
   - 不能执行 close/correct/analyze/response action；这些只能由明确命令或 service 调用触发。
 - `soc chat tui` 是主 SOC Agent 的 terminal workbench shell：

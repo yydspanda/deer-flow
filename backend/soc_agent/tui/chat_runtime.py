@@ -69,6 +69,21 @@ def _translate_custom(data: dict[str, Any]) -> list[Action]:
                 tone="info" if data.get("allowed") else "error",
             )
         ]
+    if kind == "soc.permission_decision":
+        allowed = bool(data.get("allowed"))
+        requires_human_approval = bool(data.get("requires_human_approval"))
+        return [
+            SystemMessage(
+                _permission_decision_text(
+                    action=_as_str(data.get("action")),
+                    allowed=allowed,
+                    risk_level=_as_str(data.get("risk_level")),
+                    reason=_as_str(data.get("reason")),
+                    requires_human_approval=requires_human_approval,
+                ),
+                tone="info" if allowed else "error",
+            )
+        ]
     if kind == "soc.action_result":
         status = _as_str(data.get("status"))
         return [
@@ -100,6 +115,27 @@ def _route_decision_text(*, route: str, allowed: bool, reason: str) -> str:
     parts = [f"SOC route {status}"]
     if route:
         parts.append(f"route={route}")
+    if reason:
+        parts.append(reason)
+    return " | ".join(parts)
+
+
+def _permission_decision_text(
+    *,
+    action: str,
+    allowed: bool,
+    risk_level: str,
+    reason: str,
+    requires_human_approval: bool,
+) -> str:
+    status = "allowed" if allowed else "denied"
+    parts = [f"SOC permission {status}"]
+    if action:
+        parts.append(f"action={action}")
+    if risk_level:
+        parts.append(f"risk={risk_level}")
+    if requires_human_approval:
+        parts.append("approval_required")
     if reason:
         parts.append(reason)
     return " | ".join(parts)

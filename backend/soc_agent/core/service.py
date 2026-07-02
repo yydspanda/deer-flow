@@ -36,6 +36,8 @@ from soc_agent.contracts import (
     SocAgentActionResult,
     SocAgentChatRequest,
     SocAgentChatResponse,
+    SocAgentPermissionDecision,
+    SocAgentRiskLevel,
     SocAgentRouteDecision,
     SocAgentStreamEvent,
     SocEvent,
@@ -553,7 +555,14 @@ class SocAgentChatService:
             yield SocAgentStreamEvent(type="end", data={"usage": {}, "thread_id": thread_id})
             return
 
-        action_result = self._action_dispatcher.dispatch(chat_request, route_decision, context=request_context)
+        permission_decision = self._action_dispatcher.check_permission(chat_request, route_decision, context=request_context)
+        yield _permission_decision_event(permission_decision)
+        if not permission_decision.allowed:
+            yield _assistant_event(_permission_denied_message(permission_decision))
+            yield SocAgentStreamEvent(type="end", data={"usage": {}, "thread_id": thread_id})
+            return
+
+        action_result = self._action_dispatcher.dispatch(chat_request, route_decision, context=request_context, permission_decision=permission_decision)
         yield _action_result_event(action_result)
         if action_result.status != "success":
             yield _assistant_event(action_result.message)
@@ -607,11 +616,119 @@ class SocAgentCapabilityRouter:
         )
 
 
+class SocAgentActionPolicy:
+    """Permission policy for routed SOC Agent service actions."""
+
+    POLICY_VERSION = "soc.agent_action_policy.v1"
+    READ_ONLY_ACTIONS = frozenset({"chat.ready_message", "review.open_context"})
+    ANALYST_WRITE_ACTIONS = frozenset({"review.correct", "analysis.replay"})
+    HIGH_RISK_ACTIONS = frozenset({"response.block_ip", "endpoint.isolate_host", "mcp.invoke"})
+
+    def check(
+        self,
+        *,
+        action: str,
+        route: str,
+        request: SocAgentChatRequest,
+        context: ServiceRequestContext,
+    ) -> SocAgentPermissionDecision:
+        risk_level = self._risk_level(action)
+        if risk_level is SocAgentRiskLevel.READ_ONLY:
+            return self._decision(
+                action=action,
+                route=route,
+                allowed=True,
+                risk_level=risk_level,
+                reason=f"action {action} is read-only",
+                context=context,
+            )
+        if risk_level is SocAgentRiskLevel.ANALYST_WRITE:
+            allowed = "analyst" in context.actor.roles
+            reason = f"actor has analyst role for action {action}" if allowed else f"action {action} requires analyst role"
+            return self._decision(
+                action=action,
+                route=route,
+                allowed=allowed,
+                risk_level=risk_level,
+                reason=reason,
+                context=context,
+            )
+        if risk_level is SocAgentRiskLevel.HIGH_RISK:
+            return self._decision(
+                action=action,
+                route=route,
+                allowed=False,
+                risk_level=risk_level,
+                reason=f"action {action} requires human approval",
+                context=context,
+                requires_human_approval=True,
+            )
+        return self._decision(
+            action=action,
+            route=route,
+            allowed=False,
+            risk_level=SocAgentRiskLevel.UNKNOWN,
+            reason=f"action {action} is not registered in policy",
+            context=context,
+        )
+
+    def _risk_level(self, action: str) -> SocAgentRiskLevel:
+        if action in self.READ_ONLY_ACTIONS:
+            return SocAgentRiskLevel.READ_ONLY
+        if action in self.ANALYST_WRITE_ACTIONS:
+            return SocAgentRiskLevel.ANALYST_WRITE
+        if action in self.HIGH_RISK_ACTIONS:
+            return SocAgentRiskLevel.HIGH_RISK
+        return SocAgentRiskLevel.UNKNOWN
+
+    def _decision(
+        self,
+        *,
+        action: str,
+        route: str,
+        allowed: bool,
+        risk_level: SocAgentRiskLevel,
+        reason: str,
+        context: ServiceRequestContext,
+        requires_human_approval: bool = False,
+    ) -> SocAgentPermissionDecision:
+        return SocAgentPermissionDecision(
+            route=route,
+            action=action,
+            allowed=allowed,
+            risk_level=risk_level,
+            reason=reason,
+            requires_human_approval=requires_human_approval,
+            policy_version=self.POLICY_VERSION,
+            actor=context.actor,
+        )
+
+
 class SocAgentActionDispatcher:
     """Dispatch allowed SOC Agent routes to explicit service actions."""
 
-    def __init__(self, *, review_service: SocReviewService | None = None) -> None:
+    def __init__(self, *, review_service: SocReviewService | None = None, action_policy: SocAgentActionPolicy | None = None) -> None:
         self._review_service = review_service
+        self._action_policy = action_policy or SocAgentActionPolicy()
+
+    def check_permission(
+        self,
+        request: SocAgentChatRequest,
+        route_decision: SocAgentRouteDecision,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentPermissionDecision:
+        action = _action_name_for_route(route_decision.route)
+        if not route_decision.allowed:
+            return SocAgentPermissionDecision(
+                route=route_decision.route,
+                action=action,
+                allowed=False,
+                risk_level=SocAgentRiskLevel.UNKNOWN,
+                reason=route_decision.reason,
+                actor=context.actor,
+            )
+        return self._action_policy.check(action=action, route=route_decision.route, request=request, context=context)
 
     def dispatch(
         self,
@@ -619,6 +736,7 @@ class SocAgentActionDispatcher:
         route_decision: SocAgentRouteDecision,
         *,
         context: ServiceRequestContext,
+        permission_decision: SocAgentPermissionDecision | None = None,
     ) -> SocAgentActionResult:
         if not route_decision.allowed:
             return SocAgentActionResult(
@@ -627,20 +745,29 @@ class SocAgentActionDispatcher:
                 status="denied",
                 message=route_decision.reason,
             )
-        if route_decision.route == "chat.freeform":
+        permission = permission_decision or self.check_permission(request, route_decision, context=context)
+        if not permission.allowed:
             return SocAgentActionResult(
                 route=route_decision.route,
-                action="chat.ready_message",
+                action=permission.action,
+                status="denied",
+                message=permission.reason,
+                requires_human_approval=permission.requires_human_approval,
+            )
+        if permission.action == "chat.ready_message":
+            return SocAgentActionResult(
+                route=route_decision.route,
+                action=permission.action,
                 status="success",
                 message="SOC investigation chat is ready. Phase 1 supports deterministic review context loading; future SOC Lead Agent routing will attach skills, MCP tools, and bounded LLM reasoning here.",
             )
-        if route_decision.route == "review.open_context":
+        if permission.action == "review.open_context":
             return self._open_review_context(request, route_decision=route_decision, context=context)
         return SocAgentActionResult(
             route=route_decision.route,
-            action="route.unsupported",
+            action=permission.action,
             status="denied",
-            message=f"route {route_decision.route} has no service action mapping",
+            message=f"action {permission.action} has no service action mapping",
         )
 
     def _open_review_context(
@@ -693,6 +820,16 @@ def _route_name(request: SocAgentChatRequest) -> str:
     return "chat.freeform"
 
 
+def _action_name_for_route(route: str) -> str:
+    if route == "chat.freeform":
+        return "chat.ready_message"
+    if route == "review.open_context":
+        return "review.open_context"
+    if route == "command.unknown":
+        return "command.unknown"
+    return "route.unsupported"
+
+
 def _route_decision_event(decision: SocAgentRouteDecision) -> SocAgentStreamEvent:
     return SocAgentStreamEvent(
         type="custom",
@@ -702,6 +839,22 @@ def _route_decision_event(decision: SocAgentRouteDecision) -> SocAgentStreamEven
             "allowed": decision.allowed,
             "reason": decision.reason,
             "requires_human_approval": decision.requires_human_approval,
+        },
+    )
+
+
+def _permission_decision_event(decision: SocAgentPermissionDecision) -> SocAgentStreamEvent:
+    return SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.permission_decision",
+            "route": decision.route,
+            "action": decision.action,
+            "allowed": decision.allowed,
+            "risk_level": decision.risk_level.value,
+            "reason": decision.reason,
+            "requires_human_approval": decision.requires_human_approval,
+            "policy_version": decision.policy_version,
         },
     )
 
@@ -718,6 +871,12 @@ def _action_result_event(result: SocAgentActionResult) -> SocAgentStreamEvent:
             "requires_human_approval": result.requires_human_approval,
         },
     )
+
+
+def _permission_denied_message(decision: SocAgentPermissionDecision) -> str:
+    if decision.requires_human_approval:
+        return f"Action requires human approval: {decision.reason}"
+    return f"Permission denied: {decision.reason}"
 
 
 def _new_chat_thread_id() -> str:

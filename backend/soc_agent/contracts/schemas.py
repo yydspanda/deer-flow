@@ -150,6 +150,27 @@ class SocAgentRouteDecision(BaseModel):
     input_text: str | None = None
 
 
+class SocAgentRiskLevel(StrEnum):
+    READ_ONLY = "read_only"
+    ANALYST_WRITE = "analyst_write"
+    HIGH_RISK = "high_risk"
+    UNKNOWN = "unknown"
+
+
+class SocAgentPermissionDecision(BaseModel):
+    """Permission decision for one routed SOC Agent action."""
+
+    schema_version: str = "soc.agent_permission_decision.v1"
+    route: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    allowed: bool
+    risk_level: SocAgentRiskLevel = SocAgentRiskLevel.UNKNOWN
+    reason: str = Field(min_length=1)
+    requires_human_approval: bool = False
+    policy_version: str = "soc.agent_action_policy.v1"
+    actor: ActorContext | None = None
+
+
 class SocAgentActionResult(BaseModel):
     """Result of dispatching an allowed SOC Agent route to a service action."""
 

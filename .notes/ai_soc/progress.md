@@ -23,7 +23,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | ReviewQueue Web thin page 或 SOC Lead Agent action permission / human approval 切片 |
+| 当前下一刀 | ReviewQueue Web thin page 或 SOC Lead Agent approved-action execution 切片 |
 
 ## Phase 1 切片计划
 
@@ -56,8 +56,37 @@
 | 25 | SOC Agent chat TUI workbench shell | Done | `soc chat tui` 启动 DeerFlow-aligned Textual chat workbench；支持普通消息和 `/open REV-...` context loading；业务仍走 `SocAgentChatService` |
 | 26 | SOC Agent capability router MVP | Done | `SocAgentCapabilityRouter` 对 chat request 生成白名单 route decision；stream 发出 `soc.route_decision`；TUI 显示 allowed/denied |
 | 27 | SOC Agent route -> service/action dispatcher | Done | `SocAgentActionDispatcher` 将 allowed route 映射为显式 service action result；stream 发出 `soc.action_result`；`review.open_context` 通过 `SocReviewService` 执行 |
+| 28 | SOC Agent action permission / human approval | Done | `SocAgentActionPolicy` 在 action dispatch 前输出 permission decision；read-only 允许、analyst-write 需 analyst 角色、高风险要求人工审批且不执行 |
 
 ## 进度记录
+
+### 2026-07-02 — SOC Agent action permission / human approval 切片
+
+- 背景：
+  - 已有 route -> action dispatcher，但执行前还缺 permission/human approval 闸门。
+  - 这一层保证后续 `review.correct`、`analysis.replay`、封禁、隔离、MCP/tool 调用不会绕过审批边界。
+- 新增：
+  - `SocAgentRiskLevel`：`read_only`、`analyst_write`、`high_risk`、`unknown`。
+  - `SocAgentPermissionDecision` contract。
+  - `SocAgentActionPolicy`。
+  - `SocAgentChatService.stream()` 在 `route_decision` 后、`action_result` 前发 `custom kind=soc.permission_decision`。
+  - `soc_agent.tui.chat_runtime` 将 `soc.permission_decision` 转成 DeerFlow `SystemMessage`，拒绝态使用 error tone。
+- 当前策略：
+  - `chat.ready_message`、`review.open_context` 是 read-only，默认允许。
+  - `review.correct`、`analysis.replay` 是 analyst-write，必须 actor 具备 `analyst` role。
+  - `response.block_ip`、`endpoint.isolate_host`、`mcp.invoke` 是 high-risk，返回 `requires_human_approval=True` 且不执行。
+  - 未注册 action 默认拒绝。
+- 边界：
+  - permission allowed 才会进入 dispatcher 执行。
+  - high-risk action 当前只生成 approval-required decision，不执行真实动作。
+  - 后续要执行高风险动作，必须先补审批请求/确认/审计模型。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_service.py tests/test_soc_tui_chat_runtime.py tests/test_soc_tui_chat_app.py tests/test_soc_review_tui.py tests/architecture/test_soc_agent_boundaries.py -q`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_service.py tests/test_soc_tui_chat_runtime.py tests/test_soc_tui_chat_app.py tests/test_soc_review_tui.py tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+- 下一步：
+  - 若继续 Agent 能力，做 approved-action execution：审批通过后的 command token / approval id / audit record。
+  - 若先补产品闭环，做 ReviewQueue Web thin page。
 
 ### 2026-07-02 — SOC Agent route -> service/action dispatcher 切片
 
