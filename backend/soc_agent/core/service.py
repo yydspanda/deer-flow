@@ -35,6 +35,7 @@ from soc_agent.contracts import (
     SimilarAlertQuery,
     SocAgentChatRequest,
     SocAgentChatResponse,
+    SocAgentRouteDecision,
     SocAgentStreamEvent,
     SocEvent,
     SocEventType,
@@ -513,8 +514,14 @@ class SocAgentChatService:
     not run the future SOC Lead Agent or call LLM tools yet.
     """
 
-    def __init__(self, *, review_service: SocReviewService | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        review_service: SocReviewService | None = None,
+        capability_router: SocAgentCapabilityRouter | None = None,
+    ) -> None:
         self._review_service = review_service
+        self._capability_router = capability_router or SocAgentCapabilityRouter()
 
     def stream(
         self,
@@ -535,6 +542,13 @@ class SocAgentChatService:
                 "thread_id": thread_id,
             },
         )
+
+        route_decision = self._capability_router.route(chat_request)
+        yield _route_decision_event(route_decision)
+        if not route_decision.allowed:
+            yield _assistant_event(f"Route denied: {route_decision.reason}")
+            yield SocAgentStreamEvent(type="end", data={"usage": {}, "thread_id": thread_id})
+            return
 
         if chat_request.queue_id:
             if self._review_service is None:
@@ -577,10 +591,57 @@ class SocAgentChatService:
         )
 
 
+class SocAgentCapabilityRouter:
+    """Deterministic whitelist router for SOC chat capabilities."""
+
+    DEFAULT_ALLOWED_ROUTES = frozenset({"chat.freeform", "review.open_context"})
+
+    def __init__(self, *, allowed_routes: set[str] | None = None) -> None:
+        self._allowed_routes = frozenset(allowed_routes or self.DEFAULT_ALLOWED_ROUTES)
+
+    def route(self, request: SocAgentChatRequest) -> SocAgentRouteDecision:
+        route = _route_name(request)
+        allowed = route in self._allowed_routes and (not request.allowed_routes or route in set(request.allowed_routes))
+        if allowed:
+            return SocAgentRouteDecision(
+                route=route,
+                allowed=True,
+                reason=f"route {route} is allowed by whitelist",
+                input_text=request.message,
+            )
+        return SocAgentRouteDecision(
+            route=route,
+            allowed=False,
+            reason=f"route {route} is not allowed",
+            input_text=request.message,
+        )
+
+
 def _coerce_chat_request(request: SocAgentChatRequest | str) -> SocAgentChatRequest:
     if isinstance(request, SocAgentChatRequest):
         return request
     return SocAgentChatRequest(message=request)
+
+
+def _route_name(request: SocAgentChatRequest) -> str:
+    if request.queue_id:
+        return "review.open_context"
+    if request.message.strip().startswith("/"):
+        return "command.unknown"
+    return "chat.freeform"
+
+
+def _route_decision_event(decision: SocAgentRouteDecision) -> SocAgentStreamEvent:
+    return SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.route_decision",
+            "route": decision.route,
+            "allowed": decision.allowed,
+            "reason": decision.reason,
+            "requires_human_approval": decision.requires_human_approval,
+        },
+    )
 
 
 def _new_chat_thread_id() -> str:

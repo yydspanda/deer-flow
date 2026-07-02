@@ -58,6 +58,17 @@ def _translate_custom(data: dict[str, Any]) -> list[Action]:
                 )
             )
         ]
+    if kind == "soc.route_decision":
+        return [
+            SystemMessage(
+                _route_decision_text(
+                    route=_as_str(data.get("route")),
+                    allowed=bool(data.get("allowed")),
+                    reason=_as_str(data.get("reason")),
+                ),
+                tone="info" if data.get("allowed") else "error",
+            )
+        ]
     return []
 
 
@@ -69,6 +80,16 @@ def _review_context_text(*, queue_id: str, run_id: str, alert_id: str) -> str:
         parts.append(f"alert={alert_id}")
     if run_id:
         parts.append(f"run={run_id}")
+    return " | ".join(parts)
+
+
+def _route_decision_text(*, route: str, allowed: bool, reason: str) -> str:
+    status = "allowed" if allowed else "denied"
+    parts = [f"SOC route {status}"]
+    if route:
+        parts.append(f"route={route}")
+    if reason:
+        parts.append(reason)
     return " | ".join(parts)
 
 

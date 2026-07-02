@@ -139,6 +139,17 @@ class SocAgentChatResponse(BaseModel):
     final_text: str = ""
 
 
+class SocAgentRouteDecision(BaseModel):
+    """Whitelisted capability route selected for one SOC chat request."""
+
+    schema_version: str = "soc.agent_route_decision.v1"
+    route: str = Field(min_length=1)
+    allowed: bool
+    reason: str = Field(min_length=1)
+    requires_human_approval: bool = False
+    input_text: str | None = None
+
+
 class AlertSourceType(StrEnum):
     UNKNOWN = "unknown"
     SIEM = "siem"

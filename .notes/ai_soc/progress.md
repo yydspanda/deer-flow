@@ -23,7 +23,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | ReviewQueue Web thin page 或 SOC Lead Agent capability router 设计/实现切片 |
+| 当前下一刀 | ReviewQueue Web thin page 或 SOC Lead Agent route -> service/action 映射切片 |
 
 ## Phase 1 切片计划
 
@@ -54,8 +54,36 @@
 | 23 | SOC Agent chat stream contract | Done | `SocAgentChatService` 输出 DeerFlow-compatible stream event；可加载 ReviewQueue context；不调用 LLM、不替代 core service |
 | 24 | SOC TUI chat runtime adapter | Done | 将 `SocAgentStreamEvent` 翻译成 DeerFlow TUI reducer actions；支持 `soc.review_context` custom event；保持纯函数、无 Textual/DB 依赖 |
 | 25 | SOC Agent chat TUI workbench shell | Done | `soc chat tui` 启动 DeerFlow-aligned Textual chat workbench；支持普通消息和 `/open REV-...` context loading；业务仍走 `SocAgentChatService` |
+| 26 | SOC Agent capability router MVP | Done | `SocAgentCapabilityRouter` 对 chat request 生成白名单 route decision；stream 发出 `soc.route_decision`；TUI 显示 allowed/denied |
 
 ## 进度记录
+
+### 2026-07-02 — SOC Agent capability router MVP 切片
+
+- 背景：
+  - 主 SOC Agent 后续会接 skills/MCP/tool route，必须先有确定性白名单路由，不让 LLM 或 TUI 自由调任意能力。
+- 新增：
+  - `SocAgentRouteDecision` contract。
+  - `SocAgentCapabilityRouter`。
+  - 默认白名单：`chat.freeform`、`review.open_context`。
+  - `SocAgentChatService.stream()` 每次先发 `custom kind=soc.route_decision`。
+  - route 被拒绝时输出明确 assistant message 并结束，不继续执行 context loading。
+  - `soc_agent.tui.chat_runtime` 将 `soc.route_decision` 转成 DeerFlow `SystemMessage`，拒绝态使用 error tone。
+- 当前 route：
+  - 普通消息 -> `chat.freeform`。
+  - 带 `queue_id` 或 `/open REV-...` -> `review.open_context`。
+  - 未知 slash command -> `command.unknown`，默认拒绝。
+- 边界：
+  - router 只选择白名单 route，不执行动作。
+  - route allowed 不代表处置动作 allowed；高风险动作后续还要走 service command + permission + human approval。
+  - `allowed_routes` 可在单次 request 中进一步收窄，不扩大全局白名单。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_service.py tests/test_soc_tui_chat_runtime.py tests/test_soc_tui_chat_app.py tests/test_soc_review_tui.py tests/architecture/test_soc_agent_boundaries.py -q`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_service.py tests/test_soc_tui_chat_runtime.py tests/test_soc_tui_chat_app.py tests/test_soc_review_tui.py tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+- 下一步：
+  - 若继续 Agent 能力，补 route -> service/action 映射 contract，例如 review.open_context、review.correct、analysis.replay 的显式 command boundary。
+  - 若先做产品闭环，做 ReviewQueue Web thin page。
 
 ### 2026-07-02 — SOC Agent chat TUI workbench shell 切片
 

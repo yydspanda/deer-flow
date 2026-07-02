@@ -41,6 +41,34 @@ def test_soc_chat_runtime_ignores_unknown_custom_event() -> None:
     assert translate(event) == []
 
 
+def test_soc_chat_runtime_translates_route_decision_custom_event() -> None:
+    event = SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.route_decision",
+            "route": "review.open_context",
+            "allowed": True,
+            "reason": "route review.open_context is allowed by whitelist",
+        },
+    )
+
+    assert translate(event) == [SystemMessage("SOC route allowed | route=review.open_context | route review.open_context is allowed by whitelist")]
+
+
+def test_soc_chat_runtime_translates_denied_route_as_error() -> None:
+    event = SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.route_decision",
+            "route": "command.unknown",
+            "allowed": False,
+            "reason": "route command.unknown is not allowed",
+        },
+    )
+
+    assert translate(event) == [SystemMessage("SOC route denied | route=command.unknown | route command.unknown is not allowed", tone="error")]
+
+
 class _FakeChatService:
     def __init__(self, events: list[SocAgentStreamEvent]) -> None:
         self._events = events
@@ -78,6 +106,7 @@ def test_soc_chat_runtime_stream_actions_brackets_service_stream() -> None:
 def test_soc_chat_runtime_reduces_to_deerflow_view_state() -> None:
     service = _FakeChatService(
         [
+            SocAgentStreamEvent(type="custom", data={"kind": "soc.route_decision", "route": "review.open_context", "allowed": True}),
             SocAgentStreamEvent(type="custom", data={"kind": "soc.review_context", "queue_id": "REV-1"}),
             SocAgentStreamEvent(type="messages-tuple", data={"type": "ai", "id": "m1", "content": "Next step"}),
             SocAgentStreamEvent(type="end", data={"usage": {}}),
@@ -88,9 +117,10 @@ def test_soc_chat_runtime_reduces_to_deerflow_view_state() -> None:
     for action in stream_actions(service, "open REV-1"):
         state = reduce(state, action)
 
-    assert [row.kind for row in state.rows] == ["system", "assistant"]
-    assert state.rows[0].text == "SOC review context loaded | queue=REV-1"
-    assert state.rows[1].text == "Next step"
+    assert [row.kind for row in state.rows] == ["system", "system", "assistant"]
+    assert state.rows[0].text == "SOC route allowed | route=review.open_context"
+    assert state.rows[1].text == "SOC review context loaded | queue=REV-1"
+    assert state.rows[2].text == "Next step"
     assert state.streaming is False
 
 

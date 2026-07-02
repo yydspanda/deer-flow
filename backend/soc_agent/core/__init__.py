@@ -3,6 +3,7 @@
 from soc_agent.core.service import (
     DeterministicAnalysisRuntime,
     NoopEventSink,
+    SocAgentCapabilityRouter,
     SocAgentChatService,
     SocAnalysisService,
     SocDaemonService,
@@ -17,6 +18,7 @@ from soc_agent.core.service import (
 __all__ = [
     "DeterministicAnalysisRuntime",
     "NoopEventSink",
+    "SocAgentCapabilityRouter",
     "SocAgentChatService",
     "SocAnalysisService",
     "SocDaemonService",

@@ -25,6 +25,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.core import (
+    SocAgentCapabilityRouter,
     SocAgentChatService,
     SocAnalysisService,
     SocDaemonService,
@@ -470,12 +471,15 @@ def test_agent_chat_service_streams_deerflow_like_events() -> None:
 
     events = list(service.stream(SocAgentChatRequest(message="triage this alert", thread_id="soc-thread-1")))
 
-    assert [event.type for event in events] == ["values", "messages-tuple", "end"]
+    assert [event.type for event in events] == ["values", "custom", "messages-tuple", "end"]
     assert events[0].data["title"] == "triage this alert"
     assert events[0].data["thread_id"] == "soc-thread-1"
     assert events[0].data["artifacts"] == []
-    assert events[1].data["type"] == "ai"
-    assert "deterministic review context loading" in events[1].data["content"]
+    assert events[1].data["kind"] == "soc.route_decision"
+    assert events[1].data["route"] == "chat.freeform"
+    assert events[1].data["allowed"] is True
+    assert events[2].data["type"] == "ai"
+    assert "deterministic review context loading" in events[2].data["content"]
     assert events[-1].data["thread_id"] == "soc-thread-1"
 
 
@@ -483,7 +487,7 @@ def test_agent_chat_service_materializes_response_from_same_stream() -> None:
     response = SocAgentChatService().send_message("hello soc")
 
     assert response.thread_id.startswith("SOC-TH-")
-    assert [event.type for event in response.events] == ["values", "messages-tuple", "end"]
+    assert [event.type for event in response.events] == ["values", "custom", "messages-tuple", "end"]
     assert "SOC investigation chat is ready" in response.final_text
 
 
@@ -515,16 +519,29 @@ def test_agent_chat_service_loads_review_context() -> None:
         )
     )
 
-    assert [event.type for event in events] == ["values", "custom", "messages-tuple", "end"]
+    assert [event.type for event in events] == ["values", "custom", "custom", "messages-tuple", "end"]
     assert events[0].data["title"] == f"SOC Review {item.queue_id}"
-    assert events[1].data == {
+    assert events[1].data["kind"] == "soc.route_decision"
+    assert events[1].data["route"] == "review.open_context"
+    assert events[1].data["allowed"] is True
+    assert events[2].data == {
         "kind": "soc.review_context",
         "queue_id": item.queue_id,
         "run_id": run.run_id,
         "alert_id": run.alert_id,
         "actor_surface": "tui",
     }
-    assert f"Loaded review context {item.queue_id}" in events[2].data["content"]
+    assert f"Loaded review context {item.queue_id}" in events[3].data["content"]
+
+
+def test_agent_chat_service_denies_unlisted_route() -> None:
+    events = list(SocAgentChatService(capability_router=SocAgentCapabilityRouter(allowed_routes={"chat.freeform"})).stream(SocAgentChatRequest(message="open", queue_id="REV-1")))
+
+    assert [event.type for event in events] == ["values", "custom", "messages-tuple", "end"]
+    assert events[1].data["kind"] == "soc.route_decision"
+    assert events[1].data["route"] == "review.open_context"
+    assert events[1].data["allowed"] is False
+    assert "Route denied" in events[2].data["content"]
 
 
 def test_agent_chat_service_requires_review_service_for_queue_context() -> None:
