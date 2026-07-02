@@ -297,7 +297,12 @@ ZEUS/天眼输入可信度相关结构状态：
 5. **ReviewQueue UI 或 Kafka daemon**
    - UI 依赖稳定可解释的研判结果。
    - Kafka daemon 依赖稳定的 parse/repair/fallback/rate-limit 策略。
-   - 当前状态：Next，需要根据“先服务分析师复核闭环”还是“先验证后台流式接入”决定下一刀。
+   - 当前状态：In progress，已选择先服务分析师复核闭环；ReviewQueue API MVP 已落地，下一步做 TUI thin client 或 Web thin page。
+6. **ReviewQueue API / TUI / Web**
+   - API 是 Web/TUI/外部系统统一入口，必须只调用 `SocReviewService`。
+   - TUI 是 Phase 1/2 更合适的薄操作台，用于 open queue、context、close、correct、trace 调试。
+   - Web UI 后续基于同一套 API 增量做列表和详情页，不复制业务逻辑。
+   - 当前状态：API Done，TUI Next。
 
 ### 1.2.2 生产级 Runtime 原则：硬骨架 + 软路由
 

@@ -209,6 +209,13 @@ Review queue 约束：
 - `SocReviewService.correct()` 记录人工 correction 后，必须关闭该 run 的 open review item；关闭队列不能删除原始 run、summary 或审计记录。
 - `SocReviewService.close_queue_item()` 只表示复核待办已处理，不等价于修改 verdict；需要改判必须走 `CorrectionCommand`。
 - `soc_review_queue` 保存扁平索引字段和完整 `item_payload`，字段优先服务列表、筛选和复核入口：`status`、`priority`、`alert_id`、`run_id`、`source_type`、`rule_code`、`verdict`、`updated_at`。
+- Gateway ReviewQueue API 路径固定在 `/api/soc/review/*`：
+  - `GET /api/soc/review/items`
+  - `GET /api/soc/review/items/{queue_id}/context`
+  - `POST /api/soc/review/items/{queue_id}/close`
+  - `POST /api/soc/review/runs/{run_id}/correct`
+- ReviewQueue API/TUI/Web 只能调用 `SocReviewService`，不能直接读写 repository 或组装 queue item。
+- API close/correct 必须构造 `ServiceRequestContext`，`ActorContext.surface=api`；TUI/Web 后续分别使用 `tui` / `web`。
 
 Investigation context 约束：
 

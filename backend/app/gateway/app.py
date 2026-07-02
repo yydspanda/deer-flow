@@ -24,6 +24,7 @@ from app.gateway.routers import (
     models,
     runs,
     skills,
+    soc_review,
     suggestions,
     thread_runs,
     threads,
@@ -410,6 +411,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Stateless Runs API (stream/wait without a pre-existing thread)
     app.include_router(runs.router)
+
+    # SOC review queue API is mounted at /api/soc/review
+    app.include_router(soc_review.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict[str, str]:

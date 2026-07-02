@@ -23,7 +23,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | ReviewQueue UI 或 Kafka daemon 二选一：先决定下一阶段产品验证入口 |
+| 当前下一刀 | ReviewQueue TUI thin client：复用 ReviewQueue API/service 做列表、详情、关闭、纠正 |
 
 ## Phase 1 切片计划
 
@@ -49,8 +49,36 @@
 | 18 | LLM JSON parser + bad JSON repair | Done | 先严格 JSON parse，再 repair，再 Pydantic/domain validation；覆盖代码块、尾逗号、半截 JSON、字段类型错误 |
 | 19 | 真实 LLM analyzer behind flag | Done | 默认继续走 `analyze_stub`；显式配置开启后才调用模型；输出必须经过 prompt builder、JSON parser、schema/domain validation |
 | 20 | Offline eval：stub / llm / replay diff | Done | 同一批样本比较 verdict、confidence、needs_review、parse success、冲突字段处理质量 |
+| 21 | ReviewQueue API | Done | Gateway 暴露 review queue 列表、调查上下文、关闭、纠正接口；业务动作仍走 `SocReviewService` |
+| 22 | ReviewQueue TUI thin client | Next | 基于 service/API 展示 open queue、打开 context、关闭 item、发起 correction；不复制业务逻辑 |
 
 ## 进度记录
+
+### 2026-07-02 — ReviewQueue API MVP 切片
+
+- 产品决策：
+  - 在 ReviewQueue UI/API/TUI 方向中，先做 API。
+  - Web UI 和 TUI 后续都复用同一套 `SocReviewService` / API 语义，避免前端或终端入口各自拼业务逻辑。
+- 新增 Gateway router：
+  - `backend/app/gateway/routers/soc_review.py`
+  - `GET /api/soc/review/items`
+  - `GET /api/soc/review/items/{queue_id}/context`
+  - `POST /api/soc/review/items/{queue_id}/close`
+  - `POST /api/soc/review/runs/{run_id}/correct`
+- API 边界：
+  - 业务动作只调用 `SocReviewService`。
+  - 如果 `app.state.soc_review_service` 已注入则直接使用，方便测试和未来 TUI/Web adapter。
+  - 默认从 `SOC_DATABASE_URL` 或 DeerFlow postgres 配置创建 `SqlAlchemyAlertRepository`。
+  - close/correct 会构造 `ServiceRequestContext`，actor surface 固定为 `api`，支持 `x-soc-actor-id`。
+- 新增测试：
+  - `backend/tests/test_soc_review_router.py`
+  - 覆盖列表、调查上下文、关闭、纠正、缺失 404、MVP route path 暴露。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check app/gateway/routers/soc_review.py app/gateway/app.py soc_agent tests/test_soc_review_router.py tests/test_soc_agent_service.py tests/test_soc_agent_runtime.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_review_router.py tests/test_soc_agent_service.py tests/test_soc_agent_runtime.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py -q`
+- 下一步：
+  - 做 ReviewQueue TUI thin client 或 Web thin page。
+  - 当前建议先做 TUI thin client，因为它更贴近 Phase 1/2 的开发调试和值班操作，且不需要先投入前端页面布局。
 
 ### 2026-07-02 — Offline eval：stub / llm / replay diff 切片
 
