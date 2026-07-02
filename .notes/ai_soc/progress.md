@@ -26,7 +26,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | ReviewQueue Web thin page 或 approved-action execution token / audit record 切片 |
+| 当前下一刀 | ReviewQueue Web thin page 或 approved-action persistence / execution dry-run 切片 |
 
 ## Phase 1 切片计划
 
@@ -61,8 +61,33 @@
 | 27 | SOC Agent route -> service/action dispatcher | Done | `SocAgentActionDispatcher` 将 allowed route 映射为显式 service action result；stream 发出 `soc.action_result`；`review.open_context` 通过 `SocReviewService` 执行 |
 | 28 | SOC Agent action permission / human approval | Done | `SocAgentActionPolicy` 在 action dispatch 前输出 permission decision；read-only 允许、analyst-write 需 analyst 角色、高风险要求人工审批且不执行 |
 | 29 | SOC Agent approval request event | Done | 高风险 action 被拒绝时生成 `SocAgentApprovalRequest`；stream 发出 `soc.approval_request`；TUI 显示 pending approval request |
+| 30 | SOC Agent approval grant token | Done | `SocAgentApprovalService` 将 pending approval request 转成一次性 `SocAgentApprovalGrant`；仅 `soc_approver`/`soc_admin` 可批准；仍不执行真实动作 |
 
 ## 进度记录
+
+### 2026-07-02 — SOC Agent approval grant token 切片
+
+- 背景：
+  - 上一刀已有 pending approval request，但审批通过后的执行授权还不能和审批请求混在一起。
+  - 高风险动作必须先有明确 human approver、一次性 token、过期时间和幂等键，后续才能接 dry-run 或真实执行。
+- 新增：
+  - `SocAgentApprovalGrant` contract，包含 `approval_grant_id`、`execution_token_id`、`approval_request_id`、`permission_decision_id`、`approved_by`、`expires_at`、`idempotency_key`。
+  - `SocAgentApprovalService.approve()`，只把 pending request 转成 grant，不执行 action。
+  - approval role policy：只有 `soc_approver` 或 `soc_admin` 可以批准；普通 `analyst` 不能批准。
+- 边界：
+  - grant/token 不是 action result。
+  - 当前仍不调用外部工具、不写生产状态、不执行封禁或隔离。
+  - 后续如果接执行层，必须校验 token 未过期、单次使用、action/route/risk 与原 request 一致，并写 automation action audit。
+- 工具使用：
+  - Understand Chat 已按 `.understand-anything/knowledge-graph.json` 搜索，但图谱停在 2026-06-27 `bcce7db...`，早于当前 SOC 代码，未命中 `backend/soc_agent` 新符号。
+  - 本切片使用 CodeGraph 定位 `SocAgentActionPolicy`、`SocAgentApprovalRequest`、`DecisionAuditRecord` 等本地落点。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_service.py tests/test_soc_tui_chat_runtime.py tests/test_soc_tui_chat_app.py tests/test_soc_review_tui.py tests/architecture/test_soc_agent_boundaries.py -q`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_service.py tests/test_soc_tui_chat_runtime.py tests/test_soc_tui_chat_app.py tests/test_soc_review_tui.py tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+- 下一步：
+  - 若继续 Agent 能力，做 approval grant persistence / execution dry-run。
+  - 若先补产品闭环，做 ReviewQueue Web thin page。
 
 ### 2026-07-02 — SOC Agent approval request event 切片
 

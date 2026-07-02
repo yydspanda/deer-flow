@@ -188,6 +188,28 @@ class SocAgentApprovalRequest(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class SocAgentApprovalGrant(BaseModel):
+    """One-time execution grant produced after human approval."""
+
+    schema_version: str = "soc.agent_approval_grant.v1"
+    approval_grant_id: str = Field(default_factory=lambda: f"APG-{uuid4().hex[:12].upper()}")
+    execution_token_id: str = Field(default_factory=lambda: f"SAT-{uuid4().hex[:16].upper()}")
+    approval_request_id: str
+    permission_decision_id: str
+    route: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    risk_level: SocAgentRiskLevel
+    requested_by: ActorContext
+    approved_by: ActorContext
+    approval_reason: str = Field(min_length=1)
+    idempotency_key: str | None = None
+    status: Literal["approved"] = "approved"
+    single_use: Literal[True] = True
+    approved_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime
+    policy_version: str = "soc.agent_action_policy.v1"
+
+
 class SocAgentActionResult(BaseModel):
     """Result of dispatching an allowed SOC Agent route to a service action."""
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterator, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -34,6 +34,7 @@ from soc_agent.contracts import (
     ServiceRequestContext,
     SimilarAlertQuery,
     SocAgentActionResult,
+    SocAgentApprovalGrant,
     SocAgentApprovalRequest,
     SocAgentChatRequest,
     SocAgentChatResponse,
@@ -508,6 +509,51 @@ class SocDaemonService:
 
     def start(self) -> None:
         raise SocServiceNotImplementedError("daemon mode is planned for Phase 4")
+
+
+class SocAgentApprovalService:
+    """Human approval boundary for high-risk SOC Agent actions.
+
+    This service creates an execution grant only. It does not execute the action,
+    call external tools, or write business state.
+    """
+
+    APPROVER_ROLES = frozenset({"soc_approver", "soc_admin"})
+
+    def approve(
+        self,
+        approval_request: SocAgentApprovalRequest,
+        *,
+        context: ServiceRequestContext,
+        reason: str,
+        expires_in_seconds: int = 900,
+    ) -> SocAgentApprovalGrant:
+        if approval_request.status != "pending":
+            raise SocServiceError(f"approval request {approval_request.approval_request_id} is not pending")
+        if not reason.strip():
+            raise SocServiceError("approval reason is required")
+        if expires_in_seconds <= 0:
+            raise SocServiceError("approval grant expiry must be positive")
+        if not self._can_approve(context.actor):
+            raise SocServiceError("approval requires actor role soc_approver or soc_admin")
+
+        approved_at = datetime.now(UTC)
+        return SocAgentApprovalGrant(
+            approval_request_id=approval_request.approval_request_id,
+            permission_decision_id=approval_request.permission_decision_id,
+            route=approval_request.route,
+            action=approval_request.action,
+            risk_level=approval_request.risk_level,
+            requested_by=approval_request.requested_by,
+            approved_by=context.actor,
+            approval_reason=reason.strip(),
+            idempotency_key=context.idempotency_key,
+            approved_at=approved_at,
+            expires_at=approved_at + timedelta(seconds=expires_in_seconds),
+        )
+
+    def _can_approve(self, actor: ActorContext) -> bool:
+        return bool(self.APPROVER_ROLES.intersection(actor.roles))
 
 
 class SocAgentChatService:

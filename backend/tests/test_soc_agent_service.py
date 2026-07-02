@@ -19,6 +19,7 @@ from soc_agent.contracts import (
     ServiceRequestContext,
     SimilarAlertMatch,
     SimilarAlertQuery,
+    SocAgentApprovalRequest,
     SocAgentChatRequest,
     SocAgentPermissionDecision,
     SocAgentRiskLevel,
@@ -30,6 +31,7 @@ from soc_agent.contracts import (
 from soc_agent.core import (
     SocAgentActionDispatcher,
     SocAgentActionPolicy,
+    SocAgentApprovalService,
     SocAgentCapabilityRouter,
     SocAgentChatService,
     SocAnalysisService,
@@ -37,6 +39,7 @@ from soc_agent.core import (
     SocMemoryService,
     SocNormalizationService,
     SocReviewService,
+    SocServiceError,
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
 )
@@ -147,6 +150,18 @@ class _HighRiskRouter:
 
 def _sample(name: str) -> dict:
     return json.loads((SAMPLES / name).read_text(encoding="utf-8"))
+
+
+def _approval_request() -> SocAgentApprovalRequest:
+    return SocAgentApprovalRequest(
+        approval_request_id="APR-TEST-001",
+        permission_decision_id="PERM-TEST-001",
+        route="response.block_ip",
+        action="response.block_ip",
+        risk_level=SocAgentRiskLevel.HIGH_RISK,
+        reason="action response.block_ip requires human approval",
+        requested_by=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI, roles=["analyst"]),
+    )
 
 
 def test_analysis_service_emits_events_and_saves_run() -> None:
@@ -697,6 +712,51 @@ def test_agent_action_policy_denies_unknown_actions() -> None:
 
     assert decision.allowed is False
     assert decision.risk_level is SocAgentRiskLevel.UNKNOWN
+
+
+def test_agent_approval_service_creates_one_time_grant_for_approver() -> None:
+    context = ServiceRequestContext(
+        actor=ActorContext(actor_id="approver-1", surface=EntrySurface.TUI, roles=["soc_approver"]),
+        idempotency_key="idem-approval-1",
+    )
+
+    grant = SocAgentApprovalService().approve(
+        _approval_request(),
+        context=context,
+        reason="Analyst verified emergency containment scope.",
+        expires_in_seconds=300,
+    )
+
+    assert grant.approval_grant_id.startswith("APG-")
+    assert grant.execution_token_id.startswith("SAT-")
+    assert grant.approval_request_id == "APR-TEST-001"
+    assert grant.permission_decision_id == "PERM-TEST-001"
+    assert grant.action == "response.block_ip"
+    assert grant.risk_level is SocAgentRiskLevel.HIGH_RISK
+    assert grant.requested_by.actor_id == "analyst-1"
+    assert grant.approved_by.actor_id == "approver-1"
+    assert grant.approval_reason == "Analyst verified emergency containment scope."
+    assert grant.idempotency_key == "idem-approval-1"
+    assert grant.single_use is True
+    assert grant.status == "approved"
+    assert grant.expires_at > grant.approved_at
+
+
+def test_agent_approval_service_rejects_non_approver() -> None:
+    context = ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", roles=["analyst"]))
+
+    with pytest.raises(SocServiceError, match="soc_approver"):
+        SocAgentApprovalService().approve(_approval_request(), context=context, reason="approve")
+
+
+def test_agent_approval_service_requires_valid_reason_and_expiry() -> None:
+    context = ServiceRequestContext(actor=ActorContext(actor_id="admin-1", roles=["soc_admin"]))
+    service = SocAgentApprovalService()
+
+    with pytest.raises(SocServiceError, match="reason"):
+        service.approve(_approval_request(), context=context, reason=" ")
+    with pytest.raises(SocServiceError, match="expiry"):
+        service.approve(_approval_request(), context=context, reason="valid reason", expires_in_seconds=0)
 
 
 def test_review_service_correct_requires_repository() -> None:

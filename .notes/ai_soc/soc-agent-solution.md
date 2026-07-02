@@ -302,7 +302,7 @@ ZEUS/天眼输入可信度相关结构状态：
    - API 是 Web/TUI/外部系统统一入口，必须只调用 `SocReviewService`。
    - TUI 是 Phase 1/2 更合适的薄操作台，用于 open queue、context、close、correct、trace 调试。
    - Web UI 后续基于同一套 API 增量做列表和详情页，不复制业务逻辑。
-   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done，action permission / human approval Done，approval request event Done；下一步做 ReviewQueue Web thin page 或 approved-action execution token。
+   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done，action permission / human approval Done，approval request event Done，approval grant token Done；下一步做 ReviewQueue Web thin page 或 approved-action persistence / execution dry-run。
 
 7. **SOC Agent chat stream contract**
    - `SocAgentChatService.stream()` 是后续 SOC Lead Agent TUI/Web/Channels 的统一流式入口。
@@ -315,6 +315,7 @@ ZEUS/天眼输入可信度相关结构状态：
    - 当前已落地 `SocAgentActionDispatcher`，把 allowed route 映射到显式 service action result，并通过 `custom kind=soc.action_result` 暴露 action/status/message；`review.open_context` 当前唯一真实 service action。
    - 当前已落地 `SocAgentActionPolicy`，在 action dispatch 前输出 `custom kind=soc.permission_decision`；read-only 允许，analyst-write 需要 analyst role，高风险 action 只返回 `requires_human_approval=True`，不执行真实动作。
    - 当前已落地 `SocAgentApprovalRequest` 和 `custom kind=soc.approval_request`；高风险 action 会产生 pending approval request，供 TUI/Web/API 展示和后续审批执行链路使用，但不会直接授权执行。
+   - 当前已落地 `SocAgentApprovalService` 和 `SocAgentApprovalGrant`；只有 `soc_approver`/`soc_admin` 可以把 pending approval request 转成一次性 execution token，仍不执行真实动作。
 
 ReviewQueue TUI 实现边界：
 
