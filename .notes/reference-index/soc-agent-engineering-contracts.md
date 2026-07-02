@@ -216,6 +216,11 @@ Review queue 约束：
   - `POST /api/soc/review/runs/{run_id}/correct`
 - ReviewQueue API/TUI/Web 只能调用 `SocReviewService`，不能直接读写 repository 或组装 queue item。
 - API close/correct 必须构造 `ServiceRequestContext`，`ActorContext.surface=api`；TUI/Web 后续分别使用 `tui` / `web`。
+- `soc review tui` 必须保持 DeerFlow-aligned：
+  - 可以复用 DeerFlow TUI 的 Textual app、theme、composer、command palette、stream 设计思想和组件。
+  - 当前 ReviewQueue TUI 是 thin client，不接 DeerFlow agent stream，不写业务判断。
+  - 后续 SOC Lead Agent TUI/chat 才接 DeerFlow messages/artifacts/streaming/clarification。
+  - TUI 不应把 review queue 结构化业务数据塞进 `ThreadState.artifacts`；artifacts 只保存用户可打开/下载的生成文件路径。
 
 Investigation context 约束：
 

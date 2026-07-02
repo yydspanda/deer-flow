@@ -23,7 +23,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | ReviewQueue TUI thin client：复用 ReviewQueue API/service 做列表、详情、关闭、纠正 |
+| 当前下一刀 | ReviewQueue Web thin page 或 SOC Lead Agent TUI/chat 设计切片 |
 
 ## Phase 1 切片计划
 
@@ -50,9 +50,48 @@
 | 19 | 真实 LLM analyzer behind flag | Done | 默认继续走 `analyze_stub`；显式配置开启后才调用模型；输出必须经过 prompt builder、JSON parser、schema/domain validation |
 | 20 | Offline eval：stub / llm / replay diff | Done | 同一批样本比较 verdict、confidence、needs_review、parse success、冲突字段处理质量 |
 | 21 | ReviewQueue API | Done | Gateway 暴露 review queue 列表、调查上下文、关闭、纠正接口；业务动作仍走 `SocReviewService` |
-| 22 | ReviewQueue TUI thin client | Next | 基于 service/API 展示 open queue、打开 context、关闭 item、发起 correction；不复制业务逻辑 |
+| 22 | ReviewQueue TUI thin client | Done | 基于 service/API 展示 open queue、打开 context、关闭 item、发起 correction；不复制业务逻辑 |
 
 ## 进度记录
+
+### 2026-07-02 — ReviewQueue TUI thin client 切片
+
+- 产品/架构决策：
+  - TUI 必须兼容 DeerFlow 方向，不能另起一套完全独立的终端菜单。
+  - 第一版是 ReviewQueue operator workbench，不接 SOC Lead Agent chat stream；后续 SOC Lead Agent 再复用 DeerFlow messages / artifacts / streaming / clarification。
+- 新增 SOC TUI 模块：
+  - `backend/soc_agent/tui/command_registry.py`
+  - `backend/soc_agent/tui/view_state.py`
+  - `backend/soc_agent/tui/render.py`
+  - `backend/soc_agent/tui/app.py`
+  - `backend/soc_agent/tui/runner.py`
+- DeerFlow 对齐点：
+  - 使用 Textual app。
+  - 复用 `deerflow.tui.theme.THEME` 和 `deerflow.tui.widgets.composer.ComposerInput`。
+  - 采用 slash command palette、状态/渲染分离、纯 command registry / render 测试的模式。
+- TUI 命令：
+  - `soc review tui`
+  - `/refresh`
+  - `/open REV-...`
+  - `/close REV-... reason`
+  - `/correct RUN-... verdict reason`
+  - `/help`
+  - `/quit`
+- 边界：
+  - 所有业务动作仍走 `SocReviewService`。
+  - TUI 不直接读写 repository，不组装 queue item，不做自动判断。
+  - close/correct 构造 `ServiceRequestContext`，审计 actor 使用 `surface=tui`。
+- 新增测试：
+  - `backend/tests/test_soc_review_tui.py`
+  - 覆盖 slash command、view state、Rich render、correct 参数解析。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_review_tui.py tests/test_soc_review_router.py tests/test_soc_agent_service.py tests/test_soc_agent_runtime.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_review_tui.py tests/test_soc_review_router.py tests/test_soc_agent_service.py tests/test_soc_agent_runtime.py tests/test_soc_agent_repository.py tests/architecture/test_soc_agent_boundaries.py -q`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli review tui --help`
+  - `codegraph sync .`
+- 下一步：
+  - 如果继续 ReviewQueue 产品闭环，做 Web thin page。
+  - 如果转向主 SOC Agent，设计 SOC Lead Agent TUI/chat 如何复用 DeerFlow stream/messages/artifacts/clarification。
 
 ### 2026-07-02 — ReviewQueue API MVP 切片
 

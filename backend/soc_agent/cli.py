@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
         return _review_context(args)
     if args.command == "review" and args.review_command == "close":
         return _review_close(args)
+    if args.command == "review" and args.review_command == "tui":
+        return _review_tui(args)
     if args.command == "eval" and args.eval_command == "offline":
         return _eval_offline(args)
     if args.command == "db" and args.db_command == "init":
@@ -143,6 +145,8 @@ def _build_parser() -> argparse.ArgumentParser:
     review_close.add_argument("--reason", required=True, help="Reason for closing the queue item")
     review_close.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(review_close)
+    review_tui = review_subparsers.add_parser("tui", help="Open the SOC review queue terminal workbench")
+    _add_database_args(review_tui)
 
     eval_cmd = subparsers.add_parser("eval", help="SOC offline evaluation helpers")
     eval_subparsers = eval_cmd.add_subparsers(dest="eval_command")
@@ -358,6 +362,29 @@ def _review_context(args: argparse.Namespace) -> int:
     return 0
 
 
+def _review_tui(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        from soc_agent.tui.runner import run_review_tui
+
+        run_review_tui(
+            SocReviewService(
+                repository=repository,
+                summary_repository=repository,
+                audit_repository=repository,
+                review_queue_repository=repository,
+            ),
+            database_label=_database_label(args.database_url),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def _eval_offline(args: argparse.Namespace) -> int:
     try:
         samples = _load_payload_samples(args.path, args.glob)
@@ -411,6 +438,12 @@ def _repository_from_args(args: argparse.Namespace) -> SqlAlchemyAlertRepository
 def _engine_from_args(args: argparse.Namespace):
     database_url = resolve_database_url(args.database_url)
     return create_engine(to_sync_database_url(database_url), pool_pre_ping=True)
+
+
+def _database_label(explicit_url: str | None) -> str:
+    if explicit_url:
+        return "explicit database"
+    return "SOC_DATABASE_URL / DeerFlow postgres"
 
 
 def _load_payload(path: str | None, json_payload: str | None) -> dict[str, Any]:
