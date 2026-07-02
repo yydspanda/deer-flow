@@ -12,7 +12,7 @@
 | `ai_soc/zeus-alert-flow-and-field-trust.md` | ZEUS/天眼上游字段冲突、可信度分层、统一研判闭环流程 |
 | `ai_soc/progress.md` | SOC Agent 长期开发进度台账；每个可验证切片完成后更新 |
 | `reference-index/soc-agent-engineering-contracts.md` | SOC Agent 代码风格、框架设计、API、通信协议和测试门禁 |
-| `reference/cross-project-workflow.md` | 跨项目参考工作流：先定义问题，再用 Understand Anything / CodeGraph 查参考项目 |
+| `reference/cross-project-workflow.md` | 跨项目参考工作流：先定义问题，再用 CodeGraph / 最小源码读取查参考项目 |
 | `reference-index/` | 已沉淀的跨项目研究索引和工具选型记录 |
 
 ## 目录分工

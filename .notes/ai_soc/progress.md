@@ -8,23 +8,12 @@
 
 1. 先读 `.notes/ai_soc/soc-agent-solution.md` 和相关 `.notes/reference-index/*.md`。
 2. 明确当前任务属于哪个 Phase、解决哪个用户/工程问题。
-3. 再用 CodeGraph / Understand Anything 查 DeerFlow 代码落点和参考实现：
+3. 再用 CodeGraph / 源码读取查 DeerFlow 代码落点和参考实现：
    - 局部实现切片优先 CodeGraph，用来定位本仓库符号、调用点和低侵入接入点。
-   - 架构型或跨项目切片必须先考虑 Understand Anything / reference 项目，例如权限审批、memory、多 Agent、runtime lifecycle、stream/event protocol、跨项目设计模式。
-   - 项目顶层 `.understand-anything` 是当前 fork 的 DeerFlow 全仓静态知识图谱，是理解 DeerFlow 原架构、Gateway/TUI/frontend/backend 关系和低侵入扩展点的最重要参考之一；它不再增量更新。所有参考项目的 Understand 图也按静态快照使用，不再更新。
-   - SOC Agent 使用子目录 scoped graph，不把项目顶层 `.understand-anything` 当作 SOC 代码事实来源：
-     - 首次或结构大改强制重建：`$understand-anything:understand /home/yydspei/projects/deer-flow/backend/soc_agent --full --language zh`
-     - 日常增量刷新：`$understand-anything:understand /home/yydspei/projects/deer-flow/backend/soc_agent --language zh`
-     - 生成物位置：`backend/soc_agent/.understand-anything/{knowledge-graph.json,meta.json}`
-     - 注意：Understand incremental 是基于 commit 的；如果 `meta.json.gitCommitHash == HEAD`，未提交的 working-tree 改动不会被 `git diff <metaCommit>..HEAD` 发现。未提交代码变更期间先用 CodeGraph/源码确认，或显式 `--full` 重建 scoped graph。
-     - 注意：scoped graph 的 changed-files 必须相对 `backend/soc_agent`；repo-root 原始路径如 `backend/soc_agent/core/service.py` 可能导致 `compute-batches` 输出 0 batches。若发生这种情况，不要信任 stale graph；改用 CodeGraph/源码或 full scoped rebuild。
-   - `backend/soc_agent` 发生大量结构变化时，不强行把旧 root graph 当作可用依据；优先做 SOC scoped rebuild。
-   - `understand-chat` / `understand-explain` 只用于已有且足够新的图谱；如果 `.understand-anything/meta.json` 落后于当前设计代码，必须先更新图谱或记录“图谱过期，改用 CodeGraph”。
-   - `$understand-anything:*` 是 Codex skill/slash workflow，不是 shell 命令；当用户明确要求执行时，agent 先按 skill 的 pre-flight/decision logic 自动执行当前环境能执行的部分。只有缺少 skill runner、subagent、工具或权限面时，才让用户手动运行命令，agent 再读取生成后的 scoped graph/meta。
-   - Understand 的使用不是“只生成图谱”：先用 `understand-chat` / `understand-explain` 在 scoped graph 中找相关节点、summary、tags、1-hop edges 和 layer；再把候选文件/符号交给 CodeGraph 或源码读取确认精确实现；最后才做设计或代码修改。
-   - SOC 问题默认使用 `backend/soc_agent/.understand-anything/knowledge-graph.json`；如果直接调用 `understand-chat` / `understand-explain`，必须明确使用 SOC scoped graph，避免误读项目顶层旧图。
-   - 参考项目只在本地方案尚未定型时使用，常见触发点是 memory、approval policy、多 Agent、stream/event protocol、context compaction、tool runtime。
-   - 不为窄小本地改动机械运行 Understand；如果现有方案和本仓库上下文已经足够，记录理由后继续实现。
+   - 架构型或跨项目切片也默认使用 CodeGraph + 最小源码读取；参考项目只在本地方案尚未定型时使用，常见触发点是 memory、approval policy、多 Agent、stream/event protocol、context compaction、tool runtime。
+   - 不再把 Understand Anything 放入日常流程；它消耗较高，且 scoped 增量存在路径作用域问题。
+   - 项目顶层 `.understand-anything` 和所有参考项目的 `.understand-anything` 只作为静态快照保留，不再更新。
+   - 只有用户明确要求“使用 Understand”时才临时使用；临时结论仍必须经过 CodeGraph/源码确认。
 4. 优先新增 SOC 独立模块、adapter、schema、CLI/API 入口，不侵入 DeerFlow 上游核心。
 5. 如果切片改变产品方向、runtime pipeline、contract 语义、Phase 边界或下一步顺序，必须同步更新 `.notes/ai_soc/soc-agent-solution.md`；工程规则同步更新 `.notes/reference-index/soc-agent-engineering-contracts.md`。
 6. 代码改动后运行 `codegraph sync .`，确保新增/修改的 SOC 符号进入本地索引。

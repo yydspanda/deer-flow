@@ -1,182 +1,27 @@
-# 跨项目开发工作流
+# 跨项目参考工作流
 
-> 目标是参考其他开源 Agent 项目来增强 deer-flow SOC Agent 的设计。
-> 核心原则：**问题驱动，不项目驱动**。查完立刻写索引。
+> 目标：在需要借鉴其他 Agent 项目时，快速找到可复用设计点，并把结论沉淀到 `reference-index/`。
+> 默认工具链：**CodeGraph + 源码读取**。Understand Anything 不进入日常流程；只有用户明确要求时临时使用。
 
 ## 流程总览
 
-```
-① 定义具体问题 → ② Understand Anything 导航定位符号 → ③ CodeGraph 拉代码 → ④ 写参考索引
+```text
+① 定义具体问题 → ② 查已有 reference-index → ③ CodeGraph 定位代码 → ④ 读取最小源码 → ⑤ 写参考索引
 ```
 
 ## ① 定义问题
 
-不要想「我要去翻 claude-code-sourcemap」，而是想「我要解决什么问题」。
+不要从“我要翻某个项目”开始，而是先写清楚当前设计问题。
 
-```
-问题: 如何设计 Agent 的 Tool 生命周期管理？
+```text
+问题: SOC Agent 的高风险动作审批后如何进入执行层？
 候选项目: claude-code-sourcemap, hermes-agent
+预期产出: 权限/审批/执行边界的可复用设计点
 ```
 
-## ② 层一：Understand Anything — 全景导航
+只有当前方案还没定型，或者本仓库缺少足够参考时，才查外部项目。
 
-对候选项目生成知识图谱（一次性的，结果持久化在 `.understand-anything/knowledge-graph.json`）。Understand Anything 在 Codex 中是 slash/skill 工作流，不是普通 shell 命令：
-
-```text
-/understand /home/yydspei/projects/claude-code-sourcemap --language zh
-/understand /home/yydspei/projects/hermes-agent --language zh
-```
-
-### 静态图谱基线
-
-项目顶层 `.understand-anything` 是当前 DeerFlow fork 的全仓静态知识图谱，是理解上游架构的最重要参考之一。使用它回答：
-
-- DeerFlow 原有 backend / frontend / Gateway / TUI / channel / harness 的结构关系
-- SOC Agent 应该接入哪里才低侵入
-- 哪些能力应复用 DeerFlow 原有 stream、TUI、service、router、agent runtime 模式
-
-但它**不再增量更新**，不能代表最新 `backend/soc_agent` 代码事实。所有参考项目的 `.understand-anything` 也按静态快照使用，不再更新；需要最新代码事实时，用 CodeGraph 或源码读取。
-
-SOC Agent 本项目建议使用 scoped graph，而不是在 root graph 过期时强行增量：
-
-```text
-$understand-anything:understand /home/yydspei/projects/deer-flow/backend/soc_agent --full --language zh
-```
-
-日常更新 SOC Agent 子图时优先增量：
-
-```text
-$understand-anything:understand /home/yydspei/projects/deer-flow/backend/soc_agent --language zh
-```
-
-生成物必须位于 SOC 子目录，避免和项目顶层图混淆：
-
-```text
-/home/yydspei/projects/deer-flow/backend/soc_agent/.understand-anything/
-├── knowledge-graph.json
-└── meta.json
-```
-
-使用规则：
-
-- `$understand-anything:*` 是 Codex skill/slash workflow，不是 shell 命令；当用户明确要求执行时，agent 先按 skill 的 pre-flight/decision logic 自动执行当前环境能执行的部分。只有缺少 skill runner、subagent、工具或权限面时，才让用户手动运行命令。
-- `understand-chat` / `understand-explain` 前先看对应 `.understand-anything/meta.json`，确认图谱覆盖当前问题涉及的代码。
-- 如果 root graph 早于 SOC Agent 新增代码，不能用它回答 SOC 代码落点；先跑 SOC scoped rebuild，或明确记录“图谱过期，改用 CodeGraph”。
-- 如果变更集中在 `backend/soc_agent/**`，优先刷新 SOC scoped graph；只有跨 DeerFlow core/frontend/Gateway 架构变化时才考虑 root graph full rebuild。
-- Understand incremental 是基于 commit 的；如果 scoped `meta.json.gitCommitHash` 等于当前 `HEAD`，未提交 working-tree 改动不会被 `git diff <metaCommit>..HEAD` 发现。未提交代码期间不要把 graph 当最新事实源；先用 CodeGraph/源码，或显式 `--full` 重建 scoped graph。
-- Scoped graph 的 changed-files 必须相对 scoped root。若 `git diff` 输出 `backend/soc_agent/core/service.py`，而 scan inventory 中是 `core/service.py`，`compute-batches` 可能输出 0 batches。正确判断方式是确认 changed-files 已过滤为 `backend/soc_agent/**` 并 strip 掉 `backend/soc_agent/` 前缀；否则使用 full scoped rebuild 或 CodeGraph/源码。
-- `backend/soc_agent/.understand-anything/intermediate/*` 是本地 ignored 中间产物；不要把 `build_scoped_graph.py` 这类中间脚本当作团队流程或代码事实来源。刷新 SOC 图谱时以 `$understand-anything:understand ...` skill workflow 为准。
-- 不为了一个局部函数改动启动 full Understand；局部落点继续用 CodeGraph。
-
-Understand 查询参考的方式：
-
-1. **建图/刷新**：先对目标项目或 SOC 子目录运行 `understand`，确认 `meta.json` 的 scope、commit 和时间。
-2. **架构问答**：用 `understand-chat` 问“这个模块如何分层”“某能力的执行链路在哪里”“哪些节点和 permission/memory/stream 相关”。答案只作为导航，记录候选 layer、node、file、symbol。
-3. **组件深挖**：用 `understand-explain` 针对候选文件/函数做深挖，关注 incoming/outgoing edges、所在 layer、包含的函数/类、与其他组件关系。
-4. **精确验证**：用 CodeGraph 的 `query/context/callers/callees/impact` 或直接读源码确认真实签名、调用点、边界和测试位置。
-5. **沉淀索引**：如果查的是参考项目，把采用点/拒绝点写入 `.notes/reference-index/`；如果查的是 SOC Agent 本仓库，把结论写进 `.notes/ai_soc/progress.md` 或相关设计文档。
-
-示例问题：
-
-```text
-$understand-anything:understand-chat SOC Agent 的 approval request 到 approval grant 的边界在哪里？请基于 backend/soc_agent scoped graph 回答
-$understand-anything:understand-explain backend/soc_agent/core/service.py
-```
-
-启动 Dashboard 交互浏览：
-
-```text
-/understand-dashboard /home/yydspei/projects/claude-code-sourcemap
-```
-
-功能选择：
-
-| 功能 | 什么时候用 | 示例 |
-|---|---|---|
-| `/understand <path>` | 第一次理解项目、生成/更新架构知识图谱 | `/understand /home/yydspei/projects/hermes-agent --language zh` |
-| `/understand-dashboard <path>` | 用浏览器可视化架构层级、依赖、tour、diff/domain 图 | `/understand-dashboard /home/yydspei/projects/hermes-agent` |
-| `/understand-chat <问题>` | 基于已有图谱问架构问题，不想重新扫代码 | `/understand-chat Hermes Agent 的 memory 生命周期是什么？` |
-| `/understand-explain <文件或符号>` | 深入解释某个文件、函数、模块及上下游关系 | `/understand-explain restored-src/src/Tool.ts:buildTool` |
-| `/understand-diff` | 分析当前 git diff/PR 影响面、风险、受影响组件 | `/understand-diff` |
-| `/understand-domain [--full]` | 抽取业务域、业务流程、步骤，生成 domain flow graph | `/understand-domain --full` |
-| `/understand-onboard` | 基于图谱生成新人 onboarding 文档 | `/understand-onboard` |
-| `/understand-knowledge <wiki-dir>` | 分析 Karpathy-style LLM wiki 知识库，生成知识图谱 | `/understand-knowledge .notes` |
-
-常用参数：
-
-| 参数 | 用途 |
-|---|---|
-| `--full` | 忽略已有图谱，完整重建 |
-| `--language zh` | 生成中文摘要、标题、标签 |
-| `--auto-update` / `--no-auto-update` | 开启/关闭提交后的自动更新配置 |
-| `--review` | 对已有图谱运行 LLM reviewer |
-
-目标：看架构分层图 → 找到目标模块的**具体文件和符号名**。例如：
-
-- 找到 Tool 系统在 `restored-src/src/Tool.ts`，关键函数是 `buildTool()`、类型是 `ToolDef`
-
-## ③ 层二：CodeGraph — 精确读代码
-
-用上一步拿到的符号名，优先通过 Codex 已配置的 CodeGraph MCP 查询。需要手动跑 shell 命令时，使用新版 CodeGraph CLI 的 `-p/--path` 指定跨项目路径：
-
-```
-codegraph context -p /home/yydspei/projects/claude-code-sourcemap "Tool buildTool ToolDef checkPermissions isEnabled call"
-codegraph query -p /home/yydspei/projects/hermes-agent "tool register execute lifecycle"
-codegraph callers -p /home/yydspei/projects/claude-mem "MemoryManager"
-```
-
-关键：
-
-- 只看返回的代码，不直接 `ls`/`cat` 参考项目文件
-- 不打开参考项目的编辑器（防止 IDE 索引混淆 + 手滑改错）
-- 如果报 `not initialized`，去那个项目跑一次 `codegraph init`
-- 已验证命令格式：`codegraph query -p /home/yydspei/projects/deer-flow "memory" --limit 3`
-
-常用命令：
-
-| 命令 | 用途 |
-|---|---|
-| `codegraph init <path>` | 初始化并索引项目，生成 `.codegraph/` |
-| `codegraph status -p <path>` | 查看索引状态 |
-| `codegraph sync -p <path>` | 手动同步索引变化 |
-| `codegraph query -p <path> "keyword"` | 搜索符号/类/函数 |
-| `codegraph context -p <path> "task"` | 为某个问题生成相关上下文 |
-| `codegraph callers -p <path> "Symbol"` | 查谁调用了某个符号 |
-| `codegraph callees -p <path> "Symbol"` | 查某个符号调用了谁 |
-| `codegraph impact -p <path> "Symbol"` | 分析修改某个符号的影响范围 |
-| `codegraph affected -p <path> <files...>` | 根据变更文件找可能受影响测试 |
-
-## ④ 写参考索引
-
-每次查完记录到 `.notes/reference-index/` 下。格式：
-
-```markdown
-# tool-lifecycle-design.md
-
-| 问题 | 最佳参考位置 | 要点 |
-|---|---|---|
-| Tool 生命周期管理 | claude-code-sourcemap: restored-src/src/Tool.ts:721-792 | `buildTool()` 合并默认值，`ToolDef` 支持按需覆写 |
-| Tool 权限检查 | claude-code-sourcemap: restored-src/src/hooks/useCanUseTool.tsx:28-191 | 多层决策链：rule→mode→classifier→hook→dialog |
-```
-
-下次同类问题直接翻索引，不用重新查。
-
-## 多项目参考索引示例
-
-```
-.notes/reference-index/
-├── tool-lifecycle-design.md
-├── memory-system-architecture.md
-├── agent-execution-loop.md
-├── permission-decision-pipeline.md
-└── context-compaction-strategy.md
-```
-
-每个文件一个主题，记录各项目的**最佳实现位置**（文件+行号+要点），不追求全面对比。
-
-## ⑤ 什么时候参考其他项目
-
-参考项目不是每个切片都要查。只有当前问题需要跨项目设计判断时才查，例如：
+常见触发点：
 
 | 问题类型 | 优先参考 |
 |---|---|
@@ -185,20 +30,96 @@ codegraph callers -p /home/yydspei/projects/claude-mem "MemoryManager"
 | multi-agent orchestration、agent lifecycle、event stream | `hermes-agent`、`openclaw` |
 | context compaction、long-running session | `claude-code-sourcemap`、`openclaw` |
 
-查完必须写入 `.notes/reference-index/`，至少包含：
+## ② 先查已有索引
 
-```markdown
-| 问题 | 参考项目/位置 | 采用点 | 未采用点 |
-|---|---|---|---|
+先看 `.notes/reference-index/` 有没有同类问题的结论。已有索引能回答的，不重新扫项目。
+
+```text
+.notes/reference-index/
+├── soc-agent-engineering-contracts.md
+├── memory-system-architecture.md
+├── permission-decision-pipeline.md
+└── context-compaction-strategy.md
 ```
 
-没有记录到 reference-index 的跨项目发现，不能作为长期决策依据。
+## ③ CodeGraph 定位代码
+
+优先用 Codex 已配置的 CodeGraph MCP。手动 CLI 只在 MCP 不方便时使用：
+
+```bash
+codegraph query -p /home/yydspei/projects/claude-code-sourcemap "permission approval tool"
+codegraph context -p /home/yydspei/projects/hermes-agent "agent lifecycle event stream"
+codegraph callers -p /home/yydspei/projects/claude-mem "MemoryManager"
+```
+
+规则：
+
+- 先搜符号/模块，再读代码；不要从项目根目录盲扫。
+- 只读取和问题直接相关的文件/函数。
+- 参考项目只读不改。
+- 如果 CodeGraph 报 `not initialized`，再考虑 `codegraph init <path>`。
+- 本仓库 SOC 代码改动后继续执行 `codegraph sync .`，保证下一刀能查到新符号。
+
+常用命令：
+
+| 命令 | 用途 |
+|---|---|
+| `codegraph status -p <path>` | 查看索引状态 |
+| `codegraph sync -p <path>` | 同步索引变化 |
+| `codegraph query -p <path> "keyword"` | 搜索符号/类/函数 |
+| `codegraph context -p <path> "task"` | 为某个问题生成相关上下文 |
+| `codegraph callers -p <path> "Symbol"` | 查谁调用某个符号 |
+| `codegraph callees -p <path> "Symbol"` | 查某个符号调用谁 |
+| `codegraph impact -p <path> "Symbol"` | 分析修改影响面 |
+
+## ④ 读取最小源码
+
+CodeGraph 返回候选文件/符号后，再读取最小必要代码片段确认：
+
+- public interface / 类型签名
+- 权限和错误语义
+- 状态流转
+- 审计/日志/恢复机制
+- 测试如何覆盖
+
+不要复制参考项目代码；只复用设计思想，在本仓库按 SOC Agent 契约重写。
+
+## ⑤ 写参考索引
+
+查完必须写入 `.notes/reference-index/`。没有沉淀的跨项目发现，不作为长期决策依据。
+
+模板：
+
+```markdown
+# permission-decision-pipeline.md
+
+| 问题 | 参考项目/位置 | 采用点 | 未采用点 |
+|---|---|---|---|
+| 高风险动作审批 | claude-code-sourcemap: path/to/file.ts:123 | 审批和执行 token 分离 | 不采用其 UI 交互细节 |
+```
+
+## Understand Anything
+
+默认不使用 Understand Anything。原因：它对长流程和图谱更新消耗较高，且 scoped 增量存在路径作用域问题。
+
+保留规则：
+
+- 项目顶层 `.understand-anything` 是 DeerFlow 全仓静态快照，可作为人工追溯参考，但不再更新。
+- 参考项目的 `.understand-anything` 也按静态快照看待，不再更新。
+- 只有用户明确要求“使用 Understand”时，才临时使用相关 skill。
+- 临时使用后的结论仍必须经过 CodeGraph/源码确认，不能直接把图谱摘要当代码事实。
+
+旧的 Understand-heavy 流程已归档：
+
+```text
+.notes/archive/reference/cross-project-workflow-understand-heavy.md
+```
 
 ## 三条铁律
 
-1. **先定义问题，再选项目查** — 不要打开项目从头扫
-2. **Understand Anything 看全局，CodeGraph 看细节** — 不要反过来
-3. **查完立刻写索引** — 过两天你会忘
+1. **问题驱动**：先定义问题，再决定是否查参考项目。
+2. **CodeGraph 优先**：先定位符号和调用关系，再读最小源码。
+3. **查完写索引**：采用点和拒绝点必须进入 `reference-index/`。
 
 ## 参考项目
 
