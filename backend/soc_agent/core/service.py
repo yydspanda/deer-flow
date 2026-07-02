@@ -34,6 +34,7 @@ from soc_agent.contracts import (
     ServiceRequestContext,
     SimilarAlertQuery,
     SocAgentActionResult,
+    SocAgentApprovalRequest,
     SocAgentChatRequest,
     SocAgentChatResponse,
     SocAgentPermissionDecision,
@@ -558,6 +559,8 @@ class SocAgentChatService:
         permission_decision = self._action_dispatcher.check_permission(chat_request, route_decision, context=request_context)
         yield _permission_decision_event(permission_decision)
         if not permission_decision.allowed:
+            if permission_decision.requires_human_approval:
+                yield _approval_request_event(_approval_request_from_permission(permission_decision, context=request_context))
             yield _assistant_event(_permission_denied_message(permission_decision))
             yield SocAgentStreamEvent(type="end", data={"usage": {}, "thread_id": thread_id})
             return
@@ -699,6 +702,7 @@ class SocAgentActionPolicy:
             risk_level=risk_level,
             reason=reason,
             requires_human_approval=requires_human_approval,
+            approval_request_id=f"APR-{uuid4().hex[:12].upper()}" if requires_human_approval else None,
             policy_version=self.POLICY_VERSION,
             actor=context.actor,
         )
@@ -827,6 +831,8 @@ def _action_name_for_route(route: str) -> str:
         return "review.open_context"
     if route == "command.unknown":
         return "command.unknown"
+    if route in SocAgentActionPolicy.HIGH_RISK_ACTIONS:
+        return route
     return "route.unsupported"
 
 
@@ -848,13 +854,49 @@ def _permission_decision_event(decision: SocAgentPermissionDecision) -> SocAgent
         type="custom",
         data={
             "kind": "soc.permission_decision",
+            "decision_id": decision.decision_id,
             "route": decision.route,
             "action": decision.action,
             "allowed": decision.allowed,
             "risk_level": decision.risk_level.value,
             "reason": decision.reason,
             "requires_human_approval": decision.requires_human_approval,
+            "approval_request_id": decision.approval_request_id,
             "policy_version": decision.policy_version,
+        },
+    )
+
+
+def _approval_request_from_permission(
+    decision: SocAgentPermissionDecision,
+    *,
+    context: ServiceRequestContext,
+) -> SocAgentApprovalRequest:
+    return SocAgentApprovalRequest(
+        approval_request_id=decision.approval_request_id or f"APR-{uuid4().hex[:12].upper()}",
+        permission_decision_id=decision.decision_id,
+        route=decision.route,
+        action=decision.action,
+        risk_level=decision.risk_level,
+        reason=decision.reason,
+        requested_by=decision.actor or context.actor,
+    )
+
+
+def _approval_request_event(request: SocAgentApprovalRequest) -> SocAgentStreamEvent:
+    return SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.approval_request",
+            "approval_request_id": request.approval_request_id,
+            "permission_decision_id": request.permission_decision_id,
+            "route": request.route,
+            "action": request.action,
+            "risk_level": request.risk_level.value,
+            "reason": request.reason,
+            "requested_by": request.requested_by.model_dump(mode="json"),
+            "status": request.status,
+            "created_at": request.created_at.isoformat(),
         },
     )
 

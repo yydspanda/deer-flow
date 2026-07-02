@@ -84,6 +84,18 @@ def _translate_custom(data: dict[str, Any]) -> list[Action]:
                 tone="info" if allowed else "error",
             )
         ]
+    if kind == "soc.approval_request":
+        return [
+            SystemMessage(
+                _approval_request_text(
+                    approval_request_id=_as_str(data.get("approval_request_id")),
+                    action=_as_str(data.get("action")),
+                    risk_level=_as_str(data.get("risk_level")),
+                    status=_as_str(data.get("status")),
+                ),
+                tone="error",
+            )
+        ]
     if kind == "soc.action_result":
         status = _as_str(data.get("status"))
         return [
@@ -138,6 +150,19 @@ def _permission_decision_text(
         parts.append("approval_required")
     if reason:
         parts.append(reason)
+    return " | ".join(parts)
+
+
+def _approval_request_text(*, approval_request_id: str, action: str, risk_level: str, status: str) -> str:
+    parts = ["SOC approval request"]
+    if approval_request_id:
+        parts.append(f"id={approval_request_id}")
+    if action:
+        parts.append(f"action={action}")
+    if risk_level:
+        parts.append(f"risk={risk_level}")
+    if status:
+        parts.append(f"status={status}")
     return " | ".join(parts)
 
 

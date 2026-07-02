@@ -8,7 +8,10 @@
 
 1. 先读 `.notes/ai_soc/soc-agent-solution.md` 和相关 `.notes/reference-index/*.md`。
 2. 明确当前任务属于哪个 Phase、解决哪个用户/工程问题。
-3. 再用 CodeGraph / Understand Anything 查 DeerFlow 代码落点和参考实现。
+3. 再用 CodeGraph / Understand Anything 查 DeerFlow 代码落点和参考实现：
+   - 局部实现切片优先 CodeGraph，用来定位本仓库符号、调用点和低侵入接入点。
+   - 架构型或跨项目切片必须先考虑 Understand Anything / reference 项目，例如权限审批、memory、多 Agent、runtime lifecycle、stream/event protocol、跨项目设计模式。
+   - 不为窄小本地改动机械运行 Understand；如果现有方案和本仓库上下文已经足够，记录理由后继续实现。
 4. 优先新增 SOC 独立模块、adapter、schema、CLI/API 入口，不侵入 DeerFlow 上游核心。
 5. 如果切片改变产品方向、runtime pipeline、contract 语义、Phase 边界或下一步顺序，必须同步更新 `.notes/ai_soc/soc-agent-solution.md`；工程规则同步更新 `.notes/reference-index/soc-agent-engineering-contracts.md`。
 6. 代码改动后运行 `codegraph sync .`，确保新增/修改的 SOC 符号进入本地索引。
@@ -23,7 +26,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | ReviewQueue Web thin page 或 SOC Lead Agent approved-action execution 切片 |
+| 当前下一刀 | ReviewQueue Web thin page 或 approved-action execution token / audit record 切片 |
 
 ## Phase 1 切片计划
 
@@ -57,8 +60,34 @@
 | 26 | SOC Agent capability router MVP | Done | `SocAgentCapabilityRouter` 对 chat request 生成白名单 route decision；stream 发出 `soc.route_decision`；TUI 显示 allowed/denied |
 | 27 | SOC Agent route -> service/action dispatcher | Done | `SocAgentActionDispatcher` 将 allowed route 映射为显式 service action result；stream 发出 `soc.action_result`；`review.open_context` 通过 `SocReviewService` 执行 |
 | 28 | SOC Agent action permission / human approval | Done | `SocAgentActionPolicy` 在 action dispatch 前输出 permission decision；read-only 允许、analyst-write 需 analyst 角色、高风险要求人工审批且不执行 |
+| 29 | SOC Agent approval request event | Done | 高风险 action 被拒绝时生成 `SocAgentApprovalRequest`；stream 发出 `soc.approval_request`；TUI 显示 pending approval request |
 
 ## 进度记录
+
+### 2026-07-02 — SOC Agent approval request event 切片
+
+- 背景：
+  - 上一刀已经能把 high-risk action 拦截为 `requires_human_approval=True`，但还没有一个可展示、可落库、可审计的审批请求对象。
+  - 这会影响后续 Web/TUI 展示、approval token、automation action audit 的一致性。
+- 新增：
+  - `SocAgentPermissionDecision.decision_id` 和 `approval_request_id`。
+  - `SocAgentApprovalRequest` contract。
+  - `SocAgentChatService.stream()` 在 high-risk permission denied 时发 `custom kind=soc.approval_request`。
+  - `soc_agent.tui.chat_runtime` 将 approval request 转成 DeerFlow `SystemMessage`。
+- 边界：
+  - approval request 只是 pending request，不代表已批准。
+  - 当前仍不执行封禁 IP、隔离终端、任意 MCP 调用等外部副作用动作。
+  - 后续执行必须补 approval token、audit record 和 idempotency key。
+- 工具使用：
+  - 本切片是局部服务契约扩展，已有 `.notes/reference-index` 和本仓库上下文足够；使用 CodeGraph/本地代码定位即可，不跑完整 Understand Anything。
+  - 已把“架构型/跨项目切片先考虑 Understand Anything，局部切片不机械运行”的规则写入工作方式。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_service.py tests/test_soc_tui_chat_runtime.py tests/test_soc_tui_chat_app.py tests/test_soc_review_tui.py tests/architecture/test_soc_agent_boundaries.py -q`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_service.py tests/test_soc_tui_chat_runtime.py tests/test_soc_tui_chat_app.py tests/test_soc_review_tui.py tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+- 下一步：
+  - 若继续 Agent 能力，做 approved-action execution token / audit record。
+  - 若先补产品闭环，做 ReviewQueue Web thin page。
 
 ### 2026-07-02 — SOC Agent action permission / human approval 切片
 

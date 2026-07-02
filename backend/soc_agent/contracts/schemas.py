@@ -161,14 +161,31 @@ class SocAgentPermissionDecision(BaseModel):
     """Permission decision for one routed SOC Agent action."""
 
     schema_version: str = "soc.agent_permission_decision.v1"
+    decision_id: str = Field(default_factory=lambda: f"PERM-{uuid4().hex[:12].upper()}")
     route: str = Field(min_length=1)
     action: str = Field(min_length=1)
     allowed: bool
     risk_level: SocAgentRiskLevel = SocAgentRiskLevel.UNKNOWN
     reason: str = Field(min_length=1)
     requires_human_approval: bool = False
+    approval_request_id: str | None = None
     policy_version: str = "soc.agent_action_policy.v1"
     actor: ActorContext | None = None
+
+
+class SocAgentApprovalRequest(BaseModel):
+    """Human approval request for a blocked high-risk SOC Agent action."""
+
+    schema_version: str = "soc.agent_approval_request.v1"
+    approval_request_id: str = Field(default_factory=lambda: f"APR-{uuid4().hex[:12].upper()}")
+    permission_decision_id: str
+    route: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    risk_level: SocAgentRiskLevel
+    reason: str = Field(min_length=1)
+    requested_by: ActorContext
+    status: Literal["pending"] = "pending"
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class SocAgentActionResult(BaseModel):

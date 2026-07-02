@@ -140,6 +140,11 @@ class InMemoryReviewQueueRepository:
         return items[:limit]
 
 
+class _HighRiskRouter:
+    def route(self, request: SocAgentChatRequest) -> SocAgentRouteDecision:
+        return SocAgentRouteDecision(route="response.block_ip", allowed=True, reason="test high-risk route")
+
+
 def _sample(name: str) -> dict:
     return json.loads((SAMPLES / name).read_text(encoding="utf-8"))
 
@@ -568,6 +573,27 @@ def test_agent_chat_service_requires_review_service_for_queue_context() -> None:
         list(SocAgentChatService().stream(SocAgentChatRequest(message="open", queue_id="REV-1")))
 
 
+def test_agent_chat_service_emits_approval_request_for_high_risk_action() -> None:
+    context = ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI))
+
+    events = list(SocAgentChatService(capability_router=_HighRiskRouter()).stream("block this ip", context=context))
+
+    assert [event.type for event in events] == ["values", "custom", "custom", "custom", "messages-tuple", "end"]
+    assert events[1].data["kind"] == "soc.route_decision"
+    assert events[1].data["route"] == "response.block_ip"
+    assert events[2].data["kind"] == "soc.permission_decision"
+    assert events[2].data["action"] == "response.block_ip"
+    assert events[2].data["allowed"] is False
+    assert events[2].data["requires_human_approval"] is True
+    assert events[2].data["approval_request_id"].startswith("APR-")
+    assert events[3].data["kind"] == "soc.approval_request"
+    assert events[3].data["approval_request_id"] == events[2].data["approval_request_id"]
+    assert events[3].data["permission_decision_id"] == events[2].data["decision_id"]
+    assert events[3].data["status"] == "pending"
+    assert events[3].data["requested_by"]["actor_id"] == "analyst-1"
+    assert "Action requires human approval" in events[4].data["content"]
+
+
 def test_agent_action_dispatcher_maps_chat_route() -> None:
     decision = SocAgentCapabilityRouter().route(SocAgentChatRequest(message="hello"))
     result = SocAgentActionDispatcher().dispatch(SocAgentChatRequest(message="hello"), decision, context=ServiceRequestContext())
@@ -657,6 +683,8 @@ def test_agent_action_policy_blocks_high_risk_actions_for_human_approval() -> No
     assert decision.allowed is False
     assert decision.risk_level is SocAgentRiskLevel.HIGH_RISK
     assert decision.requires_human_approval is True
+    assert decision.approval_request_id is not None
+    assert decision.approval_request_id.startswith("APR-")
 
 
 def test_agent_action_policy_denies_unknown_actions() -> None:

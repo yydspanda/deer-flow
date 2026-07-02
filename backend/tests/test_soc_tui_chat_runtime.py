@@ -105,6 +105,21 @@ def test_soc_chat_runtime_translates_approval_required_permission_as_error() -> 
     ]
 
 
+def test_soc_chat_runtime_translates_approval_request_custom_event() -> None:
+    event = SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.approval_request",
+            "approval_request_id": "APR-1",
+            "action": "response.block_ip",
+            "risk_level": "high_risk",
+            "status": "pending",
+        },
+    )
+
+    assert translate(event) == [SystemMessage("SOC approval request | id=APR-1 | action=response.block_ip | risk=high_risk | status=pending", tone="error")]
+
+
 def test_soc_chat_runtime_translates_action_result_custom_event() -> None:
     event = SocAgentStreamEvent(
         type="custom",

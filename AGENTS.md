@@ -159,6 +159,11 @@ search alone. Use this order:
 2. Derive the smallest Phase-aligned implementation slice from those docs.
 3. Use CodeGraph only after the slice is clear, to verify DeerFlow code locations,
    reusable APIs, and low-intrusion integration points.
+   Use Understand Anything before implementation when the slice is architectural
+   or cross-project in nature, especially permissions/approval, memory, multi-agent
+   orchestration, runtime lifecycle, streaming/event protocol, or reference-project
+   pattern comparison. Do not run Understand mechanically for narrow local edits
+   where the repo-local contract and CodeGraph lookup are sufficient.
 4. Implement SOC-specific behavior as incremental modules/adapters first; avoid changing
    upstream DeerFlow core unless a small generic extension point is required.
 5. If the slice changes product direction, runtime pipeline, contract semantics, phase
