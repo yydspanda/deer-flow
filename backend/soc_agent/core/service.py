@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from soc_agent.contracts import (
     ActorContext,
@@ -32,6 +33,9 @@ from soc_agent.contracts import (
     ReviewQueueStatus,
     ServiceRequestContext,
     SimilarAlertQuery,
+    SocAgentChatRequest,
+    SocAgentChatResponse,
+    SocAgentStreamEvent,
     SocEvent,
     SocEventType,
     Verdict,
@@ -502,10 +506,132 @@ class SocDaemonService:
 
 
 class SocAgentChatService:
-    """Interactive investigation service placeholder for TUI/Web UI."""
+    """Interactive investigation service for TUI/Web/Channels.
 
-    def send_message(self, *args: Any, **kwargs: Any) -> None:
-        raise SocServiceNotImplementedError("agent chat is planned after review/replay primitives stabilize")
+    This Phase 1 version is intentionally deterministic. It establishes the
+    DeerFlow-compatible stream contract and can load review context, but it does
+    not run the future SOC Lead Agent or call LLM tools yet.
+    """
+
+    def __init__(self, *, review_service: SocReviewService | None = None) -> None:
+        self._review_service = review_service
+
+    def stream(
+        self,
+        request: SocAgentChatRequest | str,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> Iterator[SocAgentStreamEvent]:
+        chat_request = _coerce_chat_request(request)
+        request_context = context or ServiceRequestContext()
+        thread_id = chat_request.thread_id or _new_chat_thread_id()
+
+        yield SocAgentStreamEvent(
+            type="values",
+            data={
+                "title": _chat_title(chat_request),
+                "messages": [],
+                "artifacts": [],
+                "thread_id": thread_id,
+            },
+        )
+
+        if chat_request.queue_id:
+            if self._review_service is None:
+                raise SocServiceNotImplementedError("agent chat review context requires SocReviewService")
+            investigation_context = self._review_service.get_investigation_context(chat_request.queue_id)
+            yield SocAgentStreamEvent(
+                type="custom",
+                data={
+                    "kind": "soc.review_context",
+                    "queue_id": investigation_context.queue_item.queue_id,
+                    "run_id": investigation_context.run.run_id,
+                    "alert_id": investigation_context.run.alert_id,
+                    "actor_surface": request_context.actor.surface.value,
+                },
+            )
+            yield _assistant_event(
+                _review_context_loaded_message(
+                    queue_id=investigation_context.queue_item.queue_id,
+                    run_id=investigation_context.run.run_id,
+                    alert_id=investigation_context.run.alert_id,
+                )
+            )
+        else:
+            yield _assistant_event("SOC investigation chat is ready. Phase 1 supports deterministic review context loading; future SOC Lead Agent routing will attach skills, MCP tools, and bounded LLM reasoning here.")
+
+        yield SocAgentStreamEvent(type="end", data={"usage": {}, "thread_id": thread_id})
+
+    def send_message(
+        self,
+        request: SocAgentChatRequest | str,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> SocAgentChatResponse:
+        events = list(self.stream(request, context=context))
+        thread_id = _thread_id_from_events(events)
+        return SocAgentChatResponse(
+            thread_id=thread_id,
+            events=events,
+            final_text=_final_text_from_events(events),
+        )
+
+
+def _coerce_chat_request(request: SocAgentChatRequest | str) -> SocAgentChatRequest:
+    if isinstance(request, SocAgentChatRequest):
+        return request
+    return SocAgentChatRequest(message=request)
+
+
+def _new_chat_thread_id() -> str:
+    return f"SOC-TH-{uuid4().hex[:12].upper()}"
+
+
+def _chat_title(request: SocAgentChatRequest) -> str:
+    if request.queue_id:
+        return f"SOC Review {request.queue_id}"
+    if request.run_id:
+        return f"SOC Run {request.run_id}"
+    text = " ".join(request.message.split())
+    if not text:
+        return "SOC Investigation"
+    return text[:60]
+
+
+def _assistant_event(text: str) -> SocAgentStreamEvent:
+    return SocAgentStreamEvent(
+        type="messages-tuple",
+        data={
+            "type": "ai",
+            "id": f"soc-ai-{uuid4().hex[:8]}",
+            "content": text,
+        },
+    )
+
+
+def _review_context_loaded_message(*, queue_id: str, run_id: str, alert_id: str) -> str:
+    return f"Loaded review context {queue_id} for alert {alert_id} / run {run_id}. Next steps should be expressed as bounded SOC actions such as inspect evidence, compare similar alerts, record correction, or request human approval."
+
+
+def _thread_id_from_events(events: list[SocAgentStreamEvent]) -> str:
+    for event in events:
+        thread_id = event.data.get("thread_id")
+        if isinstance(thread_id, str) and thread_id:
+            return thread_id
+    return _new_chat_thread_id()
+
+
+def _final_text_from_events(events: list[SocAgentStreamEvent]) -> str:
+    parts: list[str] = []
+    for event in events:
+        if event.type != "messages-tuple":
+            continue
+        if event.data.get("type") != "ai":
+            continue
+        content = event.data.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+    return "".join(parts)
 
 
 def _completion_event_type(run: AnalysisRun) -> SocEventType:

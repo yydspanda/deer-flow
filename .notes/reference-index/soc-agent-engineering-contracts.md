@@ -222,6 +222,15 @@ Review queue 约束：
   - 后续 SOC Lead Agent TUI/chat 才接 DeerFlow messages/artifacts/streaming/clarification。
   - TUI 不应把 review queue 结构化业务数据塞进 `ThreadState.artifacts`；artifacts 只保存用户可打开/下载的生成文件路径。
 
+SOC Agent chat stream 约束：
+
+- `SocAgentChatService.stream()` 是 TUI/Web/Channels 的统一交互流入口；`send_message()` 只能 materialize 同一条 stream，不能定义第二套 headless 协议。
+- `SocAgentStreamEvent.type` 与 DeerFlow embedded client/TUI 对齐，只允许 `values`、`messages-tuple`、`custom`、`end`。
+- `values.data` 可以携带 `title`、`messages`、`artifacts`、`thread_id`；`artifacts` 仍只表示用户可打开/下载的生成文件路径。
+- SOC 结构化上下文通过 `custom` event 暴露，例如 `{"kind": "soc.review_context", ...}`；不要塞进 `ThreadState.artifacts`。
+- `SocAgentChatService` 可以调用 `SocReviewService`、`SocAnalysisService`、`SocMemoryService` 等 core services，但不能直接读写 repository、直接改 verdict、直接写 memory。
+- Phase 1 的 chat stream 是 deterministic shell/context loader，不调用真实 SOC Lead Agent；后续接 LLM/skills/MCP 时必须保留 Runtime 固定控制流和人工审批边界。
+
 Investigation context 约束：
 
 - `InvestigationContext` 是分析师打开 review queue item 时的只读上下文，不产生新判断，也不修改 run/summary/audit。

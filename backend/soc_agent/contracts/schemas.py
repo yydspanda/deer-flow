@@ -110,6 +110,35 @@ class SocEvent(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class SocAgentStreamEvent(BaseModel):
+    """DeerFlow-compatible stream event emitted by SOC interactive services."""
+
+    schema_version: str = "soc.agent_stream.v1"
+    type: Literal["values", "messages-tuple", "custom", "end"]
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocAgentChatRequest(BaseModel):
+    """One operator message sent to the SOC interactive investigation surface."""
+
+    schema_version: str = "soc.agent_chat_request.v1"
+    message: str = Field(min_length=1)
+    thread_id: str | None = None
+    queue_id: str | None = None
+    run_id: str | None = None
+    allowed_routes: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocAgentChatResponse(BaseModel):
+    """Materialized response for headless callers over the same stream contract."""
+
+    schema_version: str = "soc.agent_chat_response.v1"
+    thread_id: str
+    events: list[SocAgentStreamEvent] = Field(default_factory=list)
+    final_text: str = ""
+
+
 class AlertSourceType(StrEnum):
     UNKNOWN = "unknown"
     SIEM = "siem"

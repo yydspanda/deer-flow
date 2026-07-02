@@ -19,6 +19,7 @@ from soc_agent.contracts import (
     ServiceRequestContext,
     SimilarAlertMatch,
     SimilarAlertQuery,
+    SocAgentChatRequest,
     SocEvent,
     SocEventType,
     Verdict,
@@ -464,6 +465,73 @@ def test_review_service_context_requires_existing_queue_item() -> None:
         ).get_investigation_context("REV-UNKNOWN")
 
 
+def test_agent_chat_service_streams_deerflow_like_events() -> None:
+    service = SocAgentChatService()
+
+    events = list(service.stream(SocAgentChatRequest(message="triage this alert", thread_id="soc-thread-1")))
+
+    assert [event.type for event in events] == ["values", "messages-tuple", "end"]
+    assert events[0].data["title"] == "triage this alert"
+    assert events[0].data["thread_id"] == "soc-thread-1"
+    assert events[0].data["artifacts"] == []
+    assert events[1].data["type"] == "ai"
+    assert "deterministic review context loading" in events[1].data["content"]
+    assert events[-1].data["thread_id"] == "soc-thread-1"
+
+
+def test_agent_chat_service_materializes_response_from_same_stream() -> None:
+    response = SocAgentChatService().send_message("hello soc")
+
+    assert response.thread_id.startswith("SOC-TH-")
+    assert [event.type for event in response.events] == ["values", "messages-tuple", "end"]
+    assert "SOC investigation chat is ready" in response.final_text
+
+
+def test_agent_chat_service_loads_review_context() -> None:
+    repository = InMemoryAlertRepository()
+    summary_repository = InMemorySummaryRepository()
+    audit_repository = InMemoryAuditRepository()
+    review_repository = InMemoryReviewQueueRepository()
+    analysis_service = SocAnalysisService(
+        repository=repository,
+        summary_repository=summary_repository,
+        audit_repository=audit_repository,
+        review_queue_repository=review_repository,
+    )
+    run = analysis_service.analyze(_sample("pingan_legacy_apt.json"))
+    item = review_repository.get_open_review_item_by_run(run.run_id)
+    assert item is not None
+    review_service = SocReviewService(
+        repository=repository,
+        summary_repository=summary_repository,
+        audit_repository=audit_repository,
+        review_queue_repository=review_repository,
+    )
+
+    events = list(
+        SocAgentChatService(review_service=review_service).stream(
+            SocAgentChatRequest(message="open queue", queue_id=item.queue_id),
+            context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI)),
+        )
+    )
+
+    assert [event.type for event in events] == ["values", "custom", "messages-tuple", "end"]
+    assert events[0].data["title"] == f"SOC Review {item.queue_id}"
+    assert events[1].data == {
+        "kind": "soc.review_context",
+        "queue_id": item.queue_id,
+        "run_id": run.run_id,
+        "alert_id": run.alert_id,
+        "actor_surface": "tui",
+    }
+    assert f"Loaded review context {item.queue_id}" in events[2].data["content"]
+
+
+def test_agent_chat_service_requires_review_service_for_queue_context() -> None:
+    with pytest.raises(SocServiceNotImplementedError):
+        list(SocAgentChatService().stream(SocAgentChatRequest(message="open", queue_id="REV-1")))
+
+
 def test_review_service_correct_requires_repository() -> None:
     with pytest.raises(SocServiceNotImplementedError):
         SocReviewService().correct(
@@ -480,5 +548,3 @@ def test_planned_services_fail_fast_until_implemented() -> None:
         SocMemoryService().list_facts()
     with pytest.raises(SocServiceNotImplementedError):
         SocDaemonService().start()
-    with pytest.raises(SocServiceNotImplementedError):
-        SocAgentChatService().send_message()

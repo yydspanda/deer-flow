@@ -23,7 +23,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | ReviewQueue Web thin page 或 SOC Lead Agent TUI/chat 设计切片 |
+| 当前下一刀 | SOC Lead Agent TUI/chat adapter 或 ReviewQueue Web thin page |
 
 ## Phase 1 切片计划
 
@@ -51,8 +51,39 @@
 | 20 | Offline eval：stub / llm / replay diff | Done | 同一批样本比较 verdict、confidence、needs_review、parse success、冲突字段处理质量 |
 | 21 | ReviewQueue API | Done | Gateway 暴露 review queue 列表、调查上下文、关闭、纠正接口；业务动作仍走 `SocReviewService` |
 | 22 | ReviewQueue TUI thin client | Done | 基于 service/API 展示 open queue、打开 context、关闭 item、发起 correction；不复制业务逻辑 |
+| 23 | SOC Agent chat stream contract | Done | `SocAgentChatService` 输出 DeerFlow-compatible stream event；可加载 ReviewQueue context；不调用 LLM、不替代 core service |
 
 ## 进度记录
+
+### 2026-07-02 — SOC Agent chat stream contract 切片
+
+- 背景：
+  - ReviewQueue TUI 已对齐 DeerFlow Textual 体验，但它仍是 thin client。
+  - 主 SOC Agent 后续需要像 DeerFlow 一样支持 TUI/Web/Channels 的交互式调查、澄清、skills/MCP/tool 调用和 artifacts。
+- 本切片只建立交互服务协议，不实现完整 Lead Agent：
+  - 新增 `SocAgentStreamEvent`，事件类型保持 DeerFlow-like：`values`、`messages-tuple`、`custom`、`end`。
+  - 新增 `SocAgentChatRequest` / `SocAgentChatResponse`。
+  - `SocAgentChatService.stream()` 是 TUI/Web/Channels 的统一流式入口。
+  - `SocAgentChatService.send_message()` 只是 materialize 同一条 stream，避免 headless/API 另起一套协议。
+- 当前能力：
+  - 无上下文时输出 deterministic ready message，明确 Phase 1 不调用 LLM。
+  - 带 `queue_id` 时通过 `SocReviewService.get_investigation_context()` 加载 review context。
+  - 通过 `custom kind=soc.review_context` 暴露 queue/run/alert 上下文给未来 TUI/Web 渲染层。
+- 边界：
+  - 不调用真实 SOC Lead Agent。
+  - 不执行处置动作。
+  - 不直接读写 repository。
+  - 不把 review queue 结构化数据塞进 `ThreadState.artifacts`。
+- 新增/更新测试：
+  - `backend/tests/test_soc_agent_service.py`
+  - 覆盖 DeerFlow-like event sequence、headless materialize、ReviewQueue context loading、缺少 `SocReviewService` 时 fail-fast。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_service.py -q`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent tests/test_soc_agent_service.py`
+  - `codegraph sync .`
+- 下一步：
+  - 若继续 TUI 方向，补 `soc_agent.tui` 的 chat runtime adapter，将 `SocAgentStreamEvent` 翻译为 TUI view-state action。
+  - 若继续产品闭环，做 ReviewQueue Web thin page，复用已落地的 Gateway API。
 
 ### 2026-07-02 — ReviewQueue TUI thin client 切片
 

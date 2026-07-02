@@ -302,7 +302,13 @@ ZEUS/天眼输入可信度相关结构状态：
    - API 是 Web/TUI/外部系统统一入口，必须只调用 `SocReviewService`。
    - TUI 是 Phase 1/2 更合适的薄操作台，用于 open queue、context、close、correct、trace 调试。
    - Web UI 后续基于同一套 API 增量做列表和详情页，不复制业务逻辑。
-   - 当前状态：API Done，TUI Done，Web thin page 或 SOC Lead Agent TUI/chat 设计 Next。
+   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done；下一步做 TUI chat adapter 或 Web thin page。
+
+7. **SOC Agent chat stream contract**
+   - `SocAgentChatService.stream()` 是后续 SOC Lead Agent TUI/Web/Channels 的统一流式入口。
+   - 事件类型与 DeerFlow TUI 兼容：`values`、`messages-tuple`、`custom`、`end`。
+   - `send_message()` 只 materialize 同一条 stream，供 headless/API 使用，不定义第二套 chat 协议。
+   - 当前 Phase 1 实现只做 deterministic shell 和 ReviewQueue context loading；不调用 LLM、不执行处置、不绕过 core service。
 
 ReviewQueue TUI 实现边界：
 
