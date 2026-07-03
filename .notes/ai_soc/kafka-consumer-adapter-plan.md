@@ -141,13 +141,40 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
   - `send_dead_letter()` 写 `soc.kafka_dead_letter.v1` payload 到 dead-letter topic，并同步 `flush()`。
 - CLI 顺序：`SOC_KAFKA_ENABLED=true` 时先校验 database-backed `SocDaemonService`，再构造 Kafka client，避免数据库配置错误时先连接 broker。
 
+已完成 local smoke runner：
+
+- 脚本：`backend/scripts/soc_kafka_smoke.py`。
+- 前提：已有 Kafka/Redpanda broker 可连接；脚本不负责启动 Docker。
+- 默认 broker：`localhost:9092`。
+- 脚本会创建/确认 input topics 和 dead-letter topic。
+- 脚本会发布 sample alert，调用真实 `soc daemon consume` CLI path，并验证 `soc list` 中出现 summary。
+- `--include-dead-letter` 会额外发布坏 JSON，验证 dead-letter topic 中出现 `soc.kafka_dead_letter.v1`。
+- 当前环境未完成 live run：WSL 中没有 `docker` 命令，无法启动 Redpanda 容器。
+
 ## 下一刀建议
 
-做本地 Redpanda/Kafka smoke test：
+在 Docker 或已有 Kafka broker 可用后执行 live smoke：
 
-- 启动本地 broker。
-- 创建 `soc.alerts.raw.v1`、`soc.approvals.requests.v1`、`soc.alerts.dead_letter.v1`。
-- 发布一条 alert sample。
-- 运行 `SOC_KAFKA_ENABLED=true soc daemon consume --database-url sqlite:///... --max-records 1`。
-- 验证 analysis run、summary、review queue、offset commit。
-- 再发布一条坏 JSON 或 unknown topic 消息，验证 dead-letter topic。
+```bash
+cd backend
+uv sync --extra kafka
+./.venv/bin/python scripts/soc_kafka_smoke.py \
+  --database-url sqlite+pysqlite:////tmp/soc_kafka_smoke.db \
+  --include-dead-letter
+```
+
+如果 broker 不在本机：
+
+```bash
+./.venv/bin/python scripts/soc_kafka_smoke.py \
+  --bootstrap-servers kafka-host:9092 \
+  --database-url sqlite+pysqlite:////tmp/soc_kafka_smoke.db
+```
+
+live smoke 通过后，补充记录：
+
+- `consume_result.run_id`
+- `AlertSummary.alert_id`
+- review queue 是否按预期产生
+- dead-letter payload key/schema
+- offset commit 是否重复运行不会重复处理同一 group 的同一 offset
