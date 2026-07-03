@@ -15,9 +15,12 @@
 
 ```mermaid
 flowchart LR
-    Kafka["Kafka daemon\nconsumer planned"] --> Analysis["SocAnalysisService"]
+    Kafka["Kafka consumer\nplanned"] --> DaemonMessage["SocDaemonMessage"]
+    DaemonMessage --> DaemonProcess["SocDaemonService.process_message"]
+    DaemonProcess --> Analysis["SocAnalysisService"]
     CLI["CLI / API analyze"] --> Analysis
     Agent["SOC Agent chat\napproval service injected"] --> ApprovalInbox["Approval Request Inbox"]
+    DaemonProcess --> ApprovalInbox
     Daemon["SocDaemonService\nsubmit boundary"] --> ApprovalInbox
     Web["Web 工单/后台"] --> ReviewAPI["Review / Approval API"]
     TUI["SOC TUI"] --> ReviewAPI
@@ -227,6 +230,7 @@ Replay 不覆盖旧 run；它创建一个新 run，并通过 `replay_of_run_id` 
 | CLI | `soc analyze --persist` | 运行分析并写入 run/summary/review/audit |
 | CLI | `soc show` / `soc replay` / `soc correct` | 查看、重放、人工纠正 |
 | CLI/TUI | `soc review tui` | ReviewQueue thin client；approval inbox pending request 列表、详情、approve token 生成、dry-run、execute boundary |
+| CLI | `soc daemon process` | 本地处理一条 decoded daemon message JSON；支持 `kind=alert` 和 `kind=approval_request` |
 | Web | `/workspace/soc/review` | ReviewQueue 页面；审批动作区可从 approval inbox 选择 pending request 后 approve / dry-run / execute，仍保留手工 JSON fallback |
 | Gateway | `/api/soc/review/*` | review list/context/close/correct |
 | Gateway | `/api/soc/approvals/requests*` | approval inbox create/list/get |
@@ -240,7 +244,7 @@ Replay 不覆盖旧 run；它创建一个新 run，并通过 `replay_of_run_id` 
 
 这些是规划点，当前流程图里只作为未来入口或 adapter：
 
-- Kafka daemon 自动消费预警流，批量调用 `SocAnalysisService`；当前仅有 approval request submit 边界，尚未实现 consumer。
+- Kafka daemon 自动消费预警流；当前已有 `SocDaemonMessage` 和 `SocDaemonService.process_message()` decoded-message scaffold，尚未实现真实 broker consumer。
 - SOC Lead Agent middleware 拦截高风险 tool/action call；当前 chat service 已能在注入 approval service 时写入 approval inbox，但真实 DeerFlow middleware 尚未接入。
 - Kafka daemon 自动预警入口的可测试 scaffold；当前 daemon 只有 approval request submit boundary，尚未消费 Kafka。
 - Action adapter registry：把 `response.block_ip`、`edr.isolate_host`、F5 策略、Kafka 处置事件等真实外部动作注册到 execute boundary 后面。

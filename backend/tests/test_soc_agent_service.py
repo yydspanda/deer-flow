@@ -7,6 +7,7 @@ import pytest
 
 from soc_agent.contracts import (
     ActorContext,
+    ActorType,
     AlertSummary,
     AnalysisRun,
     AuditAction,
@@ -26,6 +27,7 @@ from soc_agent.contracts import (
     SocAgentPermissionDecision,
     SocAgentRiskLevel,
     SocAgentRouteDecision,
+    SocDaemonMessage,
     SocEvent,
     SocEventType,
     Verdict,
@@ -860,6 +862,60 @@ def test_daemon_service_submits_approval_request_to_shared_inbox() -> None:
 
     assert submitted == approval_request
     assert repository.get_approval_request(approval_request.approval_request_id) == approval_request
+
+
+def test_daemon_service_processes_alert_message_through_analysis_service() -> None:
+    repository = InMemoryAlertRepository()
+    sink = RecordingEventSink()
+    analysis_service = SocAnalysisService(repository=repository, event_sink=sink)
+    message = SocDaemonMessage(
+        message_id="SDM-ALERT-001",
+        kind="alert",
+        payload=_sample("approved_scanner.json"),
+        topic="soc.alerts",
+        partition=1,
+        offset=42,
+        key="alert-key-1",
+    )
+
+    result = SocDaemonService(analysis_service=analysis_service).process_message(message)
+
+    assert result.status == "processed"
+    assert result.kind == "alert"
+    assert result.run_id is not None
+    assert repository.get_run(result.run_id) is not None
+    assert result.payload["idempotency_key"] == "kafka:soc.alerts:1:42"
+    assert sink.events[0].actor.actor_type is ActorType.SERVICE
+    assert sink.events[0].actor.surface is EntrySurface.DAEMON
+    assert sink.events[0].request_id.startswith("REQ-")
+    assert sink.events[1].payload["idempotency_key"] == "kafka:soc.alerts:1:42"
+
+
+def test_daemon_service_processes_approval_request_message_to_shared_inbox() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    approval_service = SocAgentApprovalService(request_repository=repository)
+    approval_request = _approval_request()
+    message = SocDaemonMessage(
+        message_id="SDM-APPROVAL-001",
+        kind="approval_request",
+        payload=approval_request.model_dump(mode="json"),
+        topic="soc.approvals",
+        partition=0,
+        offset=7,
+    )
+
+    result = SocDaemonService(approval_service=approval_service).process_message(message)
+
+    assert result.status == "processed"
+    assert result.kind == "approval_request"
+    assert result.approval_request_id == approval_request.approval_request_id
+    assert result.payload["idempotency_key"] == "kafka:soc.approvals:0:7"
+    assert repository.get_approval_request(approval_request.approval_request_id) == approval_request
+
+
+def test_daemon_service_process_alert_message_requires_analysis_service() -> None:
+    with pytest.raises(SocServiceNotImplementedError, match="SocAnalysisService"):
+        SocDaemonService().process_message(SocDaemonMessage(kind="alert", payload=_sample("approved_scanner.json")))
 
 
 def test_daemon_service_submit_approval_request_requires_service() -> None:

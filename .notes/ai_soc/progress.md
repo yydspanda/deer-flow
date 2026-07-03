@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon scaffold / approval request ingestion |
+| 当前下一刀 | Kafka consumer adapter / broker integration planning |
 
 ## Phase 1 切片计划
 
@@ -76,8 +76,41 @@
 | 40 | Agent/daemon approval inbox write boundary | Done | `SocAgentChatService` 可持久化高风险 approval request；`SocDaemonService` 暴露同一 approval inbox 写入边界；真实 Kafka consumer / DeerFlow middleware 仍后续接入 |
 | 41 | approval inbox TUI consumption | Done | `soc review tui` 展示 pending approval request，支持打开详情并 approve 生成 execution token；不执行真实动作 |
 | 42 | TUI approved-action dry-run / execute command | Done | `soc review tui` 支持 dry-run token 校验和 execute boundary token 消费；execute 要求显式 idempotency key；仍不执行外部副作用 |
+| 43 | Kafka daemon scaffold / approval request ingestion | Done | 新增 versioned daemon message contract、`SocDaemonService.process_message()` 和 `soc daemon process` 本地入口；支持 alert 分析与 approval_request 入箱；尚未连接 Kafka broker |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka daemon scaffold / approval request ingestion 切片
+
+- 背景：
+  - Web/TUI 审批链路已经具备 request -> grant -> dry-run -> execute boundary。
+  - 后台自动入口不能直接从 Kafka callback 调 pipeline 或 DB，必须先进入 versioned contract 和 core service。
+- 新增：
+  - `SocDaemonMessage`：daemon decoded-message contract，包含 `kind=alert|approval_request`、payload、topic/partition/offset/key。
+  - `SocDaemonProcessResult`：单条 daemon message 处理结果。
+  - `SocDaemonService.process_message()`：
+    - `kind=alert`：通过 `SocAnalysisService.analyze()` 进入固定 runtime。
+    - `kind=approval_request`：解析 `SocAgentApprovalRequest` 并通过 `SocAgentApprovalService.submit_request()` 写入 approval inbox。
+  - daemon context：actor 固定为 `soc-daemon`、`actor_type=service`、`surface=daemon`；Kafka metadata 派生 `idempotency_key=kafka:{topic}:{partition}:{offset}`。
+  - CLI 本地验证入口：`soc daemon process PATH|--json ... --database-url ...`。
+- 边界：
+  - 本切片不连接真实 Kafka broker，不引入 Kafka client 依赖。
+  - daemon 不直接访问 repository；CLI 只负责 wiring repository-backed services。
+  - daemon 不在 callback 中执行复杂逻辑；未来 Kafka consumer 只应 decode message 后调用 `SocDaemonService.process_message()`。
+- 已补充测试：
+  - alert daemon message 通过 analysis service 产生 run，并带 daemon actor/idempotency key。
+  - approval request daemon message 写入 shared approval inbox。
+  - 缺少 analysis service 时明确 fail-fast。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/contracts/schemas.py soc_agent/contracts/__init__.py soc_agent/core/service.py soc_agent/cli.py tests/test_soc_agent_service.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/contracts/schemas.py soc_agent/contracts/__init__.py soc_agent/core/service.py soc_agent/cli.py tests/test_soc_agent_service.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_service.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli db upgrade --database-url sqlite:////tmp/soc_daemon_cli_test_20260703.db`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli daemon process --database-url sqlite:////tmp/soc_daemon_cli_test_20260703.db --json '<approval_request daemon message>' --pretty`
+  - `git diff --check`
+- 下一步：
+  - 讨论/设计真实 Kafka consumer adapter：consumer 配置、topic schema、反压、重试、offset 提交、dead-letter、metrics/readiness。
 
 ### 2026-07-03 — TUI approved-action dry-run / execute command 切片
 

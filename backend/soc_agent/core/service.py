@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from soc_agent.contracts import (
     ActorContext,
+    ActorType,
     AlertInput,
     AlertSourceType,
     AlertSummary,
@@ -21,6 +22,7 @@ from soc_agent.contracts import (
     CorrectionRecord,
     Decision,
     DecisionAuditRecord,
+    EntrySurface,
     ExtractionReport,
     InvestigationContext,
     NormalizationDriftReport,
@@ -43,6 +45,8 @@ from soc_agent.contracts import (
     SocAgentRiskLevel,
     SocAgentRouteDecision,
     SocAgentStreamEvent,
+    SocDaemonMessage,
+    SocDaemonProcessResult,
     SocEvent,
     SocEventType,
     Verdict,
@@ -510,11 +514,40 @@ class SocMemoryService:
 class SocDaemonService:
     """Kafka worker orchestration service placeholder."""
 
-    def __init__(self, *, approval_service: SocAgentApprovalService | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        analysis_service: SocAnalysisService | None = None,
+        approval_service: SocAgentApprovalService | None = None,
+    ) -> None:
+        self._analysis_service = analysis_service
         self._approval_service = approval_service
 
     def start(self) -> None:
         raise SocServiceNotImplementedError("daemon mode is planned for Phase 4")
+
+    def process_message(self, message: SocDaemonMessage | Mapping[str, Any]) -> SocDaemonProcessResult:
+        """Process one decoded daemon message through stable core services."""
+
+        daemon_message = SocDaemonMessage.model_validate(message)
+        if daemon_message.kind == "alert":
+            return self._process_alert_message(daemon_message)
+        if daemon_message.kind == "approval_request":
+            approval_request = SocAgentApprovalRequest.model_validate(daemon_message.payload)
+            submitted = self.submit_approval_request(approval_request)
+            return SocDaemonProcessResult(
+                message_id=daemon_message.message_id,
+                kind=daemon_message.kind,
+                status="processed",
+                approval_request_id=submitted.approval_request_id,
+                payload={
+                    "route": submitted.route,
+                    "action": submitted.action,
+                    "risk_level": submitted.risk_level.value,
+                    "idempotency_key": _daemon_idempotency_key(daemon_message),
+                },
+            )
+        raise SocServiceError(f"unsupported daemon message kind: {daemon_message.kind}")
 
     def submit_approval_request(self, approval_request: SocAgentApprovalRequest) -> SocAgentApprovalRequest:
         """Daemon-side boundary for writing high-risk requests to the shared inbox."""
@@ -522,6 +555,40 @@ class SocDaemonService:
         if self._approval_service is None:
             raise SocServiceNotImplementedError("submit_approval_request requires a SocAgentApprovalService")
         return self._approval_service.submit_request(approval_request)
+
+    def _process_alert_message(self, message: SocDaemonMessage) -> SocDaemonProcessResult:
+        if self._analysis_service is None:
+            raise SocServiceNotImplementedError("process alert message requires a SocAnalysisService")
+        run = self._analysis_service.analyze(message.payload, context=_daemon_request_context(message))
+        return SocDaemonProcessResult(
+            message_id=message.message_id,
+            kind=message.kind,
+            status="processed",
+            run_id=run.run_id,
+            alert_id=run.alert_id,
+            analysis_status=run.status.value,
+            payload={
+                "topic": message.topic,
+                "partition": message.partition,
+                "offset": message.offset,
+                "key": message.key,
+                "idempotency_key": _daemon_idempotency_key(message),
+            },
+        )
+
+
+def _daemon_request_context(message: SocDaemonMessage) -> ServiceRequestContext:
+    return ServiceRequestContext(
+        actor=ActorContext(actor_id="soc-daemon", actor_type=ActorType.SERVICE, surface=EntrySurface.DAEMON),
+        trace_id=message.message_id,
+        idempotency_key=_daemon_idempotency_key(message),
+    )
+
+
+def _daemon_idempotency_key(message: SocDaemonMessage) -> str:
+    if message.topic is not None and message.partition is not None and message.offset is not None:
+        return f"kafka:{message.topic}:{message.partition}:{message.offset}"
+    return f"daemon:{message.message_id}"
 
 
 class SocAgentApprovalService:

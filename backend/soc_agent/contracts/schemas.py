@@ -238,6 +238,40 @@ class SocAgentActionResult(BaseModel):
     requires_human_approval: bool = False
 
 
+class SocDaemonMessage(BaseModel):
+    """Versioned message envelope consumed by the SOC daemon boundary.
+
+    Real Kafka consumers should decode transport metadata into this contract
+    before calling core services. The payload stays source-specific at the
+    boundary and is validated by the downstream service selected by ``kind``.
+    """
+
+    schema_version: str = "soc.daemon_message.v1"
+    message_id: str = Field(default_factory=lambda: f"SDM-{uuid4().hex[:12].upper()}")
+    kind: Literal["alert", "approval_request"]
+    payload: dict[str, Any] = Field(default_factory=dict)
+    topic: str | None = None
+    partition: int | None = None
+    offset: int | None = None
+    key: str | None = None
+    received_at: datetime = Field(default_factory=utc_now)
+
+
+class SocDaemonProcessResult(BaseModel):
+    """Result of processing one daemon message through core services."""
+
+    schema_version: str = "soc.daemon_process_result.v1"
+    message_id: str
+    kind: Literal["alert", "approval_request"]
+    status: Literal["processed", "failed"]
+    run_id: str | None = None
+    alert_id: str | None = None
+    analysis_status: str | None = None
+    approval_request_id: str | None = None
+    error: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
 class AlertSourceType(StrEnum):
     UNKNOWN = "unknown"
     SIEM = "siem"

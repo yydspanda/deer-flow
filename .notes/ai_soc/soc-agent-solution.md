@@ -309,7 +309,7 @@ ZEUS/天眼输入可信度相关结构状态：
    - API 是 Web/TUI/外部系统统一入口，必须只调用 `SocReviewService`。
    - TUI 是 Phase 1/2 更合适的薄操作台，用于 open queue、context、close、correct、trace 调试。
    - Web UI 后续基于同一套 API 增量做列表和详情页，不复制业务逻辑。
-   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done，action permission / human approval Done，approval request event Done，approval grant token Done，approval grant persistence / dry-run Done，ReviewQueue Web thin page Done，Web actor/context headers Done，approved-action consume/audit boundary Done，approval grant repository persistence Done，approved action Gateway API Done，approved action Web workbench Done，approval request inbox API Done，approval inbox Web consumption Done，Agent/daemon approval inbox write boundary Done，approval inbox TUI consumption Done，TUI approved-action dry-run / execute command Done；下一步做 Kafka daemon scaffold / approval request ingestion。
+   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done，action permission / human approval Done，approval request event Done，approval grant token Done，approval grant persistence / dry-run Done，ReviewQueue Web thin page Done，Web actor/context headers Done，approved-action consume/audit boundary Done，approval grant repository persistence Done，approved action Gateway API Done，approved action Web workbench Done，approval request inbox API Done，approval inbox Web consumption Done，Agent/daemon approval inbox write boundary Done，approval inbox TUI consumption Done，TUI approved-action dry-run / execute command Done，Kafka daemon scaffold / approval request ingestion Done；下一步讨论/设计真实 Kafka consumer adapter。
 
 7. **SOC Agent chat stream contract**
    - `SocAgentChatService.stream()` 是后续 SOC Lead Agent TUI/Web/Channels 的统一流式入口。
@@ -332,10 +332,11 @@ ZEUS/天眼输入可信度相关结构状态：
    - 当前已落地 Agent/daemon approval inbox write boundary：`SocAgentChatService` 在注入 `SocAgentApprovalService` 时会把高风险 approval request 写入 inbox；`SocDaemonService.submit_approval_request()` 作为 daemon 侧同一写入边界。真实 Kafka consumer 和 DeerFlow Lead Agent middleware 仍后续接入。
    - 当前已落地 TUI approval inbox consumption：`soc review tui` 可以通过 `/approvals` 查看 pending request、`/approval APR-...` 打开详情、`/approve APR-... reason` 生成一次性 execution token；TUI 当前不执行外部动作。
    - 当前已落地 TUI approved-action dry-run / execute command：`soc review tui` 可以通过 `/dry-run SAT-... route action` 校验 token，通过 `/execute SAT-... route action idempotency-key` 消费 token；execute 仍只进入 execution boundary，不执行真实外部副作用。
+   - 当前已落地 Kafka daemon scaffold / approval request ingestion：`SocDaemonMessage(kind=alert|approval_request)` 是 decoded-message contract，`SocDaemonService.process_message()` 是 daemon 唯一 core service 入口；`soc daemon process` 可本地处理一条 daemon JSON。真实 Kafka broker consumer 尚未接入。
 
 三入口审批模型：
 
-- Kafka daemon 自动预警流可以在固定 runtime/policy 后生成 `SocAgentApprovalRequest`，并通过 `SocDaemonService.submit_approval_request()` 写入 approval inbox。
+- Kafka daemon 自动预警流先解码为 `SocDaemonMessage`，再通过 `SocDaemonService.process_message()` 进入固定 runtime 或 approval inbox；真实 Kafka consumer 不拥有分析逻辑。
 - Agent TUI/Lead Agent 路径后续通过 SOC middleware 拦截高风险 tool/action call，生成同一类 `SocAgentApprovalRequest`，并通过注入的 `SocAgentApprovalService.submit_request()` 写入 approval inbox。
 - Web 工单/后台和 TUI 作为人工消费入口，从 approval inbox 选择 pending request 后 approve，生成一次性 `SocAgentApprovalGrant.execution_token_id`，再 dry-run / execute。当前 Web/TUI 都只进入 execution boundary，不执行真实外部副作用。
 - 统一中心是 `SocAgentApprovalService` + request/grant repository + audit/event log；middleware 只是 Agent 入口 adapter，不是审批系统唯一中心。

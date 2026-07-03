@@ -718,6 +718,9 @@ soc.analysis.events.v1
 Kafka consumer 约定：
 
 - 至少一次投递，必须靠 `alert_id + run_mode + pipeline_version` 做幂等。
+- Kafka callback 解码后必须先生成 `SocDaemonMessage`，再调用 `SocDaemonService.process_message()`；callback 不能直接写 repository、不能直接调用 runtime pipeline。
+- `SocDaemonMessage.kind=alert` 只能进入 `SocAnalysisService.analyze()`；`kind=approval_request` 只能进入 `SocAgentApprovalService.submit_request()`。
+- Kafka metadata 必须保留为 daemon message metadata；`topic + partition + offset` 派生 `idempotency_key=kafka:{topic}:{partition}:{offset}`。
 - DB 写入成功后再 commit offset。
 - 不在 Kafka callback 内执行长逻辑；只入队并由 Runtime worker 处理。
 - poison message 进入 dead-letter topic：`soc.alerts.dead_letter.v1`。

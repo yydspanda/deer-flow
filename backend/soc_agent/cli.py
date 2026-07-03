@@ -17,6 +17,7 @@ from soc_agent.core import (
     SocAgentApprovalService,
     SocAgentChatService,
     SocAnalysisService,
+    SocDaemonService,
     SocNormalizationService,
     SocReviewService,
     SocServiceError,
@@ -59,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
         return _review_tui(args)
     if args.command == "chat" and args.chat_command == "tui":
         return _chat_tui(args)
+    if args.command == "daemon" and args.daemon_command == "process":
+        return _daemon_process(args)
     if args.command == "eval" and args.eval_command == "offline":
         return _eval_offline(args)
     if args.command == "db" and args.db_command == "init":
@@ -163,6 +166,14 @@ def _build_parser() -> argparse.ArgumentParser:
     chat_tui.add_argument("--queue-id", help="Open a review queue context on launch")
     chat_tui.add_argument("--message", help="Send an initial message on launch")
     _add_database_args(chat_tui)
+
+    daemon = subparsers.add_parser("daemon", help="SOC daemon helpers")
+    daemon_subparsers = daemon.add_subparsers(dest="daemon_command")
+    daemon_process = daemon_subparsers.add_parser("process", help="Process one decoded SOC daemon message JSON")
+    daemon_process.add_argument("path", nargs="?", help="Path to daemon message JSON file")
+    daemon_process.add_argument("--json", dest="json_payload", help="Inline daemon message JSON object")
+    daemon_process.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(daemon_process)
 
     eval_cmd = subparsers.add_parser("eval", help="SOC offline evaluation helpers")
     eval_subparsers = eval_cmd.add_subparsers(dest="eval_command")
@@ -426,6 +437,32 @@ def _chat_tui(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0
+
+
+def _daemon_process(args: argparse.Namespace) -> int:
+    try:
+        payload = _load_payload(args.path, args.json_payload)
+        repository = _repository_from_args(args)
+        analysis_service = SocAnalysisService(
+            repository=repository,
+            summary_repository=repository,
+            audit_repository=repository,
+            review_queue_repository=repository,
+        )
+        approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
+        result = SocDaemonService(
+            analysis_service=analysis_service,
+            approval_service=approval_service,
+        ).process_message(payload)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if result.status == "processed" else 1
 
 
 def _eval_offline(args: argparse.Namespace) -> int:
