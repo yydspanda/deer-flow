@@ -306,6 +306,12 @@ Kafka daemon / consumer adapter 约束：
   - mapper failure / service failure：先 `send_dead_letter()`，dead-letter 成功后才 `commit` 原 offset。
   - dead-letter 写失败不得 commit 原 offset，必须暴露异常，避免静默丢消息。
 - `KafkaConsumerPort` 是真实 broker client 的唯一 port；真实 `aiokafka` / `confluent-kafka` adapter 只能实现该协议，不能把具体 SDK 类型扩散到 core、pipeline、repository、API、TUI 或 Web。
+- 当前真实 broker adapter 选择 `confluent-kafka`：
+  - 依赖必须放在 optional extra `backend[kafka]`，普通本地开发和 CI 不强制安装。
+  - `confluent_kafka.Consumer`、`Producer`、`TopicPartition` 只能出现在 `soc_agent.daemon.kafka_adapter` 或同层 adapter module。
+  - SDK message 必须立即转换为 `KafkaRecord`，不能传入 mapper、runner、core service 或 tests 之外的业务层。
+  - consumer error、empty/tombstone value 必须在 adapter 层 fail-fast，不进入 `SocDaemonService`。
+  - manual commit 使用 consumed offset + 1；禁止开启 automatic commit。
 - `KafkaConsumerSettings` 是 broker adapter 配置 contract：
   - 默认 `enabled=False`，本地和 CI 不要求 Kafka broker。
   - 默认 broker 为 `localhost:9092`，只作为本地 Redpanda/Kafka 约定。
@@ -319,8 +325,10 @@ Kafka daemon / consumer adapter 约束：
 - `soc daemon consume` 是 broker consumer 的 CLI shell：
   - 默认必须有限次 poll，例如 `--max-records 1`，不能在本地/CI 默认长驻阻塞。
   - disabled idle path 不应要求数据库连接；只有真实 broker adapter 启用并可能处理消息时，才需要 repository-backed `SocDaemonService` wiring。
+  - enabled path 必须先校验/构造 repository-backed `SocDaemonService`，再构造真实 Kafka client；配置错误不能先触发 broker 连接。
   - 输出必须是结构化 JSON 摘要，不能只写自然语言日志，方便测试和后续 supervisor/readiness 集成。
 - `SocDaemonMessage` 的 Kafka metadata 必须保留 `topic`、`partition`、`offset`、`key`；daemon idempotency key 固定为 `kafka:{topic}:{partition}:{offset}`。
+- dead-letter payload 必须使用 `soc.kafka_dead_letter.v1`，至少包含 failed_at、topic、partition、offset、key、headers、value、error_type、error_message；payload 不得包含 secret。
 - 真实 consumer CLI/daemon 入口只能做配置读取、adapter 构造、runner loop 和 graceful shutdown；业务处理仍归 `SocDaemonService`。
 - 后续并发、重试阈值、lag metrics、readiness 和 worker pool 只能在 runner/adapter 层扩展，不得改变 core service 的单条 message contract。
 

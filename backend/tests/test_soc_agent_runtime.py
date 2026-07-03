@@ -798,11 +798,11 @@ def test_cli_daemon_consume_disabled_by_default_outputs_idle(monkeypatch: pytest
     ]
 
 
-def test_cli_daemon_consume_enabled_without_broker_adapter_fails_fast(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+def test_cli_daemon_consume_enabled_requires_database_before_kafka(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     monkeypatch.setenv("SOC_KAFKA_ENABLED", "true")
 
     exit_code = main(["daemon", "consume"])
 
     captured = capsys.readouterr()
     assert exit_code == 3
-    assert "no broker client adapter is configured" in captured.err
+    assert "database URL required" in captured.err

@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka broker adapter dependency decision |
+| 当前下一刀 | Kafka local Redpanda smoke test / sample publish |
 
 ## Phase 1 切片计划
 
@@ -82,9 +82,51 @@
 | 46 | Kafka record -> daemon message mapper | Done | 新增 `soc_agent.daemon.kafka_mapper`，纯 stdlib + contracts；支持 alert/approval topics、custom topic set、坏 JSON/未知 topic 错误 |
 | 47 | Kafka consumer runner skeleton | Done | 新增 `SocKafkaConsumerRunner` 和 `KafkaConsumerPort`，串行 map -> process -> commit；mapper/service failure 进 dead-letter，仍不接真实 broker |
 | 48 | Kafka consumer settings + null adapter | Done | 新增 `KafkaConsumerSettings` 环境变量配置 contract 和 `NullKafkaConsumerPort`；默认禁用、启用但无真实 adapter 时 fail-fast |
-| 49 | `soc daemon consume` disabled wiring | Done | CLI 读取 `KafkaConsumerSettings` 并运行有限次 runner poll；默认 idle 输出 JSON，启用但未接真实 adapter 时 fail-fast |
+| 49 | `soc daemon consume` disabled wiring | Done | CLI 读取 `KafkaConsumerSettings` 并运行有限次 runner poll；默认 idle 输出 JSON，disabled path 不要求 DB/Kafka |
+| 50 | Confluent Kafka broker adapter | Done | 新增 `backend[kafka]` optional extra 和 `ConfluentKafkaConsumerPort`；支持 subscribe/poll/manual commit/dead-letter produce+flush |
 
 ## 进度记录
+
+### 2026-07-03 — Confluent Kafka broker adapter 切片
+
+- 背景：
+  - `soc daemon consume` shell 已存在，但只能 disabled idle。
+  - 当前 runner 是同步模型，优先接 `confluent-kafka`，保持生产成熟度和同步 adapter 简洁性。
+- 依赖：
+  - 新增 optional extra：`backend[kafka]` -> `confluent-kafka>=2.6.0`。
+  - 普通 backend install 不强制安装 Kafka SDK；生产 daemon 或本地 broker 验证时显式安装 extra。
+- 新增：
+  - `ConfluentKafkaConsumerPort`
+  - `build_kafka_consumer_port(settings)`
+  - `KafkaAdapterError`
+- 行为：
+  - disabled：factory 返回 `NullKafkaConsumerPort`。
+  - enabled：factory 返回 `ConfluentKafkaConsumerPort`。
+  - `subscribe()` 订阅 alert topics + approval request topics。
+  - `poll()` 将 Confluent message 转为 client-neutral `KafkaRecord`。
+  - consumer error / empty value 直接抛 `KafkaAdapterError`，不进入 mapper/core。
+  - `commit()` 使用 `TopicPartition(topic, partition, offset + 1)` 同步提交。
+  - `send_dead_letter()` 生成 `soc.kafka_dead_letter.v1` payload，写入 dead-letter topic 并同步 `flush()`。
+- CLI 顺序修正：
+  - `SOC_KAFKA_ENABLED=true` 时先校验/组装 repository-backed `SocDaemonService`，再构造真实 Kafka client。
+  - 避免数据库配置错误时先产生 broker 连接尝试。
+- 已补充测试：
+  - factory disabled -> null port。
+  - fake Confluent message -> `KafkaRecord`。
+  - manual commit offset = consumed offset + 1。
+  - dead-letter payload 内容。
+  - consumer error。
+  - dead-letter flush failure。
+  - enabled consume 缺数据库时先 fail-fast，不连接 Kafka。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/daemon/__init__.py soc_agent/daemon/kafka_adapter.py soc_agent/cli.py tests/test_soc_daemon_kafka_config.py tests/test_soc_agent_runtime.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/daemon/__init__.py soc_agent/daemon/kafka_adapter.py soc_agent/cli.py tests/test_soc_daemon_kafka_config.py tests/test_soc_agent_runtime.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_kafka_config.py tests/test_soc_daemon_kafka_mapper.py tests/test_soc_daemon_kafka_runner.py tests/test_soc_agent_runtime.py::test_cli_daemon_consume_disabled_by_default_outputs_idle tests/test_soc_agent_runtime.py::test_cli_daemon_consume_enabled_requires_database_before_kafka tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && uv lock --check`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli daemon consume --pretty`
+  - `git diff --check`
+- 下一步：
+  - 做本地 Redpanda/Kafka smoke test：启动 broker、创建 topics、发布一条 alert sample、用 `soc daemon consume --database-url sqlite:///...` 消费并验证 run/summary/review queue 落库。
 
 ### 2026-07-03 — `soc daemon consume` disabled wiring 切片
 
@@ -97,7 +139,7 @@
   - 从 `SOC_KAFKA_*` 读取 `KafkaConsumerSettings`。
   - 使用 `NullKafkaConsumerPort` 和 `SocKafkaConsumerRunner` 完成 disabled-by-default wiring。
   - 输出 `soc.kafka_consume_result.v1` JSON，包含安全配置摘要和每次 runner 结果。
-- 行为：
+- 当时行为：
   - `SOC_KAFKA_ENABLED` 未设置或为 false：输出 `status=idle`，退出码 0。
   - `SOC_KAFKA_ENABLED=true` 但尚未接真实 broker adapter：stderr 明确报错，退出码 3。
   - `--max-records < 1`：参数错误，退出码 2。

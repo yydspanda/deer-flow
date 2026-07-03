@@ -126,12 +126,28 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 - `SOC_KAFKA_ENABLED=true` 但未接真实 adapter 时，CLI fail-fast，避免误以为已经连接 broker。
 - disabled idle 不要求数据库连接；未来真实 broker adapter 启用时才需要完整 repository-backed `SocDaemonService` wiring。
 
+已完成 `confluent-kafka` broker adapter：
+
+- 依赖选择：优先使用 `confluent-kafka`，原因是当前 runner 是同步模型，且该 SDK 生产成熟度更高。
+- 依赖形态：`backend[kafka]` optional extra；普通开发/CI 不强制安装 Kafka SDK。
+- `build_kafka_consumer_port(settings)`：
+  - disabled -> `NullKafkaConsumerPort`。
+  - enabled -> `ConfluentKafkaConsumerPort`。
+- `ConfluentKafkaConsumerPort`：
+  - `subscribe()` 订阅 alert topics + approval request topics。
+  - `poll()` 将 SDK message 转为 `KafkaRecord`。
+  - consumer error / empty value 直接抛 `KafkaAdapterError`，不进入 mapper/core。
+  - `commit()` 使用 `TopicPartition(topic, partition, offset + 1)` 同步提交。
+  - `send_dead_letter()` 写 `soc.kafka_dead_letter.v1` payload 到 dead-letter topic，并同步 `flush()`。
+- CLI 顺序：`SOC_KAFKA_ENABLED=true` 时先校验 database-backed `SocDaemonService`，再构造 Kafka client，避免数据库配置错误时先连接 broker。
+
 ## 下一刀建议
 
-先做 broker adapter 依赖选择：
+做本地 Redpanda/Kafka smoke test：
 
-- 依赖选择：
-  - `aiokafka`：async 友好，适合后续 FastAPI/async runtime，但项目当前 daemon runner 是 sync skeleton。
-  - `confluent-kafka`：性能和生产成熟度更强，但本地安装和测试依赖更重。
-- 建议：如果优先生产成熟度和同步 runner 兼容性，先接 `confluent-kafka` adapter；如果后续 daemon 明确走 async worker/runtime，再接 `aiokafka`。
-- 无论选择哪一个，具体 SDK 只能出现在 adapter 层，不能进入 core、pipeline、repository、API、TUI 或 contracts。
+- 启动本地 broker。
+- 创建 `soc.alerts.raw.v1`、`soc.approvals.requests.v1`、`soc.alerts.dead_letter.v1`。
+- 发布一条 alert sample。
+- 运行 `SOC_KAFKA_ENABLED=true soc daemon consume --database-url sqlite:///... --max-records 1`。
+- 验证 analysis run、summary、review queue、offset commit。
+- 再发布一条坏 JSON 或 unknown topic 消息，验证 dead-letter topic。

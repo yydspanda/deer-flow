@@ -23,11 +23,12 @@ from soc_agent.core import (
     SocServiceError,
 )
 from soc_agent.daemon import (
+    KafkaAdapterError,
     KafkaAdapterNotConfiguredError,
     KafkaConsumerSettings,
     KafkaRunnerProcessResult,
-    NullKafkaConsumerPort,
     SocKafkaConsumerRunner,
+    build_kafka_consumer_port,
 )
 from soc_agent.db import (
     SqlAlchemyAlertRepository,
@@ -187,8 +188,8 @@ def _build_parser() -> argparse.ArgumentParser:
     daemon_consume.add_argument(
         "--max-records",
         type=int,
-        default=1,
-        help="Maximum records to process before exiting; default is one safe poll",
+        default=None,
+        help="Maximum records to process before exiting; defaults to SOC_KAFKA_MAX_POLL_RECORDS",
     )
     daemon_consume.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(daemon_consume)
@@ -484,25 +485,32 @@ def _daemon_process(args: argparse.Namespace) -> int:
 
 
 def _daemon_consume(args: argparse.Namespace) -> int:
-    if args.max_records < 1:
+    settings = KafkaConsumerSettings.from_env()
+    max_records = args.max_records if args.max_records is not None else settings.max_poll_records
+    if max_records < 1:
         print("error: --max-records must be >= 1", file=sys.stderr)
         return 2
 
-    settings = KafkaConsumerSettings.from_env()
-    consumer = NullKafkaConsumerPort(settings)
+    try:
+        daemon_service = _daemon_service_from_args(args) if settings.enabled else SocDaemonService()
+        consumer = build_kafka_consumer_port(settings)
+    except (ValueError, KafkaAdapterNotConfiguredError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
     runner = SocKafkaConsumerRunner(
         consumer=consumer,
-        daemon_service=SocDaemonService(),
+        daemon_service=daemon_service,
     )
 
     results: list[dict[str, Any]] = []
     try:
-        for _ in range(args.max_records):
+        for _ in range(max_records):
             result = runner.process_next()
             results.append(_kafka_runner_result_payload(result))
             if result.status == "idle":
                 break
-    except KafkaAdapterNotConfiguredError as exc:
+    except (KafkaAdapterError, KafkaAdapterNotConfiguredError, SocServiceError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 3
     finally:
@@ -520,6 +528,21 @@ def _daemon_consume(args: argparse.Namespace) -> int:
         )
     )
     return 0
+
+
+def _daemon_service_from_args(args: argparse.Namespace) -> SocDaemonService:
+    repository = _repository_from_args(args)
+    analysis_service = SocAnalysisService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+    )
+    approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
+    return SocDaemonService(
+        analysis_service=analysis_service,
+        approval_service=approval_service,
+    )
 
 
 def _eval_offline(args: argparse.Namespace) -> int:

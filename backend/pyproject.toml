@@ -30,6 +30,9 @@ soc = "soc_agent.cli:main"
 [project.optional-dependencies]
 postgres = ["deerflow-harness[postgres]"]
 discord = ["discord.py>=2.7.0"]
+kafka = [
+    "confluent-kafka>=2.6.0",
+]
 
 [dependency-groups]
 dev = [
