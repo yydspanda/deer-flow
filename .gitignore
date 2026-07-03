@@ -65,3 +65,5 @@ config.yaml.bak
 alert_demo/
 
 .history/
+
+backend/soc_agent/.understand-anything/

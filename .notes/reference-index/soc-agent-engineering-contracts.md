@@ -216,6 +216,7 @@ Review queue 约束：
   - `POST /api/soc/review/runs/{run_id}/correct`
 - ReviewQueue API/TUI/Web 只能调用 `SocReviewService`，不能直接读写 repository 或组装 queue item。
 - API close/correct 必须构造 `ServiceRequestContext`，`ActorContext.surface=api`；TUI/Web 后续分别使用 `tui` / `web`。
+- 当前 ReviewQueue Web thin page 通过 Gateway `/api/soc/review/*` 调用，因此服务端暂时记录为 API surface；后续若要区分 Web 操作者，必须补 `x-soc-actor-id`、`x-trace-id`、`idempotency-key` 和 Web surface/context headers，不允许前端绕过 API 直接写库。
 - `soc review tui` 必须保持 DeerFlow-aligned：
   - 可以复用 DeerFlow TUI 的 Textual app、theme、composer、command palette、stream 设计思想和组件。
   - 当前 ReviewQueue TUI 是 thin client，不接 DeerFlow agent stream，不写业务判断。
@@ -293,7 +294,9 @@ SOC repository 实现约束：
 - SOC schema migrations 放在 `backend/soc_agent/db/migrations/`，使用独立版本表 `soc_alembic_version`。
 - 正式 schema 变更走 `soc db upgrade` / Alembic revision；`create_soc_tables()` 和 `soc db init` 只作为 Phase 1 本地开发辅助。
 - SOC 当前持久化表包括 `soc_analysis_runs`、`soc_decision_audit_log`、`soc_alert_summaries` 和 `soc_review_queue`。
-- 单元测试可以用 SQLite in-memory 验证 SQLAlchemy 映射；运行时配置和正式部署必须指向 PostgreSQL。
+- 单元测试可以用 SQLite in-memory 验证 SQLAlchemy 映射。
+- 本地开发/人工验收可以用独立 SOC SQLite 文件，例如 `backend/.deer-flow/data/soc_agent_dev.db`，并通过 `SOC_DATABASE_URL=sqlite:////.../soc_agent_dev.db` 显式启用。
+- 准生产、生产和长期联调环境必须指向 PostgreSQL；不得把本地 SQLite 例外扩大成生产架构。
 
 ### 三类模型必须分清
 
@@ -913,6 +916,17 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 - 处置类工具默认高风险，例如 IP 封禁、EDR 隔离、禁用账号、下发阻断，必须有人类审批或明确 playbook 授权。
 - LLM 输出只能是 `ToolActionProposal` / `ActionProposal` 一类结构化候选，不能直接调用 adapter。
 - Tool result 必须作为 evidence 写回 run trace / audit，不允许只进入 prompt 后丢失。
+
+### Profile / Skill / MCP 开放配置治理
+
+SOC Lead Agent、Domain Sub Agent、Skill 和 MCP/tool group 的开放配置以 `.notes/ai_soc/soc-agent-profile-governance.md` 为产品治理源头；工程实现必须满足：
+
+- Profile、skill、MCP 绑定必须有 `draft -> validated -> staging -> active -> archived` 生命周期。
+- `draft` / `staging` 不能影响生产决策；`active` 必须记录审批人、评测集版本、profile hash、skill hash、tool group hash。
+- Middleware preset 只能由代码定义，不能由用户自由新增/删除。
+- 用户可配置 readonly MCP 候选；`high_risk` tool group 必须由管理员/审批流程启用，并继续走 human approval。
+- Runtime 只能从 active profile registry 选择 profile；LLM 只能在白名单候选内建议 rerank，不能动态加载未知 profile/skill/tool。
+- 所有 profile 选择、skill 注入、tool proposal、tool result 都必须进入 trace/audit，支持 replay diff 和 rollback。
 
 ### Model fallback
 

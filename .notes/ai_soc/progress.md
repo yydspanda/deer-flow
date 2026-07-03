@@ -26,9 +26,9 @@
 | 当前阶段 | Phase 1：CLI + Runtime 可靠性闭环 |
 | 当前目标 | 建立 SOC Agent 最小可靠闭环：contracts schema、Runtime 状态机、step trace、validator、headless CLI analyze、run 输入快照、replay contract、PostgreSQL repository、Alembic migration、alert summary 读模型 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
-| 数据库策略 | PostgreSQL 是业务存储；Phase 1 可先定义 schema/接口，落库实现按最小闭环推进 |
+| 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | approved-action consume/audit 真实执行边界 或 ReviewQueue Web thin page |
+| 当前下一刀 | ReviewQueue Web thin page 后接 SOC Web actor/context headers 或 approved-action consume/audit 真实执行边界 |
 
 ## Phase 1 切片计划
 
@@ -65,8 +65,58 @@
 | 29 | SOC Agent approval request event | Done | 高风险 action 被拒绝时生成 `SocAgentApprovalRequest`；stream 发出 `soc.approval_request`；TUI 显示 pending approval request |
 | 30 | SOC Agent approval grant token | Done | `SocAgentApprovalService` 将 pending approval request 转成一次性 `SocAgentApprovalGrant`；仅 `soc_approver`/`soc_admin` 可批准；仍不执行真实动作 |
 | 31 | SOC Agent approval grant persistence / dry-run | Done | `approve()` 可保存 grant；`dry_run_approved_action()` 用 execution token 校验 route/action/expiry，只返回 dry-run result，不执行外部副作用 |
+| 32 | ReviewQueue Web thin page | Done | Next.js 工作台新增 `/workspace/soc/review`，通过 Gateway ReviewQueue API 展示队列/上下文并提交 close/correct；前端不复制业务逻辑 |
 
 ## 进度记录
+
+### 2026-07-03 — SOC Agent profile governance 决策记录
+
+- 背景：
+  - 后续 SOC Lead Agent、EDR/HIDS/APT/F5 Domain Sub Agent、Skill 和 MCP/tool group 会越来越多。
+  - 同事希望能参与配置 skill/MCP 和沉淀安全运营经验；这是合理诉求，但不能让 draft 配置直接影响生产告警。
+- 决策：
+  - 主控和 sub agent 都可以复用 DeerFlow `lead_agent` 思路生成/编辑 profile 草稿。
+  - Profile 必须作为 SOC Runtime 的受控配置使用，不是自由运行的生产 agent。
+  - Skill/MCP 开放配置采用 `draft -> validated -> staging -> active -> archived` 生命周期。
+  - 同事可配置 draft skill、适用条件、readonly MCP 候选；middleware preset、high-risk MCP、approval/audit policy、Runtime pipeline 必须由代码/审批控制。
+- 文档：
+  - 新增 `.notes/ai_soc/soc-agent-profile-governance.md`。
+  - `.notes/ai_soc/soc-agent-solution.md` 增加 profile 治理摘要和链接。
+  - `.notes/reference-index/soc-agent-engineering-contracts.md` 增加工程约束。
+- 验证：
+  - 文档切片，仅需 `git diff --check`。
+- 下一步：
+  - 后续实现 profile registry / middleware preset / tool group registry 时，以该治理文档为边界。
+
+### 2026-07-02 — ReviewQueue Web thin page 切片
+
+- 背景：
+  - ReviewQueue API 和 TUI thin client 已经可用，但 DeerFlow Web 工作台还没有最小的分析师复核入口。
+  - 这次只做产品闭环验证，不把研判、关联、纠正规则放到前端。
+- 新增：
+  - `frontend/src/core/soc/`：ReviewQueue 类型、API client、React Query hooks。
+  - `frontend/src/app/workspace/soc/review/page.tsx` 和 `SocReviewQueueWorkbench`：队列列表、详情上下文、相似告警、结构化产物、关闭复核项、提交人工纠正。
+  - Workspace sidebar 新增 `SOC 复核` 入口和中英文 i18n。
+  - `frontend/tests/unit/core/soc/api.test.ts` 覆盖 SOC Review API 路径、query 参数、body 和 backend detail 透传。
+- 边界：
+  - Web 页面只调用 `/api/soc/review/*`，不直接查 DB、不组装 queue item、不运行 pipeline。
+  - close/correct 仍由 Gateway API 转入 `SocReviewService`；当前 Web 请求继承 API actor surface，后续如需区分 Web actor，需要补 headers/context contract。
+  - 本页是 thin page，不是完整 SOC 大屏；批量复核、case/evidence 图、streaming agent console 后续增量做。
+  - 本地人工验证允许 `SOC_DATABASE_URL=sqlite:////.../backend/.deer-flow/data/soc_agent_dev.db`；生产/准生产仍必须使用 PostgreSQL。
+- 已验证：
+  - `cd frontend && pnpm exec prettier --check src/core/soc src/components/workspace/soc src/app/workspace/soc/review tests/unit/core/soc src/components/workspace/workspace-nav-chat-list.tsx src/core/i18n/locales/types.ts src/core/i18n/locales/en-US.ts src/core/i18n/locales/zh-CN.ts`
+  - `cd frontend && pnpm exec eslint src/core/soc src/components/workspace/soc src/app/workspace/soc/review tests/unit/core/soc src/components/workspace/workspace-nav-chat-list.tsx`
+  - `cd frontend && pnpm install --frozen-lockfile`
+  - `cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -m soc_agent.cli db upgrade --database-url sqlite:////home/yydspei/projects/deer-flow/backend/.deer-flow/data/soc_agent_dev.db`
+  - `cd backend && SOC_DATABASE_URL=sqlite:////home/yydspei/projects/deer-flow/backend/.deer-flow/data/soc_agent_dev.db uv run uvicorn app.gateway.app:app --host 127.0.0.1 --port 8001`
+  - Gateway log: `GET /api/soc/review/items?status=open&limit=50` 返回 `200 OK`。
+  - `codegraph sync .`
+- 未完成验证：
+  - `cd frontend && pnpm test -- tests/unit/core/soc/api.test.ts` 尚未单独补跑。
+  - `cd frontend && pnpm typecheck` 尚未补跑全量类型检查。
+- 下一步：
+  - 若继续产品闭环，补 Web actor/context headers，让 Gateway 能区分 `surface=web`、actor id、trace/idempotency。
+  - 若继续 Agent 安全边界，做 approved-action consume/audit 真实执行边界，仍默认 dry-run/无外部副作用。
 
 ### 2026-07-02 — SOC Agent approval grant persistence / dry-run 切片
 

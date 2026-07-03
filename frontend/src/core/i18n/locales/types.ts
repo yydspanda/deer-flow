@@ -120,6 +120,7 @@ export interface Translations {
     demoChats: string;
     agents: string;
     channels: string;
+    socReview: string;
   };
 
   // Agents

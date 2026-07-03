@@ -152,7 +152,7 @@ SOC Agent 的产品入口应和 DeerFlow 保持同构，而不是另起一套产
 
 - Phase 1 先做 headless CLI + `SocAnalysisService`，等价于 DeerFlow 的 headless console script 能力，不急着做完整 TUI/Web UI。
 - TUI 是和 DeerFlow 对齐的 terminal workbench，可作为 Phase 3/4 的 operator console 引入，定位是交互入口和运行观测面板，不重新实现业务逻辑。
-- Web UI 等 `review_queue`、置信度、批量复查模型稳定后再做，避免早期 UI 返工。
+- Web UI 先做 `review_queue` thin page 验证分析师复核闭环；完整 SOC 大屏、批量复查和 case/evidence 可视化等 `review_queue`、置信度、批量复查模型稳定后再做，避免早期 UI 返工。
 - Web UI 和 Channels 都通过 Gateway/API 或对应 channel adapter 进入 service，不直接拼业务逻辑。
 - Kafka ingestion adapter 只负责消费、反压、offset/lease、失败重试和调用 service，不拥有分析逻辑。
 - Headless CLI、TUI、API、Web UI、Channels、Kafka adapter 都只做 transport / presentation / session 编排，业务逻辑全部进入 `core services`。
@@ -200,6 +200,13 @@ Node Prompts
 - Domain skill 可以动态选择，但选择结果必须以受控 skill context 注入节点或交互 agent，不能绕过 Runtime 直接改 DB、memory 或执行处置。
 - MCP/tool 可以动态调用，但必须经过 Tool Gateway、权限策略、审计和必要的人类审批。
 - SOC Lead Agent 可以像 DeerFlow `lead_agent` 一样使用 skills、MCP、tool search、subagent，但它不能取代 core service 的状态机和安全边界。
+
+Profile 治理：
+
+- SOC Lead Agent 和 Domain Sub Agent 都可以复用 DeerFlow `lead_agent` 机制生成/编辑 profile 草稿，但生成结果只是 draft，不直接生产生效。
+- 同事可以参与配置 skill 文案、适用条件和 readonly MCP 候选；生产启用必须经过 schema 校验、offline eval、审批、版本化和审计。
+- Middleware preset、high-risk MCP/tool group、approval policy、audit policy、Runtime pipeline 不能开放为普通用户自由配置项。
+- 详细治理规则见 `.notes/ai_soc/soc-agent-profile-governance.md`。
 
 典型流程：
 
@@ -302,7 +309,7 @@ ZEUS/天眼输入可信度相关结构状态：
    - API 是 Web/TUI/外部系统统一入口，必须只调用 `SocReviewService`。
    - TUI 是 Phase 1/2 更合适的薄操作台，用于 open queue、context、close、correct、trace 调试。
    - Web UI 后续基于同一套 API 增量做列表和详情页，不复制业务逻辑。
-   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done，action permission / human approval Done，approval request event Done，approval grant token Done；下一步做 ReviewQueue Web thin page 或 approved-action persistence / execution dry-run。
+   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done，action permission / human approval Done，approval request event Done，approval grant token Done，approval grant persistence / dry-run Done，ReviewQueue Web thin page Done；下一步在 Web actor/context headers 和 approved-action consume/audit 真实执行边界之间选择。
 
 7. **SOC Agent chat stream contract**
    - `SocAgentChatService.stream()` 是后续 SOC Lead Agent TUI/Web/Channels 的统一流式入口。
@@ -621,7 +628,7 @@ Phase 2 以后再关注重复告警 merge 率、LLM 调用节省率、confirmed 
 Phase 1 的边界必须明确，避免把 MVP 做成不可验收的平台项目。
 
 - 不接生产 Kafka，只处理本地样例、手工 JSON 和可控测试数据。
-- 不做 Web UI，只做可脚本化 CLI。
+- 不做完整 SOC Web 大屏、批量复核平台或 case/evidence 可视化；允许做 thin Web page 验证已稳定的 `SocReviewService` / Gateway API 闭环。
 - 不做自动封禁、隔离主机、禁用账号等破坏性处置。
 - 不做 7×24 daemon，不承诺生产吞吐。
 - 不做 Knowledge RAG，不引入 PageIndex / GraphRAG。
@@ -1692,6 +1699,17 @@ soc correct RUN-0001 --verdict false_positive --reason "approved scanner mainten
 soc memory list
 ```
 
+本地开发可以用独立 SOC SQLite 测试库先跑通 Web/API/CLI 闭环：
+
+```bash
+cd backend
+export SOC_DATABASE_URL="sqlite:////home/yydspei/projects/deer-flow/backend/.deer-flow/data/soc_agent_dev.db"
+UV_CACHE_DIR=/tmp/uv-cache uv run python -m soc_agent.cli db upgrade --database-url "$SOC_DATABASE_URL"
+SOC_DATABASE_URL="$SOC_DATABASE_URL" uv run uvicorn app.gateway.app:app --host 127.0.0.1 --port 8001
+```
+
+该 SQLite 例外只用于本地开发/人工验收；准生产和生产仍使用 PostgreSQL。
+
 说明：CLI/API/Kafka 入口可以为了接入便利接受 flat/simple/vendor-like payload，但必须先经过 `normalizers/` 转换成 canonical `AlertInput`。核心 runtime、pipeline、DB、memory、API response 不直接依赖 flat 字段。
 
 Phase 2/4 扩展：
@@ -1803,7 +1821,7 @@ TUI 不能做：
 
 ### 5.5 Web UI 的位置
 
-当前 DeerFlow 前端已有通用 Web UI，但 SOC 场景需要专用视图：告警队列、研判详情、证据时间线、实体关联、复查队列、批量确认/驳回。Web UI 不是 Phase 1 重点，应在 Phase 3/4 基于稳定的 `review_queue` 和 API 增量构建。
+当前 DeerFlow 前端已有通用 Web UI，但 SOC 场景需要专用视图：告警队列、研判详情、证据时间线、实体关联、复查队列、批量确认/驳回。Phase 1 只允许 thin Web page 接已稳定的 Gateway API 和 core service，用于验证复核闭环；完整 SOC 大屏、批量操作、证据图和 Agent console 仍应在 Phase 3/4 基于稳定的 `review_queue`、case/evidence 和 stream protocol 增量构建。
 
 ### 5.6 任务队列选型：不上来不用 Celery
 
