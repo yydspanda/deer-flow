@@ -168,13 +168,24 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
   - `ConfluentKafkaConsumerPort` 能订阅自定义 topic，但 `SocKafkaConsumerRunner` mapper 仍使用默认 topic set。
   - 修复后 runner 接收 configured `alert_topics` / `approval_request_topics`，CLI 从 `KafkaConsumerSettings` 传入。
 
+已完成 bounded runner loop counters：
+
+- `SocKafkaConsumerRunner.run(max_records=..., stop_on_idle=True)` 下沉有限 poll loop。
+- `KafkaRunnerLoopResult` 暴露：
+  - `processed_count`
+  - `dead_lettered_count`
+  - `idle_count`
+  - `committed_count`
+- `soc daemon consume` 输出 `counters` JSON。
+- 这不是生产长驻 daemon，只是把 loop 语义集中到 runner，为 readiness、metrics、supervisor 和 graceful shutdown 做准备。
+
 ## 下一刀建议
 
 进入 daemon readiness / long-running loop 规划：
 
 - 当前 `soc daemon consume` 仍是有限 poll，适合 smoke/手工验证。
 - 生产 daemon 需要：
-  - long-running loop。
+  - long-running loop wrapper，复用 `SocKafkaConsumerRunner.run()` 或 `process_next()`。
   - graceful shutdown。
   - readiness：DB 可用、broker connected、topics assigned。
   - metrics：processed、dead_lettered、failed、last_success_at。

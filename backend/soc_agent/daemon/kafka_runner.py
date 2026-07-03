@@ -39,6 +39,29 @@ class KafkaRunnerProcessResult:
     dead_lettered: bool = False
 
 
+@dataclass(frozen=True)
+class KafkaRunnerLoopResult:
+    """Aggregated outcome of running the Kafka runner for a bounded loop."""
+
+    results: list[KafkaRunnerProcessResult]
+
+    @property
+    def processed_count(self) -> int:
+        return sum(1 for result in self.results if result.status == "processed")
+
+    @property
+    def dead_lettered_count(self) -> int:
+        return sum(1 for result in self.results if result.dead_lettered)
+
+    @property
+    def idle_count(self) -> int:
+        return sum(1 for result in self.results if result.status == "idle")
+
+    @property
+    def committed_count(self) -> int:
+        return sum(1 for result in self.results if result.committed)
+
+
 class SocKafkaConsumerRunner:
     """Serial runner that maps Kafka records and calls ``SocDaemonService``."""
 
@@ -60,6 +83,25 @@ class SocKafkaConsumerRunner:
         if record is None:
             return KafkaRunnerProcessResult(status="idle")
         return self.process_record(record)
+
+    def run(self, *, max_records: int, stop_on_idle: bool = True) -> KafkaRunnerLoopResult:
+        """Run a bounded consumer loop.
+
+        This is intentionally finite. A future daemon supervisor can call this
+        repeatedly or wrap it with shutdown/backoff/readiness logic without
+        changing per-record processing semantics.
+        """
+
+        if max_records < 1:
+            raise ValueError("max_records must be >= 1")
+
+        results: list[KafkaRunnerProcessResult] = []
+        for _ in range(max_records):
+            result = self.process_next()
+            results.append(result)
+            if stop_on_idle and result.status == "idle":
+                break
+        return KafkaRunnerLoopResult(results=results)
 
     def process_record(self, record: KafkaRecord) -> KafkaRunnerProcessResult:
         try:

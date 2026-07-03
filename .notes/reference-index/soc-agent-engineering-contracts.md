@@ -305,6 +305,8 @@ Kafka daemon / consumer adapter 约束：
   - 成功：`poll -> map -> process_message -> commit`。
   - mapper failure / service failure：先 `send_dead_letter()`，dead-letter 成功后才 `commit` 原 offset。
   - dead-letter 写失败不得 commit 原 offset，必须暴露异常，避免静默丢消息。
+  - bounded loop 必须通过 `SocKafkaConsumerRunner.run()` 聚合结果；CLI/API/daemon wrapper 不应重新实现 poll loop。
+  - `KafkaRunnerLoopResult` counters 是后续 metrics/readiness 的最小来源：processed、dead_lettered、idle、committed。
 - `KafkaConsumerPort` 是真实 broker client 的唯一 port；真实 `aiokafka` / `confluent-kafka` adapter 只能实现该协议，不能把具体 SDK 类型扩散到 core、pipeline、repository、API、TUI 或 Web。
 - 当前真实 broker adapter 选择 `confluent-kafka`：
   - 依赖必须放在 optional extra `backend[kafka]`，普通本地开发和 CI 不强制安装。

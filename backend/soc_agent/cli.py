@@ -505,13 +505,8 @@ def _daemon_consume(args: argparse.Namespace) -> int:
         approval_request_topics=frozenset(settings.approval_request_topics),
     )
 
-    results: list[dict[str, Any]] = []
     try:
-        for _ in range(max_records):
-            result = runner.process_next()
-            results.append(_kafka_runner_result_payload(result))
-            if result.status == "idle":
-                break
+        loop_result = runner.run(max_records=max_records, stop_on_idle=True)
     except (KafkaAdapterError, KafkaAdapterNotConfiguredError, SocServiceError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 3
@@ -523,7 +518,13 @@ def _daemon_consume(args: argparse.Namespace) -> int:
             {
                 "schema_version": "soc.kafka_consume_result.v1",
                 "settings": settings.model_dump(mode="json", exclude_none=True),
-                "results": results,
+                "counters": {
+                    "processed": loop_result.processed_count,
+                    "dead_lettered": loop_result.dead_lettered_count,
+                    "idle": loop_result.idle_count,
+                    "committed": loop_result.committed_count,
+                },
+                "results": [_kafka_runner_result_payload(result) for result in loop_result.results],
             },
             ensure_ascii=False,
             indent=2 if args.pretty else None,

@@ -9,7 +9,7 @@ from soc_agent.daemon.kafka_adapter import (
 )
 from soc_agent.daemon.kafka_config import KafkaConsumerSettings, KafkaSecurityProtocol
 from soc_agent.daemon.kafka_mapper import KafkaMapperError, KafkaRecord, map_kafka_record_to_daemon_message
-from soc_agent.daemon.kafka_runner import KafkaConsumerPort, KafkaRunnerProcessResult, SocKafkaConsumerRunner
+from soc_agent.daemon.kafka_runner import KafkaConsumerPort, KafkaRunnerLoopResult, KafkaRunnerProcessResult, SocKafkaConsumerRunner
 
 __all__ = [
     "ConfluentKafkaConsumerPort",
@@ -19,6 +19,7 @@ __all__ = [
     "KafkaConsumerSettings",
     "KafkaMapperError",
     "KafkaRecord",
+    "KafkaRunnerLoopResult",
     "KafkaRunnerProcessResult",
     "KafkaSecurityProtocol",
     "NullKafkaConsumerPort",

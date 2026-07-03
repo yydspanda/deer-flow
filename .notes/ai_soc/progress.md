@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon readiness / long-running loop planning |
+| 当前下一刀 | Kafka daemon readiness / graceful shutdown planning |
 
 ## Phase 1 切片计划
 
@@ -85,8 +85,48 @@
 | 49 | `soc daemon consume` disabled wiring | Done | CLI 读取 `KafkaConsumerSettings` 并运行有限次 runner poll；默认 idle 输出 JSON，disabled path 不要求 DB/Kafka |
 | 50 | Confluent Kafka broker adapter | Done | 新增 `backend[kafka]` optional extra 和 `ConfluentKafkaConsumerPort`；支持 subscribe/poll/manual commit/dead-letter produce+flush |
 | 51 | Kafka smoke runner + live Redpanda smoke | Done | 新增 `backend/scripts/soc_kafka_smoke.py`，真实 Redpanda smoke 已验证 sample publish、daemon consume、summary、dead-letter、post-commit idle |
+| 52 | Kafka bounded runner loop counters | Done | `SocKafkaConsumerRunner.run()` 下沉有限循环，返回 processed/dead_lettered/idle/committed counters；CLI 输出 counters，为后续 metrics/readiness 铺路 |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka bounded runner loop counters 切片
+
+- 背景：
+  - live smoke 已验证 broker path。
+  - 下一步做 readiness / 长驻 daemon 前，需要先把 CLI 中的手写 poll loop 下沉为 runner 级稳定入口。
+- 新增：
+  - `KafkaRunnerLoopResult`
+  - `SocKafkaConsumerRunner.run(max_records=..., stop_on_idle=True)`
+- 行为：
+  - bounded loop 仍是有限 poll，不是生产 supervisor。
+  - `max_records < 1` fail-fast。
+  - 默认遇到 idle 停止，保持当前 CLI/smoke 行为。
+  - loop result 暴露 counters：
+    - `processed_count`
+    - `dead_lettered_count`
+    - `idle_count`
+    - `committed_count`
+  - `soc daemon consume` 复用 `runner.run()` 并输出 `counters` JSON。
+- 边界：
+  - per-record 语义不变：成功 commit；mapper/service failure dead-letter 后 commit；dead-letter failure 仍向外抛。
+  - 还不做无限循环、signal handling、readiness endpoint、metrics exporter 或 supervisor。
+- 已补充测试：
+  - `run()` 聚合两条 processed + 一条 idle。
+  - `run(max_records=0)` 参数校验。
+  - CLI disabled output 包含 counters。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/daemon/__init__.py soc_agent/daemon/kafka_runner.py soc_agent/cli.py tests/test_soc_daemon_kafka_runner.py tests/test_soc_agent_runtime.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/daemon/__init__.py soc_agent/daemon/kafka_runner.py soc_agent/cli.py tests/test_soc_daemon_kafka_runner.py tests/test_soc_agent_runtime.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_kafka_runner.py tests/test_soc_daemon_kafka_mapper.py tests/test_soc_agent_runtime.py::test_cli_daemon_consume_disabled_by_default_outputs_idle tests/test_soc_agent_runtime.py::test_cli_daemon_consume_enabled_requires_database_before_kafka tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli daemon consume --pretty`
+  - `cd backend && ./.venv/bin/python scripts/soc_kafka_smoke.py --database-url sqlite+pysqlite:////tmp/soc_kafka_smoke_20260703_loop.db --include-dead-letter --timeout-seconds 30`
+- live smoke 结果：
+  - group_id：`soc-smoke-1783064507`
+  - run_id：`RUN-8F5BAC0AEDC6`
+  - topic：`soc.alerts.raw.v1.smoke.1783064507`
+  - dead-letter key：`smoke-bad-1783064508`
+- 下一步：
+  - 设计 readiness / graceful shutdown：DB readiness、broker assignment readiness、signal handling、metrics emission 和 long-running daemon boundary。
 
 ### 2026-07-03 — Kafka smoke runner + live Redpanda smoke 切片
 

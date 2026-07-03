@@ -99,6 +99,26 @@ def test_kafka_runner_returns_idle_when_no_record_is_available() -> None:
     assert consumer.committed == []
 
 
+def test_kafka_runner_run_aggregates_bounded_loop_results() -> None:
+    first = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=1, value='{"alert_id":"ALT-1"}')
+    second = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=2, value='{"alert_id":"ALT-2"}')
+    consumer = FakeConsumer([first, second])
+
+    loop_result = SocKafkaConsumerRunner(consumer=consumer, daemon_service=FakeDaemonService()).run(max_records=3)
+
+    assert [result.status for result in loop_result.results] == ["processed", "processed", "idle"]
+    assert loop_result.processed_count == 2
+    assert loop_result.dead_lettered_count == 0
+    assert loop_result.idle_count == 1
+    assert loop_result.committed_count == 2
+    assert consumer.committed == [first, second]
+
+
+def test_kafka_runner_run_rejects_invalid_max_records() -> None:
+    with pytest.raises(ValueError, match="max_records"):
+        SocKafkaConsumerRunner(consumer=FakeConsumer(), daemon_service=FakeDaemonService()).run(max_records=0)
+
+
 def test_kafka_runner_sends_mapper_failure_to_dead_letter_then_commits() -> None:
     record = KafkaRecord(topic="unknown.topic", partition=0, offset=1, value="{}")
     consumer = FakeConsumer([record])

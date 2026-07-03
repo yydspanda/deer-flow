@@ -789,6 +789,12 @@ def test_cli_daemon_consume_disabled_by_default_outputs_idle(monkeypatch: pytest
     assert payload["schema_version"] == "soc.kafka_consume_result.v1"
     assert payload["settings"]["enabled"] is False
     assert payload["settings"]["bootstrap_servers"] == ["localhost:9092"]
+    assert payload["counters"] == {
+        "processed": 0,
+        "dead_lettered": 0,
+        "idle": 1,
+        "committed": 0,
+    }
     assert payload["results"] == [
         {
             "status": "idle",
