@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | approved action API/TUI 入口 |
+| 当前下一刀 | approved action TUI/Web 操作入口 |
 
 ## Phase 1 切片计划
 
@@ -69,8 +69,38 @@
 | 33 | ReviewQueue Web actor/context headers | Done | Web 请求携带 surface/trace/idempotency；Gateway 用认证用户覆盖可伪造 actor header，并把 `surface=web` 写入 service context |
 | 34 | approved-action consume/audit boundary | Done | `execute_approved_action()` 要求 `dry_run=False` + idempotency，消费一次性 token，记录 consumed/execution result payload；仍不执行外部副作用 |
 | 35 | approval grant repository persistence | Done | 新增 `soc_approval_grants` 表和 SQLAlchemy repository 方法，持久化 approval grant approve/consume 状态 |
+| 36 | approved action Gateway API | Done | 新增 `/api/soc/approvals/*`，支持 create grant、dry-run、execute；Gateway admin 映射为 `soc_admin` |
 
 ## 进度记录
+
+### 2026-07-03 — approved action Gateway API 切片
+
+- 背景：
+  - approval grant 已可持久化，execute boundary 已能消费 token。
+  - Web/TUI 需要一个统一 API 入口来手工验证 approve / dry-run / execute 链路，不能各自直接调用 repository。
+- 新增：
+  - `backend/app/gateway/routers/soc_approvals.py`
+  - `backend/app/gateway/routers/soc_dependencies.py`，共享 SOC repository/context/role 映射依赖。
+  - `POST /api/soc/approvals/grants`
+  - `POST /api/soc/approvals/actions/dry-run`
+  - `POST /api/soc/approvals/actions/execute`
+  - Gateway app 注册 SOC approvals router。
+- 边界：
+  - API 只调用 `SocAgentApprovalService`，不直接消费 token、不直接写 repository。
+  - 创建 grant 需要 `soc_approver` / `soc_admin`；Gateway 当前将 DeerFlow `system_role=admin` 映射为 `soc_admin`。
+  - execute endpoint 仍只进入 `execute_approved_action()` 边界，不调用外部 MCP/tool、不封禁 IP、不隔离终端。
+- 已补充测试：
+  - create grant 记录 Web/admin actor、idempotency key，并持久化 token。
+  - dry-run 返回 non-side-effect result。
+  - execute 消费 token，返回 `external_side_effect=not_executed`。
+  - missing token 映射为 404。
+  - router 暴露三条 MVP path。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format app/gateway/app.py app/gateway/routers/__init__.py app/gateway/routers/soc_dependencies.py app/gateway/routers/soc_review.py app/gateway/routers/soc_approvals.py tests/test_soc_approvals_router.py tests/test_soc_review_router.py`
+  - `cd backend && ./.venv/bin/python -m ruff check app/gateway/app.py app/gateway/routers/__init__.py app/gateway/routers/soc_dependencies.py app/gateway/routers/soc_review.py app/gateway/routers/soc_approvals.py tests/test_soc_approvals_router.py tests/test_soc_review_router.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_approvals_router.py tests/test_soc_review_router.py tests/test_soc_agent_repository.py tests/test_soc_agent_service.py`
+- 下一步：
+  - 做 approved action TUI/Web 操作入口，复用 Gateway API 或 service 语义，让分析师能在界面上审批、dry-run、execute。
 
 ### 2026-07-03 — approval grant repository persistence 切片
 

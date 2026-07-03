@@ -24,6 +24,7 @@ from app.gateway.routers import (
     models,
     runs,
     skills,
+    soc_approvals,
     soc_review,
     suggestions,
     thread_runs,
@@ -414,6 +415,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # SOC review queue API is mounted at /api/soc/review
     app.include_router(soc_review.router)
+
+    # SOC approval API is mounted at /api/soc/approvals
+    app.include_router(soc_approvals.router)
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict[str, str]:

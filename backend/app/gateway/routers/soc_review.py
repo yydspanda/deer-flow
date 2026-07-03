@@ -6,30 +6,20 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
+from app.gateway.routers.soc_dependencies import get_or_create_soc_repository, soc_service_context_from_request
 from soc_agent.contracts import (
-    ActorContext,
     AnalysisRun,
     CorrectionCommand,
-    EntrySurface,
     InvestigationContext,
     ReviewQueueCloseCommand,
     ReviewQueueItem,
     ReviewQueueStatus,
-    ServiceRequestContext,
     Verdict,
 )
 from soc_agent.core import SocReviewService, SocServiceNotFoundError, SocServiceNotImplementedError
-from soc_agent.db import SqlAlchemyAlertRepository, resolve_database_url, to_sync_database_url
 
 router = APIRouter(prefix="/api/soc/review", tags=["soc-review"])
-
-_ALLOWED_HEADER_SURFACES = {
-    EntrySurface.API.value: EntrySurface.API,
-    EntrySurface.WEB.value: EntrySurface.WEB,
-}
 
 
 class ReviewQueueListResponse(BaseModel):
@@ -51,7 +41,7 @@ def get_soc_review_service(request: Request) -> SocReviewService:
     if injected is not None:
         return injected
 
-    repository = _get_or_create_soc_repository(request)
+    repository = get_or_create_soc_repository(request)
     return SocReviewService(
         repository=repository,
         summary_repository=repository,
@@ -95,7 +85,7 @@ def close_review_item(
     try:
         return service.close_queue_item(
             ReviewQueueCloseCommand(queue_id=queue_id, reason=body.reason),
-            context=_service_context_from_request(request),
+            context=soc_service_context_from_request(request),
         )
     except SocServiceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -118,50 +108,9 @@ def correct_review_run(
                 corrected_confidence=body.confidence,
                 reason=body.reason,
             ),
-            context=_service_context_from_request(request),
+            context=soc_service_context_from_request(request),
         )
     except SocServiceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-
-def _get_or_create_soc_repository(request: Request) -> SqlAlchemyAlertRepository:
-    repository = getattr(request.app.state, "soc_alert_repository", None)
-    if repository is not None:
-        return repository
-
-    try:
-        database_url = resolve_database_url()
-    except ValueError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    engine = create_engine(to_sync_database_url(database_url), pool_pre_ping=True)
-    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
-    repository = SqlAlchemyAlertRepository(session_factory)
-    request.app.state.soc_alert_repository = repository
-    return repository
-
-
-def _service_context_from_request(request: Request) -> ServiceRequestContext:
-    return ServiceRequestContext(
-        actor=ActorContext(
-            actor_id=_actor_id_from_request(request),
-            surface=_surface_from_request(request),
-        ),
-        trace_id=request.headers.get("x-trace-id"),
-        idempotency_key=request.headers.get("idempotency-key"),
-    )
-
-
-def _actor_id_from_request(request: Request) -> str:
-    user = getattr(getattr(request, "state", None), "user", None)
-    user_id = getattr(user, "id", None)
-    if user_id is not None:
-        return str(user_id)
-    return request.headers.get("x-soc-actor-id") or "api"
-
-
-def _surface_from_request(request: Request) -> EntrySurface:
-    surface = request.headers.get("x-soc-surface", EntrySurface.API.value).lower()
-    return _ALLOWED_HEADER_SURFACES.get(surface, EntrySurface.API)
