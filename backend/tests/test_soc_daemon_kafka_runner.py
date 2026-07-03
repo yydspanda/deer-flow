@@ -71,6 +71,24 @@ def test_kafka_runner_processes_record_and_commits_after_service_success() -> No
     assert daemon_service.messages[0].kind == "alert"
 
 
+def test_kafka_runner_uses_configured_topic_sets() -> None:
+    record = KafkaRecord(topic="custom.alerts.v1", partition=0, offset=10, value='{"alert_id":"ALT-1"}')
+    consumer = FakeConsumer([record])
+    daemon_service = FakeDaemonService()
+
+    result = SocKafkaConsumerRunner(
+        consumer=consumer,
+        daemon_service=daemon_service,
+        alert_topics=frozenset({"custom.alerts.v1"}),
+        approval_request_topics=frozenset({"custom.approvals.v1"}),
+    ).process_next()
+
+    assert result.status == "processed"
+    assert consumer.committed == [record]
+    assert consumer.dead_letters == []
+    assert daemon_service.messages[0].kind == "alert"
+
+
 def test_kafka_runner_returns_idle_when_no_record_is_available() -> None:
     consumer = FakeConsumer()
 

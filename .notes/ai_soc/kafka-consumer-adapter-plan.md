@@ -146,35 +146,37 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 - 脚本：`backend/scripts/soc_kafka_smoke.py`。
 - 前提：已有 Kafka/Redpanda broker 可连接；脚本不负责启动 Docker。
 - 默认 broker：`localhost:9092`。
+- 默认使用带时间戳后缀的临时 smoke topics，避免复用固定 topic 时被历史消息污染；`--stable-topics` 可使用固定 SOC topic 名。
 - 脚本会创建/确认 input topics 和 dead-letter topic。
 - 脚本会发布 sample alert，调用真实 `soc daemon consume` CLI path，并验证 `soc list` 中出现 summary。
 - `--include-dead-letter` 会额外发布坏 JSON，验证 dead-letter topic 中出现 `soc.kafka_dead_letter.v1`。
-- 当前环境未完成 live run：WSL 中没有 `docker` 命令，无法启动 Redpanda 容器。
+- 脚本会用同一 consumer group 再 poll 一次，验证 post-commit idle，避免 offset commit 失效导致重复消费。
+
+已完成 live Redpanda smoke：
+
+- Docker container：`soc-redpanda-smoke`
+- broker：`localhost:9092`
+- group_id：`soc-smoke-1783064070`
+- alert topic：`soc.alerts.raw.v1.smoke.1783064070`
+- processed run：`RUN-C140EB6BEB70`
+- alert_id：`ALT-SAMPLE-FP-001`
+- summary_count：`1`
+- review queue：empty，符合 approved scanner false positive / no review 预期。
+- dead-letter：`soc.kafka_dead_letter.v1`，key `smoke-bad-1783064071`，error_type `KafkaMapperError`。
+- post-commit consume：`idle`，说明同一 group 不会重复处理已提交 offset。
+- smoke 过程中发现并修复：
+  - `ConfluentKafkaConsumerPort` 能订阅自定义 topic，但 `SocKafkaConsumerRunner` mapper 仍使用默认 topic set。
+  - 修复后 runner 接收 configured `alert_topics` / `approval_request_topics`，CLI 从 `KafkaConsumerSettings` 传入。
 
 ## 下一刀建议
 
-在 Docker 或已有 Kafka broker 可用后执行 live smoke：
+进入 daemon readiness / long-running loop 规划：
 
-```bash
-cd backend
-uv sync --extra kafka
-./.venv/bin/python scripts/soc_kafka_smoke.py \
-  --database-url sqlite+pysqlite:////tmp/soc_kafka_smoke.db \
-  --include-dead-letter
-```
-
-如果 broker 不在本机：
-
-```bash
-./.venv/bin/python scripts/soc_kafka_smoke.py \
-  --bootstrap-servers kafka-host:9092 \
-  --database-url sqlite+pysqlite:////tmp/soc_kafka_smoke.db
-```
-
-live smoke 通过后，补充记录：
-
-- `consume_result.run_id`
-- `AlertSummary.alert_id`
-- review queue 是否按预期产生
-- dead-letter payload key/schema
-- offset commit 是否重复运行不会重复处理同一 group 的同一 offset
+- 当前 `soc daemon consume` 仍是有限 poll，适合 smoke/手工验证。
+- 生产 daemon 需要：
+  - long-running loop。
+  - graceful shutdown。
+  - readiness：DB 可用、broker connected、topics assigned。
+  - metrics：processed、dead_lettered、failed、last_success_at。
+  - retry/backoff。
+  - optional supervisor/Docker entrypoint。

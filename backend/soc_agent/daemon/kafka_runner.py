@@ -12,7 +12,7 @@ from typing import Protocol
 
 from soc_agent.contracts import SocDaemonProcessResult
 from soc_agent.core import SocDaemonService, SocServiceError
-from soc_agent.daemon.kafka_mapper import KafkaMapperError, KafkaRecord, map_kafka_record_to_daemon_message
+from soc_agent.daemon.kafka_mapper import DEFAULT_ALERT_TOPICS, DEFAULT_APPROVAL_REQUEST_TOPICS, KafkaMapperError, KafkaRecord, map_kafka_record_to_daemon_message
 
 
 class KafkaConsumerPort(Protocol):
@@ -47,9 +47,13 @@ class SocKafkaConsumerRunner:
         *,
         consumer: KafkaConsumerPort,
         daemon_service: SocDaemonService,
+        alert_topics: frozenset[str] = DEFAULT_ALERT_TOPICS,
+        approval_request_topics: frozenset[str] = DEFAULT_APPROVAL_REQUEST_TOPICS,
     ) -> None:
         self._consumer = consumer
         self._daemon_service = daemon_service
+        self._alert_topics = alert_topics
+        self._approval_request_topics = approval_request_topics
 
     def process_next(self) -> KafkaRunnerProcessResult:
         record = self._consumer.poll()
@@ -59,7 +63,11 @@ class SocKafkaConsumerRunner:
 
     def process_record(self, record: KafkaRecord) -> KafkaRunnerProcessResult:
         try:
-            message = map_kafka_record_to_daemon_message(record)
+            message = map_kafka_record_to_daemon_message(
+                record,
+                alert_topics=self._alert_topics,
+                approval_request_topics=self._approval_request_topics,
+            )
             daemon_result = self._daemon_service.process_message(message)
             self._consumer.commit(record)
             return KafkaRunnerProcessResult(

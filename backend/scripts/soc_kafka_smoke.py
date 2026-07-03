@@ -42,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     payload = json.loads(sample_path.read_text(encoding="utf-8"))
     alert_id = _alert_id(payload)
     group_id = args.group_id or f"soc-smoke-{int(time.time())}"
+    _resolve_topics(args)
 
     admin = AdminClient({"bootstrap.servers": args.bootstrap_servers})
     _wait_for_broker(admin, timeout_seconds=args.timeout_seconds)
@@ -66,11 +67,11 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     consume_env = _consume_env(args, group_id)
-    consume = _run_soc_cli(
-        ["daemon", "consume", "--database-url", database_url, "--max-records", "1", "--pretty"],
+    consume_payload = _consume_until_non_idle(
+        database_url=database_url,
         env=consume_env,
+        timeout_seconds=args.timeout_seconds,
     )
-    consume_payload = json.loads(consume.stdout)
     first_result = consume_payload["results"][0]
     if first_result["status"] != "processed":
         raise SystemExit(f"Expected processed Kafka result, got: {first_result}")
@@ -97,10 +98,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         dead_letter_consumer.subscribe([args.dead_letter_topic])
         try:
-            _run_soc_cli(
-                ["daemon", "consume", "--database-url", database_url, "--max-records", "1", "--pretty"],
+            bad_consume_payload = _consume_until_non_idle(
+                database_url=database_url,
                 env=consume_env,
+                timeout_seconds=args.timeout_seconds,
             )
+            bad_consume_result = bad_consume_payload["results"][0]
+            if bad_consume_result["status"] != "dead_lettered":
+                raise SystemExit(f"Expected bad JSON to be dead-lettered, got: {bad_consume_result}")
             dead_letter_payload = _wait_for_dead_letter(
                 dead_letter_consumer,
                 expected_key=bad_key,
@@ -109,6 +114,15 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             dead_letter_consumer.close()
 
+    post_commit_consume = _run_soc_cli(
+        ["daemon", "consume", "--database-url", database_url, "--max-records", "1", "--pretty"],
+        env=consume_env,
+    )
+    post_commit_payload = json.loads(post_commit_consume.stdout)
+    post_commit_result = post_commit_payload["results"][0]
+    if post_commit_result["status"] != "idle":
+        raise SystemExit(f"Expected post-commit idle result, got: {post_commit_result}")
+
     result = {
         "schema_version": "soc.kafka_smoke_result.v1",
         "bootstrap_servers": args.bootstrap_servers,
@@ -116,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         "group_id": group_id,
         "alert_id": alert_id,
         "consume_result": first_result,
+        "post_commit_result": post_commit_result,
         "summary_count": len(summaries),
         "dead_letter": dead_letter_payload,
     }
@@ -133,16 +148,30 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Alert JSON sample to publish",
     )
     parser.add_argument("--group-id", help="Kafka consumer group id; defaults to a timestamped smoke group")
-    parser.add_argument("--alert-topic", default=next(iter(DEFAULT_ALERT_TOPICS)), help="SOC alert input topic")
+    parser.add_argument("--alert-topic", help="SOC alert input topic")
     parser.add_argument(
         "--approval-request-topic",
-        default=next(iter(DEFAULT_APPROVAL_REQUEST_TOPICS)),
         help="SOC approval request input topic",
     )
-    parser.add_argument("--dead-letter-topic", default=DEFAULT_DEAD_LETTER_TOPIC, help="SOC dead-letter topic")
+    parser.add_argument("--dead-letter-topic", help="SOC dead-letter topic")
+    parser.add_argument(
+        "--topic-suffix",
+        help="Suffix appended to default SOC topics; defaults to a timestamped smoke suffix",
+    )
+    parser.add_argument("--stable-topics", action="store_true", help="Use stable default SOC topic names without a smoke suffix")
     parser.add_argument("--timeout-seconds", type=float, default=15.0, help="Broker operation timeout")
     parser.add_argument("--include-dead-letter", action="store_true", help="Also verify bad JSON -> dead-letter")
     return parser
+
+
+def _resolve_topics(args: argparse.Namespace) -> None:
+    if args.stable_topics:
+        suffix = ""
+    else:
+        suffix = args.topic_suffix or f".smoke.{int(time.time())}"
+    args.alert_topic = args.alert_topic or f"{next(iter(DEFAULT_ALERT_TOPICS))}{suffix}"
+    args.approval_request_topic = args.approval_request_topic or f"{next(iter(DEFAULT_APPROVAL_REQUEST_TOPICS))}{suffix}"
+    args.dead_letter_topic = args.dead_letter_topic or f"{DEFAULT_DEAD_LETTER_TOPIC}{suffix}"
 
 
 def _wait_for_broker(admin: Any, *, timeout_seconds: float) -> None:
@@ -164,7 +193,8 @@ def _ensure_topics(admin: Any, new_topic_cls: type[Any], topics: list[str], *, t
         try:
             future.result(timeout=timeout_seconds)
         except Exception as exc:  # noqa: BLE001 - provider-specific error types
-            if "already exists" not in str(exc).lower():
+            message = str(exc).lower()
+            if "already exists" not in message and "already been created" not in message and "topic_already_exists" not in message:
                 raise SystemExit(f"Failed to create topic {topic}: {exc}") from exc
 
 
@@ -183,6 +213,22 @@ def _run_soc_cli(args: list[str], *, env: dict[str, str]) -> CliResult:
     if result.code != 0:
         raise SystemExit(f"SOC CLI failed ({result.code}): {' '.join(args)}\n{result.stderr}")
     return result
+
+
+def _consume_until_non_idle(*, database_url: str, env: dict[str, str], timeout_seconds: float) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    last_payload: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        consume = _run_soc_cli(
+            ["daemon", "consume", "--database-url", database_url, "--max-records", "1", "--pretty"],
+            env=env,
+        )
+        payload = json.loads(consume.stdout)
+        last_payload = payload
+        if payload["results"][0]["status"] != "idle":
+            return payload
+        time.sleep(0.5)
+    raise SystemExit(f"Timed out waiting for non-idle consume result; last result: {last_payload}")
 
 
 def _consume_env(args: argparse.Namespace, group_id: str) -> dict[str, str]:

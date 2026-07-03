@@ -501,6 +501,8 @@ def _daemon_consume(args: argparse.Namespace) -> int:
     runner = SocKafkaConsumerRunner(
         consumer=consumer,
         daemon_service=daemon_service,
+        alert_topics=frozenset(settings.alert_topics),
+        approval_request_topics=frozenset(settings.approval_request_topics),
     )
 
     results: list[dict[str, Any]] = []

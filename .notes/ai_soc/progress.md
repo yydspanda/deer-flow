@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Run live Kafka/Redpanda smoke after Docker or broker is available |
+| 当前下一刀 | Kafka daemon readiness / long-running loop planning |
 
 ## Phase 1 切片计划
 
@@ -84,40 +84,58 @@
 | 48 | Kafka consumer settings + null adapter | Done | 新增 `KafkaConsumerSettings` 环境变量配置 contract 和 `NullKafkaConsumerPort`；默认禁用、启用但无真实 adapter 时 fail-fast |
 | 49 | `soc daemon consume` disabled wiring | Done | CLI 读取 `KafkaConsumerSettings` 并运行有限次 runner poll；默认 idle 输出 JSON，disabled path 不要求 DB/Kafka |
 | 50 | Confluent Kafka broker adapter | Done | 新增 `backend[kafka]` optional extra 和 `ConfluentKafkaConsumerPort`；支持 subscribe/poll/manual commit/dead-letter produce+flush |
-| 51 | Kafka smoke runner | Done | 新增 `backend/scripts/soc_kafka_smoke.py`，可对真实 Kafka/Redpanda 执行 topic 创建、sample publish、daemon consume、summary 验证和可选 dead-letter 验证 |
+| 51 | Kafka smoke runner + live Redpanda smoke | Done | 新增 `backend/scripts/soc_kafka_smoke.py`，真实 Redpanda smoke 已验证 sample publish、daemon consume、summary、dead-letter、post-commit idle |
 
 ## 进度记录
 
-### 2026-07-03 — Kafka smoke runner 切片
+### 2026-07-03 — Kafka smoke runner + live Redpanda smoke 切片
 
 - 背景：
   - Confluent Kafka adapter 已完成，需要一个可重复的本地 smoke 验证入口。
-  - 当前执行环境没有 `docker` 命令，无法直接启动 Redpanda 容器；`ss` 也被沙箱限制，无法探测端口。
+  - Docker Desktop / WSL integration 恢复后，已用临时 Redpanda 容器跑通真实 broker smoke。
 - 新增：
   - `backend/scripts/soc_kafka_smoke.py`
 - smoke runner 行为：
   - 连接已有 Kafka/Redpanda broker，默认 `localhost:9092`。
+  - 默认使用带时间戳后缀的临时 smoke topics，避免历史 topic 消息污染；`--stable-topics` 可使用固定 SOC topic。
   - 创建/确认 topics：
-    - `soc.alerts.raw.v1`
-    - `soc.approvals.requests.v1`
-    - `soc.alerts.dead_letter.v1`
+    - `soc.alerts.raw.v1.smoke.<ts>` 或 `soc.alerts.raw.v1`
+    - `soc.approvals.requests.v1.smoke.<ts>` 或 `soc.approvals.requests.v1`
+    - `soc.alerts.dead_letter.v1.smoke.<ts>` 或 `soc.alerts.dead_letter.v1`
   - 发布一条 alert sample，默认 `backend/samples/alerts/approved_scanner.json`。
   - 调用真实 CLI path：`soc daemon consume --database-url ... --max-records 1`。
   - 验证 `consume_result.status=processed`。
   - 调用 `soc list` 验证 `AlertSummary` 已落库。
   - `--include-dead-letter` 可额外发布坏 JSON 并验证 dead-letter topic 中出现 `soc.kafka_dead_letter.v1`。
+  - 再用同一 consumer group poll 一次，验证 `post_commit_result.status=idle`，确认 offset commit 不会重复处理。
+- 修复：
+  - `SocKafkaConsumerRunner` 现在接收 configured `alert_topics` / `approval_request_topics`。
+  - CLI 从 `KafkaConsumerSettings` 把 topic set 传给 runner。
+  - 修复前，adapter 可以订阅自定义 topic，但 runner mapper 仍只认默认 topic，真实 smoke 会把临时 topic 误判为 unknown topic。
 - 使用示例：
   - `cd backend && uv sync --extra kafka`
   - `cd backend && ./.venv/bin/python scripts/soc_kafka_smoke.py --database-url sqlite+pysqlite:////tmp/soc_kafka_smoke.db`
   - `cd backend && ./.venv/bin/python scripts/soc_kafka_smoke.py --include-dead-letter`
 - 已验证：
   - `cd backend && ./.venv/bin/python -m ruff format scripts/soc_kafka_smoke.py`
-  - `cd backend && ./.venv/bin/python -m ruff check scripts/soc_kafka_smoke.py`
+  - `cd backend && ./.venv/bin/python -m ruff check scripts/soc_kafka_smoke.py soc_agent/daemon/kafka_runner.py soc_agent/cli.py tests/test_soc_daemon_kafka_runner.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_kafka_runner.py tests/test_soc_daemon_kafka_mapper.py tests/test_soc_agent_runtime.py::test_cli_daemon_consume_disabled_by_default_outputs_idle tests/test_soc_agent_runtime.py::test_cli_daemon_consume_enabled_requires_database_before_kafka`
   - `cd backend && ./.venv/bin/python scripts/soc_kafka_smoke.py --help`
-- 未完成：
-  - 真实 broker live run 未执行，原因是当前 WSL 环境没有 `docker` 命令，也没有可确认的 Kafka/Redpanda broker。
+  - `docker run -d --name soc-redpanda-smoke -p 9092:9092 -p 9644:9644 docker.redpanda.com/redpandadata/redpanda:latest ...`
+  - `cd backend && ./.venv/bin/python scripts/soc_kafka_smoke.py --database-url sqlite+pysqlite:////tmp/soc_kafka_smoke_20260703_isolated2.db --include-dead-letter --timeout-seconds 30`
+- live smoke 结果：
+  - broker：`localhost:9092`，container：`soc-redpanda-smoke`
+  - group_id：`soc-smoke-1783064070`
+  - alert topic：`soc.alerts.raw.v1.smoke.1783064070`
+  - alert_id：`ALT-SAMPLE-FP-001`
+  - run_id：`RUN-C140EB6BEB70`
+  - consume result：`processed`, `committed=true`
+  - summary_count：`1`
+  - review queue：`[]`，符合 approved scanner false positive / no review 预期
+  - dead-letter：`soc.kafka_dead_letter.v1`, key `smoke-bad-1783064071`, offset `1`, error_type `KafkaMapperError`
+  - post-commit check：同一 group 再 poll 返回 `idle`
 - 下一步：
-  - 在 Docker Desktop WSL integration 开启后，或已有 Kafka broker 可用时，运行 smoke runner 并把真实输出补回本台账。
+  - 做 daemon readiness / metrics / long-running loop 规划；当前 CLI smoke 仍是有限 poll，不是生产 daemon supervisor。
 
 ### 2026-07-03 — Confluent Kafka broker adapter 切片
 
