@@ -366,7 +366,8 @@ Kafka daemon / consumer adapter 约束：
   - healthcheck 必须使用 `backend/scripts/soc_daemon_healthcheck.sh`。
   - 默认 metric sink 应使用 `SOC_DAEMON_METRIC_JSONL=stderr`。
   - overlay 不能保存生产 secret；Kafka/DB secret 必须来自 env file、secret manager 或部署平台。
-  - Dockerfile 尚未支持多 backend extras 时，overlay 不得假装 `postgres,kafka` 已同时安装；先记录限制，再做 build support。
+  - 默认 build extra 是 `postgres,kafka`；`backend/Dockerfile` 必须把 comma/whitespace 分隔的 `UV_EXTRAS` 展开成多个 `--extra` flag。
+  - 本地 SQLite + Kafka 验证可以显式设置 `SOC_DAEMON_UV_EXTRAS=kafka`。
 - `soc daemon status` 是 Kafka daemon readiness/status contract：
   - 输出 schema 固定为 `soc.kafka_daemon_status.v1`，供 CLI、supervisor、Docker/K8s readiness 和人工验收复用。
   - 默认只检查 database readiness 和 Kafka adapter 配置状态；不能 poll 或处理业务消息。

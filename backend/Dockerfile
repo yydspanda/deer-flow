@@ -13,8 +13,9 @@ FROM python:3.12-slim-bookworm AS builder
 ARG NODE_MAJOR=22
 ARG APT_MIRROR
 ARG UV_INDEX_URL
-# Optional extras to install (e.g. "postgres" for PostgreSQL support)
-# Usage: docker build --build-arg UV_EXTRAS=postgres ...
+# Optional extras to install. Accepts comma- or whitespace-separated names
+# (e.g. "postgres,kafka" or "postgres kafka").
+# Usage: docker build --build-arg UV_EXTRAS=postgres,kafka ...
 ARG UV_EXTRAS
 
 # Optionally override apt mirror for restricted networks (e.g. APT_MIRROR=mirrors.aliyun.com)
@@ -45,10 +46,25 @@ WORKDIR /app
 # Copy backend source code
 COPY backend ./backend
 
-# Install dependencies with cache mount
-# When UV_EXTRAS is set (e.g. "postgres"), installs optional dependencies.
+# Install dependencies with cache mount.
+# When UV_EXTRAS is set, install one --extra flag per validated extra name.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    sh -c "cd backend && UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} uv sync ${UV_EXTRAS:+--extra $UV_EXTRAS}"
+    set -eu; \
+    EXTRAS_FLAGS=""; \
+    if [ -n "${UV_EXTRAS:-}" ]; then \
+      for raw in $(printf '%s' "$UV_EXTRAS" | tr ',' ' '); do \
+        [ -z "$raw" ] && continue; \
+        case "$raw" in \
+          [!A-Za-z]* | *[!A-Za-z0-9_-]*) \
+            echo "[build] UV_EXTRAS entry '$raw' is invalid (must match [A-Za-z][A-Za-z0-9_-]*)" >&2; \
+            exit 1; \
+            ;; \
+        esac; \
+        EXTRAS_FLAGS="$EXTRAS_FLAGS --extra $raw"; \
+      done; \
+    fi; \
+    cd backend; \
+    UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} uv sync --all-packages $EXTRAS_FLAGS
 
 # UTF-8 locale prevents UnicodeEncodeError on Chinese/emoji content in minimal
 # containers where locale configuration may be missing and the default encoding is not UTF-8.

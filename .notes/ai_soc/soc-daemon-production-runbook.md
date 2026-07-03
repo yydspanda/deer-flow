@@ -97,7 +97,8 @@ Overlay 文件：`docker/docker-compose.soc-daemon.yaml`
 - 默认 command 是 `backend/scripts/soc_daemon_entrypoint.sh`。
 - 默认 healthcheck 是 `backend/scripts/soc_daemon_healthcheck.sh`。
 - 默认 `SOC_DAEMON_METRIC_JSONL=stderr`。
-- 默认 build extra 是 `kafka`；如果生产镜像需要同时安装多个 backend extras，应先增强 Dockerfile 的 multi-extra build arg，而不是在 overlay 中写无效的逗号/空格拼接。
+- 默认 build extra 是 `postgres,kafka`；`backend/Dockerfile` 会把 comma/whitespace 分隔的 `UV_EXTRAS` 展开成多个 `--extra` flag。
+- 如果只做本地 SQLite + Kafka 验证，可设置 `SOC_DAEMON_UV_EXTRAS=kafka` 缩小镜像依赖。
 
 ## Logging
 

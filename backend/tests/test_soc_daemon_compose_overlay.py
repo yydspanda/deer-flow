@@ -13,5 +13,6 @@ def test_soc_daemon_compose_overlay_is_explicit_opt_in() -> None:
     assert "soc-daemon:" in overlay
     assert "soc_daemon_entrypoint.sh" in overlay
     assert "soc_daemon_healthcheck.sh" in overlay
+    assert "UV_EXTRAS: ${SOC_DAEMON_UV_EXTRAS:-postgres,kafka}" in overlay
     assert "SOC_DAEMON_METRIC_JSONL=${SOC_DAEMON_METRIC_JSONL:-stderr}" in overlay
     assert "docker-compose.soc-daemon.yaml" not in docker_script

@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon multi-extra Docker build support / production deployment hardening |
+| 当前下一刀 | Kafka daemon deployment hardening / K8s template planning |
 
 ## Phase 1 切片计划
 
@@ -93,8 +93,30 @@
 | 57 | Kafka isolated run-mode smoke | Done | `soc_kafka_smoke.py --mode run` 使用隔离 topic 验证 `soc daemon run` 真实 broker 消费、commit、summary 和 dead-letter |
 | 58 | Kafka daemon JSONL metric sink | Done | `soc daemon run --metric-jsonl stderr|stdout` 可持续输出 start/result/error/stop JSONL 事件；entrypoint 支持 `SOC_DAEMON_METRIC_JSONL` |
 | 59 | Kafka daemon production compose overlay | Done | 新增 `docker-compose.soc-daemon.yaml`，显式 opt-in 启动 SOC daemon；默认不进入 DeerFlow 主 docker 流程 |
+| 60 | Kafka daemon Dockerfile multi-extra support | Done | `backend/Dockerfile` 支持 comma/whitespace 分隔 `UV_EXTRAS`；SOC daemon overlay 默认 `postgres,kafka` |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka daemon Dockerfile multi-extra support 切片
+
+- 背景：
+  - SOC daemon 生产镜像通常需要同时安装 PostgreSQL 与 Kafka optional extras。
+  - 之前 Dockerfile build-time `UV_EXTRAS` 只能可靠处理单个 extra，compose overlay 只能保守默认 `kafka`。
+- 变更：
+  - `backend/Dockerfile`：
+    - `UV_EXTRAS` 支持 comma/whitespace 分隔，例如 `postgres,kafka` 或 `postgres kafka`。
+    - 每个 extra 名称校验为 `[A-Za-z][A-Za-z0-9_-]*`。
+    - build sync 改为 `uv sync --all-packages $EXTRAS_FLAGS`。
+  - `docker/docker-compose.soc-daemon.yaml`：
+    - 默认 `SOC_DAEMON_UV_EXTRAS=postgres,kafka`。
+    - 本地 SQLite + Kafka 验证仍可显式设置 `SOC_DAEMON_UV_EXTRAS=kafka`。
+  - `scripts/detect_uv_extras.py`：
+    - 更新说明，确认 Dockerfile 与 dev-entrypoint/local detect 采用一致的多 extra 语义。
+- 测试：
+  - 新增 Dockerfile 静态回归断言，防止退回 `${UV_EXTRAS:+--extra $UV_EXTRAS}`。
+  - 更新 compose overlay 测试，锁住默认 `postgres,kafka`。
+- 下一步：
+  - 补 deployment hardening / K8s template planning：secret 注入、resource limits、restart policy、日志采集标签、Compose 与 K8s 配置等价关系。
 
 ### 2026-07-03 — Kafka daemon production compose overlay 切片
 
@@ -111,7 +133,7 @@
   - command：`backend/scripts/soc_daemon_entrypoint.sh`
   - healthcheck：`backend/scripts/soc_daemon_healthcheck.sh`
   - 默认 `SOC_DAEMON_METRIC_JSONL=stderr`。
-  - 默认 build extra 暂用 `kafka`；如果生产镜像需要同时启用 `postgres` + `kafka` extras，应后续增强 Dockerfile 支持多 extra。
+  - 默认 build extra 使用 `postgres,kafka`，由 Dockerfile multi-extra support 展开。
 - 已补充测试：
   - overlay 包含 entrypoint、healthcheck、metric env。
   - `scripts/docker.sh` 不加载 `docker-compose.soc-daemon.yaml`。
@@ -121,8 +143,8 @@
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_compose_overlay.py tests/test_soc_daemon_scripts.py`
   - `cd docker && docker compose -p deer-flow-dev -f docker-compose-dev.yaml -f docker-compose.soc-daemon.yaml config --services`
   - compose config 输出包含 `soc-daemon`；本地未设置 `DEER_FLOW_ROOT` 时会有 compose warning，不影响 overlay 解析。
-- 下一步：
-  - 处理 Dockerfile multi-extra build arg / deployment hardening，避免生产镜像安装 `postgres` + `kafka` 时靠手工变通。
+- 后续已完成：
+  - Dockerfile multi-extra build arg support 已在下一切片补齐。
 
 ### 2026-07-03 — Kafka daemon JSONL metric sink 切片
 

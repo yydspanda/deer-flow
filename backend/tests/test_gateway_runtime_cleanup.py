@@ -66,6 +66,16 @@ def test_backend_container_only_exposes_gateway_port():
     assert re.search(r"^EXPOSE\s+8001\b", dockerfile, re.M)
 
 
+def test_backend_dockerfile_accepts_multiple_uv_extras():
+    dockerfile = _read("backend/Dockerfile")
+
+    assert "Accepts comma- or whitespace-separated names" in dockerfile
+    assert "tr ',' ' '" in dockerfile
+    assert 'EXTRAS_FLAGS="$EXTRAS_FLAGS --extra $raw"' in dockerfile
+    assert "uv sync --all-packages $EXTRAS_FLAGS" in dockerfile
+    assert "${UV_EXTRAS:+--extra $UV_EXTRAS}" not in dockerfile
+
+
 def test_root_makefile_clean_does_not_reference_langgraph_server_cache():
     makefile = _read("Makefile")
 

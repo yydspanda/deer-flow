@@ -304,13 +304,13 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
   - command：`backend/scripts/soc_daemon_entrypoint.sh`
   - healthcheck：`backend/scripts/soc_daemon_healthcheck.sh`
   - default metric sink：`SOC_DAEMON_METRIC_JSONL=stderr`
-- 当前限制：
-  - Dockerfile `UV_EXTRAS` 当前按单个 extra 传入，overlay 默认使用 `kafka`。
-  - 若生产镜像需要同时安装 `postgres` + `kafka` extras，下一步应增强 Dockerfile multi-extra 支持。
+- 当前 build contract：
+  - `backend/Dockerfile` 支持 comma/whitespace 分隔的 `UV_EXTRAS`，例如 `postgres,kafka` 或 `postgres kafka`。
+  - overlay 默认 `SOC_DAEMON_UV_EXTRAS=postgres,kafka`，生产镜像同时具备 PostgreSQL 和 Kafka 依赖。
 
 ## 下一刀建议
 
-进入 Dockerfile multi-extra support / deployment hardening：
+进入 deployment hardening / K8s template planning：
 
 - 当前 `soc daemon consume` 是有限 poll，适合 smoke/手工验证。
 - 当前 `soc daemon run` 是长驻 loop shell，已具备 graceful stop、结构化 counters、metrics 和 error backoff。
@@ -318,9 +318,10 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 - 当前 run-mode smoke 已覆盖真实 broker path。
 - 当前 JSONL metric sink 已能被日志系统采集。
 - 当前 production compose overlay 已是显式 opt-in。
+- 当前 Dockerfile multi-extra support 已完成。
 - 后续建议：
-  - 让 Dockerfile 支持多个 backend extras，例如 `postgres,kafka` 或 `postgres kafka`。
-  - 再补 production/K8s deployment hardening：secret 注入、resource limits、restart policy、日志采集标签。
+  - 补 production/K8s deployment hardening：secret 注入、resource limits、restart policy、日志采集标签。
+  - 明确 Docker Compose overlay 与 K8s deployment 的配置等价关系。
 
 ## Prometheus Deferred Plan
 
