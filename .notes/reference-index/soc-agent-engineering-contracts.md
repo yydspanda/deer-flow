@@ -387,6 +387,15 @@ Kafka daemon / consumer adapter 约束：
 - dead-letter payload 必须使用 `soc.kafka_dead_letter.v1`，至少包含 failed_at、topic、partition、offset、key、headers、value、error_type、error_message；payload 不得包含 secret。
 - 真实 consumer CLI/daemon 入口只能做配置读取、adapter 构造、runner loop 和 graceful shutdown；业务处理仍归 `SocDaemonService`。
 - 后续并发、重试阈值、lag metrics、readiness 和 worker pool 只能在 runner/adapter 层扩展，不得改变 core service 的单条 message contract。
+- Kafka worker pool / concurrency 约束：
+  - 默认生产安全模式必须保持 `worker_concurrency=1`，等价当前串行 runner。
+  - Kafka consumer poll/commit/pause/resume ownership 必须留在 poller/controller；worker 不得直接调用 Kafka consumer。
+  - worker 只能调用 `SocDaemonService.process_message()` 或后续等价 core service，不得直接写 repository、commit offset 或写 dead-letter。
+  - offset commit 必须 partition-aware，只能推进到同一 partition 已连续完成的最大 offset + 1。
+  - mapper/service failure 必须先 dead-letter 成功，再把该 offset 标记为 completed；dead-letter 失败时不得 commit 或越过该 offset。
+  - 并发前必须补幂等写入边界，确保同一 `kafka:{topic}:{partition}:{offset}` 重放不会重复污染 summary、approval inbox、audit 或 memory。
+  - worker pool 必须 bounded；必须有 max in-flight、queue depth、shutdown timeout 和 backpressure 语义。
+  - Kafka worker concurrency 不等于 LLM concurrency；LLM analyzer 必须有独立限流。
 
 Investigation context 约束：
 

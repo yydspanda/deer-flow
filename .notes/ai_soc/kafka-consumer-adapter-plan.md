@@ -322,7 +322,7 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 - 当前 K8s opt-in template 已提供 deployment contract 示例。
 - 后续建议：
   - 用真实环境参数验证 K8s manifest：image、namespace、secret manager、日志采集标签、resource sizing。
-  - 等吞吐模型明确后再补 worker pool / concurrency。
+  - worker pool / concurrency 已先做规划，见 `.notes/ai_soc/kafka-worker-pool-concurrency-plan.md`；实现前先补 partition commit tracker 和幂等写入边界。
 
 ## Prometheus Deferred Plan
 

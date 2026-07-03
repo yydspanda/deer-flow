@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon real-env validation or worker pool / concurrency planning |
+| 当前下一刀 | Kafka partition commit tracker or daemon idempotency hardening |
 
 ## Phase 1 切片计划
 
@@ -95,8 +95,32 @@
 | 59 | Kafka daemon production compose overlay | Done | 新增 `docker-compose.soc-daemon.yaml`，显式 opt-in 启动 SOC daemon；默认不进入 DeerFlow 主 docker 流程 |
 | 60 | Kafka daemon Dockerfile multi-extra support | Done | `backend/Dockerfile` 支持 comma/whitespace 分隔 `UV_EXTRAS`；SOC daemon overlay 默认 `postgres,kafka` |
 | 61 | Kafka daemon K8s deployment contract | Done | 新增 opt-in K8s template，固定 ConfigMap/Secret/probes/resources/logging 标签；Compose 与 K8s 配置等价关系写入 runbook |
+| 62 | Kafka worker pool / concurrency planning | Done | 新增并发规划文档，明确 poller ownership、partition-aware commit、bounded in-flight、幂等前置和 LLM 独立限流 |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka worker pool / concurrency planning 切片
+
+- 背景：
+  - 目前无真实 Kafka/DB/K8s 参数，不适合直接实现并发。
+  - 当前串行 runner 语义清楚：poll -> map -> process -> commit/dead-letter。
+  - 后续并发最大风险是 offset 越过未完成消息、dead-letter 失败后错误 commit、重复写 summary/approval/audit。
+- 新增：
+  - `.notes/ai_soc/kafka-worker-pool-concurrency-plan.md`
+- 决策：
+  - 默认保持 `worker_concurrency=1`，等价当前串行安全模式。
+  - 并发只能在 runner/daemon/controller 层扩展，不进入 `SocDaemonService` 内部。
+  - Kafka poll/commit/pause/resume ownership 必须留在 poller/controller。
+  - worker 不直接 commit、不直接 dead-letter，只返回结构化 result。
+  - commit 必须 partition-aware，只能推进同一 partition 连续完成 offsets。
+  - 并发前必须先补 daemon idempotency hardening，确保同一 `kafka:{topic}:{partition}:{offset}` 重放不会重复污染数据。
+  - LLM concurrency 与 Kafka worker concurrency 分离。
+- 同步：
+  - README 增加文档入口。
+  - engineering contracts 增加 worker pool / concurrency 约束。
+  - solution / kafka plan 更新下一步。
+- 下一步：
+  - 若继续 Kafka daemon 可靠性，优先做 `PartitionCommitTracker` 纯单测切片，或先做 daemon idempotency hardening。
 
 ### 2026-07-03 — Kafka daemon K8s deployment contract 切片
 
