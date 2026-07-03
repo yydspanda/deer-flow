@@ -220,6 +220,18 @@ def _build_parser() -> argparse.ArgumentParser:
         default=1000,
         help="Sleep duration after idle polls; use 0 for tests/local validation",
     )
+    daemon_run.add_argument(
+        "--error-backoff-ms",
+        type=int,
+        default=1000,
+        help="Sleep duration after daemon poll/runtime errors; use 0 for tests/local validation",
+    )
+    daemon_run.add_argument(
+        "--max-consecutive-errors",
+        type=int,
+        default=3,
+        help="Stop after this many consecutive daemon errors; use 0 to disable the cap",
+    )
     daemon_run.add_argument("--include-results", action="store_true", help="Include per-loop results in output JSON")
     daemon_run.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(daemon_run)
@@ -570,6 +582,12 @@ def _daemon_run(args: argparse.Namespace) -> int:
     if args.idle_sleep_ms < 0:
         print("error: --idle-sleep-ms must be >= 0", file=sys.stderr)
         return 2
+    if args.error_backoff_ms < 0:
+        print("error: --error-backoff-ms must be >= 0", file=sys.stderr)
+        return 2
+    if args.max_consecutive_errors < 0:
+        print("error: --max-consecutive-errors must be >= 0", file=sys.stderr)
+        return 2
 
     settings = KafkaConsumerSettings.from_env()
     try:
@@ -591,6 +609,8 @@ def _daemon_run(args: argparse.Namespace) -> int:
         runner=runner,
         stop_signal=stop_signal,
         idle_sleep_seconds=args.idle_sleep_ms / 1000,
+        error_backoff_seconds=args.error_backoff_ms / 1000,
+        max_consecutive_errors=args.max_consecutive_errors or None,
     )
 
     try:
@@ -757,6 +777,16 @@ def _kafka_daemon_run_payload(
             "dead_lettered": result.dead_lettered_count,
             "idle": result.idle_count,
             "committed": result.committed_count,
+        },
+        "metrics": {
+            "started_at": result.started_at.isoformat(),
+            "stopped_at": result.stopped_at.isoformat(),
+            "error_count": result.error_count,
+            "consecutive_error_count": result.consecutive_error_count,
+            "last_success_at": result.last_success_at.isoformat() if result.last_success_at else None,
+            "last_error_at": result.last_error_at.isoformat() if result.last_error_at else None,
+            "last_error_type": result.last_error_type,
+            "last_error_message": result.last_error_message,
         },
     }
     if include_results:

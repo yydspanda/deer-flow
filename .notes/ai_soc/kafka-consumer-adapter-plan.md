@@ -221,16 +221,41 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
   - 当前 poll 返回后退出 loop。
   - controller 在 `finally` 中 close runner/consumer port。
 
+已完成 daemon metrics/backoff：
+
+- `KafkaDaemonRunResult` 暴露最小运行 metrics：
+  - `started_at`
+  - `stopped_at`
+  - `error_count`
+  - `consecutive_error_count`
+  - `last_success_at`
+  - `last_error_at`
+  - `last_error_type`
+  - `last_error_message`
+- `soc daemon run` 输出 `metrics` JSON 节点，schema 仍为 `soc.kafka_daemon_run_result.v1`。
+- `SocKafkaDaemonRunner` 对 poll/runtime 层异常做 backoff：
+  - 默认 `error_backoff_seconds=1.0`。
+  - 默认 `max_consecutive_errors=3`。
+  - 达到阈值后停止，`stop_reason=max_consecutive_errors_reached`。
+- CLI 参数：
+  - `--error-backoff-ms`
+  - `--max-consecutive-errors`
+- 约束：
+  - backoff 只处理 daemon loop / adapter runtime 异常。
+  - mapper/service failure 的 dead-letter + commit 语义仍属于 `SocKafkaConsumerRunner`，不在 daemon controller 重写。
+  - `--error-backoff-ms 0` 和 `--max-consecutive-errors 0` 只应用于测试/本地验证或明确的外部 supervisor 托管场景。
+
 ## 下一刀建议
 
-进入 metrics / backoff / production supervisor 规划：
+进入 production supervisor / Docker entrypoint 规划：
 
 - 当前 `soc daemon consume` 是有限 poll，适合 smoke/手工验证。
-- 当前 `soc daemon run` 是长驻 loop shell，已具备 graceful stop 和结构化 counters。
+- 当前 `soc daemon run` 是长驻 loop shell，已具备 graceful stop、结构化 counters、metrics 和 error backoff。
 - 生产 daemon 仍需要：
-  - continuous counters / last_success_at / last_error_at。
-  - adapter error retry/backoff，避免 broker/DB 短暂故障时热循环。
-  - metrics event sink，先可输出 JSON log，后续接 Prometheus。
-  - readiness endpoint/command 继续复用 `build_kafka_daemon_status()`。
+  - 进程启动命令和环境变量约定。
   - Docker entrypoint / supervisor 约定。
+  - healthcheck 使用 `soc daemon status --check-broker`。
+  - stdout/stderr JSON log 采集规范。
+  - metrics event sink，先输出 JSON log，后续接 Prometheus。
+  - readiness endpoint/command 继续复用 `build_kafka_daemon_status()`。
   - 隔离 topic smoke，避免默认 topic 历史消息干扰验收。

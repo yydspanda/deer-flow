@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon metrics/backoff/production supervisor planning |
+| 当前下一刀 | Kafka daemon production supervisor / Docker entrypoint planning |
 
 ## Phase 1 切片计划
 
@@ -88,8 +88,48 @@
 | 52 | Kafka bounded runner loop counters | Done | `SocKafkaConsumerRunner.run()` 下沉有限循环，返回 processed/dead_lettered/idle/committed counters；CLI 输出 counters，为后续 metrics/readiness 铺路 |
 | 53 | Kafka daemon status/readiness contract | Done | 新增 `soc daemon status`，输出 versioned JSON；检查 database readiness，支持显式 `--check-broker` 轻量 broker poll |
 | 54 | Kafka daemon long-running run loop | Done | 新增 `SocKafkaDaemonRunner` 和 `soc daemon run`；支持 SIGINT/SIGTERM graceful stop、idle sleep、bounded local validation 和结构化 run result |
+| 55 | Kafka daemon metrics/backoff | Done | `soc daemon run` 输出 run metrics；adapter/runtime error 会 backoff，可配置连续错误阈值，避免故障热循环 |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka daemon metrics/backoff 切片
+
+- 背景：
+  - `soc daemon run` 已具备长驻 loop 和 graceful stop。
+  - 生产运行还需要最小 metrics 和错误退避，否则 broker/DB 短暂故障可能造成热循环，且 supervisor 无法判断运行质量。
+- 新增：
+  - `KafkaDaemonRunResult` 运行 metrics：
+    - `started_at`
+    - `stopped_at`
+    - `error_count`
+    - `consecutive_error_count`
+    - `last_success_at`
+    - `last_error_at`
+    - `last_error_type`
+    - `last_error_message`
+  - `SocKafkaDaemonRunner(error_backoff_seconds=..., max_consecutive_errors=...)`
+  - CLI 参数：
+    - `soc daemon run --error-backoff-ms`
+    - `soc daemon run --max-consecutive-errors`
+- 行为：
+  - `SocKafkaDaemonRunner` 捕获 poll/runtime 层异常，记录 metrics，并在继续前按 `error_backoff_seconds` sleep。
+  - 达到 `max_consecutive_errors` 后停止，`stop_reason=max_consecutive_errors_reached`。
+  - `--max-consecutive-errors 0` 表示不设连续错误上限。
+  - `--error-backoff-ms 0` 仅用于测试/本地快速验收；生产不应设为 0。
+  - per-record 语义不变：mapper/service failure 仍由 `SocKafkaConsumerRunner.process_record()` 进入 dead-letter + commit；daemon controller 不直接处理业务消息。
+  - 输出 schema 仍是 `soc.kafka_daemon_run_result.v1`，新增 `metrics` 节点；原 `counters` 保持 processed/dead_lettered/idle/committed 不变。
+- 已补充测试：
+  - transient error 后 backoff 并继续处理下一轮。
+  - 达到连续错误阈值后停止。
+  - invalid backoff / consecutive error 参数 fail-fast。
+  - CLI run 输出 metrics。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/daemon/kafka_daemon.py soc_agent/cli.py tests/test_soc_daemon_kafka_daemon.py tests/test_soc_agent_runtime.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/daemon/__init__.py soc_agent/daemon/kafka_daemon.py soc_agent/cli.py tests/test_soc_daemon_kafka_daemon.py tests/test_soc_agent_runtime.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_kafka_daemon.py tests/test_soc_daemon_kafka_status.py tests/test_soc_daemon_kafka_runner.py tests/test_soc_daemon_kafka_config.py tests/test_soc_daemon_kafka_mapper.py tests/test_soc_agent_runtime.py::test_cli_daemon_run_disabled_by_default_outputs_bounded_run tests/test_soc_agent_runtime.py::test_cli_daemon_run_rejects_invalid_loop_args tests/test_soc_agent_runtime.py::test_cli_daemon_consume_disabled_by_default_outputs_idle tests/test_soc_agent_runtime.py::test_cli_daemon_consume_enabled_requires_database_before_kafka tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli daemon run --max-loops 2 --idle-sleep-ms 0 --error-backoff-ms 0 --include-results --pretty`
+- 下一步：
+  - 明确 production supervisor / Docker entrypoint 约定：进程命令、env contract、healthcheck、readiness 调用、日志采集和隔离 topic smoke。
 
 ### 2026-07-03 — Kafka daemon long-running run loop 切片
 

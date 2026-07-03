@@ -822,6 +822,9 @@ def test_cli_daemon_run_disabled_by_default_outputs_bounded_run(monkeypatch: pyt
         "idle": 2,
         "committed": 0,
     }
+    assert payload["metrics"]["error_count"] == 0
+    assert payload["metrics"]["consecutive_error_count"] == 0
+    assert payload["metrics"]["last_error_type"] is None
     assert [item["status"] for item in payload["results"]] == ["idle", "idle"]
 
 
@@ -835,6 +838,14 @@ def test_cli_daemon_run_rejects_invalid_loop_args(monkeypatch: pytest.MonkeyPatc
     assert main(["daemon", "run", "--idle-sleep-ms", "-1"]) == 2
     second = capsys.readouterr()
     assert "--idle-sleep-ms must be >= 0" in second.err
+
+    assert main(["daemon", "run", "--error-backoff-ms", "-1"]) == 2
+    third = capsys.readouterr()
+    assert "--error-backoff-ms must be >= 0" in third.err
+
+    assert main(["daemon", "run", "--max-consecutive-errors", "-1"]) == 2
+    fourth = capsys.readouterr()
+    assert "--max-consecutive-errors must be >= 0" in fourth.err
 
 
 def test_cli_daemon_status_outputs_readiness_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
