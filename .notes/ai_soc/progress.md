@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka partition commit tracker or daemon idempotency hardening |
+| 当前下一刀 | Kafka daemon idempotency hardening |
 
 ## Phase 1 切片计划
 
@@ -96,8 +96,31 @@
 | 60 | Kafka daemon Dockerfile multi-extra support | Done | `backend/Dockerfile` 支持 comma/whitespace 分隔 `UV_EXTRAS`；SOC daemon overlay 默认 `postgres,kafka` |
 | 61 | Kafka daemon K8s deployment contract | Done | 新增 opt-in K8s template，固定 ConfigMap/Secret/probes/resources/logging 标签；Compose 与 K8s 配置等价关系写入 runbook |
 | 62 | Kafka worker pool / concurrency planning | Done | 新增并发规划文档，明确 poller ownership、partition-aware commit、bounded in-flight、幂等前置和 LLM 独立限流 |
+| 63 | Kafka partition commit tracker | Done | 新增纯内存 `PartitionCommitTracker`，锁定乱序完成、dead-letter pending、多 partition 和已提交边界的 commit 推进规则 |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka partition commit tracker 切片
+
+- 背景：
+  - worker pool 并发前必须先锁住 partition-aware commit 推进规则。
+  - 当前不改变串行 runner，也不连接真实 Kafka。
+- 新增：
+  - `backend/soc_agent/daemon/kafka_commit_tracker.py`
+  - `backend/tests/test_soc_daemon_kafka_commit_tracker.py`
+- 行为：
+  - `PartitionCommitTracker` 只做内存状态计算，不 poll、不 commit、不 dead-letter、不调用 core service。
+  - `mark_in_flight()` 注册 worker in-flight offset。
+  - `mark_processed()` 只在同 partition 连续 offset 完成时返回 `KafkaCommitAdvance`。
+  - `mark_dead_letter_pending()` 将失败 offset 标记为不可提交。
+  - `mark_dead_lettered()` 只在 dead-letter 成功后把 offset 纳入可推进范围。
+  - 多 partition 独立推进。
+  - 已推进边界之前的 offset 会被拒绝。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/daemon/__init__.py soc_agent/daemon/kafka_commit_tracker.py tests/test_soc_daemon_kafka_commit_tracker.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_kafka_commit_tracker.py tests/test_soc_daemon_kafka_runner.py tests/test_soc_daemon_kafka_daemon.py`
+- 下一步：
+  - 做 daemon idempotency hardening，确保同一 `kafka:{topic}:{partition}:{offset}` 重放不会重复污染 summary、approval inbox、audit 或后续 memory。
 
 ### 2026-07-03 — Kafka worker pool / concurrency planning 切片
 

@@ -389,6 +389,7 @@ Kafka daemon / consumer adapter 约束：
 - 后续并发、重试阈值、lag metrics、readiness 和 worker pool 只能在 runner/adapter 层扩展，不得改变 core service 的单条 message contract。
 - Kafka worker pool / concurrency 约束：
   - 默认生产安全模式必须保持 `worker_concurrency=1`，等价当前串行 runner。
+  - `PartitionCommitTracker` 是后续并发 controller 的 commit 推进原语；它只能做内存状态计算，不能 poll、commit、dead-letter 或调用 core service。
   - Kafka consumer poll/commit/pause/resume ownership 必须留在 poller/controller；worker 不得直接调用 Kafka consumer。
   - worker 只能调用 `SocDaemonService.process_message()` 或后续等价 core service，不得直接写 repository、commit offset 或写 dead-letter。
   - offset commit 必须 partition-aware，只能推进到同一 partition 已连续完成的最大 offset + 1。

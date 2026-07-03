@@ -1,6 +1,6 @@
 # SOC Kafka Worker Pool / Concurrency Plan
 
-> 状态：Planning。当前不立即实现并发代码；先固定语义边界，避免后续为了吞吐破坏 Kafka offset、dead-letter、审批和审计可靠性。
+> 状态：Planning + first primitive implemented。当前不立即实现并发代码；先固定语义边界，避免后续为了吞吐破坏 Kafka offset、dead-letter、审批和审计可靠性。
 
 ## 背景
 
@@ -223,6 +223,7 @@ commit(topic, partition, next_committable_offset)
 1. **PartitionCommitTracker**
    - 纯内存、纯单测，不接 Kafka。
    - 验证 partition ordered commit 语义。
+   - 当前状态：Done，已落地 `backend/soc_agent/daemon/kafka_commit_tracker.py`。
 
 2. **WorkerPoolResult contract**
    - dataclass/Pydantic schema，先不启动线程。
@@ -248,4 +249,3 @@ commit(topic, partition, next_committable_offset)
 - 不让 worker 直接操作 Kafka consumer。
 - 不把 LLM 并发和 Kafka worker 并发绑死。
 - 不为了吞吐绕过 review / approval / audit。
-

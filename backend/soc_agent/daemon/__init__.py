@@ -7,6 +7,12 @@ from soc_agent.daemon.kafka_adapter import (
     NullKafkaConsumerPort,
     build_kafka_consumer_port,
 )
+from soc_agent.daemon.kafka_commit_tracker import (
+    KafkaCommitAdvance,
+    KafkaPartitionRef,
+    PartitionCommitStateSnapshot,
+    PartitionCommitTracker,
+)
 from soc_agent.daemon.kafka_config import KafkaConsumerSettings, KafkaSecurityProtocol
 from soc_agent.daemon.kafka_daemon import (
     JsonLineKafkaDaemonMetricSink,
@@ -25,6 +31,7 @@ __all__ = [
     "KafkaAdapterNotConfiguredError",
     "KafkaConsumerPort",
     "KafkaConsumerSettings",
+    "KafkaCommitAdvance",
     "KafkaDaemonBrokerStatus",
     "KafkaDaemonDatabaseStatus",
     "KafkaDaemonMetricSink",
@@ -32,12 +39,15 @@ __all__ = [
     "KafkaDaemonStatus",
     "KafkaDaemonStopSignal",
     "KafkaMapperError",
+    "KafkaPartitionRef",
     "KafkaRecord",
     "KafkaRunnerLoopResult",
     "KafkaRunnerProcessResult",
     "KafkaSecurityProtocol",
     "JsonLineKafkaDaemonMetricSink",
     "NullKafkaConsumerPort",
+    "PartitionCommitStateSnapshot",
+    "PartitionCommitTracker",
     "SocKafkaDaemonRunner",
     "SocKafkaConsumerRunner",
     "build_kafka_consumer_port",
