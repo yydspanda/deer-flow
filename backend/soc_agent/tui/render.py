@@ -7,7 +7,7 @@ from rich.table import Table
 from rich.text import Text
 
 from deerflow.tui.theme import THEME
-from soc_agent.contracts import InvestigationContext, ReviewQueueItem
+from soc_agent.contracts import InvestigationContext, ReviewQueueItem, SocAgentApprovalGrant, SocAgentApprovalRequest
 from soc_agent.tui.command_registry import Command
 from soc_agent.tui.view_state import ReviewViewState
 
@@ -30,18 +30,28 @@ def render_status(state: ReviewViewState) -> Text:
         text.append("* ready", style=f"bold {THEME.accent}")
     text.append("   ")
     text.append(f"{len(state.items)} open", style=THEME.muted)
+    text.append("   ")
+    text.append(f"{len(state.approval_requests)} approvals", style=THEME.muted)
     if state.selected_queue_id:
         text.append("   ")
         text.append(state.selected_queue_id, style=THEME.primary)
+    if state.selected_approval_request_id:
+        text.append("   ")
+        text.append(state.selected_approval_request_id, style=THEME.primary)
     text.append("   /help", style=THEME.dim)
     return text
 
 
 def render_main(state: ReviewViewState) -> RenderableType:
     blocks: list[RenderableType] = [render_queue_table(state.items, selected_queue_id=state.selected_queue_id)]
+    blocks.append(Text(""))
+    blocks.append(render_approval_table(state.approval_requests, selected_approval_request_id=state.selected_approval_request_id))
     if state.context is not None:
         blocks.append(Text(""))
         blocks.append(render_context(state.context))
+    if state.approval_request is not None:
+        blocks.append(Text(""))
+        blocks.append(render_approval_request(state.approval_request, grant=state.approval_grant))
     if state.notices:
         blocks.append(Text(""))
         blocks.extend(_render_notice(notice.text, notice.tone) for notice in state.notices)
@@ -99,6 +109,58 @@ def render_context(context: InvestigationContext) -> RenderableType:
     if context.similar_alerts:
         table.add_row("similar", ", ".join(f"{match.summary.alert_id}:{match.score:.0f}" for match in context.similar_alerts[:5]))
     return Group(Text("Investigation Context", style=f"bold {THEME.primary}"), table)
+
+
+def render_approval_table(
+    requests: tuple[SocAgentApprovalRequest, ...],
+    *,
+    selected_approval_request_id: str | None = None,
+) -> Table:
+    table = Table(expand=True)
+    table.add_column("Approval", style=THEME.primary, no_wrap=True)
+    table.add_column("Risk", no_wrap=True)
+    table.add_column("Route", no_wrap=True)
+    table.add_column("Action", no_wrap=True)
+    table.add_column("Requested By", no_wrap=True)
+    table.add_column("Reason")
+
+    if not requests:
+        table.add_row("-", "-", "-", "-", "-", "No pending approval requests.")
+        return table
+
+    for request in requests:
+        marker = ">" if request.approval_request_id == selected_approval_request_id else " "
+        table.add_row(
+            f"{marker} {request.approval_request_id}",
+            request.risk_level.value,
+            request.route,
+            request.action,
+            request.requested_by.actor_id,
+            request.reason,
+        )
+    return table
+
+
+def render_approval_request(
+    approval_request: SocAgentApprovalRequest,
+    *,
+    grant: SocAgentApprovalGrant | None = None,
+) -> RenderableType:
+    table = Table.grid(expand=True)
+    table.add_column(width=24, style=THEME.dim)
+    table.add_column(ratio=1)
+    table.add_row("approval_request_id", approval_request.approval_request_id)
+    table.add_row("permission_decision_id", approval_request.permission_decision_id)
+    table.add_row("route", approval_request.route)
+    table.add_row("action", approval_request.action)
+    table.add_row("risk", approval_request.risk_level.value)
+    table.add_row("requested_by", approval_request.requested_by.actor_id)
+    table.add_row("reason", approval_request.reason)
+    if grant is not None and grant.approval_request_id == approval_request.approval_request_id:
+        table.add_row("grant", grant.approval_grant_id)
+        table.add_row("execution_token", grant.execution_token_id)
+        table.add_row("expires_at", grant.expires_at.isoformat())
+    return Group(Text("Approval Request", style=f"bold {THEME.primary}"), table)
 
 
 def render_palette(items: list[Command], index: int, limit: int = 8) -> RenderableType:

@@ -22,6 +22,9 @@ class Resolution:
 BUILTIN_COMMANDS: tuple[Command, ...] = (
     Command("help", "Show review commands"),
     Command("refresh", "Reload open review queue"),
+    Command("approvals", "Reload pending approval requests"),
+    Command("approval", "Open approval request: /approval APR-..."),
+    Command("approve", "Approve request: /approve APR-... reason"),
     Command("open", "Open investigation context: /open REV-..."),
     Command("close", "Close item: /close REV-... reason"),
     Command("correct", "Correct run: /correct RUN-... verdict reason"),

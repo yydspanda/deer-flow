@@ -226,7 +226,7 @@ Replay 不覆盖旧 run；它创建一个新 run，并通过 `replay_of_run_id` 
 |---|---|---|
 | CLI | `soc analyze --persist` | 运行分析并写入 run/summary/review/audit |
 | CLI | `soc show` / `soc replay` / `soc correct` | 查看、重放、人工纠正 |
-| CLI/TUI | `soc review tui` | ReviewQueue thin client |
+| CLI/TUI | `soc review tui` | ReviewQueue thin client；approval inbox pending request 列表、详情、approve token 生成 |
 | Web | `/workspace/soc/review` | ReviewQueue 页面；审批动作区可从 approval inbox 选择 pending request 后 approve / dry-run / execute，仍保留手工 JSON fallback |
 | Gateway | `/api/soc/review/*` | review list/context/close/correct |
 | Gateway | `/api/soc/approvals/requests*` | approval inbox create/list/get |
@@ -242,6 +242,6 @@ Replay 不覆盖旧 run；它创建一个新 run，并通过 `replay_of_run_id` 
 
 - Kafka daemon 自动消费预警流，批量调用 `SocAnalysisService`；当前仅有 approval request submit 边界，尚未实现 consumer。
 - SOC Lead Agent middleware 拦截高风险 tool/action call；当前 chat service 已能在注入 approval service 时写入 approval inbox，但真实 DeerFlow middleware 尚未接入。
-- Approval inbox 的 TUI 消费入口：从 pending request 选择审批，而不是手工粘贴 JSON。
+- Approval inbox 的 TUI dry-run / execute 命令；当前 TUI 已支持 pending request 展示和 approve token 生成。
 - Action adapter registry：把 `response.block_ip`、`edr.isolate_host`、F5 策略、Kafka 处置事件等真实外部动作注册到 execute boundary 后面。
 - 真实外部副作用的补偿、失败重试、审批后超时、adapter-level audit。

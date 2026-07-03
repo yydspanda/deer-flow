@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | TUI approval inbox consumption |
+| 当前下一刀 | TUI approved-action dry-run / execute command |
 
 ## Phase 1 切片计划
 
@@ -74,8 +74,39 @@
 | 38 | approval request inbox API | Done | 新增 `soc_approval_requests` 持久化表和 `/api/soc/approvals/requests` inbox API，供 Kafka daemon、Agent middleware、Web/TUI 共用 |
 | 39 | approval inbox Web consumption | Done | Web 审批动作面板从 approval inbox 拉取 pending request，支持列表、详情、approve、dry-run、execute |
 | 40 | Agent/daemon approval inbox write boundary | Done | `SocAgentChatService` 可持久化高风险 approval request；`SocDaemonService` 暴露同一 approval inbox 写入边界；真实 Kafka consumer / DeerFlow middleware 仍后续接入 |
+| 41 | approval inbox TUI consumption | Done | `soc review tui` 展示 pending approval request，支持打开详情并 approve 生成 execution token；不执行真实动作 |
 
 ## 进度记录
+
+### 2026-07-03 — approval inbox TUI consumption 切片
+
+- 背景：
+  - approval inbox 已有 API 和 Web 消费端。
+  - 值班/本地运维场景还需要 terminal workbench 从 pending request 选择审批，避免手工粘贴 JSON。
+- 新增：
+  - `soc review tui` 增加 approval inbox 区块，展示 pending approval requests。
+  - 新增 slash commands：
+    - `/approvals`：重新加载 pending approval requests。
+    - `/approval APR-...`：打开 approval request 详情。
+    - `/approve APR-... reason`：用 TUI approver context 生成一次性 execution token。
+  - `run_review_tui()` 支持注入 `SocAgentApprovalService`。
+  - CLI `soc review tui` 使用同一个 SQLAlchemy repository-backed approval service。
+  - CLI `soc chat tui` 注入 approval service，使高风险 chat action 生成的 approval request 能进入同一个 inbox。
+- 边界：
+  - TUI 只调用 `SocAgentApprovalService`，不直接访问 repository。
+  - TUI approve 只生成 `SocAgentApprovalGrant.execution_token_id`，不执行外部动作。
+  - TUI 本地 MVP approver actor 固定为 `soc-review-tui` + `soc_approver`；后续接真实用户体系时替换为认证/角色配置。
+- 已补充测试：
+  - slash command registry 覆盖 `/approvals`、`/approval`、`/approve`。
+  - TUI view state 覆盖 approval request / grant。
+  - TUI render 覆盖 approval inbox、approval request detail、execution token 展示。
+  - TUI approval context 覆盖 `soc_approver` role。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/tui/app.py soc_agent/tui/runner.py soc_agent/tui/view_state.py soc_agent/tui/render.py soc_agent/tui/command_registry.py soc_agent/cli.py tests/test_soc_review_tui.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/tui/app.py soc_agent/tui/runner.py soc_agent/tui/view_state.py soc_agent/tui/render.py soc_agent/tui/command_registry.py soc_agent/cli.py tests/test_soc_review_tui.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_review_tui.py tests/test_soc_tui_chat_app.py tests/test_soc_agent_service.py`
+- 下一步：
+  - 补 TUI dry-run / execute command，复用 `SocAgentApprovalService.dry_run_approved_action()` 和 `execute_approved_action()`，保持 execute 必须显式 idempotency key。
 
 ### 2026-07-03 — Agent/daemon approval inbox write boundary 切片
 

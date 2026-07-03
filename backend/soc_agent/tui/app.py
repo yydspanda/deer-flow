@@ -18,12 +18,21 @@ from soc_agent.contracts import (
     ServiceRequestContext,
     Verdict,
 )
-from soc_agent.core import SocReviewService, SocServiceError
+from soc_agent.core import SocAgentApprovalService, SocReviewService, SocServiceError
 from soc_agent.tui.command_registry import filter_commands, resolve
 from soc_agent.tui.render import render_header, render_main, render_palette, render_status
-from soc_agent.tui.view_state import add_notice, initial_state, select_context, set_items, set_loading
+from soc_agent.tui.view_state import (
+    add_notice,
+    initial_state,
+    select_approval_request,
+    select_context,
+    set_approval_grant,
+    set_approval_requests,
+    set_items,
+    set_loading,
+)
 
-_HELP_TEXT = "Commands: /refresh  /open REV-...  /close REV-... reason  /correct RUN-... verdict reason  /quit"
+_HELP_TEXT = "Commands: /refresh  /approvals  /approval APR-...  /approve APR-... reason  /open REV-...  /close REV-... reason  /correct RUN-... verdict reason  /quit"
 
 
 class SocReviewTUI(App):
@@ -86,9 +95,16 @@ class SocReviewTUI(App):
         Binding("escape", "escape", show=False, priority=True),
     ]
 
-    def __init__(self, service: SocReviewService, *, database_label: str = "") -> None:
+    def __init__(
+        self,
+        service: SocReviewService,
+        *,
+        approval_service: SocAgentApprovalService | None = None,
+        database_label: str = "",
+    ) -> None:
         super().__init__()
         self.service = service
+        self.approval_service = approval_service
         self.database_label = database_label
         self.state = initial_state()
         self._palette_open = False
@@ -106,6 +122,7 @@ class SocReviewTUI(App):
     def on_mount(self) -> None:
         self._refresh_all()
         self._load_queue()
+        self._load_approval_requests()
         self.query_one("#composer", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -137,6 +154,13 @@ class SocReviewTUI(App):
             self._notice(_HELP_TEXT)
         elif name == "refresh":
             self._load_queue()
+            self._load_approval_requests()
+        elif name == "approvals":
+            self._load_approval_requests()
+        elif name == "approval":
+            self._open_approval_request(args)
+        elif name == "approve":
+            self._approve_request(args)
         elif name == "open":
             self._open_context(args)
         elif name == "close":
@@ -157,6 +181,20 @@ class SocReviewTUI(App):
         self.state = set_items(self.state, items)
         self._refresh_all()
 
+    def _load_approval_requests(self) -> None:
+        if self.approval_service is None:
+            self._notice("Approval service is not configured.", tone="error")
+            return
+        self.state = set_loading(self.state)
+        self._refresh_status()
+        try:
+            requests = self.approval_service.list_requests(status="pending", limit=50)
+        except SocServiceError as exc:
+            self._notice(str(exc), tone="error")
+            return
+        self.state = set_approval_requests(self.state, requests)
+        self._refresh_all()
+
     def _open_context(self, queue_id: str) -> None:
         queue_id = queue_id.strip()
         if not queue_id:
@@ -169,6 +207,45 @@ class SocReviewTUI(App):
             return
         self.state = select_context(self.state, context)
         self._refresh_all()
+
+    def _open_approval_request(self, approval_request_id: str) -> None:
+        approval_request_id = approval_request_id.strip()
+        if not approval_request_id:
+            self._notice("Usage: /approval APR-...", tone="error")
+            return
+        if self.approval_service is None:
+            self._notice("Approval service is not configured.", tone="error")
+            return
+        try:
+            approval_request = self.approval_service.get_request(approval_request_id)
+        except SocServiceError as exc:
+            self._notice(str(exc), tone="error")
+            return
+        self.state = select_approval_request(self.state, approval_request)
+        self._refresh_all()
+
+    def _approve_request(self, args: str) -> None:
+        approval_request_id, _, reason = args.partition(" ")
+        if not approval_request_id or not reason.strip():
+            self._notice("Usage: /approve APR-... reason", tone="error")
+            return
+        if self.approval_service is None:
+            self._notice("Approval service is not configured.", tone="error")
+            return
+        try:
+            approval_request = self.approval_service.get_request(approval_request_id)
+            grant = self.approval_service.approve(
+                approval_request,
+                context=_tui_approval_context(),
+                reason=reason.strip(),
+            )
+        except SocServiceError as exc:
+            self._notice(str(exc), tone="error")
+            return
+        self.state = select_approval_request(self.state, approval_request)
+        self.state = set_approval_grant(self.state, grant)
+        self._notice(f"Approved {approval_request_id}; token {grant.execution_token_id}.")
+        self._load_approval_requests()
 
     def _close_item(self, args: str) -> None:
         queue_id, _, reason = args.partition(" ")
@@ -299,3 +376,7 @@ def _parse_correct_args(args: str) -> tuple[str, str, str]:
 
 def _tui_request_context() -> ServiceRequestContext:
     return ServiceRequestContext(actor=ActorContext(actor_id="soc-review-tui", surface=EntrySurface.TUI))
+
+
+def _tui_approval_context() -> ServiceRequestContext:
+    return ServiceRequestContext(actor=ActorContext(actor_id="soc-review-tui", surface=EntrySurface.TUI, roles=["soc_approver"]))

@@ -13,7 +13,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from soc_agent.contracts import CorrectionCommand, ReviewQueueCloseCommand, ReviewQueueStatus, Verdict
-from soc_agent.core import SocAgentChatService, SocAnalysisService, SocNormalizationService, SocReviewService, SocServiceError
+from soc_agent.core import (
+    SocAgentApprovalService,
+    SocAgentChatService,
+    SocAnalysisService,
+    SocNormalizationService,
+    SocReviewService,
+    SocServiceError,
+)
 from soc_agent.db import (
     SqlAlchemyAlertRepository,
     create_soc_tables,
@@ -383,6 +390,7 @@ def _review_tui(args: argparse.Namespace) -> int:
                 audit_repository=repository,
                 review_queue_repository=repository,
             ),
+            approval_service=SocAgentApprovalService(grant_repository=repository, request_repository=repository),
             database_label=_database_label(args.database_url),
         )
     except ValueError as exc:
@@ -405,8 +413,9 @@ def _chat_tui(args: argparse.Namespace) -> int:
             audit_repository=repository,
             review_queue_repository=repository,
         )
+        approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
         run_chat_tui(
-            SocAgentChatService(review_service=review_service),
+            SocAgentChatService(review_service=review_service, approval_service=approval_service),
             initial_queue_id=args.queue_id,
             initial_message=args.message,
         )
