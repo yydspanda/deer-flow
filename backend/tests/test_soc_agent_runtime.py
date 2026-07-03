@@ -828,6 +828,21 @@ def test_cli_daemon_run_disabled_by_default_outputs_bounded_run(monkeypatch: pyt
     assert [item["status"] for item in payload["results"]] == ["idle", "idle"]
 
 
+def test_cli_daemon_run_can_emit_metric_jsonl_to_stderr(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.delenv("SOC_KAFKA_ENABLED", raising=False)
+
+    exit_code = main(["daemon", "run", "--max-loops", "1", "--idle-sleep-ms", "0", "--metric-jsonl", "stderr"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    payload = json.loads(captured.out)
+    assert payload["schema_version"] == "soc.kafka_daemon_run_result.v1"
+    events = [json.loads(line) for line in captured.err.splitlines()]
+    assert [event["event"] for event in events] == ["start", "result", "stop"]
+    assert all(event["schema_version"] == "soc.kafka_daemon_metric.v1" for event in events)
+    assert events[1]["status"] == "idle"
+
+
 def test_cli_daemon_run_rejects_invalid_loop_args(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     monkeypatch.delenv("SOC_KAFKA_ENABLED", raising=False)
 

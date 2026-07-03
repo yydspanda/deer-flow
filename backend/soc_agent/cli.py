@@ -24,6 +24,7 @@ from soc_agent.core import (
     SocServiceError,
 )
 from soc_agent.daemon import (
+    JsonLineKafkaDaemonMetricSink,
     KafkaAdapterError,
     KafkaAdapterNotConfiguredError,
     KafkaConsumerSettings,
@@ -231,6 +232,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="Stop after this many consecutive daemon errors; use 0 to disable the cap",
+    )
+    daemon_run.add_argument(
+        "--metric-jsonl",
+        choices=["stdout", "stderr"],
+        help="Emit daemon runtime metric events as JSON lines to the selected stream",
     )
     daemon_run.add_argument("--include-results", action="store_true", help="Include per-loop results in output JSON")
     daemon_run.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
@@ -611,6 +617,7 @@ def _daemon_run(args: argparse.Namespace) -> int:
         idle_sleep_seconds=args.idle_sleep_ms / 1000,
         error_backoff_seconds=args.error_backoff_ms / 1000,
         max_consecutive_errors=args.max_consecutive_errors or None,
+        metric_sink=_daemon_metric_sink(args.metric_jsonl),
     )
 
     try:
@@ -678,6 +685,16 @@ def _install_daemon_signal_handlers(stop_signal: KafkaDaemonStopSignal) -> dict[
 def _restore_signal_handlers(previous_handlers: dict[signal.Signals, Any]) -> None:
     for daemon_signal, previous_handler in previous_handlers.items():
         signal.signal(daemon_signal, previous_handler)
+
+
+def _daemon_metric_sink(target: str | None):
+    if target is None:
+        return None
+    if target == "stdout":
+        return JsonLineKafkaDaemonMetricSink(sys.stdout)
+    if target == "stderr":
+        return JsonLineKafkaDaemonMetricSink(sys.stderr)
+    raise ValueError(f"unsupported metric jsonl target: {target}")
 
 
 def _eval_offline(args: argparse.Namespace) -> int:

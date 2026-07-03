@@ -8,7 +8,13 @@ from soc_agent.daemon.kafka_adapter import (
     build_kafka_consumer_port,
 )
 from soc_agent.daemon.kafka_config import KafkaConsumerSettings, KafkaSecurityProtocol
-from soc_agent.daemon.kafka_daemon import KafkaDaemonRunResult, KafkaDaemonStopSignal, SocKafkaDaemonRunner
+from soc_agent.daemon.kafka_daemon import (
+    JsonLineKafkaDaemonMetricSink,
+    KafkaDaemonMetricSink,
+    KafkaDaemonRunResult,
+    KafkaDaemonStopSignal,
+    SocKafkaDaemonRunner,
+)
 from soc_agent.daemon.kafka_mapper import KafkaMapperError, KafkaRecord, map_kafka_record_to_daemon_message
 from soc_agent.daemon.kafka_runner import KafkaConsumerPort, KafkaRunnerLoopResult, KafkaRunnerProcessResult, SocKafkaConsumerRunner
 from soc_agent.daemon.kafka_status import KafkaDaemonBrokerStatus, KafkaDaemonDatabaseStatus, KafkaDaemonStatus, build_kafka_daemon_status
@@ -21,6 +27,7 @@ __all__ = [
     "KafkaConsumerSettings",
     "KafkaDaemonBrokerStatus",
     "KafkaDaemonDatabaseStatus",
+    "KafkaDaemonMetricSink",
     "KafkaDaemonRunResult",
     "KafkaDaemonStatus",
     "KafkaDaemonStopSignal",
@@ -29,6 +36,7 @@ __all__ = [
     "KafkaRunnerLoopResult",
     "KafkaRunnerProcessResult",
     "KafkaSecurityProtocol",
+    "JsonLineKafkaDaemonMetricSink",
     "NullKafkaConsumerPort",
     "SocKafkaDaemonRunner",
     "SocKafkaConsumerRunner",

@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon JSONL metric sink |
+| 当前下一刀 | Kafka daemon production overlay / Prometheus metrics planning |
 
 ## Phase 1 切片计划
 
@@ -91,8 +91,44 @@
 | 55 | Kafka daemon metrics/backoff | Done | `soc daemon run` 输出 run metrics；adapter/runtime error 会 backoff，可配置连续错误阈值，避免故障热循环 |
 | 56 | Kafka daemon production entrypoint / healthcheck | Done | 新增 `soc_daemon_entrypoint.sh`、`soc_daemon_healthcheck.sh` 和 production runbook；固定 env、healthcheck、日志采集和 Docker overlay 约定 |
 | 57 | Kafka isolated run-mode smoke | Done | `soc_kafka_smoke.py --mode run` 使用隔离 topic 验证 `soc daemon run` 真实 broker 消费、commit、summary 和 dead-letter |
+| 58 | Kafka daemon JSONL metric sink | Done | `soc daemon run --metric-jsonl stderr|stdout` 可持续输出 start/result/error/stop JSONL 事件；entrypoint 支持 `SOC_DAEMON_METRIC_JSONL` |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka daemon JSONL metric sink 切片
+
+- 背景：
+  - `soc daemon run` 之前只在进程退出时输出 summary。
+  - 长驻 daemon 需要运行中事件流，便于容器日志采集、排障和后续 Prometheus exporter。
+- 新增：
+  - `KafkaDaemonMetricSink` protocol。
+  - `JsonLineKafkaDaemonMetricSink`。
+  - `soc daemon run --metric-jsonl stdout|stderr`。
+  - `SOC_DAEMON_METRIC_JSONL` entrypoint env。
+- 行为：
+  - 默认不启用 JSONL metric sink，保持现有 CLI/smoke 输出兼容。
+  - 开启后输出 schema：`soc.kafka_daemon_metric.v1`。
+  - 事件类型：
+    - `start`
+    - `result`
+    - `error`
+    - `stop`
+  - 推荐生产使用 `--metric-jsonl stderr` 或 `SOC_DAEMON_METRIC_JSONL=stderr`，让 stdout 保留最终 run summary。
+  - result 事件只包含 record metadata 和 daemon_result 摘要，不输出完整告警 payload。
+  - error 事件只记录 loop-level adapter/runtime error；mapper/service failure 仍由 runner dead-letter 语义处理。
+- 已补充测试：
+  - runner emits start/result/stop。
+  - runner emits error。
+  - JSONL sink 一行一个 JSON object。
+  - CLI `--metric-jsonl stderr` 不污染 stdout summary。
+  - entrypoint `SOC_DAEMON_METRIC_JSONL=stderr` 可输出 JSONL。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/daemon/__init__.py soc_agent/daemon/kafka_daemon.py soc_agent/cli.py tests/test_soc_daemon_kafka_daemon.py tests/test_soc_agent_runtime.py tests/test_soc_daemon_scripts.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/daemon/__init__.py soc_agent/daemon/kafka_daemon.py soc_agent/cli.py tests/test_soc_daemon_kafka_daemon.py tests/test_soc_agent_runtime.py tests/test_soc_daemon_scripts.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_kafka_daemon.py tests/test_soc_agent_runtime.py::test_cli_daemon_run_can_emit_metric_jsonl_to_stderr tests/test_soc_agent_runtime.py::test_cli_daemon_run_disabled_by_default_outputs_bounded_run tests/test_soc_daemon_scripts.py::test_soc_daemon_entrypoint_can_emit_metric_jsonl_to_stderr`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli daemon run --max-loops 1 --idle-sleep-ms 0 --metric-jsonl stderr --pretty`
+- 下一步：
+  - 规划 production overlay / Prometheus metrics：先确定是否需要 HTTP `/metrics` exporter，还是继续由日志系统采集 JSONL。
 
 ### 2026-07-03 — Kafka isolated run-mode smoke 切片
 

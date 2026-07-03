@@ -43,6 +43,27 @@ def test_soc_daemon_entrypoint_supports_bounded_local_validation() -> None:
     assert payload["loop_count"] == 1
 
 
+def test_soc_daemon_entrypoint_can_emit_metric_jsonl_to_stderr() -> None:
+    result = _run_script(
+        ENTRYPOINT,
+        {
+            "SOC_DAEMON_ALLOW_DISABLED": "true",
+            "SOC_KAFKA_ENABLED": "false",
+            "SOC_DAEMON_MAX_LOOPS": "1",
+            "SOC_DAEMON_IDLE_SLEEP_MS": "0",
+            "SOC_DAEMON_ERROR_BACKOFF_MS": "0",
+            "SOC_DAEMON_METRIC_JSONL": "stderr",
+        },
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == "soc.kafka_daemon_run_result.v1"
+    events = [json.loads(line) for line in result.stderr.splitlines()]
+    assert [event["event"] for event in events] == ["start", "result", "stop"]
+    assert all(event["schema_version"] == "soc.kafka_daemon_metric.v1" for event in events)
+
+
 def test_soc_daemon_healthcheck_supports_config_only_local_validation() -> None:
     result = _run_script(
         HEALTHCHECK,

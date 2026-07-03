@@ -341,11 +341,18 @@ Kafka daemon / consumer adapter 约束：
   - 输出 schema 固定为 `soc.kafka_daemon_run_result.v1`；默认只输出 counters 和 stop reason，只有显式 `--include-results` 才输出每轮结果。
   - 输出必须包含 `metrics`：`started_at`、`stopped_at`、`error_count`、`consecutive_error_count`、`last_success_at`、`last_error_at`、`last_error_type`、`last_error_message`。
   - daemon controller 只能记录 loop-level error metrics；mapper/service failure 的 dead-letter + commit 语义仍归 `SocKafkaConsumerRunner`。
+  - `--metric-jsonl stdout|stderr` 是运行中 metric event sink：
+    - 默认关闭，不能改变现有 CLI/smoke stdout summary。
+    - event schema 固定为 `soc.kafka_daemon_metric.v1`。
+    - event 只允许 `start`、`result`、`error`、`stop`。
+    - result event 只能输出 record metadata、status、commit/dead-letter 状态和 daemon_result 摘要；不得输出完整 alert payload、raw_message、secret 或 DB URL。
+    - 生产推荐输出到 stderr，由日志系统采集；stdout 保留最终 `soc.kafka_daemon_run_result.v1` summary。
 - `backend/scripts/soc_daemon_entrypoint.sh` 是生产 daemon 的稳定 shell entrypoint：
   - 默认要求 `SOC_KAFKA_ENABLED=true`，避免生产容器运行在 null adapter。
   - `SOC_DAEMON_ALLOW_DISABLED=true` 只允许测试/本地验证。
   - 可选 `SOC_DAEMON_UPGRADE_DB=true` 只能作为便利模式；生产更推荐独立 migration job。
   - 可选 `SOC_DAEMON_PRESTART_STATUS_CHECK=true` 可以在启动前调用 healthcheck。
+  - `SOC_DAEMON_METRIC_JSONL=stdout|stderr` 可以打开同一套 metric sink。
   - entrypoint 只能组装 CLI 参数和执行 preflight，不得实现业务逻辑、poll loop、offset commit 或 dead-letter。
 - `backend/scripts/soc_daemon_healthcheck.sh` 是生产 daemon 的稳定 readiness shell：
   - 默认执行 `soc daemon status --check-broker`。

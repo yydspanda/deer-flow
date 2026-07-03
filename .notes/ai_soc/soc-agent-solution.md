@@ -309,7 +309,7 @@ ZEUS/天眼输入可信度相关结构状态：
    - API 是 Web/TUI/外部系统统一入口，必须只调用 `SocReviewService`。
    - TUI 是 Phase 1/2 更合适的薄操作台，用于 open queue、context、close、correct、trace 调试。
    - Web UI 后续基于同一套 API 增量做列表和详情页，不复制业务逻辑。
-   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done，action permission / human approval Done，approval request event Done，approval grant token Done，approval grant persistence / dry-run Done，ReviewQueue Web thin page Done，Web actor/context headers Done，approved-action consume/audit boundary Done，approval grant repository persistence Done，approved action Gateway API Done，approved action Web workbench Done，approval request inbox API Done，approval inbox Web consumption Done，Agent/daemon approval inbox write boundary Done，approval inbox TUI consumption Done，TUI approved-action dry-run / execute command Done，Kafka daemon scaffold / approval request ingestion Done，Kafka mapper/runner/settings/Confluent adapter/smoke/status/long-running run loop/metrics/backoff/entrypoint/healthcheck/isolated run-mode smoke Done；下一步进入 JSONL metric sink。
+   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done，action permission / human approval Done，approval request event Done，approval grant token Done，approval grant persistence / dry-run Done，ReviewQueue Web thin page Done，Web actor/context headers Done，approved-action consume/audit boundary Done，approval grant repository persistence Done，approved action Gateway API Done，approved action Web workbench Done，approval request inbox API Done，approval inbox Web consumption Done，Agent/daemon approval inbox write boundary Done，approval inbox TUI consumption Done，TUI approved-action dry-run / execute command Done，Kafka daemon scaffold / approval request ingestion Done，Kafka mapper/runner/settings/Confluent adapter/smoke/status/long-running run loop/metrics/backoff/entrypoint/healthcheck/isolated run-mode smoke/JSONL metric sink Done；下一步进入 production overlay / Prometheus metrics planning。
 
 7. **SOC Agent chat stream contract**
    - `SocAgentChatService.stream()` 是后续 SOC Lead Agent TUI/Web/Channels 的统一流式入口。
@@ -333,7 +333,7 @@ ZEUS/天眼输入可信度相关结构状态：
    - 当前已落地 TUI approval inbox consumption：`soc review tui` 可以通过 `/approvals` 查看 pending request、`/approval APR-...` 打开详情、`/approve APR-... reason` 生成一次性 execution token；TUI 当前不执行外部动作。
    - 当前已落地 TUI approved-action dry-run / execute command：`soc review tui` 可以通过 `/dry-run SAT-... route action` 校验 token，通过 `/execute SAT-... route action idempotency-key` 消费 token；execute 仍只进入 execution boundary，不执行真实外部副作用。
    - 当前已落地 Kafka daemon scaffold / approval request ingestion：`SocDaemonMessage(kind=alert|approval_request)` 是 decoded-message contract，`SocDaemonService.process_message()` 是 daemon 唯一 core service 入口；`soc daemon process` 可本地处理一条 daemon JSON。
-   - 当前已落地真实 Kafka broker consumer 基础链路：`KafkaRecord -> SocDaemonMessage` mapper、`SocKafkaConsumerRunner`、`KafkaConsumerSettings`、`ConfluentKafkaConsumerPort`、local Redpanda smoke、`soc daemon status` readiness 和 `soc daemon run` 长驻 loop shell。`soc daemon run` 已具备 metrics 与 adapter/runtime error backoff。生产 entrypoint / healthcheck 已固定在 `backend/scripts/soc_daemon_entrypoint.sh` 和 `backend/scripts/soc_daemon_healthcheck.sh`。`soc_kafka_smoke.py --mode run` 已覆盖生产入口的真实 broker smoke。Kafka adapter 仍只做 ingestion，不拥有分析逻辑。
+   - 当前已落地真实 Kafka broker consumer 基础链路：`KafkaRecord -> SocDaemonMessage` mapper、`SocKafkaConsumerRunner`、`KafkaConsumerSettings`、`ConfluentKafkaConsumerPort`、local Redpanda smoke、`soc daemon status` readiness 和 `soc daemon run` 长驻 loop shell。`soc daemon run` 已具备 metrics 与 adapter/runtime error backoff，并支持 `--metric-jsonl stdout|stderr` 运行中事件输出。生产 entrypoint / healthcheck 已固定在 `backend/scripts/soc_daemon_entrypoint.sh` 和 `backend/scripts/soc_daemon_healthcheck.sh`。`soc_kafka_smoke.py --mode run` 已覆盖生产入口的真实 broker smoke。Kafka adapter 仍只做 ingestion，不拥有分析逻辑。
 
 三入口审批模型：
 
@@ -342,7 +342,7 @@ ZEUS/天眼输入可信度相关结构状态：
 - Web 工单/后台和 TUI 作为人工消费入口，从 approval inbox 选择 pending request 后 approve，生成一次性 `SocAgentApprovalGrant.execution_token_id`，再 dry-run / execute。当前 Web/TUI 都只进入 execution boundary，不执行真实外部副作用。
 - 统一中心是 `SocAgentApprovalService` + request/grant repository + audit/event log；middleware 只是 Agent 入口 adapter，不是审批系统唯一中心。
 
-真实 Kafka consumer adapter 规划见 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，生产运行约定见 `.notes/ai_soc/soc-daemon-production-runbook.md`。下一刀优先补 JSONL metric sink，让长驻 daemon 不只在退出时输出运行摘要。
+真实 Kafka consumer adapter 规划见 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，生产运行约定见 `.notes/ai_soc/soc-daemon-production-runbook.md`。下一刀进入 production overlay / Prometheus metrics planning，先判断是否需要 HTTP exporter，还是继续依赖 JSONL 日志采集。
 
 ReviewQueue TUI 实现边界：
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import io
+import json
+
 import pytest
 
 from soc_agent.core import SocDaemonService
-from soc_agent.daemon.kafka_daemon import KafkaDaemonStopSignal, SocKafkaDaemonRunner
+from soc_agent.daemon.kafka_daemon import JsonLineKafkaDaemonMetricSink, KafkaDaemonStopSignal, SocKafkaDaemonRunner
 from soc_agent.daemon.kafka_mapper import KafkaRecord
 from soc_agent.daemon.kafka_runner import SocKafkaConsumerRunner
 
@@ -37,6 +40,14 @@ class FailingThenIdleConsumer(IdleConsumer):
         return None
 
 
+class ListMetricSink:
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    def emit(self, event: dict) -> None:
+        self.events.append(event)
+
+
 def test_kafka_daemon_runner_runs_until_max_loops_and_closes_consumer() -> None:
     consumer = IdleConsumer()
     runner = SocKafkaDaemonRunner(
@@ -53,6 +64,57 @@ def test_kafka_daemon_runner_runs_until_max_loops_and_closes_consumer() -> None:
     assert result.error_count == 0
     assert result.started_at <= result.stopped_at
     assert consumer.closed is True
+
+
+def test_kafka_daemon_runner_emits_start_result_and_stop_metrics() -> None:
+    consumer = IdleConsumer()
+    sink = ListMetricSink()
+    runner = SocKafkaDaemonRunner(
+        runner=__import_runner(consumer),
+        idle_sleep_seconds=0,
+        metric_sink=sink,
+    )
+
+    result = runner.run(max_loops=1)
+
+    assert result.stop_reason == "max_loops_reached"
+    assert [event["event"] for event in sink.events] == ["start", "result", "stop"]
+    assert all(event["schema_version"] == "soc.kafka_daemon_metric.v1" for event in sink.events)
+    assert sink.events[1]["status"] == "idle"
+    assert sink.events[1]["loop_count"] == 1
+    assert sink.events[2]["stop_reason"] == "max_loops_reached"
+    assert sink.events[2]["counters"]["idle"] == 1
+
+
+def test_kafka_daemon_runner_emits_error_metric() -> None:
+    consumer = FailingThenIdleConsumer(failures=1)
+    sink = ListMetricSink()
+    runner = SocKafkaDaemonRunner(
+        runner=__import_runner(consumer),
+        idle_sleep_seconds=0,
+        error_backoff_seconds=0,
+        max_consecutive_errors=1,
+        metric_sink=sink,
+    )
+
+    result = runner.run()
+
+    assert result.stop_reason == "max_consecutive_errors_reached"
+    assert [event["event"] for event in sink.events] == ["start", "error", "stop"]
+    assert sink.events[1]["error_type"] == "RuntimeError"
+    assert sink.events[1]["consecutive_error_count"] == 1
+    assert sink.events[2]["metrics"]["error_count"] == 1
+
+
+def test_json_line_kafka_daemon_metric_sink_writes_one_json_object_per_line() -> None:
+    stream = io.StringIO()
+    sink = JsonLineKafkaDaemonMetricSink(stream)
+
+    sink.emit({"schema_version": "soc.kafka_daemon_metric.v1", "event": "start"})
+    sink.emit({"schema_version": "soc.kafka_daemon_metric.v1", "event": "stop"})
+
+    lines = stream.getvalue().splitlines()
+    assert [json.loads(line)["event"] for line in lines] == ["start", "stop"]
 
 
 def test_kafka_daemon_runner_closes_consumer_when_already_stopped() -> None:

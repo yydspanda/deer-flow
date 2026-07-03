@@ -75,6 +75,7 @@ SOC_DAEMON_HEALTHCHECK_BROKER=false ./scripts/soc_daemon_healthcheck.sh
 | `SOC_DAEMON_MAX_CONSECUTIVE_ERRORS` | `3` | 连续错误停止阈值；`0` 表示交给外部 supervisor |
 | `SOC_DAEMON_MAX_LOOPS` | 无 | 仅用于本地/smoke，不用于生产 |
 | `SOC_DAEMON_INCLUDE_RESULTS` | `false` | 生产保持 false，避免输出无限增长 |
+| `SOC_DAEMON_METRIC_JSONL` | 无 | `stdout` / `stderr`；生产推荐 `stderr`，持续输出 daemon metric JSONL |
 
 ## Docker Compose Sketch
 
@@ -111,9 +112,14 @@ services:
 当前最小约定：
 
 - `soc daemon run` 正常退出时输出 `soc.kafka_daemon_run_result.v1` JSON。
+- `SOC_DAEMON_METRIC_JSONL=stderr` 时，运行中持续输出 `soc.kafka_daemon_metric.v1` JSON lines：
+  - `start`
+  - `result`
+  - `error`
+  - `stop`
 - `stderr` 输出启动配置错误、adapter error 上抛或 CLI 参数错误。
-- 长驻运行过程中的持续 metrics sink 暂未落地；下一步可以加 `SocDaemonMetricSink`，先输出 JSON lines，再接 Prometheus。
 - 生产日志采集应保留 stdout/stderr，并按 `schema_version`、`stop_reason`、`metrics.error_count`、`metrics.last_error_type` 建索引。
+- 后续是否需要 Prometheus `/metrics` exporter 再单独决策；当前先以 JSONL 日志作为最低可用观测面。
 
 ## Smoke
 

@@ -58,6 +58,10 @@ if [ -n "${SOC_DAEMON_MAX_LOOPS:-}" ]; then
   set -- "$@" --max-loops "$SOC_DAEMON_MAX_LOOPS"
 fi
 
+if [ -n "${SOC_DAEMON_METRIC_JSONL:-}" ]; then
+  set -- "$@" --metric-jsonl "$SOC_DAEMON_METRIC_JSONL"
+fi
+
 case "$(printf '%s' "${SOC_DAEMON_INCLUDE_RESULTS:-false}" | tr '[:upper:]' '[:lower:]')" in
   1|true|yes|on)
     set -- "$@" --include-results
