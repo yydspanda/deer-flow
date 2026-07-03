@@ -77,8 +77,26 @@
 | 41 | approval inbox TUI consumption | Done | `soc review tui` 展示 pending approval request，支持打开详情并 approve 生成 execution token；不执行真实动作 |
 | 42 | TUI approved-action dry-run / execute command | Done | `soc review tui` 支持 dry-run token 校验和 execute boundary token 消费；execute 要求显式 idempotency key；仍不执行外部副作用 |
 | 43 | Kafka daemon scaffold / approval request ingestion | Done | 新增 versioned daemon message contract、`SocDaemonService.process_message()` 和 `soc daemon process` 本地入口；支持 alert 分析与 approval_request 入箱；尚未连接 Kafka broker |
+| 44 | SOC Lead Agent approval middleware | Planned | 等 SOC Lead Agent / skills / MCP tool chain 落地后接入；当前只保留 service-level approval boundary，不提前做无宿主 middleware |
+| 45 | Kafka consumer adapter planning | Done | 新增 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，明确 mapper/runner/offset/dead-letter/metrics 方案和下一刀 |
 
 ## 进度记录
+
+### 2026-07-03 — approval middleware placement + Kafka adapter planning
+
+- 记录：
+  - SOC Lead Agent approval middleware 不在当前 ReviewQueue/TUI/API/Kafka scaffold 阶段实现。
+  - 它应挂在未来真实 SOC Lead Agent / skills / MCP tool chain 中，用来拦截 tool/action call，再调用 `SocAgentActionPolicy` 和 `SocAgentApprovalService`。
+  - 当前已完成的是 service-level approval boundary，足以支撑 Web/TUI/daemon 入口。
+- 新增：
+  - `.notes/ai_soc/kafka-consumer-adapter-plan.md`
+- 下一刀建议：
+  - 先做 `soc_agent/daemon/kafka_mapper.py` 与 tests，不接真实 broker：
+    - `KafkaRecord` 轻量 dataclass。
+    - `map_kafka_record_to_daemon_message(record)`。
+    - alert topic -> `SocDaemonMessage(kind="alert")`。
+    - approval request topic -> `SocDaemonMessage(kind="approval_request")`。
+    - unknown topic / invalid JSON / non-object payload 明确报错。
 
 ### 2026-07-03 — Kafka daemon scaffold / approval request ingestion 切片
 

@@ -337,9 +337,11 @@ ZEUS/天眼输入可信度相关结构状态：
 三入口审批模型：
 
 - Kafka daemon 自动预警流先解码为 `SocDaemonMessage`，再通过 `SocDaemonService.process_message()` 进入固定 runtime 或 approval inbox；真实 Kafka consumer 不拥有分析逻辑。
-- Agent TUI/Lead Agent 路径后续通过 SOC middleware 拦截高风险 tool/action call，生成同一类 `SocAgentApprovalRequest`，并通过注入的 `SocAgentApprovalService.submit_request()` 写入 approval inbox。
+- Agent TUI/Lead Agent 路径后续通过 SOC Lead Agent approval middleware 拦截高风险 tool/action call，生成同一类 `SocAgentApprovalRequest`，并通过注入的 `SocAgentApprovalService.submit_request()` 写入 approval inbox。该 middleware 必须等真实 SOC Lead Agent / skills / MCP tool chain 落地后实现；当前不提前做无宿主 middleware。
 - Web 工单/后台和 TUI 作为人工消费入口，从 approval inbox 选择 pending request 后 approve，生成一次性 `SocAgentApprovalGrant.execution_token_id`，再 dry-run / execute。当前 Web/TUI 都只进入 execution boundary，不执行真实外部副作用。
 - 统一中心是 `SocAgentApprovalService` + request/grant repository + audit/event log；middleware 只是 Agent 入口 adapter，不是审批系统唯一中心。
+
+真实 Kafka consumer adapter 规划见 `.notes/ai_soc/kafka-consumer-adapter-plan.md`。下一刀优先做 Kafka record -> `SocDaemonMessage` mapper，而不是直接连接 broker。
 
 ReviewQueue TUI 实现边界：
 

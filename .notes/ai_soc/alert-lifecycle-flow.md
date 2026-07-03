@@ -20,6 +20,7 @@ flowchart LR
     DaemonProcess --> Analysis["SocAnalysisService"]
     CLI["CLI / API analyze"] --> Analysis
     Agent["SOC Agent chat\napproval service injected"] --> ApprovalInbox["Approval Request Inbox"]
+    LeadMiddleware["SOC Lead Agent approval middleware\nplanned with real tool/MCP chain"] -.-> ApprovalInbox
     DaemonProcess --> ApprovalInbox
     Daemon["SocDaemonService\nsubmit boundary"] --> ApprovalInbox
     Web["Web 工单/后台"] --> ReviewAPI["Review / Approval API"]
@@ -237,7 +238,7 @@ Replay 不覆盖旧 run；它创建一个新 run，并通过 `replay_of_run_id` 
 | Gateway | `/api/soc/approvals/grants` | approval request -> execution token |
 | Gateway | `/api/soc/approvals/actions/dry-run` | token 校验，不执行副作用 |
 | Gateway | `/api/soc/approvals/actions/execute` | 消费 token，记录 execution boundary |
-| Core service | `SocAgentChatService.stream(..., approval_service=...)` | TUI/Agent chat 高风险 request 写入 approval inbox 并发出 stream event |
+| Core service | `SocAgentChatService.stream(..., approval_service=...)` | TUI/Agent chat shell 高风险 request 写入 approval inbox 并发出 stream event；不是最终 Lead Agent middleware |
 | Core service | `SocDaemonService.submit_approval_request()` | Kafka daemon 后续复用的 approval inbox 写入边界 |
 
 ## 尚未接入的后续点
@@ -245,7 +246,6 @@ Replay 不覆盖旧 run；它创建一个新 run，并通过 `replay_of_run_id` 
 这些是规划点，当前流程图里只作为未来入口或 adapter：
 
 - Kafka daemon 自动消费预警流；当前已有 `SocDaemonMessage` 和 `SocDaemonService.process_message()` decoded-message scaffold，尚未实现真实 broker consumer。
-- SOC Lead Agent middleware 拦截高风险 tool/action call；当前 chat service 已能在注入 approval service 时写入 approval inbox，但真实 DeerFlow middleware 尚未接入。
-- Kafka daemon 自动预警入口的可测试 scaffold；当前 daemon 只有 approval request submit boundary，尚未消费 Kafka。
+- SOC Lead Agent approval middleware 拦截高风险 tool/action call；当前 chat service 已能在注入 approval service 时写入 approval inbox，但真实 DeerFlow-derived Lead Agent middleware 必须等 SOC Lead Agent / skills / MCP tool chain 落地时再接入。
 - Action adapter registry：把 `response.block_ip`、`edr.isolate_host`、F5 策略、Kafka 处置事件等真实外部动作注册到 execute boundary 后面。
 - 真实外部副作用的补偿、失败重试、审批后超时、adapter-level audit。
