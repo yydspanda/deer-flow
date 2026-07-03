@@ -261,14 +261,31 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
   - `.notes/ai_soc/soc-daemon-production-runbook.md`
   - 当前不修改 DeerFlow 主 docker-compose；SOC daemon 后续通过独立 overlay 或生产模板接入。
 
+已完成 isolated run-mode smoke：
+
+- `backend/scripts/soc_kafka_smoke.py` 支持 `--mode {consume,run}`。
+- `consume` 模式保持原有 `soc daemon consume --max-records 1` smoke。
+- `run` 模式验证生产入口：
+  - `soc daemon run --max-loops 1`
+  - `--idle-sleep-ms 0`
+  - `--error-backoff-ms 0`
+  - `--include-results`
+- 默认继续使用 timestamped isolated topics，避免消费默认 topic 历史消息。
+- post-commit idle 检查继续使用同一 group 的 bounded consume，验证 run-mode 已提交 offset。
+- 已用 Redpanda 验证：
+  - sample alert processed。
+  - summary 落库。
+  - bad JSON 进入 dead-letter。
+  - post-commit idle。
+
 ## 下一刀建议
 
-进入 JSONL metric sink / isolated run-mode smoke：
+进入 JSONL metric sink：
 
 - 当前 `soc daemon consume` 是有限 poll，适合 smoke/手工验证。
 - 当前 `soc daemon run` 是长驻 loop shell，已具备 graceful stop、结构化 counters、metrics 和 error backoff。
 - 当前生产入口和 healthcheck 已固定。
+- 当前 run-mode smoke 已覆盖真实 broker path。
 - 后续建议：
   - metric sink：先输出 JSON lines，后续接 Prometheus。
-  - run-mode smoke：使用隔离 topic + `soc daemon run --max-loops ...` 验证长驻入口，不复用默认 topic。
   - 生产 overlay：独立 compose / Helm / K8s deployment 模板，而不是修改 DeerFlow 主 compose 默认行为。

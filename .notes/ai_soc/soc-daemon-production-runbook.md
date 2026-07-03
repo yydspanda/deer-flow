@@ -124,6 +124,13 @@ cd backend
 ./.venv/bin/python scripts/soc_kafka_smoke.py --include-dead-letter
 ```
 
+生产入口 smoke 使用 `run` 模式：
+
+```bash
+cd backend
+./.venv/bin/python scripts/soc_kafka_smoke.py --mode run --include-dead-letter
+```
+
 不要用固定默认 topic + 新 group 做验收，否则可能消费历史消息。
 
 ## Non-goals

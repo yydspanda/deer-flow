@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon JSONL metric sink / isolated run-mode smoke |
+| 当前下一刀 | Kafka daemon JSONL metric sink |
 
 ## Phase 1 切片计划
 
@@ -90,8 +90,51 @@
 | 54 | Kafka daemon long-running run loop | Done | 新增 `SocKafkaDaemonRunner` 和 `soc daemon run`；支持 SIGINT/SIGTERM graceful stop、idle sleep、bounded local validation 和结构化 run result |
 | 55 | Kafka daemon metrics/backoff | Done | `soc daemon run` 输出 run metrics；adapter/runtime error 会 backoff，可配置连续错误阈值，避免故障热循环 |
 | 56 | Kafka daemon production entrypoint / healthcheck | Done | 新增 `soc_daemon_entrypoint.sh`、`soc_daemon_healthcheck.sh` 和 production runbook；固定 env、healthcheck、日志采集和 Docker overlay 约定 |
+| 57 | Kafka isolated run-mode smoke | Done | `soc_kafka_smoke.py --mode run` 使用隔离 topic 验证 `soc daemon run` 真实 broker 消费、commit、summary 和 dead-letter |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka isolated run-mode smoke 切片
+
+- 背景：
+  - 生产 daemon 入口是 `soc daemon run`，此前 live smoke 主要验证 `soc daemon consume`。
+  - 需要一个隔离 topic 的 run-mode smoke，避免用默认 topic + 新 group 时消费历史消息。
+- 变更：
+  - `backend/scripts/soc_kafka_smoke.py` 新增 `--mode {consume,run}`。
+  - 默认仍是 `consume`，保持已有调用兼容。
+  - `--mode run` 使用：
+    - `soc daemon run`
+    - `--max-loops 1`
+    - `--idle-sleep-ms 0`
+    - `--error-backoff-ms 0`
+    - `--include-results`
+  - post-commit idle 检查继续用同一 group 的 `soc daemon consume --max-records 1`，验证 run-mode 处理后 offset 已提交。
+  - smoke result 新增 `mode` 字段。
+- 已补充测试：
+  - `_daemon_command(mode="consume")`
+  - `_daemon_command(mode="run")`
+  - unknown mode fail-fast。
+  - daemon result 提取校验。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format scripts/soc_kafka_smoke.py tests/test_soc_kafka_smoke_script.py`
+  - `cd backend && ./.venv/bin/python -m ruff check scripts/soc_kafka_smoke.py tests/test_soc_kafka_smoke_script.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_kafka_smoke_script.py`
+  - `cd backend && ./.venv/bin/python scripts/soc_kafka_smoke.py --help`
+  - `cd backend && ./.venv/bin/python scripts/soc_kafka_smoke.py --mode run --database-url sqlite+pysqlite:////tmp/soc_kafka_smoke_20260703_runmode.db --include-dead-letter --timeout-seconds 30`
+- live run-mode smoke 结果：
+  - broker：`localhost:9092`
+  - group_id：`soc-smoke-1783067390`
+  - topic：`soc.alerts.raw.v1.smoke.1783067390`
+  - mode：`run`
+  - run_id：`RUN-F8E8B65D7FFB`
+  - alert_id：`ALT-SAMPLE-FP-001`
+  - consume_result：`processed`, `committed=true`
+  - summary_count：`1`
+  - dead-letter key：`smoke-bad-1783067391`
+  - dead-letter error_type：`KafkaMapperError`
+  - post_commit_result：`idle`
+- 下一步：
+  - 做 daemon JSONL metric sink，让长驻 daemon 运行过程可持续输出结构化运行事件，而不是只在退出时输出 run summary。
 
 ### 2026-07-03 — Kafka daemon production entrypoint / healthcheck 切片
 

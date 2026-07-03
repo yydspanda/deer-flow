@@ -2,7 +2,8 @@
 
 This script expects a Kafka-compatible broker to already be reachable. It
 creates the SOC topics, publishes one alert sample, runs ``soc daemon consume``
-through the real CLI path, and verifies the resulting SOC summary.
+or ``soc daemon run`` through the real CLI path, and verifies the resulting SOC
+summary.
 """
 
 from __future__ import annotations
@@ -67,7 +68,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     consume_env = _consume_env(args, group_id)
-    consume_payload = _consume_until_non_idle(
+    consume_payload = _daemon_until_non_idle(
+        mode=args.mode,
         database_url=database_url,
         env=consume_env,
         timeout_seconds=args.timeout_seconds,
@@ -98,7 +100,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         dead_letter_consumer.subscribe([args.dead_letter_topic])
         try:
-            bad_consume_payload = _consume_until_non_idle(
+            bad_consume_payload = _daemon_until_non_idle(
+                mode=args.mode,
                 database_url=database_url,
                 env=consume_env,
                 timeout_seconds=args.timeout_seconds,
@@ -128,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         "bootstrap_servers": args.bootstrap_servers,
         "database_url": database_url,
         "group_id": group_id,
+        "mode": args.mode,
         "alert_id": alert_id,
         "consume_result": first_result,
         "post_commit_result": post_commit_result,
@@ -140,6 +144,12 @@ def main(argv: list[str] | None = None) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a local SOC Kafka daemon smoke test")
+    parser.add_argument(
+        "--mode",
+        choices=["consume", "run"],
+        default="consume",
+        help="Daemon entrypoint to verify: bounded consume poll or long-running run shell",
+    )
     parser.add_argument("--bootstrap-servers", default="localhost:9092", help="Kafka bootstrap servers")
     parser.add_argument("--database-url", help="SOC database URL; defaults to /tmp/soc_kafka_smoke.db")
     parser.add_argument(
@@ -215,20 +225,49 @@ def _run_soc_cli(args: list[str], *, env: dict[str, str]) -> CliResult:
     return result
 
 
-def _consume_until_non_idle(*, database_url: str, env: dict[str, str], timeout_seconds: float) -> dict[str, Any]:
+def _daemon_until_non_idle(*, mode: str, database_url: str, env: dict[str, str], timeout_seconds: float) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
     last_payload: dict[str, Any] | None = None
     while time.monotonic() < deadline:
-        consume = _run_soc_cli(
-            ["daemon", "consume", "--database-url", database_url, "--max-records", "1", "--pretty"],
-            env=env,
-        )
+        consume = _run_soc_cli(_daemon_command(mode=mode, database_url=database_url), env=env)
         payload = json.loads(consume.stdout)
         last_payload = payload
-        if payload["results"][0]["status"] != "idle":
+        first_result = _first_daemon_result(payload)
+        if first_result["status"] != "idle":
             return payload
         time.sleep(0.5)
-    raise SystemExit(f"Timed out waiting for non-idle consume result; last result: {last_payload}")
+    raise SystemExit(f"Timed out waiting for non-idle {mode} result; last result: {last_payload}")
+
+
+def _daemon_command(*, mode: str, database_url: str) -> list[str]:
+    if mode == "consume":
+        return ["daemon", "consume", "--database-url", database_url, "--max-records", "1", "--pretty"]
+    if mode == "run":
+        return [
+            "daemon",
+            "run",
+            "--database-url",
+            database_url,
+            "--max-loops",
+            "1",
+            "--idle-sleep-ms",
+            "0",
+            "--error-backoff-ms",
+            "0",
+            "--include-results",
+            "--pretty",
+        ]
+    raise SystemExit(f"Unsupported smoke mode: {mode}")
+
+
+def _first_daemon_result(payload: dict[str, Any]) -> dict[str, Any]:
+    results = payload.get("results")
+    if not isinstance(results, list) or not results:
+        raise SystemExit(f"Daemon payload did not include results: {payload}")
+    first = results[0]
+    if not isinstance(first, dict):
+        raise SystemExit(f"Daemon result is not an object: {first}")
+    return first
 
 
 def _consume_env(args: argparse.Namespace, group_id: str) -> dict[str, str]:
