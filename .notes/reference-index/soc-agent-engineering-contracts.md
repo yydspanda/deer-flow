@@ -360,6 +360,13 @@ Kafka daemon / consumer adapter 约束：
   - `SOC_DAEMON_HEALTHCHECK_DATABASE=false` 只用于配置排障，不应作为生产 readiness。
   - Docker/K8s healthcheck 应调用该脚本，而不是自己拼 readiness 逻辑。
 - SOC daemon 不直接进入 DeerFlow 主 docker-compose 默认服务；它是业务扩展进程，应通过独立 overlay、生产 compose 或 K8s deployment 模板接入。
+- `docker/docker-compose.soc-daemon.yaml` 是 SOC daemon 的显式 opt-in compose overlay：
+  - 不得被默认 `scripts/docker.sh` / `make docker-start` 自动加载。
+  - service 必须使用 `backend/scripts/soc_daemon_entrypoint.sh`。
+  - healthcheck 必须使用 `backend/scripts/soc_daemon_healthcheck.sh`。
+  - 默认 metric sink 应使用 `SOC_DAEMON_METRIC_JSONL=stderr`。
+  - overlay 不能保存生产 secret；Kafka/DB secret 必须来自 env file、secret manager 或部署平台。
+  - Dockerfile 尚未支持多 backend extras 时，overlay 不得假装 `postgres,kafka` 已同时安装；先记录限制，再做 build support。
 - `soc daemon status` 是 Kafka daemon readiness/status contract：
   - 输出 schema 固定为 `soc.kafka_daemon_status.v1`，供 CLI、supervisor、Docker/K8s readiness 和人工验收复用。
   - 默认只检查 database readiness 和 Kafka adapter 配置状态；不能 poll 或处理业务消息。

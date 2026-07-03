@@ -294,17 +294,33 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 - 生产建议输出到 stderr，stdout 保留最终 run summary。
 - result event 只输出 record metadata 和 daemon_result 摘要，不输出完整告警 payload。
 
+已完成 production compose overlay：
+
+- `docker/docker-compose.soc-daemon.yaml` 提供显式 opt-in SOC daemon service。
+- 默认不进入 DeerFlow 主 docker flow，不影响 `make docker-start`。
+- overlay 启动命令：
+  - `docker compose -p deer-flow-dev -f docker-compose-dev.yaml -f docker-compose.soc-daemon.yaml up -d soc-daemon`
+- service contract：
+  - command：`backend/scripts/soc_daemon_entrypoint.sh`
+  - healthcheck：`backend/scripts/soc_daemon_healthcheck.sh`
+  - default metric sink：`SOC_DAEMON_METRIC_JSONL=stderr`
+- 当前限制：
+  - Dockerfile `UV_EXTRAS` 当前按单个 extra 传入，overlay 默认使用 `kafka`。
+  - 若生产镜像需要同时安装 `postgres` + `kafka` extras，下一步应增强 Dockerfile multi-extra 支持。
+
 ## 下一刀建议
 
-进入 production overlay planning：
+进入 Dockerfile multi-extra support / deployment hardening：
 
 - 当前 `soc daemon consume` 是有限 poll，适合 smoke/手工验证。
 - 当前 `soc daemon run` 是长驻 loop shell，已具备 graceful stop、结构化 counters、metrics 和 error backoff。
 - 当前生产入口和 healthcheck 已固定。
 - 当前 run-mode smoke 已覆盖真实 broker path。
 - 当前 JSONL metric sink 已能被日志系统采集。
+- 当前 production compose overlay 已是显式 opt-in。
 - 后续建议：
-  - 生产 overlay：独立 compose / Helm / K8s deployment 模板，而不是修改 DeerFlow 主 compose 默认行为。
+  - 让 Dockerfile 支持多个 backend extras，例如 `postgres,kafka` 或 `postgres kafka`。
+  - 再补 production/K8s deployment hardening：secret 注入、resource limits、restart policy、日志采集标签。
 
 ## Prometheus Deferred Plan
 

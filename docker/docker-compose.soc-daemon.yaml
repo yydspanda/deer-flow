@@ -1,0 +1,58 @@
+# Optional SOC Kafka daemon overlay.
+#
+# Usage:
+#   docker compose -p deer-flow-dev \
+#     -f docker-compose-dev.yaml \
+#     -f docker-compose.soc-daemon.yaml \
+#     up -d soc-daemon
+#
+# This overlay is not loaded by the default DeerFlow docker scripts. SOC daemon
+# is a business extension process and must be enabled explicitly.
+
+services:
+  soc-daemon:
+    build:
+      context: ../
+      dockerfile: backend/Dockerfile
+      target: dev
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
+        UV_IMAGE: ${UV_IMAGE:-ghcr.io/astral-sh/uv:0.7.20}
+        UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi.org/simple}
+        UV_EXTRAS: ${SOC_DAEMON_UV_EXTRAS:-kafka}
+    container_name: deer-flow-soc-daemon
+    command: ["sh", "backend/scripts/soc_daemon_entrypoint.sh"]
+    volumes:
+      - ../backend/:/app/backend/
+      - gateway-venv:/app/backend/.venv
+      - ../config.yaml:/app/config.yaml:ro
+      - ../extensions_config.json:/app/extensions_config.json:ro
+      - ../logs:/app/logs
+      - gateway-uv-cache:/root/.cache/uv
+    working_dir: /app
+    environment:
+      - CI=true
+      - DEER_FLOW_PROJECT_ROOT=/app
+      - DEER_FLOW_HOME=/app/backend/.deer-flow
+      - SOC_KAFKA_ENABLED=${SOC_KAFKA_ENABLED:-true}
+      - SOC_DAEMON_IDLE_SLEEP_MS=${SOC_DAEMON_IDLE_SLEEP_MS:-1000}
+      - SOC_DAEMON_ERROR_BACKOFF_MS=${SOC_DAEMON_ERROR_BACKOFF_MS:-1000}
+      - SOC_DAEMON_MAX_CONSECUTIVE_ERRORS=${SOC_DAEMON_MAX_CONSECUTIVE_ERRORS:-3}
+      - SOC_DAEMON_METRIC_JSONL=${SOC_DAEMON_METRIC_JSONL:-stderr}
+      - SOC_DAEMON_PRESTART_STATUS_CHECK=${SOC_DAEMON_PRESTART_STATUS_CHECK:-false}
+      - SOC_DAEMON_UPGRADE_DB=${SOC_DAEMON_UPGRADE_DB:-false}
+      - NO_PROXY=${NO_PROXY:-}${NO_PROXY:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,provisioner,host.docker.internal
+      - no_proxy=${no_proxy:-}${no_proxy:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,provisioner,host.docker.internal
+    env_file:
+      - ../.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - deer-flow-dev
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "sh", "backend/scripts/soc_daemon_healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 4
+      start_period: 30s

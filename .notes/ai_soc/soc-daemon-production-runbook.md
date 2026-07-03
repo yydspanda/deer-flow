@@ -77,35 +77,27 @@ SOC_DAEMON_HEALTHCHECK_BROKER=false ./scripts/soc_daemon_healthcheck.sh
 | `SOC_DAEMON_INCLUDE_RESULTS` | `false` | 生产保持 false，避免输出无限增长 |
 | `SOC_DAEMON_METRIC_JSONL` | 无 | `stdout` / `stderr`；生产推荐 `stderr`，持续输出 daemon metric JSONL |
 
-## Docker Compose Sketch
+## Docker Compose Overlay
 
-不要直接改 DeerFlow 主 compose 作为默认行为。SOC daemon 是业务扩展进程，建议用独立 overlay 或生产部署模板接入：
+不要直接改 DeerFlow 主 compose 作为默认行为。SOC daemon 是业务扩展进程，通过显式 overlay 接入：
 
-```yaml
-services:
-  soc-daemon:
-    build:
-      context: ..
-      dockerfile: backend/Dockerfile
-      target: runtime
-      args:
-        UV_EXTRAS: "postgres kafka"
-    command: ["sh", "backend/scripts/soc_daemon_entrypoint.sh"]
-    env_file:
-      - ../.env
-    environment:
-      SOC_KAFKA_ENABLED: "true"
-      SOC_DAEMON_IDLE_SLEEP_MS: "1000"
-      SOC_DAEMON_ERROR_BACKOFF_MS: "1000"
-      SOC_DAEMON_MAX_CONSECUTIVE_ERRORS: "3"
-    healthcheck:
-      test: ["CMD", "sh", "backend/scripts/soc_daemon_healthcheck.sh"]
-      interval: 15s
-      timeout: 10s
-      retries: 4
-      start_period: 30s
-    restart: unless-stopped
+```bash
+cd docker
+docker compose -p deer-flow-dev \
+  -f docker-compose-dev.yaml \
+  -f docker-compose.soc-daemon.yaml \
+  up -d soc-daemon
 ```
+
+Overlay 文件：`docker/docker-compose.soc-daemon.yaml`
+
+约定：
+
+- 默认不被 `scripts/docker.sh` 或 `make docker-start` 加载。
+- 默认 command 是 `backend/scripts/soc_daemon_entrypoint.sh`。
+- 默认 healthcheck 是 `backend/scripts/soc_daemon_healthcheck.sh`。
+- 默认 `SOC_DAEMON_METRIC_JSONL=stderr`。
+- 默认 build extra 是 `kafka`；如果生产镜像需要同时安装多个 backend extras，应先增强 Dockerfile 的 multi-extra build arg，而不是在 overlay 中写无效的逗号/空格拼接。
 
 ## Logging
 

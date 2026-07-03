@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon production overlay planning |
+| 当前下一刀 | Kafka daemon multi-extra Docker build support / production deployment hardening |
 
 ## Phase 1 切片计划
 
@@ -92,8 +92,37 @@
 | 56 | Kafka daemon production entrypoint / healthcheck | Done | 新增 `soc_daemon_entrypoint.sh`、`soc_daemon_healthcheck.sh` 和 production runbook；固定 env、healthcheck、日志采集和 Docker overlay 约定 |
 | 57 | Kafka isolated run-mode smoke | Done | `soc_kafka_smoke.py --mode run` 使用隔离 topic 验证 `soc daemon run` 真实 broker 消费、commit、summary 和 dead-letter |
 | 58 | Kafka daemon JSONL metric sink | Done | `soc daemon run --metric-jsonl stderr|stdout` 可持续输出 start/result/error/stop JSONL 事件；entrypoint 支持 `SOC_DAEMON_METRIC_JSONL` |
+| 59 | Kafka daemon production compose overlay | Done | 新增 `docker-compose.soc-daemon.yaml`，显式 opt-in 启动 SOC daemon；默认不进入 DeerFlow 主 docker 流程 |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka daemon production compose overlay 切片
+
+- 背景：
+  - 生产 entrypoint、healthcheck、JSONL metric sink 已完成。
+  - 需要一个可执行的 compose overlay 示例，但不能改 DeerFlow 默认 docker 启动行为。
+- 新增：
+  - `docker/docker-compose.soc-daemon.yaml`
+- 行为：
+  - 显式 opt-in：
+    - `docker compose -p deer-flow-dev -f docker-compose-dev.yaml -f docker-compose.soc-daemon.yaml up -d soc-daemon`
+  - 默认不被 `scripts/docker.sh` / `make docker-start` 加载。
+  - service：`soc-daemon`
+  - command：`backend/scripts/soc_daemon_entrypoint.sh`
+  - healthcheck：`backend/scripts/soc_daemon_healthcheck.sh`
+  - 默认 `SOC_DAEMON_METRIC_JSONL=stderr`。
+  - 默认 build extra 暂用 `kafka`；如果生产镜像需要同时启用 `postgres` + `kafka` extras，应后续增强 Dockerfile 支持多 extra。
+- 已补充测试：
+  - overlay 包含 entrypoint、healthcheck、metric env。
+  - `scripts/docker.sh` 不加载 `docker-compose.soc-daemon.yaml`。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format tests/test_soc_daemon_compose_overlay.py`
+  - `cd backend && ./.venv/bin/python -m ruff check tests/test_soc_daemon_compose_overlay.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_compose_overlay.py tests/test_soc_daemon_scripts.py`
+  - `cd docker && docker compose -p deer-flow-dev -f docker-compose-dev.yaml -f docker-compose.soc-daemon.yaml config --services`
+  - compose config 输出包含 `soc-daemon`；本地未设置 `DEER_FLOW_ROOT` 时会有 compose warning，不影响 overlay 解析。
+- 下一步：
+  - 处理 Dockerfile multi-extra build arg / deployment hardening，避免生产镜像安装 `postgres` + `kafka` 时靠手工变通。
 
 ### 2026-07-03 — Kafka daemon JSONL metric sink 切片
 
