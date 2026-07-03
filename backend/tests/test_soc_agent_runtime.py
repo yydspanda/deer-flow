@@ -804,6 +804,39 @@ def test_cli_daemon_consume_disabled_by_default_outputs_idle(monkeypatch: pytest
     ]
 
 
+def test_cli_daemon_run_disabled_by_default_outputs_bounded_run(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.delenv("SOC_KAFKA_ENABLED", raising=False)
+
+    exit_code = main(["daemon", "run", "--max-loops", "2", "--idle-sleep-ms", "0", "--include-results", "--pretty"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    payload = json.loads(captured.out)
+    assert payload["schema_version"] == "soc.kafka_daemon_run_result.v1"
+    assert payload["settings"]["enabled"] is False
+    assert payload["stop_reason"] == "max_loops_reached"
+    assert payload["loop_count"] == 2
+    assert payload["counters"] == {
+        "processed": 0,
+        "dead_lettered": 0,
+        "idle": 2,
+        "committed": 0,
+    }
+    assert [item["status"] for item in payload["results"]] == ["idle", "idle"]
+
+
+def test_cli_daemon_run_rejects_invalid_loop_args(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.delenv("SOC_KAFKA_ENABLED", raising=False)
+
+    assert main(["daemon", "run", "--max-loops", "0"]) == 2
+    first = capsys.readouterr()
+    assert "--max-loops must be >= 1" in first.err
+
+    assert main(["daemon", "run", "--idle-sleep-ms", "-1"]) == 2
+    second = capsys.readouterr()
+    assert "--idle-sleep-ms must be >= 0" in second.err
+
+
 def test_cli_daemon_status_outputs_readiness_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     monkeypatch.delenv("SOC_KAFKA_ENABLED", raising=False)
     database_url = f"sqlite+pysqlite:///{tmp_path / 'soc.db'}"

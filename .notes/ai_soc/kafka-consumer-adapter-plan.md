@@ -199,15 +199,38 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
   - ready -> `0`
   - unready -> `1`
 
+已完成 long-running daemon run loop：
+
+- `soc_agent.daemon.kafka_daemon` 提供长驻 loop controller：
+  - `KafkaDaemonStopSignal`
+  - `KafkaDaemonRunResult`
+  - `SocKafkaDaemonRunner`
+- `SocKafkaDaemonRunner` 只包装现有 `SocKafkaConsumerRunner.process_next()`：
+  - 不重写 mapper。
+  - 不重写 commit/dead-letter 语义。
+  - 不直接调用 core service。
+- CLI 新增 `soc daemon run`：
+  - 默认 `max_loops=None`，表达长驻 daemon 语义。
+  - `--max-loops` 只用于测试、本地验收和 smoke。
+  - `--idle-sleep-ms` 控制 idle poll 后 sleep，测试可设为 `0`。
+  - `--include-results` 才输出每轮结果，避免长驻进程输出无限增长。
+  - 输出 schema：`soc.kafka_daemon_run_result.v1`。
+- graceful shutdown：
+  - CLI 安装 `SIGINT` / `SIGTERM` handler。
+  - handler 只设置 stop flag，不在 signal handler 中做 DB/Kafka/IO 工作。
+  - 当前 poll 返回后退出 loop。
+  - controller 在 `finally` 中 close runner/consumer port。
+
 ## 下一刀建议
 
-进入 long-running daemon / graceful shutdown 规划：
+进入 metrics / backoff / production supervisor 规划：
 
-- 当前 `soc daemon consume` 仍是有限 poll，适合 smoke/手工验证。
-- 生产 daemon 需要：
-  - long-running loop wrapper，复用 `SocKafkaConsumerRunner.run()` 或 `process_next()`。
-  - graceful shutdown。
-  - readiness endpoint/command 可继续复用 `build_kafka_daemon_status()`。
-  - metrics：processed、dead_lettered、failed、last_success_at。
-  - retry/backoff。
-  - optional supervisor/Docker entrypoint。
+- 当前 `soc daemon consume` 是有限 poll，适合 smoke/手工验证。
+- 当前 `soc daemon run` 是长驻 loop shell，已具备 graceful stop 和结构化 counters。
+- 生产 daemon 仍需要：
+  - continuous counters / last_success_at / last_error_at。
+  - adapter error retry/backoff，避免 broker/DB 短暂故障时热循环。
+  - metrics event sink，先可输出 JSON log，后续接 Prometheus。
+  - readiness endpoint/command 继续复用 `build_kafka_daemon_status()`。
+  - Docker entrypoint / supervisor 约定。
+  - 隔离 topic smoke，避免默认 topic 历史消息干扰验收。

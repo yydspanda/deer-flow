@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 from pathlib import Path
 from typing import Any
@@ -26,8 +27,11 @@ from soc_agent.daemon import (
     KafkaAdapterError,
     KafkaAdapterNotConfiguredError,
     KafkaConsumerSettings,
+    KafkaDaemonRunResult,
+    KafkaDaemonStopSignal,
     KafkaRunnerProcessResult,
     SocKafkaConsumerRunner,
+    SocKafkaDaemonRunner,
     build_kafka_consumer_port,
     build_kafka_daemon_status,
 )
@@ -73,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
         return _daemon_process(args)
     if args.command == "daemon" and args.daemon_command == "consume":
         return _daemon_consume(args)
+    if args.command == "daemon" and args.daemon_command == "run":
+        return _daemon_run(args)
     if args.command == "daemon" and args.daemon_command == "status":
         return _daemon_status(args)
     if args.command == "eval" and args.eval_command == "offline":
@@ -201,6 +207,22 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     daemon_consume.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(daemon_consume)
+    daemon_run = daemon_subparsers.add_parser("run", help="Run the SOC Kafka daemon until stopped")
+    daemon_run.add_argument(
+        "--max-loops",
+        type=int,
+        default=None,
+        help="Optional loop cap for local validation; omit for long-running daemon mode",
+    )
+    daemon_run.add_argument(
+        "--idle-sleep-ms",
+        type=int,
+        default=1000,
+        help="Sleep duration after idle polls; use 0 for tests/local validation",
+    )
+    daemon_run.add_argument("--include-results", action="store_true", help="Include per-loop results in output JSON")
+    daemon_run.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(daemon_run)
 
     eval_cmd = subparsers.add_parser("eval", help="SOC offline evaluation helpers")
     eval_subparsers = eval_cmd.add_subparsers(dest="eval_command")
@@ -541,6 +563,58 @@ def _daemon_consume(args: argparse.Namespace) -> int:
     return 0
 
 
+def _daemon_run(args: argparse.Namespace) -> int:
+    if args.max_loops is not None and args.max_loops < 1:
+        print("error: --max-loops must be >= 1", file=sys.stderr)
+        return 2
+    if args.idle_sleep_ms < 0:
+        print("error: --idle-sleep-ms must be >= 0", file=sys.stderr)
+        return 2
+
+    settings = KafkaConsumerSettings.from_env()
+    try:
+        daemon_service = _daemon_service_from_args(args) if settings.enabled else SocDaemonService()
+        consumer = build_kafka_consumer_port(settings)
+    except (ValueError, KafkaAdapterNotConfiguredError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    runner = SocKafkaConsumerRunner(
+        consumer=consumer,
+        daemon_service=daemon_service,
+        alert_topics=frozenset(settings.alert_topics),
+        approval_request_topics=frozenset(settings.approval_request_topics),
+    )
+    stop_signal = KafkaDaemonStopSignal()
+    previous_signal_handlers = _install_daemon_signal_handlers(stop_signal)
+    daemon_runner = SocKafkaDaemonRunner(
+        runner=runner,
+        stop_signal=stop_signal,
+        idle_sleep_seconds=args.idle_sleep_ms / 1000,
+    )
+
+    try:
+        run_result = daemon_runner.run(max_loops=args.max_loops)
+    except (KafkaAdapterError, KafkaAdapterNotConfiguredError, SocServiceError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    finally:
+        _restore_signal_handlers(previous_signal_handlers)
+
+    print(
+        json.dumps(
+            _kafka_daemon_run_payload(
+                run_result,
+                settings=settings,
+                include_results=args.include_results,
+            ),
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+        )
+    )
+    return 0
+
+
 def _daemon_status(args: argparse.Namespace) -> int:
     settings = KafkaConsumerSettings.from_env()
     status = build_kafka_daemon_status(
@@ -566,6 +640,24 @@ def _daemon_service_from_args(args: argparse.Namespace) -> SocDaemonService:
         analysis_service=analysis_service,
         approval_service=approval_service,
     )
+
+
+def _install_daemon_signal_handlers(stop_signal: KafkaDaemonStopSignal) -> dict[signal.Signals, Any]:
+    previous_handlers: dict[signal.Signals, Any] = {}
+
+    def _request_stop(signum: int, _frame: Any) -> None:
+        signal_name = signal.Signals(signum).name.lower()
+        stop_signal.request_stop(f"signal:{signal_name}")
+
+    for daemon_signal in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[daemon_signal] = signal.getsignal(daemon_signal)
+        signal.signal(daemon_signal, _request_stop)
+    return previous_handlers
+
+
+def _restore_signal_handlers(previous_handlers: dict[signal.Signals, Any]) -> None:
+    for daemon_signal, previous_handler in previous_handlers.items():
+        signal.signal(daemon_signal, previous_handler)
 
 
 def _eval_offline(args: argparse.Namespace) -> int:
@@ -646,6 +738,29 @@ def _kafka_runner_result_payload(result: KafkaRunnerProcessResult) -> dict[str, 
         payload["daemon_result"] = result.daemon_result.model_dump(mode="json", exclude_none=True)
     if result.error:
         payload["error"] = result.error
+    return payload
+
+
+def _kafka_daemon_run_payload(
+    result: KafkaDaemonRunResult,
+    *,
+    settings: KafkaConsumerSettings,
+    include_results: bool,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": "soc.kafka_daemon_run_result.v1",
+        "settings": settings.model_dump(mode="json", exclude_none=True),
+        "stop_reason": result.stop_reason,
+        "loop_count": result.loop_count,
+        "counters": {
+            "processed": result.processed_count,
+            "dead_lettered": result.dead_lettered_count,
+            "idle": result.idle_count,
+            "committed": result.committed_count,
+        },
+    }
+    if include_results:
+        payload["results"] = [_kafka_runner_result_payload(item) for item in result.results]
     return payload
 
 

@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon long-running loop / graceful shutdown planning |
+| 当前下一刀 | Kafka daemon metrics/backoff/production supervisor planning |
 
 ## Phase 1 切片计划
 
@@ -87,8 +87,51 @@
 | 51 | Kafka smoke runner + live Redpanda smoke | Done | 新增 `backend/scripts/soc_kafka_smoke.py`，真实 Redpanda smoke 已验证 sample publish、daemon consume、summary、dead-letter、post-commit idle |
 | 52 | Kafka bounded runner loop counters | Done | `SocKafkaConsumerRunner.run()` 下沉有限循环，返回 processed/dead_lettered/idle/committed counters；CLI 输出 counters，为后续 metrics/readiness 铺路 |
 | 53 | Kafka daemon status/readiness contract | Done | 新增 `soc daemon status`，输出 versioned JSON；检查 database readiness，支持显式 `--check-broker` 轻量 broker poll |
+| 54 | Kafka daemon long-running run loop | Done | 新增 `SocKafkaDaemonRunner` 和 `soc daemon run`；支持 SIGINT/SIGTERM graceful stop、idle sleep、bounded local validation 和结构化 run result |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka daemon long-running run loop 切片
+
+- 背景：
+  - `soc daemon consume` 适合 smoke 和有限 poll，不应该被改成默认长驻命令。
+  - 生产后台进程需要单独的 run loop：可优雅停止、可空闲 sleep、可在本地用 loop cap 验证，不改变 per-record commit/dead-letter 语义。
+- 新增：
+  - `soc_agent.daemon.kafka_daemon`
+  - `KafkaDaemonStopSignal`
+  - `KafkaDaemonRunResult`
+  - `SocKafkaDaemonRunner`
+  - CLI：`soc daemon run`
+- 行为：
+  - `SocKafkaDaemonRunner` 包装现有 `SocKafkaConsumerRunner.process_next()`，不重写 Kafka record 处理逻辑。
+  - `run(max_loops=None)` 默认长驻，直到 stop signal。
+  - `--max-loops` 只用于本地验收、测试和 smoke，不是生产默认。
+  - `--idle-sleep-ms` 控制 idle poll 后 sleep；测试可设为 `0`。
+  - CLI 安装 `SIGINT` / `SIGTERM` handler，收到信号后设置 stop flag，当前 poll 返回后退出。
+  - 不论正常停止还是异常，controller 都会调用 `runner.close()`，确保 consumer port 释放。
+  - 输出 schema 固定为 `soc.kafka_daemon_run_result.v1`，默认只输出 counters；`--include-results` 才输出每轮结果，避免长驻进程输出无限增长。
+- 已补充测试：
+  - daemon runner 到达 `max_loops` 后停止并 close consumer。
+  - stop signal 预先触发时不处理 loop，但仍 close consumer。
+  - idle sleep 后可由 stop signal 停止。
+  - invalid `idle_sleep_seconds` / `max_loops` fail-fast。
+  - CLI disabled bounded run 输出 structured JSON。
+  - CLI invalid args 返回 exit code 2。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/daemon/__init__.py soc_agent/daemon/kafka_daemon.py soc_agent/cli.py tests/test_soc_daemon_kafka_daemon.py tests/test_soc_agent_runtime.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/daemon/__init__.py soc_agent/daemon/kafka_daemon.py soc_agent/cli.py tests/test_soc_daemon_kafka_daemon.py tests/test_soc_agent_runtime.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_kafka_daemon.py tests/test_soc_daemon_kafka_status.py tests/test_soc_daemon_kafka_runner.py tests/test_soc_daemon_kafka_config.py tests/test_soc_daemon_kafka_mapper.py tests/test_soc_agent_runtime.py::test_cli_daemon_run_disabled_by_default_outputs_bounded_run tests/test_soc_agent_runtime.py::test_cli_daemon_run_rejects_invalid_loop_args tests/test_soc_agent_runtime.py::test_cli_daemon_consume_disabled_by_default_outputs_idle tests/test_soc_agent_runtime.py::test_cli_daemon_consume_enabled_requires_database_before_kafka tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli daemon run --max-loops 2 --idle-sleep-ms 0 --include-results --pretty`
+  - `cd backend && SOC_KAFKA_ENABLED=true SOC_KAFKA_BOOTSTRAP_SERVERS=localhost:9092 SOC_KAFKA_GROUP_ID=soc-daemon-run-check-1783066000 ./.venv/bin/python -m soc_agent.cli daemon run --database-url sqlite+pysqlite:////tmp/soc_daemon_status_20260703.db --max-loops 1 --idle-sleep-ms 0 --pretty`
+- live broker run 结果：
+  - broker：`localhost:9092`
+  - command：`soc daemon run --max-loops 1`
+  - `stop_reason=max_loops_reached`
+  - `processed=1`
+  - `committed=1`
+  - 注意：这次使用默认 topic + 新 group，消费到历史 topic 中的一条消息；后续 smoke 仍应使用隔离 topic，避免历史消息干扰验收。
+- 下一步：
+  - 做 metrics/backoff/production supervisor planning：失败退避、last_success_at、continuous counters、可接 Prometheus/日志的 event sink、Docker entrypoint 约定。
 
 ### 2026-07-03 — Kafka daemon status/readiness contract 切片
 

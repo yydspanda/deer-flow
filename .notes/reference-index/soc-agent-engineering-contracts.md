@@ -329,6 +329,14 @@ Kafka daemon / consumer adapter 约束：
   - disabled idle path 不应要求数据库连接；只有真实 broker adapter 启用并可能处理消息时，才需要 repository-backed `SocDaemonService` wiring。
   - enabled path 必须先校验/构造 repository-backed `SocDaemonService`，再构造真实 Kafka client；配置错误不能先触发 broker 连接。
   - 输出必须是结构化 JSON 摘要，不能只写自然语言日志，方便测试和后续 supervisor/readiness 集成。
+- `soc daemon run` 是长驻 daemon CLI shell：
+  - 长驻控制流必须集中在 `SocKafkaDaemonRunner`，不能在 CLI、Docker entrypoint 或 supervisor 脚本里重新实现 poll loop。
+  - `SocKafkaDaemonRunner` 只能调用 `SocKafkaConsumerRunner.process_next()`；不能绕过 runner 直接 poll/commit/dead-letter，也不能直接调用 `SocDaemonService.process_message()`。
+  - `--max-loops` 只用于测试、本地验收和 smoke；生产默认不设置 loop cap。
+  - idle poll 后必须有可配置 sleep/backoff，避免 broker 空闲时热循环；测试可设为 `--idle-sleep-ms 0`。
+  - `SIGINT` / `SIGTERM` handler 只能设置 stop flag，不得在 signal handler 内做 DB/Kafka/IO 操作。
+  - 停止时必须 close consumer port；异常路径也必须释放 consumer。
+  - 输出 schema 固定为 `soc.kafka_daemon_run_result.v1`；默认只输出 counters 和 stop reason，只有显式 `--include-results` 才输出每轮结果。
 - `soc daemon status` 是 Kafka daemon readiness/status contract：
   - 输出 schema 固定为 `soc.kafka_daemon_status.v1`，供 CLI、supervisor、Docker/K8s readiness 和人工验收复用。
   - 默认只检查 database readiness 和 Kafka adapter 配置状态；不能 poll 或处理业务消息。
