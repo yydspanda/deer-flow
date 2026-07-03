@@ -344,6 +344,8 @@ ZEUS/天眼输入可信度相关结构状态：
 
 真实 Kafka consumer adapter 规划见 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，生产运行约定见 `.notes/ai_soc/soc-daemon-production-runbook.md`。下一刀进入 deployment hardening / K8s template planning；Prometheus `/metrics` exporter 暂缓，先依赖 JSONL 日志采集。
 
+后续运行态观察台需求已暂存到 `.notes/ai_soc/operations-overview-deferred.md`。该需求有价值，但不作为当前主链路走通的前置条件；等 Kafka daemon、review queue、approval inbox 和 runtime audit 的真实数据流稳定后再进入实现。
+
 ReviewQueue TUI 实现边界：
 
 - `soc review tui` 是 DeerFlow-aligned thin client。

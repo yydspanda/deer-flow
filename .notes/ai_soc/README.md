@@ -7,6 +7,7 @@
 | `soc-agent-solution.md` | 当前权威产品/系统方案，决定“做什么、先后顺序、用户入口和阶段边界” |
 | `normalization-drift-strategy.md` | 供应商日志归一化、漂移检测、LLM 低频辅助策略 |
 | `zeus-alert-flow-and-field-trust.md` | ZEUS/天眼上游字段冲突、可信度分层、统一研判与处置闭环流程 |
+| `operations-overview-deferred.md` | 后续优化项：SOC Agent 运行态观察台需求，当前不进入实现队列 |
 | `progress.md` | 长期开发进度台账，记录当前 Phase、切片状态、完成记录和下一步 |
 
 ## 执行规则
