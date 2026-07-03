@@ -5,13 +5,14 @@ import {
   CheckCircle2Icon,
   CircleIcon,
   FlaskConicalIcon,
+  InboxIcon,
   KeyRoundIcon,
   PlayCircleIcon,
   RefreshCwIcon,
   ShieldAlertIcon,
   XCircleIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +32,8 @@ import {
   useCreateSocApprovalGrant,
   useDryRunSocApprovedAction,
   useExecuteSocApprovedAction,
+  useSocApprovalRequest,
+  useSocApprovalRequests,
   useSocReviewContext,
   useSocReviewItems,
 } from "@/core/soc";
@@ -118,6 +121,10 @@ function verdictLabel(value: string | null | undefined) {
 
 function queueItemLabel(item: SocReviewQueueItem) {
   return item.rule_name ?? item.rule_code ?? item.alert_id;
+}
+
+function approvalRequestLabel(request: SocAgentApprovalRequest) {
+  return `${request.action} / ${request.approval_request_id ?? request.permission_decision_id}`;
 }
 
 function parseJsonObject<T>(value: string): T {
@@ -215,6 +222,9 @@ export function SocReviewQueueWorkbench() {
   const [correctionReason, setCorrectionReason] = useState("");
   const [correctedVerdict, setCorrectedVerdict] =
     useState<SocVerdict>("false_positive");
+  const [selectedApprovalRequestId, setSelectedApprovalRequestId] = useState<
+    string | null
+  >(null);
   const [approvalRequestJson, setApprovalRequestJson] = useState(
     DEFAULT_APPROVAL_REQUEST_JSON,
   );
@@ -241,11 +251,50 @@ export function SocReviewQueueWorkbench() {
     selectedItem?.queue_id ?? fallbackSelectedItem?.queue_id;
   const { context, isLoading: contextLoading } =
     useSocReviewContext(activeQueueId);
+  const {
+    requests: approvalRequests,
+    isLoading: approvalRequestsLoading,
+    isFetching: approvalRequestsFetching,
+    error: approvalRequestsError,
+    refetch: refetchApprovalRequests,
+  } = useSocApprovalRequests({ status: "pending", limit: 50 });
+  const fallbackSelectedApprovalRequest = useMemo(
+    () =>
+      approvalRequests.find(
+        (request) => request.approval_request_id === selectedApprovalRequestId,
+      ) ??
+      approvalRequests[0] ??
+      null,
+    [approvalRequests, selectedApprovalRequestId],
+  );
+  const activeApprovalRequestId =
+    selectedApprovalRequestId ??
+    fallbackSelectedApprovalRequest?.approval_request_id;
+  const {
+    request: selectedApprovalRequest,
+    isLoading: approvalRequestLoading,
+  } = useSocApprovalRequest(activeApprovalRequestId);
+  const activeApprovalRequest =
+    selectedApprovalRequest ?? fallbackSelectedApprovalRequest;
   const closeMutation = useCloseSocReviewItem();
   const correctMutation = useCorrectSocReviewRun();
   const createApprovalGrantMutation = useCreateSocApprovalGrant();
   const dryRunApprovedActionMutation = useDryRunSocApprovedAction();
   const executeApprovedActionMutation = useExecuteSocApprovedAction();
+
+  useEffect(() => {
+    const firstRequestId = approvalRequests[0]?.approval_request_id;
+    if (!selectedApprovalRequestId && firstRequestId) {
+      setSelectedApprovalRequestId(firstRequestId);
+    }
+  }, [approvalRequests, selectedApprovalRequestId]);
+
+  useEffect(() => {
+    if (!activeApprovalRequest) return;
+    setApprovalRequestJson(JSON.stringify(activeApprovalRequest, null, 2));
+    setApprovalGrant(null);
+    setApprovedActionResult(null);
+  }, [activeApprovalRequest]);
 
   const handleClose = async () => {
     if (!activeQueueId || closeReason.trim().length === 0) return;
@@ -514,18 +563,110 @@ export function SocReviewQueueWorkbench() {
                     <KeyRoundIcon className="text-muted-foreground size-4" />
                     <h3 className="text-sm font-semibold">审批动作</h3>
                   </div>
-                  {approvalGrant ? (
-                    <Badge variant="outline">{approvalGrant.status}</Badge>
-                  ) : null}
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary">{approvalRequests.length}</Badge>
+                    {approvalGrant ? (
+                      <Badge variant="outline">{approvalGrant.status}</Badge>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="grid grid-cols-1 gap-5 p-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
                   <div className="space-y-4">
+                    <div className="rounded-md border">
+                      <div className="flex items-center justify-between gap-3 border-b p-3">
+                        <div className="flex items-center gap-2 text-sm font-medium">
+                          <InboxIcon className="text-muted-foreground size-4" />
+                          审批收件箱
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void refetchApprovalRequests()}
+                          disabled={approvalRequestsFetching}
+                        >
+                          <RefreshCwIcon
+                            className={cn(
+                              "size-4",
+                              approvalRequestsFetching && "animate-spin",
+                            )}
+                          />
+                          刷新
+                        </Button>
+                      </div>
+                      <div className="max-h-64 overflow-y-auto p-2">
+                        {approvalRequestsLoading ? (
+                          <div className="text-muted-foreground flex h-24 items-center justify-center text-sm">
+                            加载中...
+                          </div>
+                        ) : approvalRequestsError ? (
+                          <div className="text-destructive flex h-24 items-center justify-center px-4 text-center text-sm">
+                            {approvalRequestsError instanceof Error
+                              ? approvalRequestsError.message
+                              : "加载失败"}
+                          </div>
+                        ) : approvalRequests.length === 0 ? (
+                          <div className="text-muted-foreground flex h-24 items-center justify-center text-sm">
+                            当前没有审批请求
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {approvalRequests.map((request) => {
+                              const requestId =
+                                request.approval_request_id ??
+                                request.permission_decision_id;
+                              const active =
+                                activeApprovalRequest?.approval_request_id ===
+                                  request.approval_request_id ||
+                                selectedApprovalRequestId ===
+                                  request.approval_request_id;
+                              return (
+                                <button
+                                  key={requestId}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedApprovalRequestId(
+                                      request.approval_request_id ?? null,
+                                    );
+                                  }}
+                                  className={cn(
+                                    "w-full rounded-md border p-3 text-left transition-colors",
+                                    "hover:bg-accent focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none",
+                                    active
+                                      ? "border-primary bg-accent"
+                                      : "border-border bg-background",
+                                  )}
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <div className="truncate text-sm font-medium">
+                                        {approvalRequestLabel(request)}
+                                      </div>
+                                      <div className="text-muted-foreground mt-1 truncate text-xs">
+                                        {request.route} /{" "}
+                                        {request.requested_by.actor_id}
+                                      </div>
+                                    </div>
+                                    <Badge variant="outline">
+                                      {request.risk_level}
+                                    </Badge>
+                                  </div>
+                                  <p className="text-muted-foreground mt-2 line-clamp-2 text-xs">
+                                    {request.reason}
+                                  </p>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
                     <div className="space-y-2">
                       <label
                         className="text-sm font-medium"
                         htmlFor="approval-request-json"
                       >
-                        审批请求 JSON
+                        审批请求详情
                       </label>
                       <Textarea
                         id="approval-request-json"
@@ -534,6 +675,7 @@ export function SocReviewQueueWorkbench() {
                           setApprovalRequestJson(event.target.value)
                         }
                         className="min-h-52 resize-none font-mono text-xs"
+                        disabled={approvalRequestLoading}
                       />
                     </div>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">

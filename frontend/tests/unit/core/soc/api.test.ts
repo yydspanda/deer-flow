@@ -15,7 +15,9 @@ import {
   createSocApprovalGrant,
   dryRunSocApprovedAction,
   executeSocApprovedAction,
+  getSocApprovalRequest,
   getSocReviewContext,
+  listSocApprovalRequests,
   listSocReviewItems,
 } from "@/core/soc/api";
 
@@ -176,6 +178,46 @@ describe("SOC approval API", () => {
       roles: ["analyst"],
     },
   };
+
+  test("lists approval requests from inbox", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, { items: [approvalRequest] }),
+    );
+
+    await expect(
+      listSocApprovalRequests({
+        status: "pending",
+        limit: 25,
+        context: {
+          actorId: "approver-1",
+          surface: "web",
+          traceId: "trace-inbox-1",
+        },
+      }),
+    ).resolves.toEqual([approvalRequest]);
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/approvals/requests?status=pending&limit=25",
+      expect.any(Object),
+    );
+    const init = firstFetchInit();
+    const headers = init.headers as Headers;
+    expect(headers.get("x-soc-actor-id")).toBe("approver-1");
+    expect(headers.get("x-soc-surface")).toBe("web");
+    expect(headers.get("x-trace-id")).toBe("trace-inbox-1");
+  });
+
+  test("loads approval request detail by encoded id", async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse(200, approvalRequest));
+
+    await expect(getSocApprovalRequest("APR/1")).resolves.toEqual(
+      approvalRequest,
+    );
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/approvals/requests/APR%2F1",
+    );
+  });
 
   test("creates approval grant through gateway API", async () => {
     mockedFetch.mockResolvedValueOnce(

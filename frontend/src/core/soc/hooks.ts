@@ -11,7 +11,9 @@ import {
   createSocApprovalGrant,
   dryRunSocApprovedAction,
   executeSocApprovedAction,
+  getSocApprovalRequest,
   getSocReviewContext,
+  listSocApprovalRequests,
   listSocReviewItems,
 } from "./api";
 import type {
@@ -29,6 +31,14 @@ export const socReviewQueryKeys = {
     [...socReviewQueryKeys.all, "items", status, limit] as const,
   context: (queueId: string | null | undefined) =>
     [...socReviewQueryKeys.all, "context", queueId] as const,
+};
+
+export const socApprovalQueryKeys = {
+  all: ["soc-approval"] as const,
+  requests: (status: "pending" | null, limit: number) =>
+    [...socApprovalQueryKeys.all, "requests", status, limit] as const,
+  request: (approvalRequestId: string | null | undefined) =>
+    [...socApprovalQueryKeys.all, "request", approvalRequestId] as const,
 };
 
 function useSocWebRequestContext(): SocRequestContext {
@@ -104,11 +114,44 @@ export function useCorrectSocReviewRun() {
   });
 }
 
+export function useSocApprovalRequests({
+  status = "pending",
+  limit = 50,
+}: {
+  status?: "pending" | null;
+  limit?: number;
+} = {}) {
+  const context = useSocWebRequestContext();
+  const { data, isLoading, error, refetch, isFetching } = useQuery({
+    queryKey: socApprovalQueryKeys.requests(status, limit),
+    queryFn: () => listSocApprovalRequests({ status, limit, context }),
+  });
+  return { requests: data ?? [], isLoading, isFetching, error, refetch };
+}
+
+export function useSocApprovalRequest(
+  approvalRequestId: string | null | undefined,
+) {
+  const context = useSocWebRequestContext();
+  const { data, isLoading, error, isFetching } = useQuery({
+    queryKey: socApprovalQueryKeys.request(approvalRequestId),
+    queryFn: () => getSocApprovalRequest(approvalRequestId!, context),
+    enabled: !!approvalRequestId,
+  });
+  return { request: data ?? null, isLoading, isFetching, error };
+}
+
 export function useCreateSocApprovalGrant() {
   const context = useSocWebRequestContext();
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (request: SocApprovalGrantRequest) =>
       createSocApprovalGrant(request, context),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: socApprovalQueryKeys.all,
+      });
+    },
   });
 }
 

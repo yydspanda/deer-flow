@@ -274,6 +274,7 @@ SOC Agent chat stream 约束：
     - `GET /api/soc/approvals/requests/{approval_request_id}`
   - approved action API/TUI/Web 只能调用 `SocAgentApprovalService`，不能直接读写 repository 或绕过 token consume 边界。
   - Web approved action workbench 只能通过 `frontend/src/core/soc/api.ts` 调用 Gateway `/api/soc/approvals/*`；React component 不得直接拼后端 repository/DB 行为，也不得把 dry-run 展示成真实处置完成。
+  - Web approval inbox consumption 只能读取 Gateway `/api/soc/approvals/requests*`，并通过 `/api/soc/approvals/grants` 把 pending request 转成 grant；前端不得直接修改 `SocAgentApprovalRequest.status`。
   - Gateway 入口当前将 DeerFlow `system_role=admin` 映射为 SOC `soc_admin`；后续细粒度 SOC role 体系落地后必须替换为独立授权策略。
   - 未注册 action 默认拒绝，不能因为 route allowed 就执行。
 - `soc_agent.tui.chat_runtime` 是纯翻译层：

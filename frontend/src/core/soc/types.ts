@@ -149,6 +149,10 @@ export interface SocAgentApprovalRequest {
   created_at?: string;
 }
 
+export interface SocApprovalRequestListResponse {
+  items: SocAgentApprovalRequest[];
+}
+
 export interface SocAgentApprovalGrant {
   schema_version: "soc.agent_approval_grant.v1";
   approval_grant_id: string;

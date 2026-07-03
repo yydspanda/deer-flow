@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | approval inbox Web/TUI consumption |
+| 当前下一刀 | Kafka daemon / Agent middleware 写入 approval inbox |
 
 ## Phase 1 切片计划
 
@@ -72,8 +72,32 @@
 | 36 | approved action Gateway API | Done | 新增 `/api/soc/approvals/*`，支持 create grant、dry-run、execute；Gateway admin 映射为 `soc_admin` |
 | 37 | approved action Web workbench | Done | ReviewQueue Web 页面新增审批动作面板，复用 Gateway API 完成 create grant、dry-run、execute 边界验证 |
 | 38 | approval request inbox API | Done | 新增 `soc_approval_requests` 持久化表和 `/api/soc/approvals/requests` inbox API，供 Kafka daemon、Agent middleware、Web/TUI 共用 |
+| 39 | approval inbox Web consumption | Done | Web 审批动作面板从 approval inbox 拉取 pending request，支持列表、详情、approve、dry-run、execute |
 
 ## 进度记录
+
+### 2026-07-03 — approval inbox Web consumption 切片
+
+- 背景：
+  - `soc_approval_requests` 和 Gateway inbox API 已落地。
+  - Web approval workbench 之前仍依赖手工粘贴 request JSON，不适合作为后台审批入口。
+- 新增：
+  - `frontend/src/core/soc/api.ts` 增加 `listSocApprovalRequests()` 和 `getSocApprovalRequest()`。
+  - `frontend/src/core/soc/hooks.ts` 增加 `useSocApprovalRequests()` 和 `useSocApprovalRequest()`。
+  - `frontend/src/components/workspace/soc/soc-review-queue-workbench.tsx` 在审批动作区新增 approval inbox 列表，默认选择 pending request，并把详情填入 approve 表单。
+- 边界：
+  - Web 只通过 `/api/soc/approvals/requests*` 读取 inbox，仍通过 `/api/soc/approvals/grants` 生成 token。
+  - Web 不直接读写 repository，不修改 ApprovalRequest 状态。
+  - 手工 JSON fallback 暂时保留，方便本地调试和后端验证。
+- 已补充测试：
+  - 前端 API 单测覆盖 approval request inbox list 和 detail 路径、headers、URL encoding。
+- 已验证：
+  - `cd frontend && pnpm exec prettier --write src/core/soc/types.ts src/core/soc/api.ts src/core/soc/hooks.ts src/components/workspace/soc/soc-review-queue-workbench.tsx tests/unit/core/soc/api.test.ts`
+  - `cd frontend && pnpm exec eslint src/core/soc src/components/workspace/soc/soc-review-queue-workbench.tsx tests/unit/core/soc/api.test.ts`
+  - `cd frontend && pnpm typecheck`
+  - `cd frontend && pnpm test -- tests/unit/core/soc/api.test.ts`
+- 下一步：
+  - 让 Kafka daemon 和 Agent middleware 都写入同一个 approval inbox，然后再做 TUI approval inbox consumption。
 
 ### 2026-07-03 — approval request inbox API 切片
 
@@ -99,7 +123,7 @@
   - `cd backend && ./.venv/bin/python -m ruff check soc_agent/protocols.py soc_agent/db/models.py soc_agent/db/repositories.py soc_agent/db/__init__.py soc_agent/db/migrations/versions/0006_approval_requests.py soc_agent/core/service.py app/gateway/routers/soc_approvals.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/test_soc_approvals_router.py`
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_approvals_router.py tests/test_soc_agent_repository.py tests/test_soc_agent_service.py`
 - 下一步：
-  - 做 approval inbox Web/TUI consumption：Web/TUI 不再手工粘贴 JSON，而是从 inbox 选择 pending request 后 approve / dry-run / execute。
+  - 做 approval inbox Web consumption：Web 不再手工粘贴 JSON，而是从 inbox 选择 pending request 后 approve / dry-run / execute。
 
 ### 2026-07-03 — approved action Web workbench 切片
 
