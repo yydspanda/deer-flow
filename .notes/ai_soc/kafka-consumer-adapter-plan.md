@@ -37,7 +37,7 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
    - approval request topic 默认映射为 `kind=approval_request`。
    - 非法 JSON / schema mismatch 不进入 core service，直接产生 dead-letter record。
 
-3. **consumer runner**
+3. **consumer runner** `Done`
    - loop 只做 poll -> map -> enqueue/process -> commit。
    - 第一版可以串行处理，先保证语义正确。
    - 后续再加 bounded worker pool / semaphore。
@@ -90,13 +90,19 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 - approval request topic -> `SocDaemonMessage(kind="approval_request")`。
 - unknown topic / invalid JSON / non-object payload 明确报错。
 
-## 下一刀建议
-
-做 consumer runner skeleton，不接真实 broker client：
+已完成 `soc_agent/daemon/kafka_runner.py` 和 tests：
 
 - `KafkaConsumerPort` protocol：`poll()`, `commit(record)`, `send_dead_letter(record, error)`, `close()`。
 - `SocKafkaConsumerRunner`：串行处理一条 record，流程为 map -> `SocDaemonService.process_message()` -> commit。
 - mapper error / service error 进入 dead-letter，不 commit 原 offset 直到 dead-letter 成功。
-- tests 用 fake consumer port 覆盖 success、mapper failure、service failure、dead-letter failure。
+- tests 用 fake consumer port 覆盖 success、idle、mapper failure、service failure、dead-letter failure、close。
 
-这样下一步再接 aiokafka / confluent-kafka 时，真实 adapter 只实现 IO port，不碰业务映射。
+## 下一刀建议
+
+先定 broker adapter 配置和依赖选择，再实现 disabled-by-default broker adapter：
+
+- 配置 contract：bootstrap servers、topics、group id、client id、security protocol、SASL/TLS secret 引用、poll timeout。
+- 依赖选择：
+  - `aiokafka`：async 友好，适合后续 FastAPI/async runtime，但项目当前 daemon runner 是 sync skeleton。
+  - `confluent-kafka`：性能和生产成熟度更强，但本地安装和测试依赖更重。
+- 建议：先不加依赖，做 `KafkaConsumerSettings` contract 和 `NullKafkaConsumerPort` / fake config tests；真正 broker client 在配置稳定后接入。

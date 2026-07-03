@@ -80,8 +80,42 @@
 | 44 | SOC Lead Agent approval middleware | Planned | 等 SOC Lead Agent / skills / MCP tool chain 落地后接入；当前只保留 service-level approval boundary，不提前做无宿主 middleware |
 | 45 | Kafka consumer adapter planning | Done | 新增 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，明确 mapper/runner/offset/dead-letter/metrics 方案和下一刀 |
 | 46 | Kafka record -> daemon message mapper | Done | 新增 `soc_agent.daemon.kafka_mapper`，纯 stdlib + contracts；支持 alert/approval topics、custom topic set、坏 JSON/未知 topic 错误 |
+| 47 | Kafka consumer runner skeleton | Done | 新增 `SocKafkaConsumerRunner` 和 `KafkaConsumerPort`，串行 map -> process -> commit；mapper/service failure 进 dead-letter，仍不接真实 broker |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka consumer runner skeleton 切片
+
+- 背景：
+  - `KafkaRecord -> SocDaemonMessage` mapper 已完成。
+  - 真实 broker adapter 前，需要先固定 poll/process/commit/dead-letter 语义。
+- 新增：
+  - `soc_agent/daemon/kafka_runner.py`
+  - `KafkaConsumerPort` protocol：`poll()`、`commit(record)`、`send_dead_letter(record, error)`、`close()`。
+  - `KafkaRunnerProcessResult`。
+  - `SocKafkaConsumerRunner.process_next()` / `process_record()`。
+- 处理语义：
+  - 成功：`poll -> map -> SocDaemonService.process_message -> commit`。
+  - mapper failure：`send_dead_letter -> commit`。
+  - service failure：`send_dead_letter -> commit`。
+  - dead-letter 写失败：不 commit，异常向上抛出。
+- 边界：
+  - runner 不引入真实 Kafka SDK。
+  - runner 不访问 repository，不调用 pipeline。
+  - 真实 broker adapter 后续只实现 `KafkaConsumerPort`。
+- 已补充测试：
+  - success commit after service success。
+  - idle。
+  - mapper failure -> dead-letter -> commit。
+  - service failure -> dead-letter -> commit。
+  - dead-letter failure -> no commit。
+  - close。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/daemon/__init__.py soc_agent/daemon/kafka_runner.py tests/test_soc_daemon_kafka_runner.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/daemon/__init__.py soc_agent/daemon/kafka_runner.py tests/test_soc_daemon_kafka_runner.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_kafka_mapper.py tests/test_soc_daemon_kafka_runner.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 做真实 broker adapter/config planning 或实现一个 disabled-by-default broker adapter。优先先定配置 contract 和依赖选择（`aiokafka` vs `confluent-kafka`）。
 
 ### 2026-07-03 — Kafka record to daemon message mapper 切片
 
