@@ -256,6 +256,8 @@ SOC Agent chat stream 约束：
   - `SocAgentApprovalService` 只能把 pending request 转成 `SocAgentApprovalGrant`；只有 `soc_approver` 或 `soc_admin` role 可以批准。
   - `SocAgentApprovalGrant.execution_token_id` 是一次性执行授权标识，不是 action result；生成 grant 仍不得执行封禁、隔离、MCP 调用等外部副作用。
   - `SocAgentApprovalGrantRepository` 是 approval grant 的持久化边界；`approve()` 在 repository 存在时必须保存 grant。
+  - SQLAlchemy repository 必须持久化 `SocAgentApprovalGrant` 的 approve/consume 全量 payload，并提供按 `approval_grant_id` 和 `execution_token_id` 查询。
+  - `soc_approval_grants` 表必须保存扁平索引字段和完整 `grant_payload`；索引至少覆盖 `execution_token_id`、`approval_request_id`、`permission_decision_id`、`route`、`action`、`risk_level`、`status`、`expires_at`、`consumed_at`、`consume_idempotency_key`、`execution_result_id`。
   - `SocAgentApprovedActionCommand` 是审批后执行入口的显式 contract；必须包含 `execution_token_id`、`route`、`action`，并显式区分 `dry_run=True/False`。
   - `SocAgentApprovalService.dry_run_approved_action()` 只能做 token 存在性、过期时间、route/action 一致性校验，并返回 `SocAgentActionResult(status=success)`；不得调用外部工具、不得修改业务状态、不得把 dry-run 结果当作真实处置完成。
   - `SocAgentApprovalService.execute_approved_action()` 是真实执行前的稳定边界：必须要求 `dry_run=False` 和 `idempotency_key`，必须消费一次性 token，并把 `consumed_at`、`consumed_by`、`consume_idempotency_key`、`execution_result_id`、`execution_result_payload` 写回 grant。

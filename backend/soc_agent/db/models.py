@@ -133,3 +133,32 @@ class SocReviewQueueRow(SocBase):
     closed_by_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     close_reason: Mapped[str | None] = mapped_column(Text)
     item_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SocApprovalGrantRow(SocBase):
+    """Approved high-risk action grant and consume state."""
+
+    __tablename__ = "soc_approval_grants"
+    __table_args__ = (
+        Index("ix_soc_approval_grants_status_expires", "status", "expires_at"),
+        Index("ix_soc_approval_grants_action_status", "action", "status"),
+    )
+
+    approval_grant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    execution_token_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    approval_request_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    permission_decision_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    route: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    action: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    risk_level: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    approved_by_actor_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    requested_by_actor_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    approval_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    consume_idempotency_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    execution_result_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    grant_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

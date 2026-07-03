@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | approved action API/TUI 入口或 approval grant repository 持久化 |
+| 当前下一刀 | approved action API/TUI 入口 |
 
 ## Phase 1 切片计划
 
@@ -68,8 +68,39 @@
 | 32 | ReviewQueue Web thin page | Done | Next.js 工作台新增 `/workspace/soc/review`，通过 Gateway ReviewQueue API 展示队列/上下文并提交 close/correct；前端不复制业务逻辑 |
 | 33 | ReviewQueue Web actor/context headers | Done | Web 请求携带 surface/trace/idempotency；Gateway 用认证用户覆盖可伪造 actor header，并把 `surface=web` 写入 service context |
 | 34 | approved-action consume/audit boundary | Done | `execute_approved_action()` 要求 `dry_run=False` + idempotency，消费一次性 token，记录 consumed/execution result payload；仍不执行外部副作用 |
+| 35 | approval grant repository persistence | Done | 新增 `soc_approval_grants` 表和 SQLAlchemy repository 方法，持久化 approval grant approve/consume 状态 |
 
 ## 进度记录
+
+### 2026-07-03 — approval grant repository persistence 切片
+
+- 背景：
+  - `SocAgentApprovalService` 已支持 approve、dry-run 和 execute consume boundary。
+  - 但 grant repository 只有 protocol 和 in-memory 测试实现，真实 API/TUI 入口前必须先能持久化 execution token 和 consumed 状态。
+- 新增：
+  - `SocApprovalGrantRow` ORM model。
+  - Alembic migration `0005_approval_grants.py`，新增 `soc_approval_grants` 表。
+  - `SqlAlchemyAlertRepository.save_approval_grant()`。
+  - `SqlAlchemyAlertRepository.get_approval_grant()`。
+  - `SqlAlchemyAlertRepository.get_approval_grant_by_token()`。
+- 数据边界：
+  - 表中保存扁平索引字段和完整 `grant_payload`。
+  - 查询支持按 `approval_grant_id` 和 `execution_token_id`。
+  - consume 后的 `consumed_at`、`consumed_by`、`consume_idempotency_key`、`execution_result_id`、`execution_result_payload` 通过 payload 和索引字段持久化。
+- 已同步文档：
+  - `.notes/ai_soc/soc-agent-solution.md`
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 已补充测试：
+  - repository 持久化 approve 状态。
+  - repository 持久化 execute consume 状态。
+  - `SocAgentApprovalService` 通过 SQLAlchemy repository 完成 approve -> execute -> reload。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/db/models.py soc_agent/db/repositories.py soc_agent/db/__init__.py soc_agent/db/migrations/versions/0005_approval_grants.py tests/test_soc_agent_repository.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/db/models.py soc_agent/db/repositories.py soc_agent/db/__init__.py soc_agent/db/migrations/versions/0005_approval_grants.py tests/test_soc_agent_repository.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_repository.py tests/test_soc_agent_service.py`
+  - `cd backend && UV_CACHE_DIR=/tmp/uv-cache uv run python -m soc_agent.cli db upgrade --database-url sqlite:////home/yydspei/projects/deer-flow/backend/.deer-flow/data/soc_agent_dev.db`
+- 下一步：
+  - 做 approved action API/TUI 入口，让 approve/execute 链路可从操作界面或 Gateway 手工验证。
 
 ### 2026-07-03 — approved-action consume/audit boundary 切片
 

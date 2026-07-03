@@ -6,8 +6,8 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from soc_agent.contracts import AuditAction, CorrectionCommand, ReviewQueueStatus, SimilarAlertQuery, Verdict
-from soc_agent.core import SocAnalysisService
+from soc_agent.contracts import ActorContext, AuditAction, CorrectionCommand, ReviewQueueStatus, ServiceRequestContext, SimilarAlertQuery, SocAgentApprovalRequest, SocAgentApprovedActionCommand, SocAgentRiskLevel, Verdict
+from soc_agent.core import SocAgentApprovalService, SocAnalysisService
 from soc_agent.core.service import SocReviewService
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 
@@ -224,3 +224,52 @@ def test_sqlalchemy_alert_repository_closes_review_queue_after_correction() -> N
     assert closed.closed_by is not None
     assert repository.list_review_items(status=ReviewQueueStatus.OPEN) == []
     assert repository.list_review_items(status=ReviewQueueStatus.CLOSED) == [closed]
+
+
+def test_sqlalchemy_alert_repository_persists_approval_grant_consume_state() -> None:
+    repository = _repository()
+    service = SocAgentApprovalService(grant_repository=repository)
+    approval_request = SocAgentApprovalRequest(
+        approval_request_id="APR-REPO-001",
+        permission_decision_id="PERM-REPO-001",
+        route="response.block_ip",
+        action="response.block_ip",
+        risk_level=SocAgentRiskLevel.HIGH_RISK,
+        reason="requires approval",
+        requested_by=ActorContext(actor_id="analyst-1", roles=["analyst"]),
+    )
+    grant = service.approve(
+        approval_request,
+        context=ServiceRequestContext(
+            actor=ActorContext(actor_id="approver-1", roles=["soc_approver"]),
+            idempotency_key="idem-approve-1",
+        ),
+        reason="approved containment scope",
+    )
+
+    saved = repository.get_approval_grant(grant.approval_grant_id)
+    saved_by_token = repository.get_approval_grant_by_token(grant.execution_token_id)
+
+    assert saved == grant
+    assert saved_by_token == grant
+    assert saved.status == "approved"
+
+    result = service.execute_approved_action(
+        SocAgentApprovedActionCommand(
+            execution_token_id=grant.execution_token_id,
+            route="response.block_ip",
+            action="response.block_ip",
+            dry_run=False,
+            payload={"ip": "203.0.113.8"},
+        ),
+        context=ServiceRequestContext(
+            actor=ActorContext(actor_id="analyst-2", roles=["analyst"]),
+            idempotency_key="idem-execute-1",
+        ),
+    )
+    consumed = repository.get_approval_grant(grant.approval_grant_id)
+
+    assert consumed.status == "consumed"
+    assert consumed.consumed_by.actor_id == "analyst-2"
+    assert consumed.consume_idempotency_key == "idem-execute-1"
+    assert consumed.execution_result_payload == result.model_dump(mode="json")

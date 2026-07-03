@@ -16,8 +16,9 @@ from soc_agent.contracts import (
     ReviewQueueStatus,
     SimilarAlertMatch,
     SimilarAlertQuery,
+    SocAgentApprovalGrant,
 )
-from soc_agent.db.models import SocAlertSummaryRow, SocAnalysisRunRow, SocDecisionAuditLogRow, SocReviewQueueRow
+from soc_agent.db.models import SocAlertSummaryRow, SocAnalysisRunRow, SocApprovalGrantRow, SocDecisionAuditLogRow, SocReviewQueueRow
 
 
 class SqlAlchemyAlertRepository:
@@ -145,6 +146,32 @@ class SqlAlchemyAlertRepository:
             result = session.execute(query.order_by(SocReviewQueueRow.updated_at.desc()).limit(limit))
             return [ReviewQueueItem.model_validate(row.item_payload) for row in result.scalars()]
 
+    def save_approval_grant(self, grant: SocAgentApprovalGrant) -> None:
+        payload = grant.model_dump(mode="json")
+        with self._session_factory() as session:
+            row = session.get(SocApprovalGrantRow, grant.approval_grant_id)
+            if row is None:
+                session.add(SocApprovalGrantRow(approval_grant_id=grant.approval_grant_id, **_approval_grant_row_values(grant, payload)))
+            else:
+                for key, value in _approval_grant_row_values(grant, payload).items():
+                    setattr(row, key, value)
+            session.commit()
+
+    def get_approval_grant(self, approval_grant_id: str) -> SocAgentApprovalGrant | None:
+        with self._session_factory() as session:
+            row = session.get(SocApprovalGrantRow, approval_grant_id)
+            if row is None:
+                return None
+            return SocAgentApprovalGrant.model_validate(row.grant_payload)
+
+    def get_approval_grant_by_token(self, execution_token_id: str) -> SocAgentApprovalGrant | None:
+        with self._session_factory() as session:
+            result = session.execute(select(SocApprovalGrantRow).where(SocApprovalGrantRow.execution_token_id == execution_token_id).limit(1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                return None
+            return SocAgentApprovalGrant.model_validate(row.grant_payload)
+
 
 def _row_values(run: AnalysisRun, payload: dict, *, updated_at: datetime) -> dict:
     return {
@@ -259,4 +286,26 @@ def _review_queue_row_values(item: ReviewQueueItem, payload: dict) -> dict:
         "closed_by_payload": item.closed_by.model_dump(mode="json") if item.closed_by is not None else None,
         "close_reason": item.close_reason,
         "item_payload": payload,
+    }
+
+
+def _approval_grant_row_values(grant: SocAgentApprovalGrant, payload: dict) -> dict:
+    return {
+        "execution_token_id": grant.execution_token_id,
+        "approval_request_id": grant.approval_request_id,
+        "permission_decision_id": grant.permission_decision_id,
+        "route": grant.route,
+        "action": grant.action,
+        "risk_level": grant.risk_level.value,
+        "status": grant.status,
+        "approved_by_actor_id": grant.approved_by.actor_id,
+        "requested_by_actor_id": grant.requested_by.actor_id,
+        "approval_reason": grant.approval_reason,
+        "idempotency_key": grant.idempotency_key,
+        "consume_idempotency_key": grant.consume_idempotency_key,
+        "execution_result_id": grant.execution_result_id,
+        "approved_at": grant.approved_at,
+        "expires_at": grant.expires_at,
+        "consumed_at": grant.consumed_at,
+        "grant_payload": payload,
     }
