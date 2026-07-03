@@ -776,3 +776,33 @@ def test_cli_review_queue_lists_and_closes_items(tmp_path: Path, capsys) -> None
     closed_items = json.loads(captured.out)
     assert len(closed_items) == 1
     assert closed_items[0]["queue_id"] == item["queue_id"]
+
+
+def test_cli_daemon_consume_disabled_by_default_outputs_idle(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.delenv("SOC_KAFKA_ENABLED", raising=False)
+
+    exit_code = main(["daemon", "consume", "--pretty"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    payload = json.loads(captured.out)
+    assert payload["schema_version"] == "soc.kafka_consume_result.v1"
+    assert payload["settings"]["enabled"] is False
+    assert payload["settings"]["bootstrap_servers"] == ["localhost:9092"]
+    assert payload["results"] == [
+        {
+            "status": "idle",
+            "committed": False,
+            "dead_lettered": False,
+        }
+    ]
+
+
+def test_cli_daemon_consume_enabled_without_broker_adapter_fails_fast(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.setenv("SOC_KAFKA_ENABLED", "true")
+
+    exit_code = main(["daemon", "consume"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 3
+    assert "no broker client adapter is configured" in captured.err

@@ -316,6 +316,10 @@ Kafka daemon / consumer adapter 约束：
 - `NullKafkaConsumerPort` 是 disabled-by-default 本地/测试 adapter：
   - `enabled=False` 时 `poll()` 返回 `None`。
   - `enabled=True` 但没有真实 broker adapter 时必须 fail-fast，不能伪装成已经连接 Kafka。
+- `soc daemon consume` 是 broker consumer 的 CLI shell：
+  - 默认必须有限次 poll，例如 `--max-records 1`，不能在本地/CI 默认长驻阻塞。
+  - disabled idle path 不应要求数据库连接；只有真实 broker adapter 启用并可能处理消息时，才需要 repository-backed `SocDaemonService` wiring。
+  - 输出必须是结构化 JSON 摘要，不能只写自然语言日志，方便测试和后续 supervisor/readiness 集成。
 - `SocDaemonMessage` 的 Kafka metadata 必须保留 `topic`、`partition`、`offset`、`key`；daemon idempotency key 固定为 `kafka:{topic}:{partition}:{offset}`。
 - 真实 consumer CLI/daemon 入口只能做配置读取、adapter 构造、runner loop 和 graceful shutdown；业务处理仍归 `SocDaemonService`。
 - 后续并发、重试阈值、lag metrics、readiness 和 worker pool 只能在 runner/adapter 层扩展，不得改变 core service 的单条 message contract。

@@ -22,6 +22,13 @@ from soc_agent.core import (
     SocReviewService,
     SocServiceError,
 )
+from soc_agent.daemon import (
+    KafkaAdapterNotConfiguredError,
+    KafkaConsumerSettings,
+    KafkaRunnerProcessResult,
+    NullKafkaConsumerPort,
+    SocKafkaConsumerRunner,
+)
 from soc_agent.db import (
     SqlAlchemyAlertRepository,
     create_soc_tables,
@@ -62,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
         return _chat_tui(args)
     if args.command == "daemon" and args.daemon_command == "process":
         return _daemon_process(args)
+    if args.command == "daemon" and args.daemon_command == "consume":
+        return _daemon_consume(args)
     if args.command == "eval" and args.eval_command == "offline":
         return _eval_offline(args)
     if args.command == "db" and args.db_command == "init":
@@ -174,6 +183,15 @@ def _build_parser() -> argparse.ArgumentParser:
     daemon_process.add_argument("--json", dest="json_payload", help="Inline daemon message JSON object")
     daemon_process.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(daemon_process)
+    daemon_consume = daemon_subparsers.add_parser("consume", help="Run the SOC Kafka consumer loop")
+    daemon_consume.add_argument(
+        "--max-records",
+        type=int,
+        default=1,
+        help="Maximum records to process before exiting; default is one safe poll",
+    )
+    daemon_consume.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(daemon_consume)
 
     eval_cmd = subparsers.add_parser("eval", help="SOC offline evaluation helpers")
     eval_subparsers = eval_cmd.add_subparsers(dest="eval_command")
@@ -465,6 +483,45 @@ def _daemon_process(args: argparse.Namespace) -> int:
     return 0 if result.status == "processed" else 1
 
 
+def _daemon_consume(args: argparse.Namespace) -> int:
+    if args.max_records < 1:
+        print("error: --max-records must be >= 1", file=sys.stderr)
+        return 2
+
+    settings = KafkaConsumerSettings.from_env()
+    consumer = NullKafkaConsumerPort(settings)
+    runner = SocKafkaConsumerRunner(
+        consumer=consumer,
+        daemon_service=SocDaemonService(),
+    )
+
+    results: list[dict[str, Any]] = []
+    try:
+        for _ in range(args.max_records):
+            result = runner.process_next()
+            results.append(_kafka_runner_result_payload(result))
+            if result.status == "idle":
+                break
+    except KafkaAdapterNotConfiguredError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    finally:
+        runner.close()
+
+    print(
+        json.dumps(
+            {
+                "schema_version": "soc.kafka_consume_result.v1",
+                "settings": settings.model_dump(mode="json", exclude_none=True),
+                "results": results,
+            },
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+        )
+    )
+    return 0
+
+
 def _eval_offline(args: argparse.Namespace) -> int:
     try:
         samples = _load_payload_samples(args.path, args.glob)
@@ -524,6 +581,26 @@ def _database_label(explicit_url: str | None) -> str:
     if explicit_url:
         return "explicit database"
     return "SOC_DATABASE_URL / DeerFlow postgres"
+
+
+def _kafka_runner_result_payload(result: KafkaRunnerProcessResult) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "status": result.status,
+        "committed": result.committed,
+        "dead_lettered": result.dead_lettered,
+    }
+    if result.record is not None:
+        payload["record"] = {
+            "topic": result.record.topic,
+            "partition": result.record.partition,
+            "offset": result.record.offset,
+            "key": result.record.key.decode("utf-8", errors="replace") if isinstance(result.record.key, bytes) else result.record.key,
+        }
+    if result.daemon_result is not None:
+        payload["daemon_result"] = result.daemon_result.model_dump(mode="json", exclude_none=True)
+    if result.error:
+        payload["error"] = result.error
+    return payload
 
 
 def _load_payload(path: str | None, json_payload: str | None) -> dict[str, Any]:

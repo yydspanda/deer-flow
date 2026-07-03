@@ -118,11 +118,20 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 - `sasl_password_env` 只保存环境变量名，避免 secret 进入配置文件、notes、DB 或 run payload。
 - `NullKafkaConsumerPort` 用于 disabled-by-default 本地/测试空跑；如果 `enabled=True` 但没有真实 broker adapter，会 fail-fast。
 
+已完成 `soc daemon consume` disabled-by-default CLI wiring：
+
+- CLI 从 `SOC_KAFKA_*` 读取 `KafkaConsumerSettings`。
+- 默认 `--max-records 1`，不会在本地/CI 长期挂住。
+- `SOC_KAFKA_ENABLED=false` 或未设置时，`NullKafkaConsumerPort.poll()` 返回 idle，CLI 输出 `soc.kafka_consume_result.v1`。
+- `SOC_KAFKA_ENABLED=true` 但未接真实 adapter 时，CLI fail-fast，避免误以为已经连接 broker。
+- disabled idle 不要求数据库连接；未来真实 broker adapter 启用时才需要完整 repository-backed `SocDaemonService` wiring。
+
 ## 下一刀建议
 
-先做 broker adapter 依赖选择和 disabled-by-default consume command wiring：
+先做 broker adapter 依赖选择：
 
 - 依赖选择：
   - `aiokafka`：async 友好，适合后续 FastAPI/async runtime，但项目当前 daemon runner 是 sync skeleton。
   - `confluent-kafka`：性能和生产成熟度更强，但本地安装和测试依赖更重。
-- 建议：优先让 `soc daemon consume` 能读取 `KafkaConsumerSettings` 并在 disabled 时明确 idle；真实 broker client behind flag 接入，避免本地开发和 CI 被 Kafka 依赖阻塞。
+- 建议：如果优先生产成熟度和同步 runner 兼容性，先接 `confluent-kafka` adapter；如果后续 daemon 明确走 async worker/runtime，再接 `aiokafka`。
+- 无论选择哪一个，具体 SDK 只能出现在 adapter 层，不能进入 core、pipeline、repository、API、TUI 或 contracts。

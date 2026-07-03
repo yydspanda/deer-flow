@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka broker adapter dependency decision / disabled-by-default consume command wiring |
+| 当前下一刀 | Kafka broker adapter dependency decision |
 
 ## Phase 1 切片计划
 
@@ -82,8 +82,39 @@
 | 46 | Kafka record -> daemon message mapper | Done | 新增 `soc_agent.daemon.kafka_mapper`，纯 stdlib + contracts；支持 alert/approval topics、custom topic set、坏 JSON/未知 topic 错误 |
 | 47 | Kafka consumer runner skeleton | Done | 新增 `SocKafkaConsumerRunner` 和 `KafkaConsumerPort`，串行 map -> process -> commit；mapper/service failure 进 dead-letter，仍不接真实 broker |
 | 48 | Kafka consumer settings + null adapter | Done | 新增 `KafkaConsumerSettings` 环境变量配置 contract 和 `NullKafkaConsumerPort`；默认禁用、启用但无真实 adapter 时 fail-fast |
+| 49 | `soc daemon consume` disabled wiring | Done | CLI 读取 `KafkaConsumerSettings` 并运行有限次 runner poll；默认 idle 输出 JSON，启用但未接真实 adapter 时 fail-fast |
 
 ## 进度记录
+
+### 2026-07-03 — `soc daemon consume` disabled wiring 切片
+
+- 背景：
+  - `KafkaConsumerSettings` / `NullKafkaConsumerPort` 已完成。
+  - 需要先让 CLI daemon consumer 入口存在，但不能要求本地/CI 有 Kafka broker。
+- 新增：
+  - `soc daemon consume`
+  - 默认 `--max-records 1`，只做有限 poll，不会长期挂住。
+  - 从 `SOC_KAFKA_*` 读取 `KafkaConsumerSettings`。
+  - 使用 `NullKafkaConsumerPort` 和 `SocKafkaConsumerRunner` 完成 disabled-by-default wiring。
+  - 输出 `soc.kafka_consume_result.v1` JSON，包含安全配置摘要和每次 runner 结果。
+- 行为：
+  - `SOC_KAFKA_ENABLED` 未设置或为 false：输出 `status=idle`，退出码 0。
+  - `SOC_KAFKA_ENABLED=true` 但尚未接真实 broker adapter：stderr 明确报错，退出码 3。
+  - `--max-records < 1`：参数错误，退出码 2。
+- 边界：
+  - 本切片不引入 Kafka SDK。
+  - disabled idle 不要求数据库连接。
+  - 当前不连接 broker、不消费真实消息、不写 dead-letter topic。
+- 已补充测试：
+  - disabled default 输出 idle JSON。
+  - enabled without broker adapter fail-fast。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/cli.py tests/test_soc_agent_runtime.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/cli.py tests/test_soc_agent_runtime.py soc_agent/daemon/kafka_adapter.py soc_agent/daemon/kafka_config.py soc_agent/daemon/kafka_runner.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_runtime.py::test_cli_daemon_consume_disabled_by_default_outputs_idle tests/test_soc_agent_runtime.py::test_cli_daemon_consume_enabled_without_broker_adapter_fails_fast tests/test_soc_daemon_kafka_config.py tests/test_soc_daemon_kafka_runner.py tests/architecture/test_soc_agent_boundaries.py`
+  - `git diff --check`
+- 下一步：
+  - 决定真实 broker adapter 依赖：优先评估 `confluent-kafka` vs `aiokafka`；在 adapter 层 behind flag 接入，保持 core/service 不受 Kafka SDK 污染。
 
 ### 2026-07-03 — Kafka consumer settings + null adapter 切片
 
