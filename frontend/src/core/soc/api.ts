@@ -4,12 +4,52 @@ import { getBackendBaseURL } from "@/core/config";
 import type {
   SocAnalysisRun,
   SocInvestigationContext,
+  SocRequestContext,
   SocReviewCloseRequest,
   SocReviewCorrectionRequest,
   SocReviewQueueItem,
   SocReviewQueueListResponse,
   SocReviewQueueStatus,
 } from "./types";
+
+function createRequestId(prefix: string) {
+  const randomId = globalThis.crypto?.randomUUID?.();
+  if (randomId) return `${prefix}-${randomId}`;
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function buildSocHeaders(
+  context: SocRequestContext | undefined,
+  {
+    json = false,
+    stateChanging = false,
+  }: {
+    json?: boolean;
+    stateChanging?: boolean;
+  } = {},
+) {
+  const headers = new Headers();
+  if (json) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (!context) {
+    return headers;
+  }
+  if (context.actorId) {
+    headers.set("x-soc-actor-id", context.actorId);
+  }
+  if (context.surface) {
+    headers.set("x-soc-surface", context.surface);
+  }
+  headers.set("x-trace-id", context.traceId ?? createRequestId("soc-trace"));
+  if (stateChanging) {
+    headers.set(
+      "idempotency-key",
+      context.idempotencyKey ?? createRequestId("soc-idem"),
+    );
+  }
+  return headers;
+}
 
 async function readJson<T>(response: Response, fallbackMessage: string) {
   if (!response.ok) {
@@ -25,9 +65,11 @@ async function readJson<T>(response: Response, fallbackMessage: string) {
 export async function listSocReviewItems({
   status = "open",
   limit = 50,
+  context,
 }: {
   status?: SocReviewQueueStatus | null;
   limit?: number;
+  context?: SocRequestContext;
 } = {}): Promise<SocReviewQueueItem[]> {
   const params = new URLSearchParams();
   if (status !== null) {
@@ -35,9 +77,10 @@ export async function listSocReviewItems({
   }
   params.set("limit", String(limit));
 
-  const response = await fetch(
-    `${getBackendBaseURL()}/api/soc/review/items?${params.toString()}`,
-  );
+  const url = `${getBackendBaseURL()}/api/soc/review/items?${params.toString()}`;
+  const response = context
+    ? await fetch(url, { headers: buildSocHeaders(context) })
+    : await fetch(url);
   const data = await readJson<SocReviewQueueListResponse>(
     response,
     "Failed to load SOC review queue",
@@ -47,10 +90,12 @@ export async function listSocReviewItems({
 
 export async function getSocReviewContext(
   queueId: string,
+  context?: SocRequestContext,
 ): Promise<SocInvestigationContext> {
-  const response = await fetch(
-    `${getBackendBaseURL()}/api/soc/review/items/${encodeURIComponent(queueId)}/context`,
-  );
+  const url = `${getBackendBaseURL()}/api/soc/review/items/${encodeURIComponent(queueId)}/context`;
+  const response = context
+    ? await fetch(url, { headers: buildSocHeaders(context) })
+    : await fetch(url);
   return readJson<SocInvestigationContext>(
     response,
     "Failed to load SOC review context",
@@ -60,12 +105,13 @@ export async function getSocReviewContext(
 export async function closeSocReviewItem(
   queueId: string,
   request: SocReviewCloseRequest,
+  context?: SocRequestContext,
 ): Promise<SocReviewQueueItem> {
   const response = await fetch(
     `${getBackendBaseURL()}/api/soc/review/items/${encodeURIComponent(queueId)}/close`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
       body: JSON.stringify(request),
     },
   );
@@ -78,12 +124,13 @@ export async function closeSocReviewItem(
 export async function correctSocReviewRun(
   runId: string,
   request: SocReviewCorrectionRequest,
+  context?: SocRequestContext,
 ): Promise<SocAnalysisRun> {
   const response = await fetch(
     `${getBackendBaseURL()}/api/soc/review/runs/${encodeURIComponent(runId)}/correct`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
       body: JSON.stringify(request),
     },
   );

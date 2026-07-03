@@ -26,6 +26,11 @@ from soc_agent.db import SqlAlchemyAlertRepository, resolve_database_url, to_syn
 
 router = APIRouter(prefix="/api/soc/review", tags=["soc-review"])
 
+_ALLOWED_HEADER_SURFACES = {
+    EntrySurface.API.value: EntrySurface.API,
+    EntrySurface.WEB.value: EntrySurface.WEB,
+}
+
 
 class ReviewQueueListResponse(BaseModel):
     items: list[ReviewQueueItem]
@@ -141,9 +146,22 @@ def _get_or_create_soc_repository(request: Request) -> SqlAlchemyAlertRepository
 def _service_context_from_request(request: Request) -> ServiceRequestContext:
     return ServiceRequestContext(
         actor=ActorContext(
-            actor_id=request.headers.get("x-soc-actor-id") or "api",
-            surface=EntrySurface.API,
+            actor_id=_actor_id_from_request(request),
+            surface=_surface_from_request(request),
         ),
         trace_id=request.headers.get("x-trace-id"),
         idempotency_key=request.headers.get("idempotency-key"),
     )
+
+
+def _actor_id_from_request(request: Request) -> str:
+    user = getattr(getattr(request, "state", None), "user", None)
+    user_id = getattr(user, "id", None)
+    if user_id is not None:
+        return str(user_id)
+    return request.headers.get("x-soc-actor-id") or "api"
+
+
+def _surface_from_request(request: Request) -> EntrySurface:
+    surface = request.headers.get("x-soc-surface", EntrySurface.API.value).lower()
+    return _ALLOWED_HEADER_SURFACES.get(surface, EntrySurface.API)

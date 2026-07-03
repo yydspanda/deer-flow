@@ -25,6 +25,14 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+function firstFetchInit(): RequestInit {
+  const init = mockedFetch.mock.calls[0]?.[1];
+  if (!init) {
+    throw new Error("expected fetch init");
+  }
+  return init;
+}
+
 beforeEach(() => {
   mockedFetch.mockReset();
 });
@@ -39,6 +47,26 @@ describe("SOC review API", () => {
     expect(mockedFetch).toHaveBeenCalledWith(
       "/api/soc/review/items?status=open&limit=25",
     );
+  });
+
+  test("adds web actor headers when context is provided", async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse(200, { items: [] }));
+
+    await listSocReviewItems({
+      status: "open",
+      limit: 25,
+      context: {
+        actorId: "user-1",
+        surface: "web",
+        traceId: "trace-1",
+      },
+    });
+
+    const init = firstFetchInit();
+    const headers = init?.headers as Headers;
+    expect(headers.get("x-soc-actor-id")).toBe("user-1");
+    expect(headers.get("x-soc-surface")).toBe("web");
+    expect(headers.get("x-trace-id")).toBe("trace-1");
   });
 
   test("omits status when requesting all queue items", async () => {
@@ -78,6 +106,29 @@ describe("SOC review API", () => {
         body: JSON.stringify({ reason: "done" }),
       }),
     );
+  });
+
+  test("posts state-changing review request with idempotency key", async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse(200, { queue_id: "REV-1" }));
+
+    await closeSocReviewItem(
+      "REV-1",
+      { reason: "done" },
+      {
+        actorId: "user-1",
+        surface: "web",
+        traceId: "trace-1",
+        idempotencyKey: "idem-1",
+      },
+    );
+
+    const init = firstFetchInit();
+    const headers = init?.headers as Headers;
+    expect(headers.get("content-type")).toBe("application/json");
+    expect(headers.get("x-soc-actor-id")).toBe("user-1");
+    expect(headers.get("x-soc-surface")).toBe("web");
+    expect(headers.get("x-trace-id")).toBe("trace-1");
+    expect(headers.get("idempotency-key")).toBe("idem-1");
   });
 
   test("posts correction request body", async () => {

@@ -9,6 +9,15 @@ export type SocVerdict =
   | "unknown"
   | "needs_review";
 
+export type SocEntrySurface = "api" | "web";
+
+export interface SocRequestContext {
+  actorId?: string;
+  surface?: SocEntrySurface;
+  traceId?: string;
+  idempotencyKey?: string;
+}
+
 export interface SocActorContext {
   actor_id: string;
   actor_type?: string;

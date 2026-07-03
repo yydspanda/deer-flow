@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -86,8 +87,10 @@ def _sample(name: str) -> dict:
 
 
 class FakeRequest:
-    def __init__(self, headers: dict[str, str] | None = None) -> None:
+    def __init__(self, headers: dict[str, str] | None = None, user_id: str | None = None) -> None:
         self.headers = headers or {}
+        if user_id is not None:
+            self.state = SimpleNamespace(user=SimpleNamespace(id=user_id))
 
 
 @pytest.fixture
@@ -152,6 +155,29 @@ def test_soc_review_api_closes_item_with_api_actor(review_api) -> None:
     assert closed.closed_by.actor_id == "analyst-api"
     assert closed.closed_by.surface == EntrySurface.API
     assert repository.get_review_item(item.queue_id).status == ReviewQueueStatus.CLOSED
+
+
+def test_soc_review_api_uses_authenticated_web_actor_over_header(review_api) -> None:
+    service, _, item = review_api
+
+    closed = soc_review.close_review_item(
+        item.queue_id,
+        soc_review.ReviewQueueCloseRequest(reason="复核完成"),
+        FakeRequest(
+            {
+                "x-soc-actor-id": "spoofed-user",
+                "x-soc-surface": "web",
+                "x-trace-id": "trace-web-1",
+                "idempotency-key": "idem-web-1",
+            },
+            user_id="auth-user-1",
+        ),
+        service=service,
+    )
+
+    assert closed.closed_by is not None
+    assert closed.closed_by.actor_id == "auth-user-1"
+    assert closed.closed_by.surface == EntrySurface.WEB
 
 
 def test_soc_review_api_corrects_run_and_closes_open_item(review_api) -> None:

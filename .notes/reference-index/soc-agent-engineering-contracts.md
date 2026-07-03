@@ -215,8 +215,11 @@ Review queue 约束：
   - `POST /api/soc/review/items/{queue_id}/close`
   - `POST /api/soc/review/runs/{run_id}/correct`
 - ReviewQueue API/TUI/Web 只能调用 `SocReviewService`，不能直接读写 repository 或组装 queue item。
-- API close/correct 必须构造 `ServiceRequestContext`，`ActorContext.surface=api`；TUI/Web 后续分别使用 `tui` / `web`。
-- 当前 ReviewQueue Web thin page 通过 Gateway `/api/soc/review/*` 调用，因此服务端暂时记录为 API surface；后续若要区分 Web 操作者，必须补 `x-soc-actor-id`、`x-trace-id`、`idempotency-key` 和 Web surface/context headers，不允许前端绕过 API 直接写库。
+- API/TUI/Web close/correct 必须构造 `ServiceRequestContext`；`ActorContext.surface` 必须准确标识 `api` / `tui` / `web`。
+- ReviewQueue Web thin page 通过 Gateway `/api/soc/review/*` 调用，不允许前端绕过 API 直接写库。
+- Web 请求必须携带 `x-soc-surface=web`、`x-trace-id`；状态变更请求必须携带 `idempotency-key`。
+- Web 前端可以携带 `x-soc-actor-id` 作为显式上下文，但 Gateway 侧必须优先使用认证中间件写入的 `request.state.user.id`，不能信任可伪造 header 覆盖已认证用户。
+- Gateway 只接受白名单 SOC surface header；非法 `x-soc-surface` 必须降级为 `api`，不能把任意 header 值写入审计记录。
 - `soc review tui` 必须保持 DeerFlow-aligned：
   - 可以复用 DeerFlow TUI 的 Textual app、theme、composer、command palette、stream 设计思想和组件。
   - 当前 ReviewQueue TUI 是 thin client，不接 DeerFlow agent stream，不写业务判断。

@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | ReviewQueue Web thin page 后接 SOC Web actor/context headers 或 approved-action consume/audit 真实执行边界 |
+| 当前下一刀 | approved-action consume/audit 真实执行边界 |
 
 ## Phase 1 切片计划
 
@@ -66,8 +66,40 @@
 | 30 | SOC Agent approval grant token | Done | `SocAgentApprovalService` 将 pending approval request 转成一次性 `SocAgentApprovalGrant`；仅 `soc_approver`/`soc_admin` 可批准；仍不执行真实动作 |
 | 31 | SOC Agent approval grant persistence / dry-run | Done | `approve()` 可保存 grant；`dry_run_approved_action()` 用 execution token 校验 route/action/expiry，只返回 dry-run result，不执行外部副作用 |
 | 32 | ReviewQueue Web thin page | Done | Next.js 工作台新增 `/workspace/soc/review`，通过 Gateway ReviewQueue API 展示队列/上下文并提交 close/correct；前端不复制业务逻辑 |
+| 33 | ReviewQueue Web actor/context headers | Done | Web 请求携带 surface/trace/idempotency；Gateway 用认证用户覆盖可伪造 actor header，并把 `surface=web` 写入 service context |
 
 ## 进度记录
+
+### 2026-07-03 — ReviewQueue Web actor/context headers 切片
+
+- 背景：
+  - ReviewQueue Web thin page 已经能调用 Gateway API，但 close/correct 审计上下文仍会退化为泛化 API 调用。
+  - SOC 复核、纠正和后续审批执行必须能区分 Web 操作者、调用 surface、trace 和 idempotency。
+- 新增：
+  - `frontend/src/core/soc/types.ts` 增加 `SocRequestContext` / `SocEntrySurface`。
+  - `frontend/src/core/soc/api.ts` 统一构造 SOC headers：`x-soc-actor-id`、`x-soc-surface`、`x-trace-id`，状态变更请求额外带 `idempotency-key`。
+  - `frontend/src/core/soc/hooks.ts` 从 `useAuth()` 注入当前 Web 用户，页面调用自动带 `surface=web`。
+  - `backend/app/gateway/routers/soc_review.py` 从 `request.state.user.id` 读取认证用户作为 actor id；没有认证 state 时才回退 `x-soc-actor-id`；`x-soc-surface` 只接受 `api/web` 白名单。
+- 边界：
+  - 前端 header 只是显式上下文，不能覆盖 Gateway 已认证用户。
+  - 非法 surface header 降级为 `api`，不写入任意字符串到审计上下文。
+  - 本切片只修复 Web ReviewQueue API context；真实 approved-action consume / token 消费 / external side effect 仍未实现。
+- 已同步文档：
+  - `.notes/ai_soc/soc-agent-solution.md`
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 已补充测试：
+  - 前端 API 单测覆盖 Web actor headers 和 idempotency key。
+  - 后端 router 单测覆盖认证用户覆盖伪造 actor header，并记录 `surface=web`。
+- 已验证：
+  - `cd frontend && pnpm exec prettier --check src/core/soc tests/unit/core/soc`
+  - `cd frontend && pnpm exec eslint src/core/soc tests/unit/core/soc`
+  - `cd frontend && pnpm typecheck`
+  - `cd frontend && pnpm test -- tests/unit/core/soc/api.test.ts`
+  - `cd backend && ./.venv/bin/python -m ruff format app/gateway/routers/soc_review.py tests/test_soc_review_router.py`
+  - `cd backend && ./.venv/bin/python -m ruff check app/gateway/routers/soc_review.py tests/test_soc_review_router.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_review_router.py`
+- 下一步：
+  - 做 approved-action consume/audit 真实执行边界：一次性 token 消费、已执行状态、审计记录、幂等检查和 dry-run/真实执行分层。
 
 ### 2026-07-03 — SOC Agent profile governance 决策记录
 
