@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | approved action TUI 操作入口 |
+| 当前下一刀 | approval inbox Web/TUI consumption |
 
 ## Phase 1 切片计划
 
@@ -71,8 +71,35 @@
 | 35 | approval grant repository persistence | Done | 新增 `soc_approval_grants` 表和 SQLAlchemy repository 方法，持久化 approval grant approve/consume 状态 |
 | 36 | approved action Gateway API | Done | 新增 `/api/soc/approvals/*`，支持 create grant、dry-run、execute；Gateway admin 映射为 `soc_admin` |
 | 37 | approved action Web workbench | Done | ReviewQueue Web 页面新增审批动作面板，复用 Gateway API 完成 create grant、dry-run、execute 边界验证 |
+| 38 | approval request inbox API | Done | 新增 `soc_approval_requests` 持久化表和 `/api/soc/approvals/requests` inbox API，供 Kafka daemon、Agent middleware、Web/TUI 共用 |
 
 ## 进度记录
+
+### 2026-07-03 — approval request inbox API 切片
+
+- 背景：
+  - 实际产品入口有三条：Kafka 自动预警处理、Agent TUI 主动对话、Web 工单/后台人工审批。
+  - approved action Web workbench 只能手工粘贴 approval request JSON，适合验证链路，但不能作为多入口统一审批中心。
+- 新增：
+  - `SocAgentApprovalRequestRepository` protocol。
+  - `soc_approval_requests` ORM model 和 Alembic migration `0006_approval_requests.py`。
+  - `SqlAlchemyAlertRepository.save_approval_request()` / `get_approval_request()` / `list_approval_requests()`。
+  - `SocAgentApprovalService.submit_request()` / `get_request()` / `list_requests()`。
+  - Gateway `POST /api/soc/approvals/requests`、`GET /api/soc/approvals/requests`、`GET /api/soc/approvals/requests/{approval_request_id}`。
+- 边界：
+  - ApprovalRequest 是 pending request，不是执行授权；真实执行仍必须走 ApprovalGrant execution token。
+  - API 只调用 `SocAgentApprovalService`，不直接访问 repository。
+  - Kafka daemon 和 Agent middleware 后续都应该写入同一个 inbox，Web/TUI 只作为消费和批准入口。
+- 已补充测试：
+  - service request inbox submit/list/get、missing request、缺 repository。
+  - repository 持久化 approval request，approve 时同时保存 request 和 grant。
+  - Gateway request inbox create/list/get/404 和 route 暴露。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/protocols.py soc_agent/db/models.py soc_agent/db/repositories.py soc_agent/db/__init__.py soc_agent/db/migrations/versions/0006_approval_requests.py soc_agent/core/service.py app/gateway/routers/soc_approvals.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/test_soc_approvals_router.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/protocols.py soc_agent/db/models.py soc_agent/db/repositories.py soc_agent/db/__init__.py soc_agent/db/migrations/versions/0006_approval_requests.py soc_agent/core/service.py app/gateway/routers/soc_approvals.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py tests/test_soc_approvals_router.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_approvals_router.py tests/test_soc_agent_repository.py tests/test_soc_agent_service.py`
+- 下一步：
+  - 做 approval inbox Web/TUI consumption：Web/TUI 不再手工粘贴 JSON，而是从 inbox 选择 pending request 后 approve / dry-run / execute。
 
 ### 2026-07-03 — approved action Web workbench 切片
 
@@ -93,7 +120,7 @@
   - dry-run 强制发送 `dry_run=true` 且不带 idempotency header。
   - execute 强制发送 `dry_run=false` 且携带 idempotency header。
 - 下一步：
-  - 做 approved action TUI 操作入口，复用同一 API/service 语义，不复制审批和 token 消费逻辑。
+  - 做 approval request inbox API，使 Kafka daemon、Agent middleware、Web/TUI 都能共用 pending request 收件箱。
 
 ### 2026-07-03 — approved action Gateway API 切片
 

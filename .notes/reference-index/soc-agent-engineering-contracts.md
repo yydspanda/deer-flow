@@ -253,6 +253,8 @@ SOC Agent chat stream 约束：
   - `high_risk` action 必须返回 `requires_human_approval=True` 且不执行，例如未来的封禁 IP、隔离终端、任意 MCP 调用。
   - `high_risk` action 被拒绝时必须生成 `SocAgentApprovalRequest`，并通过 `custom kind=soc.approval_request` 暴露 `approval_request_id`、`permission_decision_id`、`action`、`risk_level`、`requested_by`、`status=pending`。
   - `SocAgentApprovalRequest` 只是审批请求，不是执行授权；后续执行必须另有 approval token、audit record、idempotency key。
+  - `SocAgentApprovalRequestRepository` 是多入口 approval inbox 边界；Kafka daemon、Agent middleware、API/Web/TUI 产生的 pending request 都必须写入同一 repository contract。
+  - `soc_approval_requests` 表必须保存扁平索引字段和完整 `request_payload`；索引至少覆盖 `permission_decision_id`、`route`、`action`、`risk_level`、`status`、`requested_by_actor_id`、`created_at`。
   - `SocAgentApprovalService` 只能把 pending request 转成 `SocAgentApprovalGrant`；只有 `soc_approver` 或 `soc_admin` role 可以批准。
   - `SocAgentApprovalGrant.execution_token_id` 是一次性执行授权标识，不是 action result；生成 grant 仍不得执行封禁、隔离、MCP 调用等外部副作用。
   - `SocAgentApprovalGrantRepository` 是 approval grant 的持久化边界；`approve()` 在 repository 存在时必须保存 grant。
@@ -267,6 +269,9 @@ SOC Agent chat stream 约束：
     - `POST /api/soc/approvals/grants`
     - `POST /api/soc/approvals/actions/dry-run`
     - `POST /api/soc/approvals/actions/execute`
+    - `POST /api/soc/approvals/requests`
+    - `GET /api/soc/approvals/requests`
+    - `GET /api/soc/approvals/requests/{approval_request_id}`
   - approved action API/TUI/Web 只能调用 `SocAgentApprovalService`，不能直接读写 repository 或绕过 token consume 边界。
   - Web approved action workbench 只能通过 `frontend/src/core/soc/api.ts` 调用 Gateway `/api/soc/approvals/*`；React component 不得直接拼后端 repository/DB 行为，也不得把 dry-run 展示成真实处置完成。
   - Gateway 入口当前将 DeerFlow `system_role=admin` 映射为 SOC `soc_admin`；后续细粒度 SOC role 体系落地后必须替换为独立授权策略。

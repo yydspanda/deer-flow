@@ -17,8 +17,9 @@ from soc_agent.contracts import (
     SimilarAlertMatch,
     SimilarAlertQuery,
     SocAgentApprovalGrant,
+    SocAgentApprovalRequest,
 )
-from soc_agent.db.models import SocAlertSummaryRow, SocAnalysisRunRow, SocApprovalGrantRow, SocDecisionAuditLogRow, SocReviewQueueRow
+from soc_agent.db.models import SocAlertSummaryRow, SocAnalysisRunRow, SocApprovalGrantRow, SocApprovalRequestRow, SocDecisionAuditLogRow, SocReviewQueueRow
 
 
 class SqlAlchemyAlertRepository:
@@ -172,6 +173,37 @@ class SqlAlchemyAlertRepository:
                 return None
             return SocAgentApprovalGrant.model_validate(row.grant_payload)
 
+    def save_approval_request(self, approval_request: SocAgentApprovalRequest) -> None:
+        payload = approval_request.model_dump(mode="json")
+        with self._session_factory() as session:
+            row = session.get(SocApprovalRequestRow, approval_request.approval_request_id)
+            if row is None:
+                session.add(SocApprovalRequestRow(approval_request_id=approval_request.approval_request_id, **_approval_request_row_values(approval_request, payload)))
+            else:
+                for key, value in _approval_request_row_values(approval_request, payload).items():
+                    setattr(row, key, value)
+            session.commit()
+
+    def get_approval_request(self, approval_request_id: str) -> SocAgentApprovalRequest | None:
+        with self._session_factory() as session:
+            row = session.get(SocApprovalRequestRow, approval_request_id)
+            if row is None:
+                return None
+            return SocAgentApprovalRequest.model_validate(row.request_payload)
+
+    def list_approval_requests(
+        self,
+        *,
+        status: str | None = "pending",
+        limit: int = 50,
+    ) -> list[SocAgentApprovalRequest]:
+        with self._session_factory() as session:
+            query = select(SocApprovalRequestRow)
+            if status is not None:
+                query = query.where(SocApprovalRequestRow.status == status)
+            result = session.execute(query.order_by(SocApprovalRequestRow.created_at.desc()).limit(limit))
+            return [SocAgentApprovalRequest.model_validate(row.request_payload) for row in result.scalars()]
+
 
 def _row_values(run: AnalysisRun, payload: dict, *, updated_at: datetime) -> dict:
     return {
@@ -308,4 +340,18 @@ def _approval_grant_row_values(grant: SocAgentApprovalGrant, payload: dict) -> d
         "expires_at": grant.expires_at,
         "consumed_at": grant.consumed_at,
         "grant_payload": payload,
+    }
+
+
+def _approval_request_row_values(approval_request: SocAgentApprovalRequest, payload: dict) -> dict:
+    return {
+        "permission_decision_id": approval_request.permission_decision_id,
+        "route": approval_request.route,
+        "action": approval_request.action,
+        "risk_level": approval_request.risk_level.value,
+        "status": approval_request.status,
+        "requested_by_actor_id": approval_request.requested_by.actor_id,
+        "reason": approval_request.reason,
+        "created_at": approval_request.created_at,
+        "request_payload": payload,
     }

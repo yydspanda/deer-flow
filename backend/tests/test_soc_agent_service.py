@@ -148,6 +148,7 @@ class InMemoryReviewQueueRepository:
 class InMemoryApprovalGrantRepository:
     def __init__(self) -> None:
         self.grants: dict[str, SocAgentApprovalGrant] = {}
+        self.requests: dict[str, SocAgentApprovalRequest] = {}
 
     def save_approval_grant(self, grant: SocAgentApprovalGrant) -> None:
         self.grants[grant.approval_grant_id] = grant
@@ -160,6 +161,23 @@ class InMemoryApprovalGrantRepository:
             if grant.execution_token_id == execution_token_id:
                 return grant
         return None
+
+    def save_approval_request(self, approval_request: SocAgentApprovalRequest) -> None:
+        self.requests[approval_request.approval_request_id] = approval_request
+
+    def get_approval_request(self, approval_request_id: str) -> SocAgentApprovalRequest | None:
+        return self.requests.get(approval_request_id)
+
+    def list_approval_requests(
+        self,
+        *,
+        status: str | None = "pending",
+        limit: int = 50,
+    ) -> list[SocAgentApprovalRequest]:
+        requests = list(self.requests.values())
+        if status is not None:
+            requests = [request for request in requests if request.status == status]
+        return requests[:limit]
 
 
 class _HighRiskRouter:
@@ -762,6 +780,53 @@ def test_agent_approval_service_creates_one_time_grant_for_approver() -> None:
     assert grant.expires_at > grant.approved_at
     assert repository.get_approval_grant(grant.approval_grant_id) == grant
     assert repository.get_approval_grant_by_token(grant.execution_token_id) == grant
+
+
+def test_agent_approval_service_persists_approval_request_in_inbox() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
+    approval_request = _approval_request()
+
+    submitted = service.submit_request(approval_request)
+    listed = service.list_requests()
+    fetched = service.get_request(approval_request.approval_request_id)
+
+    assert submitted == approval_request
+    assert listed == [approval_request]
+    assert fetched == approval_request
+
+
+def test_agent_approval_service_approve_saves_request_when_repository_available() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
+    approval_request = _approval_request()
+
+    grant = service.approve(
+        approval_request,
+        context=ServiceRequestContext(actor=ActorContext(actor_id="admin-1", roles=["soc_admin"])),
+        reason="approved containment scope",
+    )
+
+    assert repository.get_approval_request(approval_request.approval_request_id) == approval_request
+    assert repository.get_approval_grant(grant.approval_grant_id) == grant
+
+
+def test_agent_approval_service_request_inbox_requires_repository() -> None:
+    service = SocAgentApprovalService()
+
+    with pytest.raises(SocServiceNotImplementedError, match="SocAgentApprovalRequestRepository"):
+        service.submit_request(_approval_request())
+    with pytest.raises(SocServiceNotImplementedError, match="SocAgentApprovalRequestRepository"):
+        service.list_requests()
+    with pytest.raises(SocServiceNotImplementedError, match="SocAgentApprovalRequestRepository"):
+        service.get_request("APR-MISSING")
+
+
+def test_agent_approval_service_request_inbox_maps_missing_request() -> None:
+    service = SocAgentApprovalService(request_repository=InMemoryApprovalGrantRepository())
+
+    with pytest.raises(SocServiceNotFoundError, match="not found"):
+        service.get_request("APR-MISSING")
 
 
 def test_agent_approval_service_dry_runs_approved_action_without_side_effect() -> None:

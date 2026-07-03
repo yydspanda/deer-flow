@@ -273,3 +273,46 @@ def test_sqlalchemy_alert_repository_persists_approval_grant_consume_state() -> 
     assert consumed.consumed_by.actor_id == "analyst-2"
     assert consumed.consume_idempotency_key == "idem-execute-1"
     assert consumed.execution_result_payload == result.model_dump(mode="json")
+
+
+def test_sqlalchemy_alert_repository_persists_approval_requests() -> None:
+    repository = _repository()
+    approval_request = SocAgentApprovalRequest(
+        approval_request_id="APR-REPO-REQUEST-001",
+        permission_decision_id="PERM-REPO-REQUEST-001",
+        route="response.block_ip",
+        action="response.block_ip",
+        risk_level=SocAgentRiskLevel.HIGH_RISK,
+        reason="requires approval",
+        requested_by=ActorContext(actor_id="analyst-1", roles=["analyst"]),
+    )
+
+    repository.save_approval_request(approval_request)
+
+    assert repository.get_approval_request("APR-REPO-REQUEST-001") == approval_request
+    assert repository.list_approval_requests(status="pending") == [approval_request]
+    assert repository.list_approval_requests(status=None) == [approval_request]
+    assert repository.list_approval_requests(status="closed") == []
+
+
+def test_sqlalchemy_approval_service_approve_persists_request_and_grant() -> None:
+    repository = _repository()
+    service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
+    approval_request = SocAgentApprovalRequest(
+        approval_request_id="APR-REPO-APPROVE-001",
+        permission_decision_id="PERM-REPO-APPROVE-001",
+        route="response.block_ip",
+        action="response.block_ip",
+        risk_level=SocAgentRiskLevel.HIGH_RISK,
+        reason="requires approval",
+        requested_by=ActorContext(actor_id="analyst-1", roles=["analyst"]),
+    )
+
+    grant = service.approve(
+        approval_request,
+        context=ServiceRequestContext(actor=ActorContext(actor_id="admin-1", roles=["soc_admin"])),
+        reason="approved containment scope",
+    )
+
+    assert repository.get_approval_request(approval_request.approval_request_id) == approval_request
+    assert repository.get_approval_grant(grant.approval_grant_id) == grant

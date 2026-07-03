@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.routers.soc_dependencies import get_or_create_soc_repository, soc_service_context_from_request
@@ -20,16 +20,58 @@ class ApprovalGrantRequest(BaseModel):
     expires_in_seconds: int = Field(default=900, gt=0, le=86_400)
 
 
+class ApprovalRequestListResponse(BaseModel):
+    items: list[SocAgentApprovalRequest]
+
+
 def get_soc_approval_service(request: Request) -> SocAgentApprovalService:
     injected = getattr(request.app.state, "soc_approval_service", None)
     if injected is not None:
         return injected
 
     repository = get_or_create_soc_repository(request)
-    return SocAgentApprovalService(grant_repository=repository)
+    return SocAgentApprovalService(grant_repository=repository, request_repository=repository)
 
 
 ApprovalServiceDep = Annotated[SocAgentApprovalService, Depends(get_soc_approval_service)]
+
+
+@router.post("/requests", response_model=SocAgentApprovalRequest)
+def create_approval_request(
+    approval_request: SocAgentApprovalRequest,
+    service: ApprovalServiceDep,
+) -> SocAgentApprovalRequest:
+    try:
+        return service.submit_request(approval_request)
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SocServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/requests", response_model=ApprovalRequestListResponse)
+def list_approval_requests(
+    service: ApprovalServiceDep,
+    status: str | None = Query(default="pending"),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> ApprovalRequestListResponse:
+    try:
+        return ApprovalRequestListResponse(items=service.list_requests(status=status, limit=limit))
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get("/requests/{approval_request_id}", response_model=SocAgentApprovalRequest)
+def get_approval_request(
+    approval_request_id: str,
+    service: ApprovalServiceDep,
+) -> SocAgentApprovalRequest:
+    try:
+        return service.get_request(approval_request_id)
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/grants", response_model=SocAgentApprovalGrant)

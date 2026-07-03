@@ -77,9 +77,9 @@ graph TB
 
     subgraph SOC_Agent["SOC Agent（Main Agent + Sub Agent 编排）"]
         MAIN["<b>Main Agent</b>（持久）<br/>────────────────<br/>· 滑动窗口（最近200条摘要）<br/>· 倒排索引（实体→alert_id）<br/>· 活跃子Agent管理<br/>· 去重判定（不调LLM）"]
-        
+
         SUB["<b>Sub Agent</b>（per-alert，短命）<br/>─────────────<br/>① 实体提取<br/>② 经验快查<br/>③ 关联查询<br/>④ 漏斗关联<br/>⑤ LLM 综合分析<br/>⑥ 置信度决策<br/>⑦ 写入存储"]
-        
+
         MAIN -->|"去重未命中·派发"| SUB
         MAIN -->|"去重命中·merge"| SKIP_MERGE["直接引用已有结论<br/>不调 LLM"]
         SUB -->|"返回结论+context_modifier"| MAIN
@@ -309,7 +309,7 @@ ZEUS/天眼输入可信度相关结构状态：
    - API 是 Web/TUI/外部系统统一入口，必须只调用 `SocReviewService`。
    - TUI 是 Phase 1/2 更合适的薄操作台，用于 open queue、context、close、correct、trace 调试。
    - Web UI 后续基于同一套 API 增量做列表和详情页，不复制业务逻辑。
-   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done，action permission / human approval Done，approval request event Done，approval grant token Done，approval grant persistence / dry-run Done，ReviewQueue Web thin page Done，Web actor/context headers Done，approved-action consume/audit boundary Done，approval grant repository persistence Done，approved action Gateway API Done，approved action Web workbench Done；下一步做 approved action TUI 操作入口。
+   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done，action permission / human approval Done，approval request event Done，approval grant token Done，approval grant persistence / dry-run Done，ReviewQueue Web thin page Done，Web actor/context headers Done，approved-action consume/audit boundary Done，approval grant repository persistence Done，approved action Gateway API Done，approved action Web workbench Done，approval request inbox API Done；下一步做 approval inbox Web/TUI consumption。
 
 7. **SOC Agent chat stream contract**
    - `SocAgentChatService.stream()` 是后续 SOC Lead Agent TUI/Web/Channels 的统一流式入口。
@@ -327,6 +327,14 @@ ZEUS/天眼输入可信度相关结构状态：
    - 当前已落地 `soc_approval_grants` 持久化表和 SQLAlchemy repository，approval grant 的 approve/consume 状态可跨进程恢复。
    - 当前已落地 `/api/soc/approvals/*` Gateway API：创建 grant、dry-run、execute 都复用 `SocAgentApprovalService`，Gateway admin 映射为 `soc_admin`。
    - 当前已落地 ReviewQueue Web 审批动作面板：通过 Gateway API 生成 execution token、dry-run、execute；前端不直接访问 repository、不执行外部副作用。
+   - 当前已落地 `soc_approval_requests` 持久化表和 approval inbox API：Kafka daemon、Agent middleware、Web/TUI 后续都写入/读取同一个 pending approval request inbox；ApprovalRequest 仍不是执行授权，执行必须走 ApprovalGrant token。
+
+三入口审批模型：
+
+- Kafka daemon 自动预警流可以在固定 runtime/policy 后生成 `SocAgentApprovalRequest`，写入 approval inbox。
+- Agent TUI/Lead Agent 路径后续通过 SOC middleware 拦截高风险 tool/action call，生成同一类 `SocAgentApprovalRequest`，写入 approval inbox。
+- Web 工单/后台和 TUI 作为人工消费入口，从 approval inbox 选择 pending request 后 approve，生成一次性 `SocAgentApprovalGrant.execution_token_id`，再 dry-run / execute。
+- 统一中心是 `SocAgentApprovalService` + request/grant repository + audit/event log；middleware 只是 Agent 入口 adapter，不是审批系统唯一中心。
 
 ReviewQueue TUI 实现边界：
 
@@ -454,15 +462,15 @@ Main Agent + Sub Agent 的核心价值：
 class MainAgentContext:
     # === 静资产（从存储加载） ===
     soul: str                              # soc_soul.md 全文
-    
+
     # === 准静资产（从存储加载，按需更新） ===
     memory_facts: list[Fact]               # soc_facts 中 status=confirmed 的 facts
-    
+
     # === 动资产（内存维护，重启时从 DB 重建） ===
     recent_window: deque[AlertDigest]      # 最近 200 条预警摘要（环形缓冲区）
     pattern_index: dict[PatternKey, list[str]]  # (detection_key, process_name, source_ip) → alert_ids
     active_subs: dict[str, SubAgentHandle] # 当前正在运行的子 Agent
-    
+
     # === 实时上下文（不持久化，重启清零） ===
     recent_trends: dict[str, TrendSignal]  # 最近 5 分钟的趋势信号
                                            # 例如: "10.0.3.5 在 3 分钟内触发了 5 条不同规则"
@@ -480,7 +488,7 @@ class MainAgent:
             source_ip=alert.entities.network.source_ip,
         )
         candidates = self.ctx.pattern_index.get(key, [])
-        
+
         for alert_id in reversed(candidates[-5:]):  # 只看最近 5 条
             digest = self.ctx.recent_window.get(alert_id)
             if digest is None:
@@ -506,7 +514,7 @@ class MainAgent:
             else:
                 # 可能相关但不确定 → 标记 context_ref 供子 Agent 参考
                 alert["_context_ref"] = match.alert_id
-        
+
         # 步骤 1: 派发子 Agent
         sub = SubAgent(
             alert=alert,
@@ -514,7 +522,7 @@ class MainAgent:
             main_ctx=self.ctx
         )
         self.ctx.active_subs[alert["id"]] = sub
-        
+
         # 步骤 2: 异步执行（带超时）
         try:
             result = await asyncio.wait_for(sub.run(), timeout=120)
@@ -526,16 +534,16 @@ class MainAgent:
                 summary="子Agent超时"
             )
             sub.kill()
-        
+
         # 步骤 3: 结果回写主 Agent 上下文
         if result.context_modifier:
             self.ctx = result.context_modifier(self.ctx)
-        
+
         # 步骤 4: 更新滑动窗口
         self.ctx.recent_window.append(result.to_digest())
         self.ctx.pattern_index[key].append(alert["id"])
         del self.ctx.active_subs[alert["id"]]
-        
+
         return result
 ```
 
@@ -548,7 +556,7 @@ class SubAgent:
         self.context_ref = context_ref  # ← 如果命中相似预警，带上
         self.main_ctx = main_ctx        # 共享 soul + memory + 实时趋势
         self.abort = asyncio.Event()
-    
+
     async def run(self) -> AlertResult:
         # 构建 prompt 时注入主 Agent 的实时上下文
         context = {
@@ -558,11 +566,11 @@ class SubAgent:
             "soul": self.main_ctx.soul,
             "memory_facts": self.main_ctx.memory_facts,
         }
-        
+
         # 走 7 步流水线...
         result = await self.pipeline(context)
         return result
-    
+
     def _get_context_ref(self) -> dict | None:
         if not self.context_ref:
             return None
@@ -575,7 +583,7 @@ class SubAgent:
                 "relation_hint": f"同类预警 {prior.alert_id} 已判定为 {prior.verdict}"
             }
         return None
-    
+
     def kill(self):
         self.abort.set()
 ```
@@ -979,7 +987,7 @@ async def analyze(alert, soul, memory_facts, correlation_result):
 决策实现：
 
 ```python
-def decide(analysis: dict, mode: str, 
+def decide(analysis: dict, mode: str,
            lesson_match: LessonMatch | None = None,
            similarity_score: float = 0.0) -> Decision:
     """
@@ -992,15 +1000,15 @@ def decide(analysis: dict, mode: str,
     """
     c = analysis["confidence"]
     v = analysis["verdict"]
-    
+
     # L2: 运行模式覆盖
     if mode == "daemon" and c < 0.85:
         return Decision(action="queue_for_review", needs_human=True)
-    
+
     # L3: 分类器相似度预判（新增）—— 历史有高相似的同类型，直接复用
     if similarity_score > 0.9 and lesson_match is None:
         return Decision(action="inherit_prior", needs_human=False)
-    
+
     # L4: LLM 置信度阈值
     if c >= 0.85:
         if v in ("false_positive", "benign_positive"):
@@ -1087,20 +1095,20 @@ v4 方案：
 async def handle_alert_with_prejudge(alert):
     # 步骤 ②③ 同步进行的同时，后台启动分类器
     speculative = asyncio.create_task(classifier.prejudge(alert))
-    
+
     lesson = check_lessons(alert)        # ② 同步查 DB
     history = correlate(alert)           # ③ 同步查 DB
-    
+
     classifier_result = await speculative  # 等待分类器完成
-    
+
     # 分类器高置信命中 → 直接跳过 LLM
-    if (classifier_result.confidence == "high" 
+    if (classifier_result.confidence == "high"
         and classifier_result.action == "auto_close"):
-        return AlertResult(verdict="false_positive", 
+        return AlertResult(verdict="false_positive",
                           confidence=0.92,
                           source="classifier",
                           skipped_llm=True)
-    
+
     # 继续走 ④⑤ 正常流水线
 ```
 
@@ -1553,7 +1561,7 @@ $ soc-agent correct ALT-0042 --verdict false_positive
   → 每周三凌晨定时跑
 
 还有什么要补充的吗？（回车跳过）
-  → 
+  →
 
 ✅ 已保存 1 条知识到 soc_facts（status: confirmed）
 ✅ 已保存 1 条规则到 lessons_learned（以后同类自动关闭）
@@ -2157,14 +2165,14 @@ async def async_classifier_prejudge(state: SubAgentState) -> SubAgentState:
     """后台运行，与步骤②③并行。结果缓存到 state，步骤⑤使用。"""
     command = f"{state.exe_name} {state.rule_name}"
     descriptions = [state.exe_name, state.rule_name]
-    
+
     result = await classifier.classify(command, descriptions, mode='allow')
-    
+
     state.classifier_result = result
     if result.matches and result.confidence == 'high':
         state.classifier_hit = True
         state.classifier_action = result.action  # auto_close / lower_priority
-    
+
     return state
 ```
 

@@ -57,6 +57,7 @@ from soc_agent.protocols import (
     LLMAnalyzer,
     ReviewQueueRepository,
     SocAgentApprovalGrantRepository,
+    SocAgentApprovalRequestRepository,
     SocEventSink,
 )
 
@@ -522,8 +523,42 @@ class SocAgentApprovalService:
 
     APPROVER_ROLES = frozenset({"soc_approver", "soc_admin"})
 
-    def __init__(self, *, grant_repository: SocAgentApprovalGrantRepository | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        grant_repository: SocAgentApprovalGrantRepository | None = None,
+        request_repository: SocAgentApprovalRequestRepository | None = None,
+    ) -> None:
         self._grant_repository = grant_repository
+        self._request_repository = request_repository
+
+    def submit_request(self, approval_request: SocAgentApprovalRequest) -> SocAgentApprovalRequest:
+        """Persist a pending approval request for human review."""
+
+        if approval_request.status != "pending":
+            raise SocServiceError(f"approval request {approval_request.approval_request_id} is not pending")
+        if self._request_repository is None:
+            raise SocServiceNotImplementedError("submit_request requires a SocAgentApprovalRequestRepository")
+        self._request_repository.save_approval_request(approval_request)
+        return approval_request
+
+    def get_request(self, approval_request_id: str) -> SocAgentApprovalRequest:
+        if self._request_repository is None:
+            raise SocServiceNotImplementedError("get_request requires a SocAgentApprovalRequestRepository")
+        approval_request = self._request_repository.get_approval_request(approval_request_id)
+        if approval_request is None:
+            raise SocServiceNotFoundError(f"approval request {approval_request_id} not found")
+        return approval_request
+
+    def list_requests(
+        self,
+        *,
+        status: str | None = "pending",
+        limit: int = 50,
+    ) -> list[SocAgentApprovalRequest]:
+        if self._request_repository is None:
+            raise SocServiceNotImplementedError("list_requests requires a SocAgentApprovalRequestRepository")
+        return self._request_repository.list_approval_requests(status=status, limit=limit)
 
     def approve(
         self,
@@ -556,6 +591,8 @@ class SocAgentApprovalService:
             approved_at=approved_at,
             expires_at=approved_at + timedelta(seconds=expires_in_seconds),
         )
+        if self._request_repository is not None:
+            self._request_repository.save_approval_request(approval_request)
         if self._grant_repository is not None:
             self._grant_repository.save_approval_grant(grant)
         return grant

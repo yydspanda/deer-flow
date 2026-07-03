@@ -21,6 +21,7 @@ from soc_agent.core import SocAgentApprovalService
 class InMemoryApprovalGrantRepository:
     def __init__(self) -> None:
         self.grants: dict[str, SocAgentApprovalGrant] = {}
+        self.requests: dict[str, SocAgentApprovalRequest] = {}
 
     def save_approval_grant(self, grant: SocAgentApprovalGrant) -> None:
         self.grants[grant.approval_grant_id] = grant
@@ -33,6 +34,23 @@ class InMemoryApprovalGrantRepository:
             if grant.execution_token_id == execution_token_id:
                 return grant
         return None
+
+    def save_approval_request(self, approval_request: SocAgentApprovalRequest) -> None:
+        self.requests[approval_request.approval_request_id] = approval_request
+
+    def get_approval_request(self, approval_request_id: str) -> SocAgentApprovalRequest | None:
+        return self.requests.get(approval_request_id)
+
+    def list_approval_requests(
+        self,
+        *,
+        status: str | None = "pending",
+        limit: int = 50,
+    ) -> list[SocAgentApprovalRequest]:
+        requests = list(self.requests.values())
+        if status is not None:
+            requests = [request for request in requests if request.status == status]
+        return requests[:limit]
 
 
 class FakeRequest:
@@ -85,6 +103,30 @@ def test_soc_approvals_api_creates_grant() -> None:
     assert grant.approved_by.surface == EntrySurface.WEB
     assert grant.idempotency_key == "idem-approve-1"
     assert repository.get_approval_grant_by_token(grant.execution_token_id) == grant
+
+
+def test_soc_approvals_api_creates_and_lists_approval_requests() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    service = SocAgentApprovalService(request_repository=repository)
+    approval_request = _approval_request()
+
+    created = soc_approvals.create_approval_request(approval_request, service=service)
+    listed = soc_approvals.list_approval_requests(service=service, status="pending", limit=50)
+    fetched = soc_approvals.get_approval_request("APR-API-001", service=service)
+
+    assert created == approval_request
+    assert listed.items == [approval_request]
+    assert fetched == approval_request
+    assert repository.get_approval_request("APR-API-001") == approval_request
+
+
+def test_soc_approvals_api_maps_missing_request_to_404() -> None:
+    service = SocAgentApprovalService(request_repository=InMemoryApprovalGrantRepository())
+
+    with pytest.raises(HTTPException) as exc_info:
+        soc_approvals.get_approval_request("APR-MISSING", service=service)
+
+    assert exc_info.value.status_code == 404
 
 
 def test_soc_approvals_api_dry_runs_and_executes_approved_action() -> None:
@@ -146,6 +188,8 @@ def test_soc_approvals_api_maps_missing_token_to_404() -> None:
 def test_soc_approvals_router_exposes_mvp_paths() -> None:
     paths = {route.path for route in soc_approvals.router.routes}
 
+    assert "/api/soc/approvals/requests" in paths
+    assert "/api/soc/approvals/requests/{approval_request_id}" in paths
     assert "/api/soc/approvals/grants" in paths
     assert "/api/soc/approvals/actions/dry-run" in paths
     assert "/api/soc/approvals/actions/execute" in paths

@@ -17,6 +17,7 @@ from soc_agent.contracts import (
     SimilarAlertMatch,
     SimilarAlertQuery,
     SocAgentApprovalGrant,
+    SocAgentApprovalRequest,
     SocEvent,
 )
 
@@ -96,6 +97,21 @@ class SocAgentApprovalGrantRepository(Protocol):
     def get_approval_grant(self, approval_grant_id: str) -> SocAgentApprovalGrant | None: ...
 
     def get_approval_grant_by_token(self, execution_token_id: str) -> SocAgentApprovalGrant | None: ...
+
+
+class SocAgentApprovalRequestRepository(Protocol):
+    """Persistence boundary for pending high-risk action approval requests."""
+
+    def save_approval_request(self, approval_request: SocAgentApprovalRequest) -> None: ...
+
+    def get_approval_request(self, approval_request_id: str) -> SocAgentApprovalRequest | None: ...
+
+    def list_approval_requests(
+        self,
+        *,
+        status: str | None = "pending",
+        limit: int = 50,
+    ) -> list[SocAgentApprovalRequest]: ...
 
 
 class SocEventSink(Protocol):
