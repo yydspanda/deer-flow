@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon deployment hardening / K8s template planning |
+| 当前下一刀 | Kafka daemon real-env validation or worker pool / concurrency planning |
 
 ## Phase 1 切片计划
 
@@ -94,8 +94,34 @@
 | 58 | Kafka daemon JSONL metric sink | Done | `soc daemon run --metric-jsonl stderr|stdout` 可持续输出 start/result/error/stop JSONL 事件；entrypoint 支持 `SOC_DAEMON_METRIC_JSONL` |
 | 59 | Kafka daemon production compose overlay | Done | 新增 `docker-compose.soc-daemon.yaml`，显式 opt-in 启动 SOC daemon；默认不进入 DeerFlow 主 docker 流程 |
 | 60 | Kafka daemon Dockerfile multi-extra support | Done | `backend/Dockerfile` 支持 comma/whitespace 分隔 `UV_EXTRAS`；SOC daemon overlay 默认 `postgres,kafka` |
+| 61 | Kafka daemon K8s deployment contract | Done | 新增 opt-in K8s template，固定 ConfigMap/Secret/probes/resources/logging 标签；Compose 与 K8s 配置等价关系写入 runbook |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka daemon K8s deployment contract 切片
+
+- 背景：
+  - SOC daemon 已具备生产 entrypoint、healthcheck、JSONL metric sink、compose overlay 和 Dockerfile multi-extra support。
+  - 需要把生产部署边界固定成可审阅模板，但不能接入默认 DeerFlow 部署流程。
+- 新增：
+  - `docker/k8s/soc-daemon.yaml`
+  - `backend/tests/test_soc_daemon_k8s_template.py`
+- 行为：
+  - K8s 模板显式 opt-in，不被默认脚本加载。
+  - `ConfigMap` 保存非敏感 Kafka/daemon 配置。
+  - `Secret` 保存 `SOC_DATABASE_URL` 和 Kafka password。
+  - `SOC_KAFKA_SASL_PASSWORD_ENV=SOC_KAFKA_PASSWORD`，代码只读取 secret env 名。
+  - Deployment command 复用 `backend/scripts/soc_daemon_entrypoint.sh`。
+  - readiness/liveness 复用 `backend/scripts/soc_daemon_healthcheck.sh`。
+  - 不创建 Service；daemon 先通过 stderr JSONL 暴露最低观测面。
+  - 模板包含 resource requests/limits 和日志标签。
+- 同步：
+  - runbook 补 K8s template、环境变量和 Compose/K8s 等价关系。
+  - engineering contracts 补 K8s 模板边界。
+  - solution / kafka plan 更新当前状态和下一步。
+- 下一步：
+  - 如果有真实环境参数，验证 image、namespace、secret manager、日志采集标签、resource sizing。
+  - 如果继续产品闭环，进入 worker pool / concurrency planning，明确什么时候从单条串行消费扩到并发。
 
 ### 2026-07-03 — Kafka daemon Dockerfile multi-extra support 切片
 

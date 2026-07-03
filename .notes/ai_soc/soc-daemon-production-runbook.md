@@ -69,7 +69,12 @@ SOC_DAEMON_HEALTHCHECK_BROKER=false ./scripts/soc_daemon_healthcheck.sh
 | `SOC_KAFKA_CLIENT_ID` | `soc-agent-consumer` | Consumer client id |
 | `SOC_KAFKA_DEAD_LETTER_TOPIC` | `soc.alerts.dead_letter.v1` | Dead-letter output topic |
 | `SOC_KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT` | `PLAINTEXT` / `SSL` / `SASL_PLAINTEXT` / `SASL_SSL` |
+| `SOC_KAFKA_SASL_MECHANISM` | 无 | SASL 机制，例如 `PLAIN` |
+| `SOC_KAFKA_SASL_USERNAME` | 无 | SASL 用户名；如属敏感凭证则走 Secret |
 | `SOC_KAFKA_SASL_PASSWORD_ENV` | 无 | 只保存 secret env 名；不要把 secret 写入 config/notes/DB |
+| `SOC_KAFKA_SSL_CA_LOCATION` | 无 | Kafka CA 文件路径，K8s 可通过 Secret/volume 挂载 |
+| `SOC_KAFKA_POLL_TIMEOUT_MS` | `1000` | 单次 broker poll timeout |
+| `SOC_KAFKA_MAX_POLL_RECORDS` | `1` | 当前 runner 串行处理，生产先保持 1 |
 | `SOC_DAEMON_IDLE_SLEEP_MS` | `1000` | idle poll 后 sleep |
 | `SOC_DAEMON_ERROR_BACKOFF_MS` | `1000` | adapter/runtime error 后 backoff |
 | `SOC_DAEMON_MAX_CONSECUTIVE_ERRORS` | `3` | 连续错误停止阈值；`0` 表示交给外部 supervisor |
@@ -99,6 +104,35 @@ Overlay 文件：`docker/docker-compose.soc-daemon.yaml`
 - 默认 `SOC_DAEMON_METRIC_JSONL=stderr`。
 - 默认 build extra 是 `postgres,kafka`；`backend/Dockerfile` 会把 comma/whitespace 分隔的 `UV_EXTRAS` 展开成多个 `--extra` flag。
 - 如果只做本地 SQLite + Kafka 验证，可设置 `SOC_DAEMON_UV_EXTRAS=kafka` 缩小镜像依赖。
+
+## Kubernetes Template
+
+示例模板：`docker/k8s/soc-daemon.yaml`
+
+该模板是 opt-in 示例，不被默认部署脚本加载。应用前必须替换 image、namespace、broker、topic、Secret、resource requests/limits 等环境相关值。
+
+模板约定：
+
+- `ConfigMap` 只放非敏感配置：Kafka brokers、topics、consumer group、client id、daemon backoff、metric sink。
+- `Secret` 放 `SOC_DATABASE_URL` 和 Kafka secret，例如 `SOC_KAFKA_PASSWORD`。
+- `SOC_KAFKA_SASL_PASSWORD_ENV=SOC_KAFKA_PASSWORD`，代码只读取 secret env 名，不把密码写入普通配置。
+- `Deployment` 只运行 `backend/scripts/soc_daemon_entrypoint.sh`。
+- readiness/liveness 都调用 `backend/scripts/soc_daemon_healthcheck.sh`，不重新实现 readiness 逻辑。
+- 不创建 Service：daemon 没有 HTTP listener，运行态输出先走 stderr JSONL 日志。
+- 资源限制必须显式设置；模板给出保守起点，生产按真实吞吐和 LLM 调用行为调整。
+- migration 不放在 daemon 主容器里默认执行；生产更推荐独立 migration Job。
+
+Compose 与 K8s 等价关系：
+
+| 能力 | Compose overlay | K8s template |
+|---|---|---|
+| 入口 | `command: ["sh", "backend/scripts/soc_daemon_entrypoint.sh"]` | container `command` 同 entrypoint |
+| 健康检查 | compose `healthcheck` 调用 `soc_daemon_healthcheck.sh` | readiness/liveness probes 调用同一脚本 |
+| 非敏感配置 | `.env` + `environment` | `ConfigMap` |
+| 敏感配置 | `.env` / 部署平台 secret | `Secret` |
+| 日志 | stderr JSONL | stderr JSONL，由日志系统采集 |
+| 资源限制 | compose 后续按环境补 | `resources.requests/limits` |
+| 默认接入 | 显式 `-f docker-compose.soc-daemon.yaml` | 显式 `kubectl apply -f docker/k8s/soc-daemon.yaml` |
 
 ## Logging
 

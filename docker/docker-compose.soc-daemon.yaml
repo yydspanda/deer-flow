@@ -11,6 +11,10 @@
 
 services:
   soc-daemon:
+    labels:
+      com.deerflow.service: soc-daemon
+      com.deerflow.extension: soc-agent
+      com.deerflow.log-schema: soc.kafka_daemon_metric.v1
     build:
       context: ../
       dockerfile: backend/Dockerfile

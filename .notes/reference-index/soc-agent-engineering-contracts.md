@@ -368,6 +368,14 @@ Kafka daemon / consumer adapter 约束：
   - overlay 不能保存生产 secret；Kafka/DB secret 必须来自 env file、secret manager 或部署平台。
   - 默认 build extra 是 `postgres,kafka`；`backend/Dockerfile` 必须把 comma/whitespace 分隔的 `UV_EXTRAS` 展开成多个 `--extra` flag。
   - 本地 SQLite + Kafka 验证可以显式设置 `SOC_DAEMON_UV_EXTRAS=kafka`。
+- `docker/k8s/soc-daemon.yaml` 是 SOC daemon 的显式 opt-in K8s 示例模板：
+  - 不得被默认部署脚本自动加载。
+  - 只能作为 deployment contract 示例，应用前必须替换 image、namespace、broker、topic、Secret 和资源限制。
+  - `ConfigMap` 只能保存非敏感配置；`SOC_DATABASE_URL`、Kafka password、CA 等必须来自 `Secret` 或 secret volume。
+  - container command 必须使用 `backend/scripts/soc_daemon_entrypoint.sh`。
+  - readiness/liveness probes 必须调用 `backend/scripts/soc_daemon_healthcheck.sh`。
+  - 不应创建 Service；当前 daemon 无 HTTP listener，metric 最小面是 stderr JSONL。
+  - 必须显式设置 resource requests/limits，避免后台消费进程无边界占用资源。
 - `soc daemon status` 是 Kafka daemon readiness/status contract：
   - 输出 schema 固定为 `soc.kafka_daemon_status.v1`，供 CLI、supervisor、Docker/K8s readiness 和人工验收复用。
   - 默认只检查 database readiness 和 Kafka adapter 配置状态；不能 poll 或处理业务消息。

@@ -319,9 +319,10 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 - 当前 JSONL metric sink 已能被日志系统采集。
 - 当前 production compose overlay 已是显式 opt-in。
 - 当前 Dockerfile multi-extra support 已完成。
+- 当前 K8s opt-in template 已提供 deployment contract 示例。
 - 后续建议：
-  - 补 production/K8s deployment hardening：secret 注入、resource limits、restart policy、日志采集标签。
-  - 明确 Docker Compose overlay 与 K8s deployment 的配置等价关系。
+  - 用真实环境参数验证 K8s manifest：image、namespace、secret manager、日志采集标签、resource sizing。
+  - 等吞吐模型明确后再补 worker pool / concurrency。
 
 ## Prometheus Deferred Plan
 

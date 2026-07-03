@@ -1,0 +1,119 @@
+# Example SOC Kafka daemon Kubernetes deployment.
+#
+# This manifest is intentionally opt-in and is not referenced by DeerFlow's
+# default Docker or deployment scripts. Replace image, namespace, resources,
+# topics, broker endpoints, and secrets for your environment before applying.
+#
+# The daemon has no HTTP listener, so no Service is defined. Readiness/liveness
+# use the same production healthcheck shell as Docker Compose.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: soc-daemon-config
+  labels:
+    app.kubernetes.io/name: deer-flow-soc-daemon
+    app.kubernetes.io/part-of: deer-flow
+    app.kubernetes.io/component: soc-agent
+data:
+  DEER_FLOW_PROJECT_ROOT: /app
+  DEER_FLOW_HOME: /app/backend/.deer-flow
+  SOC_KAFKA_ENABLED: "true"
+  SOC_KAFKA_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092
+  SOC_KAFKA_ALERT_TOPICS: soc.alerts.raw.v1
+  SOC_KAFKA_APPROVAL_REQUEST_TOPICS: soc.approvals.requests.v1
+  SOC_KAFKA_GROUP_ID: soc-agent-daemon
+  SOC_KAFKA_CLIENT_ID: soc-agent-consumer
+  SOC_KAFKA_DEAD_LETTER_TOPIC: soc.alerts.dead_letter.v1
+  SOC_KAFKA_SECURITY_PROTOCOL: SASL_SSL
+  SOC_KAFKA_SASL_MECHANISM: PLAIN
+  SOC_KAFKA_SASL_USERNAME: soc-agent
+  SOC_KAFKA_SASL_PASSWORD_ENV: SOC_KAFKA_PASSWORD
+  SOC_KAFKA_SSL_CA_LOCATION: /etc/soc-daemon/kafka/ca.crt
+  SOC_KAFKA_POLL_TIMEOUT_MS: "1000"
+  SOC_KAFKA_MAX_POLL_RECORDS: "1"
+  SOC_DAEMON_IDLE_SLEEP_MS: "1000"
+  SOC_DAEMON_ERROR_BACKOFF_MS: "1000"
+  SOC_DAEMON_MAX_CONSECUTIVE_ERRORS: "3"
+  SOC_DAEMON_METRIC_JSONL: stderr
+  SOC_DAEMON_PRESTART_STATUS_CHECK: "true"
+  SOC_DAEMON_UPGRADE_DB: "false"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: soc-daemon-secrets
+  labels:
+    app.kubernetes.io/name: deer-flow-soc-daemon
+    app.kubernetes.io/part-of: deer-flow
+    app.kubernetes.io/component: soc-agent
+type: Opaque
+stringData:
+  SOC_DATABASE_URL: postgresql+psycopg://soc_agent:REPLACE_ME@postgres:5432/soc_agent
+  SOC_KAFKA_PASSWORD: REPLACE_ME
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soc-daemon
+  labels:
+    app.kubernetes.io/name: deer-flow-soc-daemon
+    app.kubernetes.io/part-of: deer-flow
+    app.kubernetes.io/component: soc-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: deer-flow-soc-daemon
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: deer-flow-soc-daemon
+        app.kubernetes.io/part-of: deer-flow
+        app.kubernetes.io/component: soc-agent
+      annotations:
+        deerflow.ai/log-schema: soc.kafka_daemon_metric.v1
+        deerflow.ai/log-sink: stderr-jsonl
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: soc-daemon
+          image: ghcr.io/your-org/deer-flow-backend:soc-daemon
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["sh", "backend/scripts/soc_daemon_entrypoint.sh"]
+          envFrom:
+            - configMapRef:
+                name: soc-daemon-config
+            - secretRef:
+                name: soc-daemon-secrets
+          volumeMounts:
+            - name: kafka-ca
+              mountPath: /etc/soc-daemon/kafka
+              readOnly: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          readinessProbe:
+            exec:
+              command: ["sh", "backend/scripts/soc_daemon_healthcheck.sh"]
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 4
+          livenessProbe:
+            exec:
+              command: ["sh", "backend/scripts/soc_daemon_healthcheck.sh"]
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: kafka-ca
+          secret:
+            secretName: soc-daemon-kafka-ca
+            optional: true
