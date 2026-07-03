@@ -119,7 +119,7 @@ services:
   - `stop`
 - `stderr` 输出启动配置错误、adapter error 上抛或 CLI 参数错误。
 - 生产日志采集应保留 stdout/stderr，并按 `schema_version`、`stop_reason`、`metrics.error_count`、`metrics.last_error_type` 建索引。
-- 后续是否需要 Prometheus `/metrics` exporter 再单独决策；当前先以 JSONL 日志作为最低可用观测面。
+- Prometheus `/metrics` exporter 暂缓；候选指标和触发条件记录在 `kafka-consumer-adapter-plan.md`，当前先以 JSONL 日志作为最低可用观测面。
 
 ## Smoke
 

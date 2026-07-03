@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon production overlay / Prometheus metrics planning |
+| 当前下一刀 | Kafka daemon production overlay planning |
 
 ## Phase 1 切片计划
 
@@ -128,7 +128,7 @@
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_kafka_daemon.py tests/test_soc_agent_runtime.py::test_cli_daemon_run_can_emit_metric_jsonl_to_stderr tests/test_soc_agent_runtime.py::test_cli_daemon_run_disabled_by_default_outputs_bounded_run tests/test_soc_daemon_scripts.py::test_soc_daemon_entrypoint_can_emit_metric_jsonl_to_stderr`
   - `cd backend && ./.venv/bin/python -m soc_agent.cli daemon run --max-loops 1 --idle-sleep-ms 0 --metric-jsonl stderr --pretty`
 - 下一步：
-  - 规划 production overlay / Prometheus metrics：先确定是否需要 HTTP `/metrics` exporter，还是继续由日志系统采集 JSONL。
+  - Prometheus exporter 暂缓，方案记录在 `kafka-consumer-adapter-plan.md`；下一步进入 production overlay planning。
 
 ### 2026-07-03 — Kafka isolated run-mode smoke 切片
 

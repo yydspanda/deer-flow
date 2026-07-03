@@ -296,7 +296,7 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 
 ## 下一刀建议
 
-进入 production overlay / Prometheus metrics planning：
+进入 production overlay planning：
 
 - 当前 `soc daemon consume` 是有限 poll，适合 smoke/手工验证。
 - 当前 `soc daemon run` 是长驻 loop shell，已具备 graceful stop、结构化 counters、metrics 和 error backoff。
@@ -304,5 +304,38 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 - 当前 run-mode smoke 已覆盖真实 broker path。
 - 当前 JSONL metric sink 已能被日志系统采集。
 - 后续建议：
-  - 判断是否需要 HTTP `/metrics` exporter，还是先依赖 stdout/stderr JSONL + 日志系统。
   - 生产 overlay：独立 compose / Helm / K8s deployment 模板，而不是修改 DeerFlow 主 compose 默认行为。
+
+## Prometheus Deferred Plan
+
+当前暂不实现 Prometheus exporter，先用 `SOC_DAEMON_METRIC_JSONL=stderr` 接日志系统。原因：
+
+- 部署形态尚未最终确定：Docker Compose、K8s、公司内部平台的服务发现方式不同。
+- `/metrics` exporter 需要额外 HTTP 端口、生命周期管理和 scrape 配置，当前会提前增加运行复杂度。
+- 现有 JSONL 已能覆盖排障和初期告警：start/result/error/stop、错误类型、topic/partition/offset、处理计数。
+
+后续触发条件：
+
+- 测试环境或生产环境已明确接入 Prometheus/Grafana。
+- 需要跨实例聚合 daemon 状态，而日志平台查询不足以稳定支撑。
+- 需要基于 counters/gauges 做标准化 SLO/告警规则。
+
+候选指标：
+
+| Metric | Type | Labels | 说明 |
+|---|---|---|---|
+| `soc_kafka_processed_total` | counter | `topic`, `kind` | 成功处理消息数 |
+| `soc_kafka_dead_lettered_total` | counter | `topic`, `error_type` | dead-letter 数 |
+| `soc_kafka_committed_total` | counter | `topic` | offset commit 数 |
+| `soc_kafka_idle_total` | counter | `group_id` | idle poll 次数 |
+| `soc_kafka_errors_total` | counter | `error_type` | loop-level adapter/runtime error 数 |
+| `soc_kafka_consecutive_errors` | gauge | `group_id` | 当前连续错误数 |
+| `soc_kafka_last_success_timestamp` | gauge | `group_id` | 最近成功处理时间 |
+| `soc_kafka_last_error_timestamp` | gauge | `group_id`, `error_type` | 最近错误时间 |
+| `soc_kafka_run_up` | gauge | `group_id` | daemon run loop 是否存活 |
+
+实现边界：
+
+- Prometheus exporter 只能读取 daemon metrics snapshot 或订阅 metric sink，不能参与 Kafka 消费、commit、dead-letter 或业务判断。
+- exporter 不暴露 alert raw payload、raw_message、DB URL、Kafka secret、SASL/TLS secret。
+- JSONL sink 保留为最低可用观测面；Prometheus 是增量能力，不替代日志审计。
