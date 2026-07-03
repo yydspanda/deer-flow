@@ -245,17 +245,30 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
   - mapper/service failure 的 dead-letter + commit 语义仍属于 `SocKafkaConsumerRunner`，不在 daemon controller 重写。
   - `--error-backoff-ms 0` 和 `--max-consecutive-errors 0` 只应用于测试/本地验证或明确的外部 supervisor 托管场景。
 
+已完成 production entrypoint / healthcheck：
+
+- `backend/scripts/soc_daemon_entrypoint.sh`
+  - 生产启动脚本。
+  - 默认要求 `SOC_KAFKA_ENABLED=true`。
+  - `SOC_DAEMON_ALLOW_DISABLED=true` 只允许测试/本地验证。
+  - 可选 `SOC_DAEMON_UPGRADE_DB=true`。
+  - 可选 `SOC_DAEMON_PRESTART_STATUS_CHECK=true`。
+  - 最终 exec `python -m soc_agent.cli daemon run ...`。
+- `backend/scripts/soc_daemon_healthcheck.sh`
+  - 默认执行 `soc daemon status --check-broker`。
+  - 不处理业务消息，不 commit offset，不写 DB。
+- 运行说明：
+  - `.notes/ai_soc/soc-daemon-production-runbook.md`
+  - 当前不修改 DeerFlow 主 docker-compose；SOC daemon 后续通过独立 overlay 或生产模板接入。
+
 ## 下一刀建议
 
-进入 production supervisor / Docker entrypoint 规划：
+进入 JSONL metric sink / isolated run-mode smoke：
 
 - 当前 `soc daemon consume` 是有限 poll，适合 smoke/手工验证。
 - 当前 `soc daemon run` 是长驻 loop shell，已具备 graceful stop、结构化 counters、metrics 和 error backoff。
-- 生产 daemon 仍需要：
-  - 进程启动命令和环境变量约定。
-  - Docker entrypoint / supervisor 约定。
-  - healthcheck 使用 `soc daemon status --check-broker`。
-  - stdout/stderr JSON log 采集规范。
-  - metrics event sink，先输出 JSON log，后续接 Prometheus。
-  - readiness endpoint/command 继续复用 `build_kafka_daemon_status()`。
-  - 隔离 topic smoke，避免默认 topic 历史消息干扰验收。
+- 当前生产入口和 healthcheck 已固定。
+- 后续建议：
+  - metric sink：先输出 JSON lines，后续接 Prometheus。
+  - run-mode smoke：使用隔离 topic + `soc daemon run --max-loops ...` 验证长驻入口，不复用默认 topic。
+  - 生产 overlay：独立 compose / Helm / K8s deployment 模板，而不是修改 DeerFlow 主 compose 默认行为。

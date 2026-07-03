@@ -12,6 +12,7 @@
 | `ai_soc/normalization-drift-strategy.md` | 供应商日志归一化、字段漂移检测、LLM 低频辅助策略 |
 | `ai_soc/zeus-alert-flow-and-field-trust.md` | ZEUS/天眼上游字段冲突、可信度分层、统一研判闭环流程 |
 | `ai_soc/kafka-consumer-adapter-plan.md` | Kafka/Redpanda consumer adapter 接入规划：mapper、offset、dead-letter、metrics |
+| `ai_soc/soc-daemon-production-runbook.md` | SOC Kafka daemon 生产 entrypoint、healthcheck、env、日志和部署约定 |
 | `ai_soc/progress.md` | SOC Agent 长期开发进度台账；每个可验证切片完成后更新 |
 | `reference-index/soc-agent-engineering-contracts.md` | SOC Agent 代码风格、框架设计、API、通信协议和测试门禁 |
 | `reference/cross-project-workflow.md` | 跨项目参考工作流：先定义问题，再用 CodeGraph / 最小源码读取查参考项目 |

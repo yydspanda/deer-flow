@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon production supervisor / Docker entrypoint planning |
+| 当前下一刀 | Kafka daemon JSONL metric sink / isolated run-mode smoke |
 
 ## Phase 1 切片计划
 
@@ -89,8 +89,35 @@
 | 53 | Kafka daemon status/readiness contract | Done | 新增 `soc daemon status`，输出 versioned JSON；检查 database readiness，支持显式 `--check-broker` 轻量 broker poll |
 | 54 | Kafka daemon long-running run loop | Done | 新增 `SocKafkaDaemonRunner` 和 `soc daemon run`；支持 SIGINT/SIGTERM graceful stop、idle sleep、bounded local validation 和结构化 run result |
 | 55 | Kafka daemon metrics/backoff | Done | `soc daemon run` 输出 run metrics；adapter/runtime error 会 backoff，可配置连续错误阈值，避免故障热循环 |
+| 56 | Kafka daemon production entrypoint / healthcheck | Done | 新增 `soc_daemon_entrypoint.sh`、`soc_daemon_healthcheck.sh` 和 production runbook；固定 env、healthcheck、日志采集和 Docker overlay 约定 |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka daemon production entrypoint / healthcheck 切片
+
+- 背景：
+  - `soc daemon run` 已具备长驻 loop、graceful stop、metrics 和 backoff。
+  - 需要把生产启动方式、healthcheck、环境变量和日志采集约定固定下来，避免后续部署脚本各写一套。
+- 新增：
+  - `backend/scripts/soc_daemon_entrypoint.sh`
+  - `backend/scripts/soc_daemon_healthcheck.sh`
+  - `.notes/ai_soc/soc-daemon-production-runbook.md`
+- 行为：
+  - entrypoint 默认要求 `SOC_KAFKA_ENABLED=true`。
+  - 未显式设置时，entrypoint 会导出 `SOC_KAFKA_ENABLED=true`，避免生产容器悄悄跑在 null adapter。
+  - 只有测试/本地验证允许 `SOC_DAEMON_ALLOW_DISABLED=true`。
+  - 可选 `SOC_DAEMON_UPGRADE_DB=true` 在启动前执行 `soc db upgrade`；生产更推荐独立 migration job。
+  - 可选 `SOC_DAEMON_PRESTART_STATUS_CHECK=true` 在启动前执行 healthcheck。
+  - healthcheck 默认执行 `soc daemon status --check-broker`，只检查 DB/broker readiness，不处理业务消息。
+  - 没有直接修改 DeerFlow 主 docker-compose；SOC daemon 作为业务扩展进程，后续通过独立 overlay/生产模板接入。
+- 已补充测试：
+  - entrypoint 在 `SOC_KAFKA_ENABLED=false` 且无 override 时 fail-fast。
+  - entrypoint 支持 disabled bounded local validation。
+  - healthcheck 支持无 broker 的本地 config/DB 验证。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_scripts.py tests/test_soc_daemon_kafka_daemon.py tests/test_soc_agent_runtime.py::test_cli_daemon_run_disabled_by_default_outputs_bounded_run`
+- 下一步：
+  - 做 daemon JSONL metric sink 或 isolated run-mode smoke，优先让长驻 run 模式也有不依赖历史 topic 的可重复验收。
 
 ### 2026-07-03 — Kafka daemon metrics/backoff 切片
 

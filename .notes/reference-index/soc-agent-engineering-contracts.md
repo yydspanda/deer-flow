@@ -341,6 +341,18 @@ Kafka daemon / consumer adapter 约束：
   - 输出 schema 固定为 `soc.kafka_daemon_run_result.v1`；默认只输出 counters 和 stop reason，只有显式 `--include-results` 才输出每轮结果。
   - 输出必须包含 `metrics`：`started_at`、`stopped_at`、`error_count`、`consecutive_error_count`、`last_success_at`、`last_error_at`、`last_error_type`、`last_error_message`。
   - daemon controller 只能记录 loop-level error metrics；mapper/service failure 的 dead-letter + commit 语义仍归 `SocKafkaConsumerRunner`。
+- `backend/scripts/soc_daemon_entrypoint.sh` 是生产 daemon 的稳定 shell entrypoint：
+  - 默认要求 `SOC_KAFKA_ENABLED=true`，避免生产容器运行在 null adapter。
+  - `SOC_DAEMON_ALLOW_DISABLED=true` 只允许测试/本地验证。
+  - 可选 `SOC_DAEMON_UPGRADE_DB=true` 只能作为便利模式；生产更推荐独立 migration job。
+  - 可选 `SOC_DAEMON_PRESTART_STATUS_CHECK=true` 可以在启动前调用 healthcheck。
+  - entrypoint 只能组装 CLI 参数和执行 preflight，不得实现业务逻辑、poll loop、offset commit 或 dead-letter。
+- `backend/scripts/soc_daemon_healthcheck.sh` 是生产 daemon 的稳定 readiness shell：
+  - 默认执行 `soc daemon status --check-broker`。
+  - healthcheck 不处理业务消息、不提交 offset、不写 dead-letter、不写业务 DB。
+  - `SOC_DAEMON_HEALTHCHECK_DATABASE=false` 只用于配置排障，不应作为生产 readiness。
+  - Docker/K8s healthcheck 应调用该脚本，而不是自己拼 readiness 逻辑。
+- SOC daemon 不直接进入 DeerFlow 主 docker-compose 默认服务；它是业务扩展进程，应通过独立 overlay、生产 compose 或 K8s deployment 模板接入。
 - `soc daemon status` 是 Kafka daemon readiness/status contract：
   - 输出 schema 固定为 `soc.kafka_daemon_status.v1`，供 CLI、supervisor、Docker/K8s readiness 和人工验收复用。
   - 默认只检查 database readiness 和 Kafka adapter 配置状态；不能 poll 或处理业务消息。
