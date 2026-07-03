@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | approved-action consume/audit 真实执行边界 |
+| 当前下一刀 | approved action API/TUI 入口或 approval grant repository 持久化 |
 
 ## Phase 1 切片计划
 
@@ -67,8 +67,42 @@
 | 31 | SOC Agent approval grant persistence / dry-run | Done | `approve()` 可保存 grant；`dry_run_approved_action()` 用 execution token 校验 route/action/expiry，只返回 dry-run result，不执行外部副作用 |
 | 32 | ReviewQueue Web thin page | Done | Next.js 工作台新增 `/workspace/soc/review`，通过 Gateway ReviewQueue API 展示队列/上下文并提交 close/correct；前端不复制业务逻辑 |
 | 33 | ReviewQueue Web actor/context headers | Done | Web 请求携带 surface/trace/idempotency；Gateway 用认证用户覆盖可伪造 actor header，并把 `surface=web` 写入 service context |
+| 34 | approved-action consume/audit boundary | Done | `execute_approved_action()` 要求 `dry_run=False` + idempotency，消费一次性 token，记录 consumed/execution result payload；仍不执行外部副作用 |
 
 ## 进度记录
+
+### 2026-07-03 — approved-action consume/audit boundary 切片
+
+- 背景：
+  - 之前已有 approval request、approval grant、grant repository protocol 和 dry-run 校验。
+  - 但审批通过后的 execution token 还不能被消费，也没有已执行状态、幂等重试和 execution audit payload。
+- 新增：
+  - `SocAgentApprovalGrant` 增加 `status=approved|consumed`、`consumed_at`、`consumed_by`、`consume_idempotency_key`、`execution_result_id`、`execution_result_payload`。
+  - `SocAgentApprovedActionCommand.dry_run` 从只允许 `True` 改为显式 boolean，用于区分 dry-run 和执行边界。
+  - `SocAgentApprovalService.execute_approved_action()`：
+    - 要求 repository、`dry_run=False`、`context.idempotency_key`。
+    - 校验 token 存在、未过期、route/action 匹配、grant 未消费。
+    - 消费 grant 并写回 execution result payload。
+    - 相同 idempotency key 重试返回原 result；不同 key 重放拒绝。
+- 边界：
+  - 该方法只消费 token 和记录 execution boundary audit。
+  - 不调用外部 MCP/tool、不封禁 IP、不隔离终端、不修改生产系统。
+  - 真正外部副作用必须后续通过 action adapter registry 接入，并继续复用这个 token consume / idempotency / audit 边界。
+- 已同步文档：
+  - `.notes/ai_soc/soc-agent-solution.md`
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 已补充测试：
+  - dry-run 不消费 token。
+  - execute 消费 token 并写 consumed fields。
+  - 相同 idempotency key 幂等返回同一 result。
+  - 不同 idempotency key 重放被拒绝。
+  - execute 必须 `dry_run=False` 且必须带 idempotency key。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/contracts/schemas.py soc_agent/core/service.py tests/test_soc_agent_service.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/contracts/schemas.py soc_agent/core/service.py tests/test_soc_agent_service.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_service.py`
+- 下一步：
+  - 二选一：先做 approved action API/TUI 入口，让审批后执行链路可手工验证；或先做 approval grant repository 持久化，让 grant/consume 状态不只存在内存测试中。
 
 ### 2026-07-03 — ReviewQueue Web actor/context headers 切片
 

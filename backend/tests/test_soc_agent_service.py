@@ -799,6 +799,7 @@ def test_agent_approval_service_dry_runs_approved_action_without_side_effect() -
     assert result.payload["approved_by"]["actor_id"] == "approver-1"
     assert result.payload["executed_by"]["actor_id"] == "analyst-2"
     assert "no external side effect" in result.message
+    assert repository.get_approval_grant(grant.approval_grant_id).status == "approved"
 
 
 def test_agent_approval_service_dry_run_requires_repository() -> None:
@@ -808,6 +809,93 @@ def test_agent_approval_service_dry_run_requires_repository() -> None:
                 execution_token_id="SAT-UNKNOWN",
                 route="response.block_ip",
                 action="response.block_ip",
+            ),
+            context=ServiceRequestContext(),
+        )
+
+
+def test_agent_approval_service_execute_consumes_token_and_is_idempotent() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    grant = SocAgentApprovalService(grant_repository=repository).approve(
+        _approval_request(),
+        context=ServiceRequestContext(actor=ActorContext(actor_id="admin-1", roles=["soc_admin"])),
+        reason="approved containment scope",
+    )
+    service = SocAgentApprovalService(grant_repository=repository)
+    context = ServiceRequestContext(
+        actor=ActorContext(actor_id="analyst-2", surface=EntrySurface.TUI, roles=["analyst"]),
+        idempotency_key="idem-execute-1",
+    )
+    command = SocAgentApprovedActionCommand(
+        execution_token_id=grant.execution_token_id,
+        route="response.block_ip",
+        action="response.block_ip",
+        dry_run=False,
+        payload={"ip": "203.0.113.8"},
+    )
+
+    result = service.execute_approved_action(command, context=context)
+    replay = service.execute_approved_action(command, context=context)
+    consumed = repository.get_approval_grant(grant.approval_grant_id)
+
+    assert result == replay
+    assert result.status == "success"
+    assert result.payload["external_side_effect"] == "not_executed"
+    assert result.payload["payload"] == {"ip": "203.0.113.8"}
+    assert consumed.status == "consumed"
+    assert consumed.consumed_by.actor_id == "analyst-2"
+    assert consumed.consume_idempotency_key == "idem-execute-1"
+    assert consumed.execution_result_id == result.payload["execution_result_id"]
+    assert consumed.execution_result_payload == result.model_dump(mode="json")
+
+
+def test_agent_approval_service_execute_rejects_consumed_token_with_different_idempotency() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    grant = SocAgentApprovalService(grant_repository=repository).approve(
+        _approval_request(),
+        context=ServiceRequestContext(actor=ActorContext(actor_id="admin-1", roles=["soc_admin"])),
+        reason="approved containment scope",
+    )
+    service = SocAgentApprovalService(grant_repository=repository)
+    command = SocAgentApprovedActionCommand(
+        execution_token_id=grant.execution_token_id,
+        route="response.block_ip",
+        action="response.block_ip",
+        dry_run=False,
+    )
+
+    service.execute_approved_action(command, context=ServiceRequestContext(idempotency_key="idem-1"))
+
+    with pytest.raises(SocServiceError, match="already been consumed"):
+        service.execute_approved_action(command, context=ServiceRequestContext(idempotency_key="idem-2"))
+
+
+def test_agent_approval_service_execute_requires_non_dry_run_and_idempotency() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    grant = SocAgentApprovalService(grant_repository=repository).approve(
+        _approval_request(),
+        context=ServiceRequestContext(actor=ActorContext(actor_id="admin-1", roles=["soc_admin"])),
+        reason="approved containment scope",
+    )
+    service = SocAgentApprovalService(grant_repository=repository)
+
+    with pytest.raises(SocServiceError, match="dry_run=false"):
+        service.execute_approved_action(
+            SocAgentApprovedActionCommand(
+                execution_token_id=grant.execution_token_id,
+                route="response.block_ip",
+                action="response.block_ip",
+            ),
+            context=ServiceRequestContext(idempotency_key="idem-1"),
+        )
+
+    with pytest.raises(SocServiceError, match="idempotency_key"):
+        service.execute_approved_action(
+            SocAgentApprovedActionCommand(
+                execution_token_id=grant.execution_token_id,
+                route="response.block_ip",
+                action="response.block_ip",
+                dry_run=False,
             ),
             context=ServiceRequestContext(),
         )

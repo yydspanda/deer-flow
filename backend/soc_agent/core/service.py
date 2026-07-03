@@ -570,6 +570,8 @@ class SocAgentApprovalService:
 
         if self._grant_repository is None:
             raise SocServiceNotImplementedError("dry_run_approved_action requires a SocAgentApprovalGrantRepository")
+        if not command.dry_run:
+            raise SocServiceError("dry_run_approved_action requires dry_run=true")
 
         grant = self._grant_repository.get_approval_grant_by_token(command.execution_token_id)
         if grant is None:
@@ -594,8 +596,75 @@ class SocAgentApprovalService:
             },
         )
 
+    def execute_approved_action(
+        self,
+        command: SocAgentApprovedActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        """Consume an approved action token at the execution boundary.
+
+        Phase 1 intentionally stops at the boundary: it consumes the one-time
+        token and records the deterministic execution result, but it does not
+        call an external response tool or mutate production systems.
+        """
+
+        if self._grant_repository is None:
+            raise SocServiceNotImplementedError("execute_approved_action requires a SocAgentApprovalGrantRepository")
+        if command.dry_run:
+            raise SocServiceError("execute_approved_action requires dry_run=false")
+        if not context.idempotency_key:
+            raise SocServiceError("execute_approved_action requires an idempotency_key")
+
+        grant = self._grant_repository.get_approval_grant_by_token(command.execution_token_id)
+        if grant is None:
+            raise SocServiceNotFoundError(f"approval execution token {command.execution_token_id} not found")
+        if grant.status == "consumed":
+            return self._replay_consumed_grant(grant, context.idempotency_key)
+
+        self._validate_grant_for_command(grant, command)
+
+        executed_at = datetime.now(UTC)
+        execution_result_id = f"AXR-{uuid4().hex[:12].upper()}"
+        result = SocAgentActionResult(
+            route=grant.route,
+            action=grant.action,
+            status="success",
+            message="Approved action execution boundary consumed token; no external side effect adapter executed.",
+            payload={
+                "dry_run": command.dry_run,
+                "execution_result_id": execution_result_id,
+                "approval_grant_id": grant.approval_grant_id,
+                "approval_request_id": grant.approval_request_id,
+                "execution_token_id": grant.execution_token_id,
+                "requested_by": grant.requested_by.model_dump(mode="json"),
+                "approved_by": grant.approved_by.model_dump(mode="json"),
+                "executed_by": context.actor.model_dump(mode="json"),
+                "idempotency_key": context.idempotency_key,
+                "executed_at": executed_at.isoformat(),
+                "external_side_effect": "not_executed",
+                "payload": command.payload,
+            },
+        )
+
+        grant.status = "consumed"
+        grant.consumed_at = executed_at
+        grant.consumed_by = context.actor
+        grant.consume_idempotency_key = context.idempotency_key
+        grant.execution_result_id = execution_result_id
+        grant.execution_result_payload = result.model_dump(mode="json")
+        self._grant_repository.save_approval_grant(grant)
+        return result
+
     def _can_approve(self, actor: ActorContext) -> bool:
         return bool(self.APPROVER_ROLES.intersection(actor.roles))
+
+    def _replay_consumed_grant(self, grant: SocAgentApprovalGrant, idempotency_key: str) -> SocAgentActionResult:
+        if grant.consume_idempotency_key != idempotency_key:
+            raise SocServiceError(f"approval grant {grant.approval_grant_id} has already been consumed")
+        if grant.execution_result_payload is None:
+            raise SocServiceError(f"approval grant {grant.approval_grant_id} was consumed without result payload")
+        return SocAgentActionResult.model_validate(grant.execution_result_payload)
 
     def _validate_grant_for_command(
         self,
@@ -603,6 +672,8 @@ class SocAgentApprovalService:
         command: SocAgentApprovedActionCommand,
     ) -> None:
         now = datetime.now(UTC)
+        if grant.status != "approved":
+            raise SocServiceError(f"approval grant {grant.approval_grant_id} is {grant.status}")
         if grant.expires_at <= now:
             raise SocServiceError(f"approval grant {grant.approval_grant_id} is expired")
         if grant.route != command.route:

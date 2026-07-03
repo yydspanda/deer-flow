@@ -203,10 +203,15 @@ class SocAgentApprovalGrant(BaseModel):
     approved_by: ActorContext
     approval_reason: str = Field(min_length=1)
     idempotency_key: str | None = None
-    status: Literal["approved"] = "approved"
+    status: Literal["approved", "consumed"] = "approved"
     single_use: Literal[True] = True
     approved_at: datetime = Field(default_factory=utc_now)
     expires_at: datetime
+    consumed_at: datetime | None = None
+    consumed_by: ActorContext | None = None
+    consume_idempotency_key: str | None = None
+    execution_result_id: str | None = None
+    execution_result_payload: dict[str, Any] | None = None
     policy_version: str = "soc.agent_action_policy.v1"
 
 
@@ -217,7 +222,7 @@ class SocAgentApprovedActionCommand(BaseModel):
     execution_token_id: str = Field(min_length=1)
     route: str = Field(min_length=1)
     action: str = Field(min_length=1)
-    dry_run: Literal[True] = True
+    dry_run: bool = True
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
