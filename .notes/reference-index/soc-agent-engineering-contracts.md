@@ -329,6 +329,13 @@ Kafka daemon / consumer adapter 约束：
   - disabled idle path 不应要求数据库连接；只有真实 broker adapter 启用并可能处理消息时，才需要 repository-backed `SocDaemonService` wiring。
   - enabled path 必须先校验/构造 repository-backed `SocDaemonService`，再构造真实 Kafka client；配置错误不能先触发 broker 连接。
   - 输出必须是结构化 JSON 摘要，不能只写自然语言日志，方便测试和后续 supervisor/readiness 集成。
+- `soc daemon status` 是 Kafka daemon readiness/status contract：
+  - 输出 schema 固定为 `soc.kafka_daemon_status.v1`，供 CLI、supervisor、Docker/K8s readiness 和人工验收复用。
+  - 默认只检查 database readiness 和 Kafka adapter 配置状态；不能 poll 或处理业务消息。
+  - broker 连通性检查必须显式传 `--check-broker`，只允许做轻量 `poll()`；不能调用 `SocDaemonService.process_message()`、不能 commit offset、不能写 dead-letter、不能写业务 DB。
+  - `--skip-database-check` 只允许用于配置检查或本地排障；生产 readiness 不应跳过 DB 检查。
+  - status 输出中的 database URL 必须 redacted，不得泄露 password、SASL secret 或 TLS secret。
+  - exit code 必须和 `ready` 对齐：ready 返回 `0`，unready 返回非零。
 - `SocDaemonMessage` 的 Kafka metadata 必须保留 `topic`、`partition`、`offset`、`key`；daemon idempotency key 固定为 `kafka:{topic}:{partition}:{offset}`。
 - dead-letter payload 必须使用 `soc.kafka_dead_letter.v1`，至少包含 failed_at、topic、partition、offset、key、headers、value、error_type、error_message；payload 不得包含 secret。
 - 真实 consumer CLI/daemon 入口只能做配置读取、adapter 构造、runner loop 和 graceful shutdown；业务处理仍归 `SocDaemonService`。

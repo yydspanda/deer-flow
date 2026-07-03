@@ -29,6 +29,7 @@ from soc_agent.daemon import (
     KafkaRunnerProcessResult,
     SocKafkaConsumerRunner,
     build_kafka_consumer_port,
+    build_kafka_daemon_status,
 )
 from soc_agent.db import (
     SqlAlchemyAlertRepository,
@@ -72,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
         return _daemon_process(args)
     if args.command == "daemon" and args.daemon_command == "consume":
         return _daemon_consume(args)
+    if args.command == "daemon" and args.daemon_command == "status":
+        return _daemon_status(args)
     if args.command == "eval" and args.eval_command == "offline":
         return _eval_offline(args)
     if args.command == "db" and args.db_command == "init":
@@ -184,6 +187,11 @@ def _build_parser() -> argparse.ArgumentParser:
     daemon_process.add_argument("--json", dest="json_payload", help="Inline daemon message JSON object")
     daemon_process.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(daemon_process)
+    daemon_status = daemon_subparsers.add_parser("status", help="Show SOC Kafka daemon readiness status")
+    daemon_status.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    daemon_status.add_argument("--skip-database-check", action="store_true", help="Only validate database URL configuration")
+    daemon_status.add_argument("--check-broker", action="store_true", help="Attempt a lightweight Kafka broker poll")
+    _add_database_args(daemon_status)
     daemon_consume = daemon_subparsers.add_parser("consume", help="Run the SOC Kafka consumer loop")
     daemon_consume.add_argument(
         "--max-records",
@@ -531,6 +539,18 @@ def _daemon_consume(args: argparse.Namespace) -> int:
         )
     )
     return 0
+
+
+def _daemon_status(args: argparse.Namespace) -> int:
+    settings = KafkaConsumerSettings.from_env()
+    status = build_kafka_daemon_status(
+        database_url=args.database_url,
+        kafka_settings=settings,
+        check_database=not args.skip_database_check,
+        check_broker=args.check_broker,
+    )
+    print(status.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if status.ready else 1
 
 
 def _daemon_service_from_args(args: argparse.Namespace) -> SocDaemonService:

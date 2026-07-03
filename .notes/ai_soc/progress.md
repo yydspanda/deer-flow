@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon readiness / graceful shutdown planning |
+| 当前下一刀 | Kafka daemon long-running loop / graceful shutdown planning |
 
 ## Phase 1 切片计划
 
@@ -86,8 +86,49 @@
 | 50 | Confluent Kafka broker adapter | Done | 新增 `backend[kafka]` optional extra 和 `ConfluentKafkaConsumerPort`；支持 subscribe/poll/manual commit/dead-letter produce+flush |
 | 51 | Kafka smoke runner + live Redpanda smoke | Done | 新增 `backend/scripts/soc_kafka_smoke.py`，真实 Redpanda smoke 已验证 sample publish、daemon consume、summary、dead-letter、post-commit idle |
 | 52 | Kafka bounded runner loop counters | Done | `SocKafkaConsumerRunner.run()` 下沉有限循环，返回 processed/dead_lettered/idle/committed counters；CLI 输出 counters，为后续 metrics/readiness 铺路 |
+| 53 | Kafka daemon status/readiness contract | Done | 新增 `soc daemon status`，输出 versioned JSON；检查 database readiness，支持显式 `--check-broker` 轻量 broker poll |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka daemon status/readiness contract 切片
+
+- 背景：
+  - bounded runner loop 已有 counters，但还缺一个 supervisor / 人工验收可调用的 readiness 入口。
+  - 在进入长驻 daemon 前，先固定状态输出 contract，避免后续 Docker/K8s/运维脚本各自判断。
+- 新增：
+  - `soc_agent.daemon.kafka_status`
+  - `KafkaDaemonStatus`
+  - `KafkaDaemonDatabaseStatus`
+  - `KafkaDaemonBrokerStatus`
+  - `build_kafka_daemon_status()`
+  - CLI：`soc daemon status`
+- 行为：
+  - 输出 schema 固定为 `soc.kafka_daemon_status.v1`。
+  - 默认检查 database URL 是否配置且可执行 `SELECT 1`。
+  - 默认不连接 broker；Kafka broker 连通性必须显式传 `--check-broker`。
+  - `SOC_KAFKA_ENABLED=false` 时 kafka status 表示 adapter configured / broker check skipped，适合本地和 CI。
+  - `SOC_KAFKA_ENABLED=true --check-broker` 时通过真实 adapter 做一次轻量 `poll()`，不处理业务消息、不提交 offset、不写 DB。
+  - database URL 输出会隐藏 password。
+- 已补充测试：
+  - database 未配置 -> unready。
+  - SQLite database 可达 -> ready。
+  - skip database check。
+  - Kafka enabled 但不检查 broker。
+  - broker checker success / failure。
+  - CLI status JSON 输出和 exit code。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/daemon/__init__.py soc_agent/daemon/kafka_status.py soc_agent/cli.py tests/test_soc_daemon_kafka_status.py tests/test_soc_agent_runtime.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_kafka_status.py tests/test_soc_agent_runtime.py::test_cli_daemon_status_outputs_readiness_json tests/test_soc_agent_runtime.py::test_cli_daemon_status_returns_unready_when_database_missing tests/test_soc_agent_runtime.py::test_cli_daemon_consume_disabled_by_default_outputs_idle tests/test_soc_agent_runtime.py::test_cli_daemon_consume_enabled_requires_database_before_kafka tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli daemon status --database-url sqlite+pysqlite:////tmp/soc_daemon_status_20260703.db --pretty`
+  - `cd backend && SOC_KAFKA_ENABLED=true SOC_KAFKA_BOOTSTRAP_SERVERS=localhost:9092 SOC_KAFKA_GROUP_ID=soc-status-check-1783065000 ./.venv/bin/python -m soc_agent.cli daemon status --database-url sqlite+pysqlite:////tmp/soc_daemon_status_20260703.db --check-broker --pretty`
+- live readiness 结果：
+  - broker：`localhost:9092`
+  - `ready=true`
+  - database reachable：`true`
+  - kafka checked：`true`
+  - kafka reachable：`true`
+- 下一步：
+  - 进入 long-running daemon / graceful shutdown 规划：signal handling、loop lifecycle、backoff、metrics emission、supervisor/Docker entrypoint。
 
 ### 2026-07-03 — Kafka bounded runner loop counters 切片
 

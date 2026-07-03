@@ -179,15 +179,35 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 - `soc daemon consume` 输出 `counters` JSON。
 - 这不是生产长驻 daemon，只是把 loop 语义集中到 runner，为 readiness、metrics、supervisor 和 graceful shutdown 做准备。
 
+已完成 daemon status/readiness contract：
+
+- `soc_agent.daemon.kafka_status` 提供 readiness/status 结构：
+  - `KafkaDaemonStatus`
+  - `KafkaDaemonDatabaseStatus`
+  - `KafkaDaemonBrokerStatus`
+- `soc daemon status` 输出 versioned JSON：`soc.kafka_daemon_status.v1`。
+- 默认检查 database readiness：
+  - database URL 必须能解析。
+  - 默认执行 `SELECT 1`。
+  - 输出中的 database URL 必须隐藏 password。
+- 默认不连接 broker：
+  - 未传 `--check-broker` 时只展示 Kafka adapter 配置状态。
+  - 传 `--check-broker` 时才构造真实 broker adapter 并做一次轻量 `poll()`。
+- `SOC_KAFKA_ENABLED=false` 时 status 可用于本地/CI readiness dry-run，不要求 broker 存在。
+- `SOC_KAFKA_ENABLED=true --check-broker` 时可验证本地 Redpanda/Kafka broker 可达；该检查不处理业务消息、不提交 offset、不写业务 DB。
+- CLI exit code：
+  - ready -> `0`
+  - unready -> `1`
+
 ## 下一刀建议
 
-进入 daemon readiness / long-running loop 规划：
+进入 long-running daemon / graceful shutdown 规划：
 
 - 当前 `soc daemon consume` 仍是有限 poll，适合 smoke/手工验证。
 - 生产 daemon 需要：
   - long-running loop wrapper，复用 `SocKafkaConsumerRunner.run()` 或 `process_next()`。
   - graceful shutdown。
-  - readiness：DB 可用、broker connected、topics assigned。
+  - readiness endpoint/command 可继续复用 `build_kafka_daemon_status()`。
   - metrics：processed、dead_lettered、failed、last_success_at。
   - retry/backoff。
   - optional supervisor/Docker entrypoint。

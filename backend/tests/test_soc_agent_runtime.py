@@ -804,6 +804,39 @@ def test_cli_daemon_consume_disabled_by_default_outputs_idle(monkeypatch: pytest
     ]
 
 
+def test_cli_daemon_status_outputs_readiness_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.delenv("SOC_KAFKA_ENABLED", raising=False)
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'soc.db'}"
+
+    assert main(["db", "upgrade", "--database-url", database_url]) == 0
+    capsys.readouterr()
+
+    exit_code = main(["daemon", "status", "--database-url", database_url, "--pretty"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    payload = json.loads(captured.out)
+    assert payload["schema_version"] == "soc.kafka_daemon_status.v1"
+    assert payload["ready"] is True
+    assert payload["database"]["configured"] is True
+    assert payload["database"]["reachable"] is True
+    assert payload["kafka"]["enabled"] is False
+    assert payload["kafka"]["adapter_configured"] is True
+
+
+def test_cli_daemon_status_returns_unready_when_database_missing(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.delenv("SOC_DATABASE_URL", raising=False)
+
+    exit_code = main(["daemon", "status", "--pretty"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    payload = json.loads(captured.out)
+    assert payload["ready"] is False
+    assert payload["database"]["configured"] is False
+    assert "database URL required" in payload["database"]["error"]
+
+
 def test_cli_daemon_consume_enabled_requires_database_before_kafka(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     monkeypatch.setenv("SOC_KAFKA_ENABLED", "true")
 
