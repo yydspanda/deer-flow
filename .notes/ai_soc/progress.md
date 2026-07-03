@@ -79,8 +79,36 @@
 | 43 | Kafka daemon scaffold / approval request ingestion | Done | 新增 versioned daemon message contract、`SocDaemonService.process_message()` 和 `soc daemon process` 本地入口；支持 alert 分析与 approval_request 入箱；尚未连接 Kafka broker |
 | 44 | SOC Lead Agent approval middleware | Planned | 等 SOC Lead Agent / skills / MCP tool chain 落地后接入；当前只保留 service-level approval boundary，不提前做无宿主 middleware |
 | 45 | Kafka consumer adapter planning | Done | 新增 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，明确 mapper/runner/offset/dead-letter/metrics 方案和下一刀 |
+| 46 | Kafka record -> daemon message mapper | Done | 新增 `soc_agent.daemon.kafka_mapper`，纯 stdlib + contracts；支持 alert/approval topics、custom topic set、坏 JSON/未知 topic 错误 |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka record to daemon message mapper 切片
+
+- 背景：
+  - 已有 `SocDaemonMessage` 和 `SocDaemonService.process_message()`，但真实 consumer 还缺 broker record 到 daemon contract 的纯映射层。
+- 新增：
+  - `soc_agent/daemon/kafka_mapper.py`
+  - `KafkaRecord` 轻量 dataclass，不依赖真实 Kafka client。
+  - `map_kafka_record_to_daemon_message(record)`。
+  - 默认 topic：
+    - `soc.alerts.raw.v1` -> `kind=alert`
+    - `soc.approvals.requests.v1` -> `kind=approval_request`
+- 边界：
+  - mapper 只依赖 stdlib 和 `soc_agent.contracts`。
+  - mapper 不 import Kafka SDK、不调用 core service、不访问 repository。
+  - unknown topic、invalid JSON、non-object JSON、non-UTF8 key 都明确失败，后续 runner 可转 dead-letter。
+- 已补充测试：
+  - alert topic mapping。
+  - approval request topic mapping。
+  - custom topic set。
+  - unknown topic / invalid JSON / non-object JSON / non-UTF8 key。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/daemon/__init__.py soc_agent/daemon/kafka_mapper.py tests/test_soc_daemon_kafka_mapper.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/daemon/__init__.py soc_agent/daemon/kafka_mapper.py tests/test_soc_daemon_kafka_mapper.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_kafka_mapper.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 做 consumer runner skeleton：定义 poll/process/commit/dead-letter 抽象，不接真实 broker client。
 
 ### 2026-07-03 — approval middleware placement + Kafka adapter planning
 

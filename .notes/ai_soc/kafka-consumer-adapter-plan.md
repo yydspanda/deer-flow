@@ -30,7 +30,7 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
    - `dead_letter_topic`
    - `poll_timeout_ms`
 
-2. **decoded-message mapper**
+2. **decoded-message mapper** `Done`
    - 输入：Kafka record，包括 `topic`、`partition`、`offset`、`key`、`value`、headers。
    - 输出：`SocDaemonMessage`。
    - alert topic 默认映射为 `kind=alert`。
@@ -80,9 +80,9 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 - 不在 consumer 内写业务判断。
 - 不引入真实生产凭证。
 
-## 下一刀建议
+## 当前状态
 
-先做 `soc_agent/daemon/kafka_mapper.py` 和 tests：
+已完成 `soc_agent/daemon/kafka_mapper.py` 和 tests：
 
 - `KafkaRecord` 轻量 dataclass，不依赖真实 Kafka client。
 - `map_kafka_record_to_daemon_message(record)`。
@@ -90,4 +90,13 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 - approval request topic -> `SocDaemonMessage(kind="approval_request")`。
 - unknown topic / invalid JSON / non-object payload 明确报错。
 
-这样下一步再接 aiokafka / confluent-kafka 时，consumer runner 只负责 IO，不碰业务映射。
+## 下一刀建议
+
+做 consumer runner skeleton，不接真实 broker client：
+
+- `KafkaConsumerPort` protocol：`poll()`, `commit(record)`, `send_dead_letter(record, error)`, `close()`。
+- `SocKafkaConsumerRunner`：串行处理一条 record，流程为 map -> `SocDaemonService.process_message()` -> commit。
+- mapper error / service error 进入 dead-letter，不 commit 原 offset 直到 dead-letter 成功。
+- tests 用 fake consumer port 覆盖 success、mapper failure、service failure、dead-letter failure。
+
+这样下一步再接 aiokafka / confluent-kafka 时，真实 adapter 只实现 IO port，不碰业务映射。
