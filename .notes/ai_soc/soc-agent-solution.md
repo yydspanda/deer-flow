@@ -309,7 +309,7 @@ ZEUS/天眼输入可信度相关结构状态：
    - API 是 Web/TUI/外部系统统一入口，必须只调用 `SocReviewService`。
    - TUI 是 Phase 1/2 更合适的薄操作台，用于 open queue、context、close、correct、trace 调试。
    - Web UI 后续基于同一套 API 增量做列表和详情页，不复制业务逻辑。
-   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done，action permission / human approval Done，approval request event Done，approval grant token Done，approval grant persistence / dry-run Done，ReviewQueue Web thin page Done，Web actor/context headers Done，approved-action consume/audit boundary Done，approval grant repository persistence Done，approved action Gateway API Done；下一步做 approved action TUI/Web 操作入口。
+   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done，action permission / human approval Done，approval request event Done，approval grant token Done，approval grant persistence / dry-run Done，ReviewQueue Web thin page Done，Web actor/context headers Done，approved-action consume/audit boundary Done，approval grant repository persistence Done，approved action Gateway API Done，approved action Web workbench Done；下一步做 approved action TUI 操作入口。
 
 7. **SOC Agent chat stream contract**
    - `SocAgentChatService.stream()` 是后续 SOC Lead Agent TUI/Web/Channels 的统一流式入口。
@@ -326,6 +326,7 @@ ZEUS/天眼输入可信度相关结构状态：
    - 当前已落地 `execute_approved_action()` 执行边界：`dry_run=False` 必须带 `idempotency_key`，会消费 token 并记录 consumed/execution result audit，但仍不调用外部工具、不产生真实封禁/隔离副作用。
    - 当前已落地 `soc_approval_grants` 持久化表和 SQLAlchemy repository，approval grant 的 approve/consume 状态可跨进程恢复。
    - 当前已落地 `/api/soc/approvals/*` Gateway API：创建 grant、dry-run、execute 都复用 `SocAgentApprovalService`，Gateway admin 映射为 `soc_admin`。
+   - 当前已落地 ReviewQueue Web 审批动作面板：通过 Gateway API 生成 execution token、dry-run、execute；前端不直接访问 repository、不执行外部副作用。
 
 ReviewQueue TUI 实现边界：
 

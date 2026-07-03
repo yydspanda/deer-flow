@@ -12,6 +12,9 @@ import { fetch as fetcher } from "@/core/api/fetcher";
 import {
   closeSocReviewItem,
   correctSocReviewRun,
+  createSocApprovalGrant,
+  dryRunSocApprovedAction,
+  executeSocApprovedAction,
   getSocReviewContext,
   listSocReviewItems,
 } from "@/core/soc/api";
@@ -157,5 +160,154 @@ describe("SOC review API", () => {
     );
 
     await expect(listSocReviewItems()).rejects.toThrow("no database");
+  });
+});
+
+describe("SOC approval API", () => {
+  const approvalRequest = {
+    permission_decision_id: "PERM-1",
+    route: "response.block_ip",
+    action: "response.block_ip",
+    risk_level: "high_risk" as const,
+    reason: "requires approval",
+    requested_by: {
+      actor_id: "soc-agent",
+      surface: "web",
+      roles: ["analyst"],
+    },
+  };
+
+  test("creates approval grant through gateway API", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, {
+        approval_grant_id: "APG-1",
+        execution_token_id: "SAT-1",
+      }),
+    );
+
+    await createSocApprovalGrant(
+      {
+        approval_request: approvalRequest,
+        reason: "approved",
+        expires_in_seconds: 900,
+      },
+      {
+        actorId: "approver-1",
+        surface: "web",
+        traceId: "trace-approve-1",
+        idempotencyKey: "idem-approve-1",
+      },
+    );
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/approvals/grants",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          approval_request: approvalRequest,
+          reason: "approved",
+          expires_in_seconds: 900,
+        }),
+      }),
+    );
+    const init = firstFetchInit();
+    const headers = init.headers as Headers;
+    expect(headers.get("content-type")).toBe("application/json");
+    expect(headers.get("x-soc-actor-id")).toBe("approver-1");
+    expect(headers.get("x-soc-surface")).toBe("web");
+    expect(headers.get("x-trace-id")).toBe("trace-approve-1");
+    expect(headers.get("idempotency-key")).toBe("idem-approve-1");
+  });
+
+  test("dry-runs approved action without idempotency header", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, {
+        route: "response.block_ip",
+        action: "response.block_ip",
+        status: "success",
+        message: "dry-run",
+        payload: {},
+      }),
+    );
+
+    await dryRunSocApprovedAction(
+      {
+        execution_token_id: "SAT-1",
+        route: "response.block_ip",
+        action: "response.block_ip",
+        dry_run: false,
+      },
+      {
+        actorId: "analyst-1",
+        surface: "web",
+        traceId: "trace-dry-run-1",
+        idempotencyKey: "idem-ignored",
+      },
+    );
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/approvals/actions/dry-run",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          execution_token_id: "SAT-1",
+          route: "response.block_ip",
+          action: "response.block_ip",
+          dry_run: true,
+        }),
+      }),
+    );
+    const init = firstFetchInit();
+    const headers = init.headers as Headers;
+    expect(headers.get("x-trace-id")).toBe("trace-dry-run-1");
+    expect(headers.get("idempotency-key")).toBeNull();
+  });
+
+  test("executes approved action with idempotency header", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, {
+        route: "response.block_ip",
+        action: "response.block_ip",
+        status: "success",
+        message: "consumed",
+        payload: {},
+      }),
+    );
+
+    await executeSocApprovedAction(
+      {
+        execution_token_id: "SAT-1",
+        route: "response.block_ip",
+        action: "response.block_ip",
+        dry_run: true,
+        payload: { ip: "203.0.113.8" },
+      },
+      {
+        actorId: "analyst-1",
+        surface: "web",
+        traceId: "trace-execute-1",
+        idempotencyKey: "idem-execute-1",
+      },
+    );
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/approvals/actions/execute",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          execution_token_id: "SAT-1",
+          route: "response.block_ip",
+          action: "response.block_ip",
+          dry_run: false,
+          payload: { ip: "203.0.113.8" },
+        }),
+      }),
+    );
+    const init = firstFetchInit();
+    const headers = init.headers as Headers;
+    expect(headers.get("x-soc-actor-id")).toBe("analyst-1");
+    expect(headers.get("x-soc-surface")).toBe("web");
+    expect(headers.get("x-trace-id")).toBe("trace-execute-1");
+    expect(headers.get("idempotency-key")).toBe("idem-execute-1");
   });
 });

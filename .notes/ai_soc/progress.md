@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | approved action TUI/Web 操作入口 |
+| 当前下一刀 | approved action TUI 操作入口 |
 
 ## Phase 1 切片计划
 
@@ -70,8 +70,30 @@
 | 34 | approved-action consume/audit boundary | Done | `execute_approved_action()` 要求 `dry_run=False` + idempotency，消费一次性 token，记录 consumed/execution result payload；仍不执行外部副作用 |
 | 35 | approval grant repository persistence | Done | 新增 `soc_approval_grants` 表和 SQLAlchemy repository 方法，持久化 approval grant approve/consume 状态 |
 | 36 | approved action Gateway API | Done | 新增 `/api/soc/approvals/*`，支持 create grant、dry-run、execute；Gateway admin 映射为 `soc_admin` |
+| 37 | approved action Web workbench | Done | ReviewQueue Web 页面新增审批动作面板，复用 Gateway API 完成 create grant、dry-run、execute 边界验证 |
 
 ## 进度记录
+
+### 2026-07-03 — approved action Web workbench 切片
+
+- 背景：
+  - approved action Gateway API 已经落地，但分析师还没有 Web 操作入口验证 approve / dry-run / execute 链路。
+  - 本切片只做 thin page，不把审批或 token 消费逻辑放到前端。
+- 新增：
+  - `frontend/src/core/soc/types.ts` 增加 approval request / grant / approved action command / action result contract。
+  - `frontend/src/core/soc/api.ts` 增加 `createSocApprovalGrant()`、`dryRunSocApprovedAction()`、`executeSocApprovedAction()`。
+  - `frontend/src/core/soc/hooks.ts` 增加对应 React Query mutation hook。
+  - `frontend/src/components/workspace/soc/soc-review-queue-workbench.tsx` 增加审批动作面板：输入 pending approval request JSON、生成 execution token、dry-run、execute。
+- 边界：
+  - Web 只调用 `/api/soc/approvals/*`，不直接访问 repository，不自行消费 token。
+  - execute 仍只进入后端 execution boundary，当前不会调用外部 MCP/tool，不会封禁 IP 或隔离终端。
+  - 前端本地 execute 成功后只把当前 grant 标记为 consumed，真实幂等和重放拒绝仍由后端控制。
+- 已补充测试：
+  - approval grant API 路径、请求体和 Web actor/idempotency headers。
+  - dry-run 强制发送 `dry_run=true` 且不带 idempotency header。
+  - execute 强制发送 `dry_run=false` 且携带 idempotency header。
+- 下一步：
+  - 做 approved action TUI 操作入口，复用同一 API/service 语义，不复制审批和 token 消费逻辑。
 
 ### 2026-07-03 — approved action Gateway API 切片
 

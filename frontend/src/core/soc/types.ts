@@ -129,3 +129,72 @@ export interface SocReviewCorrectionRequest {
   reason: string;
   confidence?: number | null;
 }
+
+export type SocAgentRiskLevel =
+  | "read_only"
+  | "analyst_write"
+  | "high_risk"
+  | "unknown";
+
+export interface SocAgentApprovalRequest {
+  schema_version?: "soc.agent_approval_request.v1";
+  approval_request_id?: string;
+  permission_decision_id: string;
+  route: string;
+  action: string;
+  risk_level: SocAgentRiskLevel;
+  reason: string;
+  requested_by: SocActorContext;
+  status?: "pending";
+  created_at?: string;
+}
+
+export interface SocAgentApprovalGrant {
+  schema_version: "soc.agent_approval_grant.v1";
+  approval_grant_id: string;
+  execution_token_id: string;
+  approval_request_id: string;
+  permission_decision_id: string;
+  route: string;
+  action: string;
+  risk_level: SocAgentRiskLevel;
+  requested_by: SocActorContext;
+  approved_by: SocActorContext;
+  approval_reason: string;
+  idempotency_key?: string | null;
+  status: "approved" | "consumed";
+  single_use: true;
+  approved_at: string;
+  expires_at: string;
+  consumed_at?: string | null;
+  consumed_by?: SocActorContext | null;
+  consume_idempotency_key?: string | null;
+  execution_result_id?: string | null;
+  execution_result_payload?: Record<string, unknown> | null;
+  policy_version: string;
+}
+
+export interface SocApprovalGrantRequest {
+  approval_request: SocAgentApprovalRequest;
+  reason: string;
+  expires_in_seconds?: number;
+}
+
+export interface SocAgentApprovedActionCommand {
+  schema_version?: "soc.agent_approved_action_command.v1";
+  execution_token_id: string;
+  route: string;
+  action: string;
+  dry_run?: boolean;
+  payload?: Record<string, unknown>;
+}
+
+export interface SocAgentActionResult {
+  schema_version: "soc.agent_action_result.v1";
+  route: string;
+  action: string;
+  status: "success" | "denied" | "failed";
+  message: string;
+  payload: Record<string, unknown>;
+  requires_human_approval?: boolean;
+}

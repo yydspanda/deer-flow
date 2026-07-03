@@ -4,6 +4,9 @@ import {
   AlertTriangleIcon,
   CheckCircle2Icon,
   CircleIcon,
+  FlaskConicalIcon,
+  KeyRoundIcon,
+  PlayCircleIcon,
   RefreshCwIcon,
   ShieldAlertIcon,
   XCircleIcon,
@@ -13,6 +16,7 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -24,10 +28,17 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   useCloseSocReviewItem,
   useCorrectSocReviewRun,
+  useCreateSocApprovalGrant,
+  useDryRunSocApprovedAction,
+  useExecuteSocApprovedAction,
   useSocReviewContext,
   useSocReviewItems,
 } from "@/core/soc";
 import type {
+  SocAgentActionResult,
+  SocAgentApprovalGrant,
+  SocAgentApprovalRequest,
+  SocAgentApprovedActionCommand,
   SocReviewQueueItem,
   SocReviewQueueStatus,
   SocVerdict,
@@ -48,6 +59,23 @@ const VERDICT_OPTIONS: { value: SocVerdict; label: string }[] = [
   { value: "unknown", label: "未知" },
   { value: "needs_review", label: "需复核" },
 ];
+
+const DEFAULT_APPROVAL_REQUEST_JSON = JSON.stringify(
+  {
+    permission_decision_id: "PERM-MANUAL-001",
+    route: "response.block_ip",
+    action: "response.block_ip",
+    risk_level: "high_risk",
+    reason: "high-risk response action requires human approval",
+    requested_by: {
+      actor_id: "soc-agent",
+      surface: "web",
+      roles: ["analyst"],
+    },
+  },
+  null,
+  2,
+);
 
 function formatTime(value: string | null | undefined) {
   if (!value) return "-";
@@ -90,6 +118,14 @@ function verdictLabel(value: string | null | undefined) {
 
 function queueItemLabel(item: SocReviewQueueItem) {
   return item.rule_name ?? item.rule_code ?? item.alert_id;
+}
+
+function parseJsonObject<T>(value: string): T {
+  const parsed: unknown = JSON.parse(value);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("JSON 必须是对象");
+  }
+  return parsed as T;
 }
 
 function QueueItemButton({
@@ -179,6 +215,17 @@ export function SocReviewQueueWorkbench() {
   const [correctionReason, setCorrectionReason] = useState("");
   const [correctedVerdict, setCorrectedVerdict] =
     useState<SocVerdict>("false_positive");
+  const [approvalRequestJson, setApprovalRequestJson] = useState(
+    DEFAULT_APPROVAL_REQUEST_JSON,
+  );
+  const [approvalReason, setApprovalReason] = useState("批准手工验证执行边界");
+  const [approvalExpirySeconds, setApprovalExpirySeconds] = useState("900");
+  const [approvedActionPayloadJson, setApprovedActionPayloadJson] =
+    useState("{}");
+  const [approvalGrant, setApprovalGrant] =
+    useState<SocAgentApprovalGrant | null>(null);
+  const [approvedActionResult, setApprovedActionResult] =
+    useState<SocAgentActionResult | null>(null);
 
   const status = statusFilter === "all" ? null : statusFilter;
   const { items, isLoading, isFetching, error, refetch } = useSocReviewItems({
@@ -196,6 +243,9 @@ export function SocReviewQueueWorkbench() {
     useSocReviewContext(activeQueueId);
   const closeMutation = useCloseSocReviewItem();
   const correctMutation = useCorrectSocReviewRun();
+  const createApprovalGrantMutation = useCreateSocApprovalGrant();
+  const dryRunApprovedActionMutation = useDryRunSocApprovedAction();
+  const executeApprovedActionMutation = useExecuteSocApprovedAction();
 
   const handleClose = async () => {
     if (!activeQueueId || closeReason.trim().length === 0) return;
@@ -225,6 +275,82 @@ export function SocReviewQueueWorkbench() {
       setCorrectionReason("");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "纠正失败");
+    }
+  };
+
+  const handleCreateApprovalGrant = async () => {
+    if (approvalReason.trim().length === 0) return;
+    const expiresInSeconds = Number.parseInt(approvalExpirySeconds, 10);
+    if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
+      toast.error("有效期必须是正整数秒");
+      return;
+    }
+
+    try {
+      const approvalRequest =
+        parseJsonObject<SocAgentApprovalRequest>(approvalRequestJson);
+      const grant = await createApprovalGrantMutation.mutateAsync({
+        approval_request: approvalRequest,
+        reason: approvalReason.trim(),
+        expires_in_seconds: expiresInSeconds,
+      });
+      setApprovalGrant(grant);
+      setApprovedActionResult(null);
+      toast.success("审批 token 已生成");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "审批失败");
+    }
+  };
+
+  const buildApprovedActionCommand = (
+    dryRun: boolean,
+  ): SocAgentApprovedActionCommand | null => {
+    if (!approvalGrant) return null;
+    try {
+      return {
+        execution_token_id: approvalGrant.execution_token_id,
+        route: approvalGrant.route,
+        action: approvalGrant.action,
+        dry_run: dryRun,
+        payload: parseJsonObject<Record<string, unknown>>(
+          approvedActionPayloadJson,
+        ),
+      };
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Payload 不是合法 JSON");
+      return null;
+    }
+  };
+
+  const handleDryRunApprovedAction = async () => {
+    const command = buildApprovedActionCommand(true);
+    if (!command) return;
+    try {
+      const result = await dryRunApprovedActionMutation.mutateAsync(command);
+      setApprovedActionResult(result);
+      toast.success("Dry-run 已通过");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Dry-run 失败");
+    }
+  };
+
+  const handleExecuteApprovedAction = async () => {
+    const command = buildApprovedActionCommand(false);
+    if (!command) return;
+    try {
+      const result = await executeApprovedActionMutation.mutateAsync(command);
+      setApprovedActionResult(result);
+      setApprovalGrant((current) =>
+        current
+          ? {
+              ...current,
+              status: "consumed",
+            }
+          : current,
+      );
+      toast.success("执行边界已消费 token");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "执行失败");
     }
   };
 
@@ -380,6 +506,144 @@ export function SocReviewQueueWorkbench() {
                     value={fallbackSelectedItem.summary ?? "-"}
                   />
                 </dl>
+              </section>
+
+              <section className="rounded-md border">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+                  <div className="flex items-center gap-2">
+                    <KeyRoundIcon className="text-muted-foreground size-4" />
+                    <h3 className="text-sm font-semibold">审批动作</h3>
+                  </div>
+                  {approvalGrant ? (
+                    <Badge variant="outline">{approvalGrant.status}</Badge>
+                  ) : null}
+                </div>
+                <div className="grid grid-cols-1 gap-5 p-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <label
+                        className="text-sm font-medium"
+                        htmlFor="approval-request-json"
+                      >
+                        审批请求 JSON
+                      </label>
+                      <Textarea
+                        id="approval-request-json"
+                        value={approvalRequestJson}
+                        onChange={(event) =>
+                          setApprovalRequestJson(event.target.value)
+                        }
+                        className="min-h-52 resize-none font-mono text-xs"
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">
+                      <div className="space-y-2">
+                        <label
+                          className="text-sm font-medium"
+                          htmlFor="approval-reason"
+                        >
+                          审批原因
+                        </label>
+                        <Input
+                          id="approval-reason"
+                          value={approvalReason}
+                          onChange={(event) =>
+                            setApprovalReason(event.target.value)
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label
+                          className="text-sm font-medium"
+                          htmlFor="approval-expiry"
+                        >
+                          有效期秒
+                        </label>
+                        <Input
+                          id="approval-expiry"
+                          inputMode="numeric"
+                          value={approvalExpirySeconds}
+                          onChange={(event) =>
+                            setApprovalExpirySeconds(event.target.value)
+                          }
+                        />
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={() => void handleCreateApprovalGrant()}
+                      disabled={
+                        createApprovalGrantMutation.isPending ||
+                        approvalReason.trim().length === 0
+                      }
+                    >
+                      <KeyRoundIcon className="size-4" />
+                      生成审批 token
+                    </Button>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="rounded-md border">
+                      <div className="border-b p-3 text-sm font-medium">
+                        Grant
+                      </div>
+                      <pre className="bg-muted max-h-48 overflow-auto p-3 text-xs whitespace-pre-wrap">
+                        {prettyJson(approvalGrant)}
+                      </pre>
+                    </div>
+                    <div className="space-y-2">
+                      <label
+                        className="text-sm font-medium"
+                        htmlFor="approved-action-payload"
+                      >
+                        执行 payload JSON
+                      </label>
+                      <Textarea
+                        id="approved-action-payload"
+                        value={approvedActionPayloadJson}
+                        onChange={(event) =>
+                          setApprovedActionPayloadJson(event.target.value)
+                        }
+                        className="min-h-24 resize-none font-mono text-xs"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleDryRunApprovedAction()}
+                        disabled={
+                          !approvalGrant ||
+                          dryRunApprovedActionMutation.isPending ||
+                          approvalGrant.status !== "approved"
+                        }
+                      >
+                        <FlaskConicalIcon className="size-4" />
+                        Dry-run
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => void handleExecuteApprovedAction()}
+                        disabled={
+                          !approvalGrant ||
+                          executeApprovedActionMutation.isPending ||
+                          approvalGrant.status !== "approved"
+                        }
+                      >
+                        <PlayCircleIcon className="size-4" />
+                        Execute
+                      </Button>
+                    </div>
+                    <div className="rounded-md border">
+                      <div className="border-b p-3 text-sm font-medium">
+                        Result
+                      </div>
+                      <pre className="bg-muted max-h-56 overflow-auto p-3 text-xs whitespace-pre-wrap">
+                        {prettyJson(approvedActionResult)}
+                      </pre>
+                    </div>
+                  </div>
+                </div>
               </section>
 
               <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">

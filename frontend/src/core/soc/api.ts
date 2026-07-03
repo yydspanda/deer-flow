@@ -2,7 +2,11 @@ import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 
 import type {
+  SocAgentActionResult,
+  SocAgentApprovalGrant,
+  SocAgentApprovedActionCommand,
   SocAnalysisRun,
+  SocApprovalGrantRequest,
   SocInvestigationContext,
   SocRequestContext,
   SocReviewCloseRequest,
@@ -135,4 +139,58 @@ export async function correctSocReviewRun(
     },
   );
   return readJson<SocAnalysisRun>(response, "Failed to correct SOC review run");
+}
+
+export async function createSocApprovalGrant(
+  request: SocApprovalGrantRequest,
+  context?: SocRequestContext,
+): Promise<SocAgentApprovalGrant> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/approvals/grants`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocAgentApprovalGrant>(
+    response,
+    "Failed to create SOC approval grant",
+  );
+}
+
+export async function dryRunSocApprovedAction(
+  command: SocAgentApprovedActionCommand,
+  context?: SocRequestContext,
+): Promise<SocAgentActionResult> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/approvals/actions/dry-run`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true }),
+      body: JSON.stringify({ ...command, dry_run: true }),
+    },
+  );
+  return readJson<SocAgentActionResult>(
+    response,
+    "Failed to dry-run SOC approved action",
+  );
+}
+
+export async function executeSocApprovedAction(
+  command: SocAgentApprovedActionCommand,
+  context?: SocRequestContext,
+): Promise<SocAgentActionResult> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/approvals/actions/execute`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify({ ...command, dry_run: false }),
+    },
+  );
+  return readJson<SocAgentActionResult>(
+    response,
+    "Failed to execute SOC approved action",
+  );
 }

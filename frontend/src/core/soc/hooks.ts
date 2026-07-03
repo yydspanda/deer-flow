@@ -8,10 +8,15 @@ import { useAuth } from "@/core/auth/AuthProvider";
 import {
   closeSocReviewItem,
   correctSocReviewRun,
+  createSocApprovalGrant,
+  dryRunSocApprovedAction,
+  executeSocApprovedAction,
   getSocReviewContext,
   listSocReviewItems,
 } from "./api";
 import type {
+  SocAgentApprovedActionCommand,
+  SocApprovalGrantRequest,
   SocRequestContext,
   SocReviewCloseRequest,
   SocReviewCorrectionRequest,
@@ -96,5 +101,29 @@ export function useCorrectSocReviewRun() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all });
     },
+  });
+}
+
+export function useCreateSocApprovalGrant() {
+  const context = useSocWebRequestContext();
+  return useMutation({
+    mutationFn: (request: SocApprovalGrantRequest) =>
+      createSocApprovalGrant(request, context),
+  });
+}
+
+export function useDryRunSocApprovedAction() {
+  const context = useSocWebRequestContext();
+  return useMutation({
+    mutationFn: (command: SocAgentApprovedActionCommand) =>
+      dryRunSocApprovedAction(command, context),
+  });
+}
+
+export function useExecuteSocApprovedAction() {
+  const context = useSocWebRequestContext();
+  return useMutation({
+    mutationFn: (command: SocAgentApprovedActionCommand) =>
+      executeSocApprovedAction(command, context),
   });
 }
