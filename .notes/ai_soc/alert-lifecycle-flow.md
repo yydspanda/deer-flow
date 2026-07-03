@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow
 
-> 当前文档描述的是截至 2026-07-03 已落地代码的预警流转、状态变化和数据写入边界。Kafka daemon、SOC Lead Agent middleware、真实外部处置 adapter 仍是后续接入点，不应被理解为已经完成的自动化生产链路。
+> 当前文档描述的是截至 2026-07-03 已落地代码的预警流转、状态变化和数据写入边界。Agent/daemon 写入 approval inbox 的 service boundary 已落地；Kafka consumer、SOC Lead Agent middleware、真实外部处置 adapter 仍是后续接入点，不应被理解为已经完成的自动化生产链路。
 
 ## 总览
 
@@ -15,9 +15,10 @@
 
 ```mermaid
 flowchart LR
-    Kafka["Kafka daemon\nplanned"] --> Analysis["SocAnalysisService"]
+    Kafka["Kafka daemon\nconsumer planned"] --> Analysis["SocAnalysisService"]
     CLI["CLI / API analyze"] --> Analysis
-    Agent["SOC Agent TUI / Lead Agent\nplanned middleware"] --> ApprovalInbox["Approval Request Inbox"]
+    Agent["SOC Agent chat\napproval service injected"] --> ApprovalInbox["Approval Request Inbox"]
+    Daemon["SocDaemonService\nsubmit boundary"] --> ApprovalInbox
     Web["Web 工单/后台"] --> ReviewAPI["Review / Approval API"]
     TUI["SOC TUI"] --> ReviewAPI
 
@@ -167,7 +168,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    HighRisk["高风险 action\nKafka / Agent middleware / API planned"] --> Request["SocAgentApprovalRequest\nstatus=pending"]
+    HighRisk["高风险 action\nAgent chat / daemon boundary / API"] --> Request["SocAgentApprovalRequest\nstatus=pending"]
     Request --> Inbox["soc_approval_requests\napproval inbox"]
     Inbox --> Human["Web/TUI/后台人工审批"]
     Human --> Approve["POST /api/soc/approvals/grants"]
@@ -186,6 +187,8 @@ flowchart TD
 | 操作 | 数据变化 |
 |---|---|
 | `submit_request()` / `POST /api/soc/approvals/requests` | 写入 `soc_approval_requests`，完整 `request_payload` + route/action/risk/status/requested_by/created_at 索引列 |
+| `SocAgentChatService.stream()` | 如果注入 `SocAgentApprovalService`，高风险 approval request 先写入 inbox，再发出同一个 `soc.approval_request` stream event |
+| `SocDaemonService.submit_approval_request()` | daemon 侧统一写入边界，内部只调用 `SocAgentApprovalService.submit_request()` |
 | `list_requests()` / `GET /api/soc/approvals/requests` | 读取 pending request inbox |
 | `get_request()` / `GET /api/soc/approvals/requests/{id}` | 读取单个 pending request |
 
@@ -230,13 +233,15 @@ Replay 不覆盖旧 run；它创建一个新 run，并通过 `replay_of_run_id` 
 | Gateway | `/api/soc/approvals/grants` | approval request -> execution token |
 | Gateway | `/api/soc/approvals/actions/dry-run` | token 校验，不执行副作用 |
 | Gateway | `/api/soc/approvals/actions/execute` | 消费 token，记录 execution boundary |
+| Core service | `SocAgentChatService.stream(..., approval_service=...)` | TUI/Agent chat 高风险 request 写入 approval inbox 并发出 stream event |
+| Core service | `SocDaemonService.submit_approval_request()` | Kafka daemon 后续复用的 approval inbox 写入边界 |
 
 ## 尚未接入的后续点
 
 这些是规划点，当前流程图里只作为未来入口或 adapter：
 
-- Kafka daemon 自动消费预警流，批量调用 `SocAnalysisService`。
-- SOC Lead Agent middleware 拦截高风险 tool/action call，并写入 approval inbox。
+- Kafka daemon 自动消费预警流，批量调用 `SocAnalysisService`；当前仅有 approval request submit 边界，尚未实现 consumer。
+- SOC Lead Agent middleware 拦截高风险 tool/action call；当前 chat service 已能在注入 approval service 时写入 approval inbox，但真实 DeerFlow middleware 尚未接入。
 - Approval inbox 的 TUI 消费入口：从 pending request 选择审批，而不是手工粘贴 JSON。
 - Action adapter registry：把 `response.block_ip`、`edr.isolate_host`、F5 策略、Kafka 处置事件等真实外部动作注册到 execute boundary 后面。
 - 真实外部副作用的补偿、失败重试、审批后超时、adapter-level audit。

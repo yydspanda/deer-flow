@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon / Agent middleware 写入 approval inbox |
+| 当前下一刀 | TUI approval inbox consumption |
 
 ## Phase 1 切片计划
 
@@ -73,8 +73,34 @@
 | 37 | approved action Web workbench | Done | ReviewQueue Web 页面新增审批动作面板，复用 Gateway API 完成 create grant、dry-run、execute 边界验证 |
 | 38 | approval request inbox API | Done | 新增 `soc_approval_requests` 持久化表和 `/api/soc/approvals/requests` inbox API，供 Kafka daemon、Agent middleware、Web/TUI 共用 |
 | 39 | approval inbox Web consumption | Done | Web 审批动作面板从 approval inbox 拉取 pending request，支持列表、详情、approve、dry-run、execute |
+| 40 | Agent/daemon approval inbox write boundary | Done | `SocAgentChatService` 可持久化高风险 approval request；`SocDaemonService` 暴露同一 approval inbox 写入边界；真实 Kafka consumer / DeerFlow middleware 仍后续接入 |
 
 ## 进度记录
+
+### 2026-07-03 — Agent/daemon approval inbox write boundary 切片
+
+- 背景：
+  - approval inbox API 和 Web consumption 已落地，但高风险 request 仍主要靠 API 手工提交。
+  - 后续真实入口有两类：Kafka daemon 自动预警流，以及 SOC Lead Agent / TUI 高风险 action middleware。
+- 新增：
+  - `SocAgentChatService` 支持注入 `SocAgentApprovalService`。
+  - 高风险 action 被 policy 拒绝且需要人工审批时，chat stream 先生成 `SocAgentApprovalRequest`；如果注入 approval service，则同步写入 approval inbox，再发出 `custom kind=soc.approval_request`。
+  - `SocDaemonService.submit_approval_request()` 作为 daemon 侧写入边界，内部只调用 `SocAgentApprovalService.submit_request()`。
+- 边界：
+  - 未注入 approval service 时，chat stream 保持事件输出行为，方便测试和 headless shell，不隐式写 DB。
+  - `SocDaemonService.start()` 仍是 Phase 4 placeholder；本切片不实现 Kafka consumer、不消费 broker 消息。
+  - Agent middleware / daemon adapter 后续只能通过 `SocAgentApprovalService` 写 inbox，不能直接写 repository 或 DB。
+- 已补充测试：
+  - chat service 持久化高风险 approval request 到 shared inbox。
+  - daemon service submit 边界复用同一 approval service。
+  - daemon service 缺少 approval service 时明确报错。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/core/service.py tests/test_soc_agent_service.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/core/service.py tests/test_soc_agent_service.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_service.py`
+  - `git diff --check`
+- 下一步：
+  - 做 TUI approval inbox consumption：从 pending request 选择审批，而不是手工粘贴 JSON。
 
 ### 2026-07-03 — approval inbox Web consumption 切片
 

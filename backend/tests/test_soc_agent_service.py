@@ -646,6 +646,28 @@ def test_agent_chat_service_emits_approval_request_for_high_risk_action() -> Non
     assert "Action requires human approval" in events[4].data["content"]
 
 
+def test_agent_chat_service_persists_approval_request_to_inbox() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    approval_service = SocAgentApprovalService(request_repository=repository)
+    context = ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI))
+
+    events = list(
+        SocAgentChatService(
+            capability_router=_HighRiskRouter(),
+            approval_service=approval_service,
+        ).stream("block this ip", context=context)
+    )
+
+    approval_event = events[3]
+    approval_request_id = approval_event.data["approval_request_id"]
+    saved = repository.get_approval_request(approval_request_id)
+    assert saved is not None
+    assert saved.approval_request_id == approval_request_id
+    assert saved.permission_decision_id == approval_event.data["permission_decision_id"]
+    assert saved.action == "response.block_ip"
+    assert saved.requested_by.actor_id == "analyst-1"
+
+
 def test_agent_action_dispatcher_maps_chat_route() -> None:
     decision = SocAgentCapabilityRouter().route(SocAgentChatRequest(message="hello"))
     result = SocAgentActionDispatcher().dispatch(SocAgentChatRequest(message="hello"), decision, context=ServiceRequestContext())
@@ -827,6 +849,22 @@ def test_agent_approval_service_request_inbox_maps_missing_request() -> None:
 
     with pytest.raises(SocServiceNotFoundError, match="not found"):
         service.get_request("APR-MISSING")
+
+
+def test_daemon_service_submits_approval_request_to_shared_inbox() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    approval_service = SocAgentApprovalService(request_repository=repository)
+    approval_request = _approval_request()
+
+    submitted = SocDaemonService(approval_service=approval_service).submit_approval_request(approval_request)
+
+    assert submitted == approval_request
+    assert repository.get_approval_request(approval_request.approval_request_id) == approval_request
+
+
+def test_daemon_service_submit_approval_request_requires_service() -> None:
+    with pytest.raises(SocServiceNotImplementedError, match="SocAgentApprovalService"):
+        SocDaemonService().submit_approval_request(_approval_request())
 
 
 def test_agent_approval_service_dry_runs_approved_action_without_side_effect() -> None:

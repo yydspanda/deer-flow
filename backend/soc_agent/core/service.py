@@ -510,8 +510,18 @@ class SocMemoryService:
 class SocDaemonService:
     """Kafka worker orchestration service placeholder."""
 
+    def __init__(self, *, approval_service: SocAgentApprovalService | None = None) -> None:
+        self._approval_service = approval_service
+
     def start(self) -> None:
         raise SocServiceNotImplementedError("daemon mode is planned for Phase 4")
+
+    def submit_approval_request(self, approval_request: SocAgentApprovalRequest) -> SocAgentApprovalRequest:
+        """Daemon-side boundary for writing high-risk requests to the shared inbox."""
+
+        if self._approval_service is None:
+            raise SocServiceNotImplementedError("submit_approval_request requires a SocAgentApprovalService")
+        return self._approval_service.submit_request(approval_request)
 
 
 class SocAgentApprovalService:
@@ -733,10 +743,12 @@ class SocAgentChatService:
         review_service: SocReviewService | None = None,
         capability_router: SocAgentCapabilityRouter | None = None,
         action_dispatcher: SocAgentActionDispatcher | None = None,
+        approval_service: SocAgentApprovalService | None = None,
     ) -> None:
         self._review_service = review_service
         self._capability_router = capability_router or SocAgentCapabilityRouter()
         self._action_dispatcher = action_dispatcher or SocAgentActionDispatcher(review_service=review_service)
+        self._approval_service = approval_service
 
     def stream(
         self,
@@ -769,7 +781,10 @@ class SocAgentChatService:
         yield _permission_decision_event(permission_decision)
         if not permission_decision.allowed:
             if permission_decision.requires_human_approval:
-                yield _approval_request_event(_approval_request_from_permission(permission_decision, context=request_context))
+                approval_request = _approval_request_from_permission(permission_decision, context=request_context)
+                if self._approval_service is not None:
+                    self._approval_service.submit_request(approval_request)
+                yield _approval_request_event(approval_request)
             yield _assistant_event(_permission_denied_message(permission_decision))
             yield SocAgentStreamEvent(type="end", data={"usage": {}, "thread_id": thread_id})
             return
