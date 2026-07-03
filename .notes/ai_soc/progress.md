@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka consumer adapter / broker integration planning |
+| 当前下一刀 | Kafka broker adapter dependency decision / disabled-by-default consume command wiring |
 
 ## Phase 1 切片计划
 
@@ -81,8 +81,46 @@
 | 45 | Kafka consumer adapter planning | Done | 新增 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，明确 mapper/runner/offset/dead-letter/metrics 方案和下一刀 |
 | 46 | Kafka record -> daemon message mapper | Done | 新增 `soc_agent.daemon.kafka_mapper`，纯 stdlib + contracts；支持 alert/approval topics、custom topic set、坏 JSON/未知 topic 错误 |
 | 47 | Kafka consumer runner skeleton | Done | 新增 `SocKafkaConsumerRunner` 和 `KafkaConsumerPort`，串行 map -> process -> commit；mapper/service failure 进 dead-letter，仍不接真实 broker |
+| 48 | Kafka consumer settings + null adapter | Done | 新增 `KafkaConsumerSettings` 环境变量配置 contract 和 `NullKafkaConsumerPort`；默认禁用、启用但无真实 adapter 时 fail-fast |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka consumer settings + null adapter 切片
+
+- 背景：
+  - runner skeleton 已固定 `poll -> map -> process -> commit/dead-letter` 语义。
+  - 接真实 broker 前，需要先固定配置 contract、secret 引用方式和 disabled-by-default 行为。
+- 新增：
+  - `soc_agent/daemon/kafka_config.py`
+  - `KafkaConsumerSettings`：
+    - `enabled=False` 默认禁用。
+    - `bootstrap_servers=["localhost:9092"]`。
+    - 默认 input topics：`soc.alerts.raw.v1`、`soc.approvals.requests.v1`。
+    - `dead_letter_topic=soc.alerts.dead_letter.v1`。
+    - `security_protocol` 支持 `PLAINTEXT`、`SSL`、`SASL_PLAINTEXT`、`SASL_SSL`。
+    - `sasl_password_env` 只保存环境变量名，不把 secret 写入配置对象。
+    - `from_env()` 支持 `SOC_KAFKA_*` 环境变量。
+  - `soc_agent/daemon/kafka_adapter.py`
+  - `NullKafkaConsumerPort`：
+    - disabled 时 `poll()` 返回 `None`，可用于本地/测试空跑。
+    - enabled 但未配置真实 broker adapter 时 fail-fast，避免误以为已经消费 Kafka。
+- 边界：
+  - 本切片不引入 Kafka SDK。
+  - config contract 不读取 DeerFlow root config，不改上游配置系统。
+  - secret 只通过环境变量引用读取，不写入 notes、DB 或 run payload。
+- 已补充测试：
+  - 默认配置。
+  - `SOC_KAFKA_*` 环境变量解析。
+  - 空 topic 校验。
+  - disabled null consumer idle。
+  - enabled null consumer fail-fast。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/daemon/__init__.py soc_agent/daemon/kafka_config.py soc_agent/daemon/kafka_adapter.py tests/test_soc_daemon_kafka_config.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/daemon/__init__.py soc_agent/daemon/kafka_config.py soc_agent/daemon/kafka_adapter.py tests/test_soc_daemon_kafka_config.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_kafka_config.py tests/test_soc_daemon_kafka_mapper.py tests/test_soc_daemon_kafka_runner.py tests/architecture/test_soc_agent_boundaries.py`
+  - `git diff --check`
+- 下一步：
+  - 先做 broker adapter 依赖选择和 `soc daemon consume` disabled-by-default wiring；真实 broker client 仍 behind flag，不影响现有 deterministic daemon scaffold。
 
 ### 2026-07-03 — Kafka consumer runner skeleton 切片
 

@@ -17,16 +17,16 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 
 ## 推荐实现顺序
 
-1. **配置 contract**
+1. **配置 contract** `Done`
    - `enabled`
    - `bootstrap_servers`
-   - `input_topics`
+   - `alert_topics`
+   - `approval_request_topics`
    - `group_id`
    - `client_id`
    - `security_protocol`
-   - `sasl_*` / TLS secret 引用
+   - `sasl_*` / TLS secret 引用；secret 只保存环境变量名
    - `max_poll_records`
-   - `commit_strategy`
    - `dead_letter_topic`
    - `poll_timeout_ms`
 
@@ -97,12 +97,32 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 - mapper error / service error 进入 dead-letter，不 commit 原 offset 直到 dead-letter 成功。
 - tests 用 fake consumer port 覆盖 success、idle、mapper failure、service failure、dead-letter failure、close。
 
+已完成 `soc_agent/daemon/kafka_config.py` / `kafka_adapter.py` 和 tests：
+
+- `KafkaConsumerSettings` 是 broker adapter 配置 contract，默认 `enabled=False`。
+- `from_env()` 支持 `SOC_KAFKA_*` 环境变量：
+  - `SOC_KAFKA_ENABLED`
+  - `SOC_KAFKA_BOOTSTRAP_SERVERS`
+  - `SOC_KAFKA_ALERT_TOPICS`
+  - `SOC_KAFKA_APPROVAL_REQUEST_TOPICS`
+  - `SOC_KAFKA_GROUP_ID`
+  - `SOC_KAFKA_CLIENT_ID`
+  - `SOC_KAFKA_DEAD_LETTER_TOPIC`
+  - `SOC_KAFKA_SECURITY_PROTOCOL`
+  - `SOC_KAFKA_SASL_MECHANISM`
+  - `SOC_KAFKA_SASL_USERNAME`
+  - `SOC_KAFKA_SASL_PASSWORD_ENV`
+  - `SOC_KAFKA_SSL_CA_LOCATION`
+  - `SOC_KAFKA_POLL_TIMEOUT_MS`
+  - `SOC_KAFKA_MAX_POLL_RECORDS`
+- `sasl_password_env` 只保存环境变量名，避免 secret 进入配置文件、notes、DB 或 run payload。
+- `NullKafkaConsumerPort` 用于 disabled-by-default 本地/测试空跑；如果 `enabled=True` 但没有真实 broker adapter，会 fail-fast。
+
 ## 下一刀建议
 
-先定 broker adapter 配置和依赖选择，再实现 disabled-by-default broker adapter：
+先做 broker adapter 依赖选择和 disabled-by-default consume command wiring：
 
-- 配置 contract：bootstrap servers、topics、group id、client id、security protocol、SASL/TLS secret 引用、poll timeout。
 - 依赖选择：
   - `aiokafka`：async 友好，适合后续 FastAPI/async runtime，但项目当前 daemon runner 是 sync skeleton。
   - `confluent-kafka`：性能和生产成熟度更强，但本地安装和测试依赖更重。
-- 建议：先不加依赖，做 `KafkaConsumerSettings` contract 和 `NullKafkaConsumerPort` / fake config tests；真正 broker client 在配置稳定后接入。
+- 建议：优先让 `soc daemon consume` 能读取 `KafkaConsumerSettings` 并在 disabled 时明确 idle；真实 broker client behind flag 接入，避免本地开发和 CI 被 Kafka 依赖阻塞。

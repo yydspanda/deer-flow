@@ -297,6 +297,29 @@ SOC Agent chat stream 约束：
   - CLI 构造 repository/service 是入口组装；TUI app 内部不能直接 import repository。
   - 后续 skills/MCP/tool route 必须走 capability router 白名单和 service 层，不能让 TUI 或 LLM 直接调任意工具。
 
+Kafka daemon / consumer adapter 约束：
+
+- Kafka consumer 是后台 ingestion adapter，只能把 broker record 映射成 `SocDaemonMessage`，再调用 `SocDaemonService.process_message()`；不能直接调用 runtime pipeline、repository、normalizer、LLM、approval repository 或 action adapter。
+- `KafkaRecord -> SocDaemonMessage` 映射必须先经过 `soc_agent.daemon.kafka_mapper`；unknown topic、invalid JSON、non-object payload、非法 key 等错误不能进入 core service。
+- `SocKafkaConsumerRunner` 固定提交语义：
+  - 成功：`poll -> map -> process_message -> commit`。
+  - mapper failure / service failure：先 `send_dead_letter()`，dead-letter 成功后才 `commit` 原 offset。
+  - dead-letter 写失败不得 commit 原 offset，必须暴露异常，避免静默丢消息。
+- `KafkaConsumerPort` 是真实 broker client 的唯一 port；真实 `aiokafka` / `confluent-kafka` adapter 只能实现该协议，不能把具体 SDK 类型扩散到 core、pipeline、repository、API、TUI 或 Web。
+- `KafkaConsumerSettings` 是 broker adapter 配置 contract：
+  - 默认 `enabled=False`，本地和 CI 不要求 Kafka broker。
+  - 默认 broker 为 `localhost:9092`，只作为本地 Redpanda/Kafka 约定。
+  - 默认 input topics 为 `soc.alerts.raw.v1` 和 `soc.approvals.requests.v1`。
+  - 默认 dead-letter topic 为 `soc.alerts.dead_letter.v1`。
+  - `security_protocol` 只允许 `PLAINTEXT`、`SSL`、`SASL_PLAINTEXT`、`SASL_SSL`。
+  - SASL/TLS secret 只能通过环境变量引用传入，例如 `sasl_password_env`；不得把 secret 写入 notes、config、DB、run payload、step trace 或 dead-letter payload。
+- `NullKafkaConsumerPort` 是 disabled-by-default 本地/测试 adapter：
+  - `enabled=False` 时 `poll()` 返回 `None`。
+  - `enabled=True` 但没有真实 broker adapter 时必须 fail-fast，不能伪装成已经连接 Kafka。
+- `SocDaemonMessage` 的 Kafka metadata 必须保留 `topic`、`partition`、`offset`、`key`；daemon idempotency key 固定为 `kafka:{topic}:{partition}:{offset}`。
+- 真实 consumer CLI/daemon 入口只能做配置读取、adapter 构造、runner loop 和 graceful shutdown；业务处理仍归 `SocDaemonService`。
+- 后续并发、重试阈值、lag metrics、readiness 和 worker pool 只能在 runner/adapter 层扩展，不得改变 core service 的单条 message contract。
+
 Investigation context 约束：
 
 - `InvestigationContext` 是分析师打开 review queue item 时的只读上下文，不产生新判断，也不修改 run/summary/audit。
