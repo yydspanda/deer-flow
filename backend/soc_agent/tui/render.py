@@ -7,7 +7,13 @@ from rich.table import Table
 from rich.text import Text
 
 from deerflow.tui.theme import THEME
-from soc_agent.contracts import InvestigationContext, ReviewQueueItem, SocAgentApprovalGrant, SocAgentApprovalRequest
+from soc_agent.contracts import (
+    InvestigationContext,
+    ReviewQueueItem,
+    SocAgentActionResult,
+    SocAgentApprovalGrant,
+    SocAgentApprovalRequest,
+)
 from soc_agent.tui.command_registry import Command
 from soc_agent.tui.view_state import ReviewViewState
 
@@ -51,7 +57,13 @@ def render_main(state: ReviewViewState) -> RenderableType:
         blocks.append(render_context(state.context))
     if state.approval_request is not None:
         blocks.append(Text(""))
-        blocks.append(render_approval_request(state.approval_request, grant=state.approval_grant))
+        blocks.append(
+            render_approval_request(
+                state.approval_request,
+                grant=state.approval_grant,
+                action_result=state.approval_action_result,
+            )
+        )
     if state.notices:
         blocks.append(Text(""))
         blocks.extend(_render_notice(notice.text, notice.tone) for notice in state.notices)
@@ -145,6 +157,7 @@ def render_approval_request(
     approval_request: SocAgentApprovalRequest,
     *,
     grant: SocAgentApprovalGrant | None = None,
+    action_result: SocAgentActionResult | None = None,
 ) -> RenderableType:
     table = Table.grid(expand=True)
     table.add_column(width=24, style=THEME.dim)
@@ -160,6 +173,13 @@ def render_approval_request(
         table.add_row("grant", grant.approval_grant_id)
         table.add_row("execution_token", grant.execution_token_id)
         table.add_row("expires_at", grant.expires_at.isoformat())
+    if action_result is not None:
+        table.add_row("result_status", action_result.status)
+        table.add_row("result_message", action_result.message)
+        if action_result.payload.get("execution_result_id"):
+            table.add_row("execution_result_id", str(action_result.payload["execution_result_id"]))
+        if action_result.payload.get("external_side_effect"):
+            table.add_row("external_side_effect", str(action_result.payload["external_side_effect"]))
     return Group(Text("Approval Request", style=f"bold {THEME.primary}"), table)
 
 

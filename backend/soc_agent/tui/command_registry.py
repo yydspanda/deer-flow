@@ -25,6 +25,8 @@ BUILTIN_COMMANDS: tuple[Command, ...] = (
     Command("approvals", "Reload pending approval requests"),
     Command("approval", "Open approval request: /approval APR-..."),
     Command("approve", "Approve request: /approve APR-... reason"),
+    Command("dry-run", "Validate token: /dry-run SAT-... route action"),
+    Command("execute", "Consume token: /execute SAT-... route action idempotency-key"),
     Command("open", "Open investigation context: /open REV-..."),
     Command("close", "Close item: /close REV-... reason"),
     Command("correct", "Correct run: /correct RUN-... verdict reason"),

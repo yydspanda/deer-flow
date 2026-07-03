@@ -16,6 +16,7 @@ from soc_agent.contracts import (
     ReviewQueueCloseCommand,
     ReviewQueueStatus,
     ServiceRequestContext,
+    SocAgentApprovedActionCommand,
     Verdict,
 )
 from soc_agent.core import SocAgentApprovalService, SocReviewService, SocServiceError
@@ -26,13 +27,16 @@ from soc_agent.tui.view_state import (
     initial_state,
     select_approval_request,
     select_context,
+    set_approval_action_result,
     set_approval_grant,
     set_approval_requests,
     set_items,
     set_loading,
 )
 
-_HELP_TEXT = "Commands: /refresh  /approvals  /approval APR-...  /approve APR-... reason  /open REV-...  /close REV-... reason  /correct RUN-... verdict reason  /quit"
+_HELP_TEXT = (
+    "Commands: /refresh  /approvals  /approval APR-...  /approve APR-... reason  /dry-run SAT-... route action  /execute SAT-... route action idempotency-key  /open REV-...  /close REV-... reason  /correct RUN-... verdict reason  /quit"
+)
 
 
 class SocReviewTUI(App):
@@ -161,6 +165,10 @@ class SocReviewTUI(App):
             self._open_approval_request(args)
         elif name == "approve":
             self._approve_request(args)
+        elif name == "dry-run":
+            self._dry_run_approved_action(args)
+        elif name == "execute":
+            self._execute_approved_action(args)
         elif name == "open":
             self._open_context(args)
         elif name == "close":
@@ -246,6 +254,54 @@ class SocReviewTUI(App):
         self.state = set_approval_grant(self.state, grant)
         self._notice(f"Approved {approval_request_id}; token {grant.execution_token_id}.")
         self._load_approval_requests()
+
+    def _dry_run_approved_action(self, args: str) -> None:
+        execution_token_id, route, action, extra = _parse_approved_action_args(args)
+        if not execution_token_id or not route or not action or extra:
+            self._notice("Usage: /dry-run SAT-... route action", tone="error")
+            return
+        if self.approval_service is None:
+            self._notice("Approval service is not configured.", tone="error")
+            return
+        try:
+            result = self.approval_service.dry_run_approved_action(
+                SocAgentApprovedActionCommand(
+                    execution_token_id=execution_token_id,
+                    route=route,
+                    action=action,
+                    dry_run=True,
+                ),
+                context=_tui_request_context(),
+            )
+        except SocServiceError as exc:
+            self._notice(str(exc), tone="error")
+            return
+        self.state = set_approval_action_result(self.state, result)
+        self._notice(f"Dry-run validated {execution_token_id}.")
+
+    def _execute_approved_action(self, args: str) -> None:
+        execution_token_id, route, action, idempotency_key = _parse_approved_action_args(args)
+        if not execution_token_id or not route or not action or not idempotency_key:
+            self._notice("Usage: /execute SAT-... route action idempotency-key", tone="error")
+            return
+        if self.approval_service is None:
+            self._notice("Approval service is not configured.", tone="error")
+            return
+        try:
+            result = self.approval_service.execute_approved_action(
+                SocAgentApprovedActionCommand(
+                    execution_token_id=execution_token_id,
+                    route=route,
+                    action=action,
+                    dry_run=False,
+                ),
+                context=_tui_request_context(idempotency_key=idempotency_key),
+            )
+        except SocServiceError as exc:
+            self._notice(str(exc), tone="error")
+            return
+        self.state = set_approval_action_result(self.state, result)
+        self._notice(f"Executed approval boundary for {execution_token_id}.")
 
     def _close_item(self, args: str) -> None:
         queue_id, _, reason = args.partition(" ")
@@ -374,8 +430,18 @@ def _parse_correct_args(args: str) -> tuple[str, str, str]:
     return run_id.strip(), verdict.strip(), reason.strip()
 
 
-def _tui_request_context() -> ServiceRequestContext:
-    return ServiceRequestContext(actor=ActorContext(actor_id="soc-review-tui", surface=EntrySurface.TUI))
+def _parse_approved_action_args(args: str) -> tuple[str, str, str, str]:
+    execution_token_id, _, rest = args.strip().partition(" ")
+    route, _, rest = rest.strip().partition(" ")
+    action, _, extra = rest.strip().partition(" ")
+    return execution_token_id.strip(), route.strip(), action.strip(), extra.strip()
+
+
+def _tui_request_context(*, idempotency_key: str | None = None) -> ServiceRequestContext:
+    return ServiceRequestContext(
+        actor=ActorContext(actor_id="soc-review-tui", surface=EntrySurface.TUI),
+        idempotency_key=idempotency_key,
+    )
 
 
 def _tui_approval_context() -> ServiceRequestContext:

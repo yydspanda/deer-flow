@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | TUI approved-action dry-run / execute command |
+| 当前下一刀 | Kafka daemon scaffold / approval request ingestion |
 
 ## Phase 1 切片计划
 
@@ -75,8 +75,35 @@
 | 39 | approval inbox Web consumption | Done | Web 审批动作面板从 approval inbox 拉取 pending request，支持列表、详情、approve、dry-run、execute |
 | 40 | Agent/daemon approval inbox write boundary | Done | `SocAgentChatService` 可持久化高风险 approval request；`SocDaemonService` 暴露同一 approval inbox 写入边界；真实 Kafka consumer / DeerFlow middleware 仍后续接入 |
 | 41 | approval inbox TUI consumption | Done | `soc review tui` 展示 pending approval request，支持打开详情并 approve 生成 execution token；不执行真实动作 |
+| 42 | TUI approved-action dry-run / execute command | Done | `soc review tui` 支持 dry-run token 校验和 execute boundary token 消费；execute 要求显式 idempotency key；仍不执行外部副作用 |
 
 ## 进度记录
+
+### 2026-07-03 — TUI approved-action dry-run / execute command 切片
+
+- 背景：
+  - Web 已支持 approval request -> grant -> dry-run -> execute。
+  - TUI 上一刀只做到 pending request 展示和 approve token 生成，还不能验证或消费 execution token。
+- 新增：
+  - `soc review tui` 新增 `/dry-run SAT-... route action`。
+  - `soc review tui` 新增 `/execute SAT-... route action idempotency-key`。
+  - TUI view state 增加最近一次 `SocAgentActionResult`。
+  - approval request detail 渲染 execution token、action result status/message、`execution_result_id`、`external_side_effect`。
+- 边界：
+  - dry-run 只调用 `SocAgentApprovalService.dry_run_approved_action()`，不修改 grant，不执行外部副作用。
+  - execute 只调用 `SocAgentApprovalService.execute_approved_action()`，必须显式传入 idempotency key。
+  - 当前 execute 仍只消费 token 并记录 execution boundary，`external_side_effect=not_executed`，不会封禁 IP、隔离终端或调用 MCP。
+- 已补充测试：
+  - slash command registry 覆盖 `/dry-run`、`/execute`。
+  - approved action 参数解析覆盖 token/route/action/idempotency key。
+  - TUI request context 覆盖 idempotency key。
+  - TUI view state/render 覆盖 `SocAgentActionResult` 展示。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/tui/app.py soc_agent/tui/view_state.py soc_agent/tui/render.py soc_agent/tui/command_registry.py tests/test_soc_review_tui.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/tui/app.py soc_agent/tui/view_state.py soc_agent/tui/render.py soc_agent/tui/command_registry.py tests/test_soc_review_tui.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_review_tui.py tests/test_soc_agent_service.py`
+- 下一步：
+  - 做 Kafka daemon scaffold / approval request ingestion：先建立可测试 daemon 输入边界和 repository-backed service wiring，不直接接生产 Kafka。
 
 ### 2026-07-03 — approval inbox TUI consumption 切片
 

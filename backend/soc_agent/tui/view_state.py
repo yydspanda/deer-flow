@@ -5,7 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from soc_agent.contracts import InvestigationContext, ReviewQueueItem, SocAgentApprovalGrant, SocAgentApprovalRequest
+from soc_agent.contracts import (
+    InvestigationContext,
+    ReviewQueueItem,
+    SocAgentActionResult,
+    SocAgentApprovalGrant,
+    SocAgentApprovalRequest,
+)
 
 
 @dataclass(frozen=True)
@@ -23,6 +29,7 @@ class ReviewViewState:
     selected_approval_request_id: str | None = None
     approval_request: SocAgentApprovalRequest | None = None
     approval_grant: SocAgentApprovalGrant | None = None
+    approval_action_result: SocAgentActionResult | None = None
     notices: tuple[Notice, ...] = ()
     loading: bool = False
 
@@ -65,6 +72,10 @@ def select_approval_request(state: ReviewViewState, approval_request: SocAgentAp
 
 def set_approval_grant(state: ReviewViewState, grant: SocAgentApprovalGrant) -> ReviewViewState:
     return replace(state, approval_grant=grant, loading=False)
+
+
+def set_approval_action_result(state: ReviewViewState, result: SocAgentActionResult) -> ReviewViewState:
+    return replace(state, approval_action_result=result, loading=False)
 
 
 def add_notice(state: ReviewViewState, text: str, *, tone: Literal["info", "error"] = "info") -> ReviewViewState:

@@ -11,11 +11,12 @@ from soc_agent.contracts import (
     ReviewQueueItem,
     ReviewQueuePriority,
     ReviewQueueStatus,
+    SocAgentActionResult,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
     SocAgentRiskLevel,
 )
-from soc_agent.tui.app import _parse_correct_args, _tui_approval_context, _tui_request_context
+from soc_agent.tui.app import _parse_approved_action_args, _parse_correct_args, _tui_approval_context, _tui_request_context
 from soc_agent.tui.command_registry import filter_commands, resolve
 from soc_agent.tui.render import render_main
 from soc_agent.tui.view_state import (
@@ -23,6 +24,7 @@ from soc_agent.tui.view_state import (
     initial_state,
     select_approval_request,
     select_context,
+    set_approval_action_result,
     set_approval_grant,
     set_approval_requests,
     set_items,
@@ -39,6 +41,8 @@ def test_soc_review_tui_command_registry_filters_and_resolves() -> None:
     assert resolve("/approvals").kind == "builtin"
     assert resolve("/approval APR-1").args == "APR-1"
     assert resolve("/approve APR-1 reason").args == "APR-1 reason"
+    assert resolve("/dry-run SAT-1 response.block_ip response.block_ip").kind == "builtin"
+    assert resolve("/execute SAT-1 response.block_ip response.block_ip idem-1").args == "SAT-1 response.block_ip response.block_ip idem-1"
     assert resolve("open REV-1").kind == "unknown"
 
 
@@ -67,15 +71,18 @@ def test_soc_review_tui_view_state_tracks_items_context_and_notices() -> None:
 def test_soc_review_tui_view_state_tracks_approval_request_and_grant() -> None:
     approval_request = _approval_request()
     approval_grant = _approval_grant(approval_request)
+    action_result = _action_result()
 
     state = set_approval_requests(initial_state(), [approval_request])
     state = select_approval_request(state, approval_request)
     state = set_approval_grant(state, approval_grant)
+    state = set_approval_action_result(state, action_result)
 
     assert state.approval_requests == (approval_request,)
     assert state.selected_approval_request_id == "APR-TUI-001"
     assert state.approval_request == approval_request
     assert state.approval_grant == approval_grant
+    assert state.approval_action_result == action_result
 
 
 def test_soc_review_tui_render_includes_queue_and_context() -> None:
@@ -102,7 +109,13 @@ def test_soc_review_tui_render_includes_queue_and_context() -> None:
 def test_soc_review_tui_render_includes_approval_inbox_and_grant() -> None:
     approval_request = _approval_request()
     approval_grant = _approval_grant(approval_request)
-    state = set_approval_grant(select_approval_request(set_approval_requests(initial_state(), [approval_request]), approval_request), approval_grant)
+    state = set_approval_action_result(
+        set_approval_grant(
+            select_approval_request(set_approval_requests(initial_state(), [approval_request]), approval_request),
+            approval_grant,
+        ),
+        _action_result(),
+    )
 
     console = Console(record=True, width=140)
     console.print(render_main(state))
@@ -112,6 +125,8 @@ def test_soc_review_tui_render_includes_approval_inbox_and_grant() -> None:
     assert "response.block_ip" in text
     assert "Approval Request" in text
     assert "SAT-TUI-001" in text
+    assert "AXR-TUI-001" in text
+    assert "not_executed" in text
 
 
 def test_soc_review_tui_parse_correct_args() -> None:
@@ -122,11 +137,21 @@ def test_soc_review_tui_parse_correct_args() -> None:
     )
 
 
+def test_soc_review_tui_parse_approved_action_args() -> None:
+    assert _parse_approved_action_args("SAT-1 response.block_ip response.block_ip idem-1") == (
+        "SAT-1",
+        "response.block_ip",
+        "response.block_ip",
+        "idem-1",
+    )
+
+
 def test_soc_review_tui_request_context_marks_tui_surface() -> None:
-    context = _tui_request_context()
+    context = _tui_request_context(idempotency_key="idem-1")
 
     assert context.actor.actor_id == "soc-review-tui"
     assert context.actor.surface is EntrySurface.TUI
+    assert context.idempotency_key == "idem-1"
 
 
 def test_soc_review_tui_approval_context_marks_approver_role() -> None:
@@ -162,4 +187,17 @@ def _approval_grant(approval_request: SocAgentApprovalRequest) -> SocAgentApprov
         approved_by=ActorContext(actor_id="soc-review-tui", surface=EntrySurface.TUI, roles=["soc_approver"]),
         approval_reason="approved in tui",
         expires_at=approval_request.created_at,
+    )
+
+
+def _action_result() -> SocAgentActionResult:
+    return SocAgentActionResult(
+        route="response.block_ip",
+        action="response.block_ip",
+        status="success",
+        message="Approved action execution boundary consumed token; no external side effect adapter executed.",
+        payload={
+            "execution_result_id": "AXR-TUI-001",
+            "external_side_effect": "not_executed",
+        },
     )
