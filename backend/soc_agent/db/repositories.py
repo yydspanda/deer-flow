@@ -79,6 +79,20 @@ class SqlAlchemyAlertRepository:
             result = session.execute(select(SocDecisionAuditLogRow).where(SocDecisionAuditLogRow.run_id == run_id).order_by(SocDecisionAuditLogRow.occurred_at.asc()))
             return [DecisionAuditRecord.model_validate(row.record_payload) for row in result.scalars()]
 
+    def find_audit_record_by_idempotency_key(
+        self,
+        idempotency_key: str,
+        *,
+        action: str | None = None,
+    ) -> DecisionAuditRecord | None:
+        with self._session_factory() as session:
+            query = select(SocDecisionAuditLogRow).where(SocDecisionAuditLogRow.idempotency_key == idempotency_key)
+            if action is not None:
+                query = query.where(SocDecisionAuditLogRow.action == action)
+            result = session.execute(query.order_by(SocDecisionAuditLogRow.occurred_at.desc()).limit(1))
+            row = result.scalar_one_or_none()
+            return DecisionAuditRecord.model_validate(row.record_payload) if row is not None else None
+
     def save_alert_summary(self, summary: AlertSummary) -> None:
         payload = summary.model_dump(mode="json")
         with self._session_factory() as session:
@@ -232,6 +246,7 @@ def _audit_row_values(record: DecisionAuditRecord, payload: dict) -> dict:
         "actor_surface": record.actor.surface.value,
         "occurred_at": record.occurred_at,
         "input_hash": record.input_hash,
+        "idempotency_key": _idempotency_key_from_audit_payload(record),
         "previous_verdict": record.previous_verdict.value if record.previous_verdict is not None else None,
         "final_verdict": record.final_verdict.value if record.final_verdict is not None else None,
         "confidence": record.confidence,
@@ -239,6 +254,11 @@ def _audit_row_values(record: DecisionAuditRecord, payload: dict) -> dict:
         "correction_id": record.correction_id,
         "record_payload": payload,
     }
+
+
+def _idempotency_key_from_audit_payload(record: DecisionAuditRecord) -> str | None:
+    value = record.payload.get("idempotency_key")
+    return value if isinstance(value, str) and value else None
 
 
 def _summary_row_values(summary: AlertSummary, payload: dict) -> dict:

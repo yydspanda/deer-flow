@@ -186,6 +186,7 @@ commit(topic, partition, next_committable_offset)
 1. **幂等写入边界**
    - `SocDaemonService.process_message()` 已能生成 `kafka:{topic}:{partition}:{offset}`。
    - 并发前需要确认 analyze / approval request / audit / summary 对同一 idempotency key 重放不会重复污染数据。
+   - 当前状态：Done，`SocAnalysisService` 会通过 decision audit 的 `idempotency_key` 索引复用既有 run，避免重复写 summary / review queue / audit。
 
 2. **worker result contract**
    - worker 返回结构化结果，不直接操作 Kafka：
@@ -228,6 +229,7 @@ commit(topic, partition, next_committable_offset)
 2. **WorkerPoolResult contract**
    - dataclass/Pydantic schema，先不启动线程。
    - 明确 worker 不 commit、不 dead-letter。
+   - 当前状态：Next。
 
 3. **Bounded worker pool behind flag**
    - `SOC_KAFKA_WORKER_CONCURRENCY=1` 默认保持旧行为。

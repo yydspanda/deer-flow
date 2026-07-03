@@ -158,6 +158,7 @@ class SocAnalysisService:
         context: ServiceRequestContext,
         replay_of_run_id: str | None = None,
     ) -> AnalysisRun:
+        audit_action = AuditAction.REPLAY if replay_of_run_id else AuditAction.ANALYSIS
         self._emit(
             SocEvent(
                 event_type=SocEventType.ANALYSIS_REQUESTED,
@@ -169,6 +170,10 @@ class SocAnalysisService:
                 },
             )
         )
+
+        if existing_run := self._find_existing_idempotent_run(context, action=audit_action):
+            self._emit_analysis_completion(existing_run, context=context, replay_of_run_id=replay_of_run_id, idempotent_replay=True)
+            return existing_run
 
         run = self._runtime.analyze(payload)
         run.replay_of_run_id = replay_of_run_id
@@ -184,10 +189,30 @@ class SocAnalysisService:
                 _analysis_audit_record(
                     run,
                     actor=context.actor,
-                    action=AuditAction.REPLAY if replay_of_run_id else AuditAction.ANALYSIS,
+                    action=audit_action,
+                    idempotency_key=context.idempotency_key,
                 )
             )
 
+        self._emit_analysis_completion(run, context=context, replay_of_run_id=replay_of_run_id, idempotent_replay=False)
+        return run
+
+    def _find_existing_idempotent_run(self, context: ServiceRequestContext, *, action: AuditAction) -> AnalysisRun | None:
+        if not context.idempotency_key or self._audit_repository is None or self._repository is None:
+            return None
+        audit_record = self._audit_repository.find_audit_record_by_idempotency_key(context.idempotency_key, action=action.value)
+        if audit_record is None:
+            return None
+        return self._repository.get_run(audit_record.run_id)
+
+    def _emit_analysis_completion(
+        self,
+        run: AnalysisRun,
+        *,
+        context: ServiceRequestContext,
+        replay_of_run_id: str | None,
+        idempotent_replay: bool,
+    ) -> None:
         self._emit(
             SocEvent(
                 event_type=_completion_event_type(run),
@@ -200,10 +225,10 @@ class SocAnalysisService:
                     "trace_id": context.trace_id,
                     "idempotency_key": context.idempotency_key,
                     "replay_of_run_id": replay_of_run_id,
+                    "idempotent_replay": idempotent_replay,
                 },
             )
         )
-        return run
 
     def _emit(self, event: SocEvent) -> None:
         self._event_sink.emit(event)
@@ -1451,7 +1476,13 @@ def _dedupe(values: list[str]) -> list[str]:
     return result
 
 
-def _analysis_audit_record(run: AnalysisRun, *, actor: ActorContext, action: AuditAction) -> DecisionAuditRecord:
+def _analysis_audit_record(
+    run: AnalysisRun,
+    *,
+    actor: ActorContext,
+    action: AuditAction,
+    idempotency_key: str | None = None,
+) -> DecisionAuditRecord:
     return DecisionAuditRecord(
         action=action,
         run_id=run.run_id,
@@ -1467,6 +1498,7 @@ def _analysis_audit_record(run: AnalysisRun, *, actor: ActorContext, action: Aud
             "model_name": run.model_name,
             "prompt_version": run.prompt_version,
             "step_count": len(run.steps),
+            "idempotency_key": idempotency_key,
         },
     )
 

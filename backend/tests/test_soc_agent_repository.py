@@ -83,6 +83,30 @@ def test_sqlalchemy_alert_repository_supports_service_replay() -> None:
     assert replayed.run_id in {summary.run_id for summary in repository.list_alert_summaries(limit=2)}
 
 
+def test_sqlalchemy_alert_repository_finds_audit_by_idempotency_key() -> None:
+    repository = _repository()
+    service = SocAnalysisService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+    )
+
+    run = service.analyze(
+        _sample("approved_scanner.json"),
+        context=ServiceRequestContext(idempotency_key="kafka:soc.alerts.raw.v1:0:99"),
+    )
+
+    audit_record = repository.find_audit_record_by_idempotency_key(
+        "kafka:soc.alerts.raw.v1:0:99",
+        action=AuditAction.ANALYSIS.value,
+    )
+
+    assert audit_record is not None
+    assert audit_record.run_id == run.run_id
+    assert audit_record.payload["idempotency_key"] == "kafka:soc.alerts.raw.v1:0:99"
+    assert repository.find_audit_record_by_idempotency_key("missing") is None
+
+
 def test_sqlalchemy_alert_repository_lists_recent_runs() -> None:
     repository = _repository()
     service = SocAnalysisService(repository=repository, summary_repository=repository)

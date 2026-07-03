@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka daemon idempotency hardening |
+| 当前下一刀 | Kafka WorkerPoolResult contract |
 
 ## Phase 1 切片计划
 
@@ -97,8 +97,31 @@
 | 61 | Kafka daemon K8s deployment contract | Done | 新增 opt-in K8s template，固定 ConfigMap/Secret/probes/resources/logging 标签；Compose 与 K8s 配置等价关系写入 runbook |
 | 62 | Kafka worker pool / concurrency planning | Done | 新增并发规划文档，明确 poller ownership、partition-aware commit、bounded in-flight、幂等前置和 LLM 独立限流 |
 | 63 | Kafka partition commit tracker | Done | 新增纯内存 `PartitionCommitTracker`，锁定乱序完成、dead-letter pending、多 partition 和已提交边界的 commit 推进规则 |
+| 64 | Kafka daemon idempotency hardening | Done | `SocAnalysisService` 通过 audit idempotency key 复用既有 run，避免同一 Kafka offset 重放重复写 summary/review/audit |
 
 ## 进度记录
+
+### 2026-07-03 — Kafka daemon idempotency hardening 切片
+
+- 背景：
+  - 并发/重试/重启后，同一 Kafka offset 可能被再次处理。
+  - 如果不加幂等，同一 `kafka:{topic}:{partition}:{offset}` 会重复生成 run、summary、review queue item 和 audit。
+- 变更：
+  - `soc_decision_audit_log` 增加 `idempotency_key` 索引字段。
+  - 新增 migration `0007_audit_idempotency_key`。
+  - `DecisionAuditRepository` 增加 `find_audit_record_by_idempotency_key()`。
+  - `SqlAlchemyAlertRepository` 支持按 `idempotency_key` + action 查询 audit。
+  - `SocAnalysisService._analyze()` 在执行 runtime 前检查同 key、同 action 的既有 audit/run；命中时直接返回旧 run。
+  - completion event payload 增加 `idempotent_replay` 标记。
+- 语义：
+  - 首次处理：正常 runtime -> save run -> save summary/review/audit。
+  - 同 key 重放：不再执行 runtime，不新增 summary/review/audit，返回第一次 run。
+  - audit 存在但 run 缺失时继续正常分析，用于容忍不完整历史数据。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/core/service.py soc_agent/db/repositories.py soc_agent/db/models.py soc_agent/protocols.py tests/test_soc_agent_service.py tests/test_soc_agent_repository.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_service.py::test_analysis_service_reuses_existing_run_for_same_idempotency_key tests/test_soc_agent_service.py::test_daemon_service_processes_alert_message_through_analysis_service tests/test_soc_agent_repository.py::test_sqlalchemy_alert_repository_finds_audit_by_idempotency_key tests/test_soc_agent_repository.py::test_sqlalchemy_alert_repository_supports_service_replay`
+- 下一步：
+  - 做 `WorkerPoolResult` contract，先固定 worker 不 commit、不 dead-letter 的结构化结果语义。
 
 ### 2026-07-03 — Kafka partition commit tracker 切片
 

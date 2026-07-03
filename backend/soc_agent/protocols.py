@@ -59,6 +59,13 @@ class DecisionAuditRepository(Protocol):
 
     def list_audit_records(self, run_id: str) -> list[DecisionAuditRecord]: ...
 
+    def find_audit_record_by_idempotency_key(
+        self,
+        idempotency_key: str,
+        *,
+        action: str | None = None,
+    ) -> DecisionAuditRecord | None: ...
+
 
 class AlertSummaryRepository(Protocol):
     """Persistence boundary for queryable alert summaries."""

@@ -58,6 +58,7 @@ class SocDecisionAuditLogRow(SocBase):
     actor_surface: Mapped[str] = mapped_column(String(32), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     input_hash: Mapped[str | None] = mapped_column(String(128), index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(256), index=True)
     previous_verdict: Mapped[str | None] = mapped_column(String(32))
     final_verdict: Mapped[str | None] = mapped_column(String(32), index=True)
     confidence: Mapped[float | None]

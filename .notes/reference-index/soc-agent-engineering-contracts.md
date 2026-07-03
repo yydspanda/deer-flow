@@ -395,6 +395,8 @@ Kafka daemon / consumer adapter 约束：
   - offset commit 必须 partition-aware，只能推进到同一 partition 已连续完成的最大 offset + 1。
   - mapper/service failure 必须先 dead-letter 成功，再把该 offset 标记为 completed；dead-letter 失败时不得 commit 或越过该 offset。
   - 并发前必须补幂等写入边界，确保同一 `kafka:{topic}:{partition}:{offset}` 重放不会重复污染 summary、approval inbox、audit 或 memory。
+  - `SocAnalysisService` 的 idempotency hardening 以 `DecisionAuditRecord.payload["idempotency_key"]` 和 `soc_decision_audit_log.idempotency_key` 为索引；同 key、同 action 命中既有 audit/run 时必须复用旧 run，不得重新执行 runtime 或重复写 summary/review/audit。
+  - `soc_decision_audit_log.idempotency_key` 是请求幂等索引字段，不保存 secret，不替代 Kafka metadata；Kafka metadata 仍来自 `SocDaemonMessage`。
   - worker pool 必须 bounded；必须有 max in-flight、queue depth、shutdown timeout 和 backpressure 语义。
   - Kafka worker concurrency 不等于 LLM concurrency；LLM analyzer 必须有独立限流。
 

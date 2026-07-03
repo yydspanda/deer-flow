@@ -33,6 +33,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.core import (
+    DeterministicAnalysisRuntime,
     SocAgentActionDispatcher,
     SocAgentActionPolicy,
     SocAgentApprovalService,
@@ -73,6 +74,16 @@ class InMemoryAlertRepository:
         return list(self.runs.values())[-limit:][::-1]
 
 
+class CountingRuntime:
+    def __init__(self) -> None:
+        self.calls = 0
+        self._runtime = DeterministicAnalysisRuntime()
+
+    def analyze(self, payload: dict) -> AnalysisRun:
+        self.calls += 1
+        return self._runtime.analyze(payload)
+
+
 class InMemoryAuditRepository:
     def __init__(self) -> None:
         self.records: list[DecisionAuditRecord] = []
@@ -82,6 +93,20 @@ class InMemoryAuditRepository:
 
     def list_audit_records(self, run_id: str) -> list[DecisionAuditRecord]:
         return [record for record in self.records if record.run_id == run_id]
+
+    def find_audit_record_by_idempotency_key(
+        self,
+        idempotency_key: str,
+        *,
+        action: str | None = None,
+    ) -> DecisionAuditRecord | None:
+        for record in reversed(self.records):
+            if record.payload.get("idempotency_key") != idempotency_key:
+                continue
+            if action is not None and record.action.value != action:
+                continue
+            return record
+        return None
 
 
 class InMemorySummaryRepository:
@@ -244,6 +269,36 @@ def test_analysis_service_writes_decision_audit_record() -> None:
     assert record.input_hash == run.input_hash
     assert record.final_verdict == Verdict.FALSE_POSITIVE
     assert record.payload["step_count"] == len(run.steps)
+
+
+def test_analysis_service_reuses_existing_run_for_same_idempotency_key() -> None:
+    repository = InMemoryAlertRepository()
+    audit_repository = InMemoryAuditRepository()
+    summary_repository = InMemorySummaryRepository()
+    review_repository = InMemoryReviewQueueRepository()
+    runtime = CountingRuntime()
+    sink = RecordingEventSink()
+    service = SocAnalysisService(
+        runtime=runtime,
+        repository=repository,
+        summary_repository=summary_repository,
+        audit_repository=audit_repository,
+        review_queue_repository=review_repository,
+        event_sink=sink,
+    )
+    context = ServiceRequestContext(idempotency_key="kafka:soc.alerts.raw.v1:0:42")
+
+    first = service.analyze(_sample("pingan_legacy_apt.json"), context=context)
+    second = service.analyze(_sample("pingan_legacy_apt.json"), context=context)
+
+    assert second == first
+    assert runtime.calls == 1
+    assert list(repository.runs) == [first.run_id]
+    assert list(summary_repository.summaries) == [first.run_id]
+    assert len(review_repository.items) == 1
+    assert len(audit_repository.records) == 1
+    assert audit_repository.records[0].payload["idempotency_key"] == "kafka:soc.alerts.raw.v1:0:42"
+    assert sink.events[-1].payload["idempotent_replay"] is True
 
 
 def test_analysis_service_writes_alert_summary() -> None:
