@@ -645,7 +645,7 @@ def test_agent_chat_service_loads_review_context() -> None:
         )
     )
 
-    assert [event.type for event in events] == ["values", "custom", "custom", "custom", "custom", "messages-tuple", "end"]
+    assert [event.type for event in events] == ["values", "custom", "custom", "custom", "custom", "custom", "messages-tuple", "end"]
     assert events[0].data["title"] == f"SOC Review {item.queue_id}"
     assert events[1].data["kind"] == "soc.route_decision"
     assert events[1].data["route"] == "review.open_context"
@@ -664,7 +664,10 @@ def test_agent_chat_service_loads_review_context() -> None:
         "alert_id": run.alert_id,
         "actor_surface": "tui",
     }
-    assert f"Loaded review context {item.queue_id}" in events[5].data["content"]
+    assert events[5].data["kind"] == "soc.skill_context"
+    assert events[5].data["selected_skills"]
+    assert events[5].data["total_token_budget"] > 0
+    assert f"Loaded review context {item.queue_id}" in events[6].data["content"]
 
 
 def test_agent_chat_service_denies_unlisted_route() -> None:

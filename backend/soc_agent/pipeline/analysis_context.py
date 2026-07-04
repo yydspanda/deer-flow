@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from soc_agent.contracts import AlertInput, ExtractedEntities, FactReconstructionResult, LLMAnalysisRequest
+from soc_agent.skills import SocSkillResolver, build_soc_skill_context
 
 
 def build_llm_analysis_request(
@@ -17,7 +18,7 @@ def build_llm_analysis_request(
         *fact_reconstruction.warnings,
         *entities.warnings,
     ]
-    return LLMAnalysisRequest(
+    request = LLMAnalysisRequest(
         alert_id=alert.alert_id,
         source=alert.source,
         detection=alert.detection,
@@ -30,6 +31,9 @@ def build_llm_analysis_request(
         conflict_types=conflict_types,
         warnings=_dedupe(warnings),
     )
+    skill_resolution = SocSkillResolver().resolve_for_analysis_request(request)
+    request.skill_context = build_soc_skill_context(skill_resolution)
+    return request
 
 
 def _dedupe(values: list[str]) -> list[str]:

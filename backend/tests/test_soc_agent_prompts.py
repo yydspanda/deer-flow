@@ -34,12 +34,17 @@ def test_analysis_prompt_uses_bounded_llm_request_for_pingan_apt() -> None:
     assert "field-trust" in prompt.system
     assert "Return JSON only" in prompt.system
     assert "Bounded analysis context" in prompt.user
+    assert prompt.context["skill_context"]["selected_skills"]
+    assert prompt.context["skill_context"]["total_token_budget"] > 0
+    assert "skill_context" in prompt.user
 
 
 def test_analysis_prompt_shows_low_trust_fallback_without_dumping_raw_payload() -> None:
     prompt = build_analysis_prompt(_analysis_request("pingan_legacy_edr.json"))
     user_prompt = prompt.user
 
+    skill_names = [item["skill_name"] for item in prompt.context["skill_context"]["selected_skills"]]
+    assert "soc-endpoint-triage" in skill_names
     assert prompt.context["evidence"]["selected_input_available"] is True
     assert prompt.context["evidence"]["evidence_policy"]["trust_level"] == "low"
     assert "evidence input policy selected low-trust structured fallback" in prompt.context["fact_reconstruction"]["warnings"]

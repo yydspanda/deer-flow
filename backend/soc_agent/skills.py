@@ -3,8 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from hashlib import sha256
+from pathlib import Path
 
-from soc_agent.contracts import AlertInput, AlertSourceType, AlertSummary, ExtractedEntities, LLMAnalysisRequest, SocSkillRecommendation, SocSkillResolution
+from soc_agent.contracts import (
+    AlertInput,
+    AlertSourceType,
+    AlertSummary,
+    ExtractedEntities,
+    LLMAnalysisRequest,
+    SocSkillContext,
+    SocSkillContextItem,
+    SocSkillRecommendation,
+    SocSkillResolution,
+)
 
 SOC_ALERT_TRIAGE_SKILL = "soc-alert-triage"
 SOC_ENDPOINT_TRIAGE_SKILL = "soc-endpoint-triage"
@@ -20,6 +32,19 @@ SOC_LEAD_AGENT_SKILLS: tuple[str, ...] = (
     SOC_WAF_F5_TRIAGE_SKILL,
     SOC_ASSET_DIRECTION_SKILL,
 )
+SOC_SKILL_CONTEXT_TOKEN_BUDGET = 240
+SOC_SKILL_CONTEXT_SOURCE = "soc_skill_resolver"
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_PUBLIC_SKILL_ROOT = _REPO_ROOT / "skills" / "public"
+
+_SOC_SKILL_CONTEXT_SUMMARIES: dict[str, str] = {
+    SOC_ALERT_TRIAGE_SKILL: "General SOC triage: separate facts, inferred facts, conflicts, uncertainty, verdict, confidence, and safe next steps.",
+    SOC_ENDPOINT_TRIAGE_SKILL: "Endpoint triage: focus on host/user/process/file evidence, process ancestry, lateral movement, and approval-gated endpoint response.",
+    SOC_NETWORK_APT_TRIAGE_SKILL: "Network/APT triage: focus on direction, IOC quality, C2/callback behavior, role assignment, and historical similar alerts.",
+    SOC_WAF_F5_TRIAGE_SKILL: "WAF/F5 triage: focus on HTTP evidence, client IP attribution, x-forwarded-for, target application, web attack type, and suppression target.",
+    SOC_ASSET_DIRECTION_SKILL: "Asset and direction triage: resolve ownership, attacker/victim roles, traffic direction, affected asset, and response target conflicts.",
+}
 
 _SOURCE_SKILLS: dict[AlertSourceType, tuple[str, str]] = {
     AlertSourceType.EDR: (SOC_ENDPOINT_TRIAGE_SKILL, "source_type is edr"),
@@ -205,6 +230,43 @@ class SocSkillResolver:
         )
 
 
+def build_soc_skill_context(
+    resolution: SocSkillResolution,
+    *,
+    public_skill_root: Path | None = None,
+    token_budget_per_skill: int = SOC_SKILL_CONTEXT_TOKEN_BUDGET,
+) -> SocSkillContext:
+    """Build compact skill context for bounded prompts and chat streams."""
+
+    skill_root = public_skill_root or _DEFAULT_PUBLIC_SKILL_ROOT
+    items: list[SocSkillContextItem] = []
+    notes = list(resolution.notes)
+    for recommendation in resolution.selected_skills:
+        content_hash = _skill_content_hash(skill_root, recommendation.skill_name)
+        if content_hash is None:
+            notes.append(f"skill file not found for {recommendation.skill_name}")
+        items.append(
+            SocSkillContextItem(
+                skill_name=recommendation.skill_name,
+                reason=recommendation.reason,
+                confidence=recommendation.confidence,
+                matched_fields=list(recommendation.matched_fields),
+                summary=_SOC_SKILL_CONTEXT_SUMMARIES.get(
+                    recommendation.skill_name,
+                    "SOC domain skill selected by resolver; use it only as bounded guidance.",
+                ),
+                content_hash=content_hash,
+                token_budget=token_budget_per_skill,
+            )
+        )
+    return SocSkillContext(
+        source=SOC_SKILL_CONTEXT_SOURCE,
+        selected_skills=items,
+        total_token_budget=sum(item.token_budget for item in items),
+        notes=notes,
+    )
+
+
 class _RecommendationBuilder:
     def __init__(self, available_skill_names: set[str]) -> None:
         self._available_skill_names = available_skill_names
@@ -304,3 +366,10 @@ def _add_keyword_skill(
     if matched is None:
         return
     recommendations.add(skill_name, reason=reason, confidence=0.64, matched_field=f"keyword:{matched}")
+
+
+def _skill_content_hash(public_skill_root: Path, skill_name: str) -> str | None:
+    skill_path = public_skill_root / skill_name / "SKILL.md"
+    if not skill_path.exists():
+        return None
+    return sha256(skill_path.read_bytes()).hexdigest()

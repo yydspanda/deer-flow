@@ -49,6 +49,7 @@ from soc_agent.contracts import (
     SocDaemonProcessResult,
     SocEvent,
     SocEventType,
+    SocSkillContext,
     SocSkillResolution,
     Verdict,
 )
@@ -65,7 +66,7 @@ from soc_agent.protocols import (
     SocAgentApprovalRequestRepository,
     SocEventSink,
 )
-from soc_agent.skills import SocSkillResolver
+from soc_agent.skills import SocSkillResolver, build_soc_skill_context
 
 
 class SocServiceError(RuntimeError):
@@ -902,7 +903,11 @@ class SocAgentChatService:
             return
 
         if action_result.action == "review.open_context":
-            yield SocAgentStreamEvent(type="custom", data={"kind": "soc.review_context", **action_result.payload})
+            review_payload = dict(action_result.payload)
+            skill_context = review_payload.pop("skill_context", None)
+            yield SocAgentStreamEvent(type="custom", data={"kind": "soc.review_context", **review_payload})
+            if isinstance(skill_context, dict):
+                yield SocAgentStreamEvent(type="custom", data={"kind": "soc.skill_context", **skill_context})
         yield _assistant_event(action_result.message)
 
         yield SocAgentStreamEvent(type="end", data={"usage": {}, "thread_id": thread_id})
@@ -1126,6 +1131,9 @@ class SocAgentActionDispatcher:
             "alert_id": investigation_context.run.alert_id,
             "actor_surface": context.actor.surface.value,
         }
+        skill_context = _skill_context_from_investigation_context(investigation_context)
+        if skill_context is not None:
+            payload["skill_context"] = skill_context.model_dump(mode="json", exclude_none=True)
         return SocAgentActionResult(
             route=route_decision.route,
             action="review.open_context",
@@ -1228,6 +1236,17 @@ def _approval_request_event(request: SocAgentApprovalRequest) -> SocAgentStreamE
             "created_at": request.created_at.isoformat(),
         },
     )
+
+
+def _skill_context_from_investigation_context(context: InvestigationContext) -> SocSkillContext | None:
+    request = context.run.llm_analysis_request
+    if request is not None:
+        if request.skill_context.selected_skills:
+            return request.skill_context
+        return build_soc_skill_context(SocSkillResolver().resolve_for_analysis_request(request))
+    if context.summary is not None:
+        return build_soc_skill_context(SocSkillResolver().resolve_for_summary(context.summary))
+    return None
 
 
 def _action_result_event(result: SocAgentActionResult) -> SocAgentStreamEvent:

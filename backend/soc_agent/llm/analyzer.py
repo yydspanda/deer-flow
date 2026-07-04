@@ -66,6 +66,8 @@ class JsonLLMAnalyzer:
             "analyzer": "json_llm",
             "repair_applied": parsed.repair_applied,
             "prompt_hash": stable_hash({"messages": prompt.messages()}),
+            "skill_context_hash": stable_hash(request.skill_context.model_dump(mode="json", exclude_none=True)),
+            "selected_skills": [item.skill_name for item in request.skill_context.selected_skills],
             "candidate_hash": stable_hash({"candidate_text": parsed.candidate_text}),
         }
         if parsed.repair_log:

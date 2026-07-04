@@ -35,6 +35,22 @@ def test_soc_chat_runtime_translates_review_context_custom_event() -> None:
     assert translate(event) == [SystemMessage("SOC review context loaded | queue=REV-1 | alert=ALT-1 | run=RUN-1")]
 
 
+def test_soc_chat_runtime_translates_skill_context_custom_event() -> None:
+    event = SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.skill_context",
+            "selected_skills": [
+                {"skill_name": "soc-alert-triage"},
+                {"skill_name": "soc-endpoint-triage"},
+            ],
+            "total_token_budget": 480,
+        },
+    )
+
+    assert translate(event) == [SystemMessage("SOC skill context | skills=soc-alert-triage,soc-endpoint-triage | token_budget=480")]
+
+
 def test_soc_chat_runtime_ignores_unknown_custom_event() -> None:
     event = SocAgentStreamEvent(type="custom", data={"kind": "soc.unknown"})
 

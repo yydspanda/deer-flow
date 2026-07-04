@@ -100,9 +100,41 @@
 | 64 | Kafka daemon idempotency hardening | Done | `SocAnalysisService` 通过 audit idempotency key 复用既有 run，避免同一 Kafka offset 重放重复写 summary/review/audit |
 | 65 | Kafka WorkerPoolResult contract | Done | 新增 `KafkaWorkerResult` / `SocKafkaWorker`，worker 只返回 processed/dead_letter_required/retryable/fatal 结构化结果；不 commit、不 dead-letter、不启动并发 |
 | 66 | SocSkillResolver + SOC Lead Agent MVP | Done | 复用 DeerFlow custom-agent/profile/skills 机制；按 source/detection/entities/conflict 选择 SOC domain skills；新增只读 CLI `soc agent profile` / `soc agent resolve-skills` |
-| 67 | Skill-selected bounded context for analysis/chat | Planned | 将 `SocSkillResolver` selected skills 作为有界上下文接入 analysis node 或 SOC chat stream，记录 skill/hash/token budget；不让 LLM 动态加载未知 skill |
+| 67 | Skill-selected bounded context for analysis/chat | Done | `LLMAnalysisRequest.skill_context`、PromptBuilder、LLM metadata、ReviewContext chat stream 和 TUI translate 已接入 compact skill context；记录 skill/hash/token budget；不让 LLM 动态加载未知 skill |
+| 68 | SOC Lead Agent DeerFlow profile installation path | Planned | 将 `soc agent profile` 的推荐 payload 接到 DeerFlow existing agents API / profile storage 的安全安装路径；仍不绕过 DeerFlow custom-agent 机制 |
 
 ## 进度记录
+
+### 2026-07-04 — Skill-selected bounded context for analysis/chat 切片
+
+- 背景：
+  - 上一刀已经能选择 SOC domain skills，但 analysis prompt 和 chat stream 还没有消费这份选择结果。
+  - 本刀目标是把 selected skills 变成可审计、可 replay diff 的 bounded context，而不是把完整 `SKILL.md` 塞进 prompt。
+- 变更：
+  - 新增 contracts：
+    - `SocSkillContextItem`
+    - `SocSkillContext`
+  - `backend/soc_agent/skills.py` 新增 `build_soc_skill_context()`：
+    - 从 `SocSkillResolution` 生成 compact skill context。
+    - 每个 skill 记录 `skill_name`、reason、confidence、matched_fields、summary、`content_hash`、`token_budget`。
+    - `content_hash` 来自 `skills/public/<skill>/SKILL.md` 的 sha256，用于审计和 replay diff。
+  - `build_llm_analysis_request()` 自动附带 `skill_context`。
+  - `build_analysis_prompt()` 将 `skill_context` 注入 bounded analysis context。
+  - `JsonLLMAnalyzer` metadata 记录 `skill_context_hash` 和 `selected_skills`。
+  - `SocAgentChatService` 在打开 review context 时额外发出 `custom kind=soc.skill_context`。
+  - `soc_agent.tui.chat_runtime.translate()` 可把 `soc.skill_context` 显示为 TUI system message。
+- 边界：
+  - 不加载完整 skill 文本进 prompt。
+  - 不让 LLM 动态加载未知 skill。
+  - 不改变 runtime 控制流、不执行工具、不写 memory。
+  - Chat/TUI 只展示 selected skill context，不把业务逻辑放到 TUI。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/contracts/schemas.py soc_agent/contracts/__init__.py soc_agent/skills.py soc_agent/pipeline/analysis_context.py soc_agent/prompts/analysis.py soc_agent/llm/analyzer.py soc_agent/core/service.py soc_agent/tui/chat_runtime.py tests/test_soc_agent_lead_agent.py tests/test_soc_agent_prompts.py tests/test_soc_agent_llm_analyzer.py tests/test_soc_agent_service.py tests/test_soc_tui_chat_runtime.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_lead_agent.py tests/test_soc_agent_prompts.py tests/test_soc_agent_llm_analyzer.py tests/test_soc_agent_service.py tests/test_soc_tui_chat_runtime.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli analyze samples/alerts/pingan_legacy_edr.json --pretty`
+  - `codegraph sync .`
+- 下一步：
+  - 讨论是否需要把 `soc agent profile` 安装到 DeerFlow existing agents API/profile storage，或者先继续做 SOC Lead Agent 与 DeerFlow chat runtime 的真实接入。
 
 ### 2026-07-04 — SocSkillResolver + SOC Lead Agent MVP 切片
 

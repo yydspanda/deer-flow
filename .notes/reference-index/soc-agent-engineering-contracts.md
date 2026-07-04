@@ -1055,6 +1055,8 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 - 选中的 skill 作为 bounded context 注入 prompt；必须记录 skill name、skill version/hash、注入摘要和 token 预算。
 - Skill 只能产生指导、候选解释、候选查询或 action proposal；写 DB、写 memory、执行 tool 必须回到 service/policy 层。
 
+当前实现：`SocSkillContext` 已接入 `LLMAnalysisRequest.skill_context`、`build_analysis_prompt()`、`JsonLLMAnalyzer.metadata`、`SocAgentChatService` 的 `soc.skill_context` stream event 和 TUI translate。实现只注入 compact summary + sha256 content hash + token budget，不把完整 `SKILL.md` 作为 analysis node prompt 上下文。
+
 后续 MCP/tool 调用遵循：
 
 - 查询类工具默认仍需通过 allowlist、rate limit、audit，例如资产归属查询、EDR 进程树查询、历史告警查询。

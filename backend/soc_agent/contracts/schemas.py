@@ -159,6 +159,28 @@ class SocSkillResolution(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class SocSkillContextItem(BaseModel):
+    """Compact, auditable skill context injected into bounded SOC prompts."""
+
+    skill_name: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    matched_fields: list[str] = Field(default_factory=list)
+    summary: str = Field(min_length=1)
+    content_hash: str | None = None
+    token_budget: int = Field(default=240, ge=0)
+
+
+class SocSkillContext(BaseModel):
+    """Bounded skill context derived from DeerFlow skill selection."""
+
+    schema_version: str = "soc.skill_context.v1"
+    source: str = "soc_skill_resolver"
+    selected_skills: list[SocSkillContextItem] = Field(default_factory=list)
+    total_token_budget: int = Field(default=0, ge=0)
+    notes: list[str] = Field(default_factory=list)
+
+
 class SocLeadAgentProfile(BaseModel):
     """DeerFlow custom-agent profile payload recommended for SOC triage."""
 
@@ -608,6 +630,7 @@ class LLMAnalysisRequest(BaseModel):
     conflict_count: int = Field(default=0, ge=0)
     conflict_types: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    skill_context: SocSkillContext = Field(default_factory=SocSkillContext)
 
 
 class NormalizationReport(BaseModel):

@@ -58,6 +58,8 @@ def _translate_custom(data: dict[str, Any]) -> list[Action]:
                 )
             )
         ]
+    if kind == "soc.skill_context":
+        return [SystemMessage(_skill_context_text(data))]
     if kind == "soc.route_decision":
         return [
             SystemMessage(
@@ -119,6 +121,24 @@ def _review_context_text(*, queue_id: str, run_id: str, alert_id: str) -> str:
         parts.append(f"alert={alert_id}")
     if run_id:
         parts.append(f"run={run_id}")
+    return " | ".join(parts)
+
+
+def _skill_context_text(data: dict[str, Any]) -> str:
+    selected = data.get("selected_skills")
+    skill_names: list[str] = []
+    if isinstance(selected, list):
+        for item in selected:
+            if isinstance(item, dict):
+                skill_name = item.get("skill_name")
+                if isinstance(skill_name, str) and skill_name:
+                    skill_names.append(skill_name)
+    parts = ["SOC skill context"]
+    if skill_names:
+        parts.append(f"skills={','.join(skill_names)}")
+    token_budget = data.get("total_token_budget")
+    if isinstance(token_budget, int):
+        parts.append(f"token_budget={token_budget}")
     return " | ".join(parts)
 
 

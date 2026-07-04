@@ -27,6 +27,7 @@ from soc_agent.skills import (
     SOC_NETWORK_APT_TRIAGE_SKILL,
     SOC_WAF_F5_TRIAGE_SKILL,
     SocSkillResolver,
+    build_soc_skill_context,
 )
 
 
@@ -112,6 +113,24 @@ def test_skill_resolver_respects_available_skill_whitelist() -> None:
 
     assert [item.skill_name for item in resolution.selected_skills] == [SOC_ALERT_TRIAGE_SKILL]
     assert resolution.available_agent_skills == [SOC_ALERT_TRIAGE_SKILL]
+
+
+def test_skill_context_compacts_selected_skill_metadata() -> None:
+    request = LLMAnalysisRequest(
+        alert_id="ALT-EDR",
+        source=AlertSourceRef(source_type=AlertSourceType.EDR),
+        extracted_entities=ExtractedEntities(processes=["cmd.exe"]),
+    )
+    resolution = SocSkillResolver().resolve_for_analysis_request(request)
+
+    context = build_soc_skill_context(resolution)
+
+    endpoint_item = next(item for item in context.selected_skills if item.skill_name == SOC_ENDPOINT_TRIAGE_SKILL)
+    assert endpoint_item.content_hash is not None
+    assert len(endpoint_item.content_hash) == 64
+    assert endpoint_item.token_budget == 240
+    assert "Endpoint triage" in endpoint_item.summary
+    assert context.total_token_budget == 240 * len(context.selected_skills)
 
 
 def test_skill_resolver_accepts_canonical_alert_input() -> None:

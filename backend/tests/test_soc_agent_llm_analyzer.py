@@ -98,6 +98,8 @@ def test_json_llm_analyzer_runs_prompt_client_parser_and_runtime_trace() -> None
     assert analyze_step.metadata["usage"] == {"input_tokens": 100, "output_tokens": 80}
     assert analyze_step.metadata["response_metadata"] == {"finish_reason": "stop"}
     assert "prompt_hash" in analyze_step.metadata
+    assert "skill_context_hash" in analyze_step.metadata
+    assert analyze_step.metadata["selected_skills"]
     assert "candidate_hash" in analyze_step.metadata
 
 

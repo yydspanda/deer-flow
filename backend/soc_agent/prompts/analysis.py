@@ -107,6 +107,7 @@ def _analysis_context(request: LLMAnalysisRequest) -> dict[str, Any]:
             "conflict_reports": [item.model_dump(mode="json", exclude_none=True) for item in fact.conflict_reports],
             "warnings": request.warnings,
         },
+        "skill_context": request.skill_context.model_dump(mode="json", exclude_none=True),
     }
 
 

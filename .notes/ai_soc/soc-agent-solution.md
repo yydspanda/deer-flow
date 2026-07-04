@@ -215,6 +215,10 @@ Profile 治理：
 - `backend/soc_agent/lead_agent.py` 只生成推荐 profile payload，不直接写 `.deer-flow/users/.../agents`。
 - `backend/soc_agent/skills.py` 的 `SocSkillResolver` 只输出 DeerFlow skill 名称和 reason；真正 skill 加载、slash activation、allowed-tools 过滤仍交给 DeerFlow。
 - 当前已提供 `skills/public/soc-alert-triage`、`soc-endpoint-triage`、`soc-network-apt-triage`、`soc-waf-f5-triage`、`soc-asset-direction`，并通过 allowed-tools 将 MVP 限制在只读/计划型工具。
+- 当前已把 selected skills 接入 bounded analysis/chat context：
+  - `LLMAnalysisRequest.skill_context` 只包含 compact summary、reason、matched fields、skill content hash 和 token budget。
+  - PromptBuilder 注入的是 compact context，不是完整 `SKILL.md`。
+  - SOC chat stream 打开 review context 时发出 `custom kind=soc.skill_context`，TUI/Web 可单独展示。
 - CLI 只读辅助：
   - `soc agent profile` 输出可用于 DeerFlow `/api/agents` 的 SOC custom-agent profile payload。
   - `soc agent resolve-skills <alert.json>` 输出 canonical alert 对应的 domain skill resolution。
@@ -236,8 +240,8 @@ EDR 告警进入
 
 1. Phase 1 先把 node prompt、JSON parser、真实 LLM analyzer behind flag 做稳。
 2. Phase 1 收口已引入 `SocSkillResolver` 和 SOC custom-agent profile payload；当前只做 deterministic skill recommendation，不让 LLM 动态加载未知 skill。
-3. Phase 2/3 将 selected skills 作为 bounded context 接入 analysis node / SOC Lead Agent 对话，并补充 skill hash、token budget 和 replay diff。
-4. Phase 3/4 再让 SOC Lead Agent 在 TUI/Web/Chat 场景中做交互式调查和受限软路由。
+3. Phase 1 收口已将 selected skills 作为 compact bounded context 接入 analysis prompt / LLM metadata / SOC chat stream，并记录 skill hash、summary 和 token budget。
+4. Phase 2/3 再让 SOC Lead Agent 在 TUI/Web/Chat 场景中做交互式调查和受限软路由。
 5. MCP/tool 处置能力最后接入；查询类工具先接，封禁/隔离/禁用账号必须默认需要审批。
 
 ### 1.2.1 Phase 1 当前实际 Runtime Pipeline
