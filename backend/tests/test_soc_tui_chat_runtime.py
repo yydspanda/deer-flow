@@ -51,6 +51,19 @@ def test_soc_chat_runtime_translates_skill_context_custom_event() -> None:
     assert translate(event) == [SystemMessage("SOC skill context | skills=soc-alert-triage,soc-endpoint-triage | token_budget=480")]
 
 
+def test_soc_chat_runtime_translates_lead_agent_entry_event() -> None:
+    event = SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.lead_agent_entry",
+            "agent_name": "soc-triage",
+            "thread_id": "SOC-THREAD-1",
+        },
+    )
+
+    assert translate(event) == [SystemMessage("SOC lead agent entry | agent=soc-triage | thread=SOC-THREAD-1")]
+
+
 def test_soc_chat_runtime_ignores_unknown_custom_event() -> None:
     event = SocAgentStreamEvent(type="custom", data={"kind": "soc.unknown"})
 

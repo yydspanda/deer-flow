@@ -226,6 +226,10 @@ Profile 治理：
   - `soc agent install-profile --dry-run` 显示将写入的 DeerFlow user-scoped profile 路径。
   - `soc agent install-profile --overwrite` 才会覆盖既有 user-scoped `soc-triage`。
   - 遇到 legacy shared agent 同名冲突时跳过，避免 shadow 旧 agent。
+- Chat entry：
+  - `backend/soc_agent/lead_agent_chat.py` 通过 DeerFlow embedded `DeerFlowClient(agent_name="soc-triage")` 进入现有 `lead_agent`。
+  - `soc chat tui --lead-agent` 使用该入口；默认仍是 deterministic SOC review/context shell。
+  - 当前 Lead Agent entry 只接 chat stream，不开放处置工具；review/action/approval 仍必须回到 SOC service 边界。
 
 典型流程：
 
@@ -245,7 +249,7 @@ EDR 告警进入
 1. Phase 1 先把 node prompt、JSON parser、真实 LLM analyzer behind flag 做稳。
 2. Phase 1 收口已引入 `SocSkillResolver` 和 SOC custom-agent profile payload；当前只做 deterministic skill recommendation，不让 LLM 动态加载未知 skill。
 3. Phase 1 收口已将 selected skills 作为 compact bounded context 接入 analysis prompt / LLM metadata / SOC chat stream，并记录 skill hash、summary 和 token budget。
-4. Phase 2/3 再让 SOC Lead Agent 在 TUI/Web/Chat 场景中做交互式调查和受限软路由。
+4. Phase 1 收口已提供 `soc chat tui --lead-agent`，可通过 DeerFlowClient 以 `agent_name=soc-triage` 进入 DeerFlow `lead_agent`；后续再把 review context、action proposal 和 MCP/tool bridge 逐步接入。
 5. MCP/tool 处置能力最后接入；查询类工具先接，封禁/隔离/禁用账号必须默认需要审批。
 
 ### 1.2.1 Phase 1 当前实际 Runtime Pipeline

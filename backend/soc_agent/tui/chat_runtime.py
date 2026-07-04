@@ -60,6 +60,15 @@ def _translate_custom(data: dict[str, Any]) -> list[Action]:
         ]
     if kind == "soc.skill_context":
         return [SystemMessage(_skill_context_text(data))]
+    if kind == "soc.lead_agent_entry":
+        return [
+            SystemMessage(
+                _lead_agent_entry_text(
+                    agent_name=_as_str(data.get("agent_name")),
+                    thread_id=_as_str(data.get("thread_id")),
+                )
+            )
+        ]
     if kind == "soc.route_decision":
         return [
             SystemMessage(
@@ -139,6 +148,15 @@ def _skill_context_text(data: dict[str, Any]) -> str:
     token_budget = data.get("total_token_budget")
     if isinstance(token_budget, int):
         parts.append(f"token_budget={token_budget}")
+    return " | ".join(parts)
+
+
+def _lead_agent_entry_text(*, agent_name: str, thread_id: str) -> str:
+    parts = ["SOC lead agent entry"]
+    if agent_name:
+        parts.append(f"agent={agent_name}")
+    if thread_id:
+        parts.append(f"thread={thread_id}")
     return " | ".join(parts)
 
 

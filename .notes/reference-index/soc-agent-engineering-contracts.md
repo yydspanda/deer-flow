@@ -1059,6 +1059,8 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 
 SOC Lead Agent profile 安装必须使用 DeerFlow per-user custom-agent storage。当前 `SocLeadAgentProfileInstaller` / `soc agent install-profile` 写入 `.deer-flow/users/{user_id}/agents/soc-triage/config.yaml` 和 `SOUL.md`，默认不覆盖，只有显式 `--overwrite` 才更新；legacy shared 同名 agent 存在时跳过，避免 shadow。不要为 SOC 自建第二套 agent profile storage。
 
+SOC Lead Agent chat entry 必须复用 DeerFlow embedded client / gateway runtime。当前 `SocLeadAgentChatService` 只通过 `DeerFlowClient(agent_name="soc-triage")` 转发 stream，并发出 `soc.lead_agent_entry` marker；它不是 SOC action executor。ReviewQueue context、MCP/tool 调用、审批和处置必须继续通过 SOC service/action/policy boundary 逐步接入。
+
 后续 MCP/tool 调用遵循：
 
 - 查询类工具默认仍需通过 allowlist、rate limit、audit，例如资产归属查询、EDR 进程树查询、历史告警查询。

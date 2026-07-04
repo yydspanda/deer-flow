@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
-from soc_agent.core import SocAgentApprovalService, SocAgentChatService, SocReviewService
+from collections.abc import Iterator
+from typing import Protocol
+
+from soc_agent.contracts import ServiceRequestContext, SocAgentChatRequest, SocAgentStreamEvent
+from soc_agent.core import SocAgentApprovalService, SocReviewService
+
+
+class SocChatServiceLike(Protocol):
+    def stream(
+        self,
+        request: SocAgentChatRequest | str,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> Iterator[SocAgentStreamEvent]: ...
 
 
 def run_review_tui(
@@ -20,7 +33,7 @@ def run_review_tui(
 
 
 def run_chat_tui(
-    service: SocAgentChatService,
+    service: SocChatServiceLike,
     *,
     initial_queue_id: str | None = None,
     initial_message: str | None = None,

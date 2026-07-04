@@ -47,6 +47,7 @@ from soc_agent.db import (
 )
 from soc_agent.eval import load_eval_responses_jsonl, run_offline_eval
 from soc_agent.lead_agent import build_soc_lead_agent_profile
+from soc_agent.lead_agent_chat import SocLeadAgentChatService
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -194,6 +195,7 @@ def _build_parser() -> argparse.ArgumentParser:
     chat_tui = chat_subparsers.add_parser("tui", help="Open the SOC agent chat terminal workbench")
     chat_tui.add_argument("--queue-id", help="Open a review queue context on launch")
     chat_tui.add_argument("--message", help="Send an initial message on launch")
+    chat_tui.add_argument("--lead-agent", action="store_true", help="Use DeerFlow lead_agent with agent_name=soc-triage")
     _add_database_args(chat_tui)
 
     agent = subparsers.add_parser("agent", help="SOC Lead Agent profile and skill helpers")
@@ -505,6 +507,8 @@ def _review_tui(args: argparse.Namespace) -> int:
 
 def _chat_tui(args: argparse.Namespace) -> int:
     try:
+        if args.lead_agent and args.queue_id:
+            raise ValueError("--lead-agent currently supports chat messages; open review queue contexts without --lead-agent")
         repository = _repository_from_args(args)
         from soc_agent.tui.runner import run_chat_tui
 
@@ -515,8 +519,9 @@ def _chat_tui(args: argparse.Namespace) -> int:
             review_queue_repository=repository,
         )
         approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
+        chat_service = SocLeadAgentChatService() if args.lead_agent else SocAgentChatService(review_service=review_service, approval_service=approval_service)
         run_chat_tui(
-            SocAgentChatService(review_service=review_service, approval_service=approval_service),
+            chat_service,
             initial_queue_id=args.queue_id,
             initial_message=args.message,
         )

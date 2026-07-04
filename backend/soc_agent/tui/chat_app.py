@@ -16,8 +16,8 @@ from deerflow.tui.theme import THEME
 from deerflow.tui.view_state import RunEnded, RunStarted, SystemMessage, UserSubmitted, initial_state, reduce
 from deerflow.tui.widgets.composer import ComposerInput
 from soc_agent.contracts import ActorContext, EntrySurface, ServiceRequestContext, SocAgentChatRequest
-from soc_agent.core import SocAgentChatService
 from soc_agent.tui.chat_runtime import stream_actions
+from soc_agent.tui.runner import SocChatServiceLike
 
 _HELP_TEXT = "Commands: /open REV-...  /help  /quit"
 
@@ -68,7 +68,7 @@ class SocAgentChatTUI(App):
 
     def __init__(
         self,
-        service: SocAgentChatService,
+        service: SocChatServiceLike,
         *,
         initial_queue_id: str | None = None,
         initial_message: str | None = None,

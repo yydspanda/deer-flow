@@ -102,9 +102,40 @@
 | 66 | SocSkillResolver + SOC Lead Agent MVP | Done | 复用 DeerFlow custom-agent/profile/skills 机制；按 source/detection/entities/conflict 选择 SOC domain skills；新增只读 CLI `soc agent profile` / `soc agent resolve-skills` |
 | 67 | Skill-selected bounded context for analysis/chat | Done | `LLMAnalysisRequest.skill_context`、PromptBuilder、LLM metadata、ReviewContext chat stream 和 TUI translate 已接入 compact skill context；记录 skill/hash/token budget；不让 LLM 动态加载未知 skill |
 | 68 | SOC Lead Agent DeerFlow profile installation path | Done | 新增 `soc agent install-profile`，把推荐 profile 写入 DeerFlow per-user custom-agent storage；默认 dry-run/skip 安全语义，`--overwrite` 才覆盖 |
-| 69 | SOC Lead Agent chat entry wiring | Planned | 在安装 profile 后，让 SOC chat/Web/TUI 能以 `agent_name=soc-triage` 进入 DeerFlow lead_agent；仍通过 SOC core service/action boundary 处理业务动作 |
+| 69 | SOC Lead Agent chat entry wiring | Done | 新增 `SocLeadAgentChatService`，通过 DeerFlowClient `agent_name=soc-triage` 进入现有 lead_agent；`soc chat tui --lead-agent` 可选启用 |
+| 70 | SOC Lead Agent review context bridge | Planned | 将 ReviewQueue context 以 bounded context/artifact 形式提供给 DeerFlow SOC Lead Agent；不让 Lead Agent 直接读 repository 或执行处置 |
 
 ## 进度记录
+
+### 2026-07-04 — SOC Lead Agent chat entry wiring 切片
+
+- 背景：
+  - SOC profile 已能安装到 DeerFlow per-user custom-agent storage。
+  - 下一步需要真实入口以 `agent_name=soc-triage` 进入 DeerFlow `lead_agent`，而不是继续停留在 SOC deterministic chat shell。
+- 变更：
+  - 新增 `backend/soc_agent/lead_agent_chat.py`：
+    - `SocLeadAgentChatService`
+    - `SocLeadAgentProfileNotInstalledError`
+    - 通过 `DeerFlowClient(agent_name="soc-triage")` 转发 stream。
+    - stream 开头发出 `custom kind=soc.lead_agent_entry`，标明 agent/thread/surface。
+    - 默认要求 profile 已安装；未安装时提示运行 `soc agent install-profile`。
+  - `soc chat tui` 新增 `--lead-agent`：
+    - 默认仍使用 deterministic `SocAgentChatService`。
+    - 传 `--lead-agent` 时切到 DeerFlow SOC Lead Agent entry。
+    - 当前 `--lead-agent` 不支持 `--queue-id` 直开 review context，避免把 review repository 绕给 LLM。
+  - TUI translate 新增 `soc.lead_agent_entry` 系统消息。
+  - 新增 `backend/tests/test_soc_lead_agent_chat.py`。
+- 边界：
+  - 不创建第二套 SOC LangGraph runtime。
+  - 不修改 DeerFlow upstream `lead_agent`。
+  - 不开放 SOC 处置工具。
+  - 不让 Lead Agent 直接访问 review repository；review context bridge 作为下一刀单独设计。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/lead_agent_chat.py soc_agent/cli.py soc_agent/tui/runner.py soc_agent/tui/chat_app.py soc_agent/tui/chat_runtime.py tests/test_soc_lead_agent_chat.py tests/test_soc_tui_chat_runtime.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_lead_agent_chat.py tests/test_soc_tui_chat_runtime.py tests/test_soc_agent_profile_install.py tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+- 下一步：
+  - 做 SOC Lead Agent review context bridge：把 ReviewQueue context 转成 bounded context/artifact 供 DeerFlow Lead Agent 使用，同时保留 service/action/approval 边界。
 
 ### 2026-07-04 — SOC Lead Agent DeerFlow profile installation path 切片
 
