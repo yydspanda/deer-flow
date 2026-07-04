@@ -127,6 +127,48 @@ function approvalRequestLabel(request: SocAgentApprovalRequest) {
   return `${request.action} / ${request.approval_request_id ?? request.permission_decision_id}`;
 }
 
+function hasObjectEntries(value: Record<string, unknown> | null | undefined) {
+  return !!value && Object.keys(value).length > 0;
+}
+
+function ApprovalProposalSummary({
+  request,
+}: {
+  request: SocAgentApprovalRequest | null;
+}) {
+  if (!request) return null;
+  const hasProposalDetails =
+    !!request.source_proposal_id ||
+    hasObjectEntries(request.action_payload) ||
+    hasObjectEntries(request.context_refs);
+  if (!hasProposalDetails) return null;
+
+  return (
+    <div className="bg-muted/30 rounded-md border p-3">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="text-sm font-medium">Lead Agent proposal</div>
+        {request.source_proposal_id ? (
+          <Badge variant="outline">{request.source_proposal_id}</Badge>
+        ) : null}
+      </div>
+      <div className="grid gap-3 text-xs lg:grid-cols-2">
+        <div className="space-y-1">
+          <div className="text-muted-foreground">Action payload</div>
+          <pre className="bg-background max-h-36 overflow-auto rounded border p-2 whitespace-pre-wrap">
+            {prettyJson(request.action_payload ?? {})}
+          </pre>
+        </div>
+        <div className="space-y-1">
+          <div className="text-muted-foreground">Context refs</div>
+          <pre className="bg-background max-h-36 overflow-auto rounded border p-2 whitespace-pre-wrap">
+            {prettyJson(request.context_refs ?? {})}
+          </pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function parseJsonObject<T>(value: string): T {
   const parsed: unknown = JSON.parse(value);
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -646,9 +688,16 @@ export function SocReviewQueueWorkbench() {
                                         {request.requested_by.actor_id}
                                       </div>
                                     </div>
-                                    <Badge variant="outline">
-                                      {request.risk_level}
-                                    </Badge>
+                                    <div className="flex shrink-0 flex-col items-end gap-1">
+                                      <Badge variant="outline">
+                                        {request.risk_level}
+                                      </Badge>
+                                      {request.source_proposal_id ? (
+                                        <Badge variant="secondary">
+                                          proposal
+                                        </Badge>
+                                      ) : null}
+                                    </div>
                                   </div>
                                   <p className="text-muted-foreground mt-2 line-clamp-2 text-xs">
                                     {request.reason}
@@ -660,6 +709,8 @@ export function SocReviewQueueWorkbench() {
                         )}
                       </div>
                     </div>
+
+                    <ApprovalProposalSummary request={activeApprovalRequest} />
 
                     <div className="space-y-2">
                       <label

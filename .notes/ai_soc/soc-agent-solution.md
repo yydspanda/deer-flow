@@ -233,6 +233,7 @@ Profile 治理：
   - 当前 Lead Agent entry 支持 chat stream + bounded review context + 显式 action proposal boundary。
   - Lead Agent 只有输出 `<soc_action_proposal>...</soc_action_proposal>` JSON marker 时才会触发 `SocLeadAgentActionProposalBoundary`；普通自然语言不会被系统猜测成动作。
   - 高风险 proposal 会生成 pending `SocAgentApprovalRequest`，携带 `source_proposal_id`、`action_payload`、`context_refs`；仍不开放真实处置工具，action/approval 必须回到 SOC service 边界。
+  - Web/TUI approval inbox 已展示 proposal 来源、payload 和 context refs，审批人不需要只看 action 名称。
 
 典型流程：
 
@@ -369,7 +370,7 @@ ZEUS/天眼输入可信度相关结构状态：
 - Web 工单/后台和 TUI 作为人工消费入口，从 approval inbox 选择 pending request 后 approve，生成一次性 `SocAgentApprovalGrant.execution_token_id`，再 dry-run / execute。当前 Web/TUI 都只进入 execution boundary，不执行真实外部副作用。
 - 统一中心是 `SocAgentApprovalService` + request/grant repository + audit/event log；middleware 只是 Agent 入口 adapter，不是审批系统唯一中心。
 
-真实 Kafka consumer adapter 规划见 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，生产运行约定见 `.notes/ai_soc/soc-daemon-production-runbook.md`，worker pool / concurrency 规划见 `.notes/ai_soc/kafka-worker-pool-concurrency-plan.md`。Kafka 当前进入收口/暂缓状态：Prometheus `/metrics` exporter、bounded worker pool、多 replica 和压测都等真实 Kafka/DB/K8s 参数、吞吐/延迟数据和 LLM 限流策略明确后再做。SOC 主线当前已完成 `SocSkillResolver + SOC Lead Agent MVP`、skill-selected bounded context、profile installation、Lead Agent chat entry、review context bridge 和 action proposal boundary；下一步是让 Web/TUI approval inbox 展示 Lead Agent proposal 的来源、payload 和 context refs，避免审批人只能看到 action 名。
+真实 Kafka consumer adapter 规划见 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，生产运行约定见 `.notes/ai_soc/soc-daemon-production-runbook.md`，worker pool / concurrency 规划见 `.notes/ai_soc/kafka-worker-pool-concurrency-plan.md`。Kafka 当前进入收口/暂缓状态：Prometheus `/metrics` exporter、bounded worker pool、多 replica 和压测都等真实 Kafka/DB/K8s 参数、吞吐/延迟数据和 LLM 限流策略明确后再做。SOC 主线当前已完成 `SocSkillResolver + SOC Lead Agent MVP`、skill-selected bounded context、profile installation、Lead Agent chat entry、review context bridge、action proposal boundary 和 approval proposal rendering；下一步是规划真实 action adapter registry contract，包括 dry-run、幂等、审计、失败补偿和 MCP/EDR/F5 adapter 接入边界。
 
 后续运行态观察台需求已暂存到 `.notes/ai_soc/operations-overview-deferred.md`。该需求有价值，但不作为当前主链路走通的前置条件；等 Kafka daemon、review queue、approval inbox 和 runtime audit 的真实数据流稳定后再进入实现。
 

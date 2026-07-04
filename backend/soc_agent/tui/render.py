@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
@@ -169,6 +171,12 @@ def render_approval_request(
     table.add_row("risk", approval_request.risk_level.value)
     table.add_row("requested_by", approval_request.requested_by.actor_id)
     table.add_row("reason", approval_request.reason)
+    if approval_request.source_proposal_id:
+        table.add_row("source_proposal_id", approval_request.source_proposal_id)
+    if approval_request.action_payload:
+        table.add_row("action_payload", _compact_json(approval_request.action_payload))
+    if approval_request.context_refs:
+        table.add_row("context_refs", _compact_json(approval_request.context_refs))
     if grant is not None and grant.approval_request_id == approval_request.approval_request_id:
         table.add_row("grant", grant.approval_grant_id)
         table.add_row("execution_token", grant.execution_token_id)
@@ -181,6 +189,13 @@ def render_approval_request(
         if action_result.payload.get("external_side_effect"):
             table.add_row("external_side_effect", str(action_result.payload["external_side_effect"]))
     return Group(Text("Approval Request", style=f"bold {THEME.primary}"), table)
+
+
+def _compact_json(value: object) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=True, sort_keys=True)
+    except TypeError:
+        return str(value)
 
 
 def render_palette(items: list[Command], index: int, limit: int = 8) -> RenderableType:

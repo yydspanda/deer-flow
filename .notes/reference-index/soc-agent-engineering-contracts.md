@@ -1063,6 +1063,8 @@ SOC Lead Agent chat entry 必须复用 DeerFlow embedded client / gateway runtim
 
 SOC Lead Agent action proposal 必须走 `backend/soc_agent/action_proposals.py`。只有 `<soc_action_proposal>...</soc_action_proposal>` 显式 JSON marker 会被解析成 `SocAgentActionProposal`；普通自然语言、Markdown 建议、模型自称“已执行”的文本都不能触发动作。`SocLeadAgentActionProposalBoundary` 只能调用 `SocAgentActionPolicy`，并在高风险时生成 pending `SocAgentApprovalRequest`；approval request 必须携带 `source_proposal_id`、`action_payload`、`context_refs`。本边界不执行 MCP/tool，不调用外部处置 adapter，不修改业务状态。
 
+Approval inbox 客户端必须展示 proposal 溯源字段。Web/TUI 至少要让审批人看到 `source_proposal_id`、`action_payload`、`context_refs`；展示层不能改写这些字段，不能绕过 approval grant / dry-run / execute boundary。
+
 MCP/tool 调用、审批和处置必须继续通过 SOC service/action/policy boundary 逐步接入。
 
 后续 MCP/tool 调用遵循：

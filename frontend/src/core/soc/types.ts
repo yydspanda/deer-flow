@@ -145,6 +145,9 @@ export interface SocAgentApprovalRequest {
   risk_level: SocAgentRiskLevel;
   reason: string;
   requested_by: SocActorContext;
+  source_proposal_id?: string | null;
+  action_payload?: Record<string, unknown>;
+  context_refs?: Record<string, unknown>;
   status?: "pending";
   created_at?: string;
 }

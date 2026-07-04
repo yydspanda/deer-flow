@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Approval inbox proposal payload rendering |
+| 当前下一刀 | Action adapter registry contract planning |
 
 ## Phase 1 切片计划
 
@@ -105,9 +105,35 @@
 | 69 | SOC Lead Agent chat entry wiring | Done | 新增 `SocLeadAgentChatService`，通过 DeerFlowClient `agent_name=soc-triage` 进入现有 lead_agent；`soc chat tui --lead-agent` 可选启用 |
 | 70 | SOC Lead Agent review context bridge | Done | 将 ReviewQueue context 以 bounded context/artifact 形式提供给 DeerFlow SOC Lead Agent；不让 Lead Agent 直接读 repository 或执行处置 |
 | 71 | SOC Lead Agent action proposal boundary | Done | 约束 Lead Agent 后续如何输出结构化 action proposal；仍不直接执行 MCP/tool/处置动作，必须回到 policy/approval/service 边界 |
-| 72 | Approval inbox proposal payload rendering | Planned | Web/TUI 审批入口展示 `source_proposal_id`、`action_payload`、`context_refs`，让分析师审批前能看见 Lead Agent 候选动作来源和参数 |
+| 72 | Approval inbox proposal payload rendering | Done | Web/TUI 审批入口展示 `source_proposal_id`、`action_payload`、`context_refs`，让分析师审批前能看见 Lead Agent 候选动作来源和参数 |
+| 73 | Action adapter registry contract planning | Planned | 规划真实 `response.block_ip` / `endpoint.isolate_host` / MCP tool adapter registry 的 contract、幂等、审计和 dry-run 要求；不直接接生产动作 |
 
 ## 进度记录
+
+### 2026-07-04 — Approval inbox proposal payload rendering 切片
+
+- 背景：
+  - Lead Agent action proposal boundary 已能把高风险候选动作写入 approval inbox。
+  - 审批人不能只看到 `action=response.block_ip`，还需要看到 proposal 来源、候选参数和上下文引用。
+- 变更：
+  - TUI：
+    - `render_approval_request()` 展示 `source_proposal_id`、`action_payload`、`context_refs`。
+    - 新增 `backend/tests/test_soc_tui_render.py` 覆盖 proposal 字段展示。
+  - Web：
+    - `SocAgentApprovalRequest` TypeScript 类型增加 `source_proposal_id`、`action_payload`、`context_refs`。
+    - ReviewQueue workbench 审批列表对 proposal request 标记 `proposal`。
+    - 审批详情上方增加只读 `Lead Agent proposal` 摘要，展示 action payload 和 context refs；保留原 JSON textarea 作为手工兜底。
+- 边界：
+  - 不改变 approval grant / dry-run / execute 语义。
+  - 不新增真实外部动作 adapter。
+  - 不让前端复制审批业务逻辑，只展示后端 request payload。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/tui/render.py tests/test_soc_tui_render.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_tui_render.py tests/test_soc_lead_agent_chat.py tests/test_soc_tui_chat_runtime.py`
+  - `cd frontend && pnpm check`
+  - `codegraph sync .`
+- 下一步：
+  - 做 Action adapter registry contract planning：先设计真实 adapter registry 的 contract、幂等、dry-run 和审计约束，再决定是否接具体 EDR/F5/MCP。
 
 ### 2026-07-04 — SOC Lead Agent action proposal boundary 切片
 
