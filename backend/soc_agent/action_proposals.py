@@ -13,12 +13,15 @@ from pydantic import ValidationError
 from soc_agent.contracts import (
     ServiceRequestContext,
     SocAgentActionProposal,
+    SocAgentActionResult,
     SocAgentApprovalRequest,
     SocAgentChatRequest,
     SocAgentPermissionDecision,
+    SocAgentRiskLevel,
+    SocAgentRouteDecision,
     SocAgentStreamEvent,
 )
-from soc_agent.core import SocAgentActionPolicy, SocAgentApprovalService
+from soc_agent.core import SocAgentActionDispatcher, SocAgentActionPolicy, SocAgentApprovalService, SocAgentCapabilityRouter
 
 ACTION_PROPOSAL_START = "<soc_action_proposal>"
 ACTION_PROPOSAL_END = "</soc_action_proposal>"
@@ -33,11 +36,18 @@ class ActionProposalParseResult:
 
 
 @dataclass(frozen=True)
+class ReadOnlyToolBridgeResult:
+    route_decision: SocAgentRouteDecision
+    action_result: SocAgentActionResult | None = None
+
+
+@dataclass(frozen=True)
 class ActionProposalBoundaryResult:
     proposal: SocAgentActionProposal
     permission_decision: SocAgentPermissionDecision
     approval_request: SocAgentApprovalRequest | None = None
     submitted_approval_request: bool = False
+    read_only_tool_result: ReadOnlyToolBridgeResult | None = None
 
 
 class SocLeadAgentActionProposalBoundary:
@@ -48,9 +58,13 @@ class SocLeadAgentActionProposalBoundary:
         *,
         action_policy: SocAgentActionPolicy | None = None,
         approval_service: SocAgentApprovalService | None = None,
+        read_only_capability_router: SocAgentCapabilityRouter | None = None,
+        read_only_action_dispatcher: SocAgentActionDispatcher | None = None,
     ) -> None:
         self._action_policy = action_policy or SocAgentActionPolicy()
         self._approval_service = approval_service
+        self._read_only_capability_router = read_only_capability_router
+        self._read_only_action_dispatcher = read_only_action_dispatcher
 
     def review(
         self,
@@ -67,6 +81,7 @@ class SocLeadAgentActionProposalBoundary:
         decision = self._action_policy.check(action=proposal.action, route=proposal.route, request=chat_request, context=context)
         approval_request: SocAgentApprovalRequest | None = None
         submitted = False
+        read_only_tool_result = self._review_read_only_tool_proposal(proposal, decision=decision, context=context)
         if decision.requires_human_approval:
             approval_request = approval_request_from_action_proposal(proposal, decision=decision, context=context)
             if self._approval_service is not None:
@@ -77,7 +92,31 @@ class SocLeadAgentActionProposalBoundary:
             permission_decision=decision,
             approval_request=approval_request,
             submitted_approval_request=submitted,
+            read_only_tool_result=read_only_tool_result,
         )
+
+    def _review_read_only_tool_proposal(
+        self,
+        proposal: SocAgentActionProposal,
+        *,
+        decision: SocAgentPermissionDecision,
+        context: ServiceRequestContext,
+    ) -> ReadOnlyToolBridgeResult | None:
+        if decision.risk_level != SocAgentRiskLevel.READ_ONLY or not decision.allowed:
+            return None
+        if self._read_only_capability_router is None or self._read_only_action_dispatcher is None:
+            return None
+        chat_request = _read_only_tool_chat_request(proposal)
+        route_decision = self._read_only_capability_router.route(chat_request)
+        action_result: SocAgentActionResult | None = None
+        if route_decision.allowed:
+            action_result = self._read_only_action_dispatcher.dispatch(
+                chat_request,
+                route_decision,
+                context=context,
+                permission_decision=decision,
+            )
+        return ReadOnlyToolBridgeResult(route_decision=route_decision, action_result=action_result)
 
 
 def extract_action_proposals_from_text(
@@ -143,6 +182,19 @@ def approval_request_from_action_proposal(
     )
 
 
+def route_decision_event(decision: SocAgentRouteDecision) -> SocAgentStreamEvent:
+    return SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.route_decision",
+            "route": decision.route,
+            "allowed": decision.allowed,
+            "reason": decision.reason,
+            "input_text": decision.input_text,
+        },
+    )
+
+
 def action_proposal_event(proposal: SocAgentActionProposal) -> SocAgentStreamEvent:
     return SocAgentStreamEvent(
         type="custom",
@@ -202,6 +254,21 @@ def approval_request_event(request: SocAgentApprovalRequest) -> SocAgentStreamEv
     )
 
 
+def action_result_event(result: SocAgentActionResult) -> SocAgentStreamEvent:
+    return SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.action_result",
+            "route": result.route,
+            "action": result.action,
+            "status": result.status,
+            "message": result.message,
+            "requires_human_approval": result.requires_human_approval,
+            "payload": result.payload,
+        },
+    )
+
+
 def _proposal_payload(item: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
     payload = dict(item)
     if "route" not in payload and isinstance(payload.get("action"), str):
@@ -213,3 +280,33 @@ def _proposal_payload(item: dict[str, Any], metadata: dict[str, Any]) -> dict[st
             payload[key] = value
     payload["source"] = "lead_agent"
     return payload
+
+
+def _read_only_tool_chat_request(proposal: SocAgentActionProposal) -> SocAgentChatRequest:
+    payload = dict(proposal.payload)
+    context_refs = dict(payload.get("context_refs")) if isinstance(payload.get("context_refs"), dict) else {}
+    _set_context_ref(context_refs, "source", proposal.source)
+    _set_context_ref(context_refs, "proposal_id", proposal.proposal_id)
+    _set_context_ref(context_refs, "thread_id", proposal.thread_id)
+    _set_context_ref(context_refs, "queue_id", proposal.queue_id)
+    _set_context_ref(context_refs, "run_id", proposal.run_id)
+    _set_context_ref(context_refs, "alert_id", proposal.alert_id)
+    _set_context_ref(context_refs, "context_hash", proposal.context_hash)
+    if context_refs:
+        payload["context_refs"] = context_refs
+    return SocAgentChatRequest(
+        message=proposal.reason,
+        thread_id=proposal.thread_id,
+        queue_id=proposal.queue_id,
+        run_id=proposal.run_id,
+        metadata={
+            "soc_route": proposal.route,
+            "action_payload": payload,
+        },
+        allowed_routes=[proposal.route],
+    )
+
+
+def _set_context_ref(context_refs: dict[str, Any], key: str, value: Any) -> None:
+    if value is not None:
+        context_refs.setdefault(key, value)

@@ -8,6 +8,7 @@ import pytest
 
 from deerflow.config.paths import get_paths
 from deerflow.runtime.user_context import get_effective_user_id
+from soc_agent.action_adapters import InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
 from soc_agent.action_proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.contracts import (
     ActorContext,
@@ -24,9 +25,10 @@ from soc_agent.contracts import (
     ServiceRequestContext,
     SocAgentApprovalRequest,
     SocAgentChatRequest,
+    SocAssetLookupRecord,
     Verdict,
 )
-from soc_agent.core import SocAgentApprovalService
+from soc_agent.core import SocAgentActionDispatcher, SocAgentApprovalService, SocAgentCapabilityRouter
 from soc_agent.lead_agent_chat import SocLeadAgentChatService, SocLeadAgentProfileNotInstalledError, SocLeadAgentReviewContextError
 from soc_agent.skills import SOC_LEAD_AGENT_NAME
 
@@ -208,6 +210,73 @@ def test_soc_lead_agent_chat_service_routes_action_proposal_to_approval_inbox() 
     assert saved.action_payload == {"ip": "1.2.3.4"}
 
 
+def test_soc_lead_agent_chat_service_dispatches_read_only_action_proposal() -> None:
+    content = (
+        "I will check the asset owner before suggesting a suppression target.\n"
+        '<soc_action_proposal>{"route":"asset.lookup","action":"asset.lookup",'
+        '"reason":"Look up asset ownership before deciding suppression target.",'
+        '"payload":{"asset_key":"10.10.1.5"},"confidence":0.74}</soc_action_proposal>'
+    )
+    client = ProposalFakeDeerFlowClient(content)
+    registry = SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter(records=[_asset_lookup_record()])])
+    service = SocLeadAgentChatService(
+        client_factory=lambda: client,
+        require_profile=False,
+        action_proposal_boundary=SocLeadAgentActionProposalBoundary(
+            read_only_capability_router=SocAgentCapabilityRouter(allowed_routes={"asset.lookup"}),
+            read_only_action_dispatcher=SocAgentActionDispatcher(action_adapter_registry=registry),
+        ),
+    )
+    context = ServiceRequestContext(actor=ActorContext(actor_id="analyst", surface=EntrySurface.TUI))
+
+    events = list(service.stream(SocAgentChatRequest(message="who owns this asset", thread_id="SOC-THREAD-1"), context=context))
+
+    assert events[2].data["content"] == "I will check the asset owner before suggesting a suppression target."
+    proposal_event = events[3]
+    route_event = events[4]
+    permission_event = events[5]
+    action_event = events[6]
+    assert proposal_event.data["kind"] == "soc.action_proposal"
+    assert proposal_event.data["action"] == "asset.lookup"
+    assert route_event.data["kind"] == "soc.route_decision"
+    assert route_event.data["route"] == "asset.lookup"
+    assert route_event.data["allowed"] is True
+    assert permission_event.data["kind"] == "soc.permission_decision"
+    assert permission_event.data["action"] == "asset.lookup"
+    assert permission_event.data["risk_level"] == "read_only"
+    assert permission_event.data["allowed"] is True
+    assert action_event.data["kind"] == "soc.action_result"
+    assert action_event.data["action"] == "asset.lookup"
+    assert action_event.data["status"] == "success"
+    assert action_event.data["payload"]["asset_found"] is True
+    assert action_event.data["payload"]["asset_record"]["asset_id"] == "asset-001"
+    assert action_event.data["payload"]["external_side_effect"] == "read"
+
+
+def test_soc_lead_agent_read_only_action_proposal_requires_route_allowlist() -> None:
+    content = 'I will check ownership.\n<soc_action_proposal>{"route":"asset.lookup","action":"asset.lookup","reason":"Look up asset ownership.","payload":{"asset_key":"10.10.1.5"},"confidence":0.74}</soc_action_proposal>'
+    client = ProposalFakeDeerFlowClient(content)
+    registry = SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter(records=[_asset_lookup_record()])])
+    service = SocLeadAgentChatService(
+        client_factory=lambda: client,
+        require_profile=False,
+        action_proposal_boundary=SocLeadAgentActionProposalBoundary(
+            read_only_capability_router=SocAgentCapabilityRouter(),
+            read_only_action_dispatcher=SocAgentActionDispatcher(action_adapter_registry=registry),
+        ),
+    )
+
+    events = list(service.stream(SocAgentChatRequest(message="who owns this asset", thread_id="SOC-THREAD-1")))
+
+    assert events[3].data["kind"] == "soc.action_proposal"
+    assert events[4].data["kind"] == "soc.route_decision"
+    assert events[4].data["route"] == "asset.lookup"
+    assert events[4].data["allowed"] is False
+    assert events[5].data["kind"] == "soc.permission_decision"
+    assert events[5].data["allowed"] is True
+    assert [event.data.get("kind") for event in events if event.type == "custom"].count("soc.action_result") == 0
+
+
 def test_soc_lead_agent_chat_service_rejects_bad_action_proposal_json() -> None:
     client = ProposalFakeDeerFlowClient("Bad proposal <soc_action_proposal>{bad json}</soc_action_proposal>")
     service = SocLeadAgentChatService(client_factory=lambda: client, require_profile=False)
@@ -300,3 +369,17 @@ def _investigation_context() -> InvestigationContext:
         summary="Suspicious endpoint activity needs analyst review.",
     )
     return InvestigationContext(queue_item=queue_item, run=run, summary=summary)
+
+
+def _asset_lookup_record() -> SocAssetLookupRecord:
+    return SocAssetLookupRecord(
+        asset_key="srv-payments-01",
+        asset_id="asset-001",
+        hostname="srv-payments-01",
+        primary_ip="10.10.1.5",
+        owner="payments-sre",
+        business_unit="payments",
+        environment="prod",
+        criticality="critical",
+        source="unit-test",
+    )

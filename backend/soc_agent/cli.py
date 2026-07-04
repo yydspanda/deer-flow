@@ -13,11 +13,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
+from soc_agent.action_adapters import InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
 from soc_agent.action_proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.agent_profile import SocLeadAgentProfileInstaller
 from soc_agent.contracts import CorrectionCommand, ReviewQueueCloseCommand, ReviewQueueStatus, Verdict
 from soc_agent.core import (
+    SocAgentActionDispatcher,
     SocAgentApprovalService,
+    SocAgentCapabilityRouter,
     SocAgentChatService,
     SocAnalysisService,
     SocDaemonService,
@@ -518,10 +521,15 @@ def _chat_tui(args: argparse.Namespace) -> int:
             review_queue_repository=repository,
         )
         approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
+        read_only_adapter_registry = SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter()])
         chat_service = (
             SocLeadAgentChatService(
                 review_service=review_service,
-                action_proposal_boundary=SocLeadAgentActionProposalBoundary(approval_service=approval_service),
+                action_proposal_boundary=SocLeadAgentActionProposalBoundary(
+                    approval_service=approval_service,
+                    read_only_capability_router=SocAgentCapabilityRouter(allowed_routes={"asset.lookup"}),
+                    read_only_action_dispatcher=SocAgentActionDispatcher(action_adapter_registry=read_only_adapter_registry),
+                ),
             )
             if args.lead_agent
             else SocAgentChatService(review_service=review_service, approval_service=approval_service)

@@ -102,7 +102,7 @@ SOC 当前有两条 Agent 相关路径，必须区分：
 | Deterministic chat shell | Done | `SocAgentChatService` 打开 ReviewQueue context，发出 `soc.review_context` / `soc.skill_context` stream event | 不替代 DeerFlow Lead Agent |
 | DeerFlow SOC Lead Agent entry | Done | `SocLeadAgentChatService` 通过 `agent_name=soc-triage` 进入 DeerFlow `lead_agent` | 不执行处置动作 |
 | Review context bridge | Done | 把 ReviewQueue context 转为 bounded `SocLeadAgentReviewContextArtifact`，提供给 DeerFlow SOC Lead Agent | 不让 Lead Agent 直接读 repository；不绕过 `SocReviewService`、`SocAgentActionPolicy`、`SocAgentApprovalService` |
-| Action proposal boundary | Done | 只处理 `<soc_action_proposal>...</soc_action_proposal>` 显式 JSON；输出 `soc.action_proposal` / `soc.permission_decision` / `soc.approval_request`；Web/TUI approval inbox 展示 proposal payload/context refs | 不从自然语言猜动作；不执行 MCP/tool/处置 |
+| Action proposal boundary | Done | 只处理 `<soc_action_proposal>...</soc_action_proposal>` 显式 JSON；高风险输出 approval request；read-only `asset.lookup` 可经显式 router/dispatcher/registry 返回 action result | 不从自然语言猜动作；不直接调用 MCP/资产系统；不执行写动作 |
 | Lead Agent tool/action middleware | Planned | 拦截未来 MCP/tool/action call，生成 approval request 或 action proposal | 不在没有真实 tool/MCP 宿主前提前实现 |
 
 当前生命周期增量不是重新做一个 SOC agent runtime，而是在 `SocLeadAgentChatService` 前面补一个受控桥接层：
@@ -118,11 +118,13 @@ flowchart TD
     DeerFlowLead --> Proposal["explicit soc_action_proposal marker"]
     Proposal --> Boundary["SocLeadAgentActionProposalBoundary"]
     Boundary --> Policy["SocAgentActionPolicy"]
+    Policy --> ReadOnly["read-only router/dispatcher/registry\nwhen asset.lookup allowlisted"]
+    ReadOnly -.-> ActionResult["soc.action_result"]
     Policy --> Approval["SocAgentApprovalService.submit_request\nwhen high risk"]
     Approval -.-> Inbox["Approval inbox"]
 ```
 
-桥接层记录 context hash、queue_id、run_id、skill context hash、surface、actor 信息，保证 Lead Agent 的上下文可复现、可审计、可裁剪。Action proposal boundary 记录 `source_proposal_id`、`action_payload`、`context_refs`；Web/TUI approval inbox 已展示这些字段，审批人可以在生成 grant 前检查候选动作参数和上下文来源。
+桥接层记录 context hash、queue_id、run_id、skill context hash、surface、actor 信息，保证 Lead Agent 的上下文可复现、可审计、可裁剪。Action proposal boundary 记录 `source_proposal_id`、`action_payload`、`context_refs`；Web/TUI approval inbox 已展示这些字段，审批人可以在生成 grant 前检查候选动作参数和上下文来源。Read-only proposal bridge 当前只允许显式 `asset.lookup`，并且必须由注入的 router/dispatcher/registry 打开；普通自然语言不会触发查询。
 
 ## 分析后的数据写入
 
@@ -292,7 +294,7 @@ Replay 不覆盖旧 run；它创建一个新 run，并通过 `replay_of_run_id` 
 这些是规划点，当前流程图里只作为未来入口或 adapter：
 
 - SOC Lead Agent approval middleware：拦截高风险 tool/action call；当前 chat shell 已能在注入 approval service 时写入 approval inbox，但真实 DeerFlow-derived middleware 必须等 SOC Lead Agent / MCP tool chain 落地后再接入。
-- Action adapter registry：把 `response.block_ip`、`edr.isolate_host`、F5 策略、Kafka 处置事件等真实外部动作注册到 execute boundary 后面。
+- MCP / real adapter bridge：把真实资产系统、EDR 进程树、`response.block_ip`、`edr.isolate_host`、F5 策略、Kafka 处置事件等真实外部动作注册到 adapter boundary 后面；write/destructive 动作仍必须走 approval。
 - 真实外部副作用的补偿、失败重试、审批后超时、adapter-level audit。
 - Kafka bounded worker pool：当前 broker runner 仍是串行处理；并发 worker pool 要等真实吞吐、DB/K8s 参数和 LLM 限流策略明确后再接。
 - Prometheus `/metrics` exporter 和运营态势看板：需求已记录为后续优化项，当前优先保证 SOC agent 主链路走通。

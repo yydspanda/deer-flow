@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；第一个具体 read-only adapter 已通过显式 dispatcher/tool gateway 进入运行态 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；第一个具体 read-only adapter 已可由 Lead Agent 显式 proposal 进入受控运行态 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | SOC Lead Agent read-only tool proposal bridge |
+| 当前下一刀 | MCP adapter bridge / real read-only data source planning |
 
 ## Phase 1 切片计划
 
@@ -111,9 +111,44 @@
 | 75 | Execute adapter preflight before token consume | Done | `execute_approved_action()` 在消费 token 前可选校验 adapter 存在性、execute 支持度、payload 和 context refs；仍不接生产副作用 |
 | 76 | First concrete safe read-only adapter | Done | 先接只读查询类 adapter（资产归属查询或 EDR 进程树查询），验证 adapter descriptor、dry-run、execute preflight 与审计 payload；不接封禁/隔离等写动作 |
 | 77 | Read-only adapter dispatcher / tool gateway wiring | Done | 明确 `asset.lookup` 如何通过受控 route/tool gateway 进入运行态；默认不加入 chat router 白名单；结果必须写入 action result / audit payload |
-| 78 | SOC Lead Agent read-only tool proposal bridge | Planned | Lead Agent 只能通过结构化 envelope 请求 `asset.lookup` 等只读能力；bridge 转成同一条 router/policy/dispatcher/registry 链路；不直接调用 adapter/MCP |
+| 78 | SOC Lead Agent read-only tool proposal bridge | Done | Lead Agent 只能通过结构化 envelope 请求 `asset.lookup` 等只读能力；bridge 转成同一条 router/policy/dispatcher/registry 链路；不直接调用 adapter/MCP |
+| 79 | MCP adapter bridge / real read-only data source planning | Planned | 规划真实资产系统、EDR 只读查询或 MCP readonly tool 如何通过 adapter descriptor 接入；write/destructive 仍走 approval |
 
 ## 进度记录
+
+### 2026-07-05 — SOC Lead Agent read-only tool proposal bridge 切片
+
+- 背景：
+  - `asset.lookup` 已能通过显式 chat/tool gateway metadata 进入 dispatcher/registry。
+  - 但 SOC Lead Agent 只能输出 high-risk action proposal 到 approval inbox，还不能用同一条边界请求只读查询。
+- 变更：
+  - `SocLeadAgentActionProposalBoundary` 增加可选 read-only bridge：
+    - 只处理 policy 判定为 `read_only` 且 `allowed=True` 的 proposal。
+    - 构造显式 `SocAgentChatRequest.metadata["soc_route"]` 和 `metadata["action_payload"]`。
+    - 必须经过注入的 `SocAgentCapabilityRouter` allowlist 和 `SocAgentActionDispatcher`。
+    - dispatcher 仍通过 action adapter registry 精确匹配 route/action。
+  - `SocLeadAgentChatService` 对 read-only proposal 输出标准 stream events：
+    - `soc.action_proposal`
+    - `soc.route_decision`
+    - `soc.permission_decision`
+    - `soc.action_result`
+  - 高风险 proposal 的审批路径不变，仍输出 `soc.permission_decision` 和 `soc.approval_request`。
+  - `soc chat tui --lead-agent` 本地装配加入空的 `InMemoryAssetLookupActionAdapter` registry，用于验证 contract；生产资产系统仍需独立 adapter/MCP bridge。
+  - `SOC_LEAD_AGENT_SOUL` 和 `soc-alert-triage` skill 补充只读 `asset.lookup` proposal 约束。
+  - 更新 action adapter plan、工程契约、主方案和 alert lifecycle 文档。
+- 边界：
+  - 不让 Lead Agent 直接调用 adapter、MCP 或资产系统。
+  - 不从自然语言或 Markdown 猜测 lookup。
+  - 不接生产资产库。
+  - 不开放 write/destructive action 执行。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/action_proposals.py soc_agent/lead_agent_chat.py soc_agent/cli.py soc_agent/lead_agent.py tests/test_soc_lead_agent_chat.py`
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/action_proposals.py soc_agent/lead_agent_chat.py soc_agent/cli.py soc_agent/lead_agent.py tests/test_soc_lead_agent_chat.py --check`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_lead_agent_chat.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_action_adapters.py tests/test_soc_agent_service.py tests/test_soc_lead_agent_chat.py tests/test_soc_tui_chat_runtime.py tests/test_soc_agent_lead_agent.py`
+  - `codegraph sync .`
+- 下一步：
+  - 做 MCP adapter bridge / real read-only data source planning：先明确真实资产系统、EDR 只读查询、MCP readonly tool 的 adapter descriptor、配置和审计边界，再接生产数据源。
 
 ### 2026-07-05 — Read-only adapter dispatcher / tool gateway wiring 切片
 

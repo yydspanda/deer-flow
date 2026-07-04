@@ -87,11 +87,11 @@ Lead Agent / Skill / Daemon
    - 默认不加入 chat router 白名单；必须显式 route / skill / tool policy 打开。
    - read-only adapter execute 结果进入 `SocAgentActionResult.payload` 和 `soc.action_result.payload`，不能只把结果塞回 prompt。
 
-5. **SOC Lead Agent read-only tool proposal bridge**
+5. **SOC Lead Agent read-only tool proposal bridge**（Done）
    - 让 SOC Lead Agent 只能通过结构化 tool/proposal envelope 请求 `asset.lookup` 等只读 action。
    - bridge 负责把 proposal 转成显式 `metadata.soc_route/action_payload`，再走同一条 router/policy/dispatcher/registry 链路。
    - 不允许 Lead Agent 直接 import adapter 或直接调用 MCP/资产系统。
 
-6. **MCP adapter bridge**
+6. **MCP adapter bridge**（Next）
    - 复用 DeerFlow MCP/tool 能力，但通过 SOC adapter descriptor 限定 action 名称、参数 schema、风险等级和审计字段。
    - 用户可配置 readonly MCP 候选；高风险 MCP group 只允许管理员启用，并继续走 approval。

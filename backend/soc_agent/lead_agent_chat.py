@@ -12,9 +12,11 @@ from soc_agent.action_proposals import (
     SocLeadAgentActionProposalBoundary,
     action_proposal_error_event,
     action_proposal_event,
+    action_result_event,
     approval_request_event,
     extract_action_proposals_from_text,
     permission_decision_event,
+    route_decision_event,
 )
 from soc_agent.context_bridge import build_lead_agent_review_context_artifact, render_lead_agent_review_context_message
 from soc_agent.contracts import InvestigationContext, ServiceRequestContext, SocAgentChatRequest, SocAgentStreamEvent
@@ -169,9 +171,13 @@ def _review_action_proposals(
     for proposal in parse_result.proposals:
         yield action_proposal_event(proposal)
         result = boundary.review(proposal, context=context)
+        if result.read_only_tool_result is not None:
+            yield route_decision_event(result.read_only_tool_result.route_decision)
         yield permission_decision_event(result.permission_decision)
         if result.approval_request is not None:
             yield approval_request_event(result.approval_request)
+        if result.read_only_tool_result is not None and result.read_only_tool_result.action_result is not None:
+            yield action_result_event(result.read_only_tool_result.action_result)
 
 
 def _operator_message(request: SocAgentChatRequest) -> str:
