@@ -13,6 +13,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
+from soc_agent.agent_profile import SocLeadAgentProfileInstaller
 from soc_agent.contracts import CorrectionCommand, ReviewQueueCloseCommand, ReviewQueueStatus, Verdict
 from soc_agent.core import (
     SocAgentApprovalService,
@@ -80,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
         return _agent_profile(args)
     if args.command == "agent" and args.agent_command == "resolve-skills":
         return _agent_resolve_skills(args)
+    if args.command == "agent" and args.agent_command == "install-profile":
+        return _agent_install_profile(args)
     if args.command == "daemon" and args.daemon_command == "process":
         return _daemon_process(args)
     if args.command == "daemon" and args.daemon_command == "consume":
@@ -197,6 +200,11 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_subparsers = agent.add_subparsers(dest="agent_command")
     agent_profile = agent_subparsers.add_parser("profile", help="Show the recommended DeerFlow custom-agent profile")
     agent_profile.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    agent_install_profile = agent_subparsers.add_parser("install-profile", help="Install the SOC profile into DeerFlow custom-agent storage")
+    agent_install_profile.add_argument("--user-id", help="Install for a specific DeerFlow user id")
+    agent_install_profile.add_argument("--dry-run", action="store_true", help="Show the target path and action without writing files")
+    agent_install_profile.add_argument("--overwrite", action="store_true", help="Overwrite an existing user-scoped SOC profile")
+    agent_install_profile.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     agent_resolve_skills = agent_subparsers.add_parser("resolve-skills", help="Resolve SOC domain skills for one alert payload")
     agent_resolve_skills.add_argument("path", nargs="?", help="Path to alert JSON file")
     agent_resolve_skills.add_argument("--json", dest="json_payload", help="Inline alert JSON object")
@@ -536,6 +544,21 @@ def _agent_resolve_skills(args: argparse.Namespace) -> int:
         return 2
 
     print(resolution.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _agent_install_profile(args: argparse.Namespace) -> int:
+    try:
+        result = SocLeadAgentProfileInstaller().install(
+            user_id=args.user_id,
+            dry_run=args.dry_run,
+            overwrite=args.overwrite,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
 
 

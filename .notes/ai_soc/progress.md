@@ -101,9 +101,45 @@
 | 65 | Kafka WorkerPoolResult contract | Done | 新增 `KafkaWorkerResult` / `SocKafkaWorker`，worker 只返回 processed/dead_letter_required/retryable/fatal 结构化结果；不 commit、不 dead-letter、不启动并发 |
 | 66 | SocSkillResolver + SOC Lead Agent MVP | Done | 复用 DeerFlow custom-agent/profile/skills 机制；按 source/detection/entities/conflict 选择 SOC domain skills；新增只读 CLI `soc agent profile` / `soc agent resolve-skills` |
 | 67 | Skill-selected bounded context for analysis/chat | Done | `LLMAnalysisRequest.skill_context`、PromptBuilder、LLM metadata、ReviewContext chat stream 和 TUI translate 已接入 compact skill context；记录 skill/hash/token budget；不让 LLM 动态加载未知 skill |
-| 68 | SOC Lead Agent DeerFlow profile installation path | Planned | 将 `soc agent profile` 的推荐 payload 接到 DeerFlow existing agents API / profile storage 的安全安装路径；仍不绕过 DeerFlow custom-agent 机制 |
+| 68 | SOC Lead Agent DeerFlow profile installation path | Done | 新增 `soc agent install-profile`，把推荐 profile 写入 DeerFlow per-user custom-agent storage；默认 dry-run/skip 安全语义，`--overwrite` 才覆盖 |
+| 69 | SOC Lead Agent chat entry wiring | Planned | 在安装 profile 后，让 SOC chat/Web/TUI 能以 `agent_name=soc-triage` 进入 DeerFlow lead_agent；仍通过 SOC core service/action boundary 处理业务动作 |
 
 ## 进度记录
+
+### 2026-07-04 — SOC Lead Agent DeerFlow profile installation path 切片
+
+- 背景：
+  - `soc agent profile` 已能输出 SOC custom-agent payload，但还没有写入 DeerFlow existing profile storage。
+  - 用户要求能用 DeerFlow 现有能力就复用，避免为 SOC 再建一套 agent 配置系统。
+- 变更：
+  - 新增 `backend/soc_agent/agent_profile.py`：
+    - `SocLeadAgentProfileInstaller`
+    - 写入 DeerFlow per-user layout：`.deer-flow/users/{user_id}/agents/soc-triage/config.yaml` 和 `SOUL.md`。
+    - 复用 DeerFlow `validate_agent_name()`、`get_paths()`、`get_effective_user_id()`。
+  - 新增 contract：
+    - `SocLeadAgentInstallResult`
+  - 新增 CLI：
+    - `soc agent install-profile --dry-run`
+    - `soc agent install-profile --user-id USER`
+    - `soc agent install-profile --overwrite`
+  - 新增测试 `backend/tests/test_soc_agent_profile_install.py`：
+    - dry-run 不写文件。
+    - install 后可用 DeerFlow `load_agent_config()` / `load_agent_soul()` 反读。
+    - 默认不覆盖已有 user-scoped profile。
+    - `overwrite=True` 才更新。
+    - legacy shared 同名 agent 存在时跳过，避免 shadow。
+- 边界：
+  - 不修改 DeerFlow upstream core。
+  - 不调用独立 SOC agent runtime。
+  - 不自建 SOC agent profile storage。
+  - 不通过 CLI 静默覆盖用户已有 `soc-triage`。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/agent_profile.py soc_agent/cli.py soc_agent/contracts/schemas.py soc_agent/contracts/__init__.py tests/test_soc_agent_profile_install.py tests/test_soc_agent_lead_agent.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_profile_install.py tests/test_soc_agent_lead_agent.py tests/test_custom_agent.py::TestLoadAgentConfig tests/test_custom_agent.py::TestLoadAgentSoul tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && DEER_FLOW_HOME=/tmp/soc-agent-profile-cli-smoke ./.venv/bin/python -m soc_agent.cli agent install-profile --user-id soc-user --dry-run --pretty`
+  - `codegraph sync .`
+- 下一步：
+  - 讨论 SOC Lead Agent chat entry wiring：让 Web/TUI/CLI 能以 `agent_name=soc-triage` 进入 DeerFlow `lead_agent`，同时保留 SOC service/action/approval 边界。
 
 ### 2026-07-04 — Skill-selected bounded context for analysis/chat 切片
 

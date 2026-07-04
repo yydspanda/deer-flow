@@ -212,7 +212,7 @@ Profile 治理：
 
 - 不新建第二套 SOC LangGraph agent runtime。
 - SOC Lead Agent 复用 DeerFlow custom-agent 机制：同一个 `lead_agent`，通过 `agent_name=soc-triage` 加载 `SOUL.md`、`config.yaml.skills` 和 DeerFlow 原生 `SkillActivationMiddleware` / `get_available_tools()` / middleware chain。
-- `backend/soc_agent/lead_agent.py` 只生成推荐 profile payload，不直接写 `.deer-flow/users/.../agents`。
+- `backend/soc_agent/lead_agent.py` 生成推荐 profile payload；`backend/soc_agent/agent_profile.py` 通过 DeerFlow per-user custom-agent storage 安装该 profile。
 - `backend/soc_agent/skills.py` 的 `SocSkillResolver` 只输出 DeerFlow skill 名称和 reason；真正 skill 加载、slash activation、allowed-tools 过滤仍交给 DeerFlow。
 - 当前已提供 `skills/public/soc-alert-triage`、`soc-endpoint-triage`、`soc-network-apt-triage`、`soc-waf-f5-triage`、`soc-asset-direction`，并通过 allowed-tools 将 MVP 限制在只读/计划型工具。
 - 当前已把 selected skills 接入 bounded analysis/chat context：
@@ -222,6 +222,10 @@ Profile 治理：
 - CLI 只读辅助：
   - `soc agent profile` 输出可用于 DeerFlow `/api/agents` 的 SOC custom-agent profile payload。
   - `soc agent resolve-skills <alert.json>` 输出 canonical alert 对应的 domain skill resolution。
+- CLI 安装辅助：
+  - `soc agent install-profile --dry-run` 显示将写入的 DeerFlow user-scoped profile 路径。
+  - `soc agent install-profile --overwrite` 才会覆盖既有 user-scoped `soc-triage`。
+  - 遇到 legacy shared agent 同名冲突时跳过，避免 shadow 旧 agent。
 
 典型流程：
 

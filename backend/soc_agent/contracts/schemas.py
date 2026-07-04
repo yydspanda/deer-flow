@@ -192,6 +192,21 @@ class SocLeadAgentProfile(BaseModel):
     soul: str
 
 
+class SocLeadAgentInstallResult(BaseModel):
+    """Result of installing the SOC profile into DeerFlow custom-agent storage."""
+
+    schema_version: str = "soc.lead_agent_install_result.v1"
+    agent_name: str
+    user_id: str
+    agent_dir: str
+    config_path: str
+    soul_path: str
+    status: Literal["dry_run", "created", "updated", "skipped"]
+    dry_run: bool = False
+    overwrite: bool = False
+    message: str
+
+
 class SocAgentRouteDecision(BaseModel):
     """Whitelisted capability route selected for one SOC chat request."""
 
