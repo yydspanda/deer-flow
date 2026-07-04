@@ -754,7 +754,7 @@ class SocAgentApprovalService:
         self._validate_grant_for_command(grant, command)
 
         if self._action_adapter_registry is not None:
-            adapter_command = self._adapter_dry_run_command(command, grant)
+            adapter_command = self._adapter_action_command_with_approval_payload(command, grant)
             try:
                 adapter_result = self._action_adapter_registry.dry_run(adapter_command, context=context)
             except (LookupError, ValueError) as exc:
@@ -806,28 +806,44 @@ class SocAgentApprovalService:
             return self._replay_consumed_grant(grant, context.idempotency_key)
 
         self._validate_grant_for_command(grant, command)
+        execution_command = command
+        adapter_preflight_result: SocAgentActionResult | None = None
+        if self._action_adapter_registry is not None:
+            execution_command = self._adapter_action_command_with_approval_payload(command, grant)
+            try:
+                adapter_preflight_result = self._action_adapter_registry.preflight_execute(execution_command, context=context)
+            except (LookupError, ValueError) as exc:
+                raise SocServiceError(f"approved action execute adapter preflight failed: {exc}") from exc
+            if adapter_preflight_result.status != "success":
+                raise SocServiceError(f"approved action execute adapter preflight failed: {adapter_preflight_result.message}")
 
         executed_at = datetime.now(UTC)
         execution_result_id = f"AXR-{uuid4().hex[:12].upper()}"
+        execution_payload: dict[str, Any] = {
+            "dry_run": execution_command.dry_run,
+            "adapter_preflight_validated": adapter_preflight_result is not None,
+            "execution_result_id": execution_result_id,
+            "approval_grant_id": grant.approval_grant_id,
+            "approval_request_id": grant.approval_request_id,
+            "execution_token_id": grant.execution_token_id,
+            "requested_by": grant.requested_by.model_dump(mode="json"),
+            "approved_by": grant.approved_by.model_dump(mode="json"),
+            "executed_by": context.actor.model_dump(mode="json"),
+            "idempotency_key": context.idempotency_key,
+            "executed_at": executed_at.isoformat(),
+            "external_side_effect": "not_executed",
+            "payload": execution_command.payload,
+        }
+        if adapter_preflight_result is not None:
+            execution_payload.update(adapter_preflight_result.payload)
+            execution_payload["adapter_preflight_validated"] = True
+
         result = SocAgentActionResult(
             route=grant.route,
             action=grant.action,
             status="success",
             message="Approved action execution boundary consumed token; no external side effect adapter executed.",
-            payload={
-                "dry_run": command.dry_run,
-                "execution_result_id": execution_result_id,
-                "approval_grant_id": grant.approval_grant_id,
-                "approval_request_id": grant.approval_request_id,
-                "execution_token_id": grant.execution_token_id,
-                "requested_by": grant.requested_by.model_dump(mode="json"),
-                "approved_by": grant.approved_by.model_dump(mode="json"),
-                "executed_by": context.actor.model_dump(mode="json"),
-                "idempotency_key": context.idempotency_key,
-                "executed_at": executed_at.isoformat(),
-                "external_side_effect": "not_executed",
-                "payload": command.payload,
-            },
+            payload=execution_payload,
         )
 
         grant.status = "consumed"
@@ -849,7 +865,7 @@ class SocAgentApprovalService:
             raise SocServiceError(f"approval grant {grant.approval_grant_id} was consumed without result payload")
         return SocAgentActionResult.model_validate(grant.execution_result_payload)
 
-    def _adapter_dry_run_command(
+    def _adapter_action_command_with_approval_payload(
         self,
         command: SocAgentApprovedActionCommand,
         grant: SocAgentApprovalGrant,

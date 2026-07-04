@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；approval dry-run 已可选校验 action adapter registry |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；approval dry-run 与 execute preflight 已可选校验 action adapter registry |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Execute adapter preflight before token consume |
+| 当前下一刀 | First concrete safe read-only adapter |
 
 ## Phase 1 切片计划
 
@@ -108,9 +108,41 @@
 | 72 | Approval inbox proposal payload rendering | Done | Web/TUI 审批入口展示 `source_proposal_id`、`action_payload`、`context_refs`，让分析师审批前能看见 Lead Agent 候选动作来源和参数 |
 | 73 | Action adapter registry contract planning | Done | 规划真实 `response.block_ip` / `endpoint.isolate_host` / MCP tool adapter registry 的 contract、幂等、审计和 dry-run 要求；新增 registry/descriptor/protocol/dry-run-only adapter，不直接接生产动作 |
 | 74 | Approval service adapter dry-run integration | Done | `SocAgentApprovalService.dry_run_approved_action()` 在 token 校验后可选调用 action adapter registry dry-run，校验 allowlist、payload 和 context refs；默认仍兼容无 registry 的 token-only dry-run |
-| 75 | Execute adapter preflight before token consume | Planned | `execute_approved_action()` 在消费 token 前可选校验 adapter 存在性、execute 支持度、payload 和 context refs；仍不接生产副作用 |
+| 75 | Execute adapter preflight before token consume | Done | `execute_approved_action()` 在消费 token 前可选校验 adapter 存在性、execute 支持度、payload 和 context refs；仍不接生产副作用 |
+| 76 | First concrete safe read-only adapter | Planned | 先接只读查询类 adapter（资产归属查询或 EDR 进程树查询），验证 adapter descriptor、dry-run、execute preflight 与审计 payload；不接封禁/隔离等写动作 |
 
 ## 进度记录
+
+### 2026-07-05 — Execute adapter preflight before token consume 切片
+
+- 背景：
+  - approval dry-run 已能校验 action adapter registry，但 execute 仍然会在 adapter 不存在/不支持 execute 时消费 token。
+  - 真实 EDR/F5/SOAR/MCP 接入前，必须保证 execute 在消费 token 前先做 adapter preflight。
+- 变更：
+  - `SocActionAdapterRegistry` 新增 `preflight_execute()`：
+    - 精确解析 `route/action`。
+    - 校验 adapter `execute_supported=True`。
+    - 校验 `idempotency_key`、required payload fields 和 required context refs。
+    - 只返回 `preflight_only=True` 的 `SocAgentActionResult`，不调用 `adapter.execute()`。
+  - `SocActionAdapterRegistryPort` 新增 `preflight_execute()`。
+  - `SocAgentApprovalService.execute_approved_action()`：
+    - 在 `grant.status=approved` 且 route/action 校验后、消费 token 前调用 registry preflight。
+    - 合并 approval request 的 `action_payload/context_refs` 与 command payload。
+    - preflight 失败时抛 `SocServiceError`，grant 保持 `approved`，不写 consumed/result。
+    - preflight 成功后继续按 Phase 1 语义消费 token，但仍不调用真实 adapter execute。
+  - 新增测试覆盖 registry preflight 不调用 adapter.execute、dry-run-only adapter 被拒绝、service preflight 成功消费 token、preflight 失败不消费 token。
+- 边界：
+  - 不接生产 EDR/F5/SOAR/MCP。
+  - 不调用 `adapter.execute()`。
+  - 不改变无 registry 时的 execute boundary 行为。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/action_adapters.py soc_agent/core/service.py soc_agent/protocols.py tests/test_soc_action_adapters.py tests/test_soc_agent_service.py`
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/action_adapters.py soc_agent/core/service.py soc_agent/protocols.py tests/test_soc_action_adapters.py tests/test_soc_agent_service.py --check`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_action_adapters.py tests/test_soc_agent_service.py::test_agent_approval_service_execute_preflights_adapter_before_consuming_token tests/test_soc_agent_service.py::test_agent_approval_service_execute_preflight_failure_does_not_consume_token tests/test_soc_agent_service.py::test_agent_approval_service_execute_consumes_token_and_is_idempotent`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_action_adapters.py tests/test_soc_agent_service.py tests/test_soc_approvals_router.py tests/test_soc_lead_agent_chat.py tests/test_soc_tui_chat_runtime.py`
+  - `codegraph sync .`
+- 下一步：
+  - 做 First concrete safe read-only adapter：优先选择资产归属查询或 EDR 进程树查询类只读 adapter，验证 adapter wiring、审计字段和 UI/TUI 展示，不碰封禁/隔离写动作。
 
 ### 2026-07-04 — Approval service adapter dry-run integration 切片
 

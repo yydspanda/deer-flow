@@ -162,6 +162,13 @@ class SocActionAdapterRegistryPort(Protocol):
         context: ServiceRequestContext,
     ) -> SocAgentActionResult: ...
 
+    def preflight_execute(
+        self,
+        command: SocAgentApprovedActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult: ...
+
 
 class SocEventSink(Protocol):
     """Event boundary for TUI/CLI progress, API SSE, channels, daemon logs, and audit."""

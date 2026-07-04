@@ -1,6 +1,6 @@
 # SOC Action Adapter Registry Plan
 
-> 状态：Phase 1 收口规划已开始。当前已固定 contract、本地 dry-run-only adapter，并把 approval service dry-run 接入可选 registry；仍不接生产 EDR/F5/MCP 副作用。
+> 状态：Phase 1 收口规划已开始。当前已固定 contract、本地 dry-run-only adapter，并把 approval service dry-run 与 execute preflight 接入可选 registry；仍不接生产 EDR/F5/MCP 副作用。
 
 ## 背景
 
@@ -27,13 +27,14 @@ Lead Agent / Skill / Daemon
   -> EDR / F5 / SOAR / MCP adapter
 ```
 
-当前代码已落地到 registry contract + approval service dry-run integration：
+当前代码已落地到 registry contract + approval service dry-run / execute preflight integration：
 
 - `SocAgentActionAdapterDescriptor`：声明 action adapter 能力、风险、side-effect 等级、必需 payload/context 字段。
 - `SocActionAdapter` protocol：所有真实 adapter 必须实现 `dry_run()` 和 `execute()`。
 - `SocActionAdapterRegistry`：只按精确 `route/action` allowlist 解析 adapter，不提供 fallback。
 - `DryRunOnlySocActionAdapter`：用于 Phase 1/测试/尚未上线的动作，只验证参数并返回 `external_side_effect=not_executed`。
 - `SocAgentApprovalService.dry_run_approved_action()`：有 registry 时先校验 grant，再把 approval request 中的 `action_payload/context_refs` 与 command payload 合并后交给 registry dry-run；没有 registry 时保持 token-only dry-run 兼容。
+- `SocAgentApprovalService.execute_approved_action()`：有 registry 时，在消费 token 前先调用 registry execute preflight，确认 adapter 存在、支持 execute、payload/context refs 齐全；当前仍不调用 adapter.execute，不产生外部副作用。
 
 ## Contract 约束
 
@@ -67,12 +68,12 @@ Lead Agent / Skill / Daemon
    - `dry_run_approved_action()` 继续先校验 approval grant，再调用 registry dry-run 校验 payload/context。
    - registry 不存在时保持当前 token-only dry-run，兼容本地最小闭环。
 
-2. **Execute preflight before token consume**（Next）
+2. **Execute preflight before token consume**（Done）
    - `execute_approved_action()` 在消费 token 前检查 adapter 是否存在、是否支持 execute、payload 是否满足必需字段。
    - 只有真实 adapter 调用结果确定后，才把 execution result 写回 grant。
-   - dry-run-only adapter 的 execute 仍返回 failed + `external_side_effect=not_executed`，不能伪装成功。
+   - 当前仍不调用 `adapter.execute()`；dry-run-only adapter / 未注册 adapter 会 fail-fast，token 保持 unconsumed。
 
-3. **First concrete safe adapter**
+3. **First concrete safe adapter**（Next）
    - 先接只读查询类 adapter，例如资产归属查询或 EDR 进程树查询。
    - 封禁 IP、隔离终端、禁用账号等 write/destructive adapter 等 staging eval、审计和补偿策略稳定后再接。
 

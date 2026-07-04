@@ -83,6 +83,52 @@ class SocActionAdapterRegistry:
         adapter = self.get(route=command.route, action=command.action)
         return adapter.execute(command, context=context)
 
+    def preflight_execute(
+        self,
+        command: SocAgentApprovedActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if command.dry_run:
+            raise SocActionAdapterRegistryError("adapter execute preflight requires command.dry_run=false")
+        adapter = self.get(route=command.route, action=command.action)
+        descriptor = adapter.descriptor
+        _validate_command_matches_descriptor(command, descriptor)
+        if not descriptor.execute_supported:
+            raise SocActionAdapterRegistryError(f"action adapter {descriptor.adapter_id!r} does not support execute")
+        if descriptor.idempotency_required and not context.idempotency_key:
+            raise SocActionAdapterRegistryError(f"action adapter {descriptor.adapter_id!r} requires an idempotency_key")
+        _validate_required_fields(
+            "payload",
+            command.payload,
+            descriptor.required_payload_fields,
+        )
+        context_refs = command.payload.get("context_refs")
+        _validate_required_fields(
+            "context_refs",
+            context_refs if isinstance(context_refs, Mapping) else {},
+            descriptor.required_context_refs,
+        )
+        return SocAgentActionResult(
+            route=command.route,
+            action=command.action,
+            status="success",
+            message="Action adapter execute preflight validated; no external side effect executed.",
+            payload={
+                "adapter_id": descriptor.adapter_id,
+                "adapter_kind": descriptor.adapter_kind,
+                "adapter_execute_supported": descriptor.execute_supported,
+                "adapter_external_side_effect": descriptor.external_side_effect,
+                "dry_run": False,
+                "preflight_only": True,
+                "external_side_effect": "not_executed",
+                "required_payload_fields": descriptor.required_payload_fields,
+                "required_context_refs": descriptor.required_context_refs,
+                "executed_by": context.actor.model_dump(mode="json"),
+                "idempotency_key": context.idempotency_key,
+            },
+        )
+
 
 class DryRunOnlySocActionAdapter:
     """Contract adapter for actions that are planned but not yet executable."""

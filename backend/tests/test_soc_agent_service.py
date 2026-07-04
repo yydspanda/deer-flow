@@ -22,6 +22,7 @@ from soc_agent.contracts import (
     SimilarAlertMatch,
     SimilarAlertQuery,
     SocAgentActionAdapterDescriptor,
+    SocAgentActionResult,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
     SocAgentApprovedActionCommand,
@@ -230,7 +231,36 @@ def _approval_request() -> SocAgentApprovalRequest:
     )
 
 
-def _block_ip_adapter_descriptor() -> SocAgentActionAdapterDescriptor:
+class _ExecutableActionAdapter:
+    def __init__(self, descriptor: SocAgentActionAdapterDescriptor) -> None:
+        self.descriptor = descriptor
+        self.execute_calls = 0
+
+    def dry_run(
+        self,
+        command: SocAgentApprovedActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        return SocAgentActionResult(
+            route=command.route,
+            action=command.action,
+            status="success",
+            message="test dry-run",
+            payload={"adapter_id": self.descriptor.adapter_id},
+        )
+
+    def execute(
+        self,
+        command: SocAgentApprovedActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        self.execute_calls += 1
+        raise AssertionError("execute preflight must not call adapter.execute")
+
+
+def _block_ip_adapter_descriptor(*, execute_supported: bool = False) -> SocAgentActionAdapterDescriptor:
     return SocAgentActionAdapterDescriptor(
         adapter_id="test-block-ip",
         route="response.block_ip",
@@ -238,7 +268,7 @@ def _block_ip_adapter_descriptor() -> SocAgentActionAdapterDescriptor:
         risk_level=SocAgentRiskLevel.HIGH_RISK,
         adapter_kind="mcp",
         external_side_effect="write",
-        execute_supported=False,
+        execute_supported=execute_supported,
         required_payload_fields=["ip", "duration_seconds"],
         required_context_refs=["queue_id", "run_id"],
         description="Test block-ip adapter descriptor.",
@@ -1168,6 +1198,88 @@ def test_agent_approval_service_execute_consumes_token_and_is_idempotent() -> No
     assert consumed.consume_idempotency_key == "idem-execute-1"
     assert consumed.execution_result_id == result.payload["execution_result_id"]
     assert consumed.execution_result_payload == result.model_dump(mode="json")
+
+
+def test_agent_approval_service_execute_preflights_adapter_before_consuming_token() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    approval_request = _approval_request().model_copy(
+        update={
+            "action_payload": {"ip": "203.0.113.8", "duration_seconds": 900},
+            "context_refs": {"queue_id": "REV-TEST-001", "run_id": "RUN-TEST-001"},
+        }
+    )
+    grant = SocAgentApprovalService(grant_repository=repository, request_repository=repository).approve(
+        approval_request,
+        context=ServiceRequestContext(actor=ActorContext(actor_id="admin-1", roles=["soc_admin"])),
+        reason="approved containment scope",
+    )
+    adapter = _ExecutableActionAdapter(_block_ip_adapter_descriptor(execute_supported=True))
+    service = SocAgentApprovalService(
+        grant_repository=repository,
+        request_repository=repository,
+        action_adapter_registry=SocActionAdapterRegistry([adapter]),
+    )
+
+    result = service.execute_approved_action(
+        SocAgentApprovedActionCommand(
+            execution_token_id=grant.execution_token_id,
+            route="response.block_ip",
+            action="response.block_ip",
+            dry_run=False,
+        ),
+        context=ServiceRequestContext(
+            actor=ActorContext(actor_id="analyst-2", surface=EntrySurface.TUI, roles=["analyst"]),
+            idempotency_key="idem-execute-preflight-1",
+        ),
+    )
+
+    stored = repository.get_approval_grant(grant.approval_grant_id)
+    assert adapter.execute_calls == 0
+    assert result.status == "success"
+    assert result.payload["adapter_preflight_validated"] is True
+    assert result.payload["adapter_id"] == "test-block-ip"
+    assert result.payload["preflight_only"] is True
+    assert result.payload["external_side_effect"] == "not_executed"
+    assert result.payload["payload"]["ip"] == "203.0.113.8"
+    assert result.payload["payload"]["context_refs"]["run_id"] == "RUN-TEST-001"
+    assert stored.status == "consumed"
+    assert stored.execution_result_payload == result.model_dump(mode="json")
+
+
+def test_agent_approval_service_execute_preflight_failure_does_not_consume_token() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    grant = SocAgentApprovalService(grant_repository=repository).approve(
+        _approval_request(),
+        context=ServiceRequestContext(actor=ActorContext(actor_id="admin-1", roles=["soc_admin"])),
+        reason="approved containment scope",
+    )
+    service = SocAgentApprovalService(
+        grant_repository=repository,
+        action_adapter_registry=SocActionAdapterRegistry([DryRunOnlySocActionAdapter(_block_ip_adapter_descriptor())]),
+    )
+
+    with pytest.raises(SocServiceError, match="does not support execute"):
+        service.execute_approved_action(
+            SocAgentApprovedActionCommand(
+                execution_token_id=grant.execution_token_id,
+                route="response.block_ip",
+                action="response.block_ip",
+                dry_run=False,
+                payload={
+                    "ip": "203.0.113.8",
+                    "duration_seconds": 900,
+                    "context_refs": {"queue_id": "REV-TEST-001", "run_id": "RUN-TEST-001"},
+                },
+            ),
+            context=ServiceRequestContext(
+                actor=ActorContext(actor_id="analyst-2", surface=EntrySurface.TUI, roles=["analyst"]),
+                idempotency_key="idem-execute-preflight-fail-1",
+            ),
+        )
+
+    stored = repository.get_approval_grant(grant.approval_grant_id)
+    assert stored.status == "approved"
+    assert stored.execution_result_payload is None
 
 
 def test_agent_approval_service_execute_rejects_consumed_token_with_different_idempotency() -> None:

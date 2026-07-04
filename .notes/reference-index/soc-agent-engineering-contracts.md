@@ -266,14 +266,14 @@ SOC Agent chat stream 约束：
   - `soc_approval_grants` 表必须保存扁平索引字段和完整 `grant_payload`；索引至少覆盖 `execution_token_id`、`approval_request_id`、`permission_decision_id`、`route`、`action`、`risk_level`、`status`、`expires_at`、`consumed_at`、`consume_idempotency_key`、`execution_result_id`。
   - `SocAgentApprovedActionCommand` 是审批后执行入口的显式 contract；必须包含 `execution_token_id`、`route`、`action`，并显式区分 `dry_run=True/False`。
   - `SocAgentApprovalService.dry_run_approved_action()` 必须先做 token 存在性、过期时间、route/action 一致性校验；没有 action adapter registry 时保持 token-only dry-run 兼容，有 registry 时必须继续调用 registry dry-run 校验 allowlist、payload 和 context refs；不得调用外部工具、不得修改业务状态、不得把 dry-run 结果当作真实处置完成。
-  - `SocAgentApprovalService.execute_approved_action()` 是真实执行前的稳定边界：必须要求 `dry_run=False` 和 `idempotency_key`，必须消费一次性 token，并把 `consumed_at`、`consumed_by`、`consume_idempotency_key`、`execution_result_id`、`execution_result_payload` 写回 grant。
-  - `execute_approved_action()` 当前只消费 token 和记录 execution boundary audit，不调用外部工具、不封禁 IP、不隔离终端、不改生产系统；真实外部副作用只能在后续 action adapter 注册后接入。
+  - `SocAgentApprovalService.execute_approved_action()` 是真实执行前的稳定边界：必须要求 `dry_run=False` 和 `idempotency_key`；有 action adapter registry 时，必须在消费 token 前完成 adapter execute preflight；preflight 成功后才能消费一次性 token，并把 `consumed_at`、`consumed_by`、`consume_idempotency_key`、`execution_result_id`、`execution_result_payload` 写回 grant。
+  - `execute_approved_action()` 当前只做 execute preflight、消费 token 和记录 execution boundary audit，不调用外部工具、不封禁 IP、不隔离终端、不改生产系统；真实外部副作用只能在后续 action adapter execute 接入后打开。
   - 已消费 token 遇到相同 `idempotency_key` 必须返回原 `execution_result_payload`；不同 key 或缺少记录必须拒绝，避免重复执行。
   - `SocAgentActionAdapterDescriptor` 是真实 action adapter 的能力声明，必须固定 `adapter_id`、`route`、`action`、`risk_level`、`adapter_kind`、`external_side_effect`、`dry_run_supported`、`execute_supported`、`required_payload_fields` 和 `required_context_refs`。
   - `SocActionAdapterRegistry` 是 approved action 后续接 EDR/F5/SOAR/MCP 的唯一 allowlist；只能精确匹配 `route/action`，没有注册 adapter 时必须 fail-fast，不能 fallback 到自然语言、模糊匹配或任意 MCP tool。
   - `SocActionAdapter` 具体实现只能暴露 `dry_run()` / `execute()`；真实 SDK、HTTP client、MCP client 类型只能留在 adapter module，不能扩散到 core、Gateway、TUI、Web 或 contracts。
   - `DryRunOnlySocActionAdapter` 只能用于规划、测试和未上线动作；它可以校验 payload/context refs，但 execute 必须返回 failed 且 `external_side_effect=not_executed`。
-  - `SocAgentApprovalService` 接 registry 时，必须先完成 approval grant 校验，再进行 adapter dry-run；dry-run payload 可以合并 approval request 的 `action_payload/context_refs` 和 command payload，其中 command payload 是显式覆盖。execute 必须在消费 token 前完成 adapter 存在性、execute 支持度和参数 preflight，避免 token 被消费后才发现 adapter 不可执行。
+  - `SocAgentApprovalService` 接 registry 时，必须先完成 approval grant 校验，再进行 adapter dry-run 或 execute preflight；payload 可以合并 approval request 的 `action_payload/context_refs` 和 command payload，其中 command payload 是显式覆盖。execute preflight 必须在消费 token 前完成 adapter 存在性、execute 支持度和参数校验，失败时 grant 必须保持 `approved`，避免 token 被消费后才发现 adapter 不可执行。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
     - `POST /api/soc/approvals/grants`
     - `POST /api/soc/approvals/actions/dry-run`
