@@ -22,6 +22,7 @@ from soc_agent.core import (
     SocNormalizationService,
     SocReviewService,
     SocServiceError,
+    SocSkillResolutionService,
 )
 from soc_agent.daemon import (
     JsonLineKafkaDaemonMetricSink,
@@ -44,6 +45,7 @@ from soc_agent.db import (
     upgrade_soc_schema,
 )
 from soc_agent.eval import load_eval_responses_jsonl, run_offline_eval
+from soc_agent.lead_agent import build_soc_lead_agent_profile
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -74,6 +76,10 @@ def main(argv: list[str] | None = None) -> int:
         return _review_tui(args)
     if args.command == "chat" and args.chat_command == "tui":
         return _chat_tui(args)
+    if args.command == "agent" and args.agent_command == "profile":
+        return _agent_profile(args)
+    if args.command == "agent" and args.agent_command == "resolve-skills":
+        return _agent_resolve_skills(args)
     if args.command == "daemon" and args.daemon_command == "process":
         return _daemon_process(args)
     if args.command == "daemon" and args.daemon_command == "consume":
@@ -186,6 +192,15 @@ def _build_parser() -> argparse.ArgumentParser:
     chat_tui.add_argument("--queue-id", help="Open a review queue context on launch")
     chat_tui.add_argument("--message", help="Send an initial message on launch")
     _add_database_args(chat_tui)
+
+    agent = subparsers.add_parser("agent", help="SOC Lead Agent profile and skill helpers")
+    agent_subparsers = agent.add_subparsers(dest="agent_command")
+    agent_profile = agent_subparsers.add_parser("profile", help="Show the recommended DeerFlow custom-agent profile")
+    agent_profile.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    agent_resolve_skills = agent_subparsers.add_parser("resolve-skills", help="Resolve SOC domain skills for one alert payload")
+    agent_resolve_skills.add_argument("path", nargs="?", help="Path to alert JSON file")
+    agent_resolve_skills.add_argument("--json", dest="json_payload", help="Inline alert JSON object")
+    agent_resolve_skills.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
     daemon = subparsers.add_parser("daemon", help="SOC daemon helpers")
     daemon_subparsers = daemon.add_subparsers(dest="daemon_command")
@@ -503,6 +518,24 @@ def _chat_tui(args: argparse.Namespace) -> int:
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    return 0
+
+
+def _agent_profile(args: argparse.Namespace) -> int:
+    profile = build_soc_lead_agent_profile()
+    print(profile.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _agent_resolve_skills(args: argparse.Namespace) -> int:
+    try:
+        payload = _load_payload(args.path, args.json_payload)
+        resolution = SocSkillResolutionService().resolve_payload(payload)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(resolution.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
 
 

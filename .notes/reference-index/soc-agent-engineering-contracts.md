@@ -1032,17 +1032,25 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 
 | 类型 | 所属层 | 负责什么 | 禁止什么 |
 |---|---|---|---|
-| Lead Agent prompt | `SocAgentChatService` / TUI / Web / Channels | 交互、任务理解、调查计划、选择 skill/tool、提出澄清问题 | 直接改 DB、memory、decision，绕过 core service 执行动作 |
-| Domain skill | `skills/` 或 SOC skill registry | 提供 EDR、APT、F5/WAF、资产归属、攻击方向、处置剧本等领域指导 | 自己执行工具、自己写 memory、把候选知识当 confirmed fact |
+| Lead Agent prompt | DeerFlow `lead_agent` custom agent / `SocAgentChatService` / TUI / Web / Channels | 交互、任务理解、调查计划、选择 skill/tool、提出澄清问题 | 直接改 DB、memory、decision，绕过 core service 执行动作 |
+| Domain skill | DeerFlow `skills/public/soc-*` 或后续 SOC custom skill | 提供 EDR、APT、F5/WAF、资产归属、攻击方向、处置剧本等领域指导 | 自己执行工具、自己写 memory、把候选知识当 confirmed fact |
 | Node prompt | `soc_agent/prompts/` | 固定 pipeline 节点内的结构化推理，例如 `llm_analyze` | 自主改变主流程、直接调用 MCP/tool、输出未校验自然语言进入决策层 |
 | MCP/tool adapter | `soc_agent/tools/` / DeerFlow MCP bridge | 查询或执行外部能力 | 绕过 policy、审计、人类审批执行高风险动作 |
 
 当前 `soc-analysis-v1` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费 `LLMAnalysisRequest` 和后续受控 skill context，输出必须进入 `AnalysisResult` parser、schema validation、domain validation，再由 Runtime 决定后续状态。
 
-后续新增 `SocSkillResolver` 时遵循：
+当前 `SocSkillResolver` 已作为薄层落地在 `backend/soc_agent/skills.py`，只输出 DeerFlow skill 名称和结构化 reason，不加载 `SKILL.md` 内容，不绕过 DeerFlow skill system。当前 DeerFlow 可加载的 SOC domain skills 是：
+
+- `soc-alert-triage`
+- `soc-endpoint-triage`
+- `soc-network-apt-triage`
+- `soc-waf-f5-triage`
+- `soc-asset-direction`
+
+`SocSkillResolver` 遵循：
 
 - 输入来自 `LLMAnalysisRequest`、`AlertSummary`、confirmed facts 或 analyst-selected context，不读取松散 raw vendor payload。
-- Phase 2/3 先用 deterministic 规则选择 skill，例如 `source_type=edr` -> `edr-triage`，`source_type=f5/waf` -> `waf-analysis`，存在方向冲突 -> `attack-direction-reconstruction`。
+- Phase 2/3 先用 deterministic 规则选择 skill，例如 `source_type=edr/hids` -> `soc-endpoint-triage`，`source_type=f5/waf` -> `soc-waf-f5-triage`，存在方向冲突 -> `soc-asset-direction`。
 - LLM 可以在白名单 skill 候选中 rerank 或建议补充 skill，但不能动态加载未知 skill 后直接影响决策。
 - 选中的 skill 作为 bounded context 注入 prompt；必须记录 skill name、skill version/hash、注入摘要和 token 预算。
 - Skill 只能产生指导、候选解释、候选查询或 action proposal；写 DB、写 memory、执行 tool 必须回到 service/policy 层。

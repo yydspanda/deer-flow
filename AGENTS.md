@@ -138,6 +138,11 @@ Current SOC direction:
   handle bounded reasoning and can only suggest soft routes from a whitelist.
 - LLM-discovered knowledge is candidate knowledge only. It must be confirmed by a human before
   it can affect future decisions.
+- SOC Lead Agent work must reuse DeerFlow's existing `lead_agent` custom-agent mechanism
+  wherever possible. Do not create a second SOC LangGraph runtime unless a future design
+  explicitly proves DeerFlow's custom-agent/profile/skills/MCP path cannot satisfy the need.
+  Current SOC profile/skill helpers live in `backend/soc_agent/lead_agent.py` and
+  `backend/soc_agent/skills.py`; DeerFlow-loadable SOC skills live under `skills/public/soc-*`.
 
 SOC phase plan:
 

@@ -49,9 +49,10 @@ from soc_agent.contracts import (
     SocDaemonProcessResult,
     SocEvent,
     SocEventType,
+    SocSkillResolution,
     Verdict,
 )
-from soc_agent.core.runtime import analyze_alert, inspect_alert_normalization
+from soc_agent.core.runtime import analyze_alert, build_analysis_request_for_payload, inspect_alert_normalization
 from soc_agent.normalizers import load_mapping_config, normalize_alert_payload
 from soc_agent.protocols import (
     AlertRepository,
@@ -64,6 +65,7 @@ from soc_agent.protocols import (
     SocAgentApprovalRequestRepository,
     SocEventSink,
 )
+from soc_agent.skills import SocSkillResolver
 
 
 class SocServiceError(RuntimeError):
@@ -309,6 +311,17 @@ class SocNormalizationService:
             )
 
         return _normalization_drift_report(sample_reports)
+
+
+class SocSkillResolutionService:
+    """Resolve DeerFlow SOC domain skills through the core service boundary."""
+
+    def __init__(self, *, resolver: SocSkillResolver | None = None) -> None:
+        self._resolver = resolver or SocSkillResolver()
+
+    def resolve_payload(self, payload: Mapping[str, Any]) -> SocSkillResolution:
+        request = build_analysis_request_for_payload(payload)
+        return self._resolver.resolve_for_analysis_request(request)
 
 
 def _normalization_drift_report(sample_reports: list[NormalizationDriftSample]) -> NormalizationDriftReport:

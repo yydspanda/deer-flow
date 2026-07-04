@@ -60,6 +60,15 @@ def inspect_alert_normalization(
     )
 
 
+def build_analysis_request_for_payload(payload: Mapping[str, Any]) -> LLMAnalysisRequest:
+    """Build bounded analysis input without running analyzer or decision nodes."""
+
+    alert = _normalize_alert(payload)
+    entities = extract_entities(alert)
+    fact_reconstruction = reconstruct_facts(alert)
+    return build_llm_analysis_request(alert, entities, fact_reconstruction)
+
+
 def analyze_alert(payload: Mapping[str, Any], *, analyzer: LLMAnalyzer | None = None) -> AnalysisRun:
     """Analyze one alert through the fixed Phase 1 pipeline."""
 

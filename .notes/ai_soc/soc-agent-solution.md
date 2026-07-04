@@ -208,12 +208,23 @@ Profile 治理：
 - Middleware preset、high-risk MCP/tool group、approval policy、audit policy、Runtime pipeline 不能开放为普通用户自由配置项。
 - 详细治理规则见 `.notes/ai_soc/soc-agent-profile-governance.md`。
 
+当前 MVP 决策：
+
+- 不新建第二套 SOC LangGraph agent runtime。
+- SOC Lead Agent 复用 DeerFlow custom-agent 机制：同一个 `lead_agent`，通过 `agent_name=soc-triage` 加载 `SOUL.md`、`config.yaml.skills` 和 DeerFlow 原生 `SkillActivationMiddleware` / `get_available_tools()` / middleware chain。
+- `backend/soc_agent/lead_agent.py` 只生成推荐 profile payload，不直接写 `.deer-flow/users/.../agents`。
+- `backend/soc_agent/skills.py` 的 `SocSkillResolver` 只输出 DeerFlow skill 名称和 reason；真正 skill 加载、slash activation、allowed-tools 过滤仍交给 DeerFlow。
+- 当前已提供 `skills/public/soc-alert-triage`、`soc-endpoint-triage`、`soc-network-apt-triage`、`soc-waf-f5-triage`、`soc-asset-direction`，并通过 allowed-tools 将 MVP 限制在只读/计划型工具。
+- CLI 只读辅助：
+  - `soc agent profile` 输出可用于 DeerFlow `/api/agents` 的 SOC custom-agent profile payload。
+  - `soc agent resolve-skills <alert.json>` 输出 canonical alert 对应的 domain skill resolution。
+
 典型流程：
 
 ```text
 EDR 告警进入
   -> normalize / entity_extract / fact_reconstruct / build_analysis_input
-  -> SkillResolver 选择 edr-triage / lateral-movement / asset-ownership 等 skill
+  -> SkillResolver 选择 soc-endpoint-triage / soc-network-apt-triage / soc-asset-direction 等 skill
   -> PromptBuilder 注入 bounded request + selected skill context
   -> LLM 输出 AnalysisResult / action proposal
   -> Policy 判定是否允许查询或处置
@@ -224,9 +235,10 @@ EDR 告警进入
 早期实现顺序：
 
 1. Phase 1 先把 node prompt、JSON parser、真实 LLM analyzer behind flag 做稳。
-2. Phase 2/3 再引入 `SocSkillResolver`，先用 deterministic 规则按 `source_type`、`detection_key`、category、entity kind 选择 skill。
-3. Phase 3/4 再让 SOC Lead Agent 在 TUI/Web/Chat 场景中做交互式调查和受限软路由。
-4. MCP/tool 处置能力最后接入；查询类工具先接，封禁/隔离/禁用账号必须默认需要审批。
+2. Phase 1 收口已引入 `SocSkillResolver` 和 SOC custom-agent profile payload；当前只做 deterministic skill recommendation，不让 LLM 动态加载未知 skill。
+3. Phase 2/3 将 selected skills 作为 bounded context 接入 analysis node / SOC Lead Agent 对话，并补充 skill hash、token budget 和 replay diff。
+4. Phase 3/4 再让 SOC Lead Agent 在 TUI/Web/Chat 场景中做交互式调查和受限软路由。
+5. MCP/tool 处置能力最后接入；查询类工具先接，封禁/隔离/禁用账号必须默认需要审批。
 
 ### 1.2.1 Phase 1 当前实际 Runtime Pipeline
 
@@ -309,7 +321,7 @@ ZEUS/天眼输入可信度相关结构状态：
    - API 是 Web/TUI/外部系统统一入口，必须只调用 `SocReviewService`。
    - TUI 是 Phase 1/2 更合适的薄操作台，用于 open queue、context、close、correct、trace 调试。
    - Web UI 后续基于同一套 API 增量做列表和详情页，不复制业务逻辑。
-   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done，action permission / human approval Done，approval request event Done，approval grant token Done，approval grant persistence / dry-run Done，ReviewQueue Web thin page Done，Web actor/context headers Done，approved-action consume/audit boundary Done，approval grant repository persistence Done，approved action Gateway API Done，approved action Web workbench Done，approval request inbox API Done，approval inbox Web consumption Done，Agent/daemon approval inbox write boundary Done，approval inbox TUI consumption Done，TUI approved-action dry-run / execute command Done，Kafka daemon scaffold / approval request ingestion Done，Kafka mapper/runner/settings/Confluent adapter/smoke/status/long-running run loop/metrics/backoff/entrypoint/healthcheck/isolated run-mode smoke/JSONL metric sink/production compose overlay/Dockerfile multi-extra support/K8s opt-in template/worker pool concurrency plan/partition commit tracker/daemon idempotency hardening/WorkerPoolResult contract Done；Prometheus exporter 和真实 worker pool 暂缓，下一步切回 `SocSkillResolver + SOC Lead Agent MVP`。
+   - 当前状态：API Done，TUI Done，SOC Agent chat stream contract Done，TUI chat runtime adapter Done，`soc chat tui` workbench shell Done，capability router MVP Done，route -> service/action dispatcher Done，action permission / human approval Done，approval request event Done，approval grant token Done，approval grant persistence / dry-run Done，ReviewQueue Web thin page Done，Web actor/context headers Done，approved-action consume/audit boundary Done，approval grant repository persistence Done，approved action Gateway API Done，approved action Web workbench Done，approval request inbox API Done，approval inbox Web consumption Done，Agent/daemon approval inbox write boundary Done，approval inbox TUI consumption Done，TUI approved-action dry-run / execute command Done，Kafka daemon scaffold / approval request ingestion Done，Kafka mapper/runner/settings/Confluent adapter/smoke/status/long-running run loop/metrics/backoff/entrypoint/healthcheck/isolated run-mode smoke/JSONL metric sink/production compose overlay/Dockerfile multi-extra support/K8s opt-in template/worker pool concurrency plan/partition commit tracker/daemon idempotency hardening/WorkerPoolResult contract Done；`SocSkillResolver + SOC Lead Agent MVP` Done；Prometheus exporter 和真实 worker pool 暂缓，下一步将 selected skills 接入 analysis/chat bounded context。
 
 7. **SOC Agent chat stream contract**
    - `SocAgentChatService.stream()` 是后续 SOC Lead Agent TUI/Web/Channels 的统一流式入口。
@@ -342,7 +354,7 @@ ZEUS/天眼输入可信度相关结构状态：
 - Web 工单/后台和 TUI 作为人工消费入口，从 approval inbox 选择 pending request 后 approve，生成一次性 `SocAgentApprovalGrant.execution_token_id`，再 dry-run / execute。当前 Web/TUI 都只进入 execution boundary，不执行真实外部副作用。
 - 统一中心是 `SocAgentApprovalService` + request/grant repository + audit/event log；middleware 只是 Agent 入口 adapter，不是审批系统唯一中心。
 
-真实 Kafka consumer adapter 规划见 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，生产运行约定见 `.notes/ai_soc/soc-daemon-production-runbook.md`，worker pool / concurrency 规划见 `.notes/ai_soc/kafka-worker-pool-concurrency-plan.md`。Kafka 当前进入收口/暂缓状态：Prometheus `/metrics` exporter、bounded worker pool、多 replica 和压测都等真实 Kafka/DB/K8s 参数、吞吐/延迟数据和 LLM 限流策略明确后再做。下一步切回 SOC Agent 主线，先做 `SocSkillResolver + SOC Lead Agent MVP`。
+真实 Kafka consumer adapter 规划见 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，生产运行约定见 `.notes/ai_soc/soc-daemon-production-runbook.md`，worker pool / concurrency 规划见 `.notes/ai_soc/kafka-worker-pool-concurrency-plan.md`。Kafka 当前进入收口/暂缓状态：Prometheus `/metrics` exporter、bounded worker pool、多 replica 和压测都等真实 Kafka/DB/K8s 参数、吞吐/延迟数据和 LLM 限流策略明确后再做。SOC 主线当前已完成 `SocSkillResolver + SOC Lead Agent MVP`，下一步把 selected skills 作为受控上下文接入 analysis/chat。
 
 后续运行态观察台需求已暂存到 `.notes/ai_soc/operations-overview-deferred.md`。该需求有价值，但不作为当前主链路走通的前置条件；等 Kafka daemon、review queue、approval inbox 和 runtime audit 的真实数据流稳定后再进入实现。
 

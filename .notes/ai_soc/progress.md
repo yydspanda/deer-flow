@@ -23,12 +23,12 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP 准备 |
-| 当前目标 | Kafka ingestion 基线已收口；下一阶段切回 SOC Agent 主线：domain skill resolver、SOC Lead Agent MVP、关联/记忆闭环 |
+| 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 开始复用 DeerFlow custom-agent/profile/skills 机制，后续把 selected skills 接入 analysis/chat bounded context |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | SocSkillResolver + SOC Lead Agent MVP planning/contract |
+| 当前下一刀 | Skill-selected bounded context for analysis/chat |
 
 ## Phase 1 切片计划
 
@@ -99,9 +99,62 @@
 | 63 | Kafka partition commit tracker | Done | 新增纯内存 `PartitionCommitTracker`，锁定乱序完成、dead-letter pending、多 partition 和已提交边界的 commit 推进规则 |
 | 64 | Kafka daemon idempotency hardening | Done | `SocAnalysisService` 通过 audit idempotency key 复用既有 run，避免同一 Kafka offset 重放重复写 summary/review/audit |
 | 65 | Kafka WorkerPoolResult contract | Done | 新增 `KafkaWorkerResult` / `SocKafkaWorker`，worker 只返回 processed/dead_letter_required/retryable/fatal 结构化结果；不 commit、不 dead-letter、不启动并发 |
-| 66 | SocSkillResolver + SOC Lead Agent MVP | Planned | 切回 SOC Agent 主线：按 source/detection/entities 选择 domain skill；Lead Agent 对话/调查计划复用现有 chat stream、approval boundary 和 core services |
+| 66 | SocSkillResolver + SOC Lead Agent MVP | Done | 复用 DeerFlow custom-agent/profile/skills 机制；按 source/detection/entities/conflict 选择 SOC domain skills；新增只读 CLI `soc agent profile` / `soc agent resolve-skills` |
+| 67 | Skill-selected bounded context for analysis/chat | Planned | 将 `SocSkillResolver` selected skills 作为有界上下文接入 analysis node 或 SOC chat stream，记录 skill/hash/token budget；不让 LLM 动态加载未知 skill |
 
 ## 进度记录
+
+### 2026-07-04 — SocSkillResolver + SOC Lead Agent MVP 切片
+
+- 背景：
+  - 用户明确要求：SOC Lead Agent 能用 DeerFlow 已有能力就复用，避免二次开发造成维护困难。
+  - DeerFlow 已有 custom-agent 机制：所有 assistant 仍走同一个 `lead_agent`，通过 `agent_name` 加载 per-user `SOUL.md` / `config.yaml`，并用 `skills` / `tool_groups` 白名单限制能力。
+- 变更：
+  - 新增 `backend/soc_agent/skills.py`：
+    - `SocSkillResolver`
+    - `SOC_LEAD_AGENT_SKILLS`
+    - 按 `source_type`、detection/category/entity/conflict 选择 SOC domain skills。
+  - 新增 `backend/soc_agent/lead_agent.py`：
+    - `build_soc_lead_agent_profile()` 输出 DeerFlow `/api/agents` 可用的 profile payload。
+    - 不写 `.deer-flow`，不新建 LangGraph 图。
+  - 新增 contracts：
+    - `SocSkillRecommendation`
+    - `SocSkillResolution`
+    - `SocLeadAgentProfile`
+  - 新增 DeerFlow public SOC skills：
+    - `soc-alert-triage`
+    - `soc-endpoint-triage`
+    - `soc-network-apt-triage`
+    - `soc-waf-f5-triage`
+    - `soc-asset-direction`
+  - 新增 CLI：
+    - `soc agent profile`
+    - `soc agent resolve-skills`
+- 复用 DeerFlow 的部分：
+  - `make_lead_agent`
+  - custom-agent `agent_name`
+  - `SOUL.md` / `config.yaml.skills`
+  - `SkillActivationMiddleware`
+  - `get_available_tools()`
+  - `allowed-tools` tool policy
+  - existing Web/Gateway agents API
+- 边界：
+  - 本切片不创建第二套 SOC Lead Agent runtime。
+  - `SocSkillResolver` 只推荐 skill，不加载 `SKILL.md` 内容、不执行工具、不写 DB。
+  - SOC skills 当前只开放只读/计划型工具：`ask_clarification`、`present_files`、`read_file`、`task`。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/core/runtime.py soc_agent/core/service.py soc_agent/core/__init__.py soc_agent/cli.py soc_agent/contracts/schemas.py soc_agent/contracts/__init__.py soc_agent/skills.py soc_agent/lead_agent.py tests/test_soc_agent_lead_agent.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_lead_agent.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_lead_agent_skills.py tests/test_skills_parser.py tests/test_skills_loader.py tests/test_skills_validation.py tests/test_skills_bundled.py`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli agent profile --pretty`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli agent resolve-skills --json '{"source":{"source_type":"edr","product":"EDR"},"detection":{"rule_name":"Suspicious endpoint process"},"entities":{"process":{"process_name":"powershell.exe"}}}' --pretty`
+  - `codegraph sync .`
+- 架构修正：
+  - `soc agent resolve-skills` 通过 `SocSkillResolutionService` 进入 core service，不从 CLI 直接调用 normalizer/pipeline。
+- 备注：
+  - `tests/test_slash_skills.py` 单跑在既有 async middleware 测试处长时间未退出，已中断；本切片未修改 slash middleware。
+- 下一步：
+  - 将 selected skills 接入 analysis/chat bounded context，记录 skill name/hash/token budget，为后续 SOC Lead Agent 对话和 replay diff 打基础。
 
 ### 2026-07-04 — Kafka WorkerPoolResult contract 收口切片
 

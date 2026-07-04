@@ -139,6 +139,37 @@ class SocAgentChatResponse(BaseModel):
     final_text: str = ""
 
 
+class SocSkillRecommendation(BaseModel):
+    """One DeerFlow skill recommendation for a SOC alert or investigation."""
+
+    skill_name: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    matched_fields: list[str] = Field(default_factory=list)
+
+
+class SocSkillResolution(BaseModel):
+    """Resolved SOC domain skills without loading skill content directly."""
+
+    schema_version: str = "soc.skill_resolution.v1"
+    alert_id: str | None = None
+    agent_name: str = "soc-triage"
+    selected_skills: list[SocSkillRecommendation] = Field(default_factory=list)
+    available_agent_skills: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class SocLeadAgentProfile(BaseModel):
+    """DeerFlow custom-agent profile payload recommended for SOC triage."""
+
+    schema_version: str = "soc.lead_agent_profile.v1"
+    name: str = "soc-triage"
+    description: str
+    skills: list[str] = Field(default_factory=list)
+    tool_groups: list[str] | None = None
+    soul: str
+
+
 class SocAgentRouteDecision(BaseModel):
     """Whitelisted capability route selected for one SOC chat request."""
 
