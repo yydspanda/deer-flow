@@ -507,8 +507,6 @@ def _review_tui(args: argparse.Namespace) -> int:
 
 def _chat_tui(args: argparse.Namespace) -> int:
     try:
-        if args.lead_agent and args.queue_id:
-            raise ValueError("--lead-agent currently supports chat messages; open review queue contexts without --lead-agent")
         repository = _repository_from_args(args)
         from soc_agent.tui.runner import run_chat_tui
 
@@ -519,7 +517,7 @@ def _chat_tui(args: argparse.Namespace) -> int:
             review_queue_repository=repository,
         )
         approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
-        chat_service = SocLeadAgentChatService() if args.lead_agent else SocAgentChatService(review_service=review_service, approval_service=approval_service)
+        chat_service = SocLeadAgentChatService(review_service=review_service) if args.lead_agent else SocAgentChatService(review_service=review_service, approval_service=approval_service)
         run_chat_tui(
             chat_service,
             initial_queue_id=args.queue_id,

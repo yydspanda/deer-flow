@@ -1059,7 +1059,7 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 
 SOC Lead Agent profile 安装必须使用 DeerFlow per-user custom-agent storage。当前 `SocLeadAgentProfileInstaller` / `soc agent install-profile` 写入 `.deer-flow/users/{user_id}/agents/soc-triage/config.yaml` 和 `SOUL.md`，默认不覆盖，只有显式 `--overwrite` 才更新；legacy shared 同名 agent 存在时跳过，避免 shadow。不要为 SOC 自建第二套 agent profile storage。
 
-SOC Lead Agent chat entry 必须复用 DeerFlow embedded client / gateway runtime。当前 `SocLeadAgentChatService` 只通过 `DeerFlowClient(agent_name="soc-triage")` 转发 stream，并发出 `soc.lead_agent_entry` marker；它不是 SOC action executor。ReviewQueue context、MCP/tool 调用、审批和处置必须继续通过 SOC service/action/policy boundary 逐步接入。
+SOC Lead Agent chat entry 必须复用 DeerFlow embedded client / gateway runtime。当前 `SocLeadAgentChatService` 通过 `DeerFlowClient(agent_name="soc-triage")` 转发 stream，并发出 `soc.lead_agent_entry` marker；它不是 SOC action executor。ReviewQueue context 已通过 `backend/soc_agent/context_bridge.py` 以 bounded `SocLeadAgentReviewContextArtifact` 接入：只能由 `SocReviewService.get_investigation_context()` 取数，必须记录 context hash / skill context hash，不能把完整 raw payload 或 repository 访问权交给 Lead Agent。MCP/tool 调用、审批和处置必须继续通过 SOC service/action/policy boundary 逐步接入。
 
 后续 MCP/tool 调用遵循：
 

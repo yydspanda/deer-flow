@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 开始复用 DeerFlow custom-agent/profile/skills 机制，后续把 selected skills 接入 analysis/chat bounded context |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，并能接收 ReviewQueue bounded context |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Skill-selected bounded context for analysis/chat |
+| 当前下一刀 | SOC Lead Agent action proposal boundary |
 
 ## Phase 1 切片计划
 
@@ -103,9 +103,40 @@
 | 67 | Skill-selected bounded context for analysis/chat | Done | `LLMAnalysisRequest.skill_context`、PromptBuilder、LLM metadata、ReviewContext chat stream 和 TUI translate 已接入 compact skill context；记录 skill/hash/token budget；不让 LLM 动态加载未知 skill |
 | 68 | SOC Lead Agent DeerFlow profile installation path | Done | 新增 `soc agent install-profile`，把推荐 profile 写入 DeerFlow per-user custom-agent storage；默认 dry-run/skip 安全语义，`--overwrite` 才覆盖 |
 | 69 | SOC Lead Agent chat entry wiring | Done | 新增 `SocLeadAgentChatService`，通过 DeerFlowClient `agent_name=soc-triage` 进入现有 lead_agent；`soc chat tui --lead-agent` 可选启用 |
-| 70 | SOC Lead Agent review context bridge | Planned | 将 ReviewQueue context 以 bounded context/artifact 形式提供给 DeerFlow SOC Lead Agent；不让 Lead Agent 直接读 repository 或执行处置 |
+| 70 | SOC Lead Agent review context bridge | Done | 将 ReviewQueue context 以 bounded context/artifact 形式提供给 DeerFlow SOC Lead Agent；不让 Lead Agent 直接读 repository 或执行处置 |
+| 71 | SOC Lead Agent action proposal boundary | Planned | 约束 Lead Agent 后续如何输出结构化 action proposal；仍不直接执行 MCP/tool/处置动作，必须回到 policy/approval/service 边界 |
 
 ## 进度记录
+
+### 2026-07-04 — SOC Lead Agent review context bridge 切片
+
+- 背景：
+  - `soc chat tui --lead-agent` 已能进入 DeerFlow `lead_agent`，但不能带 ReviewQueue context。
+  - 需要让 Lead Agent 看见当前工单上下文，同时不能让它直接读 repository、绕过 service，或执行处置动作。
+- 变更：
+  - 新增 `backend/soc_agent/context_bridge.py`：
+    - `build_lead_agent_review_context_artifact()` 从 `InvestigationContext` 生成 redacted/bounded artifact。
+    - artifact 只包含 review/summary/analysis/fact_context/similar_alerts/skill_context 摘要和 hash，不塞完整 raw payload。
+    - `render_lead_agent_review_context_message()` 将 artifact 作为 bounded context 前缀交给 DeerFlow Lead Agent。
+    - `skill_context_from_investigation_context()` 统一 deterministic chat 和 Lead Agent bridge 的 skill context 生成逻辑。
+  - 新增 `SocLeadAgentReviewContextArtifact` contract。
+  - `SocLeadAgentChatService` 新增可选 `review_service`：
+    - 当 `SocAgentChatRequest.queue_id` 存在时，通过 `SocReviewService.get_investigation_context()` 取 context。
+    - stream 发出 `custom kind=soc.lead_agent_review_context`，包含 artifact id、queue/run/alert、context hash、skill context hash 和 bounded artifact。
+    - `/open REV-...` 会转成自然语言调查意图，不把 slash command 原样交给 DeerFlow Lead Agent。
+  - `soc chat tui --lead-agent --queue-id REV-...` 已放开，CLI 注入同一个 `SocReviewService`。
+  - TUI translate 新增 `soc.lead_agent_review_context` 系统消息，只显示 queue/run/alert 和短 hash。
+- 边界：
+  - 不修改 DeerFlow upstream `lead_agent`。
+  - 不创建第二套 SOC LangGraph runtime。
+  - 不给 Lead Agent 直接 repository 权限。
+  - 不开放真实处置工具；后续 action proposal 必须回到 policy/approval/service 边界。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/context_bridge.py soc_agent/lead_agent_chat.py soc_agent/core/service.py soc_agent/cli.py soc_agent/tui/chat_runtime.py tests/test_soc_lead_agent_chat.py tests/test_soc_tui_chat_runtime.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_lead_agent_chat.py tests/test_soc_tui_chat_runtime.py tests/test_soc_agent_service.py::test_agent_chat_service_loads_review_context tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+- 下一步：
+  - 做 SOC Lead Agent action proposal boundary：让 Lead Agent 只能输出结构化候选动作，由 SOC policy/approval/service 决定能否进入 approval inbox 或 execute boundary。
 
 ### 2026-07-04 — SOC Lead Agent chat entry wiring 切片
 

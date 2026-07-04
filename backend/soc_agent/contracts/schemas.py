@@ -207,6 +207,27 @@ class SocLeadAgentInstallResult(BaseModel):
     message: str
 
 
+class SocLeadAgentReviewContextArtifact(BaseModel):
+    """Bounded ReviewQueue context handed to the DeerFlow SOC lead agent."""
+
+    schema_version: str = "soc.lead_agent_review_context_artifact.v1"
+    artifact_id: str = Field(default_factory=lambda: f"LCTX-{uuid4().hex[:12].upper()}")
+    queue_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    alert_id: str = Field(min_length=1)
+    context_hash: str = Field(min_length=1)
+    skill_context_hash: str | None = None
+    actor: ActorContext | None = None
+    review: dict[str, Any] = Field(default_factory=dict)
+    analysis: dict[str, Any] = Field(default_factory=dict)
+    fact_context: dict[str, Any] = Field(default_factory=dict)
+    summary: dict[str, Any] | None = None
+    similar_alerts: list[dict[str, Any]] = Field(default_factory=list)
+    skill_context: SocSkillContext | None = None
+    instructions: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class SocAgentRouteDecision(BaseModel):
     """Whitelisted capability route selected for one SOC chat request."""
 

@@ -229,7 +229,8 @@ Profile 治理：
 - Chat entry：
   - `backend/soc_agent/lead_agent_chat.py` 通过 DeerFlow embedded `DeerFlowClient(agent_name="soc-triage")` 进入现有 `lead_agent`。
   - `soc chat tui --lead-agent` 使用该入口；默认仍是 deterministic SOC review/context shell。
-  - 当前 Lead Agent entry 只接 chat stream，不开放处置工具；review/action/approval 仍必须回到 SOC service 边界。
+  - `soc chat tui --lead-agent --queue-id REV-...` 已通过 `backend/soc_agent/context_bridge.py` 将 ReviewQueue context 转成 bounded `SocLeadAgentReviewContextArtifact` 注入 Lead Agent turn。
+  - 当前 Lead Agent entry 支持 chat stream + bounded review context，不开放处置工具；action/approval 仍必须回到 SOC service 边界。
 
 典型流程：
 
@@ -366,7 +367,7 @@ ZEUS/天眼输入可信度相关结构状态：
 - Web 工单/后台和 TUI 作为人工消费入口，从 approval inbox 选择 pending request 后 approve，生成一次性 `SocAgentApprovalGrant.execution_token_id`，再 dry-run / execute。当前 Web/TUI 都只进入 execution boundary，不执行真实外部副作用。
 - 统一中心是 `SocAgentApprovalService` + request/grant repository + audit/event log；middleware 只是 Agent 入口 adapter，不是审批系统唯一中心。
 
-真实 Kafka consumer adapter 规划见 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，生产运行约定见 `.notes/ai_soc/soc-daemon-production-runbook.md`，worker pool / concurrency 规划见 `.notes/ai_soc/kafka-worker-pool-concurrency-plan.md`。Kafka 当前进入收口/暂缓状态：Prometheus `/metrics` exporter、bounded worker pool、多 replica 和压测都等真实 Kafka/DB/K8s 参数、吞吐/延迟数据和 LLM 限流策略明确后再做。SOC 主线当前已完成 `SocSkillResolver + SOC Lead Agent MVP`，下一步把 selected skills 作为受控上下文接入 analysis/chat。
+真实 Kafka consumer adapter 规划见 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，生产运行约定见 `.notes/ai_soc/soc-daemon-production-runbook.md`，worker pool / concurrency 规划见 `.notes/ai_soc/kafka-worker-pool-concurrency-plan.md`。Kafka 当前进入收口/暂缓状态：Prometheus `/metrics` exporter、bounded worker pool、多 replica 和压测都等真实 Kafka/DB/K8s 参数、吞吐/延迟数据和 LLM 限流策略明确后再做。SOC 主线当前已完成 `SocSkillResolver + SOC Lead Agent MVP`、skill-selected bounded context、profile installation、Lead Agent chat entry 和 review context bridge；下一步是做 SOC Lead Agent action proposal boundary，让 Lead Agent 只能输出结构化候选动作，由 SOC policy/approval/service 决定能否进入 approval inbox 或 execute boundary。
 
 后续运行态观察台需求已暂存到 `.notes/ai_soc/operations-overview-deferred.md`。该需求有价值，但不作为当前主链路走通的前置条件；等 Kafka daemon、review queue、approval inbox 和 runtime audit 的真实数据流稳定后再进入实现。
 

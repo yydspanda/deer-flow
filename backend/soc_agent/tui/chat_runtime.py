@@ -69,6 +69,17 @@ def _translate_custom(data: dict[str, Any]) -> list[Action]:
                 )
             )
         ]
+    if kind == "soc.lead_agent_review_context":
+        return [
+            SystemMessage(
+                _lead_agent_review_context_text(
+                    queue_id=_as_str(data.get("queue_id")),
+                    run_id=_as_str(data.get("run_id")),
+                    alert_id=_as_str(data.get("alert_id")),
+                    context_hash=_as_str(data.get("context_hash")),
+                )
+            )
+        ]
     if kind == "soc.route_decision":
         return [
             SystemMessage(
@@ -157,6 +168,19 @@ def _lead_agent_entry_text(*, agent_name: str, thread_id: str) -> str:
         parts.append(f"agent={agent_name}")
     if thread_id:
         parts.append(f"thread={thread_id}")
+    return " | ".join(parts)
+
+
+def _lead_agent_review_context_text(*, queue_id: str, run_id: str, alert_id: str, context_hash: str) -> str:
+    parts = ["SOC lead agent review context"]
+    if queue_id:
+        parts.append(f"queue={queue_id}")
+    if alert_id:
+        parts.append(f"alert={alert_id}")
+    if run_id:
+        parts.append(f"run={run_id}")
+    if context_hash:
+        parts.append(f"hash={context_hash[:12]}")
     return " | ".join(parts)
 
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from soc_agent.context_bridge import skill_context_from_investigation_context
 from soc_agent.contracts import (
     ActorContext,
     ActorType,
@@ -49,7 +50,6 @@ from soc_agent.contracts import (
     SocDaemonProcessResult,
     SocEvent,
     SocEventType,
-    SocSkillContext,
     SocSkillResolution,
     Verdict,
 )
@@ -66,7 +66,7 @@ from soc_agent.protocols import (
     SocAgentApprovalRequestRepository,
     SocEventSink,
 )
-from soc_agent.skills import SocSkillResolver, build_soc_skill_context
+from soc_agent.skills import SocSkillResolver
 
 
 class SocServiceError(RuntimeError):
@@ -1131,7 +1131,7 @@ class SocAgentActionDispatcher:
             "alert_id": investigation_context.run.alert_id,
             "actor_surface": context.actor.surface.value,
         }
-        skill_context = _skill_context_from_investigation_context(investigation_context)
+        skill_context = skill_context_from_investigation_context(investigation_context)
         if skill_context is not None:
             payload["skill_context"] = skill_context.model_dump(mode="json", exclude_none=True)
         return SocAgentActionResult(
@@ -1236,17 +1236,6 @@ def _approval_request_event(request: SocAgentApprovalRequest) -> SocAgentStreamE
             "created_at": request.created_at.isoformat(),
         },
     )
-
-
-def _skill_context_from_investigation_context(context: InvestigationContext) -> SocSkillContext | None:
-    request = context.run.llm_analysis_request
-    if request is not None:
-        if request.skill_context.selected_skills:
-            return request.skill_context
-        return build_soc_skill_context(SocSkillResolver().resolve_for_analysis_request(request))
-    if context.summary is not None:
-        return build_soc_skill_context(SocSkillResolver().resolve_for_summary(context.summary))
-    return None
 
 
 def _action_result_event(result: SocAgentActionResult) -> SocAgentStreamEvent:

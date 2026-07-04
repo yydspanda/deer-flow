@@ -64,6 +64,21 @@ def test_soc_chat_runtime_translates_lead_agent_entry_event() -> None:
     assert translate(event) == [SystemMessage("SOC lead agent entry | agent=soc-triage | thread=SOC-THREAD-1")]
 
 
+def test_soc_chat_runtime_translates_lead_agent_review_context_event() -> None:
+    event = SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.lead_agent_review_context",
+            "queue_id": "REV-1",
+            "run_id": "RUN-1",
+            "alert_id": "ALT-1",
+            "context_hash": "1234567890abcdef",
+        },
+    )
+
+    assert translate(event) == [SystemMessage("SOC lead agent review context | queue=REV-1 | alert=ALT-1 | run=RUN-1 | hash=1234567890ab")]
+
+
 def test_soc_chat_runtime_ignores_unknown_custom_event() -> None:
     event = SocAgentStreamEvent(type="custom", data={"kind": "soc.unknown"})
 

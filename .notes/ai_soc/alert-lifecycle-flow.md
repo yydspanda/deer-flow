@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow
 
-> 当前文档描述的是截至 2026-07-03 已落地代码的预警流转、状态变化和数据写入边界。Agent/daemon 写入 approval inbox 的 service boundary 已落地；Kafka consumer、SOC Lead Agent middleware、真实外部处置 adapter 仍是后续接入点，不应被理解为已经完成的自动化生产链路。
+> 当前文档描述的是截至 2026-07-04 已落地代码的预警流转、状态变化和数据写入边界。Kafka daemon opt-in broker consumer、approval inbox、ReviewQueue、skill-selected bounded context、SOC Lead Agent profile install/chat entry、SOC Lead Agent review context bridge 都已落地；Lead Agent tool/action approval middleware、真实外部处置 adapter、worker pool 并发仍是后续接入点。
 
 ## 总览
 
@@ -9,18 +9,26 @@
 - `SocAnalysisService`：预警分析入口，负责调用固定 runtime、保存 run/summary/review/audit。
 - `SocReviewService`：复核队列、调查上下文、关闭、人工纠正。
 - `SocAgentApprovalService`：approval request inbox、approval grant、dry-run、execute boundary。
+- `SocSkillResolver`：从 canonical alert / review context 选择白名单 SOC domain skills，并生成 compact bounded context。
+- `SocLeadAgentChatService`：通过 DeerFlow `DeerFlowClient(agent_name="soc-triage")` 进入现有 `lead_agent`，不是 SOC action executor。
+- `SocKafkaDaemonRunner` / `SocKafkaConsumerRunner`：opt-in Kafka daemon run loop，负责 broker poll、record mapping、process、dead-letter、commit、metrics JSONL。
 - `SqlAlchemyAlertRepository`：当前统一实现 run、summary、review queue、audit、approval request、approval grant 的持久化协议。
 
 三类入口后续都应该进入同一组 service：
 
 ```mermaid
 flowchart LR
-    Kafka["Kafka consumer\nplanned"] --> DaemonMessage["SocDaemonMessage"]
+    Kafka["Kafka topics\nopt-in daemon"] --> Consumer["SocKafkaConsumerRunner\nConfluentKafkaConsumerPort"]
+    Consumer --> Mapper["kafka record -> SocDaemonMessage"]
+    Mapper --> DaemonMessage["SocDaemonMessage"]
     DaemonMessage --> DaemonProcess["SocDaemonService.process_message"]
     DaemonProcess --> Analysis["SocAnalysisService"]
     CLI["CLI / API analyze"] --> Analysis
-    Agent["SOC Agent chat\napproval service injected"] --> ApprovalInbox["Approval Request Inbox"]
-    LeadMiddleware["SOC Lead Agent approval middleware\nplanned with real tool/MCP chain"] -.-> ApprovalInbox
+    AgentShell["SOC deterministic chat shell\nreview context loader"] --> ApprovalInbox["Approval Request Inbox"]
+    Profile["soc agent install-profile\nuser-scoped soc-triage"] --> LeadAgent["SocLeadAgentChatService\nDeerFlow lead_agent entry"]
+    LeadAgent --> DeerFlow["DeerFlow lead_agent\nagent_name=soc-triage"]
+    ReviewBridge["Review context bridge\nbounded artifact"] -.-> LeadAgent
+    LeadMiddleware["Lead Agent tool/action approval middleware\nplanned after MCP/tool chain"] -.-> ApprovalInbox
     DaemonProcess --> ApprovalInbox
     Daemon["SocDaemonService\nsubmit boundary"] --> ApprovalInbox
     Web["Web 工单/后台"] --> ReviewAPI["Review / Approval API"]
@@ -51,7 +59,8 @@ flowchart TD
     S1 --> S2["entity_extract\nExtractedEntities"]
     S2 --> S3["fact_reconstruct\nFactReconstructionResult"]
     S3 --> S4["build_analysis_input\nLLMAnalysisRequest"]
-    S4 --> S5["analyze_stub 或 LLM analyzer\nAnalysisNodeOutput"]
+    S4 --> Skill["SocSkillResolver\nbounded skill context"]
+    Skill --> S5["analyze_stub 或 LLM analyzer\nAnalysisNodeOutput"]
     S5 --> S6["schema_validate\nAnalysisResult"]
     S6 --> S7["decide\nDecision"]
 
@@ -82,6 +91,35 @@ flowchart TD
 | `input_hash` / `output_hash` | 当前 step 输入/输出稳定 hash |
 | `warnings` | entity/fact/analysis request 中产生的警告 |
 | `metadata` | analyzer model、prompt、parser 等元信息 |
+
+## Skill Context 与 Lead Agent 入口
+
+SOC 当前有两条 Agent 相关路径，必须区分：
+
+| 路径 | 当前状态 | 作用 | 禁止边界 |
+|---|---|---|---|
+| Runtime analysis node | Done | `LLMAnalysisRequest.skill_context` 把 selected skills 作为 compact context 注入分析 prompt | 不动态加载未知 skill；不让 LLM 改主流程 |
+| Deterministic chat shell | Done | `SocAgentChatService` 打开 ReviewQueue context，发出 `soc.review_context` / `soc.skill_context` stream event | 不替代 DeerFlow Lead Agent |
+| DeerFlow SOC Lead Agent entry | Done | `SocLeadAgentChatService` 通过 `agent_name=soc-triage` 进入 DeerFlow `lead_agent` | 不执行处置动作 |
+| Review context bridge | Done | 把 ReviewQueue context 转为 bounded `SocLeadAgentReviewContextArtifact`，提供给 DeerFlow SOC Lead Agent | 不让 Lead Agent 直接读 repository；不绕过 `SocReviewService`、`SocAgentActionPolicy`、`SocAgentApprovalService` |
+| Lead Agent tool/action middleware | Planned | 拦截未来 MCP/tool/action call，生成 approval request 或 action proposal | 不在没有真实 tool/MCP 宿主前提前实现 |
+
+当前生命周期增量不是重新做一个 SOC agent runtime，而是在 `SocLeadAgentChatService` 前面补一个受控桥接层：
+
+```mermaid
+flowchart TD
+    QueueId["ReviewQueue queue_id"] --> ReviewService["SocReviewService.get_context"]
+    ReviewService --> Snapshot["Bounded review context snapshot\nredacted fields + hashes + skill_context"]
+    Snapshot --> Artifact["SocLeadAgentReviewContextArtifact\ncontext_hash + skill_context_hash"]
+    Artifact --> LeadEntry["SocLeadAgentChatService\nagent_name=soc-triage"]
+    LeadEntry --> DeerFlowLead["DeerFlow lead_agent stream"]
+
+    DeerFlowLead -. "future action proposal" .-> Policy["SocAgentActionPolicy"]
+    Policy -. "high risk" .-> Approval["SocAgentApprovalService.submit_request"]
+    Approval -.-> Inbox["Approval inbox"]
+```
+
+桥接层记录 context hash、queue_id、run_id、skill context hash、surface、actor 信息，保证 Lead Agent 的上下文可复现、可审计、可裁剪。后续 action proposal 还需要继续补 trace/idempotency 与 approval boundary。
 
 ## 分析后的数据写入
 
@@ -230,8 +268,11 @@ Replay 不覆盖旧 run；它创建一个新 run，并通过 `replay_of_run_id` 
 |---|---|---|
 | CLI | `soc analyze --persist` | 运行分析并写入 run/summary/review/audit |
 | CLI | `soc show` / `soc replay` / `soc correct` | 查看、重放、人工纠正 |
+| CLI | `soc agent profile` / `soc agent resolve-skills` / `soc agent install-profile` | 生成/解析/安装 DeerFlow `soc-triage` custom-agent profile；默认只读或 dry-run |
 | CLI/TUI | `soc review tui` | ReviewQueue thin client；approval inbox pending request 列表、详情、approve token 生成、dry-run、execute boundary |
+| CLI/TUI | `soc chat tui` | 默认 deterministic SOC chat shell；`--lead-agent` 时通过 DeerFlow `lead_agent` 进入 `soc-triage` |
 | CLI | `soc daemon process` | 本地处理一条 decoded daemon message JSON；支持 `kind=alert` 和 `kind=approval_request` |
+| CLI | `soc daemon consume` / `soc daemon run` / `soc daemon status` | opt-in Kafka broker 消费、长期运行、readiness/status；支持 dead-letter、manual commit、metric JSONL |
 | Web | `/workspace/soc/review` | ReviewQueue 页面；审批动作区可从 approval inbox 选择 pending request 后 approve / dry-run / execute，仍保留手工 JSON fallback |
 | Gateway | `/api/soc/review/*` | review list/context/close/correct |
 | Gateway | `/api/soc/approvals/requests*` | approval inbox create/list/get |
@@ -239,13 +280,16 @@ Replay 不覆盖旧 run；它创建一个新 run，并通过 `replay_of_run_id` 
 | Gateway | `/api/soc/approvals/actions/dry-run` | token 校验，不执行副作用 |
 | Gateway | `/api/soc/approvals/actions/execute` | 消费 token，记录 execution boundary |
 | Core service | `SocAgentChatService.stream(..., approval_service=...)` | TUI/Agent chat shell 高风险 request 写入 approval inbox 并发出 stream event；不是最终 Lead Agent middleware |
+| Core service | `SocLeadAgentChatService.stream(...)` | 复用 DeerFlow embedded client/gateway runtime，以 `agent_name=soc-triage` 转发 stream；可接收 bounded review context；不是 action executor |
+| Core service | `SocSkillResolver` / `build_soc_skill_context()` | 为 analysis/chat 生成 compact selected skill context，不直接加载完整 skill 文本 |
 | Core service | `SocDaemonService.submit_approval_request()` | Kafka daemon 后续复用的 approval inbox 写入边界 |
 
 ## 尚未接入的后续点
 
 这些是规划点，当前流程图里只作为未来入口或 adapter：
 
-- Kafka daemon 自动消费预警流；当前已有 `SocDaemonMessage` 和 `SocDaemonService.process_message()` decoded-message scaffold，尚未实现真实 broker consumer。
-- SOC Lead Agent approval middleware 拦截高风险 tool/action call；当前 chat service 已能在注入 approval service 时写入 approval inbox，但真实 DeerFlow-derived Lead Agent middleware 必须等 SOC Lead Agent / skills / MCP tool chain 落地时再接入。
+- SOC Lead Agent approval middleware：拦截高风险 tool/action call；当前 chat shell 已能在注入 approval service 时写入 approval inbox，但真实 DeerFlow-derived middleware 必须等 SOC Lead Agent / MCP tool chain 落地后再接入。
 - Action adapter registry：把 `response.block_ip`、`edr.isolate_host`、F5 策略、Kafka 处置事件等真实外部动作注册到 execute boundary 后面。
 - 真实外部副作用的补偿、失败重试、审批后超时、adapter-level audit。
+- Kafka bounded worker pool：当前 broker runner 仍是串行处理；并发 worker pool 要等真实吞吐、DB/K8s 参数和 LLM 限流策略明确后再接。
+- Prometheus `/metrics` exporter 和运营态势看板：需求已记录为后续优化项，当前优先保证 SOC agent 主链路走通。
