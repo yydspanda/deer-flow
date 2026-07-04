@@ -262,6 +262,26 @@ class SocAgentPermissionDecision(BaseModel):
     actor: ActorContext | None = None
 
 
+class SocAgentActionProposal(BaseModel):
+    """Structured action candidate proposed by a lead agent or skill."""
+
+    schema_version: str = "soc.agent_action_proposal.v1"
+    proposal_id: str = Field(default_factory=lambda: f"SAP-{uuid4().hex[:12].upper()}")
+    source: Literal["lead_agent", "skill", "deterministic", "mcp"] = "lead_agent"
+    thread_id: str | None = None
+    queue_id: str | None = None
+    run_id: str | None = None
+    alert_id: str | None = None
+    context_hash: str | None = None
+    route: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    proposed_by: ActorContext | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class SocAgentApprovalRequest(BaseModel):
     """Human approval request for a blocked high-risk SOC Agent action."""
 
@@ -273,6 +293,9 @@ class SocAgentApprovalRequest(BaseModel):
     risk_level: SocAgentRiskLevel
     reason: str = Field(min_length=1)
     requested_by: ActorContext
+    source_proposal_id: str | None = None
+    action_payload: dict[str, Any] = Field(default_factory=dict)
+    context_refs: dict[str, Any] = Field(default_factory=dict)
     status: Literal["pending"] = "pending"
     created_at: datetime = Field(default_factory=utc_now)
 

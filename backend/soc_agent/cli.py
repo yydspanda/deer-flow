@@ -13,6 +13,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
+from soc_agent.action_proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.agent_profile import SocLeadAgentProfileInstaller
 from soc_agent.contracts import CorrectionCommand, ReviewQueueCloseCommand, ReviewQueueStatus, Verdict
 from soc_agent.core import (
@@ -517,7 +518,14 @@ def _chat_tui(args: argparse.Namespace) -> int:
             review_queue_repository=repository,
         )
         approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
-        chat_service = SocLeadAgentChatService(review_service=review_service) if args.lead_agent else SocAgentChatService(review_service=review_service, approval_service=approval_service)
+        chat_service = (
+            SocLeadAgentChatService(
+                review_service=review_service,
+                action_proposal_boundary=SocLeadAgentActionProposalBoundary(approval_service=approval_service),
+            )
+            if args.lead_agent
+            else SocAgentChatService(review_service=review_service, approval_service=approval_service)
+        )
         run_chat_tui(
             chat_service,
             initial_queue_id=args.queue_id,

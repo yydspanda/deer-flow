@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，并能接收 ReviewQueue bounded context |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | SOC Lead Agent action proposal boundary |
+| 当前下一刀 | Approval inbox proposal payload rendering |
 
 ## Phase 1 切片计划
 
@@ -104,9 +104,41 @@
 | 68 | SOC Lead Agent DeerFlow profile installation path | Done | 新增 `soc agent install-profile`，把推荐 profile 写入 DeerFlow per-user custom-agent storage；默认 dry-run/skip 安全语义，`--overwrite` 才覆盖 |
 | 69 | SOC Lead Agent chat entry wiring | Done | 新增 `SocLeadAgentChatService`，通过 DeerFlowClient `agent_name=soc-triage` 进入现有 lead_agent；`soc chat tui --lead-agent` 可选启用 |
 | 70 | SOC Lead Agent review context bridge | Done | 将 ReviewQueue context 以 bounded context/artifact 形式提供给 DeerFlow SOC Lead Agent；不让 Lead Agent 直接读 repository 或执行处置 |
-| 71 | SOC Lead Agent action proposal boundary | Planned | 约束 Lead Agent 后续如何输出结构化 action proposal；仍不直接执行 MCP/tool/处置动作，必须回到 policy/approval/service 边界 |
+| 71 | SOC Lead Agent action proposal boundary | Done | 约束 Lead Agent 后续如何输出结构化 action proposal；仍不直接执行 MCP/tool/处置动作，必须回到 policy/approval/service 边界 |
+| 72 | Approval inbox proposal payload rendering | Planned | Web/TUI 审批入口展示 `source_proposal_id`、`action_payload`、`context_refs`，让分析师审批前能看见 Lead Agent 候选动作来源和参数 |
 
 ## 进度记录
+
+### 2026-07-04 — SOC Lead Agent action proposal boundary 切片
+
+- 背景：
+  - ReviewQueue bounded context 已能进入 DeerFlow `lead_agent`。
+  - 下一步需要约束 Lead Agent 如何提出处置/查询候选动作，避免自然语言建议被误当成执行能力。
+- 变更：
+  - 新增 `backend/soc_agent/action_proposals.py`：
+    - 只识别 `<soc_action_proposal>...</soc_action_proposal>` 内的显式 JSON。
+    - `extract_action_proposals_from_text()` 会剥离 marker、校验 schema、保留普通回复文本。
+    - `SocLeadAgentActionProposalBoundary` 用 `SocAgentActionPolicy` 评估候选动作。
+    - 高风险 proposal 会转换成 `SocAgentApprovalRequest`，可通过注入的 `SocAgentApprovalService` 写入 approval inbox。
+  - 新增 `SocAgentActionProposal` contract。
+  - `SocAgentApprovalRequest` 增加可选 `source_proposal_id`、`action_payload`、`context_refs`，随完整 JSON payload 保存，不需要新迁移列。
+  - `SocLeadAgentChatService`：
+    - 从 Lead Agent message event 中提取 proposal marker。
+    - 发出 `soc.action_proposal`、`soc.permission_decision`、`soc.approval_request` 或 `soc.action_proposal_error` stream event。
+    - 不执行任何 action，不调用 MCP/tool。
+  - `soc chat tui --lead-agent` 注入同一个 approval service，确保高风险 proposal 进入既有 approval inbox。
+  - TUI translate 新增 action proposal / proposal error 展示。
+  - `SOC_LEAD_AGENT_SOUL` 增加 action proposal marker 格式。
+- 边界：
+  - 只有显式 marker 会触发 proposal boundary；普通自然语言不会被猜测为动作。
+  - policy 只决定允许、拒绝或需要人工审批；本切片不新增真实 action adapter。
+  - approval request 只是 pending inbox 项，不是执行授权。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/action_proposals.py soc_agent/lead_agent_chat.py soc_agent/lead_agent.py soc_agent/cli.py soc_agent/tui/chat_runtime.py soc_agent/contracts/schemas.py soc_agent/contracts/__init__.py soc_agent/core/service.py tests/test_soc_lead_agent_chat.py tests/test_soc_tui_chat_runtime.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_lead_agent_chat.py tests/test_soc_tui_chat_runtime.py tests/test_soc_agent_service.py::test_agent_chat_service_persists_approval_request_to_inbox tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+- 下一步：
+  - 做 Approval inbox proposal payload rendering：让 Web/TUI 审批面板展示 proposal 来源、payload 和 context refs，避免审批人只能看到 action 名。
 
 ### 2026-07-04 — SOC Lead Agent review context bridge 切片
 

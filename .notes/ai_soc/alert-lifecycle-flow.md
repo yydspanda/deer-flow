@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow
 
-> 当前文档描述的是截至 2026-07-04 已落地代码的预警流转、状态变化和数据写入边界。Kafka daemon opt-in broker consumer、approval inbox、ReviewQueue、skill-selected bounded context、SOC Lead Agent profile install/chat entry、SOC Lead Agent review context bridge 都已落地；Lead Agent tool/action approval middleware、真实外部处置 adapter、worker pool 并发仍是后续接入点。
+> 当前文档描述的是截至 2026-07-04 已落地代码的预警流转、状态变化和数据写入边界。Kafka daemon opt-in broker consumer、approval inbox、ReviewQueue、skill-selected bounded context、SOC Lead Agent profile install/chat entry、SOC Lead Agent review context bridge、SOC Lead Agent action proposal boundary 都已落地；Lead Agent tool/action approval middleware、真实外部处置 adapter、worker pool 并发仍是后续接入点。
 
 ## 总览
 
@@ -102,6 +102,7 @@ SOC 当前有两条 Agent 相关路径，必须区分：
 | Deterministic chat shell | Done | `SocAgentChatService` 打开 ReviewQueue context，发出 `soc.review_context` / `soc.skill_context` stream event | 不替代 DeerFlow Lead Agent |
 | DeerFlow SOC Lead Agent entry | Done | `SocLeadAgentChatService` 通过 `agent_name=soc-triage` 进入 DeerFlow `lead_agent` | 不执行处置动作 |
 | Review context bridge | Done | 把 ReviewQueue context 转为 bounded `SocLeadAgentReviewContextArtifact`，提供给 DeerFlow SOC Lead Agent | 不让 Lead Agent 直接读 repository；不绕过 `SocReviewService`、`SocAgentActionPolicy`、`SocAgentApprovalService` |
+| Action proposal boundary | Done | 只处理 `<soc_action_proposal>...</soc_action_proposal>` 显式 JSON；输出 `soc.action_proposal` / `soc.permission_decision` / `soc.approval_request` | 不从自然语言猜动作；不执行 MCP/tool/处置 |
 | Lead Agent tool/action middleware | Planned | 拦截未来 MCP/tool/action call，生成 approval request 或 action proposal | 不在没有真实 tool/MCP 宿主前提前实现 |
 
 当前生命周期增量不是重新做一个 SOC agent runtime，而是在 `SocLeadAgentChatService` 前面补一个受控桥接层：
@@ -114,12 +115,14 @@ flowchart TD
     Artifact --> LeadEntry["SocLeadAgentChatService\nagent_name=soc-triage"]
     LeadEntry --> DeerFlowLead["DeerFlow lead_agent stream"]
 
-    DeerFlowLead -. "future action proposal" .-> Policy["SocAgentActionPolicy"]
-    Policy -. "high risk" .-> Approval["SocAgentApprovalService.submit_request"]
+    DeerFlowLead --> Proposal["explicit soc_action_proposal marker"]
+    Proposal --> Boundary["SocLeadAgentActionProposalBoundary"]
+    Boundary --> Policy["SocAgentActionPolicy"]
+    Policy --> Approval["SocAgentApprovalService.submit_request\nwhen high risk"]
     Approval -.-> Inbox["Approval inbox"]
 ```
 
-桥接层记录 context hash、queue_id、run_id、skill context hash、surface、actor 信息，保证 Lead Agent 的上下文可复现、可审计、可裁剪。后续 action proposal 还需要继续补 trace/idempotency 与 approval boundary。
+桥接层记录 context hash、queue_id、run_id、skill context hash、surface、actor 信息，保证 Lead Agent 的上下文可复现、可审计、可裁剪。Action proposal boundary 记录 `source_proposal_id`、`action_payload`、`context_refs`；后续 Web/TUI approval inbox 需要把这些字段展示给审批人。
 
 ## 分析后的数据写入
 

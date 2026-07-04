@@ -80,6 +80,19 @@ def _translate_custom(data: dict[str, Any]) -> list[Action]:
                 )
             )
         ]
+    if kind == "soc.action_proposal":
+        return [
+            SystemMessage(
+                _action_proposal_text(
+                    proposal_id=_as_str(data.get("proposal_id")),
+                    action=_as_str(data.get("action")),
+                    confidence=data.get("confidence"),
+                    reason=_as_str(data.get("reason")),
+                )
+            )
+        ]
+    if kind == "soc.action_proposal_error":
+        return [SystemMessage(f"SOC action proposal rejected | {_as_str(data.get('error'))}", tone="error")]
     if kind == "soc.route_decision":
         return [
             SystemMessage(
@@ -181,6 +194,19 @@ def _lead_agent_review_context_text(*, queue_id: str, run_id: str, alert_id: str
         parts.append(f"run={run_id}")
     if context_hash:
         parts.append(f"hash={context_hash[:12]}")
+    return " | ".join(parts)
+
+
+def _action_proposal_text(*, proposal_id: str, action: str, confidence: Any, reason: str) -> str:
+    parts = ["SOC action proposal"]
+    if proposal_id:
+        parts.append(f"id={proposal_id}")
+    if action:
+        parts.append(f"action={action}")
+    if isinstance(confidence, int | float):
+        parts.append(f"confidence={confidence:.2f}")
+    if reason:
+        parts.append(reason)
     return " | ".join(parts)
 
 

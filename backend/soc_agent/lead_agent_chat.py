@@ -8,6 +8,14 @@ from uuid import uuid4
 
 from deerflow.client import DeerFlowClient
 from deerflow.config.agents_config import load_agent_config
+from soc_agent.action_proposals import (
+    SocLeadAgentActionProposalBoundary,
+    action_proposal_error_event,
+    action_proposal_event,
+    approval_request_event,
+    extract_action_proposals_from_text,
+    permission_decision_event,
+)
 from soc_agent.context_bridge import build_lead_agent_review_context_artifact, render_lead_agent_review_context_message
 from soc_agent.contracts import InvestigationContext, ServiceRequestContext, SocAgentChatRequest, SocAgentStreamEvent
 from soc_agent.skills import SOC_LEAD_AGENT_NAME
@@ -45,11 +53,13 @@ class SocLeadAgentChatService:
         client_factory: Callable[[], DeerFlowClientLike] | None = None,
         require_profile: bool = True,
         review_service: ReviewContextProvider | None = None,
+        action_proposal_boundary: SocLeadAgentActionProposalBoundary | None = None,
     ) -> None:
         self._agent_name = agent_name
         self._client_factory = client_factory or (lambda: DeerFlowClient(agent_name=agent_name))
         self._require_profile = require_profile
         self._review_service = review_service
+        self._action_proposal_boundary = action_proposal_boundary or SocLeadAgentActionProposalBoundary()
 
     def stream(
         self,
@@ -58,6 +68,7 @@ class SocLeadAgentChatService:
         context: ServiceRequestContext | None = None,
     ) -> Iterator[SocAgentStreamEvent]:
         chat_request = request if isinstance(request, SocAgentChatRequest) else SocAgentChatRequest(message=request)
+        request_context = context or ServiceRequestContext()
         thread_id = chat_request.thread_id or f"SOC-LEAD-{uuid4().hex[:12].upper()}"
         if self._require_profile:
             _ensure_profile_installed(self._agent_name)
@@ -68,16 +79,29 @@ class SocLeadAgentChatService:
                 "kind": "soc.lead_agent_entry",
                 "agent_name": self._agent_name,
                 "thread_id": thread_id,
-                "actor_surface": context.actor.surface.value if context is not None else None,
+                "actor_surface": request_context.actor.surface.value,
             },
         )
         message = _operator_message(chat_request)
+        proposal_defaults: dict[str, Any] = {
+            "thread_id": thread_id,
+            "queue_id": chat_request.queue_id,
+            "run_id": chat_request.run_id,
+            "proposed_by": request_context.actor.model_dump(mode="json"),
+        }
         if chat_request.queue_id:
             if self._review_service is None:
                 raise SocLeadAgentReviewContextError("SOC Lead Agent review context bridge requires SocReviewService")
             artifact = build_lead_agent_review_context_artifact(
                 self._review_service.get_investigation_context(chat_request.queue_id),
-                request_context=context,
+                request_context=request_context,
+            )
+            proposal_defaults.update(
+                {
+                    "run_id": artifact.run_id,
+                    "alert_id": artifact.alert_id,
+                    "context_hash": artifact.context_hash,
+                }
             )
             yield SocAgentStreamEvent(
                 type="custom",
@@ -95,7 +119,13 @@ class SocLeadAgentChatService:
             message = render_lead_agent_review_context_message(message=message, artifact=artifact)
         client = self._client_factory()
         for event in client.stream(message, thread_id=thread_id):
-            yield _coerce_stream_event(event, thread_id=thread_id)
+            stream_event = _coerce_stream_event(event, thread_id=thread_id)
+            yield from _review_action_proposals(
+                stream_event,
+                boundary=self._action_proposal_boundary,
+                context=request_context,
+                proposal_defaults=proposal_defaults,
+            )
 
 
 def _ensure_profile_installed(agent_name: str) -> None:
@@ -112,6 +142,36 @@ def _coerce_stream_event(event: Any, *, thread_id: str) -> SocAgentStreamEvent:
     if event_type in {"values", "end"} and "thread_id" not in payload:
         payload["thread_id"] = thread_id
     return SocAgentStreamEvent(type=event_type, data=payload)
+
+
+def _review_action_proposals(
+    event: SocAgentStreamEvent,
+    *,
+    boundary: SocLeadAgentActionProposalBoundary,
+    context: ServiceRequestContext,
+    proposal_defaults: dict[str, Any],
+) -> Iterator[SocAgentStreamEvent]:
+    if event.type != "messages-tuple":
+        yield event
+        return
+    content = event.data.get("content")
+    if not isinstance(content, str) or "<soc_action_proposal>" not in content:
+        yield event
+        return
+
+    parse_result = extract_action_proposals_from_text(content, defaults=proposal_defaults)
+    if parse_result.clean_text:
+        data = dict(event.data)
+        data["content"] = parse_result.clean_text
+        yield SocAgentStreamEvent(type=event.type, data=data)
+    for error in parse_result.errors:
+        yield action_proposal_error_event(error)
+    for proposal in parse_result.proposals:
+        yield action_proposal_event(proposal)
+        result = boundary.review(proposal, context=context)
+        yield permission_decision_event(result.permission_decision)
+        if result.approval_request is not None:
+            yield approval_request_event(result.approval_request)
 
 
 def _operator_message(request: SocAgentChatRequest) -> str:

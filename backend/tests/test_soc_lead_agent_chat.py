@@ -8,6 +8,7 @@ import pytest
 
 from deerflow.config.paths import get_paths
 from deerflow.runtime.user_context import get_effective_user_id
+from soc_agent.action_proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.contracts import (
     ActorContext,
     AlertSourceType,
@@ -21,9 +22,11 @@ from soc_agent.contracts import (
     InvestigationContext,
     ReviewQueueItem,
     ServiceRequestContext,
+    SocAgentApprovalRequest,
     SocAgentChatRequest,
     Verdict,
 )
+from soc_agent.core import SocAgentApprovalService
 from soc_agent.lead_agent_chat import SocLeadAgentChatService, SocLeadAgentProfileNotInstalledError, SocLeadAgentReviewContextError
 from soc_agent.skills import SOC_LEAD_AGENT_NAME
 
@@ -54,6 +57,42 @@ class FakeReviewContextProvider:
     def get_investigation_context(self, queue_id: str) -> InvestigationContext:
         self.calls.append(queue_id)
         return self.context
+
+
+class FakeApprovalRequestRepository:
+    def __init__(self) -> None:
+        self.requests: dict[str, SocAgentApprovalRequest] = {}
+
+    def save_approval_request(self, approval_request: SocAgentApprovalRequest) -> None:
+        self.requests[approval_request.approval_request_id] = approval_request
+
+    def get_approval_request(self, approval_request_id: str) -> SocAgentApprovalRequest | None:
+        return self.requests.get(approval_request_id)
+
+    def list_approval_requests(self, *, status: str | None = "pending", limit: int = 50) -> list[SocAgentApprovalRequest]:
+        requests = list(self.requests.values())
+        if status is not None:
+            requests = [request for request in requests if request.status == status]
+        return requests[:limit]
+
+
+class ProposalFakeDeerFlowClient(FakeDeerFlowClient):
+    def __init__(self, content: str) -> None:
+        super().__init__()
+        self.content = content
+
+    def stream(
+        self,
+        message: str,
+        *,
+        thread_id: str | None = None,
+        **kwargs,
+    ) -> Iterator[SimpleNamespace]:
+        del kwargs
+        self.calls.append((message, thread_id))
+        yield SimpleNamespace(type="values", data={"title": "SOC"})
+        yield SimpleNamespace(type="messages-tuple", data={"type": "ai", "id": "m1", "content": self.content})
+        yield SimpleNamespace(type="end", data={"usage": {"total_tokens": 1}})
 
 
 def _reset_deerflow_home(tmp_path: Path, monkeypatch) -> None:
@@ -125,6 +164,59 @@ def test_soc_lead_agent_chat_service_requires_review_provider_for_queue_context(
 
     with pytest.raises(SocLeadAgentReviewContextError, match="requires SocReviewService"):
         list(service.stream(SocAgentChatRequest(message="/open REV-1", queue_id="REV-1")))
+
+
+def test_soc_lead_agent_chat_service_routes_action_proposal_to_approval_inbox() -> None:
+    content = (
+        "I recommend analyst-approved containment.\n"
+        '<soc_action_proposal>{"route":"response.block_ip","action":"response.block_ip",'
+        '"reason":"Block the confirmed malicious source IP after analyst approval.",'
+        '"payload":{"ip":"1.2.3.4"},"confidence":0.82}</soc_action_proposal>'
+    )
+    client = ProposalFakeDeerFlowClient(content)
+    request_repository = FakeApprovalRequestRepository()
+    service = SocLeadAgentChatService(
+        client_factory=lambda: client,
+        require_profile=False,
+        action_proposal_boundary=SocLeadAgentActionProposalBoundary(
+            approval_service=SocAgentApprovalService(request_repository=request_repository),
+        ),
+    )
+    context = ServiceRequestContext(actor=ActorContext(actor_id="analyst", surface=EntrySurface.TUI))
+
+    events = list(service.stream(SocAgentChatRequest(message="contain this", thread_id="SOC-THREAD-1"), context=context))
+
+    assert events[2].type == "messages-tuple"
+    assert events[2].data["content"] == "I recommend analyst-approved containment."
+    proposal_event = events[3]
+    permission_event = events[4]
+    approval_event = events[5]
+    assert proposal_event.data["kind"] == "soc.action_proposal"
+    assert proposal_event.data["action"] == "response.block_ip"
+    assert proposal_event.data["confidence"] == 0.82
+    assert permission_event.data["kind"] == "soc.permission_decision"
+    assert permission_event.data["action"] == "response.block_ip"
+    assert permission_event.data["requires_human_approval"] is True
+    assert approval_event.data["kind"] == "soc.approval_request"
+    assert approval_event.data["source_proposal_id"] == proposal_event.data["proposal_id"]
+    assert approval_event.data["action_payload"] == {"ip": "1.2.3.4"}
+    assert approval_event.data["context_refs"]["thread_id"] == "SOC-THREAD-1"
+
+    saved = request_repository.get_approval_request(approval_event.data["approval_request_id"])
+    assert saved is not None
+    assert saved.source_proposal_id == proposal_event.data["proposal_id"]
+    assert saved.action_payload == {"ip": "1.2.3.4"}
+
+
+def test_soc_lead_agent_chat_service_rejects_bad_action_proposal_json() -> None:
+    client = ProposalFakeDeerFlowClient("Bad proposal <soc_action_proposal>{bad json}</soc_action_proposal>")
+    service = SocLeadAgentChatService(client_factory=lambda: client, require_profile=False)
+
+    events = list(service.stream(SocAgentChatRequest(message="contain this", thread_id="SOC-THREAD-1")))
+
+    assert events[2].data["content"] == "Bad proposal"
+    assert events[3].data["kind"] == "soc.action_proposal_error"
+    assert "not valid JSON" in events[3].data["error"]
 
 
 def test_soc_lead_agent_chat_service_requires_installed_profile(tmp_path: Path, monkeypatch) -> None:

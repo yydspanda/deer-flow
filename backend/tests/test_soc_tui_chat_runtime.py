@@ -79,6 +79,27 @@ def test_soc_chat_runtime_translates_lead_agent_review_context_event() -> None:
     assert translate(event) == [SystemMessage("SOC lead agent review context | queue=REV-1 | alert=ALT-1 | run=RUN-1 | hash=1234567890ab")]
 
 
+def test_soc_chat_runtime_translates_action_proposal_event() -> None:
+    event = SocAgentStreamEvent(
+        type="custom",
+        data={
+            "kind": "soc.action_proposal",
+            "proposal_id": "SAP-1",
+            "action": "response.block_ip",
+            "confidence": 0.82,
+            "reason": "Block after approval",
+        },
+    )
+
+    assert translate(event) == [SystemMessage("SOC action proposal | id=SAP-1 | action=response.block_ip | confidence=0.82 | Block after approval")]
+
+
+def test_soc_chat_runtime_translates_action_proposal_error_event() -> None:
+    event = SocAgentStreamEvent(type="custom", data={"kind": "soc.action_proposal_error", "error": "proposal block 1 is not valid JSON"})
+
+    assert translate(event) == [SystemMessage("SOC action proposal rejected | proposal block 1 is not valid JSON", tone="error")]
+
+
 def test_soc_chat_runtime_ignores_unknown_custom_event() -> None:
     event = SocAgentStreamEvent(type="custom", data={"kind": "soc.unknown"})
 

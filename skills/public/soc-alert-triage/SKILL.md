@@ -32,3 +32,5 @@ Use this skill for the general SOC triage loop.
 ## Safety Boundary
 
 Never bypass SOC core services, review queue, approval inbox, or audit records. If a user asks for blocking, isolation, account disablement, suppression, rule edits, or production changes, produce an approval-oriented plan rather than claiming execution.
+
+When running under the SOC Lead Agent and a concrete action should enter SOC policy/approval handling, emit only a structured candidate in `<soc_action_proposal>{...}</soc_action_proposal>` with `route`, `action`, `reason`, `payload`, and `confidence`. Do not infer execution from this proposal.
