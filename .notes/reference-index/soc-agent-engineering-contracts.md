@@ -392,6 +392,9 @@ Kafka daemon / consumer adapter 约束：
   - `PartitionCommitTracker` 是后续并发 controller 的 commit 推进原语；它只能做内存状态计算，不能 poll、commit、dead-letter 或调用 core service。
   - Kafka consumer poll/commit/pause/resume ownership 必须留在 poller/controller；worker 不得直接调用 Kafka consumer。
   - worker 只能调用 `SocDaemonService.process_message()` 或后续等价 core service，不得直接写 repository、commit offset 或写 dead-letter。
+  - `KafkaWorkerResult` 是 worker -> controller 的唯一返回 contract；允许状态只有 `processed`、`dead_letter_required`、`retryable_error`、`fatal_error`。
+  - `KafkaWorkerResult` 不得包含 `committed`、`dead_lettered` 或任何 broker side-effect 状态；这些只能由 poller/controller 在 dead-letter/commit 实际完成后记录。
+  - `SocKafkaWorker` 可以被当前串行 `SocKafkaConsumerRunner` 复用，但 runner/controller 仍是 commit 和 dead-letter owner。
   - offset commit 必须 partition-aware，只能推进到同一 partition 已连续完成的最大 offset + 1。
   - mapper/service failure 必须先 dead-letter 成功，再把该 offset 标记为 completed；dead-letter 失败时不得 commit 或越过该 offset。
   - 并发前必须补幂等写入边界，确保同一 `kafka:{topic}:{partition}:{offset}` 重放不会重复污染 summary、approval inbox、audit 或 memory。

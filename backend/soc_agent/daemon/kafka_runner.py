@@ -11,8 +11,9 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from soc_agent.contracts import SocDaemonProcessResult
-from soc_agent.core import SocDaemonService, SocServiceError
-from soc_agent.daemon.kafka_mapper import DEFAULT_ALERT_TOPICS, DEFAULT_APPROVAL_REQUEST_TOPICS, KafkaMapperError, KafkaRecord, map_kafka_record_to_daemon_message
+from soc_agent.core import SocDaemonService
+from soc_agent.daemon.kafka_mapper import DEFAULT_ALERT_TOPICS, DEFAULT_APPROVAL_REQUEST_TOPICS, KafkaRecord
+from soc_agent.daemon.kafka_worker import KafkaWorkerResultStatus, SocKafkaWorker
 
 
 class KafkaConsumerPort(Protocol):
@@ -74,9 +75,11 @@ class SocKafkaConsumerRunner:
         approval_request_topics: frozenset[str] = DEFAULT_APPROVAL_REQUEST_TOPICS,
     ) -> None:
         self._consumer = consumer
-        self._daemon_service = daemon_service
-        self._alert_topics = alert_topics
-        self._approval_request_topics = approval_request_topics
+        self._worker = SocKafkaWorker(
+            daemon_service=daemon_service,
+            alert_topics=alert_topics,
+            approval_request_topics=approval_request_topics,
+        )
 
     def process_next(self) -> KafkaRunnerProcessResult:
         record = self._consumer.poll()
@@ -104,30 +107,32 @@ class SocKafkaConsumerRunner:
         return KafkaRunnerLoopResult(results=results)
 
     def process_record(self, record: KafkaRecord) -> KafkaRunnerProcessResult:
-        try:
-            message = map_kafka_record_to_daemon_message(
-                record,
-                alert_topics=self._alert_topics,
-                approval_request_topics=self._approval_request_topics,
-            )
-            daemon_result = self._daemon_service.process_message(message)
+        worker_result = self._worker.process_record(record)
+        if worker_result.status == KafkaWorkerResultStatus.PROCESSED:
             self._consumer.commit(record)
             return KafkaRunnerProcessResult(
                 status="processed",
                 record=record,
-                daemon_result=daemon_result,
+                daemon_result=worker_result.daemon_result,
                 committed=True,
             )
-        except (KafkaMapperError, SocServiceError) as exc:
-            self._consumer.send_dead_letter(record, exc)
+
+        if worker_result.status == KafkaWorkerResultStatus.DEAD_LETTER_REQUIRED:
+            if worker_result.error is None:
+                raise RuntimeError("dead-letter worker result missing error")
+            self._consumer.send_dead_letter(record, worker_result.error.as_exception())
             self._consumer.commit(record)
             return KafkaRunnerProcessResult(
                 status="dead_lettered",
                 record=record,
-                error=str(exc),
+                error=worker_result.error.message,
                 committed=True,
                 dead_lettered=True,
             )
+
+        if worker_result.error is None:
+            raise RuntimeError(f"unsupported worker result: {worker_result.status.value}")
+        raise worker_result.error.as_exception()
 
     def close(self) -> None:
         self._consumer.close()

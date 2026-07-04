@@ -24,6 +24,7 @@ from soc_agent.daemon.kafka_daemon import (
 from soc_agent.daemon.kafka_mapper import KafkaMapperError, KafkaRecord, map_kafka_record_to_daemon_message
 from soc_agent.daemon.kafka_runner import KafkaConsumerPort, KafkaRunnerLoopResult, KafkaRunnerProcessResult, SocKafkaConsumerRunner
 from soc_agent.daemon.kafka_status import KafkaDaemonBrokerStatus, KafkaDaemonDatabaseStatus, KafkaDaemonStatus, build_kafka_daemon_status
+from soc_agent.daemon.kafka_worker import KafkaWorkerError, KafkaWorkerResult, KafkaWorkerResultStatus, SocKafkaWorker
 
 __all__ = [
     "ConfluentKafkaConsumerPort",
@@ -44,10 +45,14 @@ __all__ = [
     "KafkaRunnerLoopResult",
     "KafkaRunnerProcessResult",
     "KafkaSecurityProtocol",
+    "KafkaWorkerError",
+    "KafkaWorkerResult",
+    "KafkaWorkerResultStatus",
     "JsonLineKafkaDaemonMetricSink",
     "NullKafkaConsumerPort",
     "PartitionCommitStateSnapshot",
     "PartitionCommitTracker",
+    "SocKafkaWorker",
     "SocKafkaDaemonRunner",
     "SocKafkaConsumerRunner",
     "build_kafka_consumer_port",

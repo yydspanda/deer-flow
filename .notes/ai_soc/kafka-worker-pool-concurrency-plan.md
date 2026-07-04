@@ -1,6 +1,6 @@
 # SOC Kafka Worker Pool / Concurrency Plan
 
-> 状态：Planning + first primitive implemented。当前不立即实现并发代码；先固定语义边界，避免后续为了吞吐破坏 Kafka offset、dead-letter、审批和审计可靠性。
+> 状态：Planning + required primitives implemented / concurrency deferred。当前不立即实现并发代码；已固定 commit tracker、幂等写入边界和 worker result contract，后续等真实吞吐、延迟、DB/LLM 限流数据明确后再打开 worker pool。
 
 ## 背景
 
@@ -229,11 +229,12 @@ commit(topic, partition, next_committable_offset)
 2. **WorkerPoolResult contract**
    - dataclass/Pydantic schema，先不启动线程。
    - 明确 worker 不 commit、不 dead-letter。
-   - 当前状态：Next。
+   - 当前状态：Done，已落地 `backend/soc_agent/daemon/kafka_worker.py`，包括 `KafkaWorkerResultStatus`、`KafkaWorkerError`、`KafkaWorkerResult` 和 `SocKafkaWorker`。
 
 3. **Bounded worker pool behind flag**
    - `SOC_KAFKA_WORKER_CONCURRENCY=1` 默认保持旧行为。
    - `>1` 才进入新 controller。
+   - 当前状态：Deferred，等真实 Kafka/DB/K8s 参数、吞吐/延迟数据、LLM 独立限流策略明确后再做。
 
 4. **JSONL metrics**
    - 输出 queue/in-flight/latency。

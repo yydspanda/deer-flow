@@ -23,12 +23,12 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前阶段 | Phase 1：CLI + Runtime 可靠性闭环 |
-| 当前目标 | 建立 SOC Agent 最小可靠闭环：contracts schema、Runtime 状态机、step trace、validator、headless CLI analyze、run 输入快照、replay contract、PostgreSQL repository、Alembic migration、alert summary 读模型 |
+| 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP 准备 |
+| 当前目标 | Kafka ingestion 基线已收口；下一阶段切回 SOC Agent 主线：domain skill resolver、SOC Lead Agent MVP、关联/记忆闭环 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Kafka WorkerPoolResult contract |
+| 当前下一刀 | SocSkillResolver + SOC Lead Agent MVP planning/contract |
 
 ## Phase 1 切片计划
 
@@ -98,8 +98,31 @@
 | 62 | Kafka worker pool / concurrency planning | Done | 新增并发规划文档，明确 poller ownership、partition-aware commit、bounded in-flight、幂等前置和 LLM 独立限流 |
 | 63 | Kafka partition commit tracker | Done | 新增纯内存 `PartitionCommitTracker`，锁定乱序完成、dead-letter pending、多 partition 和已提交边界的 commit 推进规则 |
 | 64 | Kafka daemon idempotency hardening | Done | `SocAnalysisService` 通过 audit idempotency key 复用既有 run，避免同一 Kafka offset 重放重复写 summary/review/audit |
+| 65 | Kafka WorkerPoolResult contract | Done | 新增 `KafkaWorkerResult` / `SocKafkaWorker`，worker 只返回 processed/dead_letter_required/retryable/fatal 结构化结果；不 commit、不 dead-letter、不启动并发 |
+| 66 | SocSkillResolver + SOC Lead Agent MVP | Planned | 切回 SOC Agent 主线：按 source/detection/entities 选择 domain skill；Lead Agent 对话/调查计划复用现有 chat stream、approval boundary 和 core services |
 
 ## 进度记录
+
+### 2026-07-04 — Kafka WorkerPoolResult contract 收口切片
+
+- 背景：
+  - Kafka 串行 runner、真实 broker adapter、daemon run loop、production entrypoint、healthcheck、JSONL metrics、K8s template、partition commit tracker 和幂等写入边界已经具备。
+  - 继续实现 worker pool 会把当前工作带入 Phase 4 吞吐优化，偏离 SOC Agent 主线。
+- 变更：
+  - 新增 `backend/soc_agent/daemon/kafka_worker.py`。
+  - 新增 `KafkaWorkerResultStatus`：`processed`、`dead_letter_required`、`retryable_error`、`fatal_error`。
+  - 新增 `KafkaWorkerError` 和 `KafkaWorkerResult`，明确 worker result 不包含 commit/dead-letter 状态。
+  - 新增 `SocKafkaWorker`，只负责 `KafkaRecord -> SocDaemonMessage -> SocDaemonService.process_message()`。
+  - `SocKafkaConsumerRunner` 改为复用 `SocKafkaWorker`，但仍由 runner 负责 commit 和 dead-letter，现有串行语义不变。
+- 边界：
+  - 本切片不启动线程、不实现 bounded worker pool、不改变生产默认 `worker_concurrency=1`。
+  - 真正并发等真实 Kafka/DB/K8s 参数、吞吐/延迟数据和 LLM 限流策略明确后再打开。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/daemon/kafka_worker.py soc_agent/daemon/kafka_runner.py soc_agent/daemon/__init__.py tests/test_soc_daemon_kafka_worker.py tests/test_soc_daemon_kafka_runner.py tests/test_soc_daemon_kafka_commit_tracker.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_kafka_worker.py tests/test_soc_daemon_kafka_runner.py tests/test_soc_daemon_kafka_commit_tracker.py`
+- 下一步：
+  - Kafka 进入收口/暂缓状态。
+  - 切回 SOC Agent 主线，先做 `SocSkillResolver + SOC Lead Agent MVP` 的 contract 和最小实现。
 
 ### 2026-07-03 — Kafka daemon idempotency hardening 切片
 
