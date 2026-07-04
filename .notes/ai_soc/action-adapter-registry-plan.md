@@ -1,6 +1,6 @@
 # SOC Action Adapter Registry Plan
 
-> 状态：Phase 1 收口规划已开始。当前已固定 contract、本地 dry-run-only adapter、approval service dry-run / execute preflight，并新增第一个具体只读 `asset.lookup` adapter；仍不接生产 EDR/F5/MCP 副作用。
+> 状态：Phase 1 收口规划已开始。当前已固定 contract、本地 dry-run-only adapter、approval service dry-run / execute preflight、第一个具体只读 `asset.lookup` adapter，以及显式 read-only adapter dispatcher/tool gateway wiring；仍不接生产 EDR/F5/MCP 副作用。
 
 ## 背景
 
@@ -36,6 +36,7 @@ Lead Agent / Skill / Daemon
 - `SocAgentApprovalService.dry_run_approved_action()`：有 registry 时先校验 grant，再把 approval request 中的 `action_payload/context_refs` 与 command payload 合并后交给 registry dry-run；没有 registry 时保持 token-only dry-run 兼容。
 - `SocAgentApprovalService.execute_approved_action()`：有 registry 时，在消费 token 前先调用 registry execute preflight，确认 adapter 存在、支持 execute、payload/context refs 齐全；当前仍不调用 adapter.execute，不产生外部副作用。
 - `InMemoryAssetLookupActionAdapter`：第一个具体 read-only adapter，route/action 固定为 `asset.lookup`，只读查询 in-memory/static inventory，用于验证 descriptor、dry-run、execute preflight 和 result payload；不是生产资产系统接入。
+- `SocAgentActionDispatcher` read-only adapter path：显式 `metadata.soc_route=asset.lookup` 且 router allowlist 打开时，dispatcher 可通过注入的 `SocActionAdapterRegistry` 执行只读 adapter，并把 adapter result payload 通过 `soc.action_result` stream event 暴露；默认 chat router 仍不开放 `asset.lookup`。
 
 ## Contract 约束
 
@@ -59,6 +60,9 @@ Lead Agent / Skill / Daemon
 - dry-run 永远不能产生外部副作用。
 - execute 必须在 approval grant token、idempotency key、adapter descriptor、payload/context 校验都通过后才允许调用真实 adapter。
 - adapter result 必须进入 `SocAgentActionResult.payload`，并保留 `adapter_id`、`external_side_effect`、幂等键和执行者。
+- read-only adapter 运行态调用必须来自显式 tool/gateway metadata，例如 `SocAgentChatRequest.metadata["soc_route"]` 和 `metadata["action_payload"]`；不能从自然语言消息里猜测 route 或 payload。
+- read-only adapter 也必须同时满足 router allowlist、permission policy 和 registry 精确匹配；缺少任一层都必须 fail-fast。
+- `soc.action_result` stream event 必须携带 result payload，供 TUI/Web/Channels 可观测 adapter 输出。
 - 真实 MCP/HTTP/厂商 SDK 类型只能出现在具体 adapter module，不能扩散到 core、API、TUI、Web。
 - Web/TUI 只能展示 `SocAgentActionResult`，不能自行调用 adapter。
 
@@ -78,11 +82,16 @@ Lead Agent / Skill / Daemon
    - 先接只读查询类 adapter，例如资产归属查询或 EDR 进程树查询。
    - 封禁 IP、隔离终端、禁用账号等 write/destructive adapter 等 staging eval、审计和补偿策略稳定后再接。
 
-4. **Read-only adapter dispatcher / tool gateway wiring**（Next）
-   - 明确 `asset.lookup` 通过 action dispatcher、tool gateway 还是 Lead Agent tool bridge 进入运行态。
+4. **Read-only adapter dispatcher / tool gateway wiring**（Done）
+   - `asset.lookup` 通过显式 chat/tool gateway metadata 进入 action dispatcher：`metadata.soc_route=asset.lookup` + `metadata.action_payload`。
    - 默认不加入 chat router 白名单；必须显式 route / skill / tool policy 打开。
-   - read-only adapter execute 仍要写 audit/result payload，不能只把结果塞回 prompt。
+   - read-only adapter execute 结果进入 `SocAgentActionResult.payload` 和 `soc.action_result.payload`，不能只把结果塞回 prompt。
 
-5. **MCP adapter bridge**
+5. **SOC Lead Agent read-only tool proposal bridge**
+   - 让 SOC Lead Agent 只能通过结构化 tool/proposal envelope 请求 `asset.lookup` 等只读 action。
+   - bridge 负责把 proposal 转成显式 `metadata.soc_route/action_payload`，再走同一条 router/policy/dispatcher/registry 链路。
+   - 不允许 Lead Agent 直接 import adapter 或直接调用 MCP/资产系统。
+
+6. **MCP adapter bridge**
    - 复用 DeerFlow MCP/tool 能力，但通过 SOC adapter descriptor 限定 action 名称、参数 schema、风险等级和审计字段。
    - 用户可配置 readonly MCP 候选；高风险 MCP group 只允许管理员启用，并继续走 approval。

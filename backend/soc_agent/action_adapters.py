@@ -8,8 +8,8 @@ from typing import Any
 from soc_agent.contracts import (
     ServiceRequestContext,
     SocAgentActionAdapterDescriptor,
+    SocAgentActionCommand,
     SocAgentActionResult,
-    SocAgentApprovedActionCommand,
     SocAgentRiskLevel,
     SocAssetLookupRecord,
 )
@@ -63,7 +63,7 @@ class SocActionAdapterRegistry:
 
     def dry_run(
         self,
-        command: SocAgentApprovedActionCommand,
+        command: SocAgentActionCommand,
         *,
         context: ServiceRequestContext,
     ) -> SocAgentActionResult:
@@ -76,7 +76,7 @@ class SocActionAdapterRegistry:
 
     def execute(
         self,
-        command: SocAgentApprovedActionCommand,
+        command: SocAgentActionCommand,
         *,
         context: ServiceRequestContext,
     ) -> SocAgentActionResult:
@@ -87,7 +87,7 @@ class SocActionAdapterRegistry:
 
     def preflight_execute(
         self,
-        command: SocAgentApprovedActionCommand,
+        command: SocAgentActionCommand,
         *,
         context: ServiceRequestContext,
     ) -> SocAgentActionResult:
@@ -144,7 +144,7 @@ class DryRunOnlySocActionAdapter:
 
     def dry_run(
         self,
-        command: SocAgentApprovedActionCommand,
+        command: SocAgentActionCommand,
         *,
         context: ServiceRequestContext,
     ) -> SocAgentActionResult:
@@ -179,7 +179,7 @@ class DryRunOnlySocActionAdapter:
 
     def execute(
         self,
-        command: SocAgentApprovedActionCommand,
+        command: SocAgentActionCommand,
         *,
         context: ServiceRequestContext,
     ) -> SocAgentActionResult:
@@ -244,7 +244,7 @@ class InMemoryAssetLookupActionAdapter:
 
     def dry_run(
         self,
-        command: SocAgentApprovedActionCommand,
+        command: SocAgentActionCommand,
         *,
         context: ServiceRequestContext,
     ) -> SocAgentActionResult:
@@ -273,7 +273,7 @@ class InMemoryAssetLookupActionAdapter:
 
     def execute(
         self,
-        command: SocAgentApprovedActionCommand,
+        command: SocAgentActionCommand,
         *,
         context: ServiceRequestContext,
     ) -> SocAgentActionResult:
@@ -315,7 +315,7 @@ def _adapter_key(route: str, action: str) -> tuple[str, str]:
 
 
 def _validate_command_matches_descriptor(
-    command: SocAgentApprovedActionCommand,
+    command: SocAgentActionCommand,
     descriptor: SocAgentActionAdapterDescriptor,
 ) -> None:
     if command.route != descriptor.route:

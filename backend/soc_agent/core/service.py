@@ -36,6 +36,7 @@ from soc_agent.contracts import (
     ReviewQueueStatus,
     ServiceRequestContext,
     SimilarAlertQuery,
+    SocAgentActionCommand,
     SocAgentActionResult,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
@@ -1123,9 +1124,16 @@ class SocAgentActionPolicy:
 class SocAgentActionDispatcher:
     """Dispatch allowed SOC Agent routes to explicit service actions."""
 
-    def __init__(self, *, review_service: SocReviewService | None = None, action_policy: SocAgentActionPolicy | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        review_service: SocReviewService | None = None,
+        action_policy: SocAgentActionPolicy | None = None,
+        action_adapter_registry: SocActionAdapterRegistryPort | None = None,
+    ) -> None:
         self._review_service = review_service
         self._action_policy = action_policy or SocAgentActionPolicy()
+        self._action_adapter_registry = action_adapter_registry
 
     def check_permission(
         self,
@@ -1179,6 +1187,8 @@ class SocAgentActionDispatcher:
             )
         if permission.action == "review.open_context":
             return self._open_review_context(request, route_decision=route_decision, context=context)
+        if permission.risk_level is SocAgentRiskLevel.READ_ONLY:
+            return self._dispatch_read_only_adapter(request, permission=permission, context=context)
         return SocAgentActionResult(
             route=route_decision.route,
             action=permission.action,
@@ -1224,6 +1234,36 @@ class SocAgentActionDispatcher:
             payload=payload,
         )
 
+    def _dispatch_read_only_adapter(
+        self,
+        request: SocAgentChatRequest,
+        *,
+        permission: SocAgentPermissionDecision,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if self._action_adapter_registry is None:
+            return SocAgentActionResult(
+                route=permission.route,
+                action=permission.action,
+                status="failed",
+                message=f"read-only action {permission.action} requires an action adapter registry",
+            )
+        command = SocAgentActionCommand(
+            route=permission.route,
+            action=permission.action,
+            dry_run=False,
+            payload=_action_adapter_payload_from_request(request),
+        )
+        try:
+            return self._action_adapter_registry.execute(command, context=context)
+        except (LookupError, ValueError) as exc:
+            return SocAgentActionResult(
+                route=permission.route,
+                action=permission.action,
+                status="failed",
+                message=f"read-only action adapter execution failed: {exc}",
+            )
+
 
 def _coerce_chat_request(request: SocAgentChatRequest | str) -> SocAgentChatRequest:
     if isinstance(request, SocAgentChatRequest):
@@ -1232,6 +1272,9 @@ def _coerce_chat_request(request: SocAgentChatRequest | str) -> SocAgentChatRequ
 
 
 def _route_name(request: SocAgentChatRequest) -> str:
+    metadata_route = _metadata_soc_route(request)
+    if metadata_route:
+        return metadata_route
     if request.queue_id:
         return "review.open_context"
     if request.message.strip().startswith("/"):
@@ -1249,6 +1292,28 @@ def _action_name_for_route(route: str) -> str:
     if route in SocAgentActionPolicy.READ_ONLY_ACTIONS | SocAgentActionPolicy.ANALYST_WRITE_ACTIONS | SocAgentActionPolicy.HIGH_RISK_ACTIONS:
         return route
     return "route.unsupported"
+
+
+def _metadata_soc_route(request: SocAgentChatRequest) -> str | None:
+    route = request.metadata.get("soc_route")
+    if isinstance(route, str) and route.strip():
+        return route.strip()
+    return None
+
+
+def _action_adapter_payload_from_request(request: SocAgentChatRequest) -> dict[str, Any]:
+    raw_payload = request.metadata.get("action_payload")
+    payload = dict(raw_payload) if isinstance(raw_payload, Mapping) else {}
+    context_refs = dict(payload.get("context_refs")) if isinstance(payload.get("context_refs"), Mapping) else {}
+    if request.thread_id:
+        context_refs.setdefault("thread_id", request.thread_id)
+    if request.queue_id:
+        context_refs.setdefault("queue_id", request.queue_id)
+    if request.run_id:
+        context_refs.setdefault("run_id", request.run_id)
+    if context_refs:
+        payload["context_refs"] = context_refs
+    return payload
 
 
 def _route_decision_event(decision: SocAgentRouteDecision) -> SocAgentStreamEvent:
@@ -1329,6 +1394,7 @@ def _action_result_event(result: SocAgentActionResult) -> SocAgentStreamEvent:
             "status": result.status,
             "message": result.message,
             "requires_human_approval": result.requires_human_approval,
+            "payload": result.payload,
         },
     )
 

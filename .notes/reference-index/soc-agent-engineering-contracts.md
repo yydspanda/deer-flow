@@ -244,7 +244,10 @@ SOC Agent chat stream 约束：
   - dispatcher 可以调用 core service，例如 `SocReviewService.get_investigation_context()`。
   - dispatcher 不能直接 import repository、normalizer、runtime pipeline、Gateway router、TUI app 或 MCP client。
   - 每次 dispatch 必须返回 `SocAgentActionResult`，并通过 `custom kind=soc.action_result` 出现在 stream 中。
-  - 当前允许的真实 service action 只有 `review.open_context`；`chat.ready_message` 只是 deterministic shell message。
+  - `custom kind=soc.action_result` 必须携带 `SocAgentActionResult.payload`，让 TUI/Web/Channels 可观察 read-only adapter 输出、approval boundary result 和后续 tool result。
+  - 当前允许的真实 service/action path 包括 `review.open_context` 和显式 read-only adapter route；`chat.ready_message` 只是 deterministic shell message。
+  - 显式 read-only adapter route 只能来自受控 tool/gateway metadata，例如 `SocAgentChatRequest.metadata["soc_route"]` 和 `metadata["action_payload"]`；不得从自然语言消息里猜测 route 或 payload。
+  - dispatcher 调用 read-only adapter 前必须同时满足 capability router allowlist、permission policy 和 action adapter registry 精确匹配；缺少 registry、payload 或 adapter 时必须 fail-fast。
   - 后续 `review.correct`、`analysis.replay`、封禁/隔离/下发规则等 action 必须先补 permission/human approval，再接 service command。
 - `SocAgentActionPolicy` 是 action 执行前权限闸门：
   - 每次 allowed route 进入 dispatcher 前必须先得到 `SocAgentPermissionDecision`，并通过 `custom kind=soc.permission_decision` 出现在 stream 中。
@@ -264,7 +267,8 @@ SOC Agent chat stream 约束：
   - `SocAgentApprovalGrantRepository` 是 approval grant 的持久化边界；`approve()` 在 repository 存在时必须保存 grant。
   - SQLAlchemy repository 必须持久化 `SocAgentApprovalGrant` 的 approve/consume 全量 payload，并提供按 `approval_grant_id` 和 `execution_token_id` 查询。
   - `soc_approval_grants` 表必须保存扁平索引字段和完整 `grant_payload`；索引至少覆盖 `execution_token_id`、`approval_request_id`、`permission_decision_id`、`route`、`action`、`risk_level`、`status`、`expires_at`、`consumed_at`、`consume_idempotency_key`、`execution_result_id`。
-  - `SocAgentApprovedActionCommand` 是审批后执行入口的显式 contract；必须包含 `execution_token_id`、`route`、`action`，并显式区分 `dry_run=True/False`。
+  - `SocAgentActionCommand` 是 action adapter 的基础执行 contract；必须包含 `route`、`action`、`dry_run` 和 `payload`，供 read-only adapter、dry-run 和 execute preflight 共用。
+  - `SocAgentApprovedActionCommand` 是审批后执行入口的显式 contract，继承 `SocAgentActionCommand` 并额外要求 `execution_token_id`；必须显式区分 `dry_run=True/False`。
   - `SocAgentApprovalService.dry_run_approved_action()` 必须先做 token 存在性、过期时间、route/action 一致性校验；没有 action adapter registry 时保持 token-only dry-run 兼容，有 registry 时必须继续调用 registry dry-run 校验 allowlist、payload 和 context refs；不得调用外部工具、不得修改业务状态、不得把 dry-run 结果当作真实处置完成。
   - `SocAgentApprovalService.execute_approved_action()` 是真实执行前的稳定边界：必须要求 `dry_run=False` 和 `idempotency_key`；有 action adapter registry 时，必须在消费 token 前完成 adapter execute preflight；preflight 成功后才能消费一次性 token，并把 `consumed_at`、`consumed_by`、`consume_idempotency_key`、`execution_result_id`、`execution_result_payload` 写回 grant。
   - `execute_approved_action()` 当前只做 execute preflight、消费 token 和记录 execution boundary audit，不调用外部工具、不封禁 IP、不隔离终端、不改生产系统；真实外部副作用只能在后续 action adapter execute 接入后打开。
@@ -275,7 +279,8 @@ SOC Agent chat stream 约束：
   - `DryRunOnlySocActionAdapter` 只能用于规划、测试和未上线动作；它可以校验 payload/context refs，但 execute 必须返回 failed 且 `external_side_effect=not_executed`。
   - `SocAgentApprovalService` 接 registry 时，必须先完成 approval grant 校验，再进行 adapter dry-run 或 execute preflight；payload 可以合并 approval request 的 `action_payload/context_refs` 和 command payload，其中 command payload 是显式覆盖。execute preflight 必须在消费 token 前完成 adapter 存在性、execute 支持度和参数校验，失败时 grant 必须保持 `approved`，避免 token 被消费后才发现 adapter 不可执行。
   - `asset.lookup` 是第一个具体 read-only adapter action，`risk_level=read_only`、`external_side_effect=read`、`execute_supported=True`，当前实现为 `InMemoryAssetLookupActionAdapter`，只服务本地开发/测试和 contract 验证；生产资产系统必须后续通过独立 adapter/MCP bridge 接入。
-  - `asset.lookup` 可以登记为 read-only policy action，但不能默认加入 chat router 白名单；运行态调用必须等 read-only adapter dispatcher/tool gateway wiring 落地后再开放。
+  - `asset.lookup` 可以登记为 read-only policy action，但不能默认加入 chat router 白名单；运行态调用只能通过显式 `soc_route=asset.lookup`、显式 `action_payload.asset_key`、显式 router allowlist 和注入的 action adapter registry 打开。
+  - Lead Agent 后续如需查询 `asset.lookup`，必须输出结构化 tool/proposal envelope，由 bridge 转成同一条 router/policy/dispatcher/registry 链路；Lead Agent 不得直接调用 adapter、MCP 或资产系统。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
     - `POST /api/soc/approvals/grants`
     - `POST /api/soc/approvals/actions/dry-run`

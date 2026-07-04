@@ -18,10 +18,10 @@ from soc_agent.contracts import (
     SimilarAlertMatch,
     SimilarAlertQuery,
     SocAgentActionAdapterDescriptor,
+    SocAgentActionCommand,
     SocAgentActionResult,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
-    SocAgentApprovedActionCommand,
     SocEvent,
 )
 
@@ -132,14 +132,14 @@ class SocActionAdapter(Protocol):
 
     def dry_run(
         self,
-        command: SocAgentApprovedActionCommand,
+        command: SocAgentActionCommand,
         *,
         context: ServiceRequestContext,
     ) -> SocAgentActionResult: ...
 
     def execute(
         self,
-        command: SocAgentApprovedActionCommand,
+        command: SocAgentActionCommand,
         *,
         context: ServiceRequestContext,
     ) -> SocAgentActionResult: ...
@@ -150,21 +150,21 @@ class SocActionAdapterRegistryPort(Protocol):
 
     def dry_run(
         self,
-        command: SocAgentApprovedActionCommand,
+        command: SocAgentActionCommand,
         *,
         context: ServiceRequestContext,
     ) -> SocAgentActionResult: ...
 
     def execute(
         self,
-        command: SocAgentApprovedActionCommand,
+        command: SocAgentActionCommand,
         *,
         context: ServiceRequestContext,
     ) -> SocAgentActionResult: ...
 
     def preflight_execute(
         self,
-        command: SocAgentApprovedActionCommand,
+        command: SocAgentActionCommand,
         *,
         context: ServiceRequestContext,
     ) -> SocAgentActionResult: ...

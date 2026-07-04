@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；第一个具体 read-only adapter 已落地 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；第一个具体 read-only adapter 已通过显式 dispatcher/tool gateway 进入运行态 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Read-only adapter dispatcher / tool gateway wiring |
+| 当前下一刀 | SOC Lead Agent read-only tool proposal bridge |
 
 ## Phase 1 切片计划
 
@@ -110,9 +110,39 @@
 | 74 | Approval service adapter dry-run integration | Done | `SocAgentApprovalService.dry_run_approved_action()` 在 token 校验后可选调用 action adapter registry dry-run，校验 allowlist、payload 和 context refs；默认仍兼容无 registry 的 token-only dry-run |
 | 75 | Execute adapter preflight before token consume | Done | `execute_approved_action()` 在消费 token 前可选校验 adapter 存在性、execute 支持度、payload 和 context refs；仍不接生产副作用 |
 | 76 | First concrete safe read-only adapter | Done | 先接只读查询类 adapter（资产归属查询或 EDR 进程树查询），验证 adapter descriptor、dry-run、execute preflight 与审计 payload；不接封禁/隔离等写动作 |
-| 77 | Read-only adapter dispatcher / tool gateway wiring | Planned | 明确 `asset.lookup` 如何通过受控 route/tool gateway 进入运行态；默认不加入 chat router 白名单；结果必须写入 action result / audit payload |
+| 77 | Read-only adapter dispatcher / tool gateway wiring | Done | 明确 `asset.lookup` 如何通过受控 route/tool gateway 进入运行态；默认不加入 chat router 白名单；结果必须写入 action result / audit payload |
+| 78 | SOC Lead Agent read-only tool proposal bridge | Planned | Lead Agent 只能通过结构化 envelope 请求 `asset.lookup` 等只读能力；bridge 转成同一条 router/policy/dispatcher/registry 链路；不直接调用 adapter/MCP |
 
 ## 进度记录
+
+### 2026-07-05 — Read-only adapter dispatcher / tool gateway wiring 切片
+
+- 背景：
+  - `asset.lookup` adapter 已存在，但仍只在 adapter/approval contract 层验证。
+  - 需要先打通只读 adapter 的受控运行态入口，再考虑让 Lead Agent 或 MCP bridge 使用。
+- 变更：
+  - 新增 `SocAgentActionCommand` 作为 adapter 基础 command contract；`SocAgentApprovedActionCommand` 继承它并额外要求 `execution_token_id`。
+  - `SocAgentActionDispatcher` 增加可选 `action_adapter_registry`：
+    - read-only action 通过 registry execute 调用 adapter。
+    - 缺少 registry、adapter 或 payload 校验失败时 fail-fast。
+    - 不影响 high-risk approval request / approved action token 流程。
+  - `SocAgentChatService` 的 route 解析支持显式 `metadata.soc_route`；adapter payload 只从 `metadata.action_payload` 和 request context refs 构造，不从自然语言猜测。
+  - `soc.action_result` stream event 增加 `payload`，让 TUI/Web/Channels 能看到 read-only adapter 输出。
+  - `asset.lookup` 默认仍不在 chat router 白名单内；必须显式构造 `SocAgentCapabilityRouter(allowed_routes={"asset.lookup"})` 并注入 adapter registry 才能运行。
+  - 更新 action adapter plan、工程契约、主方案，固定 read-only tool gateway 边界。
+- 边界：
+  - 不接生产资产系统。
+  - 不让 Lead Agent 直接调用 adapter/MCP。
+  - 不开放自然语言 route/payload 推断。
+  - 不接封禁、隔离、禁用账号等 write/destructive action。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/action_adapters.py soc_agent/contracts/schemas.py soc_agent/contracts/__init__.py soc_agent/core/service.py soc_agent/protocols.py tests/test_soc_action_adapters.py tests/test_soc_agent_service.py`
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/action_adapters.py soc_agent/contracts/schemas.py soc_agent/contracts/__init__.py soc_agent/core/service.py soc_agent/protocols.py tests/test_soc_action_adapters.py tests/test_soc_agent_service.py --check`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_action_adapters.py tests/test_soc_agent_service.py::test_agent_chat_service_does_not_allow_asset_lookup_by_default tests/test_soc_agent_service.py::test_agent_chat_service_dispatches_explicit_read_only_asset_lookup_adapter`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_action_adapters.py tests/test_soc_agent_service.py tests/test_soc_approvals_router.py tests/test_soc_lead_agent_chat.py tests/test_soc_tui_chat_runtime.py`
+  - `codegraph sync .`
+- 下一步：
+  - 做 SOC Lead Agent read-only tool proposal bridge：Lead Agent 只能输出结构化只读 tool/proposal envelope，由 bridge 转成显式 route/payload，再走同一条 router/policy/dispatcher/registry 链路。
 
 ### 2026-07-05 — First concrete safe read-only adapter 切片
 

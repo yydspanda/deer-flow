@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from soc_agent.action_adapters import DryRunOnlySocActionAdapter, SocActionAdapterRegistry
+from soc_agent.action_adapters import DryRunOnlySocActionAdapter, InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
 from soc_agent.contracts import (
     ActorContext,
     ActorType,
@@ -30,6 +30,7 @@ from soc_agent.contracts import (
     SocAgentPermissionDecision,
     SocAgentRiskLevel,
     SocAgentRouteDecision,
+    SocAssetLookupRecord,
     SocDaemonMessage,
     SocEvent,
     SocEventType,
@@ -272,6 +273,20 @@ def _block_ip_adapter_descriptor(*, execute_supported: bool = False) -> SocAgent
         required_payload_fields=["ip", "duration_seconds"],
         required_context_refs=["queue_id", "run_id"],
         description="Test block-ip adapter descriptor.",
+    )
+
+
+def _asset_lookup_record() -> SocAssetLookupRecord:
+    return SocAssetLookupRecord(
+        asset_key="srv-payments-01",
+        asset_id="asset-001",
+        hostname="srv-payments-01",
+        primary_ip="10.10.1.5",
+        owner="payments-sre",
+        business_unit="payments",
+        environment="prod",
+        criticality="critical",
+        source="unit-test",
     )
 
 
@@ -725,6 +740,62 @@ def test_agent_chat_service_denies_unlisted_route() -> None:
     assert events[1].data["route"] == "review.open_context"
     assert events[1].data["allowed"] is False
     assert "Route denied" in events[2].data["content"]
+
+
+def test_agent_chat_service_does_not_allow_asset_lookup_by_default() -> None:
+    request = SocAgentChatRequest(
+        message="lookup asset",
+        metadata={
+            "soc_route": "asset.lookup",
+            "action_payload": {"asset_key": "10.10.1.5"},
+        },
+    )
+
+    events = list(SocAgentChatService().stream(request))
+
+    assert [event.type for event in events] == ["values", "custom", "messages-tuple", "end"]
+    assert events[1].data["kind"] == "soc.route_decision"
+    assert events[1].data["route"] == "asset.lookup"
+    assert events[1].data["allowed"] is False
+    assert "Route denied" in events[2].data["content"]
+
+
+def test_agent_chat_service_dispatches_explicit_read_only_asset_lookup_adapter() -> None:
+    registry = SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter(records=[_asset_lookup_record()])])
+    service = SocAgentChatService(
+        capability_router=SocAgentCapabilityRouter(allowed_routes={"asset.lookup"}),
+        action_dispatcher=SocAgentActionDispatcher(action_adapter_registry=registry),
+    )
+    request = SocAgentChatRequest(
+        message="lookup asset",
+        metadata={
+            "soc_route": "asset.lookup",
+            "action_payload": {"asset_key": "10.10.1.5"},
+        },
+    )
+
+    events = list(
+        service.stream(
+            request,
+            context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI)),
+        )
+    )
+
+    assert [event.type for event in events] == ["values", "custom", "custom", "custom", "messages-tuple", "end"]
+    assert events[1].data["kind"] == "soc.route_decision"
+    assert events[1].data["route"] == "asset.lookup"
+    assert events[1].data["allowed"] is True
+    assert events[2].data["kind"] == "soc.permission_decision"
+    assert events[2].data["action"] == "asset.lookup"
+    assert events[2].data["risk_level"] == "read_only"
+    assert events[2].data["allowed"] is True
+    assert events[3].data["kind"] == "soc.action_result"
+    assert events[3].data["action"] == "asset.lookup"
+    assert events[3].data["status"] == "success"
+    assert events[3].data["payload"]["asset_found"] is True
+    assert events[3].data["payload"]["asset_record"]["asset_id"] == "asset-001"
+    assert events[3].data["payload"]["external_side_effect"] == "read"
+    assert "Asset lookup completed" in events[4].data["content"]
 
 
 def test_agent_chat_service_requires_review_service_for_queue_context() -> None:
