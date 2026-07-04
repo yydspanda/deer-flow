@@ -30,7 +30,12 @@ def get_soc_approval_service(request: Request) -> SocAgentApprovalService:
         return injected
 
     repository = get_or_create_soc_repository(request)
-    return SocAgentApprovalService(grant_repository=repository, request_repository=repository)
+    action_adapter_registry = getattr(request.app.state, "soc_action_adapter_registry", None)
+    return SocAgentApprovalService(
+        grant_repository=repository,
+        request_repository=repository,
+        action_adapter_registry=action_adapter_registry,
+    )
 
 
 ApprovalServiceDep = Annotated[SocAgentApprovalService, Depends(get_soc_approval_service)]

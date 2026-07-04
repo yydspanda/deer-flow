@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；真实 action adapter registry contract 已固定 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；approval dry-run 已可选校验 action adapter registry |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Approval service adapter dry-run integration |
+| 当前下一刀 | Execute adapter preflight before token consume |
 
 ## Phase 1 切片计划
 
@@ -107,9 +107,38 @@
 | 71 | SOC Lead Agent action proposal boundary | Done | 约束 Lead Agent 后续如何输出结构化 action proposal；仍不直接执行 MCP/tool/处置动作，必须回到 policy/approval/service 边界 |
 | 72 | Approval inbox proposal payload rendering | Done | Web/TUI 审批入口展示 `source_proposal_id`、`action_payload`、`context_refs`，让分析师审批前能看见 Lead Agent 候选动作来源和参数 |
 | 73 | Action adapter registry contract planning | Done | 规划真实 `response.block_ip` / `endpoint.isolate_host` / MCP tool adapter registry 的 contract、幂等、审计和 dry-run 要求；新增 registry/descriptor/protocol/dry-run-only adapter，不直接接生产动作 |
-| 74 | Approval service adapter dry-run integration | Planned | `SocAgentApprovalService.dry_run_approved_action()` 在 token 校验后可选调用 action adapter registry dry-run，校验 allowlist、payload 和 context refs；默认仍兼容无 registry 的 token-only dry-run |
+| 74 | Approval service adapter dry-run integration | Done | `SocAgentApprovalService.dry_run_approved_action()` 在 token 校验后可选调用 action adapter registry dry-run，校验 allowlist、payload 和 context refs；默认仍兼容无 registry 的 token-only dry-run |
+| 75 | Execute adapter preflight before token consume | Planned | `execute_approved_action()` 在消费 token 前可选校验 adapter 存在性、execute 支持度、payload 和 context refs；仍不接生产副作用 |
 
 ## 进度记录
+
+### 2026-07-04 — Approval service adapter dry-run integration 切片
+
+- 背景：
+  - action adapter registry contract 已固定，但 approval dry-run 仍只校验 execution token。
+  - 真实 EDR/F5/SOAR/MCP 动作接入前，需要让 dry-run 能验证 adapter allowlist、proposal payload 和 context refs。
+- 变更：
+  - 新增 `SocActionAdapterRegistryPort` protocol，core service 只依赖协议，不 import 具体 registry 实现。
+  - `SocAgentApprovalService` 增加可选 `action_adapter_registry`。
+  - `dry_run_approved_action()`：
+    - 先按原逻辑校验 approval grant token、expiry、route/action。
+    - 有 registry 时，合并 approval request 的 `action_payload/context_refs` 与 command payload，再调用 registry dry-run。
+    - command payload 是显式覆盖；无 registry 时仍返回 token-only dry-run 结果。
+    - registry validation error 被映射为 `SocServiceError`，Gateway 会返回 400。
+  - Gateway `/api/soc/approvals/actions/dry-run` 的默认 service wiring 会透传 `request.app.state.soc_action_adapter_registry`。
+- 边界：
+  - 不改变 `execute_approved_action()`。
+  - 不消费 token。
+  - 不调用真实外部工具。
+  - 不要求 Web/TUI 复制 proposal payload；service 会从 approval request repository 合并。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/core/service.py soc_agent/protocols.py app/gateway/routers/soc_approvals.py tests/test_soc_agent_service.py tests/test_soc_action_adapters.py`
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/core/service.py soc_agent/protocols.py app/gateway/routers/soc_approvals.py tests/test_soc_agent_service.py tests/test_soc_action_adapters.py --check`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_action_adapters.py tests/test_soc_agent_service.py::test_agent_approval_service_dry_runs_approved_action_without_side_effect tests/test_soc_agent_service.py::test_agent_approval_service_dry_run_uses_action_adapter_registry_payload tests/test_soc_agent_service.py::test_agent_approval_service_dry_run_maps_adapter_validation_error tests/test_soc_agent_service.py::test_agent_approval_service_dry_run_maps_missing_adapter_error tests/test_soc_agent_service.py::test_agent_approval_service_dry_run_rejects_mismatched_action tests/test_soc_approvals_router.py::test_soc_approvals_api_dry_runs_and_executes_approved_action`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_action_adapters.py tests/test_soc_agent_service.py tests/test_soc_approvals_router.py tests/test_soc_lead_agent_chat.py tests/test_soc_tui_chat_runtime.py`
+  - `codegraph sync .`
+- 下一步：
+  - 做 Execute adapter preflight before token consume：执行前先确认 adapter 存在、支持 execute、payload/context refs 满足要求，避免 token 被消费后才发现 adapter 不可执行。
 
 ### 2026-07-04 — Action adapter registry contract planning 切片
 

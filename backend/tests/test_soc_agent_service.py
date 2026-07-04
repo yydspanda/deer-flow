@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from soc_agent.action_adapters import DryRunOnlySocActionAdapter, SocActionAdapterRegistry
 from soc_agent.contracts import (
     ActorContext,
     ActorType,
@@ -20,6 +21,7 @@ from soc_agent.contracts import (
     ServiceRequestContext,
     SimilarAlertMatch,
     SimilarAlertQuery,
+    SocAgentActionAdapterDescriptor,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
     SocAgentApprovedActionCommand,
@@ -225,6 +227,21 @@ def _approval_request() -> SocAgentApprovalRequest:
         risk_level=SocAgentRiskLevel.HIGH_RISK,
         reason="action response.block_ip requires human approval",
         requested_by=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI, roles=["analyst"]),
+    )
+
+
+def _block_ip_adapter_descriptor() -> SocAgentActionAdapterDescriptor:
+    return SocAgentActionAdapterDescriptor(
+        adapter_id="test-block-ip",
+        route="response.block_ip",
+        action="response.block_ip",
+        risk_level=SocAgentRiskLevel.HIGH_RISK,
+        adapter_kind="mcp",
+        external_side_effect="write",
+        execute_supported=False,
+        required_payload_fields=["ip", "duration_seconds"],
+        required_context_refs=["queue_id", "run_id"],
+        description="Test block-ip adapter descriptor.",
     )
 
 
@@ -1017,6 +1034,93 @@ def test_agent_approval_service_dry_runs_approved_action_without_side_effect() -
     assert result.payload["executed_by"]["actor_id"] == "analyst-2"
     assert "no external side effect" in result.message
     assert repository.get_approval_grant(grant.approval_grant_id).status == "approved"
+
+
+def test_agent_approval_service_dry_run_uses_action_adapter_registry_payload() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    approval_request = _approval_request().model_copy(
+        update={
+            "action_payload": {"ip": "203.0.113.8", "duration_seconds": 900},
+            "context_refs": {"queue_id": "REV-TEST-001", "run_id": "RUN-TEST-001"},
+        }
+    )
+    grant = SocAgentApprovalService(grant_repository=repository, request_repository=repository).approve(
+        approval_request,
+        context=ServiceRequestContext(actor=ActorContext(actor_id="approver-1", surface=EntrySurface.TUI, roles=["soc_approver"])),
+        reason="approved containment scope",
+    )
+    registry = SocActionAdapterRegistry([DryRunOnlySocActionAdapter(_block_ip_adapter_descriptor())])
+    service = SocAgentApprovalService(
+        grant_repository=repository,
+        request_repository=repository,
+        action_adapter_registry=registry,
+    )
+
+    result = service.dry_run_approved_action(
+        SocAgentApprovedActionCommand(
+            execution_token_id=grant.execution_token_id,
+            route="response.block_ip",
+            action="response.block_ip",
+        ),
+        context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-2", surface=EntrySurface.TUI, roles=["analyst"])),
+    )
+
+    assert result.status == "success"
+    assert result.payload["adapter_validated"] is True
+    assert result.payload["adapter_id"] == "test-block-ip"
+    assert result.payload["external_side_effect"] == "not_executed"
+    assert result.payload["approval_grant_id"] == grant.approval_grant_id
+    assert result.payload["payload"]["ip"] == "203.0.113.8"
+    assert result.payload["payload"]["context_refs"]["queue_id"] == "REV-TEST-001"
+    assert repository.get_approval_grant(grant.approval_grant_id).status == "approved"
+
+
+def test_agent_approval_service_dry_run_maps_adapter_validation_error() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    grant = SocAgentApprovalService(grant_repository=repository).approve(
+        _approval_request(),
+        context=ServiceRequestContext(actor=ActorContext(actor_id="approver-1", roles=["soc_approver"])),
+        reason="approved containment scope",
+    )
+    service = SocAgentApprovalService(
+        grant_repository=repository,
+        action_adapter_registry=SocActionAdapterRegistry([DryRunOnlySocActionAdapter(_block_ip_adapter_descriptor())]),
+    )
+
+    with pytest.raises(SocServiceError, match="adapter validation failed"):
+        service.dry_run_approved_action(
+            SocAgentApprovedActionCommand(
+                execution_token_id=grant.execution_token_id,
+                route="response.block_ip",
+                action="response.block_ip",
+                payload={"ip": "203.0.113.8"},
+            ),
+            context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-2", surface=EntrySurface.TUI, roles=["analyst"])),
+        )
+
+
+def test_agent_approval_service_dry_run_maps_missing_adapter_error() -> None:
+    repository = InMemoryApprovalGrantRepository()
+    grant = SocAgentApprovalService(grant_repository=repository).approve(
+        _approval_request(),
+        context=ServiceRequestContext(actor=ActorContext(actor_id="approver-1", roles=["soc_approver"])),
+        reason="approved containment scope",
+    )
+    service = SocAgentApprovalService(
+        grant_repository=repository,
+        action_adapter_registry=SocActionAdapterRegistry(),
+    )
+
+    with pytest.raises(SocServiceError, match="no action adapter registered"):
+        service.dry_run_approved_action(
+            SocAgentApprovedActionCommand(
+                execution_token_id=grant.execution_token_id,
+                route="response.block_ip",
+                action="response.block_ip",
+                payload={"ip": "203.0.113.8", "duration_seconds": 900},
+            ),
+            context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-2", surface=EntrySurface.TUI, roles=["analyst"])),
+        )
 
 
 def test_agent_approval_service_dry_run_requires_repository() -> None:

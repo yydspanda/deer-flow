@@ -62,6 +62,7 @@ from soc_agent.protocols import (
     DecisionAuditRepository,
     LLMAnalyzer,
     ReviewQueueRepository,
+    SocActionAdapterRegistryPort,
     SocAgentApprovalGrantRepository,
     SocAgentApprovalRequestRepository,
     SocEventSink,
@@ -630,6 +631,25 @@ def _daemon_idempotency_key(message: SocDaemonMessage) -> str:
     return f"daemon:{message.message_id}"
 
 
+def _merge_approval_action_payload(
+    approval_request: SocAgentApprovalRequest,
+    command_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = dict(approval_request.action_payload)
+    request_context_refs = dict(approval_request.context_refs)
+    command_payload_copy = dict(command_payload)
+    command_context_refs = command_payload_copy.pop("context_refs", None)
+
+    payload.update(command_payload_copy)
+    if isinstance(command_context_refs, Mapping):
+        request_context_refs.update(command_context_refs)
+    if request_context_refs:
+        payload["context_refs"] = request_context_refs
+    elif command_context_refs is not None:
+        payload["context_refs"] = command_context_refs
+    return payload
+
+
 class SocAgentApprovalService:
     """Human approval boundary for high-risk SOC Agent actions.
 
@@ -644,9 +664,11 @@ class SocAgentApprovalService:
         *,
         grant_repository: SocAgentApprovalGrantRepository | None = None,
         request_repository: SocAgentApprovalRequestRepository | None = None,
+        action_adapter_registry: SocActionAdapterRegistryPort | None = None,
     ) -> None:
         self._grant_repository = grant_repository
         self._request_repository = request_repository
+        self._action_adapter_registry = action_adapter_registry
 
     def submit_request(self, approval_request: SocAgentApprovalRequest) -> SocAgentApprovalRequest:
         """Persist a pending approval request for human review."""
@@ -731,22 +753,30 @@ class SocAgentApprovalService:
             raise SocServiceNotFoundError(f"approval execution token {command.execution_token_id} not found")
         self._validate_grant_for_command(grant, command)
 
+        if self._action_adapter_registry is not None:
+            adapter_command = self._adapter_dry_run_command(command, grant)
+            try:
+                adapter_result = self._action_adapter_registry.dry_run(adapter_command, context=context)
+            except (LookupError, ValueError) as exc:
+                raise SocServiceError(f"approved action dry-run adapter validation failed: {exc}") from exc
+            payload = self._approval_dry_run_payload(grant, adapter_command, context)
+            payload.update(adapter_result.payload)
+            payload["adapter_validated"] = True
+            return SocAgentActionResult(
+                route=grant.route,
+                action=grant.action,
+                status=adapter_result.status,
+                message=adapter_result.message,
+                payload=payload,
+                requires_human_approval=adapter_result.requires_human_approval,
+            )
+
         return SocAgentActionResult(
             route=grant.route,
             action=grant.action,
             status="success",
             message="Approved action dry-run validated; no external side effect executed.",
-            payload={
-                "dry_run": command.dry_run,
-                "approval_grant_id": grant.approval_grant_id,
-                "approval_request_id": grant.approval_request_id,
-                "execution_token_id": grant.execution_token_id,
-                "requested_by": grant.requested_by.model_dump(mode="json"),
-                "approved_by": grant.approved_by.model_dump(mode="json"),
-                "executed_by": context.actor.model_dump(mode="json"),
-                "idempotency_key": context.idempotency_key,
-                "expires_at": grant.expires_at.isoformat(),
-            },
+            payload=self._approval_dry_run_payload(grant, command, context),
         )
 
     def execute_approved_action(
@@ -818,6 +848,38 @@ class SocAgentApprovalService:
         if grant.execution_result_payload is None:
             raise SocServiceError(f"approval grant {grant.approval_grant_id} was consumed without result payload")
         return SocAgentActionResult.model_validate(grant.execution_result_payload)
+
+    def _adapter_dry_run_command(
+        self,
+        command: SocAgentApprovedActionCommand,
+        grant: SocAgentApprovalGrant,
+    ) -> SocAgentApprovedActionCommand:
+        if self._request_repository is None:
+            return command
+        approval_request = self._request_repository.get_approval_request(grant.approval_request_id)
+        if approval_request is None:
+            return command
+        return command.model_copy(update={"payload": _merge_approval_action_payload(approval_request, command.payload)})
+
+    def _approval_dry_run_payload(
+        self,
+        grant: SocAgentApprovalGrant,
+        command: SocAgentApprovedActionCommand,
+        context: ServiceRequestContext,
+    ) -> dict[str, Any]:
+        return {
+            "dry_run": command.dry_run,
+            "adapter_validated": False,
+            "approval_grant_id": grant.approval_grant_id,
+            "approval_request_id": grant.approval_request_id,
+            "execution_token_id": grant.execution_token_id,
+            "requested_by": grant.requested_by.model_dump(mode="json"),
+            "approved_by": grant.approved_by.model_dump(mode="json"),
+            "executed_by": context.actor.model_dump(mode="json"),
+            "idempotency_key": context.idempotency_key,
+            "expires_at": grant.expires_at.isoformat(),
+            "payload": command.payload,
+        }
 
     def _validate_grant_for_command(
         self,

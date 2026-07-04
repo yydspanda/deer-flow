@@ -145,6 +145,24 @@ class SocActionAdapter(Protocol):
     ) -> SocAgentActionResult: ...
 
 
+class SocActionAdapterRegistryPort(Protocol):
+    """Allowlisted registry boundary for approved SOC response action adapters."""
+
+    def dry_run(
+        self,
+        command: SocAgentApprovedActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult: ...
+
+    def execute(
+        self,
+        command: SocAgentApprovedActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult: ...
+
+
 class SocEventSink(Protocol):
     """Event boundary for TUI/CLI progress, API SSE, channels, daemon logs, and audit."""
 

@@ -1,6 +1,6 @@
 # SOC Action Adapter Registry Plan
 
-> 状态：Phase 1 收口规划已开始。当前只固定 contract 和本地 dry-run-only adapter，不接生产 EDR/F5/MCP 副作用。
+> 状态：Phase 1 收口规划已开始。当前已固定 contract、本地 dry-run-only adapter，并把 approval service dry-run 接入可选 registry；仍不接生产 EDR/F5/MCP 副作用。
 
 ## 背景
 
@@ -27,12 +27,13 @@ Lead Agent / Skill / Daemon
   -> EDR / F5 / SOAR / MCP adapter
 ```
 
-当前代码只落地到 registry contract：
+当前代码已落地到 registry contract + approval service dry-run integration：
 
 - `SocAgentActionAdapterDescriptor`：声明 action adapter 能力、风险、side-effect 等级、必需 payload/context 字段。
 - `SocActionAdapter` protocol：所有真实 adapter 必须实现 `dry_run()` 和 `execute()`。
 - `SocActionAdapterRegistry`：只按精确 `route/action` allowlist 解析 adapter，不提供 fallback。
 - `DryRunOnlySocActionAdapter`：用于 Phase 1/测试/尚未上线的动作，只验证参数并返回 `external_side_effect=not_executed`。
+- `SocAgentApprovalService.dry_run_approved_action()`：有 registry 时先校验 grant，再把 approval request 中的 `action_payload/context_refs` 与 command payload 合并后交给 registry dry-run；没有 registry 时保持 token-only dry-run 兼容。
 
 ## Contract 约束
 
@@ -61,12 +62,12 @@ Lead Agent / Skill / Daemon
 
 ## 后续切片
 
-1. **Approval service adapter dry-run integration**
+1. **Approval service adapter dry-run integration**（Done）
    - 给 `SocAgentApprovalService` 注入可选 `SocActionAdapterRegistry`。
    - `dry_run_approved_action()` 继续先校验 approval grant，再调用 registry dry-run 校验 payload/context。
    - registry 不存在时保持当前 token-only dry-run，兼容本地最小闭环。
 
-2. **Execute preflight before token consume**
+2. **Execute preflight before token consume**（Next）
    - `execute_approved_action()` 在消费 token 前检查 adapter 是否存在、是否支持 execute、payload 是否满足必需字段。
    - 只有真实 adapter 调用结果确定后，才把 execution result 写回 grant。
    - dry-run-only adapter 的 execute 仍返回 failed + `external_side_effect=not_executed`，不能伪装成功。
@@ -78,4 +79,3 @@ Lead Agent / Skill / Daemon
 4. **MCP adapter bridge**
    - 复用 DeerFlow MCP/tool 能力，但通过 SOC adapter descriptor 限定 action 名称、参数 schema、风险等级和审计字段。
    - 用户可配置 readonly MCP 候选；高风险 MCP group 只允许管理员启用，并继续走 approval。
-
