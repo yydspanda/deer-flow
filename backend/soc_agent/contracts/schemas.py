@@ -350,6 +350,25 @@ class SocAgentActionResult(BaseModel):
     requires_human_approval: bool = False
 
 
+class SocAgentActionAdapterDescriptor(BaseModel):
+    """Registered adapter capability for an approved SOC action."""
+
+    schema_version: str = "soc.agent_action_adapter_descriptor.v1"
+    adapter_id: str = Field(min_length=1)
+    route: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    risk_level: SocAgentRiskLevel = SocAgentRiskLevel.UNKNOWN
+    adapter_kind: Literal["noop", "service", "mcp", "http", "script"] = "noop"
+    external_side_effect: Literal["none", "read", "write", "destructive"] = "none"
+    dry_run_supported: bool = True
+    execute_supported: bool = False
+    idempotency_required: bool = True
+    required_payload_fields: list[str] = Field(default_factory=list)
+    required_context_refs: list[str] = Field(default_factory=list)
+    description: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class SocDaemonMessage(BaseModel):
     """Versioned message envelope consumed by the SOC daemon boundary.
 

@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；真实 action adapter registry contract 已固定 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Action adapter registry contract planning |
+| 当前下一刀 | Approval service adapter dry-run integration |
 
 ## Phase 1 切片计划
 
@@ -106,9 +106,35 @@
 | 70 | SOC Lead Agent review context bridge | Done | 将 ReviewQueue context 以 bounded context/artifact 形式提供给 DeerFlow SOC Lead Agent；不让 Lead Agent 直接读 repository 或执行处置 |
 | 71 | SOC Lead Agent action proposal boundary | Done | 约束 Lead Agent 后续如何输出结构化 action proposal；仍不直接执行 MCP/tool/处置动作，必须回到 policy/approval/service 边界 |
 | 72 | Approval inbox proposal payload rendering | Done | Web/TUI 审批入口展示 `source_proposal_id`、`action_payload`、`context_refs`，让分析师审批前能看见 Lead Agent 候选动作来源和参数 |
-| 73 | Action adapter registry contract planning | Planned | 规划真实 `response.block_ip` / `endpoint.isolate_host` / MCP tool adapter registry 的 contract、幂等、审计和 dry-run 要求；不直接接生产动作 |
+| 73 | Action adapter registry contract planning | Done | 规划真实 `response.block_ip` / `endpoint.isolate_host` / MCP tool adapter registry 的 contract、幂等、审计和 dry-run 要求；新增 registry/descriptor/protocol/dry-run-only adapter，不直接接生产动作 |
+| 74 | Approval service adapter dry-run integration | Planned | `SocAgentApprovalService.dry_run_approved_action()` 在 token 校验后可选调用 action adapter registry dry-run，校验 allowlist、payload 和 context refs；默认仍兼容无 registry 的 token-only dry-run |
 
 ## 进度记录
+
+### 2026-07-04 — Action adapter registry contract planning 切片
+
+- 背景：
+  - Lead Agent action proposal、approval inbox 和 Web/TUI proposal 展示已打通。
+  - 下一步接 EDR/F5/SOAR/MCP 前，需要先固定 action adapter registry contract，避免真实动作靠字符串猜测或绕过 approval boundary。
+- 变更：
+  - 新增 `SocAgentActionAdapterDescriptor`：
+    - 声明 `adapter_id`、`route/action`、`risk_level`、`adapter_kind`、`external_side_effect`、dry-run/execute 支持度、必需 payload/context refs 和幂等要求。
+  - 新增 `SocActionAdapter` protocol：
+    - 真实 adapter 只能实现 `dry_run()` 和 `execute()`。
+  - 新增 `backend/soc_agent/action_adapters.py`：
+    - `SocActionAdapterRegistry` 精确按 `route/action` allowlist 解析 adapter。
+    - 没有注册 adapter 时 fail-fast，不 fallback 到自然语言或任意 MCP。
+    - `DryRunOnlySocActionAdapter` 可验证参数，但 execute 只能返回 failed + `external_side_effect=not_executed`。
+  - 新增 `.notes/ai_soc/action-adapter-registry-plan.md`，记录后续 dry-run integration、execute preflight、只读查询 adapter 和 MCP bridge 顺序。
+- 边界：
+  - 不修改 `SocAgentApprovalService` 当前执行语义。
+  - 不调用真实 EDR/F5/SOAR/MCP。
+  - 不消费 approval token 之外的任何外部动作能力。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/action_adapters.py soc_agent/contracts/schemas.py soc_agent/contracts/__init__.py soc_agent/protocols.py tests/test_soc_action_adapters.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_action_adapters.py`
+- 下一步：
+  - 做 Approval service adapter dry-run integration：让审批 token dry-run 同时校验 action adapter registry allowlist、payload 和 context refs，仍不产生外部副作用。
 
 ### 2026-07-04 — Approval inbox proposal payload rendering 切片
 

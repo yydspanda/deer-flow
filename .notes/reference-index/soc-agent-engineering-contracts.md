@@ -269,6 +269,11 @@ SOC Agent chat stream 约束：
   - `SocAgentApprovalService.execute_approved_action()` 是真实执行前的稳定边界：必须要求 `dry_run=False` 和 `idempotency_key`，必须消费一次性 token，并把 `consumed_at`、`consumed_by`、`consume_idempotency_key`、`execution_result_id`、`execution_result_payload` 写回 grant。
   - `execute_approved_action()` 当前只消费 token 和记录 execution boundary audit，不调用外部工具、不封禁 IP、不隔离终端、不改生产系统；真实外部副作用只能在后续 action adapter 注册后接入。
   - 已消费 token 遇到相同 `idempotency_key` 必须返回原 `execution_result_payload`；不同 key 或缺少记录必须拒绝，避免重复执行。
+  - `SocAgentActionAdapterDescriptor` 是真实 action adapter 的能力声明，必须固定 `adapter_id`、`route`、`action`、`risk_level`、`adapter_kind`、`external_side_effect`、`dry_run_supported`、`execute_supported`、`required_payload_fields` 和 `required_context_refs`。
+  - `SocActionAdapterRegistry` 是 approved action 后续接 EDR/F5/SOAR/MCP 的唯一 allowlist；只能精确匹配 `route/action`，没有注册 adapter 时必须 fail-fast，不能 fallback 到自然语言、模糊匹配或任意 MCP tool。
+  - `SocActionAdapter` 具体实现只能暴露 `dry_run()` / `execute()`；真实 SDK、HTTP client、MCP client 类型只能留在 adapter module，不能扩散到 core、Gateway、TUI、Web 或 contracts。
+  - `DryRunOnlySocActionAdapter` 只能用于规划、测试和未上线动作；它可以校验 payload/context refs，但 execute 必须返回 failed 且 `external_side_effect=not_executed`。
+  - 后续 `SocAgentApprovalService` 接 registry 时，必须先完成 approval grant 校验，再进行 adapter dry-run；execute 必须在消费 token 前完成 adapter 存在性、execute 支持度和参数 preflight，避免 token 被消费后才发现 adapter 不可执行。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
     - `POST /api/soc/approvals/grants`
     - `POST /api/soc/approvals/actions/dry-run`
@@ -1072,6 +1077,7 @@ MCP/tool 调用、审批和处置必须继续通过 SOC service/action/policy bo
 - 查询类工具默认仍需通过 allowlist、rate limit、audit，例如资产归属查询、EDR 进程树查询、历史告警查询。
 - 处置类工具默认高风险，例如 IP 封禁、EDR 隔离、禁用账号、下发阻断，必须有人类审批或明确 playbook 授权。
 - LLM 输出只能是 `ToolActionProposal` / `ActionProposal` 一类结构化候选，不能直接调用 adapter。
+- 真实 adapter 必须注册到 `SocActionAdapterRegistry`，并通过 `SocAgentActionAdapterDescriptor` 声明 side-effect、必需参数和 dry-run/execute 能力。
 - Tool result 必须作为 evidence 写回 run trace / audit，不允许只进入 prompt 后丢失。
 
 ### Profile / Skill / MCP 开放配置治理

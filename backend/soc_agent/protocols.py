@@ -14,10 +14,14 @@ from soc_agent.contracts import (
     LLMAnalysisRequest,
     ReviewQueueItem,
     ReviewQueueStatus,
+    ServiceRequestContext,
     SimilarAlertMatch,
     SimilarAlertQuery,
+    SocAgentActionAdapterDescriptor,
+    SocAgentActionResult,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
+    SocAgentApprovedActionCommand,
     SocEvent,
 )
 
@@ -119,6 +123,26 @@ class SocAgentApprovalRequestRepository(Protocol):
         status: str | None = "pending",
         limit: int = 50,
     ) -> list[SocAgentApprovalRequest]: ...
+
+
+class SocActionAdapter(Protocol):
+    """Replaceable adapter for approved SOC response actions."""
+
+    descriptor: SocAgentActionAdapterDescriptor
+
+    def dry_run(
+        self,
+        command: SocAgentApprovedActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult: ...
+
+    def execute(
+        self,
+        command: SocAgentApprovedActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult: ...
 
 
 class SocEventSink(Protocol):
