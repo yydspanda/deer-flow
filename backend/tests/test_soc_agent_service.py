@@ -833,6 +833,19 @@ def test_agent_action_policy_allows_read_only_actions() -> None:
     assert decision.requires_human_approval is False
 
 
+def test_agent_action_policy_allows_asset_lookup_as_read_only() -> None:
+    decision = SocAgentActionPolicy().check(
+        action="asset.lookup",
+        route="asset.lookup",
+        request=SocAgentChatRequest(message="lookup asset"),
+        context=ServiceRequestContext(),
+    )
+
+    assert decision.allowed is True
+    assert decision.risk_level is SocAgentRiskLevel.READ_ONLY
+    assert decision.requires_human_approval is False
+
+
 def test_agent_action_policy_requires_analyst_role_for_write_actions() -> None:
     denied = SocAgentActionPolicy().check(
         action="review.correct",

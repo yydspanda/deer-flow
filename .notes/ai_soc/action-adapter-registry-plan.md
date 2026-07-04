@@ -1,6 +1,6 @@
 # SOC Action Adapter Registry Plan
 
-> 状态：Phase 1 收口规划已开始。当前已固定 contract、本地 dry-run-only adapter，并把 approval service dry-run 与 execute preflight 接入可选 registry；仍不接生产 EDR/F5/MCP 副作用。
+> 状态：Phase 1 收口规划已开始。当前已固定 contract、本地 dry-run-only adapter、approval service dry-run / execute preflight，并新增第一个具体只读 `asset.lookup` adapter；仍不接生产 EDR/F5/MCP 副作用。
 
 ## 背景
 
@@ -35,6 +35,7 @@ Lead Agent / Skill / Daemon
 - `DryRunOnlySocActionAdapter`：用于 Phase 1/测试/尚未上线的动作，只验证参数并返回 `external_side_effect=not_executed`。
 - `SocAgentApprovalService.dry_run_approved_action()`：有 registry 时先校验 grant，再把 approval request 中的 `action_payload/context_refs` 与 command payload 合并后交给 registry dry-run；没有 registry 时保持 token-only dry-run 兼容。
 - `SocAgentApprovalService.execute_approved_action()`：有 registry 时，在消费 token 前先调用 registry execute preflight，确认 adapter 存在、支持 execute、payload/context refs 齐全；当前仍不调用 adapter.execute，不产生外部副作用。
+- `InMemoryAssetLookupActionAdapter`：第一个具体 read-only adapter，route/action 固定为 `asset.lookup`，只读查询 in-memory/static inventory，用于验证 descriptor、dry-run、execute preflight 和 result payload；不是生产资产系统接入。
 
 ## Contract 约束
 
@@ -73,10 +74,15 @@ Lead Agent / Skill / Daemon
    - 只有真实 adapter 调用结果确定后，才把 execution result 写回 grant。
    - 当前仍不调用 `adapter.execute()`；dry-run-only adapter / 未注册 adapter 会 fail-fast，token 保持 unconsumed。
 
-3. **First concrete safe adapter**（Next）
+3. **First concrete safe adapter**（Done）
    - 先接只读查询类 adapter，例如资产归属查询或 EDR 进程树查询。
    - 封禁 IP、隔离终端、禁用账号等 write/destructive adapter 等 staging eval、审计和补偿策略稳定后再接。
 
-4. **MCP adapter bridge**
+4. **Read-only adapter dispatcher / tool gateway wiring**（Next）
+   - 明确 `asset.lookup` 通过 action dispatcher、tool gateway 还是 Lead Agent tool bridge 进入运行态。
+   - 默认不加入 chat router 白名单；必须显式 route / skill / tool policy 打开。
+   - read-only adapter execute 仍要写 audit/result payload，不能只把结果塞回 prompt。
+
+5. **MCP adapter bridge**
    - 复用 DeerFlow MCP/tool 能力，但通过 SOC adapter descriptor 限定 action 名称、参数 schema、风险等级和审计字段。
    - 用户可配置 readonly MCP 候选；高风险 MCP group 只允许管理员启用，并继续走 approval。

@@ -3,10 +3,13 @@ from __future__ import annotations
 import pytest
 
 from soc_agent.action_adapters import (
+    ASSET_LOOKUP_ACTION,
     DryRunOnlySocActionAdapter,
+    InMemoryAssetLookupActionAdapter,
     SocActionAdapterNotFoundError,
     SocActionAdapterRegistry,
     SocActionAdapterRegistryError,
+    asset_lookup_adapter_descriptor,
 )
 from soc_agent.contracts import (
     ActorContext,
@@ -17,6 +20,7 @@ from soc_agent.contracts import (
     SocAgentActionResult,
     SocAgentApprovedActionCommand,
     SocAgentRiskLevel,
+    SocAssetLookupRecord,
 )
 
 
@@ -147,6 +151,102 @@ def test_registry_execute_preflight_rejects_dry_run_only_adapter() -> None:
         )
 
 
+def test_asset_lookup_adapter_descriptor_is_read_only() -> None:
+    descriptor = asset_lookup_adapter_descriptor()
+
+    assert descriptor.route == ASSET_LOOKUP_ACTION
+    assert descriptor.action == ASSET_LOOKUP_ACTION
+    assert descriptor.risk_level is SocAgentRiskLevel.READ_ONLY
+    assert descriptor.external_side_effect == "read"
+    assert descriptor.execute_supported is True
+    assert descriptor.required_payload_fields == ["asset_key"]
+
+
+def test_asset_lookup_adapter_dry_run_validates_query_without_reading_inventory() -> None:
+    registry = SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter(records=[_asset_record()])])
+
+    result = registry.dry_run(
+        SocAgentApprovedActionCommand(
+            execution_token_id="SAT-test",
+            route=ASSET_LOOKUP_ACTION,
+            action=ASSET_LOOKUP_ACTION,
+            dry_run=True,
+            payload={"asset_key": "10.10.1.5"},
+        ),
+        context=_context(),
+    )
+
+    assert result.status == "success"
+    assert result.payload["asset_key"] == "10.10.1.5"
+    assert result.payload["asset_found"] is None
+    assert result.payload["external_side_effect"] == "not_executed"
+    assert result.payload["read_only"] is True
+
+
+def test_asset_lookup_adapter_execute_returns_matching_asset_record() -> None:
+    registry = SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter(records=[_asset_record()])])
+
+    result = registry.execute(
+        SocAgentApprovedActionCommand(
+            execution_token_id="SAT-test",
+            route=ASSET_LOOKUP_ACTION,
+            action=ASSET_LOOKUP_ACTION,
+            dry_run=False,
+            payload={"asset_key": "srv-payments-01"},
+        ),
+        context=_context(),
+    )
+
+    assert result.status == "success"
+    assert result.payload["asset_found"] is True
+    assert result.payload["asset_record"]["asset_id"] == "asset-001"
+    assert result.payload["asset_record"]["business_unit"] == "payments"
+    assert result.payload["external_side_effect"] == "read"
+    assert result.payload["read_only"] is True
+
+
+def test_asset_lookup_adapter_execute_preflight_validates_without_inventory_read() -> None:
+    registry = SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter(records=[])])
+
+    result = registry.preflight_execute(
+        SocAgentApprovedActionCommand(
+            execution_token_id="SAT-test",
+            route=ASSET_LOOKUP_ACTION,
+            action=ASSET_LOOKUP_ACTION,
+            dry_run=False,
+            payload={"asset_key": "10.10.1.5"},
+        ),
+        context=_context(),
+    )
+
+    assert result.status == "success"
+    assert result.payload["adapter_id"] == "asset-lookup-in-memory"
+    assert result.payload["adapter_execute_supported"] is True
+    assert result.payload["adapter_external_side_effect"] == "read"
+    assert result.payload["external_side_effect"] == "not_executed"
+    assert result.payload["preflight_only"] is True
+
+
+def test_asset_lookup_adapter_execute_not_found_is_successful_read() -> None:
+    registry = SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter(records=[_asset_record()])])
+
+    result = registry.execute(
+        SocAgentApprovedActionCommand(
+            execution_token_id="SAT-test",
+            route=ASSET_LOOKUP_ACTION,
+            action=ASSET_LOOKUP_ACTION,
+            dry_run=False,
+            payload={"asset_key": "missing-host"},
+        ),
+        context=_context(),
+    )
+
+    assert result.status == "success"
+    assert result.payload["asset_found"] is False
+    assert result.payload["asset_record"] is None
+    assert result.payload["external_side_effect"] == "read"
+
+
 class _ExecutableAdapter:
     def __init__(self, descriptor: SocAgentActionAdapterDescriptor) -> None:
         self.descriptor = descriptor
@@ -205,4 +305,18 @@ def _context() -> ServiceRequestContext:
         ),
         trace_id="trace-test",
         idempotency_key="action-adapter-test",
+    )
+
+
+def _asset_record() -> SocAssetLookupRecord:
+    return SocAssetLookupRecord(
+        asset_key="srv-payments-01",
+        asset_id="asset-001",
+        hostname="srv-payments-01",
+        primary_ip="10.10.1.5",
+        owner="payments-sre",
+        business_unit="payments",
+        environment="prod",
+        criticality="critical",
+        source="unit-test",
     )

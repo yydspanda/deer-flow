@@ -10,6 +10,8 @@ from soc_agent.contracts import (
     SocAgentActionAdapterDescriptor,
     SocAgentActionResult,
     SocAgentApprovedActionCommand,
+    SocAgentRiskLevel,
+    SocAssetLookupRecord,
 )
 from soc_agent.protocols import SocActionAdapter
 
@@ -198,6 +200,116 @@ class DryRunOnlySocActionAdapter:
         )
 
 
+ASSET_LOOKUP_ACTION = "asset.lookup"
+
+
+def asset_lookup_adapter_descriptor(
+    *,
+    adapter_id: str = "asset-lookup-in-memory",
+) -> SocAgentActionAdapterDescriptor:
+    """Descriptor for the first concrete read-only SOC action adapter."""
+
+    return SocAgentActionAdapterDescriptor(
+        adapter_id=adapter_id,
+        route=ASSET_LOOKUP_ACTION,
+        action=ASSET_LOOKUP_ACTION,
+        risk_level=SocAgentRiskLevel.READ_ONLY,
+        adapter_kind="service",
+        external_side_effect="read",
+        dry_run_supported=True,
+        execute_supported=True,
+        idempotency_required=False,
+        required_payload_fields=["asset_key"],
+        description="Read-only asset inventory lookup adapter.",
+    )
+
+
+class InMemoryAssetLookupActionAdapter:
+    """Read-only asset lookup adapter backed by an in-memory inventory."""
+
+    def __init__(
+        self,
+        records: Iterable[SocAssetLookupRecord | Mapping[str, Any]] | None = None,
+        *,
+        descriptor: SocAgentActionAdapterDescriptor | None = None,
+    ) -> None:
+        self.descriptor = descriptor or asset_lookup_adapter_descriptor()
+        if self.descriptor.action != ASSET_LOOKUP_ACTION or self.descriptor.route != ASSET_LOOKUP_ACTION:
+            raise SocActionAdapterRegistryError("InMemoryAssetLookupActionAdapter requires route/action asset.lookup")
+        if self.descriptor.risk_level is not SocAgentRiskLevel.READ_ONLY:
+            raise SocActionAdapterRegistryError("InMemoryAssetLookupActionAdapter must be read-only")
+        if self.descriptor.external_side_effect != "read":
+            raise SocActionAdapterRegistryError("InMemoryAssetLookupActionAdapter must declare external_side_effect=read")
+        self._records = _index_asset_records(records or ())
+
+    def dry_run(
+        self,
+        command: SocAgentApprovedActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if not command.dry_run:
+            raise SocActionAdapterRegistryError("asset.lookup dry-run requires command.dry_run=true")
+        _validate_command_matches_descriptor(command, self.descriptor)
+        _validate_required_fields("payload", command.payload, self.descriptor.required_payload_fields)
+        asset_key = _asset_key_from_payload(command.payload)
+        return SocAgentActionResult(
+            route=command.route,
+            action=command.action,
+            status="success",
+            message="Asset lookup dry-run validated; no asset inventory read executed.",
+            payload={
+                "adapter_id": self.descriptor.adapter_id,
+                "adapter_kind": self.descriptor.adapter_kind,
+                "dry_run": True,
+                "asset_key": asset_key,
+                "asset_found": None,
+                "external_side_effect": "not_executed",
+                "read_only": True,
+                "executed_by": context.actor.model_dump(mode="json"),
+                "idempotency_key": context.idempotency_key,
+            },
+        )
+
+    def execute(
+        self,
+        command: SocAgentApprovedActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if command.dry_run:
+            raise SocActionAdapterRegistryError("asset.lookup execute requires command.dry_run=false")
+        _validate_command_matches_descriptor(command, self.descriptor)
+        _validate_required_fields("payload", command.payload, self.descriptor.required_payload_fields)
+        asset_key = _asset_key_from_payload(command.payload)
+        record = self._records.get(_normalize_asset_key(asset_key))
+        if record is None:
+            return SocAgentActionResult(
+                route=command.route,
+                action=command.action,
+                status="success",
+                message=f"Asset lookup completed; no asset record matched {asset_key}.",
+                payload=_asset_lookup_payload(
+                    descriptor=self.descriptor,
+                    asset_key=asset_key,
+                    record=None,
+                    context=context,
+                ),
+            )
+        return SocAgentActionResult(
+            route=command.route,
+            action=command.action,
+            status="success",
+            message=f"Asset lookup completed for {asset_key}.",
+            payload=_asset_lookup_payload(
+                descriptor=self.descriptor,
+                asset_key=asset_key,
+                record=record,
+                context=context,
+            ),
+        )
+
+
 def _adapter_key(route: str, action: str) -> tuple[str, str]:
     return (route.strip(), action.strip())
 
@@ -226,9 +338,55 @@ def _has_value(value: Any) -> bool:
     return True
 
 
+def _index_asset_records(records: Iterable[SocAssetLookupRecord | Mapping[str, Any]]) -> dict[str, SocAssetLookupRecord]:
+    index: dict[str, SocAssetLookupRecord] = {}
+    for item in records:
+        record = item if isinstance(item, SocAssetLookupRecord) else SocAssetLookupRecord.model_validate(item)
+        for key in (record.asset_key, record.asset_id, record.hostname, record.primary_ip):
+            if key:
+                index[_normalize_asset_key(key)] = record
+    return index
+
+
+def _asset_key_from_payload(payload: Mapping[str, Any]) -> str:
+    value = payload.get("asset_key")
+    if not isinstance(value, str) or not value.strip():
+        raise SocActionAdapterRegistryError("asset.lookup requires non-empty payload asset_key")
+    return value.strip()
+
+
+def _normalize_asset_key(value: str) -> str:
+    return value.strip().casefold()
+
+
+def _asset_lookup_payload(
+    *,
+    descriptor: SocAgentActionAdapterDescriptor,
+    asset_key: str,
+    record: SocAssetLookupRecord | None,
+    context: ServiceRequestContext,
+) -> dict[str, Any]:
+    payload = {
+        "adapter_id": descriptor.adapter_id,
+        "adapter_kind": descriptor.adapter_kind,
+        "dry_run": False,
+        "asset_key": asset_key,
+        "asset_found": record is not None,
+        "asset_record": record.model_dump(mode="json") if record is not None else None,
+        "external_side_effect": "read",
+        "read_only": True,
+        "executed_by": context.actor.model_dump(mode="json"),
+        "idempotency_key": context.idempotency_key,
+    }
+    return payload
+
+
 __all__ = [
+    "ASSET_LOOKUP_ACTION",
     "DryRunOnlySocActionAdapter",
+    "InMemoryAssetLookupActionAdapter",
     "SocActionAdapterNotFoundError",
     "SocActionAdapterRegistry",
     "SocActionAdapterRegistryError",
+    "asset_lookup_adapter_descriptor",
 ]

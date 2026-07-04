@@ -369,6 +369,22 @@ class SocAgentActionAdapterDescriptor(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class SocAssetLookupRecord(BaseModel):
+    """Read-only asset inventory record returned by the SOC asset lookup adapter."""
+
+    schema_version: str = "soc.asset_lookup_record.v1"
+    asset_key: str = Field(min_length=1)
+    asset_id: str | None = None
+    hostname: str | None = None
+    primary_ip: str | None = None
+    owner: str | None = None
+    business_unit: str | None = None
+    environment: str | None = None
+    criticality: Literal["low", "medium", "high", "critical", "unknown"] = "unknown"
+    source: str = "static"
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
 class SocDaemonMessage(BaseModel):
     """Versioned message envelope consumed by the SOC daemon boundary.
 

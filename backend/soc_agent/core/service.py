@@ -1035,7 +1035,7 @@ class SocAgentActionPolicy:
     """Permission policy for routed SOC Agent service actions."""
 
     POLICY_VERSION = "soc.agent_action_policy.v1"
-    READ_ONLY_ACTIONS = frozenset({"chat.ready_message", "review.open_context"})
+    READ_ONLY_ACTIONS = frozenset({"asset.lookup", "chat.ready_message", "review.open_context"})
     ANALYST_WRITE_ACTIONS = frozenset({"review.correct", "analysis.replay"})
     HIGH_RISK_ACTIONS = frozenset({"response.block_ip", "endpoint.isolate_host", "mcp.invoke"})
 
@@ -1246,7 +1246,7 @@ def _action_name_for_route(route: str) -> str:
         return "review.open_context"
     if route == "command.unknown":
         return "command.unknown"
-    if route in SocAgentActionPolicy.HIGH_RISK_ACTIONS:
+    if route in SocAgentActionPolicy.READ_ONLY_ACTIONS | SocAgentActionPolicy.ANALYST_WRITE_ACTIONS | SocAgentActionPolicy.HIGH_RISK_ACTIONS:
         return route
     return "route.unsupported"
 
