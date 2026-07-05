@@ -47,6 +47,8 @@ Action proposal boundary:
 def build_soc_lead_agent_profile() -> SocLeadAgentProfile:
     """Return a DeerFlow custom-agent payload for the SOC Lead Agent MVP."""
 
+    # MCP server wiring is managed by DeerFlow extensions_config/mcp_config.
+    # SOC action-to-MCP bindings live in the action adapter allowlist, not here.
     return SocLeadAgentProfile(
         name=SOC_LEAD_AGENT_NAME,
         description=SOC_LEAD_AGENT_DESCRIPTION,

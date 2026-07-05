@@ -14,9 +14,20 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from soc_agent.actions.adapters import InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
+from soc_agent.actions.mcp import DeerFlowCachedMcpToolProvider, build_mcp_action_adapter_registry_from_file
 from soc_agent.actions.proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.agent_profile import SocLeadAgentProfileInstaller
-from soc_agent.contracts import CorrectionCommand, ReviewQueueCloseCommand, ReviewQueueStatus, Verdict
+from soc_agent.contracts import (
+    ActorContext,
+    ActorType,
+    CorrectionCommand,
+    EntrySurface,
+    ReviewQueueCloseCommand,
+    ReviewQueueStatus,
+    ServiceRequestContext,
+    SocAgentActionCommand,
+    Verdict,
+)
 from soc_agent.core import (
     SocAgentActionDispatcher,
     SocAgentApprovalService,
@@ -88,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
         return _agent_resolve_skills(args)
     if args.command == "agent" and args.agent_command == "install-profile":
         return _agent_install_profile(args)
+    if args.command == "mcp" and args.mcp_command == "smoke":
+        return _mcp_smoke(args)
     if args.command == "daemon" and args.daemon_command == "process":
         return _daemon_process(args)
     if args.command == "daemon" and args.daemon_command == "consume":
@@ -215,6 +228,19 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_resolve_skills.add_argument("path", nargs="?", help="Path to alert JSON file")
     agent_resolve_skills.add_argument("--json", dest="json_payload", help="Inline alert JSON object")
     agent_resolve_skills.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+
+    mcp = subparsers.add_parser("mcp", help="SOC MCP action adapter helpers")
+    mcp_subparsers = mcp.add_subparsers(dest="mcp_command")
+    mcp_smoke = mcp_subparsers.add_parser("smoke", help="Smoke-test read-only MCP action adapter config")
+    mcp_smoke.add_argument("config", help="Path to SOC MCP action adapter JSON/YAML config")
+    mcp_smoke.add_argument("--route", required=True, help="SOC action route to test")
+    mcp_smoke.add_argument("--action", help="SOC action name; defaults to --route")
+    mcp_smoke.add_argument("--json", dest="json_payload", required=True, help="Inline SOC action payload JSON object")
+    mcp_smoke.add_argument("--dry-run", action="store_true", help="Validate adapter/tool availability without invoking the MCP tool")
+    mcp_smoke.add_argument("--actor-id", default="soc-mcp-smoke", help="Actor id recorded in the smoke context")
+    mcp_smoke.add_argument("--trace-id", default="soc-mcp-smoke", help="Trace id recorded in the smoke context")
+    mcp_smoke.add_argument("--idempotency-key", default="soc-mcp-smoke", help="Idempotency key recorded in the smoke context")
+    mcp_smoke.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
     daemon = subparsers.add_parser("daemon", help="SOC daemon helpers")
     daemon_subparsers = daemon.add_subparsers(dest="daemon_command")
@@ -581,6 +607,41 @@ def _agent_install_profile(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mcp_smoke(args: argparse.Namespace) -> int:
+    try:
+        payload = _load_json_object(args.json_payload, payload_label="SOC action payload")
+        registry = build_mcp_action_adapter_registry_from_file(
+            args.config,
+            DeerFlowCachedMcpToolProvider(),
+        )
+        command = SocAgentActionCommand(
+            route=args.route,
+            action=args.action or args.route,
+            dry_run=args.dry_run,
+            payload=payload,
+        )
+        context = ServiceRequestContext(
+            actor=ActorContext(
+                actor_id=args.actor_id,
+                actor_type=ActorType.USER,
+                surface=EntrySurface.CLI,
+                roles=["soc_mcp_smoke"],
+            ),
+            trace_id=args.trace_id,
+            idempotency_key=args.idempotency_key,
+        )
+        result = registry.dry_run(command, context=context) if args.dry_run else registry.execute(command, context=context)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except RuntimeError as exc:
+        print(f"error: MCP smoke failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if result.status == "success" else 1
+
+
 def _daemon_process(args: argparse.Namespace) -> int:
     try:
         payload = _load_payload(args.path, args.json_payload)
@@ -892,7 +953,7 @@ def _load_payload(path: str | None, json_payload: str | None) -> dict[str, Any]:
 
     try:
         if json_payload:
-            data = json.loads(json_payload)
+            data = _load_json_object(json_payload, payload_label="alert JSON")
         else:
             data = json.loads(Path(path or "").read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -902,6 +963,16 @@ def _load_payload(path: str | None, json_payload: str | None) -> dict[str, Any]:
 
     if not isinstance(data, dict):
         raise ValueError("alert JSON must be an object")
+    return data
+
+
+def _load_json_object(json_payload: str, *, payload_label: str) -> dict[str, Any]:
+    try:
+        data = json.loads(json_payload)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{payload_label} must be an object")
     return data
 
 

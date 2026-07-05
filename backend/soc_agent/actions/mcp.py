@@ -7,11 +7,14 @@ SOC route/action names; MCP server/tool names stay inside adapter config.
 from __future__ import annotations
 
 import concurrent.futures
+import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field, is_dataclass
+from pathlib import Path
 from typing import Any, Literal, Protocol, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from soc_agent.actions.adapters import SocActionAdapterRegistry, SocActionAdapterRegistryError
 from soc_agent.contracts import (
@@ -227,6 +230,38 @@ def build_mcp_action_adapter_registry(
             continue
         registry.register(build_mcp_action_adapter(adapter_config, provider))
     return registry
+
+
+def load_mcp_action_adapter_configs(config_path: str | Path) -> list[SocMcpActionAdapterConfig]:
+    """Load explicit MCP-backed SOC action adapter configs from JSON/YAML."""
+
+    path = Path(config_path)
+    document = _load_config_document(path)
+    entries = _extract_adapter_config_entries(document, source=path)
+    configs: list[SocMcpActionAdapterConfig] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, Mapping):
+            raise SocActionAdapterRegistryError(f"MCP action adapter config entry adapters[{index}] must be an object")
+        try:
+            configs.append(SocMcpActionAdapterConfig.model_validate(entry))
+        except ValidationError as exc:
+            raise SocActionAdapterRegistryError(f"invalid MCP action adapter config at adapters[{index}]: {exc}") from exc
+    return configs
+
+
+def build_mcp_action_adapter_registry_from_file(
+    config_path: str | Path,
+    provider: SocMcpToolProviderPort,
+    *,
+    base_adapters: Iterable[Any] = (),
+) -> SocActionAdapterRegistry:
+    """Build an action adapter registry from a JSON/YAML allowlist config file."""
+
+    return build_mcp_action_adapter_registry(
+        load_mcp_action_adapter_configs(config_path),
+        provider,
+        base_adapters=base_adapters,
+    )
 
 
 class SocMcpToolActionAdapter:
@@ -477,6 +512,37 @@ def _coerce_mcp_action_adapter_config(config: SocMcpActionAdapterConfig | Mappin
     return SocMcpActionAdapterConfig.model_validate(config)
 
 
+def _load_config_document(path: Path) -> Any:
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SocActionAdapterRegistryError(f"cannot read MCP action adapter config {path}: {exc}") from exc
+
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".json":
+            return json.loads(source)
+        if suffix in {".yaml", ".yml"}:
+            return yaml.safe_load(source)
+    except json.JSONDecodeError as exc:
+        raise SocActionAdapterRegistryError(f"invalid JSON MCP action adapter config {path}: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise SocActionAdapterRegistryError(f"invalid YAML MCP action adapter config {path}: {exc}") from exc
+
+    raise SocActionAdapterRegistryError("MCP action adapter config path must end with .json, .yaml, or .yml")
+
+
+def _extract_adapter_config_entries(document: Any, *, source: Path) -> list[Any]:
+    if isinstance(document, list):
+        return list(document)
+    if isinstance(document, Mapping):
+        entries = document.get("adapters")
+        if not isinstance(entries, list):
+            raise SocActionAdapterRegistryError(f"MCP action adapter config {source} must contain an adapters list")
+        return list(entries)
+    raise SocActionAdapterRegistryError(f"MCP action adapter config {source} must be a list or an object with adapters")
+
+
 def _descriptor_metadata(config: SocMcpActionAdapterConfig) -> dict[str, Any]:
     metadata = dict(config.metadata)
     metadata["mcp"] = {
@@ -515,5 +581,7 @@ __all__ = [
     "SocMcpToolProviderPort",
     "build_mcp_action_adapter",
     "build_mcp_action_adapter_registry",
+    "build_mcp_action_adapter_registry_from_file",
+    "load_mcp_action_adapter_configs",
     "mcp_read_only_adapter_descriptor",
 ]

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+import soc_agent.cli as soc_cli
 from soc_agent.actions.adapters import SocActionAdapterRegistry, SocActionAdapterRegistryError
 from soc_agent.actions.mcp import (
     DeerFlowCachedMcpToolProvider,
@@ -15,6 +18,8 @@ from soc_agent.actions.mcp import (
     SocMcpToolProviderError,
     build_mcp_action_adapter,
     build_mcp_action_adapter_registry,
+    build_mcp_action_adapter_registry_from_file,
+    load_mcp_action_adapter_configs,
     mcp_read_only_adapter_descriptor,
 )
 from soc_agent.contracts import (
@@ -125,6 +130,142 @@ def test_mcp_adapter_config_builder_rejects_duplicate_route_action() -> None:
 
     with pytest.raises(SocActionAdapterRegistryError, match="already registered"):
         build_mcp_action_adapter_registry([_asset_lookup_config(), duplicate_config], provider)
+
+
+def test_load_mcp_action_adapter_configs_from_json_object(tmp_path: Path) -> None:
+    config_path = tmp_path / "soc_action_adapters.json"
+    config_path.write_text(json.dumps({"adapters": [_asset_lookup_config()]}), encoding="utf-8")
+
+    [config] = load_mcp_action_adapter_configs(config_path)
+
+    assert config.adapter_id == "asset-lookup-cmdb-mcp"
+    assert config.route == "asset.lookup"
+    assert config.mcp.tool == "cmdb_asset_lookup"
+
+
+def test_load_mcp_action_adapter_configs_from_yaml_list(tmp_path: Path) -> None:
+    config_path = tmp_path / "soc_action_adapters.yaml"
+    config_path.write_text(
+        """
+- enabled: true
+  owner: soc-platform
+  environment: dev
+  adapter_id: asset-lookup-cmdb-mcp
+  route: asset.lookup
+  action: asset.lookup
+  required_payload_fields:
+    - asset_key
+  required_context_refs:
+    - thread_id
+  description: Read-only CMDB asset lookup through MCP.
+  mcp:
+    server: cmdb
+    tool: cmdb_asset_lookup
+    timeout_seconds: 7
+    input_mapping:
+      asset_key: query
+    output_fields:
+      - asset_found
+      - asset_record
+    result_schema_version: soc.asset_lookup_result.v1
+""".strip(),
+        encoding="utf-8",
+    )
+
+    [config] = load_mcp_action_adapter_configs(config_path)
+
+    assert config.adapter_id == "asset-lookup-cmdb-mcp"
+    assert config.mcp.input_mapping == {"asset_key": "query"}
+    assert config.mcp.output_fields == ["asset_found", "asset_record"]
+
+
+def test_load_mcp_action_adapter_configs_rejects_invalid_shape(tmp_path: Path) -> None:
+    config_path = tmp_path / "soc_action_adapters.json"
+    config_path.write_text(json.dumps({"adapter_id": "missing-adapters-list"}), encoding="utf-8")
+
+    with pytest.raises(SocActionAdapterRegistryError, match="must contain an adapters list"):
+        load_mcp_action_adapter_configs(config_path)
+
+
+def test_build_mcp_action_adapter_registry_from_file_executes_cached_provider(tmp_path: Path) -> None:
+    config_path = tmp_path / "soc_action_adapters.json"
+    config_path.write_text(json.dumps({"adapters": [_asset_lookup_config()]}), encoding="utf-8")
+    tool = FakeCachedMcpTool(
+        name="cmdb_asset_lookup",
+        result={
+            "asset_found": True,
+            "asset_record": {"asset_id": "asset-001"},
+            "raw_secret": "must-not-leak",
+        },
+    )
+    provider = DeerFlowCachedMcpToolProvider(lambda: [tool])
+
+    registry = build_mcp_action_adapter_registry_from_file(config_path, provider)
+    result = registry.execute(
+        SocAgentActionCommand(
+            route="asset.lookup",
+            action="asset.lookup",
+            dry_run=False,
+            payload={
+                "asset_key": "10.10.1.5",
+                "context_refs": {"thread_id": "SOC-THREAD-1"},
+            },
+        ),
+        context=_context(),
+    )
+
+    assert tool.invocations == [{"query": "10.10.1.5"}]
+    assert result.status == "success"
+    assert result.payload["mcp_result"] == {
+        "asset_found": True,
+        "asset_record": {"asset_id": "asset-001"},
+    }
+
+
+def test_cli_mcp_smoke_executes_configured_read_only_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / "soc_action_adapters.json"
+    config_path.write_text(json.dumps({"adapters": [_asset_lookup_config()]}), encoding="utf-8")
+    tool = FakeCachedMcpTool(
+        name="cmdb_asset_lookup",
+        result={
+            "asset_found": True,
+            "asset_record": {"asset_id": "asset-001"},
+            "raw_secret": "must-not-leak",
+        },
+    )
+    provider = DeerFlowCachedMcpToolProvider(lambda: [tool])
+    monkeypatch.setattr(soc_cli, "DeerFlowCachedMcpToolProvider", lambda: provider)
+
+    exit_code = soc_cli.main(
+        [
+            "mcp",
+            "smoke",
+            str(config_path),
+            "--route",
+            "asset.lookup",
+            "--json",
+            json.dumps(
+                {
+                    "asset_key": "10.10.1.5",
+                    "context_refs": {"thread_id": "SOC-THREAD-1"},
+                }
+            ),
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert tool.invocations == [{"query": "10.10.1.5"}]
+    assert output["status"] == "success"
+    assert output["payload"]["adapter_kind"] == "mcp"
+    assert output["payload"]["mcp_result"] == {
+        "asset_found": True,
+        "asset_record": {"asset_id": "asset-001"},
+    }
 
 
 def test_mcp_adapter_config_rejects_non_read_only_risk() -> None:

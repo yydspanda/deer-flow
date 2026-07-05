@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge skeleton 已固定 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge skeleton / MCP config smoke 已固定 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Read-only live smoke / config wiring |
+| 当前下一刀 | Dev/staging read-only MCP live smoke |
 
 ## Phase 1 切片计划
 
@@ -117,9 +117,40 @@
 | 81 | MCP-backed read-only `asset.lookup` adapter config builder | Done | 用 fake provider 固定显式配置到 MCP-backed `asset.lookup` adapter registry 的构造方式；不接真实 MCP server |
 | 82 | SOC action package structure hygiene | Done | 将 action adapter、proposal、MCP adapter 收口到 `backend/soc_agent/actions/`，删除根目录旧入口；架构测试防止继续往根目录新增 action-like 模块 |
 | 83 | DeerFlow cached MCP provider implementation | Done | 复用 DeerFlow MCP cache/session 生命周期，实现 `SocMcpToolProviderPort`；仍不让 Lead Agent 直接调用任意 MCP tool |
-| 84 | Read-only live smoke / config wiring | Planned | 用 dev/staging MCP server 或本地 fake MCP server 验证 read-only action path，并固定显式 adapter config 加载方式 |
+| 84 | Read-only config smoke wiring | Done | 支持 JSON/YAML 显式 adapter config 加载，`soc mcp smoke` 可验证 config -> registry -> DeerFlow cached provider -> action result |
+| 85 | Dev/staging read-only MCP live smoke | Planned | 用真实 dev/staging MCP server 验证资产查询或 EDR process tree read-only path，记录延迟、失败、payload size 和敏感字段裁剪 |
 
 ## 进度记录
+
+### 2026-07-05 — Read-only MCP config smoke wiring 切片
+
+- 背景：
+  - `DeerFlowCachedMcpToolProvider` 已能复用 DeerFlow MCP cache，但还没有固定本地显式 adapter config 的加载方式。
+  - 下一步接 dev/staging MCP 前，需要一个可重复 smoke 入口验证 `config -> registry -> provider -> SocAgentActionResult.payload`。
+- 变更：
+  - `backend/soc_agent/actions/mcp.py` 新增：
+    - `load_mcp_action_adapter_configs()`：加载 `.json/.yaml/.yml`，只接受顶层 list 或 `adapters: [...]`。
+    - `build_mcp_action_adapter_registry_from_file()`：从显式 allowlist config 构造 registry。
+  - `backend/soc_agent/cli.py` 新增 `soc mcp smoke`：
+    - 显式传入 config、`--route`、可选 `--action` 和 `--json` action payload。
+    - 默认使用 `DeerFlowCachedMcpToolProvider`。
+    - `--dry-run` 只验证 adapter/tool 可用性，不调用 MCP tool。
+  - `backend/tests/test_soc_mcp_adapters.py` 增加配置加载、registry-from-file 和 CLI smoke 覆盖。
+  - 更新 MCP bridge plan、action adapter plan、主方案、工程契约和进度台账。
+- 边界：
+  - 不接生产 MCP server。
+  - 不把 MCP config 自动接入 chat TUI / daemon 默认链路。
+  - 不开放 write/destructive execute。
+  - 不让 Lead Agent 直接选择 MCP tool；仍只能走 SOC route/action。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/actions/mcp.py soc_agent/cli.py tests/test_soc_mcp_adapters.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/actions soc_agent/cli.py soc_agent/lead_agent.py soc_agent/lead_agent_chat.py tests/test_soc_action_adapters.py tests/test_soc_mcp_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/actions soc_agent/cli.py soc_agent/lead_agent.py soc_agent/lead_agent_chat.py tests/test_soc_action_adapters.py tests/test_soc_mcp_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py --check`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py tests/test_soc_action_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+- 下一步：
+  - 用真实 dev/staging MCP server 配置一个 read-only `asset.lookup` 或 `endpoint.process_tree.lookup` smoke，记录延迟、失败率、payload size 和敏感字段裁剪结果。
 
 ### 2026-07-05 — DeerFlow cached MCP provider implementation 切片
 

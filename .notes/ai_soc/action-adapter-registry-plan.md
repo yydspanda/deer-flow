@@ -112,7 +112,14 @@ Lead Agent / Skill / Daemon
    - provider 对外仍实现 `SocMcpToolProviderPort`，core/API/TUI/Web 不接触 LangChain/MCP tool 类型。
    - 按 tool name 精确查找，缺失或调用失败必须映射为 `SocAgentActionResult(status="failed")` 或明确 registry error。
 
-10. **Read-only live smoke / config wiring**（Next）
-   - 用 dev/staging MCP server 或本地 fake MCP server 验证 read-only `asset.lookup` / EDR process tree path。
+10. **Read-only config smoke wiring**（Done）
+   - 支持从 `.json/.yaml/.yml` 显式 allowlist 加载 MCP-backed adapter config。
+   - 新增 `soc mcp smoke` 验证 `config -> registry -> DeerFlowCachedMcpToolProvider -> SocAgentActionResult.payload`。
    - 显式 adapter config 加载后构造 registry，不把 MCP tool 暴露给 Lead Agent 自主选择。
+   - SOC Lead Agent profile 不配置 `mcp` 字段；MCP 绑定属于 action adapter allowlist，不属于 custom-agent profile。
    - 不开放 write/destructive execute。
+
+11. **Dev/staging read-only MCP live smoke**（Next）
+   - 用真实 dev/staging MCP server 验证 read-only `asset.lookup` / EDR process tree path。
+   - 记录延迟、失败率、payload size 和敏感字段裁剪情况。
+   - 不接生产 write/destructive MCP。
