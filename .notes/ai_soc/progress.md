@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence 已固定 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence 已固定；真实 dev/staging MCP 等待 endpoint/凭证 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 用真实 dev/staging CMDB/EDR MCP config 替换本地 mock，跑 `soc mcp tools/smoke` 并保存 smoke report；继续只开放 read-only action |
+| 当前下一刀 | 不依赖真实 MCP：补 Lead Agent evidence reuse 规则和 read-only mock adapter 扩展；真实 dev/staging MCP smoke 等待 endpoint/凭证 |
 
 ## Phase 1 切片计划
 
@@ -121,13 +121,39 @@
 | 85 | Dev/staging read-only MCP smoke report contract | Done | `soc mcp smoke` 输出 versioned report，记录 latency、failure、payload size、result size、tool/config 和 output_fields 裁剪信息 |
 | 86 | MCP smoke readiness inventory | Done | `soc mcp tools` 可安全列出 DeerFlow cached MCP tools，`soc mcp smoke/tools --report-path` 可落盘报告；无 MCP config 时 tool_count=0 |
 | 87 | Local real MCP fixture and read-only smoke | Done | 本地 stdio MCP server + sample extensions/action config 可验证 `soc_dev_asset_lookup` discovery 和 `asset.lookup` execute smoke |
-| 88 | Real dev/staging MCP replacement | Planned | 用真实 CMDB/EDR MCP server 替换本地 fixture，保存 smoke report 并评估延迟、失败率、字段裁剪和接入风险 |
+| 88 | Real dev/staging MCP replacement | Waiting | 等真实 CMDB/EDR MCP endpoint/凭证可用后，再替换本地 fixture、保存 smoke report 并评估延迟、失败率、字段裁剪和接入风险 |
 | 89 | Upstream MCP sync compatibility retest | Done | 同步 upstream/main 后，SOC MCP adapter 显式传递 `mcp.server`，并重新验证 DeerFlow MCP 前缀重叠路由、local stdio discovery 和 `asset.lookup` execute smoke |
 | 90 | Asset extraction skill + asset.locate MCP mock | Done | 根据资产提取/定位原型，新增 `soc-asset-extraction` skill、`asset.locate` read-only policy、mock MCP tool/config，并让 Lead Agent proposal bridge 可通过 MCP-backed adapter 执行只读定位 |
 | 91 | Read-only action result evidence bridge | Done | 新增 `InvestigationEvidence` contract、repository protocol、in-memory store；read-only action success 后可记录 evidence，ReviewQueue context / Lead Agent artifact / Web/TUI 可展示 |
 | 92 | InvestigationEvidence PostgreSQL persistence / Gateway wiring | Done | 新增 `soc_investigation_evidence` migration、ORM row、SQLAlchemy repository 方法；Gateway/CLI ReviewService 和 Lead Agent read-only dispatcher 使用同一 repository 共享 evidence |
+| 93 | Lead Agent evidence reuse + endpoint process-tree mock adapter | Done | Lead Agent bounded context 明确复用既有 action_evidence；新增 `endpoint.process_tree.lookup` read-only in-memory/mock adapter、policy、proposal 示例和测试 |
 
 ## 进度记录
+
+### 2026-07-05 — Lead Agent evidence reuse + endpoint process-tree mock adapter
+
+- 背景：
+  - 用户确认当前没有真实 dev/staging CMDB/EDR MCP endpoint/凭证，因此不能继续把真实 MCP smoke 作为当前下一刀。
+  - 为了继续验证 SOC Lead Agent 的安全运营能力，先扩展不依赖外部服务的 read-only mock adapter，并让 Lead Agent 明确复用已有 action evidence。
+- 变更：
+  - `backend/soc_agent/contracts/schemas.py`：
+    - 新增 `SocEndpointProcessNode`、`SocEndpointNetworkConnection`、`SocEndpointProcessTreeRecord`。
+  - `backend/soc_agent/actions/adapters.py`：
+    - 新增 `endpoint.process_tree.lookup` read-only descriptor 和 `InMemoryEndpointProcessTreeLookupActionAdapter`。
+    - 默认 mock 返回 endpoint process tree、suspicious PowerShell、network connection 等结构化 EDR 证据。
+  - `backend/soc_agent/core/service.py` / `backend/soc_agent/cli.py`：
+    - `endpoint.process_tree.lookup` 纳入 read-only policy。
+    - `soc chat tui --lead-agent` 默认本地 registry 同时包含 `asset.lookup` 和 `endpoint.process_tree.lookup`；显式 `--mcp-action-config` 仍只使用配置中的 MCP adapter。
+  - `backend/soc_agent/lead_agent.py` / `backend/soc_agent/context_bridge.py`：
+    - SOC Lead Agent profile 和 bounded context instructions 明确：已有 `action_evidence` 要先复用，避免重复查同类只读工具。
+    - 增加 `endpoint.process_tree.lookup` proposal 示例。
+  - 测试：
+    - 覆盖 endpoint process-tree adapter descriptor/execute/not-found。
+    - 覆盖 policy 把 `endpoint.process_tree.lookup` 识别为 read-only。
+    - 覆盖 Lead Agent proposal -> router/policy/dispatcher -> mock adapter -> evidence repository。
+- 下一步：
+  - 继续不依赖真实 MCP 时，可补 Web/TUI evidence 过滤/详情体验或更多 read-only mock adapter。
+  - 真实 dev/staging MCP smoke 等 endpoint/凭证可用后再执行。
 
 ### 2026-07-05 — InvestigationEvidence PostgreSQL persistence / Gateway wiring
 
@@ -153,8 +179,8 @@
   - `cd backend && ./.venv/bin/python -m soc_agent.cli db upgrade --database-url sqlite:////tmp/soc_agent_evidence_migration_smoke.db`
   - `cd frontend && pnpm check`
 - 下一步：
-  - 用真实 dev/staging CMDB/EDR MCP server 替换本地 fixture，跑 `soc mcp tools` / `soc mcp smoke` 并保存 `soc.mcp_action_smoke_report.v1`。
-  - 继续保持 read-only：真实封禁/隔离/阻断不在下一刀开放。
+  - 真实 dev/staging MCP server 尚不可用时，继续做 mock read-only adapter 和 evidence reuse 体验。
+  - endpoint/凭证可用后，再跑 `soc mcp tools` / `soc mcp smoke` 并保存 `soc.mcp_action_smoke_report.v1`。
 
 ### 2026-07-05 — Read-only action result evidence bridge
 

@@ -13,7 +13,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
-from soc_agent.actions.adapters import InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
+from soc_agent.actions.adapters import InMemoryAssetLookupActionAdapter, InMemoryEndpointProcessTreeLookupActionAdapter, SocActionAdapterRegistry
 from soc_agent.actions.mcp import (
     DeerFlowCachedMcpToolProvider,
     build_mcp_action_adapter_registry_from_file,
@@ -602,7 +602,12 @@ def _read_only_adapter_registry_for_chat(args: argparse.Namespace) -> SocActionA
             config_path,
             DeerFlowCachedMcpToolProvider(use_one_shot_invocation=True),
         )
-    return SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter()])
+    return SocActionAdapterRegistry(
+        [
+            InMemoryAssetLookupActionAdapter(),
+            InMemoryEndpointProcessTreeLookupActionAdapter(),
+        ]
+    )
 
 
 def _agent_profile(args: argparse.Namespace) -> int:

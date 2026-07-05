@@ -291,7 +291,9 @@ SOC Agent chat stream 约束：
   - `asset.lookup` 是第一个具体 read-only adapter action，`risk_level=read_only`、`external_side_effect=read`、`execute_supported=True`，当前实现为 `InMemoryAssetLookupActionAdapter`，只服务本地开发/测试和 contract 验证；生产资产系统必须后续通过独立 adapter/MCP bridge 接入。
   - `asset.lookup` 可以登记为 read-only policy action，但不能默认加入 chat router 白名单；运行态调用只能通过显式 `soc_route=asset.lookup`、显式 `action_payload.asset_key`、显式 router allowlist 和注入的 action adapter registry 打开。
   - `asset.locate` 是 read-only business ownership / BU location action，用于把已提取资产定位到公司、业务组、处置归属或 mock 远程查询结果；它和 `asset.lookup` 一样不能默认加入 chat router 白名单，只能通过显式 proposal、router allowlist 和注入的 MCP-backed action adapter registry 打开。
+  - `endpoint.process_tree.lookup` 是 read-only endpoint investigation action，用于在没有真实 EDR MCP 时验证进程树查询、证据沉淀和 Lead Agent proposal bridge；当前实现为 `InMemoryEndpointProcessTreeLookupActionAdapter`，默认返回 mock EDR process tree，不代表真实 EDR 接入。
   - SOC Lead Agent 可以用 `<soc_action_proposal>...</soc_action_proposal>` 提出 `asset.lookup` / `asset.locate` 这类 read-only proposal；`SocLeadAgentActionProposalBoundary` 只能在注入 read-only router/dispatcher 时把它转成同一条 router/policy/dispatcher/registry 链路。
+  - SOC Lead Agent 可以提出 `endpoint.process_tree.lookup` proposal，但必须先检查 `InvestigationContext.action_evidence` / bounded artifact `action_evidence`，复用已有新鲜结果，避免重复查询。
   - `soc-asset-extraction` skill 只负责资产抽取、角色标注、disposal target 建议和 `asset.lookup` / `asset.locate` proposal 生成约束；skill 不得直接查询 Zeus/CMDB/EDR/SOAR，不得宣称 company code、BU、owner 或处置结果。
   - Lead Agent 不得直接调用 adapter、MCP 或资产系统；普通自然语言、Markdown 建议、模型自称“已查询”都不能触发 read-only lookup。
   - MCP-backed SOC action 必须实现为 `SocActionAdapter`，并先注册 `SocAgentActionAdapterDescriptor`；SOC route/action 到 MCP server/tool 的映射只能存在于 adapter/config 层，不能暴露给 Lead Agent 作为自由 tool 选择。
@@ -314,7 +316,8 @@ SOC Agent chat stream 约束：
   - `backend/scripts/soc_dev_mcp_server.py` 和 `backend/samples/mcp/soc_dev_*.json` 只用于本地真实 stdio MCP smoke，不是生产配置。样例 `extensions_config` 使用 `$SOC_DEV_MCP_PYTHON` / `$SOC_DEV_MCP_SERVER` 环境变量传绝对路径，避免 DeerFlow stdio tool 执行时切换 cwd 后找不到相对路径。
   - `backend/scripts/soc_dev_mcp_server.py` 当前提供两个本地 mock read-only tools：`asset_lookup` 返回静态资产记录，`asset_locate` 模拟 Zeus/CMDB/asset_to_bu 远程归属定位并返回 `mocked=true`；这两个工具只能用于开发 smoke 和 proposal bridge 验证。
   - `soc chat tui --lead-agent --mcp-action-config PATH` 是显式 dev/staging 注入入口；不传配置时保持本地 in-memory read-only adapter，不得隐式扫描或自动启用任意 MCP action config。
-  - `soc chat tui --lead-agent` 当前使用 SOC repository 写入 read-only action evidence；`InMemoryInvestigationEvidenceRepository` 只用于单元测试和无数据库的局部 service wiring。
+  - `soc chat tui --lead-agent` 当前使用 SOC repository 写入 read-only action evidence；不传 `--mcp-action-config` 时默认包含本地 `asset.lookup` 与 `endpoint.process_tree.lookup` mock adapter；`InMemoryInvestigationEvidenceRepository` 只用于单元测试和无数据库的局部 service wiring。
+  - 真实 dev/staging MCP smoke 不是当前阻塞项；只有拿到真实 endpoint/凭证后才替换本地 fixture 并保存 `soc.mcp_action_smoke_report.v1`。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
     - `POST /api/soc/approvals/grants`
     - `POST /api/soc/approvals/actions/dry-run`

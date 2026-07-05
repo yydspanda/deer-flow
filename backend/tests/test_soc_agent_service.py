@@ -776,6 +776,16 @@ def test_agent_action_policy_treats_asset_locate_as_read_only() -> None:
     assert decision.risk_level is SocAgentRiskLevel.READ_ONLY
     assert decision.requires_human_approval is False
 
+    process_tree_decision = SocAgentActionPolicy().check(
+        action="endpoint.process_tree.lookup",
+        route="endpoint.process_tree.lookup",
+        request=SocAgentChatRequest(message="lookup process tree"),
+        context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI)),
+    )
+    assert process_tree_decision.allowed is True
+    assert process_tree_decision.risk_level is SocAgentRiskLevel.READ_ONLY
+    assert process_tree_decision.requires_human_approval is False
+
 
 def test_agent_chat_service_dispatches_explicit_read_only_asset_lookup_adapter() -> None:
     registry = SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter(records=[_asset_lookup_record()])])

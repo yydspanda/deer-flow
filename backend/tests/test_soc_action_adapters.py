@@ -4,12 +4,15 @@ import pytest
 
 from soc_agent.actions.adapters import (
     ASSET_LOOKUP_ACTION,
+    ENDPOINT_PROCESS_TREE_LOOKUP_ACTION,
     DryRunOnlySocActionAdapter,
     InMemoryAssetLookupActionAdapter,
+    InMemoryEndpointProcessTreeLookupActionAdapter,
     SocActionAdapterNotFoundError,
     SocActionAdapterRegistry,
     SocActionAdapterRegistryError,
     asset_lookup_adapter_descriptor,
+    endpoint_process_tree_lookup_adapter_descriptor,
 )
 from soc_agent.contracts import (
     ActorContext,
@@ -21,6 +24,7 @@ from soc_agent.contracts import (
     SocAgentApprovedActionCommand,
     SocAgentRiskLevel,
     SocAssetLookupRecord,
+    SocEndpointProcessTreeRecord,
 )
 
 
@@ -247,6 +251,59 @@ def test_asset_lookup_adapter_execute_not_found_is_successful_read() -> None:
     assert result.payload["external_side_effect"] == "read"
 
 
+def test_endpoint_process_tree_adapter_descriptor_is_read_only() -> None:
+    descriptor = endpoint_process_tree_lookup_adapter_descriptor()
+
+    assert descriptor.route == ENDPOINT_PROCESS_TREE_LOOKUP_ACTION
+    assert descriptor.action == ENDPOINT_PROCESS_TREE_LOOKUP_ACTION
+    assert descriptor.risk_level is SocAgentRiskLevel.READ_ONLY
+    assert descriptor.external_side_effect == "read"
+    assert descriptor.execute_supported is True
+    assert descriptor.required_payload_fields == ["host_key"]
+
+
+def test_endpoint_process_tree_adapter_execute_returns_matching_mock_record() -> None:
+    registry = SocActionAdapterRegistry([InMemoryEndpointProcessTreeLookupActionAdapter(records=[_process_tree_record()])])
+
+    result = registry.execute(
+        SocAgentApprovedActionCommand(
+            execution_token_id="SAT-test",
+            route=ENDPOINT_PROCESS_TREE_LOOKUP_ACTION,
+            action=ENDPOINT_PROCESS_TREE_LOOKUP_ACTION,
+            dry_run=False,
+            payload={"host_key": "endpoint-1"},
+        ),
+        context=_context(),
+    )
+
+    assert result.status == "success"
+    assert result.payload["process_tree_found"] is True
+    assert result.payload["process_tree"]["process_tree_id"] == "ptree-unit-001"
+    assert result.payload["process_tree"]["processes"][0]["process_name"] == "powershell.exe"
+    assert result.payload["external_side_effect"] == "read"
+    assert result.payload["read_only"] is True
+
+
+def test_endpoint_process_tree_adapter_execute_not_found_is_successful_read() -> None:
+    registry = SocActionAdapterRegistry([InMemoryEndpointProcessTreeLookupActionAdapter(records=[])])
+
+    result = registry.execute(
+        SocAgentApprovedActionCommand(
+            execution_token_id="SAT-test",
+            route=ENDPOINT_PROCESS_TREE_LOOKUP_ACTION,
+            action=ENDPOINT_PROCESS_TREE_LOOKUP_ACTION,
+            dry_run=False,
+            payload={"host_key": "missing-host"},
+        ),
+        context=_context(),
+    )
+
+    assert result.status == "success"
+    assert result.payload["process_tree_found"] is False
+    assert result.payload["process_tree"] is None
+    assert result.payload["external_side_effect"] == "read"
+
+
 class _ExecutableAdapter:
     def __init__(self, descriptor: SocAgentActionAdapterDescriptor) -> None:
         self.descriptor = descriptor
@@ -319,4 +376,34 @@ def _asset_record() -> SocAssetLookupRecord:
         environment="prod",
         criticality="critical",
         source="unit-test",
+    )
+
+
+def _process_tree_record() -> SocEndpointProcessTreeRecord:
+    return SocEndpointProcessTreeRecord(
+        host_key="endpoint-1",
+        hostname="endpoint-1",
+        primary_ip="10.10.1.5",
+        process_tree_id="ptree-unit-001",
+        processes=[
+            {
+                "pid": 4200,
+                "parent_pid": 700,
+                "process_name": "powershell.exe",
+                "command_line": "powershell.exe -nop -w hidden",
+                "user": "UM001",
+                "risk_tags": ["suspicious_powershell"],
+            }
+        ],
+        network_connections=[
+            {
+                "process_name": "powershell.exe",
+                "remote_ip": "203.0.113.10",
+                "remote_port": 80,
+                "direction": "outbound",
+                "protocol": "tcp",
+            }
+        ],
+        source="unit-test",
+        mocked=True,
     )

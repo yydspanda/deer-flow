@@ -28,6 +28,7 @@ _LEAD_AGENT_CONTEXT_INSTRUCTIONS = [
     "Do not read SOC repositories directly from the lead agent.",
     "Do not execute response actions from this context.",
     "High-risk actions must be proposed as bounded action requests and routed through SOC approval.",
+    "Before proposing a duplicate read-only lookup, inspect action_evidence and reuse fresh matching results.",
     "If evidence conflicts, explain the conflict and ask for review instead of forcing a conclusion.",
 ]
 

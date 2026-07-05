@@ -150,6 +150,9 @@ Current SOC direction:
   and `InvestigationEvidenceRepository`, then re-enter analyst/Lead Agent context through
   `SocReviewService.get_investigation_context()`; do not let entry layers write evidence
   or mutate decisions directly.
+- `endpoint.process_tree.lookup` is currently a read-only in-memory/mock EDR investigation
+  adapter used to validate process-tree evidence flow before real EDR MCP credentials exist;
+  do not treat it as production EDR integration.
 
 SOC phase plan:
 

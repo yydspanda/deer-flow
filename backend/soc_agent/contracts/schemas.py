@@ -413,6 +413,42 @@ class SocAssetLookupRecord(BaseModel):
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
+class SocEndpointProcessNode(BaseModel):
+    """One process node returned by an endpoint process-tree lookup."""
+
+    pid: int | None = None
+    parent_pid: int | None = None
+    process_name: str = Field(min_length=1)
+    command_line: str | None = None
+    user: str | None = None
+    risk_tags: list[str] = Field(default_factory=list)
+
+
+class SocEndpointNetworkConnection(BaseModel):
+    """One network connection observed in an endpoint process tree."""
+
+    process_name: str | None = None
+    remote_ip: str = Field(min_length=1)
+    remote_port: int | None = Field(default=None, ge=1, le=65535)
+    direction: Literal["inbound", "outbound", "unknown"] = "unknown"
+    protocol: str | None = None
+
+
+class SocEndpointProcessTreeRecord(BaseModel):
+    """Read-only endpoint process-tree record returned by an EDR adapter."""
+
+    schema_version: str = "soc.endpoint_process_tree_record.v1"
+    host_key: str = Field(min_length=1)
+    hostname: str | None = None
+    primary_ip: str | None = None
+    process_tree_id: str | None = None
+    observed_at: datetime | None = None
+    processes: list[SocEndpointProcessNode] = Field(default_factory=list)
+    network_connections: list[SocEndpointNetworkConnection] = Field(default_factory=list)
+    source: str = "static"
+    mocked: bool = False
+
+
 class SocDaemonMessage(BaseModel):
     """Versioned message envelope consumed by the SOC daemon boundary.
 
