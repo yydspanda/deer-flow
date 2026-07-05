@@ -97,7 +97,12 @@ Lead Agent / Skill / Daemon
    - 用户可配置 readonly MCP 候选；高风险 MCP group 只允许管理员启用，并继续走 approval。
    - 规划文档：`.notes/ai_soc/mcp-adapter-bridge-plan.md`。
 
-7. **MCP tool provider port + fake provider adapter tests**（Next）
+7. **MCP tool provider port + fake provider adapter tests**（Done）
    - 先定义 SOC MCP provider port 和 fake provider 测试，不接真实 MCP server。
    - `SocMcpToolActionAdapter` 先只支持 read-only fake invocation。
    - 真实 DeerFlow cached MCP provider 放到下一刀，避免一次性接入外部状态。
+
+8. **MCP-backed read-only `asset.lookup` adapter config builder**（Next）
+   - 新增显式配置/builder，把 `asset.lookup` 映射到 MCP-backed adapter descriptor、tool name、input mapping 和 output fields。
+   - 继续使用 fake provider，不接真实 MCP server。
+   - 为后续 DeerFlow cached MCP provider 实现预留同一 provider port。

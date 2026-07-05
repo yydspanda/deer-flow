@@ -285,6 +285,7 @@ SOC Agent chat stream 约束：
   - MCP-backed SOC action 必须实现为 `SocActionAdapter`，并先注册 `SocAgentActionAdapterDescriptor`；SOC route/action 到 MCP server/tool 的映射只能存在于 adapter/config 层，不能暴露给 Lead Agent 作为自由 tool 选择。
   - SOC MCP bridge 可以复用 DeerFlow `get_cached_mcp_tools()` / MCP session cache，但真实 LangChain/MCP tool 类型只能出现在 adapter module；`core/service.py`、Gateway、TUI、Web、contracts 不得 import MCP SDK 或 DeerFlow MCP cache。
   - `tool_search` 适合 DeerFlow 通用 agent 的 deferred tool discovery，不是 SOC action execution boundary；生产 SOC action 不允许由 Lead Agent 直接通过 `tool_search` 找到并调用任意 MCP tool。
+  - `backend/soc_agent/mcp_adapters.py` 是当前 SOC MCP adapter skeleton 边界：`SocMcpToolProviderPort` 只暴露 `list_tools()` / `invoke()`，`SocMcpToolActionAdapter` 先只支持 `read_only + external_side_effect=read`，provider exception 必须映射为 `SocAgentActionResult(status="failed")`，dry-run 不得调用 provider `invoke()`。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
     - `POST /api/soc/approvals/grants`
     - `POST /api/soc/approvals/actions/dry-run`

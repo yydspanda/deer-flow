@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge 的边界已固定 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge skeleton 已固定 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | MCP tool provider port + fake provider adapter tests |
+| 当前下一刀 | MCP-backed read-only `asset.lookup` adapter config builder |
 
 ## Phase 1 切片计划
 
@@ -113,9 +113,47 @@
 | 77 | Read-only adapter dispatcher / tool gateway wiring | Done | 明确 `asset.lookup` 如何通过受控 route/tool gateway 进入运行态；默认不加入 chat router 白名单；结果必须写入 action result / audit payload |
 | 78 | SOC Lead Agent read-only tool proposal bridge | Done | Lead Agent 只能通过结构化 envelope 请求 `asset.lookup` 等只读能力；bridge 转成同一条 router/policy/dispatcher/registry 链路；不直接调用 adapter/MCP |
 | 79 | MCP adapter bridge / real read-only data source planning | Done | 规划真实资产系统、EDR 只读查询或 MCP readonly tool 如何通过 adapter descriptor 接入；write/destructive 仍走 approval |
-| 80 | MCP tool provider port + fake provider adapter tests | Planned | 定义 SOC MCP provider port、fake provider 和 read-only MCP adapter skeleton；不接真实 MCP server |
+| 80 | MCP tool provider port + fake provider adapter tests | Done | 定义 SOC MCP provider port、fake provider 和 read-only MCP adapter skeleton；不接真实 MCP server |
+| 81 | MCP-backed read-only `asset.lookup` adapter config builder | Planned | 用 fake provider 固定显式配置到 MCP-backed `asset.lookup` adapter registry 的构造方式；不接真实 MCP server |
 
 ## 进度记录
+
+### 2026-07-05 — MCP tool provider port + fake provider adapter tests 切片
+
+- 背景：
+  - MCP bridge 规划已完成，但还没有 SOC 自己的 provider port 和 adapter skeleton。
+  - 直接接 DeerFlow cached MCP provider 会引入外部状态；先用 fake provider 固定 contract 更稳。
+- 变更：
+  - 新增 `backend/soc_agent/mcp_adapters.py`：
+    - `SocMcpToolDescriptor`
+    - `SocMcpToolProviderPort`
+    - `SocMcpToolProviderError` / `SocMcpToolNotFoundError`
+    - `mcp_read_only_adapter_descriptor()`
+    - `SocMcpToolActionAdapter`
+  - `SocMcpToolActionAdapter` 当前只支持 read-only MCP invocation：
+    - descriptor 必须是 `adapter_kind=mcp`、`risk_level=read_only`、`external_side_effect=read`、`execute_supported=True`。
+    - dry-run 校验 route/action、required payload、required context refs、tool availability，但不调用 provider `invoke()`。
+    - execute 通过 `input_mapping` 构造 MCP tool payload，通过 `output_fields` 裁剪返回结果。
+    - provider exception 被映射为 `SocAgentActionResult(status="failed")`，不向上泄漏外部异常。
+  - 新增 `backend/tests/test_soc_mcp_adapters.py`：
+    - fake provider list/invoke。
+    - dry-run 不调用 provider。
+    - execute payload mapping、timeout、output filtering。
+    - missing context refs、missing MCP tool、provider error、非 read-only descriptor 拒绝。
+  - 更新 MCP bridge plan、action adapter plan、主方案、工程契约。
+- 边界：
+  - 不接真实 DeerFlow MCP cache。
+  - 不接真实 MCP server。
+  - 不修改 DeerFlow MCP core。
+  - 不开放 high-risk/write/destructive MCP execute。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/mcp_adapters.py tests/test_soc_mcp_adapters.py tests/test_soc_action_adapters.py tests/test_soc_lead_agent_chat.py`
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/mcp_adapters.py tests/test_soc_mcp_adapters.py tests/test_soc_action_adapters.py tests/test_soc_lead_agent_chat.py --check`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py tests/test_soc_action_adapters.py tests/test_soc_lead_agent_chat.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py tests/test_soc_action_adapters.py tests/test_soc_agent_service.py tests/test_soc_lead_agent_chat.py tests/test_soc_tui_chat_runtime.py`
+  - `codegraph sync .`
+- 下一步：
+  - 做 MCP-backed read-only `asset.lookup` adapter config builder：用 fake provider 固定显式配置到 adapter registry 的构造方式，继续不接真实 MCP server。
 
 ### 2026-07-05 — MCP adapter bridge / real read-only data source planning 切片
 
