@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock 已固定 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence 已固定 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Replace local MCP fixture with real dev/staging CMDB/EDR MCP config, or wire MCP-backed `asset.lookup` into injected runtime registry behind config |
+| 当前下一刀 | 用真实 dev/staging CMDB/EDR MCP config 替换本地 mock，跑 `soc mcp tools/smoke` 并保存 smoke report；继续只开放 read-only action |
 
 ## Phase 1 切片计划
 
@@ -124,8 +124,66 @@
 | 88 | Real dev/staging MCP replacement | Planned | 用真实 CMDB/EDR MCP server 替换本地 fixture，保存 smoke report 并评估延迟、失败率、字段裁剪和接入风险 |
 | 89 | Upstream MCP sync compatibility retest | Done | 同步 upstream/main 后，SOC MCP adapter 显式传递 `mcp.server`，并重新验证 DeerFlow MCP 前缀重叠路由、local stdio discovery 和 `asset.lookup` execute smoke |
 | 90 | Asset extraction skill + asset.locate MCP mock | Done | 根据资产提取/定位原型，新增 `soc-asset-extraction` skill、`asset.locate` read-only policy、mock MCP tool/config，并让 Lead Agent proposal bridge 可通过 MCP-backed adapter 执行只读定位 |
+| 91 | Read-only action result evidence bridge | Done | 新增 `InvestigationEvidence` contract、repository protocol、in-memory store；read-only action success 后可记录 evidence，ReviewQueue context / Lead Agent artifact / Web/TUI 可展示 |
+| 92 | InvestigationEvidence PostgreSQL persistence / Gateway wiring | Done | 新增 `soc_investigation_evidence` migration、ORM row、SQLAlchemy repository 方法；Gateway/CLI ReviewService 和 Lead Agent read-only dispatcher 使用同一 repository 共享 evidence |
 
 ## 进度记录
+
+### 2026-07-05 — InvestigationEvidence PostgreSQL persistence / Gateway wiring
+
+- 背景：
+  - 上一刀 `InvestigationEvidence` 只在同进程内存中可复用，Web、TUI、daemon、Lead Agent 不能跨进程共享只读查询结果。
+  - 在接真实 CMDB/EDR MCP 前，先把 evidence 落到 SOC business store，避免真实工具结果只停留在一次 stream 里。
+- 变更：
+  - `backend/soc_agent/db/models.py`：
+    - 新增 `SocInvestigationEvidenceRow`，保存 route/action/status、queue/run/alert/thread/proposal/context 索引和完整 `evidence_payload`。
+  - `backend/soc_agent/db/migrations/versions/0008_investigation_evidence.py`：
+    - 新增 `soc_investigation_evidence` 表和常用查询索引。
+  - `backend/soc_agent/db/repositories.py`：
+    - `SqlAlchemyAlertRepository` 实现 `save_evidence()` / `list_evidence()`。
+  - Gateway / CLI wiring：
+    - `app.gateway.routers.soc_review.get_soc_review_service()` 将同一 repository 注入 `evidence_repository`。
+    - `soc review context`、`soc review tui`、`soc chat tui --lead-agent` 使用 PG repository 聚合/写入 evidence。
+  - 测试：
+    - 增加 SQLAlchemy evidence persistence、ReviewService context 聚合、Gateway context action_evidence 覆盖。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_repository.py tests/test_soc_review_router.py tests/test_soc_agent_service.py tests/test_soc_lead_agent_chat.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/db soc_agent/core soc_agent/contracts soc_agent/protocols.py soc_agent/context_bridge.py soc_agent/cli.py soc_agent/tui/render.py app/gateway/routers/soc_review.py tests/test_soc_agent_repository.py tests/test_soc_review_router.py tests/test_soc_agent_service.py tests/test_soc_lead_agent_chat.py`
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/db soc_agent/core soc_agent/contracts soc_agent/protocols.py soc_agent/context_bridge.py soc_agent/cli.py soc_agent/tui/render.py app/gateway/routers/soc_review.py tests/test_soc_agent_repository.py tests/test_soc_review_router.py tests/test_soc_agent_service.py tests/test_soc_lead_agent_chat.py --check`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli db upgrade --database-url sqlite:////tmp/soc_agent_evidence_migration_smoke.db`
+  - `cd frontend && pnpm check`
+- 下一步：
+  - 用真实 dev/staging CMDB/EDR MCP server 替换本地 fixture，跑 `soc mcp tools` / `soc mcp smoke` 并保存 `soc.mcp_action_smoke_report.v1`。
+  - 继续保持 read-only：真实封禁/隔离/阻断不在下一刀开放。
+
+### 2026-07-05 — Read-only action result evidence bridge
+
+- 背景：
+  - `asset.lookup` / `asset.locate` 已能通过 Lead Agent proposal -> policy -> dispatcher -> adapter/MCP 产生 `soc.action_result`。
+  - 如果结果只停留在 stream 事件里，分析师重新打开工单、Web 页面或后续 Lead Agent turn 无法复用“已经查过的资产定位结果”。
+- 变更：
+  - `backend/soc_agent/contracts/schemas.py`：
+    - 新增 `InvestigationEvidence`，表示只读 action/tool 产生的调查证据。
+    - `InvestigationContext` 和 `SocLeadAgentReviewContextArtifact` 增加 `action_evidence`。
+  - `backend/soc_agent/protocols.py` / `backend/soc_agent/core/evidence.py`：
+    - 新增 `InvestigationEvidenceRepository` 协议和 `InMemoryInvestigationEvidenceRepository`。
+  - `backend/soc_agent/core/service.py`：
+    - `SocAgentActionDispatcher` 在 read-only adapter 成功执行后可选写入 evidence，并把 `evidence_id` 回填到 action result payload。
+    - `SocReviewService.get_investigation_context()` 可选聚合 action evidence。
+  - `backend/soc_agent/context_bridge.py`：
+    - Lead Agent bounded review artifact 带入最近 action evidence，数量受限。
+  - `backend/soc_agent/cli.py`：
+    - `soc chat tui --lead-agent` 同一进程中共享 in-memory evidence repository。
+  - `backend/soc_agent/tui/render.py` / `frontend/src/components/workspace/soc/soc-review-queue-workbench.tsx`：
+    - Review context / Web review 页面展示只读查询证据摘要和 result payload。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_agent_service.py tests/test_soc_lead_agent_chat.py`
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/contracts soc_agent/protocols.py soc_agent/core/evidence.py soc_agent/core/service.py soc_agent/context_bridge.py soc_agent/cli.py soc_agent/tui/render.py tests/test_soc_agent_service.py tests/test_soc_lead_agent_chat.py --check`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/contracts soc_agent/protocols.py soc_agent/core/evidence.py soc_agent/core/service.py soc_agent/context_bridge.py soc_agent/cli.py soc_agent/tui/render.py tests/test_soc_agent_service.py tests/test_soc_lead_agent_chat.py`
+  - `cd frontend && pnpm check`
+- 下一步：
+  - 做 `InvestigationEvidence` PostgreSQL repository / migration / Gateway wiring，让 evidence 跨进程共享。
+  - PG 持久化完成后，再用真实 dev/staging CMDB/EDR MCP config 替换本地 mock 并保存 smoke report。
 
 ### 2026-07-05 — Asset extraction skill + asset.locate MCP mock
 

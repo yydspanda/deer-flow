@@ -223,6 +223,7 @@ class SocLeadAgentReviewContextArtifact(BaseModel):
     fact_context: dict[str, Any] = Field(default_factory=dict)
     summary: dict[str, Any] | None = None
     similar_alerts: list[dict[str, Any]] = Field(default_factory=list)
+    action_evidence: list[dict[str, Any]] = Field(default_factory=list)
     skill_context: SocSkillContext | None = None
     instructions: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
@@ -354,6 +355,27 @@ class SocAgentActionResult(BaseModel):
     message: str = Field(min_length=1)
     payload: dict[str, Any] = Field(default_factory=dict)
     requires_human_approval: bool = False
+
+
+class InvestigationEvidence(BaseModel):
+    """Investigation evidence produced by bounded SOC service actions."""
+
+    schema_version: str = "soc.investigation_evidence.v1"
+    evidence_id: str = Field(default_factory=lambda: f"EVI-{uuid4().hex[:12].upper()}")
+    source_type: Literal["read_only_action_result"] = "read_only_action_result"
+    route: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    status: Literal["success", "denied", "failed"]
+    message: str = Field(min_length=1)
+    result_payload: dict[str, Any] = Field(default_factory=dict)
+    queue_id: str | None = None
+    run_id: str | None = None
+    alert_id: str | None = None
+    thread_id: str | None = None
+    source_proposal_id: str | None = None
+    context_hash: str | None = None
+    actor: ActorContext | None = None
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class SocAgentActionAdapterDescriptor(BaseModel):
@@ -1007,3 +1029,4 @@ class InvestigationContext(BaseModel):
     summary: AlertSummary | None = None
     audit_records: list[DecisionAuditRecord] = Field(default_factory=list)
     similar_alerts: list[SimilarAlertMatch] = Field(default_factory=list)
+    action_evidence: list[InvestigationEvidence] = Field(default_factory=list)

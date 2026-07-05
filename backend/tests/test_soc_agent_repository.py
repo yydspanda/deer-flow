@@ -1,12 +1,25 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from soc_agent.contracts import ActorContext, AuditAction, CorrectionCommand, ReviewQueueStatus, ServiceRequestContext, SimilarAlertQuery, SocAgentApprovalRequest, SocAgentApprovedActionCommand, SocAgentRiskLevel, Verdict
+from soc_agent.contracts import (
+    ActorContext,
+    AuditAction,
+    CorrectionCommand,
+    InvestigationEvidence,
+    ReviewQueueStatus,
+    ServiceRequestContext,
+    SimilarAlertQuery,
+    SocAgentApprovalRequest,
+    SocAgentApprovedActionCommand,
+    SocAgentRiskLevel,
+    Verdict,
+)
 from soc_agent.core import SocAgentApprovalService, SocAnalysisService
 from soc_agent.core.service import SocReviewService
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
@@ -214,6 +227,101 @@ def test_sqlalchemy_alert_repository_persists_review_queue_items() -> None:
     assert "ip:30.180.248.178" in item.entity_keys
     assert repository.get_open_review_item_by_run(run.run_id) == item
     assert repository.get_review_item(item.queue_id) == item
+
+
+def test_sqlalchemy_alert_repository_persists_investigation_evidence() -> None:
+    repository = _repository()
+    older = InvestigationEvidence(
+        evidence_id="EVI-OLDER",
+        route="asset.lookup",
+        action="asset.lookup",
+        status="success",
+        message="Asset lookup completed.",
+        result_payload={"asset_found": True, "asset_record": {"asset_id": "asset-001"}},
+        queue_id="REV-1",
+        run_id="RUN-1",
+        alert_id="ALT-1",
+        thread_id="SOC-THREAD-1",
+        source_proposal_id="PROP-1",
+        actor=ActorContext(actor_id="analyst-1"),
+        created_at=datetime(2026, 7, 5, 10, 0, tzinfo=UTC),
+    )
+    newer = InvestigationEvidence(
+        evidence_id="EVI-NEWER",
+        route="asset.locate",
+        action="asset.locate",
+        status="success",
+        message="Asset location completed.",
+        result_payload={"mcp_result": {"company_code": "PA011", "mocked": True}},
+        queue_id="REV-1",
+        run_id="RUN-1",
+        alert_id="ALT-1",
+        thread_id="SOC-THREAD-2",
+        created_at=older.created_at + timedelta(minutes=1),
+    )
+    unrelated = InvestigationEvidence(
+        evidence_id="EVI-UNRELATED",
+        route="asset.locate",
+        action="asset.locate",
+        status="success",
+        message="Unrelated asset location completed.",
+        result_payload={"mcp_result": {"company_code": "PA999"}},
+        queue_id="REV-2",
+        run_id="RUN-2",
+        alert_id="ALT-2",
+        thread_id="SOC-THREAD-3",
+        created_at=older.created_at + timedelta(minutes=2),
+    )
+
+    repository.save_evidence(older)
+    repository.save_evidence(newer)
+    repository.save_evidence(unrelated)
+
+    by_queue = repository.list_evidence(queue_id="REV-1")
+    assert [item.evidence_id for item in by_queue] == ["EVI-NEWER", "EVI-OLDER"]
+    assert by_queue[0].result_payload["mcp_result"]["company_code"] == "PA011"
+    assert by_queue[1].actor is not None
+    assert by_queue[1].actor.actor_id == "analyst-1"
+    assert repository.list_evidence(run_id="RUN-1", limit=1)[0].evidence_id == "EVI-NEWER"
+    assert repository.list_evidence(alert_id="ALT-2")[0].evidence_id == "EVI-UNRELATED"
+    assert repository.list_evidence(thread_id="SOC-THREAD-1")[0].evidence_id == "EVI-OLDER"
+    assert repository.list_evidence(queue_id="REV-MISSING") == []
+
+
+def test_review_service_context_loads_sqlalchemy_investigation_evidence() -> None:
+    repository = _repository()
+    run = SocAnalysisService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+    ).analyze(_sample("pingan_legacy_apt.json"))
+    item = repository.get_open_review_item_by_run(run.run_id)
+    assert item is not None
+    repository.save_evidence(
+        InvestigationEvidence(
+            route="asset.locate",
+            action="asset.locate",
+            status="success",
+            message="Asset location completed.",
+            result_payload={"mcp_result": {"company_code": "PA011", "mocked": True}},
+            queue_id=item.queue_id,
+            run_id=run.run_id,
+            alert_id=run.alert_id,
+        )
+    )
+
+    context = SocReviewService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+        evidence_repository=repository,
+    ).get_investigation_context(item.queue_id)
+
+    assert len(context.action_evidence) == 1
+    assert context.action_evidence[0].action == "asset.locate"
+    assert context.action_evidence[0].result_payload["mcp_result"]["company_code"] == "PA011"
 
 
 def test_sqlalchemy_alert_repository_closes_review_queue_after_correction() -> None:

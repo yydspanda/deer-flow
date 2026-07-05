@@ -9,12 +9,15 @@ from soc_agent.actions.adapters import DryRunOnlySocActionAdapter, InMemoryAsset
 from soc_agent.contracts import (
     ActorContext,
     ActorType,
+    AlertSourceType,
     AlertSummary,
     AnalysisRun,
+    AnalysisRunStatus,
     AuditAction,
     CorrectionCommand,
     DecisionAuditRecord,
     EntrySurface,
+    InvestigationEvidence,
     ReviewQueueCloseCommand,
     ReviewQueueItem,
     ReviewQueueStatus,
@@ -38,6 +41,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.core import (
     DeterministicAnalysisRuntime,
+    InMemoryInvestigationEvidenceRepository,
     SocAgentActionDispatcher,
     SocAgentActionPolicy,
     SocAgentApprovalService,
@@ -809,6 +813,100 @@ def test_agent_chat_service_dispatches_explicit_read_only_asset_lookup_adapter()
     assert events[3].data["payload"]["asset_record"]["asset_id"] == "asset-001"
     assert events[3].data["payload"]["external_side_effect"] == "read"
     assert "Asset lookup completed" in events[4].data["content"]
+
+
+def test_read_only_action_result_can_be_recorded_as_investigation_evidence() -> None:
+    registry = SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter(records=[_asset_lookup_record()])])
+    evidence_repository = InMemoryInvestigationEvidenceRepository()
+    service = SocAgentChatService(
+        capability_router=SocAgentCapabilityRouter(allowed_routes={"asset.lookup"}),
+        action_dispatcher=SocAgentActionDispatcher(
+            action_adapter_registry=registry,
+            evidence_repository=evidence_repository,
+        ),
+    )
+    request = SocAgentChatRequest(
+        message="lookup asset",
+        thread_id="SOC-THREAD-1",
+        metadata={
+            "soc_route": "asset.lookup",
+            "action_payload": {
+                "asset_key": "10.10.1.5",
+                "context_refs": {
+                    "queue_id": "REV-1",
+                    "run_id": "RUN-1",
+                    "alert_id": "ALT-1",
+                    "proposal_id": "PROP-1",
+                    "context_hash": "ctx-hash",
+                },
+            },
+        },
+    )
+
+    events = list(
+        service.stream(
+            request,
+            context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI)),
+        )
+    )
+
+    action_payload = events[3].data["payload"]
+    assert action_payload["evidence_id"].startswith("EVI-")
+    evidence = evidence_repository.list_evidence(queue_id="REV-1")
+    assert len(evidence) == 1
+    assert evidence[0].evidence_id == action_payload["evidence_id"]
+    assert evidence[0].route == "asset.lookup"
+    assert evidence[0].action == "asset.lookup"
+    assert evidence[0].status == "success"
+    assert evidence[0].queue_id == "REV-1"
+    assert evidence[0].run_id == "RUN-1"
+    assert evidence[0].alert_id == "ALT-1"
+    assert evidence[0].thread_id == "SOC-THREAD-1"
+    assert evidence[0].source_proposal_id == "PROP-1"
+    assert evidence[0].context_hash == "ctx-hash"
+    assert evidence[0].actor is not None
+    assert evidence[0].actor.actor_id == "analyst-1"
+    assert evidence[0].result_payload["asset_record"]["asset_id"] == "asset-001"
+
+
+def test_review_service_context_includes_action_evidence() -> None:
+    repository = InMemoryAlertRepository()
+    review_repository = InMemoryReviewQueueRepository()
+    evidence_repository = InMemoryInvestigationEvidenceRepository()
+    run = AnalysisRun(run_id="RUN-1", alert_id="ALT-1", status=AnalysisRunStatus.NEEDS_REVIEW)
+    item = ReviewQueueItem(
+        queue_id="REV-1",
+        run_id="RUN-1",
+        alert_id="ALT-1",
+        reason="low_confidence",
+        source_type=AlertSourceType.EDR,
+        summary="Needs review.",
+    )
+    repository.save_run(run)
+    review_repository.save_review_item(item)
+    evidence_repository.save_evidence(
+        InvestigationEvidence(
+            route="asset.locate",
+            action="asset.locate",
+            status="success",
+            message="Asset location completed.",
+            result_payload={"mcp_result": {"company_code": "PA011", "mocked": True}},
+            queue_id="REV-1",
+            run_id="RUN-1",
+            alert_id="ALT-1",
+            thread_id="SOC-THREAD-1",
+        )
+    )
+
+    context = SocReviewService(
+        repository=repository,
+        review_queue_repository=review_repository,
+        evidence_repository=evidence_repository,
+    ).get_investigation_context("REV-1")
+
+    assert len(context.action_evidence) == 1
+    assert context.action_evidence[0].action == "asset.locate"
+    assert context.action_evidence[0].result_payload["mcp_result"]["company_code"] == "PA011"
 
 
 def test_agent_chat_service_requires_review_service_for_queue_context() -> None:

@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from soc_agent.contracts import (
     AlertSummary,
     AnalysisRun,
     DecisionAuditRecord,
+    InvestigationEvidence,
     ReviewQueueItem,
     ReviewQueueStatus,
     SimilarAlertMatch,
@@ -19,7 +20,7 @@ from soc_agent.contracts import (
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
 )
-from soc_agent.db.models import SocAlertSummaryRow, SocAnalysisRunRow, SocApprovalGrantRow, SocApprovalRequestRow, SocDecisionAuditLogRow, SocReviewQueueRow
+from soc_agent.db.models import SocAlertSummaryRow, SocAnalysisRunRow, SocApprovalGrantRow, SocApprovalRequestRow, SocDecisionAuditLogRow, SocInvestigationEvidenceRow, SocReviewQueueRow
 
 
 class SqlAlchemyAlertRepository:
@@ -218,6 +219,43 @@ class SqlAlchemyAlertRepository:
             result = session.execute(query.order_by(SocApprovalRequestRow.created_at.desc()).limit(limit))
             return [SocAgentApprovalRequest.model_validate(row.request_payload) for row in result.scalars()]
 
+    def save_evidence(self, evidence: InvestigationEvidence) -> None:
+        payload = evidence.model_dump(mode="json")
+        with self._session_factory() as session:
+            row = session.get(SocInvestigationEvidenceRow, evidence.evidence_id)
+            if row is None:
+                session.add(SocInvestigationEvidenceRow(evidence_id=evidence.evidence_id, **_evidence_row_values(evidence, payload)))
+            else:
+                for key, value in _evidence_row_values(evidence, payload).items():
+                    setattr(row, key, value)
+            session.commit()
+
+    def list_evidence(
+        self,
+        *,
+        queue_id: str | None = None,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        thread_id: str | None = None,
+        limit: int = 20,
+    ) -> list[InvestigationEvidence]:
+        filters = []
+        if queue_id:
+            filters.append(SocInvestigationEvidenceRow.queue_id == queue_id)
+        if run_id:
+            filters.append(SocInvestigationEvidenceRow.run_id == run_id)
+        if alert_id:
+            filters.append(SocInvestigationEvidenceRow.alert_id == alert_id)
+        if thread_id:
+            filters.append(SocInvestigationEvidenceRow.thread_id == thread_id)
+
+        with self._session_factory() as session:
+            query = select(SocInvestigationEvidenceRow)
+            if filters:
+                query = query.where(or_(*filters))
+            result = session.execute(query.order_by(SocInvestigationEvidenceRow.created_at.desc()).limit(limit))
+            return [InvestigationEvidence.model_validate(row.evidence_payload) for row in result.scalars()]
+
 
 def _row_values(run: AnalysisRun, payload: dict, *, updated_at: datetime) -> dict:
     return {
@@ -374,4 +412,23 @@ def _approval_request_row_values(approval_request: SocAgentApprovalRequest, payl
         "reason": approval_request.reason,
         "created_at": approval_request.created_at,
         "request_payload": payload,
+    }
+
+
+def _evidence_row_values(evidence: InvestigationEvidence, payload: dict) -> dict:
+    return {
+        "source_type": evidence.source_type,
+        "route": evidence.route,
+        "action": evidence.action,
+        "status": evidence.status,
+        "queue_id": evidence.queue_id,
+        "run_id": evidence.run_id,
+        "alert_id": evidence.alert_id,
+        "thread_id": evidence.thread_id,
+        "source_proposal_id": evidence.source_proposal_id,
+        "context_hash": evidence.context_hash,
+        "actor_id": evidence.actor.actor_id if evidence.actor is not None else None,
+        "message": evidence.message,
+        "created_at": evidence.created_at,
+        "evidence_payload": payload,
     }

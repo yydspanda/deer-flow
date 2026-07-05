@@ -1,5 +1,6 @@
 """Core SOC Agent runtime and service exports."""
 
+from soc_agent.core.evidence import InMemoryInvestigationEvidenceRepository
 from soc_agent.core.service import (
     DeterministicAnalysisRuntime,
     NoopEventSink,
@@ -21,6 +22,7 @@ from soc_agent.core.service import (
 
 __all__ = [
     "DeterministicAnalysisRuntime",
+    "InMemoryInvestigationEvidenceRepository",
     "NoopEventSink",
     "SocAgentActionDispatcher",
     "SocAgentActionPolicy",

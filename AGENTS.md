@@ -145,6 +145,11 @@ Current SOC direction:
   `backend/soc_agent/agent_profile.py`, `backend/soc_agent/lead_agent_chat.py`,
   and `backend/soc_agent/skills.py`; DeerFlow-loadable SOC skills live under
   `skills/public/soc-*`.
+- Read-only SOC action results such as `asset.lookup` / `asset.locate` are investigation
+  evidence, not memory or verdict changes. They must flow through `InvestigationEvidence`
+  and `InvestigationEvidenceRepository`, then re-enter analyst/Lead Agent context through
+  `SocReviewService.get_investigation_context()`; do not let entry layers write evidence
+  or mutate decisions directly.
 
 SOC phase plan:
 

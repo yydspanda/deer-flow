@@ -13,6 +13,7 @@ from soc_agent.contracts import (
     AnalysisRun,
     DecisionAuditRecord,
     EntrySurface,
+    InvestigationEvidence,
     ReviewQueueItem,
     ReviewQueueStatus,
     SimilarAlertMatch,
@@ -30,6 +31,7 @@ class InMemorySocRepository:
         self.summaries: dict[str, AlertSummary] = {}
         self.review_items: dict[str, ReviewQueueItem] = {}
         self.audit_records: list[DecisionAuditRecord] = []
+        self.evidence: list[InvestigationEvidence] = []
 
     def save_run(self, run: AnalysisRun) -> None:
         self.runs[run.run_id] = run
@@ -81,6 +83,30 @@ class InMemorySocRepository:
     def list_audit_records(self, run_id: str) -> list[DecisionAuditRecord]:
         return [record for record in self.audit_records if record.run_id == run_id]
 
+    def save_evidence(self, evidence: InvestigationEvidence) -> None:
+        self.evidence.append(evidence)
+
+    def list_evidence(
+        self,
+        *,
+        queue_id: str | None = None,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        thread_id: str | None = None,
+        limit: int = 20,
+    ) -> list[InvestigationEvidence]:
+        filters = {
+            "queue_id": queue_id,
+            "run_id": run_id,
+            "alert_id": alert_id,
+            "thread_id": thread_id,
+        }
+        active_filters = {key: value for key, value in filters.items() if value}
+        evidence = self.evidence
+        if active_filters:
+            evidence = [item for item in evidence if any(getattr(item, key) == value for key, value in active_filters.items())]
+        return sorted(evidence, key=lambda item: item.created_at, reverse=True)[:limit]
+
 
 def _sample(name: str) -> dict:
     return json.loads((SAMPLES / name).read_text(encoding="utf-8"))
@@ -110,6 +136,7 @@ def review_api() -> tuple[SocReviewService, InMemorySocRepository, ReviewQueueIt
         summary_repository=repository,
         audit_repository=repository,
         review_queue_repository=repository,
+        evidence_repository=repository,
     )
     return service, repository, item
 
@@ -128,7 +155,19 @@ def test_soc_review_api_lists_open_items(review_api) -> None:
 
 
 def test_soc_review_api_returns_investigation_context(review_api) -> None:
-    service, _, item = review_api
+    service, repository, item = review_api
+    repository.save_evidence(
+        InvestigationEvidence(
+            route="asset.locate",
+            action="asset.locate",
+            status="success",
+            message="Asset location completed.",
+            result_payload={"mcp_result": {"company_code": "PA011", "mocked": True}},
+            queue_id=item.queue_id,
+            run_id=item.run_id,
+            alert_id=item.alert_id,
+        )
+    )
 
     context = soc_review.get_review_context(item.queue_id, service=service)
 
@@ -137,6 +176,8 @@ def test_soc_review_api_returns_investigation_context(review_api) -> None:
     assert context.summary is not None
     assert context.summary.run_id == item.run_id
     assert len(context.audit_records) == 1
+    assert len(context.action_evidence) == 1
+    assert context.action_evidence[0].action == "asset.locate"
 
 
 def test_soc_review_api_closes_item_with_api_actor(review_api) -> None:

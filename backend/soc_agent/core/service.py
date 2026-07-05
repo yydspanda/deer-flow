@@ -26,6 +26,7 @@ from soc_agent.contracts import (
     EntrySurface,
     ExtractionReport,
     InvestigationContext,
+    InvestigationEvidence,
     NormalizationDriftReport,
     NormalizationDriftSample,
     NormalizationInspectionResult,
@@ -61,6 +62,7 @@ from soc_agent.protocols import (
     AlertSummaryRepository,
     AnalysisRuntime,
     DecisionAuditRepository,
+    InvestigationEvidenceRepository,
     LLMAnalyzer,
     ReviewQueueRepository,
     SocActionAdapterRegistryPort,
@@ -416,12 +418,14 @@ class SocReviewService:
         summary_repository: AlertSummaryRepository | None = None,
         audit_repository: DecisionAuditRepository | None = None,
         review_queue_repository: ReviewQueueRepository | None = None,
+        evidence_repository: InvestigationEvidenceRepository | None = None,
         event_sink: SocEventSink | None = None,
     ) -> None:
         self._repository = repository
         self._summary_repository = summary_repository
         self._audit_repository = audit_repository
         self._review_queue_repository = review_queue_repository
+        self._evidence_repository = evidence_repository
         self._event_sink = event_sink or NoopEventSink()
 
     def correct(
@@ -536,12 +540,23 @@ class SocReviewService:
         summary = self._summary_repository.get_alert_summary(item.run_id) if self._summary_repository is not None else None
         audit_records = self._audit_repository.list_audit_records(item.run_id) if self._audit_repository is not None else []
         similar_alerts = self._summary_repository.find_similar_alert_summaries(_similar_alert_query_from_summary(summary)) if self._summary_repository is not None and summary is not None else []
+        action_evidence = (
+            self._evidence_repository.list_evidence(
+                queue_id=item.queue_id,
+                run_id=item.run_id,
+                alert_id=item.alert_id,
+                limit=20,
+            )
+            if self._evidence_repository is not None
+            else []
+        )
         return InvestigationContext(
             queue_item=item,
             run=run,
             summary=summary,
             audit_records=audit_records,
             similar_alerts=similar_alerts,
+            action_evidence=action_evidence,
         )
 
 
@@ -1130,10 +1145,12 @@ class SocAgentActionDispatcher:
         review_service: SocReviewService | None = None,
         action_policy: SocAgentActionPolicy | None = None,
         action_adapter_registry: SocActionAdapterRegistryPort | None = None,
+        evidence_repository: InvestigationEvidenceRepository | None = None,
     ) -> None:
         self._review_service = review_service
         self._action_policy = action_policy or SocAgentActionPolicy()
         self._action_adapter_registry = action_adapter_registry
+        self._evidence_repository = evidence_repository
 
     def check_permission(
         self,
@@ -1255,7 +1272,7 @@ class SocAgentActionDispatcher:
             payload=_action_adapter_payload_from_request(request),
         )
         try:
-            return self._action_adapter_registry.execute(command, context=context)
+            result = self._action_adapter_registry.execute(command, context=context)
         except (LookupError, ValueError) as exc:
             return SocAgentActionResult(
                 route=permission.route,
@@ -1263,6 +1280,33 @@ class SocAgentActionDispatcher:
                 status="failed",
                 message=f"read-only action adapter execution failed: {exc}",
             )
+        return self._record_read_only_action_evidence(
+            result,
+            request=request,
+            command=command,
+            context=context,
+        )
+
+    def _record_read_only_action_evidence(
+        self,
+        result: SocAgentActionResult,
+        *,
+        request: SocAgentChatRequest,
+        command: SocAgentActionCommand,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if self._evidence_repository is None or result.status != "success":
+            return result
+        evidence = _investigation_evidence_from_action_result(
+            result,
+            request=request,
+            command=command,
+            context=context,
+        )
+        self._evidence_repository.save_evidence(evidence)
+        payload = dict(result.payload)
+        payload["evidence_id"] = evidence.evidence_id
+        return result.model_copy(update={"payload": payload})
 
 
 def _coerce_chat_request(request: SocAgentChatRequest | str) -> SocAgentChatRequest:
@@ -1314,6 +1358,38 @@ def _action_adapter_payload_from_request(request: SocAgentChatRequest) -> dict[s
     if context_refs:
         payload["context_refs"] = context_refs
     return payload
+
+
+def _investigation_evidence_from_action_result(
+    result: SocAgentActionResult,
+    *,
+    request: SocAgentChatRequest,
+    command: SocAgentActionCommand,
+    context: ServiceRequestContext,
+) -> InvestigationEvidence:
+    context_refs = command.payload.get("context_refs")
+    refs = dict(context_refs) if isinstance(context_refs, Mapping) else {}
+    return InvestigationEvidence(
+        route=result.route,
+        action=result.action,
+        status=result.status,
+        message=result.message,
+        result_payload=result.payload,
+        queue_id=_string_ref(refs, "queue_id") or request.queue_id,
+        run_id=_string_ref(refs, "run_id") or request.run_id,
+        alert_id=_string_ref(refs, "alert_id"),
+        thread_id=_string_ref(refs, "thread_id") or request.thread_id,
+        source_proposal_id=_string_ref(refs, "proposal_id"),
+        context_hash=_string_ref(refs, "context_hash"),
+        actor=context.actor,
+    )
+
+
+def _string_ref(refs: Mapping[str, Any], key: str) -> str | None:
+    value = refs.get(key)
+    if isinstance(value, str) and value:
+        return value
+    return None
 
 
 def _route_decision_event(decision: SocAgentRouteDecision) -> SocAgentStreamEvent:

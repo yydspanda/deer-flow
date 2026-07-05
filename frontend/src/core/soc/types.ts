@@ -111,6 +111,25 @@ export interface SocSimilarAlertMatch {
   matched_reasons: string[];
 }
 
+export interface SocInvestigationEvidence {
+  schema_version: string;
+  evidence_id: string;
+  source_type: "read_only_action_result";
+  route: string;
+  action: string;
+  status: "success" | "denied" | "failed";
+  message: string;
+  result_payload: Record<string, unknown>;
+  queue_id?: string | null;
+  run_id?: string | null;
+  alert_id?: string | null;
+  thread_id?: string | null;
+  source_proposal_id?: string | null;
+  context_hash?: string | null;
+  actor?: SocActorContext | null;
+  created_at: string;
+}
+
 export interface SocInvestigationContext {
   schema_version: string;
   queue_item: SocReviewQueueItem;
@@ -118,6 +137,7 @@ export interface SocInvestigationContext {
   summary?: SocAlertSummary | null;
   audit_records: SocDecisionAuditRecord[];
   similar_alerts: SocSimilarAlertMatch[];
+  action_evidence: SocInvestigationEvidence[];
 }
 
 export interface SocReviewCloseRequest {

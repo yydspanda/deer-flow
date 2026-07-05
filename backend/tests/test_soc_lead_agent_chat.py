@@ -22,6 +22,7 @@ from soc_agent.contracts import (
     EntrySurface,
     EvidenceItem,
     InvestigationContext,
+    InvestigationEvidence,
     ReviewQueueItem,
     ServiceRequestContext,
     SocAgentApprovalRequest,
@@ -175,6 +176,8 @@ def test_soc_lead_agent_chat_service_bridges_review_context_to_deerflow_client()
     assert events[1].data["artifact"]["schema_version"] == "soc.lead_agent_review_context_artifact.v1"
     assert events[1].data["artifact"]["actor"]["actor_id"] == "analyst"
     assert events[1].data["artifact"]["skill_context"]["selected_skills"]
+    assert events[1].data["artifact"]["action_evidence"][0]["action"] == "asset.locate"
+    assert events[1].data["artifact"]["action_evidence"][0]["result_payload"]["mcp_result"]["company_code"] == "PA011"
     assert review_provider.calls == ["REV-1"]
 
     sent_message, sent_thread_id = client.calls[0]
@@ -461,7 +464,19 @@ def _investigation_context() -> InvestigationContext:
         confidence=0.62,
         summary="Suspicious endpoint activity needs analyst review.",
     )
-    return InvestigationContext(queue_item=queue_item, run=run, summary=summary)
+    evidence = InvestigationEvidence(
+        route="asset.locate",
+        action="asset.locate",
+        status="success",
+        message="Asset location completed.",
+        result_payload={"mcp_result": {"company_code": "PA011", "mocked": True}},
+        queue_id="REV-1",
+        run_id="RUN-1",
+        alert_id="ALT-1",
+        thread_id="SOC-THREAD-1",
+        source_proposal_id="PROP-1",
+    )
+    return InvestigationContext(queue_item=queue_item, run=run, summary=summary, action_evidence=[evidence])
 
 
 def _asset_lookup_record() -> SocAssetLookupRecord:

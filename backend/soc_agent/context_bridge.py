@@ -8,6 +8,7 @@ from typing import Any
 from soc_agent.contracts import (
     AlertSummary,
     InvestigationContext,
+    InvestigationEvidence,
     ServiceRequestContext,
     SimilarAlertMatch,
     SocLeadAgentReviewContextArtifact,
@@ -20,6 +21,7 @@ _MAX_ENTITY_KEYS = 20
 _MAX_EVIDENCE_ITEMS = 5
 _MAX_SIMILAR_ALERTS = 5
 _MAX_FACT_ITEMS = 10
+_MAX_ACTION_EVIDENCE_ITEMS = 5
 
 _LEAD_AGENT_CONTEXT_INSTRUCTIONS = [
     "Treat this artifact as bounded SOC review context supplied by SOC services.",
@@ -55,6 +57,7 @@ def build_lead_agent_review_context_artifact(
     fact_payload = _fact_context_payload(context)
     summary_payload = _summary_payload(context.summary)
     similar_payload = [_similar_alert_payload(match) for match in context.similar_alerts[:_MAX_SIMILAR_ALERTS]]
+    action_evidence_payload = [_action_evidence_payload(item) for item in context.action_evidence[:_MAX_ACTION_EVIDENCE_ITEMS]]
     hash_payload = {
         "queue_id": context.queue_item.queue_id,
         "run_id": context.run.run_id,
@@ -64,6 +67,7 @@ def build_lead_agent_review_context_artifact(
         "fact_context": fact_payload,
         "summary": summary_payload,
         "similar_alerts": similar_payload,
+        "action_evidence": action_evidence_payload,
         "skill_context": skill_payload,
         "instructions": _LEAD_AGENT_CONTEXT_INSTRUCTIONS,
     }
@@ -79,6 +83,7 @@ def build_lead_agent_review_context_artifact(
         fact_context=fact_payload,
         summary=summary_payload,
         similar_alerts=similar_payload,
+        action_evidence=action_evidence_payload,
         skill_context=skill_context,
         instructions=list(_LEAD_AGENT_CONTEXT_INSTRUCTIONS),
     )
@@ -218,3 +223,25 @@ def _similar_alert_payload(match: SimilarAlertMatch) -> dict[str, Any]:
         "confidence": summary.confidence,
         "summary": summary.summary,
     }
+
+
+def _action_evidence_payload(evidence: InvestigationEvidence) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "evidence_id": evidence.evidence_id,
+        "source_type": evidence.source_type,
+        "route": evidence.route,
+        "action": evidence.action,
+        "status": evidence.status,
+        "message": evidence.message,
+        "queue_id": evidence.queue_id,
+        "run_id": evidence.run_id,
+        "alert_id": evidence.alert_id,
+        "thread_id": evidence.thread_id,
+        "source_proposal_id": evidence.source_proposal_id,
+        "context_hash": evidence.context_hash,
+        "created_at": evidence.created_at.isoformat(),
+        "result_payload": evidence.result_payload,
+    }
+    if evidence.actor is not None:
+        payload["actor"] = evidence.actor.model_dump(mode="json", exclude_none=True)
+    return {key: value for key, value in payload.items() if value is not None}

@@ -11,6 +11,7 @@ from soc_agent.contracts import (
     AnalysisNodeOutput,
     AnalysisRun,
     DecisionAuditRecord,
+    InvestigationEvidence,
     LLMAnalysisRequest,
     ReviewQueueItem,
     ReviewQueueStatus,
@@ -98,6 +99,22 @@ class ReviewQueueRepository(Protocol):
         status: ReviewQueueStatus | None = None,
         limit: int = 50,
     ) -> list[ReviewQueueItem]: ...
+
+
+class InvestigationEvidenceRepository(Protocol):
+    """Persistence boundary for investigation evidence produced by safe actions."""
+
+    def save_evidence(self, evidence: InvestigationEvidence) -> None: ...
+
+    def list_evidence(
+        self,
+        *,
+        queue_id: str | None = None,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        thread_id: str | None = None,
+        limit: int = 20,
+    ) -> list[InvestigationEvidence]: ...
 
 
 class SocAgentApprovalGrantRepository(Protocol):

@@ -416,6 +416,7 @@ def _correct(args: argparse.Namespace) -> int:
             summary_repository=repository,
             audit_repository=repository,
             review_queue_repository=repository,
+            evidence_repository=repository,
         ).correct(
             CorrectionCommand(
                 run_id=args.run_id,
@@ -512,6 +513,7 @@ def _review_context(args: argparse.Namespace) -> int:
             summary_repository=repository,
             audit_repository=repository,
             review_queue_repository=repository,
+            evidence_repository=repository,
         ).get_investigation_context(args.queue_id)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -535,6 +537,7 @@ def _review_tui(args: argparse.Namespace) -> int:
                 summary_repository=repository,
                 audit_repository=repository,
                 review_queue_repository=repository,
+                evidence_repository=repository,
             ),
             approval_service=SocAgentApprovalService(grant_repository=repository, request_repository=repository),
             database_label=_database_label(args.database_url),
@@ -558,6 +561,7 @@ def _chat_tui(args: argparse.Namespace) -> int:
             summary_repository=repository,
             audit_repository=repository,
             review_queue_repository=repository,
+            evidence_repository=repository,
         )
         approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
         read_only_adapter_registry = _read_only_adapter_registry_for_chat(args)
@@ -568,7 +572,10 @@ def _chat_tui(args: argparse.Namespace) -> int:
                 action_proposal_boundary=SocLeadAgentActionProposalBoundary(
                     approval_service=approval_service,
                     read_only_capability_router=SocAgentCapabilityRouter(allowed_routes=read_only_routes),
-                    read_only_action_dispatcher=SocAgentActionDispatcher(action_adapter_registry=read_only_adapter_registry),
+                    read_only_action_dispatcher=SocAgentActionDispatcher(
+                        action_adapter_registry=read_only_adapter_registry,
+                        evidence_repository=repository,
+                    ),
                 ),
             )
             if args.lead_agent

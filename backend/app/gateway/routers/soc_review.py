@@ -47,6 +47,7 @@ def get_soc_review_service(request: Request) -> SocReviewService:
         summary_repository=repository,
         audit_repository=repository,
         review_queue_repository=repository,
+        evidence_repository=repository,
     )
 
 

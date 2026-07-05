@@ -122,6 +122,11 @@ def render_context(context: InvestigationContext) -> RenderableType:
         table.add_row("conflicts", conflicts)
     if context.similar_alerts:
         table.add_row("similar", ", ".join(f"{match.summary.alert_id}:{match.score:.0f}" for match in context.similar_alerts[:5]))
+    if context.action_evidence:
+        table.add_row(
+            "action_evidence",
+            ", ".join(f"{item.action}:{item.status}" for item in context.action_evidence[:5]),
+        )
     return Group(Text("Investigation Context", style=f"bold {THEME.primary}"), table)
 
 

@@ -9,6 +9,7 @@ import {
   KeyRoundIcon,
   PlayCircleIcon,
   RefreshCwIcon,
+  SearchCheckIcon,
   ShieldAlertIcon,
   XCircleIcon,
 } from "lucide-react";
@@ -42,6 +43,7 @@ import type {
   SocAgentApprovalGrant,
   SocAgentApprovalRequest,
   SocAgentApprovedActionCommand,
+  SocInvestigationEvidence,
   SocReviewQueueItem,
   SocReviewQueueStatus,
   SocVerdict,
@@ -166,6 +168,65 @@ function ApprovalProposalSummary({
         </div>
       </div>
     </div>
+  );
+}
+
+function ActionEvidenceSection({
+  evidence,
+}: {
+  evidence: SocInvestigationEvidence[];
+}) {
+  return (
+    <section className="rounded-md border">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+        <div className="flex items-center gap-2">
+          <SearchCheckIcon className="text-muted-foreground size-4" />
+          <h3 className="text-sm font-semibold">只读查询证据</h3>
+        </div>
+        <Badge variant="secondary">{evidence.length}</Badge>
+      </div>
+      <div className="divide-y">
+        {evidence.length === 0 ? (
+          <div className="text-muted-foreground p-4 text-sm">
+            当前工单还没有资产查询、定位或其他只读工具结果。
+          </div>
+        ) : (
+          evidence.map((item) => (
+            <div key={item.evidence_id} className="p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">
+                    {item.action}
+                  </div>
+                  <div className="text-muted-foreground mt-1 text-xs">
+                    {item.route} / {formatTime(item.created_at)}
+                  </div>
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Badge variant="outline">{item.status}</Badge>
+                  {item.source_proposal_id ? (
+                    <Badge variant="secondary">proposal</Badge>
+                  ) : null}
+                </div>
+              </div>
+              <p className="text-muted-foreground mt-2 text-xs">
+                {item.message}
+              </p>
+              <div className="text-muted-foreground mt-2 text-xs">
+                {item.actor?.actor_id ? `actor: ${item.actor.actor_id}` : null}
+                {item.thread_id ? ` / thread: ${item.thread_id}` : null}
+                {item.source_proposal_id
+                  ? ` / proposal: ${item.source_proposal_id}`
+                  : null}
+              </div>
+              <pre className="bg-muted mt-3 max-h-48 overflow-auto rounded-md p-3 text-xs whitespace-pre-wrap">
+                {prettyJson(item.result_payload)}
+              </pre>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -598,6 +659,10 @@ export function SocReviewQueueWorkbench() {
                   />
                 </dl>
               </section>
+
+              <ActionEvidenceSection
+                evidence={context?.action_evidence ?? []}
+              />
 
               <section className="rounded-md border">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
