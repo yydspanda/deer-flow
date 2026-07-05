@@ -635,7 +635,7 @@ def _mcp_smoke(args: argparse.Namespace) -> int:
         )
         report = run_mcp_action_adapter_smoke(
             args.config,
-            DeerFlowCachedMcpToolProvider(),
+            DeerFlowCachedMcpToolProvider(use_one_shot_invocation=True),
             command=command,
             context=context,
         )

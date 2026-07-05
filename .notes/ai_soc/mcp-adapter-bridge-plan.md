@@ -1,6 +1,6 @@
 # SOC MCP Adapter Bridge Plan
 
-> 状态：Phase 1 后续规划。当前已完成 SOC MCP provider port、fake provider tests、read-only MCP adapter skeleton、MCP-backed read-only `asset.lookup` explicit config builder、DeerFlow cached MCP provider implementation、本地显式 config smoke wiring、dev/staging smoke report contract，以及 MCP readiness inventory；当前本机 `soc mcp tools` 显示 `tool_count=0`，尚未做真实 dev/staging MCP live smoke。目标是把真实资产系统、EDR 只读查询、F5/SOAR/MCP 能力接进 SOC action adapter registry，但不让 SOC Lead Agent 直接调用任意 MCP tool。
+> 状态：Phase 1 后续规划。当前已完成 SOC MCP provider port、fake provider tests、read-only MCP adapter skeleton、MCP-backed read-only `asset.lookup` explicit config builder、DeerFlow cached MCP provider implementation、本地显式 config smoke wiring、dev/staging smoke report contract、MCP readiness inventory，以及本地真实 stdio MCP fixture smoke。目标是把真实资产系统、EDR 只读查询、F5/SOAR/MCP 能力接进 SOC action adapter registry，但不让 SOC Lead Agent 直接调用任意 MCP tool。
 
 ## 背景
 
@@ -229,7 +229,8 @@ soc_action_adapters.yaml / db managed config
    - 当前实现：`DeerFlowCachedMcpToolProvider` in `backend/soc_agent/actions/mcp.py`。
    - provider 对外仍只暴露 `SocMcpToolProviderPort`：
      - `list_tools()` 返回 SOC `SocMcpToolDescriptor`，不会把 LangChain `BaseTool` 传出 adapter module。
-     - `invoke()` 按 exact tool name 调 `BaseTool.invoke()`，执行 timeout，并把 dict / content+artifact / model dump / text 结果归一为 `Mapping`。
+     - `invoke()` 按 exact tool name 执行，执行 timeout，并把 dict / content+artifact / MCP `structuredContent` / model dump / text 结果归一为 `Mapping`。
+     - smoke execute 路径可使用 one-shot MCP session 调用，避免 DeerFlow 为文件/浏览器类 stdio MCP 准备 workspace snapshot 时阻塞只读数据查询；inventory 仍通过 DeerFlow cached MCP tools 验证可见性。
    - 当前测试使用 fake cached tool 和 monkeypatched `deerflow.mcp.cache.get_cached_mcp_tools()`，不要求真实 MCP server。
 
 4. **Read-only config smoke wiring**（Done）
@@ -261,22 +262,48 @@ soc_action_adapters.yaml / db managed config
      - `--include-schema` 才输出 input schema。
      - `--report-path` 可落盘 inventory report。
    - `soc mcp smoke --report-path` 可把 smoke report 落盘，方便 dev/staging 验证归档。
-   - 当前本机 readiness：`status=success`、`tool_count=0`，说明还没有启用真实 dev/staging MCP server。
+   - 当前本机未设置 MCP config 时 readiness：`status=success`、`tool_count=0`。
+   - 使用 `backend/samples/mcp/soc_dev_extensions_config.json` 并设置绝对路径环境变量后，readiness 可看到 `soc_dev_asset_lookup`。
 
-7. **Real dev/staging read-only MCP live smoke**（Next）
-   - 用 dev/staging MCP server 验证资产查询或 EDR process tree 查询。
+7. **Local real MCP live smoke**（Done）
+   - 新增 `backend/scripts/soc_dev_mcp_server.py`：最小只读 stdio MCP JSON-RPC server，暴露 `asset_lookup`，无凭证、无外部副作用。
+   - 新增样例配置：
+     - `backend/samples/mcp/soc_dev_extensions_config.json`
+     - `backend/samples/mcp/soc_dev_action_adapters.json`
+   - 本地 smoke 命令：
+
+```bash
+cd backend
+SOC_DEV_MCP_PYTHON=/home/yydspei/projects/deer-flow/backend/.venv/bin/python \
+SOC_DEV_MCP_SERVER=/home/yydspei/projects/deer-flow/backend/scripts/soc_dev_mcp_server.py \
+DEER_FLOW_EXTENSIONS_CONFIG_PATH=/home/yydspei/projects/deer-flow/backend/samples/mcp/soc_dev_extensions_config.json \
+./.venv/bin/python -m soc_agent.cli mcp tools --include-schema --pretty
+
+SOC_DEV_MCP_PYTHON=/home/yydspei/projects/deer-flow/backend/.venv/bin/python \
+SOC_DEV_MCP_SERVER=/home/yydspei/projects/deer-flow/backend/scripts/soc_dev_mcp_server.py \
+DEER_FLOW_EXTENSIONS_CONFIG_PATH=/home/yydspei/projects/deer-flow/backend/samples/mcp/soc_dev_extensions_config.json \
+./.venv/bin/python -m soc_agent.cli mcp smoke samples/mcp/soc_dev_action_adapters.json \
+  --route asset.lookup \
+  --json '{"asset_key":"10.10.1.5","context_refs":{"thread_id":"SOC-THREAD-1"}}' \
+  --pretty
+```
+
+   - 已验证结果：`soc mcp tools` 返回 `tool_count=1`、tool=`soc_dev_asset_lookup`；`soc mcp smoke` 返回 `status=success`、`asset_found=true`。
+
+8. **Real dev/staging read-only MCP live smoke**（Next）
+   - 用真实 dev/staging CMDB/EDR MCP server 替换本地 fixture，验证资产查询或 EDR process tree 查询。
    - 保存 `soc.mcp_action_smoke_report.v1`，评估延迟、失败率、payload size、敏感字段脱敏/裁剪情况。
 
-8. **High-risk MCP preflight only**
+9. **High-risk MCP preflight only**
    - `response.block_ip`、`endpoint.isolate_host`、F5 规则等先只接 dry-run / execute preflight。
    - execute_supported 默认 false。
    - 真实 execute 等 staging eval、审批、幂等、回滚策略稳定后再打开。
 
 ## 下一刀
 
-建议做 **Connect dev/staging MCP config and run read-only smoke**：
+建议做 **Replace local fixture with real dev/staging read-only MCP config**：
 
-- 先不要接生产系统；创建/启用 dev/staging `extensions_config.json` 或 `mcp_config.json`。
+- 先不要接生产系统；用真实 dev/staging CMDB/EDR MCP server 替换本地 `soc_dev` fixture。
 - 运行 `soc mcp tools --pretty`，确认目标 read-only MCP tool 可见。
 - 沿用已固定的本地显式 adapter config，后续再升级为 DB/Web managed config。
 - smoke 验证 read-only path：config -> registry -> `DeerFlowCachedMcpToolProvider` -> `SocMcpActionSmokeReport.action_result.payload`。

@@ -65,8 +65,11 @@ class DeerFlowCachedMcpToolProvider:
     def __init__(
         self,
         tools_loader: Callable[[], Iterable[Any]] | None = None,
+        *,
+        use_one_shot_invocation: bool = False,
     ) -> None:
         self._tools_loader = tools_loader or _load_deerflow_cached_mcp_tools
+        self._use_one_shot_invocation = tools_loader is None and use_one_shot_invocation
 
     def list_tools(self) -> list[SocMcpToolDescriptor]:
         tools = self._load_tools()
@@ -89,11 +92,18 @@ class DeerFlowCachedMcpToolProvider:
     ) -> Mapping[str, Any]:
         tool = self._tool_by_name(tool_name)
         try:
-            raw_result = _invoke_tool_with_timeout(
-                tool,
-                payload,
-                timeout_seconds=timeout_seconds,
-            )
+            if self._use_one_shot_invocation:
+                raw_result = _invoke_mcp_tool_once_with_timeout(
+                    tool_name,
+                    payload,
+                    timeout_seconds=timeout_seconds,
+                )
+            else:
+                raw_result = _invoke_tool_with_timeout(
+                    tool,
+                    payload,
+                    timeout_seconds=timeout_seconds,
+                )
         except SocMcpToolProviderError:
             raise
         except Exception as exc:  # noqa: BLE001 - provider boundary wraps external tool failures
@@ -582,6 +592,57 @@ def _invoke_tool_with_timeout(
         executor.shutdown(wait=False, cancel_futures=True)
 
 
+def _invoke_mcp_tool_once_with_timeout(
+    tool_name: str,
+    payload: Mapping[str, Any],
+    *,
+    timeout_seconds: int,
+) -> Any:
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="soc-mcp-one-shot",
+    )
+    future = executor.submit(_run_mcp_tool_once, tool_name, dict(payload))
+    try:
+        return future.result(timeout=timeout_seconds)
+    except concurrent.futures.TimeoutError as exc:
+        future.cancel()
+        raise SocMcpToolProviderError(f"MCP tool {tool_name!r} timed out after {timeout_seconds}s") from exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _run_mcp_tool_once(tool_name: str, payload: Mapping[str, Any]) -> Any:
+    import asyncio
+
+    return asyncio.run(_invoke_mcp_tool_once(tool_name, payload))
+
+
+async def _invoke_mcp_tool_once(tool_name: str, payload: Mapping[str, Any]) -> Any:
+    from langchain_mcp_adapters.sessions import create_session
+
+    server_name, original_tool_name, connection = _resolve_mcp_tool_target(tool_name)
+    try:
+        async with create_session(connection) as session:
+            await session.initialize()
+            return await session.call_tool(original_tool_name, dict(payload))
+    except Exception as exc:  # noqa: BLE001 - provider boundary wraps external MCP failures
+        raise SocMcpToolProviderError(f"MCP tool {tool_name!r} one-shot call failed on server {server_name!r}: {exc}") from exc
+
+
+def _resolve_mcp_tool_target(tool_name: str) -> tuple[str, str, dict[str, Any]]:
+    from deerflow.config.extensions_config import ExtensionsConfig
+    from deerflow.mcp.client import build_servers_config
+
+    servers_config = build_servers_config(ExtensionsConfig.from_file())
+    for server_name in sorted(servers_config, key=len, reverse=True):
+        prefix = f"{server_name}_"
+        if tool_name.startswith(prefix):
+            original_tool_name = tool_name[len(prefix) :]
+            return server_name, original_tool_name, dict(servers_config[server_name])
+    raise SocMcpToolNotFoundError(f"MCP tool {tool_name!r} does not include a configured server prefix")
+
+
 def _tool_input_schema(tool: Any) -> Mapping[str, Any]:
     args_schema = getattr(tool, "args_schema", None)
     if args_schema is not None and hasattr(args_schema, "model_json_schema"):
@@ -610,9 +671,25 @@ def _normalize_tool_result(result: Any) -> Mapping[str, Any]:
         return _json_safe(result)
     if isinstance(result, tuple) and len(result) == 2:
         content, artifact = result
+        normalized_artifact = _json_safe(artifact)
+        if isinstance(normalized_artifact, Mapping):
+            structured_content = normalized_artifact.get("structured_content")
+            if isinstance(structured_content, Mapping):
+                return {
+                    **_json_safe(structured_content),
+                    "content": _json_safe(content),
+                    "artifact": normalized_artifact,
+                }
         return {
             "content": _json_safe(content),
-            "artifact": _json_safe(artifact),
+            "artifact": normalized_artifact,
+        }
+    structured_content = getattr(result, "structuredContent", None)
+    if isinstance(structured_content, Mapping):
+        return {
+            **_json_safe(structured_content),
+            "content": _json_safe(getattr(result, "content", [])),
+            "artifact": {"structured_content": _json_safe(structured_content)},
         }
     if hasattr(result, "model_dump"):
         dumped = result.model_dump(mode="json")

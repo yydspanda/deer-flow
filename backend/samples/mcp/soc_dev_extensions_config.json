@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "soc_dev": {
+      "enabled": true,
+      "type": "stdio",
+      "command": "$SOC_DEV_MCP_PYTHON",
+      "args": ["$SOC_DEV_MCP_SERVER"],
+      "env": {}
+    }
+  },
+  "skills": {}
+}

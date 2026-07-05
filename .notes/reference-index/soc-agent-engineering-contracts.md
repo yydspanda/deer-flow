@@ -294,10 +294,13 @@ SOC Agent chat stream 约束：
   - `build_mcp_action_adapter_registry_from_file()` 只能用于显式 smoke/dev/staging wiring；chat TUI、daemon 或 production runtime 默认不得自动加载本地 MCP adapter config，除非后续有独立配置治理和启动参数。
   - `DeerFlowCachedMcpToolProvider` 是唯一允许复用 DeerFlow `get_cached_mcp_tools()` 的 SOC provider 实现；它必须把 LangChain `BaseTool` 归一为 `SocMcpToolDescriptor` / `Mapping`，不能把 BaseTool、ToolMessage、content block 或 MCP SDK 类型传出 `actions/mcp.py`。
   - `DeerFlowCachedMcpToolProvider.invoke()` 必须按 exact tool name 调用，不做 fuzzy match；tool 缺失、cache 加载失败、调用失败、timeout 都必须转成 `SocMcpToolProviderError` / `SocMcpToolNotFoundError`，再由 adapter 映射为可审计 action result。
+  - `DeerFlowCachedMcpToolProvider` 的 smoke execute 路径可以使用 one-shot MCP session 调用已 allowlist 的 read-only tool，避免 DeerFlow stdio session wrapper 为文件/浏览器类 MCP 做 workspace snapshot 时阻塞 SOC 只读数据查询；该 one-shot 路径仍必须先通过 DeerFlow cached MCP inventory 验证 exact tool 可见，且不能跳过 `SocMcpActionAdapterConfig`。
+  - MCP tool 返回的 `structuredContent`、LangChain content/artifact、model dump 或普通 dict 都必须在 `actions/mcp.py` 内归一化；adapter 的 `output_fields` 是最终进入 `SocAgentActionResult.payload.mcp_result` 的字段裁剪边界。
   - `soc mcp smoke CONFIG --route ... --json ...` 是 dev/staging read-only MCP path 的显式 smoke 入口；默认使用 `DeerFlowCachedMcpToolProvider`，`--dry-run` 只验证 adapter/tool availability，execute smoke 输出 `SocMcpActionSmokeReport`。该命令不是生产 daemon，也不是 Lead Agent 自主 tool runtime。
   - `SocMcpActionSmokeReport` 是 dev/staging smoke 的版本化报告 contract，必须记录 `duration_ms`、payload/result byte size、adapter/tool/config metadata、`output_fields` 裁剪状态、`mcp_result_keys`、失败类型和内嵌 `SocAgentActionResult`；config/load/registry/tool failure 也应输出结构化 report，方便脚本归档和接入评估。
   - `soc mcp tools` 是 read-only MCP smoke 的前置 readiness 命令，只允许列出 DeerFlow cached MCP tool inventory，默认不输出 input schema；`--include-schema` 才输出 schema，`--report-path` 可落盘。它不得调用 MCP tool，也不得输出 secret。
   - `soc mcp smoke --report-path` 和 `soc mcp tools --report-path` 只能写调用者显式指定的报告文件；报告文件可能包含业务 payload/result，默认不应提交到 git。
+  - `backend/scripts/soc_dev_mcp_server.py` 和 `backend/samples/mcp/soc_dev_*.json` 只用于本地真实 stdio MCP smoke，不是生产配置。样例 `extensions_config` 使用 `$SOC_DEV_MCP_PYTHON` / `$SOC_DEV_MCP_SERVER` 环境变量传绝对路径，避免 DeerFlow stdio tool 执行时切换 cwd 后找不到相对路径。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
     - `POST /api/soc/approvals/grants`
     - `POST /api/soc/approvals/actions/dry-run`

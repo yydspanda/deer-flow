@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge skeleton / MCP config smoke 已固定 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke 已固定 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Connect dev/staging MCP config and run read-only smoke |
+| 当前下一刀 | Replace local MCP fixture with real dev/staging CMDB/EDR MCP config, or wire MCP-backed `asset.lookup` into injected runtime registry behind config |
 
 ## Phase 1 切片计划
 
@@ -119,10 +119,48 @@
 | 83 | DeerFlow cached MCP provider implementation | Done | 复用 DeerFlow MCP cache/session 生命周期，实现 `SocMcpToolProviderPort`；仍不让 Lead Agent 直接调用任意 MCP tool |
 | 84 | Read-only config smoke wiring | Done | 支持 JSON/YAML 显式 adapter config 加载，`soc mcp smoke` 可验证 config -> registry -> DeerFlow cached provider -> action result |
 | 85 | Dev/staging read-only MCP smoke report contract | Done | `soc mcp smoke` 输出 versioned report，记录 latency、failure、payload size、result size、tool/config 和 output_fields 裁剪信息 |
-| 86 | MCP smoke readiness inventory | Done | `soc mcp tools` 可安全列出 DeerFlow cached MCP tools，`soc mcp smoke/tools --report-path` 可落盘报告；当前本机 tool_count=0 |
-| 87 | Connect dev/staging MCP config and run read-only smoke | Planned | 配置真实 dev/staging MCP server 后验证资产查询或 EDR process tree read-only path，保存 smoke report 并评估接入风险 |
+| 86 | MCP smoke readiness inventory | Done | `soc mcp tools` 可安全列出 DeerFlow cached MCP tools，`soc mcp smoke/tools --report-path` 可落盘报告；无 MCP config 时 tool_count=0 |
+| 87 | Local real MCP fixture and read-only smoke | Done | 本地 stdio MCP server + sample extensions/action config 可验证 `soc_dev_asset_lookup` discovery 和 `asset.lookup` execute smoke |
+| 88 | Real dev/staging MCP replacement | Planned | 用真实 CMDB/EDR MCP server 替换本地 fixture，保存 smoke report 并评估延迟、失败率、字段裁剪和接入风险 |
 
 ## 进度记录
+
+### 2026-07-05 — Local real MCP fixture and read-only smoke 切片
+
+- 背景：
+  - 前一刀 `soc mcp tools` 在未配置 MCP 时只能返回 `tool_count=0`。
+  - 为了验证真实 MCP 协议链路，而不是继续用 fake provider，需要一个无凭证、无外部副作用的本地 read-only MCP server。
+- 变更：
+  - 新增 `backend/scripts/soc_dev_mcp_server.py`：
+    - 最小 MCP JSON-RPC stdio server。
+    - 暴露 `asset_lookup` 只读工具。
+    - 返回 MCP `structuredContent`，用于验证真实 MCP result 归一化。
+  - 新增样例配置：
+    - `backend/samples/mcp/soc_dev_extensions_config.json`
+    - `backend/samples/mcp/soc_dev_action_adapters.json`
+  - `backend/soc_agent/actions/mcp.py`：
+    - `DeerFlowCachedMcpToolProvider` 支持 smoke execute one-shot MCP session 调用。
+    - 继续先通过 DeerFlow cached MCP inventory 验证 exact tool 可见。
+    - 归一化 MCP `structuredContent`，让 `output_fields` 能裁剪业务字段。
+  - `backend/soc_agent/cli.py`：
+    - `soc mcp smoke` 使用 one-shot read-only invocation，避免 DeerFlow stdio workspace snapshot 阻塞数据查询类 MCP smoke。
+  - `backend/tests/test_soc_mcp_adapters.py` 增加 `structuredContent` 归一化覆盖。
+  - 更新主方案、MCP bridge plan 和工程契约。
+- 本机 smoke：
+  - `soc mcp tools --include-schema --pretty` 在样例 MCP config 下返回 `tool_count=1`、tool=`soc_dev_asset_lookup`。
+  - `soc mcp smoke samples/mcp/soc_dev_action_adapters.json --route asset.lookup --json '{"asset_key":"10.10.1.5","context_refs":{"thread_id":"SOC-THREAD-1"}}' --pretty` 返回 `status=success`、`asset_found=true`。
+- 边界：
+  - 本地 fixture 不是生产 CMDB/EDR。
+  - 样例 `extensions_config` 使用 `$SOC_DEV_MCP_PYTHON` / `$SOC_DEV_MCP_SERVER` 传绝对路径，避免 DeerFlow stdio tool 执行时切换 cwd 后相对路径失效。
+  - 不开放 high-risk MCP execute。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check scripts/soc_dev_mcp_server.py soc_agent/actions/mcp.py soc_agent/cli.py tests/test_soc_mcp_adapters.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py`
+  - `cd backend && SOC_DEV_MCP_PYTHON=/home/yydspei/projects/deer-flow/backend/.venv/bin/python SOC_DEV_MCP_SERVER=/home/yydspei/projects/deer-flow/backend/scripts/soc_dev_mcp_server.py DEER_FLOW_EXTENSIONS_CONFIG_PATH=/home/yydspei/projects/deer-flow/backend/samples/mcp/soc_dev_extensions_config.json ./.venv/bin/python -m soc_agent.cli mcp tools --include-schema --pretty`
+  - `cd backend && SOC_DEV_MCP_PYTHON=/home/yydspei/projects/deer-flow/backend/.venv/bin/python SOC_DEV_MCP_SERVER=/home/yydspei/projects/deer-flow/backend/scripts/soc_dev_mcp_server.py DEER_FLOW_EXTENSIONS_CONFIG_PATH=/home/yydspei/projects/deer-flow/backend/samples/mcp/soc_dev_extensions_config.json ./.venv/bin/python -m soc_agent.cli mcp smoke samples/mcp/soc_dev_action_adapters.json --route asset.lookup --json '{"asset_key":"10.10.1.5","context_refs":{"thread_id":"SOC-THREAD-1"}}' --pretty`
+- 下一步：
+  - 拿真实 dev/staging CMDB/EDR MCP 参数替换本地 fixture，再跑同一组 `tools/smoke`。
+  - 或先把 MCP-backed `asset.lookup` registry 注入 `SocLeadAgentActionProposalBoundary` 的 read-only dispatcher，默认仍 behind config。
 
 ### 2026-07-05 — MCP smoke readiness inventory 切片
 

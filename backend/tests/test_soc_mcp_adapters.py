@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -352,7 +353,7 @@ def test_cli_mcp_smoke_executes_configured_read_only_action(
         },
     )
     provider = DeerFlowCachedMcpToolProvider(lambda: [tool])
-    monkeypatch.setattr(soc_cli, "DeerFlowCachedMcpToolProvider", lambda: provider)
+    monkeypatch.setattr(soc_cli, "DeerFlowCachedMcpToolProvider", lambda *_, **__: provider)
 
     exit_code = soc_cli.main(
         [
@@ -433,6 +434,50 @@ def test_cli_mcp_tools_outputs_inventory_report(
     }
 
 
+def test_cli_mcp_smoke_executes_local_real_stdio_mcp_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    from deerflow.mcp.cache import reset_mcp_tools_cache
+
+    backend_root = Path(__file__).resolve().parents[1]
+    monkeypatch.setenv("SOC_DEV_MCP_PYTHON", sys.executable)
+    monkeypatch.setenv("SOC_DEV_MCP_SERVER", str(backend_root / "scripts" / "soc_dev_mcp_server.py"))
+    monkeypatch.setenv(
+        "DEER_FLOW_EXTENSIONS_CONFIG_PATH",
+        str(backend_root / "samples" / "mcp" / "soc_dev_extensions_config.json"),
+    )
+    reset_mcp_tools_cache()
+
+    try:
+        exit_code = soc_cli.main(
+            [
+                "mcp",
+                "smoke",
+                str(backend_root / "samples" / "mcp" / "soc_dev_action_adapters.json"),
+                "--route",
+                "asset.lookup",
+                "--json",
+                json.dumps(
+                    {
+                        "asset_key": "10.10.1.5",
+                        "context_refs": {"thread_id": "SOC-THREAD-1"},
+                    }
+                ),
+            ]
+        )
+    finally:
+        reset_mcp_tools_cache()
+
+    output = json.loads(capfd.readouterr().out)
+    assert exit_code == 0
+    assert output["schema_version"] == "soc.mcp_action_smoke_report.v1"
+    assert output["status"] == "success"
+    assert output["tool_name"] == "soc_dev_asset_lookup"
+    assert output["action_result"]["payload"]["mcp_result"]["asset_found"] is True
+    assert output["action_result"]["payload"]["mcp_result"]["asset_record"]["asset_id"] == "asset-001"
+
+
 def test_mcp_adapter_config_rejects_non_read_only_risk() -> None:
     with pytest.raises(ValueError, match="risk_level=read_only"):
         SocMcpActionAdapterConfig.model_validate(_asset_lookup_config() | {"risk_level": "high_risk"})
@@ -474,8 +519,35 @@ def test_deerflow_cached_mcp_provider_normalizes_content_and_artifact_result() -
     result = provider.invoke("cmdb_asset_lookup", {"query": "10.10.1.5"}, timeout_seconds=5)
 
     assert result == {
+        "asset_found": True,
         "content": [{"type": "text", "text": "asset found"}],
         "artifact": {"structured_content": {"asset_found": True}},
+    }
+
+
+def test_deerflow_cached_mcp_provider_normalizes_call_tool_result_with_structured_content() -> None:
+    class CallToolResultLike:
+        structuredContent = {"asset_found": True, "asset_record": {"asset_id": "asset-001"}}
+        content = [{"type": "text", "text": "asset found"}]
+
+    tool = FakeCachedMcpTool(
+        name="cmdb_asset_lookup",
+        result=CallToolResultLike(),
+    )
+    provider = DeerFlowCachedMcpToolProvider(lambda: [tool])
+
+    result = provider.invoke("cmdb_asset_lookup", {"query": "10.10.1.5"}, timeout_seconds=5)
+
+    assert result == {
+        "asset_found": True,
+        "asset_record": {"asset_id": "asset-001"},
+        "content": [{"type": "text", "text": "asset found"}],
+        "artifact": {
+            "structured_content": {
+                "asset_found": True,
+                "asset_record": {"asset_id": "asset-001"},
+            }
+        },
     }
 
 
