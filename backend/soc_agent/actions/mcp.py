@@ -187,6 +187,31 @@ class SocMcpActionSmokeReport(BaseModel):
     action_result: dict[str, Any] = Field(default_factory=dict)
 
 
+class SocMcpToolInventoryItem(BaseModel):
+    """Safe MCP tool inventory item for smoke readiness checks."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    server: str | None = None
+    description: str = ""
+    input_schema: dict[str, Any] | None = None
+
+
+class SocMcpToolInventoryReport(BaseModel):
+    """Safe report of currently available DeerFlow cached MCP tools."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "soc.mcp_tool_inventory.v1"
+    status: Literal["success", "failed"]
+    tool_count: int = Field(ge=0)
+    include_input_schema: bool = False
+    tools: list[SocMcpToolInventoryItem] = Field(default_factory=list)
+    error_type: str | None = None
+    error_message: str | None = None
+
+
 def mcp_read_only_adapter_descriptor(
     *,
     adapter_id: str,
@@ -332,6 +357,40 @@ def run_mcp_action_adapter_smoke(
         matching_config=matching_config,
         result=result,
         error=None,
+    )
+
+
+def inspect_mcp_tool_inventory(
+    provider: SocMcpToolProviderPort,
+    *,
+    include_input_schema: bool = False,
+) -> SocMcpToolInventoryReport:
+    """Inspect currently available MCP tools without exposing secrets or invoking tools."""
+
+    try:
+        descriptors = provider.list_tools()
+    except Exception as exc:  # noqa: BLE001 - readiness report should be structured
+        return SocMcpToolInventoryReport(
+            status="failed",
+            tool_count=0,
+            include_input_schema=include_input_schema,
+            error_type=exc.__class__.__name__,
+            error_message=str(exc),
+        )
+    tools = [
+        SocMcpToolInventoryItem(
+            name=descriptor.name,
+            server=descriptor.server,
+            description=descriptor.description,
+            input_schema=_json_safe(descriptor.input_schema) if include_input_schema else None,
+        )
+        for descriptor in sorted(descriptors, key=lambda item: (item.server or "", item.name))
+    ]
+    return SocMcpToolInventoryReport(
+        status="success",
+        tool_count=len(tools),
+        include_input_schema=include_input_schema,
+        tools=tools,
     )
 
 
@@ -716,12 +775,15 @@ __all__ = [
     "SocMcpToolActionAdapter",
     "SocMcpToolBindingConfig",
     "SocMcpToolDescriptor",
+    "SocMcpToolInventoryItem",
+    "SocMcpToolInventoryReport",
     "SocMcpToolNotFoundError",
     "SocMcpToolProviderError",
     "SocMcpToolProviderPort",
     "build_mcp_action_adapter",
     "build_mcp_action_adapter_registry",
     "build_mcp_action_adapter_registry_from_file",
+    "inspect_mcp_tool_inventory",
     "load_mcp_action_adapter_configs",
     "mcp_read_only_adapter_descriptor",
     "run_mcp_action_adapter_smoke",

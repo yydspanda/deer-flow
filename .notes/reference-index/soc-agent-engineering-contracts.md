@@ -296,6 +296,8 @@ SOC Agent chat stream 约束：
   - `DeerFlowCachedMcpToolProvider.invoke()` 必须按 exact tool name 调用，不做 fuzzy match；tool 缺失、cache 加载失败、调用失败、timeout 都必须转成 `SocMcpToolProviderError` / `SocMcpToolNotFoundError`，再由 adapter 映射为可审计 action result。
   - `soc mcp smoke CONFIG --route ... --json ...` 是 dev/staging read-only MCP path 的显式 smoke 入口；默认使用 `DeerFlowCachedMcpToolProvider`，`--dry-run` 只验证 adapter/tool availability，execute smoke 输出 `SocMcpActionSmokeReport`。该命令不是生产 daemon，也不是 Lead Agent 自主 tool runtime。
   - `SocMcpActionSmokeReport` 是 dev/staging smoke 的版本化报告 contract，必须记录 `duration_ms`、payload/result byte size、adapter/tool/config metadata、`output_fields` 裁剪状态、`mcp_result_keys`、失败类型和内嵌 `SocAgentActionResult`；config/load/registry/tool failure 也应输出结构化 report，方便脚本归档和接入评估。
+  - `soc mcp tools` 是 read-only MCP smoke 的前置 readiness 命令，只允许列出 DeerFlow cached MCP tool inventory，默认不输出 input schema；`--include-schema` 才输出 schema，`--report-path` 可落盘。它不得调用 MCP tool，也不得输出 secret。
+  - `soc mcp smoke --report-path` 和 `soc mcp tools --report-path` 只能写调用者显式指定的报告文件；报告文件可能包含业务 payload/result，默认不应提交到 git。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
     - `POST /api/soc/approvals/grants`
     - `POST /api/soc/approvals/actions/dry-run`

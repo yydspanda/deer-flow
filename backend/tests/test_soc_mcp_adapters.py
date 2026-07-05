@@ -19,6 +19,7 @@ from soc_agent.actions.mcp import (
     build_mcp_action_adapter,
     build_mcp_action_adapter_registry,
     build_mcp_action_adapter_registry_from_file,
+    inspect_mcp_tool_inventory,
     load_mcp_action_adapter_configs,
     mcp_read_only_adapter_descriptor,
     run_mcp_action_adapter_smoke,
@@ -297,12 +298,50 @@ def test_run_mcp_action_adapter_smoke_reports_config_failure(tmp_path: Path) -> 
     assert report.action_result == {}
 
 
+def test_inspect_mcp_tool_inventory_reports_tools_without_invoking_them() -> None:
+    tool = FakeCachedMcpTool(
+        name="cmdb_asset_lookup",
+        result={"asset_found": True},
+        description="Lookup asset ownership.",
+        args={"query": {"type": "string"}},
+    )
+
+    report = inspect_mcp_tool_inventory(
+        DeerFlowCachedMcpToolProvider(lambda: [tool]),
+        include_input_schema=True,
+    )
+
+    assert report.schema_version == "soc.mcp_tool_inventory.v1"
+    assert report.status == "success"
+    assert report.tool_count == 1
+    assert report.tools[0].name == "cmdb_asset_lookup"
+    assert report.tools[0].description == "Lookup asset ownership."
+    assert report.tools[0].input_schema == {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+    }
+    assert tool.invocations == []
+
+
+def test_inspect_mcp_tool_inventory_reports_loader_failure() -> None:
+    def load_tools():
+        raise RuntimeError("cache unavailable")
+
+    report = inspect_mcp_tool_inventory(DeerFlowCachedMcpToolProvider(load_tools))
+
+    assert report.status == "failed"
+    assert report.tool_count == 0
+    assert report.error_type == "SocMcpToolProviderError"
+    assert "cache unavailable" in (report.error_message or "")
+
+
 def test_cli_mcp_smoke_executes_configured_read_only_action(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     config_path = tmp_path / "soc_action_adapters.json"
+    report_path = tmp_path / "smoke-report.json"
     config_path.write_text(json.dumps({"adapters": [_asset_lookup_config()]}), encoding="utf-8")
     tool = FakeCachedMcpTool(
         name="cmdb_asset_lookup",
@@ -329,11 +368,15 @@ def test_cli_mcp_smoke_executes_configured_read_only_action(
                     "context_refs": {"thread_id": "SOC-THREAD-1"},
                 }
             ),
+            "--report-path",
+            str(report_path),
         ]
     )
 
     output = json.loads(capsys.readouterr().out)
+    saved_output = json.loads(report_path.read_text(encoding="utf-8"))
     assert exit_code == 0
+    assert saved_output == output
     assert tool.invocations == [{"query": "10.10.1.5"}]
     assert output["schema_version"] == "soc.mcp_action_smoke_report.v1"
     assert output["status"] == "success"
@@ -345,6 +388,48 @@ def test_cli_mcp_smoke_executes_configured_read_only_action(
     assert output["action_result"]["payload"]["mcp_result"] == {
         "asset_found": True,
         "asset_record": {"asset_id": "asset-001"},
+    }
+
+
+def test_cli_mcp_tools_outputs_inventory_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    report_path = tmp_path / "tools-report.json"
+    provider = DeerFlowCachedMcpToolProvider(
+        lambda: [
+            FakeCachedMcpTool(
+                name="cmdb_asset_lookup",
+                result={"asset_found": True},
+                description="Lookup asset ownership.",
+                args={"query": {"type": "string"}},
+            )
+        ]
+    )
+    monkeypatch.setattr(soc_cli, "DeerFlowCachedMcpToolProvider", lambda: provider)
+
+    exit_code = soc_cli.main(
+        [
+            "mcp",
+            "tools",
+            "--include-schema",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    saved_output = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert saved_output == output
+    assert output["schema_version"] == "soc.mcp_tool_inventory.v1"
+    assert output["status"] == "success"
+    assert output["tool_count"] == 1
+    assert output["tools"][0]["name"] == "cmdb_asset_lookup"
+    assert output["tools"][0]["input_schema"] == {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
     }
 
 

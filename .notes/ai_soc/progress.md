@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Real dev/staging read-only MCP smoke run |
+| 当前下一刀 | Connect dev/staging MCP config and run read-only smoke |
 
 ## Phase 1 切片计划
 
@@ -119,9 +119,46 @@
 | 83 | DeerFlow cached MCP provider implementation | Done | 复用 DeerFlow MCP cache/session 生命周期，实现 `SocMcpToolProviderPort`；仍不让 Lead Agent 直接调用任意 MCP tool |
 | 84 | Read-only config smoke wiring | Done | 支持 JSON/YAML 显式 adapter config 加载，`soc mcp smoke` 可验证 config -> registry -> DeerFlow cached provider -> action result |
 | 85 | Dev/staging read-only MCP smoke report contract | Done | `soc mcp smoke` 输出 versioned report，记录 latency、failure、payload size、result size、tool/config 和 output_fields 裁剪信息 |
-| 86 | Real dev/staging read-only MCP smoke run | Planned | 用真实 dev/staging MCP server 验证资产查询或 EDR process tree read-only path，保存 smoke report 并评估接入风险 |
+| 86 | MCP smoke readiness inventory | Done | `soc mcp tools` 可安全列出 DeerFlow cached MCP tools，`soc mcp smoke/tools --report-path` 可落盘报告；当前本机 tool_count=0 |
+| 87 | Connect dev/staging MCP config and run read-only smoke | Planned | 配置真实 dev/staging MCP server 后验证资产查询或 EDR process tree read-only path，保存 smoke report 并评估接入风险 |
 
 ## 进度记录
+
+### 2026-07-05 — MCP smoke readiness inventory 切片
+
+- 背景：
+  - 真实 dev/staging read-only MCP smoke 需要 DeerFlow cached MCP tools 可见。
+  - 当前本机只有 `extensions_config.example.json`，没有启用的 `extensions_config.json` / `mcp_config.json`；直接列 DeerFlow cached MCP tools 得到 `tool_count=0`。
+- 变更：
+  - `backend/soc_agent/actions/mcp.py` 新增：
+    - `SocMcpToolInventoryItem`
+    - `SocMcpToolInventoryReport`
+    - `inspect_mcp_tool_inventory()`
+  - `backend/soc_agent/cli.py` 新增：
+    - `soc mcp tools`
+    - `soc mcp tools --include-schema`
+    - `soc mcp tools --report-path PATH`
+    - `soc mcp smoke --report-path PATH`
+  - `backend/tests/test_soc_mcp_adapters.py` 增加 inventory success/failure、CLI tools 和 report-path 覆盖。
+- 本机 readiness：
+  - `soc mcp tools --pretty` 输出 `status=success`、`tool_count=0`。
+  - 说明当前还不能跑真实 `asset.lookup` / EDR process tree smoke，需要先配置 dev/staging MCP server。
+- 边界：
+  - inventory 只列 tool name/server/description，默认不输出 input schema；`--include-schema` 才输出 schema。
+  - 不调用 MCP tool。
+  - 不打印 secret。
+  - 不接生产 MCP server。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/actions/mcp.py soc_agent/cli.py tests/test_soc_mcp_adapters.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/actions soc_agent/cli.py soc_agent/lead_agent.py soc_agent/lead_agent_chat.py tests/test_soc_action_adapters.py tests/test_soc_mcp_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/actions soc_agent/cli.py soc_agent/lead_agent.py soc_agent/lead_agent_chat.py tests/test_soc_action_adapters.py tests/test_soc_mcp_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py --check`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py tests/test_soc_action_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m soc_agent.cli mcp tools --pretty`
+  - `codegraph sync .`
+- 下一步：
+  - 创建/启用真实 dev/staging `extensions_config.json` 或 `mcp_config.json`，确认 `soc mcp tools` 能看到目标 read-only tool。
+  - 写对应 `soc_action_adapters.yaml/json`，运行 `soc mcp smoke CONFIG --route asset.lookup --json ... --report-path ... --pretty`。
 
 ### 2026-07-05 — Dev/staging read-only MCP smoke report contract 切片
 

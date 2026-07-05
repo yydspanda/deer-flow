@@ -14,7 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from soc_agent.actions.adapters import InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
-from soc_agent.actions.mcp import DeerFlowCachedMcpToolProvider, run_mcp_action_adapter_smoke
+from soc_agent.actions.mcp import DeerFlowCachedMcpToolProvider, inspect_mcp_tool_inventory, run_mcp_action_adapter_smoke
 from soc_agent.actions.proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.agent_profile import SocLeadAgentProfileInstaller
 from soc_agent.contracts import (
@@ -101,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
         return _agent_install_profile(args)
     if args.command == "mcp" and args.mcp_command == "smoke":
         return _mcp_smoke(args)
+    if args.command == "mcp" and args.mcp_command == "tools":
+        return _mcp_tools(args)
     if args.command == "daemon" and args.daemon_command == "process":
         return _daemon_process(args)
     if args.command == "daemon" and args.daemon_command == "consume":
@@ -240,7 +242,12 @@ def _build_parser() -> argparse.ArgumentParser:
     mcp_smoke.add_argument("--actor-id", default="soc-mcp-smoke", help="Actor id recorded in the smoke context")
     mcp_smoke.add_argument("--trace-id", default="soc-mcp-smoke", help="Trace id recorded in the smoke context")
     mcp_smoke.add_argument("--idempotency-key", default="soc-mcp-smoke", help="Idempotency key recorded in the smoke context")
+    mcp_smoke.add_argument("--report-path", help="Optional path to write the smoke report JSON")
     mcp_smoke.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    mcp_tools = mcp_subparsers.add_parser("tools", help="List DeerFlow cached MCP tools visible to SOC")
+    mcp_tools.add_argument("--include-schema", action="store_true", help="Include MCP tool input schemas in the report")
+    mcp_tools.add_argument("--report-path", help="Optional path to write the inventory report JSON")
+    mcp_tools.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
     daemon = subparsers.add_parser("daemon", help="SOC daemon helpers")
     daemon_subparsers = daemon.add_subparsers(dest="daemon_command")
@@ -636,7 +643,28 @@ def _mcp_smoke(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    output = report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True)
+    try:
+        _write_report(args.report_path, output)
+    except OSError as exc:
+        print(f"error: cannot write MCP smoke report: {exc}", file=sys.stderr)
+        return 2
+    print(output)
+    return 0 if report.status == "success" else 1
+
+
+def _mcp_tools(args: argparse.Namespace) -> int:
+    report = inspect_mcp_tool_inventory(
+        DeerFlowCachedMcpToolProvider(),
+        include_input_schema=args.include_schema,
+    )
+    output = report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True)
+    try:
+        _write_report(args.report_path, output)
+    except OSError as exc:
+        print(f"error: cannot write MCP tools report: {exc}", file=sys.stderr)
+        return 2
+    print(output)
     return 0 if report.status == "success" else 1
 
 
@@ -972,6 +1000,12 @@ def _load_json_object(json_payload: str, *, payload_label: str) -> dict[str, Any
     if not isinstance(data, dict):
         raise ValueError(f"{payload_label} must be an object")
     return data
+
+
+def _write_report(path: str | None, content: str) -> None:
+    if not path:
+        return
+    Path(path).write_text(f"{content}\n", encoding="utf-8")
 
 
 def _load_payload_samples(path: str, glob_pattern: str) -> list[tuple[str, dict[str, Any]]]:
