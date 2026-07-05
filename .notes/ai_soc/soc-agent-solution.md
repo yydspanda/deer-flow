@@ -241,7 +241,7 @@ Profile 治理：
   - 当前已把 `asset.lookup` 接入显式 read-only adapter dispatcher/tool gateway：只有 `metadata.soc_route=asset.lookup`、`metadata.action_payload`、router allowlist 和 adapter registry 都满足时才会执行；默认 chat router 不开放，自然语言不会被猜测成资产查询。
   - 当前已把 SOC Lead Agent read-only proposal bridge 接入 action proposal boundary：Lead Agent 输出 `asset.lookup` proposal 时，只有注入 read-only router/dispatcher/registry 后才会产生 `soc.route_decision`、`soc.permission_decision`、`soc.action_result`；高风险 proposal 仍进入 approval inbox。
   - 当前已完成 MCP adapter bridge / real read-only data source planning：SOC MCP 能力必须作为 `SocActionAdapter` 接入，复用 DeerFlow MCP cache/session，但 route/action 到 MCP server/tool 的映射只存在于 adapter/config 层；Lead Agent 不能直接用 `tool_search` 执行 SOC action。
-  - 当前 action/tool 相关代码已收口到 `backend/soc_agent/actions/`：`actions/adapters.py` 放 adapter registry 和本地 `asset.lookup`，`actions/mcp.py` 放 MCP-backed adapter 和配置 builder，`actions/proposals.py` 放 Lead Agent action proposal boundary。根目录 `action_adapters.py` / `action_proposals.py` / `mcp_adapters.py` 只作为兼容 wrapper。
+  - 当前 action/tool 相关代码已收口到 `backend/soc_agent/actions/`：`actions/adapters.py` 放 adapter registry 和本地 `asset.lookup`，`actions/mcp.py` 放 MCP-backed adapter 和配置 builder，`actions/proposals.py` 放 Lead Agent action proposal boundary。根目录 `action_adapters.py` / `action_proposals.py` / `mcp_adapters.py` 已删除，不保留兼容入口。
   - 当前已新增 `backend/soc_agent/actions/mcp.py` skeleton：固定 `SocMcpToolProviderPort`、`SocMcpToolActionAdapter`、read-only MCP descriptor helper、explicit config builder 和 fake-provider tests；尚未接真实 DeerFlow cached MCP provider。
 
 典型流程：

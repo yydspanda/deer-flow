@@ -95,18 +95,9 @@ def test_db_does_not_import_runtime_or_transport_layers() -> None:
 
 
 def test_action_boundaries_live_under_actions_package() -> None:
-    wrappers = {
-        "action_adapters.py": "soc_agent.actions.adapters",
-        "action_proposals.py": "soc_agent.actions.proposals",
-        "mcp_adapters.py": "soc_agent.actions.mcp",
-    }
     root_action_like_files = {file.name for file in SOC_AGENT.glob("*.py") if "adapter" in file.stem or "proposal" in file.stem}
 
-    assert root_action_like_files <= set(wrappers)
-    for wrapper, target in wrappers.items():
-        source = (SOC_AGENT / wrapper).read_text(encoding="utf-8")
-        assert "Compatibility wrapper" in source
-        assert target in source
+    assert root_action_like_files == set()
     assert (SOC_AGENT / "actions" / "adapters.py").exists()
     assert (SOC_AGENT / "actions" / "mcp.py").exists()
     assert (SOC_AGENT / "actions" / "proposals.py").exists()

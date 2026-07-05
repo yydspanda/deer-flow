@@ -115,10 +115,31 @@
 | 79 | MCP adapter bridge / real read-only data source planning | Done | 规划真实资产系统、EDR 只读查询或 MCP readonly tool 如何通过 adapter descriptor 接入；write/destructive 仍走 approval |
 | 80 | MCP tool provider port + fake provider adapter tests | Done | 定义 SOC MCP provider port、fake provider 和 read-only MCP adapter skeleton；不接真实 MCP server |
 | 81 | MCP-backed read-only `asset.lookup` adapter config builder | Done | 用 fake provider 固定显式配置到 MCP-backed `asset.lookup` adapter registry 的构造方式；不接真实 MCP server |
-| 82 | SOC action package structure hygiene | Done | 将 action adapter、proposal、MCP adapter 收口到 `backend/soc_agent/actions/`，根目录只保留兼容 wrapper；架构测试防止继续往根目录新增 action-like 模块 |
+| 82 | SOC action package structure hygiene | Done | 将 action adapter、proposal、MCP adapter 收口到 `backend/soc_agent/actions/`，删除根目录旧入口；架构测试防止继续往根目录新增 action-like 模块 |
 | 83 | DeerFlow cached MCP provider implementation | Planned | 复用 DeerFlow MCP cache/session 生命周期，实现 `SocMcpToolProviderPort`；仍不让 Lead Agent 直接调用任意 MCP tool |
 
 ## 进度记录
+
+### 2026-07-05 — SOC action package structure hygiene follow-up
+
+- 背景：
+  - 项目仍处早期，可以接受删除旧入口，不需要为了尚未稳定的 SOC internal import 保留兼容层。
+- 变更：
+  - 删除根目录旧入口：
+    - `backend/soc_agent/action_adapters.py`
+    - `backend/soc_agent/action_proposals.py`
+    - `backend/soc_agent/mcp_adapters.py`
+  - 架构测试从“允许兼容 wrapper”改为“根目录不允许 action-like modules”。
+  - 更新主方案、MCP bridge plan 和工程契约，明确新代码必须使用 `soc_agent.actions.*`。
+- 边界：
+  - 不改变 runtime 行为。
+  - 不接真实 MCP provider。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/actions soc_agent/cli.py soc_agent/lead_agent_chat.py tests/test_soc_action_adapters.py tests/test_soc_mcp_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/actions soc_agent/cli.py soc_agent/lead_agent_chat.py tests/test_soc_action_adapters.py tests/test_soc_mcp_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py --check`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py tests/test_soc_action_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 做 DeerFlow cached MCP provider implementation；真实 provider 放在 `backend/soc_agent/actions/` 下。
 
 ### 2026-07-05 — SOC action package structure hygiene 切片
 
@@ -131,7 +152,7 @@
     - `actions/mcp.py`：原 `mcp_adapters.py`，承载 MCP provider port、read-only MCP adapter 和 explicit config builder。
     - `actions/proposals.py`：原 `action_proposals.py`，承载 Lead Agent action proposal boundary。
     - `actions/__init__.py`：轻量 package marker，不重导出子模块，避免隐性加载 core/proposal 依赖。
-  - 根目录 `action_adapters.py`、`action_proposals.py`、`mcp_adapters.py` 改成兼容 wrapper；新代码必须 import `soc_agent.actions.*`。
+  - 根目录旧入口后续 follow-up 已删除；新代码必须 import `soc_agent.actions.*`。
   - SOC 内部代码和测试 import 切到新路径。
   - `backend/tests/architecture/test_soc_agent_boundaries.py` 增加架构测试，防止未来新增 root-level action-like modules。
   - 更新主方案、MCP bridge plan、action adapter plan 和工程契约。

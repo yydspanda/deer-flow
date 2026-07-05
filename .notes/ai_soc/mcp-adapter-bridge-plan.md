@@ -204,7 +204,6 @@ soc_action_adapters.yaml / db managed config
      - `SocMcpToolProviderPort`
      - `SocMcpToolActionAdapter`
      - `mcp_read_only_adapter_descriptor()`
-   - 兼容入口：`backend/soc_agent/mcp_adapters.py`。
    - 当前测试：`backend/tests/test_soc_mcp_adapters.py`
 
 2. **MCP-backed read-only `asset.lookup` adapter behind explicit config**（Done）
@@ -216,7 +215,6 @@ soc_action_adapters.yaml / db managed config
      - `SocMcpToolBindingConfig`
      - `build_mcp_action_adapter()`
      - `build_mcp_action_adapter_registry()`
-   - 兼容入口：`backend/soc_agent/mcp_adapters.py`。
    - 当前测试：`backend/tests/test_soc_mcp_adapters.py`
      - explicit config -> registry -> `asset.lookup` execute。
      - disabled config skip。
