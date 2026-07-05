@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, Self
 
-from soc_agent.action_adapters import SocActionAdapterRegistryError
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from soc_agent.action_adapters import SocActionAdapterRegistry, SocActionAdapterRegistryError
 from soc_agent.contracts import (
     ServiceRequestContext,
     SocAgentActionAdapterDescriptor,
@@ -52,6 +54,51 @@ class SocMcpToolNotFoundError(SocMcpToolProviderError, LookupError):
     """Raised when a configured MCP tool is not available."""
 
 
+class SocMcpToolBindingConfig(BaseModel):
+    """MCP server/tool binding hidden behind a SOC action adapter config."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    server: str | None = None
+    tool: str = Field(min_length=1)
+    timeout_seconds: int = Field(default=5, gt=0)
+    input_mapping: dict[str, str] = Field(default_factory=dict)
+    output_fields: list[str] = Field(default_factory=list)
+    result_schema_version: str = "soc.mcp_tool_result.v1"
+
+
+class SocMcpActionAdapterConfig(BaseModel):
+    """Explicit allowlist config for one read-only MCP-backed SOC action adapter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "soc.mcp_action_adapter_config.v1"
+    enabled: bool = True
+    owner: str | None = None
+    environment: str | None = None
+    adapter_id: str = Field(min_length=1)
+    route: str = Field(min_length=1)
+    action: str | None = None
+    risk_level: SocAgentRiskLevel = SocAgentRiskLevel.READ_ONLY
+    adapter_kind: Literal["mcp"] = "mcp"
+    external_side_effect: Literal["read"] = "read"
+    dry_run_supported: Literal[True] = True
+    execute_supported: Literal[True] = True
+    idempotency_required: Literal[False] = False
+    required_payload_fields: list[str] = Field(default_factory=list)
+    required_context_refs: list[str] = Field(default_factory=list)
+    description: str = ""
+    payload_schema: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    mcp: SocMcpToolBindingConfig
+
+    @model_validator(mode="after")
+    def _validate_read_only_config(self) -> Self:
+        if self.risk_level != SocAgentRiskLevel.READ_ONLY:
+            raise ValueError("SocMcpActionAdapterConfig currently supports risk_level=read_only only")
+        return self
+
+
 def mcp_read_only_adapter_descriptor(
     *,
     adapter_id: str,
@@ -79,6 +126,52 @@ def mcp_read_only_adapter_descriptor(
         description=description,
         metadata=metadata or {},
     )
+
+
+def build_mcp_action_adapter(
+    config: SocMcpActionAdapterConfig | Mapping[str, Any],
+    provider: SocMcpToolProviderPort,
+) -> SocMcpToolActionAdapter:
+    """Build one read-only MCP-backed action adapter from explicit config."""
+
+    adapter_config = _coerce_mcp_action_adapter_config(config)
+    if not adapter_config.enabled:
+        raise SocActionAdapterRegistryError("disabled MCP action adapter config cannot be built directly")
+    descriptor = mcp_read_only_adapter_descriptor(
+        adapter_id=adapter_config.adapter_id,
+        route=adapter_config.route,
+        action=adapter_config.action,
+        required_payload_fields=adapter_config.required_payload_fields,
+        required_context_refs=adapter_config.required_context_refs,
+        description=adapter_config.description,
+        metadata=_descriptor_metadata(adapter_config),
+    )
+    return SocMcpToolActionAdapter(
+        descriptor=descriptor,
+        provider=provider,
+        tool_name=adapter_config.mcp.tool,
+        timeout_seconds=adapter_config.mcp.timeout_seconds,
+        input_mapping=adapter_config.mcp.input_mapping,
+        output_fields=adapter_config.mcp.output_fields,
+        result_schema_version=adapter_config.mcp.result_schema_version,
+    )
+
+
+def build_mcp_action_adapter_registry(
+    configs: Iterable[SocMcpActionAdapterConfig | Mapping[str, Any]],
+    provider: SocMcpToolProviderPort,
+    *,
+    base_adapters: Iterable[Any] = (),
+) -> SocActionAdapterRegistry:
+    """Build an action adapter registry from enabled MCP adapter configs."""
+
+    registry = SocActionAdapterRegistry(base_adapters)
+    for config in configs:
+        adapter_config = _coerce_mcp_action_adapter_config(config)
+        if not adapter_config.enabled:
+            continue
+        registry.register(build_mcp_action_adapter(adapter_config, provider))
+    return registry
 
 
 class SocMcpToolActionAdapter:
@@ -243,6 +336,31 @@ def _select_output_fields(result: Mapping[str, Any], output_fields: tuple[str, .
     return {field: result[field] for field in output_fields if field in result}
 
 
+def _coerce_mcp_action_adapter_config(config: SocMcpActionAdapterConfig | Mapping[str, Any]) -> SocMcpActionAdapterConfig:
+    if isinstance(config, SocMcpActionAdapterConfig):
+        return config
+    return SocMcpActionAdapterConfig.model_validate(config)
+
+
+def _descriptor_metadata(config: SocMcpActionAdapterConfig) -> dict[str, Any]:
+    metadata = dict(config.metadata)
+    metadata["mcp"] = {
+        "server": config.mcp.server,
+        "tool": config.mcp.tool,
+        "timeout_seconds": config.mcp.timeout_seconds,
+        "result_schema_version": config.mcp.result_schema_version,
+    }
+    metadata["config"] = {
+        "schema_version": config.schema_version,
+        "enabled": config.enabled,
+        "owner": config.owner,
+        "environment": config.environment,
+    }
+    if config.payload_schema:
+        metadata["payload_schema"] = config.payload_schema
+    return metadata
+
+
 def _has_value(value: Any) -> bool:
     if value is None:
         return False
@@ -252,10 +370,14 @@ def _has_value(value: Any) -> bool:
 
 
 __all__ = [
+    "SocMcpActionAdapterConfig",
     "SocMcpToolActionAdapter",
+    "SocMcpToolBindingConfig",
     "SocMcpToolDescriptor",
     "SocMcpToolNotFoundError",
     "SocMcpToolProviderError",
     "SocMcpToolProviderPort",
+    "build_mcp_action_adapter",
+    "build_mcp_action_adapter_registry",
     "mcp_read_only_adapter_descriptor",
 ]

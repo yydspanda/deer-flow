@@ -1,6 +1,6 @@
 # SOC MCP Adapter Bridge Plan
 
-> 状态：Phase 1 后续规划。当前已完成 SOC MCP provider port、fake provider tests 和 read-only MCP adapter skeleton；尚未接真实 DeerFlow cached MCP provider。目标是把真实资产系统、EDR 只读查询、F5/SOAR/MCP 能力接进 SOC action adapter registry，但不让 SOC Lead Agent 直接调用任意 MCP tool。
+> 状态：Phase 1 后续规划。当前已完成 SOC MCP provider port、fake provider tests、read-only MCP adapter skeleton，以及 MCP-backed read-only `asset.lookup` explicit config builder；尚未接真实 DeerFlow cached MCP provider。目标是把真实资产系统、EDR 只读查询、F5/SOAR/MCP 能力接进 SOC action adapter registry，但不让 SOC Lead Agent 直接调用任意 MCP tool。
 
 ## 背景
 
@@ -206,12 +206,22 @@ soc_action_adapters.yaml / db managed config
      - `mcp_read_only_adapter_descriptor()`
    - 当前测试：`backend/tests/test_soc_mcp_adapters.py`
 
-2. **MCP-backed read-only `asset.lookup` adapter behind explicit config**（Next）
+2. **MCP-backed read-only `asset.lookup` adapter behind explicit config**（Done）
    - 先用 fake provider 或本地 stub 验证 registry builder。
    - `execute_supported=True`，`external_side_effect=read`。
    - 无配置时继续使用 in-memory adapter 或 fail-fast，不影响本地。
+   - 当前实现：`backend/soc_agent/mcp_adapters.py`
+     - `SocMcpActionAdapterConfig`
+     - `SocMcpToolBindingConfig`
+     - `build_mcp_action_adapter()`
+     - `build_mcp_action_adapter_registry()`
+   - 当前测试：`backend/tests/test_soc_mcp_adapters.py`
+     - explicit config -> registry -> `asset.lookup` execute。
+     - disabled config skip。
+     - duplicate route/action fail-fast。
+     - non-read-only config reject。
 
-3. **DeerFlow cached MCP provider implementation**
+3. **DeerFlow cached MCP provider implementation**（Next）
    - 只在 adapter module import `deerflow.mcp.cache.get_cached_mcp_tools()`。
    - 按 tool name 精确查找，不做 fuzzy match。
    - 真实 MCP server 缺失时返回明确 adapter failure。
@@ -227,9 +237,9 @@ soc_action_adapters.yaml / db managed config
 
 ## 下一刀
 
-建议做 **MCP-backed read-only `asset.lookup` adapter behind explicit config**：
+建议做 **DeerFlow cached MCP provider implementation**：
 
-- 新增一个显式 config/builder 层，把 `asset.lookup` 映射到 `adapter_id/tool_name/input_mapping/output_fields`。
-- 仍使用 fake provider，不接真实 MCP server。
-- 让 registry 可以通过配置构造 MCP-backed `asset.lookup` adapter。
-- 无配置时继续保留 in-memory/local 行为或 fail-fast，不影响本地闭环。
+- 新增 provider 实现，复用 DeerFlow `get_cached_mcp_tools()`，但 provider 类型仍只暴露 `SocMcpToolProviderPort`。
+- 按配置中的 `mcp.tool` 精确查找 tool，不做 fuzzy match，不让 Lead Agent 直接看到 MCP tool name。
+- MCP tool 缺失、server 未启用、调用失败都映射为明确 adapter failure。
+- 先做 unit tests / fake cached tool tests，不直接要求真实生产 MCP server。

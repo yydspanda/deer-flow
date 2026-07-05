@@ -15,10 +15,13 @@ from soc_agent.contracts import (
     SocAgentRiskLevel,
 )
 from soc_agent.mcp_adapters import (
+    SocMcpActionAdapterConfig,
     SocMcpToolActionAdapter,
     SocMcpToolDescriptor,
     SocMcpToolNotFoundError,
     SocMcpToolProviderError,
+    build_mcp_action_adapter,
+    build_mcp_action_adapter_registry,
     mcp_read_only_adapter_descriptor,
 )
 
@@ -36,6 +39,96 @@ def test_mcp_read_only_descriptor_sets_adapter_contract() -> None:
     assert descriptor.idempotency_required is False
     assert descriptor.required_payload_fields == ["asset_key"]
     assert descriptor.required_context_refs == ["thread_id"]
+
+
+def test_mcp_adapter_config_builder_creates_read_only_asset_lookup_registry() -> None:
+    provider = FakeSocMcpToolProvider(
+        {
+            "cmdb_asset_lookup": {
+                "asset_found": True,
+                "asset_record": {"asset_id": "asset-001", "owner": "payments-sre"},
+                "raw_secret": "must-not-leak",
+            }
+        }
+    )
+
+    registry = build_mcp_action_adapter_registry([_asset_lookup_config()], provider)
+    [descriptor] = registry.list_descriptors()
+
+    assert descriptor.adapter_id == "asset-lookup-cmdb-mcp"
+    assert descriptor.route == "asset.lookup"
+    assert descriptor.action == "asset.lookup"
+    assert descriptor.risk_level is SocAgentRiskLevel.READ_ONLY
+    assert descriptor.adapter_kind == "mcp"
+    assert descriptor.external_side_effect == "read"
+    assert descriptor.required_payload_fields == ["asset_key"]
+    assert descriptor.required_context_refs == ["thread_id"]
+    assert descriptor.metadata["mcp"] == {
+        "server": "cmdb",
+        "tool": "cmdb_asset_lookup",
+        "timeout_seconds": 7,
+        "result_schema_version": "soc.asset_lookup_result.v1",
+    }
+    assert descriptor.metadata["config"]["owner"] == "soc-platform"
+    assert descriptor.metadata["config"]["environment"] == "dev"
+
+    result = registry.execute(
+        SocAgentActionCommand(
+            route="asset.lookup",
+            action="asset.lookup",
+            dry_run=False,
+            payload={
+                "asset_key": "10.10.1.5",
+                "context_refs": {"thread_id": "SOC-THREAD-1"},
+                "ignored": "not-sent",
+            },
+        ),
+        context=_context(),
+    )
+
+    assert provider.invocations == [
+        {
+            "tool_name": "cmdb_asset_lookup",
+            "payload": {"query": "10.10.1.5"},
+            "timeout_seconds": 7,
+        }
+    ]
+    assert result.status == "success"
+    assert result.payload["mcp_result"] == {
+        "asset_found": True,
+        "asset_record": {"asset_id": "asset-001", "owner": "payments-sre"},
+    }
+    assert "raw_secret" not in result.payload["mcp_result"]
+
+
+def test_mcp_adapter_config_builder_skips_disabled_configs() -> None:
+    provider = FakeSocMcpToolProvider({"cmdb_asset_lookup": {"asset_found": True}})
+    config = _asset_lookup_config() | {"enabled": False}
+
+    registry = build_mcp_action_adapter_registry([config], provider)
+
+    assert registry.list_descriptors() == []
+
+
+def test_mcp_adapter_config_builder_rejects_disabled_direct_build() -> None:
+    provider = FakeSocMcpToolProvider({"cmdb_asset_lookup": {"asset_found": True}})
+    config = _asset_lookup_config() | {"enabled": False}
+
+    with pytest.raises(SocActionAdapterRegistryError, match="disabled MCP action adapter config"):
+        build_mcp_action_adapter(config, provider)
+
+
+def test_mcp_adapter_config_builder_rejects_duplicate_route_action() -> None:
+    provider = FakeSocMcpToolProvider({"cmdb_asset_lookup": {"asset_found": True}})
+    duplicate_config = _asset_lookup_config() | {"adapter_id": "asset-lookup-cmdb-mcp-2"}
+
+    with pytest.raises(SocActionAdapterRegistryError, match="already registered"):
+        build_mcp_action_adapter_registry([_asset_lookup_config(), duplicate_config], provider)
+
+
+def test_mcp_adapter_config_rejects_non_read_only_risk() -> None:
+    with pytest.raises(ValueError, match="risk_level=read_only"):
+        SocMcpActionAdapterConfig.model_validate(_asset_lookup_config() | {"risk_level": "high_risk"})
 
 
 def test_mcp_adapter_dry_run_validates_tool_without_invoking_provider() -> None:
@@ -238,6 +331,28 @@ def _asset_lookup_descriptor():
         required_context_refs=["thread_id"],
         description="Read-only CMDB asset lookup through MCP.",
     )
+
+
+def _asset_lookup_config() -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "owner": "soc-platform",
+        "environment": "dev",
+        "adapter_id": "asset-lookup-cmdb-mcp",
+        "route": "asset.lookup",
+        "action": "asset.lookup",
+        "required_payload_fields": ["asset_key"],
+        "required_context_refs": ["thread_id"],
+        "description": "Read-only CMDB asset lookup through MCP.",
+        "mcp": {
+            "server": "cmdb",
+            "tool": "cmdb_asset_lookup",
+            "timeout_seconds": 7,
+            "input_mapping": {"asset_key": "query"},
+            "output_fields": ["asset_found", "asset_record"],
+            "result_schema_version": "soc.asset_lookup_result.v1",
+        },
+    }
 
 
 def _context() -> ServiceRequestContext:

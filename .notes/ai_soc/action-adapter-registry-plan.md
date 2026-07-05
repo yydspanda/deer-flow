@@ -102,7 +102,12 @@ Lead Agent / Skill / Daemon
    - `SocMcpToolActionAdapter` 先只支持 read-only fake invocation。
    - 真实 DeerFlow cached MCP provider 放到下一刀，避免一次性接入外部状态。
 
-8. **MCP-backed read-only `asset.lookup` adapter config builder**（Next）
+8. **MCP-backed read-only `asset.lookup` adapter config builder**（Done）
    - 新增显式配置/builder，把 `asset.lookup` 映射到 MCP-backed adapter descriptor、tool name、input mapping 和 output fields。
    - 继续使用 fake provider，不接真实 MCP server。
    - 为后续 DeerFlow cached MCP provider 实现预留同一 provider port。
+
+9. **DeerFlow cached MCP provider implementation**（Next）
+   - 真实 provider 只能在 `backend/soc_agent/mcp_adapters.py` 或同级 adapter module import DeerFlow MCP cache。
+   - provider 对外仍实现 `SocMcpToolProviderPort`，core/API/TUI/Web 不接触 LangChain/MCP tool 类型。
+   - 按 tool name 精确查找，缺失或调用失败必须映射为 `SocAgentActionResult(status="failed")` 或明确 registry error。

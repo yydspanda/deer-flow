@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | MCP-backed read-only `asset.lookup` adapter config builder |
+| 当前下一刀 | DeerFlow cached MCP provider implementation |
 
 ## Phase 1 切片计划
 
@@ -114,9 +114,36 @@
 | 78 | SOC Lead Agent read-only tool proposal bridge | Done | Lead Agent 只能通过结构化 envelope 请求 `asset.lookup` 等只读能力；bridge 转成同一条 router/policy/dispatcher/registry 链路；不直接调用 adapter/MCP |
 | 79 | MCP adapter bridge / real read-only data source planning | Done | 规划真实资产系统、EDR 只读查询或 MCP readonly tool 如何通过 adapter descriptor 接入；write/destructive 仍走 approval |
 | 80 | MCP tool provider port + fake provider adapter tests | Done | 定义 SOC MCP provider port、fake provider 和 read-only MCP adapter skeleton；不接真实 MCP server |
-| 81 | MCP-backed read-only `asset.lookup` adapter config builder | Planned | 用 fake provider 固定显式配置到 MCP-backed `asset.lookup` adapter registry 的构造方式；不接真实 MCP server |
+| 81 | MCP-backed read-only `asset.lookup` adapter config builder | Done | 用 fake provider 固定显式配置到 MCP-backed `asset.lookup` adapter registry 的构造方式；不接真实 MCP server |
+| 82 | DeerFlow cached MCP provider implementation | Planned | 复用 DeerFlow MCP cache/session 生命周期，实现 `SocMcpToolProviderPort`；仍不让 Lead Agent 直接调用任意 MCP tool |
 
 ## 进度记录
+
+### 2026-07-05 — MCP-backed read-only `asset.lookup` adapter config builder 切片
+
+- 背景：
+  - MCP adapter skeleton 已经固定 provider port 和 read-only execution contract。
+  - 下一步接真实 MCP provider 前，需要先把 `route/action -> mcp.server/tool` 的显式配置边界固定下来，避免 Lead Agent、dispatcher 或自然语言推断 tool name/payload。
+- 变更：
+  - `backend/soc_agent/mcp_adapters.py` 新增：
+    - `SocMcpToolBindingConfig`：承载 `mcp.server/tool/timeout/input_mapping/output_fields/result_schema_version`。
+    - `SocMcpActionAdapterConfig`：承载 SOC action descriptor、owner/environment、payload schema、metadata 和 MCP binding。
+    - `build_mcp_action_adapter()`：从单个 enabled config 构造 `SocMcpToolActionAdapter`。
+    - `build_mcp_action_adapter_registry()`：从配置列表构造 `SocActionAdapterRegistry`，跳过 disabled config，重复 route/action fail-fast。
+  - `SocMcpActionAdapterConfig` 当前只允许 `risk_level=read_only`、`adapter_kind=mcp`、`external_side_effect=read`、`execute_supported=True`、`idempotency_required=False`。
+  - `backend/tests/test_soc_mcp_adapters.py` 增加 explicit config -> registry -> `asset.lookup` execute、disabled skip、direct disabled build reject、duplicate route/action reject、non-read-only config reject 覆盖。
+  - 更新 MCP bridge plan、action adapter plan、工程契约和主方案。
+- 边界：
+  - 不接真实 DeerFlow cached MCP provider。
+  - 不接真实 MCP server。
+  - 不修改 DeerFlow MCP core。
+  - 不开放 write/destructive MCP execute。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/mcp_adapters.py tests/test_soc_mcp_adapters.py`
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/mcp_adapters.py tests/test_soc_mcp_adapters.py --check`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py`
+- 下一步：
+  - 做 DeerFlow cached MCP provider implementation：复用 `get_cached_mcp_tools()`，但对外仍只暴露 `SocMcpToolProviderPort`，按 tool name 精确查找并把失败映射为 adapter failure。
 
 ### 2026-07-05 — MCP tool provider port + fake provider adapter tests 切片
 
