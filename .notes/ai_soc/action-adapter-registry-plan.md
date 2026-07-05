@@ -119,7 +119,11 @@ Lead Agent / Skill / Daemon
    - SOC Lead Agent profile 不配置 `mcp` 字段；MCP 绑定属于 action adapter allowlist，不属于 custom-agent profile。
    - 不开放 write/destructive execute。
 
-11. **Dev/staging read-only MCP live smoke**（Next）
+11. **Dev/staging read-only MCP smoke report contract**（Done）
+   - `soc mcp smoke` 输出 `SocMcpActionSmokeReport`，记录 latency、failure、payload/result byte size、tool/config metadata、output_fields 裁剪和内嵌 action result。
+   - config/load/registry/tool failure 也输出结构化 report，方便 dev/staging 脚本归档。
+
+12. **Real dev/staging read-only MCP live smoke**（Next）
    - 用真实 dev/staging MCP server 验证 read-only `asset.lookup` / EDR process tree path。
    - 记录延迟、失败率、payload size 和敏感字段裁剪情况。
    - 不接生产 write/destructive MCP。

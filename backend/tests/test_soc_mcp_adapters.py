@@ -21,6 +21,7 @@ from soc_agent.actions.mcp import (
     build_mcp_action_adapter_registry_from_file,
     load_mcp_action_adapter_configs,
     mcp_read_only_adapter_descriptor,
+    run_mcp_action_adapter_smoke,
 )
 from soc_agent.contracts import (
     ActorContext,
@@ -222,6 +223,80 @@ def test_build_mcp_action_adapter_registry_from_file_executes_cached_provider(tm
     }
 
 
+def test_run_mcp_action_adapter_smoke_reports_live_metrics(tmp_path: Path) -> None:
+    config_path = tmp_path / "soc_action_adapters.json"
+    config_path.write_text(json.dumps({"adapters": [_asset_lookup_config()]}), encoding="utf-8")
+    tool = FakeCachedMcpTool(
+        name="cmdb_asset_lookup",
+        result={
+            "asset_found": True,
+            "asset_record": {"asset_id": "asset-001"},
+            "raw_secret": "must-not-leak",
+        },
+    )
+    provider = DeerFlowCachedMcpToolProvider(lambda: [tool])
+
+    report = run_mcp_action_adapter_smoke(
+        config_path,
+        provider,
+        command=SocAgentActionCommand(
+            route="asset.lookup",
+            action="asset.lookup",
+            dry_run=False,
+            payload={
+                "asset_key": "10.10.1.5",
+                "context_refs": {"thread_id": "SOC-THREAD-1"},
+            },
+        ),
+        context=_context(),
+    )
+
+    assert tool.invocations == [{"query": "10.10.1.5"}]
+    assert report.schema_version == "soc.mcp_action_smoke_report.v1"
+    assert report.status == "success"
+    assert report.result_status == "success"
+    assert report.route == "asset.lookup"
+    assert report.action == "asset.lookup"
+    assert report.tool_name == "cmdb_asset_lookup"
+    assert report.mcp_server == "cmdb"
+    assert report.timeout_seconds == 7
+    assert report.duration_ms >= 0
+    assert report.action_payload_bytes > 0
+    assert report.action_result_bytes > 0
+    assert report.mcp_result_bytes is not None and report.mcp_result_bytes > 0
+    assert report.output_fields == ["asset_found", "asset_record"]
+    assert report.output_filter_applied is True
+    assert report.mcp_result_keys == ["asset_found", "asset_record"]
+    assert report.action_result["payload"]["mcp_result"] == {
+        "asset_found": True,
+        "asset_record": {"asset_id": "asset-001"},
+    }
+    assert "raw_secret" not in report.action_result["payload"]["mcp_result"]
+
+
+def test_run_mcp_action_adapter_smoke_reports_config_failure(tmp_path: Path) -> None:
+    config_path = tmp_path / "soc_action_adapters.json"
+    config_path.write_text(json.dumps({"adapter_id": "missing-adapters-list"}), encoding="utf-8")
+
+    report = run_mcp_action_adapter_smoke(
+        config_path,
+        DeerFlowCachedMcpToolProvider(lambda: []),
+        command=SocAgentActionCommand(
+            route="asset.lookup",
+            action="asset.lookup",
+            dry_run=False,
+            payload={"asset_key": "10.10.1.5"},
+        ),
+        context=_context(),
+    )
+
+    assert report.status == "failed"
+    assert report.result_status is None
+    assert report.error_type == "SocActionAdapterRegistryError"
+    assert "must contain an adapters list" in (report.error_message or "")
+    assert report.action_result == {}
+
+
 def test_cli_mcp_smoke_executes_configured_read_only_action(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -260,9 +335,14 @@ def test_cli_mcp_smoke_executes_configured_read_only_action(
     output = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert tool.invocations == [{"query": "10.10.1.5"}]
+    assert output["schema_version"] == "soc.mcp_action_smoke_report.v1"
     assert output["status"] == "success"
-    assert output["payload"]["adapter_kind"] == "mcp"
-    assert output["payload"]["mcp_result"] == {
+    assert output["result_status"] == "success"
+    assert output["adapter_kind"] == "mcp"
+    assert output["tool_name"] == "cmdb_asset_lookup"
+    assert output["output_filter_applied"] is True
+    assert output["mcp_result_keys"] == ["asset_found", "asset_record"]
+    assert output["action_result"]["payload"]["mcp_result"] == {
         "asset_found": True,
         "asset_record": {"asset_id": "asset-001"},
     }

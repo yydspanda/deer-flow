@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | Dev/staging read-only MCP live smoke |
+| 当前下一刀 | Real dev/staging read-only MCP smoke run |
 
 ## Phase 1 切片计划
 
@@ -118,9 +118,45 @@
 | 82 | SOC action package structure hygiene | Done | 将 action adapter、proposal、MCP adapter 收口到 `backend/soc_agent/actions/`，删除根目录旧入口；架构测试防止继续往根目录新增 action-like 模块 |
 | 83 | DeerFlow cached MCP provider implementation | Done | 复用 DeerFlow MCP cache/session 生命周期，实现 `SocMcpToolProviderPort`；仍不让 Lead Agent 直接调用任意 MCP tool |
 | 84 | Read-only config smoke wiring | Done | 支持 JSON/YAML 显式 adapter config 加载，`soc mcp smoke` 可验证 config -> registry -> DeerFlow cached provider -> action result |
-| 85 | Dev/staging read-only MCP live smoke | Planned | 用真实 dev/staging MCP server 验证资产查询或 EDR process tree read-only path，记录延迟、失败、payload size 和敏感字段裁剪 |
+| 85 | Dev/staging read-only MCP smoke report contract | Done | `soc mcp smoke` 输出 versioned report，记录 latency、failure、payload size、result size、tool/config 和 output_fields 裁剪信息 |
+| 86 | Real dev/staging read-only MCP smoke run | Planned | 用真实 dev/staging MCP server 验证资产查询或 EDR process tree read-only path，保存 smoke report 并评估接入风险 |
 
 ## 进度记录
+
+### 2026-07-05 — Dev/staging read-only MCP smoke report contract 切片
+
+- 背景：
+  - `soc mcp smoke` 已能跑通 config -> registry -> provider -> action result，但真实 dev/staging 验证还需要稳定的 metrics/report 输出。
+  - 当前本机没有真实 CMDB/EDR dev/staging MCP 参数，因此本切片只固定 report contract，不冒充 live MCP 已连通。
+- 变更：
+  - `backend/soc_agent/actions/mcp.py` 新增：
+    - `SocMcpActionSmokeReport`
+    - `run_mcp_action_adapter_smoke()`
+  - smoke report 字段包括：
+    - `duration_ms`
+    - `action_payload_bytes`
+    - `action_result_bytes`
+    - `mcp_result_bytes`
+    - `adapter_id / adapter_kind / mcp_server / tool_name / timeout_seconds`
+    - `output_fields / output_filter_applied / mcp_result_keys`
+    - `error_type / error_message`
+    - `action_result`
+  - `backend/soc_agent/cli.py` 的 `soc mcp smoke` 改为输出 `soc.mcp_action_smoke_report.v1`，失败也返回结构化 JSON report。
+  - `backend/tests/test_soc_mcp_adapters.py` 增加 smoke success metrics、config failure 和 CLI report 覆盖。
+- 边界：
+  - 不接生产 MCP server。
+  - 不把 smoke report 接入默认 chat/daemon。
+  - 不开放 high-risk execute。
+  - 不让 Lead Agent 直接调用 MCP tool。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/actions/mcp.py soc_agent/cli.py tests/test_soc_mcp_adapters.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/actions soc_agent/cli.py soc_agent/lead_agent.py soc_agent/lead_agent_chat.py tests/test_soc_action_adapters.py tests/test_soc_mcp_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/actions soc_agent/cli.py soc_agent/lead_agent.py soc_agent/lead_agent_chat.py tests/test_soc_action_adapters.py tests/test_soc_mcp_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py --check`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py tests/test_soc_action_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `codegraph sync .`
+- 下一步：
+  - 准备一份真实 dev/staging MCP config，运行 `soc mcp smoke CONFIG --route asset.lookup --json ... --pretty`，把 report 记录到台账或 runbook，评估延迟、失败率、payload size 和字段裁剪。
 
 ### 2026-07-05 — Read-only MCP config smoke wiring 切片
 

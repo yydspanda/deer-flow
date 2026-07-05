@@ -14,7 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from soc_agent.actions.adapters import InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
-from soc_agent.actions.mcp import DeerFlowCachedMcpToolProvider, build_mcp_action_adapter_registry_from_file
+from soc_agent.actions.mcp import DeerFlowCachedMcpToolProvider, run_mcp_action_adapter_smoke
 from soc_agent.actions.proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.agent_profile import SocLeadAgentProfileInstaller
 from soc_agent.contracts import (
@@ -610,10 +610,6 @@ def _agent_install_profile(args: argparse.Namespace) -> int:
 def _mcp_smoke(args: argparse.Namespace) -> int:
     try:
         payload = _load_json_object(args.json_payload, payload_label="SOC action payload")
-        registry = build_mcp_action_adapter_registry_from_file(
-            args.config,
-            DeerFlowCachedMcpToolProvider(),
-        )
         command = SocAgentActionCommand(
             route=args.route,
             action=args.action or args.route,
@@ -630,16 +626,18 @@ def _mcp_smoke(args: argparse.Namespace) -> int:
             trace_id=args.trace_id,
             idempotency_key=args.idempotency_key,
         )
-        result = registry.dry_run(command, context=context) if args.dry_run else registry.execute(command, context=context)
+        report = run_mcp_action_adapter_smoke(
+            args.config,
+            DeerFlowCachedMcpToolProvider(),
+            command=command,
+            context=context,
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    except RuntimeError as exc:
-        print(f"error: MCP smoke failed: {exc}", file=sys.stderr)
-        return 1
 
-    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
-    return 0 if result.status == "success" else 1
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if report.status == "success" else 1
 
 
 def _daemon_process(args: argparse.Namespace) -> int:

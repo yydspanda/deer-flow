@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
@@ -157,6 +158,35 @@ class SocMcpActionAdapterConfig(BaseModel):
         return self
 
 
+class SocMcpActionSmokeReport(BaseModel):
+    """Structured report for dev/staging read-only MCP action smoke runs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "soc.mcp_action_smoke_report.v1"
+    config_path: str
+    route: str
+    action: str
+    dry_run: bool
+    status: Literal["success", "failed"]
+    result_status: Literal["success", "denied", "failed"] | None = None
+    duration_ms: float = Field(ge=0)
+    action_payload_bytes: int = Field(ge=0)
+    action_result_bytes: int = Field(ge=0)
+    mcp_result_bytes: int | None = Field(default=None, ge=0)
+    adapter_id: str | None = None
+    adapter_kind: str | None = None
+    mcp_server: str | None = None
+    tool_name: str | None = None
+    timeout_seconds: int | None = None
+    output_fields: list[str] = Field(default_factory=list)
+    output_filter_applied: bool = False
+    mcp_result_keys: list[str] = Field(default_factory=list)
+    error_type: str | None = None
+    error_message: str | None = None
+    action_result: dict[str, Any] = Field(default_factory=dict)
+
+
 def mcp_read_only_adapter_descriptor(
     *,
     adapter_id: str,
@@ -261,6 +291,47 @@ def build_mcp_action_adapter_registry_from_file(
         load_mcp_action_adapter_configs(config_path),
         provider,
         base_adapters=base_adapters,
+    )
+
+
+def run_mcp_action_adapter_smoke(
+    config_path: str | Path,
+    provider: SocMcpToolProviderPort,
+    *,
+    command: SocAgentActionCommand,
+    context: ServiceRequestContext,
+    base_adapters: Iterable[Any] = (),
+) -> SocMcpActionSmokeReport:
+    """Run one read-only MCP action smoke and return metrics for dev/staging checks."""
+
+    path = Path(config_path)
+    started = time.perf_counter()
+    action_payload_bytes = _json_byte_size(command.payload)
+    matching_config: SocMcpActionAdapterConfig | None = None
+    try:
+        configs = load_mcp_action_adapter_configs(path)
+        matching_config = _find_enabled_mcp_action_config(configs, route=command.route, action=command.action)
+        registry = build_mcp_action_adapter_registry(configs, provider, base_adapters=base_adapters)
+        result = registry.dry_run(command, context=context) if command.dry_run else registry.execute(command, context=context)
+    except Exception as exc:  # noqa: BLE001 - smoke report must preserve failure as structured JSON
+        return _mcp_smoke_report(
+            config_path=path,
+            command=command,
+            started=started,
+            action_payload_bytes=action_payload_bytes,
+            matching_config=matching_config,
+            result=None,
+            error=exc,
+        )
+
+    return _mcp_smoke_report(
+        config_path=path,
+        command=command,
+        started=started,
+        action_payload_bytes=action_payload_bytes,
+        matching_config=matching_config,
+        result=result,
+        error=None,
     )
 
 
@@ -543,6 +614,74 @@ def _extract_adapter_config_entries(document: Any, *, source: Path) -> list[Any]
     raise SocActionAdapterRegistryError(f"MCP action adapter config {source} must be a list or an object with adapters")
 
 
+def _find_enabled_mcp_action_config(
+    configs: Iterable[SocMcpActionAdapterConfig],
+    *,
+    route: str,
+    action: str,
+) -> SocMcpActionAdapterConfig | None:
+    for config in configs:
+        if config.enabled and config.route == route and (config.action or config.route) == action:
+            return config
+    return None
+
+
+def _mcp_smoke_report(
+    *,
+    config_path: Path,
+    command: SocAgentActionCommand,
+    started: float,
+    action_payload_bytes: int,
+    matching_config: SocMcpActionAdapterConfig | None,
+    result: SocAgentActionResult | None,
+    error: Exception | None,
+) -> SocMcpActionSmokeReport:
+    duration_ms = round((time.perf_counter() - started) * 1000, 3)
+    action_result = result.model_dump(mode="json", exclude_none=True) if result is not None else {}
+    result_payload = result.payload if result is not None else {}
+    mcp_result = result_payload.get("mcp_result") if isinstance(result_payload, Mapping) else None
+    mcp_result_mapping = mcp_result if isinstance(mcp_result, Mapping) else None
+    result_status = result.status if result is not None else None
+    return SocMcpActionSmokeReport(
+        config_path=str(config_path),
+        route=command.route,
+        action=command.action,
+        dry_run=command.dry_run,
+        status="success" if result_status == "success" and error is None else "failed",
+        result_status=result_status,
+        duration_ms=duration_ms,
+        action_payload_bytes=action_payload_bytes,
+        action_result_bytes=_json_byte_size(action_result),
+        mcp_result_bytes=_json_byte_size(mcp_result_mapping) if mcp_result_mapping is not None else None,
+        adapter_id=result_payload.get("adapter_id") if isinstance(result_payload.get("adapter_id"), str) else (matching_config.adapter_id if matching_config else None),
+        adapter_kind=result_payload.get("adapter_kind") if isinstance(result_payload.get("adapter_kind"), str) else (matching_config.adapter_kind if matching_config else None),
+        mcp_server=matching_config.mcp.server if matching_config else None,
+        tool_name=result_payload.get("tool_name") if isinstance(result_payload.get("tool_name"), str) else (matching_config.mcp.tool if matching_config else None),
+        timeout_seconds=result_payload.get("timeout_seconds") if isinstance(result_payload.get("timeout_seconds"), int) else (matching_config.mcp.timeout_seconds if matching_config else None),
+        output_fields=list(matching_config.mcp.output_fields) if matching_config else [],
+        output_filter_applied=bool(matching_config and matching_config.mcp.output_fields),
+        mcp_result_keys=sorted(str(key) for key in mcp_result_mapping) if mcp_result_mapping is not None else [],
+        error_type=(error.__class__.__name__ if error is not None else _result_error_type(result_payload)),
+        error_message=(str(error) if error is not None else _result_error_message(result)),
+        action_result=action_result,
+    )
+
+
+def _result_error_type(result_payload: Mapping[str, Any]) -> str | None:
+    value = result_payload.get("error_type")
+    return value if isinstance(value, str) and value else None
+
+
+def _result_error_message(result: SocAgentActionResult | None) -> str | None:
+    if result is None or result.status == "success":
+        return None
+    return result.message
+
+
+def _json_byte_size(value: Any) -> int:
+    return len(json.dumps(_json_safe(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+
 def _descriptor_metadata(config: SocMcpActionAdapterConfig) -> dict[str, Any]:
     metadata = dict(config.metadata)
     metadata["mcp"] = {
@@ -573,6 +712,7 @@ def _has_value(value: Any) -> bool:
 __all__ = [
     "DeerFlowCachedMcpToolProvider",
     "SocMcpActionAdapterConfig",
+    "SocMcpActionSmokeReport",
     "SocMcpToolActionAdapter",
     "SocMcpToolBindingConfig",
     "SocMcpToolDescriptor",
@@ -584,4 +724,5 @@ __all__ = [
     "build_mcp_action_adapter_registry_from_file",
     "load_mcp_action_adapter_configs",
     "mcp_read_only_adapter_descriptor",
+    "run_mcp_action_adapter_smoke",
 ]

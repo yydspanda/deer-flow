@@ -1,6 +1,6 @@
 # SOC MCP Adapter Bridge Plan
 
-> 状态：Phase 1 后续规划。当前已完成 SOC MCP provider port、fake provider tests、read-only MCP adapter skeleton、MCP-backed read-only `asset.lookup` explicit config builder、DeerFlow cached MCP provider implementation，以及本地显式 config smoke wiring；尚未做真实 dev/staging MCP live smoke。目标是把真实资产系统、EDR 只读查询、F5/SOAR/MCP 能力接进 SOC action adapter registry，但不让 SOC Lead Agent 直接调用任意 MCP tool。
+> 状态：Phase 1 后续规划。当前已完成 SOC MCP provider port、fake provider tests、read-only MCP adapter skeleton、MCP-backed read-only `asset.lookup` explicit config builder、DeerFlow cached MCP provider implementation、本地显式 config smoke wiring，以及 dev/staging smoke report contract；尚未做真实 dev/staging MCP live smoke。目标是把真实资产系统、EDR 只读查询、F5/SOAR/MCP 能力接进 SOC action adapter registry，但不让 SOC Lead Agent 直接调用任意 MCP tool。
 
 ## 背景
 
@@ -238,23 +238,37 @@ soc_action_adapters.yaml / db managed config
    - 新增 `soc mcp smoke CONFIG --route asset.lookup --json ...`：
      - 默认使用 `DeerFlowCachedMcpToolProvider`。
      - `--dry-run` 只验证 adapter/tool 可用性，不调用 MCP tool。
-     - execute smoke 输出 `SocAgentActionResult`，用于检查 payload 裁剪和 error mapping。
+     - execute smoke 输出 `SocMcpActionSmokeReport`，内含 `SocAgentActionResult`，用于检查 latency、payload size、payload 裁剪和 error mapping。
    - 当前测试仍用 fake cached tool，不要求真实 MCP server。
 
-5. **Dev/staging read-only MCP live smoke**（Next）
-   - 用 dev/staging MCP server 验证资产查询或 EDR process tree 查询。
-   - 记录延迟、失败率、payload size、敏感字段脱敏情况。
+5. **Dev/staging read-only MCP smoke report contract**（Done）
+   - `soc mcp smoke` 输出 `soc.mcp_action_smoke_report.v1`。
+   - report 固定记录：
+     - `duration_ms`
+     - `action_payload_bytes`
+     - `action_result_bytes`
+     - `mcp_result_bytes`
+     - `adapter_id / adapter_kind / mcp_server / tool_name / timeout_seconds`
+     - `output_fields / output_filter_applied / mcp_result_keys`
+     - `error_type / error_message`
+     - `action_result`
+   - config/load/registry/tool failure 也输出结构化 report，便于 CI 或本地 smoke 脚本归档。
+   - 当前测试仍用 fake cached tool，不要求真实 MCP server。
 
-6. **High-risk MCP preflight only**
+6. **Real dev/staging read-only MCP live smoke**（Next）
+   - 用 dev/staging MCP server 验证资产查询或 EDR process tree 查询。
+   - 保存 `soc.mcp_action_smoke_report.v1`，评估延迟、失败率、payload size、敏感字段脱敏/裁剪情况。
+
+7. **High-risk MCP preflight only**
    - `response.block_ip`、`endpoint.isolate_host`、F5 规则等先只接 dry-run / execute preflight。
    - execute_supported 默认 false。
    - 真实 execute 等 staging eval、审批、幂等、回滚策略稳定后再打开。
 
 ## 下一刀
 
-建议做 **Dev/staging read-only MCP live smoke**：
+建议做 **Real dev/staging read-only MCP smoke run**：
 
 - 先不要接生产系统；用 dev/staging MCP server 验证 `asset.lookup` / EDR process tree 一类 read-only tool。
 - 沿用已固定的本地显式 adapter config，后续再升级为 DB/Web managed config。
-- smoke 验证 read-only path：config -> registry -> `DeerFlowCachedMcpToolProvider` -> `SocAgentActionResult.payload`。
-- 记录 latency、failure、payload size 和敏感字段裁剪情况；不开放 high-risk execute。
+- smoke 验证 read-only path：config -> registry -> `DeerFlowCachedMcpToolProvider` -> `SocMcpActionSmokeReport.action_result.payload`。
+- 保存 report，记录 latency、failure、payload size 和敏感字段裁剪情况；不开放 high-risk execute。

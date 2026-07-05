@@ -294,7 +294,8 @@ SOC Agent chat stream 约束：
   - `build_mcp_action_adapter_registry_from_file()` 只能用于显式 smoke/dev/staging wiring；chat TUI、daemon 或 production runtime 默认不得自动加载本地 MCP adapter config，除非后续有独立配置治理和启动参数。
   - `DeerFlowCachedMcpToolProvider` 是唯一允许复用 DeerFlow `get_cached_mcp_tools()` 的 SOC provider 实现；它必须把 LangChain `BaseTool` 归一为 `SocMcpToolDescriptor` / `Mapping`，不能把 BaseTool、ToolMessage、content block 或 MCP SDK 类型传出 `actions/mcp.py`。
   - `DeerFlowCachedMcpToolProvider.invoke()` 必须按 exact tool name 调用，不做 fuzzy match；tool 缺失、cache 加载失败、调用失败、timeout 都必须转成 `SocMcpToolProviderError` / `SocMcpToolNotFoundError`，再由 adapter 映射为可审计 action result。
-  - `soc mcp smoke CONFIG --route ... --json ...` 是 dev/staging read-only MCP path 的显式 smoke 入口；默认使用 `DeerFlowCachedMcpToolProvider`，`--dry-run` 只验证 adapter/tool availability，execute smoke 输出 `SocAgentActionResult`。该命令不是生产 daemon，也不是 Lead Agent 自主 tool runtime。
+  - `soc mcp smoke CONFIG --route ... --json ...` 是 dev/staging read-only MCP path 的显式 smoke 入口；默认使用 `DeerFlowCachedMcpToolProvider`，`--dry-run` 只验证 adapter/tool availability，execute smoke 输出 `SocMcpActionSmokeReport`。该命令不是生产 daemon，也不是 Lead Agent 自主 tool runtime。
+  - `SocMcpActionSmokeReport` 是 dev/staging smoke 的版本化报告 contract，必须记录 `duration_ms`、payload/result byte size、adapter/tool/config metadata、`output_fields` 裁剪状态、`mcp_result_keys`、失败类型和内嵌 `SocAgentActionResult`；config/load/registry/tool failure 也应输出结构化 report，方便脚本归档和接入评估。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
     - `POST /api/soc/approvals/grants`
     - `POST /api/soc/approvals/actions/dry-run`
