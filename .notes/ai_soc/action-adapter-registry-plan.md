@@ -92,6 +92,12 @@ Lead Agent / Skill / Daemon
    - bridge 负责把 proposal 转成显式 `metadata.soc_route/action_payload`，再走同一条 router/policy/dispatcher/registry 链路。
    - 不允许 Lead Agent 直接 import adapter 或直接调用 MCP/资产系统。
 
-6. **MCP adapter bridge**（Next）
+6. **MCP adapter bridge / real read-only data source planning**（Done）
    - 复用 DeerFlow MCP/tool 能力，但通过 SOC adapter descriptor 限定 action 名称、参数 schema、风险等级和审计字段。
    - 用户可配置 readonly MCP 候选；高风险 MCP group 只允许管理员启用，并继续走 approval。
+   - 规划文档：`.notes/ai_soc/mcp-adapter-bridge-plan.md`。
+
+7. **MCP tool provider port + fake provider adapter tests**（Next）
+   - 先定义 SOC MCP provider port 和 fake provider 测试，不接真实 MCP server。
+   - `SocMcpToolActionAdapter` 先只支持 read-only fake invocation。
+   - 真实 DeerFlow cached MCP provider 放到下一刀，避免一次性接入外部状态。

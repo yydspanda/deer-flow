@@ -13,6 +13,7 @@
 | `ai_soc/zeus-alert-flow-and-field-trust.md` | ZEUS/天眼上游字段冲突、可信度分层、统一研判闭环流程 |
 | `ai_soc/kafka-consumer-adapter-plan.md` | Kafka/Redpanda consumer adapter 接入规划：mapper、offset、dead-letter、metrics |
 | `ai_soc/action-adapter-registry-plan.md` | SOC approval 后真实 EDR/F5/SOAR/MCP action adapter registry 接入规划 |
+| `ai_soc/mcp-adapter-bridge-plan.md` | MCP adapter bridge 与真实只读数据源接入规划：DeerFlow MCP 复用、SOC adapter allowlist、配置治理 |
 | `ai_soc/soc-daemon-production-runbook.md` | SOC Kafka daemon 生产 entrypoint、healthcheck、env、日志和部署约定 |
 | `ai_soc/progress.md` | SOC Agent 长期开发进度台账；每个可验证切片完成后更新 |
 | `reference-index/soc-agent-engineering-contracts.md` | SOC Agent 代码风格、框架设计、API、通信协议和测试门禁 |

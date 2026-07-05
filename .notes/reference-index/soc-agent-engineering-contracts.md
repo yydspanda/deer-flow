@@ -282,6 +282,9 @@ SOC Agent chat stream 约束：
   - `asset.lookup` 可以登记为 read-only policy action，但不能默认加入 chat router 白名单；运行态调用只能通过显式 `soc_route=asset.lookup`、显式 `action_payload.asset_key`、显式 router allowlist 和注入的 action adapter registry 打开。
   - SOC Lead Agent 可以用 `<soc_action_proposal>...</soc_action_proposal>` 提出 `asset.lookup` 这类 read-only proposal；`SocLeadAgentActionProposalBoundary` 只能在注入 read-only router/dispatcher 时把它转成同一条 router/policy/dispatcher/registry 链路。
   - Lead Agent 不得直接调用 adapter、MCP 或资产系统；普通自然语言、Markdown 建议、模型自称“已查询”都不能触发 read-only lookup。
+  - MCP-backed SOC action 必须实现为 `SocActionAdapter`，并先注册 `SocAgentActionAdapterDescriptor`；SOC route/action 到 MCP server/tool 的映射只能存在于 adapter/config 层，不能暴露给 Lead Agent 作为自由 tool 选择。
+  - SOC MCP bridge 可以复用 DeerFlow `get_cached_mcp_tools()` / MCP session cache，但真实 LangChain/MCP tool 类型只能出现在 adapter module；`core/service.py`、Gateway、TUI、Web、contracts 不得 import MCP SDK 或 DeerFlow MCP cache。
+  - `tool_search` 适合 DeerFlow 通用 agent 的 deferred tool discovery，不是 SOC action execution boundary；生产 SOC action 不允许由 Lead Agent 直接通过 `tool_search` 找到并调用任意 MCP tool。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
     - `POST /api/soc/approvals/grants`
     - `POST /api/soc/approvals/actions/dry-run`

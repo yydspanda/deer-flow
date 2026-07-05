@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；第一个具体 read-only adapter 已可由 Lead Agent 显式 proposal 进入受控运行态 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge 的边界已固定 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | MCP adapter bridge / real read-only data source planning |
+| 当前下一刀 | MCP tool provider port + fake provider adapter tests |
 
 ## Phase 1 切片计划
 
@@ -112,9 +112,40 @@
 | 76 | First concrete safe read-only adapter | Done | 先接只读查询类 adapter（资产归属查询或 EDR 进程树查询），验证 adapter descriptor、dry-run、execute preflight 与审计 payload；不接封禁/隔离等写动作 |
 | 77 | Read-only adapter dispatcher / tool gateway wiring | Done | 明确 `asset.lookup` 如何通过受控 route/tool gateway 进入运行态；默认不加入 chat router 白名单；结果必须写入 action result / audit payload |
 | 78 | SOC Lead Agent read-only tool proposal bridge | Done | Lead Agent 只能通过结构化 envelope 请求 `asset.lookup` 等只读能力；bridge 转成同一条 router/policy/dispatcher/registry 链路；不直接调用 adapter/MCP |
-| 79 | MCP adapter bridge / real read-only data source planning | Planned | 规划真实资产系统、EDR 只读查询或 MCP readonly tool 如何通过 adapter descriptor 接入；write/destructive 仍走 approval |
+| 79 | MCP adapter bridge / real read-only data source planning | Done | 规划真实资产系统、EDR 只读查询或 MCP readonly tool 如何通过 adapter descriptor 接入；write/destructive 仍走 approval |
+| 80 | MCP tool provider port + fake provider adapter tests | Planned | 定义 SOC MCP provider port、fake provider 和 read-only MCP adapter skeleton；不接真实 MCP server |
 
 ## 进度记录
+
+### 2026-07-05 — MCP adapter bridge / real read-only data source planning 切片
+
+- 背景：
+  - Lead Agent 已能通过显式 read-only proposal 请求 `asset.lookup`。
+  - 但真实资产系统、EDR 只读查询或 MCP readonly tool 还没有接入边界；如果直接让 Lead Agent 用 DeerFlow `tool_search` 发现和调用 MCP tool，会绕开 SOC route/action、审计和 approval policy。
+- CodeGraph 结论：
+  - `deerflow.tools.tools.get_available_tools()` 会加载 config tools、built-in tools、cached MCP tools 和 ACP tools，并按 tool name 去重。
+  - MCP tools 来自 `deerflow.mcp.cache.get_cached_mcp_tools()`，该 cache 会根据 `extensions_config.json` / `mcp_config.json` 的 mtime 自动 reset/lazy initialize。
+  - `ExtensionsConfig.from_file()` / `get_enabled_mcp_servers()` 是 DeerFlow MCP server 配置入口。
+  - `tool_search` 是 DeerFlow 的 deferred MCP tool discovery 机制，不是 SOC action execution boundary。
+- 变更：
+  - 新增 `.notes/ai_soc/mcp-adapter-bridge-plan.md`：
+    - 固定 SOC MCP bridge 是 `SocActionAdapter` 具体实现，不是新的 agent tool runtime。
+    - 固定 `route/action -> MCP server/tool` 映射只能存在于 adapter/config 层。
+    - 规划 `SocMcpToolProviderPort`、payload mapping、result mapping、超时、脱敏、审计字段。
+    - 明确 read-only 先接，write/destructive 继续走 approval grant + execute preflight + idempotency。
+    - 拆分后续接入顺序：fake provider tests -> read-only config -> DeerFlow cached MCP provider -> live smoke -> high-risk preflight。
+  - `.notes/README.md` 增加 MCP bridge 文档入口。
+  - 更新 action adapter plan、工程契约和主方案。
+- 边界：
+  - 不新增代码 adapter。
+  - 不接真实 MCP server。
+  - 不修改 DeerFlow MCP core。
+  - 不让 Lead Agent 直接 tool_search 后执行 SOC action。
+- 已验证：
+  - `CodeGraph: get_available_tools / get_cached_mcp_tools / ExtensionsConfig / tool_search` 源码查询。
+  - `git diff --check`
+- 下一步：
+  - 做 MCP tool provider port + fake provider adapter tests：先用 fake provider 固定 `SocMcpToolActionAdapter` 的 read-only contract、timeout/error mapping 和 result payload。
 
 ### 2026-07-05 — SOC Lead Agent read-only tool proposal bridge 切片
 

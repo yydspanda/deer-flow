@@ -294,7 +294,7 @@ Replay 不覆盖旧 run；它创建一个新 run，并通过 `replay_of_run_id` 
 这些是规划点，当前流程图里只作为未来入口或 adapter：
 
 - SOC Lead Agent approval middleware：拦截高风险 tool/action call；当前 chat shell 已能在注入 approval service 时写入 approval inbox，但真实 DeerFlow-derived middleware 必须等 SOC Lead Agent / MCP tool chain 落地后再接入。
-- MCP / real adapter bridge：把真实资产系统、EDR 进程树、`response.block_ip`、`edr.isolate_host`、F5 策略、Kafka 处置事件等真实外部动作注册到 adapter boundary 后面；write/destructive 动作仍必须走 approval。
+- MCP / real adapter bridge：规划见 `.notes/ai_soc/mcp-adapter-bridge-plan.md`。真实资产系统、EDR 进程树、`response.block_ip`、`edr.isolate_host`、F5 策略、Kafka 处置事件等外部能力都必须注册到 adapter boundary 后面；write/destructive 动作仍必须走 approval。
 - 真实外部副作用的补偿、失败重试、审批后超时、adapter-level audit。
 - Kafka bounded worker pool：当前 broker runner 仍是串行处理；并发 worker pool 要等真实吞吐、DB/K8s 参数和 LLM 限流策略明确后再接。
 - Prometheus `/metrics` exporter 和运营态势看板：需求已记录为后续优化项，当前优先保证 SOC agent 主链路走通。
