@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from soc_agent.action_adapters import DryRunOnlySocActionAdapter, InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
+from soc_agent.actions.adapters import DryRunOnlySocActionAdapter, InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
 from soc_agent.contracts import (
     ActorContext,
     ActorType,

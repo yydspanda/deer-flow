@@ -8,8 +8,8 @@ import pytest
 
 from deerflow.config.paths import get_paths
 from deerflow.runtime.user_context import get_effective_user_id
-from soc_agent.action_adapters import InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
-from soc_agent.action_proposals import SocLeadAgentActionProposalBoundary
+from soc_agent.actions.adapters import InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
+from soc_agent.actions.proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.contracts import (
     ActorContext,
     AlertSourceType,

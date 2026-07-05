@@ -5,16 +5,8 @@ from typing import Any
 
 import pytest
 
-from soc_agent.action_adapters import SocActionAdapterRegistry, SocActionAdapterRegistryError
-from soc_agent.contracts import (
-    ActorContext,
-    ActorType,
-    EntrySurface,
-    ServiceRequestContext,
-    SocAgentActionCommand,
-    SocAgentRiskLevel,
-)
-from soc_agent.mcp_adapters import (
+from soc_agent.actions.adapters import SocActionAdapterRegistry, SocActionAdapterRegistryError
+from soc_agent.actions.mcp import (
     SocMcpActionAdapterConfig,
     SocMcpToolActionAdapter,
     SocMcpToolDescriptor,
@@ -23,6 +15,14 @@ from soc_agent.mcp_adapters import (
     build_mcp_action_adapter,
     build_mcp_action_adapter_registry,
     mcp_read_only_adapter_descriptor,
+)
+from soc_agent.contracts import (
+    ActorContext,
+    ActorType,
+    EntrySurface,
+    ServiceRequestContext,
+    SocAgentActionCommand,
+    SocAgentRiskLevel,
 )
 
 

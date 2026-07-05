@@ -13,8 +13,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
-from soc_agent.action_adapters import InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
-from soc_agent.action_proposals import SocLeadAgentActionProposalBoundary
+from soc_agent.actions.adapters import InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
+from soc_agent.actions.proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.agent_profile import SocLeadAgentProfileInstaller
 from soc_agent.contracts import CorrectionCommand, ReviewQueueCloseCommand, ReviewQueueStatus, Verdict
 from soc_agent.core import (

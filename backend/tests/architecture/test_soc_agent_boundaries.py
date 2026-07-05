@@ -94,6 +94,24 @@ def test_db_does_not_import_runtime_or_transport_layers() -> None:
         assert not (_imports(module) & forbidden), f"{module} imports runtime or transport code"
 
 
+def test_action_boundaries_live_under_actions_package() -> None:
+    wrappers = {
+        "action_adapters.py": "soc_agent.actions.adapters",
+        "action_proposals.py": "soc_agent.actions.proposals",
+        "mcp_adapters.py": "soc_agent.actions.mcp",
+    }
+    root_action_like_files = {file.name for file in SOC_AGENT.glob("*.py") if "adapter" in file.stem or "proposal" in file.stem}
+
+    assert root_action_like_files <= set(wrappers)
+    for wrapper, target in wrappers.items():
+        source = (SOC_AGENT / wrapper).read_text(encoding="utf-8")
+        assert "Compatibility wrapper" in source
+        assert target in source
+    assert (SOC_AGENT / "actions" / "adapters.py").exists()
+    assert (SOC_AGENT / "actions" / "mcp.py").exists()
+    assert (SOC_AGENT / "actions" / "proposals.py").exists()
+
+
 def test_cli_enters_business_logic_through_core_service() -> None:
     imports = _imports(SOC_AGENT / "cli.py")
 

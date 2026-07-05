@@ -70,6 +70,7 @@ soc_agent/
 ├── core/               # Runtime、状态机、service、validator、router
 ├── pipeline/           # 7 步流水线节点
 ├── policy/             # 权限等级、动作审批、risk gate
+├── actions/            # action proposal、adapter registry、MCP/HTTP/vendor action adapters
 ├── tools/              # 工具注册和执行适配器
 ├── memory/             # soc_facts / lessons / prompt 注入
 ├── db/                 # repository + migrations
@@ -104,6 +105,7 @@ contracts
 - `pipeline/` 只做纯业务步骤，不直接 import FastAPI、Kafka、Typer、SQLAlchemy、psycopg、具体 LLM SDK。
 - `db/` 只实现 repository，不承载业务决策；SQL row 和 domain/contract model 需要显式转换。
 - `memory/` 不能绕过事实状态机写 prompt；只能通过 `MemoryStore`/`LessonStore` 协议读写。
+- `actions/` 是 action proposal、adapter registry、MCP/HTTP/vendor adapter 的归属目录；根目录的 `action_adapters.py`、`action_proposals.py`、`mcp_adapters.py` 只能作为兼容 wrapper，新代码必须 import `soc_agent.actions.*`。
 - `tools/` 不能直接执行高风险动作；必须经过 `policy`。
 - 每个包的 `__init__.py` 只 export 稳定 public API。未 export 的类/函数默认内部实现，跨包不直接调用。
 
@@ -285,7 +287,7 @@ SOC Agent chat stream 约束：
   - MCP-backed SOC action 必须实现为 `SocActionAdapter`，并先注册 `SocAgentActionAdapterDescriptor`；SOC route/action 到 MCP server/tool 的映射只能存在于 adapter/config 层，不能暴露给 Lead Agent 作为自由 tool 选择。
   - SOC MCP bridge 可以复用 DeerFlow `get_cached_mcp_tools()` / MCP session cache，但真实 LangChain/MCP tool 类型只能出现在 adapter module；`core/service.py`、Gateway、TUI、Web、contracts 不得 import MCP SDK 或 DeerFlow MCP cache。
   - `tool_search` 适合 DeerFlow 通用 agent 的 deferred tool discovery，不是 SOC action execution boundary；生产 SOC action 不允许由 Lead Agent 直接通过 `tool_search` 找到并调用任意 MCP tool。
-  - `backend/soc_agent/mcp_adapters.py` 是当前 SOC MCP adapter skeleton 边界：`SocMcpToolProviderPort` 只暴露 `list_tools()` / `invoke()`，`SocMcpToolActionAdapter` 先只支持 `read_only + external_side_effect=read`，provider exception 必须映射为 `SocAgentActionResult(status="failed")`，dry-run 不得调用 provider `invoke()`。
+  - `backend/soc_agent/actions/mcp.py` 是当前 SOC MCP adapter skeleton 边界；根目录 `backend/soc_agent/mcp_adapters.py` 只保留兼容 wrapper。`SocMcpToolProviderPort` 只暴露 `list_tools()` / `invoke()`，`SocMcpToolActionAdapter` 先只支持 `read_only + external_side_effect=read`，provider exception 必须映射为 `SocAgentActionResult(status="failed")`，dry-run 不得调用 provider `invoke()`。
   - `SocMcpActionAdapterConfig` / `SocMcpToolBindingConfig` 是当前 MCP-backed read-only adapter 的显式配置边界：SOC action 字段和 `mcp.server/tool/timeout/input_mapping/output_fields` 必须由配置映射到 adapter registry，不能由 Lead Agent、dispatcher 或自然语言推断。
   - `build_mcp_action_adapter_registry()` 只能注册 `enabled=true` 的配置；重复 `route/action` 必须 fail-fast；当前 config builder 只接受 `risk_level=read_only`、`external_side_effect=read`、`execute_supported=true`，write/destructive MCP 另走后续 high-risk preflight 设计。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
@@ -1080,7 +1082,7 @@ SOC Lead Agent profile 安装必须使用 DeerFlow per-user custom-agent storage
 
 SOC Lead Agent chat entry 必须复用 DeerFlow embedded client / gateway runtime。当前 `SocLeadAgentChatService` 通过 `DeerFlowClient(agent_name="soc-triage")` 转发 stream，并发出 `soc.lead_agent_entry` marker；它不是 SOC action executor。ReviewQueue context 已通过 `backend/soc_agent/context_bridge.py` 以 bounded `SocLeadAgentReviewContextArtifact` 接入：只能由 `SocReviewService.get_investigation_context()` 取数，必须记录 context hash / skill context hash，不能把完整 raw payload 或 repository 访问权交给 Lead Agent。
 
-SOC Lead Agent action proposal 必须走 `backend/soc_agent/action_proposals.py`。只有 `<soc_action_proposal>...</soc_action_proposal>` 显式 JSON marker 会被解析成 `SocAgentActionProposal`；普通自然语言、Markdown 建议、模型自称“已执行”的文本都不能触发动作。`SocLeadAgentActionProposalBoundary` 只能调用 `SocAgentActionPolicy`，并在高风险时生成 pending `SocAgentApprovalRequest`；approval request 必须携带 `source_proposal_id`、`action_payload`、`context_refs`。本边界不执行 MCP/tool，不调用外部处置 adapter，不修改业务状态。
+SOC Lead Agent action proposal 必须走 `backend/soc_agent/actions/proposals.py`。根目录 `backend/soc_agent/action_proposals.py` 只保留兼容 wrapper。只有 `<soc_action_proposal>...</soc_action_proposal>` 显式 JSON marker 会被解析成 `SocAgentActionProposal`；普通自然语言、Markdown 建议、模型自称“已执行”的文本都不能触发动作。`SocLeadAgentActionProposalBoundary` 只能调用 `SocAgentActionPolicy`，并在高风险时生成 pending `SocAgentApprovalRequest`；approval request 必须携带 `source_proposal_id`、`action_payload`、`context_refs`。本边界不执行 MCP/tool，不调用外部处置 adapter，不修改业务状态。
 
 Approval inbox 客户端必须展示 proposal 溯源字段。Web/TUI 至少要让审批人看到 `source_proposal_id`、`action_payload`、`context_refs`；展示层不能改写这些字段，不能绕过 approval grant / dry-run / execute boundary。
 

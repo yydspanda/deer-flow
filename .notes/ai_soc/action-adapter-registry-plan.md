@@ -108,6 +108,6 @@ Lead Agent / Skill / Daemon
    - 为后续 DeerFlow cached MCP provider 实现预留同一 provider port。
 
 9. **DeerFlow cached MCP provider implementation**（Next）
-   - 真实 provider 只能在 `backend/soc_agent/mcp_adapters.py` 或同级 adapter module import DeerFlow MCP cache。
+   - 真实 provider 只能在 `backend/soc_agent/actions/mcp.py` 或 `backend/soc_agent/actions/` 同级 adapter module import DeerFlow MCP cache。
    - provider 对外仍实现 `SocMcpToolProviderPort`，core/API/TUI/Web 不接触 LangChain/MCP tool 类型。
    - 按 tool name 精确查找，缺失或调用失败必须映射为 `SocAgentActionResult(status="failed")` 或明确 registry error。

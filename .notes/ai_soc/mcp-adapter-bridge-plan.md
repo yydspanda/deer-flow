@@ -199,22 +199,24 @@ soc_action_adapters.yaml / db managed config
 1. **MCP tool provider port + fake provider adapter tests**（Done）
    - 不接真实 MCP。
    - 固定 provider port、tool descriptor、timeout/error mapping、result payload。
-   - 当前实现：`backend/soc_agent/mcp_adapters.py`
+   - 当前实现：`backend/soc_agent/actions/mcp.py`
      - `SocMcpToolDescriptor`
      - `SocMcpToolProviderPort`
      - `SocMcpToolActionAdapter`
      - `mcp_read_only_adapter_descriptor()`
+   - 兼容入口：`backend/soc_agent/mcp_adapters.py`。
    - 当前测试：`backend/tests/test_soc_mcp_adapters.py`
 
 2. **MCP-backed read-only `asset.lookup` adapter behind explicit config**（Done）
    - 先用 fake provider 或本地 stub 验证 registry builder。
    - `execute_supported=True`，`external_side_effect=read`。
    - 无配置时继续使用 in-memory adapter 或 fail-fast，不影响本地。
-   - 当前实现：`backend/soc_agent/mcp_adapters.py`
+   - 当前实现：`backend/soc_agent/actions/mcp.py`
      - `SocMcpActionAdapterConfig`
      - `SocMcpToolBindingConfig`
      - `build_mcp_action_adapter()`
      - `build_mcp_action_adapter_registry()`
+   - 兼容入口：`backend/soc_agent/mcp_adapters.py`。
    - 当前测试：`backend/tests/test_soc_mcp_adapters.py`
      - explicit config -> registry -> `asset.lookup` execute。
      - disabled config skip。

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from deerflow.client import DeerFlowClient
 from deerflow.config.agents_config import load_agent_config
-from soc_agent.action_proposals import (
+from soc_agent.actions.proposals import (
     SocLeadAgentActionProposalBoundary,
     action_proposal_error_event,
     action_proposal_event,

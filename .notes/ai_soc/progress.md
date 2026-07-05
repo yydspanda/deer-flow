@@ -115,9 +115,36 @@
 | 79 | MCP adapter bridge / real read-only data source planning | Done | 规划真实资产系统、EDR 只读查询或 MCP readonly tool 如何通过 adapter descriptor 接入；write/destructive 仍走 approval |
 | 80 | MCP tool provider port + fake provider adapter tests | Done | 定义 SOC MCP provider port、fake provider 和 read-only MCP adapter skeleton；不接真实 MCP server |
 | 81 | MCP-backed read-only `asset.lookup` adapter config builder | Done | 用 fake provider 固定显式配置到 MCP-backed `asset.lookup` adapter registry 的构造方式；不接真实 MCP server |
-| 82 | DeerFlow cached MCP provider implementation | Planned | 复用 DeerFlow MCP cache/session 生命周期，实现 `SocMcpToolProviderPort`；仍不让 Lead Agent 直接调用任意 MCP tool |
+| 82 | SOC action package structure hygiene | Done | 将 action adapter、proposal、MCP adapter 收口到 `backend/soc_agent/actions/`，根目录只保留兼容 wrapper；架构测试防止继续往根目录新增 action-like 模块 |
+| 83 | DeerFlow cached MCP provider implementation | Planned | 复用 DeerFlow MCP cache/session 生命周期，实现 `SocMcpToolProviderPort`；仍不让 Lead Agent 直接调用任意 MCP tool |
 
 ## 进度记录
+
+### 2026-07-05 — SOC action package structure hygiene 切片
+
+- 背景：
+  - `backend/soc_agent` 顶层已经出现 action/tool 横向堆文件苗头，下一步真实 MCP provider 如果继续写在根目录会变得难维护。
+  - 需要在继续接真实 provider 前先固定 action/tool 代码归属，避免重复 openclaw/hermes 那类后期难拆的结构问题。
+- 变更：
+  - 新增 `backend/soc_agent/actions/` package：
+    - `actions/adapters.py`：原 `action_adapters.py`，承载 adapter registry、dry-run-only adapter 和本地 `asset.lookup` adapter。
+    - `actions/mcp.py`：原 `mcp_adapters.py`，承载 MCP provider port、read-only MCP adapter 和 explicit config builder。
+    - `actions/proposals.py`：原 `action_proposals.py`，承载 Lead Agent action proposal boundary。
+    - `actions/__init__.py`：轻量 package marker，不重导出子模块，避免隐性加载 core/proposal 依赖。
+  - 根目录 `action_adapters.py`、`action_proposals.py`、`mcp_adapters.py` 改成兼容 wrapper；新代码必须 import `soc_agent.actions.*`。
+  - SOC 内部代码和测试 import 切到新路径。
+  - `backend/tests/architecture/test_soc_agent_boundaries.py` 增加架构测试，防止未来新增 root-level action-like modules。
+  - 更新主方案、MCP bridge plan、action adapter plan 和工程契约。
+- 边界：
+  - 不改变 runtime 行为。
+  - 不接真实 MCP provider。
+  - 不移动 Lead Agent / skill / profile 相关文件；后续单独评估是否收口到 `soc_agent/agent/`。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/action_adapters.py soc_agent/action_proposals.py soc_agent/mcp_adapters.py soc_agent/actions soc_agent/cli.py soc_agent/lead_agent_chat.py tests/test_soc_action_adapters.py tests/test_soc_mcp_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/action_adapters.py soc_agent/action_proposals.py soc_agent/mcp_adapters.py soc_agent/actions soc_agent/cli.py soc_agent/lead_agent_chat.py tests/test_soc_action_adapters.py tests/test_soc_mcp_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py --check`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py tests/test_soc_action_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 做 DeerFlow cached MCP provider implementation；真实 provider 放在 `backend/soc_agent/actions/` 下，不回到根目录。
 
 ### 2026-07-05 — MCP-backed read-only `asset.lookup` adapter config builder 切片
 

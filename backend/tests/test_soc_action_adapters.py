@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from soc_agent.action_adapters import (
+from soc_agent.actions.adapters import (
     ASSET_LOOKUP_ACTION,
     DryRunOnlySocActionAdapter,
     InMemoryAssetLookupActionAdapter,
