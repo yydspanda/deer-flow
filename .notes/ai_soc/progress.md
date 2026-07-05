@@ -24,7 +24,7 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke 已固定 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest 已固定 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
@@ -122,8 +122,34 @@
 | 86 | MCP smoke readiness inventory | Done | `soc mcp tools` 可安全列出 DeerFlow cached MCP tools，`soc mcp smoke/tools --report-path` 可落盘报告；无 MCP config 时 tool_count=0 |
 | 87 | Local real MCP fixture and read-only smoke | Done | 本地 stdio MCP server + sample extensions/action config 可验证 `soc_dev_asset_lookup` discovery 和 `asset.lookup` execute smoke |
 | 88 | Real dev/staging MCP replacement | Planned | 用真实 CMDB/EDR MCP server 替换本地 fixture，保存 smoke report 并评估延迟、失败率、字段裁剪和接入风险 |
+| 89 | Upstream MCP sync compatibility retest | Done | 同步 upstream/main 后，SOC MCP adapter 显式传递 `mcp.server`，并重新验证 DeerFlow MCP 前缀重叠路由、local stdio discovery 和 `asset.lookup` execute smoke |
 
 ## 进度记录
+
+### 2026-07-05 — Upstream MCP sync compatibility retest
+
+- 背景：
+  - 同步 `upstream/main` 后，DeerFlow MCP core 新增了按 source server 分组路由的修复，避免 `web` / `web_scraper` 这类 server 名前缀重叠时误路由。
+  - SOC MCP adapter 原本已经有 `mcp.server` 配置字段，但 execute / smoke one-shot 路径仍主要依赖 tool name 前缀推断 server，需要与 upstream 的新路由语义对齐。
+- 变更：
+  - `backend/soc_agent/actions/mcp.py`：
+    - `SocMcpToolProviderPort.invoke()` 增加可选 `server_name` keyword。
+    - `SocMcpToolActionAdapter` 保存 `mcp_server` 并在 execute 时传给 provider。
+    - one-shot MCP smoke 路径优先使用显式 `server_name` 定位连接，并只在未提供 server 时 fallback 到最长前缀推断。
+    - MCP inventory server 字段优先读取 metadata，缺失时按已配置 server 的最长前缀做只读展示推断。
+  - `backend/tests/test_soc_mcp_adapters.py`：
+    - 覆盖 config-built adapter 把 `server_name=cmdb` 传入 provider。
+    - 覆盖 prefix overlap 时 explicit server 优先。
+  - 更新工程契约和主方案：`mcp.server` 是执行路由绑定，不只是展示字段。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/actions/mcp.py tests/test_soc_mcp_adapters.py --check`
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/actions/mcp.py tests/test_soc_mcp_adapters.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_mcp_session_pool.py::test_mcp_tools_routed_to_source_server_with_prefix_overlap`
+  - `cd backend && SOC_DEV_MCP_PYTHON=/home/yydspei/projects/deer-flow/backend/.venv/bin/python SOC_DEV_MCP_SERVER=/home/yydspei/projects/deer-flow/backend/scripts/soc_dev_mcp_server.py DEER_FLOW_EXTENSIONS_CONFIG_PATH=/home/yydspei/projects/deer-flow/backend/samples/mcp/soc_dev_extensions_config.json ./.venv/bin/python -m soc_agent.cli mcp tools --include-schema --pretty`
+  - `cd backend && SOC_DEV_MCP_PYTHON=/home/yydspei/projects/deer-flow/backend/.venv/bin/python SOC_DEV_MCP_SERVER=/home/yydspei/projects/deer-flow/backend/scripts/soc_dev_mcp_server.py DEER_FLOW_EXTENSIONS_CONFIG_PATH=/home/yydspei/projects/deer-flow/backend/samples/mcp/soc_dev_extensions_config.json ./.venv/bin/python -m soc_agent.cli mcp smoke samples/mcp/soc_dev_action_adapters.json --route asset.lookup --json '{"asset_key":"10.10.1.5","context_refs":{"thread_id":"SOC-THREAD-1"}}' --pretty`
+- 下一步：
+  - 仍然是拿真实 dev/staging CMDB/EDR MCP 参数替换本地 fixture，再跑同一组 `tools/smoke` 并保存 `soc.mcp_action_smoke_report.v1`。
 
 ### 2026-07-05 — Local real MCP fixture and read-only smoke 切片
 

@@ -48,6 +48,7 @@ class SocMcpToolProviderPort(Protocol):
         payload: Mapping[str, Any],
         *,
         timeout_seconds: int,
+        server_name: str | None = None,
     ) -> Mapping[str, Any]: ...
 
 
@@ -89,6 +90,7 @@ class DeerFlowCachedMcpToolProvider:
         payload: Mapping[str, Any],
         *,
         timeout_seconds: int,
+        server_name: str | None = None,
     ) -> Mapping[str, Any]:
         tool = self._tool_by_name(tool_name)
         try:
@@ -97,6 +99,7 @@ class DeerFlowCachedMcpToolProvider:
                     tool_name,
                     payload,
                     timeout_seconds=timeout_seconds,
+                    server_name=server_name,
                 )
             else:
                 raw_result = _invoke_tool_with_timeout(
@@ -273,6 +276,7 @@ def build_mcp_action_adapter(
         descriptor=descriptor,
         provider=provider,
         tool_name=adapter_config.mcp.tool,
+        mcp_server=adapter_config.mcp.server,
         timeout_seconds=adapter_config.mcp.timeout_seconds,
         input_mapping=adapter_config.mcp.input_mapping,
         output_fields=adapter_config.mcp.output_fields,
@@ -413,6 +417,7 @@ class SocMcpToolActionAdapter:
         descriptor: SocAgentActionAdapterDescriptor,
         provider: SocMcpToolProviderPort,
         tool_name: str,
+        mcp_server: str | None = None,
         timeout_seconds: int = 5,
         input_mapping: Mapping[str, str] | None = None,
         output_fields: Iterable[str] = (),
@@ -431,6 +436,7 @@ class SocMcpToolActionAdapter:
         self.descriptor = descriptor
         self._provider = provider
         self._tool_name = tool_name
+        self._mcp_server = mcp_server
         self._timeout_seconds = timeout_seconds
         self._input_mapping = dict(input_mapping or {})
         self._output_fields = tuple(output_fields)
@@ -456,6 +462,7 @@ class SocMcpToolActionAdapter:
             payload={
                 "adapter_id": self.descriptor.adapter_id,
                 "adapter_kind": self.descriptor.adapter_kind,
+                "mcp_server": self._mcp_server,
                 "tool_name": self._tool_name,
                 "dry_run": True,
                 "external_side_effect": "not_executed",
@@ -485,6 +492,7 @@ class SocMcpToolActionAdapter:
                 self._tool_name,
                 tool_payload,
                 timeout_seconds=self._timeout_seconds,
+                server_name=self._mcp_server,
             )
             if not isinstance(raw_result, Mapping):
                 raise SocMcpToolProviderError("MCP tool returned a non-object result")
@@ -498,6 +506,7 @@ class SocMcpToolActionAdapter:
                 payload={
                     "adapter_id": self.descriptor.adapter_id,
                     "adapter_kind": self.descriptor.adapter_kind,
+                    "mcp_server": self._mcp_server,
                     "tool_name": self._tool_name,
                     "dry_run": False,
                     "external_side_effect": "not_executed",
@@ -517,6 +526,7 @@ class SocMcpToolActionAdapter:
             payload={
                 "adapter_id": self.descriptor.adapter_id,
                 "adapter_kind": self.descriptor.adapter_kind,
+                "mcp_server": self._mcp_server,
                 "tool_name": self._tool_name,
                 "dry_run": False,
                 "external_side_effect": "read",
@@ -597,12 +607,13 @@ def _invoke_mcp_tool_once_with_timeout(
     payload: Mapping[str, Any],
     *,
     timeout_seconds: int,
+    server_name: str | None = None,
 ) -> Any:
     executor = concurrent.futures.ThreadPoolExecutor(
         max_workers=1,
         thread_name_prefix="soc-mcp-one-shot",
     )
-    future = executor.submit(_run_mcp_tool_once, tool_name, dict(payload))
+    future = executor.submit(_run_mcp_tool_once, tool_name, dict(payload), server_name=server_name)
     try:
         return future.result(timeout=timeout_seconds)
     except concurrent.futures.TimeoutError as exc:
@@ -612,16 +623,16 @@ def _invoke_mcp_tool_once_with_timeout(
         executor.shutdown(wait=False, cancel_futures=True)
 
 
-def _run_mcp_tool_once(tool_name: str, payload: Mapping[str, Any]) -> Any:
+def _run_mcp_tool_once(tool_name: str, payload: Mapping[str, Any], *, server_name: str | None = None) -> Any:
     import asyncio
 
-    return asyncio.run(_invoke_mcp_tool_once(tool_name, payload))
+    return asyncio.run(_invoke_mcp_tool_once(tool_name, payload, server_name=server_name))
 
 
-async def _invoke_mcp_tool_once(tool_name: str, payload: Mapping[str, Any]) -> Any:
+async def _invoke_mcp_tool_once(tool_name: str, payload: Mapping[str, Any], *, server_name: str | None = None) -> Any:
     from langchain_mcp_adapters.sessions import create_session
 
-    server_name, original_tool_name, connection = _resolve_mcp_tool_target(tool_name)
+    server_name, original_tool_name, connection = _resolve_mcp_tool_target(tool_name, server_name=server_name)
     try:
         async with create_session(connection) as session:
             await session.initialize()
@@ -630,11 +641,18 @@ async def _invoke_mcp_tool_once(tool_name: str, payload: Mapping[str, Any]) -> A
         raise SocMcpToolProviderError(f"MCP tool {tool_name!r} one-shot call failed on server {server_name!r}: {exc}") from exc
 
 
-def _resolve_mcp_tool_target(tool_name: str) -> tuple[str, str, dict[str, Any]]:
+def _resolve_mcp_tool_target(tool_name: str, *, server_name: str | None = None) -> tuple[str, str, dict[str, Any]]:
     from deerflow.config.extensions_config import ExtensionsConfig
     from deerflow.mcp.client import build_servers_config
 
     servers_config = build_servers_config(ExtensionsConfig.from_file())
+    if server_name:
+        connection = servers_config.get(server_name)
+        if connection is None:
+            raise SocMcpToolNotFoundError(f"MCP server {server_name!r} is not configured")
+        prefix = f"{server_name}_"
+        original_tool_name = tool_name[len(prefix) :] if tool_name.startswith(prefix) else tool_name
+        return server_name, original_tool_name, dict(connection)
     for server_name in sorted(servers_config, key=len, reverse=True):
         prefix = f"{server_name}_"
         if tool_name.startswith(prefix):
@@ -663,6 +681,25 @@ def _server_from_tool(tool: Any) -> str | None:
             value = metadata.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
+    inferred = _server_name_from_prefixed_tool_name(str(getattr(tool, "name", "") or ""))
+    if inferred:
+        return inferred
+    return None
+
+
+def _server_name_from_prefixed_tool_name(tool_name: str) -> str | None:
+    if not tool_name:
+        return None
+    try:
+        from deerflow.config.extensions_config import ExtensionsConfig
+        from deerflow.mcp.client import build_servers_config
+
+        servers_config = build_servers_config(ExtensionsConfig.from_file())
+    except Exception:  # noqa: BLE001 - inventory server names are best-effort metadata only
+        return None
+    for server_name in sorted(servers_config, key=len, reverse=True):
+        if tool_name.startswith(f"{server_name}_"):
+            return server_name
     return None
 
 

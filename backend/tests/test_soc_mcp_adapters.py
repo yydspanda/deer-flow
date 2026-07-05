@@ -98,6 +98,7 @@ def test_mcp_adapter_config_builder_creates_read_only_asset_lookup_registry() ->
     assert provider.invocations == [
         {
             "tool_name": "cmdb_asset_lookup",
+            "server_name": "cmdb",
             "payload": {"query": "10.10.1.5"},
             "timeout_seconds": 7,
         }
@@ -558,6 +559,26 @@ def test_deerflow_cached_mcp_provider_rejects_missing_tool() -> None:
         provider.invoke("cmdb_asset_lookup", {"query": "10.10.1.5"}, timeout_seconds=5)
 
 
+def test_mcp_one_shot_target_resolution_prefers_explicit_server_for_prefix_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
+    import soc_agent.actions.mcp as soc_mcp
+
+    servers_config = {
+        "web": {"transport": "stdio", "command": "web", "args": []},
+        "web_scraper": {"transport": "stdio", "command": "scraper", "args": []},
+    }
+    monkeypatch.setattr("deerflow.config.extensions_config.ExtensionsConfig.from_file", lambda: object())
+    monkeypatch.setattr("deerflow.mcp.client.build_servers_config", lambda _: servers_config)
+
+    server_name, original_tool_name, connection = soc_mcp._resolve_mcp_tool_target(
+        "web_scraper_search",
+        server_name="web_scraper",
+    )
+
+    assert server_name == "web_scraper"
+    assert original_tool_name == "search"
+    assert connection == servers_config["web_scraper"]
+
+
 def test_deerflow_cached_mcp_provider_maps_loader_failure() -> None:
     def load_tools():
         raise RuntimeError("cache unavailable")
@@ -767,14 +788,16 @@ class FakeSocMcpToolProvider:
         payload: Mapping[str, Any],
         *,
         timeout_seconds: int,
+        server_name: str | None = None,
     ) -> Mapping[str, Any]:
-        self.invocations.append(
-            {
-                "tool_name": tool_name,
-                "payload": dict(payload),
-                "timeout_seconds": timeout_seconds,
-            }
-        )
+        invocation = {
+            "tool_name": tool_name,
+            "payload": dict(payload),
+            "timeout_seconds": timeout_seconds,
+        }
+        if server_name is not None:
+            invocation["server_name"] = server_name
+        self.invocations.append(invocation)
         result = self._tools.get(tool_name)
         if result is None:
             raise SocMcpToolNotFoundError(f"missing fake MCP tool {tool_name}")
