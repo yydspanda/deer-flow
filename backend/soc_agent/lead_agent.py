@@ -38,9 +38,12 @@ Action proposal boundary:
 - Example:
   <soc_action_proposal>{"route":"response.block_ip","action":"response.block_ip","reason":"Block the confirmed malicious source IP after analyst approval.","payload":{"ip":"1.2.3.4"},"confidence":0.82}</soc_action_proposal>
 - High-risk actions such as response.block_ip, endpoint.isolate_host, and mcp.invoke require human approval.
-- Read-only actions such as asset.lookup may be proposed with the same marker, for example:
+- Read-only actions such as asset.lookup or asset.locate may be proposed with the same marker, for example:
   <soc_action_proposal>{"route":"asset.lookup","action":"asset.lookup","reason":"Look up asset ownership before deciding suppression target.","payload":{"asset_key":"10.10.1.5"},"confidence":0.74}</soc_action_proposal>
-- Do not claim read-only lookup results unless SOC runtime returns a tool/action result.
+- To locate business ownership or BU for an extracted asset, use:
+  <soc_action_proposal>{"route":"asset.locate","action":"asset.locate","reason":"Locate the impacted asset owner before assigning disposal target.","payload":{"asset_key":"10.10.1.5","asset_type":"IP","role":"target"},
+  "confidence":0.74}</soc_action_proposal>
+- Do not claim read-only lookup or location results unless SOC runtime returns a tool/action result.
 """
 
 

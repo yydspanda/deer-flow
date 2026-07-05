@@ -45,6 +45,65 @@
         ],
         "result_schema_version": "soc.dev_asset_lookup_result.v1"
       }
+    },
+    {
+      "schema_version": "soc.mcp_action_adapter_config.v1",
+      "enabled": true,
+      "owner": "soc-platform",
+      "environment": "dev",
+      "adapter_id": "asset-locate-soc-dev-mcp",
+      "route": "asset.locate",
+      "action": "asset.locate",
+      "risk_level": "read_only",
+      "adapter_kind": "mcp",
+      "external_side_effect": "read",
+      "dry_run_supported": true,
+      "execute_supported": true,
+      "idempotency_required": false,
+      "required_payload_fields": ["asset_key"],
+      "required_context_refs": ["thread_id"],
+      "description": "Read-only local SOC development asset BU/location lookup through real MCP stdio.",
+      "payload_schema": {
+        "type": "object",
+        "required": ["asset_key"],
+        "properties": {
+          "asset_key": {"type": "string"},
+          "asset_type": {"type": "string"},
+          "role": {"type": "string"},
+          "um": {"type": "string"},
+          "context_refs": {"type": "object"}
+        }
+      },
+      "metadata": {
+        "dev_only": true,
+        "external_system": "soc_dev_mcp_server",
+        "mocked_remote_call": true
+      },
+      "mcp": {
+        "server": "soc_dev",
+        "tool": "soc_dev_asset_locate",
+        "timeout_seconds": 5,
+        "input_mapping": {
+          "asset_key": "query",
+          "asset_type": "asset_type",
+          "role": "role",
+          "um": "um"
+        },
+        "output_fields": [
+          "schema_version",
+          "query",
+          "asset_type",
+          "role",
+          "found",
+          "company_code",
+          "biz_group",
+          "source",
+          "disposal_target",
+          "search_results",
+          "mocked"
+        ],
+        "result_schema_version": "soc.dev_asset_location_result.v1"
+      }
     }
   ]
 }

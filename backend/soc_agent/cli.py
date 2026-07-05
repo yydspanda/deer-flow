@@ -14,7 +14,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from soc_agent.actions.adapters import InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
-from soc_agent.actions.mcp import DeerFlowCachedMcpToolProvider, inspect_mcp_tool_inventory, run_mcp_action_adapter_smoke
+from soc_agent.actions.mcp import (
+    DeerFlowCachedMcpToolProvider,
+    build_mcp_action_adapter_registry_from_file,
+    inspect_mcp_tool_inventory,
+    run_mcp_action_adapter_smoke,
+)
 from soc_agent.actions.proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.agent_profile import SocLeadAgentProfileInstaller
 from soc_agent.contracts import (
@@ -215,6 +220,7 @@ def _build_parser() -> argparse.ArgumentParser:
     chat_tui.add_argument("--queue-id", help="Open a review queue context on launch")
     chat_tui.add_argument("--message", help="Send an initial message on launch")
     chat_tui.add_argument("--lead-agent", action="store_true", help="Use DeerFlow lead_agent with agent_name=soc-triage")
+    chat_tui.add_argument("--mcp-action-config", help="Optional SOC MCP read-only action adapter JSON/YAML config for lead-agent proposals")
     _add_database_args(chat_tui)
 
     agent = subparsers.add_parser("agent", help="SOC Lead Agent profile and skill helpers")
@@ -554,13 +560,14 @@ def _chat_tui(args: argparse.Namespace) -> int:
             review_queue_repository=repository,
         )
         approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
-        read_only_adapter_registry = SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter()])
+        read_only_adapter_registry = _read_only_adapter_registry_for_chat(args)
+        read_only_routes = {descriptor.route for descriptor in read_only_adapter_registry.list_descriptors()}
         chat_service = (
             SocLeadAgentChatService(
                 review_service=review_service,
                 action_proposal_boundary=SocLeadAgentActionProposalBoundary(
                     approval_service=approval_service,
-                    read_only_capability_router=SocAgentCapabilityRouter(allowed_routes={"asset.lookup"}),
+                    read_only_capability_router=SocAgentCapabilityRouter(allowed_routes=read_only_routes),
                     read_only_action_dispatcher=SocAgentActionDispatcher(action_adapter_registry=read_only_adapter_registry),
                 ),
             )
@@ -579,6 +586,16 @@ def _chat_tui(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0
+
+
+def _read_only_adapter_registry_for_chat(args: argparse.Namespace) -> SocActionAdapterRegistry:
+    config_path = getattr(args, "mcp_action_config", None)
+    if config_path:
+        return build_mcp_action_adapter_registry_from_file(
+            config_path,
+            DeerFlowCachedMcpToolProvider(use_one_shot_invocation=True),
+        )
+    return SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter()])
 
 
 def _agent_profile(args: argparse.Namespace) -> int:

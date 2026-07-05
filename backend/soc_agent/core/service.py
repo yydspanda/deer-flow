@@ -1036,7 +1036,7 @@ class SocAgentActionPolicy:
     """Permission policy for routed SOC Agent service actions."""
 
     POLICY_VERSION = "soc.agent_action_policy.v1"
-    READ_ONLY_ACTIONS = frozenset({"asset.lookup", "chat.ready_message", "review.open_context"})
+    READ_ONLY_ACTIONS = frozenset({"asset.lookup", "asset.locate", "chat.ready_message", "review.open_context"})
     ANALYST_WRITE_ACTIONS = frozenset({"review.correct", "analysis.replay"})
     HIGH_RISK_ACTIONS = frozenset({"response.block_ip", "endpoint.isolate_host", "mcp.invoke"})
 

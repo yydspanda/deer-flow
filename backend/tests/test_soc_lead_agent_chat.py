@@ -9,6 +9,7 @@ import pytest
 from deerflow.config.paths import get_paths
 from deerflow.runtime.user_context import get_effective_user_id
 from soc_agent.actions.adapters import InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
+from soc_agent.actions.mcp import SocMcpToolDescriptor, build_mcp_action_adapter_registry
 from soc_agent.actions.proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.contracts import (
     ActorContext,
@@ -95,6 +96,30 @@ class ProposalFakeDeerFlowClient(FakeDeerFlowClient):
         yield SimpleNamespace(type="values", data={"title": "SOC"})
         yield SimpleNamespace(type="messages-tuple", data={"type": "ai", "id": "m1", "content": self.content})
         yield SimpleNamespace(type="end", data={"usage": {"total_tokens": 1}})
+
+
+class FakeMcpToolProvider:
+    def __init__(self) -> None:
+        self.invocations: list[dict[str, object]] = []
+
+    def list_tools(self) -> list[SocMcpToolDescriptor]:
+        return [SocMcpToolDescriptor(name="soc_dev_asset_locate", server="soc_dev")]
+
+    def invoke(self, tool_name, payload, *, timeout_seconds, server_name=None):
+        self.invocations.append(
+            {
+                "tool_name": tool_name,
+                "payload": dict(payload),
+                "timeout_seconds": timeout_seconds,
+                "server_name": server_name,
+            }
+        )
+        return {
+            "found": True,
+            "company_code": "PA011",
+            "biz_group": "平安科技/支付研发",
+            "mocked": True,
+        }
 
 
 def _reset_deerflow_home(tmp_path: Path, monkeypatch) -> None:
@@ -251,6 +276,74 @@ def test_soc_lead_agent_chat_service_dispatches_read_only_action_proposal() -> N
     assert action_event.data["payload"]["asset_found"] is True
     assert action_event.data["payload"]["asset_record"]["asset_id"] == "asset-001"
     assert action_event.data["payload"]["external_side_effect"] == "read"
+
+
+def test_soc_lead_agent_chat_service_dispatches_mcp_asset_locate_proposal() -> None:
+    content = (
+        "I will locate the impacted asset owner before assigning disposal.\n"
+        '<soc_action_proposal>{"route":"asset.locate","action":"asset.locate",'
+        '"reason":"Locate the impacted asset owner before assigning disposal target.",'
+        '"payload":{"asset_key":"10.10.1.5","asset_type":"IP","role":"target"},'
+        '"confidence":0.74}</soc_action_proposal>'
+    )
+    client = ProposalFakeDeerFlowClient(content)
+    provider = FakeMcpToolProvider()
+    registry = build_mcp_action_adapter_registry(
+        [
+            {
+                "adapter_id": "asset-locate-soc-dev-mcp",
+                "route": "asset.locate",
+                "action": "asset.locate",
+                "required_payload_fields": ["asset_key"],
+                "required_context_refs": ["thread_id"],
+                "mcp": {
+                    "server": "soc_dev",
+                    "tool": "soc_dev_asset_locate",
+                    "timeout_seconds": 5,
+                    "input_mapping": {
+                        "asset_key": "query",
+                        "asset_type": "asset_type",
+                        "role": "role",
+                    },
+                    "output_fields": ["found", "company_code", "biz_group", "mocked"],
+                    "result_schema_version": "soc.dev_asset_location_result.v1",
+                },
+            }
+        ],
+        provider,
+    )
+    service = SocLeadAgentChatService(
+        client_factory=lambda: client,
+        require_profile=False,
+        action_proposal_boundary=SocLeadAgentActionProposalBoundary(
+            read_only_capability_router=SocAgentCapabilityRouter(allowed_routes={"asset.locate"}),
+            read_only_action_dispatcher=SocAgentActionDispatcher(action_adapter_registry=registry),
+        ),
+    )
+    context = ServiceRequestContext(actor=ActorContext(actor_id="analyst", surface=EntrySurface.TUI))
+
+    events = list(service.stream(SocAgentChatRequest(message="locate owner", thread_id="SOC-THREAD-1"), context=context))
+
+    action_event = events[6]
+    assert action_event.data["kind"] == "soc.action_result"
+    assert action_event.data["action"] == "asset.locate"
+    assert action_event.data["status"] == "success"
+    assert action_event.data["payload"]["mcp_server"] == "soc_dev"
+    assert action_event.data["payload"]["tool_name"] == "soc_dev_asset_locate"
+    assert action_event.data["payload"]["mcp_result"] == {
+        "found": True,
+        "company_code": "PA011",
+        "biz_group": "平安科技/支付研发",
+        "mocked": True,
+    }
+    assert provider.invocations == [
+        {
+            "tool_name": "soc_dev_asset_locate",
+            "payload": {"query": "10.10.1.5", "asset_type": "IP", "role": "target"},
+            "timeout_seconds": 5,
+            "server_name": "soc_dev",
+        }
+    ]
 
 
 def test_soc_lead_agent_read_only_action_proposal_requires_route_allowlist() -> None:

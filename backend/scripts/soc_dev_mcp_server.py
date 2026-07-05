@@ -27,6 +27,30 @@ _ASSET_LOOKUP_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+_ASSET_LOCATE_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["query"],
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "IP address, hostname, domain, URL, UM account, or asset key to locate.",
+        },
+        "asset_type": {
+            "type": "string",
+            "description": "Optional normalized asset type such as IP, DOMAIN, WEB, HOST, or USER.",
+        },
+        "role": {
+            "type": "string",
+            "description": "Optional SOC role hint such as attacker, target, victim, or impacted_asset.",
+        },
+        "um": {
+            "type": "string",
+            "description": "Optional UM/user account fallback used when asset lookup misses.",
+        },
+    },
+    "additionalProperties": False,
+}
+
 _ASSET_LOOKUP_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["schema_version", "query", "asset_found", "asset_record", "source"],
@@ -39,6 +63,36 @@ _ASSET_LOOKUP_OUTPUT_SCHEMA: dict[str, Any] = {
             "additionalProperties": True,
         },
         "source": {"type": "string"},
+    },
+    "additionalProperties": True,
+}
+
+_ASSET_LOCATE_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": [
+        "schema_version",
+        "query",
+        "asset_type",
+        "role",
+        "found",
+        "company_code",
+        "biz_group",
+        "source",
+        "search_results",
+        "mocked",
+    ],
+    "properties": {
+        "schema_version": {"type": "string"},
+        "query": {"type": "string"},
+        "asset_type": {"type": "string"},
+        "role": {"type": "string"},
+        "found": {"type": "boolean"},
+        "company_code": {"type": "string"},
+        "biz_group": {"type": "string"},
+        "source": {"type": "string"},
+        "disposal_target": {"type": "string"},
+        "search_results": {"type": "array", "items": {"type": "object"}},
+        "mocked": {"type": "boolean"},
     },
     "additionalProperties": True,
 }
@@ -61,6 +115,29 @@ _ASSETS: dict[str, dict[str, Any]] = {
         "environment": "staging",
         "criticality": "medium",
         "network_zone": "internet",
+    },
+}
+
+_ASSET_LOCATIONS: dict[str, dict[str, Any]] = {
+    "10.10.1.5": {
+        "company_code": "PA011",
+        "biz_group": "平安科技/支付研发",
+        "source": "mock_zeus_search_asset_info",
+    },
+    "203.0.113.10": {
+        "company_code": "PA009",
+        "biz_group": "互联网边界/测试环境",
+        "source": "mock_asset_to_bu_workflow",
+    },
+    "app.example.com": {
+        "company_code": "PA011",
+        "biz_group": "平安科技/门户应用",
+        "source": "mock_zeus_search_asset_info",
+    },
+    "UM001": {
+        "company_code": "PA011",
+        "biz_group": "平安科技/终端用户",
+        "source": "mock_locate_user",
     },
 }
 
@@ -108,7 +185,13 @@ def _handle_message(message: dict[str, Any]) -> dict[str, Any] | None:
                         "description": "Read-only lookup of deterministic SOC development asset ownership.",
                         "inputSchema": _ASSET_LOOKUP_INPUT_SCHEMA,
                         "outputSchema": _ASSET_LOOKUP_OUTPUT_SCHEMA,
-                    }
+                    },
+                    {
+                        "name": "asset_locate",
+                        "description": "Read-only mock location of SOC asset business ownership and disposal target.",
+                        "inputSchema": _ASSET_LOCATE_INPUT_SCHEMA,
+                        "outputSchema": _ASSET_LOCATE_OUTPUT_SCHEMA,
+                    },
                 ]
             },
         )
@@ -126,11 +209,30 @@ def _call_tool(params: dict[str, Any]) -> dict[str, Any]:
     tool_name = params.get("name")
     arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
     if tool_name != "asset_lookup":
-        return _tool_error(f"unknown SOC development tool: {tool_name}")
+        if tool_name != "asset_locate":
+            return _tool_error(f"unknown SOC development tool: {tool_name}")
+        return _call_asset_locate(arguments)
     query = arguments.get("query")
     if not isinstance(query, str):
         return _tool_error("query must be a string")
     result = _asset_lookup(query)
+    return {
+        "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
+        "structuredContent": result,
+        "isError": False,
+    }
+
+
+def _call_asset_locate(arguments: dict[str, Any]) -> dict[str, Any]:
+    query = arguments.get("query")
+    if not isinstance(query, str):
+        return _tool_error("query must be a string")
+    result = _asset_locate(
+        query,
+        asset_type=_optional_string(arguments.get("asset_type")),
+        role=_optional_string(arguments.get("role")),
+        um=_optional_string(arguments.get("um")),
+    )
     return {
         "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
         "structuredContent": result,
@@ -148,6 +250,60 @@ def _asset_lookup(query: str) -> dict[str, Any]:
         "asset_record": asset_record,
         "source": "soc_dev_mcp_server",
     }
+
+
+def _asset_locate(query: str, *, asset_type: str | None = None, role: str | None = None, um: str | None = None) -> dict[str, Any]:
+    normalized_query = query.strip()
+    normalized_type = (asset_type or _guess_asset_type(normalized_query)).upper()
+    normalized_role = (role or "").strip()
+    location = _ASSET_LOCATIONS.get(normalized_query) or (_ASSET_LOCATIONS.get(um.strip()) if isinstance(um, str) and um.strip() else None)
+    found = location is not None
+    company_code = str(location.get("company_code", "")) if location else ""
+    biz_group = str(location.get("biz_group", "")) if location else ""
+    source = str(location.get("source", "")) if location else ""
+    disposal_target = "target" if normalized_role in {"target", "victim", "impacted_asset"} else "-"
+    search_results = [
+        {
+            "type": normalized_type,
+            "value": normalized_query,
+            "role": normalized_role,
+            "code": 200 if found else 404,
+            "result": {
+                "company_code": company_code,
+                "biz_group": biz_group,
+                "source": source,
+            },
+        }
+    ]
+    return {
+        "schema_version": "soc.dev_asset_location_result.v1",
+        "query": normalized_query,
+        "asset_type": normalized_type,
+        "role": normalized_role,
+        "found": found,
+        "company_code": company_code,
+        "biz_group": biz_group,
+        "source": source,
+        "disposal_target": disposal_target,
+        "search_results": search_results,
+        "mocked": True,
+    }
+
+
+def _guess_asset_type(value: str) -> str:
+    if value.startswith("http://") or value.startswith("https://"):
+        return "WEB"
+    if value.upper().startswith("UM"):
+        return "USER"
+    if value.count(".") == 3 and all(part.isdigit() for part in value.split(".")):
+        return "IP"
+    if "." in value:
+        return "DOMAIN"
+    return "HOST"
+
+
+def _optional_string(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _tool_error(message: str) -> dict[str, Any]:

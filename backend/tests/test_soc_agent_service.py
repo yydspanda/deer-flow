@@ -760,6 +760,19 @@ def test_agent_chat_service_does_not_allow_asset_lookup_by_default() -> None:
     assert "Route denied" in events[2].data["content"]
 
 
+def test_agent_action_policy_treats_asset_locate_as_read_only() -> None:
+    decision = SocAgentActionPolicy().check(
+        action="asset.locate",
+        route="asset.locate",
+        request=SocAgentChatRequest(message="locate asset"),
+        context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI)),
+    )
+
+    assert decision.allowed is True
+    assert decision.risk_level is SocAgentRiskLevel.READ_ONLY
+    assert decision.requires_human_approval is False
+
+
 def test_agent_chat_service_dispatches_explicit_read_only_asset_lookup_adapter() -> None:
     registry = SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter(records=[_asset_lookup_record()])])
     service = SocAgentChatService(

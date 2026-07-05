@@ -23,6 +23,7 @@ SOC_ENDPOINT_TRIAGE_SKILL = "soc-endpoint-triage"
 SOC_NETWORK_APT_TRIAGE_SKILL = "soc-network-apt-triage"
 SOC_WAF_F5_TRIAGE_SKILL = "soc-waf-f5-triage"
 SOC_ASSET_DIRECTION_SKILL = "soc-asset-direction"
+SOC_ASSET_EXTRACTION_SKILL = "soc-asset-extraction"
 
 SOC_LEAD_AGENT_NAME = "soc-triage"
 SOC_LEAD_AGENT_SKILLS: tuple[str, ...] = (
@@ -31,6 +32,7 @@ SOC_LEAD_AGENT_SKILLS: tuple[str, ...] = (
     SOC_NETWORK_APT_TRIAGE_SKILL,
     SOC_WAF_F5_TRIAGE_SKILL,
     SOC_ASSET_DIRECTION_SKILL,
+    SOC_ASSET_EXTRACTION_SKILL,
 )
 SOC_SKILL_CONTEXT_TOKEN_BUDGET = 240
 SOC_SKILL_CONTEXT_SOURCE = "soc_skill_resolver"
@@ -44,6 +46,7 @@ _SOC_SKILL_CONTEXT_SUMMARIES: dict[str, str] = {
     SOC_NETWORK_APT_TRIAGE_SKILL: "Network/APT triage: focus on direction, IOC quality, C2/callback behavior, role assignment, and historical similar alerts.",
     SOC_WAF_F5_TRIAGE_SKILL: "WAF/F5 triage: focus on HTTP evidence, client IP attribution, x-forwarded-for, target application, web attack type, and suppression target.",
     SOC_ASSET_DIRECTION_SKILL: "Asset and direction triage: resolve ownership, attacker/victim roles, traffic direction, affected asset, and response target conflicts.",
+    SOC_ASSET_EXTRACTION_SKILL: "Asset extraction: extract IP, domain, URL, host, user, and UM assets; assign roles; prepare guarded asset.lookup/asset.locate proposals.",
 }
 
 _SOURCE_SKILLS: dict[AlertSourceType, tuple[str, str]] = {
@@ -111,6 +114,26 @@ _ASSET_DIRECTION_KEYWORDS = (
     "受害",
     "攻击者",
 )
+_ASSET_EXTRACTION_KEYWORDS = (
+    "asset",
+    "assets",
+    "asset_key",
+    "host",
+    "hostname",
+    "domain",
+    "url",
+    "uri",
+    "user",
+    "user_id",
+    "um",
+    "username",
+    "资产",
+    "主机",
+    "域名",
+    "链接",
+    "账号",
+    "用户",
+)
 
 
 class SocSkillResolver:
@@ -157,6 +180,12 @@ class SocSkillResolver:
                 SOC_ASSET_DIRECTION_SKILL,
                 reason="fact reconstruction reported field conflicts, so asset/direction review is needed",
                 confidence=0.68,
+                matched_field="fact_reconstruction.conflict_reports",
+            )
+            recommendations.add(
+                SOC_ASSET_EXTRACTION_SKILL,
+                reason="field conflicts require explicit asset extraction before ownership lookup",
+                confidence=0.67,
                 matched_field="fact_reconstruction.conflict_reports",
             )
         return self._resolution(request.alert_id, recommendations)
@@ -319,6 +348,13 @@ def _add_entity_skills(recommendations: _RecommendationBuilder, entities: Extrac
             confidence=0.66,
             matched_field="extracted_entities.network",
         )
+    if entities.ips or entities.domains or entities.urls or entities.hosts or entities.users:
+        recommendations.add(
+            SOC_ASSET_EXTRACTION_SKILL,
+            reason="alert entities include assets that may need extraction and ownership/location lookup",
+            confidence=0.67,
+            matched_field="extracted_entities.assets",
+        )
 
 
 def _add_text_skills(recommendations: _RecommendationBuilder, values: Iterable[str | None]) -> None:
@@ -352,6 +388,13 @@ def _add_text_skills(recommendations: _RecommendationBuilder, values: Iterable[s
         _ASSET_DIRECTION_KEYWORDS,
         SOC_ASSET_DIRECTION_SKILL,
         "asset ownership or attack direction keyword matched",
+    )
+    _add_keyword_skill(
+        recommendations,
+        text,
+        _ASSET_EXTRACTION_KEYWORDS,
+        SOC_ASSET_EXTRACTION_SKILL,
+        "asset extraction keyword matched",
     )
 
 

@@ -24,7 +24,7 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest 已固定 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock 已固定 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
@@ -123,8 +123,42 @@
 | 87 | Local real MCP fixture and read-only smoke | Done | 本地 stdio MCP server + sample extensions/action config 可验证 `soc_dev_asset_lookup` discovery 和 `asset.lookup` execute smoke |
 | 88 | Real dev/staging MCP replacement | Planned | 用真实 CMDB/EDR MCP server 替换本地 fixture，保存 smoke report 并评估延迟、失败率、字段裁剪和接入风险 |
 | 89 | Upstream MCP sync compatibility retest | Done | 同步 upstream/main 后，SOC MCP adapter 显式传递 `mcp.server`，并重新验证 DeerFlow MCP 前缀重叠路由、local stdio discovery 和 `asset.lookup` execute smoke |
+| 90 | Asset extraction skill + asset.locate MCP mock | Done | 根据资产提取/定位原型，新增 `soc-asset-extraction` skill、`asset.locate` read-only policy、mock MCP tool/config，并让 Lead Agent proposal bridge 可通过 MCP-backed adapter 执行只读定位 |
 
 ## 进度记录
+
+### 2026-07-05 — Asset extraction skill + asset.locate MCP mock
+
+- 背景：
+  - 用户提供的 `资产提取器.py` / `资产定位器.py` 原型分别代表两类能力：提取资产和角色应沉淀为 skill；远程资产归属/BU 定位应走 MCP/tool 边界。
+  - 真实 Zeus/CMDB/asset_to_bu 远程调用暂不接入，本切片用 deterministic mock 结果验证协议和 proposal bridge。
+- 变更：
+  - 新增 `skills/public/soc-asset-extraction/SKILL.md`：
+    - 指导 Lead Agent 提取 IP、DOMAIN、WEB/URL、HOST、USER、UM 等资产。
+    - 明确 role assignment、disposal target、recommended lookup order。
+    - 明确 skill 不执行远程调用；需要定位归属时只能提出 `asset.locate` proposal。
+  - `backend/soc_agent/skills.py`：
+    - 新增 `SOC_ASSET_EXTRACTION_SKILL`，加入 SOC Lead Agent skills 和 resolver。
+    - 当告警包含资产实体、用户/UM/host/domain/url 关键词或字段冲突时，选择资产提取 skill。
+  - `backend/scripts/soc_dev_mcp_server.py`：
+    - 新增 MCP tool `asset_locate`，模拟远程资产归属/BU 定位，返回 `company_code`、`biz_group`、`search_results`、`mocked=true`。
+  - `backend/samples/mcp/soc_dev_action_adapters.json`：
+    - 新增 `asset.locate -> soc_dev_asset_locate` read-only adapter config。
+  - `backend/soc_agent/core/service.py` / `backend/soc_agent/lead_agent.py`：
+    - 将 `asset.locate` 纳入 read-only action policy。
+    - SOC Lead Agent profile 增加 `asset.locate` proposal 示例。
+  - `backend/soc_agent/cli.py`：
+    - `soc chat tui --lead-agent --mcp-action-config PATH` 可显式注入 MCP-backed read-only action registry。
+    - 不传 config 时仍使用本地 `InMemoryAssetLookupActionAdapter`。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff format scripts/soc_dev_mcp_server.py soc_agent/skills.py soc_agent/lead_agent.py soc_agent/cli.py soc_agent/core/service.py tests/test_soc_mcp_adapters.py tests/test_soc_agent_lead_agent.py tests/test_soc_agent_service.py tests/test_soc_lead_agent_chat.py --check`
+  - `cd backend && ./.venv/bin/python -m ruff check scripts/soc_dev_mcp_server.py soc_agent/skills.py soc_agent/lead_agent.py soc_agent/cli.py soc_agent/core/service.py tests/test_soc_mcp_adapters.py tests/test_soc_agent_lead_agent.py tests/test_soc_agent_service.py tests/test_soc_lead_agent_chat.py`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py tests/test_soc_agent_lead_agent.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py::test_agent_action_policy_treats_asset_locate_as_read_only`
+  - `cd backend && SOC_DEV_MCP_PYTHON=/home/yydspei/projects/deer-flow/backend/.venv/bin/python SOC_DEV_MCP_SERVER=/home/yydspei/projects/deer-flow/backend/scripts/soc_dev_mcp_server.py DEER_FLOW_EXTENSIONS_CONFIG_PATH=/home/yydspei/projects/deer-flow/backend/samples/mcp/soc_dev_extensions_config.json ./.venv/bin/python -m soc_agent.cli mcp tools --include-schema --pretty`
+  - `cd backend && SOC_DEV_MCP_PYTHON=/home/yydspei/projects/deer-flow/backend/.venv/bin/python SOC_DEV_MCP_SERVER=/home/yydspei/projects/deer-flow/backend/scripts/soc_dev_mcp_server.py DEER_FLOW_EXTENSIONS_CONFIG_PATH=/home/yydspei/projects/deer-flow/backend/samples/mcp/soc_dev_extensions_config.json ./.venv/bin/python -m soc_agent.cli mcp smoke samples/mcp/soc_dev_action_adapters.json --route asset.locate --json '{"asset_key":"10.10.1.5","asset_type":"IP","role":"target","context_refs":{"thread_id":"SOC-THREAD-1"}}' --pretty`
+- 下一步：
+  - 将 `asset.locate` 真实 dev/staging MCP 参数替换 mock config，保存 smoke report。
+  - 如果要进 Web/TUI 正式体验，再给 `soc chat tui --lead-agent --mcp-action-config ...` 做一条可复现实操验收脚本。
 
 ### 2026-07-05 — Upstream MCP sync compatibility retest
 

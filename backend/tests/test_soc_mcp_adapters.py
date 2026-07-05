@@ -479,6 +479,55 @@ def test_cli_mcp_smoke_executes_local_real_stdio_mcp_fixture(
     assert output["action_result"]["payload"]["mcp_result"]["asset_record"]["asset_id"] == "asset-001"
 
 
+def test_cli_mcp_smoke_executes_local_asset_locate_mock_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    from deerflow.mcp.cache import reset_mcp_tools_cache
+
+    backend_root = Path(__file__).resolve().parents[1]
+    monkeypatch.setenv("SOC_DEV_MCP_PYTHON", sys.executable)
+    monkeypatch.setenv("SOC_DEV_MCP_SERVER", str(backend_root / "scripts" / "soc_dev_mcp_server.py"))
+    monkeypatch.setenv(
+        "DEER_FLOW_EXTENSIONS_CONFIG_PATH",
+        str(backend_root / "samples" / "mcp" / "soc_dev_extensions_config.json"),
+    )
+    reset_mcp_tools_cache()
+
+    try:
+        exit_code = soc_cli.main(
+            [
+                "mcp",
+                "smoke",
+                str(backend_root / "samples" / "mcp" / "soc_dev_action_adapters.json"),
+                "--route",
+                "asset.locate",
+                "--json",
+                json.dumps(
+                    {
+                        "asset_key": "10.10.1.5",
+                        "asset_type": "IP",
+                        "role": "target",
+                        "context_refs": {"thread_id": "SOC-THREAD-1"},
+                    }
+                ),
+            ]
+        )
+    finally:
+        reset_mcp_tools_cache()
+
+    output = json.loads(capfd.readouterr().out)
+    assert exit_code == 0
+    assert output["schema_version"] == "soc.mcp_action_smoke_report.v1"
+    assert output["status"] == "success"
+    assert output["tool_name"] == "soc_dev_asset_locate"
+    result = output["action_result"]["payload"]["mcp_result"]
+    assert result["found"] is True
+    assert result["company_code"] == "PA011"
+    assert result["biz_group"] == "平安科技/支付研发"
+    assert result["mocked"] is True
+
+
 def test_mcp_adapter_config_rejects_non_read_only_risk() -> None:
     with pytest.raises(ValueError, match="risk_level=read_only"):
         SocMcpActionAdapterConfig.model_validate(_asset_lookup_config() | {"risk_level": "high_risk"})

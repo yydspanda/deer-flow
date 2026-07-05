@@ -22,6 +22,7 @@ from soc_agent.lead_agent import build_soc_lead_agent_profile
 from soc_agent.skills import (
     SOC_ALERT_TRIAGE_SKILL,
     SOC_ASSET_DIRECTION_SKILL,
+    SOC_ASSET_EXTRACTION_SKILL,
     SOC_ENDPOINT_TRIAGE_SKILL,
     SOC_LEAD_AGENT_NAME,
     SOC_NETWORK_APT_TRIAGE_SKILL,
@@ -42,8 +43,10 @@ def test_soc_lead_agent_profile_uses_deerflow_custom_agent_shape() -> None:
     assert SOC_ALERT_TRIAGE_SKILL in profile.skills
     assert SOC_ENDPOINT_TRIAGE_SKILL in profile.skills
     assert SOC_NETWORK_APT_TRIAGE_SKILL in profile.skills
+    assert SOC_ASSET_EXTRACTION_SKILL in profile.skills
     assert "DeerFlow custom agent" in profile.soul
     assert "Do not invent a second SOC agent runtime" in profile.soul
+    assert "asset.locate" in profile.soul
     assert profile.tool_groups is None
 
 
@@ -100,6 +103,21 @@ def test_skill_resolver_selects_waf_and_asset_direction_for_http_conflict() -> N
 
     assert SOC_WAF_F5_TRIAGE_SKILL in skill_names
     assert SOC_ASSET_DIRECTION_SKILL in skill_names
+    assert SOC_ASSET_EXTRACTION_SKILL in skill_names
+
+
+def test_skill_resolver_selects_asset_extraction_for_user_and_host_assets() -> None:
+    request = LLMAnalysisRequest(
+        alert_id="ALT-ASSET",
+        source=AlertSourceRef(source_type=AlertSourceType.EDR, product="EDR"),
+        detection=DetectionRuleRef(rule_name="Endpoint alert involving UM account and hostname"),
+        extracted_entities=ExtractedEntities(hosts=["HOST-1"], users=["UM001"]),
+    )
+
+    skill_names = _skill_names(request)
+
+    assert SOC_ASSET_EXTRACTION_SKILL in skill_names
+    assert SOC_ENDPOINT_TRIAGE_SKILL in skill_names
 
 
 def test_skill_resolver_respects_available_skill_whitelist() -> None:
