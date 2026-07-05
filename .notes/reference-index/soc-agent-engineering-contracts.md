@@ -290,6 +290,8 @@ SOC Agent chat stream 约束：
   - `backend/soc_agent/actions/mcp.py` 是当前 SOC MCP adapter skeleton 边界；根目录不保留 `backend/soc_agent/mcp_adapters.py` 兼容入口。`SocMcpToolProviderPort` 只暴露 `list_tools()` / `invoke()`，`SocMcpToolActionAdapter` 先只支持 `read_only + external_side_effect=read`，provider exception 必须映射为 `SocAgentActionResult(status="failed")`，dry-run 不得调用 provider `invoke()`。
   - `SocMcpActionAdapterConfig` / `SocMcpToolBindingConfig` 是当前 MCP-backed read-only adapter 的显式配置边界：SOC action 字段和 `mcp.server/tool/timeout/input_mapping/output_fields` 必须由配置映射到 adapter registry，不能由 Lead Agent、dispatcher 或自然语言推断。
   - `build_mcp_action_adapter_registry()` 只能注册 `enabled=true` 的配置；重复 `route/action` 必须 fail-fast；当前 config builder 只接受 `risk_level=read_only`、`external_side_effect=read`、`execute_supported=true`，write/destructive MCP 另走后续 high-risk preflight 设计。
+  - `DeerFlowCachedMcpToolProvider` 是唯一允许复用 DeerFlow `get_cached_mcp_tools()` 的 SOC provider 实现；它必须把 LangChain `BaseTool` 归一为 `SocMcpToolDescriptor` / `Mapping`，不能把 BaseTool、ToolMessage、content block 或 MCP SDK 类型传出 `actions/mcp.py`。
+  - `DeerFlowCachedMcpToolProvider.invoke()` 必须按 exact tool name 调用，不做 fuzzy match；tool 缺失、cache 加载失败、调用失败、timeout 都必须转成 `SocMcpToolProviderError` / `SocMcpToolNotFoundError`，再由 adapter 映射为可审计 action result。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
     - `POST /api/soc/approvals/grants`
     - `POST /api/soc/approvals/actions/dry-run`

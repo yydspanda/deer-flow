@@ -7,6 +7,7 @@ import pytest
 
 from soc_agent.actions.adapters import SocActionAdapterRegistry, SocActionAdapterRegistryError
 from soc_agent.actions.mcp import (
+    DeerFlowCachedMcpToolProvider,
     SocMcpActionAdapterConfig,
     SocMcpToolActionAdapter,
     SocMcpToolDescriptor,
@@ -129,6 +130,99 @@ def test_mcp_adapter_config_builder_rejects_duplicate_route_action() -> None:
 def test_mcp_adapter_config_rejects_non_read_only_risk() -> None:
     with pytest.raises(ValueError, match="risk_level=read_only"):
         SocMcpActionAdapterConfig.model_validate(_asset_lookup_config() | {"risk_level": "high_risk"})
+
+
+def test_deerflow_cached_mcp_provider_loads_tools_from_lazy_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    tool = FakeCachedMcpTool(
+        name="cmdb_asset_lookup",
+        result={"asset_found": True, "asset_record": {"asset_id": "asset-001"}},
+        description="Lookup asset ownership.",
+        args={"query": {"type": "string"}},
+    )
+    monkeypatch.setattr("deerflow.mcp.cache.get_cached_mcp_tools", lambda: [tool])
+    provider = DeerFlowCachedMcpToolProvider()
+
+    [descriptor] = provider.list_tools()
+    result = provider.invoke("cmdb_asset_lookup", {"query": "10.10.1.5"}, timeout_seconds=5)
+
+    assert descriptor.name == "cmdb_asset_lookup"
+    assert descriptor.description == "Lookup asset ownership."
+    assert descriptor.input_schema == {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+    }
+    assert tool.invocations == [{"query": "10.10.1.5"}]
+    assert result == {"asset_found": True, "asset_record": {"asset_id": "asset-001"}}
+
+
+def test_deerflow_cached_mcp_provider_normalizes_content_and_artifact_result() -> None:
+    tool = FakeCachedMcpTool(
+        name="cmdb_asset_lookup",
+        result=(
+            [{"type": "text", "text": "asset found"}],
+            {"structured_content": {"asset_found": True}},
+        ),
+    )
+    provider = DeerFlowCachedMcpToolProvider(lambda: [tool])
+
+    result = provider.invoke("cmdb_asset_lookup", {"query": "10.10.1.5"}, timeout_seconds=5)
+
+    assert result == {
+        "content": [{"type": "text", "text": "asset found"}],
+        "artifact": {"structured_content": {"asset_found": True}},
+    }
+
+
+def test_deerflow_cached_mcp_provider_rejects_missing_tool() -> None:
+    provider = DeerFlowCachedMcpToolProvider(lambda: [])
+
+    with pytest.raises(SocMcpToolNotFoundError, match="cmdb_asset_lookup"):
+        provider.invoke("cmdb_asset_lookup", {"query": "10.10.1.5"}, timeout_seconds=5)
+
+
+def test_deerflow_cached_mcp_provider_maps_loader_failure() -> None:
+    def load_tools():
+        raise RuntimeError("cache unavailable")
+
+    provider = DeerFlowCachedMcpToolProvider(load_tools)
+
+    with pytest.raises(SocMcpToolProviderError, match="cache unavailable"):
+        provider.list_tools()
+
+
+def test_mcp_adapter_executes_against_deerflow_cached_provider() -> None:
+    provider = DeerFlowCachedMcpToolProvider(
+        lambda: [
+            FakeCachedMcpTool(
+                name="cmdb_asset_lookup",
+                result={
+                    "asset_found": True,
+                    "asset_record": {"asset_id": "asset-001"},
+                    "raw_secret": "must-not-leak",
+                },
+            )
+        ]
+    )
+    registry = build_mcp_action_adapter_registry([_asset_lookup_config()], provider)
+
+    result = registry.execute(
+        SocAgentActionCommand(
+            route="asset.lookup",
+            action="asset.lookup",
+            dry_run=False,
+            payload={
+                "asset_key": "10.10.1.5",
+                "context_refs": {"thread_id": "SOC-THREAD-1"},
+            },
+        ),
+        context=_context(),
+    )
+
+    assert result.status == "success"
+    assert result.payload["mcp_result"] == {
+        "asset_found": True,
+        "asset_record": {"asset_id": "asset-001"},
+    }
 
 
 def test_mcp_adapter_dry_run_validates_tool_without_invoking_provider() -> None:
@@ -309,6 +403,29 @@ class FakeSocMcpToolProvider:
         if isinstance(result, Exception):
             raise result
         return result
+
+
+class FakeCachedMcpTool:
+    def __init__(
+        self,
+        *,
+        name: str,
+        result: Any,
+        description: str = "",
+        args: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.name = name
+        self.description = description
+        self.args = dict(args or {})
+        self.result = result
+        self.metadata = {}
+        self.invocations: list[dict[str, Any]] = []
+
+    def invoke(self, payload: Mapping[str, Any]) -> Any:
+        self.invocations.append(dict(payload))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
 
 
 def _asset_lookup_adapter(provider: FakeSocMcpToolProvider) -> SocMcpToolActionAdapter:

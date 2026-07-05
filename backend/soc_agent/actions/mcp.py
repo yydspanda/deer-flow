@@ -6,8 +6,9 @@ SOC route/action names; MCP server/tool names stay inside adapter config.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+import concurrent.futures
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -52,6 +53,60 @@ class SocMcpToolProviderError(RuntimeError):
 
 class SocMcpToolNotFoundError(SocMcpToolProviderError, LookupError):
     """Raised when a configured MCP tool is not available."""
+
+
+class DeerFlowCachedMcpToolProvider:
+    """SOC provider backed by DeerFlow's cached MCP tool lifecycle."""
+
+    def __init__(
+        self,
+        tools_loader: Callable[[], Iterable[Any]] | None = None,
+    ) -> None:
+        self._tools_loader = tools_loader or _load_deerflow_cached_mcp_tools
+
+    def list_tools(self) -> list[SocMcpToolDescriptor]:
+        tools = self._load_tools()
+        return [
+            SocMcpToolDescriptor(
+                name=tool.name,
+                server=_server_from_tool(tool),
+                description=str(getattr(tool, "description", "") or ""),
+                input_schema=_tool_input_schema(tool),
+            )
+            for tool in sorted(tools, key=lambda item: item.name)
+        ]
+
+    def invoke(
+        self,
+        tool_name: str,
+        payload: Mapping[str, Any],
+        *,
+        timeout_seconds: int,
+    ) -> Mapping[str, Any]:
+        tool = self._tool_by_name(tool_name)
+        try:
+            raw_result = _invoke_tool_with_timeout(
+                tool,
+                payload,
+                timeout_seconds=timeout_seconds,
+            )
+        except SocMcpToolProviderError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - provider boundary wraps external tool failures
+            raise SocMcpToolProviderError(f"MCP tool {tool_name!r} failed: {exc}") from exc
+        return _normalize_tool_result(raw_result)
+
+    def _tool_by_name(self, tool_name: str) -> Any:
+        for tool in self._load_tools():
+            if tool.name == tool_name:
+                return tool
+        raise SocMcpToolNotFoundError(f"MCP tool {tool_name!r} is not available in DeerFlow cache")
+
+    def _load_tools(self) -> list[Any]:
+        try:
+            return list(self._tools_loader())
+        except Exception as exc:  # noqa: BLE001 - provider boundary wraps cache/config failures
+            raise SocMcpToolProviderError(f"Failed to load DeerFlow cached MCP tools: {exc}") from exc
 
 
 class SocMcpToolBindingConfig(BaseModel):
@@ -336,6 +391,86 @@ def _select_output_fields(result: Mapping[str, Any], output_fields: tuple[str, .
     return {field: result[field] for field in output_fields if field in result}
 
 
+def _load_deerflow_cached_mcp_tools() -> Iterable[Any]:
+    from deerflow.mcp.cache import get_cached_mcp_tools
+
+    return get_cached_mcp_tools()
+
+
+def _invoke_tool_with_timeout(
+    tool: Any,
+    payload: Mapping[str, Any],
+    *,
+    timeout_seconds: int,
+) -> Any:
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="soc-mcp-tool",
+    )
+    future = executor.submit(tool.invoke, dict(payload))
+    try:
+        return future.result(timeout=timeout_seconds)
+    except concurrent.futures.TimeoutError as exc:
+        future.cancel()
+        raise SocMcpToolProviderError(f"MCP tool {tool.name!r} timed out after {timeout_seconds}s") from exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _tool_input_schema(tool: Any) -> Mapping[str, Any]:
+    args_schema = getattr(tool, "args_schema", None)
+    if args_schema is not None and hasattr(args_schema, "model_json_schema"):
+        return _json_safe(args_schema.model_json_schema())
+    tool_call_schema = getattr(tool, "tool_call_schema", None)
+    if tool_call_schema is not None and hasattr(tool_call_schema, "model_json_schema"):
+        return _json_safe(tool_call_schema.model_json_schema())
+    args = getattr(tool, "args", None)
+    if isinstance(args, Mapping):
+        return {"type": "object", "properties": _json_safe(args)}
+    return {}
+
+
+def _server_from_tool(tool: Any) -> str | None:
+    metadata = getattr(tool, "metadata", None)
+    if isinstance(metadata, Mapping):
+        for key in ("server", "server_name", "mcp_server", "mcp_server_name"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _normalize_tool_result(result: Any) -> Mapping[str, Any]:
+    if isinstance(result, Mapping):
+        return _json_safe(result)
+    if isinstance(result, tuple) and len(result) == 2:
+        content, artifact = result
+        return {
+            "content": _json_safe(content),
+            "artifact": _json_safe(artifact),
+        }
+    if hasattr(result, "model_dump"):
+        dumped = result.model_dump(mode="json")
+        if isinstance(dumped, Mapping):
+            return _json_safe(dumped)
+        return {"content": _json_safe(dumped)}
+    return {"content": _json_safe(result)}
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list | tuple | set):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, str | int | float | bool) or value is None:
+        return value
+    if hasattr(value, "model_dump"):
+        return _json_safe(value.model_dump(mode="json"))
+    if is_dataclass(value) and not isinstance(value, type):
+        return _json_safe(asdict(value))
+    return str(value)
+
+
 def _coerce_mcp_action_adapter_config(config: SocMcpActionAdapterConfig | Mapping[str, Any]) -> SocMcpActionAdapterConfig:
     if isinstance(config, SocMcpActionAdapterConfig):
         return config
@@ -370,6 +505,7 @@ def _has_value(value: Any) -> bool:
 
 
 __all__ = [
+    "DeerFlowCachedMcpToolProvider",
     "SocMcpActionAdapterConfig",
     "SocMcpToolActionAdapter",
     "SocMcpToolBindingConfig",

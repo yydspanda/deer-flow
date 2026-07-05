@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | DeerFlow cached MCP provider implementation |
+| 当前下一刀 | Read-only live smoke / config wiring |
 
 ## Phase 1 切片计划
 
@@ -116,9 +116,44 @@
 | 80 | MCP tool provider port + fake provider adapter tests | Done | 定义 SOC MCP provider port、fake provider 和 read-only MCP adapter skeleton；不接真实 MCP server |
 | 81 | MCP-backed read-only `asset.lookup` adapter config builder | Done | 用 fake provider 固定显式配置到 MCP-backed `asset.lookup` adapter registry 的构造方式；不接真实 MCP server |
 | 82 | SOC action package structure hygiene | Done | 将 action adapter、proposal、MCP adapter 收口到 `backend/soc_agent/actions/`，删除根目录旧入口；架构测试防止继续往根目录新增 action-like 模块 |
-| 83 | DeerFlow cached MCP provider implementation | Planned | 复用 DeerFlow MCP cache/session 生命周期，实现 `SocMcpToolProviderPort`；仍不让 Lead Agent 直接调用任意 MCP tool |
+| 83 | DeerFlow cached MCP provider implementation | Done | 复用 DeerFlow MCP cache/session 生命周期，实现 `SocMcpToolProviderPort`；仍不让 Lead Agent 直接调用任意 MCP tool |
+| 84 | Read-only live smoke / config wiring | Planned | 用 dev/staging MCP server 或本地 fake MCP server 验证 read-only action path，并固定显式 adapter config 加载方式 |
 
 ## 进度记录
+
+### 2026-07-05 — DeerFlow cached MCP provider implementation 切片
+
+- 背景：
+  - MCP adapter skeleton 和 explicit config builder 已完成，但 provider 仍是测试 fake provider。
+  - 下一步需要复用 DeerFlow MCP cache/session 生命周期，同时不能让 LangChain `BaseTool` 或 MCP SDK 类型扩散到 core/API/TUI/Web。
+- 变更：
+  - `backend/soc_agent/actions/mcp.py` 新增 `DeerFlowCachedMcpToolProvider`：
+    - 默认 lazy import `deerflow.mcp.cache.get_cached_mcp_tools()`。
+    - 对外仍实现 `SocMcpToolProviderPort`。
+    - `list_tools()` 把 cached `BaseTool` 转成 `SocMcpToolDescriptor`，包括 name、description、input schema。
+    - `invoke()` 按 exact tool name 调用 `BaseTool.invoke()`，不做 fuzzy match。
+    - provider 层执行 timeout，并把 loader failure、missing tool、tool failure、timeout 映射为 `SocMcpToolProviderError` / `SocMcpToolNotFoundError`。
+    - 将 dict、content+artifact tuple、Pydantic/model dump、文本等 tool result 归一为 `Mapping`，避免 raw LangChain/MCP result 类型进入 action result。
+  - `backend/tests/test_soc_mcp_adapters.py` 增加 fake cached tool 覆盖：
+    - monkeypatched DeerFlow cache loader。
+    - descriptor/input schema。
+    - exact invoke payload。
+    - content+artifact result normalization。
+    - missing tool。
+    - cache loader failure。
+    - config builder + `DeerFlowCachedMcpToolProvider` 组合执行 `asset.lookup`。
+  - 更新 MCP bridge plan、action adapter plan、主方案、工程契约和进度台账。
+- 边界：
+  - 不接真实生产 MCP server。
+  - 不让 Lead Agent 直接使用 cached MCP tools。
+  - 不开放 write/destructive execute。
+  - 不修改 DeerFlow MCP core。
+- 已验证：
+  - `cd backend && ./.venv/bin/python -m ruff check soc_agent/actions soc_agent/cli.py soc_agent/lead_agent_chat.py tests/test_soc_action_adapters.py tests/test_soc_mcp_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+  - `cd backend && ./.venv/bin/python -m ruff format soc_agent/actions soc_agent/cli.py soc_agent/lead_agent_chat.py tests/test_soc_action_adapters.py tests/test_soc_mcp_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py --check`
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_mcp_adapters.py tests/test_soc_action_adapters.py tests/test_soc_lead_agent_chat.py tests/test_soc_agent_service.py tests/architecture/test_soc_agent_boundaries.py`
+- 下一步：
+  - 做 read-only live smoke / config wiring：用 dev/staging MCP server 或本地 fake MCP server 验证 `config -> registry -> DeerFlowCachedMcpToolProvider -> SocAgentActionResult.payload`，并固定显式 adapter config 加载方式。
 
 ### 2026-07-05 — SOC action package structure hygiene follow-up
 

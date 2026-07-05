@@ -1,6 +1,6 @@
 # SOC MCP Adapter Bridge Plan
 
-> 状态：Phase 1 后续规划。当前已完成 SOC MCP provider port、fake provider tests、read-only MCP adapter skeleton，以及 MCP-backed read-only `asset.lookup` explicit config builder；尚未接真实 DeerFlow cached MCP provider。目标是把真实资产系统、EDR 只读查询、F5/SOAR/MCP 能力接进 SOC action adapter registry，但不让 SOC Lead Agent 直接调用任意 MCP tool。
+> 状态：Phase 1 后续规划。当前已完成 SOC MCP provider port、fake provider tests、read-only MCP adapter skeleton、MCP-backed read-only `asset.lookup` explicit config builder，以及 DeerFlow cached MCP provider implementation；尚未做 dev/staging live smoke。目标是把真实资产系统、EDR 只读查询、F5/SOAR/MCP 能力接进 SOC action adapter registry，但不让 SOC Lead Agent 直接调用任意 MCP tool。
 
 ## 背景
 
@@ -221,12 +221,17 @@ soc_action_adapters.yaml / db managed config
      - duplicate route/action fail-fast。
      - non-read-only config reject。
 
-3. **DeerFlow cached MCP provider implementation**（Next）
+3. **DeerFlow cached MCP provider implementation**（Done）
    - 只在 adapter module import `deerflow.mcp.cache.get_cached_mcp_tools()`。
    - 按 tool name 精确查找，不做 fuzzy match。
    - 真实 MCP server 缺失时返回明确 adapter failure。
+   - 当前实现：`DeerFlowCachedMcpToolProvider` in `backend/soc_agent/actions/mcp.py`。
+   - provider 对外仍只暴露 `SocMcpToolProviderPort`：
+     - `list_tools()` 返回 SOC `SocMcpToolDescriptor`，不会把 LangChain `BaseTool` 传出 adapter module。
+     - `invoke()` 按 exact tool name 调 `BaseTool.invoke()`，执行 timeout，并把 dict / content+artifact / model dump / text 结果归一为 `Mapping`。
+   - 当前测试使用 fake cached tool 和 monkeypatched `deerflow.mcp.cache.get_cached_mcp_tools()`，不要求真实 MCP server。
 
-4. **Read-only live smoke**
+4. **Read-only live smoke**（Next）
    - 用 dev/staging MCP server 验证资产查询或 EDR process tree 查询。
    - 记录延迟、失败率、payload size、敏感字段脱敏情况。
 
@@ -237,9 +242,9 @@ soc_action_adapters.yaml / db managed config
 
 ## 下一刀
 
-建议做 **DeerFlow cached MCP provider implementation**：
+建议做 **Read-only live smoke / config wiring**：
 
-- 新增 provider 实现，复用 DeerFlow `get_cached_mcp_tools()`，但 provider 类型仍只暴露 `SocMcpToolProviderPort`。
-- 按配置中的 `mcp.tool` 精确查找 tool，不做 fuzzy match，不让 Lead Agent 直接看到 MCP tool name。
-- MCP tool 缺失、server 未启用、调用失败都映射为明确 adapter failure。
-- 先做 unit tests / fake cached tool tests，不直接要求真实生产 MCP server。
+- 先不要接生产系统；用 dev/staging MCP server 或本地 fake server 验证 `asset.lookup` / EDR process tree 一类 read-only tool。
+- 固定本地显式 adapter config 的加载位置，后续再升级为 DB/Web managed config。
+- smoke 只验证 read-only path：config -> registry -> `DeerFlowCachedMcpToolProvider` -> `SocAgentActionResult.payload`。
+- 记录 latency、failure、payload size 和敏感字段裁剪情况；不开放 high-risk execute。
