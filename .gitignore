@@ -63,7 +63,9 @@ config.yaml.bak
 
 # Local raw SOC alert demos may contain internal asset/user data.
 alert_demo/
+datas/
 
 .history/
 
 backend/soc_agent/.understand-anything/
+.notes/ai_soc/pingan_docs
