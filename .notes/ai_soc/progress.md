@@ -23,12 +23,12 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前阶段 | Phase 1 收口：Runtime 可靠性 + SOC Lead Agent MVP |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence 已固定；真实 dev/staging MCP 等待 endpoint/凭证 |
+| 当前阶段 | Phase 1 收口完成，Phase 2 correlation / domain triage 起步 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence 已固定；真实 dev/staging MCP 等待 endpoint/凭证；当前主线转向 Phase 2 最小 correlation + domain sub-agent 可见研判链路，并增加 PingAn SOC capability onboarding 作为业务经验注入层 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 不依赖真实 MCP：补 Lead Agent evidence reuse 规则和 read-only mock adapter 扩展；真实 dev/staging MCP smoke 等待 endpoint/凭证 |
+| 当前下一刀 | 工程实现做 Phase 2 最小 Correlation Service；随后补 Memory Tracking Contract；并行收集第一批 PingAn P0 capability card，用来驱动 APT/EDR/HIDS/F5 domain triage 和 typed memory facets |
 
 ## Phase 1 切片计划
 
@@ -127,8 +127,32 @@
 | 91 | Read-only action result evidence bridge | Done | 新增 `InvestigationEvidence` contract、repository protocol、in-memory store；read-only action success 后可记录 evidence，ReviewQueue context / Lead Agent artifact / Web/TUI 可展示 |
 | 92 | InvestigationEvidence PostgreSQL persistence / Gateway wiring | Done | 新增 `soc_investigation_evidence` migration、ORM row、SQLAlchemy repository 方法；Gateway/CLI ReviewService 和 Lead Agent read-only dispatcher 使用同一 repository 共享 evidence |
 | 93 | Lead Agent evidence reuse + endpoint process-tree mock adapter | Done | Lead Agent bounded context 明确复用既有 action_evidence；新增 `endpoint.process_tree.lookup` read-only in-memory/mock adapter、policy、proposal 示例和测试 |
+| 94 | PingAn SOC capability onboarding | Done | 新增 `.notes/ai_soc/pingan-soc-capability-onboarding.md`，固定经验 -> capability card -> skill/MCP/normalizer/domain/eval/memory 的转化流程 |
+| 95 | Correlation Service MVP | Next | 新增结构化 correlation contract/service/CLI；基于 summary + evidence 找相似告警、匹配原因和可复用证据；不调用 LLM、不依赖真实 MCP、不改 DeerFlow core |
+| 96 | Memory Tracking Contract | Planned | 固定 DB-first typed memory record + facets + retrieval policy；TUI/Web/Kafka/Lead Agent/domain 结论先生成 `SocMemoryCandidate`，不直接写 confirmed memory；wiki/OKF 后期只做 projection |
 
 ## 进度记录
+
+### 2026-07-05 — Alert lifecycle roadmap refresh
+
+- 背景：
+  - 用户希望看到完整 SOC Agent + EDR/APT/HIDS/F5 domain sub-agent 研判效果，需要把当前 lifecycle 和接下来实现路线讲清楚。
+  - 真实 dev/staging MCP endpoint/凭证暂不可用，继续扩展 mock tool 收益下降。
+- 追加决策：
+  - 用户明确提出还需要把平安 SOC tool/MCP/skill 经验嵌入项目，才能让系统真正像生产 AI SOC 跑起来。
+  - 因此新增 PingAn SOC capability onboarding 作为 Slice 0：每条内部经验先整理成 capability card，再分类落到 skill、MCP/action adapter、normalizer、domain handler、eval case 或 memory candidate。
+  - 用户进一步提出后续需要按 topic/rule_code/场景做记忆追踪，并将 SOC TUI / Kafka 工作流中的重要结论更新到记忆，保持经验最新。
+  - 随后澄清：`rule_code` 只是平安等平台的 vendor alias；topic、detection、scenario 等也不能变成硬主键。Memory 需要采用 typed record + facets + retrieval policy，DB 先做稳，wiki/OKF 后期作为展示/审阅 projection。
+- 变更：
+  - `.notes/ai_soc/alert-lifecycle-flow.md` 重写为当前 As-Is 生命周期 + To-Be Main SOC Agent / domain sub-agent 可见链路。
+  - 新增 `.notes/ai_soc/pingan-soc-capability-onboarding.md`，记录平安 SOC 经验注入流程、capability card 模板、P0 能力 backlog 和用户提供信息格式。
+  - 新增 `.notes/ai_soc/soc-memory-tracking-plan.md`，记录 DB-first typed memory store、facets retrieval、写入来源、状态机、DB/wiki 一致性和实现路线。
+  - 明确下一阶段路线：PingAn SOC capability onboarding -> `SocCorrelationService` -> Memory Tracking Contract -> domain sub-agent contract -> EDR/APT/HIDS/F5 MVP handlers -> Main SOC Agent orchestrator -> unified investigation report -> Web/TUI 可见化 -> demo/eval script。
+  - 进度台账把当前下一刀切到 Phase 2 最小 Correlation Service，并把 Memory Tracking Contract 加入下一步待办。
+- 下一步：
+  - 实现 Correlation Service MVP，先让 review context / CLI 能看到结构化相似告警、匹配原因和可复用 investigation evidence。
+  - 之后实现 Memory Tracking Contract，再接 TUI/Web correction、Kafka repeated pattern 和 domain triage 的候选记忆写入。
+  - 向用户收集第一批 PingAn capability card：APT 方向判断、EDR 进程树、资产归属、F5 抑制目标、HIDS 主机事件。
 
 ### 2026-07-05 — Lead Agent evidence reuse + endpoint process-tree mock adapter
 

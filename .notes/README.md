@@ -8,6 +8,8 @@
 |---|---|
 | `project-overview.md` | DeerFlow 2.0 项目全貌、分层、核心数据流 |
 | `ai_soc/soc-agent-solution.md` | SOC Agent 当前权威方案；后续产品和工程讨论优先更新这里 |
+| `ai_soc/pingan-soc-capability-onboarding.md` | 平安 SOC 工具、MCP、skill、研判经验和处置经验的结构化嵌入流程 |
+| `ai_soc/soc-memory-tracking-plan.md` | SOC topic/rule_code/场景粒度记忆追踪和 TUI/Kafka 结论沉淀方案 |
 | `ai_soc/soc-agent-profile-governance.md` | SOC Lead/Sub Agent、Skill、MCP 开放配置与治理方案 |
 | `ai_soc/normalization-drift-strategy.md` | 供应商日志归一化、字段漂移检测、LLM 低频辅助策略 |
 | `ai_soc/zeus-alert-flow-and-field-trust.md` | ZEUS/天眼上游字段冲突、可信度分层、统一研判闭环流程 |

@@ -1,53 +1,146 @@
 # SOC Alert Lifecycle Flow
 
-> 当前文档描述的是截至 2026-07-04 已落地代码的预警流转、状态变化和数据写入边界。Kafka daemon opt-in broker consumer、approval inbox、ReviewQueue、skill-selected bounded context、SOC Lead Agent profile install/chat entry、SOC Lead Agent review context bridge、SOC Lead Agent action proposal boundary 都已落地；Lead Agent tool/action approval middleware、真实外部处置 adapter、worker pool 并发仍是后续接入点。
+> Updated: 2026-07-05
+>
+> 本文档描述两件事：
+>
+> 1. 当前代码已经实现的预警生命周期、状态变化和数据写入边界。
+> 2. 下一阶段如何演进到可演示的 Main SOC Agent + EDR/APT/HIDS/F5 domain sub-agent 研判链路。
+>
+> 原则：LLM 和 Lead Agent 可以参与研判、提出调查动作和生成解释，但主流程、状态机、权限、审计、持久化仍由 SOC Runtime / Core Services 掌握。
 
-## 总览
+## 1. 当前结论
 
-当前已实现的中心不是某一个 UI 或 middleware，而是一组稳定 service/repository 边界：
+当前系统已经具备一条可信的 SOC 预警闭环底座：
 
-- `SocAnalysisService`：预警分析入口，负责调用固定 runtime、保存 run/summary/review/audit。
-- `SocReviewService`：复核队列、调查上下文、关闭、人工纠正。
-- `SocAgentApprovalService`：approval request inbox、approval grant、dry-run、execute boundary。
-- `SocSkillResolver`：从 canonical alert / review context 选择白名单 SOC domain skills，并生成 compact bounded context。
-- `SocLeadAgentChatService`：通过 DeerFlow `DeerFlowClient(agent_name="soc-triage")` 进入现有 `lead_agent`，不是 SOC action executor。
-- `SocKafkaDaemonRunner` / `SocKafkaConsumerRunner`：opt-in Kafka daemon run loop，负责 broker poll、record mapping、process、dead-letter、commit、metrics JSONL。
-- `SqlAlchemyAlertRepository`：当前统一实现 run、summary、review queue、audit、approval request、approval grant 的持久化协议。
-
-三类入口后续都应该进入同一组 service：
-
-```mermaid
-flowchart LR
-    Kafka["Kafka topics\nopt-in daemon"] --> Consumer["SocKafkaConsumerRunner\nConfluentKafkaConsumerPort"]
-    Consumer --> Mapper["kafka record -> SocDaemonMessage"]
-    Mapper --> DaemonMessage["SocDaemonMessage"]
-    DaemonMessage --> DaemonProcess["SocDaemonService.process_message"]
-    DaemonProcess --> Analysis["SocAnalysisService"]
-    CLI["CLI / API analyze"] --> Analysis
-    AgentShell["SOC deterministic chat shell\nreview context loader"] --> ApprovalInbox["Approval Request Inbox"]
-    Profile["soc agent install-profile\nuser-scoped soc-triage"] --> LeadAgent["SocLeadAgentChatService\nDeerFlow lead_agent entry"]
-    LeadAgent --> DeerFlow["DeerFlow lead_agent\nagent_name=soc-triage"]
-    ReviewBridge["Review context bridge\nbounded artifact"] -.-> LeadAgent
-    LeadMiddleware["Lead Agent tool/action approval middleware\nplanned after MCP/tool chain"] -.-> ApprovalInbox
-    DaemonProcess --> ApprovalInbox
-    Daemon["SocDaemonService\nsubmit boundary"] --> ApprovalInbox
-    Web["Web 工单/后台"] --> ReviewAPI["Review / Approval API"]
-    TUI["SOC TUI"] --> ReviewAPI
-
-    Analysis --> Runtime["Deterministic Runtime"]
-    Runtime --> Stores["SOC repositories"]
-    Stores --> ReviewQueue["ReviewQueue"]
-    Stores --> ApprovalInbox
-
-    ReviewAPI --> ReviewQueue
-    ReviewAPI --> ApprovalInbox
-    ApprovalInbox --> Grant["ApprovalGrant token"]
-    Grant --> Execute["dry-run / execute boundary"]
+```text
+alert in
+  -> deterministic runtime analyze
+  -> run / summary / review / audit persistence
+  -> ReviewQueue Web/TUI
+  -> SOC Lead Agent bounded context
+  -> read-only action proposal
+  -> investigation evidence persistence
+  -> approval inbox / grant / execute boundary
 ```
 
-## 预警分析主链路
+但它还不是最终形态的“完整 SOC Agent + 多个子研判 Agent”。缺口在这里：
 
-当前预警进入分析后，主控制流由 runtime 固定掌握。LLM 或 stub analyzer 只能作为固定节点，不决定是否跳过必要步骤。
+- 还没有明确的 `SocCorrelationService`，相似告警/历史证据仍只是 review context 的一部分。
+- 还没有统一的 domain sub-agent 输入输出协议。
+- EDR/APT/HIDS/F5 当前主要体现为 skills / mock action / prompt context，还不是可独立评估的子研判单元。
+- Main SOC Agent 还没有把 correlation、domain triage、read-only evidence 和统一研判报告串成一个可视化链路。
+
+因此下一阶段目标不是继续堆更多 mock tool，而是补齐 Phase 2 最小闭环：
+
+```text
+PingAn SOC Capability Onboarding
+  -> Correlation Service
+  -> Memory Tracking Contract
+  -> Domain Sub-Agent Contract
+  -> EDR/APT/HIDS/F5 MVP handlers
+  -> Main SOC Agent Orchestrator
+  -> Unified Investigation Report
+  -> Web/TUI/Lead Agent 展示完整研判链路
+```
+
+## 2. 当前已实现服务边界
+
+| Service / Component | 当前职责 | 状态 |
+|---|---|---|
+| `SocAnalysisService` | 预警分析入口；调用固定 runtime，保存 run/summary/review/audit | Done |
+| `SocReviewService` | review queue、调查上下文、关闭、人工纠正；聚合 similar alerts 和 action evidence | Done |
+| `SocAgentApprovalService` | approval request inbox、approval grant、dry-run、execute boundary | Done |
+| `SocSkillResolver` | 从 canonical alert / review context 选择白名单 SOC domain skills，生成 compact bounded context | Done |
+| `SocLeadAgentChatService` | 通过 DeerFlow `DeerFlowClient(agent_name="soc-triage")` 进入现有 `lead_agent` | Done |
+| `SocLeadAgentActionProposalBoundary` | 只处理显式 `<soc_action_proposal>`；read-only proposal 走 router/policy/dispatcher/registry，高风险写入 approval inbox | Done |
+| `SocActionAdapterRegistry` | action adapter allowlist；当前支持 `asset.lookup`、`asset.locate`、`endpoint.process_tree.lookup` 等只读能力 | Done |
+| `InvestigationEvidenceRepository` | 保存只读 action/tool 结果，供 ReviewQueue、Web/TUI、Lead Agent 后续复用 | Done |
+| `SocKafkaDaemonRunner` / `SocKafkaConsumerRunner` | opt-in Kafka daemon run loop、mapper、dead-letter、manual commit、metrics JSONL | Done, production params waiting |
+| `SqlAlchemyAlertRepository` | 当前统一实现 run、summary、review queue、audit、approval request、approval grant、investigation evidence 持久化 | Done |
+
+## 3. 当前 As-Is 生命周期
+
+```mermaid
+flowchart TD
+    subgraph Inputs["入口层"]
+        CLI["CLI / API\nsoc analyze"]
+        Kafka["Kafka daemon\nopt-in"]
+        Web["Web ReviewQueue"]
+        TUI["SOC TUI"]
+        Lead["SOC Lead Agent\nsoc-triage"]
+    end
+
+    subgraph Core["Core Services"]
+        Analysis["SocAnalysisService"]
+        Review["SocReviewService"]
+        Chat["SocAgentChatService / SocLeadAgentChatService"]
+        Approval["SocAgentApprovalService"]
+    end
+
+    subgraph Runtime["Fixed Runtime"]
+        Normalize["normalize"]
+        Entity["entity_extract"]
+        Fact["fact_reconstruct"]
+        BuildInput["build_analysis_input"]
+        Skill["skill_context"]
+        Analyze["analyze_stub / LLM node"]
+        Validate["schema_validate"]
+        Decide["decide"]
+    end
+
+    subgraph Stores["SOC Business Store"]
+        Runs["soc_analysis_runs"]
+        Summary["soc_alert_summaries"]
+        Queue["soc_review_queue"]
+        Audit["soc_decision_audit_log"]
+        ApprovalReq["soc_approval_requests"]
+        ApprovalGrant["soc_approval_grants"]
+        Evidence["soc_investigation_evidence"]
+    end
+
+    CLI --> Analysis
+    Kafka --> Analysis
+    Web --> Review
+    TUI --> Review
+    TUI --> Chat
+    Lead --> Chat
+
+    Analysis --> Normalize --> Entity --> Fact --> BuildInput --> Skill --> Analyze --> Validate --> Decide
+
+    Decide --> Runs
+    Decide --> Summary
+    Decide --> Queue
+    Decide --> Audit
+
+    Review --> Queue
+    Review --> Runs
+    Review --> Summary
+    Review --> Audit
+    Review --> Evidence
+
+    Chat --> Review
+    Chat --> Approval
+    Chat --> Evidence
+    Approval --> ApprovalReq
+    Approval --> ApprovalGrant
+```
+
+### 3.1 数据状态变化
+
+| 对象 | 状态字段 | 流转 | 说明 |
+|---|---|---|---|
+| `AnalysisRun` | `status` | `running -> success / needs_review / failed` | 完整 run payload 和输入快照保留，用于 replay |
+| `AlertSummary` | `verdict / confidence / needs_review` | analyze/replay/correct 更新 | 面向列表、检索、关联和 review queue 的读模型 |
+| `ReviewQueueItem` | `status` | `open -> closed` | close 不等于改判；改判必须走 correction |
+| `CorrectionRecord` | `candidate_knowledge_status` | `pending_review` | 人工纠正不会直接写 confirmed memory |
+| `InvestigationEvidence` | `status` | `success / failed` | 只读调查证据，不自动改 verdict，不写 confirmed memory |
+| `SocAgentApprovalRequest` | `status` | `pending` | 审批请求，不是执行授权 |
+| `SocAgentApprovalGrant` | `status` | `approved -> consumed` | 一次性 execution token，当前 execute 仍不产生外部副作用 |
+
+## 4. 预警分析主链路
+
+主控制流由 runtime 固定掌握。LLM 或 deterministic stub 只能作为固定节点，不决定是否跳过必要步骤。
 
 ```mermaid
 flowchart TD
@@ -60,7 +153,7 @@ flowchart TD
     S2 --> S3["fact_reconstruct\nFactReconstructionResult"]
     S3 --> S4["build_analysis_input\nLLMAnalysisRequest"]
     S4 --> Skill["SocSkillResolver\nbounded skill context"]
-    Skill --> S5["analyze_stub 或 LLM analyzer\nAnalysisNodeOutput"]
+    Skill --> S5["analyze_stub / LLM analyzer\nAnalysisNodeOutput"]
     S5 --> S6["schema_validate\nAnalysisResult"]
     S6 --> S7["decide\nDecision"]
 
@@ -75,14 +168,14 @@ flowchart TD
 
     Persist --> SaveRun["soc_analysis_runs"]
     Persist --> SaveSummary["soc_alert_summaries"]
-    Persist --> UpsertReview["按规则 upsert soc_review_queue"]
+    Persist --> UpsertReview["upsert soc_review_queue"]
     Persist --> SaveAudit["soc_decision_audit_log"]
     Persist --> EventEnd["emit ANALYSIS_COMPLETED / ANALYSIS_FAILED"]
 ```
 
 ### Runtime Step Trace
 
-每个 runtime step 都会写入 `PipelineStepTrace`：
+每个 runtime step 都写入 `PipelineStepTrace`：
 
 | 字段 | 含义 |
 |---|---|
@@ -90,211 +183,287 @@ flowchart TD
 | `status` | `running -> success` 或 `failed` |
 | `input_hash` / `output_hash` | 当前 step 输入/输出稳定 hash |
 | `warnings` | entity/fact/analysis request 中产生的警告 |
-| `metadata` | analyzer model、prompt、parser 等元信息 |
+| `metadata` | analyzer model、prompt、parser、skill context 等元信息 |
 
-## Skill Context 与 Lead Agent 入口
+## 5. ReviewQueue、Lead Agent 与 Evidence
 
-SOC 当前有两条 Agent 相关路径，必须区分：
-
-| 路径 | 当前状态 | 作用 | 禁止边界 |
-|---|---|---|---|
-| Runtime analysis node | Done | `LLMAnalysisRequest.skill_context` 把 selected skills 作为 compact context 注入分析 prompt | 不动态加载未知 skill；不让 LLM 改主流程 |
-| Deterministic chat shell | Done | `SocAgentChatService` 打开 ReviewQueue context，发出 `soc.review_context` / `soc.skill_context` stream event | 不替代 DeerFlow Lead Agent |
-| DeerFlow SOC Lead Agent entry | Done | `SocLeadAgentChatService` 通过 `agent_name=soc-triage` 进入 DeerFlow `lead_agent` | 不执行处置动作 |
-| Review context bridge | Done | 把 ReviewQueue context 转为 bounded `SocLeadAgentReviewContextArtifact`，提供给 DeerFlow SOC Lead Agent | 不让 Lead Agent 直接读 repository；不绕过 `SocReviewService`、`SocAgentActionPolicy`、`SocAgentApprovalService` |
-| Action proposal boundary | Done | 只处理 `<soc_action_proposal>...</soc_action_proposal>` 显式 JSON；高风险输出 approval request；read-only `asset.lookup` 可经显式 router/dispatcher/registry 返回 action result | 不从自然语言猜动作；不直接调用 MCP/资产系统；不执行写动作 |
-| Lead Agent tool/action middleware | Planned | 拦截未来 MCP/tool/action call，生成 approval request 或 action proposal | 不在没有真实 tool/MCP 宿主前提前实现 |
-
-当前生命周期增量不是重新做一个 SOC agent runtime，而是在 `SocLeadAgentChatService` 前面补一个受控桥接层：
+ReviewQueue 是当前人工复核入口；SOC Lead Agent 只能拿 bounded context，不能直接读 repository、改 verdict 或执行处置。
 
 ```mermaid
 flowchart TD
-    QueueId["ReviewQueue queue_id"] --> ReviewService["SocReviewService.get_context"]
-    ReviewService --> Snapshot["Bounded review context snapshot\nredacted fields + hashes + skill_context"]
-    Snapshot --> Artifact["SocLeadAgentReviewContextArtifact\ncontext_hash + skill_context_hash"]
-    Artifact --> LeadEntry["SocLeadAgentChatService\nagent_name=soc-triage"]
+    QueueId["ReviewQueue queue_id"] --> ReviewService["SocReviewService.get_investigation_context"]
+    ReviewService --> Context["InvestigationContext\nrun + summary + audit + similar_alerts + action_evidence"]
+    Context --> Bridge["SocLeadAgentReviewContextArtifact\nredacted + bounded + hashed"]
+    Bridge --> LeadEntry["SocLeadAgentChatService\nagent_name=soc-triage"]
     LeadEntry --> DeerFlowLead["DeerFlow lead_agent stream"]
 
-    DeerFlowLead --> Proposal["explicit soc_action_proposal marker"]
+    DeerFlowLead --> Proposal["explicit <soc_action_proposal> JSON"]
     Proposal --> Boundary["SocLeadAgentActionProposalBoundary"]
     Boundary --> Policy["SocAgentActionPolicy"]
-    Policy --> ReadOnly["read-only router/dispatcher/registry\nwhen asset.lookup allowlisted"]
-    ReadOnly -.-> ActionResult["soc.action_result"]
-    Policy --> Approval["SocAgentApprovalService.submit_request\nwhen high risk"]
-    Approval -.-> Inbox["Approval inbox"]
+
+    Policy -->|read_only| ReadOnly["router + dispatcher + adapter registry"]
+    ReadOnly --> ActionResult["soc.action_result"]
+    ActionResult --> Evidence["soc_investigation_evidence"]
+
+    Policy -->|high_risk| Approval["SocAgentApprovalService.submit_request"]
+    Approval --> Inbox["soc_approval_requests"]
 ```
 
-桥接层记录 context hash、queue_id、run_id、skill context hash、surface、actor 信息，保证 Lead Agent 的上下文可复现、可审计、可裁剪。Action proposal boundary 记录 `source_proposal_id`、`action_payload`、`context_refs`；Web/TUI approval inbox 已展示这些字段，审批人可以在生成 grant 前检查候选动作参数和上下文来源。Read-only proposal bridge 当前只允许显式 `asset.lookup`，并且必须由注入的 router/dispatcher/registry 打开；普通自然语言不会触发查询。
+当前 read-only action 能力：
 
-## 分析后的数据写入
-
-```mermaid
-flowchart LR
-    Run["AnalysisRun"] --> Runs["soc_analysis_runs\n完整 run_payload + 索引列"]
-    Run --> SummaryBuilder["_alert_summary_from_run"]
-    SummaryBuilder --> Summary["soc_alert_summaries\n可查询摘要"]
-    Summary --> ReviewReason{"是否需要人工复核?"}
-    ReviewReason -->|yes| Review["soc_review_queue\nopen item"]
-    ReviewReason -->|no| NoReview["不创建/更新 review item"]
-    Run --> Audit["soc_decision_audit_log\naction=analysis/replay"]
-```
-
-### ReviewQueue 入队条件
-
-`_upsert_review_queue_item()` 只在 `_review_reason(summary)` 返回原因时写入/更新 open item。
-
-| 条件 | `reason` |
-|---|---|
-| `summary.needs_review == true` | `summary.needs_review` |
-| `summary.confidence < 0.75` | `low_confidence` |
-| `summary.verdict in unknown / needs_review / suspicious` | `uncertain_verdict` |
-| `severity in critical/high/高危/严重` | `high_severity` |
-
-优先级规则：
-
-| 条件 | `priority` |
-|---|---|
-| 高危/严重，或 verdict 为 true_positive / suspicious | `high` |
-| confidence < 0.6 | `high` |
-| needs_review | `medium` |
-| 其他入队项 | `low` |
-
-## 状态模型
-
-```mermaid
-stateDiagram-v2
-    [*] --> AnalysisRunning: create AnalysisRun
-    AnalysisRunning --> AnalysisSuccess: decision.needs_review=false
-    AnalysisRunning --> AnalysisNeedsReview: decision.needs_review=true
-    AnalysisRunning --> AnalysisFailed: runtime exception
-
-    [*] --> ReviewOpen: review reason exists
-    ReviewOpen --> ReviewClosed: close_queue_item
-    ReviewOpen --> ReviewClosed: correct closes open item
-
-    [*] --> ApprovalPending: submit approval request
-    ApprovalPending --> GrantApproved: approve request
-    GrantApproved --> GrantConsumed: execute approved action
-```
-
-| 对象 | 当前状态字段 | 当前状态流转 |
+| Action | 当前实现 | 用途 |
 |---|---|---|
-| `AnalysisRun` | `status` | `running -> success / needs_review / failed` |
-| `ReviewQueueItem` | `status` | `open -> closed` |
-| `SocAgentApprovalRequest` | `status` | 当前只有 `pending` |
-| `SocAgentApprovalGrant` | `status` | `approved -> consumed` |
-| `CorrectionRecord` | `candidate_knowledge_status` | 当前写入 `pending_review`，不会自动成为 confirmed memory |
+| `asset.lookup` | in-memory / MCP-backed config | 查静态资产记录，验证资产查询 contract |
+| `asset.locate` | local stdio MCP mock | 模拟 Zeus/CMDB/asset_to_bu 归属定位 |
+| `endpoint.process_tree.lookup` | in-memory mock | 模拟 EDR 进程树和网络连接调查 |
 
-## 人工复核与纠正
+所有 read-only action result 都只是 investigation evidence：
 
-```mermaid
-flowchart TD
-    List["GET /api/soc/review/items"] --> Context["GET /api/soc/review/items/{queue_id}/context"]
-    Context --> Analyst{"分析师动作"}
+- 可以进入 ReviewQueue context。
+- 可以进入 Lead Agent bounded artifact。
+- 可以展示在 Web/TUI。
+- 不能自动改判。
+- 不能自动关闭 review item。
+- 不能直接写 confirmed memory。
 
-    Analyst -->|关闭| Close["POST /api/soc/review/items/{queue_id}/close"]
-    Close --> CloseUpdate["soc_review_queue.status = closed\nclosed_at / closed_by / close_reason"]
-
-    Analyst -->|纠正 verdict| Correct["POST /api/soc/review/runs/{run_id}/correct"]
-    Correct --> RunUpdate["更新 AnalysisRun.decision\n追加 CorrectionRecord"]
-    Correct --> SummaryUpdate["更新 soc_alert_summaries"]
-    Correct --> ReviewClose["关闭同 run 的 open review item"]
-    Correct --> CorrectionAudit["soc_decision_audit_log\naction=correction"]
-```
-
-纠正时的关键边界：
-
-- 保留原 AI/模型结论在 `CorrectionRecord.previous_verdict`。
-- 新的 operational decision 写回 `AnalysisRun.decision`。
-- `candidate_knowledge_status` 只是 `pending_review`，不会污染长期记忆。
-- 如果同一 run 有 open review item，会自动关闭。
-
-## 审批与高风险动作
+## 6. 审批与高风险动作
 
 当前审批链路已经拆成 request inbox 和 grant token 两层。
 
 ```mermaid
 flowchart TD
-    HighRisk["高风险 action\nAgent chat / daemon boundary / API"] --> Request["SocAgentApprovalRequest\nstatus=pending"]
-    Request --> Inbox["soc_approval_requests\napproval inbox"]
+    HighRisk["高风险 action\nAgent / daemon / API"] --> Request["SocAgentApprovalRequest\nstatus=pending"]
+    Request --> Inbox["soc_approval_requests"]
     Inbox --> Human["Web/TUI/后台人工审批"]
-    Human --> Approve["POST /api/soc/approvals/grants"]
+    Human --> Approve["create approval grant"]
     Approve --> Grant["SocAgentApprovalGrant\nstatus=approved\nexecution_token_id"]
 
-    Grant --> DryRun["POST /api/soc/approvals/actions/dry-run"]
-    DryRun --> DryResult["校验 token/route/action/expiry\n不修改 grant\n不执行外部副作用"]
+    Grant --> DryRun["dry-run"]
+    DryRun --> DryResult["校验 token/route/action/expiry\n不消费 token\n不执行外部副作用"]
 
-    Grant --> Execute["POST /api/soc/approvals/actions/execute"]
+    Grant --> Execute["execute boundary"]
     Execute --> Consume["grant.status=consumed\nconsumed_at / consumed_by\nexecution_result_payload"]
     Consume --> NoSideEffect["当前 external_side_effect=not_executed"]
 ```
 
-### ApprovalRequest 数据变化
+当前 execute 只消费 token 并记录 execution boundary，不会封禁 IP、隔离终端、下发 F5 策略或调用生产 MCP。真实外部副作用必须等 adapter-level audit、补偿、失败重试和真实 staging 验证后打开。
 
-| 操作 | 数据变化 |
-|---|---|
-| `submit_request()` / `POST /api/soc/approvals/requests` | 写入 `soc_approval_requests`，完整 `request_payload` + route/action/risk/status/requested_by/created_at 索引列 |
-| `SocAgentChatService.stream()` | 如果注入 `SocAgentApprovalService`，高风险 approval request 先写入 inbox，再发出同一个 `soc.approval_request` stream event |
-| `SocDaemonService.submit_approval_request()` | daemon 侧统一写入边界，内部只调用 `SocAgentApprovalService.submit_request()` |
-| `list_requests()` / `GET /api/soc/approvals/requests` | 读取 pending request inbox |
-| `get_request()` / `GET /api/soc/approvals/requests/{id}` | 读取单个 pending request |
+## 7. To-Be：完整 SOC Agent 可见链路
 
-注意：`SocAgentApprovalRequest` 只是审批请求，不是执行授权。
-
-### ApprovalGrant 数据变化
-
-| 操作 | 校验 | 数据变化 |
-|---|---|---|
-| `approve()` | request 必须 pending；reason 非空；expiry > 0；actor 具备 `soc_approver` 或 `soc_admin` | 写入 `soc_approval_grants`，状态 `approved`；如果有 request repository，也会保存 request |
-| `dry_run_approved_action()` | token 存在；grant 未过期；route/action 匹配；`dry_run=true` | 不消费 token，不修改 grant，不调用外部工具 |
-| `execute_approved_action()` | token 存在；grant 未过期；route/action 匹配；`dry_run=false`；必须有 `idempotency_key` | `approved -> consumed`，写入 `consumed_at`、`consumed_by`、`consume_idempotency_key`、`execution_result_id`、`execution_result_payload` |
-| 重放 execute | 相同 `idempotency_key` | 返回原 `execution_result_payload` |
-| 重放 execute | 不同 `idempotency_key` | 拒绝，避免重复执行 |
-
-当前 execute 只消费 token 和记录 execution boundary，不会封禁 IP、隔离终端、下发 F5 策略或调用 MCP。
-
-## Replay 流转
+目标是让分析师能看到一个预警被 Main SOC Agent 调度多个 domain sub-agent 研判，并形成统一报告：
 
 ```mermaid
 flowchart TD
-    Replay["SocAnalysisService.replay(run_id)"] --> Load["读取旧 AnalysisRun"]
-    Load --> Check["要求旧 run.input_payload 存在"]
-    Check --> AnalyzeAgain["用旧 input_payload 重新 analyze"]
-    AnalyzeAgain --> NewRun["生成新 run_id\nreplay_of_run_id=旧 run_id"]
-    NewRun --> Save["保存 run/summary/review/audit"]
-    Save --> Audit["audit action=replay"]
+    Alert["AlertInput / ReviewQueue Context"] --> Main["Main SOC Agent Orchestrator"]
+
+    Main --> Corr["SocCorrelationService\nsimilar alerts + reusable evidence"]
+    Main --> Router["Domain Router\nsource_type / detection / entities / skills"]
+
+    Router --> APT["APT Triage Agent\nnetwork direction + IOC + attack chain"]
+    Router --> EDR["EDR Triage Agent\nendpoint process tree + account + lateral movement"]
+    Router --> HIDS["HIDS Triage Agent\nhost/file/process/login behavior"]
+    Router --> F5["F5/WAF Triage Agent\nHTTP direction + URI + source/target + suppress target"]
+
+    Corr --> APT
+    Corr --> EDR
+    Corr --> HIDS
+    Corr --> F5
+
+    APT --> Merge["Unified Investigation Report"]
+    EDR --> Merge
+    HIDS --> Merge
+    F5 --> Merge
+
+    Merge --> Decision["Runtime Decision\nverdict/confidence/needs_review"]
+    Merge --> Evidence["Investigation Evidence Timeline"]
+    Merge --> Review["ReviewQueue / Web / TUI / Lead Agent"]
 ```
 
-Replay 不覆盖旧 run；它创建一个新 run，并通过 `replay_of_run_id` 关联旧 run。
+这里的 sub-agent 可以先不是独立进程，也不一定马上是完整 DeerFlow custom agent。MVP 更合理的实现方式是：
 
-## 当前已实现 API Surface
+- 先定义统一 `DomainTriageRequest` / `DomainTriageResult` contract。
+- 每个 domain handler 可以是 deterministic + skill/prompt context 的受控节点。
+- 后续再把稳定的 domain handler 升级为 DeerFlow-derived domain agent/profile。
+- Main Agent 负责路由、并发策略、证据合并、冲突标记和审计，不让子 agent 直接写 DB 或执行工具。
 
-| Surface | 路径/命令 | 当前作用 |
-|---|---|---|
-| CLI | `soc analyze --persist` | 运行分析并写入 run/summary/review/audit |
-| CLI | `soc show` / `soc replay` / `soc correct` | 查看、重放、人工纠正 |
-| CLI | `soc agent profile` / `soc agent resolve-skills` / `soc agent install-profile` | 生成/解析/安装 DeerFlow `soc-triage` custom-agent profile；默认只读或 dry-run |
-| CLI/TUI | `soc review tui` | ReviewQueue thin client；approval inbox pending request 列表、详情、approve token 生成、dry-run、execute boundary |
-| CLI/TUI | `soc chat tui` | 默认 deterministic SOC chat shell；`--lead-agent` 时通过 DeerFlow `lead_agent` 进入 `soc-triage` |
-| CLI | `soc daemon process` | 本地处理一条 decoded daemon message JSON；支持 `kind=alert` 和 `kind=approval_request` |
-| CLI | `soc daemon consume` / `soc daemon run` / `soc daemon status` | opt-in Kafka broker 消费、长期运行、readiness/status；支持 dead-letter、manual commit、metric JSONL |
-| Web | `/workspace/soc/review` | ReviewQueue 页面；审批动作区可从 approval inbox 选择 pending request 后 approve / dry-run / execute，仍保留手工 JSON fallback |
-| Gateway | `/api/soc/review/*` | review list/context/close/correct |
-| Gateway | `/api/soc/approvals/requests*` | approval inbox create/list/get |
-| Gateway | `/api/soc/approvals/grants` | approval request -> execution token |
-| Gateway | `/api/soc/approvals/actions/dry-run` | token 校验，不执行副作用 |
-| Gateway | `/api/soc/approvals/actions/execute` | 消费 token，记录 execution boundary |
-| Core service | `SocAgentChatService.stream(..., approval_service=...)` | TUI/Agent chat shell 高风险 request 写入 approval inbox 并发出 stream event；不是最终 Lead Agent middleware |
-| Core service | `SocLeadAgentChatService.stream(...)` | 复用 DeerFlow embedded client/gateway runtime，以 `agent_name=soc-triage` 转发 stream；可接收 bounded review context；不是 action executor |
-| Core service | `SocSkillResolver` / `build_soc_skill_context()` | 为 analysis/chat 生成 compact selected skill context，不直接加载完整 skill 文本 |
-| Core service | `SocDaemonService.submit_approval_request()` | Kafka daemon 后续复用的 approval inbox 写入边界 |
+## 8. 下一阶段实现路线
 
-## 尚未接入的后续点
+### Slice 0：PingAn SOC Capability Onboarding
 
-这些是规划点，当前流程图里只作为未来入口或 adapter：
+目的：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验结构化嵌入项目，让后续 Correlation、Domain Sub-Agent 和 Demo/Eval 不再是空框架。
 
-- SOC Lead Agent approval middleware：拦截高风险 tool/action call；当前 chat shell 已能在注入 approval service 时写入 approval inbox，但真实 DeerFlow-derived middleware 必须等 SOC Lead Agent / MCP tool chain 落地后再接入。
-- MCP / real adapter bridge：规划见 `.notes/ai_soc/mcp-adapter-bridge-plan.md`。真实资产系统、EDR 进程树、`response.block_ip`、`edr.isolate_host`、F5 策略、Kafka 处置事件等外部能力都必须注册到 adapter boundary 后面；write/destructive 动作仍必须走 approval。
-- 真实外部副作用的补偿、失败重试、审批后超时、adapter-level audit。
-- Kafka bounded worker pool：当前 broker runner 仍是串行处理；并发 worker pool 要等真实吞吐、DB/K8s 参数和 LLM 限流策略明确后再接。
-- Prometheus `/metrics` exporter 和运营态势看板：需求已记录为后续优化项，当前优先保证 SOC agent 主链路走通。
+范围：
+
+- 新增并维护 `.notes/ai_soc/pingan-soc-capability-onboarding.md`。
+- 每个经验点先整理成 capability card，再分类到 skill、MCP/action adapter、normalizer、domain handler、eval case 或 memory candidate。
+- 优先收集 3-5 张 P0 card：APT 方向判断、EDR 进程树、资产归属、F5 抑制目标、HIDS 主机事件。
+- 不把生产账号、token、内部系统地址或敏感数据写入仓库；真实 endpoint/凭证只通过本地配置或 secret 注入。
+
+验收：
+
+- 每个即将实现的平安 SOC 经验都有 capability card。
+- 能明确它落到 skill、adapter、domain handler、eval case 还是 memory candidate。
+- 每个能力都有至少一个脱敏样例或 fake fixture。
+- read-only / high-risk / memory candidate 的安全边界明确。
+
+### Slice 1：Correlation Service MVP
+
+目的：让 SOC Agent 先具备“看历史、找相似、复用证据”的能力。
+
+范围：
+
+- 新增 `SocCorrelationService`。
+- 新增 `CorrelationQuery`、`CorrelationMatch`、`CorrelationResult`。
+- 基于 `soc_alert_summaries` 查询相似告警。
+- 合并 `InvestigationEvidence` 中同 run / alert / entity 相关的只读证据。
+- 接入 `SocReviewService.get_investigation_context()`，保留旧 `similar_alerts` 兼容展示，但新增更结构化的 `correlation_result`。
+- 加 CLI 验证入口，例如 `soc correlate RUN_ID --pretty`。
+
+验收：
+
+- 不调用 LLM。
+- 不依赖真实 MCP。
+- 不改 DeerFlow core。
+- 对同一批 demo alert 能看到相似告警、匹配原因和可复用 evidence。
+
+### Slice 2：Memory Tracking Contract
+
+目的：固定 typed memory record + facets + retrieval policy，让 TUI、Kafka daemon、ReviewQueue、Lead Agent 和 domain triage 的重要结论后续能转成候选记忆。
+
+范围：
+
+- 新增并维护 `.notes/ai_soc/soc-memory-tracking-plan.md`。
+- 固定 DB-first memory contract：PostgreSQL 是 source of truth，wiki/OKF 只是后期展示、审阅和迁移 projection。
+- 固定 typed record：`memory_type`、`status`、`content`、`facets`、`evidence_refs`、`version/hash`。
+- 固定 facets：topics、canonical detection key、vendor aliases、scenario、entities、environment；缺失任意 facet 时系统仍要能工作。
+- 明确具体 IP、UM、host、URL、hash 默认只作为 evidence / query dimension，不直接成为长期 memory 主粒度。
+- 规划 `SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryFact`、`SocMemoryEvidenceRef`、`SocMemoryQuery`、`SocMemoryStatus`。
+- 明确 TUI/Web correction、Kafka daemon repeated pattern、Lead Agent summary、DomainTriageResult 和 InvestigationEvidence 如何生成 memory candidate。
+
+验收：
+
+- 不自动写 confirmed memory。
+- `pending_review` 不注入 prompt。
+- 所有 candidate 都有 memory key、来源、evidence refs 和幂等键。
+- 后续代码只能通过 `SocMemoryService` 写 memory，入口层不能直接写 repository。
+
+### Slice 3：Domain Sub-Agent Contract
+
+目的：先固定 EDR/APT/HIDS/F5 子研判单元的输入输出，避免每个 domain 各写一套。
+
+范围：
+
+- 新增 `DomainTriageRequest`。
+- 新增 `DomainTriageResult`。
+- 新增 `DomainTriageFinding`、`DomainTriageEvidenceRef`、`DomainTriageRecommendation`。
+- 结果必须包含 `domain`、`confidence`、`findings`、`evidence_refs`、`recommended_next_actions`、`needs_human_review`。
+
+验收：
+
+- EDR/APT/HIDS/F5 都能用同一 schema。
+- 子研判结果不能直接改 `AnalysisRun.decision`。
+- 子研判结果可被统一 report 合并。
+
+### Slice 4：EDR/APT/HIDS/F5 MVP Handlers
+
+目的：让 demo alert 真正进入不同 domain triage 分支。
+
+范围：
+
+- APT handler：关注攻击方向、IOC、外联/入站/横向、受害资产。
+- EDR handler：关注 endpoint、process tree、账号/UM、可疑进程和网络连接。
+- HIDS handler：关注主机行为、文件/进程/登录/账号事件。
+- F5/WAF handler：关注 HTTP method、URI、source/target、攻击方向和抑制目标。
+
+验收：
+
+- 先 deterministic + selected skill context。
+- 可使用已有 read-only mock evidence。
+- 每个 handler 都输出 `DomainTriageResult`。
+
+### Slice 5：Main SOC Agent Orchestrator MVP
+
+目的：把 correlation、domain routing、domain triage 和 report merge 串起来。
+
+范围：
+
+- 新增 `SocInvestigationService` 或在 `SocAnalysisService` 后增加受控 investigation stage。
+- 输入一个 run/review context。
+- 自动选择 1-N 个 domain handlers。
+- 合并 `CorrelationResult` 和 `DomainTriageResult`。
+- 输出 `UnifiedInvestigationReport`。
+
+验收：
+
+- 单条 APT demo 能触发 APT + asset/location/process evidence。
+- 单条 EDR demo 能触发 EDR + endpoint process-tree evidence。
+- 多 domain 冲突要显式展示，不能静默覆盖。
+
+### Slice 6：Web/TUI 可见化
+
+目的：让你和同事能直观看到“谁参与了研判、用了什么证据、给了什么结论”。
+
+范围：
+
+- ReviewQueue context 页面增加：
+  - correlation panel
+  - domain triage panel
+  - evidence timeline
+  - action proposal panel
+- TUI 增加对应文本视图。
+- Lead Agent bounded context 带入 report summary，不塞完整 raw payload。
+
+验收：
+
+- 打开一个 review item，能看到完整研判链路。
+- 能区分 runtime decision、domain findings、read-only evidence 和人工 correction。
+
+### Slice 7：Demo / Eval Script
+
+目的：形成可重复演示和回归验证。
+
+范围：
+
+- 用 `alert_demo` 或脱敏样本生成一批 demo run。
+- 提供一条命令跑完整链路。
+- 输出 JSON report + Web/TUI 可打开的 review item。
+
+验收：
+
+```text
+soc demo run apt
+soc demo run edr
+soc correlate RUN_ID
+soc review tui
+soc chat tui --lead-agent --queue-id REV-...
+```
+
+能稳定看到同一条预警的 runtime、correlation、domain triage、evidence 和 review 状态。
+
+## 9. 暂缓项
+
+这些需求有价值，但不是看到完整 SOC Agent Alpha 的前置条件：
+
+- 真实 dev/staging CMDB/EDR MCP replacement：等待 endpoint/凭证。
+- 真实 high-risk execute：等待 staging adapter、补偿、失败审计和审批策略成熟。
+- Kafka bounded worker pool：等待真实吞吐、DB/K8s 参数和 LLM 限流策略。
+- Prometheus `/metrics` exporter 和运行态势看板：已记录在 `.notes/ai_soc/operations-overview-deferred.md`。
+- 外部 Knowledge RAG / 威胁情报大屏：Phase 5。
+
+## 10. 当前可见 Alpha 目标
+
+Alpha 的定义不是“完全自动化 SOC”，而是：
+
+```text
+给一条 APT/EDR/HIDS/F5 预警
+  -> 系统能稳定跑完整 runtime
+  -> 找出历史相似告警
+  -> 选择对应 domain triage handler
+  -> 生成 domain findings
+  -> 复用 read-only evidence
+  -> 产出统一 Investigation Report
+  -> 在 Web/TUI/Lead Agent context 里可审阅
+  -> 所有状态、证据、审批边界可追踪
+```
+
+这条路线优先保证“看得见、查得清、改得了、可回放”，再考虑自动关闭、自动处置和大规模并发。

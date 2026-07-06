@@ -202,6 +202,39 @@ Alert summary 约束：
 - replay 必须生成新的 summary，记录 `replay_of_run_id`，不能覆盖原 run summary。
 - 方案文档中泛称的 `alert_summaries` 在当前实现里使用 SOC 前缀表名 `soc_alert_summaries`。
 
+Correlation service 约束：
+
+- `SocCorrelationService` 是 Phase 2 相似告警、历史关联和可复用证据的只读业务入口；CLI/API/TUI/Web/Lead Agent 都不能绕过 service 直接拼 correlation result。
+- `CorrelationQuery` / `CorrelationResult` / `CorrelationMatch` 是 domain sub-agent 和 unified investigation report 的稳定输入；不得让每个 EDR/APT/HIDS/F5 handler 自己发明相似告警结构。
+- MVP correlation 只能依赖 `AlertSummaryRepository` 和 `InvestigationEvidenceRepository`，不调用 LLM、不调用 MCP、不执行 action、不修改 run/summary/review/memory。
+- correlation match 必须携带结构化 `match_reasons`，例如 `same_detection_key`、`same_rule_code`、`shared_ip`、`shared_user`、`same_asset`、`same_source_type`、`reusable_evidence`；不能只给自然语言解释。
+- correlation 结果可以进入 `InvestigationContext`、Lead Agent bounded artifact、Web/TUI 展示和后续 domain triage request，但不能自动改 `AnalysisRun.decision`、不能自动关闭 review queue、不能直接生成 confirmed memory。
+- 后续若引入 LLM rerank，只能作为 bounded rerank node 消费候选 `CorrelationMatch`，输出仍必须经过 schema/domain validation；LLM 不得直接发起 DB 查询或扩大检索范围。
+
+PingAn SOC capability onboarding 约束：
+
+- 平安 SOC 工具、MCP、skill、研判经验和处置经验进入项目之前，必须先整理成 capability card；来源、适用场景、输入字段、输出结构、风险等级、失败模式和脱敏验收样例必须明确。
+- capability card 只能分类落到以下稳定 artifact：domain skill、normalizer/field trust rule、read-only action adapter、high-risk action adapter、domain handler、eval fixture、memory candidate。不得直接把一段经验文本粘进生产 prompt 后生效。
+- 内部系统 endpoint、账号、token、cookie、真实敏感样本不得写入仓库；真实连接只能通过本地 config、environment secret 或部署 secret 注入。
+- read-only 工具经验必须通过 `SocActionAdapterRegistry` / MCP-backed adapter 落地，结果写 `InvestigationEvidence`；不能让 Lead Agent 直接用自然语言调用内部系统。
+- 处置类经验必须走 approval request / approval grant / dry-run / execute boundary；未经过 staging smoke 和 adapter-level audit 前，生产 execute 只能保持 no external side effect。
+- 经验记忆必须先进入 `pending_review` 或 eval fixture；只有人工确认、版本化和可回滚后才允许作为 confirmed memory 或 active lesson 影响后续判断。
+
+SOC memory tracking 约束：
+
+- 业务记忆必须实现为 typed memory record + facets + retrieval policy，不得实现为 `topic/rule_code/scenario` 等字段的联合等值主键。
+- `rule_code` 只是 vendor alias 的一种；平安 `rule_code`、EDR `signature_id`、SIEM `analytic_id`、Sigma id、Splunk analytic id 等都只能进入 `facets.detection.vendor_aliases`，不能成为跨公司必填字段。
+- `facets.detection.canonical_key` 是推荐的跨供应商检测标识；缺失时必须能通过 `source_type/product/category/rule_name/MITRE/raw fingerprint` 生成弱 key，或退化到 topic/scenario 检索。
+- topic、canonical detection、vendor aliases、scenario、entity、environment 都是可选检索 facets；缺失任意一个 facet 时系统仍必须能工作，只是召回分数降低。
+- 具体 IP、UM、host、URL、file hash、process hash 等实体默认只能作为 evidence refs、query dimensions 或 case memory，不得默认成为长期全局 memory 主键。
+- TUI/Web/Kafka/Lead Agent/domain handler 只能生成 `SocMemoryCandidate`；不得直接写 `confirmed` fact 或 active lesson。
+- 所有 memory candidate 必须包含 source surface、source run/review/evidence refs、idempotency key、status、confidence、proposed content、facets、evidence refs 和 reviewer/audit fields。
+- Kafka daemon 生成 memory candidate 时，幂等键必须包含 `topic/partition/offset` 或 run id；重复消费不能增加重复 fact 或污染 evidence count。
+- `pending_review` 和 `confirmed_candidate` 默认不进入全局 prompt 注入；只有 `confirmed` 且未过期的 memory fact 可以进入 PromptBuilder / Lead Agent bounded context。
+- Memory 检索必须返回 match reason、score、fact id、version/hash 和 token budget，支持 replay diff 和回滚。
+- `SocMemoryService` 是 memory 写入、确认、驳回、过期、检索和注入前筛选的唯一 service 边界；CLI/TUI/API/Web/daemon/Lead Agent 不能直接写 memory repository。
+- PostgreSQL memory store 是唯一 source of truth；wiki/OKF 只能作为 DB 导出的 read model / review projection / portable export。wiki 反向修改必须生成 change proposal，经 review 后通过 `SocMemoryService` 写回新版本，不能直接覆盖 DB。
+
 Review queue 约束：
 
 - `ReviewQueueItem` 是人工复核队列读模型，由 `AlertSummary` 派生，不替代完整 `AnalysisRun`。

@@ -21,6 +21,23 @@
 4. LLM 不掌握主控制流；runtime 固定流程，LLM 只在受控节点内做结构化建议。
 5. 记忆和知识写入必须可审计、可回滚、可人工确认，不能让 LLM 自发现结果直接变成事实。
 
+截至 2026-07-05，Phase 1 的 Runtime、ReviewQueue、Lead Agent entry、approval boundary、read-only action evidence、Kafka daemon 基线和本地 MCP mock/smoke 已基本收口；真实 dev/staging CMDB/EDR MCP 替换等待 endpoint/凭证。当前主线前移到 **Phase 2 最小 correlation + domain triage 可见链路**：
+
+```text
+PingAn SOC Capability Onboarding
+  -> SocCorrelationService
+  -> Memory Tracking Contract
+  -> Domain Sub-Agent Contract
+  -> EDR/APT/HIDS/F5 MVP handlers
+  -> Main SOC Agent Orchestrator
+  -> Unified Investigation Report
+  -> Web/TUI/Lead Agent 可审阅展示
+```
+
+`PingAn SOC Capability Onboarding` 是业务经验注入层：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验先整理成 capability card，再分类落到 skill、MCP/action adapter、normalizer、domain handler、eval case 或 memory candidate。它不直接把经验塞进 prompt，也不把生产 secret 写入仓库；详见 `.notes/ai_soc/pingan-soc-capability-onboarding.md`。
+
+下一刀工程实现仍先做 `SocCorrelationService`，基于 `soc_alert_summaries` 和 `soc_investigation_evidence` 输出结构化相似告警、匹配原因和可复用证据；不调用 LLM、不依赖真实 MCP、不修改 DeerFlow core。同时并行收集第一批 PingAn P0 capability card，用来校验后续 memory tracking、domain sub-agent contract 和 demo/eval。
+
 文档关系：本文件决定“做什么和先后顺序”；`.notes/reference-index/soc-agent-engineering-contracts.md` 决定“代码接口、协议、边界和测试怎么约束”。如果两者措辞冲突，以本文件为方向源头，并同步修正工程契约。
 
 ### 1.0 产品目标与目标用户
@@ -1313,10 +1330,31 @@ CREATE INDEX idx_fact_evidence_alert ON fact_evidence(alert_id);
 | `pending_review` | 待确认 | **否**（避免误导 LLM） | LLM 自发现 |
 | `rejected` | 已驳回 | **否** | 分析师驳回 |
 
-**粒度控制**：memory 只存模式级知识，不存具体 IP/用户。
-- ✅ "SecurityScan 是公司漏扫工具"（适用所有机器）
-- ✅ "财务网段月末对账有异常流量"（适用整个网段）
-- ❌ "张三的 PC 有 USB 许可"（太具体，放 alert_summaries 关联查询即可）
+**粒度控制**：memory 只存模式级知识，不默认存具体 IP/用户。后续按 `.notes/ai_soc/soc-memory-tracking-plan.md` 固定为 **typed memory record + facets + retrieval policy**，而不是四维联合主键：
+
+```text
+SocMemoryRecord
+  -> memory_type / status / content
+  -> facets: topics, canonical detection, vendor aliases, scenario, entities, environment
+  -> evidence_refs
+  -> retrieval policy
+```
+
+- `memory_type` 区分 `procedure`、`detection_lesson`、`environment_fact`、`negative_memory`、`case_memory`。
+- `topics` 表示研判主题，例如 `apt_direction_reconstruction`、`edr_process_tree_triage`、`f5_suppression_target`。
+- `detection.canonical_key` 是跨公司更通用的检测标识；缺失时可用 source_type、category、rule_name、MITRE、raw fingerprint 生成弱 key。
+- `detection.vendor_aliases` 存平安 `rule_code`、EDR `signature_id`、SIEM `analytic_id` 等可选强索引；没有这些 alias 时系统仍必须 work。
+- `scenario` 用 source_type、product、category、entity roles、asset context、attack direction、finding type 等稳定 facets 表达场景；hash 只用于去重，不用于硬匹配。
+- 具体 IP、UM、host、URL、process hash 等实体默认作为 evidence / query dimension；只有稳定环境事实才允许进入 `environment_fact`，并且必须带有效期。
+- PostgreSQL 是 memory 的唯一 source of truth；wiki/OKF 只作为后期 DB -> markdown 的展示、审阅和迁移 projection。
+
+示例：
+
+- ✅ "SecurityScan 是公司漏扫工具"（`environment_facts`，适用所有机器或明确资产范围）
+- ✅ "财务网段月末对账有异常流量"（`environment_facts`，适用整个网段，带有效期）
+- ✅ "APT 方向判断优先 raw message + 五元组，天眼加工攻击/受害字段只能作为低可信候选"（`detection_facts`，topic=`apt_direction_reconstruction`）
+- ✅ "EDR PowerShell 可疑进程若父进程为 Office 且外联公网，需要优先查 process tree 和登录账号"（`detection_facts`，topic=`edr_process_tree_triage`）
+- ❌ "张三的 PC 有 USB 许可"（太具体，放 case/evidence 或资产系统查询，不作为长期全局 memory）
 
 **注入方式**：⑤ LLM 综合分析时，只注入 `status=confirmed` 且未过期的 facts，按实体相关性、confidence、时间新鲜度排序。
 
@@ -1742,6 +1780,39 @@ SOC 业务记忆会直接影响后续判断，因此知识写入必须比普通�
 - 同一 content + entities 的 LLM 自发现如果已被驳回，短期内不再重复提示。
 - 如果新 evidence 明显不同，可以重新进入 `pending_review`，但必须展示“曾被驳回”的历史。
 - rejected fact 不删除，保留为负样本和审计证据。
+
+### 4.7 TUI / Kafka 工作流结论如何进入记忆
+
+SOC TUI、ReviewQueue Web、Kafka daemon、Lead Agent 和 domain triage 后续都会产出“重要结论”，但这些结论不能直接升级为长期记忆。统一策略：
+
+```text
+workflow conclusion
+  -> SocMemoryCandidate
+  -> pending_review / confirmed_candidate
+  -> analyst review / repeated evidence / eval
+  -> confirmed
+  -> retrieval + bounded injection
+```
+
+来源规则：
+
+| 来源 | 生成对象 | 默认状态 | 说明 |
+|---|---|---|---|
+| `soc correct` / ReviewQueue correction | correction fact / lesson candidate | `pending_review` 或 `confirmed_candidate` | 分析师明确确认时可信度较高，但仍要带 evidence |
+| `soc review tui` 关闭/备注 | analyst observation candidate | `pending_review` | close 不等于改判，不能自动生成 confirmed lesson |
+| Kafka daemon 批量处理 | repeated pattern candidate | `pending_review` | 幂等键必须包含 `topic/partition/offset` 或 run id，防止重放污染 |
+| SOC Lead Agent 总结 | memory candidate | `pending_review` | LLM 只能提出候选，不确认事实 |
+| DomainTriageResult | topic/scenario candidate | `pending_review` | APT/EDR/HIDS/F5 finding 稳定后再接入 |
+| InvestigationEvidence | evidence ref | 不直接是 memory | 作为候选记忆的证据链 |
+
+推荐实现顺序：
+
+1. 在 Correlation Service MVP 后做 **Memory Tracking Contract**：`SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryFact`、`SocMemoryEvidenceRef`、`SocMemoryQuery`、`SocMemoryStatus`。
+2. 新增 `SocMemoryService.propose_candidate()`，入口层只能调用 service，不能直接写 repository。
+3. TUI/Web correction 先接 candidate 写入，作为人工工作流最可信来源。
+4. Kafka daemon 只生成 repeated pattern candidate，默认 `pending_review`。
+5. PromptBuilder / Lead Agent bounded context 只注入 `confirmed` 且未过期的 facts，并记录 memory fact id、version/hash 和命中原因。
+6. Wiki/OKF export 等 DB memory store、retrieval 和 review workflow 稳定后再做；自动方向只能是 DB -> wiki/OKF，反向修改必须生成 proposal 后经 `SocMemoryService` 写回。
 
 ---
 
