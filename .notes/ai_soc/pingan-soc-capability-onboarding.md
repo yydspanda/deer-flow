@@ -1,10 +1,10 @@
 # PingAn SOC Capability Onboarding
 
-> Updated: 2026-07-05
+> Updated: 2026-07-07
 >
 > 目的：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验，持续、可审计地嵌入 DeerFlow SOC Agent，而不是零散写进 prompt。
 >
-> 本文档是“经验输入 -> 产品能力 -> 工程落地”的工作台账模板。它不要求一次性收集完整信息；每次只要拿到一个可验证能力，就转成一个小切片实现和评测。
+> 本文档是“经验输入 -> 产品能力 -> 工程落地”的工作台账模板。它不要求一次性收集完整信息；每次只要拿到一个可验证能力，就转成一个小切片实现和评测。平安 APT/EDR/HIDS 历史 prompt/经验文档的拆解规则见 `pingan-knowledge-decomposition-plan.md`。
 
 ## 1. 定位
 
@@ -20,7 +20,7 @@
 ```text
 field experience
   -> capability card
-  -> classification: skill / MCP adapter / normalizer / domain handler / eval case / memory candidate
+  -> classification: skill / tenant memory / MCP adapter / normalizer / policy config / domain handler / eval case
   -> implementation slice
   -> smoke/eval/replay
   -> staging/active governance
@@ -30,13 +30,26 @@ field experience
 
 | 经验类型 | 应落到哪里 | 例子 | 生产边界 |
 |---|---|---|---|
-| 研判原则 / SOP | `skills/public/soc-*` 或 domain skill | “天眼 APT 方向字段不可信，优先 raw message 和五元组重建方向” | skill 只提供指导，不直接改判 |
+| 通用研判原则 / SOP | `skills/public/soc-*` 或 domain skill | “进程树研判要看父子进程、命令行、用户权限和路径可信度” | skill 只提供指导，不直接改判 |
+| 平安环境知识 / 误报模式 | tenant-scoped memory | “某内部安全组运行某工具常见为授权行为” | 必须 pending review 起步，带来源和有效期 |
 | 字段可信度 / 归一化规则 | `normalizers/` + `FactReconstructionResult` | “message 优先；缺失时 fallback 到 zeusRawLogs 全字段，但标记低可信” | 必须在 trace 中体现降级和冲突 |
 | 只读查询工具 | `SocActionAdapter` / MCP-backed adapter | 资产归属、EDR 进程树、F5 访问日志、HIDS 主机事件 | read-only，结果写 `InvestigationEvidence` |
 | 高风险处置工具 | approval + adapter execute | 封禁 IP、隔离终端、下发 F5 策略、关闭生产工单 | 必须人工审批、dry-run、idempotency、audit |
+| 阈值 / 状态映射 / 模板映射 | policy/config | 忽略次数阈值、外部状态映射、处置模板选择 | 必须版本化；生产启用需要评测和审批 |
 | 领域子研判能力 | domain handler / later domain agent | APT、EDR、HIDS、F5/WAF 各自的 finding schema | 子研判不能直接写 DB 或执行工具 |
 | 经验记忆 / lesson | `soc_facts` / `lessons_learned` candidate | 某类规则在特定资产段总是误报 | 默认 `pending_review`，人工确认后才可注入 |
 | 回归样本 | `samples` / eval fixtures | 脱敏真实 APT/EDR/HIDS/F5 告警 | 不提交敏感字段；必要时只提交 schema skeleton |
+
+### 2.1 Skill 与 Memory 的分界
+
+只有换一家公司仍成立的研判方法可以进通用 skill。以下内容不能进入 `skills/public/soc-*`：
+
+- 平安内部域名、内部安全工具、部门、团队、账号、BU/PA code。
+- 天眼/Zeus/EDR/HIDS 的原始字段名和字段别名。
+- 具体 `rule_code` 分流、模板 ID、策略 ID、operateType。
+- “某组/某路径/某账号通常可忽略”这类环境事实或误报模式。
+
+这些内容应进入 tenant-scoped memory、adapter mapping、policy/config 或 eval fixture。通用 skill 只描述怎么判断，不保存平安环境事实。
 
 ## 3. Capability Card 模板
 
@@ -69,7 +82,7 @@ field experience
 
 ### 4. 能力类型
 
-- skill / MCP adapter / normalizer / domain handler / memory candidate / eval case：
+- skill / tenant memory / MCP adapter / normalizer / policy config / domain handler / eval case：
 - read-only / analyst-write / high-risk：
 - 是否需要人工审批：
 

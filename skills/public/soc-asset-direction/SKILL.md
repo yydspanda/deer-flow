@@ -19,6 +19,12 @@ Use this skill when asset ownership, attacker/victim role, traffic direction, or
 - Do not assume `src` means attacker or `dst` means victim. Validate by source type, event meaning, network direction, and business asset ownership.
 - If raw message is missing and only processed fields remain, lower confidence and ask for review.
 
+## Knowledge Boundary
+
+- Keep role-assignment principles generic. Do not embed customer-specific source/destination field names, internal network ranges, internal business units, or vendor-specific direction rules as universal truth.
+- Customer-specific direction fixes and environment exceptions belong in tenant memory, field-trust policy, or normalizer tests.
+- If a customer adapter provides role candidates, treat them as evidence with confidence, not as final truth.
+
 ## Output
 
 Return a role assignment summary:

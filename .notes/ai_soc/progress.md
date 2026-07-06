@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 工程实现做 Phase 2 最小 Correlation Service；随后补 External Disposition Sync Contract 和 Memory Tracking Contract；并行收集第一批 PingAn P0 capability card，用来驱动 APT/EDR/HIDS/F5 domain triage、外部处置反馈和 typed memory facets |
+| 当前下一刀 | 工程实现做 Phase 2 最小 Correlation Service；随后补 External Disposition Sync Contract 和 Memory Tracking Contract；并行把 PingAn prompt/经验文档拆成 skill / tenant memory / MCP / policy / eval，用来驱动 APT/EDR/HIDS/F5 domain triage、外部处置反馈和 typed memory facets |
 
 ## 当前待办列表
 
@@ -36,7 +36,8 @@
 
 | 顺序 | 待办 | 状态 | 做什么 | 验收标准 |
 |---|---|---|---|---|
-| 0 | PingAn SOC capability cards | In parallel | 收集并整理 APT 方向判断、EDR 进程树、资产归属、F5 抑制目标、HIDS 主机事件等 P0 经验 | 每张 card 明确场景、输入、输出、落点、风险等级、失败模式和脱敏样例 |
+| 0 | PingAn knowledge decomposition | In parallel | 将 `.notes/ai_soc/pingan_docs/` 中 APT/EDR/HIDS 历史 prompt/经验拆成通用 skill、tenant memory、MCP/action、policy/config、eval fixture | 通用 skill 不含平安内部知识；每条平安经验都有 target artifact、tenant scope、来源和验收方式 |
+| 0.1 | PingAn SOC capability cards | In parallel | 收集并整理 APT 方向判断、EDR 进程树、资产归属、F5 抑制目标、HIDS 主机事件等 P0 经验 | 每张 card 明确场景、输入、输出、落点、风险等级、失败模式和脱敏样例 |
 | 1 | Correlation Service MVP | Next | 新增 `SocCorrelationService`、`CorrelationQuery`、`CorrelationResult`、CLI `soc correlate`；基于 summary/evidence 输出相似告警、匹配原因和可复用证据 | 不调用 LLM、不依赖真实 MCP、不改 DeerFlow core；demo alert 可看到结构化 correlation result |
 | 2 | External Disposition Sync Contract | Planned | 新增 vendor-neutral 外部处置反馈协议；Zeus/Webhook/Kafka/Polling adapter 只负责转成 `SocExternalDispositionEvent`，service 负责状态映射、审计、review/correction 同步和候选记忆 | 不在 core service 写死 Zeus；外部 status/reason 可同步，但 free-text reason 只能进 pending memory/skill improvement candidate |
 | 3 | Memory Tracking Contract | Planned | 新增 DB-first typed memory record + facets + retrieval policy；规划 `SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryQuery` 等 schema | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
@@ -153,6 +154,36 @@
 | 97 | Memory Tracking Contract | Planned | 固定 DB-first typed memory record + facets + retrieval policy；TUI/Web/Kafka/Lead Agent/domain/external disposition 结论先生成 `SocMemoryCandidate`，不直接写 confirmed memory；wiki/OKF 后期只做 projection |
 
 ## 进度记录
+
+### 2026-07-07 — PingAn knowledge decomposition boundary
+
+- 背景：
+  - 用户指出 PingAn APT/EDR/HIDS 文档中的很多历史 prompt 实际不是 prompt，而是平安运营经验、环境知识、误报模式、字段映射、工具能力或处置策略。
+  - 用户进一步指出现有 `skills/public/soc-*` 也需要明确边界：哪些是通用研判 skill，哪些是平安知识，哪些进 memory，哪些进 MCP/action。
+- 变更：
+  - 新增 `.notes/ai_soc/pingan-knowledge-decomposition-plan.md`：
+    - 固定 PingAn docs -> skill / tenant memory / adapter / MCP/action / policy/config / eval fixture 的拆解矩阵。
+    - 明确通用 skill 只能保存跨客户研判方法，平安内部域名、账号、部门、路径、规则码、模板 ID、策略 ID、误报模式等进入 tenant-scoped memory/config/adapter/eval。
+    - 规划第一批拆解任务：补 skill boundary、抽 P0 capability cards、设计 knowledge candidates、mock read-only adapters、建 eval fixtures、接 memory candidate。
+  - 给现有六个 SOC skill 增加 `Knowledge Boundary`：
+    - `soc-alert-triage`
+    - `soc-asset-direction`
+    - `soc-asset-extraction`
+    - `soc-endpoint-triage`
+    - `soc-network-apt-triage`
+    - `soc-waf-f5-triage`
+  - 更新 `.notes/ai_soc/soc-memory-tracking-plan.md`：
+    - 新增 `benign_pattern`、`identity_pattern`、`response_policy_hint` memory types。
+    - 增加 PingAn prompt decomposition memory 映射。
+  - 更新 `.notes/reference-index/soc-agent-engineering-contracts.md`：
+    - 明确历史 prompt 原文不得整体复制进 Lead Agent prompt、analysis node prompt 或 public skill。
+    - 平安字段名仅能进入 adapter/normalizer/mapping tests/fixture；core、public skill、Lead Agent prompt 消费 canonical fields。
+- 下一步：
+  - 从 PingAn docs 抽第一批 P0 `PingAnKnowledgeCandidate` / capability cards：APT 方向、EDR 进程树、HIDS 主机事件、资产归属、外部查询、处置动作。
+  - 随后开始 mock `host.event_context.lookup`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup`。
+- 验证：
+  - `rg -n 'paic|平安|Zeus|天眼|RPAADM|strategyId|operateType|pa_code|biz_group|company_code|detail_|str_' skills/public/soc-*` 无命中，确认通用 skill 不含平安/Zeus 专属字段或规则。
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_lead_agent_skills.py tests/test_skills_validation.py tests/test_skills_loader.py`
 
 ### 2026-07-06 — SOC notes active set cleanup
 

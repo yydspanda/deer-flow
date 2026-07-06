@@ -35,7 +35,7 @@ PingAn SOC Capability Onboarding
   -> Web/TUI/Lead Agent 可审阅展示
 ```
 
-`PingAn SOC Capability Onboarding` 是业务经验注入层：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验先整理成 capability card，再分类落到 skill、MCP/action adapter、normalizer、domain handler、eval case 或 memory candidate。它不直接把经验塞进 prompt，也不把生产 secret 写入仓库；详见 `.notes/ai_soc/pingan-soc-capability-onboarding.md`。
+`PingAn SOC Capability Onboarding` 是业务经验注入层：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验先整理成 capability card，再分类落到 skill、MCP/action adapter、normalizer、domain handler、eval case 或 memory candidate。它不直接把经验塞进 prompt，也不把生产 secret 写入仓库；详见 `.notes/ai_soc/pingan-soc-capability-onboarding.md`。平安 APT/EDR/HIDS 文档拆解规则见 `.notes/ai_soc/pingan-knowledge-decomposition-plan.md`：只有跨客户通用研判方法可以进入 `skills/public/soc-*`，平安内部环境知识、误报模式、字段别名、模板/策略 ID、账号/组织/域名例外必须进入 tenant-scoped memory、adapter、policy/config 或 eval。
 
 `External Disposition Sync` 是外部预警/工单/处置系统的人工反馈接入层：Zeus 只是第一个 adapter，未来要能接客户自研 SOC、SIEM/SOAR、ITSM、ServiceNow、Jira 等系统。外部状态/理由通过 vendor-neutral `SocExternalDispositionEvent` 进入 `SocExternalDispositionService`，再同步 audit、review/correction 和 pending memory / skill improvement candidate；不得把外部 free-text reason 直接写成 confirmed memory，也不得让外部系统直接修改 skill 或 prompt。详见 `.notes/ai_soc/external-disposition-sync-plan.md`。
 

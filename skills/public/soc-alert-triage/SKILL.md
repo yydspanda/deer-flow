@@ -21,6 +21,12 @@ Use this skill for the general SOC triage loop.
 - Do not perform or claim response actions. Propose actions and route high-risk actions through approval.
 - Keep conclusions reviewable: verdict, confidence, evidence, uncertainty, recommended next step.
 
+## Knowledge Boundary
+
+- Keep this skill tenant-neutral. It may describe general SOC triage method, but must not embed customer-specific rule codes, internal domains, department names, account patterns, allowlists, suppression templates, or response IDs.
+- Customer-specific operational knowledge belongs in tenant-scoped memory, policy/config, adapter mappings, or eval fixtures.
+- Vendor field names should be handled by normalizers/adapters before this skill sees bounded context.
+
 ## Triage Shape
 
 1. Identify source, rule/detection, severity, and affected entities.

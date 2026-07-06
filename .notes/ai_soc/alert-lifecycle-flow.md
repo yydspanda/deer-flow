@@ -36,7 +36,7 @@ alert in
 因此下一阶段目标不是继续堆更多 mock tool，而是按下面待办补齐可见 Alpha 链路：
 
 ```text
-[In parallel] PingAn SOC capability cards
+[In parallel] PingAn knowledge decomposition + capability cards
   -> [Next] Correlation Service MVP
   -> [Planned] External Disposition Sync Contract
   -> [Planned] Memory Tracking Contract
@@ -342,21 +342,23 @@ flowchart TD
 
 ## 8. 下一阶段实现路线
 
-### Slice 0：PingAn SOC Capability Onboarding
+### Slice 0：PingAn Knowledge Decomposition + Capability Onboarding
 
-目的：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验结构化嵌入项目，让后续 Correlation、Domain Sub-Agent 和 Demo/Eval 不再是空框架。
+目的：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验结构化嵌入项目，并先区分通用 skill、平安 tenant memory、adapter/mapping、MCP/action、policy/config 和 eval fixture，避免把历史 prompt 原文直接塞进通用 skill 或主 Agent prompt。
 
 范围：
 
 - 新增并维护 `.notes/ai_soc/pingan-soc-capability-onboarding.md`。
-- 每个经验点先整理成 capability card，再分类到 skill、MCP/action adapter、normalizer、domain handler、eval case 或 memory candidate。
+- 新增并维护 `.notes/ai_soc/pingan-knowledge-decomposition-plan.md`。
+- 每个经验点先整理成 capability card，再分类到 skill、tenant memory、MCP/action adapter、normalizer、policy/config、domain handler、eval case 或 memory candidate。
 - 优先收集 3-5 张 P0 card：APT 方向判断、EDR 进程树、资产归属、F5 抑制目标、HIDS 主机事件。
 - 不把生产账号、token、内部系统地址或敏感数据写入仓库；真实 endpoint/凭证只通过本地配置或 secret 注入。
 
 验收：
 
 - 每个即将实现的平安 SOC 经验都有 capability card。
-- 能明确它落到 skill、adapter、domain handler、eval case 还是 memory candidate。
+- 能明确它落到通用 skill、tenant memory、adapter、policy/config、domain handler、eval case 还是 memory candidate。
+- 通用 `skills/public/soc-*` 不包含平安内部域名、账号、部门、规则码、模板 ID、策略 ID、字段别名或误报白名单。
 - 每个能力都有至少一个脱敏样例或 fake fixture。
 - read-only / high-risk / memory candidate 的安全边界明确。
 

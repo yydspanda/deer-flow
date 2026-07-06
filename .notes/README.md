@@ -11,6 +11,7 @@
 | `ai_soc/soc-agent-solution.md` | SOC Agent 当前权威方案；后续产品和工程讨论优先更新这里 |
 | `ai_soc/alert-lifecycle-flow.md` | SOC 预警生命周期、当前状态流转和下一阶段可见研判链路 |
 | `ai_soc/pingan-soc-capability-onboarding.md` | 平安 SOC 工具、MCP、skill、研判经验和处置经验的结构化嵌入流程 |
+| `ai_soc/pingan-knowledge-decomposition-plan.md` | 平安 APT/EDR/HIDS 经验拆成 skill、tenant memory、MCP/action、policy/config、eval 的落地矩阵 |
 | `ai_soc/soc-memory-tracking-plan.md` | SOC topic/rule_code/场景粒度记忆追踪和 TUI/Kafka 结论沉淀方案 |
 | `ai_soc/external-disposition-sync-plan.md` | 外部预警/工单/处置系统状态与理由同步协议；Zeus 只是第一个 adapter |
 | `ai_soc/soc-agent-profile-governance.md` | SOC Lead/Sub Agent、Skill、MCP 开放配置与治理方案 |

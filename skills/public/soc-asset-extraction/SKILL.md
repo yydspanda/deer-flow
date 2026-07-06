@@ -1,6 +1,6 @@
 ---
 name: soc-asset-extraction
-description: Use when SOC triage must extract IP, domain, URL, host, user, or UM assets from an alert and prepare safe read-only asset lookup/location proposals.
+description: Use when SOC triage must extract IP, domain, URL, host, user, enterprise account, or UM-like assets from an alert and prepare safe read-only asset lookup/location proposals.
 allowed-tools:
   - ask_clarification
   - present_files
@@ -14,10 +14,16 @@ Use this skill before asset ownership lookup, BU location, attack direction judg
 
 ## Scope
 
-- Extract all observable assets from the bounded alert context: IP, DOMAIN, WEB/URL, HOST, USER, UM account, process-linked host, and HTTP host.
+- Extract all observable assets from the bounded alert context: IP, DOMAIN, WEB/URL, HOST, USER, enterprise account, UM-like account, process-linked host, and HTTP host.
 - Assign roles only when evidence supports them: attacker, target, victim, impacted_asset, response_target, proxy, relay, scanner, unknown.
-- Separate extraction from remote lookup. This skill does not query CMDB, Zeus, EDR, SOAR, or any production system.
+- Separate extraction from remote lookup. This skill does not query CMDB, external case systems, EDR, SOAR, or any production system.
 - Prefer normalized SOC runtime fields, raw-message evidence, field trust, and conflict reports. Do not rely on vendor processed fields when conflict reports say they disagree.
+
+## Knowledge Boundary
+
+- Keep extraction patterns generic. Customer-specific account formats, BU names, PA/company codes, asset ownership rules, and CMDB semantics belong in tenant memory, adapter config, or read-only lookup results.
+- This skill can propose `asset.lookup` or `asset.locate`; it must not claim owner, BU, company code, environment, or disposal owner without a returned SOC action result.
+- Vendor field aliases belong in normalizers/adapters, not in this skill.
 
 ## Output Shape
 

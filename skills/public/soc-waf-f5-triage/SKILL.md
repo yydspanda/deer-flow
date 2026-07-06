@@ -19,6 +19,12 @@ Use this skill when the alert involves WAF/F5, HTTP request evidence, proxy head
 - Attack type: scan, exploit attempt, injection, webshell, credential attack, false positive.
 - Direction and suppression target: avoid confusing protected service, client IP, and intermediate proxy.
 
+## Knowledge Boundary
+
+- Keep WAF/F5 reasoning generic: HTTP evidence, proxy attribution, web attack success signals, target service, and suppression target.
+- Customer-specific URI exceptions, internal domains, F5 policy names, VIPs, route tables, and suppression templates belong in tenant memory, adapter config, or policy.
+- This skill may propose read-only investigation or approval-gated response, but must not add rules, block clients, or suppress alerts directly.
+
 ## Output
 
 Explain:

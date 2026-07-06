@@ -20,6 +20,12 @@ Use this skill when the alert depends on network evidence, APT-style detection, 
 - Evidence conflicts from vendor direction fields, processed fields, or historical parsing.
 - Similar historical alerts by detection key, rule code, entity keys, and time window.
 
+## Knowledge Boundary
+
+- Keep APT/network reasoning generic: traffic direction, callback/C2, IOC quality, exploit evidence, attack success evidence, and role confidence.
+- Customer-specific APT product field names, internal domains, business allowlists, rule codes, and exception patterns belong in tenant memory, adapter mapping, or eval fixtures.
+- If customer memory says a pattern is common benign behavior, cite it as scoped memory with match reason, not as universal security knowledge.
+
 ## Output
 
 Provide a concise network narrative:

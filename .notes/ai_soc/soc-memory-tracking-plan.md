@@ -1,6 +1,6 @@
 # SOC Memory Tracking Plan
 
-> Updated: 2026-07-06
+> Updated: 2026-07-07
 >
 > 目的：定义 SOC Agent 后续如何沉淀 topic / detection / scenario 级经验，并把 SOC TUI、Kafka daemon、ReviewQueue、Lead Agent 和 domain triage 中的重要结论转成可审计、可确认、可回滚的业务记忆。
 
@@ -116,9 +116,24 @@ Typed Memory Record
 |---|---|---|---|
 | `procedure` | 研判方法 / SOP | confirmed 后可注入 | “APT 方向冲突优先 raw message + 五元组重建” |
 | `detection_lesson` | 检测规则/场景经验 | confirmed 后可注入 | “EDR PowerShell + Office parent + 外联公网需查进程树” |
+| `benign_pattern` | 常见误报 / 授权行为模式 | confirmed 且未过期可注入 | “某内部安全组执行指定扫描工具通常为授权测试” |
 | `environment_fact` | 环境事实 / 授权资产 / 业务背景 | confirmed 且未过期可注入 | “SecurityScan 是公司漏扫工具” |
+| `identity_pattern` | 租户身份/账号模式 | confirmed 且未过期可注入 | “外包账号通常使用 EX- 前缀” |
+| `response_policy_hint` | 处置策略提示 | confirmed 后可作为建议，不自动执行 | “该场景优先转 BU，不直接封 IP” |
 | `negative_memory` | 被驳回结论 / 禁止重复建议 | confirmed/rejected 后用于抑制 | “不要把 X 类日志云加工字段当攻击方向事实” |
 | `case_memory` | 当前 case 临时上下文 | 只在当前 case 注入 | “本工单已查过 endpoint process tree” |
+
+### 4.1 PingAn Prompt Decomposition Memory
+
+`.notes/ai_soc/pingan_docs/` 中的历史 prompt 原文不能整体进入 prompt。拆解后，只有通用方法进入 skill；平安环境知识进入 tenant-scoped memory：
+
+| PingAn 内容 | Memory type | 要求 |
+|---|---|---|
+| 内部安全工具、内部域名、部门/团队例外 | `environment_fact` | 必须有 `tenant_id=pingan`、来源文档、有效期 |
+| 某规则/场景长期误报模式 | `benign_pattern` 或 `detection_lesson` | 必须带 detection/vendor alias 和 eval evidence |
+| 账号格式、外包账号、管理员账号特征 | `identity_pattern` | 不得当作跨客户通用知识 |
+| 处置倾向、转 BU、封禁/隔离前置条件 | `response_policy_hint` | 只能作为建议；执行仍走 approval/policy |
+| 字段方向不可信、加工字段误导 | `negative_memory` 或 `procedure` | 用于降低错误字段权重 |
 
 ## 5. Facets 不是必填项
 
