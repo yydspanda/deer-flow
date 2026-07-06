@@ -7,16 +7,13 @@
 | 文档 | 用途 |
 |---|---|
 | `project-overview.md` | DeerFlow 2.0 项目全貌、分层、核心数据流 |
+| `ai_soc/README.md` | SOC Agent 文档入口：告诉用户该看哪份、什么时候更新哪份 |
 | `ai_soc/soc-agent-solution.md` | SOC Agent 当前权威方案；后续产品和工程讨论优先更新这里 |
+| `ai_soc/alert-lifecycle-flow.md` | SOC 预警生命周期、当前状态流转和下一阶段可见研判链路 |
 | `ai_soc/pingan-soc-capability-onboarding.md` | 平安 SOC 工具、MCP、skill、研判经验和处置经验的结构化嵌入流程 |
 | `ai_soc/soc-memory-tracking-plan.md` | SOC topic/rule_code/场景粒度记忆追踪和 TUI/Kafka 结论沉淀方案 |
+| `ai_soc/external-disposition-sync-plan.md` | 外部预警/工单/处置系统状态与理由同步协议；Zeus 只是第一个 adapter |
 | `ai_soc/soc-agent-profile-governance.md` | SOC Lead/Sub Agent、Skill、MCP 开放配置与治理方案 |
-| `ai_soc/normalization-drift-strategy.md` | 供应商日志归一化、字段漂移检测、LLM 低频辅助策略 |
-| `ai_soc/zeus-alert-flow-and-field-trust.md` | ZEUS/天眼上游字段冲突、可信度分层、统一研判闭环流程 |
-| `ai_soc/kafka-consumer-adapter-plan.md` | Kafka/Redpanda consumer adapter 接入规划：mapper、offset、dead-letter、metrics |
-| `ai_soc/action-adapter-registry-plan.md` | SOC approval 后真实 EDR/F5/SOAR/MCP action adapter registry 接入规划 |
-| `ai_soc/mcp-adapter-bridge-plan.md` | MCP adapter bridge 与真实只读数据源接入规划：DeerFlow MCP 复用、SOC adapter allowlist、配置治理 |
-| `ai_soc/soc-daemon-production-runbook.md` | SOC Kafka daemon 生产 entrypoint、healthcheck、env、日志和部署约定 |
 | `ai_soc/progress.md` | SOC Agent 长期开发进度台账；每个可验证切片完成后更新 |
 | `reference-index/soc-agent-engineering-contracts.md` | SOC Agent 代码风格、框架设计、API、通信协议和测试门禁 |
 | `reference/cross-project-workflow.md` | 跨项目参考工作流：先定义问题，再用 CodeGraph / 最小源码读取查参考项目 |

@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow
 
-> Updated: 2026-07-05
+> Updated: 2026-07-06
 >
 > 本文档描述两件事：
 >
@@ -24,25 +24,35 @@ alert in
   -> approval inbox / grant / execute boundary
 ```
 
-但它还不是最终形态的“完整 SOC Agent + 多个子研判 Agent”。缺口在这里：
+但它还不是最终形态的“完整 SOC Agent + 多个子研判 Agent”。当前缺口在这里：
 
-- 还没有明确的 `SocCorrelationService`，相似告警/历史证据仍只是 review context 的一部分。
+- 还没有明确的 `SocCorrelationService`，相似告警、历史结论和可复用 evidence 仍只是 review context 的零散部分。
+- 还没有 vendor-neutral 的 external disposition sync 协议；Zeus 等外部系统中的状态/理由还不能可靠同步为本地 audit、review/correction 和候选记忆。
+- 还没有 DB-first typed memory contract；TUI/Web/Kafka/Lead Agent/domain triage 的重要结论还不能统一生成候选记忆。
 - 还没有统一的 domain sub-agent 输入输出协议。
 - EDR/APT/HIDS/F5 当前主要体现为 skills / mock action / prompt context，还不是可独立评估的子研判单元。
 - Main SOC Agent 还没有把 correlation、domain triage、read-only evidence 和统一研判报告串成一个可视化链路。
 
-因此下一阶段目标不是继续堆更多 mock tool，而是补齐 Phase 2 最小闭环：
+因此下一阶段目标不是继续堆更多 mock tool，而是按下面待办补齐可见 Alpha 链路：
 
 ```text
-PingAn SOC Capability Onboarding
-  -> Correlation Service
-  -> Memory Tracking Contract
-  -> Domain Sub-Agent Contract
-  -> EDR/APT/HIDS/F5 MVP handlers
-  -> Main SOC Agent Orchestrator
-  -> Unified Investigation Report
-  -> Web/TUI/Lead Agent 展示完整研判链路
+[In parallel] PingAn SOC capability cards
+  -> [Next] Correlation Service MVP
+  -> [Planned] External Disposition Sync Contract
+  -> [Planned] Memory Tracking Contract
+  -> [Planned] Domain Sub-Agent Contract
+  -> [Planned] EDR/APT/HIDS/F5 MVP handlers
+  -> [Planned] Main SOC Agent Orchestrator MVP
+  -> [Planned] Web/TUI visible investigation
+  -> [Planned] Demo / Eval Script
 ```
+
+暂缓项不作为当前 Alpha 前置条件：
+
+- Real dev/staging CMDB/EDR MCP replacement：等待 endpoint/凭证。
+- Wiki/OKF export projection：等 PostgreSQL memory store、retrieval 和 review workflow 稳定后再做，且只能作为 DB 的 projection。
+- Prometheus / operations overview：等 Kafka/review/approval/runtime 数据流稳定后再做。
+- High-risk real execute：等真实 staging adapter、审批策略、补偿和 adapter audit 成熟后再打开。
 
 ## 2. 当前已实现服务边界
 
@@ -69,6 +79,7 @@ flowchart TD
         Web["Web ReviewQueue"]
         TUI["SOC TUI"]
         Lead["SOC Lead Agent\nsoc-triage"]
+        External["External systems\nZeus / ITSM / SOAR"]
     end
 
     subgraph Core["Core Services"]
@@ -76,6 +87,7 @@ flowchart TD
         Review["SocReviewService"]
         Chat["SocAgentChatService / SocLeadAgentChatService"]
         Approval["SocAgentApprovalService"]
+        ExternalSync["SocExternalDispositionService"]
     end
 
     subgraph Runtime["Fixed Runtime"]
@@ -97,6 +109,8 @@ flowchart TD
         ApprovalReq["soc_approval_requests"]
         ApprovalGrant["soc_approval_grants"]
         Evidence["soc_investigation_evidence"]
+        Disposition["soc_external_dispositions"]
+        MemoryCandidate["soc_memory_candidates"]
     end
 
     CLI --> Analysis
@@ -105,6 +119,7 @@ flowchart TD
     TUI --> Review
     TUI --> Chat
     Lead --> Chat
+    External --> ExternalSync
 
     Analysis --> Normalize --> Entity --> Fact --> BuildInput --> Skill --> Analyze --> Validate --> Decide
 
@@ -124,6 +139,10 @@ flowchart TD
     Chat --> Evidence
     Approval --> ApprovalReq
     Approval --> ApprovalGrant
+    ExternalSync --> Review
+    ExternalSync --> Audit
+    ExternalSync --> Disposition
+    ExternalSync --> MemoryCandidate
 ```
 
 ### 3.1 数据状态变化
@@ -134,9 +153,44 @@ flowchart TD
 | `AlertSummary` | `verdict / confidence / needs_review` | analyze/replay/correct 更新 | 面向列表、检索、关联和 review queue 的读模型 |
 | `ReviewQueueItem` | `status` | `open -> closed` | close 不等于改判；改判必须走 correction |
 | `CorrectionRecord` | `candidate_knowledge_status` | `pending_review` | 人工纠正不会直接写 confirmed memory |
+| `ExternalDispositionRecord` | `mapped_status / apply_status` | `received -> mapped / unmatched -> applied / ignored` | 外部系统状态/理由同步记录；Zeus 只是 adapter，reason 只生成候选记忆 |
 | `InvestigationEvidence` | `status` | `success / failed` | 只读调查证据，不自动改 verdict，不写 confirmed memory |
 | `SocAgentApprovalRequest` | `status` | `pending` | 审批请求，不是执行授权 |
 | `SocAgentApprovalGrant` | `status` | `approved -> consumed` | 一次性 execution token，当前 execute 仍不产生外部副作用 |
+
+### 3.2 外部处置反馈流
+
+外部处置反馈流用于接 Zeus、ITSM、SIEM/SOAR、客户自研工单系统等外部产品中的人工状态和理由。Zeus 只是第一个 adapter，不允许把 Zeus 字段、状态名或 ID 体系写死到 core service。
+
+```mermaid
+flowchart TD
+    Zeus["Zeus / external ticket system\nstatus + reason update"] --> Adapter["ExternalDispositionAdapter\nwebhook / Kafka / polling"]
+    Adapter --> Event["SocExternalDispositionEvent\nvendor-neutral + versioned"]
+    Event --> Service["SocExternalDispositionService.apply_event"]
+
+    Service --> Map["status mapping config\nexternal_status -> canonical_status"]
+    Map --> Locate["target locate\nqueue_id / run_id / alert_id / external_case_id / weak correlation"]
+
+    Locate -->|unique + trusted| Apply["apply external correction\nsync review/correction"]
+    Locate -->|ambiguous / unmapped| Unmatched["unmatched disposition\nneeds review"]
+
+    Apply --> Audit["soc_decision_audit_log"]
+    Apply --> Record["soc_external_dispositions"]
+    Apply --> Review["soc_review_queue update/close"]
+    Apply --> Candidate["SocMemoryCandidate\npending_review"]
+    Candidate --> SkillCandidate["SkillImprovementCandidate\npending review"]
+
+    Unmatched --> Record
+    Unmatched --> Audit
+```
+
+实现约束：
+
+- Adapter 只做传输、认证、解码、字段映射和幂等键生成；不能直接写 repository。
+- `SocExternalDispositionService` 是唯一允许同步外部状态到本地 review/correction/audit 的边界。
+- 外部 free-text reason 默认只是 case feedback；只能生成 pending memory / skill improvement candidate，不能直接成为 confirmed memory 或 active skill。
+- 状态映射必须可配置，未映射状态进入 `unknown/unmatched`，不自动改判。
+- 幂等键必须包含 `tenant_id`、`external_system`、`external_case_id` 和外部事件版本/更新时间/hash，重复回放不能重复关闭队列或重复生成候选记忆。
 
 ## 4. 预警分析主链路
 
@@ -326,7 +380,26 @@ flowchart TD
 - 不改 DeerFlow core。
 - 对同一批 demo alert 能看到相似告警、匹配原因和可复用 evidence。
 
-### Slice 2：Memory Tracking Contract
+### Slice 2：External Disposition Sync Contract
+
+目的：让 Zeus、ITSM、SIEM/SOAR、客户自研工单系统中的人工状态和处置理由能回流 SOC Agent，同时保持协议可扩展、可插拔、可审计。
+
+范围：
+
+- 新增并维护 `.notes/ai_soc/external-disposition-sync-plan.md`。
+- 固定 `SocExternalDispositionEvent` vendor-neutral schema，Zeus 只是第一个 adapter。
+- 规划 `SocExternalDispositionService`、adapter port、状态映射、幂等键、unmatched record、audit、review/correction 同步和 memory/skill improvement candidate。
+- 支持 webhook、Kafka、polling、manual import 作为 transport adapter，但进入 service 前必须归一成同一 event。
+- 明确外部 free-text reason 只能进入 pending memory / skill improvement candidate，不能直接写 confirmed memory 或 active skill。
+
+验收：
+
+- 不在 core service 中写死 Zeus 字段、状态名或 ID 体系。
+- 未映射状态或无法唯一定位的 case 只能保存 unmatched record，不自动改判。
+- 重复外部事件不会重复关闭 queue、重复改判或重复生成候选记忆。
+- Web/TUI/Review context 后续能展示外部 disposition history 和 reason。
+
+### Slice 3：Memory Tracking Contract
 
 目的：固定 typed memory record + facets + retrieval policy，让 TUI、Kafka daemon、ReviewQueue、Lead Agent 和 domain triage 的重要结论后续能转成候选记忆。
 
@@ -338,16 +411,16 @@ flowchart TD
 - 固定 facets：topics、canonical detection key、vendor aliases、scenario、entities、environment；缺失任意 facet 时系统仍要能工作。
 - 明确具体 IP、UM、host、URL、hash 默认只作为 evidence / query dimension，不直接成为长期 memory 主粒度。
 - 规划 `SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryFact`、`SocMemoryEvidenceRef`、`SocMemoryQuery`、`SocMemoryStatus`。
-- 明确 TUI/Web correction、Kafka daemon repeated pattern、Lead Agent summary、DomainTriageResult 和 InvestigationEvidence 如何生成 memory candidate。
+- 明确 TUI/Web correction、Kafka daemon repeated pattern、external disposition reason、Lead Agent summary、DomainTriageResult 和 InvestigationEvidence 如何生成 memory candidate。
 
 验收：
 
 - 不自动写 confirmed memory。
 - `pending_review` 不注入 prompt。
-- 所有 candidate 都有 memory key、来源、evidence refs 和幂等键。
+- 所有 candidate 都有 typed memory record、facets、来源、evidence refs 和幂等键。
 - 后续代码只能通过 `SocMemoryService` 写 memory，入口层不能直接写 repository。
 
-### Slice 3：Domain Sub-Agent Contract
+### Slice 4：Domain Sub-Agent Contract
 
 目的：先固定 EDR/APT/HIDS/F5 子研判单元的输入输出，避免每个 domain 各写一套。
 
@@ -364,7 +437,7 @@ flowchart TD
 - 子研判结果不能直接改 `AnalysisRun.decision`。
 - 子研判结果可被统一 report 合并。
 
-### Slice 4：EDR/APT/HIDS/F5 MVP Handlers
+### Slice 5：EDR/APT/HIDS/F5 MVP Handlers
 
 目的：让 demo alert 真正进入不同 domain triage 分支。
 
@@ -381,7 +454,7 @@ flowchart TD
 - 可使用已有 read-only mock evidence。
 - 每个 handler 都输出 `DomainTriageResult`。
 
-### Slice 5：Main SOC Agent Orchestrator MVP
+### Slice 6：Main SOC Agent Orchestrator MVP
 
 目的：把 correlation、domain routing、domain triage 和 report merge 串起来。
 
@@ -399,7 +472,7 @@ flowchart TD
 - 单条 EDR demo 能触发 EDR + endpoint process-tree evidence。
 - 多 domain 冲突要显式展示，不能静默覆盖。
 
-### Slice 6：Web/TUI 可见化
+### Slice 7：Web/TUI 可见化
 
 目的：让你和同事能直观看到“谁参与了研判、用了什么证据、给了什么结论”。
 
@@ -418,7 +491,7 @@ flowchart TD
 - 打开一个 review item，能看到完整研判链路。
 - 能区分 runtime decision、domain findings、read-only evidence 和人工 correction。
 
-### Slice 7：Demo / Eval Script
+### Slice 8：Demo / Eval Script
 
 目的：形成可重复演示和回归验证。
 
@@ -447,7 +520,7 @@ soc chat tui --lead-agent --queue-id REV-...
 - 真实 dev/staging CMDB/EDR MCP replacement：等待 endpoint/凭证。
 - 真实 high-risk execute：等待 staging adapter、补偿、失败审计和审批策略成熟。
 - Kafka bounded worker pool：等待真实吞吐、DB/K8s 参数和 LLM 限流策略。
-- Prometheus `/metrics` exporter 和运行态势看板：已记录在 `.notes/ai_soc/operations-overview-deferred.md`。
+- Prometheus `/metrics` exporter 和运行态势看板：已记录在 `.notes/archive/ai_soc/deferred/operations-overview-deferred.md`。
 - 外部 Knowledge RAG / 威胁情报大屏：Phase 5。
 
 ## 10. 当前可见 Alpha 目标

@@ -28,7 +28,27 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 工程实现做 Phase 2 最小 Correlation Service；随后补 Memory Tracking Contract；并行收集第一批 PingAn P0 capability card，用来驱动 APT/EDR/HIDS/F5 domain triage 和 typed memory facets |
+| 当前下一刀 | 工程实现做 Phase 2 最小 Correlation Service；随后补 External Disposition Sync Contract 和 Memory Tracking Contract；并行收集第一批 PingAn P0 capability card，用来驱动 APT/EDR/HIDS/F5 domain triage、外部处置反馈和 typed memory facets |
+
+## 当前待办列表
+
+> 这张表是当前新的执行待办。下面的 Phase 1 长表保留历史切片和完成记录；后续实际推进优先看本表。
+
+| 顺序 | 待办 | 状态 | 做什么 | 验收标准 |
+|---|---|---|---|---|
+| 0 | PingAn SOC capability cards | In parallel | 收集并整理 APT 方向判断、EDR 进程树、资产归属、F5 抑制目标、HIDS 主机事件等 P0 经验 | 每张 card 明确场景、输入、输出、落点、风险等级、失败模式和脱敏样例 |
+| 1 | Correlation Service MVP | Next | 新增 `SocCorrelationService`、`CorrelationQuery`、`CorrelationResult`、CLI `soc correlate`；基于 summary/evidence 输出相似告警、匹配原因和可复用证据 | 不调用 LLM、不依赖真实 MCP、不改 DeerFlow core；demo alert 可看到结构化 correlation result |
+| 2 | External Disposition Sync Contract | Planned | 新增 vendor-neutral 外部处置反馈协议；Zeus/Webhook/Kafka/Polling adapter 只负责转成 `SocExternalDispositionEvent`，service 负责状态映射、审计、review/correction 同步和候选记忆 | 不在 core service 写死 Zeus；外部 status/reason 可同步，但 free-text reason 只能进 pending memory/skill improvement candidate |
+| 3 | Memory Tracking Contract | Planned | 新增 DB-first typed memory record + facets + retrieval policy；规划 `SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryQuery` 等 schema | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
+| 4 | Domain Sub-Agent Contract | Planned | 固定 `DomainTriageRequest`、`DomainTriageResult`、finding/evidence/recommendation 结构 | EDR/APT/HIDS/F5 能共用同一 schema；子研判不能直接改 decision 或写 DB |
+| 5 | EDR/APT/HIDS/F5 MVP handlers | Planned | 先做 deterministic + skill context 的 domain handlers，复用已有 read-only evidence/mock adapter | APT/EDR/HIDS/F5 demo 能分别输出 domain findings 和 evidence refs |
+| 6 | Main SOC Agent Orchestrator MVP | Planned | 串起 correlation、domain routing、domain triage、report merge，输出 `UnifiedInvestigationReport` | 单条 demo alert 能看到主控选择了哪些 domain handler、用了哪些证据、合并出什么结论 |
+| 7 | Web/TUI visible investigation | Planned | 在 ReviewQueue Web/TUI 展示 correlation panel、domain triage panel、evidence timeline、external disposition history、action proposal panel | 分析师能区分 runtime decision、domain findings、read-only evidence、外部人工反馈、人工 correction |
+| 8 | Demo / Eval Script | Planned | 提供可重复 demo/eval 命令，跑 APT/EDR/HIDS/F5 样例并生成 review item/report | 一条命令可稳定演示 runtime + correlation + domain triage + evidence + review 状态 |
+| W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
+| D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
+| D2 | Prometheus / operations overview | Deferred | Kafka/review/approval/runtime 数据流稳定后，再做指标和运行态势面板 | 不阻塞当前 SOC Agent Alpha |
+| D3 | High-risk real execute | Deferred | 等真实 staging adapter、审批策略、补偿和 adapter audit 成熟后再打开 | 生产 execute 前必须有 approval、dry-run、idempotency、回滚/补偿策略 |
 
 ## Phase 1 切片计划
 
@@ -78,7 +98,7 @@
 | 42 | TUI approved-action dry-run / execute command | Done | `soc review tui` 支持 dry-run token 校验和 execute boundary token 消费；execute 要求显式 idempotency key；仍不执行外部副作用 |
 | 43 | Kafka daemon scaffold / approval request ingestion | Done | 新增 versioned daemon message contract、`SocDaemonService.process_message()` 和 `soc daemon process` 本地入口；支持 alert 分析与 approval_request 入箱；尚未连接 Kafka broker |
 | 44 | SOC Lead Agent approval middleware | Planned | 等 SOC Lead Agent / skills / MCP tool chain 落地后接入；当前只保留 service-level approval boundary，不提前做无宿主 middleware |
-| 45 | Kafka consumer adapter planning | Done | 新增 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，明确 mapper/runner/offset/dead-letter/metrics 方案和下一刀 |
+| 45 | Kafka consumer adapter planning | Done | 新增并归档 `.notes/archive/ai_soc/implementation-plans/kafka-consumer-adapter-plan.md`，明确 mapper/runner/offset/dead-letter/metrics 方案和下一刀 |
 | 46 | Kafka record -> daemon message mapper | Done | 新增 `soc_agent.daemon.kafka_mapper`，纯 stdlib + contracts；支持 alert/approval topics、custom topic set、坏 JSON/未知 topic 错误 |
 | 47 | Kafka consumer runner skeleton | Done | 新增 `SocKafkaConsumerRunner` 和 `KafkaConsumerPort`，串行 map -> process -> commit；mapper/service failure 进 dead-letter，仍不接真实 broker |
 | 48 | Kafka consumer settings + null adapter | Done | 新增 `KafkaConsumerSettings` 环境变量配置 contract 和 `NullKafkaConsumerPort`；默认禁用、启用但无真实 adapter 时 fail-fast |
@@ -129,9 +149,40 @@
 | 93 | Lead Agent evidence reuse + endpoint process-tree mock adapter | Done | Lead Agent bounded context 明确复用既有 action_evidence；新增 `endpoint.process_tree.lookup` read-only in-memory/mock adapter、policy、proposal 示例和测试 |
 | 94 | PingAn SOC capability onboarding | Done | 新增 `.notes/ai_soc/pingan-soc-capability-onboarding.md`，固定经验 -> capability card -> skill/MCP/normalizer/domain/eval/memory 的转化流程 |
 | 95 | Correlation Service MVP | Next | 新增结构化 correlation contract/service/CLI；基于 summary + evidence 找相似告警、匹配原因和可复用证据；不调用 LLM、不依赖真实 MCP、不改 DeerFlow core |
-| 96 | Memory Tracking Contract | Planned | 固定 DB-first typed memory record + facets + retrieval policy；TUI/Web/Kafka/Lead Agent/domain 结论先生成 `SocMemoryCandidate`，不直接写 confirmed memory；wiki/OKF 后期只做 projection |
+| 96 | External Disposition Sync Contract | Planned | 固定外部预警/工单/处置系统状态与理由同步协议；Zeus 只是第一个 adapter；同步结果进入 audit/review/correction/memory candidate/skill improvement candidate |
+| 97 | Memory Tracking Contract | Planned | 固定 DB-first typed memory record + facets + retrieval policy；TUI/Web/Kafka/Lead Agent/domain/external disposition 结论先生成 `SocMemoryCandidate`，不直接写 confirmed memory；wiki/OKF 后期只做 projection |
 
 ## 进度记录
+
+### 2026-07-06 — SOC notes active set cleanup
+
+- 背景：
+  - 用户指出 `.notes/ai_soc` 又开始堆积文档，需要删除/移走低价值内容，保留真正有用的入口，并让使用者知道怎么读这些文档。
+- 变更：
+  - 重写 `.notes/ai_soc/README.md`，按使用场景说明先看哪份、再看哪份、什么时候更新哪份。
+  - 同步 `.notes/README.md`，只列当前主线文档，不再把已完成切片和暂缓项作为 active docs。
+  - 将已完成或低频实现计划移到 `.notes/archive/ai_soc/implementation-plans/`：
+    - `action-adapter-registry-plan.md`
+    - `kafka-consumer-adapter-plan.md`
+    - `mcp-adapter-bridge-plan.md`
+  - 将当前暂缓项移到 `.notes/archive/ai_soc/deferred/`：
+    - `kafka-worker-pool-concurrency-plan.md`
+    - `operations-overview-deferred.md`
+  - 将已被主方案/工程契约吸收的背景参考移到 `.notes/archive/ai_soc/reference/`：
+    - `normalization-drift-strategy.md`
+    - `zeus-alert-flow-and-field-trust.md`
+  - 将生产运行 runbook 移到 `.notes/archive/ai_soc/runbooks/`，等进入部署阶段再提升为 active。
+- 当前 active `.notes/ai_soc` 顶层只保留：
+  - `README.md`
+  - `soc-agent-solution.md`
+  - `progress.md`
+  - `alert-lifecycle-flow.md`
+  - `pingan-soc-capability-onboarding.md`
+  - `external-disposition-sync-plan.md`
+  - `soc-memory-tracking-plan.md`
+  - `soc-agent-profile-governance.md`
+- 验证：
+  - active docs 已无旧 `.notes/ai_soc/<archived-doc>.md` 路径引用。
 
 ### 2026-07-05 — Alert lifecycle roadmap refresh
 
@@ -143,15 +194,17 @@
   - 因此新增 PingAn SOC capability onboarding 作为 Slice 0：每条内部经验先整理成 capability card，再分类落到 skill、MCP/action adapter、normalizer、domain handler、eval case 或 memory candidate。
   - 用户进一步提出后续需要按 topic/rule_code/场景做记忆追踪，并将 SOC TUI / Kafka 工作流中的重要结论更新到记忆，保持经验最新。
   - 随后澄清：`rule_code` 只是平安等平台的 vendor alias；topic、detection、scenario 等也不能变成硬主键。Memory 需要采用 typed record + facets + retrieval policy，DB 先做稳，wiki/OKF 后期作为展示/审阅 projection。
+  - 用户提出现实工作流里分析师仍会在老 Zeus 预警系统处理告警，需要 Zeus 更新状态/理由后同步到 SOC Agent，并在空闲时把理由沉淀成候选记忆或 skill 优化候选。该能力必须做成市场化、可扩展、可插拔协议，不能写死平安 Zeus。
 - 变更：
   - `.notes/ai_soc/alert-lifecycle-flow.md` 重写为当前 As-Is 生命周期 + To-Be Main SOC Agent / domain sub-agent 可见链路。
   - 新增 `.notes/ai_soc/pingan-soc-capability-onboarding.md`，记录平安 SOC 经验注入流程、capability card 模板、P0 能力 backlog 和用户提供信息格式。
   - 新增 `.notes/ai_soc/soc-memory-tracking-plan.md`，记录 DB-first typed memory store、facets retrieval、写入来源、状态机、DB/wiki 一致性和实现路线。
-  - 明确下一阶段路线：PingAn SOC capability onboarding -> `SocCorrelationService` -> Memory Tracking Contract -> domain sub-agent contract -> EDR/APT/HIDS/F5 MVP handlers -> Main SOC Agent orchestrator -> unified investigation report -> Web/TUI 可见化 -> demo/eval script。
-  - 进度台账把当前下一刀切到 Phase 2 最小 Correlation Service，并把 Memory Tracking Contract 加入下一步待办。
+  - 新增 `.notes/ai_soc/external-disposition-sync-plan.md`，固定 external disposition feedback lane：外部系统状态/理由更新通过 adapter 转成 `SocExternalDispositionEvent`，再由 service 同步 audit/review/correction，并生成 pending memory / skill improvement candidate。
+  - 明确下一阶段路线：PingAn SOC capability onboarding -> `SocCorrelationService` -> External Disposition Sync Contract -> Memory Tracking Contract -> domain sub-agent contract -> EDR/APT/HIDS/F5 MVP handlers -> Main SOC Agent orchestrator -> unified investigation report -> Web/TUI 可见化 -> demo/eval script。
+  - 进度台账把当前下一刀切到 Phase 2 最小 Correlation Service，并把 External Disposition Sync Contract 和 Memory Tracking Contract 加入下一步待办。
 - 下一步：
   - 实现 Correlation Service MVP，先让 review context / CLI 能看到结构化相似告警、匹配原因和可复用 investigation evidence。
-  - 之后实现 Memory Tracking Contract，再接 TUI/Web correction、Kafka repeated pattern 和 domain triage 的候选记忆写入。
+  - 之后实现 External Disposition Sync Contract，再实现 Memory Tracking Contract，接 TUI/Web correction、Kafka repeated pattern、external status/reason 和 domain triage 的候选记忆写入。
   - 向用户收集第一批 PingAn capability card：APT 方向判断、EDR 进程树、资产归属、F5 抑制目标、HIDS 主机事件。
 
 ### 2026-07-05 — Lead Agent evidence reuse + endpoint process-tree mock adapter
@@ -586,7 +639,7 @@
   - `ExtensionsConfig.from_file()` / `get_enabled_mcp_servers()` 是 DeerFlow MCP server 配置入口。
   - `tool_search` 是 DeerFlow 的 deferred MCP tool discovery 机制，不是 SOC action execution boundary。
 - 变更：
-  - 新增 `.notes/ai_soc/mcp-adapter-bridge-plan.md`：
+  - 新增并归档 `.notes/archive/ai_soc/implementation-plans/mcp-adapter-bridge-plan.md`：
     - 固定 SOC MCP bridge 是 `SocActionAdapter` 具体实现，不是新的 agent tool runtime。
     - 固定 `route/action -> MCP server/tool` 映射只能存在于 adapter/config 层。
     - 规划 `SocMcpToolProviderPort`、payload mapping、result mapping、超时、脱敏、审计字段。
@@ -775,7 +828,7 @@
     - `SocActionAdapterRegistry` 精确按 `route/action` allowlist 解析 adapter。
     - 没有注册 adapter 时 fail-fast，不 fallback 到自然语言或任意 MCP。
     - `DryRunOnlySocActionAdapter` 可验证参数，但 execute 只能返回 failed + `external_side_effect=not_executed`。
-  - 新增 `.notes/ai_soc/action-adapter-registry-plan.md`，记录后续 dry-run integration、execute preflight、只读查询 adapter 和 MCP bridge 顺序。
+  - 新增并归档 `.notes/archive/ai_soc/implementation-plans/action-adapter-registry-plan.md`，记录后续 dry-run integration、execute preflight、只读查询 adapter 和 MCP bridge 顺序。
 - 边界：
   - 不修改 `SocAgentApprovalService` 当前执行语义。
   - 不调用真实 EDR/F5/SOAR/MCP。
@@ -1092,7 +1145,7 @@
   - 当前串行 runner 语义清楚：poll -> map -> process -> commit/dead-letter。
   - 后续并发最大风险是 offset 越过未完成消息、dead-letter 失败后错误 commit、重复写 summary/approval/audit。
 - 新增：
-  - `.notes/ai_soc/kafka-worker-pool-concurrency-plan.md`
+  - `.notes/archive/ai_soc/deferred/kafka-worker-pool-concurrency-plan.md`
 - 决策：
   - 默认保持 `worker_concurrency=1`，等价当前串行安全模式。
   - 并发只能在 runner/daemon/controller 层扩展，不进入 `SocDaemonService` 内部。
@@ -1215,7 +1268,7 @@
   - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_daemon_kafka_daemon.py tests/test_soc_agent_runtime.py::test_cli_daemon_run_can_emit_metric_jsonl_to_stderr tests/test_soc_agent_runtime.py::test_cli_daemon_run_disabled_by_default_outputs_bounded_run tests/test_soc_daemon_scripts.py::test_soc_daemon_entrypoint_can_emit_metric_jsonl_to_stderr`
   - `cd backend && ./.venv/bin/python -m soc_agent.cli daemon run --max-loops 1 --idle-sleep-ms 0 --metric-jsonl stderr --pretty`
 - 下一步：
-  - Prometheus exporter 暂缓，方案记录在 `kafka-consumer-adapter-plan.md`；下一步进入 production overlay planning。
+  - Prometheus exporter 暂缓，方案记录在归档的 `kafka-consumer-adapter-plan.md`；下一步进入 production overlay planning。
 
 ### 2026-07-03 — Kafka isolated run-mode smoke 切片
 
@@ -1267,7 +1320,7 @@
 - 新增：
   - `backend/scripts/soc_daemon_entrypoint.sh`
   - `backend/scripts/soc_daemon_healthcheck.sh`
-  - `.notes/ai_soc/soc-daemon-production-runbook.md`
+  - `.notes/archive/ai_soc/runbooks/soc-daemon-production-runbook.md`
 - 行为：
   - entrypoint 默认要求 `SOC_KAFKA_ENABLED=true`。
   - 未显式设置时，entrypoint 会导出 `SOC_KAFKA_ENABLED=true`，避免生产容器悄悄跑在 null adapter。
@@ -1669,7 +1722,7 @@
   - 它应挂在未来真实 SOC Lead Agent / skills / MCP tool chain 中，用来拦截 tool/action call，再调用 `SocAgentActionPolicy` 和 `SocAgentApprovalService`。
   - 当前已完成的是 service-level approval boundary，足以支撑 Web/TUI/daemon 入口。
 - 新增：
-  - `.notes/ai_soc/kafka-consumer-adapter-plan.md`
+  - `.notes/archive/ai_soc/implementation-plans/kafka-consumer-adapter-plan.md`
 - 下一刀建议：
   - 先做 `soc_agent/daemon/kafka_mapper.py` 与 tests，不接真实 broker：
     - `KafkaRecord` 轻量 dataclass。
@@ -2512,7 +2565,7 @@
 
 ### 2026-07-01 — ZEUS / 天眼证据输入策略
 
-- 根据同事反馈的上游日志方向不可靠、加工字段冲突问题，新增 `.notes/ai_soc/zeus-alert-flow-and-field-trust.md`：
+- 根据同事反馈的上游日志方向不可靠、加工字段冲突问题，新增并归档 `.notes/archive/ai_soc/reference/zeus-alert-flow-and-field-trust.md`：
   - 梳理 ZEUS/天眼告警流程。
   - 记录 raw message、结构化原始字段、加工字段、skills/记忆、人工复核的可信度分层。
   - 补充 Mermaid 流程图和泳道图。
@@ -3069,7 +3122,7 @@
 ### 2026-06-29 — Normalization drift strategy and runtime reports
 
 - 新增策略文档：
-  - `.notes/ai_soc/normalization-drift-strategy.md`
+  - `.notes/archive/ai_soc/reference/normalization-drift-strategy.md`
   - 明确 LLM 不默认参与每条告警 normalize/entity extraction。
   - LLM 定位为新供应商接入、字段漂移分析、mapping 建议、低频复核样本 enrichment 的辅助能力。
 - 新增 runtime report contracts：
@@ -3144,7 +3197,7 @@
   - mapping adapter 输出为 `mapping:<name>`。
   - 缺失 source path 进入 `NormalizationReport.warnings` 和 `unmapped_fields`。
 - 已同步文档：
-  - `.notes/ai_soc/normalization-drift-strategy.md`
+  - `.notes/archive/ai_soc/reference/normalization-drift-strategy.md`
   - `.notes/reference-index/soc-agent-engineering-contracts.md`
 - 已补充测试：
   - service 通过 mapping 文件 inspect 简单 WAF payload。
@@ -3181,7 +3234,7 @@
   - CLI 只负责读取样本和输出 JSON；聚合规则在 core service。
   - suspicious 只由 normalize 失败、missing canonical field、unmapped mapping field 触发；抽取 warning 只作为趋势信号，避免 WAF/账号类告警因没有 process 被误报。
 - 已同步文档：
-  - `.notes/ai_soc/normalization-drift-strategy.md`
+  - `.notes/archive/ai_soc/reference/normalization-drift-strategy.md`
   - `.notes/reference-index/soc-agent-engineering-contracts.md`
 - 已补充测试：
   - service 聚合 generic 样本 report。
@@ -3213,7 +3266,7 @@
   - persisted run 聚合用于线上/测试库最近告警的格式漂移观察。
   - CLI 仍只做参数、repository 注入和 JSON 输出；聚合规则在 core service。
 - 已同步文档：
-  - `.notes/ai_soc/normalization-drift-strategy.md`
+  - `.notes/archive/ai_soc/reference/normalization-drift-strategy.md`
   - `.notes/reference-index/soc-agent-engineering-contracts.md`
 - 已补充测试：
   - service 基于 in-memory repository 聚合最近 runs。

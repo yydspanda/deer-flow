@@ -220,6 +220,19 @@ PingAn SOC capability onboarding 约束：
 - 处置类经验必须走 approval request / approval grant / dry-run / execute boundary；未经过 staging smoke 和 adapter-level audit 前，生产 execute 只能保持 no external side effect。
 - 经验记忆必须先进入 `pending_review` 或 eval fixture；只有人工确认、版本化和可回滚后才允许作为 confirmed memory 或 active lesson 影响后续判断。
 
+External disposition sync 约束：
+
+- 外部预警/工单/处置系统的状态和理由同步必须走 vendor-neutral `SocExternalDispositionEvent`，Zeus 只是第一个 adapter；core service 不能出现 Zeus 专属分支。
+- `SocExternalDispositionEvent` schema version 固定为 `soc.external_disposition.v1`，至少包含 `external_system`、`external_case_id`、`external_status`、`updated_at`、`raw_payload_hash`，可选包含 `tenant_id`、`source_event_id`、`source_version`、`external_alert_ref`、`soc_alert_id`、`soc_run_id`、`soc_queue_id`、`external_reason`、`external_tags`、`operator`；多租户部署时 `tenant_id` 必须由认证上下文或 adapter 配置补齐。
+- 外部系统 adapter 只负责认证、解码、字段映射、redaction、幂等键生成和调用 `SocExternalDispositionService`；adapter 不得直接写 repository、不得直接调用 `SocReviewService.correct()`、不得直接写 memory 或 skill。
+- `SocExternalDispositionService` 是外部反馈写入本地 audit、review/correction、external disposition record、memory candidate 和 skill improvement candidate 的唯一 service 边界。
+- 幂等键固定形态为 `external_disposition:{tenant_id|default}:{external_system}:{external_case_id}:{source_event_id|source_version|updated_at_hash}`；重复 webhook、Kafka offset 回放或 polling 重扫不能重复关闭 review queue、重复改判或重复生成 memory candidate。
+- 目标定位顺序必须是明确本地引用优先：`soc_queue_id` -> `soc_run_id` -> `soc_alert_id` -> 已绑定 `external_system + external_case_id` -> 弱关联；弱关联不能唯一命中时只能保存 unmatched record，不得自动改判。
+- 外部状态必须通过可配置 mapping 转换为 canonical status，例如 `closed_true_positive`、`closed_false_positive`、`closed_benign_true_positive`、`suppressed`、`escalated`、`ignored`、`duplicate`、`unknown`；未映射状态只能进入 `unknown/unmatched`，不能自动更新 operational decision。
+- 外部 free-text reason 默认只是 case feedback；只能生成 `SocMemoryCandidate(status=pending_review)` 或 `SkillImprovementCandidate(status=pending_review)`，不得直接成为 confirmed memory、active lesson、active skill 或 prompt 修改。
+- 外部处置同步必须记录 source surface、operator、mapping version、apply status、target refs、idempotency key 和 audit event，支持 replay diff、撤销和客户审计。
+- Webhook、Kafka、polling 和 manual import 都是 transport adapter；进入 core service 前必须归一成同一 `SocExternalDispositionEvent`，不能为每种 transport 复制业务状态机。
+
 SOC memory tracking 约束：
 
 - 业务记忆必须实现为 typed memory record + facets + retrieval policy，不得实现为 `topic/rule_code/scenario` 等字段的联合等值主键。
@@ -227,7 +240,7 @@ SOC memory tracking 约束：
 - `facets.detection.canonical_key` 是推荐的跨供应商检测标识；缺失时必须能通过 `source_type/product/category/rule_name/MITRE/raw fingerprint` 生成弱 key，或退化到 topic/scenario 检索。
 - topic、canonical detection、vendor aliases、scenario、entity、environment 都是可选检索 facets；缺失任意一个 facet 时系统仍必须能工作，只是召回分数降低。
 - 具体 IP、UM、host、URL、file hash、process hash 等实体默认只能作为 evidence refs、query dimensions 或 case memory，不得默认成为长期全局 memory 主键。
-- TUI/Web/Kafka/Lead Agent/domain handler 只能生成 `SocMemoryCandidate`；不得直接写 `confirmed` fact 或 active lesson。
+- TUI/Web/Kafka/Lead Agent/domain handler/external disposition sync 只能生成 `SocMemoryCandidate`；不得直接写 `confirmed` fact 或 active lesson。
 - 所有 memory candidate 必须包含 source surface、source run/review/evidence refs、idempotency key、status、confidence、proposed content、facets、evidence refs 和 reviewer/audit fields。
 - Kafka daemon 生成 memory candidate 时，幂等键必须包含 `topic/partition/offset` 或 run id；重复消费不能增加重复 fact 或污染 evidence count。
 - `pending_review` 和 `confirmed_candidate` 默认不进入全局 prompt 注入；只有 `confirmed` 且未过期的 memory fact 可以进入 PromptBuilder / Lead Agent bounded context。
@@ -907,7 +920,7 @@ Kafka consumer 约定：
 
 - 至少一次投递，必须靠 `alert_id + run_mode + pipeline_version` 做幂等。
 - Kafka callback 解码后必须先生成 `SocDaemonMessage`，再调用 `SocDaemonService.process_message()`；callback 不能直接写 repository、不能直接调用 runtime pipeline。
-- `SocDaemonMessage.kind=alert` 只能进入 `SocAnalysisService.analyze()`；`kind=approval_request` 只能进入 `SocAgentApprovalService.submit_request()`。
+- `SocDaemonMessage.kind=alert` 只能进入 `SocAnalysisService.analyze()`；`kind=approval_request` 只能进入 `SocAgentApprovalService.submit_request()`；后续 `kind=external_disposition` 只能进入 `SocExternalDispositionService.apply_event()`。
 - Kafka metadata 必须保留为 daemon message metadata；`topic + partition + offset` 派生 `idempotency_key=kafka:{topic}:{partition}:{offset}`。
 - DB 写入成功后再 commit offset。
 - 不在 Kafka callback 内执行长逻辑；只入队并由 Runtime worker 处理。

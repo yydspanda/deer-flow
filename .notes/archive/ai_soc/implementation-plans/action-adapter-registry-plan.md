@@ -95,7 +95,7 @@ Lead Agent / Skill / Daemon
 6. **MCP adapter bridge / real read-only data source planning**（Done）
    - 复用 DeerFlow MCP/tool 能力，但通过 SOC adapter descriptor 限定 action 名称、参数 schema、风险等级和审计字段。
    - 用户可配置 readonly MCP 候选；高风险 MCP group 只允许管理员启用，并继续走 approval。
-   - 规划文档：`.notes/ai_soc/mcp-adapter-bridge-plan.md`。
+   - 规划文档：`.notes/archive/ai_soc/implementation-plans/mcp-adapter-bridge-plan.md`。
 
 7. **MCP tool provider port + fake provider adapter tests**（Done）
    - 先定义 SOC MCP provider port 和 fake provider 测试，不接真实 MCP server。

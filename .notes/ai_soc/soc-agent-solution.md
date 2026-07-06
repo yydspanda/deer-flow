@@ -26,6 +26,7 @@
 ```text
 PingAn SOC Capability Onboarding
   -> SocCorrelationService
+  -> External Disposition Sync
   -> Memory Tracking Contract
   -> Domain Sub-Agent Contract
   -> EDR/APT/HIDS/F5 MVP handlers
@@ -36,7 +37,9 @@ PingAn SOC Capability Onboarding
 
 `PingAn SOC Capability Onboarding` 是业务经验注入层：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验先整理成 capability card，再分类落到 skill、MCP/action adapter、normalizer、domain handler、eval case 或 memory candidate。它不直接把经验塞进 prompt，也不把生产 secret 写入仓库；详见 `.notes/ai_soc/pingan-soc-capability-onboarding.md`。
 
-下一刀工程实现仍先做 `SocCorrelationService`，基于 `soc_alert_summaries` 和 `soc_investigation_evidence` 输出结构化相似告警、匹配原因和可复用证据；不调用 LLM、不依赖真实 MCP、不修改 DeerFlow core。同时并行收集第一批 PingAn P0 capability card，用来校验后续 memory tracking、domain sub-agent contract 和 demo/eval。
+`External Disposition Sync` 是外部预警/工单/处置系统的人工反馈接入层：Zeus 只是第一个 adapter，未来要能接客户自研 SOC、SIEM/SOAR、ITSM、ServiceNow、Jira 等系统。外部状态/理由通过 vendor-neutral `SocExternalDispositionEvent` 进入 `SocExternalDispositionService`，再同步 audit、review/correction 和 pending memory / skill improvement candidate；不得把外部 free-text reason 直接写成 confirmed memory，也不得让外部系统直接修改 skill 或 prompt。详见 `.notes/ai_soc/external-disposition-sync-plan.md`。
+
+下一刀工程实现仍先做 `SocCorrelationService`，基于 `soc_alert_summaries` 和 `soc_investigation_evidence` 输出结构化相似告警、匹配原因和可复用证据；不调用 LLM、不依赖真实 MCP、不修改 DeerFlow core。随后固定 External Disposition Sync Contract，再做 Memory Tracking Contract。同时并行收集第一批 PingAn P0 capability card，用来校验后续 external feedback、memory tracking、domain sub-agent contract 和 demo/eval。
 
 文档关系：本文件决定“做什么和先后顺序”；`.notes/reference-index/soc-agent-engineering-contracts.md` 决定“代码接口、协议、边界和测试怎么约束”。如果两者措辞冲突，以本文件为方向源头，并同步修正工程契约。
 
@@ -83,6 +86,7 @@ graph TB
         WEB_UI["Web UI<br/>（批量复查/可视化）"]
         CHANNEL_MODE["Channels<br/>（Slack/Telegram/Feishu 等 IM 接入）"]
         INGEST_MODE["Kafka Ingestion Adapter<br/>（后台消费，不是独立用户入口）"]
+        EXTERNAL_FEEDBACK["External Disposition Adapter<br/>（Zeus / ITSM / SIEM-SOAR 状态理由同步）"]
     end
 
     subgraph SERVICES["Core Services（统一业务入口）"]
@@ -90,6 +94,7 @@ graph TB
         REVIEW_SERVICE["SocReviewService<br/>review / correct"]
         MEMORY_SERVICE["SocMemoryService<br/>facts / lessons"]
         CHAT_SERVICE["SocAgentChatService<br/>interactive investigation"]
+        EXTERNAL_SYNC_SERVICE["SocExternalDispositionService<br/>external status / reason sync"]
     end
 
     subgraph SOC_Agent["SOC Agent（Main Agent + Sub Agent 编排）"]
@@ -126,12 +131,15 @@ graph TB
     API_MODE --> MEMORY_SERVICE
     CHANNEL_MODE --> CHAT_SERVICE
     INGEST_MODE --> ANALYSIS_SERVICE
+    EXTERNAL_FEEDBACK --> EXTERNAL_SYNC_SERVICE
     WEB_UI --> API_MODE
 
     ANALYSIS_SERVICE --> MAIN
     REVIEW_SERVICE --> DB
     MEMORY_SERVICE --> MEMORY
     CHAT_SERVICE --> MAIN
+    EXTERNAL_SYNC_SERVICE --> REVIEW_SERVICE
+    EXTERNAL_SYNC_SERVICE --> MEMORY_SERVICE
 
     SUB -->|读| SOUL
     SUB -->|读| MEMORY
@@ -403,9 +411,9 @@ ZEUS/天眼输入可信度相关结构状态：
 - Web 工单/后台和 TUI 作为人工消费入口，从 approval inbox 选择 pending request 后 approve，生成一次性 `SocAgentApprovalGrant.execution_token_id`，再 dry-run / execute。当前 Web/TUI 都只进入 execution boundary，不执行真实外部副作用。
 - 统一中心是 `SocAgentApprovalService` + request/grant repository + audit/event log；middleware 只是 Agent 入口 adapter，不是审批系统唯一中心。
 
-真实 Kafka consumer adapter 规划见 `.notes/ai_soc/kafka-consumer-adapter-plan.md`，生产运行约定见 `.notes/ai_soc/soc-daemon-production-runbook.md`，worker pool / concurrency 规划见 `.notes/ai_soc/kafka-worker-pool-concurrency-plan.md`。Kafka 当前进入收口/暂缓状态：Prometheus `/metrics` exporter、bounded worker pool、多 replica 和压测都等真实 Kafka/DB/K8s 参数、吞吐/延迟数据和 LLM 限流策略明确后再做。SOC 主线当前已完成 `SocSkillResolver + SOC Lead Agent MVP`、skill-selected bounded context、profile installation、Lead Agent chat entry、review context bridge、action proposal boundary、approval proposal rendering、action adapter registry contract、approval service adapter dry-run integration、execute adapter preflight、first concrete safe read-only adapter、read-only adapter dispatcher/tool gateway wiring、SOC Lead Agent read-only tool proposal bridge、MCP adapter bridge planning、MCP provider port/fake adapter tests、MCP-backed read-only `asset.lookup` adapter config builder、DeerFlow cached MCP provider implementation、read-only MCP config smoke wiring、dev/staging MCP smoke report contract、MCP smoke readiness inventory、本地真实 stdio MCP fixture smoke、`soc-asset-extraction` skill、`asset.locate` MCP mock、read-only action evidence bridge、InvestigationEvidence PG persistence、Lead Agent evidence reuse 和 endpoint process-tree mock adapter；真实 dev/staging CMDB/EDR MCP server 替换本地 fixture这一步等待 endpoint/凭证，拿到后再保存 `soc.mcp_action_smoke_report.v1`，评估延迟、失败率、payload size 和敏感字段裁剪，不开放 high-risk execute。
+真实 Kafka consumer adapter 规划已归档到 `.notes/archive/ai_soc/implementation-plans/kafka-consumer-adapter-plan.md`，生产运行约定已归档到 `.notes/archive/ai_soc/runbooks/soc-daemon-production-runbook.md`，worker pool / concurrency 规划已归档到 `.notes/archive/ai_soc/deferred/kafka-worker-pool-concurrency-plan.md`。Kafka 当前进入收口/暂缓状态：Prometheus `/metrics` exporter、bounded worker pool、多 replica 和压测都等真实 Kafka/DB/K8s 参数、吞吐/延迟数据和 LLM 限流策略明确后再做。SOC 主线当前已完成 `SocSkillResolver + SOC Lead Agent MVP`、skill-selected bounded context、profile installation、Lead Agent chat entry、review context bridge、action proposal boundary、approval proposal rendering、action adapter registry contract、approval service adapter dry-run integration、execute adapter preflight、first concrete safe read-only adapter、read-only adapter dispatcher/tool gateway wiring、SOC Lead Agent read-only tool proposal bridge、MCP adapter bridge planning、MCP provider port/fake adapter tests、MCP-backed read-only `asset.lookup` adapter config builder、DeerFlow cached MCP provider implementation、read-only MCP config smoke wiring、dev/staging MCP smoke report contract、MCP smoke readiness inventory、本地真实 stdio MCP fixture smoke、`soc-asset-extraction` skill、`asset.locate` MCP mock、read-only action evidence bridge、InvestigationEvidence PG persistence、Lead Agent evidence reuse 和 endpoint process-tree mock adapter；真实 dev/staging CMDB/EDR MCP server 替换本地 fixture这一步等待 endpoint/凭证，拿到后再保存 `soc.mcp_action_smoke_report.v1`，评估延迟、失败率、payload size 和敏感字段裁剪，不开放 high-risk execute。
 
-后续运行态观察台需求已暂存到 `.notes/ai_soc/operations-overview-deferred.md`。该需求有价值，但不作为当前主链路走通的前置条件；等 Kafka daemon、review queue、approval inbox 和 runtime audit 的真实数据流稳定后再进入实现。
+后续运行态观察台需求已暂存到 `.notes/archive/ai_soc/deferred/operations-overview-deferred.md`。该需求有价值，但不作为当前主链路走通的前置条件；等 Kafka daemon、review queue、approval inbox 和 runtime audit 的真实数据流稳定后再进入实现。
 
 ReviewQueue TUI 实现边界：
 
@@ -1801,18 +1809,20 @@ workflow conclusion
 | `soc correct` / ReviewQueue correction | correction fact / lesson candidate | `pending_review` 或 `confirmed_candidate` | 分析师明确确认时可信度较高，但仍要带 evidence |
 | `soc review tui` 关闭/备注 | analyst observation candidate | `pending_review` | close 不等于改判，不能自动生成 confirmed lesson |
 | Kafka daemon 批量处理 | repeated pattern candidate | `pending_review` | 幂等键必须包含 `topic/partition/offset` 或 run id，防止重放污染 |
+| External disposition sync | external feedback / lesson candidate | `pending_review` | Zeus/ITSM/SOAR 等外部系统的 status/reason 先经 `SocExternalDispositionService` 同步，不直接写 confirmed memory |
 | SOC Lead Agent 总结 | memory candidate | `pending_review` | LLM 只能提出候选，不确认事实 |
 | DomainTriageResult | topic/scenario candidate | `pending_review` | APT/EDR/HIDS/F5 finding 稳定后再接入 |
 | InvestigationEvidence | evidence ref | 不直接是 memory | 作为候选记忆的证据链 |
 
 推荐实现顺序：
 
-1. 在 Correlation Service MVP 后做 **Memory Tracking Contract**：`SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryFact`、`SocMemoryEvidenceRef`、`SocMemoryQuery`、`SocMemoryStatus`。
-2. 新增 `SocMemoryService.propose_candidate()`，入口层只能调用 service，不能直接写 repository。
-3. TUI/Web correction 先接 candidate 写入，作为人工工作流最可信来源。
-4. Kafka daemon 只生成 repeated pattern candidate，默认 `pending_review`。
-5. PromptBuilder / Lead Agent bounded context 只注入 `confirmed` 且未过期的 facts，并记录 memory fact id、version/hash 和命中原因。
-6. Wiki/OKF export 等 DB memory store、retrieval 和 review workflow 稳定后再做；自动方向只能是 DB -> wiki/OKF，反向修改必须生成 proposal 后经 `SocMemoryService` 写回。
+1. 在 Correlation Service MVP 后做 **External Disposition Sync Contract**：`SocExternalDispositionEvent`、adapter port、mapping config、idempotency、unmatched record、audit 和 review/correction sync。
+2. 再做 **Memory Tracking Contract**：`SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryFact`、`SocMemoryEvidenceRef`、`SocMemoryQuery`、`SocMemoryStatus`。
+3. 新增 `SocMemoryService.propose_candidate()`，入口层只能调用 service，不能直接写 repository。
+4. TUI/Web correction 和 external disposition reason 先接 candidate 写入，作为人工工作流最可信来源。
+5. Kafka daemon 只生成 repeated pattern candidate，默认 `pending_review`。
+6. PromptBuilder / Lead Agent bounded context 只注入 `confirmed` 且未过期的 facts，并记录 memory fact id、version/hash 和命中原因。
+7. Wiki/OKF export 等 DB memory store、retrieval 和 review workflow 稳定后再做；自动方向只能是 DB -> wiki/OKF，反向修改必须生成 proposal 后经 `SocMemoryService` 写回。
 
 ---
 

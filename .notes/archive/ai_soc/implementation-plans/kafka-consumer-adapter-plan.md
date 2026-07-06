@@ -258,7 +258,7 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
   - 默认执行 `soc daemon status --check-broker`。
   - 不处理业务消息，不 commit offset，不写 DB。
 - 运行说明：
-  - `.notes/ai_soc/soc-daemon-production-runbook.md`
+  - `.notes/archive/ai_soc/runbooks/soc-daemon-production-runbook.md`
   - 当前不修改 DeerFlow 主 docker-compose；SOC daemon 后续通过独立 overlay 或生产模板接入。
 
 已完成 isolated run-mode smoke：
@@ -322,7 +322,7 @@ Kafka consumer 是后台 ingestion adapter，不是新的业务系统。它只�
 - 当前 K8s opt-in template 已提供 deployment contract 示例。
 - 后续建议：
   - 用真实环境参数验证 K8s manifest：image、namespace、secret manager、日志采集标签、resource sizing。
-  - worker pool / concurrency 已先做规划，见 `.notes/ai_soc/kafka-worker-pool-concurrency-plan.md`；partition commit tracker、幂等写入边界和 worker result contract 已完成，真正 bounded worker pool 等真实吞吐/延迟和资源参数明确后再做。
+  - worker pool / concurrency 已先做规划，见 `.notes/archive/ai_soc/deferred/kafka-worker-pool-concurrency-plan.md`；partition commit tracker、幂等写入边界和 worker result contract 已完成，真正 bounded worker pool 等真实吞吐/延迟和资源参数明确后再做。
 
 ## Prometheus Deferred Plan
 
