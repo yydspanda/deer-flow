@@ -8,6 +8,7 @@ from soc_agent.eval import (
     load_pingan_capability_eval_fixtures,
     run_pingan_capability_eval,
     run_pingan_domain_triage_eval,
+    run_pingan_main_orchestrator_eval,
 )
 
 
@@ -87,5 +88,48 @@ def test_cli_eval_pingan_domain_outputs_report(capsys) -> None:
 
     assert code == 0
     assert data["schema_version"] == "soc.pingan_domain_triage_eval_report.v1"
+    assert data["sample_count"] == 3
+    assert data["failed_count"] == 0
+
+
+def test_pingan_main_orchestrator_eval_runs_default_fixtures() -> None:
+    fixtures = load_pingan_capability_eval_fixtures(DEFAULT_PINGAN_CAPABILITY_EVAL_DIR)
+
+    report = run_pingan_main_orchestrator_eval(fixtures)
+
+    assert report.schema_version == "soc.pingan_main_orchestrator_eval_report.v1"
+    assert report.sample_count == 3
+    assert report.route_step_count == 6
+    assert report.evidence_count == 6
+    assert report.domain_finding_count == 3
+    assert report.failed_count == 0
+    assert report.passed_count == 3
+
+    by_sample = {result.sample_id: result for result in report.results}
+    apt = by_sample["pingan-apt-action-evidence"]
+    assert apt.report.skill_context.selected_skills
+    assert [step.route for step in apt.report.route_steps] == [
+        "threat_intel.ip_reputation.lookup",
+        "security_tag.lookup",
+    ]
+    assert all(step.evidence_id for step in apt.report.route_steps)
+    assert apt.report.domain_triage_results[0].findings[0].capability_card_refs
+    assert apt.report.review_context.run_id == apt.report.run.run_id
+    assert apt.report.metadata["writes_db"] is False
+    assert apt.report.metadata["executes_high_risk_actions"] is False
+
+    hids = by_sample["pingan-hids-action-evidence"]
+    assert hids.report.review_context.action_evidence_count == 2
+    assert hids.report.review_context.domain_finding_count == 1
+
+
+def test_cli_eval_pingan_main_outputs_report(capsys) -> None:
+    code = main(["eval", "pingan-main", "--pretty"])
+
+    captured = capsys.readouterr()
+    data = json.loads(captured.out)
+
+    assert code == 0
+    assert data["schema_version"] == "soc.pingan_main_orchestrator_eval_report.v1"
     assert data["sample_count"] == 3
     assert data["failed_count"] == 0

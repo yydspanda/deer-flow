@@ -1372,6 +1372,67 @@ class SocDomainTriageResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class SocOrchestratorActionSpec(BaseModel):
+    """One explicit read-only action requested by the main orchestrator."""
+
+    route: str = Field(min_length=1)
+    action: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocOrchestratorRouteStep(BaseModel):
+    """One route/action/evidence step inside a main orchestrator report."""
+
+    route: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    status: Literal["success", "denied", "failed"]
+    message: str = Field(min_length=1)
+    evidence_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocOrchestratorReviewContextSummary(BaseModel):
+    """Bounded review context summary for analyst-facing reports."""
+
+    run_id: str
+    alert_id: str
+    verdict: Verdict | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    needs_review: bool = True
+    reason: str | None = None
+    analysis_summary: str | None = None
+    action_evidence_count: int = Field(default=0, ge=0)
+    domain_finding_count: int = Field(default=0, ge=0)
+
+
+class SocMainOrchestratorRequest(BaseModel):
+    """Input for one bounded main-orchestrator demo run."""
+
+    schema_version: str = "soc.main_orchestrator_request.v1"
+    payload: dict[str, Any]
+    sample_id: str | None = None
+    thread_id: str | None = None
+    action_specs: list[SocOrchestratorActionSpec] = Field(default_factory=list)
+    capability_card_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class UnifiedInvestigationReport(BaseModel):
+    """Unified report assembled by the SOC main orchestrator."""
+
+    schema_version: str = "soc.unified_investigation_report.v1"
+    report_id: str = Field(default_factory=lambda: f"UIR-{uuid4().hex[:12].upper()}")
+    sample_id: str | None = None
+    run: AnalysisRun
+    skill_context: SocSkillContext = Field(default_factory=SocSkillContext)
+    route_steps: list[SocOrchestratorRouteStep] = Field(default_factory=list)
+    investigation_evidence: list[InvestigationEvidence] = Field(default_factory=list)
+    domain_triage_results: list[SocDomainTriageResult] = Field(default_factory=list)
+    review_context: SocOrchestratorReviewContextSummary
+    created_at: datetime = Field(default_factory=utc_now)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class InvestigationContext(BaseModel):
     """Read model used by analyst surfaces to open one review item."""
 

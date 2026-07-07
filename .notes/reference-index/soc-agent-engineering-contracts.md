@@ -219,6 +219,15 @@ Domain triage 约束：
 - PA-10 handler 输出只允许包含 finding、evidence refs、capability card refs、recommendations、limitations 和 metadata；任何处置动作必须转成 action proposal 并回到 policy/approval boundary。
 - Domain finding 是分析证据，不是 operational verdict。它可以进入 unified investigation report、ReviewQueue/Lead Agent bounded context 和 pending memory candidate source，但不能自动关闭工单或自动确认 memory。
 
+Main orchestrator 约束：
+
+- `SocMainOrchestratorService` 是 PA-11 unified investigation report 的 core service 入口；CLI/API/TUI/Web/Lead Agent 后续展示统一报告时不得绕过它自己拼 analyze/action/domain/review 链路。
+- `SocMainOrchestratorRequest` / `UnifiedInvestigationReport` / `SocOrchestratorRouteStep` / `SocOrchestratorReviewContextSummary` 是主控报告的稳定 contract；前端和 eval 只能消费这些结构，不能消费 handler 内部私有对象。
+- Main orchestrator 只能调用已有 core service、router、policy/dispatcher、adapter registry 和 domain triage service；不能直接读写 repository、不能直接调用 MCP/tool、不能直接执行高风险动作、不能确认 memory。
+- PA-11 report 中的 read-only action result 必须先写 `InvestigationEvidence`，再通过 evidence refs 进入 domain finding 和 review context；不能让 route step payload 直接改变 verdict。
+- report metadata 必须显式标记 `handler_output_only`、`writes_db`、`executes_high_risk_actions` 等边界语义；eval 必须验证这些字段，防止 demo 链路被误当生产处置链路。
+- `PA-12` 真实 PingAn MCP/API 替换只能替换 action adapter/provider/config，不能改变 Main Orchestrator contract；真实 endpoint/凭证缺失时状态为 Waiting，不允许用本地 mock 冒充完成。
+
 PingAn SOC capability onboarding 约束：
 
 - 平安 SOC 工具、MCP、skill、研判经验和处置经验进入项目之前，必须先整理成 capability card；来源、适用场景、输入字段、输出结构、风险等级、失败模式和脱敏验收样例必须明确。

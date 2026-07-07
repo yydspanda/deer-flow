@@ -153,8 +153,8 @@ field experience
 | `PA-08` | Done | 建 eval fixtures | 已新增 `backend/samples/eval/pingan/` 三条 fixture、`backend/samples/alerts/pingan_legacy_hids.json` 和 `soc eval pingan` | APT / EDR / HIDS 各 1 条脱敏 fixture；覆盖字段冲突、查不到外部事实、误报/授权标签；成功结果写 `InvestigationEvidence` |
 | `PA-09` | Done | 接 memory candidate 入口 | 已新增 `SocMemoryCandidate` contract、`MemoryCandidateRepository`、in-memory repository 和 `SocMemoryService.propose_candidate()` | 只写 `pending_review`；含 source/evidence/validity/idempotency/facets/review 信息；不自动 confirmed |
 | `PA-10` | Done | 接 domain triage MVP | 已新增 APT / EDR / HIDS domain handlers，读取 capability card refs、skill context、evidence refs 并输出 domain findings | 子研判只输出 finding/evidence/recommendation，不直接写 DB 或执行动作 |
-| `PA-11` | Next | 接 Main Orchestrator demo | 单条 APT/EDR/HIDS demo 能看到 route -> skill -> read-only evidence -> finding -> review context | TUI/Web 可解释用了哪些平安能力、哪些只是候选、哪些需要人工确认 |
-| `PA-12` | Deferred | 真实 PingAn MCP/API 替换 mock | dev/staging endpoint/凭证就绪后替换 mock adapter provider | 保存 smoke report；评估 latency、失败率、敏感字段裁剪、payload size |
+| `PA-11` | Done | 接 Main Orchestrator demo | 已新增 `SocMainOrchestratorService`、`UnifiedInvestigationReport`、`soc eval pingan-main` | APT/EDR/HIDS demo 能看到 analyze -> skill -> read-only evidence -> domain finding -> review context；仍不写 DB、不执行高风险动作 |
+| `PA-12` | Waiting | 真实 PingAn MCP/API 替换 mock | 等 dev/staging endpoint/凭证后替换 mock adapter provider | 保存 smoke report；评估 latency、失败率、敏感字段裁剪、payload size；不能用本地 mock 假装完成 |
 
 ### 5.4 P0 Capability Cards
 
@@ -274,11 +274,11 @@ Slice 0: PingAn SOC capability onboarding
 
 当前建议执行顺序：
 
-1. 先实现 `SocCorrelationService` MVP，不等完整平安经验包。
-2. 同时开始收集 3-5 张 P0 capability card：APT 方向、EDR 进程树、资产归属、F5 抑制目标、HIDS 主机事件。
-3. 做 Memory Tracking Contract 时，用这些 card 固定 memory type、topics、canonical detection、vendor aliases、scenario facets 和 evidence refs。
-4. 做 Domain Sub-Agent Contract 时，用这些 card 校验 schema 是否够用。
-5. 做 MVP handlers 时，把 card 转成 skill/context、deterministic rule、mock adapter 或 eval case。
+1. 已完成 `SocCorrelationService` MVP、`PA-01..PA-11` PingAn 可见链路。
+2. `PA-12` 只在真实 dev/staging PingAn MCP/API 参数可用时推进：替换 provider、跑 smoke/eval、保存报告，并评估延迟、失败率、字段裁剪和敏感信息风险。
+3. 在真实接口未就绪前，下一刀应转向外部处置反馈、typed memory tracking 或 Web/TUI 可见化，而不是继续堆更多 mock。
+4. 做 Memory Tracking Contract 时，用这些 card 固定 memory type、topics、canonical detection、vendor aliases、scenario facets 和 evidence refs。
+5. 做 Web/TUI 可见化时，用 `UnifiedInvestigationReport` 展示 route、skill、evidence、domain finding 和 review context。
 
 ## 9. 第一批建议让用户补充的信息
 

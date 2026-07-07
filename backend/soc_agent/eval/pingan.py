@@ -37,7 +37,10 @@ from soc_agent.contracts import (
     SocAgentChatRequest,
     SocDomainName,
     SocDomainTriageRequest,
+    SocMainOrchestratorRequest,
+    SocOrchestratorActionSpec,
     SocSkillContext,
+    UnifiedInvestigationReport,
 )
 from soc_agent.core import (
     InMemoryInvestigationEvidenceRepository,
@@ -45,6 +48,7 @@ from soc_agent.core import (
     SocAgentCapabilityRouter,
     SocAnalysisService,
     SocDomainTriageService,
+    SocMainOrchestratorService,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -172,6 +176,35 @@ class PingAnDomainTriageEvalReport(BaseModel):
     results: list[PingAnDomainTriageEvalSampleResult] = Field(default_factory=list)
 
 
+class PingAnMainOrchestratorEvalSampleResult(BaseModel):
+    """One PA-11 main-orchestrator demo result."""
+
+    sample_id: str
+    scenario: str
+    source_path: str
+    route_step_count: int = 0
+    skill_count: int = 0
+    evidence_count: int = 0
+    domain_finding_count: int = 0
+    review_context_ready: bool = False
+    passed: bool = False
+    failure_reasons: list[str] = Field(default_factory=list)
+    report: UnifiedInvestigationReport
+
+
+class PingAnMainOrchestratorEvalReport(BaseModel):
+    """Aggregate report for PingAn PA-11 main-orchestrator demo fixtures."""
+
+    schema_version: str = "soc.pingan_main_orchestrator_eval_report.v1"
+    sample_count: int = 0
+    route_step_count: int = 0
+    evidence_count: int = 0
+    domain_finding_count: int = 0
+    passed_count: int = 0
+    failed_count: int = 0
+    results: list[PingAnMainOrchestratorEvalSampleResult] = Field(default_factory=list)
+
+
 def load_pingan_capability_eval_fixtures(path: str | Path = DEFAULT_PINGAN_CAPABILITY_EVAL_DIR) -> list[PingAnCapabilityEvalFixture]:
     """Load one PingAn eval fixture file or all JSON fixtures in a directory."""
 
@@ -225,6 +258,21 @@ def run_pingan_domain_triage_eval(fixtures: Sequence[PingAnCapabilityEvalFixture
         passed_count=sum(result.passed for result in results),
         failed_count=sum(not result.passed for result in results),
         domain_counts=domain_counts,
+        results=results,
+    )
+
+
+def run_pingan_main_orchestrator_eval(fixtures: Sequence[PingAnCapabilityEvalFixture]) -> PingAnMainOrchestratorEvalReport:
+    """Run PingAn fixtures through PA-11 main-orchestrator unified reports."""
+
+    results = [_run_main_orchestrator_fixture(fixture) for fixture in fixtures]
+    return PingAnMainOrchestratorEvalReport(
+        sample_count=len(results),
+        route_step_count=sum(result.route_step_count for result in results),
+        evidence_count=sum(result.evidence_count for result in results),
+        domain_finding_count=sum(result.domain_finding_count for result in results),
+        passed_count=sum(result.passed for result in results),
+        failed_count=sum(not result.passed for result in results),
         results=results,
     )
 
@@ -314,6 +362,64 @@ def _run_domain_fixture(fixture: PingAnCapabilityEvalFixture) -> PingAnDomainTri
         passed=not failure_reasons,
         failure_reasons=failure_reasons,
         findings=findings,
+    )
+
+
+def _run_main_orchestrator_fixture(fixture: PingAnCapabilityEvalFixture) -> PingAnMainOrchestratorEvalSampleResult:
+    source_payload = _load_source_payload(fixture)
+    expected_domain = _expected_domain_for_fixture(fixture, fixture.expected_source_type)
+    service = SocMainOrchestratorService(action_adapter_registry=_registry_for_fixture(fixture))
+    report = service.run(
+        SocMainOrchestratorRequest(
+            payload=source_payload,
+            sample_id=fixture.sample_id,
+            thread_id=f"THR-{fixture.sample_id}",
+            action_specs=[
+                SocOrchestratorActionSpec(
+                    route=action.route,
+                    action=action.action,
+                    payload=action.payload,
+                )
+                for action in fixture.actions
+            ],
+            capability_card_refs=_expected_capability_cards(expected_domain),
+            metadata={"source_path": fixture.source_path, "fixture_path": fixture.fixture_path},
+        )
+    )
+    failure_reasons: list[str] = []
+    if len(report.route_steps) != len(fixture.actions):
+        failure_reasons.append(f"expected {len(fixture.actions)} route steps, got {len(report.route_steps)}")
+    failed_steps = [item.route for item in report.route_steps if item.status != "success"]
+    if failed_steps:
+        failure_reasons.append(f"route steps failed: {', '.join(failed_steps)}")
+    if fixture.actions and not all(item.evidence_id for item in report.route_steps):
+        failure_reasons.append("expected every read-only route step to produce evidence_id")
+    if not report.skill_context.selected_skills:
+        failure_reasons.append("expected selected SOC skills in unified report")
+    if len(report.investigation_evidence) < sum(1 for action in fixture.actions if action.expect_evidence):
+        failure_reasons.append("expected investigation evidence for read-only actions")
+    finding_count = sum(len(result.findings) for result in report.domain_triage_results)
+    if finding_count == 0:
+        failure_reasons.append("expected at least one domain finding")
+    if report.review_context.run_id != report.run.run_id or report.review_context.alert_id != report.run.alert_id:
+        failure_reasons.append("review context does not reference the orchestrated run")
+    if report.metadata.get("writes_db") is not False:
+        failure_reasons.append("main orchestrator demo must not write DB")
+    if report.metadata.get("executes_high_risk_actions") is not False:
+        failure_reasons.append("main orchestrator demo must not execute high-risk actions")
+
+    return PingAnMainOrchestratorEvalSampleResult(
+        sample_id=fixture.sample_id,
+        scenario=fixture.scenario,
+        source_path=fixture.source_path,
+        route_step_count=len(report.route_steps),
+        skill_count=len(report.skill_context.selected_skills),
+        evidence_count=len(report.investigation_evidence),
+        domain_finding_count=finding_count,
+        review_context_ready=report.review_context.run_id == report.run.run_id,
+        passed=not failure_reasons,
+        failure_reasons=failure_reasons,
+        report=report,
     )
 
 
@@ -538,7 +644,10 @@ __all__ = [
     "PingAnDomainTriageEvalFinding",
     "PingAnDomainTriageEvalReport",
     "PingAnDomainTriageEvalSampleResult",
+    "PingAnMainOrchestratorEvalReport",
+    "PingAnMainOrchestratorEvalSampleResult",
     "load_pingan_capability_eval_fixtures",
     "run_pingan_capability_eval",
     "run_pingan_domain_triage_eval",
+    "run_pingan_main_orchestrator_eval",
 ]

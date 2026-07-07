@@ -28,7 +28,8 @@ PingAn SOC Capability Onboarding
   -> SocCorrelationService [MVP done]
   -> PingAn Memory Candidate Entry [done]
   -> PingAn Domain Triage MVP [done]
-  -> PingAn Main Orchestrator Demo [next]
+  -> PingAn Main Orchestrator Demo [done]
+  -> PingAn real MCP/API replacement [waiting for endpoint/credentials]
   -> External Disposition Sync
   -> Memory Tracking Contract
   -> Domain Sub-Agent Contract
@@ -38,11 +39,11 @@ PingAn SOC Capability Onboarding
   -> Web/TUI/Lead Agent 可审阅展示
 ```
 
-`PingAn SOC Capability Onboarding` 是业务经验注入层：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验先整理成 capability card，再分类落到 skill、MCP/action adapter、normalizer、domain handler、eval case 或 memory candidate。它不直接把经验塞进 prompt，也不把生产 secret 写入仓库；详见 `.notes/ai_soc/pingan-soc-capability-onboarding.md`。平安 APT/EDR/HIDS 文档拆解规则见 `.notes/ai_soc/pingan-knowledge-decomposition-plan.md`：只有跨客户通用研判方法可以进入 `skills/public/soc-*`，平安内部环境知识、误报模式、字段别名、模板/策略 ID、账号/组织/域名例外必须进入 tenant-scoped memory、adapter、policy/config 或 eval。第一版卡片台账见 `.notes/ai_soc/pingan-capability-cards.md`，平安专属知识候选见 `.notes/ai_soc/pingan-knowledge-candidates.md`；当前已完成 `PA-01` capability register、`PA-02` APT source decomposition、`PA-03` EDR source decomposition、`PA-04` HIDS source decomposition、`PA-05` PingAnKnowledgeCandidate register、`PA-06` public skill minimal revisions、`PA-07` P0 read-only mock action adapters、`PA-08` eval fixtures、`PA-09` memory candidate 入口和 `PA-10` domain triage MVP，下一步进入 `PA-11` Main Orchestrator demo。代码层面，平安字段接入只作为 normalizer adapter 存在于 `backend/soc_agent/normalizers/pingan_platform.py`；core service 后续仍只消费 canonical `AlertInput`，其他客户/供应商也应通过独立 adapter 接入。
+`PingAn SOC Capability Onboarding` 是业务经验注入层：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验先整理成 capability card，再分类落到 skill、MCP/action adapter、normalizer、domain handler、eval case 或 memory candidate。它不直接把经验塞进 prompt，也不把生产 secret 写入仓库；详见 `.notes/ai_soc/pingan-soc-capability-onboarding.md`。平安 APT/EDR/HIDS 文档拆解规则见 `.notes/ai_soc/pingan-knowledge-decomposition-plan.md`：只有跨客户通用研判方法可以进入 `skills/public/soc-*`，平安内部环境知识、误报模式、字段别名、模板/策略 ID、账号/组织/域名例外必须进入 tenant-scoped memory、adapter、policy/config 或 eval。第一版卡片台账见 `.notes/ai_soc/pingan-capability-cards.md`，平安专属知识候选见 `.notes/ai_soc/pingan-knowledge-candidates.md`；当前已完成 `PA-01` capability register、`PA-02` APT source decomposition、`PA-03` EDR source decomposition、`PA-04` HIDS source decomposition、`PA-05` PingAnKnowledgeCandidate register、`PA-06` public skill minimal revisions、`PA-07` P0 read-only mock action adapters、`PA-08` eval fixtures、`PA-09` memory candidate 入口、`PA-10` domain triage MVP 和 `PA-11` Main Orchestrator demo。`PA-12` 不是继续写 mock，而是等真实 PingAn dev/staging MCP/API endpoint 和凭证可用后替换 provider 并保存 smoke/eval report。代码层面，平安字段接入只作为 normalizer adapter 存在于 `backend/soc_agent/normalizers/pingan_platform.py`；core service 后续仍只消费 canonical `AlertInput`，其他客户/供应商也应通过独立 adapter 接入。
 
 `External Disposition Sync` 是外部预警/工单/处置系统的人工反馈接入层：Zeus 只是第一个 adapter，未来要能接客户自研 SOC、SIEM/SOAR、ITSM、ServiceNow、Jira 等系统。外部状态/理由通过 vendor-neutral `SocExternalDispositionEvent` 进入 `SocExternalDispositionService`，再同步 audit、review/correction 和 pending memory / skill improvement candidate；不得把外部 free-text reason 直接写成 confirmed memory，也不得让外部系统直接修改 skill 或 prompt。详见 `.notes/ai_soc/external-disposition-sync-plan.md`。
 
-`SocCorrelationService` MVP 已完成：基于 `soc_alert_summaries` 和 `soc_investigation_evidence` 输出结构化相似告警、匹配原因和可复用证据；不调用 LLM、不依赖真实 MCP、不修改 DeerFlow core。当前按用户决策先继续 PingAn 专项，`PA-08` 已新增 `soc eval pingan` 和 APT/EDR/HIDS 脱敏 fixture，覆盖字段冲突、查不到外部事实、误报/授权标签等样例；`PA-09` 已新增 pending review memory candidate 入口；`PA-10` 已新增 APT/EDR/HIDS deterministic domain triage 和 `soc eval pingan-domain`。下一刀做 `PA-11` Main Orchestrator demo；`External Disposition Sync Contract` 后续继续保留为 Phase 2 主线项，但不抢当前 PingAn 可见链路。
+`SocCorrelationService` MVP 已完成：基于 `soc_alert_summaries` 和 `soc_investigation_evidence` 输出结构化相似告警、匹配原因和可复用证据；不调用 LLM、不依赖真实 MCP、不修改 DeerFlow core。当前按用户决策先继续 PingAn 专项，`PA-08` 已新增 `soc eval pingan` 和 APT/EDR/HIDS 脱敏 fixture，覆盖字段冲突、查不到外部事实、误报/授权标签等样例；`PA-09` 已新增 pending review memory candidate 入口；`PA-10` 已新增 APT/EDR/HIDS deterministic domain triage 和 `soc eval pingan-domain`；`PA-11` 已新增 `SocMainOrchestratorService`、`UnifiedInvestigationReport` 和 `soc eval pingan-main`，能看到 analyze -> selected skills -> read-only evidence -> domain findings -> review context 的完整只读链路。`PA-12` 等真实接口参数；`External Disposition Sync Contract` 后续继续保留为 Phase 2 主线项。
 
 文档关系：本文件决定“做什么和先后顺序”；`.notes/reference-index/soc-agent-engineering-contracts.md` 决定“代码接口、协议、边界和测试怎么约束”。如果两者措辞冲突，以本文件为方向源头，并同步修正工程契约。
 

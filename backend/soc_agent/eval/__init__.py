@@ -17,9 +17,12 @@ from soc_agent.eval.pingan import (
     PingAnDomainTriageEvalFinding,
     PingAnDomainTriageEvalReport,
     PingAnDomainTriageEvalSampleResult,
+    PingAnMainOrchestratorEvalReport,
+    PingAnMainOrchestratorEvalSampleResult,
     load_pingan_capability_eval_fixtures,
     run_pingan_capability_eval,
     run_pingan_domain_triage_eval,
+    run_pingan_main_orchestrator_eval,
 )
 
 __all__ = [
@@ -35,9 +38,12 @@ __all__ = [
     "PingAnDomainTriageEvalFinding",
     "PingAnDomainTriageEvalReport",
     "PingAnDomainTriageEvalSampleResult",
+    "PingAnMainOrchestratorEvalReport",
+    "PingAnMainOrchestratorEvalSampleResult",
     "load_eval_responses_jsonl",
     "load_pingan_capability_eval_fixtures",
     "run_offline_eval",
     "run_pingan_capability_eval",
     "run_pingan_domain_triage_eval",
+    "run_pingan_main_orchestrator_eval",
 ]

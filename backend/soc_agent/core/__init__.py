@@ -2,6 +2,7 @@
 
 from soc_agent.core.correlation import SocCorrelationService
 from soc_agent.core.evidence import InMemoryInvestigationEvidenceRepository
+from soc_agent.core.orchestrator import SocMainOrchestratorService
 from soc_agent.core.service import (
     DeterministicAnalysisRuntime,
     NoopEventSink,
@@ -35,6 +36,7 @@ __all__ = [
     "SocCorrelationService",
     "SocDaemonService",
     "SocDomainTriageService",
+    "SocMainOrchestratorService",
     "SocMemoryService",
     "SocNormalizationService",
     "SocReviewService",

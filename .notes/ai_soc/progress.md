@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `PA-10` PingAn domain triage MVP 已完成；下一刀继续 `PA-11` Main Orchestrator demo。`External Disposition Sync Contract` 保持 Planned，不抢当前 PingAn 可见链路。 |
+| 当前下一刀 | `PA-11` PingAn Main Orchestrator demo 已完成；`PA-12` 真实 PingAn MCP/API 替换等待 dev/staging endpoint/凭证。真实接口未就绪前，下一刀回到 External Disposition Sync / Memory Tracking / Web-TUI 可见化主线。 |
 
 ## 当前待办列表
 
@@ -36,7 +36,7 @@
 
 | 顺序 | 待办 | 状态 | 做什么 | 验收标准 |
 |---|---|---|---|---|
-| 0 | PingAn knowledge decomposition | In progress | 已完成 `PA-01..PA-10`；当前继续 `PA-11` Main Orchestrator demo | 通用 skill 不含平安内部知识；每条平安经验都有 target artifact、tenant scope、来源和验收方式 |
+| 0 | PingAn knowledge decomposition | In progress | 已完成 `PA-01..PA-11`；`PA-12` 等真实 PingAn MCP/API 参数 | 通用 skill 不含平安内部知识；每条平安经验都有 target artifact、tenant scope、来源和验收方式 |
 | 0.1 | `PA-01` PingAn capability card register | Done | 已新增 `.notes/ai_soc/pingan-capability-cards.md`，从 APT/EDR/HIDS 三份源文档抽出 P0/P1/P2 cards | P0 card 已明确 source、场景、输入、输出、落点、风险等级、失败模式和验收要求；mock MCP 必须等 card 明确后再做 |
 | 0.2 | `PA-02` APT source decomposition | Done | 已扩展 `PA-APT-001..005`：攻击方向、场景化研判、威胁情报、security tag、IP 封堵高风险边界；拆出 skill/domain handler/eval/memory/action 边界 | APT 通用方法进 public skill/domain handler；平安字段、URI 例外、内部环境、策略和阈值只进 tenant artifact |
 | 0.3 | `PA-03` EDR source decomposition | Done | 已扩展 EDR cards：进程树、路径/命令行、LoginData/System、提权、UM/账号、终端处置候选 | 通用 endpoint 方法进 skill/domain handler；平安路径、账号、部门、BU 和封禁/隔离策略只进 tenant artifact 或 approval-gated action |
@@ -47,12 +47,14 @@
 | 0.8 | `PA-08` PingAn eval fixtures | Done | 已新增 `backend/samples/eval/pingan/` 三条 fixture、`backend/samples/alerts/pingan_legacy_hids.json`、`backend/soc_agent/eval/pingan.py` 和 `soc eval pingan` | APT/EDR/HIDS 各 1 条脱敏 fixture；覆盖字段冲突、查不到外部事实、误报/授权标签；read-only success 写 `InvestigationEvidence` |
 | 0.9 | `PA-09` PingAn memory candidate entry | Done | 已新增 `SocMemoryCandidate` contracts、`MemoryCandidateRepository` protocol、in-memory repository 和 `SocMemoryService.propose_candidate()` | 候选默认 `pending_review`，携带 source/evidence/validity/idempotency/facets/review 信息；不自动 confirmed，不影响 runtime decision |
 | 0.10 | `PA-10` PingAn domain triage MVP | Done | 已新增 `SocDomainTriageRequest/Result/Finding` contract、`SocDomainTriageService`、APT/EDR/HIDS deterministic handlers 和 `soc eval pingan-domain` | 子研判只输出 finding/evidence/recommendation；消费 skill context 和 read-only evidence refs；不写 DB、不执行 action、不改 verdict |
+| 0.11 | `PA-11` PingAn main orchestrator demo | Done | 已新增 `SocMainOrchestratorService`、`UnifiedInvestigationReport`、`soc eval pingan-main` 和 APT/EDR/HIDS eval 覆盖 | 单条 demo 能看到 analyze -> selected skills -> read-only route/evidence -> domain finding -> review context；不写 DB、不执行高风险动作 |
+| 0.12 | `PA-12` real PingAn MCP/API replacement | Waiting | 等真实 PingAn dev/staging MCP/API endpoint/凭证后替换 mock provider，保存 smoke/eval report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险；不能用本地 mock 假装完成 |
 | 1 | Correlation Service MVP | Done | 已新增 `SocCorrelationService`、`CorrelationQuery`、`CorrelationResult`、CLI `soc correlate`；基于 summary/evidence 输出相似告警、匹配原因和可复用证据 | 不调用 LLM、不依赖真实 MCP、不改 DeerFlow core；demo alert 可看到结构化 correlation result |
 | 2 | External Disposition Sync Contract | Planned after PA-11 | 新增 vendor-neutral 外部处置反馈协议；Zeus/Webhook/Kafka/Polling adapter 只负责转成 `SocExternalDispositionEvent`，service 负责状态映射、审计、review/correction 同步和候选记忆 | 不在 core service 写死 Zeus；外部 status/reason 可同步，但 free-text reason 只能进 pending memory/skill improvement candidate |
 | 3 | Memory Tracking Contract | Planned | 新增 DB-first typed memory record + facets + retrieval policy；规划 `SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryQuery` 等 schema | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
 | 4 | Domain Sub-Agent Contract | Done for PA-10 | 已固定 `SocDomainTriageRequest`、`SocDomainTriageResult`、`SocDomainFinding` 结构 | EDR/APT/HIDS 已共用同一 schema；子研判不能直接改 decision 或写 DB |
 | 5 | EDR/APT/HIDS/F5 MVP handlers | Partial | 已先做 APT/EDR/HIDS deterministic + skill context domain handlers，复用已有 read-only evidence/mock adapter | APT/EDR/HIDS demo 已能输出 domain findings 和 evidence refs；F5/WAF handler 后续补 |
-| 6 | Main SOC Agent Orchestrator MVP | Planned | 串起 correlation、domain routing、domain triage、report merge，输出 `UnifiedInvestigationReport` | 单条 demo alert 能看到主控选择了哪些 domain handler、用了哪些证据、合并出什么结论 |
+| 6 | Main SOC Agent Orchestrator MVP | Done for PA-11 / correlation merge pending | 已串起 analyze、skill context、read-only action evidence、domain triage、review summary，输出 `UnifiedInvestigationReport`；correlation 尚未并入 report | APT/EDR/HIDS demo 能看到主控用了哪些 skill、route、evidence、domain finding 和 review context |
 | 7 | Web/TUI visible investigation | Planned | 在 ReviewQueue Web/TUI 展示 correlation panel、domain triage panel、evidence timeline、external disposition history、action proposal panel | 分析师能区分 runtime decision、domain findings、read-only evidence、外部人工反馈、人工 correction |
 | 8 | Demo / Eval Script | Planned | 提供可重复 demo/eval 命令，跑 APT/EDR/HIDS/F5 样例并生成 review item/report | 一条命令可稳定演示 runtime + correlation + domain triage + evidence + review 状态 |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
@@ -162,8 +164,41 @@
 | 96 | External Disposition Sync Contract | Planned after PA-11 | 固定外部预警/工单/处置系统状态与理由同步协议；Zeus 只是第一个 adapter；同步结果进入 audit/review/correction/memory candidate/skill improvement candidate |
 | 97 | Memory Tracking Contract | Planned | 固定 DB-first typed memory record + facets + retrieval policy；TUI/Web/Kafka/Lead Agent/domain/external disposition 结论先生成 `SocMemoryCandidate`，不直接写 confirmed memory；wiki/OKF 后期只做 projection |
 | 98 | PingAn Domain Triage MVP | Done | 新增 `SocDomainTriageService` 和 APT/EDR/HIDS deterministic handlers；`soc eval pingan-domain` 可验证三类样本输出 domain findings、capability card refs 和 evidence refs |
+| 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-07 — PA-11 PingAn main orchestrator demo
+
+- 背景：
+  - `PA-10` 已把 APT/EDR/HIDS capability cards、skill context 和 read-only evidence 收口成 domain findings；下一步需要一个主控服务把单条预警的固定分析、只读调查、子研判和复核上下文合成统一报告，让后续 Web/TUI/Lead Agent 有稳定输入。
+- 变更：
+  - 更新 `backend/soc_agent/contracts/schemas.py` 和 `backend/soc_agent/contracts/__init__.py`：
+    - 新增 `SocOrchestratorActionSpec`、`SocOrchestratorRouteStep`、`SocOrchestratorReviewContextSummary`、`SocMainOrchestratorRequest`、`UnifiedInvestigationReport`。
+  - 新增 `backend/soc_agent/core/orchestrator.py` 并导出 `SocMainOrchestratorService`：
+    - 串起 `SocAnalysisService.analyze()`、`SocAgentCapabilityRouter`、`SocAgentActionDispatcher`、`InvestigationEvidenceRepository`、`SocDomainTriageService`。
+    - 只处理显式 read-only action specs；结果进入 `InvestigationEvidence`，再进入 domain triage 和 review summary。
+    - report metadata 固定 `handler_output_only=true`、`writes_db=false`、`executes_high_risk_actions=false`。
+  - 更新 `backend/soc_agent/eval/pingan.py` 和 `backend/soc_agent/eval/__init__.py`：
+    - 新增 `run_pingan_main_orchestrator_eval()` 和 `PingAnMainOrchestratorEvalReport`。
+  - 更新 `backend/soc_agent/cli.py`：
+    - 新增 CLI：`soc eval pingan-main [path] --pretty`。
+  - 更新 `backend/tests/test_soc_pingan_capability_eval.py`：
+    - 覆盖 APT/EDR/HIDS report schema、route/evidence/finding/review context、read-only metadata 和 CLI 输出。
+  - 更新 `.notes/ai_soc/pingan-soc-capability-onboarding.md`、`.notes/ai_soc/soc-agent-solution.md`、`.notes/ai_soc/alert-lifecycle-flow.md`、`.notes/reference-index/soc-agent-engineering-contracts.md`：
+    - 固定 PA-11 已完成、PA-12 等真实 endpoint/凭证，不用 mock 假装完成真实替换。
+- 验证：
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff format backend/soc_agent/contracts/schemas.py backend/soc_agent/contracts/__init__.py backend/soc_agent/core/__init__.py backend/soc_agent/core/orchestrator.py backend/soc_agent/eval/__init__.py backend/soc_agent/eval/pingan.py backend/soc_agent/cli.py backend/tests/test_soc_pingan_capability_eval.py`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff check backend/soc_agent/contracts/schemas.py backend/soc_agent/contracts/__init__.py backend/soc_agent/core/__init__.py backend/soc_agent/core/orchestrator.py backend/soc_agent/eval/__init__.py backend/soc_agent/eval/pingan.py backend/soc_agent/cli.py backend/tests/test_soc_pingan_capability_eval.py`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_pingan_capability_eval.py -k 'main_orchestrator or pingan_main' -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_pingan_capability_eval.py -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_action_adapters.py -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_agent_service.py -k 'correlation or read_only or action_policy_treats_asset_locate or memory' -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m soc_agent.cli eval pingan-main`
+  - `git diff --check`
+  - `codegraph sync .`
+- 下一步：
+  - `PA-12` 等真实 PingAn MCP/API endpoint/凭证；真实接口未就绪前，下一刀回到 External Disposition Sync / Memory Tracking / Web-TUI visible investigation。
 
 ### 2026-07-07 — PA-10 PingAn domain triage MVP
 

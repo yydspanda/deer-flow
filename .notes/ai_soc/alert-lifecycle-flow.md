@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow
 
-> Updated: 2026-07-06
+> Updated: 2026-07-07
 >
 > 本文档描述两件事：
 >
@@ -29,9 +29,9 @@ alert in
 - `SocCorrelationService` MVP 已存在，能通过 CLI/core service 输出结构化相似告警、匹配原因和可复用 evidence；后续还需要接入 ReviewQueue/Web/TUI 可视化面板。
 - 还没有 vendor-neutral 的 external disposition sync 协议；Zeus 等外部系统中的状态/理由还不能可靠同步为本地 audit、review/correction 和候选记忆。
 - 已有 `SocMemoryCandidate` 候选入口；但还没有 DB-first typed memory store、确认/驳回/过期状态机和 confirmed memory 检索/注入策略。
-- 还没有统一的 domain sub-agent 输入输出协议。
-- EDR/APT/HIDS/F5 当前主要体现为 skills / mock action / prompt context，还不是可独立评估的子研判单元。
-- Main SOC Agent 还没有把 correlation、domain triage、read-only evidence 和统一研判报告串成一个可视化链路。
+- APT/EDR/HIDS 已有统一 `SocDomainTriageRequest` / `SocDomainTriageResult` / `SocDomainFinding`，F5/WAF handler 后续补。
+- PA-11 已有只读 Main Orchestrator demo：`SocMainOrchestratorService` 能把 deterministic analyze、selected skills、read-only action evidence、domain findings 和 review context 合成 `UnifiedInvestigationReport`。
+- 这条链路还没有接入 ReviewQueue Web/TUI 可视化，也没有替换为真实 PingAn MCP/API；PA-12 等真实 endpoint/凭证。
 
 因此下一阶段目标不是继续堆更多 mock tool，而是按下面待办补齐可见 Alpha 链路：
 
@@ -41,7 +41,8 @@ alert in
   -> [Done] PingAn PA-08 eval fixtures
   -> [Done] PingAn PA-09 memory candidate entry
   -> [Done] PingAn PA-10 domain triage MVP
-  -> [Next] PingAn PA-11 Main Orchestrator demo
+  -> [Done] PingAn PA-11 Main Orchestrator demo
+  -> [Waiting] PingAn PA-12 real MCP/API replacement
   -> [Planned] External Disposition Sync Contract
   -> [Planned] Memory Tracking Contract
   -> [Planned] Domain Sub-Agent Contract
@@ -69,6 +70,7 @@ PingAn APT/EDR/HIDS 专属经验当前已经先落到 `.notes/ai_soc/pingan-capa
 | `SocReviewService` | review queue、调查上下文、关闭、人工纠正；聚合 similar alerts 和 action evidence | Done |
 | `SocAgentApprovalService` | approval request inbox、approval grant、dry-run、execute boundary | Done |
 | `SocSkillResolver` | 从 canonical alert / review context 选择白名单 SOC domain skills，生成 compact bounded context | Done |
+| `SocMainOrchestratorService` | 串起 analyze -> read-only route/action/evidence -> domain triage -> bounded review summary，输出 `UnifiedInvestigationReport` | Done for PA-11 |
 | `SocLeadAgentChatService` | 通过 DeerFlow `DeerFlowClient(agent_name="soc-triage")` 进入现有 `lead_agent` | Done |
 | `SocLeadAgentActionProposalBoundary` | 只处理显式 `<soc_action_proposal>`；read-only proposal 走 router/policy/dispatcher/registry，高风险写入 approval inbox | Done |
 | `SocActionAdapterRegistry` | action adapter allowlist；当前支持 `asset.lookup`、`asset.locate`、`endpoint.process_tree.lookup` 等只读能力 | Done |
@@ -313,7 +315,7 @@ flowchart TD
 
 ## 7. To-Be：完整 SOC Agent 可见链路
 
-目标是让分析师能看到一个预警被 Main SOC Agent 调度多个 domain sub-agent 研判，并形成统一报告：
+目标是让分析师能看到一个预警被 Main SOC Agent 调度多个 domain sub-agent 研判，并形成统一报告。PA-11 已先完成 headless/eval demo；后续要把同一份 `UnifiedInvestigationReport` 接入 ReviewQueue Web/TUI 和 Lead Agent bounded context：
 
 ```mermaid
 flowchart TD
@@ -344,7 +346,7 @@ flowchart TD
 
 这里的 sub-agent 可以先不是独立进程，也不一定马上是完整 DeerFlow custom agent。MVP 更合理的实现方式是：
 
-- 先定义统一 `DomainTriageRequest` / `DomainTriageResult` contract。
+- 先定义统一 `DomainTriageRequest` / `DomainTriageResult` contract（PA-10 已完成 APT/EDR/HIDS）。
 - 每个 domain handler 可以是 deterministic + skill/prompt context 的受控节点。
 - 后续再把稳定的 domain handler 升级为 DeerFlow-derived domain agent/profile。
 - Main Agent 负责路由、并发策略、证据合并、冲突标记和审计，不让子 agent 直接写 DB 或执行工具。
@@ -470,9 +472,11 @@ flowchart TD
 
 目的：把 correlation、domain routing、domain triage 和 report merge 串起来。
 
+当前状态：PA-11 已完成只读 headless/eval 版本，入口为 `SocMainOrchestratorService` 和 `soc eval pingan-main`。
+
 范围：
 
-- 新增 `SocInvestigationService` 或在 `SocAnalysisService` 后增加受控 investigation stage。
+- 新增 `SocMainOrchestratorService` 或在 `SocAnalysisService` 后增加受控 investigation stage。
 - 输入一个 run/review context。
 - 自动选择 1-N 个 domain handlers。
 - 合并 `CorrelationResult` 和 `DomainTriageResult`。
@@ -480,9 +484,16 @@ flowchart TD
 
 验收：
 
-- 单条 APT demo 能触发 APT + asset/location/process evidence。
+- 单条 APT demo 能触发 APT + threat intel / security-tag evidence。
 - 单条 EDR demo 能触发 EDR + endpoint process-tree evidence。
+- 单条 HIDS demo 能触发 host-event context + security-tag evidence。
 - 多 domain 冲突要显式展示，不能静默覆盖。
+
+遗留：
+
+- 当前 PA-11 使用 fixture action specs 和 mock adapters；PA-12 需要真实 PingAn MCP/API endpoint/凭证后替换 provider。
+- correlation 尚未并入 PA-11 report；下一版 report merge 需要加入 `CorrelationResult`。
+- Web/TUI 尚未展示 `UnifiedInvestigationReport`。
 
 ### Slice 7：Web/TUI 可见化
 

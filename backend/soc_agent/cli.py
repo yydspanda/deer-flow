@@ -81,6 +81,7 @@ from soc_agent.eval import (
     run_offline_eval,
     run_pingan_capability_eval,
     run_pingan_domain_triage_eval,
+    run_pingan_main_orchestrator_eval,
 )
 from soc_agent.lead_agent import build_soc_lead_agent_profile
 from soc_agent.lead_agent_chat import SocLeadAgentChatService
@@ -140,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
         return _eval_pingan(args)
     if args.command == "eval" and args.eval_command == "pingan-domain":
         return _eval_pingan_domain(args)
+    if args.command == "eval" and args.eval_command == "pingan-main":
+        return _eval_pingan_main(args)
     if args.command == "db" and args.db_command == "init":
         return _db_init(args)
     if args.command == "db" and args.db_command == "upgrade":
@@ -364,6 +367,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to a PingAn capability fixture JSON file or directory",
     )
     eval_pingan_domain.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    eval_pingan_main = eval_subparsers.add_parser("pingan-main", help="Run PingAn SOC main-orchestrator demo eval")
+    eval_pingan_main.add_argument(
+        "path",
+        nargs="?",
+        default=str(DEFAULT_PINGAN_CAPABILITY_EVAL_DIR),
+        help="Path to a PingAn capability fixture JSON file or directory",
+    )
+    eval_pingan_main.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
     db = subparsers.add_parser("db", help="SOC database helpers")
     db_subparsers = db.add_subparsers(dest="db_command")
@@ -1002,6 +1013,21 @@ def _eval_pingan_domain(args: argparse.Namespace) -> int:
         return 2
     except Exception as exc:  # noqa: BLE001 - CLI boundary: report eval failure
         print(f"error: PingAn domain triage eval failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if report.failed_count == 0 else 1
+
+
+def _eval_pingan_main(args: argparse.Namespace) -> int:
+    try:
+        fixtures = load_pingan_capability_eval_fixtures(args.path)
+        report = run_pingan_main_orchestrator_eval(fixtures)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: report eval failure
+        print(f"error: PingAn main orchestrator eval failed: {exc}", file=sys.stderr)
         return 1
 
     print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
