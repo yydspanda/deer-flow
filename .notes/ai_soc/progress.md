@@ -36,7 +36,7 @@
 
 | 顺序 | 待办 | 状态 | 做什么 | 验收标准 |
 |---|---|---|---|---|
-| 0 | PingAn knowledge decomposition | In progress | 已完成 `PA-01..PA-11`；`PA-12` 等真实 PingAn MCP/API 参数 | 通用 skill 不含平安内部知识；每条平安经验都有 target artifact、tenant scope、来源和验收方式 |
+| 0 | PingAn knowledge decomposition | Partial / credential-gated | 已完成 `PA-01..PA-11`；`PA-12` 等真实 PingAn MCP/API endpoint/凭证 | 通用 skill 不含平安内部知识；每条平安经验都有 target artifact、tenant scope、来源和验收方式；PA-12 不能用 mock 冒充完成 |
 | 0.1 | `PA-01` PingAn capability card register | Done | 已新增 `.notes/ai_soc/pingan-capability-cards.md`，从 APT/EDR/HIDS 三份源文档抽出 P0/P1/P2 cards | P0 card 已明确 source、场景、输入、输出、落点、风险等级、失败模式和验收要求；mock MCP 必须等 card 明确后再做 |
 | 0.2 | `PA-02` APT source decomposition | Done | 已扩展 `PA-APT-001..005`：攻击方向、场景化研判、威胁情报、security tag、IP 封堵高风险边界；拆出 skill/domain handler/eval/memory/action 边界 | APT 通用方法进 public skill/domain handler；平安字段、URI 例外、内部环境、策略和阈值只进 tenant artifact |
 | 0.3 | `PA-03` EDR source decomposition | Done | 已扩展 EDR cards：进程树、路径/命令行、LoginData/System、提权、UM/账号、终端处置候选 | 通用 endpoint 方法进 skill/domain handler；平安路径、账号、部门、BU 和封禁/隔离策略只进 tenant artifact 或 approval-gated action |

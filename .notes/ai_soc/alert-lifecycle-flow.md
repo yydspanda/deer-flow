@@ -33,7 +33,7 @@ alert in
 - PA-11 已有只读 Main Orchestrator demo：`SocMainOrchestratorService` 能把 deterministic analyze、selected skills、read-only action evidence、domain findings 和 review context 合成 `UnifiedInvestigationReport`。
 - 这条链路还没有接入 ReviewQueue Web/TUI 可视化，也没有替换为真实 PingAn MCP/API；PA-12 等真实 endpoint/凭证。
 
-因此下一阶段目标不是继续堆更多 mock tool，而是按下面待办补齐可见 Alpha 链路：
+因此当前 Alpha 主线不是继续堆更多 mock tool，而是把已经跑通的只读研判链路、外部反馈链路和候选记忆链路变成分析师可见、可审计、可复盘的产品闭环：
 
 ```text
 [Done] PingAn knowledge decomposition + capability cards + pending candidates
@@ -42,12 +42,10 @@ alert in
   -> [Done] PingAn PA-09 memory candidate entry
   -> [Done] PingAn PA-10 domain triage MVP
   -> [Done] PingAn PA-11 Main Orchestrator demo
-  -> [Waiting] PingAn PA-12 real MCP/API replacement
-  -> [Partial] External Disposition Sync Contract + Review/Correction
-  -> [Planned] Memory Tracking Contract
-  -> [Planned] Domain Sub-Agent Contract
-  -> [Planned] EDR/APT/HIDS/F5 MVP handlers
-  -> [Planned] Main SOC Agent Orchestrator MVP
+  -> [Done] External Disposition contract + review/correction + memory candidate
+  -> [Current] External Disposition PostgreSQL/API/ReviewQueue visibility
+  -> [Planned] Memory Tracking Contract / DB-first candidate persistence
+  -> [Partial] EDR/APT/HIDS handlers done; F5/WAF handler pending
   -> [Planned] Web/TUI visible investigation
   -> [Planned] Demo / Eval Script
 ```
@@ -55,6 +53,7 @@ alert in
 暂缓项不作为当前 Alpha 前置条件：
 
 - Real dev/staging CMDB/EDR MCP replacement：等待 endpoint/凭证。
+- PingAn PA-12 real MCP/API replacement：等待真实 PingAn dev/staging endpoint/凭证，不能用本地 mock 冒充完成。
 - Wiki/OKF export projection：等 PostgreSQL memory store、retrieval 和 review workflow 稳定后再做，且只能作为 DB 的 projection。
 - Prometheus / operations overview：等 Kafka/review/approval/runtime 数据流稳定后再做。
 - High-risk real execute：等真实 staging adapter、审批策略、补偿和 adapter audit 成熟后再打开。

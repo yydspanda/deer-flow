@@ -21,22 +21,19 @@
 4. LLM 不掌握主控制流；runtime 固定流程，LLM 只在受控节点内做结构化建议。
 5. 记忆和知识写入必须可审计、可回滚、可人工确认，不能让 LLM 自发现结果直接变成事实。
 
-截至 2026-07-07，Phase 1 的 Runtime、ReviewQueue、Lead Agent entry、approval boundary、read-only action evidence、Kafka daemon 基线和本地 MCP mock/smoke 已基本收口；真实 dev/staging CMDB/EDR MCP 替换等待 endpoint/凭证。当前主线前移到 **Phase 2 最小 correlation + domain triage 可见链路**，但在继续写 domain/correlation 代码前，先把 PingAn APT / EDR / HIDS 经验拆成 cards，作为 domain handler、memory、eval 和 read-only action 的输入。
+截至 2026-07-07，Phase 1 的 Runtime、ReviewQueue、Lead Agent entry、approval boundary、read-only action evidence、Kafka daemon 基线和本地 MCP mock/smoke 已基本收口；`SocCorrelationService`、PingAn PA-01..PA-11、APT/EDR/HIDS domain triage 和只读 Main Orchestrator demo 已完成。`PA-12` 是真实 PingAn dev/staging MCP/API replacement，受 endpoint/凭证门控，不作为当前 Alpha 主线阻塞项。当前主线是把已经跑通的只读研判、外部反馈和候选记忆链路接入 PostgreSQL/API/ReviewQueue/Web/TUI，让分析师能看见、审计和复盘。
 
 ```text
-PingAn SOC Capability Onboarding
-  -> SocCorrelationService [MVP done]
-  -> PingAn Memory Candidate Entry [done]
-  -> PingAn Domain Triage MVP [done]
-  -> PingAn Main Orchestrator Demo [done]
-  -> PingAn real MCP/API replacement [waiting for endpoint/credentials]
-  -> External Disposition Sync
-  -> Memory Tracking Contract
-  -> Domain Sub-Agent Contract
-  -> EDR/APT/HIDS/F5 MVP handlers
-  -> Main SOC Agent Orchestrator
-  -> Unified Investigation Report
-  -> Web/TUI/Lead Agent 可审阅展示
+[Done] Phase 1 reliable runtime / review / approval / Kafka baseline
+  -> [Done] PingAn PA-01..PA-11 capability / skill / eval / domain / orchestrator slice
+  -> [Waiting] PingAn PA-12 real MCP/API replacement (credential-gated, not Alpha blocker)
+  -> [Done] SocCorrelationService MVP
+  -> [Done] External Disposition contract + review/correction + memory candidate
+  -> [Current] External Disposition PostgreSQL/API/ReviewQueue visibility
+  -> [Planned] Memory Tracking Contract / DB-first candidate persistence
+  -> [Partial] EDR/APT/HIDS handlers done; F5/WAF handler pending
+  -> [Planned] Web/TUI visible investigation
+  -> [Planned] Demo / Eval Script
 ```
 
 `PingAn SOC Capability Onboarding` 是业务经验注入层：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验先整理成 capability card，再分类落到 skill、MCP/action adapter、normalizer、domain handler、eval case 或 memory candidate。它不直接把经验塞进 prompt，也不把生产 secret 写入仓库；详见 `.notes/ai_soc/pingan-soc-capability-onboarding.md`。平安 APT/EDR/HIDS 文档拆解规则见 `.notes/ai_soc/pingan-knowledge-decomposition-plan.md`：只有跨客户通用研判方法可以进入 `skills/public/soc-*`，平安内部环境知识、误报模式、字段别名、模板/策略 ID、账号/组织/域名例外必须进入 tenant-scoped memory、adapter、policy/config 或 eval。第一版卡片台账见 `.notes/ai_soc/pingan-capability-cards.md`，平安专属知识候选见 `.notes/ai_soc/pingan-knowledge-candidates.md`；当前已完成 `PA-01` capability register、`PA-02` APT source decomposition、`PA-03` EDR source decomposition、`PA-04` HIDS source decomposition、`PA-05` PingAnKnowledgeCandidate register、`PA-06` public skill minimal revisions、`PA-07` P0 read-only mock action adapters、`PA-08` eval fixtures、`PA-09` memory candidate 入口、`PA-10` domain triage MVP 和 `PA-11` Main Orchestrator demo。`PA-12` 不是继续写 mock，而是等真实 PingAn dev/staging MCP/API endpoint 和凭证可用后替换 provider 并保存 smoke/eval report。代码层面，平安字段接入只作为 normalizer adapter 存在于 `backend/soc_agent/normalizers/pingan_platform.py`；core service 后续仍只消费 canonical `AlertInput`，其他客户/供应商也应通过独立 adapter 接入。
@@ -45,7 +42,7 @@ PingAn SOC Capability Onboarding
 
 当前已完成 External Disposition Contract MVP、Review/Correction integration 和 Memory Candidate integration：`SocExternalDispositionEvent`、canonical status、adapter/mapping config、record/result、通用 field-path mapper、Zeus mock fixture、`SocExternalDispositionService.apply_event()`、repository protocol 和 in-memory repository。它已经支持状态映射、目标定位、幂等、unmatched、audit、event emission；高可信 mapped event 在唯一定位本地 target 后会复用 `SocReviewService.correct()` 同步 operational correction 并关闭 review queue；mapped 且可定位的外部 reason 只会生成 `SocMemoryCandidate(status=pending_review)`。DB migration、API/Web/TUI visibility 和 confirmed memory review workflow 是后续切片；外部 free-text reason 仍不能直接进入 confirmed memory。
 
-`SocCorrelationService` MVP 已完成：基于 `soc_alert_summaries` 和 `soc_investigation_evidence` 输出结构化相似告警、匹配原因和可复用证据；不调用 LLM、不依赖真实 MCP、不修改 DeerFlow core。当前按用户决策先继续 PingAn 专项，`PA-08` 已新增 `soc eval pingan` 和 APT/EDR/HIDS 脱敏 fixture，覆盖字段冲突、查不到外部事实、误报/授权标签等样例；`PA-09` 已新增 pending review memory candidate 入口；`PA-10` 已新增 APT/EDR/HIDS deterministic domain triage 和 `soc eval pingan-domain`；`PA-11` 已新增 `SocMainOrchestratorService`、`UnifiedInvestigationReport` 和 `soc eval pingan-main`，能看到 analyze -> selected skills -> read-only evidence -> domain findings -> review context 的完整只读链路。`PA-12` 等真实接口参数；`External Disposition Sync Contract` 后续继续保留为 Phase 2 主线项。
+`SocCorrelationService` MVP 已完成：基于 `soc_alert_summaries` 和 `soc_investigation_evidence` 输出结构化相似告警、匹配原因和可复用证据；不调用 LLM、不依赖真实 MCP、不修改 DeerFlow core。PingAn 专项当前已推进到 `PA-11`：`PA-08` 已新增 `soc eval pingan` 和 APT/EDR/HIDS 脱敏 fixture，`PA-09` 已新增 pending review memory candidate 入口，`PA-10` 已新增 APT/EDR/HIDS deterministic domain triage 和 `soc eval pingan-domain`，`PA-11` 已新增 `SocMainOrchestratorService`、`UnifiedInvestigationReport` 和 `soc eval pingan-main`，能看到 analyze -> selected skills -> read-only evidence -> domain findings -> review context 的完整只读链路。`PA-12` 等真实接口参数，不用本地 mock 冒充完成。
 
 文档关系：本文件决定“做什么和先后顺序”；`.notes/reference-index/soc-agent-engineering-contracts.md` 决定“代码接口、协议、边界和测试怎么约束”。如果两者措辞冲突，以本文件为方向源头，并同步修正工程契约。
 
@@ -1820,15 +1817,15 @@ workflow conclusion
 | DomainTriageResult | topic/scenario candidate | `pending_review` | APT/EDR/HIDS/F5 finding 稳定后再接入 |
 | InvestigationEvidence | evidence ref | 不直接是 memory | 作为候选记忆的证据链 |
 
-推荐实现顺序：
+当前实现顺序：
 
-1. 在 Correlation Service MVP 后做 **External Disposition Sync Contract**：`SocExternalDispositionEvent`、adapter port、mapping config、idempotency、unmatched record、audit 和 review/correction sync。
-2. 再做 **Memory Tracking Contract**：`SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryFact`、`SocMemoryEvidenceRef`、`SocMemoryQuery`、`SocMemoryStatus`。
-3. 新增 `SocMemoryService.propose_candidate()`，入口层只能调用 service，不能直接写 repository。
-4. TUI/Web correction 和 external disposition reason 先接 candidate 写入，作为人工工作流最可信来源。
-5. Kafka daemon 只生成 repeated pattern candidate，默认 `pending_review`。
-6. PromptBuilder / Lead Agent bounded context 只注入 `confirmed` 且未过期的 facts，并记录 memory fact id、version/hash 和命中原因。
-7. Wiki/OKF export 等 DB memory store、retrieval 和 review workflow 稳定后再做；自动方向只能是 DB -> wiki/OKF，反向修改必须生成 proposal 后经 `SocMemoryService` 写回。
+1. Done：Correlation Service MVP 已完成，Review context / CLI 可看到结构化相似告警、匹配原因和可复用 investigation evidence。
+2. Done：External Disposition contract、mapper、service、review/correction sync 和 external reason -> pending memory candidate 已完成。
+3. Current：External Disposition PostgreSQL/API/ReviewQueue visibility，让外部处置历史、reason、`correction_id`、`memory_candidate_id` 能被分析师看见和审计。
+4. Next：Memory Tracking Contract / DB-first candidate persistence，补 `SocMemoryRecord`、`SocMemoryFact`、`SocMemoryEvidenceRef`、`SocMemoryQuery`、`SocMemoryStatus`、review/confirm/reject/deprecate 状态机。
+5. Next：TUI/Web correction、Kafka repeated pattern、Lead Agent summary、DomainTriageResult 和 InvestigationEvidence 都只能经 `SocMemoryService` 生成 candidate，默认 `pending_review`。
+6. Later：PromptBuilder / Lead Agent bounded context 只注入 `confirmed` 且未过期的 facts，并记录 memory fact id、version/hash 和命中原因。
+7. Later：Wiki/OKF export 等 DB memory store、retrieval 和 review workflow 稳定后再做；自动方向只能是 DB -> wiki/OKF，反向修改必须生成 proposal 后经 `SocMemoryService` 写回。
 
 ---
 
