@@ -318,6 +318,7 @@ class SocLeadAgentReviewContextArtifact(BaseModel):
     similar_alerts: list[dict[str, Any]] = Field(default_factory=list)
     action_evidence: list[dict[str, Any]] = Field(default_factory=list)
     external_dispositions: list[dict[str, Any]] = Field(default_factory=list)
+    memory_candidates: list[dict[str, Any]] = Field(default_factory=list)
     skill_context: SocSkillContext | None = None
     instructions: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
@@ -1548,3 +1549,4 @@ class InvestigationContext(BaseModel):
     similar_alerts: list[SimilarAlertMatch] = Field(default_factory=list)
     action_evidence: list[InvestigationEvidence] = Field(default_factory=list)
     external_dispositions: list[SocExternalDispositionRecord] = Field(default_factory=list)
+    memory_candidates: list[SocMemoryCandidate] = Field(default_factory=list)

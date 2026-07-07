@@ -184,6 +184,91 @@ export interface SocExternalDispositionRecord {
   metadata: Record<string, unknown>;
 }
 
+export type SocMemoryCandidateStatus =
+  | "pending_review"
+  | "confirmed_candidate"
+  | "confirmed"
+  | "rejected"
+  | "deprecated";
+
+export type SocMemoryCandidateType =
+  | "procedure"
+  | "detection_lesson"
+  | "benign_pattern"
+  | "environment_fact"
+  | "identity_pattern"
+  | "response_policy_hint"
+  | "negative_memory"
+  | "adapter_mapping"
+  | "eval_fixture";
+
+export type SocMemoryTargetArtifact =
+  | "public_skill"
+  | "tenant_memory"
+  | "adapter_mapping"
+  | "policy_config"
+  | "normalizer"
+  | "domain_handler"
+  | "eval_fixture"
+  | "prompt_context"
+  | "external_sync";
+
+export interface SocMemoryCandidateSource {
+  source_type: string;
+  source_surface?: string | null;
+  source_id?: string | null;
+  source_doc?: string | null;
+  source_section?: string | null;
+  capability_card_id?: string | null;
+  run_id?: string | null;
+  alert_id?: string | null;
+  queue_id?: string | null;
+  correction_id?: string | null;
+  eval_sample_id?: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface SocMemoryCandidateValidity {
+  valid_from: string;
+  valid_until?: string | null;
+  review_after_days?: number | null;
+  notes: string;
+}
+
+export interface SocMemoryCandidate {
+  schema_version: string;
+  candidate_id: string;
+  candidate_type: SocMemoryCandidateType;
+  target_artifact: SocMemoryTargetArtifact;
+  summary: string;
+  content: string;
+  tenant_scope: string;
+  tenant_id?: string | null;
+  status: SocMemoryCandidateStatus;
+  source: SocMemoryCandidateSource;
+  evidence_refs: string[];
+  validity: SocMemoryCandidateValidity;
+  idempotency_key?: string | null;
+  confidence: number;
+  facets: Record<string, string[]>;
+  decision_impact: string;
+  runtime_decision_allowed: false;
+  review_required: true;
+  review_owner?: string | null;
+  reviewed_by?: SocActorContext | null;
+  reviewed_at?: string | null;
+  review_reason?: string | null;
+  labels: string[];
+  metadata: Record<string, unknown>;
+  proposed_by?: SocActorContext | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SocMemoryCandidateListResponse {
+  items: SocMemoryCandidate[];
+}
+
 export interface SocInvestigationContext {
   schema_version: string;
   queue_item: SocReviewQueueItem;
@@ -193,6 +278,7 @@ export interface SocInvestigationContext {
   similar_alerts: SocSimilarAlertMatch[];
   action_evidence: SocInvestigationEvidence[];
   external_dispositions: SocExternalDispositionRecord[];
+  memory_candidates: SocMemoryCandidate[];
 }
 
 export interface SocReviewCloseRequest {

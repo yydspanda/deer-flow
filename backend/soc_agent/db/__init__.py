@@ -11,6 +11,7 @@ from soc_agent.db.models import (
     SocDecisionAuditLogRow,
     SocExternalDispositionRow,
     SocInvestigationEvidenceRow,
+    SocMemoryCandidateRow,
     SocReviewQueueRow,
 )
 from soc_agent.db.repositories import SqlAlchemyAlertRepository
@@ -23,6 +24,7 @@ __all__ = [
     "SocDecisionAuditLogRow",
     "SocExternalDispositionRow",
     "SocInvestigationEvidenceRow",
+    "SocMemoryCandidateRow",
     "SocReviewQueueRow",
     "SocBase",
     "SqlAlchemyAlertRepository",

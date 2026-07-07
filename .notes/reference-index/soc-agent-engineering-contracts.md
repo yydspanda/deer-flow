@@ -267,9 +267,16 @@ SOC memory tracking 约束：
 - 具体 IP、UM、host、URL、file hash、process hash 等实体默认只能作为 evidence refs、query dimensions 或 case memory，不得默认成为长期全局 memory 主键。
 - TUI/Web/Kafka/Lead Agent/domain handler/external disposition sync 只能生成 `SocMemoryCandidate`；不得直接写 `confirmed` fact 或 active lesson。
 - 所有 memory candidate 必须包含 source surface、source run/review/evidence refs、idempotency key、status、confidence、proposed content、facets、evidence refs 和 reviewer/audit fields。
-- 当前 `PA-09` 只实现 candidate entry：`SocMemoryService.propose_candidate()` 必须强制写 `pending_review`，并保持 `runtime_decision_allowed=false`；confirmed fact store、review/confirm/reject/deprecate 状态机和 retrieval policy 后续单独实现。
+- 当前已实现 DB-first candidate persistence：`SocMemoryService.propose_candidate()` 必须强制写 `pending_review`，并保持 `runtime_decision_allowed=false`；`SocMemoryService.list_candidates()` / `get_candidate()` 是 API/CLI/Web/TUI/Lead Agent 查询候选记忆的 service 边界。confirmed fact store、review/confirm/reject/deprecate 状态机和 retrieval policy 后续单独实现。
+- `soc_memory_candidates` 是当前 `SocMemoryCandidate` 的 SOC business store 表；`SqlAlchemyAlertRepository` 实现 `MemoryCandidateRepository` 方法。生产和本地持久化都必须通过 migration `0010_memory_candidates` 或 `create_soc_tables()` 创建该表。
+- `SocMemoryCandidate.idempotency_key` 是候选记忆重复抑制边界；同 key 重放必须返回既有 candidate，不得重复写入或重复发出 memory update event。
+- `SocMemoryCandidate.status=pending_review` 只能表示待评审建议；Web/TUI/Lead Agent 可以展示它，但不得展示为 confirmed fact、active lesson 或已生效策略。
+- Gateway memory candidate API 路径固定在 `/api/soc/memory/*`：
+  - `GET /api/soc/memory/candidates`
+  - `GET /api/soc/memory/candidates/{candidate_id}`
+- `soc memory list/get` 是本地/运维查询候选记忆的 headless CLI；它只能调用 `SocMemoryService`，不能直接查 repository row。
 - Kafka daemon 生成 memory candidate 时，幂等键必须包含 `topic/partition/offset` 或 run id；重复消费不能增加重复 fact 或污染 evidence count。
-- `pending_review` 和 `confirmed_candidate` 默认不进入全局 prompt 注入；只有 `confirmed` 且未过期的 memory fact 可以进入 PromptBuilder / Lead Agent bounded context。
+- `pending_review` 和 `confirmed_candidate` 默认不进入全局 prompt 注入；只有 `confirmed` 且未过期的 memory fact 可以进入 PromptBuilder / Lead Agent bounded context。当前 `InvestigationContext.memory_candidates` 只用于展示和人工评审，不参与 runtime verdict。
 - Memory 检索必须返回 match reason、score、fact id、version/hash 和 token budget，支持 replay diff 和回滚。
 - `SocMemoryService` 是 memory 写入、确认、驳回、过期、检索和注入前筛选的唯一 service 边界；CLI/TUI/API/Web/daemon/Lead Agent 不能直接写 memory repository。
 - PostgreSQL memory store 是唯一 source of truth；wiki/OKF 只能作为 DB 导出的 read model / review projection / portable export。wiki 反向修改必须生成 change proposal，经 review 后通过 `SocMemoryService` 写回新版本，不能直接覆盖 DB。
@@ -285,12 +292,14 @@ Review queue 约束：
 - `soc_review_queue` 保存扁平索引字段和完整 `item_payload`，字段优先服务列表、筛选和复核入口：`status`、`priority`、`alert_id`、`run_id`、`source_type`、`rule_code`、`verdict`、`updated_at`。
 - `InvestigationEvidence` 是只读查询、定位、EDR process tree 等 investigation action 的结果证据，不是原始告警证据、不是 confirmed memory、不是 operational verdict。
 - `InvestigationEvidenceRepository.save_evidence()` 只能在 service/action boundary 调用；CLI/API/TUI/Web/daemon 入口不能自己拼 evidence 绕过 dispatcher。
-- `SocReviewService.get_investigation_context()` 是聚合 action evidence 和 external disposition feedback 的边界；ReviewQueue API/TUI/Web/Lead Agent context bridge 都从 `InvestigationContext.action_evidence` / `InvestigationContext.external_dispositions` 读取，不直接查 repository。
+- `SocReviewService.get_investigation_context()` 是聚合 action evidence、external disposition feedback 和 memory candidates 的边界；ReviewQueue API/TUI/Web/Lead Agent context bridge 都从 `InvestigationContext.action_evidence` / `InvestigationContext.external_dispositions` / `InvestigationContext.memory_candidates` 读取，不直接查 repository。
 - read-only action evidence 可以帮助后续分析和人工复核，但不得自动修改 `AnalysisRun.decision`、不得自动关闭 review queue、不得直接写 confirmed memory。
 - `soc_investigation_evidence` 是当前 `InvestigationEvidence` 的 SOC business store 表；`SqlAlchemyAlertRepository` 实现 evidence repository 方法。生产和本地持久化都必须通过 migration `0008_investigation_evidence` 或 `create_soc_tables()` 创建该表。
 - `soc_external_dispositions` 是当前外部状态/理由回流的 SOC business store 表；`SqlAlchemyAlertRepository` 实现 external disposition repository 方法。Web/TUI/Lead Agent 只能把它作为外部人工反馈展示，不得把 `memory_candidate_id` 展示为已确认知识。
+- `soc_memory_candidates` 是当前候选记忆的 SOC business store 表；`SqlAlchemyAlertRepository` 实现 memory candidate repository 方法。Web/TUI/Lead Agent 只能把它作为待评审候选展示，不得把 `pending_review` candidate 展示为已确认知识。
 - Gateway `SocReviewService`、`soc review context/tui` 和 `soc chat tui --lead-agent` 必须使用同一 repository 作为 `evidence_repository`，确保 Web/TUI/Lead Agent 可以跨进程看到 read-only action evidence。
 - Gateway `SocReviewService`、`soc review context/tui` 和 `soc chat tui --lead-agent` 必须使用同一 repository 作为 `external_disposition_repository`，确保外部反馈在 API/Web/TUI/Lead Agent 上下文中一致可见。
+- Gateway `SocReviewService`、`soc review context/tui` 和 `soc chat tui --lead-agent` 必须使用同一 repository 作为 `memory_candidate_repository`，确保候选记忆在 API/Web/TUI/Lead Agent 上下文中一致可见。
 - Gateway ReviewQueue API 路径固定在 `/api/soc/review/*`：
   - `GET /api/soc/review/items`
   - `GET /api/soc/review/items/{queue_id}/context`
@@ -532,6 +541,8 @@ Investigation context 约束：
 - `SocReviewService.get_investigation_context(queue_id)` 是 API/TUI/Web/CLI 打开复核详情的统一 service 入口。
 - context 至少包含 `queue_item` 和完整 `AnalysisRun`；如果注入了 summary/audit repository，则同时返回 `AlertSummary` 和 `DecisionAuditRecord[]`。
 - context 中的 `similar_alerts` 必须来自 `AlertSummaryRepository.find_similar_alert_summaries()`，不能让入口层或 LLM 直接全库检索。
+- context 中的 `memory_candidates` 必须来自 `MemoryCandidateRepository.list_memory_candidates(queue_id/run_id/alert_id)`，只能包含当前 review item 相关候选；入口层、前端和 Lead Agent 不能直接全表查询后自行关联。
+- Lead Agent bounded context 必须明确标记 `memory_candidates` 为 reviewable proposals only；不能把它们当作 confirmed facts、active lessons 或处置依据。
 - 入口层不能自己分别查 queue/run/summary/audit 再拼响应，避免 Web/TUI/CLI 对“详情页上下文”理解不一致。
 - 后续相似告警、confirmed facts、lessons、threat intel 都应作为 context 的增量字段接入，不能绕过 service 直接塞进 prompt。
 
@@ -550,7 +561,7 @@ SOC repository 实现约束：
 - `soc_analysis_runs.run_payload` 保存完整 `AnalysisRun`，索引列只服务查询和筛选，不作为唯一事实来源。
 - SOC schema migrations 放在 `backend/soc_agent/db/migrations/`，使用独立版本表 `soc_alembic_version`。
 - 正式 schema 变更走 `soc db upgrade` / Alembic revision；`create_soc_tables()` 和 `soc db init` 只作为 Phase 1 本地开发辅助。
-- SOC 当前持久化表包括 `soc_analysis_runs`、`soc_decision_audit_log`、`soc_alert_summaries` 和 `soc_review_queue`。
+- SOC 当前持久化表包括 `soc_analysis_runs`、`soc_decision_audit_log`、`soc_alert_summaries`、`soc_review_queue`、`soc_approval_requests`、`soc_approval_grants`、`soc_investigation_evidence`、`soc_external_dispositions` 和 `soc_memory_candidates`。
 - 单元测试可以用 SQLite in-memory 验证 SQLAlchemy 映射。
 - 本地开发/人工验收可以用独立 SOC SQLite 文件，例如 `backend/.deer-flow/data/soc_agent_dev.db`，并通过 `SOC_DATABASE_URL=sqlite:////.../soc_agent_dev.db` 显式启用。
 - 准生产、生产和长期联调环境必须指向 PostgreSQL；不得把本地 SQLite 例外扩大成生产架构。

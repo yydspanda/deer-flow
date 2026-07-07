@@ -10,6 +10,9 @@ import type {
   SocApprovalGrantRequest,
   SocApprovalRequestListResponse,
   SocInvestigationContext,
+  SocMemoryCandidate,
+  SocMemoryCandidateListResponse,
+  SocMemoryCandidateStatus,
   SocRequestContext,
   SocReviewCloseRequest,
   SocReviewCorrectionRequest,
@@ -234,5 +237,70 @@ export async function executeSocApprovedAction(
   return readJson<SocAgentActionResult>(
     response,
     "Failed to execute SOC approved action",
+  );
+}
+
+export async function listSocMemoryCandidates({
+  status = "pending_review",
+  tenantScope,
+  tenantId,
+  runId,
+  alertId,
+  queueId,
+  limit = 50,
+  context,
+}: {
+  status?: SocMemoryCandidateStatus | null;
+  tenantScope?: string | null;
+  tenantId?: string | null;
+  runId?: string | null;
+  alertId?: string | null;
+  queueId?: string | null;
+  limit?: number;
+  context?: SocRequestContext;
+} = {}): Promise<SocMemoryCandidate[]> {
+  const params = new URLSearchParams();
+  if (status !== null) {
+    params.set("status", status);
+  }
+  if (tenantScope) {
+    params.set("tenant_scope", tenantScope);
+  }
+  if (tenantId) {
+    params.set("tenant_id", tenantId);
+  }
+  if (runId) {
+    params.set("run_id", runId);
+  }
+  if (alertId) {
+    params.set("alert_id", alertId);
+  }
+  if (queueId) {
+    params.set("queue_id", queueId);
+  }
+  params.set("limit", String(limit));
+
+  const url = `${getBackendBaseURL()}/api/soc/memory/candidates?${params.toString()}`;
+  const response = context
+    ? await fetch(url, { headers: buildSocHeaders(context) })
+    : await fetch(url);
+  const data = await readJson<SocMemoryCandidateListResponse>(
+    response,
+    "Failed to load SOC memory candidates",
+  );
+  return data.items;
+}
+
+export async function getSocMemoryCandidate(
+  candidateId: string,
+  context?: SocRequestContext,
+): Promise<SocMemoryCandidate> {
+  const url = `${getBackendBaseURL()}/api/soc/memory/candidates/${encodeURIComponent(candidateId)}`;
+  const response = context
+    ? await fetch(url, { headers: buildSocHeaders(context) })
+    : await fetch(url);
+  return readJson<SocMemoryCandidate>(
+    response,
+    "Failed to load SOC memory candidate",
   );
 }

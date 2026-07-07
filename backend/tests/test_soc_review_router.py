@@ -22,9 +22,18 @@ from soc_agent.contracts import (
     SocExternalDispositionCanonicalStatus,
     SocExternalDispositionEvent,
     SocExternalDispositionRecord,
+    SocMemoryCandidate,
+    SocMemoryCandidateCreateCommand,
+    SocMemoryCandidateSource,
+    SocMemoryCandidateSourceType,
+    SocMemoryCandidateStatus,
+    SocMemoryCandidateType,
+    SocMemoryCandidateValidity,
+    SocMemoryDecisionImpact,
+    SocMemoryTargetArtifact,
     Verdict,
 )
-from soc_agent.core import SocAnalysisService, SocReviewService
+from soc_agent.core import SocAnalysisService, SocMemoryService, SocReviewService
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
 
@@ -37,6 +46,7 @@ class InMemorySocRepository:
         self.audit_records: list[DecisionAuditRecord] = []
         self.evidence: list[InvestigationEvidence] = []
         self.external_dispositions: list[SocExternalDispositionRecord] = []
+        self.memory_candidates: list[SocMemoryCandidate] = []
 
     def save_run(self, run: AnalysisRun) -> None:
         self.runs[run.run_id] = run
@@ -146,6 +156,49 @@ class InMemorySocRepository:
             records = [item for item in records if item.event.external_case_id == external_case_id]
         return sorted(records, key=lambda item: item.created_at, reverse=True)[:limit]
 
+    def save_memory_candidate(self, candidate: SocMemoryCandidate) -> None:
+        self.memory_candidates.append(candidate)
+
+    def get_memory_candidate(self, candidate_id: str) -> SocMemoryCandidate | None:
+        for candidate in self.memory_candidates:
+            if candidate.candidate_id == candidate_id:
+                return candidate
+        return None
+
+    def find_memory_candidate_by_idempotency_key(self, idempotency_key: str) -> SocMemoryCandidate | None:
+        for candidate in self.memory_candidates:
+            if candidate.idempotency_key == idempotency_key:
+                return candidate
+        return None
+
+    def list_memory_candidates(
+        self,
+        *,
+        status: SocMemoryCandidateStatus | None = None,
+        tenant_scope: str | None = None,
+        tenant_id: str | None = None,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        queue_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SocMemoryCandidate]:
+        candidates = self.memory_candidates
+        if status is not None:
+            candidates = [item for item in candidates if item.status == status]
+        if tenant_scope is not None:
+            candidates = [item for item in candidates if item.tenant_scope == tenant_scope]
+        if tenant_id is not None:
+            candidates = [item for item in candidates if item.tenant_id == tenant_id]
+        source_filters = {
+            "run_id": run_id,
+            "alert_id": alert_id,
+            "queue_id": queue_id,
+        }
+        active_source_filters = {key: value for key, value in source_filters.items() if value}
+        if active_source_filters:
+            candidates = [item for item in candidates if any(getattr(item.source, key) == value for key, value in active_source_filters.items())]
+        return sorted(candidates, key=lambda item: item.created_at, reverse=True)[:limit]
+
 
 def _sample(name: str) -> dict:
     return json.loads((SAMPLES / name).read_text(encoding="utf-8"))
@@ -177,6 +230,7 @@ def review_api() -> tuple[SocReviewService, InMemorySocRepository, ReviewQueueIt
         review_queue_repository=repository,
         evidence_repository=repository,
         external_disposition_repository=repository,
+        memory_candidate_repository=repository,
     )
     return service, repository, item
 
@@ -231,6 +285,13 @@ def test_soc_review_api_returns_investigation_context(review_api) -> None:
             apply_reason="external status mapped to a unique local target",
         )
     )
+    memory_candidate = SocMemoryService(candidate_repository=repository).propose_candidate(
+        _memory_candidate_command(
+            run_id=item.run_id,
+            alert_id=item.alert_id,
+            queue_id=item.queue_id,
+        )
+    )
 
     context = soc_review.get_review_context(item.queue_id, service=service)
 
@@ -243,6 +304,7 @@ def test_soc_review_api_returns_investigation_context(review_api) -> None:
     assert context.action_evidence[0].action == "asset.locate"
     assert len(context.external_dispositions) == 1
     assert context.external_dispositions[0].event.external_system == "zeus"
+    assert context.memory_candidates == [memory_candidate]
 
 
 def test_soc_review_api_closes_item_with_api_actor(review_api) -> None:
@@ -323,3 +385,34 @@ def test_soc_review_router_exposes_mvp_paths() -> None:
     assert "/api/soc/review/items/{queue_id}/context" in paths
     assert "/api/soc/review/items/{queue_id}/close" in paths
     assert "/api/soc/review/runs/{run_id}/correct" in paths
+
+
+def _memory_candidate_command(
+    *,
+    run_id: str,
+    alert_id: str,
+    queue_id: str,
+) -> SocMemoryCandidateCreateCommand:
+    return SocMemoryCandidateCreateCommand(
+        candidate_type=SocMemoryCandidateType.BENIGN_PATTERN,
+        target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
+        summary="Review context memory candidate",
+        content="External feedback should remain pending until an analyst reviews it.",
+        tenant_scope="pingan",
+        tenant_id="pingan",
+        source=SocMemoryCandidateSource(
+            source_type=SocMemoryCandidateSourceType.MANUAL_NOTE,
+            source_id="review-router-memory-test",
+            run_id=run_id,
+            alert_id=alert_id,
+            queue_id=queue_id,
+        ),
+        evidence_refs=["manual:review-router-test"],
+        validity=SocMemoryCandidateValidity(notes="Review router test candidate."),
+        idempotency_key=f"memory:review-router:{queue_id}",
+        confidence=0.6,
+        facets={"tenant": ["pingan"]},
+        decision_impact=SocMemoryDecisionImpact.REVIEW_HINT,
+        review_owner="soc_analyst",
+        labels=["candidate-only"],
+    )

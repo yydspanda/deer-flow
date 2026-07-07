@@ -23,9 +23,17 @@ from soc_agent.contracts import (
     SocExternalDispositionCanonicalStatus,
     SocExternalDispositionEvent,
     SocExternalDispositionRecord,
+    SocMemoryCandidateCreateCommand,
+    SocMemoryCandidateSource,
+    SocMemoryCandidateSourceType,
+    SocMemoryCandidateStatus,
+    SocMemoryCandidateType,
+    SocMemoryCandidateValidity,
+    SocMemoryDecisionImpact,
+    SocMemoryTargetArtifact,
     Verdict,
 )
-from soc_agent.core import SocAgentApprovalService, SocAnalysisService, SocCorrelationService
+from soc_agent.core import SocAgentApprovalService, SocAnalysisService, SocCorrelationService, SocMemoryService
 from soc_agent.core.service import SocReviewService
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 
@@ -41,6 +49,38 @@ def _repository() -> SqlAlchemyAlertRepository:
     create_soc_tables(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     return SqlAlchemyAlertRepository(session_factory)
+
+
+def _repository_memory_candidate_command(
+    *,
+    run_id: str = "RUN-MEM-1",
+    alert_id: str = "ALT-MEM-1",
+    queue_id: str = "REV-MEM-1",
+    idempotency_key: str = "memory:repo:run-1",
+) -> SocMemoryCandidateCreateCommand:
+    return SocMemoryCandidateCreateCommand(
+        candidate_type=SocMemoryCandidateType.BENIGN_PATTERN,
+        target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
+        summary="Repository memory candidate",
+        content="Authorized maintenance activity should remain a pending candidate until reviewed.",
+        tenant_scope="pingan",
+        tenant_id="pingan",
+        source=SocMemoryCandidateSource(
+            source_type=SocMemoryCandidateSourceType.MANUAL_NOTE,
+            source_id="memory-repo-test",
+            run_id=run_id,
+            alert_id=alert_id,
+            queue_id=queue_id,
+        ),
+        evidence_refs=["manual:repo-test"],
+        validity=SocMemoryCandidateValidity(notes="Repository persistence test candidate."),
+        idempotency_key=idempotency_key,
+        confidence=0.6,
+        facets={"tenant": ["pingan"], "domain": ["hids"]},
+        decision_impact=SocMemoryDecisionImpact.REVIEW_HINT,
+        review_owner="soc_analyst",
+        labels=["candidate-only"],
+    )
 
 
 def test_sqlalchemy_alert_repository_saves_and_gets_run() -> None:
@@ -418,6 +458,58 @@ def test_review_service_context_loads_sqlalchemy_external_dispositions() -> None
     assert len(context.external_dispositions) == 1
     assert context.external_dispositions[0].event.external_system == "zeus"
     assert context.external_dispositions[0].canonical_status is SocExternalDispositionCanonicalStatus.CLOSED_FALSE_POSITIVE
+
+
+def test_sqlalchemy_memory_candidate_repository_persists_and_filters_candidates() -> None:
+    repository = _repository()
+    service = SocMemoryService(candidate_repository=repository)
+
+    candidate = service.propose_candidate(_repository_memory_candidate_command())
+    duplicate = service.propose_candidate(_repository_memory_candidate_command())
+
+    assert duplicate == candidate
+    assert repository.get_memory_candidate(candidate.candidate_id) == candidate
+    assert repository.find_memory_candidate_by_idempotency_key("memory:repo:run-1") == candidate
+    assert repository.list_memory_candidates(status=SocMemoryCandidateStatus.PENDING_REVIEW) == [candidate]
+    assert repository.list_memory_candidates(tenant_scope="pingan") == [candidate]
+    assert repository.list_memory_candidates(tenant_id="pingan") == [candidate]
+    assert repository.list_memory_candidates(run_id="RUN-MEM-1") == [candidate]
+    assert repository.list_memory_candidates(alert_id="ALT-MEM-1") == [candidate]
+    assert repository.list_memory_candidates(queue_id="REV-MEM-1") == [candidate]
+    assert repository.list_memory_candidates(queue_id="REV-MISSING") == []
+
+
+def test_review_service_context_loads_sqlalchemy_memory_candidates() -> None:
+    repository = _repository()
+    run = SocAnalysisService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+    ).analyze(_sample("pingan_legacy_apt.json"))
+    item = repository.get_open_review_item_by_run(run.run_id)
+    assert item is not None
+    candidate = SocMemoryService(candidate_repository=repository).propose_candidate(
+        _repository_memory_candidate_command(
+            run_id=run.run_id,
+            alert_id=run.alert_id,
+            queue_id=item.queue_id,
+            idempotency_key=f"memory:repo:{run.run_id}",
+        )
+    )
+
+    context = SocReviewService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+        evidence_repository=repository,
+        external_disposition_repository=repository,
+        memory_candidate_repository=repository,
+    ).get_investigation_context(item.queue_id)
+
+    assert context.memory_candidates == [candidate]
+    assert context.memory_candidates[0].runtime_decision_allowed is False
 
 
 def test_sqlalchemy_alert_repository_closes_review_queue_after_correction() -> None:

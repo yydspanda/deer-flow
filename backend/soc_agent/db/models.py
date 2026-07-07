@@ -245,3 +245,48 @@ class SocExternalDispositionRow(SocBase):
     memory_candidate_id: Mapped[str | None] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     disposition_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SocMemoryCandidateRow(SocBase):
+    """Reviewable SOC memory candidate that cannot affect runtime decisions."""
+
+    __tablename__ = "soc_memory_candidates"
+    __table_args__ = (
+        Index("ix_soc_memory_candidates_status_created", "status", "created_at"),
+        Index("ix_soc_memory_candidates_tenant_status", "tenant_scope", "tenant_id", "status"),
+        Index("ix_soc_memory_candidates_run_created", "source_run_id", "created_at"),
+        Index("ix_soc_memory_candidates_alert_created", "source_alert_id", "created_at"),
+        Index("ix_soc_memory_candidates_queue_created", "source_queue_id", "created_at"),
+        Index("ix_soc_memory_candidates_source_created", "source_type", "created_at"),
+    )
+
+    candidate_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    candidate_type: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    target_artifact: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    tenant_scope: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    tenant_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    source_type: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    source_surface: Mapped[str | None] = mapped_column(String(32), index=True)
+    source_id: Mapped[str | None] = mapped_column(String(256), index=True)
+    source_doc: Mapped[str | None] = mapped_column(String(256), index=True)
+    source_section: Mapped[str | None] = mapped_column(String(256))
+    capability_card_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    source_run_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_alert_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    source_queue_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    correction_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    eval_sample_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(512), unique=True, index=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    decision_impact: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    runtime_decision_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    review_required: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    review_owner: Mapped[str | None] = mapped_column(String(128), index=True)
+    reviewed_by_actor_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    candidate_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

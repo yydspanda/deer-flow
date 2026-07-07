@@ -20,6 +20,8 @@ from soc_agent.contracts import (
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
     SocExternalDispositionRecord,
+    SocMemoryCandidate,
+    SocMemoryCandidateStatus,
 )
 from soc_agent.db.models import (
     SocAlertSummaryRow,
@@ -29,6 +31,7 @@ from soc_agent.db.models import (
     SocDecisionAuditLogRow,
     SocExternalDispositionRow,
     SocInvestigationEvidenceRow,
+    SocMemoryCandidateRow,
     SocReviewQueueRow,
 )
 
@@ -312,6 +315,60 @@ class SqlAlchemyAlertRepository:
             result = session.execute(query.order_by(SocExternalDispositionRow.created_at.desc()).limit(limit))
             return [SocExternalDispositionRecord.model_validate(row.disposition_payload) for row in result.scalars()]
 
+    def save_memory_candidate(self, candidate: SocMemoryCandidate) -> None:
+        payload = candidate.model_dump(mode="json")
+        with self._session_factory() as session:
+            row = session.get(SocMemoryCandidateRow, candidate.candidate_id)
+            if row is None:
+                session.add(SocMemoryCandidateRow(candidate_id=candidate.candidate_id, **_memory_candidate_row_values(candidate, payload)))
+            else:
+                for key, value in _memory_candidate_row_values(candidate, payload).items():
+                    setattr(row, key, value)
+            session.commit()
+
+    def get_memory_candidate(self, candidate_id: str) -> SocMemoryCandidate | None:
+        with self._session_factory() as session:
+            row = session.get(SocMemoryCandidateRow, candidate_id)
+            return SocMemoryCandidate.model_validate(row.candidate_payload) if row is not None else None
+
+    def find_memory_candidate_by_idempotency_key(self, idempotency_key: str) -> SocMemoryCandidate | None:
+        with self._session_factory() as session:
+            result = session.execute(select(SocMemoryCandidateRow).where(SocMemoryCandidateRow.idempotency_key == idempotency_key).limit(1))
+            row = result.scalar_one_or_none()
+            return SocMemoryCandidate.model_validate(row.candidate_payload) if row is not None else None
+
+    def list_memory_candidates(
+        self,
+        *,
+        status: SocMemoryCandidateStatus | None = None,
+        tenant_scope: str | None = None,
+        tenant_id: str | None = None,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        queue_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SocMemoryCandidate]:
+        source_filters = []
+        if run_id:
+            source_filters.append(SocMemoryCandidateRow.source_run_id == run_id)
+        if alert_id:
+            source_filters.append(SocMemoryCandidateRow.source_alert_id == alert_id)
+        if queue_id:
+            source_filters.append(SocMemoryCandidateRow.source_queue_id == queue_id)
+
+        with self._session_factory() as session:
+            query = select(SocMemoryCandidateRow)
+            if status is not None:
+                query = query.where(SocMemoryCandidateRow.status == status.value)
+            if tenant_scope is not None:
+                query = query.where(SocMemoryCandidateRow.tenant_scope == tenant_scope)
+            if tenant_id is not None:
+                query = query.where(SocMemoryCandidateRow.tenant_id == tenant_id)
+            if source_filters:
+                query = query.where(or_(*source_filters))
+            result = session.execute(query.order_by(SocMemoryCandidateRow.created_at.desc()).limit(limit))
+            return [SocMemoryCandidate.model_validate(row.candidate_payload) for row in result.scalars()]
+
 
 def _row_values(run: AnalysisRun, payload: dict, *, updated_at: datetime) -> dict:
     return {
@@ -510,4 +567,38 @@ def _external_disposition_row_values(record: SocExternalDispositionRecord, paylo
         "memory_candidate_id": record.memory_candidate_id,
         "created_at": record.created_at,
         "disposition_payload": payload,
+    }
+
+
+def _memory_candidate_row_values(candidate: SocMemoryCandidate, payload: dict) -> dict:
+    return {
+        "candidate_type": candidate.candidate_type.value,
+        "target_artifact": candidate.target_artifact.value,
+        "status": candidate.status.value,
+        "tenant_scope": candidate.tenant_scope,
+        "tenant_id": candidate.tenant_id,
+        "source_type": candidate.source.source_type.value,
+        "source_surface": candidate.source.source_surface.value if candidate.source.source_surface is not None else None,
+        "source_id": candidate.source.source_id,
+        "source_doc": candidate.source.source_doc,
+        "source_section": candidate.source.source_section,
+        "capability_card_id": candidate.source.capability_card_id,
+        "source_run_id": candidate.source.run_id,
+        "source_alert_id": candidate.source.alert_id,
+        "source_queue_id": candidate.source.queue_id,
+        "correction_id": candidate.source.correction_id,
+        "eval_sample_id": candidate.source.eval_sample_id,
+        "idempotency_key": candidate.idempotency_key,
+        "confidence": candidate.confidence,
+        "decision_impact": candidate.decision_impact.value,
+        "runtime_decision_allowed": candidate.runtime_decision_allowed,
+        "review_required": candidate.review_required,
+        "review_owner": candidate.review_owner,
+        "reviewed_by_actor_id": candidate.reviewed_by.actor_id if candidate.reviewed_by is not None else None,
+        "reviewed_at": candidate.reviewed_at,
+        "summary": candidate.summary,
+        "content": candidate.content,
+        "created_at": candidate.created_at,
+        "updated_at": candidate.updated_at,
+        "candidate_payload": payload,
     }

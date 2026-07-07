@@ -39,6 +39,7 @@ from soc_agent.contracts import (
     ReviewQueueStatus,
     ServiceRequestContext,
     SocAgentActionCommand,
+    SocMemoryCandidateStatus,
     Verdict,
 )
 from soc_agent.core import (
@@ -49,6 +50,7 @@ from soc_agent.core import (
     SocAnalysisService,
     SocCorrelationService,
     SocDaemonService,
+    SocMemoryService,
     SocNormalizationService,
     SocReviewService,
     SocServiceError,
@@ -143,6 +145,10 @@ def main(argv: list[str] | None = None) -> int:
         return _eval_pingan_domain(args)
     if args.command == "eval" and args.eval_command == "pingan-main":
         return _eval_pingan_main(args)
+    if args.command == "memory" and args.memory_command == "list":
+        return _memory_list(args)
+    if args.command == "memory" and args.memory_command == "get":
+        return _memory_get(args)
     if args.command == "db" and args.db_command == "init":
         return _db_init(args)
     if args.command == "db" and args.db_command == "upgrade":
@@ -376,6 +382,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     eval_pingan_main.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
+    memory = subparsers.add_parser("memory", help="SOC memory candidate helpers")
+    memory_subparsers = memory.add_subparsers(dest="memory_command")
+    memory_list = memory_subparsers.add_parser("list", help="List SOC memory candidates")
+    memory_list.add_argument(
+        "--status",
+        choices=[status.value for status in SocMemoryCandidateStatus],
+        default=SocMemoryCandidateStatus.PENDING_REVIEW.value,
+        help="Memory candidate status to list",
+    )
+    memory_list.add_argument("--tenant-scope", help="Filter by tenant scope")
+    memory_list.add_argument("--tenant-id", help="Filter by tenant id")
+    memory_list.add_argument("--run-id", help="Filter by source run id")
+    memory_list.add_argument("--alert-id", help="Filter by source alert id")
+    memory_list.add_argument("--queue-id", help="Filter by source review queue id")
+    memory_list.add_argument("--limit", type=int, default=50, help="Maximum candidates to return")
+    memory_list.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(memory_list)
+    memory_get = memory_subparsers.add_parser("get", help="Get one SOC memory candidate")
+    memory_get.add_argument("candidate_id", help="Memory candidate id to load")
+    memory_get.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(memory_get)
+
     db = subparsers.add_parser("db", help="SOC database helpers")
     db_subparsers = db.add_subparsers(dest="db_command")
     init = db_subparsers.add_parser("init", help="Create SOC database tables")
@@ -500,6 +528,7 @@ def _correct(args: argparse.Namespace) -> int:
             review_queue_repository=repository,
             evidence_repository=repository,
             external_disposition_repository=repository,
+            memory_candidate_repository=repository,
         ).correct(
             CorrectionCommand(
                 run_id=args.run_id,
@@ -598,6 +627,7 @@ def _review_context(args: argparse.Namespace) -> int:
             review_queue_repository=repository,
             evidence_repository=repository,
             external_disposition_repository=repository,
+            memory_candidate_repository=repository,
         ).get_investigation_context(args.queue_id)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -607,6 +637,44 @@ def _review_context(args: argparse.Namespace) -> int:
         return 3
 
     print(context.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _memory_list(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        candidates = SocMemoryService(candidate_repository=repository).list_candidates(
+            status=SocMemoryCandidateStatus(args.status) if args.status else None,
+            tenant_scope=args.tenant_scope,
+            tenant_id=args.tenant_id,
+            run_id=args.run_id,
+            alert_id=args.alert_id,
+            queue_id=args.queue_id,
+            limit=args.limit,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(json.dumps([item.model_dump(mode="json", exclude_none=True) for item in candidates], ensure_ascii=False, indent=2 if args.pretty else None))
+    return 0
+
+
+def _memory_get(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        candidate = SocMemoryService(candidate_repository=repository).get_candidate(args.candidate_id)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(candidate.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
 
 
@@ -623,6 +691,7 @@ def _review_tui(args: argparse.Namespace) -> int:
                 review_queue_repository=repository,
                 evidence_repository=repository,
                 external_disposition_repository=repository,
+                memory_candidate_repository=repository,
             ),
             approval_service=SocAgentApprovalService(grant_repository=repository, request_repository=repository),
             database_label=_database_label(args.database_url),
@@ -648,6 +717,7 @@ def _chat_tui(args: argparse.Namespace) -> int:
             review_queue_repository=repository,
             evidence_repository=repository,
             external_disposition_repository=repository,
+            memory_candidate_repository=repository,
         )
         approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
         read_only_adapter_registry = _read_only_adapter_registry_for_chat(args)

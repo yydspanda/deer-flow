@@ -425,6 +425,7 @@ class SocReviewService:
         review_queue_repository: ReviewQueueRepository | None = None,
         evidence_repository: InvestigationEvidenceRepository | None = None,
         external_disposition_repository: SocExternalDispositionRepository | None = None,
+        memory_candidate_repository: MemoryCandidateRepository | None = None,
         event_sink: SocEventSink | None = None,
     ) -> None:
         self._repository = repository
@@ -433,6 +434,7 @@ class SocReviewService:
         self._review_queue_repository = review_queue_repository
         self._evidence_repository = evidence_repository
         self._external_disposition_repository = external_disposition_repository
+        self._memory_candidate_repository = memory_candidate_repository
         self._event_sink = event_sink or NoopEventSink()
 
     def correct(
@@ -567,6 +569,16 @@ class SocReviewService:
             if self._external_disposition_repository is not None
             else []
         )
+        memory_candidates = (
+            self._memory_candidate_repository.list_memory_candidates(
+                queue_id=item.queue_id,
+                run_id=item.run_id,
+                alert_id=item.alert_id,
+                limit=20,
+            )
+            if self._memory_candidate_repository is not None
+            else []
+        )
         return InvestigationContext(
             queue_item=item,
             run=run,
@@ -575,6 +587,7 @@ class SocReviewService:
             similar_alerts=similar_alerts,
             action_evidence=action_evidence,
             external_dispositions=external_dispositions,
+            memory_candidates=memory_candidates,
         )
 
 
@@ -602,6 +615,11 @@ class SocMemoryService:
             raise SocServiceNotImplementedError("propose_candidate requires a MemoryCandidateRepository")
 
         request_context = context or ServiceRequestContext()
+        if command.idempotency_key:
+            existing = self._candidate_repository.find_memory_candidate_by_idempotency_key(command.idempotency_key)
+            if existing is not None:
+                return existing
+
         source = command.source.model_copy(update={"source_surface": command.source.source_surface or request_context.actor.surface})
         candidate = SocMemoryCandidate(
             candidate_type=command.candidate_type,
@@ -663,6 +681,9 @@ class SocMemoryService:
         status: SocMemoryCandidateStatus | None = None,
         tenant_scope: str | None = None,
         tenant_id: str | None = None,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        queue_id: str | None = None,
         limit: int = 50,
     ) -> list[SocMemoryCandidate]:
         if self._candidate_repository is None:
@@ -672,6 +693,9 @@ class SocMemoryService:
             status=status,
             tenant_scope=tenant_scope,
             tenant_id=tenant_id,
+            run_id=run_id,
+            alert_id=alert_id,
+            queue_id=queue_id,
             limit=limit,
         )
 

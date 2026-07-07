@@ -27,8 +27,8 @@ alert in
 但它还不是最终形态的“完整 SOC Agent + 多个子研判 Agent”。当前缺口在这里：
 
 - `SocCorrelationService` MVP 已存在，能通过 CLI/core service 输出结构化相似告警、匹配原因和可复用 evidence；后续还需要接入 ReviewQueue/Web/TUI 可视化面板。
-- External Disposition 已有 vendor-neutral event/mapping/service MVP，并且 high-trust mapped 外部结论可同步为本地 correction / review close；mapped 且可定位的外部 reason 可生成 pending memory candidate；DB/API 和 Web/TUI visibility 待补。
-- 已有 `SocMemoryCandidate` 候选入口；但还没有 DB-first typed memory store、确认/驳回/过期状态机和 confirmed memory 检索/注入策略。
+- External Disposition 已有 vendor-neutral event/mapping/service MVP，并且 high-trust mapped 外部结论可同步为本地 correction / review close；mapped 且可定位的外部 reason 可生成 pending memory candidate；DB/API 和 Web/TUI visibility 已完成。
+- `SocMemoryCandidate` 已有 DB-first candidate store、API/CLI 和 ReviewQueue Web/TUI/Lead Agent visibility；但还没有确认/驳回/过期状态机和 confirmed memory 检索/注入策略。
 - APT/EDR/HIDS 已有统一 `SocDomainTriageRequest` / `SocDomainTriageResult` / `SocDomainFinding`，F5/WAF handler 后续补。
 - PA-11 已有只读 Main Orchestrator demo：`SocMainOrchestratorService` 能把 deterministic analyze、selected skills、read-only action evidence、domain findings 和 review context 合成 `UnifiedInvestigationReport`。
 - 这条链路还没有接入 ReviewQueue Web/TUI 可视化，也没有替换为真实 PingAn MCP/API；PA-12 等真实 endpoint/凭证。
@@ -44,7 +44,8 @@ alert in
   -> [Done] PingAn PA-11 Main Orchestrator demo
   -> [Done] External Disposition contract + review/correction + memory candidate
   -> [Done] External Disposition PostgreSQL/API/ReviewQueue visibility
-  -> [Current] Memory Tracking Contract / DB-first candidate persistence
+  -> [Done] Memory candidate DB/API/ReviewQueue visibility
+  -> [Current] Memory candidate review workflow / confirmed-memory boundary
   -> [Partial] EDR/APT/HIDS handlers done; F5/WAF handler pending
   -> [Planned] Web/TUI visible investigation
   -> [Planned] Demo / Eval Script
@@ -66,7 +67,7 @@ PingAn APT/EDR/HIDS 专属经验当前已经先落到 `.notes/ai_soc/pingan-capa
 |---|---|---|
 | `SocAnalysisService` | 预警分析入口；调用固定 runtime，保存 run/summary/review/audit | Done |
 | `SocCorrelationService` | 基于 alert summaries 和 investigation evidence 输出结构化相似告警、匹配原因和可复用 evidence | Done |
-| `SocReviewService` | review queue、调查上下文、关闭、人工纠正；聚合 similar alerts、action evidence 和 external disposition feedback | Done |
+| `SocReviewService` | review queue、调查上下文、关闭、人工纠正；聚合 similar alerts、action evidence、external disposition feedback 和 memory candidates | Done |
 | `SocAgentApprovalService` | approval request inbox、approval grant、dry-run、execute boundary | Done |
 | `SocSkillResolver` | 从 canonical alert / review context 选择白名单 SOC domain skills，生成 compact bounded context | Done |
 | `SocMainOrchestratorService` | 串起 analyze -> read-only route/action/evidence -> domain triage -> bounded review summary，输出 `UnifiedInvestigationReport` | Done for PA-11 |
@@ -74,10 +75,10 @@ PingAn APT/EDR/HIDS 专属经验当前已经先落到 `.notes/ai_soc/pingan-capa
 | `SocLeadAgentActionProposalBoundary` | 只处理显式 `<soc_action_proposal>`；read-only proposal 走 router/policy/dispatcher/registry，高风险写入 approval inbox | Done |
 | `SocActionAdapterRegistry` | action adapter allowlist；当前支持 `asset.lookup`、`asset.locate`、`endpoint.process_tree.lookup` 等只读能力 | Done |
 | `InvestigationEvidenceRepository` | 保存只读 action/tool 结果，供 ReviewQueue、Web/TUI、Lead Agent 后续复用 | Done |
-| `SocMemoryService` | 生成 pending review memory candidate；confirmed fact store、review workflow 和 retrieval policy 仍后续实现 | Partial |
+| `SocMemoryService` | 生成并查询 pending review memory candidate；candidate 已持久化到 PostgreSQL/API/CLI/ReviewQueue context；confirmed fact store、review workflow 和 retrieval policy 仍后续实现 | Partial |
 | `SocDomainTriageService` | APT/EDR/HIDS deterministic domain handlers；消费 skill context 和 read-only evidence refs，只输出 findings | Done for PA-10 |
 | `SocKafkaDaemonRunner` / `SocKafkaConsumerRunner` | opt-in Kafka daemon run loop、mapper、dead-letter、manual commit、metrics JSONL | Done, production params waiting |
-| `SqlAlchemyAlertRepository` | 当前统一实现 run、summary、review queue、audit、approval request、approval grant、investigation evidence、external disposition 持久化 | Done |
+| `SqlAlchemyAlertRepository` | 当前统一实现 run、summary、review queue、audit、approval request、approval grant、investigation evidence、external disposition、memory candidate 持久化 | Done |
 
 ## 3. 当前 As-Is 生命周期
 
@@ -120,7 +121,7 @@ flowchart TD
         ApprovalGrant["soc_approval_grants"]
         Evidence["soc_investigation_evidence"]
         Disposition["soc_external_dispositions"]
-        MemoryCandidate["MemoryCandidateRepository\n(PA-09 in-memory; PG planned)"]
+        MemoryCandidate["soc_memory_candidates\npending_review only"]
     end
 
     CLI --> Analysis
@@ -153,6 +154,7 @@ flowchart TD
     ExternalSync --> Audit
     ExternalSync --> Disposition
     ExternalSync --> MemoryCandidate
+    Review --> MemoryCandidate
 ```
 
 ### 3.1 数据状态变化
@@ -164,6 +166,7 @@ flowchart TD
 | `ReviewQueueItem` | `status` | `open -> closed` | close 不等于改判；改判必须走 correction |
 | `CorrectionRecord` | `candidate_knowledge_status` | `pending_review` | 人工纠正不会直接写 confirmed memory |
 | `ExternalDispositionRecord` | `mapped_status / apply_status` | `received -> mapped / unmatched -> applied / ignored` | 外部系统状态/理由同步记录；Zeus 只是 adapter，reason 只生成候选记忆 |
+| `SocMemoryCandidate` | `status / runtime_decision_allowed` | `pending_review`（当前已持久化；confirm/reject/deprecate 后续） | 候选经验、外部 reason、domain finding 或 correction 只进入评审队列；当前不会注入 prompt，不影响 verdict |
 | `InvestigationEvidence` | `status` | `success / failed` | 只读调查证据，不自动改 verdict，不写 confirmed memory |
 | `SocAgentApprovalRequest` | `status` | `pending` | 审批请求，不是执行授权 |
 | `SocAgentApprovalGrant` | `status` | `approved -> consumed` | 一次性 execution token，当前 execute 仍不产生外部副作用 |
@@ -256,7 +259,7 @@ ReviewQueue 是当前人工复核入口；SOC Lead Agent 只能拿 bounded conte
 ```mermaid
 flowchart TD
     QueueId["ReviewQueue queue_id"] --> ReviewService["SocReviewService.get_investigation_context"]
-    ReviewService --> Context["InvestigationContext\nrun + summary + audit + similar_alerts + action_evidence"]
+    ReviewService --> Context["InvestigationContext\nrun + summary + audit + similar_alerts\n+ action_evidence + external_dispositions\n+ memory_candidates"]
     Context --> Bridge["SocLeadAgentReviewContextArtifact\nredacted + bounded + hashed"]
     Bridge --> LeadEntry["SocLeadAgentChatService\nagent_name=soc-triage"]
     LeadEntry --> DeerFlowLead["DeerFlow lead_agent stream"]
@@ -289,6 +292,12 @@ flowchart TD
 - 不能自动改判。
 - 不能自动关闭 review item。
 - 不能直接写 confirmed memory。
+
+候选记忆当前可见但不生效：
+
+- `SocMemoryCandidate(status=pending_review)` 可以进入 ReviewQueue context、Web/TUI 和 Lead Agent bounded artifact。
+- Lead Agent 必须把 `memory_candidates` 当成待评审建议，不能当成 confirmed fact、active lesson 或处置依据。
+- confirmed memory、检索注入、confirm/reject/deprecate 状态机后续单独实现。
 
 ## 6. 审批与高风险动作
 
@@ -416,21 +425,24 @@ flowchart TD
 
 目的：固定 typed memory record + facets + retrieval policy，让 TUI、Kafka daemon、ReviewQueue、Lead Agent 和 domain triage 的重要结论后续能转成候选记忆。
 
+当前状态：DB-first memory candidate persistence 已完成；`SocMemoryCandidate` 现在有 `soc_memory_candidates` 表、repository、`soc memory list/get`、Gateway `/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded context。它仍只代表 `pending_review` 候选，不能影响 runtime decision。
+
 范围：
 
-- 新增并维护 `.notes/ai_soc/soc-memory-tracking-plan.md`。
+- 后续新增并维护 `.notes/ai_soc/soc-memory-tracking-plan.md`。
 - 固定 DB-first memory contract：PostgreSQL 是 source of truth，wiki/OKF 只是后期展示、审阅和迁移 projection。
 - 固定 typed record：`memory_type`、`status`、`content`、`facets`、`evidence_refs`、`version/hash`。
 - 固定 facets：topics、canonical detection key、vendor aliases、scenario、entities、environment；缺失任意 facet 时系统仍要能工作。
 - 明确具体 IP、UM、host、URL、hash 默认只作为 evidence / query dimension，不直接成为长期 memory 主粒度。
-- 规划 `SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryFact`、`SocMemoryEvidenceRef`、`SocMemoryQuery`、`SocMemoryStatus`。
-- 明确 TUI/Web correction、Kafka daemon repeated pattern、external disposition reason、Lead Agent summary、DomainTriageResult 和 InvestigationEvidence 如何生成 memory candidate。
+- 继续规划 `SocMemoryRecord`、`SocMemoryFact`、`SocMemoryEvidenceRef`、`SocMemoryQuery`、`SocMemoryStatus`。
+- 明确 TUI/Web correction、Kafka daemon repeated pattern、Lead Agent summary、DomainTriageResult 和 InvestigationEvidence 如何生成 memory candidate。
+- 实现 candidate review workflow：confirm / reject / deprecate / expire / review audit。
 
 验收：
 
 - 不自动写 confirmed memory。
 - `pending_review` 不注入 prompt。
-- 所有 candidate 都有 typed memory record、facets、来源、evidence refs 和幂等键。
+- 所有 candidate 都有 facets、来源、evidence refs、幂等键和 reviewer/audit fields。
 - 后续代码只能通过 `SocMemoryService` 写 memory，入口层不能直接写 repository。
 
 ### Slice 4：Domain Sub-Agent Contract

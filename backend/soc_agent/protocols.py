@@ -127,12 +127,17 @@ class MemoryCandidateRepository(Protocol):
 
     def get_memory_candidate(self, candidate_id: str) -> SocMemoryCandidate | None: ...
 
+    def find_memory_candidate_by_idempotency_key(self, idempotency_key: str) -> SocMemoryCandidate | None: ...
+
     def list_memory_candidates(
         self,
         *,
         status: SocMemoryCandidateStatus | None = None,
         tenant_scope: str | None = None,
         tenant_id: str | None = None,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        queue_id: str | None = None,
         limit: int = 50,
     ) -> list[SocMemoryCandidate]: ...
 

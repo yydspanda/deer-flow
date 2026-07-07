@@ -1798,6 +1798,7 @@ def test_memory_service_proposes_pingan_candidate_as_pending_review() -> None:
     assert candidate.proposed_by == context.actor
     assert candidate.metadata["request_id"] == context.request_id
     assert service.get_candidate(candidate.candidate_id) == candidate
+    assert service.propose_candidate(_pingan_memory_candidate_command(), context=context) == candidate
 
     assert event_sink.events[-1].event_type == SocEventType.MEMORY_UPDATED
     assert event_sink.events[-1].payload["operation"] == "memory_candidate.proposed"
@@ -1827,6 +1828,8 @@ def test_memory_service_lists_candidates_by_status_and_tenant_scope() -> None:
     candidates = service.list_candidates(
         status=SocMemoryCandidateStatus.PENDING_REVIEW,
         tenant_scope="pingan",
+        run_id="RUN-HIDS-DEMO",
+        alert_id="ALERT-HIDS-DEMO",
     )
 
     assert candidates == [pingan]

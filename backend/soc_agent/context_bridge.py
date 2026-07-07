@@ -23,6 +23,7 @@ _MAX_SIMILAR_ALERTS = 5
 _MAX_FACT_ITEMS = 10
 _MAX_ACTION_EVIDENCE_ITEMS = 5
 _MAX_EXTERNAL_DISPOSITION_ITEMS = 5
+_MAX_MEMORY_CANDIDATE_ITEMS = 5
 
 _LEAD_AGENT_CONTEXT_INSTRUCTIONS = [
     "Treat this artifact as bounded SOC review context supplied by SOC services.",
@@ -31,6 +32,7 @@ _LEAD_AGENT_CONTEXT_INSTRUCTIONS = [
     "High-risk actions must be proposed as bounded action requests and routed through SOC approval.",
     "Before proposing a duplicate read-only lookup, inspect action_evidence and reuse fresh matching results.",
     "Treat external_dispositions as operator feedback; pending memory candidates are not confirmed reusable knowledge.",
+    "Treat memory_candidates as reviewable proposals only; do not use them as confirmed facts or active lessons.",
     "If evidence conflicts, explain the conflict and ask for review instead of forcing a conclusion.",
 ]
 
@@ -62,6 +64,7 @@ def build_lead_agent_review_context_artifact(
     similar_payload = [_similar_alert_payload(match) for match in context.similar_alerts[:_MAX_SIMILAR_ALERTS]]
     action_evidence_payload = [_action_evidence_payload(item) for item in context.action_evidence[:_MAX_ACTION_EVIDENCE_ITEMS]]
     external_disposition_payload = [_external_disposition_payload(item) for item in context.external_dispositions[:_MAX_EXTERNAL_DISPOSITION_ITEMS]]
+    memory_candidate_payload = [_memory_candidate_payload(item) for item in context.memory_candidates[:_MAX_MEMORY_CANDIDATE_ITEMS]]
     hash_payload = {
         "queue_id": context.queue_item.queue_id,
         "run_id": context.run.run_id,
@@ -73,6 +76,7 @@ def build_lead_agent_review_context_artifact(
         "similar_alerts": similar_payload,
         "action_evidence": action_evidence_payload,
         "external_dispositions": external_disposition_payload,
+        "memory_candidates": memory_candidate_payload,
         "skill_context": skill_payload,
         "instructions": _LEAD_AGENT_CONTEXT_INSTRUCTIONS,
     }
@@ -90,6 +94,7 @@ def build_lead_agent_review_context_artifact(
         similar_alerts=similar_payload,
         action_evidence=action_evidence_payload,
         external_dispositions=external_disposition_payload,
+        memory_candidates=memory_candidate_payload,
         skill_context=skill_context,
         instructions=list(_LEAD_AGENT_CONTEXT_INSTRUCTIONS),
     )
@@ -270,5 +275,29 @@ def _external_disposition_payload(record: Any) -> dict[str, Any]:
         "created_at": record.created_at.isoformat(),
         "external_updated_at": record.event.updated_at.isoformat(),
         "external_tags": record.event.external_tags,
+    }
+    return {key: value for key, value in payload.items() if value not in (None, [], {})}
+
+
+def _memory_candidate_payload(candidate: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "candidate_id": candidate.candidate_id,
+        "candidate_type": candidate.candidate_type.value,
+        "target_artifact": candidate.target_artifact.value,
+        "status": candidate.status.value,
+        "summary": candidate.summary,
+        "content": candidate.content,
+        "tenant_scope": candidate.tenant_scope,
+        "tenant_id": candidate.tenant_id,
+        "source": candidate.source.model_dump(mode="json", exclude_none=True),
+        "evidence_refs": candidate.evidence_refs,
+        "confidence": candidate.confidence,
+        "facets": candidate.facets,
+        "decision_impact": candidate.decision_impact.value,
+        "runtime_decision_allowed": candidate.runtime_decision_allowed,
+        "review_owner": candidate.review_owner,
+        "labels": candidate.labels,
+        "created_at": candidate.created_at.isoformat(),
+        "updated_at": candidate.updated_at.isoformat(),
     }
     return {key: value for key, value in payload.items() if value not in (None, [], {})}

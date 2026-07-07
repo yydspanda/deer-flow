@@ -11,14 +11,17 @@ import {
   createSocApprovalGrant,
   dryRunSocApprovedAction,
   executeSocApprovedAction,
+  getSocMemoryCandidate,
   getSocApprovalRequest,
   getSocReviewContext,
+  listSocMemoryCandidates,
   listSocApprovalRequests,
   listSocReviewItems,
 } from "./api";
 import type {
   SocAgentApprovedActionCommand,
   SocApprovalGrantRequest,
+  SocMemoryCandidateStatus,
   SocRequestContext,
   SocReviewCloseRequest,
   SocReviewCorrectionRequest,
@@ -39,6 +42,40 @@ export const socApprovalQueryKeys = {
     [...socApprovalQueryKeys.all, "requests", status, limit] as const,
   request: (approvalRequestId: string | null | undefined) =>
     [...socApprovalQueryKeys.all, "request", approvalRequestId] as const,
+};
+
+export const socMemoryQueryKeys = {
+  all: ["soc-memory"] as const,
+  candidates: ({
+    status,
+    tenantScope,
+    tenantId,
+    runId,
+    alertId,
+    queueId,
+    limit,
+  }: {
+    status: SocMemoryCandidateStatus | null;
+    tenantScope: string | null | undefined;
+    tenantId: string | null | undefined;
+    runId: string | null | undefined;
+    alertId: string | null | undefined;
+    queueId: string | null | undefined;
+    limit: number;
+  }) =>
+    [
+      ...socMemoryQueryKeys.all,
+      "candidates",
+      status,
+      tenantScope,
+      tenantId,
+      runId,
+      alertId,
+      queueId,
+      limit,
+    ] as const,
+  candidate: (candidateId: string | null | undefined) =>
+    [...socMemoryQueryKeys.all, "candidate", candidateId] as const,
 };
 
 function useSocWebRequestContext(): SocRequestContext {
@@ -139,6 +176,59 @@ export function useSocApprovalRequest(
     enabled: !!approvalRequestId,
   });
   return { request: data ?? null, isLoading, isFetching, error };
+}
+
+export function useSocMemoryCandidates({
+  status = "pending_review",
+  tenantScope,
+  tenantId,
+  runId,
+  alertId,
+  queueId,
+  limit = 50,
+}: {
+  status?: SocMemoryCandidateStatus | null;
+  tenantScope?: string | null;
+  tenantId?: string | null;
+  runId?: string | null;
+  alertId?: string | null;
+  queueId?: string | null;
+  limit?: number;
+} = {}) {
+  const context = useSocWebRequestContext();
+  const { data, isLoading, error, refetch, isFetching } = useQuery({
+    queryKey: socMemoryQueryKeys.candidates({
+      status,
+      tenantScope,
+      tenantId,
+      runId,
+      alertId,
+      queueId,
+      limit,
+    }),
+    queryFn: () =>
+      listSocMemoryCandidates({
+        status,
+        tenantScope,
+        tenantId,
+        runId,
+        alertId,
+        queueId,
+        limit,
+        context,
+      }),
+  });
+  return { candidates: data ?? [], isLoading, isFetching, error, refetch };
+}
+
+export function useSocMemoryCandidate(candidateId: string | null | undefined) {
+  const context = useSocWebRequestContext();
+  const { data, isLoading, error, isFetching } = useQuery({
+    queryKey: socMemoryQueryKeys.candidate(candidateId),
+    queryFn: () => getSocMemoryCandidate(candidateId!, context),
+    enabled: !!candidateId,
+  });
+  return { candidate: data ?? null, isLoading, isFetching, error };
 }
 
 export function useCreateSocApprovalGrant() {

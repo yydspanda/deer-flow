@@ -132,6 +132,11 @@ def render_context(context: InvestigationContext) -> RenderableType:
             "external_feedback",
             ", ".join(f"{item.event.external_system}:{item.event.external_case_id}:{item.canonical_status.value}/{item.apply_status.value}" for item in context.external_dispositions[:5]),
         )
+    if context.memory_candidates:
+        table.add_row(
+            "memory_candidates",
+            ", ".join(f"{item.candidate_id}:{item.status.value}/{item.candidate_type.value}" for item in context.memory_candidates[:5]),
+        )
     return Group(Text("Investigation Context", style=f"bold {THEME.primary}"), table)
 
 

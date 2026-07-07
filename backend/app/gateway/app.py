@@ -29,6 +29,7 @@ from app.gateway.routers import (
     scheduled_tasks,
     skills,
     soc_approvals,
+    soc_memory,
     soc_review,
     suggestions,
     thread_runs,
@@ -470,6 +471,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # SOC review queue API is mounted at /api/soc/review
     app.include_router(soc_review.router)
+
+    # SOC memory candidate API is mounted at /api/soc/memory
+    app.include_router(soc_memory.router)
 
     # SOC approval API is mounted at /api/soc/approvals
     app.include_router(soc_approvals.router)

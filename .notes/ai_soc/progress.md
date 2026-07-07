@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口完成，Phase 2 correlation / domain triage 起步 |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence / external disposition PG + ReviewQueue visibility 已固定；真实 dev/staging MCP 等待 endpoint/凭证；当前主线转向 DB-first memory candidate persistence，让外部 reason、domain finding、correction 等候选知识可持久化评审 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence / external disposition PG + ReviewQueue visibility / memory candidate PG + API + ReviewQueue visibility 已固定；真实 dev/staging MCP 等待 endpoint/凭证；当前主线转向 memory candidate review workflow / confirmed-memory boundary |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 做 DB-first memory candidate persistence：把 `SocMemoryCandidate` 从 in-memory 测试边界推进到 PostgreSQL/API/ReviewQueue 可评审队列，仍保持 `pending_review` 不影响 runtime decision。 |
+| 当前下一刀 | 做 memory candidate review workflow / confirmed-memory boundary：补 confirm/reject/deprecate/expire 状态机、review audit 和 confirmed memory record 设计，仍不把 pending candidate 注入 prompt。 |
 
 ## 当前待办列表
 
@@ -51,7 +51,8 @@
 | 0.12 | `PA-12` real PingAn MCP/API replacement | Waiting | 等真实 PingAn dev/staging MCP/API endpoint/凭证后替换 mock provider，保存 smoke/eval report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险；不能用本地 mock 假装完成 |
 | 1 | Correlation Service MVP | Done | 已新增 `SocCorrelationService`、`CorrelationQuery`、`CorrelationResult`、CLI `soc correlate`；基于 summary/evidence 输出相似告警、匹配原因和可复用证据 | 不调用 LLM、不依赖真实 MCP、不改 DeerFlow core；demo alert 可看到结构化 correlation result |
 | 2 | External Disposition Sync Contract | Done | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol、in-memory repository、PostgreSQL persistence、ReviewQueue context API/Web/TUI/Lead Agent visibility；已接 high-trust mapped review/correction 和 pending memory candidate | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
-| 3 | Memory Tracking Contract | Planned | 新增 DB-first typed memory record + facets + retrieval policy；规划 `SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryQuery` 等 schema | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
+| 3 | Memory Tracking Contract | Partial | DB-first candidate persistence 已完成；下一步新增 confirmed memory record + facets + retrieval policy；规划 `SocMemoryRecord`、`SocMemoryQuery` 等 schema | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
+| 3.1 | Memory candidate DB/API/ReviewQueue visibility | Done | 已新增 `soc_memory_candidates`、repository、CLI `soc memory list/get`、Gateway `/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded visibility | candidate 仍为 `pending_review` 且 `runtime_decision_allowed=false`；不注入 prompt，不影响 verdict |
 | 4 | Domain Sub-Agent Contract | Done for PA-10 | 已固定 `SocDomainTriageRequest`、`SocDomainTriageResult`、`SocDomainFinding` 结构 | EDR/APT/HIDS 已共用同一 schema；子研判不能直接改 decision 或写 DB |
 | 5 | EDR/APT/HIDS/F5 MVP handlers | Partial | 已先做 APT/EDR/HIDS deterministic + skill context domain handlers，复用已有 read-only evidence/mock adapter | APT/EDR/HIDS demo 已能输出 domain findings 和 evidence refs；F5/WAF handler 后续补 |
 | 6 | Main SOC Agent Orchestrator MVP | Done for PA-11 / correlation merge pending | 已串起 analyze、skill context、read-only action evidence、domain triage、review summary，输出 `UnifiedInvestigationReport`；correlation 尚未并入 report | APT/EDR/HIDS demo 能看到主控用了哪些 skill、route、evidence、domain finding 和 review context |
@@ -163,11 +164,43 @@
 | 95 | Correlation Service MVP | Done | 新增结构化 correlation contract/service/CLI；基于 summary + evidence 找相似告警、匹配原因和可复用证据；不调用 LLM、不依赖真实 MCP、不改 DeerFlow core |
 | 96 | External Disposition Sync Contract MVP | Done | 固定外部预警/工单/处置系统状态与理由同步协议；新增 mapper/service/repository MVP，Zeus 只是 mock fixture |
 | 100 | External Disposition Review/Correction Integration | Done | 高可信 mapped external disposition 在唯一定位本地 target 后复用 `SocReviewService.correct()`，同步 operational correction 并关闭 review queue；低可信/未知/无法定位不改判 |
-| 97 | Memory Tracking Contract | Planned | 固定 DB-first typed memory record + facets + retrieval policy；TUI/Web/Kafka/Lead Agent/domain/external disposition 结论先生成 `SocMemoryCandidate`，不直接写 confirmed memory；wiki/OKF 后期只做 projection |
+| 97 | Memory Tracking Contract | Partial | `SocMemoryCandidate` 已完成 DB/API/ReviewQueue visibility；下一步固定 confirmed memory record + facets + retrieval policy；TUI/Web/Kafka/Lead Agent/domain/external disposition 结论先生成 candidate，不直接写 confirmed memory；wiki/OKF 后期只做 projection |
 | 98 | PingAn Domain Triage MVP | Done | 新增 `SocDomainTriageService` 和 APT/EDR/HIDS deterministic handlers；`soc eval pingan-domain` 可验证三类样本输出 domain findings、capability card refs 和 evidence refs |
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-07 — Memory candidate DB/API/ReviewQueue visibility
+
+- 背景：
+  - External Disposition、correction、domain finding 和 Lead Agent 后续都会产生候选经验；之前 `SocMemoryCandidate` 主要停留在 in-memory/test boundary，分析师无法通过统一 ReviewQueue context 看到这些候选。
+- 变更：
+  - 新增 `soc_memory_candidates` 持久化：
+    - 新增 migration `0010_memory_candidates`、`SocMemoryCandidateRow`、SQLAlchemy repository 方法。
+    - `MemoryCandidateRepository` 增加 idempotency lookup 和 run/alert/queue 过滤。
+    - `SocMemoryService.propose_candidate()` 按 `idempotency_key` 复用既有 candidate，避免重复写入。
+  - 新增查询入口：
+    - Gateway 新增 `/api/soc/memory/candidates` 和 `/api/soc/memory/candidates/{candidate_id}`。
+    - CLI 新增 `soc memory list/get`。
+  - ReviewQueue context 可见：
+    - `SocReviewService.get_investigation_context()` 聚合相关 `memory_candidates`。
+    - `InvestigationContext`、Lead Agent bounded artifact、TUI render 和 ReviewQueue Web 页面新增候选记忆展示。
+    - Web/TUI/Lead Agent 只能把它展示为 `pending_review` candidate，不作为 confirmed fact 或 active lesson。
+  - 文档同步：
+    - `.notes/ai_soc/soc-agent-solution.md`
+    - `.notes/ai_soc/alert-lifecycle-flow.md`
+    - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 验证：
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff check ...`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_agent_service.py -k memory -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_agent_repository.py -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_memory_router.py -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_review_router.py -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m soc_agent.cli db upgrade --database-url sqlite:////tmp/soc_memory_candidate_migration_check.db`
+  - `pnpm --dir frontend check`
+  - `git diff --check`
+- 下一步：
+  - 做 memory candidate review workflow / confirmed-memory boundary：补 confirm/reject/deprecate/expire 状态机、review audit 和 confirmed memory record 设计；仍不把 pending candidate 注入 prompt。
 
 ### 2026-07-07 — External Disposition PostgreSQL/API/ReviewQueue visibility
 

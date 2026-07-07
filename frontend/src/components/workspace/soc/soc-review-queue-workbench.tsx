@@ -45,6 +45,7 @@ import type {
   SocAgentApprovedActionCommand,
   SocExternalDispositionRecord,
   SocInvestigationEvidence,
+  SocMemoryCandidate,
   SocReviewQueueItem,
   SocReviewQueueStatus,
   SocVerdict,
@@ -132,6 +133,17 @@ function approvalRequestLabel(request: SocAgentApprovalRequest) {
 
 function hasObjectEntries(value: Record<string, unknown> | null | undefined) {
   return !!value && Object.keys(value).length > 0;
+}
+
+function candidateSourceLabel(candidate: SocMemoryCandidate) {
+  const source = candidate.source;
+  const refs = [
+    source.source_type,
+    source.run_id ? `run ${source.run_id}` : null,
+    source.alert_id ? `alert ${source.alert_id}` : null,
+    source.queue_id ? `queue ${source.queue_id}` : null,
+  ].filter(Boolean);
+  return refs.join(" / ");
 }
 
 function ApprovalProposalSummary({
@@ -298,6 +310,86 @@ function ExternalDispositionSection({
                   {record.event.external_tags.map((tag) => (
                     <Badge key={tag} variant="outline">
                       {tag}
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function MemoryCandidateSection({
+  candidates,
+}: {
+  candidates: SocMemoryCandidate[];
+}) {
+  return (
+    <section className="rounded-md border">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+        <div className="flex items-center gap-2">
+          <CircleIcon className="text-muted-foreground size-4" />
+          <h3 className="text-sm font-semibold">候选记忆</h3>
+        </div>
+        <Badge variant="secondary">{candidates.length}</Badge>
+      </div>
+      <div className="divide-y">
+        {candidates.length === 0 ? (
+          <div className="text-muted-foreground p-4 text-sm">
+            当前工单还没有待评审经验。
+          </div>
+        ) : (
+          candidates.map((candidate) => (
+            <div key={candidate.candidate_id} className="p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">
+                    {candidate.summary}
+                  </div>
+                  <div className="text-muted-foreground mt-1 text-xs">
+                    {candidateSourceLabel(candidate)} /{" "}
+                    {formatTime(candidate.created_at)}
+                  </div>
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Badge variant="outline">{candidate.status}</Badge>
+                  <Badge variant="secondary">{candidate.target_artifact}</Badge>
+                  <Badge variant="outline">
+                    confidence {formatPercent(candidate.confidence)}
+                  </Badge>
+                </div>
+              </div>
+              <p className="text-muted-foreground mt-2 text-xs">
+                {candidate.content}
+              </p>
+              <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                <span>{candidate.candidate_type}</span>
+                <span>{candidate.tenant_scope}</span>
+                {candidate.review_owner ? (
+                  <span>owner: {candidate.review_owner}</span>
+                ) : null}
+                {candidate.idempotency_key ? (
+                  <span>idempotency: {candidate.idempotency_key}</span>
+                ) : null}
+                <span>runtime: inactive</span>
+              </div>
+              {candidate.evidence_refs.length > 0 ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {candidate.evidence_refs.map((ref) => (
+                    <Badge key={ref} variant="outline">
+                      {ref}
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
+              {candidate.labels.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {candidate.labels.map((label) => (
+                    <Badge key={label} variant="secondary">
+                      {label}
                     </Badge>
                   ))}
                 </div>
@@ -746,6 +838,10 @@ export function SocReviewQueueWorkbench() {
 
               <ExternalDispositionSection
                 records={context?.external_dispositions ?? []}
+              />
+
+              <MemoryCandidateSection
+                candidates={context?.memory_candidates ?? []}
               />
 
               <section className="rounded-md border">
