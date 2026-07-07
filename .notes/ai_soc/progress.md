@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `PA-11` PingAn Main Orchestrator demo 已完成；`PA-12` 真实 PingAn MCP/API 替换等待 dev/staging endpoint/凭证。真实接口未就绪前，下一刀回到 External Disposition Sync / Memory Tracking / Web-TUI 可见化主线。 |
+| 当前下一刀 | External Disposition Review/Correction integration 已完成；下一刀做 Memory candidate integration，把外部 reason 生成 pending memory candidate，仍不写 confirmed memory。 |
 
 ## 当前待办列表
 
@@ -50,7 +50,7 @@
 | 0.11 | `PA-11` PingAn main orchestrator demo | Done | 已新增 `SocMainOrchestratorService`、`UnifiedInvestigationReport`、`soc eval pingan-main` 和 APT/EDR/HIDS eval 覆盖 | 单条 demo 能看到 analyze -> selected skills -> read-only route/evidence -> domain finding -> review context；不写 DB、不执行高风险动作 |
 | 0.12 | `PA-12` real PingAn MCP/API replacement | Waiting | 等真实 PingAn dev/staging MCP/API endpoint/凭证后替换 mock provider，保存 smoke/eval report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险；不能用本地 mock 假装完成 |
 | 1 | Correlation Service MVP | Done | 已新增 `SocCorrelationService`、`CorrelationQuery`、`CorrelationResult`、CLI `soc correlate`；基于 summary/evidence 输出相似告警、匹配原因和可复用证据 | 不调用 LLM、不依赖真实 MCP、不改 DeerFlow core；demo alert 可看到结构化 correlation result |
-| 2 | External Disposition Sync Contract | Planned after PA-11 | 新增 vendor-neutral 外部处置反馈协议；Zeus/Webhook/Kafka/Polling adapter 只负责转成 `SocExternalDispositionEvent`，service 负责状态映射、审计、review/correction 同步和候选记忆 | 不在 core service 写死 Zeus；外部 status/reason 可同步，但 free-text reason 只能进 pending memory/skill improvement candidate |
+| 2 | External Disposition Sync Contract | Partial | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol 和 in-memory repository；已接 high-trust mapped review/correction；memory/DB/API 未接 | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 不能进 confirmed memory |
 | 3 | Memory Tracking Contract | Planned | 新增 DB-first typed memory record + facets + retrieval policy；规划 `SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryQuery` 等 schema | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
 | 4 | Domain Sub-Agent Contract | Done for PA-10 | 已固定 `SocDomainTriageRequest`、`SocDomainTriageResult`、`SocDomainFinding` 结构 | EDR/APT/HIDS 已共用同一 schema；子研判不能直接改 decision 或写 DB |
 | 5 | EDR/APT/HIDS/F5 MVP handlers | Partial | 已先做 APT/EDR/HIDS deterministic + skill context domain handlers，复用已有 read-only evidence/mock adapter | APT/EDR/HIDS demo 已能输出 domain findings 和 evidence refs；F5/WAF handler 后续补 |
@@ -161,12 +161,78 @@
 | 93 | Lead Agent evidence reuse + endpoint process-tree mock adapter | Done | Lead Agent bounded context 明确复用既有 action_evidence；新增 `endpoint.process_tree.lookup` read-only in-memory/mock adapter、policy、proposal 示例和测试 |
 | 94 | PingAn SOC capability onboarding | Done | 新增 `.notes/ai_soc/pingan-soc-capability-onboarding.md`，固定经验 -> capability card -> skill/MCP/normalizer/domain/eval/memory 的转化流程 |
 | 95 | Correlation Service MVP | Done | 新增结构化 correlation contract/service/CLI；基于 summary + evidence 找相似告警、匹配原因和可复用证据；不调用 LLM、不依赖真实 MCP、不改 DeerFlow core |
-| 96 | External Disposition Sync Contract | Planned after PA-11 | 固定外部预警/工单/处置系统状态与理由同步协议；Zeus 只是第一个 adapter；同步结果进入 audit/review/correction/memory candidate/skill improvement candidate |
+| 96 | External Disposition Sync Contract MVP | Done | 固定外部预警/工单/处置系统状态与理由同步协议；新增 mapper/service/repository MVP，Zeus 只是 mock fixture |
+| 100 | External Disposition Review/Correction Integration | Done | 高可信 mapped external disposition 在唯一定位本地 target 后复用 `SocReviewService.correct()`，同步 operational correction 并关闭 review queue；低可信/未知/无法定位不改判 |
 | 97 | Memory Tracking Contract | Planned | 固定 DB-first typed memory record + facets + retrieval policy；TUI/Web/Kafka/Lead Agent/domain/external disposition 结论先生成 `SocMemoryCandidate`，不直接写 confirmed memory；wiki/OKF 后期只做 projection |
 | 98 | PingAn Domain Triage MVP | Done | 新增 `SocDomainTriageService` 和 APT/EDR/HIDS deterministic handlers；`soc eval pingan-domain` 可验证三类样本输出 domain findings、capability card refs 和 evidence refs |
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-07 — External Disposition Review/Correction integration
+
+- 背景：
+  - External Disposition Contract MVP 已能记录、映射、定位和审计外部状态；下一步需要把高可信外部人工结论同步到本地 operational correction / review close，同时继续防止低可信或无法定位事件改判。
+- 变更：
+  - 更新 `backend/soc_agent/contracts/schemas.py`：
+    - `SocExternalDispositionApplyResult` 新增 `correction_applied`。
+  - 更新 `backend/soc_agent/core/external_disposition.py`：
+    - `SocExternalDispositionService` 新增可选 `summary_repository`。
+    - 对 `trust_level=high`、`apply_status=mapped`、目标唯一且 canonical status 可映射到 verdict 的事件，复用 `SocReviewService.correct()`。
+    - correction reason 固定带外部系统、case id、canonical status 和外部 reason。
+    - 外部 disposition audit payload 记录 `correction_id`。
+    - 低可信、未知状态、无法定位、非 verdict 类状态仍只记录，不改判。
+  - 更新 `backend/tests/test_soc_external_disposition.py`：
+    - 覆盖 high-trust mapped event 会写 correction、关闭 review、写 correction/external 两类 audit。
+    - 覆盖 duplicate event 不重复 correction。
+    - 覆盖 low-trust mapped event 不改判、不关闭 review。
+  - 更新 `.notes/ai_soc/external-disposition-sync-plan.md`：
+    - 切片 4 Review/Correction integration 标记 Done；下一步切到 memory candidate integration。
+- 验证：
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff format backend/soc_agent/core/external_disposition.py backend/tests/test_soc_external_disposition.py backend/soc_agent/contracts/schemas.py`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff check backend/soc_agent/core/external_disposition.py backend/tests/test_soc_external_disposition.py backend/soc_agent/contracts/schemas.py`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_external_disposition.py -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_agent_service.py -k 'review_service_correct or memory_service or correlation' -q`
+  - `git diff --check`
+  - `codegraph sync .`
+- 下一步：
+  - 做 External Disposition memory candidate integration：外部 reason 只能生成 `SocMemoryCandidate(status=pending_review)`，不能写 confirmed memory。
+
+### 2026-07-07 — External Disposition Sync Contract MVP
+
+- 背景：
+  - `PA-12` 真实 PingAn MCP/API 替换等待 endpoint/凭证；按规划回到 External Disposition Sync，让 Zeus/ITSM/SIEM-SOAR/客户自研 SOC 的人工状态和理由能先通过 vendor-neutral feedback lane 回流。
+- 变更：
+  - 更新 `backend/soc_agent/contracts/schemas.py` 和 `backend/soc_agent/contracts/__init__.py`：
+    - 新增 `SocExternalDispositionEvent`、`SocExternalDispositionCanonicalStatus`、`SocExternalDispositionApplyStatus`。
+    - 新增 `SocExternalDispositionStatusMapping`、`SocExternalDispositionMappingConfig`、`SocExternalDispositionAdapterConfig`。
+    - 新增 `SocExternalDispositionRecord`、`SocExternalDispositionApplyResult`。
+    - 扩展 `AuditAction.EXTERNAL_DISPOSITION` 和 `SocEventType.EXTERNAL_DISPOSITION_RECEIVED`。
+  - 更新 `backend/soc_agent/protocols.py`：
+    - 新增 `SocExternalDispositionRepository` protocol。
+  - 新增 `backend/soc_agent/external_disposition/`：
+    - `build_external_disposition_event()`：通过 field-path config 把外部 payload 映射成 canonical event。
+    - `resolve_external_disposition_status()`：通过 mapping config 把外部状态映射成 canonical status。
+    - `build_external_disposition_idempotency_key()`：固定幂等键形态。
+    - `InMemoryExternalDispositionRepository`：用于 service tests 和本地 smoke。
+  - 新增 `backend/soc_agent/core/external_disposition.py` 并导出 `SocExternalDispositionService`：
+    - `apply_event()` 支持 schema validation、状态映射、目标定位、幂等、unmatched、audit 和 event emission。
+    - 当前不自动 correction、不关闭 review、不写 memory candidate。
+  - 新增 `backend/samples/external_disposition/zeus_status_update.json`：
+    - 脱敏 Zeus 状态/理由 mock payload，用 adapter config 映射，不在 core 写死 Zeus。
+  - 新增 `backend/tests/test_soc_external_disposition.py`：
+    - 覆盖 mapper、状态映射、幂等、unmatched、audit 和 service repository 边界。
+  - 更新 `.notes/ai_soc/external-disposition-sync-plan.md`：
+    - 标记切片 1-3 Done，下一步切到 Review/Correction integration。
+- 验证：
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff format backend/soc_agent/contracts/schemas.py backend/soc_agent/contracts/__init__.py backend/soc_agent/protocols.py backend/soc_agent/core/__init__.py backend/soc_agent/core/external_disposition.py backend/soc_agent/external_disposition/__init__.py backend/soc_agent/external_disposition/mapping.py backend/soc_agent/external_disposition/repository.py backend/tests/test_soc_external_disposition.py`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff check backend/soc_agent/contracts/schemas.py backend/soc_agent/contracts/__init__.py backend/soc_agent/protocols.py backend/soc_agent/core/__init__.py backend/soc_agent/core/external_disposition.py backend/soc_agent/external_disposition/__init__.py backend/soc_agent/external_disposition/mapping.py backend/soc_agent/external_disposition/repository.py backend/tests/test_soc_external_disposition.py`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_external_disposition.py -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_agent_service.py -k 'review_service_correct or memory_service or correlation' -q`
+  - `git diff --check`
+  - `codegraph sync .`
+- 下一步：
+  - 做 External Disposition Review/Correction integration：高置信 mapped external disposition 在唯一定位本地 target 后，同步 operational correction / review close/update；仍不写 confirmed memory。
 
 ### 2026-07-07 — PA-11 PingAn main orchestrator demo
 

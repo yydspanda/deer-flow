@@ -62,6 +62,7 @@ class SocEventType(StrEnum):
     ANALYSIS_REQUESTED = "analysis.requested"
     ANALYSIS_COMPLETED = "analysis.completed"
     ANALYSIS_FAILED = "analysis.failed"
+    EXTERNAL_DISPOSITION_RECEIVED = "external_disposition.received"
     REVIEW_CORRECTED = "review.corrected"
     REVIEW_REQUESTED = "review.requested"
     MEMORY_UPDATED = "memory.updated"
@@ -71,6 +72,7 @@ class AuditAction(StrEnum):
     ANALYSIS = "analysis"
     REPLAY = "replay"
     CORRECTION = "correction"
+    EXTERNAL_DISPOSITION = "external_disposition"
 
 
 class ReviewQueueStatus(StrEnum):
@@ -132,6 +134,23 @@ class SocMemoryCandidateSourceType(StrEnum):
     EXTERNAL_DISPOSITION = "external_disposition"
     MANUAL_NOTE = "manual_note"
     EVAL_FIXTURE = "eval_fixture"
+
+
+class SocExternalDispositionCanonicalStatus(StrEnum):
+    CLOSED_TRUE_POSITIVE = "closed_true_positive"
+    CLOSED_FALSE_POSITIVE = "closed_false_positive"
+    CLOSED_BENIGN_TRUE_POSITIVE = "closed_benign_true_positive"
+    SUPPRESSED = "suppressed"
+    ESCALATED = "escalated"
+    IGNORED = "ignored"
+    DUPLICATE = "duplicate"
+    UNKNOWN = "unknown"
+
+
+class SocExternalDispositionApplyStatus(StrEnum):
+    MAPPED = "mapped"
+    UNMATCHED = "unmatched"
+    IGNORED = "ignored"
 
 
 class SocDomainName(StrEnum):
@@ -551,6 +570,90 @@ class SocMemoryCandidate(BaseModel):
     proposed_by: ActorContext | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class SocExternalDispositionEvent(BaseModel):
+    """Vendor-neutral external ticket/case disposition event."""
+
+    schema_version: str = "soc.external_disposition.v1"
+    tenant_id: str | None = None
+    external_system: str = Field(min_length=1)
+    external_case_id: str = Field(min_length=1)
+    source_event_id: str | None = None
+    source_version: str | None = None
+    external_alert_ref: str | None = None
+    soc_alert_id: str | None = None
+    soc_run_id: str | None = None
+    soc_queue_id: str | None = None
+    external_status: str = Field(min_length=1)
+    external_reason: str | None = None
+    external_tags: list[str] = Field(default_factory=list)
+    operator: dict[str, Any] = Field(default_factory=dict)
+    updated_at: datetime
+    raw_payload_hash: str = Field(min_length=1)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocExternalDispositionStatusMapping(BaseModel):
+    """One external status to canonical disposition mapping rule."""
+
+    external_status: str = Field(min_length=1)
+    canonical_status: SocExternalDispositionCanonicalStatus
+    external_system: str | None = None
+    trust_level: Literal["low", "medium", "high"] = "medium"
+    apply_to_review: bool = True
+    notes: str | None = None
+
+
+class SocExternalDispositionMappingConfig(BaseModel):
+    """Configurable status mapping used by external disposition adapters/services."""
+
+    schema_version: str = "soc.external_disposition_mapping.v1"
+    tenant_id: str | None = None
+    status_mappings: list[SocExternalDispositionStatusMapping] = Field(default_factory=list)
+    default_canonical_status: SocExternalDispositionCanonicalStatus = SocExternalDispositionCanonicalStatus.UNKNOWN
+
+
+class SocExternalDispositionAdapterConfig(BaseModel):
+    """Generic field-path mapping from an external payload to the canonical event."""
+
+    schema_version: str = "soc.external_disposition_adapter.v1"
+    external_system: str = Field(min_length=1)
+    tenant_id: str | None = None
+    field_paths: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocExternalDispositionRecord(BaseModel):
+    """Persisted external disposition event and local mapping outcome."""
+
+    schema_version: str = "soc.external_disposition_record.v1"
+    disposition_id: str = Field(default_factory=lambda: f"XDISP-{uuid4().hex[:12].upper()}")
+    event: SocExternalDispositionEvent
+    canonical_status: SocExternalDispositionCanonicalStatus
+    apply_status: SocExternalDispositionApplyStatus
+    idempotency_key: str = Field(min_length=1)
+    target_run_id: str | None = None
+    target_alert_id: str | None = None
+    target_queue_id: str | None = None
+    matched_by: str | None = None
+    apply_reason: str = Field(min_length=1)
+    audit_id: str | None = None
+    correction_id: str | None = None
+    memory_candidate_id: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocExternalDispositionApplyResult(BaseModel):
+    """Service result for applying one external disposition event."""
+
+    schema_version: str = "soc.external_disposition_apply_result.v1"
+    record: SocExternalDispositionRecord
+    idempotent: bool = False
+    audit_written: bool = False
+    correction_applied: bool = False
+    memory_candidate_created: bool = False
 
 
 class SocAgentActionAdapterDescriptor(BaseModel):

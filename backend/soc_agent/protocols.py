@@ -24,6 +24,7 @@ from soc_agent.contracts import (
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
     SocEvent,
+    SocExternalDispositionRecord,
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
 )
@@ -134,6 +135,25 @@ class MemoryCandidateRepository(Protocol):
         tenant_id: str | None = None,
         limit: int = 50,
     ) -> list[SocMemoryCandidate]: ...
+
+
+class SocExternalDispositionRepository(Protocol):
+    """Persistence boundary for external disposition feedback events."""
+
+    def save_external_disposition(self, record: SocExternalDispositionRecord) -> None: ...
+
+    def find_external_disposition_by_idempotency_key(self, idempotency_key: str) -> SocExternalDispositionRecord | None: ...
+
+    def list_external_dispositions(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        queue_id: str | None = None,
+        external_system: str | None = None,
+        external_case_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SocExternalDispositionRecord]: ...
 
 
 class SocAgentApprovalGrantRepository(Protocol):

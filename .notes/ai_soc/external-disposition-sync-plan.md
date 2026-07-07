@@ -1,6 +1,6 @@
 # External Disposition Sync Plan
 
-> Updated: 2026-07-06
+> Updated: 2026-07-07
 >
 > 本文档定义 SOC Agent 与外部预警/工单/处置系统同步人工状态和处置理由的产品与工程边界。Zeus 是第一个接入场景，但协议不能写死 Zeus；未来要能接客户自研 SOC、SIEM/SOAR、ServiceNow、Jira、ITSM 或其他工单系统。
 
@@ -18,6 +18,14 @@
 ```
 
 外部系统仍可以是分析师当前主操作界面。SOC Agent 不要求第一阶段替换 Zeus 页面，而是把 Zeus 中的人工处置状态、理由、标签和复核结果同步回来，形成可审计、可回放、可学习的反馈闭环。
+
+当前实现状态：
+
+- Done：`SocExternalDispositionEvent`、canonical status、adapter/mapping config、`SocExternalDispositionRecord`、`SocExternalDispositionApplyResult`。
+- Done：通用 field-path mapper，可用 Zeus mock fixture 转成 vendor-neutral event，不在 core 写死 Zeus。
+- Done：`SocExternalDispositionService.apply_event()` + repository protocol + in-memory repository，支持状态映射、目标定位、幂等、unmatched 和 audit。
+- Done：高可信 mapped event 在唯一定位本地 target 后复用 `SocReviewService.correct()`，同步 operational correction 并关闭 review queue；低可信、未知状态、无法定位仍不改判。
+- Not yet：memory candidate 生成、skill improvement candidate、DB migration/API/Web/TUI visibility。
 
 ## 2. 产品目标
 
@@ -136,13 +144,13 @@ external_disposition:{tenant_id|default}:{external_system}:{external_case_id}:{s
 
 | 顺序 | 切片 | 验收 |
 |---|---|---|
-| 1 | `SocExternalDispositionEvent` contract + mapper tests | Zeus/通用样例都能转成 canonical event |
-| 2 | `SocExternalDispositionService` + repository protocol | 幂等、状态映射、unmatched、audit 都有测试 |
-| 3 | Zeus adapter mock | 用 fixture 模拟 Zeus 状态/理由更新，不接真实 endpoint |
-| 4 | Review/Correction integration | 高置信外部结论能同步本地 review/correction |
-| 5 | Memory candidate integration | reason 生成 pending candidate，不写 confirmed memory |
-| 6 | Skill improvement candidate backlog | 重复 reason 可聚合成待评审优化项 |
-| 7 | Web/TUI visibility | ReviewQueue context 显示外部处置历史和理由 |
+| 1 | Done | `SocExternalDispositionEvent` contract + mapper tests | Zeus/通用样例都能转成 canonical event |
+| 2 | Done | `SocExternalDispositionService` + repository protocol | 幂等、状态映射、unmatched、audit 都有测试 |
+| 3 | Done | Zeus adapter mock fixture | 用 fixture 模拟 Zeus 状态/理由更新，不接真实 endpoint |
+| 4 | Done | Review/Correction integration | 高置信外部结论能同步本地 review/correction |
+| 5 | Next | Memory candidate integration | reason 生成 pending candidate，不写 confirmed memory |
+| 6 | Planned | Skill improvement candidate backlog | 重复 reason 可聚合成待评审优化项 |
+| 7 | Planned | Web/TUI visibility | ReviewQueue context 显示外部处置历史和理由 |
 
 ## 10. 市场化扩展要求
 

@@ -1,0 +1,24 @@
+{
+  "event": {
+    "id": "ZEUS-EVT-20260707-0001",
+    "version": "12",
+    "updatedAt": "2026-07-07T09:45:00Z"
+  },
+  "case": {
+    "id": "ZEUS-CASE-20260707-0001",
+    "alertRef": "2026494",
+    "status": "误报关闭",
+    "reason": "经人工复核，该告警由授权安全测试触发，未发现入侵迹象。",
+    "tags": ["false_positive", "authorized_test"]
+  },
+  "soc": {
+    "runId": "RUN-ZEUS-MOCK-0001",
+    "queueId": "REV-ZEUS-MOCK-0001",
+    "alertId": "2026494"
+  },
+  "operator": {
+    "id": "analyst-001",
+    "name": "SOC Analyst",
+    "team": "soc"
+  }
+}
