@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from soc_agent.contracts import SocMemoryCandidate, SocMemoryCandidateStatus
+from soc_agent.contracts import SocMemoryCandidate, SocMemoryCandidateStatus, SocMemoryRecord, SocMemoryRecordStatus
 
 
 class InMemoryMemoryCandidateRepository:
@@ -12,6 +12,7 @@ class InMemoryMemoryCandidateRepository:
 
     def __init__(self, candidates: Iterable[SocMemoryCandidate] | None = None) -> None:
         self._candidates: dict[str, SocMemoryCandidate] = {}
+        self._records: dict[str, SocMemoryRecord] = {}
         for candidate in candidates or ():
             self.save_memory_candidate(candidate)
 
@@ -54,3 +55,35 @@ class InMemoryMemoryCandidateRepository:
         if active_source_filters:
             items = [item for item in items if any(getattr(item.source, key) == value for key, value in active_source_filters.items())]
         return sorted(items, key=lambda item: item.created_at, reverse=True)[:limit]
+
+    def save_memory_record(self, record: SocMemoryRecord) -> None:
+        self._records[record.memory_id] = record
+
+    def get_memory_record(self, memory_id: str) -> SocMemoryRecord | None:
+        return self._records.get(memory_id)
+
+    def get_memory_record_by_candidate_id(self, candidate_id: str) -> SocMemoryRecord | None:
+        for record in self._records.values():
+            if record.source_candidate_id == candidate_id:
+                return record
+        return None
+
+    def list_memory_records(
+        self,
+        *,
+        status: SocMemoryRecordStatus | None = None,
+        tenant_scope: str | None = None,
+        tenant_id: str | None = None,
+        source_candidate_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SocMemoryRecord]:
+        items = list(self._records.values())
+        if status is not None:
+            items = [item for item in items if item.status == status]
+        if tenant_scope is not None:
+            items = [item for item in items if item.tenant_scope == tenant_scope]
+        if tenant_id is not None:
+            items = [item for item in items if item.tenant_id == tenant_id]
+        if source_candidate_id is not None:
+            items = [item for item in items if item.source_candidate_id == source_candidate_id]
+        return sorted(items, key=lambda item: item.updated_at, reverse=True)[:limit]

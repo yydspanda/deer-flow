@@ -267,16 +267,21 @@ SOC memory tracking 约束：
 - 具体 IP、UM、host、URL、file hash、process hash 等实体默认只能作为 evidence refs、query dimensions 或 case memory，不得默认成为长期全局 memory 主键。
 - TUI/Web/Kafka/Lead Agent/domain handler/external disposition sync 只能生成 `SocMemoryCandidate`；不得直接写 `confirmed` fact 或 active lesson。
 - 所有 memory candidate 必须包含 source surface、source run/review/evidence refs、idempotency key、status、confidence、proposed content、facets、evidence refs 和 reviewer/audit fields。
-- 当前已实现 DB-first candidate persistence：`SocMemoryService.propose_candidate()` 必须强制写 `pending_review`，并保持 `runtime_decision_allowed=false`；`SocMemoryService.list_candidates()` / `get_candidate()` 是 API/CLI/Web/TUI/Lead Agent 查询候选记忆的 service 边界。confirmed fact store、review/confirm/reject/deprecate 状态机和 retrieval policy 后续单独实现。
+- 当前已实现 DB-first candidate persistence 和 confirmed-memory boundary：`SocMemoryService.propose_candidate()` 必须强制写 `pending_review`，并保持 `runtime_decision_allowed=false`；`SocMemoryService.list_candidates()` / `get_candidate()` 是 API/CLI/Web/TUI/Lead Agent 查询候选记忆的 service 边界；`SocMemoryService.review_candidate()` 是 confirm/reject/deprecate/expire 的唯一状态机边界。confirmed memory retrieval policy 后续单独实现。
 - `soc_memory_candidates` 是当前 `SocMemoryCandidate` 的 SOC business store 表；`SqlAlchemyAlertRepository` 实现 `MemoryCandidateRepository` 方法。生产和本地持久化都必须通过 migration `0010_memory_candidates` 或 `create_soc_tables()` 创建该表。
+- `soc_memory_records` 是 `SocMemoryRecord` 的 SOC business store 表；`confirm` decision 会从 candidate 派生一条 `SocMemoryRecord(status=confirmed, retrieval_enabled=false)`，生产和本地持久化都必须通过 migration `0011_memory_records` 或 `create_soc_tables()` 创建该表。
 - `SocMemoryCandidate.idempotency_key` 是候选记忆重复抑制边界；同 key 重放必须返回既有 candidate，不得重复写入或重复发出 memory update event。
 - `SocMemoryCandidate.status=pending_review` 只能表示待评审建议；Web/TUI/Lead Agent 可以展示它，但不得展示为 confirmed fact、active lesson 或已生效策略。
+- `confirm_candidate` 只表示候选通过初审，不创建 `SocMemoryRecord`；`confirm` 才创建 confirmed record。`reject` 只更新 candidate 状态，不创建 record；`deprecate` / `expire` 必须同步更新 linked record 状态和 deprecation metadata；非法状态迁移必须 fail-fast。
 - Gateway memory candidate API 路径固定在 `/api/soc/memory/*`：
   - `GET /api/soc/memory/candidates`
   - `GET /api/soc/memory/candidates/{candidate_id}`
-- `soc memory list/get` 是本地/运维查询候选记忆的 headless CLI；它只能调用 `SocMemoryService`，不能直接查 repository row。
+  - `POST /api/soc/memory/candidates/{candidate_id}/review`
+  - `GET /api/soc/memory/records`
+  - `GET /api/soc/memory/records/{memory_id}`
+- `soc memory list/get/review` 和 `soc memory records list/get` 是本地/运维查询和评审记忆的 headless CLI；它只能调用 `SocMemoryService`，不能直接查 repository row。
 - Kafka daemon 生成 memory candidate 时，幂等键必须包含 `topic/partition/offset` 或 run id；重复消费不能增加重复 fact 或污染 evidence count。
-- `pending_review` 和 `confirmed_candidate` 默认不进入全局 prompt 注入；只有 `confirmed` 且未过期的 memory fact 可以进入 PromptBuilder / Lead Agent bounded context。当前 `InvestigationContext.memory_candidates` 只用于展示和人工评审，不参与 runtime verdict。
+- `pending_review`、`confirmed_candidate`、`confirmed` candidate 和 `SocMemoryRecord(retrieval_enabled=false)` 默认都不进入全局 prompt 注入；只有后续 retrieval policy 显式允许、未过期且 retrieval-enabled 的 memory fact 才可以进入 PromptBuilder / Lead Agent bounded context。当前 `InvestigationContext.memory_candidates` 只用于展示和人工评审，不参与 runtime verdict。
 - Memory 检索必须返回 match reason、score、fact id、version/hash 和 token budget，支持 replay diff 和回滚。
 - `SocMemoryService` 是 memory 写入、确认、驳回、过期、检索和注入前筛选的唯一 service 边界；CLI/TUI/API/Web/daemon/Lead Agent 不能直接写 memory repository。
 - PostgreSQL memory store 是唯一 source of truth；wiki/OKF 只能作为 DB 导出的 read model / review projection / portable export。wiki 反向修改必须生成 change proposal，经 review 后通过 `SocMemoryService` 写回新版本，不能直接覆盖 DB。

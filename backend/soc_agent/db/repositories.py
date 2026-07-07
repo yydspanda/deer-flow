@@ -22,6 +22,8 @@ from soc_agent.contracts import (
     SocExternalDispositionRecord,
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
+    SocMemoryRecord,
+    SocMemoryRecordStatus,
 )
 from soc_agent.db.models import (
     SocAlertSummaryRow,
@@ -32,6 +34,7 @@ from soc_agent.db.models import (
     SocExternalDispositionRow,
     SocInvestigationEvidenceRow,
     SocMemoryCandidateRow,
+    SocMemoryRecordRow,
     SocReviewQueueRow,
 )
 
@@ -369,6 +372,50 @@ class SqlAlchemyAlertRepository:
             result = session.execute(query.order_by(SocMemoryCandidateRow.created_at.desc()).limit(limit))
             return [SocMemoryCandidate.model_validate(row.candidate_payload) for row in result.scalars()]
 
+    def save_memory_record(self, record: SocMemoryRecord) -> None:
+        payload = record.model_dump(mode="json")
+        with self._session_factory() as session:
+            row = session.get(SocMemoryRecordRow, record.memory_id)
+            if row is None:
+                session.add(SocMemoryRecordRow(memory_id=record.memory_id, **_memory_record_row_values(record, payload)))
+            else:
+                for key, value in _memory_record_row_values(record, payload).items():
+                    setattr(row, key, value)
+            session.commit()
+
+    def get_memory_record(self, memory_id: str) -> SocMemoryRecord | None:
+        with self._session_factory() as session:
+            row = session.get(SocMemoryRecordRow, memory_id)
+            return SocMemoryRecord.model_validate(row.record_payload) if row is not None else None
+
+    def get_memory_record_by_candidate_id(self, candidate_id: str) -> SocMemoryRecord | None:
+        with self._session_factory() as session:
+            result = session.execute(select(SocMemoryRecordRow).where(SocMemoryRecordRow.source_candidate_id == candidate_id).limit(1))
+            row = result.scalar_one_or_none()
+            return SocMemoryRecord.model_validate(row.record_payload) if row is not None else None
+
+    def list_memory_records(
+        self,
+        *,
+        status: SocMemoryRecordStatus | None = None,
+        tenant_scope: str | None = None,
+        tenant_id: str | None = None,
+        source_candidate_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SocMemoryRecord]:
+        with self._session_factory() as session:
+            query = select(SocMemoryRecordRow)
+            if status is not None:
+                query = query.where(SocMemoryRecordRow.status == status.value)
+            if tenant_scope is not None:
+                query = query.where(SocMemoryRecordRow.tenant_scope == tenant_scope)
+            if tenant_id is not None:
+                query = query.where(SocMemoryRecordRow.tenant_id == tenant_id)
+            if source_candidate_id is not None:
+                query = query.where(SocMemoryRecordRow.source_candidate_id == source_candidate_id)
+            result = session.execute(query.order_by(SocMemoryRecordRow.updated_at.desc()).limit(limit))
+            return [SocMemoryRecord.model_validate(row.record_payload) for row in result.scalars()]
+
 
 def _row_values(run: AnalysisRun, payload: dict, *, updated_at: datetime) -> dict:
     return {
@@ -601,4 +648,32 @@ def _memory_candidate_row_values(candidate: SocMemoryCandidate, payload: dict) -
         "created_at": candidate.created_at,
         "updated_at": candidate.updated_at,
         "candidate_payload": payload,
+    }
+
+
+def _memory_record_row_values(record: SocMemoryRecord, payload: dict) -> dict:
+    return {
+        "version": record.version,
+        "memory_type": record.memory_type.value,
+        "target_artifact": record.target_artifact.value,
+        "status": record.status.value,
+        "tenant_scope": record.tenant_scope,
+        "tenant_id": record.tenant_id,
+        "source_candidate_id": record.source_candidate_id,
+        "source_type": record.source.source_type.value,
+        "source_run_id": record.source.run_id,
+        "source_alert_id": record.source.alert_id,
+        "source_queue_id": record.source.queue_id,
+        "content_hash": record.content_hash,
+        "facets_hash": record.facets_hash,
+        "retrieval_enabled": record.retrieval_enabled,
+        "confidence": record.confidence,
+        "created_by_actor_id": record.created_by.actor_id,
+        "deprecated_by_actor_id": record.deprecated_by.actor_id if record.deprecated_by is not None else None,
+        "deprecated_at": record.deprecated_at,
+        "summary": record.summary,
+        "content": record.content,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "record_payload": payload,
     }

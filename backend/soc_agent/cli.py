@@ -39,7 +39,10 @@ from soc_agent.contracts import (
     ReviewQueueStatus,
     ServiceRequestContext,
     SocAgentActionCommand,
+    SocMemoryCandidateReviewCommand,
+    SocMemoryCandidateReviewDecision,
     SocMemoryCandidateStatus,
+    SocMemoryRecordStatus,
     Verdict,
 )
 from soc_agent.core import (
@@ -149,6 +152,12 @@ def main(argv: list[str] | None = None) -> int:
         return _memory_list(args)
     if args.command == "memory" and args.memory_command == "get":
         return _memory_get(args)
+    if args.command == "memory" and args.memory_command == "review":
+        return _memory_review(args)
+    if args.command == "memory" and args.memory_command == "records" and args.memory_records_command == "list":
+        return _memory_records_list(args)
+    if args.command == "memory" and args.memory_command == "records" and args.memory_records_command == "get":
+        return _memory_records_get(args)
     if args.command == "db" and args.db_command == "init":
         return _db_init(args)
     if args.command == "db" and args.db_command == "upgrade":
@@ -403,6 +412,39 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_get.add_argument("candidate_id", help="Memory candidate id to load")
     memory_get.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(memory_get)
+    memory_review = memory_subparsers.add_parser("review", help="Review one SOC memory candidate")
+    memory_review.add_argument("candidate_id", help="Memory candidate id to review")
+    memory_review.add_argument(
+        "--decision",
+        required=True,
+        choices=[item.value for item in SocMemoryCandidateReviewDecision],
+        help="Review decision to apply",
+    )
+    memory_review.add_argument("--reason", required=True, help="Human review reason")
+    memory_review.add_argument("--record-summary", help="Optional confirmed memory summary override")
+    memory_review.add_argument("--record-content", help="Optional confirmed memory content override")
+    memory_review.add_argument("--actor-id", default="soc-cli", help="Review actor id")
+    memory_review.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(memory_review)
+    memory_records = memory_subparsers.add_parser("records", help="SOC confirmed memory record helpers")
+    memory_records_subparsers = memory_records.add_subparsers(dest="memory_records_command")
+    memory_records_list = memory_records_subparsers.add_parser("list", help="List SOC memory records")
+    memory_records_list.add_argument(
+        "--status",
+        choices=["", *[item.value for item in SocMemoryRecordStatus]],
+        default=SocMemoryRecordStatus.CONFIRMED.value,
+        help="Filter by memory record status; use empty string to list all",
+    )
+    memory_records_list.add_argument("--tenant-scope", help="Filter by tenant scope")
+    memory_records_list.add_argument("--tenant-id", help="Filter by tenant id")
+    memory_records_list.add_argument("--source-candidate-id", help="Filter by source candidate id")
+    memory_records_list.add_argument("--limit", type=int, default=50, help="Maximum records to return")
+    memory_records_list.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(memory_records_list)
+    memory_records_get = memory_records_subparsers.add_parser("get", help="Get one SOC memory record")
+    memory_records_get.add_argument("memory_id", help="Memory record id to load")
+    memory_records_get.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(memory_records_get)
 
     db = subparsers.add_parser("db", help="SOC database helpers")
     db_subparsers = db.add_subparsers(dest="db_command")
@@ -643,7 +685,7 @@ def _review_context(args: argparse.Namespace) -> int:
 def _memory_list(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
-        candidates = SocMemoryService(candidate_repository=repository).list_candidates(
+        candidates = SocMemoryService(candidate_repository=repository, record_repository=repository).list_candidates(
             status=SocMemoryCandidateStatus(args.status) if args.status else None,
             tenant_scope=args.tenant_scope,
             tenant_id=args.tenant_id,
@@ -666,7 +708,7 @@ def _memory_list(args: argparse.Namespace) -> int:
 def _memory_get(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
-        candidate = SocMemoryService(candidate_repository=repository).get_candidate(args.candidate_id)
+        candidate = SocMemoryService(candidate_repository=repository, record_repository=repository).get_candidate(args.candidate_id)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -675,6 +717,73 @@ def _memory_get(args: argparse.Namespace) -> int:
         return 3
 
     print(candidate.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _memory_review(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        result = SocMemoryService(candidate_repository=repository, record_repository=repository).review_candidate(
+            SocMemoryCandidateReviewCommand(
+                candidate_id=args.candidate_id,
+                decision=SocMemoryCandidateReviewDecision(args.decision),
+                reason=args.reason,
+                record_summary=args.record_summary,
+                record_content=args.record_content,
+            ),
+            context=ServiceRequestContext(
+                actor=ActorContext(
+                    actor_id=args.actor_id,
+                    actor_type=ActorType.USER,
+                    surface=EntrySurface.CLI,
+                    roles=["soc_analyst"],
+                )
+            ),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _memory_records_list(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        records = SocMemoryService(candidate_repository=repository, record_repository=repository).list_records(
+            status=SocMemoryRecordStatus(args.status) if args.status else None,
+            tenant_scope=args.tenant_scope,
+            tenant_id=args.tenant_id,
+            source_candidate_id=args.source_candidate_id,
+            limit=args.limit,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(json.dumps([item.model_dump(mode="json", exclude_none=True) for item in records], ensure_ascii=False, indent=2 if args.pretty else None))
+    return 0
+
+
+def _memory_records_get(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        record = SocMemoryService(candidate_repository=repository, record_repository=repository).get_record(args.memory_id)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(record.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
 
 

@@ -189,7 +189,17 @@ export type SocMemoryCandidateStatus =
   | "confirmed_candidate"
   | "confirmed"
   | "rejected"
-  | "deprecated";
+  | "deprecated"
+  | "expired";
+
+export type SocMemoryCandidateReviewDecision =
+  | "confirm_candidate"
+  | "confirm"
+  | "reject"
+  | "deprecate"
+  | "expire";
+
+export type SocMemoryRecordStatus = "confirmed" | "deprecated" | "expired";
 
 export type SocMemoryCandidateType =
   | "procedure"
@@ -267,6 +277,58 @@ export interface SocMemoryCandidate {
 
 export interface SocMemoryCandidateListResponse {
   items: SocMemoryCandidate[];
+}
+
+export interface SocMemoryRecord {
+  schema_version: string;
+  memory_id: string;
+  version: number;
+  memory_type: SocMemoryCandidateType;
+  target_artifact: SocMemoryTargetArtifact;
+  status: SocMemoryRecordStatus;
+  tenant_scope: string;
+  tenant_id?: string | null;
+  source_candidate_id: string;
+  source: SocMemoryCandidateSource;
+  summary: string;
+  content: string;
+  facets: Record<string, string[]>;
+  evidence_refs: string[];
+  validity: SocMemoryCandidateValidity;
+  confidence: number;
+  decision_impact: string;
+  content_hash: string;
+  facets_hash: string;
+  retrieval_enabled: boolean;
+  created_by: SocActorContext;
+  created_at: string;
+  updated_at: string;
+  deprecated_by?: SocActorContext | null;
+  deprecated_at?: string | null;
+  deprecation_reason?: string | null;
+  labels: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface SocMemoryRecordListResponse {
+  items: SocMemoryRecord[];
+}
+
+export interface SocMemoryCandidateReviewRequest {
+  decision: SocMemoryCandidateReviewDecision;
+  reason: string;
+  record_summary?: string | null;
+  record_content?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SocMemoryCandidateReviewResult {
+  schema_version: string;
+  candidate: SocMemoryCandidate;
+  memory_record?: SocMemoryRecord | null;
+  previous_status: SocMemoryCandidateStatus;
+  decision: SocMemoryCandidateReviewDecision;
+  reviewed_at: string;
 }
 
 export interface SocInvestigationContext {

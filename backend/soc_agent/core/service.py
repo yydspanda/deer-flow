@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime, timedelta
@@ -54,7 +56,12 @@ from soc_agent.contracts import (
     SocEventType,
     SocMemoryCandidate,
     SocMemoryCandidateCreateCommand,
+    SocMemoryCandidateReviewCommand,
+    SocMemoryCandidateReviewDecision,
+    SocMemoryCandidateReviewResult,
     SocMemoryCandidateStatus,
+    SocMemoryRecord,
+    SocMemoryRecordStatus,
     SocSkillResolution,
     Verdict,
 )
@@ -68,6 +75,7 @@ from soc_agent.protocols import (
     InvestigationEvidenceRepository,
     LLMAnalyzer,
     MemoryCandidateRepository,
+    MemoryRecordRepository,
     ReviewQueueRepository,
     SocActionAdapterRegistryPort,
     SocAgentApprovalGrantRepository,
@@ -598,9 +606,11 @@ class SocMemoryService:
         self,
         *,
         candidate_repository: MemoryCandidateRepository | None = None,
+        record_repository: MemoryRecordRepository | None = None,
         event_sink: SocEventSink | None = None,
     ) -> None:
         self._candidate_repository = candidate_repository
+        self._record_repository = record_repository
         self._event_sink = event_sink or NoopEventSink()
 
     def propose_candidate(
@@ -675,6 +685,129 @@ class SocMemoryService:
             raise SocServiceNotFoundError(f"memory candidate {candidate_id} not found")
         return candidate
 
+    def review_candidate(
+        self,
+        command: SocMemoryCandidateReviewCommand,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> SocMemoryCandidateReviewResult:
+        if self._candidate_repository is None:
+            raise SocServiceNotImplementedError("review_candidate requires a MemoryCandidateRepository")
+
+        request_context = context or ServiceRequestContext()
+        candidate = self.get_candidate(command.candidate_id)
+        previous_status = candidate.status
+        reviewed_at = datetime.now(UTC)
+        memory_record: SocMemoryRecord | None = None
+
+        if command.decision is SocMemoryCandidateReviewDecision.CONFIRM_CANDIDATE:
+            _validate_memory_candidate_transition(candidate.status, command.decision)
+            candidate = self._transition_candidate(
+                candidate,
+                status=SocMemoryCandidateStatus.CONFIRMED_CANDIDATE,
+                command=command,
+                actor=request_context.actor,
+                reviewed_at=reviewed_at,
+            )
+        elif command.decision is SocMemoryCandidateReviewDecision.CONFIRM:
+            _validate_memory_candidate_transition(candidate.status, command.decision)
+            if self._record_repository is None:
+                raise SocServiceNotImplementedError("confirming a memory candidate requires a MemoryRecordRepository")
+            candidate = self._transition_candidate(
+                candidate,
+                status=SocMemoryCandidateStatus.CONFIRMED,
+                command=command,
+                actor=request_context.actor,
+                reviewed_at=reviewed_at,
+            )
+            memory_record = self._record_repository.get_memory_record_by_candidate_id(candidate.candidate_id)
+            if memory_record is None:
+                memory_record = _memory_record_from_candidate(candidate, command=command, actor=request_context.actor, created_at=reviewed_at)
+                self._record_repository.save_memory_record(memory_record)
+        elif command.decision is SocMemoryCandidateReviewDecision.REJECT:
+            _validate_memory_candidate_transition(candidate.status, command.decision)
+            candidate = self._transition_candidate(
+                candidate,
+                status=SocMemoryCandidateStatus.REJECTED,
+                command=command,
+                actor=request_context.actor,
+                reviewed_at=reviewed_at,
+            )
+        elif command.decision in {SocMemoryCandidateReviewDecision.DEPRECATE, SocMemoryCandidateReviewDecision.EXPIRE}:
+            _validate_memory_candidate_transition(candidate.status, command.decision)
+            candidate_status = SocMemoryCandidateStatus.EXPIRED if command.decision is SocMemoryCandidateReviewDecision.EXPIRE else SocMemoryCandidateStatus.DEPRECATED
+            record_status = SocMemoryRecordStatus.EXPIRED if command.decision is SocMemoryCandidateReviewDecision.EXPIRE else SocMemoryRecordStatus.DEPRECATED
+            candidate = self._transition_candidate(
+                candidate,
+                status=candidate_status,
+                command=command,
+                actor=request_context.actor,
+                reviewed_at=reviewed_at,
+            )
+            if self._record_repository is not None:
+                memory_record = self._record_repository.get_memory_record_by_candidate_id(candidate.candidate_id)
+                if memory_record is not None:
+                    memory_record = memory_record.model_copy(
+                        update={
+                            "status": record_status,
+                            "updated_at": reviewed_at,
+                            "deprecated_by": request_context.actor,
+                            "deprecated_at": reviewed_at,
+                            "deprecation_reason": command.reason,
+                            "metadata": {**memory_record.metadata, **command.metadata},
+                        }
+                    )
+                    self._record_repository.save_memory_record(memory_record)
+        else:
+            raise SocServiceError(f"unsupported memory review decision: {command.decision}")
+
+        self._candidate_repository.save_memory_candidate(candidate)
+        self._event_sink.emit(
+            SocEvent(
+                event_type=SocEventType.MEMORY_UPDATED,
+                request_id=request_context.request_id,
+                run_id=candidate.source.run_id,
+                alert_id=candidate.source.alert_id,
+                actor=request_context.actor,
+                payload={
+                    "operation": "memory_candidate.reviewed",
+                    "candidate_id": candidate.candidate_id,
+                    "previous_status": previous_status.value,
+                    "candidate_status": candidate.status.value,
+                    "decision": command.decision.value,
+                    "memory_id": memory_record.memory_id if memory_record is not None else None,
+                    "retrieval_enabled": memory_record.retrieval_enabled if memory_record is not None else None,
+                },
+            )
+        )
+        return SocMemoryCandidateReviewResult(
+            candidate=candidate,
+            memory_record=memory_record,
+            previous_status=previous_status,
+            decision=command.decision,
+            reviewed_at=reviewed_at,
+        )
+
+    def _transition_candidate(
+        self,
+        candidate: SocMemoryCandidate,
+        *,
+        status: SocMemoryCandidateStatus,
+        command: SocMemoryCandidateReviewCommand,
+        actor: ActorContext,
+        reviewed_at: datetime,
+    ) -> SocMemoryCandidate:
+        return candidate.model_copy(
+            update={
+                "status": status,
+                "reviewed_by": actor,
+                "reviewed_at": reviewed_at,
+                "review_reason": command.reason,
+                "updated_at": reviewed_at,
+                "metadata": {**candidate.metadata, **command.metadata},
+            }
+        )
+
     def list_candidates(
         self,
         *,
@@ -699,8 +832,115 @@ class SocMemoryService:
             limit=limit,
         )
 
+    def get_record(self, memory_id: str) -> SocMemoryRecord:
+        if self._record_repository is None:
+            raise SocServiceNotImplementedError("get_record requires a MemoryRecordRepository")
+
+        record = self._record_repository.get_memory_record(memory_id)
+        if record is None:
+            raise SocServiceNotFoundError(f"memory record {memory_id} not found")
+        return record
+
+    def list_records(
+        self,
+        *,
+        status: SocMemoryRecordStatus | None = None,
+        tenant_scope: str | None = None,
+        tenant_id: str | None = None,
+        source_candidate_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SocMemoryRecord]:
+        if self._record_repository is None:
+            raise SocServiceNotImplementedError("list_records requires a MemoryRecordRepository")
+
+        return self._record_repository.list_memory_records(
+            status=status,
+            tenant_scope=tenant_scope,
+            tenant_id=tenant_id,
+            source_candidate_id=source_candidate_id,
+            limit=limit,
+        )
+
     def list_facts(self) -> list[Any]:
-        raise SocServiceNotImplementedError("memory store is planned after PostgreSQL persistence is implemented")
+        raise SocServiceNotImplementedError("confirmed memory retrieval policy is planned after review workflow is implemented")
+
+
+def _memory_record_from_candidate(
+    candidate: SocMemoryCandidate,
+    *,
+    command: SocMemoryCandidateReviewCommand,
+    actor: ActorContext,
+    created_at: datetime,
+) -> SocMemoryRecord:
+    summary = command.record_summary or candidate.summary
+    content = command.record_content or candidate.content
+    facets_hash = _stable_sha256(candidate.facets)
+    return SocMemoryRecord(
+        memory_type=candidate.candidate_type,
+        target_artifact=candidate.target_artifact,
+        tenant_scope=candidate.tenant_scope,
+        tenant_id=candidate.tenant_id,
+        source_candidate_id=candidate.candidate_id,
+        source=candidate.source,
+        summary=summary,
+        content=content,
+        facets=candidate.facets,
+        evidence_refs=candidate.evidence_refs,
+        validity=candidate.validity,
+        confidence=candidate.confidence,
+        decision_impact=candidate.decision_impact,
+        content_hash=f"sha256:{_stable_sha256(content)}",
+        facets_hash=f"sha256:{facets_hash}",
+        created_by=actor,
+        created_at=created_at,
+        updated_at=created_at,
+        labels=sorted(set(candidate.labels + ["confirmed-memory", "retrieval-disabled"])),
+        metadata={
+            **candidate.metadata,
+            **command.metadata,
+            "review_reason": command.reason,
+            "retrieval_enabled": False,
+        },
+    )
+
+
+def _validate_memory_candidate_transition(
+    status: SocMemoryCandidateStatus,
+    decision: SocMemoryCandidateReviewDecision,
+) -> None:
+    allowed: dict[SocMemoryCandidateReviewDecision, set[SocMemoryCandidateStatus]] = {
+        SocMemoryCandidateReviewDecision.CONFIRM_CANDIDATE: {
+            SocMemoryCandidateStatus.PENDING_REVIEW,
+            SocMemoryCandidateStatus.CONFIRMED_CANDIDATE,
+        },
+        SocMemoryCandidateReviewDecision.CONFIRM: {
+            SocMemoryCandidateStatus.PENDING_REVIEW,
+            SocMemoryCandidateStatus.CONFIRMED_CANDIDATE,
+            SocMemoryCandidateStatus.CONFIRMED,
+        },
+        SocMemoryCandidateReviewDecision.REJECT: {
+            SocMemoryCandidateStatus.PENDING_REVIEW,
+            SocMemoryCandidateStatus.CONFIRMED_CANDIDATE,
+            SocMemoryCandidateStatus.REJECTED,
+        },
+        SocMemoryCandidateReviewDecision.DEPRECATE: {
+            SocMemoryCandidateStatus.CONFIRMED,
+            SocMemoryCandidateStatus.DEPRECATED,
+        },
+        SocMemoryCandidateReviewDecision.EXPIRE: {
+            SocMemoryCandidateStatus.PENDING_REVIEW,
+            SocMemoryCandidateStatus.CONFIRMED_CANDIDATE,
+            SocMemoryCandidateStatus.CONFIRMED,
+            SocMemoryCandidateStatus.EXPIRED,
+        },
+    }
+    if status not in allowed[decision]:
+        raise SocServiceError(f"cannot apply memory review decision {decision.value} to candidate in status {status.value}")
+
+
+def _stable_sha256(value: Any) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 class SocDaemonService:

@@ -44,12 +44,15 @@ from soc_agent.contracts import (
     SocEvent,
     SocEventType,
     SocMemoryCandidateCreateCommand,
+    SocMemoryCandidateReviewCommand,
+    SocMemoryCandidateReviewDecision,
     SocMemoryCandidateSource,
     SocMemoryCandidateSourceType,
     SocMemoryCandidateStatus,
     SocMemoryCandidateType,
     SocMemoryCandidateValidity,
     SocMemoryDecisionImpact,
+    SocMemoryRecordStatus,
     SocMemoryTargetArtifact,
     Verdict,
 )
@@ -1833,6 +1836,81 @@ def test_memory_service_lists_candidates_by_status_and_tenant_scope() -> None:
     )
 
     assert candidates == [pingan]
+
+
+def test_memory_service_confirms_candidate_into_retrieval_disabled_record() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    event_sink = RecordingEventSink()
+    service = SocMemoryService(candidate_repository=repository, record_repository=repository, event_sink=event_sink)
+    candidate = service.propose_candidate(_pingan_memory_candidate_command())
+
+    result = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Analyst verified this lesson against evidence.",
+        ),
+        context=ServiceRequestContext(
+            actor=ActorContext(actor_id="analyst-1", actor_type=ActorType.USER, surface=EntrySurface.CLI),
+        ),
+    )
+
+    assert result.previous_status is SocMemoryCandidateStatus.PENDING_REVIEW
+    assert result.candidate.status is SocMemoryCandidateStatus.CONFIRMED
+    assert result.candidate.reviewed_by is not None
+    assert result.memory_record is not None
+    assert result.memory_record.source_candidate_id == candidate.candidate_id
+    assert result.memory_record.status is SocMemoryRecordStatus.CONFIRMED
+    assert result.memory_record.retrieval_enabled is False
+    assert result.memory_record.content_hash.startswith("sha256:")
+    assert repository.get_memory_record_by_candidate_id(candidate.candidate_id) == result.memory_record
+    assert event_sink.events[-1].payload["operation"] == "memory_candidate.reviewed"
+    assert event_sink.events[-1].payload["memory_id"] == result.memory_record.memory_id
+
+
+def test_memory_service_rejects_candidate_without_record() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(candidate_repository=repository, record_repository=repository)
+    candidate = service.propose_candidate(_pingan_memory_candidate_command())
+
+    result = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.REJECT,
+            reason="Evidence did not support this candidate.",
+        )
+    )
+
+    assert result.candidate.status is SocMemoryCandidateStatus.REJECTED
+    assert result.memory_record is None
+    assert repository.get_memory_record_by_candidate_id(candidate.candidate_id) is None
+
+
+def test_memory_service_deprecates_confirmed_record() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(candidate_repository=repository, record_repository=repository)
+    candidate = service.propose_candidate(_pingan_memory_candidate_command())
+    confirmed = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Confirmed for current tenant.",
+        )
+    )
+    assert confirmed.memory_record is not None
+
+    deprecated = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.DEPRECATE,
+            reason="Superseded by newer guidance.",
+        )
+    )
+
+    assert deprecated.candidate.status is SocMemoryCandidateStatus.DEPRECATED
+    assert deprecated.memory_record is not None
+    assert deprecated.memory_record.status is SocMemoryRecordStatus.DEPRECATED
+    assert deprecated.memory_record.deprecation_reason == "Superseded by newer guidance."
 
 
 def _pingan_memory_candidate_command() -> SocMemoryCandidateCreateCommand:

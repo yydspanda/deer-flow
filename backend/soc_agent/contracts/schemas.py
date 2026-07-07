@@ -92,6 +92,21 @@ class SocMemoryCandidateStatus(StrEnum):
     CONFIRMED = "confirmed"
     REJECTED = "rejected"
     DEPRECATED = "deprecated"
+    EXPIRED = "expired"
+
+
+class SocMemoryCandidateReviewDecision(StrEnum):
+    CONFIRM_CANDIDATE = "confirm_candidate"
+    CONFIRM = "confirm"
+    REJECT = "reject"
+    DEPRECATE = "deprecate"
+    EXPIRE = "expire"
+
+
+class SocMemoryRecordStatus(StrEnum):
+    CONFIRMED = "confirmed"
+    DEPRECATED = "deprecated"
+    EXPIRED = "expired"
 
 
 class SocMemoryCandidateType(StrEnum):
@@ -542,6 +557,17 @@ class SocMemoryCandidateCreateCommand(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class SocMemoryCandidateReviewCommand(BaseModel):
+    """Command to review one SOC memory candidate without bypassing service audit."""
+
+    candidate_id: str = Field(min_length=1)
+    decision: SocMemoryCandidateReviewDecision
+    reason: str = Field(min_length=1)
+    record_summary: str | None = None
+    record_content: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class SocMemoryCandidate(BaseModel):
     """Reviewable candidate knowledge item that cannot affect runtime decisions."""
 
@@ -572,6 +598,50 @@ class SocMemoryCandidate(BaseModel):
     proposed_by: ActorContext | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class SocMemoryRecord(BaseModel):
+    """Confirmed SOC memory record; retrieval remains disabled until policy is implemented."""
+
+    schema_version: str = "soc.memory_record.v1"
+    memory_id: str = Field(default_factory=lambda: f"MEM-{uuid4().hex[:12].upper()}")
+    version: int = Field(default=1, ge=1)
+    memory_type: SocMemoryCandidateType
+    target_artifact: SocMemoryTargetArtifact
+    status: SocMemoryRecordStatus = SocMemoryRecordStatus.CONFIRMED
+    tenant_scope: str = Field(default="global", min_length=1)
+    tenant_id: str | None = None
+    source_candidate_id: str
+    source: SocMemoryCandidateSource
+    summary: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    facets: dict[str, list[str]] = Field(default_factory=dict)
+    evidence_refs: list[str] = Field(min_length=1)
+    validity: SocMemoryCandidateValidity
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    decision_impact: SocMemoryDecisionImpact = SocMemoryDecisionImpact.NONE
+    content_hash: str = Field(min_length=1)
+    facets_hash: str = Field(min_length=1)
+    retrieval_enabled: bool = False
+    created_by: ActorContext
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    deprecated_by: ActorContext | None = None
+    deprecated_at: datetime | None = None
+    deprecation_reason: str | None = None
+    labels: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocMemoryCandidateReviewResult(BaseModel):
+    """Result of a candidate review transition."""
+
+    schema_version: str = "soc.memory_candidate_review_result.v1"
+    candidate: SocMemoryCandidate
+    memory_record: SocMemoryRecord | None = None
+    previous_status: SocMemoryCandidateStatus
+    decision: SocMemoryCandidateReviewDecision
+    reviewed_at: datetime = Field(default_factory=utc_now)
 
 
 class SocExternalDispositionEvent(BaseModel):

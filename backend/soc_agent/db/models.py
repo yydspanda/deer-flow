@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Index, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from soc_agent.db.base import SocBase
@@ -290,3 +290,39 @@ class SocMemoryCandidateRow(SocBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     candidate_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SocMemoryRecordRow(SocBase):
+    """Confirmed SOC memory record; retrieval policy is still disabled."""
+
+    __tablename__ = "soc_memory_records"
+    __table_args__ = (
+        Index("ix_soc_memory_records_status_updated", "status", "updated_at"),
+        Index("ix_soc_memory_records_tenant_status", "tenant_scope", "tenant_id", "status"),
+        Index("ix_soc_memory_records_type_status", "memory_type", "status"),
+    )
+
+    memory_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    memory_type: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    target_artifact: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    tenant_scope: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    tenant_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    source_candidate_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    source_run_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_alert_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    source_queue_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    content_hash: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    facets_hash: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    retrieval_enabled: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    created_by_actor_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    deprecated_by_actor_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    deprecated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    record_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

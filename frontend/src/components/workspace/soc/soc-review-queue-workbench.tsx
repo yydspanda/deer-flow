@@ -33,6 +33,7 @@ import {
   useCreateSocApprovalGrant,
   useDryRunSocApprovedAction,
   useExecuteSocApprovedAction,
+  useReviewSocMemoryCandidate,
   useSocApprovalRequest,
   useSocApprovalRequests,
   useSocReviewContext,
@@ -46,6 +47,7 @@ import type {
   SocExternalDispositionRecord,
   SocInvestigationEvidence,
   SocMemoryCandidate,
+  SocMemoryCandidateReviewDecision,
   SocReviewQueueItem,
   SocReviewQueueStatus,
   SocVerdict,
@@ -324,8 +326,19 @@ function ExternalDispositionSection({
 
 function MemoryCandidateSection({
   candidates,
+  reviewReasons,
+  isReviewing,
+  onReviewReasonChange,
+  onReview,
 }: {
   candidates: SocMemoryCandidate[];
+  reviewReasons: Record<string, string>;
+  isReviewing: boolean;
+  onReviewReasonChange: (candidateId: string, reason: string) => void;
+  onReview: (
+    candidate: SocMemoryCandidate,
+    decision: SocMemoryCandidateReviewDecision,
+  ) => void;
 }) {
   return (
     <section className="rounded-md border">
@@ -394,6 +407,72 @@ function MemoryCandidateSection({
                   ))}
                 </div>
               ) : null}
+              <div className="mt-4 grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
+                <Input
+                  value={reviewReasons[candidate.candidate_id] ?? ""}
+                  onChange={(event) =>
+                    onReviewReasonChange(
+                      candidate.candidate_id,
+                      event.target.value,
+                    )
+                  }
+                  placeholder="评审理由"
+                  disabled={isReviewing}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      isReviewing ||
+                      !["pending_review", "confirmed_candidate"].includes(
+                        candidate.status,
+                      ) ||
+                      !reviewReasons[candidate.candidate_id]?.trim()
+                    }
+                    onClick={() => onReview(candidate, "confirm")}
+                  >
+                    确认
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      isReviewing ||
+                      !["pending_review", "confirmed_candidate"].includes(
+                        candidate.status,
+                      ) ||
+                      !reviewReasons[candidate.candidate_id]?.trim()
+                    }
+                    onClick={() => onReview(candidate, "reject")}
+                  >
+                    驳回
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      isReviewing ||
+                      ![
+                        "pending_review",
+                        "confirmed_candidate",
+                        "confirmed",
+                      ].includes(candidate.status) ||
+                      !reviewReasons[candidate.candidate_id]?.trim()
+                    }
+                    onClick={() =>
+                      onReview(
+                        candidate,
+                        candidate.status === "confirmed"
+                          ? "deprecate"
+                          : "expire",
+                      )
+                    }
+                  >
+                    {candidate.status === "confirmed" ? "废弃" : "过期"}
+                  </Button>
+                </div>
+              </div>
             </div>
           ))
         )}
@@ -511,6 +590,9 @@ export function SocReviewQueueWorkbench() {
     useState<SocAgentApprovalGrant | null>(null);
   const [approvedActionResult, setApprovedActionResult] =
     useState<SocAgentActionResult | null>(null);
+  const [memoryReviewReasons, setMemoryReviewReasons] = useState<
+    Record<string, string>
+  >({});
 
   const status = statusFilter === "all" ? null : statusFilter;
   const { items, isLoading, isFetching, error, refetch } = useSocReviewItems({
@@ -556,6 +638,7 @@ export function SocReviewQueueWorkbench() {
   const createApprovalGrantMutation = useCreateSocApprovalGrant();
   const dryRunApprovedActionMutation = useDryRunSocApprovedAction();
   const executeApprovedActionMutation = useExecuteSocApprovedAction();
+  const reviewMemoryCandidateMutation = useReviewSocMemoryCandidate();
 
   useEffect(() => {
     const firstRequestId = approvalRequests[0]?.approval_request_id;
@@ -675,6 +758,40 @@ export function SocReviewQueueWorkbench() {
       toast.success("执行边界已消费 token");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "执行失败");
+    }
+  };
+
+  const handleMemoryReviewReasonChange = (
+    candidateId: string,
+    reason: string,
+  ) => {
+    setMemoryReviewReasons((current) => ({
+      ...current,
+      [candidateId]: reason,
+    }));
+  };
+
+  const handleReviewMemoryCandidate = async (
+    candidate: SocMemoryCandidate,
+    decision: SocMemoryCandidateReviewDecision,
+  ) => {
+    const reason = memoryReviewReasons[candidate.candidate_id]?.trim();
+    if (!reason) {
+      toast.error("请填写评审理由");
+      return;
+    }
+    try {
+      await reviewMemoryCandidateMutation.mutateAsync({
+        candidateId: candidate.candidate_id,
+        request: { decision, reason },
+      });
+      setMemoryReviewReasons((current) => ({
+        ...current,
+        [candidate.candidate_id]: "",
+      }));
+      toast.success("候选记忆已更新");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "候选记忆评审失败");
     }
   };
 
@@ -842,6 +959,12 @@ export function SocReviewQueueWorkbench() {
 
               <MemoryCandidateSection
                 candidates={context?.memory_candidates ?? []}
+                reviewReasons={memoryReviewReasons}
+                isReviewing={reviewMemoryCandidateMutation.isPending}
+                onReviewReasonChange={handleMemoryReviewReasonChange}
+                onReview={(candidate, decision) =>
+                  void handleReviewMemoryCandidate(candidate, decision)
+                }
               />
 
               <section className="rounded-md border">

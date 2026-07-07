@@ -24,11 +24,14 @@ Wiki / OKF = read model / review projection / portable export
 ```text
 Typed memory DB contract
   -> SocMemoryService
+  -> Candidate review workflow / confirmed-memory boundary
   -> Retrieval policy
   -> TUI/Web/Kafka/domain candidate write
   -> Prompt/Lead Agent bounded injection
   -> Wiki/OKF export projection later
 ```
+
+当前实现进度：`SocMemoryCandidate` DB/API/CLI/Web/TUI/Lead Agent visibility 已完成；`SocMemoryService.review_candidate()` 已支持 `confirm_candidate`、`confirm`、`reject`、`deprecate`、`expire`；`confirm` 会创建 `SocMemoryRecord(status=confirmed, retrieval_enabled=false)`。下一步才是 retrieval policy、score/match reason/token budget 和 replay diff。
 
 ## 2. 不是四维硬主键
 
@@ -55,7 +58,8 @@ Typed Memory Record
   "memory_id": "MEM-...",
   "version": 3,
   "memory_type": "procedure | detection_lesson | environment_fact | negative_memory | case_memory",
-  "status": "pending_review | confirmed_candidate | confirmed | rejected | deprecated",
+  "status": "confirmed | deprecated | expired",
+  "retrieval_enabled": false,
   "content": "APT 方向冲突时，优先 raw message、五元组和资产归属重建攻击方向。",
   "facets": {
     "scope": ["soc", "defense"],
@@ -104,7 +108,7 @@ Typed Memory Record
 字段原则：
 
 - `memory_type` 决定用途和注入边界。
-- `status` 决定是否能影响后续判断。
+- candidate `status` 决定评审阶段；record `status` + `retrieval_enabled` + retrieval policy 共同决定是否能影响后续判断。
 - `facets` 用于检索，不是硬主键。
 - `vendor_aliases` 是可选字段；平安 `rule_code`、EDR `signature_id`、SIEM `analytic_id` 都只是 alias。
 - `entities` 默认作为 evidence / query dimension，不作为长期全局记忆主粒度。
@@ -114,13 +118,13 @@ Typed Memory Record
 
 | Type | 用途 | 是否可默认注入 | 示例 |
 |---|---|---|---|
-| `procedure` | 研判方法 / SOP | confirmed 后可注入 | “APT 方向冲突优先 raw message + 五元组重建” |
-| `detection_lesson` | 检测规则/场景经验 | confirmed 后可注入 | “EDR PowerShell + Office parent + 外联公网需查进程树” |
-| `benign_pattern` | 常见误报 / 授权行为模式 | confirmed 且未过期可注入 | “某内部安全组执行指定扫描工具通常为授权测试” |
-| `environment_fact` | 环境事实 / 授权资产 / 业务背景 | confirmed 且未过期可注入 | “SecurityScan 是公司漏扫工具” |
-| `identity_pattern` | 租户身份/账号模式 | confirmed 且未过期可注入 | “外包账号通常使用 EX- 前缀” |
+| `procedure` | 研判方法 / SOP | confirmed + retrieval policy 允许后可注入 | “APT 方向冲突优先 raw message + 五元组重建” |
+| `detection_lesson` | 检测规则/场景经验 | confirmed + retrieval policy 允许后可注入 | “EDR PowerShell + Office parent + 外联公网需查进程树” |
+| `benign_pattern` | 常见误报 / 授权行为模式 | confirmed、未过期且 retrieval policy 允许后可注入 | “某内部安全组执行指定扫描工具通常为授权测试” |
+| `environment_fact` | 环境事实 / 授权资产 / 业务背景 | confirmed、未过期且 retrieval policy 允许后可注入 | “SecurityScan 是公司漏扫工具” |
+| `identity_pattern` | 租户身份/账号模式 | confirmed、未过期且 retrieval policy 允许后可注入 | “外包账号通常使用 EX- 前缀” |
 | `response_policy_hint` | 处置策略提示 | confirmed 后可作为建议，不自动执行 | “该场景优先转 BU，不直接封 IP” |
-| `negative_memory` | 被驳回结论 / 禁止重复建议 | confirmed/rejected 后用于抑制 | “不要把 X 类日志云加工字段当攻击方向事实” |
+| `negative_memory` | 被驳回结论 / 禁止重复建议 | confirmed + retrieval policy 允许后用于抑制 | “不要把 X 类日志云加工字段当攻击方向事实” |
 | `case_memory` | 当前 case 临时上下文 | 只在当前 case 注入 | “本工单已查过 endpoint process tree” |
 
 ### 4.1 PingAn Prompt Decomposition Memory
@@ -227,16 +231,21 @@ score =
 ```mermaid
 stateDiagram-v2
     [*] --> Pending: propose candidate
-    Pending --> ConfirmedCandidate: analyst confirms in current workflow
+    Pending --> ConfirmedCandidate: confirm_candidate
     Pending --> Rejected: analyst rejects
-    ConfirmedCandidate --> Confirmed: review / eval / repeated evidence passes
-    Confirmed --> Deprecated: stale / superseded
+    Pending --> Confirmed: confirm
+    ConfirmedCandidate --> Confirmed: confirm
+    Confirmed --> RecordConfirmed: create SocMemoryRecord(retrieval_enabled=false)
+    Confirmed --> Deprecated: deprecate
+    Confirmed --> Expired: expire
+    RecordConfirmed --> RecordDeprecated: deprecate linked record
+    RecordConfirmed --> RecordExpired: expire linked record
     Rejected --> Pending: materially new evidence
 ```
 
 注入规则：
 
-- `confirmed` 才能默认注入 analysis prompt / Lead Agent bounded context。
+- 当前 `confirmed` record 也不能默认注入 analysis prompt / Lead Agent bounded context；必须等 retrieval policy 开启，并且 `retrieval_enabled=true`。
 - `confirmed_candidate` 默认不全局注入；可以在当前 TUI/correction 会话内局部引用。
 - `pending_review` 不注入，只展示给分析师确认。
 - `rejected` 不注入，并用于抑制重复错误建议。
@@ -272,14 +281,14 @@ soc memory reconcile
 
 ### Slice A：Memory Tracking Contract
 
-- 新增 `SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryFact`、`SocMemoryEvidenceRef`、`SocMemoryQuery`、`SocMemoryStatus`。
+- 已新增 `SocMemoryCandidate`、`SocMemoryRecord` 和 review 状态枚举；`SocMemoryQuery` / retrieval result 后续补。
 - 定义 typed record、facets、hash、status lifecycle 和 retrieval result。
 - 先不接自动写入，只固定 schema、hash、去重和测试。
 
 ### Slice B：SocMemoryService MVP
 
-- 新增 `SocMemoryService.propose_candidate()`。
-- 新增 repository protocol：保存候选、查询 pending、确认、驳回、标记 deprecated。
+- 已新增 `SocMemoryService.propose_candidate()` 和 `review_candidate()`。
+- 已新增 repository protocol：保存候选、查询 pending、确认、驳回、标记 deprecated/expired，以及保存/查询 confirmed record。
 - 所有入口只能调用 service，不能直接写 memory repository。
 
 ### Slice C：Memory Retrieval MVP

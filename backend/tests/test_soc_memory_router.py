@@ -1,21 +1,35 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi import HTTPException
 
 from app.gateway.routers import soc_memory
 from soc_agent.contracts import (
     SocMemoryCandidateCreateCommand,
+    SocMemoryCandidateReviewDecision,
     SocMemoryCandidateSource,
     SocMemoryCandidateSourceType,
     SocMemoryCandidateStatus,
     SocMemoryCandidateType,
     SocMemoryCandidateValidity,
     SocMemoryDecisionImpact,
+    SocMemoryRecordStatus,
     SocMemoryTargetArtifact,
 )
 from soc_agent.core import SocMemoryService
 from soc_agent.memory import InMemoryMemoryCandidateRepository
+
+
+class FakeRequest:
+    def __init__(self) -> None:
+        self.headers: dict[str, str] = {
+            "x-soc-actor-id": "soc-web-test",
+            "x-soc-surface": "web",
+            "x-trace-id": "soc-memory-router-test",
+        }
+        self.state = SimpleNamespace()
 
 
 def test_soc_memory_api_lists_candidates_by_review_filters() -> None:
@@ -61,6 +75,37 @@ def test_soc_memory_api_returns_404_for_missing_candidate() -> None:
         soc_memory.get_memory_candidate("MC-MISSING", service=service)
 
     assert exc_info.value.status_code == 404
+
+
+def test_soc_memory_api_reviews_candidate_and_lists_record() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(candidate_repository=repository, record_repository=repository)
+    candidate = service.propose_candidate(_memory_candidate_command())
+
+    result = soc_memory.review_memory_candidate(
+        candidate.candidate_id,
+        soc_memory.MemoryCandidateReviewRequest(
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Router analyst confirmed candidate.",
+        ),
+        request=FakeRequest(),
+        service=service,
+    )
+
+    assert result.candidate.status is SocMemoryCandidateStatus.CONFIRMED
+    assert result.memory_record is not None
+    assert result.memory_record.status is SocMemoryRecordStatus.CONFIRMED
+    assert result.memory_record.created_by.actor_id == "soc-web-test"
+    records = soc_memory.list_memory_records(
+        service=service,
+        status=SocMemoryRecordStatus.CONFIRMED,
+        tenant_scope="pingan",
+        tenant_id=None,
+        source_candidate_id=candidate.candidate_id,
+        limit=50,
+    )
+    assert records.items == [result.memory_record]
+    assert soc_memory.get_memory_record(result.memory_record.memory_id, service=service) == result.memory_record
 
 
 def _memory_candidate_command(

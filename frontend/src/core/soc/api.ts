@@ -12,7 +12,12 @@ import type {
   SocInvestigationContext,
   SocMemoryCandidate,
   SocMemoryCandidateListResponse,
+  SocMemoryCandidateReviewRequest,
+  SocMemoryCandidateReviewResult,
   SocMemoryCandidateStatus,
+  SocMemoryRecord,
+  SocMemoryRecordListResponse,
+  SocMemoryRecordStatus,
   SocRequestContext,
   SocReviewCloseRequest,
   SocReviewCorrectionRequest,
@@ -302,5 +307,79 @@ export async function getSocMemoryCandidate(
   return readJson<SocMemoryCandidate>(
     response,
     "Failed to load SOC memory candidate",
+  );
+}
+
+export async function reviewSocMemoryCandidate(
+  candidateId: string,
+  request: SocMemoryCandidateReviewRequest,
+  context?: SocRequestContext,
+): Promise<SocMemoryCandidateReviewResult> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/candidates/${encodeURIComponent(candidateId)}/review`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocMemoryCandidateReviewResult>(
+    response,
+    "Failed to review SOC memory candidate",
+  );
+}
+
+export async function listSocMemoryRecords({
+  status = "confirmed",
+  tenantScope,
+  tenantId,
+  sourceCandidateId,
+  limit = 50,
+  context,
+}: {
+  status?: SocMemoryRecordStatus | null;
+  tenantScope?: string | null;
+  tenantId?: string | null;
+  sourceCandidateId?: string | null;
+  limit?: number;
+  context?: SocRequestContext;
+} = {}): Promise<SocMemoryRecord[]> {
+  const params = new URLSearchParams();
+  if (status !== null) {
+    params.set("status", status);
+  }
+  if (tenantScope) {
+    params.set("tenant_scope", tenantScope);
+  }
+  if (tenantId) {
+    params.set("tenant_id", tenantId);
+  }
+  if (sourceCandidateId) {
+    params.set("source_candidate_id", sourceCandidateId);
+  }
+  params.set("limit", String(limit));
+
+  const url = `${getBackendBaseURL()}/api/soc/memory/records?${params.toString()}`;
+  const response = context
+    ? await fetch(url, { headers: buildSocHeaders(context) })
+    : await fetch(url);
+  const data = await readJson<SocMemoryRecordListResponse>(
+    response,
+    "Failed to load SOC memory records",
+  );
+  return data.items;
+}
+
+export async function getSocMemoryRecord(
+  memoryId: string,
+  context?: SocRequestContext,
+): Promise<SocMemoryRecord> {
+  const url = `${getBackendBaseURL()}/api/soc/memory/records/${encodeURIComponent(memoryId)}`;
+  const response = context
+    ? await fetch(url, { headers: buildSocHeaders(context) })
+    : await fetch(url);
+  return readJson<SocMemoryRecord>(
+    response,
+    "Failed to load SOC memory record",
   );
 }

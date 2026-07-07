@@ -27,6 +27,8 @@ from soc_agent.contracts import (
     SocExternalDispositionRecord,
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
+    SocMemoryRecord,
+    SocMemoryRecordStatus,
 )
 
 
@@ -121,7 +123,7 @@ class InvestigationEvidenceRepository(Protocol):
 
 
 class MemoryCandidateRepository(Protocol):
-    """Persistence boundary for unconfirmed SOC memory candidates."""
+    """Persistence boundary for SOC memory candidates."""
 
     def save_memory_candidate(self, candidate: SocMemoryCandidate) -> None: ...
 
@@ -140,6 +142,26 @@ class MemoryCandidateRepository(Protocol):
         queue_id: str | None = None,
         limit: int = 50,
     ) -> list[SocMemoryCandidate]: ...
+
+
+class MemoryRecordRepository(Protocol):
+    """Persistence boundary for confirmed SOC memory records."""
+
+    def save_memory_record(self, record: SocMemoryRecord) -> None: ...
+
+    def get_memory_record(self, memory_id: str) -> SocMemoryRecord | None: ...
+
+    def get_memory_record_by_candidate_id(self, candidate_id: str) -> SocMemoryRecord | None: ...
+
+    def list_memory_records(
+        self,
+        *,
+        status: SocMemoryRecordStatus | None = None,
+        tenant_scope: str | None = None,
+        tenant_id: str | None = None,
+        source_candidate_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SocMemoryRecord]: ...
 
 
 class SocExternalDispositionRepository(Protocol):

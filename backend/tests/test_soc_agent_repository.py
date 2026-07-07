@@ -24,12 +24,15 @@ from soc_agent.contracts import (
     SocExternalDispositionEvent,
     SocExternalDispositionRecord,
     SocMemoryCandidateCreateCommand,
+    SocMemoryCandidateReviewCommand,
+    SocMemoryCandidateReviewDecision,
     SocMemoryCandidateSource,
     SocMemoryCandidateSourceType,
     SocMemoryCandidateStatus,
     SocMemoryCandidateType,
     SocMemoryCandidateValidity,
     SocMemoryDecisionImpact,
+    SocMemoryRecordStatus,
     SocMemoryTargetArtifact,
     Verdict,
 )
@@ -462,7 +465,7 @@ def test_review_service_context_loads_sqlalchemy_external_dispositions() -> None
 
 def test_sqlalchemy_memory_candidate_repository_persists_and_filters_candidates() -> None:
     repository = _repository()
-    service = SocMemoryService(candidate_repository=repository)
+    service = SocMemoryService(candidate_repository=repository, record_repository=repository)
 
     candidate = service.propose_candidate(_repository_memory_candidate_command())
     duplicate = service.propose_candidate(_repository_memory_candidate_command())
@@ -477,6 +480,25 @@ def test_sqlalchemy_memory_candidate_repository_persists_and_filters_candidates(
     assert repository.list_memory_candidates(alert_id="ALT-MEM-1") == [candidate]
     assert repository.list_memory_candidates(queue_id="REV-MEM-1") == [candidate]
     assert repository.list_memory_candidates(queue_id="REV-MISSING") == []
+
+    review = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Repository test analyst confirmation.",
+        )
+    )
+
+    assert review.candidate.status is SocMemoryCandidateStatus.CONFIRMED
+    assert repository.get_memory_candidate(candidate.candidate_id) == review.candidate
+    assert review.memory_record is not None
+    assert review.memory_record.status is SocMemoryRecordStatus.CONFIRMED
+    assert review.memory_record.retrieval_enabled is False
+    assert repository.get_memory_record(review.memory_record.memory_id) == review.memory_record
+    assert repository.get_memory_record_by_candidate_id(candidate.candidate_id) == review.memory_record
+    assert repository.list_memory_records(status=SocMemoryRecordStatus.CONFIRMED) == [review.memory_record]
+    assert repository.list_memory_records(tenant_scope="pingan") == [review.memory_record]
+    assert repository.list_memory_records(source_candidate_id=candidate.candidate_id) == [review.memory_record]
 
 
 def test_review_service_context_loads_sqlalchemy_memory_candidates() -> None:
