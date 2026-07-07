@@ -249,6 +249,8 @@ External disposition sync 约束：
 - 外部系统 adapter 只负责认证、解码、字段映射、redaction、幂等键生成和调用 `SocExternalDispositionService`；adapter 不得直接写 repository、不得直接调用 `SocReviewService.correct()`、不得直接写 memory 或 skill。
 - `SocExternalDispositionService` 是外部反馈写入本地 audit、review/correction、external disposition record、memory candidate 和 skill improvement candidate 的唯一 service 边界。
 - 当前 External Disposition Contract MVP 已实现 contract/mapper/service/repository 边界；`SocExternalDispositionService.apply_event()` 对 high-trust、mapped、唯一定位且可映射 verdict 的事件复用 `SocReviewService.correct()` 同步 operational correction / review close。mapped、可定位且带 reason 的事件可以通过注入的 `SocMemoryService.propose_candidate()` 生成 pending memory candidate；低可信只能生成候选不能改判，未知状态、无法定位、无 reason 或非可学习状态不能生成候选。
+- `soc_external_dispositions` 是当前 `SocExternalDispositionRecord` 的 SOC business store 表；`SqlAlchemyAlertRepository` 实现 `SocExternalDispositionRepository` 方法。生产和本地持久化都必须通过 migration `0009_external_dispositions` 或 `create_soc_tables()` 创建该表。
+- 外部处置历史必须通过 `SocReviewService.get_investigation_context()` 聚合到 `InvestigationContext.external_dispositions`；ReviewQueue API/TUI/Web/Lead Agent bounded context 只能消费该字段，不能直接查 `soc_external_dispositions`。
 - 幂等键固定形态为 `external_disposition:{tenant_id|default}:{external_system}:{external_case_id}:{source_event_id|source_version|updated_at_hash}`；重复 webhook、Kafka offset 回放或 polling 重扫不能重复关闭 review queue、重复改判或重复生成 memory candidate。
 - 目标定位顺序必须是明确本地引用优先：`soc_queue_id` -> `soc_run_id` -> `soc_alert_id` -> 已绑定 `external_system + external_case_id` -> 弱关联；弱关联不能唯一命中时只能保存 unmatched record，不得自动改判。
 - 外部状态必须通过可配置 mapping 转换为 canonical status，例如 `closed_true_positive`、`closed_false_positive`、`closed_benign_true_positive`、`suppressed`、`escalated`、`ignored`、`duplicate`、`unknown`；未映射状态只能进入 `unknown/unmatched`，不能自动更新 operational decision。
@@ -283,10 +285,12 @@ Review queue 约束：
 - `soc_review_queue` 保存扁平索引字段和完整 `item_payload`，字段优先服务列表、筛选和复核入口：`status`、`priority`、`alert_id`、`run_id`、`source_type`、`rule_code`、`verdict`、`updated_at`。
 - `InvestigationEvidence` 是只读查询、定位、EDR process tree 等 investigation action 的结果证据，不是原始告警证据、不是 confirmed memory、不是 operational verdict。
 - `InvestigationEvidenceRepository.save_evidence()` 只能在 service/action boundary 调用；CLI/API/TUI/Web/daemon 入口不能自己拼 evidence 绕过 dispatcher。
-- `SocReviewService.get_investigation_context()` 是聚合 action evidence 的边界；ReviewQueue API/TUI/Web/Lead Agent context bridge 都从 `InvestigationContext.action_evidence` 读取，不直接查 repository。
+- `SocReviewService.get_investigation_context()` 是聚合 action evidence 和 external disposition feedback 的边界；ReviewQueue API/TUI/Web/Lead Agent context bridge 都从 `InvestigationContext.action_evidence` / `InvestigationContext.external_dispositions` 读取，不直接查 repository。
 - read-only action evidence 可以帮助后续分析和人工复核，但不得自动修改 `AnalysisRun.decision`、不得自动关闭 review queue、不得直接写 confirmed memory。
 - `soc_investigation_evidence` 是当前 `InvestigationEvidence` 的 SOC business store 表；`SqlAlchemyAlertRepository` 实现 evidence repository 方法。生产和本地持久化都必须通过 migration `0008_investigation_evidence` 或 `create_soc_tables()` 创建该表。
+- `soc_external_dispositions` 是当前外部状态/理由回流的 SOC business store 表；`SqlAlchemyAlertRepository` 实现 external disposition repository 方法。Web/TUI/Lead Agent 只能把它作为外部人工反馈展示，不得把 `memory_candidate_id` 展示为已确认知识。
 - Gateway `SocReviewService`、`soc review context/tui` 和 `soc chat tui --lead-agent` 必须使用同一 repository 作为 `evidence_repository`，确保 Web/TUI/Lead Agent 可以跨进程看到 read-only action evidence。
+- Gateway `SocReviewService`、`soc review context/tui` 和 `soc chat tui --lead-agent` 必须使用同一 repository 作为 `external_disposition_repository`，确保外部反馈在 API/Web/TUI/Lead Agent 上下文中一致可见。
 - Gateway ReviewQueue API 路径固定在 `/api/soc/review/*`：
   - `GET /api/soc/review/items`
   - `GET /api/soc/review/items/{queue_id}/context`

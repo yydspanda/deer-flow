@@ -43,6 +43,7 @@ import type {
   SocAgentApprovalGrant,
   SocAgentApprovalRequest,
   SocAgentApprovedActionCommand,
+  SocExternalDispositionRecord,
   SocInvestigationEvidence,
   SocReviewQueueItem,
   SocReviewQueueStatus,
@@ -222,6 +223,85 @@ function ActionEvidenceSection({
               <pre className="bg-muted mt-3 max-h-48 overflow-auto rounded-md p-3 text-xs whitespace-pre-wrap">
                 {prettyJson(item.result_payload)}
               </pre>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ExternalDispositionSection({
+  records,
+}: {
+  records: SocExternalDispositionRecord[];
+}) {
+  return (
+    <section className="rounded-md border">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+        <div className="flex items-center gap-2">
+          <InboxIcon className="text-muted-foreground size-4" />
+          <h3 className="text-sm font-semibold">外部处置反馈</h3>
+        </div>
+        <Badge variant="secondary">{records.length}</Badge>
+      </div>
+      <div className="divide-y">
+        {records.length === 0 ? (
+          <div className="text-muted-foreground p-4 text-sm">
+            当前工单还没有外部系统同步的处置状态或理由。
+          </div>
+        ) : (
+          records.map((record) => (
+            <div key={record.disposition_id} className="p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">
+                    {record.event.external_system} /{" "}
+                    {record.event.external_case_id}
+                  </div>
+                  <div className="text-muted-foreground mt-1 text-xs">
+                    外部更新 {formatTime(record.event.updated_at)} / 本地记录{" "}
+                    {formatTime(record.created_at)}
+                  </div>
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Badge variant="outline">
+                    {record.event.external_status}
+                  </Badge>
+                  <Badge variant="secondary">{record.canonical_status}</Badge>
+                  <Badge
+                    variant={
+                      record.apply_status === "mapped" ? "default" : "outline"
+                    }
+                  >
+                    {record.apply_status}
+                  </Badge>
+                </div>
+              </div>
+              <p className="text-muted-foreground mt-2 text-xs">
+                {record.event.external_reason ?? record.apply_reason}
+              </p>
+              <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                {record.matched_by ? (
+                  <span>matched: {record.matched_by}</span>
+                ) : null}
+                {record.correction_id ? (
+                  <span>correction: {record.correction_id}</span>
+                ) : null}
+                {record.memory_candidate_id ? (
+                  <span>memory candidate: {record.memory_candidate_id}</span>
+                ) : null}
+                {record.audit_id ? <span>audit: {record.audit_id}</span> : null}
+              </div>
+              {record.event.external_tags.length > 0 ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {record.event.external_tags.map((tag) => (
+                    <Badge key={tag} variant="outline">
+                      {tag}
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ))
         )}
@@ -662,6 +742,10 @@ export function SocReviewQueueWorkbench() {
 
               <ActionEvidenceSection
                 evidence={context?.action_evidence ?? []}
+              />
+
+              <ExternalDispositionSection
+                records={context?.external_dispositions ?? []}
               />
 
               <section className="rounded-md border">

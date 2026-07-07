@@ -31,12 +31,14 @@ class InMemoryExternalDispositionRepository:
         limit: int = 50,
     ) -> list[SocExternalDispositionRecord]:
         records = list(self.records.values())
-        if run_id is not None:
-            records = [item for item in records if item.target_run_id == run_id]
-        if alert_id is not None:
-            records = [item for item in records if item.target_alert_id == alert_id]
-        if queue_id is not None:
-            records = [item for item in records if item.target_queue_id == queue_id]
+        target_filters = {
+            "target_run_id": run_id,
+            "target_alert_id": alert_id,
+            "target_queue_id": queue_id,
+        }
+        active_target_filters = {key: value for key, value in target_filters.items() if value is not None}
+        if active_target_filters:
+            records = [item for item in records if any(getattr(item, key) == value for key, value in active_target_filters.items())]
         if external_system is not None:
             records = [item for item in records if item.event.external_system == external_system]
         if external_case_id is not None:

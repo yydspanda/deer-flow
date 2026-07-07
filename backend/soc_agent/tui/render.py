@@ -127,6 +127,11 @@ def render_context(context: InvestigationContext) -> RenderableType:
             "action_evidence",
             ", ".join(f"{item.action}:{item.status}" for item in context.action_evidence[:5]),
         )
+    if context.external_dispositions:
+        table.add_row(
+            "external_feedback",
+            ", ".join(f"{item.event.external_system}:{item.event.external_case_id}:{item.canonical_status.value}/{item.apply_status.value}" for item in context.external_dispositions[:5]),
+        )
     return Group(Text("Investigation Context", style=f"bold {THEME.primary}"), table)
 
 

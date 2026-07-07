@@ -22,6 +22,7 @@ _MAX_EVIDENCE_ITEMS = 5
 _MAX_SIMILAR_ALERTS = 5
 _MAX_FACT_ITEMS = 10
 _MAX_ACTION_EVIDENCE_ITEMS = 5
+_MAX_EXTERNAL_DISPOSITION_ITEMS = 5
 
 _LEAD_AGENT_CONTEXT_INSTRUCTIONS = [
     "Treat this artifact as bounded SOC review context supplied by SOC services.",
@@ -29,6 +30,7 @@ _LEAD_AGENT_CONTEXT_INSTRUCTIONS = [
     "Do not execute response actions from this context.",
     "High-risk actions must be proposed as bounded action requests and routed through SOC approval.",
     "Before proposing a duplicate read-only lookup, inspect action_evidence and reuse fresh matching results.",
+    "Treat external_dispositions as operator feedback; pending memory candidates are not confirmed reusable knowledge.",
     "If evidence conflicts, explain the conflict and ask for review instead of forcing a conclusion.",
 ]
 
@@ -59,6 +61,7 @@ def build_lead_agent_review_context_artifact(
     summary_payload = _summary_payload(context.summary)
     similar_payload = [_similar_alert_payload(match) for match in context.similar_alerts[:_MAX_SIMILAR_ALERTS]]
     action_evidence_payload = [_action_evidence_payload(item) for item in context.action_evidence[:_MAX_ACTION_EVIDENCE_ITEMS]]
+    external_disposition_payload = [_external_disposition_payload(item) for item in context.external_dispositions[:_MAX_EXTERNAL_DISPOSITION_ITEMS]]
     hash_payload = {
         "queue_id": context.queue_item.queue_id,
         "run_id": context.run.run_id,
@@ -69,6 +72,7 @@ def build_lead_agent_review_context_artifact(
         "summary": summary_payload,
         "similar_alerts": similar_payload,
         "action_evidence": action_evidence_payload,
+        "external_dispositions": external_disposition_payload,
         "skill_context": skill_payload,
         "instructions": _LEAD_AGENT_CONTEXT_INSTRUCTIONS,
     }
@@ -85,6 +89,7 @@ def build_lead_agent_review_context_artifact(
         summary=summary_payload,
         similar_alerts=similar_payload,
         action_evidence=action_evidence_payload,
+        external_dispositions=external_disposition_payload,
         skill_context=skill_context,
         instructions=list(_LEAD_AGENT_CONTEXT_INSTRUCTIONS),
     )
@@ -246,3 +251,24 @@ def _action_evidence_payload(evidence: InvestigationEvidence) -> dict[str, Any]:
     if evidence.actor is not None:
         payload["actor"] = evidence.actor.model_dump(mode="json", exclude_none=True)
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _external_disposition_payload(record: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "disposition_id": record.disposition_id,
+        "external_system": record.event.external_system,
+        "external_case_id": record.event.external_case_id,
+        "external_status": record.event.external_status,
+        "canonical_status": record.canonical_status.value,
+        "apply_status": record.apply_status.value,
+        "apply_reason": record.apply_reason,
+        "external_reason": record.event.external_reason,
+        "matched_by": record.matched_by,
+        "audit_id": record.audit_id,
+        "correction_id": record.correction_id,
+        "memory_candidate_id": record.memory_candidate_id,
+        "created_at": record.created_at.isoformat(),
+        "external_updated_at": record.event.updated_at.isoformat(),
+        "external_tags": record.event.external_tags,
+    }
+    return {key: value for key, value in payload.items() if value not in (None, [], {})}

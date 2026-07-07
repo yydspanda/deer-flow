@@ -19,6 +19,10 @@ from soc_agent.contracts import (
     SocAgentApprovalRequest,
     SocAgentApprovedActionCommand,
     SocAgentRiskLevel,
+    SocExternalDispositionApplyStatus,
+    SocExternalDispositionCanonicalStatus,
+    SocExternalDispositionEvent,
+    SocExternalDispositionRecord,
     Verdict,
 )
 from soc_agent.core import SocAgentApprovalService, SocAnalysisService, SocCorrelationService
@@ -359,6 +363,61 @@ def test_review_service_context_loads_sqlalchemy_investigation_evidence() -> Non
     assert len(context.action_evidence) == 1
     assert context.action_evidence[0].action == "asset.locate"
     assert context.action_evidence[0].result_payload["mcp_result"]["company_code"] == "PA011"
+
+
+def test_review_service_context_loads_sqlalchemy_external_dispositions() -> None:
+    repository = _repository()
+    run = SocAnalysisService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+    ).analyze(_sample("pingan_legacy_apt.json"))
+    item = repository.get_open_review_item_by_run(run.run_id)
+    assert item is not None
+    record = SocExternalDispositionRecord(
+        event=SocExternalDispositionEvent(
+            external_system="zeus",
+            external_case_id="ZEUS-CASE-1",
+            soc_alert_id=run.alert_id,
+            soc_run_id=run.run_id,
+            soc_queue_id=item.queue_id,
+            external_status="误报关闭",
+            external_reason="同事在老 ZEUS 工单中确认是授权测试。",
+            updated_at=datetime.now(UTC),
+            raw_payload_hash="hash-zeus-case-1",
+        ),
+        canonical_status=SocExternalDispositionCanonicalStatus.CLOSED_FALSE_POSITIVE,
+        apply_status=SocExternalDispositionApplyStatus.MAPPED,
+        idempotency_key="external_disposition:zeus:case-1:event-1",
+        target_run_id=run.run_id,
+        target_alert_id=run.alert_id,
+        target_queue_id=item.queue_id,
+        matched_by="soc_queue_id",
+        apply_reason="external status mapped to a unique local target",
+        correction_id="CORR-ZEUS-1",
+        memory_candidate_id="MEM-ZEUS-1",
+    )
+    repository.save_external_disposition(record)
+
+    assert repository.find_external_disposition_by_idempotency_key(record.idempotency_key) == record
+    assert repository.list_external_dispositions(queue_id=item.queue_id)[0] == record
+    assert repository.list_external_dispositions(run_id=run.run_id)[0] == record
+    assert repository.list_external_dispositions(alert_id=run.alert_id)[0] == record
+    assert repository.list_external_dispositions(external_system="zeus", external_case_id="ZEUS-CASE-1")[0] == record
+
+    context = SocReviewService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+        evidence_repository=repository,
+        external_disposition_repository=repository,
+    ).get_investigation_context(item.queue_id)
+
+    assert len(context.external_dispositions) == 1
+    assert context.external_dispositions[0].event.external_system == "zeus"
+    assert context.external_dispositions[0].canonical_status is SocExternalDispositionCanonicalStatus.CLOSED_FALSE_POSITIVE
 
 
 def test_sqlalchemy_alert_repository_closes_review_queue_after_correction() -> None:

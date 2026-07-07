@@ -18,6 +18,10 @@ from soc_agent.contracts import (
     ReviewQueueStatus,
     SimilarAlertMatch,
     SimilarAlertQuery,
+    SocExternalDispositionApplyStatus,
+    SocExternalDispositionCanonicalStatus,
+    SocExternalDispositionEvent,
+    SocExternalDispositionRecord,
     Verdict,
 )
 from soc_agent.core import SocAnalysisService, SocReviewService
@@ -32,6 +36,7 @@ class InMemorySocRepository:
         self.review_items: dict[str, ReviewQueueItem] = {}
         self.audit_records: list[DecisionAuditRecord] = []
         self.evidence: list[InvestigationEvidence] = []
+        self.external_dispositions: list[SocExternalDispositionRecord] = []
 
     def save_run(self, run: AnalysisRun) -> None:
         self.runs[run.run_id] = run
@@ -107,6 +112,40 @@ class InMemorySocRepository:
             evidence = [item for item in evidence if any(getattr(item, key) == value for key, value in active_filters.items())]
         return sorted(evidence, key=lambda item: item.created_at, reverse=True)[:limit]
 
+    def save_external_disposition(self, record: SocExternalDispositionRecord) -> None:
+        self.external_dispositions.append(record)
+
+    def find_external_disposition_by_idempotency_key(self, idempotency_key: str) -> SocExternalDispositionRecord | None:
+        for record in self.external_dispositions:
+            if record.idempotency_key == idempotency_key:
+                return record
+        return None
+
+    def list_external_dispositions(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        queue_id: str | None = None,
+        external_system: str | None = None,
+        external_case_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SocExternalDispositionRecord]:
+        target_filters = {
+            "target_run_id": run_id,
+            "target_alert_id": alert_id,
+            "target_queue_id": queue_id,
+        }
+        active_target_filters = {key: value for key, value in target_filters.items() if value}
+        records = self.external_dispositions
+        if active_target_filters:
+            records = [item for item in records if any(getattr(item, key) == value for key, value in active_target_filters.items())]
+        if external_system:
+            records = [item for item in records if item.event.external_system == external_system]
+        if external_case_id:
+            records = [item for item in records if item.event.external_case_id == external_case_id]
+        return sorted(records, key=lambda item: item.created_at, reverse=True)[:limit]
+
 
 def _sample(name: str) -> dict:
     return json.loads((SAMPLES / name).read_text(encoding="utf-8"))
@@ -137,6 +176,7 @@ def review_api() -> tuple[SocReviewService, InMemorySocRepository, ReviewQueueIt
         audit_repository=repository,
         review_queue_repository=repository,
         evidence_repository=repository,
+        external_disposition_repository=repository,
     )
     return service, repository, item
 
@@ -168,6 +208,29 @@ def test_soc_review_api_returns_investigation_context(review_api) -> None:
             alert_id=item.alert_id,
         )
     )
+    repository.save_external_disposition(
+        SocExternalDispositionRecord(
+            event=SocExternalDispositionEvent(
+                external_system="zeus",
+                external_case_id="ZEUS-CASE-ROUTER-1",
+                soc_alert_id=item.alert_id,
+                soc_run_id=item.run_id,
+                soc_queue_id=item.queue_id,
+                external_status="误报关闭",
+                external_reason="老工单确认授权测试。",
+                updated_at=item.updated_at,
+                raw_payload_hash="hash-router-zeus",
+            ),
+            canonical_status=SocExternalDispositionCanonicalStatus.CLOSED_FALSE_POSITIVE,
+            apply_status=SocExternalDispositionApplyStatus.MAPPED,
+            idempotency_key="external_disposition:zeus:router-1",
+            target_run_id=item.run_id,
+            target_alert_id=item.alert_id,
+            target_queue_id=item.queue_id,
+            matched_by="soc_queue_id",
+            apply_reason="external status mapped to a unique local target",
+        )
+    )
 
     context = soc_review.get_review_context(item.queue_id, service=service)
 
@@ -178,6 +241,8 @@ def test_soc_review_api_returns_investigation_context(review_api) -> None:
     assert len(context.audit_records) == 1
     assert len(context.action_evidence) == 1
     assert context.action_evidence[0].action == "asset.locate"
+    assert len(context.external_dispositions) == 1
+    assert context.external_dispositions[0].event.external_system == "zeus"
 
 
 def test_soc_review_api_closes_item_with_api_actor(review_api) -> None:

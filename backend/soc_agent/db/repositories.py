@@ -19,8 +19,18 @@ from soc_agent.contracts import (
     SimilarAlertQuery,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
+    SocExternalDispositionRecord,
 )
-from soc_agent.db.models import SocAlertSummaryRow, SocAnalysisRunRow, SocApprovalGrantRow, SocApprovalRequestRow, SocDecisionAuditLogRow, SocInvestigationEvidenceRow, SocReviewQueueRow
+from soc_agent.db.models import (
+    SocAlertSummaryRow,
+    SocAnalysisRunRow,
+    SocApprovalGrantRow,
+    SocApprovalRequestRow,
+    SocDecisionAuditLogRow,
+    SocExternalDispositionRow,
+    SocInvestigationEvidenceRow,
+    SocReviewQueueRow,
+)
 
 
 class SqlAlchemyAlertRepository:
@@ -256,6 +266,52 @@ class SqlAlchemyAlertRepository:
             result = session.execute(query.order_by(SocInvestigationEvidenceRow.created_at.desc()).limit(limit))
             return [InvestigationEvidence.model_validate(row.evidence_payload) for row in result.scalars()]
 
+    def save_external_disposition(self, record: SocExternalDispositionRecord) -> None:
+        payload = record.model_dump(mode="json")
+        with self._session_factory() as session:
+            row = session.get(SocExternalDispositionRow, record.disposition_id)
+            if row is None:
+                session.add(SocExternalDispositionRow(disposition_id=record.disposition_id, **_external_disposition_row_values(record, payload)))
+            else:
+                for key, value in _external_disposition_row_values(record, payload).items():
+                    setattr(row, key, value)
+            session.commit()
+
+    def find_external_disposition_by_idempotency_key(self, idempotency_key: str) -> SocExternalDispositionRecord | None:
+        with self._session_factory() as session:
+            result = session.execute(select(SocExternalDispositionRow).where(SocExternalDispositionRow.idempotency_key == idempotency_key).limit(1))
+            row = result.scalar_one_or_none()
+            return SocExternalDispositionRecord.model_validate(row.disposition_payload) if row is not None else None
+
+    def list_external_dispositions(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        queue_id: str | None = None,
+        external_system: str | None = None,
+        external_case_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SocExternalDispositionRecord]:
+        target_filters = []
+        if run_id:
+            target_filters.append(SocExternalDispositionRow.target_run_id == run_id)
+        if alert_id:
+            target_filters.append(SocExternalDispositionRow.target_alert_id == alert_id)
+        if queue_id:
+            target_filters.append(SocExternalDispositionRow.target_queue_id == queue_id)
+
+        with self._session_factory() as session:
+            query = select(SocExternalDispositionRow)
+            if target_filters:
+                query = query.where(or_(*target_filters))
+            if external_system:
+                query = query.where(SocExternalDispositionRow.external_system == external_system)
+            if external_case_id:
+                query = query.where(SocExternalDispositionRow.external_case_id == external_case_id)
+            result = session.execute(query.order_by(SocExternalDispositionRow.created_at.desc()).limit(limit))
+            return [SocExternalDispositionRecord.model_validate(row.disposition_payload) for row in result.scalars()]
+
 
 def _row_values(run: AnalysisRun, payload: dict, *, updated_at: datetime) -> dict:
     return {
@@ -431,4 +487,27 @@ def _evidence_row_values(evidence: InvestigationEvidence, payload: dict) -> dict
         "message": evidence.message,
         "created_at": evidence.created_at,
         "evidence_payload": payload,
+    }
+
+
+def _external_disposition_row_values(record: SocExternalDispositionRecord, payload: dict) -> dict:
+    return {
+        "tenant_id": record.event.tenant_id,
+        "external_system": record.event.external_system,
+        "external_case_id": record.event.external_case_id,
+        "source_event_id": record.event.source_event_id,
+        "source_version": record.event.source_version,
+        "external_status": record.event.external_status,
+        "canonical_status": record.canonical_status.value,
+        "apply_status": record.apply_status.value,
+        "idempotency_key": record.idempotency_key,
+        "target_run_id": record.target_run_id,
+        "target_alert_id": record.target_alert_id,
+        "target_queue_id": record.target_queue_id,
+        "matched_by": record.matched_by,
+        "audit_id": record.audit_id,
+        "correction_id": record.correction_id,
+        "memory_candidate_id": record.memory_candidate_id,
+        "created_at": record.created_at,
+        "disposition_payload": payload,
     }

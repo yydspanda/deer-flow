@@ -130,6 +130,60 @@ export interface SocInvestigationEvidence {
   created_at: string;
 }
 
+export type SocExternalDispositionCanonicalStatus =
+  | "closed_true_positive"
+  | "closed_false_positive"
+  | "closed_benign_true_positive"
+  | "suppressed"
+  | "escalated"
+  | "ignored"
+  | "duplicate"
+  | "unknown";
+
+export type SocExternalDispositionApplyStatus =
+  | "mapped"
+  | "unmatched"
+  | "ignored";
+
+export interface SocExternalDispositionEvent {
+  schema_version: string;
+  tenant_id?: string | null;
+  external_system: string;
+  external_case_id: string;
+  source_event_id?: string | null;
+  source_version?: string | null;
+  external_alert_ref?: string | null;
+  soc_alert_id?: string | null;
+  soc_run_id?: string | null;
+  soc_queue_id?: string | null;
+  external_status: string;
+  external_reason?: string | null;
+  external_tags: string[];
+  operator: Record<string, unknown>;
+  updated_at: string;
+  raw_payload_hash: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface SocExternalDispositionRecord {
+  schema_version: string;
+  disposition_id: string;
+  event: SocExternalDispositionEvent;
+  canonical_status: SocExternalDispositionCanonicalStatus;
+  apply_status: SocExternalDispositionApplyStatus;
+  idempotency_key: string;
+  target_run_id?: string | null;
+  target_alert_id?: string | null;
+  target_queue_id?: string | null;
+  matched_by?: string | null;
+  apply_reason: string;
+  audit_id?: string | null;
+  correction_id?: string | null;
+  memory_candidate_id?: string | null;
+  created_at: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface SocInvestigationContext {
   schema_version: string;
   queue_item: SocReviewQueueItem;
@@ -138,6 +192,7 @@ export interface SocInvestigationContext {
   audit_records: SocDecisionAuditRecord[];
   similar_alerts: SocSimilarAlertMatch[];
   action_evidence: SocInvestigationEvidence[];
+  external_dispositions: SocExternalDispositionRecord[];
 }
 
 export interface SocReviewCloseRequest {

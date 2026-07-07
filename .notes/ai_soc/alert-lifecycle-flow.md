@@ -43,8 +43,8 @@ alert in
   -> [Done] PingAn PA-10 domain triage MVP
   -> [Done] PingAn PA-11 Main Orchestrator demo
   -> [Done] External Disposition contract + review/correction + memory candidate
-  -> [Current] External Disposition PostgreSQL/API/ReviewQueue visibility
-  -> [Planned] Memory Tracking Contract / DB-first candidate persistence
+  -> [Done] External Disposition PostgreSQL/API/ReviewQueue visibility
+  -> [Current] Memory Tracking Contract / DB-first candidate persistence
   -> [Partial] EDR/APT/HIDS handlers done; F5/WAF handler pending
   -> [Planned] Web/TUI visible investigation
   -> [Planned] Demo / Eval Script
@@ -66,7 +66,7 @@ PingAn APT/EDR/HIDS 专属经验当前已经先落到 `.notes/ai_soc/pingan-capa
 |---|---|---|
 | `SocAnalysisService` | 预警分析入口；调用固定 runtime，保存 run/summary/review/audit | Done |
 | `SocCorrelationService` | 基于 alert summaries 和 investigation evidence 输出结构化相似告警、匹配原因和可复用 evidence | Done |
-| `SocReviewService` | review queue、调查上下文、关闭、人工纠正；聚合 similar alerts 和 action evidence | Done |
+| `SocReviewService` | review queue、调查上下文、关闭、人工纠正；聚合 similar alerts、action evidence 和 external disposition feedback | Done |
 | `SocAgentApprovalService` | approval request inbox、approval grant、dry-run、execute boundary | Done |
 | `SocSkillResolver` | 从 canonical alert / review context 选择白名单 SOC domain skills，生成 compact bounded context | Done |
 | `SocMainOrchestratorService` | 串起 analyze -> read-only route/action/evidence -> domain triage -> bounded review summary，输出 `UnifiedInvestigationReport` | Done for PA-11 |
@@ -77,7 +77,7 @@ PingAn APT/EDR/HIDS 专属经验当前已经先落到 `.notes/ai_soc/pingan-capa
 | `SocMemoryService` | 生成 pending review memory candidate；confirmed fact store、review workflow 和 retrieval policy 仍后续实现 | Partial |
 | `SocDomainTriageService` | APT/EDR/HIDS deterministic domain handlers；消费 skill context 和 read-only evidence refs，只输出 findings | Done for PA-10 |
 | `SocKafkaDaemonRunner` / `SocKafkaConsumerRunner` | opt-in Kafka daemon run loop、mapper、dead-letter、manual commit、metrics JSONL | Done, production params waiting |
-| `SqlAlchemyAlertRepository` | 当前统一实现 run、summary、review queue、audit、approval request、approval grant、investigation evidence 持久化 | Done |
+| `SqlAlchemyAlertRepository` | 当前统一实现 run、summary、review queue、audit、approval request、approval grant、investigation evidence、external disposition 持久化 | Done |
 
 ## 3. 当前 As-Is 生命周期
 

@@ -212,3 +212,36 @@ class SocInvestigationEvidenceRow(SocBase):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     evidence_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SocExternalDispositionRow(SocBase):
+    """External ticket/case disposition feedback synchronized into SOC review context."""
+
+    __tablename__ = "soc_external_dispositions"
+    __table_args__ = (
+        Index("ix_soc_external_dispositions_case_created", "external_system", "external_case_id", "created_at"),
+        Index("ix_soc_external_dispositions_run_created", "target_run_id", "created_at"),
+        Index("ix_soc_external_dispositions_alert_created", "target_alert_id", "created_at"),
+        Index("ix_soc_external_dispositions_queue_created", "target_queue_id", "created_at"),
+        Index("ix_soc_external_dispositions_apply_created", "apply_status", "created_at"),
+    )
+
+    disposition_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    external_system: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    external_case_id: Mapped[str] = mapped_column(String(256), index=True, nullable=False)
+    source_event_id: Mapped[str | None] = mapped_column(String(256), index=True)
+    source_version: Mapped[str | None] = mapped_column(String(256))
+    external_status: Mapped[str] = mapped_column(String(256), index=True, nullable=False)
+    canonical_status: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    apply_status: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(512), unique=True, index=True, nullable=False)
+    target_run_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    target_alert_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    target_queue_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    matched_by: Mapped[str | None] = mapped_column(String(64), index=True)
+    audit_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    correction_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    memory_candidate_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    disposition_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

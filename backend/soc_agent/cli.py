@@ -499,6 +499,7 @@ def _correct(args: argparse.Namespace) -> int:
             audit_repository=repository,
             review_queue_repository=repository,
             evidence_repository=repository,
+            external_disposition_repository=repository,
         ).correct(
             CorrectionCommand(
                 run_id=args.run_id,
@@ -596,6 +597,7 @@ def _review_context(args: argparse.Namespace) -> int:
             audit_repository=repository,
             review_queue_repository=repository,
             evidence_repository=repository,
+            external_disposition_repository=repository,
         ).get_investigation_context(args.queue_id)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -620,6 +622,7 @@ def _review_tui(args: argparse.Namespace) -> int:
                 audit_repository=repository,
                 review_queue_repository=repository,
                 evidence_repository=repository,
+                external_disposition_repository=repository,
             ),
             approval_service=SocAgentApprovalService(grant_repository=repository, request_repository=repository),
             database_label=_database_label(args.database_url),
@@ -644,6 +647,7 @@ def _chat_tui(args: argparse.Namespace) -> int:
             audit_repository=repository,
             review_queue_repository=repository,
             evidence_repository=repository,
+            external_disposition_repository=repository,
         )
         approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
         read_only_adapter_registry = _read_only_adapter_registry_for_chat(args)

@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口完成，Phase 2 correlation / domain triage 起步 |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence 已固定；真实 dev/staging MCP 等待 endpoint/凭证；当前主线转向 Phase 2 最小 correlation + domain sub-agent 可见研判链路，并增加 PingAn SOC capability onboarding 作为业务经验注入层 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence / external disposition PG + ReviewQueue visibility 已固定；真实 dev/staging MCP 等待 endpoint/凭证；当前主线转向 DB-first memory candidate persistence，让外部 reason、domain finding、correction 等候选知识可持久化评审 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | External Disposition memory candidate integration 已完成；下一刀建议做 External Disposition PostgreSQL/API/ReviewQueue visibility，让外部处置历史和候选记忆能被分析师看见。 |
+| 当前下一刀 | 做 DB-first memory candidate persistence：把 `SocMemoryCandidate` 从 in-memory 测试边界推进到 PostgreSQL/API/ReviewQueue 可评审队列，仍保持 `pending_review` 不影响 runtime decision。 |
 
 ## 当前待办列表
 
@@ -50,12 +50,12 @@
 | 0.11 | `PA-11` PingAn main orchestrator demo | Done | 已新增 `SocMainOrchestratorService`、`UnifiedInvestigationReport`、`soc eval pingan-main` 和 APT/EDR/HIDS eval 覆盖 | 单条 demo 能看到 analyze -> selected skills -> read-only route/evidence -> domain finding -> review context；不写 DB、不执行高风险动作 |
 | 0.12 | `PA-12` real PingAn MCP/API replacement | Waiting | 等真实 PingAn dev/staging MCP/API endpoint/凭证后替换 mock provider，保存 smoke/eval report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险；不能用本地 mock 假装完成 |
 | 1 | Correlation Service MVP | Done | 已新增 `SocCorrelationService`、`CorrelationQuery`、`CorrelationResult`、CLI `soc correlate`；基于 summary/evidence 输出相似告警、匹配原因和可复用证据 | 不调用 LLM、不依赖真实 MCP、不改 DeerFlow core；demo alert 可看到结构化 correlation result |
-| 2 | External Disposition Sync Contract | Partial | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol 和 in-memory repository；已接 high-trust mapped review/correction 和 pending memory candidate；DB/API/Web 未接 | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
+| 2 | External Disposition Sync Contract | Done | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol、in-memory repository、PostgreSQL persistence、ReviewQueue context API/Web/TUI/Lead Agent visibility；已接 high-trust mapped review/correction 和 pending memory candidate | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
 | 3 | Memory Tracking Contract | Planned | 新增 DB-first typed memory record + facets + retrieval policy；规划 `SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryQuery` 等 schema | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
 | 4 | Domain Sub-Agent Contract | Done for PA-10 | 已固定 `SocDomainTriageRequest`、`SocDomainTriageResult`、`SocDomainFinding` 结构 | EDR/APT/HIDS 已共用同一 schema；子研判不能直接改 decision 或写 DB |
 | 5 | EDR/APT/HIDS/F5 MVP handlers | Partial | 已先做 APT/EDR/HIDS deterministic + skill context domain handlers，复用已有 read-only evidence/mock adapter | APT/EDR/HIDS demo 已能输出 domain findings 和 evidence refs；F5/WAF handler 后续补 |
 | 6 | Main SOC Agent Orchestrator MVP | Done for PA-11 / correlation merge pending | 已串起 analyze、skill context、read-only action evidence、domain triage、review summary，输出 `UnifiedInvestigationReport`；correlation 尚未并入 report | APT/EDR/HIDS demo 能看到主控用了哪些 skill、route、evidence、domain finding 和 review context |
-| 7 | Web/TUI visible investigation | Planned | 在 ReviewQueue Web/TUI 展示 correlation panel、domain triage panel、evidence timeline、external disposition history、action proposal panel | 分析师能区分 runtime decision、domain findings、read-only evidence、外部人工反馈、人工 correction |
+| 7 | Web/TUI visible investigation | Partial | ReviewQueue Web/TUI 已展示 read-only evidence、approval inbox/proposal、external disposition history；correlation panel、domain triage panel、evidence timeline 仍待做 | 分析师能区分 runtime decision、domain findings、read-only evidence、外部人工反馈、人工 correction |
 | 8 | Demo / Eval Script | Planned | 提供可重复 demo/eval 命令，跑 APT/EDR/HIDS/F5 样例并生成 review item/report | 一条命令可稳定演示 runtime + correlation + domain triage + evidence + review 状态 |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
@@ -168,6 +168,40 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-07 — External Disposition PostgreSQL/API/ReviewQueue visibility
+
+- 背景：
+  - External Disposition 已能同步 high-trust review/correction，并把外部 reason 变成 pending memory candidate；下一步需要让外部处置历史、理由、correction id 和 memory candidate id 被分析师、Web/TUI 和 SOC Lead Agent 看到。
+- 变更：
+  - 更新 `backend/soc_agent/contracts/schemas.py`：
+    - `InvestigationContext` 新增 `external_dispositions`。
+    - `SocLeadAgentReviewContextArtifact` 新增 bounded `external_dispositions`。
+  - 新增 `backend/soc_agent/db/migrations/versions/0009_external_dispositions.py`，并更新 ORM / SQLAlchemy repository：
+    - 新增 `soc_external_dispositions` 表。
+    - `SqlAlchemyAlertRepository` 实现 `save_external_disposition()`、`find_external_disposition_by_idempotency_key()`、`list_external_dispositions()`。
+  - 更新 `SocReviewService.get_investigation_context()`：
+    - 通过 `SocExternalDispositionRepository` 聚合外部处置反馈。
+  - 更新 Gateway/CLI/TUI/Lead Agent context bridge/Web：
+    - `/api/soc/review/items/{queue_id}/context` 返回外部反馈。
+    - `soc review context/tui` 和 `soc chat tui --lead-agent` 使用同一 repository 读取外部反馈。
+    - ReviewQueue Web 页面新增“外部处置反馈”区块。
+  - 更新文档：
+    - `.notes/ai_soc/external-disposition-sync-plan.md`
+    - `.notes/ai_soc/alert-lifecycle-flow.md`
+    - `.notes/reference-index/soc-agent-engineering-contracts.md`
+- 验证：
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff format ...`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff check ...`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_agent_repository.py -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_review_router.py -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_external_disposition.py -q`
+  - `pnpm --dir frontend check`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m soc_agent.cli db upgrade --database-url sqlite:////tmp/soc_external_disposition_migration_check.db`
+  - `git diff --check`
+  - `codegraph sync .`
+- 下一步：
+  - 做 DB-first memory candidate persistence：把 `SocMemoryCandidate` 从 in-memory 测试边界推进到 PostgreSQL/API/ReviewQueue 可评审队列，仍保持 `pending_review` 不影响 runtime decision。
 
 ### 2026-07-07 — External Disposition memory candidate integration
 

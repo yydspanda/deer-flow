@@ -73,6 +73,7 @@ from soc_agent.protocols import (
     SocAgentApprovalGrantRepository,
     SocAgentApprovalRequestRepository,
     SocEventSink,
+    SocExternalDispositionRepository,
 )
 from soc_agent.skills import SocSkillResolver
 
@@ -423,6 +424,7 @@ class SocReviewService:
         audit_repository: DecisionAuditRepository | None = None,
         review_queue_repository: ReviewQueueRepository | None = None,
         evidence_repository: InvestigationEvidenceRepository | None = None,
+        external_disposition_repository: SocExternalDispositionRepository | None = None,
         event_sink: SocEventSink | None = None,
     ) -> None:
         self._repository = repository
@@ -430,6 +432,7 @@ class SocReviewService:
         self._audit_repository = audit_repository
         self._review_queue_repository = review_queue_repository
         self._evidence_repository = evidence_repository
+        self._external_disposition_repository = external_disposition_repository
         self._event_sink = event_sink or NoopEventSink()
 
     def correct(
@@ -554,6 +557,16 @@ class SocReviewService:
             if self._evidence_repository is not None
             else []
         )
+        external_dispositions = (
+            self._external_disposition_repository.list_external_dispositions(
+                queue_id=item.queue_id,
+                run_id=item.run_id,
+                alert_id=item.alert_id,
+                limit=20,
+            )
+            if self._external_disposition_repository is not None
+            else []
+        )
         return InvestigationContext(
             queue_item=item,
             run=run,
@@ -561,6 +574,7 @@ class SocReviewService:
             audit_records=audit_records,
             similar_alerts=similar_alerts,
             action_evidence=action_evidence,
+            external_dispositions=external_dispositions,
         )
 
 
