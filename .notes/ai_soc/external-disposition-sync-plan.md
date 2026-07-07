@@ -25,7 +25,8 @@
 - Done：通用 field-path mapper，可用 Zeus mock fixture 转成 vendor-neutral event，不在 core 写死 Zeus。
 - Done：`SocExternalDispositionService.apply_event()` + repository protocol + in-memory repository，支持状态映射、目标定位、幂等、unmatched 和 audit。
 - Done：高可信 mapped event 在唯一定位本地 target 后复用 `SocReviewService.correct()`，同步 operational correction 并关闭 review queue；低可信、未知状态、无法定位仍不改判。
-- Not yet：memory candidate 生成、skill improvement candidate、DB migration/API/Web/TUI visibility。
+- Done：mapped 且可定位的外部 reason 可通过 `SocMemoryService.propose_candidate()` 生成 `SocMemoryCandidate(status=pending_review)`；未知/无法定位/无 reason 不生成候选。
+- Not yet：skill improvement candidate、DB migration/API/Web/TUI visibility、confirmed memory review workflow。
 
 ## 2. 产品目标
 
@@ -148,9 +149,10 @@ external_disposition:{tenant_id|default}:{external_system}:{external_case_id}:{s
 | 2 | Done | `SocExternalDispositionService` + repository protocol | 幂等、状态映射、unmatched、audit 都有测试 |
 | 3 | Done | Zeus adapter mock fixture | 用 fixture 模拟 Zeus 状态/理由更新，不接真实 endpoint |
 | 4 | Done | Review/Correction integration | 高置信外部结论能同步本地 review/correction |
-| 5 | Next | Memory candidate integration | reason 生成 pending candidate，不写 confirmed memory |
-| 6 | Planned | Skill improvement candidate backlog | 重复 reason 可聚合成待评审优化项 |
-| 7 | Planned | Web/TUI visibility | ReviewQueue context 显示外部处置历史和理由 |
+| 5 | Done | Memory candidate integration | reason 生成 pending candidate，不写 confirmed memory |
+| 6 | Planned | External disposition DB/API visibility | external disposition record 和 memory candidate id 能进入 ReviewQueue context |
+| 7 | Planned | Skill improvement candidate backlog | 重复 reason 可聚合成待评审优化项 |
+| 8 | Planned | Web/TUI visibility | ReviewQueue context 显示外部处置历史和理由 |
 
 ## 10. 市场化扩展要求
 

@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | External Disposition Review/Correction integration 已完成；下一刀做 Memory candidate integration，把外部 reason 生成 pending memory candidate，仍不写 confirmed memory。 |
+| 当前下一刀 | External Disposition memory candidate integration 已完成；下一刀建议做 External Disposition PostgreSQL/API/ReviewQueue visibility，让外部处置历史和候选记忆能被分析师看见。 |
 
 ## 当前待办列表
 
@@ -50,7 +50,7 @@
 | 0.11 | `PA-11` PingAn main orchestrator demo | Done | 已新增 `SocMainOrchestratorService`、`UnifiedInvestigationReport`、`soc eval pingan-main` 和 APT/EDR/HIDS eval 覆盖 | 单条 demo 能看到 analyze -> selected skills -> read-only route/evidence -> domain finding -> review context；不写 DB、不执行高风险动作 |
 | 0.12 | `PA-12` real PingAn MCP/API replacement | Waiting | 等真实 PingAn dev/staging MCP/API endpoint/凭证后替换 mock provider，保存 smoke/eval report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险；不能用本地 mock 假装完成 |
 | 1 | Correlation Service MVP | Done | 已新增 `SocCorrelationService`、`CorrelationQuery`、`CorrelationResult`、CLI `soc correlate`；基于 summary/evidence 输出相似告警、匹配原因和可复用证据 | 不调用 LLM、不依赖真实 MCP、不改 DeerFlow core；demo alert 可看到结构化 correlation result |
-| 2 | External Disposition Sync Contract | Partial | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol 和 in-memory repository；已接 high-trust mapped review/correction；memory/DB/API 未接 | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 不能进 confirmed memory |
+| 2 | External Disposition Sync Contract | Partial | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol 和 in-memory repository；已接 high-trust mapped review/correction 和 pending memory candidate；DB/API/Web 未接 | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
 | 3 | Memory Tracking Contract | Planned | 新增 DB-first typed memory record + facets + retrieval policy；规划 `SocMemoryRecord`、`SocMemoryCandidate`、`SocMemoryQuery` 等 schema | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
 | 4 | Domain Sub-Agent Contract | Done for PA-10 | 已固定 `SocDomainTriageRequest`、`SocDomainTriageResult`、`SocDomainFinding` 结构 | EDR/APT/HIDS 已共用同一 schema；子研判不能直接改 decision 或写 DB |
 | 5 | EDR/APT/HIDS/F5 MVP handlers | Partial | 已先做 APT/EDR/HIDS deterministic + skill context domain handlers，复用已有 read-only evidence/mock adapter | APT/EDR/HIDS demo 已能输出 domain findings 和 evidence refs；F5/WAF handler 后续补 |
@@ -168,6 +168,32 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-07 — External Disposition memory candidate integration
+
+- 背景：
+  - External Disposition 已能同步 high-trust review/correction；下一步需要把外部系统里的人工处置理由沉淀为可评审候选，但不能直接污染 confirmed memory。
+- 变更：
+  - 更新 `backend/soc_agent/core/external_disposition.py`：
+    - `SocExternalDispositionService` 新增可选 `memory_service`。
+    - mapped、可定位、带 `external_reason` 的事件通过 `SocMemoryService.propose_candidate()` 生成 `SocMemoryCandidate(status=pending_review)`。
+    - low-trust mapped event 可以生成候选，但不能改判；unknown/unmatched/no reason 不生成候选。
+    - candidate 固定带 `source_id=disposition_id`、run/alert/queue/correction refs、idempotency key、facets、trust/apply metadata 和 `candidate-only` 标签。
+    - external disposition record 和 audit payload 记录 `memory_candidate_id`。
+  - 更新 `backend/tests/test_soc_external_disposition.py`：
+    - 覆盖 high-trust mapped event 同时 correction + pending memory candidate。
+    - 覆盖 duplicate event 不重复生成 candidate。
+    - 覆盖 low-trust mapped event 只生成 candidate、不改判。
+    - 覆盖 unknown/unmatched event 不生成 candidate。
+  - 更新 `.notes/ai_soc/external-disposition-sync-plan.md`、`.notes/ai_soc/soc-agent-solution.md`、`.notes/ai_soc/alert-lifecycle-flow.md`、`.notes/ai_soc/mock-and-real-integration-register.md` 和工程契约：
+    - 固定 external reason 的安全边界：只能 pending review，不进入 confirmed memory。
+- 验证：
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff format backend/soc_agent/core/external_disposition.py backend/tests/test_soc_external_disposition.py`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff check backend/soc_agent/core/external_disposition.py backend/tests/test_soc_external_disposition.py`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_external_disposition.py -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_agent_service.py -k 'review_service_correct or memory_service or correlation' -q`
+- 下一步：
+  - 做 External Disposition PostgreSQL/API/ReviewQueue visibility，让分析师能看到外部处置历史、理由和 memory candidate id；或者先做 DB-first memory candidate persistence，避免候选长期停留在 in-memory 测试边界。
 
 ### 2026-07-07 — External Disposition Review/Correction integration
 

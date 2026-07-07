@@ -23,15 +23,18 @@ from soc_agent.contracts import (
     SocExternalDispositionCanonicalStatus,
     SocExternalDispositionMappingConfig,
     SocExternalDispositionStatusMapping,
+    SocMemoryCandidateStatus,
+    SocMemoryCandidateType,
     Verdict,
 )
-from soc_agent.core import SocExternalDispositionService, SocServiceNotImplementedError
+from soc_agent.core import SocExternalDispositionService, SocMemoryService, SocServiceNotImplementedError
 from soc_agent.external_disposition import (
     InMemoryExternalDispositionRepository,
     build_external_disposition_event,
     build_external_disposition_idempotency_key,
     resolve_external_disposition_status,
 )
+from soc_agent.memory import InMemoryMemoryCandidateRepository
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "external_disposition"
 
@@ -136,6 +139,11 @@ def test_external_disposition_service_applies_high_trust_correction_and_closes_r
     review_repository = InMemoryReviewQueueRepository()
     audit_repository = InMemoryAuditRepository()
     event_sink = RecordingEventSink()
+    memory_repository = InMemoryMemoryCandidateRepository()
+    memory_service = SocMemoryService(
+        candidate_repository=memory_repository,
+        event_sink=event_sink,
+    )
     run = AnalysisRun(
         run_id="RUN-ZEUS-MOCK-0001",
         alert_id="2026494",
@@ -158,6 +166,7 @@ def test_external_disposition_service_applies_high_trust_correction_and_closes_r
         review_queue_repository=review_repository,
         audit_repository=audit_repository,
         event_sink=event_sink,
+        memory_service=memory_service,
     )
     context = ServiceRequestContext(
         actor=ActorContext(
@@ -174,6 +183,7 @@ def test_external_disposition_service_applies_high_trust_correction_and_closes_r
     assert result.idempotent is False
     assert result.audit_written is True
     assert result.correction_applied is True
+    assert result.memory_candidate_created is True
     assert result.record.apply_status is SocExternalDispositionApplyStatus.MAPPED
     assert result.record.canonical_status is SocExternalDispositionCanonicalStatus.CLOSED_FALSE_POSITIVE
     assert result.record.target_run_id == run.run_id
@@ -181,6 +191,29 @@ def test_external_disposition_service_applies_high_trust_correction_and_closes_r
     assert result.record.target_queue_id == "REV-ZEUS-MOCK-0001"
     assert result.record.matched_by == "soc_queue_id"
     assert result.record.correction_id is not None
+    assert result.record.memory_candidate_id is not None
+    candidate = memory_repository.get_memory_candidate(result.record.memory_candidate_id)
+    assert candidate is not None
+    assert candidate.status is SocMemoryCandidateStatus.PENDING_REVIEW
+    assert candidate.runtime_decision_allowed is False
+    assert candidate.candidate_type is SocMemoryCandidateType.BENIGN_PATTERN
+    assert candidate.content == "经人工复核，该告警由授权安全测试触发，未发现入侵迹象。"
+    assert candidate.source.source_id == result.record.disposition_id
+    assert candidate.source.run_id == run.run_id
+    assert candidate.source.queue_id == "REV-ZEUS-MOCK-0001"
+    assert candidate.source.correction_id == result.record.correction_id
+    assert candidate.idempotency_key == f"memory_candidate:{result.record.idempotency_key}"
+    assert candidate.facets["source_type"] == ["external_disposition"]
+    assert candidate.facets["external_system"] == ["zeus"]
+    assert candidate.facets["canonical_status"] == ["closed_false_positive"]
+    assert candidate.facets["mapping_trust_level"] == ["high"]
+    assert candidate.review_owner == "soc_analyst"
+    assert candidate.labels == [
+        "external-disposition",
+        "candidate-only",
+        "zeus",
+        "closed_false_positive",
+    ]
     assert alert_repository.get_run(run.run_id).decision.verdict is Verdict.FALSE_POSITIVE
     assert review_repository.get_review_item("REV-ZEUS-MOCK-0001").status is ReviewQueueStatus.CLOSED
     assert {record.action for record in audit_repository.records} == {
@@ -190,22 +223,27 @@ def test_external_disposition_service_applies_high_trust_correction_and_closes_r
     external_audit = [record for record in audit_repository.records if record.action is AuditAction.EXTERNAL_DISPOSITION][0]
     assert external_audit.payload["apply_status"] == "mapped"
     assert external_audit.payload["correction_id"] == result.record.correction_id
+    assert external_audit.payload["memory_candidate_id"] == result.record.memory_candidate_id
     assert [event.event_type.value for event in event_sink.events] == [
         "review.corrected",
+        "memory.updated",
         "external_disposition.received",
     ]
 
     duplicate = service.apply_event(build_external_disposition_event(_load_zeus_fixture(), _zeus_adapter_config()), context=context)
     assert duplicate.idempotent is True
     assert duplicate.correction_applied is False
+    assert duplicate.memory_candidate_created is False
     assert duplicate.record.disposition_id == result.record.disposition_id
     assert len(audit_repository.records) == 2
+    assert len(memory_repository.list_memory_candidates()) == 1
 
 
 def test_external_disposition_service_does_not_apply_low_trust_correction() -> None:
     repository = InMemoryExternalDispositionRepository()
     alert_repository = InMemoryAlertRepository()
     review_repository = InMemoryReviewQueueRepository()
+    memory_repository = InMemoryMemoryCandidateRepository()
     run = AnalysisRun(
         run_id="RUN-ZEUS-MOCK-0001",
         alert_id="2026494",
@@ -235,15 +273,24 @@ def test_external_disposition_service_does_not_apply_low_trust_correction() -> N
         ),
         alert_repository=alert_repository,
         review_queue_repository=review_repository,
+        memory_service=SocMemoryService(candidate_repository=memory_repository),
     )
 
     result = service.apply_event(build_external_disposition_event(_load_zeus_fixture(), _zeus_adapter_config()))
 
     assert result.record.apply_status is SocExternalDispositionApplyStatus.MAPPED
     assert result.correction_applied is False
+    assert result.memory_candidate_created is True
     assert result.record.correction_id is None
+    assert result.record.memory_candidate_id is not None
     assert alert_repository.get_run(run.run_id).decision is None
     assert review_repository.get_review_item("REV-ZEUS-MOCK-0001").status is ReviewQueueStatus.OPEN
+    candidate = memory_repository.get_memory_candidate(result.record.memory_candidate_id)
+    assert candidate is not None
+    assert candidate.status is SocMemoryCandidateStatus.PENDING_REVIEW
+    assert candidate.source.correction_id is None
+    assert candidate.confidence == 0.5
+    assert candidate.facets["mapping_trust_level"] == ["medium"]
 
 
 def test_external_disposition_service_keeps_unmapped_or_unmatched_event_review_safe() -> None:
@@ -251,6 +298,7 @@ def test_external_disposition_service_keeps_unmapped_or_unmatched_event_review_s
     service = SocExternalDispositionService(
         repository=repository,
         mapping_config=SocExternalDispositionMappingConfig(),
+        memory_service=SocMemoryService(candidate_repository=InMemoryMemoryCandidateRepository()),
     )
     payload = {
         "event": {"id": "evt-unknown", "updatedAt": "2026-07-07T10:00:00Z"},
@@ -270,6 +318,7 @@ def test_external_disposition_service_keeps_unmapped_or_unmatched_event_review_s
     assert result.record.target_run_id is None
     assert result.record.correction_id is None
     assert result.record.memory_candidate_id is None
+    assert result.memory_candidate_created is False
     assert result.record.apply_reason == "external status is unmapped"
 
 

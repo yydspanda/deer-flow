@@ -20,6 +20,13 @@ from soc_agent.contracts import (
     SocExternalDispositionEvent,
     SocExternalDispositionMappingConfig,
     SocExternalDispositionRecord,
+    SocMemoryCandidateCreateCommand,
+    SocMemoryCandidateSource,
+    SocMemoryCandidateSourceType,
+    SocMemoryCandidateType,
+    SocMemoryCandidateValidity,
+    SocMemoryDecisionImpact,
+    SocMemoryTargetArtifact,
     Verdict,
 )
 from soc_agent.external_disposition import build_external_disposition_idempotency_key, resolve_external_disposition_status
@@ -32,7 +39,7 @@ from soc_agent.protocols import (
     SocExternalDispositionRepository,
 )
 
-from .service import NoopEventSink, SocReviewService, SocServiceNotImplementedError
+from .service import NoopEventSink, SocMemoryService, SocReviewService, SocServiceNotImplementedError
 
 
 @dataclass(frozen=True)
@@ -56,6 +63,7 @@ class SocExternalDispositionService:
         review_queue_repository: ReviewQueueRepository | None = None,
         audit_repository: DecisionAuditRepository | None = None,
         event_sink: SocEventSink | None = None,
+        memory_service: SocMemoryService | None = None,
     ) -> None:
         self._repository = repository
         self._mapping_config = mapping_config or SocExternalDispositionMappingConfig()
@@ -64,6 +72,7 @@ class SocExternalDispositionService:
         self._review_queue_repository = review_queue_repository
         self._audit_repository = audit_repository
         self._event_sink = event_sink or NoopEventSink()
+        self._memory_service = memory_service
 
     def apply_event(
         self,
@@ -95,15 +104,6 @@ class SocExternalDispositionService:
             context=request_context,
         )
 
-        audit_record = self._build_audit_record(
-            external_event,
-            target=target,
-            actor=request_context.actor,
-            idempotency_key=idempotency_key,
-            canonical_status=status_mapping.canonical_status,
-            apply_status=apply_status,
-            correction_id=correction_id,
-        )
         record = SocExternalDispositionRecord(
             event=external_event,
             canonical_status=status_mapping.canonical_status,
@@ -114,7 +114,6 @@ class SocExternalDispositionService:
             target_queue_id=target.queue_id if target is not None else None,
             matched_by=target.matched_by if target is not None else None,
             apply_reason=apply_reason,
-            audit_id=audit_record.audit_id if audit_record is not None else None,
             correction_id=correction_id,
             metadata={
                 "mapping_trust_level": status_mapping.trust_level,
@@ -123,6 +122,34 @@ class SocExternalDispositionService:
                 "correction_applied": correction_id is not None,
             },
         )
+        memory_candidate_id = self._propose_memory_candidate(
+            record,
+            target=target,
+            trust_level=status_mapping.trust_level,
+            apply_status=apply_status,
+            correction_id=correction_id,
+            context=request_context,
+        )
+        record = record.model_copy(
+            update={
+                "memory_candidate_id": memory_candidate_id,
+                "metadata": {
+                    **record.metadata,
+                    "memory_candidate_created": memory_candidate_id is not None,
+                },
+            }
+        )
+        audit_record = self._build_audit_record(
+            external_event,
+            target=target,
+            actor=request_context.actor,
+            idempotency_key=idempotency_key,
+            canonical_status=status_mapping.canonical_status,
+            apply_status=apply_status,
+            correction_id=correction_id,
+            memory_candidate_id=memory_candidate_id,
+        )
+        record = record.model_copy(update={"audit_id": audit_record.audit_id if audit_record is not None else None})
         self._repository.save_external_disposition(record)
         if audit_record is not None and self._audit_repository is not None:
             self._audit_repository.save_audit_record(audit_record)
@@ -148,8 +175,83 @@ class SocExternalDispositionService:
             idempotent=False,
             audit_written=audit_record is not None and self._audit_repository is not None,
             correction_applied=correction_id is not None,
-            memory_candidate_created=False,
+            memory_candidate_created=memory_candidate_id is not None,
         )
+
+    def _propose_memory_candidate(
+        self,
+        record: SocExternalDispositionRecord,
+        *,
+        target: _LocatedExternalDispositionTarget | None,
+        trust_level: str,
+        apply_status: SocExternalDispositionApplyStatus,
+        correction_id: str | None,
+        context: ServiceRequestContext,
+    ) -> str | None:
+        if self._memory_service is None:
+            return None
+        reason = record.event.external_reason.strip() if record.event.external_reason else ""
+        if not reason:
+            return None
+        if apply_status is not SocExternalDispositionApplyStatus.MAPPED or target is None:
+            return None
+        candidate_type = _memory_candidate_type_for_external_status(record.canonical_status)
+        if candidate_type is None:
+            return None
+
+        candidate = self._memory_service.propose_candidate(
+            SocMemoryCandidateCreateCommand(
+                candidate_type=candidate_type,
+                target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
+                summary=_external_memory_candidate_summary(record),
+                content=reason,
+                tenant_scope=record.event.tenant_id or "global",
+                tenant_id=record.event.tenant_id,
+                source=SocMemoryCandidateSource(
+                    source_type=SocMemoryCandidateSourceType.EXTERNAL_DISPOSITION,
+                    source_id=record.disposition_id,
+                    run_id=target.run_id,
+                    alert_id=target.alert_id,
+                    queue_id=target.queue_id,
+                    correction_id=correction_id,
+                    metadata={
+                        "external_system": record.event.external_system,
+                        "external_case_id": record.event.external_case_id,
+                        "external_status": record.event.external_status,
+                        "canonical_status": record.canonical_status.value,
+                        "apply_status": apply_status.value,
+                        "mapping_trust_level": trust_level,
+                    },
+                ),
+                evidence_refs=_memory_candidate_evidence_refs(record, target),
+                validity=SocMemoryCandidateValidity(
+                    notes="External disposition reason is operator feedback and must be reviewed before reuse.",
+                ),
+                idempotency_key=f"memory_candidate:{record.idempotency_key}",
+                confidence=_memory_candidate_confidence(trust_level),
+                facets=_memory_candidate_facets(record, trust_level=trust_level, apply_status=apply_status),
+                decision_impact=_memory_candidate_decision_impact(record.canonical_status),
+                review_owner="soc_analyst",
+                labels=[
+                    "external-disposition",
+                    "candidate-only",
+                    record.event.external_system,
+                    record.canonical_status.value,
+                ],
+                metadata={
+                    "external_system": record.event.external_system,
+                    "external_case_id": record.event.external_case_id,
+                    "source_event_id": record.event.source_event_id,
+                    "source_version": record.event.source_version,
+                    "raw_payload_hash": record.event.raw_payload_hash,
+                    "matched_by": record.matched_by,
+                    "correction_id": correction_id,
+                    "runtime_decision_allowed": False,
+                },
+            ),
+            context=context,
+        )
+        return candidate.candidate_id
 
     def _apply_review_correction(
         self,
@@ -251,6 +353,7 @@ class SocExternalDispositionService:
         canonical_status: SocExternalDispositionCanonicalStatus,
         apply_status: SocExternalDispositionApplyStatus,
         correction_id: str | None,
+        memory_candidate_id: str | None,
     ) -> DecisionAuditRecord | None:
         if target is None or target.run_id is None or target.alert_id is None:
             return None
@@ -266,6 +369,7 @@ class SocExternalDispositionService:
                 "canonical_status": canonical_status.value,
                 "apply_status": apply_status.value,
                 "correction_id": correction_id,
+                "memory_candidate_id": memory_candidate_id,
                 "idempotency_key": idempotency_key,
                 "external_reason_present": bool(event.external_reason),
                 "source_event_id": event.source_event_id,
@@ -298,6 +402,76 @@ def _verdict_for_external_status(status: SocExternalDispositionCanonicalStatus) 
     if status is SocExternalDispositionCanonicalStatus.CLOSED_BENIGN_TRUE_POSITIVE:
         return Verdict.TRUE_POSITIVE
     return None
+
+
+def _memory_candidate_type_for_external_status(status: SocExternalDispositionCanonicalStatus) -> SocMemoryCandidateType | None:
+    if status in {
+        SocExternalDispositionCanonicalStatus.CLOSED_FALSE_POSITIVE,
+        SocExternalDispositionCanonicalStatus.CLOSED_BENIGN_TRUE_POSITIVE,
+        SocExternalDispositionCanonicalStatus.SUPPRESSED,
+        SocExternalDispositionCanonicalStatus.IGNORED,
+    }:
+        return SocMemoryCandidateType.BENIGN_PATTERN
+    if status in {
+        SocExternalDispositionCanonicalStatus.CLOSED_TRUE_POSITIVE,
+        SocExternalDispositionCanonicalStatus.ESCALATED,
+    }:
+        return SocMemoryCandidateType.DETECTION_LESSON
+    return None
+
+
+def _memory_candidate_decision_impact(status: SocExternalDispositionCanonicalStatus) -> SocMemoryDecisionImpact:
+    if status is SocExternalDispositionCanonicalStatus.SUPPRESSED:
+        return SocMemoryDecisionImpact.SUPPRESSION_HINT
+    return SocMemoryDecisionImpact.REVIEW_HINT
+
+
+def _memory_candidate_confidence(trust_level: str) -> float:
+    if trust_level == "high":
+        return 0.65
+    if trust_level == "medium":
+        return 0.5
+    return 0.35
+
+
+def _external_memory_candidate_summary(record: SocExternalDispositionRecord) -> str:
+    return f"External disposition feedback from {record.event.external_system}: {record.canonical_status.value}"
+
+
+def _memory_candidate_facets(
+    record: SocExternalDispositionRecord,
+    *,
+    trust_level: str,
+    apply_status: SocExternalDispositionApplyStatus,
+) -> dict[str, list[str]]:
+    facets = {
+        "source_type": ["external_disposition"],
+        "external_system": [record.event.external_system],
+        "canonical_status": [record.canonical_status.value],
+        "apply_status": [apply_status.value],
+        "mapping_trust_level": [trust_level],
+    }
+    if record.event.tenant_id:
+        facets["tenant"] = [record.event.tenant_id]
+    if record.target_alert_id:
+        facets["alert_id"] = [record.target_alert_id]
+    if record.target_run_id:
+        facets["run_id"] = [record.target_run_id]
+    return facets
+
+
+def _memory_candidate_evidence_refs(
+    record: SocExternalDispositionRecord,
+    target: _LocatedExternalDispositionTarget,
+) -> list[str]:
+    refs = [f"external_disposition:{record.disposition_id}"]
+    if target.run_id:
+        refs.append(f"run:{target.run_id}")
+    if target.alert_id:
+        refs.append(f"alert:{target.alert_id}")
+    if target.queue_id:
+        refs.append(f"review_queue:{target.queue_id}")
+    return refs
 
 
 def _external_correction_reason(event: SocExternalDispositionEvent, canonical_status: SocExternalDispositionCanonicalStatus) -> str:

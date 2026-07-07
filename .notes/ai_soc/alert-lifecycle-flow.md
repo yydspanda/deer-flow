@@ -27,7 +27,7 @@ alert in
 但它还不是最终形态的“完整 SOC Agent + 多个子研判 Agent”。当前缺口在这里：
 
 - `SocCorrelationService` MVP 已存在，能通过 CLI/core service 输出结构化相似告警、匹配原因和可复用 evidence；后续还需要接入 ReviewQueue/Web/TUI 可视化面板。
-- External Disposition 已有 vendor-neutral event/mapping/service MVP，并且 high-trust mapped 外部结论可同步为本地 correction / review close；memory candidate、DB/API 和 Web/TUI visibility 待补。
+- External Disposition 已有 vendor-neutral event/mapping/service MVP，并且 high-trust mapped 外部结论可同步为本地 correction / review close；mapped 且可定位的外部 reason 可生成 pending memory candidate；DB/API 和 Web/TUI visibility 待补。
 - 已有 `SocMemoryCandidate` 候选入口；但还没有 DB-first typed memory store、确认/驳回/过期状态机和 confirmed memory 检索/注入策略。
 - APT/EDR/HIDS 已有统一 `SocDomainTriageRequest` / `SocDomainTriageResult` / `SocDomainFinding`，F5/WAF handler 后续补。
 - PA-11 已有只读 Main Orchestrator demo：`SocMainOrchestratorService` 能把 deterministic analyze、selected skills、read-only action evidence、domain findings 和 review context 合成 `UnifiedInvestigationReport`。
@@ -402,7 +402,7 @@ flowchart TD
 
 - 新增并维护 `.notes/ai_soc/external-disposition-sync-plan.md`。
 - 固定 `SocExternalDispositionEvent` vendor-neutral schema，Zeus 只是第一个 adapter。
-- 规划 `SocExternalDispositionService`、adapter port、状态映射、幂等键、unmatched record、audit、review/correction 同步和 memory/skill improvement candidate。
+- 已有 `SocExternalDispositionService`、adapter port、状态映射、幂等键、unmatched record、audit、review/correction 同步和 pending memory candidate；skill improvement candidate 后续补。
 - 支持 webhook、Kafka、polling、manual import 作为 transport adapter，但进入 service 前必须归一成同一 event。
 - 明确外部 free-text reason 只能进入 pending memory / skill improvement candidate，不能直接写 confirmed memory 或 active skill。
 

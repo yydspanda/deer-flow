@@ -65,6 +65,6 @@
 
 ## 6. 当前下一步
 
-- External Disposition 已完成 contract、mapper、record、audit、high-trust review/correction；下一刀接 `SocMemoryCandidate(status=pending_review)`。
+- External Disposition 已完成 contract、mapper、record、audit、high-trust review/correction 和 `SocMemoryCandidate(status=pending_review)`；下一刀建议接 PG/API/ReviewQueue visibility。
 - `PA-12` 继续等待真实 PingAn dev/staging endpoint、凭证和允许测试的数据源。
 - 在真实接口未就绪前，不继续堆更多 mock；优先补 Memory candidate、Web/TUI 可见化、correlation/main orchestrator 整合和 demo/eval 链路。
