@@ -211,6 +211,14 @@ Correlation service 约束：
 - correlation 结果可以进入 `InvestigationContext`、Lead Agent bounded artifact、Web/TUI 展示和后续 domain triage request，但不能自动改 `AnalysisRun.decision`、不能自动关闭 review queue、不能直接生成 confirmed memory。
 - 后续若引入 LLM rerank，只能作为 bounded rerank node 消费候选 `CorrelationMatch`，输出仍必须经过 schema/domain validation；LLM 不得直接发起 DB 查询或扩大检索范围。
 
+Domain triage 约束：
+
+- `SocDomainTriageRequest` / `SocDomainTriageResult` / `SocDomainFinding` 是 APT、EDR、HIDS、F5/WAF 子研判的稳定输出协议；不得让每个 handler 自己返回自由 JSON。
+- Domain handler 只能消费 `AnalysisRun`、bounded `SocSkillContext`、`InvestigationEvidence` refs、capability card refs 和后续 correlation refs；不能直接读 DB、不能调用 MCP/tool、不能写 review queue、不能写 confirmed memory、不能修改 `AnalysisRun.decision`。
+- `SocDomainTriageService` 是 PA-10 domain handler 路由入口；entry adapter、TUI/Web、eval 和后续 Main Orchestrator 不能绕过 service 直接调用某个 handler。
+- PA-10 handler 输出只允许包含 finding、evidence refs、capability card refs、recommendations、limitations 和 metadata；任何处置动作必须转成 action proposal 并回到 policy/approval boundary。
+- Domain finding 是分析证据，不是 operational verdict。它可以进入 unified investigation report、ReviewQueue/Lead Agent bounded context 和 pending memory candidate source，但不能自动关闭工单或自动确认 memory。
+
 PingAn SOC capability onboarding 约束：
 
 - 平安 SOC 工具、MCP、skill、研判经验和处置经验进入项目之前，必须先整理成 capability card；来源、适用场景、输入字段、输出结构、风险等级、失败模式和脱敏验收样例必须明确。
@@ -247,6 +255,7 @@ SOC memory tracking 约束：
 - 具体 IP、UM、host、URL、file hash、process hash 等实体默认只能作为 evidence refs、query dimensions 或 case memory，不得默认成为长期全局 memory 主键。
 - TUI/Web/Kafka/Lead Agent/domain handler/external disposition sync 只能生成 `SocMemoryCandidate`；不得直接写 `confirmed` fact 或 active lesson。
 - 所有 memory candidate 必须包含 source surface、source run/review/evidence refs、idempotency key、status、confidence、proposed content、facets、evidence refs 和 reviewer/audit fields。
+- 当前 `PA-09` 只实现 candidate entry：`SocMemoryService.propose_candidate()` 必须强制写 `pending_review`，并保持 `runtime_decision_allowed=false`；confirmed fact store、review/confirm/reject/deprecate 状态机和 retrieval policy 后续单独实现。
 - Kafka daemon 生成 memory candidate 时，幂等键必须包含 `topic/partition/offset` 或 run id；重复消费不能增加重复 fact 或污染 evidence count。
 - `pending_review` 和 `confirmed_candidate` 默认不进入全局 prompt 注入；只有 `confirmed` 且未过期的 memory fact 可以进入 PromptBuilder / Lead Agent bounded context。
 - Memory 检索必须返回 match reason、score、fact id、version/hash 和 token budget，支持 replay diff 和回滚。

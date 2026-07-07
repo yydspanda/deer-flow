@@ -37,4 +37,30 @@ Provide a concise network narrative:
 - unresolved conflicts
 - safe next investigation query
 
+## Generic Method
+
+1. Reconstruct the traffic facts before assigning roles: protocol, source, destination, ports, URL/domain, HTTP host/path, timestamps, and asset ownership evidence.
+2. Classify the direction as external-to-internal, internal-to-external, internal-to-internal, or ambiguous. Do not treat vendor `src`/`dst` labels as final attacker/victim roles.
+3. Separate attack attempt, detection hit, attack success, and confirmed impact.
+4. Check IOC quality: source, freshness, confidence, scope, false-positive risk, and whether the IOC matches the observed entity or only a related entity.
+5. If fields conflict or evidence is thin, output uncertainty and recommend read-only queries instead of forcing a verdict.
+
+## Attack Success Signals
+
+- HTTP or web exploit: request payload plus response status/body, application error, sensitive data returned, system information returned, or follow-on traffic.
+- File read or directory traversal: evidence that sensitive file content was actually returned, not only that a path appeared in a payload.
+- Command or code execution: command arguments plus execution output, callback, new process evidence, system info echo, or other side effect.
+- Webshell or upload: distinguish upload request, execution request, response echo, and later callback or persistence signal.
+- Scan, weak password, or brute force: distinguish single probe, automated scan, authentication failure, authentication success, and normal business login.
+- Callback/C2: repeated beaconing, suspicious domain or IP reputation, unusual user agent/protocol, and related endpoint process evidence.
+
+## Safe Read-Only Next Queries
+
+Recommend these as proposals only when needed:
+
+- `asset.locate` for victim, affected asset, owner, environment, or response target ambiguity.
+- `threat_intel.ip_reputation.lookup` for external IP/domain/URL quality and freshness.
+- `security_tag.lookup` for authorization, testing, maintenance, or allowlist evidence.
+- `endpoint.process_tree.lookup` when network traffic must be tied to an endpoint process.
+
 Do not directly block IPs/domains or suppress alerts. Route those actions through approval.

@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from soc_agent.actions.adapters import DryRunOnlySocActionAdapter, InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
+from soc_agent.actions.adapters import (
+    DryRunOnlySocActionAdapter,
+    InMemoryAssetLookupActionAdapter,
+    InMemorySecurityTagLookupActionAdapter,
+    SocActionAdapterRegistry,
+)
 from soc_agent.contracts import (
     ActorContext,
     ActorType,
@@ -15,6 +20,7 @@ from soc_agent.contracts import (
     AnalysisRunStatus,
     AuditAction,
     CorrectionCommand,
+    CorrelationQuery,
     DecisionAuditRecord,
     EntrySurface,
     InvestigationEvidence,
@@ -37,6 +43,14 @@ from soc_agent.contracts import (
     SocDaemonMessage,
     SocEvent,
     SocEventType,
+    SocMemoryCandidateCreateCommand,
+    SocMemoryCandidateSource,
+    SocMemoryCandidateSourceType,
+    SocMemoryCandidateStatus,
+    SocMemoryCandidateType,
+    SocMemoryCandidateValidity,
+    SocMemoryDecisionImpact,
+    SocMemoryTargetArtifact,
     Verdict,
 )
 from soc_agent.core import (
@@ -48,6 +62,7 @@ from soc_agent.core import (
     SocAgentCapabilityRouter,
     SocAgentChatService,
     SocAnalysisService,
+    SocCorrelationService,
     SocDaemonService,
     SocMemoryService,
     SocNormalizationService,
@@ -56,6 +71,7 @@ from soc_agent.core import (
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
 )
+from soc_agent.memory import InMemoryMemoryCandidateRepository
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
 
@@ -384,6 +400,110 @@ def test_analysis_service_writes_alert_summary() -> None:
     assert summary.needs_review is False
     assert summary.detection_key == "sample-edr:rule_code:edr-scan-001"
     assert "ip:10.0.1.10" in summary.entity_keys
+
+
+def test_correlation_service_returns_matches_and_reusable_evidence() -> None:
+    summary_repository = InMemorySummaryRepository()
+    evidence_repository = InMemoryInvestigationEvidenceRepository()
+    subject = AlertSummary(
+        run_id="RUN-CURRENT",
+        alert_id="ALT-CURRENT",
+        detection_key="edr:credential-access",
+        rule_code="EDR-CRED-001",
+        category="credential_access",
+        entity_keys=["host:workstation-1", "user:alice"],
+        status=AnalysisRunStatus.NEEDS_REVIEW,
+        verdict=Verdict.SUSPICIOUS,
+        needs_review=True,
+    )
+    related = AlertSummary(
+        run_id="RUN-RELATED",
+        alert_id="ALT-RELATED",
+        detection_key="edr:credential-access",
+        rule_code="EDR-CRED-001",
+        category="credential_access",
+        entity_keys=["host:workstation-1", "user:bob"],
+        status=AnalysisRunStatus.SUCCESS,
+        verdict=Verdict.FALSE_POSITIVE,
+        needs_review=False,
+    )
+    unrelated = AlertSummary(
+        run_id="RUN-UNRELATED",
+        alert_id="ALT-UNRELATED",
+        detection_key="waf:sqli",
+        entity_keys=["ip:203.0.113.8"],
+        status=AnalysisRunStatus.SUCCESS,
+        verdict=Verdict.TRUE_POSITIVE,
+    )
+    for summary in (subject, related, unrelated):
+        summary_repository.save_alert_summary(summary)
+    evidence_repository.save_evidence(
+        InvestigationEvidence(
+            evidence_id="EVI-RELATED-1",
+            route="endpoint.process_tree.lookup",
+            action="endpoint.process_tree.lookup",
+            status="success",
+            message="Process tree lookup completed.",
+            result_payload={"root_process": "browser.exe", "risk": "low"},
+            run_id=related.run_id,
+            alert_id=related.alert_id,
+        )
+    )
+
+    result = SocCorrelationService(
+        summary_repository=summary_repository,
+        evidence_repository=evidence_repository,
+    ).correlate(CorrelationQuery(run_id=subject.run_id, limit=5))
+
+    assert result.subject_summary == subject
+    assert result.reusable_evidence_count == 1
+    assert [match.summary.run_id for match in result.matches] == ["RUN-RELATED"]
+    match = result.matches[0]
+    assert "detection_key:edr:credential-access" in match.matched_reasons
+    assert "rule_code:EDR-CRED-001" in match.matched_reasons
+    assert "entity_key:host:workstation-1" in match.matched_reasons
+    assert match.reusable_evidence[0].evidence_id == "EVI-RELATED-1"
+    assert match.reusable_evidence[0].result_payload["risk"] == "low"
+
+
+def test_correlation_service_can_disable_reusable_evidence_loading() -> None:
+    summary_repository = InMemorySummaryRepository()
+    evidence_repository = InMemoryInvestigationEvidenceRepository()
+    subject = AlertSummary(
+        run_id="RUN-CURRENT",
+        alert_id="ALT-CURRENT",
+        detection_key="apt:callback",
+        entity_keys=["ip:10.0.0.5"],
+        status=AnalysisRunStatus.NEEDS_REVIEW,
+    )
+    related = AlertSummary(
+        run_id="RUN-RELATED",
+        alert_id="ALT-RELATED",
+        detection_key="apt:callback",
+        entity_keys=["ip:10.0.0.5"],
+        status=AnalysisRunStatus.SUCCESS,
+    )
+    summary_repository.save_alert_summary(subject)
+    summary_repository.save_alert_summary(related)
+    evidence_repository.save_evidence(
+        InvestigationEvidence(
+            route="asset.locate",
+            action="asset.locate",
+            status="success",
+            message="Asset located.",
+            run_id=related.run_id,
+            alert_id=related.alert_id,
+        )
+    )
+
+    result = SocCorrelationService(
+        summary_repository=summary_repository,
+        evidence_repository=evidence_repository,
+    ).correlate(CorrelationQuery(run_id=subject.run_id, evidence_limit_per_match=0))
+
+    assert len(result.matches) == 1
+    assert result.reusable_evidence_count == 0
+    assert result.matches[0].reusable_evidence == []
 
 
 def test_analysis_service_enqueues_review_item_from_summary() -> None:
@@ -786,6 +906,21 @@ def test_agent_action_policy_treats_asset_locate_as_read_only() -> None:
     assert process_tree_decision.risk_level is SocAgentRiskLevel.READ_ONLY
     assert process_tree_decision.requires_human_approval is False
 
+    for action in (
+        "host.event_context.lookup",
+        "threat_intel.ip_reputation.lookup",
+        "security_tag.lookup",
+    ):
+        decision = SocAgentActionPolicy().check(
+            action=action,
+            route=action,
+            request=SocAgentChatRequest(message=f"lookup {action}"),
+            context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI)),
+        )
+        assert decision.allowed is True
+        assert decision.risk_level is SocAgentRiskLevel.READ_ONLY
+        assert decision.requires_human_approval is False
+
 
 def test_agent_chat_service_dispatches_explicit_read_only_asset_lookup_adapter() -> None:
     registry = SocActionAdapterRegistry([InMemoryAssetLookupActionAdapter(records=[_asset_lookup_record()])])
@@ -877,6 +1012,45 @@ def test_read_only_action_result_can_be_recorded_as_investigation_evidence() -> 
     assert evidence[0].actor is not None
     assert evidence[0].actor.actor_id == "analyst-1"
     assert evidence[0].result_payload["asset_record"]["asset_id"] == "asset-001"
+
+
+def test_pa07_security_tag_read_only_action_records_investigation_evidence() -> None:
+    registry = SocActionAdapterRegistry([InMemorySecurityTagLookupActionAdapter()])
+    evidence_repository = InMemoryInvestigationEvidenceRepository()
+    service = SocAgentChatService(
+        capability_router=SocAgentCapabilityRouter(allowed_routes={"security_tag.lookup"}),
+        action_dispatcher=SocAgentActionDispatcher(
+            action_adapter_registry=registry,
+            evidence_repository=evidence_repository,
+        ),
+    )
+    request = SocAgentChatRequest(
+        message="lookup security tag",
+        metadata={
+            "soc_route": "security_tag.lookup",
+            "action_payload": {
+                "entity_key": "host:web-01",
+                "context_refs": {"queue_id": "REV-1", "run_id": "RUN-1", "alert_id": "ALT-1"},
+            },
+        },
+    )
+
+    events = list(
+        service.stream(
+            request,
+            context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI)),
+        )
+    )
+
+    action_payload = events[3].data["payload"]
+    assert action_payload["evidence_id"].startswith("EVI-")
+    assert action_payload["security_tag_found"] is True
+    evidence = evidence_repository.list_evidence(queue_id="REV-1")
+    assert len(evidence) == 1
+    assert evidence[0].action == "security_tag.lookup"
+    assert evidence[0].status == "success"
+    assert evidence[0].result_payload["has_active"] is True
+    assert evidence[0].result_payload["security_tag"]["labels"] == ["authorized_maintenance"]
 
 
 def test_review_service_context_includes_action_evidence() -> None:
@@ -1584,6 +1758,113 @@ def test_review_service_correct_requires_repository() -> None:
                 reason="manual correction",
             )
         )
+
+
+def test_memory_service_requires_candidate_repository() -> None:
+    with pytest.raises(SocServiceNotImplementedError, match="MemoryCandidateRepository"):
+        SocMemoryService().propose_candidate(_pingan_memory_candidate_command())
+
+
+def test_memory_service_proposes_pingan_candidate_as_pending_review() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    event_sink = RecordingEventSink()
+    context = ServiceRequestContext(
+        actor=ActorContext(
+            actor_id="analyst-1",
+            surface=EntrySurface.TUI,
+        )
+    )
+    service = SocMemoryService(candidate_repository=repository, event_sink=event_sink)
+
+    candidate = service.propose_candidate(_pingan_memory_candidate_command(), context=context)
+
+    assert candidate.status == SocMemoryCandidateStatus.PENDING_REVIEW
+    assert candidate.runtime_decision_allowed is False
+    assert candidate.review_required is True
+    assert candidate.tenant_scope == "pingan"
+    assert candidate.idempotency_key == "memory:pingan:hids:host-context:demo"
+    assert candidate.confidence == 0.7
+    assert candidate.facets == {
+        "tenant": ["pingan"],
+        "domain": ["hids"],
+        "capability_card": ["PA-HIDS-001"],
+    }
+    assert candidate.review_owner == "soc_analyst"
+    assert candidate.source.source_surface == EntrySurface.TUI
+    assert candidate.source.source_doc == "pingan_docs/hids-alert-assess-flow.md"
+    assert candidate.source.capability_card_id == "PA-HIDS-001"
+    assert candidate.evidence_refs == ["EVI-HOST-CONTEXT-1"]
+    assert candidate.validity.notes == "Only applies to PingAn HIDS host-event context until reviewed."
+    assert candidate.proposed_by == context.actor
+    assert candidate.metadata["request_id"] == context.request_id
+    assert service.get_candidate(candidate.candidate_id) == candidate
+
+    assert event_sink.events[-1].event_type == SocEventType.MEMORY_UPDATED
+    assert event_sink.events[-1].payload["operation"] == "memory_candidate.proposed"
+    assert event_sink.events[-1].payload["candidate_status"] == "pending_review"
+    assert event_sink.events[-1].payload["runtime_decision_allowed"] is False
+
+
+def test_memory_service_lists_candidates_by_status_and_tenant_scope() -> None:
+    service = SocMemoryService(candidate_repository=InMemoryMemoryCandidateRepository())
+    pingan = service.propose_candidate(_pingan_memory_candidate_command())
+    service.propose_candidate(
+        SocMemoryCandidateCreateCommand(
+            candidate_type=SocMemoryCandidateType.PROCEDURE,
+            target_artifact=SocMemoryTargetArtifact.PUBLIC_SKILL,
+            summary="Generic endpoint triage lesson",
+            content="Review parent process, command line, user, persistence, and network activity together.",
+            tenant_scope="global",
+            source=SocMemoryCandidateSource(
+                source_type=SocMemoryCandidateSourceType.MANUAL_NOTE,
+                source_id="manual-endpoint-triage-1",
+            ),
+            evidence_refs=["manual:analyst-note:endpoint-triage"],
+            validity=SocMemoryCandidateValidity(notes="Generic triage guidance pending skill review."),
+        )
+    )
+
+    candidates = service.list_candidates(
+        status=SocMemoryCandidateStatus.PENDING_REVIEW,
+        tenant_scope="pingan",
+    )
+
+    assert candidates == [pingan]
+
+
+def _pingan_memory_candidate_command() -> SocMemoryCandidateCreateCommand:
+    return SocMemoryCandidateCreateCommand(
+        candidate_type=SocMemoryCandidateType.BENIGN_PATTERN,
+        target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
+        summary="PingAn HIDS authorized operation candidate",
+        content=("PingAn HIDS host-event context may indicate authorized operations when the host event lookup returns a trusted maintenance tag. This is a tenant candidate and must be reviewed before affecting future decisions."),
+        tenant_scope="pingan",
+        tenant_id="pingan",
+        source=SocMemoryCandidateSource(
+            source_type=SocMemoryCandidateSourceType.PINGAN_DOC,
+            source_doc="pingan_docs/hids-alert-assess-flow.md",
+            source_section="host event context",
+            capability_card_id="PA-HIDS-001",
+            run_id="RUN-HIDS-DEMO",
+            alert_id="ALERT-HIDS-DEMO",
+            eval_sample_id="pingan-hids-action-evidence",
+        ),
+        evidence_refs=["EVI-HOST-CONTEXT-1"],
+        validity=SocMemoryCandidateValidity(
+            notes="Only applies to PingAn HIDS host-event context until reviewed.",
+        ),
+        idempotency_key="memory:pingan:hids:host-context:demo",
+        confidence=0.7,
+        facets={
+            "tenant": ["pingan"],
+            "domain": ["hids"],
+            "capability_card": ["PA-HIDS-001"],
+        },
+        decision_impact=SocMemoryDecisionImpact.REVIEW_HINT,
+        review_owner="soc_analyst",
+        labels=["pingan", "hids", "candidate-only"],
+        metadata={"source_backlog_id": "PA-09"},
+    )
 
 
 def test_planned_services_fail_fast_until_implemented() -> None:

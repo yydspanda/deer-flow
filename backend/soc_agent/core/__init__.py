@@ -1,5 +1,6 @@
 """Core SOC Agent runtime and service exports."""
 
+from soc_agent.core.correlation import SocCorrelationService
 from soc_agent.core.evidence import InMemoryInvestigationEvidenceRepository
 from soc_agent.core.service import (
     DeterministicAnalysisRuntime,
@@ -19,6 +20,7 @@ from soc_agent.core.service import (
     SocServiceNotImplementedError,
     SocSkillResolutionService,
 )
+from soc_agent.domain import SocDomainTriageService
 
 __all__ = [
     "DeterministicAnalysisRuntime",
@@ -30,7 +32,9 @@ __all__ = [
     "SocAgentCapabilityRouter",
     "SocAgentChatService",
     "SocAnalysisService",
+    "SocCorrelationService",
     "SocDaemonService",
+    "SocDomainTriageService",
     "SocMemoryService",
     "SocNormalizationService",
     "SocReviewService",

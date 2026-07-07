@@ -52,6 +52,9 @@ from soc_agent.contracts import (
     SocDaemonProcessResult,
     SocEvent,
     SocEventType,
+    SocMemoryCandidate,
+    SocMemoryCandidateCreateCommand,
+    SocMemoryCandidateStatus,
     SocSkillResolution,
     Verdict,
 )
@@ -64,6 +67,7 @@ from soc_agent.protocols import (
     DecisionAuditRepository,
     InvestigationEvidenceRepository,
     LLMAnalyzer,
+    MemoryCandidateRepository,
     ReviewQueueRepository,
     SocActionAdapterRegistryPort,
     SocAgentApprovalGrantRepository,
@@ -561,7 +565,101 @@ class SocReviewService:
 
 
 class SocMemoryService:
-    """Facts and lessons service placeholder."""
+    """Facts, lessons, and reviewable candidate knowledge service."""
+
+    def __init__(
+        self,
+        *,
+        candidate_repository: MemoryCandidateRepository | None = None,
+        event_sink: SocEventSink | None = None,
+    ) -> None:
+        self._candidate_repository = candidate_repository
+        self._event_sink = event_sink or NoopEventSink()
+
+    def propose_candidate(
+        self,
+        command: SocMemoryCandidateCreateCommand,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> SocMemoryCandidate:
+        """Persist candidate knowledge as pending review only."""
+
+        if self._candidate_repository is None:
+            raise SocServiceNotImplementedError("propose_candidate requires a MemoryCandidateRepository")
+
+        request_context = context or ServiceRequestContext()
+        source = command.source.model_copy(update={"source_surface": command.source.source_surface or request_context.actor.surface})
+        candidate = SocMemoryCandidate(
+            candidate_type=command.candidate_type,
+            target_artifact=command.target_artifact,
+            summary=command.summary,
+            content=command.content,
+            tenant_scope=command.tenant_scope,
+            tenant_id=command.tenant_id,
+            status=SocMemoryCandidateStatus.PENDING_REVIEW,
+            source=source,
+            evidence_refs=command.evidence_refs,
+            validity=command.validity,
+            idempotency_key=command.idempotency_key,
+            confidence=command.confidence,
+            facets=command.facets,
+            decision_impact=command.decision_impact,
+            review_owner=command.review_owner,
+            labels=command.labels,
+            metadata={
+                **command.metadata,
+                "request_id": request_context.request_id,
+            },
+            proposed_by=request_context.actor,
+        )
+        self._candidate_repository.save_memory_candidate(candidate)
+        self._event_sink.emit(
+            SocEvent(
+                event_type=SocEventType.MEMORY_UPDATED,
+                request_id=request_context.request_id,
+                run_id=candidate.source.run_id,
+                alert_id=candidate.source.alert_id,
+                actor=request_context.actor,
+                payload={
+                    "operation": "memory_candidate.proposed",
+                    "candidate_id": candidate.candidate_id,
+                    "candidate_status": candidate.status.value,
+                    "candidate_type": candidate.candidate_type.value,
+                    "target_artifact": candidate.target_artifact.value,
+                    "tenant_scope": candidate.tenant_scope,
+                    "idempotency_key": candidate.idempotency_key,
+                    "runtime_decision_allowed": candidate.runtime_decision_allowed,
+                },
+            )
+        )
+        return candidate
+
+    def get_candidate(self, candidate_id: str) -> SocMemoryCandidate:
+        if self._candidate_repository is None:
+            raise SocServiceNotImplementedError("get_candidate requires a MemoryCandidateRepository")
+
+        candidate = self._candidate_repository.get_memory_candidate(candidate_id)
+        if candidate is None:
+            raise SocServiceNotFoundError(f"memory candidate {candidate_id} not found")
+        return candidate
+
+    def list_candidates(
+        self,
+        *,
+        status: SocMemoryCandidateStatus | None = None,
+        tenant_scope: str | None = None,
+        tenant_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SocMemoryCandidate]:
+        if self._candidate_repository is None:
+            raise SocServiceNotImplementedError("list_candidates requires a MemoryCandidateRepository")
+
+        return self._candidate_repository.list_memory_candidates(
+            status=status,
+            tenant_scope=tenant_scope,
+            tenant_id=tenant_id,
+            limit=limit,
+        )
 
     def list_facts(self) -> list[Any]:
         raise SocServiceNotImplementedError("memory store is planned after PostgreSQL persistence is implemented")
@@ -1051,7 +1149,18 @@ class SocAgentActionPolicy:
     """Permission policy for routed SOC Agent service actions."""
 
     POLICY_VERSION = "soc.agent_action_policy.v1"
-    READ_ONLY_ACTIONS = frozenset({"asset.lookup", "asset.locate", "chat.ready_message", "endpoint.process_tree.lookup", "review.open_context"})
+    READ_ONLY_ACTIONS = frozenset(
+        {
+            "asset.lookup",
+            "asset.locate",
+            "chat.ready_message",
+            "endpoint.process_tree.lookup",
+            "host.event_context.lookup",
+            "review.open_context",
+            "security_tag.lookup",
+            "threat_intel.ip_reputation.lookup",
+        }
+    )
     ANALYST_WRITE_ACTIONS = frozenset({"review.correct", "analysis.replay"})
     HIGH_RISK_ACTIONS = frozenset({"response.block_ip", "endpoint.isolate_host", "mcp.invoke"})
 

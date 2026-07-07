@@ -13,7 +13,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
-from soc_agent.actions.adapters import InMemoryAssetLookupActionAdapter, InMemoryEndpointProcessTreeLookupActionAdapter, SocActionAdapterRegistry
+from soc_agent.actions.adapters import (
+    InMemoryAssetLookupActionAdapter,
+    InMemoryEndpointProcessTreeLookupActionAdapter,
+    InMemoryHostEventContextLookupActionAdapter,
+    InMemorySecurityTagLookupActionAdapter,
+    InMemoryThreatIntelIpReputationLookupActionAdapter,
+    SocActionAdapterRegistry,
+)
 from soc_agent.actions.mcp import (
     DeerFlowCachedMcpToolProvider,
     build_mcp_action_adapter_registry_from_file,
@@ -26,6 +33,7 @@ from soc_agent.contracts import (
     ActorContext,
     ActorType,
     CorrectionCommand,
+    CorrelationQuery,
     EntrySurface,
     ReviewQueueCloseCommand,
     ReviewQueueStatus,
@@ -39,6 +47,7 @@ from soc_agent.core import (
     SocAgentCapabilityRouter,
     SocAgentChatService,
     SocAnalysisService,
+    SocCorrelationService,
     SocDaemonService,
     SocNormalizationService,
     SocReviewService,
@@ -65,7 +74,14 @@ from soc_agent.db import (
     to_sync_database_url,
     upgrade_soc_schema,
 )
-from soc_agent.eval import load_eval_responses_jsonl, run_offline_eval
+from soc_agent.eval import (
+    DEFAULT_PINGAN_CAPABILITY_EVAL_DIR,
+    load_eval_responses_jsonl,
+    load_pingan_capability_eval_fixtures,
+    run_offline_eval,
+    run_pingan_capability_eval,
+    run_pingan_domain_triage_eval,
+)
 from soc_agent.lead_agent import build_soc_lead_agent_profile
 from soc_agent.lead_agent_chat import SocLeadAgentChatService
 
@@ -78,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
         return _analyze(args)
     if args.command == "list":
         return _list(args)
+    if args.command == "correlate":
+        return _correlate(args)
     if args.command == "show":
         return _show(args)
     if args.command == "replay":
@@ -118,6 +136,10 @@ def main(argv: list[str] | None = None) -> int:
         return _daemon_status(args)
     if args.command == "eval" and args.eval_command == "offline":
         return _eval_offline(args)
+    if args.command == "eval" and args.eval_command == "pingan":
+        return _eval_pingan(args)
+    if args.command == "eval" and args.eval_command == "pingan-domain":
+        return _eval_pingan_domain(args)
     if args.command == "db" and args.db_command == "init":
         return _db_init(args)
     if args.command == "db" and args.db_command == "upgrade":
@@ -150,6 +172,14 @@ def _build_parser() -> argparse.ArgumentParser:
     list_cmd.add_argument("--limit", type=int, default=50, help="Maximum summaries to return")
     list_cmd.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(list_cmd)
+
+    correlate = subparsers.add_parser("correlate", help="Correlate one persisted SOC alert summary")
+    correlate.add_argument("run_id", help="Run id whose alert summary should be correlated")
+    correlate.add_argument("--limit", type=int, default=10, help="Maximum similar alerts to return")
+    correlate.add_argument("--candidate-limit", type=int, default=200, help="Maximum recent summaries to score")
+    correlate.add_argument("--evidence-limit", type=int, default=5, help="Maximum reusable evidence refs per match")
+    correlate.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(correlate)
 
     show = subparsers.add_parser("show", help="Show one persisted SOC analysis run")
     show.add_argument("run_id", help="Run id to load")
@@ -318,6 +348,22 @@ def _build_parser() -> argparse.ArgumentParser:
     eval_offline.add_argument("--llm-response-jsonl", help="Replayable LLM response JSONL keyed by sample_id")
     eval_offline.add_argument("--model-name", default="replay-llm", help="Model name recorded for replayed LLM analyzer")
     eval_offline.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    eval_pingan = eval_subparsers.add_parser("pingan", help="Run PingAn SOC capability fixture eval")
+    eval_pingan.add_argument(
+        "path",
+        nargs="?",
+        default=str(DEFAULT_PINGAN_CAPABILITY_EVAL_DIR),
+        help="Path to a PingAn capability fixture JSON file or directory",
+    )
+    eval_pingan.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    eval_pingan_domain = eval_subparsers.add_parser("pingan-domain", help="Run PingAn SOC domain triage fixture eval")
+    eval_pingan_domain.add_argument(
+        "path",
+        nargs="?",
+        default=str(DEFAULT_PINGAN_CAPABILITY_EVAL_DIR),
+        help="Path to a PingAn capability fixture JSON file or directory",
+    )
+    eval_pingan_domain.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
     db = subparsers.add_parser("db", help="SOC database helpers")
     db_subparsers = db.add_subparsers(dest="db_command")
@@ -385,6 +431,31 @@ def _list(args: argparse.Namespace) -> int:
 
     summaries = repository.list_alert_summaries(limit=args.limit)
     print(json.dumps([summary.model_dump(mode="json", exclude_none=True) for summary in summaries], ensure_ascii=False, indent=2 if args.pretty else None))
+    return 0
+
+
+def _correlate(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        result = SocCorrelationService(
+            summary_repository=repository,
+            evidence_repository=repository,
+        ).correlate(
+            CorrelationQuery(
+                run_id=args.run_id,
+                limit=args.limit,
+                candidate_limit=args.candidate_limit,
+                evidence_limit_per_match=args.evidence_limit,
+            )
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
 
 
@@ -606,6 +677,9 @@ def _read_only_adapter_registry_for_chat(args: argparse.Namespace) -> SocActionA
         [
             InMemoryAssetLookupActionAdapter(),
             InMemoryEndpointProcessTreeLookupActionAdapter(),
+            InMemoryHostEventContextLookupActionAdapter(),
+            InMemorySecurityTagLookupActionAdapter(),
+            InMemoryThreatIntelIpReputationLookupActionAdapter(),
         ]
     )
 
@@ -898,6 +972,36 @@ def _eval_offline(args: argparse.Namespace) -> int:
         return 2
     except Exception as exc:  # noqa: BLE001 - CLI boundary: report eval failure
         print(f"error: offline eval failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if report.failed_count == 0 else 1
+
+
+def _eval_pingan(args: argparse.Namespace) -> int:
+    try:
+        fixtures = load_pingan_capability_eval_fixtures(args.path)
+        report = run_pingan_capability_eval(fixtures)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: report eval failure
+        print(f"error: PingAn capability eval failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if report.failed_count == 0 else 1
+
+
+def _eval_pingan_domain(args: argparse.Namespace) -> int:
+    try:
+        fixtures = load_pingan_capability_eval_fixtures(args.path)
+        report = run_pingan_domain_triage_eval(fixtures)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: report eval failure
+        print(f"error: PingAn domain triage eval failed: {exc}", file=sys.stderr)
         return 1
 
     print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))

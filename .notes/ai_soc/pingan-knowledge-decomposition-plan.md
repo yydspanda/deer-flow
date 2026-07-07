@@ -171,8 +171,8 @@ SOC Lead Agent prompt 只应该包含这些稳定规则：
 | 顺序 | 任务 | 输出 |
 |---|---|---|
 | 1 | 给现有六个 `soc-*` skill 补 Knowledge Boundary | 防止 PingAn 知识继续污染通用 skill |
-| 2 | 从 PingAn docs 抽 P0 capability cards | APT 方向、EDR 进程树、HIDS 主机事件、资产归属、外部查询、处置动作 |
-| 3 | 设计 `PingAnKnowledgeCandidate` 清单 | 每条标注 target artifact：skill/memory/MCP/policy/eval |
+| 2 | 从 PingAn docs 抽 P0 capability cards | Done：已新增 `pingan-capability-cards.md`；`PA-02` APT、`PA-03` EDR、`PA-04` HIDS 已展开 |
+| 3 | 设计 `PingAnKnowledgeCandidate` 清单 | Done：已新增 `pingan-knowledge-candidates.md`；每条标注 target artifact、tenant scope、source、validity、review owner，默认 `pending_review` |
 | 4 | mock read-only adapters | `host.event_context.lookup`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup` |
 | 5 | 建 eval fixtures | 每类至少 1 条脱敏样例，验证 skill/memory/router 不走偏 |
 | 6 | 接 memory candidate | 只写 `pending_review`，不自动 confirmed |

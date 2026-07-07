@@ -11,6 +11,7 @@ from soc_agent.contracts import (
     ActorContext,
     AuditAction,
     CorrectionCommand,
+    CorrelationQuery,
     InvestigationEvidence,
     ReviewQueueStatus,
     ServiceRequestContext,
@@ -20,7 +21,7 @@ from soc_agent.contracts import (
     SocAgentRiskLevel,
     Verdict,
 )
-from soc_agent.core import SocAgentApprovalService, SocAnalysisService
+from soc_agent.core import SocAgentApprovalService, SocAnalysisService, SocCorrelationService
 from soc_agent.core.service import SocReviewService
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 
@@ -203,6 +204,42 @@ def test_sqlalchemy_alert_repository_finds_similar_alert_summaries() -> None:
     assert "detection_key:sec_guard_apt:rule_code:rpaadm_002635" in match.matched_reasons
     assert "rule_code:RPAADM_002635" in match.matched_reasons
     assert "entity_key:ip:30.180.248.178" in match.matched_reasons
+
+
+def test_sqlalchemy_correlation_service_returns_reusable_evidence() -> None:
+    repository = _repository()
+    service = SocAnalysisService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+    )
+    similar = service.analyze(_sample("pingan_legacy_apt.json"))
+    current = service.analyze(_sample("pingan_legacy_apt.json"))
+    repository.save_evidence(
+        InvestigationEvidence(
+            evidence_id="EVI-CORRELATION-1",
+            route="asset.locate",
+            action="asset.locate",
+            status="success",
+            message="Asset location completed.",
+            result_payload={"owner": "mock-owner", "source": "unit-test"},
+            run_id=similar.run_id,
+            alert_id=similar.alert_id,
+        )
+    )
+
+    result = SocCorrelationService(
+        summary_repository=repository,
+        evidence_repository=repository,
+    ).correlate(CorrelationQuery(run_id=current.run_id, limit=5))
+
+    assert result.subject_summary.run_id == current.run_id
+    assert len(result.matches) == 1
+    assert result.matches[0].summary.run_id == similar.run_id
+    assert result.reusable_evidence_count == 1
+    assert result.matches[0].reusable_evidence[0].evidence_id == "EVI-CORRELATION-1"
+    assert result.matches[0].reusable_evidence[0].result_payload["owner"] == "mock-owner"
 
 
 def test_sqlalchemy_alert_repository_persists_review_queue_items() -> None:

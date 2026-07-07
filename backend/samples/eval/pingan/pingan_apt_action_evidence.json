@@ -1,0 +1,52 @@
+{
+  "schema_version": "soc.pingan_capability_eval_fixture.v1",
+  "sample_id": "pingan-apt-action-evidence",
+  "scenario": "APT direction conflict plus read-only threat intelligence and security-tag checks",
+  "source_path": "backend/samples/alerts/pingan_legacy_apt.json",
+  "expected_source_type": "ndr",
+  "min_conflict_count": 1,
+  "expected_conflict_types": ["source_candidate_conflict"],
+  "mock_records": {
+    "threat_intel.ip_reputation.lookup": [
+      {
+        "ip": "182.16.91.214",
+        "labels": ["suspicious_scanner", "internet_source"],
+        "confidence": 0.76,
+        "score": 76,
+        "geo": "ZZ",
+        "source": "pa08-fixture",
+        "mocked": true
+      }
+    ],
+    "security_tag.lookup": []
+  },
+  "actions": [
+    {
+      "route": "threat_intel.ip_reputation.lookup",
+      "payload": {
+        "ip": "182.16.91.214"
+      },
+      "expect_payload_values": {
+        "reputation_found": true,
+        "reputation.score": 76,
+        "external_side_effect": "read",
+        "read_only": true
+      },
+      "expect_payload_contains": {
+        "reputation.labels": "suspicious_scanner"
+      }
+    },
+    {
+      "route": "security_tag.lookup",
+      "payload": {
+        "entity_key": "ip:182.16.91.214"
+      },
+      "expect_payload_values": {
+        "security_tag_found": false,
+        "has_active": false,
+        "external_side_effect": "read",
+        "read_only": true
+      }
+    }
+  ]
+}

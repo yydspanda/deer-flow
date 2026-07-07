@@ -1,0 +1,83 @@
+{
+  "schema_version": "soc.pingan_capability_eval_fixture.v1",
+  "sample_id": "pingan-hids-action-evidence",
+  "scenario": "HIDS host-event context lookup plus authorized maintenance tag",
+  "source_path": "backend/samples/alerts/pingan_legacy_hids.json",
+  "expected_source_type": "hids",
+  "mock_records": {
+    "host.event_context.lookup": [
+      {
+        "host_key": "web-01",
+        "hostname": "web-01",
+        "primary_ip": "10.10.2.15",
+        "time_window": "PT30M",
+        "recent_logins": [
+          {
+            "user": "enterprise-user-1",
+            "source_ip": "10.20.0.15",
+            "result": "success",
+            "method": "ssh"
+          }
+        ],
+        "related_commands": [
+          {
+            "user": "enterprise-user-1",
+            "command": "curl http://198.51.100.10/a",
+            "process_name": "bash"
+          }
+        ],
+        "source_ips": ["10.20.0.15"],
+        "related_events": [
+          {
+            "event_type": "process_execution",
+            "summary": "Command executed during approved maintenance window."
+          }
+        ],
+        "host_criticality": "high",
+        "source": "pa08-fixture",
+        "mocked": true
+      }
+    ],
+    "security_tag.lookup": [
+      {
+        "entity_key": "host:web-01",
+        "entity_type": "host",
+        "labels": ["authorized_maintenance", "approved_change"],
+        "tag_types": ["maintenance", "change"],
+        "is_valid": true,
+        "source": "pa08-fixture",
+        "mocked": true
+      }
+    ]
+  },
+  "actions": [
+    {
+      "route": "host.event_context.lookup",
+      "payload": {
+        "host_key": "web-01"
+      },
+      "expect_payload_values": {
+        "host_event_context_found": true,
+        "host_event_context.host_key": "web-01",
+        "host_event_context.related_events.0.event_type": "process_execution",
+        "external_side_effect": "read",
+        "read_only": true
+      }
+    },
+    {
+      "route": "security_tag.lookup",
+      "payload": {
+        "entity_key": "host:web-01"
+      },
+      "expect_payload_values": {
+        "security_tag_found": true,
+        "has_active": true,
+        "external_side_effect": "read",
+        "read_only": true
+      },
+      "expect_payload_contains": {
+        "security_tag.labels": "authorized_maintenance"
+      }
+    }
+  ]
+}

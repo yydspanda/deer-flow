@@ -26,9 +26,9 @@ alert in
 
 但它还不是最终形态的“完整 SOC Agent + 多个子研判 Agent”。当前缺口在这里：
 
-- 还没有明确的 `SocCorrelationService`，相似告警、历史结论和可复用 evidence 仍只是 review context 的零散部分。
+- `SocCorrelationService` MVP 已存在，能通过 CLI/core service 输出结构化相似告警、匹配原因和可复用 evidence；后续还需要接入 ReviewQueue/Web/TUI 可视化面板。
 - 还没有 vendor-neutral 的 external disposition sync 协议；Zeus 等外部系统中的状态/理由还不能可靠同步为本地 audit、review/correction 和候选记忆。
-- 还没有 DB-first typed memory contract；TUI/Web/Kafka/Lead Agent/domain triage 的重要结论还不能统一生成候选记忆。
+- 已有 `SocMemoryCandidate` 候选入口；但还没有 DB-first typed memory store、确认/驳回/过期状态机和 confirmed memory 检索/注入策略。
 - 还没有统一的 domain sub-agent 输入输出协议。
 - EDR/APT/HIDS/F5 当前主要体现为 skills / mock action / prompt context，还不是可独立评估的子研判单元。
 - Main SOC Agent 还没有把 correlation、domain triage、read-only evidence 和统一研判报告串成一个可视化链路。
@@ -36,8 +36,12 @@ alert in
 因此下一阶段目标不是继续堆更多 mock tool，而是按下面待办补齐可见 Alpha 链路：
 
 ```text
-[In parallel] PingAn knowledge decomposition + capability cards
-  -> [Next] Correlation Service MVP
+[Done] PingAn knowledge decomposition + capability cards + pending candidates
+  -> [Done] Correlation Service MVP
+  -> [Done] PingAn PA-08 eval fixtures
+  -> [Done] PingAn PA-09 memory candidate entry
+  -> [Done] PingAn PA-10 domain triage MVP
+  -> [Next] PingAn PA-11 Main Orchestrator demo
   -> [Planned] External Disposition Sync Contract
   -> [Planned] Memory Tracking Contract
   -> [Planned] Domain Sub-Agent Contract
@@ -54,11 +58,14 @@ alert in
 - Prometheus / operations overview：等 Kafka/review/approval/runtime 数据流稳定后再做。
 - High-risk real execute：等真实 staging adapter、审批策略、补偿和 adapter audit 成熟后再打开。
 
+PingAn APT/EDR/HIDS 专属经验当前已经先落到 `.notes/ai_soc/pingan-capability-cards.md` 和 `.notes/ai_soc/pingan-knowledge-candidates.md`，并且已有 `SocMemoryService.propose_candidate()` 作为代码入口。它只生成 `pending_review` candidate，不能直接影响 runtime verdict；后续只能通过 confirmed memory、tenant policy/config、adapter mapping 或 eval fixture 的受控路径进入系统。
+
 ## 2. 当前已实现服务边界
 
 | Service / Component | 当前职责 | 状态 |
 |---|---|---|
 | `SocAnalysisService` | 预警分析入口；调用固定 runtime，保存 run/summary/review/audit | Done |
+| `SocCorrelationService` | 基于 alert summaries 和 investigation evidence 输出结构化相似告警、匹配原因和可复用 evidence | Done |
 | `SocReviewService` | review queue、调查上下文、关闭、人工纠正；聚合 similar alerts 和 action evidence | Done |
 | `SocAgentApprovalService` | approval request inbox、approval grant、dry-run、execute boundary | Done |
 | `SocSkillResolver` | 从 canonical alert / review context 选择白名单 SOC domain skills，生成 compact bounded context | Done |
@@ -66,6 +73,8 @@ alert in
 | `SocLeadAgentActionProposalBoundary` | 只处理显式 `<soc_action_proposal>`；read-only proposal 走 router/policy/dispatcher/registry，高风险写入 approval inbox | Done |
 | `SocActionAdapterRegistry` | action adapter allowlist；当前支持 `asset.lookup`、`asset.locate`、`endpoint.process_tree.lookup` 等只读能力 | Done |
 | `InvestigationEvidenceRepository` | 保存只读 action/tool 结果，供 ReviewQueue、Web/TUI、Lead Agent 后续复用 | Done |
+| `SocMemoryService` | 生成 pending review memory candidate；confirmed fact store、review workflow 和 retrieval policy 仍后续实现 | Partial |
+| `SocDomainTriageService` | APT/EDR/HIDS deterministic domain handlers；消费 skill context 和 read-only evidence refs，只输出 findings | Done for PA-10 |
 | `SocKafkaDaemonRunner` / `SocKafkaConsumerRunner` | opt-in Kafka daemon run loop、mapper、dead-letter、manual commit、metrics JSONL | Done, production params waiting |
 | `SqlAlchemyAlertRepository` | 当前统一实现 run、summary、review queue、audit、approval request、approval grant、investigation evidence 持久化 | Done |
 
@@ -110,7 +119,7 @@ flowchart TD
         ApprovalGrant["soc_approval_grants"]
         Evidence["soc_investigation_evidence"]
         Disposition["soc_external_dispositions"]
-        MemoryCandidate["soc_memory_candidates"]
+        MemoryCandidate["MemoryCandidateRepository\n(PA-09 in-memory; PG planned)"]
     end
 
     CLI --> Analysis
@@ -350,8 +359,9 @@ flowchart TD
 
 - 新增并维护 `.notes/ai_soc/pingan-soc-capability-onboarding.md`。
 - 新增并维护 `.notes/ai_soc/pingan-knowledge-decomposition-plan.md`。
+- 新增并维护 `.notes/ai_soc/pingan-capability-cards.md`，作为 PingAn APT / EDR / HIDS capability card 台账。
 - 每个经验点先整理成 capability card，再分类到 skill、tenant memory、MCP/action adapter、normalizer、policy/config、domain handler、eval case 或 memory candidate。
-- 优先收集 3-5 张 P0 card：APT 方向判断、EDR 进程树、资产归属、F5 抑制目标、HIDS 主机事件。
+- 第一批已登记 APT 方向判断、APT 场景化研判、威胁情报、security tag、EDR 进程树、资产归属、HIDS 主机事件、HIDS event_type 研判等 P0 cards；F5/WAF 后续有源文档或样例后再补。
 - 不把生产账号、token、内部系统地址或敏感数据写入仓库；真实 endpoint/凭证只通过本地配置或 secret 注入。
 
 验收：

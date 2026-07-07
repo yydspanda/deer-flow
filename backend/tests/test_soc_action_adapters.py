@@ -5,14 +5,23 @@ import pytest
 from soc_agent.actions.adapters import (
     ASSET_LOOKUP_ACTION,
     ENDPOINT_PROCESS_TREE_LOOKUP_ACTION,
+    HOST_EVENT_CONTEXT_LOOKUP_ACTION,
+    SECURITY_TAG_LOOKUP_ACTION,
+    THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION,
     DryRunOnlySocActionAdapter,
     InMemoryAssetLookupActionAdapter,
     InMemoryEndpointProcessTreeLookupActionAdapter,
+    InMemoryHostEventContextLookupActionAdapter,
+    InMemorySecurityTagLookupActionAdapter,
+    InMemoryThreatIntelIpReputationLookupActionAdapter,
     SocActionAdapterNotFoundError,
     SocActionAdapterRegistry,
     SocActionAdapterRegistryError,
     asset_lookup_adapter_descriptor,
     endpoint_process_tree_lookup_adapter_descriptor,
+    host_event_context_lookup_adapter_descriptor,
+    security_tag_lookup_adapter_descriptor,
+    threat_intel_ip_reputation_lookup_adapter_descriptor,
 )
 from soc_agent.contracts import (
     ActorContext,
@@ -25,6 +34,9 @@ from soc_agent.contracts import (
     SocAgentRiskLevel,
     SocAssetLookupRecord,
     SocEndpointProcessTreeRecord,
+    SocHostEventContextRecord,
+    SocSecurityTagRecord,
+    SocThreatIntelReputationRecord,
 )
 
 
@@ -304,6 +316,105 @@ def test_endpoint_process_tree_adapter_execute_not_found_is_successful_read() ->
     assert result.payload["external_side_effect"] == "read"
 
 
+def test_host_event_context_adapter_descriptor_is_read_only() -> None:
+    descriptor = host_event_context_lookup_adapter_descriptor()
+
+    assert descriptor.route == HOST_EVENT_CONTEXT_LOOKUP_ACTION
+    assert descriptor.action == HOST_EVENT_CONTEXT_LOOKUP_ACTION
+    assert descriptor.risk_level is SocAgentRiskLevel.READ_ONLY
+    assert descriptor.external_side_effect == "read"
+    assert descriptor.execute_supported is True
+    assert descriptor.required_payload_fields == ["host_key"]
+
+
+def test_host_event_context_adapter_execute_returns_matching_mock_record() -> None:
+    registry = SocActionAdapterRegistry([InMemoryHostEventContextLookupActionAdapter(records=[_host_context_record()])])
+
+    result = registry.execute(
+        SocAgentApprovedActionCommand(
+            execution_token_id="SAT-test",
+            route=HOST_EVENT_CONTEXT_LOOKUP_ACTION,
+            action=HOST_EVENT_CONTEXT_LOOKUP_ACTION,
+            dry_run=False,
+            payload={"host_key": "web-01"},
+        ),
+        context=_context(),
+    )
+
+    assert result.status == "success"
+    assert result.payload["host_event_context_found"] is True
+    assert result.payload["host_event_context"]["host_key"] == "web-01"
+    assert result.payload["host_event_context"]["related_commands"][0]["command"] == "whoami"
+    assert result.payload["external_side_effect"] == "read"
+    assert result.payload["read_only"] is True
+
+
+def test_threat_intel_ip_reputation_adapter_descriptor_is_read_only() -> None:
+    descriptor = threat_intel_ip_reputation_lookup_adapter_descriptor()
+
+    assert descriptor.route == THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION
+    assert descriptor.action == THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION
+    assert descriptor.risk_level is SocAgentRiskLevel.READ_ONLY
+    assert descriptor.external_side_effect == "read"
+    assert descriptor.execute_supported is True
+    assert descriptor.required_payload_fields == ["ip"]
+
+
+def test_threat_intel_ip_reputation_adapter_execute_returns_matching_mock_record() -> None:
+    registry = SocActionAdapterRegistry([InMemoryThreatIntelIpReputationLookupActionAdapter(records=[_threat_intel_record()])])
+
+    result = registry.execute(
+        SocAgentApprovedActionCommand(
+            execution_token_id="SAT-test",
+            route=THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION,
+            action=THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION,
+            dry_run=False,
+            payload={"ip": "203.0.113.10"},
+        ),
+        context=_context(),
+    )
+
+    assert result.status == "success"
+    assert result.payload["reputation_found"] is True
+    assert result.payload["reputation"]["score"] == 82
+    assert "c2_candidate" in result.payload["reputation"]["labels"]
+    assert result.payload["external_side_effect"] == "read"
+    assert result.payload["read_only"] is True
+
+
+def test_security_tag_adapter_descriptor_is_read_only() -> None:
+    descriptor = security_tag_lookup_adapter_descriptor()
+
+    assert descriptor.route == SECURITY_TAG_LOOKUP_ACTION
+    assert descriptor.action == SECURITY_TAG_LOOKUP_ACTION
+    assert descriptor.risk_level is SocAgentRiskLevel.READ_ONLY
+    assert descriptor.external_side_effect == "read"
+    assert descriptor.execute_supported is True
+    assert descriptor.required_payload_fields == ["entity_key"]
+
+
+def test_security_tag_adapter_execute_returns_matching_mock_record() -> None:
+    registry = SocActionAdapterRegistry([InMemorySecurityTagLookupActionAdapter(records=[_security_tag_record()])])
+
+    result = registry.execute(
+        SocAgentApprovedActionCommand(
+            execution_token_id="SAT-test",
+            route=SECURITY_TAG_LOOKUP_ACTION,
+            action=SECURITY_TAG_LOOKUP_ACTION,
+            dry_run=False,
+            payload={"entity_key": "host:web-01"},
+        ),
+        context=_context(),
+    )
+
+    assert result.status == "success"
+    assert result.payload["security_tag_found"] is True
+    assert result.payload["has_active"] is True
+    assert result.payload["security_tag"]["labels"] == ["authorized_maintenance"]
+    assert result.payload["external_side_effect"] == "read"
+    assert result.payload["read_only"] is True
+
+
 class _ExecutableAdapter:
     def __init__(self, descriptor: SocAgentActionAdapterDescriptor) -> None:
         self.descriptor = descriptor
@@ -404,6 +515,43 @@ def _process_tree_record() -> SocEndpointProcessTreeRecord:
                 "protocol": "tcp",
             }
         ],
+        source="unit-test",
+        mocked=True,
+    )
+
+
+def _host_context_record() -> SocHostEventContextRecord:
+    return SocHostEventContextRecord(
+        host_key="web-01",
+        hostname="web-01",
+        primary_ip="10.10.2.15",
+        recent_logins=[{"user": "enterprise-user-1", "source_ip": "10.20.0.15", "result": "success"}],
+        related_commands=[{"user": "enterprise-user-1", "command": "whoami", "process_name": "bash"}],
+        source_ips=["10.20.0.15"],
+        related_events=[{"event_type": "process_execution", "summary": "Command executed during alert window."}],
+        source="unit-test",
+        mocked=True,
+    )
+
+
+def _threat_intel_record() -> SocThreatIntelReputationRecord:
+    return SocThreatIntelReputationRecord(
+        ip="203.0.113.10",
+        labels=["c2_candidate"],
+        confidence=0.82,
+        score=82,
+        source="unit-test",
+        mocked=True,
+    )
+
+
+def _security_tag_record() -> SocSecurityTagRecord:
+    return SocSecurityTagRecord(
+        entity_key="host:web-01",
+        entity_type="host",
+        labels=["authorized_maintenance"],
+        tag_types=["maintenance"],
+        is_valid=True,
         source="unit-test",
         mocked=True,
     )

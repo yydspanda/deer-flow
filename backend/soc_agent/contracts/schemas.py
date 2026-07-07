@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def utc_now() -> datetime:
@@ -82,6 +82,80 @@ class ReviewQueuePriority(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+class SocMemoryCandidateStatus(StrEnum):
+    PENDING_REVIEW = "pending_review"
+    CONFIRMED_CANDIDATE = "confirmed_candidate"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+    DEPRECATED = "deprecated"
+
+
+class SocMemoryCandidateType(StrEnum):
+    PROCEDURE = "procedure"
+    DETECTION_LESSON = "detection_lesson"
+    BENIGN_PATTERN = "benign_pattern"
+    ENVIRONMENT_FACT = "environment_fact"
+    IDENTITY_PATTERN = "identity_pattern"
+    RESPONSE_POLICY_HINT = "response_policy_hint"
+    NEGATIVE_MEMORY = "negative_memory"
+    ADAPTER_MAPPING = "adapter_mapping"
+    EVAL_FIXTURE = "eval_fixture"
+
+
+class SocMemoryTargetArtifact(StrEnum):
+    PUBLIC_SKILL = "public_skill"
+    TENANT_MEMORY = "tenant_memory"
+    ADAPTER_MAPPING = "adapter_mapping"
+    POLICY_CONFIG = "policy_config"
+    NORMALIZER = "normalizer"
+    DOMAIN_HANDLER = "domain_handler"
+    EVAL_FIXTURE = "eval_fixture"
+    PROMPT_CONTEXT = "prompt_context"
+    EXTERNAL_SYNC = "external_sync"
+
+
+class SocMemoryDecisionImpact(StrEnum):
+    NONE = "none"
+    REVIEW_HINT = "review_hint"
+    ROUTING_HINT = "routing_hint"
+    SUPPRESSION_HINT = "suppression_hint"
+    RESPONSE_POLICY_HINT = "response_policy_hint"
+
+
+class SocMemoryCandidateSourceType(StrEnum):
+    PINGAN_DOC = "pingan_doc"
+    ANALYSIS_RUN = "analysis_run"
+    CORRECTION = "correction"
+    DOMAIN_FINDING = "domain_finding"
+    EXTERNAL_DISPOSITION = "external_disposition"
+    MANUAL_NOTE = "manual_note"
+    EVAL_FIXTURE = "eval_fixture"
+
+
+class SocDomainName(StrEnum):
+    APT = "apt"
+    EDR = "edr"
+    HIDS = "hids"
+    WAF_F5 = "waf_f5"
+    GENERIC = "generic"
+
+
+class SocDomainFindingSeverity(StrEnum):
+    INFO = "info"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class SocDomainFindingDisposition(StrEnum):
+    SUSPICIOUS = "suspicious"
+    LIKELY_TRUE_POSITIVE = "likely_true_positive"
+    LIKELY_FALSE_POSITIVE = "likely_false_positive"
+    BENIGN_AUTHORIZED_CANDIDATE = "benign_authorized_candidate"
+    NEEDS_MORE_EVIDENCE = "needs_more_evidence"
 
 
 class ActorContext(BaseModel):
@@ -378,6 +452,107 @@ class InvestigationEvidence(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class SocMemoryCandidateSource(BaseModel):
+    """Auditable origin metadata for one proposed SOC memory candidate."""
+
+    source_type: SocMemoryCandidateSourceType
+    source_surface: EntrySurface | None = None
+    source_id: str | None = None
+    source_doc: str | None = None
+    source_section: str | None = None
+    capability_card_id: str | None = None
+    run_id: str | None = None
+    alert_id: str | None = None
+    queue_id: str | None = None
+    correction_id: str | None = None
+    eval_sample_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_traceable_reference(self) -> SocMemoryCandidateSource:
+        references = (
+            self.source_id,
+            self.source_doc,
+            self.capability_card_id,
+            self.run_id,
+            self.alert_id,
+            self.queue_id,
+            self.correction_id,
+            self.eval_sample_id,
+        )
+        if not any(references):
+            raise ValueError("memory candidate source must include at least one traceable reference")
+        return self
+
+
+class SocMemoryCandidateValidity(BaseModel):
+    """Scope and freshness window for candidate knowledge under review."""
+
+    valid_from: datetime = Field(default_factory=utc_now)
+    valid_until: datetime | None = None
+    review_after_days: int | None = Field(default=None, ge=1)
+    notes: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def require_forward_window(self) -> SocMemoryCandidateValidity:
+        if self.valid_until is not None and self.valid_until <= self.valid_from:
+            raise ValueError("valid_until must be later than valid_from")
+        return self
+
+
+class SocMemoryCandidateCreateCommand(BaseModel):
+    """Command to propose candidate SOC knowledge without confirming it."""
+
+    candidate_type: SocMemoryCandidateType
+    target_artifact: SocMemoryTargetArtifact
+    summary: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    tenant_scope: str = Field(default="global", min_length=1)
+    tenant_id: str | None = None
+    source: SocMemoryCandidateSource
+    evidence_refs: list[str] = Field(min_length=1)
+    validity: SocMemoryCandidateValidity
+    idempotency_key: str | None = None
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    facets: dict[str, list[str]] = Field(default_factory=dict)
+    decision_impact: SocMemoryDecisionImpact = SocMemoryDecisionImpact.NONE
+    review_owner: str | None = None
+    labels: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocMemoryCandidate(BaseModel):
+    """Reviewable candidate knowledge item that cannot affect runtime decisions."""
+
+    schema_version: str = "soc.memory_candidate.v1"
+    candidate_id: str = Field(default_factory=lambda: f"MC-{uuid4().hex[:12].upper()}")
+    candidate_type: SocMemoryCandidateType
+    target_artifact: SocMemoryTargetArtifact
+    summary: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    tenant_scope: str = Field(default="global", min_length=1)
+    tenant_id: str | None = None
+    status: SocMemoryCandidateStatus = SocMemoryCandidateStatus.PENDING_REVIEW
+    source: SocMemoryCandidateSource
+    evidence_refs: list[str] = Field(min_length=1)
+    validity: SocMemoryCandidateValidity
+    idempotency_key: str | None = None
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    facets: dict[str, list[str]] = Field(default_factory=dict)
+    decision_impact: SocMemoryDecisionImpact = SocMemoryDecisionImpact.NONE
+    runtime_decision_allowed: Literal[False] = False
+    review_required: Literal[True] = True
+    review_owner: str | None = None
+    reviewed_by: ActorContext | None = None
+    reviewed_at: datetime | None = None
+    review_reason: str | None = None
+    labels: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    proposed_by: ActorContext | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class SocAgentActionAdapterDescriptor(BaseModel):
     """Registered adapter capability for an approved SOC action."""
 
@@ -447,6 +622,55 @@ class SocEndpointProcessTreeRecord(BaseModel):
     network_connections: list[SocEndpointNetworkConnection] = Field(default_factory=list)
     source: str = "static"
     mocked: bool = False
+
+
+class SocHostEventContextRecord(BaseModel):
+    """Read-only host event context returned by a host/HIDS adapter."""
+
+    schema_version: str = "soc.host_event_context_record.v1"
+    host_key: str = Field(min_length=1)
+    hostname: str | None = None
+    primary_ip: str | None = None
+    time_window: str | None = None
+    recent_logins: list[dict[str, Any]] = Field(default_factory=list)
+    related_commands: list[dict[str, Any]] = Field(default_factory=list)
+    source_ips: list[str] = Field(default_factory=list)
+    related_events: list[dict[str, Any]] = Field(default_factory=list)
+    host_criticality: Literal["low", "medium", "high", "critical", "unknown"] = "unknown"
+    source: str = "static"
+    mocked: bool = False
+
+
+class SocThreatIntelReputationRecord(BaseModel):
+    """Read-only threat-intelligence reputation for a network entity."""
+
+    schema_version: str = "soc.threat_intel_reputation_record.v1"
+    ip: str = Field(min_length=1)
+    labels: list[str] = Field(default_factory=list)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    score: int | None = Field(default=None, ge=0, le=100)
+    last_seen: datetime | None = None
+    geo: str | None = None
+    source: str = "static"
+    expires_at: datetime | None = None
+    stale: bool = False
+    mocked: bool = False
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocSecurityTagRecord(BaseModel):
+    """Read-only authorization, maintenance, or security-testing tag evidence."""
+
+    schema_version: str = "soc.security_tag_record.v1"
+    entity_key: str = Field(min_length=1)
+    entity_type: str | None = None
+    labels: list[str] = Field(default_factory=list)
+    tag_types: list[str] = Field(default_factory=list)
+    is_valid: bool = False
+    valid_until: datetime | None = None
+    source: str = "static"
+    mocked: bool = False
+    attributes: dict[str, Any] = Field(default_factory=dict)
 
 
 class SocDaemonMessage(BaseModel):
@@ -977,6 +1201,51 @@ class SimilarAlertMatch(BaseModel):
     matched_reasons: list[str] = Field(default_factory=list)
 
 
+class CorrelationQuery(BaseModel):
+    """Request to correlate one alert summary with recent historical alerts."""
+
+    run_id: str
+    limit: int = Field(default=10, ge=1, le=100)
+    candidate_limit: int = Field(default=200, ge=1, le=1000)
+    evidence_limit_per_match: int = Field(default=5, ge=0, le=50)
+
+
+class CorrelationEvidenceRef(BaseModel):
+    """Reusable investigation evidence attached to a correlated historical alert."""
+
+    evidence_id: str
+    route: str
+    action: str
+    status: Literal["success", "denied", "failed"]
+    message: str
+    result_payload: dict[str, Any] = Field(default_factory=dict)
+    queue_id: str | None = None
+    run_id: str | None = None
+    alert_id: str | None = None
+    source_proposal_id: str | None = None
+    created_at: datetime
+
+
+class CorrelationMatch(BaseModel):
+    """One correlated historical alert plus evidence that can be reused in review."""
+
+    summary: AlertSummary
+    score: float = Field(ge=0.0)
+    matched_reasons: list[str] = Field(default_factory=list)
+    reusable_evidence: list[CorrelationEvidenceRef] = Field(default_factory=list)
+
+
+class CorrelationResult(BaseModel):
+    """Deterministic correlation result for CLI, TUI, Web, and review context."""
+
+    schema_version: str = "soc.correlation_result.v1"
+    query: CorrelationQuery
+    subject_summary: AlertSummary
+    matches: list[CorrelationMatch] = Field(default_factory=list)
+    reusable_evidence_count: int = 0
+    generated_at: datetime = Field(default_factory=utc_now)
+
+
 class ReviewQueueItem(BaseModel):
     """Human review queue item derived from an alert summary."""
 
@@ -1054,6 +1323,53 @@ class AnalysisRun(BaseModel):
     analysis: AnalysisResult | None = None
     decision: Decision | None = None
     corrections: list[CorrectionRecord] = Field(default_factory=list)
+
+
+class SocDomainTriageRequest(BaseModel):
+    """Input contract for one bounded SOC domain handler."""
+
+    schema_version: str = "soc.domain_triage_request.v1"
+    request_id: str = Field(default_factory=lambda: f"DTR-{uuid4().hex[:12].upper()}")
+    run: AnalysisRun
+    domain: SocDomainName | None = None
+    skill_context: SocSkillContext = Field(default_factory=SocSkillContext)
+    investigation_evidence: list[InvestigationEvidence] = Field(default_factory=list)
+    capability_card_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocDomainFinding(BaseModel):
+    """One bounded domain finding; it is not an operational verdict."""
+
+    schema_version: str = "soc.domain_finding.v1"
+    finding_id: str = Field(default_factory=lambda: f"DFN-{uuid4().hex[:12].upper()}")
+    domain: SocDomainName
+    title: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    severity: SocDomainFindingSeverity = SocDomainFindingSeverity.MEDIUM
+    disposition: SocDomainFindingDisposition = SocDomainFindingDisposition.NEEDS_MORE_EVIDENCE
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    evidence_refs: list[str] = Field(default_factory=list)
+    capability_card_refs: list[str] = Field(default_factory=list)
+    skill_names: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocDomainTriageResult(BaseModel):
+    """Output from one SOC domain handler."""
+
+    schema_version: str = "soc.domain_triage_result.v1"
+    request_id: str
+    run_id: str
+    alert_id: str
+    domain: SocDomainName
+    handler_id: str = Field(min_length=1)
+    findings: list[SocDomainFinding] = Field(default_factory=list)
+    evidence_ref_count: int = Field(default=0, ge=0)
+    created_at: datetime = Field(default_factory=utc_now)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class InvestigationContext(BaseModel):

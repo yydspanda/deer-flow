@@ -295,6 +295,8 @@ def _source_type(hit_log: dict[str, Any], raw_event: dict[str, Any]) -> AlertSou
     )
     if "edr" in text:
         return AlertSourceType.EDR
+    if "hids" in text:
+        return AlertSourceType.HIDS
     if "waf" in text:
         return AlertSourceType.WAF
     if "apt" in text or "skyeye" in text or "天眼" in text:

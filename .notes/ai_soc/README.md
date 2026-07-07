@@ -11,6 +11,8 @@
 | 理解当前告警从进入到复核的完整流转 | `alert-lifecycle-flow.md` | `soc-agent-solution.md` 的入口/服务章节 |
 | 输入平安 SOC 经验、工具、MCP、skill 想法 | `pingan-soc-capability-onboarding.md` | 需要落工程时再看工程契约 |
 | 拆分平安 prompt/经验/工具/记忆 | `pingan-knowledge-decomposition-plan.md` | `soc-memory-tracking-plan.md` 和相关 `skills/public/soc-*` |
+| 查看平安 APT/EDR/HIDS capability cards | `pingan-capability-cards.md` | `pingan-soc-capability-onboarding.md` 的 TODO |
+| 查看平安知识候选/记忆候选 | `pingan-knowledge-candidates.md` | `soc-memory-tracking-plan.md` 和后续 DB memory contract |
 | 设计外部系统状态/理由同步 | `external-disposition-sync-plan.md` | `soc-agent-solution.md` 和工程契约中的 external disposition 约束 |
 | 设计记忆和经验沉淀 | `soc-memory-tracking-plan.md` | external disposition / review / domain triage 的来源约束 |
 | 设计 Lead/Sub Agent、skill、MCP 开放配置 | `soc-agent-profile-governance.md` | 工程契约中的 Profile / Skill / MCP 章节 |
@@ -25,6 +27,8 @@
 | `alert-lifecycle-flow.md` | 当前 As-Is 生命周期和下一阶段 To-Be 研判链路 | 状态机、服务边界、下一阶段演示链路变化时更新 |
 | `pingan-soc-capability-onboarding.md` | 平安 SOC 经验输入模板 | 新增业务经验、tool/MCP/skill/SOP card 时更新 |
 | `pingan-knowledge-decomposition-plan.md` | 平安 APT/EDR/HIDS 文档到 skill、memory、MCP、policy、eval 的拆解矩阵 | 拆解规则、artifact 边界或第一批 capability cards 变化时更新 |
+| `pingan-capability-cards.md` | 平安 APT/EDR/HIDS capability card 台账 | 新增、拆分、实现、废弃平安 card 时更新 |
+| `pingan-knowledge-candidates.md` | 平安专属知识候选清单 | 新增、确认、拒绝、过期或迁移 PingAn memory/policy/adapter/eval candidate 时更新 |
 | `external-disposition-sync-plan.md` | 外部预警/工单/处置系统状态与理由同步方案 | 实现 external feedback contract 前后更新 |
 | `soc-memory-tracking-plan.md` | DB-first typed memory 与候选记忆方案 | memory contract、检索、确认、wiki/OKF projection 变化时更新 |
 | `soc-agent-profile-governance.md` | SOC Lead/Sub Agent、Skill、MCP 开放配置治理 | 配置开放、profile 生命周期、skill/MCP 治理变化时更新 |

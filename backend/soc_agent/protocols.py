@@ -24,6 +24,8 @@ from soc_agent.contracts import (
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
     SocEvent,
+    SocMemoryCandidate,
+    SocMemoryCandidateStatus,
 )
 
 
@@ -115,6 +117,23 @@ class InvestigationEvidenceRepository(Protocol):
         thread_id: str | None = None,
         limit: int = 20,
     ) -> list[InvestigationEvidence]: ...
+
+
+class MemoryCandidateRepository(Protocol):
+    """Persistence boundary for unconfirmed SOC memory candidates."""
+
+    def save_memory_candidate(self, candidate: SocMemoryCandidate) -> None: ...
+
+    def get_memory_candidate(self, candidate_id: str) -> SocMemoryCandidate | None: ...
+
+    def list_memory_candidates(
+        self,
+        *,
+        status: SocMemoryCandidateStatus | None = None,
+        tenant_scope: str | None = None,
+        tenant_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SocMemoryCandidate]: ...
 
 
 class SocAgentApprovalGrantRepository(Protocol):
