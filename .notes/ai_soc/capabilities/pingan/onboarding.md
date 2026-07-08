@@ -4,7 +4,7 @@
 >
 > 目的：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验，持续、可审计地嵌入 DeerFlow SOC Agent，而不是零散写进 prompt。
 >
-> 本文档是“经验输入 -> 产品能力 -> 工程落地”的工作台账模板。它不要求一次性收集完整信息；每次只要拿到一个可验证能力，就转成一个小切片实现和评测。平安 APT/EDR/HIDS 历史 prompt/经验文档的拆解规则见 `pingan-knowledge-decomposition-plan.md`。
+> 本文档是“经验输入 -> 产品能力 -> 工程落地”的工作台账模板。它不要求一次性收集完整信息；每次只要拿到一个可验证能力，就转成一个小切片实现和评测。平安 APT/EDR/HIDS 历史 prompt/经验文档的拆解规则见 `capabilities/pingan/knowledge-decomposition.md`。
 
 ## 1. 定位
 
@@ -124,7 +124,7 @@ field experience
 
 ### 5.1 执行原则
 
-- `pingan_docs/` 原文只作为 source evidence，不直接复制进 Lead Agent prompt、node prompt 或 public skill。
+- `.notes/ai_soc/capabilities/pingan/source-docs/` 原文只作为 source evidence，不直接复制进 Lead Agent prompt、node prompt 或 public skill。
 - 每条经验必须先落成 capability card，再决定进入 skill、tenant memory、adapter/normalizer、MCP/action、policy/config 或 eval fixture。
 - MCP/mock adapter 只能在 capability card 明确之后实现；mock 是验证链路，不是替代知识拆解。
 - Public skill 只能保留跨客户通用方法；平安字段名、内部环境、规则码、模板 ID、处置策略、误报白名单进入 PingAn tenant artifact。
@@ -134,20 +134,20 @@ field experience
 
 | Source ID | 文件 | 主要内容 | 处理方式 |
 |---|---|---|---|
-| `PA-APT-SRC` | `pingan_docs/apt-alert-assess-flow.md` | 天眼/APT 告警、攻击方向、威胁情报、封禁策略、字段可信度 | 拆成 APT direction、threat intel、security tag、response policy、eval cases |
-| `PA-EDR-SRC` | `pingan_docs/edr-alert-assess-flow.md` | EDR 进程树、命令行、账号/UM、资产归属、终端处置 | 拆成 endpoint triage、process tree evidence、asset locate、identity pattern、high-risk action |
-| `PA-HIDS-SRC` | `pingan_docs/hids-alert-assess-flow.md` | HIDS 主机事件、登录用户、进程链、后门/反弹 shell/web command、误报经验 | 拆成 host triage、host event context lookup、benign pattern、eval cases |
+| `PA-APT-SRC` | `.notes/ai_soc/capabilities/pingan/source-docs/apt-alert-assess-flow.md` | 天眼/APT 告警、攻击方向、威胁情报、封禁策略、字段可信度 | 拆成 APT direction、threat intel、security tag、response policy、eval cases |
+| `PA-EDR-SRC` | `.notes/ai_soc/capabilities/pingan/source-docs/edr-alert-assess-flow.md` | EDR 进程树、命令行、账号/UM、资产归属、终端处置 | 拆成 endpoint triage、process tree evidence、asset locate、identity pattern、high-risk action |
+| `PA-HIDS-SRC` | `.notes/ai_soc/capabilities/pingan/source-docs/hids-alert-assess-flow.md` | HIDS 主机事件、登录用户、进程链、后门/反弹 shell/web command、误报经验 | 拆成 host triage、host event context lookup、benign pattern、eval cases |
 
 ### 5.3 Execution Backlog
 
 | ID | 状态 | 任务 | 产物 | 验收标准 |
 |---|---|---|---|---|
-| `PA-00` | Done | 固定知识边界 | `pingan-knowledge-decomposition-plan.md` + 六个 `soc-*` skill 的 `Knowledge Boundary` | 通用 skill 不含平安内部字段、账号、部门、规则码、模板 ID、策略 ID |
-| `PA-01` | Done | 建立 PingAn capability card register | 已新增 `pingan-capability-cards.md`，先列 APT / EDR / HIDS P0/P1/P2 cards | 每张 P0 card 有 source、场景、输入、输出、artifact 分类、风险等级、失败模式、验收要求 |
-| `PA-02` | Done | 拆 `PA-APT-SRC` | 已在 `pingan-capability-cards.md` 展开 APT direction、APT scenario triage、threat intel、security tag、block IP boundary | APT 方向判断方法进入通用 skill/domain handler；平安字段和策略进入 adapter/policy/eval，不进 public skill |
-| `PA-03` | Done | 拆 `PA-EDR-SRC` | 已在 `pingan-capability-cards.md` 展开 EDR process tree、path/cmd、LoginData/System、privilege、UM/account、endpoint response boundary | 通用进程树研判进入 endpoint skill；平安路径/账号/部门/BU 进入 tenant memory/config |
-| `PA-04` | Done | 拆 `PA-HIDS-SRC` | 已在 `pingan-capability-cards.md` 展开 HIDS host event context、event_type triage、benign/authorized ops、host isolation boundary | HIDS 先复用 endpoint/host skill；必要时再新增 `soc-host-hids-triage` |
-| `PA-05` | Done | 建立 `PingAnKnowledgeCandidate` 清单 | 已新增 `pingan-knowledge-candidates.md`，每条候选标注 `target_artifact`、`tenant_scope`、`source_doc`、`source_section`、`status=pending_review` | 任意经验都能回答“放哪里、为什么、是否过期、由谁确认”；默认不能影响 runtime decision |
+| `PA-00` | Done | 固定知识边界 | `capabilities/pingan/knowledge-decomposition.md` + 六个 `soc-*` skill 的 `Knowledge Boundary` | 通用 skill 不含平安内部字段、账号、部门、规则码、模板 ID、策略 ID |
+| `PA-01` | Done | 建立 PingAn capability card register | 已新增 `capabilities/pingan/capability-cards.md`，先列 APT / EDR / HIDS P0/P1/P2 cards | 每张 P0 card 有 source、场景、输入、输出、artifact 分类、风险等级、失败模式、验收要求 |
+| `PA-02` | Done | 拆 `PA-APT-SRC` | 已在 `capabilities/pingan/capability-cards.md` 展开 APT direction、APT scenario triage、threat intel、security tag、block IP boundary | APT 方向判断方法进入通用 skill/domain handler；平安字段和策略进入 adapter/policy/eval，不进 public skill |
+| `PA-03` | Done | 拆 `PA-EDR-SRC` | 已在 `capabilities/pingan/capability-cards.md` 展开 EDR process tree、path/cmd、LoginData/System、privilege、UM/account、endpoint response boundary | 通用进程树研判进入 endpoint skill；平安路径/账号/部门/BU 进入 tenant memory/config |
+| `PA-04` | Done | 拆 `PA-HIDS-SRC` | 已在 `capabilities/pingan/capability-cards.md` 展开 HIDS host event context、event_type triage、benign/authorized ops、host isolation boundary | HIDS 先复用 endpoint/host skill；必要时再新增 `soc-host-hids-triage` |
+| `PA-05` | Done | 建立 `PingAnKnowledgeCandidate` 清单 | 已新增 `capabilities/pingan/knowledge-candidates.md`，每条候选标注 `target_artifact`、`tenant_scope`、`source_doc`、`source_section`、`status=pending_review` | 任意经验都能回答“放哪里、为什么、是否过期、由谁确认”；默认不能影响 runtime decision |
 | `PA-06` | Done | 对 public skills 做最小增量修订 | 已更新 `skills/public/soc-*`，只补通用 APT/EDR/HIDS/WAF/asset 研判方法，不补平安事实 | `rg` 检查 public skills 不出现平安内部字段/规则/模板/账号等敏感或专属内容 |
 | `PA-07` | Done | 实现 P0 read-only mock action adapters | 已实现 `host.event_context.lookup`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup` mock adapter | 通过 `SocActionAdapterRegistry` 调用；成功结果写 `InvestigationEvidence`；不改 verdict/memory |
 | `PA-08` | Done | 建 eval fixtures | 已新增 `backend/samples/eval/pingan/` 三条 fixture、`backend/samples/alerts/pingan_legacy_hids.json` 和 `soc eval pingan` | APT / EDR / HIDS 各 1 条脱敏 fixture；覆盖字段冲突、查不到外部事实、误报/授权标签；成功结果写 `InvestigationEvidence` |
@@ -175,7 +175,7 @@ field experience
 
 PingAn 方案算“做好”不是指所有 mock 都写完，而是满足这些条件：
 
-- 三份 `pingan_docs` 都已拆成 capability cards，并保留 source trace。
+- 三份 `source-docs` 都已拆成 capability cards，并保留 source trace。
 - 每张 card 都有唯一 ID、目标 artifact、风险等级、验收样例和不该发生的行为。
 - Public skills 只保存通用方法；PingAn 专属知识进入 tenant memory/config/adapter/eval。
 - P0 read-only action 都能通过统一 adapter registry 返回 mock evidence。

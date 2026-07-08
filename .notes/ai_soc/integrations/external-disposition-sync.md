@@ -1,4 +1,4 @@
-# External Disposition Sync Plan
+# External Disposition Sync
 
 > Updated: 2026-07-07
 >

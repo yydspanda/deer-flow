@@ -148,6 +148,7 @@ class SocMemoryCandidateSourceType(StrEnum):
     DOMAIN_FINDING = "domain_finding"
     EXTERNAL_DISPOSITION = "external_disposition"
     MANUAL_NOTE = "manual_note"
+    REVIEW_NOTE = "review_note"
     EVAL_FIXTURE = "eval_fixture"
 
 
@@ -1561,6 +1562,25 @@ class ReviewQueueItem(BaseModel):
 class ReviewQueueCloseCommand(BaseModel):
     queue_id: str
     reason: str = Field(min_length=1)
+
+
+class ReviewNoteCommand(BaseModel):
+    """Analyst note captured from a review queue item as candidate memory."""
+
+    queue_id: str = Field(min_length=1)
+    note: str = Field(min_length=1)
+    scenario_key: str | None = None
+    domain: SocDomainName | None = None
+    finding_id: str | None = None
+    confidence: float = Field(default=0.55, ge=0.0, le=1.0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReviewNoteResult(BaseModel):
+    """Result of recording a review note through the memory-candidate boundary."""
+
+    queue_item: ReviewQueueItem
+    memory_candidate: SocMemoryCandidate | None = None
 
 
 class PipelineStepTrace(BaseModel):

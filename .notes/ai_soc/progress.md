@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口完成，Phase 2 correlation / domain triage 起步 |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence / external disposition PG + ReviewQueue visibility / memory candidate PG + API + ReviewQueue visibility / memory candidate review workflow / confirmed memory retrieval policy MVP / Web/TUI visible investigation MVP / persistent demo script MVP 已固定；memory candidate source bridge 已接 correction、domain finding 和 analyst feedback；generic scenario recognition deterministic MVP 已接 evidence profile/current conclusion，支持 `vendor.unmapped` 未映射厂商场景候选 finding，并暴露 PingAn + vendor-neutral taxonomy/eval coverage/replay diff baseline；真实 dev/staging MCP 等待 endpoint/凭证 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence / external disposition PG + ReviewQueue visibility / memory candidate PG + API + ReviewQueue visibility / memory candidate review workflow / confirmed memory retrieval policy MVP / Web/TUI visible investigation MVP / persistent demo script MVP / single-alert demo MVP 已固定；memory candidate source bridge 已接 correction、domain finding、analyst feedback 和 review note；generic scenario recognition deterministic MVP 已接 evidence profile/current conclusion，支持 `vendor.unmapped` 未映射厂商场景候选 finding，并暴露 PingAn + vendor-neutral taxonomy/eval coverage/replay diff baseline；真实 dev/staging MCP 等待 endpoint/凭证 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 继续 scenario recognition / memory 闭环：接 Kafka/Lead Agent/review note 等 memory 来源，或开始 bounded LLM scenario recognizer / custom taxonomy 设计。 |
+| 当前下一刀 | 继续 Alpha 演示链路：把 single-alert demo 的同一套 review summary 接入 Web/TUI 操作面，或推进 Lead Agent/Kafka 结论生成 pending memory candidate；bounded LLM scenario recognizer / custom taxonomy 设计仍排在后面。 |
 
 ## 当前待办列表
 
@@ -37,11 +37,11 @@
 | 顺序 | 待办 | 状态 | 做什么 | 验收标准 |
 |---|---|---|---|---|
 | 0 | PingAn knowledge decomposition | Partial / credential-gated | 已完成 `PA-01..PA-11`；`PA-12` 等真实 PingAn MCP/API endpoint/凭证 | 通用 skill 不含平安内部知识；每条平安经验都有 target artifact、tenant scope、来源和验收方式；PA-12 不能用 mock 冒充完成 |
-| 0.1 | `PA-01` PingAn capability card register | Done | 已新增 `.notes/ai_soc/pingan-capability-cards.md`，从 APT/EDR/HIDS 三份源文档抽出 P0/P1/P2 cards | P0 card 已明确 source、场景、输入、输出、落点、风险等级、失败模式和验收要求；mock MCP 必须等 card 明确后再做 |
+| 0.1 | `PA-01` PingAn capability card register | Done | 已新增 `.notes/ai_soc/capabilities/pingan/capability-cards.md`，从 APT/EDR/HIDS 三份源文档抽出 P0/P1/P2 cards | P0 card 已明确 source、场景、输入、输出、落点、风险等级、失败模式和验收要求；mock MCP 必须等 card 明确后再做 |
 | 0.2 | `PA-02` APT source decomposition | Done | 已扩展 `PA-APT-001..005`：攻击方向、场景化研判、威胁情报、security tag、IP 封堵高风险边界；拆出 skill/domain handler/eval/memory/action 边界 | APT 通用方法进 public skill/domain handler；平安字段、URI 例外、内部环境、策略和阈值只进 tenant artifact |
 | 0.3 | `PA-03` EDR source decomposition | Done | 已扩展 EDR cards：进程树、路径/命令行、LoginData/System、提权、UM/账号、终端处置候选 | 通用 endpoint 方法进 skill/domain handler；平安路径、账号、部门、BU 和封禁/隔离策略只进 tenant artifact 或 approval-gated action |
 | 0.4 | `PA-04` HIDS source decomposition | Done | 已扩展 HIDS cards：主机事件上下文、event_type 场景化研判、误报/授权运维模式、服务器隔离候选 | 通用 host/endpoint 方法进 skill/domain handler；平安组名、账号、路径、机房、域名、隔离模板只进 tenant artifact 或 approval-gated action |
-| 0.5 | `PA-05` PingAnKnowledgeCandidate register | Done | 已新增 `.notes/ai_soc/pingan-knowledge-candidates.md`，从 APT/EDR/HIDS expanded cards 抽候选知识清单，标注 target_artifact、tenant_scope、source_doc、source_section、status、validity、review owner | 每条平安专属经验都能回答“放哪里、为什么、是否过期、由谁确认”，且默认 pending_review，不直接影响 runtime decision |
+| 0.5 | `PA-05` PingAnKnowledgeCandidate register | Done | 已新增 `.notes/ai_soc/capabilities/pingan/knowledge-candidates.md`，从 APT/EDR/HIDS expanded cards 抽候选知识清单，标注 target_artifact、tenant_scope、source_doc、source_section、status、validity、review owner | 每条平安专属经验都能回答“放哪里、为什么、是否过期、由谁确认”，且默认 pending_review，不直接影响 runtime decision |
 | 0.6 | `PA-06` public skills minimal revisions | Done | 已对 `skills/public/soc-*` 做最小增量修订，只吸收跨客户通用的 APT/EDR/HIDS/WAF/asset 研判方法 | `rg` 检查 public skills 不出现平安字段、内部环境、账号/组织、白名单、模板 ID、策略 ID 或处置阈值 |
 | 0.7 | `PA-07` P0 read-only mock action adapters | Done | 已实现 `host.event_context.lookup`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup` mock adapters，并接入 read-only policy/default registry | 通过 `SocActionAdapterRegistry` 调用；成功结果写 `InvestigationEvidence`；不改 verdict/memory |
 | 0.8 | `PA-08` PingAn eval fixtures | Done | 已新增 `backend/samples/eval/pingan/` 三条 fixture、`backend/samples/alerts/pingan_legacy_hids.json`、`backend/soc_agent/eval/pingan.py` 和 `soc eval pingan` | APT/EDR/HIDS 各 1 条脱敏 fixture；覆盖字段冲突、查不到外部事实、误报/授权标签；read-only success 写 `InvestigationEvidence` |
@@ -51,7 +51,7 @@
 | 0.12 | `PA-12` real PingAn MCP/API replacement | Waiting | 等真实 PingAn dev/staging MCP/API endpoint/凭证后替换 mock provider，保存 smoke/eval report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险；不能用本地 mock 假装完成 |
 | 1 | Correlation Service MVP | Done | 已新增 `SocCorrelationService`、`CorrelationQuery`、`CorrelationResult`、CLI `soc correlate`；基于 summary/evidence 输出相似告警、匹配原因和可复用证据 | 不调用 LLM、不依赖真实 MCP、不改 DeerFlow core；demo alert 可看到结构化 correlation result |
 | 2 | External Disposition Sync Contract | Done | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol、in-memory repository、PostgreSQL persistence、ReviewQueue context API/Web/TUI/Lead Agent visibility；已接 high-trust mapped review/correction 和 pending memory candidate | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
-| 3 | Memory Tracking Contract | Partial | DB-first candidate persistence、review workflow、confirmed-memory boundary 和 retrieval policy MVP 已完成；`SocMemoryCandidateSourceBridge` 已接 correction 和 domain finding；下一步是 Kafka/Lead Agent/review note 等来源、prompt injection/replay diff 的受控设计 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
+| 3 | Memory Tracking Contract | Partial | DB-first candidate persistence、review workflow、confirmed-memory boundary 和 retrieval policy MVP 已完成；`SocMemoryCandidateSourceBridge` 已接 correction、domain finding、analyst feedback 和 ReviewQueue review note；下一步是 Kafka/Lead Agent 结论来源、prompt injection/replay diff 的受控设计 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
 | 3.1 | Memory candidate DB/API/ReviewQueue visibility | Done | 已新增 `soc_memory_candidates`、repository、CLI `soc memory list/get`、Gateway `/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded visibility | candidate 仍为 `pending_review` 且 `runtime_decision_allowed=false`；不注入 prompt，不影响 verdict |
 | 3.2 | Memory candidate review workflow / confirmed-memory boundary | Done | 已新增 `SocMemoryCandidateReviewCommand/Result`、`SocMemoryRecord`、`soc_memory_records`、`soc memory review`、`soc memory records list/get`、Gateway review/records API 和 ReviewQueue Web 操作入口 | confirm/reject/deprecate/expire 只能走 `SocMemoryService`；`confirm` 生成 `SocMemoryRecord(retrieval_enabled=false)`；不注入 prompt，不影响 verdict |
 | 3.3 | Confirmed memory retrieval policy / unified visibility MVP | Done | 已新增 `SocMemoryQuery`、`SocMemoryMatch`、`SocMemoryRetrievalResult`、`SocMemoryService.find_relevant_records()`、CLI `soc memory search`、Gateway `/api/soc/memory/search`、`InvestigationContext.relevant_memories` 和 Web/TUI/Lead Agent 可见化 | 只返回 `retrieval_enabled=true`、confirmed、未过期 record；返回 score/match reason/token estimate/hash/version；不注入 prompt，不影响 verdict |
@@ -59,8 +59,8 @@
 | 5 | Generic security scenario recognition | Partial | deterministic MVP 已完成：第一批场景包括反弹 shell、webshell、横向移动、命令/代码执行、恶意外联、提权、凭证滥用；未命中内部 taxonomy 但存在上游场景提示时输出 `vendor.unmapped` 候选 finding；已暴露 `SCENARIO_TAXONOMY_VERSION`/keys/snapshot；PingAn domain eval 和 vendor-neutral `soc eval scenarios` 都输出 covered/missing/unmapped 计数，`--baseline-json` 可生成 replay diff | 任何来源的告警都通过统一 `SocDomainTriageResult/Finding` 输出场景化 finding；Evidence Fusion First；未映射厂商场景不阻断研判、不改 verdict、不写 confirmed memory；eval 能作为 replay diff 基线；LLM 后续只能在 bounded context 中识别场景，不能直接改 verdict 或写 confirmed memory |
 | 6 | Main SOC Agent Orchestrator MVP | Done for PA-11 / correlation merge pending | 已串起 analyze、skill context、read-only action evidence、domain triage、review summary，输出 `UnifiedInvestigationReport`；correlation 尚未并入 report | APT/EDR/HIDS demo 能看到主控用了哪些 skill、route、evidence、domain finding 和 review context |
 | 7 | Web/TUI visible investigation | Done for MVP | 已新增 `UnifiedInvestigationView`、`InvestigationTimelineItem`，`InvestigationContext` 聚合 correlation result、domain triage results、evidence timeline、external feedback、memory candidates 和 relevant memories；Web/TUI/Lead Agent bounded artifact 可见 | 分析师能区分 runtime decision、domain findings、read-only evidence、外部人工反馈、人工 correction、retrieval-enabled memory；视图只读，不改 verdict |
-| 8 | Demo / Eval Script | Done for APT/EDR/HIDS MVP | 已新增 `soc demo run [all|apt|edr|hids]`，用 PingAn 脱敏样例持久化 ReviewQueue item、read-only evidence、domain finding、confirmed/retrieval memory 和 unified investigation view | 一条命令可稳定演示 runtime + domain triage + evidence + review 状态，并能直接用 `soc review context QUEUE_ID --pretty` 或 Web/TUI 打开统一调查视图；本 MVP 为保持 open review 可见性，暂不种 external disposition |
-| 9 | Memory candidate source integration | Partial | 已新增 `SocMemoryCandidateSourceBridge`：correction 会自动生成 pending candidate 并回写 `memory_candidate_id`，domain finding 已有幂等 bridge/factory，analyst feedback 可进入 candidate content/facets/metadata；Kafka daemon、Lead Agent proposal、review note 等来源待接 | 每类来源都有 source/evidence/validity/idempotency/facet；候选默认 pending review；confirmed/retrieval gate 仍由 `SocMemoryService` 控制 |
+| 8 | Demo / Eval Script | Done for APT/EDR/HIDS + single-alert MVP | 已新增 `soc demo run [all|apt|edr|hids]` 和 `soc demo alert PATH|--json`；前者持久化 PingAn APT/EDR/HIDS investigation chain，后者跑一条任意 alert 并输出 compact review summary | 一条命令可稳定演示 runtime + domain triage + evidence/memory/review 状态，并能直接用 `soc review context QUEUE_ID --summary --pretty` 或 Web/TUI 打开统一调查视图；本 MVP 为保持 open review 可见性，暂不种 external disposition |
+| 9 | Memory candidate source integration | Partial | 已新增 `SocMemoryCandidateSourceBridge`：correction 会自动生成 pending candidate 并回写 `memory_candidate_id`，domain finding 已有幂等 bridge/factory，analyst feedback 可进入 candidate content/facets/metadata，`SocReviewService.add_note()` / `soc review note` 可把 ReviewQueue review note 生成 pending candidate；Kafka daemon、Lead Agent proposal 等来源待接 | 每类来源都有 source/evidence/validity/idempotency/facet；候选默认 pending review；confirmed/retrieval gate 仍由 `SocMemoryService` 控制 |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Deferred | Kafka/review/approval/runtime 数据流稳定后，再做指标和运行态势面板 | 不阻塞当前 SOC Agent Alpha |
@@ -163,7 +163,7 @@
 | 91 | Read-only action result evidence bridge | Done | 新增 `InvestigationEvidence` contract、repository protocol、in-memory store；read-only action success 后可记录 evidence，ReviewQueue context / Lead Agent artifact / Web/TUI 可展示 |
 | 92 | InvestigationEvidence PostgreSQL persistence / Gateway wiring | Done | 新增 `soc_investigation_evidence` migration、ORM row、SQLAlchemy repository 方法；Gateway/CLI ReviewService 和 Lead Agent read-only dispatcher 使用同一 repository 共享 evidence |
 | 93 | Lead Agent evidence reuse + endpoint process-tree mock adapter | Done | Lead Agent bounded context 明确复用既有 action_evidence；新增 `endpoint.process_tree.lookup` read-only in-memory/mock adapter、policy、proposal 示例和测试 |
-| 94 | PingAn SOC capability onboarding | Done | 新增 `.notes/ai_soc/pingan-soc-capability-onboarding.md`，固定经验 -> capability card -> skill/MCP/normalizer/domain/eval/memory 的转化流程 |
+| 94 | PingAn SOC capability onboarding | Done | 新增 `.notes/ai_soc/capabilities/pingan/onboarding.md`，固定经验 -> capability card -> skill/MCP/normalizer/domain/eval/memory 的转化流程 |
 | 95 | Correlation Service MVP | Done | 新增结构化 correlation contract/service/CLI；基于 summary + evidence 找相似告警、匹配原因和可复用证据；不调用 LLM、不依赖真实 MCP、不改 DeerFlow core |
 | 96 | External Disposition Sync Contract MVP | Done | 固定外部预警/工单/处置系统状态与理由同步协议；新增 mapper/service/repository MVP，Zeus 只是 mock fixture |
 | 100 | External Disposition Review/Correction Integration | Done | 高可信 mapped external disposition 在唯一定位本地 target 后复用 `SocReviewService.correct()`，同步 operational correction 并关闭 review queue；低可信/未知/无法定位不改判 |
@@ -172,6 +172,67 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-08 — SOC solution review baseline rewrite
+
+- 背景：
+  - 用户要求 `.notes/ai_soc/soc-agent-solution.md` 成为后续 review 的主方案文档，需要中英文术语对照、结构化流程图、模块说明和清晰边界。
+  - 旧文档混合了历史计划、阶段流水账、路线争论和已完成状态，内容很全但不适合作为评审入口。
+- 变更：
+  - 重写 `.notes/ai_soc/soc-agent-solution.md`，定位为 `Active review baseline`。
+  - 新增中英文术语对照：Alert、Evidence Layer、Field Trust、Review Queue、SOC Lead Agent、Skill、MCP、Approval、Memory Candidate 等。
+  - 新增 Mermaid 架构图、端到端流程图、runtime pipeline、Lead Agent/Skill/MCP/Approval、memory lifecycle、PingAn capability onboarding 等 review 图。
+  - 明确模块边界：entry layer、core service、runtime、normalizer/evidence、review/approval/external feedback、memory、PingAn capability layer。
+  - 把进度流水账职责移回本文件，把详细生命周期职责指向 `.notes/ai_soc/alert-lifecycle-flow.md`。
+- 验证：
+  - `rg` 检查主文档和索引文档不再引用旧的 `.notes/ai_soc/*` 平铺文档路径。
+  - `git diff -- .notes/ai_soc/soc-agent-solution.md` 人工检查主文档从 2517 行混合草案收敛为 750 行 review baseline。
+- 下一步：
+  - 后续 review 以 `.notes/ai_soc/soc-agent-solution.md` + `.notes/reference-index/soc-agent-engineering-contracts.md` 为主，具体进度继续写入本台账。
+
+### 2026-07-08 — AI SOC notes structure cleanup
+
+- 背景：
+  - 用户要求整理 `.notes/ai_soc`，避免主线目录继续堆放平行方案、专项计划和源资料。
+- 变更：
+  - 保留根目录主入口：`README.md`、`soc-agent-solution.md`、`progress.md`、`alert-lifecycle-flow.md`。
+  - 平安专项移动到 `capabilities/pingan/`：
+    - `onboarding.md`
+    - `knowledge-decomposition.md`
+    - `capability-cards.md`
+    - `knowledge-candidates.md`
+    - `source-docs/`
+  - 外部系统与 mock/real 台账移动到 `integrations/`。
+  - 记忆方案移动到 `memory/memory-tracking.md`。
+  - Agent/Skill/MCP 治理移动到 `governance/agent-profile-governance.md`。
+  - 重写 `.notes/ai_soc/README.md`，新增目录地图和使用路径。
+  - 更新 `.notes/README.md`、`soc-agent-solution.md`、工程契约和进度台账里的旧路径引用。
+- 验证：
+  - `rg` 检查旧路径/旧文件名无残留。
+  - `git diff --check -- .notes/ai_soc .notes/README.md .notes/reference-index/soc-agent-engineering-contracts.md`
+- 下一步：
+  - 后续新增 SOC 文档优先放入现有主题目录；只有真正的主入口才留在 `.notes/ai_soc/` 根目录。
+
+### 2026-07-08 — Review note memory source and single-alert demo
+
+- 背景：
+  - 用户要求把剩余三刀做完：ReviewQueue review note -> pending memory candidate、单告警 demo/runbook 命令、review context 展示优化。
+- 变更：
+  - 新增 `ReviewNoteCommand` / `ReviewNoteResult`，并新增 `SocMemoryCandidateSourceType.REVIEW_NOTE`。
+  - `SocMemoryCandidateSourceBridge` 新增 review note factory/bridge，生成 `pending_review` candidate，带 queue/run/alert/scenario/domain/finding facets、evidence refs 和幂等 key。
+  - `SocReviewService.add_note()` 成为 ReviewQueue note -> memory candidate 的 service 边界；入口层不直接写 memory repository。
+  - CLI 新增 `soc review note QUEUE_ID --note ...`，并为 `soc review context` 增加 `--summary` compact view。
+  - CLI 新增 `soc demo alert PATH|--json`，可持久化一条 alert，输出 run/queue/review summary/domain findings/memory candidates/next commands；可选 `--review-note` 验证 note candidate 链路。
+- 验证：
+  - `env UV_CACHE_DIR=/tmp/deer-flow-uv-cache uv run pytest backend/tests/test_soc_agent_service.py -q`
+  - `env UV_CACHE_DIR=/tmp/deer-flow-uv-cache SOC_DATABASE_URL=sqlite:////tmp/soc-demo-alert.db uv run python -m soc_agent.cli demo alert samples/alerts/pingan_legacy_apt.json --init-db --pretty`
+  - `env UV_CACHE_DIR=/tmp/deer-flow-uv-cache SOC_DATABASE_URL=sqlite:////tmp/soc-demo-alert-note.db uv run python -m soc_agent.cli demo alert samples/alerts/pingan_legacy_apt.json --init-db --review-note 'Analyst says raw message direction wins over derived fields.' --scenario-key network.malicious_outbound --domain apt --pretty`
+- 结果：
+  - 服务测试 `76 passed`。
+  - 单告警 demo 能输出 ReviewQueue summary、3 个 domain/scenario findings、evidence gaps 和 next commands。
+  - 带 review note 的 demo 生成 `source_type=review_note` 的 pending memory candidate，且 `runtime_decision_allowed=false`。
+- 下一步：
+  - 继续把这条 single-alert demo/review summary 链路映射到 Web/TUI 操作面，或接 Lead Agent/Kafka 结论来源到同一 `SocMemoryCandidateSourceBridge`。
 
 ### 2026-07-08 — Vendor-neutral scenario eval and replay diff
 
@@ -355,7 +416,7 @@
   - 文档同步：
     - `.notes/ai_soc/soc-agent-solution.md`
     - `.notes/ai_soc/alert-lifecycle-flow.md`
-    - `.notes/ai_soc/soc-memory-tracking-plan.md`
+    - `.notes/ai_soc/memory/memory-tracking.md`
     - `.notes/reference-index/soc-agent-engineering-contracts.md`
 - 验证：
   - `PYTHONPATH=backend backend/.venv/bin/python -m ruff check ...`
@@ -390,7 +451,7 @@
   - 文档同步：
     - `.notes/ai_soc/soc-agent-solution.md`
     - `.notes/ai_soc/alert-lifecycle-flow.md`
-    - `.notes/ai_soc/soc-memory-tracking-plan.md`
+    - `.notes/ai_soc/memory/memory-tracking.md`
     - `.notes/reference-index/soc-agent-engineering-contracts.md`
 - 验证：
   - `PYTHONPATH=backend backend/.venv/bin/python -m ruff check ...`
@@ -454,7 +515,7 @@
     - `soc review context/tui` 和 `soc chat tui --lead-agent` 使用同一 repository 读取外部反馈。
     - ReviewQueue Web 页面新增“外部处置反馈”区块。
   - 更新文档：
-    - `.notes/ai_soc/external-disposition-sync-plan.md`
+    - `.notes/ai_soc/integrations/external-disposition-sync.md`
     - `.notes/ai_soc/alert-lifecycle-flow.md`
     - `.notes/reference-index/soc-agent-engineering-contracts.md`
 - 验证：
@@ -486,7 +547,7 @@
     - 覆盖 duplicate event 不重复生成 candidate。
     - 覆盖 low-trust mapped event 只生成 candidate、不改判。
     - 覆盖 unknown/unmatched event 不生成 candidate。
-  - 更新 `.notes/ai_soc/external-disposition-sync-plan.md`、`.notes/ai_soc/soc-agent-solution.md`、`.notes/ai_soc/alert-lifecycle-flow.md`、`.notes/ai_soc/mock-and-real-integration-register.md` 和工程契约：
+  - 更新 `.notes/ai_soc/integrations/external-disposition-sync.md`、`.notes/ai_soc/soc-agent-solution.md`、`.notes/ai_soc/alert-lifecycle-flow.md`、`.notes/ai_soc/integrations/mock-and-real-register.md` 和工程契约：
     - 固定 external reason 的安全边界：只能 pending review，不进入 confirmed memory。
 - 验证：
   - `PYTHONPATH=backend backend/.venv/bin/python -m ruff format backend/soc_agent/core/external_disposition.py backend/tests/test_soc_external_disposition.py`
@@ -513,7 +574,7 @@
     - 覆盖 high-trust mapped event 会写 correction、关闭 review、写 correction/external 两类 audit。
     - 覆盖 duplicate event 不重复 correction。
     - 覆盖 low-trust mapped event 不改判、不关闭 review。
-  - 更新 `.notes/ai_soc/external-disposition-sync-plan.md`：
+  - 更新 `.notes/ai_soc/integrations/external-disposition-sync.md`：
     - 切片 4 Review/Correction integration 标记 Done；下一步切到 memory candidate integration。
 - 验证：
   - `PYTHONPATH=backend backend/.venv/bin/python -m ruff format backend/soc_agent/core/external_disposition.py backend/tests/test_soc_external_disposition.py backend/soc_agent/contracts/schemas.py`
@@ -549,7 +610,7 @@
     - 脱敏 Zeus 状态/理由 mock payload，用 adapter config 映射，不在 core 写死 Zeus。
   - 新增 `backend/tests/test_soc_external_disposition.py`：
     - 覆盖 mapper、状态映射、幂等、unmatched、audit 和 service repository 边界。
-  - 更新 `.notes/ai_soc/external-disposition-sync-plan.md`：
+  - 更新 `.notes/ai_soc/integrations/external-disposition-sync.md`：
     - 标记切片 1-3 Done，下一步切到 Review/Correction integration。
 - 验证：
   - `PYTHONPATH=backend backend/.venv/bin/python -m ruff format backend/soc_agent/contracts/schemas.py backend/soc_agent/contracts/__init__.py backend/soc_agent/protocols.py backend/soc_agent/core/__init__.py backend/soc_agent/core/external_disposition.py backend/soc_agent/external_disposition/__init__.py backend/soc_agent/external_disposition/mapping.py backend/soc_agent/external_disposition/repository.py backend/tests/test_soc_external_disposition.py`
@@ -578,7 +639,7 @@
     - 新增 CLI：`soc eval pingan-main [path] --pretty`。
   - 更新 `backend/tests/test_soc_pingan_capability_eval.py`：
     - 覆盖 APT/EDR/HIDS report schema、route/evidence/finding/review context、read-only metadata 和 CLI 输出。
-  - 更新 `.notes/ai_soc/pingan-soc-capability-onboarding.md`、`.notes/ai_soc/soc-agent-solution.md`、`.notes/ai_soc/alert-lifecycle-flow.md`、`.notes/reference-index/soc-agent-engineering-contracts.md`：
+  - 更新 `.notes/ai_soc/capabilities/pingan/onboarding.md`、`.notes/ai_soc/soc-agent-solution.md`、`.notes/ai_soc/alert-lifecycle-flow.md`、`.notes/reference-index/soc-agent-engineering-contracts.md`：
     - 固定 PA-11 已完成、PA-12 等真实 endpoint/凭证，不用 mock 假装完成真实替换。
 - 验证：
   - `PYTHONPATH=backend backend/.venv/bin/python -m ruff format backend/soc_agent/contracts/schemas.py backend/soc_agent/contracts/__init__.py backend/soc_agent/core/__init__.py backend/soc_agent/core/orchestrator.py backend/soc_agent/eval/__init__.py backend/soc_agent/eval/pingan.py backend/soc_agent/cli.py backend/tests/test_soc_pingan_capability_eval.py`
@@ -679,7 +740,7 @@
     - PingAn HIDS envelope 识别为 canonical `source_type=hids`。
   - 新增 `backend/tests/test_soc_pingan_capability_eval.py`：
     - 覆盖默认 fixtures、report 聚合和 CLI 输出。
-  - 更新 `.notes/ai_soc/soc-agent-solution.md`、`.notes/ai_soc/pingan-soc-capability-onboarding.md`、`.notes/ai_soc/pingan-capability-cards.md`、`.notes/ai_soc/alert-lifecycle-flow.md` 和本进度台账：
+  - 更新 `.notes/ai_soc/soc-agent-solution.md`、`.notes/ai_soc/capabilities/pingan/onboarding.md`、`.notes/ai_soc/capabilities/pingan/capability-cards.md`、`.notes/ai_soc/alert-lifecycle-flow.md` 和本进度台账：
     - `PA-08` 标记 Done。
     - 下一刀改为 `PA-09` memory candidate 入口。
 - 验证：
@@ -694,7 +755,7 @@
 ### 2026-07-07 — PA-07 P0 read-only mock action adapters
 
 - 背景：
-  - 用户指出应先按 `pingan-soc-capability-onboarding.md` 做好 PingAn 专项，而不是继续切到 External Disposition。
+  - 用户指出应先按 `capabilities/pingan/onboarding.md` 做好 PingAn 专项，而不是继续切到 External Disposition。
   - `PA-07` 的目标是补齐 P0 read-only mock adapters：`host.event_context.lookup`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup`。
 - 变更：
   - 更新 `backend/soc_agent/contracts/schemas.py` 和 `backend/soc_agent/contracts/__init__.py`：
@@ -714,7 +775,7 @@
   - 更新测试：
     - `backend/tests/test_soc_action_adapters.py` 覆盖三条 mock adapters 的 descriptor 和 execute。
     - `backend/tests/test_soc_agent_service.py` 覆盖新 read-only policy 和 `security_tag.lookup` 成功写入 `InvestigationEvidence`。
-  - 更新 `.notes/ai_soc/soc-agent-solution.md`、`.notes/ai_soc/pingan-soc-capability-onboarding.md`、`.notes/ai_soc/pingan-capability-cards.md`、`.notes/ai_soc/alert-lifecycle-flow.md` 和本进度台账：
+  - 更新 `.notes/ai_soc/soc-agent-solution.md`、`.notes/ai_soc/capabilities/pingan/onboarding.md`、`.notes/ai_soc/capabilities/pingan/capability-cards.md`、`.notes/ai_soc/alert-lifecycle-flow.md` 和本进度台账：
     - `PA-07` 标记 Done。
     - 下一刀改为 `PA-08` eval fixtures。
 - 验证：
@@ -774,7 +835,7 @@
     - 增加 direction method 和 conflict handling。
   - 更新 `skills/public/soc-asset-extraction/SKILL.md`：
     - 把 `UM`、`BU/company code` 等租户/组织语义收敛为 tenant-specific identity、business ownership、organization code。
-  - 更新 `.notes/ai_soc/soc-agent-solution.md`、`.notes/ai_soc/pingan-soc-capability-onboarding.md`、`.notes/ai_soc/pingan-capability-cards.md` 和本进度台账：
+  - 更新 `.notes/ai_soc/soc-agent-solution.md`、`.notes/ai_soc/capabilities/pingan/onboarding.md`、`.notes/ai_soc/capabilities/pingan/capability-cards.md` 和本进度台账：
     - `PA-06` 标记 Done。
     - 整体下一刀回到 `Correlation Service MVP`。
 - 验证：
@@ -789,17 +850,17 @@
   - APT/EDR/HIDS capability cards 已经展开，但其中仍包含大量平安专属经验、误报模式、身份模式、处置策略候选和环境事实。
   - 这些内容不能直接进入 public skill、runtime memory 或 Lead Agent prompt，否则会污染通用产品能力。
 - 变更：
-  - 新增 `.notes/ai_soc/pingan-knowledge-candidates.md`：
+  - 新增 `.notes/ai_soc/capabilities/pingan/knowledge-candidates.md`：
     - 建立 `PingAnKnowledgeCandidate` schema。
     - 把 APT/EDR/HIDS cards 中的专属经验整理为 `PA-KC-*` candidate register。
     - 每条 candidate 标注 type、target artifact、tenant scope、source、status、validity、review owner 和验收要求。
     - 明确所有 candidate 默认 `pending_review`，不能直接影响 runtime decision。
   - 更新 `.notes/README.md` 和 `.notes/ai_soc/README.md`：
     - 增加 PingAn knowledge candidates 入口。
-  - 更新 `.notes/ai_soc/pingan-soc-capability-onboarding.md`：
+  - 更新 `.notes/ai_soc/capabilities/pingan/onboarding.md`：
     - `PA-05` 标记 Done。
     - 当时推进到 `PA-06`；后续已由 “PA-06 public skills minimal revisions” 记录完成。
-  - 更新 `.notes/ai_soc/soc-agent-solution.md`、`.notes/ai_soc/pingan-knowledge-decomposition-plan.md`、`.notes/ai_soc/pingan-capability-cards.md`、`.notes/ai_soc/alert-lifecycle-flow.md`：
+  - 更新 `.notes/ai_soc/soc-agent-solution.md`、`.notes/ai_soc/capabilities/pingan/knowledge-decomposition.md`、`.notes/ai_soc/capabilities/pingan/capability-cards.md`、`.notes/ai_soc/alert-lifecycle-flow.md`：
     - 同步 PA-05 完成状态。
     - 明确下一刀是 `PA-06` public skill 最小修订。
 - 验证：
@@ -813,7 +874,7 @@
   - 用户要求继续执行 PingAn capability card 拆解；当前轮到 `PA-HIDS-SRC`。
   - HIDS 文档中的平安特定内容非常多，包括内部机房、域名、组名、账号、脚本路径、内部安全工具和服务器隔离模板，必须避免污染 public skill。
 - 变更：
-  - 更新 `.notes/ai_soc/pingan-capability-cards.md`：
+  - 更新 `.notes/ai_soc/capabilities/pingan/capability-cards.md`：
     - `PA-HIDS-SRC` 标记为 `PA-04 expanded`。
     - `PA-HIDS-001..003` 标记为 `Expanded`，`PA-HIDS-004` 标记为 `Boundary defined`。
     - 新增 `PA-04 HIDS Source Decomposition`：
@@ -823,7 +884,7 @@
       - 固定 read-only actions：`host.event_context.lookup`、`asset.locate`、`security_tag.lookup`、`endpoint.process_tree.lookup`。
       - 固定 high-risk `host.isolate_server` 只作为 approval-gated proposal。
       - 列出 HIDS tenant memory candidates 和 eval fixture candidates。
-  - 更新 `.notes/ai_soc/pingan-soc-capability-onboarding.md`：
+  - 更新 `.notes/ai_soc/capabilities/pingan/onboarding.md`：
     - `PA-04` 标记 Done。
     - 当时推进到 `PA-05`；后续已由 “PA-05 PingAnKnowledgeCandidate register” 记录完成。
   - 更新当前待办：
@@ -843,7 +904,7 @@
   - 统一 normalize 入口在 `backend/soc_agent/normalizers/alert.py::normalize_alert_payload()`。
   - `normalize_alert_payload()` 先识别 `alert.hitLog[].zeusRawLogs[]` 这种平安旧平台 envelope，命中后交给 `normalize_pingan_platform_payload()`；否则走 generic normalizer。
 - 变更：
-  - 更新 `.notes/ai_soc/pingan-capability-cards.md`：
+  - 更新 `.notes/ai_soc/capabilities/pingan/capability-cards.md`：
     - `PA-EDR-SRC` 标记为 `PA-03 expanded`。
     - `PA-EDR-001..004` 标记为 `Expanded`，`PA-EDR-005` 标记为 `Boundary defined`。
     - 新增 `PA-03 EDR Source Decomposition`：
@@ -853,7 +914,7 @@
       - 固定 read-only actions：`endpoint.process_tree.lookup`、`asset.locate`、`security_tag.lookup`、`host.event_context.lookup`。
       - 固定 high-risk actions：`account.disable_um`、`endpoint.isolate_host`、`endpoint.isolate_ip` 只作为 approval-gated proposals。
       - 列出 EDR tenant memory candidates 和 eval fixture candidates。
-  - 更新 `.notes/ai_soc/pingan-soc-capability-onboarding.md`：
+  - 更新 `.notes/ai_soc/capabilities/pingan/onboarding.md`：
     - `PA-03` 标记 Done。
     - `PA-04` 当时进入后续待办；后续已由 “PA-04 HIDS source decomposition” 记录完成。
   - 更新当前待办：
@@ -869,7 +930,7 @@
   - 用户追问为什么要先做 capability cards，而不是直接做 skill prompt 或 MCP。
   - 结论是 cards 是分拣和验收层，用来决定哪些内容进入 public skill、tenant memory/config、adapter/normalizer、read-only MCP/action、approval-gated action 或 eval fixture；skill 和 MCP 是 cards 之后的具体落点，不应直接承接混合经验。
 - 变更：
-  - 更新 `.notes/ai_soc/pingan-capability-cards.md`：
+  - 更新 `.notes/ai_soc/capabilities/pingan/capability-cards.md`：
     - `PA-APT-SRC` 标记为 `PA-02 expanded`。
     - `PA-APT-001..004` 标记为 `Expanded`，`PA-APT-005` 标记为 `Boundary defined`。
     - 新增 `PA-02 APT Source Decomposition`：
@@ -879,7 +940,7 @@
       - 固定 read-only actions：`threat_intel.ip_reputation.lookup`、`security_tag.lookup`、`asset.locate`。
       - 固定 high-risk `response.block_ip` 只作为 approval-gated proposal。
       - 列出 APT tenant memory candidates 和 eval fixture candidates。
-  - 更新 `.notes/ai_soc/pingan-soc-capability-onboarding.md`：
+  - 更新 `.notes/ai_soc/capabilities/pingan/onboarding.md`：
     - `PA-02` 标记 Done。
     - `PA-03` 当时进入后续待办；后续已由 “PA-03 EDR source decomposition” 记录完成。
     - 修正 P0 card ID：`PA-APT-002` 是 APT 场景化研判，`PA-APT-003` 是威胁情报，`PA-APT-004` 是 security tag。
@@ -893,15 +954,15 @@
 ### 2026-07-07 — PA-01 PingAn capability card register
 
 - 背景：
-  - 用户指出 PingAn 方案推进顺序混乱，不能直接跳到 mock MCP；必须先把 `.notes/ai_soc/pingan_docs/` 拆成明确 TODO 和 capability cards。
+  - 用户指出 PingAn 方案推进顺序混乱，不能直接跳到 mock MCP；必须先把 `.notes/ai_soc/capabilities/pingan/source-docs/` 拆成明确 TODO 和 capability cards。
   - 当前目标是让平安经验先成为可审计、可实现、可评测的 cards，再进入 skill、tenant memory、MCP/action、policy/config、domain handler 或 eval。
 - 变更：
-  - 新增 `.notes/ai_soc/pingan-capability-cards.md`：
+  - 新增 `.notes/ai_soc/capabilities/pingan/capability-cards.md`：
     - 固定 source register：`PA-APT-SRC`、`PA-EDR-SRC`、`PA-HIDS-SRC`。
     - 建立 card register：`PA-COM-*`、`PA-APT-*`、`PA-EDR-*`、`PA-HIDS-*`、`PA-RESP-*`。
     - 展开 P0 card：历史关联漏斗、资产提取/归属、APT 方向、APT 场景化研判、威胁情报、security tag、EDR 进程树、HIDS 主机事件、HIDS event_type 研判。
     - 明确 guardrails：不复制原 prompt、不污染 public skill、不以 rule_code 为必需主键、不把 read-only evidence 自动写 confirmed memory、不让 high-risk action 进入自由 tool call。
-  - 更新 `.notes/ai_soc/pingan-soc-capability-onboarding.md`：
+  - 更新 `.notes/ai_soc/capabilities/pingan/onboarding.md`：
     - `PA-01` 标记 Done。
     - `PA-02` 当时进入后续待办；后续已由 “PA-02 APT source decomposition” 记录完成。
   - 更新 `.notes/README.md` 和 `.notes/ai_soc/README.md`：
@@ -919,7 +980,7 @@
   - 用户指出 PingAn APT/EDR/HIDS 文档中的很多历史 prompt 实际不是 prompt，而是平安运营经验、环境知识、误报模式、字段映射、工具能力或处置策略。
   - 用户进一步指出现有 `skills/public/soc-*` 也需要明确边界：哪些是通用研判 skill，哪些是平安知识，哪些进 memory，哪些进 MCP/action。
 - 变更：
-  - 新增 `.notes/ai_soc/pingan-knowledge-decomposition-plan.md`：
+  - 新增 `.notes/ai_soc/capabilities/pingan/knowledge-decomposition.md`：
     - 固定 PingAn docs -> skill / tenant memory / adapter / MCP/action / policy/config / eval fixture 的拆解矩阵。
     - 明确通用 skill 只能保存跨客户研判方法，平安内部域名、账号、部门、路径、规则码、模板 ID、策略 ID、误报模式等进入 tenant-scoped memory/config/adapter/eval。
     - 规划第一批拆解任务：补 skill boundary、抽 P0 capability cards、设计 knowledge candidates、mock read-only adapters、建 eval fixtures、接 memory candidate。
@@ -930,7 +991,7 @@
     - `soc-endpoint-triage`
     - `soc-network-apt-triage`
     - `soc-waf-f5-triage`
-  - 更新 `.notes/ai_soc/soc-memory-tracking-plan.md`：
+  - 更新 `.notes/ai_soc/memory/memory-tracking.md`：
     - 新增 `benign_pattern`、`identity_pattern`、`response_policy_hint` memory types。
     - 增加 PingAn prompt decomposition memory 映射。
   - 更新 `.notes/reference-index/soc-agent-engineering-contracts.md`：
@@ -966,10 +1027,10 @@
   - `soc-agent-solution.md`
   - `progress.md`
   - `alert-lifecycle-flow.md`
-  - `pingan-soc-capability-onboarding.md`
-  - `external-disposition-sync-plan.md`
-  - `soc-memory-tracking-plan.md`
-  - `soc-agent-profile-governance.md`
+  - `capabilities/pingan/onboarding.md`
+  - `integrations/external-disposition-sync.md`
+  - `memory/memory-tracking.md`
+  - `governance/agent-profile-governance.md`
 - 验证：
   - active docs 已无旧 `.notes/ai_soc/<archived-doc>.md` 路径引用。
 
@@ -986,15 +1047,15 @@
   - 用户提出现实工作流里分析师仍会在老 Zeus 预警系统处理告警，需要 Zeus 更新状态/理由后同步到 SOC Agent，并在空闲时把理由沉淀成候选记忆或 skill 优化候选。该能力必须做成市场化、可扩展、可插拔协议，不能写死平安 Zeus。
 - 变更：
   - `.notes/ai_soc/alert-lifecycle-flow.md` 重写为当前 As-Is 生命周期 + To-Be Main SOC Agent / domain sub-agent 可见链路。
-  - 新增 `.notes/ai_soc/pingan-soc-capability-onboarding.md`，记录平安 SOC 经验注入流程、capability card 模板、P0 能力 backlog 和用户提供信息格式。
-  - 新增 `.notes/ai_soc/soc-memory-tracking-plan.md`，记录 DB-first typed memory store、facets retrieval、写入来源、状态机、DB/wiki 一致性和实现路线。
-  - 新增 `.notes/ai_soc/external-disposition-sync-plan.md`，固定 external disposition feedback lane：外部系统状态/理由更新通过 adapter 转成 `SocExternalDispositionEvent`，再由 service 同步 audit/review/correction，并生成 pending memory / skill improvement candidate。
+  - 新增 `.notes/ai_soc/capabilities/pingan/onboarding.md`，记录平安 SOC 经验注入流程、capability card 模板、P0 能力 backlog 和用户提供信息格式。
+  - 新增 `.notes/ai_soc/memory/memory-tracking.md`，记录 DB-first typed memory store、facets retrieval、写入来源、状态机、DB/wiki 一致性和实现路线。
+  - 新增 `.notes/ai_soc/integrations/external-disposition-sync.md`，固定 external disposition feedback lane：外部系统状态/理由更新通过 adapter 转成 `SocExternalDispositionEvent`，再由 service 同步 audit/review/correction，并生成 pending memory / skill improvement candidate。
   - 明确下一阶段路线：PingAn SOC capability onboarding -> `SocCorrelationService` -> External Disposition Sync Contract -> Memory Tracking Contract -> domain sub-agent contract -> EDR/APT/HIDS/F5 MVP handlers -> Main SOC Agent orchestrator -> unified investigation report -> Web/TUI 可见化 -> demo/eval script。
   - 当时进度台账把下一刀切到 Phase 2 最小 Correlation Service，并把 External Disposition Sync Contract 和 Memory Tracking Contract 加入后续待办。
 - 下一步：
   - 实现 Correlation Service MVP，先让 review context / CLI 能看到结构化相似告警、匹配原因和可复用 investigation evidence。
   - 之后实现 External Disposition Sync Contract，再实现 Memory Tracking Contract，接 TUI/Web correction、Kafka repeated pattern、external status/reason 和 domain triage 的候选记忆写入。
-  - PingAn capability card 收集已由 `PA-01` 承接到 `.notes/ai_soc/pingan-capability-cards.md`；后续按 `PA-02/03/04` 逐源展开。
+  - PingAn capability card 收集已由 `PA-01` 承接到 `.notes/ai_soc/capabilities/pingan/capability-cards.md`；后续按 `PA-02/03/04` 逐源展开。
 
 ### 2026-07-05 — Lead Agent evidence reuse + endpoint process-tree mock adapter
 
@@ -2837,7 +2898,7 @@
   - Skill/MCP 开放配置采用 `draft -> validated -> staging -> active -> archived` 生命周期。
   - 同事可配置 draft skill、适用条件、readonly MCP 候选；middleware preset、high-risk MCP、approval/audit policy、Runtime pipeline 必须由代码/审批控制。
 - 文档：
-  - 新增 `.notes/ai_soc/soc-agent-profile-governance.md`。
+  - 新增 `.notes/ai_soc/governance/agent-profile-governance.md`。
   - `.notes/ai_soc/soc-agent-solution.md` 增加 profile 治理摘要和链接。
   - `.notes/reference-index/soc-agent-engineering-contracts.md` 增加工程约束。
 - 验证：

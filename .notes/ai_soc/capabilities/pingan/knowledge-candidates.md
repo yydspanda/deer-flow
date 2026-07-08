@@ -2,7 +2,7 @@
 
 > Updated: 2026-07-07
 >
-> 目的：把 `pingan-capability-cards.md` 中已经拆清楚的平安 APT / EDR / HIDS 专属知识，进一步整理成可审阅、可过期、可拒绝、可迁移到 DB memory / policy / adapter / eval 的候选清单。本文档是 `PA-05` 的产物。
+> 目的：把 `capabilities/pingan/capability-cards.md` 中已经拆清楚的平安 APT / EDR / HIDS 专属知识，进一步整理成可审阅、可过期、可拒绝、可迁移到 DB memory / policy / adapter / eval 的候选清单。本文档是 `PA-05` 的产物。
 
 ## 1. 结论
 

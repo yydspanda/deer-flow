@@ -1,4 +1,4 @@
-# SOC Memory Tracking Plan
+# SOC Memory Tracking
 
 > Updated: 2026-07-08
 >
@@ -129,7 +129,7 @@ Typed Memory Record
 
 ### 4.1 PingAn Prompt Decomposition Memory
 
-`.notes/ai_soc/pingan_docs/` 中的历史 prompt 原文不能整体进入 prompt。拆解后，只有通用方法进入 skill；平安环境知识进入 tenant-scoped memory：
+`.notes/ai_soc/capabilities/pingan/source-docs/` 中的历史 prompt 原文不能整体进入 prompt。拆解后，只有通用方法进入 skill；平安环境知识进入 tenant-scoped memory：
 
 | PingAn 内容 | Memory type | 要求 |
 |---|---|---|

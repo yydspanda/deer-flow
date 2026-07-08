@@ -35,10 +35,13 @@ from soc_agent.contracts import (
     CorrectionCommand,
     CorrelationQuery,
     EntrySurface,
+    InvestigationContext,
+    ReviewNoteCommand,
     ReviewQueueCloseCommand,
     ReviewQueueStatus,
     ServiceRequestContext,
     SocAgentActionCommand,
+    SocDomainName,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateStatus,
@@ -120,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
         return _review_list(args)
     if args.command == "review" and args.review_command == "context":
         return _review_context(args)
+    if args.command == "review" and args.review_command == "note":
+        return _review_note(args)
     if args.command == "review" and args.review_command == "close":
         return _review_close(args)
     if args.command == "review" and args.review_command == "tui":
@@ -156,6 +161,8 @@ def main(argv: list[str] | None = None) -> int:
         return _eval_scenarios(args)
     if args.command == "demo" and args.demo_command == "run":
         return _demo_run(args)
+    if args.command == "demo" and args.demo_command == "alert":
+        return _demo_alert(args)
     if args.command == "memory" and args.memory_command == "list":
         return _memory_list(args)
     if args.command == "memory" and args.memory_command == "get":
@@ -262,8 +269,20 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_database_args(review_list)
     review_context = review_subparsers.add_parser("context", help="Show analyst investigation context for a queue item")
     review_context.add_argument("queue_id", help="Review queue id to open")
+    review_context.add_argument("--summary", action="store_true", help="Show compact analyst-facing summary")
     review_context.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(review_context)
+    review_note = review_subparsers.add_parser("note", help="Record an analyst review note as pending memory candidate")
+    review_note.add_argument("queue_id", help="Review queue id to annotate")
+    review_note.add_argument("--note", required=True, help="Analyst note to capture as candidate memory")
+    review_note.add_argument("--scenario-key", help="Optional scenario key this note applies to")
+    review_note.add_argument("--domain", choices=[item.value for item in SocDomainName], help="Optional SOC domain this note applies to")
+    review_note.add_argument("--finding-id", help="Optional domain finding id this note applies to")
+    review_note.add_argument("--confidence", type=float, default=0.55, help="Candidate confidence, 0..1")
+    review_note.add_argument("--metadata-json", help="Optional JSON object attached to the candidate source metadata")
+    review_note.add_argument("--actor-id", default="soc-cli", help="Analyst actor id")
+    review_note.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(review_note)
     review_close = review_subparsers.add_parser("close", help="Close one SOC review queue item")
     review_close.add_argument("queue_id", help="Review queue id to close")
     review_close.add_argument("--reason", required=True, help="Reason for closing the queue item")
@@ -424,6 +443,16 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_run.add_argument("--init-db", action="store_true", help="Create SOC tables before seeding")
     demo_run.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(demo_run)
+    demo_alert = demo_subparsers.add_parser("alert", help="Run one alert through SOC services and print a review-ready summary")
+    demo_alert.add_argument("path", nargs="?", help="Path to alert JSON file")
+    demo_alert.add_argument("--json", dest="json_payload", help="Inline alert JSON object")
+    demo_alert.add_argument("--init-db", action="store_true", help="Create SOC tables before running")
+    demo_alert.add_argument("--review-note", help="Optional analyst note to capture after the queue item is created")
+    demo_alert.add_argument("--scenario-key", help="Optional scenario key for --review-note")
+    demo_alert.add_argument("--domain", choices=[item.value for item in SocDomainName], help="Optional SOC domain for --review-note")
+    demo_alert.add_argument("--finding-id", help="Optional domain finding id for --review-note")
+    demo_alert.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(demo_alert)
 
     memory = subparsers.add_parser("memory", help="SOC memory candidate helpers")
     memory_subparsers = memory.add_subparsers(dest="memory_command")
@@ -730,8 +759,124 @@ def _review_context(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 3
 
-    print(context.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    if args.summary:
+        print(json.dumps(_review_context_summary_payload(context), ensure_ascii=False, indent=2 if args.pretty else None))
+    else:
+        print(context.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
+
+
+def _review_note(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        metadata = _load_json_object(args.metadata_json, payload_label="metadata JSON") if args.metadata_json else {}
+        result = SocReviewService(
+            repository=repository,
+            summary_repository=repository,
+            audit_repository=repository,
+            review_queue_repository=repository,
+            evidence_repository=repository,
+            external_disposition_repository=repository,
+            memory_candidate_repository=repository,
+            memory_record_repository=repository,
+        ).add_note(
+            ReviewNoteCommand(
+                queue_id=args.queue_id,
+                note=args.note,
+                scenario_key=args.scenario_key,
+                domain=SocDomainName(args.domain) if args.domain else None,
+                finding_id=args.finding_id,
+                confidence=args.confidence,
+                metadata=metadata,
+            ),
+            context=ServiceRequestContext(
+                actor=ActorContext(
+                    actor_id=args.actor_id,
+                    actor_type=ActorType.USER,
+                    surface=EntrySurface.CLI,
+                    roles=["soc_analyst"],
+                )
+            ),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _review_context_summary_payload(context: InvestigationContext) -> dict[str, Any]:
+    view = context.investigation_view
+    findings = [
+        {
+            "finding_id": finding.finding_id,
+            "domain": finding.domain.value,
+            "scenario_key": finding.scenario_key,
+            "scenario_name": finding.scenario_name,
+            "title": finding.title,
+            "disposition": finding.disposition.value,
+            "severity": finding.severity.value,
+            "confidence": finding.confidence,
+            "current_conclusion": finding.current_conclusion.model_dump(mode="json", exclude_none=True),
+            "evidence_gaps": finding.evidence_profile.gaps,
+            "recommendations": finding.recommendations,
+            "human_checklist": finding.human_checklist,
+        }
+        for result in context.domain_triage_results
+        for finding in result.findings
+    ]
+    memory_candidates = [
+        {
+            "candidate_id": candidate.candidate_id,
+            "status": candidate.status.value,
+            "candidate_type": candidate.candidate_type.value,
+            "source_type": candidate.source.source_type.value,
+            "summary": candidate.summary,
+            "runtime_decision_allowed": candidate.runtime_decision_allowed,
+        }
+        for candidate in context.memory_candidates
+    ]
+    relevant_memories = []
+    if context.relevant_memories is not None:
+        relevant_memories = [
+            {
+                "memory_id": match.memory_id,
+                "score": match.score,
+                "summary": match.summary,
+                "match_reasons": match.match_reasons,
+                "retrieval_enabled": match.retrieval_enabled,
+            }
+            for match in context.relevant_memories.matches
+        ]
+    counts = dict(view.counts) if view is not None else {}
+    queue_id = context.queue_item.queue_id
+    return {
+        "schema_version": "soc.review_context_summary.v1",
+        "queue_id": queue_id,
+        "run_id": context.run.run_id,
+        "alert_id": context.run.alert_id,
+        "status": context.queue_item.status.value,
+        "priority": context.queue_item.priority.value,
+        "runtime_verdict": context.run.decision.verdict.value if context.run.decision is not None else None,
+        "runtime_confidence": context.run.decision.confidence if context.run.decision is not None else None,
+        "needs_review": context.run.decision.needs_review if context.run.decision is not None else True,
+        "primary_summary": view.primary_summary if view is not None else context.queue_item.summary,
+        "primary_reason": view.primary_reason if view is not None else context.queue_item.reason,
+        "counts": counts,
+        "scenario_findings": findings,
+        "memory_candidates": memory_candidates,
+        "relevant_memories": relevant_memories,
+        "next_commands": [
+            f"soc review note {queue_id} --note '<analyst note>' --pretty",
+            f"soc chat tui --queue-id {queue_id} --lead-agent",
+            f"soc memory list --queue-id {queue_id} --pretty",
+        ],
+        "boundary_notes": view.boundary_notes if view is not None else [],
+    }
 
 
 def _memory_list(args: argparse.Namespace) -> int:
@@ -1333,6 +1478,83 @@ def _eval_scenarios(args: argparse.Namespace) -> int:
 
     print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0 if report.failed_count == 0 else 1
+
+
+def _demo_alert(args: argparse.Namespace) -> int:
+    try:
+        payload = _load_payload(args.path, args.json_payload)
+        if args.init_db:
+            create_soc_tables(_engine_from_args(args))
+        repository = _repository_from_args(args)
+        run = SocAnalysisService(
+            repository=repository,
+            summary_repository=repository,
+            audit_repository=repository,
+            review_queue_repository=repository,
+        ).analyze(
+            payload,
+            context=ServiceRequestContext(actor=ActorContext(actor_id="soc-demo", actor_type=ActorType.USER, surface=EntrySurface.CLI, roles=["soc_analyst"])),
+        )
+        review_item = repository.get_open_review_item_by_run(run.run_id)
+        review_summary: dict[str, Any] | None = None
+        note_candidate_id: str | None = None
+        if review_item is not None:
+            review_service = SocReviewService(
+                repository=repository,
+                summary_repository=repository,
+                audit_repository=repository,
+                review_queue_repository=repository,
+                evidence_repository=repository,
+                external_disposition_repository=repository,
+                memory_candidate_repository=repository,
+                memory_record_repository=repository,
+            )
+            if args.review_note:
+                note_result = review_service.add_note(
+                    ReviewNoteCommand(
+                        queue_id=review_item.queue_id,
+                        note=args.review_note,
+                        scenario_key=args.scenario_key,
+                        domain=SocDomainName(args.domain) if args.domain else None,
+                        finding_id=args.finding_id,
+                    ),
+                    context=ServiceRequestContext(actor=ActorContext(actor_id="soc-demo", actor_type=ActorType.USER, surface=EntrySurface.CLI, roles=["soc_analyst"])),
+                )
+                if note_result.memory_candidate is not None:
+                    note_candidate_id = note_result.memory_candidate.candidate_id
+            review_summary = _review_context_summary_payload(review_service.get_investigation_context(review_item.queue_id))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: SOC alert demo failed: {exc}", file=sys.stderr)
+        return 3
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: report demo failure
+        print(f"error: SOC alert demo failed: {exc}", file=sys.stderr)
+        return 1
+
+    output = {
+        "schema_version": "soc.one_alert_demo_result.v1",
+        "run_id": run.run_id,
+        "alert_id": run.alert_id,
+        "status": run.status.value,
+        "queue_id": review_item.queue_id if review_item is not None else None,
+        "queue_created": review_item is not None,
+        "note_memory_candidate_id": note_candidate_id,
+        "runtime_verdict": run.decision.verdict.value if run.decision is not None else None,
+        "runtime_confidence": run.decision.confidence if run.decision is not None else None,
+        "review_context": review_summary,
+        "next_commands": [
+            f"soc show {run.run_id} --pretty",
+            *(f"soc review context {review_item.queue_id} --summary --pretty" for _ in [review_item] if review_item is not None),
+            *(f"soc chat tui --queue-id {review_item.queue_id} --lead-agent" for _ in [review_item] if review_item is not None),
+        ],
+    }
+    print(json.dumps(output, ensure_ascii=False, indent=2 if args.pretty else None))
+    return 0 if run.status.value in {"success", "needs_review"} else 1
 
 
 def _demo_run(args: argparse.Namespace) -> int:

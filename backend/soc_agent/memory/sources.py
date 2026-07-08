@@ -9,6 +9,7 @@ from soc_agent.contracts import (
     AlertInput,
     AnalysisRun,
     CorrectionRecord,
+    ReviewNoteCommand,
     ReviewQueueItem,
     ServiceRequestContext,
     SocDomainFinding,
@@ -98,6 +99,19 @@ class SocMemoryCandidateSourceBridge:
             )
             for finding in result.findings
         ]
+
+    def propose_from_review_note(
+        self,
+        run: AnalysisRun,
+        command: ReviewNoteCommand,
+        *,
+        queue_item: ReviewQueueItem,
+        context: ServiceRequestContext | None = None,
+    ) -> SocMemoryCandidate:
+        return self._memory_service.propose_candidate(
+            memory_candidate_command_from_review_note(run, command, queue_item=queue_item),
+            context=context,
+        )
 
 
 def memory_candidate_command_from_correction(
@@ -233,6 +247,64 @@ def memory_candidate_command_from_domain_finding(
     )
 
 
+def memory_candidate_command_from_review_note(
+    run: AnalysisRun,
+    command: ReviewNoteCommand,
+    *,
+    queue_item: ReviewQueueItem,
+) -> SocMemoryCandidateCreateCommand:
+    """Build a pending candidate from a free-form analyst review note."""
+
+    alert = _normalized_alert(run)
+    stable_key = _stable_review_note_key(run, command, queue_item=queue_item)
+    evidence_refs = _review_note_evidence_refs(run, command, queue_item=queue_item)
+    facets = {
+        **_run_facets(run, alert=alert),
+        "candidate_source": ["review_note"],
+        "queue_id": [queue_item.queue_id],
+        **({"scenario_key": [command.scenario_key]} if command.scenario_key else {}),
+        **({"domain": [command.domain.value]} if command.domain is not None else {}),
+        **({"finding_id": [command.finding_id]} if command.finding_id else {}),
+    }
+    return SocMemoryCandidateCreateCommand(
+        candidate_type=SocMemoryCandidateType.PROCEDURE,
+        target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
+        summary=f"Review note for {run.run_id}",
+        content=_review_note_content(run, command, queue_item=queue_item),
+        tenant_scope=_tenant_scope(alert),
+        tenant_id=alert.tenant_id if alert is not None else None,
+        source=SocMemoryCandidateSource(
+            source_type=SocMemoryCandidateSourceType.REVIEW_NOTE,
+            source_id=f"review_note:{stable_key}",
+            run_id=run.run_id,
+            alert_id=run.alert_id,
+            queue_id=queue_item.queue_id,
+            metadata={
+                "scenario_key": command.scenario_key,
+                "domain": command.domain.value if command.domain is not None else None,
+                "finding_id": command.finding_id,
+                "note_length": len(command.note),
+                **command.metadata,
+            },
+        ),
+        evidence_refs=_dedupe(evidence_refs),
+        validity=SocMemoryCandidateValidity(notes="Review note must be confirmed before it becomes reusable SOC memory."),
+        idempotency_key=f"memory_candidate:review_note:{stable_key}",
+        confidence=command.confidence,
+        facets=facets,
+        decision_impact=SocMemoryDecisionImpact.REVIEW_HINT,
+        review_owner="soc_analyst",
+        labels=["review-note", "candidate-only", *(["scenario-feedback"] if command.scenario_key else [])],
+        metadata={
+            "runtime_decision_allowed": False,
+            "source": "review_note",
+            "note_length": len(command.note),
+            "scenario_key_present": bool(command.scenario_key),
+            "finding_id_present": bool(command.finding_id),
+        },
+    )
+
+
 def _normalized_alert(run: AnalysisRun) -> AlertInput | None:
     if run.input_payload is None:
         return None
@@ -316,6 +388,32 @@ def _domain_finding_content(finding: SocDomainFinding, *, analyst_feedback: str 
     return "\n".join(lines)
 
 
+def _review_note_content(
+    run: AnalysisRun,
+    command: ReviewNoteCommand,
+    *,
+    queue_item: ReviewQueueItem,
+) -> str:
+    lines = [
+        f"Analyst review note: {_normalize_feedback(command.note) or command.note}",
+        f"Queue: {queue_item.queue_id}",
+        f"Run: {run.run_id}",
+        f"Alert: {run.alert_id}",
+    ]
+    if command.domain is not None:
+        lines.append(f"Domain: {command.domain.value}")
+    if command.scenario_key:
+        lines.append(f"Scenario: {command.scenario_key}")
+    if command.finding_id:
+        lines.append(f"Finding: {command.finding_id}")
+    if run.analysis is not None:
+        lines.append(f"Runtime summary: {run.analysis.summary}")
+        lines.append(f"Runtime reason: {run.analysis.reason}")
+    if run.decision is not None:
+        lines.append(f"Runtime verdict: {run.decision.verdict.value} ({run.decision.confidence:.2f})")
+    return "\n".join(lines)
+
+
 def _normalize_feedback(value: str | None) -> str | None:
     if value is None:
         return None
@@ -375,6 +473,42 @@ def _stable_domain_finding_key(result: SocDomainTriageResult, finding: SocDomain
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
+def _stable_review_note_key(
+    run: AnalysisRun,
+    command: ReviewNoteCommand,
+    *,
+    queue_item: ReviewQueueItem,
+) -> str:
+    normalized_note = _normalize_feedback(command.note) or command.note.strip()
+    raw = "|".join(
+        [
+            queue_item.queue_id,
+            run.run_id,
+            run.alert_id,
+            command.domain.value if command.domain is not None else "",
+            command.scenario_key or "",
+            command.finding_id or "",
+            normalized_note,
+        ]
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def _review_note_evidence_refs(
+    run: AnalysisRun,
+    command: ReviewNoteCommand,
+    *,
+    queue_item: ReviewQueueItem,
+) -> list[str]:
+    refs = _base_evidence_refs(run, queue_id=queue_item.queue_id)
+    refs.insert(0, f"review_note:{queue_item.queue_id}")
+    if command.finding_id:
+        refs.append(f"domain_finding:{command.finding_id}")
+    if command.scenario_key:
+        refs.append(f"scenario:{command.scenario_key}")
+    return refs
+
+
 def _add_facet(facets: dict[str, list[str]], key: str, value: str | None) -> None:
     if value is None:
         return
@@ -402,4 +536,5 @@ __all__ = [
     "SocMemoryCandidateSourceBridge",
     "memory_candidate_command_from_correction",
     "memory_candidate_command_from_domain_finding",
+    "memory_candidate_command_from_review_note",
 ]

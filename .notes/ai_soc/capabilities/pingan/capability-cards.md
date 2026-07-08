@@ -2,7 +2,7 @@
 
 > Updated: 2026-07-07
 >
-> 目的：把 `pingan_docs/` 中的平安 APT / EDR / HIDS 经验拆成可实现、可评测、可审计的 capability cards。本文档是 `PA-01` 的产物；原始文档仍保留为 source evidence，不直接复制进 public skill、Lead Agent prompt 或 node prompt。
+> 目的：把 `.notes/ai_soc/capabilities/pingan/source-docs/` 中的平安 APT / EDR / HIDS 经验拆成可实现、可评测、可审计的 capability cards。本文档是 `PA-01` 的产物；原始文档仍保留为 source evidence，不直接复制进 public skill、Lead Agent prompt 或 node prompt。
 
 ## 1. 使用方式
 
@@ -22,9 +22,9 @@ card
 
 | Source ID | 文件 | 覆盖范围 | 初始拆解状态 |
 |---|---|---|---|
-| `PA-APT-SRC` | `pingan_docs/apt-alert-assess-flow.md` | APT/天眼流量告警、攻击类型 prompt 分流、IP 情报、黑白名单、IP 封堵、FollowUp、攻击链 | PA-02 expanded |
-| `PA-EDR-SRC` | `pingan_docs/edr-alert-assess-flow.md` | EDR 终端告警、进程树/路径/提权、UM 提取、渗透测试名单、资产定位、终端隔离、攻击链 | PA-03 expanded |
-| `PA-HIDS-SRC` | `pingan_docs/hids-alert-assess-flow.md` | HIDS 主机事件、event_type 分流、主机上下文、误报模式、服务器隔离、FollowUp、攻击链 | PA-04 expanded |
+| `PA-APT-SRC` | `.notes/ai_soc/capabilities/pingan/source-docs/apt-alert-assess-flow.md` | APT/天眼流量告警、攻击类型 prompt 分流、IP 情报、黑白名单、IP 封堵、FollowUp、攻击链 | PA-02 expanded |
+| `PA-EDR-SRC` | `.notes/ai_soc/capabilities/pingan/source-docs/edr-alert-assess-flow.md` | EDR 终端告警、进程树/路径/提权、UM 提取、渗透测试名单、资产定位、终端隔离、攻击链 | PA-03 expanded |
+| `PA-HIDS-SRC` | `.notes/ai_soc/capabilities/pingan/source-docs/hids-alert-assess-flow.md` | HIDS 主机事件、event_type 分流、主机上下文、误报模式、服务器隔离、FollowUp、攻击链 | PA-04 expanded |
 
 ## 3. Card Register
 
@@ -832,7 +832,7 @@ PA-04 后续至少需要这些脱敏 fixture：
 - `PA-HIDS-001..003` 已展开到 source、输入、输出、artifact decision、failure、acceptance。
 - `PA-HIDS-004` 已定义 high-risk 边界，但不实现执行。
 - 已明确哪些内容进 public skill，哪些进 tenant memory/config/eval，哪些进 read-only action。
-- 已可安全进入 `PA-05` PingAnKnowledgeCandidate 清单；PA-05 已在 `pingan-knowledge-candidates.md` 落地。
+- 已可安全进入 `PA-05` PingAnKnowledgeCandidate 清单；PA-05 已在 `capabilities/pingan/knowledge-candidates.md` 落地。
 
 ## 8. P1/P2 Cards To Expand
 
@@ -861,7 +861,7 @@ PA-04 后续至少需要这些脱敏 fixture：
 
 ## 10. Guardrails
 
-- 不把 `pingan_docs` 原文整体迁入 prompt。
+- 不把 `source-docs` 原文整体迁入 prompt。
 - 不把平安字段名和内部环境事实写进 `skills/public/soc-*`。
 - 不用 rule_code 作为必需主键；它只是 vendor alias。
 - 不把 read-only evidence 自动提升为 confirmed memory。

@@ -9,14 +9,11 @@
 | `project-overview.md` | DeerFlow 2.0 项目全貌、分层、核心数据流 |
 | `ai_soc/README.md` | SOC Agent 文档入口：告诉用户该看哪份、什么时候更新哪份 |
 | `ai_soc/soc-agent-solution.md` | SOC Agent 当前权威方案；后续产品和工程讨论优先更新这里 |
-| `ai_soc/alert-lifecycle-flow.md` | SOC 预警生命周期、当前状态流转和下一阶段可见研判链路 |
-| `ai_soc/pingan-soc-capability-onboarding.md` | 平安 SOC 工具、MCP、skill、研判经验和处置经验的结构化嵌入流程 |
-| `ai_soc/pingan-knowledge-decomposition-plan.md` | 平安 APT/EDR/HIDS 经验拆成 skill、tenant memory、MCP/action、policy/config、eval 的落地矩阵 |
-| `ai_soc/pingan-capability-cards.md` | 平安 APT/EDR/HIDS 经验拆解后的 capability card 台账 |
-| `ai_soc/pingan-knowledge-candidates.md` | 平安专属知识候选清单；所有条目默认 `pending_review`，用于后续 memory/policy/adapter/eval 审核 |
-| `ai_soc/soc-memory-tracking-plan.md` | SOC topic/rule_code/场景粒度记忆追踪和 TUI/Kafka 结论沉淀方案 |
-| `ai_soc/external-disposition-sync-plan.md` | 外部预警/工单/处置系统状态与理由同步协议；Zeus 只是第一个 adapter |
-| `ai_soc/soc-agent-profile-governance.md` | SOC Lead/Sub Agent、Skill、MCP 开放配置与治理方案 |
+| `ai_soc/alert-lifecycle-flow.md` | SOC 预警端到端完整过程图谱：状态流转、数据写入、服务边界 |
+| `ai_soc/capabilities/pingan/` | 平安 SOC 经验、能力卡、知识候选和 APT/EDR/HIDS 源资料 |
+| `ai_soc/integrations/` | 外部系统同步、mock/fixture/真实替换台账 |
+| `ai_soc/memory/` | SOC typed memory、candidate、confirmed memory、retrieval policy |
+| `ai_soc/governance/` | SOC Lead/Sub Agent、Skill、MCP 开放配置治理 |
 | `ai_soc/progress.md` | SOC Agent 长期开发进度台账；每个可验证切片完成后更新 |
 | `reference-index/soc-agent-engineering-contracts.md` | SOC Agent 代码风格、框架设计、API、通信协议和测试门禁 |
 | `reference/cross-project-workflow.md` | 跨项目参考工作流：先定义问题，再用 CodeGraph / 最小源码读取查参考项目 |
@@ -26,7 +23,7 @@
 
 | 目录 | 保留标准 |
 |---|---|
-| `ai_soc/` | 只保留 SOC Agent 当前方案和当前相关说明 |
+| `ai_soc/` | 只保留 SOC Agent 当前主线入口和按主题分组的活跃资料 |
 | `reference/` | 只保留跨项目查阅工作流；其他 DeerFlow 学习笔记已归档 |
 | `reference-index/` | 已验证的主题索引、工具安装和选型结论 |
 | `research/` | 只保留仍被当前方案直接引用的研究材料 |

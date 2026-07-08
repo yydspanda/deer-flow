@@ -255,7 +255,7 @@ PingAn SOC capability onboarding 约束：
 - read-only 工具经验必须通过 `SocActionAdapterRegistry` / MCP-backed adapter 落地，结果写 `InvestigationEvidence`；不能让 Lead Agent 直接用自然语言调用内部系统。
 - 处置类经验必须走 approval request / approval grant / dry-run / execute boundary；未经过 staging smoke 和 adapter-level audit 前，生产 execute 只能保持 no external side effect。
 - 经验记忆必须先进入 `pending_review` 或 eval fixture；只有人工确认、版本化和可回滚后才允许作为 confirmed memory 或 active lesson 影响后续判断。
-- `.notes/ai_soc/pingan_docs/` 中的历史 prompt 原文必须先按 `.notes/ai_soc/pingan-knowledge-decomposition-plan.md` 拆解；不得整体复制进 Lead Agent prompt、analysis node prompt 或 public skill。
+- `.notes/ai_soc/capabilities/pingan/source-docs/` 中的历史 prompt 原文必须先按 `.notes/ai_soc/capabilities/pingan/knowledge-decomposition.md` 拆解；不得整体复制进 Lead Agent prompt、analysis node prompt 或 public skill。
 - `skills/public/soc-*` 只能包含跨客户通用研判方法；平安内部域名、部门、账号、BU/PA code、路径、白名单、具体 `rule_code`、模板 ID、策略 ID、operateType 等必须进入 tenant memory、adapter mapping、policy/config 或 eval fixture。
 - 平安环境知识进入 memory 时必须带 tenant scope、source doc/section、status、validity 和 evidence refs；默认 `pending_review`，不能直接 confirmed。
 - 平安字段名和字段别名只能出现在 adapter/normalizer/mapping tests 或脱敏 fixture 中；core contract、public skill 和 Lead Agent prompt 必须消费 canonical fields。
@@ -289,6 +289,7 @@ SOC memory tracking 约束：
 - 当前已实现 DB-first candidate persistence、confirmed-memory boundary 和 retrieval policy MVP：`SocMemoryService.propose_candidate()` 必须强制写 `pending_review`，并保持 `runtime_decision_allowed=false`；`SocMemoryService.list_candidates()` / `get_candidate()` 是 API/CLI/Web/TUI/Lead Agent 查询候选记忆的 service 边界；`SocMemoryService.review_candidate()` 是 confirm/reject/deprecate/expire 的唯一状态机边界；`SocMemoryService.find_relevant_records(SocMemoryQuery)` 是 confirmed memory 检索的唯一 service 边界。
 - 候选记忆来源桥接固定在 `soc_agent.memory.sources.SocMemoryCandidateSourceBridge`：新增来源必须先构造 `SocMemoryCandidateCreateCommand`，再经 `SocMemoryService.propose_candidate()` 写入，不得在 Web/TUI/Kafka/Lead Agent/domain handler 内直接拼 repository row。
 - `SocReviewService.correct()` 是 correction -> pending memory candidate 的 service 边界；当注入 `MemoryCandidateRepository` 时，它会把 candidate id 回写到 `CorrectionRecord.memory_candidate_id`、audit payload 和 event payload。外部反馈如果复用 correction 链路，不得再重复创建第二条 correction candidate。
+- `SocReviewService.add_note()` 是 ReviewQueue review note -> pending memory candidate 的 service 边界；`soc review note`、Web/TUI note action 和后续 Lead Agent/Kafka note source 都必须通过它或同级 service 方法进入 `SocMemoryCandidateSourceBridge`，不得直接写 `soc_memory_candidates`。Review note source type 固定为 `review_note`，幂等键必须至少覆盖 queue/run/alert/note，并可附加 scenario/domain/finding refs。
 - `SocDomainTriageResult/SocDomainFinding` 可以通过 source bridge 生成 domain finding candidate，但必须由显式 service/entry 调用；只读 investigation context assembly 不能在渲染/读取过程中写 candidate。
 - `soc_memory_candidates` 是当前 `SocMemoryCandidate` 的 SOC business store 表；`SqlAlchemyAlertRepository` 实现 `MemoryCandidateRepository` 方法。生产和本地持久化都必须通过 migration `0010_memory_candidates` 或 `create_soc_tables()` 创建该表。
 - `soc_memory_records` 是 `SocMemoryRecord` 的 SOC business store 表；`confirm` decision 会从 candidate 派生一条 `SocMemoryRecord(status=confirmed, retrieval_enabled=false)`，生产和本地持久化都必须通过 migration `0011_memory_records` 或 `create_soc_tables()` 创建该表。
@@ -318,6 +319,7 @@ Review queue 约束：
 - 同一个 run 同时最多保留一个 open review item；重新分析同一 run 的派生 summary 时更新 open item，而不是制造重复待办。
 - `SocReviewService.correct()` 记录人工 correction 后，必须关闭该 run 的 open review item；关闭队列不能删除原始 run、summary 或审计记录。
 - `SocReviewService.close_queue_item()` 只表示复核待办已处理，不等价于修改 verdict；需要改判必须走 `CorrectionCommand`。
+- `SocReviewService.add_note()` 只表示记录分析师观察并提出候选记忆，不等价于关闭 queue、修改 verdict 或确认 memory。
 - `soc_review_queue` 保存扁平索引字段和完整 `item_payload`，字段优先服务列表、筛选和复核入口：`status`、`priority`、`alert_id`、`run_id`、`source_type`、`rule_code`、`verdict`、`updated_at`。
 - `InvestigationEvidence` 是只读查询、定位、EDR process tree 等 investigation action 的结果证据，不是原始告警证据、不是 confirmed memory、不是 operational verdict。
 - `InvestigationEvidenceRepository.save_evidence()` 只能在 service/action boundary 调用；CLI/API/TUI/Web/daemon 入口不能自己拼 evidence 绕过 dispatcher。
@@ -329,6 +331,7 @@ Review queue 约束：
 - Gateway `SocReviewService`、`soc review context/tui` 和 `soc chat tui --lead-agent` 必须使用同一 repository 作为 `evidence_repository`，确保 Web/TUI/Lead Agent 可以跨进程看到 read-only action evidence。
 - Gateway `SocReviewService`、`soc review context/tui` 和 `soc chat tui --lead-agent` 必须使用同一 repository 作为 `external_disposition_repository`，确保外部反馈在 API/Web/TUI/Lead Agent 上下文中一致可见。
 - Gateway `SocReviewService`、`soc review context/tui` 和 `soc chat tui --lead-agent` 必须使用同一 repository 作为 `memory_candidate_repository`，确保候选记忆在 API/Web/TUI/Lead Agent 上下文中一致可见。
+- `soc review context --summary` 和 `soc demo alert` 只能调用 `SocReviewService.get_investigation_context()` 生成只读 compact view；它们不得在读取 context 时写 memory、写 evidence、执行 action 或修改 review status。
 - Gateway ReviewQueue API 路径固定在 `/api/soc/review/*`：
   - `GET /api/soc/review/items`
   - `GET /api/soc/review/items/{queue_id}/context`
@@ -1240,7 +1243,7 @@ MCP/tool 调用、审批和处置必须继续通过 SOC service/action/policy bo
 
 ### Profile / Skill / MCP 开放配置治理
 
-SOC Lead Agent、Domain Sub Agent、Skill 和 MCP/tool group 的开放配置以 `.notes/ai_soc/soc-agent-profile-governance.md` 为产品治理源头；工程实现必须满足：
+SOC Lead Agent、Domain Sub Agent、Skill 和 MCP/tool group 的开放配置以 `.notes/ai_soc/governance/agent-profile-governance.md` 为产品治理源头；工程实现必须满足：
 
 - Profile、skill、MCP 绑定必须有 `draft -> validated -> staging -> active -> archived` 生命周期。
 - `draft` / `staging` 不能影响生产决策；`active` 必须记录审批人、评测集版本、profile hash、skill hash、tool group hash。

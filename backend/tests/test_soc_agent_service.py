@@ -24,6 +24,7 @@ from soc_agent.contracts import (
     DecisionAuditRecord,
     EntrySurface,
     InvestigationEvidence,
+    ReviewNoteCommand,
     ReviewQueueCloseCommand,
     ReviewQueueItem,
     ReviewQueueStatus,
@@ -737,6 +738,63 @@ def test_review_service_correct_proposes_pending_memory_candidate() -> None:
     assert "correction" in candidate.facets["candidate_source"]
     assert "false_positive" in candidate.facets["corrected_verdict"]
     assert audit_repository.records[0].payload["memory_candidate_id"] == correction.memory_candidate_id
+
+
+def test_review_service_add_note_proposes_pending_memory_candidate_idempotently() -> None:
+    repository = InMemoryAlertRepository()
+    summary_repository = InMemorySummaryRepository()
+    review_repository = InMemoryReviewQueueRepository()
+    memory_repository = InMemoryMemoryCandidateRepository()
+    run = SocAnalysisService(
+        repository=repository,
+        summary_repository=summary_repository,
+        review_queue_repository=review_repository,
+    ).analyze(_sample("pingan_legacy_apt.json"))
+    open_item = review_repository.get_open_review_item_by_run(run.run_id)
+    assert open_item is not None
+
+    service = SocReviewService(
+        repository=repository,
+        summary_repository=summary_repository,
+        review_queue_repository=review_repository,
+        memory_candidate_repository=memory_repository,
+    )
+    command = ReviewNoteCommand(
+        queue_id=open_item.queue_id,
+        note="运营确认：这类方向冲突要优先回看 raw message 再判断攻击/受害关系。",
+        scenario_key="network.malicious_external_connection",
+        domain=SocDomainName.APT,
+        confidence=0.72,
+    )
+    first = service.add_note(
+        command,
+        context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI, roles=["soc_analyst"])),
+    )
+    second = service.add_note(
+        command,
+        context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI, roles=["soc_analyst"])),
+    )
+
+    assert first.memory_candidate is not None
+    assert second.memory_candidate is not None
+    assert second.memory_candidate.candidate_id == first.memory_candidate.candidate_id
+    candidate = first.memory_candidate
+    assert candidate.status is SocMemoryCandidateStatus.PENDING_REVIEW
+    assert candidate.source.source_type is SocMemoryCandidateSourceType.REVIEW_NOTE
+    assert candidate.source.run_id == run.run_id
+    assert candidate.source.alert_id == run.alert_id
+    assert candidate.source.queue_id == open_item.queue_id
+    assert candidate.runtime_decision_allowed is False
+    assert candidate.decision_impact is SocMemoryDecisionImpact.REVIEW_HINT
+    assert candidate.idempotency_key is not None
+    assert candidate.idempotency_key.startswith("memory_candidate:review_note:")
+    assert "review_note" in candidate.facets["candidate_source"]
+    assert "network.malicious_external_connection" in candidate.facets["scenario_key"]
+    assert "apt" in candidate.facets["domain"]
+
+    context = service.get_investigation_context(open_item.queue_id)
+    assert [item.candidate_id for item in context.memory_candidates] == [candidate.candidate_id]
+    assert context.run.decision == run.decision
 
 
 def test_memory_source_bridge_proposes_domain_finding_candidate_idempotently() -> None:

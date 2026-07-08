@@ -36,6 +36,8 @@ from soc_agent.contracts import (
     NormalizationDriftSample,
     NormalizationInspectionResult,
     NormalizationReport,
+    ReviewNoteCommand,
+    ReviewNoteResult,
     ReviewQueueCloseCommand,
     ReviewQueueItem,
     ReviewQueuePriority,
@@ -584,6 +586,40 @@ class SocReviewService:
         item.updated_at = item.closed_at
         self._review_queue_repository.save_review_item(item)
         return item
+
+    def add_note(
+        self,
+        command: ReviewNoteCommand,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> ReviewNoteResult:
+        if self._review_queue_repository is None:
+            raise SocServiceNotImplementedError("add_note requires a ReviewQueueRepository")
+        if self._repository is None:
+            raise SocServiceNotImplementedError("add_note requires an AlertRepository")
+        if self._memory_candidate_repository is None:
+            raise SocServiceNotImplementedError("add_note requires a MemoryCandidateRepository")
+
+        item = self._review_queue_repository.get_review_item(command.queue_id)
+        if item is None:
+            raise SocServiceNotFoundError(f"review queue item {command.queue_id} not found")
+
+        run = self._repository.get_run(item.run_id)
+        if run is None:
+            raise SocServiceNotFoundError(f"run {item.run_id} not found")
+
+        request_context = context or ServiceRequestContext()
+        memory_service = SocMemoryService(
+            candidate_repository=self._memory_candidate_repository,
+            event_sink=self._event_sink,
+        )
+        candidate = SocMemoryCandidateSourceBridge(memory_service).propose_from_review_note(
+            run,
+            command,
+            queue_item=item,
+            context=request_context,
+        )
+        return ReviewNoteResult(queue_item=item, memory_candidate=candidate)
 
     def get_investigation_context(self, queue_id: str) -> InvestigationContext:
         if self._review_queue_repository is None:
