@@ -649,11 +649,11 @@ class SocReviewService:
             memory_candidates=memory_candidates,
             correlation_result=correlation_result,
         )
-        domain_triage_results = _domain_triage_results_for_context(context)
-        context = context.model_copy(update={"domain_triage_results": domain_triage_results})
         if self._memory_record_repository is not None:
             relevant_memories = SocMemoryService(record_repository=self._memory_record_repository).find_relevant_records(_memory_query_from_investigation_context(context))
             context = context.model_copy(update={"relevant_memories": relevant_memories})
+        domain_triage_results = _domain_triage_results_for_context(context)
+        context = context.model_copy(update={"domain_triage_results": domain_triage_results})
         return context.model_copy(update={"investigation_view": _unified_investigation_view_from_context(context)})
 
 
@@ -2242,12 +2242,19 @@ def _domain_triage_results_for_context(context: InvestigationContext) -> list[So
     from soc_agent.domain import SocDomainTriageService
 
     skill_context = skill_context_from_investigation_context(context)
+    available_action_routes = sorted({route for evidence in context.action_evidence for route in (evidence.route, evidence.action) if route})
     request = SocDomainTriageRequest(
         run=context.run,
         investigation_evidence=context.action_evidence,
         metadata={
             "source": "review_context",
             "queue_id": context.queue_item.queue_id,
+            "similar_alert_count": len(context.similar_alerts),
+            "correlation_match_count": len(context.correlation_result.matches) if context.correlation_result is not None else 0,
+            "external_disposition_count": len(context.external_dispositions),
+            "memory_candidate_count": len(context.memory_candidates),
+            "relevant_memory_count": context.relevant_memories.returned_count if context.relevant_memories is not None else 0,
+            "available_action_routes": available_action_routes,
             "handler_output_only": True,
             "writes_db": False,
         },
@@ -2386,10 +2393,15 @@ def _investigation_timeline_from_context(context: InvestigationContext) -> list[
                     occurred_at=result.created_at,
                     payload={
                         "handler_id": result.handler_id,
+                        "scenario_key": finding.scenario_key,
+                        "scenario_name": finding.scenario_name,
                         "confidence": finding.confidence,
+                        "evidence_profile": finding.evidence_profile.model_dump(mode="json"),
+                        "current_conclusion": finding.current_conclusion.model_dump(mode="json"),
                         "evidence_refs": finding.evidence_refs,
                         "recommendations": finding.recommendations,
                         "limitations": finding.limitations,
+                        "human_checklist": finding.human_checklist,
                     },
                 )
             )

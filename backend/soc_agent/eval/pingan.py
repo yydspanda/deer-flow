@@ -140,9 +140,13 @@ class PingAnDomainTriageEvalFinding(BaseModel):
     finding_id: str
     domain: SocDomainName
     title: str
+    scenario_key: str | None = None
+    scenario_name: str | None = None
     severity: str
     disposition: str
     confidence: float
+    conclusion_summary: str | None = None
+    evidence_gaps: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     capability_card_refs: list[str] = Field(default_factory=list)
     skill_names: list[str] = Field(default_factory=list)
@@ -341,9 +345,13 @@ def _run_domain_fixture(fixture: PingAnCapabilityEvalFixture) -> PingAnDomainTri
             finding_id=finding.finding_id,
             domain=finding.domain,
             title=finding.title,
+            scenario_key=finding.scenario_key,
+            scenario_name=finding.scenario_name,
             severity=finding.severity.value,
             disposition=finding.disposition.value,
             confidence=finding.confidence,
+            conclusion_summary=finding.current_conclusion.summary,
+            evidence_gaps=finding.evidence_profile.gaps,
             evidence_refs=finding.evidence_refs,
             capability_card_refs=finding.capability_card_refs,
             skill_names=finding.skill_names,

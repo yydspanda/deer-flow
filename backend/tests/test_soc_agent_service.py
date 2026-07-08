@@ -870,6 +870,10 @@ def test_review_service_context_includes_similar_alerts() -> None:
     assert context.correlation_result.matches[0].summary.run_id == similar_run.run_id
     assert context.domain_triage_results
     assert context.domain_triage_results[0].findings
+    scenario_findings = [finding for result in context.domain_triage_results for finding in result.findings if finding.scenario_key]
+    assert scenario_findings
+    assert any(finding.current_conclusion.summary.startswith("当前结论：") for finding in scenario_findings)
+    assert any(finding.evidence_profile.sources["similar_alerts"] == "available" for finding in scenario_findings)
     assert context.investigation_view is not None
     assert context.investigation_view.counts["correlation_matches"] == len(context.correlation_result.matches)
     assert context.investigation_view.counts["domain_findings"] >= 1

@@ -153,6 +153,12 @@ def render_context(context: InvestigationContext) -> RenderableType:
                 "timeline",
                 ", ".join(f"{item.kind}:{item.status or '-'}" for item in view.evidence_timeline[:5]),
             )
+        scenario_items = [item for item in view.evidence_timeline if item.kind == "domain_finding" and item.payload.get("scenario_key")]
+        if scenario_items:
+            table.add_row(
+                "scenarios",
+                ", ".join(f"{item.payload.get('scenario_key')}:{item.status or '-'}" for item in scenario_items[:5]),
+            )
     return Group(Text("Investigation Context", style=f"bold {THEME.primary}"), table)
 
 

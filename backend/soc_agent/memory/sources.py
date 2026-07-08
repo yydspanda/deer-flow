@@ -199,6 +199,8 @@ def memory_candidate_command_from_domain_finding(
         facets={
             "candidate_source": ["domain_finding"],
             "domain": [finding.domain.value],
+            **({"scenario_key": [finding.scenario_key]} if finding.scenario_key else {}),
+            **({"scenario_name": [finding.scenario_name]} if finding.scenario_name else {}),
             "handler_id": [result.handler_id],
             "disposition": [finding.disposition.value],
             "severity": [finding.severity.value],
@@ -289,7 +291,12 @@ def _domain_finding_content(finding: SocDomainFinding) -> str:
         f"Finding summary: {finding.summary}",
         f"Disposition: {finding.disposition.value}",
         f"Severity: {finding.severity.value}",
+        f"Current conclusion: {finding.current_conclusion.summary}",
     ]
+    if finding.scenario_key:
+        lines.append(f"Scenario: {finding.scenario_key} ({finding.scenario_name or 'unnamed'})")
+    if finding.evidence_profile.gaps:
+        lines.append("Evidence gaps: " + " | ".join(finding.evidence_profile.gaps))
     if finding.recommendations:
         lines.append("Recommendations: " + " | ".join(finding.recommendations))
     if finding.limitations:

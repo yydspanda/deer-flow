@@ -220,7 +220,9 @@ Domain triage 约束：
 - `SocDomainTriageRequest` / `SocDomainTriageResult` / `SocDomainFinding` 是 source handler 和通用安全场景识别的稳定输出协议；不得让每个 handler 自己返回自由 JSON。APT/EDR/HIDS/WAF/F5 是输入来源或来源视角，反弹 shell、webshell、横向移动、命令执行、恶意外联、提权、凭证滥用等是可跨来源识别的安全场景。
 - Domain handler 只能消费 `AnalysisRun`、bounded `SocSkillContext`、`InvestigationEvidence` refs、capability card refs 和后续 correlation refs；不能直接读 DB、不能调用 MCP/tool、不能写 review queue、不能写 confirmed memory、不能修改 `AnalysisRun.decision`。
 - `SocDomainTriageService` 是 PA-10 domain handler 路由入口；entry adapter、TUI/Web、eval 和后续 Main Orchestrator 不能绕过 service 直接调用某个 handler。
-- PA-10 handler 输出只允许包含 finding、evidence refs、capability card refs、recommendations、limitations 和 metadata；任何处置动作必须转成 action proposal 并回到 policy/approval boundary。
+- PA-10 handler 输出只允许包含 finding、scenario hints、evidence profile、current conclusion、evidence refs、capability card refs、recommendations、limitations、human checklist 和 metadata；任何处置动作必须转成 action proposal 并回到 policy/approval boundary。
+- 每个 `SocDomainFinding` 必须给出当前结论：`current_conclusion.summary`、risk/certainty、recommended action/queue、`automation_allowed=false`。证据不足不能输出“无法判断然后停止”；必须给出当前偏向判断、证据缺口和人工核查清单。
+- Evidence Fusion First 是 domain/scenario triage 默认策略：raw/canonical alert、历史相似预警、外部处置反馈、confirmed memory、read-only evidence 和可用 tool evidence 都是常规输入；工具证据缺失只能降低 certainty 并进入 `evidence_profile.gaps`，不得阻塞 finding 输出。
 - Domain finding 是分析证据，不是 operational verdict。它可以进入 unified investigation report、ReviewQueue/Lead Agent bounded context 和 pending memory candidate source，但不能自动关闭工单或自动确认 memory。
 
 Main orchestrator 约束：

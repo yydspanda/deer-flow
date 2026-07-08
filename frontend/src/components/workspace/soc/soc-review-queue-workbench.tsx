@@ -254,6 +254,9 @@ function UnifiedInvestigationViewSection({
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Badge variant="outline">{finding.domain}</Badge>
+                      {finding.scenario_key ? (
+                        <Badge variant="outline">{finding.scenario_key}</Badge>
+                      ) : null}
                       <Badge variant="secondary">{finding.disposition}</Badge>
                       <Badge variant="outline">
                         {formatPercent(finding.confidence)}
@@ -263,6 +266,15 @@ function UnifiedInvestigationViewSection({
                   <p className="text-muted-foreground mt-1 text-xs">
                     {finding.summary}
                   </p>
+                  <p className="mt-2 text-xs">
+                    {finding.current_conclusion.summary}
+                  </p>
+                  {finding.evidence_profile.gaps.length > 0 ? (
+                    <p className="text-muted-foreground mt-1 text-xs">
+                      证据缺口：
+                      {finding.evidence_profile.gaps.slice(0, 2).join("；")}
+                    </p>
+                  ) : null}
                   {finding.recommendations.length > 0 ? (
                     <p className="text-muted-foreground mt-2 text-xs">
                       {finding.recommendations[0]}

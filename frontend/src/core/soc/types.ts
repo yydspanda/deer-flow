@@ -157,20 +157,45 @@ export type SocDomainFindingDisposition =
   | "benign_authorized_candidate"
   | "needs_more_evidence";
 
+export interface SocEvidenceProfile {
+  schema_version: string;
+  sources: Record<string, string>;
+  used_sources: string[];
+  gaps: string[];
+  notes: string[];
+}
+
+export interface SocFindingConclusion {
+  schema_version: string;
+  summary: string;
+  risk_level: SocDomainFindingSeverity;
+  certainty: "low" | "medium_low" | "medium" | "medium_high" | "high";
+  recommended_action: string;
+  recommended_queue?: string | null;
+  automation_allowed: boolean;
+  rationale: string[];
+}
+
 export interface SocDomainFinding {
   schema_version: string;
   finding_id: string;
   domain: SocDomainName;
+  scenario_key?: string | null;
+  scenario_name?: string | null;
+  vendor_scenarios: string[];
   title: string;
   summary: string;
   severity: SocDomainFindingSeverity;
   disposition: SocDomainFindingDisposition;
   confidence: number;
+  evidence_profile: SocEvidenceProfile;
+  current_conclusion: SocFindingConclusion;
   evidence_refs: string[];
   capability_card_refs: string[];
   skill_names: string[];
   recommendations: string[];
   limitations: string[];
+  human_checklist: string[];
   metadata: Record<string, unknown>;
 }
 

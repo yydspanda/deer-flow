@@ -192,6 +192,29 @@ class SocDomainFindingDisposition(StrEnum):
     NEEDS_MORE_EVIDENCE = "needs_more_evidence"
 
 
+class SocEvidenceProfile(BaseModel):
+    """Evidence availability and usage profile for one domain finding."""
+
+    schema_version: str = "soc.evidence_profile.v1"
+    sources: dict[str, str] = Field(default_factory=dict)
+    used_sources: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class SocFindingConclusion(BaseModel):
+    """Current analyst-facing conclusion even when evidence is incomplete."""
+
+    schema_version: str = "soc.finding_conclusion.v1"
+    summary: str = "Current conclusion is not available for this finding."
+    risk_level: SocDomainFindingSeverity = SocDomainFindingSeverity.INFO
+    certainty: Literal["low", "medium_low", "medium", "medium_high", "high"] = "low"
+    recommended_action: str = "manual_review"
+    recommended_queue: str | None = None
+    automation_allowed: bool = False
+    rationale: list[str] = Field(default_factory=list)
+
+
 class ActorContext(BaseModel):
     actor_id: str = "anonymous"
     actor_type: ActorType = ActorType.USER
@@ -1605,16 +1628,22 @@ class SocDomainFinding(BaseModel):
     schema_version: str = "soc.domain_finding.v1"
     finding_id: str = Field(default_factory=lambda: f"DFN-{uuid4().hex[:12].upper()}")
     domain: SocDomainName
+    scenario_key: str | None = None
+    scenario_name: str | None = None
+    vendor_scenarios: list[str] = Field(default_factory=list)
     title: str = Field(min_length=1)
     summary: str = Field(min_length=1)
     severity: SocDomainFindingSeverity = SocDomainFindingSeverity.MEDIUM
     disposition: SocDomainFindingDisposition = SocDomainFindingDisposition.NEEDS_MORE_EVIDENCE
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    evidence_profile: SocEvidenceProfile = Field(default_factory=SocEvidenceProfile)
+    current_conclusion: SocFindingConclusion = Field(default_factory=SocFindingConclusion)
     evidence_refs: list[str] = Field(default_factory=list)
     capability_card_refs: list[str] = Field(default_factory=list)
     skill_names: list[str] = Field(default_factory=list)
     recommendations: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+    human_checklist: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

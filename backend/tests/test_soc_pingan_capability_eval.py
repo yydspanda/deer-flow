@@ -57,7 +57,7 @@ def test_pingan_domain_triage_eval_runs_default_fixtures() -> None:
 
     assert report.schema_version == "soc.pingan_domain_triage_eval_report.v1"
     assert report.sample_count == 3
-    assert report.finding_count == 3
+    assert report.finding_count >= 6
     assert report.failed_count == 0
     assert report.passed_count == 3
     assert report.domain_counts == {"apt": 1, "edr": 1, "hids": 1}
@@ -68,16 +68,20 @@ def test_pingan_domain_triage_eval_runs_default_fixtures() -> None:
     assert apt.handler_id == "soc.domain.apt.v1"
     assert "PA-APT-001" in apt.findings[0].capability_card_refs
     assert any(ref.startswith("EVI-") for ref in apt.findings[0].evidence_refs)
+    assert {item.scenario_key for item in apt.findings if item.scenario_key}.issuperset({"execution.suspicious_command", "network.malicious_outbound"})
 
     edr = by_sample["pingan-edr-action-evidence"]
     assert edr.domain.value == "edr"
     assert edr.findings[0].disposition == "suspicious"
     assert "PA-EDR-001" in edr.findings[0].capability_card_refs
+    assert "lateral_movement" in {item.scenario_key for item in edr.findings}
 
     hids = by_sample["pingan-hids-action-evidence"]
     assert hids.domain.value == "hids"
     assert hids.findings[0].disposition == "benign_authorized_candidate"
     assert "PA-HIDS-001" in hids.findings[0].capability_card_refs
+    assert "execution.suspicious_command" in {item.scenario_key for item in hids.findings}
+    assert all(item.conclusion_summary for result in by_sample.values() for item in result.findings)
 
 
 def test_cli_eval_pingan_domain_outputs_report(capsys) -> None:
@@ -101,7 +105,7 @@ def test_pingan_main_orchestrator_eval_runs_default_fixtures() -> None:
     assert report.sample_count == 3
     assert report.route_step_count == 6
     assert report.evidence_count == 6
-    assert report.domain_finding_count == 3
+    assert report.domain_finding_count >= 6
     assert report.failed_count == 0
     assert report.passed_count == 3
 
@@ -120,7 +124,8 @@ def test_pingan_main_orchestrator_eval_runs_default_fixtures() -> None:
 
     hids = by_sample["pingan-hids-action-evidence"]
     assert hids.report.review_context.action_evidence_count == 2
-    assert hids.report.review_context.domain_finding_count == 1
+    assert hids.report.review_context.domain_finding_count >= 1
+    assert "execution.suspicious_command" in {finding.scenario_key for result in hids.report.domain_triage_results for finding in result.findings}
 
 
 def test_cli_eval_pingan_main_outputs_report(capsys) -> None:

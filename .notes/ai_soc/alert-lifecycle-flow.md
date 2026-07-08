@@ -52,7 +52,7 @@ alert in
   -> [Done] Web/TUI visible investigation MVP
   -> [Done] Demo / Eval Script MVP
   -> [Partial] Memory candidate source integration: correction + domain finding bridge done
-  -> [Current] Generic security scenario recognition
+  -> [Partial] Generic security scenario recognition deterministic MVP
 ```
 
 暂缓项不作为当前 Alpha 前置条件：
@@ -536,7 +536,7 @@ flowchart TD
 - 新增 `DomainTriageRequest`。
 - 新增 `DomainTriageResult`。
 - 新增 `DomainTriageFinding`、`DomainTriageEvidenceRef`、`DomainTriageRecommendation`。
-- 结果必须包含 `domain`、`confidence`、`findings`、`evidence_refs`、`recommended_next_actions`、`needs_human_review`。
+- 结果必须包含 `domain`、`confidence`、`findings`、`evidence_refs`、`evidence_profile`、`current_conclusion`、`human_checklist`。
 
 验收：
 
@@ -554,12 +554,14 @@ flowchart TD
 - 新增通用场景识别：反弹 shell、webshell、横向移动、命令执行、恶意外联、提权、凭证滥用等。
 - 场景识别可使用 LLM bounded reasoning，但输入必须来自 canonical alert、raw evidence、实体、read-only evidence、skill context 和 confirmed/retrieval memory。
 - 场景识别输出仍是 `SocDomainFinding`，不直接改 verdict，不写 confirmed memory。
+- Evidence Fusion First：raw/canonical alert、历史相似预警、外部处置反馈、confirmed memory、read-only action evidence 和可用工具证据都是常规输入；工具证据缺失只进入 evidence gaps 并降低 certainty，不能让 Agent 停止输出当前结论。
 
 验收：
 
-- 先 deterministic + selected skill context。
-- 可使用已有 read-only mock evidence。
-- 每个 handler 都输出 `DomainTriageResult`。
+- deterministic MVP 已输出 `scenario_key`、vendor scenario hints、`evidence_profile`、`current_conclusion` 和 `human_checklist`。
+- PingAn APT/EDR/HIDS eval 能识别命令/代码执行、恶意外联、横向移动等场景。
+- 每个 scenario finding 都必须给出当前结论，即使证据不足也要明确证据缺口和人工核查清单。
+- 后续再补 bounded LLM recognizer、自定义 taxonomy、scenario replay/eval 指标和 analyst feedback -> candidate memory。
 
 ### Slice 6：Main SOC Agent Orchestrator MVP
 
