@@ -21,7 +21,7 @@
 4. LLM 不掌握主控制流；runtime 固定流程，LLM 只在受控节点内做结构化建议。
 5. 记忆和知识写入必须可审计、可回滚、可人工确认，不能让 LLM 自发现结果直接变成事实。
 
-截至 2026-07-08，Phase 1 的 Runtime、ReviewQueue、Lead Agent entry、approval boundary、read-only action evidence、Kafka daemon 基线和本地 MCP mock/smoke 已基本收口；`SocCorrelationService`、PingAn PA-01..PA-11、APT/EDR/HIDS domain triage、只读 Main Orchestrator demo、外部反馈可见性、候选记忆 DB/API/ReviewQueue 可见性、候选记忆评审状态机、confirmed-memory retrieval policy MVP、Web/TUI visible investigation MVP 和 persistent demo script MVP 已完成。`soc demo run [all|apt|edr|hids]` 现在能用一条可重复命令生成可打开的 ReviewQueue investigation chain。`PA-12` 是真实 PingAn dev/staging MCP/API replacement，受 endpoint/凭证门控，不作为当前 Alpha 主线阻塞项。当前主线转向 memory candidate 来源闭环和通用安全场景识别；F5/WAF 只是可选 source/adapter 示例，不是固定下一阶段目标。
+截至 2026-07-08，Phase 1 的 Runtime、ReviewQueue、Lead Agent entry、approval boundary、read-only action evidence、Kafka daemon 基线和本地 MCP mock/smoke 已基本收口；`SocCorrelationService`、PingAn PA-01..PA-11、APT/EDR/HIDS domain triage、只读 Main Orchestrator demo、外部反馈可见性、候选记忆 DB/API/ReviewQueue 可见性、候选记忆评审状态机、confirmed-memory retrieval policy MVP、Web/TUI visible investigation MVP 和 persistent demo script MVP 已完成。`soc demo run [all|apt|edr|hids]` 现在能用一条可重复命令生成可打开的 ReviewQueue investigation chain。`PA-12` 是真实 PingAn dev/staging MCP/API replacement，受 endpoint/凭证门控，不作为当前 Alpha 主线阻塞项。当前主线转向 memory candidate 来源闭环和通用安全场景识别；F5/WAF 只是可选 source/adapter 示例，不是固定下一阶段目标。Memory candidate 来源闭环已完成第一步：`SocMemoryCandidateSourceBridge` 统一承接 correction 和 domain finding -> pending candidate，后续继续接 Kafka/Lead Agent proposal/review note 等来源。
 
 ```text
 [Done] Phase 1 reliable runtime / review / approval / Kafka baseline
@@ -36,7 +36,8 @@
   -> [Partial] APT/EDR/HIDS source handlers done; generic scenario recognition pending
   -> [Done] Web/TUI visible investigation MVP
   -> [Done] Demo / Eval Script MVP
-  -> [Current] Memory candidate source integration + generic security scenario recognition
+  -> [Partial] Memory candidate source integration: correction + domain finding bridge done; Kafka/Lead Agent/review note pending
+  -> [Current] Generic security scenario recognition
 ```
 
 `PingAn SOC Capability Onboarding` 是业务经验注入层：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验先整理成 capability card，再分类落到 skill、MCP/action adapter、normalizer、domain handler、eval case 或 memory candidate。它不直接把经验塞进 prompt，也不把生产 secret 写入仓库；详见 `.notes/ai_soc/pingan-soc-capability-onboarding.md`。平安 APT/EDR/HIDS 文档拆解规则见 `.notes/ai_soc/pingan-knowledge-decomposition-plan.md`：只有跨客户通用研判方法可以进入 `skills/public/soc-*`，平安内部环境知识、误报模式、字段别名、模板/策略 ID、账号/组织/域名例外必须进入 tenant-scoped memory、adapter、policy/config 或 eval。第一版卡片台账见 `.notes/ai_soc/pingan-capability-cards.md`，平安专属知识候选见 `.notes/ai_soc/pingan-knowledge-candidates.md`；当前已完成 `PA-01` capability register、`PA-02` APT source decomposition、`PA-03` EDR source decomposition、`PA-04` HIDS source decomposition、`PA-05` PingAnKnowledgeCandidate register、`PA-06` public skill minimal revisions、`PA-07` P0 read-only mock action adapters、`PA-08` eval fixtures、`PA-09` memory candidate 入口、`PA-10` domain triage MVP 和 `PA-11` Main Orchestrator demo。`PA-12` 不是继续写 mock，而是等真实 PingAn dev/staging MCP/API endpoint 和凭证可用后替换 provider 并保存 smoke/eval report。代码层面，平安字段接入只作为 normalizer adapter 存在于 `backend/soc_agent/normalizers/pingan_platform.py`；core service 后续仍只消费 canonical `AlertInput`，其他客户/供应商也应通过独立 adapter 接入。
@@ -1812,12 +1813,12 @@ workflow conclusion
 
 | 来源 | 生成对象 | 默认状态 | 说明 |
 |---|---|---|---|
-| `soc correct` / ReviewQueue correction | correction fact / lesson candidate | `pending_review` 或 `confirmed_candidate` | 分析师明确确认时可信度较高，但仍要带 evidence |
+| `soc correct` / ReviewQueue correction | correction fact / lesson candidate | `pending_review` | 已通过 `SocMemoryCandidateSourceBridge` 接入；分析师明确确认时可信度较高，但仍要带 evidence |
 | `soc review tui` 关闭/备注 | analyst observation candidate | `pending_review` | close 不等于改判，不能自动生成 confirmed lesson |
 | Kafka daemon 批量处理 | repeated pattern candidate | `pending_review` | 幂等键必须包含 `topic/partition/offset` 或 run id，防止重放污染 |
 | External disposition sync | external feedback / lesson candidate | `pending_review` | Zeus/ITSM/SOAR 等外部系统的 status/reason 先经 `SocExternalDispositionService` 同步，不直接写 confirmed memory |
 | SOC Lead Agent 总结 | memory candidate | `pending_review` | LLM 只能提出候选，不确认事实 |
-| DomainTriageResult | topic/scenario candidate | `pending_review` | 反弹 shell、webshell、横向移动、命令执行、恶意外联等场景 finding 稳定后再接入；APT/EDR/HIDS/F5 只是输入来源或 handler 起点 |
+| DomainTriageResult | topic/scenario candidate | `pending_review` | 已有 bridge/factory，可由显式 service/entry 调用；反弹 shell、webshell、横向移动、命令执行、恶意外联等场景 finding 稳定后继续扩展；APT/EDR/HIDS/F5 只是输入来源或 handler 起点 |
 | InvestigationEvidence | evidence ref | 不直接是 memory | 作为候选记忆的证据链 |
 
 当前实现顺序：
@@ -1830,7 +1831,7 @@ workflow conclusion
 6. Done：Confirmed memory retrieval policy MVP 已完成，新增 `SocMemoryQuery`、`SocMemoryRetrievalResult`、match reason、score、token budget、retrieval-enabled gate、CLI/API search 和 `InvestigationContext.relevant_memories`；仍不做 prompt 注入。
 7. Done：Web/TUI visible investigation MVP 已完成，`InvestigationContext` 聚合 correlation result、domain findings、evidence timeline、external feedback、memory candidates 和 relevant memories，并通过 `UnifiedInvestigationView` 提供分析师统一调查视图。
 8. Done：Demo / Eval Script MVP 已完成，`soc demo run [all|apt|edr|hids]` 用一条可重复命令稳定生成 ReviewQueue item、read-only evidence、domain finding、memory retrieval 和 Web/TUI 可见调查视图；暂不自动种 external disposition。
-9. Current：TUI/Web correction、Kafka repeated pattern、Lead Agent summary、DomainTriageResult 和 InvestigationEvidence 都只能经 `SocMemoryService` 生成 candidate，默认 `pending_review`。
+9. Partial：已新增 `SocMemoryCandidateSourceBridge`，`SocReviewService.correct()` 在注入 memory repository 时会把 correction 写成 pending candidate，并把 `memory_candidate_id` 写回 `CorrectionRecord` / audit / event；`DomainTriageResult/SocDomainFinding` 已有统一 factory 和幂等 bridge。Kafka repeated pattern、Lead Agent summary、review note 等来源仍待接入；`InvestigationEvidence` 仍只是证据引用，不直接写 memory。
 10. Later：PromptBuilder / Lead Agent bounded context 只注入 retrieval policy 允许、`retrieval_enabled=true`、confirmed 且未过期的 facts，并记录 memory fact id、version/hash 和命中原因。
 11. Later：Wiki/OKF export 等 DB memory store、retrieval 和 review workflow 稳定后再做；自动方向只能是 DB -> wiki/OKF，反向修改必须生成 proposal 后经 `SocMemoryService` 写回。
 

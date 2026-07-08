@@ -1390,6 +1390,7 @@ class CorrectionRecord(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     candidate_knowledge_status: Literal["not_created", "pending_review"] = "not_created"
+    memory_candidate_id: str | None = None
 
 
 class DecisionAuditRecord(BaseModel):

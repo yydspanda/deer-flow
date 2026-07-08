@@ -51,7 +51,8 @@ alert in
   -> [Partial] APT/EDR/HIDS source handlers done; generic scenario recognition pending
   -> [Done] Web/TUI visible investigation MVP
   -> [Done] Demo / Eval Script MVP
-  -> [Current] Memory candidate source integration + generic security scenario recognition
+  -> [Partial] Memory candidate source integration: correction + domain finding bridge done
+  -> [Current] Generic security scenario recognition
 ```
 
 暂缓项不作为当前 Alpha 前置条件：
@@ -630,7 +631,7 @@ soc chat tui --lead-agent --queue-id REV-... --database-url ...
 
 能稳定看到同一条预警的 runtime、domain triage、read-only evidence、relevant memory 和 review 状态。本 MVP 暂不自动种 external disposition，避免 demo queue 被 high-trust 外部反馈自动关闭。
 
-### Slice 9：Memory candidate source integration（Current）
+### Slice 9：Memory candidate source integration（Partial）
 
 目的：把系统里会产生经验沉淀价值的路径统一收敛到 pending memory candidate，而不是散落在各自模块里。
 
@@ -639,6 +640,18 @@ soc chat tui --lead-agent --queue-id REV-... --database-url ...
 - TUI/Web correction、external disposition、domain finding、Lead Agent proposal、Kafka/daemon 处理结论都通过统一 command 生成 candidate。
 - 每个 candidate 必须带 source/evidence/validity/idempotency/facets/review owner。
 - 不直接写 confirmed memory；不启用 prompt injection；不改 runtime verdict。
+
+当前已完成：
+
+- `SocMemoryCandidateSourceBridge` 作为统一来源桥接层，所有新增来源应先构造 `SocMemoryCandidateCreateCommand`，再通过 `SocMemoryService.propose_candidate()` 写入。
+- `SocReviewService.correct()` 在配置 `MemoryCandidateRepository` 时会自动把人工/外部复用 correction 生成 pending candidate，并把 `memory_candidate_id` 写回 `CorrectionRecord`、audit payload 和 review corrected event。
+- `DomainTriageResult/SocDomainFinding` 已有 bridge/factory，可按 finding 稳定幂等生成 pending candidate；当前仍需由后续 entry/service 显式调用。
+- `InvestigationEvidence` 仍只是候选记忆的 evidence ref，不直接触发 memory 写入。
+
+剩余接入：
+
+- ReviewQueue 关闭备注、Lead Agent proposal、Kafka/daemon repeated pattern 和 domain finding 持久化路径还需要逐个接入同一个 bridge。
+- 每个新来源必须补幂等测试，证明重放不会重复写 candidate。
 
 验收：
 

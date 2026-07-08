@@ -41,6 +41,11 @@ from soc_agent.contracts import (
     SocAgentRouteDecision,
     SocAssetLookupRecord,
     SocDaemonMessage,
+    SocDomainFinding,
+    SocDomainFindingDisposition,
+    SocDomainFindingSeverity,
+    SocDomainName,
+    SocDomainTriageResult,
     SocEvent,
     SocEventType,
     SocMemoryCandidateCreateCommand,
@@ -75,7 +80,7 @@ from soc_agent.core import (
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
 )
-from soc_agent.memory import InMemoryMemoryCandidateRepository
+from soc_agent.memory import InMemoryMemoryCandidateRepository, SocMemoryCandidateSourceBridge
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
 
@@ -685,6 +690,102 @@ def test_review_service_correct_closes_open_review_queue_item() -> None:
     assert closed.status == ReviewQueueStatus.CLOSED
     assert closed.close_reason == "manual correction: Analyst confirmed authorized activity."
     assert closed.closed_by is not None
+
+
+def test_review_service_correct_proposes_pending_memory_candidate() -> None:
+    repository = InMemoryAlertRepository()
+    review_repository = InMemoryReviewQueueRepository()
+    audit_repository = InMemoryAuditRepository()
+    memory_repository = InMemoryMemoryCandidateRepository()
+    run = SocAnalysisService(
+        repository=repository,
+        review_queue_repository=review_repository,
+    ).analyze(_sample("pingan_legacy_edr.json"))
+    open_item = review_repository.get_open_review_item_by_run(run.run_id)
+    assert open_item is not None
+
+    corrected = SocReviewService(
+        repository=repository,
+        review_queue_repository=review_repository,
+        audit_repository=audit_repository,
+        memory_candidate_repository=memory_repository,
+    ).correct(
+        CorrectionCommand(
+            run_id=run.run_id,
+            corrected_verdict=Verdict.FALSE_POSITIVE,
+            corrected_confidence=0.88,
+            reason="Analyst confirmed this EDR activity was authorized maintenance.",
+        ),
+        context=ServiceRequestContext(
+            actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI),
+        ),
+    )
+
+    correction = corrected.corrections[0]
+    assert correction.candidate_knowledge_status == "pending_review"
+    assert correction.memory_candidate_id is not None
+    candidate = memory_repository.get_memory_candidate(correction.memory_candidate_id)
+    assert candidate is not None
+    assert candidate.status is SocMemoryCandidateStatus.PENDING_REVIEW
+    assert candidate.candidate_type is SocMemoryCandidateType.BENIGN_PATTERN
+    assert candidate.source.source_type is SocMemoryCandidateSourceType.CORRECTION
+    assert candidate.source.run_id == run.run_id
+    assert candidate.source.alert_id == run.alert_id
+    assert candidate.source.queue_id == open_item.queue_id
+    assert candidate.source.correction_id == correction.correction_id
+    assert candidate.idempotency_key == f"memory_candidate:correction:{correction.correction_id}"
+    assert "correction" in candidate.facets["candidate_source"]
+    assert "false_positive" in candidate.facets["corrected_verdict"]
+    assert audit_repository.records[0].payload["memory_candidate_id"] == correction.memory_candidate_id
+
+
+def test_memory_source_bridge_proposes_domain_finding_candidate_idempotently() -> None:
+    memory_repository = InMemoryMemoryCandidateRepository()
+    bridge = SocMemoryCandidateSourceBridge(SocMemoryService(candidate_repository=memory_repository))
+    finding = SocDomainFinding(
+        domain=SocDomainName.EDR,
+        title="Reverse shell behavior candidate",
+        summary="Endpoint command line and outbound connection resemble a reverse shell.",
+        severity=SocDomainFindingSeverity.HIGH,
+        disposition=SocDomainFindingDisposition.SUSPICIOUS,
+        confidence=0.81,
+        evidence_refs=["EVI-PROC-1"],
+        skill_names=["soc-endpoint-triage"],
+        recommendations=["Confirm process ancestry and remote endpoint before containment."],
+    )
+    result = SocDomainTriageResult(
+        request_id="DTR-SCENARIO-1",
+        run_id="RUN-SCENARIO-1",
+        alert_id="ALT-SCENARIO-1",
+        domain=SocDomainName.EDR,
+        handler_id="soc.domain.edr.v1",
+        findings=[finding],
+        evidence_ref_count=1,
+    )
+
+    first = bridge.propose_from_domain_triage_result(
+        result,
+        queue_id="REV-SCENARIO-1",
+        tenant_id="tenant-a",
+    )
+    second = bridge.propose_from_domain_triage_result(
+        result,
+        queue_id="REV-SCENARIO-1",
+        tenant_id="tenant-a",
+    )
+
+    assert len(first) == 1
+    assert len(second) == 1
+    assert first[0].candidate_id == second[0].candidate_id
+    candidate = first[0]
+    assert candidate.candidate_type is SocMemoryCandidateType.DETECTION_LESSON
+    assert candidate.source.source_type is SocMemoryCandidateSourceType.DOMAIN_FINDING
+    assert candidate.source.run_id == "RUN-SCENARIO-1"
+    assert candidate.source.alert_id == "ALT-SCENARIO-1"
+    assert candidate.source.queue_id == "REV-SCENARIO-1"
+    assert "EVI-PROC-1" in candidate.evidence_refs
+    assert "domain_finding" in candidate.facets["candidate_source"]
+    assert "edr" in candidate.facets["domain"]
 
 
 def test_review_service_lists_and_closes_queue_item() -> None:

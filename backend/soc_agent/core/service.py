@@ -75,6 +75,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.core.runtime import analyze_alert, build_analysis_request_for_payload, inspect_alert_normalization
+from soc_agent.memory import SocMemoryCandidateSourceBridge
 from soc_agent.normalizers import load_mapping_config, normalize_alert_payload
 from soc_agent.protocols import (
     AlertRepository,
@@ -490,6 +491,7 @@ class SocReviewService:
             reason=command.reason,
             automation_allowed=False,
         )
+        review_item = self._review_queue_repository.get_open_review_item_by_run(run.run_id) if self._review_queue_repository is not None else None
         self._repository.save_run(run)
         if self._summary_repository is not None:
             self._summary_repository.save_alert_summary(_alert_summary_from_run(run))
@@ -500,6 +502,16 @@ class SocReviewService:
                 actor=request_context.actor,
                 reason=f"manual correction: {command.reason}",
             )
+        memory_candidate = self._propose_correction_memory_candidate(
+            run,
+            record,
+            queue_item=review_item,
+            context=request_context,
+        )
+        if memory_candidate is not None:
+            record.memory_candidate_id = memory_candidate.candidate_id
+            run.corrections[-1] = record
+            self._repository.save_run(run)
         if self._audit_repository is not None:
             self._audit_repository.save_audit_record(_correction_audit_record(run, record))
         self._event_sink.emit(
@@ -514,10 +526,32 @@ class SocReviewService:
                     "previous_verdict": previous_verdict.value if previous_verdict is not None else None,
                     "corrected_verdict": command.corrected_verdict.value,
                     "candidate_knowledge_status": record.candidate_knowledge_status,
+                    "memory_candidate_id": record.memory_candidate_id,
                 },
             )
         )
         return run
+
+    def _propose_correction_memory_candidate(
+        self,
+        run: AnalysisRun,
+        record: CorrectionRecord,
+        *,
+        queue_item: ReviewQueueItem | None,
+        context: ServiceRequestContext,
+    ) -> SocMemoryCandidate | None:
+        if self._memory_candidate_repository is None:
+            return None
+        memory_service = SocMemoryService(
+            candidate_repository=self._memory_candidate_repository,
+            event_sink=self._event_sink,
+        )
+        return SocMemoryCandidateSourceBridge(memory_service).propose_from_correction(
+            run,
+            record,
+            queue_item=queue_item,
+            context=context,
+        )
 
     def list_queue(
         self,
@@ -2701,6 +2735,7 @@ def _correction_audit_record(run: AnalysisRun, record: CorrectionRecord) -> Deci
         payload={
             "reason": record.reason,
             "candidate_knowledge_status": record.candidate_knowledge_status,
+            "memory_candidate_id": record.memory_candidate_id,
             "evidence_count": len(record.evidence),
             "automation_allowed": False,
         },

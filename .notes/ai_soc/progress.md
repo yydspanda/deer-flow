@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口完成，Phase 2 correlation / domain triage 起步 |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence / external disposition PG + ReviewQueue visibility / memory candidate PG + API + ReviewQueue visibility / memory candidate review workflow / confirmed memory retrieval policy MVP / Web/TUI visible investigation MVP / persistent demo script MVP 已固定；真实 dev/staging MCP 等待 endpoint/凭证；当前主线转向 memory candidate 来源闭环和通用安全场景识别 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence / external disposition PG + ReviewQueue visibility / memory candidate PG + API + ReviewQueue visibility / memory candidate review workflow / confirmed memory retrieval policy MVP / Web/TUI visible investigation MVP / persistent demo script MVP 已固定；memory candidate source bridge 已接 correction 和 domain finding；真实 dev/staging MCP 等待 endpoint/凭证；当前主线继续做通用安全场景识别 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 做 memory candidate 来源闭环：把 TUI/Web correction、Kafka/daemon、Lead Agent proposal、domain finding、external disposition 等重要结论按统一 source/evidence/validity/idempotency 生成 pending candidate；后续场景识别按“反弹 shell / webshell / 横向移动 / 命令执行 / 恶意外联”等通用安全场景推进，不把 F5/WAF 当固定主线。 |
+| 当前下一刀 | 做 generic security scenario recognition：按“反弹 shell / webshell / 横向移动 / 命令执行 / 恶意外联 / 提权 / 凭证滥用”等通用安全场景推进，不把 F5/WAF 当固定主线；后续 Kafka/Lead Agent/review note 等 memory 来源继续按 `SocMemoryCandidateSourceBridge` 接入。 |
 
 ## 当前待办列表
 
@@ -51,16 +51,16 @@
 | 0.12 | `PA-12` real PingAn MCP/API replacement | Waiting | 等真实 PingAn dev/staging MCP/API endpoint/凭证后替换 mock provider，保存 smoke/eval report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险；不能用本地 mock 假装完成 |
 | 1 | Correlation Service MVP | Done | 已新增 `SocCorrelationService`、`CorrelationQuery`、`CorrelationResult`、CLI `soc correlate`；基于 summary/evidence 输出相似告警、匹配原因和可复用证据 | 不调用 LLM、不依赖真实 MCP、不改 DeerFlow core；demo alert 可看到结构化 correlation result |
 | 2 | External Disposition Sync Contract | Done | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol、in-memory repository、PostgreSQL persistence、ReviewQueue context API/Web/TUI/Lead Agent visibility；已接 high-trust mapped review/correction 和 pending memory candidate | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
-| 3 | Memory Tracking Contract | Partial | DB-first candidate persistence、review workflow、confirmed-memory boundary 和 retrieval policy MVP 已完成；下一步是 candidate 写入来源和 prompt injection/replay diff 的受控设计 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
+| 3 | Memory Tracking Contract | Partial | DB-first candidate persistence、review workflow、confirmed-memory boundary 和 retrieval policy MVP 已完成；`SocMemoryCandidateSourceBridge` 已接 correction 和 domain finding；下一步是 Kafka/Lead Agent/review note 等来源、prompt injection/replay diff 的受控设计 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
 | 3.1 | Memory candidate DB/API/ReviewQueue visibility | Done | 已新增 `soc_memory_candidates`、repository、CLI `soc memory list/get`、Gateway `/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded visibility | candidate 仍为 `pending_review` 且 `runtime_decision_allowed=false`；不注入 prompt，不影响 verdict |
 | 3.2 | Memory candidate review workflow / confirmed-memory boundary | Done | 已新增 `SocMemoryCandidateReviewCommand/Result`、`SocMemoryRecord`、`soc_memory_records`、`soc memory review`、`soc memory records list/get`、Gateway review/records API 和 ReviewQueue Web 操作入口 | confirm/reject/deprecate/expire 只能走 `SocMemoryService`；`confirm` 生成 `SocMemoryRecord(retrieval_enabled=false)`；不注入 prompt，不影响 verdict |
 | 3.3 | Confirmed memory retrieval policy / unified visibility MVP | Done | 已新增 `SocMemoryQuery`、`SocMemoryMatch`、`SocMemoryRetrievalResult`、`SocMemoryService.find_relevant_records()`、CLI `soc memory search`、Gateway `/api/soc/memory/search`、`InvestigationContext.relevant_memories` 和 Web/TUI/Lead Agent 可见化 | 只返回 `retrieval_enabled=true`、confirmed、未过期 record；返回 score/match reason/token estimate/hash/version；不注入 prompt，不影响 verdict |
 | 4 | Domain Sub-Agent Contract | Done for PA-10 | 已固定 `SocDomainTriageRequest`、`SocDomainTriageResult`、`SocDomainFinding` 结构 | EDR/APT/HIDS 已共用同一 schema；子研判不能直接改 decision 或写 DB |
-| 5 | Generic security scenario recognition | Planned after memory source integration | 从 source-specific handler 思路升级为“数据源归一化 + 安全场景识别”，候选场景包括反弹 shell、webshell、横向移动、命令执行、恶意外联、提权、凭证滥用等；F5/WAF 只作为可能的数据源/adapter 示例 | 任何来源的告警都通过统一 `SocDomainTriageResult/Finding` 输出场景化 finding；LLM 可在 bounded context 中识别场景，但不能直接改 verdict 或写 confirmed memory |
+| 5 | Generic security scenario recognition | Current | 从 source-specific handler 思路升级为“数据源归一化 + 安全场景识别”，候选场景包括反弹 shell、webshell、横向移动、命令执行、恶意外联、提权、凭证滥用等；F5/WAF 只作为可能的数据源/adapter 示例 | 任何来源的告警都通过统一 `SocDomainTriageResult/Finding` 输出场景化 finding；LLM 可在 bounded context 中识别场景，但不能直接改 verdict 或写 confirmed memory |
 | 6 | Main SOC Agent Orchestrator MVP | Done for PA-11 / correlation merge pending | 已串起 analyze、skill context、read-only action evidence、domain triage、review summary，输出 `UnifiedInvestigationReport`；correlation 尚未并入 report | APT/EDR/HIDS demo 能看到主控用了哪些 skill、route、evidence、domain finding 和 review context |
 | 7 | Web/TUI visible investigation | Done for MVP | 已新增 `UnifiedInvestigationView`、`InvestigationTimelineItem`，`InvestigationContext` 聚合 correlation result、domain triage results、evidence timeline、external feedback、memory candidates 和 relevant memories；Web/TUI/Lead Agent bounded artifact 可见 | 分析师能区分 runtime decision、domain findings、read-only evidence、外部人工反馈、人工 correction、retrieval-enabled memory；视图只读，不改 verdict |
 | 8 | Demo / Eval Script | Done for APT/EDR/HIDS MVP | 已新增 `soc demo run [all|apt|edr|hids]`，用 PingAn 脱敏样例持久化 ReviewQueue item、read-only evidence、domain finding、confirmed/retrieval memory 和 unified investigation view | 一条命令可稳定演示 runtime + domain triage + evidence + review 状态，并能直接用 `soc review context QUEUE_ID --pretty` 或 Web/TUI 打开统一调查视图；本 MVP 为保持 open review 可见性，暂不种 external disposition |
-| 9 | Memory candidate source integration | Current | 把 correction、external disposition、domain finding、Lead Agent proposal、Kafka daemon 等结论统一生成 pending candidate，而不是直接写 confirmed memory | 每类来源都有 source/evidence/validity/idempotency/facet；候选默认 pending review；confirmed/retrieval gate 仍由 `SocMemoryService` 控制 |
+| 9 | Memory candidate source integration | Partial | 已新增 `SocMemoryCandidateSourceBridge`：correction 会自动生成 pending candidate 并回写 `memory_candidate_id`，domain finding 已有幂等 bridge/factory；Kafka daemon、Lead Agent proposal、review note 等来源待接 | 每类来源都有 source/evidence/validity/idempotency/facet；候选默认 pending review；confirmed/retrieval gate 仍由 `SocMemoryService` 控制 |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Deferred | Kafka/review/approval/runtime 数据流稳定后，再做指标和运行态势面板 | 不阻塞当前 SOC Agent Alpha |
@@ -172,6 +172,29 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-08 — Memory candidate source bridge + correction integration
+
+- 背景：
+  - Candidate store、review workflow、retrieval gate 和统一调查视图已经存在，但候选记忆来源如果继续散落在 correction、domain、Kafka、Lead Agent 等模块里，后续会重复实现 source/evidence/facet/idempotency 逻辑。
+- 变更：
+  - 新增 `backend/soc_agent/memory/sources.py`：
+    - `SocMemoryCandidateSourceBridge` 统一把稳定 SOC 来源转成 `SocMemoryCandidateCreateCommand`，再通过 `SocMemoryService.propose_candidate()` 写入。
+    - 已支持 `CorrectionRecord` 和 `SocDomainTriageResult/SocDomainFinding` 两类来源。
+    - correction candidate 带 `correction/run/alert/review_queue` evidence refs、corrected/previous verdict facets 和 correction idempotency key。
+    - domain finding candidate 使用稳定 hash key，避免同一 finding 重放重复写入。
+  - `SocReviewService.correct()` 在注入 `MemoryCandidateRepository` 时自动生成 pending candidate，并把 `memory_candidate_id` 写回 `CorrectionRecord`、audit payload 和 review corrected event。
+  - `CorrectionRecord` 新增 `memory_candidate_id`，用于把 operational correction 和 pending memory candidate 串起来。
+- 边界：
+  - 本刀不自动确认 memory，不启用 prompt injection，不改变 runtime verdict。
+  - `InvestigationEvidence` 仍只是 evidence ref，不直接触发 memory 写入。
+  - Domain finding bridge 已完成，但后续 entry/service 还需要显式调用它。
+- 验证：
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff check backend/soc_agent/memory backend/soc_agent/core/service.py backend/soc_agent/contracts/schemas.py backend/tests/test_soc_agent_service.py backend/tests/test_soc_external_disposition.py backend/tests/test_soc_agent_repository.py`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_agent_service.py backend/tests/test_soc_external_disposition.py backend/tests/test_soc_agent_repository.py -q`
+  - `codegraph sync .`
+- 下一步：
+  - 做 generic security scenario recognition，优先把反弹 shell、webshell、横向移动、命令执行、恶意外联、提权、凭证滥用等通用场景落到 `SocDomainTriageResult/Finding`；Kafka/Lead Agent/review note 等记忆来源按同一 bridge 逐步接入。
 
 ### 2026-07-08 — Persistent demo script MVP
 
