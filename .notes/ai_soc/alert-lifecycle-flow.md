@@ -29,7 +29,7 @@ alert in
 - `SocCorrelationService` MVP 已存在，能通过 CLI/core service 输出结构化相似告警、匹配原因和可复用 evidence；后续还需要接入 ReviewQueue/Web/TUI 可视化面板。
 - External Disposition 已有 vendor-neutral event/mapping/service MVP，并且 high-trust mapped 外部结论可同步为本地 correction / review close；mapped 且可定位的外部 reason 可生成 pending memory candidate；DB/API 和 Web/TUI visibility 已完成。
 - `SocMemoryCandidate` 已有 DB-first candidate store、API/CLI、ReviewQueue Web/TUI/Lead Agent visibility 和 confirm/reject/deprecate/expire review workflow；`confirm` 会生成 `SocMemoryRecord(retrieval_enabled=false)`；confirmed memory retrieval policy MVP 已能按 `retrieval_enabled=true` gate 返回 `relevant_memories`，但 prompt injection / runtime decision 仍未开启。
-- APT/EDR/HIDS 已有统一 `SocDomainTriageRequest` / `SocDomainTriageResult` / `SocDomainFinding`。后续不按 F5/WAF 这类单一来源固定排期，而是按反弹 shell、webshell、横向移动、命令执行、恶意外联、提权、凭证滥用等通用安全场景补识别能力。
+- APT/EDR/HIDS 已有统一 `SocDomainTriageRequest` / `SocDomainTriageResult` / `SocDomainFinding`。通用安全场景 deterministic MVP 已覆盖反弹 shell、webshell、横向移动、命令执行、恶意外联、提权、凭证滥用；未命中内部 taxonomy 但存在上游提示时会输出 `vendor.unmapped` 候选 finding。后续不按 F5/WAF 这类单一来源固定排期，而是继续补 bounded LLM recognizer、自定义 taxonomy 和反馈/记忆闭环。
 - PA-11 已有只读 Main Orchestrator demo：`SocMainOrchestratorService` 能把 deterministic analyze、selected skills、read-only action evidence、domain findings 和 review context 合成 `UnifiedInvestigationReport`。
 - 这条链路已经通过 `UnifiedInvestigationView` 接入 ReviewQueue Web/TUI/Lead Agent bounded context 的统一调查视图；还没有替换为真实 PingAn MCP/API，PA-12 等真实 endpoint/凭证。
 - `soc demo run [all|apt|edr|hids]` 已能把 APT/EDR/HIDS 脱敏样例持久化成可打开的 investigation chain：ReviewQueue item、read-only evidence、domain finding、confirmed/retrieval memory 和 unified investigation view。
@@ -48,11 +48,11 @@ alert in
   -> [Done] Memory candidate DB/API/ReviewQueue visibility
   -> [Done] Memory candidate review workflow / confirmed-memory boundary
   -> [Done] Confirmed memory retrieval policy / unified investigation visibility MVP
-  -> [Partial] APT/EDR/HIDS source handlers done; generic scenario recognition pending
+  -> [Done] APT/EDR/HIDS source handlers done
   -> [Done] Web/TUI visible investigation MVP
   -> [Done] Demo / Eval Script MVP
-  -> [Partial] Memory candidate source integration: correction + domain finding bridge done
-  -> [Partial] Generic security scenario recognition deterministic MVP
+  -> [Partial] Memory candidate source integration: correction + domain finding + analyst feedback bridge done; Review note / Lead Agent note / Kafka sources pending
+  -> [Partial] Generic security scenario recognition deterministic MVP + vendor.unmapped fallback + vendor-neutral eval/replay diff baseline; bounded LLM recognizer/custom taxonomy pending
 ```
 
 暂缓项不作为当前 Alpha 前置条件：
