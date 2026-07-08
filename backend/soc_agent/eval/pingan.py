@@ -50,6 +50,7 @@ from soc_agent.core import (
     SocDomainTriageService,
     SocMainOrchestratorService,
 )
+from soc_agent.domain import SCENARIO_TAXONOMY_VERSION, scenario_taxonomy_keys
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_PINGAN_CAPABILITY_EVAL_DIR = REPO_ROOT / "backend" / "samples" / "eval" / "pingan"
@@ -172,11 +173,17 @@ class PingAnDomainTriageEvalReport(BaseModel):
     """Aggregate report for PingAn PA-10 domain triage fixtures."""
 
     schema_version: str = "soc.pingan_domain_triage_eval_report.v1"
+    scenario_taxonomy_version: str = SCENARIO_TAXONOMY_VERSION
     sample_count: int = 0
     finding_count: int = 0
+    scenario_finding_count: int = 0
+    unmapped_vendor_scenario_count: int = 0
     passed_count: int = 0
     failed_count: int = 0
     domain_counts: dict[str, int] = Field(default_factory=dict)
+    scenario_taxonomy_keys: list[str] = Field(default_factory=list)
+    covered_scenario_keys: list[str] = Field(default_factory=list)
+    missing_scenario_taxonomy_keys: list[str] = Field(default_factory=list)
     results: list[PingAnDomainTriageEvalSampleResult] = Field(default_factory=list)
 
 
@@ -256,12 +263,19 @@ def run_pingan_domain_triage_eval(fixtures: Sequence[PingAnCapabilityEvalFixture
     for result in results:
         if result.domain is not None:
             domain_counts[result.domain.value] = domain_counts.get(result.domain.value, 0) + 1
+    taxonomy_keys = scenario_taxonomy_keys()
+    covered_scenario_keys = sorted({finding.scenario_key for result in results for finding in result.findings if finding.scenario_key and finding.scenario_key != "vendor.unmapped"})
     return PingAnDomainTriageEvalReport(
         sample_count=len(results),
         finding_count=sum(result.finding_count for result in results),
+        scenario_finding_count=sum(1 for result in results for finding in result.findings if finding.scenario_key),
+        unmapped_vendor_scenario_count=sum(1 for result in results for finding in result.findings if finding.scenario_key == "vendor.unmapped"),
         passed_count=sum(result.passed for result in results),
         failed_count=sum(not result.passed for result in results),
         domain_counts=domain_counts,
+        scenario_taxonomy_keys=taxonomy_keys,
+        covered_scenario_keys=covered_scenario_keys,
+        missing_scenario_taxonomy_keys=[key for key in taxonomy_keys if key not in covered_scenario_keys],
         results=results,
     )
 

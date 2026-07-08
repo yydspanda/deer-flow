@@ -744,6 +744,8 @@ def test_memory_source_bridge_proposes_domain_finding_candidate_idempotently() -
     bridge = SocMemoryCandidateSourceBridge(SocMemoryService(candidate_repository=memory_repository))
     finding = SocDomainFinding(
         domain=SocDomainName.EDR,
+        scenario_key="execution.reverse_shell",
+        scenario_name="疑似反弹 shell",
         title="Reverse shell behavior candidate",
         summary="Endpoint command line and outbound connection resemble a reverse shell.",
         severity=SocDomainFindingSeverity.HIGH,
@@ -767,11 +769,13 @@ def test_memory_source_bridge_proposes_domain_finding_candidate_idempotently() -
         result,
         queue_id="REV-SCENARIO-1",
         tenant_id="tenant-a",
+        analyst_feedback="Analyst confirmed the scenario was useful, but containment still needs process ancestry evidence.",
     )
     second = bridge.propose_from_domain_triage_result(
         result,
         queue_id="REV-SCENARIO-1",
         tenant_id="tenant-a",
+        analyst_feedback="Analyst confirmed the scenario was useful, but containment still needs process ancestry evidence.",
     )
 
     assert len(first) == 1
@@ -786,6 +790,12 @@ def test_memory_source_bridge_proposes_domain_finding_candidate_idempotently() -
     assert "EVI-PROC-1" in candidate.evidence_refs
     assert "domain_finding" in candidate.facets["candidate_source"]
     assert "edr" in candidate.facets["domain"]
+    assert "execution.reverse_shell" in candidate.facets["scenario_key"]
+    assert "analyst" in candidate.facets["feedback_source"]
+    assert "analyst-feedback" in candidate.labels
+    assert "Analyst feedback:" in candidate.content
+    assert candidate.metadata["analyst_feedback_present"] is True
+    assert candidate.runtime_decision_allowed is False
 
 
 def test_review_service_lists_and_closes_queue_item() -> None:

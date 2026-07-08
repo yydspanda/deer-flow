@@ -20,6 +20,8 @@ from soc_agent.contracts import (
 )
 from soc_agent.normalizers import normalize_alert_payload
 
+SCENARIO_TAXONOMY_VERSION = "soc.scenario_taxonomy.v1"
+
 _SCENARIO_RULES: tuple[dict[str, Any], ...] = (
     {
         "key": "execution.reverse_shell",
@@ -64,10 +66,10 @@ _SCENARIO_RULES: tuple[dict[str, Any], ...] = (
             "菜刀",
             "eval(",
             "assert(",
-            "jsp",
-            "jspx",
-            "php",
-            "upload",
+            "cmd.jsp",
+            "shell.jsp",
+            "cmd.php",
+            "shell.php",
         ),
         "required_routes": ("asset.lookup", "host.event_context.lookup"),
         "checklist": (
@@ -200,6 +202,29 @@ _SCENARIO_RULES: tuple[dict[str, Any], ...] = (
         ),
     },
 )
+
+
+def scenario_taxonomy_snapshot() -> list[dict[str, Any]]:
+    """Return a stable, replay-diff friendly view of deterministic scenario rules."""
+
+    return [
+        {
+            "key": str(rule["key"]),
+            "name": str(rule["name"]),
+            "family": str(rule["family"]),
+            "severity": rule["severity"].value if isinstance(rule["severity"], SocDomainFindingSeverity) else str(rule["severity"]),
+            "review_queue": str(rule["queue"]),
+            "required_routes": list(rule["required_routes"]),
+            "keyword_count": len(rule["keywords"]),
+        }
+        for rule in _SCENARIO_RULES
+    ]
+
+
+def scenario_taxonomy_keys() -> list[str]:
+    """Return deterministic scenario keys in taxonomy order."""
+
+    return [item["key"] for item in scenario_taxonomy_snapshot()]
 
 
 def scenario_findings(request: SocDomainTriageRequest, domain: SocDomainName) -> list[SocDomainFinding]:
@@ -650,7 +675,10 @@ def _dedupe_strs(values: list[str]) -> list[str]:
 
 
 __all__ = [
+    "SCENARIO_TAXONOMY_VERSION",
     "evidence_profile_for_request",
     "finding_conclusion",
     "scenario_findings",
+    "scenario_taxonomy_keys",
+    "scenario_taxonomy_snapshot",
 ]

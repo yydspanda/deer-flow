@@ -64,6 +64,7 @@ class SocMemoryCandidateSourceBridge:
         *,
         queue_id: str | None = None,
         tenant_id: str | None = None,
+        analyst_feedback: str | None = None,
         context: ServiceRequestContext | None = None,
     ) -> SocMemoryCandidate:
         return self._memory_service.propose_candidate(
@@ -72,6 +73,7 @@ class SocMemoryCandidateSourceBridge:
                 finding,
                 queue_id=queue_id,
                 tenant_id=tenant_id,
+                analyst_feedback=analyst_feedback,
             ),
             context=context,
         )
@@ -82,6 +84,7 @@ class SocMemoryCandidateSourceBridge:
         *,
         queue_id: str | None = None,
         tenant_id: str | None = None,
+        analyst_feedback: str | None = None,
         context: ServiceRequestContext | None = None,
     ) -> list[SocMemoryCandidate]:
         return [
@@ -90,6 +93,7 @@ class SocMemoryCandidateSourceBridge:
                 finding,
                 queue_id=queue_id,
                 tenant_id=tenant_id,
+                analyst_feedback=analyst_feedback,
                 context=context,
             )
             for finding in result.findings
@@ -159,10 +163,12 @@ def memory_candidate_command_from_domain_finding(
     *,
     queue_id: str | None = None,
     tenant_id: str | None = None,
+    analyst_feedback: str | None = None,
 ) -> SocMemoryCandidateCreateCommand:
     """Build a pending candidate from a bounded domain/scenario finding."""
 
     stable_key = _stable_domain_finding_key(result, finding)
+    feedback = _normalize_feedback(analyst_feedback)
     evidence_refs = [
         f"domain_finding:{stable_key}",
         f"domain_triage:{result.request_id}",
@@ -175,7 +181,7 @@ def memory_candidate_command_from_domain_finding(
         candidate_type=_candidate_type_for_finding(finding),
         target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
         summary=f"{finding.domain.value} finding: {finding.title}",
-        content=_domain_finding_content(finding),
+        content=_domain_finding_content(finding, analyst_feedback=feedback),
         tenant_scope=tenant_id or "global",
         tenant_id=tenant_id,
         source=SocMemoryCandidateSource(
@@ -209,10 +215,11 @@ def memory_candidate_command_from_domain_finding(
             **({"queue_id": [queue_id]} if queue_id else {}),
             **({"skill": finding.skill_names} if finding.skill_names else {}),
             **({"capability_card": finding.capability_card_refs} if finding.capability_card_refs else {}),
+            **({"feedback_source": ["analyst"]} if feedback else {}),
         },
         decision_impact=SocMemoryDecisionImpact.REVIEW_HINT,
         review_owner="soc_analyst",
-        labels=["domain-finding", "candidate-only", finding.domain.value, finding.disposition.value],
+        labels=["domain-finding", "candidate-only", finding.domain.value, finding.disposition.value, *(["analyst-feedback"] if feedback else [])],
         metadata={
             "runtime_decision_allowed": False,
             "source": "domain_finding",
@@ -220,6 +227,8 @@ def memory_candidate_command_from_domain_finding(
             "handler_id": result.handler_id,
             "recommendation_count": len(finding.recommendations),
             "limitation_count": len(finding.limitations),
+            "analyst_feedback_present": bool(feedback),
+            **({"analyst_feedback_length": len(feedback)} if feedback else {}),
         },
     )
 
@@ -286,7 +295,7 @@ def _correction_content(run: AnalysisRun, correction: CorrectionRecord) -> str:
     return f"Analyst correction changed verdict from {previous} to {correction.corrected_verdict.value}.\nReason: {correction.reason}\nRuntime summary: {summary}"
 
 
-def _domain_finding_content(finding: SocDomainFinding) -> str:
+def _domain_finding_content(finding: SocDomainFinding, *, analyst_feedback: str | None = None) -> str:
     lines = [
         f"Finding summary: {finding.summary}",
         f"Disposition: {finding.disposition.value}",
@@ -301,7 +310,17 @@ def _domain_finding_content(finding: SocDomainFinding) -> str:
         lines.append("Recommendations: " + " | ".join(finding.recommendations))
     if finding.limitations:
         lines.append("Limitations: " + " | ".join(finding.limitations))
+    feedback = _normalize_feedback(analyst_feedback)
+    if feedback:
+        lines.append(f"Analyst feedback: {feedback}")
     return "\n".join(lines)
+
+
+def _normalize_feedback(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = " ".join(value.split())
+    return normalized or None
 
 
 def _candidate_type_for_correction(verdict: Verdict) -> SocMemoryCandidateType:

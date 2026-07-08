@@ -223,8 +223,10 @@ Domain triage 约束：
 - PA-10 handler 输出只允许包含 finding、scenario hints、evidence profile、current conclusion、evidence refs、capability card refs、recommendations、limitations、human checklist 和 metadata；任何处置动作必须转成 action proposal 并回到 policy/approval boundary。
 - 每个 `SocDomainFinding` 必须给出当前结论：`current_conclusion.summary`、risk/certainty、recommended action/queue、`automation_allowed=false`。证据不足不能输出“无法判断然后停止”；必须给出当前偏向判断、证据缺口和人工核查清单。
 - Evidence Fusion First 是 domain/scenario triage 默认策略：raw/canonical alert、历史相似预警、外部处置反馈、confirmed memory、read-only evidence 和可用 tool evidence 都是常规输入；工具证据缺失只能降低 certainty 并进入 `evidence_profile.gaps`，不得阻塞 finding 输出。
+- deterministic scenario taxonomy 必须通过 `soc_agent.domain.scenarios` 暴露稳定 `SCENARIO_TAXONOMY_VERSION`、`scenario_taxonomy_keys()` 和 `scenario_taxonomy_snapshot()`；eval/replay diff 只能消费这些稳定快照，不能读取 `_SCENARIO_RULES` 私有结构。
 - 如果厂商/上游提供了场景提示但内部 deterministic scenario taxonomy 未命中，domain triage 必须输出 `scenario_key=vendor.unmapped` 的低/中置信候选 finding，保留 `vendor_scenarios`、证据缺口和人工核查清单；它不能替代内部已识别场景，不能改 verdict，也不能直接写 confirmed memory。
-- Domain finding 是分析证据，不是 operational verdict。它可以进入 unified investigation report、ReviewQueue/Lead Agent bounded context 和 pending memory candidate source，但不能自动关闭工单或自动确认 memory。
+- Domain finding 是分析证据，不是 operational verdict。它可以进入 unified investigation report、ReviewQueue/Lead Agent bounded context 和 pending memory candidate source，但不能自动关闭工单或自动确认 memory。分析师对 domain/scenario finding 的反馈只能经 `SocMemoryCandidateSourceBridge` 生成 `pending_review` candidate；feedback 可以进入 candidate content/facets/metadata，但仍不得绕过 `SocMemoryService.review_candidate()`。
+- domain/scenario eval report 必须输出 taxonomy version、taxonomy keys、covered keys、missing keys 和 `vendor.unmapped` 计数，作为 replay diff 基线；eval 仍只读样本，不写业务库、不生成 confirmed memory。
 
 Main orchestrator 约束：
 

@@ -56,8 +56,15 @@ def test_pingan_domain_triage_eval_runs_default_fixtures() -> None:
     report = run_pingan_domain_triage_eval(fixtures)
 
     assert report.schema_version == "soc.pingan_domain_triage_eval_report.v1"
+    assert report.scenario_taxonomy_version == "soc.scenario_taxonomy.v1"
     assert report.sample_count == 3
     assert report.finding_count >= 6
+    assert report.scenario_finding_count >= 3
+    assert "execution.reverse_shell" in report.scenario_taxonomy_keys
+    assert {"execution.suspicious_command", "network.malicious_outbound", "lateral_movement"}.issubset(set(report.covered_scenario_keys))
+    assert report.unmapped_vendor_scenario_count == 0
+    assert "execution.reverse_shell" in report.missing_scenario_taxonomy_keys
+    assert "web.webshell" in report.missing_scenario_taxonomy_keys
     assert report.failed_count == 0
     assert report.passed_count == 3
     assert report.domain_counts == {"apt": 1, "edr": 1, "hids": 1}

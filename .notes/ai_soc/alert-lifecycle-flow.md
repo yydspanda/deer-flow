@@ -555,13 +555,15 @@ flowchart TD
 - 场景识别可使用 LLM bounded reasoning，但输入必须来自 canonical alert、raw evidence、实体、read-only evidence、skill context 和 confirmed/retrieval memory。
 - 场景识别输出仍是 `SocDomainFinding`，不直接改 verdict，不写 confirmed memory。
 - Evidence Fusion First：raw/canonical alert、历史相似预警、外部处置反馈、confirmed memory、read-only action evidence 和可用工具证据都是常规输入；工具证据缺失只进入 evidence gaps 并降低 certainty，不能让 Agent 停止输出当前结论。
+- deterministic scenario taxonomy 已暴露稳定 version/keys/snapshot；eval/replay diff 只能消费该快照，不能读取私有规则结构。
 
 验收：
 
 - deterministic MVP 已输出 `scenario_key`、vendor scenario hints、`evidence_profile`、`current_conclusion` 和 `human_checklist`。
-- PingAn APT/EDR/HIDS eval 能识别命令/代码执行、恶意外联、横向移动等场景。
+- PingAn APT/EDR/HIDS eval 能识别命令/代码执行、恶意外联、横向移动等场景，并输出 covered/missing/unmapped taxonomy baseline。
 - 每个 scenario finding 都必须给出当前结论，即使证据不足也要明确证据缺口和人工核查清单。
-- 后续再补 bounded LLM recognizer、自定义 taxonomy、scenario replay/eval 指标和 analyst feedback -> candidate memory。
+- 分析师对 scenario/domain finding 的补充意见只能通过 `SocMemoryCandidateSourceBridge` 生成 `pending_review` candidate，不能直接成为 confirmed memory。
+- 后续再补 bounded LLM recognizer、自定义 taxonomy 和 vendor-neutral scenario replay/eval。
 
 ### Slice 6：Main SOC Agent Orchestrator MVP
 
