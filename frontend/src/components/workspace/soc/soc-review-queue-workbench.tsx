@@ -46,11 +46,13 @@ import type {
   SocAgentApprovedActionCommand,
   SocExternalDispositionRecord,
   SocInvestigationEvidence,
+  SocInvestigationTimelineItem,
   SocMemoryCandidate,
   SocMemoryCandidateReviewDecision,
   SocMemoryRetrievalResult,
   SocReviewQueueItem,
   SocReviewQueueStatus,
+  SocUnifiedInvestigationView,
   SocVerdict,
 } from "@/core/soc";
 import { cn } from "@/lib/utils";
@@ -147,6 +149,209 @@ function candidateSourceLabel(candidate: SocMemoryCandidate) {
     source.queue_id ? `queue ${source.queue_id}` : null,
   ].filter(Boolean);
   return refs.join(" / ");
+}
+
+function timelineKindLabel(kind: SocInvestigationTimelineItem["kind"]) {
+  const labels: Record<SocInvestigationTimelineItem["kind"], string> = {
+    analysis: "分析",
+    decision: "决策",
+    correlation: "关联",
+    domain_finding: "领域发现",
+    read_only_evidence: "只读证据",
+    external_disposition: "外部反馈",
+    memory_candidate: "候选记忆",
+    relevant_memory: "确认记忆",
+    audit: "审计",
+    correction: "纠正",
+  };
+  return labels[kind];
+}
+
+function UnifiedInvestigationViewSection({
+  view,
+}: {
+  view: SocUnifiedInvestigationView | null | undefined;
+}) {
+  if (!view) {
+    return (
+      <section className="rounded-md border">
+        <div className="text-muted-foreground p-4 text-sm">
+          当前上下文没有统一调查视图。
+        </div>
+      </section>
+    );
+  }
+  const correlationMatches = view.correlation_result?.matches ?? [];
+  const domainFindings = view.domain_triage_results.flatMap(
+    (result) => result.findings,
+  );
+  const timeline = view.evidence_timeline.slice(0, 8);
+  return (
+    <section className="rounded-md border">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b p-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <SearchCheckIcon className="text-muted-foreground size-4" />
+            <h3 className="text-sm font-semibold">统一调查视图</h3>
+          </div>
+          <p className="text-muted-foreground mt-1 text-xs">
+            {view.primary_summary ?? "暂无研判摘要"}
+          </p>
+        </div>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Badge variant="outline">{verdictLabel(view.runtime_verdict)}</Badge>
+          <Badge variant="secondary">
+            confidence {formatPercent(view.runtime_confidence)}
+          </Badge>
+          {view.needs_review ? (
+            <Badge variant="outline">needs review</Badge>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="grid divide-y text-sm md:grid-cols-4 md:divide-x md:divide-y-0">
+        <div className="p-4">
+          <div className="text-muted-foreground text-xs">只读证据</div>
+          <div className="mt-1 text-lg font-semibold">
+            {view.counts.action_evidence ?? 0}
+          </div>
+        </div>
+        <div className="p-4">
+          <div className="text-muted-foreground text-xs">关联告警</div>
+          <div className="mt-1 text-lg font-semibold">
+            {view.counts.correlation_matches ?? correlationMatches.length}
+          </div>
+        </div>
+        <div className="p-4">
+          <div className="text-muted-foreground text-xs">领域发现</div>
+          <div className="mt-1 text-lg font-semibold">
+            {view.counts.domain_findings ?? domainFindings.length}
+          </div>
+        </div>
+        <div className="p-4">
+          <div className="text-muted-foreground text-xs">记忆命中</div>
+          <div className="mt-1 text-lg font-semibold">
+            {view.counts.relevant_memories ?? 0}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid border-t xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+        <div className="border-b p-4 xl:border-r xl:border-b-0">
+          <div className="mb-3 text-sm font-medium">领域发现</div>
+          {domainFindings.length === 0 ? (
+            <div className="text-muted-foreground text-sm">暂无领域发现。</div>
+          ) : (
+            <div className="space-y-3">
+              {domainFindings.slice(0, 4).map((finding) => (
+                <div
+                  key={finding.finding_id}
+                  className="border-b pb-3 last:border-b-0 last:pb-0"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0 text-sm font-medium">
+                      {finding.title}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="outline">{finding.domain}</Badge>
+                      <Badge variant="secondary">{finding.disposition}</Badge>
+                      <Badge variant="outline">
+                        {formatPercent(finding.confidence)}
+                      </Badge>
+                    </div>
+                  </div>
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    {finding.summary}
+                  </p>
+                  {finding.recommendations.length > 0 ? (
+                    <p className="text-muted-foreground mt-2 text-xs">
+                      {finding.recommendations[0]}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="p-4">
+          <div className="mb-3 text-sm font-medium">调查时间线</div>
+          {timeline.length === 0 ? (
+            <div className="text-muted-foreground text-sm">
+              暂无时间线事件。
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {timeline.map((item) => (
+                <div
+                  key={item.item_id}
+                  className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-3 border-b pb-3 last:border-b-0 last:pb-0"
+                >
+                  <div className="text-muted-foreground text-xs">
+                    <div>{timelineKindLabel(item.kind)}</div>
+                    <div>{formatTime(item.occurred_at)}</div>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="truncate text-sm font-medium">
+                        {item.title}
+                      </div>
+                      {item.status ? (
+                        <Badge variant="outline">{item.status}</Badge>
+                      ) : null}
+                    </div>
+                    <p className="text-muted-foreground mt-1 line-clamp-2 text-xs">
+                      {item.summary ?? "-"}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {correlationMatches.length > 0 ? (
+        <div className="border-t p-4">
+          <div className="mb-3 text-sm font-medium">Top 关联告警</div>
+          <div className="divide-y">
+            {correlationMatches.slice(0, 3).map((match) => {
+              const reasonText = match.matched_reasons.join(", ");
+              const description =
+                reasonText.length > 0
+                  ? reasonText
+                  : (match.summary.summary ?? "-");
+              return (
+                <div
+                  key={match.summary.run_id}
+                  className="py-3 first:pt-0 last:pb-0"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0 truncate text-sm font-medium">
+                      {match.summary.rule_name ??
+                        match.summary.rule_code ??
+                        match.summary.alert_id}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="secondary">
+                        score {match.score.toFixed(0)}
+                      </Badge>
+                      <Badge variant="outline">
+                        evidence {match.reusable_evidence.length}
+                      </Badge>
+                    </div>
+                  </div>
+                  <p className="text-muted-foreground mt-1 line-clamp-2 text-xs">
+                    {description}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
 }
 
 function ApprovalProposalSummary({
@@ -1033,6 +1238,10 @@ export function SocReviewQueueWorkbench() {
                   />
                 </dl>
               </section>
+
+              <UnifiedInvestigationViewSection
+                view={context?.investigation_view}
+              />
 
               <ActionEvidenceSection
                 evidence={context?.action_evidence ?? []}

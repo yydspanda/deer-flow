@@ -142,6 +142,17 @@ def render_context(context: InvestigationContext) -> RenderableType:
             "relevant_memories",
             f"{context.relevant_memories.returned_count} returned / {context.relevant_memories.skipped_retrieval_disabled} retrieval-disabled skipped",
         )
+    if context.investigation_view is not None:
+        view = context.investigation_view
+        table.add_row(
+            "unified_view",
+            (f"correlation={view.counts.get('correlation_matches', 0)} domain={view.counts.get('domain_findings', 0)} evidence={view.counts.get('action_evidence', 0)} memory={view.counts.get('relevant_memories', 0)}"),
+        )
+        if view.evidence_timeline:
+            table.add_row(
+                "timeline",
+                ", ".join(f"{item.kind}:{item.status or '-'}" for item in view.evidence_timeline[:5]),
+            )
     return Group(Text("Investigation Context", style=f"bold {THEME.primary}"), table)
 
 

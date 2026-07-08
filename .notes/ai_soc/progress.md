@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口完成，Phase 2 correlation / domain triage 起步 |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence / external disposition PG + ReviewQueue visibility / memory candidate PG + API + ReviewQueue visibility / memory candidate review workflow / confirmed memory retrieval policy MVP 已固定；真实 dev/staging MCP 等待 endpoint/凭证；当前主线转向 Web/TUI visible investigation |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence / external disposition PG + ReviewQueue visibility / memory candidate PG + API + ReviewQueue visibility / memory candidate review workflow / confirmed memory retrieval policy MVP / Web/TUI visible investigation MVP 已固定；真实 dev/staging MCP 等待 endpoint/凭证；当前主线转向 Demo / Eval Script |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 做 Web/TUI visible investigation：把 correlation result、domain triage findings、main orchestrator report、evidence timeline、external feedback 和 relevant memories 收敛到分析师统一调查视图；仍不让 Web/TUI 复制业务逻辑。 |
+| 当前下一刀 | 做 Demo / Eval Script：用一条可重复命令生成或装载 APT/EDR/HIDS 样例、ReviewQueue item、read-only evidence、domain finding、relevant memory 和 unified investigation view，方便直接打开 Web/TUI 看效果。 |
 
 ## 当前待办列表
 
@@ -58,8 +58,8 @@
 | 4 | Domain Sub-Agent Contract | Done for PA-10 | 已固定 `SocDomainTriageRequest`、`SocDomainTriageResult`、`SocDomainFinding` 结构 | EDR/APT/HIDS 已共用同一 schema；子研判不能直接改 decision 或写 DB |
 | 5 | EDR/APT/HIDS/F5 MVP handlers | Partial | 已先做 APT/EDR/HIDS deterministic + skill context domain handlers，复用已有 read-only evidence/mock adapter | APT/EDR/HIDS demo 已能输出 domain findings 和 evidence refs；F5/WAF handler 后续补 |
 | 6 | Main SOC Agent Orchestrator MVP | Done for PA-11 / correlation merge pending | 已串起 analyze、skill context、read-only action evidence、domain triage、review summary，输出 `UnifiedInvestigationReport`；correlation 尚未并入 report | APT/EDR/HIDS demo 能看到主控用了哪些 skill、route、evidence、domain finding 和 review context |
-| 7 | Web/TUI visible investigation | Partial | ReviewQueue Web/TUI 已展示 read-only evidence、approval inbox/proposal、external disposition history 和 relevant memories；correlation panel、domain triage panel、main report、evidence timeline 仍待做 | 分析师能区分 runtime decision、domain findings、read-only evidence、外部人工反馈、人工 correction、retrieval-enabled memory |
-| 8 | Demo / Eval Script | Planned | 提供可重复 demo/eval 命令，跑 APT/EDR/HIDS/F5 样例并生成 review item/report | 一条命令可稳定演示 runtime + correlation + domain triage + evidence + review 状态 |
+| 7 | Web/TUI visible investigation | Done for MVP | 已新增 `UnifiedInvestigationView`、`InvestigationTimelineItem`，`InvestigationContext` 聚合 correlation result、domain triage results、evidence timeline、external feedback、memory candidates 和 relevant memories；Web/TUI/Lead Agent bounded artifact 可见 | 分析师能区分 runtime decision、domain findings、read-only evidence、外部人工反馈、人工 correction、retrieval-enabled memory；视图只读，不改 verdict |
+| 8 | Demo / Eval Script | Current | 提供可重复 demo/eval 命令，跑 APT/EDR/HIDS/F5 样例并生成 review item/report/view | 一条命令可稳定演示 runtime + correlation + domain triage + evidence + review 状态，并能直接在 Web/TUI 看到统一调查视图 |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Deferred | Kafka/review/approval/runtime 数据流稳定后，再做指标和运行态势面板 | 不阻塞当前 SOC Agent Alpha |
@@ -171,6 +171,32 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-08 — Web/TUI visible investigation MVP
+
+- 背景：
+  - Correlation、domain triage、read-only evidence、external feedback、memory candidate 和 relevant memory 都已经有各自的 read model，但分析师在 Web/TUI 打开一个 ReviewQueue item 时仍要分散查看，缺少统一调查视图和 evidence timeline。
+- 变更：
+  - 新增统一调查视图 contract：
+    - `InvestigationTimelineItem`：把 analysis、decision、correlation、domain finding、read-only evidence、external disposition、memory candidate、relevant memory、audit、correction 统一为只读时间线项。
+    - `UnifiedInvestigationView`：聚合 runtime verdict/confidence、只读计数、`CorrelationResult`、`SocDomainTriageResult`、timeline 和 boundary notes。
+  - `SocReviewService.get_investigation_context()` 现在聚合：
+    - `correlation_result`：通过 `SocCorrelationService` 基于 summary/evidence 生成。
+    - `domain_triage_results`：通过 `SocDomainTriageService` 使用 bounded skill context 和现有 action evidence 生成。
+    - `investigation_view`：从 run/summary/audit/evidence/external/memory/correlation/domain 生成只读分析师视图。
+  - ReviewQueue Web 新增“统一调查视图”区块，展示 runtime summary、关键计数、领域发现、调查时间线和 Top 关联告警。
+  - SOC Review TUI 新增 unified view 计数和 timeline 摘要。
+  - Lead Agent bounded artifact 新增 compact `investigation_view` payload；不提供新增权限。
+- 边界：
+  - `UnifiedInvestigationView` 是展示投影，不是 source of truth。
+  - 本刀不写 DB、不执行 action、不改 verdict、不启用 prompt injection。
+- 验证：
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff check ...`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_agent_service.py -k "investigation_context or context_includes_similar_alerts or context_includes_action_evidence or relevant_memory" -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_review_router.py -q`
+  - `pnpm --dir frontend check`
+- 下一步：
+  - 做 Demo / Eval Script：一条命令生成或装载样例、ReviewQueue item、只读 evidence、domain finding、relevant memory 和 unified investigation view，方便直接打开 Web/TUI/TUI 看完整效果。
 
 ### 2026-07-08 — Confirmed memory retrieval policy / unified visibility MVP
 

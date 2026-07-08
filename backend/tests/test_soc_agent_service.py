@@ -765,6 +765,15 @@ def test_review_service_context_includes_similar_alerts() -> None:
     assert match.score >= 90
     assert "rule_code:RPAADM_002635" in match.matched_reasons
     assert "entity_key:ip:30.180.248.178" in match.matched_reasons
+    assert context.correlation_result is not None
+    assert context.correlation_result.matches[0].summary.run_id == similar_run.run_id
+    assert context.domain_triage_results
+    assert context.domain_triage_results[0].findings
+    assert context.investigation_view is not None
+    assert context.investigation_view.counts["correlation_matches"] == len(context.correlation_result.matches)
+    assert context.investigation_view.counts["domain_findings"] >= 1
+    timeline_kinds = {item.kind for item in context.investigation_view.evidence_timeline}
+    assert {"analysis", "decision", "correlation", "domain_finding"}.issubset(timeline_kinds)
 
 
 def test_review_service_context_requires_existing_queue_item() -> None:
@@ -1095,6 +1104,9 @@ def test_review_service_context_includes_action_evidence() -> None:
     assert len(context.action_evidence) == 1
     assert context.action_evidence[0].action == "asset.locate"
     assert context.action_evidence[0].result_payload["mcp_result"]["company_code"] == "PA011"
+    assert context.investigation_view is not None
+    assert context.investigation_view.counts["action_evidence"] == 1
+    assert any(item.kind == "read_only_evidence" and item.source_id == context.action_evidence[0].evidence_id for item in context.investigation_view.evidence_timeline)
 
 
 def test_agent_chat_service_requires_review_service_for_queue_context() -> None:
@@ -2010,6 +2022,9 @@ def test_review_context_includes_relevant_memory_result() -> None:
     assert context.relevant_memories is not None
     assert context.relevant_memories.returned_count == 1
     assert context.relevant_memories.matches[0].record.summary == "APT direction reconstruction"
+    assert context.investigation_view is not None
+    assert context.investigation_view.counts["relevant_memories"] == 1
+    assert any(item.kind == "relevant_memory" for item in context.investigation_view.evidence_timeline)
 
 
 def _pingan_memory_candidate_command() -> SocMemoryCandidateCreateCommand:

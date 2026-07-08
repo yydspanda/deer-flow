@@ -335,6 +335,7 @@ class SocLeadAgentReviewContextArtifact(BaseModel):
     external_dispositions: list[dict[str, Any]] = Field(default_factory=list)
     memory_candidates: list[dict[str, Any]] = Field(default_factory=list)
     relevant_memories: dict[str, Any] | None = None
+    investigation_view: dict[str, Any] | None = None
     skill_context: SocSkillContext | None = None
     instructions: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
@@ -1692,6 +1693,62 @@ class UnifiedInvestigationReport(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class InvestigationTimelineItem(BaseModel):
+    """One analyst-facing event in the unified investigation timeline."""
+
+    schema_version: str = "soc.investigation_timeline_item.v1"
+    item_id: str = Field(default_factory=lambda: f"TIM-{uuid4().hex[:12].upper()}")
+    kind: Literal[
+        "analysis",
+        "decision",
+        "correlation",
+        "domain_finding",
+        "read_only_evidence",
+        "external_disposition",
+        "memory_candidate",
+        "relevant_memory",
+        "audit",
+        "correction",
+    ]
+    title: str = Field(min_length=1)
+    summary: str | None = None
+    status: str | None = None
+    severity: str | None = None
+    source_id: str | None = None
+    source_refs: dict[str, str] = Field(default_factory=dict)
+    occurred_at: datetime | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class UnifiedInvestigationView(BaseModel):
+    """Read-only analyst view assembled from existing SOC investigation products."""
+
+    schema_version: str = "soc.unified_investigation_view.v1"
+    view_id: str = Field(default_factory=lambda: f"UIV-{uuid4().hex[:12].upper()}")
+    queue_id: str
+    run_id: str
+    alert_id: str
+    generated_at: datetime = Field(default_factory=utc_now)
+    runtime_verdict: Verdict | None = None
+    runtime_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    needs_review: bool = True
+    automation_allowed: bool = False
+    primary_summary: str | None = None
+    primary_reason: str | None = None
+    correlation_result: CorrelationResult | None = None
+    domain_triage_results: list[SocDomainTriageResult] = Field(default_factory=list)
+    evidence_timeline: list[InvestigationTimelineItem] = Field(default_factory=list)
+    counts: dict[str, int] = Field(default_factory=dict)
+    boundary_notes: list[str] = Field(
+        default_factory=lambda: [
+            "This view is read-only analyst context.",
+            "Domain findings and relevant memories do not change the operational verdict.",
+            "External feedback and memory updates must still pass service boundaries.",
+        ]
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class InvestigationContext(BaseModel):
     """Read model used by analyst surfaces to open one review item."""
 
@@ -1705,3 +1762,6 @@ class InvestigationContext(BaseModel):
     external_dispositions: list[SocExternalDispositionRecord] = Field(default_factory=list)
     memory_candidates: list[SocMemoryCandidate] = Field(default_factory=list)
     relevant_memories: SocMemoryRetrievalResult | None = None
+    correlation_result: CorrelationResult | None = None
+    domain_triage_results: list[SocDomainTriageResult] = Field(default_factory=list)
+    investigation_view: UnifiedInvestigationView | None = None

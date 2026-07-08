@@ -23,12 +23,15 @@ from soc_agent.contracts import (
     AuditAction,
     CorrectionCommand,
     CorrectionRecord,
+    CorrelationQuery,
+    CorrelationResult,
     Decision,
     DecisionAuditRecord,
     EntrySurface,
     ExtractionReport,
     InvestigationContext,
     InvestigationEvidence,
+    InvestigationTimelineItem,
     NormalizationDriftReport,
     NormalizationDriftSample,
     NormalizationInspectionResult,
@@ -52,6 +55,8 @@ from soc_agent.contracts import (
     SocAgentStreamEvent,
     SocDaemonMessage,
     SocDaemonProcessResult,
+    SocDomainTriageRequest,
+    SocDomainTriageResult,
     SocEvent,
     SocEventType,
     SocMemoryCandidate,
@@ -66,6 +71,7 @@ from soc_agent.contracts import (
     SocMemoryRecordStatus,
     SocMemoryRetrievalResult,
     SocSkillResolution,
+    UnifiedInvestigationView,
     Verdict,
 )
 from soc_agent.core.runtime import analyze_alert, build_analysis_request_for_payload, inspect_alert_normalization
@@ -592,6 +598,12 @@ class SocReviewService:
             if self._memory_candidate_repository is not None
             else []
         )
+        correlation_result = _correlation_result_for_context(
+            run_id=item.run_id,
+            summary=summary,
+            summary_repository=self._summary_repository,
+            evidence_repository=self._evidence_repository,
+        )
         context = InvestigationContext(
             queue_item=item,
             run=run,
@@ -601,11 +613,14 @@ class SocReviewService:
             action_evidence=action_evidence,
             external_dispositions=external_dispositions,
             memory_candidates=memory_candidates,
+            correlation_result=correlation_result,
         )
+        domain_triage_results = _domain_triage_results_for_context(context)
+        context = context.model_copy(update={"domain_triage_results": domain_triage_results})
         if self._memory_record_repository is not None:
             relevant_memories = SocMemoryService(record_repository=self._memory_record_repository).find_relevant_records(_memory_query_from_investigation_context(context))
             context = context.model_copy(update={"relevant_memories": relevant_memories})
-        return context
+        return context.model_copy(update={"investigation_view": _unified_investigation_view_from_context(context)})
 
 
 class SocMemoryService:
@@ -2167,6 +2182,272 @@ def _assistant_event(text: str) -> SocAgentStreamEvent:
 
 def _review_context_loaded_message(*, queue_id: str, run_id: str, alert_id: str) -> str:
     return f"Loaded review context {queue_id} for alert {alert_id} / run {run_id}. Next steps should be expressed as bounded SOC actions such as inspect evidence, compare similar alerts, record correction, or request human approval."
+
+
+def _correlation_result_for_context(
+    *,
+    run_id: str,
+    summary: AlertSummary | None,
+    summary_repository: AlertSummaryRepository | None,
+    evidence_repository: InvestigationEvidenceRepository | None,
+) -> CorrelationResult | None:
+    if summary is None or summary_repository is None:
+        return None
+    from soc_agent.core.correlation import SocCorrelationService
+
+    try:
+        return SocCorrelationService(
+            summary_repository=summary_repository,
+            evidence_repository=evidence_repository,
+        ).correlate(CorrelationQuery(run_id=run_id, limit=10, candidate_limit=200, evidence_limit_per_match=5))
+    except (SocServiceNotFoundError, SocServiceNotImplementedError):
+        return None
+
+
+def _domain_triage_results_for_context(context: InvestigationContext) -> list[SocDomainTriageResult]:
+    from soc_agent.domain import SocDomainTriageService
+
+    skill_context = skill_context_from_investigation_context(context)
+    request = SocDomainTriageRequest(
+        run=context.run,
+        investigation_evidence=context.action_evidence,
+        metadata={
+            "source": "review_context",
+            "queue_id": context.queue_item.queue_id,
+            "handler_output_only": True,
+            "writes_db": False,
+        },
+    )
+    if skill_context is not None:
+        request = request.model_copy(update={"skill_context": skill_context})
+    return [SocDomainTriageService().triage(request)]
+
+
+def _unified_investigation_view_from_context(context: InvestigationContext) -> UnifiedInvestigationView:
+    run = context.run
+    decision = run.decision
+    analysis = run.analysis
+    timeline = _investigation_timeline_from_context(context)
+    return UnifiedInvestigationView(
+        queue_id=context.queue_item.queue_id,
+        run_id=run.run_id,
+        alert_id=run.alert_id,
+        runtime_verdict=decision.verdict if decision is not None else _current_verdict(run),
+        runtime_confidence=decision.confidence if decision is not None else _current_confidence(run),
+        needs_review=decision.needs_review if decision is not None else run.status is AnalysisRunStatus.NEEDS_REVIEW,
+        automation_allowed=decision.automation_allowed if decision is not None else False,
+        primary_summary=analysis.summary if analysis is not None else context.queue_item.summary,
+        primary_reason=decision.reason if decision is not None else (analysis.reason if analysis is not None else context.queue_item.reason),
+        correlation_result=context.correlation_result,
+        domain_triage_results=context.domain_triage_results,
+        evidence_timeline=timeline,
+        counts={
+            "similar_alerts": len(context.similar_alerts),
+            "correlation_matches": len(context.correlation_result.matches) if context.correlation_result is not None else 0,
+            "reusable_evidence": context.correlation_result.reusable_evidence_count if context.correlation_result is not None else 0,
+            "domain_findings": sum(len(result.findings) for result in context.domain_triage_results),
+            "action_evidence": len(context.action_evidence),
+            "external_dispositions": len(context.external_dispositions),
+            "memory_candidates": len(context.memory_candidates),
+            "relevant_memories": context.relevant_memories.returned_count if context.relevant_memories is not None else 0,
+            "audit_records": len(context.audit_records),
+            "corrections": len(run.corrections),
+            "timeline_items": len(timeline),
+        },
+        metadata={
+            "source": "SocReviewService.get_investigation_context",
+            "view_only": True,
+            "writes_db": False,
+            "executes_actions": False,
+        },
+    )
+
+
+def _investigation_timeline_from_context(context: InvestigationContext) -> list[InvestigationTimelineItem]:
+    run = context.run
+    items: list[InvestigationTimelineItem] = []
+    if run.analysis is not None:
+        items.append(
+            InvestigationTimelineItem(
+                kind="analysis",
+                title="Runtime analysis completed",
+                summary=run.analysis.summary,
+                status=run.analysis.verdict.value,
+                severity=context.summary.severity if context.summary is not None else None,
+                source_id=run.run_id,
+                source_refs={"run_id": run.run_id, "alert_id": run.alert_id},
+                occurred_at=run.ended_at or run.started_at,
+                payload={
+                    "confidence": run.analysis.confidence,
+                    "reason": run.analysis.reason,
+                    "recommended_action": run.analysis.recommended_action,
+                },
+            )
+        )
+    if run.decision is not None:
+        items.append(
+            InvestigationTimelineItem(
+                kind="decision",
+                title="Operational decision",
+                summary=run.decision.reason,
+                status=run.decision.verdict.value,
+                source_id=run.run_id,
+                source_refs={"run_id": run.run_id, "alert_id": run.alert_id},
+                occurred_at=run.ended_at or run.started_at,
+                payload={
+                    "confidence": run.decision.confidence,
+                    "needs_review": run.decision.needs_review,
+                    "automation_allowed": run.decision.automation_allowed,
+                    "suggested_action": run.decision.suggested_action,
+                },
+            )
+        )
+    for correction in run.corrections:
+        items.append(
+            InvestigationTimelineItem(
+                kind="correction",
+                title="Manual correction recorded",
+                summary=correction.reason,
+                status=correction.corrected_verdict.value,
+                source_id=correction.correction_id,
+                source_refs={"run_id": run.run_id, "correction_id": correction.correction_id},
+                occurred_at=correction.created_at,
+                payload={
+                    "previous_verdict": correction.previous_verdict.value if correction.previous_verdict is not None else None,
+                    "corrected_confidence": correction.corrected_confidence,
+                    "candidate_knowledge_status": correction.candidate_knowledge_status,
+                },
+            )
+        )
+    if context.correlation_result is not None:
+        for match in context.correlation_result.matches[:5]:
+            items.append(
+                InvestigationTimelineItem(
+                    kind="correlation",
+                    title="Correlated historical alert",
+                    summary=match.summary.summary,
+                    status=match.summary.verdict.value if match.summary.verdict is not None else None,
+                    severity=match.summary.severity,
+                    source_id=match.summary.run_id,
+                    source_refs={"run_id": match.summary.run_id, "alert_id": match.summary.alert_id},
+                    occurred_at=match.summary.updated_at,
+                    payload={
+                        "score": match.score,
+                        "matched_reasons": match.matched_reasons,
+                        "reusable_evidence_count": len(match.reusable_evidence),
+                    },
+                )
+            )
+    for result in context.domain_triage_results:
+        for finding in result.findings:
+            items.append(
+                InvestigationTimelineItem(
+                    kind="domain_finding",
+                    title=finding.title,
+                    summary=finding.summary,
+                    status=finding.disposition.value,
+                    severity=finding.severity.value,
+                    source_id=finding.finding_id,
+                    source_refs={"run_id": result.run_id, "finding_id": finding.finding_id, "domain": result.domain.value},
+                    occurred_at=result.created_at,
+                    payload={
+                        "handler_id": result.handler_id,
+                        "confidence": finding.confidence,
+                        "evidence_refs": finding.evidence_refs,
+                        "recommendations": finding.recommendations,
+                        "limitations": finding.limitations,
+                    },
+                )
+            )
+    for evidence in context.action_evidence:
+        items.append(
+            InvestigationTimelineItem(
+                kind="read_only_evidence",
+                title=evidence.action,
+                summary=evidence.message,
+                status=evidence.status,
+                source_id=evidence.evidence_id,
+                source_refs={"evidence_id": evidence.evidence_id, "route": evidence.route},
+                occurred_at=evidence.created_at,
+                payload={
+                    "result_payload": evidence.result_payload,
+                    "source_proposal_id": evidence.source_proposal_id,
+                },
+            )
+        )
+    for record in context.external_dispositions:
+        items.append(
+            InvestigationTimelineItem(
+                kind="external_disposition",
+                title=f"{record.event.external_system} disposition",
+                summary=record.event.external_reason or record.apply_reason,
+                status=f"{record.canonical_status.value}/{record.apply_status.value}",
+                source_id=record.disposition_id,
+                source_refs={"disposition_id": record.disposition_id, "external_case_id": record.event.external_case_id},
+                occurred_at=record.event.updated_at,
+                payload={
+                    "external_status": record.event.external_status,
+                    "matched_by": record.matched_by,
+                    "correction_id": record.correction_id,
+                    "memory_candidate_id": record.memory_candidate_id,
+                },
+            )
+        )
+    for candidate in context.memory_candidates:
+        items.append(
+            InvestigationTimelineItem(
+                kind="memory_candidate",
+                title="Memory candidate",
+                summary=candidate.summary,
+                status=candidate.status.value,
+                source_id=candidate.candidate_id,
+                source_refs={"candidate_id": candidate.candidate_id},
+                occurred_at=candidate.created_at,
+                payload={
+                    "candidate_type": candidate.candidate_type.value,
+                    "target_artifact": candidate.target_artifact.value,
+                    "runtime_decision_allowed": candidate.runtime_decision_allowed,
+                    "confidence": candidate.confidence,
+                },
+            )
+        )
+    if context.relevant_memories is not None:
+        for match in context.relevant_memories.matches[:5]:
+            items.append(
+                InvestigationTimelineItem(
+                    kind="relevant_memory",
+                    title="Relevant confirmed memory",
+                    summary=match.record.summary,
+                    status=match.record.status.value,
+                    source_id=match.memory_id,
+                    source_refs={"memory_id": match.memory_id, "source_candidate_id": match.record.source_candidate_id},
+                    occurred_at=match.record.updated_at,
+                    payload={
+                        "score": match.score,
+                        "match_reasons": match.match_reasons,
+                        "retrieval_enabled": match.retrieval_enabled,
+                        "token_estimate": match.token_estimate,
+                    },
+                )
+            )
+    for audit in context.audit_records[:10]:
+        items.append(
+            InvestigationTimelineItem(
+                kind="audit",
+                title=f"Audit {audit.action.value}",
+                summary=audit.payload.get("reason") if isinstance(audit.payload.get("reason"), str) else None,
+                status=audit.final_verdict.value if audit.final_verdict is not None else None,
+                source_id=audit.audit_id,
+                source_refs={"audit_id": audit.audit_id, "run_id": audit.run_id},
+                occurred_at=audit.occurred_at,
+                payload={
+                    "input_hash": audit.input_hash,
+                    "confidence": audit.confidence,
+                    "correction_id": audit.correction_id,
+                },
+            )
+        )
+    return sorted(items, key=lambda item: item.occurred_at or datetime.min.replace(tzinfo=UTC), reverse=True)
 
 
 def _thread_id_from_events(events: list[SocAgentStreamEvent]) -> str:

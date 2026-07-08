@@ -111,6 +111,82 @@ export interface SocSimilarAlertMatch {
   matched_reasons: string[];
 }
 
+export interface SocCorrelationEvidenceRef {
+  evidence_id: string;
+  route: string;
+  action: string;
+  status: "success" | "denied" | "failed";
+  message: string;
+  result_payload: Record<string, unknown>;
+  queue_id?: string | null;
+  run_id?: string | null;
+  alert_id?: string | null;
+  source_proposal_id?: string | null;
+  created_at: string;
+}
+
+export interface SocCorrelationMatch {
+  summary: SocAlertSummary;
+  score: number;
+  matched_reasons: string[];
+  reusable_evidence: SocCorrelationEvidenceRef[];
+}
+
+export interface SocCorrelationResult {
+  schema_version: string;
+  query: Record<string, unknown>;
+  subject_summary: SocAlertSummary;
+  matches: SocCorrelationMatch[];
+  reusable_evidence_count: number;
+  generated_at: string;
+}
+
+export type SocDomainName = "apt" | "edr" | "hids" | "waf_f5" | "generic";
+
+export type SocDomainFindingSeverity =
+  | "info"
+  | "low"
+  | "medium"
+  | "high"
+  | "critical";
+
+export type SocDomainFindingDisposition =
+  | "suspicious"
+  | "likely_true_positive"
+  | "likely_false_positive"
+  | "benign_authorized_candidate"
+  | "needs_more_evidence";
+
+export interface SocDomainFinding {
+  schema_version: string;
+  finding_id: string;
+  domain: SocDomainName;
+  title: string;
+  summary: string;
+  severity: SocDomainFindingSeverity;
+  disposition: SocDomainFindingDisposition;
+  confidence: number;
+  evidence_refs: string[];
+  capability_card_refs: string[];
+  skill_names: string[];
+  recommendations: string[];
+  limitations: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface SocDomainTriageResult {
+  schema_version: string;
+  request_id: string;
+  run_id: string;
+  alert_id: string;
+  domain: SocDomainName;
+  handler_id: string;
+  findings: SocDomainFinding[];
+  evidence_ref_count: number;
+  created_at: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface SocInvestigationEvidence {
   schema_version: string;
   evidence_id: string;
@@ -360,6 +436,53 @@ export interface SocMemoryRetrievalResult {
   created_at: string;
 }
 
+export type SocInvestigationTimelineKind =
+  | "analysis"
+  | "decision"
+  | "correlation"
+  | "domain_finding"
+  | "read_only_evidence"
+  | "external_disposition"
+  | "memory_candidate"
+  | "relevant_memory"
+  | "audit"
+  | "correction";
+
+export interface SocInvestigationTimelineItem {
+  schema_version: string;
+  item_id: string;
+  kind: SocInvestigationTimelineKind;
+  title: string;
+  summary?: string | null;
+  status?: string | null;
+  severity?: string | null;
+  source_id?: string | null;
+  source_refs: Record<string, string>;
+  occurred_at?: string | null;
+  payload: Record<string, unknown>;
+}
+
+export interface SocUnifiedInvestigationView {
+  schema_version: string;
+  view_id: string;
+  queue_id: string;
+  run_id: string;
+  alert_id: string;
+  generated_at: string;
+  runtime_verdict?: SocVerdict | null;
+  runtime_confidence?: number | null;
+  needs_review: boolean;
+  automation_allowed: boolean;
+  primary_summary?: string | null;
+  primary_reason?: string | null;
+  correlation_result?: SocCorrelationResult | null;
+  domain_triage_results: SocDomainTriageResult[];
+  evidence_timeline: SocInvestigationTimelineItem[];
+  counts: Record<string, number>;
+  boundary_notes: string[];
+  metadata: Record<string, unknown>;
+}
+
 export interface SocMemoryCandidateReviewRequest {
   decision: SocMemoryCandidateReviewDecision;
   reason: string;
@@ -388,6 +511,9 @@ export interface SocInvestigationContext {
   external_dispositions: SocExternalDispositionRecord[];
   memory_candidates: SocMemoryCandidate[];
   relevant_memories?: SocMemoryRetrievalResult | null;
+  correlation_result?: SocCorrelationResult | null;
+  domain_triage_results?: SocDomainTriageResult[];
+  investigation_view?: SocUnifiedInvestigationView | null;
 }
 
 export interface SocReviewCloseRequest {

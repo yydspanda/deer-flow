@@ -228,6 +228,15 @@ Main orchestrator 约束：
 - report metadata 必须显式标记 `handler_output_only`、`writes_db`、`executes_high_risk_actions` 等边界语义；eval 必须验证这些字段，防止 demo 链路被误当生产处置链路。
 - `PA-12` 真实 PingAn MCP/API 替换只能替换 action adapter/provider/config，不能改变 Main Orchestrator contract；真实 endpoint/凭证缺失时状态为 Waiting，不允许用本地 mock 冒充完成。
 
+Unified investigation view 约束：
+
+- `UnifiedInvestigationView` / `InvestigationTimelineItem` 是 ReviewQueue 打开单个工单时的只读分析师视图 contract，不是新的 source of truth。
+- `SocReviewService.get_investigation_context()` 是生成 `InvestigationContext.correlation_result`、`InvestigationContext.domain_triage_results` 和 `InvestigationContext.investigation_view` 的唯一 service 边界；API/Web/TUI/Lead Agent 不能绕过 service 自己拼等价结构。
+- `UnifiedInvestigationView` 只能消费已有 read model 和只读 handler output：`AnalysisRun`、`AlertSummary`、`DecisionAuditRecord`、`CorrelationResult`、`SocDomainTriageResult`、`InvestigationEvidence`、`SocExternalDispositionRecord`、`SocMemoryCandidate`、`SocMemoryRetrievalResult`。
+- `evidence_timeline` 只是投影；不能替代 `soc_analysis_runs`、`soc_decision_audit_log`、`soc_investigation_evidence`、`soc_external_dispositions`、`soc_memory_candidates` 或 `soc_memory_records`。
+- 生成 unified view 不能写 DB、不能执行 action、不能发起 MCP/tool、不能确认 memory、不能修改 `AnalysisRun.decision` 或 `ReviewQueueItem.status`。
+- Web/TUI/Lead Agent bounded artifact 可以展示 unified view 的计数、Top 关联、domain finding 和 timeline；任何 close/correct/approve/memory review 仍必须调用对应 core service。
+
 PingAn SOC capability onboarding 约束：
 
 - 平安 SOC 工具、MCP、skill、研判经验和处置经验进入项目之前，必须先整理成 capability card；来源、适用场景、输入字段、输出结构、风险等级、失败模式和脱敏验收样例必须明确。

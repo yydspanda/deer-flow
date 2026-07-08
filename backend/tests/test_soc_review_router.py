@@ -305,6 +305,12 @@ def test_soc_review_api_returns_investigation_context(review_api) -> None:
     assert len(context.external_dispositions) == 1
     assert context.external_dispositions[0].event.external_system == "zeus"
     assert context.memory_candidates == [memory_candidate]
+    assert context.correlation_result is not None
+    assert context.domain_triage_results
+    assert context.investigation_view is not None
+    assert context.investigation_view.counts["action_evidence"] == 1
+    assert context.investigation_view.counts["external_dispositions"] == 1
+    assert context.investigation_view.counts["memory_candidates"] == 1
 
 
 def test_soc_review_api_closes_item_with_api_actor(review_api) -> None:

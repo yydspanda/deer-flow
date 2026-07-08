@@ -68,6 +68,7 @@ def build_lead_agent_review_context_artifact(
     external_disposition_payload = [_external_disposition_payload(item) for item in context.external_dispositions[:_MAX_EXTERNAL_DISPOSITION_ITEMS]]
     memory_candidate_payload = [_memory_candidate_payload(item) for item in context.memory_candidates[:_MAX_MEMORY_CANDIDATE_ITEMS]]
     relevant_memory_payload = _relevant_memory_payload(context.relevant_memories)
+    investigation_view_payload = _investigation_view_payload(context)
     hash_payload = {
         "queue_id": context.queue_item.queue_id,
         "run_id": context.run.run_id,
@@ -81,6 +82,7 @@ def build_lead_agent_review_context_artifact(
         "external_dispositions": external_disposition_payload,
         "memory_candidates": memory_candidate_payload,
         "relevant_memories": relevant_memory_payload,
+        "investigation_view": investigation_view_payload,
         "skill_context": skill_payload,
         "instructions": _LEAD_AGENT_CONTEXT_INSTRUCTIONS,
     }
@@ -100,6 +102,7 @@ def build_lead_agent_review_context_artifact(
         external_dispositions=external_disposition_payload,
         memory_candidates=memory_candidate_payload,
         relevant_memories=relevant_memory_payload,
+        investigation_view=investigation_view_payload,
         skill_context=skill_context,
         instructions=list(_LEAD_AGENT_CONTEXT_INSTRUCTIONS),
     )
@@ -344,4 +347,26 @@ def _relevant_memory_payload(result: Any) -> dict[str, Any] | None:
         "skipped_expired": result.skipped_expired,
         "skipped_below_min_score": result.skipped_below_min_score,
         "matches": matches,
+    }
+
+
+def _investigation_view_payload(context: InvestigationContext) -> dict[str, Any] | None:
+    view = context.investigation_view
+    if view is None:
+        return None
+    timeline = []
+    for item in view.evidence_timeline[:_MAX_EVIDENCE_ITEMS]:
+        item_payload = item.model_dump(mode="json", exclude_none=True)
+        item_payload.pop("item_id", None)
+        timeline.append(item_payload)
+    return {
+        "runtime_verdict": view.runtime_verdict.value if view.runtime_verdict is not None else None,
+        "runtime_confidence": view.runtime_confidence,
+        "needs_review": view.needs_review,
+        "automation_allowed": view.automation_allowed,
+        "primary_summary": view.primary_summary,
+        "primary_reason": view.primary_reason,
+        "counts": view.counts,
+        "boundary_notes": view.boundary_notes,
+        "timeline": timeline,
     }

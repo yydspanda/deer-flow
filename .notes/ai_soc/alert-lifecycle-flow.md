@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow
 
-> Updated: 2026-07-07
+> Updated: 2026-07-08
 >
 > 本文档描述两件事：
 >
@@ -31,7 +31,7 @@ alert in
 - `SocMemoryCandidate` 已有 DB-first candidate store、API/CLI、ReviewQueue Web/TUI/Lead Agent visibility 和 confirm/reject/deprecate/expire review workflow；`confirm` 会生成 `SocMemoryRecord(retrieval_enabled=false)`；confirmed memory retrieval policy MVP 已能按 `retrieval_enabled=true` gate 返回 `relevant_memories`，但 prompt injection / runtime decision 仍未开启。
 - APT/EDR/HIDS 已有统一 `SocDomainTriageRequest` / `SocDomainTriageResult` / `SocDomainFinding`，F5/WAF handler 后续补。
 - PA-11 已有只读 Main Orchestrator demo：`SocMainOrchestratorService` 能把 deterministic analyze、selected skills、read-only action evidence、domain findings 和 review context 合成 `UnifiedInvestigationReport`。
-- 这条链路还没有接入 ReviewQueue Web/TUI 可视化，也没有替换为真实 PingAn MCP/API；PA-12 等真实 endpoint/凭证。
+- 这条链路已经通过 `UnifiedInvestigationView` 接入 ReviewQueue Web/TUI/Lead Agent bounded context 的统一调查视图；还没有替换为真实 PingAn MCP/API，PA-12 等真实 endpoint/凭证。
 
 因此当前 Alpha 主线不是继续堆更多 mock tool，而是把已经跑通的只读研判链路、外部反馈链路和候选记忆链路变成分析师可见、可审计、可复盘的产品闭环：
 
@@ -48,8 +48,8 @@ alert in
   -> [Done] Memory candidate review workflow / confirmed-memory boundary
   -> [Done] Confirmed memory retrieval policy / unified investigation visibility MVP
   -> [Partial] EDR/APT/HIDS handlers done; F5/WAF handler pending
-  -> [Current] Web/TUI visible investigation
-  -> [Planned] Demo / Eval Script
+  -> [Done] Web/TUI visible investigation MVP
+  -> [Current] Demo / Eval Script
 ```
 
 暂缓项不作为当前 Alpha 前置条件：
@@ -68,7 +68,7 @@ PingAn APT/EDR/HIDS 专属经验当前已经先落到 `.notes/ai_soc/pingan-capa
 |---|---|---|
 | `SocAnalysisService` | 预警分析入口；调用固定 runtime，保存 run/summary/review/audit | Done |
 | `SocCorrelationService` | 基于 alert summaries 和 investigation evidence 输出结构化相似告警、匹配原因和可复用 evidence | Done |
-| `SocReviewService` | review queue、调查上下文、关闭、人工纠正；聚合 similar alerts、action evidence、external disposition feedback、memory candidates 和 relevant memories | Done |
+| `SocReviewService` | review queue、调查上下文、关闭、人工纠正；聚合 similar alerts、correlation result、domain triage、action evidence、external disposition feedback、memory candidates、relevant memories 和 `UnifiedInvestigationView` | Done |
 | `SocAgentApprovalService` | approval request inbox、approval grant、dry-run、execute boundary | Done |
 | `SocSkillResolver` | 从 canonical alert / review context 选择白名单 SOC domain skills，生成 compact bounded context | Done |
 | `SocMainOrchestratorService` | 串起 analyze -> read-only route/action/evidence -> domain triage -> bounded review summary，输出 `UnifiedInvestigationReport` | Done for PA-11 |
@@ -254,6 +254,33 @@ flowchart TD
 - `retrieval_enabled=false` 的 confirmed record 必须被计入 `skipped_retrieval_disabled`，不能返回为 match。
 - ReviewQueue Web/TUI/Lead Agent 只能展示 `relevant_memories`，不能把它当成 active lesson 自动改判。
 
+### 3.5 Unified Investigation View Flow
+
+Web/TUI visible investigation MVP 已落地。它解决“分析师在一个地方看清本次调查材料”的问题，不解决自动决策、自动处置或新推理。
+
+```mermaid
+flowchart TD
+    Queue["ReviewQueue queue_id"] --> ReviewService["SocReviewService.get_investigation_context"]
+    ReviewService --> Base["run + summary + audit + similar_alerts\n+ action_evidence + external_dispositions\n+ memory_candidates + relevant_memories"]
+    Base --> Correlation["SocCorrelationService\nCorrelationResult"]
+    Base --> Domain["SocDomainTriageService\nSocDomainTriageResult"]
+    Base --> Timeline["InvestigationTimelineItem[]\nanalysis / decision / evidence / external / memory / audit"]
+    Correlation --> View["UnifiedInvestigationView"]
+    Domain --> View
+    Timeline --> View
+    View --> Web["ReviewQueue Web\n统一调查视图"]
+    View --> TUI["SOC Review TUI\nview counters + timeline"]
+    View --> Lead["Lead Agent bounded artifact\ncompact view payload"]
+    View --> NoWrite["read-only projection\nno DB write / no action / no verdict mutation"]
+```
+
+实现约束：
+
+- `UnifiedInvestigationView` 只能由 `SocReviewService.get_investigation_context()` 聚合，不允许 Web/TUI/Lead Agent 自己拼同义结构。
+- `CorrelationResult`、`SocDomainTriageResult`、`SocMemoryRetrievalResult`、`InvestigationEvidence`、`SocExternalDispositionRecord` 仍是各自来源的 source of truth；`evidence_timeline` 只是展示投影。
+- domain finding、correlation match 和 relevant memory 都不能自动改 `AnalysisRun.decision`，也不能自动关闭 review item。
+- Web/TUI 可展示统一计数、Top 关联告警、领域发现和时间线；更深的复盘仍应回到原始 run/evidence/audit/memory record。
+
 ## 4. 预警分析主链路
 
 主控制流由 runtime 固定掌握。LLM 或 deterministic stub 只能作为固定节点，不决定是否跳过必要步骤。
@@ -308,7 +335,7 @@ ReviewQueue 是当前人工复核入口；SOC Lead Agent 只能拿 bounded conte
 ```mermaid
 flowchart TD
     QueueId["ReviewQueue queue_id"] --> ReviewService["SocReviewService.get_investigation_context"]
-    ReviewService --> Context["InvestigationContext\nrun + summary + audit + similar_alerts\n+ action_evidence + external_dispositions\n+ memory_candidates"]
+    ReviewService --> Context["InvestigationContext\nrun + summary + audit + correlation_result\n+ domain_triage_results + action_evidence\n+ external_dispositions + memory_candidates\n+ relevant_memories + investigation_view"]
     Context --> Bridge["SocLeadAgentReviewContextArtifact\nredacted + bounded + hashed"]
     Bridge --> LeadEntry["SocLeadAgentChatService\nagent_name=soc-triage"]
     LeadEntry --> DeerFlowLead["DeerFlow lead_agent stream"]
@@ -555,19 +582,21 @@ flowchart TD
 
 - 当前 PA-11 使用 fixture action specs 和 mock adapters；PA-12 需要真实 PingAn MCP/API endpoint/凭证后替换 provider。
 - correlation 尚未并入 PA-11 report；下一版 report merge 需要加入 `CorrelationResult`。
-- Web/TUI 尚未展示 `UnifiedInvestigationReport`。
+- Web/TUI visible investigation MVP 已通过 `UnifiedInvestigationView` 展示 correlation、domain finding 和 timeline；`UnifiedInvestigationReport` 仍是 PA-11 headless/eval report，后续 demo/eval slice 再决定是否持久化或单独展示。
 
 ### Slice 7：Web/TUI 可见化
 
 目的：让你和同事能直观看到“谁参与了研判、用了什么证据、给了什么结论”。
 
+当前状态：MVP 已完成。ReviewQueue Web/TUI 和 Lead Agent bounded context 已能消费 `InvestigationContext.investigation_view`，展示统一计数、领域发现、调查时间线、Top 关联告警、外部反馈和记忆上下文。
+
 范围：
 
 - ReviewQueue context 页面增加：
-  - correlation panel
-  - domain triage panel
-  - evidence timeline
-  - action proposal panel
+  - correlation panel：已通过 unified view + 原有相似告警区块展示
+  - domain triage panel：已通过 unified view 展示
+  - evidence timeline：已通过 `InvestigationTimelineItem[]` 展示
+  - action proposal panel：已通过 approval inbox/proposal 区块展示
 - TUI 增加对应文本视图。
 - Lead Agent bounded context 带入 report summary，不塞完整 raw payload。
 
@@ -575,6 +604,7 @@ flowchart TD
 
 - 打开一个 review item，能看到完整研判链路。
 - 能区分 runtime decision、domain findings、read-only evidence 和人工 correction。
+- 统一视图只读，不写 DB、不执行 action、不改 verdict。
 
 ### Slice 8：Demo / Eval Script
 
