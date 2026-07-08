@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口完成，Phase 2 correlation / domain triage 起步 |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence / external disposition PG + ReviewQueue visibility / memory candidate PG + API + ReviewQueue visibility / memory candidate review workflow / confirmed memory retrieval policy MVP / Web/TUI visible investigation MVP 已固定；真实 dev/staging MCP 等待 endpoint/凭证；当前主线转向 Demo / Eval Script |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence / external disposition PG + ReviewQueue visibility / memory candidate PG + API + ReviewQueue visibility / memory candidate review workflow / confirmed memory retrieval policy MVP / Web/TUI visible investigation MVP / persistent demo script MVP 已固定；真实 dev/staging MCP 等待 endpoint/凭证；当前主线转向 memory candidate 来源闭环和 F5/WAF domain handler |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 做 Demo / Eval Script：用一条可重复命令生成或装载 APT/EDR/HIDS 样例、ReviewQueue item、read-only evidence、domain finding、relevant memory 和 unified investigation view，方便直接打开 Web/TUI 看效果。 |
+| 当前下一刀 | 做 memory candidate 来源闭环：把 TUI/Web correction、Kafka/daemon、Lead Agent proposal、domain finding、external disposition 等重要结论按统一 source/evidence/validity/idempotency 生成 pending candidate；F5/WAF handler 作为下一个 domain handler 补齐项。 |
 
 ## 当前待办列表
 
@@ -59,7 +59,8 @@
 | 5 | EDR/APT/HIDS/F5 MVP handlers | Partial | 已先做 APT/EDR/HIDS deterministic + skill context domain handlers，复用已有 read-only evidence/mock adapter | APT/EDR/HIDS demo 已能输出 domain findings 和 evidence refs；F5/WAF handler 后续补 |
 | 6 | Main SOC Agent Orchestrator MVP | Done for PA-11 / correlation merge pending | 已串起 analyze、skill context、read-only action evidence、domain triage、review summary，输出 `UnifiedInvestigationReport`；correlation 尚未并入 report | APT/EDR/HIDS demo 能看到主控用了哪些 skill、route、evidence、domain finding 和 review context |
 | 7 | Web/TUI visible investigation | Done for MVP | 已新增 `UnifiedInvestigationView`、`InvestigationTimelineItem`，`InvestigationContext` 聚合 correlation result、domain triage results、evidence timeline、external feedback、memory candidates 和 relevant memories；Web/TUI/Lead Agent bounded artifact 可见 | 分析师能区分 runtime decision、domain findings、read-only evidence、外部人工反馈、人工 correction、retrieval-enabled memory；视图只读，不改 verdict |
-| 8 | Demo / Eval Script | Current | 提供可重复 demo/eval 命令，跑 APT/EDR/HIDS/F5 样例并生成 review item/report/view | 一条命令可稳定演示 runtime + correlation + domain triage + evidence + review 状态，并能直接在 Web/TUI 看到统一调查视图 |
+| 8 | Demo / Eval Script | Done for APT/EDR/HIDS MVP | 已新增 `soc demo run [all|apt|edr|hids]`，用 PingAn 脱敏样例持久化 ReviewQueue item、read-only evidence、domain finding、confirmed/retrieval memory 和 unified investigation view | 一条命令可稳定演示 runtime + domain triage + evidence + review 状态，并能直接用 `soc review context QUEUE_ID --pretty` 或 Web/TUI 打开统一调查视图；本 MVP 为保持 open review 可见性，暂不种 external disposition |
+| 9 | Memory candidate source integration | Current | 把 correction、external disposition、domain finding、Lead Agent proposal、Kafka daemon 等结论统一生成 pending candidate，而不是直接写 confirmed memory | 每类来源都有 source/evidence/validity/idempotency/facet；候选默认 pending review；confirmed/retrieval gate 仍由 `SocMemoryService` 控制 |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Deferred | Kafka/review/approval/runtime 数据流稳定后，再做指标和运行态势面板 | 不阻塞当前 SOC Agent Alpha |
@@ -171,6 +172,33 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-08 — Persistent demo script MVP
+
+- 背景：
+  - Web/TUI visible investigation 已能聚合 correlation、domain finding、read-only evidence、memory candidate 和 relevant memory，但还缺一条可重复命令把演示数据真实写入 SOC repository，导致分析师不方便直接打开 Web/TUI 看完整效果。
+- 变更：
+  - 新增 `backend/soc_agent/demo/`：
+    - `run_pingan_investigation_demo()` 调用现有 `SocAnalysisService`、`SocAgentActionDispatcher`、`SocMemoryService`、`SocReviewService`，不绕过 service 直接拼 view。
+    - 用 PingAn APT/EDR/HIDS 脱敏 fixture 生成持久化 `AnalysisRun`、`ReviewQueueItem`、read-only `InvestigationEvidence`、confirmed retrieval memory 和 `UnifiedInvestigationView`。
+    - 分析 run、action evidence、memory candidate 都使用 demo idempotency key；重复执行会复用已有链路，不无限堆重复数据。
+  - 新增 CLI：
+    - `soc demo run [all|apt|edr|hids] --database-url ... --init-db --pretty`。
+    - 输出 run ids、queue ids、next commands、view counts、timeline kinds 和 action evidence id。
+  - 新增测试：
+    - 验证 `soc demo run apt` 后能通过 `soc review context QUEUE_ID` 看到 action evidence、domain findings 和 relevant memories。
+    - 验证重复执行同一 HIDS demo 会复用既有 run/queue/evidence。
+- 边界：
+  - 本 MVP 使用本地 mock read-only adapters 和脱敏样例；不代表真实 PingAn PA-12 完成。
+  - 本 MVP 暂不种 external disposition，避免 high-trust external mapping 自动 correction/close 影响 open ReviewQueue 演示可见性。
+  - Confirmed memory 在 demo 中显式打开 `retrieval_enabled=true`，用于验证检索和统一视图；生产记忆仍必须走人工 review/gate。
+- 验证：
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff check backend/soc_agent/demo backend/soc_agent/cli.py backend/tests/test_soc_demo_investigation.py`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_demo_investigation.py -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_pingan_capability_eval.py -q`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m soc_agent.cli demo run all --database-url sqlite:////tmp/soc_demo_investigation_smoke.db --init-db --pretty`
+- 下一步：
+  - 做 memory candidate 来源闭环：把 correction、external disposition、domain finding、Lead Agent proposal、Kafka daemon 等重要结论统一生成 pending candidate，并保持 confirmed-memory/retrieval gate 不被绕过。
 
 ### 2026-07-08 — Web/TUI visible investigation MVP
 

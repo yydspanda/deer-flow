@@ -80,6 +80,7 @@ from soc_agent.db import (
     to_sync_database_url,
     upgrade_soc_schema,
 )
+from soc_agent.demo import run_pingan_investigation_demo
 from soc_agent.eval import (
     DEFAULT_PINGAN_CAPABILITY_EVAL_DIR,
     load_eval_responses_jsonl,
@@ -149,6 +150,8 @@ def main(argv: list[str] | None = None) -> int:
         return _eval_pingan_domain(args)
     if args.command == "eval" and args.eval_command == "pingan-main":
         return _eval_pingan_main(args)
+    if args.command == "demo" and args.demo_command == "run":
+        return _demo_run(args)
     if args.command == "memory" and args.memory_command == "list":
         return _memory_list(args)
     if args.command == "memory" and args.memory_command == "get":
@@ -393,6 +396,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to a PingAn capability fixture JSON file or directory",
     )
     eval_pingan_main.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+
+    demo = subparsers.add_parser("demo", help="SOC persistent demo helpers")
+    demo_subparsers = demo.add_subparsers(dest="demo_command")
+    demo_run = demo_subparsers.add_parser("run", help="Seed a reviewable SOC investigation demo")
+    demo_run.add_argument(
+        "scenario",
+        nargs="?",
+        choices=["all", "apt", "edr", "hids"],
+        default="all",
+        help="PingAn demo scenario to seed",
+    )
+    demo_run.add_argument(
+        "--path",
+        default=str(DEFAULT_PINGAN_CAPABILITY_EVAL_DIR),
+        help="Path to a PingAn capability fixture JSON file or directory",
+    )
+    demo_run.add_argument("--init-db", action="store_true", help="Create SOC tables before seeding")
+    demo_run.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(demo_run)
 
     memory = subparsers.add_parser("memory", help="SOC memory candidate helpers")
     memory_subparsers = memory.add_subparsers(dest="memory_command")
@@ -1282,6 +1304,30 @@ def _eval_pingan_main(args: argparse.Namespace) -> int:
         return 2
     except Exception as exc:  # noqa: BLE001 - CLI boundary: report eval failure
         print(f"error: PingAn main orchestrator eval failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if report.failed_count == 0 else 1
+
+
+def _demo_run(args: argparse.Namespace) -> int:
+    try:
+        if args.init_db:
+            create_soc_tables(_engine_from_args(args))
+        fixtures = load_pingan_capability_eval_fixtures(args.path)
+        repository = _repository_from_args(args)
+        report = run_pingan_investigation_demo(fixtures, repository=repository, scenario=args.scenario)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: SOC demo failed: {exc}", file=sys.stderr)
+        return 3
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: report demo seed failure
+        print(f"error: SOC demo failed: {exc}", file=sys.stderr)
         return 1
 
     print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))

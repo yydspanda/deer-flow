@@ -74,6 +74,8 @@ soc_agent/
 ├── tools/              # 工具注册和执行适配器
 ├── memory/             # soc_facts / lessons / prompt 注入
 ├── db/                 # repository + migrations
+├── demo/               # 可重复产品演示编排；只调用 core/repository/actions，不写业务决策
+├── eval/               # 离线评估与 fixture runner；只做回归验证，不作为生产路径
 ├── queue/              # Phase 1 memory queue；Phase 4 PG queue
 ├── api/                # Gateway/FastAPI 入口，只做 transport
 ├── cli/                # Headless CLI 入口，只做 transport
@@ -104,6 +106,8 @@ contracts
 - `core/` 是唯一 orchestration 层。Headless CLI、TUI、API、Web UI、Channels、Kafka adapter 都只能调用 core service，不能直接拼 pipeline。
 - `pipeline/` 只做纯业务步骤，不直接 import FastAPI、Kafka、Typer、SQLAlchemy、psycopg、具体 LLM SDK。
 - `db/` 只实现 repository，不承载业务决策；SQL row 和 domain/contract model 需要显式转换。
+- `demo/` 只编排现有 service/repository/actions 生成可演示数据，不直接拼接业务 view、不绕过状态机、不冒充真实集成完成。
+- `eval/` 只用于 fixture / replay / regression，不写生产状态，不作为 Web/TUI/Kafka runtime 入口。
 - `memory/` 不能绕过事实状态机写 prompt；只能通过 `MemoryStore`/`LessonStore` 协议读写。
 - `actions/` 是 action proposal、adapter registry、MCP/HTTP/vendor adapter 的唯一归属目录；根目录不保留 `action_adapters.py`、`action_proposals.py`、`mcp_adapters.py` 兼容入口，新代码必须 import `soc_agent.actions.*`。
 - `tools/` 不能直接执行高风险动作；必须经过 `policy`。

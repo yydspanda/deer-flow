@@ -32,6 +32,7 @@ alert in
 - APT/EDR/HIDS 已有统一 `SocDomainTriageRequest` / `SocDomainTriageResult` / `SocDomainFinding`，F5/WAF handler 后续补。
 - PA-11 已有只读 Main Orchestrator demo：`SocMainOrchestratorService` 能把 deterministic analyze、selected skills、read-only action evidence、domain findings 和 review context 合成 `UnifiedInvestigationReport`。
 - 这条链路已经通过 `UnifiedInvestigationView` 接入 ReviewQueue Web/TUI/Lead Agent bounded context 的统一调查视图；还没有替换为真实 PingAn MCP/API，PA-12 等真实 endpoint/凭证。
+- `soc demo run [all|apt|edr|hids]` 已能把 APT/EDR/HIDS 脱敏样例持久化成可打开的 investigation chain：ReviewQueue item、read-only evidence、domain finding、confirmed/retrieval memory 和 unified investigation view。
 
 因此当前 Alpha 主线不是继续堆更多 mock tool，而是把已经跑通的只读研判链路、外部反馈链路和候选记忆链路变成分析师可见、可审计、可复盘的产品闭环：
 
@@ -49,7 +50,8 @@ alert in
   -> [Done] Confirmed memory retrieval policy / unified investigation visibility MVP
   -> [Partial] EDR/APT/HIDS handlers done; F5/WAF handler pending
   -> [Done] Web/TUI visible investigation MVP
-  -> [Current] Demo / Eval Script
+  -> [Done] Demo / Eval Script MVP
+  -> [Current] Memory candidate source integration + F5/WAF handler
 ```
 
 暂缓项不作为当前 Alpha 前置条件：
@@ -80,6 +82,7 @@ PingAn APT/EDR/HIDS 专属经验当前已经先落到 `.notes/ai_soc/pingan-capa
 | `SocDomainTriageService` | APT/EDR/HIDS deterministic domain handlers；消费 skill context 和 read-only evidence refs，只输出 findings | Done for PA-10 |
 | `SocKafkaDaemonRunner` / `SocKafkaConsumerRunner` | opt-in Kafka daemon run loop、mapper、dead-letter、manual commit、metrics JSONL | Done, production params waiting |
 | `SqlAlchemyAlertRepository` | 当前统一实现 run、summary、review queue、audit、approval request、approval grant、investigation evidence、external disposition、memory candidate 和 memory record 持久化 | Done |
+| `soc_agent.demo` / `soc demo run` | 可重复生成本地持久化 APT/EDR/HIDS investigation chain，方便 Web/TUI/CLI 打开统一调查视图 | Done for MVP |
 
 ## 3. 当前 As-Is 生命周期
 
@@ -606,27 +609,42 @@ flowchart TD
 - 能区分 runtime decision、domain findings、read-only evidence 和人工 correction。
 - 统一视图只读，不写 DB、不执行 action、不改 verdict。
 
-### Slice 8：Demo / Eval Script
+### Slice 8：Demo / Eval Script（Done for APT/EDR/HIDS MVP）
 
 目的：形成可重复演示和回归验证。
 
 范围：
 
-- 用 `alert_demo` 或脱敏样本生成一批 demo run。
-- 提供一条命令跑完整链路。
-- 输出 JSON report + Web/TUI 可打开的 review item。
+- 已用 PingAn 脱敏样本生成 APT/EDR/HIDS demo run。
+- 已提供 `soc demo run [all|apt|edr|hids]` 跑持久化链路。
+- 已输出 JSON report + Web/TUI/CLI 可打开的 review item。
 
 验收：
 
 ```text
-soc demo run apt
-soc demo run edr
-soc correlate RUN_ID
-soc review tui
-soc chat tui --lead-agent --queue-id REV-...
+soc demo run all --database-url ... --init-db --pretty
+soc review context REV-... --database-url ... --pretty
+soc review tui --database-url ...
+soc chat tui --lead-agent --queue-id REV-... --database-url ...
 ```
 
-能稳定看到同一条预警的 runtime、correlation、domain triage、evidence 和 review 状态。
+能稳定看到同一条预警的 runtime、domain triage、read-only evidence、relevant memory 和 review 状态。本 MVP 暂不自动种 external disposition，避免 demo queue 被 high-trust 外部反馈自动关闭。
+
+### Slice 9：Memory candidate source integration（Current）
+
+目的：把系统里会产生经验沉淀价值的路径统一收敛到 pending memory candidate，而不是散落在各自模块里。
+
+范围：
+
+- TUI/Web correction、external disposition、domain finding、Lead Agent proposal、Kafka/daemon 处理结论都通过统一 command 生成 candidate。
+- 每个 candidate 必须带 source/evidence/validity/idempotency/facets/review owner。
+- 不直接写 confirmed memory；不启用 prompt injection；不改 runtime verdict。
+
+验收：
+
+- 每类来源都能生成可查询 pending candidate。
+- ReviewQueue context / Web / TUI 能看到来源和证据。
+- 重放同一来源不会重复写 candidate。
 
 ## 9. 暂缓项
 
