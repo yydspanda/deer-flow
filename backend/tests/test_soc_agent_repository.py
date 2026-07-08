@@ -499,6 +499,10 @@ def test_sqlalchemy_memory_candidate_repository_persists_and_filters_candidates(
     assert repository.list_memory_records(status=SocMemoryRecordStatus.CONFIRMED) == [review.memory_record]
     assert repository.list_memory_records(tenant_scope="pingan") == [review.memory_record]
     assert repository.list_memory_records(source_candidate_id=candidate.candidate_id) == [review.memory_record]
+    assert repository.list_memory_records(retrieval_enabled=True) == []
+    enabled_record = review.memory_record.model_copy(update={"retrieval_enabled": True})
+    repository.save_memory_record(enabled_record)
+    assert repository.list_memory_records(retrieval_enabled=True) == [enabled_record]
 
 
 def test_review_service_context_loads_sqlalchemy_memory_candidates() -> None:

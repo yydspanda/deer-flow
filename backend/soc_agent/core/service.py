@@ -60,8 +60,11 @@ from soc_agent.contracts import (
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateReviewResult,
     SocMemoryCandidateStatus,
+    SocMemoryMatch,
+    SocMemoryQuery,
     SocMemoryRecord,
     SocMemoryRecordStatus,
+    SocMemoryRetrievalResult,
     SocSkillResolution,
     Verdict,
 )
@@ -434,6 +437,7 @@ class SocReviewService:
         evidence_repository: InvestigationEvidenceRepository | None = None,
         external_disposition_repository: SocExternalDispositionRepository | None = None,
         memory_candidate_repository: MemoryCandidateRepository | None = None,
+        memory_record_repository: MemoryRecordRepository | None = None,
         event_sink: SocEventSink | None = None,
     ) -> None:
         self._repository = repository
@@ -443,6 +447,7 @@ class SocReviewService:
         self._evidence_repository = evidence_repository
         self._external_disposition_repository = external_disposition_repository
         self._memory_candidate_repository = memory_candidate_repository
+        self._memory_record_repository = memory_record_repository
         self._event_sink = event_sink or NoopEventSink()
 
     def correct(
@@ -587,7 +592,7 @@ class SocReviewService:
             if self._memory_candidate_repository is not None
             else []
         )
-        return InvestigationContext(
+        context = InvestigationContext(
             queue_item=item,
             run=run,
             summary=summary,
@@ -597,6 +602,10 @@ class SocReviewService:
             external_dispositions=external_dispositions,
             memory_candidates=memory_candidates,
         )
+        if self._memory_record_repository is not None:
+            relevant_memories = SocMemoryService(record_repository=self._memory_record_repository).find_relevant_records(_memory_query_from_investigation_context(context))
+            context = context.model_copy(update={"relevant_memories": relevant_memories})
+        return context
 
 
 class SocMemoryService:
@@ -848,6 +857,7 @@ class SocMemoryService:
         tenant_scope: str | None = None,
         tenant_id: str | None = None,
         source_candidate_id: str | None = None,
+        retrieval_enabled: bool | None = None,
         limit: int = 50,
     ) -> list[SocMemoryRecord]:
         if self._record_repository is None:
@@ -858,11 +868,109 @@ class SocMemoryService:
             tenant_scope=tenant_scope,
             tenant_id=tenant_id,
             source_candidate_id=source_candidate_id,
+            retrieval_enabled=retrieval_enabled,
             limit=limit,
         )
 
+    def find_relevant_records(self, query: SocMemoryQuery) -> SocMemoryRetrievalResult:
+        """Return retrieval-enabled confirmed memory records with scoring metadata."""
+
+        if self._record_repository is None:
+            raise SocServiceNotImplementedError("find_relevant_records requires a MemoryRecordRepository")
+
+        candidate_records: list[SocMemoryRecord] = []
+        for status in query.statuses:
+            candidate_records.extend(
+                self._record_repository.list_memory_records(
+                    status=status,
+                    tenant_scope=query.tenant_scope,
+                    tenant_id=query.tenant_id,
+                    retrieval_enabled=None,
+                    limit=query.candidate_limit,
+                )
+            )
+        if not query.statuses:
+            candidate_records = self._record_repository.list_memory_records(
+                status=None,
+                tenant_scope=query.tenant_scope,
+                tenant_id=query.tenant_id,
+                retrieval_enabled=None,
+                limit=query.candidate_limit,
+            )
+
+        deduped_records: dict[str, SocMemoryRecord] = {}
+        for record in candidate_records:
+            deduped_records[record.memory_id] = record
+
+        scored_matches: list[SocMemoryMatch] = []
+        skipped_retrieval_disabled = 0
+        skipped_status = 0
+        skipped_expired = 0
+        skipped_below_min_score = 0
+        now = datetime.now(UTC)
+
+        for record in deduped_records.values():
+            if query.statuses and record.status not in query.statuses:
+                skipped_status += 1
+                continue
+            if query.memory_types and record.memory_type not in query.memory_types:
+                skipped_status += 1
+                continue
+            if query.require_retrieval_enabled and not record.retrieval_enabled:
+                skipped_retrieval_disabled += 1
+                continue
+            if record.status != SocMemoryRecordStatus.CONFIRMED:
+                skipped_status += 1
+                continue
+            if record.validity.valid_until is not None and record.validity.valid_until <= now:
+                skipped_expired += 1
+                continue
+
+            score, match_reasons, matched_facets = _score_memory_record(record, query)
+            if score < query.min_score:
+                skipped_below_min_score += 1
+                continue
+            token_estimate = _estimate_memory_tokens(record)
+            scored_matches.append(
+                SocMemoryMatch(
+                    memory_id=record.memory_id,
+                    version=record.version,
+                    record=record,
+                    score=score,
+                    match_reasons=match_reasons,
+                    matched_facets=matched_facets,
+                    token_estimate=token_estimate,
+                    content_hash=record.content_hash,
+                    facets_hash=record.facets_hash,
+                    retrieval_enabled=True,
+                )
+            )
+
+        selected_matches: list[SocMemoryMatch] = []
+        token_total = 0
+        for match in sorted(scored_matches, key=lambda item: (item.score, item.record.updated_at), reverse=True):
+            if len(selected_matches) >= query.limit:
+                break
+            if token_total + match.token_estimate > query.max_tokens and selected_matches:
+                break
+            selected_matches.append(match)
+            token_total += match.token_estimate
+
+        return SocMemoryRetrievalResult(
+            query=query,
+            matches=selected_matches,
+            total_candidate_count=len(deduped_records),
+            skipped_retrieval_disabled=skipped_retrieval_disabled,
+            skipped_status=skipped_status,
+            skipped_expired=skipped_expired,
+            skipped_below_min_score=skipped_below_min_score,
+            returned_count=len(selected_matches),
+            total_token_estimate=token_total,
+            max_tokens=query.max_tokens,
+        )
+
     def list_facts(self) -> list[Any]:
-        raise SocServiceNotImplementedError("confirmed memory retrieval policy is planned after review workflow is implemented")
+        raise SocServiceNotImplementedError("list_facts is replaced by find_relevant_records(SocMemoryQuery)")
 
 
 def _memory_record_from_candidate(
@@ -902,6 +1010,169 @@ def _memory_record_from_candidate(
             "retrieval_enabled": False,
         },
     )
+
+
+def _memory_query_from_investigation_context(context: InvestigationContext) -> SocMemoryQuery:
+    facets: dict[str, list[str]] = {}
+    text_terms: list[str] = []
+    evidence_refs: list[str] = []
+
+    item = context.queue_item
+    _add_memory_query_facet(facets, "source_type", item.source_type.value)
+    _add_memory_query_facet(facets, "source_system", item.source_system)
+    _add_memory_query_facet(facets, "rule_code", item.rule_code)
+    _add_memory_query_facet(facets, "rule_name", item.rule_name)
+    _add_memory_query_facet(facets, "severity", item.severity)
+    _add_memory_query_facet(facets, "category", item.category)
+    _add_memory_query_facet(facets, "verdict", item.verdict.value if item.verdict is not None else None)
+    for entity_key in item.entity_keys:
+        _add_memory_query_facet(facets, "entity", entity_key)
+
+    if context.summary is not None:
+        summary = context.summary
+        _add_memory_query_facet(facets, "detection_key", summary.detection_key)
+        _add_memory_query_facet(facets, "rule_code", summary.rule_code)
+        _add_memory_query_facet(facets, "rule_name", summary.rule_name)
+        _add_memory_query_facet(facets, "source_type", summary.source_type.value)
+        _add_memory_query_facet(facets, "source_system", summary.source_system)
+        _add_memory_query_facet(facets, "category", summary.category)
+        for entity_key in summary.entity_keys:
+            _add_memory_query_facet(facets, "entity", entity_key)
+        if summary.summary:
+            text_terms.extend(_memory_text_terms(summary.summary))
+
+    if context.run.analysis is not None:
+        text_terms.extend(_memory_text_terms(context.run.analysis.summary))
+        text_terms.extend(_memory_text_terms(context.run.analysis.reason))
+        for candidate in context.run.analysis.knowledge_candidates:
+            _add_memory_query_facet(facets, "knowledge_candidate", candidate)
+
+    request = context.run.llm_analysis_request
+    if request is not None:
+        for skill in request.skill_context.selected_skills:
+            _add_memory_query_facet(facets, "skill", skill.skill_name)
+            _add_memory_query_facet(facets, "skill_reason", skill.reason)
+            for matched_field in skill.matched_fields:
+                _add_memory_query_facet(facets, "skill_matched_field", matched_field)
+        for conflict_type in request.conflict_types:
+            _add_memory_query_facet(facets, "conflict_type", conflict_type)
+
+    for evidence in context.action_evidence:
+        evidence_refs.append(evidence.evidence_id)
+        _add_memory_query_facet(facets, "action", evidence.action)
+        _add_memory_query_facet(facets, "route", evidence.route)
+    for candidate in context.memory_candidates:
+        _add_memory_query_facet(facets, "candidate_type", candidate.candidate_type.value)
+        _add_memory_query_facet(facets, "target_artifact", candidate.target_artifact.value)
+
+    return SocMemoryQuery(
+        tenant_id=item.tenant_id,
+        facets=facets,
+        text_terms=text_terms,
+        evidence_refs=evidence_refs,
+        limit=5,
+        max_tokens=900,
+        metadata={
+            "source": "investigation_context",
+            "queue_id": item.queue_id,
+            "run_id": item.run_id,
+            "alert_id": item.alert_id,
+        },
+    )
+
+
+def _add_memory_query_facet(facets: dict[str, list[str]], key: str, value: str | None) -> None:
+    if value is None:
+        return
+    normalized = str(value).strip()
+    if not normalized:
+        return
+    values = facets.setdefault(key, [])
+    if normalized not in values:
+        values.append(normalized)
+
+
+def _memory_text_terms(text: str | None) -> list[str]:
+    if not text:
+        return []
+    terms: list[str] = []
+    for token in str(text).replace("/", " ").replace(",", " ").replace("，", " ").replace(":", " ").split():
+        normalized = token.strip()
+        if len(normalized) >= 3 and normalized not in terms:
+            terms.append(normalized[:80])
+        if len(terms) >= 12:
+            break
+    return terms
+
+
+def _score_memory_record(record: SocMemoryRecord, query: SocMemoryQuery) -> tuple[float, list[str], dict[str, list[str]]]:
+    score = float(record.confidence)
+    match_reasons: list[str] = []
+    matched_facets: dict[str, list[str]] = {}
+
+    if query.memory_types and record.memory_type in query.memory_types:
+        score += 2.0
+        match_reasons.append(f"memory_type:{record.memory_type.value}")
+
+    record_facets = _normalized_memory_facets(record.facets)
+    query_facets = _normalized_memory_facets(query.facets)
+    for key, query_values in query_facets.items():
+        record_values = record_facets.get(key, set())
+        overlap = sorted(query_values & record_values)
+        if not overlap:
+            continue
+        weight = _memory_facet_weight(key)
+        score += weight * len(overlap)
+        matched_facets[key] = overlap
+        match_reasons.append(f"facet:{key}={','.join(overlap[:3])}")
+
+    haystack = f"{record.summary}\n{record.content}".lower()
+    for term in query.text_terms:
+        normalized_term = term.lower()
+        if normalized_term and normalized_term in haystack:
+            score += 1.25
+            match_reasons.append(f"text:{term[:40]}")
+
+    evidence_overlap = sorted(set(record.evidence_refs) & set(query.evidence_refs))
+    if evidence_overlap:
+        score += 3.0 * len(evidence_overlap)
+        match_reasons.append(f"evidence:{','.join(evidence_overlap[:3])}")
+
+    if not match_reasons and not query.facets and not query.text_terms and not query.evidence_refs:
+        match_reasons.append("broad:policy_allowed")
+
+    return round(score, 3), match_reasons, matched_facets
+
+
+def _normalized_memory_facets(facets: dict[str, list[str]]) -> dict[str, set[str]]:
+    normalized: dict[str, set[str]] = {}
+    for key, values in facets.items():
+        normalized_key = str(key).strip()
+        if not normalized_key:
+            continue
+        normalized_values = {str(value).strip().lower() for value in values if str(value).strip()}
+        if normalized_values:
+            normalized[normalized_key] = normalized_values
+    return normalized
+
+
+def _memory_facet_weight(key: str) -> float:
+    if key in {"detection_key", "rule_code", "canonical_detection", "vendor_alias"}:
+        return 4.0
+    if key in {"topic", "skill", "skill_reason", "category", "candidate_type"}:
+        return 2.5
+    if key in {"entity", "asset", "host", "user", "ip"}:
+        return 2.0
+    if key in {"source_type", "source_system", "severity", "conflict_type", "action"}:
+        return 1.5
+    return 1.0
+
+
+def _estimate_memory_tokens(record: SocMemoryRecord) -> int:
+    # Conservative text-size estimate; the later prompt builder can replace this
+    # with model-specific tokenization without changing retrieval contracts.
+    text = f"{record.summary}\n{record.content}"
+    return max(1, (len(text) + 3) // 4)
 
 
 def _validate_memory_candidate_transition(

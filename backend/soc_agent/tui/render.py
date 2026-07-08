@@ -137,6 +137,11 @@ def render_context(context: InvestigationContext) -> RenderableType:
             "memory_candidates",
             ", ".join(f"{item.candidate_id}:{item.status.value}/{item.candidate_type.value}" for item in context.memory_candidates[:5]),
         )
+    if context.relevant_memories is not None:
+        table.add_row(
+            "relevant_memories",
+            f"{context.relevant_memories.returned_count} returned / {context.relevant_memories.skipped_retrieval_disabled} retrieval-disabled skipped",
+        )
     return Group(Text("Investigation Context", style=f"bold {THEME.primary}"), table)
 
 

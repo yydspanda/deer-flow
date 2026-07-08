@@ -75,6 +75,7 @@ class InMemoryMemoryCandidateRepository:
         tenant_scope: str | None = None,
         tenant_id: str | None = None,
         source_candidate_id: str | None = None,
+        retrieval_enabled: bool | None = None,
         limit: int = 50,
     ) -> list[SocMemoryRecord]:
         items = list(self._records.values())
@@ -86,4 +87,6 @@ class InMemoryMemoryCandidateRepository:
             items = [item for item in items if item.tenant_id == tenant_id]
         if source_candidate_id is not None:
             items = [item for item in items if item.source_candidate_id == source_candidate_id]
+        if retrieval_enabled is not None:
+            items = [item for item in items if item.retrieval_enabled is retrieval_enabled]
         return sorted(items, key=lambda item: item.updated_at, reverse=True)[:limit]

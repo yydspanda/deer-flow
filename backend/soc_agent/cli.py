@@ -42,6 +42,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateStatus,
+    SocMemoryQuery,
     SocMemoryRecordStatus,
     Verdict,
 )
@@ -154,6 +155,8 @@ def main(argv: list[str] | None = None) -> int:
         return _memory_get(args)
     if args.command == "memory" and args.memory_command == "review":
         return _memory_review(args)
+    if args.command == "memory" and args.memory_command == "search":
+        return _memory_search(args)
     if args.command == "memory" and args.memory_command == "records" and args.memory_records_command == "list":
         return _memory_records_list(args)
     if args.command == "memory" and args.memory_command == "records" and args.memory_records_command == "get":
@@ -426,6 +429,17 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_review.add_argument("--actor-id", default="soc-cli", help="Review actor id")
     memory_review.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(memory_review)
+    memory_search = memory_subparsers.add_parser("search", help="Search retrieval-enabled SOC memory records")
+    memory_search.add_argument("--query-json", help="Inline SocMemoryQuery JSON object")
+    memory_search.add_argument("--term", action="append", default=[], help="Text term to match; repeatable")
+    memory_search.add_argument("--facet", action="append", default=[], help="Facet match as KEY=VALUE; repeatable")
+    memory_search.add_argument("--tenant-scope", help="Filter by tenant scope")
+    memory_search.add_argument("--tenant-id", help="Filter by tenant id")
+    memory_search.add_argument("--limit", type=int, default=8, help="Maximum matches to return")
+    memory_search.add_argument("--max-tokens", type=int, default=1200, help="Token budget for returned matches")
+    memory_search.add_argument("--min-score", type=float, default=1.0, help="Minimum retrieval score")
+    memory_search.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(memory_search)
     memory_records = memory_subparsers.add_parser("records", help="SOC confirmed memory record helpers")
     memory_records_subparsers = memory_records.add_subparsers(dest="memory_records_command")
     memory_records_list = memory_records_subparsers.add_parser("list", help="List SOC memory records")
@@ -438,6 +452,12 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_records_list.add_argument("--tenant-scope", help="Filter by tenant scope")
     memory_records_list.add_argument("--tenant-id", help="Filter by tenant id")
     memory_records_list.add_argument("--source-candidate-id", help="Filter by source candidate id")
+    memory_records_list.add_argument(
+        "--retrieval-enabled",
+        choices=["true", "false", "all"],
+        default="all",
+        help="Filter by retrieval-enabled gate",
+    )
     memory_records_list.add_argument("--limit", type=int, default=50, help="Maximum records to return")
     memory_records_list.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(memory_records_list)
@@ -670,6 +690,7 @@ def _review_context(args: argparse.Namespace) -> int:
             evidence_repository=repository,
             external_disposition_repository=repository,
             memory_candidate_repository=repository,
+            memory_record_repository=repository,
         ).get_investigation_context(args.queue_id)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -751,6 +772,47 @@ def _memory_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _memory_search(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        query = _memory_query_from_args(args)
+        result = SocMemoryService(candidate_repository=repository, record_repository=repository).find_relevant_records(query)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _memory_query_from_args(args: argparse.Namespace) -> SocMemoryQuery:
+    if args.query_json:
+        return SocMemoryQuery.model_validate(_load_json_object(args.query_json, payload_label="memory query JSON"))
+    facets: dict[str, list[str]] = {}
+    for facet in args.facet:
+        if "=" not in facet:
+            raise ValueError("--facet must use KEY=VALUE")
+        key, value = facet.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            raise ValueError("--facet must use non-empty KEY=VALUE")
+        facets.setdefault(key, []).append(value)
+    return SocMemoryQuery(
+        tenant_scope=args.tenant_scope,
+        tenant_id=args.tenant_id,
+        facets=facets,
+        text_terms=args.term,
+        limit=args.limit,
+        max_tokens=args.max_tokens,
+        min_score=args.min_score,
+        metadata={"source": "cli"},
+    )
+
+
 def _memory_records_list(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
@@ -759,6 +821,7 @@ def _memory_records_list(args: argparse.Namespace) -> int:
             tenant_scope=args.tenant_scope,
             tenant_id=args.tenant_id,
             source_candidate_id=args.source_candidate_id,
+            retrieval_enabled=_optional_bool(args.retrieval_enabled),
             limit=args.limit,
         )
     except ValueError as exc:
@@ -787,6 +850,12 @@ def _memory_records_get(args: argparse.Namespace) -> int:
     return 0
 
 
+def _optional_bool(value: str) -> bool | None:
+    if value == "all":
+        return None
+    return value == "true"
+
+
 def _review_tui(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
@@ -801,6 +870,7 @@ def _review_tui(args: argparse.Namespace) -> int:
                 evidence_repository=repository,
                 external_disposition_repository=repository,
                 memory_candidate_repository=repository,
+                memory_record_repository=repository,
             ),
             approval_service=SocAgentApprovalService(grant_repository=repository, request_repository=repository),
             database_label=_database_label(args.database_url),
@@ -827,6 +897,7 @@ def _chat_tui(args: argparse.Namespace) -> int:
             evidence_repository=repository,
             external_disposition_repository=repository,
             memory_candidate_repository=repository,
+            memory_record_repository=repository,
         )
         approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
         read_only_adapter_registry = _read_only_adapter_registry_for_chat(args)

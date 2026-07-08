@@ -334,6 +334,7 @@ class SocLeadAgentReviewContextArtifact(BaseModel):
     action_evidence: list[dict[str, Any]] = Field(default_factory=list)
     external_dispositions: list[dict[str, Any]] = Field(default_factory=list)
     memory_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    relevant_memories: dict[str, Any] | None = None
     skill_context: SocSkillContext | None = None
     instructions: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
@@ -631,6 +632,89 @@ class SocMemoryRecord(BaseModel):
     deprecation_reason: str | None = None
     labels: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocMemoryQuery(BaseModel):
+    """Retrieval query for confirmed SOC memory records.
+
+    Facets are optional by design. Missing topic, detection key, vendor alias,
+    scenario, entity, or environment facets lower recall/score but must not
+    make retrieval fail.
+    """
+
+    schema_version: str = "soc.memory_query.v1"
+    memory_types: list[SocMemoryCandidateType] = Field(default_factory=list)
+    statuses: list[SocMemoryRecordStatus] = Field(default_factory=lambda: [SocMemoryRecordStatus.CONFIRMED])
+    tenant_scope: str | None = None
+    tenant_id: str | None = None
+    facets: dict[str, list[str]] = Field(default_factory=dict)
+    text_terms: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    limit: int = Field(default=8, ge=1, le=50)
+    candidate_limit: int = Field(default=200, ge=1, le=1000)
+    min_score: float = Field(default=1.0, ge=0.0)
+    max_tokens: int = Field(default=1200, ge=100, le=10000)
+    require_retrieval_enabled: Literal[True] = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("facets", mode="before")
+    @classmethod
+    def normalize_facets(cls, value: Any) -> dict[str, list[str]]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("facets must be an object")
+        normalized: dict[str, list[str]] = {}
+        for raw_key, raw_values in value.items():
+            key = str(raw_key).strip()
+            if not key:
+                continue
+            values = raw_values if isinstance(raw_values, list) else [raw_values]
+            normalized_values = sorted({str(item).strip() for item in values if str(item).strip()})
+            if normalized_values:
+                normalized[key] = normalized_values
+        return normalized
+
+    @field_validator("text_terms", "evidence_refs", mode="before")
+    @classmethod
+    def normalize_string_list(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        values = value if isinstance(value, list) else [value]
+        return sorted({str(item).strip() for item in values if str(item).strip()})
+
+
+class SocMemoryMatch(BaseModel):
+    """One retrieval-safe memory match with replayable scoring metadata."""
+
+    memory_id: str
+    version: int = Field(ge=1)
+    record: SocMemoryRecord
+    score: float = Field(ge=0.0)
+    match_reasons: list[str] = Field(default_factory=list)
+    matched_facets: dict[str, list[str]] = Field(default_factory=dict)
+    token_estimate: int = Field(ge=1)
+    content_hash: str
+    facets_hash: str
+    retrieval_enabled: Literal[True] = True
+
+
+class SocMemoryRetrievalResult(BaseModel):
+    """Retrieval result that is safe to inspect before prompt injection is enabled."""
+
+    schema_version: str = "soc.memory_retrieval_result.v1"
+    policy_version: str = "soc.memory_retrieval_policy.v1"
+    query: SocMemoryQuery
+    matches: list[SocMemoryMatch] = Field(default_factory=list)
+    total_candidate_count: int = Field(default=0, ge=0)
+    skipped_retrieval_disabled: int = Field(default=0, ge=0)
+    skipped_status: int = Field(default=0, ge=0)
+    skipped_expired: int = Field(default=0, ge=0)
+    skipped_below_min_score: int = Field(default=0, ge=0)
+    returned_count: int = Field(default=0, ge=0)
+    total_token_estimate: int = Field(default=0, ge=0)
+    max_tokens: int = Field(default=1200, ge=100)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class SocMemoryCandidateReviewResult(BaseModel):
@@ -1620,3 +1704,4 @@ class InvestigationContext(BaseModel):
     action_evidence: list[InvestigationEvidence] = Field(default_factory=list)
     external_dispositions: list[SocExternalDispositionRecord] = Field(default_factory=list)
     memory_candidates: list[SocMemoryCandidate] = Field(default_factory=list)
+    relevant_memories: SocMemoryRetrievalResult | None = None

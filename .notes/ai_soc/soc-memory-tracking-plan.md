@@ -1,6 +1,6 @@
 # SOC Memory Tracking Plan
 
-> Updated: 2026-07-07
+> Updated: 2026-07-08
 >
 > 目的：定义 SOC Agent 后续如何沉淀 topic / detection / scenario 级经验，并把 SOC TUI、Kafka daemon、ReviewQueue、Lead Agent 和 domain triage 中的重要结论转成可审计、可确认、可回滚的业务记忆。
 
@@ -31,7 +31,7 @@ Typed memory DB contract
   -> Wiki/OKF export projection later
 ```
 
-当前实现进度：`SocMemoryCandidate` DB/API/CLI/Web/TUI/Lead Agent visibility 已完成；`SocMemoryService.review_candidate()` 已支持 `confirm_candidate`、`confirm`、`reject`、`deprecate`、`expire`；`confirm` 会创建 `SocMemoryRecord(status=confirmed, retrieval_enabled=false)`。下一步才是 retrieval policy、score/match reason/token budget 和 replay diff。
+当前实现进度：`SocMemoryCandidate` DB/API/CLI/Web/TUI/Lead Agent visibility 已完成；`SocMemoryService.review_candidate()` 已支持 `confirm_candidate`、`confirm`、`reject`、`deprecate`、`expire`；`confirm` 会创建 `SocMemoryRecord(status=confirmed, retrieval_enabled=false)`。`SocMemoryService.find_relevant_records()` 已支持 retrieval-enabled gate、score、match reason、token budget 和 `InvestigationContext.relevant_memories`；prompt injection、memory replay diff 和 retrieval enablement workflow 后续再做。
 
 ## 2. 不是四维硬主键
 
@@ -245,7 +245,7 @@ stateDiagram-v2
 
 注入规则：
 
-- 当前 `confirmed` record 也不能默认注入 analysis prompt / Lead Agent bounded context；必须等 retrieval policy 开启，并且 `retrieval_enabled=true`。
+- 当前 `confirmed` record 也不能默认注入 analysis prompt；只有 `retrieval_enabled=true` 且通过 `SocMemoryService.find_relevant_records()` 命中的 record 可以作为 `InvestigationContext.relevant_memories` 展示给 Web/TUI/Lead Agent。
 - `confirmed_candidate` 默认不全局注入；可以在当前 TUI/correction 会话内局部引用。
 - `pending_review` 不注入，只展示给分析师确认。
 - `rejected` 不注入，并用于抑制重复错误建议。
@@ -281,7 +281,7 @@ soc memory reconcile
 
 ### Slice A：Memory Tracking Contract
 
-- 已新增 `SocMemoryCandidate`、`SocMemoryRecord` 和 review 状态枚举；`SocMemoryQuery` / retrieval result 后续补。
+- 已新增 `SocMemoryCandidate`、`SocMemoryRecord`、review 状态枚举、`SocMemoryQuery` 和 retrieval result。
 - 定义 typed record、facets、hash、status lifecycle 和 retrieval result。
 - 先不接自动写入，只固定 schema、hash、去重和测试。
 
@@ -293,9 +293,10 @@ soc memory reconcile
 
 ### Slice C：Memory Retrieval MVP
 
-- 新增 `SocMemoryService.find_relevant_facts(query)`。
-- 支持 type/status/topic/canonical detection/vendor alias/scenario/environment/negative memory 多路召回。
-- PromptBuilder / Lead Agent bounded context 只注入 confirmed 结果。
+- 已新增 `SocMemoryService.find_relevant_records(SocMemoryQuery)`。
+- 已支持 type/status/tenant/facets/text/evidence refs 多路召回、score、match reason、token budget、hash/version 和 skipped counters。
+- 已接 CLI `soc memory search`、Gateway `/api/soc/memory/search`、ReviewQueue context/Web/TUI/Lead Agent bounded artifact 可见化。
+- PromptBuilder 注入仍未开启；后续只允许 retrieval policy 通过、`retrieval_enabled=true`、confirmed 且未过期的结果进入 bounded prompt。
 
 ### Slice D：TUI / ReviewQueue Memory Candidate
 

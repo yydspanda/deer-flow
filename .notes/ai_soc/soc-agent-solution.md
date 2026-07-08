@@ -21,7 +21,7 @@
 4. LLM 不掌握主控制流；runtime 固定流程，LLM 只在受控节点内做结构化建议。
 5. 记忆和知识写入必须可审计、可回滚、可人工确认，不能让 LLM 自发现结果直接变成事实。
 
-截至 2026-07-07，Phase 1 的 Runtime、ReviewQueue、Lead Agent entry、approval boundary、read-only action evidence、Kafka daemon 基线和本地 MCP mock/smoke 已基本收口；`SocCorrelationService`、PingAn PA-01..PA-11、APT/EDR/HIDS domain triage、只读 Main Orchestrator demo、外部反馈可见性和候选记忆 DB/API/ReviewQueue 可见性已完成。`PA-12` 是真实 PingAn dev/staging MCP/API replacement，受 endpoint/凭证门控，不作为当前 Alpha 主线阻塞项。当前主线是把候选记忆评审状态机、confirmed-memory 边界和 unified investigation 可视化接起来，让分析师能看见、审计、确认、驳回和复盘。
+截至 2026-07-08，Phase 1 的 Runtime、ReviewQueue、Lead Agent entry、approval boundary、read-only action evidence、Kafka daemon 基线和本地 MCP mock/smoke 已基本收口；`SocCorrelationService`、PingAn PA-01..PA-11、APT/EDR/HIDS domain triage、只读 Main Orchestrator demo、外部反馈可见性、候选记忆 DB/API/ReviewQueue 可见性、候选记忆评审状态机和 confirmed-memory retrieval policy MVP 已完成。`PA-12` 是真实 PingAn dev/staging MCP/API replacement，受 endpoint/凭证门控，不作为当前 Alpha 主线阻塞项。当前主线转向 Web/TUI visible investigation：把 correlation、domain triage、read-only evidence、external feedback、memory retrieval 和 main report 放到分析师能统一查看的调查视图里。
 
 ```text
 [Done] Phase 1 reliable runtime / review / approval / Kafka baseline
@@ -32,9 +32,9 @@
   -> [Done] External Disposition PostgreSQL/API/ReviewQueue visibility
   -> [Done] Memory candidate DB/API/ReviewQueue visibility
   -> [Done] Memory candidate review workflow / confirmed-memory boundary
-  -> [Current] Confirmed memory retrieval policy / unified investigation visibility
+  -> [Done] Confirmed memory retrieval policy / unified investigation visibility MVP
   -> [Partial] EDR/APT/HIDS handlers done; F5/WAF handler pending
-  -> [Planned] Web/TUI visible investigation
+  -> [Current] Web/TUI visible investigation
   -> [Planned] Demo / Eval Script
 ```
 
@@ -42,7 +42,7 @@
 
 `External Disposition Sync` 是外部预警/工单/处置系统的人工反馈接入层：Zeus 只是第一个 adapter，未来要能接客户自研 SOC、SIEM/SOAR、ITSM、ServiceNow、Jira 等系统。外部状态/理由通过 vendor-neutral `SocExternalDispositionEvent` 进入 `SocExternalDispositionService`，再同步 audit、review/correction 和 pending memory / skill improvement candidate；不得把外部 free-text reason 直接写成 confirmed memory，也不得让外部系统直接修改 skill 或 prompt。详见 `.notes/ai_soc/external-disposition-sync-plan.md`。
 
-当前已完成 External Disposition Contract MVP、Review/Correction integration、Memory Candidate integration 和 PostgreSQL/API/ReviewQueue visibility：`SocExternalDispositionEvent`、canonical status、adapter/mapping config、record/result、通用 field-path mapper、Zeus mock fixture、`SocExternalDispositionService.apply_event()`、repository protocol、in-memory repository、`soc_external_dispositions` 持久化和 `InvestigationContext.external_dispositions`。它已经支持状态映射、目标定位、幂等、unmatched、audit、event emission；高可信 mapped event 在唯一定位本地 target 后会复用 `SocReviewService.correct()` 同步 operational correction 并关闭 review queue；mapped 且可定位的外部 reason 只会生成 `SocMemoryCandidate(status=pending_review)`。外部反馈现在可通过 ReviewQueue API/Web/TUI/Lead Agent bounded context 展示；候选记忆也已进入 `soc_memory_candidates`、`/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded context。Memory candidate review workflow MVP 已完成：confirm/reject/deprecate/expire 只能走 `SocMemoryService`，`confirm` 会生成 `SocMemoryRecord(retrieval_enabled=false)`，但 confirmed-memory retrieval/injection 仍是后续切片；外部 free-text reason 仍不能直接进入 active prompt 或 runtime decision。
+当前已完成 External Disposition Contract MVP、Review/Correction integration、Memory Candidate integration 和 PostgreSQL/API/ReviewQueue visibility：`SocExternalDispositionEvent`、canonical status、adapter/mapping config、record/result、通用 field-path mapper、Zeus mock fixture、`SocExternalDispositionService.apply_event()`、repository protocol、in-memory repository、`soc_external_dispositions` 持久化和 `InvestigationContext.external_dispositions`。它已经支持状态映射、目标定位、幂等、unmatched、audit、event emission；高可信 mapped event 在唯一定位本地 target 后会复用 `SocReviewService.correct()` 同步 operational correction 并关闭 review queue；mapped 且可定位的外部 reason 只会生成 `SocMemoryCandidate(status=pending_review)`。外部反馈现在可通过 ReviewQueue API/Web/TUI/Lead Agent bounded context 展示；候选记忆也已进入 `soc_memory_candidates`、`/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded context。Memory candidate review workflow MVP 已完成：confirm/reject/deprecate/expire 只能走 `SocMemoryService`，`confirm` 会生成 `SocMemoryRecord(retrieval_enabled=false)`。Confirmed-memory retrieval policy MVP 已完成：`SocMemoryQuery`、`SocMemoryRetrievalResult`、match reason、score、token budget、`retrieval_enabled` gate、`soc memory search`、`/api/soc/memory/search` 和 `InvestigationContext.relevant_memories` 已接入；prompt injection / runtime decision 仍未开启。
 
 `SocCorrelationService` MVP 已完成：基于 `soc_alert_summaries` 和 `soc_investigation_evidence` 输出结构化相似告警、匹配原因和可复用证据；不调用 LLM、不依赖真实 MCP、不修改 DeerFlow core。PingAn 专项当前已推进到 `PA-11`：`PA-08` 已新增 `soc eval pingan` 和 APT/EDR/HIDS 脱敏 fixture，`PA-09` 已新增 pending review memory candidate 入口，`PA-10` 已新增 APT/EDR/HIDS deterministic domain triage 和 `soc eval pingan-domain`，`PA-11` 已新增 `SocMainOrchestratorService`、`UnifiedInvestigationReport` 和 `soc eval pingan-main`，能看到 analyze -> selected skills -> read-only evidence -> domain findings -> review context 的完整只读链路。`PA-12` 等真实接口参数，不用本地 mock 冒充完成。
 
@@ -1826,10 +1826,11 @@ workflow conclusion
 3. Done：External Disposition PostgreSQL/API/ReviewQueue visibility 已完成，外部处置历史、reason、`correction_id`、`memory_candidate_id` 可通过 ReviewQueue API/Web/TUI/Lead Agent bounded context 被分析师看见和审计。
 4. Done：Memory candidate DB-first persistence 已完成，`SocMemoryCandidate` 可通过 `soc_memory_candidates`、`/api/soc/memory/candidates`、`soc memory list/get`、ReviewQueue context、Web/TUI 和 Lead Agent bounded context 被看见；仍固定 `pending_review`、`runtime_decision_allowed=false`。
 5. Done：Memory candidate review workflow / confirmed-memory boundary 已完成，支持 confirm/reject/deprecate/expire；`confirm` 生成 `SocMemoryRecord(retrieval_enabled=false)`，不提前做 prompt 注入。
-6. Current：Confirmed memory retrieval policy，补 `SocMemoryQuery`、match reason、score、token budget 和 replay diff；只有显式开启 retrieval policy 后才允许进入 PromptBuilder / Lead Agent bounded context。
-7. Next：TUI/Web correction、Kafka repeated pattern、Lead Agent summary、DomainTriageResult 和 InvestigationEvidence 都只能经 `SocMemoryService` 生成 candidate，默认 `pending_review`。
-8. Later：PromptBuilder / Lead Agent bounded context 只注入 `confirmed` 且未过期的 facts，并记录 memory fact id、version/hash 和命中原因。
-9. Later：Wiki/OKF export 等 DB memory store、retrieval 和 review workflow 稳定后再做；自动方向只能是 DB -> wiki/OKF，反向修改必须生成 proposal 后经 `SocMemoryService` 写回。
+6. Done：Confirmed memory retrieval policy MVP 已完成，新增 `SocMemoryQuery`、`SocMemoryRetrievalResult`、match reason、score、token budget、retrieval-enabled gate、CLI/API search 和 `InvestigationContext.relevant_memories`；仍不做 prompt 注入。
+7. Current：Web/TUI visible investigation，把 correlation result、domain findings、main report、evidence timeline、external feedback 和 relevant memories 收敛到分析师统一调查视图。
+8. Next：TUI/Web correction、Kafka repeated pattern、Lead Agent summary、DomainTriageResult 和 InvestigationEvidence 都只能经 `SocMemoryService` 生成 candidate，默认 `pending_review`。
+9. Later：PromptBuilder / Lead Agent bounded context 只注入 retrieval policy 允许、`retrieval_enabled=true`、confirmed 且未过期的 facts，并记录 memory fact id、version/hash 和命中原因。
+10. Later：Wiki/OKF export 等 DB memory store、retrieval 和 review workflow 稳定后再做；自动方向只能是 DB -> wiki/OKF，反向修改必须生成 proposal 后经 `SocMemoryService` 写回。
 
 ---
 

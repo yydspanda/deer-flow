@@ -24,6 +24,7 @@ _MAX_FACT_ITEMS = 10
 _MAX_ACTION_EVIDENCE_ITEMS = 5
 _MAX_EXTERNAL_DISPOSITION_ITEMS = 5
 _MAX_MEMORY_CANDIDATE_ITEMS = 5
+_MAX_RELEVANT_MEMORY_ITEMS = 5
 
 _LEAD_AGENT_CONTEXT_INSTRUCTIONS = [
     "Treat this artifact as bounded SOC review context supplied by SOC services.",
@@ -33,6 +34,7 @@ _LEAD_AGENT_CONTEXT_INSTRUCTIONS = [
     "Before proposing a duplicate read-only lookup, inspect action_evidence and reuse fresh matching results.",
     "Treat external_dispositions as operator feedback; pending memory candidates are not confirmed reusable knowledge.",
     "Treat memory_candidates as reviewable proposals only; do not use them as confirmed facts or active lessons.",
+    "Treat relevant_memories as retrieval-policy-approved context only; they can inform analysis but never bypass evidence or approval.",
     "If evidence conflicts, explain the conflict and ask for review instead of forcing a conclusion.",
 ]
 
@@ -65,6 +67,7 @@ def build_lead_agent_review_context_artifact(
     action_evidence_payload = [_action_evidence_payload(item) for item in context.action_evidence[:_MAX_ACTION_EVIDENCE_ITEMS]]
     external_disposition_payload = [_external_disposition_payload(item) for item in context.external_dispositions[:_MAX_EXTERNAL_DISPOSITION_ITEMS]]
     memory_candidate_payload = [_memory_candidate_payload(item) for item in context.memory_candidates[:_MAX_MEMORY_CANDIDATE_ITEMS]]
+    relevant_memory_payload = _relevant_memory_payload(context.relevant_memories)
     hash_payload = {
         "queue_id": context.queue_item.queue_id,
         "run_id": context.run.run_id,
@@ -77,6 +80,7 @@ def build_lead_agent_review_context_artifact(
         "action_evidence": action_evidence_payload,
         "external_dispositions": external_disposition_payload,
         "memory_candidates": memory_candidate_payload,
+        "relevant_memories": relevant_memory_payload,
         "skill_context": skill_payload,
         "instructions": _LEAD_AGENT_CONTEXT_INSTRUCTIONS,
     }
@@ -95,6 +99,7 @@ def build_lead_agent_review_context_artifact(
         action_evidence=action_evidence_payload,
         external_dispositions=external_disposition_payload,
         memory_candidates=memory_candidate_payload,
+        relevant_memories=relevant_memory_payload,
         skill_context=skill_context,
         instructions=list(_LEAD_AGENT_CONTEXT_INSTRUCTIONS),
     )
@@ -301,3 +306,42 @@ def _memory_candidate_payload(candidate: Any) -> dict[str, Any]:
         "updated_at": candidate.updated_at.isoformat(),
     }
     return {key: value for key, value in payload.items() if value not in (None, [], {})}
+
+
+def _relevant_memory_payload(result: Any) -> dict[str, Any] | None:
+    if result is None:
+        return None
+    matches = []
+    for match in result.matches[:_MAX_RELEVANT_MEMORY_ITEMS]:
+        record = match.record
+        matches.append(
+            {
+                "memory_id": match.memory_id,
+                "version": match.version,
+                "memory_type": record.memory_type.value,
+                "target_artifact": record.target_artifact.value,
+                "score": match.score,
+                "match_reasons": match.match_reasons,
+                "matched_facets": match.matched_facets,
+                "token_estimate": match.token_estimate,
+                "content_hash": match.content_hash,
+                "facets_hash": match.facets_hash,
+                "summary": record.summary,
+                "content": record.content,
+                "evidence_refs": record.evidence_refs,
+                "tenant_scope": record.tenant_scope,
+                "tenant_id": record.tenant_id,
+            }
+        )
+    return {
+        "policy_version": result.policy_version,
+        "returned_count": result.returned_count,
+        "total_candidate_count": result.total_candidate_count,
+        "total_token_estimate": result.total_token_estimate,
+        "max_tokens": result.max_tokens,
+        "skipped_retrieval_disabled": result.skipped_retrieval_disabled,
+        "skipped_status": result.skipped_status,
+        "skipped_expired": result.skipped_expired,
+        "skipped_below_min_score": result.skipped_below_min_score,
+        "matches": matches,
+    }

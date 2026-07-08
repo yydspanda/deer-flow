@@ -160,6 +160,7 @@ class MemoryRecordRepository(Protocol):
         tenant_scope: str | None = None,
         tenant_id: str | None = None,
         source_candidate_id: str | None = None,
+        retrieval_enabled: bool | None = None,
         limit: int = 50,
     ) -> list[SocMemoryRecord]: ...
 

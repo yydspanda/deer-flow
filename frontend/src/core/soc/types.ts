@@ -314,6 +314,52 @@ export interface SocMemoryRecordListResponse {
   items: SocMemoryRecord[];
 }
 
+export interface SocMemoryQuery {
+  schema_version?: string;
+  memory_types?: SocMemoryCandidateType[];
+  statuses?: SocMemoryRecordStatus[];
+  tenant_scope?: string | null;
+  tenant_id?: string | null;
+  facets?: Record<string, string[]>;
+  text_terms?: string[];
+  evidence_refs?: string[];
+  limit?: number;
+  candidate_limit?: number;
+  min_score?: number;
+  max_tokens?: number;
+  require_retrieval_enabled?: true;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SocMemoryMatch {
+  memory_id: string;
+  version: number;
+  record: SocMemoryRecord;
+  score: number;
+  match_reasons: string[];
+  matched_facets: Record<string, string[]>;
+  token_estimate: number;
+  content_hash: string;
+  facets_hash: string;
+  retrieval_enabled: true;
+}
+
+export interface SocMemoryRetrievalResult {
+  schema_version: string;
+  policy_version: string;
+  query: SocMemoryQuery;
+  matches: SocMemoryMatch[];
+  total_candidate_count: number;
+  skipped_retrieval_disabled: number;
+  skipped_status: number;
+  skipped_expired: number;
+  skipped_below_min_score: number;
+  returned_count: number;
+  total_token_estimate: number;
+  max_tokens: number;
+  created_at: string;
+}
+
 export interface SocMemoryCandidateReviewRequest {
   decision: SocMemoryCandidateReviewDecision;
   reason: string;
@@ -341,6 +387,7 @@ export interface SocInvestigationContext {
   action_evidence: SocInvestigationEvidence[];
   external_dispositions: SocExternalDispositionRecord[];
   memory_candidates: SocMemoryCandidate[];
+  relevant_memories?: SocMemoryRetrievalResult | null;
 }
 
 export interface SocReviewCloseRequest {

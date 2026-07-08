@@ -15,6 +15,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateType,
     SocMemoryCandidateValidity,
     SocMemoryDecisionImpact,
+    SocMemoryQuery,
     SocMemoryRecordStatus,
     SocMemoryTargetArtifact,
 )
@@ -102,10 +103,26 @@ def test_soc_memory_api_reviews_candidate_and_lists_record() -> None:
         tenant_scope="pingan",
         tenant_id=None,
         source_candidate_id=candidate.candidate_id,
+        retrieval_enabled=None,
         limit=50,
     )
     assert records.items == [result.memory_record]
     assert soc_memory.get_memory_record(result.memory_record.memory_id, service=service) == result.memory_record
+
+    disabled_search = soc_memory.search_memory_records(
+        SocMemoryQuery(facets={"tenant": ["pingan"]}),
+        service=service,
+    )
+    assert disabled_search.matches == []
+    assert disabled_search.skipped_retrieval_disabled == 1
+
+    repository.save_memory_record(result.memory_record.model_copy(update={"retrieval_enabled": True}))
+    enabled_search = soc_memory.search_memory_records(
+        SocMemoryQuery(facets={"tenant": ["pingan"]}, text_terms=["feedback"]),
+        service=service,
+    )
+    assert enabled_search.returned_count == 1
+    assert enabled_search.matches[0].memory_id == result.memory_record.memory_id
 
 
 def _memory_candidate_command(

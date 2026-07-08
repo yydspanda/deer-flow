@@ -28,7 +28,7 @@ alert in
 
 - `SocCorrelationService` MVP 已存在，能通过 CLI/core service 输出结构化相似告警、匹配原因和可复用 evidence；后续还需要接入 ReviewQueue/Web/TUI 可视化面板。
 - External Disposition 已有 vendor-neutral event/mapping/service MVP，并且 high-trust mapped 外部结论可同步为本地 correction / review close；mapped 且可定位的外部 reason 可生成 pending memory candidate；DB/API 和 Web/TUI visibility 已完成。
-- `SocMemoryCandidate` 已有 DB-first candidate store、API/CLI、ReviewQueue Web/TUI/Lead Agent visibility 和 confirm/reject/deprecate/expire review workflow；`confirm` 会生成 `SocMemoryRecord(retrieval_enabled=false)`，confirmed memory 检索/注入策略仍未开启。
+- `SocMemoryCandidate` 已有 DB-first candidate store、API/CLI、ReviewQueue Web/TUI/Lead Agent visibility 和 confirm/reject/deprecate/expire review workflow；`confirm` 会生成 `SocMemoryRecord(retrieval_enabled=false)`；confirmed memory retrieval policy MVP 已能按 `retrieval_enabled=true` gate 返回 `relevant_memories`，但 prompt injection / runtime decision 仍未开启。
 - APT/EDR/HIDS 已有统一 `SocDomainTriageRequest` / `SocDomainTriageResult` / `SocDomainFinding`，F5/WAF handler 后续补。
 - PA-11 已有只读 Main Orchestrator demo：`SocMainOrchestratorService` 能把 deterministic analyze、selected skills、read-only action evidence、domain findings 和 review context 合成 `UnifiedInvestigationReport`。
 - 这条链路还没有接入 ReviewQueue Web/TUI 可视化，也没有替换为真实 PingAn MCP/API；PA-12 等真实 endpoint/凭证。
@@ -46,9 +46,9 @@ alert in
   -> [Done] External Disposition PostgreSQL/API/ReviewQueue visibility
   -> [Done] Memory candidate DB/API/ReviewQueue visibility
   -> [Done] Memory candidate review workflow / confirmed-memory boundary
-  -> [Current] Confirmed memory retrieval policy / unified investigation visibility
+  -> [Done] Confirmed memory retrieval policy / unified investigation visibility MVP
   -> [Partial] EDR/APT/HIDS handlers done; F5/WAF handler pending
-  -> [Planned] Web/TUI visible investigation
+  -> [Current] Web/TUI visible investigation
   -> [Planned] Demo / Eval Script
 ```
 
@@ -60,7 +60,7 @@ alert in
 - Prometheus / operations overview：等 Kafka/review/approval/runtime 数据流稳定后再做。
 - High-risk real execute：等真实 staging adapter、审批策略、补偿和 adapter audit 成熟后再打开。
 
-PingAn APT/EDR/HIDS 专属经验当前已经先落到 `.notes/ai_soc/pingan-capability-cards.md` 和 `.notes/ai_soc/pingan-knowledge-candidates.md`，并且已有 `SocMemoryService.propose_candidate()` 作为代码入口。它只生成 `pending_review` candidate，不能直接影响 runtime verdict；`SocMemoryService.review_candidate()` 是确认、驳回、废弃和过期的唯一边界。确认后的 `SocMemoryRecord` 默认 `retrieval_enabled=false`，后续只能通过 confirmed memory retrieval policy、tenant policy/config、adapter mapping 或 eval fixture 的受控路径进入系统。
+PingAn APT/EDR/HIDS 专属经验当前已经先落到 `.notes/ai_soc/pingan-capability-cards.md` 和 `.notes/ai_soc/pingan-knowledge-candidates.md`，并且已有 `SocMemoryService.propose_candidate()` 作为代码入口。它只生成 `pending_review` candidate，不能直接影响 runtime verdict；`SocMemoryService.review_candidate()` 是确认、驳回、废弃和过期的唯一边界。确认后的 `SocMemoryRecord` 默认 `retrieval_enabled=false`，只有后续显式打开 retrieval gate 的 confirmed record 才能通过 `SocMemoryService.find_relevant_records()` 返回到 `InvestigationContext.relevant_memories`；即便命中，也仍只是调查上下文，不直接改 verdict。
 
 ## 2. 当前已实现服务边界
 
@@ -68,7 +68,7 @@ PingAn APT/EDR/HIDS 专属经验当前已经先落到 `.notes/ai_soc/pingan-capa
 |---|---|---|
 | `SocAnalysisService` | 预警分析入口；调用固定 runtime，保存 run/summary/review/audit | Done |
 | `SocCorrelationService` | 基于 alert summaries 和 investigation evidence 输出结构化相似告警、匹配原因和可复用 evidence | Done |
-| `SocReviewService` | review queue、调查上下文、关闭、人工纠正；聚合 similar alerts、action evidence、external disposition feedback 和 memory candidates | Done |
+| `SocReviewService` | review queue、调查上下文、关闭、人工纠正；聚合 similar alerts、action evidence、external disposition feedback、memory candidates 和 relevant memories | Done |
 | `SocAgentApprovalService` | approval request inbox、approval grant、dry-run、execute boundary | Done |
 | `SocSkillResolver` | 从 canonical alert / review context 选择白名单 SOC domain skills，生成 compact bounded context | Done |
 | `SocMainOrchestratorService` | 串起 analyze -> read-only route/action/evidence -> domain triage -> bounded review summary，输出 `UnifiedInvestigationReport` | Done for PA-11 |
@@ -76,7 +76,7 @@ PingAn APT/EDR/HIDS 专属经验当前已经先落到 `.notes/ai_soc/pingan-capa
 | `SocLeadAgentActionProposalBoundary` | 只处理显式 `<soc_action_proposal>`；read-only proposal 走 router/policy/dispatcher/registry，高风险写入 approval inbox | Done |
 | `SocActionAdapterRegistry` | action adapter allowlist；当前支持 `asset.lookup`、`asset.locate`、`endpoint.process_tree.lookup` 等只读能力 | Done |
 | `InvestigationEvidenceRepository` | 保存只读 action/tool 结果，供 ReviewQueue、Web/TUI、Lead Agent 后续复用 | Done |
-| `SocMemoryService` | 生成并查询 pending review memory candidate；通过 service review workflow 确认/驳回/废弃/过期 candidate；`confirm` 生成 retrieval-disabled `SocMemoryRecord`；retrieval policy 和 prompt injection 仍后续实现 | Partial |
+| `SocMemoryService` | 生成并查询 pending review memory candidate；通过 service review workflow 确认/驳回/废弃/过期 candidate；`confirm` 生成 retrieval-disabled `SocMemoryRecord`；`find_relevant_records()` 只返回 retrieval-enabled confirmed records 并给出 score/match reason/token budget | Partial |
 | `SocDomainTriageService` | APT/EDR/HIDS deterministic domain handlers；消费 skill context 和 read-only evidence refs，只输出 findings | Done for PA-10 |
 | `SocKafkaDaemonRunner` / `SocKafkaConsumerRunner` | opt-in Kafka daemon run loop、mapper、dead-letter、manual commit、metrics JSONL | Done, production params waiting |
 | `SqlAlchemyAlertRepository` | 当前统一实现 run、summary、review queue、audit、approval request、approval grant、investigation evidence、external disposition、memory candidate 和 memory record 持久化 | Done |
@@ -229,8 +229,30 @@ flowchart TD
 
 - ReviewQueue Web、TUI、CLI、Gateway API 和 Lead Agent 后续只能调用 `SocMemoryService.review_candidate()`，不能直接写 `soc_memory_candidates` 或 `soc_memory_records`。
 - `confirm_candidate` 只表示候选通过初审；`confirm` 才会创建 `SocMemoryRecord`。
-- `SocMemoryRecord.retrieval_enabled=false` 是当前硬边界；retrieval policy、score、token budget、match reason、prompt injection 和 replay diff 后续单独实现。
+- `SocMemoryRecord.retrieval_enabled=false` 是当前硬边界；retrieval policy、score、token budget 和 match reason 已有 MVP；prompt injection、retrieval enablement workflow 和 replay diff 后续单独实现。
 - `rejected`、`deprecated`、`expired` 只能作为审计状态或后续过滤条件，不删除原候选和证据来源。
+
+### 3.4 Confirmed Memory Retrieval Flow
+
+Confirmed-memory retrieval policy MVP 已落地。它只解决“哪些 confirmed memory 可以作为调查上下文被看见”的问题，不解决自动决策和 prompt 注入。
+
+```mermaid
+flowchart TD
+    Context["InvestigationContext input\nsummary + entities + skills + evidence"] --> Query["SocMemoryQuery\nfacets + text_terms + evidence_refs"]
+    Query --> Service["SocMemoryService.find_relevant_records"]
+    Service --> Gate["retrieval_enabled=true\nstatus=confirmed\nnot expired"]
+    Gate --> Score["score + match_reasons\nmatched_facets + token_estimate"]
+    Score --> Result["SocMemoryRetrievalResult"]
+    Result --> Review["InvestigationContext.relevant_memories\nWeb/TUI/Lead Agent visible"]
+    Review --> NoDecision["no verdict mutation\nno prompt injection yet"]
+```
+
+实现约束：
+
+- `SocMemoryQuery` 不要求 topic、rule_code、canonical detection、scenario 或 entity 全部存在；缺任意 facet 只降低召回和分数。
+- `SocMemoryRetrievalResult` 必须返回 `memory_id`、`version`、`content_hash`、`facets_hash`、`score`、`match_reasons` 和 `token_estimate`，便于 replay diff。
+- `retrieval_enabled=false` 的 confirmed record 必须被计入 `skipped_retrieval_disabled`，不能返回为 match。
+- ReviewQueue Web/TUI/Lead Agent 只能展示 `relevant_memories`，不能把它当成 active lesson 自动改判。
 
 ## 4. 预警分析主链路
 
@@ -325,7 +347,8 @@ flowchart TD
 - `SocMemoryCandidate(status=pending_review)` 可以进入 ReviewQueue context、Web/TUI 和 Lead Agent bounded artifact。
 - Lead Agent 必须把 `memory_candidates` 当成待评审建议，不能当成 confirmed fact、active lesson 或处置依据。
 - confirm/reject/deprecate/expire 状态机已由 `SocMemoryService.review_candidate()` 提供；`confirm` 生成的 `SocMemoryRecord` 默认 `retrieval_enabled=false`。
-- confirmed memory retrieval policy、检索注入、score/match reason/token budget 和 replay diff 后续单独实现。
+- confirmed memory retrieval policy MVP 已由 `SocMemoryService.find_relevant_records()` 提供；只返回 `retrieval_enabled=true`、confirmed、未过期 record，并带 score / match reason / token budget。
+- prompt injection、runtime decision 影响和 memory replay diff 后续单独实现。
 
 ## 6. 审批与高风险动作
 
@@ -453,7 +476,7 @@ flowchart TD
 
 目的：固定 typed memory record + facets + retrieval policy，让 TUI、Kafka daemon、ReviewQueue、Lead Agent 和 domain triage 的重要结论后续能转成候选记忆。
 
-当前状态：DB-first memory candidate persistence 和 review workflow 已完成；`SocMemoryCandidate` 现在有 `soc_memory_candidates` 表、repository、`soc memory list/get/review`、Gateway `/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded context。`confirm` 会创建 `SocMemoryRecord(retrieval_enabled=false)`，仍不能影响 runtime decision。
+当前状态：DB-first memory candidate persistence、review workflow 和 retrieval policy MVP 已完成；`SocMemoryCandidate` 现在有 `soc_memory_candidates` 表、repository、`soc memory list/get/review`、Gateway `/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded context。`confirm` 会创建 `SocMemoryRecord(retrieval_enabled=false)`；`soc memory search`、`/api/soc/memory/search` 和 `InvestigationContext.relevant_memories` 只返回 retrieval-enabled confirmed records，仍不能影响 runtime decision。
 
 范围：
 
@@ -462,13 +485,13 @@ flowchart TD
 - 固定 typed record：`memory_type`、`status`、`content`、`facets`、`evidence_refs`、`version/hash`。
 - 固定 facets：topics、canonical detection key、vendor aliases、scenario、entities、environment；缺失任意 facet 时系统仍要能工作。
 - 明确具体 IP、UM、host、URL、hash 默认只作为 evidence / query dimension，不直接成为长期 memory 主粒度。
-- 已新增 `SocMemoryRecord` / `SocMemoryRecordStatus` 和 `soc_memory_records`；后续继续规划 `SocMemoryQuery`、retrieval result、score 和 token budget。
+- 已新增 `SocMemoryRecord` / `SocMemoryRecordStatus`、`SocMemoryQuery`、`SocMemoryRetrievalResult` 和 `soc_memory_records`；后续继续规划 prompt injection、memory replay diff 和 retrieval enablement policy。
 - 明确 TUI/Web correction、Kafka daemon repeated pattern、Lead Agent summary、DomainTriageResult 和 InvestigationEvidence 如何生成 memory candidate。
 - candidate review workflow 已实现：confirm / reject / deprecate / expire 只能走 `SocMemoryService`。
 
 验收：
 
-- 不自动把 candidate 写成生效 memory；只有人工 `confirm` 才创建 `SocMemoryRecord`，且默认 retrieval disabled。
+- 不自动把 candidate 写成生效 memory；只有人工 `confirm` 才创建 `SocMemoryRecord`，且默认 retrieval disabled；只有显式 retrieval-enabled confirmed record 才能被检索返回。
 - `pending_review` 不注入 prompt。
 - 所有 candidate 都有 facets、来源、evidence refs、幂等键和 reviewer/audit fields。
 - 后续代码只能通过 `SocMemoryService` 写 memory，入口层不能直接写 repository。

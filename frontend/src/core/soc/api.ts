@@ -15,9 +15,11 @@ import type {
   SocMemoryCandidateReviewRequest,
   SocMemoryCandidateReviewResult,
   SocMemoryCandidateStatus,
+  SocMemoryQuery,
   SocMemoryRecord,
   SocMemoryRecordListResponse,
   SocMemoryRecordStatus,
+  SocMemoryRetrievalResult,
   SocRequestContext,
   SocReviewCloseRequest,
   SocReviewCorrectionRequest,
@@ -334,6 +336,7 @@ export async function listSocMemoryRecords({
   tenantScope,
   tenantId,
   sourceCandidateId,
+  retrievalEnabled,
   limit = 50,
   context,
 }: {
@@ -341,6 +344,7 @@ export async function listSocMemoryRecords({
   tenantScope?: string | null;
   tenantId?: string | null;
   sourceCandidateId?: string | null;
+  retrievalEnabled?: boolean | null;
   limit?: number;
   context?: SocRequestContext;
 } = {}): Promise<SocMemoryRecord[]> {
@@ -357,6 +361,9 @@ export async function listSocMemoryRecords({
   if (sourceCandidateId) {
     params.set("source_candidate_id", sourceCandidateId);
   }
+  if (retrievalEnabled !== undefined && retrievalEnabled !== null) {
+    params.set("retrieval_enabled", String(retrievalEnabled));
+  }
   params.set("limit", String(limit));
 
   const url = `${getBackendBaseURL()}/api/soc/memory/records?${params.toString()}`;
@@ -368,6 +375,21 @@ export async function listSocMemoryRecords({
     "Failed to load SOC memory records",
   );
   return data.items;
+}
+
+export async function searchSocMemoryRecords(
+  query: SocMemoryQuery,
+  context?: SocRequestContext,
+): Promise<SocMemoryRetrievalResult> {
+  const response = await fetch(`${getBackendBaseURL()}/api/soc/memory/search`, {
+    method: "POST",
+    headers: buildSocHeaders(context, { json: true }),
+    body: JSON.stringify(query),
+  });
+  return readJson<SocMemoryRetrievalResult>(
+    response,
+    "Failed to search SOC memory records",
+  );
 }
 
 export async function getSocMemoryRecord(

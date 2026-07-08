@@ -52,6 +52,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateType,
     SocMemoryCandidateValidity,
     SocMemoryDecisionImpact,
+    SocMemoryQuery,
     SocMemoryRecordStatus,
     SocMemoryTargetArtifact,
     Verdict,
@@ -1911,6 +1912,104 @@ def test_memory_service_deprecates_confirmed_record() -> None:
     assert deprecated.memory_record is not None
     assert deprecated.memory_record.status is SocMemoryRecordStatus.DEPRECATED
     assert deprecated.memory_record.deprecation_reason == "Superseded by newer guidance."
+
+
+def test_memory_service_retrieval_requires_enabled_confirmed_records() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(candidate_repository=repository, record_repository=repository)
+    candidate = service.propose_candidate(_pingan_memory_candidate_command())
+    confirmed = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Confirmed for retrieval gate test.",
+        )
+    )
+    assert confirmed.memory_record is not None
+
+    query = SocMemoryQuery(
+        facets={"domain": ["hids"], "capability_card": ["PA-HIDS-001"]},
+        text_terms=["authorized"],
+    )
+    disabled_result = service.find_relevant_records(query)
+
+    assert disabled_result.matches == []
+    assert disabled_result.skipped_retrieval_disabled == 1
+
+    enabled_record = confirmed.memory_record.model_copy(update={"retrieval_enabled": True})
+    repository.save_memory_record(enabled_record)
+
+    enabled_result = service.find_relevant_records(query)
+
+    assert enabled_result.returned_count == 1
+    match = enabled_result.matches[0]
+    assert match.memory_id == enabled_record.memory_id
+    assert match.retrieval_enabled is True
+    assert match.score > 1
+    assert "facet:domain=hids" in match.match_reasons
+    assert match.content_hash == enabled_record.content_hash
+    assert enabled_result.total_token_estimate == match.token_estimate
+
+
+def test_review_context_includes_relevant_memory_result() -> None:
+    repository = InMemoryAlertRepository()
+    summary_repository = InMemorySummaryRepository()
+    audit_repository = InMemoryAuditRepository()
+    review_repository = InMemoryReviewQueueRepository()
+    memory_repository = InMemoryMemoryCandidateRepository()
+    run = SocAnalysisService(
+        repository=repository,
+        summary_repository=summary_repository,
+        audit_repository=audit_repository,
+        review_queue_repository=review_repository,
+    ).analyze(_sample("pingan_legacy_apt.json"))
+    item = review_repository.get_open_review_item_by_run(run.run_id)
+    assert item is not None
+
+    memory_service = SocMemoryService(candidate_repository=memory_repository, record_repository=memory_repository)
+    candidate = memory_service.propose_candidate(
+        SocMemoryCandidateCreateCommand(
+            candidate_type=SocMemoryCandidateType.PROCEDURE,
+            target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
+            summary="APT direction reconstruction",
+            content="For this APT rule, reconstruct direction from raw message and internal asset role before suppressing.",
+            tenant_scope="global",
+            source=SocMemoryCandidateSource(
+                source_type=SocMemoryCandidateSourceType.MANUAL_NOTE,
+                run_id=run.run_id,
+                alert_id=run.alert_id,
+                queue_id=item.queue_id,
+            ),
+            evidence_refs=["manual:apt-direction"],
+            validity=SocMemoryCandidateValidity(notes="Applies to APT direction reconstruction demos."),
+            facets={
+                "source_type": ["apt"],
+                "rule_code": [item.rule_code or ""],
+                "entity": item.entity_keys,
+            },
+        )
+    )
+    confirmed = memory_service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Analyst confirmed this APT procedure.",
+        )
+    )
+    assert confirmed.memory_record is not None
+    memory_repository.save_memory_record(confirmed.memory_record.model_copy(update={"retrieval_enabled": True}))
+
+    context = SocReviewService(
+        repository=repository,
+        summary_repository=summary_repository,
+        audit_repository=audit_repository,
+        review_queue_repository=review_repository,
+        memory_record_repository=memory_repository,
+    ).get_investigation_context(item.queue_id)
+
+    assert context.relevant_memories is not None
+    assert context.relevant_memories.returned_count == 1
+    assert context.relevant_memories.matches[0].record.summary == "APT direction reconstruction"
 
 
 def _pingan_memory_candidate_command() -> SocMemoryCandidateCreateCommand:

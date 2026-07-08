@@ -48,6 +48,7 @@ import type {
   SocInvestigationEvidence,
   SocMemoryCandidate,
   SocMemoryCandidateReviewDecision,
+  SocMemoryRetrievalResult,
   SocReviewQueueItem,
   SocReviewQueueStatus,
   SocVerdict,
@@ -477,6 +478,90 @@ function MemoryCandidateSection({
           ))
         )}
       </div>
+    </section>
+  );
+}
+
+function RelevantMemorySection({
+  result,
+}: {
+  result: SocMemoryRetrievalResult | null | undefined;
+}) {
+  const matches = result?.matches ?? [];
+  return (
+    <section className="rounded-md border">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+        <div className="flex items-center gap-2">
+          <SearchCheckIcon className="text-muted-foreground size-4" />
+          <h3 className="text-sm font-semibold">相关确认记忆</h3>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="secondary">{matches.length}</Badge>
+          {result ? (
+            <Badge variant="outline">
+              {result.total_token_estimate}/{result.max_tokens} tokens
+            </Badge>
+          ) : null}
+        </div>
+      </div>
+      {!result ? (
+        <div className="text-muted-foreground p-4 text-sm">
+          当前上下文没有 memory retrieval result。
+        </div>
+      ) : (
+        <div className="divide-y">
+          <div className="text-muted-foreground grid gap-2 p-4 text-xs sm:grid-cols-4">
+            <span>候选 {result.total_candidate_count}</span>
+            <span>未开启检索 {result.skipped_retrieval_disabled}</span>
+            <span>状态过滤 {result.skipped_status}</span>
+            <span>低分过滤 {result.skipped_below_min_score}</span>
+          </div>
+          {matches.length === 0 ? (
+            <div className="text-muted-foreground p-4 text-sm">
+              没有命中 retrieval-enabled 的 confirmed memory。
+            </div>
+          ) : (
+            matches.map((match) => (
+              <div key={match.memory_id} className="p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium">
+                      {match.record.summary}
+                    </div>
+                    <div className="text-muted-foreground mt-1 text-xs">
+                      {match.memory_id} v{match.version} / score{" "}
+                      {match.score.toFixed(2)} / {match.token_estimate} tokens
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Badge variant="outline">{match.record.memory_type}</Badge>
+                    <Badge variant="secondary">
+                      {match.record.target_artifact}
+                    </Badge>
+                    <Badge variant="outline">retrieval-enabled</Badge>
+                  </div>
+                </div>
+                <p className="text-muted-foreground mt-2 text-xs">
+                  {match.record.content}
+                </p>
+                {match.match_reasons.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {match.match_reasons.map((reason) => (
+                      <Badge key={reason} variant="outline">
+                        {reason}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                  <span>content {match.content_hash}</span>
+                  <span>facets {match.facets_hash}</span>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -956,6 +1041,8 @@ export function SocReviewQueueWorkbench() {
               <ExternalDispositionSection
                 records={context?.external_dispositions ?? []}
               />
+
+              <RelevantMemorySection result={context?.relevant_memories} />
 
               <MemoryCandidateSection
                 candidates={context?.memory_candidates ?? []}

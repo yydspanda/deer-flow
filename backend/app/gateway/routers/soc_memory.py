@@ -14,8 +14,10 @@ from soc_agent.contracts import (
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateReviewResult,
     SocMemoryCandidateStatus,
+    SocMemoryQuery,
     SocMemoryRecord,
     SocMemoryRecordStatus,
+    SocMemoryRetrievalResult,
 )
 from soc_agent.core import SocMemoryService, SocServiceError, SocServiceNotFoundError, SocServiceNotImplementedError
 
@@ -87,8 +89,6 @@ def get_memory_candidate(candidate_id: str, service: MemoryServiceDep) -> SocMem
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except SocServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except SocServiceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/candidates/{candidate_id}/review", response_model=SocMemoryCandidateReviewResult)
@@ -114,6 +114,8 @@ def review_memory_candidate(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SocServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/records", response_model=MemoryRecordListResponse)
@@ -123,6 +125,7 @@ def list_memory_records(
     tenant_scope: str | None = Query(default=None),
     tenant_id: str | None = Query(default=None),
     source_candidate_id: str | None = Query(default=None),
+    retrieval_enabled: bool | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> MemoryRecordListResponse:
     try:
@@ -132,6 +135,7 @@ def list_memory_records(
                 tenant_scope=tenant_scope,
                 tenant_id=tenant_id,
                 source_candidate_id=source_candidate_id,
+                retrieval_enabled=retrieval_enabled,
                 limit=limit,
             )
         )
@@ -147,3 +151,13 @@ def get_memory_record(memory_id: str, service: MemoryServiceDep) -> SocMemoryRec
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/search", response_model=SocMemoryRetrievalResult)
+def search_memory_records(payload: SocMemoryQuery, service: MemoryServiceDep) -> SocMemoryRetrievalResult:
+    try:
+        return service.find_relevant_records(payload)
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SocServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

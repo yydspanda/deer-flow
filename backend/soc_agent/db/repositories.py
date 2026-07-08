@@ -401,6 +401,7 @@ class SqlAlchemyAlertRepository:
         tenant_scope: str | None = None,
         tenant_id: str | None = None,
         source_candidate_id: str | None = None,
+        retrieval_enabled: bool | None = None,
         limit: int = 50,
     ) -> list[SocMemoryRecord]:
         with self._session_factory() as session:
@@ -413,6 +414,8 @@ class SqlAlchemyAlertRepository:
                 query = query.where(SocMemoryRecordRow.tenant_id == tenant_id)
             if source_candidate_id is not None:
                 query = query.where(SocMemoryRecordRow.source_candidate_id == source_candidate_id)
+            if retrieval_enabled is not None:
+                query = query.where(SocMemoryRecordRow.retrieval_enabled == retrieval_enabled)
             result = session.execute(query.order_by(SocMemoryRecordRow.updated_at.desc()).limit(limit))
             return [SocMemoryRecord.model_validate(row.record_payload) for row in result.scalars()]
 

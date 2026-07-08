@@ -20,12 +20,14 @@ import {
   listSocApprovalRequests,
   listSocReviewItems,
   reviewSocMemoryCandidate,
+  searchSocMemoryRecords,
 } from "./api";
 import type {
   SocAgentApprovedActionCommand,
   SocApprovalGrantRequest,
   SocMemoryCandidateReviewRequest,
   SocMemoryCandidateStatus,
+  SocMemoryQuery,
   SocMemoryRecordStatus,
   SocRequestContext,
   SocReviewCloseRequest,
@@ -86,12 +88,14 @@ export const socMemoryQueryKeys = {
     tenantScope,
     tenantId,
     sourceCandidateId,
+    retrievalEnabled,
     limit,
   }: {
     status: SocMemoryRecordStatus | null;
     tenantScope: string | null | undefined;
     tenantId: string | null | undefined;
     sourceCandidateId: string | null | undefined;
+    retrievalEnabled: boolean | null | undefined;
     limit: number;
   }) =>
     [
@@ -101,10 +105,13 @@ export const socMemoryQueryKeys = {
       tenantScope,
       tenantId,
       sourceCandidateId,
+      retrievalEnabled,
       limit,
     ] as const,
   record: (memoryId: string | null | undefined) =>
     [...socMemoryQueryKeys.all, "record", memoryId] as const,
+  search: (query: SocMemoryQuery | null | undefined) =>
+    [...socMemoryQueryKeys.all, "search", query] as const,
 };
 
 function useSocWebRequestContext(): SocRequestContext {
@@ -286,12 +293,14 @@ export function useSocMemoryRecords({
   tenantScope,
   tenantId,
   sourceCandidateId,
+  retrievalEnabled,
   limit = 50,
 }: {
   status?: SocMemoryRecordStatus | null;
   tenantScope?: string | null;
   tenantId?: string | null;
   sourceCandidateId?: string | null;
+  retrievalEnabled?: boolean | null;
   limit?: number;
 } = {}) {
   const context = useSocWebRequestContext();
@@ -301,6 +310,7 @@ export function useSocMemoryRecords({
       tenantScope,
       tenantId,
       sourceCandidateId,
+      retrievalEnabled,
       limit,
     }),
     queryFn: () =>
@@ -309,11 +319,22 @@ export function useSocMemoryRecords({
         tenantScope,
         tenantId,
         sourceCandidateId,
+        retrievalEnabled,
         limit,
         context,
       }),
   });
   return { records: data ?? [], isLoading, isFetching, error, refetch };
+}
+
+export function useSocMemorySearch(query: SocMemoryQuery | null | undefined) {
+  const context = useSocWebRequestContext();
+  const { data, isLoading, error, refetch, isFetching } = useQuery({
+    queryKey: socMemoryQueryKeys.search(query),
+    queryFn: () => searchSocMemoryRecords(query!, context),
+    enabled: !!query,
+  });
+  return { result: data ?? null, isLoading, isFetching, error, refetch };
 }
 
 export function useSocMemoryRecord(memoryId: string | null | undefined) {
