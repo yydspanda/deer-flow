@@ -24,7 +24,7 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口完成，Phase 2 correlation / domain triage 起步 |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence / external disposition PG + ReviewQueue visibility / memory candidate PG + API + ReviewQueue visibility / memory candidate review workflow / confirmed memory retrieval policy MVP / Web/TUI visible investigation MVP / persistent demo script MVP 已固定；memory candidate source bridge 已接 correction 和 domain finding；generic scenario recognition deterministic MVP 已接 evidence profile/current conclusion；真实 dev/staging MCP 等待 endpoint/凭证 |
+| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence / external disposition PG + ReviewQueue visibility / memory candidate PG + API + ReviewQueue visibility / memory candidate review workflow / confirmed memory retrieval policy MVP / Web/TUI visible investigation MVP / persistent demo script MVP 已固定；memory candidate source bridge 已接 correction 和 domain finding；generic scenario recognition deterministic MVP 已接 evidence profile/current conclusion，并支持 `vendor.unmapped` 未映射厂商场景候选 finding；真实 dev/staging MCP 等待 endpoint/凭证 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
@@ -56,7 +56,7 @@
 | 3.2 | Memory candidate review workflow / confirmed-memory boundary | Done | 已新增 `SocMemoryCandidateReviewCommand/Result`、`SocMemoryRecord`、`soc_memory_records`、`soc memory review`、`soc memory records list/get`、Gateway review/records API 和 ReviewQueue Web 操作入口 | confirm/reject/deprecate/expire 只能走 `SocMemoryService`；`confirm` 生成 `SocMemoryRecord(retrieval_enabled=false)`；不注入 prompt，不影响 verdict |
 | 3.3 | Confirmed memory retrieval policy / unified visibility MVP | Done | 已新增 `SocMemoryQuery`、`SocMemoryMatch`、`SocMemoryRetrievalResult`、`SocMemoryService.find_relevant_records()`、CLI `soc memory search`、Gateway `/api/soc/memory/search`、`InvestigationContext.relevant_memories` 和 Web/TUI/Lead Agent 可见化 | 只返回 `retrieval_enabled=true`、confirmed、未过期 record；返回 score/match reason/token estimate/hash/version；不注入 prompt，不影响 verdict |
 | 4 | Domain Sub-Agent Contract | Done for PA-10 | 已固定 `SocDomainTriageRequest`、`SocDomainTriageResult`、`SocDomainFinding` 结构 | EDR/APT/HIDS 已共用同一 schema；子研判不能直接改 decision 或写 DB |
-| 5 | Generic security scenario recognition | Partial | deterministic MVP 已完成：第一批场景包括反弹 shell、webshell、横向移动、命令/代码执行、恶意外联、提权、凭证滥用；`SocDomainFinding` 输出 `scenario_key`、vendor hints、evidence profile、current conclusion、evidence gaps 和 human checklist | 任何来源的告警都通过统一 `SocDomainTriageResult/Finding` 输出场景化 finding；Evidence Fusion First；LLM 后续只能在 bounded context 中识别场景，不能直接改 verdict 或写 confirmed memory |
+| 5 | Generic security scenario recognition | Partial | deterministic MVP 已完成：第一批场景包括反弹 shell、webshell、横向移动、命令/代码执行、恶意外联、提权、凭证滥用；未命中内部 taxonomy 但存在上游场景提示时输出 `vendor.unmapped` 候选 finding；`SocDomainFinding` 输出 `scenario_key`、vendor hints、evidence profile、current conclusion、evidence gaps 和 human checklist | 任何来源的告警都通过统一 `SocDomainTriageResult/Finding` 输出场景化 finding；Evidence Fusion First；未映射厂商场景不阻断研判、不改 verdict、不写 confirmed memory；LLM 后续只能在 bounded context 中识别场景，不能直接改 verdict 或写 confirmed memory |
 | 6 | Main SOC Agent Orchestrator MVP | Done for PA-11 / correlation merge pending | 已串起 analyze、skill context、read-only action evidence、domain triage、review summary，输出 `UnifiedInvestigationReport`；correlation 尚未并入 report | APT/EDR/HIDS demo 能看到主控用了哪些 skill、route、evidence、domain finding 和 review context |
 | 7 | Web/TUI visible investigation | Done for MVP | 已新增 `UnifiedInvestigationView`、`InvestigationTimelineItem`，`InvestigationContext` 聚合 correlation result、domain triage results、evidence timeline、external feedback、memory candidates 和 relevant memories；Web/TUI/Lead Agent bounded artifact 可见 | 分析师能区分 runtime decision、domain findings、read-only evidence、外部人工反馈、人工 correction、retrieval-enabled memory；视图只读，不改 verdict |
 | 8 | Demo / Eval Script | Done for APT/EDR/HIDS MVP | 已新增 `soc demo run [all|apt|edr|hids]`，用 PingAn 脱敏样例持久化 ReviewQueue item、read-only evidence、domain finding、confirmed/retrieval memory 和 unified investigation view | 一条命令可稳定演示 runtime + domain triage + evidence + review 状态，并能直接用 `soc review context QUEUE_ID --pretty` 或 Web/TUI 打开统一调查视图；本 MVP 为保持 open review 可见性，暂不种 external disposition |
@@ -172,6 +172,24 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-08 — Vendor unmapped scenario fallback
+
+- 背景：
+  - 用户追问“如果不在场景识别器里会怎么样”，明确不能让内部场景库未覆盖导致 SOC Agent 停止研判或强行映射到错误场景。
+- 变更：
+  - `backend/soc_agent/domain/scenarios.py` 在 deterministic scenario rule 未命中、但上游/canonical alert 存在 vendor scenario hints 时，输出 `scenario_key=vendor.unmapped` 的候选 `SocDomainFinding`。
+  - 该 finding 保留 `vendor_scenarios`、`evidence_profile`、`current_conclusion`、`limitations` 和 `human_checklist`，推荐人工复核并作为 taxonomy / capability card / memory candidate 的后续候选。
+  - 命中内部场景规则时不会额外生成 `vendor.unmapped`，避免把已识别场景和厂商未映射提示混在一起。
+  - 更新 `.notes/ai_soc/soc-agent-solution.md` 和 `.notes/reference-index/soc-agent-engineering-contracts.md`，固定未映射厂商场景的边界。
+- 边界：
+  - `vendor.unmapped` 不改 operational verdict，不写 confirmed memory，不执行 action，不替代 domain handler 的基础 finding。
+  - 这只是 deterministic fallback；后续 taxonomy 扩展、replay diff、analyst feedback -> pending memory candidate 仍是独立切片。
+- 验证：
+  - `PYTHONPATH=backend backend/.venv/bin/python -m ruff check backend/soc_agent/domain/scenarios.py backend/tests/test_soc_domain_scenarios.py`
+  - `PYTHONPATH=backend backend/.venv/bin/python -m pytest backend/tests/test_soc_domain_scenarios.py backend/tests/test_soc_pingan_capability_eval.py -q`
+- 下一步：
+  - 继续补 scenario taxonomy / replay diff / analyst feedback -> pending memory candidate，或者先把 domain finding bridge 显式接入合适的 service/entry。
 
 ### 2026-07-08 — Generic scenario recognition deterministic MVP
 

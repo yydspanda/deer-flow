@@ -267,7 +267,11 @@ def scenario_findings(request: SocDomainTriageRequest, domain: SocDomainName) ->
             },
         )
         findings.append(finding)
-    return findings[:3]
+    if findings:
+        return findings[:3]
+    if vendor_scenarios:
+        return [_unmapped_vendor_scenario_finding(request, domain, vendor_scenarios, action_routes)]
+    return []
 
 
 def finding_conclusion(
@@ -388,6 +392,110 @@ def _scenario_gaps(required_routes: tuple[str, ...], action_routes: list[str]) -
         if route not in action_routes:
             gaps.append(f"current context has no {route} evidence")
     return gaps
+
+
+def _unmapped_vendor_scenario_finding(
+    request: SocDomainTriageRequest,
+    domain: SocDomainName,
+    vendor_scenarios: list[str],
+    action_routes: list[str],
+) -> SocDomainFinding:
+    gaps = [
+        "No internal scenario taxonomy rule matched vendor-provided scenario hints.",
+        "No scenario-specific tool plan is available yet.",
+    ]
+    confidence = _unmapped_vendor_confidence(request)
+    scenario_name = f"未映射厂商场景：{vendor_scenarios[0]}"
+    return SocDomainFinding(
+        domain=domain,
+        scenario_key="vendor.unmapped",
+        scenario_name=scenario_name,
+        vendor_scenarios=vendor_scenarios,
+        title=scenario_name,
+        summary=(f"Vendor or upstream alert context provided scenario hints that are not yet mapped to the internal SOC scenario taxonomy. Vendor hints: {', '.join(vendor_scenarios[:5])}."),
+        severity=SocDomainFindingSeverity.MEDIUM,
+        disposition=SocDomainFindingDisposition.NEEDS_MORE_EVIDENCE,
+        confidence=confidence,
+        evidence_profile=evidence_profile_for_request(
+            request,
+            used_sources=_used_evidence_sources(request),
+            gaps=gaps,
+        ),
+        current_conclusion=finding_conclusion(
+            _unmapped_vendor_conclusion_summary(vendor_scenarios, confidence, gaps, request),
+            risk_level=SocDomainFindingSeverity.MEDIUM,
+            confidence=confidence,
+            recommended_action="manual_review",
+            recommended_queue=_default_review_queue_for_domain(domain),
+            rationale=[
+                "上游场景提示只能作为候选线索；未映射到内部 taxonomy 前不能作为最终场景结论。",
+                "仍需结合 raw/canonical alert、历史相似预警、外部反馈、confirmed memory 和只读工具证据给出当前研判。",
+            ],
+        ),
+        evidence_refs=_scenario_evidence_refs(request),
+        skill_names=_skill_names(request.skill_context),
+        recommendations=[
+            "先按当前 domain handler 的基础 finding 完成人工复核，不因场景未映射而中止研判。",
+            "核对上游场景名是否只是厂商分类、规则分类或真实攻击场景。",
+            "若该场景反复出现且有稳定处置经验，将其沉淀为 capability card、eval fixture 或 pending memory candidate。",
+        ],
+        limitations=gaps,
+        human_checklist=[
+            "查看 raw/canonical alert，确认上游场景提示是否有直接证据支撑。",
+            "检索同 tenant/source/rule/entity 的历史相似预警和外部处置理由。",
+            "检查当前可用只读证据是否能支持或反驳该厂商场景。",
+            "判断是否需要新增内部 scenario taxonomy、domain skill 或 capability card。",
+        ],
+        metadata={
+            "scenario_family": "vendor_unmapped",
+            "available_action_routes": action_routes,
+            "vendor_scenarios": vendor_scenarios,
+            "taxonomy_candidate": True,
+        },
+    )
+
+
+def _unmapped_vendor_confidence(request: SocDomainTriageRequest) -> float:
+    score = 0.38
+    if request.run.input_payload:
+        score += 0.04
+    if request.metadata.get("similar_alert_count", 0):
+        score += 0.04
+    if request.metadata.get("external_disposition_count", 0):
+        score += 0.04
+    if request.metadata.get("relevant_memory_count", 0):
+        score += 0.06
+    if request.investigation_evidence:
+        score += 0.04
+    return min(max(round(score, 2), 0.32), 0.62)
+
+
+def _unmapped_vendor_conclusion_summary(
+    vendor_scenarios: list[str],
+    confidence: float,
+    gaps: list[str],
+    request: SocDomainTriageRequest,
+) -> str:
+    history_bits = []
+    if request.metadata.get("similar_alert_count", 0):
+        history_bits.append(f"{request.metadata['similar_alert_count']} 条历史相似预警")
+    if request.metadata.get("external_disposition_count", 0):
+        history_bits.append(f"{request.metadata['external_disposition_count']} 条外部处置反馈")
+    if request.metadata.get("relevant_memory_count", 0):
+        history_bits.append(f"{request.metadata['relevant_memory_count']} 条 confirmed memory")
+    history = "，".join(history_bits) if history_bits else "当前上下文未命中历史/反馈/memory"
+    gap_text = "；证据缺口：" + "、".join(gaps) if gaps else ""
+    return f"当前结论：上游提示未映射场景 {', '.join(vendor_scenarios[:3])}，置信度 {confidence:.2f}；{history}{gap_text}。建议按基础 domain finding 继续复核，并把该场景作为 taxonomy/memory 候选。"
+
+
+def _default_review_queue_for_domain(domain: SocDomainName) -> str:
+    if domain in {SocDomainName.EDR, SocDomainName.HIDS}:
+        return "endpoint_review"
+    if domain == SocDomainName.APT:
+        return "network_review"
+    if domain == SocDomainName.WAF_F5:
+        return "web_review"
+    return "soc_review"
 
 
 def _used_evidence_sources(request: SocDomainTriageRequest) -> list[str]:
