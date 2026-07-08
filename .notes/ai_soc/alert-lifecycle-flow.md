@@ -5,7 +5,7 @@
 > 本文档描述两件事：
 >
 > 1. 当前代码已经实现的预警生命周期、状态变化和数据写入边界。
-> 2. 下一阶段如何演进到可演示的 Main SOC Agent + EDR/APT/HIDS/F5 domain sub-agent 研判链路。
+> 2. 下一阶段如何演进到可演示的 Main SOC Agent + 通用安全场景识别研判链路。
 >
 > 原则：LLM 和 Lead Agent 可以参与研判、提出调查动作和生成解释，但主流程、状态机、权限、审计、持久化仍由 SOC Runtime / Core Services 掌握。
 
@@ -29,7 +29,7 @@ alert in
 - `SocCorrelationService` MVP 已存在，能通过 CLI/core service 输出结构化相似告警、匹配原因和可复用 evidence；后续还需要接入 ReviewQueue/Web/TUI 可视化面板。
 - External Disposition 已有 vendor-neutral event/mapping/service MVP，并且 high-trust mapped 外部结论可同步为本地 correction / review close；mapped 且可定位的外部 reason 可生成 pending memory candidate；DB/API 和 Web/TUI visibility 已完成。
 - `SocMemoryCandidate` 已有 DB-first candidate store、API/CLI、ReviewQueue Web/TUI/Lead Agent visibility 和 confirm/reject/deprecate/expire review workflow；`confirm` 会生成 `SocMemoryRecord(retrieval_enabled=false)`；confirmed memory retrieval policy MVP 已能按 `retrieval_enabled=true` gate 返回 `relevant_memories`，但 prompt injection / runtime decision 仍未开启。
-- APT/EDR/HIDS 已有统一 `SocDomainTriageRequest` / `SocDomainTriageResult` / `SocDomainFinding`，F5/WAF handler 后续补。
+- APT/EDR/HIDS 已有统一 `SocDomainTriageRequest` / `SocDomainTriageResult` / `SocDomainFinding`。后续不按 F5/WAF 这类单一来源固定排期，而是按反弹 shell、webshell、横向移动、命令执行、恶意外联、提权、凭证滥用等通用安全场景补识别能力。
 - PA-11 已有只读 Main Orchestrator demo：`SocMainOrchestratorService` 能把 deterministic analyze、selected skills、read-only action evidence、domain findings 和 review context 合成 `UnifiedInvestigationReport`。
 - 这条链路已经通过 `UnifiedInvestigationView` 接入 ReviewQueue Web/TUI/Lead Agent bounded context 的统一调查视图；还没有替换为真实 PingAn MCP/API，PA-12 等真实 endpoint/凭证。
 - `soc demo run [all|apt|edr|hids]` 已能把 APT/EDR/HIDS 脱敏样例持久化成可打开的 investigation chain：ReviewQueue item、read-only evidence、domain finding、confirmed/retrieval memory 和 unified investigation view。
@@ -48,10 +48,10 @@ alert in
   -> [Done] Memory candidate DB/API/ReviewQueue visibility
   -> [Done] Memory candidate review workflow / confirmed-memory boundary
   -> [Done] Confirmed memory retrieval policy / unified investigation visibility MVP
-  -> [Partial] EDR/APT/HIDS handlers done; F5/WAF handler pending
+  -> [Partial] APT/EDR/HIDS source handlers done; generic scenario recognition pending
   -> [Done] Web/TUI visible investigation MVP
   -> [Done] Demo / Eval Script MVP
-  -> [Current] Memory candidate source integration + F5/WAF handler
+  -> [Current] Memory candidate source integration + generic security scenario recognition
 ```
 
 暂缓项不作为当前 Alpha 前置条件：
@@ -413,20 +413,20 @@ flowchart TD
     Main --> Corr["SocCorrelationService\nsimilar alerts + reusable evidence"]
     Main --> Router["Domain Router\nsource_type / detection / entities / skills"]
 
-    Router --> APT["APT Triage Agent\nnetwork direction + IOC + attack chain"]
-    Router --> EDR["EDR Triage Agent\nendpoint process tree + account + lateral movement"]
-    Router --> HIDS["HIDS Triage Agent\nhost/file/process/login behavior"]
-    Router --> F5["F5/WAF Triage Agent\nHTTP direction + URI + source/target + suppress target"]
+    Router --> Network["Network / APT Source Handler\nnetwork direction + IOC + attack chain"]
+    Router --> Endpoint["Endpoint Source Handler\nprocess tree + account + lateral movement"]
+    Router --> Host["Host Source Handler\nfile/process/login behavior"]
+    Router --> Scenario["Generic Scenario Recognizer\nreverse shell + webshell + lateral movement + command execution"]
 
-    Corr --> APT
-    Corr --> EDR
-    Corr --> HIDS
-    Corr --> F5
+    Corr --> Network
+    Corr --> Endpoint
+    Corr --> Host
+    Corr --> Scenario
 
-    APT --> Merge["Unified Investigation Report"]
-    EDR --> Merge
-    HIDS --> Merge
-    F5 --> Merge
+    Network --> Merge["Unified Investigation Report"]
+    Endpoint --> Merge
+    Host --> Merge
+    Scenario --> Merge
 
     Merge --> Decision["Runtime Decision\nverdict/confidence/needs_review"]
     Merge --> Evidence["Investigation Evidence Timeline"]
@@ -526,9 +526,9 @@ flowchart TD
 - 所有 candidate 都有 facets、来源、evidence refs、幂等键和 reviewer/audit fields。
 - 后续代码只能通过 `SocMemoryService` 写 memory，入口层不能直接写 repository。
 
-### Slice 4：Domain Sub-Agent Contract
+### Slice 4：Domain / Scenario Triage Contract
 
-目的：先固定 EDR/APT/HIDS/F5 子研判单元的输入输出，避免每个 domain 各写一套。
+目的：先固定 source handler 和安全场景识别单元的输入输出，避免 EDR、APT、HIDS、WAF、云日志、反弹 shell、webshell、横向移动等各写一套。
 
 范围：
 
@@ -539,20 +539,20 @@ flowchart TD
 
 验收：
 
-- EDR/APT/HIDS/F5 都能用同一 schema。
+- EDR/APT/HIDS/WAF/F5/云日志等来源，以及反弹 shell、webshell、横向移动、命令执行等安全场景都能用同一 schema。
 - 子研判结果不能直接改 `AnalysisRun.decision`。
 - 子研判结果可被统一 report 合并。
 
-### Slice 5：EDR/APT/HIDS/F5 MVP Handlers
+### Slice 5：Generic Security Scenario Recognition
 
-目的：让 demo alert 真正进入不同 domain triage 分支。
+目的：让 demo alert 不只按来源分支，还能识别跨来源安全场景。F5/WAF 是未来 source/adapter 示例，不是当前固定专项。
 
 范围：
 
-- APT handler：关注攻击方向、IOC、外联/入站/横向、受害资产。
-- EDR handler：关注 endpoint、process tree、账号/UM、可疑进程和网络连接。
-- HIDS handler：关注主机行为、文件/进程/登录/账号事件。
-- F5/WAF handler：关注 HTTP method、URI、source/target、攻击方向和抑制目标。
+- 已有 APT/EDR/HIDS source handler 继续保留，用于提供来源视角 evidence。
+- 新增通用场景识别：反弹 shell、webshell、横向移动、命令执行、恶意外联、提权、凭证滥用等。
+- 场景识别可使用 LLM bounded reasoning，但输入必须来自 canonical alert、raw evidence、实体、read-only evidence、skill context 和 confirmed/retrieval memory。
+- 场景识别输出仍是 `SocDomainFinding`，不直接改 verdict，不写 confirmed memory。
 
 验收：
 
@@ -661,11 +661,11 @@ soc chat tui --lead-agent --queue-id REV-... --database-url ...
 Alpha 的定义不是“完全自动化 SOC”，而是：
 
 ```text
-给一条 APT/EDR/HIDS/F5 预警
+给一条 APT/EDR/HIDS/WAF/F5/云日志等来源的预警
   -> 系统能稳定跑完整 runtime
   -> 找出历史相似告警
-  -> 选择对应 domain triage handler
-  -> 生成 domain findings
+  -> 选择对应 source handler 和通用安全场景识别
+  -> 生成结构化 findings（例如反弹 shell / webshell / 横向移动 / 命令执行）
   -> 复用 read-only evidence
   -> 产出统一 Investigation Report
   -> 在 Web/TUI/Lead Agent context 里可审阅

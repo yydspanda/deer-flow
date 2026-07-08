@@ -21,7 +21,7 @@
 4. LLM 不掌握主控制流；runtime 固定流程，LLM 只在受控节点内做结构化建议。
 5. 记忆和知识写入必须可审计、可回滚、可人工确认，不能让 LLM 自发现结果直接变成事实。
 
-截至 2026-07-08，Phase 1 的 Runtime、ReviewQueue、Lead Agent entry、approval boundary、read-only action evidence、Kafka daemon 基线和本地 MCP mock/smoke 已基本收口；`SocCorrelationService`、PingAn PA-01..PA-11、APT/EDR/HIDS domain triage、只读 Main Orchestrator demo、外部反馈可见性、候选记忆 DB/API/ReviewQueue 可见性、候选记忆评审状态机、confirmed-memory retrieval policy MVP、Web/TUI visible investigation MVP 和 persistent demo script MVP 已完成。`soc demo run [all|apt|edr|hids]` 现在能用一条可重复命令生成可打开的 ReviewQueue investigation chain。`PA-12` 是真实 PingAn dev/staging MCP/API replacement，受 endpoint/凭证门控，不作为当前 Alpha 主线阻塞项。当前主线转向 memory candidate 来源闭环和 F5/WAF domain handler。
+截至 2026-07-08，Phase 1 的 Runtime、ReviewQueue、Lead Agent entry、approval boundary、read-only action evidence、Kafka daemon 基线和本地 MCP mock/smoke 已基本收口；`SocCorrelationService`、PingAn PA-01..PA-11、APT/EDR/HIDS domain triage、只读 Main Orchestrator demo、外部反馈可见性、候选记忆 DB/API/ReviewQueue 可见性、候选记忆评审状态机、confirmed-memory retrieval policy MVP、Web/TUI visible investigation MVP 和 persistent demo script MVP 已完成。`soc demo run [all|apt|edr|hids]` 现在能用一条可重复命令生成可打开的 ReviewQueue investigation chain。`PA-12` 是真实 PingAn dev/staging MCP/API replacement，受 endpoint/凭证门控，不作为当前 Alpha 主线阻塞项。当前主线转向 memory candidate 来源闭环和通用安全场景识别；F5/WAF 只是可选 source/adapter 示例，不是固定下一阶段目标。
 
 ```text
 [Done] Phase 1 reliable runtime / review / approval / Kafka baseline
@@ -33,10 +33,10 @@
   -> [Done] Memory candidate DB/API/ReviewQueue visibility
   -> [Done] Memory candidate review workflow / confirmed-memory boundary
   -> [Done] Confirmed memory retrieval policy / unified investigation visibility MVP
-  -> [Partial] EDR/APT/HIDS handlers done; F5/WAF handler pending
+  -> [Partial] APT/EDR/HIDS source handlers done; generic scenario recognition pending
   -> [Done] Web/TUI visible investigation MVP
   -> [Done] Demo / Eval Script MVP
-  -> [Current] Memory candidate source integration + F5/WAF handler
+  -> [Current] Memory candidate source integration + generic security scenario recognition
 ```
 
 `PingAn SOC Capability Onboarding` 是业务经验注入层：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验先整理成 capability card，再分类落到 skill、MCP/action adapter、normalizer、domain handler、eval case 或 memory candidate。它不直接把经验塞进 prompt，也不把生产 secret 写入仓库；详见 `.notes/ai_soc/pingan-soc-capability-onboarding.md`。平安 APT/EDR/HIDS 文档拆解规则见 `.notes/ai_soc/pingan-knowledge-decomposition-plan.md`：只有跨客户通用研判方法可以进入 `skills/public/soc-*`，平安内部环境知识、误报模式、字段别名、模板/策略 ID、账号/组织/域名例外必须进入 tenant-scoped memory、adapter、policy/config 或 eval。第一版卡片台账见 `.notes/ai_soc/pingan-capability-cards.md`，平安专属知识候选见 `.notes/ai_soc/pingan-knowledge-candidates.md`；当前已完成 `PA-01` capability register、`PA-02` APT source decomposition、`PA-03` EDR source decomposition、`PA-04` HIDS source decomposition、`PA-05` PingAnKnowledgeCandidate register、`PA-06` public skill minimal revisions、`PA-07` P0 read-only mock action adapters、`PA-08` eval fixtures、`PA-09` memory candidate 入口、`PA-10` domain triage MVP 和 `PA-11` Main Orchestrator demo。`PA-12` 不是继续写 mock，而是等真实 PingAn dev/staging MCP/API endpoint 和凭证可用后替换 provider 并保存 smoke/eval report。代码层面，平安字段接入只作为 normalizer adapter 存在于 `backend/soc_agent/normalizers/pingan_platform.py`；core service 后续仍只消费 canonical `AlertInput`，其他客户/供应商也应通过独立 adapter 接入。
@@ -1817,7 +1817,7 @@ workflow conclusion
 | Kafka daemon 批量处理 | repeated pattern candidate | `pending_review` | 幂等键必须包含 `topic/partition/offset` 或 run id，防止重放污染 |
 | External disposition sync | external feedback / lesson candidate | `pending_review` | Zeus/ITSM/SOAR 等外部系统的 status/reason 先经 `SocExternalDispositionService` 同步，不直接写 confirmed memory |
 | SOC Lead Agent 总结 | memory candidate | `pending_review` | LLM 只能提出候选，不确认事实 |
-| DomainTriageResult | topic/scenario candidate | `pending_review` | APT/EDR/HIDS/F5 finding 稳定后再接入 |
+| DomainTriageResult | topic/scenario candidate | `pending_review` | 反弹 shell、webshell、横向移动、命令执行、恶意外联等场景 finding 稳定后再接入；APT/EDR/HIDS/F5 只是输入来源或 handler 起点 |
 | InvestigationEvidence | evidence ref | 不直接是 memory | 作为候选记忆的证据链 |
 
 当前实现顺序：

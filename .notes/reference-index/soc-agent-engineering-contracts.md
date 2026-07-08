@@ -209,7 +209,7 @@ Alert summary 约束：
 Correlation service 约束：
 
 - `SocCorrelationService` 是 Phase 2 相似告警、历史关联和可复用证据的只读业务入口；CLI/API/TUI/Web/Lead Agent 都不能绕过 service 直接拼 correlation result。
-- `CorrelationQuery` / `CorrelationResult` / `CorrelationMatch` 是 domain sub-agent 和 unified investigation report 的稳定输入；不得让每个 EDR/APT/HIDS/F5 handler 自己发明相似告警结构。
+- `CorrelationQuery` / `CorrelationResult` / `CorrelationMatch` 是 source handler、security scenario recognizer 和 unified investigation report 的稳定输入；不得让每个 EDR/APT/HIDS/WAF/F5 handler 或反弹 shell/webshell/横向移动识别器自己发明相似告警结构。
 - MVP correlation 只能依赖 `AlertSummaryRepository` 和 `InvestigationEvidenceRepository`，不调用 LLM、不调用 MCP、不执行 action、不修改 run/summary/review/memory。
 - correlation match 必须携带结构化 `match_reasons`，例如 `same_detection_key`、`same_rule_code`、`shared_ip`、`shared_user`、`same_asset`、`same_source_type`、`reusable_evidence`；不能只给自然语言解释。
 - correlation 结果可以进入 `InvestigationContext`、Lead Agent bounded artifact、Web/TUI 展示和后续 domain triage request，但不能自动改 `AnalysisRun.decision`、不能自动关闭 review queue、不能直接生成 confirmed memory。
@@ -217,7 +217,7 @@ Correlation service 约束：
 
 Domain triage 约束：
 
-- `SocDomainTriageRequest` / `SocDomainTriageResult` / `SocDomainFinding` 是 APT、EDR、HIDS、F5/WAF 子研判的稳定输出协议；不得让每个 handler 自己返回自由 JSON。
+- `SocDomainTriageRequest` / `SocDomainTriageResult` / `SocDomainFinding` 是 source handler 和通用安全场景识别的稳定输出协议；不得让每个 handler 自己返回自由 JSON。APT/EDR/HIDS/WAF/F5 是输入来源或来源视角，反弹 shell、webshell、横向移动、命令执行、恶意外联、提权、凭证滥用等是可跨来源识别的安全场景。
 - Domain handler 只能消费 `AnalysisRun`、bounded `SocSkillContext`、`InvestigationEvidence` refs、capability card refs 和后续 correlation refs；不能直接读 DB、不能调用 MCP/tool、不能写 review queue、不能写 confirmed memory、不能修改 `AnalysisRun.decision`。
 - `SocDomainTriageService` 是 PA-10 domain handler 路由入口；entry adapter、TUI/Web、eval 和后续 Main Orchestrator 不能绕过 service 直接调用某个 handler。
 - PA-10 handler 输出只允许包含 finding、evidence refs、capability card refs、recommendations、limitations 和 metadata；任何处置动作必须转成 action proposal 并回到 policy/approval boundary。
