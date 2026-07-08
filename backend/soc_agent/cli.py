@@ -85,10 +85,12 @@ from soc_agent.eval import (
     DEFAULT_PINGAN_CAPABILITY_EVAL_DIR,
     load_eval_responses_jsonl,
     load_pingan_capability_eval_fixtures,
+    load_scenario_eval_report,
     run_offline_eval,
     run_pingan_capability_eval,
     run_pingan_domain_triage_eval,
     run_pingan_main_orchestrator_eval,
+    run_scenario_eval,
 )
 from soc_agent.lead_agent import build_soc_lead_agent_profile
 from soc_agent.lead_agent_chat import SocLeadAgentChatService
@@ -150,6 +152,8 @@ def main(argv: list[str] | None = None) -> int:
         return _eval_pingan_domain(args)
     if args.command == "eval" and args.eval_command == "pingan-main":
         return _eval_pingan_main(args)
+    if args.command == "eval" and args.eval_command == "scenarios":
+        return _eval_scenarios(args)
     if args.command == "demo" and args.demo_command == "run":
         return _demo_run(args)
     if args.command == "memory" and args.memory_command == "list":
@@ -372,6 +376,11 @@ def _build_parser() -> argparse.ArgumentParser:
     eval_offline.add_argument("--llm-response-jsonl", help="Replayable LLM response JSONL keyed by sample_id")
     eval_offline.add_argument("--model-name", default="replay-llm", help="Model name recorded for replayed LLM analyzer")
     eval_offline.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    eval_scenarios = eval_subparsers.add_parser("scenarios", help="Run vendor-neutral deterministic scenario taxonomy eval")
+    eval_scenarios.add_argument("path", help="Path to an alert JSON file or directory")
+    eval_scenarios.add_argument("--glob", default="*.json", help="Glob used when PATH is a directory")
+    eval_scenarios.add_argument("--baseline-json", help="Prior scenario eval report JSON used for replay diff")
+    eval_scenarios.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     eval_pingan = eval_subparsers.add_parser("pingan", help="Run PingAn SOC capability fixture eval")
     eval_pingan.add_argument(
         "path",
@@ -1304,6 +1313,22 @@ def _eval_pingan_main(args: argparse.Namespace) -> int:
         return 2
     except Exception as exc:  # noqa: BLE001 - CLI boundary: report eval failure
         print(f"error: PingAn main orchestrator eval failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if report.failed_count == 0 else 1
+
+
+def _eval_scenarios(args: argparse.Namespace) -> int:
+    try:
+        samples = _load_payload_samples(args.path, args.glob)
+        baseline = load_scenario_eval_report(args.baseline_json) if args.baseline_json else None
+        report = run_scenario_eval(samples, baseline=baseline)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: report eval failure
+        print(f"error: scenario eval failed: {exc}", file=sys.stderr)
         return 1
 
     print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))

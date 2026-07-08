@@ -561,9 +561,10 @@ flowchart TD
 
 - deterministic MVP 已输出 `scenario_key`、vendor scenario hints、`evidence_profile`、`current_conclusion` 和 `human_checklist`。
 - PingAn APT/EDR/HIDS eval 能识别命令/代码执行、恶意外联、横向移动等场景，并输出 covered/missing/unmapped taxonomy baseline。
+- `soc eval scenarios PATH --baseline-json REPORT` 已作为 vendor-neutral scenario replay-diff 入口，可对任意 alert JSON 样本输出 taxonomy coverage 和 diff。
 - 每个 scenario finding 都必须给出当前结论，即使证据不足也要明确证据缺口和人工核查清单。
 - 分析师对 scenario/domain finding 的补充意见只能通过 `SocMemoryCandidateSourceBridge` 生成 `pending_review` candidate，不能直接成为 confirmed memory。
-- 后续再补 bounded LLM recognizer、自定义 taxonomy 和 vendor-neutral scenario replay/eval。
+- 后续再补 bounded LLM recognizer、自定义 taxonomy、严格阈值和 CI gating。
 
 ### Slice 6：Main SOC Agent Orchestrator MVP
 

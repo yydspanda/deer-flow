@@ -24,6 +24,14 @@ from soc_agent.eval.pingan import (
     run_pingan_domain_triage_eval,
     run_pingan_main_orchestrator_eval,
 )
+from soc_agent.eval.scenarios import (
+    ScenarioEvalDiff,
+    ScenarioEvalFinding,
+    ScenarioEvalReport,
+    ScenarioEvalSampleResult,
+    load_scenario_eval_report,
+    run_scenario_eval,
+)
 
 __all__ = [
     "DEFAULT_PINGAN_CAPABILITY_EVAL_DIR",
@@ -40,10 +48,16 @@ __all__ = [
     "PingAnDomainTriageEvalSampleResult",
     "PingAnMainOrchestratorEvalReport",
     "PingAnMainOrchestratorEvalSampleResult",
+    "ScenarioEvalDiff",
+    "ScenarioEvalFinding",
+    "ScenarioEvalReport",
+    "ScenarioEvalSampleResult",
     "load_eval_responses_jsonl",
     "load_pingan_capability_eval_fixtures",
+    "load_scenario_eval_report",
     "run_offline_eval",
     "run_pingan_capability_eval",
     "run_pingan_domain_triage_eval",
     "run_pingan_main_orchestrator_eval",
+    "run_scenario_eval",
 ]
