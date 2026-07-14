@@ -1,6 +1,7 @@
 from . import (
     artifacts,
     assistants_compat,
+    input_polish,
     mcp,
     models,
     scheduled_tasks,
@@ -16,6 +17,7 @@ from . import (
 __all__ = [
     "artifacts",
     "assistants_compat",
+    "input_polish",
     "mcp",
     "models",
     "scheduled_tasks",

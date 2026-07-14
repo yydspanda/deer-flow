@@ -28,6 +28,7 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 from deerflow.agents.goal_state import GoalEvaluation, GoalState
 from deerflow.config.app_config import AppConfig
+from deerflow.runtime.context_keys import CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY
 from deerflow.runtime.goal import (
     DEFAULT_MAX_GOAL_CONTINUATIONS,
     DEFAULT_MAX_NO_PROGRESS_CONTINUATIONS,
@@ -49,10 +50,12 @@ from deerflow.runtime.goal import (
 )
 from deerflow.runtime.serialization import serialize
 from deerflow.runtime.stream_bridge import StreamBridge
-from deerflow.runtime.user_context import resolve_runtime_user_id
+from deerflow.runtime.user_context import get_effective_user_id, resolve_runtime_user_id
 from deerflow.trace_context import DEERFLOW_TRACE_METADATA_KEY, get_current_trace_id, normalize_trace_id
 from deerflow.tracing import inject_langfuse_metadata
 from deerflow.utils.messages import message_to_text
+from deerflow.workspace_changes import capture_workspace_snapshot, record_workspace_changes
+from deerflow.workspace_changes.types import WorkspaceSnapshot
 
 from .manager import RunManager, RunRecord
 from .naming import resolve_root_run_name
@@ -85,6 +88,8 @@ def _build_runtime_context(
     runtime_ctx: dict[str, Any] = {"thread_id": thread_id, "run_id": run_id}
     if isinstance(caller_context, dict):
         for key, value in caller_context.items():
+            if key == CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY:
+                continue
             runtime_ctx.setdefault(key, value)
     if app_config is not None:
         runtime_ctx["app_config"] = app_config
@@ -118,6 +123,8 @@ def _install_runtime_context(config: dict, runtime_context: dict[str, Any]) -> N
             existing_context.setdefault(DEERFLOW_TRACE_METADATA_KEY, runtime_context[DEERFLOW_TRACE_METADATA_KEY])
         if "app_config" in runtime_context:
             existing_context["app_config"] = runtime_context["app_config"]
+        if CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY in runtime_context:
+            existing_context[CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY] = runtime_context[CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY]
         return
 
     config["context"] = dict(runtime_context)
@@ -199,6 +206,9 @@ class _SubagentEventBuffer:
         try:
             await self._event_store.put_batch(batch)
         except Exception:
+            # Re-buffer the failed batch (ahead of any events queued since) so a
+            # transient store error does not silently drop subagent step events.
+            self._pending = batch + self._pending
             logger.warning("Run %s: failed to persist %d subagent step event(s)", self._run_id, len(batch), exc_info=True)
 
 
@@ -230,6 +240,8 @@ async def run_agent(
     requested_modes: set[str] = set(stream_modes or ["values"])
     pre_run_checkpoint_id: str | None = None
     pre_run_snapshot: dict[str, Any] | None = None
+    pre_run_workspace_snapshot: WorkspaceSnapshot | None = None
+    workspace_changes_user_id: str | None = None
     snapshot_capture_failed = False
     llm_error_fallback_message: str | None = None
     # Message ids checkpointed *before* this run started. The stream loop uses
@@ -274,6 +286,16 @@ async def run_agent(
         # 1. Mark running
         await run_manager.set_status(run_id, RunStatus.running)
 
+        if event_store is not None:
+            workspace_changes_user_id = get_effective_user_id()
+            try:
+                pre_run_workspace_snapshot = await capture_workspace_snapshot(
+                    thread_id,
+                    user_id=workspace_changes_user_id,
+                )
+            except Exception:
+                logger.warning("Could not capture pre-run workspace snapshot for run %s", run_id, exc_info=True)
+
         # Snapshot the latest pre-run checkpoint so rollback can restore it.
         if checkpointer is not None:
             try:
@@ -312,6 +334,7 @@ async def run_agent(
         # manually here because we drive the graph through ``agent.astream(config=...)``
         # without passing the official ``context=`` parameter.
         runtime_ctx = _build_runtime_context(thread_id, run_id, config.get("context"), ctx.app_config)
+        runtime_ctx[CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY] = frozenset(pre_existing_message_ids)
         incoming_metadata = config.get("metadata") if isinstance(config.get("metadata"), dict) else {}
         deerflow_trace_id = normalize_trace_id(incoming_metadata.get(DEERFLOW_TRACE_METADATA_KEY)) or get_current_trace_id()
         if deerflow_trace_id:
@@ -551,6 +574,18 @@ async def run_agent(
         if subagent_events is not None:
             await subagent_events.flush()
 
+        if event_store is not None and pre_run_workspace_snapshot is not None:
+            try:
+                await record_workspace_changes(
+                    event_store,
+                    thread_id,
+                    run_id,
+                    pre_run_workspace_snapshot,
+                    user_id=workspace_changes_user_id,
+                )
+            except Exception:
+                logger.warning("Failed to record workspace changes for run %s", run_id, exc_info=True)
+
         # Flush any buffered journal events and persist completion data
         if journal is not None:
             try:
@@ -706,6 +741,12 @@ async def _persist_goal_evaluation(
             current_goal = _read_checkpoint_goal(checkpoint_tuple)
             if current_goal is None or not _goal_instance_matches(goal, current_goal):
                 return None
+            # Defensive: compute continuation_count from the fresh current_goal
+            # inside the lock.  The caller computed it from a possibly-stale goal
+            # snapshot; a racing continuation may have already bumped the count.
+            if continuation_count is not None:
+                current_count = int(current_goal.get("continuation_count", 0))
+                continuation_count = max(continuation_count, current_count + 1)
             expected_checkpoint_id = _checkpoint_id(checkpoint_tuple)
             updated_goal = attach_goal_evaluation(
                 current_goal,
