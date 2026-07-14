@@ -404,6 +404,9 @@ The system has several confidence-like values, but they are not interchangeable 
 | `ScenarioHypothesis.confidence` | Versioned deterministic heuristic score | Scenario ordering and review context; currently uncalibrated |
 | `RoleClaim/RoleResolution.semantic_confidence` | Strength of one role interpretation under a scenario | Provisional role explanation and automation guard |
 | `AnalysisResult.confidence` | Analyzer/LLM assessment for the verdict | Review display and eval only; cannot bypass validation or approval |
+| `Decision.confidence_source` | Provenance of the raw decision score | Distinguishes stub heuristic, LLM self-report, human confirmation, and external disposition |
+| `Decision.calibrated_probability` | Versioned calibrated probability, when an approved profile exists | Currently `null`; it must never be fabricated from raw analyzer confidence |
+| `Decision.evidence_state` / `review_reasons` | Operational evidence guard and structured review causes | Drives ReviewQueue/audit explanations independently of the numeric score |
 | Memory confidence | Strength of a reviewed reusable lesson | Retrieval ranking after confirmation; never promotes a candidate by itself |
 
 Rules:
@@ -421,6 +424,15 @@ Rules:
   `auto_action_allowed` is always false.
 - Missing coverage, degraded schemas, conflicts, and truncation can lower or cap an operational
   conclusion, but no single score may silently erase those warnings.
+- `SocDecisionPolicy` is the only Runtime component allowed to translate validated analysis into an
+  operational `Decision`. The current policy deliberately marks stub and live-LLM confidence as
+  uncalibrated and sends every such decision to human review until a labeled, approved calibration
+  profile is explicitly integrated and replay-tested.
+- False-positive decisions require confirmation even when the raw score is high. Review reasons are
+  structured (`confidence_not_calibrated`, `fact_conflict`, `high_value_evidence_gap`, and so on),
+  persisted in the summary/queue/audit trail, and must not be replaced by one free-text reason.
+- Successful mock evidence is visible for demo and audit only. Mock, denied, or failed action results
+  cannot satisfy scenario tool requirements, raise domain/scenario confidence, or change verdict.
 
 ---
 
@@ -816,6 +828,7 @@ Acceptance criteria for the first complete demo:
 | Keep SOC code under `backend/soc_agent/` | Avoid invasive upstream fork changes |
 | Keep entry surfaces thin | Prevent CLI/Web/TUI/Kafka logic divergence |
 | Reuse DeerFlow `create_chat_model` for Runtime LLM | One provider/config/tracing implementation; no SOC-specific SDK client |
+| Centralize operational decisions in `SocDecisionPolicy` | Keep confidence provenance, evidence guards, review routing, and policy version deterministic and auditable |
 | Use canonical `AlertInput` | Vendor-neutral core |
 | Use adapters for PingAn and future vendors | Extensible source integration |
 | Use read-only investigation evidence first | Makes tools useful before risky automation |

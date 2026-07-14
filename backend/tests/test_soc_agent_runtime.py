@@ -11,6 +11,9 @@ from soc_agent.contracts import (
     AlertSourceType,
     AnalysisRun,
     AnalysisRunStatus,
+    DecisionConfidenceSource,
+    DecisionEvidenceState,
+    DecisionReviewReason,
     EvidenceInputPolicy,
     EvidenceInputPolicyName,
     EvidenceLayer,
@@ -37,12 +40,16 @@ def test_approved_scanner_returns_false_positive_candidate() -> None:
     payload = _sample("approved_scanner.json")
     run = _analyze(payload)
 
-    assert run.status == AnalysisRunStatus.SUCCESS
+    assert run.status == AnalysisRunStatus.NEEDS_REVIEW
     assert run.input_payload == payload
     assert run.input_hash is not None
     assert run.analysis is not None
     assert run.decision is not None
     assert run.analysis.verdict == Verdict.FALSE_POSITIVE
+    assert run.decision.confidence_source is DecisionConfidenceSource.STUB_HEURISTIC
+    assert run.decision.confidence_is_calibrated is False
+    assert run.decision.calibrated_probability is None
+    assert run.decision.review_reasons[0] is DecisionReviewReason.FALSE_POSITIVE_REQUIRES_CONFIRMATION
     assert run.decision.automation_allowed is False
     assert run.normalization_report is not None
     assert run.normalization_report.adapter == "generic"
@@ -66,10 +73,24 @@ def test_approved_scanner_returns_false_positive_candidate() -> None:
 def test_malicious_ioc_returns_true_positive_candidate() -> None:
     run = _analyze(_sample("malicious_ioc.json"))
 
-    assert run.status == AnalysisRunStatus.SUCCESS
+    assert run.status == AnalysisRunStatus.NEEDS_REVIEW
     assert run.analysis is not None
     assert run.analysis.verdict == Verdict.TRUE_POSITIVE
     assert run.analysis.confidence >= 0.9
+    assert run.decision is not None
+    assert DecisionReviewReason.CONFIDENCE_NOT_CALIBRATED in run.decision.review_reasons
+    assert DecisionReviewReason.STUB_ANALYZER in run.decision.review_reasons
+
+
+def test_decision_policy_preserves_fact_conflict_guard() -> None:
+    run = _analyze(_sample("pingan_legacy_apt.json"))
+
+    assert run.fact_reconstruction is not None
+    assert run.fact_reconstruction.conflict_reports
+    assert run.decision is not None
+    assert run.decision.evidence_state is DecisionEvidenceState.CONFLICTED
+    assert DecisionReviewReason.FACT_CONFLICT in run.decision.review_reasons
+    assert run.decision.needs_review is True
 
 
 def test_low_context_alert_needs_review() -> None:
@@ -731,7 +752,8 @@ def test_cli_review_queue_lists_and_closes_items(tmp_path: Path, capsys) -> None
     assert item["alert_id"] == "2026494"
     assert item["status"] == "open"
     assert item["priority"] == "high"
-    assert item["reason"] == "summary.needs_review"
+    assert item["reason"] == "uncertain_verdict"
+    assert "confidence_not_calibrated" in item["review_reasons"]
     assert item["rule_code"] == "RPAADM_002635"
 
     assert main(["review", "context", item["queue_id"], "--database-url", database_url]) == 0

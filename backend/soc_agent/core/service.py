@@ -86,6 +86,7 @@ from soc_agent.protocols import (
     AlertSummaryRepository,
     AnalysisRuntime,
     DecisionAuditRepository,
+    DecisionPolicy,
     InvestigationEvidenceRepository,
     LLMAnalyzer,
     MemoryCandidateRepository,
@@ -116,11 +117,21 @@ class SocServiceNotFoundError(SocServiceError):
 class DeterministicAnalysisRuntime:
     """Adapter that exposes the current deterministic runtime as a protocol."""
 
-    def __init__(self, *, analyzer: LLMAnalyzer | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        analyzer: LLMAnalyzer | None = None,
+        decision_policy: DecisionPolicy | None = None,
+    ) -> None:
         self._analyzer = analyzer
+        self._decision_policy = decision_policy
 
     def analyze(self, payload: Mapping[str, Any]) -> AnalysisRun:
-        return analyze_alert(payload, analyzer=self._analyzer)
+        return analyze_alert(
+            payload,
+            analyzer=self._analyzer,
+            decision_policy=self._decision_policy,
+        )
 
 
 class NoopEventSink:
@@ -2177,6 +2188,7 @@ def _investigation_evidence_from_action_result(
         status=result.status,
         message=result.message,
         result_payload=result.payload,
+        mocked=_contains_mock_marker(result.payload),
         queue_id=_string_ref(refs, "queue_id") or request.queue_id,
         run_id=_string_ref(refs, "run_id") or request.run_id,
         alert_id=_string_ref(refs, "alert_id"),
@@ -2185,6 +2197,16 @@ def _investigation_evidence_from_action_result(
         context_hash=_string_ref(refs, "context_hash"),
         actor=context.actor,
     )
+
+
+def _contains_mock_marker(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        if value.get("mocked") is True:
+            return True
+        return any(_contains_mock_marker(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_mock_marker(item) for item in value)
+    return False
 
 
 def _string_ref(refs: Mapping[str, Any], key: str) -> str | None:
@@ -2432,7 +2454,14 @@ def _investigation_timeline_from_context(context: InvestigationContext) -> list[
                 occurred_at=run.ended_at or run.started_at,
                 payload={
                     "confidence": run.decision.confidence,
+                    "confidence_source": run.decision.confidence_source.value,
+                    "confidence_is_calibrated": run.decision.confidence_is_calibrated,
+                    "calibrated_probability": run.decision.calibrated_probability,
+                    "calibration_profile_version": run.decision.calibration_profile_version,
+                    "evidence_state": run.decision.evidence_state.value,
                     "needs_review": run.decision.needs_review,
+                    "review_reasons": [item.value for item in run.decision.review_reasons],
+                    "policy_version": run.decision.policy_version,
                     "automation_allowed": run.decision.automation_allowed,
                     "suggested_action": run.decision.suggested_action,
                 },
@@ -2657,6 +2686,7 @@ def _alert_summary_from_run(run: AnalysisRun) -> AlertSummary:
         verdict=verdict,
         confidence=confidence,
         needs_review=decision.needs_review if decision is not None else run.status is AnalysisRunStatus.NEEDS_REVIEW,
+        review_reasons=list(decision.review_reasons) if decision is not None else [],
         summary=analysis.summary if analysis is not None else None,
         recommended_action=decision.suggested_action if decision is not None else None,
         input_hash=run.input_hash,
@@ -2729,6 +2759,7 @@ def _upsert_review_queue_item(repository: ReviewQueueRepository, summary: AlertS
     item.category = summary.category
     item.verdict = summary.verdict
     item.confidence = summary.confidence
+    item.review_reasons = list(summary.review_reasons)
     item.entity_keys = summary.entity_keys
     item.summary = summary.summary
     item.updated_at = _utc_now()
@@ -2754,6 +2785,8 @@ def _close_open_review_item_for_run(
 
 
 def _review_reason(summary: AlertSummary) -> str | None:
+    if summary.review_reasons:
+        return summary.review_reasons[0].value
     if summary.needs_review:
         return "summary.needs_review"
     if summary.confidence is not None and summary.confidence < 0.75:
@@ -2822,6 +2855,13 @@ def _analysis_audit_record(
             "model_name": run.model_name,
             "prompt_version": run.prompt_version,
             "step_count": len(run.steps),
+            "decision_policy_version": run.decision.policy_version if run.decision is not None else None,
+            "confidence_source": run.decision.confidence_source.value if run.decision is not None else None,
+            "confidence_is_calibrated": run.decision.confidence_is_calibrated if run.decision is not None else False,
+            "calibrated_probability": run.decision.calibrated_probability if run.decision is not None else None,
+            "calibration_profile_version": run.decision.calibration_profile_version if run.decision is not None else None,
+            "evidence_state": run.decision.evidence_state.value if run.decision is not None else None,
+            "review_reasons": [item.value for item in run.decision.review_reasons] if run.decision is not None else [],
             "idempotency_key": idempotency_key,
         },
     )

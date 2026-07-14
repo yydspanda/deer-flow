@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from soc_agent.contracts import AnalysisRunStatus, Verdict
+from soc_agent.contracts import AnalysisRunStatus, DecisionConfidenceSource, DecisionReviewReason, Verdict
 from soc_agent.core.service import DeterministicAnalysisRuntime, SocAnalysisService
 from soc_agent.llm import (
     ANALYSIS_JSON_PARSER_VERSION,
@@ -82,11 +82,16 @@ def test_json_llm_analyzer_runs_prompt_client_parser_and_runtime_trace() -> None
 
     run = service.analyze(_sample("malicious_ioc.json"))
 
-    assert run.status == AnalysisRunStatus.SUCCESS
+    assert run.status == AnalysisRunStatus.NEEDS_REVIEW
     assert run.analysis is not None
     assert run.analysis.verdict == Verdict.TRUE_POSITIVE
     assert run.model_name == "soc-model-response"
     assert run.prompt_version == ANALYSIS_PROMPT_VERSION
+    assert run.decision is not None
+    assert run.decision.confidence_source is DecisionConfidenceSource.LLM_SELF_REPORT
+    assert run.decision.confidence_is_calibrated is False
+    assert run.decision.calibrated_probability is None
+    assert run.decision.review_reasons == [DecisionReviewReason.CONFIDENCE_NOT_CALIBRATED]
     assert [call_model for _, call_model in client.calls] == ["soc-model"]
     assert client.calls[0][0][0]["role"] == "system"
     assert client.calls[0][0][1]["role"] == "user"
@@ -101,6 +106,11 @@ def test_json_llm_analyzer_runs_prompt_client_parser_and_runtime_trace() -> None
     assert "skill_context_hash" in analyze_step.metadata
     assert analyze_step.metadata["selected_skills"]
     assert "candidate_hash" in analyze_step.metadata
+    decide_step = next(step for step in run.steps if step.step_name == "decide")
+    assert decide_step.metadata["policy_version"] == "soc.decision_policy.v1"
+    assert decide_step.metadata["confidence_source"] == "llm_self_report"
+    assert decide_step.metadata["confidence_is_calibrated"] is False
+    assert decide_step.metadata["review_reasons"] == ["confidence_not_calibrated"]
 
 
 def test_default_runtime_still_uses_stub_analyzer() -> None:

@@ -1,6 +1,7 @@
 """Core SOC Agent runtime and service exports."""
 
 from soc_agent.core.correlation import SocCorrelationService
+from soc_agent.core.decision_policy import SocDecisionPolicy
 from soc_agent.core.evidence import InMemoryInvestigationEvidenceRepository
 from soc_agent.core.external_disposition import SocExternalDispositionService
 from soc_agent.core.normalization_maintenance import SocNormalizationMaintenanceService
@@ -37,6 +38,7 @@ __all__ = [
     "SocAnalysisService",
     "SocCorrelationService",
     "SocDaemonService",
+    "SocDecisionPolicy",
     "SocDomainTriageService",
     "SocExternalDispositionService",
     "SocMainOrchestratorService",

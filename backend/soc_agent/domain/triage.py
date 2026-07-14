@@ -17,6 +17,7 @@ from soc_agent.contracts import (
     SocDomainTriageResult,
     SocSkillContext,
 )
+from soc_agent.domain.evidence import evidence_is_mocked, successful_evidence
 from soc_agent.domain.scenarios import (
     evidence_profile_for_request as _evidence_profile_for_request,
 )
@@ -63,15 +64,25 @@ class _AptDomainTriageHandler:
         evidence = request.investigation_evidence
         skill_names = _skill_names(request.skill_context)
         conflict_refs = _conflict_refs(request.run)
-        reputation_hits = _evidence_by_route(evidence, "threat_intel.ip_reputation.lookup", found_key="reputation_found")
-        active_tags = _active_security_tags(evidence)
+        reputation_evidence = _evidence_by_route(
+            evidence,
+            "threat_intel.ip_reputation.lookup",
+            found_key="reputation_found",
+            include_mocked=True,
+        )
+        tag_evidence = _active_security_tags(evidence, include_mocked=True)
+        reputation_hits = [item for item in reputation_evidence if not evidence_is_mocked(item)]
+        active_tags = [item for item in tag_evidence if not evidence_is_mocked(item)]
+        mocked_evidence = [item for item in [*reputation_evidence, *tag_evidence] if evidence_is_mocked(item)]
         score = _max_reputation_score(reputation_hits)
-        evidence_refs = _evidence_ids(reputation_hits + active_tags) + conflict_refs
+        evidence_refs = _evidence_ids(reputation_evidence + tag_evidence) + conflict_refs
         limitations: list[str] = []
         if not reputation_hits:
             limitations.append("No positive threat-intelligence evidence was attached.")
         if not active_tags:
             limitations.append("No active authorization or maintenance tag was attached.")
+        if mocked_evidence:
+            limitations.append("Mock investigation evidence is visible for flow validation but does not raise finding confidence.")
         if conflict_refs:
             limitations.append("Direction and role facts contain conflicts; raw evidence needs analyst review.")
 
@@ -114,7 +125,11 @@ class _AptDomainTriageHandler:
                 "核对上游攻击方向字段是否与原始连接方向冲突。",
                 "结合威胁情报、历史相似预警和外部处置理由判断是否为重复误报。",
             ],
-            metadata={"max_reputation_score": score, "conflict_count": len(conflict_refs)},
+            metadata={
+                "max_reputation_score": score,
+                "conflict_count": len(conflict_refs),
+                "mock_evidence_count": len(mocked_evidence),
+            },
         )
         return _result(request, self.domain, self.handler_id, [finding])
 
@@ -126,14 +141,22 @@ class _EdrDomainTriageHandler:
     def triage(self, request: SocDomainTriageRequest) -> SocDomainTriageResult:
         evidence = request.investigation_evidence
         skill_names = _skill_names(request.skill_context)
-        process_tree_evidence = _evidence_by_route(evidence, "endpoint.process_tree.lookup", found_key="process_tree_found")
+        all_process_tree_evidence = _evidence_by_route(
+            evidence,
+            "endpoint.process_tree.lookup",
+            found_key="process_tree_found",
+            include_mocked=True,
+        )
+        process_tree_evidence = [item for item in all_process_tree_evidence if not evidence_is_mocked(item)]
         risk_tags = sorted(_risk_tags_from_process_tree(process_tree_evidence))
-        evidence_refs = _evidence_ids(process_tree_evidence)
+        evidence_refs = _evidence_ids(all_process_tree_evidence)
         limitations: list[str] = []
         if not process_tree_evidence:
             limitations.append("No endpoint process-tree evidence was attached.")
         if not risk_tags:
             limitations.append("No process risk tags were present in attached endpoint evidence.")
+        if len(all_process_tree_evidence) > len(process_tree_evidence):
+            limitations.append("Mock process-tree evidence is visible for flow validation but does not raise finding confidence.")
 
         severe_tags = {"credential_access", "lateral_movement_candidate", "remote_registry", "persistence"}
         severity = SocDomainFindingSeverity.HIGH if severe_tags.intersection(risk_tags) else SocDomainFindingSeverity.MEDIUM
@@ -175,7 +198,10 @@ class _EdrDomainTriageHandler:
                 "核对同主机、同用户、同 rule 的历史相似预警处置结论。",
                 "若需要隔离或封禁，先生成高风险处置 proposal 并走审批。",
             ],
-            metadata={"risk_tags": risk_tags},
+            metadata={
+                "risk_tags": risk_tags,
+                "mock_evidence_count": len(all_process_tree_evidence) - len(process_tree_evidence),
+            },
         )
         return _result(request, self.domain, self.handler_id, [finding])
 
@@ -187,14 +213,24 @@ class _HidsDomainTriageHandler:
     def triage(self, request: SocDomainTriageRequest) -> SocDomainTriageResult:
         evidence = request.investigation_evidence
         skill_names = _skill_names(request.skill_context)
-        host_context = _evidence_by_route(evidence, "host.event_context.lookup", found_key="host_event_context_found")
-        active_tags = _active_security_tags(evidence)
-        evidence_refs = _evidence_ids(host_context + active_tags)
+        all_host_context = _evidence_by_route(
+            evidence,
+            "host.event_context.lookup",
+            found_key="host_event_context_found",
+            include_mocked=True,
+        )
+        all_active_tags = _active_security_tags(evidence, include_mocked=True)
+        host_context = [item for item in all_host_context if not evidence_is_mocked(item)]
+        active_tags = [item for item in all_active_tags if not evidence_is_mocked(item)]
+        mocked_evidence = [item for item in [*all_host_context, *all_active_tags] if evidence_is_mocked(item)]
+        evidence_refs = _evidence_ids(all_host_context + all_active_tags)
         limitations: list[str] = []
         if not host_context:
             limitations.append("No HIDS host-event context evidence was attached.")
         if not active_tags:
             limitations.append("No active maintenance or authorization tag was attached.")
+        if mocked_evidence:
+            limitations.append("Mock host/tag evidence is visible for flow validation but does not raise finding confidence.")
 
         disposition = SocDomainFindingDisposition.BENIGN_AUTHORIZED_CANDIDATE if active_tags else SocDomainFindingDisposition.NEEDS_MORE_EVIDENCE
         confidence = 0.68 if active_tags and host_context else 0.5
@@ -235,7 +271,11 @@ class _HidsDomainTriageHandler:
                 "核对安全标签是否仍在有效期内，避免过期白名单污染判断。",
                 "如果分析师确认是重复授权行为，生成 tenant memory candidate 而不是修改 public skill。",
             ],
-            metadata={"active_security_tag_count": len(active_tags), "host_context_count": len(host_context)},
+            metadata={
+                "active_security_tag_count": len(active_tags),
+                "host_context_count": len(host_context),
+                "mock_evidence_count": len(mocked_evidence),
+            },
         )
         return _result(request, self.domain, self.handler_id, [finding])
 
@@ -351,15 +391,28 @@ def _evidence_by_route(
     route: str,
     *,
     found_key: str | None = None,
+    include_mocked: bool = False,
 ) -> list[InvestigationEvidence]:
-    result = [item for item in evidence if item.route == route or item.action == route]
+    result = [item for item in successful_evidence(evidence, include_mocked=include_mocked) if item.route == route or item.action == route]
     if found_key is not None:
         result = [item for item in result if item.result_payload.get(found_key) is True]
     return result
 
 
-def _active_security_tags(evidence: list[InvestigationEvidence]) -> list[InvestigationEvidence]:
-    return [item for item in _evidence_by_route(evidence, "security_tag.lookup") if item.result_payload.get("has_active") is True]
+def _active_security_tags(
+    evidence: list[InvestigationEvidence],
+    *,
+    include_mocked: bool = False,
+) -> list[InvestigationEvidence]:
+    return [
+        item
+        for item in _evidence_by_route(
+            evidence,
+            "security_tag.lookup",
+            include_mocked=include_mocked,
+        )
+        if item.result_payload.get("has_active") is True
+    ]
 
 
 def _evidence_ids(evidence: list[InvestigationEvidence]) -> list[str]:

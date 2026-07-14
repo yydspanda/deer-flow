@@ -229,6 +229,9 @@ Decision audit 约束：
 - `soc_decision_audit_log` 必须至少记录 `run_id`、`alert_id`、`actor`、`action`、`input_hash`、previous/final verdict、confidence 和可扩展 payload。
 - replay/correction 必须生成新的审计记录，不覆盖历史审计记录。
 - 审计写入失败在 Phase 1 应暴露为执行失败或明确错误，不允许假装成功。
+- analyzer decision audit payload 必须记录 `decision_policy_version`、`confidence_source`、
+  `confidence_is_calibrated`、`calibrated_probability`、`calibration_profile_version`、
+  `evidence_state` 和完整 `review_reasons`；不能只保存一个 raw confidence。
 
 Alert summary 约束：
 
@@ -238,6 +241,8 @@ Alert summary 约束：
 - correction 后必须更新同一个 run 的 summary，让 operational verdict 和 review 列表保持一致；原始 AI verdict 仍保留在 `AnalysisRun.analysis` 和 `soc_analysis_runs.run_payload`。
 - replay 必须生成新的 summary，记录 `replay_of_run_id`，不能覆盖原 run summary。
 - 方案文档中泛称的 `alert_summaries` 在当前实现里使用 SOC 前缀表名 `soc_alert_summaries`。
+- Runtime analyzer decision 的 `review_reasons` 必须从 `Decision` 复制到 `AlertSummary` 和
+  `ReviewQueueItem`；`reason` 可用于列表主原因，但不能丢弃其余结构化 guard。
 
 Correlation service 约束：
 
@@ -785,6 +790,16 @@ normalizers/hids.py
   的 deterministic heuristic score；在标注集完成 calibration 前，不得描述成真实概率。
 - `AnalysisResult.confidence` 是 analyzer/LLM 对 verdict 的自评，只可用于展示、排序和离线评测；不能
   绕过 schema/domain validation、conflict guard、policy、approval 或 human review。
+- `SocDecisionPolicy` 是 Runtime 中唯一允许把已校验 `AnalysisResult` 转换为 operational `Decision`
+  的边界；CLI/API/TUI/Kafka/Lead Agent 不得自行按 confidence 拼 `needs_review`。
+- `Decision` 必须显式携带 `confidence_source`、`confidence_is_calibrated`、可空的
+  `calibrated_probability` / `calibration_profile_version`、`evidence_state`、结构化
+  `review_reasons` 和 `policy_version`。raw confidence 不得冒充 calibrated probability。
+- 当前 stub heuristic 与 LLM self-report 都未校准，必须包含 `confidence_not_calibrated` 并进入
+  human review。未来只有经过人工标注、离线校准、版本审批和 replay 验证的 profile 才能改变该策略；
+  `soc eval confidence` 的输出不会自动接入 Runtime。
+- `false_positive` 必须要求人工确认。fact conflict、degraded/unsupported message schema、high-value
+  evidence gap、LLM evidence truncation 等 guard 独立于 raw confidence，高分不能清除它们。
 - memory confidence 只在 confirmed/retrieval-enabled memory 内参与排序；不能让 pending candidate
   自动生效。
 - 不同层的 confidence/trust/status 禁止直接平均、相乘或折算成一个总分。任何聚合都必须先定义
@@ -792,6 +807,16 @@ normalizers/hids.py
 - `soc eval confidence` 只消费人工标注 JSON/JSONL，输出 accuracy、Brier score、ECE、non-empty bins
   和 versioned `review_below` profile。样本不足、实际 verdict 单一或无满足支持度的阈值必须 warning；
   当前 profile 的 `auto_action_allowed` 固定为 false，不自动写生产配置。
+
+### Investigation evidence eligibility / 调查证据采信约束
+
+- `InvestigationEvidence.mocked` 是稳定的顶层 provenance 标记；读取历史 payload 时可以兼容检测嵌套
+  `mocked=true`，但新写入必须同步设置顶层字段。
+- 只有 `status=success` 且 `mocked=false` 的 read-only action evidence 可以满足场景所需 route、参与
+  domain/scenario semantic calculation 或提高 finding confidence。
+- 成功 mock evidence 可以保留在 evidence refs、调查时间线和 demo/eval 中，但必须明确标记为 mock；
+  denied/failed evidence 只能保留在完整调查审计中，不得进入 finding 的已采信证据集合。
+- mock/failed/denied evidence 不得改变 Runtime verdict、关闭 ReviewQueue、写 confirmed memory 或允许自动处置。
 
 ### LLM analysis request 约束
 

@@ -16,7 +16,6 @@ from soc_agent.contracts import (
     AlertInput,
     AlertSourceType,
     AnalysisNodeOutput,
-    AnalysisResult,
     AnalysisRun,
     AnalysisRunStatus,
     Decision,
@@ -31,14 +30,15 @@ from soc_agent.contracts import (
     PipelineStepStatus,
     PipelineStepTrace,
 )
-from soc_agent.core.validator import validate_analysis_result, validate_decision
+from soc_agent.core.decision_policy import SocDecisionPolicy
+from soc_agent.core.validator import validate_analysis_result
 from soc_agent.normalizers import normalize_alert_payload, normalize_with_mapping
 from soc_agent.pipeline.analysis_context import build_llm_analysis_request
 from soc_agent.pipeline.analyzer import StubLLMAnalyzer
 from soc_agent.pipeline.evidence_coverage import observe_message_schemas
 from soc_agent.pipeline.extractor import extract_entities
 from soc_agent.pipeline.fact_reconstructor import reconstruct_facts
-from soc_agent.protocols import LLMAnalyzer
+from soc_agent.protocols import DecisionPolicy, LLMAnalyzer
 from soc_agent.utils.hashing import stable_hash
 
 
@@ -72,11 +72,17 @@ def build_analysis_request_for_payload(payload: Mapping[str, Any]) -> LLMAnalysi
     return build_llm_analysis_request(alert, entities, fact_reconstruction)
 
 
-def analyze_alert(payload: Mapping[str, Any], *, analyzer: LLMAnalyzer | None = None) -> AnalysisRun:
+def analyze_alert(
+    payload: Mapping[str, Any],
+    *,
+    analyzer: LLMAnalyzer | None = None,
+    decision_policy: DecisionPolicy | None = None,
+) -> AnalysisRun:
     """Analyze one alert through the fixed Phase 1 pipeline."""
 
     input_payload = _jsonable(payload)
     analysis_node = analyzer or StubLLMAnalyzer()
+    policy = decision_policy or SocDecisionPolicy()
     run = AnalysisRun(
         alert_id="unknown",
         status=AnalysisRunStatus.RUNNING,
@@ -121,7 +127,20 @@ def analyze_alert(payload: Mapping[str, Any], *, analyzer: LLMAnalyzer | None = 
         run.model_name = analysis_output.model_name
         run.prompt_version = analysis_output.prompt_version
         run.analysis = _run_step(run, "schema_validate", analysis_output.analysis, validate_analysis_result)
-        run.decision = _run_step(run, "decide", run.analysis, _decide)
+        run.decision = _run_step(
+            run,
+            "decide",
+            {
+                "analysis": run.analysis,
+                "analysis_request": analysis_request,
+                "analyzer_step_name": analysis_node.step_name,
+            },
+            lambda _: policy.decide(
+                run.analysis,
+                request=analysis_request,
+                analyzer_step_name=analysis_node.step_name,
+            ),
+        )
         run.status = AnalysisRunStatus.NEEDS_REVIEW if run.decision.needs_review else AnalysisRunStatus.SUCCESS
     except Exception as exc:  # noqa: BLE001 - convert all runtime failures into run state
         run.status = AnalysisRunStatus.FAILED
@@ -150,22 +169,6 @@ def _normalize_alert(
     if mapping_config is not None:
         return normalize_with_mapping(payload, mapping_config)
     return normalize_alert_payload(payload)
-
-
-def _decide(analysis: AnalysisResult) -> Decision:
-    needs_review = analysis.confidence < 0.75 or analysis.verdict.value in {
-        "unknown",
-        "needs_review",
-    }
-    decision = Decision(
-        verdict=analysis.verdict,
-        confidence=analysis.confidence,
-        suggested_action=analysis.recommended_action,
-        needs_review=needs_review,
-        reason=analysis.reason,
-        automation_allowed=False,
-    )
-    return validate_decision(decision)
 
 
 def _normalization_report(alert: AlertInput) -> NormalizationReport:
@@ -320,6 +323,16 @@ def _run_step[T](
         if output.parser_version is not None:
             trace.metadata["parser_version"] = output.parser_version
         trace.metadata.update(output.metadata)
+    if isinstance(output, Decision):
+        trace.metadata.update(
+            {
+                "policy_version": output.policy_version,
+                "confidence_source": output.confidence_source.value,
+                "confidence_is_calibrated": output.confidence_is_calibrated,
+                "evidence_state": output.evidence_state.value,
+                "review_reasons": [item.value for item in output.review_reasons],
+            }
+        )
 
     return output
 

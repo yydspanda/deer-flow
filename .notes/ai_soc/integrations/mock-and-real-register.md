@@ -8,7 +8,7 @@
 
 - Mock 只能证明协议、服务边界、展示链路和回归测试能跑通，不能证明生产系统已接入。
 - `PA-12` 真实 PingAn MCP/API 替换当前仍是 `Waiting`；本地 mock、fake fixture、in-memory adapter 不能冒充完成。
-- Read-only mock 的成功结果可以写入 `InvestigationEvidence` 用于 demo/eval，但必须带 `mocked=true`、fixture source 或 adapter id，不能当作生产事实。
+- Read-only mock 的成功结果可以写入 `InvestigationEvidence` 用于 demo/eval，但必须带 `mocked=true`、fixture source 或 adapter id，不能当作生产事实，不能满足场景证据要求，也不能提高 domain/scenario confidence。
 - 外部 free-text reason、LLM 总结、分析师备注、mock tool result 都只能生成 `SocMemoryCandidate(status=pending_review)`；不能直接写 confirmed memory 或 active lesson。
 - 真实替换时只能替换 adapter/provider/config，不得改变 core service contract、Main Orchestrator contract、ReviewQueue contract 或 Lead Agent bounded context contract。
 - 每个 mock 替换成真实系统前，必须至少补齐：endpoint/config、认证方式、字段裁剪、敏感信息处理、超时/重试、失败返回、latency、payload/result size、smoke report、rollback 方案。
@@ -27,7 +27,7 @@
 | External Disposition Zeus fixture | Zeus 状态/理由 mock payload | `backend/samples/external_disposition/zeus_status_update.json` | 验证 field-path mapper、status mapping、idempotency、review/correction | 替换为真实 webhook/Kafka/poll/manual import adapter；补认证、签名、租户、重放和脱敏 |
 | Kafka local smoke | 本地 Redpanda/Kafka topic、sample payload、dead-letter smoke | `backend/scripts/soc_kafka_smoke.py`、`backend/soc_agent/daemon/` | 验证 consumer runner、mapper、commit、dead-letter、status/readiness | 替换为真实 topic、ACL、consumer group、DLQ、监控、容量与失败演练 |
 | 高风险响应动作 | 当前只有 proposal、policy、approval、一次性 grant、dry-run/execute preflight；`external_side_effect=not_executed` | `backend/soc_agent/actions/adapters.py`、`backend/soc_agent/core/service.py` | 验证封禁 IP、隔离主机等动作在执行前的权限、审批、幂等和审计边界 | 接入真实 EDR/F5/SOAR/防火墙 adapter；必须补回滚/补偿、执行结果核验和失败重试，默认仍需人工审批 |
-| LLM analyzer | **真实路径已完成**：默认 deterministic stub；显式模式复用 DeerFlow `create_chat_model` | `backend/soc_agent/llm/`、`backend/soc_agent/core/runtime.py` | stub 保证回归/回放；`SOC_ANALYZER_MODE=llm` 或 CLI flag 调用已注册模型 | 持续补标注集、校准、限流和成本预算；真实输出仍需 JSON/schema/domain validation |
+| LLM analyzer | **真实路径已完成**：默认 deterministic stub；显式模式复用 DeerFlow `create_chat_model` | `backend/soc_agent/llm/`、`backend/soc_agent/core/runtime.py` | stub 保证回归/回放；`SOC_ANALYZER_MODE=llm` 或 CLI flag 调用已注册模型；raw confidence 当前均标记为 uncalibrated 并进入复核 | 持续补标注集、校准、限流和成本预算；真实输出仍需 JSON/schema/domain validation 和 `SocDecisionPolicy` |
 | Normalization suggestion | **真实路径已完成**：deterministic/replay/live LLM 三种离线模式 | `backend/soc_agent/normalizers/suggestions.py` | 发现 mapping 候选并严格校验 observed source path / canonical whitelist | 所有建议仍需工程师复核，`auto_apply_allowed=false` |
 | SQL/in-memory repositories in tests | in-memory repository 或 SQLite 单元测试 | `backend/soc_agent/*/repository.py`、`backend/tests/` | 单元测试和无 DB 局部 wiring | 生产/准生产必须走 PostgreSQL migration + SQLAlchemy repository；本地开发可用 SOC SQLite 测试库 |
 
@@ -40,6 +40,21 @@
 | `NullKafkaConsumerPort` | disabled-mode adapter | `SOC_KAFKA_ENABLED=false` 时明确不连接 broker；启用后使用 `ConfluentKafkaConsumerPort`，不是用 null adapter 冒充消费成功 |
 | SOC SQLite | 本地真实持久化 | 本地开发可以真实保存 SOC 数据；生产/准生产目标仍是 PostgreSQL，不应把 SQLite 测试结果当生产验收 |
 | SOC Lead Agent | DeerFlow 真实 agent path | 复用 DeerFlow `lead_agent`、profile、skills 和 MCP；mock 的是部分外部查询结果，不是 Lead Agent 运行时本身 |
+
+### 2.2 Runtime heuristic / LLM replacement audit
+
+| Runtime component | Current nature | 是否用 LLM 替换 | 结论 |
+|---|---|---|---|
+| Normalizer / message parser | 确定性生产代码 | No | LLM 只可离线建议 mapping；生产解析必须可回放、可监控 |
+| Entity extraction | 确定性基础抽取 | Not as replacement | 后续可增加 bounded LLM enrichment，但原始 extractor 保留为基线和 provenance 来源 |
+| Fact reconstruction / scenario hypothesis | 版本化 deterministic heuristic，当前未校准 | Not as controller | LLM 可补候选场景/解释，不能覆盖 role conflict、evidence trust 或 response-target guard |
+| `StubLLMAnalyzer` | 显式 fallback/test/replay baseline | Production uses `llm` explicitly | 不删除；生产入口必须显式配置 `SOC_ANALYZER_MODE=llm`，且 trace 标明 analyzer |
+| `JsonLLMAnalyzer` | 真实 DeerFlow model path | Already real | 模型自报 confidence 仍不是 calibrated probability |
+| `SocDecisionPolicy` | 确定性生产决策策略 | No | LLM 不决定 `needs_review`；策略统一处理 provenance、evidence guard、review reasons 和 version |
+| Domain/scenario finding confidence | 可回放 heuristic score | No direct replacement | 只用于 finding 排序/解释；mock/failed evidence 不得抬分，后续用标注集评测版本常量 |
+| Correlation / memory retrieval score | 确定性检索分数 | No direct replacement | 后续 LLM 只能 bounded rerank，不能扩大查询或直接生效 memory |
+| CMDB/EDR/HIDS/TI/security-tag results | 当前部分为 mock external facts | **Must replace with real provider** | 这是当前真实缺口；不能让 LLM 生成或猜测外部事实 |
+| Main orchestrator demo | 可重复 MVP 编排 | Evolve through services/Lead Agent | demo 不是生产自主 Agent；生产入口继续复用同一 Runtime/service/policy 边界 |
 
 ## 3. PA-12 的真实完成标准
 

@@ -189,6 +189,15 @@ is explicit through `SOC_ANALYZER_MODE=stub|llm` and `SOC_LLM_MODEL`, with CLI o
 validation and deterministic decision node. Only allowlisted response metadata and token usage enter
 the run trace.
 
+`soc_agent.core.SocDecisionPolicy` is the only Runtime boundary that converts validated
+`AnalysisResult` into an operational `Decision`. Analyzer confidence is currently an uncalibrated
+self-report: `Decision.confidence_source`, `confidence_is_calibrated`, `evidence_state`,
+`review_reasons`, and `policy_version` must remain explicit. Until an approved, versioned calibration
+profile is wired into this policy, stub and live-LLM decisions require human review; a high raw score
+cannot erase conflicts, degraded/unsupported message schemas, high-value evidence gaps, truncation,
+or false-positive confirmation. Read-only mock or failed action evidence may remain visible for
+flow validation and audit, but cannot raise domain/scenario confidence or satisfy an evidence gap.
+
 Production normalization drift is handled by `core/normalization_maintenance.py`, not by the alert
 ReviewQueue. Explicitly approved baselines and deduplicated maintenance issues are persisted through
 the repository protocols and migration `0012_normalization_maintenance`. Persisted CLI/Kafka analysis

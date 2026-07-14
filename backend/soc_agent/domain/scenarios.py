@@ -18,6 +18,7 @@ from soc_agent.contracts import (
     SocFindingConclusion,
     SocSkillContext,
 )
+from soc_agent.domain.evidence import evidence_is_mocked, successful_evidence, successful_evidence_routes
 from soc_agent.normalizers import normalize_alert_payload
 
 SCENARIO_TAXONOMY_VERSION = "soc.scenario_taxonomy.v1"
@@ -327,6 +328,7 @@ def evidence_profile_for_request(
 ) -> SocEvidenceProfile:
     metadata = request.metadata
     available_routes = _available_action_routes(request)
+    successful_mock_evidence = [item for item in successful_evidence(request.investigation_evidence, include_mocked=True) if evidence_is_mocked(item)]
     sources = {
         "raw_log": "available" if request.run.input_payload else "missing",
         "similar_alerts": _count_status(metadata.get("similar_alert_count")),
@@ -334,7 +336,8 @@ def evidence_profile_for_request(
         "external_feedback": _count_status(metadata.get("external_disposition_count")),
         "confirmed_memory": _count_status(metadata.get("relevant_memory_count")),
         "memory_candidates": _count_status(metadata.get("memory_candidate_count")),
-        "read_only_action_evidence": "available" if request.investigation_evidence else "missing",
+        "read_only_action_evidence": "available" if successful_evidence(request.investigation_evidence) else "missing",
+        "mock_action_evidence": "available" if successful_mock_evidence else "missing",
         "endpoint_process_tree": "available" if "endpoint.process_tree.lookup" in available_routes else "not_available_in_context",
         "host_event_context": "available" if "host.event_context.lookup" in available_routes else "not_available_in_context",
         "threat_intel": "available" if "threat_intel.ip_reputation.lookup" in available_routes else "not_available_in_context",
@@ -379,7 +382,7 @@ def _scenario_confidence(
         score += 0.08
     if any(route in action_routes for route in required_routes):
         score += 0.08
-    if not request.investigation_evidence:
+    if not successful_evidence(request.investigation_evidence):
         score -= 0.04
     return min(max(round(score, 2), 0.3), 0.88)
 
@@ -490,7 +493,7 @@ def _unmapped_vendor_confidence(request: SocDomainTriageRequest) -> float:
         score += 0.04
     if request.metadata.get("relevant_memory_count", 0):
         score += 0.06
-    if request.investigation_evidence:
+    if successful_evidence(request.investigation_evidence):
         score += 0.04
     return min(max(round(score, 2), 0.32), 0.62)
 
@@ -531,26 +534,21 @@ def _used_evidence_sources(request: SocDomainTriageRequest) -> list[str]:
         sources.append("external_feedback")
     if request.metadata.get("relevant_memory_count", 0):
         sources.append("confirmed_memory")
-    if request.investigation_evidence:
+    if successful_evidence(request.investigation_evidence):
         sources.append("read_only_action_evidence")
+    elif any(evidence_is_mocked(item) for item in successful_evidence(request.investigation_evidence, include_mocked=True)):
+        sources.append("mock_action_evidence")
     return sources
 
 
 def _scenario_evidence_refs(request: SocDomainTriageRequest) -> list[str]:
     refs = [f"run:{request.run.run_id}", f"alert:{request.run.alert_id}"]
-    refs.extend(item.evidence_id for item in request.investigation_evidence)
+    refs.extend(item.evidence_id for item in successful_evidence(request.investigation_evidence, include_mocked=True))
     return _dedupe_strs(refs)
 
 
 def _available_action_routes(request: SocDomainTriageRequest) -> list[str]:
-    routes = []
-    for item in request.investigation_evidence:
-        routes.append(item.route)
-        routes.append(item.action)
-    configured = request.metadata.get("available_action_routes")
-    if isinstance(configured, list):
-        routes.extend(str(item) for item in configured if item)
-    return sorted(set(routes))
+    return successful_evidence_routes(request.investigation_evidence)
 
 
 def _count_status(value: Any) -> str:

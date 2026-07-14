@@ -9,7 +9,9 @@ from soc_agent.contracts import (
     AlertInput,
     AlertSummary,
     AnalysisNodeOutput,
+    AnalysisResult,
     AnalysisRun,
+    Decision,
     DecisionAuditRecord,
     InvestigationEvidence,
     LLMAnalysisRequest,
@@ -57,6 +59,18 @@ class LLMAnalyzer(Protocol):
     prompt_version: str
 
     def analyze(self, request: LLMAnalysisRequest) -> AnalysisNodeOutput: ...
+
+
+class DecisionPolicy(Protocol):
+    """Convert bounded analyzer output into an operational decision."""
+
+    def decide(
+        self,
+        analysis: AnalysisResult,
+        *,
+        request: LLMAnalysisRequest,
+        analyzer_step_name: str,
+    ) -> Decision: ...
 
 
 class NormalizationMaintenanceMonitor(Protocol):

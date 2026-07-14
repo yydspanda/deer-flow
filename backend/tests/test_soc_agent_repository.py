@@ -305,7 +305,8 @@ def test_sqlalchemy_alert_repository_persists_review_queue_items() -> None:
     assert item.run_id == run.run_id
     assert item.alert_id == "2026494"
     assert item.status == ReviewQueueStatus.OPEN
-    assert item.reason == "summary.needs_review"
+    assert item.reason == "uncertain_verdict"
+    assert any(reason.value == "confidence_not_calibrated" for reason in item.review_reasons)
     assert item.priority.value == "high"
     assert item.rule_code == "RPAADM_002635"
     assert "ip:30.180.248.178" in item.entity_keys
@@ -337,6 +338,7 @@ def test_sqlalchemy_alert_repository_persists_investigation_evidence() -> None:
         status="success",
         message="Asset location completed.",
         result_payload={"mcp_result": {"company_code": "PA011", "mocked": True}},
+        mocked=True,
         queue_id="REV-1",
         run_id="RUN-1",
         alert_id="ALT-1",
@@ -363,6 +365,7 @@ def test_sqlalchemy_alert_repository_persists_investigation_evidence() -> None:
 
     by_queue = repository.list_evidence(queue_id="REV-1")
     assert [item.evidence_id for item in by_queue] == ["EVI-NEWER", "EVI-OLDER"]
+    assert by_queue[0].mocked is True
     assert by_queue[0].result_payload["mcp_result"]["company_code"] == "PA011"
     assert by_queue[1].actor is not None
     assert by_queue[1].actor.actor_id == "analyst-1"

@@ -79,13 +79,15 @@ def test_pingan_domain_triage_eval_runs_default_fixtures() -> None:
 
     edr = by_sample["pingan-edr-action-evidence"]
     assert edr.domain.value == "edr"
-    assert edr.findings[0].disposition == "suspicious"
+    assert edr.findings[0].disposition == "needs_more_evidence"
+    assert edr.findings[0].confidence == 0.5
     assert "PA-EDR-001" in edr.findings[0].capability_card_refs
     assert "lateral_movement" in {item.scenario_key for item in edr.findings}
 
     hids = by_sample["pingan-hids-action-evidence"]
     assert hids.domain.value == "hids"
-    assert hids.findings[0].disposition == "benign_authorized_candidate"
+    assert hids.findings[0].disposition == "needs_more_evidence"
+    assert hids.findings[0].confidence == 0.5
     assert "PA-HIDS-001" in hids.findings[0].capability_card_refs
     assert "execution.suspicious_command" in {item.scenario_key for item in hids.findings}
     assert all(item.conclusion_summary for result in by_sample.values() for item in result.findings)

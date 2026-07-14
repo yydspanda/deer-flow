@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 逐条审阅 5 条 `datas/` 的真实 LLM analyze/validate/decide 输出，形成第一份人工标注集并校准 confidence/token/latency 预算；不要提前打开自动处置。 |
+| 当前下一刀 | 补 LLM evidence grounding 校验与评测契约，再逐条审阅 5 条 `datas/` 的真实 LLM 输出形成首份人工标注集；校准 profile 仍不得自动接入生产放行。 |
 
 ## 当前待办列表
 
@@ -63,6 +63,7 @@
 | 9 | Memory candidate source integration | Partial | 已新增 `SocMemoryCandidateSourceBridge`：correction 会自动生成 pending candidate 并回写 `memory_candidate_id`，domain finding 已有幂等 bridge/factory，analyst feedback 可进入 candidate content/facets/metadata，`SocReviewService.add_note()` / `soc review note` 可把 ReviewQueue review note 生成 pending candidate；Kafka daemon、Lead Agent proposal 等来源待接 | 每类来源都有 source/evidence/validity/idempotency/facet；候选默认 pending review；confirmed/retrieval gate 仍由 `SocMemoryService` 控制 |
 | 10 | Normalization maintenance loop | Done for MVP | 持久化 schema baseline、主动 monitor、去重/reopen issue、SocEvent、CLI/API/Web/TUI、Kafka metric 摘要；字段重要性 registry、离线 suggestion、confidence calibration 和 repair domain guard 已落地 | 新 schema/解析降级/关键映射缺口不静默；首次观察不自批 baseline；suggestion 不自动改代码；calibration profile 不自动放行动作 |
 | 11 | DeerFlow-backed live Runtime LLM | Done for MVP | 新增 `DeerFlowLLMChatClient`、`SocLLMSettings`，统一装配 analyze/replay/demo/Kafka；offline eval 和 normalize suggest 支持 live model | 显式选择模型；未知模型 fail-fast；输出过 JSON/schema/domain validation；trace 记录安全 metadata/usage；模型不能执行动作 |
+| 11.1 | Deterministic decision policy / confidence guard | Done for uncalibrated MVP | 新增 `SocDecisionPolicy`，把 raw analyzer score、来源、校准状态、证据状态、结构化 review reasons 和 policy version 分开；mock/failed evidence 不参与 domain/scenario 置信度 | stub/LLM self-report 当前全部进入复核；误报、冲突、schema 降级/不支持、关键证据缺口、截断等 guard 不会被高分覆盖；summary/queue/audit 保留原因 |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Partial | normalization 运维页、Gateway bounded metrics 和 Kafka JSONL issue 摘要已完成；全局 Kafka/review/approval/runtime/算力 Prometheus exporter 和态势面板仍后置 | 当前 maintenance issue 可见；全系统运行态势不阻塞 SOC Agent Alpha |
@@ -174,6 +175,29 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-14 — Deterministic decision policy and confidence guard
+
+- 问题：
+  - Runtime 原先直接用 `AnalysisResult.confidence < 0.75` 决定是否复核，模型自报分数没有来源、
+    校准状态或 policy version；高分 false positive 可能绕过 ReviewQueue。
+  - domain/scenario 研判可能把成功 mock 或失败 action payload 当成真实外部事实，抬高 finding confidence。
+- 实现：
+  - 新增 public `DecisionPolicy` protocol 和 `SocDecisionPolicy`，Runtime 固定 `decide` 节点只调用该策略；
+    `Decision` 新增 confidence provenance、calibration、evidence state、structured review reasons 和 policy version。
+  - 当前 stub heuristic 与 LLM self-report 一律标记 uncalibrated 并进入人工复核；false positive、fact
+    conflict、schema degraded/unsupported、high-value gap、evidence truncation 和低 raw score 分别保留原因。
+  - `AlertSummary`、`ReviewQueueItem`、timeline 和 decision audit 继承结构化原因，不再只剩一个自由文本原因。
+  - `InvestigationEvidence` 新增顶层 `mocked`；domain/scenario 仅采信 `status=success && mocked=false`
+    的只读证据。成功 mock 只用于 demo/audit 可见性，failed/denied 不进入 finding 已采信证据集合。
+- 验证：
+  - 完整 SOC + architecture regression：`410 passed`；仅 1 条既有 DeerFlow MCP cache asyncio
+    deprecation warning。
+  - 回归覆盖真实 LLM uncalibrated review、false-positive confirmation、summary/queue/audit persistence、
+    mock/failed evidence eligibility 和 scenario confidence。
+- 下一步：
+  - 增加 LLM evidence grounding contract/validator，检查 evidence item 是否能回指 bounded input；随后用
+    5 条 `datas/` 建立人工标注集并运行离线 calibration，不打开自动处置。
 
 ### 2026-07-14 — DeerFlow-backed live SOC Runtime LLM
 

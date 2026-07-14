@@ -22,6 +22,40 @@ class Verdict(StrEnum):
     NEEDS_REVIEW = "needs_review"
 
 
+class DecisionConfidenceSource(StrEnum):
+    """Origin of the confidence carried by an operational decision."""
+
+    UNKNOWN = "unknown"
+    STUB_HEURISTIC = "stub_heuristic"
+    LLM_SELF_REPORT = "llm_self_report"
+    HUMAN_CONFIRMATION = "human_confirmation"
+    EXTERNAL_DISPOSITION = "external_disposition"
+
+
+class DecisionEvidenceState(StrEnum):
+    """Compact evidence sufficiency state used by deterministic policy guards."""
+
+    SUFFICIENT = "sufficient"
+    PARTIAL = "partial"
+    DEGRADED = "degraded"
+    CONFLICTED = "conflicted"
+
+
+class DecisionReviewReason(StrEnum):
+    """Stable reason codes explaining why a decision requires human review."""
+
+    CONFIDENCE_NOT_CALIBRATED = "confidence_not_calibrated"
+    STUB_ANALYZER = "stub_analyzer"
+    RAW_CONFIDENCE_BELOW_THRESHOLD = "raw_confidence_below_threshold"
+    FALSE_POSITIVE_REQUIRES_CONFIRMATION = "false_positive_requires_confirmation"
+    UNCERTAIN_VERDICT = "uncertain_verdict"
+    DEGRADED_MESSAGE_SCHEMA = "degraded_message_schema"
+    UNSUPPORTED_MESSAGE_SCHEMA = "unsupported_message_schema"
+    HIGH_VALUE_EVIDENCE_GAP = "high_value_evidence_gap"
+    TRUNCATED_ANALYSIS_EVIDENCE = "truncated_analysis_evidence"
+    FACT_CONFLICT = "fact_conflict"
+
+
 class AnalysisRunStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
@@ -507,6 +541,7 @@ class InvestigationEvidence(BaseModel):
     status: Literal["success", "denied", "failed"]
     message: str = Field(min_length=1)
     result_payload: dict[str, Any] = Field(default_factory=dict)
+    mocked: bool = False
     queue_id: str | None = None
     run_id: str | None = None
     alert_id: str | None = None
@@ -1777,9 +1812,16 @@ class AnalysisResult(BaseModel):
 class Decision(BaseModel):
     verdict: Verdict
     confidence: float = Field(ge=0.0, le=1.0)
+    confidence_source: DecisionConfidenceSource = DecisionConfidenceSource.UNKNOWN
+    confidence_is_calibrated: bool = False
+    calibrated_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    calibration_profile_version: str | None = None
+    evidence_state: DecisionEvidenceState = DecisionEvidenceState.PARTIAL
     suggested_action: str
     needs_review: bool
+    review_reasons: list[DecisionReviewReason] = Field(default_factory=list)
     reason: str
+    policy_version: str = "soc.decision_policy.v1"
     automation_allowed: Literal[False] = False
 
 
@@ -1845,6 +1887,7 @@ class AlertSummary(BaseModel):
     verdict: Verdict | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     needs_review: bool = False
+    review_reasons: list[DecisionReviewReason] = Field(default_factory=list)
     summary: str | None = None
     recommended_action: str | None = None
     input_hash: str | None = None
@@ -1938,6 +1981,7 @@ class ReviewQueueItem(BaseModel):
     category: str | None = None
     verdict: Verdict | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    review_reasons: list[DecisionReviewReason] = Field(default_factory=list)
     entity_keys: list[str] = Field(default_factory=list)
     summary: str | None = None
     created_at: datetime = Field(default_factory=utc_now)

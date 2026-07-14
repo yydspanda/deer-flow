@@ -10,7 +10,7 @@
 | 向老板/管理层解释为什么 Runtime 控制流程、LLM 只做受控推理 | `runtime-and-llm-control-strategy.md` | `soc-agent-solution.md` 的核心原则 |
 | 开始下一刀开发 | `progress.md` | `.notes/reference-index/soc-agent-engineering-contracts.md` |
 | 理解一条预警从进入到复核的完整过程 | `alert-lifecycle-flow.md` | `soc-agent-solution.md` 的服务章节 |
-| 排查 message 新结构、字段遗漏和置信度含义 | `soc-agent-solution.md` 的 Normalizer / Confidence 章节 | `.notes/reference-index/soc-agent-engineering-contracts.md` 的对应契约 |
+| 排查 message 新结构、字段遗漏、决策置信度和复核原因 | `soc-agent-solution.md` 的 Normalizer / Confidence 章节 | `.notes/reference-index/soc-agent-engineering-contracts.md` 的对应契约 |
 | 查看平安经验如何进入系统 | `capabilities/pingan/onboarding.md` | `capabilities/pingan/capability-cards.md` |
 | 拆分平安历史 prompt / 经验 / 工具 | `capabilities/pingan/knowledge-decomposition.md` | `memory/memory-tracking.md` |
 | 查看平安专属知识候选 | `capabilities/pingan/knowledge-candidates.md` | `capabilities/pingan/source-docs/` |

@@ -92,7 +92,7 @@ flowchart TD
     H --> I["5️⃣ skill_context<br/>选择白名单 SOC skills"]
     I --> J["6️⃣ analyze_stub / LLM analyzer<br/>受控分析节点"]
     J --> K["7️⃣ schema_validate<br/>Pydantic schema + domain validation"]
-    K --> L["8️⃣ decide<br/>生成 Decision"]
+    K --> L["8️⃣ SocDecisionPolicy<br/>生成受控 Decision"]
 
     L --> M{"needs_review?<br/>是否需要复核"}
     M -->|Yes| N["AnalysisRun.status = needs_review"]
@@ -103,7 +103,7 @@ flowchart TD
     O --> Q
     P --> Q
     Q --> R["🗃️ upsert soc_alert_summaries"]
-    R --> S["🗃️ upsert soc_review_queue<br/>仅 needs_review 或高风险进入 open queue"]
+    R --> S["🗃️ upsert soc_review_queue<br/>结构化 review_reasons 进入 open queue"]
     S --> T["🗃️ save soc_decision_audit_log"]
     T --> U["🛠️ normalization_monitor<br/>baseline / schema / coverage"]
     U --> V["🗃️ upsert normalization issues<br/>dedupe + recurrence + reopen"]
@@ -121,8 +121,26 @@ flowchart TD
 | `skill_context` | Resolve SOC skills | 根据 source type、场景、实体、冲突选择 SOC skills；当前产物是名称/原因/摘要/hash 的选择清单，不是完整 `SKILL.md` 正文 | `SocSkillContext` |
 | `analyze_stub / LLM analyzer` | Run bounded reasoning | 默认 deterministic stub；显式选择后通过 DeerFlow `create_chat_model` 调用真实模型，输出仍必须经过 JSON/schema/domain validation | `AnalysisNodeOutput` |
 | `schema_validate` | Validate model result | 严格校验 JSON schema、字段类型、domain rule，坏 JSON 需要 repair 后再校验 | `AnalysisResult` |
-| `decide` | Create operational decision | 生成 verdict、confidence、needs_review、suggested_action；不允许自动高风险处置 | `Decision` |
+| `decide` | Apply deterministic decision policy | `SocDecisionPolicy` 将已校验结果转换成 operational decision；保留 raw confidence 来源、校准状态、证据状态、结构化复核原因和 policy version。当前 stub/LLM 分数均未校准，因此必须复核；高分不能覆盖冲突、schema 降级、关键证据缺口、截断或误报确认 | `Decision` |
 | `normalization_monitor` | Detect parser/mapping maintenance work | 在业务结果已落库后检查基线、新结构、解析降级、关键字段缺口和 evidence truncation；失败只写 warning | `NormalizationMonitoringResult`, `NormalizationMaintenanceIssue` |
+
+### Decision State / 决策状态
+
+```mermaid
+flowchart LR
+    A["🧠 AnalysisResult<br/>verdict + raw confidence"] --> B["⚙️ SocDecisionPolicy<br/>确定性策略"]
+    C["🔎 EvidenceCoverage<br/>schema / gap / truncation"] --> B
+    D["⚖️ FactReconstruction<br/>conflicts"] --> B
+    B --> E["📋 Decision<br/>confidence_source<br/>evidence_state<br/>review_reasons<br/>policy_version"]
+    E --> F{"👤 Human review required?"}
+    F -->|Current stub / LLM: Yes| G["🗃️ ReviewQueue"]
+    F -->|Future calibrated policy only| H["✅ Success state<br/>仍不代表允许自动处置"]
+```
+
+`AnalysisResult.confidence` 是分析器原始自评，不是生产概率。当前
+`Decision.calibrated_probability=null`、`confidence_is_calibrated=false`；只有经过人工标注、离线校准、
+版本化审批和 replay 验证的 profile，才有资格在未来改变复核策略。mock/failed/denied 调查证据不满足
+场景所需证据，也不能提高 finding confidence；它们只在调查时间线或 demo 审计中可见。
 
 ## 3. Persistence Map / 数据写入地图
 
