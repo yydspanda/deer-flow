@@ -182,6 +182,13 @@ accepted-baseline drift checks. `LLMAnalysisRequest.evidence_coverage` records p
 sanitization, truncation, omissions, and high-value mapping gaps; prompts receive only its compact
 path-free summary.
 
+The production SOC analysis node reuses `deerflow.models.create_chat_model()` through
+`soc_agent.llm.DeerFlowLLMChatClient`; do not add a second provider SDK/config path. Runtime selection
+is explicit through `SOC_ANALYZER_MODE=stub|llm` and `SOC_LLM_MODEL`, with CLI overrides
+`--analyzer-mode` / `--model-name`. Live model output still passes the SOC JSON parser, Pydantic/domain
+validation and deterministic decision node. Only allowlisted response metadata and token usage enter
+the run trace.
+
 Production normalization drift is handled by `core/normalization_maintenance.py`, not by the alert
 ReviewQueue. Explicitly approved baselines and deduplicated maintenance issues are persisted through
 the repository protocols and migration `0012_normalization_maintenance`. Persisted CLI/Kafka analysis

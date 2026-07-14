@@ -44,8 +44,8 @@ class LLMChatClient(Protocol):
 class JsonLLMAnalyzer:
     """Prompt + JSON parser backed SOC analysis node.
 
-    The caller must explicitly inject this analyzer into the runtime. Default
-    SOC runtime construction still uses ``StubLLMAnalyzer``.
+    Entry adapters select this analyzer explicitly through ``SocLLMSettings``.
+    Direct ``SocAnalysisService`` construction remains deterministic for tests.
     """
 
     step_name = LLM_ANALYZER_STEP_NAME
@@ -95,8 +95,8 @@ def build_optional_llm_analyzer(
     """Feature-flagged analyzer factory.
 
     ``enabled=False`` is the safe default and returns the deterministic stub.
-    ``enabled=True`` requires an injected client so tests and future entry
-    adapters can choose the model provider explicitly.
+    ``enabled=True`` requires an injected client so tests and entry adapters
+    can choose the model provider explicitly.
     """
 
     if not enabled:

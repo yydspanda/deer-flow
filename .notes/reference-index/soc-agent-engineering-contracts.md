@@ -795,24 +795,31 @@ normalizers/hids.py
 
 ### LLM analysis request 约束
 
-`LLMAnalysisRequest` 是 stub analyzer 和后续真实 LLM analyzer 的唯一输入 contract。它的目的不是扩大上下文，而是把脏输入收敛成可验证、可审计、可替换的分析请求。
+`LLMAnalysisRequest` 是 stub analyzer 和真实 LLM analyzer 的唯一输入 contract。它的目的不是扩大上下文，而是把脏输入收敛成可验证、可审计、可替换的分析请求。
 
 - runtime 固定在 `fact_reconstruct` 后执行 `build_analysis_input`，产出 `AnalysisRun.llm_analysis_request`。
-- `analyze_stub` 和后续真实 `llm_analyze` 只能消费 `LLMAnalysisRequest`，不能直接消费 raw payload 或自行重新解析 vendor 字段。
+- `analyze_stub` 和真实 `llm_analyze` 只能消费 `LLMAnalysisRequest`，不能直接消费 raw payload 或自行重新解析 vendor 字段。
 - `LLMAnalysisRequest` 必须包含：
   - canonical source / detection / classification / entities。
   - `ExtractedEntities`。
   - `FactReconstructionResult`。
   - `primary_evidence_path`、`conflict_count`、`conflict_types`、`warnings`。
 - analyzer 输出的 `AnalysisResult.evidence` 必须能引用 fact layer 中的关键不确定性，例如低可信 fallback 和字段冲突。
-- 真实 LLM 接入前，先以 deterministic stub 验证 request 结构、trace、持久化、replay 和 review queue 不受影响。
-- 后续接模型时，prompt builder 只能从 `LLMAnalysisRequest` 生成 prompt；不能把完整 `AlertInput.raw` 自动塞入上下文。
+- deterministic stub 用于 request 结构、trace、replay、golden test 和低成本降级；它不是生产模型质量证明。
+- 真实模型通过 `DeerFlowLLMChatClient` 复用 `deerflow.models.create_chat_model()`；SOC 代码不得再实现一套
+  provider SDK、API key 读取或模型 fallback。
+- prompt builder 只能从 `LLMAnalysisRequest` 生成 prompt；不能把完整 `AlertInput.raw` 自动塞入上下文。
 - analyzer public output 必须是 `AnalysisNodeOutput`：
   - `analysis` 必须先经过 parser、Pydantic schema validation 和 domain validation。
   - `model_name`、`prompt_version`、`parser_version` 必须进入 run/step trace。
   - `PipelineStepTrace.metadata` 必须记录 `prompt_hash`、`candidate_hash`、`repair_applied`、usage/response metadata 等审计信息。
   - step metadata 不保存完整 prompt、完整 raw LLM output 或完整 vendor payload；需要复盘时通过 replay 输入和版本重新生成。
 - 默认 runtime 必须继续使用 deterministic `StubLLMAnalyzer`；真实 LLM analyzer 只能通过显式 flag/config/client 注入。
+- 统一配置为 `SOC_ANALYZER_MODE=stub|llm`、`SOC_LLM_MODEL`、`SOC_LLM_THINKING_ENABLED`、
+  `SOC_LLM_ATTACH_TRACING`。CLI 可用 `--analyzer-mode` / `--model-name` 覆盖；未知模型必须 fail-fast，
+  禁止静默换到默认 provider。
+- `DeerFlowLLMChatClient` 只可保存 allowlisted response metadata 和 token usage；provider headers、凭证、
+  原始 response object 不得进入 `AnalysisRun`。
 
 ### Mapping config 约束
 
@@ -1522,6 +1529,8 @@ tool permission denial rate
 ### Offline eval 约束
 
 - `soc eval offline` 是真实 LLM 默认上线前的评测入口；它必须可重复运行、默认不调用外部模型。
+- 显式 `--live-llm --model-name NAME` 时允许逐样本调用 DeerFlow 注册模型；它与
+  `--llm-response-jsonl` 互斥，失败样本必须留在 report，不能中断后伪装成 stub 成功。
 - replay response 使用 JSONL，按 `sample_id` 绑定样本；`content` 可以是字符串或 JSON object，但进入 analyzer 前必须走同一套 `JsonLLMAnalyzer`、parser、schema/domain validation。
 - 默认未提供 replay response 时，只允许把 stub 结果序列化后再走一遍 LLM parser/runtime 链路，用于 smoke-test 工程路径；不能把该结果解释为真实模型质量。
 - eval report 必须至少包含 parse success、repair count、failed count、verdict diff、needs_review diff、confidence delta。

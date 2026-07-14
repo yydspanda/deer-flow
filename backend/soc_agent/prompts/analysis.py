@@ -14,7 +14,7 @@ ANALYSIS_PROMPT_VERSION = "soc-analysis-v1"
 
 @dataclass(frozen=True)
 class AnalysisPrompt:
-    """Versioned prompt payload passed to a future LLM client."""
+    """Versioned prompt payload passed to the configured LLM client."""
 
     prompt_version: str
     system: str

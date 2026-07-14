@@ -1,0 +1,180 @@
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from soc_agent.cli import main
+from soc_agent.llm import (
+    DeerFlowLLMChatClient,
+    JsonLLMAnalyzer,
+    LLMChatResponse,
+    SocAnalyzerMode,
+    SocLLMSettings,
+    build_configured_analyzer,
+    configured_soc_llm_status,
+    resolve_soc_model_name,
+)
+from soc_agent.pipeline.analyzer import StubLLMAnalyzer
+
+SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
+
+
+class _FakeModel:
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[dict[str, str]], dict[str, Any]]] = []
+
+    def invoke(self, messages, *, config):
+        self.calls.append((messages, config))
+        return SimpleNamespace(
+            content='{"verdict":"unknown"}',
+            usage_metadata={"input_tokens": 11, "output_tokens": 7},
+            response_metadata={
+                "finish_reason": "stop",
+                "model_name": "provider-model-id",
+                "headers": {"authorization": "must-not-be-recorded"},
+                "token_usage": {"prompt_tokens": 999},
+            },
+        )
+
+
+class _FakeConfig:
+    def __init__(self, *names: str) -> None:
+        self.models = [SimpleNamespace(name=name) for name in names]
+
+    def get_model_config(self, name: str):
+        return SimpleNamespace(name=name) if name in {model.name for model in self.models} else None
+
+
+class _RecordingClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[Mapping[str, str]], str]] = []
+
+    def complete(
+        self,
+        messages: Sequence[Mapping[str, str]],
+        *,
+        model_name: str,
+    ) -> LLMChatResponse:
+        self.calls.append((list(messages), model_name))
+        return LLMChatResponse(content="{}", model_name=model_name)
+
+
+def test_deerflow_client_reuses_model_and_bounds_metadata() -> None:
+    model = _FakeModel()
+    factory_calls: list[dict[str, Any]] = []
+
+    def factory(**kwargs):
+        factory_calls.append(kwargs)
+        return model
+
+    config = _FakeConfig("deepseek-v4-pro")
+    client = DeerFlowLLMChatClient(
+        app_config=config,  # type: ignore[arg-type]
+        thinking_enabled=False,
+        attach_tracing=True,
+        model_factory=factory,
+    )
+
+    first = client.complete([{"role": "user", "content": "one"}], model_name="deepseek-v4-pro")
+    second = client.complete([{"role": "user", "content": "two"}], model_name="deepseek-v4-pro")
+
+    assert len(factory_calls) == 1
+    assert factory_calls[0]["name"] == "deepseek-v4-pro"
+    assert factory_calls[0]["thinking_enabled"] is False
+    assert len(model.calls) == 2
+    assert model.calls[0][1]["run_name"] == "soc_runtime_analysis"
+    assert first.model_name == "provider-model-id"
+    assert first.usage == {"input_tokens": 11, "output_tokens": 7}
+    assert first.metadata == {"finish_reason": "stop", "model_name": "provider-model-id"}
+    assert second.model_name == "provider-model-id"
+
+
+def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
+    assert SocLLMSettings.from_env({}).mode is SocAnalyzerMode.STUB
+    settings = SocLLMSettings.from_env(
+        {
+            "SOC_ANALYZER_MODE": "llm",
+            "SOC_LLM_MODEL": "deepseek-v4-pro",
+            "SOC_LLM_THINKING_ENABLED": "false",
+            "SOC_LLM_ATTACH_TRACING": "true",
+        }
+    )
+    assert settings.mode is SocAnalyzerMode.LLM
+    assert settings.model_name == "deepseek-v4-pro"
+
+    with pytest.raises(ValueError, match="SOC_ANALYZER_MODE"):
+        SocLLMSettings.from_env({"SOC_ANALYZER_MODE": "automatic"})
+    with pytest.raises(ValueError, match="SOC_LLM_THINKING_ENABLED"):
+        SocLLMSettings.from_env({"SOC_LLM_THINKING_ENABLED": "sometimes"})
+
+
+def test_model_resolution_has_no_unknown_provider_fallback() -> None:
+    config = _FakeConfig("deepseek-v4-flash", "deepseek-v4-pro")
+    assert resolve_soc_model_name(None, app_config=config) == "deepseek-v4-flash"  # type: ignore[arg-type]
+    assert resolve_soc_model_name("deepseek-v4-pro", app_config=config) == "deepseek-v4-pro"  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="not configured"):
+        resolve_soc_model_name("missing", app_config=config)  # type: ignore[arg-type]
+
+
+def test_configured_analyzer_keeps_stub_default_and_builds_live_analyzer() -> None:
+    config = _FakeConfig("deepseek-v4-pro")
+    assert isinstance(
+        build_configured_analyzer(
+            settings=SocLLMSettings(mode=SocAnalyzerMode.STUB),
+            app_config=config,  # type: ignore[arg-type]
+        ),
+        StubLLMAnalyzer,
+    )
+
+    client = _RecordingClient()
+    analyzer = build_configured_analyzer(
+        settings=SocLLMSettings(mode=SocAnalyzerMode.LLM, model_name="deepseek-v4-pro"),
+        app_config=config,  # type: ignore[arg-type]
+        client=client,  # type: ignore[arg-type]
+    )
+    assert isinstance(analyzer, JsonLLMAnalyzer)
+    assert analyzer.model_name == "deepseek-v4-pro"
+
+
+def test_secret_free_status_lists_configured_models() -> None:
+    config = _FakeConfig("deepseek-v4-flash", "deepseek-v4-pro")
+    status = configured_soc_llm_status(
+        settings=SocLLMSettings(mode=SocAnalyzerMode.LLM, model_name="deepseek-v4-pro"),
+        app_config=config,  # type: ignore[arg-type]
+    )
+
+    assert status["resolved_model_name"] == "deepseek-v4-pro"
+    assert status["configured_model_names"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert status["secrets_included"] is False
+    assert "api_key" not in status
+
+
+def test_cli_analyze_passes_explicit_model_selection_to_runtime(monkeypatch, capsys) -> None:
+    captured: list[SocLLMSettings] = []
+
+    def fake_build(*, settings):
+        captured.append(settings)
+        return StubLLMAnalyzer()
+
+    monkeypatch.setattr("soc_agent.cli.build_configured_analyzer", fake_build)
+
+    exit_code = main(
+        [
+            "analyze",
+            str(SAMPLES / "malicious_ioc.json"),
+            "--analyzer-mode",
+            "llm",
+            "--model-name",
+            "deepseek-v4-pro",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured[0].mode is SocAnalyzerMode.LLM
+    assert captured[0].model_name == "deepseek-v4-pro"
+    assert json.loads(capsys.readouterr().out)["model_name"] == "stub"

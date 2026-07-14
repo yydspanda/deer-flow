@@ -1,7 +1,7 @@
-"""Deterministic Phase 1 SOC runtime.
+"""Deterministic-control-flow SOC runtime.
 
-The runtime owns the control flow. LLM-backed nodes can be added later behind
-fixed pipeline steps, but they must not choose whether required steps run.
+The runtime owns the control flow. A configured LLM may implement the bounded
+analysis node, but it cannot choose whether required steps run.
 """
 
 from __future__ import annotations
@@ -80,6 +80,8 @@ def analyze_alert(payload: Mapping[str, Any], *, analyzer: LLMAnalyzer | None = 
     run = AnalysisRun(
         alert_id="unknown",
         status=AnalysisRunStatus.RUNNING,
+        model_name=analysis_node.model_name,
+        prompt_version=analysis_node.prompt_version,
         input_payload=input_payload,
         input_hash=stable_hash(input_payload),
     )
@@ -100,12 +102,22 @@ def analyze_alert(payload: Mapping[str, Any], *, analyzer: LLMAnalyzer | None = 
             lambda _: build_llm_analysis_request(alert, entities, fact_reconstruction),
         )
         run.llm_analysis_request = analysis_request
-        analysis_output = _run_step(
-            run,
-            analysis_node.step_name,
-            analysis_request,
-            analysis_node.analyze,
-        )
+        try:
+            analysis_output = _run_step(
+                run,
+                analysis_node.step_name,
+                analysis_request,
+                analysis_node.analyze,
+            )
+        except Exception:
+            run.steps[-1].metadata.update(
+                {
+                    "model_name": analysis_node.model_name,
+                    "prompt_version": analysis_node.prompt_version,
+                    "analyzer": "json_llm" if analysis_node.step_name == "analyze_llm" else "stub",
+                }
+            )
+            raise
         run.model_name = analysis_output.model_name
         run.prompt_version = analysis_output.prompt_version
         run.analysis = _run_step(run, "schema_validate", analysis_output.analysis, validate_analysis_result)

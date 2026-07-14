@@ -150,6 +150,9 @@ Current SOC direction:
   step trace, audit logging, basic rate limiting, and `analyze` / `correct` / `replay`.
 - LLMs do not own the main control flow. Runtime owns the deterministic pipeline; LLM nodes
   handle bounded reasoning and can only suggest soft routes from a whitelist.
+- SOC Runtime live analysis reuses DeerFlow `create_chat_model` through `backend/soc_agent/llm/`.
+  Select it explicitly with `SOC_ANALYZER_MODE=llm` / `SOC_LLM_MODEL` or CLI
+  `--analyzer-mode llm --model-name NAME`; the default remains deterministic for tests and replay.
 - LLM-discovered knowledge is candidate knowledge only. It must be confirmed by a human before
   it can affect future decisions.
 - PingAn `zeusRawLogs[].message` values are parsed only inside the PingAn normalizer. Deterministically

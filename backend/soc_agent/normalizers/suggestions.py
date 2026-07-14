@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from typing import Any
+from time import perf_counter
+from typing import Any, Literal
 
 from json_repair import loads as repair_json_loads
 from pydantic import ValidationError
@@ -18,6 +19,7 @@ from soc_agent.contracts import (
     NormalizationSuggestionReport,
     NormalizationSuggestionStatus,
 )
+from soc_agent.llm.analyzer import LLMChatClient
 
 _ALLOWED_TARGET_PATHS = (
     "classification.category",
@@ -108,6 +110,7 @@ def build_normalization_suggestion_report(
     *,
     response_content: Any | None = None,
     model_name: str | None = None,
+    llm_source: Literal["llm_replay", "llm"] = "llm_replay",
 ) -> NormalizationSuggestionReport:
     """Return governed candidates; invalid paths remain visible as rejected suggestions."""
 
@@ -119,7 +122,7 @@ def build_normalization_suggestion_report(
     if response_content is None:
         warnings.append("no LLM replay response supplied; report contains deterministic coverage-gap candidates only")
     else:
-        generated_by = "llm_replay"
+        generated_by = llm_source
         replayed, parse_warnings = _parse_replayed_suggestions(response_content, prompt=prompt)
         warnings.extend(parse_warnings)
 
@@ -132,6 +135,41 @@ def build_normalization_suggestion_report(
         warnings=warnings,
         auto_apply_allowed=False,
     )
+
+
+def run_live_normalization_suggestion(
+    run: AnalysisRun,
+    *,
+    client: LLMChatClient,
+    model_name: str,
+) -> NormalizationSuggestionReport:
+    """Call a configured model for governed, non-applying mapping candidates."""
+
+    prompt = build_normalization_suggestion_prompt(run)
+    started_at = perf_counter()
+    response = client.complete(
+        [
+            {"role": "system", "content": prompt.system_prompt},
+            {"role": "user", "content": prompt.user_prompt},
+        ],
+        model_name=model_name,
+    )
+    content = response.content if hasattr(response, "content") else response
+    response_model = getattr(response, "model_name", None)
+    report = build_normalization_suggestion_report(
+        run,
+        response_content=content,
+        model_name=response_model or model_name,
+        llm_source="llm",
+    )
+    report.duration_ms = int((perf_counter() - started_at) * 1000)
+    usage = getattr(response, "usage", None)
+    if isinstance(usage, Mapping):
+        report.usage = dict(usage)
+    metadata = getattr(response, "metadata", None)
+    if isinstance(metadata, Mapping):
+        report.response_metadata = dict(metadata)
+    return report
 
 
 def _coverage_gap_suggestions(run: AnalysisRun) -> list[NormalizationMappingSuggestion]:

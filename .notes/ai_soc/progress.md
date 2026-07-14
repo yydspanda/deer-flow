@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口完成，Phase 2 correlation / domain triage 起步 |
-| 当前目标 | Runtime 单预警链路和 PingAn message/fact/coverage 验证已走通；schema baseline、主动 drift/coverage maintenance queue、CLI/API/Web/TUI 可见性、离线 mapping suggestion 和 confidence calibration boundary 已落地；SOC Lead Agent、ReviewQueue、Kafka、memory、external disposition、domain triage 继续沿既有 service boundary 演进；真实 dev/staging MCP 等待 endpoint/凭证 |
+| 当前目标 | Runtime 单预警链路和 PingAn message/fact/coverage 验证已走通；DeerFlow 原生真实 LLM analyzer、live offline eval、live normalization suggestion 已落地并用 `deepseek-v4-pro` smoke；SOC Lead Agent、ReviewQueue、Kafka、memory、external disposition、domain triage 继续沿既有 service boundary 演进；真实 dev/staging MCP 等待 endpoint/凭证 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 用 5 条 `datas/` 样本完成 Runtime 后续 analyze/validate/decide 输出审阅，并建立第一份人工标注 confidence calibration fixture；不要提前打开自动处置。 |
+| 当前下一刀 | 逐条审阅 5 条 `datas/` 的真实 LLM analyze/validate/decide 输出，形成第一份人工标注集并校准 confidence/token/latency 预算；不要提前打开自动处置。 |
 
 ## 当前待办列表
 
@@ -62,6 +62,7 @@
 | 8 | Demo / Eval Script | Done for APT/EDR/HIDS + single-alert MVP | 已新增 `soc demo run [all|apt|edr|hids]` 和 `soc demo alert PATH|--json`；前者持久化 PingAn APT/EDR/HIDS investigation chain，后者跑一条任意 alert 并输出 compact review summary | 一条命令可稳定演示 runtime + domain triage + evidence/memory/review 状态，并能直接用 `soc review context QUEUE_ID --summary --pretty` 或 Web/TUI 打开统一调查视图；本 MVP 为保持 open review 可见性，暂不种 external disposition |
 | 9 | Memory candidate source integration | Partial | 已新增 `SocMemoryCandidateSourceBridge`：correction 会自动生成 pending candidate 并回写 `memory_candidate_id`，domain finding 已有幂等 bridge/factory，analyst feedback 可进入 candidate content/facets/metadata，`SocReviewService.add_note()` / `soc review note` 可把 ReviewQueue review note 生成 pending candidate；Kafka daemon、Lead Agent proposal 等来源待接 | 每类来源都有 source/evidence/validity/idempotency/facet；候选默认 pending review；confirmed/retrieval gate 仍由 `SocMemoryService` 控制 |
 | 10 | Normalization maintenance loop | Done for MVP | 持久化 schema baseline、主动 monitor、去重/reopen issue、SocEvent、CLI/API/Web/TUI、Kafka metric 摘要；字段重要性 registry、离线 suggestion、confidence calibration 和 repair domain guard 已落地 | 新 schema/解析降级/关键映射缺口不静默；首次观察不自批 baseline；suggestion 不自动改代码；calibration profile 不自动放行动作 |
+| 11 | DeerFlow-backed live Runtime LLM | Done for MVP | 新增 `DeerFlowLLMChatClient`、`SocLLMSettings`，统一装配 analyze/replay/demo/Kafka；offline eval 和 normalize suggest 支持 live model | 显式选择模型；未知模型 fail-fast；输出过 JSON/schema/domain validation；trace 记录安全 metadata/usage；模型不能执行动作 |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Partial | normalization 运维页、Gateway bounded metrics 和 Kafka JSONL issue 摘要已完成；全局 Kafka/review/approval/runtime/算力 Prometheus exporter 和态势面板仍后置 | 当前 maintenance issue 可见；全系统运行态势不阻塞 SOC Agent Alpha |
@@ -89,7 +90,7 @@
 | 16 | LLM-ready analysis request | Done | `fact_reconstruct` 后生成 `LLMAnalysisRequest`，analyzer 消费有界 primary/supplementary evidence 内容和 compact coverage summary，不接收完整 vendor payload；完整 `EvidenceCoverageReport` 留作审计 |
 | 17 | Prompt Builder + SOC prompt golden tests | Done | Prompt 只能从 `LLMAnalysisRequest` 生成；覆盖 PingAn APT/EDR、raw message 缺失 fallback、字段冲突；不把完整 raw payload 无脑塞进 prompt |
 | 18 | LLM JSON parser + bad JSON repair | Done | 先严格 JSON parse，再 repair，再 Pydantic/domain validation；覆盖代码块、尾逗号、半截 JSON、字段类型错误 |
-| 19 | 真实 LLM analyzer behind flag | Done | 默认继续走 `analyze_stub`；显式配置开启后才调用模型；输出必须经过 prompt builder、JSON parser、schema/domain validation |
+| 19 | 真实 LLM analyzer behind flag | Done | 已复用 DeerFlow `create_chat_model`；默认继续走 `analyze_stub`，显式 `SOC_ANALYZER_MODE=llm` 或 CLI flag 才调用模型；输出经过 prompt builder、JSON parser、schema/domain validation |
 | 20 | Offline eval：stub / llm / replay diff | Done | 同一批样本比较 verdict、confidence、needs_review、parse success、冲突字段处理质量 |
 | 21 | ReviewQueue API | Done | Gateway 暴露 review queue 列表、调查上下文、关闭、纠正接口；业务动作仍走 `SocReviewService` |
 | 22 | ReviewQueue TUI thin client | Done | 基于 service/API 展示 open queue、打开 context、关闭 item、发起 correction；不复制业务逻辑 |
@@ -173,6 +174,39 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-14 — DeerFlow-backed live SOC Runtime LLM
+
+- 问题：
+  - `JsonLLMAnalyzer` 之前只有 client protocol 和 fake/replay test，没有调用 DeerFlow 模型注册表的生产 client；
+    CLI/Kafka 仍实际构造 deterministic stub。
+  - `soc normalize suggest` 只能读取 replay response，不能使用已配置模型生成候选。
+- 实现：
+  - 新增 `DeerFlowLLMChatClient`，复用 `deerflow.models.create_chat_model()`、模型配置、API key 解析和 tracing；
+    按模型名缓存实例，只记录 allowlisted response metadata 和 token usage。
+  - 新增 `SocLLMSettings`：`SOC_ANALYZER_MODE=stub|llm`、`SOC_LLM_MODEL`、thinking/tracing 开关；
+    CLI `analyze/replay/demo alert/daemon` 支持 `--analyzer-mode` / `--model-name` 覆盖。
+  - `soc llm status` 输出无 secret 的模型解析状态；未知模型 fail-fast，不静默 fallback。
+  - `soc eval offline --live-llm` 可对样本集调用真实模型；与 replay JSONL 互斥。
+  - `soc normalize suggest --live-llm` 可调用真实模型，仍校验 observed path/canonical whitelist，
+    `auto_apply_allowed=false`，并记录 duration/usage/safe response metadata。
+  - Compose/K8s daemon 模板增加 analyzer/model 配置；K8s Secret 预留 provider key，daemon 启动前验证模型注册。
+- 真实验证：
+  - DeerFlow 配置识别 `deepseek-v4-flash` 和 `deepseek-v4-pro`；本轮显式使用 `deepseek-v4-pro`。
+  - `datas/apt-1965449.json` 真实分析成功：`analyze_llm` parser 无 repair，最终 `needs_review`、
+    `automation_allowed=false`；约 18.75 秒、8,949 input tokens、1,064 output tokens。
+  - live normalization suggestion 成功，返回 31 条 governed candidate，全部仍需人工评审且不可自动应用。
+- 边界：
+  - `asset/EDR/HIDS/TI/security-tag/Zeus disposition` 仍等待真实 endpoint/凭证；LLM 不得伪造这些外部事实。
+  - 根据 `.notes/ai_soc/README.md` 指向的 mock/real 权威台账复核代码：高风险响应动作目前只完成
+    proposal/policy/approval/grant/dry-run/preflight，尚未执行真实外部副作用；已补入台账。
+  - 明确 deterministic normalizer/entity/fact 节点、disabled-mode Kafka adapter、SOC SQLite 和 DeerFlow
+    Lead Agent 的性质，避免把“不调用 LLM”或“本地模式”误判为未完成 mock。
+- 验证：
+  - 完整 SOC regression：`406 passed`；仅 1 条既有 DeerFlow MCP cache asyncio deprecation warning。
+  - Ruff check/format、daemon shell syntax 和 Compose overlay config 通过；overlay 服务列表包含 `soc-daemon`。
+- 下一步：
+  - 用 5 条 `datas/` 建人工标注集，评审 verdict/evidence/recommended action，确定 token 裁剪、并发和 confidence calibration 策略。
 
 ### 2026-07-14 — Normalization maintenance and calibration loop
 

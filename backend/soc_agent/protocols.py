@@ -53,6 +53,8 @@ class LLMAnalyzer(Protocol):
     """Bounded LLM analysis node used behind a fixed runtime step."""
 
     step_name: str
+    model_name: str
+    prompt_version: str
 
     def analyze(self, request: LLMAnalysisRequest) -> AnalysisNodeOutput: ...
 

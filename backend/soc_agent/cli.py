@@ -54,6 +54,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.core import (
+    DeterministicAnalysisRuntime,
     SocAgentActionDispatcher,
     SocAgentApprovalService,
     SocAgentCapabilityRouter,
@@ -104,7 +105,17 @@ from soc_agent.eval import (
 )
 from soc_agent.lead_agent import build_soc_lead_agent_profile
 from soc_agent.lead_agent_chat import SocLeadAgentChatService
-from soc_agent.normalizers import build_normalization_suggestion_prompt, build_normalization_suggestion_report
+from soc_agent.llm import (
+    SocLLMSettings,
+    build_configured_analyzer,
+    build_configured_chat_client,
+    configured_soc_llm_status,
+)
+from soc_agent.normalizers import (
+    build_normalization_suggestion_prompt,
+    build_normalization_suggestion_report,
+    run_live_normalization_suggestion,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -159,6 +170,8 @@ def main(argv: list[str] | None = None) -> int:
         return _mcp_smoke(args)
     if args.command == "mcp" and args.mcp_command == "tools":
         return _mcp_tools(args)
+    if args.command == "llm" and args.llm_command == "status":
+        return _llm_status(args)
     if args.command == "daemon" and args.daemon_command == "process":
         return _daemon_process(args)
     if args.command == "daemon" and args.daemon_command == "consume":
@@ -221,6 +234,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Persist the run through AlertRepository",
     )
+    _add_analyzer_args(analyze)
     _add_database_args(analyze)
 
     list_cmd = subparsers.add_parser("list", help="List persisted SOC alert summaries")
@@ -244,6 +258,7 @@ def _build_parser() -> argparse.ArgumentParser:
     replay = subparsers.add_parser("replay", help="Replay one persisted SOC analysis run")
     replay.add_argument("run_id", help="Run id to replay")
     replay.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_analyzer_args(replay)
     _add_database_args(replay)
 
     correct = subparsers.add_parser("correct", help="Record a manual verdict correction")
@@ -339,7 +354,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     normalize_suggest.add_argument("path", help="Path to one alert JSON file")
     normalize_suggest.add_argument("--llm-response", help="Optional replayed LLM response JSON/text file")
-    normalize_suggest.add_argument("--model-name", help="Model name recorded for replayed suggestions")
+    normalize_suggest.add_argument("--live-llm", action="store_true", help="Call a configured DeerFlow model instead of replaying a response")
+    normalize_suggest.add_argument("--model-name", help="Configured model for --live-llm or model label for replay")
     normalize_suggest.add_argument("--prompt-out", help="Write the sanitized offline prompt bundle as JSON")
     normalize_suggest.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
@@ -420,12 +436,19 @@ def _build_parser() -> argparse.ArgumentParser:
     mcp_tools.add_argument("--report-path", help="Optional path to write the inventory report JSON")
     mcp_tools.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
+    llm = subparsers.add_parser("llm", help="SOC bounded LLM runtime helpers")
+    llm_subparsers = llm.add_subparsers(dest="llm_command")
+    llm_status = llm_subparsers.add_parser("status", help="Show secret-free SOC LLM model resolution status")
+    _add_analyzer_args(llm_status)
+    llm_status.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+
     daemon = subparsers.add_parser("daemon", help="SOC daemon helpers")
     daemon_subparsers = daemon.add_subparsers(dest="daemon_command")
     daemon_process = daemon_subparsers.add_parser("process", help="Process one decoded SOC daemon message JSON")
     daemon_process.add_argument("path", nargs="?", help="Path to daemon message JSON file")
     daemon_process.add_argument("--json", dest="json_payload", help="Inline daemon message JSON object")
     daemon_process.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_analyzer_args(daemon_process)
     _add_database_args(daemon_process)
     daemon_status = daemon_subparsers.add_parser("status", help="Show SOC Kafka daemon readiness status")
     daemon_status.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
@@ -440,6 +463,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Maximum records to process before exiting; defaults to SOC_KAFKA_MAX_POLL_RECORDS",
     )
     daemon_consume.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_analyzer_args(daemon_consume)
     _add_database_args(daemon_consume)
     daemon_run = daemon_subparsers.add_parser("run", help="Run the SOC Kafka daemon until stopped")
     daemon_run.add_argument(
@@ -473,6 +497,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     daemon_run.add_argument("--include-results", action="store_true", help="Include per-loop results in output JSON")
     daemon_run.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_analyzer_args(daemon_run)
     _add_database_args(daemon_run)
 
     eval_cmd = subparsers.add_parser("eval", help="SOC offline evaluation helpers")
@@ -481,7 +506,8 @@ def _build_parser() -> argparse.ArgumentParser:
     eval_offline.add_argument("path", help="Path to an alert JSON file or directory")
     eval_offline.add_argument("--glob", default="*.json", help="Glob used when PATH is a directory")
     eval_offline.add_argument("--llm-response-jsonl", help="Replayable LLM response JSONL keyed by sample_id")
-    eval_offline.add_argument("--model-name", default="replay-llm", help="Model name recorded for replayed LLM analyzer")
+    eval_offline.add_argument("--live-llm", action="store_true", help="Call the configured model for each sample")
+    eval_offline.add_argument("--model-name", help="Configured live model or replay model label")
     eval_offline.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     eval_scenarios = eval_subparsers.add_parser("scenarios", help="Run vendor-neutral deterministic scenario taxonomy eval")
     eval_scenarios.add_argument("path", help="Path to an alert JSON file or directory")
@@ -550,6 +576,7 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_alert.add_argument("--domain", choices=[item.value for item in SocDomainName], help="Optional SOC domain for --review-note")
     demo_alert.add_argument("--finding-id", help="Optional domain finding id for --review-note")
     demo_alert.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_analyzer_args(demo_alert)
     _add_database_args(demo_alert)
 
     memory = subparsers.add_parser("memory", help="SOC memory candidate helpers")
@@ -643,6 +670,18 @@ def _add_database_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_analyzer_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--analyzer-mode",
+        choices=["stub", "llm"],
+        help="Override SOC_ANALYZER_MODE for this command",
+    )
+    parser.add_argument(
+        "--model-name",
+        help="Override SOC_LLM_MODEL with a DeerFlow configured model name",
+    )
+
+
 def _analyze(args: argparse.Namespace) -> int:
     try:
         payload = _load_payload(args.path, args.json_payload)
@@ -651,7 +690,14 @@ def _analyze(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    run = _analysis_service_for_repository(repository).analyze(payload)
+    try:
+        run = _analysis_service_for_repository(
+            repository,
+            settings=_llm_settings_from_args(args),
+        ).analyze(payload)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     print(
         run.model_dump_json(
             indent=2 if args.pretty else None,
@@ -716,7 +762,10 @@ def _correlate(args: argparse.Namespace) -> int:
 def _replay(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
-        run = _analysis_service_for_repository(repository).replay(args.run_id)
+        run = _analysis_service_for_repository(
+            repository,
+            settings=_llm_settings_from_args(args),
+        ).replay(args.run_id)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -901,20 +950,37 @@ def _normalize_issue_update(args: argparse.Namespace) -> int:
 
 def _normalize_suggest(args: argparse.Namespace) -> int:
     try:
+        if args.live_llm and args.llm_response:
+            raise ValueError("--live-llm and --llm-response are mutually exclusive")
         payload = _load_payload(args.path, None)
         run = SocAnalysisService().analyze(payload)
         prompt = build_normalization_suggestion_prompt(run)
-        response_content = _load_optional_response(args.llm_response)
-        report = build_normalization_suggestion_report(
-            run,
-            response_content=response_content,
-            model_name=args.model_name,
-        )
+        if args.live_llm:
+            settings = SocLLMSettings.from_env().with_overrides(
+                mode="llm",
+                model_name=args.model_name,
+            )
+            client, model_name = build_configured_chat_client(settings=settings)
+            report = run_live_normalization_suggestion(
+                run,
+                client=client,
+                model_name=model_name,
+            )
+        else:
+            response_content = _load_optional_response(args.llm_response)
+            report = build_normalization_suggestion_report(
+                run,
+                response_content=response_content,
+                model_name=args.model_name,
+            )
         if args.prompt_out:
             _write_report(args.prompt_out, prompt.model_dump_json(indent=2, exclude_none=True))
     except (ValueError, OSError) as exc:
         print(f"error: normalization suggestion failed: {exc}", file=sys.stderr)
         return 2
+    except Exception as exc:  # noqa: BLE001 - CLI boundary reports provider failures
+        print(f"error: normalization suggestion model call failed: {exc}", file=sys.stderr)
+        return 1
     print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
 
@@ -1447,15 +1513,23 @@ def _mcp_tools(args: argparse.Namespace) -> int:
     return 0 if report.status == "success" else 1
 
 
+def _llm_status(args: argparse.Namespace) -> int:
+    try:
+        status = configured_soc_llm_status(settings=_llm_settings_from_args(args))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(status, ensure_ascii=False, indent=2 if args.pretty else None))
+    return 0
+
+
 def _daemon_process(args: argparse.Namespace) -> int:
     try:
         payload = _load_payload(args.path, args.json_payload)
         repository = _repository_from_args(args)
-        analysis_service = SocAnalysisService(
-            repository=repository,
-            summary_repository=repository,
-            audit_repository=repository,
-            review_queue_repository=repository,
+        analysis_service = _analysis_service_for_repository(
+            repository,
+            settings=_llm_settings_from_args(args),
         )
         approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
         result = SocDaemonService(
@@ -1597,7 +1671,10 @@ def _daemon_status(args: argparse.Namespace) -> int:
 
 def _daemon_service_from_args(args: argparse.Namespace) -> SocDaemonService:
     repository = _repository_from_args(args)
-    analysis_service = _analysis_service_for_repository(repository)
+    analysis_service = _analysis_service_for_repository(
+        repository,
+        settings=_llm_settings_from_args(args),
+    )
     approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
     return SocDaemonService(
         analysis_service=analysis_service,
@@ -1635,9 +1712,24 @@ def _daemon_metric_sink(target: str | None):
 
 def _eval_offline(args: argparse.Namespace) -> int:
     try:
+        if args.live_llm and args.llm_response_jsonl:
+            raise ValueError("--live-llm and --llm-response-jsonl are mutually exclusive")
         samples = _load_payload_samples(args.path, args.glob)
         responses = load_eval_responses_jsonl(args.llm_response_jsonl) if args.llm_response_jsonl else None
-        report = run_offline_eval(samples, responses=responses, model_name=args.model_name)
+        client = None
+        model_name = args.model_name or "replay-llm"
+        if args.live_llm:
+            settings = SocLLMSettings.from_env().with_overrides(
+                mode="llm",
+                model_name=args.model_name,
+            )
+            client, model_name = build_configured_chat_client(settings=settings)
+        report = run_offline_eval(
+            samples,
+            responses=responses,
+            client=client,
+            model_name=model_name,
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -1733,7 +1825,10 @@ def _demo_alert(args: argparse.Namespace) -> int:
         if args.init_db:
             create_soc_tables(_engine_from_args(args))
         repository = _repository_from_args(args)
-        run = _analysis_service_for_repository(repository).analyze(
+        run = _analysis_service_for_repository(
+            repository,
+            settings=_llm_settings_from_args(args),
+        ).analyze(
             payload,
             context=ServiceRequestContext(actor=ActorContext(actor_id="soc-demo", actor_type=ActorType.USER, surface=EntrySurface.CLI, roles=["soc_analyst"])),
         )
@@ -1859,6 +1954,8 @@ def _repository_from_args(args: argparse.Namespace) -> SqlAlchemyAlertRepository
 
 def _analysis_service_for_repository(
     repository: SqlAlchemyAlertRepository | None,
+    *,
+    settings: SocLLMSettings | None = None,
 ) -> SocAnalysisService:
     maintenance = (
         SocNormalizationMaintenanceService(
@@ -1869,11 +1966,21 @@ def _analysis_service_for_repository(
         else None
     )
     return SocAnalysisService(
+        runtime=DeterministicAnalysisRuntime(
+            analyzer=build_configured_analyzer(settings=settings),
+        ),
         repository=repository,
         summary_repository=repository,
         audit_repository=repository,
         review_queue_repository=repository,
         normalization_maintenance_monitor=maintenance,
+    )
+
+
+def _llm_settings_from_args(args: argparse.Namespace) -> SocLLMSettings:
+    return SocLLMSettings.from_env().with_overrides(
+        mode=getattr(args, "analyzer_mode", None),
+        model_name=getattr(args, "model_name", None),
     )
 
 

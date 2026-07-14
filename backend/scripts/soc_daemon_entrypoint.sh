@@ -37,6 +37,22 @@ run_soc() {
   PYTHONPATH="${PYTHONPATH:-.}" "$SOC_DAEMON_PYTHON" -m soc_agent.cli "$@"
 }
 
+case "$(printf '%s' "${SOC_ANALYZER_MODE:-stub}" | tr '[:upper:]' '[:lower:]')" in
+  llm)
+    if [ -n "${SOC_LLM_MODEL:-}" ]; then
+      run_soc llm status --analyzer-mode llm --model-name "$SOC_LLM_MODEL" >/dev/null
+    else
+      run_soc llm status --analyzer-mode llm >/dev/null
+    fi
+    ;;
+  stub)
+    ;;
+  *)
+    echo "error: SOC_ANALYZER_MODE must be stub or llm" >&2
+    exit 2
+    ;;
+esac
+
 case "$(printf '%s' "${SOC_DAEMON_UPGRADE_DB:-false}" | tr '[:upper:]' '[:lower:]')" in
   1|true|yes|on)
     run_soc db upgrade

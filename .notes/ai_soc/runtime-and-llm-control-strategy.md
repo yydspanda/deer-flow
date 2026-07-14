@@ -58,8 +58,9 @@ flowchart TD
     G --> H["Decision<br/>生成 verdict、confidence、needs_review"]
 ```
 
-当前默认的 `analyze_stub` 是 deterministic stub，不调真实模型。
-真实 `JsonLLMAnalyzer` 已预留，但必须显式开启，并且模型输出必须经过：
+当前默认的 `analyze_stub` 是 deterministic stub，不调真实模型，便于离线回归和无外部依赖运行。
+真实 `JsonLLMAnalyzer` 已通过 DeerFlow `create_chat_model()` 接入模型注册表；使用
+`SOC_ANALYZER_MODE=llm` / `SOC_LLM_MODEL` 或对应 CLI 参数显式开启。模型输出仍必须经过：
 
 - JSON parse；
 - bad JSON repair；
@@ -67,7 +68,8 @@ flowchart TD
 - domain validation；
 - audit metadata 记录。
 
-这意味着我们可以先把系统工程能力跑稳，再逐步打开真实 LLM。
+这意味着同一条 Runtime 管线可以在 stub、replay 和真实 LLM 之间切换，而主控制流、校验、审计和
+人工复核边界保持不变。真实模型当前仍是 opt-in，不代表尚未接入。
 
 ### 2.2 Lead Agent 对话会使用大模型，但只拿受限上下文
 

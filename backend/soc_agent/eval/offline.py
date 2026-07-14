@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from soc_agent.contracts import AnalysisRun, AnalysisRunStatus, PipelineStepStatus, Verdict
 from soc_agent.core import DeterministicAnalysisRuntime, SocAnalysisService
-from soc_agent.llm import JsonLLMAnalyzer, LLMChatResponse
+from soc_agent.llm import JsonLLMAnalyzer, LLMChatClient, LLMChatResponse
 
 
 class OfflineEvalResponse(BaseModel):
@@ -90,9 +90,10 @@ def run_offline_eval(
     samples: Sequence[tuple[str, Mapping[str, Any]]],
     *,
     responses: Mapping[str, OfflineEvalResponse] | None = None,
+    client: LLMChatClient | None = None,
     model_name: str = "replay-llm",
 ) -> OfflineEvalReport:
-    """Run each sample through stub and replayable LLM analyzer, then diff."""
+    """Run each sample through stub and replayable or live LLM analyzer."""
 
     results: list[OfflineEvalSampleResult] = []
     response_by_sample = responses or {}
@@ -100,8 +101,14 @@ def run_offline_eval(
     for path, payload in samples:
         sample_id = _sample_id(path)
         stub_run = SocAnalysisService().analyze(payload)
-        response = response_by_sample.get(sample_id) or _response_from_stub(sample_id, stub_run)
-        llm_analyzer = JsonLLMAnalyzer(client=_StaticLLMChatClient(response), model_name=model_name)
+        response = response_by_sample.get(sample_id)
+        if response is not None:
+            llm_client: LLMChatClient = _StaticLLMChatClient(response)
+        elif client is not None:
+            llm_client = client
+        else:
+            llm_client = _StaticLLMChatClient(_response_from_stub(sample_id, stub_run))
+        llm_analyzer = JsonLLMAnalyzer(client=llm_client, model_name=model_name)
         llm_run = SocAnalysisService(runtime=DeterministicAnalysisRuntime(analyzer=llm_analyzer)).analyze(payload)
         results.append(_sample_result(sample_id=sample_id, path=path, stub_run=stub_run, llm_run=llm_run))
 

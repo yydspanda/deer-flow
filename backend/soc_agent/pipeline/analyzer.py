@@ -24,6 +24,8 @@ class StubLLMAnalyzer:
     """Deterministic analyzer used when the LLM feature path is disabled."""
 
     step_name = "analyze_stub"
+    model_name = STUB_ANALYZER_MODEL_NAME
+    prompt_version = STUB_ANALYZER_PROMPT_VERSION
 
     def analyze(self, request: LLMAnalysisRequest) -> AnalysisNodeOutput:
         return AnalysisNodeOutput(

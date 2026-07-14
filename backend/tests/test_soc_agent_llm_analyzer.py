@@ -119,3 +119,21 @@ def test_default_runtime_still_uses_stub_analyzer() -> None:
     ]
     analyze_step = next(step for step in run.steps if step.step_name == "analyze_stub")
     assert analyze_step.metadata["analyzer"] == "stub"
+
+
+def test_live_model_failure_keeps_requested_model_in_failed_trace() -> None:
+    class FailingClient:
+        def complete(self, messages, *, model_name):
+            raise TimeoutError("provider timeout")
+
+    analyzer = JsonLLMAnalyzer(client=FailingClient(), model_name="deepseek-v4-pro")
+    run = SocAnalysisService(runtime=DeterministicAnalysisRuntime(analyzer=analyzer)).analyze(_sample("malicious_ioc.json"))
+
+    assert run.status == AnalysisRunStatus.FAILED
+    assert run.model_name == "deepseek-v4-pro"
+    assert run.prompt_version == ANALYSIS_PROMPT_VERSION
+    step = next(item for item in run.steps if item.step_name == "analyze_llm")
+    assert step.status.value == "failed"
+    assert step.metadata["model_name"] == "deepseek-v4-pro"
+    assert step.metadata["prompt_version"] == ANALYSIS_PROMPT_VERSION
+    assert step.error == "provider timeout"

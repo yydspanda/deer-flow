@@ -19,6 +19,10 @@ data:
   DEER_FLOW_PROJECT_ROOT: /app
   DEER_FLOW_HOME: /app/backend/.deer-flow
   SOC_KAFKA_ENABLED: "true"
+  SOC_ANALYZER_MODE: llm
+  SOC_LLM_MODEL: deepseek-v4-pro
+  SOC_LLM_THINKING_ENABLED: "false"
+  SOC_LLM_ATTACH_TRACING: "true"
   SOC_KAFKA_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092
   SOC_KAFKA_ALERT_TOPICS: soc.alerts.raw.v1
   SOC_KAFKA_APPROVAL_REQUEST_TOPICS: soc.approvals.requests.v1
@@ -51,6 +55,7 @@ type: Opaque
 stringData:
   SOC_DATABASE_URL: postgresql+psycopg://soc_agent:REPLACE_ME@postgres:5432/soc_agent
   SOC_KAFKA_PASSWORD: REPLACE_ME
+  DEEPSEEK_API_KEY: REPLACE_ME
 ---
 apiVersion: apps/v1
 kind: Deployment

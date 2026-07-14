@@ -6,6 +6,7 @@ from pathlib import Path
 from soc_agent.cli import main
 from soc_agent.contracts import AnalysisRunStatus, Verdict
 from soc_agent.eval import OfflineEvalResponse, load_eval_responses_jsonl, run_offline_eval
+from soc_agent.llm import LLMChatResponse
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
 
@@ -95,6 +96,32 @@ def test_offline_eval_records_parse_failure_without_crashing_batch() -> None:
     assert result.llm_status == AnalysisRunStatus.FAILED
     assert result.parse_success is False
     assert result.error is not None
+
+
+def test_offline_eval_can_call_live_client() -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, messages, *, model_name):
+            self.calls += 1
+            assert messages[0]["role"] == "system"
+            assert model_name == "deepseek-v4-pro"
+            return LLMChatResponse(
+                content=_analysis_json(verdict="true_positive"),
+                model_name=model_name,
+            )
+
+    client = Client()
+    report = run_offline_eval(
+        [(str(SAMPLES / "malicious_ioc.json"), _sample("malicious_ioc.json"))],
+        client=client,
+        model_name="deepseek-v4-pro",
+    )
+
+    assert client.calls == 1
+    assert report.llm_success_count == 1
+    assert report.results[0].model_name == "deepseek-v4-pro"
 
 
 def test_load_eval_responses_jsonl_accepts_object_content(tmp_path: Path) -> None:

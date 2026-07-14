@@ -22,10 +22,12 @@ from soc_agent.core import SocAnalysisService, SocNormalizationMaintenanceServic
 from soc_agent.core.runtime import build_analysis_request_for_payload
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 from soc_agent.eval import calibrate_confidence
+from soc_agent.llm import LLMChatResponse
 from soc_agent.normalizers import (
     build_normalization_suggestion_prompt,
     build_normalization_suggestion_report,
     normalize_alert_payload,
+    run_live_normalization_suggestion,
 )
 
 
@@ -252,6 +254,41 @@ def test_offline_suggestion_rejects_unobserved_paths_and_never_auto_applies() ->
     assert report.auto_apply_allowed is False
     assert any(item.status.value == "candidate" for item in report.suggestions)
     assert any(item.status.value == "rejected" for item in report.suggestions)
+
+
+def test_live_suggestion_uses_model_but_keeps_auto_apply_disabled() -> None:
+    run = SocAnalysisService().analyze(_payload())
+    prompt = build_normalization_suggestion_prompt(run)
+    observed_path = prompt.observed_source_paths[0]
+
+    class Client:
+        def complete(self, messages, *, model_name):
+            assert messages[0]["role"] == "system"
+            assert model_name == "deepseek-v4-pro"
+            return LLMChatResponse(
+                content={
+                    "suggestions": [
+                        {
+                            "target_path": "entities.network.source_ip",
+                            "source_paths": [observed_path],
+                            "confidence": 0.61,
+                            "rationale": "Observed path is a candidate source for analyst review.",
+                        }
+                    ]
+                },
+                model_name="deepseek-v4-pro",
+            )
+
+    report = run_live_normalization_suggestion(
+        run,
+        client=Client(),
+        model_name="deepseek-v4-pro",
+    )
+
+    assert report.generated_by == "llm"
+    assert report.model_name == "deepseek-v4-pro"
+    assert report.auto_apply_allowed is False
+    assert report.suggestions[0].status.value == "candidate"
 
 
 def test_confidence_calibration_outputs_review_only_profile() -> None:

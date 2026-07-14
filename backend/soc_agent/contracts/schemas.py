@@ -1462,7 +1462,7 @@ class ExtractedEntities(BaseModel):
 
 
 class LLMAnalysisRequest(BaseModel):
-    """Bounded input contract for stub or future LLM analysis nodes."""
+    """Bounded input contract for deterministic or configured LLM nodes."""
 
     schema_version: str = "soc.llm_analysis_request.v1"
     alert_id: str
@@ -1706,6 +1706,9 @@ class NormalizationSuggestionReport(BaseModel):
     source_report_hash: str
     suggestions: list[NormalizationMappingSuggestion] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    duration_ms: int | None = Field(default=None, ge=0)
+    usage: dict[str, Any] = Field(default_factory=dict)
+    response_metadata: dict[str, Any] = Field(default_factory=dict)
     auto_apply_allowed: bool = False
 
 

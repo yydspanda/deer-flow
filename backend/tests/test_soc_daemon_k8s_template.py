@@ -18,6 +18,8 @@ def test_soc_daemon_k8s_template_is_opt_in_and_uses_stable_entrypoints() -> None
     assert "backend/scripts/soc_daemon_healthcheck.sh" in manifest
     assert "SOC_DAEMON_METRIC_JSONL: stderr" in manifest
     assert "SOC_KAFKA_SASL_PASSWORD_ENV: SOC_KAFKA_PASSWORD" in manifest
+    assert "SOC_ANALYZER_MODE: llm" in manifest
+    assert "SOC_LLM_MODEL: deepseek-v4-pro" in manifest
     assert "soc-daemon.yaml" not in docker_script
 
 
@@ -30,6 +32,7 @@ def test_soc_daemon_k8s_template_separates_config_from_secrets() -> None:
     assert "stringData:" in manifest
     assert "SOC_DATABASE_URL:" in manifest
     assert "SOC_KAFKA_PASSWORD:" in manifest
+    assert "DEEPSEEK_API_KEY:" in manifest
     assert "resources:" in manifest
     assert "requests:" in manifest
     assert "limits:" in manifest

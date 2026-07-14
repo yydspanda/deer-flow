@@ -2,7 +2,7 @@
 
 Status: Active review baseline
 
-Last updated: 2026-07-08
+Last updated: 2026-07-14
 
 Primary audience: product review, architecture review, engineering review, security review
 
@@ -262,7 +262,7 @@ flowchart LR
     B --> S["summary"]
     S --> C["correlation"]
     C --> D["domain_triage"]
-    D --> L["llm_analysis<br/>behind flag / schema checked"]
+    D --> L["llm_analysis<br/>DeerFlow model / explicit mode / schema checked"]
     L --> V["validate"]
     V --> R["decision"]
     R --> Q["review_queue"]
@@ -273,6 +273,11 @@ Runtime rules:
 
 - Every node has typed input/output.
 - LLM output must pass parser and schema validation.
+- The live analyzer reuses DeerFlow `create_chat_model()` and configured model names. Entry surfaces
+  select it explicitly with `--analyzer-mode llm` or `SOC_ANALYZER_MODE=llm`; direct service tests
+  remain deterministic by default.
+- Model calls record actual model name, prompt/parser versions, duration, bounded token usage and
+  safe provider metadata. They never persist API keys, request headers, full prompts or raw responses.
 - Bad JSON repair is allowed only as a logged parser step.
 - Replay must be possible from stored run payload and deterministic settings.
 - Runtime never calls production side-effect tools directly.
@@ -339,9 +344,10 @@ Schema drift workflow / 结构漂移流程：
 5. Operators use `soc normalize issues`, Review TUI `/normalization` and `/norm-update`, or the Web
    workbench at `/workspace/soc/normalization`. Gateway metrics expose bounded type/severity/source
    counts; Kafka JSONL metrics include per-message issue count/IDs/warnings.
-6. `soc normalize suggest` is an offline-only assistant. It emits a value-free path prompt, validates
-   replayed LLM suggestions against observed source paths and a canonical target whitelist, keeps
-   invalid proposals as rejected, and always returns `auto_apply_allowed=false`.
+6. `soc normalize suggest` is an offline-only assistant. It emits a value-free path prompt and can
+   either replay a recorded response or call a DeerFlow-configured model with `--live-llm`. Both paths
+   validate suggestions against observed source paths and a canonical target whitelist, keep invalid
+   proposals as rejected, and always return `auto_apply_allowed=false`.
 7. A new fingerprint only means the structure changed. It is maintenance evidence, never a verdict,
    memory fact, suppression decision, or automatic parser patch.
 
@@ -776,6 +782,15 @@ soc chat tui --queue-id <queue-id> --lead-agent
 
 # Process daemon message locally
 soc daemon process --message-json '{"kind":"alert",...}'
+
+# Inspect model resolution without exposing credentials
+soc llm status --analyzer-mode llm --model-name deepseek-v4-pro --pretty
+
+# Run one alert through the real bounded model node
+soc analyze alert.json --analyzer-mode llm --model-name deepseek-v4-pro --pretty
+
+# Compare stub and live model over an offline sample set
+soc eval offline samples/ --live-llm --model-name deepseek-v4-pro --pretty
 ```
 
 Acceptance criteria for the first complete demo:
@@ -800,6 +815,7 @@ Acceptance criteria for the first complete demo:
 | Use DeerFlow lead_agent for SOC conversational agent | Reuses existing agent/profile/skill/MCP infrastructure |
 | Keep SOC code under `backend/soc_agent/` | Avoid invasive upstream fork changes |
 | Keep entry surfaces thin | Prevent CLI/Web/TUI/Kafka logic divergence |
+| Reuse DeerFlow `create_chat_model` for Runtime LLM | One provider/config/tracing implementation; no SOC-specific SDK client |
 | Use canonical `AlertInput` | Vendor-neutral core |
 | Use adapters for PingAn and future vendors | Extensible source integration |
 | Use read-only investigation evidence first | Makes tools useful before risky automation |

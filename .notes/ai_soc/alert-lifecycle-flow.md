@@ -119,7 +119,7 @@ flowchart TD
 | `fact_reconstruct` | Rebuild and adjudicate facts | 把厂商字段声明转换为 `RoleClaim`，结合场景假设裁决 source/destination/attacker/victim/impacted asset；冲突时给暂定结论、证据缺口和核查清单，但不确定 response target | `FactReconstructionResult v2`, `RoleResolution`, `ConflictReport` |
 | `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型，而是构造受限分析上下文 | `LLMAnalysisRequest` |
 | `skill_context` | Resolve SOC skills | 根据 source type、场景、实体、冲突选择 SOC skills；当前产物是名称/原因/摘要/hash 的选择清单，不是完整 `SKILL.md` 正文 | `SocSkillContext` |
-| `analyze_stub / LLM analyzer` | Run bounded reasoning | 当前默认 deterministic stub；真实 LLM behind flag 且必须输出 JSON | `AnalysisNodeOutput` |
+| `analyze_stub / LLM analyzer` | Run bounded reasoning | 默认 deterministic stub；显式选择后通过 DeerFlow `create_chat_model` 调用真实模型，输出仍必须经过 JSON/schema/domain validation | `AnalysisNodeOutput` |
 | `schema_validate` | Validate model result | 严格校验 JSON schema、字段类型、domain rule，坏 JSON 需要 repair 后再校验 | `AnalysisResult` |
 | `decide` | Create operational decision | 生成 verdict、confidence、needs_review、suggested_action；不允许自动高风险处置 | `Decision` |
 | `normalization_monitor` | Detect parser/mapping maintenance work | 在业务结果已落库后检查基线、新结构、解析降级、关键字段缺口和 evidence truncation；失败只写 warning | `NormalizationMonitoringResult`, `NormalizationMaintenanceIssue` |

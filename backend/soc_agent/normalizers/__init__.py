@@ -9,11 +9,13 @@ from soc_agent.normalizers.mapping import load_mapping_config, normalize_with_ma
 from soc_agent.normalizers.suggestions import (
     build_normalization_suggestion_prompt,
     build_normalization_suggestion_report,
+    run_live_normalization_suggestion,
 )
 
 __all__ = [
     "build_normalization_suggestion_prompt",
     "build_normalization_suggestion_report",
+    "run_live_normalization_suggestion",
     "load_mapping_config",
     "normalize_alert_payload",
     "normalize_with_mapping",

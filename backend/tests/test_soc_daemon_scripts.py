@@ -43,6 +43,20 @@ def test_soc_daemon_entrypoint_supports_bounded_local_validation() -> None:
     assert payload["loop_count"] == 1
 
 
+def test_soc_daemon_entrypoint_rejects_unknown_analyzer_mode() -> None:
+    result = _run_script(
+        ENTRYPOINT,
+        {
+            "SOC_DAEMON_ALLOW_DISABLED": "true",
+            "SOC_KAFKA_ENABLED": "false",
+            "SOC_ANALYZER_MODE": "automatic",
+        },
+    )
+
+    assert result.returncode == 2
+    assert "SOC_ANALYZER_MODE must be stub or llm" in result.stderr
+
+
 def test_soc_daemon_entrypoint_can_emit_metric_jsonl_to_stderr() -> None:
     result = _run_script(
         ENTRYPOINT,

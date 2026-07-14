@@ -1,4 +1,4 @@
-"""Build bounded analysis context for stub or future LLM nodes."""
+"""Build bounded analysis context for deterministic or configured LLM nodes."""
 
 from __future__ import annotations
 

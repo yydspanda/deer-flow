@@ -1,6 +1,6 @@
 # SOC Agent Mock 与真实接入台账
 
-> Updated: 2026-07-07
+> Updated: 2026-07-14
 >
 > 目的：集中记录当前 SOC Agent 里哪些能力只是 mock、fixture、in-memory 或本地 smoke，用来验证工程链路；后续接入真实 PingAn / 客户环境时，必须按本台账替换、复测和重新验收。
 
@@ -26,8 +26,20 @@
 | PingAn eval fixtures | 脱敏/伪造 APT、EDR、HIDS 回归样本 | `backend/samples/eval/pingan/`、`backend/samples/alerts/pingan_legacy_hids.json` | 验证 normalizer、read-only action、domain triage、main orchestrator demo | 补充经批准的脱敏真实样本、schema drift 样本、反例和边界样本 |
 | External Disposition Zeus fixture | Zeus 状态/理由 mock payload | `backend/samples/external_disposition/zeus_status_update.json` | 验证 field-path mapper、status mapping、idempotency、review/correction | 替换为真实 webhook/Kafka/poll/manual import adapter；补认证、签名、租户、重放和脱敏 |
 | Kafka local smoke | 本地 Redpanda/Kafka topic、sample payload、dead-letter smoke | `backend/scripts/soc_kafka_smoke.py`、`backend/soc_agent/daemon/` | 验证 consumer runner、mapper、commit、dead-letter、status/readiness | 替换为真实 topic、ACL、consumer group、DLQ、监控、容量与失败演练 |
-| LLM analyzer | 默认 deterministic stub；真实 LLM behind flag | `backend/soc_agent/llm/`、`backend/soc_agent/core/runtime.py` | 保证 Phase 1/2 默认可重复、可回放、低成本 | 真实 LLM 只能在显式配置和 offline eval 通过后启用，输出仍需 JSON/schema/domain validation |
+| 高风险响应动作 | 当前只有 proposal、policy、approval、一次性 grant、dry-run/execute preflight；`external_side_effect=not_executed` | `backend/soc_agent/actions/adapters.py`、`backend/soc_agent/core/service.py` | 验证封禁 IP、隔离主机等动作在执行前的权限、审批、幂等和审计边界 | 接入真实 EDR/F5/SOAR/防火墙 adapter；必须补回滚/补偿、执行结果核验和失败重试，默认仍需人工审批 |
+| LLM analyzer | **真实路径已完成**：默认 deterministic stub；显式模式复用 DeerFlow `create_chat_model` | `backend/soc_agent/llm/`、`backend/soc_agent/core/runtime.py` | stub 保证回归/回放；`SOC_ANALYZER_MODE=llm` 或 CLI flag 调用已注册模型 | 持续补标注集、校准、限流和成本预算；真实输出仍需 JSON/schema/domain validation |
+| Normalization suggestion | **真实路径已完成**：deterministic/replay/live LLM 三种离线模式 | `backend/soc_agent/normalizers/suggestions.py` | 发现 mapping 候选并严格校验 observed source path / canonical whitelist | 所有建议仍需工程师复核，`auto_apply_allowed=false` |
 | SQL/in-memory repositories in tests | in-memory repository 或 SQLite 单元测试 | `backend/soc_agent/*/repository.py`、`backend/tests/` | 单元测试和无 DB 局部 wiring | 生产/准生产必须走 PostgreSQL migration + SQLAlchemy repository；本地开发可用 SOC SQLite 测试库 |
+
+### 2.1 容易被误判为 Mock、但已经是真实实现的部分
+
+| 能力 | 当前性质 | 说明 |
+|---|---|---|
+| Normalizer / message parser / entity extraction / fact reconstruction | deterministic production code | 它们是 Runtime 的确定性处理节点，不调用模型不等于 mock；格式漂移通过 monitoring/maintenance issue 暴露 |
+| `StubLLMAnalyzer` | 显式 fallback/test mode | 用于回归、replay 基线和无网络运行；`llm` 模式已经能调用真实 DeerFlow 模型，两者共享同一 Runtime contract |
+| `NullKafkaConsumerPort` | disabled-mode adapter | `SOC_KAFKA_ENABLED=false` 时明确不连接 broker；启用后使用 `ConfluentKafkaConsumerPort`，不是用 null adapter 冒充消费成功 |
+| SOC SQLite | 本地真实持久化 | 本地开发可以真实保存 SOC 数据；生产/准生产目标仍是 PostgreSQL，不应把 SQLite 测试结果当生产验收 |
+| SOC Lead Agent | DeerFlow 真实 agent path | 复用 DeerFlow `lead_agent`、profile、skills 和 MCP；mock 的是部分外部查询结果，不是 Lead Agent 运行时本身 |
 
 ## 3. PA-12 的真实完成标准
 
@@ -39,6 +51,21 @@
 4. 记录 latency、failure rate、timeout、payload size、result size、字段裁剪、敏感字段、空结果、权限失败和限流行为。
 5. 真实结果只作为 `InvestigationEvidence` 进入 ReviewQueue / Lead Agent context；不能直接改 verdict、memory 或处置状态。
 6. 对每个真实接入补至少一条脱敏回归样本，覆盖成功、查不到、权限失败或超时中的至少两类情况。
+
+### 3.1 当前不能由 LLM 替代的外部事实能力
+
+下列能力仍是 credential-gated，不属于本轮 LLM 接入遗漏：
+
+- `asset.lookup` / `asset.locate`：需要 CMDB、Zeus 或资产服务 endpoint。
+- `endpoint.process_tree.lookup`：需要真实 EDR 查询接口。
+- `host.event_context.lookup`：需要 HIDS/EDR/日志平台查询接口。
+- `threat_intel.ip_reputation.lookup`：需要企业或外部 TI provider。
+- `security_tag.lookup`：需要白名单、演练、变更、维护窗口等权威数据源。
+- External Disposition Zeus fixture：需要 webhook、Kafka 或 polling 接入参数。
+- 高风险响应动作：需要 EDR/F5/SOAR/防火墙 staging endpoint、审批策略和回滚/补偿能力。
+
+大模型可以建议“应查询什么”，但不能虚构这些系统的查询结果。真实 endpoint/凭证到位后，只替换
+adapter/provider/config，并继续将结果作为 `InvestigationEvidence` 回流。
 
 ## 4. External Disposition 不是 MCP
 
@@ -65,6 +92,6 @@
 
 ## 6. 当前下一步
 
-- External Disposition 已完成 contract、mapper、record、audit、high-trust review/correction 和 `SocMemoryCandidate(status=pending_review)`；下一刀建议接 PG/API/ReviewQueue visibility。
+- SOC Runtime 和 normalization suggestion 的真实 DeerFlow/DeepSeek 模型路径已完成并通过单样本 smoke；下一步是扩大人工标注 eval、校准 confidence、制定 token/并发预算。
 - `PA-12` 继续等待真实 PingAn dev/staging endpoint、凭证和允许测试的数据源。
-- 在真实接口未就绪前，不继续堆更多 mock；优先补 Memory candidate、Web/TUI 可见化、correlation/main orchestrator 整合和 demo/eval 链路。
+- 在真实接口未就绪前，不继续堆更多外部查询 mock，也不使用 LLM 伪造外部事实。
