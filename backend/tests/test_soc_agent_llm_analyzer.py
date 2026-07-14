@@ -48,7 +48,7 @@ def _analysis_json(*, trailing_comma: bool = False) -> str:
       "confidence": 0.91,
       "summary": "LLM 判断该告警包含高危外联线索。",
       "evidence": [
-        {{"source": "detection", "description": "规则命中高危行为", "value": "RISK-001"}}
+        {{"source": "detection", "description": "规则命中高危行为", "value": "EDR-IOC-001"}}
       ],
       "reason": "存在可解释的高危行为证据，需要升级复核。",
       "recommended_action": "escalate_to_analyst"{suffix}
@@ -92,6 +92,9 @@ def test_json_llm_analyzer_runs_prompt_client_parser_and_runtime_trace() -> None
     assert run.decision.confidence_is_calibrated is False
     assert run.decision.calibrated_probability is None
     assert run.decision.review_reasons == [DecisionReviewReason.CONFIDENCE_NOT_CALIBRATED]
+    assert run.analysis_evidence_grounding is not None
+    assert run.analysis_evidence_grounding.grounded_count == 1
+    assert run.analysis_evidence_grounding.ungrounded_count == 0
     assert [call_model for _, call_model in client.calls] == ["soc-model"]
     assert client.calls[0][0][0]["role"] == "system"
     assert client.calls[0][0][1]["role"] == "user"
@@ -107,7 +110,7 @@ def test_json_llm_analyzer_runs_prompt_client_parser_and_runtime_trace() -> None
     assert analyze_step.metadata["selected_skills"]
     assert "candidate_hash" in analyze_step.metadata
     decide_step = next(step for step in run.steps if step.step_name == "decide")
-    assert decide_step.metadata["policy_version"] == "soc.decision_policy.v1"
+    assert decide_step.metadata["policy_version"] == "soc.decision_policy.v2"
     assert decide_step.metadata["confidence_source"] == "llm_self_report"
     assert decide_step.metadata["confidence_is_calibrated"] is False
     assert decide_step.metadata["review_reasons"] == ["confidence_not_calibrated"]
@@ -123,12 +126,26 @@ def test_default_runtime_still_uses_stub_analyzer() -> None:
         "entity_extract",
         "fact_reconstruct",
         "build_analysis_input",
+        "skill_context",
         "analyze_stub",
         "schema_validate",
+        "evidence_grounding",
         "decide",
     ]
     analyze_step = next(step for step in run.steps if step.step_name == "analyze_stub")
     assert analyze_step.metadata["analyzer"] == "stub"
+
+
+def test_llm_evidence_not_present_in_bounded_context_forces_review() -> None:
+    client = RecordingChatClient(_analysis_json().replace("EDR-IOC-001", "HALLUCINATED-RULE-999"))
+    analyzer = JsonLLMAnalyzer(client=client, model_name="soc-model")
+
+    run = SocAnalysisService(runtime=DeterministicAnalysisRuntime(analyzer=analyzer)).analyze(_sample("malicious_ioc.json"))
+
+    assert run.analysis_evidence_grounding is not None
+    assert run.analysis_evidence_grounding.ungrounded_count == 1
+    assert run.decision is not None
+    assert DecisionReviewReason.UNGROUNDED_ANALYSIS_EVIDENCE in run.decision.review_reasons
 
 
 def test_live_model_failure_keeps_requested_model_in_failed_trace() -> None:
@@ -146,4 +163,7 @@ def test_live_model_failure_keeps_requested_model_in_failed_trace() -> None:
     assert step.status.value == "failed"
     assert step.metadata["model_name"] == "deepseek-v4-pro"
     assert step.metadata["prompt_version"] == ANALYSIS_PROMPT_VERSION
-    assert step.error == "provider timeout"
+    assert step.error == "TimeoutError while invoking configured SOC analyzer"
+    assert run.failure is not None
+    assert run.failure.kind.value == "analyzer_timeout"
+    assert run.failure.retryable is True

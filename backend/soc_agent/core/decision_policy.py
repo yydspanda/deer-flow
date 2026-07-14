@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from soc_agent.contracts import (
+    AnalysisEvidenceGroundingReport,
     AnalysisResult,
     Decision,
     DecisionConfidenceSource,
@@ -14,7 +15,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.core.validator import validate_decision
 
-SOC_DECISION_POLICY_VERSION = "soc.decision_policy.v1"
+SOC_DECISION_POLICY_VERSION = "soc.decision_policy.v2"
 DEFAULT_REVIEW_BELOW = 0.75
 
 
@@ -36,12 +37,14 @@ class SocDecisionPolicy:
         analysis: AnalysisResult,
         *,
         request: LLMAnalysisRequest,
+        grounding: AnalysisEvidenceGroundingReport,
         analyzer_step_name: str,
     ) -> Decision:
         confidence_source = _confidence_source(analyzer_step_name)
         review_reasons = _review_reasons(
             analysis,
             request=request,
+            grounding=grounding,
             confidence_source=confidence_source,
             review_below=self._review_below,
         )
@@ -52,7 +55,7 @@ class SocDecisionPolicy:
             confidence_is_calibrated=False,
             calibrated_probability=None,
             calibration_profile_version=None,
-            evidence_state=_evidence_state(request),
+            evidence_state=_evidence_state(request, grounding=grounding),
             suggested_action=analysis.recommended_action,
             needs_review=bool(review_reasons),
             review_reasons=review_reasons,
@@ -75,6 +78,7 @@ def _review_reasons(
     analysis: AnalysisResult,
     *,
     request: LLMAnalysisRequest,
+    grounding: AnalysisEvidenceGroundingReport,
     confidence_source: DecisionConfidenceSource,
     review_below: float,
 ) -> list[DecisionReviewReason]:
@@ -96,6 +100,8 @@ def _review_reasons(
         reasons.append(DecisionReviewReason.HIGH_VALUE_EVIDENCE_GAP)
     if request.evidence_coverage.llm_truncated_evidence_paths:
         reasons.append(DecisionReviewReason.TRUNCATED_ANALYSIS_EVIDENCE)
+    if grounding.ungrounded_count:
+        reasons.append(DecisionReviewReason.UNGROUNDED_ANALYSIS_EVIDENCE)
     if analysis.confidence < review_below:
         reasons.append(DecisionReviewReason.RAW_CONFIDENCE_BELOW_THRESHOLD)
     reasons.append(DecisionReviewReason.CONFIDENCE_NOT_CALIBRATED)
@@ -104,12 +110,22 @@ def _review_reasons(
     return list(dict.fromkeys(reasons))
 
 
-def _evidence_state(request: LLMAnalysisRequest) -> DecisionEvidenceState:
+def _evidence_state(
+    request: LLMAnalysisRequest,
+    *,
+    grounding: AnalysisEvidenceGroundingReport,
+) -> DecisionEvidenceState:
     if request.fact_reconstruction.conflict_reports:
         return DecisionEvidenceState.CONFLICTED
 
     schema_statuses = {item.status for item in request.evidence_coverage.message_schemas}
-    if MessageSchemaStatus.DEGRADED in schema_statuses or MessageSchemaStatus.UNSUPPORTED in schema_statuses or request.evidence_coverage.high_value_gaps or request.evidence_coverage.llm_truncated_evidence_paths:
+    if (
+        MessageSchemaStatus.DEGRADED in schema_statuses
+        or MessageSchemaStatus.UNSUPPORTED in schema_statuses
+        or request.evidence_coverage.high_value_gaps
+        or request.evidence_coverage.llm_truncated_evidence_paths
+        or grounding.ungrounded_count
+    ):
         return DecisionEvidenceState.DEGRADED
 
     if request.warnings or request.evidence_coverage.omissions:

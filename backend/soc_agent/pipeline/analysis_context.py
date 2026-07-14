@@ -18,6 +18,7 @@ from soc_agent.contracts import (
     FactReconstructionResult,
     LLMAnalysisRequest,
     ParsedRawMessageEvidence,
+    SocSkillContext,
 )
 from soc_agent.pipeline.evidence_coverage import build_evidence_coverage_report
 from soc_agent.skills import SocSkillResolver, build_soc_skill_context
@@ -33,6 +34,9 @@ _SENSITIVE_JSON_VALUE_RE = re.compile(
     r'"(?:\\.|[^"\\])*(?:"|$)',
     re.IGNORECASE,
 )
+_PROJECTION_MAX_LIST_ITEMS = 100
+_PROJECTION_MAX_STRING_CHARS = 4000
+_PROJECTION_MAX_DEPTH = 16
 
 
 def build_llm_analysis_request(
@@ -55,7 +59,7 @@ def build_llm_analysis_request(
         *entities.warnings,
         *evidence_coverage.warnings,
     ]
-    request = LLMAnalysisRequest(
+    return LLMAnalysisRequest(
         alert_id=alert.alert_id,
         tenant_id=alert.tenant_id,
         source=alert.source,
@@ -72,9 +76,109 @@ def build_llm_analysis_request(
         conflict_types=conflict_types,
         warnings=_dedupe(warnings),
     )
+
+
+def resolve_skill_context_for_request(request: LLMAnalysisRequest) -> SocSkillContext:
+    """Resolve the compact skill context as an explicit Runtime step."""
+
     skill_resolution = SocSkillResolver().resolve_for_analysis_request(request)
-    request.skill_context = build_soc_skill_context(skill_resolution)
-    return request
+    return build_soc_skill_context(skill_resolution)
+
+
+def project_analysis_context(request: LLMAnalysisRequest) -> dict[str, Any]:
+    """Return the exact bounded context shared by prompting and grounding."""
+
+    fact = request.fact_reconstruction
+    context = {
+        "schema_version": request.schema_version,
+        "alert_id": request.alert_id,
+        "source": request.source.model_dump(mode="json", exclude_none=True),
+        "detection": request.detection.model_dump(mode="json", exclude_none=True),
+        "classification": request.classification.model_dump(mode="json", exclude_none=True),
+        "canonical_entities": request.canonical_entities.model_dump(mode="json", exclude_none=True),
+        "extracted_entities": request.extracted_entities.model_dump(mode="json", exclude_none=True),
+        "evidence": {
+            "primary_evidence_path": request.primary_evidence_path,
+            "primary_evidence": request.primary_evidence.model_dump(mode="json", exclude_none=True) if request.primary_evidence is not None else None,
+            "supplementary_evidence": [item.model_dump(mode="json", exclude_none=True) for item in request.supplementary_evidence],
+            "selected_input_path": fact.selected_input_path,
+            "selected_input_available": fact.selected_input_available,
+            "evidence_policy": fact.evidence_policy.model_dump(mode="json", exclude_none=True) if fact.evidence_policy is not None else None,
+            "field_trusts": [item.model_dump(mode="json", exclude_none=True) for item in fact.field_trusts],
+            "coverage": _analysis_coverage_context(request),
+        },
+        "fact_reconstruction": {
+            "canonical_field_provenance": [item.model_dump(mode="json", exclude_none=True) for item in fact.canonical_field_provenance],
+            "role_claims": [item.model_dump(mode="json", exclude_none=True) for item in fact.role_claims],
+            "scenario_hypotheses": [
+                {
+                    "scenario_type": item.scenario_type,
+                    "status": item.status,
+                    "confidence": item.confidence,
+                    "rationale": item.rationale,
+                    "evidence_ref_count": len(item.evidence_paths),
+                }
+                for item in fact.scenario_hypotheses
+            ],
+            "role_resolutions": [item.model_dump(mode="json", exclude_none=True) for item in fact.role_resolutions],
+            "conflict_count": request.conflict_count,
+            "conflict_types": request.conflict_types,
+            "conflict_reports": [item.model_dump(mode="json", exclude_none=True) for item in fact.conflict_reports],
+            "warnings": request.warnings,
+        },
+        "skill_context": request.skill_context.model_dump(mode="json", exclude_none=True),
+    }
+    bounded = _bound_projection(context)
+    if not isinstance(bounded, dict):
+        raise TypeError("analysis context projection must remain an object")
+    return bounded
+
+
+def _analysis_coverage_context(request: LLMAnalysisRequest) -> dict[str, Any]:
+    coverage = request.evidence_coverage
+    omission_reason_counts: dict[str, int] = {}
+    for omission in coverage.omissions:
+        omission_reason_counts[omission.reason] = omission_reason_counts.get(omission.reason, 0) + 1
+    return {
+        "message_schemas": [
+            {
+                "parser_name": item.parser_name,
+                "parser_version": item.parser_version,
+                "schema_fingerprint": item.schema_fingerprint,
+                "status": item.status,
+                "field_count": item.field_count,
+                "warning_count": len(item.warnings),
+            }
+            for item in coverage.message_schemas
+        ],
+        "counts": coverage.counts,
+        "omission_reason_counts": omission_reason_counts,
+        "high_value_gaps": [
+            {
+                "expected_target": item.expected_target,
+                "reason": item.reason,
+            }
+            for item in coverage.high_value_gaps
+        ],
+        "truncated_evidence_count": len(coverage.llm_truncated_evidence_paths),
+    }
+
+
+def _bound_projection(value: Any, *, depth: int = 0) -> Any:
+    if depth >= _PROJECTION_MAX_DEPTH:
+        return "[OMITTED: maximum projection depth reached]"
+    if isinstance(value, str):
+        if len(value) <= _PROJECTION_MAX_STRING_CHARS:
+            return value
+        return value[:_PROJECTION_MAX_STRING_CHARS] + "...[TRUNCATED]"
+    if isinstance(value, Mapping):
+        return {str(key): _bound_projection(item, depth=depth + 1) for key, item in value.items()}
+    if isinstance(value, list):
+        bounded = [_bound_projection(item, depth=depth + 1) for item in value[:_PROJECTION_MAX_LIST_ITEMS]]
+        if len(value) > _PROJECTION_MAX_LIST_ITEMS:
+            bounded.append({"_omitted_items": len(value) - _PROJECTION_MAX_LIST_ITEMS})
+        return bounded
+    return value
 
 
 def _bounded_evidence(

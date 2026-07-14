@@ -1973,6 +1973,7 @@ def _analysis_service_for_repository(
         summary_repository=repository,
         audit_repository=repository,
         review_queue_repository=repository,
+        analysis_persistence=repository,
         normalization_maintenance_monitor=maintenance,
     )
 

@@ -187,7 +187,10 @@ The production SOC analysis node reuses `deerflow.models.create_chat_model()` th
 is explicit through `SOC_ANALYZER_MODE=stub|llm` and `SOC_LLM_MODEL`, with CLI overrides
 `--analyzer-mode` / `--model-name`. Live model output still passes the SOC JSON parser, Pydantic/domain
 validation and deterministic decision node. Only allowlisted response metadata and token usage enter
-the run trace.
+the run trace. Prompting and `AnalysisResult.evidence` grounding share the same bounded context
+projection; ungrounded analyzer claims force deterministic review. Model admission is process-local
+and independently bounded with `SOC_LLM_MAX_CONCURRENCY`, optional `SOC_LLM_REQUESTS_PER_MINUTE`,
+and `SOC_LLM_ADMISSION_TIMEOUT_SECONDS`.
 
 `soc_agent.core.SocDecisionPolicy` is the only Runtime boundary that converts validated
 `AnalysisResult` into an operational `Decision`. Analyzer confidence is currently an uncalibrated
@@ -197,6 +200,11 @@ profile is wired into this policy, stub and live-LLM decisions require human rev
 cannot erase conflicts, degraded/unsupported message schemas, high-value evidence gaps, truncation,
 or false-positive confirmation. Read-only mock or failed action evidence may remain visible for
 flow validation and audit, but cannot raise domain/scenario confidence or satisfy an evidence gap.
+
+Persisted analysis uses `AnalysisPersistence.save_analysis_bundle()` so run, summary, optional review
+item, and audit record commit atomically. `RuntimeFailure` owns sanitized failure kind/retryability:
+retryable failures remain replayable and do not immediately create analyst queue noise; non-retryable
+failures enter ReviewQueue. Kafka adapters must not commit retryable Runtime failures.
 
 Production normalization drift is handled by `core/normalization_maintenance.py`, not by the alert
 ReviewQueue. Explicitly approved baselines and deduplicated maintenance issues are persisted through

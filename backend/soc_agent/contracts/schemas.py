@@ -54,6 +54,31 @@ class DecisionReviewReason(StrEnum):
     HIGH_VALUE_EVIDENCE_GAP = "high_value_evidence_gap"
     TRUNCATED_ANALYSIS_EVIDENCE = "truncated_analysis_evidence"
     FACT_CONFLICT = "fact_conflict"
+    UNGROUNDED_ANALYSIS_EVIDENCE = "ungrounded_analysis_evidence"
+    ANALYSIS_FAILED = "analysis_failed"
+
+
+class AnalysisEvidenceGroundingStatus(StrEnum):
+    """Whether one analyzer evidence item can be traced to bounded input."""
+
+    GROUNDED = "grounded"
+    SOURCE_MISMATCH = "source_mismatch"
+    VALUE_NOT_FOUND = "value_not_found"
+    MISSING_VALUE = "missing_value"
+
+
+class RuntimeFailureKind(StrEnum):
+    """Stable failure categories used by review and ingestion adapters."""
+
+    INVALID_INPUT = "invalid_input"
+    INPUT_LIMIT_EXCEEDED = "input_limit_exceeded"
+    ANALYZER_CAPACITY = "analyzer_capacity"
+    ANALYZER_TIMEOUT = "analyzer_timeout"
+    ANALYZER_UNAVAILABLE = "analyzer_unavailable"
+    ANALYZER_OUTPUT_INVALID = "analyzer_output_invalid"
+    OUTPUT_VALIDATION_FAILED = "output_validation_failed"
+    DECISION_POLICY_FAILED = "decision_policy_failed"
+    INTERNAL_ERROR = "internal_error"
 
 
 class AnalysisRunStatus(StrEnum):
@@ -1207,9 +1232,48 @@ class AlertEntitySet(BaseModel):
 
 
 class EvidenceItem(BaseModel):
-    source: str
-    description: str
+    source: str = Field(min_length=1, max_length=256)
+    description: str = Field(min_length=1, max_length=2000)
     value: str | int | float | bool | None = None
+
+    @field_validator("value")
+    @classmethod
+    def bound_string_value(cls, value: str | int | float | bool | None) -> str | int | float | bool | None:
+        if isinstance(value, str) and len(value) > 4000:
+            raise ValueError("evidence string value exceeds 4000 characters")
+        return value
+
+
+class AnalysisEvidenceGroundingItem(BaseModel):
+    """Deterministic grounding result for one analyzer evidence item."""
+
+    evidence_index: int = Field(ge=0)
+    source: str = Field(min_length=1, max_length=256)
+    status: AnalysisEvidenceGroundingStatus
+    matched_context_paths: list[str] = Field(default_factory=list, max_length=10)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class AnalysisEvidenceGroundingReport(BaseModel):
+    """Audit report proving which analyzer claims came from bounded context."""
+
+    schema_version: str = "soc.analysis_evidence_grounding.v1"
+    total_count: int = Field(default=0, ge=0)
+    grounded_count: int = Field(default=0, ge=0)
+    ungrounded_count: int = Field(default=0, ge=0)
+    items: list[AnalysisEvidenceGroundingItem] = Field(default_factory=list, max_length=20)
+    warnings: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> AnalysisEvidenceGroundingReport:
+        if self.total_count != len(self.items):
+            raise ValueError("grounding total_count must equal item count")
+        if self.grounded_count + self.ungrounded_count != self.total_count:
+            raise ValueError("grounding counts must sum to total_count")
+        actual_grounded = sum(item.status is AnalysisEvidenceGroundingStatus.GROUNDED for item in self.items)
+        if actual_grounded != self.grounded_count:
+            raise ValueError("grounding grounded_count does not match item statuses")
+        return self
 
 
 class EvidenceInputPolicy(BaseModel):
@@ -1795,11 +1859,11 @@ class ConfidenceCalibrationReport(BaseModel):
 class AnalysisResult(BaseModel):
     verdict: Verdict
     confidence: float = Field(ge=0.0, le=1.0)
-    summary: str = Field(min_length=1)
-    evidence: list[EvidenceItem] = Field(default_factory=list)
-    reason: str = Field(min_length=1)
-    recommended_action: str = Field(min_length=1)
-    knowledge_candidates: list[str] = Field(default_factory=list)
+    summary: str = Field(min_length=1, max_length=4000)
+    evidence: list[EvidenceItem] = Field(default_factory=list, max_length=20)
+    reason: str = Field(min_length=1, max_length=8000)
+    recommended_action: str = Field(min_length=1, max_length=1000)
+    knowledge_candidates: list[str] = Field(default_factory=list, max_length=20)
 
     @field_validator("evidence")
     @classmethod
@@ -1807,6 +1871,15 @@ class AnalysisResult(BaseModel):
         if not evidence:
             raise ValueError("analysis result must include at least one evidence item")
         return evidence
+
+    @field_validator("knowledge_candidates")
+    @classmethod
+    def bound_knowledge_candidates(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("knowledge candidates must be non-empty strings")
+        if any(len(value) > 2000 for value in values):
+            raise ValueError("knowledge candidate exceeds 2000 characters")
+        return values
 
 
 class Decision(BaseModel):
@@ -1821,7 +1894,7 @@ class Decision(BaseModel):
     needs_review: bool
     review_reasons: list[DecisionReviewReason] = Field(default_factory=list)
     reason: str
-    policy_version: str = "soc.decision_policy.v1"
+    policy_version: str = "soc.decision_policy.v2"
     automation_allowed: Literal[False] = False
 
 
@@ -2038,11 +2111,22 @@ class AnalysisNodeOutput(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class RuntimeFailure(BaseModel):
+    """Sanitized failure state retained on a failed analysis run."""
+
+    schema_version: str = "soc.runtime_failure.v1"
+    step_name: str = Field(min_length=1, max_length=128)
+    kind: RuntimeFailureKind
+    retryable: bool = False
+    error_type: str = Field(min_length=1, max_length=256)
+    message: str = Field(min_length=1, max_length=1000)
+
+
 class AnalysisRun(BaseModel):
     run_id: str = Field(default_factory=lambda: f"RUN-{uuid4().hex[:12].upper()}")
     alert_id: str
     status: AnalysisRunStatus
-    pipeline_version: str = "phase1-runtime-v0"
+    pipeline_version: str = "soc-runtime-v1"
     model_name: str = "stub"
     prompt_version: str = "stub"
     input_payload: dict[str, Any] | None = None
@@ -2058,8 +2142,18 @@ class AnalysisRun(BaseModel):
     fact_reconstruction: FactReconstructionResult | None = None
     llm_analysis_request: LLMAnalysisRequest | None = None
     analysis: AnalysisResult | None = None
+    analysis_evidence_grounding: AnalysisEvidenceGroundingReport | None = None
     decision: Decision | None = None
+    failure: RuntimeFailure | None = None
     corrections: list[CorrectionRecord] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_failure_state(self) -> AnalysisRun:
+        if self.status is AnalysisRunStatus.FAILED and self.failure is None:
+            raise ValueError("failed analysis run requires RuntimeFailure")
+        if self.status is not AnalysisRunStatus.FAILED and self.failure is not None:
+            raise ValueError("only failed analysis run may carry RuntimeFailure")
+        return self
 
 
 class SocDomainTriageRequest(BaseModel):

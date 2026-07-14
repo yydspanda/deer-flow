@@ -27,7 +27,7 @@
 | External Disposition Zeus fixture | Zeus 状态/理由 mock payload | `backend/samples/external_disposition/zeus_status_update.json` | 验证 field-path mapper、status mapping、idempotency、review/correction | 替换为真实 webhook/Kafka/poll/manual import adapter；补认证、签名、租户、重放和脱敏 |
 | Kafka local smoke | 本地 Redpanda/Kafka topic、sample payload、dead-letter smoke | `backend/scripts/soc_kafka_smoke.py`、`backend/soc_agent/daemon/` | 验证 consumer runner、mapper、commit、dead-letter、status/readiness | 替换为真实 topic、ACL、consumer group、DLQ、监控、容量与失败演练 |
 | 高风险响应动作 | 当前只有 proposal、policy、approval、一次性 grant、dry-run/execute preflight；`external_side_effect=not_executed` | `backend/soc_agent/actions/adapters.py`、`backend/soc_agent/core/service.py` | 验证封禁 IP、隔离主机等动作在执行前的权限、审批、幂等和审计边界 | 接入真实 EDR/F5/SOAR/防火墙 adapter；必须补回滚/补偿、执行结果核验和失败重试，默认仍需人工审批 |
-| LLM analyzer | **真实路径已完成**：默认 deterministic stub；显式模式复用 DeerFlow `create_chat_model` | `backend/soc_agent/llm/`、`backend/soc_agent/core/runtime.py` | stub 保证回归/回放；`SOC_ANALYZER_MODE=llm` 或 CLI flag 调用已注册模型；raw confidence 当前均标记为 uncalibrated 并进入复核 | 持续补标注集、校准、限流和成本预算；真实输出仍需 JSON/schema/domain validation 和 `SocDecisionPolicy` |
+| LLM analyzer | **真实路径已完成**：默认 deterministic stub；显式模式复用 DeerFlow `create_chat_model` | `backend/soc_agent/llm/`、`backend/soc_agent/core/runtime.py` | stub 保证回归/回放；`SOC_ANALYZER_MODE=llm` 或 CLI flag 调用已注册模型；有独立 concurrency/RPM admission、输出上限、evidence grounding、typed failure；raw confidence 当前均标记为 uncalibrated 并进入复核 | 持续补人工标注集、离线校准和成本预算；真实输出仍需 JSON/schema/domain/grounding validation 和 `SocDecisionPolicy` |
 | Normalization suggestion | **真实路径已完成**：deterministic/replay/live LLM 三种离线模式 | `backend/soc_agent/normalizers/suggestions.py` | 发现 mapping 候选并严格校验 observed source path / canonical whitelist | 所有建议仍需工程师复核，`auto_apply_allowed=false` |
 | SQL/in-memory repositories in tests | in-memory repository 或 SQLite 单元测试 | `backend/soc_agent/*/repository.py`、`backend/tests/` | 单元测试和无 DB 局部 wiring | 生产/准生产必须走 PostgreSQL migration + SQLAlchemy repository；本地开发可用 SOC SQLite 测试库 |
 
@@ -51,6 +51,7 @@
 | `StubLLMAnalyzer` | 显式 fallback/test/replay baseline | Production uses `llm` explicitly | 不删除；生产入口必须显式配置 `SOC_ANALYZER_MODE=llm`，且 trace 标明 analyzer |
 | `JsonLLMAnalyzer` | 真实 DeerFlow model path | Already real | 模型自报 confidence 仍不是 calibrated probability |
 | `SocDecisionPolicy` | 确定性生产决策策略 | No | LLM 不决定 `needs_review`；策略统一处理 provenance、evidence guard、review reasons 和 version |
+| Evidence grounding / Runtime failure / atomic bundle | 确定性生产防护 | No | 模型证据必须回指 bounded context；run/summary/review/audit 同事务；retryable failure 不 commit Kafka offset |
 | Domain/scenario finding confidence | 可回放 heuristic score | No direct replacement | 只用于 finding 排序/解释；mock/failed evidence 不得抬分，后续用标注集评测版本常量 |
 | Correlation / memory retrieval score | 确定性检索分数 | No direct replacement | 后续 LLM 只能 bounded rerank，不能扩大查询或直接生效 memory |
 | CMDB/EDR/HIDS/TI/security-tag results | 当前部分为 mock external facts | **Must replace with real provider** | 这是当前真实缺口；不能让 LLM 生成或猜测外部事实 |

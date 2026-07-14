@@ -22,12 +22,15 @@ from soc_agent.contracts import (
     CorrectionCommand,
     CorrelationQuery,
     DecisionAuditRecord,
+    DecisionReviewReason,
     EntrySurface,
     InvestigationEvidence,
     ReviewNoteCommand,
     ReviewQueueCloseCommand,
     ReviewQueueItem,
     ReviewQueueStatus,
+    RuntimeFailure,
+    RuntimeFailureKind,
     ServiceRequestContext,
     SimilarAlertMatch,
     SimilarAlertQuery,
@@ -116,6 +119,45 @@ class CountingRuntime:
     def analyze(self, payload: dict) -> AnalysisRun:
         self.calls += 1
         return self._runtime.analyze(payload)
+
+
+class RetryableFailureThenSuccessRuntime:
+    def __init__(self) -> None:
+        self.calls = 0
+        self._runtime = DeterministicAnalysisRuntime()
+
+    def analyze(self, payload: dict) -> AnalysisRun:
+        self.calls += 1
+        if self.calls == 1:
+            return AnalysisRun(
+                alert_id=str(payload.get("alert_id") or "unknown"),
+                status=AnalysisRunStatus.FAILED,
+                input_payload=payload,
+                failure=RuntimeFailure(
+                    step_name="analyze_llm",
+                    kind=RuntimeFailureKind.ANALYZER_TIMEOUT,
+                    retryable=True,
+                    error_type="TimeoutError",
+                    message="TimeoutError while invoking configured SOC analyzer",
+                ),
+            )
+        return self._runtime.analyze(payload)
+
+
+class NonRetryableFailureRuntime:
+    def analyze(self, payload: dict) -> AnalysisRun:
+        return AnalysisRun(
+            alert_id=str(payload.get("alert_id") or "unknown"),
+            status=AnalysisRunStatus.FAILED,
+            input_payload=payload,
+            failure=RuntimeFailure(
+                step_name="analyze_llm",
+                kind=RuntimeFailureKind.ANALYZER_OUTPUT_INVALID,
+                retryable=False,
+                error_type="LLMOutputParseError",
+                message="LLM output failed schema validation",
+            ),
+        )
 
 
 class InMemoryAuditRepository:
@@ -361,11 +403,62 @@ def test_analysis_service_writes_decision_audit_record() -> None:
     assert record.input_hash == run.input_hash
     assert record.final_verdict == Verdict.FALSE_POSITIVE
     assert record.payload["step_count"] == len(run.steps)
-    assert record.payload["decision_policy_version"] == "soc.decision_policy.v1"
+    assert record.payload["decision_policy_version"] == "soc.decision_policy.v2"
     assert record.payload["confidence_source"] == "stub_heuristic"
     assert record.payload["confidence_is_calibrated"] is False
     assert record.payload["calibrated_probability"] is None
     assert record.payload["review_reasons"][0] == "false_positive_requires_confirmation"
+
+
+def test_retryable_failed_analysis_is_not_queued_or_idempotently_reused() -> None:
+    runtime = RetryableFailureThenSuccessRuntime()
+    repository = InMemoryAlertRepository()
+    summary_repository = InMemorySummaryRepository()
+    audit_repository = InMemoryAuditRepository()
+    review_repository = InMemoryReviewQueueRepository()
+    service = SocAnalysisService(
+        runtime=runtime,
+        repository=repository,
+        summary_repository=summary_repository,
+        audit_repository=audit_repository,
+        review_queue_repository=review_repository,
+    )
+    context = ServiceRequestContext(idempotency_key="kafka:soc.alerts.raw.v1:0:retryable")
+
+    failed = service.analyze(_sample("malicious_ioc.json"), context=context)
+
+    assert failed.status is AnalysisRunStatus.FAILED
+    failed_summary = summary_repository.get_alert_summary(failed.run_id)
+    assert failed_summary is not None
+    assert failed_summary.needs_review is False
+    assert failed_summary.review_reasons == []
+    assert review_repository.get_open_review_item_by_run(failed.run_id) is None
+
+    retried = service.analyze(_sample("malicious_ioc.json"), context=context)
+    idempotent = service.analyze(_sample("malicious_ioc.json"), context=context)
+
+    assert retried.run_id != failed.run_id
+    assert retried.status is AnalysisRunStatus.NEEDS_REVIEW
+    assert idempotent.run_id == retried.run_id
+    assert runtime.calls == 2
+
+
+def test_non_retryable_failed_analysis_enters_review_queue() -> None:
+    summary_repository = InMemorySummaryRepository()
+    review_repository = InMemoryReviewQueueRepository()
+    run = SocAnalysisService(
+        runtime=NonRetryableFailureRuntime(),
+        summary_repository=summary_repository,
+        review_queue_repository=review_repository,
+    ).analyze(_sample("malicious_ioc.json"))
+
+    summary = summary_repository.get_alert_summary(run.run_id)
+    assert summary is not None
+    assert summary.needs_review is True
+    assert summary.review_reasons == [DecisionReviewReason.ANALYSIS_FAILED]
+    review_item = review_repository.get_open_review_item_by_run(run.run_id)
+    assert review_item is not None
+    assert review_item.reason == DecisionReviewReason.ANALYSIS_FAILED.value
 
 
 def test_analysis_service_reuses_existing_run_for_same_idempotency_key() -> None:

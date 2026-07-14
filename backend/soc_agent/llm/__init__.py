@@ -1,5 +1,6 @@
 """LLM boundary helpers for SOC Agent."""
 
+from soc_agent.llm.admission import SocLLMAdmissionController, SocLLMAdmissionError
 from soc_agent.llm.analyzer import (
     LLM_ANALYZER_STEP_NAME,
     JsonLLMAnalyzer,
@@ -33,6 +34,8 @@ __all__ = [
     "LLMChatResponse",
     "ParsedAnalysisResult",
     "SocAnalyzerMode",
+    "SocLLMAdmissionController",
+    "SocLLMAdmissionError",
     "SocLLMSettings",
     "build_configured_analyzer",
     "build_configured_chat_client",

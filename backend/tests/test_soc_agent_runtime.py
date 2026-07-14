@@ -63,8 +63,10 @@ def test_approved_scanner_returns_false_positive_candidate() -> None:
         "entity_extract",
         "fact_reconstruct",
         "build_analysis_input",
+        "skill_context",
         "analyze_stub",
         "schema_validate",
+        "evidence_grounding",
         "decide",
     ]
     assert all(step.status.value == "success" for step in run.steps)

@@ -14,6 +14,8 @@ from soc_agent.llm import (
     JsonLLMAnalyzer,
     LLMChatResponse,
     SocAnalyzerMode,
+    SocLLMAdmissionController,
+    SocLLMAdmissionError,
     SocLLMSettings,
     build_configured_analyzer,
     configured_soc_llm_status,
@@ -102,15 +104,40 @@ def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
             "SOC_LLM_MODEL": "deepseek-v4-pro",
             "SOC_LLM_THINKING_ENABLED": "false",
             "SOC_LLM_ATTACH_TRACING": "true",
+            "SOC_LLM_MAX_CONCURRENCY": "3",
+            "SOC_LLM_REQUESTS_PER_MINUTE": "20",
+            "SOC_LLM_ADMISSION_TIMEOUT_SECONDS": "0.25",
         }
     )
     assert settings.mode is SocAnalyzerMode.LLM
     assert settings.model_name == "deepseek-v4-pro"
+    assert settings.max_concurrency == 3
+    assert settings.requests_per_minute == 20
+    assert settings.admission_timeout_seconds == 0.25
 
     with pytest.raises(ValueError, match="SOC_ANALYZER_MODE"):
         SocLLMSettings.from_env({"SOC_ANALYZER_MODE": "automatic"})
     with pytest.raises(ValueError, match="SOC_LLM_THINKING_ENABLED"):
         SocLLMSettings.from_env({"SOC_LLM_THINKING_ENABLED": "sometimes"})
+    with pytest.raises(ValueError, match="SOC_LLM_MAX_CONCURRENCY"):
+        SocLLMSettings.from_env({"SOC_LLM_MAX_CONCURRENCY": "0"})
+    with pytest.raises(ValueError, match="SOC_LLM_ADMISSION_TIMEOUT_SECONDS"):
+        SocLLMSettings.from_env({"SOC_LLM_ADMISSION_TIMEOUT_SECONDS": "nan"})
+
+
+def test_llm_admission_controller_enforces_concurrency_and_rate_budget() -> None:
+    concurrency = SocLLMAdmissionController(max_concurrency=1, acquire_timeout_seconds=0)
+    with concurrency.admit():
+        with pytest.raises(SocLLMAdmissionError, match="concurrency"):
+            with concurrency.admit():
+                pass
+
+    rate = SocLLMAdmissionController(requests_per_minute=1)
+    with rate.admit():
+        pass
+    with pytest.raises(SocLLMAdmissionError, match="requests-per-minute"):
+        with rate.admit():
+            pass
 
 
 def test_model_resolution_has_no_unknown_provider_fallback() -> None:
@@ -151,6 +178,7 @@ def test_secret_free_status_lists_configured_models() -> None:
     assert status["resolved_model_name"] == "deepseek-v4-pro"
     assert status["configured_model_names"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
     assert status["secrets_included"] is False
+    assert status["max_concurrency"] == 1
     assert "api_key" not in status
 
 

@@ -92,22 +92,21 @@ flowchart TD
     H --> I["5️⃣ skill_context<br/>选择白名单 SOC skills"]
     I --> J["6️⃣ analyze_stub / LLM analyzer<br/>受控分析节点"]
     J --> K["7️⃣ schema_validate<br/>Pydantic schema + domain validation"]
-    K --> L["8️⃣ SocDecisionPolicy<br/>生成受控 Decision"]
+    K --> L["8️⃣ evidence_grounding<br/>证据值回指 bounded context"]
+    L --> M["9️⃣ SocDecisionPolicy<br/>生成受控 Decision"]
 
-    L --> M{"needs_review?<br/>是否需要复核"}
-    M -->|Yes| N["AnalysisRun.status = needs_review"]
-    M -->|No| O["AnalysisRun.status = success"]
-    J -->|error| P["AnalysisRun.status = failed"]
+    M --> N{"needs_review?<br/>是否需要复核"}
+    N -->|Yes| O["AnalysisRun.status = needs_review"]
+    N -->|No| P["AnalysisRun.status = success"]
+    J -->|error| Q["AnalysisRun.status = failed<br/>typed RuntimeFailure"]
 
-    N --> Q["🗃️ save soc_analysis_runs"]
-    O --> Q
-    P --> Q
-    Q --> R["🗃️ upsert soc_alert_summaries"]
-    R --> S["🗃️ upsert soc_review_queue<br/>结构化 review_reasons 进入 open queue"]
-    S --> T["🗃️ save soc_decision_audit_log"]
-    T --> U["🛠️ normalization_monitor<br/>baseline / schema / coverage"]
-    U --> V["🗃️ upsert normalization issues<br/>dedupe + recurrence + reopen"]
-    V --> W["📣 SocEvent<br/>DRIFT_DETECTED + ANALYSIS_COMPLETED"]
+    O --> R["🔒 Atomic analysis bundle transaction"]
+    P --> R
+    Q --> R
+    R --> S["🗃️ run + summary + optional review + audit<br/>全部成功或全部回滚"]
+    S --> T["🛠️ normalization_monitor<br/>baseline / schema / coverage"]
+    T --> U["🗃️ upsert normalization issues<br/>dedupe + recurrence + reopen"]
+    U --> V["📣 SocEvent<br/>DRIFT_DETECTED + ANALYSIS_COMPLETED / FAILED"]
 ```
 
 ### Step Details / 每一步到底做什么
@@ -121,6 +120,7 @@ flowchart TD
 | `skill_context` | Resolve SOC skills | 根据 source type、场景、实体、冲突选择 SOC skills；当前产物是名称/原因/摘要/hash 的选择清单，不是完整 `SKILL.md` 正文 | `SocSkillContext` |
 | `analyze_stub / LLM analyzer` | Run bounded reasoning | 默认 deterministic stub；显式选择后通过 DeerFlow `create_chat_model` 调用真实模型，输出仍必须经过 JSON/schema/domain validation | `AnalysisNodeOutput` |
 | `schema_validate` | Validate model result | 严格校验 JSON schema、字段类型、domain rule，坏 JSON 需要 repair 后再校验 | `AnalysisResult` |
+| `evidence_grounding` | Ground model claims | 对每条 `AnalysisResult.evidence` 校验 source 是否是允许的 bounded-context section/path 或 bounded `source_path#parsed.field`，value 是否确实存在；不相信模型仅凭文字声称“证据存在” | `AnalysisEvidenceGroundingReport` |
 | `decide` | Apply deterministic decision policy | `SocDecisionPolicy` 将已校验结果转换成 operational decision；保留 raw confidence 来源、校准状态、证据状态、结构化复核原因和 policy version。当前 stub/LLM 分数均未校准，因此必须复核；高分不能覆盖冲突、schema 降级、关键证据缺口、截断或误报确认 | `Decision` |
 | `normalization_monitor` | Detect parser/mapping maintenance work | 在业务结果已落库后检查基线、新结构、解析降级、关键字段缺口和 evidence truncation；失败只写 warning | `NormalizationMonitoringResult`, `NormalizationMaintenanceIssue` |
 
@@ -131,9 +131,10 @@ flowchart LR
     A["🧠 AnalysisResult<br/>verdict + raw confidence"] --> B["⚙️ SocDecisionPolicy<br/>确定性策略"]
     C["🔎 EvidenceCoverage<br/>schema / gap / truncation"] --> B
     D["⚖️ FactReconstruction<br/>conflicts"] --> B
+    GR["🔗 EvidenceGrounding<br/>model claims traced to context"] --> B
     B --> E["📋 Decision<br/>confidence_source<br/>evidence_state<br/>review_reasons<br/>policy_version"]
     E --> F{"👤 Human review required?"}
-    F -->|Current stub / LLM: Yes| G["🗃️ ReviewQueue"]
+    F -->|Current stub / LLM: Yes| Q["🗃️ ReviewQueue"]
     F -->|Future calibrated policy only| H["✅ Success state<br/>仍不代表允许自动处置"]
 ```
 
@@ -146,10 +147,11 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A["⚙️ SocAnalysisService"] --> B["🗃️ soc_analysis_runs<br/>完整 run + input snapshot"]
-    A --> C["🗃️ soc_alert_summaries<br/>列表、关联、检索读模型"]
-    A --> D["🗃️ soc_review_queue<br/>待复核工单 / queue item"]
-    A --> E["🗃️ soc_decision_audit_log<br/>分析、回放、纠正审计"]
+    A["⚙️ SocAnalysisService"] --> TX["🔒 AnalysisPersistence transaction"]
+    TX --> B["🗃️ soc_analysis_runs<br/>完整 run + input snapshot"]
+    TX --> C["🗃️ soc_alert_summaries<br/>列表、关联、检索读模型"]
+    TX --> D["🗃️ soc_review_queue<br/>不可重试失败或受控决策需要复核"]
+    TX --> E["🗃️ soc_decision_audit_log<br/>分析、回放、纠正审计"]
 
     F["⚙️ SocReviewService"] --> D
     F --> B

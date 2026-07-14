@@ -27,6 +27,7 @@ from soc_agent.contracts import (
     CorrelationResult,
     Decision,
     DecisionAuditRecord,
+    DecisionReviewReason,
     EntrySurface,
     ExtractionReport,
     InvestigationContext,
@@ -84,6 +85,7 @@ from soc_agent.normalizers import load_mapping_config, normalize_alert_payload
 from soc_agent.protocols import (
     AlertRepository,
     AlertSummaryRepository,
+    AnalysisPersistence,
     AnalysisRuntime,
     DecisionAuditRepository,
     DecisionPolicy,
@@ -157,6 +159,7 @@ class SocAnalysisService:
         summary_repository: AlertSummaryRepository | None = None,
         audit_repository: DecisionAuditRepository | None = None,
         review_queue_repository: ReviewQueueRepository | None = None,
+        analysis_persistence: AnalysisPersistence | None = None,
         normalization_maintenance_monitor: NormalizationMaintenanceMonitor | None = None,
         event_sink: SocEventSink | None = None,
     ) -> None:
@@ -165,6 +168,7 @@ class SocAnalysisService:
         self._summary_repository = summary_repository
         self._audit_repository = audit_repository
         self._review_queue_repository = review_queue_repository
+        self._analysis_persistence = analysis_persistence
         self._normalization_maintenance_monitor = normalization_maintenance_monitor
         self._event_sink = event_sink or NoopEventSink()
 
@@ -225,22 +229,30 @@ class SocAnalysisService:
 
         run = self._runtime.analyze(payload)
         run.replay_of_run_id = replay_of_run_id
-        if self._repository is not None:
-            self._repository.save_run(run)
         summary = _alert_summary_from_run(run)
-        if self._summary_repository is not None:
-            self._summary_repository.save_alert_summary(summary)
-        if self._review_queue_repository is not None:
-            _upsert_review_queue_item(self._review_queue_repository, summary)
-        if self._audit_repository is not None:
-            self._audit_repository.save_audit_record(
-                _analysis_audit_record(
-                    run,
-                    actor=context.actor,
-                    action=audit_action,
-                    idempotency_key=context.idempotency_key,
-                )
+        audit_record = _analysis_audit_record(
+            run,
+            actor=context.actor,
+            action=audit_action,
+            idempotency_key=context.idempotency_key,
+        )
+        review_item = _review_queue_item_from_summary(summary)
+        if self._analysis_persistence is not None:
+            self._analysis_persistence.save_analysis_bundle(
+                run=run,
+                summary=summary,
+                review_item=review_item,
+                audit_record=audit_record,
             )
+        else:
+            if self._repository is not None:
+                self._repository.save_run(run)
+            if self._summary_repository is not None:
+                self._summary_repository.save_alert_summary(summary)
+            if self._review_queue_repository is not None:
+                _upsert_review_queue_item(self._review_queue_repository, summary)
+            if self._audit_repository is not None:
+                self._audit_repository.save_audit_record(audit_record)
 
         if self._normalization_maintenance_monitor is not None:
             try:
@@ -266,7 +278,10 @@ class SocAnalysisService:
         audit_record = self._audit_repository.find_audit_record_by_idempotency_key(context.idempotency_key, action=action.value)
         if audit_record is None:
             return None
-        return self._repository.get_run(audit_record.run_id)
+        run = self._repository.get_run(audit_record.run_id)
+        if run is not None and run.status is AnalysisRunStatus.FAILED and run.failure is not None and run.failure.retryable:
+            return None
+        return run
 
     def _emit_analysis_completion(
         self,
@@ -1415,22 +1430,26 @@ class SocDaemonService:
         if self._analysis_service is None:
             raise SocServiceNotImplementedError("process alert message requires a SocAnalysisService")
         run = self._analysis_service.analyze(message.payload, context=_daemon_request_context(message))
+        failed = run.status is AnalysisRunStatus.FAILED
         return SocDaemonProcessResult(
             message_id=message.message_id,
             kind=message.kind,
-            status="processed",
+            status="failed" if failed else "processed",
             run_id=run.run_id,
             alert_id=run.alert_id,
             analysis_status=run.status.value,
             normalization_issue_count=(len(run.normalization_monitoring_result.issues) if run.normalization_monitoring_result is not None else 0),
             normalization_issue_ids=([item.issue_id for item in run.normalization_monitoring_result.issues] if run.normalization_monitoring_result is not None else []),
             normalization_warnings=(run.normalization_monitoring_result.warnings if run.normalization_monitoring_result is not None else []),
+            error=run.failure.message if run.failure is not None else None,
             payload={
                 "topic": message.topic,
                 "partition": message.partition,
                 "offset": message.offset,
                 "key": message.key,
                 "idempotency_key": _daemon_idempotency_key(message),
+                "failure_kind": run.failure.kind.value if run.failure is not None else None,
+                "retryable": run.failure.retryable if run.failure is not None else False,
             },
         )
 
@@ -2669,6 +2688,8 @@ def _alert_summary_from_run(run: AnalysisRun) -> AlertSummary:
     analysis = run.analysis
     verdict = _current_verdict(run)
     confidence = _current_confidence(run)
+    analysis_failed = run.status is AnalysisRunStatus.FAILED
+    failed_requires_review = analysis_failed and (run.failure is None or not run.failure.retryable)
 
     return AlertSummary(
         run_id=run.run_id,
@@ -2685,9 +2706,9 @@ def _alert_summary_from_run(run: AnalysisRun) -> AlertSummary:
         status=run.status,
         verdict=verdict,
         confidence=confidence,
-        needs_review=decision.needs_review if decision is not None else run.status is AnalysisRunStatus.NEEDS_REVIEW,
-        review_reasons=list(decision.review_reasons) if decision is not None else [],
-        summary=analysis.summary if analysis is not None else None,
+        needs_review=(decision.needs_review if decision is not None else run.status is AnalysisRunStatus.NEEDS_REVIEW or failed_requires_review),
+        review_reasons=(list(decision.review_reasons) if decision is not None else [DecisionReviewReason.ANALYSIS_FAILED] if failed_requires_review else []),
+        summary=(analysis.summary if analysis is not None else run.failure.message if run.failure is not None else None),
         recommended_action=decision.suggested_action if decision is not None else None,
         input_hash=run.input_hash,
         replay_of_run_id=run.replay_of_run_id,
@@ -2738,11 +2759,25 @@ def _entity_keys(run: AnalysisRun) -> list[str]:
 
 
 def _upsert_review_queue_item(repository: ReviewQueueRepository, summary: AlertSummary) -> None:
+    item = _review_queue_item_from_summary(
+        summary,
+        existing=repository.get_open_review_item_by_run(summary.run_id),
+    )
+    if item is None:
+        return
+    repository.save_review_item(item)
+
+
+def _review_queue_item_from_summary(
+    summary: AlertSummary,
+    *,
+    existing: ReviewQueueItem | None = None,
+) -> ReviewQueueItem | None:
+    if summary.status is AnalysisRunStatus.FAILED and not summary.needs_review:
+        return None
     reason = _review_reason(summary)
     if reason is None:
-        return
-
-    existing = repository.get_open_review_item_by_run(summary.run_id)
+        return None
     item = existing or ReviewQueueItem(
         run_id=summary.run_id,
         alert_id=summary.alert_id,
@@ -2763,7 +2798,7 @@ def _upsert_review_queue_item(repository: ReviewQueueRepository, summary: AlertS
     item.entity_keys = summary.entity_keys
     item.summary = summary.summary
     item.updated_at = _utc_now()
-    repository.save_review_item(item)
+    return item
 
 
 def _close_open_review_item_for_run(
@@ -2862,6 +2897,10 @@ def _analysis_audit_record(
             "calibration_profile_version": run.decision.calibration_profile_version if run.decision is not None else None,
             "evidence_state": run.decision.evidence_state.value if run.decision is not None else None,
             "review_reasons": [item.value for item in run.decision.review_reasons] if run.decision is not None else [],
+            "evidence_grounded_count": (run.analysis_evidence_grounding.grounded_count if run.analysis_evidence_grounding is not None else None),
+            "evidence_ungrounded_count": (run.analysis_evidence_grounding.ungrounded_count if run.analysis_evidence_grounding is not None else None),
+            "failure_kind": run.failure.kind.value if run.failure is not None else None,
+            "failure_retryable": run.failure.retryable if run.failure is not None else None,
             "idempotency_key": idempotency_key,
         },
     )

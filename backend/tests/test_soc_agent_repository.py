@@ -4,7 +4,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import create_engine
+import pytest
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from soc_agent.contracts import (
@@ -36,7 +37,13 @@ from soc_agent.contracts import (
     SocMemoryTargetArtifact,
     Verdict,
 )
-from soc_agent.core import SocAgentApprovalService, SocAnalysisService, SocCorrelationService, SocMemoryService
+from soc_agent.core import (
+    DeterministicAnalysisRuntime,
+    SocAgentApprovalService,
+    SocAnalysisService,
+    SocCorrelationService,
+    SocMemoryService,
+)
 from soc_agent.core.service import SocReviewService
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 
@@ -102,6 +109,47 @@ def test_sqlalchemy_alert_repository_saves_and_gets_run() -> None:
     assert summary.verdict == Verdict.FALSE_POSITIVE
     assert summary.rule_code == "EDR-SCAN-001"
     assert "host:scanner-01" in summary.entity_keys
+
+
+def test_sqlalchemy_analysis_bundle_rolls_back_every_read_model_on_failure() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    create_soc_tables(engine)
+    repository = SqlAlchemyAlertRepository(sessionmaker(bind=engine, expire_on_commit=False))
+
+    class CapturingRuntime:
+        def __init__(self) -> None:
+            self.run = None
+            self.runtime = DeterministicAnalysisRuntime()
+
+        def analyze(self, payload):
+            self.run = self.runtime.analyze(payload)
+            return self.run
+
+    runtime = CapturingRuntime()
+
+    def fail_audit_insert(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("INSERT") and "soc_decision_audit_log" in statement:
+            raise RuntimeError("forced audit persistence failure")
+
+    event.listen(engine, "before_cursor_execute", fail_audit_insert)
+    try:
+        with pytest.raises(RuntimeError, match="forced audit persistence failure"):
+            SocAnalysisService(
+                runtime=runtime,
+                repository=repository,
+                summary_repository=repository,
+                audit_repository=repository,
+                review_queue_repository=repository,
+                analysis_persistence=repository,
+            ).analyze(_sample("approved_scanner.json"))
+    finally:
+        event.remove(engine, "before_cursor_execute", fail_audit_insert)
+
+    assert runtime.run is not None
+    assert repository.get_run(runtime.run.run_id) is None
+    assert repository.get_alert_summary(runtime.run.run_id) is None
+    assert repository.list_review_items(limit=10) == []
+    assert repository.list_audit_records(runtime.run.run_id) == []
 
 
 def test_sqlalchemy_alert_repository_updates_existing_run() -> None:

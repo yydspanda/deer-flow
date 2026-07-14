@@ -57,21 +57,26 @@ class SqlAlchemyAlertRepository:
         self._session_factory = session_factory
 
     def save_run(self, run: AnalysisRun) -> None:
-        payload = run.model_dump(mode="json")
-        now = datetime.now(UTC)
+        with self._session_factory() as session:
+            _upsert_run(session, run)
+            session.commit()
+
+    def save_analysis_bundle(
+        self,
+        *,
+        run: AnalysisRun,
+        summary: AlertSummary,
+        review_item: ReviewQueueItem | None,
+        audit_record: DecisionAuditRecord,
+    ) -> None:
+        """Persist one Runtime result and its read models in one transaction."""
 
         with self._session_factory() as session:
-            row = session.get(SocAnalysisRunRow, run.run_id)
-            if row is None:
-                row = SocAnalysisRunRow(
-                    run_id=run.run_id,
-                    created_at=now,
-                    **_row_values(run, payload, updated_at=now),
-                )
-                session.add(row)
-            else:
-                for key, value in _row_values(run, payload, updated_at=now).items():
-                    setattr(row, key, value)
+            _upsert_run(session, run)
+            _upsert_summary(session, summary)
+            if review_item is not None:
+                _upsert_review_item(session, review_item)
+            _upsert_audit_record(session, audit_record)
             session.commit()
 
     def get_run(self, run_id: str) -> AnalysisRun | None:
@@ -87,14 +92,8 @@ class SqlAlchemyAlertRepository:
             return [AnalysisRun.model_validate(row.run_payload) for row in result.scalars()]
 
     def save_audit_record(self, record: DecisionAuditRecord) -> None:
-        payload = record.model_dump(mode="json")
         with self._session_factory() as session:
-            row = session.get(SocDecisionAuditLogRow, record.audit_id)
-            if row is None:
-                session.add(SocDecisionAuditLogRow(audit_id=record.audit_id, **_audit_row_values(record, payload)))
-            else:
-                for key, value in _audit_row_values(record, payload).items():
-                    setattr(row, key, value)
+            _upsert_audit_record(session, record)
             session.commit()
 
     def list_audit_records(self, run_id: str) -> list[DecisionAuditRecord]:
@@ -117,14 +116,8 @@ class SqlAlchemyAlertRepository:
             return DecisionAuditRecord.model_validate(row.record_payload) if row is not None else None
 
     def save_alert_summary(self, summary: AlertSummary) -> None:
-        payload = summary.model_dump(mode="json")
         with self._session_factory() as session:
-            row = session.get(SocAlertSummaryRow, summary.run_id)
-            if row is None:
-                session.add(SocAlertSummaryRow(run_id=summary.run_id, **_summary_row_values(summary, payload)))
-            else:
-                for key, value in _summary_row_values(summary, payload).items():
-                    setattr(row, key, value)
+            _upsert_summary(session, summary)
             session.commit()
 
     def get_alert_summary(self, run_id: str) -> AlertSummary | None:
@@ -148,14 +141,8 @@ class SqlAlchemyAlertRepository:
         return sorted(matches, key=lambda item: (item.score, item.summary.updated_at), reverse=True)[: query.limit]
 
     def save_review_item(self, item: ReviewQueueItem) -> None:
-        payload = item.model_dump(mode="json")
         with self._session_factory() as session:
-            row = session.get(SocReviewQueueRow, item.queue_id)
-            if row is None:
-                session.add(SocReviewQueueRow(queue_id=item.queue_id, **_review_queue_row_values(item, payload)))
-            else:
-                for key, value in _review_queue_row_values(item, payload).items():
-                    setattr(row, key, value)
+            _upsert_review_item(session, item)
             session.commit()
 
     def get_review_item(self, queue_id: str) -> ReviewQueueItem | None:
@@ -518,6 +505,51 @@ class SqlAlchemyAlertRepository:
                 query = query.where(SocNormalizationMaintenanceIssueRow.source_system == source_system)
             result = session.execute(query.order_by(SocNormalizationMaintenanceIssueRow.last_seen_at.desc()).limit(limit))
             return [NormalizationMaintenanceIssue.model_validate(row.issue_payload) for row in result.scalars()]
+
+
+def _upsert_run(session: Session, run: AnalysisRun) -> None:
+    payload = run.model_dump(mode="json")
+    now = datetime.now(UTC)
+    values = _row_values(run, payload, updated_at=now)
+    row = session.get(SocAnalysisRunRow, run.run_id)
+    if row is None:
+        session.add(SocAnalysisRunRow(run_id=run.run_id, created_at=now, **values))
+        return
+    for key, value in values.items():
+        setattr(row, key, value)
+
+
+def _upsert_audit_record(session: Session, record: DecisionAuditRecord) -> None:
+    payload = record.model_dump(mode="json")
+    values = _audit_row_values(record, payload)
+    row = session.get(SocDecisionAuditLogRow, record.audit_id)
+    if row is None:
+        session.add(SocDecisionAuditLogRow(audit_id=record.audit_id, **values))
+        return
+    for key, value in values.items():
+        setattr(row, key, value)
+
+
+def _upsert_summary(session: Session, summary: AlertSummary) -> None:
+    payload = summary.model_dump(mode="json")
+    values = _summary_row_values(summary, payload)
+    row = session.get(SocAlertSummaryRow, summary.run_id)
+    if row is None:
+        session.add(SocAlertSummaryRow(run_id=summary.run_id, **values))
+        return
+    for key, value in values.items():
+        setattr(row, key, value)
+
+
+def _upsert_review_item(session: Session, item: ReviewQueueItem) -> None:
+    payload = item.model_dump(mode="json")
+    values = _review_queue_row_values(item, payload)
+    row = session.get(SocReviewQueueRow, item.queue_id)
+    if row is None:
+        session.add(SocReviewQueueRow(queue_id=item.queue_id, **values))
+        return
+    for key, value in values.items():
+        setattr(row, key, value)
 
 
 def _row_values(run: AnalysisRun, payload: dict, *, updated_at: datetime) -> dict:

@@ -130,6 +130,12 @@ contracts
 - `LLMAnalysisRequest` may include only `BoundedAnalysisEvidence`: per-field and total-size bounded,
   parser/provenance annotated, and separated into primary/supplementary content. It must not dump the
   unbounded vendor payload into the prompt.
+- Prompting and post-analysis evidence validation must share the same bounded projection function.
+  `AnalysisResult.evidence[].source` must name an approved section, exact projection path, or a
+  bounded evidence `source_path#parsed.field.path`; its scalar value must be present under that
+  declared bounded source. Every item produces an
+  `AnalysisEvidenceGroundingItem`; any ungrounded item adds
+  `ungrounded_analysis_evidence` to deterministic review reasons.
 - Parser failure is explicit: preserve raw text, emit a warning, expose only bounded text to the
   analysis node, and keep structured fallback candidates at reduced trust.
 - Every selected raw message must emit `MessageSchemaObservation`. `recognized` means parser grammar
@@ -232,6 +238,18 @@ Decision audit 约束：
 - analyzer decision audit payload 必须记录 `decision_policy_version`、`confidence_source`、
   `confidence_is_calibrated`、`calibrated_probability`、`calibration_profile_version`、
   `evidence_state` 和完整 `review_reasons`；不能只保存一个 raw confidence。
+
+Analysis persistence / 分析持久化约束：
+
+- 一次 analyze/replay 的主业务结果必须通过 `AnalysisPersistence.save_analysis_bundle()` 原子写入
+  `AnalysisRun`、`AlertSummary`、可选 `ReviewQueueItem` 和 `DecisionAuditRecord`；生产 SQL repository
+  不得在 service 中逐表 commit 后假装为完整成功。
+- 任一 bundle row 写入失败必须回滚全部四类写入。Normalization maintenance 是成功主写入后的
+  fail-open side path，可以单独更新 run 的 monitoring result，但不能破坏已提交业务事务。
+- `AnalysisRun.status=failed` 必须带 `RuntimeFailure`，至少包含 failed step、稳定 kind、retryable、
+  sanitized error type/message。Provider 原始响应、header、secret 和未裁剪异常不得写入 run/audit。
+- 不可重试失败进入 summary + ReviewQueue + audit；可重试失败保留 failed run/summary/audit，但不立即
+  创建人工工单，Kafka 不 commit offset，并允许同一 idempotency key 重新执行。
 
 Alert summary 约束：
 
@@ -600,7 +618,7 @@ Kafka daemon / consumer adapter 约束：
   - offset commit 必须 partition-aware，只能推进到同一 partition 已连续完成的最大 offset + 1。
   - mapper/service failure 必须先 dead-letter 成功，再把该 offset 标记为 completed；dead-letter 失败时不得 commit 或越过该 offset。
   - 并发前必须补幂等写入边界，确保同一 `kafka:{topic}:{partition}:{offset}` 重放不会重复污染 summary、approval inbox、audit 或 memory。
-  - `SocAnalysisService` 的 idempotency hardening 以 `DecisionAuditRecord.payload["idempotency_key"]` 和 `soc_decision_audit_log.idempotency_key` 为索引；同 key、同 action 命中既有 audit/run 时必须复用旧 run，不得重新执行 runtime 或重复写 summary/review/audit。
+  - `SocAnalysisService` 的 idempotency hardening 以 `DecisionAuditRecord.payload["idempotency_key"]` 和 `soc_decision_audit_log.idempotency_key` 为索引；同 key、同 action 命中已完成或不可重试的既有 audit/run 时必须复用旧 run。仅当既有 run 明确 `failed && failure.retryable=true` 时允许同 key 重新执行。
   - `soc_decision_audit_log.idempotency_key` 是请求幂等索引字段，不保存 secret，不替代 Kafka metadata；Kafka metadata 仍来自 `SocDaemonMessage`。
   - worker pool 必须 bounded；必须有 max in-flight、queue depth、shutdown timeout 和 backpressure 语义。
   - Kafka worker concurrency 不等于 LLM concurrency；LLM analyzer 必须有独立限流。
@@ -841,8 +859,13 @@ normalizers/hids.py
   - step metadata 不保存完整 prompt、完整 raw LLM output 或完整 vendor payload；需要复盘时通过 replay 输入和版本重新生成。
 - 默认 runtime 必须继续使用 deterministic `StubLLMAnalyzer`；真实 LLM analyzer 只能通过显式 flag/config/client 注入。
 - 统一配置为 `SOC_ANALYZER_MODE=stub|llm`、`SOC_LLM_MODEL`、`SOC_LLM_THINKING_ENABLED`、
-  `SOC_LLM_ATTACH_TRACING`。CLI 可用 `--analyzer-mode` / `--model-name` 覆盖；未知模型必须 fail-fast，
+  `SOC_LLM_ATTACH_TRACING`、`SOC_LLM_MAX_CONCURRENCY`、`SOC_LLM_REQUESTS_PER_MINUTE`、
+  `SOC_LLM_ADMISSION_TIMEOUT_SECONDS`。CLI 可用 `--analyzer-mode` / `--model-name` 覆盖；未知模型必须 fail-fast，
   禁止静默换到默认 provider。
+- LLM admission 必须独立于 Kafka worker concurrency，使用进程内 bounded semaphore 和可选 RPM
+  预算。准入饱和是 retryable `analyzer_capacity`，不得调用 provider 后再伪装成本地限流。
+- Prompt compact JSON、模型响应、`AnalysisResult` 文本字段、evidence 数量/值长度、knowledge candidate
+  数量/长度都必须有硬上限；超限必须在 Runtime 中形成 typed failure，不能进入 repair 无限消耗。
 - `DeerFlowLLMChatClient` 只可保存 allowlisted response metadata 和 token usage；provider headers、凭证、
   原始 response object 不得进入 `AnalysisRun`。
 
@@ -1344,7 +1367,7 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 | Node prompt | `soc_agent/prompts/` | 固定 pipeline 节点内的结构化推理，例如 `llm_analyze` | 自主改变主流程、直接调用 MCP/tool、输出未校验自然语言进入决策层 |
 | MCP/tool adapter | `soc_agent/tools/` / DeerFlow MCP bridge | 查询或执行外部能力 | 绕过 policy、审计、人类审批执行高风险动作 |
 
-当前 `soc-analysis-v1` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费 `LLMAnalysisRequest` 和后续受控 skill context，输出必须进入 `AnalysisResult` parser、schema validation、domain validation，再由 Runtime 决定后续状态。
+当前 `soc-analysis-v2` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费 `LLMAnalysisRequest` 和后续受控 skill context，输出必须进入 `AnalysisResult` parser、schema validation、domain validation、evidence grounding，再由 Runtime 决定后续状态。
 
 当前 `SocSkillResolver` 已作为薄层落地在 `backend/soc_agent/skills.py`，只输出 DeerFlow skill 名称和结构化 reason，不加载 `SKILL.md` 内容，不绕过 DeerFlow skill system。当前 DeerFlow 可加载的 SOC domain skills 是：
 

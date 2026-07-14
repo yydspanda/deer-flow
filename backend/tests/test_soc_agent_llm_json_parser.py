@@ -6,6 +6,7 @@ import pytest
 
 from soc_agent.contracts import Verdict
 from soc_agent.llm import ANALYSIS_JSON_PARSER_VERSION, LLMOutputParseError, parse_analysis_result_output
+from soc_agent.llm.json_parser import MAX_ANALYSIS_RESPONSE_CHARS
 
 
 def _valid_payload() -> dict:
@@ -111,3 +112,10 @@ def test_parse_analysis_result_rejects_unrecoverable_text() -> None:
 
     assert exc.value.stage == "json_repair"
     assert exc.value.repair_applied is True
+
+
+def test_parse_analysis_result_rejects_oversized_output_before_repair() -> None:
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output("{" + "x" * MAX_ANALYSIS_RESPONSE_CHARS + "}")
+
+    assert exc.value.stage == "output_size"

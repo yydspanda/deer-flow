@@ -13,7 +13,8 @@ from pydantic import ValidationError
 from soc_agent.contracts import AnalysisResult
 from soc_agent.core.validator import validate_analysis_result
 
-ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v1"
+ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v2"
+MAX_ANALYSIS_RESPONSE_CHARS = 100_000
 
 _THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.IGNORECASE | re.DOTALL)
 _OPEN_THINK_RE = re.compile(r"<think\b[^>]*>", re.IGNORECASE)
@@ -60,6 +61,11 @@ def parse_analysis_result_output(response_content: Any) -> ParsedAnalysisResult:
     text = _strip_markdown_code_fence(_strip_think_blocks(_extract_text(response_content))).strip()
     if not text:
         raise LLMOutputParseError("LLM output is empty", stage="extract_text")
+    if len(text) > MAX_ANALYSIS_RESPONSE_CHARS:
+        raise LLMOutputParseError(
+            f"LLM output exceeds {MAX_ANALYSIS_RESPONSE_CHARS} characters",
+            stage="output_size",
+        )
 
     strict = _parse_strict_json_object(text)
     if strict is not None:

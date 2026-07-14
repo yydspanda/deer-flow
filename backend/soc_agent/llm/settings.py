@@ -6,6 +6,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from math import isfinite
 
 from deerflow.config import get_app_config
 from deerflow.config.app_config import AppConfig
@@ -35,6 +36,9 @@ class SocLLMSettings:
     model_name: str | None = None
     thinking_enabled: bool = False
     attach_tracing: bool = True
+    max_concurrency: int = 1
+    requests_per_minute: int = 0
+    admission_timeout_seconds: float = 5.0
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> SocLLMSettings:
@@ -53,6 +57,21 @@ class SocLLMSettings:
             model_name=model_name.strip() if model_name and model_name.strip() else None,
             thinking_enabled=_parse_bool(values.get("SOC_LLM_THINKING_ENABLED", "false"), name="SOC_LLM_THINKING_ENABLED"),
             attach_tracing=_parse_bool(values.get("SOC_LLM_ATTACH_TRACING", "true"), name="SOC_LLM_ATTACH_TRACING"),
+            max_concurrency=_parse_int(
+                values.get("SOC_LLM_MAX_CONCURRENCY", "1"),
+                name="SOC_LLM_MAX_CONCURRENCY",
+                minimum=1,
+            ),
+            requests_per_minute=_parse_int(
+                values.get("SOC_LLM_REQUESTS_PER_MINUTE", "0"),
+                name="SOC_LLM_REQUESTS_PER_MINUTE",
+                minimum=0,
+            ),
+            admission_timeout_seconds=_parse_float(
+                values.get("SOC_LLM_ADMISSION_TIMEOUT_SECONDS", "5"),
+                name="SOC_LLM_ADMISSION_TIMEOUT_SECONDS",
+                minimum=0.0,
+            ),
         )
 
     def with_overrides(
@@ -120,6 +139,9 @@ def build_configured_chat_client(
             app_config=config,
             thinking_enabled=resolved.thinking_enabled,
             attach_tracing=resolved.attach_tracing,
+            max_concurrency=resolved.max_concurrency,
+            requests_per_minute=resolved.requests_per_minute,
+            acquire_timeout_seconds=resolved.admission_timeout_seconds,
         ),
         model_name,
     )
@@ -143,6 +165,9 @@ def configured_soc_llm_status(
         "configured_model_names": [model.name for model in config.models],
         "thinking_enabled": resolved.thinking_enabled,
         "attach_tracing": resolved.attach_tracing,
+        "max_concurrency": resolved.max_concurrency,
+        "requests_per_minute": resolved.requests_per_minute,
+        "admission_timeout_seconds": resolved.admission_timeout_seconds,
         "secrets_included": False,
     }
 
@@ -154,3 +179,23 @@ def _parse_bool(value: str, *, name: str) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise ValueError(f"{name} must be a boolean value")
+
+
+def _parse_int(value: str, *, name: str, minimum: int) -> int:
+    try:
+        parsed = int(value.strip())
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if not isfinite(parsed) or parsed < minimum:
+        raise ValueError(f"{name} must be a finite number >= {minimum}")
+    return parsed
+
+
+def _parse_float(value: str, *, name: str, minimum: float) -> float:
+    try:
+        parsed = float(value.strip())
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    if not isfinite(parsed) or parsed < minimum:
+        raise ValueError(f"{name} must be a finite number >= {minimum}")
+    return parsed

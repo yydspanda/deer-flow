@@ -28,6 +28,25 @@ class FakeDaemonService(SocDaemonService):
         )
 
 
+class FailedRuntimeDaemonService(SocDaemonService):
+    def __init__(self, *, retryable: bool) -> None:
+        self.retryable = retryable
+
+    def process_message(self, message: SocDaemonMessage | dict[str, Any]) -> SocDaemonProcessResult:
+        daemon_message = SocDaemonMessage.model_validate(message)
+        return SocDaemonProcessResult(
+            message_id=daemon_message.message_id,
+            kind=daemon_message.kind,
+            status="failed",
+            run_id="RUN-FAILED-001",
+            error="TimeoutError while invoking configured SOC analyzer",
+            payload={
+                "failure_kind": "analyzer_timeout" if self.retryable else "analyzer_output_invalid",
+                "retryable": self.retryable,
+            },
+        )
+
+
 def _record(*, topic: str = "soc.alerts.raw.v1", value: str = '{"alert_id":"ALT-1"}') -> KafkaRecord:
     return KafkaRecord(topic=topic, partition=0, offset=1, value=value)
 
@@ -71,6 +90,18 @@ def test_kafka_worker_returns_dead_letter_required_for_service_failure() -> None
     assert result.error.error_type == "SocServiceError"
     assert result.error.message == "db unavailable"
     assert isinstance(result.error.as_exception(), SocServiceError)
+
+
+def test_kafka_worker_preserves_runtime_retryability() -> None:
+    retryable = SocKafkaWorker(daemon_service=FailedRuntimeDaemonService(retryable=True)).process_record(_record())
+    invalid_output = SocKafkaWorker(daemon_service=FailedRuntimeDaemonService(retryable=False)).process_record(_record())
+
+    assert retryable.status is KafkaWorkerResultStatus.RETRYABLE_ERROR
+    assert retryable.should_retry is True
+    assert retryable.error is not None
+    assert retryable.error.error_type == "analyzer_timeout"
+    assert invalid_output.status is KafkaWorkerResultStatus.DEAD_LETTER_REQUIRED
+    assert invalid_output.requires_dead_letter is True
 
 
 def test_kafka_worker_result_rejects_processed_without_daemon_result() -> None:

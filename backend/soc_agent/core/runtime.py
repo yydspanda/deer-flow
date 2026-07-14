@@ -10,11 +10,10 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import ValidationError
-
 from soc_agent.contracts import (
     AlertInput,
     AlertSourceType,
+    AnalysisEvidenceGroundingReport,
     AnalysisNodeOutput,
     AnalysisRun,
     AnalysisRunStatus,
@@ -29,13 +28,20 @@ from soc_agent.contracts import (
     NormalizationReport,
     PipelineStepStatus,
     PipelineStepTrace,
+    RuntimeFailure,
+    RuntimeFailureKind,
+    SocSkillContext,
 )
 from soc_agent.core.decision_policy import SocDecisionPolicy
 from soc_agent.core.validator import validate_analysis_result
 from soc_agent.normalizers import normalize_alert_payload, normalize_with_mapping
-from soc_agent.pipeline.analysis_context import build_llm_analysis_request
+from soc_agent.pipeline.analysis_context import (
+    build_llm_analysis_request,
+    resolve_skill_context_for_request,
+)
 from soc_agent.pipeline.analyzer import StubLLMAnalyzer
 from soc_agent.pipeline.evidence_coverage import observe_message_schemas
+from soc_agent.pipeline.evidence_grounding import ground_analysis_evidence
 from soc_agent.pipeline.extractor import extract_entities
 from soc_agent.pipeline.fact_reconstructor import reconstruct_facts
 from soc_agent.protocols import DecisionPolicy, LLMAnalyzer
@@ -69,7 +75,8 @@ def build_analysis_request_for_payload(payload: Mapping[str, Any]) -> LLMAnalysi
     alert = _normalize_alert(payload)
     entities = extract_entities(alert)
     fact_reconstruction = reconstruct_facts(alert)
-    return build_llm_analysis_request(alert, entities, fact_reconstruction)
+    request = build_llm_analysis_request(alert, entities, fact_reconstruction)
+    return request.model_copy(update={"skill_context": resolve_skill_context_for_request(request)})
 
 
 def analyze_alert(
@@ -107,6 +114,13 @@ def analyze_alert(
             {"alert": alert, "entities": entities, "fact_reconstruction": fact_reconstruction},
             lambda _: build_llm_analysis_request(alert, entities, fact_reconstruction),
         )
+        skill_context = _run_step(
+            run,
+            "skill_context",
+            analysis_request,
+            resolve_skill_context_for_request,
+        )
+        analysis_request = analysis_request.model_copy(update={"skill_context": skill_context})
         run.llm_analysis_request = analysis_request
         try:
             analysis_output = _run_step(
@@ -127,31 +141,54 @@ def analyze_alert(
         run.model_name = analysis_output.model_name
         run.prompt_version = analysis_output.prompt_version
         run.analysis = _run_step(run, "schema_validate", analysis_output.analysis, validate_analysis_result)
+        run.analysis_evidence_grounding = _run_step(
+            run,
+            "evidence_grounding",
+            {"analysis": run.analysis, "analysis_request": analysis_request},
+            lambda _: ground_analysis_evidence(run.analysis, analysis_request),
+        )
         run.decision = _run_step(
             run,
             "decide",
             {
                 "analysis": run.analysis,
                 "analysis_request": analysis_request,
+                "analysis_evidence_grounding": run.analysis_evidence_grounding,
                 "analyzer_step_name": analysis_node.step_name,
             },
             lambda _: policy.decide(
                 run.analysis,
                 request=analysis_request,
+                grounding=run.analysis_evidence_grounding,
                 analyzer_step_name=analysis_node.step_name,
             ),
         )
         run.status = AnalysisRunStatus.NEEDS_REVIEW if run.decision.needs_review else AnalysisRunStatus.SUCCESS
     except Exception as exc:  # noqa: BLE001 - convert all runtime failures into run state
         run.status = AnalysisRunStatus.FAILED
+        failed_step = run.steps[-1].step_name if run.steps else "runtime"
+        run.failure = _classify_runtime_failure(exc, step_name=failed_step)
         if not run.steps or run.steps[-1].status is not PipelineStepStatus.FAILED:
             run.steps.append(
                 PipelineStepTrace(
                     step_name="runtime",
                     status=PipelineStepStatus.FAILED,
-                    error=str(exc),
+                    error=run.failure.message,
                     ended_at=_utc_now(),
+                    metadata={
+                        "failure_kind": run.failure.kind.value,
+                        "retryable": run.failure.retryable,
+                        "error_type": run.failure.error_type,
+                    },
                 )
+            )
+        else:
+            run.steps[-1].metadata.update(
+                {
+                    "failure_kind": run.failure.kind.value,
+                    "retryable": run.failure.retryable,
+                    "error_type": run.failure.error_type,
+                }
             )
     finally:
         run.ended_at = _utc_now()
@@ -295,9 +332,9 @@ def _run_step[T](
 
     try:
         output = func(step_input)
-    except (ValidationError, Exception) as exc:
+    except Exception as exc:  # noqa: BLE001 - outer runtime classifies the failure
         trace.status = PipelineStepStatus.FAILED
-        trace.error = str(exc)
+        trace.error = _safe_error_message(exc, step_name=step_name)
         trace.ended_at = _utc_now()
         trace.duration_ms = _duration_ms(trace.started_at, trace.ended_at)
         raise
@@ -313,6 +350,21 @@ def _run_step[T](
         trace.warnings.extend(output.warnings)
     if isinstance(output, LLMAnalysisRequest):
         trace.warnings.extend(output.warnings)
+    if isinstance(output, SocSkillContext):
+        trace.metadata.update(
+            {
+                "selected_skills": [item.skill_name for item in output.selected_skills],
+                "total_token_budget": output.total_token_budget,
+            }
+        )
+    if isinstance(output, AnalysisEvidenceGroundingReport):
+        trace.warnings.extend(output.warnings)
+        trace.metadata.update(
+            {
+                "grounded_count": output.grounded_count,
+                "ungrounded_count": output.ungrounded_count,
+            }
+        )
     if isinstance(output, AnalysisNodeOutput):
         trace.metadata.update(
             {
@@ -353,3 +405,55 @@ def _utc_now() -> datetime:
 
 def _duration_ms(started_at: datetime, ended_at: datetime) -> int:
     return int((ended_at - started_at).total_seconds() * 1000)
+
+
+def _classify_runtime_failure(exc: Exception, *, step_name: str) -> RuntimeFailure:
+    error_type = type(exc).__name__
+    lowered_type = error_type.lower()
+    lowered_message = str(exc).lower()
+
+    if step_name == "normalize":
+        kind = RuntimeFailureKind.INVALID_INPUT
+        retryable = False
+    elif "promptsize" in lowered_type or "context exceeds" in lowered_message:
+        kind = RuntimeFailureKind.INPUT_LIMIT_EXCEEDED
+        retryable = False
+    elif step_name == "analyze_llm" and ("admission" in lowered_type or "ratelimit" in lowered_type or "rate_limit" in lowered_type or "capacity" in lowered_type):
+        kind = RuntimeFailureKind.ANALYZER_CAPACITY
+        retryable = True
+    elif step_name == "analyze_llm" and (isinstance(exc, TimeoutError) or "timeout" in lowered_type):
+        kind = RuntimeFailureKind.ANALYZER_TIMEOUT
+        retryable = True
+    elif step_name == "analyze_llm" and hasattr(exc, "stage"):
+        kind = RuntimeFailureKind.ANALYZER_OUTPUT_INVALID
+        retryable = False
+    elif step_name == "analyze_llm":
+        kind = RuntimeFailureKind.ANALYZER_UNAVAILABLE
+        retryable = True
+    elif step_name == "schema_validate":
+        kind = RuntimeFailureKind.OUTPUT_VALIDATION_FAILED
+        retryable = False
+    elif step_name == "decide":
+        kind = RuntimeFailureKind.DECISION_POLICY_FAILED
+        retryable = False
+    else:
+        kind = RuntimeFailureKind.INTERNAL_ERROR
+        retryable = False
+
+    return RuntimeFailure(
+        step_name=step_name,
+        kind=kind,
+        retryable=retryable,
+        error_type=error_type,
+        message=_safe_error_message(exc, step_name=step_name),
+    )
+
+
+def _safe_error_message(exc: Exception, *, step_name: str) -> str:
+    error_type = type(exc).__name__
+    if step_name == "analyze_llm" and not hasattr(exc, "stage"):
+        return f"{error_type} while invoking configured SOC analyzer"
+    message = " ".join(str(exc).split())
+    if not message:
+        message = "runtime step failed"
+    return message[:1000]

@@ -23,12 +23,12 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前阶段 | Phase 1 收口完成，Phase 2 correlation / domain triage 起步 |
-| 当前目标 | Runtime 单预警链路和 PingAn message/fact/coverage 验证已走通；DeerFlow 原生真实 LLM analyzer、live offline eval、live normalization suggestion 已落地并用 `deepseek-v4-pro` smoke；SOC Lead Agent、ReviewQueue、Kafka、memory、external disposition、domain triage 继续沿既有 service boundary 演进；真实 dev/staging MCP 等待 endpoint/凭证 |
+| 当前阶段 | Phase 1 Runtime 工程闭环完成；Phase 2 correlation / domain triage 起步 |
+| 当前目标 | Runtime 已具备 bounded live LLM、显式 skill trace、证据落地、硬输出上限、typed failure/retry、主业务原子写入和 Kafka 失败语义；下一步用人工标注集评审模型质量，不把未校准 confidence 接入自动放行 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 补 LLM evidence grounding 校验与评测契约，再逐条审阅 5 条 `datas/` 的真实 LLM 输出形成首份人工标注集；校准 profile 仍不得自动接入生产放行。 |
+| 当前下一刀 | 逐条人工审阅 5 条 `datas/` 的真实 LLM verdict/evidence/recommended action，形成首份 label set 并运行离线 calibration；校准 profile 仍不得自动接入生产放行。 |
 
 ## 当前待办列表
 
@@ -64,6 +64,7 @@
 | 10 | Normalization maintenance loop | Done for MVP | 持久化 schema baseline、主动 monitor、去重/reopen issue、SocEvent、CLI/API/Web/TUI、Kafka metric 摘要；字段重要性 registry、离线 suggestion、confidence calibration 和 repair domain guard 已落地 | 新 schema/解析降级/关键映射缺口不静默；首次观察不自批 baseline；suggestion 不自动改代码；calibration profile 不自动放行动作 |
 | 11 | DeerFlow-backed live Runtime LLM | Done for MVP | 新增 `DeerFlowLLMChatClient`、`SocLLMSettings`，统一装配 analyze/replay/demo/Kafka；offline eval 和 normalize suggest 支持 live model | 显式选择模型；未知模型 fail-fast；输出过 JSON/schema/domain validation；trace 记录安全 metadata/usage；模型不能执行动作 |
 | 11.1 | Deterministic decision policy / confidence guard | Done for uncalibrated MVP | 新增 `SocDecisionPolicy`，把 raw analyzer score、来源、校准状态、证据状态、结构化 review reasons 和 policy version 分开；mock/failed evidence 不参与 domain/scenario 置信度 | stub/LLM self-report 当前全部进入复核；误报、冲突、schema 降级/不支持、关键证据缺口、截断等 guard 不会被高分覆盖；summary/queue/audit 保留原因 |
+| 11.2 | Runtime production hardening | Done | 显式 `skill_context` trace、共享 bounded projection、analysis evidence grounding、prompt/output/schema hard bounds、LLM concurrency/RPM admission、typed sanitized failure、Kafka retry/dead-letter 语义、run/summary/review/audit 原子 bundle | 未落地证据强制复核；可重试失败不 commit offset/不制造工单噪声；不可重试失败进入 ReviewQueue/DLQ；SQL 故障回归证明四类主写入全部回滚 |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Partial | normalization 运维页、Gateway bounded metrics 和 Kafka JSONL issue 摘要已完成；全局 Kafka/review/approval/runtime/算力 Prometheus exporter 和态势面板仍后置 | 当前 maintenance issue 可见；全系统运行态势不阻塞 SOC Agent Alpha |
@@ -75,7 +76,7 @@
 |---|---|---|---|
 | 1 | SOC Agent 代码落点确认与骨架创建 | Done | 明确包目录、CLI 接入方式、测试目录；新增空骨架不破坏现有测试 |
 | 2 | contracts + core state | Done | 定义 `AlertInput`、`AnalysisResult`、`Decision`、`AnalysisRun`、`PipelineStepTrace` 等 schema/状态 |
-| 3 | fixed Runtime pipeline | Done | `normalize -> entity_extract -> analyze_stub -> validate -> decide -> trace` 固定执行，LLM 不能跳步 |
+| 3 | fixed Runtime pipeline | Done | `normalize -> entity_extract -> fact_reconstruct -> build_analysis_input -> skill_context -> analyze -> schema_validate -> evidence_grounding -> decide` 固定执行，LLM 不能跳步 |
 | 4 | CLI `soc analyze` | Done | 能读取 JSON 文件/字符串，输出结构化 JSON 结果和 step trace |
 | 5 | golden alert samples | Done for Phase 1 | 覆盖批准扫描器误报、恶意 IOC、低置信未知、字段缺失、嵌套坏 JSON accepted/rejected repair 和 schema drift |
 | 6 | Phase 1 最小测试 | Done | 字段缺失不崩、输出过 schema/domain validation、每步有 trace、不执行自动处置；坏 JSON repair 有字段策略/domain guard 回归 |
@@ -175,6 +176,40 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-14 — SOC Runtime production hardening completion
+
+- 问题：
+  - LLM evidence 只做了非空校验，模型可以引用 bounded input 中不存在的值；skill resolver 隐藏在
+    `build_analysis_input` 内，trace 不可见；prompt/output 缺少完整硬上限。
+  - Runtime failure 只有 step error 字符串，Kafka 会把失败分析当 processed 并 commit；run/summary/
+    review/audit 分别 commit，任一中间失败会留下半套业务状态。
+- 实现：
+  - Runtime pipeline 升级为 `soc-runtime-v1`：增加显式 `skill_context` 和 `evidence_grounding` step；
+    `soc-analysis-v2` prompt 和 grounding 共用同一 `project_analysis_context()`。
+  - 新增 `AnalysisEvidenceGroundingReport`，逐条验证 evidence source/path 和 value；未落地证据进入
+    `ungrounded_analysis_evidence` review reason。`AnalysisResult`、evidence、knowledge candidate、prompt
+    context 和 model response 均增加硬上限。
+  - 新增 `SocLLMAdmissionController` 及 concurrency/RPM/admission-timeout 环境配置；容量饱和、超时、
+    provider unavailable、bad output、input limit 等进入 typed/sanitized `RuntimeFailure`。
+  - Kafka worker 对 retryable failure 不 commit；non-retryable failure 进入 DLQ。可重试 failed run 允许
+    同 idempotency key 重新执行且不立即创建人工工单；不可重试 failure 进入 ReviewQueue。
+  - 新增 `AnalysisPersistence.save_analysis_bundle()`；SQLAlchemy 将 run/summary/optional review/audit
+    作为一个事务提交，Normalization Monitor 保持 fail-open 后置处理。
+- 验证：
+  - 完整 SOC + architecture regression：`422 passed`；仅 1 条既有 DeerFlow MCP cache asyncio
+    deprecation warning。Ruff format/check 和 `git diff --check` 通过。
+  - 新增 evidence hallucination、source mismatch、composite evidence、response oversize、admission budget、
+    retry/no-commit、non-retry review、idempotent retry 和 SQL bundle rollback 覆盖。
+  - 5 条 `datas/` 均按 `normalize -> entity_extract -> fact_reconstruct -> build_analysis_input ->
+    skill_context -> analyze_stub -> schema_validate -> evidence_grounding -> decide` 完成，均无 failure，
+    stub evidence 全部落地。
+  - `deepseek-v4-pro` live smoke 完成并进入 `needs_review`；当前 grounding 对保存的 live analysis 重检为
+    `6 grounded / 1 ungrounded`，未落地项是模型合并的 role-resolution 自然语言，不允许高分掩盖。
+    本地 DeerFlow `config.yaml` 已从 v9 安全升级到 v24，并保留 `config.yaml.bak`。
+- 下一步：
+  - 用 5 条 `datas/` 先完成技术 smoke，再由用户逐条审阅真实 LLM 输出建立人工 label set；只有标签量和
+    calibration 指标达到要求后，才讨论 versioned profile，当前继续全量人工复核。
 
 ### 2026-07-14 — Deterministic decision policy and confidence guard
 

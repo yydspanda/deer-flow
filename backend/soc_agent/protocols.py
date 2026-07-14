@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from soc_agent.contracts import (
     AlertInput,
     AlertSummary,
+    AnalysisEvidenceGroundingReport,
     AnalysisNodeOutput,
     AnalysisResult,
     AnalysisRun,
@@ -69,6 +70,7 @@ class DecisionPolicy(Protocol):
         analysis: AnalysisResult,
         *,
         request: LLMAnalysisRequest,
+        grounding: AnalysisEvidenceGroundingReport,
         analyzer_step_name: str,
     ) -> Decision: ...
 
@@ -136,6 +138,19 @@ class ReviewQueueRepository(Protocol):
         status: ReviewQueueStatus | None = None,
         limit: int = 50,
     ) -> list[ReviewQueueItem]: ...
+
+
+class AnalysisPersistence(Protocol):
+    """Atomic persistence boundary for one completed Runtime analysis."""
+
+    def save_analysis_bundle(
+        self,
+        *,
+        run: AnalysisRun,
+        summary: AlertSummary,
+        review_item: ReviewQueueItem | None,
+        audit_record: DecisionAuditRecord,
+    ) -> None: ...
 
 
 class InvestigationEvidenceRepository(Protocol):

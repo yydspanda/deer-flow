@@ -142,6 +142,15 @@ class SocKafkaWorker:
                 approval_request_topics=self._approval_request_topics,
             )
             daemon_result = self._daemon_service.process_message(message)
+            if daemon_result.status == "failed":
+                error = KafkaWorkerError(
+                    error_type=str(daemon_result.payload.get("failure_kind") or "RuntimeFailure"),
+                    message=daemon_result.error or "SOC Runtime analysis failed",
+                    retryable=daemon_result.payload.get("retryable") is True,
+                )
+                if error.retryable:
+                    return KafkaWorkerResult.retryable_error(record=record, error=error)
+                return KafkaWorkerResult.dead_letter_required(record=record, error=error)
             return KafkaWorkerResult.processed(record=record, daemon_result=daemon_result)
         except (KafkaMapperError, SocServiceError) as exc:
             return KafkaWorkerResult.dead_letter_required(

@@ -254,32 +254,52 @@ Important behavior:
 ### 5.3 Runtime Pipeline / 固定运行时
 
 ```mermaid
-flowchart LR
-    I["AlertInput"] --> N["normalize"]
-    N --> X["entity_extract<br/>code-first"]
-    X --> F["fact_reconstruct<br/>RoleClaim + Scenario + Resolution"]
-    F --> B["build_analysis_input<br/>bounded evidence + coverage + skill context"]
-    B --> S["summary"]
-    S --> C["correlation"]
-    C --> D["domain_triage"]
-    D --> L["llm_analysis<br/>DeerFlow model / explicit mode / schema checked"]
-    L --> V["validate"]
-    V --> R["decision"]
-    R --> Q["review_queue"]
-    R --> A["audit + event"]
+flowchart TD
+    I["🧾 Raw Alert Payload"] --> N["1. normalize"]
+    N --> X["2. entity_extract<br/>code-first"]
+    X --> F["3. fact_reconstruct<br/>RoleClaim + Scenario + Resolution"]
+    F --> B["4. build_analysis_input<br/>bounded evidence + coverage"]
+    B --> S["5. skill_context<br/>allowlisted compact guidance"]
+    S --> L["6. analyze_stub / analyze_llm<br/>DeerFlow model in explicit mode"]
+    L --> V["7. schema_validate<br/>JSON + Pydantic + domain"]
+    V --> G["8. evidence_grounding<br/>claim value -> bounded context path"]
+    G --> R["9. SocDecisionPolicy<br/>operational decision guards"]
+    R --> P["🔒 Atomic analysis bundle<br/>run + summary + review + audit"]
+    L -->|failure| E["⚠️ RuntimeFailure<br/>typed + sanitized + retryable"]
+    E --> P
+    P --> M["🛠️ normalization_monitor<br/>fail-open maintenance side path"]
 ```
+
+`SocCorrelationService`, `SocDomainTriageService`, investigation actions, memory retrieval, and the
+DeerFlow SOC Lead Agent are **not hidden nodes inside this base Runtime**. They consume the persisted
+run through explicit orchestration/review services. This keeps one-alert execution replayable while
+allowing richer investigation workflows to evolve independently.
 
 Runtime rules:
 
 - Every node has typed input/output.
 - LLM output must pass parser and schema validation.
+- Analyzer evidence must pass deterministic grounding against the exact bounded prompt projection.
+  Ungrounded values or invalid source paths cannot disappear behind a high confidence score; they
+  become structured review reasons.
 - The live analyzer reuses DeerFlow `create_chat_model()` and configured model names. Entry surfaces
   select it explicitly with `--analyzer-mode llm` or `SOC_ANALYZER_MODE=llm`; direct service tests
   remain deterministic by default.
 - Model calls record actual model name, prompt/parser versions, duration, bounded token usage and
   safe provider metadata. They never persist API keys, request headers, full prompts or raw responses.
+- Process-local model admission is bounded independently from Kafka workers with
+  `SOC_LLM_MAX_CONCURRENCY`, optional `SOC_LLM_REQUESTS_PER_MINUTE`, and
+  `SOC_LLM_ADMISSION_TIMEOUT_SECONDS`.
 - Bad JSON repair is allowed only as a logged parser step.
+- Prompt context, model response, analysis text, evidence count/value size, knowledge candidates,
+  and projection depth/list sizes all have hard bounds.
 - Replay must be possible from stored run payload and deterministic settings.
+- Runtime failures are stored as `RuntimeFailure(kind, step_name, retryable, safe message)`. Retryable
+  Kafka failures do not commit the offset or open a duplicate analyst queue; non-retryable failures
+  are dead-lettered and enter ReviewQueue.
+- The primary business write is one transaction through `AnalysisPersistence.save_analysis_bundle()`:
+  `AnalysisRun`, `AlertSummary`, optional `ReviewQueueItem`, and `DecisionAuditRecord` either all
+  commit or all roll back. Normalization maintenance remains a fail-open post-write side path.
 - Runtime never calls production side-effect tools directly.
 
 ### 5.4 Normalizer and Evidence Layer / 标准化与证据层
@@ -407,6 +427,7 @@ The system has several confidence-like values, but they are not interchangeable 
 | `Decision.confidence_source` | Provenance of the raw decision score | Distinguishes stub heuristic, LLM self-report, human confirmation, and external disposition |
 | `Decision.calibrated_probability` | Versioned calibrated probability, when an approved profile exists | Currently `null`; it must never be fabricated from raw analyzer confidence |
 | `Decision.evidence_state` / `review_reasons` | Operational evidence guard and structured review causes | Drives ReviewQueue/audit explanations independently of the numeric score |
+| `AnalysisEvidenceGroundingReport` | Whether each analyzer evidence value exists at its declared bounded-context source | Ungrounded claims force review and remain auditable; never auto-rewrite model output |
 | Memory confidence | Strength of a reviewed reusable lesson | Retrieval ranking after confirmation; never promotes a candidate by itself |
 
 Rules:

@@ -55,6 +55,19 @@ class FakeDaemonService(SocDaemonService):
         )
 
 
+class RetryableRuntimeFailureDaemonService(SocDaemonService):
+    def process_message(self, message: SocDaemonMessage | dict[str, Any]) -> SocDaemonProcessResult:
+        daemon_message = SocDaemonMessage.model_validate(message)
+        return SocDaemonProcessResult(
+            message_id=daemon_message.message_id,
+            kind=daemon_message.kind,
+            status="failed",
+            run_id="RUN-FAILED-001",
+            error="TimeoutError while invoking configured SOC analyzer",
+            payload={"failure_kind": "analyzer_timeout", "retryable": True},
+        )
+
+
 def test_kafka_runner_processes_record_and_commits_after_service_success() -> None:
     record = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=10, value='{"alert_id":"ALT-1"}')
     consumer = FakeConsumer([record])
@@ -147,6 +160,20 @@ def test_kafka_runner_sends_service_failure_to_dead_letter_then_commits() -> Non
     assert "db unavailable" in (result.error or "")
     assert consumer.dead_letters[0][0] == record
     assert consumer.committed == [record]
+
+
+def test_kafka_runner_does_not_commit_retryable_runtime_failure() -> None:
+    record = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=4, value='{"alert_id":"ALT-4"}')
+    consumer = FakeConsumer([record])
+
+    with pytest.raises(RuntimeError, match="analyzer_timeout"):
+        SocKafkaConsumerRunner(
+            consumer=consumer,
+            daemon_service=RetryableRuntimeFailureDaemonService(),
+        ).process_next()
+
+    assert consumer.committed == []
+    assert consumer.dead_letters == []
 
 
 def test_kafka_runner_does_not_commit_when_dead_letter_write_fails() -> None:

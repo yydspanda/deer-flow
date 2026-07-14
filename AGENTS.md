@@ -153,6 +153,12 @@ Current SOC direction:
 - SOC Runtime live analysis reuses DeerFlow `create_chat_model` through `backend/soc_agent/llm/`.
   Select it explicitly with `SOC_ANALYZER_MODE=llm` / `SOC_LLM_MODEL` or CLI
   `--analyzer-mode llm --model-name NAME`; the default remains deterministic for tests and replay.
+- SOC model calls have independent process-local admission controls (`SOC_LLM_MAX_CONCURRENCY`,
+  optional requests-per-minute, and admission timeout). Analyzer evidence is deterministically
+  grounded against the exact bounded prompt projection before `SocDecisionPolicy` runs.
+- Persisted analysis writes run/summary/optional review/audit as one `AnalysisPersistence` transaction.
+  Retryable Runtime failures do not commit Kafka offsets or immediately create analyst queue noise;
+  non-retryable failures are recorded, reviewed, and dead-lettered.
 - LLM-discovered knowledge is candidate knowledge only. It must be confirmed by a human before
   it can affect future decisions.
 - PingAn `zeusRawLogs[].message` values are parsed only inside the PingAn normalizer. Deterministically

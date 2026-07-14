@@ -188,6 +188,7 @@ def _seed_fixture_investigation(
         summary_repository=repository,
         audit_repository=repository,
         review_queue_repository=repository,
+        analysis_persistence=repository,
     ).analyze(payload, context=context)
     review_item = _review_item_for_run(repository, run.run_id)
     failure_reasons: list[str] = []

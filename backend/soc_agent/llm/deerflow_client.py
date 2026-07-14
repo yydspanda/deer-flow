@@ -10,6 +10,7 @@ from langchain.chat_models import BaseChatModel
 
 from deerflow.config.app_config import AppConfig
 from deerflow.models import create_chat_model
+from soc_agent.llm.admission import SocLLMAdmissionController
 from soc_agent.llm.analyzer import LLMChatResponse
 
 _SAFE_RESPONSE_METADATA_KEYS = (
@@ -37,12 +38,21 @@ class DeerFlowLLMChatClient:
         attach_tracing: bool = True,
         run_name: str = "soc_runtime_analysis",
         model_factory: Callable[..., BaseChatModel] = create_chat_model,
+        admission_controller: SocLLMAdmissionController | None = None,
+        max_concurrency: int = 1,
+        requests_per_minute: int = 0,
+        acquire_timeout_seconds: float = 5.0,
     ) -> None:
         self._app_config = app_config
         self._thinking_enabled = thinking_enabled
         self._attach_tracing = attach_tracing
         self._run_name = run_name
         self._model_factory = model_factory
+        self._admission = admission_controller or SocLLMAdmissionController(
+            max_concurrency=max_concurrency,
+            requests_per_minute=requests_per_minute,
+            acquire_timeout_seconds=acquire_timeout_seconds,
+        )
         self._models: dict[str, BaseChatModel] = {}
         self._models_lock = Lock()
 
@@ -53,14 +63,15 @@ class DeerFlowLLMChatClient:
         model_name: str,
     ) -> LLMChatResponse:
         model = self._get_model(model_name)
-        response = model.invoke(
-            [dict(message) for message in messages],
-            config={
-                "run_name": self._run_name,
-                "tags": ["soc-agent", "soc-runtime", "bounded-analysis"],
-                "metadata": {"soc_model_name": model_name},
-            },
-        )
+        with self._admission.admit():
+            response = model.invoke(
+                [dict(message) for message in messages],
+                config={
+                    "run_name": self._run_name,
+                    "tags": ["soc-agent", "soc-runtime", "bounded-analysis"],
+                    "metadata": {"soc_model_name": model_name},
+                },
+            )
         response_metadata = _mapping(getattr(response, "response_metadata", None))
         return LLMChatResponse(
             content=getattr(response, "content", response),
