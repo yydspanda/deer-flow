@@ -162,6 +162,44 @@ CI runs these regression tests for every pull request via [.github/workflows/bac
 
 ## Architecture
 
+### SOC Agent Extension
+
+The fork-specific SOC business extension lives under `backend/soc_agent/` and must remain separate
+from the reusable DeerFlow harness runtime. Entry surfaces call SOC core services; vendor aliases and
+loose payload handling stay in `soc_agent.normalizers`.
+
+For PingAn legacy alerts, `normalizers/pingan_platform.py` preserves the complete input while
+`normalizers/pingan_messages.py` deterministically parses `zeusRawLogs[].message`. Parsed message
+facts have higher trust than Zeus structured fallback fields. Analysis nodes receive only bounded
+primary/supplementary evidence through `LLMAnalysisRequest`, never the unbounded vendor payload.
+Supported JSON-in-string and HTTP fields are decoded only through allowlisted, size-bounded decoders;
+bounded evidence replaces raw bodies/headers with redacted decoded projections.
+Strict nested decode failure preserves the original string and warning. Conservatively validated
+repair is stored only in the separately labeled `repaired_fields` projection; rejected repair uses
+a redacted string fallback, and repaired JSON is never a strict-decoded source fact.
+`MessageSchemaObservation` records parser status and structural fingerprints for
+accepted-baseline drift checks. `LLMAnalysisRequest.evidence_coverage` records parsed/decoded usage,
+sanitization, truncation, omissions, and high-value mapping gaps; prompts receive only its compact
+path-free summary.
+
+Production normalization drift is handled by `core/normalization_maintenance.py`, not by the alert
+ReviewQueue. Explicitly approved baselines and deduplicated maintenance issues are persisted through
+the repository protocols and migration `0012_normalization_maintenance`. Persisted CLI/Kafka analysis
+injects the monitor after run/summary/review/audit writes; monitor failures are warnings and must not
+fail alert analysis. Operational surfaces are Gateway `/api/soc/normalization/*`, CLI
+`soc normalize baseline-accept|baselines|issues|issue-update`, Review TUI `/normalization`, and Web
+`/workspace/soc/normalization`. `soc normalize suggest` and `soc eval confidence` are offline-only;
+their outputs cannot mutate adapters, baselines, runtime policy, or automatic-action thresholds.
+
+PingAn vendor aliases are translated into generic `RoleClaim` objects inside `soc_agent.normalizers`.
+`pipeline.fact_reconstructor` must remain vendor-neutral: it builds scenario hypotheses and
+conflict-aware `RoleResolution` objects, and must not assume attacker=source or victim=destination.
+Fact reconstruction never chooses an operational response target and never enables automation.
+
+The authoritative SOC architecture and engineering rules remain in
+`.notes/ai_soc/soc-agent-solution.md` and
+`.notes/reference-index/soc-agent-engineering-contracts.md`.
+
 ### Harness / App Split
 
 The backend is split into two layers with a strict dependency direction:

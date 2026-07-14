@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow / SOC 预警完整流转
 
-> Updated: 2026-07-08
+> Updated: 2026-07-14
 >
 > 本文只描述当前项目里的 SOC Agent 端到端运行过程、状态流转、数据写入和安全边界。
 >
@@ -23,6 +23,7 @@
 | ✅ | Confirmed memory | 已确认记忆，但默认不自动影响判定 |
 | 🛡️ | Approval boundary | 高风险动作审批边界 |
 | 🚫 | Forbidden mutation | 不允许自动改判、自动处置或绕过服务 |
+| 🛠️ | Maintenance | 解析器、Schema 基线和字段映射维护 |
 
 ## 1. End-to-End Overview / 端到端总览
 
@@ -32,6 +33,9 @@ flowchart TD
     B --> C["⚙️ SocAnalysisService<br/>统一分析入口 / analysis entry"]
     C --> D["⚙️ Fixed Runtime Pipeline<br/>固定流水线 / deterministic control flow"]
     D --> E["🗃️ SOC Business Store<br/>run + summary + queue + audit"]
+    E --> W["🛠️ Normalization Monitor<br/>schema baseline + drift + coverage"]
+    W --> X["🗃️ Maintenance Store<br/>baseline + deduplicated issues"]
+    X --> Y["🧑‍💻 CLI / TUI / Web / Metrics<br/>归一化运维"]
 
     E --> F["🔎 ReviewQueue<br/>人工复核入口 / analyst review item"]
     F --> G["⚙️ SocReviewService.get_investigation_context<br/>聚合调查上下文 / context assembly"]
@@ -70,6 +74,8 @@ flowchart TD
 6. 高风险动作只进入审批 inbox 和 grant boundary，当前不执行生产副作用。
 7. 人工 correction、review note、外部处置理由、domain finding 都只能先形成 pending memory candidate。
 8. confirmed memory 仍受 retrieval gate 控制，不直接改 runtime verdict。
+9. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
+   但不能改变 verdict、ReviewQueue 或分析成功状态。
 
 ## 2. Alert Analysis Pipeline / 预警分析流水线
 
@@ -99,7 +105,9 @@ flowchart TD
     Q --> R["🗃️ upsert soc_alert_summaries"]
     R --> S["🗃️ upsert soc_review_queue<br/>仅 needs_review 或高风险进入 open queue"]
     S --> T["🗃️ save soc_decision_audit_log"]
-    T --> U["📣 SocEvent<br/>ANALYSIS_COMPLETED / ANALYSIS_FAILED"]
+    T --> U["🛠️ normalization_monitor<br/>baseline / schema / coverage"]
+    U --> V["🗃️ upsert normalization issues<br/>dedupe + recurrence + reopen"]
+    V --> W["📣 SocEvent<br/>DRIFT_DETECTED + ANALYSIS_COMPLETED"]
 ```
 
 ### Step Details / 每一步到底做什么
@@ -108,12 +116,13 @@ flowchart TD
 |---|---|---|---|
 | `normalize` | Convert vendor payload to canonical alert | 把不同供应商、平安 Zeus envelope、EDR/APT/HIDS 原始字段转成统一 `AlertInput` | `AlertInput`, `NormalizationReport` |
 | `entity_extract` | Extract security entities | 抽取 IP、域名、URL、host、user/UM、process、file、rule_code/rule_name 等实体 | `ExtractedEntities` |
-| `fact_reconstruct` | Rebuild trusted facts | 按 evidence layer / field trust 还原攻击方、受害方、方向、资产、冲突字段 | `FactReconstructionResult` |
+| `fact_reconstruct` | Rebuild and adjudicate facts | 把厂商字段声明转换为 `RoleClaim`，结合场景假设裁决 source/destination/attacker/victim/impacted asset；冲突时给暂定结论、证据缺口和核查清单，但不确定 response target | `FactReconstructionResult v2`, `RoleResolution`, `ConflictReport` |
 | `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型，而是构造受限分析上下文 | `LLMAnalysisRequest` |
-| `skill_context` | Resolve SOC skills | 根据 source type、场景、实体、冲突选择 SOC skills，如 APT/EDR/HIDS/asset-direction | `SocSkillContext` |
+| `skill_context` | Resolve SOC skills | 根据 source type、场景、实体、冲突选择 SOC skills；当前产物是名称/原因/摘要/hash 的选择清单，不是完整 `SKILL.md` 正文 | `SocSkillContext` |
 | `analyze_stub / LLM analyzer` | Run bounded reasoning | 当前默认 deterministic stub；真实 LLM behind flag 且必须输出 JSON | `AnalysisNodeOutput` |
 | `schema_validate` | Validate model result | 严格校验 JSON schema、字段类型、domain rule，坏 JSON 需要 repair 后再校验 | `AnalysisResult` |
 | `decide` | Create operational decision | 生成 verdict、confidence、needs_review、suggested_action；不允许自动高风险处置 | `Decision` |
+| `normalization_monitor` | Detect parser/mapping maintenance work | 在业务结果已落库后检查基线、新结构、解析降级、关键字段缺口和 evidence truncation；失败只写 warning | `NormalizationMonitoringResult`, `NormalizationMaintenanceIssue` |
 
 ## 3. Persistence Map / 数据写入地图
 
@@ -138,6 +147,8 @@ flowchart LR
     M --> G
     O["⚙️ SocMemoryService"] --> G
     O --> P["🗃️ soc_memory_records<br/>confirmed but retrieval gated"]
+    Q["🛠️ SocNormalizationMaintenanceService"] --> R["🗃️ soc_normalization_schema_baselines"]
+    Q --> S["🗃️ soc_normalization_maintenance_issues"]
 ```
 
 每张表的职责：
@@ -154,6 +165,8 @@ flowchart LR
 | `soc_memory_records` | Confirmed memory records | 已确认记忆，默认 `retrieval_enabled=false`，仍不自动注入 prompt |
 | `soc_approval_requests` | Pending approval requests | 高风险动作审批 inbox |
 | `soc_approval_grants` | One-time approval grants | 一次性授权 token，当前 execute boundary 不执行生产副作用 |
+| `soc_normalization_schema_baselines` | Approved parser fingerprints | 人工批准的 tenant/source/adapter/parser/version 基线；新版本 supersede 旧版本 |
+| `soc_normalization_maintenance_issues` | Parser/mapping maintenance queue | 去重保存 missing/novel/degraded/unsupported/gap/truncation，记录出现次数和处理状态 |
 
 ## 4. Review Context Assembly / 调查上下文聚合
 

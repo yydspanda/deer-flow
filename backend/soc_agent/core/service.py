@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -32,9 +32,11 @@ from soc_agent.contracts import (
     InvestigationContext,
     InvestigationEvidence,
     InvestigationTimelineItem,
+    MessageSchemaStatus,
     NormalizationDriftReport,
     NormalizationDriftSample,
     NormalizationInspectionResult,
+    NormalizationMonitoringResult,
     NormalizationReport,
     ReviewNoteCommand,
     ReviewNoteResult,
@@ -88,6 +90,7 @@ from soc_agent.protocols import (
     LLMAnalyzer,
     MemoryCandidateRepository,
     MemoryRecordRepository,
+    NormalizationMaintenanceMonitor,
     ReviewQueueRepository,
     SocActionAdapterRegistryPort,
     SocAgentApprovalGrantRepository,
@@ -143,6 +146,7 @@ class SocAnalysisService:
         summary_repository: AlertSummaryRepository | None = None,
         audit_repository: DecisionAuditRepository | None = None,
         review_queue_repository: ReviewQueueRepository | None = None,
+        normalization_maintenance_monitor: NormalizationMaintenanceMonitor | None = None,
         event_sink: SocEventSink | None = None,
     ) -> None:
         self._runtime = runtime or DeterministicAnalysisRuntime()
@@ -150,6 +154,7 @@ class SocAnalysisService:
         self._summary_repository = summary_repository
         self._audit_repository = audit_repository
         self._review_queue_repository = review_queue_repository
+        self._normalization_maintenance_monitor = normalization_maintenance_monitor
         self._event_sink = event_sink or NoopEventSink()
 
     def analyze(
@@ -226,6 +231,21 @@ class SocAnalysisService:
                 )
             )
 
+        if self._normalization_maintenance_monitor is not None:
+            try:
+                run.normalization_monitoring_result = self._normalization_maintenance_monitor.monitor_run(
+                    run,
+                    context=context,
+                )
+            except Exception as exc:  # noqa: BLE001 - maintenance monitoring must not fail alert analysis
+                run.normalization_monitoring_result = NormalizationMonitoringResult(
+                    run_id=run.run_id,
+                    alert_id=run.alert_id,
+                    warnings=[f"normalization monitoring failed: {type(exc).__name__}"],
+                )
+            if self._repository is not None:
+                self._repository.save_run(run)
+
         self._emit_analysis_completion(run, context=context, replay_of_run_id=replay_of_run_id, idempotent_replay=False)
         return run
 
@@ -290,6 +310,7 @@ class SocNormalizationService:
         *,
         mapping_path: str | Path | None = None,
         mapping_config: Mapping[str, Any] | None = None,
+        known_schema_fingerprints: Collection[str] | None = None,
     ) -> NormalizationDriftReport:
         if mapping_path is not None and mapping_config is not None:
             raise SocServiceError("mapping_path and mapping_config cannot both be provided")
@@ -312,9 +333,17 @@ class SocNormalizationService:
                 )
             )
 
-        return _normalization_drift_report(sample_reports)
+        return _normalization_drift_report(
+            sample_reports,
+            known_schema_fingerprints=known_schema_fingerprints,
+        )
 
-    def drift_recent(self, *, limit: int = 50) -> NormalizationDriftReport:
+    def drift_recent(
+        self,
+        *,
+        limit: int = 50,
+        known_schema_fingerprints: Collection[str] | None = None,
+    ) -> NormalizationDriftReport:
         if self._repository is None:
             raise SocServiceNotImplementedError("drift_recent requires an AlertRepository")
 
@@ -340,7 +369,10 @@ class SocNormalizationService:
                 )
             )
 
-        return _normalization_drift_report(sample_reports)
+        return _normalization_drift_report(
+            sample_reports,
+            known_schema_fingerprints=known_schema_fingerprints,
+        )
 
 
 class SocSkillResolutionService:
@@ -354,16 +386,26 @@ class SocSkillResolutionService:
         return self._resolver.resolve_for_analysis_request(request)
 
 
-def _normalization_drift_report(sample_reports: list[NormalizationDriftSample]) -> NormalizationDriftReport:
+def _normalization_drift_report(
+    sample_reports: list[NormalizationDriftSample],
+    *,
+    known_schema_fingerprints: Collection[str] | None = None,
+) -> NormalizationDriftReport:
+    known_fingerprints = None if known_schema_fingerprints is None else set(known_schema_fingerprints)
     adapter_counts: Counter[str] = Counter()
     source_type_counts: Counter[str] = Counter()
     missing_field_counts: Counter[str] = Counter()
     unmapped_field_counts: Counter[str] = Counter()
     entity_kind_counts: Counter[str] = Counter()
     missing_entity_kind_counts: Counter[str] = Counter()
+    schema_fingerprint_counts: Counter[str] = Counter()
+    novel_schema_fingerprint_counts: Counter[str] = Counter()
+    schema_status_counts: Counter[str] = Counter()
     warning_counts: Counter[str] = Counter()
 
     for sample in sample_reports:
+        if known_fingerprints is not None:
+            sample.novel_schema_fingerprints = sorted(fingerprint for fingerprint in sample.schema_fingerprints if fingerprint not in known_fingerprints)
         if sample.adapter:
             adapter_counts.update([sample.adapter])
         source_type_counts.update([sample.source_type.value])
@@ -371,9 +413,16 @@ def _normalization_drift_report(sample_reports: list[NormalizationDriftSample]) 
         unmapped_field_counts.update(sample.unmapped_fields)
         entity_kind_counts.update(sample.entity_counts)
         missing_entity_kind_counts.update(sample.missing_entity_kinds)
+        schema_fingerprint_counts.update(sample.schema_fingerprints)
+        novel_schema_fingerprint_counts.update(sample.novel_schema_fingerprints)
+        schema_status_counts.update(status.value for status in sample.schema_statuses)
         warning_counts.update(sample.warnings)
 
-    suspicious_samples = [sample for sample in sample_reports if sample.status == "failed" or sample.missing_fields or sample.unmapped_fields]
+    suspicious_samples = [
+        sample
+        for sample in sample_reports
+        if sample.status == "failed" or sample.missing_fields or sample.unmapped_fields or sample.novel_schema_fingerprints or any(status is not MessageSchemaStatus.RECOGNIZED for status in sample.schema_statuses)
+    ]
 
     success_count = sum(1 for sample in sample_reports if sample.status == "success")
     return NormalizationDriftReport(
@@ -386,6 +435,11 @@ def _normalization_drift_report(sample_reports: list[NormalizationDriftSample]) 
         unmapped_field_counts=dict(unmapped_field_counts),
         entity_kind_counts=dict(entity_kind_counts),
         missing_entity_kind_counts=dict(missing_entity_kind_counts),
+        schema_fingerprint_counts=dict(schema_fingerprint_counts),
+        schema_baseline_applied=known_fingerprints is not None,
+        known_schema_fingerprint_count=len(known_fingerprints or ()),
+        novel_schema_fingerprint_counts=dict(novel_schema_fingerprint_counts),
+        schema_status_counts=dict(schema_status_counts),
         warning_counts=dict(warning_counts),
         suspicious_samples=suspicious_samples,
         samples=sample_reports,
@@ -412,6 +466,8 @@ def _drift_sample_from_reports(
         unmapped_fields=normalization.unmapped_fields,
         entity_counts=extraction.entity_counts,
         missing_entity_kinds=extraction.missing_entity_kinds,
+        schema_fingerprints=[observation.schema_fingerprint for observation in normalization.message_schemas if observation.schema_fingerprint],
+        schema_statuses=[observation.status for observation in normalization.message_schemas],
         warnings=[*normalization.warnings, *extraction.warnings],
     )
 
@@ -1355,6 +1411,9 @@ class SocDaemonService:
             run_id=run.run_id,
             alert_id=run.alert_id,
             analysis_status=run.status.value,
+            normalization_issue_count=(len(run.normalization_monitoring_result.issues) if run.normalization_monitoring_result is not None else 0),
+            normalization_issue_ids=([item.issue_id for item in run.normalization_monitoring_result.issues] if run.normalization_monitoring_result is not None else []),
+            normalization_warnings=(run.normalization_monitoring_result.warnings if run.normalization_monitoring_result is not None else []),
             payload={
                 "topic": message.topic,
                 "partition": message.partition,

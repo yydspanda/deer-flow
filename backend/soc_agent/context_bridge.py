@@ -199,7 +199,8 @@ def _fact_context_payload(context: InvestigationContext) -> dict[str, Any]:
         payload["selected_input_path"] = reconstruction.selected_input_path
         payload["selected_input_available"] = reconstruction.selected_input_available
         payload["conflict_reports"] = [item.model_dump(mode="json", exclude_none=True) for item in reconstruction.conflict_reports[:_MAX_FACT_ITEMS]]
-        payload["role_assignments"] = [item.model_dump(mode="json", exclude_none=True) for item in reconstruction.role_assignments[:_MAX_FACT_ITEMS]]
+        payload["scenario_hypotheses"] = [item.model_dump(mode="json", exclude_none=True) for item in reconstruction.scenario_hypotheses[:_MAX_FACT_ITEMS]]
+        payload["role_resolutions"] = [item.model_dump(mode="json", exclude_none=True) for item in reconstruction.role_resolutions[:_MAX_FACT_ITEMS]]
         payload["warnings"] = payload.get("warnings") or reconstruction.warnings[:_MAX_FACT_ITEMS]
     return payload
 

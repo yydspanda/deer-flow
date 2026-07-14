@@ -626,3 +626,79 @@ export interface SocAgentActionResult {
   payload: Record<string, unknown>;
   requires_human_approval?: boolean;
 }
+
+export type SocNormalizationIssueStatus =
+  | "open"
+  | "acknowledged"
+  | "resolved"
+  | "ignored";
+
+export type SocNormalizationIssueType =
+  | "baseline_missing"
+  | "novel_schema"
+  | "degraded_schema"
+  | "unsupported_schema"
+  | "high_value_gap"
+  | "evidence_truncated";
+
+export interface SocNormalizationMaintenanceIssue {
+  schema_version: "soc.normalization_maintenance_issue.v1";
+  issue_id: string;
+  dedupe_key: string;
+  issue_type: SocNormalizationIssueType;
+  severity: "info" | "warning" | "critical";
+  status: SocNormalizationIssueStatus;
+  tenant_id?: string | null;
+  source_system?: string | null;
+  adapter: string;
+  parser_name?: string | null;
+  parser_version?: string | null;
+  schema_fingerprint?: string | null;
+  source_path?: string | null;
+  expected_target?: string | null;
+  run_id?: string | null;
+  alert_id?: string | null;
+  occurrence_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  resolution_reason?: string | null;
+  details: Record<string, unknown>;
+}
+
+export interface SocNormalizationIssueListResponse {
+  items: SocNormalizationMaintenanceIssue[];
+}
+
+export interface SocNormalizationIssueUpdateRequest {
+  status: Exclude<SocNormalizationIssueStatus, "open">;
+  reason: string;
+}
+
+export interface SocNormalizationSchemaBaseline {
+  schema_version: "soc.normalization_schema_baseline.v1";
+  baseline_id: string;
+  version: number;
+  status: "active" | "superseded";
+  tenant_id?: string | null;
+  source_system?: string | null;
+  adapter: string;
+  parser_name: string;
+  parser_version: string;
+  accepted_fingerprints: string[];
+  reason: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SocNormalizationBaselineListResponse {
+  items: SocNormalizationSchemaBaseline[];
+}
+
+export interface SocNormalizationOperationsMetrics {
+  schema_version: "soc.normalization_operations_metrics.v1";
+  open_issue_count: number;
+  issue_type_counts: Record<string, number>;
+  severity_counts: Record<string, number>;
+  source_system_counts: Record<string, number>;
+  active_baseline_count: number;
+}

@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 收口完成，Phase 2 correlation / domain triage 起步 |
-| 当前目标 | Kafka ingestion 基线已收口；SOC Lead Agent 已复用 DeerFlow custom-agent/profile/skills/chat entry，能接收 ReviewQueue bounded context，并能把显式 action proposal 路由到 policy/approval boundary；Web/TUI 审批入口可展示 proposal 来源和参数；read-only adapter / Lead Agent proposal / MCP bridge / local real MCP smoke / upstream MCP compatibility retest / asset extraction skill + asset.locate MCP mock / read-only action evidence bridge / InvestigationEvidence PG persistence / external disposition PG + ReviewQueue visibility / memory candidate PG + API + ReviewQueue visibility / memory candidate review workflow / confirmed memory retrieval policy MVP / Web/TUI visible investigation MVP / persistent demo script MVP / single-alert demo MVP 已固定；memory candidate source bridge 已接 correction、domain finding、analyst feedback 和 review note；generic scenario recognition deterministic MVP 已接 evidence profile/current conclusion，支持 `vendor.unmapped` 未映射厂商场景候选 finding，并暴露 PingAn + vendor-neutral taxonomy/eval coverage/replay diff baseline；真实 dev/staging MCP 等待 endpoint/凭证 |
+| 当前目标 | Runtime 单预警链路和 PingAn message/fact/coverage 验证已走通；schema baseline、主动 drift/coverage maintenance queue、CLI/API/Web/TUI 可见性、离线 mapping suggestion 和 confidence calibration boundary 已落地；SOC Lead Agent、ReviewQueue、Kafka、memory、external disposition、domain triage 继续沿既有 service boundary 演进；真实 dev/staging MCP 等待 endpoint/凭证 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 继续 Alpha 演示链路：把 single-alert demo 的同一套 review summary 接入 Web/TUI 操作面，或推进 Lead Agent/Kafka 结论生成 pending memory candidate；bounded LLM scenario recognizer / custom taxonomy 设计仍排在后面。 |
+| 当前下一刀 | 用 5 条 `datas/` 样本完成 Runtime 后续 analyze/validate/decide 输出审阅，并建立第一份人工标注 confidence calibration fixture；不要提前打开自动处置。 |
 
 ## 当前待办列表
 
@@ -61,9 +61,10 @@
 | 7 | Web/TUI visible investigation | Done for MVP | 已新增 `UnifiedInvestigationView`、`InvestigationTimelineItem`，`InvestigationContext` 聚合 correlation result、domain triage results、evidence timeline、external feedback、memory candidates 和 relevant memories；Web/TUI/Lead Agent bounded artifact 可见 | 分析师能区分 runtime decision、domain findings、read-only evidence、外部人工反馈、人工 correction、retrieval-enabled memory；视图只读，不改 verdict |
 | 8 | Demo / Eval Script | Done for APT/EDR/HIDS + single-alert MVP | 已新增 `soc demo run [all|apt|edr|hids]` 和 `soc demo alert PATH|--json`；前者持久化 PingAn APT/EDR/HIDS investigation chain，后者跑一条任意 alert 并输出 compact review summary | 一条命令可稳定演示 runtime + domain triage + evidence/memory/review 状态，并能直接用 `soc review context QUEUE_ID --summary --pretty` 或 Web/TUI 打开统一调查视图；本 MVP 为保持 open review 可见性，暂不种 external disposition |
 | 9 | Memory candidate source integration | Partial | 已新增 `SocMemoryCandidateSourceBridge`：correction 会自动生成 pending candidate 并回写 `memory_candidate_id`，domain finding 已有幂等 bridge/factory，analyst feedback 可进入 candidate content/facets/metadata，`SocReviewService.add_note()` / `soc review note` 可把 ReviewQueue review note 生成 pending candidate；Kafka daemon、Lead Agent proposal 等来源待接 | 每类来源都有 source/evidence/validity/idempotency/facet；候选默认 pending review；confirmed/retrieval gate 仍由 `SocMemoryService` 控制 |
+| 10 | Normalization maintenance loop | Done for MVP | 持久化 schema baseline、主动 monitor、去重/reopen issue、SocEvent、CLI/API/Web/TUI、Kafka metric 摘要；字段重要性 registry、离线 suggestion、confidence calibration 和 repair domain guard 已落地 | 新 schema/解析降级/关键映射缺口不静默；首次观察不自批 baseline；suggestion 不自动改代码；calibration profile 不自动放行动作 |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
-| D2 | Prometheus / operations overview | Deferred | Kafka/review/approval/runtime 数据流稳定后，再做指标和运行态势面板 | 不阻塞当前 SOC Agent Alpha |
+| D2 | Prometheus / operations overview | Partial | normalization 运维页、Gateway bounded metrics 和 Kafka JSONL issue 摘要已完成；全局 Kafka/review/approval/runtime/算力 Prometheus exporter 和态势面板仍后置 | 当前 maintenance issue 可见；全系统运行态势不阻塞 SOC Agent Alpha |
 | D3 | High-risk real execute | Deferred | 等真实 staging adapter、审批策略、补偿和 adapter audit 成熟后再打开 | 生产 execute 前必须有 approval、dry-run、idempotency、回滚/补偿策略 |
 
 ## Phase 1 切片计划
@@ -74,18 +75,18 @@
 | 2 | contracts + core state | Done | 定义 `AlertInput`、`AnalysisResult`、`Decision`、`AnalysisRun`、`PipelineStepTrace` 等 schema/状态 |
 | 3 | fixed Runtime pipeline | Done | `normalize -> entity_extract -> analyze_stub -> validate -> decide -> trace` 固定执行，LLM 不能跳步 |
 | 4 | CLI `soc analyze` | Done | 能读取 JSON 文件/字符串，输出结构化 JSON 结果和 step trace |
-| 5 | golden alert samples | Partial | 覆盖批准扫描器误报、恶意 IOC、低置信未知、字段缺失；坏 JSON 模拟待补 |
-| 6 | Phase 1 最小测试 | Partial | 字段缺失不崩、输出过 schema/domain validation、每步有 trace、不执行自动处置；坏 JSON repair 待补 |
+| 5 | golden alert samples | Done for Phase 1 | 覆盖批准扫描器误报、恶意 IOC、低置信未知、字段缺失、嵌套坏 JSON accepted/rejected repair 和 schema drift |
+| 6 | Phase 1 最小测试 | Done | 字段缺失不崩、输出过 schema/domain validation、每步有 trace、不执行自动处置；坏 JSON repair 有字段策略/domain guard 回归 |
 | 7 | replay contract | Done | `AnalysisRun` 记录 input payload/hash；`SocAnalysisService.replay()` 通过 repository 生成新 run，不覆盖旧 run |
 | 8 | PostgreSQL run repository | Done | SOC ORM row + SQLAlchemy repository + Alembic migration + headless CLI `show/replay` 已完成 |
 | 9 | manual correction loop | Done | `soc correct RUN_ID` 更新 operational decision，保留原 AI verdict，追加 correction record，不自动写 confirmed memory |
 | 10 | decision audit log | Done | `soc_decision_audit_log` 独立表记录 analyze/replay/correct 的结构化审计记录 |
 | 11 | alert summary read model | Done | `soc_alert_summaries` 保存可查询摘要，analyze/replay/correct 通过 service 维护 summary |
-| 12 | legacy platform normalizer | Done | 平安旧预警平台 envelope 转 canonical `AlertInput`，APT/EDR demo 可提取核心实体 |
+| 12 | legacy platform normalizer | Done | 平安旧预警平台 envelope 转 canonical `AlertInput`；APT/EDR/HIDS raw message parser registry 可提取核心实体，完整 raw payload 保留 |
 | 13 | CLI summary list | Done | `soc list` 输出持久化 `AlertSummary`，用于验证 Web/TUI 列表字段 |
-| 14 | ZEUS evidence input policy | Done | 平安 ZEUS/天眼 raw message 优先，缺失时 fallback 到 `zeusRawLogs` 并显式降级可信度 |
+| 14 | ZEUS evidence input policy | Done | 平安 ZEUS/天眼 parsed raw message 最高优先级；多 message 分 primary/supplementary；nested decode 失败保留原文，保守验收的 repair 进入独立 repaired projection，拒绝/失败时使用脱敏字符串 fallback |
 | 15 | fact reconstruction layer | Done | `entity_extract` 后生成 `FactReconstructionResult`，记录字段可信度、角色候选和冲突报告 |
-| 16 | LLM-ready analysis request | Done | `fact_reconstruct` 后生成 `LLMAnalysisRequest`，analyzer 只消费有界分析上下文 |
+| 16 | LLM-ready analysis request | Done | `fact_reconstruct` 后生成 `LLMAnalysisRequest`，analyzer 消费有界 primary/supplementary evidence 内容和 compact coverage summary，不接收完整 vendor payload；完整 `EvidenceCoverageReport` 留作审计 |
 | 17 | Prompt Builder + SOC prompt golden tests | Done | Prompt 只能从 `LLMAnalysisRequest` 生成；覆盖 PingAn APT/EDR、raw message 缺失 fallback、字段冲突；不把完整 raw payload 无脑塞进 prompt |
 | 18 | LLM JSON parser + bad JSON repair | Done | 先严格 JSON parse，再 repair，再 Pydantic/domain validation；覆盖代码块、尾逗号、半截 JSON、字段类型错误 |
 | 19 | 真实 LLM analyzer behind flag | Done | 默认继续走 `analyze_stub`；显式配置开启后才调用模型；输出必须经过 prompt builder、JSON parser、schema/domain validation |
@@ -172,6 +173,159 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-14 — Normalization maintenance and calibration loop
+
+- 问题：
+  - 原有 `normalize drift --schema-baseline` 只能人工离线比较，Runtime 即使发现 unsupported/degraded/
+    high-value gap 也不会形成可领取、可去重、可关闭的维护工作。
+  - hardcoded high-value 字段规则无法扩展到新供应商；LLM 辅助 mapping 和 confidence 阈值也缺少
+    离线、不可自动生效的工程边界。
+- 实现：
+  - 新增 versioned `NormalizationSchemaBaseline` 和 deduplicated `NormalizationMaintenanceIssue`，Alembic
+    `0012_normalization_maintenance` 持久化两类对象；基线仅 `soc_engineer/soc_admin` 可接受，新版本
+    supersede 旧版本并关闭 covered missing/novel issue，resolved/ignored issue 复发会 reopen。
+  - `SocAnalysisService` 在业务 run/summary/review/audit 写入后调用 maintenance monitor；监控失败 fail-open，
+    只写 `NormalizationMonitoringResult.warnings`。CLI/Kafka 持久化入口已注入 monitor。
+  - 新增 Gateway `/api/soc/normalization/{baselines,issues,metrics}`、CLI baseline/issues/update、Review TUI
+    `/normalization` / `/norm-update`，以及 Web `/workspace/soc/normalization`。
+  - Kafka process result/JSONL metric 带 normalization issue count/IDs/warnings，不带 raw message。
+  - `EvidenceFieldImportanceRegistry` 取代 coverage 内硬编码检查；PingAn HTTP User-Agent/XFF 已映射到
+    canonical HTTP entity，adapter 可通过 typed extension 增加供应商规则。
+  - `soc normalize suggest` 构造不含值的离线路径 prompt，LLM replay 结果必须通过 observed source path 和
+    canonical target whitelist；所有输出不可 auto apply。
+  - `soc eval confidence` 输出 accuracy/Brier/ECE/bins/versioned review threshold；小样本/单一类别 warning，
+    `auto_action_allowed=false`。
+  - nested JSON repair 增加 field-specific root、depth、node、key/value source-evidence domain guard。
+  - 新增 `backend/scripts/generate_soc_normalization_maintenance_validation.py`，可从 `datas/` 一次重生成
+    gitignored Step 2-5 contract 快照；Step 5 显示每条真实样本触发的 maintenance issue，便于逐步审阅。
+- 验证：
+  - backend Ruff check passed；完整 SOC suite `396 passed`。
+  - frontend `pnpm check` passed；Alembic head 在全新 SQLite 文件升级成功。
+  - `cd backend && UV_CACHE_DIR=/tmp/deer-flow-uv-cache uv run python -m scripts.generate_soc_normalization_maintenance_validation`
+    已重生成 5 条 `datas/` 样本的 Step 2-5 工件；`apt-1965449` 的 canonical/LLM request 已包含
+    User-Agent，且 `high_value_gaps=[]`。
+  - 已运行 `codegraph sync .`，新增验证脚本和本轮最终符号进入本地 CodeGraph 索引。
+- 下一步：
+  - 继续按 `datas/` 做 analyze/validate/decide 原始 contract 审阅；收集分析师标签后运行第一版
+    confidence calibration，不将 provisional threshold 写入生产配置。
+
+### 2026-07-14 — Message schema drift and evidence coverage report
+
+- 背景：
+  - PingAn message 外层结构可以解析，但嵌套 body 可能损坏；同时“解析出了字段”不代表 canonical、事实重建、场景识别和 LLM 都实际使用了它。
+  - 新厂商/新版本结构必须可发现，但不能在没有已验收 baseline 时把任意首次观察误报成新 schema。
+- 变更：
+  - 新增 `MessageSchemaObservation` 和 `MessageSchemaStatus`，按 message 记录 parser/version、结构 fingerprint、field count、recognized/degraded/unsupported 和 warnings。
+  - `NormalizationReport` / drift report 聚合 schema fingerprint/status；`SocNormalizationService.drift()` 支持 accepted fingerprint baseline，CLI 新增 `--schema-baseline`，novel fingerprint 进入 `suspicious_samples`。
+  - 新增 `EvidenceCoverageReport`：记录 parsed/decoded、canonical/fact/scenario、bounded LLM projection、sanitization、truncation、omission 和 high-value gap。
+  - `ParsedRawMessageEvidence` 升级到 v2：新增 `repaired_fields` 和
+    `NestedJsonRepairObservation`；PingAn parser version 升到 v2。repair 仅在根类型、非空结构和 key
+    source evidence 校验通过后 accepted。
+  - strict nested JSON 失败继续保留原始字符串；保守验收的 `json_repair` 结果进入独立
+    `repaired_fields`，拒绝/失败时 bounded evidence 使用脱敏字符串 fallback；repair 永不冒充
+    strict-decoded source fact。
+  - 完整 coverage 留在 Runtime request/验证产物；Prompt Builder 只提供不含 vendor field path 的紧凑摘要。
+  - 权威方案和工程契约新增 confidence taxonomy：evidence trust、schema status、heuristic scenario/role score、LLM verdict confidence、memory confidence 不得跨层混算。
+- 真实样本：
+  - 已重生成 gitignored Step 2，并新增 `backend/.deer-flow/soc-runtime-validation/step-04-build-analysis-input/`。
+  - `apt-1965449` schema 为 degraded；错误造键的 `req_body` repair 被拒绝并以脱敏字符串参与分析，
+    截断的 `rsp_body` repair 被接受、结构化并脱敏；coverage 同时暴露 parsed/decoded/repaired 路径和
+    尚未映射 canonical HTTP entity 的 User-Agent gap。
+- 验证：
+  - 定向 parser/runtime/prompt tests：`48 passed`；Ruff format/check passed。
+  - 完整 SOC regression：`383 passed`；仅 1 条既有 DeerFlow MCP cache asyncio deprecation warning。
+  - `datas/` baseline replay：5 个样本、6 个 accepted fingerprints、0 个 novel fingerprint；7 个
+    recognized message observations、1 个 degraded observation，只有 nested body 损坏的
+    `apt-1965449` 进入 suspicious samples。
+  - parser v2 会有一次预期 fingerprint 变化；使用 v2 样本重建 baseline 后 replay 仍为 0 个 novel
+    fingerprint。
+- 下一步：
+  - 运行完整 SOC regression 和 CodeGraph sync；用户继续按真实 contract 输出审阅 Step 2/3/4，不提前评判最终 verdict。
+
+### 2026-07-14 — Conflict-aware Fact Reconstruction v2 and Step 3 output snapshots
+
+- 背景：
+  - Step 2 实测发现旧规则把 `attacker != source`、`victim != destination` 一律视为冲突，会把反弹
+    Shell、恶意外联、C2、横向移动、代理/NAT/XFF 等合法方向关系误报。
+  - 旧实现即使报告冲突仍会输出看似确定的 role assignment，并把 evidence trust 与角色语义置信度混为一谈。
+- 变更：
+  - `FactReconstructionResult` 升级到 v2：引入 `RoleClaim`、`ScenarioSignal`、
+    `ScenarioHypothesis`、`RoleResolution`、`CanonicalFieldProvenance`；角色状态明确区分
+    observed/tentative/conflicted/confirmed/unresolved。
+  - PingAn 字段别名只在 `normalizers/pingan_evidence.py` 内转换成 vendor-neutral claims；generic
+    fact reconstructor 不再识别 `attack_sip` / `alarm_sip` / `str_attack_ip` 等字段。
+  - 反弹 Shell 识别为 `reverse_connection`，采用 `source=victim`、`destination=attacker` 约束；删除全局
+    `attacker_source_mismatch` / `victim_destination_mismatch` 假设。
+  - 主 message、supplementary messages、structured fallback 全部参与 claim/conflict；冲突输出暂定值、
+    支持/反对 claims、证据缺口、人工核查清单和 automation guard。fact layer 永不确定 response target，
+    也不允许自动处置。
+  - PingAn parser 新增 allowlisted nested JSON、HTTP header、XFF chain 解码；bounded evidence 用脱敏
+    decoded projection 替换 raw body/header，token/cookie/password 不进入模型上下文。
+  - normalization quality rule 改为 source-aware，HIDS 不再因为缺少 network source/destination 被误报。
+- 真实样本结果：
+  - `apt-2025642`：识别 `reverse_connection`；暂定 source/victim/impacted asset=`30.116.114.150`，
+    destination/attacker=`30.174.29.44`；保留 message 与 structured fallback 的真实方向冲突，不产生伪
+    `attacker_source_mismatch`。
+  - `apt-2026494`：保留 source/attacker 多候选冲突；`edr-1965810` 识别 outbound C2 + lateral movement；
+    `hids-1965448` 识别 command execution 并暂定受影响主机，网络方向保持 unresolved。
+  - 本地、gitignored 原始契约输出快照位于
+    `backend/.deer-flow/soc-runtime-validation/step-03-fact-reconstruction/`；每份样本的
+    `fact_reconstruction` 都是 `FactReconstructionResult.model_dump(mode="json")` 的直接结果，
+    不包含审阅聚合、中文解释或人工结论，不提交真实告警衍生数据。
+- 验证：
+  - 定向 parser/prompt/runtime tests：`43 passed`；nested/supplementary/provenance/reverse-shell regression
+    tests 通过。
+  - `PYTHONPATH=. .venv/bin/python -m pytest tests/test_soc*.py tests/architecture/test_soc_agent_boundaries.py -q`：
+    `379 passed`；仅 1 条既有 DeerFlow MCP cache asyncio deprecation warning。
+- 下一步：
+  - 用户逐条验证 Step 3 原始输出；确认后把状态改为 passed，再进入 analyzer/decision Step 4。
+
+### 2026-07-14 — PingAn raw-message parsing and evidence-priority repair
+
+- 背景：
+  - 使用 `datas/` 的 3 条 APT、1 条 EDR、1 条 HIDS 样本逐步测试 Runtime 时发现：旧实现只把
+    `message` 路径标成 high trust，没有解析正文，也没有把正文放进 `LLMAnalysisRequest`。
+  - HIDS 的 IP、host 和 process tree 因此完全漏提取；Fact Reconstruction 还会把 Zeus
+    structured fallback 错误继承为 raw-message high trust。
+- 变更：
+  - 新增 `soc_agent.normalizers.pingan_messages` parser registry，支持 delimited JSON、quoted KV、
+    comma-delimited KV 和 loose KV；解析结果写入 `ParsedRawMessageEvidence`，不复制或替换原文。
+  - PingAn adapter 使用 parsed message 字段覆盖同语义 Zeus 加工字段；保留平台 `ruleCode` 作为
+    detection identity；新增 HIDS host IP 和 `java -> chattr` process-tree 映射。
+  - 多 message 记录 deterministic primary/supplementary paths；`LLMAnalysisRequest` 新增限长的
+    `BoundedAnalysisEvidence` 内容。
+  - nested body 严格 JSON 解析失败时保留原始字符串和 warning；后续 repair projection 切片补充为：
+    保守验收成功的 repair 单独保存并进入 bounded evidence，拒绝/失败时使用脱敏字符串 fallback。
+  - 修正 Fact Reconstruction 优先级：parsed raw message/high > Zeus structured fallback/medium-low
+    > processed canonical/low，并为解析失败输出显式 warning。
+  - 原始输入继续完整保存在 `AlertInput.raw` 和 `AnalysisRun.input_payload`，供持久化、审计和 replay。
+- 验证：
+  - `PYTHONPATH=. .venv/bin/python -m pytest tests/test_soc*.py -q`：`367 passed`，仅 1 条既有 MCP
+    event-loop deprecation warning。
+  - 定向 Runtime/Prompt/parser 测试：`41 passed`；Ruff checks passed；`git diff --check` passed。
+  - `datas/` 5/5 样本解析成功：APT -> `pingan_delimited_json`，EDR -> `pingan_comma_kv`，HIDS ->
+    `pingan_quoted_kv`；HIDS 现可提取 host IP、host name、`java/chattr` process；多日志进入
+    supplementary evidence；所有样本 `raw_preserved=true`。
+  - 已使用当前代码重生成
+    `backend/.deer-flow/soc-runtime-validation/step-02-message-parsing/`：每份文件中的
+    `normalization_inspection` 都直接等于 `SocNormalizationService.inspect().model_dump(mode="json")`；
+    `alert.extensions.parsed_raw_messages[].fields/decoded_fields` 展示完整第一层解析和受控二次解码结果。
+- 下一步：
+  - 先逐条验证 Step 2 message 解析和 canonical normalization，再继续 Step 3 的 role claims、
+    attack/victim direction 和 conflict reports；不在这些事实语义确认前继续评判 stub/LLM verdict。
+
+### 2026-07-08 — Management-facing Runtime/LLM control strategy doc
+
+- 背景：
+  - 用户希望有一份 `.md` 用来向老板解释：SOC Agent 为什么不是让 Lead Agent / LLM 完全自主控制流程，而是采用 Runtime-first + bounded LLM。
+- 变更：
+  - 新增 `.notes/ai_soc/runtime-and-llm-control-strategy.md`，面向管理层说明业务风险、架构取舍、LLM 使用位置、PingAn/未来客户兼容性、阶段策略和成功指标。
+  - 更新 `.notes/ai_soc/README.md`，把该文档加入 Start Here、Directory Map 和 Document Roles。
+- 验证：
+  - 文档口径已对齐 `.notes/ai_soc/soc-agent-solution.md` 与 `.notes/ai_soc/alert-lifecycle-flow.md`：Runtime 掌握主流程，LLM/Lead Agent 只做受控研判和结构化建议。
+- 下一步：
+  - 后续如果老板认可该方向，继续按 `progress.md` 当前待办推进 Alpha 演示链路和 Web/TUI 可见化。
 
 ### 2026-07-08 — SOC solution review baseline rewrite
 

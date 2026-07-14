@@ -36,6 +36,10 @@ from soc_agent.contracts import (
     CorrelationQuery,
     EntrySurface,
     InvestigationContext,
+    NormalizationBaselineAcceptCommand,
+    NormalizationBaselineStatus,
+    NormalizationMaintenanceIssueStatus,
+    NormalizationMaintenanceIssueUpdateCommand,
     ReviewNoteCommand,
     ReviewQueueCloseCommand,
     ReviewQueueStatus,
@@ -58,6 +62,7 @@ from soc_agent.core import (
     SocCorrelationService,
     SocDaemonService,
     SocMemoryService,
+    SocNormalizationMaintenanceService,
     SocNormalizationService,
     SocReviewService,
     SocServiceError,
@@ -86,6 +91,8 @@ from soc_agent.db import (
 from soc_agent.demo import run_pingan_investigation_demo
 from soc_agent.eval import (
     DEFAULT_PINGAN_CAPABILITY_EVAL_DIR,
+    calibrate_confidence,
+    load_confidence_calibration_samples,
     load_eval_responses_jsonl,
     load_pingan_capability_eval_fixtures,
     load_scenario_eval_report,
@@ -97,6 +104,7 @@ from soc_agent.eval import (
 )
 from soc_agent.lead_agent import build_soc_lead_agent_profile
 from soc_agent.lead_agent_chat import SocLeadAgentChatService
+from soc_agent.normalizers import build_normalization_suggestion_prompt, build_normalization_suggestion_report
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -119,6 +127,16 @@ def main(argv: list[str] | None = None) -> int:
         return _normalize_inspect(args)
     if args.command == "normalize" and args.normalize_command == "drift":
         return _normalize_drift(args)
+    if args.command == "normalize" and args.normalize_command == "baseline-accept":
+        return _normalize_baseline_accept(args)
+    if args.command == "normalize" and args.normalize_command == "baselines":
+        return _normalize_baselines(args)
+    if args.command == "normalize" and args.normalize_command == "issues":
+        return _normalize_issues(args)
+    if args.command == "normalize" and args.normalize_command == "issue-update":
+        return _normalize_issue_update(args)
+    if args.command == "normalize" and args.normalize_command == "suggest":
+        return _normalize_suggest(args)
     if args.command == "review" and args.review_command == "list":
         return _review_list(args)
     if args.command == "review" and args.review_command == "context":
@@ -159,6 +177,8 @@ def main(argv: list[str] | None = None) -> int:
         return _eval_pingan_main(args)
     if args.command == "eval" and args.eval_command == "scenarios":
         return _eval_scenarios(args)
+    if args.command == "eval" and args.eval_command == "confidence":
+        return _eval_confidence(args)
     if args.command == "demo" and args.demo_command == "run":
         return _demo_run(args)
     if args.command == "demo" and args.demo_command == "alert":
@@ -252,8 +272,76 @@ def _build_parser() -> argparse.ArgumentParser:
     normalize_drift.add_argument("--glob", default="*.json", help="Glob used when PATH is a directory")
     normalize_drift.add_argument("--recent-runs", action="store_true", help="Aggregate persisted recent analysis runs")
     normalize_drift.add_argument("--limit", type=int, default=50, help="Maximum persisted runs to aggregate with --recent-runs")
+    normalize_drift.add_argument(
+        "--schema-baseline",
+        help="Prior drift-report JSON or fingerprint-list JSON used to flag novel message schemas",
+    )
     normalize_drift.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(normalize_drift)
+    normalize_baseline_accept = normalize_subparsers.add_parser(
+        "baseline-accept",
+        help="Accept a governed schema fingerprint baseline",
+    )
+    normalize_baseline_accept.add_argument("--adapter", required=True, help="Normalizer adapter name")
+    normalize_baseline_accept.add_argument("--parser-name", required=True, help="Message parser name")
+    normalize_baseline_accept.add_argument("--parser-version", required=True, help="Message parser version")
+    normalize_baseline_accept.add_argument(
+        "--fingerprint",
+        action="append",
+        required=True,
+        help="Accepted schema fingerprint; repeat for multiple values",
+    )
+    normalize_baseline_accept.add_argument("--tenant-id", help="Optional tenant scope")
+    normalize_baseline_accept.add_argument("--source-system", help="Optional source-system scope")
+    normalize_baseline_accept.add_argument("--reason", required=True, help="Approval reason")
+    normalize_baseline_accept.add_argument("--actor-id", default="soc-cli", help="Approving actor id")
+    normalize_baseline_accept.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(normalize_baseline_accept)
+    normalize_baselines = normalize_subparsers.add_parser("baselines", help="List schema baselines")
+    normalize_baselines.add_argument(
+        "--status",
+        choices=[status.value for status in NormalizationBaselineStatus],
+        default=NormalizationBaselineStatus.ACTIVE.value,
+    )
+    normalize_baselines.add_argument("--tenant-id")
+    normalize_baselines.add_argument("--source-system")
+    normalize_baselines.add_argument("--limit", type=int, default=50)
+    normalize_baselines.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(normalize_baselines)
+    normalize_issues = normalize_subparsers.add_parser("issues", help="List parser/mapping maintenance issues")
+    normalize_issues.add_argument(
+        "--status",
+        choices=[status.value for status in NormalizationMaintenanceIssueStatus] + ["all"],
+        default=NormalizationMaintenanceIssueStatus.OPEN.value,
+    )
+    normalize_issues.add_argument("--tenant-id")
+    normalize_issues.add_argument("--source-system")
+    normalize_issues.add_argument("--limit", type=int, default=50)
+    normalize_issues.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(normalize_issues)
+    normalize_issue_update = normalize_subparsers.add_parser(
+        "issue-update",
+        help="Acknowledge, resolve, or ignore a normalization issue",
+    )
+    normalize_issue_update.add_argument("issue_id")
+    normalize_issue_update.add_argument(
+        "--status",
+        required=True,
+        choices=["acknowledged", "resolved", "ignored"],
+    )
+    normalize_issue_update.add_argument("--reason", required=True)
+    normalize_issue_update.add_argument("--actor-id", default="soc-cli")
+    normalize_issue_update.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(normalize_issue_update)
+    normalize_suggest = normalize_subparsers.add_parser(
+        "suggest",
+        help="Generate offline-only normalization mapping candidates",
+    )
+    normalize_suggest.add_argument("path", help="Path to one alert JSON file")
+    normalize_suggest.add_argument("--llm-response", help="Optional replayed LLM response JSON/text file")
+    normalize_suggest.add_argument("--model-name", help="Model name recorded for replayed suggestions")
+    normalize_suggest.add_argument("--prompt-out", help="Write the sanitized offline prompt bundle as JSON")
+    normalize_suggest.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
     review = subparsers.add_parser("review", help="SOC review queue helpers")
     review_subparsers = review.add_subparsers(dest="review_command")
@@ -424,6 +512,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to a PingAn capability fixture JSON file or directory",
     )
     eval_pingan_main.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    eval_confidence = eval_subparsers.add_parser(
+        "confidence",
+        help="Calibrate analysis confidence from reviewed JSON/JSONL samples",
+    )
+    eval_confidence.add_argument("path", help="Calibration JSON array or JSONL path")
+    eval_confidence.add_argument("--bins", type=int, default=10, help="Number of confidence bins")
+    eval_confidence.add_argument("--target-accuracy", type=float, default=0.9)
+    eval_confidence.add_argument("--minimum-samples", type=int, default=30)
+    eval_confidence.add_argument("--minimum-threshold-samples", type=int, default=10)
+    eval_confidence.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
     demo = subparsers.add_parser("demo", help="SOC persistent demo helpers")
     demo_subparsers = demo.add_subparsers(dest="demo_command")
@@ -553,12 +651,7 @@ def _analyze(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    run = SocAnalysisService(
-        repository=repository,
-        summary_repository=repository,
-        audit_repository=repository,
-        review_queue_repository=repository,
-    ).analyze(payload)
+    run = _analysis_service_for_repository(repository).analyze(payload)
     print(
         run.model_dump_json(
             indent=2 if args.pretty else None,
@@ -623,12 +716,7 @@ def _correlate(args: argparse.Namespace) -> int:
 def _replay(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
-        run = SocAnalysisService(
-            repository=repository,
-            summary_repository=repository,
-            audit_repository=repository,
-            review_queue_repository=repository,
-        ).replay(args.run_id)
+        run = _analysis_service_for_repository(repository).replay(args.run_id)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -687,17 +775,25 @@ def _normalize_inspect(args: argparse.Namespace) -> int:
 
 def _normalize_drift(args: argparse.Namespace) -> int:
     try:
+        known_schema_fingerprints = _load_schema_fingerprint_baseline(args.schema_baseline)
         if args.recent_runs:
             if args.path:
                 raise ValueError("PATH cannot be used with --recent-runs")
             if args.mapping:
                 raise ValueError("--mapping cannot be used with --recent-runs")
-            result = SocNormalizationService(repository=_repository_from_args(args)).drift_recent(limit=args.limit)
+            result = SocNormalizationService(repository=_repository_from_args(args)).drift_recent(
+                limit=args.limit,
+                known_schema_fingerprints=known_schema_fingerprints,
+            )
         else:
             if not args.path:
                 raise ValueError("provide PATH or --recent-runs")
             samples = _load_payload_samples(args.path, args.glob)
-            result = SocNormalizationService().drift(samples, mapping_path=args.mapping)
+            result = SocNormalizationService().drift(
+                samples,
+                mapping_path=args.mapping,
+                known_schema_fingerprints=known_schema_fingerprints,
+            )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -707,6 +803,141 @@ def _normalize_drift(args: argparse.Namespace) -> int:
 
     print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0 if result.failure_count == 0 else 1
+
+
+def _normalize_baseline_accept(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        baseline = SocNormalizationMaintenanceService(
+            baseline_repository=repository,
+            issue_repository=repository,
+        ).accept_baseline(
+            NormalizationBaselineAcceptCommand(
+                tenant_id=args.tenant_id,
+                source_system=args.source_system,
+                adapter=args.adapter,
+                parser_name=args.parser_name,
+                parser_version=args.parser_version,
+                accepted_fingerprints=args.fingerprint,
+                reason=args.reason,
+            ),
+            context=_normalization_cli_context(args.actor_id, roles=["soc_engineer"]),
+        )
+    except (ValueError, SocServiceError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(baseline.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _normalize_baselines(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        baselines = SocNormalizationMaintenanceService(
+            baseline_repository=repository,
+        ).list_baselines(
+            status=NormalizationBaselineStatus(args.status),
+            tenant_id=args.tenant_id,
+            source_system=args.source_system,
+            limit=args.limit,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(
+        json.dumps(
+            [item.model_dump(mode="json", exclude_none=True) for item in baselines],
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+        )
+    )
+    return 0
+
+
+def _normalize_issues(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        status = None if args.status == "all" else NormalizationMaintenanceIssueStatus(args.status)
+        issues = SocNormalizationMaintenanceService(
+            issue_repository=repository,
+        ).list_issues(
+            status=status,
+            tenant_id=args.tenant_id,
+            source_system=args.source_system,
+            limit=args.limit,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(
+        json.dumps(
+            [item.model_dump(mode="json", exclude_none=True) for item in issues],
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+        )
+    )
+    return 0
+
+
+def _normalize_issue_update(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        issue = SocNormalizationMaintenanceService(
+            issue_repository=repository,
+        ).update_issue(
+            NormalizationMaintenanceIssueUpdateCommand(
+                issue_id=args.issue_id,
+                status=args.status,
+                reason=args.reason,
+            ),
+            context=_normalization_cli_context(args.actor_id, roles=["soc_engineer"]),
+        )
+    except (ValueError, SocServiceError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(issue.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _normalize_suggest(args: argparse.Namespace) -> int:
+    try:
+        payload = _load_payload(args.path, None)
+        run = SocAnalysisService().analyze(payload)
+        prompt = build_normalization_suggestion_prompt(run)
+        response_content = _load_optional_response(args.llm_response)
+        report = build_normalization_suggestion_report(
+            run,
+            response_content=response_content,
+            model_name=args.model_name,
+        )
+        if args.prompt_out:
+            _write_report(args.prompt_out, prompt.model_dump_json(indent=2, exclude_none=True))
+    except (ValueError, OSError) as exc:
+        print(f"error: normalization suggestion failed: {exc}", file=sys.stderr)
+        return 2
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _normalization_cli_context(actor_id: str, *, roles: list[str]) -> ServiceRequestContext:
+    return ServiceRequestContext(
+        actor=ActorContext(
+            actor_id=actor_id,
+            actor_type=ActorType.USER,
+            surface=EntrySurface.CLI,
+            roles=roles,
+        )
+    )
+
+
+def _load_optional_response(path: str | None) -> Any | None:
+    if path is None:
+        return None
+    text = Path(path).read_text(encoding="utf-8")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
 
 
 def _review_list(args: argparse.Namespace) -> int:
@@ -1049,6 +1280,10 @@ def _review_tui(args: argparse.Namespace) -> int:
                 memory_record_repository=repository,
             ),
             approval_service=SocAgentApprovalService(grant_repository=repository, request_repository=repository),
+            normalization_service=SocNormalizationMaintenanceService(
+                baseline_repository=repository,
+                issue_repository=repository,
+            ),
             database_label=_database_label(args.database_url),
         )
     except ValueError as exc:
@@ -1362,12 +1597,7 @@ def _daemon_status(args: argparse.Namespace) -> int:
 
 def _daemon_service_from_args(args: argparse.Namespace) -> SocDaemonService:
     repository = _repository_from_args(args)
-    analysis_service = SocAnalysisService(
-        repository=repository,
-        summary_repository=repository,
-        audit_repository=repository,
-        review_queue_repository=repository,
-    )
+    analysis_service = _analysis_service_for_repository(repository)
     approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
     return SocDaemonService(
         analysis_service=analysis_service,
@@ -1480,18 +1710,30 @@ def _eval_scenarios(args: argparse.Namespace) -> int:
     return 0 if report.failed_count == 0 else 1
 
 
+def _eval_confidence(args: argparse.Namespace) -> int:
+    try:
+        samples = load_confidence_calibration_samples(args.path)
+        report = calibrate_confidence(
+            samples,
+            bin_count=args.bins,
+            target_accuracy=args.target_accuracy,
+            minimum_samples=args.minimum_samples,
+            minimum_threshold_samples=args.minimum_threshold_samples,
+        )
+    except ValueError as exc:
+        print(f"error: confidence calibration failed: {exc}", file=sys.stderr)
+        return 2
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
 def _demo_alert(args: argparse.Namespace) -> int:
     try:
         payload = _load_payload(args.path, args.json_payload)
         if args.init_db:
             create_soc_tables(_engine_from_args(args))
         repository = _repository_from_args(args)
-        run = SocAnalysisService(
-            repository=repository,
-            summary_repository=repository,
-            audit_repository=repository,
-            review_queue_repository=repository,
-        ).analyze(
+        run = _analysis_service_for_repository(repository).analyze(
             payload,
             context=ServiceRequestContext(actor=ActorContext(actor_id="soc-demo", actor_type=ActorType.USER, surface=EntrySurface.CLI, roles=["soc_analyst"])),
         )
@@ -1615,6 +1857,26 @@ def _repository_from_args(args: argparse.Namespace) -> SqlAlchemyAlertRepository
     return SqlAlchemyAlertRepository(session_factory)
 
 
+def _analysis_service_for_repository(
+    repository: SqlAlchemyAlertRepository | None,
+) -> SocAnalysisService:
+    maintenance = (
+        SocNormalizationMaintenanceService(
+            baseline_repository=repository,
+            issue_repository=repository,
+        )
+        if repository is not None
+        else None
+    )
+    return SocAnalysisService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+        normalization_maintenance_monitor=maintenance,
+    )
+
+
 def _engine_from_args(args: argparse.Namespace):
     database_url = resolve_database_url(args.database_url)
     return create_engine(to_sync_database_url(database_url), pool_pre_ping=True)
@@ -1714,6 +1976,31 @@ def _write_report(path: str | None, content: str) -> None:
     Path(path).write_text(f"{content}\n", encoding="utf-8")
 
 
+def _load_schema_fingerprint_baseline(path: str | None) -> set[str] | None:
+    if path is None:
+        return None
+    baseline_path = Path(path)
+    try:
+        data = json.loads(baseline_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid schema baseline JSON in {baseline_path}: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"cannot read schema baseline {baseline_path}: {exc}") from exc
+
+    values: Any
+    if isinstance(data, list):
+        values = data
+    elif isinstance(data, dict) and isinstance(data.get("accepted_schema_fingerprints"), list):
+        values = data["accepted_schema_fingerprints"]
+    elif isinstance(data, dict) and isinstance(data.get("schema_fingerprint_counts"), dict):
+        values = list(data["schema_fingerprint_counts"])
+    else:
+        raise ValueError("schema baseline must be a fingerprint list, contain accepted_schema_fingerprints, or be a prior normalization drift report")
+    if not all(isinstance(value, str) and value for value in values):
+        raise ValueError("schema baseline fingerprints must be non-empty strings")
+    return set(values)
+
+
 def _load_payload_samples(path: str, glob_pattern: str) -> list[tuple[str, dict[str, Any]]]:
     sample_path = Path(path)
     if not sample_path.exists():
@@ -1739,3 +2026,5 @@ def _load_payload_samples(path: str, glob_pattern: str) -> list[tuple[str, dict[
 
 if __name__ == "__main__":
     raise SystemExit(main())
+    (calibrate_confidence,)
+    (load_confidence_calibration_samples,)

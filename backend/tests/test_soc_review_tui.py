@@ -8,6 +8,9 @@ from soc_agent.contracts import (
     AnalysisRunStatus,
     EntrySurface,
     InvestigationContext,
+    NormalizationMaintenanceIssue,
+    NormalizationMaintenanceIssueType,
+    NormalizationMaintenanceSeverity,
     ReviewQueueItem,
     ReviewQueuePriority,
     ReviewQueueStatus,
@@ -16,7 +19,14 @@ from soc_agent.contracts import (
     SocAgentApprovalRequest,
     SocAgentRiskLevel,
 )
-from soc_agent.tui.app import _parse_approved_action_args, _parse_correct_args, _tui_approval_context, _tui_request_context
+from soc_agent.tui.app import (
+    _parse_approved_action_args,
+    _parse_correct_args,
+    _parse_normalization_update_args,
+    _tui_approval_context,
+    _tui_normalization_context,
+    _tui_request_context,
+)
 from soc_agent.tui.command_registry import filter_commands, resolve
 from soc_agent.tui.render import render_main
 from soc_agent.tui.view_state import (
@@ -28,6 +38,7 @@ from soc_agent.tui.view_state import (
     set_approval_grant,
     set_approval_requests,
     set_items,
+    set_normalization_issues,
 )
 
 
@@ -39,6 +50,8 @@ def test_soc_review_tui_command_registry_filters_and_resolves() -> None:
     assert resolve("/open REV-1").name == "open"
     assert resolve("/open REV-1").args == "REV-1"
     assert resolve("/approvals").kind == "builtin"
+    assert resolve("/normalization").kind == "builtin"
+    assert resolve("/norm-update NMI-1 resolved fixed").args == "NMI-1 resolved fixed"
     assert resolve("/approval APR-1").args == "APR-1"
     assert resolve("/approve APR-1 reason").args == "APR-1 reason"
     assert resolve("/dry-run SAT-1 response.block_ip response.block_ip").kind == "builtin"
@@ -129,6 +142,29 @@ def test_soc_review_tui_render_includes_approval_inbox_and_grant() -> None:
     assert "not_executed" in text
 
 
+def test_soc_review_tui_renders_normalization_maintenance_queue() -> None:
+    issue = NormalizationMaintenanceIssue(
+        issue_id="NMI-TUI-001",
+        dedupe_key="normalization:tui",
+        issue_type=NormalizationMaintenanceIssueType.NOVEL_SCHEMA,
+        severity=NormalizationMaintenanceSeverity.WARNING,
+        source_system="pingan-zeus",
+        adapter="pingan_platform",
+        parser_name="pingan_delimited_json",
+        parser_version="v2",
+        occurrence_count=3,
+    )
+    state = set_normalization_issues(initial_state(), [issue])
+
+    console = Console(record=True, width=140)
+    console.print(render_main(state))
+    text = console.export_text()
+
+    assert "NMI-TUI-001" in text
+    assert "novel_schema" in text
+    assert "pingan_delimited_json@v2" in text
+
+
 def test_soc_review_tui_parse_correct_args() -> None:
     assert _parse_correct_args("RUN-1 false_positive 分析师确认") == (
         "RUN-1",
@@ -146,6 +182,14 @@ def test_soc_review_tui_parse_approved_action_args() -> None:
     )
 
 
+def test_soc_review_tui_parse_normalization_update_args() -> None:
+    assert _parse_normalization_update_args("NMI-1 resolved parser updated") == (
+        "NMI-1",
+        "resolved",
+        "parser updated",
+    )
+
+
 def test_soc_review_tui_request_context_marks_tui_surface() -> None:
     context = _tui_request_context(idempotency_key="idem-1")
 
@@ -160,6 +204,13 @@ def test_soc_review_tui_approval_context_marks_approver_role() -> None:
     assert context.actor.actor_id == "soc-review-tui"
     assert context.actor.surface is EntrySurface.TUI
     assert context.actor.roles == ["soc_approver"]
+
+
+def test_soc_review_tui_normalization_context_marks_engineer_role() -> None:
+    context = _tui_normalization_context()
+
+    assert context.actor.surface is EntrySurface.TUI
+    assert context.actor.roles == ["soc_engineer"]
 
 
 def _approval_request() -> SocAgentApprovalRequest:

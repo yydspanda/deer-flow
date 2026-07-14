@@ -13,13 +13,20 @@ from soc_agent.contracts import (
     ActorContext,
     CorrectionCommand,
     EntrySurface,
+    NormalizationMaintenanceIssueStatus,
+    NormalizationMaintenanceIssueUpdateCommand,
     ReviewQueueCloseCommand,
     ReviewQueueStatus,
     ServiceRequestContext,
     SocAgentApprovedActionCommand,
     Verdict,
 )
-from soc_agent.core import SocAgentApprovalService, SocReviewService, SocServiceError
+from soc_agent.core import (
+    SocAgentApprovalService,
+    SocNormalizationMaintenanceService,
+    SocReviewService,
+    SocServiceError,
+)
 from soc_agent.tui.command_registry import filter_commands, resolve
 from soc_agent.tui.render import render_header, render_main, render_palette, render_status
 from soc_agent.tui.view_state import (
@@ -32,10 +39,15 @@ from soc_agent.tui.view_state import (
     set_approval_requests,
     set_items,
     set_loading,
+    set_normalization_issues,
 )
 
 _HELP_TEXT = (
-    "Commands: /refresh  /approvals  /approval APR-...  /approve APR-... reason  /dry-run SAT-... route action  /execute SAT-... route action idempotency-key  /open REV-...  /close REV-... reason  /correct RUN-... verdict reason  /quit"
+    "Commands: /refresh  /approvals  /normalization  "
+    "/norm-update NMI-... acknowledged|resolved|ignored reason  "
+    "/approval APR-...  /approve APR-... reason  /dry-run SAT-... route action  "
+    "/execute SAT-... route action idempotency-key  /open REV-...  "
+    "/close REV-... reason  /correct RUN-... verdict reason  /quit"
 )
 
 
@@ -104,11 +116,13 @@ class SocReviewTUI(App):
         service: SocReviewService,
         *,
         approval_service: SocAgentApprovalService | None = None,
+        normalization_service: SocNormalizationMaintenanceService | None = None,
         database_label: str = "",
     ) -> None:
         super().__init__()
         self.service = service
         self.approval_service = approval_service
+        self.normalization_service = normalization_service
         self.database_label = database_label
         self.state = initial_state()
         self._palette_open = False
@@ -127,6 +141,7 @@ class SocReviewTUI(App):
         self._refresh_all()
         self._load_queue()
         self._load_approval_requests()
+        self._load_normalization_issues()
         self.query_one("#composer", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -159,8 +174,13 @@ class SocReviewTUI(App):
         elif name == "refresh":
             self._load_queue()
             self._load_approval_requests()
+            self._load_normalization_issues()
         elif name == "approvals":
             self._load_approval_requests()
+        elif name == "normalization":
+            self._load_normalization_issues()
+        elif name == "norm-update":
+            self._update_normalization_issue(args)
         elif name == "approval":
             self._open_approval_request(args)
         elif name == "approve":
@@ -202,6 +222,48 @@ class SocReviewTUI(App):
             return
         self.state = set_approval_requests(self.state, requests)
         self._refresh_all()
+
+    def _load_normalization_issues(self) -> None:
+        if self.normalization_service is None:
+            return
+        self.state = set_loading(self.state)
+        self._refresh_status()
+        try:
+            issues = self.normalization_service.list_issues(
+                status=NormalizationMaintenanceIssueStatus.OPEN,
+                limit=50,
+            )
+        except SocServiceError as exc:
+            self._notice(str(exc), tone="error")
+            return
+        self.state = set_normalization_issues(self.state, issues)
+        self._refresh_all()
+
+    def _update_normalization_issue(self, args: str) -> None:
+        issue_id, status, reason = _parse_normalization_update_args(args)
+        if not issue_id or status not in {"acknowledged", "resolved", "ignored"} or not reason:
+            self._notice(
+                "Usage: /norm-update NMI-... acknowledged|resolved|ignored reason",
+                tone="error",
+            )
+            return
+        if self.normalization_service is None:
+            self._notice("Normalization service is not configured.", tone="error")
+            return
+        try:
+            self.normalization_service.update_issue(
+                NormalizationMaintenanceIssueUpdateCommand(
+                    issue_id=issue_id,
+                    status=status,
+                    reason=reason,
+                ),
+                context=_tui_normalization_context(),
+            )
+        except SocServiceError as exc:
+            self._notice(str(exc), tone="error")
+            return
+        self._notice(f"Updated normalization issue {issue_id} -> {status}.")
+        self._load_normalization_issues()
 
     def _open_context(self, queue_id: str) -> None:
         queue_id = queue_id.strip()
@@ -437,6 +499,12 @@ def _parse_approved_action_args(args: str) -> tuple[str, str, str, str]:
     return execution_token_id.strip(), route.strip(), action.strip(), extra.strip()
 
 
+def _parse_normalization_update_args(args: str) -> tuple[str, str, str]:
+    issue_id, _, rest = args.strip().partition(" ")
+    status, _, reason = rest.strip().partition(" ")
+    return issue_id.strip(), status.strip(), reason.strip()
+
+
 def _tui_request_context(*, idempotency_key: str | None = None) -> ServiceRequestContext:
     return ServiceRequestContext(
         actor=ActorContext(actor_id="soc-review-tui", surface=EntrySurface.TUI),
@@ -446,3 +514,13 @@ def _tui_request_context(*, idempotency_key: str | None = None) -> ServiceReques
 
 def _tui_approval_context() -> ServiceRequestContext:
     return ServiceRequestContext(actor=ActorContext(actor_id="soc-review-tui", surface=EntrySurface.TUI, roles=["soc_approver"]))
+
+
+def _tui_normalization_context() -> ServiceRequestContext:
+    return ServiceRequestContext(
+        actor=ActorContext(
+            actor_id="soc-review-tui",
+            surface=EntrySurface.TUI,
+            roles=["soc_engineer"],
+        )
+    )

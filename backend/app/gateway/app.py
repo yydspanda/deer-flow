@@ -31,6 +31,7 @@ from app.gateway.routers import (
     skills,
     soc_approvals,
     soc_memory,
+    soc_normalization,
     soc_review,
     suggestions,
     thread_runs,
@@ -496,6 +497,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # SOC approval API is mounted at /api/soc/approvals
     app.include_router(soc_approvals.router)
+
+    # SOC normalization maintenance API is mounted at /api/soc/normalization
+    app.include_router(soc_normalization.router)
 
     # GitHub webhooks API is mounted at /api/webhooks/github
     # Exempt from auth and CSRF middleware (see auth_middleware._PUBLIC_PATH_PREFIXES

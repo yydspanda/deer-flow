@@ -13,14 +13,18 @@ import {
   executeSocApprovedAction,
   getSocMemoryCandidate,
   getSocMemoryRecord,
+  getSocNormalizationMetrics,
   getSocApprovalRequest,
   getSocReviewContext,
   listSocMemoryCandidates,
   listSocMemoryRecords,
+  listSocNormalizationBaselines,
+  listSocNormalizationIssues,
   listSocApprovalRequests,
   listSocReviewItems,
   reviewSocMemoryCandidate,
   searchSocMemoryRecords,
+  updateSocNormalizationIssue,
 } from "./api";
 import type {
   SocAgentApprovedActionCommand,
@@ -29,6 +33,8 @@ import type {
   SocMemoryCandidateStatus,
   SocMemoryQuery,
   SocMemoryRecordStatus,
+  SocNormalizationIssueStatus,
+  SocNormalizationIssueUpdateRequest,
   SocRequestContext,
   SocReviewCloseRequest,
   SocReviewCorrectionRequest,
@@ -112,6 +118,14 @@ export const socMemoryQueryKeys = {
     [...socMemoryQueryKeys.all, "record", memoryId] as const,
   search: (query: SocMemoryQuery | null | undefined) =>
     [...socMemoryQueryKeys.all, "search", query] as const,
+};
+
+export const socNormalizationQueryKeys = {
+  all: ["soc-normalization"] as const,
+  issues: (status: SocNormalizationIssueStatus | null, limit: number) =>
+    [...socNormalizationQueryKeys.all, "issues", status, limit] as const,
+  baselines: () => [...socNormalizationQueryKeys.all, "baselines"] as const,
+  metrics: () => [...socNormalizationQueryKeys.all, "metrics"] as const,
 };
 
 function useSocWebRequestContext(): SocRequestContext {
@@ -212,6 +226,58 @@ export function useSocApprovalRequest(
     enabled: !!approvalRequestId,
   });
   return { request: data ?? null, isLoading, isFetching, error };
+}
+
+export function useSocNormalizationIssues({
+  status = "open",
+  limit = 100,
+}: {
+  status?: SocNormalizationIssueStatus | null;
+  limit?: number;
+} = {}) {
+  const context = useSocWebRequestContext();
+  const query = useQuery({
+    queryKey: socNormalizationQueryKeys.issues(status, limit),
+    queryFn: () => listSocNormalizationIssues({ status, limit, context }),
+  });
+  return { issues: query.data ?? [], ...query };
+}
+
+export function useSocNormalizationBaselines() {
+  const context = useSocWebRequestContext();
+  const query = useQuery({
+    queryKey: socNormalizationQueryKeys.baselines(),
+    queryFn: () => listSocNormalizationBaselines(context),
+  });
+  return { baselines: query.data ?? [], ...query };
+}
+
+export function useSocNormalizationMetrics() {
+  const context = useSocWebRequestContext();
+  const query = useQuery({
+    queryKey: socNormalizationQueryKeys.metrics(),
+    queryFn: () => getSocNormalizationMetrics(context),
+  });
+  return { metrics: query.data ?? null, ...query };
+}
+
+export function useUpdateSocNormalizationIssue() {
+  const context = useSocWebRequestContext();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      issueId,
+      request,
+    }: {
+      issueId: string;
+      request: SocNormalizationIssueUpdateRequest;
+    }) => updateSocNormalizationIssue(issueId, request, context),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: socNormalizationQueryKeys.all,
+      });
+    },
+  });
 }
 
 export function useSocMemoryCandidates({

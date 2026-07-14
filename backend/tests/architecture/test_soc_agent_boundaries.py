@@ -75,6 +75,13 @@ def test_pipeline_has_no_transport_or_infrastructure_imports() -> None:
         assert not (_imports(module) & forbidden), f"{module} imports transport or infrastructure code"
 
 
+def test_fact_reconstructor_does_not_know_vendor_role_aliases() -> None:
+    source = (SOC_AGENT / "pipeline" / "fact_reconstructor.py").read_text(encoding="utf-8")
+    forbidden_aliases = {"attack_sip", "alarm_sip", "str_attack_ip", "str_source_ip"}
+
+    assert not {alias for alias in forbidden_aliases if alias in source}
+
+
 def test_db_does_not_import_runtime_or_transport_layers() -> None:
     forbidden = {
         "fastapi",

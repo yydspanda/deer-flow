@@ -152,6 +152,25 @@ Current SOC direction:
   handle bounded reasoning and can only suggest soft routes from a whitelist.
 - LLM-discovered knowledge is candidate knowledge only. It must be confirmed by a human before
   it can affect future decisions.
+- PingAn `zeusRawLogs[].message` values are parsed only inside the PingAn normalizer. Deterministically
+  parsed message fields are high-trust primary facts; Zeus structured fields are reduced-trust
+  fallback candidates. Preserve the complete original payload for replay/audit and expose only
+  bounded primary/supplementary evidence content to analysis nodes.
+- Nested JSON-in-string and HTTP fields use allowlisted, size-bounded decoders. Raw bodies, headers,
+  tokens, cookies, and credentials must not enter `BoundedAnalysisEvidence` without redaction.
+- Nested decode failure keeps the original string plus a warning. Conservatively validated repair
+  may enter a separately labeled `repaired_fields` projection, but never strict `decoded_fields` or
+  source fact. `MessageSchemaObservation` and accepted-baseline fingerprints expose parser drift,
+  while `EvidenceCoverageReport` exposes parsed fields that were used, sanitized, omitted, or left
+  outside canonical/fact/scenario mappings.
+- Persisted CLI/Kafka analysis injects `SocNormalizationMaintenanceService` after normal business
+  writes. It creates deduplicated baseline/schema/coverage maintenance issues without changing the
+  verdict. Baselines require explicit engineer/admin acceptance; mapping suggestions and confidence
+  calibration are offline-only and never auto-apply. Operators use `soc normalize issues`, Review TUI
+  `/normalization`, or `/workspace/soc/normalization`.
+- Vendor aliases stop in source adapters. Adapters emit generic `RoleClaim` / `ScenarioSignal`
+  contracts; generic fact reconstruction must not recognize PingAn field names, assume
+  attacker=source or victim=destination, choose a response target, or enable automation.
 - SOC Lead Agent work must reuse DeerFlow's existing `lead_agent` custom-agent mechanism
   wherever possible. Do not create a second SOC LangGraph runtime unless a future design
   explicitly proves DeerFlow's custom-agent/profile/skills/MCP path cannot satisfy the need.

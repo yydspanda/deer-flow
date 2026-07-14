@@ -20,6 +20,13 @@ import type {
   SocMemoryRecordListResponse,
   SocMemoryRecordStatus,
   SocMemoryRetrievalResult,
+  SocNormalizationBaselineListResponse,
+  SocNormalizationIssueListResponse,
+  SocNormalizationIssueStatus,
+  SocNormalizationIssueUpdateRequest,
+  SocNormalizationMaintenanceIssue,
+  SocNormalizationOperationsMetrics,
+  SocNormalizationSchemaBaseline,
   SocRequestContext,
   SocReviewCloseRequest,
   SocReviewCorrectionRequest,
@@ -244,6 +251,75 @@ export async function executeSocApprovedAction(
   return readJson<SocAgentActionResult>(
     response,
     "Failed to execute SOC approved action",
+  );
+}
+
+export async function listSocNormalizationIssues({
+  status = "open",
+  limit = 100,
+  context,
+}: {
+  status?: SocNormalizationIssueStatus | null;
+  limit?: number;
+  context?: SocRequestContext;
+} = {}): Promise<SocNormalizationMaintenanceIssue[]> {
+  const params = new URLSearchParams();
+  if (status !== null) params.set("status", status);
+  params.set("limit", String(limit));
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/normalization/issues?${params.toString()}`,
+    { headers: buildSocHeaders(context) },
+  );
+  const data = await readJson<SocNormalizationIssueListResponse>(
+    response,
+    "Failed to load SOC normalization issues",
+  );
+  return data.items;
+}
+
+export async function updateSocNormalizationIssue(
+  issueId: string,
+  request: SocNormalizationIssueUpdateRequest,
+  context?: SocRequestContext,
+): Promise<SocNormalizationMaintenanceIssue> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/normalization/issues/${encodeURIComponent(issueId)}`,
+    {
+      method: "PATCH",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocNormalizationMaintenanceIssue>(
+    response,
+    "Failed to update SOC normalization issue",
+  );
+}
+
+export async function listSocNormalizationBaselines(
+  context?: SocRequestContext,
+): Promise<SocNormalizationSchemaBaseline[]> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/normalization/baselines?status=active&limit=200`,
+    { headers: buildSocHeaders(context) },
+  );
+  const data = await readJson<SocNormalizationBaselineListResponse>(
+    response,
+    "Failed to load SOC normalization baselines",
+  );
+  return data.items;
+}
+
+export async function getSocNormalizationMetrics(
+  context?: SocRequestContext,
+): Promise<SocNormalizationOperationsMetrics> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/normalization/metrics`,
+    { headers: buildSocHeaders(context) },
+  );
+  return readJson<SocNormalizationOperationsMetrics>(
+    response,
+    "Failed to load SOC normalization metrics",
   );
 }
 

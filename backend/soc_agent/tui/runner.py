@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from typing import Protocol
 
 from soc_agent.contracts import ServiceRequestContext, SocAgentChatRequest, SocAgentStreamEvent
-from soc_agent.core import SocAgentApprovalService, SocReviewService
+from soc_agent.core import SocAgentApprovalService, SocNormalizationMaintenanceService, SocReviewService
 
 
 class SocChatServiceLike(Protocol):
@@ -22,6 +22,7 @@ def run_review_tui(
     service: SocReviewService,
     *,
     approval_service: SocAgentApprovalService | None = None,
+    normalization_service: SocNormalizationMaintenanceService | None = None,
     database_label: str = "",
 ) -> None:
     try:
@@ -29,7 +30,12 @@ def run_review_tui(
     except ImportError as exc:
         raise RuntimeError("SOC review TUI requires Textual. Install the backend dev dependencies or deerflow-harness[tui].") from exc
 
-    SocReviewTUI(service, approval_service=approval_service, database_label=database_label).run()
+    SocReviewTUI(
+        service,
+        approval_service=approval_service,
+        normalization_service=normalization_service,
+        database_label=database_label,
+    ).run()
 
 
 def run_chat_tui(

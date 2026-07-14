@@ -7,6 +7,7 @@ from typing import Literal
 
 from soc_agent.contracts import (
     InvestigationContext,
+    NormalizationMaintenanceIssue,
     ReviewQueueItem,
     SocAgentActionResult,
     SocAgentApprovalGrant,
@@ -30,6 +31,7 @@ class ReviewViewState:
     approval_request: SocAgentApprovalRequest | None = None
     approval_grant: SocAgentApprovalGrant | None = None
     approval_action_result: SocAgentActionResult | None = None
+    normalization_issues: tuple[NormalizationMaintenanceIssue, ...] = ()
     notices: tuple[Notice, ...] = ()
     loading: bool = False
 
@@ -76,6 +78,13 @@ def set_approval_grant(state: ReviewViewState, grant: SocAgentApprovalGrant) -> 
 
 def set_approval_action_result(state: ReviewViewState, result: SocAgentActionResult) -> ReviewViewState:
     return replace(state, approval_action_result=result, loading=False)
+
+
+def set_normalization_issues(
+    state: ReviewViewState,
+    issues: list[NormalizationMaintenanceIssue],
+) -> ReviewViewState:
+    return replace(state, normalization_issues=tuple(issues), loading=False)
 
 
 def add_notice(state: ReviewViewState, text: str, *, tone: Literal["info", "error"] = "info") -> ReviewViewState:

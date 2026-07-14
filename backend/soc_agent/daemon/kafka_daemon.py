@@ -255,7 +255,21 @@ def _record_metric(result: KafkaRunnerProcessResult) -> dict[str, Any] | None:
 def _daemon_result_metric(result: KafkaRunnerProcessResult) -> dict[str, Any] | None:
     if result.daemon_result is None:
         return None
-    return result.daemon_result.model_dump(mode="json", include={"message_id", "kind", "status", "run_id", "alert_id", "approval_request_id"}, exclude_none=True)
+    return result.daemon_result.model_dump(
+        mode="json",
+        include={
+            "message_id",
+            "kind",
+            "status",
+            "run_id",
+            "alert_id",
+            "approval_request_id",
+            "normalization_issue_count",
+            "normalization_issue_ids",
+            "normalization_warnings",
+        },
+        exclude_none=True,
+    )
 
 
 def _stop_metric(result: KafkaDaemonRunResult) -> dict[str, Any]:

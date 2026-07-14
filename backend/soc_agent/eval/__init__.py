@@ -1,5 +1,6 @@
 """Offline evaluation helpers for SOC Agent."""
 
+from soc_agent.eval.confidence import calibrate_confidence, load_confidence_calibration_samples
 from soc_agent.eval.offline import (
     OfflineEvalReport,
     OfflineEvalResponse,
@@ -52,7 +53,9 @@ __all__ = [
     "ScenarioEvalFinding",
     "ScenarioEvalReport",
     "ScenarioEvalSampleResult",
+    "calibrate_confidence",
     "load_eval_responses_jsonl",
+    "load_confidence_calibration_samples",
     "load_pingan_capability_eval_fixtures",
     "load_scenario_eval_report",
     "run_offline_eval",

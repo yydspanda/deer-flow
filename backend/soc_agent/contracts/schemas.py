@@ -66,6 +66,9 @@ class SocEventType(StrEnum):
     REVIEW_CORRECTED = "review.corrected"
     REVIEW_REQUESTED = "review.requested"
     MEMORY_UPDATED = "memory.updated"
+    NORMALIZATION_BASELINE_ACCEPTED = "normalization.baseline_accepted"
+    NORMALIZATION_DRIFT_DETECTED = "normalization.drift_detected"
+    NORMALIZATION_ISSUE_UPDATED = "normalization.issue_updated"
 
 
 class AuditAction(StrEnum):
@@ -986,6 +989,9 @@ class SocDaemonProcessResult(BaseModel):
     run_id: str | None = None
     alert_id: str | None = None
     analysis_status: str | None = None
+    normalization_issue_count: int = Field(default=0, ge=0)
+    normalization_issue_ids: list[str] = Field(default_factory=list)
+    normalization_warnings: list[str] = Field(default_factory=list)
     approval_request_id: str | None = None
     error: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -1127,6 +1133,7 @@ class HostEntityRef(BaseModel):
     host_id: str | None = None
     asset_id: str | None = None
     asset_group: str | None = None
+    ip_addresses: list[str] = Field(default_factory=list)
 
 
 class FileEntityRef(BaseModel):
@@ -1181,10 +1188,75 @@ class EvidenceInputPolicy(BaseModel):
     primary_input_path: str | None = None
     fallback_input_path: str | None = None
     selected_input_path: str | None = None
+    supplementary_input_paths: list[str] = Field(default_factory=list)
     selected_layer: EvidenceLayer = EvidenceLayer.RAW_STRUCTURED
     fallback_reason: str | None = None
     ignore_processed_fields_for_reasoning: bool = False
     trust_level: EvidenceTrustLevel = EvidenceTrustLevel.MEDIUM
+
+
+class NestedJsonRepairStatus(StrEnum):
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    ERROR = "error"
+
+
+class NestedJsonRepairObservation(BaseModel):
+    """Auditable outcome of a repair attempt after strict nested JSON parsing failed."""
+
+    field_path: str = Field(min_length=1)
+    status: NestedJsonRepairStatus
+    strategy: str = "json_repair"
+    repair_log_count: int = Field(default=0, ge=0)
+    reason: str = Field(min_length=1)
+
+
+class ParsedRawMessageEvidence(BaseModel):
+    """Deterministic parser output derived from one preserved raw message."""
+
+    schema_version: str = "soc.parsed_raw_message.v2"
+    source_path: str = Field(min_length=1)
+    parser_name: str = Field(min_length=1)
+    parser_version: str = Field(min_length=1)
+    message_hash: str = Field(min_length=1)
+    original_length: int = Field(ge=0)
+    fields: dict[str, Any] = Field(default_factory=dict)
+    decoded_fields: dict[str, Any] = Field(default_factory=dict)
+    repaired_fields: dict[str, Any] = Field(default_factory=dict)
+    repair_observations: list[NestedJsonRepairObservation] = Field(default_factory=list)
+    header: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class MessageSchemaStatus(StrEnum):
+    RECOGNIZED = "recognized"
+    DEGRADED = "degraded"
+    UNSUPPORTED = "unsupported"
+
+
+class MessageSchemaObservation(BaseModel):
+    """Structural parser observation used for schema drift detection."""
+
+    source_path: str = Field(min_length=1)
+    parser_name: str | None = None
+    parser_version: str | None = None
+    schema_fingerprint: str | None = None
+    status: MessageSchemaStatus
+    field_count: int = Field(default=0, ge=0)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class BoundedAnalysisEvidence(BaseModel):
+    """Size-bounded evidence content allowed to enter an analysis node."""
+
+    schema_version: str = "soc.bounded_analysis_evidence.v1"
+    source_path: str = Field(min_length=1)
+    layer: EvidenceLayer
+    trust_level: EvidenceTrustLevel
+    content: str
+    parser_name: str | None = None
+    original_length: int = Field(default=0, ge=0)
+    truncated: bool = False
 
 
 class FieldTrust(BaseModel):
@@ -1197,16 +1269,80 @@ class FieldTrust(BaseModel):
     reason: str | None = None
 
 
-class RoleAssignment(BaseModel):
-    """Deterministic candidate assignment for one security-investigation role."""
+class RoleClaimType(StrEnum):
+    OBSERVATION = "observation"
+    VENDOR_ASSERTION = "vendor_assertion"
+    DERIVED_HYPOTHESIS = "derived_hypothesis"
+    EXTERNAL_EVIDENCE = "external_evidence"
+    HUMAN_CONFIRMATION = "human_confirmation"
 
-    role: Literal["source", "destination", "attacker", "victim", "impacted_asset", "response_target"]
+
+class RoleResolutionStatus(StrEnum):
+    OBSERVED = "observed"
+    TENTATIVE = "tentative"
+    CONFLICTED = "conflicted"
+    CONFIRMED = "confirmed"
+    UNRESOLVED = "unresolved"
+
+
+class RoleClaim(BaseModel):
+    """One observable or asserted role claim with separate evidence and semantic confidence."""
+
+    claim_id: str = Field(min_length=1)
+    role: Literal["source", "destination", "attacker", "victim", "impacted_asset"]
     value: str = Field(min_length=1)
-    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
-    evidence_path: str
-    source_layer: EvidenceLayer = EvidenceLayer.PROCESSED_FIELD
-    trust_level: EvidenceTrustLevel = EvidenceTrustLevel.UNKNOWN
+    claim_type: RoleClaimType
+    evidence_path: str = Field(min_length=1)
+    source_layer: EvidenceLayer
+    evidence_trust: EvidenceTrustLevel = EvidenceTrustLevel.UNKNOWN
+    semantic_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     rationale: str = Field(min_length=1)
+
+
+class ScenarioHypothesis(BaseModel):
+    """A bounded scenario hypothesis used to interpret network and security roles."""
+
+    scenario_type: str = Field(min_length=1)
+    status: Literal["tentative", "confirmed"] = "tentative"
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    evidence_paths: list[str] = Field(default_factory=list)
+    rationale: str = Field(min_length=1)
+
+
+class ScenarioSignal(BaseModel):
+    """Source-adapter evidence that may support a vendor-neutral scenario hypothesis."""
+
+    text: str = Field(min_length=1)
+    evidence_path: str = Field(min_length=1)
+    source_layer: EvidenceLayer
+    evidence_trust: EvidenceTrustLevel = EvidenceTrustLevel.UNKNOWN
+
+
+class RoleResolution(BaseModel):
+    """Auditable resolution for one role; conflicted roles may retain a provisional value."""
+
+    role: Literal["source", "destination", "attacker", "victim", "impacted_asset"]
+    status: RoleResolutionStatus
+    selected_value: str | None = None
+    semantic_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    supporting_claim_ids: list[str] = Field(default_factory=list)
+    contradicting_claim_ids: list[str] = Field(default_factory=list)
+    rationale: str = Field(min_length=1)
+    evidence_gaps: list[str] = Field(default_factory=list)
+    manual_checks: list[str] = Field(default_factory=list)
+    automation_allowed: bool = False
+
+
+class CanonicalFieldProvenance(BaseModel):
+    """Explains which source field supplied one canonical value and what alternatives existed."""
+
+    canonical_path: str = Field(min_length=1)
+    selected_value: str = Field(min_length=1)
+    selected_from: str = Field(min_length=1)
+    source_layer: EvidenceLayer
+    trust_level: EvidenceTrustLevel
+    selection_reason: str = Field(min_length=1)
+    alternative_values: list[str] = Field(default_factory=list)
 
 
 class ConflictReport(BaseModel):
@@ -1217,18 +1353,62 @@ class ConflictReport(BaseModel):
     description: str = Field(min_length=1)
     involved_fields: list[str] = Field(default_factory=list)
     candidate_values: dict[str, list[str]] = Field(default_factory=dict)
+    resolution_status: RoleResolutionStatus = RoleResolutionStatus.UNRESOLVED
+    provisional_value: str | None = None
+    resolution_reason: str | None = None
+    blocks_automation: bool = True
 
 
 class FactReconstructionResult(BaseModel):
     """Pre-analysis fact layer built from evidence policy and normalized fields."""
 
-    schema_version: str = "soc.fact_reconstruction.v1"
+    schema_version: str = "soc.fact_reconstruction.v2"
     evidence_policy: EvidenceInputPolicy | None = None
     selected_input_path: str | None = None
     selected_input_available: bool = False
     field_trusts: list[FieldTrust] = Field(default_factory=list)
-    role_assignments: list[RoleAssignment] = Field(default_factory=list)
+    canonical_field_provenance: list[CanonicalFieldProvenance] = Field(default_factory=list)
+    role_claims: list[RoleClaim] = Field(default_factory=list)
+    scenario_hypotheses: list[ScenarioHypothesis] = Field(default_factory=list)
+    role_resolutions: list[RoleResolution] = Field(default_factory=list)
     conflict_reports: list[ConflictReport] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class EvidenceCoverageOmission(BaseModel):
+    """One parsed field that was not passed through unchanged."""
+
+    field_path: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class EvidenceCoverageGap(BaseModel):
+    """High-value parsed evidence not represented in the canonical contract."""
+
+    field_path: str = Field(min_length=1)
+    expected_target: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    rule_id: str | None = None
+    importance: Literal["medium", "high", "critical"] = "high"
+
+
+class EvidenceCoverageReport(BaseModel):
+    """Trace which parsed evidence is used, projected, sanitized, or omitted."""
+
+    schema_version: str = "soc.evidence_coverage.v2"
+    message_schemas: list[MessageSchemaObservation] = Field(default_factory=list)
+    parsed_field_paths: list[str] = Field(default_factory=list)
+    decoded_field_paths: list[str] = Field(default_factory=list)
+    repaired_field_paths: list[str] = Field(default_factory=list)
+    canonical_source_paths: list[str] = Field(default_factory=list)
+    fact_source_paths: list[str] = Field(default_factory=list)
+    scenario_source_paths: list[str] = Field(default_factory=list)
+    llm_projected_paths: list[str] = Field(default_factory=list)
+    llm_sanitized_paths: list[str] = Field(default_factory=list)
+    llm_truncated_evidence_paths: list[str] = Field(default_factory=list)
+    omissions: list[EvidenceCoverageOmission] = Field(default_factory=list)
+    high_value_gaps: list[EvidenceCoverageGap] = Field(default_factory=list)
+    counts: dict[str, int] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -1286,6 +1466,7 @@ class LLMAnalysisRequest(BaseModel):
 
     schema_version: str = "soc.llm_analysis_request.v1"
     alert_id: str
+    tenant_id: str | None = None
     source: AlertSourceRef = Field(default_factory=AlertSourceRef)
     detection: DetectionRuleRef = Field(default_factory=DetectionRuleRef)
     classification: AlertClassification = Field(default_factory=AlertClassification)
@@ -1293,6 +1474,9 @@ class LLMAnalysisRequest(BaseModel):
     extracted_entities: ExtractedEntities = Field(default_factory=ExtractedEntities)
     fact_reconstruction: FactReconstructionResult = Field(default_factory=FactReconstructionResult)
     primary_evidence_path: str | None = None
+    primary_evidence: BoundedAnalysisEvidence | None = None
+    supplementary_evidence: list[BoundedAnalysisEvidence] = Field(default_factory=list)
+    evidence_coverage: EvidenceCoverageReport = Field(default_factory=EvidenceCoverageReport)
     conflict_count: int = Field(default=0, ge=0)
     conflict_types: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
@@ -1310,6 +1494,7 @@ class NormalizationReport(BaseModel):
     normalized_fields: list[str] = Field(default_factory=list)
     unmapped_fields: list[str] = Field(default_factory=list)
     unmapped_field_count: int = Field(default=0, ge=0)
+    message_schemas: list[MessageSchemaObservation] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -1347,6 +1532,9 @@ class NormalizationDriftSample(BaseModel):
     unmapped_fields: list[str] = Field(default_factory=list)
     entity_counts: dict[str, int] = Field(default_factory=dict)
     missing_entity_kinds: list[str] = Field(default_factory=list)
+    schema_fingerprints: list[str] = Field(default_factory=list)
+    novel_schema_fingerprints: list[str] = Field(default_factory=list)
+    schema_statuses: list[MessageSchemaStatus] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None
 
@@ -1364,9 +1552,206 @@ class NormalizationDriftReport(BaseModel):
     unmapped_field_counts: dict[str, int] = Field(default_factory=dict)
     entity_kind_counts: dict[str, int] = Field(default_factory=dict)
     missing_entity_kind_counts: dict[str, int] = Field(default_factory=dict)
+    schema_fingerprint_counts: dict[str, int] = Field(default_factory=dict)
+    schema_baseline_applied: bool = False
+    known_schema_fingerprint_count: int = Field(default=0, ge=0)
+    novel_schema_fingerprint_counts: dict[str, int] = Field(default_factory=dict)
+    schema_status_counts: dict[str, int] = Field(default_factory=dict)
     warning_counts: dict[str, int] = Field(default_factory=dict)
     suspicious_samples: list[NormalizationDriftSample] = Field(default_factory=list)
     samples: list[NormalizationDriftSample] = Field(default_factory=list)
+
+
+class NormalizationBaselineStatus(StrEnum):
+    ACTIVE = "active"
+    SUPERSEDED = "superseded"
+
+
+class NormalizationSchemaBaseline(BaseModel):
+    """Human-approved schema fingerprints for one source/parser scope."""
+
+    schema_version: str = "soc.normalization_schema_baseline.v1"
+    baseline_id: str = Field(default_factory=lambda: f"NSB-{uuid4().hex[:12].upper()}")
+    version: int = Field(default=1, ge=1)
+    status: NormalizationBaselineStatus = NormalizationBaselineStatus.ACTIVE
+    tenant_id: str | None = None
+    source_system: str | None = None
+    adapter: str = Field(min_length=1)
+    parser_name: str = Field(min_length=1)
+    parser_version: str = Field(min_length=1)
+    accepted_fingerprints: list[str] = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    approved_by: ActorContext
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    superseded_at: datetime | None = None
+
+
+class NormalizationBaselineAcceptCommand(BaseModel):
+    tenant_id: str | None = None
+    source_system: str | None = None
+    adapter: str = Field(min_length=1)
+    parser_name: str = Field(min_length=1)
+    parser_version: str = Field(min_length=1)
+    accepted_fingerprints: list[str] = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class NormalizationMaintenanceIssueType(StrEnum):
+    BASELINE_MISSING = "baseline_missing"
+    NOVEL_SCHEMA = "novel_schema"
+    DEGRADED_SCHEMA = "degraded_schema"
+    UNSUPPORTED_SCHEMA = "unsupported_schema"
+    HIGH_VALUE_GAP = "high_value_gap"
+    EVIDENCE_TRUNCATED = "evidence_truncated"
+
+
+class NormalizationMaintenanceIssueStatus(StrEnum):
+    OPEN = "open"
+    ACKNOWLEDGED = "acknowledged"
+    RESOLVED = "resolved"
+    IGNORED = "ignored"
+
+
+class NormalizationMaintenanceSeverity(StrEnum):
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+class NormalizationMaintenanceIssue(BaseModel):
+    """Deduplicated parser/mapping maintenance work, separate from alert review."""
+
+    schema_version: str = "soc.normalization_maintenance_issue.v1"
+    issue_id: str = Field(default_factory=lambda: f"NMI-{uuid4().hex[:12].upper()}")
+    dedupe_key: str = Field(min_length=1)
+    issue_type: NormalizationMaintenanceIssueType
+    severity: NormalizationMaintenanceSeverity
+    status: NormalizationMaintenanceIssueStatus = NormalizationMaintenanceIssueStatus.OPEN
+    tenant_id: str | None = None
+    source_system: str | None = None
+    adapter: str = Field(min_length=1)
+    parser_name: str | None = None
+    parser_version: str | None = None
+    schema_fingerprint: str | None = None
+    source_path: str | None = None
+    expected_target: str | None = None
+    run_id: str | None = None
+    alert_id: str | None = None
+    occurrence_count: int = Field(default=1, ge=1)
+    first_seen_at: datetime = Field(default_factory=utc_now)
+    last_seen_at: datetime = Field(default_factory=utc_now)
+    acknowledged_by: ActorContext | None = None
+    acknowledged_at: datetime | None = None
+    resolved_by: ActorContext | None = None
+    resolved_at: datetime | None = None
+    resolution_reason: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class NormalizationMaintenanceIssueUpdateCommand(BaseModel):
+    issue_id: str = Field(min_length=1)
+    status: Literal["acknowledged", "resolved", "ignored"]
+    reason: str = Field(min_length=1)
+
+
+class NormalizationMonitoringResult(BaseModel):
+    schema_version: str = "soc.normalization_monitoring_result.v1"
+    run_id: str
+    alert_id: str
+    baseline_ids: list[str] = Field(default_factory=list)
+    created_issue_ids: list[str] = Field(default_factory=list)
+    updated_issue_ids: list[str] = Field(default_factory=list)
+    issues: list[NormalizationMaintenanceIssue] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class EvidenceFieldImportance(StrEnum):
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class EvidenceFieldImportanceRule(BaseModel):
+    """Configurable mapping expectation for parsed/decoded/repaired evidence."""
+
+    rule_id: str = Field(min_length=1)
+    source_patterns: list[str] = Field(min_length=1)
+    expected_target: str = Field(min_length=1)
+    importance: EvidenceFieldImportance = EvidenceFieldImportance.HIGH
+    source_types: list[AlertSourceType] = Field(default_factory=list)
+    reason: str = Field(min_length=1)
+
+
+class NormalizationSuggestionStatus(StrEnum):
+    CANDIDATE = "candidate"
+    REJECTED = "rejected"
+
+
+class NormalizationMappingSuggestion(BaseModel):
+    suggestion_id: str = Field(default_factory=lambda: f"NMS-{uuid4().hex[:12].upper()}")
+    status: NormalizationSuggestionStatus = NormalizationSuggestionStatus.CANDIDATE
+    target_path: str = Field(min_length=1)
+    source_paths: list[str] = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+    rationale: str = Field(min_length=1)
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class NormalizationSuggestionReport(BaseModel):
+    schema_version: str = "soc.normalization_suggestion_report.v1"
+    generated_by: Literal["deterministic", "llm_replay", "llm"]
+    model_name: str | None = None
+    prompt_version: str = "soc-normalization-suggest-v1"
+    source_report_hash: str
+    suggestions: list[NormalizationMappingSuggestion] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    auto_apply_allowed: bool = False
+
+
+class NormalizationSuggestionPrompt(BaseModel):
+    """Sanitized offline prompt bundle; it never invokes or mutates runtime."""
+
+    schema_version: str = "soc.normalization_suggestion_prompt.v1"
+    prompt_version: str = "soc-normalization-suggest-v1"
+    source_report_hash: str
+    system_prompt: str
+    user_prompt: str
+    observed_source_paths: list[str] = Field(default_factory=list)
+    allowed_target_paths: list[str] = Field(default_factory=list)
+
+
+class ConfidenceCalibrationSample(BaseModel):
+    sample_id: str = Field(min_length=1)
+    predicted_verdict: Verdict
+    actual_verdict: Verdict
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class ConfidenceCalibrationBin(BaseModel):
+    lower_bound: float = Field(ge=0.0, le=1.0)
+    upper_bound: float = Field(ge=0.0, le=1.0)
+    sample_count: int = Field(ge=0)
+    average_confidence: float = Field(ge=0.0, le=1.0)
+    empirical_accuracy: float = Field(ge=0.0, le=1.0)
+
+
+class ConfidenceThresholdProfile(BaseModel):
+    profile_version: str = Field(min_length=1)
+    review_below: float = Field(ge=0.0, le=1.0)
+    auto_action_allowed: bool = False
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ConfidenceCalibrationReport(BaseModel):
+    schema_version: str = "soc.confidence_calibration_report.v1"
+    sample_count: int = Field(ge=0)
+    accuracy: float = Field(ge=0.0, le=1.0)
+    brier_score: float = Field(ge=0.0, le=1.0)
+    expected_calibration_error: float = Field(ge=0.0, le=1.0)
+    bins: list[ConfidenceCalibrationBin] = Field(default_factory=list)
+    threshold_profile: ConfidenceThresholdProfile
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AnalysisResult(BaseModel):
@@ -1621,6 +2006,7 @@ class AnalysisRun(BaseModel):
     steps: list[PipelineStepTrace] = Field(default_factory=list)
     entities: ExtractedEntities | None = None
     normalization_report: NormalizationReport | None = None
+    normalization_monitoring_result: NormalizationMonitoringResult | None = None
     extraction_report: ExtractionReport | None = None
     fact_reconstruction: FactReconstructionResult | None = None
     llm_analysis_request: LLMAnalysisRequest | None = None

@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from soc_agent.contracts import (
     AlertInput,
+    AlertSourceType,
     AnalysisNodeOutput,
     AnalysisResult,
     AnalysisRun,
@@ -24,6 +25,7 @@ from soc_agent.contracts import (
     ExtractionReport,
     FactReconstructionResult,
     LLMAnalysisRequest,
+    MessageSchemaStatus,
     NormalizationInspectionResult,
     NormalizationReport,
     PipelineStepStatus,
@@ -33,6 +35,7 @@ from soc_agent.core.validator import validate_analysis_result, validate_decision
 from soc_agent.normalizers import normalize_alert_payload, normalize_with_mapping
 from soc_agent.pipeline.analysis_context import build_llm_analysis_request
 from soc_agent.pipeline.analyzer import StubLLMAnalyzer
+from soc_agent.pipeline.evidence_coverage import observe_message_schemas
 from soc_agent.pipeline.extractor import extract_entities
 from soc_agent.pipeline.fact_reconstructor import reconstruct_facts
 from soc_agent.protocols import LLMAnalyzer
@@ -155,16 +158,7 @@ def _decide(analysis: AnalysisResult) -> Decision:
 
 def _normalization_report(alert: AlertInput) -> NormalizationReport:
     normalized_fields = _present_canonical_fields(alert)
-    missing_fields = [
-        field
-        for field in [
-            "source.source_type",
-            "detection.rule_code_or_name",
-            "entities.network.source_ip",
-            "entities.network.destination_ip",
-        ]
-        if field not in normalized_fields
-    ]
+    missing_fields = [field for field in _required_canonical_fields(alert.source.source_type) if field not in normalized_fields]
     mapping_metadata = alert.extensions.get("normalization")
     adapter = "pingan_platform" if "legacy_platform" in alert.extensions else "generic"
     mapping_warnings: list[str] = []
@@ -181,8 +175,15 @@ def _normalization_report(alert: AlertInput) -> NormalizationReport:
         if isinstance(missing_paths, list):
             unmapped_fields = [str(path) for path in missing_paths]
 
+    message_schemas = observe_message_schemas(alert)
     warnings = [f"missing normalized field: {field}" for field in missing_fields]
     warnings.extend(mapping_warnings)
+    for observation in message_schemas:
+        if observation.status is MessageSchemaStatus.UNSUPPORTED:
+            warnings.append(f"unsupported message schema: {observation.source_path}")
+        elif observation.status is MessageSchemaStatus.DEGRADED:
+            warnings.append(f"degraded message schema: {observation.source_path}")
+        warnings.extend(f"{observation.source_path}: {warning}" for warning in observation.warnings)
     return NormalizationReport(
         adapter=adapter,
         source_type=alert.source.source_type,
@@ -191,8 +192,22 @@ def _normalization_report(alert: AlertInput) -> NormalizationReport:
         normalized_fields=normalized_fields,
         unmapped_fields=unmapped_fields,
         unmapped_field_count=len(unmapped_fields),
-        warnings=warnings,
+        message_schemas=message_schemas,
+        warnings=list(dict.fromkeys(warnings)),
     )
+
+
+def _required_canonical_fields(source_type: AlertSourceType) -> list[str]:
+    required = ["source.source_type", "detection.rule_code_or_name"]
+    if source_type in {
+        AlertSourceType.NDR,
+        AlertSourceType.NIDS,
+        AlertSourceType.WAF,
+        AlertSourceType.F5,
+        AlertSourceType.THREAT_INTEL,
+    }:
+        required.extend(["entities.network.source_ip", "entities.network.destination_ip"])
+    return required
 
 
 def _present_canonical_fields(alert: AlertInput) -> list[str]:
@@ -227,6 +242,8 @@ def _present_canonical_fields(alert: AlertInput) -> list[str]:
         fields.append("entities.user.um_account")
     if alert.entities.host.host_name:
         fields.append("entities.host.host_name")
+    if alert.entities.host.ip_addresses:
+        fields.append("entities.host.ip_addresses")
     if alert.entities.process.process_name:
         fields.append("entities.process.process_name")
     if alert.entities.process.command_line:

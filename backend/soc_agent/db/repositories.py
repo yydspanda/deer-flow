@@ -13,6 +13,10 @@ from soc_agent.contracts import (
     AnalysisRun,
     DecisionAuditRecord,
     InvestigationEvidence,
+    NormalizationBaselineStatus,
+    NormalizationMaintenanceIssue,
+    NormalizationMaintenanceIssueStatus,
+    NormalizationSchemaBaseline,
     ReviewQueueItem,
     ReviewQueueStatus,
     SimilarAlertMatch,
@@ -35,6 +39,8 @@ from soc_agent.db.models import (
     SocInvestigationEvidenceRow,
     SocMemoryCandidateRow,
     SocMemoryRecordRow,
+    SocNormalizationMaintenanceIssueRow,
+    SocNormalizationSchemaBaselineRow,
     SocReviewQueueRow,
 )
 
@@ -419,6 +425,100 @@ class SqlAlchemyAlertRepository:
             result = session.execute(query.order_by(SocMemoryRecordRow.updated_at.desc()).limit(limit))
             return [SocMemoryRecord.model_validate(row.record_payload) for row in result.scalars()]
 
+    def save_normalization_baseline(self, baseline: NormalizationSchemaBaseline) -> None:
+        payload = baseline.model_dump(mode="json")
+        with self._session_factory() as session:
+            row = session.get(SocNormalizationSchemaBaselineRow, baseline.baseline_id)
+            if row is None:
+                session.add(
+                    SocNormalizationSchemaBaselineRow(
+                        baseline_id=baseline.baseline_id,
+                        **_normalization_baseline_row_values(baseline, payload),
+                    )
+                )
+            else:
+                for key, value in _normalization_baseline_row_values(baseline, payload).items():
+                    setattr(row, key, value)
+            session.commit()
+
+    def get_normalization_baseline(self, baseline_id: str) -> NormalizationSchemaBaseline | None:
+        with self._session_factory() as session:
+            row = session.get(SocNormalizationSchemaBaselineRow, baseline_id)
+            return NormalizationSchemaBaseline.model_validate(row.baseline_payload) if row is not None else None
+
+    def list_normalization_baselines(
+        self,
+        *,
+        status: NormalizationBaselineStatus | None = None,
+        tenant_id: str | None = None,
+        source_system: str | None = None,
+        adapter: str | None = None,
+        parser_name: str | None = None,
+        parser_version: str | None = None,
+        limit: int = 50,
+    ) -> list[NormalizationSchemaBaseline]:
+        with self._session_factory() as session:
+            query = select(SocNormalizationSchemaBaselineRow)
+            filters = {
+                "status": status.value if status is not None else None,
+                "tenant_id": tenant_id,
+                "source_system": source_system,
+                "adapter": adapter,
+                "parser_name": parser_name,
+                "parser_version": parser_version,
+            }
+            for name, value in filters.items():
+                if value is not None:
+                    query = query.where(getattr(SocNormalizationSchemaBaselineRow, name) == value)
+            result = session.execute(query.order_by(SocNormalizationSchemaBaselineRow.updated_at.desc()).limit(limit))
+            return [NormalizationSchemaBaseline.model_validate(row.baseline_payload) for row in result.scalars()]
+
+    def save_normalization_issue(self, issue: NormalizationMaintenanceIssue) -> None:
+        payload = issue.model_dump(mode="json")
+        with self._session_factory() as session:
+            row = session.get(SocNormalizationMaintenanceIssueRow, issue.issue_id)
+            if row is None:
+                session.add(
+                    SocNormalizationMaintenanceIssueRow(
+                        issue_id=issue.issue_id,
+                        **_normalization_issue_row_values(issue, payload),
+                    )
+                )
+            else:
+                for key, value in _normalization_issue_row_values(issue, payload).items():
+                    setattr(row, key, value)
+            session.commit()
+
+    def get_normalization_issue(self, issue_id: str) -> NormalizationMaintenanceIssue | None:
+        with self._session_factory() as session:
+            row = session.get(SocNormalizationMaintenanceIssueRow, issue_id)
+            return NormalizationMaintenanceIssue.model_validate(row.issue_payload) if row is not None else None
+
+    def find_normalization_issue_by_dedupe_key(self, dedupe_key: str) -> NormalizationMaintenanceIssue | None:
+        with self._session_factory() as session:
+            result = session.execute(select(SocNormalizationMaintenanceIssueRow).where(SocNormalizationMaintenanceIssueRow.dedupe_key == dedupe_key).limit(1))
+            row = result.scalar_one_or_none()
+            return NormalizationMaintenanceIssue.model_validate(row.issue_payload) if row is not None else None
+
+    def list_normalization_issues(
+        self,
+        *,
+        status: NormalizationMaintenanceIssueStatus | None = None,
+        tenant_id: str | None = None,
+        source_system: str | None = None,
+        limit: int = 50,
+    ) -> list[NormalizationMaintenanceIssue]:
+        with self._session_factory() as session:
+            query = select(SocNormalizationMaintenanceIssueRow)
+            if status is not None:
+                query = query.where(SocNormalizationMaintenanceIssueRow.status == status.value)
+            if tenant_id is not None:
+                query = query.where(SocNormalizationMaintenanceIssueRow.tenant_id == tenant_id)
+            if source_system is not None:
+                query = query.where(SocNormalizationMaintenanceIssueRow.source_system == source_system)
+            result = session.execute(query.order_by(SocNormalizationMaintenanceIssueRow.last_seen_at.desc()).limit(limit))
+            return [NormalizationMaintenanceIssue.model_validate(row.issue_payload) for row in result.scalars()]
+
 
 def _row_values(run: AnalysisRun, payload: dict, *, updated_at: datetime) -> dict:
     return {
@@ -679,4 +779,51 @@ def _memory_record_row_values(record: SocMemoryRecord, payload: dict) -> dict:
         "created_at": record.created_at,
         "updated_at": record.updated_at,
         "record_payload": payload,
+    }
+
+
+def _normalization_baseline_row_values(baseline: NormalizationSchemaBaseline, payload: dict) -> dict:
+    return {
+        "version": baseline.version,
+        "status": baseline.status.value,
+        "tenant_id": baseline.tenant_id,
+        "source_system": baseline.source_system,
+        "adapter": baseline.adapter,
+        "parser_name": baseline.parser_name,
+        "parser_version": baseline.parser_version,
+        "accepted_fingerprints": baseline.accepted_fingerprints,
+        "approved_by_actor_id": baseline.approved_by.actor_id,
+        "reason": baseline.reason,
+        "created_at": baseline.created_at,
+        "updated_at": baseline.updated_at,
+        "superseded_at": baseline.superseded_at,
+        "baseline_payload": payload,
+    }
+
+
+def _normalization_issue_row_values(issue: NormalizationMaintenanceIssue, payload: dict) -> dict:
+    return {
+        "dedupe_key": issue.dedupe_key,
+        "issue_type": issue.issue_type.value,
+        "severity": issue.severity.value,
+        "status": issue.status.value,
+        "tenant_id": issue.tenant_id,
+        "source_system": issue.source_system,
+        "adapter": issue.adapter,
+        "parser_name": issue.parser_name,
+        "parser_version": issue.parser_version,
+        "schema_fingerprint": issue.schema_fingerprint,
+        "source_path": issue.source_path,
+        "expected_target": issue.expected_target,
+        "run_id": issue.run_id,
+        "alert_id": issue.alert_id,
+        "occurrence_count": issue.occurrence_count,
+        "first_seen_at": issue.first_seen_at,
+        "last_seen_at": issue.last_seen_at,
+        "acknowledged_by_actor_id": issue.acknowledged_by.actor_id if issue.acknowledged_by else None,
+        "acknowledged_at": issue.acknowledged_at,
+        "resolved_by_actor_id": issue.resolved_by.actor_id if issue.resolved_by else None,
+        "resolved_at": issue.resolved_at,
+        "resolution_reason": issue.resolution_reason,
+        "issue_payload": payload,
     }

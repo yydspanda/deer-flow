@@ -86,7 +86,12 @@ write confirmed memory, or execute side-effect actions.
 | 标准化 | Normalization | `normalizers/` | 将 PingAn/EDR/APT/HIDS/F5 等输入转成 canonical alert |
 | 证据层 | Evidence Layer | `EvidenceLayer` | 区分 raw、canonical、enriched、derived 等证据来源 |
 | 字段可信度 | Field Trust | `FieldTrust` | 表示字段来源可信程度和冲突情况 |
+| 角色声明 | Role Claim | `RoleClaim` | 区分网络观测、厂商角色断言、场景推导、外部证据和人工确认 |
+| 场景假设 | Scenario Hypothesis | `ScenarioHypothesis` | 反弹 shell、C2、横向移动等带证据的暂定场景，不是最终 verdict |
+| 角色裁决 | Role Resolution | `RoleResolution` | 给出 observed/tentative/conflicted/confirmed/unresolved 状态和暂定值 |
 | 冲突报告 | Conflict Report | `ConflictReport` | 记录上游字段、加工字段、模型结论之间的冲突 |
+| 受限分析证据 | Bounded Analysis Evidence | `BoundedAnalysisEvidence` | 允许进入模型的限长、脱敏、带来源证据，不等于完整 raw payload |
+| Skill 选择上下文 | Skill Context | `SocSkillContext` | 当前选择清单、原因、摘要和 hash；不是完整 `SKILL.md` 正文 |
 | 分析运行 | Analysis Run | `AnalysisRun` | 一次 alert 分析的完整记录、trace、result |
 | 预警摘要 | Alert Summary | `AlertSummary` | 轻量读模型，用于列表、关联、复核和 demo |
 | 复核队列 | Review Queue | `ReviewQueueItem` | 需要分析师看的工作项 |
@@ -251,9 +256,10 @@ Important behavior:
 ```mermaid
 flowchart LR
     I["AlertInput"] --> N["normalize"]
-    N --> EP["evidence_policy<br/>FieldTrust + ConflictReport"]
-    EP --> X["entity_extract<br/>code-first"]
-    X --> S["summary"]
+    N --> X["entity_extract<br/>code-first"]
+    X --> F["fact_reconstruct<br/>RoleClaim + Scenario + Resolution"]
+    F --> B["build_analysis_input<br/>bounded evidence + coverage + skill context"]
+    B --> S["summary"]
     S --> C["correlation"]
     C --> D["domain_triage"]
     D --> L["llm_analysis<br/>behind flag / schema checked"]
@@ -279,20 +285,136 @@ The system must handle vendor differences without turning the core schema into a
 
 1. Vendor adapter maps raw input to canonical `AlertInput`.
 2. Evidence policy records which fields are trusted, weak, conflicting, or derived.
-3. PingAn uses raw `zeusRawLogs[].message` as preferred evidence when available.
-4. If raw message is missing, PingAn adapter may fall back to `zeusRawLogs[]` fields with lower trust.
-5. Clean vendors may bypass heavy conflict handling, but still produce canonical evidence metadata.
+3. PingAn deterministically parses all available `zeusRawLogs[].message` values through a
+   source-scoped parser registry. Supported MVP formats are delimited JSON, quoted KV,
+   comma-delimited KV, and loose KV.
+   Supported nested JSON/HTTP fields are decoded by an allowlisted decoder with size limits;
+   decoded request/response bodies and headers are redacted before entering bounded model context.
+4. Fields parsed from the raw message are the highest-priority observable facts. Conflicting
+   `zeusRawLogs[]` structured fields remain visible as medium/low-trust fallback candidates;
+   canonical processed fields remain lower-trust derived values.
+5. The original payload is never replaced: `AlertInput.raw` and `AnalysisRun.input_payload`
+   retain every hit log, raw event, message, and platform field for replay and audit.
+6. The first successfully parsed message becomes primary evidence; additional messages become
+   bounded supplementary evidence. Analysis nodes receive size-bounded parsed content, not only
+   a source path and not the unbounded vendor payload.
+7. If raw message parsing fails, Runtime preserves the raw text, emits a warning, and keeps the
+   structured fallback at reduced trust. If raw message is absent, PingAn falls back to
+   `zeusRawLogs[]` with explicit low trust.
+8. Strict nested JSON failure does not discard the field. Runtime attempts a conservative repair:
+   accepted structures enter a separately labeled `repaired_fields` projection, while rejected or
+   failed repair uses a redacted string fallback. Repair is field-policy aware and validates root
+   type, depth, node count, key length, and source-evidenced keys/string values. The original string
+   always stays in `fields`, and repaired content never masquerades as strict-decoded source fact.
+9. Every selected message emits `MessageSchemaObservation`: `recognized` means the deterministic
+   parser handled the structure, `degraded` means partial/nested decoding failed, and `unsupported`
+   means no parser handled the selected message. A structural fingerprint supports baseline diff.
+10. `EvidenceCoverageReport` records parsed/decoded/repaired paths, canonical/fact/scenario consumers,
+    bounded LLM projection, redaction/replacement, truncation, and known high-value gaps. High-value
+    expectations come from `EvidenceFieldImportanceRegistry`: core provides vendor-neutral defaults,
+    while source adapters may add typed rules in `AlertInput.extensions`. It is persisted for audit;
+    the prompt receives only a compact coverage summary without vendor paths.
+11. Clean vendors may bypass heavy conflict handling, but still produce canonical evidence metadata.
+12. Vendor aliases stop at the source adapter. PingAn fields such as `attack_sip`, `alarm_sip`,
+   `str_source_ip`, and `str_attack_ip` are converted into vendor-neutral `RoleClaim` objects;
+   the generic fact reconstructor does not interpret those aliases directly.
+13. Evidence trust and semantic confidence are separate. A value parsed faithfully from raw
+    message may still be a wrong attacker/victim assertion from the source product.
+
+Schema drift workflow / 结构漂移流程：
+
+1. Offline onboarding still uses `soc normalize drift` and `--schema-baseline` to compare a reviewed
+   sample corpus before deployment.
+2. An engineer accepts production baselines with `soc normalize baseline-accept` or
+   `POST /api/soc/normalization/baselines`. Baselines are versioned, scoped by tenant/source/adapter/
+   parser/version, persisted in `soc_normalization_schema_baselines`, and never self-approved.
+3. Every persisted CLI/Kafka analysis calls `SocNormalizationMaintenanceService.monitor_run()` after
+   the normal run/summary/queue/audit writes. Missing baseline, novel fingerprint, degraded or
+   unsupported schema, high-value mapping gap, and bounded-evidence truncation become deduplicated
+   `NormalizationMaintenanceIssue` records. Monitoring failure is fail-open for alert analysis and is
+   recorded in `NormalizationMonitoringResult.warnings`.
+4. Accepting a baseline supersedes the prior active version and resolves covered `baseline_missing` /
+   `novel_schema` issues. Recurrence increments `occurrence_count`; a resolved/ignored issue that
+   recurs is reopened.
+5. Operators use `soc normalize issues`, Review TUI `/normalization` and `/norm-update`, or the Web
+   workbench at `/workspace/soc/normalization`. Gateway metrics expose bounded type/severity/source
+   counts; Kafka JSONL metrics include per-message issue count/IDs/warnings.
+6. `soc normalize suggest` is an offline-only assistant. It emits a value-free path prompt, validates
+   replayed LLM suggestions against observed source paths and a canonical target whitelist, keeps
+   invalid proposals as rejected, and always returns `auto_apply_allowed=false`.
+7. A new fingerprint only means the structure changed. It is maintenance evidence, never a verdict,
+   memory fact, suppression decision, or automatic parser patch.
+
+Conflict adjudication / 冲突裁决：
+
+- `source` / `destination` are observed network roles; they are not globally equivalent to
+  `attacker` / `victim`.
+- Scenario hypotheses determine which semantic constraints are valid. For reverse connection,
+  `source=victim` and `destination=attacker` is consistent rather than contradictory.
+- `RoleResolution` always exposes status, provisional value, evidence gaps, manual checks, and
+  supporting/contradicting claim IDs. A conflicted resolution may provide a current conclusion,
+  but it remains visibly provisional.
+- Supplementary raw messages participate as independent claim sources. They are not only appended
+  to an LLM prompt.
+- Fact reconstruction never determines `response_target`. Action type, policy, asset evidence,
+  approval, and the action adapter jointly determine an operational target later.
+- No role resolution alone enables an action. `automation_allowed` remains false at this layer,
+  including for human-confirmed facts.
 
 ```mermaid
 flowchart TB
     RAW["📦 Vendor Raw<br/>PingAn / EDR / APT / HIDS / F5 / Other"] --> ADAPTER["🔌 Source Adapter<br/>normalizers/*"]
-    ADAPTER --> CANON["📄 Canonical AlertInput"]
+    ADAPTER --> PARSER["🧾 Raw Message Parser<br/>primary + supplementary"]
+    PARSER --> CANON["📄 Canonical AlertInput"]
+    PARSER --> SCHEMA["🔎 MessageSchemaObservation<br/>status + fingerprint"]
+    PARSER --> BOUNDED["✂️ Bounded Analysis Evidence"]
+    PARSER --> COVER["📊 EvidenceCoverageReport<br/>used / sanitized / omitted / gap"]
+    SCHEMA --> MONITOR["🛠️ Maintenance Monitor<br/>baseline / drift / coverage"]
+    COVER --> MONITOR
+    MONITOR --> MAINTDB["🗃️ Baseline + Issue Store"]
+    MAINTDB --> OPS["🧑‍💻 CLI / TUI / Web / Metrics"]
+    ADAPTER --> CLAIM["🧾 RoleClaim<br/>vendor-neutral claims"]
     ADAPTER --> TRUST["🧪 FieldTrust"]
-    ADAPTER --> CONFLICT["⚠️ ConflictReport"]
+    CLAIM --> SCENARIO["🧠 ScenarioHypothesis"]
+    SCENARIO --> RESOLVE["⚖️ RoleResolution"]
+    TRUST --> RESOLVE
+    RESOLVE --> CONFLICT["⚠️ ConflictReport<br/>provisional resolution + guard"]
     CANON --> RUNTIME["🧭 Runtime"]
-    TRUST --> RUNTIME
+    BOUNDED --> RUNTIME
+    SCHEMA --> RUNTIME
+    COVER --> RUNTIME
+    RESOLVE --> RUNTIME
     CONFLICT --> RUNTIME
 ```
+
+### 5.5 Confidence Semantics / 置信度语义
+
+The system has several confidence-like values, but they are not interchangeable probabilities.
+
+| Signal / 信号 | Meaning / 含义 | Current use / 当前用途 |
+| --- | --- | --- |
+| `EvidenceTrustLevel` | Provenance quality: raw, fallback, processed, inferred, or human-confirmed | Evidence ordering and warnings; never averaged |
+| `MessageSchemaStatus` | Parser completeness: recognized/degraded/unsupported | Drift and maintenance alert; not a probability |
+| `ScenarioHypothesis.confidence` | Versioned deterministic heuristic score | Scenario ordering and review context; currently uncalibrated |
+| `RoleClaim/RoleResolution.semantic_confidence` | Strength of one role interpretation under a scenario | Provisional role explanation and automation guard |
+| `AnalysisResult.confidence` | Analyzer/LLM assessment for the verdict | Review display and eval only; cannot bypass validation or approval |
+| Memory confidence | Strength of a reviewed reusable lesson | Retrieval ranking after confirmation; never promotes a candidate by itself |
+
+Rules:
+
+- Never average or multiply these values across layers.
+- A high-trust raw field can still have low semantic confidence when the sensor assigns attacker and
+  victim incorrectly.
+- Current scenario/role scores are deterministic heuristics, not calibrated likelihoods. Their
+  constants and taxonomy version must be replayable.
+- LLM self-reported confidence is advisory. Production thresholds require labeled replay sets,
+  calibration metrics, versioned thresholds, and comparison against analyst outcomes.
+- `soc eval confidence` now provides the offline calibration boundary. It reads reviewed JSON/JSONL,
+  reports accuracy, Brier score, expected calibration error and non-empty bins, and emits a versioned
+  `review_below` profile. Small or single-class sets are warned; the profile is provisional and
+  `auto_action_allowed` is always false.
+- Missing coverage, degraded schemas, conflicts, and truncation can lower or cap an operational
+  conclusion, but no single score may silently erase those warnings.
 
 ---
 
@@ -436,6 +558,10 @@ not require rewriting core contracts.
 | `AlertInput` | Canonical alert input | Stable, extensible through typed optional sections and metadata |
 | `EvidenceLayer` | Evidence source/layer metadata | Stable |
 | `FieldTrust` | Field trust and provenance | Stable |
+| `CanonicalFieldProvenance` | Selected canonical source path and alternatives | Stable |
+| `RoleClaim` | Observable/asserted/derived role evidence | Stable |
+| `ScenarioHypothesis` | Evidence-backed scenario hypothesis | Stable |
+| `RoleResolution` | Conflict-aware role result and evidence gaps | Stable |
 | `ConflictReport` | Conflict and ambiguity report | Stable |
 | `AnalysisRun` | Full runtime execution record | Stable for replay/audit |
 | `AlertSummary` | Lightweight read model | Stable for queue/correlation/list |

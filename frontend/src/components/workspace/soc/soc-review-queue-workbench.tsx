@@ -11,8 +11,10 @@ import {
   RefreshCwIcon,
   SearchCheckIcon,
   ShieldAlertIcon,
+  WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -1107,6 +1109,12 @@ export function SocReviewQueueWorkbench() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/workspace/soc/normalization">
+              <WrenchIcon className="size-4" />
+              归一化运维
+            </Link>
+          </Button>
           <Select
             value={statusFilter}
             onValueChange={(value) =>

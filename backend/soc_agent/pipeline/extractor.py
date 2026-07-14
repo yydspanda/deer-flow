@@ -40,6 +40,13 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
         role="x_forwarded_for",
         evidence_path="entities.http.x_forwarded_for",
     )
+    for value in host.ip_addresses:
+        _add_ip_mention(
+            mentions,
+            value,
+            role="host_ip",
+            evidence_path="entities.host.ip_addresses",
+        )
     for value in IP_RE.findall(process.command_line or ""):
         _add_ip_mention(
             mentions,

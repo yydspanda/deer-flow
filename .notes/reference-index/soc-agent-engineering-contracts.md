@@ -113,6 +113,39 @@ contracts
 - `tools/` 不能直接执行高风险动作；必须经过 `policy`。
 - 每个包的 `__init__.py` 只 export 稳定 public API。未 export 的类/函数默认内部实现，跨包不直接调用。
 
+### Raw message parsing / 原始消息解析约束
+
+- Vendor raw-message parsing belongs in the source normalizer/adapter. PingAn formats must remain
+  under `soc_agent.normalizers`; core runtime, public skills, and Lead Agent prompts must not contain
+  PingAn field aliases.
+- Raw input is immutable evidence. Parsing adds `ParsedRawMessageEvidence`; it never replaces or
+  deletes `AlertInput.raw` or `AnalysisRun.input_payload`.
+- Evidence priority for PingAn observable facts is fixed as: deterministically parsed raw message
+  (`raw_message/high`) > Zeus structured fallback (`raw_structured/medium` or `low`) > canonical
+  processed field (`processed_field/low` when raw-first policy is active).
+- `FieldTrust` must describe the field actually used. A fallback structured field must never inherit
+  the selected raw message's high trust merely because both live in the same `zeusRawLogs[]` item.
+- All parseable messages are retained. One message is selected as primary evidence and the remaining
+  paths are supplementary evidence; selection and ordering must be deterministic and replayable.
+- `LLMAnalysisRequest` may include only `BoundedAnalysisEvidence`: per-field and total-size bounded,
+  parser/provenance annotated, and separated into primary/supplementary content. It must not dump the
+  unbounded vendor payload into the prompt.
+- Parser failure is explicit: preserve raw text, emit a warning, expose only bounded text to the
+  analysis node, and keep structured fallback candidates at reduced trust.
+- Every selected raw message must emit `MessageSchemaObservation`. `recognized` means parser grammar
+  success, `degraded` means partial/nested decode warnings, and `unsupported` means no deterministic
+  parser output exists; none of these statuses is a verdict or probability.
+- `schema_fingerprint` hashes parser name/version plus structural field paths and types, never field
+  values. Novelty is evaluated only against an explicitly accepted baseline; a first observation
+  cannot call itself novel.
+- `soc normalize drift ... --schema-baseline PRIOR_REPORT.json` must flag baseline-missing
+  fingerprints in `novel_schema_fingerprint_counts` and include their samples in
+  `suspicious_samples`. Novel/degraded/unsupported signals create parser/adapter maintenance work;
+  they do not directly change a security verdict.
+- Platform `ruleCode` remains the alert-platform detection identity. Sensor-internal `rule_id` or
+  equivalent parsed values stay in parsed evidence unless a future typed alias contract explicitly
+  maps their namespace.
+
 ## 四、模块接口与协议设计
 
 随着代码量增长，SOC Agent 不能靠“大家自觉”维持边界。每个模块必须有明确 public interface、输入输出 schema、失败语义和依赖方向。
@@ -667,7 +700,7 @@ normalizers/hids.py
 - 平安 ZEUS/天眼 adapter 使用 `raw_message_first + structured_fallback`：
   - 优先读取 `alert.hitLog[].zeusRawLogs[].message`。
   - raw message 缺失时 fallback 到完整 `zeusRawLogs[]` 对象，并标记 `fallback_reason=raw_message_missing`、`trust_level=low`。
-- 后续 `FieldTrust` / `ConflictReport` 应建立在该 policy 之后：先决定主证据输入，再重建方向、角色、资产、处置目标，并记录字段冲突；不能在 normalizer 层直接下最终攻击方向结论。
+- 后续 `FieldTrust` / `RoleClaim` / `RoleResolution` / `ConflictReport` 建立在该 policy 之后：先决定主证据输入，再重建方向、角色和资产候选；不能在 normalizer 层直接下最终攻击方向或处置目标结论。
 
 ### Fact reconstruction 约束
 
@@ -676,13 +709,89 @@ normalizers/hids.py
 - runtime 固定在 `entity_extract` 后、`analyze_stub` / 后续 `llm_analyze` 前执行 `fact_reconstruct`。
 - `FactReconstructionResult` 必须保存到 `AnalysisRun.fact_reconstruction`，随 run payload 一起持久化、replay、审计。
 - `FieldTrust` 只表达字段可信度和是否参与事实重建；不能直接改变 verdict。
-- `RoleAssignment` 是候选角色分配，当前允许的角色包括 `source`、`destination`、`attacker`、`victim`、`impacted_asset`、`response_target`。
+- source-specific adapter 负责把厂商别名转换成通用 `RoleClaim`；generic fact reconstructor 禁止识别 `attack_sip`、`alarm_sip`、`str_attack_ip` 等厂商字段。
+- `RoleClaim` 必须分开 `evidence_trust` 与 `semantic_confidence`。原始 message 解析成功只能提高前者，不能自动证明厂商的 attacker/victim 语义正确。
+- `RoleResolution` 当前角色包括 `source`、`destination`、`attacker`、`victim`、`impacted_asset`；状态包括 `observed`、`tentative`、`conflicted`、`confirmed`、`unresolved`。
+- `response_target` 不属于事实重建结果。它由 action type、policy、调查证据、approval 和 adapter preflight 在动作边界确定。
 - `ConflictReport` 必须结构化表达冲突类型、涉及字段和值，例如：
   - 同一角色多个候选值：`source_candidate_conflict`、`victim_candidate_conflict`。
-  - 跨角色不一致：`attacker_source_mismatch`、`victim_destination_mismatch`。
+  - 场景化角色不一致：`reverse_connection_attacker_destination_mismatch`、`reverse_connection_victim_source_mismatch`。
   - 源和目的重叠：`source_destination_overlap`。
+- 禁止使用全局 `attacker == source` / `victim == destination` 约束。正向攻击、反弹 shell、恶意外联、C2、横向移动、代理/NAT/XFF 的角色关系不同；未知场景不得伪造跨角色冲突。
+- 主 message、supplementary messages、structured fallback 都必须作为独立 claim source 参与冲突检查；supplementary 不能只进入 Prompt。
+- 冲突裁决必须输出暂定值或 unresolved、支持/反对 claim IDs、语义置信度、证据缺口、人工核查清单和 automation guard；不能一边报告冲突，一边把值伪装成 confirmed。
+- fact layer 的 `automation_allowed` 始终为 false；即使角色由人工确认，也必须再经过 action policy/approval。
 - Phase 1 的事实重建只做 deterministic 规则；LLM 后续只能读取 fact layer 进行解释、补充候选或提出复核问题，不能绕过该层直接相信上游加工字段。
 - raw message 存在时，canonical processed fields 默认低可信且不作为主推理输入；raw message 缺失时 structured fallback 必须保留低可信 warning。
+
+### Nested message decoding / 嵌套 message 解码约束
+
+- JSON parser 递归保留真实 object/array；JSON-in-string、HTTP headers、XFF chain 只通过 allowlisted decoder 处理，禁止无界递归猜测所有字符串。
+- nested decoder 必须限制字段名、最大长度和解析深度；失败写 parser warning，不中断告警。
+- `ParsedRawMessageEvidence.fields` 保留第一层解析结果，`decoded_fields` 保存受控二次解码结果；完整原文仍只以 `AlertInput.raw` / `AnalysisRun.input_payload` 为审计来源。
+- nested JSON 严格解析失败后必须保留 `fields` 原始字符串和 parser warning，并可尝试保守 repair。
+  repair 结果必须按字段策略验证根容器类型、非空结构、最大深度、最大节点数、key 长度、key source
+  evidence 和 string value source evidence；accepted 结果只写入独立
+  `repaired_fields`，不得写入 `decoded_fields` 或覆盖原文。rejected/error repair 使用脱敏、限长字符串
+  fallback。
+- 每次 repair attempt 必须生成 `NestedJsonRepairObservation`，至少记录 field path、
+  accepted/rejected/error、strategy、repair log count 和不含敏感原文的 reason。
+- 本地逐步验证产物必须保存对应 Runtime 节点的原始 contract `model_dump(mode="json")`；允许增加步骤、源文件 hash 和上一步引用等最小 envelope 元数据，但不得用审阅聚合、翻译字段或人工结论替换真实节点输出。
+- body/header/token/cookie/password 等内容进入 `BoundedAnalysisEvidence` 前必须脱敏或以 decoded projection 替换；不能因为字段来自 raw message 就绕过敏感信息边界。
+- `CanonicalFieldProvenance` 必须展示 canonical path、selected value、selected source path/layer/trust、selection reason 和 alternatives，让 `raw_message_first` 可从运行产物直接验证。
+
+### Evidence coverage 约束
+
+- `build_analysis_input` 必须生成 `EvidenceCoverageReport`，至少记录 message schema observations、
+  parsed/decoded/repaired paths、canonical/fact/scenario source paths、LLM projection、sanitization、truncation、
+  omissions 和 high-value gaps。
+- coverage report 是审计/漂移产物，不是 verdict。一个字段被解析但没有 canonical mapping 时不得
+  静默消失：它必须仍可在 parsed evidence 中回放，并通过全路径清单或已定义 high-value gap 暴露。
+- `llm_projected_paths` 表示该字段属于 bounded projection 的候选内容；若 evidence 整体被截断，必须
+  同时记录 `llm_truncated_evidence_paths`，不能声称 leaf-level 完整送达。
+- accepted repair 进入 bounded analysis 时，原字段 replacement reason 必须标为
+  `replaced_by_repaired_projection`；rejected/error repair 标为 `sanitized_string_fallback`。repair 结果
+  只进入 repaired paths，不得进入 decoded paths。
+- Prompt Builder 不得原样 dump 完整 coverage path 清单。模型只接收 parser status/fingerprint、计数、
+  omission reason 汇总、high-value target/reason 和 truncation 数量；完整 vendor paths 只用于审计。
+- high-value gap 规则必须通过 `EvidenceFieldImportanceRule` / `EvidenceFieldImportanceRegistry` 声明。
+  Core 默认规则只能使用 vendor-neutral/标准协议语义；供应商字段规则由 adapter 写入 typed extension。
+  无效 extension 规则忽略并保留现有 deterministic defaults，不能让一条坏配置中断告警。
+
+### Normalization maintenance / 归一化维护约束
+
+- `NormalizationSchemaBaseline` 是人工批准、版本化、可 supersede 的生产基线；scope 至少包含 tenant、
+  source system、adapter、parser name/version。首次观察不能自动成为 accepted baseline。
+- 只有 `soc_engineer` / `soc_admin` 可接受基线。接受新版本必须 supersede 同 scope 旧 active baseline，
+  并可关闭被新基线覆盖的 missing/novel issue。
+- `SocNormalizationMaintenanceService.monitor_run()` 在业务 run/summary/review/audit 持久化之后执行。
+  监控失败不得把原告警改成 failed；失败类型只能进入 `NormalizationMonitoringResult.warnings`。
+- missing baseline、novel/degraded/unsupported schema、high-value gap、evidence truncation 必须形成
+  独立 `NormalizationMaintenanceIssue`，不能混入告警 `ReviewQueueItem`。Issue 必须有稳定 dedupe key、
+  occurrence count、first/last seen、状态和处理理由；resolved/ignored 后复发必须 reopen。
+- `NORMALIZATION_BASELINE_ACCEPTED`、`NORMALIZATION_DRIFT_DETECTED`、
+  `NORMALIZATION_ISSUE_UPDATED` 是通知事件，不是 verdict/memory/action 事件。
+- Gateway `/api/soc/normalization/*`、CLI、Review TUI 和 Web 只能调用 maintenance service，不得直接
+  写 repository。Kafka 单条结果/JSONL metrics 可携带 issue count/IDs/warnings，不携带 raw message。
+- `soc normalize suggest` 只能在离线/replay 场景运行：prompt 只包含字段路径和 target whitelist，不含
+  raw values；响应必须 schema validate，并验证 source path 已观察、target 在 canonical whitelist。
+  输出永远是 candidate/rejected 且 `auto_apply_allowed=false`；不得动态修改 adapter、baseline 或 runtime。
+
+### Confidence semantics / 置信度语义约束
+
+- `EvidenceTrustLevel` 是来源/证据质量的有序标签，不是 0..1 概率。
+- `MessageSchemaStatus` 是解析完整性状态，不是置信度。
+- `ScenarioHypothesis.confidence` 与 `RoleClaim/RoleResolution.semantic_confidence` 当前是可回放、带版本
+  的 deterministic heuristic score；在标注集完成 calibration 前，不得描述成真实概率。
+- `AnalysisResult.confidence` 是 analyzer/LLM 对 verdict 的自评，只可用于展示、排序和离线评测；不能
+  绕过 schema/domain validation、conflict guard、policy、approval 或 human review。
+- memory confidence 只在 confirmed/retrieval-enabled memory 内参与排序；不能让 pending candidate
+  自动生效。
+- 不同层的 confidence/trust/status 禁止直接平均、相乘或折算成一个总分。任何聚合都必须先定义
+  标注集、校准方法、版本化阈值和 replay 指标，并保留原始分层信号。
+- `soc eval confidence` 只消费人工标注 JSON/JSONL，输出 accuracy、Brier score、ECE、non-empty bins
+  和 versioned `review_below` profile。样本不足、实际 verdict 单一或无满足支持度的阈值必须 warning；
+  当前 profile 的 `auto_action_allowed` 固定为 false，不自动写生产配置。
 
 ### LLM analysis request 约束
 

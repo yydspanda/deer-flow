@@ -416,7 +416,7 @@ def test_pingan_legacy_alert_prefers_raw_message_for_reasoning_input() -> None:
     assert field_trust_by_path["entities.network.source_ip"].participates_in_fact_reconstruction is False
 
 
-def test_pingan_legacy_fact_reconstruction_reports_direction_conflicts() -> None:
+def test_pingan_legacy_fact_reconstruction_does_not_assume_attacker_is_network_source() -> None:
     payload = _sample("pingan_legacy_apt.json")
     raw_event = payload["alert"]["hitLog"][0]["zeusRawLogs"][0]
     raw_event["message"] = "<189> skyeye conflict sample"
@@ -429,17 +429,13 @@ def test_pingan_legacy_fact_reconstruction_reports_direction_conflicts() -> None
 
     assert run.fact_reconstruction is not None
     conflict_types = {report.conflict_type for report in run.fact_reconstruction.conflict_reports}
-    assert "attacker_source_mismatch" in conflict_types
-    assert "victim_destination_mismatch" in conflict_types
+    assert "attacker_source_mismatch" not in conflict_types
+    assert "victim_destination_mismatch" not in conflict_types
     assert run.llm_analysis_request is not None
-    assert "attacker_source_mismatch" in run.llm_analysis_request.conflict_types
-    assert "victim_destination_mismatch" in run.llm_analysis_request.conflict_types
-    assert run.analysis is not None
-    assert any(item.description == "事实重建发现字段冲突" for item in run.analysis.evidence)
-    assert "事实重建发现" in run.analysis.reason
-    attacker_conflict = next(report for report in run.fact_reconstruction.conflict_reports if report.conflict_type == "attacker_source_mismatch")
-    assert attacker_conflict.candidate_values["attacker"] == ["203.0.113.10"]
-    assert "30.180.248.178" in attacker_conflict.candidate_values["source"]
+    resolutions = {item.role: item for item in run.fact_reconstruction.role_resolutions}
+    assert resolutions["attacker"].selected_value == "203.0.113.10"
+    assert resolutions["victim"].selected_value == "198.51.100.22"
+    assert resolutions["attacker"].automation_allowed is False
 
 
 def test_pingan_legacy_alert_preserves_hit_log_when_raw_logs_missing() -> None:

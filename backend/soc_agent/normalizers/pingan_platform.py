@@ -20,7 +20,10 @@ from soc_agent.contracts import (
     EvidenceInputPolicyName,
     EvidenceLayer,
     EvidenceTrustLevel,
+    ParsedRawMessageEvidence,
 )
+from soc_agent.normalizers.pingan_evidence import build_pingan_fact_inputs
+from soc_agent.normalizers.pingan_messages import parse_pingan_raw_message
 
 RAW_MESSAGE_FIELD = "message"
 
@@ -33,18 +36,29 @@ def is_pingan_platform_payload(payload: Mapping[str, Any]) -> bool:
 def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
     original = dict(payload)
     alert = _as_dict(original.get("alert"))
-    hit_log_index, hit_log, raw_event_index, raw_event = _select_raw_event(alert)
-    origin = _json_object(raw_event.get("_origin"))
-    http_payload = _json_object(raw_event.get("payload"))
+    parsed_messages = _parse_raw_messages(alert)
+    preferred_path = parsed_messages[0].source_path if parsed_messages else None
+    hit_log_index, hit_log, raw_event_index, raw_event = _select_raw_event(alert, preferred_path=preferred_path)
+    raw_event_path = _raw_event_path(hit_log_index, raw_event_index)
+    primary_parsed = next((item for item in parsed_messages if item.source_path == f"{raw_event_path}.message"), None)
+    parsed_fields = primary_parsed.fields if primary_parsed is not None else {}
+    evidence_event = _merge_parsed_message(raw_event, primary_parsed)
+    origin = _json_object(evidence_event.get("_origin"))
+    http_payload = _json_object(evidence_event.get("payload"))
     soar_asset = _first_soar_asset(alert.get("soar"))
 
-    source_type = _source_type(hit_log, raw_event)
-    source_system = _first_str(hit_log, ("topic", "topicName")) or _first_str(raw_event, ("appname", "source"))
-    product = _first_str(hit_log, ("topicName",)) or _first_str(raw_event, ("metadata__product__name",))
+    source_type = _source_type(hit_log, evidence_event)
+    role_claims, scenario_signals = build_pingan_fact_inputs(
+        alert,
+        parsed_messages=parsed_messages,
+        source_type=source_type,
+    )
+    source_system = _first_str(hit_log, ("topic", "topicName")) or _first_str(evidence_event, ("appname", "source"))
+    product = _first_str(hit_log, ("topicName",)) or _first_str(evidence_event, ("metadata__product__name",))
 
     canonical = {
         "schema_version": "soc.alert.v1",
-        "alert_id": _first_str(alert, ("alertId", "alertCode")) or _first_str(raw_event, ("alarm_id", "finding__uid")),
+        "alert_id": _first_str(alert, ("alertId", "alertCode")) or _first_str(evidence_event, ("alarm_id", "finding__uid")),
         "source": {
             "source_type": source_type.value,
             "source_system": source_system,
@@ -52,27 +66,48 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
             "integration_name": "pingan_legacy_alert_platform",
         },
         "detection": {
-            "rule_code": _first_str(hit_log, ("ruleCode",)) or _first_str(raw_event, ("str_rule_id", "rule_id")),
-            "rule_name": _first_str(hit_log, ("ruleName",)) or _first_str(raw_event, ("finding__title", "str_title")),
-            "rule_category": _first_str(alert, ("tertiaryType", "secondaryType")) or _first_str(raw_event, ("finding__type_name", "attack_type", "vuln_type")),
+            # Platform ruleCode is the stable alert identity. Sensor rule ids remain
+            # available in parsed evidence because they use a different namespace.
+            "rule_code": _first_str(hit_log, ("ruleCode",)) or _first_str(evidence_event, ("str_rule_id", "rule_id")),
+            "rule_name": _first_str(parsed_fields, ("finding__title", "str_title", "rule_name")) or _first_str(hit_log, ("ruleName",)) or _first_str(raw_event, ("finding__title", "str_title")),
+            "rule_category": _first_str(parsed_fields, ("finding__type_name", "attack_type", "vuln_type", "event_type"))
+            or _first_str(alert, ("tertiaryType", "secondaryType"))
+            or _first_str(raw_event, ("finding__type_name", "attack_type", "vuln_type")),
         },
         "event": {
-            "event_id": _first_str(raw_event, ("alarm_id", "finding__uid", "str_unique_id", "logcloud_msgid")),
-            "event_time": _first_str(raw_event, ("t_detect_time", "timestamp", "time", "access_time", "first_access_time")) or _first_str(alert, ("createAt",)),
-            "received_at": _first_str(alert, ("createAt",)) or _first_str(raw_event, ("timestamp", "time")),
+            "event_id": _first_str(evidence_event, ("alarm_id", "finding__uid", "str_unique_id", "logcloud_msgid")),
+            "event_time": _first_str(evidence_event, ("t_detect_time", "timestamp", "time", "access_time", "first_access_time")) or _first_str(alert, ("createAt",)),
+            "received_at": _first_str(alert, ("createAt",)) or _first_str(evidence_event, ("timestamp", "time")),
         },
         "classification": {
-            "severity": _first_str(raw_event, ("severity", "risk_level", "hazard_rating", "threat_level")) or _first_str(alert, ("riskLevel",)),
-            "category": _first_str(alert, ("tertiaryType", "secondaryType", "primaryType")) or _first_str(raw_event, ("finding__type_name", "attack_type", "vuln_type")),
-            "tactic": _mitre_values(raw_event, prefix="TA"),
-            "technique": _mitre_values(raw_event, prefix="T"),
-            "labels": _labels(alert, hit_log, raw_event),
+            "severity": _first_str(evidence_event, ("severity", "risk_level", "hazard_rating", "threat_level", "event_level")) or _first_str(alert, ("riskLevel",)),
+            "category": _first_str(parsed_fields, ("finding__type_name", "attack_type", "vuln_type", "event_name", "event_type"))
+            or _first_str(alert, ("tertiaryType", "secondaryType", "primaryType"))
+            or _first_str(raw_event, ("finding__type_name", "attack_type", "vuln_type")),
+            "tactic": _mitre_values(evidence_event, prefix="TA"),
+            "technique": _mitre_values(evidence_event, prefix="T"),
+            "labels": _labels(alert, hit_log, evidence_event),
         },
-        "entities": _entities(source_type, raw_event, origin, http_payload, soar_asset),
-        "evidence": _evidence(alert, hit_log, raw_event),
+        "entities": _entities(
+            source_type,
+            evidence_event,
+            origin,
+            http_payload,
+            soar_asset,
+            primary_parsed,
+        ),
+        "evidence": _evidence(alert, hit_log, evidence_event),
         "extensions": {
-            "legacy_platform": _legacy_platform_context(original, alert, hit_log, raw_event, soar_asset),
-            "evidence_input_policy": _evidence_input_policy(hit_log_index, raw_event_index, raw_event),
+            "legacy_platform": _legacy_platform_context(original, alert, hit_log, evidence_event, soar_asset),
+            "parsed_raw_messages": [item.model_dump(mode="json", exclude_none=True) for item in parsed_messages],
+            "role_claims": [item.model_dump(mode="json", exclude_none=True) for item in role_claims],
+            "scenario_signals": [item.model_dump(mode="json", exclude_none=True) for item in scenario_signals],
+            "evidence_input_policy": _evidence_input_policy(
+                hit_log_index,
+                raw_event_index,
+                raw_event,
+                supplementary_input_paths=[path for path in _raw_message_paths(alert) if path != f"{raw_event_path}.message"],
+            ),
         },
         "raw": original,
     }
@@ -86,6 +121,8 @@ def _evidence_input_policy(
     hit_log_index: int | None,
     raw_event_index: int | None,
     raw_event: dict[str, Any],
+    *,
+    supplementary_input_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     raw_event_path = _raw_event_path(hit_log_index, raw_event_index)
     if _has_raw_message(raw_event):
@@ -95,6 +132,7 @@ def _evidence_input_policy(
             primary_input_path=message_path,
             fallback_input_path=raw_event_path,
             selected_input_path=message_path,
+            supplementary_input_paths=supplementary_input_paths or [],
             selected_layer=EvidenceLayer.RAW_MESSAGE,
             ignore_processed_fields_for_reasoning=True,
             trust_level=EvidenceTrustLevel.HIGH,
@@ -104,6 +142,7 @@ def _evidence_input_policy(
             name=EvidenceInputPolicyName.STRUCTURED_FALLBACK,
             primary_input_path=raw_event_path,
             selected_input_path=raw_event_path,
+            supplementary_input_paths=supplementary_input_paths or [],
             selected_layer=EvidenceLayer.RAW_STRUCTURED,
             fallback_reason="raw_message_missing",
             ignore_processed_fields_for_reasoning=False,
@@ -197,13 +236,25 @@ def _entities(
     origin: dict[str, Any],
     http_payload: dict[str, Any],
     soar_asset: dict[str, Any],
+    parsed_message: ParsedRawMessageEvidence | None,
 ) -> dict[str, Any]:
     req = _parse_request_line(_first_str(http_payload, ("req_header",)) or "")
+    decoded_request_header = _decoded_request_header(parsed_message)
+    decoded_headers = _as_dict(decoded_request_header.get("headers"))
+    forwarded_chain = decoded_request_header.get("forwarded_chain")
+    decoded_forwarded = forwarded_chain[0] if isinstance(forwarded_chain, list) and forwarded_chain else None
+    process_chain = _process_chain(_first_str(raw_event, ("event_content", "finding__desc", "str_desc")) or "")
 
     if source_type is AlertSourceType.EDR:
         network = {
             "source_ip": _first_str(raw_event, ("str_source_ip", "device__ip")),
             "destination_ip": _first_str(raw_event, ("str_attack_ip", "str_threat_value", "str_activity_id")),
+            "protocol": _first_str(raw_event, ("proto", "protocol")),
+        }
+    elif source_type is AlertSourceType.HIDS:
+        # A host alert's agent/internal IP identifies the impacted endpoint; it
+        # must not be mislabeled as an attacker/source network role.
+        network = {
             "protocol": _first_str(raw_event, ("proto", "protocol")),
         }
     else:
@@ -220,10 +271,14 @@ def _entities(
     return {
         "network": network,
         "process": {
-            "process_name": _first_str(raw_event, ("process__name", "str_process_short", "process__file__name", "str_suspicious_process_ancestor_short")),
+            "process_name": _first_str(
+                raw_event,
+                ("process__name", "str_process_short", "process__file__name", "str_suspicious_process_ancestor_short"),
+            )
+            or (process_chain[-1] if process_chain else None),
             "process_path": _first_str(raw_event, ("process__file__path", "str_process_full", "str_suspicious_file")),
             "command_line": _first_str(raw_event, ("process__cmd_line", "str_cmd", "str_suspicious_process_ancestor_cmd", "process__ancestor__cmd_line")),
-            "parent_process_name": _basename(_first_str(raw_event, ("process__parent_process__file__path", "str_parent_path_full"))),
+            "parent_process_name": _basename(_first_str(raw_event, ("process__parent_process__file__path", "str_parent_path_full"))) or (process_chain[-2] if len(process_chain) >= 2 else None),
             "parent_command_line": _first_str(raw_event, ("process__parent_process__cmd_line", "str_parent_cmd")),
         },
         "user": {
@@ -232,10 +287,21 @@ def _entities(
             "um_account": _first_str(raw_event, ("um", "um_account", "umAccount", "str_um_account")),
         },
         "host": {
-            "host_name": _first_str(raw_event, ("device__hostname", "str_source_host")) or _first_str(soar_asset, ("strdevname",)),
-            "host_id": _first_str(raw_event, ("str_agent_id", "metadata__product__version")) or _first_str(soar_asset, ("uiddevrecordid",)),
-            "asset_id": _first_str(raw_event, ("device__ip", "str_source_ip")) or _first_str(soar_asset, ("strdevip",)),
+            "host_name": _first_str(raw_event, ("host_name", "device__hostname", "str_source_host")) or _first_str(soar_asset, ("strdevname",)),
+            "host_id": _first_str(raw_event, ("agent_id", "str_agent_id", "metadata__product__version")) or _first_str(soar_asset, ("uiddevrecordid",)),
+            "asset_id": _first_str(raw_event, ("agent_id", "device__ip", "str_source_ip")) or _first_str(soar_asset, ("strdevip",)),
             "asset_group": _first_str(raw_event, ("device__org__ou_name", "str_dept_name", "dip_group", "asset_group")) or _first_str(soar_asset, ("strdeptname",)),
+            "ip_addresses": _dedupe(
+                [
+                    value
+                    for value in [
+                        _first_str(raw_event, ("agent_ip",)),
+                        _first_str(raw_event, ("internal_ip", "device__ip", "str_source_ip")),
+                        _first_str(raw_event, ("external_ip",)),
+                    ]
+                    if value
+                ]
+            ),
         },
         "file": {
             "file_name": _first_str(raw_event, ("process__file__name", "str_process_short")),
@@ -248,7 +314,8 @@ def _entities(
             "path": req.get("path") or _first_str(origin, ("uri",)),
             "url": _first_str(origin, ("uri",)) or req.get("path"),
             "status_code": _first_str(raw_event, ("rsp_status",)) or _first_str(origin, ("rsp_status",)),
-            "x_forwarded_for": _first_str(raw_event, ("x_forwarded_for",)) or _first_str(origin, ("xff",)),
+            "user_agent": _first_header_value(decoded_headers, "user-agent"),
+            "x_forwarded_for": _first_str(raw_event, ("x_forwarded_for",)) or _first_str(origin, ("xff",)) or decoded_forwarded,
         },
         "threat": {
             "iocs": _dedupe(
@@ -264,6 +331,23 @@ def _entities(
             )
         },
     }
+
+
+def _decoded_request_header(parsed_message: ParsedRawMessageEvidence | None) -> dict[str, Any]:
+    if parsed_message is None:
+        return {}
+    payload = parsed_message.decoded_fields.get("payload")
+    if not isinstance(payload, Mapping):
+        return {}
+    request_header = payload.get("req_header")
+    return dict(request_header) if isinstance(request_header, Mapping) else {}
+
+
+def _first_header_value(headers: Mapping[str, Any], name: str) -> str | None:
+    value = headers.get(name)
+    if isinstance(value, list):
+        return next((str(item).strip() for item in value if str(item).strip()), None)
+    return str(value).strip() if value is not None and str(value).strip() else None
 
 
 def _evidence(alert: dict[str, Any], hit_log: dict[str, Any], raw_event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -424,18 +508,56 @@ def _first_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _select_raw_event(alert: dict[str, Any]) -> tuple[int | None, dict[str, Any], int | None, dict[str, Any]]:
+def _select_raw_event(
+    alert: dict[str, Any],
+    *,
+    preferred_path: str | None = None,
+) -> tuple[int | None, dict[str, Any], int | None, dict[str, Any]]:
     first_candidate: tuple[int | None, dict[str, Any], int | None, dict[str, Any]] | None = None
     for hit_log_index, hit_log, raw_event_index, raw_event in _iter_raw_events(alert):
         candidate = (hit_log_index, hit_log, raw_event_index, raw_event)
         if first_candidate is None:
             first_candidate = candidate
-        if _has_raw_message(raw_event):
+        if preferred_path == f"{_raw_event_path(hit_log_index, raw_event_index)}.message":
+            return candidate
+        if preferred_path is None and _has_raw_message(raw_event):
             return candidate
     if first_candidate is not None:
         return first_candidate
     hit_log_index, hit_log = _first_hit_log(alert)
     return (hit_log_index, hit_log, None, {})
+
+
+def _parse_raw_messages(alert: dict[str, Any]) -> list[ParsedRawMessageEvidence]:
+    parsed: list[ParsedRawMessageEvidence] = []
+    for hit_log_index, _, raw_event_index, raw_event in _iter_raw_events(alert):
+        message = raw_event.get(RAW_MESSAGE_FIELD)
+        if not isinstance(message, str) or not message.strip():
+            continue
+        source_path = f"{_raw_event_path(hit_log_index, raw_event_index)}.{RAW_MESSAGE_FIELD}"
+        result = parse_pingan_raw_message(message, source_path=source_path)
+        if result is not None:
+            parsed.append(result)
+    return parsed
+
+
+def _raw_message_paths(alert: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    for hit_log_index, _, raw_event_index, raw_event in _iter_raw_events(alert):
+        if _has_raw_message(raw_event):
+            paths.append(f"{_raw_event_path(hit_log_index, raw_event_index)}.{RAW_MESSAGE_FIELD}")
+    return paths
+
+
+def _merge_parsed_message(
+    raw_event: dict[str, Any],
+    parsed: ParsedRawMessageEvidence | None,
+) -> dict[str, Any]:
+    if parsed is None:
+        return dict(raw_event)
+    # Parsed raw-message fields override duplicate Zeus structured fields.
+    # Header values fill gaps but never replace payload fields.
+    return {**raw_event, **parsed.header, **parsed.fields}
 
 
 def _iter_raw_events(alert: dict[str, Any]) -> list[tuple[int, dict[str, Any], int, dict[str, Any]]]:
@@ -470,6 +592,13 @@ def _raw_event_path(hit_log_index: int | None, raw_event_index: int | None) -> s
     if hit_log_index is None or raw_event_index is None:
         return "alert.hitLog[].zeusRawLogs[]"
     return f"alert.hitLog[{hit_log_index}].zeusRawLogs[{raw_event_index}]"
+
+
+def _process_chain(value: str) -> list[str]:
+    if not value:
+        return []
+    names = re.findall(r"([A-Za-z0-9_.-]+)\(\d+\)", value)
+    return _dedupe(names)
 
 
 def _first_str(source: dict[str, Any], aliases: tuple[str, ...]) -> str | None:

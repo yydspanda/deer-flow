@@ -7,8 +7,10 @@
 | 你要做什么 | 先看 | 再看 |
 |---|---|---|
 | 判断产品方向、阶段和优先级 | `soc-agent-solution.md` | `progress.md` 的当前待办 |
+| 向老板/管理层解释为什么 Runtime 控制流程、LLM 只做受控推理 | `runtime-and-llm-control-strategy.md` | `soc-agent-solution.md` 的核心原则 |
 | 开始下一刀开发 | `progress.md` | `.notes/reference-index/soc-agent-engineering-contracts.md` |
 | 理解一条预警从进入到复核的完整过程 | `alert-lifecycle-flow.md` | `soc-agent-solution.md` 的服务章节 |
+| 排查 message 新结构、字段遗漏和置信度含义 | `soc-agent-solution.md` 的 Normalizer / Confidence 章节 | `.notes/reference-index/soc-agent-engineering-contracts.md` 的对应契约 |
 | 查看平安经验如何进入系统 | `capabilities/pingan/onboarding.md` | `capabilities/pingan/capability-cards.md` |
 | 拆分平安历史 prompt / 经验 / 工具 | `capabilities/pingan/knowledge-decomposition.md` | `memory/memory-tracking.md` |
 | 查看平安专属知识候选 | `capabilities/pingan/knowledge-candidates.md` | `capabilities/pingan/source-docs/` |
@@ -23,6 +25,7 @@
 ai_soc/
 ├── README.md
 ├── soc-agent-solution.md              # 权威产品/系统方案
+├── runtime-and-llm-control-strategy.md # 管理层说明：Runtime-first + bounded LLM
 ├── progress.md                        # 长期进度台账和当前待办
 ├── alert-lifecycle-flow.md            # 当前端到端流程图谱
 ├── capabilities/
@@ -46,6 +49,7 @@ ai_soc/
 | 文档 | 角色 | 更新规则 |
 |---|---|---|
 | `soc-agent-solution.md` | 当前权威方案；决定做什么、为什么做、先后顺序 | 产品方向、阶段范围、入口取舍变化时更新 |
+| `runtime-and-llm-control-strategy.md` | 管理层说明；解释为什么不用全自主 Agent，而采用 Runtime-first + bounded LLM | 管理层沟通口径、LLM 使用策略或控制流哲学变化时更新 |
 | `progress.md` | 开发进度台账；聊天记录不算进度 | 每个可验证切片完成后更新 |
 | `alert-lifecycle-flow.md` | 当前系统完整过程说明；只写 as-is flow | 服务边界、状态流转、数据写入、命令入口变化时更新 |
 | `capabilities/pingan/*` | 平安经验、能力卡、专属知识候选、源资料 | 新增/拆分/实现/废弃 PingAn card 或候选时更新 |

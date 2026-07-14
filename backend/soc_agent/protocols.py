@@ -13,6 +13,11 @@ from soc_agent.contracts import (
     DecisionAuditRecord,
     InvestigationEvidence,
     LLMAnalysisRequest,
+    NormalizationBaselineStatus,
+    NormalizationMaintenanceIssue,
+    NormalizationMaintenanceIssueStatus,
+    NormalizationMonitoringResult,
+    NormalizationSchemaBaseline,
     ReviewQueueItem,
     ReviewQueueStatus,
     ServiceRequestContext,
@@ -50,6 +55,17 @@ class LLMAnalyzer(Protocol):
     step_name: str
 
     def analyze(self, request: LLMAnalysisRequest) -> AnalysisNodeOutput: ...
+
+
+class NormalizationMaintenanceMonitor(Protocol):
+    """Optional post-analysis monitor for parser/mapping maintenance signals."""
+
+    def monitor_run(
+        self,
+        run: AnalysisRun,
+        *,
+        context: ServiceRequestContext,
+    ) -> NormalizationMonitoringResult: ...
 
 
 class AlertRepository(Protocol):
@@ -207,6 +223,45 @@ class SocAgentApprovalRequestRepository(Protocol):
         status: str | None = "pending",
         limit: int = 50,
     ) -> list[SocAgentApprovalRequest]: ...
+
+
+class NormalizationSchemaBaselineRepository(Protocol):
+    """Persistence boundary for approved parser schema fingerprints."""
+
+    def save_normalization_baseline(self, baseline: NormalizationSchemaBaseline) -> None: ...
+
+    def get_normalization_baseline(self, baseline_id: str) -> NormalizationSchemaBaseline | None: ...
+
+    def list_normalization_baselines(
+        self,
+        *,
+        status: NormalizationBaselineStatus | None = None,
+        tenant_id: str | None = None,
+        source_system: str | None = None,
+        adapter: str | None = None,
+        parser_name: str | None = None,
+        parser_version: str | None = None,
+        limit: int = 50,
+    ) -> list[NormalizationSchemaBaseline]: ...
+
+
+class NormalizationMaintenanceIssueRepository(Protocol):
+    """Persistence boundary for parser/mapping maintenance issues."""
+
+    def save_normalization_issue(self, issue: NormalizationMaintenanceIssue) -> None: ...
+
+    def get_normalization_issue(self, issue_id: str) -> NormalizationMaintenanceIssue | None: ...
+
+    def find_normalization_issue_by_dedupe_key(self, dedupe_key: str) -> NormalizationMaintenanceIssue | None: ...
+
+    def list_normalization_issues(
+        self,
+        *,
+        status: NormalizationMaintenanceIssueStatus | None = None,
+        tenant_id: str | None = None,
+        source_system: str | None = None,
+        limit: int = 50,
+    ) -> list[NormalizationMaintenanceIssue]: ...
 
 
 class SocActionAdapter(Protocol):

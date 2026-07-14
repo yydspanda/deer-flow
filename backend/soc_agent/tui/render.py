@@ -11,6 +11,7 @@ from rich.text import Text
 from deerflow.tui.theme import THEME
 from soc_agent.contracts import (
     InvestigationContext,
+    NormalizationMaintenanceIssue,
     ReviewQueueItem,
     SocAgentActionResult,
     SocAgentApprovalGrant,
@@ -40,6 +41,8 @@ def render_status(state: ReviewViewState) -> Text:
     text.append(f"{len(state.items)} open", style=THEME.muted)
     text.append("   ")
     text.append(f"{len(state.approval_requests)} approvals", style=THEME.muted)
+    text.append("   ")
+    text.append(f"{len(state.normalization_issues)} normalization", style=THEME.muted)
     if state.selected_queue_id:
         text.append("   ")
         text.append(state.selected_queue_id, style=THEME.primary)
@@ -54,6 +57,8 @@ def render_main(state: ReviewViewState) -> RenderableType:
     blocks: list[RenderableType] = [render_queue_table(state.items, selected_queue_id=state.selected_queue_id)]
     blocks.append(Text(""))
     blocks.append(render_approval_table(state.approval_requests, selected_approval_request_id=state.selected_approval_request_id))
+    blocks.append(Text(""))
+    blocks.append(render_normalization_issue_table(state.normalization_issues))
     if state.context is not None:
         blocks.append(Text(""))
         blocks.append(render_context(state.context))
@@ -70,6 +75,33 @@ def render_main(state: ReviewViewState) -> RenderableType:
         blocks.append(Text(""))
         blocks.extend(_render_notice(notice.text, notice.tone) for notice in state.notices)
     return Group(*blocks)
+
+
+def render_normalization_issue_table(
+    issues: tuple[NormalizationMaintenanceIssue, ...],
+) -> Table:
+    table = Table(expand=True)
+    table.add_column("Normalization", style=THEME.primary, no_wrap=True)
+    table.add_column("Severity", no_wrap=True)
+    table.add_column("Type", no_wrap=True)
+    table.add_column("Source", no_wrap=True)
+    table.add_column("Parser", no_wrap=True)
+    table.add_column("Seen", justify="right", no_wrap=True)
+    table.add_column("Target / Path")
+    if not issues:
+        table.add_row("-", "-", "-", "-", "-", "-", "No open normalization issues.")
+        return table
+    for issue in issues:
+        table.add_row(
+            issue.issue_id,
+            issue.severity.value,
+            issue.issue_type.value,
+            issue.source_system or "-",
+            f"{issue.parser_name or '-'}@{issue.parser_version or '-'}",
+            str(issue.occurrence_count),
+            issue.expected_target or issue.source_path or "-",
+        )
+    return table
 
 
 def render_queue_table(items: tuple[ReviewQueueItem, ...], *, selected_queue_id: str | None = None) -> Table:

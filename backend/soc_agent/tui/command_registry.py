@@ -23,6 +23,8 @@ BUILTIN_COMMANDS: tuple[Command, ...] = (
     Command("help", "Show review commands"),
     Command("refresh", "Reload open review queue"),
     Command("approvals", "Reload pending approval requests"),
+    Command("normalization", "Reload open normalization maintenance issues"),
+    Command("norm-update", "Update issue: /norm-update NMI-... acknowledged|resolved|ignored reason"),
     Command("approval", "Open approval request: /approval APR-..."),
     Command("approve", "Approve request: /approve APR-... reason"),
     Command("dry-run", "Validate token: /dry-run SAT-... route action"),
