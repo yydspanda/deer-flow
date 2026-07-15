@@ -84,6 +84,60 @@ def test_parse_analysis_result_repairs_unquoted_keys() -> None:
     assert parsed.result.evidence[0].source == "fact_reconstruction"
 
 
+def test_parse_analysis_result_repairs_single_item_verdict_array() -> None:
+    payload = _valid_payload()
+    payload["verdict"] = ["suspicious"]
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert parsed.repair_applied is True
+    assert parsed.repair_log == [
+        {
+            "stage": "schema_normalization",
+            "field": "verdict",
+            "repair": "single_item_array_to_scalar",
+        }
+    ]
+    assert parsed.result.verdict is Verdict.SUSPICIOUS
+
+
+def test_parse_analysis_result_rejects_multi_item_verdict_array() -> None:
+    payload = _valid_payload()
+    payload["verdict"] = ["suspicious", "true_positive"]
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert exc.value.stage == "schema_validation"
+
+
+def test_parse_analysis_result_repairs_single_item_evidence_value_array() -> None:
+    payload = _valid_payload()
+    payload["evidence"][0]["value"] = ["ASP.NET"]
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert parsed.repair_applied is True
+    assert parsed.repair_log == [
+        {
+            "stage": "schema_normalization",
+            "field": "evidence[0].value",
+            "repair": "single_item_array_to_scalar",
+        }
+    ]
+    assert parsed.result.evidence[0].value == "ASP.NET"
+
+
+def test_parse_analysis_result_rejects_multi_item_evidence_value_array() -> None:
+    payload = _valid_payload()
+    payload["evidence"][0]["value"] = ["ASP.NET", "PHP"]
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert exc.value.stage == "schema_validation"
+
+
 def test_parse_analysis_result_rejects_string_confidence() -> None:
     payload = _valid_payload()
     payload["confidence"] = "0.76"

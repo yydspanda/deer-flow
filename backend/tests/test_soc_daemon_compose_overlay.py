@@ -20,4 +20,5 @@ def test_soc_daemon_compose_overlay_is_explicit_opt_in() -> None:
     assert "SOC_LLM_MAX_CONCURRENCY=${SOC_LLM_MAX_CONCURRENCY:-1}" in overlay
     assert "SOC_LLM_REQUESTS_PER_MINUTE=${SOC_LLM_REQUESTS_PER_MINUTE:-0}" in overlay
     assert "SOC_LLM_ADMISSION_TIMEOUT_SECONDS=${SOC_LLM_ADMISSION_TIMEOUT_SECONDS:-5}" in overlay
+    assert "SOC_LLM_CALL_TIMEOUT_SECONDS=${SOC_LLM_CALL_TIMEOUT_SECONDS:-180}" in overlay
     assert "docker-compose.soc-daemon.yaml" not in docker_script

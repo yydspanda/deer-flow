@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 Runtime 工程闭环完成；Phase 2 correlation / domain triage 起步 |
-| 当前目标 | Runtime 已具备 bounded live LLM、显式 skill trace、证据落地、硬输出上限、typed failure/retry、主业务原子写入和 Kafka 失败语义；下一步用人工标注集评审模型质量，不把未校准 confidence 接入自动放行 |
+| 当前目标 | Runtime 已具备 bounded live LLM、证据落地、typed failure/retry 和原子写入；首份 5 样本真实模型 pending label set 已生成，下一步由分析师逐条给出真实结论，不把未校准 confidence 接入自动放行 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 逐条人工审阅 5 条 `datas/` 的真实 LLM verdict/evidence/recommended action，形成首份 label set 并运行离线 calibration；校准 profile 仍不得自动接入生产放行。 |
+| 当前下一刀 | 审阅 `backend/.deer-flow/soc-runtime-validation/step-09-confidence-labeling/label-set.pending.json` 的 5 条预测，填写 accepted/excluded 结论与依据；通过 `soc eval labels validate` 后再运行离线 calibration。 |
 
 ## 当前待办列表
 
@@ -65,6 +65,7 @@
 | 11 | DeerFlow-backed live Runtime LLM | Done for MVP | 新增 `DeerFlowLLMChatClient`、`SocLLMSettings`，统一装配 analyze/replay/demo/Kafka；offline eval 和 normalize suggest 支持 live model | 显式选择模型；未知模型 fail-fast；输出过 JSON/schema/domain validation；trace 记录安全 metadata/usage；模型不能执行动作 |
 | 11.1 | Deterministic decision policy / confidence guard | Done for uncalibrated MVP | 新增 `SocDecisionPolicy`，把 raw analyzer score、来源、校准状态、证据状态、结构化 review reasons 和 policy version 分开；mock/failed evidence 不参与 domain/scenario 置信度 | stub/LLM self-report 当前全部进入复核；误报、冲突、schema 降级/不支持、关键证据缺口、截断等 guard 不会被高分覆盖；summary/queue/audit 保留原因 |
 | 11.2 | Runtime production hardening | Done | 显式 `skill_context` trace、共享 bounded projection、analysis evidence grounding、prompt/output/schema hard bounds、LLM concurrency/RPM admission、typed sanitized failure、Kafka retry/dead-letter 语义、run/summary/review/audit 原子 bundle | 未落地证据强制复核；可重试失败不 commit offset/不制造工单噪声；不可重试失败进入 ReviewQueue/DLQ；SQL 故障回归证明四类主写入全部回滚 |
+| 11.3 | Governed confidence label set | Partial / analyst review pending | 已新增 `soc eval labels prepare/validate`、traceable label contract、single-scope/duplicate replay guard，并生成 5 条真实 DeepSeek pending labels | 5 条均需分析师填写真实 verdict/reviewer/time/reason；校准前不得有 pending、重复 input hash 或混合 model/prompt/pipeline；小样本 profile 仍只作离线 smoke |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Partial | normalization 运维页、Gateway bounded metrics 和 Kafka JSONL issue 摘要已完成；全局 Kafka/review/approval/runtime/算力 Prometheus exporter 和态势面板仍后置 | 当前 maintenance issue 可见；全系统运行态势不阻塞 SOC Agent Alpha |
@@ -176,6 +177,34 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-15 — Governed confidence labels and live-model reliability follow-up
+
+- 新增人工标签治理边界：
+  - `ConfidenceCalibrationLabelSet` / `ConfidenceCalibrationSample.v2` 保存 run/input hash、
+    model/prompt/pipeline 版本、预测摘要、证据落地计数和人工审阅字段，不复制 raw payload。
+  - `pending_review` 不能校准；accepted 必须有确定 verdict、reviewer、时间和理由；无法确定的样本
+    使用 excluded。重复 input hash 与混合 model/prompt/pipeline scope 会阻断 calibration。
+  - 新增 `soc eval labels prepare PATH` 与 `soc eval labels validate LABEL_SET.json`；
+    `soc eval confidence` 改为只消费完成校验的 label-set envelope，并输出 dataset hash 和 profile scope。
+- 真实样本验证：
+  - 使用 `deepseek-v4-pro`、`soc-analysis-v2`、`soc-runtime-v1` 成功运行 `datas/` 中 5 条
+    APT/EDR/HIDS 样本。
+  - gitignored 评审入口：
+    `backend/.deer-flow/soc-runtime-validation/step-09-confidence-labeling/label-set.pending.json`。
+  - 当前 5 条均为 pending，validation 明确 `calibratable=false`；未伪造人工 ground truth。
+- 真实调用暴露并修复：
+  - parser 升级为 `soc-analysis-json-parser-v3`，只允许有 repair log 的无损白名单语义修复：
+    单元素 verdict 数组和单元素 evidence value 数组解包；多元素数组继续失败。
+  - 新增 `SOC_LLM_CALL_TIMEOUT_SECONDS`（默认 180 秒），与 admission timeout 分离；模型调用
+    超时进入 retryable `analyzer_timeout`。executor worker 数受 `SOC_LLM_MAX_CONCURRENCY` 限制。
+- 已验证（聚焦）：
+  - confidence labels / normalization maintenance：12 passed。
+  - parser / confidence labels：16 passed；新增 evidence-value repair 后 parser：13 passed。
+  - DeerFlow LLM client / compose / K8s / analyzer：17 passed。
+- 下一步：
+  - 分析师逐条审阅 5 条 pending labels 并给出真实结论；验证通过后运行小样本 calibration smoke。
+  - 继续扩充跨来源、跨场景、包含正负样本的代表性标签集；未达到治理样本量前 profile 不接 Runtime。
 
 ### 2026-07-14 — SOC Runtime production hardening completion
 

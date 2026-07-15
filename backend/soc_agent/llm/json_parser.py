@@ -11,9 +11,8 @@ from json_repair import loads as repair_json_loads
 from pydantic import ValidationError
 
 from soc_agent.contracts import AnalysisResult
-from soc_agent.core.validator import validate_analysis_result
 
-ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v2"
+ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v3"
 MAX_ANALYSIS_RESPONSE_CHARS = 100_000
 
 _THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.IGNORECASE | re.DOTALL)
@@ -70,18 +69,21 @@ def parse_analysis_result_output(response_content: Any) -> ParsedAnalysisResult:
     strict = _parse_strict_json_object(text)
     if strict is not None:
         data, candidate_text = strict
+        normalized, semantic_repair_log = _normalize_analysis_result_shape(data)
         return ParsedAnalysisResult(
-            result=_validate_analysis_result_data(data, repair_applied=False),
-            repair_applied=False,
+            result=_validate_analysis_result_data(normalized, repair_applied=bool(semantic_repair_log)),
+            repair_applied=bool(semantic_repair_log),
+            repair_log=semantic_repair_log,
             candidate_text=candidate_text,
         )
 
     candidate_text = _extract_repair_candidate(text)
     repaired = _repair_json_object(candidate_text)
+    normalized, semantic_repair_log = _normalize_analysis_result_shape(repaired.data)
     return ParsedAnalysisResult(
-        result=_validate_analysis_result_data(repaired.data, repair_applied=True),
+        result=_validate_analysis_result_data(normalized, repair_applied=True),
         repair_applied=True,
-        repair_log=repaired.log,
+        repair_log=[*repaired.log, *semantic_repair_log],
         candidate_text=candidate_text,
     )
 
@@ -188,7 +190,53 @@ def _repair_json_object(candidate_text: str) -> _RepairedJson:
     return _RepairedJson(data=repaired, log=normalized_log)
 
 
+def _normalize_analysis_result_shape(data: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Apply only lossless, explicitly audited schema-shape repairs."""
+
+    normalized = dict(data)
+    repair_log: list[dict[str, Any]] = []
+    verdict = data.get("verdict")
+    if isinstance(verdict, list) and len(verdict) == 1 and isinstance(verdict[0], str):
+        normalized["verdict"] = verdict[0]
+        repair_log.append(
+            {
+                "stage": "schema_normalization",
+                "field": "verdict",
+                "repair": "single_item_array_to_scalar",
+            }
+        )
+
+    evidence = data.get("evidence")
+    if isinstance(evidence, list):
+        normalized_evidence = list(evidence)
+        for index, item in enumerate(evidence):
+            if not isinstance(item, dict):
+                continue
+            value = item.get("value")
+            if not (isinstance(value, list) and len(value) == 1 and _is_evidence_scalar(value[0])):
+                continue
+            normalized_item = dict(item)
+            normalized_item["value"] = value[0]
+            normalized_evidence[index] = normalized_item
+            repair_log.append(
+                {
+                    "stage": "schema_normalization",
+                    "field": f"evidence[{index}].value",
+                    "repair": "single_item_array_to_scalar",
+                }
+            )
+        normalized["evidence"] = normalized_evidence
+
+    return (normalized, repair_log) if repair_log else (data, [])
+
+
+def _is_evidence_scalar(value: Any) -> bool:
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
 def _validate_analysis_result_data(data: dict[str, Any], *, repair_applied: bool) -> AnalysisResult:
+    from soc_agent.core.validator import validate_analysis_result
+
     _validate_raw_analysis_shape(data, repair_applied=repair_applied)
     try:
         result = AnalysisResult.model_validate(data)

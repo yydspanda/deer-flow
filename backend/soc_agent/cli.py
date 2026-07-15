@@ -92,8 +92,11 @@ from soc_agent.db import (
 from soc_agent.demo import run_pingan_investigation_demo
 from soc_agent.eval import (
     DEFAULT_PINGAN_CAPABILITY_EVAL_DIR,
+    build_confidence_label_set,
     calibrate_confidence,
-    load_confidence_calibration_samples,
+    calibration_samples_from_label_set,
+    load_analysis_runs_for_labeling,
+    load_confidence_label_set,
     load_eval_responses_jsonl,
     load_pingan_capability_eval_fixtures,
     load_scenario_eval_report,
@@ -102,6 +105,7 @@ from soc_agent.eval import (
     run_pingan_domain_triage_eval,
     run_pingan_main_orchestrator_eval,
     run_scenario_eval,
+    validate_confidence_label_set,
 )
 from soc_agent.lead_agent import build_soc_lead_agent_profile
 from soc_agent.lead_agent_chat import SocLeadAgentChatService
@@ -190,6 +194,10 @@ def main(argv: list[str] | None = None) -> int:
         return _eval_pingan_main(args)
     if args.command == "eval" and args.eval_command == "scenarios":
         return _eval_scenarios(args)
+    if args.command == "eval" and args.eval_command == "labels" and args.eval_labels_command == "prepare":
+        return _eval_labels_prepare(args)
+    if args.command == "eval" and args.eval_command == "labels" and args.eval_labels_command == "validate":
+        return _eval_labels_validate(args)
     if args.command == "eval" and args.eval_command == "confidence":
         return _eval_confidence(args)
     if args.command == "demo" and args.demo_command == "run":
@@ -538,11 +546,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to a PingAn capability fixture JSON file or directory",
     )
     eval_pingan_main.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    eval_labels = eval_subparsers.add_parser("labels", help="Prepare and validate governed human confidence labels")
+    eval_labels_subparsers = eval_labels.add_subparsers(dest="eval_labels_command")
+    eval_labels_prepare = eval_labels_subparsers.add_parser(
+        "prepare",
+        help="Create a pending label set from complete live-LLM AnalysisRun JSON artifacts",
+    )
+    eval_labels_prepare.add_argument("path", help="Path to an AnalysisRun JSON file or directory")
+    eval_labels_prepare.add_argument("--glob", default="*.json", help="Glob used when PATH is a directory")
+    eval_labels_prepare.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    eval_labels_validate = eval_labels_subparsers.add_parser(
+        "validate",
+        help="Validate analyst review completion and calibration scope",
+    )
+    eval_labels_validate.add_argument("path", help="Confidence label-set JSON path")
+    eval_labels_validate.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     eval_confidence = eval_subparsers.add_parser(
         "confidence",
-        help="Calibrate analysis confidence from reviewed JSON/JSONL samples",
+        help="Calibrate analysis confidence from one governed, fully reviewed label set",
     )
-    eval_confidence.add_argument("path", help="Calibration JSON array or JSONL path")
+    eval_confidence.add_argument("path", help="Reviewed confidence label-set JSON path")
     eval_confidence.add_argument("--bins", type=int, default=10, help="Number of confidence bins")
     eval_confidence.add_argument("--target-accuracy", type=float, default=0.9)
     eval_confidence.add_argument("--minimum-samples", type=int, default=30)
@@ -1804,19 +1827,43 @@ def _eval_scenarios(args: argparse.Namespace) -> int:
 
 def _eval_confidence(args: argparse.Namespace) -> int:
     try:
-        samples = load_confidence_calibration_samples(args.path)
+        label_set = load_confidence_label_set(args.path)
+        samples = calibration_samples_from_label_set(label_set)
         report = calibrate_confidence(
             samples,
             bin_count=args.bins,
             target_accuracy=args.target_accuracy,
             minimum_samples=args.minimum_samples,
             minimum_threshold_samples=args.minimum_threshold_samples,
+            label_set_id=label_set.label_set_id,
         )
     except ValueError as exc:
         print(f"error: confidence calibration failed: {exc}", file=sys.stderr)
         return 2
     print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
+
+
+def _eval_labels_prepare(args: argparse.Namespace) -> int:
+    try:
+        runs = load_analysis_runs_for_labeling(args.path, glob_pattern=args.glob)
+        label_set = build_confidence_label_set(runs)
+    except ValueError as exc:
+        print(f"error: confidence label preparation failed: {exc}", file=sys.stderr)
+        return 2
+    print(label_set.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _eval_labels_validate(args: argparse.Namespace) -> int:
+    try:
+        label_set = load_confidence_label_set(args.path)
+        report = validate_confidence_label_set(label_set)
+    except ValueError as exc:
+        print(f"error: confidence label validation failed: {exc}", file=sys.stderr)
+        return 2
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if report.calibratable else 1
 
 
 def _demo_alert(args: argparse.Namespace) -> int:
@@ -2134,5 +2181,3 @@ def _load_payload_samples(path: str, glob_pattern: str) -> list[tuple[str, dict[
 
 if __name__ == "__main__":
     raise SystemExit(main())
-    (calibrate_confidence,)
-    (load_confidence_calibration_samples,)

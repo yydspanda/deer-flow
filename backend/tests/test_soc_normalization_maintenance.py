@@ -8,6 +8,7 @@ from soc_agent.contracts import (
     ActorContext,
     AnalysisRun,
     ConfidenceCalibrationSample,
+    ConfidenceLabelReviewStatus,
     EntrySurface,
     NormalizationBaselineAcceptCommand,
     NormalizationMaintenanceIssueStatus,
@@ -295,9 +296,21 @@ def test_confidence_calibration_outputs_review_only_profile() -> None:
     samples = [
         ConfidenceCalibrationSample(
             sample_id=f"sample-{index}",
+            run_id=f"run-{index}",
+            alert_id=f"alert-{index}",
+            input_hash=f"hash-{index}",
             predicted_verdict=Verdict.TRUE_POSITIVE if index < 10 else Verdict.FALSE_POSITIVE,
             actual_verdict=(Verdict.TRUE_POSITIVE if index < 9 else Verdict.FALSE_POSITIVE),
             confidence=0.9 if index < 10 else 0.4,
+            model_name="test-model",
+            prompt_version="test-prompt-v1",
+            pipeline_version="test-pipeline-v1",
+            summary="Reviewed test prediction.",
+            recommended_action="Keep review-only.",
+            review_status=ConfidenceLabelReviewStatus.ACCEPTED,
+            reviewer_id="analyst-1",
+            reviewed_at="2026-07-15T00:00:00Z",
+            review_reason="Golden test label.",
         )
         for index in range(20)
     ]

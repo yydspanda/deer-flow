@@ -154,7 +154,7 @@ Current SOC direction:
   Select it explicitly with `SOC_ANALYZER_MODE=llm` / `SOC_LLM_MODEL` or CLI
   `--analyzer-mode llm --model-name NAME`; the default remains deterministic for tests and replay.
 - SOC model calls have independent process-local admission controls (`SOC_LLM_MAX_CONCURRENCY`,
-  optional requests-per-minute, and admission timeout). Analyzer evidence is deterministically
+  optional requests-per-minute, admission timeout, and `SOC_LLM_CALL_TIMEOUT_SECONDS`). Analyzer evidence is deterministically
   grounded against the exact bounded prompt projection before `SocDecisionPolicy` runs.
 - Persisted analysis writes run/summary/optional review/audit as one `AnalysisPersistence` transaction.
   Retryable Runtime failures do not commit Kafka offsets or immediately create analyst queue noise;

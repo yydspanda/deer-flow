@@ -58,6 +58,14 @@ class DecisionReviewReason(StrEnum):
     ANALYSIS_FAILED = "analysis_failed"
 
 
+class ConfidenceLabelReviewStatus(StrEnum):
+    """Human review state for one offline confidence label."""
+
+    PENDING_REVIEW = "pending_review"
+    ACCEPTED = "accepted"
+    EXCLUDED = "excluded"
+
+
 class AnalysisEvidenceGroundingStatus(StrEnum):
     """Whether one analyzer evidence item can be traced to bounded input."""
 
@@ -1824,10 +1832,73 @@ class NormalizationSuggestionPrompt(BaseModel):
 
 
 class ConfidenceCalibrationSample(BaseModel):
+    """One traceable human label used for offline confidence calibration."""
+
+    schema_version: str = "soc.confidence_calibration_sample.v2"
     sample_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    alert_id: str = Field(min_length=1)
+    input_hash: str = Field(min_length=1)
+    source_path: str | None = None
     predicted_verdict: Verdict
-    actual_verdict: Verdict
+    actual_verdict: Verdict | None = None
     confidence: float = Field(ge=0.0, le=1.0)
+    model_name: str = Field(min_length=1)
+    prompt_version: str = Field(min_length=1)
+    pipeline_version: str = Field(min_length=1)
+    summary: str = Field(min_length=1, max_length=4000)
+    recommended_action: str = Field(min_length=1, max_length=1000)
+    evidence_grounded_count: int = Field(default=0, ge=0)
+    evidence_ungrounded_count: int = Field(default=0, ge=0)
+    review_reasons: list[DecisionReviewReason] = Field(default_factory=list)
+    review_status: ConfidenceLabelReviewStatus = ConfidenceLabelReviewStatus.PENDING_REVIEW
+    reviewer_id: str | None = None
+    reviewed_at: datetime | None = None
+    review_reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_review_state(self) -> ConfidenceCalibrationSample:
+        review_fields = (self.reviewer_id, self.reviewed_at, self.review_reason)
+        if self.review_status is ConfidenceLabelReviewStatus.PENDING_REVIEW:
+            if self.actual_verdict is not None or any(value is not None for value in review_fields):
+                raise ValueError("pending confidence label cannot carry analyst review fields")
+            return self
+
+        if not self.reviewer_id or self.reviewed_at is None or not self.review_reason:
+            raise ValueError("reviewed confidence label requires reviewer_id, reviewed_at, and review_reason")
+        if self.review_status is ConfidenceLabelReviewStatus.ACCEPTED:
+            if self.actual_verdict is None:
+                raise ValueError("accepted confidence label requires actual_verdict")
+            if self.actual_verdict in {Verdict.UNKNOWN, Verdict.NEEDS_REVIEW}:
+                raise ValueError("unresolved actual verdict must be excluded rather than accepted")
+        return self
+
+
+class ConfidenceCalibrationLabelSet(BaseModel):
+    """Versioned review bundle generated from bounded AnalysisRun outputs."""
+
+    schema_version: str = "soc.confidence_calibration_label_set.v1"
+    label_set_id: str = Field(min_length=1)
+    created_at: datetime = Field(default_factory=utc_now)
+    samples: list[ConfidenceCalibrationSample] = Field(min_length=1, max_length=10000)
+
+
+class ConfidenceLabelSetValidationReport(BaseModel):
+    """Readiness report produced before calibration metrics are computed."""
+
+    schema_version: str = "soc.confidence_label_set_validation_report.v1"
+    label_set_id: str
+    sample_count: int = Field(ge=0)
+    accepted_count: int = Field(ge=0)
+    pending_count: int = Field(ge=0)
+    excluded_count: int = Field(ge=0)
+    calibratable: bool = False
+    model_names: list[str] = Field(default_factory=list)
+    prompt_versions: list[str] = Field(default_factory=list)
+    pipeline_versions: list[str] = Field(default_factory=list)
+    actual_verdict_counts: dict[str, int] = Field(default_factory=dict)
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ConfidenceCalibrationBin(BaseModel):
@@ -1840,14 +1911,25 @@ class ConfidenceCalibrationBin(BaseModel):
 
 class ConfidenceThresholdProfile(BaseModel):
     profile_version: str = Field(min_length=1)
+    label_set_id: str | None = None
+    dataset_hash: str | None = None
+    model_name: str | None = None
+    prompt_version: str | None = None
+    pipeline_version: str | None = None
     review_below: float = Field(ge=0.0, le=1.0)
     auto_action_allowed: bool = False
     created_at: datetime = Field(default_factory=utc_now)
 
 
 class ConfidenceCalibrationReport(BaseModel):
-    schema_version: str = "soc.confidence_calibration_report.v1"
+    schema_version: str = "soc.confidence_calibration_report.v2"
+    label_set_id: str | None = None
+    dataset_hash: str
+    model_name: str
+    prompt_version: str
+    pipeline_version: str
     sample_count: int = Field(ge=0)
+    actual_verdict_counts: dict[str, int] = Field(default_factory=dict)
     accuracy: float = Field(ge=0.0, le=1.0)
     brier_score: float = Field(ge=0.0, le=1.0)
     expected_calibration_error: float = Field(ge=0.0, le=1.0)

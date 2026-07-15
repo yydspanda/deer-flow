@@ -822,9 +822,15 @@ normalizers/hids.py
   自动生效。
 - 不同层的 confidence/trust/status 禁止直接平均、相乘或折算成一个总分。任何聚合都必须先定义
   标注集、校准方法、版本化阈值和 replay 指标，并保留原始分层信号。
-- `soc eval confidence` 只消费人工标注 JSON/JSONL，输出 accuracy、Brier score、ECE、non-empty bins
-  和 versioned `review_below` profile。样本不足、实际 verdict 单一或无满足支持度的阈值必须 warning；
-  当前 profile 的 `auto_action_allowed` 固定为 false，不自动写生产配置。
+- 置信度评测必须分为 `soc eval labels prepare`、人工审阅、`soc eval labels validate`、
+  `soc eval confidence` 四步。标签必须绑定 `run_id`、`input_hash`、model/prompt/pipeline version、
+  reviewer、reviewed_at 和理由；标签文件不得复制 raw payload。
+- `pending_review` 不能参与 calibration；无法确定真实结论的样本应标为 `excluded`，不得把
+  `unknown/needs_review` 冒充 accepted ground truth。同一 `input_hash` 的 replay 不能重复计权，
+  不同 model/prompt/pipeline scope 不能混入同一个 profile。
+- `soc eval confidence` 只消费完成治理校验的 label set，输出 accuracy、Brier score、ECE、non-empty
+  bins、dataset hash 和 versioned `review_below` profile。样本不足、实际 verdict 单一或无满足支持度的
+  阈值必须 warning；当前 profile 的 `auto_action_allowed` 固定为 false，不自动写生产配置。
 
 ### Investigation evidence eligibility / 调查证据采信约束
 
@@ -860,10 +866,17 @@ normalizers/hids.py
 - 默认 runtime 必须继续使用 deterministic `StubLLMAnalyzer`；真实 LLM analyzer 只能通过显式 flag/config/client 注入。
 - 统一配置为 `SOC_ANALYZER_MODE=stub|llm`、`SOC_LLM_MODEL`、`SOC_LLM_THINKING_ENABLED`、
   `SOC_LLM_ATTACH_TRACING`、`SOC_LLM_MAX_CONCURRENCY`、`SOC_LLM_REQUESTS_PER_MINUTE`、
-  `SOC_LLM_ADMISSION_TIMEOUT_SECONDS`。CLI 可用 `--analyzer-mode` / `--model-name` 覆盖；未知模型必须 fail-fast，
+  `SOC_LLM_ADMISSION_TIMEOUT_SECONDS`、`SOC_LLM_CALL_TIMEOUT_SECONDS`。CLI 可用 `--analyzer-mode` /
+  `--model-name` 覆盖；未知模型必须 fail-fast，
   禁止静默换到默认 provider。
 - LLM admission 必须独立于 Kafka worker concurrency，使用进程内 bounded semaphore 和可选 RPM
   预算。准入饱和是 retryable `analyzer_capacity`，不得调用 provider 后再伪装成本地限流。
+- admission timeout 只限制等待本地并发名额；call timeout 独立限制一次 provider invocation。后者
+  超时必须形成 retryable `analyzer_timeout`，Kafka 不得提交 offset；后台调用可能无法强制中断时，
+  executor worker 数仍必须有界，防止超时请求无限创建线程。
+- parser semantic repair 只允许可证明无损的白名单形状转换并记录精确 repair log。目前只允许
+  `verdict: [one_string] -> one_string` 与 `evidence[i].value: [one_scalar] -> one_scalar`；多元素数组、
+  类型猜测和内容拼接必须失败并进入 typed Runtime failure。
 - Prompt compact JSON、模型响应、`AnalysisResult` 文本字段、evidence 数量/值长度、knowledge candidate
   数量/长度都必须有硬上限；超限必须在 Runtime 中形成 typed failure，不能进入 repair 无限消耗。
 - `DeerFlowLLMChatClient` 只可保存 allowlisted response metadata 和 token usage；provider headers、凭证、

@@ -190,7 +190,8 @@ validation and deterministic decision node. Only allowlisted response metadata a
 the run trace. Prompting and `AnalysisResult.evidence` grounding share the same bounded context
 projection; ungrounded analyzer claims force deterministic review. Model admission is process-local
 and independently bounded with `SOC_LLM_MAX_CONCURRENCY`, optional `SOC_LLM_REQUESTS_PER_MINUTE`,
-and `SOC_LLM_ADMISSION_TIMEOUT_SECONDS`.
+`SOC_LLM_ADMISSION_TIMEOUT_SECONDS`, and `SOC_LLM_CALL_TIMEOUT_SECONDS`. Admission timeout limits
+queue wait; call timeout limits one provider invocation and becomes retryable `analyzer_timeout`.
 
 `soc_agent.core.SocDecisionPolicy` is the only Runtime boundary that converts validated
 `AnalysisResult` into an operational `Decision`. Analyzer confidence is currently an uncalibrated
@@ -214,6 +215,8 @@ fail alert analysis. Operational surfaces are Gateway `/api/soc/normalization/*`
 `soc normalize baseline-accept|baselines|issues|issue-update`, Review TUI `/normalization`, and Web
 `/workspace/soc/normalization`. `soc normalize suggest` and `soc eval confidence` are offline-only;
 their outputs cannot mutate adapters, baselines, runtime policy, or automatic-action thresholds.
+Confidence calibration must first use `soc eval labels prepare|validate`; only analyst-accepted,
+traceable, single-model/prompt/pipeline labels may enter `soc eval confidence`.
 
 PingAn vendor aliases are translated into generic `RoleClaim` objects inside `soc_agent.normalizers`.
 `pipeline.fact_reconstructor` must remain vendor-neutral: it builds scenario hypotheses and

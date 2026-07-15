@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -107,6 +108,7 @@ def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
             "SOC_LLM_MAX_CONCURRENCY": "3",
             "SOC_LLM_REQUESTS_PER_MINUTE": "20",
             "SOC_LLM_ADMISSION_TIMEOUT_SECONDS": "0.25",
+            "SOC_LLM_CALL_TIMEOUT_SECONDS": "30",
         }
     )
     assert settings.mode is SocAnalyzerMode.LLM
@@ -114,6 +116,7 @@ def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
     assert settings.max_concurrency == 3
     assert settings.requests_per_minute == 20
     assert settings.admission_timeout_seconds == 0.25
+    assert settings.call_timeout_seconds == 30
 
     with pytest.raises(ValueError, match="SOC_ANALYZER_MODE"):
         SocLLMSettings.from_env({"SOC_ANALYZER_MODE": "automatic"})
@@ -123,6 +126,24 @@ def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
         SocLLMSettings.from_env({"SOC_LLM_MAX_CONCURRENCY": "0"})
     with pytest.raises(ValueError, match="SOC_LLM_ADMISSION_TIMEOUT_SECONDS"):
         SocLLMSettings.from_env({"SOC_LLM_ADMISSION_TIMEOUT_SECONDS": "nan"})
+    with pytest.raises(ValueError, match="SOC_LLM_CALL_TIMEOUT_SECONDS"):
+        SocLLMSettings.from_env({"SOC_LLM_CALL_TIMEOUT_SECONDS": "0"})
+
+
+def test_deerflow_client_enforces_model_call_timeout() -> None:
+    class SlowModel(_FakeModel):
+        def invoke(self, messages, *, config):
+            time.sleep(0.05)
+            return super().invoke(messages, config=config)
+
+    client = DeerFlowLLMChatClient(
+        app_config=_FakeConfig("deepseek-v4-pro"),  # type: ignore[arg-type]
+        model_factory=lambda **_: SlowModel(),
+        call_timeout_seconds=0.001,
+    )
+
+    with pytest.raises(TimeoutError, match="SOC LLM call exceeded"):
+        client.complete([{"role": "user", "content": "slow"}], model_name="deepseek-v4-pro")
 
 
 def test_llm_admission_controller_enforces_concurrency_and_rate_budget() -> None:
@@ -179,6 +200,7 @@ def test_secret_free_status_lists_configured_models() -> None:
     assert status["configured_model_names"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
     assert status["secrets_included"] is False
     assert status["max_concurrency"] == 1
+    assert status["call_timeout_seconds"] == 180.0
     assert "api_key" not in status
 
 

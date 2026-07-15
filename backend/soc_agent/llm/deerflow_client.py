@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 from collections.abc import Callable, Mapping, Sequence
+from math import isfinite
 from threading import Lock
 from typing import Any
 
@@ -42,7 +44,10 @@ class DeerFlowLLMChatClient:
         max_concurrency: int = 1,
         requests_per_minute: int = 0,
         acquire_timeout_seconds: float = 5.0,
+        call_timeout_seconds: float = 180.0,
     ) -> None:
+        if not isfinite(call_timeout_seconds) or call_timeout_seconds <= 0:
+            raise ValueError("call_timeout_seconds must be a finite positive number")
         self._app_config = app_config
         self._thinking_enabled = thinking_enabled
         self._attach_tracing = attach_tracing
@@ -52,6 +57,11 @@ class DeerFlowLLMChatClient:
             max_concurrency=max_concurrency,
             requests_per_minute=requests_per_minute,
             acquire_timeout_seconds=acquire_timeout_seconds,
+        )
+        self._call_timeout_seconds = call_timeout_seconds
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_concurrency,
+            thread_name_prefix="soc-llm-call",
         )
         self._models: dict[str, BaseChatModel] = {}
         self._models_lock = Lock()
@@ -64,7 +74,8 @@ class DeerFlowLLMChatClient:
     ) -> LLMChatResponse:
         model = self._get_model(model_name)
         with self._admission.admit():
-            response = model.invoke(
+            future = self._executor.submit(
+                model.invoke,
                 [dict(message) for message in messages],
                 config={
                     "run_name": self._run_name,
@@ -72,6 +83,11 @@ class DeerFlowLLMChatClient:
                     "metadata": {"soc_model_name": model_name},
                 },
             )
+            try:
+                response = future.result(timeout=self._call_timeout_seconds)
+            except concurrent.futures.TimeoutError as exc:
+                future.cancel()
+                raise TimeoutError(f"SOC LLM call exceeded {self._call_timeout_seconds:g} seconds") from exc
         response_metadata = _mapping(getattr(response, "response_metadata", None))
         return LLMChatResponse(
             content=getattr(response, "content", response),

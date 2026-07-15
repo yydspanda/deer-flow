@@ -23,6 +23,7 @@ def test_soc_daemon_k8s_template_is_opt_in_and_uses_stable_entrypoints() -> None
     assert 'SOC_LLM_MAX_CONCURRENCY: "1"' in manifest
     assert 'SOC_LLM_REQUESTS_PER_MINUTE: "0"' in manifest
     assert 'SOC_LLM_ADMISSION_TIMEOUT_SECONDS: "5"' in manifest
+    assert 'SOC_LLM_CALL_TIMEOUT_SECONDS: "180"' in manifest
     assert "soc-daemon.yaml" not in docker_script
 
 

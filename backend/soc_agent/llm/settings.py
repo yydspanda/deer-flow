@@ -39,6 +39,7 @@ class SocLLMSettings:
     max_concurrency: int = 1
     requests_per_minute: int = 0
     admission_timeout_seconds: float = 5.0
+    call_timeout_seconds: float = 180.0
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> SocLLMSettings:
@@ -71,6 +72,11 @@ class SocLLMSettings:
                 values.get("SOC_LLM_ADMISSION_TIMEOUT_SECONDS", "5"),
                 name="SOC_LLM_ADMISSION_TIMEOUT_SECONDS",
                 minimum=0.0,
+            ),
+            call_timeout_seconds=_parse_float(
+                values.get("SOC_LLM_CALL_TIMEOUT_SECONDS", "180"),
+                name="SOC_LLM_CALL_TIMEOUT_SECONDS",
+                minimum=0.001,
             ),
         )
 
@@ -142,6 +148,7 @@ def build_configured_chat_client(
             max_concurrency=resolved.max_concurrency,
             requests_per_minute=resolved.requests_per_minute,
             acquire_timeout_seconds=resolved.admission_timeout_seconds,
+            call_timeout_seconds=resolved.call_timeout_seconds,
         ),
         model_name,
     )
@@ -168,6 +175,7 @@ def configured_soc_llm_status(
         "max_concurrency": resolved.max_concurrency,
         "requests_per_minute": resolved.requests_per_minute,
         "admission_timeout_seconds": resolved.admission_timeout_seconds,
+        "call_timeout_seconds": resolved.call_timeout_seconds,
         "secrets_included": False,
     }
 

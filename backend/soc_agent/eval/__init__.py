@@ -1,6 +1,13 @@
 """Offline evaluation helpers for SOC Agent."""
 
-from soc_agent.eval.confidence import calibrate_confidence, load_confidence_calibration_samples
+from soc_agent.eval.confidence import calibrate_confidence
+from soc_agent.eval.labels import (
+    build_confidence_label_set,
+    calibration_samples_from_label_set,
+    load_analysis_runs_for_labeling,
+    load_confidence_label_set,
+    validate_confidence_label_set,
+)
 from soc_agent.eval.offline import (
     OfflineEvalReport,
     OfflineEvalResponse,
@@ -53,9 +60,12 @@ __all__ = [
     "ScenarioEvalFinding",
     "ScenarioEvalReport",
     "ScenarioEvalSampleResult",
+    "build_confidence_label_set",
     "calibrate_confidence",
+    "calibration_samples_from_label_set",
     "load_eval_responses_jsonl",
-    "load_confidence_calibration_samples",
+    "load_analysis_runs_for_labeling",
+    "load_confidence_label_set",
     "load_pingan_capability_eval_fixtures",
     "load_scenario_eval_report",
     "run_offline_eval",
@@ -63,4 +73,5 @@ __all__ = [
     "run_pingan_domain_triage_eval",
     "run_pingan_main_orchestrator_eval",
     "run_scenario_eval",
+    "validate_confidence_label_set",
 ]

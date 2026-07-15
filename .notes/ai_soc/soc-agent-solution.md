@@ -289,8 +289,11 @@ Runtime rules:
   safe provider metadata. They never persist API keys, request headers, full prompts or raw responses.
 - Process-local model admission is bounded independently from Kafka workers with
   `SOC_LLM_MAX_CONCURRENCY`, optional `SOC_LLM_REQUESTS_PER_MINUTE`, and
-  `SOC_LLM_ADMISSION_TIMEOUT_SECONDS`.
-- Bad JSON repair is allowed only as a logged parser step.
+  `SOC_LLM_ADMISSION_TIMEOUT_SECONDS`. One provider invocation is separately bounded by
+  `SOC_LLM_CALL_TIMEOUT_SECONDS`; timeout is a retryable `analyzer_timeout`, not a silent hang.
+- Bad JSON repair is allowed only as a logged parser step. Narrow schema-shape repair may unwrap a
+  single-item verdict or evidence-value array, but multi-item or lossy coercion still fails schema
+  validation.
 - Prompt context, model response, analysis text, evidence count/value size, knowledge candidates,
   and projection depth/list sizes all have hard bounds.
 - Replay must be possible from stored run payload and deterministic settings.
@@ -439,10 +442,13 @@ Rules:
   constants and taxonomy version must be replayable.
 - LLM self-reported confidence is advisory. Production thresholds require labeled replay sets,
   calibration metrics, versioned thresholds, and comparison against analyst outcomes.
-- `soc eval confidence` now provides the offline calibration boundary. It reads reviewed JSON/JSONL,
-  reports accuracy, Brier score, expected calibration error and non-empty bins, and emits a versioned
-  `review_below` profile. Small or single-class sets are warned; the profile is provisional and
-  `auto_action_allowed` is always false.
+- Offline calibration is a governed two-stage boundary. `soc eval labels prepare` extracts a compact,
+  raw-payload-free review bundle from complete live-LLM `AnalysisRun` artifacts; analysts then set
+  `actual_verdict`, `review_status`, reviewer, time, and reason. `soc eval labels validate` blocks
+  pending labels, duplicate input hashes, and mixed model/prompt/pipeline scopes. Only a validated
+  label set may enter `soc eval confidence`, which reports accuracy, Brier score, expected calibration
+  error and non-empty bins and emits a provenance-bound `review_below` profile. Small or single-class
+  sets are warned; the profile remains offline and `auto_action_allowed` is always false.
 - Missing coverage, degraded schemas, conflicts, and truncation can lower or cap an operational
   conclusion, but no single score may silently erase those warnings.
 - `SocDecisionPolicy` is the only Runtime component allowed to translate validated analysis into an
