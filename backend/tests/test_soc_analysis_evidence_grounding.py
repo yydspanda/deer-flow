@@ -77,6 +77,39 @@ def test_grounding_accepts_composite_values_only_when_every_part_exists() -> Non
     assert len(report.items[0].matched_context_paths) >= 2
 
 
+def test_grounding_rejects_composite_source_paths() -> None:
+    report = ground_analysis_evidence(
+        _analysis(
+            EvidenceItem(
+                source="detection, entities",
+                description="来源必须是一个精确路径",
+                value="EDR-IOC-001",
+            )
+        ),
+        _request(),
+    )
+
+    assert report.items[0].status is AnalysisEvidenceGroundingStatus.SOURCE_MISMATCH
+
+
+def test_grounding_flags_http_success_claim_without_outcome_artifact() -> None:
+    request = _request().model_copy(
+        update={
+            "primary_evidence": BoundedAnalysisEvidence(
+                source_path="raw.message",
+                layer=EvidenceLayer.RAW_MESSAGE,
+                trust_level=EvidenceTrustLevel.HIGH,
+                content='{"decoded_fields": {"response": {"status_code": 200}}}',
+            )
+        }
+    )
+    analysis = _analysis(EvidenceItem(source="primary_evidence", description="HTTP响应", value="200")).model_copy(update={"summary": "目标返回 HTTP 200，说明漏洞利用成功"})
+
+    report = ground_analysis_evidence(analysis, request)
+
+    assert "outcome-success claim" in " ".join(report.warnings)
+
+
 def test_grounding_accepts_approved_section_shorthand_and_structured_punctuation() -> None:
     request = _request().model_copy(
         update={
@@ -84,7 +117,7 @@ def test_grounding_accepts_approved_section_shorthand_and_structured_punctuation
                 source_path="raw.message",
                 layer=EvidenceLayer.RAW_MESSAGE,
                 trust_level=EvidenceTrustLevel.HIGH,
-                content='{"fields": {"attack_sip": "10.0.9.9", "rsp_status": 200}}',
+                content=('{"fields": {"attack_sip": "10.0.9.9", "rsp_status": 200}, "decoded_fields": {"response": {"server": "nginx/1.21.3"}}}'),
             )
         }
     )
@@ -110,9 +143,32 @@ def test_grounding_accepts_approved_section_shorthand_and_structured_punctuation
                 description="显式 parsed root",
                 value="200",
             ),
+            EvidenceItem(
+                source="raw.message#decoded.response.server",
+                description="显式 decoded 路径",
+                value="nginx/1.21.3",
+            ),
         ),
         request,
     )
 
-    assert report.grounded_count == 4
+    assert report.grounded_count == 5
     assert report.ungrounded_count == 0
+
+
+def test_grounding_does_not_flag_explicitly_unconfirmed_outcome() -> None:
+    request = _request().model_copy(
+        update={
+            "primary_evidence": BoundedAnalysisEvidence(
+                source_path="raw.message",
+                layer=EvidenceLayer.RAW_MESSAGE,
+                trust_level=EvidenceTrustLevel.HIGH,
+                content='{"decoded_fields": {"response": {"status_code": 200}}}',
+            )
+        }
+    )
+    analysis = _analysis(EvidenceItem(source="primary_evidence", description="HTTP响应", value="200")).model_copy(update={"summary": "HTTP 200 无法确认代码执行或文件写入是否成功"})
+
+    report = ground_analysis_evidence(analysis, request)
+
+    assert "outcome-success claim" not in " ".join(report.warnings)

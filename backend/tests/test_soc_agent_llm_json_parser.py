@@ -128,9 +128,35 @@ def test_parse_analysis_result_repairs_single_item_evidence_value_array() -> Non
     assert parsed.result.evidence[0].value == "ASP.NET"
 
 
-def test_parse_analysis_result_rejects_multi_item_evidence_value_array() -> None:
+def test_parse_analysis_result_serializes_multi_item_evidence_value_array() -> None:
     payload = _valid_payload()
     payload["evidence"][0]["value"] = ["ASP.NET", "PHP"]
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert parsed.repair_applied is True
+    assert parsed.result.evidence[0].value == '["ASP.NET","PHP"]'
+    assert parsed.repair_log[-1]["repair"] == "structured_value_to_json_string"
+
+
+def test_parse_analysis_result_serializes_evidence_value_object() -> None:
+    payload = _valid_payload()
+    payload["evidence"][0]["value"] = {"source_type": "hids", "product": "青藤"}
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert parsed.repair_applied is True
+    assert parsed.result.evidence[0].value == '{"product":"青藤","source_type":"hids"}'
+    assert parsed.repair_log[-1] == {
+        "stage": "schema_normalization",
+        "field": "evidence[0].value",
+        "repair": "structured_value_to_json_string",
+    }
+
+
+def test_parse_analysis_result_rejects_oversized_structured_evidence_value() -> None:
+    payload = _valid_payload()
+    payload["evidence"][0]["value"] = {"content": "x" * 4_001}
 
     with pytest.raises(LLMOutputParseError) as exc:
         parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))

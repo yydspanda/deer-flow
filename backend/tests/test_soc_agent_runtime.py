@@ -85,7 +85,13 @@ def test_malicious_ioc_returns_true_positive_candidate() -> None:
 
 
 def test_decision_policy_preserves_fact_conflict_guard() -> None:
-    run = _analyze(_sample("pingan_legacy_apt.json"))
+    payload = _sample("pingan_legacy_apt.json")
+    raw_event = payload["alert"]["hitLog"][0]["zeusRawLogs"][0]
+    raw_event.pop("sip", None)
+    raw_event["source_ip"] = "198.51.100.10"
+    raw_event["src_addr"] = "198.51.100.11"
+
+    run = _analyze(payload)
 
     assert run.fact_reconstruction is not None
     assert run.fact_reconstruction.conflict_reports
@@ -382,7 +388,7 @@ def test_pingan_legacy_edr_alert_normalizes_platform_envelope() -> None:
     assert alert.entities.network.destination_ip == "30.162.29.85"
     assert alert.entities.host.host_name == "HOST-L12267.example.local"
     assert alert.entities.user.username == "analyst001"
-    assert alert.entities.user.user_id == "S-1-5-21-example"
+    assert alert.entities.user.user_id is None
     assert alert.entities.process.process_name == "svchost.exe"
     assert alert.entities.process.parent_process_name == "services.exe"
     assert alert.entities.file.md5 == "7B88D0896FBF43469A9959D59824A514"
@@ -391,6 +397,7 @@ def test_pingan_legacy_edr_alert_normalizes_platform_envelope() -> None:
     assert legacy["soar"]["display_names"] == ["IP查询-SOAR"]
     assert legacy["soar"]["asset"]["device_name"] == "HOST-L12267.example.local"
     assert legacy["soar"]["asset"]["username"] == "analyst001"
+    assert legacy["soar"]["asset"]["user_id"] == "S-1-5-21-example"
 
     run = _analyze(_sample("pingan_legacy_edr.json"))
     assert run.alert_id == "1965810"
@@ -399,13 +406,13 @@ def test_pingan_legacy_edr_alert_normalizes_platform_envelope() -> None:
     assert "svchost.exe" in run.entities.processes
     assert "services.exe" in run.entities.processes
     assert "analyst001" in run.entities.users
-    assert "S-1-5-21-example" in run.entities.users
+    assert "S-1-5-21-example" not in run.entities.users
     assert "HOST-L12267.example.local" in run.entities.hosts
     by_key = {mention.key: mention for mention in run.entities.mentions}
     assert by_key["process:svchost.exe"].role == "process_name"
     assert by_key["process:services.exe"].role == "parent_process_name"
     assert by_key["user:analyst001"].role == "username"
-    assert by_key["user:S-1-5-21-example"].role == "user_id"
+    assert "user:S-1-5-21-example" not in by_key
     assert by_key["host:HOST-L12267.example.local"].role == "host_name"
     assert by_key["file_hash:7B88D0896FBF43469A9959D59824A514"].role == "md5"
 
@@ -510,8 +517,8 @@ def test_cli_normalize_inspect_outputs_reports_without_analysis(capsys) -> None:
     assert payload["alert"]["source"]["source_type"] == "edr"
     assert payload["entities"]["ips"] == ["10.43.107.39", "30.162.29.85"]
     assert payload["normalization_report"]["adapter"] == "pingan_platform"
-    assert "entities.user.user_id" in payload["normalization_report"]["normalized_fields"]
-    assert payload["extraction_report"]["entity_counts"]["user"] >= 2
+    assert "entities.user.user_id" not in payload["normalization_report"]["normalized_fields"]
+    assert payload["extraction_report"]["entity_counts"]["user"] == 1
     assert "analysis" not in payload
     assert "decision" not in payload
 

@@ -2,7 +2,7 @@
 
 Status: Active review baseline
 
-Last updated: 2026-07-14
+Last updated: 2026-07-16
 
 Primary audience: product review, architecture review, engineering review, security review
 
@@ -29,6 +29,7 @@ Review should answer these questions first:
 | Data contracts are stable? / 数据协议是否稳定 | Sections 8, 9 |
 | PingAn knowledge is reusable and not hard-coded? / 平安经验是否可迁移 | Section 11 |
 | Memory is useful but not polluting decisions? / 记忆是否可控 | Section 10 |
+| Governed context is typed, scoped and auditable? / 运营事实是否强类型、有范围、时效和审计 | Section 7.4 |
 | Approval and side effects are safe? / 审批和副作用是否安全 | Sections 7, 12 |
 
 Non-goals of this document:
@@ -54,6 +55,8 @@ SOC Agent 是一个在 DeerFlow 上增量构建的安全运营智能体系统：
 - MCP or action adapters provide external capabilities / MCP 或 Action Adapter 承载外部系统能力。
 - Human approval gates high-risk actions / 高风险动作必须人工审批。
 - Memory is candidate-first and review-gated / 记忆先进入候选，确认后才可检索使用。
+- Operational context uses typed governed facts, not memory or permanent whitelists / 授权活动、
+  护网参与者、变更窗口等运营上下文使用强类型受治理事实，不是记忆，也不是永久白名单。
 - PingAn and other tenants use adapters, capability cards, policy, and scoped memory, not
   hard-coded core logic / 平安或其他客户能力通过适配器、能力卡、策略和租户记忆接入，不写死到核心。
 
@@ -98,6 +101,14 @@ write confirmed memory, or execute side-effect actions.
 | 调查上下文 | Investigation Context | `InvestigationContext` | Review/Lead Agent/TUI/Web 共享的受控上下文 |
 | 统一调查视图 | Unified Investigation View | `UnifiedInvestigationView` | 将分析、证据、相似预警、记忆、外部反馈拼成可读视图 |
 | 调查证据 | Investigation Evidence | `InvestigationEvidence` | 只读工具/MCP 查询结果，不直接改变 verdict |
+| 受治理上下文事实 | Governed Context Fact | `GovernedContextFact` | 共享租户、时效、来源、状态和审计信封的强类型运营事实 |
+| 授权活动事实 | Authorized Activity Fact | `AuthorizedActivityFact` | 某项扫描、运维、测试或服务行为在限定范围和时间内已获授权；不是永久白名单 |
+| 授权匹配结果 | Authorization Match Result | `AuthorizationMatchResult` | 当前告警与有效授权事实的确定性匹配、缺口、冲突和来源说明 |
+| 安全演练事实 | Security Exercise Fact | `SecurityExerciseCampaignFact` | 护网/红蓝对抗的时间、目标、交战规则和权威来源 |
+| 演练参与者事实 | Exercise Participant Fact | `ExerciseParticipantFact` | 某个时段内团队角色与 IP/账号/证书等标识的可审计关联 |
+| 参与者归属结果 | Participant Attribution Result | `ParticipantAttributionResult` | 根据事件时间和标识判断红队/蓝队/白队等身份，允许 ambiguous/conflict |
+| 检测真值 | Detection Truth | `actual_verdict` | 告警描述的攻击/异常行为是否真实发生 |
+| 运营处置 | Operational Disposition | `SocExternalDispositionCanonicalStatus` | 真实行为最终应升级、复核、抑制或按授权良性真阳关闭 |
 | 领域研判 | Domain Triage | `SocDomainTriageResult` | 面向 APT/EDR/HIDS/网络/账号等领域的研判结果 |
 | 场景发现 | Scenario Finding | `SocDomainFinding` | 反弹 shell、横向移动、恶意外联等场景化发现 |
 | 主控智能体 | SOC Lead Agent | `soc-triage` profile | DeerFlow lead_agent 派生的 SOC 对话/编排入口 |
@@ -192,8 +203,9 @@ Product conclusion:
 
 ## 4. End-to-End Flow / 端到端流程
 
-The current canonical lifecycle is documented in detail in `.notes/ai_soc/alert-lifecycle-flow.md`.
-The summary below is the review-level product flow.
+The currently implemented lifecycle is documented in detail in
+`.notes/ai_soc/alert-lifecycle-flow.md`. The summary below is the review-level target flow; steps 7
+and 9 add the planned governed-context enrichment and disposition reconciliation boundary.
 
 ```mermaid
 flowchart TD
@@ -202,12 +214,17 @@ flowchart TD
     C --> D["🧠 4. Runtime Triage<br/>deterministic + bounded LLM"]
     D --> E["🧩 5. Domain Findings<br/>scenario / entities / evidence gaps"]
     E --> F["🛠️ 6. Investigation Actions<br/>read-only adapter or MCP"]
-    F --> G["📚 7. Context Assembly<br/>similar alerts / evidence / memory / external feedback"]
-    G --> H["👤 8. Review Queue<br/>analyst sees conclusion + gaps + checklist"]
-    H --> I{"✅ Analyst action<br/>复核动作"}
-    I -->|"correct / close / note"| J["📝 9. Audit + State Update<br/>status / reason / trace"]
+    F --> A1["🪪 7. Governed Context Enrichment<br/>campaign / participant / authorization"]
+    A1 --> G["📚 8. Context Assembly<br/>similar alerts / evidence / memory / external feedback"]
+    G --> D1["⚖️ 9. Disposition Reconciliation<br/>detection truth != operational disposition"]
+    D1 --> H{"👤 10. Review Routing<br/>new / partial / conflict / expired?"}
+    H -->|"yes"| H1["Review Queue<br/>conclusion + gaps + checklist"]
+    H -->|"exact governed match"| H2["Shadow / policy-gated disposition<br/>closed_benign_true_positive candidate"]
+    H1 --> I{"✅ Analyst action<br/>复核动作"}
+    H2 --> I
+    I -->|"correct / close / note"| J["📝 11. Audit + State Update<br/>status / reason / trace"]
     I -->|"high-risk action"| K["🛂 Approval Inbox<br/>request -> grant -> dry-run/execute boundary"]
-    J --> L["🧬 10. Memory Candidate<br/>pending_review only"]
+    J --> L["🧬 12. Memory Candidate<br/>pending_review only"]
     K --> J
     L --> M{"👤 Memory Review<br/>人工确认"}
     M -->|"confirm"| N["📖 Confirmed Memory<br/>retrieval-enabled by policy"]
@@ -221,6 +238,12 @@ Important behavior:
 - Historical similar alerts, external feedback, and confirmed memory are not fallback-only;
   they are part of the normal investigation context.
 - Tool results are evidence. They do not silently mutate verdict, memory, or status.
+- Authorization never rewrites detection truth. A real exploit or prohibited operation can remain
+  `true_positive` while the operational disposition is `closed_benign_true_positive` because it was
+  explicitly authorized.
+- Only a complete governed-context chain that matches event time, tenant/environment, participant,
+  subject, target and behavior scope may reduce repetitive review. Identity attribution alone is not
+  authorization. Partial, expired, conflicting or new patterns still go to humans.
 - High-risk actions go to approval inbox. Approval grant is still not automatic execution.
 
 ---
@@ -248,6 +271,9 @@ Important behavior:
 | `SocAgentChatService` | SOC chat event stream and proposal handling | Bounded context and approval proposal |
 | `SocAgentApprovalService` | Approval request/grant/dry-run/execute boundary | Permission, token, audit, no silent execute |
 | `SocExternalDispositionService` | External status/reason sync | Mapping, target resolution, idempotency |
+| `SocGovernedContextService` (planned) | Govern typed fact lifecycle and source/version history | Proposal, activation, validity, revocation, audit |
+| `SocAuthorizedActivityService` (planned) | Compose authorized-activity matching over governed facts | Subject, target, behavior, event-time match explanation |
+| `SocSecurityExerciseContextService` (planned) | Compose campaign, participant attribution and authorization | Red/blue/white-team identity is not authorization by itself |
 | `SocCorrelationService` | Similar alert lookup | Uses summaries/evidence, no LLM dependency |
 | `SocMainOrchestratorService` | Read-only demo orchestration for selected skills/evidence/domain results | No hidden side effects |
 
@@ -263,17 +289,20 @@ flowchart TD
     S --> L["6. analyze_stub / analyze_llm<br/>DeerFlow model in explicit mode"]
     L --> V["7. schema_validate<br/>JSON + Pydantic + domain"]
     V --> G["8. evidence_grounding<br/>claim value -> bounded context path"]
-    G --> R["9. SocDecisionPolicy<br/>operational decision guards"]
+    G --> R["9. SocDecisionPolicy<br/>detection decision guards"]
     R --> P["🔒 Atomic analysis bundle<br/>run + summary + review + audit"]
     L -->|failure| E["⚠️ RuntimeFailure<br/>typed + sanitized + retryable"]
     E --> P
     P --> M["🛠️ normalization_monitor<br/>fail-open maintenance side path"]
 ```
 
-`SocCorrelationService`, `SocDomainTriageService`, investigation actions, memory retrieval, and the
-DeerFlow SOC Lead Agent are **not hidden nodes inside this base Runtime**. They consume the persisted
-run through explicit orchestration/review services. This keeps one-alert execution replayable while
-allowing richer investigation workflows to evolve independently.
+`SocCorrelationService`, `SocDomainTriageService`, investigation actions, governed-context matching,
+memory retrieval, and the DeerFlow SOC Lead Agent are **not hidden nodes inside this base
+Runtime**. They consume the persisted run through explicit orchestration/review services. The base
+Runtime produces the detection assessment; a later deterministic disposition reconciliation may
+combine it with governed authorization facts without rewriting the immutable original run. This
+keeps one-alert execution replayable while allowing richer investigation workflows to evolve
+independently.
 
 Runtime rules:
 
@@ -324,8 +353,10 @@ The system must handle vendor differences without turning the core schema into a
 5. The original payload is never replaced: `AlertInput.raw` and `AnalysisRun.input_payload`
    retain every hit log, raw event, message, and platform field for replay and audit.
 6. The first successfully parsed message becomes primary evidence; additional messages become
-   bounded supplementary evidence. Analysis nodes receive size-bounded parsed content, not only
-   a source path and not the unbounded vendor payload.
+   bounded supplementary evidence. Network and process facts remain per-message observations with
+   stable `observation_scope`; different requests or process executions are not collapsed into one
+   session conflict. Analysis nodes receive size-bounded parsed content, not only a source path and
+   not the unbounded vendor payload.
 7. If raw message parsing fails, Runtime preserves the raw text, emits a warning, and keeps the
    structured fallback at reduced trust. If raw message is absent, PingAn falls back to
    `zeusRawLogs[]` with explicit low trust.
@@ -338,16 +369,26 @@ The system must handle vendor differences without turning the core schema into a
    parser handled the structure, `degraded` means partial/nested decoding failed, and `unsupported`
    means no parser handled the selected message. A structural fingerprint supports baseline diff.
 10. `EvidenceCoverageReport` records parsed/decoded/repaired paths, canonical/fact/scenario consumers,
-    bounded LLM projection, redaction/replacement, truncation, and known high-value gaps. High-value
-    expectations come from `EvidenceFieldImportanceRegistry`: core provides vendor-neutral defaults,
-    while source adapters may add typed rules in `AlertInput.extensions`. It is persisted for audit;
-    the prompt receives only a compact coverage summary without vendor paths.
+    exact bounded LLM projection, redaction/replacement, omission reasons, truncation, and known
+    high-value gaps. A candidate path is not reported as projected unless its value is present in the
+    exact prompt projection. High-value expectations come from `EvidenceFieldImportanceRegistry`:
+    core provides vendor-neutral defaults, while source adapters may add typed rules in
+    `AlertInput.extensions`. It is persisted for audit; the prompt receives only a compact coverage
+    summary without vendor paths.
 11. Clean vendors may bypass heavy conflict handling, but still produce canonical evidence metadata.
 12. Vendor aliases stop at the source adapter. PingAn fields such as `attack_sip`, `alarm_sip`,
    `str_source_ip`, and `str_attack_ip` are converted into vendor-neutral `RoleClaim` objects;
    the generic fact reconstructor does not interpret those aliases directly.
 13. Evidence trust and semantic confidence are separate. A value parsed faithfully from raw
     message may still be a wrong attacker/victim assertion from the source product.
+14. Vendor-known placeholders or non-observation fields are emitted as `SourceFieldSemantic` with
+    explicit reasoning/entity permissions. For example, a vendor default external IP may remain in
+    raw/parsed evidence for audit while being forbidden from canonical entities, IOC extraction and
+    network-peer reasoning. Core Runtime does not know vendor aliases or placeholder values.
+15. External SOAR/asset/related-alert context remains separated from event facts. Asset owner or
+    logged-on account is not automatically the event actor; historical automated dispositions are
+    not independent human evidence. Deferred external context is visible in coverage and is later
+    admitted through typed investigation/correlation services.
 
 Schema drift workflow / 结构漂移流程：
 
@@ -431,6 +472,8 @@ The system has several confidence-like values, but they are not interchangeable 
 | `Decision.calibrated_probability` | Versioned calibrated probability, when an approved profile exists | Currently `null`; it must never be fabricated from raw analyzer confidence |
 | `Decision.evidence_state` / `review_reasons` | Operational evidence guard and structured review causes | Drives ReviewQueue/audit explanations independently of the numeric score |
 | `AnalysisEvidenceGroundingReport` | Whether each analyzer evidence value exists at its declared bounded-context source | Ungrounded claims force review and remain auditable; never auto-rewrite model output |
+| `AuthorizationMatchResult` | Deterministic applicability of governed authorization facts | Drives disposition eligibility; it is not an LLM probability |
+| Calibration eligibility | Whether decisive facts were present in the evaluated model input | Excludes context-missing samples from analyzer calibration without discarding their business truth |
 | Memory confidence | Strength of a reviewed reusable lesson | Retrieval ranking after confirmation; never promotes a candidate by itself |
 
 Rules:
@@ -449,12 +492,27 @@ Rules:
   label set may enter `soc eval confidence`, which reports accuracy, Brier score, expected calibration
   error and non-empty bins and emits a provenance-bound `review_below` profile. Small or single-class
   sets are warned; the profile remains offline and `auto_action_allowed` is always false.
+- Calibration must separate detection truth from operational disposition. A sample can have
+  `actual_verdict=true_positive` and `actual_disposition=closed_benign_true_positive` at the same
+  time. If authorization was not present in the exact bounded input used by the model, record the
+  known business truth but mark the analyzer sample `excluded_missing_decisive_context`; do not use
+  it to punish or calibrate the analyzer. Retain it for authorization-enrichment coverage metrics.
 - Missing coverage, degraded schemas, conflicts, and truncation can lower or cap an operational
   conclusion, but no single score may silently erase those warnings.
-- `SocDecisionPolicy` is the only Runtime component allowed to translate validated analysis into an
-  operational `Decision`. The current policy deliberately marks stub and live-LLM confidence as
+- Analyzer evidence uses one exact source path per item. Composite paths and descriptions that add
+  uncited sibling facts are invalid. `#parsed`, `#decoded`, and `#repaired` citations are distinct
+  provenance surfaces and must resolve to the exact bounded projection used for that model call.
+- HTTP status, tool transport success, workflow state, ticket transition, `is_blocked`, or
+  `is_banned` does not by itself prove exploit execution, command success, file creation, compromise,
+  or completed response. A positive outcome claim without outcome-specific evidence forces review as
+  `unproven_outcome_claim`; explicit uncertainty such as "cannot confirm success" is not such a claim.
+- `SocDecisionPolicy` is the only Runtime component allowed to translate validated analysis into a
+  detection `Decision`. The current policy deliberately marks stub and live-LLM confidence as
   uncalibrated and sends every such decision to human review until a labeled, approved calibration
   profile is explicitly integrated and replay-tested.
+- Final lifecycle disposition is a separate deterministic reconciliation boundary. It may consume
+  the detection decision plus `AuthorizationMatchResult`, but neither an LLM statement nor a memory
+  match may directly close or suppress an alert.
 - False-positive decisions require confirmation even when the raw score is high. Review reasons are
   structured (`confidence_not_calibrated`, `fact_conflict`, `high_value_evidence_gap`, and so on),
   persisted in the summary/queue/audit trail, and must not be replaced by one free-text reason.
@@ -495,7 +553,8 @@ flowchart TD
 | --- | --- | --- |
 | Reusable investigation method / 通用研判方法 | Public SOC skill | How to reason about reverse shell, malicious outbound, process tree |
 | External system query / 外部系统查询 | MCP or action adapter | CMDB lookup, EDR process tree, threat intel reputation |
-| Tenant-specific fact / 租户事实 | Scoped memory or policy/config | PingAn internal asset tag, suppression rule, special business system |
+| Governed operational fact / 有治理的运营事实 | Governed context registry + typed source adapter | Exercise participant, approved scanner campaign, maintenance window, asset state |
+| Tenant-specific descriptive fact / 租户描述性事实 | Scoped memory or policy/config | Internal domain meaning, investigation note, special business-system context |
 | Vendor field mapping / 字段映射 | Normalizer adapter | PingAn `zeusRawLogs[].message` mapping |
 | Repeated operational conclusion / 历史处置经验 | Memory candidate then confirmed memory | This rule often flips attacker/victim direction under condition X |
 | Eval sample / 验证样本 | Eval fixture | Desensitized APT/EDR/HIDS examples |
@@ -591,6 +650,122 @@ Rules:
 - External reason cannot become confirmed memory without review.
 - Mapping must be configurable per external system.
 
+### 7.4 Governed Context Facts / 受治理上下文事实（Planned）
+
+Authorization is the first implementation, but it is not the only operational context that needs
+source, scope, time and revocation. Use a shared typed envelope instead of a universal untyped KV
+store or one matcher for every fact.
+
+```text
+GovernedContextFact
+├── AuthorizedActivityFact
+├── SecurityExerciseCampaignFact
+├── ExerciseParticipantFact
+├── AssetContextFact
+├── IdentityContextFact
+├── ChangeWindowFact
+├── NetworkTopologyFact
+├── ServiceRelationshipFact
+└── RiskAcceptanceFact
+```
+
+`GovernedContextFact` owns common metadata: fact id/type/schema version, tenant/environment,
+`valid_from/valid_until`, source type/ref/version/freshness, status, owner/reviewer/reason,
+evidence refs, content hash and audit timestamps. Every subtype has a discriminated typed payload and
+its own matcher/resolver. The system must not implement a generic natural-language fact matcher.
+
+Shared lifecycle belongs to `SocGovernedContextService`; typed domain services compose it with
+deterministic matchers. PostgreSQL may use one common fact envelope table with typed JSONB payloads
+and indexed common columns, but Pydantic contracts and subtype validators remain mandatory.
+
+#### 7.4.1 Authorized Activity Facts / 授权活动事实
+
+The system must not ask an analyst to reconfirm the same known authorized activity for every alert,
+but it also must not turn one confirmation into a permanent IP whitelist. Use a dedicated governed
+fact lifecycle instead of memory or prompt text.
+
+`AuthorizedActivityFact` minimum semantics:
+
+| Dimension / 维度 | Required meaning / 必须表达 |
+| --- | --- |
+| Identity | Stable fact id, schema version, tenant and environment |
+| Activity | `vulnerability_scan`, `penetration_test`, `maintenance`, `automation`, `service_traffic`, or an extensible tenant-scoped type |
+| Subject scope | Scanner/service/asset/account selectors; prefer stable asset/service IDs and tags over an IP alone |
+| Target scope | Asset IDs, tags, applications, domains or bounded CIDRs the activity may touch |
+| Behavior scope | Scenario keys, normalized behavior signatures, service/process constraints, and optional detection aliases |
+| Validity | `valid_from`, `valid_until`, optional recurrence/window, and evaluation against alert event time |
+| Source | Authoritative system/type, source reference or ticket/campaign id, source version, evidence refs |
+| Governance | `proposed/active/suspended/expired/revoked`, owner, reviewer, reason, created/updated time |
+
+`AuthorizationMatchResult` is produced by deterministic code, not by the LLM. It records matched fact
+ids, `exact/partial/conflict/expired/not_found/unavailable`, matched and missing dimensions, event time,
+source freshness, policy version and evidence refs.
+
+```mermaid
+flowchart TD
+    H["👤 Analyst or authoritative system<br/>确认授权活动"] --> P["📝 Proposed Fact<br/>scope + validity + source"]
+    P --> G{"🛂 Governance Review<br/>owner / role / expiry"}
+    G -->|"approve"| A["🪪 Active AuthorizedActivityFact"]
+    G -->|"reject"| X["🗃️ Rejected"]
+    A --> Q["🔍 AuthorizationQuery<br/>canonical entities + scenario + event time"]
+    Q --> M["⚙️ Deterministic Matcher"]
+    M -->|"exact + fresh + no conflict"| B["✅ Benign-TP disposition eligible<br/>先 shadow，后策略化自动关闭"]
+    M -->|"partial / new / expired / conflict / unavailable"| R["👤 ReviewQueue<br/>只复核差异与新模式"]
+    A -->|"expiry / revoke / source change"| E["⏳ Expired or Revoked<br/>立即停止匹配"]
+```
+
+Source and rollout rules:
+
+- Preferred sources are change-management, scanner, maintenance, CMDB/security-tag or other
+  authoritative systems exposed through read-only adapters/MCP. PostgreSQL stores the governed fact
+  and source snapshot/cache; it must retain the external source reference and freshness.
+- Analyst confirmation may create a `proposed` fact. Activation requires an authorized role, explicit
+  scope and expiry. A free-text review note alone cannot activate it.
+- `security_tag.lookup` may provide one evidence input, but a generic future
+  `authorized_activity.lookup`/source-sync adapter owns authorization-specific records. Vendor names
+  stop at adapters; core matching consumes canonical selectors.
+- Exact matching can only make `closed_benign_true_positive` eligible. It must never rewrite a real
+  detection to `false_positive`, and it never authorizes a response action.
+- Initial rollout is shadow-only: show proposed disposition and match explanation while humans still
+  close the case. Auto-close is enabled later only for exact, authoritative, fresh matches after
+  replay precision, override rate and sampled-review gates pass.
+- Historical alerts are evaluated using the authorization fact version valid at alert event time.
+  Current state cannot silently rewrite old cases.
+
+#### 7.4.2 Security Exercise Context / 护网与红蓝对抗上下文
+
+A security exercise requires three facts, not one IP whitelist:
+
+| Fact / 事实 | What it proves / 能证明什么 |
+| --- | --- |
+| `SecurityExerciseCampaignFact` | Campaign time, environment, target scope, allowed/forbidden behaviors and versioned Rules of Engagement |
+| `ExerciseParticipantFact` | At event time, an IP/CIDR/domain/account/certificate/agent id belonged to a red/blue/white team or other exercise role |
+| `AuthorizedActivityFact` | That participant was allowed to perform this behavior against this target during this campaign |
+
+```mermaid
+flowchart LR
+    E["🧾 Alert event<br/>time + peers + behavior + target"] --> P["🔍 ParticipantAttributionMatcher"]
+    P -->|"exact"| R["Participant role<br/>red / blue / white / referee"]
+    P -->|"ambiguous / conflict / expired"| H["👤 Human review"]
+    R --> C["🔍 Campaign applicability<br/>time + environment + RoE version"]
+    C --> A["🔍 AuthorizedActivityMatcher<br/>subject + target + behavior"]
+    A -->|"all exact + fresh"| D["⚖️ detection=true_positive<br/>disposition=closed_benign_true_positive<br/>reason=authorized_security_exercise"]
+    A -->|"out of scope / forbidden / missing"| H
+```
+
+Rules:
+
+- Seeing a registered red-team IP only establishes participant attribution. It cannot prove that the
+  current target or technique was authorized.
+- Participant identifiers are time-bounded and multi-valued. Dynamic IP, NAT, shared jump hosts,
+  proxying and identifier reassignment must yield `ambiguous/conflict` rather than forced identity.
+- Ordinary analyst context should expose role/team refs; personal identity and official roster details
+  require stricter access control and remain auditable.
+- Do not mark red-team infrastructure as globally benign or erase its IOC history. Preserve the
+  detection and attach campaign-scoped operational context.
+- The canonical disposition remains `closed_benign_true_positive`; use a reason code such as
+  `authorized_security_exercise` instead of creating one status per campaign type.
+
 ---
 
 ## 8. Data Contracts / 数据契约
@@ -614,6 +789,13 @@ not require rewriting core contracts.
 | `InvestigationContext` | Shared context for Web/TUI/Lead Agent | Stable but may gain new sections |
 | `UnifiedInvestigationView` | Read-optimized investigation projection | Stable as display/read model |
 | `InvestigationEvidence` | Tool/MCP evidence record | Stable |
+| `GovernedContextFact` | Shared typed fact envelope and lifecycle | Planned stable contract |
+| `AuthorizedActivityFact` | Time-, scope- and source-bounded authorized activity | Planned stable contract |
+| `SecurityExerciseCampaignFact` | Campaign scope and Rules of Engagement | Planned typed fact |
+| `ExerciseParticipantFact` | Event-time participant role and identifier mapping | Planned typed fact |
+| `ParticipantAttributionResult` | Deterministic participant identity resolution | Planned typed result |
+| `AuthorizationQuery` | Vendor-neutral event-time matching input | Planned stable contract |
+| `AuthorizationMatchResult` | Explainable deterministic match result | Planned stable contract |
 | `SocDomainTriageResult` | Domain-level triage result | Stable |
 | `SocDomainFinding` | Scenario-level finding | Stable taxonomy version required |
 | `SocAgentActionProposal` | Agent proposal | Stable |
@@ -647,6 +829,8 @@ Main persistence categories:
 | Investigation evidence | Read-only tool/MCP evidence | Reusable in context, not memory by default |
 | Approval requests/grants | High-risk action boundary | Pending request and one-time grant |
 | External dispositions | Old-platform status/reason sync | Idempotent by external event key |
+| Governed context facts | Typed operational facts | Versioned, expiring, revocable, source-referenced |
+| Context match audit | Authorization/attribution/applicability result | Replayable against event time and policy version |
 | Memory candidates | Pending learning | Human review required |
 | Confirmed memory | Reviewed experience | Retrieval-enabled by policy |
 | Events/audit | Traceability | Required for production trust |
@@ -702,6 +886,9 @@ Rules:
 - Correction, review note, domain finding, external feedback, and repeated pattern can all create candidates.
 - Confirmation requires explicit human action through `SocMemoryService`.
 - Confirmed memory retrieval is budgeted and reasoned; it is not dumped blindly into prompts.
+- Active operational facts are not confirmed memory. Memory may describe how a scanner or exercise
+  team tends to behave, but only governed-context services and typed matchers can determine identity,
+  campaign applicability and authorization for a specific event time.
 - Wiki/OKF-style displays can be exported later from DB memory, but DB remains the source of truth.
 
 ---
@@ -855,7 +1042,10 @@ Acceptance criteria for the first complete demo:
 | Keep SOC code under `backend/soc_agent/` | Avoid invasive upstream fork changes |
 | Keep entry surfaces thin | Prevent CLI/Web/TUI/Kafka logic divergence |
 | Reuse DeerFlow `create_chat_model` for Runtime LLM | One provider/config/tracing implementation; no SOC-specific SDK client |
-| Centralize operational decisions in `SocDecisionPolicy` | Keep confidence provenance, evidence guards, review routing, and policy version deterministic and auditable |
+| Centralize detection decisions in `SocDecisionPolicy` | Keep confidence provenance, grounding guards and detection review reasons deterministic and auditable |
+| Reconcile operational disposition separately and deterministically | Preserve `detection truth != operational disposition`; authorization may make a true positive benign but cannot make the behavior disappear |
+| Use a typed `GovernedContextFact` envelope | Reuse tenant, event-time validity, source, status, revocation and audit without creating an untyped universal fact matcher |
+| Compose exercise attribution and authorization | A red/blue/white-team identity match does not by itself authorize the observed target or behavior |
 | Use canonical `AlertInput` | Vendor-neutral core |
 | Use adapters for PingAn and future vendors | Extensible source integration |
 | Use read-only investigation evidence first | Makes tools useful before risky automation |
@@ -898,6 +1088,17 @@ Acceptance criteria for the first complete demo:
 - Is tenant/vendor specificity represented safely?
 - Is retrieval explainable and budgeted?
 - Can the memory be rejected, expired, or deprecated?
+
+### Governed Context Fact Review / 受治理上下文事实评审
+
+- Is this an operational fact rather than evidence, policy or a reusable investigation lesson?
+- Is the subtype contract explicit, with a deterministic matcher/resolver?
+- Are tenant/environment, subject, target, behavior and event-time scope explicit?
+- Is the source authoritative, versioned, fresh and auditable?
+- Will partial, conflicting, expired or out-of-scope matches still reach a human?
+- Does the result preserve detection truth and only propose the canonical operational disposition?
+- Can the fact be suspended, revoked or expired without editing prompts or code?
+- For exercises, are campaign, participant attribution and authorized activity independently proven?
 
 ### Tool/MCP Review / 工具评审
 

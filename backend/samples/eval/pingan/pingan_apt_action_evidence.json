@@ -1,11 +1,11 @@
 {
   "schema_version": "soc.pingan_capability_eval_fixture.v1",
   "sample_id": "pingan-apt-action-evidence",
-  "scenario": "APT direction conflict plus read-only threat intelligence and security-tag checks",
+  "scenario": "APT proxy-aware direction plus read-only threat intelligence and security-tag checks",
   "source_path": "backend/samples/alerts/pingan_legacy_apt.json",
   "expected_source_type": "ndr",
-  "min_conflict_count": 1,
-  "expected_conflict_types": ["source_candidate_conflict"],
+  "min_conflict_count": 0,
+  "expected_conflict_types": [],
   "mock_records": {
     "threat_intel.ip_reputation.lookup": [
       {

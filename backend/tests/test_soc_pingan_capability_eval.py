@@ -27,8 +27,8 @@ def test_pingan_capability_eval_runs_default_fixtures() -> None:
 
     by_sample = {result.sample_id: result for result in report.results}
     apt = by_sample["pingan-apt-action-evidence"]
-    assert apt.conflict_count >= 1
-    assert "source_candidate_conflict" in apt.conflict_types
+    assert apt.conflict_count == 0
+    assert apt.conflict_types == []
 
     edr = by_sample["pingan-edr-action-evidence"]
     assert all(action.passed for action in edr.actions)

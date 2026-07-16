@@ -108,9 +108,15 @@ def build_evidence_coverage_report(
         if evidence is None:
             omissions.extend(EvidenceCoverageOmission(field_path=path, reason="message_not_selected_for_bounded_analysis") for path in message_paths)
             continue
-        projected_paths.extend(message_paths)
-        projected_paths.extend(decoded_paths_by_message[source_path])
-        projected_paths.extend(repaired_paths_by_message[source_path])
+        projected_paths.extend(evidence.projected_field_paths)
+        sanitized_paths.extend(evidence.sanitized_field_paths)
+        omissions.extend(
+            EvidenceCoverageOmission(
+                field_path=path,
+                reason=evidence.omission_reasons.get(path, "bounded_projection_budget"),
+            )
+            for path in evidence.omitted_field_paths
+        )
         if evidence.truncated:
             truncated_evidence_paths.append(source_path)
 
@@ -132,6 +138,18 @@ def build_evidence_coverage_report(
                     )
                 )
 
+    coverage_extension = alert.extensions.get("analysis_context_coverage")
+    if isinstance(coverage_extension, Mapping):
+        deferred_sources = coverage_extension.get("deferred_sources")
+        if isinstance(deferred_sources, list):
+            for value in deferred_sources:
+                if not isinstance(value, Mapping):
+                    continue
+                field_path = value.get("field_path")
+                reason = value.get("reason")
+                if isinstance(field_path, str) and field_path and isinstance(reason, str) and reason:
+                    omissions.append(EvidenceCoverageOmission(field_path=field_path, reason=reason))
+
     canonical_paths = [item.selected_from for item in fact.canonical_field_provenance]
     fact_paths = [item.evidence_path for item in fact.role_claims]
     scenario_paths = [path for item in fact.scenario_hypotheses for path in item.evidence_paths]
@@ -144,7 +162,7 @@ def build_evidence_coverage_report(
         elif observation.status is MessageSchemaStatus.DEGRADED:
             warnings.append(f"degraded message schema: {observation.source_path}")
     if truncated_evidence_paths:
-        warnings.append("bounded evidence truncation prevents exact leaf-level inclusion accounting")
+        warnings.append("bounded evidence omitted one or more fields; inspect coverage omissions for exact paths")
     warnings.extend(f"unmapped high-value evidence: {item.field_path} -> {item.expected_target}" for item in high_value_gaps)
 
     parsed_paths = _sorted_unique(parsed_paths)

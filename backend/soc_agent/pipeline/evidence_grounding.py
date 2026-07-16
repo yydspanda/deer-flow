@@ -42,6 +42,23 @@ _SOURCE_PREFIXES: dict[str, tuple[str, ...]] = {
     "skill_context": ("skill_context",),
 }
 _COMPOSITE_SEPARATOR_RE = re.compile(r"\s*[,;，；]\s*")
+_OUTCOME_CLAIM_RE = re.compile(
+    r"(?:攻击成功|利用成功|成功利用|写入成功|执行成功|已写入|已执行|已入侵|已攻陷|"
+    r"successful(?:ly)?\s+(?:exploit|execut|writ)|confirmed\s+compromise|command\s+executed|file\s+(?:was\s+)?written)",
+    re.IGNORECASE,
+)
+_OUTCOME_NEGATION_TERMS = ("未", "无", "无法", "不能", "是否", "尚未", "没有", "缺少", "缺乏", "不")
+_OUTCOME_ARTIFACT_KEYS = frozenset(
+    {
+        "command_output",
+        "created_file",
+        "execution_result",
+        "file_created",
+        "process_id",
+        "shell_output",
+        "write_result",
+    }
+)
 
 
 def ground_analysis_evidence(
@@ -68,6 +85,8 @@ def ground_analysis_evidence(
     warnings = []
     if ungrounded_count:
         warnings.append(f"{ungrounded_count} analyzer evidence item(s) could not be grounded in bounded context")
+    if _has_unproven_outcome_claim(analysis, request):
+        warnings.append("analysis contains an outcome-success claim without an explicit bounded outcome artifact")
     return AnalysisEvidenceGroundingReport(
         total_count=len(items),
         grounded_count=grounded_count,
@@ -125,6 +144,8 @@ def _source_prefixes(
     *,
     request: LLMAnalysisRequest,
 ) -> tuple[str, ...] | None:
+    if _COMPOSITE_SEPARATOR_RE.search(source):
+        return None
     normalized = source.strip().lower().replace(" ", "_")
     aliases = _SOURCE_PREFIXES.get(normalized)
     if aliases is not None:
@@ -142,6 +163,48 @@ def _source_prefixes(
     return None
 
 
+def _has_unproven_outcome_claim(
+    analysis: AnalysisResult,
+    request: LLMAnalysisRequest,
+) -> bool:
+    analysis_text = " ".join(
+        [
+            analysis.summary,
+            analysis.reason,
+            analysis.recommended_action,
+            *(item.description for item in analysis.evidence),
+        ]
+    )
+    if not _contains_positive_outcome_claim(analysis_text):
+        return False
+    context = project_analysis_context(request)
+    keys = _mapping_keys(context)
+    return not bool(keys & _OUTCOME_ARTIFACT_KEYS)
+
+
+def _contains_positive_outcome_claim(value: str) -> bool:
+    for match in _OUTCOME_CLAIM_RE.finditer(value):
+        prefix = value[max(0, match.start() - 12) : match.start()]
+        if any(term in prefix for term in _OUTCOME_NEGATION_TERMS):
+            continue
+        return True
+    return False
+
+
+def _mapping_keys(value: Any) -> set[str]:
+    if isinstance(value, Mapping):
+        keys = {str(key).lower() for key in value}
+        for item in value.values():
+            keys.update(_mapping_keys(item))
+        return keys
+    if isinstance(value, list):
+        keys: set[str] = set()
+        for item in value:
+            keys.update(_mapping_keys(item))
+        return keys
+    return set()
+
+
 def _source_evidence_prefixes(
     source: str,
     request: LLMAnalysisRequest,
@@ -153,16 +216,21 @@ def _source_evidence_prefixes(
     for context_prefix, evidence in evidence_items:
         if source == evidence.source_path:
             return (context_prefix,)
-        parsed_prefix = f"{evidence.source_path}#parsed"
-        if source.startswith(f"{parsed_prefix}."):
-            suffix = source[len(parsed_prefix) + 1 :]
-            if suffix.split(".", 1)[0] in {
-                "fields",
-                "decoded_fields",
-                "repaired_fields",
-            }:
-                return (f"{context_prefix}#parsed.{suffix}",)
-            return tuple(f"{context_prefix}#parsed.{root}.{suffix}" for root in ("fields", "decoded_fields", "repaired_fields"))
+        for namespace, content_root in (
+            ("parsed", "fields"),
+            ("decoded", "decoded_fields"),
+            ("repaired", "repaired_fields"),
+        ):
+            source_prefix = f"{evidence.source_path}#{namespace}"
+            if source.startswith(f"{source_prefix}."):
+                suffix = source[len(source_prefix) + 1 :]
+                if namespace == "parsed" and suffix.split(".", 1)[0] in {
+                    "fields",
+                    "decoded_fields",
+                    "repaired_fields",
+                }:
+                    return (f"{context_prefix}#parsed.{suffix}",)
+                return (f"{context_prefix}#parsed.{content_root}.{suffix}",)
     return ()
 
 

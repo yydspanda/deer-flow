@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 Runtime 工程闭环完成；Phase 2 correlation / domain triage 起步 |
-| 当前目标 | Runtime 已具备 bounded live LLM、证据落地、typed failure/retry 和原子写入；首份 5 样本真实模型 pending label set 已生成，下一步由分析师逐条给出真实结论，不把未校准 confidence 接入自动放行 |
+| 当前目标 | 首份同版本 5 样本字段谱系审阅与集中修复已完成：PingAn 字段语义、多 Message observation、进程链、实体边界、精确 bounded projection、grounding 和 outcome guard 均已回归；下一步实现 typed governed-context facts，使授权活动影响运营处置而不污染检测真值 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 审阅 `backend/.deer-flow/soc-runtime-validation/step-09-confidence-labeling/label-set.pending.json` 的 5 条预测，填写 accepted/excluded 结论与依据；通过 `soc eval labels validate` 后再运行离线 calibration。 |
+| 当前下一刀 | `GF-01`：实现 vendor-neutral `GovernedContextFact` envelope、lifecycle service 和 repository contract；先不实现万能 matcher，也不把 `work04/java -> chattr` 等平安业务真值硬编码进 Runtime。 |
 
 ## 当前待办列表
 
@@ -65,7 +65,8 @@
 | 11 | DeerFlow-backed live Runtime LLM | Done for MVP | 新增 `DeerFlowLLMChatClient`、`SocLLMSettings`，统一装配 analyze/replay/demo/Kafka；offline eval 和 normalize suggest 支持 live model | 显式选择模型；未知模型 fail-fast；输出过 JSON/schema/domain validation；trace 记录安全 metadata/usage；模型不能执行动作 |
 | 11.1 | Deterministic decision policy / confidence guard | Done for uncalibrated MVP | 新增 `SocDecisionPolicy`，把 raw analyzer score、来源、校准状态、证据状态、结构化 review reasons 和 policy version 分开；mock/failed evidence 不参与 domain/scenario 置信度 | stub/LLM self-report 当前全部进入复核；误报、冲突、schema 降级/不支持、关键证据缺口、截断等 guard 不会被高分覆盖；summary/queue/audit 保留原因 |
 | 11.2 | Runtime production hardening | Done | 显式 `skill_context` trace、共享 bounded projection、analysis evidence grounding、prompt/output/schema hard bounds、LLM concurrency/RPM admission、typed sanitized failure、Kafka retry/dead-letter 语义、run/summary/review/audit 原子 bundle | 未落地证据强制复核；可重试失败不 commit offset/不制造工单噪声；不可重试失败进入 ReviewQueue/DLQ；SQL 故障回归证明四类主写入全部回滚 |
-| 11.3 | Governed confidence label set | Partial / analyst review pending | 已新增 `soc eval labels prepare/validate`、traceable label contract、single-scope/duplicate replay guard，并生成 5 条真实 DeepSeek pending labels | 5 条均需分析师填写真实 verdict/reviewer/time/reason；校准前不得有 pending、重复 input hash 或混合 model/prompt/pipeline；小样本 profile 仍只作离线 smoke |
+| 11.3 | Governed confidence label set | Done for initial 5-sample baseline / 3 accepted, 2 excluded | 已完成 5 条 DeepSeek 同 scope 标签审阅：2 false positive、1 exploit-attempt true positive accepted；2 条决定性授权/内部业务上下文缺失样本保留业务真值但 excluded；validator 返回 `calibratable=true` | 标签集无 pending/重复 input hash/混合 model-prompt-pipeline scope；accepted 同时包含正负类；仅 3 条 accepted，仍只允许离线 smoke，不能生成生产阈值或自动放行 |
+| 11.4 | Governed context fact lifecycle | Planned / design fixed | `GF-01` typed envelope/service/repository；`AA-01` authorization fact + event-time matcher；`EX-01` campaign/participant/attribution；`DP-01` shadow disposition reconciliation；`EV-01` detection/disposition/calibration eligibility split；随后补 ReviewQueue/Web/TUI/eval 和 gated auto-close | 公共 lifecycle 可复用但 matcher 强类型；护网必须独立证明 campaign、participant 和 authorization；exact chain 才可提议 `closed_benign_true_positive`；partial/new/expired/conflict/unavailable 进人工；不修改 detection truth，不用 memory/IP 永久白名单代替 |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Partial | normalization 运维页、Gateway bounded metrics 和 Kafka JSONL issue 摘要已完成；全局 Kafka/review/approval/runtime/算力 Prometheus exporter 和态势面板仍后置 | 当前 maintenance issue 可见；全系统运行态势不阻塞 SOC Agent Alpha |
@@ -177,6 +178,93 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-16 — Five-sample field-lineage repair completed
+
+- PingAn Adapter 修复：
+  - 多条 raw message 形成独立 network/process observations，并以 `observation_scope` 约束角色冲突；
+    不再把不同请求的 source/destination 当作同一会话互相冲突。
+  - HIDS `external_ip=1.1.1.1` 作为 `SourceFieldSemantic` 标记为青藤默认占位值，禁止进入
+    canonical host IP、实体、IOC 和网络对端推理；完整保留 `systemd -> java -> chattr` 节点、PID 和每条消息。
+  - `host_md5` 只保留为主机身份摘要语义，不再映射到 file hash；NDR `attack_sip/alarm_sip`
+    不再冒充 packet source/destination；SOAR owner/user 只留在 legacy enrichment，不再污染事件 actor。
+  - related alert、SOAR 和 workflow 上下文仍保留在完整 raw payload，并通过 coverage 明确标为 deferred
+    external context；它们不会静默消失，也不会无界进入基础 Prompt。
+- Vendor-neutral Runtime 修复：
+  - `FactReconstructor` 仅在同一 observation 内报告角色矛盾；跨 observation 保留并列事实。
+  - XFF chain 拆成独立 IP；相对路径、`.html/.php/.txt` 文件名不再误识别为 domain。
+  - `BoundedAnalysisEvidence v2` 以结构化 leaf 投影保留合法 JSON，优先跨消息保留高价值字段，精确记录
+    projected/sanitized/omitted paths 和 omission reasons；coverage 使用实际投影结果，不再把候选字段误报为已送模。
+- LLM 边界修复：
+  - Prompt `soc-analysis-v3` 要求一条 evidence 对应一个精确 source path，禁止 description 借同级字段
+    引入未引用事实，并明确 HTTP 200 / workflow state 不能证明漏洞利用、命令执行或文件写入成功。
+  - grounding 支持 exact `#parsed/#decoded/#repaired` 路径，拒绝 composite source，并把无结果证据支撑的
+    正向成功声明标为 `unproven_outcome_claim`；否定和不确定表达不会误触发。
+  - JSON parser v4 对模型偶发返回的 bounded dict/list evidence value 做有审计、有限长、无损 JSON
+    scalar repair；超限对象继续 schema failure。
+- 验证：`ruff format` 无变化，`ruff check` 通过，SOC 全量测试 `431 passed, 1 warning`；唯一 warning
+  是 DeerFlow MCP cache 已有的 asyncio deprecation。5 条 deterministic replay 和两条 DeepSeek live replay
+  保存在 gitignored `backend/.deer-flow/soc-runtime-validation/step-10-five-sample-repair/`。
+- 结果边界：HIDS live model 已正确忽略 `1.1.1.1` 并识别两次不同 PID 的进程执行，但仍给出
+  `suspicious`，因为“周期性内部预期行为”尚未作为 event-time governed fact 进入 bounded input。
+  该业务真值不能写死在 PingAn Adapter/通用 Runtime；下一刀由 `GF-01 -> AA-01` 提供可审计匹配。
+
+### 2026-07-16 — Governed context fact and calibration boundary decision
+
+- 问题：逐告警人工确认授权扫描、内部服务和运维活动不可扩展；但把一次确认写成永久 IP 白名单、
+  confirmed memory 或 Prompt 又会造成跨时间/目标/行为误放行。
+- 决策：新增 vendor-neutral `GovernedContextFact` typed envelope，由 `SocGovernedContextService`
+  管理 propose/activate/suspend/revoke/expire/version/query；`AuthorizedActivityFact` 是第一个类型，
+  通过 `SocAuthorizedActivityService` + deterministic matcher 做 subject/target/behavior/event-time 匹配。
+  公共 lifecycle 可以复用，但每种 fact 必须有强类型 payload 和专用 matcher，禁止万能自然语言 matcher。
+- 护网扩展：新增 planned `SecurityExerciseCampaignFact`、`ExerciseParticipantFact` 和
+  `ParticipantAttributionResult`。红/蓝/白队 IP 只能证明事件时间内的 participant attribution；必须再匹配
+  campaign、目标、行为、禁用技术和授权，才能提议 `authorized_security_exercise` 良性真阳处置。
+- 语义分离：detection truth 与 operational disposition 分开。真实攻击/操作行为仍为
+  `true_positive`；在事件时间、范围和来源都 exact match 时，只提议
+  `closed_benign_true_positive`，不得改写成 `false_positive`。
+- 人力策略：一次人工确认先形成有时效的 fact proposal，经授权角色激活；后续 exact match 复用，
+  仅 partial/new pattern/scope mismatch/expired/revoked/conflict/source unavailable 和随机审计样本进人工。
+- 校准策略：业务真值已知但决定性授权事实没有出现在当次 bounded model input 的样本，保留
+  `actual_verdict/actual_disposition`，但标记 `excluded_missing_decisive_context`，不进入 analyzer
+  Brier/ECE/threshold fitting；该样本转入 enrichment coverage 和 end-to-end disposition eval。
+- 推进顺序：当前先完成同版本 5 样本字段谱系审阅与集中修复，之后按
+  `GF-01 -> AA-01 -> EX-01 -> DP-01 -> EV-01` 实现；
+  auto-close 前必须经过 shadow precision、analyst override、freshness、随机抽样和 rollback gate。
+
+### 2026-07-16 — Live sample field-lineage audit in progress
+
+- 审阅方法固定为：`raw alert/message -> parsed/decoded/repaired -> canonical entities -> entity extraction -> fact/scenario -> bounded LLM evidence -> model decision`，不只看最终 verdict。
+- 人工标签状态：
+  - `apt-1965449`：业务确认 `vendor=pingan_ad`、`domain=guanbi`、HeadlessChrome 为平安内部自动化/测试客户端；模型 `suspicious`，人工真值 `false_positive`。
+  - `apt-2025642`：业务确认 `paic.com.cn/pws/askbob-gpt` 为平安内部 LLM 调用；packet bytes 可独立验证 `30.116.114.150 -> 30.174.29.44:9092`；模型 `suspicious`，人工真值 `false_positive`。
+  - `apt-2026494`：真实 PbootCMS/PHP 利用载荷成立，但来源是否为授权扫描/渗透测试尚未确认；需区分 `true_positive` detection 与 `closed_benign_true_positive` operational disposition，当前保持 pending。
+  - `apt-2026494` 最终 detection label：两条独立 HTTP request 都包含 PbootCMS/PHP `file_put_contents` + `file_get_contents` 文件写入利用载荷，因此 exploit attempt 为 `true_positive`；Nginx/ASP.NET 返回 IIS default page，结合 `失败企图/企图` 只能证明 HTTP 200，不能证明 PHP 执行或 webshell 写入成功。是否为授权扫描仅影响 operational disposition，不影响 detection label，因此该样本 accepted。
+  - `edr-1965810`：业务确认 `30.162.29.85` 为平安内部服务，并以 RemoteRegistry 已授权作为该验证样本真值；行为检测为 `true_positive`、运营处置为 `closed_benign_true_positive`。授权事实未出现在当次 bounded input，因此记录真值但以 `excluded` 排除出 analyzer confidence calibration，待 enrichment 后重跑。
+  - `hids-1965448`：业务确认 `work04` 周期性 `java(3065) -> chattr` 为预期内部业务，`external_ip=1.1.1.1` 是青藤 HIDS 默认值而非网络对端/IOC；行为检测为 `true_positive`、运营处置为 `closed_benign_true_positive`。周期业务、历史人工结论和字段默认值语义未进入 bounded input，因此标记 `excluded`。
+  - 只更新 gitignored `label-set.pending.json` 的 `actual_verdict/review_status/reviewer/time/reason`；尚未修改 Adapter/Runtime，也未重跑模型。
+- 已确认的修复台账：
+  - PingAn Adapter：移除 `host_md5 -> file.md5` 错误映射；补 rule version/MITRE aliases/资产上下文；把 PingAn 外层加工字段与 Message 原始网络观察分层；将 `packet_data` 接入通用 packet evidence contract；不得把受害/source IP 默认写成 IOC。
+  - PingAn EDR Adapter：区分 asset/logged-on owner、process user、parent-process user，不能把 `WANGJIAN191`、`LOCAL SERVICE`、`SYSTEM` 压成一个 actor；保留 parent hash、process ids、MAC 和 event interval；把仅在描述中的 `ntoskrnl.exe` 标为 vendor-described process observation，而不是与 `svchost.exe` 合并。
+  - Vendor-neutral Runtime：按 evidence layer/trust 解释冲突，不隐藏冲突也不让低信任 fallback 无差别推翻高信任观察；为 packet/session/proxy hop 和 per-message observation scope 提供通用证据语义；同一事件的字段 aliases 不能冒充独立佐证；修正 `代码执行 -> web_attack` 的过宽规则。
+  - Entity extraction：文件名（`*.html/*.php/*.txt/*.exe`）不能误识别为 domain；XFF/proxy chain、payload-embedded IP/file/path 与真实 network peer 必须使用不同 role。
+  - LLM validation：结构化证据以外的 summary/reason 也不得引入未落地地理/资产结论；HTTP 200 不等于认证、利用或写文件成功。
+- `hids-1965448` 新增集中修复项：
+  - `relatedAlertList` 和 SOAR enrichment 虽保留在 raw `input_payload`，但未进入 bounded context，coverage 却错误显示 `omissions=[]` / `high_value_gaps=[]`；后续要输出显式 omitted/external-context coverage，并由 correlation/investigation context 受控接入，而不是直接塞进 base Runtime prompt。
+  - 历史 disposition 必须区分人工结论与 `zeusai` 自动继承结论，避免“根据历史忽略”循环自证；保留 operator/source/lineage 和独立证据计数。
+  - HIDS process evidence 不能只压成 `java -> chattr`；应保留 per-message `systemd/java/chattr` 节点、PID、事件时间和稳定/变化字段，供周期模式关联。
+  - `external_ip=1.1.1.1` 必须在 PingAn HIDS adapter 标为 default/placeholder 并禁止进入 canonical host IP、IOC 和 LLM 网络对端推理；source/message-header/host/UCMDB aliases 需要 typed role 或 conflict explanation。
+  - Evidence grounding 不能只验证 cited value；description 使用另一个 source 的 spring/jackson 规则和“隐藏恶意文件”等推断时，必须校验 citation/claim lineage，不能因 value 存在就全部记为 grounded。
+- `apt-2026494` 新增集中修复项：
+  - 两条独立请求分别来自 sensor-observed `30.180.248.178/.177`，共享 XFF chain `182.16.91.214,30.185.76.57`；当前被压成一个 canonical source 加 alternative/conflict。应保留 per-message network observations、trusted-proxy hops 和 original-client candidate，不能把多请求或代理链默认当字段冲突。
+  - bounded evidence 截断导致第二条请求中最关键的 request start-line 无法 grounding；投影预算应按 message 保留高价值字段，再裁剪低价值长文本，不能让第一条 message 吃完预算。
+  - `news.html`、`fireworks123.php`、`shell.txt` 被误抽成 domain，`host_md5` 被误映射为 file MD5；分别修 entity parser 和 PingAn adapter mapping。
+  - HTTP 200 必须标为 transport/application response，不等于模板执行、文件写入或 webshell 成功；response body/server stack、`host_state=企图`、`失败企图` 应进入 success-semantic guard。
+  - `is_blocked/is_banned` 和“告警转生产”是 vendor workflow/action observation，不是攻击成功、处置完成或 analyst verdict；需要 typed provenance，不能混入 detection truth。
+  - composite citation（一个 evidence item 声明多个 source path）当前 grounding 失败；contract/prompt 应要求结构化 source refs 或一条 evidence 对应一个可解析路径，description 中的推断也要单独标注。
+- 实施顺序：先完成同一代码版本下的 5 条审阅，再集中修复、补回归测试、重跑 5 条并输出 before/after diff，避免边审边改导致样本不可比。
+- 人力扩展原则：不要求逐告警确认。优先查询 authoritative security tag/asset/change/scan-task evidence；按 detection/scenario/entity/authorization scope 聚类，一次人工结论只在明确时间、目标和任务范围内复用；只把新模式、范围不匹配、授权过期、证据冲突和随机审计样本送人工。LLM/历史反馈只能提 suppression/memory candidate，不能直接生成永久 IP 白名单。
+- 当前 label validation：5 条中 3 accepted、2 excluded、0 pending，accepted 真值为 2 `false_positive` + 1 `true_positive`，`calibratable=true` 且无 warning；样本量仍过小，只用于离线 smoke 和修复前后比较，不接生产 profile。
 
 ### 2026-07-15 — Governed confidence labels and live-model reliability follow-up
 

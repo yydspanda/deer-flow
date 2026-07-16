@@ -12,8 +12,9 @@ from pydantic import ValidationError
 
 from soc_agent.contracts import AnalysisResult
 
-ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v3"
+ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v4"
 MAX_ANALYSIS_RESPONSE_CHARS = 100_000
+MAX_STRUCTURED_EVIDENCE_VALUE_CHARS = 4_000
 
 _THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.IGNORECASE | re.DOTALL)
 _OPEN_THINK_RE = re.compile(r"<think\b[^>]*>", re.IGNORECASE)
@@ -213,16 +214,24 @@ def _normalize_analysis_result_shape(data: dict[str, Any]) -> tuple[dict[str, An
             if not isinstance(item, dict):
                 continue
             value = item.get("value")
-            if not (isinstance(value, list) and len(value) == 1 and _is_evidence_scalar(value[0])):
-                continue
             normalized_item = dict(item)
-            normalized_item["value"] = value[0]
+            if isinstance(value, list) and len(value) == 1 and _is_evidence_scalar(value[0]):
+                normalized_item["value"] = value[0]
+                repair_name = "single_item_array_to_scalar"
+            elif isinstance(value, (dict, list)):
+                serialized = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                if len(serialized) > MAX_STRUCTURED_EVIDENCE_VALUE_CHARS:
+                    continue
+                normalized_item["value"] = serialized
+                repair_name = "structured_value_to_json_string"
+            else:
+                continue
             normalized_evidence[index] = normalized_item
             repair_log.append(
                 {
                     "stage": "schema_normalization",
                     "field": f"evidence[{index}].value",
-                    "repair": "single_item_array_to_scalar",
+                    "repair": repair_name,
                 }
             )
         normalized["evidence"] = normalized_evidence

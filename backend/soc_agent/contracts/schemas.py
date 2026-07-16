@@ -55,6 +55,7 @@ class DecisionReviewReason(StrEnum):
     TRUNCATED_ANALYSIS_EVIDENCE = "truncated_analysis_evidence"
     FACT_CONFLICT = "fact_conflict"
     UNGROUNDED_ANALYSIS_EVIDENCE = "ungrounded_analysis_evidence"
+    UNPROVEN_OUTCOME_CLAIM = "unproven_outcome_claim"
     ANALYSIS_FAILED = "analysis_failed"
 
 
@@ -1169,6 +1170,20 @@ class AlertClassification(BaseModel):
     labels: dict[str, str] = Field(default_factory=dict)
 
 
+class NetworkObservationRef(BaseModel):
+    """One network/session observation without collapsing adjacent raw events."""
+
+    observation_id: str = Field(min_length=1)
+    evidence_path: str = Field(min_length=1)
+    event_time: str | None = None
+    source_ip: str | None = None
+    destination_ip: str | None = None
+    src_port: int | None = None
+    dst_port: int | None = None
+    protocol: str | None = None
+    forwarded_chain: list[str] = Field(default_factory=list)
+
+
 class NetworkEntityRef(BaseModel):
     source_ip: str | None = None
     destination_ip: str | None = None
@@ -1178,6 +1193,27 @@ class NetworkEntityRef(BaseModel):
     direction: str | None = None
     domain: str | None = None
     url: str | None = None
+    observations: list[NetworkObservationRef] = Field(default_factory=list)
+
+
+class ProcessNodeRef(BaseModel):
+    """One process node observed in a source process tree."""
+
+    process_name: str = Field(min_length=1)
+    process_id: int | None = Field(default=None, ge=0)
+    process_path: str | None = None
+    command_line: str | None = None
+    username: str | None = None
+
+
+class ProcessObservationRef(BaseModel):
+    """One process observation with its source and full available ancestry."""
+
+    observation_id: str = Field(min_length=1)
+    evidence_path: str = Field(min_length=1)
+    event_time: str | None = None
+    host_name: str | None = None
+    nodes: list[ProcessNodeRef] = Field(default_factory=list)
 
 
 class ProcessEntityRef(BaseModel):
@@ -1186,6 +1222,7 @@ class ProcessEntityRef(BaseModel):
     command_line: str | None = None
     parent_process_name: str | None = None
     parent_command_line: str | None = None
+    observations: list[ProcessObservationRef] = Field(default_factory=list)
 
 
 class UserEntityRef(BaseModel):
@@ -1353,10 +1390,20 @@ class MessageSchemaObservation(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class SourceFieldSemantic(BaseModel):
+    """Adapter-owned meaning for a source field that must not be guessed by core."""
+
+    field_path: str = Field(min_length=1)
+    semantic_type: str = Field(min_length=1)
+    meaning: str = Field(min_length=1)
+    participates_in_entities: bool = False
+    participates_in_reasoning: bool = False
+
+
 class BoundedAnalysisEvidence(BaseModel):
     """Size-bounded evidence content allowed to enter an analysis node."""
 
-    schema_version: str = "soc.bounded_analysis_evidence.v1"
+    schema_version: str = "soc.bounded_analysis_evidence.v2"
     source_path: str = Field(min_length=1)
     layer: EvidenceLayer
     trust_level: EvidenceTrustLevel
@@ -1364,6 +1411,10 @@ class BoundedAnalysisEvidence(BaseModel):
     parser_name: str | None = None
     original_length: int = Field(default=0, ge=0)
     truncated: bool = False
+    projected_field_paths: list[str] = Field(default_factory=list)
+    sanitized_field_paths: list[str] = Field(default_factory=list)
+    omitted_field_paths: list[str] = Field(default_factory=list)
+    omission_reasons: dict[str, str] = Field(default_factory=dict)
 
 
 class FieldTrust(BaseModel):
@@ -1400,6 +1451,7 @@ class RoleClaim(BaseModel):
     value: str = Field(min_length=1)
     claim_type: RoleClaimType
     evidence_path: str = Field(min_length=1)
+    observation_scope: str | None = None
     source_layer: EvidenceLayer
     evidence_trust: EvidenceTrustLevel = EvidenceTrustLevel.UNKNOWN
     semantic_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -1584,6 +1636,7 @@ class LLMAnalysisRequest(BaseModel):
     primary_evidence: BoundedAnalysisEvidence | None = None
     supplementary_evidence: list[BoundedAnalysisEvidence] = Field(default_factory=list)
     evidence_coverage: EvidenceCoverageReport = Field(default_factory=EvidenceCoverageReport)
+    source_field_semantics: list[SourceFieldSemantic] = Field(default_factory=list)
     conflict_count: int = Field(default=0, ge=0)
     conflict_types: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

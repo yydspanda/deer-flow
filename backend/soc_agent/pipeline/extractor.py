@@ -5,11 +5,35 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import re
+from urllib.parse import urlsplit
 
 from soc_agent.contracts import AlertInput, EntityKind, EntityMention, ExtractedEntities
 
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 DOMAIN_RE = re.compile(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b")
+_FILE_LIKE_SUFFIXES = frozenset(
+    {
+        "asp",
+        "aspx",
+        "css",
+        "dll",
+        "exe",
+        "html",
+        "jar",
+        "js",
+        "json",
+        "jsp",
+        "log",
+        "php",
+        "py",
+        "sh",
+        "so",
+        "txt",
+        "xml",
+        "yaml",
+        "yml",
+    }
+)
 
 
 def extract_entities(alert: AlertInput) -> ExtractedEntities:
@@ -34,12 +58,13 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
         role="destination_ip",
         evidence_path="entities.network.destination_ip",
     )
-    _add_ip_mention(
-        mentions,
-        http.x_forwarded_for,
-        role="x_forwarded_for",
-        evidence_path="entities.http.x_forwarded_for",
-    )
+    for value in re.split(r"\s*[,;]\s*", http.x_forwarded_for or ""):
+        _add_ip_mention(
+            mentions,
+            value,
+            role="x_forwarded_for",
+            evidence_path="entities.http.x_forwarded_for",
+        )
     for value in host.ip_addresses:
         _add_ip_mention(
             mentions,
@@ -76,30 +101,24 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
         role="http_host",
         evidence_path="entities.http.host",
     )
-    for value in DOMAIN_RE.findall(process.command_line or ""):
-        _add_mention(
-            mentions,
-            EntityKind.DOMAIN,
-            value,
-            role="process_command_line_domain",
-            evidence_path="entities.process.command_line",
-        )
-    for value in DOMAIN_RE.findall(network.url or ""):
-        _add_mention(
-            mentions,
-            EntityKind.DOMAIN,
-            value,
-            role="network_url_domain",
-            evidence_path="entities.network.url",
-        )
-    for value in DOMAIN_RE.findall(http.url or ""):
-        _add_mention(
-            mentions,
-            EntityKind.DOMAIN,
-            value,
-            role="http_url_domain",
-            evidence_path="entities.http.url",
-        )
+    _add_domains_from_text(
+        mentions,
+        process.command_line,
+        role="process_command_line_domain",
+        evidence_path="entities.process.command_line",
+    )
+    _add_url_domain(
+        mentions,
+        network.url,
+        role="network_url_domain",
+        evidence_path="entities.network.url",
+    )
+    _add_url_domain(
+        mentions,
+        http.url,
+        role="http_url_domain",
+        evidence_path="entities.http.url",
+    )
 
     _add_mention(mentions, EntityKind.URL, network.url, role="network_url", evidence_path="entities.network.url")
     _add_mention(mentions, EntityKind.URL, http.url, role="http_url", evidence_path="entities.http.url")
@@ -233,13 +252,62 @@ def _add_mention(
     )
 
 
+def _add_url_domain(
+    mentions: list[EntityMention],
+    value: str | None,
+    *,
+    role: str,
+    evidence_path: str,
+) -> None:
+    if not value:
+        return
+    parsed = urlsplit(value)
+    if not parsed.scheme and not value.startswith("//"):
+        return
+    _add_mention(
+        mentions,
+        EntityKind.DOMAIN,
+        parsed.hostname,
+        role=role,
+        evidence_path=evidence_path,
+    )
+
+
+def _add_domains_from_text(
+    mentions: list[EntityMention],
+    value: str | None,
+    *,
+    role: str,
+    evidence_path: str,
+) -> None:
+    for candidate in DOMAIN_RE.findall(value or ""):
+        if candidate.rsplit(".", 1)[-1].lower() in _FILE_LIKE_SUFFIXES:
+            continue
+        _add_mention(
+            mentions,
+            EntityKind.DOMAIN,
+            candidate,
+            role=role,
+            evidence_path=evidence_path,
+        )
+
+
 def _normalize_entity_value(kind: EntityKind, value: str | None) -> str | None:
     if value is None:
         return None
     normalized = str(value).strip()
     if not normalized:
         return None
-    if kind in {EntityKind.DOMAIN, EntityKind.URL}:
+    if kind is EntityKind.DOMAIN:
+        candidate = normalized.lower().rstrip(".")
+        if ":" in candidate and candidate.count(":") == 1:
+            candidate = candidate.split(":", 1)[0]
+        if not DOMAIN_RE.fullmatch(candidate):
+            return None
+        if candidate.rsplit(".", 1)[-1] in _FILE_LIKE_SUFFIXES:
+            return None
+        return candidate
+    if kind is EntityKind.URL:
         return normalized.lower()
     if kind is EntityKind.FILE_HASH:
         return normalized.upper()

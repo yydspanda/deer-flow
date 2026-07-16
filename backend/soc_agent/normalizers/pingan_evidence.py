@@ -113,8 +113,12 @@ def _claims_for_fields(
         attacker_aliases = ()
         victim_aliases = impacted_aliases
     else:
-        source_aliases = ("sip", "source_ip", "src_addr")
-        destination_aliases = ("dip", "dst_addr")
+        # Zeus processed ``source_ip``/``src_addr`` may represent the original
+        # client recovered from a proxy chain rather than this session's
+        # observed source. Prefer the sensor's sip/dip pair when available;
+        # processed aliases remain fallback-only for message-less events.
+        source_aliases = ("sip",) if _claim_value(fields.get("sip")) else ("source_ip", "src_addr")
+        destination_aliases = ("dip",) if _claim_value(fields.get("dip")) else ("dst_addr",)
         impacted_aliases = ("victim", "alarm_sip")
         attacker_aliases = ("attacker", "attack_sip")
         victim_aliases = ("victim", "alarm_sip")
@@ -197,6 +201,7 @@ def _append_alias_claims(
     semantic_confidence: float,
     rationale: str,
 ) -> None:
+    observation_scope = _observation_scope(base_path)
     for alias in aliases:
         value = _claim_value(fields.get(alias))
         if value is None:
@@ -209,12 +214,18 @@ def _append_alias_claims(
                 value=value,
                 claim_type=claim_type,
                 evidence_path=evidence_path,
+                observation_scope=observation_scope,
                 source_layer=layer,
                 evidence_trust=trust,
                 semantic_confidence=semantic_confidence,
                 rationale=rationale,
             )
         )
+
+
+def _observation_scope(base_path: str) -> str:
+    source_path = base_path.split("#", 1)[0]
+    return source_path.removesuffix(".message")
 
 
 def _scenario_signals(

@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow / SOC 预警完整流转
 
-> Updated: 2026-07-14
+> Updated: 2026-07-16
 >
 > 本文只描述当前项目里的 SOC Agent 端到端运行过程、状态流转、数据写入和安全边界。
 >
@@ -77,6 +77,12 @@ flowchart TD
 9. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
    但不能改变 verdict、ReviewQueue 或分析成功状态。
 
+Planned boundary / 待实现边界：当前 `security_tag.lookup` 仍只是 `InvestigationEvidence`，不能自动
+证明身份、演练归属或某次行为已授权，也不能自动关单。typed governed-context facts、护网
+campaign/participant attribution、事件时间授权匹配和 `closed_benign_true_positive` shadow
+disposition 的目标设计见 `.notes/ai_soc/soc-agent-solution.md` Section 7.4；实现完成前，本图仍以人工
+ReviewQueue 为准。
+
 ## 2. Alert Analysis Pipeline / 预警分析流水线
 
 ```mermaid
@@ -113,14 +119,14 @@ flowchart TD
 
 | Step | English | 中文说明 | Output |
 |---|---|---|---|
-| `normalize` | Convert vendor payload to canonical alert | 把不同供应商、平安 Zeus envelope、EDR/APT/HIDS 原始字段转成统一 `AlertInput` | `AlertInput`, `NormalizationReport` |
+| `normalize` | Convert vendor payload to canonical alert | 把不同供应商、平安 Zeus envelope、EDR/APT/HIDS 原始字段转成统一 `AlertInput`；保留每条 message 的 network/process observation，并用 `SourceFieldSemantic` 阻止供应商占位值进入实体和推理 | `AlertInput`, `NormalizationReport` |
 | `entity_extract` | Extract security entities | 抽取 IP、域名、URL、host、user/UM、process、file、rule_code/rule_name 等实体 | `ExtractedEntities` |
-| `fact_reconstruct` | Rebuild and adjudicate facts | 把厂商字段声明转换为 `RoleClaim`，结合场景假设裁决 source/destination/attacker/victim/impacted asset；冲突时给暂定结论、证据缺口和核查清单，但不确定 response target | `FactReconstructionResult v2`, `RoleResolution`, `ConflictReport` |
-| `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型，而是构造受限分析上下文 | `LLMAnalysisRequest` |
+| `fact_reconstruct` | Rebuild and adjudicate facts | 把厂商字段声明转换为 `RoleClaim`，结合场景假设裁决 source/destination/attacker/victim/impacted asset；只在同一 observation 内判冲突，不把不同请求或不同进程执行压成一条会话；冲突时给暂定结论、证据缺口和核查清单，但不确定 response target | `FactReconstructionResult v2`, `RoleResolution`, `ConflictReport` |
+| `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型；按结构化字段和高价值优先级构造合法 JSON 投影，精确记录 projected/sanitized/omitted path，跨消息保留关键请求和进程证据 | `LLMAnalysisRequest` |
 | `skill_context` | Resolve SOC skills | 根据 source type、场景、实体、冲突选择 SOC skills；当前产物是名称/原因/摘要/hash 的选择清单，不是完整 `SKILL.md` 正文 | `SocSkillContext` |
 | `analyze_stub / LLM analyzer` | Run bounded reasoning | 默认 deterministic stub；显式选择后通过 DeerFlow `create_chat_model` 调用真实模型，输出仍必须经过 JSON/schema/domain validation | `AnalysisNodeOutput` |
 | `schema_validate` | Validate model result | 严格校验 JSON schema、字段类型、domain rule，坏 JSON 需要 repair 后再校验 | `AnalysisResult` |
-| `evidence_grounding` | Ground model claims | 对每条 `AnalysisResult.evidence` 校验 source 是否是允许的 bounded-context section/path 或 bounded `source_path#parsed.field`，value 是否确实存在；不相信模型仅凭文字声称“证据存在” | `AnalysisEvidenceGroundingReport` |
+| `evidence_grounding` | Ground model claims | 对每条 `AnalysisResult.evidence` 校验唯一精确 source 是否是实际 bounded path，value 是否存在，并区分 `#parsed/#decoded/#repaired`；拒绝 composite citation，HTTP 200/工单状态等若被模型扩写成“攻击成功”则标为未证实 outcome claim | `AnalysisEvidenceGroundingReport` |
 | `decide` | Apply deterministic decision policy | `SocDecisionPolicy` 将已校验结果转换成 operational decision；保留 raw confidence 来源、校准状态、证据状态、结构化复核原因和 policy version。当前 stub/LLM 分数均未校准，因此必须复核；高分不能覆盖冲突、schema 降级、关键证据缺口、截断或误报确认 | `Decision` |
 | `normalization_monitor` | Detect parser/mapping maintenance work | 在业务结果已落库后检查基线、新结构、解析降级、关键字段缺口和 evidence truncation；失败只写 warning | `NormalizationMonitoringResult`, `NormalizationMaintenanceIssue` |
 

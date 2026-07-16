@@ -30,7 +30,7 @@ def test_analysis_prompt_uses_bounded_llm_request_for_pingan_apt() -> None:
     assert prompt.context["alert_id"] == "2026494"
     assert prompt.context["detection"]["rule_code"] == "RPAADM_002635"
     assert prompt.context["evidence"]["primary_evidence_path"] == "alert.hitLog[0].zeusRawLogs[0]"
-    assert "source_candidate_conflict" in prompt.context["fact_reconstruction"]["conflict_types"]
+    assert "source_candidate_conflict" not in prompt.context["fact_reconstruction"]["conflict_types"]
     assert "field-trust" in prompt.system
     assert "Return JSON only" in prompt.system
     assert "Bounded analysis context" in prompt.user

@@ -10,7 +10,7 @@ from typing import Any
 from soc_agent.contracts import LLMAnalysisRequest, Verdict
 from soc_agent.pipeline.analysis_context import project_analysis_context
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v2"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v3"
 MAX_ANALYSIS_CONTEXT_CHARS = 120_000
 
 
@@ -70,12 +70,18 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
             "Keep evidence trust separate from semantic confidence: a faithfully parsed vendor field may still assert the wrong attacker or victim role.",
             "Treat tentative or conflicted role resolutions as provisional and cite their evidence gaps.",
             "Use evidence coverage warnings to identify parser degradation, sanitized fields, truncation, and high-value canonical gaps.",
+            "Obey source_field_semantics from the adapter. Fields marked participates_in_reasoning=false are preserved for audit but must not support entities, facts, verdicts, or confidence.",
             "When fields conflict, explain the uncertainty instead of silently choosing one side.",
             "Every evidence item must quote a value present in the bounded context and use an exact dotted context path "
             "or one of these source sections: alert_id, source, detection, classification, entities, canonical_entities, "
             "extracted_entities, fact_reconstruction, primary_evidence, supplementary_evidence, evidence_coverage, "
             "skill_context.",
-            "A BoundedAnalysisEvidence source_path may be extended as source_path#parsed.field.path only when that parsed field and quoted value are visible inside the corresponding bounded evidence content.",
+            "Each evidence source must identify exactly one source section or path; do not combine multiple paths into a comma-separated source.",
+            "A BoundedAnalysisEvidence source_path may be extended with an exact projected_field_paths entry using #parsed, #decoded, or #repaired only when the quoted value is visible inside that bounded evidence content.",
+            "An evidence description may interpret its quoted value, but it must not introduce additional sibling-field facts; cite each additional fact as a separate evidence item with its own exact source.",
+            "Separate an observed attempt from a confirmed outcome. HTTP status 200 proves only that an HTTP response was observed; it does not prove exploit, command, file-write, or compromise success.",
+            "Workflow fields such as blocked, banned, ignored, transferred, or closed describe handling state and do not by themselves prove attack success or failure.",
+            "Claim a successful security outcome only when bounded evidence contains an explicit outcome artifact such as execution output, a created file, a resulting process, endpoint telemetry, or equivalent independent confirmation.",
             f"Allowed verdict values: {verdict_values}.",
             "Return JSON only. Do not include markdown, code fences, or explanatory text outside JSON.",
             "The JSON object must match this shape:",

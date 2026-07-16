@@ -58,7 +58,12 @@ def reconstruct_facts(alert: AlertInput) -> FactReconstructionResult:
     scenario_hypotheses = _scenario_hypotheses(alert)
     role_claims = _add_scenario_claims(role_claims, scenario_hypotheses, selected_input_path)
     role_resolutions = _role_resolutions(role_claims, selected_input_path)
-    conflict_reports = _conflict_reports(role_claims, role_resolutions, scenario_hypotheses)
+    conflict_reports = _conflict_reports(
+        role_claims,
+        role_resolutions,
+        scenario_hypotheses,
+        selected_input_path,
+    )
     canonical_provenance = _canonical_field_provenance(alert, role_claims, selected_input_path)
 
     return FactReconstructionResult(
@@ -259,6 +264,7 @@ def _add_scenario_claims(
                 trust=EvidenceTrustLevel.MEDIUM,
                 semantic_confidence=0.78,
                 rationale="reverse-connection scenario makes the network destination the likely attacker side",
+                observation_scope=_selected_observation_scope(selected_input_path),
             )
         )
     if source is not None:
@@ -273,6 +279,7 @@ def _add_scenario_claims(
                     trust=EvidenceTrustLevel.MEDIUM,
                     semantic_confidence=0.78,
                     rationale="reverse-connection scenario makes the network source the likely victim side",
+                    observation_scope=_selected_observation_scope(selected_input_path),
                 ),
                 _new_claim(
                     role="impacted_asset",
@@ -283,6 +290,7 @@ def _add_scenario_claims(
                     trust=EvidenceTrustLevel.MEDIUM,
                     semantic_confidence=0.72,
                     rationale="the likely victim in a reverse connection is the provisional impacted asset",
+                    observation_scope=_selected_observation_scope(selected_input_path),
                 ),
             ]
         )
@@ -292,7 +300,10 @@ def _add_scenario_claims(
 def _role_resolutions(claims: list[RoleClaim], selected_input_path: str | None) -> list[RoleResolution]:
     resolutions: list[RoleResolution] = []
     for role in _ROLES:
-        candidates = [claim for claim in claims if claim.role == role]
+        candidates = _claims_in_selected_observation(
+            [claim for claim in claims if claim.role == role],
+            selected_input_path,
+        )
         best = _best_claim(candidates, selected_input_path)
         if best is None:
             resolutions.append(
@@ -345,10 +356,17 @@ def _conflict_reports(
     claims: list[RoleClaim],
     resolutions: Sequence[RoleResolution],
     hypotheses: Sequence[ScenarioHypothesis],
+    selected_input_path: str | None,
 ) -> list[ConflictReport]:
     reports: list[ConflictReport] = []
     resolution_by_role = {item.role: item for item in resolutions}
-    by_role = {role: [claim for claim in claims if claim.role == role] for role in _ROLES}
+    by_role = {
+        role: _claims_in_selected_observation(
+            [claim for claim in claims if claim.role == role],
+            selected_input_path,
+        )
+        for role in _ROLES
+    }
 
     for role, role_claims in by_role.items():
         values = _unique_values(role_claims)
@@ -438,7 +456,11 @@ def _canonical_field_provenance(
         selected = _best_claim(matching, selected_input_path)
         if selected is None:
             continue
-        alternatives = sorted({claim.value for claim in claims if claim.role == role and claim.value != value})
+        relevant_claims = _claims_in_selected_observation(
+            [claim for claim in claims if claim.role == role],
+            selected_input_path,
+        )
+        alternatives = sorted({claim.value for claim in relevant_claims if claim.value != value})
         result.append(
             CanonicalFieldProvenance(
                 canonical_path=canonical_path,
@@ -479,6 +501,7 @@ def _new_claim(
     trust: EvidenceTrustLevel,
     semantic_confidence: float,
     rationale: str,
+    observation_scope: str | None = None,
 ) -> RoleClaim:
     digest = hashlib.sha256(f"{role}|{value}|{evidence_path}|{claim_type.value}".encode()).hexdigest()[:16]
     return RoleClaim(
@@ -487,11 +510,30 @@ def _new_claim(
         value=value,
         claim_type=claim_type,
         evidence_path=evidence_path,
+        observation_scope=observation_scope,
         source_layer=layer,
         evidence_trust=trust,
         semantic_confidence=semantic_confidence,
         rationale=rationale,
     )
+
+
+def _claims_in_selected_observation(
+    claims: Sequence[RoleClaim],
+    selected_input_path: str | None,
+) -> list[RoleClaim]:
+    selected_scope = _selected_observation_scope(selected_input_path)
+    if selected_scope is None:
+        return list(claims)
+    scoped = [claim for claim in claims if claim.observation_scope == selected_scope]
+    unscoped = [claim for claim in claims if claim.observation_scope is None]
+    return [*scoped, *unscoped] if scoped else list(claims)
+
+
+def _selected_observation_scope(selected_input_path: str | None) -> str | None:
+    if not selected_input_path:
+        return None
+    return selected_input_path.split("#", 1)[0].removesuffix(".message")
 
 
 def _evidence_gaps(role: str) -> list[str]:

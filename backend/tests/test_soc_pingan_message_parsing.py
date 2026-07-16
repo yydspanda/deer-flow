@@ -116,10 +116,10 @@ def test_pingan_hids_quoted_kv_message_extracts_host_ip_and_process_tree() -> No
 
     assert alert.entities.host.host_name == "work04"
     assert alert.entities.host.host_id == "AGENT-HIDS-001"
-    assert alert.entities.host.ip_addresses == ["30.232.21.35", "1.1.1.1"]
+    assert alert.entities.host.ip_addresses == ["30.232.21.35"]
     assert alert.entities.process.process_name == "chattr"
     assert alert.entities.process.parent_process_name == "java"
-    assert result.entities.ips == ["30.232.21.35", "1.1.1.1"]
+    assert result.entities.ips == ["30.232.21.35"]
     assert result.entities.processes == ["chattr", "java"]
     assert "work04" in result.entities.hosts
     assert result.normalization_report.missing_fields == []
@@ -128,6 +128,20 @@ def test_pingan_hids_quoted_kv_message_extracts_host_ip_and_process_tree() -> No
     assert resolutions["victim"].selected_value == "30.232.21.35"
     assert resolutions["impacted_asset"].selected_value == "30.232.21.35"
     assert any(item.scenario_type == "command_execution" for item in request.fact_reconstruction.scenario_hypotheses)
+    assert alert.extensions["source_field_semantics"] == [
+        {
+            "field_path": "alert.hitLog[0].zeusRawLogs[0].message#parsed.external_ip",
+            "semantic_type": "source_placeholder",
+            "meaning": "vendor_default_value_not_observed_external_ip",
+            "participates_in_entities": False,
+            "participates_in_reasoning": False,
+        }
+    ]
+    observation = alert.entities.process.observations[0]
+    assert [(node.process_name, node.process_id) for node in observation.nodes] == [
+        ("java", 3065),
+        ("chattr", 3287784),
+    ]
 
 
 def test_pingan_multiple_messages_are_bounded_as_primary_and_supplementary() -> None:
@@ -144,7 +158,7 @@ def test_pingan_multiple_messages_are_bounded_as_primary_and_supplementary() -> 
     assert request.supplementary_evidence[0].source_path.endswith("zeusRawLogs[1].message")
 
 
-def test_supplementary_messages_participate_in_role_conflict_resolution() -> None:
+def test_supplementary_messages_remain_independent_network_observations() -> None:
     first = 'skyeye|!{"sip":"30.1.1.10","dip":"30.2.2.20","attack_type":"代码执行"}'
     second = 'skyeye|!{"sip":"30.1.1.11","dip":"30.2.2.20","attack_type":"代码执行"}'
     payload = _payload(first, second, topic="sec_guard_apt", topic_name="SkyEye APT")
@@ -153,11 +167,34 @@ def test_supplementary_messages_participate_in_role_conflict_resolution() -> Non
     reconstruction = request.fact_reconstruction
     resolutions = {item.role: item for item in reconstruction.role_resolutions}
 
-    assert resolutions["source"].status is RoleResolutionStatus.CONFLICTED
+    assert resolutions["source"].status is RoleResolutionStatus.OBSERVED
     assert resolutions["source"].selected_value == "30.1.1.10"
-    source_conflict = next(item for item in reconstruction.conflict_reports if item.conflict_type == "source_candidate_conflict")
-    assert source_conflict.candidate_values["source"] == ["30.1.1.10", "30.1.1.11"]
-    assert any("zeusRawLogs[1].message" in path for path in source_conflict.involved_fields)
+    assert not any(item.conflict_type == "source_candidate_conflict" for item in reconstruction.conflict_reports)
+    source_claims = [item for item in reconstruction.role_claims if item.role == "source"]
+    assert {item.value for item in source_claims} == {"30.1.1.10", "30.1.1.11"}
+    assert len({item.observation_scope for item in source_claims}) == 2
+    assert [item.source_ip for item in request.canonical_entities.network.observations] == [
+        "30.1.1.10",
+        "30.1.1.11",
+    ]
+
+
+def test_pingan_host_identity_digest_is_not_a_file_hash_or_network_ioc() -> None:
+    message = 'skyeye|!{"sip":"30.1.1.10","dip":"30.2.2.20","attack_sip":"30.1.1.10","host_md5":"HOST-IDENTITY-DIGEST","attack_type":"代码执行"}'
+    alert = normalize_alert_payload(_payload(message, topic="sec_guard_apt", topic_name="SkyEye APT"))
+
+    assert alert.entities.file.md5 is None
+    assert alert.entities.threat.iocs == []
+    semantics = alert.extensions["source_field_semantics"]
+    assert semantics[0]["meaning"] == "host_identity_digest_not_file_hash"
+
+
+def test_relative_http_paths_and_filenames_are_not_extracted_as_domains() -> None:
+    message = 'skyeye|!{"sip":"30.1.1.10","dip":"30.2.2.20","host":"app.example.com","_origin":"{\\"uri\\":\\"/news.html?file=fireworks123.php&src=shell.txt\\"}"}'
+    result = SocNormalizationService().inspect(_payload(message, topic="sec_guard_apt", topic_name="SkyEye APT"))
+
+    assert result.entities.domains == ["app.example.com"]
+    assert not {"news.html", "fireworks123.php", "shell.txt"} & set(result.entities.domains)
 
 
 def test_unparsed_raw_message_is_preserved_and_does_not_upgrade_fallback_trust() -> None:
@@ -239,6 +276,7 @@ def test_delimited_json_parser_decodes_supported_nested_json_and_http_headers() 
 
     request = build_analysis_request_for_payload(alert.model_dump(mode="json"))
     assert request.primary_evidence is not None
+    json.loads(request.primary_evidence.content)
     assert "secret-token" not in request.primary_evidence.content
     assert "[REDACTED]" in request.primary_evidence.content
     assert "decoded_fields" in request.primary_evidence.content
@@ -246,6 +284,24 @@ def test_delimited_json_parser_decodes_supported_nested_json_and_http_headers() 
     assert coverage.message_schemas[0].status is MessageSchemaStatus.RECOGNIZED
     assert not coverage.high_value_gaps
     assert any(path.endswith("#parsed.payload.req_header") for path in coverage.llm_sanitized_paths)
+    assert set(coverage.llm_projected_paths) == set(request.primary_evidence.projected_field_paths)
+    assert not set(request.primary_evidence.omitted_field_paths) & set(request.primary_evidence.projected_field_paths)
+
+
+def test_deferred_related_and_soar_context_is_explicit_in_coverage() -> None:
+    payload = _payload(
+        'skyeye|!{"sip":"30.1.1.10","dip":"30.2.2.20","attack_type":"代码执行"}',
+        topic="sec_guard_apt",
+        topic_name="SkyEye APT",
+    )
+    payload["relatedAlertList"] = [{"alertId": "RELATED-1"}]
+    payload["alert"]["soar"] = [{"displayName": "asset lookup", "data": {"data": []}}]
+
+    request = build_analysis_request_for_payload(payload)
+    omissions = {(item.field_path, item.reason) for item in request.evidence_coverage.omissions}
+
+    assert ("raw.relatedAlertList", "external_context_deferred_to_investigation") in omissions
+    assert ("raw.alert.soar", "external_context_deferred_to_investigation") in omissions
 
 
 def test_malformed_nested_bodies_use_accepted_repair_or_sanitized_string_fallback() -> None:

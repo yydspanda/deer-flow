@@ -127,6 +127,14 @@ contracts
   the selected raw message's high trust merely because both live in the same `zeusRawLogs[]` item.
 - All parseable messages are retained. One message is selected as primary evidence and the remaining
   paths are supplementary evidence; selection and ordering must be deterministic and replayable.
+- Network/process observations from different raw messages must keep stable `observation_scope` and
+  source paths. Fact reconstruction may report contradiction only among claims in the same
+  observation; different requests, sessions, proxy hops or process executions must not be collapsed
+  into one synthetic conflict.
+- Vendor placeholder/default/non-observation fields must be emitted by the adapter as typed
+  `SourceFieldSemantic`. `participates_in_entities=false` and `participates_in_reasoning=false` are hard guards:
+  core Runtime and prompts must not recover the value through a different alias. Raw/parsed evidence
+  remains immutable for audit. Core code must not contain the vendor's placeholder value.
 - `LLMAnalysisRequest` may include only `BoundedAnalysisEvidence`: per-field and total-size bounded,
   parser/provenance annotated, and separated into primary/supplementary content. It must not dump the
   unbounded vendor payload into the prompt.
@@ -136,6 +144,13 @@ contracts
   declared bounded source. Every item produces an
   `AnalysisEvidenceGroundingItem`; any ungrounded item adds
   `ungrounded_analysis_evidence` to deterministic review reasons.
+- One analyzer evidence item may cite only one exact source path. Composite source strings are
+  invalid. Exact bounded `#parsed`, `#decoded`, and `#repaired` paths are separate provenance
+  surfaces; descriptions may not introduce facts from uncited sibling paths.
+- HTTP status, tool/API success, workflow/ticket state, `is_blocked`, or `is_banned` is not outcome
+  evidence for exploit execution, command success, file write, compromise, or response completion.
+  Positive outcome language without outcome-specific bounded evidence adds
+  `unproven_outcome_claim`; negated or explicitly uncertain outcome language must not trigger it.
 - Parser failure is explicit: preserve raw text, emit a warning, expose only bounded text to the
   analysis node, and keep structured fallback candidates at reduced trust.
 - Every selected raw message must emit `MessageSchemaObservation`. `recognized` means parser grammar
@@ -306,14 +321,14 @@ Unified investigation view 约束：
 PingAn SOC capability onboarding 约束：
 
 - 平安 SOC 工具、MCP、skill、研判经验和处置经验进入项目之前，必须先整理成 capability card；来源、适用场景、输入字段、输出结构、风险等级、失败模式和脱敏验收样例必须明确。
-- capability card 只能分类落到以下稳定 artifact：domain skill、normalizer/field trust rule、read-only action adapter、high-risk action adapter、domain handler、eval fixture、memory candidate。不得直接把一段经验文本粘进生产 prompt 后生效。
+- capability card 只能分类落到以下稳定 artifact：domain skill、normalizer/field trust rule、read-only action adapter、high-risk action adapter、domain handler、eval fixture、memory candidate、authorized-activity fact proposal。不得直接把一段经验文本粘进生产 prompt 后生效。
 - 内部系统 endpoint、账号、token、cookie、真实敏感样本不得写入仓库；真实连接只能通过本地 config、environment secret 或部署 secret 注入。
 - read-only 工具经验必须通过 `SocActionAdapterRegistry` / MCP-backed adapter 落地，结果写 `InvestigationEvidence`；不能让 Lead Agent 直接用自然语言调用内部系统。
 - 处置类经验必须走 approval request / approval grant / dry-run / execute boundary；未经过 staging smoke 和 adapter-level audit 前，生产 execute 只能保持 no external side effect。
 - 经验记忆必须先进入 `pending_review` 或 eval fixture；只有人工确认、版本化和可回滚后才允许作为 confirmed memory 或 active lesson 影响后续判断。
 - `.notes/ai_soc/capabilities/pingan/source-docs/` 中的历史 prompt 原文必须先按 `.notes/ai_soc/capabilities/pingan/knowledge-decomposition.md` 拆解；不得整体复制进 Lead Agent prompt、analysis node prompt 或 public skill。
 - `skills/public/soc-*` 只能包含跨客户通用研判方法；平安内部域名、部门、账号、BU/PA code、路径、白名单、具体 `rule_code`、模板 ID、策略 ID、operateType 等必须进入 tenant memory、adapter mapping、policy/config 或 eval fixture。
-- 平安环境知识进入 memory 时必须带 tenant scope、source doc/section、status、validity 和 evidence refs；默认 `pending_review`，不能直接 confirmed。
+- 平安环境知识进入 memory 时必须带 tenant scope、source doc/section、status、validity 和 evidence refs；默认 `pending_review`，不能直接 confirmed。扫描、渗透测试、运维窗口、自动化服务等“当前是否被授权”的动态事实不得用 memory 代替，必须进入 authorized-activity fact lifecycle。
 - 平安字段名和字段别名只能出现在 adapter/normalizer/mapping tests 或脱敏 fixture 中；core contract、public skill 和 Lead Agent prompt 必须消费 canonical fields。
 - 平安处置经验如果需要外部事实查询，必须先建 read-only MCP/action adapter；如果会改变外部状态，必须是 high-risk/analyst-write action 并走 approval。
 
@@ -333,6 +348,47 @@ External disposition sync 约束：
 - 外部处置同步必须记录 source surface、operator、mapping version、apply status、target refs、idempotency key 和 audit event，支持 replay diff、撤销和客户审计。
 - Webhook、Kafka、polling 和 manual import 都是 transport adapter；进入 core service 前必须归一成同一 `SocExternalDispositionEvent`，不能为每种 transport 复制业务状态机。
 
+Governed context fact / 受治理上下文事实约束：
+
+- `GovernedContextFact` 是 typed operational fact 的共享信封，不是无类型 KV、自然语言知识条目或通用白名单。共享字段至少包含 fact id/type/schema version、tenant/environment、`valid_from/valid_until`、source type/ref/version/freshness、status、owner/reviewer/reason、evidence refs、content hash 和 audit time。
+- 首批 subtype 包含 `AuthorizedActivityFact`、`SecurityExerciseCampaignFact` 和 `ExerciseParticipantFact`；后续可增加 asset/identity/change-window/network-topology/service-relationship/risk-acceptance fact，但每种类型都必须有 discriminated Pydantic payload、validator 和专用 matcher/resolver。
+- 禁止实现一个依赖自然语言、embedding 或 LLM 的万能 fact matcher。共享代码只能处理 tenant/environment、事件时间、source freshness、status/version 等公共 applicability；subject/target/behavior、participant attribution、network topology 等语义由强类型 matcher 负责。
+- `SocGovernedContextService` 是 propose/activate/suspend/revoke/expire/version/query 的唯一公共生命周期边界；typed domain service 只能组合该 service 与 matcher，不得复制状态机。
+- `GovernedContextFactRepository` 是 PostgreSQL source-of-truth 边界。允许使用带 `fact_type` discriminator、公共索引列和 typed JSONB payload 的单一 envelope 表，但 repository 返回前必须恢复并验证具体 subtype，不能把任意 JSON 当作 active fact。
+- fact 与 evidence、policy、memory 必须分离：MCP/action 返回 `InvestigationEvidence`；governed fact 描述在某时点成立的业务上下文；deterministic policy 决定 disposition；memory 保存可复用研判经验。
+
+Authorized activity / 授权活动事实约束：
+
+- `AuthorizedActivityFact` 表示某项扫描、渗透测试、运维、自动化或业务服务行为在明确范围和时间内获得授权。它不是 `SocMemoryRecord`、IP 白名单、`SocAgentApprovalGrant` 或 response action permission；四者不得复用同一状态机。
+- contract 必须 vendor-neutral，至少包含 stable fact id/schema version、tenant/environment、activity type、subject selectors、target selectors、behavior selectors、`valid_from/valid_until`、source type/ref/version、status、owner/reviewer/reason、evidence refs 和 audit time。
+- `subject/target/behavior` scope 必须支持 stable asset/service/account id、security tag、application/domain/CIDR、canonical scenario/behavior signature 和 optional detection alias。具体 IP 可以作为窄范围 selector，但不得默认形成跨环境、无期限的全局白名单。
+- 任一 active fact 必须具有 tenant scope、authoritative source 或具备授权角色的人工确认、明确 expiry。范围过宽、无 expiry、source 不可追溯或仅有 free-text note 的事实只能保持 `proposed`，不得参与 disposition。
+- fact status 至少区分 `proposed/active/suspended/expired/revoked`；suspend/revoke/expire 必须立即阻止新匹配，历史 replay 仍按 alert event time 和当时有效版本计算。
+- `SocAuthorizedActivityService` 只负责 authorization query/match 和 disposition eligibility，生命周期必须复用 `SocGovernedContextService`；CLI/API/Web/TUI/Kafka/Lead Agent、source adapter 和 normalizer 不得直接写 fact repository 或自行判断授权成立。
+- 外部 change/scanner/maintenance/CMDB/security-tag 系统仍是业务来源时，本地 governed fact 必须保存 external source ref/version/freshness；缓存失效不能伪装成有效授权。
+- query-time MCP/action 和 webhook/Kafka/polling sync 都只能通过 source adapter 转换成 canonical fact/source observation。`security_tag.lookup` 是普通调查证据；只有授权事实 service 经显式 mapping 后才能把它用于授权匹配。
+- `AuthorizationQuery` 只能从 canonical alert/entity/fact/scenario、alert event time 和 tenant context 构造；generic matcher 禁止识别 PingAn/Zeus 字段名。vendor alias 必须止于 normalizer/source adapter。
+- `AuthorizationMatchResult` 必须由确定性 matcher 产生，至少记录 fact refs、`exact/partial/conflict/expired/not_found/unavailable`、matched/missing/out-of-scope dimensions、event time、source freshness、policy version 和 evidence refs。LLM 可以解释结果，但不得生成或改写 match status。
+- exact match 必须同时满足 tenant/environment、event-time validity、subject、target、behavior 和 source freshness；任何必需维度缺失、冲突、过期、撤销或 source unavailable 都必须 fail closed 到 analyst review。
+- 授权匹配不能修改 detection truth。真实利用、RemoteRegistry 启动或扫描行为仍可为 `actual_verdict=true_positive`，但可由确定性 disposition policy 提议 `closed_benign_true_positive`；不得改成 `false_positive`。
+- Base Runtime 的 `SocDecisionPolicy` 只负责 grounded detection decision。授权 enrichment 在 persisted run 之后通过显式 orchestration/review service 执行；后续 disposition reconciliation 必须生成新 audit/version，不得覆盖原始 `AnalysisRun`。
+- 初始版本只能 shadow：展示 matched fact、建议 canonical disposition 和解释，但仍进入人工关单。只有 exact authoritative match 在 replay precision、analyst override、source freshness、随机抽样复核和 rollback gate 达标后，才允许策略化自动关闭；任何 response action 仍走独立 approval boundary。
+- 一次人工确认应先生成 scoped/expiring fact proposal；经授权角色激活后，后续 exact matches 可以复用。只有新行为签名、scope mismatch、partial/conflict、expired/revoked 或 source unavailable 才重新进人工，从而避免每条告警重复确认。
+- 置信度评测必须区分 detection label 和 operational disposition label。`ConfidenceCalibrationSample` 后续应增加 `actual_disposition`、calibration eligibility、missing decisive context 和 authorization fact refs；若模型的 exact bounded input 不含决定性授权事实，业务真值可以保留，但 analyzer calibration 必须标记 `excluded_missing_decisive_context`。
+- 被 calibration 排除的已知真值样本不得丢弃；它们进入 authorization-enrichment coverage、context availability 和 end-to-end disposition eval，不进入 analyzer Brier/ECE/threshold fitting。
+- 需要持续观测 authorization match coverage、exact/partial/new-pattern 比例、analyst override rate、expired/stale fact rate、shadow disposition precision、抽样复核命中率和每条 active fact 的 alert fan-out。
+
+Security exercise / 护网与红蓝对抗事实约束：
+
+- `SecurityExerciseCampaignFact` 必须记录 campaign ref、tenant/environment、时间窗、target scope、allowed/forbidden behavior、Rules of Engagement ref/version、authoritative source 和治理状态。
+- `ExerciseParticipantFact` 必须记录 campaign ref、participant role（red/blue/white/referee/other）、team/actor ref、time-bounded identifiers 和 authoritative roster source。identifier 可以是 IP/CIDR/domain/account/certificate/agent id，不得只支持 IP。
+- `ParticipantAttributionMatcher` 必须按 alert event time 匹配 identifier，并显式返回 `exact/ambiguous/conflict/expired/not_found/unavailable`。动态 IP、NAT、共享跳板机、代理和地址重新分配不能被强制归属于单一参与者。
+- 参与者归属只回答“当时是谁”，不能回答“这次行为是否被授权”。`SocSecurityExerciseContextService` 必须依次组合 participant attribution、campaign applicability、target scope、behavior scope 和 forbidden behavior；任一步非 exact 都进入 analyst review。
+- 只有 participant/campaign/authorization/source freshness 全部 exact 时，才可提议 `actual_verdict=true_positive` + `operational_disposition=closed_benign_true_positive` + `reason_code=authorized_security_exercise`。不得把演练行为改成 `false_positive`，不得为每种演练创建新的 canonical status。
+- 红队/蓝队/白队基础设施不得进入全局 benign IOC 或永久 suppression list；IOC/行为历史必须保留，并附 campaign-scoped context。
+- 普通分析师上下文默认只暴露 role/team ref 和必要 match explanation；个人身份、官方名单和敏感联系方式必须使用更严格的 field-level access control，并记录访问审计。
+- 护网事实的 replay/eval 必须覆盖：合法 exact match、超出目标范围、超出演练时间、使用禁止技术、一个 identifier 对应多参与者、identifier 变更和 source unavailable。
+
 SOC memory tracking 约束：
 
 - 业务记忆必须实现为 typed memory record + facets + retrieval policy，不得实现为 `topic/rule_code/scenario` 等字段的联合等值主键。
@@ -340,6 +396,7 @@ SOC memory tracking 约束：
 - `facets.detection.canonical_key` 是推荐的跨供应商检测标识；缺失时必须能通过 `source_type/product/category/rule_name/MITRE/raw fingerprint` 生成弱 key，或退化到 topic/scenario 检索。
 - topic、canonical detection、vendor aliases、scenario、entity、environment 都是可选检索 facets；缺失任意一个 facet 时系统仍必须能工作，只是召回分数降低。
 - 具体 IP、UM、host、URL、file hash、process hash 等实体默认只能作为 evidence refs、query dimensions 或 case memory，不得默认成为长期全局 memory 主键。
+- 授权活动、护网 campaign/participant、变更窗口、资产状态等 governed fact 不是 reusable memory；即使来自 correction/review note，也只能生成对应 typed fact proposal，不能通过 `SocMemoryService.confirm` 变成 runtime operational fact。
 - TUI/Web/Kafka/Lead Agent/domain handler/external disposition sync 只能生成 `SocMemoryCandidate`；不得直接写 `confirmed` fact 或 active lesson。
 - 所有 memory candidate 必须包含 source surface、source run/review/evidence refs、idempotency key、status、confidence、proposed content、facets、evidence refs 和 reviewer/audit fields。
 - 当前已实现 DB-first candidate persistence、confirmed-memory boundary 和 retrieval policy MVP：`SocMemoryService.propose_candidate()` 必须强制写 `pending_review`，并保持 `runtime_decision_allowed=false`；`SocMemoryService.list_candidates()` / `get_candidate()` 是 API/CLI/Web/TUI/Lead Agent 查询候选记忆的 service 边界；`SocMemoryService.review_candidate()` 是 confirm/reject/deprecate/expire 的唯一状态机边界；`SocMemoryService.find_relevant_records(SocMemoryQuery)` 是 confirmed memory 检索的唯一 service 边界。
@@ -771,12 +828,16 @@ normalizers/hids.py
 - coverage report 是审计/漂移产物，不是 verdict。一个字段被解析但没有 canonical mapping 时不得
   静默消失：它必须仍可在 parsed evidence 中回放，并通过全路径清单或已定义 high-value gap 暴露。
 - `llm_projected_paths` 表示该字段属于 bounded projection 的候选内容；若 evidence 整体被截断，必须
-  同时记录 `llm_truncated_evidence_paths`，不能声称 leaf-level 完整送达。
+  同时记录 `llm_truncated_evidence_paths`，不能声称 leaf-level 完整送达。实现必须以
+  `BoundedAnalysisEvidence.projected_field_paths/sanitized_field_paths/omitted_field_paths` 的实际结果
+  生成 coverage，不能根据“曾参与候选排序”推断已送达。
 - accepted repair 进入 bounded analysis 时，原字段 replacement reason 必须标为
   `replaced_by_repaired_projection`；rejected/error repair 标为 `sanitized_string_fallback`。repair 结果
   只进入 repaired paths，不得进入 decoded paths。
 - Prompt Builder 不得原样 dump 完整 coverage path 清单。模型只接收 parser status/fingerprint、计数、
   omission reason 汇总、high-value target/reason 和 truncation 数量；完整 vendor paths 只用于审计。
+- 结构化 JSON evidence 不允许按字符直接截断后伪装成 JSON。投影器应按 leaf/子树选择并重新序列化，
+  在总预算内跨 primary/supplementary observations 优先保留高价值字段；所有省略必须有精确 path/reason。
 - high-value gap 规则必须通过 `EvidenceFieldImportanceRule` / `EvidenceFieldImportanceRegistry` 声明。
   Core 默认规则只能使用 vendor-neutral/标准协议语义；供应商字段规则由 adapter 写入 typed extension。
   无效 extension 规则忽略并保留现有 deterministic defaults，不能让一条坏配置中断告警。
@@ -860,6 +921,9 @@ normalizers/hids.py
 - prompt builder 只能从 `LLMAnalysisRequest` 生成 prompt；不能把完整 `AlertInput.raw` 自动塞入上下文。
 - analyzer public output 必须是 `AnalysisNodeOutput`：
   - `analysis` 必须先经过 parser、Pydantic schema validation 和 domain validation。
+  - parser 只允许有 repair log 的 bounded、lossless 白名单修复。模型把
+    `AnalysisResult.evidence[].value` 偶发返回为 object/array 时，可在严格字符上限内序列化为紧凑
+    JSON scalar；超限或有损变换必须 schema failure，不能截断后伪装成功。
   - `model_name`、`prompt_version`、`parser_version` 必须进入 run/step trace。
   - `PipelineStepTrace.metadata` 必须记录 `prompt_hash`、`candidate_hash`、`repair_applied`、usage/response metadata 等审计信息。
   - step metadata 不保存完整 prompt、完整 raw LLM output 或完整 vendor payload；需要复盘时通过 replay 输入和版本重新生成。
@@ -1380,7 +1444,7 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 | Node prompt | `soc_agent/prompts/` | 固定 pipeline 节点内的结构化推理，例如 `llm_analyze` | 自主改变主流程、直接调用 MCP/tool、输出未校验自然语言进入决策层 |
 | MCP/tool adapter | `soc_agent/tools/` / DeerFlow MCP bridge | 查询或执行外部能力 | 绕过 policy、审计、人类审批执行高风险动作 |
 
-当前 `soc-analysis-v2` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费 `LLMAnalysisRequest` 和后续受控 skill context，输出必须进入 `AnalysisResult` parser、schema validation、domain validation、evidence grounding，再由 Runtime 决定后续状态。
+当前 `soc-analysis-v3` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费 `LLMAnalysisRequest` 和后续受控 skill context，输出必须进入 `AnalysisResult` parser、schema validation、domain validation、evidence grounding，再由 Runtime 决定后续状态。
 
 当前 `SocSkillResolver` 已作为薄层落地在 `backend/soc_agent/skills.py`，只输出 DeerFlow skill 名称和结构化 reason，不加载 `SKILL.md` 内容，不绕过 DeerFlow skill system。当前 DeerFlow 可加载的 SOC domain skills 是：
 

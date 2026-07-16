@@ -93,8 +93,8 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
             evidence_event,
             origin,
             http_payload,
-            soar_asset,
             primary_parsed,
+            parsed_messages,
         ),
         "evidence": _evidence(alert, hit_log, evidence_event),
         "extensions": {
@@ -102,6 +102,8 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
             "parsed_raw_messages": [item.model_dump(mode="json", exclude_none=True) for item in parsed_messages],
             "role_claims": [item.model_dump(mode="json", exclude_none=True) for item in role_claims],
             "scenario_signals": [item.model_dump(mode="json", exclude_none=True) for item in scenario_signals],
+            "source_field_semantics": _source_field_semantics(source_type, parsed_messages),
+            "analysis_context_coverage": _analysis_context_coverage(original, alert),
             "evidence_input_policy": _evidence_input_policy(
                 hit_log_index,
                 raw_event_index,
@@ -188,8 +190,8 @@ def _legacy_platform_context(
                 "asset_group": _first_str(raw_event, ("asset_group",)),
                 "dip_group": _first_str(raw_event, ("dip_group",)),
                 "industry": _first_str(raw_event, ("industry_sign",)),
-                "soar_asset_department": _first_str(soar_asset, ("strdeptname",)),
-                "soar_asset_owner": _first_str(soar_asset, ("strusername",)),
+                "soar_asset_department": _first_str(soar_asset, ("strdeptname", "department")),
+                "soar_asset_owner": _first_str(soar_asset, ("strusername", "username")),
             },
             "sensor": {
                 "source": _first_str(raw_event, ("source",)),
@@ -220,6 +222,7 @@ def _legacy_platform_context(
                 "logcloud_msgid": _first_str(raw_event, ("logcloud_msgid",)),
                 "raw_event_count": len(hit_log.get("zeusRawLogs") or []),
                 "related_alert_count": len(original.get("relatedAlertList") or []),
+                "related_disposition_summary": _related_disposition_summary(original.get("relatedAlertList")),
                 "soar_display_names": soar_display_names,
             },
             "soar": {
@@ -235,8 +238,8 @@ def _entities(
     raw_event: dict[str, Any],
     origin: dict[str, Any],
     http_payload: dict[str, Any],
-    soar_asset: dict[str, Any],
     parsed_message: ParsedRawMessageEvidence | None,
+    parsed_messages: list[ParsedRawMessageEvidence],
 ) -> dict[str, Any]:
     req = _parse_request_line(_first_str(http_payload, ("req_header",)) or "")
     decoded_request_header = _decoded_request_header(parsed_message)
@@ -259,14 +262,15 @@ def _entities(
         }
     else:
         network = {
-            "source_ip": _first_str(raw_event, ("sip", "attack_sip", "src_addr", "source_ip")) or _first_str(origin, ("sip",)),
-            "destination_ip": _first_str(raw_event, ("dip", "dst_addr", "alarm_sip")) or _first_str(origin, ("dip",)),
+            "source_ip": _first_str(raw_event, ("sip", "src_addr", "source_ip")) or _first_str(origin, ("sip",)),
+            "destination_ip": _first_str(raw_event, ("dip", "dst_addr")) or _first_str(origin, ("dip",)),
             "src_port": _first_str(raw_event, ("sport",)) or _first_str(origin, ("sport",)),
             "dst_port": _first_str(raw_event, ("dport",)) or _first_str(origin, ("dport",)),
             "protocol": _first_str(raw_event, ("proto", "labels_proto", "protocol")),
             "domain": _first_str(raw_event, ("host",)),
             "url": _first_str(origin, ("uri",)) or req.get("path"),
         }
+    network["observations"] = _network_observations(source_type, parsed_messages)
 
     return {
         "network": network,
@@ -280,24 +284,25 @@ def _entities(
             "command_line": _first_str(raw_event, ("process__cmd_line", "str_cmd", "str_suspicious_process_ancestor_cmd", "process__ancestor__cmd_line")),
             "parent_process_name": _basename(_first_str(raw_event, ("process__parent_process__file__path", "str_parent_path_full"))) or (process_chain[-2] if len(process_chain) >= 2 else None),
             "parent_command_line": _first_str(raw_event, ("process__parent_process__cmd_line", "str_parent_cmd")),
+            "observations": _process_observations(parsed_messages),
         },
         "user": {
-            "username": _first_str(raw_event, ("str_user_agent", "process__user__name", "str_user_process")) or _first_str(soar_asset, ("strusername",)),
-            "user_id": _first_str(soar_asset, ("uiduserid",)),
+            # CMDB/SOAR owners describe asset ownership, not the event actor.
+            "username": _first_str(raw_event, ("str_user_agent", "process__user__name", "str_user_process")),
             "um_account": _first_str(raw_event, ("um", "um_account", "umAccount", "str_um_account")),
         },
         "host": {
-            "host_name": _first_str(raw_event, ("host_name", "device__hostname", "str_source_host")) or _first_str(soar_asset, ("strdevname",)),
-            "host_id": _first_str(raw_event, ("agent_id", "str_agent_id", "metadata__product__version")) or _first_str(soar_asset, ("uiddevrecordid",)),
-            "asset_id": _first_str(raw_event, ("agent_id", "device__ip", "str_source_ip")) or _first_str(soar_asset, ("strdevip",)),
-            "asset_group": _first_str(raw_event, ("device__org__ou_name", "str_dept_name", "dip_group", "asset_group")) or _first_str(soar_asset, ("strdeptname",)),
+            "host_name": _first_str(raw_event, ("host_name", "device__hostname", "str_source_host")),
+            "host_id": _first_str(raw_event, ("agent_id", "str_agent_id", "metadata__product__version")),
+            "asset_id": _first_str(raw_event, ("agent_id", "device__ip", "str_source_ip")),
+            "asset_group": _first_str(raw_event, ("device__org__ou_name", "str_dept_name", "dip_group", "asset_group")),
             "ip_addresses": _dedupe(
                 [
                     value
                     for value in [
                         _first_str(raw_event, ("agent_ip",)),
                         _first_str(raw_event, ("internal_ip", "device__ip", "str_source_ip")),
-                        _first_str(raw_event, ("external_ip",)),
+                        _usable_hids_external_ip(source_type, _first_str(raw_event, ("external_ip",))),
                     ]
                     if value
                 ]
@@ -306,7 +311,7 @@ def _entities(
         "file": {
             "file_name": _first_str(raw_event, ("process__file__name", "str_process_short")),
             "file_path": _first_str(raw_event, ("process__file__path", "str_process_full", "str_suspicious_file")),
-            "md5": _first_str(raw_event, ("process__file__hashes__md5", "str_md5", "str_suspicious_file_md5", "host_md5")),
+            "md5": _first_str(raw_event, ("process__file__hashes__md5", "str_md5", "str_suspicious_file_md5")),
         },
         "http": {
             "method": req.get("method"),
@@ -323,14 +328,93 @@ def _entities(
                     value
                     for value in [
                         _first_str(raw_event, ("ioc",)),
-                        _first_str(raw_event, ("str_threat_value", "str_attack_ip")),
-                        _first_str(raw_event, ("attack_sip", "sip")),
+                        _first_str(raw_event, ("str_threat_value", "str_attack_ip")) if source_type is AlertSourceType.EDR else None,
                     ]
                     if value
                 ]
             )
         },
     }
+
+
+def _network_observations(
+    source_type: AlertSourceType,
+    parsed_messages: list[ParsedRawMessageEvidence],
+) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    for parsed in parsed_messages:
+        fields = parsed.fields
+        if source_type is AlertSourceType.HIDS:
+            continue
+        if source_type is AlertSourceType.EDR:
+            source_ip = _first_str(fields, ("str_source_ip", "device__ip"))
+            destination_ip = _first_str(fields, ("str_attack_ip", "str_threat_value", "str_activity_id"))
+        else:
+            source_ip = _first_str(fields, ("sip", "src_addr", "source_ip"))
+            destination_ip = _first_str(fields, ("dip", "dst_addr"))
+        decoded_request = _decoded_request_header(parsed)
+        forwarded = decoded_request.get("forwarded_chain")
+        observation = _drop_none(
+            {
+                "observation_id": f"network:{parsed.message_hash[:16]}",
+                "evidence_path": f"{parsed.source_path}#parsed",
+                "event_time": _first_str(parsed.header, ("timestamp", "event_time")) or _first_str(fields, ("timestamp", "time", "access_time", "first_access_time")),
+                "source_ip": source_ip,
+                "destination_ip": destination_ip,
+                "src_port": _intish(_first_str(fields, ("sport", "src_port"))),
+                "dst_port": _intish(_first_str(fields, ("dport", "dst_port"))),
+                "protocol": _first_str(fields, ("proto", "labels_proto", "protocol")),
+                "forwarded_chain": [str(value) for value in forwarded] if isinstance(forwarded, list) else [],
+            }
+        )
+        if source_ip or destination_ip or observation.get("forwarded_chain"):
+            observations.append(observation)
+    return observations
+
+
+def _process_observations(parsed_messages: list[ParsedRawMessageEvidence]) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    for parsed in parsed_messages:
+        fields = parsed.fields
+        tree_text = (
+            _first_str(
+                fields,
+                ("process_tree", "detail_process_tree", "event_content", "finding__desc", "str_desc"),
+            )
+            or ""
+        )
+        nodes = _process_nodes(tree_text)
+        if not nodes:
+            process_name = _first_str(fields, ("process__name", "str_process_short", "process__file__name"))
+            if process_name:
+                nodes = [
+                    _drop_none(
+                        {
+                            "process_name": process_name,
+                            "process_path": _first_str(fields, ("process__file__path", "str_process_full", "str_suspicious_file")),
+                            "command_line": _first_str(fields, ("process__cmd_line", "str_cmd", "process__ancestor__cmd_line")),
+                            "username": _first_str(fields, ("process__user__name", "str_user_process")),
+                        }
+                    )
+                ]
+        if not nodes:
+            continue
+        observations.append(
+            _drop_none(
+                {
+                    "observation_id": f"process:{parsed.message_hash[:16]}",
+                    "evidence_path": f"{parsed.source_path}#parsed",
+                    "event_time": _first_str(parsed.header, ("timestamp", "event_time")) or _first_str(fields, ("timestamp", "time", "access_time", "first_access_time")),
+                    "host_name": _first_str(fields, ("host_name", "device__hostname", "str_source_host")),
+                    "nodes": nodes,
+                }
+            )
+        )
+    return observations
+
+
+def _process_nodes(value: str) -> list[dict[str, Any]]:
+    return [{"process_name": name, "process_id": int(process_id)} for name, process_id in re.findall(r"([A-Za-z0-9_.-]+)\((\d+)\)", value)]
 
 
 def _decoded_request_header(parsed_message: ParsedRawMessageEvidence | None) -> dict[str, Any]:
@@ -341,6 +425,121 @@ def _decoded_request_header(parsed_message: ParsedRawMessageEvidence | None) -> 
         return {}
     request_header = payload.get("req_header")
     return dict(request_header) if isinstance(request_header, Mapping) else {}
+
+
+def _usable_hids_external_ip(source_type: AlertSourceType, value: str | None) -> str | None:
+    if source_type is AlertSourceType.HIDS and value == "1.1.1.1":
+        return None
+    return value
+
+
+def _source_field_semantics(
+    source_type: AlertSourceType,
+    parsed_messages: list[ParsedRawMessageEvidence],
+) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    for parsed in parsed_messages:
+        if source_type is AlertSourceType.HIDS and _first_str(parsed.fields, ("external_ip",)) == "1.1.1.1":
+            observations.append(
+                {
+                    "field_path": f"{parsed.source_path}#parsed.external_ip",
+                    "semantic_type": "source_placeholder",
+                    "meaning": "vendor_default_value_not_observed_external_ip",
+                    "participates_in_entities": False,
+                    "participates_in_reasoning": False,
+                }
+            )
+        if _first_str(parsed.fields, ("host_md5",)):
+            observations.append(
+                {
+                    "field_path": f"{parsed.source_path}#parsed.host_md5",
+                    "semantic_type": "host_identity_digest",
+                    "meaning": "host_identity_digest_not_file_hash",
+                    "participates_in_entities": False,
+                    "participates_in_reasoning": False,
+                }
+            )
+    return observations
+
+
+def _analysis_context_coverage(original: dict[str, Any], alert: dict[str, Any]) -> dict[str, Any]:
+    deferred_sources: list[dict[str, str]] = []
+    if original.get("relatedAlertList"):
+        deferred_sources.append(
+            {
+                "field_path": "raw.relatedAlertList",
+                "reason": "external_context_deferred_to_investigation",
+            }
+        )
+    if alert.get("soar"):
+        deferred_sources.append(
+            {
+                "field_path": "raw.alert.soar",
+                "reason": "external_context_deferred_to_investigation",
+            }
+        )
+    if alert.get("content"):
+        deferred_sources.append(
+            {
+                "field_path": "raw.alert.content",
+                "reason": "workflow_context_deferred_to_investigation",
+            }
+        )
+    return {"deferred_sources": deferred_sources}
+
+
+def _related_disposition_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, list):
+        return {}
+    actor_counts = {"human": 0, "automation": 0, "unknown": 0}
+    reason_counts: dict[str, int] = {}
+    disposition_count = 0
+    for related in value:
+        if not isinstance(related, Mapping):
+            continue
+        related_alert = _as_dict(related.get("alert")) or dict(related)
+        content = related_alert.get("content")
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if not isinstance(item, Mapping):
+                continue
+            disposition_count += 1
+            username = str(item.get("userName") or "").strip().lower()
+            actor_kind = "automation" if username == "zeusai" else ("human" if username else "unknown")
+            actor_counts[actor_kind] += 1
+            for reason in _disposition_reasons(item.get("content")):
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    return {
+        "related_alert_count": len(value),
+        "disposition_count": disposition_count,
+        "actor_kind_counts": actor_counts,
+        "reason_counts": reason_counts,
+        "decision_input_allowed": False,
+    }
+
+
+def _disposition_reasons(value: Any) -> list[str]:
+    if not isinstance(value, str) or not value.strip():
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    reasons: list[str] = []
+    content = parsed.get("content") if isinstance(parsed, Mapping) else None
+    if not isinstance(content, list):
+        return reasons
+    for item in content:
+        if not isinstance(item, Mapping):
+            continue
+        field_name = str(item.get("field_cn") or "")
+        if "原因" not in field_name:
+            continue
+        text = re.sub(r"<[^>]+>", "", str(item.get("field_content") or "")).strip()
+        if text:
+            reasons.append(text)
+    return _dedupe(reasons)
 
 
 def _first_header_value(headers: Mapping[str, Any], name: str) -> str | None:
@@ -423,7 +622,10 @@ def _first_soar_asset(value: Any) -> dict[str, Any]:
     if not isinstance(value, list):
         return {}
     for item in value:
-        data = _as_dict(_as_dict(_as_dict(item).get("data")).get("data"))
+        nested_data = _as_dict(_as_dict(item).get("data")).get("data")
+        if isinstance(nested_data, list) and nested_data and isinstance(nested_data[0], dict):
+            return dict(nested_data[0])
+        data = _as_dict(nested_data)
         rows = data.get("rows")
         if isinstance(rows, list) and rows and isinstance(rows[0], dict):
             return dict(rows[0])
@@ -434,11 +636,13 @@ def _soar_asset_summary(value: dict[str, Any]) -> dict[str, Any]:
     return _drop_none(
         {
             "device_id": _first_str(value, ("uiddevrecordid", "strdevidentiy")),
-            "device_name": _first_str(value, ("strdevname",)),
-            "device_ip": _first_str(value, ("strdevip",)),
-            "username": _first_str(value, ("strusername",)),
+            "device_name": _first_str(value, ("strdevname", "hostName")),
+            "device_ip": _first_str(value, ("strdevip", "hostIp")),
+            "username": _first_str(value, ("strusername", "username")),
             "user_id": _first_str(value, ("uiduserid",)),
-            "department": _first_str(value, ("strdeptname",)),
+            "department": _first_str(value, ("strdeptname", "department")),
+            "company": _first_str(value, ("company",)),
+            "cluster": _first_str(value, ("clusterName",)),
             "os": _first_str(value, ("stros",)),
             "device_type": _first_str(value, ("strdevtype",)),
             "status": _first_str(value, ("status", "idevstatus")),

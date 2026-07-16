@@ -102,6 +102,8 @@ def _review_reasons(
         reasons.append(DecisionReviewReason.TRUNCATED_ANALYSIS_EVIDENCE)
     if grounding.ungrounded_count:
         reasons.append(DecisionReviewReason.UNGROUNDED_ANALYSIS_EVIDENCE)
+    if any("outcome-success claim" in warning for warning in grounding.warnings):
+        reasons.append(DecisionReviewReason.UNPROVEN_OUTCOME_CLAIM)
     if analysis.confidence < review_below:
         reasons.append(DecisionReviewReason.RAW_CONFIDENCE_BELOW_THRESHOLD)
     reasons.append(DecisionReviewReason.CONFIDENCE_NOT_CALIBRATED)
