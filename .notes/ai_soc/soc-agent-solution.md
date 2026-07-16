@@ -277,6 +277,7 @@ Important behavior:
 | `SocAuthorizedActivityService` | Read-only authorized-activity matching over governed facts | AA-01 implemented: canonical query, historical version selection, scope/time/freshness explanation |
 | `SocAuthorizationEnrichmentService` | Persist/replay one authorization match as investigation context | EX-01 implemented: append-only, idempotent, read-only projection; no disposition |
 | `SocDispositionProposalService` | Produce an auditable shadow operational proposal from persisted context | DP-01 implemented: exact + true-positive gate; no apply/close/action |
+| `SocDispositionEvaluationService` | Persist explicit labels, create reproducible samples, compute read-only gate reports | EV-01 implemented: append-only outcomes; passed report still cannot auto-close |
 | `SocSecurityExerciseContextService` (planned) | Compose campaign, participant attribution and authorization | Red/blue/white-team identity is not authorization by itself |
 | `SocCorrelationService` | Similar alert lookup | Uses summaries/evidence, no LLM dependency |
 | `SocMainOrchestratorService` | Read-only demo orchestration for selected skills/evidence/domain results | No hidden side effects |
@@ -654,7 +655,7 @@ Rules:
 - External reason cannot become confirmed memory without review.
 - Mapping must be configurable per external system.
 
-### 7.4 Governed Context Facts / 受治理上下文事实（GF-01 + AA-01 + EX-01 + DP-01 Implemented）
+### 7.4 Governed Context Facts / 受治理上下文事实（GF-01 + AA-01 + EX-01 + DP-01 + EV-01 Implemented）
 
 Authorization is the first implementation, but it is not the only operational context that needs
 source, scope, time and revocation. Use a shared typed envelope instead of a universal untyped KV
@@ -682,7 +683,7 @@ Shared lifecycle belongs to `SocGovernedContextService`; typed domain services c
 deterministic matchers. PostgreSQL may use one common fact envelope table with typed JSONB payloads
 and indexed common columns, but Pydantic contracts and subtype validators remain mandatory.
 
-Current GF-01 + AA-01 + EX-01 + DP-01 implementation:
+Current GF-01 + AA-01 + EX-01 + DP-01 + EV-01 implementation:
 
 - Governed lifecycle contracts live in `soc_agent.contracts.governed_context`; the first instantiable
   subtype is vendor-neutral `AuthorizedActivityPayload`. Matching contracts live separately in
@@ -720,9 +721,22 @@ Current GF-01 + AA-01 + EX-01 + DP-01 implementation:
 - `soc disposition propose|list|get` and InvestigationContext/Web/TUI/Lead Agent expose the proposal.
   It is always `shadow`, `not_applied`, `requires_human_review=true`, `auto_close_allowed=false`, with
   no detection-truth or ReviewQueue impact.
+- `SocDispositionEvaluationService` records explicit append-only outcomes only after the linked
+  ReviewQueue is closed. It never infers labels from close-reason text. Corrections must explicitly
+  supersede the latest outcome; analyst-resolution and independent sampled-quality-review lanes remain
+  distinguishable.
+- EV-01 creates reproducible `sha256_rank_v1` sample manifests over one exact
+  tenant/environment/time/proposal-policy/matcher-policy cohort. Migration `0016_disposition_evaluation`
+  stores manifests and outcomes in `soc_disposition_sample_manifests` and `soc_disposition_outcomes`.
+- `SocDispositionEvaluationGateReport` measures resolution, shadow precision, override, sampled coverage/
+  precision/agreement, source freshness and fact-version fan-out. Truncated datasets or broken enrichment
+  lineage are insufficient data. Gate policy explicitly allowlists primary/sample outcome sources, and a unique
+  outcome lineage key prevents concurrent root/successor labels. Passing means only
+  `eligible_for_governed_rollout_review`; the report and policy both keep `auto_close_allowed=false`.
 - GF-01/AA-01/EX-01 do not inject facts into `LLMAnalysisRequest` or change `SocDecisionPolicy`.
   DP-01 generates a separate operational proposal but still cannot update the run, close ReviewQueue,
-  write memory, authorize an action, or execute a response. EV-01 owns evaluation before any rollout.
+  write memory, authorize an action, or execute a response. EV-01 evaluates that proposal and has the same
+  no-mutation boundary.
 
 #### 7.4.1 Authorized Activity Facts / 授权活动事实
 
@@ -786,7 +800,8 @@ Rollout slices are deliberately separate:
 | `AA-01` | Build canonical query and return deterministic match explanation | Persist enrichment or propose disposition |
 | `EX-01` | Implemented: persist/version match enrichment and project it into investigation context/audit | Change detection truth or generate disposition |
 | `DP-01` | Implemented: persist `closed_benign_true_positive` shadow proposal from open-queue exact enrichment + true-positive detection snapshot | Apply proposal or auto-close during shadow phase |
-| `EV-01` | Replay and measure precision, override, freshness, fan-out and sampled review | Enable policy without gates/rollback |
+| `EV-01` | Implemented: explicit outcomes, reproducible samples, precision/override/freshness/fan-out gate | Apply proposal or enable auto-close |
+| `EV-02` | Capture structured outcomes through Web/TUI/API and trusted external disposition bridge | Infer labels from free text or bypass evaluation service |
 
 #### 7.4.2 Security Exercise Context / 护网与红蓝对抗上下文
 
@@ -854,6 +869,9 @@ not require rewriting core contracts.
 | `AuthorizationMatchResult` | Explainable deterministic match result | AA-01 implemented; read-only/shadow, not a disposition |
 | `AuthorizationEnrichmentRecord` | Append-only query/result/policy/fact-ref snapshot attached to a run | EX-01 implemented; replayable, `decision_impact=none` |
 | `SocDispositionProposalRecord` | Append-only operational proposal with detection snapshot and authorization lineage | DP-01 implemented; shadow/not-applied, human review required |
+| `SocDispositionSampleManifest` | Reproducible hash-ranked quality-review sample over one exact cohort | EV-01 implemented; append-only, seed hash only |
+| `SocDispositionOutcomeRecord` | Explicit append-only analyst/trusted-system label with supersession lineage | EV-01 implemented; no decision or queue impact |
+| `SocDispositionEvaluationReport` | Read-only precision/override/sample/freshness/fan-out gate result | EV-01 implemented; passed means rollout review only, never auto-close |
 | `SocDomainTriageResult` | Domain-level triage result | Stable |
 | `SocDomainFinding` | Scenario-level finding | Stable taxonomy version required |
 | `SocAgentActionProposal` | Agent proposal | Stable |

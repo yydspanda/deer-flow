@@ -429,6 +429,51 @@ class SocDispositionProposalRow(SocBase):
     proposal_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
+class SocDispositionSampleManifestRow(SocBase):
+    """One immutable deterministic quality-review sample manifest."""
+
+    __tablename__ = "soc_disposition_sample_manifests"
+
+    sample_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    sample_key: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    scope_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    population_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    population_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    sample_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    created_by_actor_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    manifest_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SocDispositionOutcomeRow(SocBase):
+    """One append-only analyst or trusted-system proposal outcome."""
+
+    __tablename__ = "soc_disposition_outcomes"
+    __table_args__ = (
+        Index("ix_soc_disposition_outcome_proposal_reviewed", "proposal_id", "review_kind", "observed_at"),
+        Index("ix_soc_disposition_outcome_queue_reviewed", "queue_id", "observed_at"),
+    )
+
+    outcome_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    lineage_key: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    proposal_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    alert_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    queue_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    review_kind: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    outcome_status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    observed_disposition: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    source: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    sample_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    supersedes_outcome_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    reviewed_by_actor_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    outcome_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
 class SocNormalizationSchemaBaselineRow(SocBase):
     """Approved structural fingerprints for one normalization parser scope."""
 

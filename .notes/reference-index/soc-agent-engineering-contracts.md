@@ -444,8 +444,31 @@ Authorized activity / 授权活动事实约束：
   `none`。Service 不得改 `AnalysisRun`、summary、ReviewQueue、memory、approval 或执行 action。
 - CLI 为 `soc disposition propose|list|get`；InvestigationContext、timeline/counts、Web/TUI 和 bounded
   Lead Agent artifact 只能只读投影。事件为 `disposition.proposal_recorded`。
-- `EV-01` 管理 analyst outcome、precision、override、freshness、fan-out、抽样复核和 auto-close 前的
-  rollback gate；DP-01 本身不得包含 auto-close 开关。
+- EV-01 使用 `SocDispositionEvaluationScope` 固定 tenant/environment/time window/proposal policy/matcher
+  policy cohort；跨租户、跨环境或跨版本结果不得混算。所有时间窗必须 timezone-aware。
+- 随机抽样必须生成 append-only `SocDispositionSampleManifest`：对完整 cohort 使用可复现
+  `sha256_rank_v1`，保存 population hash、selected proposal ids、sample size、seed hash 和 actor；不得保存原始
+  seed。Population 查询触达 limit、proposal 缺 enrichment 或 lineage 破损时不得创建 manifest。
+- Outcome 必须通过 `SocDispositionOutcomeCommand/Record` 和 `SocDispositionEvaluationService` 写入，且只允许
+  绑定 lineage 一致、已经 closed 且有 closed_at/closed_by 的 ReviewQueue。不能从 `close_reason`、LLM 文本、
+  Lead Agent summary 或 memory 推断 outcome。
+- `analyst_resolution` 与 `sampled_quality_review` 是独立 label lane。Sampled review 必须引用持久化 manifest，
+  proposal 必须属于 selected ids；已有 primary label 时 sampled reviewer 必须独立。`unknown` 记为
+  `inconclusive`，不进入 precision 分母；不同 terminal disposition 记为 override。
+- Outcome 为 append-only。更正必须显式 `supersedes_outcome_id=latest` 且 observed_at 不倒退；相同
+  idempotency key 只返回同语义记录。服务端生成的 observed_at 不属于 retry 输入语义。唯一
+  `lineage_key=hash(proposal, review_kind, supersedes-or-root)` 必须阻止并发写出两个 root 或两个相同后继。
+- migration `0016_disposition_evaluation` / tables `soc_disposition_sample_manifests`、
+  `soc_disposition_outcomes` 是 source of truth；indexed columns 与 typed JSON payload 恢复时必须一致。
+- EV-01 gate 同时检查 proposal/resolved count、resolution rate、shadow precision、override rate、sampled
+  count/precision/coverage/agreement、source freshness 和 fact-version fan-out。任何 dataset truncation 或
+  source-enrichment lineage gap 必须返回 `insufficient_data`。Policy 必须显式 allowlist primary/sample
+  outcome source；不在 allowlist 的 replay/external/analyst label 不得进入该次指标。
+- `passed_shadow_evaluation` 只允许标记 `eligible_for_governed_rollout_review`。Policy/report 固定
+  `auto_close_allowed=false`；EV-01 不得修改 run、summary、ReviewQueue、memory、approval、proposal 或 action。
+- CLI 为 `soc disposition sample create|list|get`、`soc disposition outcome record|list|get` 和
+  `soc disposition evaluate`；InvestigationContext/Web/TUI/Lead Agent 对 outcome 只读投影。EV-02 才接
+  Web/TUI/API 与 trusted external disposition 的结构化写入，仍不得绕过 service。
 
 Security exercise / 护网与红蓝对抗事实约束：
 

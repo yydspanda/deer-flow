@@ -60,6 +60,7 @@ from soc_agent.contracts import (
     SocAgentStreamEvent,
     SocDaemonMessage,
     SocDaemonProcessResult,
+    SocDispositionOutcomeRecord,
     SocDispositionProposalRecord,
     SocDomainTriageRequest,
     SocDomainTriageResult,
@@ -100,6 +101,7 @@ from soc_agent.protocols import (
     SocActionAdapterRegistryPort,
     SocAgentApprovalGrantRepository,
     SocAgentApprovalRequestRepository,
+    SocDispositionEvaluationRepository,
     SocDispositionProposalRepository,
     SocEventSink,
     SocExternalDispositionRepository,
@@ -531,6 +533,7 @@ class SocReviewService:
         evidence_repository: InvestigationEvidenceRepository | None = None,
         authorization_enrichment_repository: AuthorizationEnrichmentRepository | None = None,
         disposition_proposal_repository: SocDispositionProposalRepository | None = None,
+        disposition_evaluation_repository: SocDispositionEvaluationRepository | None = None,
         external_disposition_repository: SocExternalDispositionRepository | None = None,
         memory_candidate_repository: MemoryCandidateRepository | None = None,
         memory_record_repository: MemoryRecordRepository | None = None,
@@ -543,6 +546,7 @@ class SocReviewService:
         self._evidence_repository = evidence_repository
         self._authorization_enrichment_repository = authorization_enrichment_repository
         self._disposition_proposal_repository = disposition_proposal_repository
+        self._disposition_evaluation_repository = disposition_evaluation_repository
         self._external_disposition_repository = external_disposition_repository
         self._memory_candidate_repository = memory_candidate_repository
         self._memory_record_repository = memory_record_repository
@@ -754,6 +758,14 @@ class SocReviewService:
             if self._disposition_proposal_repository is not None
             else []
         )
+        disposition_outcomes = (
+            self._disposition_evaluation_repository.list_disposition_outcomes(
+                queue_id=item.queue_id,
+                limit=50,
+            )
+            if self._disposition_evaluation_repository is not None
+            else []
+        )
         external_dispositions = (
             self._external_disposition_repository.list_external_dispositions(
                 queue_id=item.queue_id,
@@ -789,6 +801,7 @@ class SocReviewService:
             action_evidence=action_evidence,
             authorization_enrichments=authorization_enrichments,
             disposition_proposals=disposition_proposals,
+            disposition_outcomes=disposition_outcomes,
             external_dispositions=external_dispositions,
             memory_candidates=memory_candidates,
             correlation_result=correlation_result,
@@ -2453,6 +2466,7 @@ def _unified_investigation_view_from_context(context: InvestigationContext) -> U
             "authorization_enrichments": len(context.authorization_enrichments),
             "exact_authorization_matches": sum(item.match_result.status.value == "exact" for item in context.authorization_enrichments),
             "disposition_proposals": len(context.disposition_proposals),
+            "disposition_outcomes": len(context.disposition_outcomes),
             "external_dispositions": len(context.external_dispositions),
             "memory_candidates": len(context.memory_candidates),
             "relevant_memories": context.relevant_memories.returned_count if context.relevant_memories is not None else 0,
@@ -2623,6 +2637,8 @@ def _investigation_timeline_from_context(context: InvestigationContext) -> list[
         )
     for proposal in context.disposition_proposals:
         items.append(_disposition_proposal_timeline_item(proposal))
+    for outcome in context.disposition_outcomes:
+        items.append(_disposition_outcome_timeline_item(outcome))
     for record in context.external_dispositions:
         items.append(
             InvestigationTimelineItem(
@@ -2723,6 +2739,33 @@ def _disposition_proposal_timeline_item(
             "auto_close_allowed": proposal.auto_close_allowed,
             "detection_truth_impact": proposal.detection_truth_impact,
             "review_queue_impact": proposal.review_queue_impact,
+        },
+    )
+
+
+def _disposition_outcome_timeline_item(
+    outcome: SocDispositionOutcomeRecord,
+) -> InvestigationTimelineItem:
+    return InvestigationTimelineItem(
+        kind="disposition_outcome",
+        title="Shadow disposition outcome",
+        summary=outcome.reason,
+        status=f"{outcome.outcome_status.value}/{outcome.review_kind.value}",
+        source_id=outcome.outcome_id,
+        source_refs={
+            "outcome_id": outcome.outcome_id,
+            "proposal_id": outcome.proposal_id,
+            "run_id": outcome.run_id,
+        },
+        occurred_at=outcome.observed_at,
+        payload={
+            "proposed_disposition": outcome.proposed_disposition.value,
+            "observed_disposition": outcome.observed_disposition.value,
+            "source": outcome.source.value,
+            "sample_id": outcome.sample_id,
+            "supersedes_outcome_id": outcome.supersedes_outcome_id,
+            "decision_impact": outcome.decision_impact,
+            "review_queue_impact": outcome.review_queue_impact,
         },
     )
 

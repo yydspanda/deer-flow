@@ -133,6 +133,8 @@ class SocEventType(StrEnum):
     AUTHORIZATION_ENRICHMENT_RECORDED = "authorization.enrichment_recorded"
     AUTHORIZATION_ENRICHMENT_REPLAYED = "authorization.enrichment_replayed"
     DISPOSITION_PROPOSAL_RECORDED = "disposition.proposal_recorded"
+    DISPOSITION_SAMPLE_CREATED = "disposition.sample_created"
+    DISPOSITION_OUTCOME_RECORDED = "disposition.outcome_recorded"
 
 
 class AuditAction(StrEnum):
@@ -238,6 +240,36 @@ SocExternalDispositionCanonicalStatus = SocOperationalDisposition
 
 class SocDispositionProposalReasonCode(StrEnum):
     AUTHORIZED_ACTIVITY_EXACT_MATCH = "authorized_activity_exact_match"
+
+
+class SocDispositionOutcomeReviewKind(StrEnum):
+    """Independent label lanes used by shadow disposition evaluation."""
+
+    ANALYST_RESOLUTION = "analyst_resolution"
+    SAMPLED_QUALITY_REVIEW = "sampled_quality_review"
+
+
+class SocDispositionOutcomeSource(StrEnum):
+    ANALYST = "analyst"
+    EXTERNAL_DISPOSITION = "external_disposition"
+    REPLAY_LABEL = "replay_label"
+
+
+class SocDispositionOutcomeStatus(StrEnum):
+    CONFIRMED = "confirmed"
+    OVERRIDDEN = "overridden"
+    INCONCLUSIVE = "inconclusive"
+
+
+class SocDispositionEvaluationGateStatus(StrEnum):
+    INSUFFICIENT_DATA = "insufficient_data"
+    FAILED = "failed"
+    PASSED_SHADOW_EVALUATION = "passed_shadow_evaluation"
+
+
+class SocDispositionEvaluationRecommendation(StrEnum):
+    HOLD_SHADOW = "hold_shadow"
+    ELIGIBLE_FOR_GOVERNED_ROLLOUT_REVIEW = "eligible_for_governed_rollout_review"
 
 
 class SocExternalDispositionApplyStatus(StrEnum):
@@ -427,6 +459,253 @@ class SocDispositionProposalApplyResult(BaseModel):
     event_written: bool = False
 
 
+class SocDispositionEvaluationScope(BaseModel):
+    """One tenant/environment/version/time cohort evaluated as a unit."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_evaluation_scope.v1"] = "soc.disposition_evaluation_scope.v1"
+    tenant_id: str | None = Field(default=None, max_length=128)
+    environment: str | None = Field(default=None, max_length=128)
+    window_start: datetime
+    window_end: datetime
+    proposal_policy_version: str = Field(min_length=1, max_length=128)
+    matcher_policy_version: str = Field(min_length=1, max_length=128)
+
+    @field_validator("window_start", "window_end")
+    @classmethod
+    def validate_aware_window(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("disposition evaluation windows must be timezone-aware")
+        return value
+
+    @model_validator(mode="after")
+    def validate_window(self) -> SocDispositionEvaluationScope:
+        if self.window_end <= self.window_start:
+            raise ValueError("disposition evaluation window_end must be after window_start")
+        return self
+
+
+class SocDispositionSampleCreateCommand(BaseModel):
+    """Create a reproducible quality-review sample from one evaluation scope."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_sample_create_command.v1"] = "soc.disposition_sample_create_command.v1"
+    scope: SocDispositionEvaluationScope
+    sample_size: int = Field(ge=1, le=10_000)
+    selection_seed: str = Field(min_length=1, max_length=256)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+
+class SocDispositionSampleManifest(BaseModel):
+    """Immutable deterministic sample manifest used to prevent cherry-picking."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_sample_manifest.v1"] = "soc.disposition_sample_manifest.v1"
+    sample_id: str = Field(default_factory=lambda: f"DSAMPLE-{uuid4().hex[:20].upper()}")
+    sample_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    scope: SocDispositionEvaluationScope
+    scope_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    population_count: int = Field(ge=1)
+    population_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selected_proposal_ids: list[str] = Field(min_length=1, max_length=10_000)
+    sample_size: int = Field(ge=1, le=10_000)
+    selection_seed_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sampling_method: Literal["sha256_rank_v1"] = "sha256_rank_v1"
+    idempotency_key: str = Field(min_length=1, max_length=128)
+    created_by: ActorContext = Field(default_factory=ActorContext)
+    created_at: datetime = Field(default_factory=utc_now)
+    shadow_only: Literal[True] = True
+    decision_impact: Literal["none"] = "none"
+
+    @model_validator(mode="after")
+    def validate_manifest(self) -> SocDispositionSampleManifest:
+        if self.sample_size != len(self.selected_proposal_ids):
+            raise ValueError("sample_size must equal selected_proposal_ids length")
+        if self.sample_size > self.population_count:
+            raise ValueError("sample_size cannot exceed population_count")
+        if len(set(self.selected_proposal_ids)) != len(self.selected_proposal_ids):
+            raise ValueError("selected_proposal_ids must be unique")
+        return self
+
+
+class SocDispositionSampleCreateResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_sample_create_result.v1"] = "soc.disposition_sample_create_result.v1"
+    manifest: SocDispositionSampleManifest
+    idempotent: bool = False
+
+
+class SocDispositionOutcomeCommand(BaseModel):
+    """Record one explicit human or trusted-system label for a proposal."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_outcome_command.v1"] = "soc.disposition_outcome_command.v1"
+    proposal_id: str = Field(min_length=1, max_length=64)
+    observed_disposition: SocOperationalDisposition
+    review_kind: SocDispositionOutcomeReviewKind = SocDispositionOutcomeReviewKind.ANALYST_RESOLUTION
+    source: SocDispositionOutcomeSource = SocDispositionOutcomeSource.ANALYST
+    source_ref: str | None = Field(default=None, min_length=1, max_length=256)
+    sample_id: str | None = Field(default=None, min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=4000)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=300)
+    observed_at: datetime | None = None
+    supersedes_outcome_id: str | None = Field(default=None, min_length=1, max_length=64)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+    @field_validator("observed_at")
+    @classmethod
+    def validate_observed_at(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("disposition outcome observed_at must be timezone-aware")
+        return value
+
+    @model_validator(mode="after")
+    def validate_review_kind(self) -> SocDispositionOutcomeCommand:
+        if self.review_kind is SocDispositionOutcomeReviewKind.SAMPLED_QUALITY_REVIEW and self.sample_id is None:
+            raise ValueError("sampled quality review requires sample_id")
+        if self.review_kind is SocDispositionOutcomeReviewKind.ANALYST_RESOLUTION and self.sample_id is not None:
+            raise ValueError("analyst resolution must not reference a sample manifest")
+        if self.source is not SocDispositionOutcomeSource.ANALYST and self.source_ref is None:
+            raise ValueError("non-analyst outcome source requires source_ref")
+        return self
+
+
+class SocDispositionOutcomeRecord(BaseModel):
+    """Append-only proposal label; later corrections supersede instead of overwrite."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_outcome_record.v1"] = "soc.disposition_outcome_record.v1"
+    outcome_id: str = Field(default_factory=lambda: f"DOUT-{uuid4().hex[:20].upper()}")
+    lineage_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    proposal_id: str = Field(min_length=1, max_length=64)
+    proposal_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    run_id: str = Field(min_length=1, max_length=64)
+    alert_id: str = Field(min_length=1, max_length=128)
+    queue_id: str = Field(min_length=1, max_length=64)
+    proposed_disposition: SocOperationalDisposition
+    observed_disposition: SocOperationalDisposition
+    outcome_status: SocDispositionOutcomeStatus
+    review_kind: SocDispositionOutcomeReviewKind
+    source: SocDispositionOutcomeSource
+    source_ref: str | None = Field(default=None, min_length=1, max_length=256)
+    sample_id: str | None = Field(default=None, min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=4000)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=300)
+    proposal_policy_version: str = Field(min_length=1, max_length=128)
+    supersedes_outcome_id: str | None = Field(default=None, min_length=1, max_length=64)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+    reviewed_by: ActorContext = Field(default_factory=ActorContext)
+    observed_at: datetime
+    created_at: datetime = Field(default_factory=utc_now)
+    shadow_only: Literal[True] = True
+    decision_impact: Literal["none"] = "none"
+    review_queue_impact: Literal["none"] = "none"
+
+
+class SocDispositionOutcomeApplyResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_outcome_apply_result.v1"] = "soc.disposition_outcome_apply_result.v1"
+    outcome: SocDispositionOutcomeRecord
+    idempotent: bool = False
+    event_written: bool = False
+
+
+class SocDispositionEvaluationGatePolicy(BaseModel):
+    """Explicit deployment-owned thresholds; the report cannot enable automation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_evaluation_gate_policy.v1"] = "soc.disposition_evaluation_gate_policy.v1"
+    policy_version: str = Field(min_length=1, max_length=128)
+    scope: SocDispositionEvaluationScope
+    accepted_primary_sources: list[SocDispositionOutcomeSource] = Field(min_length=1, max_length=10)
+    accepted_sample_sources: list[SocDispositionOutcomeSource] = Field(min_length=1, max_length=10)
+    minimum_proposal_count: int = Field(ge=1)
+    minimum_resolved_count: int = Field(ge=1)
+    minimum_resolution_rate: float = Field(ge=0.0, le=1.0)
+    minimum_shadow_precision: float = Field(ge=0.0, le=1.0)
+    maximum_override_rate: float = Field(ge=0.0, le=1.0)
+    minimum_sampled_review_count: int = Field(ge=1)
+    minimum_sampled_precision: float = Field(ge=0.0, le=1.0)
+    minimum_sample_coverage_rate: float = Field(ge=0.0, le=1.0)
+    minimum_sample_agreement_count: int = Field(ge=1)
+    minimum_sample_agreement_rate: float = Field(ge=0.0, le=1.0)
+    minimum_freshness_pass_rate: float = Field(ge=0.0, le=1.0)
+    maximum_fact_version_fanout: int = Field(ge=1)
+    auto_close_allowed: Literal[False] = False
+
+    @model_validator(mode="after")
+    def validate_source_allowlists(self) -> SocDispositionEvaluationGatePolicy:
+        if len(set(self.accepted_primary_sources)) != len(self.accepted_primary_sources):
+            raise ValueError("accepted_primary_sources must be unique")
+        if len(set(self.accepted_sample_sources)) != len(self.accepted_sample_sources):
+            raise ValueError("accepted_sample_sources must be unique")
+        return self
+
+
+class SocDispositionEvaluationMetric(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=128)
+    value: float | None = None
+    threshold: float
+    comparator: Literal[">=", "<="]
+    passed: bool
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class SocDispositionFactFanout(BaseModel):
+    fact_id: str = Field(min_length=1, max_length=64)
+    fact_version_id: str = Field(min_length=1, max_length=64)
+    proposal_count: int = Field(ge=1)
+
+
+class SocDispositionEvaluationReport(BaseModel):
+    """Read-only EV-01 metrics and rollout-review recommendation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_evaluation_report.v1"] = "soc.disposition_evaluation_report.v1"
+    policy: SocDispositionEvaluationGatePolicy
+    scope_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dataset_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dataset_complete: bool
+    proposal_count: int = Field(ge=0)
+    resolved_count: int = Field(ge=0)
+    confirmed_count: int = Field(ge=0)
+    overridden_count: int = Field(ge=0)
+    inconclusive_count: int = Field(ge=0)
+    pending_count: int = Field(ge=0)
+    resolution_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    shadow_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    override_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    sampled_population_count: int = Field(ge=0)
+    sampled_review_count: int = Field(ge=0)
+    sampled_precision: float | None = Field(default=None, ge=0.0, le=1.0)
+    sample_coverage_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    sample_agreement_count: int = Field(ge=0)
+    sample_agreement_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    freshness_pass_count: int = Field(ge=0)
+    freshness_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    maximum_fact_version_fanout: int = Field(ge=0)
+    fact_fanout: list[SocDispositionFactFanout] = Field(default_factory=list, max_length=10_000)
+    metrics: list[SocDispositionEvaluationMetric] = Field(default_factory=list, max_length=50)
+    gate_status: SocDispositionEvaluationGateStatus
+    recommendation: SocDispositionEvaluationRecommendation
+    rollout_review_eligible: bool = False
+    rollback_signals: list[str] = Field(default_factory=list, max_length=50)
+    warnings: list[str] = Field(default_factory=list, max_length=100)
+    auto_close_allowed: Literal[False] = False
+    generated_at: datetime = Field(default_factory=utc_now)
+
+
 class SocEvent(BaseModel):
     schema_version: str = "soc.event.v1"
     event_id: str = Field(default_factory=lambda: f"EVT-{uuid4().hex[:12].upper()}")
@@ -556,6 +835,7 @@ class SocLeadAgentReviewContextArtifact(BaseModel):
     external_dispositions: list[dict[str, Any]] = Field(default_factory=list)
     authorization_enrichments: list[dict[str, Any]] = Field(default_factory=list)
     disposition_proposals: list[dict[str, Any]] = Field(default_factory=list)
+    disposition_outcomes: list[dict[str, Any]] = Field(default_factory=list)
     memory_candidates: list[dict[str, Any]] = Field(default_factory=list)
     relevant_memories: dict[str, Any] | None = None
     investigation_view: dict[str, Any] | None = None
@@ -2546,6 +2826,7 @@ class InvestigationTimelineItem(BaseModel):
         "read_only_evidence",
         "authorization_enrichment",
         "disposition_proposal",
+        "disposition_outcome",
         "external_disposition",
         "memory_candidate",
         "relevant_memory",
@@ -2587,6 +2868,7 @@ class UnifiedInvestigationView(BaseModel):
             "Domain findings and relevant memories do not change the operational verdict.",
             "Authorization enrichments are shadow matches and do not change detection truth or disposition.",
             "Disposition proposals are shadow-only and require human review; they do not close review items.",
+            "Disposition outcomes are evaluation labels only; they do not mutate detection truth or review state.",
             "External feedback and memory updates must still pass service boundaries.",
         ]
     )
@@ -2605,6 +2887,7 @@ class InvestigationContext(BaseModel):
     action_evidence: list[InvestigationEvidence] = Field(default_factory=list)
     authorization_enrichments: list[AuthorizationEnrichmentRecord] = Field(default_factory=list)
     disposition_proposals: list[SocDispositionProposalRecord] = Field(default_factory=list)
+    disposition_outcomes: list[SocDispositionOutcomeRecord] = Field(default_factory=list)
     external_dispositions: list[SocExternalDispositionRecord] = Field(default_factory=list)
     memory_candidates: list[SocMemoryCandidate] = Field(default_factory=list)
     relevant_memories: SocMemoryRetrievalResult | None = None

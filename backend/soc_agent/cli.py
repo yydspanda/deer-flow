@@ -51,13 +51,20 @@ from soc_agent.contracts import (
     ReviewQueueStatus,
     ServiceRequestContext,
     SocAgentActionCommand,
+    SocDispositionEvaluationGatePolicy,
+    SocDispositionEvaluationScope,
+    SocDispositionOutcomeCommand,
+    SocDispositionOutcomeReviewKind,
+    SocDispositionOutcomeSource,
     SocDispositionProposalCommand,
+    SocDispositionSampleCreateCommand,
     SocDomainName,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateStatus,
     SocMemoryQuery,
     SocMemoryRecordStatus,
+    SocOperationalDisposition,
     Verdict,
 )
 from soc_agent.core import (
@@ -71,6 +78,7 @@ from soc_agent.core import (
     SocAuthorizedActivityService,
     SocCorrelationService,
     SocDaemonService,
+    SocDispositionEvaluationService,
     SocDispositionProposalService,
     SocGovernedContextService,
     SocMemoryService,
@@ -233,6 +241,22 @@ def main(argv: list[str] | None = None) -> int:
         return _disposition_list(args)
     if args.command == "disposition" and args.disposition_command == "get":
         return _disposition_get(args)
+    if args.command == "disposition" and args.disposition_command == "sample":
+        if args.disposition_sample_command == "create":
+            return _disposition_sample_create(args)
+        if args.disposition_sample_command == "list":
+            return _disposition_sample_list(args)
+        if args.disposition_sample_command == "get":
+            return _disposition_sample_get(args)
+    if args.command == "disposition" and args.disposition_command == "outcome":
+        if args.disposition_outcome_command == "record":
+            return _disposition_outcome_record(args)
+        if args.disposition_outcome_command == "list":
+            return _disposition_outcome_list(args)
+        if args.disposition_outcome_command == "get":
+            return _disposition_outcome_get(args)
+    if args.command == "disposition" and args.disposition_command == "evaluate":
+        return _disposition_evaluate(args)
     if args.command == "context" and args.context_command == "propose":
         return _context_fact_propose(args)
     if args.command == "context" and args.context_command == "revise":
@@ -738,6 +762,88 @@ def _build_parser() -> argparse.ArgumentParser:
     disposition_get.add_argument("proposal_id")
     disposition_get.add_argument("--pretty", action="store_true")
     _add_database_args(disposition_get)
+    disposition_sample = disposition_subparsers.add_parser(
+        "sample",
+        help="Manage reproducible EV-01 quality-review sample manifests",
+    )
+    disposition_sample_subparsers = disposition_sample.add_subparsers(dest="disposition_sample_command")
+    disposition_sample_create = disposition_sample_subparsers.add_parser("create")
+    disposition_sample_create.add_argument("path", nargs="?", help="Path to SocDispositionEvaluationScope JSON")
+    disposition_sample_create.add_argument("--json", dest="json_payload", help="Inline evaluation scope JSON")
+    disposition_sample_create.add_argument("--sample-size", type=int, required=True)
+    disposition_sample_create.add_argument("--seed", required=True, help="Selection seed; only its hash is persisted")
+    disposition_sample_create.add_argument("--idempotency-key", required=True)
+    disposition_sample_create.add_argument("--actor-id", default="soc-evaluation-admin")
+    disposition_sample_create.add_argument("--proposal-limit", type=int, default=10_000)
+    disposition_sample_create.add_argument("--pretty", action="store_true")
+    _add_database_args(disposition_sample_create)
+    disposition_sample_list = disposition_sample_subparsers.add_parser("list")
+    disposition_sample_list.add_argument("--scope-hash")
+    disposition_sample_list.add_argument("--limit", type=int, default=100)
+    disposition_sample_list.add_argument("--pretty", action="store_true")
+    _add_database_args(disposition_sample_list)
+    disposition_sample_get = disposition_sample_subparsers.add_parser("get")
+    disposition_sample_get.add_argument("sample_id")
+    disposition_sample_get.add_argument("--pretty", action="store_true")
+    _add_database_args(disposition_sample_get)
+
+    disposition_outcome = disposition_subparsers.add_parser(
+        "outcome",
+        help="Record and inspect explicit EV-01 proposal outcomes",
+    )
+    disposition_outcome_subparsers = disposition_outcome.add_subparsers(dest="disposition_outcome_command")
+    disposition_outcome_record = disposition_outcome_subparsers.add_parser("record")
+    disposition_outcome_record.add_argument("proposal_id")
+    disposition_outcome_record.add_argument(
+        "--observed-disposition",
+        choices=[item.value for item in SocOperationalDisposition],
+        required=True,
+    )
+    disposition_outcome_record.add_argument(
+        "--review-kind",
+        choices=[item.value for item in SocDispositionOutcomeReviewKind],
+        default=SocDispositionOutcomeReviewKind.ANALYST_RESOLUTION.value,
+    )
+    disposition_outcome_record.add_argument(
+        "--source",
+        choices=[item.value for item in SocDispositionOutcomeSource],
+        default=SocDispositionOutcomeSource.ANALYST.value,
+    )
+    disposition_outcome_record.add_argument("--source-ref")
+    disposition_outcome_record.add_argument("--sample-id")
+    disposition_outcome_record.add_argument("--reason", required=True)
+    disposition_outcome_record.add_argument("--evidence-ref", action="append", default=[])
+    disposition_outcome_record.add_argument("--observed-at", help="Timezone-aware ISO-8601 timestamp")
+    disposition_outcome_record.add_argument("--supersedes-outcome-id")
+    disposition_outcome_record.add_argument("--idempotency-key", required=True)
+    disposition_outcome_record.add_argument("--actor-id", default="soc-analyst")
+    disposition_outcome_record.add_argument("--pretty", action="store_true")
+    _add_database_args(disposition_outcome_record)
+    disposition_outcome_list = disposition_outcome_subparsers.add_parser("list")
+    disposition_outcome_list.add_argument("--proposal-id")
+    disposition_outcome_list.add_argument("--queue-id")
+    disposition_outcome_list.add_argument(
+        "--review-kind",
+        choices=[item.value for item in SocDispositionOutcomeReviewKind],
+    )
+    disposition_outcome_list.add_argument("--sample-id")
+    disposition_outcome_list.add_argument("--limit", type=int, default=500)
+    disposition_outcome_list.add_argument("--pretty", action="store_true")
+    _add_database_args(disposition_outcome_list)
+    disposition_outcome_get = disposition_outcome_subparsers.add_parser("get")
+    disposition_outcome_get.add_argument("outcome_id")
+    disposition_outcome_get.add_argument("--pretty", action="store_true")
+    _add_database_args(disposition_outcome_get)
+
+    disposition_evaluate = disposition_subparsers.add_parser(
+        "evaluate",
+        help="Compute a read-only EV-01 gate report from an explicit policy",
+    )
+    disposition_evaluate.add_argument("path", nargs="?", help="Path to SocDispositionEvaluationGatePolicy JSON")
+    disposition_evaluate.add_argument("--json", dest="json_payload", help="Inline gate policy JSON")
+    disposition_evaluate.add_argument("--proposal-limit", type=int, default=10_000)
+    disposition_evaluate.add_argument("--pretty", action="store_true")
+    _add_database_args(disposition_evaluate)
 
     context = subparsers.add_parser("context", help="Governed operational context fact helpers")
     context_subparsers = context.add_subparsers(dest="context_command")
@@ -1244,6 +1350,7 @@ def _review_context(args: argparse.Namespace) -> int:
             evidence_repository=repository,
             authorization_enrichment_repository=repository,
             disposition_proposal_repository=repository,
+            disposition_evaluation_repository=repository,
             external_disposition_repository=repository,
             memory_candidate_repository=repository,
             memory_record_repository=repository,
@@ -1803,6 +1910,174 @@ def _disposition_proposal_service(
     )
 
 
+def _disposition_sample_create(args: argparse.Namespace) -> int:
+    try:
+        scope = SocDispositionEvaluationScope.model_validate(_load_payload(args.path, args.json_payload))
+        repository = _repository_from_args(args)
+        result = _disposition_evaluation_service(repository).create_sample(
+            SocDispositionSampleCreateCommand(
+                scope=scope,
+                sample_size=args.sample_size,
+                selection_seed=args.seed,
+                idempotency_key=args.idempotency_key,
+            ),
+            context=_disposition_evaluation_context(args.actor_id, role="soc_evaluation_admin"),
+            proposal_limit=args.proposal_limit,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: disposition evaluation database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _disposition_sample_list(args: argparse.Namespace) -> int:
+    try:
+        items = _disposition_evaluation_service(_repository_from_args(args)).list_samples(
+            scope_hash=args.scope_hash,
+            limit=args.limit,
+        )
+    except (ValueError, SQLAlchemyError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps([item.model_dump(mode="json", exclude_none=True) for item in items], ensure_ascii=False, indent=2 if args.pretty else None))
+    return 0
+
+
+def _disposition_sample_get(args: argparse.Namespace) -> int:
+    try:
+        item = _disposition_evaluation_service(_repository_from_args(args)).get_sample(args.sample_id)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: disposition evaluation database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(item.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _disposition_outcome_record(args: argparse.Namespace) -> int:
+    payload: dict[str, Any] = {
+        "proposal_id": args.proposal_id,
+        "observed_disposition": args.observed_disposition,
+        "review_kind": args.review_kind,
+        "source": args.source,
+        "source_ref": args.source_ref,
+        "sample_id": args.sample_id,
+        "reason": args.reason,
+        "evidence_refs": args.evidence_ref,
+        "supersedes_outcome_id": args.supersedes_outcome_id,
+        "idempotency_key": args.idempotency_key,
+    }
+    if args.observed_at is not None:
+        payload["observed_at"] = args.observed_at
+    try:
+        repository = _repository_from_args(args)
+        result = _disposition_evaluation_service(repository).record_outcome(
+            SocDispositionOutcomeCommand.model_validate(payload),
+            context=_disposition_evaluation_context(
+                args.actor_id,
+                role=("soc_quality_reviewer" if args.review_kind == SocDispositionOutcomeReviewKind.SAMPLED_QUALITY_REVIEW.value else "soc_analyst"),
+            ),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: disposition evaluation database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _disposition_outcome_list(args: argparse.Namespace) -> int:
+    try:
+        review_kind = SocDispositionOutcomeReviewKind(args.review_kind) if args.review_kind else None
+        items = _disposition_evaluation_service(_repository_from_args(args)).list_outcomes(
+            proposal_id=args.proposal_id,
+            queue_id=args.queue_id,
+            review_kind=review_kind,
+            sample_id=args.sample_id,
+            limit=args.limit,
+        )
+    except (ValueError, SQLAlchemyError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps([item.model_dump(mode="json", exclude_none=True) for item in items], ensure_ascii=False, indent=2 if args.pretty else None))
+    return 0
+
+
+def _disposition_outcome_get(args: argparse.Namespace) -> int:
+    try:
+        item = _disposition_evaluation_service(_repository_from_args(args)).get_outcome(args.outcome_id)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: disposition evaluation database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(item.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _disposition_evaluate(args: argparse.Namespace) -> int:
+    try:
+        policy = SocDispositionEvaluationGatePolicy.model_validate(_load_payload(args.path, args.json_payload))
+        report = _disposition_evaluation_service(_repository_from_args(args)).evaluate(
+            policy,
+            proposal_limit=args.proposal_limit,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: disposition evaluation database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _disposition_evaluation_service(
+    repository: SqlAlchemyAlertRepository,
+) -> SocDispositionEvaluationService:
+    return SocDispositionEvaluationService(
+        repository=repository,
+        proposal_repository=repository,
+        authorization_enrichment_repository=repository,
+        review_queue_repository=repository,
+    )
+
+
+def _disposition_evaluation_context(actor_id: str, *, role: str) -> ServiceRequestContext:
+    return ServiceRequestContext(
+        actor=ActorContext(
+            actor_id=actor_id,
+            actor_type=ActorType.USER,
+            surface=EntrySurface.CLI,
+            roles=[role],
+        )
+    )
+
+
 def _context_authorization_enrich(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
@@ -1954,6 +2229,7 @@ def _review_tui(args: argparse.Namespace) -> int:
                 evidence_repository=repository,
                 authorization_enrichment_repository=repository,
                 disposition_proposal_repository=repository,
+                disposition_evaluation_repository=repository,
                 external_disposition_repository=repository,
                 memory_candidate_repository=repository,
                 memory_record_repository=repository,
@@ -1987,6 +2263,7 @@ def _chat_tui(args: argparse.Namespace) -> int:
             evidence_repository=repository,
             authorization_enrichment_repository=repository,
             disposition_proposal_repository=repository,
+            disposition_evaluation_repository=repository,
             external_disposition_repository=repository,
             memory_candidate_repository=repository,
             memory_record_repository=repository,
@@ -2483,6 +2760,7 @@ def _demo_alert(args: argparse.Namespace) -> int:
                 evidence_repository=repository,
                 authorization_enrichment_repository=repository,
                 disposition_proposal_repository=repository,
+                disposition_evaluation_repository=repository,
                 external_disposition_repository=repository,
                 memory_candidate_repository=repository,
                 memory_record_repository=repository,

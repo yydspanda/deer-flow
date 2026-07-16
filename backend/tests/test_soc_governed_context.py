@@ -376,9 +376,11 @@ def test_soc_migration_head_creates_governed_context_authorization_and_dispositi
         assert "soc_governed_context_facts" in inspect(engine).get_table_names()
         assert "soc_authorization_enrichments" in inspect(engine).get_table_names()
         assert "soc_disposition_proposals" in inspect(engine).get_table_names()
+        assert "soc_disposition_sample_manifests" in inspect(engine).get_table_names()
+        assert "soc_disposition_outcomes" in inspect(engine).get_table_names()
         with engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM soc_alembic_version")).scalar_one()
-        assert revision == "0015_disposition_proposals"
+        assert revision == "0016_disposition_evaluation"
     finally:
         engine.dispose()
 

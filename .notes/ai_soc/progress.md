@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 Runtime 工程闭环完成；Phase 2 correlation / domain triage 起步 |
-| 当前目标 | GF-01 + AA-01 + EX-01 + DP-01 已完成：typed fact、event-time matcher、append-only enrichment 和 shadow disposition proposal 已形成可审阅闭环 |
+| 当前目标 | GF-01 + AA-01 + EX-01 + DP-01 + EV-01 已完成：typed fact、shadow proposal、显式 outcome、可复现抽样与只读 gate 已形成可评测闭环 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `EV-01 Shadow Disposition Evaluation Gate`：定义 analyst outcome/override、precision、freshness、fan-out、抽样复核和 rollback 指标；只评测，不启用 auto-close。 |
+| 当前下一刀 | `EV-02 Outcome Capture Integration`：让 Web/TUI/API 与 trusted external disposition 通过同一 service 写入结构化 outcome；不从 close_reason 猜标签，不启用 auto-close。 |
 
 ## 当前待办列表
 
@@ -70,6 +70,7 @@
 | 11.5 | Authorized activity event-time matcher | AA-01 Done | 已完成 `AuthorizationQuery/AuthorizationMatchResult`、canonical query builder、历史 lifecycle version selection、source freshness/recurrence/scope matcher、`soc context match`；真实 HIDS/EDR shadow replay 均为 exact | matcher 不识别 vendor aliases、不调用 LLM、不持久化、不改 verdict/ReviewQueue/disposition；naive event time 必须显式传 IANA timezone |
 | 11.6 | Authorization enrichment persistence/projection | EX-01 Done | 已完成 strict command/record/result contracts、append-only in-memory/SQL repository、`0014` migration、幂等写入、replay lineage、CLI 和 InvestigationContext/Web/TUI/Lead Agent 投影 | enrichment 保存 query hash/policy/fact refs/actor；`shadow_only=true`、`decision_impact=none`；不修改 run decision/queue/memory/disposition |
 | 11.7 | Shadow disposition proposal | DP-01 Done | 已完成 generic operational disposition、detection truth snapshot、append-only proposal repository、`0015` migration、CLI 和 InvestigationContext/Web/TUI/Lead Agent 投影 | 仅 open-queue persisted exact enrichment + current true-positive 可提议 benign-TP；proposal 永远 shadow/not-applied，人工复核，不改 run/queue，不自动关单 |
+| 11.8 | Shadow disposition evaluation gate | EV-01 Done | 已完成 explicit evaluation scope、hash-ranked sample manifest、append-only superseding outcome、`0016` migration、CLI、gate report 和 InvestigationContext/Web/TUI/Lead Agent 只读投影 | 指标覆盖 resolution/precision/override/sample coverage+agreement/freshness/fact fan-out；passed 只代表可进入治理评审，`auto_close_allowed=false` |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Partial | normalization 运维页、Gateway bounded metrics 和 Kafka JSONL issue 摘要已完成；全局 Kafka/review/approval/runtime/算力 Prometheus exporter 和态势面板仍后置 | 当前 maintenance issue 可见；全系统运行态势不阻塞 SOC Agent Alpha |
@@ -181,6 +182,35 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-16 — EV-01 shadow disposition evaluation gate implemented
+
+- 新增严格分层合同：
+  - `SocDispositionEvaluationScope` 固定 tenant/environment/time window/proposal+matcher policy cohort；
+  - `SocDispositionSampleManifest` 用 `sha256_rank_v1` 从完整 population 可复现抽样，只保存 seed hash；
+  - `SocDispositionOutcomeRecord` 显式保存 proposed/observed disposition、review kind、来源、reviewer、sample、
+    evidence 和时间；更正必须 append 并显式 `supersedes_outcome_id`，唯一 lineage key 阻止并发双 root/后继；
+  - `SocDispositionEvaluationGatePolicy/Report` 计算 resolution、shadow precision、override、独立抽样 coverage/
+    precision/agreement、source freshness 和 fact-version fan-out。
+- 新增 `SocDispositionEvaluationService`：
+  - outcome 只能绑定 lineage 一致且已关闭的 ReviewQueue；不能从 free-text `close_reason` 推断标签；
+  - sampled quality review 必须来自持久化 manifest，proposal 必须在样本中，已有 primary reviewer 时要求独立 reviewer；
+  - population/outcome/manifest 查询命中 limit 或 enrichment lineage 破损时，gate fail closed 为
+    `insufficient_data`；
+  - gate policy 显式 allowlist primary/sample outcome source，且评测阶段再次排除同 reviewer 的非独立样本；
+  - 即使 `passed_shadow_evaluation`，结果也只是 `eligible_for_governed_rollout_review`，固定
+    `auto_close_allowed=false`。
+- 新增 append-only `soc_disposition_sample_manifests`、`soc_disposition_outcomes` 和 migration
+  `0016_disposition_evaluation`；SQL 与 in-memory repository 都校验唯一 idempotency/semantic identity 和
+  typed payload/index 一致性。
+- 新增 CLI：`soc disposition sample create|list|get`、`soc disposition outcome record|list|get`、
+  `soc disposition evaluate`。InvestigationContext、timeline/counts、Web/TUI 和 bounded Lead Agent artifact
+  只读展示 outcome，不提供 apply/close/action 能力。
+- 聚焦 service/repository/migration/CLI/Review projection/architecture 回归 `57 passed`；完整 SOC 回归
+  `484 passed, 1 warning`；Ruff、frontend `pnpm check` 和 `636 passed` 均通过。warning 是既有 DeerFlow
+  MCP cache 的 `asyncio.get_event_loop()` deprecation。
+- 下一步：`EV-02` 把 Web/TUI/API 结构化标签录入和 trusted external disposition bridge 接入同一 service；
+  不直接进入 auto-close rollout。
 
 ### 2026-07-16 — DP-01 shadow disposition proposal implemented
 

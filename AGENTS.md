@@ -174,7 +174,11 @@ Current SOC direction:
   append-only `SocDispositionProposalRecord` rows through migration `0015_disposition_proposals`.
   Only an exact enrichment linked to an open ReviewQueue plus current `true_positive` detection truth may propose
   `closed_benign_true_positive`; proposals remain shadow-only, require human review, and cannot
-  mutate the run, close ReviewQueue, or authorize an action. EV-01 owns any future rollout gate.
+  mutate the run, close ReviewQueue, or authorize an action. EV-01 uses
+  `SocDispositionEvaluationService` plus append-only sample manifests/outcomes through migration
+  `0016_disposition_evaluation`. `soc disposition sample|outcome|evaluate` supports reproducible
+  hash-ranked sampling, explicit superseding labels, and read-only precision/override/freshness/fan-out
+  gates. A passed report is only eligible for governed rollout review; `auto_close_allowed` remains false.
 - PingAn `zeusRawLogs[].message` values are parsed only inside the PingAn normalizer. Deterministically
   parsed message fields are high-trust primary facts; Zeus structured fields are reduced-trust
   fallback candidates. Preserve the complete original payload for replay/audit and expose only

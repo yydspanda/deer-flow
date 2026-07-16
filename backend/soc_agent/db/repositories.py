@@ -28,7 +28,10 @@ from soc_agent.contracts import (
     SimilarAlertQuery,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
+    SocDispositionOutcomeRecord,
+    SocDispositionOutcomeReviewKind,
     SocDispositionProposalRecord,
+    SocDispositionSampleManifest,
     SocExternalDispositionRecord,
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
@@ -42,7 +45,9 @@ from soc_agent.db.models import (
     SocApprovalRequestRow,
     SocAuthorizationEnrichmentRow,
     SocDecisionAuditLogRow,
+    SocDispositionOutcomeRow,
     SocDispositionProposalRow,
+    SocDispositionSampleManifestRow,
     SocExternalDispositionRow,
     SocGovernedContextFactRow,
     SocInvestigationEvidenceRow,
@@ -52,7 +57,7 @@ from soc_agent.db.models import (
     SocNormalizationSchemaBaselineRow,
     SocReviewQueueRow,
 )
-from soc_agent.disposition import DispositionProposalConflictError
+from soc_agent.disposition import DispositionEvaluationConflictError, DispositionProposalConflictError
 from soc_agent.governed_context import (
     GovernedContextFactVersionConflictError,
     validate_governed_context_fact_append,
@@ -402,6 +407,141 @@ class SqlAlchemyAlertRepository:
                 query = query.where(target_filter)
             result = session.execute(query.order_by(SocDispositionProposalRow.created_at.desc()).limit(limit))
             return [_disposition_proposal_from_row(row) for row in result.scalars()]
+
+    def save_disposition_sample_manifest(self, manifest: SocDispositionSampleManifest) -> None:
+        payload = manifest.model_dump(mode="json")
+        with self._session_factory() as session:
+            if session.get(SocDispositionSampleManifestRow, manifest.sample_id) is not None:
+                raise DispositionEvaluationConflictError(f"disposition sample {manifest.sample_id} already exists")
+            session.add(
+                SocDispositionSampleManifestRow(
+                    sample_id=manifest.sample_id,
+                    sample_key=manifest.sample_key,
+                    scope_hash=manifest.scope_hash,
+                    population_hash=manifest.population_hash,
+                    population_count=manifest.population_count,
+                    sample_size=manifest.sample_size,
+                    idempotency_key=manifest.idempotency_key,
+                    created_by_actor_id=manifest.created_by.actor_id,
+                    created_at=manifest.created_at,
+                    manifest_payload=payload,
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise DispositionEvaluationConflictError("disposition sample identity already exists") from exc
+
+    def get_disposition_sample_manifest(self, sample_id: str) -> SocDispositionSampleManifest | None:
+        with self._session_factory() as session:
+            row = session.get(SocDispositionSampleManifestRow, sample_id)
+            return _disposition_sample_manifest_from_row(row) if row is not None else None
+
+    def find_disposition_sample_manifest_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SocDispositionSampleManifest | None:
+        with self._session_factory() as session:
+            row = session.execute(select(SocDispositionSampleManifestRow).where(SocDispositionSampleManifestRow.idempotency_key == idempotency_key).limit(1)).scalar_one_or_none()
+            return _disposition_sample_manifest_from_row(row) if row is not None else None
+
+    def find_disposition_sample_manifest_by_key(
+        self,
+        sample_key: str,
+    ) -> SocDispositionSampleManifest | None:
+        with self._session_factory() as session:
+            row = session.execute(select(SocDispositionSampleManifestRow).where(SocDispositionSampleManifestRow.sample_key == sample_key).limit(1)).scalar_one_or_none()
+            return _disposition_sample_manifest_from_row(row) if row is not None else None
+
+    def list_disposition_sample_manifests(
+        self,
+        *,
+        scope_hash: str | None = None,
+        limit: int = 100,
+    ) -> list[SocDispositionSampleManifest]:
+        query = select(SocDispositionSampleManifestRow)
+        if scope_hash is not None:
+            query = query.where(SocDispositionSampleManifestRow.scope_hash == scope_hash)
+        with self._session_factory() as session:
+            rows = session.execute(query.order_by(SocDispositionSampleManifestRow.created_at.desc()).limit(limit)).scalars()
+            return [_disposition_sample_manifest_from_row(row) for row in rows]
+
+    def save_disposition_outcome(self, outcome: SocDispositionOutcomeRecord) -> None:
+        payload = outcome.model_dump(mode="json")
+        with self._session_factory() as session:
+            if session.get(SocDispositionOutcomeRow, outcome.outcome_id) is not None:
+                raise DispositionEvaluationConflictError(f"disposition outcome {outcome.outcome_id} already exists")
+            session.add(
+                SocDispositionOutcomeRow(
+                    outcome_id=outcome.outcome_id,
+                    lineage_key=outcome.lineage_key,
+                    proposal_id=outcome.proposal_id,
+                    run_id=outcome.run_id,
+                    alert_id=outcome.alert_id,
+                    queue_id=outcome.queue_id,
+                    review_kind=outcome.review_kind.value,
+                    outcome_status=outcome.outcome_status.value,
+                    observed_disposition=outcome.observed_disposition.value,
+                    source=outcome.source.value,
+                    sample_id=outcome.sample_id,
+                    supersedes_outcome_id=outcome.supersedes_outcome_id,
+                    idempotency_key=outcome.idempotency_key,
+                    reviewed_by_actor_id=outcome.reviewed_by.actor_id,
+                    observed_at=outcome.observed_at,
+                    created_at=outcome.created_at,
+                    outcome_payload=payload,
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise DispositionEvaluationConflictError("disposition outcome identity already exists") from exc
+
+    def get_disposition_outcome(self, outcome_id: str) -> SocDispositionOutcomeRecord | None:
+        with self._session_factory() as session:
+            row = session.get(SocDispositionOutcomeRow, outcome_id)
+            return _disposition_outcome_from_row(row) if row is not None else None
+
+    def find_disposition_outcome_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SocDispositionOutcomeRecord | None:
+        with self._session_factory() as session:
+            row = session.execute(select(SocDispositionOutcomeRow).where(SocDispositionOutcomeRow.idempotency_key == idempotency_key).limit(1)).scalar_one_or_none()
+            return _disposition_outcome_from_row(row) if row is not None else None
+
+    def list_disposition_outcomes(
+        self,
+        *,
+        proposal_id: str | None = None,
+        queue_id: str | None = None,
+        review_kind: SocDispositionOutcomeReviewKind | None = None,
+        sample_id: str | None = None,
+        limit: int = 500,
+    ) -> list[SocDispositionOutcomeRecord]:
+        query = select(SocDispositionOutcomeRow)
+        filters = []
+        if proposal_id is not None:
+            filters.append(SocDispositionOutcomeRow.proposal_id == proposal_id)
+        if queue_id is not None:
+            filters.append(SocDispositionOutcomeRow.queue_id == queue_id)
+        if review_kind is not None:
+            filters.append(SocDispositionOutcomeRow.review_kind == review_kind.value)
+        if sample_id is not None:
+            filters.append(SocDispositionOutcomeRow.sample_id == sample_id)
+        for target_filter in filters:
+            query = query.where(target_filter)
+        with self._session_factory() as session:
+            rows = session.execute(
+                query.order_by(
+                    SocDispositionOutcomeRow.observed_at.desc(),
+                    SocDispositionOutcomeRow.created_at.desc(),
+                    SocDispositionOutcomeRow.outcome_id.desc(),
+                ).limit(limit)
+            ).scalars()
+            return [_disposition_outcome_from_row(row) for row in rows]
 
     def save_external_disposition(self, record: SocExternalDispositionRecord) -> None:
         payload = record.model_dump(mode="json")
@@ -1060,6 +1200,74 @@ def _disposition_proposal_from_row(
     if indexed_values != contract_values:
         raise ValueError(f"disposition proposal row {row.proposal_id} does not match its typed payload")
     return proposal
+
+
+def _disposition_sample_manifest_from_row(
+    row: SocDispositionSampleManifestRow,
+) -> SocDispositionSampleManifest:
+    manifest = SocDispositionSampleManifest.model_validate(row.manifest_payload)
+    indexed_values = {
+        "sample_id": row.sample_id,
+        "sample_key": row.sample_key,
+        "scope_hash": row.scope_hash,
+        "population_hash": row.population_hash,
+        "population_count": row.population_count,
+        "sample_size": row.sample_size,
+        "idempotency_key": row.idempotency_key,
+        "created_by_actor_id": row.created_by_actor_id,
+    }
+    contract_values = {
+        "sample_id": manifest.sample_id,
+        "sample_key": manifest.sample_key,
+        "scope_hash": manifest.scope_hash,
+        "population_hash": manifest.population_hash,
+        "population_count": manifest.population_count,
+        "sample_size": manifest.sample_size,
+        "idempotency_key": manifest.idempotency_key,
+        "created_by_actor_id": manifest.created_by.actor_id,
+    }
+    if indexed_values != contract_values:
+        raise ValueError(f"disposition sample row {row.sample_id} does not match its typed payload")
+    return manifest
+
+
+def _disposition_outcome_from_row(row: SocDispositionOutcomeRow) -> SocDispositionOutcomeRecord:
+    outcome = SocDispositionOutcomeRecord.model_validate(row.outcome_payload)
+    indexed_values = {
+        "outcome_id": row.outcome_id,
+        "lineage_key": row.lineage_key,
+        "proposal_id": row.proposal_id,
+        "run_id": row.run_id,
+        "alert_id": row.alert_id,
+        "queue_id": row.queue_id,
+        "review_kind": row.review_kind,
+        "outcome_status": row.outcome_status,
+        "observed_disposition": row.observed_disposition,
+        "source": row.source,
+        "sample_id": row.sample_id,
+        "supersedes_outcome_id": row.supersedes_outcome_id,
+        "idempotency_key": row.idempotency_key,
+        "reviewed_by_actor_id": row.reviewed_by_actor_id,
+    }
+    contract_values = {
+        "outcome_id": outcome.outcome_id,
+        "lineage_key": outcome.lineage_key,
+        "proposal_id": outcome.proposal_id,
+        "run_id": outcome.run_id,
+        "alert_id": outcome.alert_id,
+        "queue_id": outcome.queue_id,
+        "review_kind": outcome.review_kind.value,
+        "outcome_status": outcome.outcome_status.value,
+        "observed_disposition": outcome.observed_disposition.value,
+        "source": outcome.source.value,
+        "sample_id": outcome.sample_id,
+        "supersedes_outcome_id": outcome.supersedes_outcome_id,
+        "idempotency_key": outcome.idempotency_key,
+        "reviewed_by_actor_id": outcome.reviewed_by.actor_id,
+    }
+    if indexed_values != contract_values:
+        raise ValueError(f"disposition outcome row {row.outcome_id} does not match its typed payload")
+    return outcome
 
 
 def _external_disposition_row_values(record: SocExternalDispositionRecord, payload: dict) -> dict:

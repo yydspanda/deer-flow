@@ -16,7 +16,8 @@
 已实现 canonical `AuthorizationQuery`、确定性事件时间 matcher、`AuthorizationMatchResult` 和只读
 `soc context match`；`EX-01` 已把结果保存为 append-only `AuthorizationEnrichmentRecord`，并投影到
 InvestigationContext、Web/TUI 和 Lead Agent bounded artifact；`DP-01` 已能从 persisted exact enrichment
-和当前 true-positive detection truth 生成独立的 `SocDispositionProposalRecord`。Proposal 仍为 shadow、
+和当前 true-positive detection truth 生成独立的 `SocDispositionProposalRecord`；`EV-01` 已用可复现抽样、
+显式 append-only outcome 和只读 gate report 评测 proposal。Proposal/outcome/report 均为 shadow、
 not-applied，并且 **不会改变 Runtime、ReviewQueue 或自动关单**。
 
 ## Current Contract / 当前合同
@@ -87,6 +88,10 @@ CLI 会为本地命令装配对应角色，用于开发和运维入口；生产 
 - Proposal migration: `0015_disposition_proposals`
 - `SocDispositionProposalRepository` 只允许 append；`proposal_key` 对 enrichment、fact refs、matcher policy
   和 detection snapshot 做语义去重，`idempotency_key` 防止 transport retry 重复写入。
+- Evaluation tables: `soc_disposition_sample_manifests`, `soc_disposition_outcomes`
+- Evaluation migration: `0016_disposition_evaluation`
+- `SocDispositionEvaluationRepository` 只允许 append。Sample manifest 对 scope/population/seed hash/sample size
+  做语义去重；outcome correction 必须新增记录并显式引用 `supersedes_outcome_id`，不得覆盖历史标签。
 
 ## Shadow Disposition Proposal / 影子处置建议
 
@@ -103,6 +108,24 @@ CLI 会为本地命令装配对应角色，用于开发和运维入口；生产 
 为 false positive。记录固定为 `proposal_mode=shadow`、`application_status=not_applied`、
 `requires_human_review=true`、`auto_close_allowed=false`，且 detection/ReviewQueue impact 均为 `none`。
 没有 queue、queue 不存在、lineage 不一致或 queue 已关闭时均 fail closed，不生成一个无法进入人工流程的建议。
+
+## Shadow Evaluation Gate / 影子评测门槛
+
+EV-01 将建议质量和处置执行分开：
+
+1. `SocDispositionEvaluationScope` 必须固定 tenant、environment、UTC-aware time window、proposal policy 和
+   matcher policy；不同客户、环境或版本不得混算。
+2. `SocDispositionSampleManifest` 对完整 cohort 使用 `sha256_rank_v1` 排序抽样，只保存 seed hash；population
+   截断或 enrichment lineage 破损时拒绝建样本。
+3. `SocDispositionOutcomeRecord` 只能在 lineage 一致的 ReviewQueue 已关闭后写入。普通 analyst resolution
+   与 sampled quality review 分开；抽样复核必须引用 manifest，且已有 primary reviewer 时要求独立 reviewer。
+4. `unknown` 为 inconclusive，不进入 precision 分母；其他与 proposal 不同的 terminal disposition 计为
+   override。后续改标签必须 append + supersede；唯一 lineage key 阻止并发产生两个 root/后继。
+5. Gate 同时检查 resolution、precision、override、sample coverage/precision/agreement、source freshness 和
+   每个 fact version 的 proposal fan-out。Policy 显式 allowlist primary/sample label source；查询命中 limit
+   时按 incomplete dataset fail closed。
+6. `passed_shadow_evaluation` 仅表示可进入治理上线评审；report 固定 `auto_close_allowed=false`，不会修改
+   proposal、run、queue、memory、approval 或 action。
 
 ## Deterministic Match / 确定性匹配
 
@@ -156,6 +179,15 @@ soc context enrichment replay AAE-... --idempotency-key authorization-replay:AAE
 soc disposition propose AAE-... --pretty
 soc disposition list --run-id RUN-... --pretty
 soc disposition get DPROP-... --pretty
+soc disposition sample create evaluation-scope.json \
+  --sample-size 100 --seed quarterly-2026q3 --idempotency-key sample:2026q3:v1 --pretty
+soc disposition sample list --scope-hash HASH --pretty
+soc disposition outcome record DPROP-... \
+  --observed-disposition closed_benign_true_positive \
+  --reason "analyst confirmed authorized activity" \
+  --idempotency-key outcome:DPROP-...:primary:v1 --pretty
+soc disposition outcome list --proposal-id DPROP-... --pretty
+soc disposition evaluate evaluation-policy.json --pretty
 ```
 
 其他生命周期命令：
@@ -169,5 +201,6 @@ soc context revise GCF-... revision.json --expected-version 2 --pretty
 
 ## Next / 下一步
 
-1. `EV-01 Evaluation Gate`：统计 shadow precision、override、freshness、fan-out 和随机抽样，未达 gate
-   不允许 auto-close。
+1. `EV-02 Outcome Capture Integration`：Web/TUI/API 与 trusted external disposition 只通过
+   `SocDispositionEvaluationService` 写结构化 outcome；不得从 free-text close reason 猜标签。
+2. 在取得真实、足量、跨时段评测数据并另行批准 rollout controller 前，继续保持 auto-close disabled。

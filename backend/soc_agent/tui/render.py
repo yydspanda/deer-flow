@@ -169,6 +169,11 @@ def render_context(context: InvestigationContext) -> RenderableType:
             "disposition",
             ", ".join(f"{item.proposal_id}:{item.proposed_disposition.value}/shadow-review" for item in context.disposition_proposals[:5]),
         )
+    if context.disposition_outcomes:
+        table.add_row(
+            "disposition_eval",
+            ", ".join(f"{item.outcome_id}:{item.outcome_status.value}/{item.review_kind.value}" for item in context.disposition_outcomes[:5]),
+        )
     if context.external_dispositions:
         table.add_row(
             "external_feedback",
@@ -194,6 +199,7 @@ def render_context(context: InvestigationContext) -> RenderableType:
                 f"evidence={view.counts.get('action_evidence', 0)} "
                 f"authorization={view.counts.get('authorization_enrichments', 0)} "
                 f"disposition={view.counts.get('disposition_proposals', 0)} "
+                f"outcomes={view.counts.get('disposition_outcomes', 0)} "
                 f"memory={view.counts.get('relevant_memories', 0)}"
             ),
         )

@@ -7,6 +7,11 @@ from soc_agent.core.authorization_enrichment import (
 from soc_agent.core.authorized_activity import SocAuthorizedActivityService
 from soc_agent.core.correlation import SocCorrelationService
 from soc_agent.core.decision_policy import SocDecisionPolicy
+from soc_agent.core.disposition_evaluation import (
+    DispositionEvaluationIdempotencyConflictError,
+    DispositionEvaluationIneligibleError,
+    SocDispositionEvaluationService,
+)
 from soc_agent.core.disposition_proposal import (
     DispositionProposalIdempotencyConflictError,
     DispositionProposalIneligibleError,
@@ -55,6 +60,9 @@ __all__ = [
     "SocDecisionPolicy",
     "DispositionProposalIdempotencyConflictError",
     "DispositionProposalIneligibleError",
+    "DispositionEvaluationIdempotencyConflictError",
+    "DispositionEvaluationIneligibleError",
+    "SocDispositionEvaluationService",
     "SocDispositionProposalService",
     "SocDomainTriageService",
     "SocExternalDispositionService",

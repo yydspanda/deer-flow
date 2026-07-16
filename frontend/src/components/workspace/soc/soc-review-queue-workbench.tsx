@@ -49,6 +49,7 @@ import type {
   SocAgentApprovalRequest,
   SocAgentApprovedActionCommand,
   SocAuthorizationEnrichmentRecord,
+  SocDispositionOutcomeRecord,
   SocDispositionProposalRecord,
   SocExternalDispositionRecord,
   SocInvestigationEvidence,
@@ -166,6 +167,7 @@ function timelineKindLabel(kind: SocInvestigationTimelineItem["kind"]) {
     read_only_evidence: "只读证据",
     authorization_enrichment: "授权上下文",
     disposition_proposal: "影子处置建议",
+    disposition_outcome: "影子评测结果",
     external_disposition: "外部反馈",
     memory_candidate: "候选记忆",
     relevant_memory: "确认记忆",
@@ -604,6 +606,64 @@ function DispositionProposalSection({
                 <span>fact versions {proposal.source_fact_refs.length}</span>
                 <span>auto close {String(proposal.auto_close_allowed)}</span>
                 <span>review impact {proposal.review_queue_impact}</span>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function DispositionOutcomeSection({
+  outcomes,
+}: {
+  outcomes: SocDispositionOutcomeRecord[];
+}) {
+  return (
+    <section className="rounded-md border">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+        <div className="flex items-center gap-2">
+          <FlaskConicalIcon className="text-muted-foreground size-4" />
+          <h3 className="text-sm font-semibold">影子评测结果</h3>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary">{outcomes.length}</Badge>
+          <Badge variant="outline">无决策影响</Badge>
+        </div>
+      </div>
+      <div className="divide-y">
+        {outcomes.length === 0 ? (
+          <div className="text-muted-foreground p-4 text-sm">
+            当前建议还没有结构化的分析师或抽样复核标签。
+          </div>
+        ) : (
+          outcomes.map((outcome) => (
+            <div key={outcome.outcome_id} className="p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">
+                    {outcome.outcome_status}
+                  </div>
+                  <div className="text-muted-foreground mt-1 text-xs">
+                    {outcome.outcome_id} / {formatTime(outcome.observed_at)}
+                  </div>
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Badge variant="outline">{outcome.review_kind}</Badge>
+                  <Badge variant="secondary">shadow evaluation</Badge>
+                </div>
+              </div>
+              <p className="text-muted-foreground mt-3 text-xs">
+                {outcome.reason}
+              </p>
+              <div className="text-muted-foreground mt-3 grid gap-1 text-xs sm:grid-cols-2">
+                <span>proposed {outcome.proposed_disposition}</span>
+                <span>observed {outcome.observed_disposition}</span>
+                <span>source {outcome.source}</span>
+                <span>reviewer {outcome.reviewed_by.actor_id}</span>
+                <span>sample {outcome.sample_id ?? "routine"}</span>
+                <span>queue impact {outcome.review_queue_impact}</span>
               </div>
             </div>
           ))
@@ -1417,6 +1477,10 @@ export function SocReviewQueueWorkbench() {
 
               <DispositionProposalSection
                 proposals={context?.disposition_proposals ?? []}
+              />
+
+              <DispositionOutcomeSection
+                outcomes={context?.disposition_outcomes ?? []}
               />
 
               <ActionEvidenceSection

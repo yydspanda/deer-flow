@@ -17,7 +17,7 @@
 | 查看当前哪些能力仍是 mock | `integrations/mock-and-real-register.md` | `capabilities/pingan/onboarding.md` 的 PA-12 |
 | 设计外部工单/处置状态回流 | `integrations/external-disposition-sync.md` | 工程契约 external disposition 章节 |
 | 设计记忆和经验沉淀 | `memory/memory-tracking.md` | `alert-lifecycle-flow.md` 的 memory flow |
-| 管理授权活动、查看/回放授权匹配与影子处置建议、规划变更窗口与护网身份 | `governance/governed-context-facts.md` | `soc-agent-solution.md` Section 7.4 |
+| 管理授权活动、影子处置建议、抽样 outcome 与评测 gate，规划变更窗口与护网身份 | `governance/governed-context-facts.md` | `soc-agent-solution.md` Section 7.4 |
 | 设计 Lead/Sub Agent、skill、MCP 开放配置 | `governance/agent-profile-governance.md` | 工程契约 Profile / Skill / MCP 章节 |
 
 ## Directory Map

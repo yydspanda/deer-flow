@@ -44,7 +44,15 @@ flowchart TD
     Z1 --> Z2["🗃️ AuthorizationEnrichmentRecord<br/>append-only match snapshot"]
     Z2 --> Z3["⚙️ DP-01 exact + true-positive gate"]
     Z3 --> Z4["🗃️ Shadow Disposition Proposal<br/>not applied / human review"]
+    Z4 --> Z5["🧑‍💻 Closed queue + explicit outcome<br/>人工结论，不从理由猜测"]
+    Z5 --> Z6["🗃️ Append-only Outcome<br/>primary / sampled QA"]
+    Z4 --> Z7["⚙️ Hash-ranked Sample<br/>可复现抽样"]
+    Z7 --> Z8["🗃️ Sample Manifest"]
+    Z6 --> Z9["⚙️ EV-01 Gate<br/>precision + override + freshness + fan-out"]
+    Z8 --> Z9
+    Z9 --> Z10["🚫 Hold or rollout review only<br/>auto-close remains disabled"]
     Z4 --> G
+    Z6 --> G
     F --> G["⚙️ SocReviewService.get_investigation_context<br/>聚合调查上下文 / context assembly"]
 
     G --> H["🔎 UnifiedInvestigationView<br/>统一调查视图 / unified investigation view"]
@@ -86,13 +94,17 @@ flowchart TD
 10. 显式 authorization enrichment 把确定性匹配保存为独立记录；不会回写 Runtime decision。
 11. DP-01 只有在 exact + current true-positive 时生成 shadow proposal；proposal 进入调查视图，但仍由
     人工决定是否关单，系统不会自动应用。
+12. EV-01 不从 close reason 猜结论。它保存显式 primary/sample outcome，用可复现 manifest 防止挑样，
+    再计算 precision、override、sample agreement、freshness 和 fact fan-out。
+13. Gate 通过只表示可进入治理 rollout review；当前仍固定 `auto_close_allowed=false`。
 
 Current governed-context boundary / 当前边界：GF-01 已能通过 `SocGovernedContextService` 和
 `soc_governed_context_facts` 保存、审批、暂停、撤销、过期及回放 typed fact versions；AA-01 已能从
 canonical alert 构造 `AuthorizationQuery`，按事件时间选择历史 fact version，并返回只读
 `AuthorizationMatchResult`；EX-01 已把 query/result/policy/fact refs 保存为 append-only
 `AuthorizationEnrichmentRecord`；DP-01 已从 persisted exact enrichment + current true-positive
-detection truth 生成 append-only `SocDispositionProposalRecord`，并投影到统一调查上下文。
+detection truth 生成 append-only `SocDispositionProposalRecord`；EV-01 已保存 hash-ranked sample manifest、
+append-only `SocDispositionOutcomeRecord` 并生成只读 gate report，outcome 同样投影到统一调查上下文。
 `security_tag.lookup` 仍只是 `InvestigationEvidence`；护网 campaign/participant attribution 尚未实现。
 该 proposal 只建议 `closed_benign_true_positive`，固定 shadow/not-applied，仍以人工 ReviewQueue 为准。
 
@@ -113,8 +125,14 @@ flowchart LR
     G -->|"no"| F["🚫 Fail closed<br/>no proposal"]
     D --> I
     D --> H["🧑‍💻 Human Review<br/>人工决定是否关单"]
+    H --> O["🗃️ Explicit Outcome<br/>confirmed / overridden / inconclusive"]
+    D --> S["🗃️ Reproducible Sample Manifest"]
+    O --> E["⚙️ EV-01 Evaluation Gate"]
+    S --> E
+    E --> K["🚫 Hold shadow or rollout review<br/>never auto-close"]
     P --> X["🚫 No verdict mutation<br/>No ReviewQueue update<br/>No auto-close"]
     D --> X
+    O --> X
 ```
 
 AA-01 使用告警事件时间，不使用“当前时间”替代历史事实状态。无时区时间必须由租户/集成配置显式补充
@@ -225,6 +243,9 @@ flowchart LR
 | `soc_decision_audit_log` | Decision audit records | analyze/replay/correct/external disposition 的审计链 |
 | `soc_investigation_evidence` | Read-only action results | 资产查询、EDR 进程树、威胁情报等只读调查结果 |
 | `soc_external_dispositions` | External ticket feedback | Zeus/ITSM/SOAR 外部状态、理由、映射和同步结果 |
+| `soc_disposition_proposals` | Shadow operational proposals | 保存 true-positive + exact authorization 产生的未应用处置建议 |
+| `soc_disposition_sample_manifests` | Reproducible QA samples | 保存 scope/population/seed hash/selected proposal ids，防止人工挑样 |
+| `soc_disposition_outcomes` | Append-only evaluation labels | 保存 primary/sample 结构化结论和 supersession lineage，不改 queue/verdict |
 | `soc_memory_candidates` | Reviewable knowledge proposals | 候选记忆，默认 `pending_review`，不影响 runtime decision |
 | `soc_memory_records` | Confirmed memory records | 已确认记忆，默认 `retrieval_enabled=false`，仍不自动注入 prompt |
 | `soc_approval_requests` | Pending approval requests | 高风险动作审批 inbox |
@@ -278,6 +299,9 @@ flowchart TD
 | `similar_alerts` | Simple similarity matches | 轻量历史相似告警 |
 | `correlation_result` | Structured correlation | 相似告警、匹配原因、可复用 evidence |
 | `action_evidence` | Tool evidence | 只读工具/MCP 结果 |
+| `authorization_enrichments` | Authorization snapshots | 事件时间确定性授权匹配快照，shadow/no-impact |
+| `disposition_proposals` | Shadow proposals | 未应用、需人工复核的运营处置建议 |
+| `disposition_outcomes` | Evaluation labels | 结构化 primary/sample outcome，只用于评测 |
 | `external_dispositions` | External feedback | Zeus/ITSM/SOAR 状态和理由 |
 | `memory_candidates` | Reviewable proposals | 待评审候选记忆 |
 | `relevant_memories` | Retrieval-gated memories | 显式 retrieval-enabled 的 confirmed memory |

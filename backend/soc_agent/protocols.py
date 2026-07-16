@@ -34,7 +34,10 @@ from soc_agent.contracts import (
     SocAgentActionResult,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
+    SocDispositionOutcomeRecord,
+    SocDispositionOutcomeReviewKind,
     SocDispositionProposalRecord,
+    SocDispositionSampleManifest,
     SocEvent,
     SocExternalDispositionRecord,
     SocMemoryCandidate,
@@ -221,6 +224,50 @@ class SocDispositionProposalRepository(Protocol):
         enrichment_id: str | None = None,
         limit: int = 50,
     ) -> list[SocDispositionProposalRecord]: ...
+
+
+class SocDispositionEvaluationRepository(Protocol):
+    """Append-only persistence for sample manifests and reviewed outcomes."""
+
+    def save_disposition_sample_manifest(self, manifest: SocDispositionSampleManifest) -> None: ...
+
+    def get_disposition_sample_manifest(self, sample_id: str) -> SocDispositionSampleManifest | None: ...
+
+    def find_disposition_sample_manifest_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SocDispositionSampleManifest | None: ...
+
+    def find_disposition_sample_manifest_by_key(
+        self,
+        sample_key: str,
+    ) -> SocDispositionSampleManifest | None: ...
+
+    def list_disposition_sample_manifests(
+        self,
+        *,
+        scope_hash: str | None = None,
+        limit: int = 100,
+    ) -> list[SocDispositionSampleManifest]: ...
+
+    def save_disposition_outcome(self, outcome: SocDispositionOutcomeRecord) -> None: ...
+
+    def get_disposition_outcome(self, outcome_id: str) -> SocDispositionOutcomeRecord | None: ...
+
+    def find_disposition_outcome_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SocDispositionOutcomeRecord | None: ...
+
+    def list_disposition_outcomes(
+        self,
+        *,
+        proposal_id: str | None = None,
+        queue_id: str | None = None,
+        review_kind: SocDispositionOutcomeReviewKind | None = None,
+        sample_id: str | None = None,
+        limit: int = 500,
+    ) -> list[SocDispositionOutcomeRecord]: ...
 
 
 class MemoryCandidateRepository(Protocol):

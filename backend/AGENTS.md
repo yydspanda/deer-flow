@@ -249,7 +249,18 @@ and `SocOperationalDisposition`; orchestration is `SocDispositionProposalService
 `soc_disposition_proposals` table. The service only consumes persisted `exact` enrichments linked to
 an open ReviewQueue and current `true_positive` detection truth. A proposal is always `shadow`, `not_applied`, human-reviewed and
 `auto_close_allowed=false`; it must not update `AnalysisRun`, ReviewQueue, memory, or action approval.
-CLI is `soc disposition propose|list|get`. EV-01 owns evaluation and any future auto-close gate.
+DP-01 CLI is `soc disposition propose|list|get`; it does not own evaluation or rollout.
+
+EV-01 contracts are `SocDispositionEvaluationScope`, `SocDispositionSampleManifest`,
+`SocDispositionOutcomeRecord`, and `SocDispositionEvaluationGatePolicy/Report`; orchestration is
+`SocDispositionEvaluationService`. Migration `0016_disposition_evaluation` creates append-only
+`soc_disposition_sample_manifests` and `soc_disposition_outcomes`. Samples use reproducible SHA-256
+ranking over an exact tenant/environment/time/policy cohort; outcome corrections append with an explicit
+`supersedes_outcome_id`. Gate reports measure resolution, precision, override, independent sample
+coverage/agreement, source freshness, and fact-version fan-out. They never mutate ReviewQueue, detection,
+memory, approval, or actions, and always return `auto_close_allowed=false` even when shadow evaluation passes.
+CLI is `soc disposition sample create|list|get`, `soc disposition outcome record|list|get`, and
+`soc disposition evaluate`. Web/TUI/Lead Agent receive outcomes as read-only investigation context.
 
 PingAn vendor aliases are translated into generic `RoleClaim` objects inside `soc_agent.normalizers`.
 `pipeline.fact_reconstructor` must remain vendor-neutral: it builds scenario hypotheses and

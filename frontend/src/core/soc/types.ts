@@ -471,6 +471,7 @@ export type SocInvestigationTimelineKind =
   | "read_only_evidence"
   | "authorization_enrichment"
   | "disposition_proposal"
+  | "disposition_outcome"
   | "external_disposition"
   | "memory_candidate"
   | "relevant_memory"
@@ -615,6 +616,35 @@ export interface SocDispositionProposalRecord {
   review_queue_impact: "none";
 }
 
+export interface SocDispositionOutcomeRecord {
+  schema_version: string;
+  outcome_id: string;
+  lineage_key: string;
+  proposal_id: string;
+  proposal_key: string;
+  run_id: string;
+  alert_id: string;
+  queue_id: string;
+  proposed_disposition: SocOperationalDisposition;
+  observed_disposition: SocOperationalDisposition;
+  outcome_status: "confirmed" | "overridden" | "inconclusive";
+  review_kind: "analyst_resolution" | "sampled_quality_review";
+  source: "analyst" | "external_disposition" | "replay_label";
+  source_ref?: string | null;
+  sample_id?: string | null;
+  reason: string;
+  evidence_refs: string[];
+  proposal_policy_version: string;
+  supersedes_outcome_id?: string | null;
+  idempotency_key: string;
+  reviewed_by: SocActorContext;
+  observed_at: string;
+  created_at: string;
+  shadow_only: true;
+  decision_impact: "none";
+  review_queue_impact: "none";
+}
+
 export interface SocMemoryCandidateReviewRequest {
   decision: SocMemoryCandidateReviewDecision;
   reason: string;
@@ -642,6 +672,7 @@ export interface SocInvestigationContext {
   action_evidence: SocInvestigationEvidence[];
   authorization_enrichments: SocAuthorizationEnrichmentRecord[];
   disposition_proposals: SocDispositionProposalRecord[];
+  disposition_outcomes: SocDispositionOutcomeRecord[];
   external_dispositions: SocExternalDispositionRecord[];
   memory_candidates: SocMemoryCandidate[];
   relevant_memories?: SocMemoryRetrievalResult | null;

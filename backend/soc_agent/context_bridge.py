@@ -24,6 +24,7 @@ _MAX_FACT_ITEMS = 10
 _MAX_ACTION_EVIDENCE_ITEMS = 5
 _MAX_AUTHORIZATION_ENRICHMENT_ITEMS = 5
 _MAX_DISPOSITION_PROPOSAL_ITEMS = 5
+_MAX_DISPOSITION_OUTCOME_ITEMS = 10
 _MAX_EXTERNAL_DISPOSITION_ITEMS = 5
 _MAX_MEMORY_CANDIDATE_ITEMS = 5
 _MAX_RELEVANT_MEMORY_ITEMS = 5
@@ -37,6 +38,7 @@ _LEAD_AGENT_CONTEXT_INSTRUCTIONS = [
     "Treat external_dispositions as operator feedback; pending memory candidates are not confirmed reusable knowledge.",
     "Treat authorization_enrichments as read-only shadow context; they never replace detection truth or authorize disposition by themselves.",
     "Treat disposition_proposals as shadow recommendations only; they cannot close a review item or authorize a response action.",
+    "Treat disposition_outcomes as append-only evaluation labels; they measure proposal quality but never mutate detection truth or review state.",
     "Treat memory_candidates as reviewable proposals only; do not use them as confirmed facts or active lessons.",
     "Treat relevant_memories as retrieval-policy-approved context only; they can inform analysis but never bypass evidence or approval.",
     "If evidence conflicts, explain the conflict and ask for review instead of forcing a conclusion.",
@@ -71,6 +73,7 @@ def build_lead_agent_review_context_artifact(
     action_evidence_payload = [_action_evidence_payload(item) for item in context.action_evidence[:_MAX_ACTION_EVIDENCE_ITEMS]]
     authorization_enrichment_payload = [_authorization_enrichment_payload(item) for item in context.authorization_enrichments[:_MAX_AUTHORIZATION_ENRICHMENT_ITEMS]]
     disposition_proposal_payload = [_disposition_proposal_payload(item) for item in context.disposition_proposals[:_MAX_DISPOSITION_PROPOSAL_ITEMS]]
+    disposition_outcome_payload = [_disposition_outcome_payload(item) for item in context.disposition_outcomes[:_MAX_DISPOSITION_OUTCOME_ITEMS]]
     external_disposition_payload = [_external_disposition_payload(item) for item in context.external_dispositions[:_MAX_EXTERNAL_DISPOSITION_ITEMS]]
     memory_candidate_payload = [_memory_candidate_payload(item) for item in context.memory_candidates[:_MAX_MEMORY_CANDIDATE_ITEMS]]
     relevant_memory_payload = _relevant_memory_payload(context.relevant_memories)
@@ -87,6 +90,7 @@ def build_lead_agent_review_context_artifact(
         "action_evidence": action_evidence_payload,
         "authorization_enrichments": authorization_enrichment_payload,
         "disposition_proposals": disposition_proposal_payload,
+        "disposition_outcomes": disposition_outcome_payload,
         "external_dispositions": external_disposition_payload,
         "memory_candidates": memory_candidate_payload,
         "relevant_memories": relevant_memory_payload,
@@ -109,6 +113,7 @@ def build_lead_agent_review_context_artifact(
         action_evidence=action_evidence_payload,
         authorization_enrichments=authorization_enrichment_payload,
         disposition_proposals=disposition_proposal_payload,
+        disposition_outcomes=disposition_outcome_payload,
         external_dispositions=external_disposition_payload,
         memory_candidates=memory_candidate_payload,
         relevant_memories=relevant_memory_payload,
@@ -327,6 +332,31 @@ def _disposition_proposal_payload(proposal: Any) -> dict[str, Any]:
         "detection_truth_impact": proposal.detection_truth_impact,
         "review_queue_impact": proposal.review_queue_impact,
         "created_at": proposal.created_at.isoformat(),
+    }
+
+
+def _disposition_outcome_payload(outcome: Any) -> dict[str, Any]:
+    return {
+        "outcome_id": outcome.outcome_id,
+        "lineage_key": outcome.lineage_key,
+        "proposal_id": outcome.proposal_id,
+        "run_id": outcome.run_id,
+        "alert_id": outcome.alert_id,
+        "queue_id": outcome.queue_id,
+        "proposed_disposition": outcome.proposed_disposition.value,
+        "observed_disposition": outcome.observed_disposition.value,
+        "outcome_status": outcome.outcome_status.value,
+        "review_kind": outcome.review_kind.value,
+        "source": outcome.source.value,
+        "source_ref": outcome.source_ref,
+        "sample_id": outcome.sample_id,
+        "reason": outcome.reason,
+        "evidence_refs": outcome.evidence_refs[:20],
+        "supersedes_outcome_id": outcome.supersedes_outcome_id,
+        "reviewed_by": outcome.reviewed_by.model_dump(mode="json", exclude_none=True),
+        "observed_at": outcome.observed_at.isoformat(),
+        "decision_impact": outcome.decision_impact,
+        "review_queue_impact": outcome.review_queue_impact,
     }
 
 
