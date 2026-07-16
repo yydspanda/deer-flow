@@ -23,12 +23,12 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前阶段 | Phase 1 Runtime 工程闭环完成；Phase 2 correlation 已进入统一主编排报告 |
-| 当前目标 | Runtime、domain/scenario triage、历史 correlation、统一调查视图与 GF-01..EV-03 治理评测闭环已打通；下一步先量化 correlation 质量，再讨论 shadow dedup |
+| 当前阶段 | Phase 1 Runtime 工程闭环完成；Phase 2 correlation bridge + offline quality baseline 已完成 |
+| 当前目标 | 扩展真实、人工复核的 correlation pair corpus，再以同一标签集比较 scorer v1/v2；当前不进入 shadow dedup rollout |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `Phase 2 Correlation Eval Baseline`：建立 labeled same-incident / related-but-distinct / unrelated 样本和 precision/recall/reason/fan-out 报告；通过质量门槛后才定义 shadow dedup candidate，当前不抑制告警。 |
+| 当前下一刀 | `Correlation Label Corpus Expansion`：从脱敏的真实/生产相似告警中准备 analyst-reviewed pair labels，补 event-time/source cohort；标签规模和质量稳定后再设计 scorer v2 shadow comparison。 |
 
 ## 当前待办列表
 
@@ -51,7 +51,8 @@
 | 0.12 | `PA-12` real PingAn MCP/API replacement | Waiting | 等真实 PingAn dev/staging MCP/API endpoint/凭证后替换 mock provider，保存 smoke/eval report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险；不能用本地 mock 假装完成 |
 | 1 | Correlation Service MVP | Done | `SocCorrelationService` 基于 summary/evidence 输出相似告警、匹配原因和可复用证据；typed result 已进入 main report/domain/review summary | 不调用 LLM、不依赖真实 MCP、不改 decision；demo 当前告警可看到历史 run + reusable evidence |
 | 1.1 | Correlation -> Unified Investigation bridge | Done | 共享 summary repository、统一 deterministic scorer、`SocDomainTriageRequest.correlation_result`、`UnifiedInvestigationReport.correlation_result` 和 review counts 已接通 | metadata count 不是证据源；historical evidence 只按 matched `run_id` 加载；APT/EDR/HIDS eval 为 3 matches / 6 evidence / 0 failure |
-| 1.2 | Correlation quality baseline | Next | 建 labeled same-incident / related-but-distinct / unrelated corpus，输出 precision、recall、match-reason 分布、候选 fan-out 和 evidence leakage 检查 | 未达到门槛前不生成 dedup suppression；报告可 replay/diff，规则版本显式 |
+| 1.2 | Correlation quality baseline | Done | 已建 vendor-neutral same-incident / related-but-distinct / unrelated corpus；`soc eval correlation` 输出双任务指标、reason 分布、fan-out、evidence lineage/unrelated exposure，并支持 `--baseline-json` replay diff | scorer/report/fixture 版本显式；当前 8-pair baseline 暴露 retrieval/dedup precision 均约 0.667；`shadow_dedup_allowed=false` |
+| 1.3 | Correlation label corpus expansion | Next | 从脱敏真实告警准备 analyst-reviewed pairs，覆盖来源、时间窗口、跨规则同事件和同规则不同事件 cohort | 不以 8 条受控 pair 代表生产分布；标签来源/rationale/version 可审计；扩充后再比较 scorer v2，不直接切换生产规则 |
 | 2 | External Disposition Sync Contract | Done | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol、in-memory repository、PostgreSQL persistence、ReviewQueue context API/Web/TUI/Lead Agent visibility；已接 high-trust mapped review/correction 和 pending memory candidate | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
 | 3 | Memory Tracking Contract | Partial | DB-first candidate persistence、review workflow、confirmed-memory boundary 和 retrieval policy MVP 已完成；`SocMemoryCandidateSourceBridge` 已接 correction、domain finding、analyst feedback 和 ReviewQueue review note；下一步是 Kafka/Lead Agent 结论来源、prompt injection/replay diff 的受控设计 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
 | 3.1 | Memory candidate DB/API/ReviewQueue visibility | Done | 已新增 `soc_memory_candidates`、repository、CLI `soc memory list/get`、Gateway `/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded visibility | candidate 仍为 `pending_review` 且 `runtime_decision_allowed=false`；不注入 prompt，不影响 verdict |
@@ -184,8 +185,40 @@
 | 97 | Memory Tracking Contract | Partial | `SocMemoryCandidate` 已完成 DB/API/ReviewQueue visibility 和 review workflow；`confirm` 会生成 retrieval-disabled `SocMemoryRecord`；retrieval policy/query/result/unified visibility MVP 已完成；TUI/Web/Kafka/Lead Agent/domain/external disposition 结论先生成 candidate，不直接写生效 memory；wiki/OKF 后期只做 projection |
 | 98 | PingAn Domain Triage MVP | Done | 新增 `SocDomainTriageService` 和 APT/EDR/HIDS deterministic handlers；`soc eval pingan-domain` 可验证三类样本输出 domain findings、capability card refs 和 evidence refs |
 | 99 | PingAn Main Orchestrator Demo | Done | `soc eval pingan-main` 验证 APT/EDR/HIDS historical + current analyze -> correlation -> skill -> read-only evidence -> domain finding -> review summary |
+| 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-16 — Phase 2 correlation quality baseline completed
+
+- 新增显式 `CORRELATION_SCORING_POLICY_VERSION=soc.correlation.scoring.v1`；每个
+  `CorrelationResult` 和 eval report 都记录实际 scorer 版本，fixture 与当前版本不一致时 fail-fast。
+- 新增 vendor-neutral `soc.correlation_eval_fixture_set.v1`，用 2 个 endpoint/network case、8 个
+  labeled pairs 区分：
+  - `same_incident`：检索正样本、duplicate identity 正样本；
+  - `related_distinct`：检索正样本、duplicate identity 负样本；
+  - `unrelated`：两项均为负样本。
+- 新增 `soc eval correlation [FIXTURE] [--baseline-json PRIOR] --pretty`：
+  - 分别输出 retrieval 与 offline duplicate-identity confusion matrix、precision/recall/F1；
+  - 输出 match reason prefix distribution、candidate fan-out、per-pair score/reasons；
+  - 分开统计跨 run 的 `evidence_lineage_leakage_count` 和无关候选的
+    `unrelated_evidence_exposure_count`；
+  - replay diff 忽略 `generated_at`，比较 policy/corpus、pairs、metrics、reasons、fan-out 和 evidence。
+- 当前受控 baseline 不是生产质量结论：retrieval precision/recall 为 `0.667/1.0`；离线 threshold
+  `130` 的 duplicate precision/recall 也是 `0.667/1.0`，因为一个 related-but-distinct endpoint
+  occurrence 被高重叠分数误判为 duplicate。Evidence lineage leakage 为 `0`，但 unrelated evidence
+  exposure 为 `2`。
+- 安全边界保持不变：eval 使用 in-memory repository，不写业务 DB/ReviewQueue/memory，不修改 Runtime
+  decision；报告固定 `shadow_dedup_allowed=false`、`decision_impact=none`。
+- 本地报告：
+  - `backend/.deer-flow/soc-runtime-validation/step-11-correlation-eval/correlation-baseline.json`；
+  - `backend/.deer-flow/soc-runtime-validation/step-11-correlation-eval/correlation-replay-diff.json`
+    （同一基线重放 `changed=false`）。
+- 验证：聚焦 correlation eval/service/repository 回归通过；最终 SOC + architecture 回归为
+  `499 passed, 1 warning`。warning 仍是既有 DeerFlow MCP cache
+  `asyncio.get_event_loop()` deprecation。
+- 下一步先扩展脱敏真实告警的 analyst-reviewed pair corpus 和 event-time/source cohorts；不能用 8 条
+  受控 pair 直接调生产阈值。标签稳定后再做 scorer v2 shadow comparison，仍不自动 suppression。
 
 ### 2026-07-16 — Phase 2 correlation bridged into the unified main report
 

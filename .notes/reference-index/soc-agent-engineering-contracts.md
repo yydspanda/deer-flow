@@ -295,6 +295,21 @@ Correlation service 约束：
 - 相似评分只能由 `soc_agent.domain.correlation.score_similar_alert()` 维护，SQL 和内存实现不得复制两套
   scoring semantics。历史 reusable evidence 必须按 matched historical `run_id` 精确加载；当前 repository
   多引用过滤为 union 语义，不能同时传复用的 `alert_id`，以免当前 run evidence 泄漏进历史 match。
+- 每版 scorer 必须有显式 `CORRELATION_SCORING_POLICY_VERSION`，并进入 `CorrelationResult` 和离线
+  eval report。修改权重、reason、候选召回或排序语义时必须升级 policy version，并用旧/新报告 replay diff；
+  不能只改代码而让旧指标继续冒充当前规则。
+- Correlation eval 标签固定分三类：`same_incident`、`related_distinct`、`unrelated`。检索任务把前两类
+  视为 relevant；duplicate identity 任务只把 `same_incident` 视为 positive。严禁把
+  `related_distinct` 计成检索 false positive，或因为高 score 把它静默合并。
+- `soc eval correlation [FIXTURE] [--baseline-json PRIOR]` 必须保持只读，输出两套 confusion matrix、
+  precision/recall/F1、reason prefix 分布、candidate fan-out、pair snapshot diff、
+  `evidence_lineage_leakage_count` 和 `unrelated_evidence_exposure_count`。前者是跨 run 引用 bug，后者是
+  检索噪声，两者不能合并统计。
+- eval fixture 必须是 vendor-neutral、版本化、带人工 rationale 的受控标签集。默认 query/candidate limit
+  必须覆盖每个 case 的全部标签候选，避免 top-k 截断被误解为 score=0；更大真实样本应按 cohort 另行扩展。
+- 离线 dedup threshold 只用于测量 identity precision/recall；报告固定
+  `shadow_dedup_allowed=false`、`decision_impact=none`。当前没有自动 suppression、merge、close queue 或
+  memory confirmation 的授权路径。
 - Correlation 是否命中只能改变调查上下文、finding evidence profile 和人工复核提示；不得直接提高
   Runtime detection confidence、做 dedup/suppression、关闭 queue、确认 memory 或执行 response。
 - 后续若引入 LLM rerank，只能作为 bounded rerank node 消费候选 `CorrelationMatch`，输出仍必须经过 schema/domain validation；LLM 不得直接发起 DB 查询或扩大检索范围。

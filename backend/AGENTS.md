@@ -284,6 +284,12 @@ Similarity scoring is centralized in
 `run_id` alone because repository reference filters are union-style; combining `run_id` and a reused
 `alert_id` can leak current-run evidence into a historical match. Correlation remains read-only and
 cannot alter the Runtime decision, ReviewQueue, memory, approval, or response actions.
+The scorer and every `CorrelationResult` expose `soc.correlation.scoring.v1`. Before changing its
+weights, reasons, candidate rules, or retrieval semantics, run `soc eval correlation` against the
+versioned fixture corpus. The eval treats `same_incident` and `related_distinct` as retrieval-positive,
+but only `same_incident` as duplicate-positive; its threshold is offline diagnostic input only.
+`--baseline-json` compares pair snapshots, precision/recall, reason distribution, fan-out, evidence
+lineage leakage, and unrelated-evidence exposure without writing SOC state or enabling suppression.
 
 PingAn vendor aliases are translated into generic `RoleClaim` objects inside `soc_agent.normalizers`.
 `pipeline.fact_reconstructor` must remain vendor-neutral: it builds scenario hypotheses and

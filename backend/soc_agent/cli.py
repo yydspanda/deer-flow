@@ -110,15 +110,19 @@ from soc_agent.db import (
 )
 from soc_agent.demo import run_pingan_investigation_demo
 from soc_agent.eval import (
+    DEFAULT_CORRELATION_EVAL_FIXTURE,
     DEFAULT_PINGAN_CAPABILITY_EVAL_DIR,
     build_confidence_label_set,
     calibrate_confidence,
     calibration_samples_from_label_set,
     load_analysis_runs_for_labeling,
     load_confidence_label_set,
+    load_correlation_eval_fixture,
+    load_correlation_eval_report,
     load_eval_responses_jsonl,
     load_pingan_capability_eval_fixtures,
     load_scenario_eval_report,
+    run_correlation_eval,
     run_offline_eval,
     run_pingan_capability_eval,
     run_pingan_domain_triage_eval,
@@ -205,6 +209,8 @@ def main(argv: list[str] | None = None) -> int:
         return _daemon_status(args)
     if args.command == "eval" and args.eval_command == "offline":
         return _eval_offline(args)
+    if args.command == "eval" and args.eval_command == "correlation":
+        return _eval_correlation(args)
     if args.command == "eval" and args.eval_command == "pingan":
         return _eval_pingan(args)
     if args.command == "eval" and args.eval_command == "pingan-domain":
@@ -589,6 +595,21 @@ def _build_parser() -> argparse.ArgumentParser:
     eval_scenarios.add_argument("--glob", default="*.json", help="Glob used when PATH is a directory")
     eval_scenarios.add_argument("--baseline-json", help="Prior scenario eval report JSON used for replay diff")
     eval_scenarios.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    eval_correlation = eval_subparsers.add_parser(
+        "correlation",
+        help="Measure deterministic correlation retrieval and offline dedup identity separately",
+    )
+    eval_correlation.add_argument(
+        "path",
+        nargs="?",
+        default=str(DEFAULT_CORRELATION_EVAL_FIXTURE),
+        help="Path to a versioned correlation eval fixture JSON",
+    )
+    eval_correlation.add_argument(
+        "--baseline-json",
+        help="Prior correlation eval report JSON used for deterministic replay diff",
+    )
+    eval_correlation.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     eval_pingan = eval_subparsers.add_parser("pingan", help="Run PingAn SOC capability fixture eval")
     eval_pingan.add_argument(
         "path",
@@ -2653,6 +2674,22 @@ def _eval_pingan(args: argparse.Namespace) -> int:
 
     print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0 if report.failed_count == 0 else 1
+
+
+def _eval_correlation(args: argparse.Namespace) -> int:
+    try:
+        fixture = load_correlation_eval_fixture(args.path)
+        baseline = load_correlation_eval_report(args.baseline_json) if args.baseline_json else None
+        report = run_correlation_eval(fixture, baseline=baseline)
+    except ValueError as exc:
+        print(f"error: correlation eval failed: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: report eval failure
+        print(f"error: correlation eval failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if report.integrity_passed else 1
 
 
 def _eval_pingan_domain(args: argparse.Namespace) -> int:

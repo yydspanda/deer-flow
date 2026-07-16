@@ -336,6 +336,31 @@ projections. Reusable evidence is selected by the matched historical `run_id`, p
 `alert_id` from mixing current and historical action results. A match can enrich domain findings and
 human review, but it cannot by itself suppress/deduplicate an alert or alter the Runtime decision.
 
+Correlation evaluation / 关联质量评测：
+
+```mermaid
+flowchart LR
+    A["🏷️ Versioned Pair Labels<br/>same / related / unrelated"] --> B["⚙️ Scoring Policy<br/>soc.correlation.scoring.v1"]
+    B --> C["🔎 Retrieval Task<br/>same + related = relevant"]
+    B --> D["🧬 Identity Task<br/>same only = duplicate"]
+    C --> E["📊 Precision / Recall<br/>Reason Distribution / Fan-out"]
+    D --> E
+    B --> F["🧰 Evidence Check<br/>run lineage + unrelated exposure"]
+    F --> E
+    E --> G["🔁 Replay Diff<br/>pair + metric deltas"]
+    G -. "measurement only" .-> H["🚫 No Suppression<br/>shadow_dedup_allowed=false"]
+```
+
+`soc eval correlation` consumes a versioned, vendor-neutral label set. `same_incident` and
+`related_distinct` are both useful historical retrievals, but only `same_incident` is a possible
+duplicate identity. The current controlled baseline has 8 pairs: retrieval precision `0.667`, recall
+`1.0`; an offline score threshold of `130` also yields duplicate precision `0.667`, recall `1.0`
+because one related-but-distinct endpoint occurrence crosses the threshold. Historical evidence has
+zero cross-run lineage leaks, but two unrelated retrieved candidates expose irrelevant evidence.
+These numbers are diagnostic, not rollout gates. The current scorer has no incident-identity proof,
+so automatic dedup/suppression remains forbidden. `--baseline-json` compares metric, pair, reason,
+fan-out and evidence changes while ignoring report timestamps.
+
 Runtime rules:
 
 - Every node has typed input/output.
@@ -896,6 +921,8 @@ not require rewriting core contracts.
 | `AnalysisRun` | Full runtime execution record | Stable for replay/audit |
 | `AlertSummary` | Lightweight read model | Stable for queue/correlation/list |
 | `CorrelationResult` | Structured historical similarity and reusable-evidence result | Stable read-only bridge into domain/report/context |
+| `CorrelationEvalFixtureSet` | Versioned same/related/unrelated pair labels | Offline-only; must name scoring policy and preserve human rationale |
+| `CorrelationEvalReport` | Retrieval, identity, fan-out, reason and evidence baseline | Read-only; `shadow_dedup_allowed=false` |
 | `ReviewQueueItem` | Analyst work item | Stable state machine |
 | `InvestigationContext` | Shared context for Web/TUI/Lead Agent | Stable but may gain new sections |
 | `UnifiedInvestigationView` | Read-optimized investigation projection | Stable as display/read model |

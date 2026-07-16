@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from soc_agent.contracts import AlertSummary, SimilarAlertMatch, SimilarAlertQuery
+from soc_agent.contracts import (
+    CORRELATION_SCORING_POLICY_VERSION,
+    AlertSummary,
+    SimilarAlertMatch,
+    SimilarAlertQuery,
+)
 
 
 def score_similar_alert(
@@ -41,4 +46,4 @@ def score_similar_alert(
     )
 
 
-__all__ = ["score_similar_alert"]
+__all__ = ["CORRELATION_SCORING_POLICY_VERSION", "score_similar_alert"]

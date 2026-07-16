@@ -1,6 +1,22 @@
 """Offline evaluation helpers for SOC Agent."""
 
 from soc_agent.eval.confidence import calibrate_confidence
+from soc_agent.eval.correlation import (
+    DEFAULT_CORRELATION_EVAL_FIXTURE,
+    CorrelationEvalBinaryMetrics,
+    CorrelationEvalCandidateFixture,
+    CorrelationEvalCaseFixture,
+    CorrelationEvalCaseResult,
+    CorrelationEvalDiff,
+    CorrelationEvalFanOut,
+    CorrelationEvalFixtureSet,
+    CorrelationEvalPairResult,
+    CorrelationEvalReport,
+    CorrelationRelationship,
+    load_correlation_eval_fixture,
+    load_correlation_eval_report,
+    run_correlation_eval,
+)
 from soc_agent.eval.labels import (
     build_confidence_label_set,
     calibration_samples_from_label_set,
@@ -42,7 +58,18 @@ from soc_agent.eval.scenarios import (
 )
 
 __all__ = [
+    "DEFAULT_CORRELATION_EVAL_FIXTURE",
     "DEFAULT_PINGAN_CAPABILITY_EVAL_DIR",
+    "CorrelationEvalBinaryMetrics",
+    "CorrelationEvalCandidateFixture",
+    "CorrelationEvalCaseFixture",
+    "CorrelationEvalCaseResult",
+    "CorrelationEvalDiff",
+    "CorrelationEvalFanOut",
+    "CorrelationEvalFixtureSet",
+    "CorrelationEvalPairResult",
+    "CorrelationEvalReport",
+    "CorrelationRelationship",
     "OfflineEvalReport",
     "OfflineEvalResponse",
     "OfflineEvalSampleResult",
@@ -66,9 +93,12 @@ __all__ = [
     "load_eval_responses_jsonl",
     "load_analysis_runs_for_labeling",
     "load_confidence_label_set",
+    "load_correlation_eval_fixture",
+    "load_correlation_eval_report",
     "load_pingan_capability_eval_fixtures",
     "load_scenario_eval_report",
     "run_offline_eval",
+    "run_correlation_eval",
     "run_pingan_capability_eval",
     "run_pingan_domain_triage_eval",
     "run_pingan_main_orchestrator_eval",

@@ -45,6 +45,7 @@ from soc_agent.contracts.governed_context import (
     GovernedContextSourceType,
 )
 from soc_agent.contracts.schemas import (
+    CORRELATION_SCORING_POLICY_VERSION,
     AlertClassification,
     AlertEntitySet,
     AlertEventRef,
@@ -311,6 +312,7 @@ __all__ = [
     "ConfidenceLabelReviewStatus",
     "ConfidenceLabelSetValidationReport",
     "ConfidenceThresholdProfile",
+    "CORRELATION_SCORING_POLICY_VERSION",
     "CorrelationEvidenceRef",
     "CorrelationMatch",
     "CorrelationQuery",

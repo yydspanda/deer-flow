@@ -207,6 +207,18 @@ explainable match reasons, and evidence loaded from the matched historical run. 
 evaluation uses local/mock action providers and does not enable automatic suppression or
 response.
 
+Measure the deterministic correlation scorer separately from duplicate-incident identity:
+
+```bash
+soc eval correlation --pretty
+soc eval correlation --baseline-json prior-correlation-report.json --pretty
+```
+
+The versioned corpus labels `same_incident`, `related_distinct`, and `unrelated` pairs. The
+report includes retrieval and offline dedup precision/recall, matched-reason distribution,
+candidate fan-out, and evidence-lineage checks. It is read-only and always reports
+`shadow_dedup_allowed=false`; a score or threshold does not suppress alerts.
+
 ### Configuration
 
 Edit `config.yaml` in the project root:

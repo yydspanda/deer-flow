@@ -224,13 +224,18 @@ Current SOC direction:
   `SocDomainTriageRequest` as typed data. Metadata counts are projections only. Reusable
   evidence is loaded by the matched historical `run_id` and cannot change the Runtime
   decision, close ReviewQueue, confirm memory, or suppress an alert.
+- Correlation scoring carries an explicit `scoring_policy_version`. Validate changes with
+  `soc eval correlation`, whose labels distinguish `same_incident`, `related_distinct`, and
+  `unrelated`. Retrieval metrics and offline duplicate-identity metrics are separate; an
+  evaluation threshold is never a production suppression rule. `shadow_dedup_allowed`
+  remains false until a later governed rollout explicitly changes that boundary.
 
 SOC phase plan:
 
 | Phase | Goal |
 | --- | --- |
 | Phase 1 | CLI + Runtime reliability loop |
-| Phase 2 | Correlation + Main Agent dedup |
+| Phase 2 | Correlation + dedup evaluation/shadow design |
 | Phase 3 | Learning + classifier pre-judge + limited LLM Advisory Router |
 | Phase 4 | Daemon mode + Sub Agent parallelism + replay/router evaluation |
 | Phase 5 | Knowledge RAG, threat intel, review UI, MITRE ATT&CK, stale-knowledge handling |

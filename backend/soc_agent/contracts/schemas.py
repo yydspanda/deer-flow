@@ -2608,6 +2608,9 @@ class SimilarAlertMatch(BaseModel):
     matched_reasons: list[str] = Field(default_factory=list)
 
 
+CORRELATION_SCORING_POLICY_VERSION = "soc.correlation.scoring.v1"
+
+
 class CorrelationQuery(BaseModel):
     """Request to correlate one alert summary with recent historical alerts."""
 
@@ -2646,6 +2649,7 @@ class CorrelationResult(BaseModel):
     """Deterministic correlation result for CLI, TUI, Web, and review context."""
 
     schema_version: str = "soc.correlation_result.v1"
+    scoring_policy_version: str = CORRELATION_SCORING_POLICY_VERSION
     query: CorrelationQuery
     subject_summary: AlertSummary
     matches: list[CorrelationMatch] = Field(default_factory=list)

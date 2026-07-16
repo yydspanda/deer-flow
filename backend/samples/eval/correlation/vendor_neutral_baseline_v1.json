@@ -1,0 +1,436 @@
+{
+  "schema_version": "soc.correlation_eval_fixture_set.v1",
+  "fixture_set_id": "vendor-neutral-correlation-baseline-v1",
+  "description": "Controlled endpoint and network pairs that separate useful historical correlation from duplicate-incident identity.",
+  "scoring_policy_version": "soc.correlation.scoring.v1",
+  "dedup_score_threshold": 130,
+  "query_limit": 10,
+  "candidate_limit": 200,
+  "evidence_limit_per_match": 5,
+  "cases": [
+    {
+      "case_id": "endpoint-credential-access",
+      "scenario": "Repeated endpoint credential-access alerts on one host and user",
+      "subject": {
+        "run_id": "RUN-EVAL-ENDPOINT-CURRENT",
+        "alert_id": "ALT-EVAL-ENDPOINT-001",
+        "tenant_id": "tenant-eval",
+        "source_type": "edr",
+        "source_system": "sample-edr",
+        "detection_key": "endpoint:credential-access",
+        "rule_code": "EDR-CRED-001",
+        "rule_name": "Credential access behavior",
+        "severity": "high",
+        "category": "credential_access",
+        "entity_keys": [
+          "host:workstation-001",
+          "user:alice",
+          "process:lsass.exe"
+        ],
+        "status": "needs_review",
+        "verdict": "suspicious",
+        "needs_review": true,
+        "summary": "Current credential-access alert on workstation-001.",
+        "created_at": "2026-07-16T10:00:00Z",
+        "updated_at": "2026-07-16T10:00:00Z"
+      },
+      "subject_evidence": [
+        {
+          "evidence_id": "EVI-EVAL-ENDPOINT-CURRENT",
+          "route": "endpoint.process_tree.lookup",
+          "action": "endpoint.process_tree.lookup",
+          "status": "success",
+          "message": "Current-run process tree.",
+          "result_payload": {
+            "root_process": "winlogon.exe"
+          },
+          "run_id": "RUN-EVAL-ENDPOINT-CURRENT",
+          "alert_id": "ALT-EVAL-ENDPOINT-001",
+          "created_at": "2026-07-16T10:01:00Z"
+        }
+      ],
+      "candidates": [
+        {
+          "relationship": "same_incident",
+          "rationale": "A replayed delivery of the same alert identity and entities.",
+          "summary": {
+            "run_id": "RUN-EVAL-ENDPOINT-SAME",
+            "alert_id": "ALT-EVAL-ENDPOINT-001",
+            "tenant_id": "tenant-eval",
+            "source_type": "edr",
+            "source_system": "sample-edr",
+            "detection_key": "endpoint:credential-access",
+            "rule_code": "EDR-CRED-001",
+            "rule_name": "Credential access behavior",
+            "severity": "high",
+            "category": "credential_access",
+            "entity_keys": [
+              "host:workstation-001",
+              "user:alice",
+              "process:lsass.exe"
+            ],
+            "status": "success",
+            "verdict": "true_positive",
+            "needs_review": false,
+            "summary": "Earlier delivery of the same endpoint alert.",
+            "created_at": "2026-07-16T09:58:00Z",
+            "updated_at": "2026-07-16T09:58:00Z"
+          },
+          "evidence": [
+            {
+              "evidence_id": "EVI-EVAL-ENDPOINT-SAME",
+              "route": "endpoint.process_tree.lookup",
+              "action": "endpoint.process_tree.lookup",
+              "status": "success",
+              "message": "Historical process tree for the duplicate delivery.",
+              "result_payload": {
+                "root_process": "winlogon.exe",
+                "risk": "high"
+              },
+              "run_id": "RUN-EVAL-ENDPOINT-SAME",
+              "alert_id": "ALT-EVAL-ENDPOINT-001",
+              "created_at": "2026-07-16T09:59:00Z"
+            }
+          ]
+        },
+        {
+          "relationship": "related_distinct",
+          "rationale": "Same rule, host, and user, but a distinct process occurrence that must remain a separate alert.",
+          "summary": {
+            "run_id": "RUN-EVAL-ENDPOINT-RELATED",
+            "alert_id": "ALT-EVAL-ENDPOINT-002",
+            "tenant_id": "tenant-eval",
+            "source_type": "edr",
+            "source_system": "sample-edr",
+            "detection_key": "endpoint:credential-access",
+            "rule_code": "EDR-CRED-001",
+            "rule_name": "Credential access behavior",
+            "severity": "high",
+            "category": "credential_access",
+            "entity_keys": [
+              "host:workstation-001",
+              "user:alice",
+              "process:rundll32.exe"
+            ],
+            "status": "success",
+            "verdict": "true_positive",
+            "needs_review": false,
+            "summary": "Related credential-access occurrence with another process.",
+            "created_at": "2026-07-16T09:30:00Z",
+            "updated_at": "2026-07-16T09:30:00Z"
+          },
+          "evidence": [
+            {
+              "evidence_id": "EVI-EVAL-ENDPOINT-RELATED",
+              "route": "endpoint.process_tree.lookup",
+              "action": "endpoint.process_tree.lookup",
+              "status": "success",
+              "message": "Historical process tree for a related occurrence.",
+              "result_payload": {
+                "root_process": "explorer.exe",
+                "risk": "medium"
+              },
+              "run_id": "RUN-EVAL-ENDPOINT-RELATED",
+              "alert_id": "ALT-EVAL-ENDPOINT-002",
+              "created_at": "2026-07-16T09:31:00Z"
+            }
+          ]
+        },
+        {
+          "relationship": "unrelated",
+          "rationale": "A benign configuration alert happens to share the endpoint source and host.",
+          "summary": {
+            "run_id": "RUN-EVAL-ENDPOINT-OVERLAP",
+            "alert_id": "ALT-EVAL-ENDPOINT-003",
+            "tenant_id": "tenant-eval",
+            "source_type": "edr",
+            "source_system": "sample-edr",
+            "detection_key": "endpoint:configuration-change",
+            "rule_code": "EDR-CONFIG-009",
+            "rule_name": "Endpoint configuration change",
+            "severity": "low",
+            "category": "configuration_change",
+            "entity_keys": [
+              "host:workstation-001",
+              "process:control.exe"
+            ],
+            "status": "success",
+            "verdict": "false_positive",
+            "needs_review": false,
+            "summary": "Unrelated configuration activity on the same host.",
+            "created_at": "2026-07-16T09:00:00Z",
+            "updated_at": "2026-07-16T09:00:00Z"
+          },
+          "evidence": [
+            {
+              "evidence_id": "EVI-EVAL-ENDPOINT-OVERLAP",
+              "route": "asset.lookup",
+              "action": "asset.lookup",
+              "status": "success",
+              "message": "Asset ownership for an unrelated alert.",
+              "result_payload": {
+                "owner": "desktop-support"
+              },
+              "run_id": "RUN-EVAL-ENDPOINT-OVERLAP",
+              "alert_id": "ALT-EVAL-ENDPOINT-003",
+              "created_at": "2026-07-16T09:01:00Z"
+            }
+          ]
+        },
+        {
+          "relationship": "unrelated",
+          "rationale": "A host file-integrity event has no correlation feature overlap.",
+          "summary": {
+            "run_id": "RUN-EVAL-ENDPOINT-ZERO",
+            "alert_id": "ALT-EVAL-HIDS-001",
+            "tenant_id": "tenant-eval",
+            "source_type": "hids",
+            "source_system": "sample-hids",
+            "detection_key": "host:file-integrity",
+            "rule_code": "HIDS-FIM-001",
+            "rule_name": "Protected file changed",
+            "severity": "medium",
+            "category": "file_integrity",
+            "entity_keys": [
+              "host:server-099",
+              "file:/etc/hosts"
+            ],
+            "status": "success",
+            "verdict": "suspicious",
+            "needs_review": true,
+            "summary": "Independent file-integrity event.",
+            "created_at": "2026-07-16T08:30:00Z",
+            "updated_at": "2026-07-16T08:30:00Z"
+          },
+          "evidence": [
+            {
+              "evidence_id": "EVI-EVAL-ENDPOINT-ZERO",
+              "route": "host.event_context.lookup",
+              "action": "host.event_context.lookup",
+              "status": "success",
+              "message": "Host context for an unrelated event.",
+              "result_payload": {
+                "host": "server-099"
+              },
+              "run_id": "RUN-EVAL-ENDPOINT-ZERO",
+              "alert_id": "ALT-EVAL-HIDS-001",
+              "created_at": "2026-07-16T08:31:00Z"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "network-reverse-shell",
+      "scenario": "Repeated reverse-shell observations and nearby network activity",
+      "subject": {
+        "run_id": "RUN-EVAL-NETWORK-CURRENT",
+        "alert_id": "ALT-EVAL-NETWORK-001",
+        "tenant_id": "tenant-eval",
+        "source_type": "ndr",
+        "source_system": "sample-ndr",
+        "detection_key": "network:reverse-shell",
+        "rule_code": "NDR-RS-001",
+        "rule_name": "Reverse shell traffic",
+        "severity": "critical",
+        "category": "command_and_control",
+        "entity_keys": [
+          "ip:10.10.0.8",
+          "ip:198.51.100.10",
+          "host:app-01"
+        ],
+        "status": "needs_review",
+        "verdict": "true_positive",
+        "needs_review": true,
+        "summary": "Current reverse-shell observation.",
+        "created_at": "2026-07-16T11:00:00Z",
+        "updated_at": "2026-07-16T11:00:00Z"
+      },
+      "subject_evidence": [
+        {
+          "evidence_id": "EVI-EVAL-NETWORK-CURRENT",
+          "route": "threat_intel.ip_reputation.lookup",
+          "action": "threat_intel.ip_reputation.lookup",
+          "status": "success",
+          "message": "Current-run IP reputation.",
+          "result_payload": {
+            "score": 88
+          },
+          "run_id": "RUN-EVAL-NETWORK-CURRENT",
+          "alert_id": "ALT-EVAL-NETWORK-001",
+          "created_at": "2026-07-16T11:01:00Z"
+        }
+      ],
+      "candidates": [
+        {
+          "relationship": "same_incident",
+          "rationale": "A duplicate delivery has the same alert identity and network entities.",
+          "summary": {
+            "run_id": "RUN-EVAL-NETWORK-SAME",
+            "alert_id": "ALT-EVAL-NETWORK-001",
+            "tenant_id": "tenant-eval",
+            "source_type": "ndr",
+            "source_system": "sample-ndr",
+            "detection_key": "network:reverse-shell",
+            "rule_code": "NDR-RS-001",
+            "rule_name": "Reverse shell traffic",
+            "severity": "critical",
+            "category": "command_and_control",
+            "entity_keys": [
+              "ip:10.10.0.8",
+              "ip:198.51.100.10",
+              "host:app-01"
+            ],
+            "status": "success",
+            "verdict": "true_positive",
+            "needs_review": false,
+            "summary": "Duplicate delivery of the reverse-shell observation.",
+            "created_at": "2026-07-16T10:58:00Z",
+            "updated_at": "2026-07-16T10:58:00Z"
+          },
+          "evidence": [
+            {
+              "evidence_id": "EVI-EVAL-NETWORK-SAME",
+              "route": "threat_intel.ip_reputation.lookup",
+              "action": "threat_intel.ip_reputation.lookup",
+              "status": "success",
+              "message": "Historical reputation for the duplicate delivery.",
+              "result_payload": {
+                "score": 88
+              },
+              "run_id": "RUN-EVAL-NETWORK-SAME",
+              "alert_id": "ALT-EVAL-NETWORK-001",
+              "created_at": "2026-07-16T10:59:00Z"
+            }
+          ]
+        },
+        {
+          "relationship": "related_distinct",
+          "rationale": "The same detection recurred on the host with different network peers.",
+          "summary": {
+            "run_id": "RUN-EVAL-NETWORK-RELATED",
+            "alert_id": "ALT-EVAL-NETWORK-002",
+            "tenant_id": "tenant-eval",
+            "source_type": "ndr",
+            "source_system": "sample-ndr",
+            "detection_key": "network:reverse-shell",
+            "rule_code": "NDR-RS-001",
+            "rule_name": "Reverse shell traffic",
+            "severity": "high",
+            "category": "command_and_control",
+            "entity_keys": [
+              "ip:10.10.0.9",
+              "ip:203.0.113.77",
+              "host:app-01"
+            ],
+            "status": "success",
+            "verdict": "true_positive",
+            "needs_review": false,
+            "summary": "Distinct reverse-shell occurrence on the same host.",
+            "created_at": "2026-07-16T10:00:00Z",
+            "updated_at": "2026-07-16T10:00:00Z"
+          },
+          "evidence": [
+            {
+              "evidence_id": "EVI-EVAL-NETWORK-RELATED",
+              "route": "threat_intel.ip_reputation.lookup",
+              "action": "threat_intel.ip_reputation.lookup",
+              "status": "success",
+              "message": "Historical reputation for a related occurrence.",
+              "result_payload": {
+                "score": 71
+              },
+              "run_id": "RUN-EVAL-NETWORK-RELATED",
+              "alert_id": "ALT-EVAL-NETWORK-002",
+              "created_at": "2026-07-16T10:01:00Z"
+            }
+          ]
+        },
+        {
+          "relationship": "unrelated",
+          "rationale": "A DNS anomaly shares an internal IP and NDR source but is not part of the reverse-shell incident.",
+          "summary": {
+            "run_id": "RUN-EVAL-NETWORK-OVERLAP",
+            "alert_id": "ALT-EVAL-NETWORK-003",
+            "tenant_id": "tenant-eval",
+            "source_type": "ndr",
+            "source_system": "sample-ndr",
+            "detection_key": "network:dns-anomaly",
+            "rule_code": "NDR-DNS-004",
+            "rule_name": "DNS anomaly",
+            "severity": "medium",
+            "category": "dns",
+            "entity_keys": [
+              "ip:10.10.0.8",
+              "domain:updates.example"
+            ],
+            "status": "success",
+            "verdict": "false_positive",
+            "needs_review": false,
+            "summary": "Unrelated DNS anomaly sharing one endpoint.",
+            "created_at": "2026-07-16T09:30:00Z",
+            "updated_at": "2026-07-16T09:30:00Z"
+          },
+          "evidence": [
+            {
+              "evidence_id": "EVI-EVAL-NETWORK-OVERLAP",
+              "route": "security_tag.lookup",
+              "action": "security_tag.lookup",
+              "status": "success",
+              "message": "Security tag for an unrelated DNS alert.",
+              "result_payload": {
+                "tags": [
+                  "dns-server"
+                ]
+              },
+              "run_id": "RUN-EVAL-NETWORK-OVERLAP",
+              "alert_id": "ALT-EVAL-NETWORK-003",
+              "created_at": "2026-07-16T09:31:00Z"
+            }
+          ]
+        },
+        {
+          "relationship": "unrelated",
+          "rationale": "An endpoint persistence alert has no correlation feature overlap.",
+          "summary": {
+            "run_id": "RUN-EVAL-NETWORK-ZERO",
+            "alert_id": "ALT-EVAL-EDR-099",
+            "tenant_id": "tenant-eval",
+            "source_type": "edr",
+            "source_system": "sample-edr",
+            "detection_key": "endpoint:persistence",
+            "rule_code": "EDR-PERSIST-002",
+            "rule_name": "Startup persistence",
+            "severity": "medium",
+            "category": "persistence",
+            "entity_keys": [
+              "host:workstation-099",
+              "process:reg.exe"
+            ],
+            "status": "success",
+            "verdict": "suspicious",
+            "needs_review": true,
+            "summary": "Independent endpoint persistence alert.",
+            "created_at": "2026-07-16T09:00:00Z",
+            "updated_at": "2026-07-16T09:00:00Z"
+          },
+          "evidence": [
+            {
+              "evidence_id": "EVI-EVAL-NETWORK-ZERO",
+              "route": "endpoint.process_tree.lookup",
+              "action": "endpoint.process_tree.lookup",
+              "status": "success",
+              "message": "Process tree for an unrelated endpoint alert.",
+              "result_payload": {
+                "root_process": "services.exe"
+              },
+              "run_id": "RUN-EVAL-NETWORK-ZERO",
+              "alert_id": "ALT-EVAL-EDR-099",
+              "created_at": "2026-07-16T09:01:00Z"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

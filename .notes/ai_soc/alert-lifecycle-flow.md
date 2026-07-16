@@ -359,6 +359,36 @@ flowchart TD
 5. `soc eval pingan-main --pretty` 会为 APT/EDR/HIDS 各先生成一条本地历史 run，再运行当前告警，
    用于验证这条完整只读链路；其中 action provider 仍是 mock，不代表 PA-12 真实系统接入。
 
+### 4.2 Correlation Evaluation Boundary / 关联评测边界
+
+```mermaid
+flowchart TD
+    A["🏷️ Labeled Pair Corpus<br/>版本化人工关系标签"] --> B{"Relationship / 关系"}
+    B -->|same_incident| C["✅ Retrieval Positive<br/>✅ Duplicate Positive"]
+    B -->|related_distinct| D["✅ Retrieval Positive<br/>🚫 Duplicate Negative"]
+    B -->|unrelated| E["🚫 Retrieval Negative<br/>🚫 Duplicate Negative"]
+
+    C --> F["⚙️ SocCorrelationService<br/>versioned scorer"]
+    D --> F
+    E --> F
+    F --> G["📊 Retrieval Metrics<br/>precision / recall / reason / fan-out"]
+    F --> H["🧬 Offline Identity Metrics<br/>threshold diagnostic only"]
+    F --> I["🧰 Evidence Safety<br/>run lineage / unrelated exposure"]
+    G --> J["🔁 Replay Diff<br/>pair and metric deltas"]
+    H --> J
+    I --> J
+    J -.-> K["🚫 No Runtime Mutation<br/>no dedup / queue close / verdict change"]
+```
+
+1. `CorrelationResult.scoring_policy_version` 记录实际评分语义；fixture 版本与 scorer 版本不一致时
+   fail-fast，不能拿旧标签报告解释新规则。
+2. `same_incident` 与 `related_distinct` 对检索都是正样本，但只有前者对 duplicate identity 是正样本；
+   “相似”不能直接推出“可以合并”。
+3. `evidence_lineage_leakage_count` 检查 evidence 是否来自错误 `run_id`；
+   `unrelated_evidence_exposure_count` 单独统计无关候选被召回后带出的语义噪声。
+4. `soc eval correlation --baseline-json PRIOR.json` 忽略生成时间，比较 pair、指标、reason、fan-out 和
+   evidence 变化；当前 `shadow_dedup_allowed=false`，报告不写业务库、不抑制告警。
+
 ## 5. Domain and Scenario Triage / 领域与场景研判
 
 ```mermaid
