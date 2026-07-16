@@ -14,6 +14,8 @@ from soc_agent.contracts import (
     AnalysisRun,
     Decision,
     DecisionAuditRecord,
+    GovernedContextFact,
+    GovernedContextFactQuery,
     InvestigationEvidence,
     LLMAnalysisRequest,
     NormalizationBaselineStatus,
@@ -293,6 +295,36 @@ class NormalizationMaintenanceIssueRepository(Protocol):
         source_system: str | None = None,
         limit: int = 50,
     ) -> list[NormalizationMaintenanceIssue]: ...
+
+
+class GovernedContextFactRepository(Protocol):
+    """Append-only persistence boundary for governed context fact versions."""
+
+    def append_governed_context_fact(
+        self,
+        fact: GovernedContextFact,
+        *,
+        expected_latest_version: int | None,
+    ) -> None: ...
+
+    def get_governed_context_fact(
+        self,
+        fact_id: str,
+        *,
+        version: int | None = None,
+    ) -> GovernedContextFact | None: ...
+
+    def list_governed_context_facts(
+        self,
+        query: GovernedContextFactQuery,
+    ) -> list[GovernedContextFact]: ...
+
+    def list_governed_context_fact_versions(
+        self,
+        fact_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[GovernedContextFact]: ...
 
 
 class SocActionAdapter(Protocol):

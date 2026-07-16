@@ -356,6 +356,28 @@ Governed context fact / 受治理上下文事实约束：
 - `SocGovernedContextService` 是 propose/activate/suspend/revoke/expire/version/query 的唯一公共生命周期边界；typed domain service 只能组合该 service 与 matcher，不得复制状态机。
 - `GovernedContextFactRepository` 是 PostgreSQL source-of-truth 边界。允许使用带 `fact_type` discriminator、公共索引列和 typed JSONB payload 的单一 envelope 表，但 repository 返回前必须恢复并验证具体 subtype，不能把任意 JSON 当作 active fact。
 - fact 与 evidence、policy、memory 必须分离：MCP/action 返回 `InvestigationEvidence`；governed fact 描述在某时点成立的业务上下文；deterministic policy 决定 disposition；memory 保存可复用研判经验。
+- GF-01 当前合同位于 `soc_agent.contracts.governed_context`。稳定 `fact_id` 下的每个
+  `fact_version_id` 都是追加式历史版本；`fact_id + version` 唯一，`current_key` 唯一保证一个 logical
+  fact 只有一个 latest。Repository 写入必须携带 `expected_latest_version` 并在同一事务中 supersede
+  previous latest + append next version；并发冲突必须 fail-fast，禁止 last-write-wins。
+- `SocGovernedContextService` 当前实现 `propose/revise/activate/suspend/revoke/expire/get/list/list_versions`。
+  revision 总是回到 `proposed` 并清空 reviewer，需要重新激活；从 active revision 时 latest 立即
+  fail closed，不能继续参与后续 matcher。`revoked/expired` 是终态；尚未到 `valid_until` 时不能用
+  expire 提前结束，必须明确 revoke。
+- propose/revise 角色为 `soc_analyst|soc_engineer|soc_admin|soc_context_source`；
+  activate/suspend/revoke 为 `soc_context_approver|soc_admin`；expire 额外允许
+  `soc_context_service`。生产 transport 必须从认证上下文构造这些角色，不能接受 client-supplied role。
+- Active gate 至少要求：明确 expiry、非空 evidence refs、可激活 source type、source 当前未 stale、
+  governance reviewer role。`authoritative_system/adapter_sync` source 必须提供 source version、
+  `fresh_until` 和 `authoritative=true`。
+- `0013_governed_context_facts` / `soc_governed_context_facts` 是当前持久化版本；
+  `SqlAlchemyAlertRepository` 与 in-memory adapter 实现同一 protocol。JSON payload 读取时必须恢复
+  typed subtype 并与索引列核对，不能只信 JSON 或只信 discriminator。
+- governed-context contracts 必须 `extra=forbid`；未知或拼错字段直接 validation failure，不能被 Pydantic
+  静默忽略。GF-01 的 `valid_at` 只过滤 envelope business validity，不得被 transport/service 当成
+  authorization 成立；event-time state/source/scope applicability 仍由 AA-01 matcher 统一裁决。
+- `soc context propose|revise|activate|suspend|revoke|expire|list|get` 只调用公共 service；CLI 的本地角色
+  装配不等于生产认证。GF-01 不得注入 Runtime prompt、修改 detection decision、更新 ReviewQueue 或关单。
 
 Authorized activity / 授权活动事实约束：
 
@@ -377,6 +399,24 @@ Authorized activity / 授权活动事实约束：
 - 置信度评测必须区分 detection label 和 operational disposition label。`ConfidenceCalibrationSample` 后续应增加 `actual_disposition`、calibration eligibility、missing decisive context 和 authorization fact refs；若模型的 exact bounded input 不含决定性授权事实，业务真值可以保留，但 analyzer calibration 必须标记 `excluded_missing_decisive_context`。
 - 被 calibration 排除的已知真值样本不得丢弃；它们进入 authorization-enrichment coverage、context availability 和 end-to-end disposition eval，不进入 analyzer Brier/ECE/threshold fitting。
 - 需要持续观测 authorization match coverage、exact/partial/new-pattern 比例、analyst override rate、expired/stale fact rate、shadow disposition precision、抽样复核命中率和每条 active fact 的 alert fan-out。
+- AA-01 当前合同位于 `soc_agent.contracts.authorization`，纯 query/matcher 位于
+  `soc_agent.authorization`，公共入口为 `SocAuthorizedActivityService`。CLI/API/Kafka/Lead Agent 不得
+  复制 selector 或 event-time 逻辑；只读 CLI 为 `soc context match`。
+- query builder 只能消费 canonical `AlertInput`、`ExtractedEntities`、`FactReconstructionResult` 和显式
+  tenant/environment/timezone context。`RoleResolution.selected_value` 必须先判型；不能把任意 asset/account
+  字符串强制解释为 IP。无时区 event time 缺少显式 IANA timezone 时返回 `unavailable`。
+- 历史匹配必须从 append-only fact versions 中选择 `state_changed_at <= alert.event_time` 的最后版本；
+  事后创建的 proposed/active fact 不能反向授权旧告警。后续 revoke/suspend 不能改写撤销前的历史 replay。
+- selector 语义固定为不同 `kind@namespace` group AND、同 group 多值 OR；CIDR 可包含 canonical IP。
+  fact 声明 namespace 后 query 必须同 namespace。缺 group 为 `partial`，有兼容值但超 scope/recurrence 为
+  `conflict`，lifecycle/business validity/source stale 为 `expired`，source/repository/history 不可用为
+  `unavailable`。
+- Repository error、candidate truncation、blocking `ConflictReport` 都必须 fail closed；不得因为找到某个
+  selector 值就忽略其他 required group。AA-01 结果必须带 fact version/content hash、policy version、
+  selector evidence paths 和 `shadow_only=true`。
+- AA-01 只计算匹配，不持久化、不改 `AnalysisRun`/`Decision`/ReviewQueue、不提出 disposition。
+  `EX-01` 才能通过独立 persistence/audit contract 写 enrichment；`DP-01` 才能消费 exact enrichment 生成
+  `closed_benign_true_positive` shadow proposal；`EV-01` 管理 auto-close 前的评测和 rollback gate。
 
 Security exercise / 护网与红蓝对抗事实约束：
 

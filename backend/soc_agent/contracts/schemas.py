@@ -137,6 +137,12 @@ class SocEventType(StrEnum):
     NORMALIZATION_BASELINE_ACCEPTED = "normalization.baseline_accepted"
     NORMALIZATION_DRIFT_DETECTED = "normalization.drift_detected"
     NORMALIZATION_ISSUE_UPDATED = "normalization.issue_updated"
+    GOVERNED_CONTEXT_FACT_PROPOSED = "governed_context.fact_proposed"
+    GOVERNED_CONTEXT_FACT_ACTIVATED = "governed_context.fact_activated"
+    GOVERNED_CONTEXT_FACT_SUSPENDED = "governed_context.fact_suspended"
+    GOVERNED_CONTEXT_FACT_REVOKED = "governed_context.fact_revoked"
+    GOVERNED_CONTEXT_FACT_EXPIRED = "governed_context.fact_expired"
+    GOVERNED_CONTEXT_FACT_REVISED = "governed_context.fact_revised"
 
 
 class AuditAction(StrEnum):

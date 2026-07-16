@@ -161,6 +161,13 @@ Current SOC direction:
   non-retryable failures are recorded, reviewed, and dead-lettered.
 - LLM-discovered knowledge is candidate knowledge only. It must be confirmed by a human before
   it can affect future decisions.
+- Governed operational context facts are separate from evidence, memory, action approval, and
+  detection truth. GF-01 uses typed contracts plus append-only fact versions through
+  `SocGovernedContextService` / `GovernedContextFactRepository` and migration
+  `0013_governed_context_facts`. AA-01 uses `SocAuthorizedActivityService` plus vendor-neutral
+  `AuthorizationQuery` / deterministic event-time matching; `soc context match` is read-only and
+  must not affect Runtime, ReviewQueue, disposition, or close alerts. EX-01 enrichment persistence
+  and DP-01 shadow disposition remain separate future boundaries.
 - PingAn `zeusRawLogs[].message` values are parsed only inside the PingAn normalizer. Deterministically
   parsed message fields are high-trust primary facts; Zeus structured fields are reduced-trust
   fallback candidates. Preserve the complete original payload for replay/audit and expose only

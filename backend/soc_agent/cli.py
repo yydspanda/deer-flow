@@ -35,6 +35,12 @@ from soc_agent.contracts import (
     CorrectionCommand,
     CorrelationQuery,
     EntrySurface,
+    GovernedContextFactCreateCommand,
+    GovernedContextFactQuery,
+    GovernedContextFactRevisionCommand,
+    GovernedContextFactStatus,
+    GovernedContextFactTransitionCommand,
+    GovernedContextFactType,
     InvestigationContext,
     NormalizationBaselineAcceptCommand,
     NormalizationBaselineStatus,
@@ -60,8 +66,10 @@ from soc_agent.core import (
     SocAgentCapabilityRouter,
     SocAgentChatService,
     SocAnalysisService,
+    SocAuthorizedActivityService,
     SocCorrelationService,
     SocDaemonService,
+    SocGovernedContextService,
     SocMemoryService,
     SocNormalizationMaintenanceService,
     SocNormalizationService,
@@ -216,6 +224,18 @@ def main(argv: list[str] | None = None) -> int:
         return _memory_records_list(args)
     if args.command == "memory" and args.memory_command == "records" and args.memory_records_command == "get":
         return _memory_records_get(args)
+    if args.command == "context" and args.context_command == "propose":
+        return _context_fact_propose(args)
+    if args.command == "context" and args.context_command == "revise":
+        return _context_fact_revise(args)
+    if args.command == "context" and args.context_command == "list":
+        return _context_fact_list(args)
+    if args.command == "context" and args.context_command == "get":
+        return _context_fact_get(args)
+    if args.command == "context" and args.context_command == "match":
+        return _context_fact_match(args)
+    if args.command == "context" and args.context_command in {"activate", "suspend", "revoke", "expire"}:
+        return _context_fact_transition(args)
     if args.command == "db" and args.db_command == "init":
         return _db_init(args)
     if args.command == "db" and args.db_command == "upgrade":
@@ -673,6 +693,65 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_records_get.add_argument("memory_id", help="Memory record id to load")
     memory_records_get.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(memory_records_get)
+
+    context = subparsers.add_parser("context", help="Governed operational context fact helpers")
+    context_subparsers = context.add_subparsers(dest="context_command")
+    context_propose = context_subparsers.add_parser("propose", help="Propose one typed governed context fact")
+    context_propose.add_argument("path", nargs="?", help="Path to GovernedContextFactCreateCommand JSON")
+    context_propose.add_argument("--json", dest="json_payload", help="Inline GovernedContextFactCreateCommand JSON")
+    context_propose.add_argument("--actor-id", default="soc-cli", help="Proposal actor id")
+    context_propose.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(context_propose)
+    context_revise = context_subparsers.add_parser("revise", help="Create a proposed replacement version")
+    context_revise.add_argument("fact_id", help="Stable governed context fact id")
+    context_revise.add_argument("path", nargs="?", help="Path to GovernedContextFactRevisionCommand JSON")
+    context_revise.add_argument("--json", dest="json_payload", help="Inline GovernedContextFactRevisionCommand JSON")
+    context_revise.add_argument("--expected-version", type=int, required=True, help="Expected latest fact version")
+    context_revise.add_argument("--actor-id", default="soc-cli", help="Revision actor id")
+    context_revise.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(context_revise)
+    context_list = context_subparsers.add_parser("list", help="List governed context facts")
+    context_list.add_argument("--fact-id", help="Filter by stable fact id")
+    context_list.add_argument("--fact-type", choices=["", *[item.value for item in GovernedContextFactType]], default="")
+    context_list.add_argument("--status", choices=["", *[item.value for item in GovernedContextFactStatus]], default="")
+    context_list.add_argument("--tenant-id", help="Filter by tenant id")
+    context_list.add_argument("--environment", help="Filter by environment")
+    context_list.add_argument("--valid-at", help="Filter by timezone-aware ISO-8601 event time")
+    context_list.add_argument("--all-versions", action="store_true", help="Include superseded versions")
+    context_list.add_argument("--limit", type=int, default=50, help="Maximum fact versions to return")
+    context_list.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(context_list)
+    context_get = context_subparsers.add_parser("get", help="Get one governed context fact")
+    context_get.add_argument("fact_id", help="Stable governed context fact id")
+    context_get.add_argument("--version", type=int, help="Load a specific historical version")
+    context_get.add_argument("--history", action="store_true", help="Return all versions newest first")
+    context_get.add_argument("--limit", type=int, default=100, help="Maximum historical versions to return")
+    context_get.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(context_get)
+    context_match = context_subparsers.add_parser(
+        "match",
+        help="Shadow-match one alert against governed authorized-activity facts",
+    )
+    context_match.add_argument("path", help="Path to one raw or canonical alert JSON object")
+    context_match.add_argument("--tenant-id", help="Authenticated/integration tenant when absent from the alert")
+    context_match.add_argument("--environment", help="Deployment environment when absent from the alert")
+    context_match.add_argument(
+        "--event-timezone",
+        help="IANA timezone used only when the canonical alert event time is naive",
+    )
+    context_match.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(context_match)
+    for transition_name in ("activate", "suspend", "revoke", "expire"):
+        transition = context_subparsers.add_parser(
+            transition_name,
+            help=f"{transition_name.capitalize()} one governed context fact",
+        )
+        transition.add_argument("fact_id", help="Stable governed context fact id")
+        transition.add_argument("--expected-version", type=int, required=True, help="Expected latest fact version")
+        transition.add_argument("--reason", required=True, help="Auditable lifecycle transition reason")
+        transition.add_argument("--actor-id", default="soc-cli", help="Lifecycle actor id")
+        transition.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+        _add_database_args(transition)
 
     db = subparsers.add_parser("db", help="SOC database helpers")
     db_subparsers = db.add_subparsers(dest="db_command")
@@ -1344,6 +1423,186 @@ def _memory_records_get(args: argparse.Namespace) -> int:
 
     print(record.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
+
+
+def _context_fact_propose(args: argparse.Namespace) -> int:
+    try:
+        command = GovernedContextFactCreateCommand.model_validate(
+            _load_object_input(
+                args.path,
+                args.json_payload,
+                payload_label="governed context fact proposal",
+            )
+        )
+        fact = SocGovernedContextService(repository=_repository_from_args(args)).propose(
+            command,
+            context=_context_fact_cli_context(args.actor_id, roles=["soc_analyst"]),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: governed context database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(fact.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _context_fact_revise(args: argparse.Namespace) -> int:
+    try:
+        payload = _load_object_input(
+            args.path,
+            args.json_payload,
+            payload_label="governed context fact revision",
+        )
+        payload.update(
+            {
+                "fact_id": args.fact_id,
+                "expected_latest_version": args.expected_version,
+            }
+        )
+        fact = SocGovernedContextService(repository=_repository_from_args(args)).revise(
+            GovernedContextFactRevisionCommand.model_validate(payload),
+            context=_context_fact_cli_context(args.actor_id, roles=["soc_engineer"]),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: governed context database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(fact.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _context_fact_list(args: argparse.Namespace) -> int:
+    try:
+        query = GovernedContextFactQuery.model_validate(
+            {
+                "fact_id": args.fact_id,
+                "fact_type": args.fact_type or None,
+                "status": args.status or None,
+                "tenant_id": args.tenant_id,
+                "environment": args.environment,
+                "valid_at": args.valid_at,
+                "latest_only": not args.all_versions,
+                "limit": args.limit,
+            }
+        )
+        facts = SocGovernedContextService(repository=_repository_from_args(args)).list(query)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: governed context database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(
+        json.dumps(
+            [item.model_dump(mode="json", exclude_none=True) for item in facts],
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+        )
+    )
+    return 0
+
+
+def _context_fact_get(args: argparse.Namespace) -> int:
+    try:
+        if args.history and args.version is not None:
+            raise ValueError("--history and --version cannot be used together")
+        service = SocGovernedContextService(repository=_repository_from_args(args))
+        if args.history:
+            payload: object = [item.model_dump(mode="json", exclude_none=True) for item in service.list_versions(args.fact_id, limit=args.limit)]
+        else:
+            payload = service.get(args.fact_id, version=args.version).model_dump(
+                mode="json",
+                exclude_none=True,
+            )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: governed context database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(json.dumps(payload, ensure_ascii=False, indent=2 if args.pretty else None))
+    return 0
+
+
+def _context_fact_transition(args: argparse.Namespace) -> int:
+    roles = {
+        "activate": ["soc_context_approver"],
+        "suspend": ["soc_context_approver"],
+        "revoke": ["soc_context_approver"],
+        "expire": ["soc_context_service"],
+    }
+    try:
+        service = SocGovernedContextService(repository=_repository_from_args(args))
+        operation = getattr(service, args.context_command)
+        fact = operation(
+            GovernedContextFactTransitionCommand(
+                fact_id=args.fact_id,
+                expected_latest_version=args.expected_version,
+                reason=args.reason,
+            ),
+            context=_context_fact_cli_context(
+                args.actor_id,
+                roles=roles[args.context_command],
+            ),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: governed context database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(fact.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _context_fact_match(args: argparse.Namespace) -> int:
+    try:
+        result = SocAuthorizedActivityService(
+            repository=_repository_from_args(args),
+        ).match_payload(
+            _load_payload(args.path, None),
+            tenant_id=args.tenant_id,
+            environment=args.environment,
+            event_timezone=args.event_timezone,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: governed context database access failed: {exc}", file=sys.stderr)
+        return 1
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _context_fact_cli_context(actor_id: str, *, roles: list[str]) -> ServiceRequestContext:
+    return ServiceRequestContext(
+        actor=ActorContext(
+            actor_id=actor_id,
+            actor_type=ActorType.USER,
+            surface=EntrySurface.CLI,
+            roles=roles,
+        )
+    )
 
 
 def _optional_bool(value: str) -> bool | None:
@@ -2097,21 +2356,30 @@ def _kafka_daemon_run_payload(
 
 
 def _load_payload(path: str | None, json_payload: str | None) -> dict[str, Any]:
+    return _load_object_input(path, json_payload, payload_label="alert")
+
+
+def _load_object_input(
+    path: str | None,
+    json_payload: str | None,
+    *,
+    payload_label: str,
+) -> dict[str, Any]:
     if bool(path) == bool(json_payload):
         raise ValueError("provide exactly one of PATH or --json")
 
     try:
         if json_payload:
-            data = _load_json_object(json_payload, payload_label="alert JSON")
+            data = _load_json_object(json_payload, payload_label=f"{payload_label} JSON")
         else:
             data = json.loads(Path(path or "").read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid JSON: {exc}") from exc
     except OSError as exc:
-        raise ValueError(f"cannot read alert file: {exc}") from exc
+        raise ValueError(f"cannot read {payload_label} file: {exc}") from exc
 
     if not isinstance(data, dict):
-        raise ValueError("alert JSON must be an object")
+        raise ValueError(f"{payload_label} JSON must be an object")
     return data
 
 

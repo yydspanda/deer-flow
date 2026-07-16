@@ -218,6 +218,24 @@ their outputs cannot mutate adapters, baselines, runtime policy, or automatic-ac
 Confidence calibration must first use `soc eval labels prepare|validate`; only analyst-accepted,
 traceable, single-model/prompt/pipeline labels may enter `soc eval confidence`.
 
+Governed operational context is separate from investigation evidence, memory, action approval, and
+detection policy. Public contracts live in `soc_agent.contracts.governed_context`; lifecycle logic
+lives in `soc_agent.core.governed_context.SocGovernedContextService`. Facts use a stable `fact_id`
+with append-only `fact_version_id/version` rows behind `GovernedContextFactRepository`; all writes
+carry `expected_latest_version` and stale writers fail. `SqlAlchemyAlertRepository` persists these
+versions in `soc_governed_context_facts` via migration `0013_governed_context_facts`; local tests may
+use `InMemoryGovernedContextFactRepository`. The CLI lifecycle surface is
+`soc context propose|revise|activate|suspend|revoke|expire|list|get`.
+
+AA-01 authorization contracts live in `soc_agent.contracts.authorization`; the vendor-neutral query
+builder/matcher live in `soc_agent.authorization`, and the only public service is
+`SocAuthorizedActivityService`. `soc context match` is read-only shadow evaluation. Matching selects
+the lifecycle version effective at alert event time and checks tenant/environment, validity, source
+freshness, recurrence, and subject/target/behavior selector groups. Naive event times require an
+explicit IANA timezone. GF-01/AA-01 must not inject facts into Runtime prompts, change detection
+decisions, update ReviewQueue, propose a disposition, or close alerts. EX-01 enrichment persistence
+and DP-01 shadow disposition remain separate future slices.
+
 PingAn vendor aliases are translated into generic `RoleClaim` objects inside `soc_agent.normalizers`.
 `pipeline.fact_reconstructor` must remain vendor-neutral: it builds scenario hypotheses and
 conflict-aware `RoleResolution` objects, and must not assume attacker=source or victim=destination.

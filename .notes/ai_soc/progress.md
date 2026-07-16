@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 Runtime 工程闭环完成；Phase 2 correlation / domain triage 起步 |
-| 当前目标 | 首份同版本 5 样本字段谱系审阅与集中修复已完成：PingAn 字段语义、多 Message observation、进程链、实体边界、精确 bounded projection、grounding 和 outcome guard 均已回归；下一步实现 typed governed-context facts，使授权活动影响运营处置而不污染检测真值 |
+| 当前目标 | GF-01 + AA-01 已完成：typed fact 生命周期、canonical authorization query、历史版本选择和确定性 event-time matcher 已落地；下一步 EX-01 持久化并投影只读 authorization enrichment，仍不修改 detection truth |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `GF-01`：实现 vendor-neutral `GovernedContextFact` envelope、lifecycle service 和 repository contract；先不实现万能 matcher，也不把 `work04/java -> chattr` 等平安业务真值硬编码进 Runtime。 |
+| 当前下一刀 | `EX-01 Authorization Enrichment`：把 AA-01 match result 作为独立、版本化、可回放的只读 enrichment 写入 persistence/audit，并投影到 InvestigationContext/Web/TUI/Lead Agent；不生成 disposition。 |
 
 ## 当前待办列表
 
@@ -66,7 +66,8 @@
 | 11.1 | Deterministic decision policy / confidence guard | Done for uncalibrated MVP | 新增 `SocDecisionPolicy`，把 raw analyzer score、来源、校准状态、证据状态、结构化 review reasons 和 policy version 分开；mock/failed evidence 不参与 domain/scenario 置信度 | stub/LLM self-report 当前全部进入复核；误报、冲突、schema 降级/不支持、关键证据缺口、截断等 guard 不会被高分覆盖；summary/queue/audit 保留原因 |
 | 11.2 | Runtime production hardening | Done | 显式 `skill_context` trace、共享 bounded projection、analysis evidence grounding、prompt/output/schema hard bounds、LLM concurrency/RPM admission、typed sanitized failure、Kafka retry/dead-letter 语义、run/summary/review/audit 原子 bundle | 未落地证据强制复核；可重试失败不 commit offset/不制造工单噪声；不可重试失败进入 ReviewQueue/DLQ；SQL 故障回归证明四类主写入全部回滚 |
 | 11.3 | Governed confidence label set | Done for initial 5-sample baseline / 3 accepted, 2 excluded | 已完成 5 条 DeepSeek 同 scope 标签审阅：2 false positive、1 exploit-attempt true positive accepted；2 条决定性授权/内部业务上下文缺失样本保留业务真值但 excluded；validator 返回 `calibratable=true` | 标签集无 pending/重复 input hash/混合 model-prompt-pipeline scope；accepted 同时包含正负类；仅 3 条 accepted，仍只允许离线 smoke，不能生成生产阈值或自动放行 |
-| 11.4 | Governed context fact lifecycle | Planned / design fixed | `GF-01` typed envelope/service/repository；`AA-01` authorization fact + event-time matcher；`EX-01` campaign/participant/attribution；`DP-01` shadow disposition reconciliation；`EV-01` detection/disposition/calibration eligibility split；随后补 ReviewQueue/Web/TUI/eval 和 gated auto-close | 公共 lifecycle 可复用但 matcher 强类型；护网必须独立证明 campaign、participant 和 authorization；exact chain 才可提议 `closed_benign_true_positive`；partial/new/expired/conflict/unavailable 进人工；不修改 detection truth，不用 memory/IP 永久白名单代替 |
+| 11.4 | Governed context fact lifecycle | GF-01 Done | 已完成 typed `AuthorizedActivityPayload`、append-only fact versions、role-gated lifecycle、repository protocol、in-memory/SQLAlchemy persistence、`0013` migration、CLI 和 sample | Fact 与 evidence/memory/approval/detection truth 分离；revision fail closed 并重新审批 |
+| 11.5 | Authorized activity event-time matcher | AA-01 Done / EX-01 next | 已完成 `AuthorizationQuery/AuthorizationMatchResult`、canonical query builder、历史 lifecycle version selection、source freshness/recurrence/scope matcher、`soc context match`；真实 HIDS/EDR shadow replay 均为 exact | matcher 不识别 vendor aliases、不调用 LLM、不持久化、不改 verdict/ReviewQueue/disposition；naive event time 必须显式传 IANA timezone |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Partial | normalization 运维页、Gateway bounded metrics 和 Kafka JSONL issue 摘要已完成；全局 Kafka/review/approval/runtime/算力 Prometheus exporter 和态势面板仍后置 | 当前 maintenance issue 可见；全系统运行态势不阻塞 SOC Agent Alpha |
@@ -178,6 +179,52 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-16 — AA-01 deterministic authorized-activity matcher implemented
+
+- 新增独立 `soc_agent.contracts.authorization`：固定 query、逐维度 selector explanation、fact refs 和
+  `exact/partial/conflict/expired/not_found/unavailable` 结果；所有合同 `extra=forbid`。
+- `AuthorizationQueryBuilder` 只消费 canonical alert/entity/fact/scenario。角色值先判定 IP、asset id 或
+  agent id，未知类型不强塞进 IP；无时区 event time 必须由调用方显式给 IANA timezone 并留 warning。
+- `AuthorizedActivityMatcher` 按 event time 选择追加式 fact lifecycle 历史版本，检查 lifecycle、business
+  validity、source observation/freshness、跨午夜 recurrence，以及 subject/target/behavior scope；不同
+  selector kind@namespace AND、同 group 值 OR，CIDR 可匹配 canonical IP。
+- 新增只读 `SocAuthorizedActivityService` 和 `soc context match`。Repository 缺失、读取失败或候选截断
+  都返回 `unavailable`，不把基础设施故障伪装成 `not_found/exact`。
+- 定向合同/生命周期/CLI/架构测试 `35 passed`；SOC 全量加架构回归 `466 passed, 1 warning`，唯一
+  warning 是 DeerFlow MCP cache 既有 asyncio deprecation。真实 `datas/hids-1965448.json` 与
+  `datas/edr-1965810.json` shadow replay 都为 `exact`，产物位于 gitignored
+  `backend/.deer-flow/soc-runtime-validation/step-12-authorization-shadow/`。
+- 当前边界：AA-01 结果不写 AnalysisRun/ReviewQueue，不进入 LLM prompt，不生成 disposition，不关单。
+  下一刀 `EX-01` 只负责 enrichment persistence/audit/context projection；之后 `DP-01` 才生成
+  `closed_benign_true_positive` shadow proposal，`EV-01` 再做上线 gate。
+
+### 2026-07-16 — GF-01 governed context fact lifecycle implemented
+
+- 在字段谱系修复基线提交 `8fbaae7f` 之后，新增独立合同模块
+  `backend/soc_agent/contracts/governed_context.py`，避免继续扩张通用 `schemas.py`。首个 typed payload
+  `AuthorizedActivityPayload` 明确 activity、subject/target/behavior selectors 和 recurring windows；不含
+  PingAn/Zeus aliases，也不实现自然语言万能 matcher。
+- 新增 `SocGovernedContextService`：
+  - propose/revise 使用 proposal roles；activate/suspend/revoke 使用 context approver/admin；expire 额外
+    支持 context service。
+  - 稳定 `fact_id` 下每次状态变化追加不可变 `fact_version_id/version`；writer 必须携带
+    `expected_latest_version`，stale update fail-fast。
+  - activation 要求非空 evidence refs、未结束的 fact validity、可激活 source type 和未 stale source；
+    revision 回到 proposed 并清除 reviewer；terminal fact 不可恢复。
+- 新增 `GovernedContextFactRepository`、`InMemoryGovernedContextFactRepository` 和
+  `SqlAlchemyAlertRepository` 实现；SQL 写入在一个 transaction 中取消 previous latest 并追加 next，
+  `current_key` 和 `(fact_id, version)` 唯一约束防止并发双 latest。读取 JSON 后恢复 typed payload 并核对
+  索引列。
+- 新增 migration `0013_governed_context_facts`、table `soc_governed_context_facts`，并增加
+  `soc context propose|revise|activate|suspend|revoke|expire|list|get` 及通用 sample。
+- 验证：单独 lifecycle/DB/CLI/migration tests `13 passed`；GF-01 + architecture targeted tests 通过；
+  SOC 全量加 architecture 回归 `454 passed, 1 warning`。唯一 warning 是 DeerFlow MCP cache 已有的
+  asyncio deprecation，不由本切片引入。CLI/Alembic smoke 产物保存在 gitignored
+  `backend/.deer-flow/soc-runtime-validation/step-11-governed-context/`。
+- 明确非目标：active fact 尚未进入 `LLMAnalysisRequest`、Runtime decision、ReviewQueue 或 disposition。
+  `work04/java -> chattr` 与 RemoteRegistry 业务真值仍未写死；下一刀 AA-01 通过 canonical query 和
+  deterministic event-time matcher 接入，并先做 shadow replay。
 
 ### 2026-07-16 — Five-sample field-lineage repair completed
 

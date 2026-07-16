@@ -1,0 +1,49 @@
+{
+  "schema_version": "soc.governed_context_fact_create.v1",
+  "fact_type": "authorized_activity",
+  "tenant_id": "tenant-demo",
+  "environment": "production",
+  "valid_from": "2026-07-01T00:00:00+08:00",
+  "valid_until": "2026-12-31T23:59:59+08:00",
+  "source": {
+    "source_type": "analyst_confirmation",
+    "source_ref": "change:DEMO-2026-001",
+    "observed_at": "2026-07-16T12:00:00+08:00",
+    "authoritative": false
+  },
+  "owner_id": "soc-operations",
+  "reason": "Scheduled internal maintenance automation proposed for governed review.",
+  "evidence_refs": [
+    "ticket:DEMO-2026-001"
+  ],
+  "payload": {
+    "payload_type": "authorized_activity",
+    "activity_type": "automation",
+    "subject_scope": [
+      {
+        "kind": "service_id",
+        "value": "service:maintenance-runner"
+      }
+    ],
+    "target_scope": [
+      {
+        "kind": "asset_id",
+        "value": "asset:demo-host"
+      }
+    ],
+    "behavior_scope": [
+      {
+        "kind": "process",
+        "value": "java->chattr"
+      }
+    ],
+    "recurring_windows": [
+      {
+        "timezone": "Asia/Shanghai",
+        "days_of_week": [0, 1, 2, 3, 4, 5, 6],
+        "start_time": "00:00:00",
+        "end_time": "00:30:00"
+      }
+    ]
+  }
+}

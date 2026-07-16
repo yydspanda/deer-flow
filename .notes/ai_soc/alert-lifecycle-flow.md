@@ -24,6 +24,7 @@
 | 🛡️ | Approval boundary | 高风险动作审批边界 |
 | 🚫 | Forbidden mutation | 不允许自动改判、自动处置或绕过服务 |
 | 🛠️ | Maintenance | 解析器、Schema 基线和字段映射维护 |
+| 🪪 | Governed context | 带时效、范围、来源和撤销语义的运营事实 |
 
 ## 1. End-to-End Overview / 端到端总览
 
@@ -77,11 +78,32 @@ flowchart TD
 9. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
    但不能改变 verdict、ReviewQueue 或分析成功状态。
 
-Planned boundary / 待实现边界：当前 `security_tag.lookup` 仍只是 `InvestigationEvidence`，不能自动
-证明身份、演练归属或某次行为已授权，也不能自动关单。typed governed-context facts、护网
-campaign/participant attribution、事件时间授权匹配和 `closed_benign_true_positive` shadow
-disposition 的目标设计见 `.notes/ai_soc/soc-agent-solution.md` Section 7.4；实现完成前，本图仍以人工
-ReviewQueue 为准。
+Current governed-context boundary / 当前边界：GF-01 已能通过 `SocGovernedContextService` 和
+`soc_governed_context_facts` 保存、审批、暂停、撤销、过期及回放 typed fact versions；AA-01 已能从
+canonical alert 构造 `AuthorizationQuery`，按事件时间选择历史 fact version，并返回只读
+`AuthorizationMatchResult`。但结果尚未写入主流水线/调查上下文，也不生成 disposition。
+`security_tag.lookup` 仍只是 `InvestigationEvidence`；护网 campaign/participant attribution 尚未实现。
+下一步 EX-01 负责 enrichment persistence/projection，DP-01 才产生
+`closed_benign_true_positive` shadow proposal；在此之前仍以人工 ReviewQueue 为准。
+
+### 1.1 Authorization Shadow Path / 授权事实只读旁路
+
+```mermaid
+flowchart LR
+    A["🧾 Alert<br/>raw or canonical"] --> N["⚙️ normalize + entity + fact<br/>复用确定性前处理"]
+    N --> Q["🔎 AuthorizationQuery<br/>tenant + environment + event time<br/>subject + target + behavior"]
+    F["🪪 Governed fact history<br/>append-only versions"] --> M["⚙️ AA-01 Matcher<br/>事件时间确定性匹配"]
+    Q --> M
+    M --> R["🔎 AuthorizationMatchResult<br/>exact / partial / conflict / expired<br/>not_found / unavailable"]
+    R --> C["🚪 soc context match / replay<br/>当前只读可见"]
+    R -. "EX-01 planned" .-> P["🗃️ Enrichment + audit<br/>尚未接入"]
+    P -. "DP-01 planned" .-> D["🧑‍💻 Shadow disposition proposal<br/>仍需人工关单"]
+    R --> X["🚫 No verdict mutation<br/>No ReviewQueue update<br/>No auto-close"]
+```
+
+AA-01 使用告警事件时间，不使用“当前时间”替代历史事实状态。无时区时间必须由租户/集成配置显式补充
+IANA timezone；不同 selector kind 之间 AND，同 kind 多值 OR。任何缺失、冲突、过期、source stale、
+repository unavailable 或候选截断都会 fail closed。
 
 ## 2. Alert Analysis Pipeline / 预警分析流水线
 

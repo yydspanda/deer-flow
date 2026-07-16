@@ -6,12 +6,15 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from soc_agent.contracts import (
     AlertSummary,
     AnalysisRun,
     DecisionAuditRecord,
+    GovernedContextFact,
+    GovernedContextFactQuery,
     InvestigationEvidence,
     NormalizationBaselineStatus,
     NormalizationMaintenanceIssue,
@@ -36,12 +39,17 @@ from soc_agent.db.models import (
     SocApprovalRequestRow,
     SocDecisionAuditLogRow,
     SocExternalDispositionRow,
+    SocGovernedContextFactRow,
     SocInvestigationEvidenceRow,
     SocMemoryCandidateRow,
     SocMemoryRecordRow,
     SocNormalizationMaintenanceIssueRow,
     SocNormalizationSchemaBaselineRow,
     SocReviewQueueRow,
+)
+from soc_agent.governed_context import (
+    GovernedContextFactVersionConflictError,
+    validate_governed_context_fact_append,
 )
 
 
@@ -411,6 +419,91 @@ class SqlAlchemyAlertRepository:
                 query = query.where(SocMemoryRecordRow.retrieval_enabled == retrieval_enabled)
             result = session.execute(query.order_by(SocMemoryRecordRow.updated_at.desc()).limit(limit))
             return [SocMemoryRecord.model_validate(row.record_payload) for row in result.scalars()]
+
+    def append_governed_context_fact(
+        self,
+        fact: GovernedContextFact,
+        *,
+        expected_latest_version: int | None,
+    ) -> None:
+        try:
+            with self._session_factory() as session, session.begin():
+                result = session.execute(select(SocGovernedContextFactRow).where(SocGovernedContextFactRow.current_key == fact.fact_id).with_for_update())
+                latest_row = result.scalar_one_or_none()
+                latest = _governed_context_fact_from_row(latest_row) if latest_row is not None else None
+                validate_governed_context_fact_append(
+                    fact,
+                    latest=latest,
+                    expected_latest_version=expected_latest_version,
+                )
+                if latest_row is not None:
+                    latest_row.current_key = None
+                    latest_row.is_latest = False
+                    session.flush()
+                session.add(
+                    SocGovernedContextFactRow(
+                        fact_version_id=fact.fact_version_id,
+                        **_governed_context_fact_row_values(fact),
+                    )
+                )
+        except IntegrityError as exc:
+            raise GovernedContextFactVersionConflictError(f"concurrent governed fact update rejected for {fact.fact_id}") from exc
+
+    def get_governed_context_fact(
+        self,
+        fact_id: str,
+        *,
+        version: int | None = None,
+    ) -> GovernedContextFact | None:
+        with self._session_factory() as session:
+            query = select(SocGovernedContextFactRow).where(SocGovernedContextFactRow.fact_id == fact_id)
+            if version is None:
+                query = query.where(SocGovernedContextFactRow.is_latest.is_(True))
+            else:
+                query = query.where(SocGovernedContextFactRow.version == version)
+            row = session.execute(query.limit(1)).scalar_one_or_none()
+            return _governed_context_fact_from_row(row) if row is not None else None
+
+    def list_governed_context_facts(
+        self,
+        query: GovernedContextFactQuery,
+    ) -> list[GovernedContextFact]:
+        with self._session_factory() as session:
+            statement = select(SocGovernedContextFactRow)
+            if query.latest_only:
+                statement = statement.where(SocGovernedContextFactRow.is_latest.is_(True))
+            filters = {
+                "fact_id": query.fact_id,
+                "fact_type": query.fact_type.value if query.fact_type is not None else None,
+                "status": query.status.value if query.status is not None else None,
+                "tenant_id": query.tenant_id,
+                "environment": query.environment,
+            }
+            for name, value in filters.items():
+                if value is not None:
+                    statement = statement.where(getattr(SocGovernedContextFactRow, name) == value)
+            if query.valid_at is not None:
+                statement = statement.where(
+                    SocGovernedContextFactRow.valid_from <= query.valid_at,
+                    SocGovernedContextFactRow.valid_until > query.valid_at,
+                )
+            result = session.execute(
+                statement.order_by(
+                    SocGovernedContextFactRow.updated_at.desc(),
+                    SocGovernedContextFactRow.version.desc(),
+                ).limit(query.limit)
+            )
+            return [_governed_context_fact_from_row(row) for row in result.scalars()]
+
+    def list_governed_context_fact_versions(
+        self,
+        fact_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[GovernedContextFact]:
+        with self._session_factory() as session:
+            result = session.execute(select(SocGovernedContextFactRow).where(SocGovernedContextFactRow.fact_id == fact_id).order_by(SocGovernedContextFactRow.version.desc()).limit(limit))
+            return [_governed_context_fact_from_row(row) for row in result.scalars()]
 
     def save_normalization_baseline(self, baseline: NormalizationSchemaBaseline) -> None:
         payload = baseline.model_dump(mode="json")
@@ -812,6 +905,73 @@ def _memory_record_row_values(record: SocMemoryRecord, payload: dict) -> dict:
         "updated_at": record.updated_at,
         "record_payload": payload,
     }
+
+
+def _governed_context_fact_row_values(fact: GovernedContextFact) -> dict:
+    return {
+        "fact_id": fact.fact_id,
+        "version": fact.version,
+        "current_key": fact.fact_id if fact.is_latest else None,
+        "is_latest": fact.is_latest,
+        "fact_type": fact.fact_type.value,
+        "status": fact.status.value,
+        "tenant_id": fact.tenant_id,
+        "environment": fact.environment,
+        "valid_from": fact.valid_from,
+        "valid_until": fact.valid_until,
+        "source_type": fact.source.source_type.value,
+        "source_ref": fact.source.source_ref,
+        "source_version": fact.source.source_version,
+        "source_fresh_until": fact.source.fresh_until,
+        "owner_id": fact.owner_id,
+        "changed_by_actor_id": fact.changed_by.actor_id,
+        "reviewed_by_actor_id": fact.reviewed_by.actor_id if fact.reviewed_by is not None else None,
+        "content_hash": fact.content_hash,
+        "supersedes_version_id": fact.supersedes_version_id,
+        "created_at": fact.created_at,
+        "updated_at": fact.updated_at,
+        "state_changed_at": fact.state_changed_at,
+        "fact_payload": fact.model_dump(mode="json", exclude={"is_latest"}),
+    }
+
+
+def _governed_context_fact_from_row(row: SocGovernedContextFactRow) -> GovernedContextFact:
+    payload = dict(row.fact_payload)
+    payload["is_latest"] = row.is_latest
+    fact = GovernedContextFact.model_validate(payload)
+    indexed_values = {
+        "fact_version_id": row.fact_version_id,
+        "fact_id": row.fact_id,
+        "version": row.version,
+        "fact_type": row.fact_type,
+        "status": row.status,
+        "tenant_id": row.tenant_id,
+        "environment": row.environment,
+        "source_type": row.source_type,
+        "source_ref": row.source_ref,
+        "source_version": row.source_version,
+        "owner_id": row.owner_id,
+        "content_hash": row.content_hash,
+        "supersedes_version_id": row.supersedes_version_id,
+    }
+    contract_values = {
+        "fact_version_id": fact.fact_version_id,
+        "fact_id": fact.fact_id,
+        "version": fact.version,
+        "fact_type": fact.fact_type.value,
+        "status": fact.status.value,
+        "tenant_id": fact.tenant_id,
+        "environment": fact.environment,
+        "source_type": fact.source.source_type.value,
+        "source_ref": fact.source.source_ref,
+        "source_version": fact.source.source_version,
+        "owner_id": fact.owner_id,
+        "content_hash": fact.content_hash,
+        "supersedes_version_id": fact.supersedes_version_id,
+    }
+    if indexed_values != contract_values:
+        raise ValueError(f"governed context fact row {row.fact_version_id} does not match its typed payload")
+    return fact
 
 
 def _normalization_baseline_row_values(baseline: NormalizationSchemaBaseline, payload: dict) -> dict:

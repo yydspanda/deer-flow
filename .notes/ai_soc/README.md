@@ -17,6 +17,7 @@
 | 查看当前哪些能力仍是 mock | `integrations/mock-and-real-register.md` | `capabilities/pingan/onboarding.md` 的 PA-12 |
 | 设计外部工单/处置状态回流 | `integrations/external-disposition-sync.md` | 工程契约 external disposition 章节 |
 | 设计记忆和经验沉淀 | `memory/memory-tracking.md` | `alert-lifecycle-flow.md` 的 memory flow |
+| 管理授权活动、变更窗口、护网身份等受治理事实 | `governance/governed-context-facts.md` | `soc-agent-solution.md` Section 7.4 |
 | 设计 Lead/Sub Agent、skill、MCP 开放配置 | `governance/agent-profile-governance.md` | 工程契约 Profile / Skill / MCP 章节 |
 
 ## Directory Map
@@ -41,7 +42,8 @@ ai_soc/
 ├── memory/
 │   └── memory-tracking.md             # DB-first memory 与 retrieval policy
 └── governance/
-    └── agent-profile-governance.md    # Lead/Sub Agent、Skill、MCP 配置治理
+    ├── agent-profile-governance.md    # Lead/Sub Agent、Skill、MCP 配置治理
+    └── governed-context-facts.md      # 授权/演练/变更等 typed fact 生命周期和 CLI
 ```
 
 ## Document Roles
@@ -55,6 +57,7 @@ ai_soc/
 | `capabilities/pingan/*` | 平安经验、能力卡、专属知识候选、源资料 | 新增/拆分/实现/废弃 PingAn card 或候选时更新 |
 | `integrations/*` | 外部系统接入、mock 与真实替换边界 | 新增 mock、真实 provider、外部反馈协议变化时更新 |
 | `memory/memory-tracking.md` | typed memory、candidate、confirmed memory、retrieval policy | memory contract、状态机、检索、projection 变化时更新 |
+| `governance/governed-context-facts.md` | typed operational fact、版本、来源、有效期和授权匹配边界 | fact contract、生命周期、matcher 或 disposition policy 变化时更新 |
 | `governance/agent-profile-governance.md` | agent profile、skill、MCP 开放配置治理 | profile 生命周期、权限和用户可配置范围变化时更新 |
 
 ## Maintenance Rules

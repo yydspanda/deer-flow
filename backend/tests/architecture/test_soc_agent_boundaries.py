@@ -7,7 +7,9 @@ from soc_agent.contracts import AlertInput
 from soc_agent.core import (
     SocAgentChatService,
     SocAnalysisService,
+    SocAuthorizedActivityService,
     SocDaemonService,
+    SocGovernedContextService,
     SocMemoryService,
     SocNormalizationService,
     SocReviewService,
@@ -82,6 +84,22 @@ def test_fact_reconstructor_does_not_know_vendor_role_aliases() -> None:
     assert not {alias for alias in forbidden_aliases if alias in source}
 
 
+def test_governed_context_lifecycle_is_vendor_neutral() -> None:
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            SOC_AGENT / "contracts" / "governed_context.py",
+            SOC_AGENT / "contracts" / "authorization.py",
+            SOC_AGENT / "core" / "governed_context.py",
+            SOC_AGENT / "core" / "authorized_activity.py",
+            SOC_AGENT / "authorization" / "query.py",
+            SOC_AGENT / "authorization" / "matcher.py",
+        )
+    ).lower()
+
+    assert not {value for value in {"pingan", "zeus", "work04", "1.1.1.1"} if value in source}
+
+
 def test_db_does_not_import_runtime_or_transport_layers() -> None:
     forbidden = {
         "fastapi",
@@ -125,10 +143,12 @@ def test_alert_input_contract_is_strict() -> None:
 
 def test_core_exports_planned_public_services() -> None:
     assert SocAnalysisService.__name__ == "SocAnalysisService"
+    assert SocAuthorizedActivityService.__name__ == "SocAuthorizedActivityService"
     assert SocReviewService.__name__ == "SocReviewService"
     assert SocNormalizationService.__name__ == "SocNormalizationService"
     assert SocMemoryService.__name__ == "SocMemoryService"
     assert SocDaemonService.__name__ == "SocDaemonService"
+    assert SocGovernedContextService.__name__ == "SocGovernedContextService"
     assert SocAgentChatService.__name__ == "SocAgentChatService"
     assert SocServiceNotFoundError.__name__ == "SocServiceNotFoundError"
 

@@ -271,8 +271,8 @@ Important behavior:
 | `SocAgentChatService` | SOC chat event stream and proposal handling | Bounded context and approval proposal |
 | `SocAgentApprovalService` | Approval request/grant/dry-run/execute boundary | Permission, token, audit, no silent execute |
 | `SocExternalDispositionService` | External status/reason sync | Mapping, target resolution, idempotency |
-| `SocGovernedContextService` (planned) | Govern typed fact lifecycle and source/version history | Proposal, activation, validity, revocation, audit |
-| `SocAuthorizedActivityService` (planned) | Compose authorized-activity matching over governed facts | Subject, target, behavior, event-time match explanation |
+| `SocGovernedContextService` | Govern typed fact lifecycle and source/version history | GF-01 implemented: proposal, activation, validity, revocation, audit |
+| `SocAuthorizedActivityService` | Read-only authorized-activity matching over governed facts | AA-01 implemented: canonical query, historical version selection, scope/time/freshness explanation |
 | `SocSecurityExerciseContextService` (planned) | Compose campaign, participant attribution and authorization | Red/blue/white-team identity is not authorization by itself |
 | `SocCorrelationService` | Similar alert lookup | Uses summaries/evidence, no LLM dependency |
 | `SocMainOrchestratorService` | Read-only demo orchestration for selected skills/evidence/domain results | No hidden side effects |
@@ -650,7 +650,7 @@ Rules:
 - External reason cannot become confirmed memory without review.
 - Mapping must be configurable per external system.
 
-### 7.4 Governed Context Facts / 受治理上下文事实（Planned）
+### 7.4 Governed Context Facts / 受治理上下文事实（GF-01 + AA-01 Implemented）
 
 Authorization is the first implementation, but it is not the only operational context that needs
 source, scope, time and revocation. Use a shared typed envelope instead of a universal untyped KV
@@ -677,6 +677,33 @@ its own matcher/resolver. The system must not implement a generic natural-langua
 Shared lifecycle belongs to `SocGovernedContextService`; typed domain services compose it with
 deterministic matchers. PostgreSQL may use one common fact envelope table with typed JSONB payloads
 and indexed common columns, but Pydantic contracts and subtype validators remain mandatory.
+
+Current GF-01 + AA-01 implementation:
+
+- Governed lifecycle contracts live in `soc_agent.contracts.governed_context`; the first instantiable
+  subtype is vendor-neutral `AuthorizedActivityPayload`. Matching contracts live separately in
+  `soc_agent.contracts.authorization` so persistence does not imply authorization.
+- `SocGovernedContextService` owns propose/revise/activate/suspend/revoke/expire/get/list. A stable
+  `fact_id` has append-only immutable versions identified by `fact_version_id`; every writer supplies
+  `expected_latest_version`, and stale writers fail rather than overwrite a newer decision.
+- Revision always creates a new `proposed` version and requires re-approval. Revising an active fact
+  deliberately fails closed: the latest version is no longer active until an approver activates it.
+- `GovernedContextFactRepository` is implemented by the in-memory test adapter and
+  `SqlAlchemyAlertRepository`. Migration `0013_governed_context_facts` creates
+  `soc_governed_context_facts`; one unique `current_key` per fact and unique `(fact_id, version)`
+  enforce version-stream integrity.
+- `AuthorizationQueryBuilder` consumes only canonical alert/entity/fact/scenario contracts. It does
+  not recognize vendor aliases. Naive event times require an explicit tenant/integration IANA
+  timezone and record that assumption.
+- `AuthorizedActivityMatcher` selects the fact lifecycle version that existed at alert event time,
+  then checks lifecycle, validity, source freshness, recurrence and typed scope. Different selector
+  kinds are ANDed; values inside one kind are ORed. It emits
+  `exact/partial/conflict/expired/not_found/unavailable` without an LLM.
+- CLI provides lifecycle commands plus read-only `soc context match`. HIDS `java -> chattr` and EDR
+  RemoteRegistry sample replay both produce explainable exact matches in step-12 validation.
+- GF-01/AA-01 do not inject facts into `LLMAnalysisRequest`, change `SocDecisionPolicy`, update
+  ReviewQueue, propose a disposition, or close alerts. `EX-01` must first persist/project enrichment;
+  `DP-01` then owns shadow disposition reconciliation.
 
 #### 7.4.1 Authorized Activity Facts / 授权活动事实
 
@@ -731,6 +758,16 @@ Source and rollout rules:
   replay precision, override rate and sampled-review gates pass.
 - Historical alerts are evaluated using the authorization fact version valid at alert event time.
   Current state cannot silently rewrite old cases.
+
+Rollout slices are deliberately separate:
+
+| Slice | Responsibility | Must not do |
+| --- | --- | --- |
+| `GF-01` | Govern typed fact lifecycle and append-only versions | Match alerts |
+| `AA-01` | Build canonical query and return deterministic match explanation | Persist enrichment or propose disposition |
+| `EX-01` | Persist/version match enrichment and project it into investigation context/audit | Change detection truth |
+| `DP-01` | Produce `closed_benign_true_positive` shadow proposal from eligible exact enrichment | Auto-close during shadow phase |
+| `EV-01` | Replay and measure precision, override, freshness, fan-out and sampled review | Enable policy without gates/rollback |
 
 #### 7.4.2 Security Exercise Context / 护网与红蓝对抗上下文
 
@@ -789,13 +826,13 @@ not require rewriting core contracts.
 | `InvestigationContext` | Shared context for Web/TUI/Lead Agent | Stable but may gain new sections |
 | `UnifiedInvestigationView` | Read-optimized investigation projection | Stable as display/read model |
 | `InvestigationEvidence` | Tool/MCP evidence record | Stable |
-| `GovernedContextFact` | Shared typed fact envelope and lifecycle | Planned stable contract |
-| `AuthorizedActivityFact` | Time-, scope- and source-bounded authorized activity | Planned stable contract |
+| `GovernedContextFact` | Shared typed fact envelope and lifecycle | GF-01 implemented stable contract |
+| `AuthorizedActivityPayload` | Time-, scope- and source-bounded authorized activity definition | GF-01 storage + AA-01 deterministic matcher implemented |
 | `SecurityExerciseCampaignFact` | Campaign scope and Rules of Engagement | Planned typed fact |
 | `ExerciseParticipantFact` | Event-time participant role and identifier mapping | Planned typed fact |
 | `ParticipantAttributionResult` | Deterministic participant identity resolution | Planned typed result |
-| `AuthorizationQuery` | Vendor-neutral event-time matching input | Planned stable contract |
-| `AuthorizationMatchResult` | Explainable deterministic match result | Planned stable contract |
+| `AuthorizationQuery` | Vendor-neutral event-time matching input | AA-01 implemented stable contract |
+| `AuthorizationMatchResult` | Explainable deterministic match result | AA-01 implemented; read-only/shadow, not a disposition |
 | `SocDomainTriageResult` | Domain-level triage result | Stable |
 | `SocDomainFinding` | Scenario-level finding | Stable taxonomy version required |
 | `SocAgentActionProposal` | Agent proposal | Stable |
