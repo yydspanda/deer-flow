@@ -60,6 +60,7 @@ from soc_agent.contracts import (
     SocAgentStreamEvent,
     SocDaemonMessage,
     SocDaemonProcessResult,
+    SocDispositionProposalRecord,
     SocDomainTriageRequest,
     SocDomainTriageResult,
     SocEvent,
@@ -99,6 +100,7 @@ from soc_agent.protocols import (
     SocActionAdapterRegistryPort,
     SocAgentApprovalGrantRepository,
     SocAgentApprovalRequestRepository,
+    SocDispositionProposalRepository,
     SocEventSink,
     SocExternalDispositionRepository,
 )
@@ -528,6 +530,7 @@ class SocReviewService:
         review_queue_repository: ReviewQueueRepository | None = None,
         evidence_repository: InvestigationEvidenceRepository | None = None,
         authorization_enrichment_repository: AuthorizationEnrichmentRepository | None = None,
+        disposition_proposal_repository: SocDispositionProposalRepository | None = None,
         external_disposition_repository: SocExternalDispositionRepository | None = None,
         memory_candidate_repository: MemoryCandidateRepository | None = None,
         memory_record_repository: MemoryRecordRepository | None = None,
@@ -539,6 +542,7 @@ class SocReviewService:
         self._review_queue_repository = review_queue_repository
         self._evidence_repository = evidence_repository
         self._authorization_enrichment_repository = authorization_enrichment_repository
+        self._disposition_proposal_repository = disposition_proposal_repository
         self._external_disposition_repository = external_disposition_repository
         self._memory_candidate_repository = memory_candidate_repository
         self._memory_record_repository = memory_record_repository
@@ -741,6 +745,15 @@ class SocReviewService:
             if self._authorization_enrichment_repository is not None
             else []
         )
+        disposition_proposals = (
+            self._disposition_proposal_repository.list_disposition_proposals(
+                run_id=item.run_id,
+                queue_id=item.queue_id,
+                limit=20,
+            )
+            if self._disposition_proposal_repository is not None
+            else []
+        )
         external_dispositions = (
             self._external_disposition_repository.list_external_dispositions(
                 queue_id=item.queue_id,
@@ -775,6 +788,7 @@ class SocReviewService:
             similar_alerts=similar_alerts,
             action_evidence=action_evidence,
             authorization_enrichments=authorization_enrichments,
+            disposition_proposals=disposition_proposals,
             external_dispositions=external_dispositions,
             memory_candidates=memory_candidates,
             correlation_result=correlation_result,
@@ -2438,6 +2452,7 @@ def _unified_investigation_view_from_context(context: InvestigationContext) -> U
             "action_evidence": len(context.action_evidence),
             "authorization_enrichments": len(context.authorization_enrichments),
             "exact_authorization_matches": sum(item.match_result.status.value == "exact" for item in context.authorization_enrichments),
+            "disposition_proposals": len(context.disposition_proposals),
             "external_dispositions": len(context.external_dispositions),
             "memory_candidates": len(context.memory_candidates),
             "relevant_memories": context.relevant_memories.returned_count if context.relevant_memories is not None else 0,
@@ -2606,6 +2621,8 @@ def _investigation_timeline_from_context(context: InvestigationContext) -> list[
                 },
             )
         )
+    for proposal in context.disposition_proposals:
+        items.append(_disposition_proposal_timeline_item(proposal))
     for record in context.external_dispositions:
         items.append(
             InvestigationTimelineItem(
@@ -2679,6 +2696,35 @@ def _investigation_timeline_from_context(context: InvestigationContext) -> list[
             )
         )
     return sorted(items, key=lambda item: item.occurred_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+
+
+def _disposition_proposal_timeline_item(
+    proposal: SocDispositionProposalRecord,
+) -> InvestigationTimelineItem:
+    return InvestigationTimelineItem(
+        kind="disposition_proposal",
+        title="Shadow disposition proposal",
+        summary="; ".join(proposal.rationale[:2]),
+        status=f"{proposal.proposed_disposition.value}/{proposal.proposal_mode}",
+        source_id=proposal.proposal_id,
+        source_refs={
+            "proposal_id": proposal.proposal_id,
+            "enrichment_id": proposal.source_enrichment_id,
+            "run_id": proposal.run_id,
+        },
+        occurred_at=proposal.created_at,
+        payload={
+            "reason_code": proposal.reason_code.value,
+            "policy_version": proposal.policy_version,
+            "detection_verdict": proposal.detection_truth.verdict.value,
+            "source_fact_version_ids": [item.fact_version_id for item in proposal.source_fact_refs],
+            "application_status": proposal.application_status,
+            "requires_human_review": proposal.requires_human_review,
+            "auto_close_allowed": proposal.auto_close_allowed,
+            "detection_truth_impact": proposal.detection_truth_impact,
+            "review_queue_impact": proposal.review_queue_impact,
+        },
+    )
 
 
 def _thread_id_from_events(events: list[SocAgentStreamEvent]) -> str:

@@ -170,7 +170,11 @@ Current SOC direction:
   `AuthorizationEnrichmentRecord` rows through migration `0014_authorization_enrichments` and
   projects them into InvestigationContext/Web/TUI/Lead Agent. `soc context enrich` and
   `soc context enrichment list|get|replay` use `SocAuthorizationEnrichmentService`; records remain
-  `shadow_only` with no decision impact. DP-01 shadow disposition remains a separate future boundary.
+  `shadow_only` with no decision impact. DP-01 uses `SocDispositionProposalService` to persist
+  append-only `SocDispositionProposalRecord` rows through migration `0015_disposition_proposals`.
+  Only an exact enrichment linked to an open ReviewQueue plus current `true_positive` detection truth may propose
+  `closed_benign_true_positive`; proposals remain shadow-only, require human review, and cannot
+  mutate the run, close ReviewQueue, or authorize an action. EV-01 owns any future rollout gate.
 - PingAn `zeusRawLogs[].message` values are parsed only inside the PingAn normalizer. Deterministically
   parsed message fields are high-trust primary facts; Zeus structured fields are reduced-trust
   fallback candidates. Preserve the complete original payload for replay/audit and expose only

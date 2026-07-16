@@ -34,6 +34,7 @@ from soc_agent.contracts import (
     SocAgentActionResult,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
+    SocDispositionProposalRecord,
     SocEvent,
     SocExternalDispositionRecord,
     SocMemoryCandidate,
@@ -192,6 +193,34 @@ class AuthorizationEnrichmentRepository(Protocol):
         queue_id: str | None = None,
         limit: int = 50,
     ) -> list[AuthorizationEnrichmentRecord]: ...
+
+
+class SocDispositionProposalRepository(Protocol):
+    """Append-only persistence boundary for shadow disposition proposals."""
+
+    def save_disposition_proposal(self, proposal: SocDispositionProposalRecord) -> None: ...
+
+    def get_disposition_proposal(self, proposal_id: str) -> SocDispositionProposalRecord | None: ...
+
+    def find_disposition_proposal_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SocDispositionProposalRecord | None: ...
+
+    def find_disposition_proposal_by_key(
+        self,
+        proposal_key: str,
+    ) -> SocDispositionProposalRecord | None: ...
+
+    def list_disposition_proposals(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        queue_id: str | None = None,
+        enrichment_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SocDispositionProposalRecord]: ...
 
 
 class MemoryCandidateRepository(Protocol):

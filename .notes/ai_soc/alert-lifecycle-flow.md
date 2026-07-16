@@ -39,6 +39,12 @@ flowchart TD
     X --> Y["🧑‍💻 CLI / TUI / Web / Metrics<br/>归一化运维"]
 
     E --> F["🔎 ReviewQueue<br/>人工复核入口 / analyst review item"]
+    E --> Z1["⚙️ Explicit Authorization Enrichment<br/>显式授权上下文匹配"]
+    Z0["🪪 Governed Fact History<br/>授权事实版本历史"] --> Z1
+    Z1 --> Z2["🗃️ AuthorizationEnrichmentRecord<br/>append-only match snapshot"]
+    Z2 --> Z3["⚙️ DP-01 exact + true-positive gate"]
+    Z3 --> Z4["🗃️ Shadow Disposition Proposal<br/>not applied / human review"]
+    Z4 --> G
     F --> G["⚙️ SocReviewService.get_investigation_context<br/>聚合调查上下文 / context assembly"]
 
     G --> H["🔎 UnifiedInvestigationView<br/>统一调查视图 / unified investigation view"]
@@ -77,15 +83,18 @@ flowchart TD
 8. confirmed memory 仍受 retrieval gate 控制，不直接改 runtime verdict。
 9. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
    但不能改变 verdict、ReviewQueue 或分析成功状态。
+10. 显式 authorization enrichment 把确定性匹配保存为独立记录；不会回写 Runtime decision。
+11. DP-01 只有在 exact + current true-positive 时生成 shadow proposal；proposal 进入调查视图，但仍由
+    人工决定是否关单，系统不会自动应用。
 
 Current governed-context boundary / 当前边界：GF-01 已能通过 `SocGovernedContextService` 和
 `soc_governed_context_facts` 保存、审批、暂停、撤销、过期及回放 typed fact versions；AA-01 已能从
 canonical alert 构造 `AuthorizationQuery`，按事件时间选择历史 fact version，并返回只读
 `AuthorizationMatchResult`；EX-01 已把 query/result/policy/fact refs 保存为 append-only
-`AuthorizationEnrichmentRecord`，并投影到统一调查上下文，但仍不生成 disposition。
+`AuthorizationEnrichmentRecord`；DP-01 已从 persisted exact enrichment + current true-positive
+detection truth 生成 append-only `SocDispositionProposalRecord`，并投影到统一调查上下文。
 `security_tag.lookup` 仍只是 `InvestigationEvidence`；护网 campaign/participant attribution 尚未实现。
-下一步 DP-01 才产生
-`closed_benign_true_positive` shadow proposal；在此之前仍以人工 ReviewQueue 为准。
+该 proposal 只建议 `closed_benign_true_positive`，固定 shadow/not-applied，仍以人工 ReviewQueue 为准。
 
 ### 1.1 Authorization Shadow Path / 授权事实只读旁路
 
@@ -99,8 +108,13 @@ flowchart LR
     R --> C["🚪 soc context match<br/>临时只读检查"]
     R --> P["🗃️ EX-01 Enrichment Record<br/>append-only + idempotent + replayable"]
     P --> I["👁️ InvestigationContext<br/>Web / TUI / Lead Agent"]
-    P -. "DP-01 planned" .-> D["🧑‍💻 Shadow disposition proposal<br/>仍需人工关单"]
+    P --> G{"⚙️ DP-01 Gate<br/>exact + current TP?"}
+    G -->|"yes"| D["🗃️ Shadow Disposition Proposal<br/>closed_benign_true_positive"]
+    G -->|"no"| F["🚫 Fail closed<br/>no proposal"]
+    D --> I
+    D --> H["🧑‍💻 Human Review<br/>人工决定是否关单"]
     P --> X["🚫 No verdict mutation<br/>No ReviewQueue update<br/>No auto-close"]
+    D --> X
 ```
 
 AA-01 使用告警事件时间，不使用“当前时间”替代历史事实状态。无时区时间必须由租户/集成配置显式补充

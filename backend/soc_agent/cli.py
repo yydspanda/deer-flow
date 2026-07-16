@@ -51,6 +51,7 @@ from soc_agent.contracts import (
     ReviewQueueStatus,
     ServiceRequestContext,
     SocAgentActionCommand,
+    SocDispositionProposalCommand,
     SocDomainName,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
@@ -70,6 +71,7 @@ from soc_agent.core import (
     SocAuthorizedActivityService,
     SocCorrelationService,
     SocDaemonService,
+    SocDispositionProposalService,
     SocGovernedContextService,
     SocMemoryService,
     SocNormalizationMaintenanceService,
@@ -225,6 +227,12 @@ def main(argv: list[str] | None = None) -> int:
         return _memory_records_list(args)
     if args.command == "memory" and args.memory_command == "records" and args.memory_records_command == "get":
         return _memory_records_get(args)
+    if args.command == "disposition" and args.disposition_command == "propose":
+        return _disposition_propose(args)
+    if args.command == "disposition" and args.disposition_command == "list":
+        return _disposition_list(args)
+    if args.command == "disposition" and args.disposition_command == "get":
+        return _disposition_get(args)
     if args.command == "context" and args.context_command == "propose":
         return _context_fact_propose(args)
     if args.command == "context" and args.context_command == "revise":
@@ -703,6 +711,33 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_records_get.add_argument("memory_id", help="Memory record id to load")
     memory_records_get.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(memory_records_get)
+
+    disposition = subparsers.add_parser("disposition", help="Shadow operational disposition proposals")
+    disposition_subparsers = disposition.add_subparsers(dest="disposition_command")
+    disposition_propose = disposition_subparsers.add_parser(
+        "propose",
+        help="Create a shadow proposal from one exact authorization enrichment",
+    )
+    disposition_propose.add_argument("enrichment_id", help="Persisted exact authorization enrichment id")
+    disposition_propose.add_argument(
+        "--idempotency-key",
+        help="Stable retry key; defaults to enrichment plus DP-01 policy version",
+    )
+    disposition_propose.add_argument("--actor-id", default="soc-cli", help="Proposal actor id")
+    disposition_propose.add_argument("--pretty", action="store_true")
+    _add_database_args(disposition_propose)
+    disposition_list = disposition_subparsers.add_parser("list", help="List shadow disposition proposals")
+    disposition_list.add_argument("--run-id")
+    disposition_list.add_argument("--alert-id")
+    disposition_list.add_argument("--queue-id")
+    disposition_list.add_argument("--enrichment-id")
+    disposition_list.add_argument("--limit", type=int, default=50)
+    disposition_list.add_argument("--pretty", action="store_true")
+    _add_database_args(disposition_list)
+    disposition_get = disposition_subparsers.add_parser("get", help="Get one shadow disposition proposal")
+    disposition_get.add_argument("proposal_id")
+    disposition_get.add_argument("--pretty", action="store_true")
+    _add_database_args(disposition_get)
 
     context = subparsers.add_parser("context", help="Governed operational context fact helpers")
     context_subparsers = context.add_subparsers(dest="context_command")
@@ -1208,6 +1243,7 @@ def _review_context(args: argparse.Namespace) -> int:
             review_queue_repository=repository,
             evidence_repository=repository,
             authorization_enrichment_repository=repository,
+            disposition_proposal_repository=repository,
             external_disposition_repository=repository,
             memory_candidate_repository=repository,
             memory_record_repository=repository,
@@ -1313,6 +1349,19 @@ def _review_context_summary_payload(context: InvestigationContext) -> dict[str, 
         }
         for item in context.authorization_enrichments
     ]
+    disposition_proposals = [
+        {
+            "proposal_id": item.proposal_id,
+            "source_enrichment_id": item.source_enrichment_id,
+            "detection_verdict": item.detection_truth.verdict.value,
+            "proposed_disposition": item.proposed_disposition.value,
+            "reason_code": item.reason_code.value,
+            "proposal_mode": item.proposal_mode,
+            "application_status": item.application_status,
+            "auto_close_allowed": item.auto_close_allowed,
+        }
+        for item in context.disposition_proposals
+    ]
     relevant_memories = []
     if context.relevant_memories is not None:
         relevant_memories = [
@@ -1342,6 +1391,7 @@ def _review_context_summary_payload(context: InvestigationContext) -> dict[str, 
         "counts": counts,
         "scenario_findings": findings,
         "authorization_enrichments": authorization_enrichments,
+        "disposition_proposals": disposition_proposals,
         "memory_candidates": memory_candidates,
         "relevant_memories": relevant_memories,
         "next_commands": [
@@ -1669,6 +1719,90 @@ def _context_fact_match(args: argparse.Namespace) -> int:
     return 0
 
 
+def _disposition_propose(args: argparse.Namespace) -> int:
+    idempotency_key = args.idempotency_key or f"disposition-proposal:{args.enrichment_id}:soc.disposition_proposal_policy.v1"
+    try:
+        repository = _repository_from_args(args)
+        result = _disposition_proposal_service(repository).propose(
+            SocDispositionProposalCommand(
+                enrichment_id=args.enrichment_id,
+                idempotency_key=idempotency_key,
+            ),
+            context=ServiceRequestContext(
+                actor=ActorContext(
+                    actor_id=args.actor_id,
+                    actor_type=ActorType.USER,
+                    surface=EntrySurface.CLI,
+                    roles=["soc_analyst"],
+                ),
+                idempotency_key=idempotency_key,
+            ),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: disposition proposal database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _disposition_list(args: argparse.Namespace) -> int:
+    try:
+        proposals = _disposition_proposal_service(_repository_from_args(args)).list(
+            run_id=args.run_id,
+            alert_id=args.alert_id,
+            queue_id=args.queue_id,
+            enrichment_id=args.enrichment_id,
+            limit=args.limit,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: disposition proposal database access failed: {exc}", file=sys.stderr)
+        return 1
+    print(
+        json.dumps(
+            [item.model_dump(mode="json", exclude_none=True) for item in proposals],
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+        )
+    )
+    return 0
+
+
+def _disposition_get(args: argparse.Namespace) -> int:
+    try:
+        proposal = _disposition_proposal_service(_repository_from_args(args)).get(args.proposal_id)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: disposition proposal database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(proposal.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _disposition_proposal_service(
+    repository: SqlAlchemyAlertRepository,
+) -> SocDispositionProposalService:
+    return SocDispositionProposalService(
+        repository=repository,
+        authorization_enrichment_repository=repository,
+        alert_repository=repository,
+        review_queue_repository=repository,
+    )
+
+
 def _context_authorization_enrich(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
@@ -1819,6 +1953,7 @@ def _review_tui(args: argparse.Namespace) -> int:
                 review_queue_repository=repository,
                 evidence_repository=repository,
                 authorization_enrichment_repository=repository,
+                disposition_proposal_repository=repository,
                 external_disposition_repository=repository,
                 memory_candidate_repository=repository,
                 memory_record_repository=repository,
@@ -1851,6 +1986,7 @@ def _chat_tui(args: argparse.Namespace) -> int:
             review_queue_repository=repository,
             evidence_repository=repository,
             authorization_enrichment_repository=repository,
+            disposition_proposal_repository=repository,
             external_disposition_repository=repository,
             memory_candidate_repository=repository,
             memory_record_repository=repository,
@@ -2346,6 +2482,7 @@ def _demo_alert(args: argparse.Namespace) -> int:
                 review_queue_repository=repository,
                 evidence_repository=repository,
                 authorization_enrichment_repository=repository,
+                disposition_proposal_repository=repository,
                 external_disposition_repository=repository,
                 memory_candidate_repository=repository,
                 memory_record_repository=repository,

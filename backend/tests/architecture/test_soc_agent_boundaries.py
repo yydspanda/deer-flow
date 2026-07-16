@@ -10,6 +10,7 @@ from soc_agent.core import (
     SocAuthorizationEnrichmentService,
     SocAuthorizedActivityService,
     SocDaemonService,
+    SocDispositionProposalService,
     SocGovernedContextService,
     SocMemoryService,
     SocNormalizationService,
@@ -97,6 +98,8 @@ def test_governed_context_lifecycle_is_vendor_neutral() -> None:
             SOC_AGENT / "authorization" / "repositories.py",
             SOC_AGENT / "authorization" / "query.py",
             SOC_AGENT / "authorization" / "matcher.py",
+            SOC_AGENT / "core" / "disposition_proposal.py",
+            SOC_AGENT / "disposition" / "repositories.py",
         )
     ).lower()
 
@@ -152,6 +155,7 @@ def test_core_exports_planned_public_services() -> None:
     assert SocNormalizationService.__name__ == "SocNormalizationService"
     assert SocMemoryService.__name__ == "SocMemoryService"
     assert SocDaemonService.__name__ == "SocDaemonService"
+    assert SocDispositionProposalService.__name__ == "SocDispositionProposalService"
     assert SocGovernedContextService.__name__ == "SocGovernedContextService"
     assert SocAgentChatService.__name__ == "SocAgentChatService"
     assert SocServiceNotFoundError.__name__ == "SocServiceNotFoundError"

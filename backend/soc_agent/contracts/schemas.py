@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from soc_agent.contracts.authorization import AuthorizationMatchResult, AuthorizationQuery
+from soc_agent.contracts.authorization import AuthorizationFactRef, AuthorizationMatchResult, AuthorizationQuery
 from soc_agent.contracts.common import ActorContext, EntrySurface
 
 
@@ -132,6 +132,7 @@ class SocEventType(StrEnum):
     GOVERNED_CONTEXT_FACT_REVISED = "governed_context.fact_revised"
     AUTHORIZATION_ENRICHMENT_RECORDED = "authorization.enrichment_recorded"
     AUTHORIZATION_ENRICHMENT_REPLAYED = "authorization.enrichment_replayed"
+    DISPOSITION_PROPOSAL_RECORDED = "disposition.proposal_recorded"
 
 
 class AuditAction(StrEnum):
@@ -218,7 +219,9 @@ class SocMemoryCandidateSourceType(StrEnum):
     EVAL_FIXTURE = "eval_fixture"
 
 
-class SocExternalDispositionCanonicalStatus(StrEnum):
+class SocOperationalDisposition(StrEnum):
+    """Vendor-neutral operational outcome, separate from detection truth."""
+
     CLOSED_TRUE_POSITIVE = "closed_true_positive"
     CLOSED_FALSE_POSITIVE = "closed_false_positive"
     CLOSED_BENIGN_TRUE_POSITIVE = "closed_benign_true_positive"
@@ -227,6 +230,14 @@ class SocExternalDispositionCanonicalStatus(StrEnum):
     IGNORED = "ignored"
     DUPLICATE = "duplicate"
     UNKNOWN = "unknown"
+
+
+# Backward-compatible name retained for external disposition contracts.
+SocExternalDispositionCanonicalStatus = SocOperationalDisposition
+
+
+class SocDispositionProposalReasonCode(StrEnum):
+    AUTHORIZED_ACTIVITY_EXACT_MATCH = "authorized_activity_exact_match"
 
 
 class SocExternalDispositionApplyStatus(StrEnum):
@@ -336,6 +347,82 @@ class AuthorizationEnrichmentApplyResult(BaseModel):
 
     schema_version: Literal["soc.authorization_enrichment_apply_result.v1"] = "soc.authorization_enrichment_apply_result.v1"
     record: AuthorizationEnrichmentRecord
+    idempotent: bool = False
+    event_written: bool = False
+
+
+class SocDetectionTruthSnapshot(BaseModel):
+    """Immutable detection state observed when an operational proposal is made."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.detection_truth_snapshot.v1"] = "soc.detection_truth_snapshot.v1"
+    verdict: Verdict
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    source: Literal["decision", "analysis"]
+    decision_policy_version: str | None = Field(default=None, min_length=1, max_length=128)
+    latest_correction_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class SocDispositionProposalCommand(BaseModel):
+    """Request a shadow operational disposition from one persisted enrichment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_proposal_command.v1"] = "soc.disposition_proposal_command.v1"
+    enrichment_id: str = Field(min_length=1, max_length=64)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+
+class SocDispositionProposalRecord(BaseModel):
+    """Immutable shadow proposal that never mutates detection or review state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_proposal_record.v1"] = "soc.disposition_proposal_record.v1"
+    proposal_id: str = Field(default_factory=lambda: f"DPROP-{uuid4().hex[:20].upper()}")
+    proposal_key: str = Field(pattern=r"^[0-9a-f]{64}$")
+    run_id: str = Field(min_length=1, max_length=64)
+    alert_id: str = Field(min_length=1, max_length=128)
+    queue_id: str = Field(min_length=1, max_length=64)
+    source_enrichment_id: str = Field(min_length=1, max_length=64)
+    source_query_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_matcher_policy_version: str = Field(min_length=1, max_length=128)
+    source_fact_refs: list[AuthorizationFactRef] = Field(min_length=1, max_length=100)
+    source_evidence_refs: list[str] = Field(default_factory=list, max_length=300)
+    detection_truth: SocDetectionTruthSnapshot
+    proposed_disposition: SocOperationalDisposition
+    reason_code: SocDispositionProposalReasonCode
+    rationale: list[str] = Field(min_length=1, max_length=20)
+    policy_version: Literal["soc.disposition_proposal_policy.v1"] = "soc.disposition_proposal_policy.v1"
+    idempotency_key: str = Field(min_length=1, max_length=128)
+    created_by: ActorContext = Field(default_factory=ActorContext)
+    created_at: datetime = Field(default_factory=utc_now)
+    proposal_mode: Literal["shadow"] = "shadow"
+    application_status: Literal["not_applied"] = "not_applied"
+    requires_human_review: Literal[True] = True
+    auto_close_allowed: Literal[False] = False
+    detection_truth_impact: Literal["none"] = "none"
+    review_queue_impact: Literal["none"] = "none"
+
+    @model_validator(mode="after")
+    def validate_shadow_boundary(self) -> SocDispositionProposalRecord:
+        if self.detection_truth.verdict is not Verdict.TRUE_POSITIVE:
+            raise ValueError("benign true-positive disposition requires true-positive detection truth")
+        if self.proposed_disposition is not SocOperationalDisposition.CLOSED_BENIGN_TRUE_POSITIVE:
+            raise ValueError("DP-01 only permits closed_benign_true_positive shadow proposals")
+        if self.reason_code is not SocDispositionProposalReasonCode.AUTHORIZED_ACTIVITY_EXACT_MATCH:
+            raise ValueError("DP-01 requires an exact authorized-activity reason")
+        return self
+
+
+class SocDispositionProposalApplyResult(BaseModel):
+    """Service result for creating or deduplicating one shadow proposal."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_proposal_apply_result.v1"] = "soc.disposition_proposal_apply_result.v1"
+    proposal: SocDispositionProposalRecord
     idempotent: bool = False
     event_written: bool = False
 
@@ -468,6 +555,7 @@ class SocLeadAgentReviewContextArtifact(BaseModel):
     action_evidence: list[dict[str, Any]] = Field(default_factory=list)
     external_dispositions: list[dict[str, Any]] = Field(default_factory=list)
     authorization_enrichments: list[dict[str, Any]] = Field(default_factory=list)
+    disposition_proposals: list[dict[str, Any]] = Field(default_factory=list)
     memory_candidates: list[dict[str, Any]] = Field(default_factory=list)
     relevant_memories: dict[str, Any] | None = None
     investigation_view: dict[str, Any] | None = None
@@ -2457,6 +2545,7 @@ class InvestigationTimelineItem(BaseModel):
         "domain_finding",
         "read_only_evidence",
         "authorization_enrichment",
+        "disposition_proposal",
         "external_disposition",
         "memory_candidate",
         "relevant_memory",
@@ -2497,6 +2586,7 @@ class UnifiedInvestigationView(BaseModel):
             "This view is read-only analyst context.",
             "Domain findings and relevant memories do not change the operational verdict.",
             "Authorization enrichments are shadow matches and do not change detection truth or disposition.",
+            "Disposition proposals are shadow-only and require human review; they do not close review items.",
             "External feedback and memory updates must still pass service boundaries.",
         ]
     )
@@ -2514,6 +2604,7 @@ class InvestigationContext(BaseModel):
     similar_alerts: list[SimilarAlertMatch] = Field(default_factory=list)
     action_evidence: list[InvestigationEvidence] = Field(default_factory=list)
     authorization_enrichments: list[AuthorizationEnrichmentRecord] = Field(default_factory=list)
+    disposition_proposals: list[SocDispositionProposalRecord] = Field(default_factory=list)
     external_dispositions: list[SocExternalDispositionRecord] = Field(default_factory=list)
     memory_candidates: list[SocMemoryCandidate] = Field(default_factory=list)
     relevant_memories: SocMemoryRetrievalResult | None = None

@@ -402,6 +402,33 @@ class SocAuthorizationEnrichmentRow(SocBase):
     enrichment_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
+class SocDispositionProposalRow(SocBase):
+    """One immutable shadow operational disposition proposal."""
+
+    __tablename__ = "soc_disposition_proposals"
+    __table_args__ = (
+        Index("ix_soc_disposition_proposal_run_created", "run_id", "created_at"),
+        Index("ix_soc_disposition_proposal_alert_created", "alert_id", "created_at"),
+        Index("ix_soc_disposition_proposal_queue_created", "queue_id", "created_at"),
+        Index("ix_soc_disposition_proposal_enrichment_created", "source_enrichment_id", "created_at"),
+    )
+
+    proposal_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    proposal_key: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    alert_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    queue_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    source_enrichment_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    proposed_disposition: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    detection_verdict: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    created_by_actor_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    proposal_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
 class SocNormalizationSchemaBaselineRow(SocBase):
     """Approved structural fingerprints for one normalization parser scope."""
 

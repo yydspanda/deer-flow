@@ -231,7 +231,7 @@ export interface SocInvestigationEvidence {
   created_at: string;
 }
 
-export type SocExternalDispositionCanonicalStatus =
+export type SocOperationalDisposition =
   | "closed_true_positive"
   | "closed_false_positive"
   | "closed_benign_true_positive"
@@ -240,6 +240,8 @@ export type SocExternalDispositionCanonicalStatus =
   | "ignored"
   | "duplicate"
   | "unknown";
+
+export type SocExternalDispositionCanonicalStatus = SocOperationalDisposition;
 
 export type SocExternalDispositionApplyStatus =
   | "mapped"
@@ -468,6 +470,7 @@ export type SocInvestigationTimelineKind =
   | "domain_finding"
   | "read_only_evidence"
   | "authorization_enrichment"
+  | "disposition_proposal"
   | "external_disposition"
   | "memory_candidate"
   | "relevant_memory"
@@ -575,6 +578,43 @@ export interface SocAuthorizationEnrichmentRecord {
   decision_impact: "none";
 }
 
+export interface SocDetectionTruthSnapshot {
+  schema_version: string;
+  verdict: SocVerdict;
+  confidence?: number | null;
+  source: "decision" | "analysis";
+  decision_policy_version?: string | null;
+  latest_correction_id?: string | null;
+}
+
+export interface SocDispositionProposalRecord {
+  schema_version: string;
+  proposal_id: string;
+  proposal_key: string;
+  run_id: string;
+  alert_id: string;
+  queue_id: string;
+  source_enrichment_id: string;
+  source_query_hash: string;
+  source_matcher_policy_version: string;
+  source_fact_refs: SocAuthorizationFactRef[];
+  source_evidence_refs: string[];
+  detection_truth: SocDetectionTruthSnapshot;
+  proposed_disposition: SocOperationalDisposition;
+  reason_code: "authorized_activity_exact_match";
+  rationale: string[];
+  policy_version: string;
+  idempotency_key: string;
+  created_by: SocActorContext;
+  created_at: string;
+  proposal_mode: "shadow";
+  application_status: "not_applied";
+  requires_human_review: true;
+  auto_close_allowed: false;
+  detection_truth_impact: "none";
+  review_queue_impact: "none";
+}
+
 export interface SocMemoryCandidateReviewRequest {
   decision: SocMemoryCandidateReviewDecision;
   reason: string;
@@ -601,6 +641,7 @@ export interface SocInvestigationContext {
   similar_alerts: SocSimilarAlertMatch[];
   action_evidence: SocInvestigationEvidence[];
   authorization_enrichments: SocAuthorizationEnrichmentRecord[];
+  disposition_proposals: SocDispositionProposalRecord[];
   external_dispositions: SocExternalDispositionRecord[];
   memory_candidates: SocMemoryCandidate[];
   relevant_memories?: SocMemoryRetrievalResult | null;

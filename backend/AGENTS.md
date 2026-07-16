@@ -241,7 +241,15 @@ EX-01 contracts are `AuthorizationEnrichmentCommand/Record/ApplyResult`; orchest
 idempotent by semantic query identity, and replay creates a linked new record. `SocReviewService`
 projects these records into InvestigationContext, Web/TUI, timeline counts, and the bounded Lead Agent
 artifact. They must remain `shadow_only=true`, `decision_impact=none` and must not update decisions,
-ReviewQueue, memory, disposition, or close alerts. DP-01 remains a separate future slice.
+ReviewQueue, memory, disposition, or close alerts.
+
+DP-01 contracts are `SocDetectionTruthSnapshot`, `SocDispositionProposalCommand/Record/ApplyResult`
+and `SocOperationalDisposition`; orchestration is `SocDispositionProposalService`, persistence is
+`SocDispositionProposalRepository`, and migration `0015_disposition_proposals` creates the append-only
+`soc_disposition_proposals` table. The service only consumes persisted `exact` enrichments linked to
+an open ReviewQueue and current `true_positive` detection truth. A proposal is always `shadow`, `not_applied`, human-reviewed and
+`auto_close_allowed=false`; it must not update `AnalysisRun`, ReviewQueue, memory, or action approval.
+CLI is `soc disposition propose|list|get`. EV-01 owns evaluation and any future auto-close gate.
 
 PingAn vendor aliases are translated into generic `RoleClaim` objects inside `soc_agent.normalizers`.
 `pipeline.fact_reconstructor` must remain vendor-neutral: it builds scenario hypotheses and

@@ -15,8 +15,9 @@
 当前 `GF-01` 已实现事实合同、追加式版本、生命周期、Repository、数据库迁移和 CLI；`AA-01`
 已实现 canonical `AuthorizationQuery`、确定性事件时间 matcher、`AuthorizationMatchResult` 和只读
 `soc context match`；`EX-01` 已把结果保存为 append-only `AuthorizationEnrichmentRecord`，并投影到
-InvestigationContext、Web/TUI 和 Lead Agent bounded artifact。Enrichment 仍不生成 disposition，因此
-active fact **当前不会改变 Runtime、ReviewQueue 或自动关单**。
+InvestigationContext、Web/TUI 和 Lead Agent bounded artifact；`DP-01` 已能从 persisted exact enrichment
+和当前 true-positive detection truth 生成独立的 `SocDispositionProposalRecord`。Proposal 仍为 shadow、
+not-applied，并且 **不会改变 Runtime、ReviewQueue 或自动关单**。
 
 ## Current Contract / 当前合同
 
@@ -82,6 +83,26 @@ CLI 会为本地命令装配对应角色，用于开发和运维入口；生产 
 - `AuthorizationEnrichmentRepository` 只允许 append；记录保存 canonical query、semantic query hash、
   match result、matcher policy、fact version/content hash refs、actor、idempotency key 和 replay lineage。
 - 同一 idempotency key 只能对应同一 run/queue/query/replay source；不同输入复用必须明确失败。
+- Proposal table: `soc_disposition_proposals`
+- Proposal migration: `0015_disposition_proposals`
+- `SocDispositionProposalRepository` 只允许 append；`proposal_key` 对 enrichment、fact refs、matcher policy
+  和 detection snapshot 做语义去重，`idempotency_key` 防止 transport retry 重复写入。
+
+## Shadow Disposition Proposal / 影子处置建议
+
+`SocDispositionProposalService` 只接受一个已持久化 enrichment id，并执行确定性 gate：
+
+1. enrichment 必须保留 `shadow_only=true`、`decision_impact=none`；
+2. match status 必须是 `exact` 且至少引用一个 governed fact version；
+3. enrichment 的 run/alert/queue lineage 必须一致，并且 ReviewQueue 当前仍为 `open`；
+4. 当前 detection truth 必须是 `true_positive`；
+5. 唯一允许的 DP-01 输出是 `closed_benign_true_positive` +
+   `authorized_activity_exact_match`。
+
+输出同时保留 `SocDetectionTruthSnapshot` 和 `proposed_disposition`，因此“行为真实发生”不会被错误改写
+为 false positive。记录固定为 `proposal_mode=shadow`、`application_status=not_applied`、
+`requires_human_review=true`、`auto_close_allowed=false`，且 detection/ReviewQueue impact 均为 `none`。
+没有 queue、queue 不存在、lineage 不一致或 queue 已关闭时均 fail closed，不生成一个无法进入人工流程的建议。
 
 ## Deterministic Match / 确定性匹配
 
@@ -132,6 +153,9 @@ soc context enrich RUN-... \
 soc context enrichment list --run-id RUN-... --pretty
 soc context enrichment get AAE-... --pretty
 soc context enrichment replay AAE-... --idempotency-key authorization-replay:AAE-...:1 --pretty
+soc disposition propose AAE-... --pretty
+soc disposition list --run-id RUN-... --pretty
+soc disposition get DPROP-... --pretty
 ```
 
 其他生命周期命令：
@@ -145,8 +169,5 @@ soc context revise GCF-... revision.json --expected-version 2 --pretty
 
 ## Next / 下一步
 
-1. `DP-01 Disposition Proposal`：只有 `exact` enrichment 才生成
-   `closed_benign_true_positive` shadow proposal；
-   detection truth 不变，仍由人工关单。
-2. `EV-01 Evaluation Gate`：统计 shadow precision、override、freshness、fan-out 和随机抽样，未达 gate
+1. `EV-01 Evaluation Gate`：统计 shadow precision、override、freshness、fan-out 和随机抽样，未达 gate
    不允许 auto-close。

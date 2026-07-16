@@ -23,6 +23,7 @@ _MAX_SIMILAR_ALERTS = 5
 _MAX_FACT_ITEMS = 10
 _MAX_ACTION_EVIDENCE_ITEMS = 5
 _MAX_AUTHORIZATION_ENRICHMENT_ITEMS = 5
+_MAX_DISPOSITION_PROPOSAL_ITEMS = 5
 _MAX_EXTERNAL_DISPOSITION_ITEMS = 5
 _MAX_MEMORY_CANDIDATE_ITEMS = 5
 _MAX_RELEVANT_MEMORY_ITEMS = 5
@@ -35,6 +36,7 @@ _LEAD_AGENT_CONTEXT_INSTRUCTIONS = [
     "Before proposing a duplicate read-only lookup, inspect action_evidence and reuse fresh matching results.",
     "Treat external_dispositions as operator feedback; pending memory candidates are not confirmed reusable knowledge.",
     "Treat authorization_enrichments as read-only shadow context; they never replace detection truth or authorize disposition by themselves.",
+    "Treat disposition_proposals as shadow recommendations only; they cannot close a review item or authorize a response action.",
     "Treat memory_candidates as reviewable proposals only; do not use them as confirmed facts or active lessons.",
     "Treat relevant_memories as retrieval-policy-approved context only; they can inform analysis but never bypass evidence or approval.",
     "If evidence conflicts, explain the conflict and ask for review instead of forcing a conclusion.",
@@ -68,6 +70,7 @@ def build_lead_agent_review_context_artifact(
     similar_payload = [_similar_alert_payload(match) for match in context.similar_alerts[:_MAX_SIMILAR_ALERTS]]
     action_evidence_payload = [_action_evidence_payload(item) for item in context.action_evidence[:_MAX_ACTION_EVIDENCE_ITEMS]]
     authorization_enrichment_payload = [_authorization_enrichment_payload(item) for item in context.authorization_enrichments[:_MAX_AUTHORIZATION_ENRICHMENT_ITEMS]]
+    disposition_proposal_payload = [_disposition_proposal_payload(item) for item in context.disposition_proposals[:_MAX_DISPOSITION_PROPOSAL_ITEMS]]
     external_disposition_payload = [_external_disposition_payload(item) for item in context.external_dispositions[:_MAX_EXTERNAL_DISPOSITION_ITEMS]]
     memory_candidate_payload = [_memory_candidate_payload(item) for item in context.memory_candidates[:_MAX_MEMORY_CANDIDATE_ITEMS]]
     relevant_memory_payload = _relevant_memory_payload(context.relevant_memories)
@@ -83,6 +86,7 @@ def build_lead_agent_review_context_artifact(
         "similar_alerts": similar_payload,
         "action_evidence": action_evidence_payload,
         "authorization_enrichments": authorization_enrichment_payload,
+        "disposition_proposals": disposition_proposal_payload,
         "external_dispositions": external_disposition_payload,
         "memory_candidates": memory_candidate_payload,
         "relevant_memories": relevant_memory_payload,
@@ -104,6 +108,7 @@ def build_lead_agent_review_context_artifact(
         similar_alerts=similar_payload,
         action_evidence=action_evidence_payload,
         authorization_enrichments=authorization_enrichment_payload,
+        disposition_proposals=disposition_proposal_payload,
         external_dispositions=external_disposition_payload,
         memory_candidates=memory_candidate_payload,
         relevant_memories=relevant_memory_payload,
@@ -297,6 +302,31 @@ def _authorization_enrichment_payload(record: Any) -> dict[str, Any]:
         "created_at": record.created_at.isoformat(),
         "shadow_only": True,
         "decision_impact": "none",
+    }
+
+
+def _disposition_proposal_payload(proposal: Any) -> dict[str, Any]:
+    return {
+        "proposal_id": proposal.proposal_id,
+        "run_id": proposal.run_id,
+        "alert_id": proposal.alert_id,
+        "queue_id": proposal.queue_id,
+        "source_enrichment_id": proposal.source_enrichment_id,
+        "source_query_hash": proposal.source_query_hash,
+        "source_matcher_policy_version": proposal.source_matcher_policy_version,
+        "source_fact_refs": [item.model_dump(mode="json", exclude_none=True) for item in proposal.source_fact_refs[:10]],
+        "detection_truth": proposal.detection_truth.model_dump(mode="json", exclude_none=True),
+        "proposed_disposition": proposal.proposed_disposition.value,
+        "reason_code": proposal.reason_code.value,
+        "rationale": proposal.rationale,
+        "policy_version": proposal.policy_version,
+        "proposal_mode": proposal.proposal_mode,
+        "application_status": proposal.application_status,
+        "requires_human_review": proposal.requires_human_review,
+        "auto_close_allowed": proposal.auto_close_allowed,
+        "detection_truth_impact": proposal.detection_truth_impact,
+        "review_queue_impact": proposal.review_queue_impact,
+        "created_at": proposal.created_at.isoformat(),
     }
 
 

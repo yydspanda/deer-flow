@@ -28,6 +28,7 @@ from soc_agent.contracts import (
     SimilarAlertQuery,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
+    SocDispositionProposalRecord,
     SocExternalDispositionRecord,
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
@@ -41,6 +42,7 @@ from soc_agent.db.models import (
     SocApprovalRequestRow,
     SocAuthorizationEnrichmentRow,
     SocDecisionAuditLogRow,
+    SocDispositionProposalRow,
     SocExternalDispositionRow,
     SocGovernedContextFactRow,
     SocInvestigationEvidenceRow,
@@ -50,6 +52,7 @@ from soc_agent.db.models import (
     SocNormalizationSchemaBaselineRow,
     SocReviewQueueRow,
 )
+from soc_agent.disposition import DispositionProposalConflictError
 from soc_agent.governed_context import (
     GovernedContextFactVersionConflictError,
     validate_governed_context_fact_append,
@@ -331,6 +334,74 @@ class SqlAlchemyAlertRepository:
                 query = query.where(or_(*target_filters))
             result = session.execute(query.order_by(SocAuthorizationEnrichmentRow.created_at.desc()).limit(limit))
             return [_authorization_enrichment_from_row(row) for row in result.scalars()]
+
+    def save_disposition_proposal(self, proposal: SocDispositionProposalRecord) -> None:
+        payload = proposal.model_dump(mode="json")
+        with self._session_factory() as session:
+            if session.get(SocDispositionProposalRow, proposal.proposal_id) is not None:
+                raise DispositionProposalConflictError(f"disposition proposal {proposal.proposal_id} already exists")
+            session.add(
+                SocDispositionProposalRow(
+                    proposal_id=proposal.proposal_id,
+                    **_disposition_proposal_row_values(proposal, payload),
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise DispositionProposalConflictError("disposition proposal identity already exists") from exc
+
+    def get_disposition_proposal(
+        self,
+        proposal_id: str,
+    ) -> SocDispositionProposalRecord | None:
+        with self._session_factory() as session:
+            row = session.get(SocDispositionProposalRow, proposal_id)
+            return _disposition_proposal_from_row(row) if row is not None else None
+
+    def find_disposition_proposal_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SocDispositionProposalRecord | None:
+        with self._session_factory() as session:
+            result = session.execute(select(SocDispositionProposalRow).where(SocDispositionProposalRow.idempotency_key == idempotency_key).limit(1))
+            row = result.scalar_one_or_none()
+            return _disposition_proposal_from_row(row) if row is not None else None
+
+    def find_disposition_proposal_by_key(
+        self,
+        proposal_key: str,
+    ) -> SocDispositionProposalRecord | None:
+        with self._session_factory() as session:
+            result = session.execute(select(SocDispositionProposalRow).where(SocDispositionProposalRow.proposal_key == proposal_key).limit(1))
+            row = result.scalar_one_or_none()
+            return _disposition_proposal_from_row(row) if row is not None else None
+
+    def list_disposition_proposals(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        queue_id: str | None = None,
+        enrichment_id: str | None = None,
+        limit: int = 50,
+    ) -> list[SocDispositionProposalRecord]:
+        target_filters = []
+        if run_id:
+            target_filters.append(SocDispositionProposalRow.run_id == run_id)
+        if alert_id:
+            target_filters.append(SocDispositionProposalRow.alert_id == alert_id)
+        if queue_id:
+            target_filters.append(SocDispositionProposalRow.queue_id == queue_id)
+        if enrichment_id:
+            target_filters.append(SocDispositionProposalRow.source_enrichment_id == enrichment_id)
+        with self._session_factory() as session:
+            query = select(SocDispositionProposalRow)
+            for target_filter in target_filters:
+                query = query.where(target_filter)
+            result = session.execute(query.order_by(SocDispositionProposalRow.created_at.desc()).limit(limit))
+            return [_disposition_proposal_from_row(row) for row in result.scalars()]
 
     def save_external_disposition(self, record: SocExternalDispositionRecord) -> None:
         payload = record.model_dump(mode="json")
@@ -931,6 +1002,64 @@ def _authorization_enrichment_from_row(
     if indexed_values != contract_values:
         raise ValueError(f"authorization enrichment row {row.enrichment_id} does not match its typed payload")
     return record
+
+
+def _disposition_proposal_row_values(
+    proposal: SocDispositionProposalRecord,
+    payload: dict,
+) -> dict:
+    return {
+        "proposal_key": proposal.proposal_key,
+        "run_id": proposal.run_id,
+        "alert_id": proposal.alert_id,
+        "queue_id": proposal.queue_id,
+        "source_enrichment_id": proposal.source_enrichment_id,
+        "proposed_disposition": proposal.proposed_disposition.value,
+        "reason_code": proposal.reason_code.value,
+        "detection_verdict": proposal.detection_truth.verdict.value,
+        "policy_version": proposal.policy_version,
+        "idempotency_key": proposal.idempotency_key,
+        "created_by_actor_id": proposal.created_by.actor_id,
+        "created_at": proposal.created_at,
+        "proposal_payload": payload,
+    }
+
+
+def _disposition_proposal_from_row(
+    row: SocDispositionProposalRow,
+) -> SocDispositionProposalRecord:
+    proposal = SocDispositionProposalRecord.model_validate(row.proposal_payload)
+    indexed_values = {
+        "proposal_id": row.proposal_id,
+        "proposal_key": row.proposal_key,
+        "run_id": row.run_id,
+        "alert_id": row.alert_id,
+        "queue_id": row.queue_id,
+        "source_enrichment_id": row.source_enrichment_id,
+        "proposed_disposition": row.proposed_disposition,
+        "reason_code": row.reason_code,
+        "detection_verdict": row.detection_verdict,
+        "policy_version": row.policy_version,
+        "idempotency_key": row.idempotency_key,
+        "created_by_actor_id": row.created_by_actor_id,
+    }
+    contract_values = {
+        "proposal_id": proposal.proposal_id,
+        "proposal_key": proposal.proposal_key,
+        "run_id": proposal.run_id,
+        "alert_id": proposal.alert_id,
+        "queue_id": proposal.queue_id,
+        "source_enrichment_id": proposal.source_enrichment_id,
+        "proposed_disposition": proposal.proposed_disposition.value,
+        "reason_code": proposal.reason_code.value,
+        "detection_verdict": proposal.detection_truth.verdict.value,
+        "policy_version": proposal.policy_version,
+        "idempotency_key": proposal.idempotency_key,
+        "created_by_actor_id": proposal.created_by.actor_id,
+    }
+    if indexed_values != contract_values:
+        raise ValueError(f"disposition proposal row {row.proposal_id} does not match its typed payload")
+    return proposal
 
 
 def _external_disposition_row_values(record: SocExternalDispositionRecord, payload: dict) -> dict:

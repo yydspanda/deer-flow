@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 Runtime 工程闭环完成；Phase 2 correlation / domain triage 起步 |
-| 当前目标 | GF-01 + AA-01 + EX-01 已完成：typed fact 生命周期、确定性 event-time matcher、append-only authorization enrichment 与 InvestigationContext 多端投影已落地；下一步只设计 shadow disposition proposal |
+| 当前目标 | GF-01 + AA-01 + EX-01 + DP-01 已完成：typed fact、event-time matcher、append-only enrichment 和 shadow disposition proposal 已形成可审阅闭环 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `DP-01 Shadow Disposition Proposal`：只消费持久化的 exact authorization enrichment，生成独立 `closed_benign_true_positive` proposal；不改 detection truth、不自动关单。 |
+| 当前下一刀 | `EV-01 Shadow Disposition Evaluation Gate`：定义 analyst outcome/override、precision、freshness、fan-out、抽样复核和 rollback 指标；只评测，不启用 auto-close。 |
 
 ## 当前待办列表
 
@@ -69,6 +69,7 @@
 | 11.4 | Governed context fact lifecycle | GF-01 Done | 已完成 typed `AuthorizedActivityPayload`、append-only fact versions、role-gated lifecycle、repository protocol、in-memory/SQLAlchemy persistence、`0013` migration、CLI 和 sample | Fact 与 evidence/memory/approval/detection truth 分离；revision fail closed 并重新审批 |
 | 11.5 | Authorized activity event-time matcher | AA-01 Done | 已完成 `AuthorizationQuery/AuthorizationMatchResult`、canonical query builder、历史 lifecycle version selection、source freshness/recurrence/scope matcher、`soc context match`；真实 HIDS/EDR shadow replay 均为 exact | matcher 不识别 vendor aliases、不调用 LLM、不持久化、不改 verdict/ReviewQueue/disposition；naive event time 必须显式传 IANA timezone |
 | 11.6 | Authorization enrichment persistence/projection | EX-01 Done | 已完成 strict command/record/result contracts、append-only in-memory/SQL repository、`0014` migration、幂等写入、replay lineage、CLI 和 InvestigationContext/Web/TUI/Lead Agent 投影 | enrichment 保存 query hash/policy/fact refs/actor；`shadow_only=true`、`decision_impact=none`；不修改 run decision/queue/memory/disposition |
+| 11.7 | Shadow disposition proposal | DP-01 Done | 已完成 generic operational disposition、detection truth snapshot、append-only proposal repository、`0015` migration、CLI 和 InvestigationContext/Web/TUI/Lead Agent 投影 | 仅 open-queue persisted exact enrichment + current true-positive 可提议 benign-TP；proposal 永远 shadow/not-applied，人工复核，不改 run/queue，不自动关单 |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Partial | normalization 运维页、Gateway bounded metrics 和 Kafka JSONL issue 摘要已完成；全局 Kafka/review/approval/runtime/算力 Prometheus exporter 和态势面板仍后置 | 当前 maintenance issue 可见；全系统运行态势不阻塞 SOC Agent Alpha |
@@ -180,6 +181,28 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-16 — DP-01 shadow disposition proposal implemented
+
+- 新增 vendor-neutral contracts：`SocOperationalDisposition`、`SocDetectionTruthSnapshot`、
+  `SocDispositionProposalCommand/Record/ApplyResult`；检测真值与运营处置保持为两个独立字段。
+- 新增 `SocDispositionProposalService`：
+  - 只消费已持久化的 `AuthorizationEnrichmentRecord`；
+  - 仅 linked ReviewQueue 仍为 open、`match_result.status=exact` 且当前 detection truth 为 `true_positive` 时允许提议
+    `closed_benign_true_positive`；
+  - 保存 matcher/query/fact-version refs 与 detection snapshot；相同 retry key 幂等返回原记录，相同语义 proposal
+    使用不同 retry key 时显式冲突，避免返回未持久化的伪别名；
+  - queue 缺失/关闭/lineage 错误、partial/conflict/expired/not_found/unavailable、非 true-positive 或无检测结论全部 fail closed。
+- 新增 append-only `SocDispositionProposalRepository`、in-memory/SQLAlchemy adapters、
+  `soc_disposition_proposals` 和 migration `0015_disposition_proposals`。
+- 新增 CLI `soc disposition propose|list|get`；Review API、Web、TUI、统一时间线和 Lead Agent bounded
+  artifact 均可只读查看 proposal。
+- 安全边界固定为 `proposal_mode=shadow`、`application_status=not_applied`、
+  `requires_human_review=true`、`auto_close_allowed=false`、detection/ReviewQueue impact 均为 `none`。
+- 收紧 open ReviewQueue 与幂等边界后的聚焦回归 `57 passed`；完整 SOC 回归
+  `476 passed, 1 warning`；frontend `pnpm check` 和 `636 passed` 均通过。
+  warning 是既有 DeerFlow MCP cache 的 `asyncio.get_event_loop()` deprecation。
+- 下一步：`EV-01` 建立 shadow outcome 与评测 gate；在 gate 和 rollback policy 完成前不实现 auto-close。
 
 ### 2026-07-16 — EX-01 authorization enrichment persistence/projection implemented
 

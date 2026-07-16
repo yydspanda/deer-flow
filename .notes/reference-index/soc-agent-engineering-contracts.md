@@ -426,8 +426,26 @@ Authorized activity / 授权活动事实约束：
   `shadow_only=true`、`decision_impact=none`。
 - CLI 统一使用 `soc context enrich` 和 `soc context enrichment list|get|replay`；入口层不得复制 query/match
   或 repository 逻辑。事件为 `authorization.enrichment_recorded|replayed`。
-- `DP-01` 才能消费 exact enrichment 生成
-  `closed_benign_true_positive` shadow proposal；`EV-01` 管理 auto-close 前的评测和 rollback gate。
+- DP-01 使用 generic `SocOperationalDisposition`，并通过
+  `SocDispositionProposalCommand/Record/ApplyResult`、`SocDetectionTruthSnapshot` 和
+  `SocDispositionProposalService` 生成独立运营建议。不得复用 `Decision` 或 external disposition
+  feedback record 伪装 proposal。
+- DP-01 只能消费已持久化且 run/alert/queue lineage 一致的 enrichment；ReviewQueue 必须存在且为 open。
+  只有 `status=exact`、存在 matched fact refs、enrichment 保持 shadow/no-impact，并且当前 persisted run
+  detection truth 为 `true_positive` 时，才可生成
+  `closed_benign_true_positive + authorized_activity_exact_match`。其他状态全部 fail closed。
+- Proposal 必须同时保存 source enrichment/query hash/matcher policy/fact-version refs、detection truth
+  snapshot、proposal policy、actor、idempotency key 和 semantic proposal key。相同 retry key 只返回原记录；
+  相同 semantic proposal 使用不同 retry key 必须显式冲突，不能假装绑定一个未持久化的新 key。
+  Repository 只允许 append；
+  migration `0015_disposition_proposals` / table `soc_disposition_proposals` 是 source of truth。
+- Proposal 固定 `proposal_mode=shadow`、`application_status=not_applied`、
+  `requires_human_review=true`、`auto_close_allowed=false`，detection truth 和 ReviewQueue impact 均为
+  `none`。Service 不得改 `AnalysisRun`、summary、ReviewQueue、memory、approval 或执行 action。
+- CLI 为 `soc disposition propose|list|get`；InvestigationContext、timeline/counts、Web/TUI 和 bounded
+  Lead Agent artifact 只能只读投影。事件为 `disposition.proposal_recorded`。
+- `EV-01` 管理 analyst outcome、precision、override、freshness、fan-out、抽样复核和 auto-close 前的
+  rollback gate；DP-01 本身不得包含 auto-close 开关。
 
 Security exercise / 护网与红蓝对抗事实约束：
 
@@ -757,7 +775,10 @@ SOC repository 实现约束：
 - `soc_analysis_runs.run_payload` 保存完整 `AnalysisRun`，索引列只服务查询和筛选，不作为唯一事实来源。
 - SOC schema migrations 放在 `backend/soc_agent/db/migrations/`，使用独立版本表 `soc_alembic_version`。
 - 正式 schema 变更走 `soc db upgrade` / Alembic revision；`create_soc_tables()` 和 `soc db init` 只作为 Phase 1 本地开发辅助。
-- SOC 当前持久化表包括 `soc_analysis_runs`、`soc_decision_audit_log`、`soc_alert_summaries`、`soc_review_queue`、`soc_approval_requests`、`soc_approval_grants`、`soc_investigation_evidence`、`soc_external_dispositions` 和 `soc_memory_candidates`。
+- SOC 当前持久化表包括 `soc_analysis_runs`、`soc_decision_audit_log`、`soc_alert_summaries`、
+  `soc_review_queue`、`soc_approval_requests`、`soc_approval_grants`、`soc_investigation_evidence`、
+  `soc_external_dispositions`、`soc_memory_candidates`、`soc_memory_records`、normalization baseline/issues、
+  `soc_governed_context_facts`、`soc_authorization_enrichments` 和 `soc_disposition_proposals`。
 - 单元测试可以用 SQLite in-memory 验证 SQLAlchemy 映射。
 - 本地开发/人工验收可以用独立 SOC SQLite 文件，例如 `backend/.deer-flow/data/soc_agent_dev.db`，并通过 `SOC_DATABASE_URL=sqlite:////.../soc_agent_dev.db` 显式启用。
 - 准生产、生产和长期联调环境必须指向 PostgreSQL；不得把本地 SQLite 例外扩大成生产架构。

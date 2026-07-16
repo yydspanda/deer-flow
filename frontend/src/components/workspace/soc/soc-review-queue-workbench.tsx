@@ -3,6 +3,7 @@
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
+  ClipboardCheckIcon,
   CircleIcon,
   FlaskConicalIcon,
   InboxIcon,
@@ -48,6 +49,7 @@ import type {
   SocAgentApprovalRequest,
   SocAgentApprovedActionCommand,
   SocAuthorizationEnrichmentRecord,
+  SocDispositionProposalRecord,
   SocExternalDispositionRecord,
   SocInvestigationEvidence,
   SocInvestigationTimelineItem,
@@ -163,6 +165,7 @@ function timelineKindLabel(kind: SocInvestigationTimelineItem["kind"]) {
     domain_finding: "领域发现",
     read_only_evidence: "只读证据",
     authorization_enrichment: "授权上下文",
+    disposition_proposal: "影子处置建议",
     external_disposition: "外部反馈",
     memory_candidate: "候选记忆",
     relevant_memory: "确认记忆",
@@ -543,6 +546,67 @@ function AuthorizationEnrichmentSection({
               </div>
             );
           })
+        )}
+      </div>
+    </section>
+  );
+}
+
+function DispositionProposalSection({
+  proposals,
+}: {
+  proposals: SocDispositionProposalRecord[];
+}) {
+  return (
+    <section className="rounded-md border">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+        <div className="flex items-center gap-2">
+          <ClipboardCheckIcon className="text-muted-foreground size-4" />
+          <h3 className="text-sm font-semibold">影子处置建议</h3>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary">{proposals.length}</Badge>
+          <Badge variant="outline">人工复核</Badge>
+        </div>
+      </div>
+      <div className="divide-y">
+        {proposals.length === 0 ? (
+          <div className="text-muted-foreground p-4 text-sm">
+            当前运行还没有满足确定性策略的影子处置建议。
+          </div>
+        ) : (
+          proposals.map((proposal) => (
+            <div key={proposal.proposal_id} className="p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">
+                    {proposal.proposed_disposition}
+                  </div>
+                  <div className="text-muted-foreground mt-1 text-xs">
+                    {proposal.proposal_id} / {formatTime(proposal.created_at)}
+                  </div>
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Badge variant="outline">
+                    detection {proposal.detection_truth.verdict}
+                  </Badge>
+                  <Badge variant="secondary">shadow only</Badge>
+                  <Badge variant="outline">not applied</Badge>
+                </div>
+              </div>
+              <p className="text-muted-foreground mt-3 text-xs">
+                {proposal.rationale.join(" ")}
+              </p>
+              <div className="text-muted-foreground mt-3 grid gap-1 text-xs sm:grid-cols-2">
+                <span>reason {proposal.reason_code}</span>
+                <span>policy {proposal.policy_version}</span>
+                <span>source {proposal.source_enrichment_id}</span>
+                <span>fact versions {proposal.source_fact_refs.length}</span>
+                <span>auto close {String(proposal.auto_close_allowed)}</span>
+                <span>review impact {proposal.review_queue_impact}</span>
+              </div>
+            </div>
+          ))
         )}
       </div>
     </section>
@@ -1349,6 +1413,10 @@ export function SocReviewQueueWorkbench() {
 
               <AuthorizationEnrichmentSection
                 records={context?.authorization_enrichments ?? []}
+              />
+
+              <DispositionProposalSection
+                proposals={context?.disposition_proposals ?? []}
               />
 
               <ActionEvidenceSection
