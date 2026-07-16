@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from soc_agent.contracts.schemas import ActorContext
+from soc_agent.contracts.common import ActorContext
 
 
 def _utc_now() -> datetime:

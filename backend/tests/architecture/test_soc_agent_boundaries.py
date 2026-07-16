@@ -7,6 +7,7 @@ from soc_agent.contracts import AlertInput
 from soc_agent.core import (
     SocAgentChatService,
     SocAnalysisService,
+    SocAuthorizationEnrichmentService,
     SocAuthorizedActivityService,
     SocDaemonService,
     SocGovernedContextService,
@@ -92,6 +93,8 @@ def test_governed_context_lifecycle_is_vendor_neutral() -> None:
             SOC_AGENT / "contracts" / "authorization.py",
             SOC_AGENT / "core" / "governed_context.py",
             SOC_AGENT / "core" / "authorized_activity.py",
+            SOC_AGENT / "core" / "authorization_enrichment.py",
+            SOC_AGENT / "authorization" / "repositories.py",
             SOC_AGENT / "authorization" / "query.py",
             SOC_AGENT / "authorization" / "matcher.py",
         )
@@ -144,6 +147,7 @@ def test_alert_input_contract_is_strict() -> None:
 def test_core_exports_planned_public_services() -> None:
     assert SocAnalysisService.__name__ == "SocAnalysisService"
     assert SocAuthorizedActivityService.__name__ == "SocAuthorizedActivityService"
+    assert SocAuthorizationEnrichmentService.__name__ == "SocAuthorizationEnrichmentService"
     assert SocReviewService.__name__ == "SocReviewService"
     assert SocNormalizationService.__name__ == "SocNormalizationService"
     assert SocMemoryService.__name__ == "SocMemoryService"

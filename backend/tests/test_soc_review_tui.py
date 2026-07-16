@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from rich.console import Console
 
 from soc_agent.contracts import (
     ActorContext,
     AnalysisRun,
     AnalysisRunStatus,
+    AuthorizationEnrichmentRecord,
+    AuthorizationMatchResult,
+    AuthorizationMatchStatus,
+    AuthorizationQuery,
     EntrySurface,
     InvestigationContext,
     NormalizationMaintenanceIssue,
@@ -117,6 +123,58 @@ def test_soc_review_tui_render_includes_queue_and_context() -> None:
     assert "ALT-TEST" in text
     assert "Investigation Context" in text
     assert "RUN-TEST" in text
+
+
+def test_soc_review_tui_render_includes_authorization_enrichment() -> None:
+    item = ReviewQueueItem(
+        queue_id="REV-AUTH-TUI",
+        run_id="RUN-AUTH-TUI",
+        alert_id="ALT-AUTH-TUI",
+        reason="authorization context review",
+    )
+    run = AnalysisRun(
+        run_id=item.run_id,
+        alert_id=item.alert_id,
+        status=AnalysisRunStatus.NEEDS_REVIEW,
+    )
+    query = AuthorizationQuery(
+        query_id="AAQ-TUI",
+        alert_id=item.alert_id,
+        tenant_id="tenant-a",
+        environment="production",
+        event_time=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    enrichment = AuthorizationEnrichmentRecord(
+        enrichment_id="AAE-TUI-001",
+        run_id=run.run_id,
+        alert_id=run.alert_id,
+        queue_id=item.queue_id,
+        query=query,
+        query_hash="a" * 64,
+        match_result=AuthorizationMatchResult(
+            query_id=query.query_id,
+            alert_id=query.alert_id,
+            status=AuthorizationMatchStatus.NOT_FOUND,
+            event_time=query.event_time,
+        ),
+        matcher_policy_version="soc.authorization_match.v1",
+        idempotency_key="authorization:tui:1",
+    )
+    state = select_context(
+        set_items(initial_state(), [item]),
+        InvestigationContext(
+            queue_item=item,
+            run=run,
+            authorization_enrichments=[enrichment],
+        ),
+    )
+
+    console = Console(record=True, width=140)
+    console.print(render_main(state))
+    text = console.export_text()
+
+    assert "authorization" in text
+    assert "AAE-TUI-001:not_found/shadow" in text
 
 
 def test_soc_review_tui_render_includes_approval_inbox_and_grant() -> None:

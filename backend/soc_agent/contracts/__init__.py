@@ -16,6 +16,12 @@ from soc_agent.contracts.authorization import (
     AuthorizationSelectorMatch,
     AuthorizationSourceFreshness,
 )
+from soc_agent.contracts.common import (
+    ActorContext,
+    ActorType,
+    EntrySurface,
+    ServiceRequestContext,
+)
 from soc_agent.contracts.governed_context import (
     AuthorizedActivityBehaviorKind,
     AuthorizedActivityBehaviorSelector,
@@ -39,8 +45,6 @@ from soc_agent.contracts.governed_context import (
     GovernedContextSourceType,
 )
 from soc_agent.contracts.schemas import (
-    ActorContext,
-    ActorType,
     AlertClassification,
     AlertEntitySet,
     AlertEventRef,
@@ -56,6 +60,9 @@ from soc_agent.contracts.schemas import (
     AnalysisRun,
     AnalysisRunStatus,
     AuditAction,
+    AuthorizationEnrichmentApplyResult,
+    AuthorizationEnrichmentCommand,
+    AuthorizationEnrichmentRecord,
     BoundedAnalysisEvidence,
     CanonicalFieldProvenance,
     ConfidenceCalibrationBin,
@@ -81,7 +88,6 @@ from soc_agent.contracts.schemas import (
     EntityExtractionSource,
     EntityKind,
     EntityMention,
-    EntrySurface,
     EvidenceCoverageGap,
     EvidenceCoverageOmission,
     EvidenceCoverageReport,
@@ -146,7 +152,6 @@ from soc_agent.contracts.schemas import (
     RuntimeFailureKind,
     ScenarioHypothesis,
     ScenarioSignal,
-    ServiceRequestContext,
     SimilarAlertMatch,
     SimilarAlertQuery,
     SocAgentActionAdapterDescriptor,
@@ -266,6 +271,9 @@ __all__ = [
     "AnalysisRun",
     "AnalysisRunStatus",
     "AuditAction",
+    "AuthorizationEnrichmentApplyResult",
+    "AuthorizationEnrichmentCommand",
+    "AuthorizationEnrichmentRecord",
     "BoundedAnalysisEvidence",
     "CorrectionCommand",
     "CorrectionRecord",

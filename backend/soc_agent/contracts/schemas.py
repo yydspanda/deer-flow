@@ -9,6 +9,9 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from soc_agent.contracts.authorization import AuthorizationMatchResult, AuthorizationQuery
+from soc_agent.contracts.common import ActorContext, EntrySurface
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -110,22 +113,6 @@ class PipelineStepStatus(StrEnum):
     RETRYING = "retrying"
 
 
-class ActorType(StrEnum):
-    USER = "user"
-    SYSTEM = "system"
-    SERVICE = "service"
-
-
-class EntrySurface(StrEnum):
-    CLI = "cli"
-    API = "api"
-    CHANNEL = "channel"
-    DAEMON = "daemon"
-    TUI = "tui"
-    WEB = "web"
-    TEST = "test"
-
-
 class SocEventType(StrEnum):
     ANALYSIS_REQUESTED = "analysis.requested"
     ANALYSIS_COMPLETED = "analysis.completed"
@@ -143,6 +130,8 @@ class SocEventType(StrEnum):
     GOVERNED_CONTEXT_FACT_REVOKED = "governed_context.fact_revoked"
     GOVERNED_CONTEXT_FACT_EXPIRED = "governed_context.fact_expired"
     GOVERNED_CONTEXT_FACT_REVISED = "governed_context.fact_revised"
+    AUTHORIZATION_ENRICHMENT_RECORDED = "authorization.enrichment_recorded"
+    AUTHORIZATION_ENRICHMENT_REPLAYED = "authorization.enrichment_replayed"
 
 
 class AuditAction(StrEnum):
@@ -293,18 +282,62 @@ class SocFindingConclusion(BaseModel):
     rationale: list[str] = Field(default_factory=list)
 
 
-class ActorContext(BaseModel):
-    actor_id: str = "anonymous"
-    actor_type: ActorType = ActorType.USER
-    surface: EntrySurface = EntrySurface.CLI
-    roles: list[str] = Field(default_factory=list)
+class AuthorizationEnrichmentCommand(BaseModel):
+    """Append one deterministic authorization match to an existing investigation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.authorization_enrichment_command.v1"] = "soc.authorization_enrichment_command.v1"
+    run_id: str = Field(min_length=1, max_length=64)
+    queue_id: str | None = Field(default=None, min_length=1, max_length=64)
+    query: AuthorizationQuery
+    idempotency_key: str = Field(min_length=1, max_length=128)
+    replay_of_enrichment_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
-class ServiceRequestContext(BaseModel):
-    request_id: str = Field(default_factory=lambda: f"REQ-{uuid4().hex[:12].upper()}")
-    actor: ActorContext = Field(default_factory=ActorContext)
-    trace_id: str | None = None
-    idempotency_key: str | None = None
+class AuthorizationEnrichmentRecord(BaseModel):
+    """Immutable, replayable authorization match attached to one analysis run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.authorization_enrichment_record.v1"] = "soc.authorization_enrichment_record.v1"
+    enrichment_id: str = Field(default_factory=lambda: f"AAE-{uuid4().hex[:20].upper()}")
+    run_id: str = Field(min_length=1, max_length=64)
+    alert_id: str = Field(min_length=1, max_length=128)
+    queue_id: str | None = Field(default=None, min_length=1, max_length=64)
+    query: AuthorizationQuery
+    query_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    match_result: AuthorizationMatchResult
+    matcher_policy_version: str = Field(min_length=1, max_length=128)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+    replay_of_enrichment_id: str | None = Field(default=None, min_length=1, max_length=64)
+    created_by: ActorContext = Field(default_factory=ActorContext)
+    created_at: datetime = Field(default_factory=utc_now)
+    shadow_only: Literal[True] = True
+    decision_impact: Literal["none"] = "none"
+
+    @model_validator(mode="after")
+    def validate_lineage(self) -> AuthorizationEnrichmentRecord:
+        if self.query.alert_id != self.alert_id:
+            raise ValueError("authorization enrichment query alert_id must match record alert_id")
+        if self.match_result.alert_id != self.alert_id:
+            raise ValueError("authorization enrichment result alert_id must match record alert_id")
+        if self.match_result.query_id != self.query.query_id:
+            raise ValueError("authorization enrichment result query_id must match the stored query")
+        if self.matcher_policy_version != self.match_result.policy_version:
+            raise ValueError("authorization enrichment matcher policy must match the stored result")
+        return self
+
+
+class AuthorizationEnrichmentApplyResult(BaseModel):
+    """Service result for an initial or replayed authorization enrichment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.authorization_enrichment_apply_result.v1"] = "soc.authorization_enrichment_apply_result.v1"
+    record: AuthorizationEnrichmentRecord
+    idempotent: bool = False
+    event_written: bool = False
 
 
 class SocEvent(BaseModel):
@@ -434,6 +467,7 @@ class SocLeadAgentReviewContextArtifact(BaseModel):
     similar_alerts: list[dict[str, Any]] = Field(default_factory=list)
     action_evidence: list[dict[str, Any]] = Field(default_factory=list)
     external_dispositions: list[dict[str, Any]] = Field(default_factory=list)
+    authorization_enrichments: list[dict[str, Any]] = Field(default_factory=list)
     memory_candidates: list[dict[str, Any]] = Field(default_factory=list)
     relevant_memories: dict[str, Any] | None = None
     investigation_view: dict[str, Any] | None = None
@@ -2422,6 +2456,7 @@ class InvestigationTimelineItem(BaseModel):
         "correlation",
         "domain_finding",
         "read_only_evidence",
+        "authorization_enrichment",
         "external_disposition",
         "memory_candidate",
         "relevant_memory",
@@ -2461,6 +2496,7 @@ class UnifiedInvestigationView(BaseModel):
         default_factory=lambda: [
             "This view is read-only analyst context.",
             "Domain findings and relevant memories do not change the operational verdict.",
+            "Authorization enrichments are shadow matches and do not change detection truth or disposition.",
             "External feedback and memory updates must still pass service boundaries.",
         ]
     )
@@ -2477,6 +2513,7 @@ class InvestigationContext(BaseModel):
     audit_records: list[DecisionAuditRecord] = Field(default_factory=list)
     similar_alerts: list[SimilarAlertMatch] = Field(default_factory=list)
     action_evidence: list[InvestigationEvidence] = Field(default_factory=list)
+    authorization_enrichments: list[AuthorizationEnrichmentRecord] = Field(default_factory=list)
     external_dispositions: list[SocExternalDispositionRecord] = Field(default_factory=list)
     memory_candidates: list[SocMemoryCandidate] = Field(default_factory=list)
     relevant_memories: SocMemoryRetrievalResult | None = None

@@ -1,5 +1,9 @@
 """Core SOC Agent runtime and service exports."""
 
+from soc_agent.core.authorization_enrichment import (
+    AuthorizationEnrichmentIdempotencyConflictError,
+    SocAuthorizationEnrichmentService,
+)
 from soc_agent.core.authorized_activity import SocAuthorizedActivityService
 from soc_agent.core.correlation import SocCorrelationService
 from soc_agent.core.decision_policy import SocDecisionPolicy
@@ -30,6 +34,7 @@ from soc_agent.domain import SocDomainTriageService
 
 __all__ = [
     "DeterministicAnalysisRuntime",
+    "AuthorizationEnrichmentIdempotencyConflictError",
     "InMemoryInvestigationEvidenceRepository",
     "NoopEventSink",
     "SocAgentActionDispatcher",
@@ -39,6 +44,7 @@ __all__ = [
     "SocAgentChatService",
     "SocAnalysisService",
     "SocAuthorizedActivityService",
+    "SocAuthorizationEnrichmentService",
     "SocCorrelationService",
     "SocDaemonService",
     "SocDecisionPolicy",

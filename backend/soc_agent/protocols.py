@@ -12,6 +12,7 @@ from soc_agent.contracts import (
     AnalysisNodeOutput,
     AnalysisResult,
     AnalysisRun,
+    AuthorizationEnrichmentRecord,
     Decision,
     DecisionAuditRecord,
     GovernedContextFact,
@@ -169,6 +170,28 @@ class InvestigationEvidenceRepository(Protocol):
         thread_id: str | None = None,
         limit: int = 20,
     ) -> list[InvestigationEvidence]: ...
+
+
+class AuthorizationEnrichmentRepository(Protocol):
+    """Append-only persistence boundary for authorization match enrichments."""
+
+    def save_authorization_enrichment(self, record: AuthorizationEnrichmentRecord) -> None: ...
+
+    def get_authorization_enrichment(self, enrichment_id: str) -> AuthorizationEnrichmentRecord | None: ...
+
+    def find_authorization_enrichment_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> AuthorizationEnrichmentRecord | None: ...
+
+    def list_authorization_enrichments(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        queue_id: str | None = None,
+        limit: int = 50,
+    ) -> list[AuthorizationEnrichmentRecord]: ...
 
 
 class MemoryCandidateRepository(Protocol):

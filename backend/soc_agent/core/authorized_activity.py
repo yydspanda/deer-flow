@@ -88,9 +88,27 @@ class SocAuthorizedActivityService:
         environment: str | None = None,
         event_timezone: str | None = None,
     ) -> AuthorizationMatchResult:
+        query = self.build_query_from_payload(
+            payload,
+            tenant_id=tenant_id,
+            environment=environment,
+            event_timezone=event_timezone,
+        )
+        return self.match(query)
+
+    def build_query_from_payload(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        tenant_id: str | None = None,
+        environment: str | None = None,
+        event_timezone: str | None = None,
+    ) -> AuthorizationQuery:
+        """Normalize one source payload and return its canonical authorization query."""
+
         inspection = inspect_alert_normalization(payload)
         reconstruction = reconstruct_facts(inspection.alert)
-        return self.match_alert(
+        return self.build_query(
             inspection.alert,
             entities=inspection.entities,
             fact_reconstruction=reconstruction,

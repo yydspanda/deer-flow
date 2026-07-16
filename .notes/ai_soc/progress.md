@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 Runtime 工程闭环完成；Phase 2 correlation / domain triage 起步 |
-| 当前目标 | GF-01 + AA-01 已完成：typed fact 生命周期、canonical authorization query、历史版本选择和确定性 event-time matcher 已落地；下一步 EX-01 持久化并投影只读 authorization enrichment，仍不修改 detection truth |
+| 当前目标 | GF-01 + AA-01 + EX-01 已完成：typed fact 生命周期、确定性 event-time matcher、append-only authorization enrichment 与 InvestigationContext 多端投影已落地；下一步只设计 shadow disposition proposal |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `EX-01 Authorization Enrichment`：把 AA-01 match result 作为独立、版本化、可回放的只读 enrichment 写入 persistence/audit，并投影到 InvestigationContext/Web/TUI/Lead Agent；不生成 disposition。 |
+| 当前下一刀 | `DP-01 Shadow Disposition Proposal`：只消费持久化的 exact authorization enrichment，生成独立 `closed_benign_true_positive` proposal；不改 detection truth、不自动关单。 |
 
 ## 当前待办列表
 
@@ -67,7 +67,8 @@
 | 11.2 | Runtime production hardening | Done | 显式 `skill_context` trace、共享 bounded projection、analysis evidence grounding、prompt/output/schema hard bounds、LLM concurrency/RPM admission、typed sanitized failure、Kafka retry/dead-letter 语义、run/summary/review/audit 原子 bundle | 未落地证据强制复核；可重试失败不 commit offset/不制造工单噪声；不可重试失败进入 ReviewQueue/DLQ；SQL 故障回归证明四类主写入全部回滚 |
 | 11.3 | Governed confidence label set | Done for initial 5-sample baseline / 3 accepted, 2 excluded | 已完成 5 条 DeepSeek 同 scope 标签审阅：2 false positive、1 exploit-attempt true positive accepted；2 条决定性授权/内部业务上下文缺失样本保留业务真值但 excluded；validator 返回 `calibratable=true` | 标签集无 pending/重复 input hash/混合 model-prompt-pipeline scope；accepted 同时包含正负类；仅 3 条 accepted，仍只允许离线 smoke，不能生成生产阈值或自动放行 |
 | 11.4 | Governed context fact lifecycle | GF-01 Done | 已完成 typed `AuthorizedActivityPayload`、append-only fact versions、role-gated lifecycle、repository protocol、in-memory/SQLAlchemy persistence、`0013` migration、CLI 和 sample | Fact 与 evidence/memory/approval/detection truth 分离；revision fail closed 并重新审批 |
-| 11.5 | Authorized activity event-time matcher | AA-01 Done / EX-01 next | 已完成 `AuthorizationQuery/AuthorizationMatchResult`、canonical query builder、历史 lifecycle version selection、source freshness/recurrence/scope matcher、`soc context match`；真实 HIDS/EDR shadow replay 均为 exact | matcher 不识别 vendor aliases、不调用 LLM、不持久化、不改 verdict/ReviewQueue/disposition；naive event time 必须显式传 IANA timezone |
+| 11.5 | Authorized activity event-time matcher | AA-01 Done | 已完成 `AuthorizationQuery/AuthorizationMatchResult`、canonical query builder、历史 lifecycle version selection、source freshness/recurrence/scope matcher、`soc context match`；真实 HIDS/EDR shadow replay 均为 exact | matcher 不识别 vendor aliases、不调用 LLM、不持久化、不改 verdict/ReviewQueue/disposition；naive event time 必须显式传 IANA timezone |
+| 11.6 | Authorization enrichment persistence/projection | EX-01 Done | 已完成 strict command/record/result contracts、append-only in-memory/SQL repository、`0014` migration、幂等写入、replay lineage、CLI 和 InvestigationContext/Web/TUI/Lead Agent 投影 | enrichment 保存 query hash/policy/fact refs/actor；`shadow_only=true`、`decision_impact=none`；不修改 run decision/queue/memory/disposition |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Partial | normalization 运维页、Gateway bounded metrics 和 Kafka JSONL issue 摘要已完成；全局 Kafka/review/approval/runtime/算力 Prometheus exporter 和态势面板仍后置 | 当前 maintenance issue 可见；全系统运行态势不阻塞 SOC Agent Alpha |
@@ -179,6 +180,32 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-16 — EX-01 authorization enrichment persistence/projection implemented
+
+- 新增 strict contracts：
+  - `AuthorizationEnrichmentCommand`
+  - `AuthorizationEnrichmentRecord`
+  - `AuthorizationEnrichmentApplyResult`
+- 新增 `SocAuthorizationEnrichmentService`：
+  - 只关联已存在且 alert lineage 一致的 run/queue；
+  - 保存 canonical query、semantic query hash、typed result、matcher policy、fact-version refs、actor、
+    idempotency key 和 replay lineage；
+  - 同 key 同输入返回原记录，不同输入 fail-fast；replay append 新记录，不覆盖来源。
+- 新增 `AuthorizationEnrichmentRepository`、in-memory adapter、SQLAlchemy 实现、
+  `soc_authorization_enrichments` 和 migration `0014_authorization_enrichments`。
+- 新增 CLI：
+  - `soc context enrich RUN_ID`
+  - `soc context enrichment list|get|replay`
+- `SocReviewService` 已把 enrichment 投影到 InvestigationContext、UnifiedInvestigationView timeline/counts、
+  Review API/Web、TUI 和 Lead Agent bounded artifact。
+- 保持边界：`shadow_only=true`、`decision_impact=none`；不写 Runtime decision、ReviewQueue 状态、memory、
+  disposition，也不自动关单。
+- 验证：authorization/governed-context/TUI 定向 `41 passed`；相关 service/repository/API/Lead Agent/
+  architecture 回归 `167 passed`；完整 SOC 回归 `470 passed, 1 warning`；frontend `pnpm check` 通过。
+  warning 是既有 DeerFlow MCP cache 的 `asyncio.get_event_loop()` deprecation。全量 DeerFlow
+  `tests/` 在首个 blocking-IO router test 长时间无进展后中止，本切片未改该路径。
+- 下一步：`DP-01` 只消费持久化 exact enrichment，生成独立 shadow disposition proposal。
 
 ### 2026-07-16 — AA-01 deterministic authorized-activity matcher implemented
 

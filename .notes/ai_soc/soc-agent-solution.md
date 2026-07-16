@@ -273,6 +273,7 @@ Important behavior:
 | `SocExternalDispositionService` | External status/reason sync | Mapping, target resolution, idempotency |
 | `SocGovernedContextService` | Govern typed fact lifecycle and source/version history | GF-01 implemented: proposal, activation, validity, revocation, audit |
 | `SocAuthorizedActivityService` | Read-only authorized-activity matching over governed facts | AA-01 implemented: canonical query, historical version selection, scope/time/freshness explanation |
+| `SocAuthorizationEnrichmentService` | Persist/replay one authorization match as investigation context | EX-01 implemented: append-only, idempotent, read-only projection; no disposition |
 | `SocSecurityExerciseContextService` (planned) | Compose campaign, participant attribution and authorization | Red/blue/white-team identity is not authorization by itself |
 | `SocCorrelationService` | Similar alert lookup | Uses summaries/evidence, no LLM dependency |
 | `SocMainOrchestratorService` | Read-only demo orchestration for selected skills/evidence/domain results | No hidden side effects |
@@ -650,7 +651,7 @@ Rules:
 - External reason cannot become confirmed memory without review.
 - Mapping must be configurable per external system.
 
-### 7.4 Governed Context Facts / 受治理上下文事实（GF-01 + AA-01 Implemented）
+### 7.4 Governed Context Facts / 受治理上下文事实（GF-01 + AA-01 + EX-01 Implemented）
 
 Authorization is the first implementation, but it is not the only operational context that needs
 source, scope, time and revocation. Use a shared typed envelope instead of a universal untyped KV
@@ -678,7 +679,7 @@ Shared lifecycle belongs to `SocGovernedContextService`; typed domain services c
 deterministic matchers. PostgreSQL may use one common fact envelope table with typed JSONB payloads
 and indexed common columns, but Pydantic contracts and subtype validators remain mandatory.
 
-Current GF-01 + AA-01 implementation:
+Current GF-01 + AA-01 + EX-01 implementation:
 
 - Governed lifecycle contracts live in `soc_agent.contracts.governed_context`; the first instantiable
   subtype is vendor-neutral `AuthorizedActivityPayload`. Matching contracts live separately in
@@ -701,9 +702,16 @@ Current GF-01 + AA-01 implementation:
   `exact/partial/conflict/expired/not_found/unavailable` without an LLM.
 - CLI provides lifecycle commands plus read-only `soc context match`. HIDS `java -> chattr` and EDR
   RemoteRegistry sample replay both produce explainable exact matches in step-12 validation.
-- GF-01/AA-01 do not inject facts into `LLMAnalysisRequest`, change `SocDecisionPolicy`, update
-  ReviewQueue, propose a disposition, or close alerts. `EX-01` must first persist/project enrichment;
-  `DP-01` then owns shadow disposition reconciliation.
+- `SocAuthorizationEnrichmentService` attaches AA-01 results to existing runs through strict
+  `AuthorizationEnrichmentCommand/Record/ApplyResult` contracts. Migration
+  `0014_authorization_enrichments` stores append-only records with query hash, matcher policy, exact
+  fact-version refs, actor, idempotency key and replay lineage.
+- `SocReviewService.get_investigation_context()` projects enrichments into the shared API/Web/TUI read
+  model and the bounded Lead Agent artifact. Timeline/counts label them as `shadow_only` and
+  `decision_impact=none`.
+- GF-01/AA-01/EX-01 do not inject facts into `LLMAnalysisRequest`, change `SocDecisionPolicy`, update
+  ReviewQueue, propose a disposition, or close alerts. `DP-01` separately owns shadow disposition
+  reconciliation.
 
 #### 7.4.1 Authorized Activity Facts / 授权活动事实
 
@@ -765,7 +773,7 @@ Rollout slices are deliberately separate:
 | --- | --- | --- |
 | `GF-01` | Govern typed fact lifecycle and append-only versions | Match alerts |
 | `AA-01` | Build canonical query and return deterministic match explanation | Persist enrichment or propose disposition |
-| `EX-01` | Persist/version match enrichment and project it into investigation context/audit | Change detection truth |
+| `EX-01` | Implemented: persist/version match enrichment and project it into investigation context/audit | Change detection truth or generate disposition |
 | `DP-01` | Produce `closed_benign_true_positive` shadow proposal from eligible exact enrichment | Auto-close during shadow phase |
 | `EV-01` | Replay and measure precision, override, freshness, fan-out and sampled review | Enable policy without gates/rollback |
 
@@ -833,6 +841,7 @@ not require rewriting core contracts.
 | `ParticipantAttributionResult` | Deterministic participant identity resolution | Planned typed result |
 | `AuthorizationQuery` | Vendor-neutral event-time matching input | AA-01 implemented stable contract |
 | `AuthorizationMatchResult` | Explainable deterministic match result | AA-01 implemented; read-only/shadow, not a disposition |
+| `AuthorizationEnrichmentRecord` | Append-only query/result/policy/fact-ref snapshot attached to a run | EX-01 implemented; replayable, `decision_impact=none` |
 | `SocDomainTriageResult` | Domain-level triage result | Stable |
 | `SocDomainFinding` | Scenario-level finding | Stable taxonomy version required |
 | `SocAgentActionProposal` | Agent proposal | Stable |

@@ -9,9 +9,11 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from soc_agent.authorization import AuthorizationEnrichmentConflictError
 from soc_agent.contracts import (
     AlertSummary,
     AnalysisRun,
+    AuthorizationEnrichmentRecord,
     DecisionAuditRecord,
     GovernedContextFact,
     GovernedContextFactQuery,
@@ -37,6 +39,7 @@ from soc_agent.db.models import (
     SocAnalysisRunRow,
     SocApprovalGrantRow,
     SocApprovalRequestRow,
+    SocAuthorizationEnrichmentRow,
     SocDecisionAuditLogRow,
     SocExternalDispositionRow,
     SocGovernedContextFactRow,
@@ -272,6 +275,62 @@ class SqlAlchemyAlertRepository:
                 query = query.where(or_(*filters))
             result = session.execute(query.order_by(SocInvestigationEvidenceRow.created_at.desc()).limit(limit))
             return [InvestigationEvidence.model_validate(row.evidence_payload) for row in result.scalars()]
+
+    def save_authorization_enrichment(self, record: AuthorizationEnrichmentRecord) -> None:
+        payload = record.model_dump(mode="json")
+        with self._session_factory() as session:
+            if session.get(SocAuthorizationEnrichmentRow, record.enrichment_id) is not None:
+                raise AuthorizationEnrichmentConflictError(f"authorization enrichment {record.enrichment_id} already exists")
+            session.add(
+                SocAuthorizationEnrichmentRow(
+                    enrichment_id=record.enrichment_id,
+                    **_authorization_enrichment_row_values(record, payload),
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise AuthorizationEnrichmentConflictError("authorization enrichment identity already exists") from exc
+
+    def get_authorization_enrichment(
+        self,
+        enrichment_id: str,
+    ) -> AuthorizationEnrichmentRecord | None:
+        with self._session_factory() as session:
+            row = session.get(SocAuthorizationEnrichmentRow, enrichment_id)
+            return _authorization_enrichment_from_row(row) if row is not None else None
+
+    def find_authorization_enrichment_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> AuthorizationEnrichmentRecord | None:
+        with self._session_factory() as session:
+            result = session.execute(select(SocAuthorizationEnrichmentRow).where(SocAuthorizationEnrichmentRow.idempotency_key == idempotency_key).limit(1))
+            row = result.scalar_one_or_none()
+            return _authorization_enrichment_from_row(row) if row is not None else None
+
+    def list_authorization_enrichments(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        queue_id: str | None = None,
+        limit: int = 50,
+    ) -> list[AuthorizationEnrichmentRecord]:
+        target_filters = []
+        if run_id:
+            target_filters.append(SocAuthorizationEnrichmentRow.run_id == run_id)
+        if alert_id:
+            target_filters.append(SocAuthorizationEnrichmentRow.alert_id == alert_id)
+        if queue_id:
+            target_filters.append(SocAuthorizationEnrichmentRow.queue_id == queue_id)
+        with self._session_factory() as session:
+            query = select(SocAuthorizationEnrichmentRow)
+            if target_filters:
+                query = query.where(or_(*target_filters))
+            result = session.execute(query.order_by(SocAuthorizationEnrichmentRow.created_at.desc()).limit(limit))
+            return [_authorization_enrichment_from_row(row) for row in result.scalars()]
 
     def save_external_disposition(self, record: SocExternalDispositionRecord) -> None:
         payload = record.model_dump(mode="json")
@@ -820,6 +879,58 @@ def _evidence_row_values(evidence: InvestigationEvidence, payload: dict) -> dict
         "created_at": evidence.created_at,
         "evidence_payload": payload,
     }
+
+
+def _authorization_enrichment_row_values(
+    record: AuthorizationEnrichmentRecord,
+    payload: dict,
+) -> dict:
+    return {
+        "run_id": record.run_id,
+        "alert_id": record.alert_id,
+        "queue_id": record.queue_id,
+        "match_status": record.match_result.status.value,
+        "query_hash": record.query_hash,
+        "matcher_policy_version": record.matcher_policy_version,
+        "idempotency_key": record.idempotency_key,
+        "replay_of_enrichment_id": record.replay_of_enrichment_id,
+        "created_by_actor_id": record.created_by.actor_id,
+        "created_at": record.created_at,
+        "enrichment_payload": payload,
+    }
+
+
+def _authorization_enrichment_from_row(
+    row: SocAuthorizationEnrichmentRow,
+) -> AuthorizationEnrichmentRecord:
+    record = AuthorizationEnrichmentRecord.model_validate(row.enrichment_payload)
+    indexed_values = {
+        "enrichment_id": row.enrichment_id,
+        "run_id": row.run_id,
+        "alert_id": row.alert_id,
+        "queue_id": row.queue_id,
+        "match_status": row.match_status,
+        "query_hash": row.query_hash,
+        "matcher_policy_version": row.matcher_policy_version,
+        "idempotency_key": row.idempotency_key,
+        "replay_of_enrichment_id": row.replay_of_enrichment_id,
+        "created_by_actor_id": row.created_by_actor_id,
+    }
+    contract_values = {
+        "enrichment_id": record.enrichment_id,
+        "run_id": record.run_id,
+        "alert_id": record.alert_id,
+        "queue_id": record.queue_id,
+        "match_status": record.match_result.status.value,
+        "query_hash": record.query_hash,
+        "matcher_policy_version": record.matcher_policy_version,
+        "idempotency_key": record.idempotency_key,
+        "replay_of_enrichment_id": record.replay_of_enrichment_id,
+        "created_by_actor_id": record.created_by.actor_id,
+    }
+    if indexed_values != contract_values:
+        raise ValueError(f"authorization enrichment row {row.enrichment_id} does not match its typed payload")
+    return record
 
 
 def _external_disposition_row_values(record: SocExternalDispositionRecord, payload: dict) -> dict:

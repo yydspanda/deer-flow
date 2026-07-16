@@ -11,6 +11,7 @@ import {
   RefreshCwIcon,
   SearchCheckIcon,
   ShieldAlertIcon,
+  ShieldCheckIcon,
   WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
@@ -46,6 +47,7 @@ import type {
   SocAgentApprovalGrant,
   SocAgentApprovalRequest,
   SocAgentApprovedActionCommand,
+  SocAuthorizationEnrichmentRecord,
   SocExternalDispositionRecord,
   SocInvestigationEvidence,
   SocInvestigationTimelineItem,
@@ -160,6 +162,7 @@ function timelineKindLabel(kind: SocInvestigationTimelineItem["kind"]) {
     correlation: "关联",
     domain_finding: "领域发现",
     read_only_evidence: "只读证据",
+    authorization_enrichment: "授权上下文",
     external_disposition: "外部反馈",
     memory_candidate: "候选记忆",
     relevant_memory: "确认记忆",
@@ -459,6 +462,87 @@ function ActionEvidenceSection({
               </pre>
             </div>
           ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function AuthorizationEnrichmentSection({
+  records,
+}: {
+  records: SocAuthorizationEnrichmentRecord[];
+}) {
+  return (
+    <section className="rounded-md border">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+        <div className="flex items-center gap-2">
+          <ShieldCheckIcon className="text-muted-foreground size-4" />
+          <h3 className="text-sm font-semibold">授权活动匹配</h3>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge variant="secondary">{records.length}</Badge>
+          <Badge variant="outline">shadow only</Badge>
+        </div>
+      </div>
+      <div className="divide-y">
+        {records.length === 0 ? (
+          <div className="text-muted-foreground p-4 text-sm">
+            当前运行还没有持久化的授权活动匹配记录。
+          </div>
+        ) : (
+          records.map((record) => {
+            const result = record.match_result;
+            return (
+              <div key={record.enrichment_id} className="p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium">
+                      {record.enrichment_id}
+                    </div>
+                    <div className="text-muted-foreground mt-1 text-xs">
+                      {record.query.tenant_id ?? "tenant unknown"} /{" "}
+                      {record.query.environment ?? "environment unknown"} /{" "}
+                      {formatTime(record.created_at)}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Badge variant="outline">{result.status}</Badge>
+                    <Badge variant="secondary">
+                      facts {result.matched_fact_refs.length}
+                    </Badge>
+                    {record.replay_of_enrichment_id ? (
+                      <Badge variant="outline">replay</Badge>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="text-muted-foreground mt-3 grid gap-1 text-xs sm:grid-cols-2">
+                  <span>policy {record.matcher_policy_version}</span>
+                  <span>decision impact {record.decision_impact}</span>
+                  <span>
+                    matched {result.matched_dimensions.join(", ") || "-"}
+                  </span>
+                  <span>
+                    missing {result.missing_dimensions.join(", ") || "-"}
+                  </span>
+                </div>
+                {result.matched_fact_refs.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {result.matched_fact_refs.map((fact) => (
+                      <Badge key={fact.fact_version_id} variant="outline">
+                        {fact.fact_id} v{fact.version}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
+                {result.warnings.length > 0 ? (
+                  <p className="text-muted-foreground mt-3 text-xs">
+                    {result.warnings.slice(0, 3).join("; ")}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })
         )}
       </div>
     </section>
@@ -1261,6 +1345,10 @@ export function SocReviewQueueWorkbench() {
 
               <UnifiedInvestigationViewSection
                 view={context?.investigation_view}
+              />
+
+              <AuthorizationEnrichmentSection
+                records={context?.authorization_enrichments ?? []}
               />
 
               <ActionEvidenceSection

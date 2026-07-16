@@ -159,6 +159,11 @@ def render_context(context: InvestigationContext) -> RenderableType:
             "action_evidence",
             ", ".join(f"{item.action}:{item.status}" for item in context.action_evidence[:5]),
         )
+    if context.authorization_enrichments:
+        table.add_row(
+            "authorization",
+            ", ".join(f"{item.enrichment_id}:{item.match_result.status.value}/shadow" for item in context.authorization_enrichments[:5]),
+        )
     if context.external_dispositions:
         table.add_row(
             "external_feedback",
@@ -178,7 +183,13 @@ def render_context(context: InvestigationContext) -> RenderableType:
         view = context.investigation_view
         table.add_row(
             "unified_view",
-            (f"correlation={view.counts.get('correlation_matches', 0)} domain={view.counts.get('domain_findings', 0)} evidence={view.counts.get('action_evidence', 0)} memory={view.counts.get('relevant_memories', 0)}"),
+            (
+                f"correlation={view.counts.get('correlation_matches', 0)} "
+                f"domain={view.counts.get('domain_findings', 0)} "
+                f"evidence={view.counts.get('action_evidence', 0)} "
+                f"authorization={view.counts.get('authorization_enrichments', 0)} "
+                f"memory={view.counts.get('relevant_memories', 0)}"
+            ),
         )
         if view.evidence_timeline:
             table.add_row(

@@ -14,8 +14,9 @@
 
 当前 `GF-01` 已实现事实合同、追加式版本、生命周期、Repository、数据库迁移和 CLI；`AA-01`
 已实现 canonical `AuthorizationQuery`、确定性事件时间 matcher、`AuthorizationMatchResult` 和只读
-`soc context match`。匹配结果尚未持久化到调查上下文，也不会生成 disposition，因此 active fact
-**当前不会改变 Runtime、ReviewQueue 或自动关单**。
+`soc context match`；`EX-01` 已把结果保存为 append-only `AuthorizationEnrichmentRecord`，并投影到
+InvestigationContext、Web/TUI 和 Lead Agent bounded artifact。Enrichment 仍不生成 disposition，因此
+active fact **当前不会改变 Runtime、ReviewQueue 或自动关单**。
 
 ## Current Contract / 当前合同
 
@@ -76,6 +77,11 @@ CLI 会为本地命令装配对应角色，用于开发和运维入口；生产 
 - Repository 从 JSON 恢复后必须经过具体 Pydantic payload validation，并校验索引列与 typed payload 一致。
 - `soc context list --valid-at ...` 只做 business-validity 存储过滤，不等价于 authorization match；
   历史版本状态、source freshness 和 subject/target/behavior applicability 必须由 AA-01 matcher 裁决。
+- Enrichment table: `soc_authorization_enrichments`
+- Enrichment migration: `0014_authorization_enrichments`
+- `AuthorizationEnrichmentRepository` 只允许 append；记录保存 canonical query、semantic query hash、
+  match result、matcher policy、fact version/content hash refs、actor、idempotency key 和 replay lineage。
+- 同一 idempotency key 只能对应同一 run/queue/query/replay source；不同输入复用必须明确失败。
 
 ## Deterministic Match / 确定性匹配
 
@@ -120,6 +126,12 @@ soc context get GCF-... --history --pretty
 soc context match /path/to/alert.json \
   --tenant-id tenant-demo --environment production \
   --event-timezone Asia/Shanghai --pretty
+soc context enrich RUN-... \
+  --queue-id REV-... --tenant-id tenant-demo --environment production \
+  --event-timezone Asia/Shanghai --pretty
+soc context enrichment list --run-id RUN-... --pretty
+soc context enrichment get AAE-... --pretty
+soc context enrichment replay AAE-... --idempotency-key authorization-replay:AAE-...:1 --pretty
 ```
 
 其他生命周期命令：
@@ -133,9 +145,8 @@ soc context revise GCF-... revision.json --expected-version 2 --pretty
 
 ## Next / 下一步
 
-1. `EX-01 Authorization Enrichment`：持久化 match result 和 policy/fact refs，并只读投影到
-   InvestigationContext、Web/TUI/Lead Agent 与 replay audit。
-2. `DP-01 Disposition Proposal`：只有 `exact` 才生成 `closed_benign_true_positive` shadow proposal；
+1. `DP-01 Disposition Proposal`：只有 `exact` enrichment 才生成
+   `closed_benign_true_positive` shadow proposal；
    detection truth 不变，仍由人工关单。
-3. `EV-01 Evaluation Gate`：统计 shadow precision、override、freshness、fan-out 和随机抽样，未达 gate
+2. `EV-01 Evaluation Gate`：统计 shadow precision、override、freshness、fan-out 和随机抽样，未达 gate
    不允许 auto-close。

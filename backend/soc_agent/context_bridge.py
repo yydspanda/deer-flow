@@ -22,6 +22,7 @@ _MAX_EVIDENCE_ITEMS = 5
 _MAX_SIMILAR_ALERTS = 5
 _MAX_FACT_ITEMS = 10
 _MAX_ACTION_EVIDENCE_ITEMS = 5
+_MAX_AUTHORIZATION_ENRICHMENT_ITEMS = 5
 _MAX_EXTERNAL_DISPOSITION_ITEMS = 5
 _MAX_MEMORY_CANDIDATE_ITEMS = 5
 _MAX_RELEVANT_MEMORY_ITEMS = 5
@@ -33,6 +34,7 @@ _LEAD_AGENT_CONTEXT_INSTRUCTIONS = [
     "High-risk actions must be proposed as bounded action requests and routed through SOC approval.",
     "Before proposing a duplicate read-only lookup, inspect action_evidence and reuse fresh matching results.",
     "Treat external_dispositions as operator feedback; pending memory candidates are not confirmed reusable knowledge.",
+    "Treat authorization_enrichments as read-only shadow context; they never replace detection truth or authorize disposition by themselves.",
     "Treat memory_candidates as reviewable proposals only; do not use them as confirmed facts or active lessons.",
     "Treat relevant_memories as retrieval-policy-approved context only; they can inform analysis but never bypass evidence or approval.",
     "If evidence conflicts, explain the conflict and ask for review instead of forcing a conclusion.",
@@ -65,6 +67,7 @@ def build_lead_agent_review_context_artifact(
     summary_payload = _summary_payload(context.summary)
     similar_payload = [_similar_alert_payload(match) for match in context.similar_alerts[:_MAX_SIMILAR_ALERTS]]
     action_evidence_payload = [_action_evidence_payload(item) for item in context.action_evidence[:_MAX_ACTION_EVIDENCE_ITEMS]]
+    authorization_enrichment_payload = [_authorization_enrichment_payload(item) for item in context.authorization_enrichments[:_MAX_AUTHORIZATION_ENRICHMENT_ITEMS]]
     external_disposition_payload = [_external_disposition_payload(item) for item in context.external_dispositions[:_MAX_EXTERNAL_DISPOSITION_ITEMS]]
     memory_candidate_payload = [_memory_candidate_payload(item) for item in context.memory_candidates[:_MAX_MEMORY_CANDIDATE_ITEMS]]
     relevant_memory_payload = _relevant_memory_payload(context.relevant_memories)
@@ -79,6 +82,7 @@ def build_lead_agent_review_context_artifact(
         "summary": summary_payload,
         "similar_alerts": similar_payload,
         "action_evidence": action_evidence_payload,
+        "authorization_enrichments": authorization_enrichment_payload,
         "external_dispositions": external_disposition_payload,
         "memory_candidates": memory_candidate_payload,
         "relevant_memories": relevant_memory_payload,
@@ -99,6 +103,7 @@ def build_lead_agent_review_context_artifact(
         summary=summary_payload,
         similar_alerts=similar_payload,
         action_evidence=action_evidence_payload,
+        authorization_enrichments=authorization_enrichment_payload,
         external_dispositions=external_disposition_payload,
         memory_candidates=memory_candidate_payload,
         relevant_memories=relevant_memory_payload,
@@ -265,6 +270,34 @@ def _action_evidence_payload(evidence: InvestigationEvidence) -> dict[str, Any]:
     if evidence.actor is not None:
         payload["actor"] = evidence.actor.model_dump(mode="json", exclude_none=True)
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _authorization_enrichment_payload(record: Any) -> dict[str, Any]:
+    result = record.match_result
+    return {
+        "enrichment_id": record.enrichment_id,
+        "run_id": record.run_id,
+        "alert_id": record.alert_id,
+        "queue_id": record.queue_id,
+        "query_id": record.query.query_id,
+        "query_hash": record.query_hash,
+        "tenant_id": record.query.tenant_id,
+        "environment": record.query.environment,
+        "event_time": (record.query.event_time.isoformat() if record.query.event_time is not None else None),
+        "status": result.status.value,
+        "matcher_policy_version": record.matcher_policy_version,
+        "matched_fact_refs": [item.model_dump(mode="json", exclude_none=True) for item in result.matched_fact_refs[:10]],
+        "candidate_fact_refs": [item.model_dump(mode="json", exclude_none=True) for item in result.candidate_fact_refs[:10]],
+        "matched_dimensions": [item.value for item in result.matched_dimensions],
+        "missing_dimensions": [item.value for item in result.missing_dimensions],
+        "out_of_scope_dimensions": [item.value for item in result.out_of_scope_dimensions],
+        "evidence_refs": result.evidence_refs[:20],
+        "warnings": result.warnings[:10],
+        "replay_of_enrichment_id": record.replay_of_enrichment_id,
+        "created_at": record.created_at.isoformat(),
+        "shadow_only": True,
+        "decision_impact": "none",
+    }
 
 
 def _external_disposition_payload(record: Any) -> dict[str, Any]:

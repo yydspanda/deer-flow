@@ -365,7 +365,7 @@ def test_governed_context_repository_query_and_version_history(repository_factor
         service.get("GCF-MISSING")
 
 
-def test_soc_migration_head_creates_governed_context_table(tmp_path) -> None:
+def test_soc_migration_head_creates_governed_context_and_authorization_tables(tmp_path) -> None:
     database_path = tmp_path / "soc-migrations.db"
     database_url = f"sqlite:///{database_path}"
 
@@ -374,9 +374,10 @@ def test_soc_migration_head_creates_governed_context_table(tmp_path) -> None:
     engine = create_engine(database_url)
     try:
         assert "soc_governed_context_facts" in inspect(engine).get_table_names()
+        assert "soc_authorization_enrichments" in inspect(engine).get_table_names()
         with engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM soc_alembic_version")).scalar_one()
-        assert revision == "0013_governed_context_facts"
+        assert revision == "0014_authorization_enrichments"
     finally:
         engine.dispose()
 

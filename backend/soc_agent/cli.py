@@ -66,6 +66,7 @@ from soc_agent.core import (
     SocAgentCapabilityRouter,
     SocAgentChatService,
     SocAnalysisService,
+    SocAuthorizationEnrichmentService,
     SocAuthorizedActivityService,
     SocCorrelationService,
     SocDaemonService,
@@ -234,6 +235,15 @@ def main(argv: list[str] | None = None) -> int:
         return _context_fact_get(args)
     if args.command == "context" and args.context_command == "match":
         return _context_fact_match(args)
+    if args.command == "context" and args.context_command == "enrich":
+        return _context_authorization_enrich(args)
+    if args.command == "context" and args.context_command == "enrichment":
+        if args.context_enrichment_command == "list":
+            return _context_authorization_enrichment_list(args)
+        if args.context_enrichment_command == "get":
+            return _context_authorization_enrichment_get(args)
+        if args.context_enrichment_command == "replay":
+            return _context_authorization_enrichment_replay(args)
     if args.command == "context" and args.context_command in {"activate", "suspend", "revoke", "expire"}:
         return _context_fact_transition(args)
     if args.command == "db" and args.db_command == "init":
@@ -741,6 +751,56 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     context_match.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(context_match)
+    context_enrich = context_subparsers.add_parser(
+        "enrich",
+        help="Persist a read-only authorization match for one analysis run",
+    )
+    context_enrich.add_argument("run_id", help="Existing analysis run id")
+    context_enrich.add_argument("--queue-id", help="Optional linked review queue id")
+    context_enrich.add_argument("--tenant-id", help="Authenticated/integration tenant when absent from the alert")
+    context_enrich.add_argument("--environment", help="Deployment environment when absent from the alert")
+    context_enrich.add_argument(
+        "--event-timezone",
+        help="IANA timezone used only when the canonical alert event time is naive",
+    )
+    context_enrich.add_argument(
+        "--idempotency-key",
+        help="Stable retry key; defaults to one initial enrichment per run",
+    )
+    context_enrich.add_argument("--actor-id", default="soc-cli", help="Enrichment actor id")
+    context_enrich.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(context_enrich)
+    context_enrichment = context_subparsers.add_parser(
+        "enrichment",
+        help="Inspect and replay persisted authorization enrichments",
+    )
+    context_enrichment_subparsers = context_enrichment.add_subparsers(dest="context_enrichment_command")
+    context_enrichment_list = context_enrichment_subparsers.add_parser(
+        "list",
+        help="List persisted authorization enrichments",
+    )
+    context_enrichment_list.add_argument("--run-id", help="Filter by analysis run id")
+    context_enrichment_list.add_argument("--alert-id", help="Filter by alert id")
+    context_enrichment_list.add_argument("--queue-id", help="Filter by review queue id")
+    context_enrichment_list.add_argument("--limit", type=int, default=50)
+    context_enrichment_list.add_argument("--pretty", action="store_true")
+    _add_database_args(context_enrichment_list)
+    context_enrichment_get = context_enrichment_subparsers.add_parser(
+        "get",
+        help="Get one authorization enrichment",
+    )
+    context_enrichment_get.add_argument("enrichment_id")
+    context_enrichment_get.add_argument("--pretty", action="store_true")
+    _add_database_args(context_enrichment_get)
+    context_enrichment_replay = context_enrichment_subparsers.add_parser(
+        "replay",
+        help="Re-run a stored authorization query against current governed facts",
+    )
+    context_enrichment_replay.add_argument("enrichment_id")
+    context_enrichment_replay.add_argument("--idempotency-key", required=True)
+    context_enrichment_replay.add_argument("--actor-id", default="soc-cli")
+    context_enrichment_replay.add_argument("--pretty", action="store_true")
+    _add_database_args(context_enrichment_replay)
     for transition_name in ("activate", "suspend", "revoke", "expire"):
         transition = context_subparsers.add_parser(
             transition_name,
@@ -1147,6 +1207,7 @@ def _review_context(args: argparse.Namespace) -> int:
             audit_repository=repository,
             review_queue_repository=repository,
             evidence_repository=repository,
+            authorization_enrichment_repository=repository,
             external_disposition_repository=repository,
             memory_candidate_repository=repository,
             memory_record_repository=repository,
@@ -1239,6 +1300,19 @@ def _review_context_summary_payload(context: InvestigationContext) -> dict[str, 
         }
         for candidate in context.memory_candidates
     ]
+    authorization_enrichments = [
+        {
+            "enrichment_id": item.enrichment_id,
+            "status": item.match_result.status.value,
+            "query_hash": item.query_hash,
+            "matcher_policy_version": item.matcher_policy_version,
+            "matched_fact_version_ids": [fact.fact_version_id for fact in item.match_result.matched_fact_refs],
+            "replay_of_enrichment_id": item.replay_of_enrichment_id,
+            "shadow_only": item.shadow_only,
+            "decision_impact": item.decision_impact,
+        }
+        for item in context.authorization_enrichments
+    ]
     relevant_memories = []
     if context.relevant_memories is not None:
         relevant_memories = [
@@ -1267,6 +1341,7 @@ def _review_context_summary_payload(context: InvestigationContext) -> dict[str, 
         "primary_reason": view.primary_reason if view is not None else context.queue_item.reason,
         "counts": counts,
         "scenario_findings": findings,
+        "authorization_enrichments": authorization_enrichments,
         "memory_candidates": memory_candidates,
         "relevant_memories": relevant_memories,
         "next_commands": [
@@ -1594,6 +1669,126 @@ def _context_fact_match(args: argparse.Namespace) -> int:
     return 0
 
 
+def _context_authorization_enrich(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        idempotency_key = args.idempotency_key or f"authorization-enrichment:{args.run_id}:initial:v1"
+        result = _authorization_enrichment_service(repository).enrich_run(
+            args.run_id,
+            queue_id=args.queue_id,
+            tenant_id=args.tenant_id,
+            environment=args.environment,
+            event_timezone=args.event_timezone,
+            idempotency_key=idempotency_key,
+            context=_authorization_enrichment_cli_context(
+                args.actor_id,
+                idempotency_key=idempotency_key,
+            ),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: authorization enrichment database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _context_authorization_enrichment_list(args: argparse.Namespace) -> int:
+    try:
+        records = _authorization_enrichment_service(_repository_from_args(args)).list(
+            run_id=args.run_id,
+            alert_id=args.alert_id,
+            queue_id=args.queue_id,
+            limit=args.limit,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: authorization enrichment database access failed: {exc}", file=sys.stderr)
+        return 1
+    print(
+        json.dumps(
+            [item.model_dump(mode="json", exclude_none=True) for item in records],
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+        )
+    )
+    return 0
+
+
+def _context_authorization_enrichment_get(args: argparse.Namespace) -> int:
+    try:
+        record = _authorization_enrichment_service(_repository_from_args(args)).get(args.enrichment_id)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: authorization enrichment database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(record.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _context_authorization_enrichment_replay(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        result = _authorization_enrichment_service(repository).replay(
+            args.enrichment_id,
+            idempotency_key=args.idempotency_key,
+            context=_authorization_enrichment_cli_context(
+                args.actor_id,
+                idempotency_key=args.idempotency_key,
+            ),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: authorization enrichment database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _authorization_enrichment_service(
+    repository: SqlAlchemyAlertRepository,
+) -> SocAuthorizationEnrichmentService:
+    return SocAuthorizationEnrichmentService(
+        authorization_service=SocAuthorizedActivityService(repository=repository),
+        repository=repository,
+        alert_repository=repository,
+        review_queue_repository=repository,
+    )
+
+
+def _authorization_enrichment_cli_context(
+    actor_id: str,
+    *,
+    idempotency_key: str,
+) -> ServiceRequestContext:
+    return ServiceRequestContext(
+        actor=ActorContext(
+            actor_id=actor_id,
+            actor_type=ActorType.USER,
+            surface=EntrySurface.CLI,
+            roles=["soc_analyst"],
+        ),
+        idempotency_key=idempotency_key,
+    )
+
+
 def _context_fact_cli_context(actor_id: str, *, roles: list[str]) -> ServiceRequestContext:
     return ServiceRequestContext(
         actor=ActorContext(
@@ -1623,6 +1818,7 @@ def _review_tui(args: argparse.Namespace) -> int:
                 audit_repository=repository,
                 review_queue_repository=repository,
                 evidence_repository=repository,
+                authorization_enrichment_repository=repository,
                 external_disposition_repository=repository,
                 memory_candidate_repository=repository,
                 memory_record_repository=repository,
@@ -1654,6 +1850,7 @@ def _chat_tui(args: argparse.Namespace) -> int:
             audit_repository=repository,
             review_queue_repository=repository,
             evidence_repository=repository,
+            authorization_enrichment_repository=repository,
             external_disposition_repository=repository,
             memory_candidate_repository=repository,
             memory_record_repository=repository,
@@ -2148,6 +2345,7 @@ def _demo_alert(args: argparse.Namespace) -> int:
                 audit_repository=repository,
                 review_queue_repository=repository,
                 evidence_repository=repository,
+                authorization_enrichment_repository=repository,
                 external_disposition_repository=repository,
                 memory_candidate_repository=repository,
                 memory_record_repository=repository,

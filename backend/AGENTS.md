@@ -233,8 +233,15 @@ builder/matcher live in `soc_agent.authorization`, and the only public service i
 the lifecycle version effective at alert event time and checks tenant/environment, validity, source
 freshness, recurrence, and subject/target/behavior selector groups. Naive event times require an
 explicit IANA timezone. GF-01/AA-01 must not inject facts into Runtime prompts, change detection
-decisions, update ReviewQueue, propose a disposition, or close alerts. EX-01 enrichment persistence
-and DP-01 shadow disposition remain separate future slices.
+decisions, update ReviewQueue, propose a disposition, or close alerts.
+
+EX-01 contracts are `AuthorizationEnrichmentCommand/Record/ApplyResult`; orchestration is
+`SocAuthorizationEnrichmentService` and persistence is `AuthorizationEnrichmentRepository` backed by
+`soc_authorization_enrichments` / migration `0014_authorization_enrichments`. Writes are append-only,
+idempotent by semantic query identity, and replay creates a linked new record. `SocReviewService`
+projects these records into InvestigationContext, Web/TUI, timeline counts, and the bounded Lead Agent
+artifact. They must remain `shadow_only=true`, `decision_impact=none` and must not update decisions,
+ReviewQueue, memory, disposition, or close alerts. DP-01 remains a separate future slice.
 
 PingAn vendor aliases are translated into generic `RoleClaim` objects inside `soc_agent.normalizers`.
 `pipeline.fact_reconstructor` must remain vendor-neutral: it builds scenario hypotheses and

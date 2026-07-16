@@ -8,6 +8,7 @@ from soc_agent.db.models import (
     SocAnalysisRunRow,
     SocApprovalGrantRow,
     SocApprovalRequestRow,
+    SocAuthorizationEnrichmentRow,
     SocDecisionAuditLogRow,
     SocExternalDispositionRow,
     SocGovernedContextFactRow,
@@ -22,6 +23,7 @@ from soc_agent.db.repositories import SqlAlchemyAlertRepository
 
 __all__ = [
     "SocAnalysisRunRow",
+    "SocAuthorizationEnrichmentRow",
     "SocApprovalGrantRow",
     "SocApprovalRequestRow",
     "SocAlertSummaryRow",

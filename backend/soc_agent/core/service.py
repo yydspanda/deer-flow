@@ -87,6 +87,7 @@ from soc_agent.protocols import (
     AlertSummaryRepository,
     AnalysisPersistence,
     AnalysisRuntime,
+    AuthorizationEnrichmentRepository,
     DecisionAuditRepository,
     DecisionPolicy,
     InvestigationEvidenceRepository,
@@ -526,6 +527,7 @@ class SocReviewService:
         audit_repository: DecisionAuditRepository | None = None,
         review_queue_repository: ReviewQueueRepository | None = None,
         evidence_repository: InvestigationEvidenceRepository | None = None,
+        authorization_enrichment_repository: AuthorizationEnrichmentRepository | None = None,
         external_disposition_repository: SocExternalDispositionRepository | None = None,
         memory_candidate_repository: MemoryCandidateRepository | None = None,
         memory_record_repository: MemoryRecordRepository | None = None,
@@ -536,6 +538,7 @@ class SocReviewService:
         self._audit_repository = audit_repository
         self._review_queue_repository = review_queue_repository
         self._evidence_repository = evidence_repository
+        self._authorization_enrichment_repository = authorization_enrichment_repository
         self._external_disposition_repository = external_disposition_repository
         self._memory_candidate_repository = memory_candidate_repository
         self._memory_record_repository = memory_record_repository
@@ -730,6 +733,14 @@ class SocReviewService:
             if self._evidence_repository is not None
             else []
         )
+        authorization_enrichments = (
+            self._authorization_enrichment_repository.list_authorization_enrichments(
+                run_id=item.run_id,
+                limit=20,
+            )
+            if self._authorization_enrichment_repository is not None
+            else []
+        )
         external_dispositions = (
             self._external_disposition_repository.list_external_dispositions(
                 queue_id=item.queue_id,
@@ -763,6 +774,7 @@ class SocReviewService:
             audit_records=audit_records,
             similar_alerts=similar_alerts,
             action_evidence=action_evidence,
+            authorization_enrichments=authorization_enrichments,
             external_dispositions=external_dispositions,
             memory_candidates=memory_candidates,
             correlation_result=correlation_result,
@@ -2424,6 +2436,8 @@ def _unified_investigation_view_from_context(context: InvestigationContext) -> U
             "reusable_evidence": context.correlation_result.reusable_evidence_count if context.correlation_result is not None else 0,
             "domain_findings": sum(len(result.findings) for result in context.domain_triage_results),
             "action_evidence": len(context.action_evidence),
+            "authorization_enrichments": len(context.authorization_enrichments),
+            "exact_authorization_matches": sum(item.match_result.status.value == "exact" for item in context.authorization_enrichments),
             "external_dispositions": len(context.external_dispositions),
             "memory_candidates": len(context.memory_candidates),
             "relevant_memories": context.relevant_memories.returned_count if context.relevant_memories is not None else 0,
@@ -2561,6 +2575,34 @@ def _investigation_timeline_from_context(context: InvestigationContext) -> list[
                 payload={
                     "result_payload": evidence.result_payload,
                     "source_proposal_id": evidence.source_proposal_id,
+                },
+            )
+        )
+    for enrichment in context.authorization_enrichments:
+        result = enrichment.match_result
+        items.append(
+            InvestigationTimelineItem(
+                kind="authorization_enrichment",
+                title="Authorized-activity match",
+                summary=(f"{len(result.matched_fact_refs)} exact governed fact match(es)" if result.status.value == "exact" else "; ".join(result.warnings[:2]) or "No exact authorized-activity match"),
+                status=result.status.value,
+                source_id=enrichment.enrichment_id,
+                source_refs={
+                    "enrichment_id": enrichment.enrichment_id,
+                    "query_id": enrichment.query.query_id,
+                    "run_id": enrichment.run_id,
+                },
+                occurred_at=enrichment.created_at,
+                payload={
+                    "query_hash": enrichment.query_hash,
+                    "matcher_policy_version": enrichment.matcher_policy_version,
+                    "matched_fact_version_ids": [fact.fact_version_id for fact in result.matched_fact_refs],
+                    "matched_dimensions": [item.value for item in result.matched_dimensions],
+                    "missing_dimensions": [item.value for item in result.missing_dimensions],
+                    "out_of_scope_dimensions": [item.value for item in result.out_of_scope_dimensions],
+                    "replay_of_enrichment_id": enrichment.replay_of_enrichment_id,
+                    "shadow_only": enrichment.shadow_only,
+                    "decision_impact": enrichment.decision_impact,
                 },
             )
         )

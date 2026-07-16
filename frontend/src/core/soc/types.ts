@@ -467,6 +467,7 @@ export type SocInvestigationTimelineKind =
   | "correlation"
   | "domain_finding"
   | "read_only_evidence"
+  | "authorization_enrichment"
   | "external_disposition"
   | "memory_candidate"
   | "relevant_memory"
@@ -508,6 +509,72 @@ export interface SocUnifiedInvestigationView {
   metadata: Record<string, unknown>;
 }
 
+export interface SocAuthorizationFactRef {
+  fact_id: string;
+  fact_version_id: string;
+  version: number;
+  status: string;
+  content_hash: string;
+}
+
+export interface SocAuthorizationQuery {
+  schema_version: string;
+  query_id: string;
+  alert_id: string;
+  tenant_id?: string | null;
+  environment?: string | null;
+  event_time?: string | null;
+  unresolved_event_time?: string | null;
+  subjects: Record<string, unknown>[];
+  targets: Record<string, unknown>[];
+  behaviors: Record<string, unknown>[];
+  conflicts: Record<string, unknown>[];
+  warnings: string[];
+}
+
+export interface SocAuthorizationMatchResult {
+  schema_version: string;
+  query_id: string;
+  alert_id: string;
+  status:
+    | "exact"
+    | "partial"
+    | "conflict"
+    | "expired"
+    | "not_found"
+    | "unavailable";
+  event_time?: string | null;
+  policy_version: string;
+  matched_fact_refs: SocAuthorizationFactRef[];
+  candidate_fact_refs: SocAuthorizationFactRef[];
+  matched_dimensions: string[];
+  missing_dimensions: string[];
+  out_of_scope_dimensions: string[];
+  source_freshness: string[];
+  evidence_refs: string[];
+  fact_evaluations: Record<string, unknown>[];
+  warnings: string[];
+  shadow_only: true;
+}
+
+export interface SocAuthorizationEnrichmentRecord {
+  schema_version: string;
+  enrichment_id: string;
+  run_id: string;
+  alert_id: string;
+  queue_id?: string | null;
+  query: SocAuthorizationQuery;
+  query_hash: string;
+  match_result: SocAuthorizationMatchResult;
+  matcher_policy_version: string;
+  idempotency_key: string;
+  replay_of_enrichment_id?: string | null;
+  created_by: SocActorContext;
+  created_at: string;
+  shadow_only: true;
+  decision_impact: "none";
+}
+
 export interface SocMemoryCandidateReviewRequest {
   decision: SocMemoryCandidateReviewDecision;
   reason: string;
@@ -533,6 +600,7 @@ export interface SocInvestigationContext {
   audit_records: SocDecisionAuditRecord[];
   similar_alerts: SocSimilarAlertMatch[];
   action_evidence: SocInvestigationEvidence[];
+  authorization_enrichments: SocAuthorizationEnrichmentRecord[];
   external_dispositions: SocExternalDispositionRecord[];
   memory_candidates: SocMemoryCandidate[];
   relevant_memories?: SocMemoryRetrievalResult | null;

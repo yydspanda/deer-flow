@@ -415,7 +415,18 @@ Authorized activity / 授权活动事实约束：
   selector 值就忽略其他 required group。AA-01 结果必须带 fact version/content hash、policy version、
   selector evidence paths 和 `shadow_only=true`。
 - AA-01 只计算匹配，不持久化、不改 `AnalysisRun`/`Decision`/ReviewQueue、不提出 disposition。
-  `EX-01` 才能通过独立 persistence/audit contract 写 enrichment；`DP-01` 才能消费 exact enrichment 生成
+  EX-01 通过 `AuthorizationEnrichmentRepository` 和 `SocAuthorizationEnrichmentService` 写入独立
+  append-only `AuthorizationEnrichmentRecord`；记录必须保存 canonical query、排除 query id 的 semantic
+  hash、完整 typed result、matcher policy、fact-version refs、actor、唯一 idempotency key 和 replay lineage。
+- EX-01 只能关联已存在且 alert id 一致的 `AnalysisRun`；带 queue id 时必须校验 queue/run/alert lineage。
+  同一 idempotency key 的重试只允许返回语义相同的原记录，不同输入复用必须 fail-fast。Replay 新增记录，
+  不覆盖原记录，并通过 `replay_of_enrichment_id` 连接来源。
+- EX-01 通过 `InvestigationContext.authorization_enrichments`、统一调查 timeline/counts、Web/TUI 和 bounded
+  Lead Agent artifact 只读投影。它不得修改 `AnalysisRun`/`Decision`/ReviewQueue/memory/disposition，必须保留
+  `shadow_only=true`、`decision_impact=none`。
+- CLI 统一使用 `soc context enrich` 和 `soc context enrichment list|get|replay`；入口层不得复制 query/match
+  或 repository 逻辑。事件为 `authorization.enrichment_recorded|replayed`。
+- `DP-01` 才能消费 exact enrichment 生成
   `closed_benign_true_positive` shadow proposal；`EV-01` 管理 auto-close 前的评测和 rollback gate。
 
 Security exercise / 护网与红蓝对抗事实约束：

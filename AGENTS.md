@@ -166,8 +166,11 @@ Current SOC direction:
   `SocGovernedContextService` / `GovernedContextFactRepository` and migration
   `0013_governed_context_facts`. AA-01 uses `SocAuthorizedActivityService` plus vendor-neutral
   `AuthorizationQuery` / deterministic event-time matching; `soc context match` is read-only and
-  must not affect Runtime, ReviewQueue, disposition, or close alerts. EX-01 enrichment persistence
-  and DP-01 shadow disposition remain separate future boundaries.
+  must not affect Runtime, ReviewQueue, disposition, or close alerts. EX-01 persists append-only
+  `AuthorizationEnrichmentRecord` rows through migration `0014_authorization_enrichments` and
+  projects them into InvestigationContext/Web/TUI/Lead Agent. `soc context enrich` and
+  `soc context enrichment list|get|replay` use `SocAuthorizationEnrichmentService`; records remain
+  `shadow_only` with no decision impact. DP-01 shadow disposition remains a separate future boundary.
 - PingAn `zeusRawLogs[].message` values are parsed only inside the PingAn normalizer. Deterministically
   parsed message fields are high-trust primary facts; Zeus structured fields are reduced-trust
   fallback candidates. Preserve the complete original payload for replay/audit and expose only

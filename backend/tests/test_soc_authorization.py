@@ -10,13 +10,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from soc_agent.cli import main
+from soc_agent.context_bridge import build_lead_agent_review_context_artifact
 from soc_agent.contracts import (
     ActorContext,
     ActorType,
     AlertEntitySet,
     AlertEventRef,
     AlertInput,
+    AnalysisRun,
+    AnalysisRunStatus,
     AuthorizationDimension,
+    AuthorizationEnrichmentCommand,
     AuthorizationMatchStatus,
     AuthorizationQuery,
     AuthorizationQueryBehavior,
@@ -40,9 +44,17 @@ from soc_agent.contracts import (
     GovernedContextSourceType,
     HostEntityRef,
     ProcessEntityRef,
+    ReviewQueueItem,
+    ReviewQueueStatus,
     ServiceRequestContext,
 )
-from soc_agent.core import SocAuthorizedActivityService, SocGovernedContextService
+from soc_agent.core import (
+    AuthorizationEnrichmentIdempotencyConflictError,
+    SocAuthorizationEnrichmentService,
+    SocAuthorizedActivityService,
+    SocGovernedContextService,
+    SocReviewService,
+)
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 from soc_agent.governed_context import InMemoryGovernedContextFactRepository
 
@@ -595,3 +607,195 @@ def test_context_match_cli_is_read_only_shadow_output(tmp_path, capsys) -> None:
     assert result["status"] == "exact"
     assert result["shadow_only"] is True
     assert result["matched_fact_refs"]
+
+
+def test_authorization_enrichment_is_append_only_idempotent_and_replayable() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    create_soc_tables(engine)
+    repository = SqlAlchemyAlertRepository(sessionmaker(bind=engine, expire_on_commit=False))
+    run = AnalysisRun(
+        run_id="RUN-AUTH-ENRICH-1",
+        alert_id="ALT-AUTH-1",
+        status=AnalysisRunStatus.NEEDS_REVIEW,
+    )
+    queue_item = ReviewQueueItem(
+        queue_id="REV-AUTH-ENRICH-1",
+        run_id=run.run_id,
+        alert_id=run.alert_id,
+        status=ReviewQueueStatus.OPEN,
+        reason="authorization enrichment test",
+    )
+    repository.save_run(run)
+    repository.save_review_item(queue_item)
+    _activate(repository, _payload())
+    service = SocAuthorizationEnrichmentService(
+        authorization_service=SocAuthorizedActivityService(repository=repository),
+        repository=repository,
+        alert_repository=repository,
+        review_queue_repository=repository,
+    )
+    command = AuthorizationEnrichmentCommand(
+        run_id=run.run_id,
+        queue_id=queue_item.queue_id,
+        query=_query(event_time=BASE_TIME + timedelta(days=2)),
+        idempotency_key="authorization:enrichment:test:1",
+    )
+
+    initial = service.enrich(command, context=_context("soc_analyst"))
+    duplicate = service.enrich(command, context=_context("soc_analyst"))
+    replay = service.replay(
+        initial.record.enrichment_id,
+        idempotency_key="authorization:enrichment:test:replay:1",
+        context=_context("soc_analyst"),
+    )
+
+    assert initial.idempotent is False
+    assert initial.record.match_result.status is AuthorizationMatchStatus.EXACT
+    assert initial.record.shadow_only is True
+    assert initial.record.decision_impact == "none"
+    assert duplicate.idempotent is True
+    assert duplicate.record == initial.record
+    assert replay.record.enrichment_id != initial.record.enrichment_id
+    assert replay.record.replay_of_enrichment_id == initial.record.enrichment_id
+    assert replay.record.query_hash == initial.record.query_hash
+    assert replay.record.query.query_id != initial.record.query.query_id
+    assert [item.enrichment_id for item in service.list(run_id=run.run_id)] == [
+        replay.record.enrichment_id,
+        initial.record.enrichment_id,
+    ]
+    assert repository.get_run(run.run_id) == run
+    assert repository.get_review_item(queue_item.queue_id) == queue_item
+
+    context = SocReviewService(
+        repository=repository,
+        review_queue_repository=repository,
+        authorization_enrichment_repository=repository,
+    ).get_investigation_context(queue_item.queue_id)
+    assert context.authorization_enrichments == [replay.record, initial.record]
+    assert context.investigation_view is not None
+    assert context.investigation_view.counts["authorization_enrichments"] == 2
+    assert context.investigation_view.counts["exact_authorization_matches"] == 2
+    assert any(item.kind == "authorization_enrichment" for item in context.investigation_view.evidence_timeline)
+    artifact = build_lead_agent_review_context_artifact(context)
+    assert artifact.authorization_enrichments[0]["status"] == "exact"
+    assert artifact.authorization_enrichments[0]["decision_impact"] == "none"
+    engine.dispose()
+
+
+def test_authorization_enrichment_rejects_idempotency_key_reuse_for_new_query() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    create_soc_tables(engine)
+    repository = SqlAlchemyAlertRepository(sessionmaker(bind=engine, expire_on_commit=False))
+    run = AnalysisRun(
+        run_id="RUN-AUTH-ENRICH-CONFLICT",
+        alert_id="ALT-AUTH-1",
+        status=AnalysisRunStatus.NEEDS_REVIEW,
+    )
+    repository.save_run(run)
+    service = SocAuthorizationEnrichmentService(
+        authorization_service=SocAuthorizedActivityService(repository=repository),
+        repository=repository,
+        alert_repository=repository,
+    )
+    initial = AuthorizationEnrichmentCommand(
+        run_id=run.run_id,
+        query=_query(event_time=BASE_TIME + timedelta(days=2)),
+        idempotency_key="authorization:enrichment:conflict",
+    )
+    service.enrich(initial)
+
+    with pytest.raises(
+        AuthorizationEnrichmentIdempotencyConflictError,
+        match="different input",
+    ):
+        service.enrich(
+            initial.model_copy(
+                update={
+                    "query": _query(
+                        event_time=BASE_TIME + timedelta(days=2),
+                        behavior_value="different-behavior",
+                    )
+                }
+            )
+        )
+    engine.dispose()
+
+
+def test_context_enrich_cli_persists_run_enrichment(tmp_path, capsys) -> None:
+    database_url = f"sqlite:///{tmp_path / 'soc-authorization-enrichment.db'}"
+    engine = create_engine(database_url)
+    create_soc_tables(engine)
+    repository = SqlAlchemyAlertRepository(sessionmaker(bind=engine, expire_on_commit=False))
+    now = datetime.now(UTC)
+    alert = AlertInput(
+        tenant_id=TENANT,
+        alert_id="ALT-AUTH-CLI-ENRICH",
+        event=AlertEventRef(event_time=now + timedelta(minutes=1)),
+        entities=AlertEntitySet(
+            host=HostEntityRef(asset_id="asset-1"),
+            process=ProcessEntityRef(
+                process_name="chattr",
+                parent_process_name="java",
+            ),
+        ),
+    )
+    repository.save_run(
+        AnalysisRun(
+            run_id="RUN-AUTH-CLI-ENRICH",
+            alert_id=alert.alert_id,
+            status=AnalysisRunStatus.NEEDS_REVIEW,
+            input_payload=alert.model_dump(mode="json"),
+        )
+    )
+    _activate(
+        repository,
+        _payload(),
+        lifecycle_time=now,
+        valid_from=now - timedelta(minutes=1),
+        valid_until=now + timedelta(days=1),
+        source=GovernedContextSource(
+            source_type=GovernedContextSourceType.ANALYST_CONFIRMATION,
+            source_ref="ticket:CLI-ENRICH-1",
+            observed_at=now - timedelta(minutes=1),
+        ),
+    )
+
+    try:
+        assert (
+            main(
+                [
+                    "context",
+                    "enrich",
+                    "RUN-AUTH-CLI-ENRICH",
+                    "--environment",
+                    ENVIRONMENT,
+                    "--database-url",
+                    database_url,
+                ]
+            )
+            == 0
+        )
+        result = json.loads(capsys.readouterr().out)
+        assert result["record"]["match_result"]["status"] == "exact"
+        assert result["record"]["decision_impact"] == "none"
+
+        assert (
+            main(
+                [
+                    "context",
+                    "enrichment",
+                    "list",
+                    "--run-id",
+                    "RUN-AUTH-CLI-ENRICH",
+                    "--database-url",
+                    database_url,
+                ]
+            )
+            == 0
+        )
+        listed = json.loads(capsys.readouterr().out)
+    finally:
+        engine.dispose()
+
+    assert len(listed) == 1
+    assert listed[0]["run_id"] == "RUN-AUTH-CLI-ENRICH"
