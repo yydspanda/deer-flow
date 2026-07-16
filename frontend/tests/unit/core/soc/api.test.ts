@@ -16,8 +16,10 @@ import {
   dryRunSocApprovedAction,
   executeSocApprovedAction,
   getSocApprovalRequest,
+  getSocDispositionSampleReviewInbox,
   getSocReviewContext,
   listSocApprovalRequests,
+  listSocDispositionSampleCampaigns,
   listSocReviewItems,
   recordSocDispositionOutcome,
 } from "@/core/soc/api";
@@ -193,6 +195,42 @@ describe("SOC review API", () => {
     const init = firstFetchInit();
     const headers = init.headers as Headers;
     expect(headers.get("idempotency-key")).toBe("outcome:web:1");
+  });
+
+  test("loads disposition sample campaigns and authenticated reviewer inbox", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(jsonResponse(200, { items: [], has_more: false }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          manifest: { sample_id: "DSAMPLE-1" },
+          reviewer_actor_id: "qa-reviewer-1",
+          items: [],
+        }),
+      );
+
+    await listSocDispositionSampleCampaigns({
+      limit: 25,
+      context: { actorId: "qa-reviewer-1", surface: "web" },
+    });
+    await getSocDispositionSampleReviewInbox("DSAMPLE/1", {
+      offset: 20,
+      limit: 10,
+      context: { actorId: "qa-reviewer-1", surface: "web" },
+    });
+
+    expect(mockedFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/soc/review/disposition-samples?limit=25",
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+    expect(mockedFetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/soc/review/disposition-samples/DSAMPLE%2F1/inbox?offset=20&limit=10",
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+    const secondHeaders = mockedFetch.mock.calls[1]?.[1]?.headers as Headers;
+    expect(secondHeaders.get("x-soc-actor-id")).toBe("qa-reviewer-1");
+    expect(secondHeaders.get("idempotency-key")).toBeNull();
   });
 
   test("surfaces backend detail", async () => {

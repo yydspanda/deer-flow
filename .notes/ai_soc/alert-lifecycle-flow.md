@@ -48,6 +48,8 @@ flowchart TD
     Z5 --> Z6["🗃️ Append-only Outcome<br/>primary / sampled QA"]
     Z4 --> Z7["⚙️ Hash-ranked Sample<br/>可复现抽样"]
     Z7 --> Z8["🗃️ Sample Manifest"]
+    Z8 --> Z13["🧑‍💻 EV-03 Sample Review Inbox<br/>manifest-selected QA work"]
+    Z13 --> Z5
     Z6 --> Z9["⚙️ EV-01 Gate<br/>precision + override + freshness + fan-out"]
     Z8 --> Z9
     Z9 --> Z10["🚫 Hold or rollout review only<br/>auto-close remains disabled"]
@@ -102,7 +104,9 @@ flowchart TD
     再计算 precision、override、sample agreement、freshness 和 fact fan-out。
 13. EV-02 已把 authenticated API/Web、Review TUI 和受门控的 trusted external feedback 接到同一
     evaluation service；各入口仍必须提供显式结构化标签和幂等身份。
-14. Gate 通过只表示可进入治理 rollout review；当前仍固定 `auto_close_allowed=false`。
+14. EV-03 从 immutable manifest、proposal、ReviewQueue 和 latest outcomes 派生 reviewer-specific inbox；
+    Web 只能打开 manifest-selected work，并回到 EV-02 写入口，不保存第二套 campaign 状态。
+15. Gate 通过只表示可进入治理 rollout review；当前仍固定 `auto_close_allowed=false`。
 
 Current governed-context boundary / 当前边界：GF-01 已能通过 `SocGovernedContextService` 和
 `soc_governed_context_facts` 保存、审批、暂停、撤销、过期及回放 typed fact versions；AA-01 已能从
@@ -111,7 +115,8 @@ canonical alert 构造 `AuthorizationQuery`，按事件时间选择历史 fact v
 `AuthorizationEnrichmentRecord`；DP-01 已从 persisted exact enrichment + current true-positive
 detection truth 生成 append-only `SocDispositionProposalRecord`；EV-01 已保存 hash-ranked sample manifest、
 append-only `SocDispositionOutcomeRecord` 并生成只读 gate report；EV-02 已提供 Web/TUI/API/trusted external
-显式写入口，outcome 同样投影到统一调查上下文。
+显式写入口；EV-03 已提供只读、分页、带 independent reviewer readiness 的 sample campaign/inbox，
+outcome 同样投影到统一调查上下文。
 `security_tag.lookup` 仍只是 `InvestigationEvidence`；护网 campaign/participant attribution 尚未实现。
 该 proposal 只建议 `closed_benign_true_positive`，固定 shadow/not-applied，仍以人工 ReviewQueue 为准。
 
@@ -134,6 +139,8 @@ flowchart LR
     D --> H["🧑‍💻 Human Review<br/>人工决定是否关单"]
     H --> O["🗃️ Explicit Outcome<br/>confirmed / overridden / inconclusive"]
     D --> S["🗃️ Reproducible Sample Manifest"]
+    S --> V["🧑‍💻 EV-03 Sample Inbox<br/>selected proposals only"]
+    V --> H
     O --> E["⚙️ EV-01 Evaluation Gate"]
     S --> E
     E --> K["🚫 Hold shadow or rollout review<br/>never auto-close"]

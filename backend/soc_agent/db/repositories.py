@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -542,6 +542,52 @@ class SqlAlchemyAlertRepository:
                 ).limit(limit)
             ).scalars()
             return [_disposition_outcome_from_row(row) for row in rows]
+
+    def list_latest_disposition_outcomes_for_proposals(
+        self,
+        *,
+        proposal_ids: Sequence[str],
+        review_kind: SocDispositionOutcomeReviewKind,
+        sample_id: str | None = None,
+    ) -> list[SocDispositionOutcomeRecord]:
+        ordered_ids = list(dict.fromkeys(proposal_ids))
+        if not ordered_ids:
+            return []
+
+        latest: dict[str, SocDispositionOutcomeRecord] = {}
+        with self._session_factory() as session:
+            for offset in range(0, len(ordered_ids), 500):
+                chunk = ordered_ids[offset : offset + 500]
+                rank = func.row_number().over(
+                    partition_by=SocDispositionOutcomeRow.proposal_id,
+                    order_by=(
+                        SocDispositionOutcomeRow.observed_at.desc(),
+                        SocDispositionOutcomeRow.created_at.desc(),
+                        SocDispositionOutcomeRow.outcome_id.desc(),
+                    ),
+                )
+                ranked = select(
+                    SocDispositionOutcomeRow.outcome_id.label("outcome_id"),
+                    SocDispositionOutcomeRow.proposal_id.label("proposal_id"),
+                    rank.label("outcome_rank"),
+                ).where(
+                    SocDispositionOutcomeRow.proposal_id.in_(chunk),
+                    SocDispositionOutcomeRow.review_kind == review_kind.value,
+                )
+                if sample_id is not None:
+                    ranked = ranked.where(SocDispositionOutcomeRow.sample_id == sample_id)
+                ranked_subquery = ranked.subquery()
+                rows = session.execute(
+                    select(SocDispositionOutcomeRow)
+                    .join(
+                        ranked_subquery,
+                        SocDispositionOutcomeRow.outcome_id == ranked_subquery.c.outcome_id,
+                    )
+                    .where(ranked_subquery.c.outcome_rank == 1)
+                ).scalars()
+                for row in rows:
+                    latest[row.proposal_id] = _disposition_outcome_from_row(row)
+        return [latest[proposal_id] for proposal_id in ordered_ids if proposal_id in latest]
 
     def save_external_disposition(self, record: SocExternalDispositionRecord) -> None:
         payload = record.model_dump(mode="json")

@@ -261,6 +261,13 @@ class SocDispositionOutcomeStatus(StrEnum):
     INCONCLUSIVE = "inconclusive"
 
 
+class SocDispositionSampleReviewReadiness(StrEnum):
+    READY = "ready"
+    WAITING_FOR_QUEUE_CLOSE = "waiting_for_queue_close"
+    COMPLETED = "completed"
+    UNAVAILABLE = "unavailable"
+
+
 class SocDispositionEvaluationGateStatus(StrEnum):
     INSUFFICIENT_DATA = "insufficient_data"
     FAILED = "failed"
@@ -606,6 +613,70 @@ class SocDispositionOutcomeRecord(BaseModel):
     shadow_only: Literal[True] = True
     decision_impact: Literal["none"] = "none"
     review_queue_impact: Literal["none"] = "none"
+
+
+class SocDispositionSampleManifestListResponse(BaseModel):
+    """Bounded immutable campaign list for the EV-03 review inbox."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_sample_manifest_list.v1"] = "soc.disposition_sample_manifest_list.v1"
+    items: list[SocDispositionSampleManifest]
+    limit: int = Field(ge=1, le=500)
+    has_more: bool = False
+
+
+class SocDispositionSampleReviewItem(BaseModel):
+    """One manifest-selected proposal projected for an identified reviewer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_sample_review_item.v1"] = "soc.disposition_sample_review_item.v1"
+    sample_id: str = Field(min_length=1, max_length=64)
+    selection_rank: int = Field(ge=1)
+    proposal_id: str = Field(min_length=1, max_length=64)
+    proposal: SocDispositionProposalRecord | None = None
+    queue_item: ReviewQueueItem | None = None
+    primary_outcome: SocDispositionOutcomeRecord | None = None
+    sampled_outcome: SocDispositionOutcomeRecord | None = None
+    sampled_outcome_independent: bool | None = None
+    reviewer_independent: bool | None = None
+    readiness: SocDispositionSampleReviewReadiness
+    can_record_outcome: bool = False
+    blocking_reasons: list[str] = Field(default_factory=list, max_length=20)
+    auto_close_allowed: Literal[False] = False
+    decision_impact: Literal["none"] = "none"
+
+
+class SocDispositionSampleReviewInbox(BaseModel):
+    """Derived campaign progress and one bounded page of review work."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.disposition_sample_review_inbox.v1"] = "soc.disposition_sample_review_inbox.v1"
+    manifest: SocDispositionSampleManifest
+    reviewer_actor_id: str = Field(min_length=1, max_length=128)
+    total_count: int = Field(ge=1)
+    completed_count: int = Field(ge=0)
+    remaining_count: int = Field(ge=0)
+    reviewer_conflict_count: int = Field(ge=0)
+    completion_rate: float = Field(ge=0.0, le=1.0)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1, le=200)
+    has_more: bool = False
+    items: list[SocDispositionSampleReviewItem]
+    auto_close_allowed: Literal[False] = False
+    decision_impact: Literal["none"] = "none"
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> SocDispositionSampleReviewInbox:
+        if self.completed_count + self.remaining_count != self.total_count:
+            raise ValueError("sample review completed and remaining counts must equal total_count")
+        if self.manifest.sample_size != self.total_count:
+            raise ValueError("sample review total_count must equal manifest sample_size")
+        if self.offset + len(self.items) > self.total_count:
+            raise ValueError("sample review page exceeds manifest bounds")
+        return self
 
 
 class SocDispositionOutcomeApplyResult(BaseModel):

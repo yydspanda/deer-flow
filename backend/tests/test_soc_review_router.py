@@ -433,6 +433,56 @@ def test_soc_review_api_requires_idempotency_header_for_disposition_outcome() ->
     assert exc_info.value.status_code == 400
 
 
+def test_soc_review_api_exposes_sample_campaign_and_authenticated_reviewer_inbox() -> None:
+    class RecordingDispositionEvaluationService:
+        reviewer_actor_id = None
+        offset = None
+        limit = None
+
+        def list_sample_review_campaigns(self, *, limit):
+            self.limit = limit
+            return {"items": ["DSAMPLE-API-1"], "limit": limit}
+
+        def get_sample_review_inbox(
+            self,
+            sample_id,
+            *,
+            reviewer_actor_id,
+            offset,
+            limit,
+        ):
+            self.reviewer_actor_id = reviewer_actor_id
+            self.offset = offset
+            self.limit = limit
+            return {"sample_id": sample_id, "reviewer_actor_id": reviewer_actor_id}
+
+    service = RecordingDispositionEvaluationService()
+
+    campaigns = soc_review.list_disposition_sample_campaigns(service=service, limit=25)
+    inbox = soc_review.get_disposition_sample_review_inbox(
+        "DSAMPLE-API-1",
+        FakeRequest(
+            {
+                "x-soc-actor-id": "spoofed-reviewer",
+                "x-soc-surface": "web",
+            },
+            user_id="auth-qa-reviewer",
+        ),
+        service=service,
+        offset=10,
+        limit=20,
+    )
+
+    assert campaigns == {"items": ["DSAMPLE-API-1"], "limit": 25}
+    assert inbox == {
+        "sample_id": "DSAMPLE-API-1",
+        "reviewer_actor_id": "auth-qa-reviewer",
+    }
+    assert service.reviewer_actor_id == "auth-qa-reviewer"
+    assert service.offset == 10
+    assert service.limit == 20
+
+
 def test_soc_review_api_missing_item_returns_404(review_api) -> None:
     service, _, _ = review_api
 
@@ -450,6 +500,8 @@ def test_soc_review_router_exposes_mvp_paths() -> None:
     assert "/api/soc/review/items/{queue_id}/close" in paths
     assert "/api/soc/review/runs/{run_id}/correct" in paths
     assert "/api/soc/review/disposition-outcomes" in paths
+    assert "/api/soc/review/disposition-samples" in paths
+    assert "/api/soc/review/disposition-samples/{sample_id}/inbox" in paths
 
 
 def _memory_candidate_command(

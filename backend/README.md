@@ -192,7 +192,8 @@ action. In the TUI use `/outcome DPROP-... disposition idempotency-key reason` f
 primary label or `/sample-outcome DSAMPLE-... DPROP-... disposition idempotency-key reason`
 for an independent sampled review. The Web workbench exposes the same structured
 fields at `/workspace/soc/review`; neither surface infers labels from close reasons.
-Use a distinct `--actor-id` for the independent quality reviewer.
+Its `抽样复核` view lists persisted hash-ranked campaigns and opens only manifest-selected
+work in the same capture form. Use a distinct `--actor-id` for the independent quality reviewer.
 
 ### Configuration
 

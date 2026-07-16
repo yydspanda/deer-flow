@@ -17,7 +17,8 @@
 `soc context match`；`EX-01` 已把结果保存为 append-only `AuthorizationEnrichmentRecord`，并投影到
 InvestigationContext、Web/TUI 和 Lead Agent bounded artifact；`DP-01` 已能从 persisted exact enrichment
 和当前 true-positive detection truth 生成独立的 `SocDispositionProposalRecord`；`EV-01` 已用可复现抽样、
-显式 append-only outcome 和只读 gate report 评测 proposal。Proposal/outcome/report 均为 shadow、
+显式 append-only outcome 和只读 gate report 评测 proposal；`EV-02` 已统一结构化 outcome 写入口；
+`EV-03` 已从 immutable manifest 派生 reviewer-specific sample inbox。Proposal/outcome/report/inbox 均为 shadow、
 not-applied，并且 **不会改变 Runtime、ReviewQueue 或自动关单**。
 
 ## Current Contract / 当前合同
@@ -203,6 +204,7 @@ soc context revise GCF-... revision.json --expected-version 2 --pretty
 
 1. `EV-02 Outcome Capture Integration` 已完成：Web/TUI/API 与 trusted external disposition 只通过
    `SocDispositionEvaluationService` 写结构化 outcome；不从 free-text close reason 猜标签。
-2. 下一刀 `EV-03 Sample Review Inbox`：把 manifest selected proposals、primary label、独立 sampled review
-   状态组织成 campaign/inbox，避免人工复制 id 或挑样。
-3. 在取得真实、足量、跨时段评测数据并另行批准 rollout controller 前，继续保持 auto-close disabled。
+2. `EV-03 Sample Review Inbox` 已完成：Gateway/Web 把 manifest selected proposals、primary label、独立
+   sampled review 状态组织成派生 campaign/inbox，避免人工复制 id 或挑样，不新增 mutable campaign 表。
+3. 回到产品主线，把 correlation result 合并进 `UnifiedInvestigationReport` 并完成真实单告警端到端演示；
+   在取得真实、足量、跨时段评测数据并另行批准 rollout controller 前，继续保持 auto-close disabled。

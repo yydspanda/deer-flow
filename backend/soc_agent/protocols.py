@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
 from soc_agent.contracts import (
@@ -267,6 +267,14 @@ class SocDispositionEvaluationRepository(Protocol):
         review_kind: SocDispositionOutcomeReviewKind | None = None,
         sample_id: str | None = None,
         limit: int = 500,
+    ) -> list[SocDispositionOutcomeRecord]: ...
+
+    def list_latest_disposition_outcomes_for_proposals(
+        self,
+        *,
+        proposal_ids: Sequence[str],
+        review_kind: SocDispositionOutcomeReviewKind,
+        sample_id: str | None = None,
     ) -> list[SocDispositionOutcomeRecord]: ...
 
 

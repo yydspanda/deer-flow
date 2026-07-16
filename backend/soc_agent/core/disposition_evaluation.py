@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from soc_agent.contracts import (
     AuthorizationEnrichmentRecord,
+    ReviewQueueItem,
     ReviewQueueStatus,
     ServiceRequestContext,
     SocDispositionEvaluationGatePolicy,
@@ -19,6 +20,10 @@ from soc_agent.contracts import (
     SocDispositionSampleCreateCommand,
     SocDispositionSampleCreateResult,
     SocDispositionSampleManifest,
+    SocDispositionSampleManifestListResponse,
+    SocDispositionSampleReviewInbox,
+    SocDispositionSampleReviewItem,
+    SocDispositionSampleReviewReadiness,
     SocEvent,
     SocEventType,
     SocOperationalDisposition,
@@ -50,7 +55,7 @@ class DispositionEvaluationIneligibleError(ValueError):
 
 
 class SocDispositionEvaluationService:
-    """Persist explicit labels and produce read-only shadow gate reports."""
+    """Persist explicit labels and expose read-only shadow evaluation views."""
 
     def __init__(
         self,
@@ -267,6 +272,124 @@ class SocDispositionEvaluationService:
     def list_samples(self, *, scope_hash: str | None = None, limit: int = 100) -> list[SocDispositionSampleManifest]:
         return self._require_repository().list_disposition_sample_manifests(scope_hash=scope_hash, limit=limit)
 
+    def list_sample_review_campaigns(
+        self,
+        *,
+        limit: int = 50,
+    ) -> SocDispositionSampleManifestListResponse:
+        if not 1 <= limit <= 500:
+            raise ValueError("sample review campaign limit must be between 1 and 500")
+        manifests = self._require_repository().list_disposition_sample_manifests(limit=limit + 1)
+        return SocDispositionSampleManifestListResponse(
+            items=manifests[:limit],
+            limit=limit,
+            has_more=len(manifests) > limit,
+        )
+
+    def get_sample_review_inbox(
+        self,
+        sample_id: str,
+        *,
+        reviewer_actor_id: str,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> SocDispositionSampleReviewInbox:
+        if not reviewer_actor_id.strip():
+            raise ValueError("sample review inbox requires reviewer_actor_id")
+        if offset < 0:
+            raise ValueError("sample review inbox offset must be non-negative")
+        if not 1 <= limit <= 200:
+            raise ValueError("sample review inbox limit must be between 1 and 200")
+        repository = self._require_repository()
+        proposal_repository = self._proposal_repository
+        review_queue_repository = self._review_queue_repository
+        if proposal_repository is None:
+            raise SocServiceNotImplementedError("sample review inbox requires a SocDispositionProposalRepository")
+        if review_queue_repository is None:
+            raise SocServiceNotImplementedError("sample review inbox requires a ReviewQueueRepository")
+
+        manifest = self.get_sample(sample_id)
+        selected_ids = manifest.selected_proposal_ids
+        if offset > len(selected_ids):
+            raise ValueError("sample review inbox offset exceeds manifest size")
+        primary_by_proposal = {
+            outcome.proposal_id: outcome
+            for outcome in repository.list_latest_disposition_outcomes_for_proposals(
+                proposal_ids=selected_ids,
+                review_kind=SocDispositionOutcomeReviewKind.ANALYST_RESOLUTION,
+            )
+        }
+        sampled_by_proposal = {
+            outcome.proposal_id: outcome
+            for outcome in repository.list_latest_disposition_outcomes_for_proposals(
+                proposal_ids=selected_ids,
+                review_kind=SocDispositionOutcomeReviewKind.SAMPLED_QUALITY_REVIEW,
+                sample_id=manifest.sample_id,
+            )
+        }
+        completed_ids = {proposal_id for proposal_id, sampled in sampled_by_proposal.items() if _sampled_outcome_is_independent(primary_by_proposal.get(proposal_id), sampled)}
+        remaining_ids = set(selected_ids) - completed_ids
+        reviewer_id = reviewer_actor_id.strip()
+        reviewer_conflict_count = sum(1 for proposal_id in remaining_ids if (primary := primary_by_proposal.get(proposal_id)) is not None and primary.reviewed_by.actor_id == reviewer_id)
+
+        page_ids = selected_ids[offset : offset + limit]
+        items: list[SocDispositionSampleReviewItem] = []
+        for page_index, proposal_id in enumerate(page_ids, start=offset + 1):
+            proposal = proposal_repository.get_disposition_proposal(proposal_id)
+            primary = primary_by_proposal.get(proposal_id)
+            sampled = sampled_by_proposal.get(proposal_id)
+            sampled_independent = _sampled_outcome_is_independent(primary, sampled) if sampled is not None else None
+            reviewer_independent = primary is None or primary.reviewed_by.actor_id != reviewer_id
+            queue_item = review_queue_repository.get_review_item(proposal.queue_id) if proposal is not None else None
+            readiness, blocking_reasons = _sample_review_readiness(
+                proposal_id=proposal_id,
+                proposal=proposal,
+                queue_item=queue_item,
+                sampled_outcome=sampled,
+                sampled_outcome_independent=sampled_independent,
+            )
+            if not reviewer_independent:
+                blocking_reasons.append("current reviewer is not independent from the primary analyst")
+            can_record = (
+                readiness
+                in {
+                    SocDispositionSampleReviewReadiness.READY,
+                    SocDispositionSampleReviewReadiness.COMPLETED,
+                }
+                and reviewer_independent
+            )
+            items.append(
+                SocDispositionSampleReviewItem(
+                    sample_id=manifest.sample_id,
+                    selection_rank=page_index,
+                    proposal_id=proposal_id,
+                    proposal=proposal,
+                    queue_item=queue_item,
+                    primary_outcome=primary,
+                    sampled_outcome=sampled,
+                    sampled_outcome_independent=sampled_independent,
+                    reviewer_independent=reviewer_independent,
+                    readiness=readiness,
+                    can_record_outcome=can_record,
+                    blocking_reasons=blocking_reasons,
+                )
+            )
+
+        completed_count = len(completed_ids)
+        return SocDispositionSampleReviewInbox(
+            manifest=manifest,
+            reviewer_actor_id=reviewer_id,
+            total_count=manifest.sample_size,
+            completed_count=completed_count,
+            remaining_count=manifest.sample_size - completed_count,
+            reviewer_conflict_count=reviewer_conflict_count,
+            completion_rate=completed_count / manifest.sample_size,
+            offset=offset,
+            limit=limit,
+            has_more=offset + len(items) < manifest.sample_size,
+            items=items,
+        )
+
     def get_outcome(self, outcome_id: str) -> SocDispositionOutcomeRecord:
         outcome = self._require_repository().get_disposition_outcome(outcome_id)
         if outcome is None:
@@ -376,6 +499,51 @@ def _outcome_status(
     if observed is proposal.proposed_disposition:
         return SocDispositionOutcomeStatus.CONFIRMED
     return SocDispositionOutcomeStatus.OVERRIDDEN
+
+
+def _sampled_outcome_is_independent(
+    primary: SocDispositionOutcomeRecord | None,
+    sampled: SocDispositionOutcomeRecord,
+) -> bool:
+    return primary is None or primary.reviewed_by.actor_id != sampled.reviewed_by.actor_id
+
+
+def _sample_review_readiness(
+    *,
+    proposal_id: str,
+    proposal: SocDispositionProposalRecord | None,
+    queue_item: ReviewQueueItem | None,
+    sampled_outcome: SocDispositionOutcomeRecord | None,
+    sampled_outcome_independent: bool | None,
+) -> tuple[SocDispositionSampleReviewReadiness, list[str]]:
+    if proposal is None:
+        return (
+            SocDispositionSampleReviewReadiness.UNAVAILABLE,
+            [f"manifest proposal {proposal_id} is unavailable"],
+        )
+    if queue_item is None:
+        return (
+            SocDispositionSampleReviewReadiness.UNAVAILABLE,
+            [f"ReviewQueue item {proposal.queue_id} is unavailable"],
+        )
+    if queue_item.run_id != proposal.run_id or queue_item.alert_id != proposal.alert_id:
+        return (
+            SocDispositionSampleReviewReadiness.UNAVAILABLE,
+            ["ReviewQueue lineage does not match the selected proposal"],
+        )
+    if queue_item.status is not ReviewQueueStatus.CLOSED or queue_item.closed_at is None or queue_item.closed_by is None:
+        return (
+            SocDispositionSampleReviewReadiness.WAITING_FOR_QUEUE_CLOSE,
+            ["primary ReviewQueue item is not closed"],
+        )
+    if sampled_outcome is not None and sampled_outcome_independent:
+        return SocDispositionSampleReviewReadiness.COMPLETED, []
+    if sampled_outcome is not None:
+        return (
+            SocDispositionSampleReviewReadiness.READY,
+            ["latest sampled outcome is not independent and must be superseded"],
+        )
+    return SocDispositionSampleReviewReadiness.READY, []
 
 
 def _validate_sample_retry(

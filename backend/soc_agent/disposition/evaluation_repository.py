@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 from soc_agent.contracts import (
     SocDispositionOutcomeRecord,
@@ -113,6 +113,25 @@ class InMemoryDispositionEvaluationRepository:
         if active:
             outcomes = [outcome for outcome in outcomes if all(getattr(outcome, name) == value for name, value in active.items())]
         return sorted(outcomes, key=lambda item: (item.observed_at, item.created_at, item.outcome_id), reverse=True)[:limit]
+
+    def list_latest_disposition_outcomes_for_proposals(
+        self,
+        *,
+        proposal_ids: Sequence[str],
+        review_kind: SocDispositionOutcomeReviewKind,
+        sample_id: str | None = None,
+    ) -> list[SocDispositionOutcomeRecord]:
+        ordered_ids = list(dict.fromkeys(proposal_ids))
+        selected = set(ordered_ids)
+        outcomes = [outcome for outcome in self._outcomes.values() if outcome.proposal_id in selected and outcome.review_kind is review_kind and (sample_id is None or outcome.sample_id == sample_id)]
+        outcomes.sort(
+            key=lambda item: (item.observed_at, item.created_at, item.outcome_id),
+            reverse=True,
+        )
+        latest: dict[str, SocDispositionOutcomeRecord] = {}
+        for outcome in outcomes:
+            latest.setdefault(outcome.proposal_id, outcome)
+        return [latest[proposal_id] for proposal_id in ordered_ids if proposal_id in latest]
 
 
 __all__ = [

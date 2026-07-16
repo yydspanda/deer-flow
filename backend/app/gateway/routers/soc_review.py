@@ -20,6 +20,8 @@ from soc_agent.contracts import (
     SocDispositionOutcomeCommand,
     SocDispositionOutcomeReviewKind,
     SocDispositionOutcomeSource,
+    SocDispositionSampleManifestListResponse,
+    SocDispositionSampleReviewInbox,
     SocOperationalDisposition,
     Verdict,
 )
@@ -199,6 +201,46 @@ def record_disposition_outcome(
         DispositionEvaluationIneligibleError,
     ) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/disposition-samples", response_model=SocDispositionSampleManifestListResponse)
+def list_disposition_sample_campaigns(
+    service: DispositionEvaluationServiceDep,
+    limit: int = Query(default=50, ge=1, le=500),
+) -> SocDispositionSampleManifestListResponse:
+    try:
+        return service.list_sample_review_campaigns(limit=limit)
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get(
+    "/disposition-samples/{sample_id}/inbox",
+    response_model=SocDispositionSampleReviewInbox,
+)
+def get_disposition_sample_review_inbox(
+    sample_id: str,
+    request: Request,
+    service: DispositionEvaluationServiceDep,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+) -> SocDispositionSampleReviewInbox:
+    context = soc_service_context_from_request(request)
+    try:
+        return service.get_sample_review_inbox(
+            sample_id,
+            reviewer_actor_id=context.actor.actor_id,
+            offset=offset,
+            limit=limit,
+        )
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:

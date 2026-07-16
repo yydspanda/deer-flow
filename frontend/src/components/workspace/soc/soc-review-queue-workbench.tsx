@@ -31,6 +31,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  SocDispositionSampleInbox,
+  type SocDispositionSampleReviewTarget,
+} from "@/components/workspace/soc/soc-disposition-sample-inbox";
 import {
   useCloseSocReviewItem,
   useCorrectSocReviewRun,
@@ -644,10 +649,12 @@ function DispositionOutcomeCaptureSection({
   queueStatus,
   proposals,
   outcomes,
+  prefill,
 }: {
   queueStatus: SocReviewQueueStatus;
   proposals: SocDispositionProposalRecord[];
   outcomes: SocDispositionOutcomeRecord[];
+  prefill?: SocDispositionSampleReviewTarget | null;
 }) {
   const [proposalId, setProposalId] = useState("");
   const [observedDisposition, setObservedDisposition] =
@@ -663,6 +670,15 @@ function DispositionOutcomeCaptureSection({
     proposals[0];
   const activeProposalId = activeProposal?.proposal_id ?? "";
   const proposedDisposition = activeProposal?.proposed_disposition;
+  const prefillAvailable =
+    !!prefill &&
+    proposals.some((proposal) => proposal.proposal_id === prefill.proposalId);
+  useEffect(() => {
+    if (!prefill || !prefillAvailable) return;
+    setProposalId(prefill.proposalId);
+    setReviewKind("sampled_quality_review");
+    setSampleId(prefill.sampleId);
+  }, [prefill, prefillAvailable]);
   useEffect(() => {
     if (proposedDisposition) {
       setObservedDisposition(proposedDisposition);
@@ -1300,10 +1316,15 @@ function EmptyDetail() {
 }
 
 export function SocReviewQueueWorkbench() {
+  const [workspaceView, setWorkspaceView] = useState<"queue" | "sample">(
+    "queue",
+  );
   const [statusFilter, setStatusFilter] = useState<
     SocReviewQueueStatus | "all"
   >("open");
   const [selectedQueueId, setSelectedQueueId] = useState<string | null>(null);
+  const [sampleReviewTarget, setSampleReviewTarget] =
+    useState<SocDispositionSampleReviewTarget | null>(null);
   const [closeReason, setCloseReason] = useState("复核完成");
   const [correctionReason, setCorrectionReason] = useState("");
   const [correctedVerdict, setCorrectedVerdict] =
@@ -1335,9 +1356,20 @@ export function SocReviewQueueWorkbench() {
     () => items.find((item) => item.queue_id === selectedQueueId) ?? null,
     [items, selectedQueueId],
   );
-  const fallbackSelectedItem = selectedItem ?? items[0] ?? null;
+  const selectedSampleItem =
+    sampleReviewTarget?.queueItem.queue_id === selectedQueueId
+      ? sampleReviewTarget.queueItem
+      : null;
+  const fallbackSelectedItem =
+    selectedItem ?? selectedSampleItem ?? items[0] ?? null;
   const activeQueueId =
     selectedItem?.queue_id ?? fallbackSelectedItem?.queue_id;
+  const activeSampleReviewTarget =
+    sampleReviewTarget &&
+    sampleReviewTarget.queueItem.queue_id === activeQueueId &&
+    sampleReviewTarget.canRecordOutcome
+      ? sampleReviewTarget
+      : null;
   const { context, isLoading: contextLoading } =
     useSocReviewContext(activeQueueId);
   const {
@@ -1371,6 +1403,13 @@ export function SocReviewQueueWorkbench() {
   const dryRunApprovedActionMutation = useDryRunSocApprovedAction();
   const executeApprovedActionMutation = useExecuteSocApprovedAction();
   const reviewMemoryCandidateMutation = useReviewSocMemoryCandidate();
+
+  const handleOpenSampleReview = (target: SocDispositionSampleReviewTarget) => {
+    setSampleReviewTarget(target);
+    setSelectedQueueId(target.queueItem.queue_id);
+    setStatusFilter("all");
+    setWorkspaceView("queue");
+  };
 
   useEffect(() => {
     const firstRequestId = approvalRequests[0]?.approval_request_id;
@@ -1537,44 +1576,76 @@ export function SocReviewQueueWorkbench() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            value={workspaceView}
+            onValueChange={(value) =>
+              value && setWorkspaceView(value as "queue" | "sample")
+            }
+          >
+            <ToggleGroupItem value="queue" aria-label="告警复核队列">
+              <InboxIcon className="size-4" />
+              告警队列
+            </ToggleGroupItem>
+            <ToggleGroupItem value="sample" aria-label="抽样复核批次">
+              <FlaskConicalIcon className="size-4" />
+              抽样复核
+            </ToggleGroupItem>
+          </ToggleGroup>
           <Button variant="outline" size="sm" asChild>
             <Link href="/workspace/soc/normalization">
               <WrenchIcon className="size-4" />
               归一化运维
             </Link>
           </Button>
-          <Select
-            value={statusFilter}
-            onValueChange={(value) =>
-              setStatusFilter(value as SocReviewQueueStatus | "all")
-            }
-          >
-            <SelectTrigger size="sm" className="w-28">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {STATUS_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void refetch()}
-            disabled={isFetching}
-          >
-            <RefreshCwIcon
-              className={cn("size-4", isFetching && "animate-spin")}
-            />
-            刷新
-          </Button>
+          {workspaceView === "queue" ? (
+            <>
+              <Select
+                value={statusFilter}
+                onValueChange={(value) =>
+                  setStatusFilter(value as SocReviewQueueStatus | "all")
+                }
+              >
+                <SelectTrigger size="sm" className="w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {STATUS_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void refetch()}
+                disabled={isFetching}
+              >
+                <RefreshCwIcon
+                  className={cn("size-4", isFetching && "animate-spin")}
+                />
+                刷新
+              </Button>
+            </>
+          ) : null}
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[24rem_minmax(0,1fr)]">
+      {workspaceView === "sample" ? (
+        <div className="min-h-0 flex-1">
+          <SocDispositionSampleInbox onOpenReview={handleOpenSampleReview} />
+        </div>
+      ) : null}
+      <div
+        className={cn(
+          "grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[24rem_minmax(0,1fr)]",
+          workspaceView !== "queue" && "hidden",
+        )}
+      >
         <aside className="min-h-0 border-r">
           <div className="flex items-center justify-between border-b px-4 py-3">
             <div className="text-sm font-medium">队列</div>
@@ -1600,7 +1671,10 @@ export function SocReviewQueueWorkbench() {
                     key={item.queue_id}
                     item={item}
                     active={activeQueueId === item.queue_id}
-                    onClick={() => setSelectedQueueId(item.queue_id)}
+                    onClick={() => {
+                      setSampleReviewTarget(null);
+                      setSelectedQueueId(item.queue_id);
+                    }}
                   />
                 ))}
               </div>
@@ -1703,6 +1777,7 @@ export function SocReviewQueueWorkbench() {
                 queueStatus={fallbackSelectedItem.status}
                 proposals={context?.disposition_proposals ?? []}
                 outcomes={context?.disposition_outcomes ?? []}
+                prefill={activeSampleReviewTarget}
               />
 
               <DispositionOutcomeSection

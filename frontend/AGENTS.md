@@ -82,7 +82,10 @@ the workbench only enables capture for a closed queue, requires an explicit prop
 disposition, review lane, and reason, and sends append-only revisions with
 `supersedes_outcome_id`. `recordSocDispositionOutcome()` uses the normal authenticated web actor plus
 a generated `Idempotency-Key`; UI code must never infer a label from `close_reason` or call persistence
-directly.
+directly. The `抽样复核` view uses `soc-disposition-sample-inbox.tsx` and the EV-03 read APIs; it may open
+only server-returned manifest items and must hand `sample_id/proposal_id/queue` back to the existing EV-02
+capture form rather than adding a second write path. Keep campaign progress derived and
+`auto_close_allowed=false`.
 
 ### Key Patterns
 

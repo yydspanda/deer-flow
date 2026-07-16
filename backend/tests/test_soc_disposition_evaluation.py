@@ -37,6 +37,7 @@ from soc_agent.contracts import (
     SocDispositionProposalReasonCode,
     SocDispositionProposalRecord,
     SocDispositionSampleCreateCommand,
+    SocDispositionSampleReviewReadiness,
     SocOperationalDisposition,
     Verdict,
 )
@@ -327,6 +328,107 @@ def test_sampled_review_requires_manifest_membership_and_independent_reviewer() 
         )
 
 
+def test_sample_review_inbox_derives_progress_and_reviewer_boundaries() -> None:
+    service, _, _ = _service()
+    manifest = service.create_sample(
+        SocDispositionSampleCreateCommand(
+            scope=_scope(),
+            sample_size=2,
+            selection_seed="sample-inbox",
+            idempotency_key="sample:inbox",
+        ),
+        context=_actor("qa-lead"),
+    ).manifest
+    conflict_proposal_id, completed_proposal_id = manifest.selected_proposal_ids
+    service.record_outcome(
+        SocDispositionOutcomeCommand(
+            proposal_id=conflict_proposal_id,
+            observed_disposition=SocOperationalDisposition.CLOSED_BENIGN_TRUE_POSITIVE,
+            reason="Primary analyst resolved the item.",
+            observed_at=BASE_TIME + timedelta(minutes=20),
+            idempotency_key="outcome:inbox:primary:conflict",
+        ),
+        context=_actor("qa-reviewer"),
+    )
+    service.record_outcome(
+        SocDispositionOutcomeCommand(
+            proposal_id=completed_proposal_id,
+            observed_disposition=SocOperationalDisposition.CLOSED_BENIGN_TRUE_POSITIVE,
+            reason="Primary analyst resolved the sampled item.",
+            observed_at=BASE_TIME + timedelta(minutes=21),
+            idempotency_key="outcome:inbox:primary:complete",
+        ),
+        context=_actor("analyst-other"),
+    )
+    service.record_outcome(
+        SocDispositionOutcomeCommand(
+            proposal_id=completed_proposal_id,
+            observed_disposition=SocOperationalDisposition.CLOSED_BENIGN_TRUE_POSITIVE,
+            review_kind=SocDispositionOutcomeReviewKind.SAMPLED_QUALITY_REVIEW,
+            sample_id=manifest.sample_id,
+            reason="Independent QA completed the selected sample.",
+            observed_at=BASE_TIME + timedelta(minutes=22),
+            idempotency_key="outcome:inbox:sample:complete",
+        ),
+        context=_actor("qa-reviewer"),
+    )
+
+    campaigns = service.list_sample_review_campaigns(limit=10)
+    inbox = service.get_sample_review_inbox(
+        manifest.sample_id,
+        reviewer_actor_id="qa-reviewer",
+        limit=1,
+    )
+    second_page = service.get_sample_review_inbox(
+        manifest.sample_id,
+        reviewer_actor_id="qa-reviewer",
+        offset=1,
+        limit=1,
+    )
+
+    assert campaigns.items == [manifest]
+    assert campaigns.has_more is False
+    assert inbox.total_count == 2
+    assert inbox.completed_count == 1
+    assert inbox.remaining_count == 1
+    assert inbox.reviewer_conflict_count == 1
+    assert inbox.completion_rate == 0.5
+    assert inbox.has_more is True
+    assert inbox.auto_close_allowed is False
+    assert inbox.items[0].proposal_id == conflict_proposal_id
+    assert inbox.items[0].readiness is SocDispositionSampleReviewReadiness.READY
+    assert inbox.items[0].reviewer_independent is False
+    assert inbox.items[0].can_record_outcome is False
+    assert "not independent" in inbox.items[0].blocking_reasons[0]
+    assert second_page.has_more is False
+    assert second_page.items[0].proposal_id == completed_proposal_id
+    assert second_page.items[0].readiness is SocDispositionSampleReviewReadiness.COMPLETED
+    assert second_page.items[0].sampled_outcome_independent is True
+    assert second_page.items[0].can_record_outcome is True
+
+
+def test_sample_review_inbox_waits_for_primary_queue_closure() -> None:
+    service, _, _ = _service(queues_closed=False)
+    manifest = service.create_sample(
+        SocDispositionSampleCreateCommand(
+            scope=_scope(),
+            sample_size=1,
+            selection_seed="sample-inbox-open",
+            idempotency_key="sample:inbox:open",
+        ),
+        context=_actor("qa-lead"),
+    ).manifest
+
+    inbox = service.get_sample_review_inbox(
+        manifest.sample_id,
+        reviewer_actor_id="qa-reviewer",
+    )
+
+    assert inbox.completed_count == 0
+    assert inbox.items[0].readiness is SocDispositionSampleReviewReadiness.WAITING_FOR_QUEUE_CLOSE
+    assert inbox.items[0].can_record_outcome is False
+
+
 def test_gate_filters_unapproved_sources_and_late_non_independent_sample() -> None:
     service, _, proposals = _service()
     manifest = service.create_sample(
@@ -501,6 +603,10 @@ def test_sql_repository_round_trips_sample_and_outcome(tmp_path) -> None:
     assert repository.get_disposition_sample_manifest(manifest.sample_id) == manifest
     assert repository.get_disposition_outcome(outcome.outcome_id) == outcome
     assert repository.list_disposition_outcomes(proposal_id=proposal.proposal_id) == [outcome]
+    assert repository.list_latest_disposition_outcomes_for_proposals(
+        proposal_ids=[proposal.proposal_id],
+        review_kind=SocDispositionOutcomeReviewKind.ANALYST_RESOLUTION,
+    ) == [outcome]
     context = SocReviewService(
         repository=repository,
         review_queue_repository=repository,

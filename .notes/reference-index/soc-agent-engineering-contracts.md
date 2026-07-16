@@ -486,6 +486,21 @@ Authorized activity / 授权活动事实约束：
   或 replay，必须跳过并要求显式人工 supersession。外部 reason 只作为显式 event 的标签理由，不能用于猜
   canonical status。Outcome 写入本身仍是 `review_queue_impact=none`、`auto_close_allowed=false`；既有
   high-trust external correction/queue sync 是独立边界，不能被误写成 EV rollout controller。
+- EV-03 sample-review campaign 不新增 mutable campaign table。`SocDispositionSampleReviewInbox` 必须由
+  immutable `SocDispositionSampleManifest.selected_proposal_ids`、当前 proposal、ReviewQueue、latest primary
+  outcome 和该 manifest 的 latest sampled outcome 派生；manifest 仍是防挑样 source of truth。
+- Repository 通过 `list_latest_disposition_outcomes_for_proposals()` 批量返回每个 proposal/lane 的最新记录；
+  SQL 实现必须按 `observed_at, created_at, outcome_id` 确定顺序并对大型 id 集合分块，不能在 Web 请求中对
+  整个 manifest 执行逐 outcome N+1 查询。
+- 只有 latest sampled outcome 与 latest primary reviewer 独立时才计入 campaign completion。当前 reviewer
+  与 primary actor 相同必须显示冲突并禁止提交；未关闭 queue、lineage 缺失/不一致必须显示明确 readiness，
+  不能被算作完成。
+- Gateway 只读入口为 `GET /api/soc/review/disposition-samples` 和
+  `GET /api/soc/review/disposition-samples/{sample_id}/inbox`；reviewer actor 必须来自认证 request context，
+  不能由 query/body 伪造。Inbox 必须分页且只返回 manifest-selected proposal。
+- Web `抽样复核` 视图只负责 campaign/inbox 导航。点击条目后把服务端返回的
+  `sample_id + proposal_id + queue` 交给 EV-02 capture form；不得建立第二个 outcome 写 API，不得允许手工
+  换成 manifest 外 proposal，也不得根据 UI 状态关闭工单或开启 auto-close。
 
 Security exercise / 护网与红蓝对抗事实约束：
 

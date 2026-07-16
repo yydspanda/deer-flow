@@ -180,7 +180,9 @@ Current SOC direction:
   hash-ranked sampling, explicit superseding labels, and read-only precision/override/freshness/fan-out
   gates. EV-02 routes authenticated API/Web labels, Review TUI `/outcome` and `/sample-outcome`, and
   eligible trusted external-disposition labels through that same service. Labels are never inferred from
-  `close_reason`; a passed report is only eligible for governed rollout review and
+  `close_reason`. EV-03 derives a paginated sample-review inbox from immutable manifests plus current
+  proposal/ReviewQueue/outcome records; the Web campaign view can open only manifest-selected work and
+  still writes through EV-02. A passed report is only eligible for governed rollout review and
   `auto_close_allowed` remains false.
 - PingAn `zeusRawLogs[].message` values are parsed only inside the PingAn normalizer. Deterministically
   parsed message fields are high-trust primary facts; Zeus structured fields are reduced-trust

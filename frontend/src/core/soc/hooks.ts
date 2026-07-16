@@ -11,6 +11,7 @@ import {
   createSocApprovalGrant,
   dryRunSocApprovedAction,
   executeSocApprovedAction,
+  getSocDispositionSampleReviewInbox,
   getSocMemoryCandidate,
   getSocMemoryRecord,
   getSocNormalizationMetrics,
@@ -21,6 +22,7 @@ import {
   listSocNormalizationBaselines,
   listSocNormalizationIssues,
   listSocApprovalRequests,
+  listSocDispositionSampleCampaigns,
   listSocReviewItems,
   recordSocDispositionOutcome,
   reviewSocMemoryCandidate,
@@ -49,6 +51,20 @@ export const socReviewQueryKeys = {
     [...socReviewQueryKeys.all, "items", status, limit] as const,
   context: (queueId: string | null | undefined) =>
     [...socReviewQueryKeys.all, "context", queueId] as const,
+  sampleCampaigns: (limit: number) =>
+    [...socReviewQueryKeys.all, "sample-campaigns", limit] as const,
+  sampleInbox: (
+    sampleId: string | null | undefined,
+    offset: number,
+    limit: number,
+  ) =>
+    [
+      ...socReviewQueryKeys.all,
+      "sample-inbox",
+      sampleId,
+      offset,
+      limit,
+    ] as const,
 };
 
 export const socApprovalQueryKeys = {
@@ -164,6 +180,46 @@ export function useSocReviewContext(queueId: string | null | undefined) {
     enabled: !!queueId,
   });
   return { context: data ?? null, isLoading, isFetching, error };
+}
+
+export function useSocDispositionSampleCampaigns({ limit = 50 } = {}) {
+  const context = useSocWebRequestContext();
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
+    queryKey: socReviewQueryKeys.sampleCampaigns(limit),
+    queryFn: () => listSocDispositionSampleCampaigns({ limit, context }),
+  });
+  return {
+    campaigns: data?.items ?? [],
+    hasMore: data?.has_more ?? false,
+    isLoading,
+    isFetching,
+    error,
+    refetch,
+  };
+}
+
+export function useSocDispositionSampleReviewInbox(
+  sampleId: string | null | undefined,
+  { offset = 0, limit = 100 } = {},
+) {
+  const context = useSocWebRequestContext();
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
+    queryKey: socReviewQueryKeys.sampleInbox(sampleId, offset, limit),
+    queryFn: () =>
+      getSocDispositionSampleReviewInbox(sampleId!, {
+        offset,
+        limit,
+        context,
+      }),
+    enabled: !!sampleId,
+  });
+  return {
+    inbox: data ?? null,
+    isLoading,
+    isFetching,
+    error,
+    refetch,
+  };
 }
 
 export function useCloseSocReviewItem() {

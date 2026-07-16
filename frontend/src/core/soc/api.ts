@@ -9,6 +9,8 @@ import type {
   SocAnalysisRun,
   SocDispositionOutcomeApplyResult,
   SocDispositionOutcomeRecordRequest,
+  SocDispositionSampleManifestListResponse,
+  SocDispositionSampleReviewInbox,
   SocApprovalGrantRequest,
   SocApprovalRequestListResponse,
   SocInvestigationContext,
@@ -124,6 +126,50 @@ export async function getSocReviewContext(
   return readJson<SocInvestigationContext>(
     response,
     "Failed to load SOC review context",
+  );
+}
+
+export async function listSocDispositionSampleCampaigns({
+  limit = 50,
+  context,
+}: {
+  limit?: number;
+  context?: SocRequestContext;
+} = {}): Promise<SocDispositionSampleManifestListResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const url = `${getBackendBaseURL()}/api/soc/review/disposition-samples?${params.toString()}`;
+  const response = context
+    ? await fetch(url, { headers: buildSocHeaders(context) })
+    : await fetch(url);
+  return readJson<SocDispositionSampleManifestListResponse>(
+    response,
+    "Failed to load SOC disposition sample campaigns",
+  );
+}
+
+export async function getSocDispositionSampleReviewInbox(
+  sampleId: string,
+  {
+    offset = 0,
+    limit = 100,
+    context,
+  }: {
+    offset?: number;
+    limit?: number;
+    context?: SocRequestContext;
+  } = {},
+): Promise<SocDispositionSampleReviewInbox> {
+  const params = new URLSearchParams({
+    offset: String(offset),
+    limit: String(limit),
+  });
+  const url = `${getBackendBaseURL()}/api/soc/review/disposition-samples/${encodeURIComponent(sampleId)}/inbox?${params.toString()}`;
+  const response = context
+    ? await fetch(url, { headers: buildSocHeaders(context) })
+    : await fetch(url);
+  return readJson<SocDispositionSampleReviewInbox>(
+    response,
+    "Failed to load SOC disposition sample review inbox",
   );
 }
 

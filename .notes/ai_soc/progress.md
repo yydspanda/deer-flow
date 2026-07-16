@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 Runtime 工程闭环完成；Phase 2 correlation / domain triage 起步 |
-| 当前目标 | GF-01 + AA-01 + EX-01 + DP-01 + EV-01 + EV-02 已完成：typed fact、shadow proposal、显式 outcome、多入口采集、可复现抽样与只读 gate 已形成可评测闭环 |
+| 当前目标 | GF-01 + AA-01 + EX-01 + DP-01 + EV-01..EV-03 已完成：typed fact、shadow proposal、显式 outcome、多入口采集、可复现抽样、独立复核 inbox 与只读 gate 已形成可评测闭环 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `EV-03 Sample Review Inbox`：把 persisted sample manifest、selected proposal 和独立 reviewer 待办组成可操作 inbox；继续禁止挑样和 auto-close。 |
+| 当前下一刀 | `Phase 2 Correlation -> Unified Investigation Bridge`：把已完成的 `SocCorrelationService` 结果合并进 `SocMainOrchestratorService/UnifiedInvestigationReport`，让单告警端到端演示真正包含历史相似告警证据；不新增第二套 agent runtime。 |
 
 ## 当前待办列表
 
@@ -72,6 +72,7 @@
 | 11.7 | Shadow disposition proposal | DP-01 Done | 已完成 generic operational disposition、detection truth snapshot、append-only proposal repository、`0015` migration、CLI 和 InvestigationContext/Web/TUI/Lead Agent 投影 | 仅 open-queue persisted exact enrichment + current true-positive 可提议 benign-TP；proposal 永远 shadow/not-applied，人工复核，不改 run/queue，不自动关单 |
 | 11.8 | Shadow disposition evaluation gate | EV-01 Done | 已完成 explicit evaluation scope、hash-ranked sample manifest、append-only superseding outcome、`0016` migration、CLI、gate report 和 InvestigationContext/Web/TUI/Lead Agent 只读投影 | 指标覆盖 resolution/precision/override/sample coverage+agreement/freshness/fact fan-out；passed 只代表可进入治理评审，`auto_close_allowed=false` |
 | 11.9 | Structured disposition outcome capture | EV-02 Done | authenticated API/Web、Review TUI primary/sample command 和 trusted external disposition bridge 全部复用 `SocDispositionEvaluationService` | 不从 `close_reason` 猜标签；幂等、sample membership、独立 reviewer、supersession 和 closed queue 仍由 service 校验；不启用 auto-close |
+| 11.10 | Sample review campaign inbox | EV-03 Done | 新增 derived reviewer inbox、latest-outcome batch query、Gateway read API 和 Web `抽样复核` view；selected work 回到 EV-02 capture form | manifest 仍是唯一抽样真相；禁止挑样、第二写入口和 mutable campaign table；`auto_close_allowed=false` |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Partial | normalization 运维页、Gateway bounded metrics 和 Kafka JSONL issue 摘要已完成；全局 Kafka/review/approval/runtime/算力 Prometheus exporter 和态势面板仍后置 | 当前 maintenance issue 可见；全系统运行态势不阻塞 SOC Agent Alpha |
@@ -183,6 +184,27 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-16 — EV-03 sample review inbox implemented
+
+- 新增 `SocDispositionSampleReviewInbox/Item/Readiness`：
+  - campaign progress 从 immutable manifest、proposal、ReviewQueue、latest primary/sample outcomes 派生；
+  - 只有 latest sampled reviewer 与 primary analyst 独立才计入 completed；当前 reviewer 冲突、queue 未关闭、
+    lineage 缺失/不一致均返回显式 readiness/blocking reason；
+  - response 分页，固定 `decision_impact=none`、`auto_close_allowed=false`，不新增 migration/campaign table。
+- repository 新增 `list_latest_disposition_outcomes_for_proposals()`：内存/SQL 同协议；SQL 使用 window rank，
+  按 `observed_at, created_at, outcome_id` 选择每条 lane 最新版本，并对 proposal ids 分块。
+- Gateway 新增只读入口：
+  - `GET /api/soc/review/disposition-samples`；
+  - `GET /api/soc/review/disposition-samples/{sample_id}/inbox`；
+  - reviewer actor 来自 authenticated request context，不能由 query/body 指定。
+- Web `/workspace/soc/review` 新增 `告警队列 / 抽样复核` mode：sample inbox 拆成独立组件，展示批次、完成度、
+  reviewer conflict 和逐项 readiness；打开条目时只把服务端返回的 `sample_id/proposal_id/queue` 预填到
+  EV-02 capture form，没有第二个 outcome 写入口，也不能选择 manifest 外 proposal。
+- 完整 SOC + architecture backend 回归 `492 passed`；frontend `pnpm check` 和 `638 passed` 已通过；唯一
+  warning 仍是既有 DeerFlow MCP cache `asyncio.get_event_loop()` deprecation。
+- 下一步回到 Phase 2 产品主线：把 `SocCorrelationService` 合并进 `UnifiedInvestigationReport`，再跑一条
+  包含历史相似告警证据的真实单告警端到端演示。
 
 ### 2026-07-16 — EV-02 structured disposition outcome capture implemented
 

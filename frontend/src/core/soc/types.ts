@@ -616,6 +616,42 @@ export interface SocDispositionProposalRecord {
   review_queue_impact: "none";
 }
 
+export interface SocDispositionEvaluationScope {
+  schema_version: string;
+  tenant_id?: string | null;
+  environment?: string | null;
+  window_start: string;
+  window_end: string;
+  proposal_policy_version: string;
+  matcher_policy_version: string;
+}
+
+export interface SocDispositionSampleManifest {
+  schema_version: string;
+  sample_id: string;
+  sample_key: string;
+  scope: SocDispositionEvaluationScope;
+  scope_hash: string;
+  population_count: number;
+  population_hash: string;
+  selected_proposal_ids: string[];
+  sample_size: number;
+  selection_seed_hash: string;
+  sampling_method: "sha256_rank_v1";
+  idempotency_key: string;
+  created_by: SocActorContext;
+  created_at: string;
+  shadow_only: true;
+  decision_impact: "none";
+}
+
+export interface SocDispositionSampleManifestListResponse {
+  schema_version: string;
+  items: SocDispositionSampleManifest[];
+  limit: number;
+  has_more: boolean;
+}
+
 export interface SocDispositionOutcomeRecord {
   schema_version: string;
   outcome_id: string;
@@ -665,6 +701,47 @@ export interface SocDispositionOutcomeApplyResult {
   outcome: SocDispositionOutcomeRecord;
   idempotent: boolean;
   event_written: boolean;
+}
+
+export type SocDispositionSampleReviewReadiness =
+  | "ready"
+  | "waiting_for_queue_close"
+  | "completed"
+  | "unavailable";
+
+export interface SocDispositionSampleReviewItem {
+  schema_version: string;
+  sample_id: string;
+  selection_rank: number;
+  proposal_id: string;
+  proposal?: SocDispositionProposalRecord | null;
+  queue_item?: SocReviewQueueItem | null;
+  primary_outcome?: SocDispositionOutcomeRecord | null;
+  sampled_outcome?: SocDispositionOutcomeRecord | null;
+  sampled_outcome_independent?: boolean | null;
+  reviewer_independent?: boolean | null;
+  readiness: SocDispositionSampleReviewReadiness;
+  can_record_outcome: boolean;
+  blocking_reasons: string[];
+  auto_close_allowed: false;
+  decision_impact: "none";
+}
+
+export interface SocDispositionSampleReviewInbox {
+  schema_version: string;
+  manifest: SocDispositionSampleManifest;
+  reviewer_actor_id: string;
+  total_count: number;
+  completed_count: number;
+  remaining_count: number;
+  reviewer_conflict_count: number;
+  completion_rate: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  items: SocDispositionSampleReviewItem[];
+  auto_close_allowed: false;
+  decision_impact: "none";
 }
 
 export interface SocMemoryCandidateReviewRequest {

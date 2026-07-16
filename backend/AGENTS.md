@@ -267,7 +267,10 @@ a reviewer identity distinct from the primary analyst. The API requires `Idempot
 records an outcome only for a high-trust mapped event with a verified target and exactly one matching
 proposal; it exposes skip reasons and never silently supersedes a newer analyst label. Web/TUI/Lead Agent
 continue to receive outcomes through investigation context, and outcome capture itself never closes a queue
-or enables auto-close.
+or enables auto-close. EV-03 adds `SocDispositionSampleReviewInbox`, latest-outcome batch lookup, and
+read-only `/api/soc/review/disposition-samples*` endpoints. Inbox progress is derived from immutable
+manifests and existing proposal/ReviewQueue/outcome sources; do not add a mutable campaign truth table or
+permit work outside `selected_proposal_ids`.
 
 PingAn vendor aliases are translated into generic `RoleClaim` objects inside `soc_agent.normalizers`.
 `pipeline.fact_reconstructor` must remain vendor-neutral: it builds scenario hypotheses and
