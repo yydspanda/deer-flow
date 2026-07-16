@@ -9,6 +9,8 @@ from soc_agent.contracts import (
     ActorContext,
     ActorType,
     AnalysisRun,
+    CorrelationQuery,
+    CorrelationResult,
     EntrySurface,
     ServiceRequestContext,
     SocAgentChatRequest,
@@ -24,11 +26,12 @@ from soc_agent.core.evidence import InMemoryInvestigationEvidenceRepository
 from soc_agent.domain import SocDomainTriageService
 from soc_agent.protocols import InvestigationEvidenceRepository, SocActionAdapterRegistryPort
 
+from .correlation import InMemoryAlertSummaryRepository, SocCorrelationService
 from .service import SocAgentActionDispatcher, SocAgentCapabilityRouter, SocAnalysisService
 
 
 class SocMainOrchestratorService:
-    """Assemble analyze -> read-only evidence -> domain triage -> review summary."""
+    """Assemble analysis, correlation, evidence, domain triage, and review summary."""
 
     def __init__(
         self,
@@ -36,11 +39,25 @@ class SocMainOrchestratorService:
         analysis_service: SocAnalysisService | None = None,
         action_adapter_registry: SocActionAdapterRegistryPort | None = None,
         action_dispatcher: SocAgentActionDispatcher | None = None,
+        correlation_service: SocCorrelationService | None = None,
         domain_triage_service: SocDomainTriageService | None = None,
         evidence_repository: InvestigationEvidenceRepository | None = None,
     ) -> None:
-        self._analysis_service = analysis_service or SocAnalysisService()
         self._evidence_repository = evidence_repository or InMemoryInvestigationEvidenceRepository()
+        if analysis_service is None and correlation_service is None:
+            summary_repository = InMemoryAlertSummaryRepository()
+            self._analysis_service = SocAnalysisService(
+                summary_repository=summary_repository,
+            )
+            self._correlation_service = SocCorrelationService(
+                summary_repository=summary_repository,
+                evidence_repository=self._evidence_repository,
+            )
+        elif analysis_service is None or correlation_service is None:
+            raise ValueError("custom main-orchestrator wiring requires both analysis_service and correlation_service")
+        else:
+            self._analysis_service = analysis_service
+            self._correlation_service = correlation_service
         self._action_dispatcher = action_dispatcher or SocAgentActionDispatcher(
             action_adapter_registry=action_adapter_registry,
             evidence_repository=self._evidence_repository,
@@ -67,22 +84,30 @@ class SocMainOrchestratorService:
             context=request_context,
         )
         evidence = self._evidence_repository.list_evidence(thread_id=thread_id, limit=100)
+        correlation_result = self._correlate(run)
+        correlation_match_count = len(correlation_result.matches)
+        reusable_evidence_count = correlation_result.reusable_evidence_count
         domain_result = self._domain_triage_service.triage(
             SocDomainTriageRequest(
                 run=run,
                 skill_context=skill_context,
                 investigation_evidence=evidence,
+                correlation_result=correlation_result,
                 capability_card_refs=orchestrator_request.capability_card_refs,
                 metadata={
                     "sample_id": orchestrator_request.sample_id,
                     "thread_id": thread_id,
                     "source": "soc_main_orchestrator",
+                    "similar_alert_count": correlation_match_count,
+                    "correlation_match_count": correlation_match_count,
                 },
             )
         )
         review_context = _review_context_summary(
             run,
             action_evidence_count=len(evidence),
+            correlation_match_count=correlation_match_count,
+            reusable_evidence_count=reusable_evidence_count,
             domain_finding_count=sum(len(item.findings) for item in [domain_result]),
         )
         return UnifiedInvestigationReport(
@@ -91,16 +116,30 @@ class SocMainOrchestratorService:
             skill_context=skill_context,
             route_steps=route_steps,
             investigation_evidence=evidence,
+            correlation_result=correlation_result,
             domain_triage_results=[domain_result],
             review_context=review_context,
             metadata={
                 **orchestrator_request.metadata,
                 "thread_id": thread_id,
                 "route_step_count": len(route_steps),
+                "correlation_enabled": True,
+                "correlation_match_count": correlation_match_count,
+                "reusable_correlation_evidence_count": reusable_evidence_count,
                 "handler_output_only": True,
                 "writes_db": False,
                 "executes_high_risk_actions": False,
             },
+        )
+
+    def _correlate(self, run: AnalysisRun) -> CorrelationResult:
+        return self._correlation_service.correlate(
+            CorrelationQuery(
+                run_id=run.run_id,
+                limit=10,
+                candidate_limit=200,
+                evidence_limit_per_match=5,
+            )
         )
 
     def _dispatch_read_only_actions(
@@ -191,6 +230,8 @@ def _review_context_summary(
     run: AnalysisRun,
     *,
     action_evidence_count: int,
+    correlation_match_count: int,
+    reusable_evidence_count: int,
     domain_finding_count: int,
 ) -> SocOrchestratorReviewContextSummary:
     decision = run.decision
@@ -204,6 +245,8 @@ def _review_context_summary(
         reason=decision.reason if decision is not None else None,
         analysis_summary=analysis.summary if analysis is not None else None,
         action_evidence_count=action_evidence_count,
+        correlation_match_count=correlation_match_count,
+        reusable_evidence_count=reusable_evidence_count,
         domain_finding_count=domain_finding_count,
     )
 

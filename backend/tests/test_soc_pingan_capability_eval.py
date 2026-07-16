@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from soc_agent.cli import main
+from soc_agent.core import SocAnalysisService, SocMainOrchestratorService
 from soc_agent.eval import (
     DEFAULT_PINGAN_CAPABILITY_EVAL_DIR,
     load_pingan_capability_eval_fixtures,
@@ -114,6 +117,8 @@ def test_pingan_main_orchestrator_eval_runs_default_fixtures() -> None:
     assert report.sample_count == 3
     assert report.route_step_count == 6
     assert report.evidence_count == 6
+    assert report.correlation_match_count == 3
+    assert report.reusable_evidence_count == 6
     assert report.domain_finding_count >= 6
     assert report.failed_count == 0
     assert report.passed_count == 3
@@ -126,8 +131,18 @@ def test_pingan_main_orchestrator_eval_runs_default_fixtures() -> None:
         "security_tag.lookup",
     ]
     assert all(step.evidence_id for step in apt.report.route_steps)
-    assert apt.report.domain_triage_results[0].findings[0].capability_card_refs
+    assert apt.report.correlation_result is not None
+    assert len(apt.report.correlation_result.matches) == 1
+    assert apt.report.correlation_result.reusable_evidence_count == 2
+    assert all(evidence.run_id == apt.report.correlation_result.matches[0].summary.run_id for evidence in apt.report.correlation_result.matches[0].reusable_evidence)
+    apt_finding = apt.report.domain_triage_results[0].findings[0]
+    assert apt_finding.capability_card_refs
+    assert apt_finding.evidence_profile.sources["correlation"] == "available"
+    assert f"correlation_run:{apt.report.correlation_result.matches[0].summary.run_id}" in apt_finding.evidence_refs
+    assert {evidence.evidence_id for evidence in apt.report.correlation_result.matches[0].reusable_evidence}.issubset(apt_finding.evidence_refs)
     assert apt.report.review_context.run_id == apt.report.run.run_id
+    assert apt.report.review_context.correlation_match_count == 1
+    assert apt.report.review_context.reusable_evidence_count == 2
     assert apt.report.metadata["writes_db"] is False
     assert apt.report.metadata["executes_high_risk_actions"] is False
 
@@ -135,6 +150,11 @@ def test_pingan_main_orchestrator_eval_runs_default_fixtures() -> None:
     assert hids.report.review_context.action_evidence_count == 2
     assert hids.report.review_context.domain_finding_count >= 1
     assert "execution.suspicious_command" in {finding.scenario_key for result in hids.report.domain_triage_results for finding in result.findings}
+
+
+def test_main_orchestrator_rejects_partial_custom_correlation_wiring() -> None:
+    with pytest.raises(ValueError, match="requires both analysis_service and correlation_service"):
+        SocMainOrchestratorService(analysis_service=SocAnalysisService())
 
 
 def test_cli_eval_pingan_main_outputs_report(capsys) -> None:

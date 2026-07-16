@@ -272,6 +272,19 @@ read-only `/api/soc/review/disposition-samples*` endpoints. Inbox progress is de
 manifests and existing proposal/ReviewQueue/outcome sources; do not add a mutable campaign truth table or
 permit work outside `selected_proposal_ids`.
 
+Phase 2 correlation stays outside the fixed Runtime. `SocMainOrchestratorService` calls
+`SocAnalysisService`, `SocCorrelationService`, and `SocDomainTriageService` through their public
+boundaries and projects the typed `CorrelationResult` into `UnifiedInvestigationReport`,
+`SocDomainTriageRequest`, and the bounded review summary. Analysis and correlation must share one
+`AlertSummaryRepository`; the local/eval default uses `InMemoryAlertSummaryRepository`, while
+production wiring injects a fully configured analysis/correlation service pair backed by the same
+PostgreSQL repository. Do not pass a repository alone and create partial summary-only persistence.
+Similarity scoring is centralized in
+`soc_agent.domain.correlation`. Historical reusable evidence must be queried by the matched
+`run_id` alone because repository reference filters are union-style; combining `run_id` and a reused
+`alert_id` can leak current-run evidence into a historical match. Correlation remains read-only and
+cannot alter the Runtime decision, ReviewQueue, memory, approval, or response actions.
+
 PingAn vendor aliases are translated into generic `RoleClaim` objects inside `soc_agent.normalizers`.
 `pipeline.fact_reconstructor` must remain vendor-neutral: it builds scenario hypotheses and
 conflict-aware `RoleResolution` objects, and must not assume attacker=source or victim=destination.

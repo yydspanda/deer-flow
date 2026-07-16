@@ -279,8 +279,8 @@ Important behavior:
 | `SocDispositionProposalService` | Produce an auditable shadow operational proposal from persisted context | DP-01 implemented: exact + true-positive gate; no apply/close/action |
 | `SocDispositionEvaluationService` | Persist explicit labels, create reproducible samples, derive reviewer inboxes, compute read-only gate reports | EV-01..EV-03 implemented: CLI/API/Web/TUI/trusted external capture share one append-only service; passed report still cannot auto-close |
 | `SocSecurityExerciseContextService` (planned) | Compose campaign, participant attribution and authorization | Red/blue/white-team identity is not authorization by itself |
-| `SocCorrelationService` | Similar alert lookup | Uses summaries/evidence, no LLM dependency |
-| `SocMainOrchestratorService` | Read-only demo orchestration for selected skills/evidence/domain results | No hidden side effects |
+| `SocCorrelationService` | Deterministic similar-alert and historical-evidence lookup | Shared summary repository, structured reasons, no LLM/decision mutation |
+| `SocMainOrchestratorService` | Read-only orchestration for analysis/correlation/selected actions/domain report | Typed `CorrelationResult` bridge; no direct repository/tool/high-risk side effects |
 
 ### 5.3 Runtime Pipeline / 固定运行时
 
@@ -308,6 +308,33 @@ Runtime produces the detection assessment; a later deterministic disposition rec
 combine it with governed authorization facts without rewriting the immutable original run. This
 keeps one-alert execution replayable while allowing richer investigation workflows to evolve
 independently.
+
+Phase 2 correlation bridge / 历史关联桥接：
+
+```mermaid
+flowchart LR
+    A["🧾 Current Alert<br/>当前告警"] --> B["⚙️ SocAnalysisService<br/>fixed Runtime + AlertSummary"]
+    B --> C["🔎 SocCorrelationService<br/>shared summary repository"]
+    C --> D["🗃️ Historical AlertSummary<br/>历史摘要"]
+    C --> E["🧰 Historical Evidence<br/>matched run_id only"]
+    D --> F["📦 CorrelationResult<br/>score + reasons + reusable evidence"]
+    E --> F
+    B --> G["🧩 SocDomainTriageService"]
+    F --> G
+    B --> H["📋 UnifiedInvestigationReport"]
+    F --> H
+    G --> H
+    H --> I["🧑‍💻 Analyst / Lead Agent<br/>bounded review context"]
+    F -. "🚫 no mutation" .-> J["Decision / Queue / Memory / Action"]
+```
+
+The analysis and correlation services share one `AlertSummaryRepository`, but the orchestrator does
+not query it directly. Local/eval sessions use an in-memory implementation; production must inject a
+fully configured service pair backed by the SOC PostgreSQL repository, preserving atomic analysis
+persistence. Structured correlation is authoritative; metadata counts are display-only
+projections. Reusable evidence is selected by the matched historical `run_id`, preventing a repeated
+`alert_id` from mixing current and historical action results. A match can enrich domain findings and
+human review, but it cannot by itself suppress/deduplicate an alert or alter the Runtime decision.
 
 Runtime rules:
 
@@ -868,9 +895,11 @@ not require rewriting core contracts.
 | `ConflictReport` | Conflict and ambiguity report | Stable |
 | `AnalysisRun` | Full runtime execution record | Stable for replay/audit |
 | `AlertSummary` | Lightweight read model | Stable for queue/correlation/list |
+| `CorrelationResult` | Structured historical similarity and reusable-evidence result | Stable read-only bridge into domain/report/context |
 | `ReviewQueueItem` | Analyst work item | Stable state machine |
 | `InvestigationContext` | Shared context for Web/TUI/Lead Agent | Stable but may gain new sections |
 | `UnifiedInvestigationView` | Read-optimized investigation projection | Stable as display/read model |
+| `UnifiedInvestigationReport` | Main-orchestrator analysis/correlation/evidence/domain report | Stable bounded report; no direct state mutation |
 | `InvestigationEvidence` | Tool/MCP evidence record | Stable |
 | `GovernedContextFact` | Shared typed fact envelope and lifecycle | GF-01 implemented stable contract |
 | `AuthorizedActivityPayload` | Time-, scope- and source-bounded authorized activity definition | GF-01 storage + AA-01 deterministic matcher implemented |

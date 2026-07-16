@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from soc_agent.contracts import (
     AlertSummary,
     CorrelationEvidenceRef,
@@ -9,11 +11,47 @@ from soc_agent.contracts import (
     CorrelationQuery,
     CorrelationResult,
     InvestigationEvidence,
+    SimilarAlertMatch,
     SimilarAlertQuery,
 )
+from soc_agent.domain.correlation import score_similar_alert
 from soc_agent.protocols import AlertSummaryRepository, InvestigationEvidenceRepository
 
 from .service import SocServiceNotFoundError, SocServiceNotImplementedError
+
+
+class InMemoryAlertSummaryRepository:
+    """In-memory summary store for local orchestrator sessions and evals."""
+
+    def __init__(self, summaries: Iterable[AlertSummary] | None = None) -> None:
+        self._summaries: dict[str, AlertSummary] = {}
+        for summary in summaries or ():
+            self.save_alert_summary(summary)
+
+    def save_alert_summary(self, summary: AlertSummary) -> None:
+        self._summaries[summary.run_id] = summary
+
+    def get_alert_summary(self, run_id: str) -> AlertSummary | None:
+        return self._summaries.get(run_id)
+
+    def list_alert_summaries(self, *, limit: int = 50) -> list[AlertSummary]:
+        return sorted(
+            self._summaries.values(),
+            key=lambda item: item.updated_at,
+            reverse=True,
+        )[:limit]
+
+    def find_similar_alert_summaries(
+        self,
+        query: SimilarAlertQuery,
+    ) -> list[SimilarAlertMatch]:
+        candidates = [summary for summary in self.list_alert_summaries(limit=query.candidate_limit + 1) if summary.run_id != query.run_id][: query.candidate_limit]
+        matches = [match for summary in candidates if (match := score_similar_alert(query, summary)) is not None]
+        return sorted(
+            matches,
+            key=lambda item: (item.score, item.summary.updated_at),
+            reverse=True,
+        )[: query.limit]
 
 
 class SocCorrelationService:
@@ -63,7 +101,6 @@ class SocCorrelationService:
             return []
         evidence = self._evidence_repository.list_evidence(
             run_id=summary.run_id,
-            alert_id=summary.alert_id,
             limit=query.evidence_limit_per_match,
         )
         return [_evidence_ref(item) for item in evidence]

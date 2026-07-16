@@ -322,6 +322,43 @@ flowchart TD
 | `domain_triage_results` | Domain/scenario findings | APT/EDR/HIDS/通用场景发现 |
 | `investigation_view` | Unified view | 面向 Web/TUI/Lead Agent 的统一时间线和计数 |
 
+### 4.1 Main Orchestrator Correlation Bridge / 主编排历史关联
+
+```mermaid
+flowchart TD
+    A["🧾 Current Alert<br/>当前告警"] --> B["⚙️ Analyze<br/>SocAnalysisService"]
+    B --> C["🗃️ Save AlertSummary<br/>共享 summary repository"]
+    C --> D["🔎 Correlate<br/>SocCorrelationService"]
+    D --> E["🗃️ Historical Summaries<br/>历史相似告警"]
+    D --> F["🧰 Reusable Evidence<br/>只按 historical run_id 加载"]
+    E --> G["📦 CorrelationResult<br/>score + matched_reasons"]
+    F --> G
+
+    B --> H["🧰 Read-only Actions<br/>当前告警调查证据"]
+    G --> I["🧩 Domain Triage<br/>结构化 correlation input"]
+    H --> I
+    B --> I
+
+    B --> J["📋 UnifiedInvestigationReport"]
+    G --> J
+    H --> J
+    I --> J
+    J --> K["🧑‍💻 Review / Lead Agent<br/>有界展示与人工研判"]
+
+    G -.-> L["🚫 No automatic dedup<br/>不自动抑制/关单/改判"]
+```
+
+1. `SocAnalysisService` 和 `SocCorrelationService` 共用同一个 `AlertSummaryRepository`；主编排器
+   不直接查库。
+2. `CorrelationResult` 是 `UnifiedInvestigationReport` 和 `SocDomainTriageRequest` 的显式 typed field；
+   metadata 中的 count 只是展示投影。
+3. 历史 evidence 只按 matched historical `run_id` 读取。即使历史与当前告警复用同一个
+   `alert_id`，也不会把当前 action evidence 混入历史 match。
+4. Domain finding 可以说明命中了多少历史告警、引用哪些历史 evidence；Runtime `Decision`、
+   ReviewQueue、memory、approval 和 response action 均保持不变。
+5. `soc eval pingan-main --pretty` 会为 APT/EDR/HIDS 各先生成一条本地历史 run，再运行当前告警，
+   用于验证这条完整只读链路；其中 action provider 仍是 mock，不代表 PA-12 真实系统接入。
+
 ## 5. Domain and Scenario Triage / 领域与场景研判
 
 ```mermaid

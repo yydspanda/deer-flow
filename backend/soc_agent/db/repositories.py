@@ -58,6 +58,7 @@ from soc_agent.db.models import (
     SocReviewQueueRow,
 )
 from soc_agent.disposition import DispositionEvaluationConflictError, DispositionProposalConflictError
+from soc_agent.domain.correlation import score_similar_alert
 from soc_agent.governed_context import (
     GovernedContextFactVersionConflictError,
     validate_governed_context_fact_append,
@@ -156,7 +157,7 @@ class SqlAlchemyAlertRepository:
             result = session.execute(select(SocAlertSummaryRow).where(SocAlertSummaryRow.run_id != query.run_id).order_by(SocAlertSummaryRow.updated_at.desc()).limit(query.candidate_limit))
             summaries = [AlertSummary.model_validate(row.summary_payload) for row in result.scalars()]
 
-        matches = [match for summary in summaries if (match := _score_similar_alert(query, summary)) is not None]
+        matches = [match for summary in summaries if (match := score_similar_alert(query, summary)) is not None]
         return sorted(matches, key=lambda item: (item.score, item.summary.updated_at), reverse=True)[: query.limit]
 
     def save_review_item(self, item: ReviewQueueItem) -> None:
@@ -1027,33 +1028,6 @@ def _summary_row_values(summary: AlertSummary, payload: dict) -> dict:
         "updated_at": summary.updated_at,
         "summary_payload": payload,
     }
-
-
-def _score_similar_alert(query: SimilarAlertQuery, summary: AlertSummary) -> SimilarAlertMatch | None:
-    score = 0.0
-    reasons: list[str] = []
-
-    if query.detection_key and summary.detection_key == query.detection_key:
-        score += 50
-        reasons.append(f"detection_key:{query.detection_key}")
-    if query.rule_code and summary.rule_code == query.rule_code:
-        score += 40
-        reasons.append(f"rule_code:{query.rule_code}")
-    if query.source_type is not None and summary.source_type == query.source_type:
-        score += 8
-        reasons.append(f"source_type:{query.source_type.value}")
-    if query.category and summary.category == query.category:
-        score += 6
-        reasons.append(f"category:{query.category}")
-
-    shared_entity_keys = sorted(set(query.entity_keys).intersection(summary.entity_keys))
-    if shared_entity_keys:
-        score += min(len(shared_entity_keys) * 15, 60)
-        reasons.extend(f"entity_key:{value}" for value in shared_entity_keys[:10])
-
-    if score == 0:
-        return None
-    return SimilarAlertMatch(summary=summary, score=score, matched_reasons=reasons)
 
 
 def _review_queue_row_values(item: ReviewQueueItem, payload: dict) -> dict:

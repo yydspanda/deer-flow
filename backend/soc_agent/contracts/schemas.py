@@ -2783,6 +2783,7 @@ class SocDomainTriageRequest(BaseModel):
     domain: SocDomainName | None = None
     skill_context: SocSkillContext = Field(default_factory=SocSkillContext)
     investigation_evidence: list[InvestigationEvidence] = Field(default_factory=list)
+    correlation_result: CorrelationResult | None = None
     capability_card_refs: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -2857,6 +2858,8 @@ class SocOrchestratorReviewContextSummary(BaseModel):
     reason: str | None = None
     analysis_summary: str | None = None
     action_evidence_count: int = Field(default=0, ge=0)
+    correlation_match_count: int = Field(default=0, ge=0)
+    reusable_evidence_count: int = Field(default=0, ge=0)
     domain_finding_count: int = Field(default=0, ge=0)
 
 
@@ -2882,6 +2885,7 @@ class UnifiedInvestigationReport(BaseModel):
     skill_context: SocSkillContext = Field(default_factory=SocSkillContext)
     route_steps: list[SocOrchestratorRouteStep] = Field(default_factory=list)
     investigation_evidence: list[InvestigationEvidence] = Field(default_factory=list)
+    correlation_result: CorrelationResult | None = None
     domain_triage_results: list[SocDomainTriageResult] = Field(default_factory=list)
     review_context: SocOrchestratorReviewContextSummary
     created_at: datetime = Field(default_factory=utc_now)

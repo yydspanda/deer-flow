@@ -218,6 +218,12 @@ Current SOC direction:
 - `endpoint.process_tree.lookup` is currently a read-only in-memory/mock EDR investigation
   adapter used to validate process-tree evidence flow before real EDR MCP credentials exist;
   do not treat it as production EDR integration.
+- Phase 2 correlation is an explicit service bridge, not a hidden Runtime node.
+  `SocAnalysisService` and `SocCorrelationService` must share the same
+  `AlertSummaryRepository`; `CorrelationResult` enters `UnifiedInvestigationReport` and
+  `SocDomainTriageRequest` as typed data. Metadata counts are projections only. Reusable
+  evidence is loaded by the matched historical `run_id` and cannot change the Runtime
+  decision, close ReviewQueue, confirm memory, or suppress an alert.
 
 SOC phase plan:
 

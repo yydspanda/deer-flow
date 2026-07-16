@@ -195,6 +195,18 @@ fields at `/workspace/soc/review`; neither surface infers labels from close reas
 Its `抽样复核` view lists persisted hash-ranked campaigns and opens only manifest-selected
 work in the same capture form. Use a distinct `--actor-id` for the independent quality reviewer.
 
+Run the bounded main-orchestrator evaluation with a seeded historical copy of each
+APT/EDR/HIDS alert:
+
+```bash
+soc eval pingan-main --pretty
+```
+
+The resulting `UnifiedInvestigationReport` includes structured correlation matches,
+explainable match reasons, and evidence loaded from the matched historical run. This
+evaluation uses local/mock action providers and does not enable automatic suppression or
+response.
+
 ### Configuration
 
 Edit `config.yaml` in the project root:

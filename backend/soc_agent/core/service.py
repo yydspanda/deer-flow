@@ -2421,6 +2421,7 @@ def _domain_triage_results_for_context(context: InvestigationContext) -> list[So
     request = SocDomainTriageRequest(
         run=context.run,
         investigation_evidence=context.action_evidence,
+        correlation_result=context.correlation_result,
         metadata={
             "source": "review_context",
             "queue_id": context.queue_item.queue_id,

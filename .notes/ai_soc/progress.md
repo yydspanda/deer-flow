@@ -23,12 +23,12 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前阶段 | Phase 1 Runtime 工程闭环完成；Phase 2 correlation / domain triage 起步 |
-| 当前目标 | GF-01 + AA-01 + EX-01 + DP-01 + EV-01..EV-03 已完成：typed fact、shadow proposal、显式 outcome、多入口采集、可复现抽样、独立复核 inbox 与只读 gate 已形成可评测闭环 |
+| 当前阶段 | Phase 1 Runtime 工程闭环完成；Phase 2 correlation 已进入统一主编排报告 |
+| 当前目标 | Runtime、domain/scenario triage、历史 correlation、统一调查视图与 GF-01..EV-03 治理评测闭环已打通；下一步先量化 correlation 质量，再讨论 shadow dedup |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `Phase 2 Correlation -> Unified Investigation Bridge`：把已完成的 `SocCorrelationService` 结果合并进 `SocMainOrchestratorService/UnifiedInvestigationReport`，让单告警端到端演示真正包含历史相似告警证据；不新增第二套 agent runtime。 |
+| 当前下一刀 | `Phase 2 Correlation Eval Baseline`：建立 labeled same-incident / related-but-distinct / unrelated 样本和 precision/recall/reason/fan-out 报告；通过质量门槛后才定义 shadow dedup candidate，当前不抑制告警。 |
 
 ## 当前待办列表
 
@@ -47,9 +47,11 @@
 | 0.8 | `PA-08` PingAn eval fixtures | Done | 已新增 `backend/samples/eval/pingan/` 三条 fixture、`backend/samples/alerts/pingan_legacy_hids.json`、`backend/soc_agent/eval/pingan.py` 和 `soc eval pingan` | APT/EDR/HIDS 各 1 条脱敏 fixture；覆盖字段冲突、查不到外部事实、误报/授权标签；read-only success 写 `InvestigationEvidence` |
 | 0.9 | `PA-09` PingAn memory candidate entry | Done | 已新增 `SocMemoryCandidate` contracts、`MemoryCandidateRepository` protocol、in-memory repository 和 `SocMemoryService.propose_candidate()` | 候选默认 `pending_review`，携带 source/evidence/validity/idempotency/facets/review 信息；不自动 confirmed，不影响 runtime decision |
 | 0.10 | `PA-10` PingAn domain triage MVP | Done | 已新增 `SocDomainTriageRequest/Result/Finding` contract、`SocDomainTriageService`、APT/EDR/HIDS deterministic handlers 和 `soc eval pingan-domain` | 子研判只输出 finding/evidence/recommendation；消费 skill context 和 read-only evidence refs；不写 DB、不执行 action、不改 verdict |
-| 0.11 | `PA-11` PingAn main orchestrator demo | Done | 已新增 `SocMainOrchestratorService`、`UnifiedInvestigationReport`、`soc eval pingan-main` 和 APT/EDR/HIDS eval 覆盖 | 单条 demo 能看到 analyze -> selected skills -> read-only route/evidence -> domain finding -> review context；不写 DB、不执行高风险动作 |
+| 0.11 | `PA-11` PingAn main orchestrator demo | Done | `SocMainOrchestratorService`、`UnifiedInvestigationReport`、`soc eval pingan-main` 已覆盖 APT/EDR/HIDS analyze -> correlation -> read-only evidence -> domain finding -> review summary | 每条当前告警命中 seeded historical run，并只复用该 historical `run_id` 的 evidence；不写 DB、不执行高风险动作 |
 | 0.12 | `PA-12` real PingAn MCP/API replacement | Waiting | 等真实 PingAn dev/staging MCP/API endpoint/凭证后替换 mock provider，保存 smoke/eval report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险；不能用本地 mock 假装完成 |
-| 1 | Correlation Service MVP | Done | 已新增 `SocCorrelationService`、`CorrelationQuery`、`CorrelationResult`、CLI `soc correlate`；基于 summary/evidence 输出相似告警、匹配原因和可复用证据 | 不调用 LLM、不依赖真实 MCP、不改 DeerFlow core；demo alert 可看到结构化 correlation result |
+| 1 | Correlation Service MVP | Done | `SocCorrelationService` 基于 summary/evidence 输出相似告警、匹配原因和可复用证据；typed result 已进入 main report/domain/review summary | 不调用 LLM、不依赖真实 MCP、不改 decision；demo 当前告警可看到历史 run + reusable evidence |
+| 1.1 | Correlation -> Unified Investigation bridge | Done | 共享 summary repository、统一 deterministic scorer、`SocDomainTriageRequest.correlation_result`、`UnifiedInvestigationReport.correlation_result` 和 review counts 已接通 | metadata count 不是证据源；historical evidence 只按 matched `run_id` 加载；APT/EDR/HIDS eval 为 3 matches / 6 evidence / 0 failure |
+| 1.2 | Correlation quality baseline | Next | 建 labeled same-incident / related-but-distinct / unrelated corpus，输出 precision、recall、match-reason 分布、候选 fan-out 和 evidence leakage 检查 | 未达到门槛前不生成 dedup suppression；报告可 replay/diff，规则版本显式 |
 | 2 | External Disposition Sync Contract | Done | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol、in-memory repository、PostgreSQL persistence、ReviewQueue context API/Web/TUI/Lead Agent visibility；已接 high-trust mapped review/correction 和 pending memory candidate | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
 | 3 | Memory Tracking Contract | Partial | DB-first candidate persistence、review workflow、confirmed-memory boundary 和 retrieval policy MVP 已完成；`SocMemoryCandidateSourceBridge` 已接 correction、domain finding、analyst feedback 和 ReviewQueue review note；下一步是 Kafka/Lead Agent 结论来源、prompt injection/replay diff 的受控设计 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
 | 3.1 | Memory candidate DB/API/ReviewQueue visibility | Done | 已新增 `soc_memory_candidates`、repository、CLI `soc memory list/get`、Gateway `/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded visibility | candidate 仍为 `pending_review` 且 `runtime_decision_allowed=false`；不注入 prompt，不影响 verdict |
@@ -57,9 +59,9 @@
 | 3.3 | Confirmed memory retrieval policy / unified visibility MVP | Done | 已新增 `SocMemoryQuery`、`SocMemoryMatch`、`SocMemoryRetrievalResult`、`SocMemoryService.find_relevant_records()`、CLI `soc memory search`、Gateway `/api/soc/memory/search`、`InvestigationContext.relevant_memories` 和 Web/TUI/Lead Agent 可见化 | 只返回 `retrieval_enabled=true`、confirmed、未过期 record；返回 score/match reason/token estimate/hash/version；不注入 prompt，不影响 verdict |
 | 4 | Domain Sub-Agent Contract | Done for PA-10 | 已固定 `SocDomainTriageRequest`、`SocDomainTriageResult`、`SocDomainFinding` 结构 | EDR/APT/HIDS 已共用同一 schema；子研判不能直接改 decision 或写 DB |
 | 5 | Generic security scenario recognition | Partial | deterministic MVP 已完成：第一批场景包括反弹 shell、webshell、横向移动、命令/代码执行、恶意外联、提权、凭证滥用；未命中内部 taxonomy 但存在上游场景提示时输出 `vendor.unmapped` 候选 finding；已暴露 `SCENARIO_TAXONOMY_VERSION`/keys/snapshot；PingAn domain eval 和 vendor-neutral `soc eval scenarios` 都输出 covered/missing/unmapped 计数，`--baseline-json` 可生成 replay diff | 任何来源的告警都通过统一 `SocDomainTriageResult/Finding` 输出场景化 finding；Evidence Fusion First；未映射厂商场景不阻断研判、不改 verdict、不写 confirmed memory；eval 能作为 replay diff 基线；LLM 后续只能在 bounded context 中识别场景，不能直接改 verdict 或写 confirmed memory |
-| 6 | Main SOC Agent Orchestrator MVP | Done for PA-11 / correlation merge pending | 已串起 analyze、skill context、read-only action evidence、domain triage、review summary，输出 `UnifiedInvestigationReport`；correlation 尚未并入 report | APT/EDR/HIDS demo 能看到主控用了哪些 skill、route、evidence、domain finding 和 review context |
+| 6 | Main SOC Agent Orchestrator MVP | Done for Phase 2 bridge | 已串起 analyze、skill context、correlation、read-only action evidence、domain triage、review summary，输出 `UnifiedInvestigationReport` | APT/EDR/HIDS demo 能看到主控用了哪些 skill、历史 match/reasons/evidence、route、finding 和 review context |
 | 7 | Web/TUI visible investigation | Done for MVP | 已新增 `UnifiedInvestigationView`、`InvestigationTimelineItem`，`InvestigationContext` 聚合 correlation result、domain triage results、evidence timeline、external feedback、memory candidates 和 relevant memories；Web/TUI/Lead Agent bounded artifact 可见 | 分析师能区分 runtime decision、domain findings、read-only evidence、外部人工反馈、人工 correction、retrieval-enabled memory；视图只读，不改 verdict |
-| 8 | Demo / Eval Script | Done for APT/EDR/HIDS + single-alert MVP | 已新增 `soc demo run [all|apt|edr|hids]` 和 `soc demo alert PATH|--json`；前者持久化 PingAn APT/EDR/HIDS investigation chain，后者跑一条任意 alert 并输出 compact review summary | 一条命令可稳定演示 runtime + domain triage + evidence/memory/review 状态，并能直接用 `soc review context QUEUE_ID --summary --pretty` 或 Web/TUI 打开统一调查视图；本 MVP 为保持 open review 可见性，暂不种 external disposition |
+| 8 | Demo / Eval Script | Done for APT/EDR/HIDS + single-alert MVP | `soc demo run`/`soc demo alert` 保持持久化调查演示；`soc eval pingan-main` 额外验证无 DB 的 current + historical correlation 主编排链 | 可分别演示持久化 Web/TUI context 与 bounded orchestrator report；mock action evidence 明确标记，不冒充真实 PA-12 |
 | 9 | Memory candidate source integration | Partial | 已新增 `SocMemoryCandidateSourceBridge`：correction 会自动生成 pending candidate 并回写 `memory_candidate_id`，domain finding 已有幂等 bridge/factory，analyst feedback 可进入 candidate content/facets/metadata，`SocReviewService.add_note()` / `soc review note` 可把 ReviewQueue review note 生成 pending candidate；Kafka daemon、Lead Agent proposal 等来源待接 | 每类来源都有 source/evidence/validity/idempotency/facet；候选默认 pending review；confirmed/retrieval gate 仍由 `SocMemoryService` 控制 |
 | 10 | Normalization maintenance loop | Done for MVP | 持久化 schema baseline、主动 monitor、去重/reopen issue、SocEvent、CLI/API/Web/TUI、Kafka metric 摘要；字段重要性 registry、离线 suggestion、confidence calibration 和 repair domain guard 已落地 | 新 schema/解析降级/关键映射缺口不静默；首次观察不自批 baseline；suggestion 不自动改代码；calibration profile 不自动放行动作 |
 | 11 | DeerFlow-backed live Runtime LLM | Done for MVP | 新增 `DeerFlowLLMChatClient`、`SocLLMSettings`，统一装配 analyze/replay/demo/Kafka；offline eval 和 normalize suggest 支持 live model | 显式选择模型；未知模型 fail-fast；输出过 JSON/schema/domain validation；trace 记录安全 metadata/usage；模型不能执行动作 |
@@ -176,14 +178,41 @@
 | 92 | InvestigationEvidence PostgreSQL persistence / Gateway wiring | Done | 新增 `soc_investigation_evidence` migration、ORM row、SQLAlchemy repository 方法；Gateway/CLI ReviewService 和 Lead Agent read-only dispatcher 使用同一 repository 共享 evidence |
 | 93 | Lead Agent evidence reuse + endpoint process-tree mock adapter | Done | Lead Agent bounded context 明确复用既有 action_evidence；新增 `endpoint.process_tree.lookup` read-only in-memory/mock adapter、policy、proposal 示例和测试 |
 | 94 | PingAn SOC capability onboarding | Done | 新增 `.notes/ai_soc/capabilities/pingan/onboarding.md`，固定经验 -> capability card -> skill/MCP/normalizer/domain/eval/memory 的转化流程 |
-| 95 | Correlation Service MVP | Done | 新增结构化 correlation contract/service/CLI；基于 summary + evidence 找相似告警、匹配原因和可复用证据；不调用 LLM、不依赖真实 MCP、不改 DeerFlow core |
+| 95 | Correlation Service + Unified Report Bridge | Done | 结构化 correlation service/CLI 基于 summary + evidence 找历史 match；typed result 已进入 main report/domain/review summary；不调用 LLM、不改 Runtime decision |
 | 96 | External Disposition Sync Contract MVP | Done | 固定外部预警/工单/处置系统状态与理由同步协议；新增 mapper/service/repository MVP，Zeus 只是 mock fixture |
 | 100 | External Disposition Review/Correction Integration | Done | 高可信 mapped external disposition 在唯一定位本地 target 后复用 `SocReviewService.correct()`，同步 operational correction 并关闭 review queue；低可信/未知/无法定位不改判 |
 | 97 | Memory Tracking Contract | Partial | `SocMemoryCandidate` 已完成 DB/API/ReviewQueue visibility 和 review workflow；`confirm` 会生成 retrieval-disabled `SocMemoryRecord`；retrieval policy/query/result/unified visibility MVP 已完成；TUI/Web/Kafka/Lead Agent/domain/external disposition 结论先生成 candidate，不直接写生效 memory；wiki/OKF 后期只做 projection |
 | 98 | PingAn Domain Triage MVP | Done | 新增 `SocDomainTriageService` 和 APT/EDR/HIDS deterministic handlers；`soc eval pingan-domain` 可验证三类样本输出 domain findings、capability card refs 和 evidence refs |
-| 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
+| 99 | PingAn Main Orchestrator Demo | Done | `soc eval pingan-main` 验证 APT/EDR/HIDS historical + current analyze -> correlation -> skill -> read-only evidence -> domain finding -> review summary |
 
 ## 进度记录
+
+### 2026-07-16 — Phase 2 correlation bridged into the unified main report
+
+- 把相似评分提取到 vendor-neutral `soc_agent.domain.correlation.score_similar_alert()`；SQL 和新增
+  `InMemoryAlertSummaryRepository` 共用一套 detection/rule/source/category/entity scoring 语义。
+- `SocMainOrchestratorService` 默认使用共享 in-memory summary/evidence store；生产必须注入已经正确配置、
+  共享同一 PostgreSQL repository 的 `SocAnalysisService` / `SocCorrelationService` 成对实例，避免
+  summary-only 半持久化。主编排器不直接查 repository，也没有新增 LangGraph/agent runtime。
+- `CorrelationResult` 现在显式进入：
+  - `UnifiedInvestigationReport.correlation_result`；
+  - `SocDomainTriageRequest.correlation_result`；
+  - `SocOrchestratorReviewContextSummary` 的 match/reusable-evidence counts；
+  - 既有 `SocReviewService` domain request。
+- Domain/scenario evidence profile 优先读取 typed correlation，而不是 metadata count；所有 domain handler 和
+  scenario finding 的 evidence refs 均可追溯 matched historical run 和 reusable evidence。Correlation 仍不改 Runtime decision、ReviewQueue、
+  memory、approval 或 action。
+- 修正 reusable-evidence 查询边界：只按 matched historical `run_id` 加载。Repository 多引用过滤是 union
+  语义；若同时使用复用的 `alert_id`，相同告警 ID 的 current evidence 可能混入 historical match。
+- `soc eval pingan-main --pretty` 现在每个 APT/EDR/HIDS fixture 先跑一条本地 historical run，再跑 current
+  alert；验证结果保存于本地
+  `backend/.deer-flow/soc-runtime-validation/step-10-correlation-bridge/pingan-main.json`：3 matches、
+  6 reusable evidence、0 failures，每条 evidence 的 `run_id` 均指向 matched history。
+- 聚焦回归：PingAn main + domain scenario `11 passed`；in-memory correlation `2 passed`；SQL correlation
+  `2 passed`。最终完整 SOC + architecture 回归为 `493 passed, 1 warning`；warning 仍是既有 DeerFlow MCP
+  cache `asyncio.get_event_loop()` deprecation。
+- 下一步不是直接做自动抑制，而是 `Correlation Eval Baseline`：先量化 same-incident、related-but-distinct、
+  unrelated 的 precision/recall、reason distribution 和 fan-out，再决定 shadow dedup contract。
 
 ### 2026-07-16 — EV-03 sample review inbox implemented
 
@@ -203,8 +232,8 @@
   EV-02 capture form，没有第二个 outcome 写入口，也不能选择 manifest 外 proposal。
 - 完整 SOC + architecture backend 回归 `492 passed`；frontend `pnpm check` 和 `638 passed` 已通过；唯一
   warning 仍是既有 DeerFlow MCP cache `asyncio.get_event_loop()` deprecation。
-- 下一步回到 Phase 2 产品主线：把 `SocCorrelationService` 合并进 `UnifiedInvestigationReport`，再跑一条
-  包含历史相似告警证据的真实单告警端到端演示。
+- 当时记录的下一步是把 `SocCorrelationService` 合并进 `UnifiedInvestigationReport`；该项已在后续
+  `Phase 2 correlation bridged into the unified main report` 切片完成。
 
 ### 2026-07-16 — EV-02 structured disposition outcome capture implemented
 

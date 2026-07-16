@@ -282,8 +282,21 @@ Correlation service 约束：
 - `SocCorrelationService` 是 Phase 2 相似告警、历史关联和可复用证据的只读业务入口；CLI/API/TUI/Web/Lead Agent 都不能绕过 service 直接拼 correlation result。
 - `CorrelationQuery` / `CorrelationResult` / `CorrelationMatch` 是 source handler、security scenario recognizer 和 unified investigation report 的稳定输入；不得让每个 EDR/APT/HIDS/WAF/F5 handler 或反弹 shell/webshell/横向移动识别器自己发明相似告警结构。
 - MVP correlation 只能依赖 `AlertSummaryRepository` 和 `InvestigationEvidenceRepository`，不调用 LLM、不调用 MCP、不执行 action、不修改 run/summary/review/memory。
-- correlation match 必须携带结构化 `match_reasons`，例如 `same_detection_key`、`same_rule_code`、`shared_ip`、`shared_user`、`same_asset`、`same_source_type`、`reusable_evidence`；不能只给自然语言解释。
+- correlation match 必须携带结构化 `matched_reasons`，当前稳定前缀为 `detection_key:`、
+  `rule_code:`、`source_type:`、`category:`、`entity_key:`；不能只给自然语言解释。
 - correlation 结果可以进入 `InvestigationContext`、Lead Agent bounded artifact、Web/TUI 展示和后续 domain triage request，但不能自动改 `AnalysisRun.decision`、不能自动关闭 review queue、不能直接生成 confirmed memory。
+- Phase 2 bridge 必须把完整 typed `CorrelationResult` 放入 `UnifiedInvestigationReport.correlation_result`
+  和 `SocDomainTriageRequest.correlation_result`；`similar_alert_count` / `correlation_match_count` 只允许作为
+  展示 projection，不能替代结构化结果或伪造历史证据。
+- `SocMainOrchestratorService` 不直接读写 repository。`SocAnalysisService` 与
+  `SocCorrelationService` 必须共享同一个 `AlertSummaryRepository`；本地/eval 可用
+  `InMemoryAlertSummaryRepository`；生产 wiring 必须注入共享 PostgreSQL repository 的完整 service pair，
+  不能只传 repository 形成 summary-only 非原子持久化。
+- 相似评分只能由 `soc_agent.domain.correlation.score_similar_alert()` 维护，SQL 和内存实现不得复制两套
+  scoring semantics。历史 reusable evidence 必须按 matched historical `run_id` 精确加载；当前 repository
+  多引用过滤为 union 语义，不能同时传复用的 `alert_id`，以免当前 run evidence 泄漏进历史 match。
+- Correlation 是否命中只能改变调查上下文、finding evidence profile 和人工复核提示；不得直接提高
+  Runtime detection confidence、做 dedup/suppression、关闭 queue、确认 memory 或执行 response。
 - 后续若引入 LLM rerank，只能作为 bounded rerank node 消费候选 `CorrelationMatch`，输出仍必须经过 schema/domain validation；LLM 不得直接发起 DB 查询或扩大检索范围。
 
 Domain triage 约束：

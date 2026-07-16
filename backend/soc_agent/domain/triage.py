@@ -75,7 +75,10 @@ class _AptDomainTriageHandler:
         active_tags = [item for item in tag_evidence if not evidence_is_mocked(item)]
         mocked_evidence = [item for item in [*reputation_evidence, *tag_evidence] if evidence_is_mocked(item)]
         score = _max_reputation_score(reputation_hits)
-        evidence_refs = _evidence_ids(reputation_evidence + tag_evidence) + conflict_refs
+        evidence_refs = _merge_refs(
+            _evidence_ids(reputation_evidence + tag_evidence) + conflict_refs,
+            _correlation_refs(request),
+        )
         limitations: list[str] = []
         if not reputation_hits:
             limitations.append("No positive threat-intelligence evidence was attached.")
@@ -98,7 +101,7 @@ class _AptDomainTriageHandler:
             confidence=confidence,
             evidence_profile=_evidence_profile_for_request(
                 request,
-                used_sources=["raw_log", "threat_intel", "security_tag"],
+                used_sources=["raw_log", "similar_alerts", "threat_intel", "security_tag"],
                 gaps=limitations,
             ),
             current_conclusion=_finding_conclusion(
@@ -149,7 +152,10 @@ class _EdrDomainTriageHandler:
         )
         process_tree_evidence = [item for item in all_process_tree_evidence if not evidence_is_mocked(item)]
         risk_tags = sorted(_risk_tags_from_process_tree(process_tree_evidence))
-        evidence_refs = _evidence_ids(all_process_tree_evidence)
+        evidence_refs = _merge_refs(
+            _evidence_ids(all_process_tree_evidence),
+            _correlation_refs(request),
+        )
         limitations: list[str] = []
         if not process_tree_evidence:
             limitations.append("No endpoint process-tree evidence was attached.")
@@ -223,7 +229,10 @@ class _HidsDomainTriageHandler:
         host_context = [item for item in all_host_context if not evidence_is_mocked(item)]
         active_tags = [item for item in all_active_tags if not evidence_is_mocked(item)]
         mocked_evidence = [item for item in [*all_host_context, *all_active_tags] if evidence_is_mocked(item)]
-        evidence_refs = _evidence_ids(all_host_context + all_active_tags)
+        evidence_refs = _merge_refs(
+            _evidence_ids(all_host_context + all_active_tags),
+            _correlation_refs(request),
+        )
         limitations: list[str] = []
         if not host_context:
             limitations.append("No HIDS host-event context evidence was attached.")
@@ -305,7 +314,10 @@ class _GenericDomainTriageHandler:
                 recommended_queue="soc_review",
                 rationale=["未知来源不代表无法研判；先使用通用证据融合，再决定是否补专用 handler。"],
             ),
-            evidence_refs=_evidence_ids(request.investigation_evidence),
+            evidence_refs=_merge_refs(
+                _evidence_ids(request.investigation_evidence),
+                _correlation_refs(request),
+            ),
             capability_card_refs=request.capability_card_refs,
             skill_names=_skill_names(request.skill_context),
             recommendations=["Collect domain-specific evidence before escalating this finding."],
@@ -417,6 +429,14 @@ def _active_security_tags(
 
 def _evidence_ids(evidence: list[InvestigationEvidence]) -> list[str]:
     return [item.evidence_id for item in evidence]
+
+
+def _correlation_refs(request: SocDomainTriageRequest) -> list[str]:
+    if request.correlation_result is None:
+        return []
+    refs = [f"correlation_run:{match.summary.run_id}" for match in request.correlation_result.matches]
+    refs.extend(evidence.evidence_id for match in request.correlation_result.matches for evidence in match.reusable_evidence)
+    return _merge_refs([], refs)
 
 
 def _max_reputation_score(evidence: list[InvestigationEvidence]) -> int:

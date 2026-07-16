@@ -327,12 +327,14 @@ def evidence_profile_for_request(
     gaps: list[str],
 ) -> SocEvidenceProfile:
     metadata = request.metadata
+    similar_alert_count = _similar_alert_count(request)
+    correlation_match_count = _correlation_match_count(request)
     available_routes = _available_action_routes(request)
     successful_mock_evidence = [item for item in successful_evidence(request.investigation_evidence, include_mocked=True) if evidence_is_mocked(item)]
     sources = {
         "raw_log": "available" if request.run.input_payload else "missing",
-        "similar_alerts": _count_status(metadata.get("similar_alert_count")),
-        "correlation": _count_status(metadata.get("correlation_match_count")),
+        "similar_alerts": _count_status(similar_alert_count),
+        "correlation": _count_status(correlation_match_count),
         "external_feedback": _count_status(metadata.get("external_disposition_count")),
         "confirmed_memory": _count_status(metadata.get("relevant_memory_count")),
         "memory_candidates": _count_status(metadata.get("memory_candidate_count")),
@@ -374,7 +376,7 @@ def _scenario_confidence(
     action_routes: list[str],
 ) -> float:
     score = 0.48 + min(len(matched_terms), 4) * 0.07
-    if request.metadata.get("similar_alert_count", 0):
+    if _similar_alert_count(request):
         score += 0.05
     if request.metadata.get("external_disposition_count", 0):
         score += 0.04
@@ -403,8 +405,9 @@ def _scenario_conclusion_summary(
     request: SocDomainTriageRequest,
 ) -> str:
     history_bits = []
-    if request.metadata.get("similar_alert_count", 0):
-        history_bits.append(f"{request.metadata['similar_alert_count']} 条历史相似预警")
+    similar_alert_count = _similar_alert_count(request)
+    if similar_alert_count:
+        history_bits.append(f"{similar_alert_count} 条历史相似预警")
     if request.metadata.get("external_disposition_count", 0):
         history_bits.append(f"{request.metadata['external_disposition_count']} 条外部处置反馈")
     if request.metadata.get("relevant_memory_count", 0):
@@ -487,7 +490,7 @@ def _unmapped_vendor_confidence(request: SocDomainTriageRequest) -> float:
     score = 0.38
     if request.run.input_payload:
         score += 0.04
-    if request.metadata.get("similar_alert_count", 0):
+    if _similar_alert_count(request):
         score += 0.04
     if request.metadata.get("external_disposition_count", 0):
         score += 0.04
@@ -505,8 +508,9 @@ def _unmapped_vendor_conclusion_summary(
     request: SocDomainTriageRequest,
 ) -> str:
     history_bits = []
-    if request.metadata.get("similar_alert_count", 0):
-        history_bits.append(f"{request.metadata['similar_alert_count']} 条历史相似预警")
+    similar_alert_count = _similar_alert_count(request)
+    if similar_alert_count:
+        history_bits.append(f"{similar_alert_count} 条历史相似预警")
     if request.metadata.get("external_disposition_count", 0):
         history_bits.append(f"{request.metadata['external_disposition_count']} 条外部处置反馈")
     if request.metadata.get("relevant_memory_count", 0):
@@ -528,7 +532,7 @@ def _default_review_queue_for_domain(domain: SocDomainName) -> str:
 
 def _used_evidence_sources(request: SocDomainTriageRequest) -> list[str]:
     sources = ["raw_log"]
-    if request.metadata.get("similar_alert_count", 0):
+    if _similar_alert_count(request):
         sources.append("similar_alerts")
     if request.metadata.get("external_disposition_count", 0):
         sources.append("external_feedback")
@@ -544,11 +548,28 @@ def _used_evidence_sources(request: SocDomainTriageRequest) -> list[str]:
 def _scenario_evidence_refs(request: SocDomainTriageRequest) -> list[str]:
     refs = [f"run:{request.run.run_id}", f"alert:{request.run.alert_id}"]
     refs.extend(item.evidence_id for item in successful_evidence(request.investigation_evidence, include_mocked=True))
+    if request.correlation_result is not None:
+        refs.extend(f"correlation_run:{match.summary.run_id}" for match in request.correlation_result.matches)
+        refs.extend(evidence.evidence_id for match in request.correlation_result.matches for evidence in match.reusable_evidence)
     return _dedupe_strs(refs)
 
 
 def _available_action_routes(request: SocDomainTriageRequest) -> list[str]:
     return successful_evidence_routes(request.investigation_evidence)
+
+
+def _similar_alert_count(request: SocDomainTriageRequest) -> int:
+    if request.correlation_result is not None:
+        return len(request.correlation_result.matches)
+    value = request.metadata.get("similar_alert_count")
+    return value if isinstance(value, int) and value >= 0 else 0
+
+
+def _correlation_match_count(request: SocDomainTriageRequest) -> int:
+    if request.correlation_result is not None:
+        return len(request.correlation_result.matches)
+    value = request.metadata.get("correlation_match_count")
+    return value if isinstance(value, int) and value >= 0 else 0
 
 
 def _count_status(value: Any) -> str:

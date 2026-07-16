@@ -196,6 +196,8 @@ class PingAnMainOrchestratorEvalSampleResult(BaseModel):
     route_step_count: int = 0
     skill_count: int = 0
     evidence_count: int = 0
+    correlation_match_count: int = 0
+    reusable_evidence_count: int = 0
     domain_finding_count: int = 0
     review_context_ready: bool = False
     passed: bool = False
@@ -210,6 +212,8 @@ class PingAnMainOrchestratorEvalReport(BaseModel):
     sample_count: int = 0
     route_step_count: int = 0
     evidence_count: int = 0
+    correlation_match_count: int = 0
+    reusable_evidence_count: int = 0
     domain_finding_count: int = 0
     passed_count: int = 0
     failed_count: int = 0
@@ -288,6 +292,8 @@ def run_pingan_main_orchestrator_eval(fixtures: Sequence[PingAnCapabilityEvalFix
         sample_count=len(results),
         route_step_count=sum(result.route_step_count for result in results),
         evidence_count=sum(result.evidence_count for result in results),
+        correlation_match_count=sum(result.correlation_match_count for result in results),
+        reusable_evidence_count=sum(result.reusable_evidence_count for result in results),
         domain_finding_count=sum(result.domain_finding_count for result in results),
         passed_count=sum(result.passed for result in results),
         failed_count=sum(not result.passed for result in results),
@@ -391,21 +397,20 @@ def _run_main_orchestrator_fixture(fixture: PingAnCapabilityEvalFixture) -> Ping
     source_payload = _load_source_payload(fixture)
     expected_domain = _expected_domain_for_fixture(fixture, fixture.expected_source_type)
     service = SocMainOrchestratorService(action_adapter_registry=_registry_for_fixture(fixture))
+    history_report = service.run(
+        _main_orchestrator_request(
+            fixture,
+            source_payload,
+            expected_domain=expected_domain,
+            history=True,
+        )
+    )
     report = service.run(
-        SocMainOrchestratorRequest(
-            payload=source_payload,
-            sample_id=fixture.sample_id,
-            thread_id=f"THR-{fixture.sample_id}",
-            action_specs=[
-                SocOrchestratorActionSpec(
-                    route=action.route,
-                    action=action.action,
-                    payload=action.payload,
-                )
-                for action in fixture.actions
-            ],
-            capability_card_refs=_expected_capability_cards(expected_domain),
-            metadata={"source_path": fixture.source_path, "fixture_path": fixture.fixture_path},
+        _main_orchestrator_request(
+            fixture,
+            source_payload,
+            expected_domain=expected_domain,
+            history=False,
         )
     )
     failure_reasons: list[str] = []
@@ -420,11 +425,23 @@ def _run_main_orchestrator_fixture(fixture: PingAnCapabilityEvalFixture) -> Ping
         failure_reasons.append("expected selected SOC skills in unified report")
     if len(report.investigation_evidence) < sum(1 for action in fixture.actions if action.expect_evidence):
         failure_reasons.append("expected investigation evidence for read-only actions")
+    correlation_result = report.correlation_result
+    if correlation_result is None:
+        failure_reasons.append("expected structured correlation result in unified report")
+    else:
+        history_matches = [match for match in correlation_result.matches if match.summary.run_id == history_report.run.run_id]
+        if len(history_matches) != 1:
+            failure_reasons.append("expected the seeded historical run in correlation matches")
+        expected_reusable_evidence = sum(1 for action in fixture.actions if action.expect_evidence)
+        if correlation_result.reusable_evidence_count != expected_reusable_evidence:
+            failure_reasons.append(f"expected reusable evidence to come only from the seeded historical run: expected {expected_reusable_evidence}, got {correlation_result.reusable_evidence_count}")
     finding_count = sum(len(result.findings) for result in report.domain_triage_results)
     if finding_count == 0:
         failure_reasons.append("expected at least one domain finding")
     if report.review_context.run_id != report.run.run_id or report.review_context.alert_id != report.run.alert_id:
         failure_reasons.append("review context does not reference the orchestrated run")
+    if report.review_context.correlation_match_count != len(correlation_result.matches if correlation_result is not None else []):
+        failure_reasons.append("review context correlation count does not match the unified report")
     if report.metadata.get("writes_db") is not False:
         failure_reasons.append("main orchestrator demo must not write DB")
     if report.metadata.get("executes_high_risk_actions") is not False:
@@ -437,11 +454,42 @@ def _run_main_orchestrator_fixture(fixture: PingAnCapabilityEvalFixture) -> Ping
         route_step_count=len(report.route_steps),
         skill_count=len(report.skill_context.selected_skills),
         evidence_count=len(report.investigation_evidence),
+        correlation_match_count=len(correlation_result.matches) if correlation_result is not None else 0,
+        reusable_evidence_count=correlation_result.reusable_evidence_count if correlation_result is not None else 0,
         domain_finding_count=finding_count,
         review_context_ready=report.review_context.run_id == report.run.run_id,
         passed=not failure_reasons,
         failure_reasons=failure_reasons,
         report=report,
+    )
+
+
+def _main_orchestrator_request(
+    fixture: PingAnCapabilityEvalFixture,
+    source_payload: Mapping[str, Any],
+    *,
+    expected_domain: SocDomainName,
+    history: bool,
+) -> SocMainOrchestratorRequest:
+    sample_id = f"{fixture.sample_id}-history" if history else fixture.sample_id
+    return SocMainOrchestratorRequest(
+        payload=dict(source_payload),
+        sample_id=sample_id,
+        thread_id=f"THR-{sample_id}",
+        action_specs=[
+            SocOrchestratorActionSpec(
+                route=action.route,
+                action=action.action,
+                payload=action.payload,
+            )
+            for action in fixture.actions
+        ],
+        capability_card_refs=_expected_capability_cards(expected_domain),
+        metadata={
+            "source_path": fixture.source_path,
+            "fixture_path": fixture.fixture_path,
+            "eval_role": "correlation_history" if history else "current_alert",
+        },
     )
 
 
