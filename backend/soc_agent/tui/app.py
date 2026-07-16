@@ -19,10 +19,15 @@ from soc_agent.contracts import (
     ReviewQueueStatus,
     ServiceRequestContext,
     SocAgentApprovedActionCommand,
+    SocDispositionOutcomeCommand,
+    SocDispositionOutcomeReviewKind,
+    SocDispositionOutcomeSource,
+    SocOperationalDisposition,
     Verdict,
 )
 from soc_agent.core import (
     SocAgentApprovalService,
+    SocDispositionEvaluationService,
     SocNormalizationMaintenanceService,
     SocReviewService,
     SocServiceError,
@@ -47,7 +52,9 @@ _HELP_TEXT = (
     "/norm-update NMI-... acknowledged|resolved|ignored reason  "
     "/approval APR-...  /approve APR-... reason  /dry-run SAT-... route action  "
     "/execute SAT-... route action idempotency-key  /open REV-...  "
-    "/close REV-... reason  /correct RUN-... verdict reason  /quit"
+    "/close REV-... reason  /correct RUN-... verdict reason  "
+    "/outcome DPROP-... disposition idempotency-key reason  "
+    "/sample-outcome DSAMPLE-... DPROP-... disposition idempotency-key reason  /quit"
 )
 
 
@@ -117,12 +124,16 @@ class SocReviewTUI(App):
         *,
         approval_service: SocAgentApprovalService | None = None,
         normalization_service: SocNormalizationMaintenanceService | None = None,
+        disposition_evaluation_service: SocDispositionEvaluationService | None = None,
+        actor_id: str = "soc-review-tui",
         database_label: str = "",
     ) -> None:
         super().__init__()
         self.service = service
         self.approval_service = approval_service
         self.normalization_service = normalization_service
+        self.disposition_evaluation_service = disposition_evaluation_service
+        self.actor_id = actor_id
         self.database_label = database_label
         self.state = initial_state()
         self._palette_open = False
@@ -195,6 +206,10 @@ class SocReviewTUI(App):
             self._close_item(args)
         elif name == "correct":
             self._correct_run(args)
+        elif name == "outcome":
+            self._record_disposition_outcome(args, sampled=False)
+        elif name == "sample-outcome":
+            self._record_disposition_outcome(args, sampled=True)
         else:
             self._notice(f"/{name} is not available.", tone="error")
 
@@ -402,6 +417,42 @@ class SocReviewTUI(App):
         self._notice(f"Corrected {run_id} -> {verdict.value}.")
         self._load_queue()
 
+    def _record_disposition_outcome(self, args: str, *, sampled: bool) -> None:
+        sample_id, proposal_id, disposition_value, idempotency_key, reason = _parse_outcome_args(
+            args,
+            sampled=sampled,
+        )
+        usage = "/sample-outcome DSAMPLE-... DPROP-... disposition idempotency-key reason" if sampled else "/outcome DPROP-... disposition idempotency-key reason"
+        if not proposal_id or not disposition_value or not idempotency_key or not reason:
+            self._notice(f"Usage: {usage}", tone="error")
+            return
+        if self.disposition_evaluation_service is None:
+            self._notice("Disposition evaluation service is not configured.", tone="error")
+            return
+        try:
+            observed_disposition = SocOperationalDisposition(disposition_value)
+            result = self.disposition_evaluation_service.record_outcome(
+                SocDispositionOutcomeCommand(
+                    proposal_id=proposal_id,
+                    observed_disposition=observed_disposition,
+                    review_kind=(SocDispositionOutcomeReviewKind.SAMPLED_QUALITY_REVIEW if sampled else SocDispositionOutcomeReviewKind.ANALYST_RESOLUTION),
+                    source=SocDispositionOutcomeSource.ANALYST,
+                    sample_id=sample_id,
+                    reason=reason,
+                    idempotency_key=idempotency_key,
+                ),
+                context=_tui_outcome_context(
+                    actor_id=self.actor_id,
+                    idempotency_key=idempotency_key,
+                    sampled=sampled,
+                ),
+            )
+        except (SocServiceError, ValueError) as exc:
+            self._notice(str(exc), tone="error")
+            return
+        self._notice(f"Recorded {result.outcome.outcome_id} for {proposal_id} -> {observed_disposition.value}.")
+        self._open_context(result.outcome.queue_id)
+
     def _notice(self, text: str, *, tone: str = "info") -> None:
         self.state = add_notice(self.state, text, tone="error" if tone == "error" else "info")
         self._refresh_all()
@@ -505,9 +556,48 @@ def _parse_normalization_update_args(args: str) -> tuple[str, str, str]:
     return issue_id.strip(), status.strip(), reason.strip()
 
 
+def _parse_outcome_args(
+    args: str,
+    *,
+    sampled: bool,
+) -> tuple[str | None, str, str, str, str]:
+    first, _, rest = args.strip().partition(" ")
+    if sampled:
+        sample_id = first.strip() or None
+        proposal_id, _, rest = rest.strip().partition(" ")
+    else:
+        sample_id = None
+        proposal_id = first
+    disposition, _, rest = rest.strip().partition(" ")
+    idempotency_key, _, reason = rest.strip().partition(" ")
+    return (
+        sample_id,
+        proposal_id.strip(),
+        disposition.strip(),
+        idempotency_key.strip(),
+        reason.strip(),
+    )
+
+
 def _tui_request_context(*, idempotency_key: str | None = None) -> ServiceRequestContext:
     return ServiceRequestContext(
         actor=ActorContext(actor_id="soc-review-tui", surface=EntrySurface.TUI),
+        idempotency_key=idempotency_key,
+    )
+
+
+def _tui_outcome_context(
+    *,
+    actor_id: str,
+    idempotency_key: str,
+    sampled: bool,
+) -> ServiceRequestContext:
+    return ServiceRequestContext(
+        actor=ActorContext(
+            actor_id=actor_id,
+            surface=EntrySurface.TUI,
+            roles=["soc_quality_reviewer" if sampled else "soc_analyst"],
+        ),
         idempotency_key=idempotency_key,
     )
 

@@ -7,6 +7,8 @@ import type {
   SocAgentApprovalRequest,
   SocAgentApprovedActionCommand,
   SocAnalysisRun,
+  SocDispositionOutcomeApplyResult,
+  SocDispositionOutcomeRecordRequest,
   SocApprovalGrantRequest,
   SocApprovalRequestListResponse,
   SocInvestigationContext,
@@ -158,6 +160,24 @@ export async function correctSocReviewRun(
     },
   );
   return readJson<SocAnalysisRun>(response, "Failed to correct SOC review run");
+}
+
+export async function recordSocDispositionOutcome(
+  request: SocDispositionOutcomeRecordRequest,
+  context?: SocRequestContext,
+): Promise<SocDispositionOutcomeApplyResult> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/review/disposition-outcomes`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocDispositionOutcomeApplyResult>(
+    response,
+    "Failed to record SOC disposition outcome",
+  );
 }
 
 export async function createSocApprovalGrant(

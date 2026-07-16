@@ -32,6 +32,11 @@ BUILTIN_COMMANDS: tuple[Command, ...] = (
     Command("open", "Open investigation context: /open REV-..."),
     Command("close", "Close item: /close REV-... reason"),
     Command("correct", "Correct run: /correct RUN-... verdict reason"),
+    Command("outcome", "Record label: /outcome DPROP-... disposition idempotency-key reason"),
+    Command(
+        "sample-outcome",
+        "Record sampled label: /sample-outcome DSAMPLE-... DPROP-... disposition idempotency-key reason",
+    ),
     Command("quit", "Exit the TUI"),
 )
 

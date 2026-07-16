@@ -463,6 +463,11 @@ def _build_parser() -> argparse.ArgumentParser:
     review_close.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(review_close)
     review_tui = review_subparsers.add_parser("tui", help="Open the SOC review queue terminal workbench")
+    review_tui.add_argument(
+        "--actor-id",
+        default="soc-review-tui",
+        help="Reviewer actor id used for audited TUI writes",
+    )
     _add_database_args(review_tui)
 
     chat = subparsers.add_parser("chat", help="SOC interactive agent helpers")
@@ -2239,6 +2244,8 @@ def _review_tui(args: argparse.Namespace) -> int:
                 baseline_repository=repository,
                 issue_repository=repository,
             ),
+            disposition_evaluation_service=_disposition_evaluation_service(repository),
+            actor_id=args.actor_id,
             database_label=_database_label(args.database_url),
         )
     except ValueError as exc:

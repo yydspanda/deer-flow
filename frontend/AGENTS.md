@@ -76,6 +76,14 @@ Human input requests are a structured message protocol layered on normal chat hi
 
 Tool-calling AI messages can contain user-visible text as well as `tool_calls`. `core/messages/utils.ts` keeps these turns in an `assistant:processing` group, and `components/workspace/messages/message-group.tsx` must render the visible text as a processing step instead of treating the message as only tool metadata. This preserves provider text such as error explanations or "trying another approach" notes during tool-heavy runs.
 
+The SOC review workbench at `/workspace/soc/review` uses `core/soc` API/types/hooks rather than the
+LangGraph chat client. Structured disposition labels are a separate action from ReviewQueue close:
+the workbench only enables capture for a closed queue, requires an explicit proposal, operational
+disposition, review lane, and reason, and sends append-only revisions with
+`supersedes_outcome_id`. `recordSocDispositionOutcome()` uses the normal authenticated web actor plus
+a generated `Idempotency-Key`; UI code must never infer a label from `close_reason` or call persistence
+directly.
+
 ### Key Patterns
 
 - **Server Components by default**, `"use client"` only for interactive components

@@ -157,8 +157,9 @@ make install
 
 ### Experimental SOC Agent CLI
 
-This branch includes an early Phase 1 SOC Agent runtime scaffold. It is isolated
-under `backend/soc_agent/` and does not change the DeerFlow harness runtime.
+This branch includes an incremental SOC Agent extension under `backend/soc_agent/`.
+It reuses DeerFlow's model, skill, MCP, custom-agent, and TUI infrastructure while
+keeping SOC contracts, services, persistence, and adapters outside the harness core.
 
 Run a deterministic sample analysis:
 
@@ -173,9 +174,25 @@ When installed as a backend console script, the equivalent entry point is:
 soc analyze samples/alerts/approved_scanner.json --pretty
 ```
 
-The current implementation uses a fixed runtime pipeline and a deterministic
-stub analyzer. It does not call an LLM, write PostgreSQL data, consume Kafka, or
-perform automated response actions yet.
+The runtime keeps deterministic control flow and uses a deterministic analyzer by
+default; an explicitly selected DeerFlow model can run the bounded LLM node. SOC
+business persistence supports PostgreSQL, while focused local tests may use SQLite.
+Kafka ingestion, ReviewQueue Web/TUI, governed context, shadow disposition proposals,
+and append-only evaluation outcomes are available; production response side effects
+remain approval-gated and disabled without a real adapter.
+
+Open the SOC review workbench:
+
+```bash
+soc review tui --actor-id analyst-1 --database-url "$SOC_DATABASE_URL"
+```
+
+After a ReviewQueue item is closed, disposition labels remain a separate explicit
+action. In the TUI use `/outcome DPROP-... disposition idempotency-key reason` for a
+primary label or `/sample-outcome DSAMPLE-... DPROP-... disposition idempotency-key reason`
+for an independent sampled review. The Web workbench exposes the same structured
+fields at `/workspace/soc/review`; neither surface infers labels from close reasons.
+Use a distinct `--actor-id` for the independent quality reviewer.
 
 ### Configuration
 

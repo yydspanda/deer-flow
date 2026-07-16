@@ -1,6 +1,6 @@
 # External Disposition Sync
 
-> Updated: 2026-07-07
+> Updated: 2026-07-16
 >
 > 本文档定义 SOC Agent 与外部预警/工单/处置系统同步人工状态和处置理由的产品与工程边界。Zeus 是第一个接入场景，但协议不能写死 Zeus；未来要能接客户自研 SOC、SIEM/SOAR、ServiceNow、Jira、ITSM 或其他工单系统。
 
@@ -13,6 +13,7 @@
   -> ExternalDispositionAdapter
   -> SocExternalDispositionService
   -> audit / review / correction sync
+  -> guarded disposition evaluation outcome
   -> memory candidate
   -> skill improvement candidate
 ```
@@ -27,7 +28,11 @@
 - Done：高可信 mapped event 在唯一定位本地 target 后复用 `SocReviewService.correct()`，同步 operational correction 并关闭 review queue；低可信、未知状态、无法定位仍不改判。
 - Done：mapped 且可定位的外部 reason 可通过 `SocMemoryService.propose_candidate()` 生成 `SocMemoryCandidate(status=pending_review)`；未知/无法定位/无 reason 不生成候选。
 - Done：external disposition PostgreSQL persistence、ReviewQueue context API visibility、Web/TUI display、Lead Agent bounded context display。
-- Not yet：skill improvement candidate、confirmed memory review workflow、DB-first memory candidate persistence。
+- Done：EV-02 guarded bridge。只有 high-trust mapped event、verified target 和唯一 matching shadow proposal
+  才通过 `SocDispositionEvaluationService` 写 external-source outcome；apply result/audit/event 暴露 outcome id 或
+  skip reason，重复 event 可幂等补写。
+- Done：DB-first memory candidate persistence、review workflow、confirmed-memory/retrieval boundary。
+- Not yet：skill improvement candidate aggregation、真实外部 endpoint/credential integration。
 
 ## 2. 产品目标
 
@@ -130,6 +135,7 @@ external_disposition:{tenant_id|default}:{external_system}:{external_case_id}:{s
 | `CorrectionRecord` | 高置信映射且目标唯一 | 把外部人工结论作为 external correction，同步 operational decision |
 | `ReviewQueueItem` close/update | 已映射为 closed 类状态 | 关闭或标记本地待复核项，但保留原始 run |
 | `SocMemoryCandidate` | reason 有复用价值 | 只进入 pending review，不进入 confirmed memory |
+| `SocDispositionOutcomeRecord` | high-trust mapped + verified target + 唯一 matching proposal + closed queue | 通过 evaluation service 写显式 external-source label；不从 reason 猜 status，不应用 proposal |
 | `SkillImprovementCandidate` | 多次相似 reason 指向 skill 缺陷 | 生成优化候选，不自动改 skill |
 
 ## 8. 学习闭环
@@ -154,6 +160,7 @@ external_disposition:{tenant_id|default}:{external_system}:{external_case_id}:{s
 | 6 | Done | External disposition DB/API visibility | external disposition record 和 memory candidate id 能进入 ReviewQueue context |
 | 7 | Planned | Skill improvement candidate backlog | 重复 reason 可聚合成待评审优化项 |
 | 8 | Done | Web/TUI visibility | ReviewQueue context 显示外部处置历史和理由 |
+| 9 | Done | EV-02 structured outcome bridge | 符合 gate 的 external event 通过 evaluation service 幂等写 outcome；不覆盖 analyst primary，skip reason 可审计 |
 
 ## 10. 市场化扩展要求
 

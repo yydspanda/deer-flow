@@ -12,11 +12,19 @@ from soc_agent.contracts import (
     AnalysisRun,
     AnalysisRunStatus,
     AuditAction,
+    AuthorizationFactRef,
     DecisionAuditRecord,
     EntrySurface,
+    GovernedContextFactStatus,
     ReviewQueueItem,
     ReviewQueueStatus,
     ServiceRequestContext,
+    SocDetectionTruthSnapshot,
+    SocDispositionOutcomeCommand,
+    SocDispositionOutcomeSource,
+    SocDispositionOutcomeStatus,
+    SocDispositionProposalReasonCode,
+    SocDispositionProposalRecord,
     SocEvent,
     SocExternalDispositionAdapterConfig,
     SocExternalDispositionApplyStatus,
@@ -25,9 +33,19 @@ from soc_agent.contracts import (
     SocExternalDispositionStatusMapping,
     SocMemoryCandidateStatus,
     SocMemoryCandidateType,
+    SocOperationalDisposition,
     Verdict,
 )
-from soc_agent.core import SocExternalDispositionService, SocMemoryService, SocServiceNotImplementedError
+from soc_agent.core import (
+    SocDispositionEvaluationService,
+    SocExternalDispositionService,
+    SocMemoryService,
+    SocServiceNotImplementedError,
+)
+from soc_agent.disposition import (
+    InMemoryDispositionEvaluationRepository,
+    InMemoryDispositionProposalRepository,
+)
 from soc_agent.external_disposition import (
     InMemoryExternalDispositionRepository,
     build_external_disposition_event,
@@ -159,6 +177,14 @@ def test_external_disposition_service_applies_high_trust_correction_and_closes_r
             source_type=AlertSourceType.NDR,
         )
     )
+    proposal_repository = InMemoryDispositionProposalRepository([_proposal_for_target(run.run_id, run.alert_id, "REV-ZEUS-MOCK-0001")])
+    evaluation_repository = InMemoryDispositionEvaluationRepository()
+    evaluation_service = SocDispositionEvaluationService(
+        repository=evaluation_repository,
+        proposal_repository=proposal_repository,
+        review_queue_repository=review_repository,
+        event_sink=event_sink,
+    )
     service = SocExternalDispositionService(
         repository=repository,
         mapping_config=_mapping_config(),
@@ -167,6 +193,8 @@ def test_external_disposition_service_applies_high_trust_correction_and_closes_r
         audit_repository=audit_repository,
         event_sink=event_sink,
         memory_service=memory_service,
+        disposition_proposal_repository=proposal_repository,
+        disposition_evaluation_service=evaluation_service,
     )
     context = ServiceRequestContext(
         actor=ActorContext(
@@ -184,6 +212,10 @@ def test_external_disposition_service_applies_high_trust_correction_and_closes_r
     assert result.audit_written is True
     assert result.correction_applied is True
     assert result.memory_candidate_created is True
+    assert result.disposition_outcome_recorded is True
+    assert result.disposition_outcome_id is not None
+    assert result.disposition_outcome_idempotent is False
+    assert result.disposition_outcome_skip_reason is None
     assert result.record.apply_status is SocExternalDispositionApplyStatus.MAPPED
     assert result.record.canonical_status is SocExternalDispositionCanonicalStatus.CLOSED_FALSE_POSITIVE
     assert result.record.target_run_id == run.run_id
@@ -216,6 +248,13 @@ def test_external_disposition_service_applies_high_trust_correction_and_closes_r
     ]
     assert alert_repository.get_run(run.run_id).decision.verdict is Verdict.FALSE_POSITIVE
     assert review_repository.get_review_item("REV-ZEUS-MOCK-0001").status is ReviewQueueStatus.CLOSED
+    outcome = evaluation_repository.get_disposition_outcome(result.disposition_outcome_id)
+    assert outcome is not None
+    assert outcome.source is SocDispositionOutcomeSource.EXTERNAL_DISPOSITION
+    assert outcome.source_ref == result.record.disposition_id
+    assert outcome.observed_disposition is SocOperationalDisposition.CLOSED_FALSE_POSITIVE
+    assert outcome.outcome_status is SocDispositionOutcomeStatus.OVERRIDDEN
+    assert outcome.reviewed_by.actor_id == "zeus-webhook"
     assert {record.action for record in audit_repository.records} == {
         AuditAction.CORRECTION,
         AuditAction.EXTERNAL_DISPOSITION,
@@ -224,9 +263,11 @@ def test_external_disposition_service_applies_high_trust_correction_and_closes_r
     assert external_audit.payload["apply_status"] == "mapped"
     assert external_audit.payload["correction_id"] == result.record.correction_id
     assert external_audit.payload["memory_candidate_id"] == result.record.memory_candidate_id
+    assert external_audit.payload["disposition_outcome_id"] == result.disposition_outcome_id
     assert [event.event_type.value for event in event_sink.events] == [
         "review.corrected",
         "memory.updated",
+        "disposition.outcome_recorded",
         "external_disposition.received",
     ]
 
@@ -234,9 +275,48 @@ def test_external_disposition_service_applies_high_trust_correction_and_closes_r
     assert duplicate.idempotent is True
     assert duplicate.correction_applied is False
     assert duplicate.memory_candidate_created is False
+    assert duplicate.disposition_outcome_recorded is True
+    assert duplicate.disposition_outcome_id == result.disposition_outcome_id
+    assert duplicate.disposition_outcome_idempotent is True
     assert duplicate.record.disposition_id == result.record.disposition_id
     assert len(audit_repository.records) == 2
     assert len(memory_repository.list_memory_candidates()) == 1
+    assert len(evaluation_repository.list_disposition_outcomes()) == 1
+
+    analyst_result = evaluation_service.record_outcome(
+        SocDispositionOutcomeCommand(
+            proposal_id=proposal_repository.list_disposition_proposals(limit=1)[0].proposal_id,
+            observed_disposition=SocOperationalDisposition.CLOSED_TRUE_POSITIVE,
+            source=SocDispositionOutcomeSource.ANALYST,
+            reason="Analyst reviewed the evidence and corrected the external label.",
+            evidence_refs=["review:manual-confirmation"],
+            supersedes_outcome_id=result.disposition_outcome_id,
+            idempotency_key="outcome:analyst:zeus-mock:0001",
+        ),
+        context=ServiceRequestContext(
+            actor=ActorContext(
+                actor_id="analyst-7",
+                actor_type=ActorType.USER,
+                surface=EntrySurface.TUI,
+                roles=["soc_analyst"],
+            )
+        ),
+    )
+    assert analyst_result.outcome.source is SocDispositionOutcomeSource.ANALYST
+
+    later_payload = _load_zeus_fixture()
+    later_payload["event"]["id"] = "ZEUS-EVT-20260707-0002"
+    later_payload["event"]["version"] = "2"
+    later_payload["event"]["updatedAt"] = "2026-07-07T10:30:00Z"
+    later = service.apply_event(
+        build_external_disposition_event(later_payload, _zeus_adapter_config()),
+        context=context,
+    )
+
+    assert later.disposition_outcome_recorded is False
+    assert later.disposition_outcome_id is None
+    assert later.disposition_outcome_skip_reason == (f"latest primary outcome {analyst_result.outcome.outcome_id} is not external; an explicit analyst supersession is required")
+    assert len(evaluation_repository.list_disposition_outcomes()) == 2
 
 
 def test_external_disposition_service_does_not_apply_low_trust_correction() -> None:
@@ -259,6 +339,8 @@ def test_external_disposition_service_does_not_apply_low_trust_correction() -> N
             source_type=AlertSourceType.NDR,
         )
     )
+    proposal_repository = InMemoryDispositionProposalRepository([_proposal_for_target(run.run_id, run.alert_id, "REV-ZEUS-MOCK-0001")])
+    evaluation_repository = InMemoryDispositionEvaluationRepository()
     service = SocExternalDispositionService(
         repository=repository,
         mapping_config=SocExternalDispositionMappingConfig(
@@ -274,6 +356,12 @@ def test_external_disposition_service_does_not_apply_low_trust_correction() -> N
         alert_repository=alert_repository,
         review_queue_repository=review_repository,
         memory_service=SocMemoryService(candidate_repository=memory_repository),
+        disposition_proposal_repository=proposal_repository,
+        disposition_evaluation_service=SocDispositionEvaluationService(
+            repository=evaluation_repository,
+            proposal_repository=proposal_repository,
+            review_queue_repository=review_repository,
+        ),
     )
 
     result = service.apply_event(build_external_disposition_event(_load_zeus_fixture(), _zeus_adapter_config()))
@@ -283,6 +371,8 @@ def test_external_disposition_service_does_not_apply_low_trust_correction() -> N
     assert result.memory_candidate_created is True
     assert result.record.correction_id is None
     assert result.record.memory_candidate_id is not None
+    assert result.disposition_outcome_recorded is False
+    assert result.disposition_outcome_skip_reason == "external disposition mapping is not high trust"
     assert alert_repository.get_run(run.run_id).decision is None
     assert review_repository.get_review_item("REV-ZEUS-MOCK-0001").status is ReviewQueueStatus.OPEN
     candidate = memory_repository.get_memory_candidate(result.record.memory_candidate_id)
@@ -291,6 +381,7 @@ def test_external_disposition_service_does_not_apply_low_trust_correction() -> N
     assert candidate.source.correction_id is None
     assert candidate.confidence == 0.5
     assert candidate.facets["mapping_trust_level"] == ["medium"]
+    assert evaluation_repository.list_disposition_outcomes() == []
 
 
 def test_external_disposition_service_keeps_unmapped_or_unmatched_event_review_safe() -> None:
@@ -327,6 +418,43 @@ def test_external_disposition_service_requires_repository() -> None:
 
     with pytest.raises(SocServiceNotImplementedError):
         service.apply_event(build_external_disposition_event(_load_zeus_fixture(), _zeus_adapter_config()))
+
+
+def _proposal_for_target(
+    run_id: str,
+    alert_id: str,
+    queue_id: str,
+) -> SocDispositionProposalRecord:
+    return SocDispositionProposalRecord(
+        proposal_id="DPROP-ZEUS-MOCK-0001",
+        proposal_key="a" * 64,
+        run_id=run_id,
+        alert_id=alert_id,
+        queue_id=queue_id,
+        source_enrichment_id="AAE-ZEUS-MOCK-0001",
+        source_query_hash="b" * 64,
+        source_matcher_policy_version="soc.authorization_match.v1",
+        source_fact_refs=[
+            AuthorizationFactRef(
+                fact_id="GCF-ZEUS-MOCK-0001",
+                fact_version_id="GCFV-ZEUS-MOCK-0001-1",
+                version=1,
+                status=GovernedContextFactStatus.ACTIVE,
+                content_hash="c" * 64,
+            )
+        ],
+        source_evidence_refs=["fact:GCFV-ZEUS-MOCK-0001-1"],
+        detection_truth=SocDetectionTruthSnapshot(
+            verdict=Verdict.TRUE_POSITIVE,
+            confidence=0.95,
+            source="decision",
+            decision_policy_version="soc.decision_policy.v2",
+        ),
+        proposed_disposition=SocOperationalDisposition.CLOSED_BENIGN_TRUE_POSITIVE,
+        reason_code=SocDispositionProposalReasonCode.AUTHORIZED_ACTIVITY_EXACT_MATCH,
+        rationale=["Exact governed authorization matched the true-positive behavior."],
+        idempotency_key="proposal:zeus-mock:0001",
+    )
 
 
 def _load_zeus_fixture() -> dict:

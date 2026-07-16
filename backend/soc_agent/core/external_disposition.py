@@ -12,6 +12,9 @@ from soc_agent.contracts import (
     DecisionAuditRecord,
     EvidenceItem,
     ServiceRequestContext,
+    SocDispositionOutcomeCommand,
+    SocDispositionOutcomeReviewKind,
+    SocDispositionOutcomeSource,
     SocEvent,
     SocEventType,
     SocExternalDispositionApplyResult,
@@ -35,11 +38,22 @@ from soc_agent.protocols import (
     AlertSummaryRepository,
     DecisionAuditRepository,
     ReviewQueueRepository,
+    SocDispositionProposalRepository,
     SocEventSink,
     SocExternalDispositionRepository,
 )
 
-from .service import NoopEventSink, SocMemoryService, SocReviewService, SocServiceNotImplementedError
+from .disposition_evaluation import (
+    DispositionEvaluationIneligibleError,
+    SocDispositionEvaluationService,
+)
+from .service import (
+    NoopEventSink,
+    SocMemoryService,
+    SocReviewService,
+    SocServiceNotFoundError,
+    SocServiceNotImplementedError,
+)
 
 
 @dataclass(frozen=True)
@@ -48,6 +62,17 @@ class _LocatedExternalDispositionTarget:
     alert_id: str | None = None
     queue_id: str | None = None
     matched_by: str | None = None
+
+
+@dataclass(frozen=True)
+class _DispositionOutcomeBridgeResult:
+    recorded: bool = False
+    outcome_id: str | None = None
+    idempotent: bool = False
+    skip_reason: str | None = None
+
+
+_VERIFIED_TARGET_MATCHES = frozenset({"soc_queue_id", "soc_run_id", "external_case_binding"})
 
 
 class SocExternalDispositionService:
@@ -64,6 +89,8 @@ class SocExternalDispositionService:
         audit_repository: DecisionAuditRepository | None = None,
         event_sink: SocEventSink | None = None,
         memory_service: SocMemoryService | None = None,
+        disposition_proposal_repository: SocDispositionProposalRepository | None = None,
+        disposition_evaluation_service: SocDispositionEvaluationService | None = None,
     ) -> None:
         self._repository = repository
         self._mapping_config = mapping_config or SocExternalDispositionMappingConfig()
@@ -73,6 +100,8 @@ class SocExternalDispositionService:
         self._audit_repository = audit_repository
         self._event_sink = event_sink or NoopEventSink()
         self._memory_service = memory_service
+        self._disposition_proposal_repository = disposition_proposal_repository
+        self._disposition_evaluation_service = disposition_evaluation_service
 
     def apply_event(
         self,
@@ -80,7 +109,7 @@ class SocExternalDispositionService:
         *,
         context: ServiceRequestContext | None = None,
     ) -> SocExternalDispositionApplyResult:
-        """Persist one external disposition event without changing verdicts yet."""
+        """Persist one external disposition event and apply configured feedback boundaries."""
 
         if self._repository is None:
             raise SocServiceNotImplementedError("apply_event requires a SocExternalDispositionRepository")
@@ -90,7 +119,21 @@ class SocExternalDispositionService:
         idempotency_key = build_external_disposition_idempotency_key(external_event)
         existing = self._repository.find_external_disposition_by_idempotency_key(idempotency_key)
         if existing is not None:
-            return SocExternalDispositionApplyResult(record=existing, idempotent=True, audit_written=False)
+            bridge = self._capture_disposition_outcome(
+                existing,
+                target=_target_from_record(existing),
+                trust_level=str(existing.metadata.get("mapping_trust_level") or "low"),
+                context=request_context,
+            )
+            return SocExternalDispositionApplyResult(
+                record=existing,
+                idempotent=True,
+                audit_written=False,
+                disposition_outcome_recorded=bridge.recorded,
+                disposition_outcome_id=bridge.outcome_id,
+                disposition_outcome_idempotent=bridge.idempotent,
+                disposition_outcome_skip_reason=bridge.skip_reason,
+            )
 
         status_mapping = resolve_external_disposition_status(external_event, self._mapping_config)
         target = self._locate_target(external_event)
@@ -151,7 +194,23 @@ class SocExternalDispositionService:
         )
         record = record.model_copy(update={"audit_id": audit_record.audit_id if audit_record is not None else None})
         self._repository.save_external_disposition(record)
+        outcome_bridge = self._capture_disposition_outcome(
+            record,
+            target=target,
+            trust_level=status_mapping.trust_level,
+            context=request_context,
+        )
         if audit_record is not None and self._audit_repository is not None:
+            audit_record = audit_record.model_copy(
+                update={
+                    "payload": {
+                        **audit_record.payload,
+                        "disposition_outcome_id": outcome_bridge.outcome_id,
+                        "disposition_outcome_recorded": outcome_bridge.recorded,
+                        "disposition_outcome_skip_reason": outcome_bridge.skip_reason,
+                    }
+                }
+            )
             self._audit_repository.save_audit_record(audit_record)
         self._event_sink.emit(
             SocEvent(
@@ -167,6 +226,9 @@ class SocExternalDispositionService:
                     "canonical_status": record.canonical_status.value,
                     "apply_status": record.apply_status.value,
                     "idempotency_key": record.idempotency_key,
+                    "disposition_outcome_id": outcome_bridge.outcome_id,
+                    "disposition_outcome_recorded": outcome_bridge.recorded,
+                    "disposition_outcome_skip_reason": outcome_bridge.skip_reason,
                 },
             )
         )
@@ -176,6 +238,86 @@ class SocExternalDispositionService:
             audit_written=audit_record is not None and self._audit_repository is not None,
             correction_applied=correction_id is not None,
             memory_candidate_created=memory_candidate_id is not None,
+            disposition_outcome_recorded=outcome_bridge.recorded,
+            disposition_outcome_id=outcome_bridge.outcome_id,
+            disposition_outcome_idempotent=outcome_bridge.idempotent,
+            disposition_outcome_skip_reason=outcome_bridge.skip_reason,
+        )
+
+    def _capture_disposition_outcome(
+        self,
+        record: SocExternalDispositionRecord,
+        *,
+        target: _LocatedExternalDispositionTarget | None,
+        trust_level: str,
+        context: ServiceRequestContext,
+    ) -> _DispositionOutcomeBridgeResult:
+        service = self._disposition_evaluation_service
+        proposal_repository = self._disposition_proposal_repository
+        if service is None or proposal_repository is None:
+            return _DispositionOutcomeBridgeResult(skip_reason="disposition outcome bridge is not configured")
+        if trust_level != "high":
+            return _DispositionOutcomeBridgeResult(skip_reason="external disposition mapping is not high trust")
+        if record.apply_status is not SocExternalDispositionApplyStatus.MAPPED:
+            return _DispositionOutcomeBridgeResult(skip_reason="external disposition is not mapped")
+        if record.canonical_status is SocExternalDispositionCanonicalStatus.UNKNOWN:
+            return _DispositionOutcomeBridgeResult(skip_reason="external disposition has no terminal canonical status")
+        if target is None or target.queue_id is None or target.matched_by not in _VERIFIED_TARGET_MATCHES:
+            return _DispositionOutcomeBridgeResult(skip_reason="external disposition has no verified ReviewQueue target")
+
+        proposals = proposal_repository.list_disposition_proposals(queue_id=target.queue_id, limit=3)
+        matching = [proposal for proposal in proposals if proposal.run_id == target.run_id and proposal.alert_id == target.alert_id]
+        if len(matching) != 1:
+            return _DispositionOutcomeBridgeResult(skip_reason=f"expected one disposition proposal for verified target, found {len(matching)}")
+        proposal = matching[0]
+        idempotency_key = f"outcome:external:{record.disposition_id}"
+        try:
+            existing_outcomes = service.list_outcomes(
+                proposal_id=proposal.proposal_id,
+                review_kind=SocDispositionOutcomeReviewKind.ANALYST_RESOLUTION,
+                limit=100,
+            )
+        except SocServiceNotImplementedError as exc:
+            return _DispositionOutcomeBridgeResult(skip_reason=str(exc))
+        duplicate = next(
+            (item for item in existing_outcomes if item.idempotency_key == idempotency_key),
+            None,
+        )
+        if duplicate is not None:
+            return _DispositionOutcomeBridgeResult(
+                recorded=True,
+                outcome_id=duplicate.outcome_id,
+                idempotent=True,
+            )
+
+        latest = existing_outcomes[0] if existing_outcomes else None
+        if latest is not None and latest.source is not SocDispositionOutcomeSource.EXTERNAL_DISPOSITION:
+            return _DispositionOutcomeBridgeResult(skip_reason=(f"latest primary outcome {latest.outcome_id} is not external; an explicit analyst supersession is required"))
+        try:
+            result = service.record_outcome(
+                SocDispositionOutcomeCommand(
+                    proposal_id=proposal.proposal_id,
+                    observed_disposition=record.canonical_status,
+                    review_kind=SocDispositionOutcomeReviewKind.ANALYST_RESOLUTION,
+                    source=SocDispositionOutcomeSource.EXTERNAL_DISPOSITION,
+                    source_ref=record.disposition_id,
+                    reason=_external_outcome_reason(record),
+                    evidence_refs=_external_outcome_evidence_refs(record),
+                    supersedes_outcome_id=latest.outcome_id if latest is not None else None,
+                    idempotency_key=idempotency_key,
+                ),
+                context=context,
+            )
+        except (
+            DispositionEvaluationIneligibleError,
+            SocServiceNotFoundError,
+            SocServiceNotImplementedError,
+        ) as exc:
+            return _DispositionOutcomeBridgeResult(skip_reason=str(exc))
+        return _DispositionOutcomeBridgeResult(
+            recorded=True,
+            outcome_id=result.outcome.outcome_id,
+            idempotent=result.idempotent,
         )
 
     def _propose_memory_candidate(
@@ -270,7 +412,7 @@ class SocExternalDispositionService:
             or apply_status is not SocExternalDispositionApplyStatus.MAPPED
             or target is None
             or target.run_id is None
-            or target.matched_by not in {"soc_queue_id", "soc_run_id", "external_case_binding"}
+            or target.matched_by not in _VERIFIED_TARGET_MATCHES
             or self._alert_repository is None
         ):
             return None
@@ -308,6 +450,16 @@ class SocExternalDispositionService:
                     alert_id=item.alert_id,
                     queue_id=item.queue_id,
                     matched_by="soc_queue_id",
+                )
+
+        if event.soc_run_id is not None and self._review_queue_repository is not None:
+            item = self._review_queue_repository.get_open_review_item_by_run(event.soc_run_id)
+            if item is not None:
+                return _LocatedExternalDispositionTarget(
+                    run_id=item.run_id,
+                    alert_id=item.alert_id,
+                    queue_id=item.queue_id,
+                    matched_by="soc_run_id",
                 )
 
         if event.soc_run_id is not None and self._alert_repository is not None:
@@ -378,6 +530,32 @@ class SocExternalDispositionService:
                 "matched_by": target.matched_by,
             },
         )
+
+
+def _target_from_record(record: SocExternalDispositionRecord) -> _LocatedExternalDispositionTarget:
+    return _LocatedExternalDispositionTarget(
+        run_id=record.target_run_id,
+        alert_id=record.target_alert_id,
+        queue_id=record.target_queue_id,
+        matched_by=record.matched_by,
+    )
+
+
+def _external_outcome_reason(record: SocExternalDispositionRecord) -> str:
+    reason = record.event.external_reason.strip() if record.event.external_reason else ""
+    if reason:
+        return reason
+    return f"Trusted external disposition {record.event.external_system}:{record.event.external_case_id} reported {record.event.external_status}."
+
+
+def _external_outcome_evidence_refs(record: SocExternalDispositionRecord) -> list[str]:
+    refs = [
+        f"external_disposition:{record.disposition_id}",
+        f"external_case:{record.event.external_system}:{record.event.external_case_id}",
+    ]
+    if record.event.source_event_id:
+        refs.append(f"external_event:{record.event.external_system}:{record.event.source_event_id}")
+    return refs
 
 
 def _apply_status_and_reason(

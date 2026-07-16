@@ -38,6 +38,7 @@ import {
   useDryRunSocApprovedAction,
   useExecuteSocApprovedAction,
   useReviewSocMemoryCandidate,
+  useRecordSocDispositionOutcome,
   useSocApprovalRequest,
   useSocApprovalRequests,
   useSocReviewContext,
@@ -50,6 +51,7 @@ import type {
   SocAgentApprovedActionCommand,
   SocAuthorizationEnrichmentRecord,
   SocDispositionOutcomeRecord,
+  SocDispositionOutcomeReviewKind,
   SocDispositionProposalRecord,
   SocExternalDispositionRecord,
   SocInvestigationEvidence,
@@ -57,6 +59,7 @@ import type {
   SocMemoryCandidate,
   SocMemoryCandidateReviewDecision,
   SocMemoryRetrievalResult,
+  SocOperationalDisposition,
   SocReviewQueueItem,
   SocReviewQueueStatus,
   SocUnifiedInvestigationView,
@@ -77,6 +80,28 @@ const VERDICT_OPTIONS: { value: SocVerdict; label: string }[] = [
   { value: "false_positive", label: "误报" },
   { value: "unknown", label: "未知" },
   { value: "needs_review", label: "需复核" },
+];
+
+const DISPOSITION_OPTIONS: {
+  value: SocOperationalDisposition;
+  label: string;
+}[] = [
+  { value: "closed_true_positive", label: "真实攻击关闭" },
+  { value: "closed_false_positive", label: "误报关闭" },
+  { value: "closed_benign_true_positive", label: "真实但已授权" },
+  { value: "suppressed", label: "已抑制" },
+  { value: "escalated", label: "已升级" },
+  { value: "ignored", label: "已忽略" },
+  { value: "duplicate", label: "重复事件" },
+  { value: "unknown", label: "证据不足" },
+];
+
+const OUTCOME_REVIEW_KIND_OPTIONS: {
+  value: SocDispositionOutcomeReviewKind;
+  label: string;
+}[] = [
+  { value: "analyst_resolution", label: "分析师结论" },
+  { value: "sampled_quality_review", label: "独立抽样复核" },
 ];
 
 const DEFAULT_APPROVAL_REQUEST_JSON = JSON.stringify(
@@ -610,6 +635,201 @@ function DispositionProposalSection({
             </div>
           ))
         )}
+      </div>
+    </section>
+  );
+}
+
+function DispositionOutcomeCaptureSection({
+  queueStatus,
+  proposals,
+  outcomes,
+}: {
+  queueStatus: SocReviewQueueStatus;
+  proposals: SocDispositionProposalRecord[];
+  outcomes: SocDispositionOutcomeRecord[];
+}) {
+  const [proposalId, setProposalId] = useState("");
+  const [observedDisposition, setObservedDisposition] =
+    useState<SocOperationalDisposition>("closed_benign_true_positive");
+  const [reviewKind, setReviewKind] =
+    useState<SocDispositionOutcomeReviewKind>("analyst_resolution");
+  const [sampleId, setSampleId] = useState("");
+  const [reason, setReason] = useState("");
+  const mutation = useRecordSocDispositionOutcome();
+
+  const activeProposal =
+    proposals.find((proposal) => proposal.proposal_id === proposalId) ??
+    proposals[0];
+  const activeProposalId = activeProposal?.proposal_id ?? "";
+  const proposedDisposition = activeProposal?.proposed_disposition;
+  useEffect(() => {
+    if (proposedDisposition) {
+      setObservedDisposition(proposedDisposition);
+    }
+  }, [activeProposalId, proposedDisposition]);
+  const latestOutcome = outcomes.find(
+    (outcome) =>
+      outcome.proposal_id === activeProposalId &&
+      outcome.review_kind === reviewKind,
+  );
+  const sampled = reviewKind === "sampled_quality_review";
+  const canSubmit =
+    queueStatus === "closed" &&
+    activeProposalId.length > 0 &&
+    reason.trim().length > 0 &&
+    (!sampled || sampleId.trim().length > 0);
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    try {
+      await mutation.mutateAsync({
+        proposal_id: activeProposalId,
+        observed_disposition: observedDisposition,
+        review_kind: reviewKind,
+        sample_id: sampled ? sampleId.trim() : null,
+        reason: reason.trim(),
+        evidence_refs: [],
+        supersedes_outcome_id: latestOutcome?.outcome_id ?? null,
+      });
+      setReason("");
+      toast.success(latestOutcome ? "处置标签修订已记录" : "处置标签已记录");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "处置标签记录失败");
+    }
+  };
+
+  return (
+    <section className="rounded-md border">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+        <div className="flex items-center gap-2">
+          <ClipboardCheckIcon className="text-muted-foreground size-4" />
+          <h3 className="text-sm font-semibold">结构化处置标签</h3>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge variant="outline">append-only</Badge>
+          <Badge variant="secondary">shadow evaluation</Badge>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-2">
+        <div className="space-y-2">
+          <label className="text-sm font-medium" htmlFor="outcome-proposal">
+            影子建议
+          </label>
+          <Select value={activeProposalId} onValueChange={setProposalId}>
+            <SelectTrigger id="outcome-proposal" className="w-full">
+              <SelectValue placeholder="选择建议" />
+            </SelectTrigger>
+            <SelectContent>
+              {proposals.map((proposal) => (
+                <SelectItem
+                  key={proposal.proposal_id}
+                  value={proposal.proposal_id}
+                >
+                  {proposal.proposal_id} / {proposal.proposed_disposition}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-sm font-medium" htmlFor="outcome-disposition">
+            实际处置
+          </label>
+          <Select
+            value={observedDisposition}
+            onValueChange={(value) =>
+              setObservedDisposition(value as SocOperationalDisposition)
+            }
+          >
+            <SelectTrigger id="outcome-disposition" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {DISPOSITION_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-sm font-medium" htmlFor="outcome-review-kind">
+            标签来源
+          </label>
+          <Select
+            value={reviewKind}
+            onValueChange={(value) =>
+              setReviewKind(value as SocDispositionOutcomeReviewKind)
+            }
+          >
+            <SelectTrigger id="outcome-review-kind" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {OUTCOME_REVIEW_KIND_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {sampled ? (
+          <div className="space-y-2">
+            <label className="text-sm font-medium" htmlFor="outcome-sample-id">
+              抽样批次
+            </label>
+            <Input
+              id="outcome-sample-id"
+              value={sampleId}
+              onChange={(event) => setSampleId(event.target.value)}
+              placeholder="DSAMPLE-..."
+            />
+          </div>
+        ) : (
+          <div className="flex items-end">
+            <div className="text-muted-foreground text-sm">
+              {latestOutcome
+                ? `修订 ${latestOutcome.outcome_id}`
+                : "首次记录该复核通道"}
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-2 lg:col-span-2">
+          <label className="text-sm font-medium" htmlFor="outcome-reason">
+            标签理由
+          </label>
+          <Textarea
+            id="outcome-reason"
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            className="min-h-24 resize-none"
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 lg:col-span-2">
+          <span className="text-muted-foreground text-xs">
+            {queueStatus === "closed"
+              ? latestOutcome
+                ? `将显式 supersede ${latestOutcome.outcome_id}`
+                : "工单已关闭，可记录标签"
+              : "工单关闭后可记录标签"}
+          </span>
+          <Button
+            size="sm"
+            onClick={() => void handleSubmit()}
+            disabled={!canSubmit || mutation.isPending}
+          >
+            <ClipboardCheckIcon className="size-4" />
+            {latestOutcome ? "提交修订" : "记录标签"}
+          </Button>
+        </div>
       </div>
     </section>
   );
@@ -1477,6 +1697,12 @@ export function SocReviewQueueWorkbench() {
 
               <DispositionProposalSection
                 proposals={context?.disposition_proposals ?? []}
+              />
+
+              <DispositionOutcomeCaptureSection
+                queueStatus={fallbackSelectedItem.status}
+                proposals={context?.disposition_proposals ?? []}
+                outcomes={context?.disposition_outcomes ?? []}
               />
 
               <DispositionOutcomeSection

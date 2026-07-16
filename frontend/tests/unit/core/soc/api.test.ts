@@ -19,6 +19,7 @@ import {
   getSocReviewContext,
   listSocApprovalRequests,
   listSocReviewItems,
+  recordSocDispositionOutcome,
 } from "@/core/soc/api";
 
 const mockedFetch = rs.mocked(fetcher);
@@ -154,6 +155,44 @@ describe("SOC review API", () => {
         }),
       }),
     );
+  });
+
+  test("posts explicit structured disposition outcome", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, { outcome: { outcome_id: "DOUT-1" } }),
+    );
+
+    await recordSocDispositionOutcome(
+      {
+        proposal_id: "DPROP-1",
+        observed_disposition: "closed_benign_true_positive",
+        review_kind: "analyst_resolution",
+        reason: "Analyst confirmed the authorized activity.",
+        evidence_refs: ["review_queue:REV-1"],
+      },
+      {
+        actorId: "analyst-1",
+        surface: "web",
+        idempotencyKey: "outcome:web:1",
+      },
+    );
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/review/disposition-outcomes",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          proposal_id: "DPROP-1",
+          observed_disposition: "closed_benign_true_positive",
+          review_kind: "analyst_resolution",
+          reason: "Analyst confirmed the authorized activity.",
+          evidence_refs: ["review_queue:REV-1"],
+        }),
+      }),
+    );
+    const init = firstFetchInit();
+    const headers = init.headers as Headers;
+    expect(headers.get("idempotency-key")).toBe("outcome:web:1");
   });
 
   test("surfaces backend detail", async () => {

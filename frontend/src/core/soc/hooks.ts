@@ -22,6 +22,7 @@ import {
   listSocNormalizationIssues,
   listSocApprovalRequests,
   listSocReviewItems,
+  recordSocDispositionOutcome,
   reviewSocMemoryCandidate,
   searchSocMemoryRecords,
   updateSocNormalizationIssue,
@@ -29,6 +30,7 @@ import {
 import type {
   SocAgentApprovedActionCommand,
   SocApprovalGrantRequest,
+  SocDispositionOutcomeRecordRequest,
   SocMemoryCandidateReviewRequest,
   SocMemoryCandidateStatus,
   SocMemoryQuery,
@@ -195,6 +197,18 @@ export function useCorrectSocReviewRun() {
       runId: string;
       request: SocReviewCorrectionRequest;
     }) => correctSocReviewRun(runId, request, context),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all });
+    },
+  });
+}
+
+export function useRecordSocDispositionOutcome() {
+  const context = useSocWebRequestContext();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (request: SocDispositionOutcomeRecordRequest) =>
+      recordSocDispositionOutcome(request, context),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all });
     },

@@ -201,6 +201,8 @@ soc context revise GCF-... revision.json --expected-version 2 --pretty
 
 ## Next / 下一步
 
-1. `EV-02 Outcome Capture Integration`：Web/TUI/API 与 trusted external disposition 只通过
-   `SocDispositionEvaluationService` 写结构化 outcome；不得从 free-text close reason 猜标签。
-2. 在取得真实、足量、跨时段评测数据并另行批准 rollout controller 前，继续保持 auto-close disabled。
+1. `EV-02 Outcome Capture Integration` 已完成：Web/TUI/API 与 trusted external disposition 只通过
+   `SocDispositionEvaluationService` 写结构化 outcome；不从 free-text close reason 猜标签。
+2. 下一刀 `EV-03 Sample Review Inbox`：把 manifest selected proposals、primary label、独立 sampled review
+   状态组织成 campaign/inbox，避免人工复制 id 或挑样。
+3. 在取得真实、足量、跨时段评测数据并另行批准 rollout controller 前，继续保持 auto-close disabled。

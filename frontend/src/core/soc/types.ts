@@ -645,6 +645,28 @@ export interface SocDispositionOutcomeRecord {
   review_queue_impact: "none";
 }
 
+export type SocDispositionOutcomeReviewKind =
+  | "analyst_resolution"
+  | "sampled_quality_review";
+
+export interface SocDispositionOutcomeRecordRequest {
+  proposal_id: string;
+  observed_disposition: SocOperationalDisposition;
+  review_kind: SocDispositionOutcomeReviewKind;
+  sample_id?: string | null;
+  reason: string;
+  evidence_refs?: string[];
+  observed_at?: string | null;
+  supersedes_outcome_id?: string | null;
+}
+
+export interface SocDispositionOutcomeApplyResult {
+  schema_version: string;
+  outcome: SocDispositionOutcomeRecord;
+  idempotent: boolean;
+  event_written: boolean;
+}
+
 export interface SocMemoryCandidateReviewRequest {
   decision: SocMemoryCandidateReviewDecision;
   reason: string;

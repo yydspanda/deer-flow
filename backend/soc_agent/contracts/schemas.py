@@ -1315,6 +1315,10 @@ class SocExternalDispositionApplyResult(BaseModel):
     audit_written: bool = False
     correction_applied: bool = False
     memory_candidate_created: bool = False
+    disposition_outcome_recorded: bool = False
+    disposition_outcome_id: str | None = None
+    disposition_outcome_idempotent: bool = False
+    disposition_outcome_skip_reason: str | None = None
 
 
 class SocAgentActionAdapterDescriptor(BaseModel):

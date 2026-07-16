@@ -29,8 +29,10 @@ from soc_agent.tui.app import (
     _parse_approved_action_args,
     _parse_correct_args,
     _parse_normalization_update_args,
+    _parse_outcome_args,
     _tui_approval_context,
     _tui_normalization_context,
+    _tui_outcome_context,
     _tui_request_context,
 )
 from soc_agent.tui.command_registry import filter_commands, resolve
@@ -62,6 +64,8 @@ def test_soc_review_tui_command_registry_filters_and_resolves() -> None:
     assert resolve("/approve APR-1 reason").args == "APR-1 reason"
     assert resolve("/dry-run SAT-1 response.block_ip response.block_ip").kind == "builtin"
     assert resolve("/execute SAT-1 response.block_ip response.block_ip idem-1").args == "SAT-1 response.block_ip response.block_ip idem-1"
+    assert resolve("/outcome DPROP-1 unknown idem-1 unresolved").kind == "builtin"
+    assert resolve("/sample-outcome DSAMPLE-1 DPROP-1 unknown idem-2 unresolved").kind == "builtin"
     assert resolve("open REV-1").kind == "unknown"
 
 
@@ -248,12 +252,50 @@ def test_soc_review_tui_parse_normalization_update_args() -> None:
     )
 
 
+def test_soc_review_tui_parse_primary_outcome_args() -> None:
+    assert _parse_outcome_args(
+        "DPROP-1 closed_benign_true_positive outcome-1 analyst confirmed authorization",
+        sampled=False,
+    ) == (
+        None,
+        "DPROP-1",
+        "closed_benign_true_positive",
+        "outcome-1",
+        "analyst confirmed authorization",
+    )
+
+
+def test_soc_review_tui_parse_sampled_outcome_args() -> None:
+    assert _parse_outcome_args(
+        "DSAMPLE-1 DPROP-1 escalated outcome-2 independent reviewer disagreed",
+        sampled=True,
+    ) == (
+        "DSAMPLE-1",
+        "DPROP-1",
+        "escalated",
+        "outcome-2",
+        "independent reviewer disagreed",
+    )
+
+
 def test_soc_review_tui_request_context_marks_tui_surface() -> None:
     context = _tui_request_context(idempotency_key="idem-1")
 
     assert context.actor.actor_id == "soc-review-tui"
     assert context.actor.surface is EntrySurface.TUI
     assert context.idempotency_key == "idem-1"
+
+
+def test_soc_review_tui_outcome_context_marks_review_role() -> None:
+    primary = _tui_outcome_context(actor_id="analyst-1", idempotency_key="outcome-1", sampled=False)
+    sampled = _tui_outcome_context(actor_id="reviewer-2", idempotency_key="outcome-2", sampled=True)
+
+    assert primary.actor.actor_id == "analyst-1"
+    assert primary.actor.roles == ["soc_analyst"]
+    assert sampled.actor.actor_id == "reviewer-2"
+    assert sampled.actor.roles == ["soc_quality_reviewer"]
+    assert sampled.actor.surface is EntrySurface.TUI
+    assert sampled.idempotency_key == "outcome-2"
 
 
 def test_soc_review_tui_approval_context_marks_approver_role() -> None:

@@ -6,7 +6,12 @@ from collections.abc import Iterator
 from typing import Protocol
 
 from soc_agent.contracts import ServiceRequestContext, SocAgentChatRequest, SocAgentStreamEvent
-from soc_agent.core import SocAgentApprovalService, SocNormalizationMaintenanceService, SocReviewService
+from soc_agent.core import (
+    SocAgentApprovalService,
+    SocDispositionEvaluationService,
+    SocNormalizationMaintenanceService,
+    SocReviewService,
+)
 
 
 class SocChatServiceLike(Protocol):
@@ -23,6 +28,8 @@ def run_review_tui(
     *,
     approval_service: SocAgentApprovalService | None = None,
     normalization_service: SocNormalizationMaintenanceService | None = None,
+    disposition_evaluation_service: SocDispositionEvaluationService | None = None,
+    actor_id: str = "soc-review-tui",
     database_label: str = "",
 ) -> None:
     try:
@@ -34,6 +41,8 @@ def run_review_tui(
         service,
         approval_service=approval_service,
         normalization_service=normalization_service,
+        disposition_evaluation_service=disposition_evaluation_service,
+        actor_id=actor_id,
         database_label=database_label,
     ).run()
 

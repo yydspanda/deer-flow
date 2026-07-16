@@ -44,7 +44,7 @@ flowchart TD
     Z1 --> Z2["🗃️ AuthorizationEnrichmentRecord<br/>append-only match snapshot"]
     Z2 --> Z3["⚙️ DP-01 exact + true-positive gate"]
     Z3 --> Z4["🗃️ Shadow Disposition Proposal<br/>not applied / human review"]
-    Z4 --> Z5["🧑‍💻 Closed queue + explicit outcome<br/>人工结论，不从理由猜测"]
+    Z4 --> Z5["🧑‍💻 EV-02 Outcome Capture<br/>closed queue + Web / TUI / API"]
     Z5 --> Z6["🗃️ Append-only Outcome<br/>primary / sampled QA"]
     Z4 --> Z7["⚙️ Hash-ranked Sample<br/>可复现抽样"]
     Z7 --> Z8["🗃️ Sample Manifest"]
@@ -75,6 +75,10 @@ flowchart TD
 
     T["🧾 External disposition<br/>Zeus / ITSM / SOAR 状态理由"] --> U["⚙️ SocExternalDispositionService<br/>外部反馈归一化"]
     U --> V["🗃️ external disposition + audit<br/>外部反馈和审计"]
+    U --> Z11{"⚙️ trusted + verified target<br/>+ unique proposal?"}
+    Z11 -->|Yes| Z12["⚙️ EV-02 External Outcome Bridge"]
+    Z12 --> Z6
+    Z11 -->|No| V
     U --> Q
     V --> G
 ```
@@ -96,7 +100,9 @@ flowchart TD
     人工决定是否关单，系统不会自动应用。
 12. EV-01 不从 close reason 猜结论。它保存显式 primary/sample outcome，用可复现 manifest 防止挑样，
     再计算 precision、override、sample agreement、freshness 和 fact fan-out。
-13. Gate 通过只表示可进入治理 rollout review；当前仍固定 `auto_close_allowed=false`。
+13. EV-02 已把 authenticated API/Web、Review TUI 和受门控的 trusted external feedback 接到同一
+    evaluation service；各入口仍必须提供显式结构化标签和幂等身份。
+14. Gate 通过只表示可进入治理 rollout review；当前仍固定 `auto_close_allowed=false`。
 
 Current governed-context boundary / 当前边界：GF-01 已能通过 `SocGovernedContextService` 和
 `soc_governed_context_facts` 保存、审批、暂停、撤销、过期及回放 typed fact versions；AA-01 已能从
@@ -104,7 +110,8 @@ canonical alert 构造 `AuthorizationQuery`，按事件时间选择历史 fact v
 `AuthorizationMatchResult`；EX-01 已把 query/result/policy/fact refs 保存为 append-only
 `AuthorizationEnrichmentRecord`；DP-01 已从 persisted exact enrichment + current true-positive
 detection truth 生成 append-only `SocDispositionProposalRecord`；EV-01 已保存 hash-ranked sample manifest、
-append-only `SocDispositionOutcomeRecord` 并生成只读 gate report，outcome 同样投影到统一调查上下文。
+append-only `SocDispositionOutcomeRecord` 并生成只读 gate report；EV-02 已提供 Web/TUI/API/trusted external
+显式写入口，outcome 同样投影到统一调查上下文。
 `security_tag.lookup` 仍只是 `InvestigationEvidence`；护网 campaign/participant attribution 尚未实现。
 该 proposal 只建议 `closed_benign_true_positive`，固定 shadow/not-applied，仍以人工 ReviewQueue 为准。
 
@@ -439,9 +446,14 @@ flowchart TD
 
     J --> K["🗃️ update run / summary / review queue / audit"]
     J --> L["🧠📌 external reason -> MemoryCandidate<br/>pending_review"]
+    J --> N{"⚙️ verified target + one proposal?<br/>EV-02 bridge gate"}
+    N -->|Yes| O["🗃️ external-source Outcome<br/>via evaluation service"]
+    N -->|No| P["🔎 explicit skip reason<br/>no inferred label"]
     I --> M["🔎 visible in InvestigationContext<br/>调查上下文可见"]
     K --> M
     L --> M
+    O --> M
+    P --> M
 ```
 
 External disposition 的意义：
@@ -451,6 +463,10 @@ External disposition 的意义：
 - 外部 reason 不能直接成为 confirmed memory。
 - 外部 correction 必须复用 `SocReviewService.correct()`，避免两套改判逻辑。
 - 未映射、低可信、无法唯一定位的事件只保存，不改判。
+- EV-02 outcome bridge 还要求唯一 matching proposal，并复用 `SocDispositionEvaluationService`；bridge
+  不从 external reason 猜 canonical status，不会覆盖较新的 analyst/replay primary outcome。
+- External correction/queue sync 与 shadow outcome capture 是两条独立审计边界；后者不应用 proposal，
+  不改变 ReviewQueue，仍保持 `auto_close_allowed=false`。
 
 ## 9. Memory Candidate and Confirmed Memory / 记忆候选与确认记忆
 

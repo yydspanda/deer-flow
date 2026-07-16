@@ -18,6 +18,8 @@ from soc_agent.contracts import (
     ReviewQueueStatus,
     SimilarAlertMatch,
     SimilarAlertQuery,
+    SocDispositionOutcomeReviewKind,
+    SocDispositionOutcomeSource,
     SocExternalDispositionApplyStatus,
     SocExternalDispositionCanonicalStatus,
     SocExternalDispositionEvent,
@@ -31,6 +33,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateValidity,
     SocMemoryDecisionImpact,
     SocMemoryTargetArtifact,
+    SocOperationalDisposition,
     Verdict,
 )
 from soc_agent.core import SocAnalysisService, SocMemoryService, SocReviewService
@@ -375,6 +378,61 @@ def test_soc_review_api_corrects_run_and_closes_open_item(review_api) -> None:
     assert repository.get_review_item(item.queue_id).status == ReviewQueueStatus.CLOSED
 
 
+def test_soc_review_api_records_explicit_disposition_outcome_with_authenticated_actor() -> None:
+    class RecordingDispositionEvaluationService:
+        command = None
+        context = None
+
+        def record_outcome(self, command, *, context):
+            self.command = command
+            self.context = context
+            return {"recorded": True}
+
+    service = RecordingDispositionEvaluationService()
+    result = soc_review.record_disposition_outcome(
+        soc_review.DispositionOutcomeRecordRequest(
+            proposal_id="DPROP-API-1",
+            observed_disposition=SocOperationalDisposition.CLOSED_BENIGN_TRUE_POSITIVE,
+            review_kind=SocDispositionOutcomeReviewKind.SAMPLED_QUALITY_REVIEW,
+            sample_id="DSAMPLE-API-1",
+            reason="Independent reviewer confirmed the operational disposition.",
+            evidence_refs=["review_queue:REV-API-1"],
+        ),
+        FakeRequest(
+            {
+                "x-soc-actor-id": "spoofed-user",
+                "x-soc-surface": "web",
+                "idempotency-key": "outcome:web:api-1",
+            },
+            user_id="auth-reviewer-1",
+        ),
+        service=service,
+    )
+
+    assert result == {"recorded": True}
+    assert service.command.proposal_id == "DPROP-API-1"
+    assert service.command.source is SocDispositionOutcomeSource.ANALYST
+    assert service.command.sample_id == "DSAMPLE-API-1"
+    assert service.command.idempotency_key == "outcome:web:api-1"
+    assert service.context.actor.actor_id == "auth-reviewer-1"
+    assert service.context.actor.surface == EntrySurface.WEB
+
+
+def test_soc_review_api_requires_idempotency_header_for_disposition_outcome() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        soc_review.record_disposition_outcome(
+            soc_review.DispositionOutcomeRecordRequest(
+                proposal_id="DPROP-API-1",
+                observed_disposition=SocOperationalDisposition.UNKNOWN,
+                reason="Insufficient evidence for a terminal operational disposition.",
+            ),
+            FakeRequest({"x-soc-actor-id": "analyst-api"}),
+            service=object(),
+        )
+
+    assert exc_info.value.status_code == 400
+
+
 def test_soc_review_api_missing_item_returns_404(review_api) -> None:
     service, _, _ = review_api
 
@@ -391,6 +449,7 @@ def test_soc_review_router_exposes_mvp_paths() -> None:
     assert "/api/soc/review/items/{queue_id}/context" in paths
     assert "/api/soc/review/items/{queue_id}/close" in paths
     assert "/api/soc/review/runs/{run_id}/correct" in paths
+    assert "/api/soc/review/disposition-outcomes" in paths
 
 
 def _memory_candidate_command(

@@ -178,7 +178,10 @@ Current SOC direction:
   `SocDispositionEvaluationService` plus append-only sample manifests/outcomes through migration
   `0016_disposition_evaluation`. `soc disposition sample|outcome|evaluate` supports reproducible
   hash-ranked sampling, explicit superseding labels, and read-only precision/override/freshness/fan-out
-  gates. A passed report is only eligible for governed rollout review; `auto_close_allowed` remains false.
+  gates. EV-02 routes authenticated API/Web labels, Review TUI `/outcome` and `/sample-outcome`, and
+  eligible trusted external-disposition labels through that same service. Labels are never inferred from
+  `close_reason`; a passed report is only eligible for governed rollout review and
+  `auto_close_allowed` remains false.
 - PingAn `zeusRawLogs[].message` values are parsed only inside the PingAn normalizer. Deterministically
   parsed message fields are high-trust primary facts; Zeus structured fields are reduced-trust
   fallback candidates. Preserve the complete original payload for replay/audit and expose only

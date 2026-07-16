@@ -260,7 +260,14 @@ ranking over an exact tenant/environment/time/policy cohort; outcome corrections
 coverage/agreement, source freshness, and fact-version fan-out. They never mutate ReviewQueue, detection,
 memory, approval, or actions, and always return `auto_close_allowed=false` even when shadow evaluation passes.
 CLI is `soc disposition sample create|list|get`, `soc disposition outcome record|list|get`, and
-`soc disposition evaluate`. Web/TUI/Lead Agent receive outcomes as read-only investigation context.
+`soc disposition evaluate`. EV-02 adds authenticated `POST /api/soc/review/disposition-outcomes` plus
+Review TUI `/outcome` and `/sample-outcome`; both construct an explicit analyst-source command and call
+the same evaluation service. Start TUI with a stable `--actor-id`; an independent sampled review must use
+a reviewer identity distinct from the primary analyst. The API requires `Idempotency-Key`. The trusted external-disposition bridge
+records an outcome only for a high-trust mapped event with a verified target and exactly one matching
+proposal; it exposes skip reasons and never silently supersedes a newer analyst label. Web/TUI/Lead Agent
+continue to receive outcomes through investigation context, and outcome capture itself never closes a queue
+or enables auto-close.
 
 PingAn vendor aliases are translated into generic `RoleClaim` objects inside `soc_agent.normalizers`.
 `pipeline.fact_reconstructor` must remain vendor-neutral: it builds scenario hypotheses and

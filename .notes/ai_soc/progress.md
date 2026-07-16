@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前阶段 | Phase 1 Runtime 工程闭环完成；Phase 2 correlation / domain triage 起步 |
-| 当前目标 | GF-01 + AA-01 + EX-01 + DP-01 + EV-01 已完成：typed fact、shadow proposal、显式 outcome、可复现抽样与只读 gate 已形成可评测闭环 |
+| 当前目标 | GF-01 + AA-01 + EX-01 + DP-01 + EV-01 + EV-02 已完成：typed fact、shadow proposal、显式 outcome、多入口采集、可复现抽样与只读 gate 已形成可评测闭环 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `EV-02 Outcome Capture Integration`：让 Web/TUI/API 与 trusted external disposition 通过同一 service 写入结构化 outcome；不从 close_reason 猜标签，不启用 auto-close。 |
+| 当前下一刀 | `EV-03 Sample Review Inbox`：把 persisted sample manifest、selected proposal 和独立 reviewer 待办组成可操作 inbox；继续禁止挑样和 auto-close。 |
 
 ## 当前待办列表
 
@@ -71,6 +71,7 @@
 | 11.6 | Authorization enrichment persistence/projection | EX-01 Done | 已完成 strict command/record/result contracts、append-only in-memory/SQL repository、`0014` migration、幂等写入、replay lineage、CLI 和 InvestigationContext/Web/TUI/Lead Agent 投影 | enrichment 保存 query hash/policy/fact refs/actor；`shadow_only=true`、`decision_impact=none`；不修改 run decision/queue/memory/disposition |
 | 11.7 | Shadow disposition proposal | DP-01 Done | 已完成 generic operational disposition、detection truth snapshot、append-only proposal repository、`0015` migration、CLI 和 InvestigationContext/Web/TUI/Lead Agent 投影 | 仅 open-queue persisted exact enrichment + current true-positive 可提议 benign-TP；proposal 永远 shadow/not-applied，人工复核，不改 run/queue，不自动关单 |
 | 11.8 | Shadow disposition evaluation gate | EV-01 Done | 已完成 explicit evaluation scope、hash-ranked sample manifest、append-only superseding outcome、`0016` migration、CLI、gate report 和 InvestigationContext/Web/TUI/Lead Agent 只读投影 | 指标覆盖 resolution/precision/override/sample coverage+agreement/freshness/fact fan-out；passed 只代表可进入治理评审，`auto_close_allowed=false` |
+| 11.9 | Structured disposition outcome capture | EV-02 Done | authenticated API/Web、Review TUI primary/sample command 和 trusted external disposition bridge 全部复用 `SocDispositionEvaluationService` | 不从 `close_reason` 猜标签；幂等、sample membership、独立 reviewer、supersession 和 closed queue 仍由 service 校验；不启用 auto-close |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Partial | normalization 运维页、Gateway bounded metrics 和 Kafka JSONL issue 摘要已完成；全局 Kafka/review/approval/runtime/算力 Prometheus exporter 和态势面板仍后置 | 当前 maintenance issue 可见；全系统运行态势不阻塞 SOC Agent Alpha |
@@ -182,6 +183,34 @@
 | 99 | PingAn Main Orchestrator Demo | Done | 新增 `SocMainOrchestratorService` 和 `UnifiedInvestigationReport`；`soc eval pingan-main` 可验证 APT/EDR/HIDS analyze -> skill -> read-only evidence -> domain finding -> review context |
 
 ## 进度记录
+
+### 2026-07-16 — EV-02 structured disposition outcome capture implemented
+
+- Gateway 新增 authenticated `POST /api/soc/review/disposition-outcomes`：
+  - API 固定 `source=analyst`，要求 `Idempotency-Key`；
+  - actor/surface、closed queue、sample membership、independent reviewer、幂等和 append-only supersession
+    全部继续由 `SocDispositionEvaluationService` 校验；
+  - not-found / conflict / ineligible / unavailable 使用明确 HTTP 状态，不从 `close_reason` 猜标签。
+- Review TUI 新增：
+  - `/outcome DPROP-... disposition idempotency-key reason`；
+  - `/sample-outcome DSAMPLE-... DPROP-... disposition idempotency-key reason`；
+  - CLI 装配把现有 evaluation service 注入 TUI，没有新增第二套业务实现；`--actor-id` 为审计和独立
+    reviewer 校验提供稳定身份。
+- Web ReviewQueue workbench 新增结构化标签表单：
+  - closed queue 才可提交；显式选择 proposal、observed disposition、primary/sample lane 和 reason；
+  - sampled lane 必须填写 manifest id；已有同 lane outcome 时界面显式提交
+    `supersedes_outcome_id`；关闭工单和写标签仍是两个动作。
+- trusted external disposition bridge：
+  - 只接受 high-trust mapped event、verified target 和唯一 lineage-matching proposal；
+  - 外部 record 先持久化，再通过 evaluation service 写 `source=external_disposition` outcome；重复事件可
+    幂等补写；成功/幂等/skip reason 进入 apply result、audit 和 event；
+  - 只自动 supersede 先前 external-source primary；latest primary 来自 analyst/replay 时 fail closed，要求
+    显式人工修订；external free-text reason 不参与 canonical status 推断。
+- EV-02 未新增 migration，不修改 DP proposal，不应用 shadow proposal，不开启 auto-close；既有 high-trust
+  external correction/ReviewQueue sync 仍是独立反馈边界。
+- 完整 SOC + architecture backend 回归 `489 passed`；frontend `pnpm check` 和 `637 passed` 已通过。
+- 下一步：`EV-03 Sample Review Inbox`，把 manifest、selected proposals、已完成/待完成独立复核组织成
+  可操作 campaign/inbox；仍不进入 auto-close rollout。
 
 ### 2026-07-16 — EV-01 shadow disposition evaluation gate implemented
 

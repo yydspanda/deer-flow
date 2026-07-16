@@ -469,6 +469,23 @@ Authorized activity / 授权活动事实约束：
 - CLI 为 `soc disposition sample create|list|get`、`soc disposition outcome record|list|get` 和
   `soc disposition evaluate`；InvestigationContext/Web/TUI/Lead Agent 对 outcome 只读投影。EV-02 才接
   Web/TUI/API 与 trusted external disposition 的结构化写入，仍不得绕过 service。
+- EV-02 的唯一 HTTP 写入口是 authenticated `POST /api/soc/review/disposition-outcomes`。API 固定
+  `source=analyst`，要求 `Idempotency-Key` header，并把 actor/surface 交给
+  `SocDispositionEvaluationService.record_outcome()`；客户端不得伪造 external/replay source。
+- Web 必须把 ReviewQueue close 与 outcome capture 展示为两个独立动作。只有 closed queue 才允许提交，
+  且必须显式选择 proposal、observed operational disposition、primary/sample lane 和 reason；修订必须显示并
+  传递 latest `supersedes_outcome_id`。不得把 `close_reason`、verdict 或按钮文案转换成 outcome。
+- Review TUI 使用 `/outcome DPROP disposition idempotency-key reason` 和
+  `/sample-outcome DSAMPLE DPROP disposition idempotency-key reason`；两者固定 analyst source，并通过同一
+  service 校验 closed queue、sample membership、independent reviewer、幂等和 supersession。启动 TUI 时用
+  `--actor-id` 绑定稳定审阅身份，独立抽样复核必须使用不同于 primary analyst 的 actor。
+- trusted external disposition bridge 只接受 `mapping_trust_level=high`、mapped canonical status、verified
+  target（queue/run/case binding）以及唯一 lineage-matching proposal。External record 必须先持久化；bridge
+  成功/幂等/跳过原因进入 apply result、audit 和 event。重复回放可补写缺失 outcome。
+- External bridge 只能自动 supersede 先前的 external-source primary outcome；若 latest primary 来自 analyst
+  或 replay，必须跳过并要求显式人工 supersession。外部 reason 只作为显式 event 的标签理由，不能用于猜
+  canonical status。Outcome 写入本身仍是 `review_queue_impact=none`、`auto_close_allowed=false`；既有
+  high-trust external correction/queue sync 是独立边界，不能被误写成 EV rollout controller。
 
 Security exercise / 护网与红蓝对抗事实约束：
 

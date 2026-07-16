@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -15,9 +16,21 @@ from soc_agent.contracts import (
     ReviewQueueCloseCommand,
     ReviewQueueItem,
     ReviewQueueStatus,
+    SocDispositionOutcomeApplyResult,
+    SocDispositionOutcomeCommand,
+    SocDispositionOutcomeReviewKind,
+    SocDispositionOutcomeSource,
+    SocOperationalDisposition,
     Verdict,
 )
-from soc_agent.core import SocReviewService, SocServiceNotFoundError, SocServiceNotImplementedError
+from soc_agent.core import (
+    DispositionEvaluationIdempotencyConflictError,
+    DispositionEvaluationIneligibleError,
+    SocDispositionEvaluationService,
+    SocReviewService,
+    SocServiceNotFoundError,
+    SocServiceNotImplementedError,
+)
 
 router = APIRouter(prefix="/api/soc/review", tags=["soc-review"])
 
@@ -34,6 +47,17 @@ class ReviewCorrectionRequest(BaseModel):
     verdict: Verdict
     reason: str = Field(min_length=1)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class DispositionOutcomeRecordRequest(BaseModel):
+    proposal_id: str = Field(min_length=1, max_length=64)
+    observed_disposition: SocOperationalDisposition
+    review_kind: SocDispositionOutcomeReviewKind = SocDispositionOutcomeReviewKind.ANALYST_RESOLUTION
+    sample_id: str | None = Field(default=None, min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=4000)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=300)
+    observed_at: datetime | None = None
+    supersedes_outcome_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 def get_soc_review_service(request: Request) -> SocReviewService:
@@ -58,6 +82,26 @@ def get_soc_review_service(request: Request) -> SocReviewService:
 
 
 ReviewServiceDep = Annotated[SocReviewService, Depends(get_soc_review_service)]
+
+
+def get_soc_disposition_evaluation_service(request: Request) -> SocDispositionEvaluationService:
+    injected = getattr(request.app.state, "soc_disposition_evaluation_service", None)
+    if injected is not None:
+        return injected
+
+    repository = get_or_create_soc_repository(request)
+    return SocDispositionEvaluationService(
+        repository=repository,
+        proposal_repository=repository,
+        authorization_enrichment_repository=repository,
+        review_queue_repository=repository,
+    )
+
+
+DispositionEvaluationServiceDep = Annotated[
+    SocDispositionEvaluationService,
+    Depends(get_soc_disposition_evaluation_service),
+]
 
 
 @router.get("/items", response_model=ReviewQueueListResponse)
@@ -121,3 +165,41 @@ def correct_review_run(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/disposition-outcomes", response_model=SocDispositionOutcomeApplyResult)
+def record_disposition_outcome(
+    body: DispositionOutcomeRecordRequest,
+    request: Request,
+    service: DispositionEvaluationServiceDep,
+) -> SocDispositionOutcomeApplyResult:
+    context = soc_service_context_from_request(request)
+    if context.idempotency_key is None:
+        raise HTTPException(status_code=400, detail="Idempotency-Key header is required")
+    try:
+        return service.record_outcome(
+            SocDispositionOutcomeCommand(
+                proposal_id=body.proposal_id,
+                observed_disposition=body.observed_disposition,
+                review_kind=body.review_kind,
+                source=SocDispositionOutcomeSource.ANALYST,
+                sample_id=body.sample_id,
+                reason=body.reason,
+                evidence_refs=body.evidence_refs,
+                observed_at=body.observed_at,
+                supersedes_outcome_id=body.supersedes_outcome_id,
+                idempotency_key=context.idempotency_key,
+            ),
+            context=context,
+        )
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (
+        DispositionEvaluationIdempotencyConflictError,
+        DispositionEvaluationIneligibleError,
+    ) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
