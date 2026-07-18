@@ -1,4 +1,4 @@
-"""Regenerate local Runtime Steps 2-5 artifacts from alert samples."""
+"""Regenerate local Runtime Steps 1-5 artifacts from alert samples."""
 
 from __future__ import annotations
 
@@ -165,6 +165,11 @@ def _write_runtime_steps(
     validation_root: Path,
 ) -> None:
     generated_at = datetime.now(UTC).isoformat()
+    _write_input_adapter_step(
+        samples,
+        validation_root=validation_root,
+        generated_at=generated_at,
+    )
     step_specs = {
         2: (
             "normalization_and_message_parsing",
@@ -250,6 +255,85 @@ def _write_runtime_steps(
         )
 
 
+def _write_input_adapter_step(
+    samples: list[tuple[Path, dict[str, Any]]],
+    *,
+    validation_root: Path,
+    generated_at: str,
+) -> None:
+    target_dir = validation_root / "step-01-input-adapter"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    entries: list[dict[str, Any]] = []
+
+    for source_path, payload in samples:
+        inspection = SocNormalizationService().inspect(payload)
+        alert = inspection.alert
+        extensions = alert.extensions
+        raw_messages = extensions.get("parsed_raw_messages", [])
+        source = {
+            "file": f"datas/{source_path.name}",
+            "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+            "size_bytes": source_path.stat().st_size,
+        }
+        artifact = {
+            "schema_version": "soc.runtime_validation.step01.v1",
+            "step": {
+                "number": 1,
+                "name": "input_adapter_detection",
+            },
+            "generated_at": generated_at,
+            "source": source,
+            "adapter": {
+                "name": inspection.normalization_report.adapter,
+                "source": alert.source.model_dump(mode="json", exclude_none=False),
+                "detection": alert.detection.model_dump(mode="json", exclude_none=False),
+            },
+            "raw_message_inventory": [
+                {
+                    "path": item.get("source_path"),
+                    "present": True,
+                    "length": item.get("original_length"),
+                    "sha256": item.get("message_hash"),
+                }
+                for item in raw_messages
+                if isinstance(item, dict)
+            ],
+            "evidence_input_policy": extensions.get("evidence_input_policy"),
+            "status": "passed",
+        }
+        artifact_name = f"{source_path.stem}.step-01.json"
+        (target_dir / artifact_name).write_text(
+            json.dumps(artifact, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        entries.append(
+            {
+                "source": source["file"],
+                "artifact": artifact_name,
+                "adapter": inspection.normalization_report.adapter,
+                "source_type": alert.source.source_type.value,
+                "message_count": len(artifact["raw_message_inventory"]),
+                "status": "passed",
+            }
+        )
+
+    manifest = {
+        "schema_version": "soc.runtime_validation.manifest.v1",
+        "step": {
+            "number": 1,
+            "name": "input_adapter_detection",
+        },
+        "generated_at": generated_at,
+        "artifact_count": len(entries),
+        "git_ignored": True,
+        "entries": entries,
+    }
+    (target_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _load_object(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -272,15 +356,26 @@ def _update_root_index(root: Path) -> None:
             "steps": [],
         }
     )
-    step = {
-        "number": 5,
-        "name": "normalization_maintenance",
-        "directory": "step-05-normalization-maintenance",
-        "manifest": "step-05-normalization-maintenance/manifest.json",
-        "status": "generated",
-    }
-    steps = [item for item in index.get("steps", []) if item.get("number") != 5]
-    index["steps"] = sorted([*steps, step], key=lambda item: item["number"])
+    generated_steps = [
+        (1, "input_adapter_detection", "step-01-input-adapter", "passed"),
+        (2, "normalization_and_message_parsing", "step-02-message-parsing", "generated"),
+        (3, "fact_reconstruction", "step-03-fact-reconstruction", "generated"),
+        (4, "build_analysis_input", "step-04-build-analysis-input", "generated"),
+        (5, "normalization_maintenance", "step-05-normalization-maintenance", "generated"),
+    ]
+    generated_numbers = {number for number, _, _, _ in generated_steps}
+    steps = [item for item in index.get("steps", []) if item.get("number") not in generated_numbers]
+    steps.extend(
+        {
+            "number": number,
+            "name": name,
+            "directory": directory,
+            "manifest": f"{directory}/manifest.json",
+            "status": status,
+        }
+        for number, name, directory, status in generated_steps
+    )
+    index["steps"] = sorted(steps, key=lambda item: item["number"])
     index_path.write_text(
         json.dumps(index, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",

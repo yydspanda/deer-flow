@@ -23,16 +23,28 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前阶段 | Phase 1 Runtime 工程闭环完成；Phase 2 correlation bridge + offline quality baseline 已完成 |
-| 当前目标 | 扩展真实、人工复核的 correlation pair corpus，再以同一标签集比较 scorer v1/v2；当前不进入 shadow dedup rollout |
+| 当前交付阶段 | `AA` Stage 2 - SOC Alpha Completeness Audit（`BD` Gate 已于 2026-07-18 通过） |
+| 当前目标 | `AUD-02 Code/contract/docs consistency`：以 AUD-01 as-is 旅程为基线，对照 solution、lifecycle、工程契约和 mock/real register |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `Correlation Label Corpus Expansion`：从脱敏的真实/生产相似告警中准备 analyst-reviewed pair labels，补 event-time/source cohort；标签规模和质量稳定后再设计 scorer v2 shadow comparison。 |
+| 当前下一刀 | `AUD-02`：逐条记录代码与权威文档的事实差异，不在一致性审计过程中修复业务代码；产出后进入 `AUD-03` 唯一完整性矩阵。 |
+| 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
-## 当前待办列表
+## 阶段交付主线
 
-> 这张表是当前新的执行待办。下面的 Phase 1 长表保留历史切片和完成记录；后续实际推进优先看本表。
+> 这张表只反映权威阶段顺序。每个阶段的详细 task 和 Gate 以 `delivery-roadmap.md` 为准；下面的能力长表仅用于追踪历史能力，不决定当前下一刀。
+
+| 阶段 | 交付物 | 状态 | 当前边界 | 退出条件 |
+|---|---|---|---|---|
+| `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
+| `AA` | SOC Alpha Completeness Audit | **Current / AUD-02 In Progress** | `AUD-01` as-is 旅程盘点已完成；当前做代码/契约/文档一致性审计 | 唯一完整性矩阵和 P0/P1 blocker register 确认 |
+| `BG` | Close Blocking Gaps | Planned | 只修 AA 审计确认的代码可控 P0/P1 | Alpha E2E 和 readiness package 通过 |
+| `PI` | Real Data & Production Integration | Data/credential-gated | 真实 provider、基础设施、标签、SLO 和 governed rollout | Pilot readiness review 通过 |
+
+## 能力与历史切片台账
+
+> 下表保留能力状态和历史切片。TODO 不能越过 `delivery-roadmap.md` 插入当前 Stage。
 
 | 顺序 | 待办 | 状态 | 做什么 | 验收标准 |
 |---|---|---|---|---|
@@ -52,7 +64,7 @@
 | 1 | Correlation Service MVP | Done | `SocCorrelationService` 基于 summary/evidence 输出相似告警、匹配原因和可复用证据；typed result 已进入 main report/domain/review summary | 不调用 LLM、不依赖真实 MCP、不改 decision；demo 当前告警可看到历史 run + reusable evidence |
 | 1.1 | Correlation -> Unified Investigation bridge | Done | 共享 summary repository、统一 deterministic scorer、`SocDomainTriageRequest.correlation_result`、`UnifiedInvestigationReport.correlation_result` 和 review counts 已接通 | metadata count 不是证据源；historical evidence 只按 matched `run_id` 加载；APT/EDR/HIDS eval 为 3 matches / 6 evidence / 0 failure |
 | 1.2 | Correlation quality baseline | Done | 已建 vendor-neutral same-incident / related-but-distinct / unrelated corpus；`soc eval correlation` 输出双任务指标、reason 分布、fan-out、evidence lineage/unrelated exposure，并支持 `--baseline-json` replay diff | scorer/report/fixture 版本显式；当前 8-pair baseline 暴露 retrieval/dedup precision 均约 0.667；`shadow_dedup_allowed=false` |
-| 1.3 | Correlation label corpus expansion | Next | 从脱敏真实告警准备 analyst-reviewed pairs，覆盖来源、时间窗口、跨规则同事件和同规则不同事件 cohort | 不以 8 条受控 pair 代表生产分布；标签来源/rationale/version 可审计；扩充后再比较 scorer v2，不直接切换生产规则 |
+| 1.3 | Correlation label corpus expansion | TODO / Stage 4 | 从脱敏真实告警准备 analyst-reviewed pairs，覆盖来源、时间窗口、跨规则同事件和同规则不同事件 cohort | 不以 8 条受控 pair 代表生产分布；标签来源/rationale/version 可审计；扩充后再比较 scorer v2，不直接切换生产规则；不阻塞 Boss Demo/Alpha code completeness |
 | 2 | External Disposition Sync Contract | Done | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol、in-memory repository、PostgreSQL persistence、ReviewQueue context API/Web/TUI/Lead Agent visibility；已接 high-trust mapped review/correction 和 pending memory candidate | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
 | 3 | Memory Tracking Contract | Partial | DB-first candidate persistence、review workflow、confirmed-memory boundary 和 retrieval policy MVP 已完成；`SocMemoryCandidateSourceBridge` 已接 correction、domain finding、analyst feedback 和 ReviewQueue review note；下一步是 Kafka/Lead Agent 结论来源、prompt injection/replay diff 的受控设计 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
 | 3.1 | Memory candidate DB/API/ReviewQueue visibility | Done | 已新增 `soc_memory_candidates`、repository、CLI `soc memory list/get`、Gateway `/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded visibility | candidate 仍为 `pending_review` 且 `runtime_decision_allowed=false`；不注入 prompt，不影响 verdict |
@@ -188,6 +200,102 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-18 — AUD-01 Journey inventory completed; AUD-02 started
+
+- 新增 `.notes/ai_soc/audits/alpha-journey-inventory.md`，以当前代码而不是方案推断为基线，完成：
+  - 14 组 CLI command entry、Kafka/daemon/deployment、5 组 Gateway API、Web/TUI/Lead Agent 和 service-only ingress 盘点；
+  - 21 个 public/service boundary、fixed Runtime 九步主链和显式 side-service 边界盘点；
+  - 11 组端到端 journey、15 个状态聚合、17 张 SOC 业务表和 Alembic metadata table 盘点；
+  - CLI/Web/TUI/Lead Agent/Kafka/Demo/validation 可见产物及 source-of-truth 映射；
+  - 源码、测试和 CodeGraph 证据索引。
+- 本刀只写 as-is evidence，不做业务代码修改，也不提前把差异标成 P0/P1/P2。
+- 明确保留的事实边界包括：
+  - Gateway 当前没有 analyze/replay/governed-context/external-disposition ingress；
+  - external disposition 和 domain-finding memory source 目前存在 service/test，但不是完整应用入口；
+  - correlation/domain/unified view 是读取时派生结果，不是隐藏 Runtime node 或独立表；
+  - high-risk execute 当前只消费 token，明确不产生外部生产副作用；
+  - active Kafka runner 仍是串行，worker-pool/partition tracker 是后续并发基础。
+- 已同步 `README.md` 和 `delivery-roadmap.md`，当前执行指针切换到 `AUD-02`。
+- 验证：
+  - `codegraph sync .` 已在盘点前完成；随后用 CodeGraph 查询核心 service，并以源码补齐动态 Gateway/TUI/Lead Agent 调用关系。
+  - 对照 `db/models.py` 与 `db/migrations/versions/`，17 张业务表均有唯一 migration/writer/reader 落点。
+  - 本刀无 Python/TypeScript 业务代码改动，因此未重跑产品测试；文档路径、heading、ID 和引用在本地检查。
+- 下一步：
+  - `AUD-02 Code/contract/docs consistency`：对照 `soc-agent-solution.md`、`alert-lifecycle-flow.md`、工程契约、mock/real register 与 AUD-01，产出一份事实差异报告；不在该刀修复代码。
+
+### 2026-07-18 — BD-03 completed; BD Gate passed; AUD-01 started
+
+- Docker Desktop/WSL Integration 恢复，Boss Demo `status` 返回 READY。
+- 保存 live DeepSeek ReviewQueue 页面：
+  `backend/.deer-flow/soc-boss-demo/review-desktop-live.png`；对应 run 为
+  `RUN-8366A14C3E9B`，decision `needs_review/0.45`，grounding `6/7`，无 silent fallback。
+- 通过 Web 提交明确标注的演示纠正：run 变为 `suspicious`，产生 1 条 correction 和 1 条
+  `pending_review` memory candidate；candidate 未进入 confirmed memory，且不允许 Runtime decision impact。
+  证据保存在 `review-context-after-feedback.json` 和 `review-feedback-live.png`。
+- 完成真正 clean reset：先 `soc-boss-demo.sh stop`，再 `soc-boss-demo.sh start --reset`；生成新的
+  deterministic run `RUN-7330DE4DADCC` / queue `REV-F978361476D8`，证明 ID 和数据可重复重建而非复用旧实例。
+- 冷启动第一次 readiness probe 在 Gateway 启动约 5 秒时超时；约 40 秒后第二次 probe 返回 READY，
+  未发现服务错误。
+- 最终 deterministic context 为 open queue、`unknown/0.45/needs_review`、3 domain findings、2 条
+  read-only mock evidence、1 条 relevant confirmed demo memory、0 corrections；API/CLI 结果与 Web 一致。
+- 最终产物：`review-context-rehearsal.json`、`review-desktop-rehearsal.png`；服务继续运行在
+  `http://localhost:2026/workspace/soc/review`。
+- `BD-03` 与 BD Gate 已完成；按唯一交付路线切换到 `AUD-01 Journey inventory`。下一刀只盘点完整旅程，
+  不在审计过程中修复或扩展单一模块。
+
+### 2026-07-17 — BD-02 completed; live Boss Demo and Runtime Step 01-12 rerun
+
+- Docker overlay 已验证 Gateway/API/Web 使用同一独立 `soc_boss_demo.db`；authenticated Review Context
+  API 返回 HTTP 200，ReviewQueue 页面和 bounded Lead Agent context bridge 均已 smoke/test。
+- live Boss Demo 使用 `deepseek-v4-pro` 完成 clean reset，无 silent fallback：manifest `ready`，1 个 open
+  queue、3 domain findings、2 个明确标记 mock 的只读证据、1 条 demo confirmed memory 和 10 条 timeline。
+- 新增 `scripts/soc-runtime-validation.sh`，统一提供 `core/live/evaluations/finalize/snapshot/all`；不再依赖
+  历史手工命令重跑 Step 01-12。
+- 新增 `generate_soc_context_validation.py`，可重复生成 governed fact `proposed -> active -> history/query`
+  和 HIDS/EDR authorization exact shadow match；所有边界保持 read-only/no-decision-impact。
+- 新增 `generate_soc_runtime_validation_report.py` 与 `runtime-validation-runbook.md`，生成本地
+  `RUN-INDEX.md/latest-run.json`，明确 fixed Runtime、offline maintenance、evaluation、governance 四类轨道。
+- 五条 `deepseek-v4-pro` live 样本均完成：38/49 evidence grounded，3/5 样本共 11 条引用被拒绝；
+  `SocDecisionPolicy` 对这些样本正确设置 degraded review 且 `automation_allowed=false`。模型引用质量作为
+  review finding 保留，不用“安全拦截成功”掩盖分析质量问题。
+- 新 label set 保持 5 条 pending，`calibratable=false`；脚本写
+  `label-set.rerun.pending.json`，未覆盖已有人工真值 `label-set.pending.json`。
+- 总验证结果：13 个轨道 passed、1 个 expected human boundary、0 failed/missing；correlation 8-pair replay
+  `changed=false`，HIDS/EDR authorization shadow 均 exact。
+- 回归：聚焦 Boss/validation/Lead Agent/TUI `36 passed`；SOC + architecture suite `504 passed`
+  （仅 1 条 DeerFlow MCP event-loop deprecation warning）；Ruff、format check、`bash -n`、
+  `git diff --check` 通过；`codegraph sync .` 已纳入 2 个新增生成器、41 个节点。
+- 当前进入 `BD-03`：仅剩 Docker Desktop/WSL Integration 恢复后补 live 页面截图、演示 note/correction
+  feedback，并跑一次最终 8-10 分钟彩排；不新增产品范围。
+
+### 2026-07-17 — BD-01 one-command Boss Demo preparation completed
+
+- 新增 `soc demo boss`：默认使用独立
+  `backend/.deer-flow/data/soc_boss_demo.db`，支持显式 `--reset`、stub/llm analyzer 选择和 Web base URL。
+- 输出 `soc.boss_demo_manifest.v1`，包含本次 `run_id`/`queue_id`、调查视图计数、Web/API/TUI 入口、
+  analyzer mode，以及 `real / deterministic / fixture / mock / shadow_only / disabled` 能力边界。
+- 复用现有 `SocAnalysisService`、SQLAlchemy repository、ReviewQueue、action evidence、domain triage 和
+  memory service；未新增第二套 Demo Runtime 或前端业务逻辑。
+- 新增 `scripts/soc-boss-demo.sh` 与 `docker-compose.soc-boss-demo.yaml`，提供
+  `prepare/start/status/logs/stop`，容器 Gateway 精确绑定同一 Demo DB，不修改 `.env` 或基础 Compose。
+- 新增 `boss-demo-v0.1-runbook.md`，持续记录明天汇报所需命令、流程图、8 分钟话术、真实/mock 边界、
+  故障处理和验收结果。
+- 验证：Ruff 通过；`backend/tests/test_soc_demo_investigation.py` 为 `4 passed`；默认
+  `soc demo boss --reset --pretty` 返回 `status=ready`、1 个 open queue、3 findings、2 evidence、
+  1 relevant demo memory、10 timeline items。
+- 当前进入 `BD-02`：Docker daemon 已恢复，接下来启动 Gateway/Web 并做真实同库 smoke。
+
+### 2026-07-17 — Four-stage delivery roadmap frozen; Boss Demo first
+
+- 新增唯一阶段路线 `delivery-roadmap.md`，冻结执行顺序：`Boss Demo v0.1 -> SOC Alpha
+  Completeness Audit -> Close Blocking Gaps -> Real Data & Production Integration`。
+- 纠正上一版把 Alpha audit 设为当前下一刀的排序。当前只执行 `BD-01`，先让老板在浏览器中看到
+  一条可重复、可说明、显式标注 mock/shadow 边界的告警研判闭环；审计在 BD Gate 通过后开始。
+- `Correlation label corpus expansion` 保留为 Stage 4 data-dependent TODO；当前 8-pair baseline 继续
+  作为工程回归，不冒充生产质量结论，也不阻塞 Boss Demo 或 Alpha 代码完整性。
+- 新需求只有三种处理方式：属于当前 task、用户明确替换当前目标、或进入 Parking Lot；不再通过
+  临时聊天把质量优化、真实集成或远期能力插入当前主线。
 
 ### 2026-07-16 — Phase 2 correlation quality baseline completed
 

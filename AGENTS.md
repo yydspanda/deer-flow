@@ -229,6 +229,17 @@ Current SOC direction:
   `unrelated`. Retrieval metrics and offline duplicate-identity metrics are separate; an
   evaluation threshold is never a production suppression rule. `shadow_dedup_allowed`
   remains false until a later governed rollout explicitly changes that boundary.
+- The browser-first Boss Demo uses the isolated local database
+  `backend/.deer-flow/data/soc_boss_demo.db`. Run `./scripts/soc-boss-demo.sh start --reset`
+  for deterministic rehearsal or add `--analyzer-mode llm --model-name NAME` for an explicit
+  live-model run. If Docker is unavailable in WSL, start Docker Desktop, wait for Engine Ready,
+  and enable the current distribution under WSL Integration.
+- Reproduce local SOC Runtime review artifacts with `./scripts/soc-runtime-validation.sh
+  core|live|evaluations|finalize|all`. Outputs under
+  `backend/.deer-flow/soc-runtime-validation/` contain real-alert-derived data, are gitignored,
+  and must not be committed. Steps 7 and 9-12 are maintenance/evaluation/governance tracks,
+  not extra fixed Runtime nodes. A rejected LLM evidence citation is safe only when decision
+  policy forces degraded evidence, human review, and `automation_allowed=false`.
 
 SOC phase plan:
 

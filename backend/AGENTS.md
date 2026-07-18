@@ -218,6 +218,18 @@ their outputs cannot mutate adapters, baselines, runtime policy, or automatic-ac
 Confidence calibration must first use `soc eval labels prepare|validate`; only analyst-accepted,
 traceable, single-model/prompt/pipeline labels may enter `soc eval confidence`.
 
+Local step-by-step Runtime review is orchestrated from the repository root by
+`scripts/soc-runtime-validation.sh`. `scripts.generate_soc_normalization_maintenance_validation`
+rebuilds Steps 1-5, `scripts.generate_soc_context_validation` rebuilds governed-context and
+authorization-shadow artifacts, and `scripts.generate_soc_runtime_validation_report` creates the
+local manifests and `RUN-INDEX.md`. Generated files live under
+`backend/.deer-flow/soc-runtime-validation/`, may contain real-alert-derived data, and must remain
+gitignored. The numbered directories mix fixed Runtime validation with explicit maintenance,
+evaluation, and governance tracks; do not infer a twelve-node Runtime from their names. Hardening
+validation must distinguish model evidence quality from safety behavior: rejected citations remain
+a quality finding, while the safety gate passes only when they force degraded evidence, human review,
+and `automation_allowed=false`.
+
 Governed operational context is separate from investigation evidence, memory, action approval, and
 detection policy. Public contracts live in `soc_agent.contracts.governed_context`; lifecycle logic
 lives in `soc_agent.core.governed_context.SocGovernedContextService`. Facts use a stable `fact_id`

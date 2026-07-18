@@ -1162,7 +1162,18 @@ soc analyze alert.json --analyzer-mode llm --model-name deepseek-v4-pro --pretty
 
 # Compare stub and live model over an offline sample set
 soc eval offline samples/ --live-llm --model-name deepseek-v4-pro --pretty
+
+# Reproduce the complete local Runtime/evaluation/governance review package
+cd ..
+./scripts/soc-runtime-validation.sh all
 ```
+
+The generated Step 01-12 directories are review tracks, not twelve hidden Runtime nodes. The fixed
+Runtime remains `normalize -> entity_extract -> fact_reconstruct -> build_analysis_input ->
+skill_context -> analyze -> schema_validate -> evidence_grounding -> decide`; normalization
+suggestions, human labels, correlation evaluation, and governed authorization are explicit offline or
+sidecar tracks. Exact commands, artifact contracts, and the latest local findings are documented in
+[`runtime-validation-runbook.md`](runtime-validation-runbook.md).
 
 Acceptance criteria for the first complete demo:
 
@@ -1176,6 +1187,25 @@ Acceptance criteria for the first complete demo:
 - Analyst note/correction can create pending memory candidate.
 - External disposition can sync status/reason into review context.
 - No high-risk action is executed without approval boundary.
+
+Current delivery priority / 当前交付顺序：
+
+1. **Boss Demo v0.1**: first expose one repeatable, browser-first golden path so management can see
+   the current product value without mistaking mock or shadow-only behavior for production.
+2. **SOC Alpha Completeness Audit**: inspect the complete alert journey and classify every
+   capability as `Complete`, `Gap`, `Mock`, `Data-gated`, or `Deferred`.
+3. **Close Blocking Gaps**: close only the code-controlled P0/P1 blockers identified by the audit,
+   then rerun the APT/EDR/HIDS end-to-end acceptance path.
+4. **Real Data & Production Integration**: connect real providers and infrastructure, collect real
+   labels, establish operations/SLO evidence, and progress through governed shadow/pilot gates.
+
+The authoritative work packages, gates, Parking Lot and anti-drift rules live in
+[`delivery-roadmap.md`](delivery-roadmap.md). The current implementation pointer lives only in
+[`progress.md`](progress.md).
+
+“Alpha complete” means the local/test product journey is repeatable and every mock or external-data
+dependency is explicit. It does not mean `production-ready` while real CMDB/EDR/Zeus credentials,
+production labels, operational SLOs, and high-risk response adapters are still unavailable.
 
 ---
 

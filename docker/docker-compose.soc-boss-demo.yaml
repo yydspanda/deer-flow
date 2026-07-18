@@ -1,0 +1,5 @@
+# Boss Demo v0.1 overlay. The base dev compose mounts host backend/ at /app/backend/.
+services:
+  gateway:
+    environment:
+      SOC_DATABASE_URL: sqlite:////app/backend/.deer-flow/data/soc_boss_demo.db

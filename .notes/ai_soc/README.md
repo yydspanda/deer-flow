@@ -6,8 +6,12 @@
 
 | 你要做什么 | 先看 | 再看 |
 |---|---|---|
-| 判断产品方向、阶段和优先级 | `soc-agent-solution.md` | `progress.md` 的当前待办 |
-| 向老板/管理层解释为什么 Runtime 控制流程、LLM 只做受控推理 | `runtime-and-llm-control-strategy.md` | `soc-agent-solution.md` 的核心原则 |
+| 判断当前在哪个交付阶段、下一阶段何时开始 | `delivery-roadmap.md` | `progress.md` 的当前执行指针 |
+| 审阅当前代码实际接通的完整 SOC 旅程 | `audits/alpha-journey-inventory.md` | `alert-lifecycle-flow.md` |
+| 准备老板演示、查看命令和汇报话术 | `boss-demo-v0.1-runbook.md` | `delivery-roadmap.md` 的 Stage 1 Gate |
+| 重跑并逐步审阅 Runtime/LLM/correlation/governance 产物 | `runtime-validation-runbook.md` | 本地 `backend/.deer-flow/soc-runtime-validation/RUN-INDEX.md` |
+| 判断产品方向和系统设计 | `soc-agent-solution.md` | `delivery-roadmap.md` 的阶段边界 |
+| 向老板/管理层解释为什么 Runtime 控制流程、LLM 只做受控推理 | `boss-demo-v0.1-runbook.md` | `soc-agent-solution.md` 的核心原则 |
 | 开始下一刀开发 | `progress.md` | `.notes/reference-index/soc-agent-engineering-contracts.md` |
 | 理解一条预警从进入到复核的完整过程 | `alert-lifecycle-flow.md` | `soc-agent-solution.md` 的服务章节 |
 | 排查 message 新结构、字段遗漏、决策置信度和复核原因 | `soc-agent-solution.md` 的 Normalizer / Confidence 章节 | `.notes/reference-index/soc-agent-engineering-contracts.md` 的对应契约 |
@@ -25,10 +29,14 @@
 ```text
 ai_soc/
 ├── README.md
+├── delivery-roadmap.md               # 唯一阶段顺序、Gate 和防跑偏规则
+├── boss-demo-v0.1-runbook.md          # Stage 1 演示命令、话术、边界与验收记录
+├── runtime-validation-runbook.md      # Step 01-12 重跑命令、产物与最新审阅结论
 ├── soc-agent-solution.md              # 权威产品/系统方案
-├── runtime-and-llm-control-strategy.md # 管理层说明：Runtime-first + bounded LLM
 ├── progress.md                        # 长期进度台账和当前待办
 ├── alert-lifecycle-flow.md            # 当前端到端流程图谱
+├── audits/
+│   └── alpha-journey-inventory.md      # AUD-01 as-is 入口/服务/状态/表/可见产物盘点
 ├── capabilities/
 │   └── pingan/
 │       ├── onboarding.md              # 平安经验输入与能力卡流程
@@ -50,10 +58,13 @@ ai_soc/
 
 | 文档 | 角色 | 更新规则 |
 |---|---|---|
-| `soc-agent-solution.md` | 当前权威方案；决定做什么、为什么做、先后顺序 | 产品方向、阶段范围、入口取舍变化时更新 |
-| `runtime-and-llm-control-strategy.md` | 管理层说明；解释为什么不用全自主 Agent，而采用 Runtime-first + bounded LLM | 管理层沟通口径、LLM 使用策略或控制流哲学变化时更新 |
+| `delivery-roadmap.md` | 唯一阶段性交付路线；决定当前阶段、后续顺序和 Gate | 阶段范围、顺序、退出条件或 Parking Lot 归属变化时更新 |
+| `boss-demo-v0.1-runbook.md` | Stage 1 可复跑演示手册和汇报证据 | 每完成 BD task、命令/入口/结果变化或彩排后更新 |
+| `runtime-validation-runbook.md` | Runtime/eval/governance 本地逐步验证命令、产物契约和审阅结果 | 验证脚本、步骤分类、样本结果或门禁语义变化时更新 |
+| `soc-agent-solution.md` | 当前权威产品/系统方案；决定做什么、为什么做 | 产品方向、架构、服务边界或入口取舍变化时更新 |
 | `progress.md` | 开发进度台账；聊天记录不算进度 | 每个可验证切片完成后更新 |
 | `alert-lifecycle-flow.md` | 当前系统完整过程说明；只写 as-is flow | 服务边界、状态流转、数据写入、命令入口变化时更新 |
+| `audits/alpha-journey-inventory.md` | AUD-01 代码现状证据清单；为一致性审计和唯一缺口矩阵提供输入 | 入口、service、状态机、持久化表或用户可见 surface 发生实质变化时更新 |
 | `capabilities/pingan/*` | 平安经验、能力卡、专属知识候选、源资料 | 新增/拆分/实现/废弃 PingAn card 或候选时更新 |
 | `integrations/*` | 外部系统接入、mock 与真实替换边界 | 新增 mock、真实 provider、外部反馈协议变化时更新 |
 | `memory/memory-tracking.md` | typed memory、candidate、confirmed memory、retrieval policy | memory contract、状态机、检索、projection 变化时更新 |
@@ -62,7 +73,8 @@ ai_soc/
 
 ## Maintenance Rules
 
-- 不新增平行版“完整方案”；方向变化先改 `soc-agent-solution.md`。
+- 不新增平行版路线图；阶段顺序只改 `delivery-roadmap.md`，产品/架构方向只改 `soc-agent-solution.md`。
+- `progress.md` 当前任务必须引用 `delivery-roadmap.md` 的 task ID，未通过 Gate 不切换阶段。
 - 不把 `progress.md` 当方案读；它只是状态和下一步台账。
 - 不从 `archive/` 推导当前路线；归档只用于追溯。
 - 不把平安 `source-docs/` 原文整体复制进 public skill、Lead Agent prompt 或 node prompt。

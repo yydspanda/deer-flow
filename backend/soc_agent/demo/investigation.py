@@ -148,6 +148,7 @@ def run_pingan_investigation_demo(
     repository: SocDemoInvestigationRepository | None = None,
     *,
     scenario: Literal["all", "apt", "edr", "hids"] = "all",
+    analysis_service: SocAnalysisService | None = None,
 ) -> SocDemoInvestigationReport:
     """Seed a reviewable PingAn SOC investigation chain into a repository."""
 
@@ -158,7 +159,14 @@ def run_pingan_investigation_demo(
     if not selected:
         raise ValueError(f"no PingAn demo fixtures matched scenario={scenario!r}")
 
-    results = [_seed_fixture_investigation(fixture, repository=repository) for fixture in selected]
+    results = [
+        _seed_fixture_investigation(
+            fixture,
+            repository=repository,
+            analysis_service=analysis_service,
+        )
+        for fixture in selected
+    ]
     queue_ids = [result.queue_id for result in results if result.queue_id]
     return SocDemoInvestigationReport(
         scenario=scenario,
@@ -180,16 +188,18 @@ def _seed_fixture_investigation(
     fixture: PingAnCapabilityEvalFixture,
     *,
     repository: SocDemoInvestigationRepository,
+    analysis_service: SocAnalysisService | None,
 ) -> SocDemoInvestigationSampleResult:
     payload = _load_source_payload(fixture)
     context = _demo_context(fixture.sample_id, operation="analysis")
-    run = SocAnalysisService(
+    service = analysis_service or SocAnalysisService(
         repository=repository,
         summary_repository=repository,
         audit_repository=repository,
         review_queue_repository=repository,
         analysis_persistence=repository,
-    ).analyze(payload, context=context)
+    )
+    run = service.analyze(payload, context=context)
     review_item = _review_item_for_run(repository, run.run_id)
     failure_reasons: list[str] = []
     if review_item is None:

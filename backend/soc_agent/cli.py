@@ -108,7 +108,12 @@ from soc_agent.db import (
     to_sync_database_url,
     upgrade_soc_schema,
 )
-from soc_agent.demo import run_pingan_investigation_demo
+from soc_agent.demo import (
+    build_boss_demo_manifest,
+    default_boss_demo_database_url,
+    prepare_boss_demo_database,
+    run_pingan_investigation_demo,
+)
 from soc_agent.eval import (
     DEFAULT_CORRELATION_EVAL_FIXTURE,
     DEFAULT_PINGAN_CAPABILITY_EVAL_DIR,
@@ -229,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
         return _demo_run(args)
     if args.command == "demo" and args.demo_command == "alert":
         return _demo_alert(args)
+    if args.command == "demo" and args.demo_command == "boss":
+        return _demo_boss(args)
     if args.command == "memory" and args.memory_command == "list":
         return _memory_list(args)
     if args.command == "memory" and args.memory_command == "get":
@@ -677,6 +684,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     demo_run.add_argument("--init-db", action="store_true", help="Create SOC tables before seeding")
     demo_run.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_analyzer_args(demo_run)
     _add_database_args(demo_run)
     demo_alert = demo_subparsers.add_parser("alert", help="Run one alert through SOC services and print a review-ready summary")
     demo_alert.add_argument("path", nargs="?", help="Path to alert JSON file")
@@ -689,6 +697,28 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_alert.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_analyzer_args(demo_alert)
     _add_database_args(demo_alert)
+    demo_boss = demo_subparsers.add_parser(
+        "boss",
+        help="Prepare the isolated, browser-first Boss Demo v0.1 golden path",
+    )
+    demo_boss.add_argument(
+        "--path",
+        default=str(DEFAULT_PINGAN_CAPABILITY_EVAL_DIR),
+        help="Path to the PingAn capability fixture directory",
+    )
+    demo_boss.add_argument(
+        "--reset",
+        action="store_true",
+        help="Delete only the selected file-backed SQLite demo database before seeding",
+    )
+    demo_boss.add_argument(
+        "--web-base-url",
+        default="http://localhost:2026",
+        help="Public DeerFlow base URL written into the launch manifest",
+    )
+    demo_boss.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_analyzer_args(demo_boss)
+    _add_database_args(demo_boss)
 
     memory = subparsers.add_parser("memory", help="SOC memory candidate helpers")
     memory_subparsers = memory.add_subparsers(dest="memory_command")
@@ -1501,7 +1531,7 @@ def _review_context_summary_payload(context: InvestigationContext) -> dict[str, 
             {
                 "memory_id": match.memory_id,
                 "score": match.score,
-                "summary": match.summary,
+                "summary": match.record.summary,
                 "match_reasons": match.match_reasons,
                 "retrieval_enabled": match.retrieval_enabled,
             }
@@ -2863,7 +2893,15 @@ def _demo_run(args: argparse.Namespace) -> int:
             create_soc_tables(_engine_from_args(args))
         fixtures = load_pingan_capability_eval_fixtures(args.path)
         repository = _repository_from_args(args)
-        report = run_pingan_investigation_demo(fixtures, repository=repository, scenario=args.scenario)
+        report = run_pingan_investigation_demo(
+            fixtures,
+            repository=repository,
+            scenario=args.scenario,
+            analysis_service=_analysis_service_for_repository(
+                repository,
+                settings=_llm_settings_from_args(args),
+            ),
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -2879,6 +2917,50 @@ def _demo_run(args: argparse.Namespace) -> int:
 
     print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0 if report.failed_count == 0 else 1
+
+
+def _demo_boss(args: argparse.Namespace) -> int:
+    database_url = args.database_url or default_boss_demo_database_url()
+    try:
+        database_locator, reset_applied = prepare_boss_demo_database(
+            database_url,
+            reset=args.reset,
+        )
+        engine = create_engine(to_sync_database_url(database_url), pool_pre_ping=True)
+        create_soc_tables(engine)
+        repository = SqlAlchemyAlertRepository(sessionmaker(bind=engine, expire_on_commit=False))
+        settings = _llm_settings_from_args(args)
+        fixtures = load_pingan_capability_eval_fixtures(args.path)
+        report = run_pingan_investigation_demo(
+            fixtures,
+            repository=repository,
+            scenario="apt",
+            analysis_service=_analysis_service_for_repository(repository, settings=settings),
+        )
+        manifest = build_boss_demo_manifest(
+            report,
+            database_url=database_url,
+            database_locator=database_locator,
+            analyzer_mode=settings.mode.value,
+            model_name=settings.model_name,
+            reset_applied=reset_applied,
+            web_base_url=args.web_base_url,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: SOC Boss Demo failed: {exc}", file=sys.stderr)
+        return 3
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: report demo failure
+        print(f"error: SOC Boss Demo failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(manifest.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if manifest.status == "ready" else 1
 
 
 def _db_init(args: argparse.Namespace) -> int:
