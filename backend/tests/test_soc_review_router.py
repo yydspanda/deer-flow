@@ -210,8 +210,9 @@ def _sample(name: str) -> dict:
 class FakeRequest:
     def __init__(self, headers: dict[str, str] | None = None, user_id: str | None = None) -> None:
         self.headers = headers or {}
+        self.state = SimpleNamespace(auth_source="session")
         if user_id is not None:
-            self.state = SimpleNamespace(user=SimpleNamespace(id=user_id))
+            self.state.user = SimpleNamespace(id=user_id, system_role="user")
 
 
 @pytest.fixture
@@ -322,7 +323,7 @@ def test_soc_review_api_closes_item_with_api_actor(review_api) -> None:
     closed = soc_review.close_review_item(
         item.queue_id,
         soc_review.ReviewQueueCloseRequest(reason="复核完成"),
-        FakeRequest({"x-soc-actor-id": "analyst-api"}),
+        FakeRequest({"x-soc-actor-id": "spoofed-user"}, user_id="analyst-api"),
         service=service,
     )
 
@@ -332,6 +333,21 @@ def test_soc_review_api_closes_item_with_api_actor(review_api) -> None:
     assert closed.closed_by.actor_id == "analyst-api"
     assert closed.closed_by.surface == EntrySurface.API
     assert repository.get_review_item(item.queue_id).status == ReviewQueueStatus.CLOSED
+
+
+def test_soc_review_api_rejects_header_only_actor_for_l3_mutation(review_api) -> None:
+    service, repository, item = review_api
+
+    with pytest.raises(HTTPException) as exc_info:
+        soc_review.close_review_item(
+            item.queue_id,
+            soc_review.ReviewQueueCloseRequest(reason="header actor attempted close"),
+            FakeRequest({"x-soc-actor-id": "header-only"}),
+            service=service,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert repository.get_review_item(item.queue_id).status is ReviewQueueStatus.OPEN
 
 
 def test_soc_review_api_uses_authenticated_web_actor_over_header(review_api) -> None:
@@ -367,7 +383,7 @@ def test_soc_review_api_corrects_run_and_closes_open_item(review_api) -> None:
             confidence=0.93,
             reason="分析师确认是误报",
         ),
-        FakeRequest({"x-soc-actor-id": "analyst-api"}),
+        FakeRequest({"x-soc-actor-id": "spoofed-user"}, user_id="analyst-api"),
         service=service,
     )
 

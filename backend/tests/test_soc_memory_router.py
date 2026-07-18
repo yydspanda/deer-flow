@@ -24,13 +24,16 @@ from soc_agent.memory import InMemoryMemoryCandidateRepository
 
 
 class FakeRequest:
-    def __init__(self) -> None:
+    def __init__(self, *, authenticated: bool = True) -> None:
         self.headers: dict[str, str] = {
-            "x-soc-actor-id": "soc-web-test",
+            "x-soc-actor-id": "spoofed-user",
             "x-soc-surface": "web",
             "x-trace-id": "soc-memory-router-test",
         }
         self.state = SimpleNamespace()
+        if authenticated:
+            self.state.auth_source = "session"
+            self.state.user = SimpleNamespace(id="soc-web-test", system_role="user")
 
 
 def test_soc_memory_api_lists_candidates_by_review_filters() -> None:
@@ -123,6 +126,26 @@ def test_soc_memory_api_reviews_candidate_and_lists_record() -> None:
     )
     assert enabled_search.returned_count == 1
     assert enabled_search.matches[0].memory_id == result.memory_record.memory_id
+
+
+def test_soc_memory_api_rejects_untrusted_candidate_review() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(candidate_repository=repository, record_repository=repository)
+    candidate = service.propose_candidate(_memory_candidate_command())
+
+    with pytest.raises(HTTPException) as exc_info:
+        soc_memory.review_memory_candidate(
+            candidate.candidate_id,
+            soc_memory.MemoryCandidateReviewRequest(
+                decision=SocMemoryCandidateReviewDecision.REJECT,
+                reason="untrusted caller attempted review",
+            ),
+            request=FakeRequest(authenticated=False),
+            service=service,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert service.get_candidate(candidate.candidate_id).status is SocMemoryCandidateStatus.PENDING_REVIEW
 
 
 def _memory_candidate_command(

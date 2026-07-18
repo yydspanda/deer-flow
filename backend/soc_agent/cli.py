@@ -354,6 +354,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     correct.add_argument("--reason", required=True, help="Analyst correction reason")
     correct.add_argument("--confidence", type=float, default=None, help="Optional corrected confidence, 0..1")
+    correct.add_argument("--actor-id", default="soc-cli", help="Analyst actor id")
     correct.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(correct)
 
@@ -473,6 +474,7 @@ def _build_parser() -> argparse.ArgumentParser:
     review_close = review_subparsers.add_parser("close", help="Close one SOC review queue item")
     review_close.add_argument("queue_id", help="Review queue id to close")
     review_close.add_argument("--reason", required=True, help="Reason for closing the queue item")
+    review_close.add_argument("--actor-id", default="soc-cli", help="Analyst actor id")
     review_close.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(review_close)
     review_tui = review_subparsers.add_parser("tui", help="Open the SOC review queue terminal workbench")
@@ -1153,7 +1155,8 @@ def _correct(args: argparse.Namespace) -> int:
                 corrected_verdict=Verdict(args.verdict),
                 corrected_confidence=args.confidence,
                 reason=args.reason,
-            )
+            ),
+            context=_cli_context(args.actor_id, roles=["soc_analyst"]),
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1229,7 +1232,7 @@ def _normalize_baseline_accept(args: argparse.Namespace) -> int:
                 accepted_fingerprints=args.fingerprint,
                 reason=args.reason,
             ),
-            context=_normalization_cli_context(args.actor_id, roles=["soc_engineer"]),
+            context=_cli_context(args.actor_id, roles=["soc_engineer"]),
         )
     except (ValueError, SocServiceError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1298,7 +1301,7 @@ def _normalize_issue_update(args: argparse.Namespace) -> int:
                 status=args.status,
                 reason=args.reason,
             ),
-            context=_normalization_cli_context(args.actor_id, roles=["soc_engineer"]),
+            context=_cli_context(args.actor_id, roles=["soc_engineer"]),
         )
     except (ValueError, SocServiceError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1344,7 +1347,7 @@ def _normalize_suggest(args: argparse.Namespace) -> int:
     return 0
 
 
-def _normalization_cli_context(actor_id: str, *, roles: list[str]) -> ServiceRequestContext:
+def _cli_context(actor_id: str, *, roles: list[str]) -> ServiceRequestContext:
     return ServiceRequestContext(
         actor=ActorContext(
             actor_id=actor_id,
@@ -1383,7 +1386,10 @@ def _review_list(args: argparse.Namespace) -> int:
 def _review_close(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
-        item = SocReviewService(review_queue_repository=repository).close_queue_item(ReviewQueueCloseCommand(queue_id=args.queue_id, reason=args.reason))
+        item = SocReviewService(review_queue_repository=repository).close_queue_item(
+            ReviewQueueCloseCommand(queue_id=args.queue_id, reason=args.reason),
+            context=_cli_context(args.actor_id, roles=["soc_analyst"]),
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

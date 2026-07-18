@@ -28,6 +28,7 @@ from soc_agent.contracts import (
     SimilarAlertQuery,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
+    SocAgentApprovalRequestStatus,
     SocDispositionOutcomeRecord,
     SocDispositionOutcomeReviewKind,
     SocDispositionProposalRecord,
@@ -217,16 +218,29 @@ class SqlAlchemyAlertRepository:
                 return None
             return SocAgentApprovalGrant.model_validate(row.grant_payload)
 
-    def save_approval_request(self, approval_request: SocAgentApprovalRequest) -> None:
+    def get_approval_grant_by_request_id(self, approval_request_id: str) -> SocAgentApprovalGrant | None:
+        with self._session_factory() as session:
+            result = session.execute(select(SocApprovalGrantRow).where(SocApprovalGrantRow.approval_request_id == approval_request_id).limit(1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                return None
+            return SocAgentApprovalGrant.model_validate(row.grant_payload)
+
+    def create_approval_request(self, approval_request: SocAgentApprovalRequest) -> bool:
         payload = approval_request.model_dump(mode="json")
         with self._session_factory() as session:
-            row = session.get(SocApprovalRequestRow, approval_request.approval_request_id)
-            if row is None:
-                session.add(SocApprovalRequestRow(approval_request_id=approval_request.approval_request_id, **_approval_request_row_values(approval_request, payload)))
-            else:
-                for key, value in _approval_request_row_values(approval_request, payload).items():
-                    setattr(row, key, value)
-            session.commit()
+            session.add(
+                SocApprovalRequestRow(
+                    approval_request_id=approval_request.approval_request_id,
+                    **_approval_request_row_values(approval_request, payload),
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                return False
+            return True
 
     def get_approval_request(self, approval_request_id: str) -> SocAgentApprovalRequest | None:
         with self._session_factory() as session:
@@ -247,6 +261,38 @@ class SqlAlchemyAlertRepository:
                 query = query.where(SocApprovalRequestRow.status == status)
             result = session.execute(query.order_by(SocApprovalRequestRow.created_at.desc()).limit(limit))
             return [SocAgentApprovalRequest.model_validate(row.request_payload) for row in result.scalars()]
+
+    def resolve_approval_request(
+        self,
+        approval_request: SocAgentApprovalRequest,
+        *,
+        expected_status: SocAgentApprovalRequestStatus,
+        grant: SocAgentApprovalGrant | None = None,
+    ) -> bool:
+        payload = approval_request.model_dump(mode="json")
+        with self._session_factory() as session:
+            row = session.execute(select(SocApprovalRequestRow).where(SocApprovalRequestRow.approval_request_id == approval_request.approval_request_id).with_for_update()).scalar_one_or_none()
+            if row is None or row.status != expected_status.value:
+                return False
+            if grant is not None:
+                existing_grant = session.execute(select(SocApprovalGrantRow).where(SocApprovalGrantRow.approval_request_id == approval_request.approval_request_id).limit(1)).scalar_one_or_none()
+                if existing_grant is not None:
+                    return False
+                grant_payload = grant.model_dump(mode="json")
+                session.add(
+                    SocApprovalGrantRow(
+                        approval_grant_id=grant.approval_grant_id,
+                        **_approval_grant_row_values(grant, grant_payload),
+                    )
+                )
+            for key, value in _approval_request_row_values(approval_request, payload).items():
+                setattr(row, key, value)
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                return False
+            return True
 
     def save_evidence(self, evidence: InvestigationEvidence) -> None:
         payload = evidence.model_dump(mode="json")
@@ -1089,6 +1135,11 @@ def _approval_request_row_values(approval_request: SocAgentApprovalRequest, payl
         "requested_by_actor_id": approval_request.requested_by.actor_id,
         "reason": approval_request.reason,
         "created_at": approval_request.created_at,
+        "resolved_at": approval_request.resolved_at,
+        "resolved_by_actor_id": approval_request.resolved_by.actor_id if approval_request.resolved_by is not None else None,
+        "resolution_reason": approval_request.resolution_reason,
+        "resolution_idempotency_key": approval_request.resolution_idempotency_key,
+        "approval_grant_id": approval_request.approval_grant_id,
         "request_payload": payload,
     }
 

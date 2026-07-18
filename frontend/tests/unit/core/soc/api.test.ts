@@ -14,6 +14,7 @@ import {
   correctSocReviewRun,
   createSocApprovalGrant,
   dryRunSocApprovedAction,
+  expireSocApprovalRequest,
   executeSocApprovedAction,
   getSocApprovalRequest,
   getSocDispositionSampleReviewInbox,
@@ -22,6 +23,7 @@ import {
   listSocDispositionSampleCampaigns,
   listSocReviewItems,
   recordSocDispositionOutcome,
+  rejectSocApprovalRequest,
 } from "@/core/soc/api";
 
 const mockedFetch = rs.mocked(fetcher);
@@ -244,6 +246,7 @@ describe("SOC review API", () => {
 
 describe("SOC approval API", () => {
   const approvalRequest = {
+    approval_request_id: "APR-1",
     permission_decision_id: "PERM-1",
     route: "response.block_ip",
     action: "response.block_ip",
@@ -254,6 +257,7 @@ describe("SOC approval API", () => {
       surface: "web",
       roles: ["analyst"],
     },
+    status: "pending" as const,
   };
 
   test("lists approval requests from inbox", async () => {
@@ -306,7 +310,7 @@ describe("SOC approval API", () => {
 
     await createSocApprovalGrant(
       {
-        approval_request: approvalRequest,
+        approval_request_id: "APR-1",
         reason: "approved",
         expires_in_seconds: 900,
       },
@@ -323,7 +327,7 @@ describe("SOC approval API", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          approval_request: approvalRequest,
+          approval_request_id: "APR-1",
           reason: "approved",
           expires_in_seconds: 900,
         }),
@@ -336,6 +340,56 @@ describe("SOC approval API", () => {
     expect(headers.get("x-soc-surface")).toBe("web");
     expect(headers.get("x-trace-id")).toBe("trace-approve-1");
     expect(headers.get("idempotency-key")).toBe("idem-approve-1");
+  });
+
+  test("rejects and expires approval requests by immutable request id", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(
+        jsonResponse(200, { ...approvalRequest, status: "rejected" }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, { ...approvalRequest, status: "expired" }),
+      );
+
+    await rejectSocApprovalRequest(
+      "APR/1",
+      { reason: "scope rejected" },
+      {
+        actorId: "approver-1",
+        surface: "web",
+        idempotencyKey: "reject-1",
+      },
+    );
+    await expireSocApprovalRequest(
+      "APR/2",
+      { reason: "request expired" },
+      {
+        actorId: "approver-1",
+        surface: "web",
+        idempotencyKey: "expire-1",
+      },
+    );
+
+    expect(mockedFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/soc/approvals/requests/APR%2F1/reject",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ reason: "scope rejected" }),
+      }),
+    );
+    expect(mockedFetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/soc/approvals/requests/APR%2F2/expire",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ reason: "request expired" }),
+      }),
+    );
+    const firstHeaders = mockedFetch.mock.calls[0]?.[1]?.headers as Headers;
+    const secondHeaders = mockedFetch.mock.calls[1]?.[1]?.headers as Headers;
+    expect(firstHeaders.get("idempotency-key")).toBe("reject-1");
+    expect(secondHeaders.get("idempotency-key")).toBe("expire-1");
   });
 
   test("dry-runs approved action without idempotency header", async () => {

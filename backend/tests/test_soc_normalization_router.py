@@ -21,10 +21,11 @@ class _FakeRequest:
     def __init__(self, *, admin: bool = False) -> None:
         self.headers = {"x-soc-surface": "web"}
         self.state = SimpleNamespace(
+            auth_source="session",
             user=SimpleNamespace(
                 id="normalization-admin" if admin else "normalization-analyst",
                 system_role="admin" if admin else "user",
-            )
+            ),
         )
 
 

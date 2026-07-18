@@ -207,6 +207,16 @@ item, and audit record commit atomically. `RuntimeFailure` owns sanitized failur
 retryable failures remain replayable and do not immediately create analyst queue noise; non-retryable
 failures enter ReviewQueue. Kafka adapters must not commit retryable Runtime failures.
 
+L3 SOC mutations use `core.access_control.require_actor_roles()` inside the service boundary. A caller
+must have a non-anonymous actor, a non-unknown `ActorContext.auth_source`, and a command-specific role;
+Gateway authentication/route checks do not replace this rule. Gateway derives `soc_analyst` or
+`soc_admin` from authenticated user state, while CLI/TUI/daemon/external adapters use explicit local or
+service provenance. Approval request creation is insert-only. Resolution is a terminal
+`pending -> approved|rejected|expired` compare-and-set; approve takes a request ID, loads the stored
+payload, and atomically inserts at most one grant. Exact retries may return the existing terminal result,
+but changed or stale resolution attempts conflict. Request/grant persistence is not the unified durable
+mutation audit; that remains owned by the follow-up audit unit-of-work boundary.
+
 Production normalization drift is handled by `core/normalization_maintenance.py`, not by the alert
 ReviewQueue. Explicitly approved baselines and deduplicated maintenance issues are persisted through
 the repository protocols and migration `0012_normalization_maintenance`. Persisted CLI/Kafka analysis

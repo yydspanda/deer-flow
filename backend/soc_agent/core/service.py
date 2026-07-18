@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from soc_agent.context_bridge import skill_context_from_investigation_context
 from soc_agent.contracts import (
+    ActorAuthSource,
     ActorContext,
     ActorType,
     AlertInput,
@@ -51,6 +52,7 @@ from soc_agent.contracts import (
     SocAgentActionResult,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
+    SocAgentApprovalRequestStatus,
     SocAgentApprovedActionCommand,
     SocAgentChatRequest,
     SocAgentChatResponse,
@@ -108,17 +110,14 @@ from soc_agent.protocols import (
 )
 from soc_agent.skills import SocSkillResolver
 
-
-class SocServiceError(RuntimeError):
-    """Base error for service-layer failures."""
-
-
-class SocServiceNotImplementedError(SocServiceError):
-    """Raised when a planned service operation has no Phase 1 implementation."""
-
-
-class SocServiceNotFoundError(SocServiceError):
-    """Raised when a requested SOC resource does not exist."""
+from .access_control import require_actor_roles
+from .errors import (
+    SocServiceAuthorizationError,
+    SocServiceConflictError,
+    SocServiceError,
+    SocServiceNotFoundError,
+    SocServiceNotImplementedError,
+)
 
 
 class DeterministicAnalysisRuntime:
@@ -523,6 +522,9 @@ def _drift_failure_sample(
 class SocReviewService:
     """Review queue and correction service."""
 
+    HUMAN_MUTATION_ROLES = frozenset({"analyst", "soc_analyst", "soc_admin"})
+    CORRECTION_ROLES = HUMAN_MUTATION_ROLES | {"external_disposition_adapter"}
+
     def __init__(
         self,
         *,
@@ -558,6 +560,12 @@ class SocReviewService:
         *,
         context: ServiceRequestContext | None = None,
     ) -> AnalysisRun:
+        request_context = context or ServiceRequestContext()
+        require_actor_roles(
+            request_context,
+            self.CORRECTION_ROLES,
+            operation="correcting an analysis run",
+        )
         if self._repository is None:
             raise SocServiceNotImplementedError("correct requires an AlertRepository")
 
@@ -565,7 +573,6 @@ class SocReviewService:
         if run is None:
             raise SocServiceNotFoundError(f"run {command.run_id} not found")
 
-        request_context = context or ServiceRequestContext()
         previous_verdict = _current_verdict(run)
         record = CorrectionRecord(
             run_id=run.run_id,
@@ -664,6 +671,12 @@ class SocReviewService:
         *,
         context: ServiceRequestContext | None = None,
     ) -> ReviewQueueItem:
+        request_context = context or ServiceRequestContext()
+        require_actor_roles(
+            request_context,
+            self.HUMAN_MUTATION_ROLES,
+            operation="closing a review queue item",
+        )
         if self._review_queue_repository is None:
             raise SocServiceNotImplementedError("close_queue_item requires a ReviewQueueRepository")
 
@@ -671,7 +684,6 @@ class SocReviewService:
         if item is None:
             raise SocServiceNotFoundError(f"review queue item {command.queue_id} not found")
 
-        request_context = context or ServiceRequestContext()
         item.status = ReviewQueueStatus.CLOSED
         item.closed_at = _utc_now()
         item.closed_by = request_context.actor
@@ -686,6 +698,12 @@ class SocReviewService:
         *,
         context: ServiceRequestContext | None = None,
     ) -> ReviewNoteResult:
+        request_context = context or ServiceRequestContext()
+        require_actor_roles(
+            request_context,
+            self.HUMAN_MUTATION_ROLES,
+            operation="adding a review note",
+        )
         if self._review_queue_repository is None:
             raise SocServiceNotImplementedError("add_note requires a ReviewQueueRepository")
         if self._repository is None:
@@ -701,7 +719,6 @@ class SocReviewService:
         if run is None:
             raise SocServiceNotFoundError(f"run {item.run_id} not found")
 
-        request_context = context or ServiceRequestContext()
         memory_service = SocMemoryService(
             candidate_repository=self._memory_candidate_repository,
             event_sink=self._event_sink,
@@ -817,6 +834,8 @@ class SocReviewService:
 class SocMemoryService:
     """Facts, lessons, and reviewable candidate knowledge service."""
 
+    REVIEWER_ROLES = frozenset({"analyst", "soc_analyst", "soc_memory_reviewer", "soc_admin"})
+
     def __init__(
         self,
         *,
@@ -906,10 +925,15 @@ class SocMemoryService:
         *,
         context: ServiceRequestContext | None = None,
     ) -> SocMemoryCandidateReviewResult:
+        request_context = context or ServiceRequestContext()
+        require_actor_roles(
+            request_context,
+            self.REVIEWER_ROLES,
+            operation="reviewing a memory candidate",
+        )
         if self._candidate_repository is None:
             raise SocServiceNotImplementedError("review_candidate requires a MemoryCandidateRepository")
 
-        request_context = context or ServiceRequestContext()
         candidate = self.get_candidate(command.candidate_id)
         previous_status = candidate.status
         reviewed_at = datetime.now(UTC)
@@ -1443,7 +1467,10 @@ class SocDaemonService:
             return self._process_alert_message(daemon_message)
         if daemon_message.kind == "approval_request":
             approval_request = SocAgentApprovalRequest.model_validate(daemon_message.payload)
-            submitted = self.submit_approval_request(approval_request)
+            submitted = self.submit_approval_request(
+                approval_request,
+                context=_daemon_request_context(daemon_message),
+            )
             return SocDaemonProcessResult(
                 message_id=daemon_message.message_id,
                 kind=daemon_message.kind,
@@ -1458,12 +1485,17 @@ class SocDaemonService:
             )
         raise SocServiceError(f"unsupported daemon message kind: {daemon_message.kind}")
 
-    def submit_approval_request(self, approval_request: SocAgentApprovalRequest) -> SocAgentApprovalRequest:
+    def submit_approval_request(
+        self,
+        approval_request: SocAgentApprovalRequest,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentApprovalRequest:
         """Daemon-side boundary for writing high-risk requests to the shared inbox."""
 
         if self._approval_service is None:
             raise SocServiceNotImplementedError("submit_approval_request requires a SocAgentApprovalService")
-        return self._approval_service.submit_request(approval_request)
+        return self._approval_service.submit_request(approval_request, context=context)
 
     def _process_alert_message(self, message: SocDaemonMessage) -> SocDaemonProcessResult:
         if self._analysis_service is None:
@@ -1495,7 +1527,13 @@ class SocDaemonService:
 
 def _daemon_request_context(message: SocDaemonMessage) -> ServiceRequestContext:
     return ServiceRequestContext(
-        actor=ActorContext(actor_id="soc-daemon", actor_type=ActorType.SERVICE, surface=EntrySurface.DAEMON),
+        actor=ActorContext(
+            actor_id="soc-daemon",
+            actor_type=ActorType.SERVICE,
+            surface=EntrySurface.DAEMON,
+            roles=["soc_daemon"],
+            auth_source=ActorAuthSource.DAEMON,
+        ),
         trace_id=message.message_id,
         idempotency_key=_daemon_idempotency_key(message),
     )
@@ -1526,6 +1564,30 @@ def _merge_approval_action_payload(
     return payload
 
 
+def _resolved_approval_request(
+    approval_request: SocAgentApprovalRequest,
+    *,
+    status: SocAgentApprovalRequestStatus,
+    context: ServiceRequestContext,
+    reason: str,
+    resolved_at: datetime,
+    approval_grant_id: str | None = None,
+    expires_in_seconds: int | None = None,
+) -> SocAgentApprovalRequest:
+    return SocAgentApprovalRequest.model_validate(
+        {
+            **approval_request.model_dump(mode="python"),
+            "status": status,
+            "resolved_at": resolved_at,
+            "resolved_by": context.actor,
+            "resolution_reason": reason.strip(),
+            "resolution_idempotency_key": context.idempotency_key,
+            "resolution_expires_in_seconds": expires_in_seconds,
+            "approval_grant_id": approval_grant_id,
+        }
+    )
+
+
 class SocAgentApprovalService:
     """Human approval boundary for high-risk SOC Agent actions.
 
@@ -1533,7 +1595,10 @@ class SocAgentApprovalService:
     call external tools, or write business state.
     """
 
+    SUBMITTER_ROLES = frozenset({"analyst", "soc_analyst", "soc_agent", "soc_daemon", "soc_admin"})
+    DELEGATED_SUBMITTER_ROLES = frozenset({"soc_agent", "soc_daemon"})
     APPROVER_ROLES = frozenset({"soc_approver", "soc_admin"})
+    OPERATOR_ROLES = frozenset({"analyst", "soc_analyst", "soc_operator", "soc_approver", "soc_admin"})
 
     def __init__(
         self,
@@ -1546,15 +1611,39 @@ class SocAgentApprovalService:
         self._request_repository = request_repository
         self._action_adapter_registry = action_adapter_registry
 
-    def submit_request(self, approval_request: SocAgentApprovalRequest) -> SocAgentApprovalRequest:
+    def submit_request(
+        self,
+        approval_request: SocAgentApprovalRequest,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocAgentApprovalRequest:
         """Persist a pending approval request for human review."""
 
-        if approval_request.status != "pending":
+        require_actor_roles(context, self.SUBMITTER_ROLES, operation="submitting an approval request")
+        if approval_request.status is not SocAgentApprovalRequestStatus.PENDING:
             raise SocServiceError(f"approval request {approval_request.approval_request_id} is not pending")
         if self._request_repository is None:
             raise SocServiceNotImplementedError("submit_request requires a SocAgentApprovalRequestRepository")
-        self._request_repository.save_approval_request(approval_request)
-        return approval_request
+
+        delegated = bool(self.DELEGATED_SUBMITTER_ROLES.intersection(context.actor.roles))
+        if not delegated and approval_request.requested_by.actor_id != context.actor.actor_id:
+            raise SocServiceAuthorizationError("approval requested_by must match the authenticated actor")
+        requested_by = approval_request.requested_by if delegated else context.actor
+        submitted = approval_request.model_copy(
+            update={
+                "requested_by": requested_by,
+                "submitted_by": context.actor,
+            }
+        )
+        existing = self._request_repository.get_approval_request(submitted.approval_request_id)
+        if existing is not None:
+            return self._validate_request_submission_retry(existing, submitted)
+        if self._request_repository.create_approval_request(submitted):
+            return submitted
+        concurrent = self._request_repository.get_approval_request(submitted.approval_request_id)
+        if concurrent is None:
+            raise SocServiceConflictError(f"approval request {submitted.approval_request_id} could not be persisted")
+        return self._validate_request_submission_retry(concurrent, submitted)
 
     def get_request(self, approval_request_id: str) -> SocAgentApprovalRequest:
         if self._request_repository is None:
@@ -1576,20 +1665,33 @@ class SocAgentApprovalService:
 
     def approve(
         self,
-        approval_request: SocAgentApprovalRequest,
+        approval_request_id: str,
         *,
         context: ServiceRequestContext,
         reason: str,
         expires_in_seconds: int = 900,
     ) -> SocAgentApprovalGrant:
-        if approval_request.status != "pending":
-            raise SocServiceError(f"approval request {approval_request.approval_request_id} is not pending")
+        require_actor_roles(context, self.APPROVER_ROLES, operation="approving an action")
         if not reason.strip():
             raise SocServiceError("approval reason is required")
         if expires_in_seconds <= 0:
             raise SocServiceError("approval grant expiry must be positive")
-        if not self._can_approve(context.actor):
-            raise SocServiceError("approval requires actor role soc_approver or soc_admin")
+        idempotency_key = self._require_resolution_idempotency_key(context)
+        if self._request_repository is None:
+            raise SocServiceNotImplementedError("approve requires a SocAgentApprovalRequestRepository")
+        if self._grant_repository is None:
+            raise SocServiceNotImplementedError("approve requires a SocAgentApprovalGrantRepository")
+        if self._request_repository is not self._grant_repository:
+            raise SocServiceNotImplementedError("approve requires one shared atomic approval repository")
+
+        approval_request = self.get_request(approval_request_id)
+        if approval_request.status is not SocAgentApprovalRequestStatus.PENDING:
+            return self._replay_approved_request(
+                approval_request,
+                context=context,
+                reason=reason,
+                expires_in_seconds=expires_in_seconds,
+            )
 
         approved_at = datetime.now(UTC)
         grant = SocAgentApprovalGrant(
@@ -1601,15 +1703,60 @@ class SocAgentApprovalService:
             requested_by=approval_request.requested_by,
             approved_by=context.actor,
             approval_reason=reason.strip(),
-            idempotency_key=context.idempotency_key,
+            idempotency_key=idempotency_key,
             approved_at=approved_at,
             expires_at=approved_at + timedelta(seconds=expires_in_seconds),
         )
-        if self._request_repository is not None:
-            self._request_repository.save_approval_request(approval_request)
-        if self._grant_repository is not None:
-            self._grant_repository.save_approval_grant(grant)
-        return grant
+        resolved = _resolved_approval_request(
+            approval_request,
+            status=SocAgentApprovalRequestStatus.APPROVED,
+            context=context,
+            reason=reason,
+            resolved_at=approved_at,
+            approval_grant_id=grant.approval_grant_id,
+            expires_in_seconds=expires_in_seconds,
+        )
+        if self._request_repository.resolve_approval_request(
+            resolved,
+            expected_status=SocAgentApprovalRequestStatus.PENDING,
+            grant=grant,
+        ):
+            return grant
+        concurrent = self.get_request(approval_request_id)
+        return self._replay_approved_request(
+            concurrent,
+            context=context,
+            reason=reason,
+            expires_in_seconds=expires_in_seconds,
+        )
+
+    def reject(
+        self,
+        approval_request_id: str,
+        *,
+        context: ServiceRequestContext,
+        reason: str,
+    ) -> SocAgentApprovalRequest:
+        return self._resolve_without_grant(
+            approval_request_id,
+            status=SocAgentApprovalRequestStatus.REJECTED,
+            context=context,
+            reason=reason,
+        )
+
+    def expire(
+        self,
+        approval_request_id: str,
+        *,
+        context: ServiceRequestContext,
+        reason: str,
+    ) -> SocAgentApprovalRequest:
+        return self._resolve_without_grant(
+            approval_request_id,
+            status=SocAgentApprovalRequestStatus.EXPIRED,
+            context=context,
+            reason=reason,
+        )
 
     def dry_run_approved_action(
         self,
@@ -1619,6 +1766,7 @@ class SocAgentApprovalService:
     ) -> SocAgentActionResult:
         """Validate an approval grant and return a non-side-effecting action result."""
 
+        require_actor_roles(context, self.OPERATOR_ROLES, operation="dry-running an approved action")
         if self._grant_repository is None:
             raise SocServiceNotImplementedError("dry_run_approved_action requires a SocAgentApprovalGrantRepository")
         if not command.dry_run:
@@ -1668,6 +1816,7 @@ class SocAgentApprovalService:
         call an external response tool or mutate production systems.
         """
 
+        require_actor_roles(context, self.OPERATOR_ROLES, operation="executing an approved action")
         if self._grant_repository is None:
             raise SocServiceNotImplementedError("execute_approved_action requires a SocAgentApprovalGrantRepository")
         if command.dry_run:
@@ -1731,8 +1880,100 @@ class SocAgentApprovalService:
         self._grant_repository.save_approval_grant(grant)
         return result
 
-    def _can_approve(self, actor: ActorContext) -> bool:
-        return bool(self.APPROVER_ROLES.intersection(actor.roles))
+    def _resolve_without_grant(
+        self,
+        approval_request_id: str,
+        *,
+        status: SocAgentApprovalRequestStatus,
+        context: ServiceRequestContext,
+        reason: str,
+    ) -> SocAgentApprovalRequest:
+        require_actor_roles(
+            context,
+            self.APPROVER_ROLES,
+            operation=f"marking an approval request {status.value}",
+        )
+        if status not in {SocAgentApprovalRequestStatus.REJECTED, SocAgentApprovalRequestStatus.EXPIRED}:
+            raise SocServiceError(f"unsupported approval resolution status: {status.value}")
+        if not reason.strip():
+            raise SocServiceError("approval resolution reason is required")
+        self._require_resolution_idempotency_key(context)
+        if self._request_repository is None:
+            raise SocServiceNotImplementedError("approval resolution requires a SocAgentApprovalRequestRepository")
+
+        approval_request = self.get_request(approval_request_id)
+        if approval_request.status is not SocAgentApprovalRequestStatus.PENDING:
+            return self._validate_terminal_request_retry(approval_request, status=status, context=context, reason=reason)
+        resolved = _resolved_approval_request(
+            approval_request,
+            status=status,
+            context=context,
+            reason=reason,
+            resolved_at=datetime.now(UTC),
+        )
+        if self._request_repository.resolve_approval_request(
+            resolved,
+            expected_status=SocAgentApprovalRequestStatus.PENDING,
+        ):
+            return resolved
+        concurrent = self.get_request(approval_request_id)
+        return self._validate_terminal_request_retry(concurrent, status=status, context=context, reason=reason)
+
+    def _replay_approved_request(
+        self,
+        approval_request: SocAgentApprovalRequest,
+        *,
+        context: ServiceRequestContext,
+        reason: str,
+        expires_in_seconds: int,
+    ) -> SocAgentApprovalGrant:
+        self._validate_terminal_request_retry(
+            approval_request,
+            status=SocAgentApprovalRequestStatus.APPROVED,
+            context=context,
+            reason=reason,
+            expires_in_seconds=expires_in_seconds,
+        )
+        if self._grant_repository is None:
+            raise SocServiceNotImplementedError("approval retry requires a SocAgentApprovalGrantRepository")
+        grant = self._grant_repository.get_approval_grant_by_request_id(approval_request.approval_request_id)
+        if grant is None or grant.approval_grant_id != approval_request.approval_grant_id:
+            raise SocServiceConflictError(f"approved request {approval_request.approval_request_id} has no matching persisted grant")
+        return grant
+
+    def _validate_terminal_request_retry(
+        self,
+        approval_request: SocAgentApprovalRequest,
+        *,
+        status: SocAgentApprovalRequestStatus,
+        context: ServiceRequestContext,
+        reason: str,
+        expires_in_seconds: int | None = None,
+    ) -> SocAgentApprovalRequest:
+        if (
+            approval_request.status is status
+            and approval_request.resolution_idempotency_key == context.idempotency_key
+            and approval_request.resolved_by is not None
+            and approval_request.resolved_by.actor_id == context.actor.actor_id
+            and approval_request.resolution_reason == reason.strip()
+            and approval_request.resolution_expires_in_seconds == expires_in_seconds
+        ):
+            return approval_request
+        raise SocServiceConflictError(f"approval request {approval_request.approval_request_id} is already {approval_request.status.value}")
+
+    def _validate_request_submission_retry(
+        self,
+        existing: SocAgentApprovalRequest,
+        submitted: SocAgentApprovalRequest,
+    ) -> SocAgentApprovalRequest:
+        if existing == submitted:
+            return existing
+        raise SocServiceConflictError(f"approval request {submitted.approval_request_id} already exists with different content")
+
+    def _require_resolution_idempotency_key(self, context: ServiceRequestContext) -> str:
+        if context.idempotency_key is None or not context.idempotency_key.strip():
+            raise SocServiceError("approval resolution requires an idempotency_key")
+        return context.idempotency_key.strip()
 
     def _replay_consumed_grant(self, grant: SocAgentApprovalGrant, idempotency_key: str) -> SocAgentActionResult:
         if grant.consume_idempotency_key != idempotency_key:
@@ -1843,7 +2084,7 @@ class SocAgentChatService:
             if permission_decision.requires_human_approval:
                 approval_request = _approval_request_from_permission(permission_decision, context=request_context)
                 if self._approval_service is not None:
-                    self._approval_service.submit_request(approval_request)
+                    self._approval_service.submit_request(approval_request, context=request_context)
                 yield _approval_request_event(approval_request)
             yield _assistant_event(_permission_denied_message(permission_decision))
             yield SocAgentStreamEvent(type="end", data={"usage": {}, "thread_id": thread_id})

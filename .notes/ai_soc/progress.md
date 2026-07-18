@@ -23,12 +23,12 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前交付阶段 | `AA` Stage 2 - SOC Alpha Completeness Audit（`BD` Gate 已于 2026-07-18 通过） |
-| 当前目标 | `AUD-02 Code/contract/docs consistency`：以 AUD-01 as-is 旅程为基线，对照 solution、lifecycle、工程契约和 mock/real register |
+| 当前交付阶段 | `BG` Stage 3 - Close Blocking Gaps（`BD`、`AA` Gate 已于 2026-07-18 通过） |
+| 当前目标 | `BG-P0-02 Transactional mutation and durable audit`：关闭 `AC-16`、`AC-21`，建立 correction/external feedback 的显式事务边界和所有 Alpha 状态变更的追加式审计 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `AUD-02`：逐条记录代码与权威文档的事实差异，不在一致性审计过程中修复业务代码；产出后进入 `AUD-03` 唯一完整性矩阵。 |
+| 当前下一刀 | `BG-P0-02`：先盘点 correction/external feedback 的多写入链和现有 audit repository，定义最小 unit-of-work 与 mutation-audit contract；再做逐写入 fault injection，不吸收 P1/P2。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -38,8 +38,8 @@
 | 阶段 | 交付物 | 状态 | 当前边界 | 退出条件 |
 |---|---|---|---|---|
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
-| `AA` | SOC Alpha Completeness Audit | **Current / AUD-02 In Progress** | `AUD-01` as-is 旅程盘点已完成；当前做代码/契约/文档一致性审计 | 唯一完整性矩阵和 P0/P1 blocker register 确认 |
-| `BG` | Close Blocking Gaps | Planned | 只修 AA 审计确认的代码可控 P0/P1 | Alpha E2E 和 readiness package 通过 |
+| `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
+| `BG` | Close Blocking Gaps | **Current / BG-P0-02 In Progress** | `BG-P0-01` 已关闭审批完整性和 L3 授权；当前处理事务化变更与持久审计 | Alpha E2E 和 readiness package 通过 |
 | `PI` | Real Data & Production Integration | Data/credential-gated | 真实 provider、基础设施、标签、SLO 和 governed rollout | Pilot readiness review 通过 |
 
 ## 能力与历史切片台账
@@ -200,6 +200,85 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-18 — BG-P0-01 approval integrity and L3 authorization completed
+
+- `AC-34` 已关闭：
+  - `SocAgentApprovalRequest` 状态机固定为 `pending -> approved/rejected/expired`，终态保存处理人、理由、时间、幂等键和可选 grant 引用；
+  - grant command 只接受 `approval_request_id`，service 必须加载持久化 pending request，不再信任客户端回传的完整请求对象；
+  - repository 使用 insert-only request create 和带 expected status 的原子 resolve；approve 在同一事务中完成 request transition + grant insert，数据库唯一约束保证一个 request 最多一个 grant；
+  - 完全相同的 approve/reject/expire 重试返回原结果，理由、幂等键、过期参数或目标终态不同则 conflict；Web/TUI 增加 reject/expire。
+- `AC-22` 已关闭：
+  - `ActorContext.auth_source` 明确记录 session/internal/local CLI/local TUI/daemon/external adapter/test 等身份信任来源；
+  - shared `require_actor_roles()` 在 core service 内拒绝 anonymous/unknown provenance，并保护 review close/note/correct、memory review、normalization mutation、governed-context lifecycle 和 approval submit/resolve/dry-run/execute；
+  - Gateway 从认证状态映射 `soc_analyst`/`soc_admin` 并保留认证来源；CLI/TUI/daemon 使用显式本地身份，入口不能通过 actor header 覆盖已认证用户。
+- 数据库 migration：`0017_approval_request_lifecycle`；旧的通用 `save_approval_request()` 写入口已移除，避免绕过状态机。
+- 边界声明：审批终态和 execution payload 已持久化，但统一追加式 mutation audit 仍属于 `AC-21`，没有在本刀提前标记完成；真实外部副作用仍未打开。
+- 验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_*.py -q`：509 passed；
+  - `cd frontend && pnpm test tests/unit/core/soc/api.test.ts`：16 passed；
+  - backend Ruff、frontend Prettier/TypeScript checks 通过；
+  - forged/stale/repeated/unauthorized、SQL lifecycle、API/Web/TUI happy/terminal paths 均有回归覆盖。
+- 下一步：
+  - `BG-P0-02`：关闭 `AC-16`、`AC-21`，先定义 correction/external-feedback unit of work 与统一 mutation audit，再用 fault injection 证明任一步失败都完整回滚。
+
+### 2026-07-18 — AUD-03 completeness matrix completed; AA Gate passed; BG-P0-01 started
+
+- 新增 `.notes/ai_soc/audits/alpha-completeness-matrix.md`，作为唯一 SOC Alpha 完整性矩阵：
+  - 对 50 项能力只分类一次：`Complete=21`、`Gap=13`、`Mock=1`、`Data-gated=6`、`Deferred=9`；
+  - 将 13 个代码可控 Gap 分为 4 个 P0 和 9 个 P1；Mock、外部数据/凭证条件和明确后置项不冒充当前 blocker；
+  - 每个 Gap 均记录 owner boundary、影响、AUD-01/AUD-02/源码证据、可测试验收条件和目标阶段。
+- Stage 3 输入已冻结为 7 个有序工作包：
+  - `BG-P0-01` approval integrity and L3 authorization；
+  - `BG-P0-02` transactional mutation and durable audit；
+  - `BG-P1-01` versioned ingestion and external feedback；
+  - `BG-P1-02` SOC API contract stabilization；
+  - `BG-P1-03` Runtime recovery and decision provenance；
+  - `BG-P1-04` governed memory activation；
+  - `BG-P1-05` Alpha E2E and authoritative docs reconciliation。
+- AA Gate 已于 2026-07-18 通过；当前阶段切换为 `BG`，且唯一进行中的任务是 `BG-P0-01`。
+- 本刀仅完成审计分类、门禁和执行指针更新，没有修改业务代码。
+- 验证：
+  - 矩阵编号连续覆盖 `AC-01..AC-50`，状态统计合计 50；
+  - `.notes/ai_soc/README.md`、`delivery-roadmap.md`、`progress.md` 已指向同一矩阵和下一工作包；
+  - `git diff --check`；文档审计未重跑产品测试。
+- 下一步：
+  - `BG-P0-01`：先修 `AC-22`、`AC-34`，验收 forged/stale/repeated/unauthorized 请求均被拒绝，API/Web/TUI 正常审批路径通过。
+
+### 2026-07-18 — AUD-02 consistency audit completed; AUD-03 started
+
+- 新增 `.notes/ai_soc/audits/alpha-consistency-audit.md`，以 AUD-01 as-is 旅程为基线，对照：
+  - `.notes/ai_soc/soc-agent-solution.md`；
+  - `.notes/ai_soc/alert-lifecycle-flow.md`；
+  - `.notes/reference-index/soc-agent-engineering-contracts.md`；
+  - `.notes/ai_soc/integrations/mock-and-real-register.md`；
+  - 当前 SOC/Gateway/Kafka/Web/TUI/Lead Agent 代码与测试。
+- 审计结果：
+  - 记录 10 项已确认一致的核心边界，包括 fixed Runtime、bounded evidence、analysis atomic bundle、
+    read-only correlation、GF/AA/EX/DP/EV shadow boundary、真实可选 LLM path、mock external facts 和 no-side-effect approval boundary；
+  - 记录 `CONS-01..24` 共 24 项事实差异，覆盖 application reachability、API/Kafka contract、Lead Agent/
+    main orchestrator wiring、状态/持久化、approval、audit、atomicity、confidence provenance、memory activation、
+    RBAC、运维目标和过时命令/台账；
+  - 单独核对 real implementation、mock provider、shadow-only、service-only 和 data-gated，避免把
+    “服务已实现”误写成“应用入口已接通”，也避免把真实 Runtime/SQL/governance 误写成 mock。
+- 重要事实包括：
+  - Gateway 当前没有 analyze/replay，external disposition 只有 service + SQL persistence 而没有应用 ingress；
+  - Kafka consumer/commit/DLQ/daemon 是真实串行实现，但 versioned input envelope、result topics 和 worker pool 未落地；
+  - approval request 批准后仍保持 pending，grant API 不从 repository 校验/解析 request；
+  - durable decision audit 不覆盖 close/note/approval，`SocEvent` 默认 no-op；
+  - correction/external disposition 不是 analysis bundle 那样的跨表原子事务；
+  - human/external correction 没有写正确 `Decision.confidence_source`；
+  - confirmed memory retrieval 算法真实存在，但没有受治理的 retrieval-enable 应用入口；
+  - mock register 对 EX/DP/EV 和 external disposition SQL persistence 的描述已落后。
+- 本刀只新增审计报告并更新索引/阶段指针，没有修改业务代码，也没有在审计过程中改写被审文档。
+- 验证：
+  - `codegraph status .`：index up to date，1,614 files / 33,184 nodes / 77,881 edges；
+  - CodeGraph 查询 `SocExternalDispositionService`、`SocDaemonService`、`SocLeadAgentChatService`、
+    `SocMainOrchestratorService`，再用源码/`rg` 补齐动态入口和 absence evidence；
+  - `git diff --check`；本刀为文档审计，未重跑产品测试。
+- 下一步：
+  - `AUD-03 Completeness matrix + blocker register`：将 AUD-01 journey 与 `CONS-01..24` 只分类一次，
+    补齐状态、优先级、owner、影响、证据、验收和目标阶段，冻结 `BG-01/BG-02` 输入；仍不在该刀修代码。
 
 ### 2026-07-18 — AUD-01 Journey inventory completed; AUD-02 started
 

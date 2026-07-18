@@ -22,6 +22,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.core import (
     SocNormalizationMaintenanceService,
+    SocServiceAuthorizationError,
     SocServiceError,
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
@@ -82,8 +83,10 @@ def accept_normalization_baseline(
         )
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except SocServiceError as exc:
+    except SocServiceAuthorizationError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/baselines", response_model=NormalizationBaselineListResponse)
@@ -148,6 +151,8 @@ def update_normalization_issue(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except SocServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

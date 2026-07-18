@@ -41,7 +41,9 @@ import {
   useCorrectSocReviewRun,
   useCreateSocApprovalGrant,
   useDryRunSocApprovedAction,
+  useExpireSocApprovalRequest,
   useExecuteSocApprovedAction,
+  useRejectSocApprovalRequest,
   useReviewSocMemoryCandidate,
   useRecordSocDispositionOutcome,
   useSocApprovalRequest,
@@ -1400,6 +1402,8 @@ export function SocReviewQueueWorkbench() {
   const closeMutation = useCloseSocReviewItem();
   const correctMutation = useCorrectSocReviewRun();
   const createApprovalGrantMutation = useCreateSocApprovalGrant();
+  const rejectApprovalRequestMutation = useRejectSocApprovalRequest();
+  const expireApprovalRequestMutation = useExpireSocApprovalRequest();
   const dryRunApprovedActionMutation = useDryRunSocApprovedAction();
   const executeApprovedActionMutation = useExecuteSocApprovedAction();
   const reviewMemoryCandidateMutation = useReviewSocMemoryCandidate();
@@ -1465,10 +1469,12 @@ export function SocReviewQueueWorkbench() {
     }
 
     try {
-      const approvalRequest =
-        parseJsonObject<SocAgentApprovalRequest>(approvalRequestJson);
+      if (!activeApprovalRequest?.approval_request_id) {
+        toast.error("请选择待审批请求");
+        return;
+      }
       const grant = await createApprovalGrantMutation.mutateAsync({
-        approval_request: approvalRequest,
+        approval_request_id: activeApprovalRequest.approval_request_id,
         reason: approvalReason.trim(),
         expires_in_seconds: expiresInSeconds,
       });
@@ -1477,6 +1483,37 @@ export function SocReviewQueueWorkbench() {
       toast.success("审批 token 已生成");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "审批失败");
+    }
+  };
+
+  const handleResolveApprovalRequest = async (
+    resolution: "reject" | "expire",
+  ) => {
+    if (!activeApprovalRequest?.approval_request_id) {
+      toast.error("请选择待审批请求");
+      return;
+    }
+    if (approvalReason.trim().length === 0) {
+      toast.error("请填写审批原因");
+      return;
+    }
+    try {
+      const command = {
+        approvalRequestId: activeApprovalRequest.approval_request_id,
+        request: { reason: approvalReason.trim() },
+      };
+      if (resolution === "reject") {
+        await rejectApprovalRequestMutation.mutateAsync(command);
+      } else {
+        await expireApprovalRequestMutation.mutateAsync(command);
+      }
+      setApprovalGrant(null);
+      setApprovedActionResult(null);
+      toast.success(
+        resolution === "reject" ? "审批请求已驳回" : "审批请求已过期",
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "审批状态更新失败");
     }
   };
 
@@ -1927,10 +1964,8 @@ export function SocReviewQueueWorkbench() {
                       <Textarea
                         id="approval-request-json"
                         value={approvalRequestJson}
-                        onChange={(event) =>
-                          setApprovalRequestJson(event.target.value)
-                        }
                         className="min-h-52 resize-none font-mono text-xs"
+                        readOnly
                         disabled={approvalRequestLoading}
                       />
                     </div>
@@ -1967,17 +2002,50 @@ export function SocReviewQueueWorkbench() {
                         />
                       </div>
                     </div>
-                    <Button
-                      size="sm"
-                      onClick={() => void handleCreateApprovalGrant()}
-                      disabled={
-                        createApprovalGrantMutation.isPending ||
-                        approvalReason.trim().length === 0
-                      }
-                    >
-                      <KeyRoundIcon className="size-4" />
-                      生成审批 token
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => void handleCreateApprovalGrant()}
+                        disabled={
+                          createApprovalGrantMutation.isPending ||
+                          approvalReason.trim().length === 0 ||
+                          activeApprovalRequest?.status !== "pending"
+                        }
+                      >
+                        <KeyRoundIcon className="size-4" />
+                        生成审批 token
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          void handleResolveApprovalRequest("reject")
+                        }
+                        disabled={
+                          rejectApprovalRequestMutation.isPending ||
+                          approvalReason.trim().length === 0 ||
+                          activeApprovalRequest?.status !== "pending"
+                        }
+                      >
+                        <XCircleIcon className="size-4" />
+                        驳回
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          void handleResolveApprovalRequest("expire")
+                        }
+                        disabled={
+                          expireApprovalRequestMutation.isPending ||
+                          approvalReason.trim().length === 0 ||
+                          activeApprovalRequest?.status !== "pending"
+                        }
+                      >
+                        <AlertTriangleIcon className="size-4" />
+                        标记过期
+                      </Button>
+                    </div>
                   </div>
 
                   <div className="space-y-4">

@@ -671,20 +671,23 @@ sequenceDiagram
 
     Agent->>Approval: submit SocAgentApprovalRequest
     Approval->>Inbox: persist pending request
-    Human->>Approval: approve/reject with role
-    Approval->>Approval: create one-time grant token
+    Human->>Approval: approve/reject/expire by request ID
+    Approval->>Inbox: atomic pending -> terminal transition
+    Approval->>Approval: approved only: create one-time grant in same transaction
     Human->>Approval: dry-run / execute boundary
     Approval->>Adapter: preflight allowed adapter/payload/context
     Adapter-->>Approval: dry-run result or execution boundary result
-    Approval->>Audit: record request/grant/result
+    Approval->>Audit: durable mutation audit (BG-P0-02)
 ```
 
 Current safety posture:
 
 - Read-only investigation actions can produce `InvestigationEvidence`.
 - High-risk actions create approval requests.
+- Request lifecycle is `pending -> approved/rejected/expired`; approve loads the persisted request by ID and one request can create at most one grant.
+- Exact resolution retries are idempotent; stale, forged, or semantically changed retries are rejected.
 - Execute boundary exists, but real production side effects must wait for real adapter review.
-- Approval grant is single-use and audited.
+- Approval grant is single-use. Request/grant lifecycle data is durable; the unified append-only mutation audit is the next `BG-P0-02` boundary.
 
 ### 7.3 External Disposition Sync / 外部处置反馈同步
 
@@ -972,7 +975,7 @@ Main persistence categories:
 | Alert summaries | Review/correlation/list | Lightweight projection |
 | Review queue | Human workflow | State, owner, reason, correction |
 | Investigation evidence | Read-only tool/MCP evidence | Reusable in context, not memory by default |
-| Approval requests/grants | High-risk action boundary | Pending request and one-time grant |
+| Approval requests/grants | High-risk action boundary | Terminal request lifecycle and at most one one-time grant per approved request |
 | External dispositions | Old-platform status/reason sync | Idempotent by external event key |
 | Governed context facts | Typed operational facts | Versioned, expiring, revocable, source-referenced |
 | Context match audit | Authorization/attribution/applicability result | Replayable against event time and policy version |
@@ -1109,7 +1112,7 @@ credentials, smoke report, and payload/latency/error evaluation.
 | L0 | Read local context | Allowed through services |
 | L1 | Read external data | Allowed through read-only adapter/MCP with audit |
 | L2 | Generate recommendation | Allowed, must be labeled recommendation |
-| L3 | Change internal SOC state | Requires role and service method |
+| L3 | Change internal SOC state | Requires trusted `auth_source`, command-specific role and service method |
 | L4 | Execute external side effect | Approval required, adapter reviewed |
 | L5 | Destructive or attack simulation | Explicit scope, approval, audit, later phase only |
 
@@ -1121,6 +1124,7 @@ Security invariants:
 - No tenant-specific knowledge in public generic skills unless sanitized and generalized.
 - No unbounded raw alert dump into DeerFlow Lead Agent context.
 - No bypass of `SocReviewService`, `SocMemoryService`, or `SocAgentApprovalService`.
+- No L3 mutation may rely only on entry-layer authorization; core services must reject unknown provenance and missing roles.
 
 ---
 

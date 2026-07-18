@@ -19,7 +19,13 @@ from soc_agent.contracts import (
     SocMemoryRecordStatus,
     SocMemoryRetrievalResult,
 )
-from soc_agent.core import SocMemoryService, SocServiceError, SocServiceNotFoundError, SocServiceNotImplementedError
+from soc_agent.core import (
+    SocMemoryService,
+    SocServiceAuthorizationError,
+    SocServiceError,
+    SocServiceNotFoundError,
+    SocServiceNotImplementedError,
+)
 
 router = APIRouter(prefix="/api/soc/memory", tags=["soc-memory"])
 
@@ -108,8 +114,10 @@ def review_memory_candidate(
                 record_content=payload.record_content,
                 metadata=payload.metadata,
             ),
-            context=soc_service_context_from_request(request),
+            context=soc_service_context_from_request(request, include_soc_roles=True),
         )
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except SocServiceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:

@@ -30,7 +30,8 @@ from soc_agent.protocols import (
     SocEventSink,
 )
 
-from .service import NoopEventSink, SocServiceError, SocServiceNotFoundError, SocServiceNotImplementedError
+from .access_control import require_actor_roles
+from .service import NoopEventSink, SocServiceNotFoundError, SocServiceNotImplementedError
 
 _BASELINE_ROLES = frozenset({"soc_admin", "soc_engineer"})
 
@@ -56,7 +57,11 @@ class SocNormalizationMaintenanceService:
         context: ServiceRequestContext,
     ) -> NormalizationSchemaBaseline:
         repository = self._require_baseline_repository()
-        _require_baseline_role(context.actor)
+        require_actor_roles(
+            context,
+            _BASELINE_ROLES,
+            operation="accepting a normalization baseline",
+        )
         now = datetime.now(UTC)
         active = self._active_baselines(
             tenant_id=command.tenant_id,
@@ -145,6 +150,11 @@ class SocNormalizationMaintenanceService:
         *,
         context: ServiceRequestContext,
     ) -> NormalizationMaintenanceIssue:
+        require_actor_roles(
+            context,
+            _BASELINE_ROLES,
+            operation="updating a normalization maintenance issue",
+        )
         repository = self._require_issue_repository()
         issue = repository.get_normalization_issue(command.issue_id)
         if issue is None:
@@ -385,11 +395,6 @@ class SocNormalizationMaintenanceService:
         if self._issue_repository is None:
             raise SocServiceNotImplementedError("normalization issue operation requires a repository")
         return self._issue_repository
-
-
-def _require_baseline_role(actor: ActorContext) -> None:
-    if not _BASELINE_ROLES.intersection(actor.roles):
-        raise SocServiceError("accepting a normalization baseline requires soc_engineer or soc_admin")
 
 
 def _issue_for_observation(

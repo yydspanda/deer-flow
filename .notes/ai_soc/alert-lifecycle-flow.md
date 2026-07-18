@@ -262,7 +262,7 @@ flowchart LR
 | `soc_disposition_outcomes` | Append-only evaluation labels | 保存 primary/sample 结构化结论和 supersession lineage，不改 queue/verdict |
 | `soc_memory_candidates` | Reviewable knowledge proposals | 候选记忆，默认 `pending_review`，不影响 runtime decision |
 | `soc_memory_records` | Confirmed memory records | 已确认记忆，默认 `retrieval_enabled=false`，仍不自动注入 prompt |
-| `soc_approval_requests` | Pending approval requests | 高风险动作审批 inbox |
+| `soc_approval_requests` | Approval request lifecycle | 高风险动作审批 inbox；保存 pending/approved/rejected/expired 终态和处理元数据 |
 | `soc_approval_grants` | One-time approval grants | 一次性授权 token，当前 execute boundary 不执行生产副作用 |
 | `soc_normalization_schema_baselines` | Approved parser fingerprints | 人工批准的 tenant/source/adapter/parser/version 基线；新版本 supersede 旧版本 |
 | `soc_normalization_maintenance_issues` | Parser/mapping maintenance queue | 去重保存 missing/novel/degraded/unsupported/gap/truncation，记录出现次数和处理状态 |
@@ -483,7 +483,9 @@ flowchart TD
     B --> C["🛡️ SocAgentApprovalRequest<br/>status=pending"]
     C --> D["🗃️ soc_approval_requests<br/>approval inbox"]
     D --> E["🧑‍💻 Approver in Web/TUI<br/>审批人查看来源、参数、上下文"]
-    E --> F["🛡️ approve -> SocAgentApprovalGrant<br/>一次性 execution token"]
+    E -->|"approve by request ID"| F["🛡️ atomic approved + grant<br/>同事务一次性 execution token"]
+    E -->|reject| R["🚫 request=rejected<br/>无 grant"]
+    E -->|expire| X["⌛ request=expired<br/>无 grant"]
     F --> G["dry-run<br/>校验 token/route/action/payload/context"]
     G --> H["execute boundary<br/>消费 token + 记录 payload"]
     H --> I["🗃️ soc_approval_grants<br/>status=consumed"]
@@ -494,11 +496,12 @@ Approval flow 当前做什么：
 
 1. 高风险 proposal 不会直接执行。
 2. 系统把 proposal 转成 `SocAgentApprovalRequest`。
-3. Web/TUI/CLI 审批面展示 route、payload、context refs、proposal source。
-4. 审批人创建 `SocAgentApprovalGrant`。
-5. dry-run 只验证 token、route、payload、上下文和 adapter 支持情况。
-6. execute boundary 当前只消费 token 并写执行边界记录。
-7. 当前不会对生产系统产生外部副作用。
+3. Web/TUI/CLI 审批面只展示 repository 中的 request；grant command 只提交 request ID、理由和有效期，不回传可篡改的完整 request。
+4. 审批人可 approve/reject/expire；approve 在同一事务把 request 变成 `approved` 并创建最多一个 `SocAgentApprovalGrant`，另外两个终态不创建 grant。
+5. 完全相同的终态重试返回原结果；伪造、过时或改变理由/幂等键/有效期的重试会被拒绝。
+6. dry-run 只验证 token、route、payload、上下文和 adapter 支持情况。
+7. execute boundary 当前只消费 token并写执行边界记录。
+8. 当前不会对生产系统产生外部副作用；统一追加式 mutation audit 由下一刀 `BG-P0-02` 补齐。
 
 ## 8. External Disposition Sync / 外部处置反馈流
 
@@ -706,10 +709,15 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
     [*] --> request_pending: high-risk proposal
-    request_pending --> grant_approved: approver approves
+    request_pending --> request_approved: approve by stored request ID
+    request_pending --> request_rejected: reject
+    request_pending --> request_expired: expire
+    request_approved --> grant_approved: same transaction creates one grant
     grant_approved --> dry_run_checked: dry-run
     dry_run_checked --> grant_approved: token remains reusable for execute
     grant_approved --> grant_consumed: execute boundary consumes token
+    request_rejected --> [*]
+    request_expired --> [*]
     grant_consumed --> [*]
 ```
 

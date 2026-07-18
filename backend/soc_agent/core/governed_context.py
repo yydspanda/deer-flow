@@ -24,6 +24,7 @@ from soc_agent.contracts import (
 from soc_agent.governed_context import GovernedContextFactVersionConflictError
 from soc_agent.protocols import GovernedContextFactRepository, SocEventSink
 
+from .access_control import require_actor_roles
 from .service import NoopEventSink, SocServiceError, SocServiceNotFoundError, SocServiceNotImplementedError
 
 _PROPOSE_ROLES = frozenset({"soc_analyst", "soc_engineer", "soc_admin", "soc_context_source"})
@@ -60,7 +61,7 @@ class SocGovernedContextService:
         context: ServiceRequestContext,
     ) -> GovernedContextFact:
         self._require_repository()
-        _require_role(context.actor, _PROPOSE_ROLES, operation="proposing governed context facts")
+        require_actor_roles(context, _PROPOSE_ROLES, operation="proposing governed context facts")
         now = self._now()
         evidence_refs = _normalized_refs(command.evidence_refs)
         fact = GovernedContextFact(
@@ -91,7 +92,7 @@ class SocGovernedContextService:
         *,
         context: ServiceRequestContext,
     ) -> GovernedContextFact:
-        _require_role(context.actor, _PROPOSE_ROLES, operation="revising governed context facts")
+        require_actor_roles(context, _PROPOSE_ROLES, operation="revising governed context facts")
         current = self._current(command.fact_id, expected_version=command.expected_latest_version)
         if current.status in {GovernedContextFactStatus.REVOKED, GovernedContextFactStatus.EXPIRED}:
             raise SocServiceError(f"cannot revise terminal governed fact in status {current.status.value}")
@@ -124,7 +125,7 @@ class SocGovernedContextService:
         *,
         context: ServiceRequestContext,
     ) -> GovernedContextFact:
-        _require_role(context.actor, _GOVERN_ROLES, operation="activating governed context facts")
+        require_actor_roles(context, _GOVERN_ROLES, operation="activating governed context facts")
         current = self._current(command.fact_id, expected_version=command.expected_latest_version)
         if current.status not in {GovernedContextFactStatus.PROPOSED, GovernedContextFactStatus.SUSPENDED}:
             raise SocServiceError(f"cannot activate governed fact in status {current.status.value}")
@@ -152,7 +153,7 @@ class SocGovernedContextService:
         *,
         context: ServiceRequestContext,
     ) -> GovernedContextFact:
-        _require_role(context.actor, _GOVERN_ROLES, operation="suspending governed context facts")
+        require_actor_roles(context, _GOVERN_ROLES, operation="suspending governed context facts")
         current = self._current(command.fact_id, expected_version=command.expected_latest_version)
         if current.status is not GovernedContextFactStatus.ACTIVE:
             raise SocServiceError(f"cannot suspend governed fact in status {current.status.value}")
@@ -170,7 +171,7 @@ class SocGovernedContextService:
         *,
         context: ServiceRequestContext,
     ) -> GovernedContextFact:
-        _require_role(context.actor, _GOVERN_ROLES, operation="revoking governed context facts")
+        require_actor_roles(context, _GOVERN_ROLES, operation="revoking governed context facts")
         current = self._current(command.fact_id, expected_version=command.expected_latest_version)
         if current.status not in {
             GovernedContextFactStatus.PROPOSED,
@@ -192,7 +193,7 @@ class SocGovernedContextService:
         *,
         context: ServiceRequestContext,
     ) -> GovernedContextFact:
-        _require_role(context.actor, _EXPIRE_ROLES, operation="expiring governed context facts")
+        require_actor_roles(context, _EXPIRE_ROLES, operation="expiring governed context facts")
         current = self._current(command.fact_id, expected_version=command.expected_latest_version)
         if current.status not in {
             GovernedContextFactStatus.PROPOSED,
@@ -373,12 +374,6 @@ def _stable_sha256(value: object) -> str:
 
 def _normalized_refs(values: list[str]) -> list[str]:
     return sorted({value.strip() for value in values if value.strip()})
-
-
-def _require_role(actor: ActorContext, roles: frozenset[str], *, operation: str) -> None:
-    if actor.actor_id == "anonymous" or not roles.intersection(actor.roles):
-        allowed = ", ".join(sorted(roles))
-        raise SocServiceError(f"{operation} requires one of roles: {allowed}")
 
 
 __all__ = ["SocGovernedContextService"]

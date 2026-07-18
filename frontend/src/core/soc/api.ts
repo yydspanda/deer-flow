@@ -5,6 +5,7 @@ import type {
   SocAgentActionResult,
   SocAgentApprovalGrant,
   SocAgentApprovalRequest,
+  SocAgentApprovalRequestStatus,
   SocAgentApprovedActionCommand,
   SocAnalysisRun,
   SocDispositionOutcomeApplyResult,
@@ -12,6 +13,7 @@ import type {
   SocDispositionSampleManifestListResponse,
   SocDispositionSampleReviewInbox,
   SocApprovalGrantRequest,
+  SocApprovalResolutionRequest,
   SocApprovalRequestListResponse,
   SocInvestigationContext,
   SocMemoryCandidate,
@@ -244,12 +246,50 @@ export async function createSocApprovalGrant(
   );
 }
 
+export async function rejectSocApprovalRequest(
+  approvalRequestId: string,
+  request: SocApprovalResolutionRequest,
+  context?: SocRequestContext,
+): Promise<SocAgentApprovalRequest> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/approvals/requests/${encodeURIComponent(approvalRequestId)}/reject`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocAgentApprovalRequest>(
+    response,
+    "Failed to reject SOC approval request",
+  );
+}
+
+export async function expireSocApprovalRequest(
+  approvalRequestId: string,
+  request: SocApprovalResolutionRequest,
+  context?: SocRequestContext,
+): Promise<SocAgentApprovalRequest> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/approvals/requests/${encodeURIComponent(approvalRequestId)}/expire`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocAgentApprovalRequest>(
+    response,
+    "Failed to expire SOC approval request",
+  );
+}
+
 export async function listSocApprovalRequests({
   status = "pending",
   limit = 50,
   context,
 }: {
-  status?: "pending" | null;
+  status?: SocAgentApprovalRequestStatus | null;
   limit?: number;
   context?: SocRequestContext;
 } = {}): Promise<SocAgentApprovalRequest[]> {

@@ -213,4 +213,4 @@ def _thread_label(thread_id: str | None) -> str:
 
 
 def _tui_request_context() -> ServiceRequestContext:
-    return ServiceRequestContext(actor=ActorContext(actor_id="soc-agent-tui", surface=EntrySurface.TUI))
+    return ServiceRequestContext(actor=ActorContext(actor_id="soc-agent-tui", surface=EntrySurface.TUI, roles=["soc_analyst"]))

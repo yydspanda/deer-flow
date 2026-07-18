@@ -365,7 +365,7 @@ def test_governed_context_repository_query_and_version_history(repository_factor
         service.get("GCF-MISSING")
 
 
-def test_soc_migration_head_creates_governed_context_authorization_and_disposition_tables(tmp_path) -> None:
+def test_soc_migration_head_creates_governance_and_approval_lifecycle_schema(tmp_path) -> None:
     database_path = tmp_path / "soc-migrations.db"
     database_url = f"sqlite:///{database_path}"
 
@@ -378,9 +378,19 @@ def test_soc_migration_head_creates_governed_context_authorization_and_dispositi
         assert "soc_disposition_proposals" in inspect(engine).get_table_names()
         assert "soc_disposition_sample_manifests" in inspect(engine).get_table_names()
         assert "soc_disposition_outcomes" in inspect(engine).get_table_names()
+        approval_request_columns = {column["name"] for column in inspect(engine).get_columns("soc_approval_requests")}
+        assert {
+            "resolved_at",
+            "resolved_by_actor_id",
+            "resolution_reason",
+            "resolution_idempotency_key",
+            "approval_grant_id",
+        }.issubset(approval_request_columns)
+        approval_grant_constraints = {constraint["name"] for constraint in inspect(engine).get_unique_constraints("soc_approval_grants")}
+        assert "uq_soc_approval_grants_request" in approval_grant_constraints
         with engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM soc_alembic_version")).scalar_one()
-        assert revision == "0016_disposition_evaluation"
+        assert revision == "0017_approval_request_lifecycle"
     finally:
         engine.dispose()
 

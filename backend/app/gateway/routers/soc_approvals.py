@@ -8,16 +8,33 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.routers.soc_dependencies import get_or_create_soc_repository, soc_service_context_from_request
-from soc_agent.contracts import SocAgentActionResult, SocAgentApprovalGrant, SocAgentApprovalRequest, SocAgentApprovedActionCommand
-from soc_agent.core import SocAgentApprovalService, SocServiceError, SocServiceNotFoundError, SocServiceNotImplementedError
+from soc_agent.contracts import (
+    SocAgentActionResult,
+    SocAgentApprovalGrant,
+    SocAgentApprovalRequest,
+    SocAgentApprovalRequestStatus,
+    SocAgentApprovedActionCommand,
+)
+from soc_agent.core import (
+    SocAgentApprovalService,
+    SocServiceAuthorizationError,
+    SocServiceConflictError,
+    SocServiceError,
+    SocServiceNotFoundError,
+    SocServiceNotImplementedError,
+)
 
 router = APIRouter(prefix="/api/soc/approvals", tags=["soc-approvals"])
 
 
 class ApprovalGrantRequest(BaseModel):
-    approval_request: SocAgentApprovalRequest
+    approval_request_id: str = Field(min_length=1, max_length=64)
     reason: str = Field(min_length=1)
     expires_in_seconds: int = Field(default=900, gt=0, le=86_400)
+
+
+class ApprovalResolutionRequest(BaseModel):
+    reason: str = Field(min_length=1)
 
 
 class ApprovalRequestListResponse(BaseModel):
@@ -44,10 +61,18 @@ ApprovalServiceDep = Annotated[SocAgentApprovalService, Depends(get_soc_approval
 @router.post("/requests", response_model=SocAgentApprovalRequest)
 def create_approval_request(
     approval_request: SocAgentApprovalRequest,
+    request: Request,
     service: ApprovalServiceDep,
 ) -> SocAgentApprovalRequest:
     try:
-        return service.submit_request(approval_request)
+        return service.submit_request(
+            approval_request,
+            context=soc_service_context_from_request(request, include_soc_roles=True),
+        )
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except SocServiceError as exc:
@@ -57,7 +82,7 @@ def create_approval_request(
 @router.get("/requests", response_model=ApprovalRequestListResponse)
 def list_approval_requests(
     service: ApprovalServiceDep,
-    status: str | None = Query(default="pending"),
+    status: SocAgentApprovalRequestStatus | None = Query(default=SocAgentApprovalRequestStatus.PENDING),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> ApprovalRequestListResponse:
     try:
@@ -87,11 +112,69 @@ def create_approval_grant(
 ) -> SocAgentApprovalGrant:
     try:
         return service.approve(
-            body.approval_request,
+            body.approval_request_id,
             context=soc_service_context_from_request(request, include_soc_roles=True),
             reason=body.reason,
             expires_in_seconds=body.expires_in_seconds,
         )
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SocServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/requests/{approval_request_id}/reject", response_model=SocAgentApprovalRequest)
+def reject_approval_request(
+    approval_request_id: str,
+    body: ApprovalResolutionRequest,
+    request: Request,
+    service: ApprovalServiceDep,
+) -> SocAgentApprovalRequest:
+    try:
+        return service.reject(
+            approval_request_id,
+            context=soc_service_context_from_request(request, include_soc_roles=True),
+            reason=body.reason,
+        )
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SocServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/requests/{approval_request_id}/expire", response_model=SocAgentApprovalRequest)
+def expire_approval_request(
+    approval_request_id: str,
+    body: ApprovalResolutionRequest,
+    request: Request,
+    service: ApprovalServiceDep,
+) -> SocAgentApprovalRequest:
+    try:
+        return service.expire(
+            approval_request_id,
+            context=soc_service_context_from_request(request, include_soc_roles=True),
+            reason=body.reason,
+        )
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except SocServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -104,6 +187,8 @@ def dry_run_approved_action(
 ) -> SocAgentActionResult:
     try:
         return service.dry_run_approved_action(command, context=soc_service_context_from_request(request, include_soc_roles=True))
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except SocServiceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
@@ -120,6 +205,8 @@ def execute_approved_action(
 ) -> SocAgentActionResult:
     try:
         return service.execute_approved_action(command, context=soc_service_context_from_request(request, include_soc_roles=True))
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except SocServiceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:

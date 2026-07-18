@@ -159,6 +159,10 @@ Current SOC direction:
 - Persisted analysis writes run/summary/optional review/audit as one `AnalysisPersistence` transaction.
   Retryable Runtime failures do not commit Kafka offsets or immediately create analyst queue noise;
   non-retryable failures are recorded, reviewed, and dead-lettered.
+- L3 SOC state changes require both a trusted `ActorContext.auth_source` and a command-specific role
+  inside the core service; Gateway/router checks alone are insufficient. Approval requests follow
+  `pending -> approved|rejected|expired`; approve accepts only a persisted request ID and atomically
+  creates at most one grant. Unified append-only mutation audit remains a separate service boundary.
 - LLM-discovered knowledge is candidate knowledge only. It must be confirmed by a human before
   it can affect future decisions.
 - Governed operational context facts are separate from evidence, memory, action approval, and

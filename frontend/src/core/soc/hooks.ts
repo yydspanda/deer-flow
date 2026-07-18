@@ -11,6 +11,7 @@ import {
   createSocApprovalGrant,
   dryRunSocApprovedAction,
   executeSocApprovedAction,
+  expireSocApprovalRequest,
   getSocDispositionSampleReviewInbox,
   getSocMemoryCandidate,
   getSocMemoryRecord,
@@ -25,6 +26,7 @@ import {
   listSocDispositionSampleCampaigns,
   listSocReviewItems,
   recordSocDispositionOutcome,
+  rejectSocApprovalRequest,
   reviewSocMemoryCandidate,
   searchSocMemoryRecords,
   updateSocNormalizationIssue,
@@ -32,6 +34,8 @@ import {
 import type {
   SocAgentApprovedActionCommand,
   SocApprovalGrantRequest,
+  SocApprovalResolutionRequest,
+  SocAgentApprovalRequestStatus,
   SocDispositionOutcomeRecordRequest,
   SocMemoryCandidateReviewRequest,
   SocMemoryCandidateStatus,
@@ -69,7 +73,7 @@ export const socReviewQueryKeys = {
 
 export const socApprovalQueryKeys = {
   all: ["soc-approval"] as const,
-  requests: (status: "pending" | null, limit: number) =>
+  requests: (status: SocAgentApprovalRequestStatus | null, limit: number) =>
     [...socApprovalQueryKeys.all, "requests", status, limit] as const,
   request: (approvalRequestId: string | null | undefined) =>
     [...socApprovalQueryKeys.all, "request", approvalRequestId] as const,
@@ -489,6 +493,44 @@ export function useCreateSocApprovalGrant() {
   return useMutation({
     mutationFn: (request: SocApprovalGrantRequest) =>
       createSocApprovalGrant(request, context),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: socApprovalQueryKeys.all,
+      });
+    },
+  });
+}
+
+export function useRejectSocApprovalRequest() {
+  const context = useSocWebRequestContext();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      approvalRequestId,
+      request,
+    }: {
+      approvalRequestId: string;
+      request: SocApprovalResolutionRequest;
+    }) => rejectSocApprovalRequest(approvalRequestId, request, context),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: socApprovalQueryKeys.all,
+      });
+    },
+  });
+}
+
+export function useExpireSocApprovalRequest() {
+  const context = useSocWebRequestContext();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      approvalRequestId,
+      request,
+    }: {
+      approvalRequestId: string;
+      request: SocApprovalResolutionRequest;
+    }) => expireSocApprovalRequest(approvalRequestId, request, context),
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: socApprovalQueryKeys.all,

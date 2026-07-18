@@ -34,6 +34,7 @@ from soc_agent.contracts import (
     SocAgentActionResult,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
+    SocAgentApprovalRequestStatus,
     SocDispositionOutcomeRecord,
     SocDispositionOutcomeReviewKind,
     SocDispositionProposalRecord,
@@ -349,11 +350,15 @@ class SocAgentApprovalGrantRepository(Protocol):
 
     def get_approval_grant_by_token(self, execution_token_id: str) -> SocAgentApprovalGrant | None: ...
 
+    def get_approval_grant_by_request_id(self, approval_request_id: str) -> SocAgentApprovalGrant | None: ...
+
 
 class SocAgentApprovalRequestRepository(Protocol):
-    """Persistence boundary for pending high-risk action approval requests."""
+    """Persistence boundary for high-risk action approval request lifecycle."""
 
-    def save_approval_request(self, approval_request: SocAgentApprovalRequest) -> None: ...
+    def create_approval_request(self, approval_request: SocAgentApprovalRequest) -> bool:
+        """Insert one immutable request, returning false when the id already exists."""
+        ...
 
     def get_approval_request(self, approval_request_id: str) -> SocAgentApprovalRequest | None: ...
 
@@ -363,6 +368,16 @@ class SocAgentApprovalRequestRepository(Protocol):
         status: str | None = "pending",
         limit: int = 50,
     ) -> list[SocAgentApprovalRequest]: ...
+
+    def resolve_approval_request(
+        self,
+        approval_request: SocAgentApprovalRequest,
+        *,
+        expected_status: SocAgentApprovalRequestStatus,
+        grant: SocAgentApprovalGrant | None = None,
+    ) -> bool:
+        """Atomically compare-and-set request state and optionally insert its grant."""
+        ...
 
 
 class NormalizationSchemaBaselineRepository(Protocol):

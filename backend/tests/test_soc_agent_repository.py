@@ -18,6 +18,7 @@ from soc_agent.contracts import (
     ServiceRequestContext,
     SimilarAlertQuery,
     SocAgentApprovalRequest,
+    SocAgentApprovalRequestStatus,
     SocAgentApprovedActionCommand,
     SocAgentRiskLevel,
     SocExternalDispositionApplyStatus,
@@ -52,6 +53,12 @@ SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
 
 def _sample(name: str) -> dict:
     return json.loads((SAMPLES / name).read_text(encoding="utf-8"))
+
+
+def _analyst_context() -> ServiceRequestContext:
+    return ServiceRequestContext(
+        actor=ActorContext(actor_id="analyst-1", roles=["soc_analyst"]),
+    )
 
 
 def _repository() -> SqlAlchemyAlertRepository:
@@ -245,7 +252,8 @@ def test_sqlalchemy_alert_repository_persists_corrections() -> None:
             run_id=run.run_id,
             corrected_verdict=Verdict.TRUE_POSITIVE,
             reason="Confirmed malicious behavior after host review.",
-        )
+        ),
+        context=_analyst_context(),
     )
 
     saved = repository.get_run(run.run_id)
@@ -537,7 +545,8 @@ def test_sqlalchemy_memory_candidate_repository_persists_and_filters_candidates(
             candidate_id=candidate.candidate_id,
             decision=SocMemoryCandidateReviewDecision.CONFIRM,
             reason="Repository test analyst confirmation.",
-        )
+        ),
+        context=_analyst_context(),
     )
 
     assert review.candidate.status is SocMemoryCandidateStatus.CONFIRMED
@@ -610,7 +619,8 @@ def test_sqlalchemy_alert_repository_closes_review_queue_after_correction() -> N
             run_id=run.run_id,
             corrected_verdict=Verdict.FALSE_POSITIVE,
             reason="Analyst confirmed authorized lateral movement test.",
-        )
+        ),
+        context=_analyst_context(),
     )
 
     assert repository.get_open_review_item_by_run(run.run_id) is None
@@ -625,7 +635,7 @@ def test_sqlalchemy_alert_repository_closes_review_queue_after_correction() -> N
 
 def test_sqlalchemy_alert_repository_persists_approval_grant_consume_state() -> None:
     repository = _repository()
-    service = SocAgentApprovalService(grant_repository=repository)
+    service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
     approval_request = SocAgentApprovalRequest(
         approval_request_id="APR-REPO-001",
         permission_decision_id="PERM-REPO-001",
@@ -635,8 +645,12 @@ def test_sqlalchemy_alert_repository_persists_approval_grant_consume_state() -> 
         reason="requires approval",
         requested_by=ActorContext(actor_id="analyst-1", roles=["analyst"]),
     )
-    grant = service.approve(
+    service.submit_request(
         approval_request,
+        context=ServiceRequestContext(actor=approval_request.requested_by),
+    )
+    grant = service.approve(
+        approval_request.approval_request_id,
         context=ServiceRequestContext(
             actor=ActorContext(actor_id="approver-1", roles=["soc_approver"]),
             idempotency_key="idem-approve-1",
@@ -674,6 +688,7 @@ def test_sqlalchemy_alert_repository_persists_approval_grant_consume_state() -> 
 
 def test_sqlalchemy_alert_repository_persists_approval_requests() -> None:
     repository = _repository()
+    service = SocAgentApprovalService(request_repository=repository)
     approval_request = SocAgentApprovalRequest(
         approval_request_id="APR-REPO-REQUEST-001",
         permission_decision_id="PERM-REPO-REQUEST-001",
@@ -684,11 +699,11 @@ def test_sqlalchemy_alert_repository_persists_approval_requests() -> None:
         requested_by=ActorContext(actor_id="analyst-1", roles=["analyst"]),
     )
 
-    repository.save_approval_request(approval_request)
+    submitted = service.submit_request(approval_request, context=_analyst_context())
 
-    assert repository.get_approval_request("APR-REPO-REQUEST-001") == approval_request
-    assert repository.list_approval_requests(status="pending") == [approval_request]
-    assert repository.list_approval_requests(status=None) == [approval_request]
+    assert repository.get_approval_request("APR-REPO-REQUEST-001") == submitted
+    assert repository.list_approval_requests(status="pending") == [submitted]
+    assert repository.list_approval_requests(status=None) == [submitted]
     assert repository.list_approval_requests(status="closed") == []
 
 
@@ -705,11 +720,59 @@ def test_sqlalchemy_approval_service_approve_persists_request_and_grant() -> Non
         requested_by=ActorContext(actor_id="analyst-1", roles=["analyst"]),
     )
 
-    grant = service.approve(
+    service.submit_request(
         approval_request,
-        context=ServiceRequestContext(actor=ActorContext(actor_id="admin-1", roles=["soc_admin"])),
+        context=ServiceRequestContext(actor=approval_request.requested_by),
+    )
+    approval_context = ServiceRequestContext(
+        actor=ActorContext(actor_id="admin-1", roles=["soc_admin"]),
+        idempotency_key="approve:repo-001",
+    )
+    grant = service.approve(
+        approval_request.approval_request_id,
+        context=approval_context,
+        reason="approved containment scope",
+    )
+    replayed = service.approve(
+        approval_request.approval_request_id,
+        context=approval_context,
         reason="approved containment scope",
     )
 
-    assert repository.get_approval_request(approval_request.approval_request_id) == approval_request
+    resolved = repository.get_approval_request(approval_request.approval_request_id)
+    assert resolved is not None
+    assert resolved.status.value == "approved"
+    assert resolved.approval_grant_id == grant.approval_grant_id
+    assert replayed == grant
     assert repository.get_approval_grant(grant.approval_grant_id) == grant
+    assert repository.get_approval_grant_by_request_id(approval_request.approval_request_id) == grant
+
+
+def test_sqlalchemy_approval_service_persists_rejected_terminal_request() -> None:
+    repository = _repository()
+    service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
+    approval_request = SocAgentApprovalRequest(
+        approval_request_id="APR-REPO-REJECT-001",
+        permission_decision_id="PERM-REPO-REJECT-001",
+        route="endpoint.isolate_host",
+        action="endpoint.isolate_host",
+        risk_level=SocAgentRiskLevel.HIGH_RISK,
+        reason="requires approval",
+        requested_by=ActorContext(actor_id="analyst-1", roles=["soc_analyst"]),
+    )
+    service.submit_request(approval_request, context=_analyst_context())
+
+    rejected = service.reject(
+        approval_request.approval_request_id,
+        context=ServiceRequestContext(
+            actor=ActorContext(actor_id="admin-1", roles=["soc_admin"]),
+            idempotency_key="reject:repo-001",
+        ),
+        reason="Requested scope was not authorized.",
+    )
+
+    persisted = repository.get_approval_request(approval_request.approval_request_id)
+    assert persisted == rejected
+    assert persisted.status is SocAgentApprovalRequestStatus.REJECTED
+    assert persisted.resolution_idempotency_key == "reject:repo-001"
+    assert repository.get_approval_grant_by_request_id(approval_request.approval_request_id) is None

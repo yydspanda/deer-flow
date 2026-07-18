@@ -603,7 +603,9 @@ Review queue 约束：
   - `POST /api/soc/review/items/{queue_id}/close`
   - `POST /api/soc/review/runs/{run_id}/correct`
 - ReviewQueue API/TUI/Web 只能调用 `SocReviewService`，不能直接读写 repository 或组装 queue item。
-- API/TUI/Web close/correct 必须构造 `ServiceRequestContext`；`ActorContext.surface` 必须准确标识 `api` / `tui` / `web`。
+- API/TUI/Web close/correct 必须构造 `ServiceRequestContext`；`ActorContext.surface` 必须准确标识 `api` / `tui` / `web`，`ActorContext.auth_source` 必须标识建立身份的真实信任边界。
+- L3 状态变更不能只依赖 Gateway/router 检查。`SocReviewService`、`SocMemoryService`、normalization maintenance、governed-context lifecycle 和 `SocAgentApprovalService` 必须在 core service 内调用共享 `require_actor_roles()`；`actor_id=anonymous`、`auth_source=unknown` 或缺少命令所需 role 均 fail closed。
+- Gateway 已认证普通用户映射为 `soc_analyst`，管理员映射为 `soc_admin`；CLI/TUI/daemon/external adapter 必须使用显式且受控的 local/daemon/adapter auth source，不得伪装成 session 用户。
 - ReviewQueue Web thin page 通过 Gateway `/api/soc/review/*` 调用，不允许前端绕过 API 直接写库。
 - Web 请求必须携带 `x-soc-surface=web`、`x-trace-id`；状态变更请求必须携带 `idempotency-key`。
 - Web 前端可以携带 `x-soc-actor-id` 作为显式上下文，但 Gateway 侧必须优先使用认证中间件写入的 `request.state.user.id`，不能信任可伪造 header 覆盖已认证用户。
@@ -651,11 +653,15 @@ SOC Agent chat stream 约束：
   - Agent/TUI chat path 未注入 `SocAgentApprovalService` 时，只允许作为 headless/test shell 输出 approval request event，不得隐式创建临时 repository 或直接写 DB。
   - Daemon path 的写入边界是 `SocDaemonService.submit_approval_request()`，内部只能调用 `SocAgentApprovalService.submit_request()`；`SocDaemonService.start()` 在 Phase 4 Kafka consumer 落地前仍保持未实现。
   - 真实 Kafka consumer、DeerFlow Lead Agent middleware、API router、Web/TUI 操作入口都不能直接 insert `soc_approval_requests`，也不能绕过 `SocAgentApprovalService` 自行构造 request/grant 状态流。
-  - `soc_approval_requests` 表必须保存扁平索引字段和完整 `request_payload`；索引至少覆盖 `permission_decision_id`、`route`、`action`、`risk_level`、`status`、`requested_by_actor_id`、`created_at`。
-  - `SocAgentApprovalService` 只能把 pending request 转成 `SocAgentApprovalGrant`；只有 `soc_approver` 或 `soc_admin` role 可以批准。
+  - `soc_approval_requests` 表必须保存扁平索引字段和完整 `request_payload`；索引至少覆盖 `permission_decision_id`、`route`、`action`、`risk_level`、`status`、`requested_by_actor_id`、`created_at`，终态还要保存 resolution time/actor/reason/idempotency 和可选 grant reference。
+  - request lifecycle 只允许 `pending -> approved|rejected|expired`。Pending 不能携带 resolution 字段；terminal request 必须携带处理时间、处理人、理由和 idempotency key；rejected/expired 不能引用 grant。
+  - request creation 必须是 insert-only。状态转换只能调用 repository `resolve_approval_request(expected_status=pending)`；禁止重新引入 generic save/upsert request 入口绕过状态机。
+  - approve API/service command 只接受 `approval_request_id`、reason 和 grant expiry。Service 必须从 repository 加载原 pending request；客户端提交的 route/action/payload/requested_by 不能参与 grant 构造。
+  - approve 必须在同一 repository transaction 内把 request 转为 approved 并插入 grant；`soc_approval_grants.approval_request_id` 必须唯一，保证一个 request 最多产生一个 grant。只有 `soc_approver` 或 `soc_admin` role 可以 approve/reject/expire。
+  - resolution 必须携带 idempotency key。完全相同的终态命令可返回既有 request/grant；不同 actor、reason、expiry、idempotency key 或目标终态必须返回 conflict，不能覆盖既有终态。
   - `SocAgentApprovalGrant.execution_token_id` 是一次性执行授权标识，不是 action result；生成 grant 仍不得执行封禁、隔离、MCP 调用等外部副作用。
-  - `SocAgentApprovalGrantRepository` 是 approval grant 的持久化边界；`approve()` 在 repository 存在时必须保存 grant。
-  - SQLAlchemy repository 必须持久化 `SocAgentApprovalGrant` 的 approve/consume 全量 payload，并提供按 `approval_grant_id` 和 `execution_token_id` 查询。
+  - `SocAgentApprovalGrantRepository` 是 approval grant 的持久化边界；必须提供按 request ID 查询，供 exact approve retry 返回同一 grant。
+  - SQLAlchemy repository 必须持久化 `SocAgentApprovalGrant` 的 approve/consume 全量 payload，并提供按 `approval_grant_id`、`approval_request_id` 和 `execution_token_id` 查询。
   - `soc_approval_grants` 表必须保存扁平索引字段和完整 `grant_payload`；索引至少覆盖 `execution_token_id`、`approval_request_id`、`permission_decision_id`、`route`、`action`、`risk_level`、`status`、`expires_at`、`consumed_at`、`consume_idempotency_key`、`execution_result_id`。
   - `SocAgentActionCommand` 是 action adapter 的基础执行 contract；必须包含 `route`、`action`、`dry_run` 和 `payload`，供 read-only adapter、dry-run 和 execute preflight 共用。
   - `SocAgentApprovedActionCommand` 是审批后执行入口的显式 contract，继承 `SocAgentActionCommand` 并额外要求 `execution_token_id`；必须显式区分 `dry_run=True/False`。
@@ -705,10 +711,13 @@ SOC Agent chat stream 约束：
     - `POST /api/soc/approvals/requests`
     - `GET /api/soc/approvals/requests`
     - `GET /api/soc/approvals/requests/{approval_request_id}`
+    - `POST /api/soc/approvals/requests/{approval_request_id}/reject`
+    - `POST /api/soc/approvals/requests/{approval_request_id}/expire`
   - approved action API/TUI/Web 只能调用 `SocAgentApprovalService`，不能直接读写 repository 或绕过 token consume 边界。
   - Web approved action workbench 只能通过 `frontend/src/core/soc/api.ts` 调用 Gateway `/api/soc/approvals/*`；React component 不得直接拼后端 repository/DB 行为，也不得把 dry-run 展示成真实处置完成。
-  - Web approval inbox consumption 只能读取 Gateway `/api/soc/approvals/requests*`，并通过 `/api/soc/approvals/grants` 把 pending request 转成 grant；前端不得直接修改 `SocAgentApprovalRequest.status`。
-  - `soc review tui` approval inbox consumption 只能调用 `SocAgentApprovalService`：`/approvals` list pending request、`/approval APR-...` get detail、`/approve APR-... reason` create grant。TUI 不能直接访问 repository，不能把 approve 当作执行完成。
+  - Web approval inbox consumption 只能读取 Gateway `/api/soc/approvals/requests*`，并通过 request-ID-only `/api/soc/approvals/grants` 或 reject/expire endpoint 处理 pending request；前端不得提交可变 request JSON 或直接修改 `SocAgentApprovalRequest.status`。
+  - `soc review tui` approval inbox consumption 只能调用 `SocAgentApprovalService`：`/approvals` list pending request、`/approval APR-...` get detail、`/approve APR-... reason` create grant、`/reject APR-... reason` 和 `/expire APR-... reason` 进入无 grant 终态。TUI 不能直接访问 repository，不能把 approve 当作执行完成。
+  - `BG-P0-01` 只完成 request/grant 状态完整性和 L3 authorization。所有 Alpha mutation 的统一 append-only durable audit 仍由 `AC-21/BG-P0-02` 负责；不得把 request payload 或 grant execution payload 冒充已完成的统一审计链。
   - TUI 本地 MVP approver actor 可以临时使用 `soc-review-tui` + `soc_approver`，但后续接真实用户体系后必须由认证/角色配置提供 approver role。
   - TUI dry-run / execute 必须作为单独命令显式触发：`/dry-run SAT-... route action` 只能调用 `SocAgentApprovalService.dry_run_approved_action()`；`/execute SAT-... route action idempotency-key` 必须提供 idempotency key，并继续走 `SocAgentApprovalService.execute_approved_action()`。
   - TUI execute 只能展示 `SocAgentActionResult` 和 execution boundary 状态；不得把 `external_side_effect=not_executed` 展示成真实封禁/隔离/处置完成。

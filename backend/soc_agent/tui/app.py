@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
@@ -50,7 +52,8 @@ from soc_agent.tui.view_state import (
 _HELP_TEXT = (
     "Commands: /refresh  /approvals  /normalization  "
     "/norm-update NMI-... acknowledged|resolved|ignored reason  "
-    "/approval APR-...  /approve APR-... reason  /dry-run SAT-... route action  "
+    "/approval APR-...  /approve APR-... reason  /reject APR-... reason  "
+    "/expire APR-... reason  /dry-run SAT-... route action  "
     "/execute SAT-... route action idempotency-key  /open REV-...  "
     "/close REV-... reason  /correct RUN-... verdict reason  "
     "/outcome DPROP-... disposition idempotency-key reason  "
@@ -196,6 +199,10 @@ class SocReviewTUI(App):
             self._open_approval_request(args)
         elif name == "approve":
             self._approve_request(args)
+        elif name == "reject":
+            self._resolve_approval_request(args, resolution="reject")
+        elif name == "expire":
+            self._resolve_approval_request(args, resolution="expire")
         elif name == "dry-run":
             self._dry_run_approved_action(args)
         elif name == "execute":
@@ -318,18 +325,55 @@ class SocReviewTUI(App):
             self._notice("Approval service is not configured.", tone="error")
             return
         try:
-            approval_request = self.approval_service.get_request(approval_request_id)
             grant = self.approval_service.approve(
-                approval_request,
-                context=_tui_approval_context(),
+                approval_request_id,
+                context=_tui_approval_context(
+                    approval_request_id=approval_request_id,
+                    resolution="approve",
+                    reason=reason.strip(),
+                ),
                 reason=reason.strip(),
             )
+            approval_request = self.approval_service.get_request(approval_request_id)
         except SocServiceError as exc:
             self._notice(str(exc), tone="error")
             return
         self.state = select_approval_request(self.state, approval_request)
         self.state = set_approval_grant(self.state, grant)
         self._notice(f"Approved {approval_request_id}; token {grant.execution_token_id}.")
+        self._load_approval_requests()
+
+    def _resolve_approval_request(self, args: str, *, resolution: str) -> None:
+        approval_request_id, _, reason = args.partition(" ")
+        if not approval_request_id or not reason.strip():
+            self._notice(f"Usage: /{resolution} APR-... reason", tone="error")
+            return
+        if self.approval_service is None:
+            self._notice("Approval service is not configured.", tone="error")
+            return
+        context = _tui_approval_context(
+            approval_request_id=approval_request_id,
+            resolution=resolution,
+            reason=reason.strip(),
+        )
+        try:
+            if resolution == "reject":
+                approval_request = self.approval_service.reject(
+                    approval_request_id,
+                    context=context,
+                    reason=reason.strip(),
+                )
+            else:
+                approval_request = self.approval_service.expire(
+                    approval_request_id,
+                    context=context,
+                    reason=reason.strip(),
+                )
+        except SocServiceError as exc:
+            self._notice(str(exc), tone="error")
+            return
+        self.state = select_approval_request(self.state, approval_request)
+        self._notice(f"Marked {approval_request_id} {approval_request.status.value}.")
         self._load_approval_requests()
 
     def _dry_run_approved_action(self, args: str) -> None:
@@ -581,7 +625,7 @@ def _parse_outcome_args(
 
 def _tui_request_context(*, idempotency_key: str | None = None) -> ServiceRequestContext:
     return ServiceRequestContext(
-        actor=ActorContext(actor_id="soc-review-tui", surface=EntrySurface.TUI),
+        actor=ActorContext(actor_id="soc-review-tui", surface=EntrySurface.TUI, roles=["soc_analyst"]),
         idempotency_key=idempotency_key,
     )
 
@@ -602,8 +646,17 @@ def _tui_outcome_context(
     )
 
 
-def _tui_approval_context() -> ServiceRequestContext:
-    return ServiceRequestContext(actor=ActorContext(actor_id="soc-review-tui", surface=EntrySurface.TUI, roles=["soc_approver"]))
+def _tui_approval_context(
+    *,
+    approval_request_id: str = "manual",
+    resolution: str = "approve",
+    reason: str = "manual approval",
+) -> ServiceRequestContext:
+    reason_hash = hashlib.sha256(reason.strip().encode("utf-8")).hexdigest()[:16]
+    return ServiceRequestContext(
+        actor=ActorContext(actor_id="soc-review-tui", surface=EntrySurface.TUI, roles=["soc_approver"]),
+        idempotency_key=f"tui:{resolution}:{approval_request_id}:{reason_hash}",
+    )
 
 
 def _tui_normalization_context() -> ServiceRequestContext:

@@ -62,6 +62,8 @@ def test_soc_review_tui_command_registry_filters_and_resolves() -> None:
     assert resolve("/norm-update NMI-1 resolved fixed").args == "NMI-1 resolved fixed"
     assert resolve("/approval APR-1").args == "APR-1"
     assert resolve("/approve APR-1 reason").args == "APR-1 reason"
+    assert resolve("/reject APR-1 reason").args == "APR-1 reason"
+    assert resolve("/expire APR-1 reason").args == "APR-1 reason"
     assert resolve("/dry-run SAT-1 response.block_ip response.block_ip").kind == "builtin"
     assert resolve("/execute SAT-1 response.block_ip response.block_ip idem-1").args == "SAT-1 response.block_ip response.block_ip idem-1"
     assert resolve("/outcome DPROP-1 unknown idem-1 unresolved").kind == "builtin"
@@ -299,11 +301,22 @@ def test_soc_review_tui_outcome_context_marks_review_role() -> None:
 
 
 def test_soc_review_tui_approval_context_marks_approver_role() -> None:
-    context = _tui_approval_context()
+    context = _tui_approval_context(
+        approval_request_id="APR-TUI-001",
+        resolution="approve",
+        reason="approved scope",
+    )
+    repeated = _tui_approval_context(
+        approval_request_id="APR-TUI-001",
+        resolution="approve",
+        reason="approved scope",
+    )
 
     assert context.actor.actor_id == "soc-review-tui"
     assert context.actor.surface is EntrySurface.TUI
     assert context.actor.roles == ["soc_approver"]
+    assert context.actor.auth_source == "local_tui"
+    assert context.idempotency_key == repeated.idempotency_key
 
 
 def test_soc_review_tui_normalization_context_marks_engineer_role() -> None:

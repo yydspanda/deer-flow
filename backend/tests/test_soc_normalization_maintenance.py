@@ -120,7 +120,7 @@ def test_baseline_acceptance_is_role_gated_and_persisted() -> None:
     run = SocAnalysisService().analyze(_payload())
     service = _maintenance_service(repository)
 
-    with pytest.raises(SocServiceError, match="soc_engineer or soc_admin"):
+    with pytest.raises(SocServiceError, match="requires one of roles"):
         service.accept_baseline(_baseline_command(run), context=_context())
 
     baseline = service.accept_baseline(

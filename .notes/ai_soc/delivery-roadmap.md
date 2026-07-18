@@ -1,7 +1,7 @@
 # SOC Agent Delivery Roadmap / 阶段性交付路线
 
 > Status: **Authoritative / 权威执行顺序**  
-> Current stage: **Stage 2 - SOC Alpha Completeness Audit**  
+> Current stage: **Stage 3 - Close Blocking Gaps**
 > This document owns stage order and stage gates. `soc-agent-solution.md` owns the product and
 > architecture design; `progress.md` records current execution status.
 
@@ -35,12 +35,13 @@ flowchart LR
 | Stage | Status | Primary outcome / 核心产出 | Exit gate / 退出门槛 |
 |---|---|---|---|
 | `BD` Boss Demo v0.1 | **Done** | 一条 8-10 分钟、浏览器优先、可重复的 golden path | `BD-01..03` 与 BD Gate 已通过 |
-| `AA` SOC Alpha Completeness Audit | **Current / AUD-02 In Progress** | 唯一的 Complete/Gap/Mock/Data-gated/Deferred 矩阵 | 审计矩阵和 P0/P1 阻塞清单确认 |
-| `BG` Close Blocking Gaps | Planned | 只修审计确认的代码可控 P0/P1 阻塞项 | Alpha 端到端验收通过 |
+| `AA` SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 唯一的 Complete/Gap/Mock/Data-gated/Deferred 矩阵 | 审计矩阵和 P0/P1 阻塞清单已于 2026-07-18 确认 |
+| `BG` Close Blocking Gaps | **Current / BG-P0-02 In Progress** | 只修审计确认的代码可控 P0/P1 阻塞项 | Alpha 端到端验收通过 |
 | `PI` Real Data & Production Integration | Data/credential-gated | 真实 PingAn/通用 provider、Kafka/PostgreSQL/K8s 和运营验证 | Pilot readiness review 通过 |
 
-Boss Demo v0.1 已于 2026-07-18 通过 BD Gate；当前进入 time-boxed Alpha 完整性审计。这不代表
-Alpha 或生产已经完成。
+Boss Demo v0.1 和 Alpha 完整性审计已于 2026-07-18 分别通过 BD Gate、AA Gate；当前只执行
+[`audits/alpha-completeness-matrix.md`](audits/alpha-completeness-matrix.md) 冻结的 Stage 3 阻塞工作包。
+这不代表 Alpha 或生产已经完成。
 
 ## 3. Stage 1 - Boss Demo v0.1
 
@@ -92,23 +93,32 @@ Stage 2 是 time-boxed 审计，不在审计过程中纵向优化单个模块。
 | ID | Work / 工作 | Deliverable / 产出 | Acceptance / 验收 |
 |---|---|---|---|
 | `AUD-01` | Journey inventory / 完整旅程盘点 | **Done**: [`audits/alpha-journey-inventory.md`](audits/alpha-journey-inventory.md) 已逐一定位 CLI/Kafka/Runtime/persistence/correlation/action/domain/Review/Web/TUI/Lead Agent/feedback/memory/audit/replay | 入口、21 个服务边界、15 个状态聚合、17 张业务表及用户可见产物已有唯一落点 |
-| `AUD-02` | Code/contract/docs consistency / 一致性审计 | **In progress**: 对照代码、工程契约、solution、lifecycle、mock register，记录事实差异但不在本刀修复 | 不以文档中的 Planned 冒充代码 Complete；不以 mock 冒充 real |
-| `AUD-03` | Completeness matrix + blocker register / 完整性矩阵与阻塞台账 | `Complete / Gap / Mock / Data-gated / Deferred` 唯一矩阵和 P0/P1/P2 排序 | 每个 Gap 有 owner、影响、证据、验收方式和目标阶段；只把代码可控 P0/P1 送入 Stage 3 |
+| `AUD-02` | Code/contract/docs consistency / 一致性审计 | **Done**: [`audits/alpha-consistency-audit.md`](audits/alpha-consistency-audit.md) 已记录 10 项确认一致边界、24 项事实差异和 mock/real/shadow/reachability 核对 | 未把 target/service-only 冒充 application-complete；未把 mock 或 shadow-only 冒充 production real；审计过程未修改业务代码或被审文档 |
+| `AUD-03` | Completeness matrix + blocker register / 完整性矩阵与阻塞台账 | **Done**: [`audits/alpha-completeness-matrix.md`](audits/alpha-completeness-matrix.md) 已将 50 项能力唯一分类，记录 13 个 Gap、P0/P1 优先级和 7 个冻结工作包 | 每个 Gap 有 owner、影响、证据、验收方式和目标阶段；只有代码可控 P0/P1 进入 Stage 3 |
 
 ### AA Gate / 审计门禁
 
-- [ ] 全链路只有一份完整性矩阵，不新增平行路线图。
-- [ ] P0/P1 阻塞项与非阻塞质量优化明确分开。
-- [ ] mock、凭证缺失、真实数据缺失和代码缺口明确分开。
-- [ ] Stage 3 的任务集合由审计结果冻结，不靠聊天临时决定。
+- [x] 全链路只有一份完整性矩阵，不新增平行路线图。
+- [x] P0/P1 阻塞项与非阻塞质量优化明确分开。
+- [x] mock、凭证缺失、真实数据缺失和代码缺口明确分开。
+- [x] Stage 3 的任务集合由审计结果冻结，不靠聊天临时决定。
+
+**AA Gate: Passed on 2026-07-18.**
 
 ## 5. Stage 3 - Close Blocking Gaps
 
 | ID | Work / 工作 | Deliverable / 产出 | Acceptance / 验收 |
 |---|---|---|---|
-| `BG-01` | Close P0 blockers / 修复 P0 | 按告警旅程顺序修复审计确认的 P0 | 每项有回归测试和用户可见验收；不顺手扩范围 |
-| `BG-02` | Close P1 + E2E acceptance / 修复 P1 与端到端验收 | APT/EDR/HIDS 代表样本覆盖 CLI 与 Kafka、持久化、UI、反馈、审计和 replay | 结果可重复；失败语义、offset、review、audit 和 memory boundary 符合契约 |
+| `BG-01` | Close P0 blockers / 修复 P0 | **In progress**: `BG-P0-01` 已完成，当前执行 `BG-P0-02` | 每项有回归测试和用户可见验收；不顺手扩范围 |
+| `BG-02` | Close P1 + E2E acceptance / 修复 P1 与端到端验收 | 依次执行 `BG-P1-01..05`，APT/EDR/HIDS 代表样本覆盖完整 Alpha 旅程 | 结果可重复；失败语义、offset、review、audit 和 memory boundary 符合契约 |
 | `BG-03` | Alpha readiness package / Alpha 就绪包 | 版本化验收报告、已知限制、mock/data-gated 清单、部署与回滚说明 | 代码可控 P0/P1 为零；全量 SOC/architecture 测试通过；Stage 4 输入明确 |
+
+Stage 3 的唯一拆分与验收条件见
+[`audits/alpha-completeness-matrix.md`](audits/alpha-completeness-matrix.md) Section 6，执行顺序固定为：
+
+```text
+BG-P0-01 -> BG-P0-02 -> BG-P1-01 -> BG-P1-02 -> BG-P1-03 -> BG-P1-04 -> BG-P1-05 -> BG-03
+```
 
 Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未准备等外部条件。
 
@@ -156,9 +166,10 @@ Stage 4 的退出结果是 **Pilot Ready / 可试点**。正式 GA、自动关�
 
 ```text
 Completed:    BD - Boss Demo v0.1 (BD Gate passed 2026-07-18)
-Current Stage: AA - SOC Alpha Completeness Audit
-Completed:    AUD-01 - Journey inventory
-In Progress:  AUD-02 - Code/contract/docs consistency audit
-Next:         Compare the as-is inventory with solution, lifecycle, engineering contracts, and mock/real register
-Blocked by:   None for AUD-02; real providers and production infrastructure remain Stage 4 data-gated
+Completed:    AA - SOC Alpha Completeness Audit (AA Gate passed 2026-07-18; AUD-01..03 done)
+Current Stage: BG - Close Blocking Gaps
+Completed:    BG-P0-01 - approval integrity and L3 authorization (AC-22, AC-34)
+In Progress:  BG-P0-02 - transactional mutation and durable audit (AC-16, AC-21)
+Next:         Explicit correction/external-feedback unit of work plus append-only audit coverage for every Alpha mutation
+Blocked by:   None for BG-P0-02; real providers and production infrastructure remain Stage 4 data-gated
 ```

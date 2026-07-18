@@ -67,8 +67,11 @@ class FakeApprovalRequestRepository:
     def __init__(self) -> None:
         self.requests: dict[str, SocAgentApprovalRequest] = {}
 
-    def save_approval_request(self, approval_request: SocAgentApprovalRequest) -> None:
+    def create_approval_request(self, approval_request: SocAgentApprovalRequest) -> bool:
+        if approval_request.approval_request_id in self.requests:
+            return False
         self.requests[approval_request.approval_request_id] = approval_request
+        return True
 
     def get_approval_request(self, approval_request_id: str) -> SocAgentApprovalRequest | None:
         return self.requests.get(approval_request_id)
@@ -131,7 +134,7 @@ def _reset_deerflow_home(tmp_path: Path, monkeypatch) -> None:
 def test_soc_lead_agent_chat_service_streams_through_deerflow_client() -> None:
     client = FakeDeerFlowClient()
     service = SocLeadAgentChatService(client_factory=lambda: client, require_profile=False)
-    context = ServiceRequestContext(actor=ActorContext(actor_id="analyst", surface=EntrySurface.TUI))
+    context = ServiceRequestContext(actor=ActorContext(actor_id="analyst", surface=EntrySurface.TUI, roles=["soc_analyst"]))
 
     events = list(service.stream(SocAgentChatRequest(message="hello", thread_id="SOC-THREAD-1"), context=context))
 
@@ -212,7 +215,7 @@ def test_soc_lead_agent_chat_service_routes_action_proposal_to_approval_inbox() 
             approval_service=SocAgentApprovalService(request_repository=request_repository),
         ),
     )
-    context = ServiceRequestContext(actor=ActorContext(actor_id="analyst", surface=EntrySurface.TUI))
+    context = ServiceRequestContext(actor=ActorContext(actor_id="analyst", surface=EntrySurface.TUI, roles=["soc_analyst"]))
 
     events = list(service.stream(SocAgentChatRequest(message="contain this", thread_id="SOC-THREAD-1"), context=context))
 

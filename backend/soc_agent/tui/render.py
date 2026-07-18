@@ -261,8 +261,15 @@ def render_approval_request(
     table.add_row("route", approval_request.route)
     table.add_row("action", approval_request.action)
     table.add_row("risk", approval_request.risk_level.value)
+    table.add_row("status", approval_request.status.value)
     table.add_row("requested_by", approval_request.requested_by.actor_id)
+    if approval_request.submitted_by is not None:
+        table.add_row("submitted_by", approval_request.submitted_by.actor_id)
     table.add_row("reason", approval_request.reason)
+    if approval_request.resolved_by is not None:
+        table.add_row("resolved_by", approval_request.resolved_by.actor_id)
+    if approval_request.resolution_reason:
+        table.add_row("resolution_reason", approval_request.resolution_reason)
     if approval_request.source_proposal_id:
         table.add_row("source_proposal_id", approval_request.source_proposal_id)
     if approval_request.action_payload:

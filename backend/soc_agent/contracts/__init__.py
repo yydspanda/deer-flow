@@ -17,6 +17,7 @@ from soc_agent.contracts.authorization import (
     AuthorizationSourceFreshness,
 )
 from soc_agent.contracts.common import (
+    ActorAuthSource,
     ActorContext,
     ActorType,
     EntrySurface,
@@ -161,6 +162,7 @@ from soc_agent.contracts.schemas import (
     SocAgentActionResult,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
+    SocAgentApprovalRequestStatus,
     SocAgentApprovedActionCommand,
     SocAgentChatRequest,
     SocAgentChatResponse,
@@ -258,6 +260,7 @@ from soc_agent.contracts.schemas import (
 )
 
 __all__ = [
+    "ActorAuthSource",
     "ActorContext",
     "ActorType",
     "AuthorizationDimension",
@@ -424,6 +427,7 @@ __all__ = [
     "SocAgentActionCommand",
     "SocAgentApprovedActionCommand",
     "SocAgentApprovalRequest",
+    "SocAgentApprovalRequestStatus",
     "SocAgentApprovalGrant",
     "SocAgentActionResult",
     "SocAgentActionProposal",

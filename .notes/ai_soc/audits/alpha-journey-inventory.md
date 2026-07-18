@@ -155,7 +155,7 @@ SOC routers 在 `backend/app/gateway/app.py` 注册。当前真实 path 使用�
 |---|---|---|---|---|
 | `E-API-01` | `/api/soc/review` | `GET /items`, `GET /items/{id}/context`, `POST /items/{id}/close`, `POST /runs/{id}/correct` | `SocReviewService` | Wired |
 | `E-API-02` | `/api/soc/review` | `POST /disposition-outcomes`, `GET /disposition-samples`, `GET /disposition-samples/{id}/inbox` | `SocDispositionEvaluationService` | Wired |
-| `E-API-03` | `/api/soc/approvals` | request create/list/get、grant create、action dry-run/execute | `SocAgentApprovalService` | Wired |
+| `E-API-03` | `/api/soc/approvals` | request create/list/get/reject/expire、request-ID grant create、action dry-run/execute | `SocAgentApprovalService` | Wired |
 | `E-API-04` | `/api/soc/memory` | candidate list/get/review、record list/get、search | `SocMemoryService` | Wired |
 | `E-API-05` | `/api/soc/normalization` | baseline create/list、issue list/update、metrics | `SocNormalizationMaintenanceService` | Wired |
 
@@ -191,7 +191,7 @@ disposition ingress endpoint。相应 service/CLI 是否足够，由 `AUD-02/AUD
 | `S-11` | `SocAgentChatService` | deterministic chat stream、route、permission、review context | context read; optional approval/evidence write through collaborators | Chat TUI |
 | `S-12` | `SocLeadAgentChatService` | DeerFlow stream、bounded ReviewContext artifact、proposal extraction | context read; proposal boundary may write evidence/approval | Lead Agent Chat TUI |
 | `S-13` | router/policy/dispatcher/adapter boundary | action allowlist、risk policy、read-only adapter/MCP invocation | successful read-only result -> investigation evidence | deterministic chat, Lead Agent, orchestrator |
-| `S-14` | `SocAgentApprovalService` | pending request、one-time grant、dry-run、token consume | approval request/grant tables | Kafka, Chat/Lead Agent, API/Web/TUI |
+| `S-14` | `SocAgentApprovalService` | request terminal lifecycle、one-request/one-grant resolution、dry-run、token consume、L3 role/provenance gate | approval request/grant tables | Kafka, Chat/Lead Agent, API/Web/TUI |
 | `S-15` | `SocGovernedContextService` | typed fact proposal/version/lifecycle/RBAC | append-only governed fact versions | CLI |
 | `S-16` | `SocAuthorizedActivityService` | canonical query and event-time deterministic fact match | governed fact reads only | CLI, enrichment service |
 | `S-17` | `SocAuthorizationEnrichmentService` | persist/replay authorization match attached to run | authorization enrichment table | CLI; ReviewContext projection |
@@ -313,12 +313,14 @@ An explicit MCP action config switches to DeerFlow cached MCP tools through the 
 | Journey ID | Sequence | State/write | External effect |
 |---|---|---|---|
 | `J-07A` | policy sees high-risk proposal -> creates/submits approval request | request persisted with contract status `pending` | none |
-| `J-07B` | `soc_approver` or `soc_admin` approves request | one-time grant persisted as `approved`, with expiry and execution token | none |
-| `J-07C` | dry-run validates token/route/action/expiry and optional adapter payload | no grant consumption | none |
-| `J-07D` | execute boundary requires `dry_run=false` and idempotency key | grant `approved -> consumed`, execution result stored in grant | `external_side_effect=not_executed` |
-| `J-07E` | consumed token retried with same idempotency key | returns stored execution result | none |
+| `J-07B` | `soc_approver` or `soc_admin` resolves a stored request by ID | approve atomically writes request `approved` + one grant; reject/expire write terminal request without grant | none |
+| `J-07C` | exact terminal retry uses the same actor/reason/idempotency/expiry | returns the stored request or grant; changed/stale retry conflicts | none |
+| `J-07D` | dry-run validates token/route/action/expiry and optional adapter payload | no grant consumption | none |
+| `J-07E` | execute boundary requires `dry_run=false` and idempotency key | grant `approved -> consumed`, execution result stored in grant | `external_side_effect=not_executed` |
+| `J-07F` | consumed token retried with same idempotency key | returns stored execution result | none |
 
-The request contract itself remains `pending`; grant state is the current approval/consume lifecycle carrier.
+Request resolution is a repository compare-and-set from `pending` to exactly one terminal state. Grant creation and
+the `approved` transition share one transaction and a unique request-to-grant constraint.
 
 ### 6.5 Memory journey
 
@@ -388,7 +390,7 @@ recorded feedback without changing the operational verdict. No Gateway/Kafka/CLI
 | `ST-03` | ReviewQueueItem | open/closed | create open; explicit close, correction, or eligible external correction closes; no reopen transition found | `SocReviewService` |
 | `ST-04` | MemoryCandidate | pending_review/confirmed_candidate/confirmed/rejected/deprecated/expired | service-enforced review transition map; confirm creates record | `SocMemoryService` |
 | `ST-05` | MemoryRecord | confirmed/deprecated/expired | candidate deprecate/expire updates linked record; retrieval additionally requires `retrieval_enabled=true` | `SocMemoryService` |
-| `ST-06` | ApprovalRequest | pending literal | request remains pending in current contract/table | `SocAgentApprovalService` |
+| `ST-06` | ApprovalRequest | pending/approved/rejected/expired | insert pending; compare-and-set to one terminal state; approved transition atomically creates at most one grant | `SocAgentApprovalService` |
 | `ST-07` | ApprovalGrant | approved/consumed literal | approve creates approved; execute boundary consumes; expiry is time validation, not a third persisted status | `SocAgentApprovalService` |
 | `ST-08` | GovernedContextFact | proposed/active/suspended/expired/revoked | propose; proposed/suspended -> active; active -> suspended; nonterminal -> revoked; due nonterminal -> expired; revise creates new proposed version | `SocGovernedContextService` |
 | `ST-09` | AuthorizationEnrichment | immutable record | create or replay as a new record linked by `replay_of_enrichment_id` | `SocAuthorizationEnrichmentService` |
@@ -411,8 +413,8 @@ Schema owner: `backend/soc_agent/db/models.py`; repository owner:
 | `DB-02` | `soc_decision_audit_log` | `0002`, `0007` | analysis/replay/correction/external disposition services | ReviewContext, idempotency lookup |
 | `DB-03` | `soc_alert_summaries` | `0003` | analysis/correction | CLI list/correlate, ReviewContext |
 | `DB-04` | `soc_review_queue` | `0004` | analysis bundle, review correction/close | API/Web/TUI/Lead Agent, proposal/outcome validation |
-| `DB-05` | `soc_approval_grants` | `0005` | approval service | API/Web/TUI dry-run/execute |
-| `DB-06` | `soc_approval_requests` | `0006` | Agent/Lead Agent/Kafka/API via approval service | API/Web/TUI inbox |
+| `DB-05` | `soc_approval_grants` | `0005`, `0017` | approval service | API/Web/TUI dry-run/execute |
+| `DB-06` | `soc_approval_requests` | `0006`, `0017` | Agent/Lead Agent/Kafka/API via approval service | API/Web/TUI inbox and terminal lifecycle |
 | `DB-07` | `soc_investigation_evidence` | `0008` | successful read-only action dispatcher | correlation, ReviewContext/Web/TUI/Lead Agent |
 | `DB-08` | `soc_external_dispositions` | `0009` | external disposition service | ReviewContext/Web/TUI/Lead Agent |
 | `DB-09` | `soc_memory_candidates` | `0010` | memory source bridges/service | CLI/API/Web/TUI/Lead Agent |
@@ -438,7 +440,7 @@ events, `SocEvent`, Kafka metrics, or Kafka offsets. These are derived, external
 | `U-03` | Web ReviewQueue | queue filters, run/detection/entities/summary, close/correct | Review API + `SocReviewService` |
 | `U-04` | Web unified investigation | Runtime decision, correlation, domain findings, timeline, action evidence, authorization, proposals/outcomes, external feedback, memory | `InvestigationContext` / `UnifiedInvestigationView` |
 | `U-05` | Web sample campaign | immutable sample batches, reviewer inbox, readiness and outcome capture | `SocDispositionEvaluationService` |
-| `U-06` | Web approval panel | pending requests, proposal payload/context refs, grant, dry-run, execute result | approval API/service/tables |
+| `U-06` | Web approval panel | pending and terminal requests, proposal payload/context refs, approve/reject/expire, grant, dry-run, execute result | approval API/service/tables |
 | `U-07` | Web memory panel | candidate review and relevant confirmed memory | memory API/service/tables |
 | `U-08` | Web normalization | issue counts, severity/schema/baseline metrics, queue details, acknowledge/resolve/ignore | normalization API/service/tables |
 | `U-09` | Review TUI | queue/context, approvals, normalization, close/correct, outcome/sample outcome | same services as Web, no duplicate business rules |
@@ -458,12 +460,16 @@ fact page, or standalone memory page; memory/approval/disposition are embedded i
 | Decision audit record | Yes | analysis, replay, correction, external disposition; actor/surface/verdict/idempotency/payload | `soc_decision_audit_log` |
 | Analysis step trace | Yes, inside run payload | step status/timing/error/metadata | `soc_analysis_runs.run_payload` |
 | Correction lineage | Yes, inside run payload + audit | previous/final verdict, reason, actor, candidate link | analysis run and audit table |
+| Approval request resolution | Yes, inside request payload and indexed columns | terminal status, actor, reason, time, idempotency and optional grant reference | `soc_approval_requests` |
 | Approval execution result | Yes, inside grant payload | token consume actor/time/idempotency/result | `soc_approval_grants` |
 | Governed fact history | Yes | immutable versions, source, validity, actor, evidence refs | `soc_governed_context_facts` |
 | Enrichment/proposal/outcome lineage | Yes | query/fact refs/policy/idempotency/supersession | `DB-14..17` |
 | `SocEvent` | Not by default | typed service event emitted to injected `SocEventSink` | default `NoopEventSink`; no SOC event table |
 | Kafka metrics | log stream | daemon start/result/error/stop and counters | JSONL sink stdout/stderr |
 | Web/TUI interaction | indirect | mutations persist through service records above | no separate UI interaction table |
+
+Approval lifecycle persistence is not a unified append-only mutation audit. Review close/note, memory review and approval
+transitions still require the `AC-21/BG-P0-02` audit boundary.
 
 ## 11. Source and Test Evidence Index / 证据索引
 

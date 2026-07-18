@@ -85,7 +85,7 @@ class SocLeadAgentActionProposalBoundary:
         if decision.requires_human_approval:
             approval_request = approval_request_from_action_proposal(proposal, decision=decision, context=context)
             if self._approval_service is not None:
-                self._approval_service.submit_request(approval_request)
+                self._approval_service.submit_request(approval_request, context=context)
                 submitted = True
         return ActionProposalBoundaryResult(
             proposal=proposal,

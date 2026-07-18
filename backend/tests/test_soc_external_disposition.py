@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from soc_agent.contracts import (
+    ActorAuthSource,
     ActorContext,
     ActorType,
     AlertSourceType,
@@ -202,6 +203,7 @@ def test_external_disposition_service_applies_high_trust_correction_and_closes_r
             actor_type=ActorType.SERVICE,
             surface=EntrySurface.API,
             roles=["external_disposition_adapter"],
+            auth_source=ActorAuthSource.EXTERNAL_ADAPTER,
         ),
         request_id="REQ-external-disposition",
     )

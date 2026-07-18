@@ -30,6 +30,7 @@ from soc_agent.core import (
     DispositionEvaluationIneligibleError,
     SocDispositionEvaluationService,
     SocReviewService,
+    SocServiceAuthorizationError,
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
 )
@@ -138,8 +139,10 @@ def close_review_item(
     try:
         return service.close_queue_item(
             ReviewQueueCloseCommand(queue_id=queue_id, reason=body.reason),
-            context=soc_service_context_from_request(request),
+            context=soc_service_context_from_request(request, include_soc_roles=True),
         )
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except SocServiceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
@@ -161,8 +164,10 @@ def correct_review_run(
                 corrected_confidence=body.confidence,
                 reason=body.reason,
             ),
-            context=soc_service_context_from_request(request),
+            context=soc_service_context_from_request(request, include_soc_roles=True),
         )
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except SocServiceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
@@ -175,7 +180,7 @@ def record_disposition_outcome(
     request: Request,
     service: DispositionEvaluationServiceDep,
 ) -> SocDispositionOutcomeApplyResult:
-    context = soc_service_context_from_request(request)
+    context = soc_service_context_from_request(request, include_soc_roles=True)
     if context.idempotency_key is None:
         raise HTTPException(status_code=400, detail="Idempotency-Key header is required")
     try:

@@ -933,6 +933,15 @@ class SocAgentRiskLevel(StrEnum):
     UNKNOWN = "unknown"
 
 
+class SocAgentApprovalRequestStatus(StrEnum):
+    """Lifecycle state for one human approval request."""
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+
+
 class SocAgentPermissionDecision(BaseModel):
     """Permission decision for one routed SOC Agent action."""
 
@@ -980,11 +989,44 @@ class SocAgentApprovalRequest(BaseModel):
     risk_level: SocAgentRiskLevel
     reason: str = Field(min_length=1)
     requested_by: ActorContext
+    submitted_by: ActorContext | None = None
     source_proposal_id: str | None = None
     action_payload: dict[str, Any] = Field(default_factory=dict)
     context_refs: dict[str, Any] = Field(default_factory=dict)
-    status: Literal["pending"] = "pending"
+    status: SocAgentApprovalRequestStatus = SocAgentApprovalRequestStatus.PENDING
     created_at: datetime = Field(default_factory=utc_now)
+    resolved_at: datetime | None = None
+    resolved_by: ActorContext | None = None
+    resolution_reason: str | None = Field(default=None, min_length=1)
+    resolution_idempotency_key: str | None = Field(default=None, min_length=1, max_length=128)
+    resolution_expires_in_seconds: int | None = Field(default=None, gt=0, le=86_400)
+    approval_grant_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_resolution(self) -> SocAgentApprovalRequest:
+        resolution_fields = (
+            self.resolved_at,
+            self.resolved_by,
+            self.resolution_reason,
+            self.resolution_idempotency_key,
+            self.resolution_expires_in_seconds,
+            self.approval_grant_id,
+        )
+        if self.status is SocAgentApprovalRequestStatus.PENDING:
+            if any(value is not None for value in resolution_fields):
+                raise ValueError("pending approval request cannot contain resolution fields")
+            return self
+
+        if self.resolved_at is None or self.resolved_by is None:
+            raise ValueError("resolved approval request requires resolved_at and resolved_by")
+        if self.resolution_reason is None or self.resolution_idempotency_key is None:
+            raise ValueError("resolved approval request requires reason and idempotency key")
+        if self.status is SocAgentApprovalRequestStatus.APPROVED:
+            if self.approval_grant_id is None or self.resolution_expires_in_seconds is None:
+                raise ValueError("approved request requires grant id and grant expiry")
+        elif self.approval_grant_id is not None or self.resolution_expires_in_seconds is not None:
+            raise ValueError("rejected or expired request cannot reference an approval grant")
+        return self
 
 
 class SocAgentApprovalGrant(BaseModel):

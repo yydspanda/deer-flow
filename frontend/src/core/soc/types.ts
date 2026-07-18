@@ -23,6 +23,7 @@ export interface SocActorContext {
   actor_type?: string;
   surface: string;
   roles?: string[];
+  auth_source?: string;
 }
 
 export interface SocReviewQueueItem {
@@ -796,6 +797,12 @@ export type SocAgentRiskLevel =
   | "high_risk"
   | "unknown";
 
+export type SocAgentApprovalRequestStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "expired";
+
 export interface SocAgentApprovalRequest {
   schema_version?: "soc.agent_approval_request.v1";
   approval_request_id?: string;
@@ -805,11 +812,18 @@ export interface SocAgentApprovalRequest {
   risk_level: SocAgentRiskLevel;
   reason: string;
   requested_by: SocActorContext;
+  submitted_by?: SocActorContext | null;
   source_proposal_id?: string | null;
   action_payload?: Record<string, unknown>;
   context_refs?: Record<string, unknown>;
-  status?: "pending";
+  status: SocAgentApprovalRequestStatus;
   created_at?: string;
+  resolved_at?: string | null;
+  resolved_by?: SocActorContext | null;
+  resolution_reason?: string | null;
+  resolution_idempotency_key?: string | null;
+  resolution_expires_in_seconds?: number | null;
+  approval_grant_id?: string | null;
 }
 
 export interface SocApprovalRequestListResponse {
@@ -842,9 +856,13 @@ export interface SocAgentApprovalGrant {
 }
 
 export interface SocApprovalGrantRequest {
-  approval_request: SocAgentApprovalRequest;
+  approval_request_id: string;
   reason: string;
   expires_in_seconds?: number;
+}
+
+export interface SocApprovalResolutionRequest {
+  reason: string;
 }
 
 export interface SocAgentApprovedActionCommand {

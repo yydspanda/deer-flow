@@ -27,6 +27,8 @@ BUILTIN_COMMANDS: tuple[Command, ...] = (
     Command("norm-update", "Update issue: /norm-update NMI-... acknowledged|resolved|ignored reason"),
     Command("approval", "Open approval request: /approval APR-..."),
     Command("approve", "Approve request: /approve APR-... reason"),
+    Command("reject", "Reject request: /reject APR-... reason"),
+    Command("expire", "Expire request: /expire APR-... reason"),
     Command("dry-run", "Validate token: /dry-run SAT-... route action"),
     Command("execute", "Consume token: /execute SAT-... route action idempotency-key"),
     Command("open", "Open investigation context: /open REV-..."),
