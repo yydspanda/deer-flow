@@ -41,6 +41,7 @@ from soc_agent.core import (
     SocDispositionEvaluationService,
     SocExternalDispositionService,
     SocMemoryService,
+    SocServiceAuthorizationError,
     SocServiceNotImplementedError,
 )
 from soc_agent.disposition import (
@@ -56,6 +57,18 @@ from soc_agent.external_disposition import (
 from soc_agent.memory import InMemoryMemoryCandidateRepository
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "external_disposition"
+
+
+def _external_adapter_context() -> ServiceRequestContext:
+    return ServiceRequestContext(
+        actor=ActorContext(
+            actor_id="external-disposition-test-adapter",
+            actor_type=ActorType.SERVICE,
+            surface=EntrySurface.API,
+            roles=["external_disposition_adapter"],
+            auth_source=ActorAuthSource.EXTERNAL_ADAPTER,
+        )
+    )
 
 
 class RecordingEventSink:
@@ -366,7 +379,10 @@ def test_external_disposition_service_does_not_apply_low_trust_correction() -> N
         ),
     )
 
-    result = service.apply_event(build_external_disposition_event(_load_zeus_fixture(), _zeus_adapter_config()))
+    result = service.apply_event(
+        build_external_disposition_event(_load_zeus_fixture(), _zeus_adapter_config()),
+        context=_external_adapter_context(),
+    )
 
     assert result.record.apply_status is SocExternalDispositionApplyStatus.MAPPED
     assert result.correction_applied is False
@@ -403,7 +419,7 @@ def test_external_disposition_service_keeps_unmapped_or_unmatched_event_review_s
     }
     event = build_external_disposition_event(payload, _minimal_adapter_config())
 
-    result = service.apply_event(event)
+    result = service.apply_event(event, context=_external_adapter_context())
 
     assert result.audit_written is False
     assert result.record.apply_status is SocExternalDispositionApplyStatus.UNMATCHED
@@ -420,6 +436,29 @@ def test_external_disposition_service_requires_repository() -> None:
 
     with pytest.raises(SocServiceNotImplementedError):
         service.apply_event(build_external_disposition_event(_load_zeus_fixture(), _zeus_adapter_config()))
+
+
+def test_external_disposition_service_rejects_unauthenticated_or_wrong_role() -> None:
+    service = SocExternalDispositionService(
+        repository=InMemoryExternalDispositionRepository(),
+    )
+    event = build_external_disposition_event(_load_zeus_fixture(), _zeus_adapter_config())
+
+    with pytest.raises(SocServiceAuthorizationError, match="authenticated actor"):
+        service.apply_event(event)
+    with pytest.raises(SocServiceAuthorizationError, match="external_disposition_adapter, soc_admin"):
+        service.apply_event(
+            event,
+            context=ServiceRequestContext(
+                actor=ActorContext(
+                    actor_id="analyst-1",
+                    actor_type=ActorType.USER,
+                    surface=EntrySurface.API,
+                    roles=["soc_analyst"],
+                    auth_source=ActorAuthSource.SESSION,
+                )
+            ),
+        )
 
 
 def _proposal_for_target(

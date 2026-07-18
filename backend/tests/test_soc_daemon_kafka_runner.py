@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import deque
 from typing import Any
 
@@ -9,6 +10,21 @@ from soc_agent.contracts import SocDaemonMessage, SocDaemonProcessResult
 from soc_agent.core import SocDaemonService, SocServiceError
 from soc_agent.daemon.kafka_mapper import KafkaRecord
 from soc_agent.daemon.kafka_runner import SocKafkaConsumerRunner
+
+
+def _alert_value(alert_id: str) -> str:
+    return json.dumps(
+        {
+            "schema_version": "soc.alert.raw.v1",
+            "source": "edr",
+            "alert_id": alert_id,
+            "dedup_key": f"edr:{alert_id}",
+            "occurred_at": "2026-07-18T10:00:00Z",
+            "severity": "medium",
+            "raw": {"alert_id": alert_id},
+            "entities_hint": {},
+        }
+    )
 
 
 class FakeConsumer:
@@ -69,7 +85,7 @@ class RetryableRuntimeFailureDaemonService(SocDaemonService):
 
 
 def test_kafka_runner_processes_record_and_commits_after_service_success() -> None:
-    record = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=10, value='{"alert_id":"ALT-1"}')
+    record = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=10, value=_alert_value("ALT-1"))
     consumer = FakeConsumer([record])
     daemon_service = FakeDaemonService()
 
@@ -85,7 +101,7 @@ def test_kafka_runner_processes_record_and_commits_after_service_success() -> No
 
 
 def test_kafka_runner_uses_configured_topic_sets() -> None:
-    record = KafkaRecord(topic="custom.alerts.v1", partition=0, offset=10, value='{"alert_id":"ALT-1"}')
+    record = KafkaRecord(topic="custom.alerts.v1", partition=0, offset=10, value=_alert_value("ALT-1"))
     consumer = FakeConsumer([record])
     daemon_service = FakeDaemonService()
 
@@ -113,8 +129,8 @@ def test_kafka_runner_returns_idle_when_no_record_is_available() -> None:
 
 
 def test_kafka_runner_run_aggregates_bounded_loop_results() -> None:
-    first = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=1, value='{"alert_id":"ALT-1"}')
-    second = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=2, value='{"alert_id":"ALT-2"}')
+    first = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=1, value=_alert_value("ALT-1"))
+    second = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=2, value=_alert_value("ALT-2"))
     consumer = FakeConsumer([first, second])
 
     loop_result = SocKafkaConsumerRunner(consumer=consumer, daemon_service=FakeDaemonService()).run(max_records=3)
@@ -146,8 +162,32 @@ def test_kafka_runner_sends_mapper_failure_to_dead_letter_then_commits() -> None
     assert consumer.committed == [record]
 
 
+def test_kafka_runner_dead_letters_bad_envelope_version_then_commits_offset() -> None:
+    payload = json.loads(_alert_value("ALT-BAD-VERSION"))
+    payload["schema_version"] = "soc.alert.raw.v2"
+    record = KafkaRecord(
+        topic="soc.alerts.raw.v1",
+        partition=3,
+        offset=27,
+        value=json.dumps(payload),
+    )
+    consumer = FakeConsumer([record])
+
+    result = SocKafkaConsumerRunner(
+        consumer=consumer,
+        daemon_service=FakeDaemonService(),
+    ).process_next()
+
+    assert result.status == "dead_lettered"
+    assert result.dead_lettered is True
+    assert result.committed is True
+    assert "schema_version" in (result.error or "")
+    assert consumer.dead_letters[0][0] == record
+    assert consumer.committed == [record]
+
+
 def test_kafka_runner_sends_service_failure_to_dead_letter_then_commits() -> None:
-    record = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=2, value='{"alert_id":"ALT-2"}')
+    record = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=2, value=_alert_value("ALT-2"))
     consumer = FakeConsumer([record])
 
     result = SocKafkaConsumerRunner(
@@ -163,7 +203,7 @@ def test_kafka_runner_sends_service_failure_to_dead_letter_then_commits() -> Non
 
 
 def test_kafka_runner_does_not_commit_retryable_runtime_failure() -> None:
-    record = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=4, value='{"alert_id":"ALT-4"}')
+    record = KafkaRecord(topic="soc.alerts.raw.v1", partition=0, offset=4, value=_alert_value("ALT-4"))
     consumer = FakeConsumer([record])
 
     with pytest.raises(RuntimeError, match="analyzer_timeout"):

@@ -46,3 +46,20 @@ def test_first_daemon_result_extracts_result() -> None:
 def test_first_daemon_result_rejects_missing_results() -> None:
     with pytest.raises(SystemExit, match="did not include results"):
         soc_kafka_smoke._first_daemon_result({"schema_version": "bad"})
+
+
+def test_smoke_builds_versioned_alert_envelope_without_losing_raw_payload() -> None:
+    raw = {
+        "alert_id": "ALT-SMOKE-1",
+        "source": {"source_type": "edr"},
+        "severity": "high",
+        "message": "raw source message",
+    }
+
+    envelope = soc_kafka_smoke._build_alert_envelope(raw, alert_id="ALT-SMOKE-1")
+
+    assert envelope["schema_version"] == "soc.alert.raw.v1"
+    assert envelope["source"] == "edr"
+    assert envelope["alert_id"] == "ALT-SMOKE-1"
+    assert envelope["dedup_key"] == "smoke:edr:ALT-SMOKE-1"
+    assert envelope["raw"] == raw

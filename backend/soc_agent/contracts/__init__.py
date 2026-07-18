@@ -45,6 +45,13 @@ from soc_agent.contracts.governed_context import (
     GovernedContextSource,
     GovernedContextSourceType,
 )
+from soc_agent.contracts.ingestion import (
+    MAX_SOC_ALERT_ENTITIES_HINT_BYTES,
+    MAX_SOC_ALERT_RAW_BYTES,
+    SOC_ALERT_INGRESS_METADATA_KEY,
+    SocAlertRawEnvelope,
+    SocExternalDispositionIngressCommand,
+)
 from soc_agent.contracts.mutations import SocMutationAuditRecord, SocMutationOperation
 from soc_agent.contracts.schemas import (
     CORRELATION_SCORING_POLICY_VERSION,
@@ -455,6 +462,11 @@ __all__ = [
     "SocMemoryTargetArtifact",
     "SocMutationAuditRecord",
     "SocMutationOperation",
+    "MAX_SOC_ALERT_ENTITIES_HINT_BYTES",
+    "MAX_SOC_ALERT_RAW_BYTES",
+    "SOC_ALERT_INGRESS_METADATA_KEY",
+    "SocAlertRawEnvelope",
+    "SocExternalDispositionIngressCommand",
     "SocMainOrchestratorRequest",
     "SocOrchestratorActionSpec",
     "SocOrchestratorReviewContextSummary",

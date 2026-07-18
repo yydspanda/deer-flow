@@ -30,6 +30,7 @@ from app.gateway.routers import (
     scheduled_tasks,
     skills,
     soc_approvals,
+    soc_external_dispositions,
     soc_memory,
     soc_normalization,
     soc_review,
@@ -497,6 +498,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # SOC approval API is mounted at /api/soc/approvals
     app.include_router(soc_approvals.router)
+
+    # SOC external disposition ingress is mounted at /api/soc/external-dispositions
+    app.include_router(soc_external_dispositions.router)
 
     # SOC normalization maintenance API is mounted at /api/soc/normalization
     app.include_router(soc_normalization.router)

@@ -139,9 +139,9 @@ SOC Agent 有多个入口，但不能各写一套业务逻辑：
 | CLI | Developer, maintainer | Demo, smoke, replay, correction | Thin wrapper over services |
 | TUI / terminal workbench | Analyst, operator | Queue review, context view, agent chat | DeerFlow-aligned, no independent business logic |
 | Web UI | Analyst, team lead | Review inbox, approval inbox, investigation view | Reads Gateway APIs backed by services |
-| Kafka daemon | Background ingestion | Consume alert stream and create review items | Ingestion adapter only |
+| Kafka daemon | Background ingestion | Consume strict versioned alert envelopes and create review items | Validate/unwrap only; raw source payload remains intact |
 | DeerFlow Lead Agent | Analyst chat | Ask questions around a review item, propose next steps | Uses bounded review context |
-| External systems | Zeus, old SOC platform, ticketing | Push status/reason back into SOC Agent | Goes through external disposition service |
+| External systems | Zeus, old SOC platform, ticketing | Push status/reason back into SOC Agent | Source adapter maps to canonical command, then authenticated Gateway/service boundary |
 
 ```mermaid
 flowchart TB
@@ -260,9 +260,9 @@ Important behavior:
 | --- | --- | --- |
 | `backend/soc_agent/cli.py` | CLI commands for demo, review, memory, daemon smoke | No direct DB business mutation except through services |
 | Gateway API routes | Web/TUI/API access to review, memory, approval | No duplicate runtime logic |
-| Kafka consumer / daemon | Decode records, map to daemon messages, call `SocDaemonService` | No direct alert analysis logic |
+| Kafka consumer / daemon | Validate `SocAlertRawEnvelope`, preserve raw payload, map to daemon messages, call `SocDaemonService` | No bare alert object, vendor parsing or direct alert analysis logic |
 | DeerFlow Lead Agent bridge | Chat around bounded investigation context | No unbounded raw secret/context injection |
-| External disposition adapter | Map old-platform status/reason to canonical event | No direct confirmed memory write |
+| External disposition adapter | Map old-platform status/reason to canonical event and call the authenticated canonical ingress | No direct DB, verdict, queue or confirmed-memory write |
 
 ### 5.2 Core Service Layer / 核心服务层
 
@@ -716,6 +716,16 @@ flowchart LR
 
 Rules:
 
+- The implemented application ingress is authenticated
+  `POST /api/soc/external-dispositions` with
+  `SocExternalDispositionIngressCommand(schema_version=soc.external_disposition_ingress.v1)`.
+- The ingress requires a stable `event.source_event_id`; only `soc_admin` or
+  `external_disposition_adapter` service roles may apply it. Source-specific field mapping and trust
+  configuration remain server-owned and cannot be supplied by the caller.
+- An exact source-event retry returns the existing logical result. Reusing the same semantic identity
+  with changed content returns a conflict instead of silently overwriting history.
+- This closes the generic application boundary only. Real Zeus/ITSM/SOAR webhook, Kafka or polling
+  feeds still require customer endpoint, authentication/signature, tenant and replay configuration.
 - External reason may update local review state if target resolution is unique and trusted.
 - External reason can generate memory candidates.
 - External reason cannot become confirmed memory without review.

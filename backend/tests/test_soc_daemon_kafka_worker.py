@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -47,7 +48,20 @@ class FailedRuntimeDaemonService(SocDaemonService):
         )
 
 
-def _record(*, topic: str = "soc.alerts.raw.v1", value: str = '{"alert_id":"ALT-1"}') -> KafkaRecord:
+def _record(*, topic: str = "soc.alerts.raw.v1", value: str | None = None) -> KafkaRecord:
+    if value is None:
+        value = json.dumps(
+            {
+                "schema_version": "soc.alert.raw.v1",
+                "source": "edr",
+                "alert_id": "ALT-1",
+                "dedup_key": "edr:ALT-1",
+                "occurred_at": "2026-07-18T10:00:00Z",
+                "severity": "medium",
+                "raw": {"alert_id": "ALT-1"},
+                "entities_hint": {},
+            }
+        )
     return KafkaRecord(topic=topic, partition=0, offset=1, value=value)
 
 

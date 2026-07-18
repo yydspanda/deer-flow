@@ -1408,7 +1408,21 @@ payload：
 }
 ```
 
-### 输出 topics
+`soc.alerts.raw.v1` 是 topic 名，`soc.alert.raw.v1` 是 payload schema version，二者不要混用。
+当前 input contract 由 `SocAlertRawEnvelope` 执行以下强约束：
+
+- Pydantic `extra=forbid`；不再兼容直接投递 vendor alert object。
+- `source`、`alert_id`、`dedup_key`、`occurred_at`、`severity`、`raw` 必填。
+- `raw` 最大 900,000 UTF-8 JSON bytes，`entities_hint` 最大 64,000 bytes，且都必须 JSON 可序列化。
+- `_soc_ingress` 是 transport provenance 保留键，source `raw` 不得占用。
+- mapper 完整保留 source `raw`，只用 `setdefault` 补通用 fallback，并把 envelope metadata 放入
+  `_soc_ingress`；`entities_hint` 不是已确认事实。
+- validation error 只返回字段路径和约束，不包含 input/raw 值。非法版本、裸对象、超限和保留键
+  冲突按 poison message 进入 DLQ，成功写 DLQ 后才 commit source offset。
+- contract tests 必须至少覆盖 APT、EDR、HIDS 三类脱敏 source payload 的完整保留，以及 malformed、
+  bad version、oversize、reserved-key collision 和错误信息不泄漏 raw。
+
+### 输出 topics（target，当前未生产）
 
 ```text
 soc.analysis.results.v1
@@ -1423,8 +1437,26 @@ Kafka consumer 约定：
 - `SocDaemonMessage.kind=alert` 只能进入 `SocAnalysisService.analyze()`；`kind=approval_request` 只能进入 `SocAgentApprovalService.submit_request()`；后续 `kind=external_disposition` 只能进入 `SocExternalDispositionService.apply_event()`。
 - Kafka metadata 必须保留为 daemon message metadata；`topic + partition + offset` 派生 `idempotency_key=kafka:{topic}:{partition}:{offset}`。
 - DB 写入成功后再 commit offset。
-- 不在 Kafka callback 内执行长逻辑；只入队并由 Runtime worker 处理。
+- poller/controller 永远拥有 poll、DLQ 和 commit；当前 runner 可同步调用单条 worker，后续 worker
+  pool 也不得把 consumer side effect 下放给 worker。
 - poison message 进入 dead-letter topic：`soc.alerts.dead_letter.v1`。
+
+当前分析结果的 source of truth 是 DB read model/Gateway；broker 侧仅实现 input 和 dead-letter。
+`soc.analysis.*` producer 属于后续明确立项，不得把 topic 名字本身当成已接通能力。
+
+### 外部处置反馈 application ingress
+
+- Generic ingress 是 authenticated `POST /api/soc/external-dispositions`，请求必须是
+  `SocExternalDispositionIngressCommand(soc.external_disposition_ingress.v1)` 包裹 canonical
+  `SocExternalDispositionEvent`。
+- `event.source_event_id` 必填，用于稳定语义幂等；完全相同的 retry 返回已有结果，相同 identity
+  的 changed retry 必须 `409 Conflict`。
+- Core service 只允许 `soc_admin` / `external_disposition_adapter`，router authentication 不能替代
+  service-level authorization。
+- 调用方不能提交 status/trust mapping config。vendor payload -> canonical event 的映射、租户、签名、
+  replay protection 和 trust policy 由 server-side source adapter/config 持有。
+- 真实 Zeus/ITSM/SOAR source adapter 可以采用 webhook、Kafka、polling 或受控 import，但必须进入
+  同一个 canonical ingress/service，不能直接写 repository、ReviewQueue、memory 或 outcome。
 
 ## 十、工具与动作协议
 

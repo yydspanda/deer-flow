@@ -1,6 +1,6 @@
 # SOC Agent Mock 与真实接入台账
 
-> Updated: 2026-07-16
+> Updated: 2026-07-18
 >
 > 目的：集中记录当前 SOC Agent 里哪些能力只是 mock、fixture、in-memory 或本地 smoke，用来验证工程链路；后续接入真实 PingAn / 客户环境时，必须按本台账替换、复测和重新验收。
 
@@ -25,8 +25,8 @@
 | `security_tag.lookup` | in-memory 标签/授权/白名单 mock adapter | `backend/soc_agent/actions/adapters.py` | 验证授权扫描、演练、维护窗口、白名单等标签 evidence 形态 | 替换为安全标签、变更、演练、白名单、维护窗口等真实数据源 |
 | Authorized-activity source facts | GF-01 lifecycle/DB 与 AA-01 matcher 是真实确定性实现；当前 HIDS/EDR shadow facts 由已确认业务真值构造为本地 in-memory fixture | `backend/soc_agent/contracts/governed_context.py`、`backend/soc_agent/authorization/`、gitignored `step-12-authorization-shadow/` | 验证 event-time lifecycle/scope/freshness/recurrence 和 exact explanation；不代表已接变更/扫描器/维护系统 | 接真实 change/scanner/maintenance/CMDB source adapter，同步 source ref/version/freshness 后重新跑 shadow replay；不得把 validation fixture 当生产 active fact |
 | PingAn eval fixtures | 脱敏/伪造 APT、EDR、HIDS 回归样本 | `backend/samples/eval/pingan/`、`backend/samples/alerts/pingan_legacy_hids.json` | 验证 normalizer、read-only action、domain triage、main orchestrator demo | 补充经批准的脱敏真实样本、schema drift 样本、反例和边界样本 |
-| External Disposition Zeus fixture | Zeus 状态/理由 mock payload | `backend/samples/external_disposition/zeus_status_update.json` | 验证 field-path mapper、status mapping、idempotency、review/correction | 替换为真实 webhook/Kafka/poll/manual import adapter；补认证、签名、租户、重放和脱敏 |
-| Kafka local smoke | 本地 Redpanda/Kafka topic、sample payload、dead-letter smoke | `backend/scripts/soc_kafka_smoke.py`、`backend/soc_agent/daemon/` | 验证 consumer runner、mapper、commit、dead-letter、status/readiness | 替换为真实 topic、ACL、consumer group、DLQ、监控、容量与失败演练 |
+| External Disposition Zeus fixture | Zeus 状态/理由 mock payload；canonical Gateway ingress 和 SQL/service 是真实实现 | `backend/samples/external_disposition/zeus_status_update.json`、`backend/app/gateway/routers/soc_external_dispositions.py` | fixture 验证 field-path mapper；authenticated ingress 验证 canonical command、RBAC、idempotency、review/correction | 替换 fixture/source side 为真实 webhook/Kafka/poll adapter；补签名、租户、重放和脱敏；继续复用现有 ingress/service |
+| Kafka local smoke | 本地 Redpanda/Kafka topic、strict `SocAlertRawEnvelope` sample、dead-letter smoke | `backend/scripts/soc_kafka_smoke.py`、`backend/soc_agent/daemon/` | 验证 strict envelope、raw preservation、consumer runner、commit、dead-letter、status/readiness | 替换为真实 topic、ACL、consumer group、DLQ、监控、容量与失败演练 |
 | 高风险响应动作 | 当前只有 proposal、policy、approval、一次性 grant、dry-run/execute preflight；`external_side_effect=not_executed` | `backend/soc_agent/actions/adapters.py`、`backend/soc_agent/core/service.py` | 验证封禁 IP、隔离主机等动作在执行前的权限、审批、幂等和审计边界 | 接入真实 EDR/F5/SOAR/防火墙 adapter；必须补回滚/补偿、执行结果核验和失败重试，默认仍需人工审批 |
 | LLM analyzer | **真实路径已完成**：默认 deterministic stub；显式模式复用 DeerFlow `create_chat_model` | `backend/soc_agent/llm/`、`backend/soc_agent/core/runtime.py` | stub 保证回归/回放；`SOC_ANALYZER_MODE=llm` 或 CLI flag 调用已注册模型；有独立 concurrency/RPM admission、输出上限、evidence grounding、typed failure；raw confidence 当前均标记为 uncalibrated 并进入复核 | 持续补人工标注集、离线校准和成本预算；真实输出仍需 JSON/schema/domain/grounding validation 和 `SocDecisionPolicy` |
 | Normalization suggestion | **真实路径已完成**：deterministic/replay/live LLM 三种离线模式 | `backend/soc_agent/normalizers/suggestions.py` | 发现 mapping 候选并严格校验 observed source path / canonical whitelist | 所有建议仍需工程师复核，`auto_apply_allowed=false` |
@@ -41,7 +41,8 @@
 | `NullKafkaConsumerPort` | disabled-mode adapter | `SOC_KAFKA_ENABLED=false` 时明确不连接 broker；启用后使用 `ConfluentKafkaConsumerPort`，不是用 null adapter 冒充消费成功 |
 | SOC SQLite | 本地真实持久化 | 本地开发可以真实保存 SOC 数据；生产/准生产目标仍是 PostgreSQL，不应把 SQLite 测试结果当生产验收 |
 | SOC Lead Agent | DeerFlow 真实 agent path | 复用 DeerFlow `lead_agent`、profile、skills 和 MCP；mock 的是部分外部查询结果，不是 Lead Agent 运行时本身 |
-| GF-01 / AA-01 | deterministic production contracts/services | Fact lifecycle、历史版本选择和 matcher 不是 mock；当前缺口是事实来源同步、enrichment persistence 和 disposition/eval gate |
+| GF-01 / AA-01 | deterministic production contracts/services | Fact lifecycle、历史版本选择和 matcher 不是 mock；EX/DP/EV persistence/evaluation 已实现，当前缺口是权威事实来源同步和 governed rollout |
+| External disposition canonical ingress | authenticated application boundary | Gateway route、SQL repository、transactional service、RBAC 和 exact-retry/conflict 语义是真实实现；mock/data-gated 的是 Zeus/ITSM/SOAR source feed、签名和凭证 |
 
 ### 2.2 Runtime heuristic / LLM replacement audit
 
@@ -94,9 +95,13 @@ adapter/provider/config，并继续将结果作为 `InvestigationEvidence` 回�
 现有实现：
 
 - `SocExternalDispositionEvent`：vendor-neutral 输入事件。
+- `SocExternalDispositionIngressCommand` + `POST /api/soc/external-dispositions`：当前真实的 authenticated canonical application ingress。
 - `SocExternalDispositionAdapterConfig`：把 Zeus/ITSM/SIEM/SOAR payload 映射到 canonical event 的配置。
 - `SocExternalDispositionService.apply_event()`：唯一写入 external disposition record、audit、review/correction、后续 memory candidate 的 service 边界。
-- `InMemoryExternalDispositionRepository`：当前只用于 service tests 和本地 smoke。
+- `SqlAlchemyAlertRepository` + migration `0009`：当前真实持久化；`InMemoryExternalDispositionRepository` 只用于 tests/smoke。
+
+当前未完成的是“真实外部系统 -> canonical command”的 source adapter。真实 feed 接入后仍调用上述
+Gateway/service 边界，不新建第二套状态同步逻辑。
 
 未来如果 Zeus、ITSM、SOAR 或客户自研系统通过 MCP 暴露“读取工单状态/回写状态/订阅更新”，可以新增 MCP-backed external disposition adapter；但 adapter 仍必须把结果转成 `SocExternalDispositionEvent`，再进入 `SocExternalDispositionService.apply_event()`，不能绕过 service 直接改 ReviewQueue 或 memory。
 
@@ -112,6 +117,4 @@ adapter/provider/config，并继续将结果作为 `InvestigationEvidence` 回�
 
 ## 6. 当前下一步
 
-- SOC Runtime 和 normalization suggestion 的真实 DeerFlow/DeepSeek 模型路径已完成并通过单样本 smoke；下一步是扩大人工标注 eval、校准 confidence、制定 token/并发预算。
-- `PA-12` 继续等待真实 PingAn dev/staging endpoint、凭证和允许测试的数据源。
-- 在真实接口未就绪前，不继续堆更多外部查询 mock，也不使用 LLM 伪造外部事实。
+当前交付顺序只以 `.notes/ai_soc/delivery-roadmap.md` 和 `.notes/ai_soc/progress.md` 为准；本台账不再维护平行的 next-step 列表。`PA-12` 真实 provider 与 external source feed 继续保持 data-gated，在 endpoint/凭证/允许测试数据到位前不得用更多 mock 或 LLM 伪造事实冒充接入。

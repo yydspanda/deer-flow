@@ -88,7 +88,10 @@ flowchart TD
 
 这张图表达的是当前系统的实际闭环：
 
-1. Alert 进入统一分析服务。
+1. CLI/demo alert 可直接进入统一分析服务；Kafka alert 必须先通过严格
+   `SocAlertRawEnvelope(soc.alert.raw.v1)` 校验。mapper 完整保留 source `raw`，只补充通用 transport
+   fallback 和 `_soc_ingress` provenance，再生成 `SocDaemonMessage`；裸 alert object、错误版本、超限
+   payload 或保留键冲突进入现有 DLQ/commit 语义。
 2. Runtime 按固定步骤生成 `AnalysisRun`、`AlertSummary`、`ReviewQueueItem` 和 audit。
 3. 分析师通过 ReviewQueue 打开统一调查上下文。
 4. Lead Agent 只能拿 bounded context，并只能提出结构化 action proposal。
@@ -520,9 +523,10 @@ Approval flow 当前做什么：
 
 ```mermaid
 flowchart TD
-    A["🧾 External system update<br/>Zeus / ITSM / SOAR 状态+理由"] --> B["🚪 Adapter<br/>webhook / Kafka / polling / manual import"]
+    A["🧾 External system update<br/>Zeus / ITSM / SOAR 状态+理由"] --> B["🔌 Source Adapter<br/>webhook / Kafka / polling<br/>data-gated"]
     B --> C["SocExternalDispositionEvent<br/>vendor-neutral event"]
-    C --> D["⚙️ SocExternalDispositionService.apply_event"]
+    C --> C1["🌐 Authenticated Gateway Ingress<br/>POST /api/soc/external-dispositions<br/>versioned command"]
+    C1 --> D["⚙️ SocExternalDispositionService.apply_event"]
     D --> TX["🔒 SocMutationUnitOfWork<br/>one event / one transaction"]
     TX --> E["status mapping<br/>外部状态 -> canonical status"]
     TX --> F["target locating<br/>queue_id / run_id / alert_id / external_case_id"]
@@ -551,6 +555,10 @@ flowchart TD
 External disposition 的意义：
 
 - 外部系统仍可能是分析师的实际工作台。
+- 当前已接通的是 authenticated canonical Gateway ingress；真实 Zeus/ITSM/SOAR source adapter、
+  endpoint、签名和凭证仍是 data-gated，不得把 sample fixture 当作真实上游接入。
+- command 必须携带 stable `source_event_id`。Gateway 与 core service 同时执行角色边界；exact retry
+  返回同一逻辑结果，使用同一语义 identity 提交不同内容会冲突。
 - 外部状态和理由需要回流本系统，保证 ReviewQueue、memory、audit 不脱节。
 - 外部 reason 不能直接成为 confirmed memory。
 - 外部 correction 必须复用 `SocReviewService.correct()`，避免两套改判逻辑。

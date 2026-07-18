@@ -145,7 +145,9 @@ Current SOC direction:
   persistence unless a generic upstream extension point is genuinely needed.
 - SOC schema migrations live under `backend/soc_agent/db/migrations/` and are applied with
   `soc db upgrade`; the migration version table is `soc_alembic_version`.
-- Kafka/Redpanda is planned for Phase 4 daemon ingestion; local broker default is `localhost:9092`.
+- Kafka/Redpanda daemon ingestion is implemented; local broker default is `localhost:9092`, while
+  production ACL/capacity/recovery evidence remains data-gated. Topic `soc.alerts.raw.v1` accepts only
+  strict `SocAlertRawEnvelope(schema_version=soc.alert.raw.v1)` payloads, not bare vendor alerts.
 - Phase 1 target is CLI + Runtime reliability: fixed pipeline, schema/domain validation,
   step trace, audit logging, basic rate limiting, and `analyze` / `correct` / `replay`.
 - LLMs do not own the main control flow. Runtime owns the deterministic pipeline; LLM nodes
@@ -159,6 +161,10 @@ Current SOC direction:
 - Persisted analysis writes run/summary/optional review/audit as one `AnalysisPersistence` transaction.
   Retryable Runtime failures do not commit Kafka offsets or immediately create analyst queue noise;
   non-retryable failures are recorded, reviewed, and dead-lettered.
+- External status/reason feedback has an authenticated canonical Gateway ingress at
+  `POST /api/soc/external-dispositions`; callers submit `SocExternalDispositionIngressCommand` with a
+  stable source event ID, while vendor mapping/trust configuration remains server-owned. Real
+  Zeus/ITSM/SOAR source feeds and credentials remain data-gated and must reuse this service boundary.
 - L3 SOC state changes require both a trusted `ActorContext.auth_source` and a command-specific role
   inside the core service; Gateway/router checks alone are insufficient. Approval requests follow
   `pending -> approved|rejected|expired`; approve accepts only a persisted request ID and atomically

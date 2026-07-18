@@ -1349,7 +1349,9 @@ class SocMemoryCandidateReviewResult(BaseModel):
 class SocExternalDispositionEvent(BaseModel):
     """Vendor-neutral external ticket/case disposition event."""
 
-    schema_version: str = "soc.external_disposition.v1"
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.external_disposition.v1"] = "soc.external_disposition.v1"
     tenant_id: str | None = None
     external_system: str = Field(min_length=1)
     external_case_id: str = Field(min_length=1)

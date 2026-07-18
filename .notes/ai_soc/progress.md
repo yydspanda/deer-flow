@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `BG` Stage 3 - Close Blocking Gaps（`BD`、`AA` Gate 已于 2026-07-18 通过） |
-| 当前目标 | `BG-P1-01 Versioned ingestion and feedback`：关闭 `AC-04`、`AC-08`，建立严格 `soc.alert.raw.v1` Kafka envelope 和一个通用 external disposition 应用入口 |
+| 当前目标 | `BG-P1-02 API contract stabilization`：关闭 `AC-11`，冻结 SOC Gateway path/envelope/error/request metadata 约定并增加 OpenAPI/frontend regression |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `BG-P1-01`：先冻结 versioned Kafka alert envelope 与 rejection semantics，再新增一个只做认证/幂等/映射的 external disposition 薄入口；不接真实 Zeus/ITSM 凭证。 |
+| 当前下一刀 | `BG-P1-02`：先盘点现有 `/api/soc/*` router 与 frontend client 的 path、body、error、actor/trace/idempotency 差异，再选择兼容策略；不在本刀新增业务能力。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -39,7 +39,7 @@
 |---|---|---|---|---|
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
-| `BG` | Close Blocking Gaps | **Current / BG-P1-01 In Progress** | `BG-P0-01..02` 已关闭全部 P0；当前处理版本化 ingestion 与 external feedback 入口 | Alpha E2E 和 readiness package 通过 |
+| `BG` | Close Blocking Gaps | **Current / BG-P1-02 In Progress** | `BG-P0-01..02` 和 `BG-P1-01` 已完成；当前稳定 SOC API transport contract | Alpha E2E 和 readiness package 通过 |
 | `PI` | Real Data & Production Integration | Data/credential-gated | 真实 provider、基础设施、标签、SLO 和 governed rollout | Pilot readiness review 通过 |
 
 ## 能力与历史切片台账
@@ -200,6 +200,34 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-18 — BG-P1-01 versioned ingestion and feedback completed
+
+- `AC-04` 已关闭：
+  - 新增严格 `SocAlertRawEnvelope(schema_version=soc.alert.raw.v1)`，要求 source、alert ID、dedup key、
+    event time、severity 和 raw；可选 tenant/source event/version 和 bounded entities hint；
+  - raw 上限 900,000 UTF-8 JSON bytes，entities hint 上限 64,000 bytes；拒绝非 JSON、extra field、坏
+    version 和伪造 `_soc_ingress`；validation error 不回显 raw input；
+  - Kafka mapper 校验后完整保留 vendor raw，只用 `setdefault` 补通用 transport fallback，并将 envelope
+    metadata 放入保留 `_soc_ingress`；APT/EDR/HIDS 三份真实脱敏样本逐字段保持；
+  - `scripts/soc_kafka_smoke.py` 现在发布 versioned envelope，不再把裸 vendor object 直接发到 alert topic。
+- `AC-08` 已关闭：
+  - 新增 `SocExternalDispositionIngressCommand` 和 authenticated
+    `POST /api/soc/external-dispositions`；Gateway 只构造认证 context 和映射错误，所有业务写仍进入
+    `SocExternalDispositionService.apply_event()`；
+  - service boundary 要求 `soc_admin` 或 `external_disposition_adapter`，canonical ingress 必须提供
+    `source_event_id`；完全相同的事件返回一个既有 record，同 key 改内容返回 conflict；
+  - 默认未配置 status mapping 时安全保存 unmatched；真实映射由 server-side config/service injection
+    提供，客户端不能提交 trust mapping；真实 Zeus/ITSM/SOAR feed、签名和凭证仍属于 `AC-09`。
+- 验证：
+  - `cd backend && ./.venv/bin/python -m pytest -q tests/test_soc_*.py`：532 passed；
+  - architecture + migration environment：16 passed；Kafka focused：38 passed；external ingress/UoW：19 passed；
+  - 本地 Redpanda：versioned alert `processed` + offset committed，summary=1，同 group 下一次 poll=idle；
+    bad JSON 写入 DLQ 后 offset committed；run `RUN-8D1C57429E9F`；
+  - Docker Desktop 由本次启动，Windows Engine 可用；当前 WSL distribution 仍未启用 Docker CLI integration。
+- 下一步：
+  - `BG-P1-02`：只关闭 `AC-11`，统一现有 SOC API contract/error/request metadata 与 frontend client，
+    增加 OpenAPI snapshot/compatibility tests，不扩展业务流程。
 
 ### 2026-07-18 — BG-P0-02 transactional mutation and durable audit completed
 

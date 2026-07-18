@@ -47,6 +47,7 @@ from soc_agent.protocols import (
     SocMutationUnitOfWork,
 )
 
+from .access_control import require_actor_roles
 from .disposition_evaluation import (
     DispositionEvaluationIneligibleError,
     SocDispositionEvaluationService,
@@ -61,6 +62,7 @@ from .service import (
     NoopEventSink,
     SocMemoryService,
     SocReviewService,
+    SocServiceConflictError,
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
 )
@@ -87,6 +89,8 @@ _VERIFIED_TARGET_MATCHES = frozenset({"soc_queue_id", "soc_run_id", "external_ca
 
 class SocExternalDispositionService:
     """Apply external ticket/case disposition feedback through one service boundary."""
+
+    APPLY_ROLES = frozenset({"external_disposition_adapter", "soc_admin"})
 
     def __init__(
         self,
@@ -135,7 +139,14 @@ class SocExternalDispositionService:
     ) -> SocExternalDispositionApplyResult:
         """Persist one external disposition event and apply configured feedback boundaries."""
 
+        if self._repository is None and self._mutation_uow is None:
+            raise SocServiceNotImplementedError("apply_event requires a SocExternalDispositionRepository")
         request_context = context or ServiceRequestContext()
+        require_actor_roles(
+            request_context,
+            self.APPLY_ROLES,
+            operation="applying an external disposition",
+        )
         external_event = SocExternalDispositionEvent.model_validate(event)
         idempotency_key = build_external_disposition_idempotency_key(external_event)
         request_context = request_context.model_copy(update={"idempotency_key": idempotency_key})
@@ -153,6 +164,8 @@ class SocExternalDispositionService:
 
         existing = self._repository.find_external_disposition_by_idempotency_key(idempotency_key)
         if existing is not None:
+            if existing.event.model_dump(mode="json") != external_event.model_dump(mode="json"):
+                raise SocServiceConflictError(f"external disposition idempotency key {idempotency_key} was already used for different content")
             bridge = self._capture_disposition_outcome(
                 existing,
                 target=_target_from_record(existing),

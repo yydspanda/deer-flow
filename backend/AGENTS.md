@@ -207,6 +207,13 @@ item, and audit record commit atomically. `RuntimeFailure` owns sanitized failur
 retryable failures remain replayable and do not immediately create analyst queue noise; non-retryable
 failures enter ReviewQueue. Kafka adapters must not commit retryable Runtime failures.
 
+The Kafka alert topic `soc.alerts.raw.v1` accepts only strict `SocAlertRawEnvelope` payloads with
+schema version `soc.alert.raw.v1`; bare vendor alert objects are invalid. The mapper preserves the
+complete bounded `raw` object, adds reserved `_soc_ingress` transport provenance, and must not expose
+raw input values in validation errors. External status/reason feedback enters through authenticated
+`POST /api/soc/external-dispositions` as a canonical `SocExternalDispositionIngressCommand`; source
+adapters own vendor mapping/signature/replay concerns and cannot bypass `SocExternalDispositionService`.
+
 L3 SOC mutations use `core.access_control.require_actor_roles()` inside the service boundary. A caller
 must have a non-anonymous actor, a non-unknown `ActorContext.auth_source`, and a command-specific role;
 Gateway authentication/route checks do not replace this rule. Gateway derives `soc_analyst` or

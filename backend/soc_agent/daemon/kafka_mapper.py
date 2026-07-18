@@ -10,7 +10,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from soc_agent.contracts import SocDaemonMessage
+from pydantic import ValidationError
+
+from soc_agent.contracts import SocAlertRawEnvelope, SocDaemonMessage
 
 DEFAULT_ALERT_TOPICS = frozenset({"soc.alerts.raw.v1"})
 DEFAULT_APPROVAL_REQUEST_TOPICS = frozenset({"soc.approvals.requests.v1"})
@@ -42,6 +44,11 @@ def map_kafka_record_to_daemon_message(
 
     kind = _kind_for_topic(record.topic, alert_topics=alert_topics, approval_request_topics=approval_request_topics)
     payload = _object_payload(record.value)
+    if kind == "alert":
+        try:
+            payload = SocAlertRawEnvelope.model_validate(payload).to_analysis_payload()
+        except ValidationError as exc:
+            raise KafkaMapperError(_validation_error_message(exc)) from exc
     return SocDaemonMessage(
         kind=kind,
         payload=payload,
@@ -90,3 +97,11 @@ def _decode_optional_text(value: bytes | str | None) -> str | None:
         return value.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise KafkaMapperError("Kafka record key is not valid UTF-8") from exc
+
+
+def _validation_error_message(exc: ValidationError) -> str:
+    details = []
+    for error in exc.errors(include_url=False, include_input=False):
+        location = ".".join(str(part) for part in error["loc"]) or "envelope"
+        details.append(f"{location}: {error['msg']}")
+    return "Kafka alert envelope validation failed: " + "; ".join(details)

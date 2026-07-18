@@ -16,6 +16,7 @@ import os
 import sys
 import tempfile
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 
 from soc_agent.cli import main as soc_main  # noqa: E402
+from soc_agent.contracts import SocAlertRawEnvelope  # noqa: E402
 from soc_agent.daemon.kafka_mapper import DEFAULT_ALERT_TOPICS, DEFAULT_APPROVAL_REQUEST_TOPICS  # noqa: E402
 
 DEFAULT_DEAD_LETTER_TOPIC = "soc.alerts.dead_letter.v1"
@@ -42,6 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     sample_path = Path(args.sample)
     payload = json.loads(sample_path.read_text(encoding="utf-8"))
     alert_id = _alert_id(payload)
+    alert_envelope = _build_alert_envelope(payload, alert_id=alert_id)
     group_id = args.group_id or f"soc-smoke-{int(time.time())}"
     _resolve_topics(args)
 
@@ -63,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
         Producer({"bootstrap.servers": args.bootstrap_servers}),
         topic=args.alert_topic,
         key=f"smoke-alert-{alert_id}",
-        payload=payload,
+        payload=alert_envelope,
         timeout_seconds=args.timeout_seconds,
     )
 
@@ -212,6 +215,37 @@ def _produce_json(producer: Any, *, topic: str, key: str, payload: dict[str, Any
     producer.produce(topic, key=key, value=json.dumps(payload, ensure_ascii=False).encode("utf-8"))
     if producer.flush(timeout_seconds):
         raise SystemExit(f"Failed to flush smoke message to topic {topic}")
+
+
+def _build_alert_envelope(payload: dict[str, Any], *, alert_id: str) -> dict[str, Any]:
+    source = _alert_source(payload)
+    severity = str(payload.get("severity") or "unknown")
+    envelope = SocAlertRawEnvelope(
+        source=source,
+        alert_id=alert_id,
+        dedup_key=f"smoke:{source}:{alert_id}",
+        occurred_at=datetime.now(UTC),
+        severity=severity,
+        raw=payload,
+        source_event_id=f"smoke:{alert_id}",
+    )
+    return envelope.model_dump(mode="json")
+
+
+def _alert_source(payload: dict[str, Any]) -> str:
+    source = payload.get("source")
+    if isinstance(source, dict):
+        for key in ("source_type", "source_system", "product", "vendor"):
+            value = source.get(key)
+            if value:
+                return str(value)
+    elif source:
+        return str(source)
+    for key in ("source_type", "source_system", "product", "vendor"):
+        value = payload.get(key)
+        if value:
+            return str(value)
+    return "unknown"
 
 
 def _run_soc_cli(args: list[str], *, env: dict[str, str]) -> CliResult:

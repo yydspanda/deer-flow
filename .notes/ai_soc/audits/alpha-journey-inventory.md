@@ -6,10 +6,18 @@
 > Branch snapshot: `yyds-dev`, HEAD `70e80646`, including the current SOC working-tree changes  
 > Next audit: **AUD-02 Code/contract/docs consistency**
 
-Post-snapshot addendum: `BG-P0-02` (2026-07-18) added migration `0018_mutation_audit`, table
-`soc_mutation_audit_log`, `SocMutationUnitOfWork`, and commit-buffered events for Alpha L3 commands.
-The original 17-table and audit inventory below is intentionally retained as AUD-01 evidence; current
-truth is recorded in the completeness matrix, lifecycle and engineering contracts.
+Post-snapshot addendum:
+
+- `BG-P0-02` (2026-07-18) added migration `0018_mutation_audit`, table
+  `soc_mutation_audit_log`, `SocMutationUnitOfWork`, and commit-buffered events for Alpha L3 commands.
+- `BG-P1-01` (2026-07-18) replaced the alert topic's bare-object input with strict
+  `SocAlertRawEnvelope(soc.alert.raw.v1)` validation and added authenticated
+  `POST /api/soc/external-dispositions` application ingress. The endpoint accepts a canonical
+  event; a real Zeus/ITSM/SOAR source adapter is still data-gated.
+
+The original 17-table, bare-Kafka-object, service-only external-disposition and audit inventory below
+is intentionally retained as AUD-01 evidence. Current truth is recorded in the completeness matrix,
+lifecycle and engineering contracts.
 
 ## 1. Purpose and Boundary / 目的与边界
 
