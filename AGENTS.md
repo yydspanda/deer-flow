@@ -162,7 +162,8 @@ Current SOC direction:
 - L3 SOC state changes require both a trusted `ActorContext.auth_source` and a command-specific role
   inside the core service; Gateway/router checks alone are insufficient. Approval requests follow
   `pending -> approved|rejected|expired`; approve accepts only a persisted request ID and atomically
-  creates at most one grant. Unified append-only mutation audit remains a separate service boundary.
+  creates at most one grant. `SocMutationUnitOfWork` atomically commits Alpha L3 business changes and
+  append-only `SocMutationAuditRecord` rows; process events are emitted only after commit.
 - LLM-discovered knowledge is candidate knowledge only. It must be confirmed by a human before
   it can affect future decisions.
 - Governed operational context facts are separate from evidence, memory, action approval, and

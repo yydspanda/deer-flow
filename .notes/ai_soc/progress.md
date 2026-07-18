@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `BG` Stage 3 - Close Blocking Gaps（`BD`、`AA` Gate 已于 2026-07-18 通过） |
-| 当前目标 | `BG-P0-02 Transactional mutation and durable audit`：关闭 `AC-16`、`AC-21`，建立 correction/external feedback 的显式事务边界和所有 Alpha 状态变更的追加式审计 |
+| 当前目标 | `BG-P1-01 Versioned ingestion and feedback`：关闭 `AC-04`、`AC-08`，建立严格 `soc.alert.raw.v1` Kafka envelope 和一个通用 external disposition 应用入口 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `BG-P0-02`：先盘点 correction/external feedback 的多写入链和现有 audit repository，定义最小 unit-of-work 与 mutation-audit contract；再做逐写入 fault injection，不吸收 P1/P2。 |
+| 当前下一刀 | `BG-P1-01`：先冻结 versioned Kafka alert envelope 与 rejection semantics，再新增一个只做认证/幂等/映射的 external disposition 薄入口；不接真实 Zeus/ITSM 凭证。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -39,7 +39,7 @@
 |---|---|---|---|---|
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
-| `BG` | Close Blocking Gaps | **Current / BG-P0-02 In Progress** | `BG-P0-01` 已关闭审批完整性和 L3 授权；当前处理事务化变更与持久审计 | Alpha E2E 和 readiness package 通过 |
+| `BG` | Close Blocking Gaps | **Current / BG-P1-01 In Progress** | `BG-P0-01..02` 已关闭全部 P0；当前处理版本化 ingestion 与 external feedback 入口 | Alpha E2E 和 readiness package 通过 |
 | `PI` | Real Data & Production Integration | Data/credential-gated | 真实 provider、基础设施、标签、SLO 和 governed rollout | Pilot readiness review 通过 |
 
 ## 能力与历史切片台账
@@ -200,6 +200,35 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-18 — BG-P0-02 transactional mutation and durable audit completed
+
+- `AC-16` 已关闭：
+  - 新增 `SocMutationUnitOfWork` 和 SQLAlchemy transaction repository；事务内部 repository
+    `commit()` 只 flush，外层 command context 统一 commit/rollback；
+  - `SocReviewService.correct()` 与 `SocExternalDispositionService.apply_event()` 的 run、summary、queue、
+    candidate、decision audit、external disposition、eligible outcome 和 mutation audit 属于一个命令事务；
+  - `SocEvent` 在事务内缓冲，只有 commit 成功才 flush；逐写入 fault injection 证明任一步失败都不留半套状态或成功事件；
+  - 完全相同的 idempotent retry 返回一个既有逻辑结果，复用 key 提交不同 command 会 conflict。
+- `AC-21` 已关闭：
+  - 新增 `SocMutationAuditRecord` / `SocMutationOperation`、repository protocol/SQL 实现和 migration
+    `0018_mutation_audit`，落表 `soc_mutation_audit_log`；
+  - 覆盖 review correct/close/note、memory review、approval request submit/approve/reject/expire、
+    action dry-run/execute 与 external disposition apply；
+  - 审计保存 actor + `auth_source`、request、reason、operation、target、idempotency、command hash 和有界
+    result projection；不保存原始 action/alert payload，敏感 key 和 inline credential 会脱敏限长；
+  - authenticated API 和 Review TUI 测试证明实际入口身份/幂等信息进入同一持久审计链。
+- 验证：
+  - `cd backend && ./.venv/bin/python -m pytest tests/test_soc_*.py -q`：516 passed；
+  - architecture boundaries：10 passed；migration environment：6 passed；
+  - 新增 mutation UoW/audit 聚焦测试：7 passed；Ruff 和 `git diff --check` 通过。
+- 真实边界：
+  - 该事务只覆盖本地 SOC 数据库状态；真实 provider/外部副作用仍需 Stage 4 compensation/verification；
+  - `soc_decision_audit_log` 继续负责 verdict lineage，`soc_mutation_audit_log` 负责通用 L3 command lineage；
+    generic durable `SocEvent` stream 仍是 deferred `AC-46`。
+- 下一步：
+  - `BG-P1-01`：关闭 `AC-04`、`AC-08`，实现严格 versioned Kafka alert envelope 和通用 external
+    disposition 应用入口，并验证 bad version/malformed input、DLQ/offset 和 duplicate semantics。
 
 ### 2026-07-18 — BG-P0-01 approval integrity and L3 authorization completed
 

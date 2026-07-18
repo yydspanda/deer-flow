@@ -45,6 +45,7 @@ from soc_agent.contracts.governed_context import (
     GovernedContextSource,
     GovernedContextSourceType,
 )
+from soc_agent.contracts.mutations import SocMutationAuditRecord, SocMutationOperation
 from soc_agent.contracts.schemas import (
     CORRELATION_SCORING_POLICY_VERSION,
     AlertClassification,
@@ -452,6 +453,8 @@ __all__ = [
     "SocMemoryRecordStatus",
     "SocMemoryRetrievalResult",
     "SocMemoryTargetArtifact",
+    "SocMutationAuditRecord",
+    "SocMutationOperation",
     "SocMainOrchestratorRequest",
     "SocOrchestratorActionSpec",
     "SocOrchestratorReviewContextSummary",

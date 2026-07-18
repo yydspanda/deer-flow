@@ -14,8 +14,8 @@ Post-audit resolution tracking (the rows below retain the original AUD-02 eviden
 |---|---|---|
 | `CONS-12` approval request/grant mismatch | **Resolved by `BG-P0-01`** | Request terminal lifecycle, request-ID-only approve, atomic request+grant persistence, unique one-grant constraint and exact retry semantics |
 | `CONS-18` L3 authorization/provenance mismatch | **Resolved by `BG-P0-01`** | `ActorContext.auth_source`, shared core role gate, authenticated Gateway role mapping and explicit CLI/TUI/daemon provenance |
-| `CONS-13` durable mutation audit | Open as `AC-21` | Current `BG-P0-02` |
-| `CONS-14` correction/external atomicity | Open as `AC-16` | Current `BG-P0-02` |
+| `CONS-13` durable mutation audit | **Resolved by `BG-P0-02`** | Migration `0018`, append-only secret-safe `SocMutationAuditRecord`, review/memory/approval/external command coverage and API/TUI actor tests |
+| `CONS-14` correction/external atomicity | **Resolved by `BG-P0-02`** | Explicit `SocMutationUnitOfWork`, commit-buffered events, per-write fault injection and exact-retry tests |
 
 ## 1. Audit Question / 审计问题
 

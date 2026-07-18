@@ -62,7 +62,7 @@ provider/infrastructure row remains `Mock` or `Data-gated`.
 | `AC-13` | Durable pre-LLM run/request journal | Gap | P1 | Requested event is process-local and final run is persisted only after Runtime/model returns | BG |
 | `AC-14` | Step trace and replay lineage | Complete | - | Nested trace has hashes/timing/status/error/metadata; replay creates a new run linked by `replay_of_run_id` | Maintain; docs reconcile in `AC-49` |
 | `AC-15` | Atomic primary analysis bundle | Complete | - | run/summary/optional queue/audit commit or roll back together | Maintain |
-| `AC-16` | Atomic correction and external-feedback mutation | Gap | P0 | Correction/external disposition perform multiple independently committed writes and can leave partial state | BG |
+| `AC-16` | Atomic correction and external-feedback mutation | Complete | - | Explicit `SocMutationUnitOfWork` wraps correction and full external-disposition commands; write-by-write fault injection proves state and buffered events roll back together, while exact retry returns one logical result | Maintain |
 | `AC-17` | Human/external correction confidence provenance | Gap | P1 | Corrected decisions default to `confidence_source=unknown`; external correction injects undocumented `0.95` | BG |
 | `AC-18` | Normalization maintenance loop | Complete | - | Baseline, issue dedupe/reopen, CLI/API/Web/TUI and fail-open analysis side path exist | Maintain |
 | `AC-19` | Production confidence calibration | Data-gated | P2 | Offline governance and a small seed set exist; production thresholds require sufficient approved labels | PI |
@@ -72,8 +72,8 @@ provider/infrastructure row remains `Mock` or `Data-gated`.
 | ID | Capability / 能力 | State | Priority | Current truth / 当前事实 | Target |
 |---|---|---|---|---|---|
 | `AC-20` | ReviewQueue, InvestigationContext, Web and TUI | Complete | - | Queue/context/close/correct/outcome plus unified evidence timeline are application-reachable | Maintain |
-| `AC-21` | Durable audit for Alpha state mutations | Gap | P0 | close/note/memory review/approval transitions lack a unified durable audit record; default `SocEvent` sink is no-op | BG |
-| `AC-22` | L3 service authorization and actor provenance | Complete | - | `ActorContext.auth_source` records the trust boundary; shared core role checks protect review, memory, normalization, governed-context and approval mutations independently of the entry surface | Maintain; durable mutation audit remains `AC-21` |
+| `AC-21` | Durable audit for Alpha state mutations | Complete | - | Migration `0018` adds append-only `soc_mutation_audit_log`; review, memory, approval and external-disposition mutations persist actor/provenance, reason, idempotency, command hash and bounded result metadata without raw action payloads or secrets | Maintain |
+| `AC-22` | L3 service authorization and actor provenance | Complete | - | `ActorContext.auth_source` records the trust boundary; shared core role checks protect review, memory, normalization, governed-context and approval mutations independently of the entry surface | Maintain; durable mutation audit is complete under `AC-21` |
 | `AC-23` | SOC frontend automated regression | Gap | P1 | Browser rehearsal exists, but no focused SOC frontend unit/component test suite was found | BG |
 | `AC-24` | APT/EDR/HIDS Alpha end-to-end acceptance package | Gap | P1 | Separate tests/demo/validation exist; one versioned acceptance report does not yet cover CLI+Kafka+DB+UI+feedback+audit+replay together | BG |
 
@@ -95,7 +95,7 @@ provider/infrastructure row remains `Mock` or `Data-gated`.
 
 | ID | Capability / 能力 | State | Priority | Current truth / 当前事实 | Target |
 |---|---|---|---|---|---|
-| `AC-34` | Approval request resolution and grant integrity | Complete | - | Request lifecycle is `pending -> approved/rejected/expired`; approve accepts only a request ID, atomically resolves the persisted pending row and creates at most one grant with exact-retry idempotency | Maintain; durable mutation audit remains `AC-21` |
+| `AC-34` | Approval request resolution and grant integrity | Complete | - | Request lifecycle is `pending -> approved/rejected/expired`; approve accepts only a request ID, atomically resolves the persisted pending row and creates at most one grant with exact-retry idempotency | Maintain; durable mutation audit is complete under `AC-21` |
 | `AC-35` | Approval dry-run/execute no-side-effect boundary | Complete | - | Role gate, token validation, adapter preflight, single-token consume and idempotent result replay exist | Maintain |
 | `AC-36` | Real EDR/F5/SOAR/firewall response execution | Data-gated | P2 | Requires staging adapters, rollback/compensation, execution verification and independent rollout approval | PI |
 
@@ -127,14 +127,14 @@ provider/infrastructure row remains `Mock` or `Data-gated`.
 
 | State | Count |
 |---|---:|
-| Complete | 23 |
-| Gap | 11 |
+| Complete | 25 |
+| Gap | 9 |
 | Mock | 1 |
 | Data-gated | 6 |
 | Deferred | 9 |
 | **Total** | **50** |
 
-The AUD-03 baseline admitted 13 `Gap` rows into Stage 3. Two are now closed, leaving 11 current
+The AUD-03 baseline admitted 13 `Gap` rows into Stage 3. Four are now closed, leaving 9 current
 `Gap` rows. `Mock`, `Data-gated`, and `Deferred` rows remain visible but do not silently become
 blockers.
 
@@ -142,17 +142,16 @@ blockers.
 
 ### 3.1 P0 - correctness and security blockers
 
-| Gap | Owner boundary | Impact | Source evidence | Acceptance / 验收 | Target |
-|---|---|---|---|---|---|
-| `AC-16` Atomic correction/external mutation | SOC core + DB unit of work | A late repository failure can leave decision, queue, candidate, audit and external record inconsistent | `CONS-14`; `SocReviewService.correct()`; `SocExternalDispositionService.apply_event()` | One explicit transaction boundary per command; fault injection after each write proves full rollback; idempotent retry produces one logical result | `BG-01` |
-| `AC-21` Durable state-mutation audit | SOC core + audit repository | Analysts cannot reconstruct every close/note/memory/approval transition from one immutable audit chain | `CONS-13`; `AuditAction`; default `NoopEventSink` | close, note, memory review, approval request/grant/dry-run/execute persist actor/request/reason/idempotency/result; API/TUI tests assert records and no secrets/raw payload | `BG-01` |
+All frozen P0 gaps are closed. The implementation evidence is retained in Section 3.2.
 
 ### 3.2 Closed Stage 3 gaps / 已关闭缺口
 
 | Gap | Closed by | Executable evidence | Remaining boundary |
 |---|---|---|---|
-| `AC-22` L3 authorization and actor provenance | `BG-P0-01`, 2026-07-18 | Shared `require_actor_roles()` rejects anonymous/unknown provenance and enforces command-specific roles; Gateway derives actor/role/auth source from authenticated state; CLI/TUI/daemon use explicit local provenance; allow/deny tests pass | `AC-21` still owns append-only durable audit for mutations |
-| `AC-34` Approval request/grant integrity | `BG-P0-01`, 2026-07-18 | Migration `0017`; insert-only request creation; repository CAS/row lock; one grant/request unique constraint; request-ID-only API/Web/TUI approve; reject/expire and exact retry tests | Real side-effect adapters remain data-gated under `AC-36`; mutation audit remains `AC-21` |
+| `AC-22` L3 authorization and actor provenance | `BG-P0-01`, 2026-07-18 | Shared `require_actor_roles()` rejects anonymous/unknown provenance and enforces command-specific roles; Gateway derives actor/role/auth source from authenticated state; CLI/TUI/daemon use explicit local provenance; allow/deny tests pass | Durable mutation coverage was subsequently closed by `AC-21/BG-P0-02` |
+| `AC-34` Approval request/grant integrity | `BG-P0-01`, 2026-07-18 | Migration `0017`; insert-only request creation; repository CAS/row lock; one grant/request unique constraint; request-ID-only API/Web/TUI approve; reject/expire and exact retry tests | Real side-effect adapters remain data-gated under `AC-36`; audit coverage was closed by `AC-21/BG-P0-02` |
+| `AC-16` Atomic correction/external mutation | `BG-P0-02`, 2026-07-18 | `SocMutationUnitOfWork` and SQLAlchemy transaction proxy; correction/external commands buffer events until commit; fault injection after every write proves run/summary/queue/candidate/decision audit/mutation audit/external record and event emission roll back together; exact retry produces one logical result | Provider calls and external side effects remain outside this database transaction and need their own compensation boundary |
+| `AC-21` Durable state-mutation audit | `BG-P0-02`, 2026-07-18 | Migration `0018`; immutable `SocMutationAuditRecord`; close/note/correction, memory review, approval submit/approve/reject/expire/dry-run/execute and external disposition covered; API/TUI actor provenance and secret-redaction tests pass | Generic process event streaming remains deferred under `AC-46`; decision lineage remains in `soc_decision_audit_log` |
 
 ### 3.3 P1 - Alpha journey and reproducibility blockers
 
@@ -202,7 +201,7 @@ Stage 3 may implement only these packages unless the user explicitly changes the
 | Package | Included rows | Deliverable | Exit proof |
 |---|---|---|---|
 | `BG-P0-01` Approval integrity and L3 authorization | `AC-22`, `AC-34` | **Done 2026-07-18**: persisted request state machine, request-id grant command, one-resolution/idempotency, core RBAC and actor auth provenance | 509 SOC tests + 16 frontend API tests; forged/stale/repeated/unauthorized and Web/TUI contracts covered |
-| `BG-P0-02` Transactional mutation and durable audit | `AC-16`, `AC-21` | Unit-of-work boundaries for correction/external feedback and append-only audit for all Alpha mutations | fault-injection rollback matrix and audit-coverage tests |
+| `BG-P0-02` Transactional mutation and durable audit | `AC-16`, `AC-21` | **Done 2026-07-18**: explicit command unit-of-work, commit-buffered events and append-only secret-safe mutation audit | 516 SOC tests + 10 architecture + 6 migration-environment tests; fault-injection rollback matrix plus API/TUI audit coverage |
 | `BG-P1-01` Versioned ingestion and feedback | `AC-04`, `AC-08` | Strict Kafka alert envelope plus one generic external disposition application ingress | local broker/manual adapter E2E with commit/DLQ/idempotency evidence |
 | `BG-P1-02` API contract stabilization | `AC-11` | Versioned/explicit SOC API convention, error/request metadata and OpenAPI regression | Gateway + frontend contract tests |
 | `BG-P1-03` Runtime recovery and decision provenance | `AC-13`, `AC-17` | Durable pre-call journal and correct human/external confidence source | crash/timeout recovery and correction/external replay tests |
@@ -235,4 +234,4 @@ Each package remains a reviewable slice and must not absorb P2/Data-gated work.
 
 **AA Gate: Passed on 2026-07-18.**
 
-The next implementation slice is `BG-P0-02 Transactional mutation and durable audit`.
+The next implementation slice is `BG-P1-01 Versioned ingestion and feedback`.

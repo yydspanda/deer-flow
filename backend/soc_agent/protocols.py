@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from contextlib import AbstractContextManager
 from typing import Any, Protocol
 
 from soc_agent.contracts import (
@@ -45,6 +46,8 @@ from soc_agent.contracts import (
     SocMemoryCandidateStatus,
     SocMemoryRecord,
     SocMemoryRecordStatus,
+    SocMutationAuditRecord,
+    SocMutationOperation,
 )
 
 
@@ -447,6 +450,52 @@ class GovernedContextFactRepository(Protocol):
         *,
         limit: int = 100,
     ) -> list[GovernedContextFact]: ...
+
+
+class SocMutationAuditRepository(Protocol):
+    """Append-only persistence for service-level state mutation audits."""
+
+    def append_mutation_audit(self, record: SocMutationAuditRecord) -> None: ...
+
+    def find_mutation_audit_by_idempotency_key(
+        self,
+        operation: SocMutationOperation,
+        idempotency_key: str,
+    ) -> SocMutationAuditRecord | None: ...
+
+    def list_mutation_audits(
+        self,
+        *,
+        operation: SocMutationOperation | None = None,
+        run_id: str | None = None,
+        queue_id: str | None = None,
+        target_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SocMutationAuditRecord]: ...
+
+
+class SocMutationRepository(
+    AlertRepository,
+    AlertSummaryRepository,
+    DecisionAuditRepository,
+    ReviewQueueRepository,
+    MemoryCandidateRepository,
+    MemoryRecordRepository,
+    SocExternalDispositionRepository,
+    SocDispositionProposalRepository,
+    SocDispositionEvaluationRepository,
+    SocAgentApprovalGrantRepository,
+    SocAgentApprovalRequestRepository,
+    SocMutationAuditRepository,
+    Protocol,
+):
+    """Composite repository exposed only inside one mutation transaction."""
+
+
+class SocMutationUnitOfWork(Protocol):
+    """One transaction spanning all repositories touched by an SOC command."""
+
+    def mutation_transaction(self) -> AbstractContextManager[SocMutationRepository]: ...
 
 
 class SocActionAdapter(Protocol):

@@ -30,6 +30,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateValidity,
     SocMemoryDecisionImpact,
     SocMemoryTargetArtifact,
+    SocMutationOperation,
     Verdict,
 )
 from soc_agent.external_disposition import build_external_disposition_idempotency_key, resolve_external_disposition_status
@@ -41,11 +42,20 @@ from soc_agent.protocols import (
     SocDispositionProposalRepository,
     SocEventSink,
     SocExternalDispositionRepository,
+    SocMutationAuditRepository,
+    SocMutationRepository,
+    SocMutationUnitOfWork,
 )
 
 from .disposition_evaluation import (
     DispositionEvaluationIneligibleError,
     SocDispositionEvaluationService,
+)
+from .mutation_audit import (
+    BufferedSocEventSink,
+    build_mutation_audit,
+    mutation_audit_repository_from,
+    mutation_uow_from,
 )
 from .service import (
     NoopEventSink,
@@ -91,6 +101,9 @@ class SocExternalDispositionService:
         memory_service: SocMemoryService | None = None,
         disposition_proposal_repository: SocDispositionProposalRepository | None = None,
         disposition_evaluation_service: SocDispositionEvaluationService | None = None,
+        mutation_audit_repository: SocMutationAuditRepository | None = None,
+        mutation_uow: SocMutationUnitOfWork | None = None,
+        _transaction_active: bool = False,
     ) -> None:
         self._repository = repository
         self._mapping_config = mapping_config or SocExternalDispositionMappingConfig()
@@ -102,6 +115,17 @@ class SocExternalDispositionService:
         self._memory_service = memory_service
         self._disposition_proposal_repository = disposition_proposal_repository
         self._disposition_evaluation_service = disposition_evaluation_service
+        self._mutation_audit_repository = mutation_audit_repository or mutation_audit_repository_from(
+            repository,
+            alert_repository,
+            review_queue_repository,
+        )
+        self._mutation_uow = mutation_uow or mutation_uow_from(
+            repository,
+            alert_repository,
+            review_queue_repository,
+        )
+        self._transaction_active = _transaction_active
 
     def apply_event(
         self,
@@ -111,12 +135,22 @@ class SocExternalDispositionService:
     ) -> SocExternalDispositionApplyResult:
         """Persist one external disposition event and apply configured feedback boundaries."""
 
-        if self._repository is None:
-            raise SocServiceNotImplementedError("apply_event requires a SocExternalDispositionRepository")
-
         request_context = context or ServiceRequestContext()
         external_event = SocExternalDispositionEvent.model_validate(event)
         idempotency_key = build_external_disposition_idempotency_key(external_event)
+        request_context = request_context.model_copy(update={"idempotency_key": idempotency_key})
+        if self._mutation_uow is not None and not self._transaction_active:
+            buffered_events = BufferedSocEventSink(self._event_sink)
+            with self._mutation_uow.mutation_transaction() as repository:
+                result = self._transactional_clone(repository, event_sink=buffered_events).apply_event(
+                    external_event,
+                    context=request_context,
+                )
+            buffered_events.flush()
+            return result
+        if self._repository is None:
+            raise SocServiceNotImplementedError("apply_event requires a SocExternalDispositionRepository")
+
         existing = self._repository.find_external_disposition_by_idempotency_key(idempotency_key)
         if existing is not None:
             bridge = self._capture_disposition_outcome(
@@ -212,6 +246,31 @@ class SocExternalDispositionService:
                 }
             )
             self._audit_repository.save_audit_record(audit_record)
+        if self._mutation_audit_repository is not None:
+            self._mutation_audit_repository.append_mutation_audit(
+                build_mutation_audit(
+                    operation=SocMutationOperation.EXTERNAL_DISPOSITION_APPLY,
+                    target_type="external_disposition",
+                    target_id=record.disposition_id,
+                    run_id=record.target_run_id,
+                    alert_id=record.target_alert_id,
+                    queue_id=record.target_queue_id,
+                    context=request_context,
+                    reason=external_event.external_reason or record.apply_reason,
+                    command=external_event.model_dump(mode="json"),
+                    result_ref=record.disposition_id,
+                    payload={
+                        "external_system": external_event.external_system,
+                        "external_case_id": external_event.external_case_id,
+                        "canonical_status": record.canonical_status.value,
+                        "apply_status": record.apply_status.value,
+                        "matched_by": record.matched_by,
+                        "correction_id": record.correction_id,
+                        "memory_candidate_id": record.memory_candidate_id,
+                        "disposition_outcome_id": outcome_bridge.outcome_id,
+                    },
+                )
+            )
         self._event_sink.emit(
             SocEvent(
                 event_type=SocEventType.EXTERNAL_DISPOSITION_RECEIVED,
@@ -242,6 +301,51 @@ class SocExternalDispositionService:
             disposition_outcome_id=outcome_bridge.outcome_id,
             disposition_outcome_idempotent=outcome_bridge.idempotent,
             disposition_outcome_skip_reason=outcome_bridge.skip_reason,
+        )
+
+    def _transactional_clone(
+        self,
+        repository: SocMutationRepository,
+        *,
+        event_sink: SocEventSink,
+    ) -> SocExternalDispositionService:
+        memory_service = (
+            SocMemoryService(
+                candidate_repository=repository,
+                record_repository=repository,
+                mutation_audit_repository=repository,
+                mutation_uow=self._mutation_uow,
+                event_sink=event_sink,
+                _transaction_active=True,
+            )
+            if self._memory_service is not None
+            else None
+        )
+        evaluation_service = (
+            SocDispositionEvaluationService(
+                repository=repository,
+                proposal_repository=repository,
+                authorization_enrichment_repository=repository,
+                review_queue_repository=repository,
+                event_sink=event_sink,
+            )
+            if self._disposition_evaluation_service is not None
+            else None
+        )
+        return SocExternalDispositionService(
+            repository=repository,
+            mapping_config=self._mapping_config,
+            alert_repository=repository if self._alert_repository is not None else None,
+            summary_repository=repository if self._summary_repository is not None else None,
+            review_queue_repository=(repository if self._review_queue_repository is not None else None),
+            audit_repository=repository if self._audit_repository is not None else None,
+            event_sink=event_sink,
+            memory_service=memory_service,
+            disposition_proposal_repository=(repository if self._disposition_proposal_repository is not None else None),
+            disposition_evaluation_service=evaluation_service,
+            mutation_audit_repository=repository,
+            mutation_uow=self._mutation_uow,
+            _transaction_active=True,
         )
 
     def _capture_disposition_outcome(

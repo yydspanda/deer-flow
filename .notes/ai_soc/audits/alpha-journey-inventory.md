@@ -6,6 +6,11 @@
 > Branch snapshot: `yyds-dev`, HEAD `70e80646`, including the current SOC working-tree changes  
 > Next audit: **AUD-02 Code/contract/docs consistency**
 
+Post-snapshot addendum: `BG-P0-02` (2026-07-18) added migration `0018_mutation_audit`, table
+`soc_mutation_audit_log`, `SocMutationUnitOfWork`, and commit-buffered events for Alpha L3 commands.
+The original 17-table and audit inventory below is intentionally retained as AUD-01 evidence; current
+truth is recorded in the completeness matrix, lifecycle and engineering contracts.
+
 ## 1. Purpose and Boundary / 目的与边界
 
 本文只回答一个问题：**当前代码中，一条 SOC 告警和它的后续人工/治理流程实际能走到哪里，每个落点在哪里。**

@@ -390,7 +390,7 @@ def test_soc_migration_head_creates_governance_and_approval_lifecycle_schema(tmp
         assert "uq_soc_approval_grants_request" in approval_grant_constraints
         with engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM soc_alembic_version")).scalar_one()
-        assert revision == "0017_approval_request_lifecycle"
+        assert revision == "0018_mutation_audit"
     finally:
         engine.dispose()
 

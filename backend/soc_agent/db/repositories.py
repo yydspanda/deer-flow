@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any, cast
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -38,6 +41,8 @@ from soc_agent.contracts import (
     SocMemoryCandidateStatus,
     SocMemoryRecord,
     SocMemoryRecordStatus,
+    SocMutationAuditRecord,
+    SocMutationOperation,
 )
 from soc_agent.db.models import (
     SocAlertSummaryRow,
@@ -54,6 +59,7 @@ from soc_agent.db.models import (
     SocInvestigationEvidenceRow,
     SocMemoryCandidateRow,
     SocMemoryRecordRow,
+    SocMutationAuditRow,
     SocNormalizationMaintenanceIssueRow,
     SocNormalizationSchemaBaselineRow,
     SocReviewQueueRow,
@@ -65,6 +71,50 @@ from soc_agent.governed_context import (
     validate_governed_context_fact_append,
 )
 
+MutationWriteHook = Callable[[int], None]
+
+
+@dataclass
+class _MutationTransactionState:
+    session: Session
+    write_hook: MutationWriteHook | None = None
+    write_count: int = 0
+    aborted: bool = False
+
+    def flush_write(self) -> None:
+        self.session.flush()
+        self.write_count += 1
+        if self.write_hook is not None:
+            self.write_hook(self.write_count)
+
+
+class _MutationSessionProxy:
+    """Session facade that defers repository commits to the outer UoW."""
+
+    def __init__(self, state: _MutationTransactionState) -> None:
+        self._state = state
+
+    def commit(self) -> None:
+        self._state.flush_write()
+
+    def rollback(self) -> None:
+        self._state.aborted = True
+        self._state.session.rollback()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._state.session, name)
+
+
+class _BorrowedSessionContext(AbstractContextManager[_MutationSessionProxy]):
+    def __init__(self, state: _MutationTransactionState) -> None:
+        self._proxy = _MutationSessionProxy(state)
+
+    def __enter__(self) -> _MutationSessionProxy:
+        return self._proxy
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        return None
+
 
 class SqlAlchemyAlertRepository:
     """SQLAlchemy-backed implementation of ``AlertRepository``.
@@ -74,8 +124,43 @@ class SqlAlchemyAlertRepository:
     should call it off the event loop or get a dedicated async adapter later.
     """
 
-    def __init__(self, session_factory: Callable[[], Session]) -> None:
+    def __init__(
+        self,
+        session_factory: Callable[[], AbstractContextManager[Session]],
+        *,
+        mutation_write_hook: MutationWriteHook | None = None,
+        _transaction_state: _MutationTransactionState | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._mutation_write_hook = mutation_write_hook
+        self._transaction_state = _transaction_state
+
+    @contextmanager
+    def mutation_transaction(self):
+        """Yield one repository facade whose writes commit atomically."""
+
+        if self._transaction_state is not None:
+            yield self
+            return
+
+        with self._session_factory() as session:
+            state = _MutationTransactionState(
+                session=session,
+                write_hook=self._mutation_write_hook,
+            )
+            transaction_repository = SqlAlchemyAlertRepository(
+                cast(Callable[[], AbstractContextManager[Session]], lambda: _BorrowedSessionContext(state)),
+                mutation_write_hook=self._mutation_write_hook,
+                _transaction_state=state,
+            )
+            try:
+                yield transaction_repository
+                if state.aborted:
+                    raise RuntimeError("SOC mutation transaction was rolled back by a repository operation")
+                session.commit()
+            except BaseException:
+                session.rollback()
+                raise
 
     def save_run(self, run: AnalysisRun) -> None:
         with self._session_factory() as session:
@@ -135,6 +220,67 @@ class SqlAlchemyAlertRepository:
             result = session.execute(query.order_by(SocDecisionAuditLogRow.occurred_at.desc()).limit(1))
             row = result.scalar_one_or_none()
             return DecisionAuditRecord.model_validate(row.record_payload) if row is not None else None
+
+    def append_mutation_audit(self, record: SocMutationAuditRecord) -> None:
+        payload = record.model_dump(mode="json")
+        with self._session_factory() as session:
+            if session.get(SocMutationAuditRow, record.audit_id) is not None:
+                raise ValueError(f"mutation audit {record.audit_id} already exists")
+            session.add(
+                SocMutationAuditRow(
+                    audit_id=record.audit_id,
+                    **_mutation_audit_row_values(record, payload),
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise ValueError(f"mutation audit idempotency key {record.idempotency_key} already exists for {record.operation.value}") from exc
+
+    def find_mutation_audit_by_idempotency_key(
+        self,
+        operation: SocMutationOperation,
+        idempotency_key: str,
+    ) -> SocMutationAuditRecord | None:
+        with self._session_factory() as session:
+            row = session.execute(
+                select(SocMutationAuditRow)
+                .where(
+                    SocMutationAuditRow.operation == operation.value,
+                    SocMutationAuditRow.idempotency_key == idempotency_key,
+                )
+                .limit(1)
+            ).scalar_one_or_none()
+            return _mutation_audit_from_row(row) if row is not None else None
+
+    def list_mutation_audits(
+        self,
+        *,
+        operation: SocMutationOperation | None = None,
+        run_id: str | None = None,
+        queue_id: str | None = None,
+        target_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SocMutationAuditRecord]:
+        query = select(SocMutationAuditRow)
+        filters = {
+            "operation": operation.value if operation is not None else None,
+            "run_id": run_id,
+            "queue_id": queue_id,
+            "target_id": target_id,
+        }
+        for name, value in filters.items():
+            if value is not None:
+                query = query.where(getattr(SocMutationAuditRow, name) == value)
+        with self._session_factory() as session:
+            rows = session.execute(
+                query.order_by(
+                    SocMutationAuditRow.occurred_at.desc(),
+                    SocMutationAuditRow.audit_id.desc(),
+                ).limit(limit)
+            ).scalars()
+            return [_mutation_audit_from_row(row) for row in rows]
 
     def save_alert_summary(self, summary: AlertSummary) -> None:
         with self._session_factory() as session:
@@ -228,6 +374,19 @@ class SqlAlchemyAlertRepository:
 
     def create_approval_request(self, approval_request: SocAgentApprovalRequest) -> bool:
         payload = approval_request.model_dump(mode="json")
+        if self._transaction_state is not None:
+            try:
+                with self._transaction_state.session.begin_nested():
+                    self._transaction_state.session.add(
+                        SocApprovalRequestRow(
+                            approval_request_id=approval_request.approval_request_id,
+                            **_approval_request_row_values(approval_request, payload),
+                        )
+                    )
+                    self._transaction_state.flush_write()
+            except IntegrityError:
+                return False
+            return True
         with self._session_factory() as session:
             session.add(
                 SocApprovalRequestRow(
@@ -270,29 +429,63 @@ class SqlAlchemyAlertRepository:
         grant: SocAgentApprovalGrant | None = None,
     ) -> bool:
         payload = approval_request.model_dump(mode="json")
-        with self._session_factory() as session:
-            row = session.execute(select(SocApprovalRequestRow).where(SocApprovalRequestRow.approval_request_id == approval_request.approval_request_id).with_for_update()).scalar_one_or_none()
-            if row is None or row.status != expected_status.value:
+        if self._transaction_state is not None:
+            try:
+                with self._transaction_state.session.begin_nested():
+                    if not self._resolve_approval_request_in_session(
+                        self._transaction_state.session,
+                        approval_request,
+                        payload=payload,
+                        expected_status=expected_status,
+                        grant=grant,
+                    ):
+                        return False
+                    self._transaction_state.flush_write()
+            except IntegrityError:
                 return False
-            if grant is not None:
-                existing_grant = session.execute(select(SocApprovalGrantRow).where(SocApprovalGrantRow.approval_request_id == approval_request.approval_request_id).limit(1)).scalar_one_or_none()
-                if existing_grant is not None:
-                    return False
-                grant_payload = grant.model_dump(mode="json")
-                session.add(
-                    SocApprovalGrantRow(
-                        approval_grant_id=grant.approval_grant_id,
-                        **_approval_grant_row_values(grant, grant_payload),
-                    )
-                )
-            for key, value in _approval_request_row_values(approval_request, payload).items():
-                setattr(row, key, value)
+            return True
+        with self._session_factory() as session:
+            if not self._resolve_approval_request_in_session(
+                session,
+                approval_request,
+                payload=payload,
+                expected_status=expected_status,
+                grant=grant,
+            ):
+                return False
             try:
                 session.commit()
             except IntegrityError:
                 session.rollback()
                 return False
             return True
+
+    def _resolve_approval_request_in_session(
+        self,
+        session: Session,
+        approval_request: SocAgentApprovalRequest,
+        *,
+        payload: dict,
+        expected_status: SocAgentApprovalRequestStatus,
+        grant: SocAgentApprovalGrant | None,
+    ) -> bool:
+        row = session.execute(select(SocApprovalRequestRow).where(SocApprovalRequestRow.approval_request_id == approval_request.approval_request_id).with_for_update()).scalar_one_or_none()
+        if row is None or row.status != expected_status.value:
+            return False
+        if grant is not None:
+            existing_grant = session.execute(select(SocApprovalGrantRow).where(SocApprovalGrantRow.approval_request_id == approval_request.approval_request_id).limit(1)).scalar_one_or_none()
+            if existing_grant is not None:
+                return False
+            grant_payload = grant.model_dump(mode="json")
+            session.add(
+                SocApprovalGrantRow(
+                    approval_grant_id=grant.approval_grant_id,
+                    **_approval_grant_row_values(grant, grant_payload),
+                )
+            )
+        for key, value in _approval_request_row_values(approval_request, payload).items():
+            setattr(row, key, value)
+        return True
 
     def save_evidence(self, evidence: InvestigationEvidence) -> None:
         payload = evidence.model_dump(mode="json")
@@ -1424,6 +1617,72 @@ def _memory_record_row_values(record: SocMemoryRecord, payload: dict) -> dict:
         "updated_at": record.updated_at,
         "record_payload": payload,
     }
+
+
+def _mutation_audit_row_values(record: SocMutationAuditRecord, payload: dict) -> dict:
+    return {
+        "operation": record.operation.value,
+        "target_type": record.target_type,
+        "target_id": record.target_id,
+        "run_id": record.run_id,
+        "alert_id": record.alert_id,
+        "queue_id": record.queue_id,
+        "actor_id": record.actor.actor_id,
+        "actor_type": record.actor.actor_type.value,
+        "actor_surface": record.actor.surface.value,
+        "actor_auth_source": record.actor.auth_source.value,
+        "request_id": record.request_id,
+        "idempotency_key": record.idempotency_key,
+        "command_hash": record.command_hash,
+        "reason": record.reason,
+        "result_status": record.result_status,
+        "result_ref": record.result_ref,
+        "occurred_at": record.occurred_at,
+        "record_payload": payload,
+    }
+
+
+def _mutation_audit_from_row(row: SocMutationAuditRow) -> SocMutationAuditRecord:
+    record = SocMutationAuditRecord.model_validate(row.record_payload)
+    indexed_values = {
+        "audit_id": row.audit_id,
+        "operation": row.operation,
+        "target_type": row.target_type,
+        "target_id": row.target_id,
+        "run_id": row.run_id,
+        "alert_id": row.alert_id,
+        "queue_id": row.queue_id,
+        "actor_id": row.actor_id,
+        "actor_type": row.actor_type,
+        "actor_surface": row.actor_surface,
+        "actor_auth_source": row.actor_auth_source,
+        "request_id": row.request_id,
+        "idempotency_key": row.idempotency_key,
+        "command_hash": row.command_hash,
+        "result_status": row.result_status,
+        "result_ref": row.result_ref,
+    }
+    contract_values = {
+        "audit_id": record.audit_id,
+        "operation": record.operation.value,
+        "target_type": record.target_type,
+        "target_id": record.target_id,
+        "run_id": record.run_id,
+        "alert_id": record.alert_id,
+        "queue_id": record.queue_id,
+        "actor_id": record.actor.actor_id,
+        "actor_type": record.actor.actor_type.value,
+        "actor_surface": record.actor.surface.value,
+        "actor_auth_source": record.actor.auth_source.value,
+        "request_id": record.request_id,
+        "idempotency_key": record.idempotency_key,
+        "command_hash": record.command_hash,
+        "result_status": record.result_status,
+        "result_ref": record.result_ref,
+    }
+    if indexed_values != contract_values:
+        raise ValueError(f"mutation audit row {row.audit_id} does not match its typed payload")
+    return record
 
 
 def _governed_context_fact_row_values(fact: GovernedContextFact) -> dict:

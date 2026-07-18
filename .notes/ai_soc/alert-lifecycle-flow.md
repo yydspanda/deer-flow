@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow / SOC 预警完整流转
 
-> Updated: 2026-07-16
+> Updated: 2026-07-18
 >
 > 本文只描述当前项目里的 SOC Agent 端到端运行过程、状态流转、数据写入和安全边界。
 >
@@ -33,7 +33,7 @@ flowchart TD
     A["🧾 Alert JSON<br/>预警输入 / Alert input"] --> B["🚪 Entry Surface<br/>CLI / API / Kafka / Demo"]
     B --> C["⚙️ SocAnalysisService<br/>统一分析入口 / analysis entry"]
     C --> D["⚙️ Fixed Runtime Pipeline<br/>固定流水线 / deterministic control flow"]
-    D --> E["🗃️ SOC Business Store<br/>run + summary + queue + audit"]
+    D --> E["🗃️ SOC Business Store<br/>run + summary + queue + decision audit"]
     E --> W["🛠️ Normalization Monitor<br/>schema baseline + drift + coverage"]
     W --> X["🗃️ Maintenance Store<br/>baseline + deduplicated issues"]
     X --> Y["🧑‍💻 CLI / TUI / Web / Metrics<br/>归一化运维"]
@@ -68,7 +68,8 @@ flowchart TD
 
     J --> N["🛡️ High-risk action proposal<br/>高风险动作建议 / risky proposal"]
     N --> O["🛡️ Approval Inbox + Grant<br/>审批请求和一次性授权"]
-    O --> P["🚫 Execute boundary only<br/>当前只记录边界，不执行生产副作用"]
+    O --> P["🚫 Execute boundary only<br/>事务化消费 token，不执行生产副作用"]
+    O --> P1["🗃️ Mutation Audit<br/>request / resolution / action boundary"]
 
     I --> Q["🧑‍💻 Correction / Review Note<br/>人工改判或备注"]
     Q --> R["🧠📌 MemoryCandidate<br/>pending_review 候选记忆"]
@@ -76,7 +77,7 @@ flowchart TD
     S --> G
 
     T["🧾 External disposition<br/>Zeus / ITSM / SOAR 状态理由"] --> U["⚙️ SocExternalDispositionService<br/>外部反馈归一化"]
-    U --> V["🗃️ external disposition + audit<br/>外部反馈和审计"]
+    U --> V["🗃️ atomic external disposition<br/>state + decision/mutation audit"]
     U --> Z11{"⚙️ trusted + verified target<br/>+ unique proposal?"}
     Z11 -->|Yes| Z12["⚙️ EV-02 External Outcome Bridge"]
     Z12 --> Z6
@@ -107,6 +108,8 @@ flowchart TD
 14. EV-03 从 immutable manifest、proposal、ReviewQueue 和 latest outcomes 派生 reviewer-specific inbox；
     Web 只能打开 manifest-selected work，并回到 EV-02 写入口，不保存第二套 campaign 状态。
 15. Gate 通过只表示可进入治理 rollout review；当前仍固定 `auto_close_allowed=false`。
+16. correction、close/note、memory review、approval lifecycle/action boundary 和 external disposition
+    都通过 `SocMutationUnitOfWork` 原子写入业务状态与 `soc_mutation_audit_log`；进程事件只在提交后发出。
 
 Current governed-context boundary / 当前边界：GF-01 已能通过 `SocGovernedContextService` 和
 `soc_governed_context_facts` 保存、审批、暂停、撤销、过期及回放 typed fact versions；AA-01 已能从
@@ -229,20 +232,22 @@ flowchart LR
     TX --> D["🗃️ soc_review_queue<br/>不可重试失败或受控决策需要复核"]
     TX --> E["🗃️ soc_decision_audit_log<br/>分析、回放、纠正审计"]
 
-    F["⚙️ SocReviewService"] --> D
-    F --> B
-    F --> C
-    F --> E
-    F --> G["🗃️ soc_memory_candidates<br/>review note / correction candidate"]
+    F["⚙️ SocReviewService"] --> MTX["🔒 SocMutationUnitOfWork<br/>one command / one transaction"]
+    MTX --> D
+    MTX --> B
+    MTX --> C
+    MTX --> E
+    MTX --> G["🗃️ soc_memory_candidates<br/>review note / correction candidate"]
+    MTX --> MA["🗃️ soc_mutation_audit_log<br/>all Alpha L3 commands"]
 
     H["🧰 Action Dispatcher"] --> I["🗃️ soc_investigation_evidence<br/>只读工具结果"]
-    J["🛡️ SocAgentApprovalService"] --> K["🗃️ soc_approval_requests"]
-    J --> L["🗃️ soc_approval_grants"]
-    M["⚙️ SocExternalDispositionService"] --> N["🗃️ soc_external_dispositions"]
-    M --> E
-    M --> G
-    O["⚙️ SocMemoryService"] --> G
-    O --> P["🗃️ soc_memory_records<br/>confirmed but retrieval gated"]
+    J["🛡️ SocAgentApprovalService"] --> MTX
+    MTX --> K["🗃️ soc_approval_requests"]
+    MTX --> L["🗃️ soc_approval_grants"]
+    M["⚙️ SocExternalDispositionService"] --> MTX
+    MTX --> N["🗃️ soc_external_dispositions"]
+    O["⚙️ SocMemoryService"] --> MTX
+    MTX --> P["🗃️ soc_memory_records<br/>confirmed but retrieval gated"]
     Q["🛠️ SocNormalizationMaintenanceService"] --> R["🗃️ soc_normalization_schema_baselines"]
     Q --> S["🗃️ soc_normalization_maintenance_issues"]
 ```
@@ -255,6 +260,7 @@ flowchart LR
 | `soc_alert_summaries` | Query-friendly read model | 面向列表、关联、相似检索和 ReviewQueue 的轻量摘要 |
 | `soc_review_queue` | Human review queue | 分析师复核入口；close 不等于改判 |
 | `soc_decision_audit_log` | Decision audit records | analyze/replay/correct/external disposition 的审计链 |
+| `soc_mutation_audit_log` | L3 mutation audit records | correction、close/note、memory review、approval 和 external disposition 的 actor/provenance/reason/idempotency/result 追加式审计；不保存原始敏感 payload |
 | `soc_investigation_evidence` | Read-only action results | 资产查询、EDR 进程树、威胁情报等只读调查结果 |
 | `soc_external_dispositions` | External ticket feedback | Zeus/ITSM/SOAR 外部状态、理由、映射和同步结果 |
 | `soc_disposition_proposals` | Shadow operational proposals | 保存 true-positive + exact authorization 产生的未应用处置建议 |
@@ -490,6 +496,12 @@ flowchart TD
     G --> H["execute boundary<br/>消费 token + 记录 payload"]
     H --> I["🗃️ soc_approval_grants<br/>status=consumed"]
     H --> J["🚫 no production side effect<br/>当前不执行真实封禁、隔离、下发策略"]
+    C --> A1["🗃️ mutation audit<br/>request submitted"]
+    F --> A2["🗃️ mutation audit<br/>approved + grant"]
+    R --> A3["🗃️ mutation audit<br/>rejected"]
+    X --> A4["🗃️ mutation audit<br/>expired"]
+    G --> A5["🗃️ mutation audit<br/>dry-run result"]
+    H --> A6["🗃️ mutation audit<br/>execute result"]
 ```
 
 Approval flow 当前做什么：
@@ -501,7 +513,8 @@ Approval flow 当前做什么：
 5. 完全相同的终态重试返回原结果；伪造、过时或改变理由/幂等键/有效期的重试会被拒绝。
 6. dry-run 只验证 token、route、payload、上下文和 adapter 支持情况。
 7. execute boundary 当前只消费 token并写执行边界记录。
-8. 当前不会对生产系统产生外部副作用；统一追加式 mutation audit 由下一刀 `BG-P0-02` 补齐。
+8. 当前不会对生产系统产生外部副作用；每个 request/resolve/dry-run/execute 命令都和追加式
+   `SocMutationAuditRecord` 在同一事务提交，审计不保存原始 action payload 或 secret。
 
 ## 8. External Disposition Sync / 外部处置反馈流
 
@@ -510,8 +523,9 @@ flowchart TD
     A["🧾 External system update<br/>Zeus / ITSM / SOAR 状态+理由"] --> B["🚪 Adapter<br/>webhook / Kafka / polling / manual import"]
     B --> C["SocExternalDispositionEvent<br/>vendor-neutral event"]
     C --> D["⚙️ SocExternalDispositionService.apply_event"]
-    D --> E["status mapping<br/>外部状态 -> canonical status"]
-    D --> F["target locating<br/>queue_id / run_id / alert_id / external_case_id"]
+    D --> TX["🔒 SocMutationUnitOfWork<br/>one event / one transaction"]
+    TX --> E["status mapping<br/>外部状态 -> canonical status"]
+    TX --> F["target locating<br/>queue_id / run_id / alert_id / external_case_id"]
 
     E --> G{"mapped + trusted?<br/>状态可信且可映射"}
     F --> H{"unique target?<br/>唯一定位本地对象"}
@@ -521,11 +535,12 @@ flowchart TD
     G -->|Yes| J["⚙️ apply local correction<br/>复用 SocReviewService.correct"]
     H -->|Yes| J
 
-    J --> K["🗃️ update run / summary / review queue / audit"]
+    J --> K["🗃️ update run / summary / review queue / decision audit"]
     J --> L["🧠📌 external reason -> MemoryCandidate<br/>pending_review"]
     J --> N{"⚙️ verified target + one proposal?<br/>EV-02 bridge gate"}
     N -->|Yes| O["🗃️ external-source Outcome<br/>via evaluation service"]
     N -->|No| P["🔎 explicit skip reason<br/>no inferred label"]
+    TX --> A1["🗃️ soc_mutation_audit_log<br/>bounded command/result record"]
     I --> M["🔎 visible in InvestigationContext<br/>调查上下文可见"]
     K --> M
     L --> M
@@ -544,6 +559,8 @@ External disposition 的意义：
   不从 external reason 猜 canonical status，不会覆盖较新的 analyst/replay primary outcome。
 - External correction/queue sync 与 shadow outcome capture 是两条独立审计边界；后者不应用 proposal，
   不改变 ReviewQueue，仍保持 `auto_close_allowed=false`。
+- 同一 external event 产生的 local correction、summary/queue、candidate、external record、eligible
+  outcome 和两类 audit 属于一个数据库事务；任一步失败全部回滚，`SocEvent` 只在成功提交后发出。
 
 ## 9. Memory Candidate and Confirmed Memory / 记忆候选与确认记忆
 

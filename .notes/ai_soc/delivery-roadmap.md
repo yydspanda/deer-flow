@@ -36,7 +36,7 @@ flowchart LR
 |---|---|---|---|
 | `BD` Boss Demo v0.1 | **Done** | 一条 8-10 分钟、浏览器优先、可重复的 golden path | `BD-01..03` 与 BD Gate 已通过 |
 | `AA` SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 唯一的 Complete/Gap/Mock/Data-gated/Deferred 矩阵 | 审计矩阵和 P0/P1 阻塞清单已于 2026-07-18 确认 |
-| `BG` Close Blocking Gaps | **Current / BG-P0-02 In Progress** | 只修审计确认的代码可控 P0/P1 阻塞项 | Alpha 端到端验收通过 |
+| `BG` Close Blocking Gaps | **Current / BG-P1-01 In Progress** | 只修审计确认的代码可控 P0/P1 阻塞项 | Alpha 端到端验收通过 |
 | `PI` Real Data & Production Integration | Data/credential-gated | 真实 PingAn/通用 provider、Kafka/PostgreSQL/K8s 和运营验证 | Pilot readiness review 通过 |
 
 Boss Demo v0.1 和 Alpha 完整性审计已于 2026-07-18 分别通过 BD Gate、AA Gate；当前只执行
@@ -109,8 +109,8 @@ Stage 2 是 time-boxed 审计，不在审计过程中纵向优化单个模块。
 
 | ID | Work / 工作 | Deliverable / 产出 | Acceptance / 验收 |
 |---|---|---|---|
-| `BG-01` | Close P0 blockers / 修复 P0 | **In progress**: `BG-P0-01` 已完成，当前执行 `BG-P0-02` | 每项有回归测试和用户可见验收；不顺手扩范围 |
-| `BG-02` | Close P1 + E2E acceptance / 修复 P1 与端到端验收 | 依次执行 `BG-P1-01..05`，APT/EDR/HIDS 代表样本覆盖完整 Alpha 旅程 | 结果可重复；失败语义、offset、review、audit 和 memory boundary 符合契约 |
+| `BG-01` | Close P0 blockers / 修复 P0 | **Done 2026-07-18**: `BG-P0-01..02` 已关闭审批/RBAC、事务化变更和持久审计缺口 | `AC-16/21/22/34` 均有回归与故障注入证据 |
+| `BG-02` | Close P1 + E2E acceptance / 修复 P1 与端到端验收 | **In progress**: 当前执行 `BG-P1-01`，之后依次执行 `BG-P1-02..05` | 结果可重复；失败语义、offset、review、audit 和 memory boundary 符合契约 |
 | `BG-03` | Alpha readiness package / Alpha 就绪包 | 版本化验收报告、已知限制、mock/data-gated 清单、部署与回滚说明 | 代码可控 P0/P1 为零；全量 SOC/architecture 测试通过；Stage 4 输入明确 |
 
 Stage 3 的唯一拆分与验收条件见
@@ -169,7 +169,8 @@ Completed:    BD - Boss Demo v0.1 (BD Gate passed 2026-07-18)
 Completed:    AA - SOC Alpha Completeness Audit (AA Gate passed 2026-07-18; AUD-01..03 done)
 Current Stage: BG - Close Blocking Gaps
 Completed:    BG-P0-01 - approval integrity and L3 authorization (AC-22, AC-34)
-In Progress:  BG-P0-02 - transactional mutation and durable audit (AC-16, AC-21)
-Next:         Explicit correction/external-feedback unit of work plus append-only audit coverage for every Alpha mutation
-Blocked by:   None for BG-P0-02; real providers and production infrastructure remain Stage 4 data-gated
+Completed:    BG-P0-02 - transactional mutation and durable audit (AC-16, AC-21)
+In Progress:  BG-P1-01 - versioned ingestion and feedback (AC-04, AC-08)
+Next:         Strict soc.alert.raw.v1 Kafka envelope plus one generic external-disposition application ingress
+Blocked by:   None for BG-P1-01; real Zeus/ITSM/SOAR feeds remain Stage 4 data-gated
 ```

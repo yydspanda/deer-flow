@@ -96,6 +96,8 @@ write confirmed memory, or execute side-effect actions.
 | 受限分析证据 | Bounded Analysis Evidence | `BoundedAnalysisEvidence` | 允许进入模型的限长、脱敏、带来源证据，不等于完整 raw payload |
 | Skill 选择上下文 | Skill Context | `SocSkillContext` | 当前选择清单、原因、摘要和 hash；不是完整 `SKILL.md` 正文 |
 | 分析运行 | Analysis Run | `AnalysisRun` | 一次 alert 分析的完整记录、trace、result |
+| 决策审计 | Decision Audit | `DecisionAuditRecord` | analyze/replay/correct 的判定沿革和证据策略摘要，不替代完整 run |
+| 业务变更审计 | Mutation Audit | `SocMutationAuditRecord` | L3 服务命令的追加式审计；记录 actor、来源、原因、幂等和有界结果，不保存原始敏感 payload |
 | 预警摘要 | Alert Summary | `AlertSummary` | 轻量读模型，用于列表、关联、复核和 demo |
 | 复核队列 | Review Queue | `ReviewQueueItem` | 需要分析师看的工作项 |
 | 调查上下文 | Investigation Context | `InvestigationContext` | Review/Lead Agent/TUI/Web 共享的受控上下文 |
@@ -308,6 +310,13 @@ Runtime produces the detection assessment; a later deterministic disposition rec
 combine it with governed authorization facts without rewriting the immutable original run. This
 keeps one-alert execution replayable while allowing richer investigation workflows to evolve
 independently.
+
+The primary analysis bundle has its own `AnalysisPersistence` transaction. L3 service commands use
+the separate `SocMutationUnitOfWork`: one correction, review close/note, memory review, approval
+transition/action boundary, or external-disposition apply either commits all SQL writes plus one
+`SocMutationAuditRecord`, or rolls them all back. Process-local `SocEvent` emission is buffered until
+commit. `DecisionAuditRecord` remains the decision-lineage record; mutation audit is the
+cross-command actor/idempotency/result record, so neither table replaces the other.
 
 Phase 2 correlation bridge / 历史关联桥接：
 
@@ -677,7 +686,7 @@ sequenceDiagram
     Human->>Approval: dry-run / execute boundary
     Approval->>Adapter: preflight allowed adapter/payload/context
     Adapter-->>Approval: dry-run result or execution boundary result
-    Approval->>Audit: durable mutation audit (BG-P0-02)
+    Approval->>Audit: commit durable mutation audit
 ```
 
 Current safety posture:
@@ -687,7 +696,7 @@ Current safety posture:
 - Request lifecycle is `pending -> approved/rejected/expired`; approve loads the persisted request by ID and one request can create at most one grant.
 - Exact resolution retries are idempotent; stale, forged, or semantically changed retries are rejected.
 - Execute boundary exists, but real production side effects must wait for real adapter review.
-- Approval grant is single-use. Request/grant lifecycle data is durable; the unified append-only mutation audit is the next `BG-P0-02` boundary.
+- Approval grant is single-use. Request/grant/result changes and their secret-safe mutation audit commit in one command transaction through migration `0018_mutation_audit`.
 
 ### 7.3 External Disposition Sync / 外部处置反馈同步
 
@@ -698,9 +707,11 @@ feed SOC Agent rather than being lost.
 flowchart LR
     OLD["🏢 Old SOC / Zeus<br/>status + reason"] --> MAP["🔁 ExternalDisposition Adapter<br/>mapping + target resolve"]
     MAP --> EVENT["SocExternalDispositionEvent"]
-    EVENT --> REVIEW["ReviewQueue state/reason sync"]
-    EVENT --> CAND["Memory Candidate<br/>pending_review"]
-    EVENT --> AUDIT["Audit/Event Log"]
+    EVENT --> TX["🔒 SocMutationUnitOfWork<br/>one external event / one transaction"]
+    TX --> REVIEW["ReviewQueue state/reason sync"]
+    TX --> CAND["Memory Candidate<br/>pending_review"]
+    TX --> AUDIT["Decision + Mutation Audit"]
+    TX --> EXT["ExternalDispositionRecord"]
 ```
 
 Rules:
@@ -709,6 +720,9 @@ Rules:
 - External reason can generate memory candidates.
 - External reason cannot become confirmed memory without review.
 - Mapping must be configurable per external system.
+- Local correction, summary/queue, candidate, external record, eligible outcome and both audit
+  records commit atomically; events are emitted only after commit. An exact retry returns the one
+  existing logical result, while reuse of the idempotency key for changed content conflicts.
 
 ### 7.4 Governed Context Facts / 受治理上下文事实（GF-01 + AA-01 + EX-01 + DP-01 + EV-01..EV-03 Implemented）
 
@@ -981,12 +995,16 @@ Main persistence categories:
 | Context match audit | Authorization/attribution/applicability result | Replayable against event time and policy version |
 | Memory candidates | Pending learning | Human review required |
 | Confirmed memory | Reviewed experience | Retrieval-enabled by policy |
-| Events/audit | Traceability | Required for production trust |
+| Decision audit | Verdict lineage | analyze/replay/correct/external decision metadata and policy provenance |
+| Mutation audit | L3 command lineage | Append-only actor/auth source/reason/idempotency/command hash/bounded result; no raw payload or secrets |
+| Process events | Local signaling | Buffered until SQL commit; generic durable event streaming remains a later capability |
 
 Service/repository rule:
 
 - Services depend on repository protocols from `backend/soc_agent/protocols.py`.
 - Entry layers must not write tables directly.
+- Multi-write L3 commands must use `SocMutationUnitOfWork`; service code owns audit creation and
+  emits process events only after the transaction commits.
 - Migrations live under `backend/soc_agent/db/migrations/`.
 - SOC tables stay separate from DeerFlow harness persistence unless a generic upstream extension is required.
 
@@ -1125,6 +1143,9 @@ Security invariants:
 - No unbounded raw alert dump into DeerFlow Lead Agent context.
 - No bypass of `SocReviewService`, `SocMemoryService`, or `SocAgentApprovalService`.
 - No L3 mutation may rely only on entry-layer authorization; core services must reject unknown provenance and missing roles.
+- No Alpha L3 mutation may commit business state without its `SocMutationAuditRecord`; audit
+  projections must be bounded and secret-safe, and exact retry semantics are keyed by operation,
+  idempotency key and command hash.
 
 ---
 

@@ -79,6 +79,7 @@ from soc_agent.contracts import (
     SocMemoryRecord,
     SocMemoryRecordStatus,
     SocMemoryRetrievalResult,
+    SocMutationOperation,
     SocSkillResolution,
     UnifiedInvestigationView,
     Verdict,
@@ -107,6 +108,9 @@ from soc_agent.protocols import (
     SocDispositionProposalRepository,
     SocEventSink,
     SocExternalDispositionRepository,
+    SocMutationAuditRepository,
+    SocMutationRepository,
+    SocMutationUnitOfWork,
 )
 from soc_agent.skills import SocSkillResolver
 
@@ -117,6 +121,14 @@ from .errors import (
     SocServiceError,
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
+)
+from .mutation_audit import (
+    BufferedSocEventSink,
+    build_mutation_audit,
+    mutation_audit_repository_from,
+    mutation_idempotency_key,
+    mutation_uow_from,
+    validate_mutation_retry,
 )
 
 
@@ -539,7 +551,10 @@ class SocReviewService:
         external_disposition_repository: SocExternalDispositionRepository | None = None,
         memory_candidate_repository: MemoryCandidateRepository | None = None,
         memory_record_repository: MemoryRecordRepository | None = None,
+        mutation_audit_repository: SocMutationAuditRepository | None = None,
+        mutation_uow: SocMutationUnitOfWork | None = None,
         event_sink: SocEventSink | None = None,
+        _transaction_active: bool = False,
     ) -> None:
         self._repository = repository
         self._summary_repository = summary_repository
@@ -553,6 +568,17 @@ class SocReviewService:
         self._memory_candidate_repository = memory_candidate_repository
         self._memory_record_repository = memory_record_repository
         self._event_sink = event_sink or NoopEventSink()
+        self._mutation_audit_repository = mutation_audit_repository or mutation_audit_repository_from(
+            repository,
+            review_queue_repository,
+            memory_candidate_repository,
+        )
+        self._mutation_uow = mutation_uow or mutation_uow_from(
+            repository,
+            review_queue_repository,
+            memory_candidate_repository,
+        )
+        self._transaction_active = _transaction_active
 
     def correct(
         self,
@@ -566,8 +592,34 @@ class SocReviewService:
             self.CORRECTION_ROLES,
             operation="correcting an analysis run",
         )
+        if self._mutation_uow is not None and not self._transaction_active:
+            buffered_events = BufferedSocEventSink(self._event_sink)
+            with self._mutation_uow.mutation_transaction() as repository:
+                result = self._transactional_clone(repository, event_sink=buffered_events).correct(
+                    command,
+                    context=request_context,
+                )
+            buffered_events.flush()
+            return result
         if self._repository is None:
             raise SocServiceNotImplementedError("correct requires an AlertRepository")
+
+        existing_audit = self._find_mutation_audit(
+            SocMutationOperation.REVIEW_CORRECT,
+            request_context,
+        )
+        command_payload = command.model_dump(mode="json")
+        if existing_audit is not None:
+            validate_mutation_retry(
+                existing_audit,
+                command=command_payload,
+                target_type="analysis_run",
+                target_id=command.run_id,
+            )
+            existing_run = self._repository.get_run(command.run_id)
+            if existing_run is None:
+                raise SocServiceConflictError(f"mutation audit {existing_audit.audit_id} references missing run {command.run_id}")
+            return existing_run
 
         run = self._repository.get_run(command.run_id)
         if run is None:
@@ -616,6 +668,26 @@ class SocReviewService:
             self._repository.save_run(run)
         if self._audit_repository is not None:
             self._audit_repository.save_audit_record(_correction_audit_record(run, record))
+        self._append_mutation_audit(
+            build_mutation_audit(
+                operation=SocMutationOperation.REVIEW_CORRECT,
+                target_type="analysis_run",
+                target_id=run.run_id,
+                run_id=run.run_id,
+                alert_id=run.alert_id,
+                queue_id=review_item.queue_id if review_item is not None else None,
+                context=request_context,
+                reason=command.reason,
+                command=command_payload,
+                result_ref=record.correction_id,
+                payload={
+                    "previous_verdict": previous_verdict.value if previous_verdict is not None else None,
+                    "corrected_verdict": command.corrected_verdict.value,
+                    "correction_id": record.correction_id,
+                    "memory_candidate_id": record.memory_candidate_id,
+                },
+            )
+        )
         self._event_sink.emit(
             SocEvent(
                 event_type=SocEventType.REVIEW_CORRECTED,
@@ -677,8 +749,31 @@ class SocReviewService:
             self.HUMAN_MUTATION_ROLES,
             operation="closing a review queue item",
         )
+        if self._mutation_uow is not None and not self._transaction_active:
+            with self._mutation_uow.mutation_transaction() as repository:
+                return self._transactional_clone(repository, event_sink=self._event_sink).close_queue_item(
+                    command,
+                    context=request_context,
+                )
         if self._review_queue_repository is None:
             raise SocServiceNotImplementedError("close_queue_item requires a ReviewQueueRepository")
+
+        command_payload = command.model_dump(mode="json")
+        existing_audit = self._find_mutation_audit(
+            SocMutationOperation.REVIEW_CLOSE,
+            request_context,
+        )
+        if existing_audit is not None:
+            validate_mutation_retry(
+                existing_audit,
+                command=command_payload,
+                target_type="review_queue_item",
+                target_id=command.queue_id,
+            )
+            existing_item = self._review_queue_repository.get_review_item(command.queue_id)
+            if existing_item is None:
+                raise SocServiceConflictError(f"mutation audit {existing_audit.audit_id} references missing queue item {command.queue_id}")
+            return existing_item
 
         item = self._review_queue_repository.get_review_item(command.queue_id)
         if item is None:
@@ -690,6 +785,21 @@ class SocReviewService:
         item.close_reason = command.reason
         item.updated_at = item.closed_at
         self._review_queue_repository.save_review_item(item)
+        self._append_mutation_audit(
+            build_mutation_audit(
+                operation=SocMutationOperation.REVIEW_CLOSE,
+                target_type="review_queue_item",
+                target_id=item.queue_id,
+                run_id=item.run_id,
+                alert_id=item.alert_id,
+                queue_id=item.queue_id,
+                context=request_context,
+                reason=command.reason,
+                command=command_payload,
+                result_ref=item.queue_id,
+                payload={"previous_status": ReviewQueueStatus.OPEN.value, "status": item.status.value},
+            )
+        )
         return item
 
     def add_note(
@@ -704,12 +814,39 @@ class SocReviewService:
             self.HUMAN_MUTATION_ROLES,
             operation="adding a review note",
         )
+        if self._mutation_uow is not None and not self._transaction_active:
+            buffered_events = BufferedSocEventSink(self._event_sink)
+            with self._mutation_uow.mutation_transaction() as repository:
+                result = self._transactional_clone(repository, event_sink=buffered_events).add_note(
+                    command,
+                    context=request_context,
+                )
+            buffered_events.flush()
+            return result
         if self._review_queue_repository is None:
             raise SocServiceNotImplementedError("add_note requires a ReviewQueueRepository")
         if self._repository is None:
             raise SocServiceNotImplementedError("add_note requires an AlertRepository")
         if self._memory_candidate_repository is None:
             raise SocServiceNotImplementedError("add_note requires a MemoryCandidateRepository")
+
+        command_payload = command.model_dump(mode="json")
+        existing_audit = self._find_mutation_audit(
+            SocMutationOperation.REVIEW_NOTE,
+            request_context,
+        )
+        if existing_audit is not None:
+            validate_mutation_retry(
+                existing_audit,
+                command=command_payload,
+                target_type="review_queue_item",
+                target_id=command.queue_id,
+            )
+            item = self._review_queue_repository.get_review_item(command.queue_id)
+            if item is None:
+                raise SocServiceConflictError(f"mutation audit {existing_audit.audit_id} references missing queue item {command.queue_id}")
+            candidate = self._memory_candidate_repository.get_memory_candidate(existing_audit.result_ref) if existing_audit.result_ref is not None else None
+            return ReviewNoteResult(queue_item=item, memory_candidate=candidate)
 
         item = self._review_queue_repository.get_review_item(command.queue_id)
         if item is None:
@@ -729,7 +866,66 @@ class SocReviewService:
             queue_item=item,
             context=request_context,
         )
+        self._append_mutation_audit(
+            build_mutation_audit(
+                operation=SocMutationOperation.REVIEW_NOTE,
+                target_type="review_queue_item",
+                target_id=item.queue_id,
+                run_id=run.run_id,
+                alert_id=run.alert_id,
+                queue_id=item.queue_id,
+                context=request_context,
+                reason="analyst review note recorded",
+                command=command_payload,
+                result_ref=candidate.candidate_id,
+                payload={
+                    "candidate_id": candidate.candidate_id,
+                    "scenario_key": command.scenario_key,
+                    "domain": command.domain.value if command.domain is not None else None,
+                },
+            )
+        )
         return ReviewNoteResult(queue_item=item, memory_candidate=candidate)
+
+    def _transactional_clone(
+        self,
+        repository: SocMutationRepository,
+        *,
+        event_sink: SocEventSink,
+    ) -> SocReviewService:
+        return SocReviewService(
+            repository=repository if self._repository is not None else None,
+            summary_repository=repository if self._summary_repository is not None else None,
+            audit_repository=repository if self._audit_repository is not None else None,
+            review_queue_repository=(repository if self._review_queue_repository is not None else None),
+            evidence_repository=repository if self._evidence_repository is not None else None,
+            authorization_enrichment_repository=(repository if self._authorization_enrichment_repository is not None else None),
+            disposition_proposal_repository=(repository if self._disposition_proposal_repository is not None else None),
+            disposition_evaluation_repository=(repository if self._disposition_evaluation_repository is not None else None),
+            external_disposition_repository=(repository if self._external_disposition_repository is not None else None),
+            memory_candidate_repository=(repository if self._memory_candidate_repository is not None else None),
+            memory_record_repository=(repository if self._memory_record_repository is not None else None),
+            mutation_audit_repository=repository,
+            mutation_uow=self._mutation_uow,
+            event_sink=event_sink,
+            _transaction_active=True,
+        )
+
+    def _find_mutation_audit(
+        self,
+        operation: SocMutationOperation,
+        context: ServiceRequestContext,
+    ):
+        if self._mutation_audit_repository is None:
+            return None
+        return self._mutation_audit_repository.find_mutation_audit_by_idempotency_key(
+            operation,
+            mutation_idempotency_key(context),
+        )
+
+    def _append_mutation_audit(self, record) -> None:
+        if self._mutation_audit_repository is not None:
+            self._mutation_audit_repository.append_mutation_audit(record)
 
     def get_investigation_context(self, queue_id: str) -> InvestigationContext:
         if self._review_queue_repository is None:
@@ -841,11 +1037,23 @@ class SocMemoryService:
         *,
         candidate_repository: MemoryCandidateRepository | None = None,
         record_repository: MemoryRecordRepository | None = None,
+        mutation_audit_repository: SocMutationAuditRepository | None = None,
+        mutation_uow: SocMutationUnitOfWork | None = None,
         event_sink: SocEventSink | None = None,
+        _transaction_active: bool = False,
     ) -> None:
         self._candidate_repository = candidate_repository
         self._record_repository = record_repository
         self._event_sink = event_sink or NoopEventSink()
+        self._mutation_audit_repository = mutation_audit_repository or mutation_audit_repository_from(
+            candidate_repository,
+            record_repository,
+        )
+        self._mutation_uow = mutation_uow or mutation_uow_from(
+            candidate_repository,
+            record_repository,
+        )
+        self._transaction_active = _transaction_active
 
     def propose_candidate(
         self,
@@ -931,8 +1139,49 @@ class SocMemoryService:
             self.REVIEWER_ROLES,
             operation="reviewing a memory candidate",
         )
+        if self._mutation_uow is not None and not self._transaction_active:
+            buffered_events = BufferedSocEventSink(self._event_sink)
+            with self._mutation_uow.mutation_transaction() as repository:
+                result = SocMemoryService(
+                    candidate_repository=repository,
+                    record_repository=repository,
+                    mutation_audit_repository=repository,
+                    mutation_uow=self._mutation_uow,
+                    event_sink=buffered_events,
+                    _transaction_active=True,
+                ).review_candidate(command, context=request_context)
+            buffered_events.flush()
+            return result
         if self._candidate_repository is None:
             raise SocServiceNotImplementedError("review_candidate requires a MemoryCandidateRepository")
+
+        command_payload = command.model_dump(mode="json")
+        existing_audit = (
+            self._mutation_audit_repository.find_mutation_audit_by_idempotency_key(
+                SocMutationOperation.MEMORY_REVIEW,
+                mutation_idempotency_key(request_context),
+            )
+            if self._mutation_audit_repository is not None
+            else None
+        )
+        if existing_audit is not None:
+            validate_mutation_retry(
+                existing_audit,
+                command=command_payload,
+                target_type="memory_candidate",
+                target_id=command.candidate_id,
+            )
+            candidate = self.get_candidate(command.candidate_id)
+            memory_record = self._record_repository.get_memory_record_by_candidate_id(candidate.candidate_id) if self._record_repository is not None else None
+            previous_status_value = existing_audit.payload.get("previous_status")
+            previous_status = SocMemoryCandidateStatus(previous_status_value) if isinstance(previous_status_value, str) else candidate.status
+            return SocMemoryCandidateReviewResult(
+                candidate=candidate,
+                memory_record=memory_record,
+                previous_status=previous_status,
+                decision=command.decision,
+                reviewed_at=candidate.reviewed_at or existing_audit.occurred_at,
+            )
 
         candidate = self.get_candidate(command.candidate_id)
         previous_status = candidate.status
@@ -1001,6 +1250,28 @@ class SocMemoryService:
             raise SocServiceError(f"unsupported memory review decision: {command.decision}")
 
         self._candidate_repository.save_memory_candidate(candidate)
+        if self._mutation_audit_repository is not None:
+            self._mutation_audit_repository.append_mutation_audit(
+                build_mutation_audit(
+                    operation=SocMutationOperation.MEMORY_REVIEW,
+                    target_type="memory_candidate",
+                    target_id=candidate.candidate_id,
+                    run_id=candidate.source.run_id,
+                    alert_id=candidate.source.alert_id,
+                    queue_id=candidate.source.queue_id,
+                    context=request_context,
+                    reason=command.reason,
+                    command=command_payload,
+                    result_ref=(memory_record.memory_id if memory_record is not None else candidate.candidate_id),
+                    payload={
+                        "previous_status": previous_status.value,
+                        "status": candidate.status.value,
+                        "decision": command.decision.value,
+                        "memory_id": memory_record.memory_id if memory_record is not None else None,
+                        "retrieval_enabled": (memory_record.retrieval_enabled if memory_record is not None else None),
+                    },
+                )
+            )
         self._event_sink.emit(
             SocEvent(
                 event_type=SocEventType.MEMORY_UPDATED,
@@ -1606,10 +1877,22 @@ class SocAgentApprovalService:
         grant_repository: SocAgentApprovalGrantRepository | None = None,
         request_repository: SocAgentApprovalRequestRepository | None = None,
         action_adapter_registry: SocActionAdapterRegistryPort | None = None,
+        mutation_audit_repository: SocMutationAuditRepository | None = None,
+        mutation_uow: SocMutationUnitOfWork | None = None,
+        _transaction_active: bool = False,
     ) -> None:
         self._grant_repository = grant_repository
         self._request_repository = request_repository
         self._action_adapter_registry = action_adapter_registry
+        self._mutation_audit_repository = mutation_audit_repository or mutation_audit_repository_from(
+            request_repository,
+            grant_repository,
+        )
+        self._mutation_uow = mutation_uow or mutation_uow_from(
+            request_repository,
+            grant_repository,
+        )
+        self._transaction_active = _transaction_active
 
     def submit_request(
         self,
@@ -1620,6 +1903,12 @@ class SocAgentApprovalService:
         """Persist a pending approval request for human review."""
 
         require_actor_roles(context, self.SUBMITTER_ROLES, operation="submitting an approval request")
+        if self._mutation_uow is not None and not self._transaction_active:
+            with self._mutation_uow.mutation_transaction() as repository:
+                return self._transactional_clone(repository).submit_request(
+                    approval_request,
+                    context=context,
+                )
         if approval_request.status is not SocAgentApprovalRequestStatus.PENDING:
             raise SocServiceError(f"approval request {approval_request.approval_request_id} is not pending")
         if self._request_repository is None:
@@ -1635,15 +1924,61 @@ class SocAgentApprovalService:
                 "submitted_by": context.actor,
             }
         )
+        command_payload = submitted.model_dump(mode="json")
+        existing_audit = self._find_mutation_audit(
+            SocMutationOperation.APPROVAL_REQUEST_SUBMIT,
+            context,
+        )
+        if existing_audit is not None:
+            validate_mutation_retry(
+                existing_audit,
+                command=command_payload,
+                target_type="approval_request",
+                target_id=submitted.approval_request_id,
+            )
+            existing_request = self.get_request(submitted.approval_request_id)
+            return self._validate_request_submission_retry(existing_request, submitted)
         existing = self._request_repository.get_approval_request(submitted.approval_request_id)
         if existing is not None:
-            return self._validate_request_submission_retry(existing, submitted)
+            result = self._validate_request_submission_retry(existing, submitted)
+            self._append_approval_audit(
+                operation=SocMutationOperation.APPROVAL_REQUEST_SUBMIT,
+                target_type="approval_request",
+                target_id=result.approval_request_id,
+                context=context,
+                reason=result.reason,
+                command=command_payload,
+                result_ref=result.approval_request_id,
+                payload=self._approval_request_audit_payload(result),
+            )
+            return result
         if self._request_repository.create_approval_request(submitted):
+            self._append_approval_audit(
+                operation=SocMutationOperation.APPROVAL_REQUEST_SUBMIT,
+                target_type="approval_request",
+                target_id=submitted.approval_request_id,
+                context=context,
+                reason=submitted.reason,
+                command=command_payload,
+                result_ref=submitted.approval_request_id,
+                payload=self._approval_request_audit_payload(submitted),
+            )
             return submitted
         concurrent = self._request_repository.get_approval_request(submitted.approval_request_id)
         if concurrent is None:
             raise SocServiceConflictError(f"approval request {submitted.approval_request_id} could not be persisted")
-        return self._validate_request_submission_retry(concurrent, submitted)
+        result = self._validate_request_submission_retry(concurrent, submitted)
+        self._append_approval_audit(
+            operation=SocMutationOperation.APPROVAL_REQUEST_SUBMIT,
+            target_type="approval_request",
+            target_id=result.approval_request_id,
+            context=context,
+            reason=result.reason,
+            command=command_payload,
+            result_ref=result.approval_request_id,
+            payload=self._approval_request_audit_payload(result),
+        )
+        return result
 
     def get_request(self, approval_request_id: str) -> SocAgentApprovalRequest:
         if self._request_repository is None:
@@ -1672,6 +2007,14 @@ class SocAgentApprovalService:
         expires_in_seconds: int = 900,
     ) -> SocAgentApprovalGrant:
         require_actor_roles(context, self.APPROVER_ROLES, operation="approving an action")
+        if self._mutation_uow is not None and not self._transaction_active:
+            with self._mutation_uow.mutation_transaction() as repository:
+                return self._transactional_clone(repository).approve(
+                    approval_request_id,
+                    context=context,
+                    reason=reason,
+                    expires_in_seconds=expires_in_seconds,
+                )
         if not reason.strip():
             raise SocServiceError("approval reason is required")
         if expires_in_seconds <= 0:
@@ -1683,6 +2026,29 @@ class SocAgentApprovalService:
             raise SocServiceNotImplementedError("approve requires a SocAgentApprovalGrantRepository")
         if self._request_repository is not self._grant_repository:
             raise SocServiceNotImplementedError("approve requires one shared atomic approval repository")
+
+        command_payload = {
+            "approval_request_id": approval_request_id,
+            "reason": reason.strip(),
+            "expires_in_seconds": expires_in_seconds,
+        }
+        existing_audit = self._find_mutation_audit(
+            SocMutationOperation.APPROVAL_REQUEST_APPROVE,
+            context,
+        )
+        if existing_audit is not None:
+            validate_mutation_retry(
+                existing_audit,
+                command=command_payload,
+                target_type="approval_request",
+                target_id=approval_request_id,
+            )
+            return self._replay_approved_request(
+                self.get_request(approval_request_id),
+                context=context,
+                reason=reason,
+                expires_in_seconds=expires_in_seconds,
+            )
 
         approval_request = self.get_request(approval_request_id)
         if approval_request.status is not SocAgentApprovalRequestStatus.PENDING:
@@ -1721,6 +2087,21 @@ class SocAgentApprovalService:
             expected_status=SocAgentApprovalRequestStatus.PENDING,
             grant=grant,
         ):
+            self._append_approval_audit(
+                operation=SocMutationOperation.APPROVAL_REQUEST_APPROVE,
+                target_type="approval_request",
+                target_id=resolved.approval_request_id,
+                context=context,
+                reason=reason,
+                command=command_payload,
+                result_ref=grant.approval_grant_id,
+                payload={
+                    **self._approval_request_audit_payload(resolved),
+                    "approval_grant_id": grant.approval_grant_id,
+                    "grant_status": grant.status,
+                    "expires_in_seconds": expires_in_seconds,
+                },
+            )
             return grant
         concurrent = self.get_request(approval_request_id)
         return self._replay_approved_request(
@@ -1767,10 +2148,30 @@ class SocAgentApprovalService:
         """Validate an approval grant and return a non-side-effecting action result."""
 
         require_actor_roles(context, self.OPERATOR_ROLES, operation="dry-running an approved action")
+        if self._mutation_uow is not None and not self._transaction_active:
+            with self._mutation_uow.mutation_transaction() as repository:
+                return self._transactional_clone(repository).dry_run_approved_action(
+                    command,
+                    context=context,
+                )
         if self._grant_repository is None:
             raise SocServiceNotImplementedError("dry_run_approved_action requires a SocAgentApprovalGrantRepository")
         if not command.dry_run:
             raise SocServiceError("dry_run_approved_action requires dry_run=true")
+
+        command_payload = command.model_dump(mode="json")
+        existing_audit = self._find_mutation_audit(
+            SocMutationOperation.APPROVAL_ACTION_DRY_RUN,
+            context,
+        )
+        audit_already_written = existing_audit is not None
+        if existing_audit is not None:
+            validate_mutation_retry(
+                existing_audit,
+                command=command_payload,
+                target_type="approval_grant",
+                target_id=existing_audit.target_id,
+            )
 
         grant = self._grant_repository.get_approval_grant_by_token(command.execution_token_id)
         if grant is None:
@@ -1786,7 +2187,7 @@ class SocAgentApprovalService:
             payload = self._approval_dry_run_payload(grant, adapter_command, context)
             payload.update(adapter_result.payload)
             payload["adapter_validated"] = True
-            return SocAgentActionResult(
+            result = SocAgentActionResult(
                 route=grant.route,
                 action=grant.action,
                 status=adapter_result.status,
@@ -1794,14 +2195,34 @@ class SocAgentApprovalService:
                 payload=payload,
                 requires_human_approval=adapter_result.requires_human_approval,
             )
+            if not audit_already_written:
+                self._audit_approved_action(
+                    operation=SocMutationOperation.APPROVAL_ACTION_DRY_RUN,
+                    command=command_payload,
+                    context=context,
+                    grant=grant,
+                    result=result,
+                    reason="approved action dry-run",
+                )
+            return result
 
-        return SocAgentActionResult(
+        result = SocAgentActionResult(
             route=grant.route,
             action=grant.action,
             status="success",
             message="Approved action dry-run validated; no external side effect executed.",
             payload=self._approval_dry_run_payload(grant, command, context),
         )
+        if not audit_already_written:
+            self._audit_approved_action(
+                operation=SocMutationOperation.APPROVAL_ACTION_DRY_RUN,
+                command=command_payload,
+                context=context,
+                grant=grant,
+                result=result,
+                reason="approved action dry-run",
+            )
+        return result
 
     def execute_approved_action(
         self,
@@ -1817,12 +2238,31 @@ class SocAgentApprovalService:
         """
 
         require_actor_roles(context, self.OPERATOR_ROLES, operation="executing an approved action")
+        if self._mutation_uow is not None and not self._transaction_active:
+            with self._mutation_uow.mutation_transaction() as repository:
+                return self._transactional_clone(repository).execute_approved_action(
+                    command,
+                    context=context,
+                )
         if self._grant_repository is None:
             raise SocServiceNotImplementedError("execute_approved_action requires a SocAgentApprovalGrantRepository")
         if command.dry_run:
             raise SocServiceError("execute_approved_action requires dry_run=false")
         if not context.idempotency_key:
             raise SocServiceError("execute_approved_action requires an idempotency_key")
+
+        command_payload = command.model_dump(mode="json")
+        existing_audit = self._find_mutation_audit(
+            SocMutationOperation.APPROVAL_ACTION_EXECUTE,
+            context,
+        )
+        if existing_audit is not None:
+            validate_mutation_retry(
+                existing_audit,
+                command=command_payload,
+                target_type="approval_grant",
+                target_id=existing_audit.target_id,
+            )
 
         grant = self._grant_repository.get_approval_grant_by_token(command.execution_token_id)
         if grant is None:
@@ -1878,7 +2318,108 @@ class SocAgentApprovalService:
         grant.execution_result_id = execution_result_id
         grant.execution_result_payload = result.model_dump(mode="json")
         self._grant_repository.save_approval_grant(grant)
+        self._audit_approved_action(
+            operation=SocMutationOperation.APPROVAL_ACTION_EXECUTE,
+            command=command_payload,
+            context=context,
+            grant=grant,
+            result=result,
+            reason="approved action execution boundary",
+        )
         return result
+
+    def _transactional_clone(self, repository: SocMutationRepository) -> SocAgentApprovalService:
+        return SocAgentApprovalService(
+            grant_repository=repository,
+            request_repository=repository,
+            action_adapter_registry=self._action_adapter_registry,
+            mutation_audit_repository=repository,
+            mutation_uow=self._mutation_uow,
+            _transaction_active=True,
+        )
+
+    def _find_mutation_audit(
+        self,
+        operation: SocMutationOperation,
+        context: ServiceRequestContext,
+    ):
+        if self._mutation_audit_repository is None:
+            return None
+        return self._mutation_audit_repository.find_mutation_audit_by_idempotency_key(
+            operation,
+            mutation_idempotency_key(context),
+        )
+
+    def _append_approval_audit(
+        self,
+        *,
+        operation: SocMutationOperation,
+        target_type: str,
+        target_id: str,
+        context: ServiceRequestContext,
+        reason: str,
+        command: object,
+        result_ref: str | None,
+        payload: Mapping[str, Any],
+    ) -> None:
+        if self._mutation_audit_repository is None:
+            return
+        self._mutation_audit_repository.append_mutation_audit(
+            build_mutation_audit(
+                operation=operation,
+                target_type=target_type,
+                target_id=target_id,
+                context=context,
+                reason=reason,
+                command=command,
+                result_ref=result_ref,
+                payload=payload,
+            )
+        )
+
+    def _audit_approved_action(
+        self,
+        *,
+        operation: SocMutationOperation,
+        command: object,
+        context: ServiceRequestContext,
+        grant: SocAgentApprovalGrant,
+        result: SocAgentActionResult,
+        reason: str,
+    ) -> None:
+        self._append_approval_audit(
+            operation=operation,
+            target_type="approval_grant",
+            target_id=grant.approval_grant_id,
+            context=context,
+            reason=reason,
+            command=command,
+            result_ref=(grant.execution_result_id if operation is SocMutationOperation.APPROVAL_ACTION_EXECUTE else grant.approval_grant_id),
+            payload={
+                "approval_request_id": grant.approval_request_id,
+                "approval_grant_id": grant.approval_grant_id,
+                "route": result.route,
+                "action": result.action,
+                "result_status": result.status,
+                "grant_status": grant.status,
+                "dry_run": operation is SocMutationOperation.APPROVAL_ACTION_DRY_RUN,
+                "external_side_effect": "not_executed",
+            },
+        )
+
+    def _approval_request_audit_payload(
+        self,
+        approval_request: SocAgentApprovalRequest,
+    ) -> dict[str, Any]:
+        return {
+            "approval_request_id": approval_request.approval_request_id,
+            "permission_decision_id": approval_request.permission_decision_id,
+            "route": approval_request.route,
+            "action": approval_request.action,
+            "risk_level": approval_request.risk_level.value,
+            "status": approval_request.status.value,
+            "approval_grant_id": approval_request.approval_grant_id,
+        }
 
     def _resolve_without_grant(
         self,
@@ -1893,6 +2434,14 @@ class SocAgentApprovalService:
             self.APPROVER_ROLES,
             operation=f"marking an approval request {status.value}",
         )
+        if self._mutation_uow is not None and not self._transaction_active:
+            with self._mutation_uow.mutation_transaction() as repository:
+                return self._transactional_clone(repository)._resolve_without_grant(
+                    approval_request_id,
+                    status=status,
+                    context=context,
+                    reason=reason,
+                )
         if status not in {SocAgentApprovalRequestStatus.REJECTED, SocAgentApprovalRequestStatus.EXPIRED}:
             raise SocServiceError(f"unsupported approval resolution status: {status.value}")
         if not reason.strip():
@@ -1900,6 +2449,27 @@ class SocAgentApprovalService:
         self._require_resolution_idempotency_key(context)
         if self._request_repository is None:
             raise SocServiceNotImplementedError("approval resolution requires a SocAgentApprovalRequestRepository")
+
+        operation = SocMutationOperation.APPROVAL_REQUEST_REJECT if status is SocAgentApprovalRequestStatus.REJECTED else SocMutationOperation.APPROVAL_REQUEST_EXPIRE
+        command_payload = {
+            "approval_request_id": approval_request_id,
+            "status": status.value,
+            "reason": reason.strip(),
+        }
+        existing_audit = self._find_mutation_audit(operation, context)
+        if existing_audit is not None:
+            validate_mutation_retry(
+                existing_audit,
+                command=command_payload,
+                target_type="approval_request",
+                target_id=approval_request_id,
+            )
+            return self._validate_terminal_request_retry(
+                self.get_request(approval_request_id),
+                status=status,
+                context=context,
+                reason=reason,
+            )
 
         approval_request = self.get_request(approval_request_id)
         if approval_request.status is not SocAgentApprovalRequestStatus.PENDING:
@@ -1915,6 +2485,16 @@ class SocAgentApprovalService:
             resolved,
             expected_status=SocAgentApprovalRequestStatus.PENDING,
         ):
+            self._append_approval_audit(
+                operation=operation,
+                target_type="approval_request",
+                target_id=resolved.approval_request_id,
+                context=context,
+                reason=reason,
+                command=command_payload,
+                result_ref=resolved.approval_request_id,
+                payload=self._approval_request_audit_payload(resolved),
+            )
             return resolved
         concurrent = self.get_request(approval_request_id)
         return self._validate_terminal_request_retry(concurrent, status=status, context=context, reason=reason)

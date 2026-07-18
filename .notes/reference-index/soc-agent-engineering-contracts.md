@@ -266,6 +266,30 @@ Analysis persistence / 分析持久化约束：
 - 不可重试失败进入 summary + ReviewQueue + audit；可重试失败保留 failed run/summary/audit，但不立即
   创建人工工单，Kafka 不 commit offset，并允许同一 idempotency key 重新执行。
 
+Mutation unit of work and audit / 业务变更事务与审计约束：
+
+- `AnalysisPersistence` 只拥有 analyze/replay 主 bundle；correction、review close/note、memory review、
+  approval request/resolve/dry-run/execute 和 external disposition 使用独立
+  `SocMutationUnitOfWork.mutation_transaction()`，一个 service command 对应一个数据库事务。
+- service 是事务、RBAC、幂等和审计 owner。CLI/API/TUI/Kafka/adapter 入口不能开启局部事务、直接写表，
+  或自行伪造 mutation audit。
+- SQL transaction repository 的内部 `commit()` 只能 flush；外层 context manager 统一 commit。任一写入、
+  decision audit 或 mutation audit 失败必须回滚本命令的全部状态。
+- `SocMutationAuditRecord` 是所有 Alpha L3 mutation 的追加式命令审计，至少记录 operation、target、
+  actor、`auth_source`、request、reason、idempotency key、command hash、result status/ref 和有界 payload。
+  migration `0018_mutation_audit` 将其保存到 `soc_mutation_audit_log`。
+- `DecisionAuditRecord` 负责 verdict/policy/evidence lineage，`SocMutationAuditRecord` 负责通用命令
+  actor/idempotency/result lineage；两者不可相互替代。一次 correction/external command 可以在同一事务
+  同时写两者。
+- exact retry 的身份是 `(operation, idempotency_key)`，并校验 target 与稳定 command hash；完全相同的
+  retry 返回已有逻辑结果，复用 key 提交不同内容必须 conflict。
+- 原始 action payload、alert payload、HTTP headers、token、cookie、password、credential 和 provider
+  response 不得进入 mutation audit。只保存显式 allowlist 的有界投影；reason 和嵌套字符串必须脱敏限长。
+- `SocEvent` 是进程内通知，不是事务事实。服务必须先缓冲事件，数据库 commit 成功后再 flush；rollback
+  时不得发出“已成功”的事件。
+- 每个新增 multi-write mutation 必须增加逐写入 fault injection：在第 1..N 次写入后失败，断言所有业务
+  表、两类 audit 与事件均保持命令前状态；另测 exact retry 只产生一个逻辑结果。
+
 Alert summary 约束：
 
 - `AlertSummary` 是面向告警列表、review queue、dedup、correlation 和 Web/TUI 查询的读模型，不替代完整 `AnalysisRun`。
@@ -717,7 +741,7 @@ SOC Agent chat stream 约束：
   - Web approved action workbench 只能通过 `frontend/src/core/soc/api.ts` 调用 Gateway `/api/soc/approvals/*`；React component 不得直接拼后端 repository/DB 行为，也不得把 dry-run 展示成真实处置完成。
   - Web approval inbox consumption 只能读取 Gateway `/api/soc/approvals/requests*`，并通过 request-ID-only `/api/soc/approvals/grants` 或 reject/expire endpoint 处理 pending request；前端不得提交可变 request JSON 或直接修改 `SocAgentApprovalRequest.status`。
   - `soc review tui` approval inbox consumption 只能调用 `SocAgentApprovalService`：`/approvals` list pending request、`/approval APR-...` get detail、`/approve APR-... reason` create grant、`/reject APR-... reason` 和 `/expire APR-... reason` 进入无 grant 终态。TUI 不能直接访问 repository，不能把 approve 当作执行完成。
-  - `BG-P0-01` 只完成 request/grant 状态完整性和 L3 authorization。所有 Alpha mutation 的统一 append-only durable audit 仍由 `AC-21/BG-P0-02` 负责；不得把 request payload 或 grant execution payload 冒充已完成的统一审计链。
+  - `BG-P0-01` 完成 request/grant 状态完整性和 L3 authorization；`BG-P0-02` 已让 submit/approve/reject/expire/dry-run/execute 通过 `SocMutationUnitOfWork` 与 `SocMutationAuditRecord` 原子提交。request payload 或 grant execution payload 仍不能替代统一审计链，原始 action payload 不得写入 mutation audit。
   - TUI 本地 MVP approver actor 可以临时使用 `soc-review-tui` + `soc_approver`，但后续接真实用户体系后必须由认证/角色配置提供 approver role。
   - TUI dry-run / execute 必须作为单独命令显式触发：`/dry-run SAT-... route action` 只能调用 `SocAgentApprovalService.dry_run_approved_action()`；`/execute SAT-... route action idempotency-key` 必须提供 idempotency key，并继续走 `SocAgentApprovalService.execute_approved_action()`。
   - TUI execute 只能展示 `SocAgentActionResult` 和 execution boundary 状态；不得把 `external_side_effect=not_executed` 展示成真实封禁/隔离/处置完成。
@@ -1777,6 +1801,8 @@ Phase 1 用 Python `Protocol` + 显式 registry 即可，不做热插拔 marketp
 一致性原则：
 
 - `alert_summaries`、`decision_audit_log`、`pipeline_step_trace` 要么同事务写入关键结果，要么能通过 run 状态判断失败。
+- Alpha L3 业务命令必须通过 `SocMutationUnitOfWork` 同时提交业务状态和
+  `soc_mutation_audit_log`；进程事件只能在 commit 后发出。
 - LLM 调用不可回滚，所以必须先记录 request metadata，再写 final decision。
 - 外部副作用动作必须先写 `automation_actions(proposed)`，批准后再执行。
 
