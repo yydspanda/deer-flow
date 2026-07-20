@@ -19,7 +19,10 @@ from soc_agent.contracts import (
     AlertInput,
     AlertSourceType,
     AlertSummary,
+    AnalysisRequestJournal,
+    AnalysisRequestJournalStatus,
     AnalysisRun,
+    AnalysisRunRecoveryCommand,
     AnalysisRunStatus,
     AuditAction,
     CorrectionCommand,
@@ -28,12 +31,15 @@ from soc_agent.contracts import (
     CorrelationResult,
     Decision,
     DecisionAuditRecord,
+    DecisionConfidenceSource,
+    DecisionEvidenceState,
     DecisionReviewReason,
     EntrySurface,
     ExtractionReport,
     InvestigationContext,
     InvestigationEvidence,
     InvestigationTimelineItem,
+    LLMAnalysisRequest,
     MessageSchemaStatus,
     NormalizationDriftReport,
     NormalizationDriftSample,
@@ -90,6 +96,7 @@ from soc_agent.normalizers import load_mapping_config, normalize_alert_payload
 from soc_agent.protocols import (
     AlertRepository,
     AlertSummaryRepository,
+    AnalysisBeforeProviderHook,
     AnalysisPersistence,
     AnalysisRuntime,
     AuthorizationEnrichmentRepository,
@@ -149,6 +156,19 @@ class DeterministicAnalysisRuntime:
             payload,
             analyzer=self._analyzer,
             decision_policy=self._decision_policy,
+        )
+
+    def analyze_journaled(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        before_provider: AnalysisBeforeProviderHook,
+    ) -> AnalysisRun:
+        return analyze_alert(
+            payload,
+            analyzer=self._analyzer,
+            decision_policy=self._decision_policy,
+            before_provider=before_provider,
         )
 
 
@@ -213,11 +233,86 @@ class SocAnalysisService:
         previous = self._repository.get_run(run_id)
         if previous is None:
             raise SocServiceNotFoundError(f"run {run_id} not found")
+        if previous.status is AnalysisRunStatus.RUNNING:
+            raise SocServiceConflictError(f"run {run_id} is still running; use recover after its stale window")
         if previous.input_payload is None:
             raise SocServiceNotImplementedError(f"run {run_id} has no replayable input payload")
 
         request_context = context or ServiceRequestContext()
         return self._analyze(previous.input_payload, context=request_context, replay_of_run_id=run_id)
+
+    def recover(
+        self,
+        command: AnalysisRunRecoveryCommand,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> AnalysisRun:
+        """Claim a stale running journal and replay its preserved source input."""
+
+        if self._repository is None:
+            raise SocServiceNotImplementedError("recover requires an AlertRepository")
+        previous = self._repository.get_run(command.run_id)
+        if previous is None:
+            raise SocServiceNotFoundError(f"run {command.run_id} not found")
+        if previous.input_payload is None:
+            raise SocServiceNotImplementedError(f"run {command.run_id} has no replayable input payload")
+        journal = previous.request_journal
+        if journal is None:
+            raise SocServiceConflictError(f"run {command.run_id} has no durable request journal")
+        if previous.status not in {AnalysisRunStatus.RUNNING, AnalysisRunStatus.INTERRUPTED}:
+            raise SocServiceConflictError(f"run {command.run_id} is {previous.status.value}, not recoverable")
+
+        request_context = context or ServiceRequestContext()
+        recovery_context = request_context.model_copy(update={"idempotency_key": request_context.idempotency_key or f"analysis_recovery:{command.run_id}"})
+        if journal.recovery_run_id is not None:
+            recovered = self._repository.get_run(journal.recovery_run_id)
+            if recovered is not None:
+                return recovered
+
+        now = _utc_now()
+        stale_before = now - timedelta(seconds=command.stale_after_seconds)
+        if previous.status is AnalysisRunStatus.RUNNING:
+            if journal.provider_started_at > stale_before:
+                raise SocServiceConflictError(f"run {command.run_id} has not exceeded the {command.stale_after_seconds}s recovery window")
+            previous.status = AnalysisRunStatus.INTERRUPTED
+            previous.ended_at = now
+            previous.request_journal = journal.model_copy(
+                update={
+                    "status": AnalysisRequestJournalStatus.INTERRUPTED,
+                    "finalized_at": now,
+                    "recovered_at": now,
+                    "recovered_by": recovery_context.actor,
+                    "recovery_reason": command.reason,
+                }
+            )
+            claim_run_recovery = getattr(self._repository, "claim_run_recovery", None)
+            if callable(claim_run_recovery):
+                if not claim_run_recovery(previous, expected_status=AnalysisRunStatus.RUNNING):
+                    raise SocServiceConflictError(f"run {command.run_id} recovery was already claimed")
+            else:
+                self._repository.save_run(previous)
+        elif journal.recovered_at is not None and journal.recovered_at > stale_before:
+            raise SocServiceConflictError(f"run {command.run_id} recovery is already in progress")
+        else:
+            previous.request_journal = journal.model_copy(
+                update={
+                    "recovered_at": now,
+                    "recovered_by": recovery_context.actor,
+                    "recovery_reason": command.reason,
+                }
+            )
+            self._repository.save_run(previous)
+
+        recovered = self._analyze(
+            previous.input_payload,
+            context=recovery_context,
+            replay_of_run_id=previous.run_id,
+        )
+        refreshed = self._repository.get_run(previous.run_id) or previous
+        if refreshed.request_journal is not None:
+            refreshed.request_journal = refreshed.request_journal.model_copy(update={"recovery_run_id": recovered.run_id})
+            self._repository.save_run(refreshed)
+        return recovered
 
     def _analyze(
         self,
@@ -243,8 +338,14 @@ class SocAnalysisService:
             self._emit_analysis_completion(existing_run, context=context, replay_of_run_id=replay_of_run_id, idempotent_replay=True)
             return existing_run
 
-        run = self._runtime.analyze(payload)
+        run = self._run_runtime_with_journal(
+            payload,
+            context=context,
+            action=audit_action,
+            replay_of_run_id=replay_of_run_id,
+        )
         run.replay_of_run_id = replay_of_run_id
+        _finalize_request_journal(run)
         summary = _alert_summary_from_run(run)
         audit_record = _analysis_audit_record(
             run,
@@ -287,6 +388,35 @@ class SocAnalysisService:
 
         self._emit_analysis_completion(run, context=context, replay_of_run_id=replay_of_run_id, idempotent_replay=False)
         return run
+
+    def _run_runtime_with_journal(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        context: ServiceRequestContext,
+        action: AuditAction,
+        replay_of_run_id: str | None,
+    ) -> AnalysisRun:
+        analyze_journaled = getattr(self._runtime, "analyze_journaled", None)
+        if self._repository is None or not callable(analyze_journaled):
+            return self._runtime.analyze(payload)
+
+        def persist_before_provider(
+            run: AnalysisRun,
+            request: LLMAnalysisRequest,
+            provider_step_name: str,
+        ) -> None:
+            run.replay_of_run_id = replay_of_run_id
+            run.request_journal = _request_journal_from_analysis_request(
+                run,
+                request,
+                context=context,
+                action=action,
+                provider_step_name=provider_step_name,
+            )
+            self._repository.save_run(run.model_copy(deep=True))
+
+        return analyze_journaled(payload, before_provider=persist_before_provider)
 
     def _find_existing_idempotent_run(self, context: ServiceRequestContext, *, action: AuditAction) -> AnalysisRun | None:
         if not context.idempotency_key or self._audit_repository is None or self._repository is None:
@@ -535,7 +665,6 @@ class SocReviewService:
     """Review queue and correction service."""
 
     HUMAN_MUTATION_ROLES = frozenset({"analyst", "soc_analyst", "soc_admin"})
-    CORRECTION_ROLES = HUMAN_MUTATION_ROLES | {"external_disposition_adapter"}
 
     def __init__(
         self,
@@ -586,18 +715,49 @@ class SocReviewService:
         *,
         context: ServiceRequestContext | None = None,
     ) -> AnalysisRun:
+        return self._correct(
+            command,
+            context=context or ServiceRequestContext(),
+            confidence_source=DecisionConfidenceSource.HUMAN_CONFIRMATION,
+        )
+
+    def correct_external(
+        self,
+        command: CorrectionCommand,
+        *,
+        context: ServiceRequestContext,
+    ) -> AnalysisRun:
+        """Apply a correction already admitted by the external-disposition service."""
+
+        return self._correct(
+            command,
+            context=context,
+            confidence_source=DecisionConfidenceSource.EXTERNAL_DISPOSITION,
+        )
+
+    def _correct(
+        self,
+        command: CorrectionCommand,
+        *,
+        context: ServiceRequestContext,
+        confidence_source: DecisionConfidenceSource,
+    ) -> AnalysisRun:
         request_context = context or ServiceRequestContext()
+        allowed_roles = self.HUMAN_MUTATION_ROLES
+        if confidence_source is DecisionConfidenceSource.EXTERNAL_DISPOSITION:
+            allowed_roles = frozenset({"external_disposition_adapter", "soc_admin"})
         require_actor_roles(
             request_context,
-            self.CORRECTION_ROLES,
+            allowed_roles,
             operation="correcting an analysis run",
         )
         if self._mutation_uow is not None and not self._transaction_active:
             buffered_events = BufferedSocEventSink(self._event_sink)
             with self._mutation_uow.mutation_transaction() as repository:
-                result = self._transactional_clone(repository, event_sink=buffered_events).correct(
+                result = self._transactional_clone(repository, event_sink=buffered_events)._correct(
                     command,
                     context=request_context,
+                    confidence_source=confidence_source,
                 )
             buffered_events.flush()
             return result
@@ -608,7 +768,10 @@ class SocReviewService:
             SocMutationOperation.REVIEW_CORRECT,
             request_context,
         )
-        command_payload = command.model_dump(mode="json")
+        command_payload = {
+            **command.model_dump(mode="json"),
+            "confidence_source": confidence_source.value,
+        }
         if existing_audit is not None:
             validate_mutation_retry(
                 existing_audit,
@@ -626,12 +789,21 @@ class SocReviewService:
             raise SocServiceNotFoundError(f"run {command.run_id} not found")
 
         previous_verdict = _current_verdict(run)
+        effective_confidence = command.corrected_confidence if command.corrected_confidence is not None else 1.0
+        confidence_explanation = _correction_confidence_explanation(
+            confidence_source,
+            explicit=command.corrected_confidence is not None,
+        )
         record = CorrectionRecord(
             run_id=run.run_id,
             previous_verdict=previous_verdict,
             corrected_verdict=command.corrected_verdict,
             reason=command.reason,
-            corrected_confidence=command.corrected_confidence,
+            corrected_confidence=effective_confidence,
+            confidence_source=confidence_source,
+            confidence_was_explicit=command.corrected_confidence is not None,
+            confidence_policy_version="soc.correction_policy.v1",
+            confidence_explanation=confidence_explanation,
             actor=request_context.actor,
             evidence=command.evidence,
             candidate_knowledge_status="pending_review",
@@ -639,10 +811,17 @@ class SocReviewService:
         run.corrections.append(record)
         run.decision = Decision(
             verdict=command.corrected_verdict,
-            confidence=command.corrected_confidence if command.corrected_confidence is not None else 1.0,
+            confidence=effective_confidence,
+            confidence_source=confidence_source,
+            confidence_is_calibrated=False,
+            calibrated_probability=None,
+            calibration_profile_version=None,
+            evidence_state=(run.decision.evidence_state if run.decision is not None else DecisionEvidenceState.PARTIAL),
             suggested_action=run.decision.suggested_action if run.decision is not None else "manual correction recorded",
             needs_review=False,
             reason=command.reason,
+            policy_version="soc.correction_policy.v1",
+            confidence_explanation=confidence_explanation,
             automation_allowed=False,
         )
         review_item = self._review_queue_repository.get_open_review_item_by_run(run.run_id) if self._review_queue_repository is not None else None
@@ -683,6 +862,8 @@ class SocReviewService:
                 payload={
                     "previous_verdict": previous_verdict.value if previous_verdict is not None else None,
                     "corrected_verdict": command.corrected_verdict.value,
+                    "confidence_source": confidence_source.value,
+                    "confidence_policy_version": record.confidence_policy_version,
                     "correction_id": record.correction_id,
                     "memory_candidate_id": record.memory_candidate_id,
                 },
@@ -699,6 +880,8 @@ class SocReviewService:
                     "correction_id": record.correction_id,
                     "previous_verdict": previous_verdict.value if previous_verdict is not None else None,
                     "corrected_verdict": command.corrected_verdict.value,
+                    "confidence_source": record.confidence_source.value,
+                    "confidence_policy_version": record.confidence_policy_version,
                     "candidate_knowledge_status": record.candidate_knowledge_status,
                     "memory_candidate_id": record.memory_candidate_id,
                 },
@@ -3364,6 +3547,10 @@ def _investigation_timeline_from_context(context: InvestigationContext) -> list[
                 payload={
                     "previous_verdict": correction.previous_verdict.value if correction.previous_verdict is not None else None,
                     "corrected_confidence": correction.corrected_confidence,
+                    "confidence_source": correction.confidence_source.value,
+                    "confidence_was_explicit": correction.confidence_was_explicit,
+                    "confidence_policy_version": correction.confidence_policy_version,
+                    "confidence_explanation": correction.confidence_explanation,
                     "candidate_knowledge_status": correction.candidate_knowledge_status,
                 },
             )
@@ -3659,6 +3846,10 @@ def _alert_summary_from_run(run: AnalysisRun) -> AlertSummary:
         status=run.status,
         verdict=verdict,
         confidence=confidence,
+        confidence_source=decision.confidence_source if decision is not None else None,
+        confidence_is_calibrated=decision.confidence_is_calibrated if decision is not None else False,
+        confidence_policy_version=decision.policy_version if decision is not None else None,
+        confidence_explanation=decision.confidence_explanation if decision is not None else None,
         needs_review=(decision.needs_review if decision is not None else run.status is AnalysisRunStatus.NEEDS_REVIEW or failed_requires_review),
         review_reasons=(list(decision.review_reasons) if decision is not None else [DecisionReviewReason.ANALYSIS_FAILED] if failed_requires_review else []),
         summary=(analysis.summary if analysis is not None else run.failure.message if run.failure is not None else None),
@@ -3821,6 +4012,67 @@ def _dedupe(values: list[str]) -> list[str]:
     return result
 
 
+def _request_journal_from_analysis_request(
+    run: AnalysisRun,
+    request: LLMAnalysisRequest,
+    *,
+    context: ServiceRequestContext,
+    action: AuditAction,
+    provider_step_name: str,
+) -> AnalysisRequestJournal:
+    return AnalysisRequestJournal(
+        action=action,
+        request_id=context.request_id,
+        trace_id=context.trace_id,
+        actor=context.actor,
+        idempotency_key_hash=(_stable_sha256(context.idempotency_key) if context.idempotency_key else None),
+        replay_of_run_id=run.replay_of_run_id,
+        request_schema_version=request.schema_version,
+        request_hash=_stable_sha256(request.model_dump(mode="json")),
+        source_type=request.source.source_type,
+        source_system=request.source.source_system,
+        detection_key=request.detection.detection_key,
+        model_name=run.model_name,
+        prompt_version=run.prompt_version,
+        provider_step_name=provider_step_name,
+        primary_evidence_present=request.primary_evidence is not None,
+        supplementary_evidence_count=len(request.supplementary_evidence),
+        selected_skills=[item.skill_name for item in request.skill_context.selected_skills],
+    )
+
+
+def _finalize_request_journal(run: AnalysisRun) -> None:
+    journal = run.request_journal
+    if journal is None:
+        return
+    if run.status is AnalysisRunStatus.FAILED:
+        status = AnalysisRequestJournalStatus.FAILED
+    elif run.status is AnalysisRunStatus.INTERRUPTED:
+        status = AnalysisRequestJournalStatus.INTERRUPTED
+    else:
+        status = AnalysisRequestJournalStatus.COMPLETED
+    run.request_journal = journal.model_copy(
+        update={
+            "status": status,
+            "finalized_at": run.ended_at or _utc_now(),
+            "failure_kind": run.failure.kind if run.failure is not None else None,
+            "failure_retryable": run.failure.retryable if run.failure is not None else None,
+        }
+    )
+
+
+def _correction_confidence_explanation(
+    source: DecisionConfidenceSource,
+    *,
+    explicit: bool,
+) -> str:
+    if source is DecisionConfidenceSource.EXTERNAL_DISPOSITION:
+        return "Trusted external disposition confirmation strength; not a calibrated probability."
+    if explicit:
+        return "Analyst-supplied confirmation strength; not a calibrated probability."
+    return "Policy default for categorical analyst confirmation; not a calibrated probability."
+
+
 def _analysis_audit_record(
     run: AnalysisRun,
     *,
@@ -3876,6 +4128,11 @@ def _correction_audit_record(run: AnalysisRun, record: CorrectionRecord) -> Deci
             "candidate_knowledge_status": record.candidate_knowledge_status,
             "memory_candidate_id": record.memory_candidate_id,
             "evidence_count": len(record.evidence),
+            "confidence_source": record.confidence_source.value,
+            "confidence_is_calibrated": False,
+            "confidence_was_explicit": record.confidence_was_explicit,
+            "confidence_policy_version": record.confidence_policy_version,
+            "confidence_explanation": record.confidence_explanation,
             "automation_allowed": False,
         },
     )

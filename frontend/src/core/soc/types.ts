@@ -9,6 +9,13 @@ export type SocVerdict =
   | "unknown"
   | "needs_review";
 
+export type SocDecisionConfidenceSource =
+  | "unknown"
+  | "stub_heuristic"
+  | "llm_self_report"
+  | "human_confirmation"
+  | "external_disposition";
+
 export type SocEntrySurface = "api" | "web";
 
 export interface SocRequestContext {
@@ -68,6 +75,22 @@ export interface SocAnalysisRun {
   input_hash?: string | null;
   started_at: string;
   ended_at?: string | null;
+  request_journal?: {
+    schema_version: string;
+    status: "running" | "completed" | "failed" | "interrupted";
+    action: "analysis" | "replay";
+    request_id: string;
+    trace_id?: string | null;
+    request_hash: string;
+    model_name: string;
+    prompt_version: string;
+    provider_step_name: string;
+    provider_started_at: string;
+    finalized_at?: string | null;
+    failure_kind?: string | null;
+    failure_retryable?: boolean | null;
+    recovery_run_id?: string | null;
+  } | null;
   entities?: Record<string, unknown> | null;
   normalization_report?: Record<string, unknown> | null;
   extraction_report?: Record<string, unknown> | null;
@@ -90,6 +113,10 @@ export interface SocAlertSummary {
   category?: string | null;
   verdict?: SocVerdict | null;
   confidence?: number | null;
+  confidence_source?: SocDecisionConfidenceSource | null;
+  confidence_is_calibrated?: boolean;
+  confidence_policy_version?: string | null;
+  confidence_explanation?: string | null;
   entity_keys?: string[];
   summary?: string | null;
   recommended_action?: string | null;

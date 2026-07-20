@@ -234,6 +234,11 @@ Replay 约束：
 - `AnalysisRun` 必须保存 `input_payload` 和 `input_hash`，repository 不能只保存最终 verdict。
 - `SocAnalysisService.replay(run_id)` 必须通过 `AlertRepository.get_run()` 取回旧 run 的输入快照，生成新的 run。
 - replay 不能覆盖历史 run；新 run 必须记录 `replay_of_run_id`。
+- 普通 replay 不允许复制仍处于 `running` 的 run；进程丢失恢复必须走
+  `SocAnalysisService.recover(AnalysisRunRecoveryCommand)`，经过 stale window 后先把旧 run 标成
+  `interrupted`，再创建带 `replay_of_run_id` 的新 run。SQL repository 必须以 expected `running`
+  status 做单赢家条件更新；已认领但未产出 replay 的 interruption 仍受 stale lease 保护。默认 recovery
+  idempotency key 由旧 run ID 稳定派生。
 - 若旧 run 不存在，service 返回 not-found 语义；若旧 run 没有可 replay 输入，必须 fail-fast，不允许猜测输入。
 
 Correction 约束：
@@ -242,6 +247,13 @@ Correction 约束：
 - 每次 correction 必须追加 `CorrectionRecord`，记录 previous verdict、corrected verdict、actor、reason、evidence 和时间。
 - correction 只能把候选知识标记为 `pending_review`；不能直接生成 confirmed fact、lesson 或自动处置规则。
 - correction 后仍保持 `automation_allowed=False`。
+- 人工入口只能生成 `confidence_source=human_confirmation`；只有已通过
+  `SocExternalDispositionService` trust/mapping/target gate 的内部调用可以使用
+  `SocReviewService.correct_external()` 并生成 `external_disposition`。入口不能自行提交 provenance。
+- correction confidence 是未校准的 confirmation strength，不是概率。未显式输入时使用
+  `soc.correction_policy.v1` 的 categorical default；无论是否显式输入，都必须保留
+  `confidence_source`、`confidence_was_explicit`、policy version 和 explanation，且
+  `confidence_is_calibrated=false`、`calibrated_probability=null`。
 
 Decision audit 约束：
 
@@ -256,6 +268,16 @@ Decision audit 约束：
 
 Analysis persistence / 分析持久化约束：
 
+- 持久化分析必须使用支持 `analyze_journaled()` 的 Runtime。在进入 analyzer/provider 前，service 将
+  同一个 `AnalysisRun` 以 `status=running` 写入 `soc_analysis_runs`，并附加
+  `AnalysisRequestJournal(soc.analysis_request_journal.v1)`。
+- request journal 只保存 request hash/schema、source/detection 元数据、model/prompt/step、证据计数、
+  selected skill、request/trace/actor 和哈希后的 idempotency key；不得保存渲染后的 prompt、证据值、
+  provider header/response、credential 或 token。原始 source replay snapshot 仍按既有治理边界保存在
+  `AnalysisRun.input_payload`，两者不能混为一类数据。
+- final bundle 把 journal 原子更新为 `completed` 或 `failed`；provider timeout 必须保存 typed retryable
+  failure。若进程在 provider 中消失，或 final bundle 回滚，pre-call row 保持 `running` 可发现，由
+  `soc recover RUN_ID --reason ...` 在 stale window 后转为 `interrupted` 并 replay。
 - 一次 analyze/replay 的主业务结果必须通过 `AnalysisPersistence.save_analysis_bundle()` 原子写入
   `AnalysisRun`、`AlertSummary`、可选 `ReviewQueueItem` 和 `DecisionAuditRecord`；生产 SQL repository
   不得在 service 中逐表 commit 后假装为完整成功。
@@ -1823,7 +1845,8 @@ Phase 1 用 Python `Protocol` + 显式 registry 即可，不做热插拔 marketp
 - `alert_summaries`、`decision_audit_log`、`pipeline_step_trace` 要么同事务写入关键结果，要么能通过 run 状态判断失败。
 - Alpha L3 业务命令必须通过 `SocMutationUnitOfWork` 同时提交业务状态和
   `soc_mutation_audit_log`；进程事件只能在 commit 后发出。
-- LLM 调用不可回滚，所以必须先记录 request metadata，再写 final decision。
+- LLM 调用不可回滚，所以必须先提交 bounded `AnalysisRequestJournal`，再调用 provider，最后通过
+  analysis bundle 写 final decision；只发进程内 `analysis.requested` event 不满足该约束。
 - 外部副作用动作必须先写 `automation_actions(proposed)`，批准后再执行。
 
 ## 二十一、测试与评测

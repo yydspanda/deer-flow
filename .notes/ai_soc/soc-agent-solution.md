@@ -301,13 +301,15 @@ flowchart TD
     X --> F["3. fact_reconstruct<br/>RoleClaim + Scenario + Resolution"]
     F --> B["4. build_analysis_input<br/>bounded evidence + coverage"]
     B --> S["5. skill_context<br/>allowlisted compact guidance"]
-    S --> L["6. analyze_stub / analyze_llm<br/>DeerFlow model in explicit mode"]
+    S --> J["📝 Pre-provider Journal<br/>running + bounded metadata"]
+    J --> L["6. analyze_stub / analyze_llm<br/>DeerFlow model in explicit mode"]
     L --> V["7. schema_validate<br/>JSON + Pydantic + domain"]
     V --> G["8. evidence_grounding<br/>claim value -> bounded context path"]
     G --> R["9. SocDecisionPolicy<br/>detection decision guards"]
     R --> P["🔒 Atomic analysis bundle<br/>run + summary + review + audit"]
     L -->|failure| E["⚠️ RuntimeFailure<br/>typed + sanitized + retryable"]
     E --> P
+    J -->|process loss| I["⏸️ Discoverable running run<br/>stale -> interrupted -> recover/replay"]
     P --> M["🛠️ normalization_monitor<br/>fail-open maintenance side path"]
 ```
 
@@ -325,6 +327,19 @@ transition/action boundary, or external-disposition apply either commits all SQL
 `SocMutationAuditRecord`, or rolls them all back. Process-local `SocEvent` emission is buffered until
 commit. `DecisionAuditRecord` remains the decision-lineage record; mutation audit is the
 cross-command actor/idempotency/result record, so neither table replaces the other.
+
+The provider call has an earlier durability boundary because it cannot be rolled back. Persisted
+CLI/Kafka analysis uses `DeterministicAnalysisRuntime.analyze_journaled()`: immediately before the
+analyzer is invoked, `SocAnalysisService` commits the same `AnalysisRun(status=running)` with a
+bounded `AnalysisRequestJournal`. The journal contains hashes, model/prompt/step, compact source and
+evidence counts, request/trace/actor, and a hashed idempotency key; it never contains a rendered
+prompt, evidence values, provider headers/responses, credentials, or tokens. The existing governed
+`input_payload` remains the replay snapshot. Final bundle commit changes the journal to
+`completed/failed`; process loss or bundle rollback leaves the pre-call row discoverable. Operators
+use `soc recover RUN_ID --reason ...` after the stale window, which marks the old run `interrupted`
+through an expected-`running` single-winner database claim and creates one idempotent replay run
+linked by `replay_of_run_id`. An interrupted claim without a replay remains lease-protected until its
+stale window expires.
 
 Phase 2 correlation bridge / 历史关联桥接：
 
@@ -390,6 +405,9 @@ Runtime rules:
   remain deterministic by default.
 - Model calls record actual model name, prompt/parser versions, duration, bounded token usage and
   safe provider metadata. They never persist API keys, request headers, full prompts or raw responses.
+- Before a persisted analyzer call, the service commits a bounded request journal. A normal replay
+  rejects a still-running run; recovery requires the stale-window command and preserves the old
+  run as `interrupted` rather than overwriting it.
 - Process-local model admission is bounded independently from Kafka workers with
   `SOC_LLM_MAX_CONCURRENCY`, optional `SOC_LLM_REQUESTS_PER_MINUTE`, and
   `SOC_LLM_ADMISSION_TIMEOUT_SECONDS`. One provider invocation is separately bounded by
@@ -399,7 +417,8 @@ Runtime rules:
   validation.
 - Prompt context, model response, analysis text, evidence count/value size, knowledge candidates,
   and projection depth/list sizes all have hard bounds.
-- Replay must be possible from stored run payload and deterministic settings.
+- Replay must be possible from stored run payload and deterministic settings. Recovery creates a
+  new replay run and records `replay_of_run_id`; it never turns the original run into the new result.
 - Runtime failures are stored as `RuntimeFailure(kind, step_name, retryable, safe message)`. Retryable
   Kafka failures do not commit the offset or open a duplicate analyst queue; non-retryable failures
   are dead-lettered and enter ReviewQueue.
@@ -543,6 +562,7 @@ The system has several confidence-like values, but they are not interchangeable 
 | `RoleClaim/RoleResolution.semantic_confidence` | Strength of one role interpretation under a scenario | Provisional role explanation and automation guard |
 | `AnalysisResult.confidence` | Analyzer/LLM assessment for the verdict | Review display and eval only; cannot bypass validation or approval |
 | `Decision.confidence_source` | Provenance of the raw decision score | Distinguishes stub heuristic, LLM self-report, human confirmation, and external disposition |
+| Correction confirmation strength | Human/external categorical confirmation, optionally supplied by an analyst | Always uncalibrated; policy/explanation/source travel with the number |
 | `Decision.calibrated_probability` | Versioned calibrated probability, when an approved profile exists | Currently `null`; it must never be fabricated from raw analyzer confidence |
 | `Decision.evidence_state` / `review_reasons` | Operational evidence guard and structured review causes | Drives ReviewQueue/audit explanations independently of the numeric score |
 | `AnalysisEvidenceGroundingReport` | Whether each analyzer evidence value exists at its declared bounded-context source | Ungrounded claims force review and remain auditable; never auto-rewrite model output |
@@ -559,6 +579,11 @@ Rules:
   constants and taxonomy version must be replayable.
 - LLM self-reported confidence is advisory. Production thresholds require labeled replay sets,
   calibration metrics, versioned thresholds, and comparison against analyst outcomes.
+- A correction score is not silently presented as model probability. Human correction uses
+  `human_confirmation`; an admitted trusted external disposition uses `external_disposition`.
+  Both use `soc.correction_policy.v1`, preserve whether the value was explicit, carry a plain
+  explanation, and force `confidence_is_calibrated=false` with no calibrated probability. The old
+  external fixed `0.95` is removed.
 - Offline calibration is a governed two-stage boundary. `soc eval labels prepare` extracts a compact,
   raw-payload-free review bundle from complete live-LLM `AnalysisRun` artifacts; analysts then set
   `actual_verdict`, `review_status`, reviewer, time, and reason. `soc eval labels validate` blocks
@@ -954,6 +979,8 @@ not require rewriting core contracts.
 | `RoleResolution` | Conflict-aware role result and evidence gaps | Stable |
 | `ConflictReport` | Conflict and ambiguity report | Stable |
 | `AnalysisRun` | Full runtime execution record | Stable for replay/audit |
+| `AnalysisRequestJournal` | Durable bounded pre-provider metadata and recovery state | Stable; no rendered prompt/provider secret/response |
+| `AnalysisRunRecoveryCommand` | Stale running-run claim and replay request | Stable service/CLI boundary |
 | `AlertSummary` | Lightweight read model | Stable for queue/correlation/list |
 | `CorrelationResult` | Structured historical similarity and reusable-evidence result | Stable read-only bridge into domain/report/context |
 | `CorrelationEvalFixtureSet` | Versioned same/related/unrelated pair labels | Offline-only; must name scoring policy and preserve human rationale |
@@ -1003,7 +1030,7 @@ Main persistence categories:
 
 | Data / 数据 | Purpose / 用途 | Notes / 备注 |
 | --- | --- | --- |
-| Analysis runs | Replay and audit | Full payload, trace, result |
+| Analysis runs | Replay, pre-provider journal, recovery and audit | Full source snapshot plus bounded request journal, trace and result |
 | Alert summaries | Review/correlation/list | Lightweight projection |
 | Review queue | Human workflow | State, owner, reason, correction |
 | Investigation evidence | Read-only tool/MCP evidence | Reusable in context, not memory by default |
@@ -1202,6 +1229,9 @@ soc llm status --analyzer-mode llm --model-name deepseek-v4-pro --pretty
 
 # Run one alert through the real bounded model node
 soc analyze alert.json --analyzer-mode llm --model-name deepseek-v4-pro --pretty
+
+# Recover a stale running provider call without overwriting the original run
+soc recover RUN_ID --reason "worker exited during provider call" --database-url "$SOC_DATABASE_URL" --pretty
 
 # Compare stub and live model over an offline sample set
 soc eval offline samples/ --live-llm --model-name deepseek-v4-pro --pretty

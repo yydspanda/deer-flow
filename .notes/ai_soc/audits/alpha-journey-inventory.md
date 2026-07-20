@@ -17,6 +17,10 @@ Post-snapshot addendum:
 - `BG-P1-02` (2026-07-20) preserved the existing `/api/soc/*` application paths/direct typed
   responses and added one shared API v1 transport: response version, request/trace correlation,
   sanitized Problem Details, OpenAPI snapshot and frontend `SocApiError` handling.
+- `BG-P1-03` (2026-07-20) added the durable pre-provider `AnalysisRequestJournal`, stale
+  `running -> interrupted -> linked replay` recovery path and CLI command. Human and trusted
+  external correction confidence now carry distinct uncalibrated provenance and
+  `soc.correction_policy.v1`; the external fixed `0.95` was removed.
 
 The original 17-table, bare-Kafka-object, service-only external-disposition and audit inventory below
 is intentionally retained as AUD-01 evidence. Current truth is recorded in the completeness matrix,

@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `BG` Stage 3 - Close Blocking Gaps（`BD`、`AA` Gate 已于 2026-07-18 通过） |
-| 当前目标 | `BG-P1-03 Runtime recovery and decision provenance`：关闭 `AC-13/AC-17`，增加 durable pre-model journal/recovery，并修正 human/external correction confidence provenance |
+| 当前目标 | `BG-P1-04 Governed memory activation`：关闭 `AC-39`，为 confirmed memory 的 retrieval enable/disable 增加 role/reason/audit/version-controlled service 与应用入口 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `BG-P1-03`：先冻结 pre-provider journal 状态机和 crash/timeout recovery contract，再实现持久化；同刀移除 external fixed `0.95` 并明确 human/external confidence source。 |
+| 当前下一刀 | `BG-P1-04`：先冻结 memory retrieval activation command/state/audit contract，再让 CLI/API/Web 全部调用同一个 `SocMemoryService`，并用 retrieval replay diff 证明只有受治理启用的 confirmed record 进入 bounded context。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -39,7 +39,7 @@
 |---|---|---|---|---|
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
-| `BG` | Close Blocking Gaps | **Current / BG-P1-03 In Progress** | `BG-P0-01..02`、`BG-P1-01..02` 已完成；当前补 Runtime recovery 和 correction provenance | Alpha E2E 和 readiness package 通过 |
+| `BG` | Close Blocking Gaps | **Current / BG-P1-04 In Progress** | `BG-P0-01..02`、`BG-P1-01..03` 已完成；当前补 governed memory retrieval activation | Alpha E2E 和 readiness package 通过 |
 | `PI` | Real Data & Production Integration | Data/credential-gated | 真实 provider、基础设施、标签、SLO 和 governed rollout | Pilot readiness review 通过 |
 
 ## 能力与历史切片台账
@@ -200,6 +200,40 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-20 — BG-P1-03 Runtime recovery and decision provenance completed
+
+- `AC-13` 已关闭：
+  - 新增 `AnalysisRequestJournal(soc.analysis_request_journal.v1)` 和 Runtime
+    `analyze_journaled()` pre-provider hook；持久化 CLI/Kafka path 在 analyzer/provider 调用前提交
+    `AnalysisRun(status=running)`，final analysis bundle 再原子更新 journal 为 `completed/failed`；
+  - journal 只保存 request hash/schema、source/detection 元数据、model/prompt/step、证据计数、selected
+    skills、request/trace/actor 和哈希后的 idempotency key，不保存 rendered prompt、evidence values、
+    provider header/response、credential/token；existing `input_payload` 继续作为受治理 replay snapshot；
+  - `SocAnalysisService.recover()` / `soc recover` 使用 stale window，将 process-lost run 保留为
+    `interrupted`；SQL repository 通过 expected-running 条件更新保证单赢家 claim，interrupted claim 仍受
+    stale lease 保护；随后创建稳定幂等且带 `replay_of_run_id` 的新 run，普通 replay 拒绝 running run；
+  - process loss、provider timeout、stale-window deny、final bundle rollback 和重复 recovery 均有 SQL 回归。
+- `AC-17` 已关闭：
+  - human correction 固定写 `human_confirmation`；只有经过 external disposition trust/mapping/target
+    gate 的 `correct_external()` 写 `external_disposition`；入口不能自行伪造来源；
+  - 删除 external fixed `0.95`；correction 数字定义为未校准 confirmation strength，使用
+    `soc.correction_policy.v1`，保留 explicit/default、解释和来源，强制
+    `confidence_is_calibrated=false` / `calibrated_probability=null`；
+  - provenance 已贯穿 `Decision`、`CorrectionRecord`、`AlertSummary`、decision/mutation audit、timeline、
+    CLI 和 Review API，frontend contract 同步新增字段。
+- 验证：
+  - process-loss/timeout/rollback/recovery + correction/external/summary/audit/API focused tests 通过；
+  - `cd backend && ./.venv/bin/pytest -q tests/test_soc_*.py`：541 passed；
+  - architecture + migration environment：16 passed；
+  - `cd frontend && pnpm test`：642 passed；`pnpm check` 通过；backend Ruff format/check 通过。
+- 真实边界：
+  - Alpha recovery 使用同一 SOC business store 和 stale-window claim；生产多 pod worker ownership、lease/
+    heartbeat 和 provider cost reconciliation 仍需 Stage 4 基础设施证据；
+  - confirmation strength 不是 production calibrated probability，真实校准仍由 `AC-19/PI-03` data gate 控制。
+- 下一步：
+  - `BG-P1-04`：关闭 `AC-39`，实现 role/reason/audit/version-controlled memory retrieval enable/disable，
+    并验证所有入口复用 service、只有 enabled confirmed record 进入 bounded retrieval。
 
 ### 2026-07-20 — BG-P1-02 API contract stabilization completed
 

@@ -104,6 +104,15 @@ class AnalysisRunStatus(StrEnum):
     REPLAYED = "replayed"
 
 
+class AnalysisRequestJournalStatus(StrEnum):
+    """Durable lifecycle state for the non-rollbackable analyzer call."""
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
 class PipelineStepStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
@@ -2557,6 +2566,7 @@ class Decision(BaseModel):
     review_reasons: list[DecisionReviewReason] = Field(default_factory=list)
     reason: str
     policy_version: str = "soc.decision_policy.v2"
+    confidence_explanation: str | None = None
     automation_allowed: Literal[False] = False
 
 
@@ -2575,6 +2585,10 @@ class CorrectionRecord(BaseModel):
     corrected_verdict: Verdict
     reason: str
     corrected_confidence: float | None = None
+    confidence_source: DecisionConfidenceSource = DecisionConfidenceSource.UNKNOWN
+    confidence_was_explicit: bool = False
+    confidence_policy_version: str | None = None
+    confidence_explanation: str | None = None
     actor: ActorContext
     created_at: datetime = Field(default_factory=utc_now)
     evidence: list[EvidenceItem] = Field(default_factory=list)
@@ -2621,6 +2635,10 @@ class AlertSummary(BaseModel):
     status: AnalysisRunStatus
     verdict: Verdict | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    confidence_source: DecisionConfidenceSource | None = None
+    confidence_is_calibrated: bool = False
+    confidence_policy_version: str | None = None
+    confidence_explanation: str | None = None
     needs_review: bool = False
     review_reasons: list[DecisionReviewReason] = Field(default_factory=list)
     summary: str | None = None
@@ -2788,6 +2806,51 @@ class RuntimeFailure(BaseModel):
     message: str = Field(min_length=1, max_length=1000)
 
 
+class AnalysisRequestJournal(BaseModel):
+    """Bounded metadata persisted immediately before analyzer invocation.
+
+    The journal intentionally stores no rendered prompt, evidence values,
+    provider response, headers, credentials, or tokens. ``AnalysisRun`` keeps
+    the existing source input snapshot separately for governed replay/audit.
+    """
+
+    schema_version: str = "soc.analysis_request_journal.v1"
+    status: AnalysisRequestJournalStatus = AnalysisRequestJournalStatus.RUNNING
+    action: Literal[AuditAction.ANALYSIS, AuditAction.REPLAY]
+    request_id: str = Field(min_length=1, max_length=256)
+    trace_id: str | None = Field(default=None, max_length=256)
+    actor: ActorContext
+    idempotency_key_hash: str | None = Field(default=None, min_length=1, max_length=128)
+    replay_of_run_id: str | None = None
+    request_schema_version: str = Field(min_length=1, max_length=128)
+    request_hash: str = Field(min_length=1, max_length=128)
+    source_type: AlertSourceType = AlertSourceType.UNKNOWN
+    source_system: str | None = Field(default=None, max_length=256)
+    detection_key: str | None = Field(default=None, max_length=512)
+    model_name: str = Field(min_length=1, max_length=256)
+    prompt_version: str = Field(min_length=1, max_length=256)
+    provider_step_name: str = Field(min_length=1, max_length=128)
+    primary_evidence_present: bool = False
+    supplementary_evidence_count: int = Field(default=0, ge=0)
+    selected_skills: list[str] = Field(default_factory=list, max_length=50)
+    provider_started_at: datetime = Field(default_factory=utc_now)
+    finalized_at: datetime | None = None
+    failure_kind: RuntimeFailureKind | None = None
+    failure_retryable: bool | None = None
+    recovered_at: datetime | None = None
+    recovered_by: ActorContext | None = None
+    recovery_reason: str | None = Field(default=None, max_length=1000)
+    recovery_run_id: str | None = None
+
+
+class AnalysisRunRecoveryCommand(BaseModel):
+    """Claim and replay one stale pre-provider journal."""
+
+    run_id: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=1000)
+    stale_after_seconds: int = Field(default=300, ge=0, le=86400)
+
+
 class AnalysisRun(BaseModel):
     run_id: str = Field(default_factory=lambda: f"RUN-{uuid4().hex[:12].upper()}")
     alert_id: str
@@ -2811,6 +2874,7 @@ class AnalysisRun(BaseModel):
     analysis_evidence_grounding: AnalysisEvidenceGroundingReport | None = None
     decision: Decision | None = None
     failure: RuntimeFailure | None = None
+    request_journal: AnalysisRequestJournal | None = None
     corrections: list[CorrectionRecord] = Field(default_factory=list)
 
     @model_validator(mode="after")

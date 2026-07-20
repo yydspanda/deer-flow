@@ -161,6 +161,15 @@ Current SOC direction:
 - Persisted analysis writes run/summary/optional review/audit as one `AnalysisPersistence` transaction.
   Retryable Runtime failures do not commit Kafka offsets or immediately create analyst queue noise;
   non-retryable failures are recorded, reviewed, and dead-lettered.
+- Persisted Runtime calls use `analyze_journaled()`: immediately before analyzer/provider invocation,
+  `SocAnalysisService` commits the same run as `running` with bounded `AnalysisRequestJournal`
+  metadata. Process loss or final-bundle rollback leaves that row discoverable; `soc recover` marks
+  it `interrupted` after a stale window and creates a linked replay. Never put rendered prompts,
+  provider headers/responses, credentials, tokens, or evidence values in the journal.
+- Human correction confidence uses `human_confirmation`; only the trusted external-disposition
+  service path uses `external_disposition`. Both are uncalibrated confirmation strength under
+  `soc.correction_policy.v1`, not probabilities; preserve source, explicit/default state and
+  explanation through run, summary and audit.
 - External status/reason feedback has an authenticated canonical Gateway ingress at
   `POST /api/soc/external-dispositions`; callers submit `SocExternalDispositionIngressCommand` with a
   stable source event ID, while vendor mapping/trust configuration remains server-owned. Real

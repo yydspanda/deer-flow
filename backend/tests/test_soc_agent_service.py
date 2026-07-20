@@ -17,12 +17,14 @@ from soc_agent.contracts import (
     ActorType,
     AlertSourceType,
     AlertSummary,
+    AnalysisRequestJournalStatus,
     AnalysisRun,
     AnalysisRunStatus,
     AuditAction,
     CorrectionCommand,
     CorrelationQuery,
     DecisionAuditRecord,
+    DecisionConfidenceSource,
     DecisionReviewReason,
     EntrySurface,
     InvestigationEvidence,
@@ -460,6 +462,13 @@ def test_analysis_service_emits_events_and_saves_run() -> None:
     run = service.analyze(_sample("approved_scanner.json"), context=context)
 
     assert repository.get_run(run.run_id) == run
+    assert run.request_journal is not None
+    assert run.request_journal.status is AnalysisRequestJournalStatus.COMPLETED
+    assert run.request_journal.request_id == "REQ-TEST-001"
+    assert run.request_journal.trace_id == "trace-001"
+    assert run.request_journal.idempotency_key_hash is not None
+    assert run.request_journal.request_hash
+    assert run.request_journal.finalized_at is not None
     assert [event.event_type for event in sink.events] == [
         SocEventType.ANALYSIS_REQUESTED,
         SocEventType.ANALYSIS_COMPLETED,
@@ -801,9 +810,15 @@ def test_review_service_corrects_run_and_emits_event() -> None:
     assert corrected.decision is not None
     assert corrected.decision.verdict == Verdict.TRUE_POSITIVE
     assert corrected.decision.confidence == 0.9
+    assert corrected.decision.confidence_source is DecisionConfidenceSource.HUMAN_CONFIRMATION
+    assert corrected.decision.confidence_is_calibrated is False
+    assert corrected.decision.policy_version == "soc.correction_policy.v1"
+    assert corrected.decision.confidence_explanation == "Analyst-supplied confirmation strength; not a calibrated probability."
     assert corrected.decision.automation_allowed is False
     assert len(corrected.corrections) == 1
     assert corrected.corrections[0].previous_verdict == Verdict.FALSE_POSITIVE
+    assert corrected.corrections[0].confidence_source is DecisionConfidenceSource.HUMAN_CONFIRMATION
+    assert corrected.corrections[0].confidence_was_explicit is True
     assert corrected.corrections[0].candidate_knowledge_status == "pending_review"
     assert repository.get_run(run.run_id) == corrected
     assert sink.events[0].event_type == SocEventType.REVIEW_CORRECTED
@@ -832,6 +847,10 @@ def test_review_service_correct_writes_decision_audit_record() -> None:
     assert record.final_verdict == Verdict.TRUE_POSITIVE
     assert record.correction_id == corrected.corrections[0].correction_id
     assert record.payload["candidate_knowledge_status"] == "pending_review"
+    assert record.payload["confidence_source"] == "human_confirmation"
+    assert record.payload["confidence_is_calibrated"] is False
+    assert record.payload["confidence_was_explicit"] is False
+    assert record.payload["confidence_policy_version"] == "soc.correction_policy.v1"
 
 
 def test_review_service_correct_updates_alert_summary() -> None:
@@ -858,6 +877,10 @@ def test_review_service_correct_updates_alert_summary() -> None:
     assert summary is not None
     assert summary.verdict == Verdict.TRUE_POSITIVE
     assert summary.confidence == 1.0
+    assert summary.confidence_source is DecisionConfidenceSource.HUMAN_CONFIRMATION
+    assert summary.confidence_is_calibrated is False
+    assert summary.confidence_policy_version == "soc.correction_policy.v1"
+    assert summary.confidence_explanation == "Policy default for categorical analyst confirmation; not a calibrated probability."
     assert summary.needs_review is False
     assert summary.summary == corrected.analysis.summary
 

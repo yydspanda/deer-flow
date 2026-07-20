@@ -44,12 +44,16 @@ from soc_agent.pipeline.evidence_coverage import observe_message_schemas
 from soc_agent.pipeline.evidence_grounding import ground_analysis_evidence
 from soc_agent.pipeline.extractor import extract_entities
 from soc_agent.pipeline.fact_reconstructor import reconstruct_facts
-from soc_agent.protocols import DecisionPolicy, LLMAnalyzer
+from soc_agent.protocols import AnalysisBeforeProviderHook, DecisionPolicy, LLMAnalyzer
 from soc_agent.utils.hashing import stable_hash
 
 
 class SocRuntimeError(RuntimeError):
     """Raised when the deterministic runtime cannot complete a run."""
+
+
+class SocRuntimeLifecycleError(RuntimeError):
+    """Raised when infrastructure fails before the analyzer is invoked."""
 
 
 def inspect_alert_normalization(
@@ -84,6 +88,7 @@ def analyze_alert(
     *,
     analyzer: LLMAnalyzer | None = None,
     decision_policy: DecisionPolicy | None = None,
+    before_provider: AnalysisBeforeProviderHook | None = None,
 ) -> AnalysisRun:
     """Analyze one alert through the fixed Phase 1 pipeline."""
 
@@ -122,6 +127,11 @@ def analyze_alert(
         )
         analysis_request = analysis_request.model_copy(update={"skill_context": skill_context})
         run.llm_analysis_request = analysis_request
+        if before_provider is not None:
+            try:
+                before_provider(run, analysis_request, analysis_node.step_name)
+            except Exception as exc:  # noqa: BLE001 - preserve the no-provider-call boundary
+                raise SocRuntimeLifecycleError("failed to persist analysis request journal before provider invocation") from exc
         try:
             analysis_output = _run_step(
                 run,
@@ -164,6 +174,8 @@ def analyze_alert(
             ),
         )
         run.status = AnalysisRunStatus.NEEDS_REVIEW if run.decision.needs_review else AnalysisRunStatus.SUCCESS
+    except SocRuntimeLifecycleError:
+        raise
     except Exception as exc:  # noqa: BLE001 - convert all runtime failures into run state
         run.status = AnalysisRunStatus.FAILED
         failed_step = run.steps[-1].step_name if run.steps else "runtime"

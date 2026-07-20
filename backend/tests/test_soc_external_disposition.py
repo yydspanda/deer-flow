@@ -15,6 +15,7 @@ from soc_agent.contracts import (
     AuditAction,
     AuthorizationFactRef,
     DecisionAuditRecord,
+    DecisionConfidenceSource,
     EntrySurface,
     GovernedContextFactStatus,
     ReviewQueueItem,
@@ -261,7 +262,16 @@ def test_external_disposition_service_applies_high_trust_correction_and_closes_r
         "zeus",
         "closed_false_positive",
     ]
-    assert alert_repository.get_run(run.run_id).decision.verdict is Verdict.FALSE_POSITIVE
+    corrected_run = alert_repository.get_run(run.run_id)
+    assert corrected_run is not None
+    assert corrected_run.decision is not None
+    assert corrected_run.decision.verdict is Verdict.FALSE_POSITIVE
+    assert corrected_run.decision.confidence == 1.0
+    assert corrected_run.decision.confidence_source is DecisionConfidenceSource.EXTERNAL_DISPOSITION
+    assert corrected_run.decision.confidence_is_calibrated is False
+    assert corrected_run.decision.policy_version == "soc.correction_policy.v1"
+    assert corrected_run.decision.confidence_explanation == ("Trusted external disposition confirmation strength; not a calibrated probability.")
+    assert corrected_run.corrections[0].confidence_was_explicit is False
     assert review_repository.get_review_item("REV-ZEUS-MOCK-0001").status is ReviewQueueStatus.CLOSED
     outcome = evaluation_repository.get_disposition_outcome(result.disposition_outcome_id)
     assert outcome is not None
@@ -275,6 +285,11 @@ def test_external_disposition_service_applies_high_trust_correction_and_closes_r
         AuditAction.EXTERNAL_DISPOSITION,
     }
     external_audit = [record for record in audit_repository.records if record.action is AuditAction.EXTERNAL_DISPOSITION][0]
+    correction_audit = [record for record in audit_repository.records if record.action is AuditAction.CORRECTION][0]
+    assert correction_audit.confidence == 1.0
+    assert correction_audit.payload["confidence_source"] == "external_disposition"
+    assert correction_audit.payload["confidence_is_calibrated"] is False
+    assert correction_audit.payload["confidence_was_explicit"] is False
     assert external_audit.payload["apply_status"] == "mapped"
     assert external_audit.payload["correction_id"] == result.record.correction_id
     assert external_audit.payload["memory_candidate_id"] == result.record.memory_candidate_id

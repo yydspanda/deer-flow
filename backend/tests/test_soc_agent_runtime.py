@@ -658,6 +658,9 @@ def test_cli_persist_show_and_replay(tmp_path: Path, capsys) -> None:
     assert main(["analyze", str(SAMPLES / "approved_scanner.json"), "--persist", "--database-url", database_url]) == 0
     captured = capsys.readouterr()
     original = json.loads(captured.out)
+    assert original["request_journal"]["status"] == "completed"
+    assert original["request_journal"]["action"] == "analysis"
+    assert "request_hash" in original["request_journal"]
 
     assert main(["show", original["run_id"], "--database-url", database_url]) == 0
     captured = capsys.readouterr()
@@ -670,6 +673,8 @@ def test_cli_persist_show_and_replay(tmp_path: Path, capsys) -> None:
     replayed = json.loads(captured.out)
     assert replayed["run_id"] != original["run_id"]
     assert replayed["replay_of_run_id"] == original["run_id"]
+    assert replayed["request_journal"]["status"] == "completed"
+    assert replayed["request_journal"]["action"] == "replay"
 
     assert (
         main(
@@ -689,8 +694,38 @@ def test_cli_persist_show_and_replay(tmp_path: Path, capsys) -> None:
     captured = capsys.readouterr()
     corrected = json.loads(captured.out)
     assert corrected["decision"]["verdict"] == "true_positive"
+    assert corrected["decision"]["confidence_source"] == "human_confirmation"
+    assert corrected["decision"]["confidence_is_calibrated"] is False
+    assert corrected["decision"]["policy_version"] == "soc.correction_policy.v1"
     assert corrected["corrections"][0]["previous_verdict"] == "false_positive"
+    assert corrected["corrections"][0]["confidence_source"] == "human_confirmation"
     assert corrected["corrections"][0]["candidate_knowledge_status"] == "pending_review"
+
+
+def test_cli_recover_rejects_non_running_run(tmp_path: Path, capsys) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'soc.db'}"
+
+    assert main(["db", "upgrade", "--database-url", database_url]) == 0
+    capsys.readouterr()
+    assert main(["analyze", str(SAMPLES / "approved_scanner.json"), "--persist", "--database-url", database_url]) == 0
+    completed = json.loads(capsys.readouterr().out)
+
+    assert (
+        main(
+            [
+                "recover",
+                completed["run_id"],
+                "--reason",
+                "operator checked an apparently stale worker",
+                "--stale-after-seconds",
+                "0",
+                "--database-url",
+                database_url,
+            ]
+        )
+        == 3
+    )
+    assert "not recoverable" in capsys.readouterr().err
 
 
 def test_cli_list_outputs_persisted_alert_summaries(tmp_path: Path, capsys) -> None:

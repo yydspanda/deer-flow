@@ -92,6 +92,10 @@ typed success bodies, `X-SOC-API-Version: 1`, and RFC Problem Details mapped to 
 State-changing callers provide stable idempotency keys when the endpoint requires them; request IDs
 may be supplied through `SocRequestContext` and must not be confused with trace IDs. Authenticated
 Gateway identity is authoritative, so UI actor headers are attribution hints only and cannot grant a role.
+SOC run/summary types expose additive request-journal and correction-confidence provenance. Treat
+`human_confirmation`/`external_disposition` as uncalibrated confirmation strength and render the
+server explanation when surfaced; never label it as a calibrated probability. A running/interrupted
+journal is recovery state, not a completed analysis result.
 
 ### Key Patterns
 

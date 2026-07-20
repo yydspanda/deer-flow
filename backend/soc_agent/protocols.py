@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from typing import Any, Protocol
 
@@ -13,6 +13,7 @@ from soc_agent.contracts import (
     AnalysisNodeOutput,
     AnalysisResult,
     AnalysisRun,
+    AnalysisRunStatus,
     AuthorizationEnrichmentRecord,
     Decision,
     DecisionAuditRecord,
@@ -63,6 +64,20 @@ class AnalysisRuntime(Protocol):
     def analyze(self, payload: Mapping[str, Any]) -> AnalysisRun: ...
 
 
+AnalysisBeforeProviderHook = Callable[[AnalysisRun, LLMAnalysisRequest, str], None]
+
+
+class JournaledAnalysisRuntime(Protocol):
+    """Runtime extension that exposes the exact pre-provider persistence point."""
+
+    def analyze_journaled(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        before_provider: AnalysisBeforeProviderHook,
+    ) -> AnalysisRun: ...
+
+
 class LLMAnalyzer(Protocol):
     """Bounded LLM analysis node used behind a fixed runtime step."""
 
@@ -105,6 +120,13 @@ class AlertRepository(Protocol):
     def get_run(self, run_id: str) -> AnalysisRun | None: ...
 
     def list_runs(self, *, limit: int = 50) -> list[AnalysisRun]: ...
+
+    def claim_run_recovery(
+        self,
+        run: AnalysisRun,
+        *,
+        expected_status: AnalysisRunStatus = AnalysisRunStatus.RUNNING,
+    ) -> bool: ...
 
 
 class DecisionAuditRepository(Protocol):

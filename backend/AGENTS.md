@@ -207,6 +207,19 @@ item, and audit record commit atomically. `RuntimeFailure` owns sanitized failur
 retryable failures remain replayable and do not immediately create analyst queue noise; non-retryable
 failures enter ReviewQueue. Kafka adapters must not commit retryable Runtime failures.
 
+The non-rollbackable provider call has an earlier durability point. Persisted analysis must use
+`DeterministicAnalysisRuntime.analyze_journaled()` so `SocAnalysisService` commits a bounded
+`AnalysisRequestJournal` on the same `AnalysisRun(status=running)` immediately before invocation.
+Final bundle persistence changes the journal to completed/failed. `soc recover` is the only path for
+a stale running journal: preserve the original as interrupted and create a new run with
+`replay_of_run_id`. Journal metadata excludes rendered prompts, evidence values, provider
+headers/responses, credentials and tokens.
+
+`SocReviewService.correct()` owns human provenance; `correct_external()` is reserved for the
+external-disposition service after trust/mapping/target gates. Correction confidence is an
+uncalibrated confirmation strength under `soc.correction_policy.v1`; keep source,
+`confidence_was_explicit`, explanation and `confidence_is_calibrated=false` in run/summary/audit.
+
 The Kafka alert topic `soc.alerts.raw.v1` accepts only strict `SocAlertRawEnvelope` payloads with
 schema version `soc.alert.raw.v1`; bare vendor alert objects are invalid. The mapper preserves the
 complete bounded `raw` object, adds reserved `_soc_ingress` transport provenance, and must not expose

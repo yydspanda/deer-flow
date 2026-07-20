@@ -10,11 +10,16 @@ from sqlalchemy.orm import sessionmaker
 
 from soc_agent.contracts import (
     ActorContext,
+    AnalysisRequestJournalStatus,
+    AnalysisRunRecoveryCommand,
+    AnalysisRunStatus,
     AuditAction,
     CorrectionCommand,
     CorrelationQuery,
+    DecisionConfidenceSource,
     InvestigationEvidence,
     ReviewQueueStatus,
+    RuntimeFailureKind,
     ServiceRequestContext,
     SimilarAlertQuery,
     SocAgentApprovalRequest,
@@ -44,6 +49,7 @@ from soc_agent.core import (
     SocAnalysisService,
     SocCorrelationService,
     SocMemoryService,
+    SocServiceConflictError,
 )
 from soc_agent.core.service import SocReviewService
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
@@ -118,6 +124,130 @@ def test_sqlalchemy_alert_repository_saves_and_gets_run() -> None:
     assert "host:scanner-01" in summary.entity_keys
 
 
+def test_sqlalchemy_pre_provider_journal_survives_process_loss_and_recovers() -> None:
+    class SimulatedProcessLoss(BaseException):
+        pass
+
+    class ProcessLossAnalyzer:
+        step_name = "analyze_llm"
+        model_name = "process-loss-model"
+        prompt_version = "process-loss-prompt-v1"
+
+        def analyze(self, request):
+            raise SimulatedProcessLoss
+
+    repository = _repository()
+    crashing_service = SocAnalysisService(
+        runtime=DeterministicAnalysisRuntime(analyzer=ProcessLossAnalyzer()),
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+        analysis_persistence=repository,
+    )
+    context = ServiceRequestContext(
+        request_id="REQ-PROCESS-LOSS-1",
+        trace_id="TRACE-PROCESS-LOSS-1",
+        idempotency_key="kafka:soc.alerts.raw.v1:0:process-loss",
+    )
+
+    with pytest.raises(SimulatedProcessLoss):
+        crashing_service.analyze(_sample("approved_scanner.json"), context=context)
+
+    interrupted_candidate = repository.list_runs(limit=1)[0]
+    assert interrupted_candidate.status is AnalysisRunStatus.RUNNING
+    assert interrupted_candidate.ended_at is None
+    assert interrupted_candidate.request_journal is not None
+    assert interrupted_candidate.request_journal.status is AnalysisRequestJournalStatus.RUNNING
+    assert interrupted_candidate.request_journal.request_id == "REQ-PROCESS-LOSS-1"
+    assert interrupted_candidate.request_journal.model_name == "process-loss-model"
+    assert interrupted_candidate.request_journal.provider_step_name == "analyze_llm"
+    assert interrupted_candidate.request_journal.request_hash
+    assert "kafka:soc.alerts.raw.v1:0:process-loss" not in interrupted_candidate.request_journal.model_dump_json()
+
+    recovery_service = SocAnalysisService(
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+        analysis_persistence=repository,
+    )
+    with pytest.raises(SocServiceConflictError, match="use recover"):
+        recovery_service.replay(interrupted_candidate.run_id)
+    with pytest.raises(SocServiceConflictError, match="recovery window"):
+        recovery_service.recover(
+            AnalysisRunRecoveryCommand(
+                run_id=interrupted_candidate.run_id,
+                reason="worker health check is still inside the lease window",
+                stale_after_seconds=300,
+            )
+        )
+
+    recovered = recovery_service.recover(
+        AnalysisRunRecoveryCommand(
+            run_id=interrupted_candidate.run_id,
+            reason="worker process exited during provider call",
+            stale_after_seconds=0,
+        ),
+        context=ServiceRequestContext(idempotency_key="recover:process-loss-1"),
+    )
+
+    original = repository.get_run(interrupted_candidate.run_id)
+    assert original is not None
+    assert original.status is AnalysisRunStatus.INTERRUPTED
+    assert original.request_journal is not None
+    assert original.request_journal.status is AnalysisRequestJournalStatus.INTERRUPTED
+    assert original.request_journal.recovery_reason == "worker process exited during provider call"
+    assert original.request_journal.recovery_run_id == recovered.run_id
+    assert repository.claim_run_recovery(original, expected_status=AnalysisRunStatus.RUNNING) is False
+    assert recovered.replay_of_run_id == original.run_id
+    assert recovered.request_journal is not None
+    assert recovered.request_journal.action is AuditAction.REPLAY
+    assert recovered.request_journal.status is AnalysisRequestJournalStatus.COMPLETED
+
+    idempotent = recovery_service.recover(
+        AnalysisRunRecoveryCommand(
+            run_id=interrupted_candidate.run_id,
+            reason="worker process exited during provider call",
+            stale_after_seconds=0,
+        ),
+        context=ServiceRequestContext(idempotency_key="recover:process-loss-1"),
+    )
+    assert idempotent.run_id == recovered.run_id
+
+
+def test_sqlalchemy_pre_provider_journal_finalizes_retryable_timeout() -> None:
+    class TimeoutAnalyzer:
+        step_name = "analyze_llm"
+        model_name = "timeout-model"
+        prompt_version = "timeout-prompt-v1"
+
+        def analyze(self, request):
+            raise TimeoutError("provider token must not be persisted")
+
+    repository = _repository()
+    run = SocAnalysisService(
+        runtime=DeterministicAnalysisRuntime(analyzer=TimeoutAnalyzer()),
+        repository=repository,
+        summary_repository=repository,
+        audit_repository=repository,
+        review_queue_repository=repository,
+        analysis_persistence=repository,
+    ).analyze(_sample("approved_scanner.json"))
+
+    assert run.status is AnalysisRunStatus.FAILED
+    assert run.failure is not None
+    assert run.failure.kind is RuntimeFailureKind.ANALYZER_TIMEOUT
+    assert run.failure.retryable is True
+    assert run.request_journal is not None
+    assert run.request_journal.status is AnalysisRequestJournalStatus.FAILED
+    assert run.request_journal.failure_kind is RuntimeFailureKind.ANALYZER_TIMEOUT
+    assert run.request_journal.failure_retryable is True
+    assert run.request_journal.finalized_at is not None
+    assert "provider token" not in run.request_journal.model_dump_json()
+    assert repository.get_run(run.run_id) == run
+
+
 def test_sqlalchemy_analysis_bundle_rolls_back_every_read_model_on_failure() -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     create_soc_tables(engine)
@@ -130,6 +260,13 @@ def test_sqlalchemy_analysis_bundle_rolls_back_every_read_model_on_failure() -> 
 
         def analyze(self, payload):
             self.run = self.runtime.analyze(payload)
+            return self.run
+
+        def analyze_journaled(self, payload, *, before_provider):
+            self.run = self.runtime.analyze_journaled(
+                payload,
+                before_provider=before_provider,
+            )
             return self.run
 
     runtime = CapturingRuntime()
@@ -153,7 +290,11 @@ def test_sqlalchemy_analysis_bundle_rolls_back_every_read_model_on_failure() -> 
         event.remove(engine, "before_cursor_execute", fail_audit_insert)
 
     assert runtime.run is not None
-    assert repository.get_run(runtime.run.run_id) is None
+    persisted = repository.get_run(runtime.run.run_id)
+    assert persisted is not None
+    assert persisted.status is AnalysisRunStatus.RUNNING
+    assert persisted.request_journal is not None
+    assert persisted.request_journal.status is AnalysisRequestJournalStatus.RUNNING
     assert repository.get_alert_summary(runtime.run.run_id) is None
     assert repository.list_review_items(limit=10) == []
     assert repository.list_audit_records(runtime.run.run_id) == []
@@ -261,17 +402,23 @@ def test_sqlalchemy_alert_repository_persists_corrections() -> None:
     assert saved is not None
     assert saved.decision is not None
     assert saved.decision.verdict == Verdict.TRUE_POSITIVE
+    assert saved.decision.confidence_source is DecisionConfidenceSource.HUMAN_CONFIRMATION
+    assert saved.decision.confidence_is_calibrated is False
+    assert saved.decision.policy_version == "soc.correction_policy.v1"
     assert saved.corrections[0].previous_verdict == Verdict.FALSE_POSITIVE
 
     records = repository.list_audit_records(run.run_id)
     assert [record.action for record in records] == [AuditAction.ANALYSIS, AuditAction.CORRECTION]
     assert records[1].previous_verdict == Verdict.FALSE_POSITIVE
     assert records[1].final_verdict == Verdict.TRUE_POSITIVE
+    assert records[1].payload["confidence_source"] == "human_confirmation"
+    assert records[1].payload["confidence_is_calibrated"] is False
 
     summary = repository.get_alert_summary(run.run_id)
     assert summary is not None
     assert summary.verdict == Verdict.TRUE_POSITIVE
     assert summary.confidence == 1.0
+    assert summary.confidence_source is DecisionConfidenceSource.HUMAN_CONFIRMATION
     assert summary.needs_review is False
 
 

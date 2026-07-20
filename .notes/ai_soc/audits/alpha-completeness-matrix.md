@@ -2,7 +2,7 @@
 
 Status: AUD-03 baseline frozen; Stage 3 execution status current
 
-Updated: 2026-07-18
+Updated: 2026-07-20
 
 Inputs:
 
@@ -59,11 +59,11 @@ provider/infrastructure row remains `Mock` or `Data-gated`.
 | ID | Capability / 能力 | State | Priority | Current truth / 当前事实 | Target |
 |---|---|---|---|---|---|
 | `AC-12` | Fixed nine-step Runtime plus bounded LLM | Complete | - | Deterministic control flow, explicit live-model mode, parser/schema/domain/grounding/policy guards are executable | Maintain |
-| `AC-13` | Durable pre-LLM run/request journal | Gap | P1 | Requested event is process-local and final run is persisted only after Runtime/model returns | BG |
+| `AC-13` | Durable pre-LLM run/request journal | Complete | - | Persisted analysis commits a bounded running journal immediately before analyzer invocation; timeout finalizes it, process loss/bundle rollback leaves it discoverable, and stale recovery creates a linked replay without overwriting the original | Maintain |
 | `AC-14` | Step trace and replay lineage | Complete | - | Nested trace has hashes/timing/status/error/metadata; replay creates a new run linked by `replay_of_run_id` | Maintain; docs reconcile in `AC-49` |
 | `AC-15` | Atomic primary analysis bundle | Complete | - | run/summary/optional queue/audit commit or roll back together | Maintain |
 | `AC-16` | Atomic correction and external-feedback mutation | Complete | - | Explicit `SocMutationUnitOfWork` wraps correction and full external-disposition commands; write-by-write fault injection proves state and buffered events roll back together, while exact retry returns one logical result | Maintain |
-| `AC-17` | Human/external correction confidence provenance | Gap | P1 | Corrected decisions default to `confidence_source=unknown`; external correction injects undocumented `0.95` | BG |
+| `AC-17` | Human/external correction confidence provenance | Complete | - | Human and trusted external corrections carry distinct source, uncalibrated semantics, policy version and explanation through run/summary/audit/API; the undocumented external `0.95` is removed | Maintain |
 | `AC-18` | Normalization maintenance loop | Complete | - | Baseline, issue dedupe/reopen, CLI/API/Web/TUI and fail-open analysis side path exist | Maintain |
 | `AC-19` | Production confidence calibration | Data-gated | P2 | Offline governance and a small seed set exist; production thresholds require sufficient approved labels | PI |
 
@@ -127,14 +127,14 @@ provider/infrastructure row remains `Mock` or `Data-gated`.
 
 | State | Count |
 |---|---:|
-| Complete | 28 |
-| Gap | 6 |
+| Complete | 30 |
+| Gap | 4 |
 | Mock | 1 |
 | Data-gated | 6 |
 | Deferred | 9 |
 | **Total** | **50** |
 
-The AUD-03 baseline admitted 13 `Gap` rows into Stage 3. Seven are now closed, leaving 6 current
+The AUD-03 baseline admitted 13 `Gap` rows into Stage 3. Nine are now closed, leaving 4 current
 `Gap` rows. `Mock`, `Data-gated`, and `Deferred` rows remain visible but do not silently become
 blockers.
 
@@ -155,13 +155,13 @@ All frozen P0 gaps are closed. The implementation evidence is retained in Sectio
 | `AC-04` Versioned Kafka envelope | `BG-P1-01`, 2026-07-18 | Strict `SocAlertRawEnvelope`; 900,000-byte raw and 64,000-byte hint limits; no raw values in validation errors; exact preservation of three representative source samples; bad version/malformed/reserved collision tests; Redpanda smoke proves processed+commit, DLQ+commit and post-commit idle | Real topic ACL/capacity/recovery evidence remains data-gated under `AC-48` |
 | `AC-08` Generic external disposition ingress | `BG-P1-01`, 2026-07-18 | Versioned `SocExternalDispositionIngressCommand`; authenticated Gateway route; service-level `soc_admin`/adapter RBAC; source event ID required; duplicate returns one record and changed retry conflicts; mapped/unmatched/failure coverage reuses the same service | Real Zeus/ITSM/SOAR auth/signature/feed remains data-gated under `AC-09` |
 | `AC-11` SOC API transport contract | `BG-P1-02`, 2026-07-20 | Shared `SocAPIRoute/create_soc_router`; compatible `/api/soc/*` paths and direct typed success; `X-SOC-API-Version`, request/trace propagation, sanitized RFC Problem Details; reviewed path/header/error snapshot; frontend `SocApiError` and version guard | Gateway pre-router authentication/CSRF remains the shared DeerFlow security transport; new API business capabilities remain separately scoped |
+| `AC-13` Durable pre-provider journal/recovery | `BG-P1-03`, 2026-07-20 | `AnalysisRequestJournal` is committed on the exact Runtime pre-provider hook; crash, timeout, stale-window, bundle rollback, recovery lineage and CLI contracts are tested; rendered prompts/provider secrets are excluded from journal metadata | Original source replay snapshot remains governed separately in `AnalysisRun.input_payload`; distributed multi-worker lease ownership belongs to production deployment evidence |
+| `AC-17` Correction confidence provenance | `BG-P1-03`, 2026-07-20 | Human correction writes `human_confirmation`; admitted external correction writes `external_disposition`; `soc.correction_policy.v1`, explicit/default flag, uncalibrated state and explanation reach run, summary, audit and API | Production probability calibration remains data-gated under `AC-19`; confirmation strength is not a calibrated probability |
 
 ### 3.3 P1 - Alpha journey and reproducibility blockers
 
 | Gap | Owner boundary | Impact | Source evidence | Acceptance / 验收 | Target |
 |---|---|---|---|---|---|
-| `AC-13` Durable pre-LLM run journal | Analysis service + persistence | Process loss during a model call leaves no durable requested/running record for recovery or cost investigation | `CONS-15` | Before provider invocation persist bounded request metadata and running state without raw prompt/secret; success/failure finalization is recoverable; crash/timeout test leaves a discoverable interrupted/running record and replay path | `BG-02` |
-| `AC-17` Correction confidence provenance | Review/external disposition service + decision contract | Human/external decisions display an unexplained score and lose provenance required for audit/eval | `CONS-16` | Human correction writes `human_confirmation`; trusted external correction writes `external_disposition`; fixed confidence is removed or policy-versioned/explained; summary/audit/API tests preserve provenance and no false calibration | `BG-02` |
 | `AC-23` SOC frontend regression | Frontend SOC components/API client | Browser-only rehearsal will not reliably catch state/action/render regressions | AUD-01 Web evidence; no SOC-named frontend tests | Focused tests cover queue/context render, close/correct, approval integrity flow, memory review, disposition outcome/sample and normalization actions; `pnpm test`/`pnpm check` pass | `BG-02` |
 | `AC-24` Alpha E2E acceptance package | SOC QA/demo orchestration | Separate proofs do not show one versioned release satisfies the whole Alpha journey | Delivery roadmap BG-02; AUD-01 user-visible artifacts | A single reproducible command/report runs representative APT/EDR/HIDS through CLI and Kafka, DB, Review UI/API, feedback, audit and replay; report records mock/data-gated disclosures and failure semantics | `BG-02` |
 | `AC-39` Governed memory activation | Memory service + policy + API/CLI/Web | Confirmed memory cannot become legitimately retrievable outside a demo repository write | `CONS-17`; memory service/router/demo | Versioned enable/disable command requires role, reason, validity/review metadata and audit; all surfaces use service; retrieval diff/replay proves only enabled confirmed records enter bounded context | `BG-02` |
@@ -204,7 +204,7 @@ Stage 3 may implement only these packages unless the user explicitly changes the
 | `BG-P0-02` Transactional mutation and durable audit | `AC-16`, `AC-21` | **Done 2026-07-18**: explicit command unit-of-work, commit-buffered events and append-only secret-safe mutation audit | 516 SOC tests + 10 architecture + 6 migration-environment tests; fault-injection rollback matrix plus API/TUI audit coverage |
 | `BG-P1-01` Versioned ingestion and feedback | `AC-04`, `AC-08` | **Done 2026-07-18**: strict bounded Kafka alert envelope plus authenticated canonical external-disposition Gateway ingress | 532 SOC + 16 architecture/migration tests; Redpanda processed/commit, DLQ/commit and post-commit idle; application duplicate/conflict/RBAC/failure tests |
 | `BG-P1-02` API contract stabilization | `AC-11` | **Done 2026-07-20**: compatible versioned transport headers, Problem Details/request metadata, OpenAPI snapshot and frontend contract | Gateway transport/router tests, real sync-route HTTP smoke and full frontend regression |
-| `BG-P1-03` Runtime recovery and decision provenance | `AC-13`, `AC-17` | Durable pre-call journal and correct human/external confidence source | crash/timeout recovery and correction/external replay tests |
+| `BG-P1-03` Runtime recovery and decision provenance | `AC-13`, `AC-17` | **Done 2026-07-20**: durable pre-call journal/recovery plus policy-versioned human/external confirmation provenance | process-loss/timeout/bundle-rollback recovery and correction/external/summary/audit/API tests |
 | `BG-P1-04` Governed memory activation | `AC-39` | Role/reason/audit/version controlled retrieval enable/disable service and surfaces | retrieval replay diff and authorization tests |
 | `BG-P1-05` Alpha E2E and docs reconciliation | `AC-23`, `AC-24`, `AC-49` | Frontend regression, one release-level APT/EDR/HIDS acceptance report, synchronized authoritative docs | full backend/architecture/frontend checks and versioned acceptance artifact |
 
@@ -234,4 +234,4 @@ Each package remains a reviewable slice and must not absorb P2/Data-gated work.
 
 **AA Gate: Passed on 2026-07-18.**
 
-The next implementation slice is `BG-P1-03 Runtime recovery and decision provenance`.
+The next implementation slice is `BG-P1-04 Governed memory activation`.

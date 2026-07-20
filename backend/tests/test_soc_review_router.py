@@ -12,6 +12,7 @@ from soc_agent.contracts import (
     AlertSummary,
     AnalysisRun,
     DecisionAuditRecord,
+    DecisionConfidenceSource,
     EntrySurface,
     InvestigationEvidence,
     ReviewQueueItem,
@@ -390,7 +391,14 @@ def test_soc_review_api_corrects_run_and_closes_open_item(review_api) -> None:
     assert run.decision is not None
     assert run.decision.verdict == Verdict.FALSE_POSITIVE
     assert run.decision.confidence == 0.93
+    assert run.decision.confidence_source is DecisionConfidenceSource.HUMAN_CONFIRMATION
+    assert run.decision.confidence_is_calibrated is False
+    assert run.decision.policy_version == "soc.correction_policy.v1"
+    assert run.decision.confidence_explanation == "Analyst-supplied confirmation strength; not a calibrated probability."
     assert run.corrections[0].actor.surface == EntrySurface.API
+    summary = repository.get_alert_summary(run.run_id)
+    assert summary is not None
+    assert summary.confidence_source is DecisionConfidenceSource.HUMAN_CONFIRMATION
     assert repository.get_review_item(item.queue_id).status == ReviewQueueStatus.CLOSED
 
 

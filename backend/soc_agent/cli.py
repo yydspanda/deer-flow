@@ -32,6 +32,7 @@ from soc_agent.agent_profile import SocLeadAgentProfileInstaller
 from soc_agent.contracts import (
     ActorContext,
     ActorType,
+    AnalysisRunRecoveryCommand,
     CorrectionCommand,
     CorrelationQuery,
     EntrySurface,
@@ -164,6 +165,8 @@ def main(argv: list[str] | None = None) -> int:
         return _show(args)
     if args.command == "replay":
         return _replay(args)
+    if args.command == "recover":
+        return _recover(args)
     if args.command == "correct":
         return _correct(args)
     if args.command == "normalize" and args.normalize_command == "inspect":
@@ -343,6 +346,20 @@ def _build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_analyzer_args(replay)
     _add_database_args(replay)
+
+    recover = subparsers.add_parser("recover", help="Recover and replay one stale running SOC analysis")
+    recover.add_argument("run_id", help="Stale running run id to recover")
+    recover.add_argument("--reason", required=True, help="Operator recovery reason")
+    recover.add_argument(
+        "--stale-after-seconds",
+        type=int,
+        default=300,
+        help="Minimum running age before recovery (default: 300)",
+    )
+    recover.add_argument("--actor-id", default="soc-cli", help="Recovery operator actor id")
+    recover.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_analyzer_args(recover)
+    _add_database_args(recover)
 
     correct = subparsers.add_parser("correct", help="Record a manual verdict correction")
     correct.add_argument("run_id", help="Run id to correct")
@@ -1127,6 +1144,31 @@ def _replay(args: argparse.Namespace) -> int:
             repository,
             settings=_llm_settings_from_args(args),
         ).replay(args.run_id)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(run.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if run.status.value in {"success", "needs_review"} else 1
+
+
+def _recover(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        run = _analysis_service_for_repository(
+            repository,
+            settings=_llm_settings_from_args(args),
+        ).recover(
+            AnalysisRunRecoveryCommand(
+                run_id=args.run_id,
+                reason=args.reason,
+                stale_after_seconds=args.stale_after_seconds,
+            ),
+            context=_cli_context(args.actor_id, roles=["soc_analyst"]),
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

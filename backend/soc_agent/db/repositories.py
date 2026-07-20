@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ from soc_agent.authorization import AuthorizationEnrichmentConflictError
 from soc_agent.contracts import (
     AlertSummary,
     AnalysisRun,
+    AnalysisRunStatus,
     AuthorizationEnrichmentRecord,
     DecisionAuditRecord,
     GovernedContextFact,
@@ -196,6 +197,29 @@ class SqlAlchemyAlertRepository:
         with self._session_factory() as session:
             result = session.execute(select(SocAnalysisRunRow).order_by(SocAnalysisRunRow.updated_at.desc(), SocAnalysisRunRow.created_at.desc()).limit(limit))
             return [AnalysisRun.model_validate(row.run_payload) for row in result.scalars()]
+
+    def claim_run_recovery(
+        self,
+        run: AnalysisRun,
+        *,
+        expected_status: AnalysisRunStatus = AnalysisRunStatus.RUNNING,
+    ) -> bool:
+        """Atomically transition one running run into its recovery state."""
+
+        payload = run.model_dump(mode="json")
+        now = datetime.now(UTC)
+        values = _row_values(run, payload, updated_at=now)
+        with self._session_factory() as session:
+            result = session.execute(
+                update(SocAnalysisRunRow)
+                .where(
+                    SocAnalysisRunRow.run_id == run.run_id,
+                    SocAnalysisRunRow.status == expected_status.value,
+                )
+                .values(**values)
+            )
+            session.commit()
+            return result.rowcount == 1
 
     def save_audit_record(self, record: DecisionAuditRecord) -> None:
         with self._session_factory() as session:

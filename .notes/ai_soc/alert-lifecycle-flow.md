@@ -172,7 +172,8 @@ flowchart TD
     F --> G["3️⃣ fact_reconstruct<br/>重建事实、角色、字段可信度和冲突"]
     G --> H["4️⃣ build_analysis_input<br/>构造 LLMAnalysisRequest"]
     H --> I["5️⃣ skill_context<br/>选择白名单 SOC skills"]
-    I --> J["6️⃣ analyze_stub / LLM analyzer<br/>受控分析节点"]
+    I --> PJ["📝 Pre-provider journal<br/>running + bounded metadata"]
+    PJ --> J["6️⃣ analyze_stub / LLM analyzer<br/>受控分析节点"]
     J --> K["7️⃣ schema_validate<br/>Pydantic schema + domain validation"]
     K --> L["8️⃣ evidence_grounding<br/>证据值回指 bounded context"]
     L --> M["9️⃣ SocDecisionPolicy<br/>生成受控 Decision"]
@@ -181,6 +182,7 @@ flowchart TD
     N -->|Yes| O["AnalysisRun.status = needs_review"]
     N -->|No| P["AnalysisRun.status = success"]
     J -->|error| Q["AnalysisRun.status = failed<br/>typed RuntimeFailure"]
+    PJ -->|process loss| X["⏸️ DB keeps running journal<br/>stale -> interrupted -> recover/replay"]
 
     O --> R["🔒 Atomic analysis bundle transaction"]
     P --> R
@@ -200,6 +202,7 @@ flowchart TD
 | `fact_reconstruct` | Rebuild and adjudicate facts | 把厂商字段声明转换为 `RoleClaim`，结合场景假设裁决 source/destination/attacker/victim/impacted asset；只在同一 observation 内判冲突，不把不同请求或不同进程执行压成一条会话；冲突时给暂定结论、证据缺口和核查清单，但不确定 response target | `FactReconstructionResult v2`, `RoleResolution`, `ConflictReport` |
 | `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型；按结构化字段和高价值优先级构造合法 JSON 投影，精确记录 projected/sanitized/omitted path，跨消息保留关键请求和进程证据 | `LLMAnalysisRequest` |
 | `skill_context` | Resolve SOC skills | 根据 source type、场景、实体、冲突选择 SOC skills；当前产物是名称/原因/摘要/hash 的选择清单，不是完整 `SKILL.md` 正文 | `SocSkillContext` |
+| `pre-provider journal` | Commit non-rollbackable call metadata | 在调用 analyzer/provider 前先把同一个 run 以 `running` 落到 `soc_analysis_runs`；只写 request hash/schema、模型、步骤、来源、证据计数、skill、request/trace/actor 和哈希后的幂等键，不写渲染 prompt、provider header/response、credential/token | `AnalysisRequestJournal` |
 | `analyze_stub / LLM analyzer` | Run bounded reasoning | 默认 deterministic stub；显式选择后通过 DeerFlow `create_chat_model` 调用真实模型，输出仍必须经过 JSON/schema/domain validation | `AnalysisNodeOutput` |
 | `schema_validate` | Validate model result | 严格校验 JSON schema、字段类型、domain rule，坏 JSON 需要 repair 后再校验 | `AnalysisResult` |
 | `evidence_grounding` | Ground model claims | 对每条 `AnalysisResult.evidence` 校验唯一精确 source 是否是实际 bounded path，value 是否存在，并区分 `#parsed/#decoded/#repaired`；拒绝 composite citation，HTTP 200/工单状态等若被模型扩写成“攻击成功”则标为未证实 outcome claim | `AnalysisEvidenceGroundingReport` |
@@ -225,11 +228,17 @@ flowchart LR
 版本化审批和 replay 验证的 profile，才有资格在未来改变复核策略。mock/failed/denied 调查证据不满足
 场景所需证据，也不能提高 finding confidence；它们只在调查时间线或 demo 审计中可见。
 
+人工 correction 的数字是未校准 confirmation strength，来源固定为 `human_confirmation`；只有通过
+外部状态 trust/mapping/target gate 后由 service 内部调用的 correction 才是 `external_disposition`。
+两者都使用 `soc.correction_policy.v1`、保留是否显式输入及解释，并且不生成 calibrated probability。
+
 ## 3. Persistence Map / 数据写入地图
 
 ```mermaid
 flowchart LR
-    A["⚙️ SocAnalysisService"] --> TX["🔒 AnalysisPersistence transaction"]
+    A["⚙️ SocAnalysisService"] --> PJ["📝 Pre-provider commit<br/>running AnalysisRun + bounded journal"]
+    PJ --> LLM["🧠 analyzer/provider call<br/>non-rollbackable"]
+    LLM --> TX["🔒 AnalysisPersistence transaction"]
     TX --> B["🗃️ soc_analysis_runs<br/>完整 run + input snapshot"]
     TX --> C["🗃️ soc_alert_summaries<br/>列表、关联、检索读模型"]
     TX --> D["🗃️ soc_review_queue<br/>不可重试失败或受控决策需要复核"]
@@ -680,6 +689,9 @@ soc memory list --queue-id REV-... --pretty
 
 # Open DeerFlow-aligned SOC chat entry
 soc chat tui --queue-id REV-... --lead-agent
+
+# Recover a stale process-lost provider call; the original run remains interrupted
+soc recover RUN-... --reason "worker exited during provider call" --database-url "$SOC_DATABASE_URL" --pretty
 ```
 
 ## 12. State Machines / 状态流转图
@@ -692,9 +704,17 @@ stateDiagram-v2
     running --> success: decision.needs_review=false
     running --> needs_review: decision.needs_review=true
     running --> failed: runtime/schema/tool error
-    needs_review --> replayed: replay creates new run
-    success --> replayed: replay creates new run
-    failed --> replayed: replay creates new run
+    running --> interrupted: stale journal claimed by recover
+    interrupted --> [*]: original run remains immutable history
+    success --> [*]
+    needs_review --> [*]
+    failed --> [*]
+
+    note right of interrupted
+      recover/replay creates a separate new run
+      with replay_of_run_id; it does not change
+      either run status to replayed
+    end note
 ```
 
 ### 12.2 ReviewQueueItem / 复核队列状态

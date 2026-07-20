@@ -540,11 +540,10 @@ class SocExternalDispositionService:
             review_queue_repository=self._review_queue_repository,
             event_sink=self._event_sink,
         )
-        run = review_service.correct(
+        run = review_service.correct_external(
             CorrectionCommand(
                 run_id=target.run_id,
                 corrected_verdict=verdict,
-                corrected_confidence=0.95,
                 reason=_external_correction_reason(event, canonical_status),
                 evidence=[
                     EvidenceItem(
