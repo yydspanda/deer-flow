@@ -87,6 +87,12 @@ only server-returned manifest items and must hand `sample_id/proposal_id/queue` 
 capture form rather than adding a second write path. Keep campaign progress derived and
 `auto_close_allowed=false`.
 
+All SOC HTTP calls remain under `core/soc/api.ts`. The compatible contract uses `/api/soc/*`, direct
+typed success bodies, `X-SOC-API-Version: 1`, and RFC Problem Details mapped to `SocApiError`.
+State-changing callers provide stable idempotency keys when the endpoint requires them; request IDs
+may be supplied through `SocRequestContext` and must not be confused with trace IDs. Authenticated
+Gateway identity is authoritative, so UI actor headers are attribution hints only and cannot grant a role.
+
 ### Key Patterns
 
 - **Server Components by default**, `"use client"` only for interactive components

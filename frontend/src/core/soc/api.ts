@@ -41,6 +41,31 @@ import type {
   SocReviewQueueStatus,
 } from "./types";
 
+export const SOC_API_VERSION = "1";
+
+interface SocApiProblemDetails {
+  schema_version?: string;
+  code?: string;
+  detail?: string;
+  request_id?: string;
+  trace_id?: string;
+  retryable?: boolean;
+}
+
+export class SocApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string,
+    readonly requestId: string | null,
+    readonly traceId: string | null,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = "SocApiError";
+  }
+}
+
 function createRequestId(prefix: string) {
   const randomId = globalThis.crypto?.randomUUID?.();
   if (randomId) return `${prefix}-${randomId}`;
@@ -61,6 +86,7 @@ function buildSocHeaders(
   if (json) {
     headers.set("Content-Type", "application/json");
   }
+  headers.set("X-Request-Id", context?.requestId ?? createRequestId("soc-req"));
   if (!context) {
     return headers;
   }
@@ -81,12 +107,30 @@ function buildSocHeaders(
 }
 
 async function readJson<T>(response: Response, fallbackMessage: string) {
+  const responseVersion = response.headers.get("X-SOC-API-Version");
+  if (responseVersion && responseVersion !== SOC_API_VERSION) {
+    throw new SocApiError(
+      `Unsupported SOC API version: ${responseVersion}`,
+      response.status,
+      "soc.unsupported_api_version",
+      response.headers.get("X-Request-Id"),
+      response.headers.get("X-Trace-Id"),
+      false,
+    );
+  }
   if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as {
-      detail?: unknown;
-    };
+    const body = (await response
+      .json()
+      .catch(() => ({}))) as SocApiProblemDetails;
     const detail = typeof body.detail === "string" ? body.detail : null;
-    throw new Error(detail ?? `${fallbackMessage}: ${response.statusText}`);
+    throw new SocApiError(
+      detail ?? `${fallbackMessage}: ${response.statusText}`,
+      response.status,
+      body.code ?? "soc.http_error",
+      body.request_id ?? response.headers.get("X-Request-Id"),
+      body.trace_id ?? response.headers.get("X-Trace-Id"),
+      body.retryable ?? response.status >= 500,
+    );
   }
   return response.json() as Promise<T>;
 }

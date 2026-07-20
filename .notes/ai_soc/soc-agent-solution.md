@@ -143,6 +143,14 @@ SOC Agent 有多个入口，但不能各写一套业务逻辑：
 | DeerFlow Lead Agent | Analyst chat | Ask questions around a review item, propose next steps | Uses bounded review context |
 | External systems | Zeus, old SOC platform, ticketing | Push status/reason back into SOC Agent | Source adapter maps to canonical command, then authenticated Gateway/service boundary |
 
+Gateway compatibility contract:
+
+- Existing `/api/soc/*` paths and direct typed success bodies are stable for current Web clients.
+- Every SOC route uses `create_soc_router()` to return `X-SOC-API-Version: 1`, correlated
+  `X-Request-Id` / `X-Trace-Id`, and sanitized RFC Problem Details for route-level failures.
+- The OpenAPI summary snapshot under `contracts/soc_api/` is the review gate for path/method/header/error
+  changes. Authenticated Gateway identity is authoritative; a caller header cannot replace it.
+
 ```mermaid
 flowchart TB
     subgraph Entry["🚪 Entry Surfaces / 入口层"]
@@ -259,7 +267,7 @@ Important behavior:
 | Module / 模块 | Responsibility / 职责 | Must not do / 禁止 |
 | --- | --- | --- |
 | `backend/soc_agent/cli.py` | CLI commands for demo, review, memory, daemon smoke | No direct DB business mutation except through services |
-| Gateway API routes | Web/TUI/API access to review, memory, approval | No duplicate runtime logic |
+| Gateway API routes | Web/TUI/API access to review, memory, approval through the shared v1 transport helper | No duplicate runtime logic, ad hoc error shape or trusted caller actor header |
 | Kafka consumer / daemon | Validate `SocAlertRawEnvelope`, preserve raw payload, map to daemon messages, call `SocDaemonService` | No bare alert object, vendor parsing or direct alert analysis logic |
 | DeerFlow Lead Agent bridge | Chat around bounded investigation context | No unbounded raw secret/context injection |
 | External disposition adapter | Map old-platform status/reason to canonical event and call the authenticated canonical ingress | No direct DB, verdict, queue or confirmed-memory write |

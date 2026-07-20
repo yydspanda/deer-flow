@@ -1,0 +1,104 @@
+{
+  "schema_version": "soc.openapi.snapshot.v1",
+  "api_version": "1",
+  "base_path": "/api/soc",
+  "success_body": "direct_typed_json",
+  "problem_schema": "#/components/schemas/SocProblemDetails",
+  "request_headers": [
+    "Idempotency-Key",
+    "X-Request-Id",
+    "X-Trace-Id"
+  ],
+  "response_headers": [
+    "X-Request-Id",
+    "X-SOC-API-Version",
+    "X-Trace-Id"
+  ],
+  "error_statuses": [
+    "400",
+    "403",
+    "404",
+    "409",
+    "422",
+    "503"
+  ],
+  "paths": {
+    "/api/soc/approvals/actions/dry-run": [
+      "post"
+    ],
+    "/api/soc/approvals/actions/execute": [
+      "post"
+    ],
+    "/api/soc/approvals/grants": [
+      "post"
+    ],
+    "/api/soc/approvals/requests": [
+      "get",
+      "post"
+    ],
+    "/api/soc/approvals/requests/{approval_request_id}": [
+      "get"
+    ],
+    "/api/soc/approvals/requests/{approval_request_id}/expire": [
+      "post"
+    ],
+    "/api/soc/approvals/requests/{approval_request_id}/reject": [
+      "post"
+    ],
+    "/api/soc/external-dispositions": [
+      "post"
+    ],
+    "/api/soc/memory/candidates": [
+      "get"
+    ],
+    "/api/soc/memory/candidates/{candidate_id}": [
+      "get"
+    ],
+    "/api/soc/memory/candidates/{candidate_id}/review": [
+      "post"
+    ],
+    "/api/soc/memory/records": [
+      "get"
+    ],
+    "/api/soc/memory/records/{memory_id}": [
+      "get"
+    ],
+    "/api/soc/memory/search": [
+      "post"
+    ],
+    "/api/soc/normalization/baselines": [
+      "get",
+      "post"
+    ],
+    "/api/soc/normalization/issues": [
+      "get"
+    ],
+    "/api/soc/normalization/issues/{issue_id}": [
+      "patch"
+    ],
+    "/api/soc/normalization/metrics": [
+      "get"
+    ],
+    "/api/soc/review/disposition-outcomes": [
+      "post"
+    ],
+    "/api/soc/review/disposition-samples": [
+      "get"
+    ],
+    "/api/soc/review/disposition-samples/{sample_id}/inbox": [
+      "get"
+    ],
+    "/api/soc/review/items": [
+      "get"
+    ],
+    "/api/soc/review/items/{queue_id}/close": [
+      "post"
+    ],
+    "/api/soc/review/items/{queue_id}/context": [
+      "get"
+    ],
+    "/api/soc/review/runs/{run_id}/correct": [
+      "post"
+    ]
+  }
+}

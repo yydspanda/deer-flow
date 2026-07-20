@@ -10,6 +10,7 @@ rs.mock("@/core/config", () => ({
 
 import { fetch as fetcher } from "@/core/api/fetcher";
 import {
+  SocApiError,
   closeSocReviewItem,
   correctSocReviewRun,
   createSocApprovalGrant,
@@ -28,10 +29,14 @@ import {
 
 const mockedFetch = rs.mocked(fetcher);
 
-function jsonResponse(status: number, body: unknown): Response {
+function jsonResponse(
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
   });
 }
 
@@ -76,7 +81,59 @@ describe("SOC review API", () => {
     const headers = init?.headers as Headers;
     expect(headers.get("x-soc-actor-id")).toBe("user-1");
     expect(headers.get("x-soc-surface")).toBe("web");
+    expect(headers.get("x-request-id")).toMatch(/^soc-req-/);
     expect(headers.get("x-trace-id")).toBe("trace-1");
+  });
+
+  test("uses caller request id when provided", async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse(200, { items: [] }));
+
+    await listSocReviewItems({
+      context: { requestId: "req-web-1", traceId: "trace-web-1" },
+    });
+
+    const headers = firstFetchInit().headers as Headers;
+    expect(headers.get("x-request-id")).toBe("req-web-1");
+  });
+
+  test("surfaces structured SOC problem details", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(
+        409,
+        {
+          schema_version: "soc.api.problem.v1",
+          code: "soc.conflict",
+          detail: "The command conflicts with current state",
+          request_id: "req-conflict-1",
+          trace_id: "trace-conflict-1",
+          retryable: false,
+        },
+        { "X-SOC-API-Version": "1" },
+      ),
+    );
+
+    const error = await listSocReviewItems().catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(SocApiError);
+    expect(error).toMatchObject({
+      status: 409,
+      code: "soc.conflict",
+      requestId: "req-conflict-1",
+      traceId: "trace-conflict-1",
+      retryable: false,
+      message: "The command conflicts with current state",
+    });
+  });
+
+  test("rejects an unsupported declared SOC API version", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, { items: [] }, { "X-SOC-API-Version": "2" }),
+    );
+
+    await expect(listSocReviewItems()).rejects.toMatchObject({
+      name: "SocApiError",
+      code: "soc.unsupported_api_version",
+    });
   });
 
   test("omits status when requesting all queue items", async () => {

@@ -5,10 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.routers.soc_dependencies import get_or_create_soc_repository, soc_service_context_from_request
+from app.gateway.routers.soc_transport import create_soc_router
 from soc_agent.contracts import (
     AnalysisRun,
     CorrectionCommand,
@@ -35,7 +36,7 @@ from soc_agent.core import (
     SocServiceNotImplementedError,
 )
 
-router = APIRouter(prefix="/api/soc/review", tags=["soc-review"])
+router = create_soc_router(prefix="/api/soc/review", tags=["soc-review"])
 
 
 class ReviewQueueListResponse(BaseModel):

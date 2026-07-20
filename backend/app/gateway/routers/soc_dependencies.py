@@ -9,6 +9,8 @@ from sqlalchemy.orm import sessionmaker
 from soc_agent.contracts import ActorAuthSource, ActorContext, EntrySurface, ServiceRequestContext
 from soc_agent.db import SqlAlchemyAlertRepository, resolve_database_url, to_sync_database_url
 
+from .soc_transport import soc_request_id_from_request, soc_trace_id_from_request
+
 _ALLOWED_HEADER_SURFACES = {
     EntrySurface.API.value: EntrySurface.API,
     EntrySurface.WEB.value: EntrySurface.WEB,
@@ -38,13 +40,14 @@ def soc_service_context_from_request(
     include_soc_roles: bool = False,
 ) -> ServiceRequestContext:
     return ServiceRequestContext(
+        request_id=soc_request_id_from_request(request),
         actor=ActorContext(
             actor_id=actor_id_from_request(request),
             surface=surface_from_request(request),
             roles=soc_roles_from_request(request) if include_soc_roles else [],
             auth_source=auth_source_from_request(request),
         ),
-        trace_id=request.headers.get("x-trace-id"),
+        trace_id=soc_trace_id_from_request(request),
         idempotency_key=request.headers.get("idempotency-key"),
     )
 

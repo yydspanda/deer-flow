@@ -18,6 +18,7 @@ Post-audit resolution tracking (the rows below retain the original AUD-02 eviden
 | `CONS-14` correction/external atomicity | **Resolved by `BG-P0-02`** | Explicit `SocMutationUnitOfWork`, commit-buffered events, per-write fault injection and exact-retry tests |
 | `CONS-03` external disposition application ingress | **Resolved by `BG-P1-01`** | Authenticated `POST /api/soc/external-dispositions` accepts a strict canonical ingress command and calls the transactional service with service-level RBAC; real Zeus/ITSM/SOAR feeds remain data-gated |
 | `CONS-04` Kafka alert envelope | **Resolved by `BG-P1-01`** | `SocAlertRawEnvelope` strictly validates and bounds `soc.alert.raw.v1`, preserves raw source payload, rejects bare/invalid records without leaking raw values, and passes real Redpanda commit/DLQ smoke |
+| `CONS-02` SOC API transport mismatch | **Resolved by `BG-P1-02`** | Reviewed compatibility contract preserves `/api/soc/*` and typed success bodies; shared route class adds transport version, sanitized Problem Details and request/trace headers; OpenAPI/frontend regression freezes the decision; authenticated identity replaces the unsafe `X-Actor` draft |
 
 ## 1. Audit Question / 审计问题
 

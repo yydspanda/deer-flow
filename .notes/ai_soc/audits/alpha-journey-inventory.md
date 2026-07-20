@@ -14,6 +14,9 @@ Post-snapshot addendum:
   `SocAlertRawEnvelope(soc.alert.raw.v1)` validation and added authenticated
   `POST /api/soc/external-dispositions` application ingress. The endpoint accepts a canonical
   event; a real Zeus/ITSM/SOAR source adapter is still data-gated.
+- `BG-P1-02` (2026-07-20) preserved the existing `/api/soc/*` application paths/direct typed
+  responses and added one shared API v1 transport: response version, request/trace correlation,
+  sanitized Problem Details, OpenAPI snapshot and frontend `SocApiError` handling.
 
 The original 17-table, bare-Kafka-object, service-only external-disposition and audit inventory below
 is intentionally retained as AUD-01 evidence. Current truth is recorded in the completeness matrix,

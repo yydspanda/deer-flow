@@ -165,6 +165,11 @@ Current SOC direction:
   `POST /api/soc/external-dispositions`; callers submit `SocExternalDispositionIngressCommand` with a
   stable source event ID, while vendor mapping/trust configuration remains server-owned. Real
   Zeus/ITSM/SOAR source feeds and credentials remain data-gated and must reuse this service boundary.
+- Published SOC Gateway routes keep the compatible `/api/soc/*` paths and direct typed success bodies.
+  They must use `app.gateway.routers.soc_transport.create_soc_router()` for
+  `X-SOC-API-Version: 1`, request/trace correlation and sanitized Problem Details. Update
+  `contracts/soc_api/openapi-v1.snapshot.json` only as an intentional reviewed API contract change;
+  authenticated Gateway identity always wins over caller actor headers.
 - L3 SOC state changes require both a trusted `ActorContext.auth_source` and a command-specific role
   inside the core service; Gateway/router checks alone are insufficient. Approval requests follow
   `pending -> approved|rejected|expired`; approve accepts only a persisted request ID and atomically

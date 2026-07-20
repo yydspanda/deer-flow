@@ -214,6 +214,12 @@ raw input values in validation errors. External status/reason feedback enters th
 `POST /api/soc/external-dispositions` as a canonical `SocExternalDispositionIngressCommand`; source
 adapters own vendor mapping/signature/replay concerns and cannot bypass `SocExternalDispositionService`.
 
+All published `/api/soc/*` routers use `app.gateway.routers.soc_transport.create_soc_router()`.
+The stable contract preserves direct typed success bodies, reports transport version 1 and
+request/trace IDs in response headers, and maps route/dependency/schema failures to sanitized
+`SocProblemDetails`. Do not introduce parallel `/api/soc/v1` aliases or trust an `X-Actor` header.
+Intentional path/method/header/error changes must update `contracts/soc_api/openapi-v1.snapshot.json`.
+
 L3 SOC mutations use `core.access_control.require_actor_roles()` inside the service boundary. A caller
 must have a non-anonymous actor, a non-unknown `ActorContext.auth_source`, and a command-specific role;
 Gateway authentication/route checks do not replace this rule. Gateway derives `soc_analyst` or

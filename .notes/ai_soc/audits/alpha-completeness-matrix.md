@@ -52,7 +52,7 @@ provider/infrastructure row remains `Mock` or `Data-gated`.
 | `AC-08` | Generic external disposition application ingress | Complete | - | Authenticated `POST /api/soc/external-dispositions` accepts versioned canonical ingress commands and reaches the existing transactional service; admin/adapter RBAC, source-event idempotency, changed-retry conflict and failure mapping are tested | Maintain; real feeds remain `AC-09` |
 | `AC-09` | Real Zeus/ITSM/SOAR disposition feed | Data-gated | P2 | Requires endpoint/topic, auth/signature, tenant mapping, replay and approved data | PI |
 | `AC-10` | Gateway alert analyze/run/replay API | Deferred | P2 | CLI and Kafka are Alpha ingestion paths; no current product requirement forces a Web analyze form | Parking Lot |
-| `AC-11` | Versioned SOC API transport and error/header contract | Gap | P1 | Existing `/api/soc/...` routes work, but differ from the declared v1 envelope/error/request contract | BG |
+| `AC-11` | Versioned SOC API transport and error/header contract | Complete | - | Existing `/api/soc/*` paths and direct typed success bodies are preserved; shared `SocAPIRoute` adds transport v1 header, sanitized Problem Details, request/trace propagation and reviewed OpenAPI snapshot; frontend consumes the same contract | Maintain |
 
 ### 2.2 Runtime, Decision, and Persistence
 
@@ -127,14 +127,14 @@ provider/infrastructure row remains `Mock` or `Data-gated`.
 
 | State | Count |
 |---|---:|
-| Complete | 27 |
-| Gap | 7 |
+| Complete | 28 |
+| Gap | 6 |
 | Mock | 1 |
 | Data-gated | 6 |
 | Deferred | 9 |
 | **Total** | **50** |
 
-The AUD-03 baseline admitted 13 `Gap` rows into Stage 3. Six are now closed, leaving 7 current
+The AUD-03 baseline admitted 13 `Gap` rows into Stage 3. Seven are now closed, leaving 6 current
 `Gap` rows. `Mock`, `Data-gated`, and `Deferred` rows remain visible but do not silently become
 blockers.
 
@@ -154,12 +154,12 @@ All frozen P0 gaps are closed. The implementation evidence is retained in Sectio
 | `AC-21` Durable state-mutation audit | `BG-P0-02`, 2026-07-18 | Migration `0018`; immutable `SocMutationAuditRecord`; close/note/correction, memory review, approval submit/approve/reject/expire/dry-run/execute and external disposition covered; API/TUI actor provenance and secret-redaction tests pass | Generic process event streaming remains deferred under `AC-46`; decision lineage remains in `soc_decision_audit_log` |
 | `AC-04` Versioned Kafka envelope | `BG-P1-01`, 2026-07-18 | Strict `SocAlertRawEnvelope`; 900,000-byte raw and 64,000-byte hint limits; no raw values in validation errors; exact preservation of three representative source samples; bad version/malformed/reserved collision tests; Redpanda smoke proves processed+commit, DLQ+commit and post-commit idle | Real topic ACL/capacity/recovery evidence remains data-gated under `AC-48` |
 | `AC-08` Generic external disposition ingress | `BG-P1-01`, 2026-07-18 | Versioned `SocExternalDispositionIngressCommand`; authenticated Gateway route; service-level `soc_admin`/adapter RBAC; source event ID required; duplicate returns one record and changed retry conflicts; mapped/unmatched/failure coverage reuses the same service | Real Zeus/ITSM/SOAR auth/signature/feed remains data-gated under `AC-09` |
+| `AC-11` SOC API transport contract | `BG-P1-02`, 2026-07-20 | Shared `SocAPIRoute/create_soc_router`; compatible `/api/soc/*` paths and direct typed success; `X-SOC-API-Version`, request/trace propagation, sanitized RFC Problem Details; reviewed path/header/error snapshot; frontend `SocApiError` and version guard | Gateway pre-router authentication/CSRF remains the shared DeerFlow security transport; new API business capabilities remain separately scoped |
 
 ### 3.3 P1 - Alpha journey and reproducibility blockers
 
 | Gap | Owner boundary | Impact | Source evidence | Acceptance / 验收 | Target |
 |---|---|---|---|---|---|
-| `AC-11` SOC API v1 transport contract | Gateway SOC routers + frontend client | New SOC APIs will continue diverging in paths, envelopes, errors and request metadata | `CONS-02` | One reviewed v1 convention is implemented or the engineering contract is explicitly replaced; OpenAPI snapshot covers SOC paths/errors/headers; frontend uses the chosen contract; compatibility strategy is tested | `BG-02` |
 | `AC-13` Durable pre-LLM run journal | Analysis service + persistence | Process loss during a model call leaves no durable requested/running record for recovery or cost investigation | `CONS-15` | Before provider invocation persist bounded request metadata and running state without raw prompt/secret; success/failure finalization is recoverable; crash/timeout test leaves a discoverable interrupted/running record and replay path | `BG-02` |
 | `AC-17` Correction confidence provenance | Review/external disposition service + decision contract | Human/external decisions display an unexplained score and lose provenance required for audit/eval | `CONS-16` | Human correction writes `human_confirmation`; trusted external correction writes `external_disposition`; fixed confidence is removed or policy-versioned/explained; summary/audit/API tests preserve provenance and no false calibration | `BG-02` |
 | `AC-23` SOC frontend regression | Frontend SOC components/API client | Browser-only rehearsal will not reliably catch state/action/render regressions | AUD-01 Web evidence; no SOC-named frontend tests | Focused tests cover queue/context render, close/correct, approval integrity flow, memory review, disposition outcome/sample and normalization actions; `pnpm test`/`pnpm check` pass | `BG-02` |
@@ -203,7 +203,7 @@ Stage 3 may implement only these packages unless the user explicitly changes the
 | `BG-P0-01` Approval integrity and L3 authorization | `AC-22`, `AC-34` | **Done 2026-07-18**: persisted request state machine, request-id grant command, one-resolution/idempotency, core RBAC and actor auth provenance | 509 SOC tests + 16 frontend API tests; forged/stale/repeated/unauthorized and Web/TUI contracts covered |
 | `BG-P0-02` Transactional mutation and durable audit | `AC-16`, `AC-21` | **Done 2026-07-18**: explicit command unit-of-work, commit-buffered events and append-only secret-safe mutation audit | 516 SOC tests + 10 architecture + 6 migration-environment tests; fault-injection rollback matrix plus API/TUI audit coverage |
 | `BG-P1-01` Versioned ingestion and feedback | `AC-04`, `AC-08` | **Done 2026-07-18**: strict bounded Kafka alert envelope plus authenticated canonical external-disposition Gateway ingress | 532 SOC + 16 architecture/migration tests; Redpanda processed/commit, DLQ/commit and post-commit idle; application duplicate/conflict/RBAC/failure tests |
-| `BG-P1-02` API contract stabilization | `AC-11` | Versioned/explicit SOC API convention, error/request metadata and OpenAPI regression | Gateway + frontend contract tests |
+| `BG-P1-02` API contract stabilization | `AC-11` | **Done 2026-07-20**: compatible versioned transport headers, Problem Details/request metadata, OpenAPI snapshot and frontend contract | Gateway transport/router tests, real sync-route HTTP smoke and full frontend regression |
 | `BG-P1-03` Runtime recovery and decision provenance | `AC-13`, `AC-17` | Durable pre-call journal and correct human/external confidence source | crash/timeout recovery and correction/external replay tests |
 | `BG-P1-04` Governed memory activation | `AC-39` | Role/reason/audit/version controlled retrieval enable/disable service and surfaces | retrieval replay diff and authorization tests |
 | `BG-P1-05` Alpha E2E and docs reconciliation | `AC-23`, `AC-24`, `AC-49` | Frontend regression, one release-level APT/EDR/HIDS acceptance report, synchronized authoritative docs | full backend/architecture/frontend checks and versioned acceptance artifact |
@@ -234,4 +234,4 @@ Each package remains a reviewable slice and must not absorb P2/Data-gated work.
 
 **AA Gate: Passed on 2026-07-18.**
 
-The next implementation slice is `BG-P1-02 API contract stabilization`.
+The next implementation slice is `BG-P1-03 Runtime recovery and decision provenance`.

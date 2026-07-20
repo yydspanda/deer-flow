@@ -1280,61 +1280,49 @@ LessonRule
 
 ## 七、API 接口规范
 
-API 从第一天就加版本：
+`BG-P1-02` 冻结以下兼容契约。现有 Web/API 已广泛使用 `/api/soc/*`，因此不新增一套重复
+`/api/soc/v1/*` route，也不把所有 success body 强行包成 `{data, meta}`：
 
-```text
-/api/soc/v1/...
-```
+| Contract | Current rule |
+|---|---|
+| Base path | 保持 `/api/soc/{capability}/...`；breaking transport 才建立新 major path |
+| Version | 每个 operation 的 OpenAPI 带 `x-soc-api-version=1`；每个 route response 带 `X-SOC-API-Version: 1` |
+| Success body | 保持 endpoint 声明的直接 typed JSON；list endpoint 自己使用明确的 `{items: [...]}` response model |
+| Error body | route/dependency/validation error 使用 `application/problem+json` 和 `SocProblemDetails(soc.api.problem.v1)` |
+| Request ID | 可传 `X-Request-Id`；未传则生成；进入 `ServiceRequestContext.request_id` 并在 response 回显 |
+| Trace ID | 可传 `X-Trace-Id`；复用 DeerFlow trace context 或生成；进入 service context 并在 response 回显 |
+| Idempotency | `Idempotency-Key` 是公共 optional header；只有明确声明幂等语义的 mutation 才要求并消费它 |
+| Actor | 权威 actor 来自 Gateway authenticated user/service principal；`X-Actor` 不属于协议，legacy `X-SOC-Actor-Id` 不能覆盖 authenticated identity |
 
-### Phase 1 API 草案
-
-| 方法 | 路径 | 用途 |
-|---|---|---|
-| `POST` | `/api/soc/v1/alerts/analyze` | 提交单条告警分析 |
-| `GET` | `/api/soc/v1/runs/{run_id}` | 查询 run 状态和摘要 |
-| `GET` | `/api/soc/v1/runs/{run_id}/steps` | 查询 step trace |
-| `POST` | `/api/soc/v1/runs/{run_id}/replay` | 回放分析 |
-| `GET` | `/api/soc/v1/alerts/{alert_id}` | 查看告警分析结果 |
-| `POST` | `/api/soc/v1/runs/{run_id}/corrections` | 提交人工纠正 |
-| `GET` | `/api/soc/v1/facts` | 查询 facts |
-| `PATCH` | `/api/soc/v1/facts/{fact_id}` | 确认/驳回/回滚 fact |
-
-### 响应格式
-
-业务成功：
+`SocProblemDetails` 至少包含：
 
 ```json
 {
-  "data": {},
-  "meta": {
-    "request_id": "req_...",
-    "schema_version": "soc.api.v1"
-  }
+  "schema_version": "soc.api.problem.v1",
+  "type": "urn:deerflow:soc:problem:soc.conflict",
+  "title": "Conflict",
+  "status": 409,
+  "detail": "The command conflicts with current state",
+  "instance": "/api/soc/...",
+  "code": "soc.conflict",
+  "request_id": "req_...",
+  "trace_id": "trace_...",
+  "retryable": false,
+  "errors": []
 }
 ```
 
-业务失败采用 Problem Details 风格：
+约束：
 
-```json
-{
-  "error": {
-    "code": "LLM_OUTPUT_INVALID",
-    "message": "LLM output failed schema validation",
-    "details": {},
-    "retryable": false
-  },
-  "meta": {
-    "request_id": "req_...",
-    "run_id": "run_..."
-  }
-}
-```
-
-所有写接口支持：
-
-- `Idempotency-Key`
-- `X-Request-Id`
-- `X-Actor`
+- `backend/app/gateway/routers/soc_transport.py` 是唯一 SOC HTTP transport helper；所有 SOC router
+  通过 `create_soc_router()` 获得相同 headers、Problem Details 和 OpenAPI metadata。
+- validation `errors` 只返回 location/message/type，不回显 request input、secret 或 raw alert。
+- pre-router authentication/CSRF failure 继续属于 DeerFlow Gateway 全局安全边界；SOC route 不复制或
+  绕过 Auth/CSRF middleware。进入 SOC route 后的业务、dependency 和 schema error 使用上述 problem。
+- Frontend `core/soc/api.ts` 保留 direct typed success 解析，识别 Problem Details 为 `SocApiError`，
+  传递 `X-Request-Id`，并拒绝已声明但不受支持的 API version。
+- `contracts/soc_api/openapi-v1.snapshot.json` 锁定所有已发布 SOC path/method、公共 request headers、
+  response headers 和 error statuses。新增/删除/改路径必须显式 review snapshot diff。
 
 ## 八、事件与通信规范
 

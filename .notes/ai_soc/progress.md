@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `BG` Stage 3 - Close Blocking Gaps（`BD`、`AA` Gate 已于 2026-07-18 通过） |
-| 当前目标 | `BG-P1-02 API contract stabilization`：关闭 `AC-11`，冻结 SOC Gateway path/envelope/error/request metadata 约定并增加 OpenAPI/frontend regression |
+| 当前目标 | `BG-P1-03 Runtime recovery and decision provenance`：关闭 `AC-13/AC-17`，增加 durable pre-model journal/recovery，并修正 human/external correction confidence provenance |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `BG-P1-02`：先盘点现有 `/api/soc/*` router 与 frontend client 的 path、body、error、actor/trace/idempotency 差异，再选择兼容策略；不在本刀新增业务能力。 |
+| 当前下一刀 | `BG-P1-03`：先冻结 pre-provider journal 状态机和 crash/timeout recovery contract，再实现持久化；同刀移除 external fixed `0.95` 并明确 human/external confidence source。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -39,7 +39,7 @@
 |---|---|---|---|---|
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
-| `BG` | Close Blocking Gaps | **Current / BG-P1-02 In Progress** | `BG-P0-01..02` 和 `BG-P1-01` 已完成；当前稳定 SOC API transport contract | Alpha E2E 和 readiness package 通过 |
+| `BG` | Close Blocking Gaps | **Current / BG-P1-03 In Progress** | `BG-P0-01..02`、`BG-P1-01..02` 已完成；当前补 Runtime recovery 和 correction provenance | Alpha E2E 和 readiness package 通过 |
 | `PI` | Real Data & Production Integration | Data/credential-gated | 真实 provider、基础设施、标签、SLO 和 governed rollout | Pilot readiness review 通过 |
 
 ## 能力与历史切片台账
@@ -200,6 +200,28 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-20 — BG-P1-02 API contract stabilization completed
+
+- `AC-11` 已关闭：
+  - 保留已被 Gateway/Web 使用的 `/api/soc/*` path 和 direct typed success body，不制造重复
+    `/api/soc/v1/*` 或破坏性 `{data,meta}` 迁移；
+  - 新增 `soc_transport.py`，所有 SOC routers 通过 `create_soc_router()` 共享
+    `X-SOC-API-Version: 1`、`X-Request-Id`、`X-Trace-Id` 和 sanitized
+    `SocProblemDetails(soc.api.problem.v1)`；
+  - request/trace ID 进入同一个 `ServiceRequestContext`；validation error 不回显 input；Gateway
+    authenticated identity 仍优先，旧草案 `X-Actor` 被正式废弃；
+  - `contracts/soc_api/openapi-v1.snapshot.json` 锁定所有 SOC path/method、公共 request/response
+    headers 和 error statuses；
+  - frontend `SocRequestContext` 支持 request ID，`SocApiError` 保留 code/status/request/trace/retryable，
+    并拒绝已声明但不支持的 API version。
+- 验证：
+  - backend transport/router focused：42 passed；完整 SOC suite：538 passed；architecture/migration：16 passed；
+  - frontend full test：642 passed；`pnpm check` 通过；Ruff 和 diff check 通过；
+  - 真实同步 `soc_review` ASGI route smoke 返回 typed body 和 v1/request headers。
+- 下一步：
+  - `BG-P1-03`：只关闭 `AC-13/AC-17`，实现 durable pre-model journal/recovery 和正确的
+    human/external decision confidence provenance。
 
 ### 2026-07-18 — BG-P1-01 versioned ingestion and feedback completed
 

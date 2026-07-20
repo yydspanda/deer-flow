@@ -14,6 +14,7 @@ export type SocEntrySurface = "api" | "web";
 export interface SocRequestContext {
   actorId?: string;
   surface?: SocEntrySurface;
+  requestId?: string;
   traceId?: string;
   idempotencyKey?: string;
 }

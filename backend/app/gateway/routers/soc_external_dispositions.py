@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 
 from app.gateway.routers.soc_dependencies import (
     get_or_create_soc_repository,
     soc_service_context_from_request,
 )
+from app.gateway.routers.soc_transport import create_soc_router
 from soc_agent.contracts import (
     SocExternalDispositionApplyResult,
     SocExternalDispositionIngressCommand,
@@ -25,7 +26,7 @@ from soc_agent.core import (
     SocServiceNotImplementedError,
 )
 
-router = APIRouter(
+router = create_soc_router(
     prefix="/api/soc/external-dispositions",
     tags=["soc-external-dispositions"],
 )
