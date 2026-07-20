@@ -19,6 +19,7 @@ Post-audit resolution tracking (the rows below retain the original AUD-02 eviden
 | `CONS-03` external disposition application ingress | **Resolved by `BG-P1-01`** | Authenticated `POST /api/soc/external-dispositions` accepts a strict canonical ingress command and calls the transactional service with service-level RBAC; real Zeus/ITSM/SOAR feeds remain data-gated |
 | `CONS-04` Kafka alert envelope | **Resolved by `BG-P1-01`** | `SocAlertRawEnvelope` strictly validates and bounds `soc.alert.raw.v1`, preserves raw source payload, rejects bare/invalid records without leaking raw values, and passes real Redpanda commit/DLQ smoke |
 | `CONS-02` SOC API transport mismatch | **Resolved by `BG-P1-02`** | Reviewed compatibility contract preserves `/api/soc/*` and typed success bodies; shared route class adds transport version, sanitized Problem Details and request/trace headers; OpenAPI/frontend regression freezes the decision; authenticated identity replaces the unsafe `X-Actor` draft |
+| `CONS-17` governed memory activation | **Resolved by `BG-P1-04`** | One versioned `SocMemoryService` command now owns role/reason/validity/review/CAS/audit semantics; CLI/API/Web/demo use it and retrieval rejects direct, expired, or overdue activation flags |
 
 ## 1. Audit Question / 审计问题
 
@@ -119,7 +120,7 @@ exceptions; they do not invalidate these base facts.
 | ID | Marker | Documented claim | Current code fact | Evidence and AUD-03 question |
 |---|---|---|---|---|
 | `CONS-16` | Resolved by `BG-P1-03` | Solution says `Decision.confidence_source` distinguishes stub, LLM, human confirmation, and external disposition | Human correction now emits `human_confirmation`; only the admitted external service path emits `external_disposition`; both preserve uncalibrated confirmation semantics, explicit/default origin, explanation and `soc.correction_policy.v1`; fixed external `0.95` is removed | `SocReviewService.correct()/correct_external()`; correction/summary/audit/API and external disposition tests |
-| `CONS-17` | Current claim exceeds wiring | Memory diagrams describe confirmed memory becoming retrieval-visible through an explicit policy gate | Retrieval scoring/filtering is implemented, and confirmed records correctly default to `retrieval_enabled=false`; however no public service method, CLI mutation, Gateway endpoint, or governed policy enables the flag. Boss Demo changes it directly through the repository as a disclosed fixture | Solution `1014-1037`; lifecycle `545-580`; `SocMemoryService`; memory CLI/router; `demo/investigation.py:315-383`. Retrieval plumbing is real, but activation governance is not an application path |
+| `CONS-17` | Resolved by `BG-P1-04` | Memory diagrams describe confirmed memory becoming retrieval-visible through an explicit policy gate | `SocMemoryRetrievalActivationCommand` and `SocMemoryService.set_retrieval_activation()` now enforce authorized actor, reason, expected version, bounded validity/review period, CAS, idempotency and durable mutation audit. CLI/API/Web/Boss Demo all use that path; retrieval rejects legacy/direct flags, expiry and overdue review | `contracts/schemas.py`; `core/service.py`; `memory/retrieval.py`; `routers/soc_memory.py`; CLI/frontend/demo; service/repository/router/UoW tests |
 | `CONS-18` | Semantic mismatch | Security contract requires every write to carry `actor_id`, `actor_type`, `auth_source`, and `request_id`; L3 state changes require role plus service authorization | `ActorContext` has no `auth_source`. Gateway derives authenticated actor identity, but `SocReviewService.close/correct` and `SocMemoryService.review_candidate` have no role checks. Approval does check admin/approver roles, while its request-create API accepts client-supplied `requested_by` and no request context | Solution `1105-1123`; engineering contracts `1472-1501`; `contracts/common.py:27-38`; SOC review/memory/approval routers and services. Entry authentication exists, but the documented core authorization contract is only partially implemented |
 
 ### 4.5 Documentation and Register Freshness / 文档与台账新鲜度
@@ -150,7 +151,7 @@ implementation as a production integration. It is not the final AUD-03 completen
 | External disposition service and SQL table | Real service/persistence implementation | Input fixture is mock and no application ingress exists |
 | Governed facts and authorized-activity matcher | Real deterministic lifecycle/matcher | Current source facts are fixtures until authoritative source sync exists |
 | Authorization enrichment/proposal/outcome/eval | Real persisted implementation, shadow-only behavior | No decision mutation or auto-close; a passing report only permits rollout review |
-| Memory candidate/review/retrieval algorithm | Real implementation | No governed retrieval-enable application path; demo enables one record directly |
+| Memory candidate/review/retrieval algorithm | Real implementation | Governed activation is wired through service/CLI/API/Web/demo; prompt injection and automatic lesson capture remain deferred |
 | Main orchestrator | Real eval/demo service | Not a live CLI/Kafka/Web/Lead Agent orchestration entry |
 | Approval/grant/execute boundary | Real internal safety boundary | No real external side effect; request resolution and persisted-request verification differ from diagrams |
 | Prometheus/global operations view | Not implemented | JSONL/normalization/status signals are partial observability, not the planned operations product |
@@ -165,8 +166,7 @@ implementation as a production integration. It is not the final AUD-03 completen
    persistence and evaluation are real, but authoritative fact sources and auto-close remain unavailable
    or deliberately disabled.
 4. **The largest semantic inconsistencies are not model quality issues.** They are API contract drift,
-   approval request lifecycle, audit durability, multi-write atomicity, correction confidence provenance,
-   and memory retrieval activation.
+   approval request lifecycle, audit durability, multi-write atomicity, and correction confidence provenance.
 5. **Several “future” labels are stale in the opposite direction.** Kafka daemon and DeerFlow Lead
    Agent exist, but old Phase/docstrings still call them future; their remaining production gaps must be
    described precisely instead of calling the whole capability absent.

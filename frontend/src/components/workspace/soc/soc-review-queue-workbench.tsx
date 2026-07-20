@@ -8,7 +8,9 @@ import {
   FlaskConicalIcon,
   InboxIcon,
   KeyRoundIcon,
+  LibraryBigIcon,
   PlayCircleIcon,
+  PowerIcon,
   RefreshCwIcon,
   SearchCheckIcon,
   ShieldAlertIcon,
@@ -48,8 +50,10 @@ import {
   useRecordSocDispositionOutcome,
   useSocApprovalRequest,
   useSocApprovalRequests,
+  useSocMemoryRecords,
   useSocReviewContext,
   useSocReviewItems,
+  useUpdateSocMemoryRetrievalActivation,
 } from "@/core/soc";
 import type {
   SocAgentActionResult,
@@ -65,6 +69,8 @@ import type {
   SocInvestigationTimelineItem,
   SocMemoryCandidate,
   SocMemoryCandidateReviewDecision,
+  SocMemoryRecord,
+  SocMemoryRetrievalActivationAction,
   SocMemoryRetrievalResult,
   SocOperationalDisposition,
   SocReviewQueueItem,
@@ -102,6 +108,22 @@ const DISPOSITION_OPTIONS: {
   { value: "duplicate", label: "重复事件" },
   { value: "unknown", label: "证据不足" },
 ];
+
+interface MemoryRetrievalDraft {
+  reason: string;
+  validUntil: string;
+  reviewAfterDays: string;
+}
+
+function defaultMemoryRetrievalDraft(): MemoryRetrievalDraft {
+  const validUntil = new Date();
+  validUntil.setDate(validUntil.getDate() + 90);
+  return {
+    reason: "",
+    validUntil: validUntil.toISOString().slice(0, 16),
+    reviewAfterDays: "30",
+  };
+}
 
 const OUTCOME_REVIEW_KIND_OPTIONS: {
   value: SocDispositionOutcomeReviewKind;
@@ -1178,6 +1200,9 @@ function RelevantMemorySection({
           <div className="text-muted-foreground grid gap-2 p-4 text-xs sm:grid-cols-4">
             <span>候选 {result.total_candidate_count}</span>
             <span>未开启检索 {result.skipped_retrieval_disabled}</span>
+            <span>未治理启用 {result.skipped_ungoverned_activation}</span>
+            <span>启用已过期 {result.skipped_activation_expired}</span>
+            <span>逾期未复核 {result.skipped_review_overdue}</span>
             <span>状态过滤 {result.skipped_status}</span>
             <span>低分过滤 {result.skipped_below_min_score}</span>
           </div>
@@ -1227,6 +1252,156 @@ function RelevantMemorySection({
           )}
         </div>
       )}
+    </section>
+  );
+}
+
+function MemoryRetrievalActivationSection({
+  records,
+  drafts,
+  isUpdating,
+  onDraftChange,
+  onAction,
+}: {
+  records: SocMemoryRecord[];
+  drafts: Record<string, MemoryRetrievalDraft>;
+  isUpdating: boolean;
+  onDraftChange: (
+    memoryId: string,
+    field: keyof MemoryRetrievalDraft,
+    value: string,
+  ) => void;
+  onAction: (
+    record: SocMemoryRecord,
+    action: SocMemoryRetrievalActivationAction,
+  ) => void;
+}) {
+  return (
+    <section className="rounded-md border">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+        <div className="flex items-center gap-2">
+          <LibraryBigIcon className="text-muted-foreground size-4" />
+          <h3 className="text-sm font-semibold">确认记忆检索治理</h3>
+        </div>
+        <Badge variant="secondary">{records.length}</Badge>
+      </div>
+      <div className="divide-y">
+        {records.length === 0 ? (
+          <div className="text-muted-foreground p-4 text-sm">
+            当前工单没有已确认的记忆记录。
+          </div>
+        ) : (
+          records.map((record) => {
+            const draft =
+              drafts[record.memory_id] ?? defaultMemoryRetrievalDraft();
+            const nextAction: SocMemoryRetrievalActivationAction =
+              record.retrieval_enabled ? "disable" : "enable";
+            const reviewAfterDays = Number(draft.reviewAfterDays);
+            const invalidEnable =
+              nextAction === "enable" &&
+              (!draft.validUntil ||
+                !Number.isInteger(reviewAfterDays) ||
+                reviewAfterDays < 1);
+            return (
+              <div key={record.memory_id} className="p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium">
+                      {record.summary}
+                    </div>
+                    <div className="text-muted-foreground mt-1 text-xs">
+                      {record.memory_id} v{record.version} /{" "}
+                      {record.memory_type}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="outline">{record.status}</Badge>
+                    <Badge
+                      variant={
+                        record.retrieval_enabled ? "secondary" : "outline"
+                      }
+                    >
+                      {record.retrieval_enabled
+                        ? "retrieval enabled"
+                        : "retrieval disabled"}
+                    </Badge>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_12rem_8rem_auto] lg:items-end">
+                  <label className="grid gap-1 text-xs">
+                    <span className="text-muted-foreground">治理理由</span>
+                    <Input
+                      value={draft.reason}
+                      onChange={(event) =>
+                        onDraftChange(
+                          record.memory_id,
+                          "reason",
+                          event.target.value,
+                        )
+                      }
+                      disabled={isUpdating}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs">
+                    <span className="text-muted-foreground">有效至</span>
+                    <Input
+                      type="datetime-local"
+                      value={draft.validUntil}
+                      onChange={(event) =>
+                        onDraftChange(
+                          record.memory_id,
+                          "validUntil",
+                          event.target.value,
+                        )
+                      }
+                      disabled={isUpdating || nextAction === "disable"}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs">
+                    <span className="text-muted-foreground">复核天数</span>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={365}
+                      value={draft.reviewAfterDays}
+                      onChange={(event) =>
+                        onDraftChange(
+                          record.memory_id,
+                          "reviewAfterDays",
+                          event.target.value,
+                        )
+                      }
+                      disabled={isUpdating || nextAction === "disable"}
+                    />
+                  </label>
+                  <Button
+                    size="sm"
+                    variant={nextAction === "enable" ? "default" : "outline"}
+                    disabled={
+                      isUpdating || !draft.reason.trim() || invalidEnable
+                    }
+                    onClick={() => onAction(record, nextAction)}
+                  >
+                    <PowerIcon className="size-4" />
+                    {nextAction === "enable" ? "启用检索" : "停用检索"}
+                  </Button>
+                </div>
+                {record.retrieval_updated_at ? (
+                  <div className="text-muted-foreground mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                    <span>{record.retrieval_policy_version}</span>
+                    <span>{formatTime(record.retrieval_updated_at)}</span>
+                    {record.retrieval_review_due_at ? (
+                      <span>
+                        review {formatTime(record.retrieval_review_due_at)}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })
+        )}
+      </div>
     </section>
   );
 }
@@ -1348,6 +1523,9 @@ export function SocReviewQueueWorkbench() {
   const [memoryReviewReasons, setMemoryReviewReasons] = useState<
     Record<string, string>
   >({});
+  const [memoryRetrievalDrafts, setMemoryRetrievalDrafts] = useState<
+    Record<string, MemoryRetrievalDraft>
+  >({});
 
   const status = statusFilter === "all" ? null : statusFilter;
   const { items, isLoading, isFetching, error, refetch } = useSocReviewItems({
@@ -1374,6 +1552,20 @@ export function SocReviewQueueWorkbench() {
       : null;
   const { context, isLoading: contextLoading } =
     useSocReviewContext(activeQueueId);
+  const { records: confirmedMemoryRecords } = useSocMemoryRecords({
+    status: "confirmed",
+    limit: 200,
+  });
+  const relatedMemoryRecords = useMemo(() => {
+    const candidateIds = new Set(
+      (context?.memory_candidates ?? []).map(
+        (candidate) => candidate.candidate_id,
+      ),
+    );
+    return confirmedMemoryRecords.filter((record) =>
+      candidateIds.has(record.source_candidate_id),
+    );
+  }, [confirmedMemoryRecords, context?.memory_candidates]);
   const {
     requests: approvalRequests,
     isLoading: approvalRequestsLoading,
@@ -1407,6 +1599,7 @@ export function SocReviewQueueWorkbench() {
   const dryRunApprovedActionMutation = useDryRunSocApprovedAction();
   const executeApprovedActionMutation = useExecuteSocApprovedAction();
   const reviewMemoryCandidateMutation = useReviewSocMemoryCandidate();
+  const updateMemoryRetrievalMutation = useUpdateSocMemoryRetrievalActivation();
 
   const handleOpenSampleReview = (target: SocDispositionSampleReviewTarget) => {
     setSampleReviewTarget(target);
@@ -1600,6 +1793,59 @@ export function SocReviewQueueWorkbench() {
       toast.success("候选记忆已更新");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "候选记忆评审失败");
+    }
+  };
+
+  const handleMemoryRetrievalDraftChange = (
+    memoryId: string,
+    field: keyof MemoryRetrievalDraft,
+    value: string,
+  ) => {
+    setMemoryRetrievalDrafts((current) => ({
+      ...current,
+      [memoryId]: {
+        ...(current[memoryId] ?? defaultMemoryRetrievalDraft()),
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleMemoryRetrievalAction = async (
+    record: SocMemoryRecord,
+    action: SocMemoryRetrievalActivationAction,
+  ) => {
+    const draft =
+      memoryRetrievalDrafts[record.memory_id] ?? defaultMemoryRetrievalDraft();
+    const reason = draft.reason.trim();
+    if (!reason) {
+      toast.error("请填写治理理由");
+      return;
+    }
+    try {
+      const enabling = action === "enable";
+      await updateMemoryRetrievalMutation.mutateAsync({
+        memoryId: record.memory_id,
+        request: {
+          action,
+          expected_record_version: record.version,
+          reason,
+          ...(enabling
+            ? {
+                activation_valid_until: new Date(
+                  draft.validUntil,
+                ).toISOString(),
+                review_after_days: Number(draft.reviewAfterDays),
+              }
+            : {}),
+        },
+      });
+      setMemoryRetrievalDrafts((current) => ({
+        ...current,
+        [record.memory_id]: defaultMemoryRetrievalDraft(),
+      }));
+      toast.success(enabling ? "确认记忆检索已启用" : "确认记忆检索已停用");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "记忆检索状态更新失败");
     }
   };
 
@@ -1830,6 +2076,16 @@ export function SocReviewQueueWorkbench() {
               />
 
               <RelevantMemorySection result={context?.relevant_memories} />
+
+              <MemoryRetrievalActivationSection
+                records={relatedMemoryRecords}
+                drafts={memoryRetrievalDrafts}
+                isUpdating={updateMemoryRetrievalMutation.isPending}
+                onDraftChange={handleMemoryRetrievalDraftChange}
+                onAction={(record, action) =>
+                  void handleMemoryRetrievalAction(record, action)
+                }
+              />
 
               <MemoryCandidateSection
                 candidates={context?.memory_candidates ?? []}

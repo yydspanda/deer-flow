@@ -29,6 +29,7 @@ import {
   rejectSocApprovalRequest,
   reviewSocMemoryCandidate,
   searchSocMemoryRecords,
+  updateSocMemoryRetrievalActivation,
   updateSocNormalizationIssue,
 } from "./api";
 import type {
@@ -41,6 +42,7 @@ import type {
   SocMemoryCandidateStatus,
   SocMemoryQuery,
   SocMemoryRecordStatus,
+  SocMemoryRetrievalActivationRequest,
   SocNormalizationIssueStatus,
   SocNormalizationIssueUpdateRequest,
   SocRequestContext,
@@ -485,6 +487,24 @@ export function useSocMemoryRecord(memoryId: string | null | undefined) {
     enabled: !!memoryId,
   });
   return { record: data ?? null, isLoading, isFetching, error };
+}
+
+export function useUpdateSocMemoryRetrievalActivation() {
+  const context = useSocWebRequestContext();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      memoryId,
+      request,
+    }: {
+      memoryId: string;
+      request: SocMemoryRetrievalActivationRequest;
+    }) => updateSocMemoryRetrievalActivation(memoryId, request, context),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: socMemoryQueryKeys.all });
+      void queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all });
+    },
+  });
 }
 
 export function useCreateSocApprovalGrant() {

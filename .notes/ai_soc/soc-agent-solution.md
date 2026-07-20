@@ -239,7 +239,9 @@ flowchart TD
     J --> L["🧬 12. Memory Candidate<br/>pending_review only"]
     K --> J
     L --> M{"👤 Memory Review<br/>人工确认"}
-    M -->|"confirm"| N["📖 Confirmed Memory<br/>retrieval-enabled by policy"]
+    M -->|"confirm"| N["📖 Confirmed Memory<br/>default retrieval-disabled"]
+    N --> P["🛡️ Governed Activation<br/>role + reason + version + validity + review"]
+    P -->|"eligible"| Q["🔎 Bounded Retrieval<br/>context only"]
     M -->|"reject / expire"| O["🗃️ Archive / no runtime effect"]
 ```
 
@@ -278,7 +280,7 @@ Important behavior:
 | --- | --- | --- |
 | `SocAnalysisService` | Analyze alert, replay run, update summary | Runtime determinism, trace, validation |
 | `SocReviewService` | Review queue, correction, notes, investigation context | State transition, audit, memory candidate bridge |
-| `SocMemoryService` | Candidate review, confirmed memory retrieval | Human confirmation boundary |
+| `SocMemoryService` | Candidate review, governed retrieval activation, confirmed memory retrieval | Human confirmation, optimistic concurrency, validity/review and audit boundary |
 | `SocDaemonService` | Background ingestion orchestration | Idempotency, backoff, worker result |
 | `SocAgentChatService` | SOC chat event stream and proposal handling | Bounded context and approval proposal |
 | `SocAgentApprovalService` | Approval request/grant/dry-run/execute boundary | Permission, token, audit, no silent execute |
@@ -1039,7 +1041,7 @@ Main persistence categories:
 | Governed context facts | Typed operational facts | Versioned, expiring, revocable, source-referenced |
 | Context match audit | Authorization/attribution/applicability result | Replayable against event time and policy version |
 | Memory candidates | Pending learning | Human review required |
-| Confirmed memory | Reviewed experience | Retrieval-enabled by policy |
+| Confirmed memory | Reviewed experience | Confirm creates it disabled; a versioned, audited activation policy with validity and review gates controls retrieval |
 | Decision audit | Verdict lineage | analyze/replay/correct/external decision metadata and policy provenance |
 | Mutation audit | L3 command lineage | Append-only actor/auth source/reason/idempotency/command hash/bounded result; no raw payload or secrets |
 | Process events | Local signaling | Buffered until SQL commit; generic durable event streaming remains a later capability |
@@ -1083,12 +1085,15 @@ and confirmed memory text.
 flowchart TD
     S1["📝 Source<br/>correction / review note / external reason / domain finding / repeated pattern"] --> C["🧬 SocMemoryCandidate<br/>pending_review"]
     C --> R{"👤 Human review"}
-    R -->|"confirm"| M["📖 SocMemoryRecord<br/>confirmed"]
+    R -->|"confirm"| M["📖 SocMemoryRecord<br/>confirmed + retrieval disabled"]
     R -->|"reject"| X["🗃️ rejected"]
     R -->|"expire/deprecate"| E["⏳ expired/deprecated"]
-    M --> P{"Retrieval policy<br/>检索策略"}
-    P -->|"enabled + budget + match"| CTX["📚 InvestigationContext.relevant_memories"]
-    P -->|"disabled or weak"| NO["🚫 no runtime injection"]
+    M --> G{"🛡️ Retrieval governor<br/>soc_memory_reviewer / soc_admin"}
+    G -->|"enable: reason + expected version<br/>valid-until + review period"| P["✅ Governed activation<br/>CAS + mutation audit"]
+    G -->|"disable"| NO["🚫 retrieval disabled"]
+    P --> RP{"🔎 Retrieval policy<br/>confirmed + current activation<br/>review current + budget + match"}
+    RP -->|"eligible"| CTX["📚 InvestigationContext.relevant_memories"]
+    RP -->|"direct flag / expired / overdue / weak"| NO
 ```
 
 Rules:
@@ -1096,6 +1101,14 @@ Rules:
 - LLM-discovered knowledge is candidate knowledge only.
 - Correction, review note, domain finding, external feedback, and repeated pattern can all create candidates.
 - Confirmation requires explicit human action through `SocMemoryService`.
+- Confirmation does not make a record retrievable. `SocMemoryService.set_retrieval_activation()` is the
+  only enable/disable boundary and requires an authorized memory governor, reason, expected record
+  version, idempotency key, and, for enable, a bounded validity and mandatory review period.
+- Activation and its `SocMutationAuditRecord` commit atomically. A stale version conflicts; exact retry
+  returns the same logical result. Candidate deprecation/expiry disables and version-bumps the record.
+- Retrieval rejects legacy/direct boolean flags without `soc.memory_retrieval_activation_policy.v1`
+  metadata, as well as expired activation or overdue review. `soc memory search --baseline-json` exposes
+  deterministic before/after match changes for governance review.
 - Confirmed memory retrieval is budgeted and reasoned; it is not dumped blindly into prompts.
 - Active operational facts are not confirmed memory. Memory may describe how a scanner or exercise
   team tends to behave, but only governed-context services and typed matchers can determine identity,
@@ -1211,12 +1224,15 @@ soc demo run all
 soc review context <queue-id> --summary --pretty
 
 # Add analyst note and optionally create memory candidate
-soc review note <queue-id> --note "..." --memory-candidate
+soc review note <queue-id> --note "..."
 
 # Review memory candidates
 soc memory list --status pending_review
-soc memory review <candidate-id> --confirm
-soc memory search --query "reverse shell internal host"
+soc memory review <candidate-id> --decision confirm --reason "reviewed evidence"
+soc memory records retrieval <memory-id> --action enable --expected-version 1 \
+  --reason "approved reusable lesson" --valid-until 2026-10-01T00:00:00+08:00 \
+  --review-after-days 30 --idempotency-key memory-enable-001
+soc memory search --term "reverse shell" --term "internal host" --baseline-json previous-search.json
 
 # Chat through DeerFlow-aligned SOC Lead Agent
 soc chat tui --queue-id <queue-id> --lead-agent

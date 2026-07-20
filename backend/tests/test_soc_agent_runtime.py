@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -966,3 +967,150 @@ def test_cli_daemon_consume_enabled_requires_database_before_kafka(monkeypatch: 
     captured = capsys.readouterr()
     assert exit_code == 3
     assert "database URL required" in captured.err
+
+
+def test_cli_memory_retrieval_enable_disable_and_replay_diff(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'memory-activation.db'}"
+    assert (
+        main(
+            [
+                "demo",
+                "run",
+                "hids",
+                "--database-url",
+                database_url,
+                "--init-db",
+            ]
+        )
+        == 0
+    )
+    demo = json.loads(capsys.readouterr().out)
+    memory_id = demo["results"][0]["memory_record_id"]
+
+    assert (
+        main(
+            [
+                "memory",
+                "records",
+                "get",
+                memory_id,
+                "--database-url",
+                database_url,
+            ]
+        )
+        == 0
+    )
+    enabled_record = json.loads(capsys.readouterr().out)
+    assert enabled_record["retrieval_enabled"] is True
+
+    assert (
+        main(
+            [
+                "memory",
+                "search",
+                "--min-score",
+                "0",
+                "--database-url",
+                database_url,
+            ]
+        )
+        == 0
+    )
+    enabled_search = json.loads(capsys.readouterr().out)
+    enabled_baseline = tmp_path / "enabled-retrieval.json"
+    enabled_baseline.write_text(json.dumps(enabled_search), encoding="utf-8")
+    assert [match["memory_id"] for match in enabled_search["matches"]] == [memory_id]
+
+    assert (
+        main(
+            [
+                "memory",
+                "records",
+                "retrieval",
+                memory_id,
+                "--action",
+                "disable",
+                "--expected-version",
+                str(enabled_record["version"]),
+                "--reason",
+                "CLI reviewer paused retrieval for scheduled revalidation.",
+                "--idempotency-key",
+                "cli-memory-disable-1",
+                "--database-url",
+                database_url,
+            ]
+        )
+        == 0
+    )
+    disabled = json.loads(capsys.readouterr().out)
+    assert disabled["record"]["retrieval_enabled"] is False
+
+    assert (
+        main(
+            [
+                "memory",
+                "search",
+                "--min-score",
+                "0",
+                "--baseline-json",
+                str(enabled_baseline),
+                "--database-url",
+                database_url,
+            ]
+        )
+        == 0
+    )
+    disabled_search = json.loads(capsys.readouterr().out)
+    assert disabled_search["replay_diff"]["removed_memory_ids"] == [memory_id]
+    disabled_baseline = tmp_path / "disabled-retrieval.json"
+    disabled_baseline.write_text(json.dumps(disabled_search), encoding="utf-8")
+
+    valid_until = (datetime.now(UTC) + timedelta(days=90)).isoformat()
+    assert (
+        main(
+            [
+                "memory",
+                "records",
+                "retrieval",
+                memory_id,
+                "--action",
+                "enable",
+                "--expected-version",
+                str(disabled["record"]["version"]),
+                "--reason",
+                "CLI reviewer completed revalidation.",
+                "--valid-until",
+                valid_until,
+                "--review-after-days",
+                "30",
+                "--idempotency-key",
+                "cli-memory-enable-2",
+                "--database-url",
+                database_url,
+            ]
+        )
+        == 0
+    )
+    reenabled = json.loads(capsys.readouterr().out)
+    assert reenabled["record"]["retrieval_enabled"] is True
+
+    assert (
+        main(
+            [
+                "memory",
+                "search",
+                "--min-score",
+                "0",
+                "--baseline-json",
+                str(disabled_baseline),
+                "--database-url",
+                database_url,
+            ]
+        )
+        == 0
+    )
+    reenabled_search = json.loads(capsys.readouterr().out)
+    assert reenabled_search["replay_diff"]["added_memory_ids"] == [memory_id]

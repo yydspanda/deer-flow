@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from soc_agent.contracts import SocMemoryCandidate, SocMemoryCandidateStatus, SocMemoryRecord, SocMemoryRecordStatus
+from soc_agent.contracts import (
+    SocMemoryCandidate,
+    SocMemoryCandidateStatus,
+    SocMemoryRecord,
+    SocMemoryRecordStatus,
+    SocMutationAuditRecord,
+    SocMutationOperation,
+)
 
 
 class InMemoryMemoryCandidateRepository:
@@ -13,6 +20,7 @@ class InMemoryMemoryCandidateRepository:
     def __init__(self, candidates: Iterable[SocMemoryCandidate] | None = None) -> None:
         self._candidates: dict[str, SocMemoryCandidate] = {}
         self._records: dict[str, SocMemoryRecord] = {}
+        self._mutation_audits: dict[tuple[SocMutationOperation, str], SocMutationAuditRecord] = {}
         for candidate in candidates or ():
             self.save_memory_candidate(candidate)
 
@@ -59,6 +67,18 @@ class InMemoryMemoryCandidateRepository:
     def save_memory_record(self, record: SocMemoryRecord) -> None:
         self._records[record.memory_id] = record
 
+    def compare_and_set_memory_record(
+        self,
+        record: SocMemoryRecord,
+        *,
+        expected_version: int,
+    ) -> bool:
+        current = self._records.get(record.memory_id)
+        if current is None or current.version != expected_version:
+            return False
+        self._records[record.memory_id] = record
+        return True
+
     def get_memory_record(self, memory_id: str) -> SocMemoryRecord | None:
         return self._records.get(memory_id)
 
@@ -90,3 +110,36 @@ class InMemoryMemoryCandidateRepository:
         if retrieval_enabled is not None:
             items = [item for item in items if item.retrieval_enabled is retrieval_enabled]
         return sorted(items, key=lambda item: item.updated_at, reverse=True)[:limit]
+
+    def append_mutation_audit(self, record: SocMutationAuditRecord) -> None:
+        key = (record.operation, record.idempotency_key)
+        if key in self._mutation_audits:
+            raise ValueError(f"mutation audit idempotency key {record.idempotency_key} already exists")
+        self._mutation_audits[key] = record
+
+    def find_mutation_audit_by_idempotency_key(
+        self,
+        operation: SocMutationOperation,
+        idempotency_key: str,
+    ) -> SocMutationAuditRecord | None:
+        return self._mutation_audits.get((operation, idempotency_key))
+
+    def list_mutation_audits(
+        self,
+        *,
+        operation: SocMutationOperation | None = None,
+        run_id: str | None = None,
+        queue_id: str | None = None,
+        target_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SocMutationAuditRecord]:
+        items = list(self._mutation_audits.values())
+        if operation is not None:
+            items = [item for item in items if item.operation is operation]
+        if run_id is not None:
+            items = [item for item in items if item.run_id == run_id]
+        if queue_id is not None:
+            items = [item for item in items if item.queue_id == queue_id]
+        if target_id is not None:
+            items = [item for item in items if item.target_id == target_id]
+        return sorted(items, key=lambda item: item.occurred_at, reverse=True)[:limit]

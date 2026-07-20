@@ -40,7 +40,10 @@ from soc_agent.contracts import (
     SocMemoryCandidateValidity,
     SocMemoryDecisionImpact,
     SocMemoryRecordStatus,
+    SocMemoryRetrievalActivationAction,
+    SocMemoryRetrievalActivationCommand,
     SocMemoryTargetArtifact,
+    SocMutationOperation,
     Verdict,
 )
 from soc_agent.core import (
@@ -64,6 +67,16 @@ def _sample(name: str) -> dict:
 def _analyst_context() -> ServiceRequestContext:
     return ServiceRequestContext(
         actor=ActorContext(actor_id="analyst-1", roles=["soc_analyst"]),
+    )
+
+
+def _memory_governor_context() -> ServiceRequestContext:
+    return ServiceRequestContext(
+        idempotency_key="memory-repository:retrieval-enable",
+        actor=ActorContext(
+            actor_id="memory-governor-1",
+            roles=["soc_memory_reviewer"],
+        ),
     )
 
 
@@ -707,9 +720,27 @@ def test_sqlalchemy_memory_candidate_repository_persists_and_filters_candidates(
     assert repository.list_memory_records(tenant_scope="pingan") == [review.memory_record]
     assert repository.list_memory_records(source_candidate_id=candidate.candidate_id) == [review.memory_record]
     assert repository.list_memory_records(retrieval_enabled=True) == []
-    enabled_record = review.memory_record.model_copy(update={"retrieval_enabled": True})
-    repository.save_memory_record(enabled_record)
-    assert repository.list_memory_records(retrieval_enabled=True) == [enabled_record]
+    activation = service.set_retrieval_activation(
+        SocMemoryRetrievalActivationCommand(
+            memory_id=review.memory_record.memory_id,
+            action=SocMemoryRetrievalActivationAction.ENABLE,
+            expected_record_version=review.memory_record.version,
+            reason="Repository test memory governor approved retrieval.",
+            activation_valid_until=datetime.now(UTC) + timedelta(days=90),
+            review_after_days=30,
+        ),
+        context=_memory_governor_context(),
+    )
+    assert repository.list_memory_records(retrieval_enabled=True) == [activation.record]
+    assert repository.list_mutation_audits(operation=SocMutationOperation.MEMORY_RETRIEVAL_ACTIVATION)[0].audit_id == activation.audit_id
+    stale_update = activation.record.model_copy(update={"version": activation.record.version + 1})
+    assert (
+        repository.compare_and_set_memory_record(
+            stale_update,
+            expected_version=review.memory_record.version,
+        )
+        is False
+    )
 
 
 def test_review_service_context_loads_sqlalchemy_memory_candidates() -> None:

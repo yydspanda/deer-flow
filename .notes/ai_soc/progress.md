@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `BG` Stage 3 - Close Blocking Gaps（`BD`、`AA` Gate 已于 2026-07-18 通过） |
-| 当前目标 | `BG-P1-04 Governed memory activation`：关闭 `AC-39`，为 confirmed memory 的 retrieval enable/disable 增加 role/reason/audit/version-controlled service 与应用入口 |
+| 当前目标 | `BG-P1-05 Alpha E2E and docs reconciliation`：关闭 `AC-23/AC-24/AC-49`，形成单命令、版本化的 APT/EDR/HIDS Alpha 验收证据并统一运维文档 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `BG-P1-04`：先冻结 memory retrieval activation command/state/audit contract，再让 CLI/API/Web 全部调用同一个 `SocMemoryService`，并用 retrieval replay diff 证明只有受治理启用的 confirmed record 进入 bounded context。 |
+| 当前下一刀 | `BG-P1-05`：先盘点现有 frontend SOC 测试与 Runtime/Kafka/demo 脚本，冻结一个不依赖真实 provider 的 release-level acceptance manifest，再补缺失覆盖和文档一致性。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -39,7 +39,7 @@
 |---|---|---|---|---|
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
-| `BG` | Close Blocking Gaps | **Current / BG-P1-04 In Progress** | `BG-P0-01..02`、`BG-P1-01..03` 已完成；当前补 governed memory retrieval activation | Alpha E2E 和 readiness package 通过 |
+| `BG` | Close Blocking Gaps | **Current / BG-P1-05 In Progress** | `BG-P0-01..02`、`BG-P1-01..04` 已完成；当前补 Alpha E2E、frontend regression 与文档一致性 | Alpha E2E 和 readiness package 通过 |
 | `PI` | Real Data & Production Integration | Data/credential-gated | 真实 provider、基础设施、标签、SLO 和 governed rollout | Pilot readiness review 通过 |
 
 ## 能力与历史切片台账
@@ -66,10 +66,11 @@
 | 1.2 | Correlation quality baseline | Done | 已建 vendor-neutral same-incident / related-but-distinct / unrelated corpus；`soc eval correlation` 输出双任务指标、reason 分布、fan-out、evidence lineage/unrelated exposure，并支持 `--baseline-json` replay diff | scorer/report/fixture 版本显式；当前 8-pair baseline 暴露 retrieval/dedup precision 均约 0.667；`shadow_dedup_allowed=false` |
 | 1.3 | Correlation label corpus expansion | TODO / Stage 4 | 从脱敏真实告警准备 analyst-reviewed pairs，覆盖来源、时间窗口、跨规则同事件和同规则不同事件 cohort | 不以 8 条受控 pair 代表生产分布；标签来源/rationale/version 可审计；扩充后再比较 scorer v2，不直接切换生产规则；不阻塞 Boss Demo/Alpha code completeness |
 | 2 | External Disposition Sync Contract | Done | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol、in-memory repository、PostgreSQL persistence、ReviewQueue context API/Web/TUI/Lead Agent visibility；已接 high-trust mapped review/correction 和 pending memory candidate | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
-| 3 | Memory Tracking Contract | Partial | DB-first candidate persistence、review workflow、confirmed-memory boundary 和 retrieval policy MVP 已完成；`SocMemoryCandidateSourceBridge` 已接 correction、domain finding、analyst feedback 和 ReviewQueue review note；下一步是 Kafka/Lead Agent 结论来源、prompt injection/replay diff 的受控设计 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
+| 3 | Memory Tracking Contract | Partial | DB-first candidate persistence、review workflow、confirmed-memory boundary、retrieval policy 与 governed activation 已完成；`SocMemoryCandidateSourceBridge` 已接 correction、domain finding、analyst feedback 和 ReviewQueue review note；Kafka/Lead Agent 自动结论来源与 prompt injection 仍后置 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
 | 3.1 | Memory candidate DB/API/ReviewQueue visibility | Done | 已新增 `soc_memory_candidates`、repository、CLI `soc memory list/get`、Gateway `/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded visibility | candidate 仍为 `pending_review` 且 `runtime_decision_allowed=false`；不注入 prompt，不影响 verdict |
 | 3.2 | Memory candidate review workflow / confirmed-memory boundary | Done | 已新增 `SocMemoryCandidateReviewCommand/Result`、`SocMemoryRecord`、`soc_memory_records`、`soc memory review`、`soc memory records list/get`、Gateway review/records API 和 ReviewQueue Web 操作入口 | confirm/reject/deprecate/expire 只能走 `SocMemoryService`；`confirm` 生成 `SocMemoryRecord(retrieval_enabled=false)`；不注入 prompt，不影响 verdict |
 | 3.3 | Confirmed memory retrieval policy / unified visibility MVP | Done | 已新增 `SocMemoryQuery`、`SocMemoryMatch`、`SocMemoryRetrievalResult`、`SocMemoryService.find_relevant_records()`、CLI `soc memory search`、Gateway `/api/soc/memory/search`、`InvestigationContext.relevant_memories` 和 Web/TUI/Lead Agent 可见化 | 只返回 `retrieval_enabled=true`、confirmed、未过期 record；返回 score/match reason/token estimate/hash/version；不注入 prompt，不影响 verdict |
+| 3.4 | Governed confirmed-memory retrieval activation | Done | `SocMemoryRetrievalActivationCommand` 和 `SocMemoryService.set_retrieval_activation()` 统一 role/reason/expected-version/validity/review/audit 语义；CLI/API/Web/Boss Demo 均复用该入口，search 支持 baseline diff | 直接写布尔值、过期 activation、逾期 review 或无治理 metadata 的 record 均不能进入 bounded retrieval；事务失败不留下 record/audit 半写状态 |
 | 4 | Domain Sub-Agent Contract | Done for PA-10 | 已固定 `SocDomainTriageRequest`、`SocDomainTriageResult`、`SocDomainFinding` 结构 | EDR/APT/HIDS 已共用同一 schema；子研判不能直接改 decision 或写 DB |
 | 5 | Generic security scenario recognition | Partial | deterministic MVP 已完成：第一批场景包括反弹 shell、webshell、横向移动、命令/代码执行、恶意外联、提权、凭证滥用；未命中内部 taxonomy 但存在上游场景提示时输出 `vendor.unmapped` 候选 finding；已暴露 `SCENARIO_TAXONOMY_VERSION`/keys/snapshot；PingAn domain eval 和 vendor-neutral `soc eval scenarios` 都输出 covered/missing/unmapped 计数，`--baseline-json` 可生成 replay diff | 任何来源的告警都通过统一 `SocDomainTriageResult/Finding` 输出场景化 finding；Evidence Fusion First；未映射厂商场景不阻断研判、不改 verdict、不写 confirmed memory；eval 能作为 replay diff 基线；LLM 后续只能在 bounded context 中识别场景，不能直接改 verdict 或写 confirmed memory |
 | 6 | Main SOC Agent Orchestrator MVP | Done for Phase 2 bridge | 已串起 analyze、skill context、correlation、read-only action evidence、domain triage、review summary，输出 `UnifiedInvestigationReport` | APT/EDR/HIDS demo 能看到主控用了哪些 skill、历史 match/reasons/evidence、route、finding 和 review context |
@@ -200,6 +201,35 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-20 — BG-P1-04 Governed memory activation completed
+
+- `AC-39` 已关闭：
+  - 新增 `SocMemoryRetrievalActivationCommand/Result` 和固定 policy
+    `soc.memory_retrieval_activation_policy.v1`；confirm 仍只创建 retrieval-disabled record；
+  - `SocMemoryService.set_retrieval_activation()` 是唯一 enable/disable 边界，要求
+    `soc_memory_reviewer|soc_admin`、可信 auth source、reason、expected record version、idempotency key，
+    enable 还要求 timezone-aware validity 和 mandatory review period；
+  - SQL/in-memory repository 增加 expected-version CAS；record 版本迁移与
+    `SocMutationAuditRecord(operation=memory_retrieval_activation)` 在同一 transaction 提交，事件只在
+    commit 后发出；exact retry、changed retry、stale writer 和 fault rollback 均有回归；
+  - candidate deprecate/expire 同步禁用并 version-bump linked record；retrieval 拒绝 direct/legacy
+    boolean、activation expired、review overdue、非 confirmed 和 source expired record，并输出独立 counters；
+  - CLI `soc memory records retrieval`、Gateway
+    `POST /api/soc/memory/records/{memory_id}/retrieval`、ReviewQueue Web 和 Boss Demo 全部调用同一个
+    service；`soc memory search --baseline-json` 输出 timestamp-independent before/after diff。
+- 验证：
+  - `cd backend && ./.venv/bin/pytest -q tests/test_soc_*.py`：546 passed；
+  - architecture + migration environment：16 passed；backend Ruff format/check 通过；
+  - `cd frontend && pnpm test`：643 passed；`pnpm check` 通过。
+- 真实边界：
+  - governed activation 只允许 confirmed memory 进入 bounded investigation context，不注入 fixed
+    Runtime prompt、不改 verdict、不授权 action；automatic Kafka/Lead Agent lesson capture 仍 Deferred；
+  - 无新增 migration：治理字段保存在既有 `record_payload`，并复用 `version`、
+    `retrieval_enabled` 索引列；生产 PostgreSQL 迁移基线不变。
+- 下一步：
+  - `BG-P1-05`：关闭 `AC-23/AC-24/AC-49`，建立单命令、版本化 APT/EDR/HIDS Alpha E2E acceptance
+    report，补齐 focused SOC frontend regression，并统一权威 operator docs。
 
 ### 2026-07-20 — BG-P1-03 Runtime recovery and decision provenance completed
 

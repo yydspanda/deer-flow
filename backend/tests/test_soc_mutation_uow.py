@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -36,6 +36,9 @@ from soc_agent.contracts import (
     SocExternalDispositionStatusMapping,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
+    SocMemoryRecord,
+    SocMemoryRetrievalActivationAction,
+    SocMemoryRetrievalActivationCommand,
     SocMutationOperation,
     Verdict,
 )
@@ -147,6 +150,43 @@ def _external_context() -> ServiceRequestContext:
             auth_source=ActorAuthSource.EXTERNAL_ADAPTER,
         ),
     )
+
+
+def _memory_governor_context() -> ServiceRequestContext:
+    return ServiceRequestContext(
+        request_id="REQ-MEMORY-ACTIVATION",
+        idempotency_key="memory-activation-001",
+        actor=ActorContext(
+            actor_id="memory-governor-1",
+            actor_type=ActorType.USER,
+            surface=EntrySurface.CLI,
+            roles=["soc_memory_reviewer"],
+        ),
+    )
+
+
+def _seed_confirmed_memory(repository: SqlAlchemyAlertRepository) -> SocMemoryRecord:
+    _, queue_item = _seed_review(repository)
+    note = _review_service(repository, RecordingEventSink()).add_note(
+        ReviewNoteCommand(
+            queue_id=queue_item.queue_id,
+            note="Reusable governed retrieval test lesson.",
+        ),
+        context=_analyst_context("memory-note-seed"),
+    )
+    reviewed = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+    ).review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=note.memory_candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Memory reviewer confirmed the seeded lesson.",
+        ),
+        context=_analyst_context("memory-confirm-seed"),
+    )
+    assert reviewed.memory_record is not None
+    return reviewed.memory_record
 
 
 def _external_event() -> SocExternalDispositionEvent:
@@ -287,6 +327,60 @@ def test_external_feedback_fault_after_each_write_rolls_back_entire_command(tmp_
         assert seed_repository.list_memory_candidates() == []
         assert seed_repository.list_audit_records("RUN-MUTATION-001") == []
         assert seed_repository.list_mutation_audits() == []
+        assert sink.events == []
+
+
+def test_memory_retrieval_activation_fault_rolls_back_record_and_audit(
+    tmp_path: Path,
+) -> None:
+    success_path = tmp_path / "memory-activation-success.db"
+    seed_repository = _repository(success_path)
+    seeded = _seed_confirmed_memory(seed_repository)
+    writes: list[int] = []
+    repository = _repository(success_path, write_counts=writes)
+    command = SocMemoryRetrievalActivationCommand(
+        memory_id=seeded.memory_id,
+        action=SocMemoryRetrievalActivationAction.ENABLE,
+        expected_record_version=seeded.version,
+        reason="Memory governor approved bounded retrieval.",
+        activation_valid_until=datetime.now(UTC) + timedelta(days=90),
+        review_after_days=30,
+    )
+    SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+    ).set_retrieval_activation(command, context=_memory_governor_context())
+    assert writes == [1, 2]
+
+    for fail_after_write in writes:
+        path = tmp_path / f"memory-activation-failure-{fail_after_write}.db"
+        seed_repository = _repository(path)
+        seeded = _seed_confirmed_memory(seed_repository)
+        baseline_audit_count = len(seed_repository.list_mutation_audits())
+        sink = RecordingEventSink()
+        failing_repository = _repository(path, fail_after_write=fail_after_write)
+        failing_command = command.model_copy(
+            update={
+                "memory_id": seeded.memory_id,
+                "expected_record_version": seeded.version,
+            }
+        )
+
+        with pytest.raises(InjectedMutationFailure, match=f"write {fail_after_write}"):
+            SocMemoryService(
+                candidate_repository=failing_repository,
+                record_repository=failing_repository,
+                event_sink=sink,
+            ).set_retrieval_activation(
+                failing_command,
+                context=_memory_governor_context(),
+            )
+
+        persisted = seed_repository.get_memory_record(seeded.memory_id)
+        assert persisted is not None
+        assert persisted.version == seeded.version
+        assert persisted.retrieval_enabled is False
+        assert len(seed_repository.list_mutation_audits()) == baseline_audit_count
         assert sink.events == []
 
 

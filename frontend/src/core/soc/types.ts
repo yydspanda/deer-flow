@@ -333,6 +333,8 @@ export type SocMemoryCandidateReviewDecision =
 
 export type SocMemoryRecordStatus = "confirmed" | "deprecated" | "expired";
 
+export type SocMemoryRetrievalActivationAction = "enable" | "disable";
+
 export type SocMemoryCandidateType =
   | "procedure"
   | "detection_lesson"
@@ -432,6 +434,12 @@ export interface SocMemoryRecord {
   content_hash: string;
   facets_hash: string;
   retrieval_enabled: boolean;
+  retrieval_policy_version?: string | null;
+  retrieval_valid_until?: string | null;
+  retrieval_review_due_at?: string | null;
+  retrieval_updated_by?: SocActorContext | null;
+  retrieval_updated_at?: string | null;
+  retrieval_reason?: string | null;
   created_by: SocActorContext;
   created_at: string;
   updated_at: string;
@@ -444,6 +452,26 @@ export interface SocMemoryRecord {
 
 export interface SocMemoryRecordListResponse {
   items: SocMemoryRecord[];
+}
+
+export interface SocMemoryRetrievalActivationRequest {
+  action: SocMemoryRetrievalActivationAction;
+  expected_record_version: number;
+  reason: string;
+  activation_valid_until?: string | null;
+  review_after_days?: number | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SocMemoryRetrievalActivationResult {
+  schema_version: string;
+  record: SocMemoryRecord;
+  action: SocMemoryRetrievalActivationAction;
+  previous_record_version: number;
+  previous_retrieval_enabled: boolean;
+  audit_id?: string | null;
+  policy_version: string;
+  changed_at: string;
 }
 
 export interface SocMemoryQuery {
@@ -483,13 +511,28 @@ export interface SocMemoryRetrievalResult {
   matches: SocMemoryMatch[];
   total_candidate_count: number;
   skipped_retrieval_disabled: number;
+  skipped_ungoverned_activation: number;
+  skipped_activation_expired: number;
+  skipped_review_overdue: number;
   skipped_status: number;
   skipped_expired: number;
   skipped_below_min_score: number;
   returned_count: number;
   total_token_estimate: number;
   max_tokens: number;
+  replay_diff?: SocMemoryRetrievalDiff | null;
   created_at: string;
+}
+
+export interface SocMemoryRetrievalDiff {
+  schema_version: string;
+  baseline_policy_version: string;
+  current_policy_version: string;
+  added_memory_ids: string[];
+  removed_memory_ids: string[];
+  changed_memory_ids: string[];
+  unchanged_memory_ids: string[];
+  changed: boolean;
 }
 
 export type SocInvestigationTimelineKind =

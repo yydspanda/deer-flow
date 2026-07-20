@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -67,7 +68,10 @@ from soc_agent.contracts import (
     SocMemoryDecisionImpact,
     SocMemoryQuery,
     SocMemoryRecordStatus,
+    SocMemoryRetrievalActivationAction,
+    SocMemoryRetrievalActivationCommand,
     SocMemoryTargetArtifact,
+    SocMutationOperation,
     Verdict,
 )
 from soc_agent.core import (
@@ -90,7 +94,11 @@ from soc_agent.core import (
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
 )
-from soc_agent.memory import InMemoryMemoryCandidateRepository, SocMemoryCandidateSourceBridge
+from soc_agent.memory import (
+    InMemoryMemoryCandidateRepository,
+    SocMemoryCandidateSourceBridge,
+    build_memory_retrieval_diff,
+)
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
 
@@ -337,6 +345,23 @@ def _analyst_context(
             actor_type=ActorType.USER,
             surface=surface,
             roles=["soc_analyst"],
+        ),
+    )
+
+
+def _memory_governor_context(
+    *,
+    request_id: str = "REQ-MEMORY-GOVERNOR",
+    idempotency_key: str = "memory-retrieval:test:1",
+) -> ServiceRequestContext:
+    return ServiceRequestContext(
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+        actor=ActorContext(
+            actor_id="memory-governor-1",
+            actor_type=ActorType.USER,
+            surface=EntrySurface.CLI,
+            roles=["soc_memory_reviewer"],
         ),
     )
 
@@ -2515,7 +2540,13 @@ def test_memory_service_deprecates_confirmed_record() -> None:
 
 def test_memory_service_retrieval_requires_enabled_confirmed_records() -> None:
     repository = InMemoryMemoryCandidateRepository()
-    service = SocMemoryService(candidate_repository=repository, record_repository=repository)
+    now = datetime.now(UTC) + timedelta(seconds=1)
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        mutation_audit_repository=repository,
+        now_provider=lambda: now,
+    )
     candidate = service.propose_candidate(_pingan_memory_candidate_command())
     confirmed = service.review_candidate(
         SocMemoryCandidateReviewCommand(
@@ -2536,19 +2567,161 @@ def test_memory_service_retrieval_requires_enabled_confirmed_records() -> None:
     assert disabled_result.matches == []
     assert disabled_result.skipped_retrieval_disabled == 1
 
-    enabled_record = confirmed.memory_record.model_copy(update={"retrieval_enabled": True})
-    repository.save_memory_record(enabled_record)
+    ungoverned_record = confirmed.memory_record.model_copy(update={"retrieval_enabled": True})
+    repository.save_memory_record(ungoverned_record)
+    ungoverned_result = service.find_relevant_records(query)
+    assert ungoverned_result.matches == []
+    assert ungoverned_result.skipped_ungoverned_activation == 1
+    repository.save_memory_record(confirmed.memory_record)
+
+    activation_command = SocMemoryRetrievalActivationCommand(
+        memory_id=confirmed.memory_record.memory_id,
+        action=SocMemoryRetrievalActivationAction.ENABLE,
+        expected_record_version=confirmed.memory_record.version,
+        reason="Memory governor approved bounded retrieval.",
+        activation_valid_until=now + timedelta(days=90),
+        review_after_days=30,
+    )
+    activation = service.set_retrieval_activation(
+        activation_command,
+        context=_memory_governor_context(),
+    )
 
     enabled_result = service.find_relevant_records(query)
 
     assert enabled_result.returned_count == 1
     match = enabled_result.matches[0]
-    assert match.memory_id == enabled_record.memory_id
+    assert match.memory_id == activation.record.memory_id
     assert match.retrieval_enabled is True
     assert match.score > 1
     assert "facet:domain=hids" in match.match_reasons
-    assert match.content_hash == enabled_record.content_hash
+    assert match.content_hash == activation.record.content_hash
     assert enabled_result.total_token_estimate == match.token_estimate
+    assert activation.record.version == confirmed.memory_record.version + 1
+    assert activation.record.retrieval_review_due_at == now + timedelta(days=30)
+    assert activation.audit_id is not None
+    audits = repository.list_mutation_audits(operation=SocMutationOperation.MEMORY_RETRIEVAL_ACTIVATION)
+    assert [audit.audit_id for audit in audits] == [activation.audit_id]
+    assert build_memory_retrieval_diff(disabled_result, enabled_result).added_memory_ids == [activation.record.memory_id]
+
+    retried = service.set_retrieval_activation(
+        activation_command,
+        context=_memory_governor_context(),
+    )
+    assert retried == activation
+
+    with pytest.raises(SocServiceConflictError, match="expected version"):
+        service.set_retrieval_activation(
+            activation_command.model_copy(
+                update={
+                    "reason": "A different command must not reuse stale version.",
+                }
+            ),
+            context=_memory_governor_context(
+                request_id="REQ-MEMORY-GOVERNOR-STALE",
+                idempotency_key="memory-retrieval:test:stale",
+            ),
+        )
+
+    disabled = service.set_retrieval_activation(
+        SocMemoryRetrievalActivationCommand(
+            memory_id=activation.record.memory_id,
+            action=SocMemoryRetrievalActivationAction.DISABLE,
+            expected_record_version=activation.record.version,
+            reason="Memory governor disabled retrieval pending fresh review.",
+        ),
+        context=_memory_governor_context(
+            request_id="REQ-MEMORY-GOVERNOR-DISABLE",
+            idempotency_key="memory-retrieval:test:disable",
+        ),
+    )
+    disabled_result_after_activation = service.find_relevant_records(query)
+    assert disabled.record.version == activation.record.version + 1
+    assert disabled.record.retrieval_enabled is False
+    assert build_memory_retrieval_diff(
+        enabled_result,
+        disabled_result_after_activation,
+    ).removed_memory_ids == [activation.record.memory_id]
+
+
+def test_memory_service_retrieval_activation_requires_governor_role() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        mutation_audit_repository=repository,
+    )
+    candidate = service.propose_candidate(_pingan_memory_candidate_command())
+    confirmed = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Confirmed before retrieval authorization check.",
+        ),
+        context=_analyst_context(),
+    )
+    assert confirmed.memory_record is not None
+
+    with pytest.raises(SocServiceAuthorizationError):
+        service.set_retrieval_activation(
+            SocMemoryRetrievalActivationCommand(
+                memory_id=confirmed.memory_record.memory_id,
+                action=SocMemoryRetrievalActivationAction.ENABLE,
+                expected_record_version=confirmed.memory_record.version,
+                reason="Analyst cannot activate reusable memory.",
+                activation_valid_until=datetime.now(UTC) + timedelta(days=90),
+                review_after_days=30,
+            ),
+            context=_analyst_context(),
+        )
+
+    assert service.get_record(confirmed.memory_record.memory_id).retrieval_enabled is False
+
+
+def test_memory_retrieval_excludes_overdue_and_expired_activation() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    clock = [datetime.now(UTC) + timedelta(seconds=1)]
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        mutation_audit_repository=repository,
+        now_provider=lambda: clock[0],
+    )
+    candidate = service.propose_candidate(_pingan_memory_candidate_command())
+    confirmed = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Confirmed before retrieval freshness test.",
+        ),
+        context=_analyst_context(),
+    )
+    assert confirmed.memory_record is not None
+    service.set_retrieval_activation(
+        SocMemoryRetrievalActivationCommand(
+            memory_id=confirmed.memory_record.memory_id,
+            action=SocMemoryRetrievalActivationAction.ENABLE,
+            expected_record_version=confirmed.memory_record.version,
+            reason="Enable with a bounded review and validity window.",
+            activation_valid_until=clock[0] + timedelta(days=60),
+            review_after_days=10,
+        ),
+        context=_memory_governor_context(
+            request_id="REQ-MEMORY-FRESHNESS",
+            idempotency_key="memory-retrieval:freshness:enable",
+        ),
+    )
+    query = SocMemoryQuery(min_score=0)
+
+    clock[0] += timedelta(days=11)
+    overdue = service.find_relevant_records(query)
+    assert overdue.matches == []
+    assert overdue.skipped_review_overdue == 1
+
+    clock[0] += timedelta(days=50)
+    expired = service.find_relevant_records(query)
+    assert expired.matches == []
+    assert expired.skipped_activation_expired == 1
 
 
 def test_review_context_includes_relevant_memory_result() -> None:
@@ -2566,7 +2739,13 @@ def test_review_context_includes_relevant_memory_result() -> None:
     item = review_repository.get_open_review_item_by_run(run.run_id)
     assert item is not None
 
-    memory_service = SocMemoryService(candidate_repository=memory_repository, record_repository=memory_repository)
+    now = datetime.now(UTC) + timedelta(seconds=1)
+    memory_service = SocMemoryService(
+        candidate_repository=memory_repository,
+        record_repository=memory_repository,
+        mutation_audit_repository=memory_repository,
+        now_provider=lambda: now,
+    )
     candidate = memory_service.propose_candidate(
         SocMemoryCandidateCreateCommand(
             candidate_type=SocMemoryCandidateType.PROCEDURE,
@@ -2598,7 +2777,20 @@ def test_review_context_includes_relevant_memory_result() -> None:
         context=_analyst_context(),
     )
     assert confirmed.memory_record is not None
-    memory_repository.save_memory_record(confirmed.memory_record.model_copy(update={"retrieval_enabled": True}))
+    memory_service.set_retrieval_activation(
+        SocMemoryRetrievalActivationCommand(
+            memory_id=confirmed.memory_record.memory_id,
+            action=SocMemoryRetrievalActivationAction.ENABLE,
+            expected_record_version=confirmed.memory_record.version,
+            reason="Memory governor enabled bounded APT procedure retrieval.",
+            activation_valid_until=now + timedelta(days=90),
+            review_after_days=30,
+        ),
+        context=_memory_governor_context(
+            request_id="REQ-APT-MEMORY-GOVERNOR",
+            idempotency_key="memory-retrieval:apt-context:enable",
+        ),
+    )
 
     context = SocReviewService(
         repository=repository,

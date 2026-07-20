@@ -233,6 +233,16 @@ request/trace IDs in response headers, and maps route/dependency/schema failures
 `SocProblemDetails`. Do not introduce parallel `/api/soc/v1` aliases or trust an `X-Actor` header.
 Intentional path/method/header/error changes must update `contracts/soc_api/openapi-v1.snapshot.json`.
 
+SOC confirmed memory is not activated by setting a repository boolean. Confirmation creates a
+retrieval-disabled `SocMemoryRecord`; only `SocMemoryService.set_retrieval_activation()` may enable or
+disable it. The command requires `soc_memory_reviewer|soc_admin`, trusted auth provenance, a reason,
+idempotency key and expected record version; enable also requires bounded validity and a mandatory
+review period. Persistence uses `MemoryRecordRepository.compare_and_set_memory_record()` and commits
+the record version plus `SocMutationAuditRecord` atomically. Retrieval rejects direct/legacy flags,
+expired activations and overdue reviews. Public surfaces are
+`POST /api/soc/memory/records/{memory_id}/retrieval`, `soc memory records retrieval`, and read-only
+`soc memory search --baseline-json` diffing.
+
 L3 SOC mutations use `core.access_control.require_actor_roles()` inside the service boundary. A caller
 must have a non-anonymous actor, a non-unknown `ActorContext.auth_source`, and a command-specific role;
 Gateway authentication/route checks do not replace this rule. Gateway derives `soc_analyst` or
@@ -241,7 +251,7 @@ service provenance. Approval request creation is insert-only. Resolution is a te
 `pending -> approved|rejected|expired` compare-and-set; approve takes a request ID, loads the stored
 payload, and atomically inserts at most one grant. Exact retries may return the existing terminal result,
 but changed or stale resolution attempts conflict. L3 service commands use
-`SocMutationUnitOfWork.mutation_transaction()`: correction, review close/note, memory review,
+`SocMutationUnitOfWork.mutation_transaction()`: correction, review close/note, memory review/retrieval activation,
 approval submit/resolve/dry-run/execute and external disposition commit their selected business rows
 with one append-only `SocMutationAuditRecord` in `soc_mutation_audit_log` (migration `0018`). Events
 are buffered until commit; fault-injection tests require complete rollback. Mutation audit stores a

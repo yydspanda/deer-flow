@@ -186,6 +186,11 @@ Current SOC direction:
   append-only `SocMutationAuditRecord` rows; process events are emitted only after commit.
 - LLM-discovered knowledge is candidate knowledge only. It must be confirmed by a human before
   it can affect future decisions.
+- Confirmation creates a retrieval-disabled SOC memory record. Only
+  `SocMemoryService.set_retrieval_activation()` may enable/disable retrieval, with
+  `soc_memory_reviewer|soc_admin`, trusted auth provenance, reason, expected version, validity/review
+  bounds, idempotency and atomic mutation audit. Direct/legacy boolean flags, expired activation and
+  overdue review are excluded from bounded retrieval; CLI/API/Web/Boss Demo use the same service.
 - Governed operational context facts are separate from evidence, memory, action approval, and
   detection truth. GF-01 uses typed contracts plus append-only fact versions through
   `SocGovernedContextService` / `GovernedContextFactRepository` and migration

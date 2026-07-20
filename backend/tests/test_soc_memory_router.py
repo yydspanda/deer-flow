@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +18,7 @@ from soc_agent.contracts import (
     SocMemoryDecisionImpact,
     SocMemoryQuery,
     SocMemoryRecordStatus,
+    SocMemoryRetrievalActivationAction,
     SocMemoryTargetArtifact,
 )
 from soc_agent.core import SocMemoryService
@@ -24,7 +26,12 @@ from soc_agent.memory import InMemoryMemoryCandidateRepository
 
 
 class FakeRequest:
-    def __init__(self, *, authenticated: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        authenticated: bool = True,
+        system_role: str = "user",
+    ) -> None:
         self.headers: dict[str, str] = {
             "x-soc-actor-id": "spoofed-user",
             "x-soc-surface": "web",
@@ -33,7 +40,7 @@ class FakeRequest:
         self.state = SimpleNamespace()
         if authenticated:
             self.state.auth_source = "session"
-            self.state.user = SimpleNamespace(id="soc-web-test", system_role="user")
+            self.state.user = SimpleNamespace(id="soc-web-test", system_role=system_role)
 
 
 def test_soc_memory_api_lists_candidates_by_review_filters() -> None:
@@ -83,7 +90,11 @@ def test_soc_memory_api_returns_404_for_missing_candidate() -> None:
 
 def test_soc_memory_api_reviews_candidate_and_lists_record() -> None:
     repository = InMemoryMemoryCandidateRepository()
-    service = SocMemoryService(candidate_repository=repository, record_repository=repository)
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        mutation_audit_repository=repository,
+    )
     candidate = service.propose_candidate(_memory_candidate_command())
 
     result = soc_memory.review_memory_candidate(
@@ -119,13 +130,60 @@ def test_soc_memory_api_reviews_candidate_and_lists_record() -> None:
     assert disabled_search.matches == []
     assert disabled_search.skipped_retrieval_disabled == 1
 
-    repository.save_memory_record(result.memory_record.model_copy(update={"retrieval_enabled": True}))
+    activation = soc_memory.update_memory_retrieval_activation(
+        result.memory_record.memory_id,
+        soc_memory.MemoryRetrievalActivationRequest(
+            action=SocMemoryRetrievalActivationAction.ENABLE,
+            expected_record_version=result.memory_record.version,
+            reason="Memory governor approved bounded retrieval.",
+            activation_valid_until=datetime.now(UTC) + timedelta(days=90),
+            review_after_days=30,
+        ),
+        request=FakeRequest(system_role="admin"),
+        service=service,
+    )
+    assert activation.record.version == 2
+    assert activation.record.retrieval_enabled is True
+    assert activation.audit_id is not None
     enabled_search = soc_memory.search_memory_records(
         SocMemoryQuery(facets={"tenant": ["pingan"]}, text_terms=["feedback"]),
         service=service,
     )
     assert enabled_search.returned_count == 1
     assert enabled_search.matches[0].memory_id == result.memory_record.memory_id
+
+
+def test_soc_memory_api_rejects_analyst_retrieval_activation() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(candidate_repository=repository, record_repository=repository)
+    candidate = service.propose_candidate(_memory_candidate_command())
+    reviewed = soc_memory.review_memory_candidate(
+        candidate.candidate_id,
+        soc_memory.MemoryCandidateReviewRequest(
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Confirm before activation authorization test.",
+        ),
+        request=FakeRequest(),
+        service=service,
+    )
+    assert reviewed.memory_record is not None
+
+    with pytest.raises(HTTPException) as exc_info:
+        soc_memory.update_memory_retrieval_activation(
+            reviewed.memory_record.memory_id,
+            soc_memory.MemoryRetrievalActivationRequest(
+                action=SocMemoryRetrievalActivationAction.ENABLE,
+                expected_record_version=reviewed.memory_record.version,
+                reason="Analyst attempted activation.",
+                activation_valid_until=datetime.now(UTC) + timedelta(days=90),
+                review_after_days=30,
+            ),
+            request=FakeRequest(),
+            service=service,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert service.get_record(reviewed.memory_record.memory_id).retrieval_enabled is False
 
 
 def test_soc_memory_api_rejects_untrusted_candidate_review() -> None:

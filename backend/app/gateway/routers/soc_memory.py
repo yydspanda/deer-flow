@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Query, Request
@@ -18,11 +19,15 @@ from soc_agent.contracts import (
     SocMemoryQuery,
     SocMemoryRecord,
     SocMemoryRecordStatus,
+    SocMemoryRetrievalActivationAction,
+    SocMemoryRetrievalActivationCommand,
+    SocMemoryRetrievalActivationResult,
     SocMemoryRetrievalResult,
 )
 from soc_agent.core import (
     SocMemoryService,
     SocServiceAuthorizationError,
+    SocServiceConflictError,
     SocServiceError,
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
@@ -44,6 +49,15 @@ class MemoryCandidateReviewRequest(BaseModel):
     reason: str = Field(min_length=1)
     record_summary: str | None = None
     record_content: str | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class MemoryRetrievalActivationRequest(BaseModel):
+    action: SocMemoryRetrievalActivationAction
+    expected_record_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=2000)
+    activation_valid_until: datetime | None = None
+    review_after_days: int | None = Field(default=None, ge=1, le=365)
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
@@ -160,6 +174,41 @@ def get_memory_record(memory_id: str, service: MemoryServiceDep) -> SocMemoryRec
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post(
+    "/records/{memory_id}/retrieval",
+    response_model=SocMemoryRetrievalActivationResult,
+)
+def update_memory_retrieval_activation(
+    memory_id: str,
+    payload: MemoryRetrievalActivationRequest,
+    request: Request,
+    service: MemoryServiceDep,
+) -> SocMemoryRetrievalActivationResult:
+    try:
+        return service.set_retrieval_activation(
+            SocMemoryRetrievalActivationCommand(
+                memory_id=memory_id,
+                action=payload.action,
+                expected_record_version=payload.expected_record_version,
+                reason=payload.reason,
+                activation_valid_until=payload.activation_valid_until,
+                review_after_days=payload.review_after_days,
+                metadata=payload.metadata,
+            ),
+            context=soc_service_context_from_request(request, include_soc_roles=True),
+        )
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SocServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/search", response_model=SocMemoryRetrievalResult)

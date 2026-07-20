@@ -65,6 +65,9 @@ from soc_agent.contracts import (
     SocMemoryCandidateStatus,
     SocMemoryQuery,
     SocMemoryRecordStatus,
+    SocMemoryRetrievalActivationAction,
+    SocMemoryRetrievalActivationCommand,
+    SocMemoryRetrievalResult,
     SocOperationalDisposition,
     Verdict,
 )
@@ -144,6 +147,7 @@ from soc_agent.llm import (
     build_configured_chat_client,
     configured_soc_llm_status,
 )
+from soc_agent.memory import build_memory_retrieval_diff
 from soc_agent.normalizers import (
     build_normalization_suggestion_prompt,
     build_normalization_suggestion_report,
@@ -251,6 +255,8 @@ def main(argv: list[str] | None = None) -> int:
         return _memory_records_list(args)
     if args.command == "memory" and args.memory_command == "records" and args.memory_records_command == "get":
         return _memory_records_get(args)
+    if args.command == "memory" and args.memory_command == "records" and args.memory_records_command == "retrieval":
+        return _memory_records_retrieval(args)
     if args.command == "disposition" and args.disposition_command == "propose":
         return _disposition_propose(args)
     if args.command == "disposition" and args.disposition_command == "list":
@@ -783,6 +789,10 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_search.add_argument("--limit", type=int, default=8, help="Maximum matches to return")
     memory_search.add_argument("--max-tokens", type=int, default=1200, help="Token budget for returned matches")
     memory_search.add_argument("--min-score", type=float, default=1.0, help="Minimum retrieval score")
+    memory_search.add_argument(
+        "--baseline-json",
+        help="Prior SocMemoryRetrievalResult JSON used for deterministic replay diff",
+    )
     memory_search.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(memory_search)
     memory_records = memory_subparsers.add_parser("records", help="SOC confirmed memory record helpers")
@@ -810,6 +820,41 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_records_get.add_argument("memory_id", help="Memory record id to load")
     memory_records_get.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(memory_records_get)
+    memory_records_retrieval = memory_records_subparsers.add_parser(
+        "retrieval",
+        help="Apply a governed retrieval enable/disable transition",
+    )
+    memory_records_retrieval.add_argument("memory_id", help="Memory record id to update")
+    memory_records_retrieval.add_argument(
+        "--action",
+        required=True,
+        choices=[item.value for item in SocMemoryRetrievalActivationAction],
+        help="Retrieval transition to apply",
+    )
+    memory_records_retrieval.add_argument(
+        "--expected-version",
+        required=True,
+        type=int,
+        help="Current record version used for optimistic concurrency",
+    )
+    memory_records_retrieval.add_argument("--reason", required=True, help="Governance decision reason")
+    memory_records_retrieval.add_argument(
+        "--valid-until",
+        help="Timezone-aware ISO-8601 retrieval validity end; required for enable",
+    )
+    memory_records_retrieval.add_argument(
+        "--review-after-days",
+        type=int,
+        help="Days until mandatory retrieval review; required for enable",
+    )
+    memory_records_retrieval.add_argument(
+        "--idempotency-key",
+        required=True,
+        help="Stable retry key for this transition",
+    )
+    memory_records_retrieval.add_argument("--actor-id", default="soc-memory-cli", help="Memory governor actor id")
+    memory_records_retrieval.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(memory_records_retrieval)
 
     disposition = subparsers.add_parser("disposition", help="Shadow operational disposition proposals")
     disposition_subparsers = disposition.add_subparsers(dest="disposition_command")
@@ -1688,6 +1733,9 @@ def _memory_search(args: argparse.Namespace) -> int:
         repository = _repository_from_args(args)
         query = _memory_query_from_args(args)
         result = SocMemoryService(candidate_repository=repository, record_repository=repository).find_relevant_records(query)
+        if args.baseline_json:
+            baseline = _load_memory_retrieval_result(args.baseline_json)
+            result = result.model_copy(update={"replay_diff": build_memory_retrieval_diff(baseline, result)})
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -1759,6 +1807,45 @@ def _memory_records_get(args: argparse.Namespace) -> int:
 
     print(record.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
+
+
+def _memory_records_retrieval(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        command = SocMemoryRetrievalActivationCommand.model_validate(
+            {
+                "memory_id": args.memory_id,
+                "action": args.action,
+                "expected_record_version": args.expected_version,
+                "reason": args.reason,
+                "activation_valid_until": args.valid_until,
+                "review_after_days": args.review_after_days,
+            }
+        )
+        context = _cli_context(args.actor_id, roles=["soc_memory_reviewer"]).model_copy(update={"idempotency_key": args.idempotency_key})
+        result = SocMemoryService(
+            candidate_repository=repository,
+            record_repository=repository,
+        ).set_retrieval_activation(command, context=context)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _load_memory_retrieval_result(path: str) -> SocMemoryRetrievalResult:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid memory retrieval baseline JSON: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"cannot read memory retrieval baseline: {exc}") from exc
+    return SocMemoryRetrievalResult.model_validate(payload)
 
 
 def _context_fact_propose(args: argparse.Namespace) -> int:

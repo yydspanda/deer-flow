@@ -63,6 +63,9 @@
     "/api/soc/memory/records/{memory_id}": [
       "get"
     ],
+    "/api/soc/memory/records/{memory_id}/retrieval": [
+      "post"
+    ],
     "/api/soc/memory/search": [
       "post"
     ],

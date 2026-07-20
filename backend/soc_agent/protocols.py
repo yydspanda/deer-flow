@@ -331,6 +331,13 @@ class MemoryRecordRepository(Protocol):
 
     def save_memory_record(self, record: SocMemoryRecord) -> None: ...
 
+    def compare_and_set_memory_record(
+        self,
+        record: SocMemoryRecord,
+        *,
+        expected_version: int,
+    ) -> bool: ...
+
     def get_memory_record(self, memory_id: str) -> SocMemoryRecord | None: ...
 
     def get_memory_record_by_candidate_id(self, candidate_id: str) -> SocMemoryRecord | None: ...

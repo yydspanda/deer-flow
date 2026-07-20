@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from soc_agent.context_bridge import skill_context_from_investigation_context
 from soc_agent.contracts import (
+    SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION,
     ActorAuthSource,
     ActorContext,
     ActorType,
@@ -84,6 +85,9 @@ from soc_agent.contracts import (
     SocMemoryQuery,
     SocMemoryRecord,
     SocMemoryRecordStatus,
+    SocMemoryRetrievalActivationAction,
+    SocMemoryRetrievalActivationCommand,
+    SocMemoryRetrievalActivationResult,
     SocMemoryRetrievalResult,
     SocMutationOperation,
     SocSkillResolution,
@@ -1214,6 +1218,7 @@ class SocMemoryService:
     """Facts, lessons, and reviewable candidate knowledge service."""
 
     REVIEWER_ROLES = frozenset({"analyst", "soc_analyst", "soc_memory_reviewer", "soc_admin"})
+    RETRIEVAL_GOVERNOR_ROLES = frozenset({"soc_memory_reviewer", "soc_admin"})
 
     def __init__(
         self,
@@ -1223,19 +1228,23 @@ class SocMemoryService:
         mutation_audit_repository: SocMutationAuditRepository | None = None,
         mutation_uow: SocMutationUnitOfWork | None = None,
         event_sink: SocEventSink | None = None,
+        now_provider: Callable[[], datetime] | None = None,
         _transaction_active: bool = False,
     ) -> None:
         self._candidate_repository = candidate_repository
         self._record_repository = record_repository
         self._event_sink = event_sink or NoopEventSink()
-        self._mutation_audit_repository = mutation_audit_repository or mutation_audit_repository_from(
-            candidate_repository,
-            record_repository,
-        )
         self._mutation_uow = mutation_uow or mutation_uow_from(
             candidate_repository,
             record_repository,
         )
+        self._mutation_audit_repository = mutation_audit_repository
+        if self._mutation_audit_repository is None and self._mutation_uow is not None:
+            self._mutation_audit_repository = mutation_audit_repository_from(
+                candidate_repository,
+                record_repository,
+            )
+        self._now_provider = now_provider or (lambda: datetime.now(UTC))
         self._transaction_active = _transaction_active
 
     def propose_candidate(
@@ -1331,6 +1340,7 @@ class SocMemoryService:
                     mutation_audit_repository=repository,
                     mutation_uow=self._mutation_uow,
                     event_sink=buffered_events,
+                    now_provider=self._now_provider,
                     _transaction_active=True,
                 ).review_candidate(command, context=request_context)
             buffered_events.flush()
@@ -1418,9 +1428,18 @@ class SocMemoryService:
             if self._record_repository is not None:
                 memory_record = self._record_repository.get_memory_record_by_candidate_id(candidate.candidate_id)
                 if memory_record is not None:
+                    previous_record_version = memory_record.version
                     memory_record = memory_record.model_copy(
                         update={
+                            "version": previous_record_version + 1,
                             "status": record_status,
+                            "retrieval_enabled": False,
+                            "retrieval_policy_version": SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION,
+                            "retrieval_valid_until": None,
+                            "retrieval_review_due_at": None,
+                            "retrieval_updated_by": request_context.actor,
+                            "retrieval_updated_at": reviewed_at,
+                            "retrieval_reason": command.reason,
                             "updated_at": reviewed_at,
                             "deprecated_by": request_context.actor,
                             "deprecated_at": reviewed_at,
@@ -1428,7 +1447,11 @@ class SocMemoryService:
                             "metadata": {**memory_record.metadata, **command.metadata},
                         }
                     )
-                    self._record_repository.save_memory_record(memory_record)
+                    if not self._record_repository.compare_and_set_memory_record(
+                        memory_record,
+                        expected_version=previous_record_version,
+                    ):
+                        raise SocServiceConflictError(f"memory record {memory_record.memory_id} changed during candidate review")
         else:
             raise SocServiceError(f"unsupported memory review decision: {command.decision}")
 
@@ -1556,6 +1579,179 @@ class SocMemoryService:
             limit=limit,
         )
 
+    def set_retrieval_activation(
+        self,
+        command: SocMemoryRetrievalActivationCommand,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> SocMemoryRetrievalActivationResult:
+        """Apply one governed, version-controlled retrieval transition."""
+
+        request_context = context or ServiceRequestContext()
+        require_actor_roles(
+            request_context,
+            self.RETRIEVAL_GOVERNOR_ROLES,
+            operation="changing SOC memory retrieval activation",
+        )
+        if self._mutation_uow is not None and not self._transaction_active:
+            buffered_events = BufferedSocEventSink(self._event_sink)
+            with self._mutation_uow.mutation_transaction() as repository:
+                result = SocMemoryService(
+                    candidate_repository=(repository if self._candidate_repository is not None else None),
+                    record_repository=repository,
+                    mutation_audit_repository=repository,
+                    mutation_uow=self._mutation_uow,
+                    event_sink=buffered_events,
+                    now_provider=self._now_provider,
+                    _transaction_active=True,
+                ).set_retrieval_activation(command, context=request_context)
+            buffered_events.flush()
+            return result
+        if self._record_repository is None:
+            raise SocServiceNotImplementedError("set_retrieval_activation requires a MemoryRecordRepository")
+        if self._mutation_audit_repository is None:
+            raise SocServiceNotImplementedError("set_retrieval_activation requires a SocMutationAuditRepository")
+
+        command_payload = command.model_dump(mode="json")
+        existing_audit = self._mutation_audit_repository.find_mutation_audit_by_idempotency_key(
+            SocMutationOperation.MEMORY_RETRIEVAL_ACTIVATION,
+            mutation_idempotency_key(request_context),
+        )
+        if existing_audit is not None:
+            validate_mutation_retry(
+                existing_audit,
+                command=command_payload,
+                target_type="memory_record",
+                target_id=command.memory_id,
+            )
+            record = self.get_record(command.memory_id)
+            result_version = existing_audit.payload.get("result_record_version")
+            if not isinstance(result_version, int) or record.version != result_version:
+                raise SocServiceConflictError(f"memory retrieval retry for {command.memory_id} no longer references the current version")
+            previous_version = existing_audit.payload.get("previous_record_version")
+            previous_enabled = existing_audit.payload.get("previous_retrieval_enabled")
+            if not isinstance(previous_version, int) or not isinstance(previous_enabled, bool):
+                raise SocServiceConflictError("memory retrieval audit is missing transition provenance")
+            return SocMemoryRetrievalActivationResult(
+                record=record,
+                action=command.action,
+                previous_record_version=previous_version,
+                previous_retrieval_enabled=previous_enabled,
+                audit_id=existing_audit.audit_id,
+                policy_version=command.policy_version,
+                changed_at=record.retrieval_updated_at or existing_audit.occurred_at,
+            )
+
+        record = self.get_record(command.memory_id)
+        if record.version != command.expected_record_version:
+            raise SocServiceConflictError(f"memory record {record.memory_id} expected version {command.expected_record_version}, found {record.version}")
+
+        now = self._now_provider()
+        if now.utcoffset() is None:
+            raise SocServiceError("memory service clock must be timezone-aware")
+        previous_version = record.version
+        previous_enabled = record.retrieval_enabled
+        if command.action is SocMemoryRetrievalActivationAction.ENABLE:
+            if record.status is not SocMemoryRecordStatus.CONFIRMED:
+                raise SocServiceError(f"cannot enable retrieval for memory in status {record.status.value}")
+            if record.retrieval_enabled:
+                raise SocServiceConflictError(f"memory record {record.memory_id} retrieval is already enabled")
+            if record.validity.valid_from > now:
+                raise SocServiceError("cannot enable retrieval before the memory validity window starts")
+            if record.validity.valid_until is not None and record.validity.valid_until <= now:
+                raise SocServiceError("cannot enable retrieval for expired memory")
+
+            activation_valid_until = command.activation_valid_until
+            review_after_days = command.review_after_days
+            if activation_valid_until is None or review_after_days is None:
+                raise SocServiceError("enable requires activation validity and review scheduling")
+            if activation_valid_until <= now:
+                raise SocServiceError("activation_valid_until must be in the future")
+            if record.validity.valid_until is not None and activation_valid_until > record.validity.valid_until:
+                raise SocServiceError("retrieval activation cannot outlive the confirmed memory validity window")
+            review_due_at = now + timedelta(days=review_after_days)
+            if review_due_at > activation_valid_until:
+                raise SocServiceError("retrieval review must be due no later than activation_valid_until")
+            retrieval_enabled = True
+        else:
+            if not record.retrieval_enabled:
+                raise SocServiceConflictError(f"memory record {record.memory_id} retrieval is already disabled")
+            activation_valid_until = None
+            review_due_at = None
+            retrieval_enabled = False
+
+        updated_record = record.model_copy(
+            update={
+                "version": previous_version + 1,
+                "retrieval_enabled": retrieval_enabled,
+                "retrieval_policy_version": command.policy_version,
+                "retrieval_valid_until": activation_valid_until,
+                "retrieval_review_due_at": review_due_at,
+                "retrieval_updated_by": request_context.actor,
+                "retrieval_updated_at": now,
+                "retrieval_reason": command.reason,
+                "updated_at": now,
+                "metadata": {**record.metadata, **command.metadata},
+            }
+        )
+        if not self._record_repository.compare_and_set_memory_record(
+            updated_record,
+            expected_version=previous_version,
+        ):
+            raise SocServiceConflictError(f"memory record {record.memory_id} changed while retrieval activation was being applied")
+
+        audit_record = build_mutation_audit(
+            operation=SocMutationOperation.MEMORY_RETRIEVAL_ACTIVATION,
+            target_type="memory_record",
+            target_id=record.memory_id,
+            run_id=record.source.run_id,
+            alert_id=record.source.alert_id,
+            queue_id=record.source.queue_id,
+            context=request_context,
+            reason=command.reason,
+            command=command_payload,
+            result_ref=f"{record.memory_id}:v{updated_record.version}",
+            payload={
+                "action": command.action.value,
+                "previous_record_version": previous_version,
+                "result_record_version": updated_record.version,
+                "previous_retrieval_enabled": previous_enabled,
+                "retrieval_enabled": updated_record.retrieval_enabled,
+                "policy_version": command.policy_version,
+                "retrieval_valid_until": updated_record.retrieval_valid_until,
+                "retrieval_review_due_at": updated_record.retrieval_review_due_at,
+            },
+        )
+        self._mutation_audit_repository.append_mutation_audit(audit_record)
+        self._event_sink.emit(
+            SocEvent(
+                event_type=SocEventType.MEMORY_UPDATED,
+                request_id=request_context.request_id,
+                run_id=record.source.run_id,
+                alert_id=record.source.alert_id,
+                actor=request_context.actor,
+                payload={
+                    "operation": "memory_record.retrieval_activation_changed",
+                    "memory_id": record.memory_id,
+                    "action": command.action.value,
+                    "previous_record_version": previous_version,
+                    "record_version": updated_record.version,
+                    "retrieval_enabled": updated_record.retrieval_enabled,
+                    "policy_version": command.policy_version,
+                    "audit_id": audit_record.audit_id,
+                },
+            )
+        )
+        return SocMemoryRetrievalActivationResult(
+            record=updated_record,
+            action=command.action,
+            previous_record_version=previous_version,
+            previous_retrieval_enabled=previous_enabled,
+            audit_id=audit_record.audit_id,
+            policy_version=command.policy_version,
+            changed_at=now,
+        )
+
     def find_relevant_records(self, query: SocMemoryQuery) -> SocMemoryRetrievalResult:
         """Return retrieval-enabled confirmed memory records with scoring metadata."""
 
@@ -1588,10 +1784,13 @@ class SocMemoryService:
 
         scored_matches: list[SocMemoryMatch] = []
         skipped_retrieval_disabled = 0
+        skipped_ungoverned_activation = 0
+        skipped_activation_expired = 0
+        skipped_review_overdue = 0
         skipped_status = 0
         skipped_expired = 0
         skipped_below_min_score = 0
-        now = datetime.now(UTC)
+        now = self._now_provider()
 
         for record in deduped_records.values():
             if query.statuses and record.status not in query.statuses:
@@ -1603,7 +1802,26 @@ class SocMemoryService:
             if query.require_retrieval_enabled and not record.retrieval_enabled:
                 skipped_retrieval_disabled += 1
                 continue
+            if record.retrieval_enabled and (
+                record.retrieval_policy_version != SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION
+                or record.retrieval_valid_until is None
+                or record.retrieval_review_due_at is None
+                or record.retrieval_updated_by is None
+                or record.retrieval_updated_at is None
+                or not record.retrieval_reason
+            ):
+                skipped_ungoverned_activation += 1
+                continue
+            if record.retrieval_enabled and record.retrieval_valid_until is not None and record.retrieval_valid_until <= now:
+                skipped_activation_expired += 1
+                continue
+            if record.retrieval_enabled and record.retrieval_review_due_at is not None and record.retrieval_review_due_at <= now:
+                skipped_review_overdue += 1
+                continue
             if record.status != SocMemoryRecordStatus.CONFIRMED:
+                skipped_status += 1
+                continue
+            if record.validity.valid_from > now:
                 skipped_status += 1
                 continue
             if record.validity.valid_until is not None and record.validity.valid_until <= now:
@@ -1645,6 +1863,9 @@ class SocMemoryService:
             matches=selected_matches,
             total_candidate_count=len(deduped_records),
             skipped_retrieval_disabled=skipped_retrieval_disabled,
+            skipped_ungoverned_activation=skipped_ungoverned_activation,
+            skipped_activation_expired=skipped_activation_expired,
+            skipped_review_overdue=skipped_review_overdue,
             skipped_status=skipped_status,
             skipped_expired=skipped_expired,
             skipped_below_min_score=skipped_below_min_score,

@@ -964,6 +964,27 @@ class SqlAlchemyAlertRepository:
                     setattr(row, key, value)
             session.commit()
 
+    def compare_and_set_memory_record(
+        self,
+        record: SocMemoryRecord,
+        *,
+        expected_version: int,
+    ) -> bool:
+        """Persist one memory transition only when its prior version still matches."""
+
+        payload = record.model_dump(mode="json")
+        with self._session_factory() as session:
+            result = session.execute(
+                update(SocMemoryRecordRow)
+                .where(
+                    SocMemoryRecordRow.memory_id == record.memory_id,
+                    SocMemoryRecordRow.version == expected_version,
+                )
+                .values(**_memory_record_row_values(record, payload))
+            )
+            session.commit()
+            return result.rowcount == 1
+
     def get_memory_record(self, memory_id: str) -> SocMemoryRecord | None:
         with self._session_factory() as session:
             row = session.get(SocMemoryRecordRow, memory_id)

@@ -25,6 +25,7 @@ import {
   listSocReviewItems,
   recordSocDispositionOutcome,
   rejectSocApprovalRequest,
+  updateSocMemoryRetrievalActivation,
 } from "@/core/soc/api";
 
 const mockedFetch = rs.mocked(fetcher);
@@ -216,6 +217,40 @@ describe("SOC review API", () => {
         }),
       }),
     );
+  });
+
+  test("posts governed memory retrieval activation with optimistic version", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, { record: { memory_id: "MEM-1", version: 2 } }),
+    );
+
+    await updateSocMemoryRetrievalActivation(
+      "MEM/1",
+      {
+        action: "enable",
+        expected_record_version: 1,
+        reason: "Memory reviewer approved bounded retrieval.",
+        activation_valid_until: "2026-10-01T00:00:00Z",
+        review_after_days: 30,
+      },
+      { idempotencyKey: "memory-enable-1", surface: "web" },
+    );
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/memory/records/MEM%2F1/retrieval",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          action: "enable",
+          expected_record_version: 1,
+          reason: "Memory reviewer approved bounded retrieval.",
+          activation_valid_until: "2026-10-01T00:00:00Z",
+          review_after_days: 30,
+        }),
+      }),
+    );
+    const headers = firstFetchInit().headers as Headers;
+    expect(headers.get("idempotency-key")).toBe("memory-enable-1");
   });
 
   test("posts explicit structured disposition outcome", async () => {

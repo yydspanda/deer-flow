@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -46,6 +47,8 @@ from soc_agent.contracts import (
     SocMemoryCandidateValidity,
     SocMemoryDecisionImpact,
     SocMemoryRecord,
+    SocMemoryRetrievalActivationAction,
+    SocMemoryRetrievalActivationCommand,
     SocMemoryTargetArtifact,
 )
 from soc_agent.core import (
@@ -362,26 +365,28 @@ def _seed_confirmed_memory(
             candidate_id=candidate.candidate_id,
             decision=SocMemoryCandidateReviewDecision.CONFIRM,
             reason="Seed a confirmed retrieval memory for local SOC investigation demo.",
-            metadata={"soc_demo": True, "retrieval_enabled": True},
+            metadata={"soc_demo": True, "retrieval_activation_requested": True},
         ),
         context=_demo_context(fixture.sample_id, operation="memory:confirm"),
     )
     record = result.memory_record or repository.get_memory_record_by_candidate_id(candidate.candidate_id)
     if record is None:
         return None
-    enabled_record = record.model_copy(
-        update={
-            "retrieval_enabled": True,
-            "labels": sorted(set(record.labels + ["soc-demo", "retrieval-enabled"])),
-            "metadata": {
-                **record.metadata,
-                "soc_demo": True,
-                "retrieval_enabled": True,
-            },
-        }
+    if record.retrieval_enabled:
+        return record
+    activation = service.set_retrieval_activation(
+        SocMemoryRetrievalActivationCommand(
+            memory_id=record.memory_id,
+            action=SocMemoryRetrievalActivationAction.ENABLE,
+            expected_record_version=record.version,
+            reason="Enable bounded retrieval for the local SOC investigation demo.",
+            activation_valid_until=datetime.now(UTC) + timedelta(days=180),
+            review_after_days=30,
+            metadata={"soc_demo": True, "mock": True},
+        ),
+        context=_demo_context(fixture.sample_id, operation="memory:retrieval-enable"),
     )
-    repository.save_memory_record(enabled_record)
-    return enabled_record
+    return activation.record
 
 
 def _review_context_service(
@@ -548,7 +553,7 @@ def _demo_context(sample_id: str, *, operation: str) -> ServiceRequestContext:
             actor_id="soc-demo",
             actor_type=ActorType.SYSTEM,
             surface=EntrySurface.CLI,
-            roles=["soc_demo", "analyst"],
+            roles=["soc_demo", "analyst", "soc_memory_reviewer"],
         ),
         trace_id=f"soc-demo:{sample_id}:{operation}",
         idempotency_key=f"soc-demo:{operation}:{sample_id}:{DEMO_IDEMPOTENCY_VERSION}",

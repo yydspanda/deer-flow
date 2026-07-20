@@ -25,6 +25,8 @@ import type {
   SocMemoryRecord,
   SocMemoryRecordListResponse,
   SocMemoryRecordStatus,
+  SocMemoryRetrievalActivationRequest,
+  SocMemoryRetrievalActivationResult,
   SocMemoryRetrievalResult,
   SocNormalizationBaselineListResponse,
   SocNormalizationIssueListResponse,
@@ -629,5 +631,24 @@ export async function getSocMemoryRecord(
   return readJson<SocMemoryRecord>(
     response,
     "Failed to load SOC memory record",
+  );
+}
+
+export async function updateSocMemoryRetrievalActivation(
+  memoryId: string,
+  request: SocMemoryRetrievalActivationRequest,
+  context?: SocRequestContext,
+): Promise<SocMemoryRetrievalActivationResult> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/records/${encodeURIComponent(memoryId)}/retrieval`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocMemoryRetrievalActivationResult>(
+    response,
+    "Failed to update SOC memory retrieval activation",
   );
 }

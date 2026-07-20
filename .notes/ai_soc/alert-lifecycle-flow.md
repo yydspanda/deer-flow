@@ -98,7 +98,8 @@ flowchart TD
 5. 只读工具结果写成 `InvestigationEvidence`，回到调查上下文。
 6. 高风险动作只进入审批 inbox 和 grant boundary，当前不执行生产副作用。
 7. 人工 correction、review note、外部处置理由、domain finding 都只能先形成 pending memory candidate。
-8. confirmed memory 仍受 retrieval gate 控制，不直接改 runtime verdict。
+8. confirmed memory 默认不可检索；只有 memory governor 经 role/reason/version/validity/review/audit
+   状态迁移后才可进入 bounded context，且不直接改 runtime verdict。
 9. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
    但不能改变 verdict、ReviewQueue 或分析成功状态。
 10. 显式 authorization enrichment 把确定性匹配保存为独立记录；不会回写 Runtime decision。
@@ -111,7 +112,7 @@ flowchart TD
 14. EV-03 从 immutable manifest、proposal、ReviewQueue 和 latest outcomes 派生 reviewer-specific inbox；
     Web 只能打开 manifest-selected work，并回到 EV-02 写入口，不保存第二套 campaign 状态。
 15. Gate 通过只表示可进入治理 rollout review；当前仍固定 `auto_close_allowed=false`。
-16. correction、close/note、memory review、approval lifecycle/action boundary 和 external disposition
+16. correction、close/note、memory review/retrieval activation、approval lifecycle/action boundary 和 external disposition
     都通过 `SocMutationUnitOfWork` 原子写入业务状态与 `soc_mutation_audit_log`；进程事件只在提交后发出。
 
 Current governed-context boundary / 当前边界：GF-01 已能通过 `SocGovernedContextService` 和
@@ -272,14 +273,14 @@ flowchart LR
 | `soc_alert_summaries` | Query-friendly read model | 面向列表、关联、相似检索和 ReviewQueue 的轻量摘要 |
 | `soc_review_queue` | Human review queue | 分析师复核入口；close 不等于改判 |
 | `soc_decision_audit_log` | Decision audit records | analyze/replay/correct/external disposition 的审计链 |
-| `soc_mutation_audit_log` | L3 mutation audit records | correction、close/note、memory review、approval 和 external disposition 的 actor/provenance/reason/idempotency/result 追加式审计；不保存原始敏感 payload |
+| `soc_mutation_audit_log` | L3 mutation audit records | correction、close/note、memory review/retrieval activation、approval 和 external disposition 的 actor/provenance/reason/idempotency/result 追加式审计；不保存原始敏感 payload |
 | `soc_investigation_evidence` | Read-only action results | 资产查询、EDR 进程树、威胁情报等只读调查结果 |
 | `soc_external_dispositions` | External ticket feedback | Zeus/ITSM/SOAR 外部状态、理由、映射和同步结果 |
 | `soc_disposition_proposals` | Shadow operational proposals | 保存 true-positive + exact authorization 产生的未应用处置建议 |
 | `soc_disposition_sample_manifests` | Reproducible QA samples | 保存 scope/population/seed hash/selected proposal ids，防止人工挑样 |
 | `soc_disposition_outcomes` | Append-only evaluation labels | 保存 primary/sample 结构化结论和 supersession lineage，不改 queue/verdict |
 | `soc_memory_candidates` | Reviewable knowledge proposals | 候选记忆，默认 `pending_review`，不影响 runtime decision |
-| `soc_memory_records` | Confirmed memory records | 已确认记忆，默认 `retrieval_enabled=false`，仍不自动注入 prompt |
+| `soc_memory_records` | Confirmed memory records | 已确认记忆，默认不可检索；保存 activation policy、有效期、复核期限、治理 actor/reason 和 record version，仍不自动注入 prompt |
 | `soc_approval_requests` | Approval request lifecycle | 高风险动作审批 inbox；保存 pending/approved/rejected/expired 终态和处理元数据 |
 | `soc_approval_grants` | One-time approval grants | 一次性授权 token，当前 execute boundary 不执行生产副作用 |
 | `soc_normalization_schema_baselines` | Approved parser fingerprints | 人工批准的 tenant/source/adapter/parser/version 基线；新版本 supersede 旧版本 |
@@ -336,7 +337,7 @@ flowchart TD
 | `disposition_outcomes` | Evaluation labels | 结构化 primary/sample outcome，只用于评测 |
 | `external_dispositions` | External feedback | Zeus/ITSM/SOAR 状态和理由 |
 | `memory_candidates` | Reviewable proposals | 待评审候选记忆 |
-| `relevant_memories` | Retrieval-gated memories | 显式 retrieval-enabled 的 confirmed memory |
+| `relevant_memories` | Retrieval-gated memories | confirmed 且 activation policy/有效期/复核期均有效的记忆；直接布尔开关无效 |
 | `domain_triage_results` | Domain/scenario findings | APT/EDR/HIDS/通用场景发现 |
 | `investigation_view` | Unified view | 面向 Web/TUI/Lead Agent 的统一时间线和计数 |
 
@@ -600,9 +601,14 @@ flowchart TD
     I -->|reject| M["candidate.status=rejected"]
     I -->|deprecate / expire| N["candidate/record deprecated or expired"]
 
-    L --> O{"retrieval_enabled=true?<br/>显式允许检索"}
-    O -->|No| P["skip retrieval<br/>不返回到 relevant_memories"]
-    O -->|Yes| Q["🔎 relevant_memories<br/>进入调查上下文"]
+    L --> O["🧑‍⚖️ Retrieval governor<br/>soc_memory_reviewer / soc_admin"]
+    O --> T["⚙️ set_retrieval_activation<br/>action + reason + expected version<br/>valid-until + review period"]
+    T --> U{"🔒 service gates<br/>auth + state + validity + idempotency"}
+    U -->|"fail / stale"| P["reject / conflict<br/>record 不变"]
+    U -->|"pass"| V["🗃️ atomic CAS + mutation audit<br/>version + 1; post-commit event"]
+    V --> W{"🔎 retrieval eligibility<br/>confirmed + governed policy<br/>activation current + review current"}
+    W -->|No| X["skip retrieval<br/>计入 skipped counter"]
+    W -->|Yes| Q["🔎 relevant_memories<br/>进入调查上下文"]
     Q --> R["🚫 context only<br/>不自动改判、不自动处置"]
 ```
 
@@ -614,7 +620,13 @@ Memory 规则：
 | `soc review note` | analyst observation | `pending_review` | 备注只形成候选记忆，不改 queue status，不改 verdict |
 | domain finding | scenario lesson | `pending_review` | finding 可沉淀为经验，但必须显式调用 bridge |
 | external reason | external feedback lesson | `pending_review` | 外部 reason 不能直接 confirmed |
-| confirmed candidate | memory record | `confirmed`, `retrieval_enabled=false` | 默认仍不被检索，不注入 prompt |
+| confirmed candidate | memory record | `confirmed`, `retrieval_enabled=false` | 默认仍不被检索；不能由 repository/demo 直接改布尔值 |
+| governed activation | retrieval state transition | `enabled` or `disabled`, version incremented | 只能经 `SocMemoryService`；enable 必须有角色、理由、有效期、复核期、expected version 和幂等键 |
+
+Retrieval 的最终筛选不是只看一个布尔值。`find_relevant_records()` 还会拒绝无治理 metadata 的
+legacy/direct flag、activation 已过期、review 已逾期、record 非 confirmed 或 source validity 已过期的记录；
+这些原因分别计数。`soc memory search --baseline-json` 可输出同一 query 前后新增、删除和变化的 match，
+用于 activation replay/diff 审阅，但不会写库或改变 verdict。
 
 ## 10. Review Note Flow / 复核备注流
 

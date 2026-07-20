@@ -21,6 +21,9 @@ Post-snapshot addendum:
   `running -> interrupted -> linked replay` recovery path and CLI command. Human and trusted
   external correction confidence now carry distinct uncalibrated provenance and
   `soc.correction_policy.v1`; the external fixed `0.95` was removed.
+- `BG-P1-04` (2026-07-20) added governed confirmed-memory retrieval activation. An authorized
+  reviewer uses one versioned service command with reason, validity/review bounds, expected-version
+  CAS, idempotency and durable mutation audit; CLI/API/Web/Boss Demo no longer set the flag directly.
 
 The original 17-table, bare-Kafka-object, service-only external-disposition and audit inventory below
 is intentionally retained as AUD-01 evidence. Current truth is recorded in the completeness matrix,
@@ -148,7 +151,7 @@ flowchart TD
 | `E-CLI-08` | `soc daemon process/status/consume/run` | 单消息处理、readiness、有限消费、长运行 daemon | `SocDaemonService`, `soc_agent/daemon/` | Wired |
 | `E-CLI-09` | `soc eval ...` | Runtime、scenario、correlation、PingAn、confidence 离线评测 | `soc_agent/eval/` | Demo/Eval |
 | `E-CLI-10` | `soc demo run/alert/boss` | 持久化调查演示与 Boss Demo golden path | `soc_agent/demo/`, `scripts/soc-boss-demo.sh` | Demo/Eval |
-| `E-CLI-11` | `soc memory ...` | candidate/record 查询、评审和检索 | `SocMemoryService` | Wired |
+| `E-CLI-11` | `soc memory ...` | candidate/record 查询、评审、治理式检索启停和带 baseline diff 的检索 | `SocMemoryService` | Wired |
 | `E-CLI-12` | `soc disposition ...` | shadow proposal、sample、outcome、evaluation | `SocDispositionProposalService`, `SocDispositionEvaluationService` | Wired |
 | `E-CLI-13` | `soc context ...` | governed fact 生命周期、授权 match/enrich/replay | `SocGovernedContextService`, `SocAuthorizedActivityService`, `SocAuthorizationEnrichmentService` | Wired |
 | `E-CLI-14` | `soc db init/upgrade` | 建表和 Alembic migration | `soc_agent/db/` | Wired |
@@ -176,7 +179,7 @@ SOC routers 在 `backend/app/gateway/app.py` 注册。当前真实 path 使用�
 | `E-API-01` | `/api/soc/review` | `GET /items`, `GET /items/{id}/context`, `POST /items/{id}/close`, `POST /runs/{id}/correct` | `SocReviewService` | Wired |
 | `E-API-02` | `/api/soc/review` | `POST /disposition-outcomes`, `GET /disposition-samples`, `GET /disposition-samples/{id}/inbox` | `SocDispositionEvaluationService` | Wired |
 | `E-API-03` | `/api/soc/approvals` | request create/list/get/reject/expire、request-ID grant create、action dry-run/execute | `SocAgentApprovalService` | Wired |
-| `E-API-04` | `/api/soc/memory` | candidate list/get/review、record list/get、search | `SocMemoryService` | Wired |
+| `E-API-04` | `/api/soc/memory` | candidate list/get/review、record list/get、record retrieval enable/disable、search | `SocMemoryService` | Wired |
 | `E-API-05` | `/api/soc/normalization` | baseline create/list、issue list/update、metrics | `SocNormalizationMaintenanceService` | Wired |
 
 当前没有 Gateway `analyze`、`replay`、governed fact、authorization enrichment、disposition proposal 或 external
@@ -352,10 +355,12 @@ the `approved` transition share one transaction and a unique request-to-grant co
 | `J-08D` | domain finding | bridge/factory and tests exist; no live app caller found | Service-only candidate source |
 | `J-08E` | Lead Agent/Kafka conclusion | no candidate source caller in current app path | no write |
 | `J-08F` | human reviews candidate | confirm-candidate/confirm/reject/deprecate/expire via service | updated candidate; `confirm` creates memory record |
-| `J-08G` | InvestigationContext/search | deterministic facet/text scoring with token budget | only confirmed, unexpired, explicitly retrieval-enabled records returned |
+| `J-08G` | governed retrieval activation | reviewer/admin submits expected version, reason, validity and review period | atomic record CAS + mutation audit; enable/disable returns the new record version |
+| `J-08H` | InvestigationContext/search | deterministic facet/text scoring with token budget and optional baseline diff | only confirmed, governed-enabled, activation-valid and review-current records returned |
 
-New confirmed records are created with `retrieval_enabled=false`. Retrieval does not inject records into fixed Runtime or
-alter its decision; current Web/TUI/Lead Agent surfaces show them as review context only.
+New confirmed records are created with `retrieval_enabled=false`. A direct repository/fixture boolean without
+`soc.memory_retrieval_activation_policy.v1` governance metadata is rejected by retrieval. Retrieval does not inject
+records into fixed Runtime or alter its decision; current Web/TUI/Lead Agent surfaces show them as review context only.
 
 ### 6.6 Governed context and shadow disposition journey
 
@@ -409,7 +414,7 @@ recorded feedback without changing the operational verdict. No Gateway/Kafka/CLI
 | `ST-02` | PipelineStepTrace | pending/running/skipped/success/failed/retrying | fixed Runtime appends `running -> success/failed`; other contract values are not produced in this runner | `core/runtime.py` |
 | `ST-03` | ReviewQueueItem | open/closed | create open; explicit close, correction, or eligible external correction closes; no reopen transition found | `SocReviewService` |
 | `ST-04` | MemoryCandidate | pending_review/confirmed_candidate/confirmed/rejected/deprecated/expired | service-enforced review transition map; confirm creates record | `SocMemoryService` |
-| `ST-05` | MemoryRecord | confirmed/deprecated/expired | candidate deprecate/expire updates linked record; retrieval additionally requires `retrieval_enabled=true` | `SocMemoryService` |
+| `ST-05` | MemoryRecord | confirmed/deprecated/expired plus versioned retrieval activation | candidate deprecate/expire disables and version-bumps the linked record; enable/disable is an expected-version CAS, while expiry or overdue review makes an enabled record ineligible | `SocMemoryService` |
 | `ST-06` | ApprovalRequest | pending/approved/rejected/expired | insert pending; compare-and-set to one terminal state; approved transition atomically creates at most one grant | `SocAgentApprovalService` |
 | `ST-07` | ApprovalGrant | approved/consumed literal | approve creates approved; execute boundary consumes; expiry is time validation, not a third persisted status | `SocAgentApprovalService` |
 | `ST-08` | GovernedContextFact | proposed/active/suspended/expired/revoked | propose; proposed/suspended -> active; active -> suspended; nonterminal -> revoked; due nonterminal -> expired; revise creates new proposed version | `SocGovernedContextService` |
@@ -438,7 +443,7 @@ Schema owner: `backend/soc_agent/db/models.py`; repository owner:
 | `DB-07` | `soc_investigation_evidence` | `0008` | successful read-only action dispatcher | correlation, ReviewContext/Web/TUI/Lead Agent |
 | `DB-08` | `soc_external_dispositions` | `0009` | external disposition service | ReviewContext/Web/TUI/Lead Agent |
 | `DB-09` | `soc_memory_candidates` | `0010` | memory source bridges/service | CLI/API/Web/TUI/Lead Agent |
-| `DB-10` | `soc_memory_records` | `0011` | memory candidate confirm/deprecate/expire | memory search and ReviewContext |
+| `DB-10` | `soc_memory_records` | `0011` | memory candidate confirm/deprecate/expire and governed retrieval activation | memory search and ReviewContext |
 | `DB-11` | `soc_normalization_schema_baselines` | `0012` | normalization maintenance service | monitor, CLI/API/Web/TUI metrics |
 | `DB-12` | `soc_normalization_maintenance_issues` | `0012` | analysis maintenance monitor/operator update | CLI/API/Web/TUI |
 | `DB-13` | `soc_governed_context_facts` | `0013` | governed context service append-only versions | CLI list/get/match and authorization matcher |
@@ -461,7 +466,7 @@ events, `SocEvent`, Kafka metrics, or Kafka offsets. These are derived, external
 | `U-04` | Web unified investigation | Runtime decision, correlation, domain findings, timeline, action evidence, authorization, proposals/outcomes, external feedback, memory | `InvestigationContext` / `UnifiedInvestigationView` |
 | `U-05` | Web sample campaign | immutable sample batches, reviewer inbox, readiness and outcome capture | `SocDispositionEvaluationService` |
 | `U-06` | Web approval panel | pending and terminal requests, proposal payload/context refs, approve/reject/expire, grant, dry-run, execute result | approval API/service/tables |
-| `U-07` | Web memory panel | candidate review and relevant confirmed memory | memory API/service/tables |
+| `U-07` | Web memory panel | candidate review, governed retrieval enable/disable and relevant confirmed memory | memory API/service/tables |
 | `U-08` | Web normalization | issue counts, severity/schema/baseline metrics, queue details, acknowledge/resolve/ignore | normalization API/service/tables |
 | `U-09` | Review TUI | queue/context, approvals, normalization, close/correct, outcome/sample outcome | same services as Web, no duplicate business rules |
 | `U-10` | Chat TUI | DeerFlow-compatible stream, route/permission/action/approval/context events | `SocAgentChatService` |

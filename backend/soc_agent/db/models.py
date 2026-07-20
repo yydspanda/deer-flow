@@ -331,7 +331,7 @@ class SocMemoryCandidateRow(SocBase):
 
 
 class SocMemoryRecordRow(SocBase):
-    """Confirmed SOC memory record; retrieval policy is still disabled."""
+    """Confirmed SOC memory record with versioned retrieval policy state."""
 
     __tablename__ = "soc_memory_records"
     __table_args__ = (

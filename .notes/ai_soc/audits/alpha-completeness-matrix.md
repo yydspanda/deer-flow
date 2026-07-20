@@ -105,7 +105,7 @@ provider/infrastructure row remains `Mock` or `Data-gated`.
 |---|---|---|---|---|---|
 | `AC-37` | Memory candidate/review/record lifecycle | Complete | - | Candidate-first, human confirmation, deprecate/expire and SQL/API/CLI/Web boundaries exist | Maintain |
 | `AC-38` | Bounded confirmed-memory retrieval | Complete | - | Facet/text scoring, token budget, reasons and retrieval-disabled filtering are executable | Maintain |
-| `AC-39` | Governed retrieval-enable activation | Gap | P1 | No service/CLI/API policy transition can enable a confirmed record; demo writes the flag directly as a fixture | BG |
+| `AC-39` | Governed retrieval-enable activation | Complete | - | `SocMemoryService.set_retrieval_activation()` owns role/reason/version/validity/review/audit-controlled enable/disable; CLI/API/Web and Boss Demo use the same service, while retrieval rejects direct or stale flags | Maintain |
 | `AC-40` | Correction and review-note candidate sources | Complete | - | Both create pending candidates through `SocMemoryService` with provenance and idempotency | Maintain |
 | `AC-41` | Domain/Lead Agent/Kafka lesson capture workflow | Deferred | P2 | Domain bridge exists but is explicit; automatic capture from agent/daemon would need a product review step and noise policy | Parking Lot |
 | `AC-42` | Governed fact lifecycle and authorized-activity matcher | Complete | - | Append-only lifecycle, RBAC, event-time historical matching and read-only explanations exist | Maintain |
@@ -127,14 +127,14 @@ provider/infrastructure row remains `Mock` or `Data-gated`.
 
 | State | Count |
 |---|---:|
-| Complete | 30 |
-| Gap | 4 |
+| Complete | 31 |
+| Gap | 3 |
 | Mock | 1 |
 | Data-gated | 6 |
 | Deferred | 9 |
 | **Total** | **50** |
 
-The AUD-03 baseline admitted 13 `Gap` rows into Stage 3. Nine are now closed, leaving 4 current
+The AUD-03 baseline admitted 13 `Gap` rows into Stage 3. Ten are now closed, leaving 3 current
 `Gap` rows. `Mock`, `Data-gated`, and `Deferred` rows remain visible but do not silently become
 blockers.
 
@@ -157,6 +157,7 @@ All frozen P0 gaps are closed. The implementation evidence is retained in Sectio
 | `AC-11` SOC API transport contract | `BG-P1-02`, 2026-07-20 | Shared `SocAPIRoute/create_soc_router`; compatible `/api/soc/*` paths and direct typed success; `X-SOC-API-Version`, request/trace propagation, sanitized RFC Problem Details; reviewed path/header/error snapshot; frontend `SocApiError` and version guard | Gateway pre-router authentication/CSRF remains the shared DeerFlow security transport; new API business capabilities remain separately scoped |
 | `AC-13` Durable pre-provider journal/recovery | `BG-P1-03`, 2026-07-20 | `AnalysisRequestJournal` is committed on the exact Runtime pre-provider hook; crash, timeout, stale-window, bundle rollback, recovery lineage and CLI contracts are tested; rendered prompts/provider secrets are excluded from journal metadata | Original source replay snapshot remains governed separately in `AnalysisRun.input_payload`; distributed multi-worker lease ownership belongs to production deployment evidence |
 | `AC-17` Correction confidence provenance | `BG-P1-03`, 2026-07-20 | Human correction writes `human_confirmation`; admitted external correction writes `external_disposition`; `soc.correction_policy.v1`, explicit/default flag, uncalibrated state and explanation reach run, summary, audit and API | Production probability calibration remains data-gated under `AC-19`; confirmation strength is not a calibrated probability |
+| `AC-39` Governed memory activation | `BG-P1-04`, 2026-07-20 | Versioned enable/disable command enforces `soc_memory_reviewer` or `soc_admin`, reason, expected record version, activation validity/review deadline, atomic CAS plus mutation audit and post-commit event; CLI/API/Web/Boss Demo use the service; retrieval diff and expiry/authorization/rollback tests pass | Prompt injection and automatic lesson capture remain deferred; enabled memory is bounded read-only investigation context and cannot change verdict or action policy |
 
 ### 3.3 P1 - Alpha journey and reproducibility blockers
 
@@ -164,7 +165,6 @@ All frozen P0 gaps are closed. The implementation evidence is retained in Sectio
 |---|---|---|---|---|---|
 | `AC-23` SOC frontend regression | Frontend SOC components/API client | Browser-only rehearsal will not reliably catch state/action/render regressions | AUD-01 Web evidence; no SOC-named frontend tests | Focused tests cover queue/context render, close/correct, approval integrity flow, memory review, disposition outcome/sample and normalization actions; `pnpm test`/`pnpm check` pass | `BG-02` |
 | `AC-24` Alpha E2E acceptance package | SOC QA/demo orchestration | Separate proofs do not show one versioned release satisfies the whole Alpha journey | Delivery roadmap BG-02; AUD-01 user-visible artifacts | A single reproducible command/report runs representative APT/EDR/HIDS through CLI and Kafka, DB, Review UI/API, feedback, audit and replay; report records mock/data-gated disclosures and failure semantics | `BG-02` |
-| `AC-39` Governed memory activation | Memory service + policy + API/CLI/Web | Confirmed memory cannot become legitimately retrievable outside a demo repository write | `CONS-17`; memory service/router/demo | Versioned enable/disable command requires role, reason, validity/review metadata and audit; all surfaces use service; retrieval diff/replay proves only enabled confirmed records enter bounded context | `BG-02` |
 | `AC-49` Docs/command/register reconciliation | SOC docs owners | Reviewers and operators can follow invalid commands or mistake service-only/old phase statements for current capability | `CONS-07,09,10,19..24` | Update solution, lifecycle, engineering contracts, mock register, AGENTS orientation and command examples in the same code slices; every current claim links to executable evidence; no parallel roadmap is created | `BG-03` |
 
 ## 4. Data-Gated Register / 外部条件台账
@@ -205,7 +205,7 @@ Stage 3 may implement only these packages unless the user explicitly changes the
 | `BG-P1-01` Versioned ingestion and feedback | `AC-04`, `AC-08` | **Done 2026-07-18**: strict bounded Kafka alert envelope plus authenticated canonical external-disposition Gateway ingress | 532 SOC + 16 architecture/migration tests; Redpanda processed/commit, DLQ/commit and post-commit idle; application duplicate/conflict/RBAC/failure tests |
 | `BG-P1-02` API contract stabilization | `AC-11` | **Done 2026-07-20**: compatible versioned transport headers, Problem Details/request metadata, OpenAPI snapshot and frontend contract | Gateway transport/router tests, real sync-route HTTP smoke and full frontend regression |
 | `BG-P1-03` Runtime recovery and decision provenance | `AC-13`, `AC-17` | **Done 2026-07-20**: durable pre-call journal/recovery plus policy-versioned human/external confirmation provenance | process-loss/timeout/bundle-rollback recovery and correction/external/summary/audit/API tests |
-| `BG-P1-04` Governed memory activation | `AC-39` | Role/reason/audit/version controlled retrieval enable/disable service and surfaces | retrieval replay diff and authorization tests |
+| `BG-P1-04` Governed memory activation | `AC-39` | **Done 2026-07-20**: role/reason/version/validity/review-controlled retrieval enable/disable through one audited service across CLI/API/Web/demo | CAS/rollback, exact retry/conflict, authorization, expiry/review-overdue and before/after retrieval diff tests |
 | `BG-P1-05` Alpha E2E and docs reconciliation | `AC-23`, `AC-24`, `AC-49` | Frontend regression, one release-level APT/EDR/HIDS acceptance report, synchronized authoritative docs | full backend/architecture/frontend checks and versioned acceptance artifact |
 
 Execution order is fixed:
@@ -234,4 +234,4 @@ Each package remains a reviewable slice and must not absorb P2/Data-gated work.
 
 **AA Gate: Passed on 2026-07-18.**
 
-The next implementation slice is `BG-P1-04 Governed memory activation`.
+The next implementation slice is `BG-P1-05 Alpha E2E and docs reconciliation`.

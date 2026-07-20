@@ -187,6 +187,14 @@ class SocMemoryRecordStatus(StrEnum):
     EXPIRED = "expired"
 
 
+class SocMemoryRetrievalActivationAction(StrEnum):
+    ENABLE = "enable"
+    DISABLE = "disable"
+
+
+SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION = "soc.memory_retrieval_activation_policy.v1"
+
+
 class SocMemoryCandidateType(StrEnum):
     PROCEDURE = "procedure"
     DETECTION_LESSON = "detection_lesson"
@@ -1229,7 +1237,7 @@ class SocMemoryCandidate(BaseModel):
 
 
 class SocMemoryRecord(BaseModel):
-    """Confirmed SOC memory record; retrieval remains disabled until policy is implemented."""
+    """Confirmed SOC memory record with an explicitly governed retrieval gate."""
 
     schema_version: str = "soc.memory_record.v1"
     memory_id: str = Field(default_factory=lambda: f"MEM-{uuid4().hex[:12].upper()}")
@@ -1251,6 +1259,12 @@ class SocMemoryRecord(BaseModel):
     content_hash: str = Field(min_length=1)
     facets_hash: str = Field(min_length=1)
     retrieval_enabled: bool = False
+    retrieval_policy_version: str | None = None
+    retrieval_valid_until: datetime | None = None
+    retrieval_review_due_at: datetime | None = None
+    retrieval_updated_by: ActorContext | None = None
+    retrieval_updated_at: datetime | None = None
+    retrieval_reason: str | None = None
     created_by: ActorContext
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -1259,6 +1273,46 @@ class SocMemoryRecord(BaseModel):
     deprecation_reason: str | None = None
     labels: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SocMemoryRetrievalActivationCommand(BaseModel):
+    """Version-controlled command for enabling or disabling memory retrieval."""
+
+    schema_version: Literal["soc.memory_retrieval_activation_command.v1"] = "soc.memory_retrieval_activation_command.v1"
+    memory_id: str = Field(min_length=1, max_length=64)
+    action: SocMemoryRetrievalActivationAction
+    expected_record_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=2000)
+    activation_valid_until: datetime | None = None
+    review_after_days: int | None = Field(default=None, ge=1, le=365)
+    policy_version: Literal["soc.memory_retrieval_activation_policy.v1"] = SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_enable_governance_window(self) -> SocMemoryRetrievalActivationCommand:
+        if self.action is SocMemoryRetrievalActivationAction.ENABLE:
+            if self.activation_valid_until is None:
+                raise ValueError("activation_valid_until is required when enabling retrieval")
+            if self.activation_valid_until.utcoffset() is None:
+                raise ValueError("activation_valid_until must include a timezone")
+            if self.review_after_days is None:
+                raise ValueError("review_after_days is required when enabling retrieval")
+        elif self.activation_valid_until is not None or self.review_after_days is not None:
+            raise ValueError("disable does not accept activation validity or review scheduling fields")
+        return self
+
+
+class SocMemoryRetrievalActivationResult(BaseModel):
+    """Auditable result of one retrieval activation transition."""
+
+    schema_version: str = "soc.memory_retrieval_activation_result.v1"
+    record: SocMemoryRecord
+    action: SocMemoryRetrievalActivationAction
+    previous_record_version: int = Field(ge=1)
+    previous_retrieval_enabled: bool
+    audit_id: str | None = None
+    policy_version: str = SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION
+    changed_at: datetime = Field(default_factory=utc_now)
 
 
 class SocMemoryQuery(BaseModel):
@@ -1326,6 +1380,19 @@ class SocMemoryMatch(BaseModel):
     retrieval_enabled: Literal[True] = True
 
 
+class SocMemoryRetrievalDiff(BaseModel):
+    """Timestamp-independent replay diff for two deterministic retrieval results."""
+
+    schema_version: str = "soc.memory_retrieval_diff.v1"
+    baseline_policy_version: str
+    current_policy_version: str
+    added_memory_ids: list[str] = Field(default_factory=list)
+    removed_memory_ids: list[str] = Field(default_factory=list)
+    changed_memory_ids: list[str] = Field(default_factory=list)
+    unchanged_memory_ids: list[str] = Field(default_factory=list)
+    changed: bool = False
+
+
 class SocMemoryRetrievalResult(BaseModel):
     """Retrieval result that is safe to inspect before prompt injection is enabled."""
 
@@ -1335,12 +1402,16 @@ class SocMemoryRetrievalResult(BaseModel):
     matches: list[SocMemoryMatch] = Field(default_factory=list)
     total_candidate_count: int = Field(default=0, ge=0)
     skipped_retrieval_disabled: int = Field(default=0, ge=0)
+    skipped_ungoverned_activation: int = Field(default=0, ge=0)
+    skipped_activation_expired: int = Field(default=0, ge=0)
+    skipped_review_overdue: int = Field(default=0, ge=0)
     skipped_status: int = Field(default=0, ge=0)
     skipped_expired: int = Field(default=0, ge=0)
     skipped_below_min_score: int = Field(default=0, ge=0)
     returned_count: int = Field(default=0, ge=0)
     total_token_estimate: int = Field(default=0, ge=0)
     max_tokens: int = Field(default=1200, ge=100)
+    replay_diff: SocMemoryRetrievalDiff | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 

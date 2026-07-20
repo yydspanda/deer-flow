@@ -97,6 +97,12 @@ SOC run/summary types expose additive request-journal and correction-confidence 
 server explanation when surfaced; never label it as a calibrated probability. A running/interrupted
 journal is recovery state, not a completed analysis result.
 
+The ReviewQueue memory panel may review candidates and govern retrieval for linked confirmed records.
+It must call `updateSocMemoryRetrievalActivation()` / the Gateway retrieval endpoint with the current
+record version, reason, idempotency key and enable validity/review settings. Do not optimistically flip
+`retrieval_enabled` or infer governance eligibility in the browser; refresh server records after the
+mutation. Display policy/review metadata and the retrieval skipped counters returned by the API.
+
 ### Key Patterns
 
 - **Server Components by default**, `"use client"` only for interactive components
