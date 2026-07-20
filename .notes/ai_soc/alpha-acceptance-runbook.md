@@ -141,3 +141,7 @@ production infrastructure evidence, production calibration, or real response exe
 
 The 2026-07-20 baseline completed with aggregate status `passed`. Re-run the command for each release
 candidate; do not reuse an old report as evidence for changed code.
+
+For the Stage 3 exit review, package this report with the full backend and architecture/migration
+gates by running `./scripts/soc-alpha-readiness.sh all`. Acceptance pass alone does not imply owner
+approval, stage transition or production readiness; see `alpha-readiness-package.md`.

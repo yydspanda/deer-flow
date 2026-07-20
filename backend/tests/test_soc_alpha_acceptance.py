@@ -155,6 +155,8 @@ def test_root_alpha_acceptance_script_has_valid_bash_and_all_component_commands(
     assert "pingan_legacy_apt.json" in source
     assert "pingan_legacy_edr.json" in source
     assert "pingan_legacy_hids.json" in source
+    frontend_runner = source.split("run_frontend() {", 1)[1].split("\n}\n\nfinalize()", 1)[0]
+    assert frontend_runner.index("pnpm check") < frontend_runner.rindex("stop_frontend_server")
 
 
 def _write_json(path: Path, payload: dict) -> None:

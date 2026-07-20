@@ -208,6 +208,7 @@ Stage 3 may implement only these packages unless the user explicitly changes the
 | `BG-P1-03` Runtime recovery and decision provenance | `AC-13`, `AC-17` | **Done 2026-07-20**: durable pre-call journal/recovery plus policy-versioned human/external confirmation provenance | process-loss/timeout/bundle-rollback recovery and correction/external/summary/audit/API tests |
 | `BG-P1-04` Governed memory activation | `AC-39` | **Done 2026-07-20**: role/reason/version/validity/review-controlled retrieval enable/disable through one audited service across CLI/API/Web/demo | CAS/rollback, exact retry/conflict, authorization, expiry/review-overdue and before/after retrieval diff tests |
 | `BG-P1-05` Alpha E2E and docs reconciliation | `AC-23`, `AC-24`, `AC-49` | **Done 2026-07-20**: focused frontend regression, one release-level APT/EDR/HIDS acceptance report and synchronized authoritative docs | `./scripts/soc-alpha-acceptance.sh all` passed; full backend/architecture/frontend gates and versioned hashed artifact are release evidence |
+| `BG-03` Alpha readiness package | Closed 50-row matrix + Stage 3 evidence | **Technical pass 2026-07-20; owner review pending**: versioned readiness report, deployment/rollback review packet and PI handoff references | `./scripts/soc-alpha-readiness.sh all` passed; report remains `pending_owner_review`, `stage_transition_allowed=false`, `production_ready=false` |
 
 Execution order is fixed:
 
@@ -235,5 +236,6 @@ Each package remains a reviewable slice and must not absorb P2/Data-gated work.
 
 **AA Gate: Passed on 2026-07-18.**
 
-The next implementation slice is `BG-03 Alpha readiness package`. It consumes this closed matrix and
-the versioned Alpha report; it must not add a new blocker list.
+`BG-03 Alpha readiness package` now has a passing technical report. The next action is explicit owner
+review/sign-off; it consumes this closed matrix and must not add a new blocker list or start Stage 4
+without that decision.

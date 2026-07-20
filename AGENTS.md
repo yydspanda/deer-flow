@@ -279,6 +279,11 @@ Current SOC direction:
   A pass is local/test Alpha evidence only: deterministic analyzer, SQLite, mock investigation
   providers, local Redpanda and mocked browser transport remain explicitly disclosed. See
   `.notes/ai_soc/alpha-acceptance-runbook.md`.
+- Package the Stage 3 exit evidence with `./scripts/soc-alpha-readiness.sh all`. It reuses the
+  acceptance report, runs the full SOC backend and architecture/migration gates, and writes the
+  gitignored `soc.alpha_readiness_report.v1`. A technical pass keeps
+  `release_decision=pending_owner_review`, `stage_transition_allowed=false`, and
+  `production_ready=false`; see `.notes/ai_soc/alpha-readiness-package.md`.
 
 SOC delivery plan (the only execution order is `.notes/ai_soc/delivery-roadmap.md`):
 
@@ -286,7 +291,7 @@ SOC delivery plan (the only execution order is `.notes/ai_soc/delivery-roadmap.m
 | --- | --- |
 | `BD` Boss Demo v0.1 | Done: browser-first repeatable golden path |
 | `AA` SOC Alpha Completeness Audit | Done: unique 50-row matrix and frozen blocker set |
-| `BG` Close Blocking Gaps | Current: `BG-P0-01..BG-P1-05` done; `BG-03` readiness package in progress |
+| `BG` Close Blocking Gaps | Current: `BG-P0-01..BG-P1-05` done; `BG-03` technical pass, owner review pending |
 | `PI` Real Data & Production Integration | Data/credential-gated: real providers, infrastructure, labels, SLO and governed rollout |
 
 ### SOC Agent Development Workflow
@@ -328,6 +333,7 @@ Progress is not tracked in chat history. The durable task ledger is
 | `.notes/ai_soc/soc-agent-solution.md` | Current SOC Agent design |
 | `.notes/ai_soc/progress.md` | Durable SOC Agent progress ledger |
 | `.notes/ai_soc/alpha-acceptance-runbook.md` | One-command local Alpha acceptance and evidence boundaries |
+| `.notes/ai_soc/alpha-readiness-package.md` | BG-03 technical gate, deployment/rollback and Stage 4 handoff review |
 | `.notes/ai_soc/audits/alpha-completeness-matrix.md` | Unique capability status and closed/open blocker register |
 | `.notes/reference-index/soc-agent-engineering-contracts.md` | Engineering contracts: style, API, events, Kafka, permissions, tests |
 | `.notes/reference/cross-project-workflow.md` | Cross-project reference workflow |

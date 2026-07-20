@@ -12,6 +12,7 @@
 | 查看唯一完整性矩阵、P0/P1 阻塞项和冻结实施顺序 | `audits/alpha-completeness-matrix.md` | `delivery-roadmap.md` 的 Stage 3 |
 | 准备老板演示、查看命令和汇报话术 | `boss-demo-v0.1-runbook.md` | `delivery-roadmap.md` 的 Stage 1 Gate |
 | 重跑 APT/EDR/HIDS Alpha 一键验收并审阅版本化报告 | `alpha-acceptance-runbook.md` | `audits/alpha-completeness-matrix.md` 的 `AC-23/24/49` |
+| 准备 Alpha Gate 评审、部署/回滚和 Stage 4 交接 | `alpha-readiness-package.md` | 本地 `backend/.deer-flow/soc-alpha-readiness/alpha-readiness-report.json` |
 | 重跑并逐步审阅 Runtime/LLM/correlation/governance 产物 | `runtime-validation-runbook.md` | 本地 `backend/.deer-flow/soc-runtime-validation/RUN-INDEX.md` |
 | 判断产品方向和系统设计 | `soc-agent-solution.md` | `delivery-roadmap.md` 的阶段边界 |
 | 向老板/管理层解释为什么 Runtime 控制流程、LLM 只做受控推理 | `boss-demo-v0.1-runbook.md` | `soc-agent-solution.md` 的核心原则 |
@@ -35,6 +36,7 @@ ai_soc/
 ├── delivery-roadmap.md               # 唯一阶段顺序、Gate 和防跑偏规则
 ├── boss-demo-v0.1-runbook.md          # Stage 1 演示命令、话术、边界与验收记录
 ├── alpha-acceptance-runbook.md        # Stage 3 Alpha 单命令验收、证据包和结论边界
+├── alpha-readiness-package.md         # BG-03 Alpha Gate 评审、部署/回滚与 Stage 4 handoff
 ├── runtime-validation-runbook.md      # Step 01-12 重跑命令、产物与最新审阅结论
 ├── soc-agent-solution.md              # 权威产品/系统方案
 ├── progress.md                        # 长期进度台账和当前待办
@@ -67,6 +69,7 @@ ai_soc/
 | `delivery-roadmap.md` | 唯一阶段性交付路线；决定当前阶段、后续顺序和 Gate | 阶段范围、顺序、退出条件或 Parking Lot 归属变化时更新 |
 | `boss-demo-v0.1-runbook.md` | Stage 1 可复跑演示手册和汇报证据 | 每完成 BD task、命令/入口/结果变化或彩排后更新 |
 | `alpha-acceptance-runbook.md` | Stage 3 release-level Alpha 验收命令、证据结构、失败语义和 mock/data-gated 声明 | 验收命令、报告 schema、覆盖面或结论边界变化时更新 |
+| `alpha-readiness-package.md` | Stage 3 退出评审包；汇总技术门禁、部署/回滚和 Stage 4 外部输入，不拥有能力状态 | Alpha Gate 证据、部署/回滚边界、签字要求或 Stage 4 handoff 变化时更新 |
 | `runtime-validation-runbook.md` | Runtime/eval/governance 本地逐步验证命令、产物契约和审阅结果 | 验证脚本、步骤分类、样本结果或门禁语义变化时更新 |
 | `soc-agent-solution.md` | 当前权威产品/系统方案；决定做什么、为什么做 | 产品方向、架构、服务边界或入口取舍变化时更新 |
 | `progress.md` | 开发进度台账；聊天记录不算进度 | 每个可验证切片完成后更新 |

@@ -23,12 +23,12 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前交付阶段 | `BG` Stage 3 - Close Blocking Gaps（`BD`、`AA` Gate 已于 2026-07-18 通过） |
-| 当前目标 | `BG-03 Alpha readiness package`：收口已通过的版本化验收报告、全量回归、已知限制、部署/回滚说明和 Stage 4 外部输入 |
+| 当前交付阶段 | `BG` Stage 3 - Close Blocking Gaps（`BG-03` 技术门禁通过，负责人评审待完成） |
+| 当前目标 | `BG-03 Alpha readiness package`：产品/SOC/安全/平台负责人审阅已通过的技术报告、边界、部署/回滚和 Stage 4 外部输入 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `BG-03`：基于 `soc.alpha_acceptance_report.v1` 和已关闭的 50 项完整性矩阵整理 Alpha readiness package；不新增平行 blocker list，不提前做 Stage 4 真实接入。 |
+| 当前下一刀 | `BG-03 owner review`：审阅 `alpha-readiness-package.md` 与本地 `soc.alpha_readiness_report.v1`，接受或退回范围并为 `PI-01..05` 指定 owner；签字前不启动 Stage 4。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -39,7 +39,7 @@
 |---|---|---|---|---|
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
-| `BG` | Close Blocking Gaps | **Current / BG-03 In Progress** | `BG-P0-01..02`、`BG-P1-01..05` 已完成；当前封装 Alpha readiness package | readiness package 通过，Stage 4 输入明确 |
+| `BG` | Close Blocking Gaps | **Current / BG-03 Owner Review Pending** | P0/P1 与 readiness technical gate 已通过；当前等待负责人接受边界并分配 PI owner | owner review/sign-off 通过后结束 Stage 3 |
 | `PI` | Real Data & Production Integration | Data/credential-gated | 真实 provider、基础设施、标签、SLO 和 governed rollout | Pilot readiness review 通过 |
 
 ## 能力与历史切片台账
@@ -201,6 +201,35 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-20 — BG-03 Alpha readiness technical candidate passed
+
+- 技术退出包：
+  - 新增 `scripts/soc-alpha-readiness.sh all|acceptance|backend|architecture|finalize` 和
+    `backend/scripts/soc_alpha_readiness.py`，复用既有 Alpha acceptance，不复制 Runtime/Kafka/Web
+    业务验收逻辑；
+  - 新增 `soc.alpha_test_gate.v1`，同时校验 pytest exit code、非零 passed count 和 failed/error count；
+  - `soc.alpha_readiness_report.v1` 绑定 source commit/branch、acceptance report hash、backend 与
+    architecture/migration gate、完整性矩阵 hash/counts、Data-gated/Deferred IDs 和 `PI-01..05`；
+  - finalizer 对缺失/坏报告、测试失败、矩阵 `Gap != 0` 或 roadmap 解析失败全部 fail closed；正式归档
+    还要求从 reviewed commit 的 clean checkout 重跑。
+- 评审与运维边界：
+  - 新增 `alpha-readiness-package.md`，明确 Alpha 可承诺/不可承诺范围、共享环境 PostgreSQL/Kafka/auth/
+    model/provider/action/data 前置、部署顺序、stop-first 回滚和 Stage 4 外部输入；
+  - 技术 pass 固定输出 `release_decision=pending_owner_review`、`stage_transition_allowed=false`、
+    `production_ready=false`，脚本不能替产品/SOC/安全/平台负责人签字；
+  - completeness matrix 仍是能力状态唯一来源，readiness report 只解析并 hash 引用，不创建平行 blocker
+    list。
+- 验证：
+  - `./scripts/soc-alpha-readiness.sh all`：nested Alpha acceptance core/Kafka/frontend passed；
+  - full SOC backend：558 passed；architecture + migration environment：16 passed；
+  - authoritative matrix：Complete 34 / Gap 0 / Mock 1 / Data-gated 6 / Deferred 9 / Total 50；
+  - readiness final report：`status=passed`、`alpha_candidate_ready=true`、failure reasons empty；
+  - readiness focused tests：7 passed；Ruff/shell syntax/diff check 通过。
+- 下一步：
+  - `BG-03 owner review`：审阅本地
+    `backend/.deer-flow/soc-alpha-readiness/alpha-readiness-report.json` 与评审包，接受边界、指定
+    `PI-01..05` owner 并记录 approve/changes-requested；未签字前 Stage 4 不切换为 Current。
 
 ### 2026-07-20 — BG-P1-05 Alpha E2E and docs reconciliation completed
 

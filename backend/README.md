@@ -195,6 +195,19 @@ a deterministic analyzer, local SQLite, mock investigation providers, and mocked
 a passing report proves the documented local/test Alpha boundary, not production readiness. See
 `.notes/ai_soc/alpha-acceptance-runbook.md` for prerequisites and failure semantics.
 
+Package that acceptance report with the full SOC backend and architecture/migration
+release gates:
+
+```bash
+./scripts/soc-alpha-readiness.sh all
+```
+
+The resulting
+`backend/.deer-flow/soc-alpha-readiness/alpha-readiness-report.json` records the source commit,
+artifact hashes, parsed test counts, completeness-matrix state and Stage 4 handoff references. A
+technical pass remains `pending_owner_review` and `production_ready=false`; see
+`.notes/ai_soc/alpha-readiness-package.md` for deployment, rollback and sign-off requirements.
+
 Open the SOC review workbench:
 
 ```bash

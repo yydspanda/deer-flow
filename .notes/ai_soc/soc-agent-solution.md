@@ -1308,7 +1308,14 @@ Delivery stages / 交付阶段：
 The authoritative work packages, gates, Parking Lot and anti-drift rules live in
 [`delivery-roadmap.md`](delivery-roadmap.md). The current implementation pointer lives only in
 [`progress.md`](progress.md). As of 2026-07-20, `BG-P0-01..BG-P1-05` are complete and the only
-current task is `BG-03 Alpha readiness package`; Stage 4 remains data/credential-gated.
+current task is `BG-03 Alpha readiness package`. Its technical report has passed and owner review is
+pending; Stage 4 remains data/credential-gated and is not current.
+
+`BG-03` uses `./scripts/soc-alpha-readiness.sh all` to bind the existing versioned acceptance report,
+full SOC regression, architecture/migration gates, the authoritative matrix and Stage 4 roadmap into
+`soc.alpha_readiness_report.v1`. A technical pass is only an owner-review candidate; it cannot set
+human approval, permit a stage transition or claim production readiness. Deployment, stop/rollback
+and sign-off requirements are in [`alpha-readiness-package.md`](alpha-readiness-package.md).
 
 “Alpha complete” means the local/test product journey is repeatable and every mock or external-data
 dependency is explicit. It does not mean `production-ready` while real CMDB/EDR/Zeus credentials,

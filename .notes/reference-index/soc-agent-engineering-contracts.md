@@ -1943,6 +1943,25 @@ tool permission denial rate
 - 验收输出位于 `backend/.deer-flow/soc-alpha-acceptance/`，可能含告警衍生数据，必须 gitignored，且
   每个 release candidate 重新生成。
 
+### Stage-exit Alpha readiness contract
+
+- Stage 3 技术退出入口是仓库根目录 `./scripts/soc-alpha-readiness.sh all`。它必须复用上面的 acceptance
+  report，不得复制一套 APT/EDR/HIDS 业务验收逻辑。
+- 聚合 schema 固定为 `soc.alpha_readiness_report.v1`，必须记录 source commit/branch、acceptance report
+  hash/component status、完整 SOC pytest gate、architecture/migration gate、完整性矩阵 hash/counts 和
+  Stage 4 roadmap hash/work-package IDs。
+- pytest gate 不能只相信 exit code；还必须从日志解析大于零的 passed count，并拒绝 failed/error。
+- readiness finalizer 必须从权威 Markdown 读取 completeness counts、Data-gated/Deferred capability IDs 和
+  `PI-01..05`，只保存引用/hash，不建立第二份能力状态台账。
+- technical pass 只允许设置 `alpha_candidate_ready=true`；必须始终保持
+  `release_decision=pending_owner_review`、`stage_transition_allowed=false`、
+  `production_ready=false`。人类审批不能由本地脚本推断。
+- 报告可以记录 dirty worktree 供开发评审，但正式 release archive 必须在 reviewed commit 的 clean
+  checkout 重跑；输出位于 `backend/.deer-flow/soc-alpha-readiness/`，必须 gitignored。
+- 部署、停止/回滚、签字角色和 Stage 4 外部输入只由
+  `.notes/ai_soc/alpha-readiness-package.md` 解释；真实 provider/基础设施/标签/响应动作不能用更多 mock
+  关闭。
+
 ## 二十二、交付阶段与契约成熟度
 
 执行顺序只由 `.notes/ai_soc/delivery-roadmap.md` 决定：`BD -> AA -> BG -> PI`。旧的技术

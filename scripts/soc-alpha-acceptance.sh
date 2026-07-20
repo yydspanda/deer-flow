@@ -246,16 +246,17 @@ run_frontend() {
         pnpm exec playwright test tests/e2e/soc-review.spec.ts
     ) >"$OUTPUT_DIR/frontend/browser.log" 2>&1
     browser_status=$?
-    stop_frontend_server
-    trap - EXIT INT TERM
   fi
 
+  # Next.js writes dev type artifacts incrementally; check them before stopping the writer.
   printf '[alpha/frontend] lint + TypeScript contract check\n'
   (
     cd "$FRONTEND_DIR"
     pnpm check
   ) >"$OUTPUT_DIR/frontend/check.log" 2>&1
   local check_status=$?
+  stop_frontend_server
+  trap - EXIT INT TERM
 
   write_frontend_status "$unit_status" "$browser_status" "$check_status"
   if (( unit_status != 0 || browser_status != 0 || check_status != 0 )); then

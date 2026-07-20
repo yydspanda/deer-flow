@@ -290,6 +290,13 @@ deterministic analyzer, SQLite, mock investigation provider, local Redpanda and 
 transport boundaries; it is not production equivalence. See
 `.notes/ai_soc/alpha-acceptance-runbook.md`.
 
+Stage 3 exit packaging uses root `scripts/soc-alpha-readiness.sh` and backend
+`scripts/soc_alpha_readiness.py`. It consumes the existing acceptance report, parses full SOC and
+architecture/migration pytest logs, verifies the authoritative completeness matrix and roadmap, and
+writes `soc.alpha_readiness_report.v1`. The report is technical evidence only: owner review and
+production readiness remain false until separately approved. Generated evidence lives under
+`backend/.deer-flow/soc-alpha-readiness/` and remains gitignored.
+
 Governed operational context is separate from investigation evidence, memory, action approval, and
 detection policy. Public contracts live in `soc_agent.contracts.governed_context`; lifecycle logic
 lives in `soc_agent.core.governed_context.SocGovernedContextService`. Facts use a stable `fact_id`
