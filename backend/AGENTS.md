@@ -280,6 +280,16 @@ validation must distinguish model evidence quality from safety behavior: rejecte
 a quality finding, while the safety gate passes only when they force degraded evidence, human review,
 and `automation_allowed=false`.
 
+Release-level local Alpha acceptance is orchestrated from the repository root by
+`scripts/soc-alpha-acceptance.sh`. `all` resets an isolated output directory, runs representative
+APT/EDR/HIDS through CLI/SQL/registered Gateway handlers/services, real local Kafka
+consume/commit/DLQ, focused Review Web browser regression, feedback/audit/replay, and seals
+`soc.alpha_acceptance_report.v1`. Generated evidence lives under
+`backend/.deer-flow/soc-alpha-acceptance/` and must remain gitignored. The report must disclose its
+deterministic analyzer, SQLite, mock investigation provider, local Redpanda and mocked browser
+transport boundaries; it is not production equivalence. See
+`.notes/ai_soc/alpha-acceptance-runbook.md`.
+
 Governed operational context is separate from investigation evidence, memory, action approval, and
 detection policy. Public contracts live in `soc_agent.contracts.governed_context`; lifecycle logic
 lives in `soc_agent.core.governed_context.SocGovernedContextService`. Facts use a stable `fact_id`

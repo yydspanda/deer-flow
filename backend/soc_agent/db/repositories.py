@@ -120,8 +120,8 @@ class _BorrowedSessionContext(AbstractContextManager[_MutationSessionProxy]):
 class SqlAlchemyAlertRepository:
     """SQLAlchemy-backed implementation of ``AlertRepository``.
 
-    The repository accepts a sync ``Session`` factory so Phase 1 headless CLI and
-    service tests can use the same persistence boundary. Async Gateway adapters
+    The repository accepts a sync ``Session`` factory so headless CLI and service
+    tests can use the same persistence boundary. Async Gateway adapters
     should call it off the event loop or get a dedicated async adapter later.
     """
 

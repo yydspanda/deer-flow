@@ -90,7 +90,7 @@ def analyze_alert(
     decision_policy: DecisionPolicy | None = None,
     before_provider: AnalysisBeforeProviderHook | None = None,
 ) -> AnalysisRun:
-    """Analyze one alert through the fixed Phase 1 pipeline."""
+    """Analyze one alert through the fixed nine-step pipeline."""
 
     input_payload = _jsonable(payload)
     analysis_node = analyzer or StubLLMAnalyzer()

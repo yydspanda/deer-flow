@@ -33,7 +33,7 @@ SOC Agent 不是“LLM 自主系统”，而是“生产级 Runtime + 受控 LLM
 
 ### 推荐门禁
 
-Phase 1 就建立：
+后端基础门禁：
 
 ```bash
 uv run ruff format --check .
@@ -41,7 +41,7 @@ uv run ruff check .
 uv run pytest
 ```
 
-Phase 2+ 增加：
+架构/契约门禁：
 
 ```bash
 uv run pyright
@@ -49,41 +49,54 @@ uv run pytest tests/contracts
 uv run pytest tests/architecture
 ```
 
+Release-level local Alpha 还必须从仓库根目录运行：
+
+```bash
+./scripts/soc-alpha-acceptance.sh all
+```
+
+该命令的 fixture/mock/local/data-gated 边界以
+`.notes/ai_soc/alpha-acceptance-runbook.md` 为准，不能把聚合 `passed` 解释为 production-ready。
+
 架构测试必须覆盖：
 
-- `api/cli/tui/channels/ingestion` 可以 import `core`。
-- `core` 不 import `api/cli/tui/channels/ingestion`。
+- `cli.py`、`tui/`、`daemon/`、Lead Agent bridge 和 app-layer Gateway routers 可以 import `core`。
+- `core` 不 import app-layer Gateway router、Typer/TUI 或 concrete Kafka consumer。
 - `pipeline` 不直接 import FastAPI/Kafka/Typer。
 - `memory` 不能绕过 `soc_facts` 状态机直接注入 prompt。
 - `tools` 的执行必须经过 `policy`。
 
 ## 三、项目分层
 
-建议目录：
+当前目录（新增模块应延续这一布局，不再按旧草案新建平行 `api/cli/ingestion/tools/queue` 业务层）：
 
 ```text
 soc_agent/
 ├── contracts/          # 所有跨边界 schema：API/Kafka/Event/LLM/Tool
 ├── normalizers/        # 外部厂商/flat payload -> canonical contracts
-├── domain/             # 内部稳定领域对象；不暴露外部协议细节
-├── protocols.py        # Phase 1 可替换依赖协议；复杂后再拆 protocols/
-├── core/               # Runtime、状态机、service、validator、router
-├── pipeline/           # 7 步流水线节点
-├── policy/             # 权限等级、动作审批、risk gate
+├── pipeline/           # 九步固定 Runtime 的纯处理节点
+├── core/               # Runtime、稳定 service、UoW、validator 和业务编排
+├── domain/             # correlation、domain triage 等内部稳定领域逻辑
 ├── actions/            # action proposal、adapter registry、MCP/HTTP/vendor action adapters
-├── tools/              # 工具注册和执行适配器
-├── memory/             # soc_facts / lessons / prompt 注入
+├── memory/             # candidate、confirmed record、bounded retrieval
+├── authorization/      # authorized-activity query/matcher
+├── governed_context/   # typed operational fact support
+├── disposition/        # shadow proposal/evaluation support
+├── external_disposition/ # external status/reason mapping support
+├── daemon/             # Kafka mapper/worker/consumer/long-running runner
+├── llm/ + prompts/     # DeerFlow model port、bounded prompt/parser
 ├── db/                 # repository + migrations
 ├── demo/               # 可重复产品演示编排；只调用 core/repository/actions，不写业务决策
 ├── eval/               # 离线评估与 fixture runner；只做回归验证，不作为生产路径
-├── queue/              # Phase 1 memory queue；Phase 4 PG queue
-├── api/                # Gateway/FastAPI 入口，只做 transport
-├── cli/                # Headless CLI 入口，只做 transport
 ├── tui/                # DeerFlow-style terminal workbench，只做 presentation/session
-├── channels/           # IM channel adapter，只做 transport/session
-├── ingestion/          # Kafka/Redpanda consumer，只做后台 ingestion adapter
-└── observability/      # trace、metrics、audit writer
+├── cli.py              # Headless transport；只调用 public service
+├── lead_agent*.py      # DeerFlow profile/chat/context bridge
+└── protocols.py        # 稳定 repository/provider/service ports
 ```
+
+Gateway HTTP routers 位于 `backend/app/gateway/routers/soc_*.py`，属于 DeerFlow app 层；它们不应
+复制到 `soc_agent/api/`。当前没有独立 SOC channel transport、通用 SSE event store 或 PostgreSQL
+task queue；这些能力若立项，仍须通过 core service/protocol 边界接入。
 
 依赖方向：
 
@@ -261,7 +274,7 @@ Decision audit 约束：
 - `DecisionAuditRepository.save_audit_record()` 必须在 service 边界调用，入口层不能绕过 service 自己写审计。
 - `soc_decision_audit_log` 必须至少记录 `run_id`、`alert_id`、`actor`、`action`、`input_hash`、previous/final verdict、confidence 和可扩展 payload。
 - replay/correction 必须生成新的审计记录，不覆盖历史审计记录。
-- 审计写入失败在 Phase 1 应暴露为执行失败或明确错误，不允许假装成功。
+- 审计写入失败必须暴露为执行失败或明确错误，不允许假装成功。
 - analyzer decision audit payload 必须记录 `decision_policy_version`、`confidence_source`、
   `confidence_is_calibrated`、`calibrated_probability`、`calibration_profile_version`、
   `evidence_state` 和完整 `review_reasons`；不能只保存一个 raw confidence。
@@ -325,13 +338,13 @@ Alert summary 约束：
 
 Correlation service 约束：
 
-- `SocCorrelationService` 是 Phase 2 相似告警、历史关联和可复用证据的只读业务入口；CLI/API/TUI/Web/Lead Agent 都不能绕过 service 直接拼 correlation result。
+- `SocCorrelationService` 是相似告警、历史关联和可复用证据的只读业务入口；CLI/API/TUI/Web/Lead Agent 都不能绕过 service 直接拼 correlation result。
 - `CorrelationQuery` / `CorrelationResult` / `CorrelationMatch` 是 source handler、security scenario recognizer 和 unified investigation report 的稳定输入；不得让每个 EDR/APT/HIDS/WAF/F5 handler 或反弹 shell/webshell/横向移动识别器自己发明相似告警结构。
 - MVP correlation 只能依赖 `AlertSummaryRepository` 和 `InvestigationEvidenceRepository`，不调用 LLM、不调用 MCP、不执行 action、不修改 run/summary/review/memory。
 - correlation match 必须携带结构化 `matched_reasons`，当前稳定前缀为 `detection_key:`、
   `rule_code:`、`source_type:`、`category:`、`entity_key:`；不能只给自然语言解释。
 - correlation 结果可以进入 `InvestigationContext`、Lead Agent bounded artifact、Web/TUI 展示和后续 domain triage request，但不能自动改 `AnalysisRun.decision`、不能自动关闭 review queue、不能直接生成 confirmed memory。
-- Phase 2 bridge 必须把完整 typed `CorrelationResult` 放入 `UnifiedInvestigationReport.correlation_result`
+- Correlation bridge 必须把完整 typed `CorrelationResult` 放入 `UnifiedInvestigationReport.correlation_result`
   和 `SocDomainTriageRequest.correlation_result`；`similar_alert_count` / `correlation_match_count` 只允许作为
   展示 projection，不能替代结构化结果或伪造历史证据。
 - `SocMainOrchestratorService` 不直接读写 repository。`SocAnalysisService` 与
@@ -675,7 +688,9 @@ SOC Agent chat stream 约束：
 - `values.data` 可以携带 `title`、`messages`、`artifacts`、`thread_id`；`artifacts` 仍只表示用户可打开/下载的生成文件路径。
 - SOC 结构化上下文通过 `custom` event 暴露，例如 `{"kind": "soc.review_context", ...}`；不要塞进 `ThreadState.artifacts`。
 - `SocAgentChatService` 可以调用 `SocReviewService`、`SocAnalysisService`、`SocMemoryService` 等 core services，但不能直接读写 repository、直接改 verdict、直接写 memory。
-- Phase 1 的 chat stream 是 deterministic shell/context loader，不调用真实 SOC Lead Agent；后续接 LLM/skills/MCP 时必须保留 Runtime 固定控制流和人工审批边界。
+- `SocAgentChatService` 是 deterministic shell/context loader；真实 DeerFlow 对话由独立的
+  `SocLeadAgentChatService(agent_name=soc-triage)` 承担。两条入口都必须保留 Runtime 固定控制流、
+  core service 和人工审批边界，不能因为接入 LLM/skills/MCP 而放宽权限。
 - `SocAgentCapabilityRouter` 是 SOC Lead Agent route 白名单：
   - 当前默认只允许 `chat.freeform` 和 `review.open_context`。
   - 未知 slash command 必须映射到 `command.unknown` 并拒绝。
@@ -703,7 +718,7 @@ SOC Agent chat stream 约束：
   - `SocAgentApprovalRequestRepository` 是多入口 approval inbox 边界；Kafka daemon、Agent middleware、API/Web/TUI 产生的 pending request 都必须写入同一 repository contract。
   - Agent/TUI chat path 如果注入 `SocAgentApprovalService`，必须通过 `SocAgentApprovalService.submit_request()` 持久化高风险 `SocAgentApprovalRequest`，然后再把同一个 request 作为 `custom kind=soc.approval_request` 发给 stream 消费端；不允许 stream event 和 inbox record 分叉。
   - Agent/TUI chat path 未注入 `SocAgentApprovalService` 时，只允许作为 headless/test shell 输出 approval request event，不得隐式创建临时 repository 或直接写 DB。
-  - Daemon path 的写入边界是 `SocDaemonService.submit_approval_request()`，内部只能调用 `SocAgentApprovalService.submit_request()`；`SocDaemonService.start()` 在 Phase 4 Kafka consumer 落地前仍保持未实现。
+  - Daemon path 的写入边界是 `SocDaemonService.submit_approval_request()`，内部只能调用 `SocAgentApprovalService.submit_request()`；Kafka 生命周期由 `SocKafkaConsumerRunner` / CLI runner 管理，`SocDaemonService.start()` 不作为第二套 runner 入口。
   - 真实 Kafka consumer、DeerFlow Lead Agent middleware、API router、Web/TUI 操作入口都不能直接 insert `soc_approval_requests`，也不能绕过 `SocAgentApprovalService` 自行构造 request/grant 状态流。
   - `soc_approval_requests` 表必须保存扁平索引字段和完整 `request_payload`；索引至少覆盖 `permission_decision_id`、`route`、`action`、`risk_level`、`status`、`requested_by_actor_id`、`created_at`，终态还要保存 resolution time/actor/reason/idempotency 和可选 grant reference。
   - request lifecycle 只允许 `pending -> approved|rejected|expired`。Pending 不能携带 resolution 字段；terminal request 必须携带处理时间、处理人、理由和 idempotency key；rejected/expired 不能引用 grant。
@@ -908,7 +923,7 @@ Similar alert 约束：
 
 - `SimilarAlertQuery` 从当前 `AlertSummary` 派生，查询字段优先使用 `detection_key`、`rule_code`、`source_type`、`category`、`entity_keys`。
 - `SimilarAlertMatch` 必须包含匹配到的 `AlertSummary`、数值 `score` 和结构化 `matched_reasons`，便于分析师和后续 LLM rerank 解释。
-- Phase 1 实现允许 repository 先用 SQL 读取最近候选窗口，再用 Python 规则打分；正式 PostgreSQL 优化时可在同一协议下改成 JSONB/GIN 实体交集查询。
+- 当前实现允许 repository 先用 SQL 读取最近候选窗口，再用 Python 规则打分；正式 PostgreSQL 优化时可在同一协议下改成 JSONB/GIN 实体交集查询。
 - 相似查询必须排除当前 `run_id`，并受 `limit` / `candidate_limit` 限制，避免把全库塞进上下文。
 - LLM 后续只允许对 `SimilarAlertMatch[]` 候选集合进行排序、解释或提出补查建议，不直接决定数据库检索范围。
 
@@ -918,7 +933,7 @@ SOC repository 实现约束：
 - repository 可以依赖 SQLAlchemy 和 `soc_agent.contracts`，不能 import `soc_agent.core`、`pipeline`、CLI/API/TUI/ingestion。
 - `soc_analysis_runs.run_payload` 保存完整 `AnalysisRun`，索引列只服务查询和筛选，不作为唯一事实来源。
 - SOC schema migrations 放在 `backend/soc_agent/db/migrations/`，使用独立版本表 `soc_alembic_version`。
-- 正式 schema 变更走 `soc db upgrade` / Alembic revision；`create_soc_tables()` 和 `soc db init` 只作为 Phase 1 本地开发辅助。
+- 正式 schema 变更走 `soc db upgrade` / Alembic revision；`create_soc_tables()` 和 `soc db init` 只作为本地开发、测试和验收辅助。
 - SOC 当前持久化表包括 `soc_analysis_runs`、`soc_decision_audit_log`、`soc_alert_summaries`、
   `soc_review_queue`、`soc_approval_requests`、`soc_approval_grants`、`soc_investigation_evidence`、
   `soc_external_dispositions`、`soc_memory_candidates`、`soc_memory_records`、normalization baseline/issues、
@@ -1017,7 +1032,7 @@ normalizers/hids.py
 - 主 message、supplementary messages、structured fallback 都必须作为独立 claim source 参与冲突检查；supplementary 不能只进入 Prompt。
 - 冲突裁决必须输出暂定值或 unresolved、支持/反对 claim IDs、语义置信度、证据缺口、人工核查清单和 automation guard；不能一边报告冲突，一边把值伪装成 confirmed。
 - fact layer 的 `automation_allowed` 始终为 false；即使角色由人工确认，也必须再经过 action policy/approval。
-- Phase 1 的事实重建只做 deterministic 规则；LLM 后续只能读取 fact layer 进行解释、补充候选或提出复核问题，不能绕过该层直接相信上游加工字段。
+- 事实重建只做 deterministic 规则；LLM 只能读取 fact layer 进行解释、补充候选或提出复核问题，不能绕过该层直接相信上游加工字段。
 - raw message 存在时，canonical processed fields 默认低可信且不作为主推理输入；raw message 缺失时 structured fallback 必须保留低可信 warning。
 
 ### Nested message decoding / 嵌套 message 解码约束
@@ -1216,7 +1231,7 @@ backend/tests/architecture/
 └── test_tools_require_policy.py
 ```
 
-Phase 1 当前先落地为：
+当前架构门禁集中落地为：
 
 ```text
 backend/tests/architecture/test_soc_agent_boundaries.py
@@ -1224,16 +1239,18 @@ backend/tests/architecture/test_soc_agent_boundaries.py
 
 必须覆盖：
 
-- `contracts` 不 import `core/pipeline/db/api/daemon/cli`。
-- `core` 不 import `api/cli/daemon`。
+- `contracts` 不 import `core/pipeline/db/daemon`、Gateway/Typer 或具体 provider。
+- `core` 不 import app-layer Gateway routers、`cli.py`/TUI 或 concrete Kafka consumer。
 - `pipeline` 不 import FastAPI/Kafka/Typer/具体 DB client/具体 LLM SDK。
-- `api/cli/daemon` 只能通过 core service 进入业务逻辑。
+- Gateway router、CLI、TUI、daemon worker 和 Lead Agent bridge 只能通过 public core service 进入业务逻辑。
 - `AlertInput` 保持 canonical strict schema；flat/vendor payload 只能在 `normalizers` 出现。
 - public package exports 与文档一致，避免跨包调用内部函数。
 
 ## 五、Runtime 状态机
 
-参考 DeerFlow `RunManager`：run 必须有明确状态，状态迁移可持久化。
+参考 DeerFlow `RunManager`：run 必须有明确状态，状态迁移可持久化。枚举保留未来状态不表示当前
+runner 会写出所有状态；普通 replay 创建新 run 并设置 `replay_of_run_id`，不会把任一 run 改成
+`replayed`。
 
 ### AnalysisRunStatus
 
@@ -1259,21 +1276,23 @@ failed
 retrying
 ```
 
-每个 step trace 至少包含：
+当前 `PipelineStepTrace` 嵌套在 `AnalysisRun` 中，因此不重复保存 `run_id/alert_id`。稳定字段为：
 
 | 字段 | 说明 |
 |---|---|
-| `run_id` | 本次分析 ID |
-| `alert_id` | 告警 ID |
-| `step_name` | `normalize/entity_extract/dedup/...` |
+| `step_name` | `normalize/entity_extract/fact_reconstruct/...` |
 | `status` | step 状态 |
 | `input_hash` | 输入摘要 hash |
 | `output_hash` | 输出摘要 hash |
 | `started_at/ended_at` | 时间 |
 | `duration_ms` | 耗时 |
-| `error_code/error_message` | 失败原因 |
-| `retry_count` | 重试次数 |
-| `model_name/token_usage` | LLM 节点才有 |
+| `error` | 脱敏后的失败摘要 |
+| `warnings` | 本节点的结构化可读警告 |
+| `metadata` | 节点专属有界 metadata；LLM model/token/parser 等只在相关节点出现 |
+
+独立 transport 如果需要扁平 trace，可以投影 `run_id/alert_id`，但不得反向扩散到内部 step contract。
+当前固定 runner 主要产生 `running -> success|failed` step；`pending/skipped/retrying` 是受支持的扩展
+状态，不是每次运行必经状态。
 
 ## 六、数据模型边界
 
@@ -1356,7 +1375,9 @@ LessonRule
 
 ### 内部事件
 
-内部事件用于 CLI 进度、Web UI SSE、Daemon 观测、审计落库。事件必须结构化：
+`SocEvent` 当前是结构化的进程内通知，事务化 L3 命令只在 commit 后发出；默认 sink 可以是 no-op。
+持久审计由 `decision_audit_log` 和 `soc_mutation_audit_log` 承担。下面的通用 durable event stream/SSE
+是 `AC-46` 的 Stage 4 target，当前不得把 event type 清单或 schema 当成已落库/已推送能力：
 
 ```json
 {
@@ -1391,17 +1412,17 @@ analysis.run.completed
 analysis.run.failed
 ```
 
-### Web/CLI 流式输出
+### Web/CLI 流式输出（target / Deferred）
 
 参考 DeerFlow StreamBridge/SSE 思路：
 
-- API/Web UI 用 SSE 或 WebSocket 订阅 run events。
-- CLI Phase 1 可以直接消费 core event stream，不必绕 HTTP。
+- API/Web UI 未来可用 SSE 或 WebSocket 订阅 run events；当前 SOC Review Web 使用普通 Gateway API。
+- CLI 当前直接调用 core service；它不宣称已经有 durable event stream。
 - event payload 不放超大原始日志，只放摘要和引用 ID。
 
 ## 九、Kafka 协议
 
-Phase 4 引入 Kafka/Redpanda。Kafka message 必须 versioned，不直接透传厂商原始字段作为内部模型。
+Kafka/Redpanda ingestion 已实现。Kafka message 必须 versioned，不直接把厂商原始字段当作内部模型。
 
 ### 输入 topic
 
@@ -1502,15 +1523,18 @@ class ToolSpec(BaseModel):
 }
 ```
 
-Phase 1 只允许：
+当前 Alpha 能力边界：
 
-- L0：读日志、读告警、读 DB
-- L1：生成建议
-- L2：写 `review_queue`、写 candidate fact、写 audit
+- L0：通过 service 读取本地日志、告警和业务数据。
+- L1：通过受控 read-only adapter/MCP 查询外部数据，并保留 evidence/audit。
+- L2：生成明确标记的建议、review item 和 candidate knowledge。
+- L3：只允许可信 `auth_source`、命令级角色、core service、幂等和 mutation audit 完整成立时改变内部状态。
+- L4：只验证 approval/grant、adapter preflight、dry-run 和一次性 token 消费边界；真实外部副作用仍是 data-gated。
+- L5：Alpha 明确拒绝，攻击模拟必须另行定义范围、审批、隔离环境和审计。
 
 ## 十一、多 Agent 通信协议
 
-Phase 1 不做复杂多 Agent 通信。长期如果引入 Detection/Hunting/IR/Attack Simulation Agent，必须使用结构化消息，不用自由文本当协议。
+当前 Alpha 不做复杂多 Agent 通信。长期如果引入 Detection/Hunting/IR/Attack Simulation Agent，必须使用结构化消息，不用自由文本当协议。
 
 ```json
 {
@@ -1552,7 +1576,7 @@ Phase 1 不做复杂多 Agent 通信。长期如果引入 Detection/Hunting/IR/A
 
 ## 十三、身份、认证与授权
 
-Phase 1 CLI 可以先用本机用户和配置文件，不做完整用户体系；但 API、Web UI、Daemon 从设计上必须区分 actor。
+本地 CLI 可以使用显式本机 actor 和配置文件；API、Web UI、Daemon 必须在服务边界区分 actor、surface 和 `auth_source`。
 
 ### Actor 模型
 
@@ -1644,7 +1668,7 @@ contracts/schemas/
 └── tools/
 ```
 
-Phase 2 起生成并提交 OpenAPI snapshot；Phase 4 起维护 AsyncAPI/Kafka schema 文档。
+当前已提交 SOC OpenAPI v1 snapshot 并执行兼容性测试；在生产集成冻结 Kafka 外部契约前，必须补齐 AsyncAPI/schema 文档及兼容性门禁。
 
 ## 十六、模型、Prompt 与评测治理
 
@@ -1693,7 +1717,7 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 `SocSkillResolver` 遵循：
 
 - 输入来自 `LLMAnalysisRequest`、`AlertSummary`、confirmed facts 或 analyst-selected context，不读取松散 raw vendor payload。
-- Phase 2/3 先用 deterministic 规则选择 skill，例如 `source_type=edr/hids` -> `soc-endpoint-triage`，`source_type=f5/waf` -> `soc-waf-f5-triage`，存在方向冲突 -> `soc-asset-direction`。
+- 当前先用 deterministic 规则选择 skill，例如 `source_type=edr/hids` -> `soc-endpoint-triage`，`source_type=f5/waf` -> `soc-waf-f5-triage`，存在方向冲突 -> `soc-asset-direction`。
 - LLM 可以在白名单 skill 候选中 rerank 或建议补充 skill，但不能动态加载未知 skill 后直接影响决策。
 - 选中的 skill 作为 bounded context 注入 prompt；必须记录 skill name、skill version/hash、注入摘要和 token 预算。
 - Skill 只能产生指导、候选解释、候选查询或 action proposal；写 DB、写 memory、执行 tool 必须回到 service/policy 层。
@@ -1758,6 +1782,10 @@ fallback_reason
 
 ### 背压策略
 
+以下是 production target。当前 Alpha Kafka runner 有串行 poll/worker/commit/DLQ、bounded LLM
+admission 和 JSONL metrics，但没有 priority queue、delayed queue、duplicate merge worker 或 partition-aware
+worker pool；这些属于 `AC-06/AC-47/AC-48`，不能按本节文字冒充已实现：
+
 - 队列满时优先保留高 severity、低置信、未处理告警。
 - 重复告警优先 merge，不排队完整分析。
 - provider 限流时，低风险告警进入 delayed queue 或 review queue。
@@ -1769,7 +1797,7 @@ fallback_reason
 ### 环境分层
 
 ```text
-local       # 本地开发：PostgreSQL + Redpanda 可选
+local       # 本地开发：SOC SQLite；需要协议验证时可启 Redpanda/PostgreSQL
 dev         # 开发共享环境
 staging     # 接近生产数据结构，脱敏数据
 production  # 真实告警
@@ -1777,7 +1805,8 @@ production  # 真实告警
 
 ### 健康检查
 
-至少提供：
+Current Alpha provides Kafka daemon status/health scripts, readiness summaries, JSONL process
+metrics and normalization metrics. A unified SOC HTTP health/Prometheus surface is a Stage 4 target：
 
 ```text
 /healthz       # 进程是否存活
@@ -1820,12 +1849,12 @@ kafka_consumer_lag
 | 告警接入 | `AlertSource` |
 | 工具执行 | `ToolExecutor` |
 | 知识检索 | `KnowledgeRetriever` |
-| 记忆存储 | `MemoryStore` |protocal
+| 记忆存储 | `MemoryStore` |
 | 队列 | `TaskQueue` |
 | 策略 | `PolicyEngine` |
 | 事件输出 | `EventSink` |
 
-Phase 1 用 Python `Protocol` + 显式 registry 即可，不做热插拔 marketplace。
+当前使用 Python `Protocol` + 显式 registry，不做热插拔 marketplace。
 
 ### 禁止的扩展方式
 
@@ -1869,7 +1898,7 @@ Phase 1 用 Python `Protocol` + 显式 registry 即可，不做热插拔 marketp
 
 ### Golden alert set
 
-Phase 1 最少维护：
+Alpha regression set 最少维护：
 
 - 1 条明确误报
 - 1 条明确真阳性
@@ -1900,48 +1929,31 @@ tool permission denial rate
 - eval report 必须至少包含 parse success、repair count、failed count、verdict diff、needs_review diff、confidence delta。
 - eval 只读样本，不写业务库、不生成 memory、不入 review queue；需要持久化评测历史时另建 eval repository/schema。
 
-## 二十二、Phase 切分
+### Release-level Alpha acceptance contract
 
-### Phase 1 必须做
+- 唯一入口是仓库根目录 `./scripts/soc-alpha-acceptance.sh all`；组件命令只用于定位失败，不能用若干
+  手工成功日志替代最终 `finalize` gate。
+- 聚合 schema 固定为 `soc.alpha_acceptance_report.v1`，至少覆盖 representative APT/EDR/HIDS、CLI、
+  Kafka consume/commit/DLQ、SQL、registered Gateway handlers/services、Review Web、feedback、decision+
+  mutation audit 和 replay lineage。
+- Report 必须写 component status、failure reasons、mock/data-gated disclosures、known failure semantics
+  和 SHA-256 artifact manifest；缺少任何必需 component 或 source coverage 时必须失败。
+- Deterministic analyzer、SQLite、mock investigation provider、local Redpanda、mocked browser transport
+  必须逐项标记；这些局部边界不能因 aggregate pass 被提升为 production evidence。
+- 验收输出位于 `backend/.deer-flow/soc-alpha-acceptance/`，可能含告警衍生数据，必须 gitignored，且
+  每个 release candidate 重新生成。
 
-- `contracts/` schema
-- `core/runtime.py` 固定状态机
-- `core/validator.py` schema/domain validation
-- `pipeline/trace.py` step trace
-- `decision_audit_log`
-- `PromptSanitizer` 基础脱敏
-- `prompt_version/model_name/pipeline_version` 审计字段
-- 基础 rate limiter / semaphore
-- CLI 调 core service
-- API schema 草案可先不暴露，但 contracts 要先定
-- 架构测试和 golden alert set
+## 二十二、交付阶段与契约成熟度
 
-### Phase 2 做
+执行顺序只由 `.notes/ai_soc/delivery-roadmap.md` 决定：`BD -> AA -> BG -> PI`。旧的技术
+`Phase 1..5` 已不再作为当前状态，因为 Kafka、API、memory 和评测能力已经跨原草案落地，继续沿用会
+把“已实现”和“后续目标”混在一起。
 
-- API v1 初版
-- history correlation contracts
-- dedup idempotency
-- OpenAPI snapshot test
-- 运行环境配置分层
+| Maturity / 成熟度 | Current scope / 当前范围 |
+|---|---|
+| Local Alpha complete | 九步 Runtime、CLI/Kafka ingress、SQL、Review Web/TUI、Lead Agent、API v1 transport、audit/replay、memory/governed context 的代码可控门禁 |
+| Mock / fixture | 本地 CMDB/EDR/HIDS/TI/tag facts、脱敏样本、browser HTTP fixture；只验证 contract/flow |
+| Deferred | Kafka result topics/worker pool、通用 durable event/SSE、专业 Sub Agent 自治、Knowledge RAG、Prometheus 全局态势 |
+| Data-gated PI | 真实 provider/source feed、PostgreSQL/Kafka/K8s capacity/recovery、生产标签与校准、真实响应动作 |
 
-### Phase 3 做
-
-- LLM Advisory Router 白名单
-- router decision trace
-- memory/fact 版本回滚
-- prompt/model replay evaluation
-
-### Phase 4 做
-
-- Kafka topic schema
-- AsyncAPI/Kafka schema 文档
-- PostgreSQL-backed queue / lease / heartbeat
-- SSE/Web event stream
-- replay diff / router 评测
-- readiness/metrics/consumer lag 监控
-
-### Phase 5 做
-
-- 多 Agent message protocol
-- Knowledge RAG contracts
-- Attack Simulation Agent 的 L5 scope/approval protocol
+任何 maturity 变化都先更新唯一完整性矩阵，再同步本工程契约；不得在本节新增平行 backlog。

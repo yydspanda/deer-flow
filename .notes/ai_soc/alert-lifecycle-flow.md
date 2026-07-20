@@ -706,6 +706,27 @@ soc chat tui --queue-id REV-... --lead-agent
 soc recover RUN-... --reason "worker exited during provider call" --database-url "$SOC_DATABASE_URL" --pretty
 ```
 
+Release-level Alpha acceptance is intentionally outside the nine Runtime nodes. It orchestrates the
+same public paths and seals their evidence without adding another business workflow:
+
+```mermaid
+flowchart LR
+    A["🧪 ./scripts/soc-alpha-acceptance.sh all"] --> B["⌨️ Core<br/>CLI + SQL + Gateway service"]
+    A --> C["📨 Kafka<br/>APT + EDR + HIDS + DLQ"]
+    A --> D["🌐 Frontend<br/>API contract + Chromium + check"]
+    B --> E["📦 soc.alpha_acceptance_report.v1"]
+    C --> E
+    D --> E
+    E --> F{"✅ all gates pass?"}
+    F -->|yes| G["🔏 Hashed evidence manifest"]
+    F -->|no| H["⛔ Failed report<br/>missing/failed component remains visible"]
+```
+
+The generated package lives under `backend/.deer-flow/soc-alpha-acceptance/` and is gitignored.
+Fixture, mock, local SQLite/Redpanda, browser transport and production data-gated boundaries are
+part of the report. See `alpha-acceptance-runbook.md`; a pass proves local/test Alpha repeatability,
+not production readiness.
+
 ## 12. State Machines / 状态流转图
 
 ### 12.1 AnalysisRun / 分析运行状态

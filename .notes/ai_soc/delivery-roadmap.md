@@ -36,12 +36,12 @@ flowchart LR
 |---|---|---|---|
 | `BD` Boss Demo v0.1 | **Done** | 一条 8-10 分钟、浏览器优先、可重复的 golden path | `BD-01..03` 与 BD Gate 已通过 |
 | `AA` SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 唯一的 Complete/Gap/Mock/Data-gated/Deferred 矩阵 | 审计矩阵和 P0/P1 阻塞清单已于 2026-07-18 确认 |
-| `BG` Close Blocking Gaps | **Current / BG-P1-05 In Progress** | 只修审计确认的代码可控 P0/P1 阻塞项 | Alpha 端到端验收通过 |
+| `BG` Close Blocking Gaps | **Current / BG-03 In Progress** | P0/P1 阻塞项已关闭；正在封装 Alpha readiness package | Alpha 就绪包与 Stage 4 输入通过评审 |
 | `PI` Real Data & Production Integration | Data/credential-gated | 真实 PingAn/通用 provider、Kafka/PostgreSQL/K8s 和运营验证 | Pilot readiness review 通过 |
 
-Boss Demo v0.1 和 Alpha 完整性审计已于 2026-07-18 分别通过 BD Gate、AA Gate；当前只执行
-[`audits/alpha-completeness-matrix.md`](audits/alpha-completeness-matrix.md) 冻结的 Stage 3 阻塞工作包。
-这不代表 Alpha 或生产已经完成。
+Boss Demo v0.1 和 Alpha 完整性审计已于 2026-07-18 分别通过 BD Gate、AA Gate；冻结的
+`BG-P0-01..BG-P1-05` 已于 2026-07-20 关闭。当前只执行 `BG-03 Alpha readiness package`，将已通过的
+版本化验收报告、限制、部署/回滚说明和 Stage 4 外部输入收口成门禁材料。这仍不代表生产已完成。
 
 ## 3. Stage 1 - Boss Demo v0.1
 
@@ -110,8 +110,8 @@ Stage 2 是 time-boxed 审计，不在审计过程中纵向优化单个模块。
 | ID | Work / 工作 | Deliverable / 产出 | Acceptance / 验收 |
 |---|---|---|---|
 | `BG-01` | Close P0 blockers / 修复 P0 | **Done 2026-07-18**: `BG-P0-01..02` 已关闭审批/RBAC、事务化变更和持久审计缺口 | `AC-16/21/22/34` 均有回归与故障注入证据 |
-| `BG-02` | Close P1 + E2E acceptance / 修复 P1 与端到端验收 | **In progress**: `BG-P1-01..04` 已完成，当前执行 `BG-P1-05` | 结果可重复；失败语义、offset、review、audit 和 memory boundary 符合契约 |
-| `BG-03` | Alpha readiness package / Alpha 就绪包 | 版本化验收报告、已知限制、mock/data-gated 清单、部署与回滚说明 | 代码可控 P0/P1 为零；全量 SOC/architecture 测试通过；Stage 4 输入明确 |
+| `BG-02` | Close P1 + E2E acceptance / 修复 P1 与端到端验收 | **Done 2026-07-20**: `BG-P1-01..05` 已完成；`soc.alpha_acceptance_report.v1` 覆盖 APT/EDR/HIDS 的 CLI/Kafka/SQL/Gateway/Web/feedback/audit/replay | 结果可重复；失败语义、offset、review、audit 和 memory boundary 符合契约 |
+| `BG-03` | Alpha readiness package / Alpha 就绪包 | **In progress**: 复用 `alpha-acceptance-runbook.md` 和版本化报告，收口已知限制、mock/data-gated 清单、部署与回滚说明 | 代码可控 P0/P1 为零；全量 SOC/architecture/frontend 测试通过；Stage 4 输入明确 |
 
 Stage 3 的唯一拆分与验收条件见
 [`audits/alpha-completeness-matrix.md`](audits/alpha-completeness-matrix.md) Section 6，执行顺序固定为：
@@ -174,7 +174,8 @@ Completed:    BG-P1-01 - versioned ingestion and feedback (AC-04, AC-08)
 Completed:    BG-P1-02 - API contract stabilization (AC-11)
 Completed:    BG-P1-03 - Runtime recovery and decision provenance (AC-13, AC-17)
 Completed:    BG-P1-04 - Governed memory activation (AC-39)
-In Progress:  BG-P1-05 - Alpha E2E and docs reconciliation (AC-23, AC-24, AC-49)
-Next:         Freeze one release-level APT/EDR/HIDS acceptance command/report, finish focused SOC frontend coverage, and reconcile authoritative operator docs
-Blocked by:   None for BG-P1-05; real providers, production infrastructure and larger label corpora remain Stage 4 data-gated
+Completed:    BG-P1-05 - Alpha E2E and docs reconciliation (AC-23, AC-24, AC-49)
+In Progress:  BG-03 - Alpha readiness package
+Next:         Freeze the passed acceptance report, full-suite evidence, known limitations, deployment/rollback notes and explicit Stage 4 handoff inputs
+Blocked by:   None for BG-03; real providers, production infrastructure and larger label corpora remain Stage 4 data-gated rather than Alpha blockers
 ```

@@ -1,7 +1,7 @@
-"""Stub analysis node for Phase 1 runtime scaffolding.
+"""Deterministic stub analysis node for local tests and replay.
 
-This module intentionally avoids LLM calls. It gives deterministic golden
-sample behavior while the runtime, contracts, trace, and CLI stabilize.
+This module intentionally avoids LLM calls. It provides stable golden-sample
+behavior without claiming production model quality.
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
         return AnalysisResult(
             verdict=Verdict.FALSE_POSITIVE,
             confidence=0.82,
-            summary="告警命中已知扫描器或批准工具特征，Phase 1 判定为高概率误报候选。",
+            summary="告警命中已知扫描器或批准工具特征，deterministic stub 判定为高概率误报候选。",
             evidence=[
                 EvidenceItem(
                     source="detection",
@@ -84,7 +84,7 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
                 EvidenceItem(source="entities", description="抽取到的进程实体", value=", ".join(entities.processes)),
                 *context_evidence,
             ],
-            reason=f"当前证据更符合授权扫描或安全工具活动，但 Phase 1 不自动关闭告警。{reason_suffix}",
+            reason=f"当前证据更符合授权扫描或安全工具活动，但 deterministic stub 不自动关闭告警。{reason_suffix}",
             recommended_action="review_and_close_if_approved",
         )
 
@@ -92,7 +92,7 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
         return AnalysisResult(
             verdict=Verdict.TRUE_POSITIVE,
             confidence=0.9,
-            summary="告警包含恶意 IOC、攻击工具或高危行为线索，Phase 1 判定为真阳性候选。",
+            summary="告警包含恶意 IOC、攻击工具或高危行为线索，deterministic stub 判定为真阳性候选。",
             evidence=[
                 EvidenceItem(
                     source="detection",
@@ -109,7 +109,7 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
     return AnalysisResult(
         verdict=Verdict.UNKNOWN,
         confidence=0.45,
-        summary="当前字段不足以稳定判断真伪，Phase 1 将该告警交给人工复核。",
+        summary="当前字段不足以稳定判断真伪，deterministic stub 将该告警交给人工复核。",
         evidence=[
             EvidenceItem(source="alert_id", description="告警已进入固定分析流程", value=request.alert_id),
             *context_evidence,

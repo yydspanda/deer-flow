@@ -74,8 +74,8 @@ provider/infrastructure row remains `Mock` or `Data-gated`.
 | `AC-20` | ReviewQueue, InvestigationContext, Web and TUI | Complete | - | Queue/context/close/correct/outcome plus unified evidence timeline are application-reachable | Maintain |
 | `AC-21` | Durable audit for Alpha state mutations | Complete | - | Migration `0018` adds append-only `soc_mutation_audit_log`; review, memory, approval and external-disposition mutations persist actor/provenance, reason, idempotency, command hash and bounded result metadata without raw action payloads or secrets | Maintain |
 | `AC-22` | L3 service authorization and actor provenance | Complete | - | `ActorContext.auth_source` records the trust boundary; shared core role checks protect review, memory, normalization, governed-context and approval mutations independently of the entry surface | Maintain; durable mutation audit is complete under `AC-21` |
-| `AC-23` | SOC frontend automated regression | Gap | P1 | Browser rehearsal exists, but no focused SOC frontend unit/component test suite was found | BG |
-| `AC-24` | APT/EDR/HIDS Alpha end-to-end acceptance package | Gap | P1 | Separate tests/demo/validation exist; one versioned acceptance report does not yet cover CLI+Kafka+DB+UI+feedback+audit+replay together | BG |
+| `AC-23` | SOC frontend automated regression | Complete | - | Focused API-client tests plus Chromium workflows cover queue/context, close/correct, approval, memory review/activation, disposition sample/outcome and normalization actions; frontend test/check gates pass | Maintain |
+| `AC-24` | APT/EDR/HIDS Alpha end-to-end acceptance package | Complete | - | `./scripts/soc-alpha-acceptance.sh all` seals `soc.alpha_acceptance_report.v1` across CLI, real local Kafka protocol, SQL, registered Gateway handlers, Review Web, feedback, audit and replay with explicit fixture/mock/data-gated disclosures | Maintain; production evidence remains separate |
 
 ### 2.4 Investigation, Agent, and Tools
 
@@ -120,22 +120,22 @@ provider/infrastructure row remains `Mock` or `Data-gated`.
 | `AC-46` | Durable generic `SocEvent` stream and SSE | Deferred | P2 | State tables/audit cover selected paths; generic event sink remains process-local/no-op | PI |
 | `AC-47` | Prometheus, SLO and operations overview | Deferred | P2 | JSONL Kafka metrics, status scripts and normalization metrics are partial signals only | PI |
 | `AC-48` | Production PostgreSQL/Kafka/K8s capacity and recovery evidence | Data-gated | P2 | Deployment/config code exists; real parameters, ACLs, load and failure exercises do not | PI |
-| `AC-49` | Authoritative docs, commands and mock register reconciliation | Gap | P1 | Solution/lifecycle/contracts/register contain stale service maps, states, commands, phases and “current next step” | BG |
+| `AC-49` | Authoritative docs, commands and mock register reconciliation | Complete | - | Solution/lifecycle/contracts/register/AGENTS/README now distinguish as-is application paths, target/deferred contracts and executable commands; the acceptance runbook links every Alpha claim to evidence without creating a parallel roadmap | Maintain with each behavior change |
 | `AC-50` | Repeatable Boss Demo and mock disclosure | Complete | - | Resettable isolated DB, browser path, manifest, screenshots, feedback proof and disclosure are reproducible | Maintain |
 
 ### Matrix totals
 
 | State | Count |
 |---|---:|
-| Complete | 31 |
-| Gap | 3 |
+| Complete | 34 |
+| Gap | 0 |
 | Mock | 1 |
 | Data-gated | 6 |
 | Deferred | 9 |
 | **Total** | **50** |
 
-The AUD-03 baseline admitted 13 `Gap` rows into Stage 3. Ten are now closed, leaving 3 current
-`Gap` rows. `Mock`, `Data-gated`, and `Deferred` rows remain visible but do not silently become
+The AUD-03 baseline admitted 13 `Gap` rows into Stage 3. All 13 are now closed. `Mock`,
+`Data-gated`, and `Deferred` rows remain visible and do not silently become Complete or Alpha
 blockers.
 
 ## 3. Gap Register / 阻塞台账
@@ -158,14 +158,15 @@ All frozen P0 gaps are closed. The implementation evidence is retained in Sectio
 | `AC-13` Durable pre-provider journal/recovery | `BG-P1-03`, 2026-07-20 | `AnalysisRequestJournal` is committed on the exact Runtime pre-provider hook; crash, timeout, stale-window, bundle rollback, recovery lineage and CLI contracts are tested; rendered prompts/provider secrets are excluded from journal metadata | Original source replay snapshot remains governed separately in `AnalysisRun.input_payload`; distributed multi-worker lease ownership belongs to production deployment evidence |
 | `AC-17` Correction confidence provenance | `BG-P1-03`, 2026-07-20 | Human correction writes `human_confirmation`; admitted external correction writes `external_disposition`; `soc.correction_policy.v1`, explicit/default flag, uncalibrated state and explanation reach run, summary, audit and API | Production probability calibration remains data-gated under `AC-19`; confirmation strength is not a calibrated probability |
 | `AC-39` Governed memory activation | `BG-P1-04`, 2026-07-20 | Versioned enable/disable command enforces `soc_memory_reviewer` or `soc_admin`, reason, expected record version, activation validity/review deadline, atomic CAS plus mutation audit and post-commit event; CLI/API/Web/Boss Demo use the service; retrieval diff and expiry/authorization/rollback tests pass | Prompt injection and automatic lesson capture remain deferred; enabled memory is bounded read-only investigation context and cannot change verdict or action policy |
+| `AC-23` SOC frontend regression | `BG-P1-05`, 2026-07-20 | Focused `core/soc/api` tests and three Playwright workflows exercise rendered ReviewQueue/context, correction/close, memory review/activation, approval, sampled disposition outcome and normalization maintenance; `pnpm test` and `pnpm check` pass | Browser tests use deterministic HTTP fixtures; deployed auth/network/backend transport remains independently tested and later production-integrated |
+| `AC-24` Alpha E2E acceptance package | `BG-P1-05`, 2026-07-20 | `scripts/soc-alpha-acceptance.sh` runs APT/EDR/HIDS through CLI/SQL/Gateway service feedback/audit/replay, real local Redpanda consume/commit/DLQ and Review Web regression, then hashes artifacts into `soc.alpha_acceptance_report.v1` | Deterministic analyzer, local SQLite, mock investigation providers and local broker are explicitly disclosed; no production-equivalence claim |
+| `AC-49` Authoritative docs reconciliation | `BG-P1-05`, 2026-07-20 | Alpha runbook plus synchronized solution/lifecycle/contracts/mock register/AGENTS/README replace stale commands, old technical phases and ambiguous current/target claims; roadmap remains the only task-order source | Documentation must continue changing in the same slice as contract or behavior changes |
 
 ### 3.3 P1 - Alpha journey and reproducibility blockers
 
-| Gap | Owner boundary | Impact | Source evidence | Acceptance / 验收 | Target |
-|---|---|---|---|---|---|
-| `AC-23` SOC frontend regression | Frontend SOC components/API client | Browser-only rehearsal will not reliably catch state/action/render regressions | AUD-01 Web evidence; no SOC-named frontend tests | Focused tests cover queue/context render, close/correct, approval integrity flow, memory review, disposition outcome/sample and normalization actions; `pnpm test`/`pnpm check` pass | `BG-02` |
-| `AC-24` Alpha E2E acceptance package | SOC QA/demo orchestration | Separate proofs do not show one versioned release satisfies the whole Alpha journey | Delivery roadmap BG-02; AUD-01 user-visible artifacts | A single reproducible command/report runs representative APT/EDR/HIDS through CLI and Kafka, DB, Review UI/API, feedback, audit and replay; report records mock/data-gated disclosures and failure semantics | `BG-02` |
-| `AC-49` Docs/command/register reconciliation | SOC docs owners | Reviewers and operators can follow invalid commands or mistake service-only/old phase statements for current capability | `CONS-07,09,10,19..24` | Update solution, lifecycle, engineering contracts, mock register, AGENTS orientation and command examples in the same code slices; every current claim links to executable evidence; no parallel roadmap is created | `BG-03` |
+All frozen P1 gaps are closed. Their executable evidence and remaining non-Alpha boundaries are in
+Section 3.2. New production requirements must enter Stage 4 rather than reopening a local Alpha row
+without new evidence.
 
 ## 4. Data-Gated Register / 外部条件台账
 
@@ -206,7 +207,7 @@ Stage 3 may implement only these packages unless the user explicitly changes the
 | `BG-P1-02` API contract stabilization | `AC-11` | **Done 2026-07-20**: compatible versioned transport headers, Problem Details/request metadata, OpenAPI snapshot and frontend contract | Gateway transport/router tests, real sync-route HTTP smoke and full frontend regression |
 | `BG-P1-03` Runtime recovery and decision provenance | `AC-13`, `AC-17` | **Done 2026-07-20**: durable pre-call journal/recovery plus policy-versioned human/external confirmation provenance | process-loss/timeout/bundle-rollback recovery and correction/external/summary/audit/API tests |
 | `BG-P1-04` Governed memory activation | `AC-39` | **Done 2026-07-20**: role/reason/version/validity/review-controlled retrieval enable/disable through one audited service across CLI/API/Web/demo | CAS/rollback, exact retry/conflict, authorization, expiry/review-overdue and before/after retrieval diff tests |
-| `BG-P1-05` Alpha E2E and docs reconciliation | `AC-23`, `AC-24`, `AC-49` | Frontend regression, one release-level APT/EDR/HIDS acceptance report, synchronized authoritative docs | full backend/architecture/frontend checks and versioned acceptance artifact |
+| `BG-P1-05` Alpha E2E and docs reconciliation | `AC-23`, `AC-24`, `AC-49` | **Done 2026-07-20**: focused frontend regression, one release-level APT/EDR/HIDS acceptance report and synchronized authoritative docs | `./scripts/soc-alpha-acceptance.sh all` passed; full backend/architecture/frontend gates and versioned hashed artifact are release evidence |
 
 Execution order is fixed:
 
@@ -234,4 +235,5 @@ Each package remains a reviewable slice and must not absorb P2/Data-gated work.
 
 **AA Gate: Passed on 2026-07-18.**
 
-The next implementation slice is `BG-P1-05 Alpha E2E and docs reconciliation`.
+The next implementation slice is `BG-03 Alpha readiness package`. It consumes this closed matrix and
+the versioned Alpha report; it must not add a new blocker list.

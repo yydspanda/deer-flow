@@ -2,7 +2,7 @@
 
 Status: Active review baseline
 
-Last updated: 2026-07-16
+Last updated: 2026-07-20
 
 Primary audience: product review, architecture review, engineering review, security review
 
@@ -31,6 +31,7 @@ Review should answer these questions first:
 | Memory is useful but not polluting decisions? / 记忆是否可控 | Section 10 |
 | Governed context is typed, scoped and auditable? / 运营事实是否强类型、有范围、时效和审计 | Section 7.4 |
 | Approval and side effects are safe? / 审批和副作用是否安全 | Sections 7, 12 |
+| The Alpha journey is reproducible and honestly scoped? / Alpha 是否可复跑且边界真实 | Section 13 and `.notes/ai_soc/alpha-acceptance-runbook.md` |
 
 Non-goals of this document:
 
@@ -167,7 +168,8 @@ flowchart TB
         REVIEW["SocReviewService"]
         MEMORY["SocMemoryService"]
         DAEMON["SocDaemonService"]
-        CHAT["SocAgentChatService"]
+        CHAT["SocAgentChatService<br/>deterministic chat"]
+        LEAD_CHAT["SocLeadAgentChatService<br/>DeerFlow stream"]
         DISPOSITION["SocExternalDispositionService"]
         APPROVAL["SocAgentApprovalService"]
     end
@@ -179,7 +181,7 @@ flowchart TB
 
     subgraph Data["🗄️ Data / 数据层"]
         DB["PostgreSQL in prod<br/>SQLite only for local smoke"]
-        EVENTS["Event Log"]
+        AUDIT_DB["Decision + Mutation Audit<br/>durable SQL"]
         MEMORY_DB["Memory Tables"]
     end
 
@@ -187,12 +189,14 @@ flowchart TB
     TUI --> REVIEW
     WEB --> REVIEW
     KAFKA --> DAEMON
-    LEAD --> CHAT
+    LEAD --> LEAD_CHAT
     EXT --> DISPOSITION
 
     DAEMON --> ANALYSIS
     CHAT --> REVIEW
     CHAT --> APPROVAL
+    LEAD_CHAT --> REVIEW
+    LEAD_CHAT --> APPROVAL
     DISPOSITION --> REVIEW
     REVIEW --> MEMORY
     ANALYSIS --> PIPELINE
@@ -200,7 +204,9 @@ flowchart TB
     TRACE --> DB
     REVIEW --> DB
     MEMORY --> MEMORY_DB
-    APPROVAL --> EVENTS
+    APPROVAL --> AUDIT_DB
+    REVIEW --> AUDIT_DB
+    MEMORY --> AUDIT_DB
 ```
 
 Product conclusion:
@@ -271,7 +277,7 @@ Important behavior:
 | `backend/soc_agent/cli.py` | CLI commands for demo, review, memory, daemon smoke | No direct DB business mutation except through services |
 | Gateway API routes | Web/TUI/API access to review, memory, approval through the shared v1 transport helper | No duplicate runtime logic, ad hoc error shape or trusted caller actor header |
 | Kafka consumer / daemon | Validate `SocAlertRawEnvelope`, preserve raw payload, map to daemon messages, call `SocDaemonService` | No bare alert object, vendor parsing or direct alert analysis logic |
-| DeerFlow Lead Agent bridge | Chat around bounded investigation context | No unbounded raw secret/context injection |
+| DeerFlow Lead Agent bridge | Use `SocLeadAgentChatService` to stream DeerFlow `lead_agent(agent_name=soc-triage)` around bounded investigation context | No direct repository access, arbitrary MCP exposure, or unbounded raw secret/context injection |
 | External disposition adapter | Map old-platform status/reason to canonical event and call the authenticated canonical ingress | No direct DB, verdict, queue or confirmed-memory write |
 
 ### 5.2 Core Service Layer / 核心服务层
@@ -282,7 +288,8 @@ Important behavior:
 | `SocReviewService` | Review queue, correction, notes, investigation context | State transition, audit, memory candidate bridge |
 | `SocMemoryService` | Candidate review, governed retrieval activation, confirmed memory retrieval | Human confirmation, optimistic concurrency, validity/review and audit boundary |
 | `SocDaemonService` | Background ingestion orchestration | Idempotency, backoff, worker result |
-| `SocAgentChatService` | SOC chat event stream and proposal handling | Bounded context and approval proposal |
+| `SocAgentChatService` | Deterministic SOC chat/event shell | Bounded context and proposal parsing; not the DeerFlow Lead Agent stream |
+| `SocLeadAgentChatService` | DeerFlow `soc-triage` Lead Agent streaming entry | Reuse DeerFlow profile/skills/MCP, bounded review artifact and proposal boundary |
 | `SocAgentApprovalService` | Approval request/grant/dry-run/execute boundary | Permission, token, audit, no silent execute |
 | `SocExternalDispositionService` | External status/reason sync | Mapping, target resolution, idempotency |
 | `SocGovernedContextService` | Govern typed fact lifecycle and source/version history | GF-01 implemented: proposal, activation, validity, revocation, audit |
@@ -292,7 +299,7 @@ Important behavior:
 | `SocDispositionEvaluationService` | Persist explicit labels, create reproducible samples, derive reviewer inboxes, compute read-only gate reports | EV-01..EV-03 implemented: CLI/API/Web/TUI/trusted external capture share one append-only service; passed report still cannot auto-close |
 | `SocSecurityExerciseContextService` (planned) | Compose campaign, participant attribution and authorization | Red/blue/white-team identity is not authorization by itself |
 | `SocCorrelationService` | Deterministic similar-alert and historical-evidence lookup | Shared summary repository, structured reasons, no LLM/decision mutation |
-| `SocMainOrchestratorService` | Read-only orchestration for analysis/correlation/selected actions/domain report | Typed `CorrelationResult` bridge; no direct repository/tool/high-risk side effects |
+| `SocMainOrchestratorService` | Read-only PingAn eval/demo orchestration for analysis/correlation/selected actions/domain report | Not wired as a second live Runtime; typed `CorrelationResult` bridge; no direct repository/tool/high-risk side effects |
 
 ### 5.3 Runtime Pipeline / 固定运行时
 
@@ -343,7 +350,7 @@ through an expected-`running` single-winner database claim and creates one idemp
 linked by `replay_of_run_id`. An interrupted claim without a replay remains lease-protected until its
 stale window expires.
 
-Phase 2 correlation bridge / 历史关联桥接：
+Explicit correlation bridge / 显式历史关联桥接：
 
 ```mermaid
 flowchart LR
@@ -1215,7 +1222,7 @@ Useful command surfaces:
 
 ```bash
 # Run one arbitrary alert through the service chain and create review context
-soc demo alert alert_demo/apt-2026494.json --pretty
+soc demo alert samples/alerts/pingan_legacy_apt.json --init-db --pretty
 
 # Seed repeatable demo chains
 soc demo run all
@@ -1223,7 +1230,7 @@ soc demo run all
 # Inspect review context
 soc review context <queue-id> --summary --pretty
 
-# Add analyst note and optionally create memory candidate
+# Add analyst note; this creates a pending memory candidate through SocMemoryService
 soc review note <queue-id> --note "..."
 
 # Review memory candidates
@@ -1255,6 +1262,9 @@ soc eval offline samples/ --live-llm --model-name deepseek-v4-pro --pretty
 # Reproduce the complete local Runtime/evaluation/governance review package
 cd ..
 ./scripts/soc-runtime-validation.sh all
+
+# Reproduce the release-level APT/EDR/HIDS Alpha acceptance package
+./scripts/soc-alpha-acceptance.sh all
 ```
 
 The generated Step 01-12 directories are review tracks, not twelve hidden Runtime nodes. The fixed
@@ -1263,6 +1273,13 @@ skill_context -> analyze -> schema_validate -> evidence_grounding -> decide`; no
 suggestions, human labels, correlation evaluation, and governed authorization are explicit offline or
 sidecar tracks. Exact commands, artifact contracts, and the latest local findings are documented in
 [`runtime-validation-runbook.md`](runtime-validation-runbook.md).
+
+The release-level command is a different gate: it combines CLI, SQL, registered Gateway
+handlers/services, a real local Kafka-compatible broker, Review Web browser regression, feedback,
+durable audit and replay into `backend/.deer-flow/soc-alpha-acceptance/alpha-acceptance-report.json`.
+Its deterministic analyzer, local SQLite, mock investigation providers and mocked browser transport
+are explicit report fields rather than production claims. Exact prerequisites, artifacts and failure
+semantics are in [`alpha-acceptance-runbook.md`](alpha-acceptance-runbook.md).
 
 Acceptance criteria for the first complete demo:
 
@@ -1277,7 +1294,7 @@ Acceptance criteria for the first complete demo:
 - External disposition can sync status/reason into review context.
 - No high-risk action is executed without approval boundary.
 
-Current delivery priority / 当前交付顺序：
+Delivery stages / 交付阶段：
 
 1. **Boss Demo v0.1**: first expose one repeatable, browser-first golden path so management can see
    the current product value without mistaking mock or shadow-only behavior for production.
@@ -1290,7 +1307,8 @@ Current delivery priority / 当前交付顺序：
 
 The authoritative work packages, gates, Parking Lot and anti-drift rules live in
 [`delivery-roadmap.md`](delivery-roadmap.md). The current implementation pointer lives only in
-[`progress.md`](progress.md).
+[`progress.md`](progress.md). As of 2026-07-20, `BG-P0-01..BG-P1-05` are complete and the only
+current task is `BG-03 Alpha readiness package`; Stage 4 remains data/credential-gated.
 
 “Alpha complete” means the local/test product journey is repeatable and every mock or external-data
 dependency is explicit. It does not mean `production-ready` while real CMDB/EDR/Zeus credentials,

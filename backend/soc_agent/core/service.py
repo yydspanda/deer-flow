@@ -2120,7 +2120,7 @@ def _stable_sha256(value: Any) -> str:
 
 
 class SocDaemonService:
-    """Kafka worker orchestration service placeholder."""
+    """Per-message Kafka daemon boundary used by the consumer runner."""
 
     def __init__(
         self,
@@ -2132,7 +2132,7 @@ class SocDaemonService:
         self._approval_service = approval_service
 
     def start(self) -> None:
-        raise SocServiceNotImplementedError("daemon mode is planned for Phase 4")
+        raise SocServiceNotImplementedError("daemon lifecycle is owned by SocKafkaConsumerRunner")
 
     def process_message(self, message: SocDaemonMessage | Mapping[str, Any]) -> SocDaemonProcessResult:
         """Process one decoded daemon message through stable core services."""
@@ -2636,9 +2636,9 @@ class SocAgentApprovalService:
     ) -> SocAgentActionResult:
         """Consume an approved action token at the execution boundary.
 
-        Phase 1 intentionally stops at the boundary: it consumes the one-time
-        token and records the deterministic execution result, but it does not
-        call an external response tool or mutate production systems.
+        The current Alpha boundary consumes the one-time token and records the
+        deterministic execution result, but it does not call an external
+        response tool or mutate production systems.
         """
 
         require_actor_roles(context, self.OPERATOR_ROLES, operation="executing an approved action")
@@ -3017,9 +3017,9 @@ class SocAgentApprovalService:
 class SocAgentChatService:
     """Interactive investigation service for TUI/Web/Channels.
 
-    This Phase 1 version is intentionally deterministic. It establishes the
-    DeerFlow-compatible stream contract and can load review context, but it does
-    not run the future SOC Lead Agent or call LLM tools yet.
+    This service is the deterministic DeerFlow-compatible shell and context
+    loader. Real model-driven conversation is owned by ``SocLeadAgentChatService``;
+    both paths share the same core-service and approval boundaries.
     """
 
     def __init__(
@@ -3296,7 +3296,11 @@ class SocAgentActionDispatcher:
                 route=route_decision.route,
                 action=permission.action,
                 status="success",
-                message="SOC investigation chat is ready. Phase 1 supports deterministic review context loading; future SOC Lead Agent routing will attach skills, MCP tools, and bounded LLM reasoning here.",
+                message=(
+                    "SOC investigation chat is ready with deterministic review context loading. "
+                    "Use the SOC Lead Agent entry for skills, MCP tools, and bounded LLM reasoning; "
+                    "all state changes remain behind core-service and approval boundaries."
+                ),
             )
         if permission.action == "review.open_context":
             return self._open_review_context(request, route_decision=route_decision, context=context)

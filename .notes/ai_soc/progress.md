@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `BG` Stage 3 - Close Blocking Gaps（`BD`、`AA` Gate 已于 2026-07-18 通过） |
-| 当前目标 | `BG-P1-05 Alpha E2E and docs reconciliation`：关闭 `AC-23/AC-24/AC-49`，形成单命令、版本化的 APT/EDR/HIDS Alpha 验收证据并统一运维文档 |
+| 当前目标 | `BG-03 Alpha readiness package`：收口已通过的版本化验收报告、全量回归、已知限制、部署/回滚说明和 Stage 4 外部输入 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `BG-P1-05`：先盘点现有 frontend SOC 测试与 Runtime/Kafka/demo 脚本，冻结一个不依赖真实 provider 的 release-level acceptance manifest，再补缺失覆盖和文档一致性。 |
+| 当前下一刀 | `BG-03`：基于 `soc.alpha_acceptance_report.v1` 和已关闭的 50 项完整性矩阵整理 Alpha readiness package；不新增平行 blocker list，不提前做 Stage 4 真实接入。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -39,7 +39,7 @@
 |---|---|---|---|---|
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
-| `BG` | Close Blocking Gaps | **Current / BG-P1-05 In Progress** | `BG-P0-01..02`、`BG-P1-01..04` 已完成；当前补 Alpha E2E、frontend regression 与文档一致性 | Alpha E2E 和 readiness package 通过 |
+| `BG` | Close Blocking Gaps | **Current / BG-03 In Progress** | `BG-P0-01..02`、`BG-P1-01..05` 已完成；当前封装 Alpha readiness package | readiness package 通过，Stage 4 输入明确 |
 | `PI` | Real Data & Production Integration | Data/credential-gated | 真实 provider、基础设施、标签、SLO 和 governed rollout | Pilot readiness review 通过 |
 
 ## 能力与历史切片台账
@@ -201,6 +201,44 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-20 — BG-P1-05 Alpha E2E and docs reconciliation completed
+
+- `AC-23` 已关闭：
+  - `frontend/tests/unit/core/soc/api.test.ts` 补齐 memory candidate/record/search/retrieval activation
+    与 normalization list/baseline/metrics/update transport contract；
+  - `frontend/tests/e2e/soc-review.spec.ts` 和 deterministic `mock-soc-api.ts` 用 Chromium 覆盖
+    ReviewQueue/context、correction/close、candidate review、confirmed-memory activation、approval token+
+    dry-run、manifest-selected disposition outcome 和 normalization maintenance；
+  - browser fixture 只证明真实 React/请求契约，未冒充部署后的 Gateway/auth/network E2E。
+- `AC-24` 已关闭：
+  - 新增 `scripts/soc-alpha-acceptance.sh all|core|kafka|frontend|finalize` 和
+    `backend/scripts/soc_alpha_acceptance.py`；一条命令从空输出目录运行三类 fixture；
+  - core 通过公开 CLI、真实 SQL repository、registered Gateway handlers/service dependencies 验证
+    feedback correction/close、exact retry、changed retry `409`、decision+mutation audit 和 linked replay；
+  - Kafka 使用 ephemeral Redpanda 验证 APT `2026494`、EDR `1965810`、HIDS `HIDS-2026-0001` 的
+    strict envelope、consume、commit、post-commit idle，并验证 malformed JSON DLQ+commit；
+  - frontend component 自行启动/清理 auth-disabled isolated Next dev server，运行 API/full Rstest、
+    Playwright 和 `pnpm check`；最终生成带 boundary、failure semantics 和 SHA-256 manifest 的
+    `soc.alpha_acceptance_report.v1`。
+- `AC-49` 已关闭：
+  - 新增 `alpha-acceptance-runbook.md`，同步 solution、lifecycle、engineering contracts、mock/real
+    register、root/backend AGENTS、backend README、delivery roadmap 和 completeness matrix；
+  - 纠正旧七步/技术 Phase、Lead Agent service map、trace 字段、Kafka/SSE/Prometheus 当前/target、
+    过期 CLI command 和 mock/application reachability 描述；路线图仍是唯一执行顺序。
+- 验证：
+  - `./scripts/soc-alpha-acceptance.sh all`：aggregate `passed`，core/Kafka/frontend 全部 passed；
+  - `cd backend && ./.venv/bin/pytest -q tests/test_soc_*.py`：551 passed；
+  - architecture + migration environment：16 passed；
+  - frontend Rstest：72 files / 648 passed；SOC Playwright：3 passed；`pnpm check` 通过；
+  - backend Ruff format/check 与 shell syntax 通过；`codegraph sync .` 后新验收 generator/test 符号可查询。
+- 真实边界：
+  - deterministic analyzer、local SQLite、mock read-only providers、local Redpanda、fixture external
+    source 和 mocked browser HTTP transport 均保留在报告；不证明 live-model 质量、PostgreSQL/Kafka/K8s
+    生产能力、真实 PingAn provider/feed 或外部高风险执行。
+- 下一步：
+  - `BG-03 Alpha readiness package`：冻结本次报告和全量门禁证据，整理部署/回滚、限制与 Stage 4
+    data/credential inputs，完成 Alpha Gate 评审材料。
 
 ### 2026-07-20 — BG-P1-04 Governed memory activation completed
 

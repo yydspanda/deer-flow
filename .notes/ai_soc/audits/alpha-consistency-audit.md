@@ -1,8 +1,8 @@
 # SOC Alpha Code, Contract, and Docs Consistency Audit / 一致性审计
 
-Status: AUD-02 complete
+Status: AUD-02 complete; post-audit Stage 3 resolutions current through `BG-P1-05`
 
-Updated: 2026-07-18
+Updated: 2026-07-20
 
 Scope: current repository code versus the authoritative solution, lifecycle, engineering contracts,
 and mock/real register. This document records facts only. It does not fix code, rewrite the audited
@@ -19,7 +19,17 @@ Post-audit resolution tracking (the rows below retain the original AUD-02 eviden
 | `CONS-03` external disposition application ingress | **Resolved by `BG-P1-01`** | Authenticated `POST /api/soc/external-dispositions` accepts a strict canonical ingress command and calls the transactional service with service-level RBAC; real Zeus/ITSM/SOAR feeds remain data-gated |
 | `CONS-04` Kafka alert envelope | **Resolved by `BG-P1-01`** | `SocAlertRawEnvelope` strictly validates and bounds `soc.alert.raw.v1`, preserves raw source payload, rejects bare/invalid records without leaking raw values, and passes real Redpanda commit/DLQ smoke |
 | `CONS-02` SOC API transport mismatch | **Resolved by `BG-P1-02`** | Reviewed compatibility contract preserves `/api/soc/*` and typed success bodies; shared route class adds transport version, sanitized Problem Details and request/trace headers; OpenAPI/frontend regression freezes the decision; authenticated identity replaces the unsafe `X-Actor` draft |
+| `CONS-15` durable pre-provider journal | **Resolved by `BG-P1-03`** | Bounded `AnalysisRequestJournal` is committed on the exact pre-provider hook; stale process loss is recoverable as interrupted plus linked replay |
+| `CONS-16` correction confidence provenance | **Resolved by `BG-P1-03`** | Human and trusted external correction use distinct, uncalibrated, policy-versioned provenance through run/summary/audit/API |
 | `CONS-17` governed memory activation | **Resolved by `BG-P1-04`** | One versioned `SocMemoryService` command now owns role/reason/validity/review/CAS/audit semantics; CLI/API/Web/demo use it and retrieval rejects direct, expired, or overdue activation flags |
+| `CONS-01,05,06,08` entry/orchestration ambiguity | **Reconciled by `BG-P1-05`** | Solution/lifecycle/contracts now distinguish current CLI/Kafka/Review/Gateway paths from deferred analyze API, Kafka result topics/worker pool, and eval-only Main Orchestrator wiring |
+| `CONS-07` Lead Agent service map | **Reconciled by `BG-P1-05`** | Topology/service table now separates deterministic `SocAgentChatService` from DeerFlow-backed `SocLeadAgentChatService` |
+| `CONS-09,10,11` persistence/state/trace docs | **Reconciled by `BG-P1-05`** | Lifecycle includes current governed tables and linked-replay semantics; engineering trace contract matches nested `PipelineStepTrace` fields instead of the old flat target |
+| `CONS-19..24` operator/docs/register freshness | **Reconciled by `BG-P1-05`** | Nine-step/current directory and Kafka state, executable CLI commands, EX/DP/EV and external persistence, deferred operations, mock register and current roadmap pointer are synchronized; `alpha-acceptance-runbook.md` provides one executable evidence package |
+
+Section 4 retains the original 2026-07-18 audit observations for traceability. The table above is
+the authoritative resolution status; do not read an original “current code fact” as newer than its
+resolution row.
 
 ## 1. Audit Question / 审计问题
 

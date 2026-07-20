@@ -1,4 +1,4 @@
-"""Pydantic contracts for Phase 1 SOC Agent runtime boundaries."""
+"""Pydantic contracts for SOC Agent runtime boundaries."""
 
 from __future__ import annotations
 

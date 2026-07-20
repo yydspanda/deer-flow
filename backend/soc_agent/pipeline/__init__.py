@@ -1,1 +1,1 @@
-"""Phase 1 SOC pipeline nodes."""
+"""SOC Runtime pipeline nodes."""

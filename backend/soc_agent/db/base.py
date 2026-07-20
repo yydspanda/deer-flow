@@ -17,8 +17,8 @@ class SocBase(DeclarativeBase):
 def create_soc_tables(engine: Engine) -> None:
     """Create SOC tables for local development and tests.
 
-    Production deployments should use migrations; this helper keeps the Phase 1
-    repository testable before the migration chain is finalized.
+    Production deployments must use migrations; this helper keeps local tests
+    and isolated acceptance environments lightweight.
     """
 
     SocBase.metadata.create_all(engine)

@@ -10,13 +10,13 @@ def validate_analysis_result(result: AnalysisResult) -> AnalysisResult:
 
     if result.verdict == "false_positive" and result.confidence >= 0.9:
         if "review" not in result.recommended_action.lower():
-            raise ValueError("high-confidence false positives still require review in Phase 1")
+            raise ValueError("high-confidence false positives still require review")
     return result
 
 
 def validate_decision(decision: Decision) -> Decision:
-    """Enforce Phase 1 domain rules on final decisions."""
+    """Enforce Alpha domain rules on final decisions."""
 
     if decision.automation_allowed:
-        raise ValueError("Phase 1 never allows automated production actions")
+        raise ValueError("Alpha never allows automated production actions")
     return decision

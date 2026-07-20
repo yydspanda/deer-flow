@@ -181,6 +181,20 @@ Kafka ingestion, ReviewQueue Web/TUI, governed context, shadow disposition propo
 and append-only evaluation outcomes are available; production response side effects
 remain approval-gated and disabled without a real adapter.
 
+Run the release-level local Alpha gate from the repository root:
+
+```bash
+./scripts/soc-alpha-acceptance.sh all
+```
+
+The command generates
+`backend/.deer-flow/soc-alpha-acceptance/alpha-acceptance-report.json` and component evidence for
+APT/EDR/HIDS across CLI, local SQL, a real local Kafka-compatible broker, registered Gateway
+handlers/services, Review Web browser regression, feedback, audit, and replay. It deliberately uses
+a deterministic analyzer, local SQLite, mock investigation providers, and mocked browser transport;
+a passing report proves the documented local/test Alpha boundary, not production readiness. See
+`.notes/ai_soc/alpha-acceptance-runbook.md` for prerequisites and failure semantics.
+
 Open the SOC review workbench:
 
 ```bash

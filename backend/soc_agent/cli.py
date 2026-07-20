@@ -1,4 +1,4 @@
-"""Command-line interface for the Phase 1 SOC Agent."""
+"""Command-line interface for the SOC Agent."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Code-first entity extraction for Phase 1."""
+"""Code-first entity extraction for the SOC Runtime."""
 
 from __future__ import annotations
 

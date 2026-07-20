@@ -19,13 +19,21 @@ import {
   executeSocApprovedAction,
   getSocApprovalRequest,
   getSocDispositionSampleReviewInbox,
+  getSocNormalizationMetrics,
   getSocReviewContext,
   listSocApprovalRequests,
   listSocDispositionSampleCampaigns,
+  listSocMemoryCandidates,
+  listSocMemoryRecords,
+  listSocNormalizationBaselines,
+  listSocNormalizationIssues,
   listSocReviewItems,
   recordSocDispositionOutcome,
   rejectSocApprovalRequest,
+  reviewSocMemoryCandidate,
+  searchSocMemoryRecords,
   updateSocMemoryRetrievalActivation,
+  updateSocNormalizationIssue,
 } from "@/core/soc/api";
 
 const mockedFetch = rs.mocked(fetcher);
@@ -574,5 +582,169 @@ describe("SOC approval API", () => {
     expect(headers.get("x-soc-surface")).toBe("web");
     expect(headers.get("x-trace-id")).toBe("trace-execute-1");
     expect(headers.get("idempotency-key")).toBe("idem-execute-1");
+  });
+});
+
+describe("SOC memory API", () => {
+  test("lists scoped candidates and records without losing filters", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(jsonResponse(200, { items: [] }))
+      .mockResolvedValueOnce(jsonResponse(200, { items: [] }));
+
+    await listSocMemoryCandidates({
+      status: "pending_review",
+      tenantScope: "tenant",
+      tenantId: "tenant-1",
+      runId: "RUN-1",
+      alertId: "ALT-1",
+      queueId: "REV-1",
+      limit: 25,
+    });
+    await listSocMemoryRecords({
+      status: "confirmed",
+      tenantScope: "tenant",
+      tenantId: "tenant-1",
+      sourceCandidateId: "MC-1",
+      retrievalEnabled: true,
+      limit: 10,
+    });
+
+    expect(mockedFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/soc/memory/candidates?status=pending_review&tenant_scope=tenant&tenant_id=tenant-1&run_id=RUN-1&alert_id=ALT-1&queue_id=REV-1&limit=25",
+    );
+    expect(mockedFetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/soc/memory/records?status=confirmed&tenant_scope=tenant&tenant_id=tenant-1&source_candidate_id=MC-1&retrieval_enabled=true&limit=10",
+    );
+  });
+
+  test("reviews a candidate through a state-changing idempotent request", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, { candidate: { candidate_id: "MC-1" } }),
+    );
+
+    await reviewSocMemoryCandidate(
+      "MC/1",
+      {
+        decision: "confirm",
+        reason: "Reviewer confirmed the bounded lesson.",
+      },
+      {
+        actorId: "memory-reviewer-1",
+        surface: "web",
+        idempotencyKey: "memory-review-1",
+      },
+    );
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/memory/candidates/MC%2F1/review",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          decision: "confirm",
+          reason: "Reviewer confirmed the bounded lesson.",
+        }),
+      }),
+    );
+    const headers = firstFetchInit().headers as Headers;
+    expect(headers.get("x-soc-actor-id")).toBe("memory-reviewer-1");
+    expect(headers.get("idempotency-key")).toBe("memory-review-1");
+  });
+
+  test("searches confirmed memory as a read-only bounded request", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, { matches: [], returned_count: 0 }),
+    );
+
+    await searchSocMemoryRecords(
+      {
+        tenant_scope: "tenant",
+        tenant_id: "tenant-1",
+        text_terms: ["authorized scanner"],
+        require_retrieval_enabled: true,
+        max_tokens: 800,
+      },
+      { actorId: "analyst-1", surface: "web" },
+    );
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/memory/search",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          tenant_scope: "tenant",
+          tenant_id: "tenant-1",
+          text_terms: ["authorized scanner"],
+          require_retrieval_enabled: true,
+          max_tokens: 800,
+        }),
+      }),
+    );
+    const headers = firstFetchInit().headers as Headers;
+    expect(headers.get("idempotency-key")).toBeNull();
+  });
+});
+
+describe("SOC normalization API", () => {
+  test("loads issues, active baselines, and operations metrics", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(jsonResponse(200, { items: [] }))
+      .mockResolvedValueOnce(jsonResponse(200, { items: [] }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          schema_version: "soc.normalization_operations_metrics.v1",
+          open_issue_count: 0,
+        }),
+      );
+
+    await listSocNormalizationIssues({ status: null, limit: 40 });
+    await listSocNormalizationBaselines();
+    await getSocNormalizationMetrics();
+
+    expect(mockedFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/soc/normalization/issues?limit=40",
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+    expect(mockedFetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/soc/normalization/baselines?status=active&limit=200",
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+    expect(mockedFetch).toHaveBeenNthCalledWith(
+      3,
+      "/api/soc/normalization/metrics",
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+  });
+
+  test("updates one encoded normalization issue with an idempotency key", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, { issue_id: "NORM-1", status: "resolved" }),
+    );
+
+    await updateSocNormalizationIssue(
+      "NORM/1",
+      { status: "resolved", reason: "Parser mapping and regression reviewed." },
+      {
+        actorId: "normalizer-1",
+        surface: "web",
+        idempotencyKey: "normalization-resolve-1",
+      },
+    );
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/normalization/issues/NORM%2F1",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          status: "resolved",
+          reason: "Parser mapping and regression reviewed.",
+        }),
+      }),
+    );
+    const headers = firstFetchInit().headers as Headers;
+    expect(headers.get("idempotency-key")).toBe("normalization-resolve-1");
   });
 });

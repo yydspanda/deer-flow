@@ -139,7 +139,9 @@ Current SOC direction:
   docs instead of modifying upstream core code. Only touch existing DeerFlow core files
   for small, generic extension points or framework fixes that are clearly useful beyond
   SOC, and keep those changes easy to explain for future upstream sync.
-- PostgreSQL is the SOC business store; do not use SQLite/`alerts.db` for SOC runtime data.
+- PostgreSQL is the production/staging SOC business store. Local tests, demos, Runtime validation and
+  Alpha acceptance may use purpose-specific isolated SQLite files under `backend/.deer-flow/`; do not
+  reuse DeerFlow's generic `alerts.db` or claim SQLite evidence as PostgreSQL production evidence.
 - SOC persistence code lives under `backend/soc_agent/db/` and implements repository
   protocols from `backend/soc_agent/protocols.py`; keep it separate from DeerFlow harness
   persistence unless a generic upstream extension point is genuinely needed.
@@ -270,16 +272,22 @@ Current SOC direction:
   and must not be committed. Steps 7 and 9-12 are maintenance/evaluation/governance tracks,
   not extra fixed Runtime nodes. A rejected LLM evidence citation is safe only when decision
   policy forces degraded evidence, human review, and `automation_allowed=false`.
+- Reproduce the release-level local Alpha gate with `./scripts/soc-alpha-acceptance.sh all`.
+  It covers representative APT/EDR/HIDS across CLI, SQL, registered Gateway handlers/services,
+  real local Kafka protocol, Review Web regression, feedback, audit and replay, then writes
+  `backend/.deer-flow/soc-alpha-acceptance/alpha-acceptance-report.json`. The output is gitignored.
+  A pass is local/test Alpha evidence only: deterministic analyzer, SQLite, mock investigation
+  providers, local Redpanda and mocked browser transport remain explicitly disclosed. See
+  `.notes/ai_soc/alpha-acceptance-runbook.md`.
 
-SOC phase plan:
+SOC delivery plan (the only execution order is `.notes/ai_soc/delivery-roadmap.md`):
 
-| Phase | Goal |
+| Stage | Current status and goal |
 | --- | --- |
-| Phase 1 | CLI + Runtime reliability loop |
-| Phase 2 | Correlation + dedup evaluation/shadow design |
-| Phase 3 | Learning + classifier pre-judge + limited LLM Advisory Router |
-| Phase 4 | Daemon mode + Sub Agent parallelism + replay/router evaluation |
-| Phase 5 | Knowledge RAG, threat intel, review UI, MITRE ATT&CK, stale-knowledge handling |
+| `BD` Boss Demo v0.1 | Done: browser-first repeatable golden path |
+| `AA` SOC Alpha Completeness Audit | Done: unique 50-row matrix and frozen blocker set |
+| `BG` Close Blocking Gaps | Current: `BG-P0-01..BG-P1-05` done; `BG-03` readiness package in progress |
+| `PI` Real Data & Production Integration | Data/credential-gated: real providers, infrastructure, labels, SLO and governed rollout |
 
 ### SOC Agent Development Workflow
 
@@ -319,6 +327,8 @@ Progress is not tracked in chat history. The durable task ledger is
 | --- | --- |
 | `.notes/ai_soc/soc-agent-solution.md` | Current SOC Agent design |
 | `.notes/ai_soc/progress.md` | Durable SOC Agent progress ledger |
+| `.notes/ai_soc/alpha-acceptance-runbook.md` | One-command local Alpha acceptance and evidence boundaries |
+| `.notes/ai_soc/audits/alpha-completeness-matrix.md` | Unique capability status and closed/open blocker register |
 | `.notes/reference-index/soc-agent-engineering-contracts.md` | Engineering contracts: style, API, events, Kafka, permissions, tests |
 | `.notes/reference/cross-project-workflow.md` | Cross-project reference workflow |
 | `.notes/research/hermes-vs-deerflow-agent-patterns.md` | Referenced Claude Code/Hermes design-pattern research |
