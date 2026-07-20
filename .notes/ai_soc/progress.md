@@ -23,12 +23,12 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前交付阶段 | `BG` Stage 3 - Close Blocking Gaps（`BG-03` 技术门禁通过，负责人评审待完成） |
-| 当前目标 | `BG-03 Alpha readiness package`：产品/SOC/安全/平台负责人审阅已通过的技术报告、边界、部署/回滚和 Stage 4 外部输入 |
+| 当前交付阶段 | `BG` Stage 3 - Close Blocking Gaps（`BG-03` 技术门禁与独立评审建议通过，责任人签字待完成） |
+| 当前目标 | `BG-03 Alpha readiness package`：产品/SOC/安全/平台具名负责人确认技术报告、边界、部署/回滚和 Stage 4 外部输入 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `BG-03 owner review`：审阅 `alpha-readiness-package.md` 与本地 `soc.alpha_readiness_report.v1`，接受或退回范围并为 `PI-01..05` 指定 owner；签字前不启动 Stage 4。 |
+| 当前下一刀 | `BG-03 accountable sign-off`：根据 `alpha-gate-review.md` 记录四类具名 reviewer 的 approve/changes-requested，并为 `PI-01..05` 指定具名 owner；签字前不启动 Stage 4。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -39,7 +39,7 @@
 |---|---|---|---|---|
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
-| `BG` | Close Blocking Gaps | **Current / BG-03 Owner Review Pending** | P0/P1 与 readiness technical gate 已通过；当前等待负责人接受边界并分配 PI owner | owner review/sign-off 通过后结束 Stage 3 |
+| `BG` | Close Blocking Gaps | **Current / BG-03 Accountable Sign-Off Pending** | P0/P1、readiness technical gate 与独立四方评审建议已通过；当前等待具名负责人接受边界并分配 PI owner | accountable sign-off 通过后结束 Stage 3 |
 | `PI` | Real Data & Production Integration | Data/credential-gated | 真实 provider、基础设施、标签、SLO 和 governed rollout | Pilot readiness review 通过 |
 
 ## 能力与历史切片台账
@@ -201,6 +201,30 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-20 — BG-03 independent Alpha Gate review completed
+
+- 评审结论：
+  - 新增 `alpha-gate-review.md`，从产品、SOC 运营、安全、平台四个视角复核 readiness 报告、完整性矩阵、
+    部署/回滚和关键代码边界；四方独立意见均为“建议通过 Stage 3 技术退出”；
+  - 明确该建议只允许在正式签字后进入 Stage 4 真实集成准备，不批准共享部署、有限试点、生产发布、
+    auto-close 或高风险动作；
+  - 评审记录区分 advisor recommendation 与 accountable sign-off，不伪造 reviewer 身份、时间、决策或
+    change ticket。
+- Stage 4 责任边界：
+  - 为 `PI-01..05` 固定建议责任角色、第一份受控交付物和 entry condition；`Named owner` 仍为 Pending，
+    本地新增 mock 不算满足真实集成输入；
+  - 风险按 Act now / Track 分类，仍由 roadmap 和 completeness matrix 拥有状态，未创建平行 blocker list。
+- 证据核对：
+  - 技术 baseline 为 `4631f9fd2c0934891019e950e17fff9c8edbc660`；readiness gate passed，backend
+    `558 passed`，architecture/migration `16 passed`，matrix `Gap=0`；
+  - CodeGraph/source 复核 `SocDecisionPolicy`、`SocReviewService`、`SocMutationUnitOfWork`、
+    `SocKafkaConsumerRunner` 的控制流、服务、事务审计和 ingestion ownership 落点；
+  - 当前证据由带无关本地改动的 worktree 生成，只用于开发评审；共享归档仍需从通过评审的 clean checkout
+    重跑。
+- 下一步：
+  - `BG-03 accountable sign-off`：四类具名负责人记录 approve/changes-requested，为 `PI-01..05` 指定
+    具名 owner；完成前 `stage_transition_allowed=false`，路线不切到 Stage 4。
 
 ### 2026-07-20 — BG-03 Alpha readiness technical candidate passed
 

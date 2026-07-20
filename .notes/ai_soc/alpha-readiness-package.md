@@ -1,6 +1,6 @@
 # SOC Alpha Readiness Package / Alpha 就绪评审包
 
-Status: **Technical gates executable; owner review pending / 技术门禁可执行，负责人评审待完成**
+Status: **Technical gates and independent review passed; accountable sign-off pending / 技术门禁与独立评审建议通过，责任人签字待完成**
 
 Report schema: `soc.alpha_readiness_report.v1`
 
@@ -197,12 +197,17 @@ satisfy the handoff.
 
 ## 8. Owner Review / 负责人评审
 
+The independent four-lens assessment is recorded in [`alpha-gate-review.md`](alpha-gate-review.md).
+It recommends approving the Stage 3 technical exit, while keeping shared deployment, pilot,
+production and high-risk execution unapproved. This recommendation does not replace accountable
+owner identity and sign-off.
+
 | Reviewer role | Must answer | Status |
 |---|---|---|
-| Product owner | Is Alpha scope useful and honestly presented? | Pending |
-| SOC operations | Can analysts complete review/feedback, and are operating owners named? | Pending |
-| Security | Are data, identity, tool/action and audit boundaries acceptable? | Pending |
-| Platform/infrastructure | Are deployment, backup, stop/rollback and PI inputs actionable? | Pending |
+| Product owner | Is Alpha scope useful and honestly presented? | Advisory review: recommend approve; accountable sign-off pending |
+| SOC operations | Can analysts complete review/feedback, and are operating owners named? | Advisory review: recommend approve; accountable sign-off pending |
+| Security | Are data, identity, tool/action and audit boundaries acceptable? | Advisory review: recommend approve; accountable sign-off pending |
+| Platform/infrastructure | Are deployment, backup, stop/rollback and PI inputs actionable? | Advisory review: recommend approve; accountable sign-off pending |
 
 Approval criteria:
 

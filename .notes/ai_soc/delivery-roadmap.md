@@ -36,7 +36,7 @@ flowchart LR
 |---|---|---|---|
 | `BD` Boss Demo v0.1 | **Done** | 一条 8-10 分钟、浏览器优先、可重复的 golden path | `BD-01..03` 与 BD Gate 已通过 |
 | `AA` SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 唯一的 Complete/Gap/Mock/Data-gated/Deferred 矩阵 | 审计矩阵和 P0/P1 阻塞清单已于 2026-07-18 确认 |
-| `BG` Close Blocking Gaps | **Current / BG-03 Owner Review Pending** | P0/P1 阻塞项已关闭；Alpha readiness technical candidate 已通过 | Alpha 就绪包与 Stage 4 输入通过负责人评审 |
+| `BG` Close Blocking Gaps | **Current / BG-03 Accountable Sign-Off Pending** | P0/P1、Alpha readiness technical gate 与独立评审建议已通过 | 四类具名负责人接受边界并分配 `PI-01..05` owner |
 | `PI` Real Data & Production Integration | Data/credential-gated | 真实 PingAn/通用 provider、Kafka/PostgreSQL/K8s 和运营验证 | Pilot readiness review 通过 |
 
 Boss Demo v0.1 和 Alpha 完整性审计已于 2026-07-18 分别通过 BD Gate、AA Gate；冻结的
@@ -111,7 +111,7 @@ Stage 2 是 time-boxed 审计，不在审计过程中纵向优化单个模块。
 |---|---|---|---|
 | `BG-01` | Close P0 blockers / 修复 P0 | **Done 2026-07-18**: `BG-P0-01..02` 已关闭审批/RBAC、事务化变更和持久审计缺口 | `AC-16/21/22/34` 均有回归与故障注入证据 |
 | `BG-02` | Close P1 + E2E acceptance / 修复 P1 与端到端验收 | **Done 2026-07-20**: `BG-P1-01..05` 已完成；`soc.alpha_acceptance_report.v1` 覆盖 APT/EDR/HIDS 的 CLI/Kafka/SQL/Gateway/Web/feedback/audit/replay | 结果可重复；失败语义、offset、review、audit 和 memory boundary 符合契约 |
-| `BG-03` | Alpha readiness package / Alpha 就绪包 | **Technical pass 2026-07-20; owner review pending**: `soc.alpha_readiness_report.v1` 绑定版本化验收、全量回归、矩阵/路线 hash、部署/回滚和 Stage 4 输入 | 技术门禁已通过；产品/SOC/安全/平台负责人确认范围与 PI owner 后才通过 Alpha Gate |
+| `BG-03` | Alpha readiness package / Alpha 就绪包 | **Technical pass + independent review recommendation 2026-07-20; accountable sign-off pending**: `soc.alpha_readiness_report.v1` 绑定版本化验收、全量回归、矩阵/路线 hash、部署/回滚和 Stage 4 输入；`alpha-gate-review.md` 建议通过技术退出 | 产品/SOC/安全/平台具名负责人确认范围与 PI owner 后才通过 Alpha Gate |
 
 Stage 3 的唯一拆分与验收条件见
 [`audits/alpha-completeness-matrix.md`](audits/alpha-completeness-matrix.md) Section 6，执行顺序固定为：
@@ -175,7 +175,7 @@ Completed:    BG-P1-02 - API contract stabilization (AC-11)
 Completed:    BG-P1-03 - Runtime recovery and decision provenance (AC-13, AC-17)
 Completed:    BG-P1-04 - Governed memory activation (AC-39)
 Completed:    BG-P1-05 - Alpha E2E and docs reconciliation (AC-23, AC-24, AC-49)
-In Progress:  BG-03 - technical readiness report passed; owner review/sign-off pending
-Next:         Review alpha-readiness-package.md + generated report, accept boundaries, assign PI-01..05 owners and record approve/changes-requested
-Blocked by:   Stage transition requires explicit product/SOC/security/platform owner decision; real providers, production infrastructure and larger label corpora remain Stage 4 data-gated rather than Alpha blockers
+In Progress:  BG-03 - technical gates passed and independent review recommends approval; accountable sign-off pending
+Next:         Product/SOC/security/platform named reviewers record approve/changes-requested and assign named PI-01..05 owners; then regenerate the release archive from a clean reviewed checkout
+Blocked by:   Stage transition requires explicit accountable-owner identity and decision; real providers, production infrastructure and larger label corpora remain Stage 4 data-gated rather than Alpha blockers
 ```
