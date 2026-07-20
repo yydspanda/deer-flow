@@ -1,7 +1,7 @@
 # SOC Agent Delivery Roadmap / 阶段性交付路线
 
 > Status: **Authoritative / 权威执行顺序**  
-> Current stage: **Stage 3 - Close Blocking Gaps**
+> Current stage: **Stage 4 - Real Data & Production Integration**
 > This document owns stage order and stage gates. `soc-agent-solution.md` owns the product and
 > architecture design; `progress.md` records current execution status.
 
@@ -36,12 +36,13 @@ flowchart LR
 |---|---|---|---|
 | `BD` Boss Demo v0.1 | **Done** | 一条 8-10 分钟、浏览器优先、可重复的 golden path | `BD-01..03` 与 BD Gate 已通过 |
 | `AA` SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 唯一的 Complete/Gap/Mock/Data-gated/Deferred 矩阵 | 审计矩阵和 P0/P1 阻塞清单已于 2026-07-18 确认 |
-| `BG` Close Blocking Gaps | **Current / BG-03 Accountable Sign-Off Pending** | P0/P1、Alpha readiness technical gate 与独立评审建议已通过 | 四类具名负责人接受边界并分配 `PI-01..05` owner |
-| `PI` Real Data & Production Integration | Data/credential-gated | 真实 PingAn/通用 provider、Kafka/PostgreSQL/K8s 和运营验证 | Pilot readiness review 通过 |
+| `BG` Close Blocking Gaps | **Done / Alpha Gate Passed 2026-07-20** | P0/P1、Alpha readiness technical gate、独立评审与具名批准已完成 | `BG-03` 已批准进入 Stage 4 integration preparation |
+| `PI` Real Data & Production Integration | **Current / PI-01 In Progress** | 真实 PingAn/通用 provider、Kafka/PostgreSQL/K8s 和运营验证 | Pilot readiness review 通过 |
 
 Boss Demo v0.1 和 Alpha 完整性审计已于 2026-07-18 分别通过 BD Gate、AA Gate；冻结的
-`BG-P0-01..BG-P1-05` 已于 2026-07-20 关闭。当前只执行 `BG-03 Alpha readiness package`，将已通过的
-版本化验收报告、限制、部署/回滚说明和 Stage 4 外部输入收口成门禁材料。这仍不代表生产已完成。
+`BG-P0-01..BG-P1-05` 与 `BG-03` 已于 2026-07-20 关闭。当前只执行 `PI-01 Real providers`，先做真实
+provider intake、优先级和第一项只读 dev/staging 集成；缺少 endpoint、credential 或 approved payload
+时不以新增 mock 冒充完成。这仍不代表共享部署、试点或生产已批准。
 
 ## 3. Stage 1 - Boss Demo v0.1
 
@@ -111,7 +112,7 @@ Stage 2 是 time-boxed 审计，不在审计过程中纵向优化单个模块。
 |---|---|---|---|
 | `BG-01` | Close P0 blockers / 修复 P0 | **Done 2026-07-18**: `BG-P0-01..02` 已关闭审批/RBAC、事务化变更和持久审计缺口 | `AC-16/21/22/34` 均有回归与故障注入证据 |
 | `BG-02` | Close P1 + E2E acceptance / 修复 P1 与端到端验收 | **Done 2026-07-20**: `BG-P1-01..05` 已完成；`soc.alpha_acceptance_report.v1` 覆盖 APT/EDR/HIDS 的 CLI/Kafka/SQL/Gateway/Web/feedback/audit/replay | 结果可重复；失败语义、offset、review、audit 和 memory boundary 符合契约 |
-| `BG-03` | Alpha readiness package / Alpha 就绪包 | **Technical pass + independent review recommendation 2026-07-20; accountable sign-off pending**: `soc.alpha_readiness_report.v1` 绑定版本化验收、全量回归、矩阵/路线 hash、部署/回滚和 Stage 4 输入；`alpha-gate-review.md` 建议通过技术退出 | 产品/SOC/安全/平台具名负责人确认范围与 PI owner 后才通过 Alpha Gate |
+| `BG-03` | Alpha readiness package / Alpha 就绪包 | **Done 2026-07-20**: `soc.alpha_readiness_report.v1` 绑定版本化验收、全量回归、矩阵/路线 hash、部署/回滚和 Stage 4 输入；`alpha-gate-review.md` 记录 `yydspanda` 的具名范围批准与临时 PI owner | Alpha Gate 仅批准 Stage 4 integration preparation；共享部署、试点、生产和高风险动作仍未批准 |
 
 Stage 3 的唯一拆分与验收条件见
 [`audits/alpha-completeness-matrix.md`](audits/alpha-completeness-matrix.md) Section 6，执行顺序固定为：
@@ -126,7 +127,7 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 
 | ID | Work / 工作 | Deliverable / 产出 | Acceptance / 验收 |
 |---|---|---|---|
-| `PI-01` | Real providers / 真实能力源 | CMDB、EDR、威胁情报、security tag、Zeus 等真实 dev/staging adapter/MCP/API | provider contract、超时、权限、脱敏、审计、失败降级和 smoke 有证据 |
+| `PI-01` | Real providers / 真实能力源 | **In Progress**: CMDB、EDR、威胁情报、security tag、Zeus 等真实 dev/staging adapter/MCP/API；先完成 provider intake 并选择第一项只读集成 | provider contract、超时、权限、脱敏、审计、失败降级和 smoke 有证据 |
 | `PI-02` | Real infrastructure / 真实基础设施 | Kafka、PostgreSQL、K8s 参数与容量/恢复测试 | 吞吐、端到端延迟、重试、DLQ、幂等、连接池和故障恢复满足试点门槛 |
 | `PI-03` | Real labels and calibration / 真实标签与校准 | 脱敏、人工标注的 scenario/confidence/correlation corpus | 来源、范围、版本和 reviewer 可审计；scorer/profile 仅在离线 gate 通过后进入 shadow |
 | `PI-04` | Operations and security / 运维与安全 | 可观测性、SLO、告警、secret、RBAC、审计保留和隐私策略 | 运营同事能定位任务/预警/延迟/模型/队列问题；安全评审通过 |
@@ -138,7 +139,7 @@ Stage 4 的退出结果是 **Pilot Ready / 可试点**。正式 GA、自动关�
 
 ## 7. Parking Lot / 后续项
 
-以下事项有价值，但不能插入当前 Stage 1：
+以下事项有价值，但不能插入当前 Stage 4 的 `PI-01`：
 
 - Correlation pair corpus expansion 和 scorer v2。
 - 完整多 Sub Agent 并行自治与跨域攻击尝试。
@@ -167,7 +168,7 @@ Stage 4 的退出结果是 **Pilot Ready / 可试点**。正式 GA、自动关�
 ```text
 Completed:    BD - Boss Demo v0.1 (BD Gate passed 2026-07-18)
 Completed:    AA - SOC Alpha Completeness Audit (AA Gate passed 2026-07-18; AUD-01..03 done)
-Current Stage: BG - Close Blocking Gaps
+Completed:    BG - Close Blocking Gaps (Alpha Gate passed 2026-07-20)
 Completed:    BG-P0-01 - approval integrity and L3 authorization (AC-22, AC-34)
 Completed:    BG-P0-02 - transactional mutation and durable audit (AC-16, AC-21)
 Completed:    BG-P1-01 - versioned ingestion and feedback (AC-04, AC-08)
@@ -175,7 +176,9 @@ Completed:    BG-P1-02 - API contract stabilization (AC-11)
 Completed:    BG-P1-03 - Runtime recovery and decision provenance (AC-13, AC-17)
 Completed:    BG-P1-04 - Governed memory activation (AC-39)
 Completed:    BG-P1-05 - Alpha E2E and docs reconciliation (AC-23, AC-24, AC-49)
-In Progress:  BG-03 - technical gates passed and independent review recommends approval; accountable sign-off pending
-Next:         Product/SOC/security/platform named reviewers record approve/changes-requested and assign named PI-01..05 owners; then regenerate the release archive from a clean reviewed checkout
-Blocked by:   Stage transition requires explicit accountable-owner identity and decision; real providers, production infrastructure and larger label corpora remain Stage 4 data-gated rather than Alpha blockers
+Completed:    BG-03 - Alpha readiness package and scoped accountable approval
+Current Stage: PI - Real Data & Production Integration
+In Progress:  PI-01 - provider intake and first approved read-only dev/staging integration
+Next:         Inventory real provider candidates, map existing adapter contracts, and select the first endpoint with approved credentials/payloads
+External inputs: Real endpoint/topic, authentication, tenant mapping, payload sample and data owner are required before connector smoke; do not substitute another mock
 ```

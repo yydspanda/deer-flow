@@ -1,6 +1,6 @@
 # SOC Alpha Readiness Package / Alpha 就绪评审包
 
-Status: **Technical gates and independent review passed; accountable sign-off pending / 技术门禁与独立评审建议通过，责任人签字待完成**
+Status: **Alpha Gate approved for Stage 4 integration preparation / Alpha Gate 已批准进入 Stage 4 真实集成准备**
 
 Report schema: `soc.alpha_readiness_report.v1`
 
@@ -17,7 +17,7 @@ owned only by `audits/alpha-completeness-matrix.md`; stage order is owned only b
 |---|---|
 | Are code-controllable Alpha blockers closed? / 代码可控 Alpha 阻塞是否清零？ | **Yes**: authoritative matrix `Gap=0` |
 | Is the local/test Alpha journey repeatable? / 本地测试闭环是否可重复？ | **Yes**, when the versioned acceptance and regression gates pass |
-| May Stage 4 start automatically? / 是否自动进入 Stage 4？ | **No**: product/SOC/security/platform owner review is required |
+| May Stage 4 start? / 是否进入 Stage 4？ | **Yes, by recorded human decision**: integration preparation only |
 | Is the system production or pilot ready? / 是否生产或试点就绪？ | **No**: real providers, infrastructure, labels, operations and response rollout remain external gates |
 
 The machine report intentionally emits:
@@ -32,7 +32,9 @@ The machine report intentionally emits:
 ```
 
 `alpha_candidate_ready=true` means only that the documented technical gates passed. A human owner
-decision is a separate governance fact and must not be inferred by a script.
+decision is a separate governance fact and must not be inferred by a script. That decision is now
+recorded in [`alpha-gate-review.md`](alpha-gate-review.md); the machine report remains unchanged by
+design.
 
 ## 2. One-Command Evidence / 一键证据
 
@@ -197,24 +199,28 @@ satisfy the handoff.
 
 ## 8. Owner Review / 负责人评审
 
-The independent four-lens assessment is recorded in [`alpha-gate-review.md`](alpha-gate-review.md).
-It recommends approving the Stage 3 technical exit, while keeping shared deployment, pilot,
-production and high-risk execution unapproved. This recommendation does not replace accountable
-owner identity and sign-off.
+The independent four-lens assessment and accountable decision are recorded in
+[`alpha-gate-review.md`](alpha-gate-review.md). `yydspanda` approved Stage 4 development and real
+integration preparation, while keeping shared deployment, pilot, production and high-risk execution
+unapproved. The same identity temporarily covers all roles during solo development; actual environment
+owners must reconfirm their areas before shared deployment or pilot.
 
 | Reviewer role | Must answer | Status |
 |---|---|---|
-| Product owner | Is Alpha scope useful and honestly presented? | Advisory review: recommend approve; accountable sign-off pending |
-| SOC operations | Can analysts complete review/feedback, and are operating owners named? | Advisory review: recommend approve; accountable sign-off pending |
-| Security | Are data, identity, tool/action and audit boundaries acceptable? | Advisory review: recommend approve; accountable sign-off pending |
-| Platform/infrastructure | Are deployment, backup, stop/rollback and PI inputs actionable? | Advisory review: recommend approve; accountable sign-off pending |
+| Product owner | Is Alpha scope useful and honestly presented? | Approved by `yydspanda` at `2026-07-20T18:42:25+08:00` |
+| SOC operations | Can analysts complete review/feedback, and are operating owners named? | Approved by temporary owner `yydspanda`; pilot operations remain gated |
+| Security | Are data, identity, tool/action and audit boundaries acceptable? | Approved by temporary owner `yydspanda`; actual environment review remains gated |
+| Platform/infrastructure | Are deployment, backup, stop/rollback and PI inputs actionable? | Approved by temporary owner `yydspanda`; shared deployment remains gated |
 
-Approval criteria:
+Gate transition record:
 
-- review the generated report and nested artifact hashes from a clean reviewed commit;
-- accept the explicit Mock/Data-gated/Deferred boundaries;
-- assign owners for `PI-01..05` inputs;
-- record approve/changes-requested, reviewer identities, time and reason in the release/change system;
-- only then update `delivery-roadmap.md` and `progress.md` to make Stage 4 current.
+- [x] Reviewed the generated development report and nested artifact hashes.
+- [x] Accepted the explicit Mock/Data-gated/Deferred boundaries.
+- [x] Assigned temporary named owners for `PI-01..05` during solo development.
+- [x] Recorded reviewer identity, time, scope and reason in `alpha-gate-review.md`.
+- [x] Authorized Stage 4 integration preparation only.
+- [ ] Regenerate a release archive from a clean reviewed checkout before shared deployment.
+- [ ] Obtain actual security/platform/response owner approval before shared deployment or pilot.
 
-Until that decision exists, `BG-03` remains in progress even when all technical gates pass.
+`BG-03` is complete. The two unchecked deployment conditions belong to `PI-02/PI-04/PI-05`; they do
+not authorize production behavior and must not be hidden by local evidence.

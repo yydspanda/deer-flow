@@ -23,12 +23,12 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前交付阶段 | `BG` Stage 3 - Close Blocking Gaps（`BG-03` 技术门禁与独立评审建议通过，责任人签字待完成） |
-| 当前目标 | `BG-03 Alpha readiness package`：产品/SOC/安全/平台具名负责人确认技术报告、边界、部署/回滚和 Stage 4 外部输入 |
+| 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-01` 进行中） |
+| 当前目标 | `PI-01 Real providers`：完成真实 provider intake，选择并接通第一项经过批准的只读 dev/staging 能力源 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `BG-03 accountable sign-off`：根据 `alpha-gate-review.md` 记录四类具名 reviewer 的 approve/changes-requested，并为 `PI-01..05` 指定具名 owner；签字前不启动 Stage 4。 |
+| 当前下一刀 | `PI-01 provider intake`：盘点 CMDB/EDR/HIDS/TI/security-tag/Zeus 等候选源与现有 adapter contract，选择第一项具备 endpoint、credential、approved payload 和 data owner 的只读集成；条件不足时不新增 mock。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -39,8 +39,8 @@
 |---|---|---|---|---|
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
-| `BG` | Close Blocking Gaps | **Current / BG-03 Accountable Sign-Off Pending** | P0/P1、readiness technical gate 与独立四方评审建议已通过；当前等待具名负责人接受边界并分配 PI owner | accountable sign-off 通过后结束 Stage 3 |
-| `PI` | Real Data & Production Integration | Data/credential-gated | 真实 provider、基础设施、标签、SLO 和 governed rollout | Pilot readiness review 通过 |
+| `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
+| `PI` | Real Data & Production Integration | **Current / PI-01 In Progress** | 真实 provider、基础设施、标签、SLO 和 governed rollout；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
 
 ## 能力与历史切片台账
 
@@ -201,6 +201,26 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-20 — Alpha Gate approved; Stage 4 / PI-01 started
+
+- 具名决定：
+  - 项目负责人 `yydspanda` 于 `2026-07-20T18:42:25+08:00` 明确批准 Alpha Gate；个人开发阶段临时
+    兼任产品、SOC 运营、安全、平台 reviewer，并临时负责 `PI-01..05`；
+  - 批准范围仅为 Stage 4 development / real-integration preparation，不批准共享部署、有限试点、生产、
+    auto-close、suppression、isolation、blocking、attack simulation 或其他高风险外部副作用；
+  - 进入共享环境或 pilot 前，必须由实际 security/platform/response-system owner 重新确认对应边界。
+- 阶段转换：
+  - `BG-03` 与 Stage 3 标记为 Done，Alpha Gate passed；`PI` Stage 4 成为唯一 Current stage；
+  - `PI-01 Real providers` 成为唯一 In Progress task，先做 provider intake、contract mapping 和第一项只读
+    dev/staging 集成选择；缺少 endpoint/credential/approved payload/data owner 时不得用新增 mock 冒充。
+- 证据边界：
+  - `soc.alpha_readiness_report.v1` 仍保留机器侧 `pending_owner_review`/`stage_transition_allowed=false`，因为
+    脚本不会推断后续人工授权；`alpha-gate-review.md` 是独立的人类 gate decision 记录；
+  - 当前带无关本地改动生成的开发报告不作为共享部署归档；`PI-02/PI-04` 必须在共享部署前从 clean reviewed
+    checkout 重跑并归档，同时补实际环境 owner 审批。
+- 下一步：
+  - 执行 `PI-01 provider intake`，不提前插入 `PI-02..05` 或 Parking Lot 工作。
 
 ### 2026-07-20 — BG-03 independent Alpha Gate review completed
 

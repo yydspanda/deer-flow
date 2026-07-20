@@ -1,10 +1,12 @@
 # SOC Alpha Gate Review / Alpha 门禁评审记录
 
-Status: **Independent review recommends approval; accountable owner sign-off pending / 独立评审建议通过，责任人签字待完成**
+Status: **Approved for Stage 4 integration preparation / 已批准进入 Stage 4 真实集成准备**
 
 Task: `BG-03`
 
 Review date: `2026-07-20`
+
+Approval recorded: `2026-07-20T18:42:25+08:00`
 
 Technical baseline: `4631f9fd2c0934891019e950e17fff9c8edbc660`
 
@@ -17,8 +19,8 @@ owned by `delivery-roadmap.md`; capability status is owned by
 
 | Decision item / 决策项 | Assessment / 评审结论 |
 |---|---|
-| Stage 3 technical exit / Stage 3 技术退出 | **Recommend approve / 建议通过** |
-| Stage 4 real-integration planning / Stage 4 真实集成准备 | **Eligible after explicit owner approval / 正式签字后可开始** |
+| Stage 3 technical exit / Stage 3 技术退出 | **Approved / 已批准** |
+| Stage 4 real-integration planning / Stage 4 真实集成准备 | **Approved to start / 已批准开始** |
 | Shared dev/staging deployment / 共享开发或测试环境部署 | **Not yet approved / 尚未批准** |
 | Limited pilot / 有限试点 | **Not ready / 尚未就绪** |
 | Production or GA / 生产或正式发布 | **Not ready / 尚未就绪** |
@@ -31,8 +33,9 @@ external side effects.
 
 The generated `soc.alpha_readiness_report.v1` remains authoritative for the technical run and correctly
 keeps `release_decision=pending_owner_review`, `stage_transition_allowed=false`, and
-`production_ready=false`. This review does not rewrite those machine facts or impersonate accountable
-owners.
+`production_ready=false`: the machine report cannot infer a later human decision. The signed record in
+Section 6 supplies that separate governance fact and permits only the Stage 4 preparation scope stated
+above; it does not change `production_ready=false`.
 
 ## 2. Evidence Reviewed / 已审证据
 
@@ -125,8 +128,8 @@ This table prioritizes review conditions without becoming a second blocker regis
 
 | Priority | Risk / 风险 | Required control / 控制要求 | Owned work package |
 |---|---|---|---|
-| Act now | No accountable names for real-system inputs | Assign one named accountable owner for each `PI-01..05` package | `PI-01..05` |
-| Act now | Development evidence was generated with unrelated worktree changes present | Regenerate the release archive from a clean checkout of the approved baseline | Alpha Gate sign-off |
+| Before shared deployment | Solo-development ownership is temporarily consolidated | Reassign or reconfirm security/platform/response ownership with the actual environment owners | `PI-01..05` |
+| Before shared deployment | Development evidence was generated with unrelated worktree changes present | Regenerate the release archive from a clean checkout of the approved baseline | `PI-02`, `PI-04` |
 | Act now | Real data/provider/security constraints are unknown | Complete environment, data classification, credential and provider intake before implementation | `PI-01`, `PI-02`, `PI-04` |
 | Act now | No production-quality label baseline | Define a representative, desensitized, reviewer-audited corpus and evaluation protocol | `PI-03` |
 | Track | Analyst value may differ from fixture behavior | Track review time, correction rate, evidence usefulness and manual escalation | `PI-03`, `PI-04` |
@@ -136,16 +139,17 @@ This table prioritizes review conditions without becoming a second blocker regis
 
 ## 5. Stage 4 Accountability / Stage 4 责任分配
 
-Role boundaries are proposed below so assignment is unambiguous. A role label is not a named owner;
-the `Named owner` cells must be completed in the release/change system before the Alpha Gate closes.
+Role boundaries remain explicit even though one owner temporarily covers them during solo development.
+The temporary assignment is sufficient to start Stage 4 integration preparation, but actual security,
+platform and response-system owners must reconfirm their areas before shared deployment or pilot.
 
 | Work package | Accountable role / 责任角色 | Named owner / 具名责任人 | First controlled deliverable / 首个受控交付物 |
 |---|---|---|---|
-| `PI-01 Real providers` | SOC Integration Owner | **Pending** | Provider inventory plus one approved read-only dev/staging contract and smoke |
-| `PI-02 Real infrastructure` | Platform/SRE Owner | **Pending** | Target topology, security parameters, capacity/SLO targets and recovery test plan |
-| `PI-03 Real labels and calibration` | SOC Quality/Evaluation Owner | **Pending** | Versioned label policy, reviewer roster and representative seed corpus |
-| `PI-04 Operations and security` | SOC Operations Owner, with Security reviewer | **Pending** | Threat model, observability/SLO plan, secrets/audit/retention and incident ownership |
-| `PI-05 Governed rollout` | SOC Product/Risk Owner, with response-system owner | **Pending** | Shadow policy, promotion metrics, rollback triggers and independent action approval |
+| `PI-01 Real providers` | SOC Integration Owner | `yydspanda` (temporary) | Provider inventory plus one approved read-only dev/staging contract and smoke |
+| `PI-02 Real infrastructure` | Platform/SRE Owner | `yydspanda` (temporary) | Target topology, security parameters, capacity/SLO targets and recovery test plan |
+| `PI-03 Real labels and calibration` | SOC Quality/Evaluation Owner | `yydspanda` (temporary) | Versioned label policy, reviewer roster and representative seed corpus |
+| `PI-04 Operations and security` | SOC Operations Owner, with Security reviewer | `yydspanda` (temporary) | Threat model, observability/SLO plan, secrets/audit/retention and incident ownership |
+| `PI-05 Governed rollout` | SOC Product/Risk Owner, with response-system owner | `yydspanda` (temporary) | Shadow policy, promotion metrics, rollback triggers and independent action approval |
 
 The five packages may be planned after gate approval, but implementation starts only when the package's
 external inputs and named owner are available. Local mock expansion does not satisfy a package entry
@@ -153,20 +157,25 @@ condition.
 
 ## 6. Accountable Sign-Off / 正式签字
 
-The independent review above is complete. The following record is intentionally blank because an AI
-assistant cannot invent reviewer identity, authority, timestamp, or change-ticket approval.
+The project owner explicitly approved the proposed solo-development sign-off statement. The same
+identity temporarily covers all four roles; this is recorded rather than presented as four independent
+reviews.
 
 | Required reviewer | Named reviewer | Decision | Timestamp | Reason / change record |
 |---|---|---|---|---|
-| Product owner | **Pending** | `pending` | - | - |
-| SOC operations | **Pending** | `pending` | - | - |
-| Security | **Pending** | `pending` | - | - |
-| Platform/infrastructure | **Pending** | `pending` | - | - |
+| Product owner | `yydspanda` | `approve` | `2026-07-20T18:42:25+08:00` | Approve Stage 4 development and real-integration preparation only |
+| SOC operations | `yydspanda` (temporary) | `approve` | `2026-07-20T18:42:25+08:00` | Accept Alpha analyst workflow boundary; pilot remains unapproved |
+| Security | `yydspanda` (temporary) | `approve` | `2026-07-20T18:42:25+08:00` | Accept current controls for integration work; high-risk actions remain disabled |
+| Platform/infrastructure | `yydspanda` (temporary) | `approve` | `2026-07-20T18:42:25+08:00` | Accept local evidence; shared deployment remains separately gated |
 
 Allowed decisions are `approve` or `changes_requested`. Approval means all four reviewers accept the
 scope and claim boundaries, `PI-01..05` have named accountable owners, and a clean-checkout release
 archive is required before any shared deployment. A changes-requested decision must reference a
 numbered roadmap/matrix item rather than silently creating an untracked implementation stream.
 
-Until this table is completed in the authoritative release/change record, `BG-03` remains in progress,
-Stage 4 remains non-current, and `stage_transition_allowed` remains false.
+**Human gate decision:** `approved_for_stage4_integration_preparation`.
+
+`BG-03` is complete and Stage 4 may become current. This approval does not authorize shared deployment,
+pilot, production, auto-close, suppression, isolation, blocking, attack simulation or any other
+high-risk external side effect. Those remain governed by `PI-02`, `PI-04`, and `PI-05` evidence and
+fresh approval from the actual environment owners.
