@@ -127,7 +127,7 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 
 | ID | Work / 工作 | Deliverable / 产出 | Acceptance / 验收 |
 |---|---|---|---|
-| `PI-01` | Real providers / 真实能力源 | **In Progress**: CMDB、EDR、威胁情报、security tag、Zeus 等真实 dev/staging adapter/MCP/API；先完成 provider intake 并选择第一项只读集成 | provider contract、超时、权限、脱敏、审计、失败降级和 smoke 有证据 |
+| `PI-01` | Real providers / 真实能力源 | **In Progress**: 已完成 212 条唯一 Zeus 告警的可追溯 corpus intake、PingAn source/parser Checkpoint B 和 structured fallback 修复；当前审阅 NIDS/EDR/TI/SIEM field coverage，再选择第一项获批只读 dev/staging 集成 | corpus 保持唯一 ID、lineage 和显式敏感证据模式；10 条可用 structured fallback 均产生 bounded evidence，2 条空 rawLogs 显式报数据缺口；Adapter field-use review 通过；真实 provider contract、超时、权限、数据边界、审计、失败降级和 smoke 有证据 |
 | `PI-02` | Real infrastructure / 真实基础设施 | Kafka、PostgreSQL、K8s 参数与容量/恢复测试 | 吞吐、端到端延迟、重试、DLQ、幂等、连接池和故障恢复满足试点门槛 |
 | `PI-03` | Real labels and calibration / 真实标签与校准 | 脱敏、人工标注的 scenario/confidence/correlation corpus | 来源、范围、版本和 reviewer 可审计；scorer/profile 仅在离线 gate 通过后进入 shadow |
 | `PI-04` | Operations and security / 运维与安全 | 可观测性、SLO、告警、secret、RBAC、审计保留和隐私策略 | 运营同事能定位任务/预警/延迟/模型/队列问题；安全评审通过 |
@@ -178,7 +178,7 @@ Completed:    BG-P1-04 - Governed memory activation (AC-39)
 Completed:    BG-P1-05 - Alpha E2E and docs reconciliation (AC-23, AC-24, AC-49)
 Completed:    BG-03 - Alpha readiness package and scoped accountable approval
 Current Stage: PI - Real Data & Production Integration
-In Progress:  PI-01 - provider intake and first approved read-only dev/staging integration
-Next:         Inventory real provider candidates, map existing adapter contracts, and select the first endpoint with approved credentials/payloads
+In Progress:  PI-01 - PingAn parsed-field coverage and first approved read-only dev/staging integration
+Next:         Review Checkpoint B artifacts, map important NIDS/EDR/TI/SIEM fields, then select the first approved endpoint
 External inputs: Real endpoint/topic, authentication, tenant mapping, payload sample and data owner are required before connector smoke; do not substitute another mock
 ```

@@ -24,8 +24,8 @@ _SYSLOG_HEADER_RE = re.compile(
 _NESTED_JSON_FIELD_NAMES = frozenset({"rule_labels", "req_body", "rsp_body"})
 _HTTP_HEADER_FIELD_NAMES = frozenset({"req_header", "rsp_header"})
 _FORWARDED_FIELD_NAMES = frozenset({"xff", "x_forwarded_for"})
-_SENSITIVE_KEY_RE = re.compile(r"(?:authorization|cookie|password|passwd|secret|token|credential|pwd)", re.IGNORECASE)
 _MAX_NESTED_JSON_CHARS = 64_000
+_MAX_JSON_PREFIX_CHARS = 512
 
 
 @dataclass(frozen=True)
@@ -74,6 +74,35 @@ class PingAnDelimitedJsonMessageParser:
             fields=parsed,
             header={"prefix": prefix},
         )
+
+
+class PingAnJsonObjectMessageParser:
+    """Parse one complete JSON object with an optional bounded text prefix."""
+
+    parser_name = "pingan_json_object"
+    parser_version = "v1"
+
+    def parse(self, message: str, *, source_path: str) -> ParsedRawMessageEvidence | None:
+        search_window = message[: _MAX_JSON_PREFIX_CHARS + 1]
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"{", search_window):
+            start = match.start()
+            try:
+                parsed, end = decoder.raw_decode(message[start:])
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict) or message[start + end :].strip():
+                continue
+            prefix = message[:start].strip()
+            return _result(
+                message,
+                source_path=source_path,
+                parser_name=self.parser_name,
+                parser_version=self.parser_version,
+                fields=parsed,
+                header={"prefix": prefix} if prefix else {},
+            )
+        return None
 
 
 class PingAnQuotedKvMessageParser:
@@ -151,6 +180,7 @@ class PingAnLooseKvMessageParser:
 
 DEFAULT_PINGAN_MESSAGE_PARSERS: tuple[PingAnRawMessageParser, ...] = (
     PingAnDelimitedJsonMessageParser(),
+    PingAnJsonObjectMessageParser(),
     PingAnQuotedKvMessageParser(),
     PingAnCommaKvMessageParser(),
     PingAnLooseKvMessageParser(),
@@ -226,9 +256,9 @@ def _decode_nested_fields(
                 warnings=warnings,
             )
             if nested is not None:
-                _set_nested(decoded, path, _redact_sensitive(nested))
+                _set_nested(decoded, path, nested)
             elif repaired_value is not None:
-                _set_nested(repaired, path, _redact_sensitive(repaired_value))
+                _set_nested(repaired, path, repaired_value)
             if repair_observation is not None:
                 repair_observations.append(repair_observation)
         elif field_name in _HTTP_HEADER_FIELD_NAMES:
@@ -380,8 +410,6 @@ def _decode_http_header(value: str) -> dict[str, object]:
         normalized_value = raw_value.strip()
         if not normalized_name:
             continue
-        if _SENSITIVE_KEY_RE.search(normalized_name):
-            normalized_value = "[REDACTED]"
         headers.setdefault(normalized_name, []).append(normalized_value)
     result: dict[str, object] = {"start_line": lines[0].strip(), "headers": headers}
     forwarded_values = [item for name in ("x-forwarded-for", "x-real-ip") for value in headers.get(name, []) for item in _forwarded_chain(value)]
@@ -392,14 +420,6 @@ def _decode_http_header(value: str) -> dict[str, object]:
 
 def _forwarded_chain(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
-
-
-def _redact_sensitive(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {str(key): "[REDACTED]" if _SENSITIVE_KEY_RE.search(str(key)) else _redact_sensitive(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_redact_sensitive(item) for item in value]
-    return value
 
 
 def _set_nested(target: dict[str, object], path: tuple[str, ...], value: object) -> None:

@@ -26,6 +26,12 @@ from soc_agent.normalizers.pingan_evidence import build_pingan_fact_inputs
 from soc_agent.normalizers.pingan_messages import parse_pingan_raw_message
 
 RAW_MESSAGE_FIELD = "message"
+_PINGAN_TOPIC_SOURCE_TYPES = {
+    "ptp-nids": AlertSourceType.NIDS,
+    "sec_guard_wb": AlertSourceType.THREAT_INTEL,
+    "t_gbd_zeus_data": AlertSourceType.SIEM,
+}
+_PINGAN_TRUSTED_STRUCTURED_FALLBACK_TOPICS = frozenset({"t_gbd_zeus_data"})
 
 
 def is_pingan_platform_payload(payload: Mapping[str, Any]) -> bool:
@@ -109,6 +115,7 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
                 raw_event_index,
                 raw_event,
                 supplementary_input_paths=[path for path in _raw_message_paths(alert) if path != f"{raw_event_path}.message"],
+                structured_fallback_trust=_structured_fallback_trust(hit_log),
             ),
         },
         "raw": original,
@@ -125,6 +132,7 @@ def _evidence_input_policy(
     raw_event: dict[str, Any],
     *,
     supplementary_input_paths: list[str] | None = None,
+    structured_fallback_trust: EvidenceTrustLevel = EvidenceTrustLevel.LOW,
 ) -> dict[str, Any]:
     raw_event_path = _raw_event_path(hit_log_index, raw_event_index)
     if _has_raw_message(raw_event):
@@ -148,9 +156,18 @@ def _evidence_input_policy(
             selected_layer=EvidenceLayer.RAW_STRUCTURED,
             fallback_reason="raw_message_missing",
             ignore_processed_fields_for_reasoning=False,
-            trust_level=EvidenceTrustLevel.LOW,
+            trust_level=structured_fallback_trust,
         )
     return policy.model_dump(mode="json", exclude_none=True)
+
+
+def _structured_fallback_trust(
+    hit_log: Mapping[str, Any],
+) -> EvidenceTrustLevel:
+    topic = _first_str(hit_log, ("topic",))
+    if topic and topic.strip().lower() in _PINGAN_TRUSTED_STRUCTURED_FALLBACK_TOPICS:
+        return EvidenceTrustLevel.HIGH
+    return EvidenceTrustLevel.LOW
 
 
 def _legacy_platform_context(
@@ -569,13 +586,25 @@ def _evidence(alert: dict[str, Any], hit_log: dict[str, Any], raw_event: dict[st
 
 
 def _source_type(hit_log: dict[str, Any], raw_event: dict[str, Any]) -> AlertSourceType:
+    topic = _first_str(hit_log, ("topic",)) or ""
+    explicit_type = _PINGAN_TOPIC_SOURCE_TYPES.get(topic.strip().lower())
+    if explicit_type is not None:
+        return explicit_type
+
     text = " ".join(
         value.lower()
         for value in [
-            _first_str(hit_log, ("topic", "topicName")) or "",
+            topic,
+            _first_str(hit_log, ("topicName",)) or "",
             _first_str(raw_event, ("appname", "metadata__product__name", "skyeye_type")) or "",
         ]
     )
+    if "threat_intel" in text or "threat intel" in text or "threatbook" in text or "威胁情报" in text:
+        return AlertSourceType.THREAT_INTEL
+    if "nids" in text:
+        return AlertSourceType.NIDS
+    if "ndr" in text:
+        return AlertSourceType.NDR
     if "edr" in text:
         return AlertSourceType.EDR
     if "hids" in text:

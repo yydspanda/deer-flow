@@ -50,6 +50,7 @@ deer-flow/
 ├── contracts/                      # Cross-component JSON contracts (e.g. subagent status, skill review)
 ├── scripts/                        # Root orchestration scripts invoked by the Makefile (check, configure, doctor, support_bundle, serve, nginx, docker, deploy, setup_wizard)
 ├── tests/                          # Root-level tests (currently tests/skills/ — public skill tests)
+├── validation/                     # Local/offline validation builders; generated sensitive artifacts are gitignored
 └── docs/                           # Cross-cutting docs, plans, and design notes
 ```
 
@@ -218,10 +219,17 @@ Current SOC direction:
   `auto_close_allowed` remains false.
 - PingAn `zeusRawLogs[].message` values are parsed only inside the PingAn normalizer. Deterministically
   parsed message fields are high-trust primary facts; Zeus structured fields are reduced-trust
-  fallback candidates. Preserve the complete original payload for replay/audit and expose only
-  bounded primary/supplementary evidence content to analysis nodes.
+  fallback candidates unless the source adapter has an explicit trusted-source policy. PingAn
+  `T_GBD_zeus_data` is the sole current exact-topic exception: its first structured event is
+  high-trust fallback evidence; every other PingAn structured fallback defaults to low trust.
+  Source type, missing `message`, similar topic names, and topic prefixes do not grant this
+  exception. Preserve the complete original payload for replay/audit and expose only bounded
+  primary/supplementary evidence content to analysis nodes.
 - Nested JSON-in-string and HTTP fields use allowlisted, size-bounded decoders. Raw bodies, headers,
-  tokens, cookies, and credentials must not enter `BoundedAnalysisEvidence` without redaction.
+  tokens, cookies, and credentials default to redaction before `BoundedAnalysisEvidence`. An
+  explicitly approved model environment may set `SOC_LLM_SENSITIVE_EVIDENCE_MODE=full`; this mode
+  must be visible in the evidence contract and audit, must preserve selected values unchanged, and
+  must never become the generic deployment default.
 - Nested decode failure keeps the original string plus a warning. Conservatively validated repair
   may enter a separately labeled `repaired_fields` projection, but never strict `decoded_fields` or
   source fact. `MessageSchemaObservation` and accepted-baseline fingerprints expose parser drift,
@@ -272,6 +280,12 @@ Current SOC direction:
   and must not be committed. Steps 7 and 9-12 are maintenance/evaluation/governance tracks,
   not extra fixed Runtime nodes. A rejected LLM evidence citation is safe only when decision
   policy forces degraded evidence, human review, and `automation_allowed=false`.
+- Build the local real-alert validation corpus with
+  `backend/.venv/bin/python validation/compact_zeus/build_alert_validation_corpus.py`.
+  The source PKL remains authoritative for existing IDs; exact JSON demos add lineage,
+  conflicts remain explicit variants, and missing demos append one canonical row. Raw inputs,
+  generated PKL/manifest and rich HTML/Excel outputs are sensitive and gitignored.
+  Historical `agent_response` values are model output, not analyst ground truth.
 - Reproduce the release-level local Alpha gate with `./scripts/soc-alpha-acceptance.sh all`.
   It covers representative APT/EDR/HIDS across CLI, SQL, registered Gateway handlers/services,
   real local Kafka protocol, Review Web regression, feedback, audit and replay, then writes
@@ -291,8 +305,8 @@ SOC delivery plan (the only execution order is `.notes/ai_soc/delivery-roadmap.m
 | --- | --- |
 | `BD` Boss Demo v0.1 | Done: browser-first repeatable golden path |
 | `AA` SOC Alpha Completeness Audit | Done: unique 50-row matrix and frozen blocker set |
-| `BG` Close Blocking Gaps | Current: `BG-P0-01..BG-P1-05` done; `BG-03` technical pass, owner review pending |
-| `PI` Real Data & Production Integration | Data/credential-gated: real providers, infrastructure, labels, SLO and governed rollout |
+| `BG` Close Blocking Gaps | Done: Alpha Gate passed 2026-07-20 |
+| `PI` Real Data & Production Integration | Current: `PI-01` real provider and approved-payload intake in progress |
 
 ### SOC Agent Development Workflow
 

@@ -2,7 +2,7 @@
 
 Status: Active review baseline
 
-Last updated: 2026-07-20
+Last updated: 2026-07-24
 
 Primary audience: product review, architecture review, engineering review, security review
 
@@ -94,7 +94,7 @@ write confirmed memory, or execute side-effect actions.
 | 场景假设 | Scenario Hypothesis | `ScenarioHypothesis` | 反弹 shell、C2、横向移动等带证据的暂定场景，不是最终 verdict |
 | 角色裁决 | Role Resolution | `RoleResolution` | 给出 observed/tentative/conflicted/confirmed/unresolved 状态和暂定值 |
 | 冲突报告 | Conflict Report | `ConflictReport` | 记录上游字段、加工字段、模型结论之间的冲突 |
-| 受限分析证据 | Bounded Analysis Evidence | `BoundedAnalysisEvidence` | 允许进入模型的限长、脱敏、带来源证据，不等于完整 raw payload |
+| 受限分析证据 | Bounded Analysis Evidence | `BoundedAnalysisEvidence` | 允许进入模型的限长、带来源证据；默认脱敏，批准环境可显式保留原值，不等于完整 raw payload |
 | Skill 选择上下文 | Skill Context | `SocSkillContext` | 当前选择清单、原因、摘要和 hash；不是完整 `SKILL.md` 正文 |
 | 分析运行 | Analysis Run | `AnalysisRun` | 一次 alert 分析的完整记录、trace、result |
 | 决策审计 | Decision Audit | `DecisionAuditRecord` | analyze/replay/correct 的判定沿革和证据策略摘要，不替代完整 run |
@@ -446,12 +446,15 @@ The system must handle vendor differences without turning the core schema into a
 2. Evidence policy records which fields are trusted, weak, conflicting, or derived.
 3. PingAn deterministically parses all available `zeusRawLogs[].message` values through a
    source-scoped parser registry. Supported MVP formats are delimited JSON, quoted KV,
-   comma-delimited KV, and loose KV.
+   complete direct/prefixed JSON objects, comma-delimited KV, and loose KV.
    Supported nested JSON/HTTP fields are decoded by an allowlisted decoder with size limits;
-   decoded request/response bodies and headers are redacted before entering bounded model context.
+   parser evidence preserves original values. Model-boundary projection defaults to redaction;
+   an explicitly approved environment may select `SOC_LLM_SENSITIVE_EVIDENCE_MODE=full`.
 4. Fields parsed from the raw message are the highest-priority observable facts. Conflicting
-   `zeusRawLogs[]` structured fields remain visible as medium/low-trust fallback candidates;
-   canonical processed fields remain lower-trust derived values.
+   `zeusRawLogs[]` structured fields remain visible as low-trust fallback candidates by default;
+   only exact topic `T_GBD_zeus_data` is currently allowlisted as high trust. Source type,
+   missing `message`, similar topic names, and prefixes do not grant that exception. Canonical
+   processed fields remain lower-trust derived values.
 5. The original payload is never replaced: `AlertInput.raw` and `AnalysisRun.input_payload`
    retain every hit log, raw event, message, and platform field for replay and audit.
 6. The first successfully parsed message becomes primary evidence; additional messages become
@@ -459,19 +462,22 @@ The system must handle vendor differences without turning the core schema into a
    stable `observation_scope`; different requests or process executions are not collapsed into one
    session conflict. Analysis nodes receive size-bounded parsed content, not only a source path and
    not the unbounded vendor payload.
-7. If raw message parsing fails, Runtime preserves the raw text, emits a warning, and keeps the
-   structured fallback at reduced trust. If raw message is absent, PingAn falls back to
-   `zeusRawLogs[]` with explicit low trust.
+7. If raw message parsing fails, Runtime preserves the raw text and emits a warning. If raw message
+   is absent, PingAn projects only the first `zeusRawLogs[]` object as bounded structured evidence;
+   later objects remain in `AlertInput.raw`. Trust is source-configured rather than inferred from
+   message presence: `T_GBD_zeus_data` is a trusted internal SIEM/model source and uses high-trust
+   structured fallback. Empty `zeusRawLogs=[]` is an upstream evidence gap, not synthetic evidence.
 8. Strict nested JSON failure does not discard the field. Runtime attempts a conservative repair:
    accepted structures enter a separately labeled `repaired_fields` projection, while rejected or
-   failed repair uses a redacted string fallback. Repair is field-policy aware and validates root
+   failed repair uses a policy-controlled string fallback. Repair is field-policy aware and validates root
    type, depth, node count, key length, and source-evidenced keys/string values. The original string
    always stays in `fields`, and repaired content never masquerades as strict-decoded source fact.
 9. Every selected message emits `MessageSchemaObservation`: `recognized` means the deterministic
    parser handled the structure, `degraded` means partial/nested decoding failed, and `unsupported`
    means no parser handled the selected message. A structural fingerprint supports baseline diff.
-10. `EvidenceCoverageReport` records parsed/decoded/repaired paths, canonical/fact/scenario consumers,
-    exact bounded LLM projection, redaction/replacement, omission reasons, truncation, and known
+10. `EvidenceCoverageReport` records structured/parsed/decoded/repaired paths,
+    canonical/fact/scenario consumers, exact bounded LLM projection, redaction/full mode,
+    omission reasons, truncation, and known
     high-value gaps. A candidate path is not reported as projected unless its value is present in the
     exact prompt projection. High-value expectations come from `EvidenceFieldImportanceRegistry`:
     core provides vendor-neutral defaults, while source adapters may add typed rules in
@@ -1154,6 +1160,25 @@ Current PingAn docs live under:
 - `.notes/ai_soc/capabilities/pingan/capability-cards.md`
 - `.notes/ai_soc/capabilities/pingan/knowledge-candidates.md`
 
+Current real-alert Adapter coverage:
+
+- `ptp-nids -> nids`, `sec_guard_wb -> threat_intel`, and
+  `T_GBD_zeus_data -> siem` are confirmed PingAn edge mappings. They do not
+  belong in vendor-neutral Runtime code.
+- A non-empty `zeusRawLogs[].message` remains high-trust primary evidence.
+  When no message exists, the complete selected structured event remains the
+  explicit low-trust fallback.
+- Parser precedence is delimited JSON, complete direct/prefixed JSON object,
+  quoted KV, comma KV, then loose KV. The complete-JSON parser rejects arrays,
+  fragments, incomplete JSON, trailing payloads, and prefixes beyond its bound.
+- The 212-alert Checkpoint B replay has zero normalization errors, zero
+  unsupported schemas, zero unexpected `other` source types, and no
+  message/policy contract violations. This proves parser/source coverage only;
+  parsed-field use in canonical facts, scenarios and bounded analysis is still
+  reviewed separately in Checkpoint C.
+- Reproducible local evidence and representative sample paths are documented in
+  `validation/compact_zeus/pingan_adapter_rebuild_review.md`.
+
 ### 11.1 What goes where / 平安内容怎么落位
 
 | PingAn content / 平安内容 | Destination / 落位 | Reason / 原因 |
@@ -1259,8 +1284,14 @@ soc recover RUN_ID --reason "worker exited during provider call" --database-url 
 # Compare stub and live model over an offline sample set
 soc eval offline samples/ --live-llm --model-name deepseek-v4-pro --pretty
 
-# Reproduce the complete local Runtime/evaluation/governance review package
+# Build the local lineage-preserving real-alert validation corpus
 cd ..
+backend/.venv/bin/python validation/compact_zeus/build_alert_validation_corpus.py
+
+# Rebuild the ZeusRawLogs compaction evidence from that unified corpus
+backend/.venv/bin/python validation/compact_zeus/build_zeus_compaction_artifacts.py
+
+# Reproduce the complete local Runtime/evaluation/governance review package
 ./scripts/soc-runtime-validation.sh all
 
 # Reproduce the release-level APT/EDR/HIDS Alpha acceptance package
@@ -1273,6 +1304,13 @@ skill_context -> analyze -> schema_validate -> evidence_grounding -> decide`; no
 suggestions, human labels, correlation evaluation, and governed authorization are explicit offline or
 sidecar tracks. Exact commands, artifact contracts, and the latest local findings are documented in
 [`runtime-validation-runbook.md`](runtime-validation-runbook.md).
+
+The local `validation/compact_zeus` corpus is a PI-01 payload-compatibility input, not an evaluation
+label set. It keeps one canonical row per alert ID, retains legacy conflicts as lineage, and preserves
+the source PKL rows unchanged. Historical `agent_response` values remain model outputs, and a corpus
+with no analyst `ground_label` cannot support accuracy, calibration, suppression, or automation
+claims. The generated PKL, manifest and rich reports contain or derive from internal alerts and remain
+gitignored.
 
 The release-level command is a different gate: it combines CLI, SQL, registered Gateway
 handlers/services, a real local Kafka-compatible broker, Review Web browser regression, feedback,

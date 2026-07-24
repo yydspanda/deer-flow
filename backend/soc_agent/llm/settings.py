@@ -10,6 +10,7 @@ from math import isfinite
 
 from deerflow.config import get_app_config
 from deerflow.config.app_config import AppConfig
+from soc_agent.contracts import SensitiveEvidenceMode
 from soc_agent.llm.analyzer import JsonLLMAnalyzer, LLMChatClient
 from soc_agent.llm.deerflow_client import DeerFlowLLMChatClient
 from soc_agent.pipeline.analyzer import StubLLMAnalyzer
@@ -40,6 +41,7 @@ class SocLLMSettings:
     requests_per_minute: int = 0
     admission_timeout_seconds: float = 5.0
     call_timeout_seconds: float = 180.0
+    sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> SocLLMSettings:
@@ -53,6 +55,17 @@ class SocLLMSettings:
             raise ValueError("SOC_ANALYZER_MODE must be 'stub' or 'llm'") from exc
 
         model_name = values.get("SOC_LLM_MODEL")
+        try:
+            sensitive_evidence_mode = SensitiveEvidenceMode(
+                values.get(
+                    "SOC_LLM_SENSITIVE_EVIDENCE_MODE",
+                    SensitiveEvidenceMode.REDACT.value,
+                )
+                .strip()
+                .lower()
+            )
+        except ValueError as exc:
+            raise ValueError("SOC_LLM_SENSITIVE_EVIDENCE_MODE must be 'redact' or 'full'") from exc
         return cls(
             mode=mode,
             model_name=model_name.strip() if model_name and model_name.strip() else None,
@@ -78,6 +91,7 @@ class SocLLMSettings:
                 name="SOC_LLM_CALL_TIMEOUT_SECONDS",
                 minimum=0.001,
             ),
+            sensitive_evidence_mode=sensitive_evidence_mode,
         )
 
     def with_overrides(
@@ -176,6 +190,7 @@ def configured_soc_llm_status(
         "requests_per_minute": resolved.requests_per_minute,
         "admission_timeout_seconds": resolved.admission_timeout_seconds,
         "call_timeout_seconds": resolved.call_timeout_seconds,
+        "sensitive_evidence_mode": resolved.sensitive_evidence_mode.value,
         "secrets_included": False,
     }
 

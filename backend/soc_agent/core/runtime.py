@@ -30,6 +30,7 @@ from soc_agent.contracts import (
     PipelineStepTrace,
     RuntimeFailure,
     RuntimeFailureKind,
+    SensitiveEvidenceMode,
     SocSkillContext,
 )
 from soc_agent.core.decision_policy import SocDecisionPolicy
@@ -73,13 +74,22 @@ def inspect_alert_normalization(
     )
 
 
-def build_analysis_request_for_payload(payload: Mapping[str, Any]) -> LLMAnalysisRequest:
+def build_analysis_request_for_payload(
+    payload: Mapping[str, Any],
+    *,
+    sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
+) -> LLMAnalysisRequest:
     """Build bounded analysis input without running analyzer or decision nodes."""
 
     alert = _normalize_alert(payload)
     entities = extract_entities(alert)
     fact_reconstruction = reconstruct_facts(alert)
-    request = build_llm_analysis_request(alert, entities, fact_reconstruction)
+    request = build_llm_analysis_request(
+        alert,
+        entities,
+        fact_reconstruction,
+        sensitive_evidence_mode=sensitive_evidence_mode,
+    )
     return request.model_copy(update={"skill_context": resolve_skill_context_for_request(request)})
 
 
@@ -89,6 +99,7 @@ def analyze_alert(
     analyzer: LLMAnalyzer | None = None,
     decision_policy: DecisionPolicy | None = None,
     before_provider: AnalysisBeforeProviderHook | None = None,
+    sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
 ) -> AnalysisRun:
     """Analyze one alert through the fixed nine-step pipeline."""
 
@@ -117,7 +128,12 @@ def analyze_alert(
             run,
             "build_analysis_input",
             {"alert": alert, "entities": entities, "fact_reconstruction": fact_reconstruction},
-            lambda _: build_llm_analysis_request(alert, entities, fact_reconstruction),
+            lambda _: build_llm_analysis_request(
+                alert,
+                entities,
+                fact_reconstruction,
+                sensitive_evidence_mode=sensitive_evidence_mode,
+            ),
         )
         skill_context = _run_step(
             run,

@@ -53,6 +53,7 @@ from soc_agent.contracts import (
     ReviewQueueItem,
     ReviewQueuePriority,
     ReviewQueueStatus,
+    SensitiveEvidenceMode,
     ServiceRequestContext,
     SimilarAlertQuery,
     SocAgentActionCommand,
@@ -151,15 +152,18 @@ class DeterministicAnalysisRuntime:
         *,
         analyzer: LLMAnalyzer | None = None,
         decision_policy: DecisionPolicy | None = None,
+        sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
     ) -> None:
         self._analyzer = analyzer
         self._decision_policy = decision_policy
+        self._sensitive_evidence_mode = sensitive_evidence_mode
 
     def analyze(self, payload: Mapping[str, Any]) -> AnalysisRun:
         return analyze_alert(
             payload,
             analyzer=self._analyzer,
             decision_policy=self._decision_policy,
+            sensitive_evidence_mode=self._sensitive_evidence_mode,
         )
 
     def analyze_journaled(
@@ -173,6 +177,7 @@ class DeterministicAnalysisRuntime:
             analyzer=self._analyzer,
             decision_policy=self._decision_policy,
             before_provider=before_provider,
+            sensitive_evidence_mode=self._sensitive_evidence_mode,
         )
 
 

@@ -3148,6 +3148,7 @@ def _analysis_service_for_repository(
     return SocAnalysisService(
         runtime=DeterministicAnalysisRuntime(
             analyzer=build_configured_analyzer(settings=settings),
+            sensitive_evidence_mode=settings.sensitive_evidence_mode,
         ),
         repository=repository,
         summary_repository=repository,

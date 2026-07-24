@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-01` 进行中） |
-| 当前目标 | `PI-01 Real providers`：完成真实 provider intake，选择并接通第一项经过批准的只读 dev/staging 能力源 |
+| 当前目标 | `PI-01 Real providers`：完成首批真实 payload coverage，选择并接通第一项经过批准的只读 dev/staging 能力源 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `PI-01 provider intake`：盘点 CMDB/EDR/HIDS/TI/security-tag/Zeus 等候选源与现有 adapter contract，选择第一项具备 endpoint、credential、approved payload 和 data owner 的只读集成；条件不足时不新增 mock。 |
+| 当前下一刀 | `PI-01 PingAn Adapter Checkpoint C`：structured fallback 已修复；从 NIDS 开始与用户逐类确认重要 fields 应进入 canonical/fact/scenario/LLM evidence 还是仅审计保留，再增量补 mapping。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -201,6 +201,126 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-24 — PI-01 PingAn structured fallback bounded evidence
+
+- 用户确认的输入与信任边界：
+  - `zeusRawLogs[].message` 不存在时，只把第一条 structured raw event 投影给当前分析节点；
+    后续 raw events 继续完整保存在 `AlertInput.raw` / run input 中，不进入当前模型上下文。
+  - structured fallback 默认 `low trust`；当前唯一例外是 exact topic
+    `T_GBD_zeus_data`，作为已确认的内部 SIEM/模型来源使用 `high trust`。
+  - source type、缺少 `message`、相似 topic 名称和 topic prefix 均不能自动提权。
+  - parser/repair 保持原始 password/token/cookie/header/body 值；通用模型边界默认
+    `redact`，当前经批准环境显式配置
+    `SOC_LLM_SENSITIVE_EVIDENCE_MODE=full`。
+- 实现：
+  - `BoundedAnalysisEvidence v3` 新增显式 sensitive mode；structured fallback 使用逐字段、
+    总预算受限的 JSON projection，`full` 模式不改写已选字段值，超预算项进入 omission。
+  - `EvidenceCoverageReport v3` 增加 structured field paths，并从真实 bounded projection
+    生成 projected/sanitized/omitted/truncated 结果。
+  - CLI/Runtime/DeerFlow LLM settings 与 daemon compose/K8s 配置共享同一 mode；部署默认仍是
+    `redact`，本地私有 `.env` 使用 `full`。
+  - PingAn Adapter 使用 exact-topic trust allowlist，反向测试锁定其他 topic fallback 仍为
+    `low`。
+- 212 条 replay：
+  - 200 条 `raw_message_first`、12 条 `structured_fallback`，policy violation 为 0。
+  - 12 条 fallback 中 10 条存在首条 raw event，共投影 164 个 structured leaf fields；
+    2 条 `zeusRawLogs=[]` 被显式记录为上游证据缺口，不伪造证据。
+  - 3 条 bounded projection 因总预算记录 truncation/omission；完整原始 payload 未丢失。
+- 下一步：
+  - 进入 PingAn Adapter Checkpoint C，从 NIDS 开始逐来源审阅 parsed fields 的
+    canonical/fact/scenario/LLM evidence coverage，只补 adapter mapping，不把厂商字段泄漏到通用
+    Runtime。
+
+### 2026-07-24 — PI-01 PingAn Adapter Checkpoint B implemented
+
+- Adapter 实现：
+  - 用户确认 `ptp-nids -> nids`、`sec_guard_wb -> threat_intel`、
+    `T_GBD_zeus_data -> siem`；映射只存在于 PingAn Adapter；
+  - 新增 `pingan_json_object.v1`，在 quoted/comma KV 前解析完整 direct JSON 或 bounded-prefix +
+    JSON；拒绝数组、fragment、残缺 JSON、尾随 payload 和超界前缀；
+  - 保持 delimited JSON 优先，避免改变现有 APT 语义；无 message 时继续使用完整 structured fallback。
+- 212 条 replay：
+  - `other` 从 108 降为 0，source type 分布为 `edr=37`、`hids=23`、`ndr=44`、`nids=95`、
+    `siem=10`、`threat_intel=3`；
+  - unsupported observations 从 68 降为 0；recognized 为 323，既有 nested-repair degraded 仍为 20；
+  - parser 分布为 JSON object 146、delimited JSON 105、quoted KV 52、comma KV 40；
+  - `raw_message_first=200`、`structured_fallback=12`，逐条 policy contract violation 为 0。
+- 审阅产物：
+  - 新增 `build_pingan_adapter_review_artifacts.py`，生成 direct NIDS、prefixed EDR、
+    prefixed Threat Intel、no-message SIEM 四份敏感本地 JSON；
+  - 产物同时包含完整 parsed fields/field schema、canonical alert、fact reconstruction、
+    evidence coverage 和 bounded analysis evidence；
+  - 初步暴露 EDR 128 个 schema 节点但 0 role claim、SIEM fallback 0 role claim 等 Checkpoint C
+    field-use 缺口；`high_value_gaps=0` 不能被解释为字段已完整使用。
+- 验证：
+  - 聚焦 PingAn/Runtime/normalization/capability tests：`70 passed`；
+  - validation corpus tests：`4 passed`；
+  - 212 条 corpus rebuild 与四份 Checkpoint B artifact assertions：passed。
+- 下一步：
+  - 与用户逐份审阅四个 JSON，只在确认字段语义后补 PingAn mapping；尚未进入真实消费测试。
+
+### 2026-07-24 — PI-01 PingAn Adapter coverage review checkpoint
+
+- 结论：
+  - 不是重写通用 SOC Runtime，而是基于 212 条真实语料增量完善 PingAn source adapter；
+  - 保持 `message` 存在时 `raw_message_first`，不存在时 `structured_fallback`；当前 200/12 条策略选择
+    符合该契约；
+  - `ptp-nids` 的 95 条被错误归入 `other`，且 direct JSON 被 quoted-KV parser 部分命中或完全不支持；
+  - `edr-core-xc` 的 14 个 message 是 syslog-prefix + JSON，`sec_guard_wb` 的 4 个 message 是
+    ThreatBook-prefix + JSON，当前均 unsupported；
+  - `T_GBD_zeus_data` 10 条都没有 message，fallback 正确，只需确认它作为 Zeus 模型/关联输出是否归为
+    `siem`。
+- 审阅产物：
+  - 新增 `validation/compact_zeus/pingan_adapter_rebuild_review.md`，固定不变量、完整 Topic 基线、
+    代表 alert IDs、候选 source types、JSON parser 顺序和 A-D 四个 checkpoint；
+  - Checkpoint B/C 要分别审阅完整 parser 输出和 parsed-leaf coverage，不能把 parser success 当成字段
+    已完整用于研判。
+- 当前边界：
+  - 本切片未修改 PingAn Adapter；
+  - 等用户确认 `ptp-nids -> nids`、`sec_guard_wb -> threat_intel`、
+    `T_GBD_zeus_data -> siem` 后再进入实现。
+
+### 2026-07-24 — PI-01 real-alert corpus intake and lineage validation
+
+- 输入盘点：
+  - `datas/full_alert_2026_month_forth_sample_200.pkl` 的 `alert_full_data` 是主数据；文件名虽含 200，
+    实际为 210 行、210 个唯一 `alert_id`；
+  - 5 个历史 JSON 中，2 个与 PKL 精确一致，1 个 ID 已存在但有 5 处网络地址字段差异，2 个 ID
+    不在 PKL；
+  - 210 个历史 `agent_response` 都是合法 JSON 且 ID 对齐，但它们是历史模型输出，不是人工标签；
+    `ground_label` 非空数为 0。
+- 实现：
+  - 新增 `validation/compact_zeus/build_alert_validation_corpus.py`，使用受限 pickle loader 生成
+    `soc.validation.alert_corpus.v1`；
+  - 每个 `alert_id` 只保留一个 canonical row；PKL 对已有 ID 权威，精确 JSON 只增加
+    `source_refs`，冲突 JSON 完整保存在 `legacy_demo_variants`，缺失 JSON 包装为
+    `app_code/flow_id/alert_id/alert_data` 后追加；
+  - 新增 provenance、canonical hash、lineage、response-presence 字段和不含原始字段值的 manifest；
+    原始数据、统一 PKL、manifest、HTML、Excel 均按敏感本地产物忽略；
+  - 新增共享 `restricted_dataframe_pickle.py`，语料构建和压缩报告使用同一窄白名单 loader，
+    并用负向测试确认未授权 pickle global 会被拒绝；
+  - 修正 `build_zeus_compaction_artifacts.py` 的仓库根目录/default input，使其可直接消费统一 corpus。
+- 结果：
+  - 输出 212 行、212 个唯一 ID；原 210 行所有原始列逐值保持不变；
+  - merge 状态为 `exact_match=2`、`conflict_pkl_authoritative=1`、`appended=2`；
+  - 212 条均可通过当前 SOC normalizer；source type 为 `edr=37`、`hids=23`、`ndr=44`、
+    `other=108`；
+  - 200 条采用 `raw_message_first`，12 条采用 `structured_fallback`；40 条告警含 unsupported
+    message schema、12 条含 degraded schema、12 条无 message observation。这证明输入契约可接收，
+    不证明 adapter/parser 语义覆盖完整；
+  - `compact_zeus` 全量重跑：115 条命中 1,915 个长编码片段，节省 3,475,830 字符，
+    `alert_full_data` 字符压缩率 17.43%，非 `zeusRawLogs` 字段变化数为 0。
+- 验证：
+  - `backend/.venv/bin/python -m pytest -q validation/compact_zeus/test_build_alert_validation_corpus.py`
+    -> `4 passed`；
+  - `backend/.venv/bin/python -m ruff check validation/compact_zeus/*.py` -> passed；
+  - `backend/.venv/bin/python validation/compact_zeus/build_alert_validation_corpus.py` -> passed；
+  - `backend/.venv/bin/python validation/compact_zeus/build_zeus_compaction_artifacts.py` -> passed。
+- 下一步：
+  - 仍属于 `PI-01`：先将 `T_GBD_zeus_data`、`ptp-nids`、`sec_guard_wb` 的 `other` 分类及
+    unsupported/degraded message schema 转成可审阅 adapter/parser coverage register；
+  - corpus 目前没有人工 ground truth，不能用于置信度校准、生产准确率声明或自动处置门槛。
 
 ### 2026-07-20 — Alpha Gate approved; Stage 4 / PI-01 started
 

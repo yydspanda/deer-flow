@@ -80,6 +80,7 @@ def build_evidence_coverage_report(
     parsed_by_path = _parsed_messages_by_path(alert)
     message_schemas = observe_message_schemas(alert)
     parsed_paths: list[str] = []
+    structured_paths: list[str] = []
     decoded_paths: list[str] = []
     repaired_paths: list[str] = []
     parsed_paths_by_message: dict[str, list[str]] = {}
@@ -138,6 +139,23 @@ def build_evidence_coverage_report(
                     )
                 )
 
+    for source_path, evidence in evidence_by_path.items():
+        if evidence.layer is not EvidenceLayer.RAW_STRUCTURED:
+            continue
+        structured_paths.extend(evidence.projected_field_paths)
+        structured_paths.extend(evidence.omitted_field_paths)
+        projected_paths.extend(evidence.projected_field_paths)
+        sanitized_paths.extend(evidence.sanitized_field_paths)
+        omissions.extend(
+            EvidenceCoverageOmission(
+                field_path=path,
+                reason=evidence.omission_reasons.get(path, "bounded_projection_budget"),
+            )
+            for path in evidence.omitted_field_paths
+        )
+        if evidence.truncated:
+            truncated_evidence_paths.append(source_path)
+
     coverage_extension = alert.extensions.get("analysis_context_coverage")
     if isinstance(coverage_extension, Mapping):
         deferred_sources = coverage_extension.get("deferred_sources")
@@ -166,6 +184,7 @@ def build_evidence_coverage_report(
     warnings.extend(f"unmapped high-value evidence: {item.field_path} -> {item.expected_target}" for item in high_value_gaps)
 
     parsed_paths = _sorted_unique(parsed_paths)
+    structured_paths = _sorted_unique(structured_paths)
     decoded_paths = _sorted_unique(decoded_paths)
     repaired_paths = _sorted_unique(repaired_paths)
     canonical_paths = _sorted_unique(canonical_paths)
@@ -176,6 +195,7 @@ def build_evidence_coverage_report(
     omissions = list({(item.field_path, item.reason): item for item in omissions}.values())
     return EvidenceCoverageReport(
         message_schemas=message_schemas,
+        structured_field_paths=structured_paths,
         parsed_field_paths=parsed_paths,
         decoded_field_paths=decoded_paths,
         repaired_field_paths=repaired_paths,
@@ -189,6 +209,7 @@ def build_evidence_coverage_report(
         high_value_gaps=high_value_gaps,
         counts={
             "message_schema_count": len(message_schemas),
+            "structured_field_count": len(structured_paths),
             "parsed_field_count": len(parsed_paths),
             "decoded_field_count": len(decoded_paths),
             "repaired_field_count": len(repaired_paths),

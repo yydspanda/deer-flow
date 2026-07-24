@@ -172,11 +172,26 @@ For PingAn legacy alerts, `normalizers/pingan_platform.py` preserves the complet
 `normalizers/pingan_messages.py` deterministically parses `zeusRawLogs[].message`. Parsed message
 facts have higher trust than Zeus structured fallback fields. Analysis nodes receive only bounded
 primary/supplementary evidence through `LLMAnalysisRequest`, never the unbounded vendor payload.
+Confirmed PingAn topic mappings classify `ptp-nids` as `nids`, `sec_guard_wb` as
+`threat_intel`, and `T_GBD_zeus_data` as `siem`; these aliases must not leak into generic
+Runtime code. The message parser order is delimited JSON, complete direct/prefixed JSON
+object, quoted KV, comma KV, then loose KV. A JSON prefix is bounded and retained only as
+header metadata. Arrays, fragments, incomplete JSON and trailing payloads remain unsupported.
+When no non-empty message exists, the adapter must continue selecting the complete
+first `zeusRawLogs[]` object through `structured_fallback`; later objects remain only in
+`AlertInput.raw`. `T_GBD_zeus_data` is configured as a trusted internal SIEM/model source, so its
+structured fallback is high-trust even though it remains model-derived evidence. Every other
+PingAn structured fallback defaults to low trust; source type, missing `message`, similar topic
+names, and topic prefixes must not inherit this exact-topic exception. An empty `zeusRawLogs`
+array is an explicit upstream evidence gap and must not produce fabricated bounded evidence.
 Supported JSON-in-string and HTTP fields are decoded only through allowlisted, size-bounded decoders;
-bounded evidence replaces raw bodies/headers with redacted decoded projections.
+parser output preserves original decoded values. Bounded evidence defaults to redacted projections,
+while an approved environment may explicitly use `SOC_LLM_SENSITIVE_EVIDENCE_MODE=full`; full mode
+keeps selected values unchanged and records over-budget fields as coverage omissions.
 Strict nested decode failure preserves the original string and warning. Conservatively validated
-repair is stored only in the separately labeled `repaired_fields` projection; rejected repair uses
-a redacted string fallback, and repaired JSON is never a strict-decoded source fact.
+repair is stored only in the separately labeled `repaired_fields` projection; rejected repair
+continues to preserve the original parser value, while the model-boundary projection applies its
+configured redacted/full policy. Repaired JSON is never a strict-decoded source fact.
 `MessageSchemaObservation` records parser status and structural fingerprints for
 accepted-baseline drift checks. `LLMAnalysisRequest.evidence_coverage` records parsed/decoded usage,
 sanitization, truncation, omissions, and high-value mapping gaps; prompts receive only its compact
@@ -192,6 +207,8 @@ projection; ungrounded analyzer claims force deterministic review. Model admissi
 and independently bounded with `SOC_LLM_MAX_CONCURRENCY`, optional `SOC_LLM_REQUESTS_PER_MINUTE`,
 `SOC_LLM_ADMISSION_TIMEOUT_SECONDS`, and `SOC_LLM_CALL_TIMEOUT_SECONDS`. Admission timeout limits
 queue wait; call timeout limits one provider invocation and becomes retryable `analyzer_timeout`.
+`SOC_LLM_SENSITIVE_EVIDENCE_MODE=redact|full` controls the model-boundary projection and defaults to
+`redact`; `full` is allowed only after the target model environment is explicitly approved.
 
 `soc_agent.core.SocDecisionPolicy` is the only Runtime boundary that converts validated
 `AnalysisResult` into an operational `Decision`. Analyzer confidence is currently an uncalibrated

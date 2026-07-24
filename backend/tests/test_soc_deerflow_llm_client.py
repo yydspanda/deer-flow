@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from soc_agent.cli import main
+from soc_agent.contracts import SensitiveEvidenceMode
 from soc_agent.llm import (
     DeerFlowLLMChatClient,
     JsonLLMAnalyzer,
@@ -109,6 +110,7 @@ def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
             "SOC_LLM_REQUESTS_PER_MINUTE": "20",
             "SOC_LLM_ADMISSION_TIMEOUT_SECONDS": "0.25",
             "SOC_LLM_CALL_TIMEOUT_SECONDS": "30",
+            "SOC_LLM_SENSITIVE_EVIDENCE_MODE": "full",
         }
     )
     assert settings.mode is SocAnalyzerMode.LLM
@@ -117,6 +119,7 @@ def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
     assert settings.requests_per_minute == 20
     assert settings.admission_timeout_seconds == 0.25
     assert settings.call_timeout_seconds == 30
+    assert settings.sensitive_evidence_mode is SensitiveEvidenceMode.FULL
 
     with pytest.raises(ValueError, match="SOC_ANALYZER_MODE"):
         SocLLMSettings.from_env({"SOC_ANALYZER_MODE": "automatic"})
@@ -128,6 +131,8 @@ def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
         SocLLMSettings.from_env({"SOC_LLM_ADMISSION_TIMEOUT_SECONDS": "nan"})
     with pytest.raises(ValueError, match="SOC_LLM_CALL_TIMEOUT_SECONDS"):
         SocLLMSettings.from_env({"SOC_LLM_CALL_TIMEOUT_SECONDS": "0"})
+    with pytest.raises(ValueError, match="SOC_LLM_SENSITIVE_EVIDENCE_MODE"):
+        SocLLMSettings.from_env({"SOC_LLM_SENSITIVE_EVIDENCE_MODE": "unsafe"})
 
 
 def test_deerflow_client_enforces_model_call_timeout() -> None:

@@ -70,6 +70,12 @@ config.yaml.bak
 # Local raw SOC alert demos may contain internal asset/user data.
 alert_demo/
 datas/
+validation/20260715114256145.csv
+validation/compact_zeus/data/
+validation/compact_zeus/*.pkl
+validation/compact_zeus/*.xlsx
+validation/compact_zeus/*.html
+validation/compact_zeus/*.ipynb
 
 .history/
 

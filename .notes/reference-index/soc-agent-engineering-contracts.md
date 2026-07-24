@@ -134,8 +134,11 @@ contracts
 - Raw input is immutable evidence. Parsing adds `ParsedRawMessageEvidence`; it never replaces or
   deletes `AlertInput.raw` or `AnalysisRun.input_payload`.
 - Evidence priority for PingAn observable facts is fixed as: deterministically parsed raw message
-  (`raw_message/high`) > Zeus structured fallback (`raw_structured/medium` or `low`) > canonical
-  processed field (`processed_field/low` when raw-first policy is active).
+  (`raw_message/high`) > Zeus structured fallback (`raw_structured/low` by default; only an exact,
+  reviewed topic allowlist may override it) > canonical processed field (`processed_field/low` when
+  raw-first policy is active). The current sole override is exact topic `T_GBD_zeus_data`, whose
+  structured fallback is `high`; source type, missing `message`, similar names, and topic prefixes
+  must not grant that trust.
 - `FieldTrust` must describe the field actually used. A fallback structured field must never inherit
   the selected raw message's high trust merely because both live in the same `zeusRawLogs[]` item.
 - All parseable messages are retained. One message is selected as primary evidence and the remaining
@@ -165,7 +168,8 @@ contracts
   Positive outcome language without outcome-specific bounded evidence adds
   `unproven_outcome_claim`; negated or explicitly uncertain outcome language must not trigger it.
 - Parser failure is explicit: preserve raw text, emit a warning, expose only bounded text to the
-  analysis node, and keep structured fallback candidates at reduced trust.
+  analysis node, and keep structured fallback candidates at the trust selected by the source
+  policy. PingAn defaults that trust to `low` except for its exact reviewed topic allowlist.
 - Every selected raw message must emit `MessageSchemaObservation`. `recognized` means parser grammar
   success, `degraded` means partial/nested decode warnings, and `unsupported` means no deterministic
   parser output exists; none of these statuses is a verdict or probability.
@@ -1005,12 +1009,19 @@ normalizers/hids.py
 
 - source-specific normalizer 可以在 `AlertInput.extensions["evidence_input_policy"]` 写入该策略；干净供应商可以省略。
 - `raw_message_first` 表示原始 message 是首选证据；`structured_fallback` 表示 raw message 缺失，只能退回原始结构化日志对象。
-- fallback 必须显式记录 `fallback_reason` 和较低 `trust_level`，不能伪装成 raw message 同等可信。
+- fallback 必须显式记录 `fallback_reason` 和 source-policy `trust_level`，不能因为缺少
+  `message`、source type、相似 topic 名称或前缀而伪装成 raw message 同等可信。默认必须是
+  `low`；只有经过评审的 exact-topic allowlist 可以覆写。
 - `ignore_processed_fields_for_reasoning=True` 只表示研判主输入不读加工字段；加工字段仍可保存在 `extensions` 中供审计、对比和冲突检测。
 - `EvidenceLayer` 当前至少区分 `raw_message`、`raw_structured`、`processed_field`、`agent_inference`、`human_confirmed`。
 - 平安 ZEUS/天眼 adapter 使用 `raw_message_first + structured_fallback`：
   - 优先读取 `alert.hitLog[].zeusRawLogs[].message`。
-  - raw message 缺失时 fallback 到完整 `zeusRawLogs[]` 对象，并标记 `fallback_reason=raw_message_missing`、`trust_level=low`。
+  - raw message 缺失时只选择第一条 `zeusRawLogs[]` 对象形成有界 structured projection；
+    完整数组继续保存在原始 payload，后续对象不进入当前模型输入。
+  - structured fallback 默认标记 `fallback_reason=raw_message_missing`、`trust_level=low`。
+  - 当前唯一高可信例外是 exact topic `T_GBD_zeus_data`；仅该 topic 使用
+    `trust_level=high`。`siem` source type、相似名称和前缀都不能命中。
+  - `zeusRawLogs=[]` 是上游证据缺口；不能生成 synthetic bounded evidence。
 - 后续 `FieldTrust` / `RoleClaim` / `RoleResolution` / `ConflictReport` 建立在该 policy 之后：先决定主证据输入，再重建方向、角色和资产候选；不能在 normalizer 层直接下最终攻击方向或处置目标结论。
 
 ### Fact reconstruction 约束
@@ -1033,22 +1044,30 @@ normalizers/hids.py
 - 冲突裁决必须输出暂定值或 unresolved、支持/反对 claim IDs、语义置信度、证据缺口、人工核查清单和 automation guard；不能一边报告冲突，一边把值伪装成 confirmed。
 - fact layer 的 `automation_allowed` 始终为 false；即使角色由人工确认，也必须再经过 action policy/approval。
 - 事实重建只做 deterministic 规则；LLM 只能读取 fact layer 进行解释、补充候选或提出复核问题，不能绕过该层直接相信上游加工字段。
-- raw message 存在时，canonical processed fields 默认低可信且不作为主推理输入；raw message 缺失时 structured fallback 必须保留低可信 warning。
+- raw message 存在时，canonical processed fields 默认低可信且不作为主推理输入；raw message
+  缺失时 structured fallback 必须保留 fallback warning，并沿用 source policy 的显式 trust。
+  PingAn 默认 `low`，仅 exact topic `T_GBD_zeus_data` 为 `high`。
 
 ### Nested message decoding / 嵌套 message 解码约束
 
 - JSON parser 递归保留真实 object/array；JSON-in-string、HTTP headers、XFF chain 只通过 allowlisted decoder 处理，禁止无界递归猜测所有字符串。
 - nested decoder 必须限制字段名、最大长度和解析深度；失败写 parser warning，不中断告警。
-- `ParsedRawMessageEvidence.fields` 保留第一层解析结果，`decoded_fields` 保存受控二次解码结果；完整原文仍只以 `AlertInput.raw` / `AnalysisRun.input_payload` 为审计来源。
+- `ParsedRawMessageEvidence.fields` 保留第一层解析结果，`decoded_fields` 保存受控二次解码结果；
+  parser 层必须保持解析所得原始值，不在这里改写 password/token/cookie/header/body。完整原文仍以
+  `AlertInput.raw` / `AnalysisRun.input_payload` 为审计来源。
 - nested JSON 严格解析失败后必须保留 `fields` 原始字符串和 parser warning，并可尝试保守 repair。
   repair 结果必须按字段策略验证根容器类型、非空结构、最大深度、最大节点数、key 长度、key source
   evidence 和 string value source evidence；accepted 结果只写入独立
-  `repaired_fields`，不得写入 `decoded_fields` 或覆盖原文。rejected/error repair 使用脱敏、限长字符串
-  fallback。
+  `repaired_fields`，不得写入 `decoded_fields` 或覆盖原文。rejected/error repair 继续保留原始
+  string 和 observation；模型边界再依据 evidence mode 决定原样投影或脱敏 fallback。
 - 每次 repair attempt 必须生成 `NestedJsonRepairObservation`，至少记录 field path、
   accepted/rejected/error、strategy、repair log count 和不含敏感原文的 reason。
 - 本地逐步验证产物必须保存对应 Runtime 节点的原始 contract `model_dump(mode="json")`；允许增加步骤、源文件 hash 和上一步引用等最小 envelope 元数据，但不得用审阅聚合、翻译字段或人工结论替换真实节点输出。
-- body/header/token/cookie/password 等内容进入 `BoundedAnalysisEvidence` 前必须脱敏或以 decoded projection 替换；不能因为字段来自 raw message 就绕过敏感信息边界。
+- body/header/token/cookie/password 等内容由模型边界的 `SensitiveEvidenceMode` 控制：
+  - 通用默认 `redact`，进入 `BoundedAnalysisEvidence` 时脱敏并记录 sanitized paths。
+  - 仅经过明确批准的模型环境可设置 `full`；已选字段的值必须保持原始、不改写，mode 必须进入证据
+    contract 与审计，超预算字段必须作为 omission 记录。
+  - `full` 不能成为通用部署默认，parser 也不能根据部署 mode 改变自身输出。
 - `CanonicalFieldProvenance` 必须展示 canonical path、selected value、selected source path/layer/trust、selection reason 和 alternatives，让 `raw_message_first` 可从运行产物直接验证。
 
 ### Evidence coverage 约束
@@ -1056,6 +1075,8 @@ normalizers/hids.py
 - `build_analysis_input` 必须生成 `EvidenceCoverageReport`，至少记录 message schema observations、
   parsed/decoded/repaired paths、canonical/fact/scenario source paths、LLM projection、sanitization、truncation、
   omissions 和 high-value gaps。
+- structured fallback 必须记录实际投影的 leaf paths；`full` 只表示已选值保持原始，不表示绕过
+  总预算，也不表示完整 `zeusRawLogs[]` 数组进入模型。
 - coverage report 是审计/漂移产物，不是 verdict。一个字段被解析但没有 canonical mapping 时不得
   静默消失：它必须仍可在 parsed evidence 中回放，并通过全路径清单或已定义 high-value gap 暴露。
 - `llm_projected_paths` 表示该字段属于 bounded projection 的候选内容；若 evidence 整体被截断，必须

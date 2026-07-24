@@ -19,6 +19,7 @@ from soc_agent.contracts import (
     FactReconstructionResult,
     LLMAnalysisRequest,
     ParsedRawMessageEvidence,
+    SensitiveEvidenceMode,
     SocSkillContext,
     SourceFieldSemantic,
 )
@@ -81,11 +82,17 @@ def build_llm_analysis_request(
     alert: AlertInput,
     entities: ExtractedEntities,
     fact_reconstruction: FactReconstructionResult,
+    *,
+    sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
 ) -> LLMAnalysisRequest:
     """Convert runtime state into the only input shape analysis nodes consume."""
 
     conflict_types = sorted({report.conflict_type for report in fact_reconstruction.conflict_reports})
-    primary_evidence, supplementary_evidence = _bounded_evidence(alert, fact_reconstruction)
+    primary_evidence, supplementary_evidence = _bounded_evidence(
+        alert,
+        fact_reconstruction,
+        sensitive_evidence_mode=sensitive_evidence_mode,
+    )
     evidence_coverage = build_evidence_coverage_report(
         alert,
         fact_reconstruction,
@@ -224,22 +231,23 @@ def _bound_projection(value: Any, *, depth: int = 0) -> Any:
 def _bounded_evidence(
     alert: AlertInput,
     fact_reconstruction: FactReconstructionResult,
+    *,
+    sensitive_evidence_mode: SensitiveEvidenceMode,
 ) -> tuple[BoundedAnalysisEvidence | None, list[BoundedAnalysisEvidence]]:
     policy = fact_reconstruction.evidence_policy
     if policy is None or policy.selected_input_path is None:
         return None, []
 
     parsed_by_path = _parsed_messages_by_path(alert)
-    primary = None
-    if policy.selected_layer is EvidenceLayer.RAW_MESSAGE:
-        primary = _bounded_evidence_for_path(
-            alert,
-            path=policy.selected_input_path,
-            layer=policy.selected_layer,
-            trust_level=policy.trust_level,
-            max_chars=_PRIMARY_EVIDENCE_MAX_CHARS,
-            parsed=parsed_by_path.get(policy.selected_input_path),
-        )
+    primary = _bounded_evidence_for_path(
+        alert,
+        path=policy.selected_input_path,
+        layer=policy.selected_layer,
+        trust_level=policy.trust_level,
+        max_chars=_PRIMARY_EVIDENCE_MAX_CHARS,
+        parsed=parsed_by_path.get(policy.selected_input_path),
+        sensitive_evidence_mode=sensitive_evidence_mode,
+    )
     supplementary: list[BoundedAnalysisEvidence] = []
     for path in policy.supplementary_input_paths[:_MAX_SUPPLEMENTARY_EVIDENCE]:
         item = _bounded_evidence_for_path(
@@ -249,6 +257,7 @@ def _bounded_evidence(
             trust_level=EvidenceTrustLevel.HIGH,
             max_chars=_SUPPLEMENTARY_EVIDENCE_MAX_CHARS,
             parsed=parsed_by_path.get(path),
+            sensitive_evidence_mode=sensitive_evidence_mode,
         )
         if item is not None:
             supplementary.append(item)
@@ -263,6 +272,7 @@ def _bounded_evidence_for_path(
     trust_level: EvidenceTrustLevel,
     max_chars: int,
     parsed: ParsedRawMessageEvidence | None,
+    sensitive_evidence_mode: SensitiveEvidenceMode,
 ) -> BoundedAnalysisEvidence | None:
     raw_value = _resolve_path(alert.raw, path)
     if parsed is not None:
@@ -276,11 +286,31 @@ def _bounded_evidence_for_path(
         ) = _bounded_parsed_projection(
             parsed,
             max_chars=max_chars,
+            sensitive_evidence_mode=sensitive_evidence_mode,
         )
         original_length = parsed.original_length
         parser_name = parsed.parser_name
+        content_truncated = False
+    elif isinstance(raw_value, Mapping):
+        serialized = json.dumps(raw_value, ensure_ascii=False, sort_keys=True, default=str)
+        (
+            content,
+            field_truncated,
+            projected_paths,
+            sanitized_paths,
+            omitted_paths,
+            omission_reasons,
+        ) = _bounded_structured_projection(
+            raw_value,
+            source_path=path,
+            max_chars=max_chars,
+            sensitive_evidence_mode=sensitive_evidence_mode,
+        )
+        original_length = len(serialized)
+        parser_name = None
+        content_truncated = False
     elif isinstance(raw_value, str):
-        content = raw_value
+        content = raw_value if sensitive_evidence_mode is SensitiveEvidenceMode.FULL else _safe_string_fallback(raw_value)
         original_length = len(raw_value)
         parser_name = None
         field_truncated = False
@@ -288,6 +318,7 @@ def _bounded_evidence_for_path(
         sanitized_paths = []
         omitted_paths = []
         omission_reasons = {}
+        content_truncated = len(content) > max_chars
     elif raw_value is not None:
         content = json.dumps(raw_value, ensure_ascii=False, sort_keys=True, default=str)
         original_length = len(content)
@@ -297,16 +328,17 @@ def _bounded_evidence_for_path(
         sanitized_paths = []
         omitted_paths = []
         omission_reasons = {}
+        content_truncated = len(content) > max_chars
     else:
         return None
 
-    content_truncated = parsed is None and len(content) > max_chars
     if content_truncated:
         content = content[:max_chars]
     return BoundedAnalysisEvidence(
         source_path=path,
         layer=layer,
         trust_level=trust_level,
+        sensitive_evidence_mode=sensitive_evidence_mode,
         content=content,
         parser_name=parser_name,
         original_length=original_length,
@@ -322,12 +354,20 @@ def _bounded_parsed_projection(
     parsed: ParsedRawMessageEvidence,
     *,
     max_chars: int,
+    sensitive_evidence_mode: SensitiveEvidenceMode,
 ) -> tuple[str, bool, list[str], list[str], list[str], dict[str, str]]:
-    safe_fields = _analysis_safe_fields(parsed.fields, parsed.decoded_fields, parsed.repaired_fields)
-    safe_decoded = _sanitize_mapping(parsed.decoded_fields)
-    safe_repaired = _sanitize_mapping(parsed.repaired_fields)
+    if sensitive_evidence_mode is SensitiveEvidenceMode.FULL:
+        safe_fields = deepcopy(parsed.fields)
+        safe_decoded = deepcopy(parsed.decoded_fields)
+        safe_repaired = deepcopy(parsed.repaired_fields)
+        safe_header = deepcopy(parsed.header)
+    else:
+        safe_fields = _analysis_safe_fields(parsed.fields, parsed.decoded_fields, parsed.repaired_fields)
+        safe_decoded = _sanitize_mapping(parsed.decoded_fields)
+        safe_repaired = _sanitize_mapping(parsed.repaired_fields)
+        safe_header = _sanitize_mapping(parsed.header)
     candidate_root = {
-        "header": _sanitize_mapping(parsed.header),
+        "header": safe_header,
         "fields": safe_fields,
         "decoded_fields": safe_decoded,
         "repaired_fields": safe_repaired,
@@ -341,7 +381,10 @@ def _bounded_parsed_projection(
     projected_paths: list[str] = []
     field_truncated = False
     for path_parts, value, _ in leaves:
-        bounded_value, value_truncated = _bound_value(value)
+        bounded_value, value_truncated = _projection_value(
+            value,
+            sensitive_evidence_mode=sensitive_evidence_mode,
+        )
         candidate = deepcopy(projection)
         _assign_projection_path(candidate, path_parts, bounded_value)
         candidate_content = json.dumps(candidate, ensure_ascii=False, sort_keys=True)
@@ -355,7 +398,7 @@ def _bounded_parsed_projection(
 
     content = json.dumps(projection, ensure_ascii=False, sort_keys=True)
     all_paths = _all_evidence_paths(parsed)
-    sanitized_paths = _sanitized_evidence_paths(parsed)
+    sanitized_paths = [] if sensitive_evidence_mode is SensitiveEvidenceMode.FULL else _sanitized_evidence_paths(parsed)
     projected_set = set(projected_paths)
     omitted_paths = sorted(set(all_paths) - projected_set)
     omission_reasons = {path: ("sensitive_value_redacted" if path in sanitized_paths else "bounded_projection_budget") for path in omitted_paths}
@@ -364,6 +407,48 @@ def _bounded_parsed_projection(
     return (
         content,
         field_truncated or bool(omitted_paths),
+        sorted(projected_set),
+        sorted(set(sanitized_paths)),
+        omitted_paths,
+        omission_reasons,
+    )
+
+
+def _bounded_structured_projection(
+    value: Mapping[str, Any],
+    *,
+    source_path: str,
+    max_chars: int,
+    sensitive_evidence_mode: SensitiveEvidenceMode,
+) -> tuple[str, bool, list[str], list[str], list[str], dict[str, str]]:
+    candidate_root = deepcopy(dict(value)) if sensitive_evidence_mode is SensitiveEvidenceMode.FULL else _sanitize_mapping(value)
+    leaves = _projection_leaves(candidate_root)
+    leaves.sort(key=lambda item: (_projection_priority(item[0]), item[2]))
+
+    projection: dict[str, Any] = {}
+    projected_paths: list[str] = []
+    for path_parts, field_value, _ in leaves:
+        bounded_value, _ = _projection_value(
+            field_value,
+            sensitive_evidence_mode=sensitive_evidence_mode,
+        )
+        candidate = deepcopy(projection)
+        _assign_projection_path(candidate, path_parts, bounded_value)
+        if len(json.dumps(candidate, ensure_ascii=False, sort_keys=True, default=str)) > max_chars:
+            continue
+        projection = candidate
+        projected_paths.append(_structured_source_path(source_path, path_parts))
+
+    all_paths = [_structured_source_path(source_path, path_parts) for path_parts, _, _ in _projection_leaves(value)]
+    sanitized_paths = [] if sensitive_evidence_mode is SensitiveEvidenceMode.FULL else _sensitive_mapping_paths(value, source_path=source_path)
+    projected_set = set(projected_paths)
+    omitted_paths = sorted(set(all_paths) - projected_set)
+    omission_reasons = {path: ("sensitive_value_redacted" if path in sanitized_paths else "bounded_projection_budget") for path in omitted_paths}
+    for path in sanitized_paths:
+        omission_reasons.setdefault(path, "sensitive_value_redacted")
+    return (
+        json.dumps(projection, ensure_ascii=False, sort_keys=True, default=str),
+        bool(omitted_paths),
         sorted(projected_set),
         sorted(set(sanitized_paths)),
         omitted_paths,
@@ -480,6 +565,27 @@ def _format_projection_path(path: tuple[str | int, ...]) -> str:
         else:
             result += f".{part}" if result else part
     return result
+
+
+def _structured_source_path(
+    source_path: str,
+    path: tuple[str | int, ...],
+) -> str:
+    relative = _format_projection_path(path)
+    return f"{source_path}.{relative}" if relative else source_path
+
+
+def _sensitive_mapping_paths(
+    value: Mapping[str, Any],
+    *,
+    source_path: str,
+) -> list[str]:
+    paths: list[str] = []
+    for path, _, _ in _projection_leaves(value):
+        keys = [str(part) for part in path if isinstance(part, str)]
+        if any(_SENSITIVE_FIELD_RE.search(key) for key in keys):
+            paths.append(_structured_source_path(source_path, path))
+    return paths
 
 
 def _all_evidence_paths(parsed: ParsedRawMessageEvidence) -> list[str]:
@@ -600,6 +706,16 @@ def _bound_value(value: Any) -> tuple[Any, bool]:
             truncated = truncated or item_truncated
         return result, truncated
     return value, False
+
+
+def _projection_value(
+    value: Any,
+    *,
+    sensitive_evidence_mode: SensitiveEvidenceMode,
+) -> tuple[Any, bool]:
+    if sensitive_evidence_mode is SensitiveEvidenceMode.FULL:
+        return deepcopy(value), False
+    return _bound_value(value)
 
 
 def _resolve_path(payload: Mapping[str, Any], path: str) -> Any:

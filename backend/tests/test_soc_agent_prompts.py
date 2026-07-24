@@ -39,7 +39,7 @@ def test_analysis_prompt_uses_bounded_llm_request_for_pingan_apt() -> None:
     assert "skill_context" in prompt.user
 
 
-def test_analysis_prompt_shows_low_trust_fallback_without_dumping_raw_payload() -> None:
+def test_analysis_prompt_projects_only_selected_low_trust_structured_fallback() -> None:
     prompt = build_analysis_prompt(_analysis_request("pingan_legacy_edr.json"))
     user_prompt = prompt.user
 
@@ -48,8 +48,13 @@ def test_analysis_prompt_shows_low_trust_fallback_without_dumping_raw_payload() 
     assert prompt.context["evidence"]["selected_input_available"] is True
     assert prompt.context["evidence"]["evidence_policy"]["trust_level"] == "low"
     assert "evidence input policy selected low-trust structured fallback" in prompt.context["fact_reconstruction"]["warnings"]
-    assert "process__cmd_line" not in user_prompt
-    assert "finding__desc" not in user_prompt
+    primary = prompt.context["evidence"]["primary_evidence"]
+    assert primary["layer"] == "raw_structured"
+    assert primary["source_path"] == "alert.hitLog[0].zeusRawLogs[0]"
+    assert "process__cmd_line" in primary["content"]
+    assert "finding__desc" in primary["content"]
+    assert "relatedAlertList" not in primary["content"]
+    assert "hitLog" not in primary["content"]
     assert "zeusRawLogs" in user_prompt
 
 

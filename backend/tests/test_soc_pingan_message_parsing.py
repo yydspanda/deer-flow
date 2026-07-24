@@ -6,15 +6,18 @@ from pathlib import Path
 
 from soc_agent.cli import main
 from soc_agent.contracts import (
+    AlertSourceType,
     EvidenceLayer,
     EvidenceTrustLevel,
     MessageSchemaStatus,
     NestedJsonRepairStatus,
     RoleResolutionStatus,
+    SensitiveEvidenceMode,
 )
 from soc_agent.core import SocAnalysisService, SocNormalizationService
 from soc_agent.core.runtime import build_analysis_request_for_payload
 from soc_agent.normalizers import normalize_alert_payload
+from soc_agent.normalizers.pingan_messages import parse_pingan_raw_message
 
 
 def _payload(*messages: str, topic: str, topic_name: str, raw_fields: dict | None = None) -> dict:
@@ -70,6 +73,166 @@ def test_pingan_apt_message_fields_override_zeus_structured_fields() -> None:
     assert provenance["entities.network.source_ip"].source_layer is EvidenceLayer.RAW_MESSAGE
     assert provenance["entities.network.source_ip"].alternative_values == ["198.51.100.10"]
     assert any(item.conflict_type == "source_candidate_conflict" for item in run.fact_reconstruction.conflict_reports)
+
+
+def test_pingan_direct_json_message_uses_complete_json_parser_before_partial_kv() -> None:
+    fields = {
+        "sip": "30.1.1.10",
+        "dip": "30.2.2.20",
+        "event_type": "alert",
+        "alert": {
+            "category": "C2 communication",
+            "metadata": {"attack_target": ["server"]},
+        },
+    }
+    payload = _payload(
+        json.dumps(fields, ensure_ascii=False),
+        topic="ptp-nids",
+        topic_name="NIDS",
+        raw_fields={"sip": "198.51.100.10", "dip": "198.51.100.20"},
+    )
+
+    alert = normalize_alert_payload(payload)
+
+    assert alert.source.source_type is AlertSourceType.NIDS
+    assert alert.entities.network.source_ip == "30.1.1.10"
+    assert alert.entities.network.destination_ip == "30.2.2.20"
+    parsed = alert.extensions["parsed_raw_messages"][0]
+    assert parsed["parser_name"] == "pingan_json_object"
+    assert parsed["fields"] == fields
+    assert parsed["header"] == {}
+    assert alert.extensions["evidence_input_policy"]["name"] == "raw_message_first"
+
+
+def test_pingan_prefixed_json_parser_supports_edr_and_threat_intel() -> None:
+    cases = [
+        (
+            "edr-core-xc",
+            "信创EDR",
+            "<14>Apr  4 18:32:30 guest EDR[123]: adv_threat_log : ",
+            {"agent_id": "AGENT-001", "alert_id": "EDR-001", "details0": {"relation": 4}},
+            AlertSourceType.EDR,
+        ),
+        (
+            "sec_guard_wb",
+            "微步威胁情报",
+            "tdpv3-svc Threatbook[123]: ",
+            {
+                "direction": "outbound",
+                "attacker": "30.1.1.10",
+                "victim": "30.2.2.20",
+                "net": {"src_ip": "30.1.1.10", "dest_ip": "30.2.2.20"},
+            },
+            AlertSourceType.THREAT_INTEL,
+        ),
+    ]
+
+    for topic, topic_name, prefix, fields, expected_source_type in cases:
+        alert = normalize_alert_payload(
+            _payload(
+                prefix + json.dumps(fields, ensure_ascii=False),
+                topic=topic,
+                topic_name=topic_name,
+            )
+        )
+        parsed = alert.extensions["parsed_raw_messages"][0]
+
+        assert alert.source.source_type is expected_source_type
+        assert parsed["parser_name"] == "pingan_json_object"
+        assert parsed["fields"] == fields
+        assert parsed["header"] == {"prefix": prefix.strip()}
+
+
+def test_pingan_json_parser_rejects_non_object_incomplete_and_trailing_payloads() -> None:
+    for message in (
+        '[{"sip":"30.1.1.10"}]',
+        'prefix {"sip":"30.1.1.10"',
+        'prefix {"sip":"30.1.1.10"} trailing',
+        f'{"x" * 513}{{"sip":"30.1.1.10"}}',
+    ):
+        assert parse_pingan_raw_message(message, source_path="alert.hitLog[0].zeusRawLogs[0].message") is None
+
+
+def test_pingan_no_message_keeps_structured_fallback_for_siem_model_alert() -> None:
+    payload = _payload(
+        topic="T_GBD_zeus_data",
+        topic_name="AI分析模型-数据模型组",
+    )
+    payload["alert"]["hitLog"][0]["zeusRawLogs"] = [
+        {
+            "subtype": "suspicious_email",
+            "computername": "mail-gateway",
+            "rule_name": "Suspicious email model",
+            "password": "original-password",
+        },
+        {
+            "subtype": "must-not-enter-primary",
+            "password": "second-password",
+        },
+    ]
+
+    alert = normalize_alert_payload(payload)
+
+    assert alert.source.source_type is AlertSourceType.SIEM
+    assert alert.extensions["parsed_raw_messages"] == []
+    assert alert.extensions["evidence_input_policy"] == {
+        "name": "structured_fallback",
+        "primary_input_path": "alert.hitLog[0].zeusRawLogs[0]",
+        "selected_input_path": "alert.hitLog[0].zeusRawLogs[0]",
+        "supplementary_input_paths": [],
+        "selected_layer": "raw_structured",
+        "fallback_reason": "raw_message_missing",
+        "ignore_processed_fields_for_reasoning": False,
+        "trust_level": "high",
+    }
+    assert alert.raw == payload
+
+    request = build_analysis_request_for_payload(
+        payload,
+        sensitive_evidence_mode=SensitiveEvidenceMode.FULL,
+    )
+    assert request.primary_evidence is not None
+    assert request.primary_evidence.layer is EvidenceLayer.RAW_STRUCTURED
+    assert request.primary_evidence.trust_level is EvidenceTrustLevel.HIGH
+    assert request.primary_evidence.sensitive_evidence_mode is SensitiveEvidenceMode.FULL
+    assert json.loads(request.primary_evidence.content) == payload["alert"]["hitLog"][0]["zeusRawLogs"][0]
+    assert request.supplementary_evidence == []
+    assert request.primary_evidence.sanitized_field_paths == []
+    assert "alert.hitLog[0].zeusRawLogs[0].password" in request.evidence_coverage.structured_field_paths
+    assert "alert.hitLog[0].zeusRawLogs[1].password" not in request.evidence_coverage.structured_field_paths
+    assert request.evidence_coverage.llm_sanitized_paths == []
+
+    redacted_request = build_analysis_request_for_payload(payload)
+    assert redacted_request.primary_evidence is not None
+    assert "original-password" not in redacted_request.primary_evidence.content
+    assert "[REDACTED]" in redacted_request.primary_evidence.content
+
+
+def test_pingan_structured_fallback_is_low_trust_outside_explicit_topic_allowlist() -> None:
+    payload = _payload(
+        topic="sec_guard_apt",
+        topic_name="SkyEye APT",
+    )
+    payload["alert"]["hitLog"][0]["zeusRawLogs"] = [
+        {
+            "source_ip": "30.1.1.10",
+            "password": "original-password",
+        }
+    ]
+
+    alert = normalize_alert_payload(payload)
+    policy = alert.extensions["evidence_input_policy"]
+
+    assert policy["name"] == "structured_fallback"
+    assert policy["trust_level"] == "low"
+
+    request = build_analysis_request_for_payload(
+        payload,
+        sensitive_evidence_mode=SensitiveEvidenceMode.FULL,
+    )
+    assert request.primary_evidence is not None
+    assert request.primary_evidence.trust_level is EvidenceTrustLevel.LOW
+    assert json.loads(request.primary_evidence.content) == payload["alert"]["hitLog"][0]["zeusRawLogs"][0]
 
 
 def test_pingan_edr_comma_kv_message_populates_canonical_entities() -> None:
@@ -266,11 +429,11 @@ def test_delimited_json_parser_decodes_supported_nested_json_and_http_headers() 
     parsed = alert.extensions["parsed_raw_messages"][0]
     assert parsed["fields"]["rule_labels"] == '{"kind":"web"}'
     assert parsed["decoded_fields"]["rule_labels"] == {"kind": "web"}
-    assert parsed["decoded_fields"]["payload"]["req_body"]["password"] == "[REDACTED]"
-    assert parsed["decoded_fields"]["payload"]["rsp_body"]["token"] == "[REDACTED]"
+    assert parsed["decoded_fields"]["payload"]["req_body"]["password"] == "secret"
+    assert parsed["decoded_fields"]["payload"]["rsp_body"]["token"] == "secret-token"
     request_header = parsed["decoded_fields"]["payload"]["req_header"]
     assert request_header["forwarded_chain"] == ["198.51.100.1", "10.0.0.2"]
-    assert request_header["headers"]["cookie"] == ["[REDACTED]"]
+    assert request_header["headers"]["cookie"] == ["sid=secret"]
     assert alert.entities.http.user_agent == "TestAgent/1.0"
     assert alert.entities.http.x_forwarded_for == "198.51.100.1"
 
@@ -286,6 +449,14 @@ def test_delimited_json_parser_decodes_supported_nested_json_and_http_headers() 
     assert any(path.endswith("#parsed.payload.req_header") for path in coverage.llm_sanitized_paths)
     assert set(coverage.llm_projected_paths) == set(request.primary_evidence.projected_field_paths)
     assert not set(request.primary_evidence.omitted_field_paths) & set(request.primary_evidence.projected_field_paths)
+
+    full_request = build_analysis_request_for_payload(
+        alert.model_dump(mode="json"),
+        sensitive_evidence_mode=SensitiveEvidenceMode.FULL,
+    )
+    assert full_request.primary_evidence is not None
+    assert "secret-token" in full_request.primary_evidence.content
+    assert full_request.primary_evidence.sanitized_field_paths == []
 
 
 def test_deferred_related_and_soar_context_is_explicit_in_coverage() -> None:
@@ -323,7 +494,7 @@ def test_malformed_nested_bodies_use_accepted_repair_or_sanitized_string_fallbac
     assert parsed["fields"]["payload"]["rsp_body"] == response_body
     assert "payload" not in parsed["decoded_fields"]
     assert "req_body" not in parsed["repaired_fields"].get("payload", {})
-    assert parsed["repaired_fields"]["payload"]["rsp_body"]["uIdToken"] == "[REDACTED]"
+    assert parsed["repaired_fields"]["payload"]["rsp_body"]["uIdToken"] == "secret-token-without-closing-quote"
     observations = {item["field_path"]: item for item in parsed["repair_observations"]}
     assert observations["payload.req_body"]["status"] == NestedJsonRepairStatus.REJECTED
     assert observations["payload.rsp_body"]["status"] == NestedJsonRepairStatus.ACCEPTED

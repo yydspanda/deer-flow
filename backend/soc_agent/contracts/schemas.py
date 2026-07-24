@@ -1704,6 +1704,13 @@ class EvidenceTrustLevel(StrEnum):
     UNKNOWN = "unknown"
 
 
+class SensitiveEvidenceMode(StrEnum):
+    """How bounded model evidence handles sensitive field values."""
+
+    REDACT = "redact"
+    FULL = "full"
+
+
 class EvidenceInputPolicyName(StrEnum):
     RAW_MESSAGE_FIRST = "raw_message_first"
     STRUCTURED_FALLBACK = "structured_fallback"
@@ -2010,10 +2017,11 @@ class SourceFieldSemantic(BaseModel):
 class BoundedAnalysisEvidence(BaseModel):
     """Size-bounded evidence content allowed to enter an analysis node."""
 
-    schema_version: str = "soc.bounded_analysis_evidence.v2"
+    schema_version: str = "soc.bounded_analysis_evidence.v3"
     source_path: str = Field(min_length=1)
     layer: EvidenceLayer
     trust_level: EvidenceTrustLevel
+    sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT
     content: str
     parser_name: str | None = None
     original_length: int = Field(default=0, ge=0)
@@ -2161,8 +2169,9 @@ class EvidenceCoverageGap(BaseModel):
 class EvidenceCoverageReport(BaseModel):
     """Trace which parsed evidence is used, projected, sanitized, or omitted."""
 
-    schema_version: str = "soc.evidence_coverage.v2"
+    schema_version: str = "soc.evidence_coverage.v3"
     message_schemas: list[MessageSchemaObservation] = Field(default_factory=list)
+    structured_field_paths: list[str] = Field(default_factory=list)
     parsed_field_paths: list[str] = Field(default_factory=list)
     decoded_field_paths: list[str] = Field(default_factory=list)
     repaired_field_paths: list[str] = Field(default_factory=list)
