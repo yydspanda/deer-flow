@@ -436,6 +436,228 @@ def test_pingan_prefixed_json_parser_supports_edr_and_threat_intel() -> None:
         assert parsed["header"] == {"prefix": prefix.strip()}
 
 
+def test_pingan_threat_intel_separates_wire_roles_and_provider_roles() -> None:
+    fields = {
+        "timeStr": "2026-04-01T12:21:32+08:00",
+        "direction": "out",
+        "machine": "172.28.253.5",
+        "external_ip": "30.198.71.231",
+        "attacker": "30.198.71.231",
+        "victim": "172.28.253.5",
+        "is_black_ip": False,
+        "net": {
+            "src_ip": "172.28.253.5",
+            "dest_ip": "30.198.71.231",
+            "src_port": 6449,
+            "dest_port": 80,
+            "proto": "TCP",
+            "type": "http",
+        },
+        "assets": {
+            "ip": "172.16.0.0/12",
+            "section": "服务器",
+        },
+        "threat": {
+            "id": "provider-record-id",
+            "severity": 3,
+            "phase": "control",
+            "level": "attack",
+            "type": "mining",
+            "name": "CoinMiner挖矿木马",
+            "ioc": "provider-record-id-is-not-an-ioc",
+            "tag": ["Mitre: T1496: Resource Hijacking"],
+            "msg": "检测到门罗币挖矿登录操作。",
+            "result": "success",
+        },
+    }
+    payload = _payload(
+        "tdpv3-svc Threatbook[123]: " + json.dumps(fields, ensure_ascii=False),
+        topic="sec_guard_wb",
+        topic_name="微步威胁情报",
+        raw_fields={
+            "external_ip": "198.51.100.8",
+            "net_src_ip": "198.51.100.9",
+        },
+    )
+
+    request = build_analysis_request_for_payload(payload)
+    alert = normalize_alert_payload(payload)
+
+    assert alert.entities.network.source_ip == "172.28.253.5"
+    assert alert.entities.network.destination_ip == "30.198.71.231"
+    assert alert.entities.network.src_port == 6449
+    assert alert.entities.network.dst_port == 80
+    assert alert.entities.network.application_protocol == "http"
+    assert len(alert.entities.network.observations) == 1
+    assert alert.entities.host.ip_addresses == ["172.28.253.5"]
+    assert "172.16.0.0/12" not in alert.entities.host.ip_addresses
+    assert alert.entities.threat.iocs == ["30.198.71.231"]
+    assert alert.entities.threat.malware_family == "CoinMiner挖矿木马"
+    assert alert.classification.severity == "3"
+    assert alert.classification.category == "mining"
+    assert alert.classification.technique == ["T1496"]
+
+    claims = request.fact_reconstruction.role_claims
+    by_role = {role: [item for item in claims if item.role == role] for role in {item.role for item in claims}}
+    assert by_role["source"][0].value == "172.28.253.5"
+    assert by_role["source"][0].claim_type.value == "observation"
+    assert by_role["attacker"][0].value == "30.198.71.231"
+    assert by_role["attacker"][0].claim_type.value == "vendor_assertion"
+    assert by_role["victim"][0].value == "172.28.253.5"
+    assert all(item.source_layer is EvidenceLayer.RAW_MESSAGE for item in claims)
+
+    semantics = {item["semantic_type"]: item for item in alert.extensions["source_field_semantics"]}
+    assert semantics["asset_scope_expression"]["participates_in_entities"] is False
+    assert semantics["upstream_reputation_assertion"]["participates_in_reasoning"] is True
+    assert "not proof" in semantics["provider_detection_result"]["meaning"]
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    assert provenance["entities.network.source_ip"].selected_from.endswith("message#parsed.net.src_ip")
+    assert provenance["entities.threat.iocs[0]"].selected_from.endswith("message#parsed.external_ip")
+    assert request.evidence_coverage.high_value_gaps == []
+
+
+def test_pingan_siem_suspicious_email_projects_typed_email_without_actor_inference() -> None:
+    payload = _payload(
+        topic="T_GBD_zeus_data",
+        topic_name="AI分析模型-数据模型组",
+    )
+    payload["alert"]["hitLog"][0]["zeusRawLogs"] = [
+        {
+            "subtype": "suspicious_email",
+            "email_id": "email-001",
+            "modeltime": "2026-04-01 08:28:41",
+            "User": "system",
+            "from": '["Sender@QQ.COM"]',
+            "to": '["analyst@pingan.com.cn"]',
+            "cc": "[]",
+            "subject": "平安人员信息",
+            "url": '["https://example.test/login"]',
+            "attachment": '{"平安银行.xlsx": "c168ea293c92389e66ee0ad3dd1ddcf0"}',
+            "Phishing_type": "class_5",
+            "llm_score": "80分",
+            "llm_ans": '["upstream model narrative"]',
+            "text": "mail body remains bounded evidence",
+        }
+    ]
+
+    alert = normalize_alert_payload(payload)
+    request = build_analysis_request_for_payload(payload)
+
+    assert alert.entities.email is not None
+    assert alert.entities.email.message_id == "email-001"
+    assert alert.entities.email.sender_addresses == ["Sender@QQ.COM"]
+    assert alert.entities.email.recipient_addresses == ["analyst@pingan.com.cn"]
+    assert alert.entities.email.subject == "平安人员信息"
+    assert alert.entities.email.links == ["https://example.test/login"]
+    assert alert.entities.email.attachment_names == ["平安银行.xlsx"]
+    assert alert.entities.user.username is None
+    assert request.extracted_entities.emails == [
+        "sender@qq.com",
+        "analyst@pingan.com.cn",
+    ]
+    assert request.extracted_entities.domains == [
+        "qq.com",
+        "pingan.com.cn",
+        "example.test",
+    ]
+    assert request.extracted_entities.urls == ["https://example.test/login"]
+    assert request.fact_reconstruction.role_claims == []
+
+    semantics = {item["semantic_type"]: item for item in alert.extensions["source_field_semantics"]}
+    assert semantics["pipeline_service_identity"]["participates_in_entities"] is False
+    assert semantics["upstream_model_narrative"]["participates_in_reasoning"] is True
+    assert "not calibrated" in semantics["upstream_uncalibrated_model_score"]["meaning"]
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    assert provenance["entities.email.sender_addresses[0]"].source_layer is EvidenceLayer.RAW_STRUCTURED
+    assert provenance["entities.email.sender_addresses[0]"].trust_level is EvidenceTrustLevel.HIGH
+
+
+def test_pingan_siem_machine_copy_projects_host_candidates_without_network_direction() -> None:
+    payload = _payload(
+        topic="T_GBD_zeus_data",
+        topic_name="AI分析模型-数据模型组",
+    )
+    payload["alert"]["hitLog"][0]["zeusRawLogs"] = [
+        {
+            "subtype": "standard_machine_copy",
+            "modeltime": "2026-04-01 03:18:07",
+            "computername": "PBNJ-D0174",
+            "agg_ip": "['10.121.176.162', '10.121.49.87']",
+            "winlogbeat_event_data_ipaddress": "10.121.49.87",
+            "if_cross": "交叉",
+            "sorted_timestamp_str": "['2026-03-31T00:28:57.226Z']",
+        },
+        {
+            "subtype": "standard_machine_copy",
+            "computername": "PBNJ-D0174",
+            "agg_ip": "['10.121.176.162', '10.121.49.87']",
+            "winlogbeat_event_data_ipaddress": "10.121.176.162",
+        },
+    ]
+
+    alert = normalize_alert_payload(payload)
+    request = build_analysis_request_for_payload(payload)
+
+    assert alert.entities.host.host_name == "PBNJ-D0174"
+    assert alert.entities.host.ip_addresses == ["10.121.176.162", "10.121.49.87"]
+    assert alert.entities.network.source_ip is None
+    assert alert.entities.network.destination_ip is None
+    assert alert.entities.network.observations == []
+    assert request.extracted_entities.hosts == ["PBNJ-D0174"]
+    assert set(request.extracted_entities.ips) == {
+        "10.121.176.162",
+        "10.121.49.87",
+    }
+    impacted_claims = [item for item in request.fact_reconstruction.role_claims if item.role == "impacted_asset"]
+    assert len(impacted_claims) == 1
+    assert {item.value for item in impacted_claims} == {"PBNJ-D0174"}
+    assert all(item.evidence_trust is EvidenceTrustLevel.HIGH for item in impacted_claims)
+    assert not {item.role for item in request.fact_reconstruction.role_claims} & {"source", "destination", "attacker", "victim"}
+
+
+def test_pingan_unknown_siem_subtype_keeps_evidence_without_guessing_entities() -> None:
+    payload = _payload(
+        topic="T_GBD_zeus_data",
+        topic_name="AI分析模型-数据模型组",
+    )
+    payload["alert"]["hitLog"][0]["zeusRawLogs"] = [
+        {
+            "subtype": "new_unmapped_model",
+            "computername": "must-not-map",
+            "from": '["must-not-map@example.test"]',
+        }
+    ]
+
+    alert = normalize_alert_payload(payload)
+    request = build_analysis_request_for_payload(payload)
+
+    assert alert.entities.email is None
+    assert alert.entities.host.host_name is None
+    assert alert.entities.network.source_ip is None
+    assert request.fact_reconstruction.role_claims == []
+    assert request.primary_evidence is not None
+    assert "new_unmapped_model" in request.primary_evidence.content
+    assert {(item.rule_id, item.expected_target) for item in request.evidence_coverage.high_value_gaps} == {
+        (
+            "pingan.siem.email.sender",
+            "entities.email.sender_addresses",
+        ),
+        (
+            "pingan.siem.machine.host",
+            "entities.host.host_name",
+        ),
+    }
+    assert alert.extensions["source_field_semantics"] == [
+        {
+            "field_path": "alert.hitLog[0].zeusRawLogs[0].subtype",
+            "semantic_type": "unsupported_siem_subtype",
+            "meaning": "unknown SIEM subtype remains bounded source evidence; the adapter does not infer entities or roles",
+            "participates_in_entities": False,
+            "participates_in_reasoning": True,
+        }
+    ]
+
+
 def test_pingan_edr_nested_mitre_aliases_do_not_leak_to_other_source_types() -> None:
     fields = {
         "details0": {
@@ -886,7 +1108,7 @@ def test_unparsed_raw_message_is_preserved_and_does_not_upgrade_fallback_trust()
     claims = {item.claim_id: item for item in run.fact_reconstruction.role_claims}
     source_claim = claims[resolutions["source"].supporting_claim_ids[0]]
     assert source_claim.source_layer is EvidenceLayer.RAW_STRUCTURED
-    assert source_claim.evidence_trust is EvidenceTrustLevel.MEDIUM
+    assert source_claim.evidence_trust is EvidenceTrustLevel.LOW
     assert run.llm_analysis_request is not None
     assert run.llm_analysis_request.primary_evidence is not None
     assert run.llm_analysis_request.primary_evidence.content == "opaque proprietary message"

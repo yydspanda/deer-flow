@@ -1722,6 +1722,7 @@ class EntityKind(StrEnum):
     IP = "ip"
     DOMAIN = "domain"
     URL = "url"
+    EMAIL = "email"
     PROCESS = "process"
     USER = "user"
     HOST = "host"
@@ -1950,6 +1951,34 @@ class HttpEntityRef(BaseModel):
     observations: list[HttpObservationRef] = Field(default_factory=list)
 
 
+class EmailObservationRef(BaseModel):
+    """One bounded email-message view with exact source provenance."""
+
+    observation_id: str = Field(min_length=1)
+    evidence_path: str = Field(min_length=1)
+    event_time: str | None = None
+    message_id: str | None = None
+    sender_addresses: list[str] = Field(default_factory=list, max_length=100)
+    recipient_addresses: list[str] = Field(default_factory=list, max_length=500)
+    cc_addresses: list[str] = Field(default_factory=list, max_length=500)
+    subject: str | None = Field(default=None, max_length=2000)
+    links: list[str] = Field(default_factory=list, max_length=200)
+    attachment_names: list[str] = Field(default_factory=list, max_length=200)
+
+
+class EmailEntityRef(BaseModel):
+    """Canonical email summary; message body remains bounded evidence."""
+
+    message_id: str | None = None
+    sender_addresses: list[str] = Field(default_factory=list, max_length=100)
+    recipient_addresses: list[str] = Field(default_factory=list, max_length=500)
+    cc_addresses: list[str] = Field(default_factory=list, max_length=500)
+    subject: str | None = Field(default=None, max_length=2000)
+    links: list[str] = Field(default_factory=list, max_length=200)
+    attachment_names: list[str] = Field(default_factory=list, max_length=200)
+    observations: list[EmailObservationRef] = Field(default_factory=list, max_length=100)
+
+
 class ThreatEntityRef(BaseModel):
     iocs: list[str] = Field(default_factory=list)
     campaign: str | None = None
@@ -1964,6 +1993,7 @@ class AlertEntitySet(BaseModel):
     host: HostEntityRef = Field(default_factory=HostEntityRef)
     file: FileEntityRef = Field(default_factory=FileEntityRef)
     http: HttpEntityRef = Field(default_factory=HttpEntityRef)
+    email: EmailEntityRef | None = None
     threat: ThreatEntityRef = Field(default_factory=ThreatEntityRef)
 
 
@@ -2315,6 +2345,7 @@ class ExtractedEntities(BaseModel):
     ips: list[str] = Field(default_factory=list)
     domains: list[str] = Field(default_factory=list)
     urls: list[str] = Field(default_factory=list)
+    emails: list[str] = Field(default_factory=list)
     processes: list[str] = Field(default_factory=list)
     users: list[str] = Field(default_factory=list)
     hosts: list[str] = Field(default_factory=list)

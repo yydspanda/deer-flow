@@ -193,7 +193,7 @@ Sensitive local review artifacts:
 | Prefixed ThreatBook JSON | `data/pingan-adapter-checkpoint-b/prefixed-threat-intel-json-1965919.json` |
 | No-message SIEM fallback | `data/pingan-adapter-checkpoint-b/no-message-siem-fallback-1965802.json` |
 
-Initial Checkpoint C signals:
+Initial Checkpoint C signals (pre-mapping baseline):
 
 | Cohort | Parsed schema entries | Role claims | Scenario hypotheses | Interpretation |
 |---|---:|---:|---:|---|
@@ -240,3 +240,40 @@ policy contract violations:         0
 For alert `1965802`, the primary SIEM object has 15 fields and 640 serialized
 characters. All 15 fields are projected unchanged, with zero sanitized and zero
 budget-omitted fields.
+
+## 8. Checkpoint C completed result
+
+The initial table above is retained as the pre-mapping baseline. Current production
+adapter results are:
+
+- NIDS: 95 alerts / 128 messages, 95 canonical five-tuples, 128 network observations,
+  67 HTTP observations and zero known high-value gaps.
+- EDR: 37 alerts / 60 messages, 30 process observations, 39 process nodes and 7 file
+  observations. Endpoint identity and tentative attacker candidates remain separate from
+  wire direction; no directional session is invented.
+- Threat Intel: 3 alerts / 4 messages, 4 independent wire-session observations. Provider
+  attacker/victim assertions remain separate role claims; all three alerts project the
+  monitored host, external IOC, malware family and `T1496`. Asset CIDR/ranges never become
+  host IPs.
+- SIEM: 10 alerts / 15 structured events. Six selected suspicious-email alerts create six
+  typed email observations; four selected machine-copy alerts create host/IP candidates.
+  Later structured events remain raw-only, no network direction is invented, and pipeline
+  `User=system` is not treated as an actor.
+
+The combined Threat Intel/SIEM audit records 159 canonical provenance entries, zero known
+high-value gaps, and zero raw-payload mutations. High-value checks now inspect the selected
+`raw_structured` source view as well as parsed messages, so an unknown SIEM subtype with a
+known high-value field creates a normalization-maintenance gap instead of silently passing.
+
+Reproduce the final TI/SIEM evidence with:
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/build_pingan_ti_siem_field_audit.py
+
+backend/.venv/bin/python \
+  validation/compact_zeus/build_pingan_ti_siem_review_artifacts.py
+```
+
+The generated `data/pingan-ti-siem-*` files contain sensitive `full`-mode evidence, remain
+gitignored, and must not be committed.

@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `PI-01 PingAn Adapter Checkpoint C / TI + SIEM`：NIDS 与 EDR 字段流向审计和 mapping 已完成；下一步审阅 Threat Intel/SIEM parsed/fallback fields、角色/IOC/模型来源语义和 bounded evidence coverage。 |
+| 当前下一刀 | `PI-01 first approved read-only provider`：PingAn NIDS/EDR/Threat Intel/SIEM Checkpoint C 已完成；下一步选择真实 dev/staging CMDB、EDR 或 TI 只读 endpoint，收集 owner、认证、tenant mapping、approved payload 与 smoke 证据。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -201,6 +201,43 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-27 — PI-01 PingAn Threat Intel / SIEM Checkpoint C completed
+
+- Threat Intel adapter：
+  - 新增 `normalizers/pingan_threat_intel.py`，3 条告警 / 4 个 message 全量重放生成 4 个独立
+    network observations；nested `net.*` 作为 wire session，provider `attacker/victim` 作为独立
+    vendor assertions，flattened Zeus copies 不再制造重复角色冲突；
+  - 3/3 条均投影 monitored host、external IOC、malware family 和 MITRE `T1496`；
+    `assets.ip` 的 CIDR/range 明确为 asset scope，不进入 host IP；`result=success`、
+    `is_black_ip`、provider severity/level/score 均为 typed source semantics，不作为攻击成功或
+    Runtime confidence。
+- SIEM adapter 与通用 contract：
+  - 新增 `normalizers/pingan_siem.py` 和 optional `EmailEntityRef/EmailObservationRef`；
+    `suspicious_email` 6 alerts / 7 events 形成 6 个 email observations，deterministic extractor
+    只从 canonical email 生成 email/domain/URL mentions；body 与 `llm_ans/llm_score` 保留为
+    bounded upstream-model evidence，`User=system` 不成为 actor；
+  - `standard_machine_copy` 4 alerts / 8 events 形成 host name/IP candidates；不生成
+    source/destination/attacker/victim 或 network observations；未知 subtype 保留 selected
+    structured evidence 并报告 mapping gap，不猜实体；
+  - `EvidenceFieldImportanceRegistry` 增加通用 selected `raw_structured` source view，
+    `structured.*` high-value rules 现在真正参与 coverage/maintenance，不再只检查 parsed message。
+- 可复跑证据：
+  - `build_pingan_ti_siem_field_audit.py` 重放 10 SIEM / 15 structured events 与 3 TI / 4
+    messages，结果为 159 canonical provenance、0 high-value gap、0 invented SIEM direction、
+    0 pipeline-actor leak、0 raw payload mutation；
+  - `build_pingan_ti_siem_review_artifacts.py` 生成 TI 单/多 message、SIEM email/machine-copy
+    四份 `full` 模式本地 JSON；输出位于 gitignored
+    `validation/compact_zeus/data/pingan-ti-siem-checkpoint-c/`，不得提交。
+- 验证：
+  - PingAn parser + normalization maintenance + validation 聚焦回归：`42 passed`；
+  - 完整 SOC + architecture 回归：`589 passed`；compact Zeus validation：`13 passed`；
+  - 全量 TI/SIEM field audit：`status=passed`；212-row corpus rebuild：`status=passed`、
+    6 source types、0 unexpected `other`；Ruff passed。
+- 下一步：
+  - Checkpoint C 不再继续扩张本地 mapping；按 `delivery-roadmap.md` 选择第一项经过批准的
+    read-only dev/staging provider；真实 endpoint/topic、认证、tenant mapping、approved payload
+    和 data owner 仍是外部输入，不能用新 mock 冒充完成。
 
 ### 2026-07-27 — PI-01 PingAn EDR Checkpoint C completed
 

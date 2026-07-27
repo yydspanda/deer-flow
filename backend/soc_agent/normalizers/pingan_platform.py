@@ -36,6 +36,21 @@ from soc_agent.normalizers.pingan_edr import (
 )
 from soc_agent.normalizers.pingan_evidence import build_pingan_fact_inputs
 from soc_agent.normalizers.pingan_messages import parse_pingan_raw_message
+from soc_agent.normalizers.pingan_siem import (
+    build_siem_canonical_field_provenance,
+    build_siem_entities,
+    build_siem_source_field_semantics,
+    siem_field_importance_rules,
+)
+from soc_agent.normalizers.pingan_threat_intel import (
+    build_threat_intel_canonical_field_provenance,
+    build_threat_intel_entities,
+    build_threat_intel_source_field_semantics,
+    threat_intel_category,
+    threat_intel_field_importance_rules,
+    threat_intel_mitre_values,
+    threat_intel_severity,
+)
 
 RAW_MESSAGE_FIELD = "message"
 _PINGAN_TOPIC_SOURCE_TYPES = {
@@ -73,6 +88,7 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
         alert,
         parsed_messages=parsed_messages,
         source_type=source_type,
+        structured_fallback_trust=_structured_fallback_trust(hit_log),
     )
     source_system = _first_str(hit_log, ("topic", "topicName")) or _first_str(evidence_event, ("appname", "source"))
     product = _first_str(hit_log, ("topicName",)) or _first_str(evidence_event, ("metadata__product__name",))
@@ -99,19 +115,46 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
             or _first_str(hit_log, ("ruleName",))
             or _first_str(raw_event, ("finding__title", "str_title")),
             "rule_category": _first_str(sensor_alert, ("category",))
+            or (threat_intel_category(parsed_fields) if source_type is AlertSourceType.THREAT_INTEL else None)
             or _first_str(parsed_fields, ("finding__type_name", "attack_type", "vuln_type", "event_type"))
+            or (_first_str(evidence_event, ("subtype",)) if source_type is AlertSourceType.SIEM else None)
             or _first_str(alert, ("tertiaryType", "secondaryType"))
             or _first_str(raw_event, ("finding__type_name", "attack_type", "vuln_type")),
         },
         "event": {
             "event_id": _first_str(evidence_event, ("alarm_id", "finding__uid", "str_unique_id", "logcloud_msgid")),
-            "event_time": _first_str(evidence_event, ("t_detect_time", "timestamp", "time", "access_time", "first_access_time")) or _first_str(alert, ("createAt",)),
+            "event_time": _first_str(
+                evidence_event,
+                (
+                    "t_detect_time",
+                    "timeStr",
+                    "modeltime",
+                    "timestamp",
+                    "time",
+                    "access_time",
+                    "first_access_time",
+                ),
+            )
+            or _first_str(alert, ("createAt",)),
             "received_at": _first_str(alert, ("createAt",)) or _first_str(evidence_event, ("timestamp", "time")),
         },
         "classification": {
-            "severity": _first_str(evidence_event, ("severity", "risk_level", "hazard_rating", "threat_level", "event_level")) or _first_str(alert, ("riskLevel",)),
+            "severity": (threat_intel_severity(parsed_fields) if source_type is AlertSourceType.THREAT_INTEL else None)
+            or _first_str(
+                evidence_event,
+                (
+                    "severity",
+                    "risk_level",
+                    "hazard_rating",
+                    "threat_level",
+                    "event_level",
+                ),
+            )
+            or _first_str(alert, ("riskLevel",)),
             "category": _first_str(sensor_alert, ("category",))
+            or (threat_intel_category(parsed_fields) if source_type is AlertSourceType.THREAT_INTEL else None)
             or _first_str(parsed_fields, ("finding__type_name", "attack_type", "vuln_type", "event_name", "event_type"))
+            or (_first_str(evidence_event, ("subtype",)) if source_type is AlertSourceType.SIEM else None)
             or _first_str(alert, ("tertiaryType", "secondaryType", "primaryType"))
             or _first_str(raw_event, ("finding__type_name", "attack_type", "vuln_type")),
             "tactic": _dedupe(
@@ -124,6 +167,7 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
                 [
                     *_mitre_values(evidence_event, prefix="T"),
                     *(edr_mitre_values(parsed_messages, prefix="T") if source_type is AlertSourceType.EDR else []),
+                    *(threat_intel_mitre_values(parsed_messages) if source_type is AlertSourceType.THREAT_INTEL else []),
                 ]
             ),
             "labels": _labels(alert, hit_log, evidence_event),
@@ -135,6 +179,7 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
             http_payload,
             primary_parsed,
             parsed_messages,
+            raw_event_path,
         ),
         "evidence": _evidence(alert, hit_log, evidence_event),
         "extensions": {
@@ -147,6 +192,7 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
                 source_type,
                 parsed_messages,
                 fallback_fields=raw_event,
+                fallback_path=raw_event_path,
             ),
             "analysis_context_coverage": _analysis_context_coverage(original, alert),
             "evidence_input_policy": _evidence_input_policy(
@@ -166,6 +212,9 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
         source_type=source_type,
         parsed_messages=parsed_messages,
         primary_parsed=primary_parsed,
+        raw_event=raw_event,
+        raw_event_path=raw_event_path,
+        structured_fallback_trust=_structured_fallback_trust(hit_log),
     )
     if provenance:
         normalized.extensions["canonical_field_provenance"] = provenance
@@ -304,8 +353,20 @@ def _entities(
     http_payload: dict[str, Any],
     parsed_message: ParsedRawMessageEvidence | None,
     parsed_messages: list[ParsedRawMessageEvidence],
+    raw_event_path: str,
 ) -> dict[str, Any]:
     primary_fields = parsed_message.fields if parsed_message is not None else {}
+
+    if source_type is AlertSourceType.THREAT_INTEL:
+        return build_threat_intel_entities(
+            parsed_messages,
+            fallback_fields=raw_event,
+        )
+    if source_type is AlertSourceType.SIEM:
+        return build_siem_entities(
+            raw_event,
+            evidence_path=raw_event_path,
+        )
 
     def source_value(aliases: tuple[str, ...]) -> str | None:
         if source_type is AlertSourceType.EDR:
@@ -717,12 +778,27 @@ def _canonical_field_provenance(
     source_type: AlertSourceType,
     parsed_messages: list[ParsedRawMessageEvidence],
     primary_parsed: ParsedRawMessageEvidence | None,
+    raw_event: Mapping[str, Any],
+    raw_event_path: str,
+    structured_fallback_trust: EvidenceTrustLevel,
 ) -> list[dict[str, Any]]:
     if source_type is AlertSourceType.EDR:
         return build_edr_canonical_field_provenance(
             alert,
             parsed_messages=parsed_messages,
             primary_parsed=primary_parsed,
+        )
+    if source_type is AlertSourceType.THREAT_INTEL:
+        return build_threat_intel_canonical_field_provenance(
+            alert,
+            parsed_messages=parsed_messages,
+        )
+    if source_type is AlertSourceType.SIEM:
+        return build_siem_canonical_field_provenance(
+            alert,
+            fields=raw_event,
+            evidence_path=raw_event_path,
+            trust=structured_fallback_trust,
         )
     if source_type is not AlertSourceType.NIDS:
         return []
@@ -892,6 +968,10 @@ def _field_importance_rules(
 ) -> list[dict[str, Any]]:
     if source_type is AlertSourceType.EDR:
         return edr_field_importance_rules()
+    if source_type is AlertSourceType.THREAT_INTEL:
+        return threat_intel_field_importance_rules()
+    if source_type is AlertSourceType.SIEM:
+        return siem_field_importance_rules()
     if source_type is not AlertSourceType.NIDS:
         return []
     definitions = (
@@ -995,7 +1075,15 @@ def _source_field_semantics(
     parsed_messages: list[ParsedRawMessageEvidence],
     *,
     fallback_fields: Mapping[str, Any],
+    fallback_path: str,
 ) -> list[dict[str, Any]]:
+    if source_type is AlertSourceType.THREAT_INTEL:
+        return build_threat_intel_source_field_semantics(parsed_messages)
+    if source_type is AlertSourceType.SIEM:
+        return build_siem_source_field_semantics(
+            fallback_fields,
+            evidence_path=fallback_path,
+        )
     observations = (
         build_edr_source_field_semantics(
             parsed_messages,

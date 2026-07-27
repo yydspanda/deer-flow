@@ -20,6 +20,14 @@ from soc_agent.normalizers.pingan_edr import (
     edr_endpoint_addresses,
     edr_ip_addresses,
 )
+from soc_agent.normalizers.pingan_siem import (
+    build_siem_scenario_signals,
+    siem_machine_copy_impacted_asset,
+)
+from soc_agent.normalizers.pingan_threat_intel import (
+    build_threat_intel_scenario_signals,
+    threat_intel_session,
+)
 
 _SCENARIO_SIGNAL_FIELDS = frozenset(
     {
@@ -48,12 +56,14 @@ def build_pingan_fact_inputs(
     *,
     parsed_messages: Sequence[ParsedRawMessageEvidence],
     source_type: AlertSourceType,
+    structured_fallback_trust: EvidenceTrustLevel = EvidenceTrustLevel.LOW,
 ) -> tuple[list[RoleClaim], list[ScenarioSignal]]:
     """Translate PingAn aliases into generic claims without leaking them into Runtime."""
 
     claims: list[RoleClaim] = []
     signals: list[ScenarioSignal] = []
     raw_events = _iter_raw_events(alert)
+    parsed_message_paths = {parsed.source_path for parsed in parsed_messages}
     edr_endpoints_by_scope = _edr_endpoint_addresses_by_scope(parsed_messages, raw_events) if source_type is AlertSourceType.EDR else {}
     for parsed in parsed_messages:
         base_path = f"{parsed.source_path}#parsed"
@@ -70,37 +80,61 @@ def build_pingan_fact_inputs(
                 ),
             )
         )
-        signals.extend(
-            _scenario_signals(
-                parsed.fields,
-                base_path=f"{parsed.source_path}#parsed",
-                layer=EvidenceLayer.RAW_MESSAGE,
-                trust=EvidenceTrustLevel.HIGH,
-                source_type=source_type,
+        if source_type is not AlertSourceType.THREAT_INTEL:
+            signals.extend(
+                _scenario_signals(
+                    parsed.fields,
+                    base_path=f"{parsed.source_path}#parsed",
+                    layer=EvidenceLayer.RAW_MESSAGE,
+                    trust=EvidenceTrustLevel.HIGH,
+                    source_type=source_type,
+                )
             )
-        )
+    if source_type is AlertSourceType.THREAT_INTEL:
+        signals.extend(build_threat_intel_scenario_signals(parsed_messages))
 
-    for hit_log_index, raw_event_index, raw_event in raw_events:
+    for raw_position, (hit_log_index, raw_event_index, raw_event) in enumerate(raw_events):
         base_path = f"alert.hitLog[{hit_log_index}].zeusRawLogs[{raw_event_index}]"
+        if parsed_messages:
+            if f"{base_path}.message" not in parsed_message_paths:
+                continue
+        elif raw_position > 0:
+            # Message-less fallback selects only the first raw event. Later
+            # events remain in AlertInput.raw for audit and replay.
+            continue
+        if source_type is AlertSourceType.THREAT_INTEL and f"{base_path}.message" in parsed_message_paths:
+            # ThreatBook copies message values into many flattened Zeus fields.
+            # The parsed message is the authoritative typed source and duplicate
+            # processed aliases must not create artificial role conflicts.
+            continue
         claims.extend(
             _claims_for_fields(
                 raw_event,
                 base_path=base_path,
                 layer=EvidenceLayer.RAW_STRUCTURED,
-                trust=EvidenceTrustLevel.MEDIUM,
+                trust=structured_fallback_trust,
                 source_type=source_type,
                 known_edr_endpoints=edr_endpoints_by_scope.get(base_path, ()),
             )
         )
-        signals.extend(
-            _scenario_signals(
-                raw_event,
-                base_path=base_path,
-                layer=EvidenceLayer.RAW_STRUCTURED,
-                trust=EvidenceTrustLevel.MEDIUM,
-                source_type=source_type,
+        if source_type is AlertSourceType.SIEM:
+            signals.extend(
+                build_siem_scenario_signals(
+                    raw_event,
+                    evidence_path=base_path,
+                    trust=structured_fallback_trust,
+                )
             )
-        )
+        else:
+            signals.extend(
+                _scenario_signals(
+                    raw_event,
+                    base_path=base_path,
+                    layer=EvidenceLayer.RAW_STRUCTURED,
+                    trust=structured_fallback_trust,
+                    source_type=source_type,
+                )
+            )
     return _dedupe_claims(claims), _dedupe_signals(signals)
 
 
@@ -129,6 +163,36 @@ def _claims_for_fields(
             attacker_confidence=assertion_confidence,
             known_endpoint_addresses=known_edr_endpoints,
         )
+        return claims
+
+    if source_type is AlertSourceType.THREAT_INTEL:
+        _append_threat_intel_role_claims(
+            claims,
+            fields,
+            base_path=base_path,
+            layer=layer,
+            trust=trust,
+            observation_confidence=observation_confidence,
+            assertion_confidence=assertion_confidence,
+            endpoint_confidence=endpoint_confidence,
+        )
+        return claims
+
+    if source_type is AlertSourceType.SIEM:
+        impacted_asset = siem_machine_copy_impacted_asset(fields)
+        if impacted_asset:
+            _append_direct_claim(
+                claims,
+                role="impacted_asset",
+                value=impacted_asset,
+                claim_type=RoleClaimType.DERIVED_HYPOTHESIS,
+                evidence_path=f"{base_path}.computername",
+                base_path=base_path,
+                layer=layer,
+                trust=trust,
+                semantic_confidence=0.65,
+                rationale=("the SIEM aggregate model identifies a host candidate; asset ownership and maliciousness still require corroboration"),
+            )
         return claims
 
     if source_type is AlertSourceType.HIDS:
@@ -211,6 +275,104 @@ def _claims_for_fields(
         rationale="source adapter proposed an impacted asset candidate; asset ownership still requires corroboration",
     )
     return claims
+
+
+def _append_threat_intel_role_claims(
+    claims: list[RoleClaim],
+    fields: Mapping[str, Any],
+    *,
+    base_path: str,
+    layer: EvidenceLayer,
+    trust: EvidenceTrustLevel,
+    observation_confidence: float,
+    assertion_confidence: float,
+    endpoint_confidence: float,
+) -> None:
+    """Keep wire endpoints independent from provider attacker/victim labels."""
+
+    session = threat_intel_session(fields)
+    for role, field_name in (
+        ("source", "source_ip"),
+        ("destination", "destination_ip"),
+    ):
+        value = session.get(field_name)
+        if not isinstance(value, str) or not value:
+            continue
+        source_name = "src_ip" if role == "source" else "dest_ip"
+        _append_direct_claim(
+            claims,
+            role=role,
+            value=value,
+            claim_type=RoleClaimType.OBSERVATION,
+            evidence_path=f"{base_path}.net.{source_name}",
+            base_path=base_path,
+            layer=layer,
+            trust=trust,
+            semantic_confidence=observation_confidence,
+            rationale="ThreatBook net fields describe the observed network session endpoint",
+        )
+
+    for role, field_name in (("attacker", "attacker"), ("victim", "victim")):
+        value = _claim_value(fields.get(field_name))
+        if value is None:
+            continue
+        _append_direct_claim(
+            claims,
+            role=role,
+            value=value,
+            claim_type=RoleClaimType.VENDOR_ASSERTION,
+            evidence_path=f"{base_path}.{field_name}",
+            base_path=base_path,
+            layer=layer,
+            trust=trust,
+            semantic_confidence=assertion_confidence,
+            rationale=(f"ThreatBook asserted the {role} security role; the assertion does not redefine observed wire direction"),
+        )
+
+    impacted_asset = _claim_value(fields.get("machine")) or _claim_value(fields.get("victim"))
+    if impacted_asset:
+        source_name = "machine" if _claim_value(fields.get("machine")) else "victim"
+        _append_direct_claim(
+            claims,
+            role="impacted_asset",
+            value=impacted_asset,
+            claim_type=RoleClaimType.DERIVED_HYPOTHESIS,
+            evidence_path=f"{base_path}.{source_name}",
+            base_path=base_path,
+            layer=layer,
+            trust=trust,
+            semantic_confidence=endpoint_confidence,
+            rationale=("ThreatBook identifies the monitored machine as an impacted asset candidate; ownership still requires corroboration"),
+        )
+
+
+def _append_direct_claim(
+    claims: list[RoleClaim],
+    *,
+    role: str,
+    value: str,
+    claim_type: RoleClaimType,
+    evidence_path: str,
+    base_path: str,
+    layer: EvidenceLayer,
+    trust: EvidenceTrustLevel,
+    semantic_confidence: float,
+    rationale: str,
+) -> None:
+    claims.append(
+        RoleClaim(
+            claim_id=_claim_id(role, value, evidence_path, claim_type),
+            role=role,  # type: ignore[arg-type]
+            value=value,
+            claim_type=claim_type,
+            evidence_path=evidence_path,
+            observation_scope=_observation_scope(base_path),
+            source_layer=layer,
+            evidence_trust=trust,
+            semantic_confidence=semantic_confidence,
+            rationale=rationale,
+        )
+    )
 
 
 def _append_edr_role_claims(

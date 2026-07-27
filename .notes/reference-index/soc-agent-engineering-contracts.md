@@ -160,6 +160,20 @@ contracts
   `str_threat_value` and `str_activity_id` remain typed source semantics and cannot become IP/hash
   entities by shape alone. When the source provides no explicit directional connection fields,
   canonical EDR source/destination and network observations must remain empty.
+- For PingAn Threat Intel, nested `net.src_ip/dest_ip/src_port/dest_port/proto` describes the
+  observed wire session. Provider `attacker` / `victim` values are independent
+  `VENDOR_ASSERTION` claims and must not overwrite the session endpoints. The monitored `machine`
+  may form an impacted-host candidate; `external_ip` or an explicit, shape-valid IOC may form threat
+  indicators. `assets.ip` is an asset-scope expression that may contain CIDR/range syntax and must
+  never become a host IP. Provider `result=success`, `is_black_ip`, threat severity/level and scores
+  are typed source semantics, not exploit outcome, detection truth, or calibrated Runtime confidence.
+- For exact-topic PingAn SIEM structured fallback, high trust means faithful evidence provenance,
+  not that an upstream model is correct. `suspicious_email` may project message ID, sender,
+  recipients, subject, links and attachment names into the generic email contract; body text and
+  upstream model narrative remain bounded evidence. `standard_machine_copy` may project the
+  aggregate computer name/IP candidates but cannot create network source/destination or attacker.
+  Pipeline identities such as `User=system` are not event actors. Unknown subtypes retain bounded
+  evidence and surface high-value mapping gaps instead of receiving guessed entities.
 - PingAn NIDS `alert.action`, `alert.attack_res`, and HTTP status must carry typed field semantics.
   Sensor `allowed`, a vendor result code, or HTTP 2xx cannot prove attack/exploit success or set the
   Runtime verdict. NIDS `files[]` describes transaction/file-extraction metadata and must not be
@@ -1041,6 +1055,22 @@ normalizers/hids.py
   source-field semantics。新增/漂移的高价值 detail 字段必须能通过 `EvidenceCoverageReport` 或
   schema baseline issue 暴露，不能因完整 raw payload 仍存在就静默忽略。
 
+#### PingAn Threat Intel / SIEM contract
+
+- `backend/soc_agent/normalizers/pingan_threat_intel.py` owns ThreatBook nested aliases,
+  session/role separation, IOC/MITRE projection, provenance, source semantics and field-importance
+  rules. `pingan_platform.py` only dispatches by source type; generic pipeline code must not know
+  ThreatBook names.
+- `backend/soc_agent/normalizers/pingan_siem.py` owns reviewed SIEM subtype parsing. Structured
+  string collections may use bounded `json.loads` with conservative `ast.literal_eval` fallback;
+  arbitrary evaluation is forbidden and malformed values remain in raw/bounded evidence.
+- Generic `EmailEntityRef` contains bounded message metadata only. Raw body, headers, upstream model
+  chain-of-thought/narrative and attachment contents are not duplicated into canonical entities.
+- `EvidenceFieldImportanceRegistry` must inspect both parsed message views and the selected
+  `raw_structured` fallback view. Structured source patterns use the `structured.*` namespace;
+  unknown or changed subtype fields can therefore create normalization-maintenance issues without
+  changing verdict or auto-applying a mapping.
+
 ### Normalization / extraction report 约束
 
 - `AnalysisRun.normalization_report` 记录 deterministic normalizer 的质量信号，不参与 verdict 决策。
@@ -1130,6 +1160,9 @@ normalizers/hids.py
   encoded compaction、truncation、omissions 和 high-value gaps。
 - structured fallback 必须记录实际投影的 leaf paths；`full` 只表示已选值保持原始，不表示绕过
   总预算，也不表示完整 `zeusRawLogs[]` 数组进入模型。
+- high-value mapping expectations apply to the selected structured fallback as well as parsed
+  messages. Structured checks use exact selected-input provenance and must not scan later unselected
+  `zeusRawLogs[]` entries as though they entered canonical analysis.
 - coverage report 是审计/漂移产物，不是 verdict。一个字段被解析但没有 canonical mapping 时不得
   静默消失：它必须仍可在 parsed evidence 中回放，并通过全路径清单或已定义 high-value gap 暴露。
 - `llm_projected_paths` 表示该字段属于 bounded projection 的候选内容；若 evidence 整体被截断，必须

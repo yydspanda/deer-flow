@@ -11,6 +11,7 @@ from soc_agent.contracts import AlertInput, EntityKind, EntityMention, Extracted
 
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 DOMAIN_RE = re.compile(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b")
+EMAIL_RE = re.compile(r"^[^\s<>@]+@(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$")
 FILE_HASH_RE = re.compile(r"^(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{40}|[0-9A-Fa-f]{64})$")
 _FILE_LIKE_SUFFIXES = frozenset(
     {
@@ -45,6 +46,7 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
     user = alert.entities.user
     host = alert.entities.host
     http = alert.entities.http
+    email = alert.entities.email
     threat = alert.entities.threat
 
     mentions: list[EntityMention] = []
@@ -130,6 +132,42 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
 
     _add_mention(mentions, EntityKind.URL, network.url, role="network_url", evidence_path="entities.network.url")
     _add_mention(mentions, EntityKind.URL, http.url, role="http_url", evidence_path="entities.http.url")
+    if email is not None:
+        for attribute, role in (
+            ("sender_addresses", "email_sender"),
+            ("recipient_addresses", "email_recipient"),
+            ("cc_addresses", "email_cc"),
+        ):
+            for index, value in enumerate(getattr(email, attribute)):
+                evidence_path = f"entities.email.{attribute}[{index}]"
+                _add_mention(
+                    mentions,
+                    EntityKind.EMAIL,
+                    value,
+                    role=role,
+                    evidence_path=evidence_path,
+                )
+                _add_email_domain(
+                    mentions,
+                    value,
+                    role=f"{role}_domain",
+                    evidence_path=evidence_path,
+                )
+        for index, value in enumerate(email.links):
+            evidence_path = f"entities.email.links[{index}]"
+            _add_mention(
+                mentions,
+                EntityKind.URL,
+                value,
+                role="email_link",
+                evidence_path=evidence_path,
+            )
+            _add_url_domain(
+                mentions,
+                value,
+                role="email_link_domain",
+                evidence_path=evidence_path,
+            )
     _add_mention(
         mentions,
         EntityKind.PROCESS,
@@ -266,6 +304,7 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
     ips = _values_by_kind(mentions, EntityKind.IP)
     domains = _values_by_kind(mentions, EntityKind.DOMAIN)
     urls = _values_by_kind(mentions, EntityKind.URL)
+    emails = _values_by_kind(mentions, EntityKind.EMAIL)
     processes = _values_by_kind(mentions, EntityKind.PROCESS)
     users = _values_by_kind(mentions, EntityKind.USER)
     hosts = _dedupe([*_values_by_kind(mentions, EntityKind.HOST), *_values_by_kind(mentions, EntityKind.ASSET)])
@@ -287,6 +326,7 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
         ips=ips,
         domains=domains,
         urls=urls,
+        emails=emails,
         processes=processes,
         users=users,
         hosts=hosts,
@@ -413,6 +453,25 @@ def _add_url_domain(
     )
 
 
+def _add_email_domain(
+    mentions: list[EntityMention],
+    value: str | None,
+    *,
+    role: str,
+    evidence_path: str,
+) -> None:
+    normalized = _normalize_entity_value(EntityKind.EMAIL, value)
+    if normalized is None:
+        return
+    _add_mention(
+        mentions,
+        EntityKind.DOMAIN,
+        normalized.rsplit("@", 1)[-1],
+        role=role,
+        evidence_path=evidence_path,
+    )
+
+
 def _add_domains_from_text(
     mentions: list[EntityMention],
     value: str | None,
@@ -449,6 +508,9 @@ def _normalize_entity_value(kind: EntityKind, value: str | None) -> str | None:
         return candidate
     if kind is EntityKind.URL:
         return normalized.lower()
+    if kind is EntityKind.EMAIL:
+        candidate = normalized.lower()
+        return candidate if len(candidate) <= 320 and EMAIL_RE.fullmatch(candidate) else None
     if kind is EntityKind.FILE_HASH:
         return normalized.upper()
     return normalized

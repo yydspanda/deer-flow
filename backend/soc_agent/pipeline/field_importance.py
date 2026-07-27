@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from fnmatch import fnmatch
 from typing import Any
@@ -13,6 +14,8 @@ from soc_agent.contracts import (
     EvidenceCoverageGap,
     EvidenceFieldImportance,
     EvidenceFieldImportanceRule,
+    EvidenceInputPolicy,
+    EvidenceLayer,
     ParsedRawMessageEvidence,
 )
 
@@ -64,8 +67,10 @@ class EvidenceFieldImportanceRegistry:
     ) -> list[EvidenceCoverageGap]:
         gaps: list[EvidenceCoverageGap] = []
         target_cache: dict[str, Any] = {}
-        for source_path, parsed in parsed_by_path.items():
-            evidence_paths = _evidence_leaf_paths(parsed)
+        for source_path, evidence_paths in _evidence_source_views(
+            alert,
+            parsed_by_path,
+        ):
             for rule in self._rules:
                 if rule.source_types and alert.source.source_type not in rule.source_types:
                     continue
@@ -88,6 +93,30 @@ class EvidenceFieldImportanceRegistry:
                     )
                 )
         return list({(gap.rule_id, gap.field_path, gap.expected_target): gap for gap in gaps}.values())
+
+
+def _evidence_source_views(
+    alert: AlertInput,
+    parsed_by_path: Mapping[str, ParsedRawMessageEvidence],
+) -> list[tuple[str, list[str]]]:
+    views = [(source_path, _evidence_leaf_paths(parsed)) for source_path, parsed in parsed_by_path.items()]
+    configured_policy = alert.extensions.get("evidence_input_policy")
+    try:
+        policy = EvidenceInputPolicy.model_validate(configured_policy)
+    except ValidationError:
+        return views
+    if policy.selected_layer is not EvidenceLayer.RAW_STRUCTURED or not policy.selected_input_path:
+        return views
+    selected = _resolve_payload_path(alert.raw, policy.selected_input_path)
+    if not isinstance(selected, Mapping):
+        return views
+    views.append(
+        (
+            policy.selected_input_path,
+            [f"structured.{path}" for path in _flatten_leaves(selected)],
+        )
+    )
+    return views
 
 
 def _evidence_leaf_paths(parsed: ParsedRawMessageEvidence) -> list[str]:
@@ -126,6 +155,23 @@ def _resolve_model_path(value: Any, path: str) -> Any:
         if current is None:
             return None
     return current
+
+
+def _resolve_payload_path(payload: Mapping[str, Any], path: str) -> Any:
+    value: Any = payload
+    for segment in path.split("."):
+        match = re.fullmatch(r"([^\[\]]+)(?:\[(\d+)\])?", segment)
+        if match is None:
+            return None
+        key, index = match.groups()
+        if not isinstance(value, Mapping) or key not in value:
+            return None
+        value = value[key]
+        if index is not None:
+            if not isinstance(value, list) or int(index) >= len(value):
+                return None
+            value = value[int(index)]
+    return value
 
 
 def _has_value(value: Any) -> bool:

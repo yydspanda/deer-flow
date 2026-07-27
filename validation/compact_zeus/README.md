@@ -197,3 +197,40 @@ victim/impacted-asset claims；合法且不同于 endpoint 的 `str_attack_ip` �
 destination/hash。当前语料没有可靠 EDR directional connection contract，因此 37 条告警的
 canonical source/destination 和 network observations 均为 0；这属于安全的“未虚构方向”，
 不是字段丢失。所有 37 条输入的 raw payload hash 均保持不变。
+
+### Checkpoint C: Threat Intel / SIEM 字段使用
+
+重跑 Threat Intel 与 SIEM 全量子集审计：
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/build_pingan_ti_siem_field_audit.py
+```
+
+生成四组敏感本地代表样本：
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/build_pingan_ti_siem_review_artifacts.py
+```
+
+输出位于：
+
+```text
+validation/compact_zeus/data/
+├── pingan-ti-siem-field-audit.json
+└── pingan-ti-siem-checkpoint-c/
+    ├── threat-intel-single-message-1965919.json
+    ├── threat-intel-multiple-messages-1973156.json
+    ├── siem-suspicious-email-1966022.json
+    └── siem-standard-machine-copy-1965891.json
+```
+
+当前结果：3 条 Threat Intel 告警包含 4 个 message，形成 4 个独立网络 observation；
+`net.*` 是 wire session，`attacker/victim` 是独立 provider assertions，3/3 条均提取
+host、external IOC、malware 和 `T1496`，asset CIDR/range 不进入 host IP。10 条 SIEM
+告警包含 15 个 structured events，其中 6 条可疑邮件（7 events）形成 6 个 email
+observations，4 条标机克隆（8 events）形成 host/IP candidates；没有 SIEM 告警被虚构
+network direction，也没有把 `User=system` 当作 actor。合并审计有 159 条 canonical
+provenance、0 high-value gap、0 raw mutation。生成目录包含 `full` 模式真实告警内容，
+已 gitignore，不得提交。

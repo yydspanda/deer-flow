@@ -225,6 +225,15 @@ Current SOC direction:
   Source type, missing `message`, similar topic names, and topic prefixes do not grant this
   exception. Preserve the complete original payload for replay/audit and expose only bounded
   primary/supplementary evidence content to analysis nodes.
+- PingAn Threat Intel mapping lives in `normalizers/pingan_threat_intel.py`: nested `net.*` is the
+  observed wire session, while `attacker` / `victim` remain separate provider role assertions.
+  `assets.ip` may be a CIDR/range scope and must not become a host IP; provider `result`, reputation,
+  severity and score fields are typed source semantics, not Runtime truth/confidence.
+- PingAn trusted structured SIEM mapping lives in `normalizers/pingan_siem.py`. Only reviewed
+  subtypes are projected: `suspicious_email` emits typed email entities and
+  `standard_machine_copy` emits host candidates without inventing network direction. Upstream model
+  narratives/scores and pipeline identities are not analyst truth or event actors; unknown subtypes
+  stay bounded evidence and produce mapping gaps rather than guessed entities.
 - PingAn EDR nested `detailsN` handling lives in `backend/soc_agent/normalizers/pingan_edr.py`.
   Keep one canonical endpoint/process/file summary and preserve each usable detail as an exact-path
   process/file observation. `iplist`, `str_source_ip`, and `device__ip` are endpoint identity and

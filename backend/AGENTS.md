@@ -204,7 +204,17 @@ endpoints or hashes by string shape. Without an explicit directional connection 
 EDR source/destination and network observations remain empty. Only shape-valid process MD5/SHA-256
 values enter process/file entities. Child process, file, registry, scheduled-task,
 artifact-existence and MITRE fields remain typed investigation context and cannot by themselves
-prove maliciousness or success. Long encoding-shaped spans are compacted at the shared model boundary for every primary/supplementary evidence item,
+prove maliciousness or success.
+PingAn Threat Intel nested mapping lives in `soc_agent.normalizers.pingan_threat_intel`. The
+`net` object defines the observed session; provider `attacker`/`victim` labels are independent
+security-role assertions. Asset CIDR/range scope is not a host, and provider result/reputation/score
+metadata is not Runtime detection truth or calibrated confidence. PingAn SIEM subtype mapping lives
+in `soc_agent.normalizers.pingan_siem`: reviewed suspicious-email events may populate the generic
+email contract, reviewed machine-copy events may populate host candidates, and neither path may
+infer network direction. Upstream `llm_ans`/`llm_score` remain model-derived evidence, `User=system`
+is a pipeline identity, and unknown subtypes remain bounded evidence with explicit mapping gaps.
+High-value field checks must inspect the selected structured fallback as well as parsed messages.
+Long encoding-shaped spans are compacted at the shared model boundary for every primary/supplementary evidence item,
 regardless of PingAn topic or future vendor, through `soc_agent.pipeline.encoded_context`;
 raw/parsed values are unchanged. The marker carries type, original length, and a short hash, while
 typed path/kind/length/full-hash metadata remains in request/run audit outside the prompt; both are
