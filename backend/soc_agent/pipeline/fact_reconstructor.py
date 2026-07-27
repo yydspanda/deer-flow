@@ -29,10 +29,29 @@ from soc_agent.contracts import (
 
 _ROLES = ("source", "destination", "attacker", "victim", "impacted_asset")
 _REVERSE_CONNECTION_TERMS = ("反弹shell", "反弹 shell", "reverse shell", "回连")
-_OUTBOUND_C2_TERMS = ("恶意外联", "c2", "command and control", "beacon")
+_OUTBOUND_C2_TERMS = (
+    "恶意外联",
+    "远控木马",
+    "c2",
+    "command and control",
+    "beacon",
+    "sliver",
+    "cobalt strike",
+)
 _LATERAL_MOVEMENT_TERMS = ("横向移动", "lateral movement")
-_COMMAND_EXECUTION_TERMS = ("命令执行", "command execution")
-_WEB_ATTACK_TERMS = ("web攻击", "web attack", "代码执行", "弱口令", "sql注入", "xss")
+_COMMAND_EXECUTION_TERMS = ("命令执行", "command execution", "command injection", "命令注入")
+_WEB_ATTACK_TERMS = (
+    "web攻击",
+    "web attack",
+    "代码执行",
+    "远程代码执行",
+    "remote code execution",
+    "rce",
+    "webshell",
+    "弱口令",
+    "sql注入",
+    "xss",
+)
 
 
 def reconstruct_facts(alert: AlertInput) -> FactReconstructionResult:
@@ -64,7 +83,10 @@ def reconstruct_facts(alert: AlertInput) -> FactReconstructionResult:
         scenario_hypotheses,
         selected_input_path,
     )
-    canonical_provenance = _canonical_field_provenance(alert, role_claims, selected_input_path)
+    canonical_provenance = _merge_canonical_field_provenance(
+        _canonical_field_provenance(alert, role_claims, selected_input_path),
+        _adapter_canonical_field_provenance(alert, warnings),
+    )
 
     return FactReconstructionResult(
         evidence_policy=policy,
@@ -473,6 +495,32 @@ def _canonical_field_provenance(
             )
         )
     return result
+
+
+def _adapter_canonical_field_provenance(
+    alert: AlertInput,
+    warnings: list[str],
+) -> list[CanonicalFieldProvenance]:
+    values = alert.extensions.get("canonical_field_provenance")
+    if not isinstance(values, list):
+        return []
+    result: list[CanonicalFieldProvenance] = []
+    for value in values:
+        try:
+            result.append(CanonicalFieldProvenance.model_validate(value))
+        except ValidationError as exc:
+            warnings.append(f"invalid adapter canonical provenance ignored: {exc}")
+    return result
+
+
+def _merge_canonical_field_provenance(
+    derived: Sequence[CanonicalFieldProvenance],
+    adapter: Sequence[CanonicalFieldProvenance],
+) -> list[CanonicalFieldProvenance]:
+    by_path = {item.canonical_path: item for item in derived}
+    for item in adapter:
+        by_path[item.canonical_path] = item
+    return list(by_path.values())
 
 
 def _best_claim(claims: Sequence[RoleClaim], selected_input_path: str | None) -> RoleClaim | None:

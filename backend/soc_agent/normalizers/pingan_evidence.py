@@ -62,6 +62,7 @@ def build_pingan_fact_inputs(
                 base_path=f"{parsed.source_path}#parsed",
                 layer=EvidenceLayer.RAW_MESSAGE,
                 trust=EvidenceTrustLevel.HIGH,
+                source_type=source_type,
             )
         )
 
@@ -82,6 +83,7 @@ def build_pingan_fact_inputs(
                 base_path=base_path,
                 layer=EvidenceLayer.RAW_STRUCTURED,
                 trust=EvidenceTrustLevel.MEDIUM,
+                source_type=source_type,
             )
         )
     return _dedupe_claims(claims), _dedupe_signals(signals)
@@ -234,6 +236,7 @@ def _scenario_signals(
     base_path: str,
     layer: EvidenceLayer,
     trust: EvidenceTrustLevel,
+    source_type: AlertSourceType,
 ) -> list[ScenarioSignal]:
     signals: list[ScenarioSignal] = []
 
@@ -257,6 +260,22 @@ def _scenario_signals(
         )
 
     visit(fields, ())
+    if source_type is AlertSourceType.NIDS:
+        for path in (
+            ("alert", "signature"),
+            ("alert", "category"),
+        ):
+            text = _claim_value(_nested_value(fields, path))
+            if text is None:
+                continue
+            signals.append(
+                ScenarioSignal(
+                    text=text,
+                    evidence_path=f"{base_path}.{'.'.join(path)}",
+                    source_layer=layer,
+                    evidence_trust=trust,
+                )
+            )
     return signals
 
 
@@ -282,6 +301,18 @@ def _claim_value(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _nested_value(
+    value: Mapping[str, Any],
+    path: tuple[str, ...],
+) -> Any:
+    current: Any = value
+    for segment in path:
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(segment)
+    return current
 
 
 def _claim_id(role: str, value: str, path: str, claim_type: RoleClaimType) -> str:

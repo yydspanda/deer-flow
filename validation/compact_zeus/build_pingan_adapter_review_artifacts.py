@@ -146,6 +146,7 @@ def build_review_artifact(
             mode="json",
             exclude_none=True,
         ),
+        "source_field_semantics": [item.model_dump(mode="json", exclude_none=True) for item in request.source_field_semantics],
         "evidence_coverage": request.evidence_coverage.model_dump(
             mode="json",
             exclude_none=True,

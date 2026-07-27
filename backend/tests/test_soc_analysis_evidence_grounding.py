@@ -7,6 +7,7 @@ from soc_agent.contracts import (
     AnalysisEvidenceGroundingStatus,
     AnalysisResult,
     BoundedAnalysisEvidence,
+    EncodedSpanOmission,
     EvidenceItem,
     EvidenceLayer,
     EvidenceTrustLevel,
@@ -172,3 +173,46 @@ def test_grounding_does_not_flag_explicitly_unconfirmed_outcome() -> None:
     report = ground_analysis_evidence(analysis, request)
 
     assert "outcome-success claim" not in " ".join(report.warnings)
+
+
+def test_grounding_rejects_encoded_omission_markers_and_sidecar_hashes() -> None:
+    digest = "a" * 64
+    marker = f"<ENCODED:base64_like:320:sha256={digest[:12]}:OMITTED>"
+    request = _request().model_copy(
+        update={
+            "primary_evidence": BoundedAnalysisEvidence(
+                source_path="raw.message",
+                layer=EvidenceLayer.RAW_MESSAGE,
+                trust_level=EvidenceTrustLevel.HIGH,
+                content=f'{{"fields": {{"payload": "{marker}"}}}}',
+                encoded_span_omissions=[
+                    EncodedSpanOmission(
+                        field_path="raw.message#parsed.payload",
+                        kind="base64_like",
+                        original_chars=320,
+                        sha256=digest,
+                    )
+                ],
+            )
+        }
+    )
+
+    report = ground_analysis_evidence(
+        _analysis(
+            EvidenceItem(
+                source="raw.message#parsed.payload",
+                description="模型边界中的编码占位符",
+                value=marker,
+            ),
+            EvidenceItem(
+                source="primary_evidence",
+                description="省略内容的审计哈希",
+                value=digest,
+            ),
+        ),
+        request,
+    )
+
+    assert report.grounded_count == 0
+    assert report.ungrounded_count == 2
+    assert all(item.status is AnalysisEvidenceGroundingStatus.VALUE_NOT_FOUND for item in report.items)

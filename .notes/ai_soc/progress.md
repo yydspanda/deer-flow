@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `PI-01 PingAn Adapter Checkpoint C`：structured fallback 已修复；从 NIDS 开始与用户逐类确认重要 fields 应进入 canonical/fact/scenario/LLM evidence 还是仅审计保留，再增量补 mapping。 |
+| 当前下一刀 | `PI-01 PingAn Adapter Checkpoint C / EDR`：NIDS 已完成 95 条字段流向审计与 mapping；下一步按相同方法审阅 EDR parsed fields、角色/进程/网络/用户实体和 bounded evidence coverage。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -202,6 +202,64 @@
 
 ## 进度记录
 
+### 2026-07-24 — PI-01 all-topic encoded-context production boundary
+
+- 将长编码压缩固定在生产
+  `backend/soc_agent/pipeline/encoded_context.py`；`validation` 只作为调用方，
+  新增 architecture test 禁止 `backend/soc_agent` 导入 `validation.*`。
+- 压缩发生在共享 primary/supplementary bounded-evidence 边界，不依赖 source type 或
+  topic；代表测试覆盖 PingAn 当前 8 个 topic，包括 message-first 与 structured fallback。
+- 占位符格式为
+  `<ENCODED:type:length:sha256=12-char-prefix:OMITTED>`，审计侧车保留 path 与完整
+  SHA-256；二者均不能成为 grounded analyzer evidence。
+- 212 条真实语料重放：
+  - 212/212 条完成生产 LLM projection，8/8 topic 无绕过；
+  - 112 条共压缩 210 段：NIDS 180、APT 8、APT Detail 3、HIDS 19；
+  - EDR/SIEM/Threat Intel 当前样本无命中，但均已执行同一检查；
+  - `raw_payload_mutation_count=0`，policy contract violations 为 0。
+- 验证：
+  - all-topic corpus + NIDS audit：`9 passed`；
+  - encoded-context/grounding/PingAn/architecture 聚焦回归：`46 passed`；
+  - 完整 SOC 回归：`570 passed`；SOC architecture boundary：`11 passed`。
+
+### 2026-07-24 — PI-01 PingAn NIDS Checkpoint C completed
+
+- 语料与字段审计：
+  - 重放 95 条 NIDS 告警、128 个 `pingan_json_object` message；95/95 canonical 五元组完整；
+  - 生成 128 个独立 network observations、67 个 HTTP observations（35 条告警），15 条多五元组
+    告警保持多 observation，不折叠成单一会话；
+  - `query` 保留为 bounded sensor context，未伪装成 DNS/domain；当前 typed high-value gap 为 0；
+  - 81/95 告警产生 deterministic scenario hypothesis，未命中 taxonomy 的文本仍进入受控 LLM evidence。
+- Adapter/contract：
+  - canonical network 增加 application protocol；network observation 保留 direction、community/flow ID、
+    规则相对 source/target、zone 和双向 byte/packet；
+  - 新增 per-message `HttpObservationRef`，映射 method/host/path/protocol/port/status/UA/referer/XFF；
+  - nested `alert.signature/category` 映射 detection，sensor result/severity/signature ID 保留为显式 labels；
+  - Adapter 输出 generic canonical provenance、typed field-importance rules 和
+    `SourceFieldSemantic`；generic fact reconstructor 只校验/合并 contract，不识别 PingAn aliases。
+  - 15 条含 `files[]` 的告警将其保留为 network-transaction metadata，并显式声明它不证明终端文件
+    写入；审阅产物直接展示 source-field semantics。
+- 编码边界：
+  - 将 `compact_encoded_llm_context.py` 的内容检测算法提取为生产
+    `soc_agent.pipeline.encoded_context`；Runtime 与验证脚本共用同一实现；
+  - NIDS 子集只压缩 LLM-bound evidence，不解码、不修改 raw/parsed input；92 条告警共记录
+    180 个 typed omission spans；全 topic 结果见上一节；
+  - marker 保留 kind/length/短 hash，path/kind/length/完整 hash 侧车保留在 request/run
+    audit 但不进入 prompt；marker 与侧车均从 evidence grounding 排除，不能成为事实。
+- 可复跑产物：
+  - `validation/compact_zeus/data/pingan-nids-field-audit.json`；
+  - `validation/compact_zeus/data/pingan-nids-checkpoint-c/{before,after}_adapter_mapping/` 四组代表样本；
+  - 生成数据均 gitignored、包含敏感真实告警，不提交。
+- 验证：
+  - PingAn + prompt + encoded-context + grounding 聚焦测试：`38 passed`；
+  - NIDS audit/corpus validation：`8 passed`；
+  - 完整 SOC 回归：`570 passed`；SOC architecture boundary 当前为 `11 passed`；
+  - 212 条 corpus rebuild：`edr=37, hids=23, ndr=44, nids=95, siem=10, threat_intel=3`，无
+    unexpected `other`。
+- 下一步：
+  - 继续 `PI-01 Checkpoint C / EDR`，先审计全部 EDR parsed leaf 是否进入
+    canonical/fact/scenario/LLM/audit，再只在 PingAn Adapter 补充已确认 mapping。
+
 ### 2026-07-24 — PI-01 PingAn structured fallback bounded evidence
 
 - 用户确认的输入与信任边界：
@@ -309,8 +367,9 @@
   - 200 条采用 `raw_message_first`，12 条采用 `structured_fallback`；40 条告警含 unsupported
     message schema、12 条含 degraded schema、12 条无 message observation。这证明输入契约可接收，
     不证明 adapter/parser 语义覆盖完整；
-  - `compact_zeus` 全量重跑：115 条命中 1,915 个长编码片段，节省 3,475,830 字符，
-    `alert_full_data` 字符压缩率 17.43%，非 `zeusRawLogs` 字段变化数为 0。
+  - `compact_zeus` 全量重跑：115 条命中 1,915 个长编码片段；使用含 12 位短哈希的新
+    marker 后节省 3,437,530 字符，`alert_full_data` 字符压缩率 17.24%，非
+    `zeusRawLogs` 字段变化数为 0。
 - 验证：
   - `backend/.venv/bin/python -m pytest -q validation/compact_zeus/test_build_alert_validation_corpus.py`
     -> `4 passed`；

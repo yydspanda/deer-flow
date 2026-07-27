@@ -45,19 +45,10 @@ from validation.compact_zeus.restricted_dataframe_pickle import (  # noqa: E402
     load_dataframe_pickle,
 )
 
-
-DEFAULT_DATA_PATH = (
-    ROOT / "validation/compact_zeus/data/full_alert_validation_corpus.pkl"
-)
-DEFAULT_EXCEL_PATH = (
-    ROOT / "validation/compact_zeus/zeus_raw_logs_compaction_report.xlsx"
-)
-DEFAULT_HTML_PATH = (
-    ROOT / "validation/compact_zeus/zeus_raw_logs_compaction_technical_report.html"
-)
-DEFAULT_MARKDOWN_PATH = (
-    ROOT / "validation/compact_zeus/zeus_raw_logs_compaction_technical_intro.md"
-)
+DEFAULT_DATA_PATH = ROOT / "validation/compact_zeus/data/full_alert_validation_corpus.pkl"
+DEFAULT_EXCEL_PATH = ROOT / "validation/compact_zeus/zeus_raw_logs_compaction_report.xlsx"
+DEFAULT_HTML_PATH = ROOT / "validation/compact_zeus/zeus_raw_logs_compaction_technical_report.html"
+DEFAULT_MARKDOWN_PATH = ROOT / "validation/compact_zeus/zeus_raw_logs_compaction_technical_intro.md"
 KEY_ALERT_IDS = [1973909, 1981706, 1980288, 1979923, 1970506, 1979722]
 MIN_BLOB_CHARS = 256
 
@@ -73,31 +64,12 @@ KIND_LABELS = {
 }
 
 KEY_ALERT_NOTES = {
-    1973909: (
-        "压缩量最大的重点样本。当前告警和 relatedAlertList 中存在重复的大段响应体、"
-        "message、payload 及 JWT-like 内容，因此在不删除结构字段的前提下节省大量字符。"
-    ),
-    1981706: (
-        "少量但极长的 Base64-like 片段占据绝大部分 alert_full_data，主要来自 "
-        "message 和 http_http_response_body。"
-    ),
-    1980288: (
-        "命中数量较多，但长编码只占完整告警的一部分；主要压缩 message、payload "
-        "中的 Base64-like/JWT-like 片段。"
-    ),
-    1979923: (
-        "message 与 payload 中存在成对重复的长 Base64-like 片段，压缩后保留字段、"
-        "路径、类型、原始长度和摘要。"
-    ),
-    1970506: (
-        "命中字段较分散，包括 message、payload、请求/响应头和响应体；"
-        "该样本也暴露了 http_http_method 被识别为 Base64-like 的语义误判候选，"
-        "上线前需要以字段策略或评测集治理。"
-    ),
-    1979722: (
-        "主要压缩 message、http_http_response_body 和 payload 中的 "
-        "Base64-like 片段，其余告警结构保持不变。"
-    ),
+    1973909: ("压缩量最大的重点样本。当前告警和 relatedAlertList 中存在重复的大段响应体、message、payload 及 JWT-like 内容，因此在不删除结构字段的前提下节省大量字符。"),
+    1981706: ("少量但极长的 Base64-like 片段占据绝大部分 alert_full_data，主要来自 message 和 http_http_response_body。"),
+    1980288: ("命中数量较多，但长编码只占完整告警的一部分；主要压缩 message、payload 中的 Base64-like/JWT-like 片段。"),
+    1979923: ("message 与 payload 中存在成对重复的长 Base64-like 片段，压缩后保留字段、路径、类型、原始长度和摘要。"),
+    1970506: ("命中字段较分散，包括 message、payload、请求/响应头和响应体；该样本也暴露了 http_http_method 被识别为 Base64-like 的语义误判候选，上线前需要以字段策略或评测集治理。"),
+    1979722: ("主要压缩 message、http_http_response_body 和 payload 中的 Base64-like 片段，其余告警结构保持不变。"),
 }
 
 
@@ -176,14 +148,7 @@ def replace_zeus_nodes_with_sentinel(value: Any) -> Any:
     """Create a comparison projection proving non-Zeus values did not change."""
 
     if isinstance(value, dict):
-        return {
-            key: (
-                "<ZEUS_RAW_LOGS_EXCLUDED_FROM_COMPARISON>"
-                if key == "zeusRawLogs"
-                else replace_zeus_nodes_with_sentinel(child)
-            )
-            for key, child in value.items()
-        }
+        return {key: ("<ZEUS_RAW_LOGS_EXCLUDED_FROM_COMPARISON>" if key == "zeusRawLogs" else replace_zeus_nodes_with_sentinel(child)) for key, child in value.items()}
     if isinstance(value, list):
         return [replace_zeus_nodes_with_sentinel(child) for child in value]
     return value
@@ -209,7 +174,7 @@ def source_area_from_path(path: str) -> str:
 
 
 def marker_chars(omission: OmittedEncodedSpan) -> int:
-    return len(f"<ENCODED:{omission.kind}:{omission.original_chars}:OMITTED>")
+    return len(f"<ENCODED:{omission.kind}:{omission.original_chars}:sha256={omission.sha256[:12]}:OMITTED>")
 
 
 def zeus_entry_count(nodes: list[tuple[str, Any]]) -> int:
@@ -249,50 +214,34 @@ def process_sample(
         alert_id = alert_id_value(row["alert_id"])
         source = row["alert_full_data"]
         if not isinstance(source, dict):
-            raise TypeError(
-                f"alert_id={alert_id}: alert_full_data must be dict, "
-                f"got {type(source)!r}"
-            )
+            raise TypeError(f"alert_id={alert_id}: alert_full_data must be dict, got {type(source)!r}")
 
         compacted, omissions = compact_zeus_raw_logs(
             source,
             min_blob_chars=min_blob_chars,
         )
-        if replace_zeus_nodes_with_sentinel(source) != replace_zeus_nodes_with_sentinel(
-            compacted
-        ):
-            raise AssertionError(
-                f"alert_id={alert_id}: a non-zeusRawLogs value changed"
-            )
+        if replace_zeus_nodes_with_sentinel(source) != replace_zeus_nodes_with_sentinel(compacted):
+            raise AssertionError(f"alert_id={alert_id}: a non-zeusRawLogs value changed")
         if any(".zeusRawLogs" not in omission.path for omission in omissions):
-            raise AssertionError(
-                f"alert_id={alert_id}: omission escaped zeusRawLogs scope"
-            )
+            raise AssertionError(f"alert_id={alert_id}: omission escaped zeusRawLogs scope")
 
         source_nodes = collect_zeus_nodes(source)
         compacted_nodes = dict(collect_zeus_nodes(compacted))
         if {path for path, _ in source_nodes} != set(compacted_nodes):
-            raise AssertionError(
-                f"alert_id={alert_id}: zeusRawLogs container paths changed"
-            )
+            raise AssertionError(f"alert_id={alert_id}: zeusRawLogs container paths changed")
 
         before_chars = compact_json_chars(source)
         after_chars = compact_json_chars(compacted)
         saved_chars = before_chars - after_chars
         zeus_before_chars = sum(compact_json_chars(node) for _, node in source_nodes)
-        zeus_after_chars = sum(
-            compact_json_chars(compacted_nodes[path]) for path, _ in source_nodes
-        )
+        zeus_after_chars = sum(compact_json_chars(compacted_nodes[path]) for path, _ in source_nodes)
         zeus_saved_chars = zeus_before_chars - zeus_after_chars
         omission_kinds = Counter(item.kind for item in omissions)
         unique_values = {item.sha256 for item in omissions}
 
         record: dict[str, Any] = {
             "alert_id": alert_id,
-            **{
-                column: scalar(row[column]) if column in frame.columns else ""
-                for column in metadata_columns
-            },
+            **{column: scalar(row[column]) if column in frame.columns else "" for column in metadata_columns},
             "zeusRawLogs容器数": len(source_nodes),
             "zeusRawLogs日志条数": zeus_entry_count(source_nodes),
             "命中片段数": len(omissions),
@@ -300,22 +249,15 @@ def process_sample(
             "Base64-like命中数": omission_kinds["base64_like"],
             "JWT-like命中数": omission_kinds["jwt_like"],
             "Percent-encoded命中数": omission_kinds["percent_encoded"],
-            "其他类型命中数": len(omissions)
-            - omission_kinds["base64_like"]
-            - omission_kinds["jwt_like"]
-            - omission_kinds["percent_encoded"],
+            "其他类型命中数": len(omissions) - omission_kinds["base64_like"] - omission_kinds["jwt_like"] - omission_kinds["percent_encoded"],
             "alert_full_data压缩前字符数": before_chars,
             "alert_full_data压缩后字符数": after_chars,
             "alert_full_data节省字符数": saved_chars,
-            "alert_full_data压缩率": (
-                saved_chars / before_chars if before_chars else 0
-            ),
+            "alert_full_data压缩率": (saved_chars / before_chars if before_chars else 0),
             "zeusRawLogs压缩前字符数": zeus_before_chars,
             "zeusRawLogs压缩后字符数": zeus_after_chars,
             "zeusRawLogs节省字符数": zeus_saved_chars,
-            "zeusRawLogs压缩率": (
-                zeus_saved_chars / zeus_before_chars if zeus_before_chars else 0
-            ),
+            "zeusRawLogs压缩率": (zeus_saved_chars / zeus_before_chars if zeus_before_chars else 0),
             "非zeusRawLogs字段变化数": 0,
             "agent_response处理": "未处理",
         }
@@ -426,11 +368,7 @@ def build_key_frame(
         )
         compressed_parts = []
         for _, detail in details.head(8).iterrows():
-            compressed_parts.append(
-                f"{detail['字段']} / {detail['编码类型说明']}"
-                f"（{int(detail['命中片段数']):,} 段，"
-                f"{int(detail['原始字符数']):,} 字符）"
-            )
+            compressed_parts.append(f"{detail['字段']} / {detail['编码类型说明']}（{int(detail['命中片段数']):,} 段，{int(detail['原始字符数']):,} 字符）")
         records.append(
             {
                 "alert_id": alert_id,
@@ -463,9 +401,7 @@ def summarize(
         "rows": len(row_frame),
         "hit_rows": int((row_frame["命中片段数"] > 0).sum()),
         "matches": int(row_frame["命中片段数"].sum()),
-        "unique_values": int(audit_frame["sha256"].nunique())
-        if not audit_frame.empty
-        else 0,
+        "unique_values": int(audit_frame["sha256"].nunique()) if not audit_frame.empty else 0,
         "before_chars": before,
         "after_chars": after,
         "saved_chars": saved,
@@ -641,8 +577,8 @@ def write_excel(
         ("是否解码", "否", "只识别编码形态，不尝试 Base64/JWT 等解码"),
         (
             "占位符",
-            "<ENCODED:type:length:OMITTED>",
-            "保留类型、原始长度；审计表另存路径和 SHA-256",
+            "<ENCODED:type:length:sha256=short-hash:OMITTED>",
+            "保留类型、原始长度和短哈希；审计表另存路径和完整 SHA-256",
         ),
     ]
     for row_index, values in enumerate(summary_rows, start=3):
@@ -700,8 +636,7 @@ def write_excel(
     rate_col = column_index_by_header(full_sheet, "alert_full_data压缩率")
     saved_col = column_index_by_header(full_sheet, "alert_full_data节省字符数")
     full_sheet.conditional_formatting.add(
-        f"{get_column_letter(rate_col)}2:"
-        f"{get_column_letter(rate_col)}{full_sheet.max_row}",
+        f"{get_column_letter(rate_col)}2:{get_column_letter(rate_col)}{full_sheet.max_row}",
         ColorScaleRule(
             start_type="min",
             start_color="FFFFFF",
@@ -713,8 +648,7 @@ def write_excel(
         ),
     )
     full_sheet.conditional_formatting.add(
-        f"{get_column_letter(saved_col)}2:"
-        f"{get_column_letter(saved_col)}{full_sheet.max_row}",
+        f"{get_column_letter(saved_col)}2:{get_column_letter(saved_col)}{full_sheet.max_row}",
         DataBarRule(
             start_type="num",
             start_value=0,
@@ -802,14 +736,7 @@ def write_excel(
 def append_frame(worksheet: Any, frame: pd.DataFrame) -> None:
     worksheet.append(list(frame.columns))
     for row in frame.itertuples(index=False, name=None):
-        worksheet.append(
-            [
-                value.item()
-                if hasattr(value, "item") and callable(value.item)
-                else value
-                for value in row
-            ]
-        )
+        worksheet.append([value.item() if hasattr(value, "item") and callable(value.item) else value for value in row])
 
 
 def format_int(value: int | float) -> str:
@@ -851,9 +778,7 @@ def html_table(
             if column == "alert_id":
                 try:
                     numeric_id = float(value)
-                    text = (
-                        str(int(numeric_id)) if numeric_id.is_integer() else str(value)
-                    )
+                    text = str(int(numeric_id)) if numeric_id.is_integer() else str(value)
                 except (TypeError, ValueError):
                     text = str(value)
             elif column in percent_columns:
@@ -1265,7 +1190,7 @@ def write_html(
             <code>zeusRawLogs</code>。</li>
         <li>识别长度达到 {MIN_BLOB_CHARS} 字符的 Base64-like、Hex-like，
             以及 JWT-like、Percent-encoded、PEM 等连续编码形态。</li>
-        <li>用 <code>&lt;ENCODED:type:length:OMITTED&gt;</code> 替换命中片段。</li>
+        <li>用 <code>&lt;ENCODED:type:length:sha256=short-hash:OMITTED&gt;</code> 替换命中片段。</li>
         <li>在审计明细中保留 JSON 路径、类型、原始长度和 SHA-256。</li>
       </ul>
     </section>
@@ -1465,8 +1390,8 @@ def write_markdown(
 - 不处理 `agent_response`，不处理其他字段。
 - 不解码，只按编码形态识别；通用 Base64-like/Hex-like 最小长度为
   {MIN_BLOB_CHARS} 字符。
-- 命中片段替换为 `<ENCODED:type:length:OMITTED>`。
-- 审计明细保留 JSON 路径、编码类型、原始长度和 SHA-256。
+- 命中片段替换为 `<ENCODED:type:length:sha256=short-hash:OMITTED>`。
+- 占位符保留 12 位短哈希；审计明细保留 JSON 路径、编码类型、原始长度和完整 SHA-256。
 - 原始 pickle 和原始字典不修改，压缩结果只是 LLM 投影验证。
 
 ## 3. 总体效果
@@ -1572,9 +1497,7 @@ def main() -> int:
         frame,
         min_blob_chars=args.min_blob_chars,
     )
-    missing_key_alerts = [
-        alert_id for alert_id in KEY_ALERT_IDS if alert_id not in key_comparisons
-    ]
+    missing_key_alerts = [alert_id for alert_id in KEY_ALERT_IDS if alert_id not in key_comparisons]
     if missing_key_alerts:
         raise ValueError(f"key alert IDs missing from sample: {missing_key_alerts}")
     key_frame = build_key_frame(row_frame, field_frame)

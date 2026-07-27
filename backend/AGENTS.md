@@ -188,6 +188,17 @@ Supported JSON-in-string and HTTP fields are decoded only through allowlisted, s
 parser output preserves original decoded values. Bounded evidence defaults to redacted projections,
 while an approved environment may explicitly use `SOC_LLM_SENSITIVE_EVIDENCE_MODE=full`; full mode
 keeps selected values unchanged and records over-budget fields as coverage omissions.
+PingAn NIDS maps the wire five-tuple into canonical network fields and keeps every message as a
+separate network/HTTP observation. Nested sensor `alert.source/target` are rule-relative endpoints,
+not automatic wire or attacker/victim roles; generic `query` is not DNS without protocol evidence.
+Sensor `allowed`, vendor `attack_res`, and HTTP status are typed semantics, never exploit-success
+proof; NIDS `files[]` is transaction metadata, not endpoint file-write proof. Long encoding-shaped
+spans are compacted at the shared model boundary for every primary/supplementary evidence item,
+regardless of PingAn topic or future vendor, through `soc_agent.pipeline.encoded_context`;
+raw/parsed values are unchanged. The marker carries type, original length, and a short hash, while
+typed path/kind/length/full-hash metadata remains in request/run audit outside the prompt; both are
+excluded from evidence grounding. Production `backend/soc_agent` code must never import
+`validation.*`; validation code may import the production implementation.
 Strict nested decode failure preserves the original string and warning. Conservatively validated
 repair is stored only in the separately labeled `repaired_fields` projection; rejected repair
 continues to preserve the original parser value, while the model-boundary projection applies its

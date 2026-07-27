@@ -1795,6 +1795,20 @@ class NetworkObservationRef(BaseModel):
     src_port: int | None = None
     dst_port: int | None = None
     protocol: str | None = None
+    application_protocol: str | None = None
+    direction: str | None = None
+    community_id: str | None = None
+    flow_id: str | int | None = None
+    sensor_source_ip: str | None = None
+    sensor_source_port: int | None = None
+    sensor_target_ip: str | None = None
+    sensor_target_port: int | None = None
+    sensor_source_zone: str | None = None
+    sensor_target_zone: str | None = None
+    bytes_to_server: int | None = Field(default=None, ge=0)
+    bytes_to_client: int | None = Field(default=None, ge=0)
+    packets_to_server: int | None = Field(default=None, ge=0)
+    packets_to_client: int | None = Field(default=None, ge=0)
     forwarded_chain: list[str] = Field(default_factory=list)
 
 
@@ -1804,6 +1818,7 @@ class NetworkEntityRef(BaseModel):
     src_port: int | None = None
     dst_port: int | None = None
     protocol: str | None = None
+    application_protocol: str | None = None
     direction: str | None = None
     domain: str | None = None
     url: str | None = None
@@ -1863,14 +1878,36 @@ class FileEntityRef(BaseModel):
     md5: str | None = None
 
 
+class HttpObservationRef(BaseModel):
+    """One bounded HTTP transaction view linked to its raw message."""
+
+    observation_id: str = Field(min_length=1)
+    evidence_path: str = Field(min_length=1)
+    event_time: str | None = None
+    method: str | None = None
+    host: str | None = None
+    path: str | None = None
+    url: str | None = None
+    protocol: str | None = None
+    port: int | None = Field(default=None, ge=0, le=65535)
+    status_code: int | None = None
+    user_agent: str | None = None
+    referer: str | None = None
+    x_forwarded_for: str | None = None
+
+
 class HttpEntityRef(BaseModel):
     method: str | None = None
     host: str | None = None
     path: str | None = None
     url: str | None = None
+    protocol: str | None = None
+    port: int | None = Field(default=None, ge=0, le=65535)
     status_code: int | None = None
     user_agent: str | None = None
+    referer: str | None = None
     x_forwarded_for: str | None = None
+    observations: list[HttpObservationRef] = Field(default_factory=list)
 
 
 class ThreatEntityRef(BaseModel):
@@ -2014,10 +2051,19 @@ class SourceFieldSemantic(BaseModel):
     participates_in_reasoning: bool = False
 
 
+class EncodedSpanOmission(BaseModel):
+    """Auditable encoded span removed only from model-bound evidence."""
+
+    field_path: str = Field(min_length=1)
+    kind: str = Field(min_length=1)
+    original_chars: int = Field(ge=1)
+    sha256: str = Field(min_length=64, max_length=64)
+
+
 class BoundedAnalysisEvidence(BaseModel):
     """Size-bounded evidence content allowed to enter an analysis node."""
 
-    schema_version: str = "soc.bounded_analysis_evidence.v3"
+    schema_version: str = "soc.bounded_analysis_evidence.v4"
     source_path: str = Field(min_length=1)
     layer: EvidenceLayer
     trust_level: EvidenceTrustLevel
@@ -2030,6 +2076,7 @@ class BoundedAnalysisEvidence(BaseModel):
     sanitized_field_paths: list[str] = Field(default_factory=list)
     omitted_field_paths: list[str] = Field(default_factory=list)
     omission_reasons: dict[str, str] = Field(default_factory=dict)
+    encoded_span_omissions: list[EncodedSpanOmission] = Field(default_factory=list)
 
 
 class FieldTrust(BaseModel):
@@ -2169,7 +2216,7 @@ class EvidenceCoverageGap(BaseModel):
 class EvidenceCoverageReport(BaseModel):
     """Trace which parsed evidence is used, projected, sanitized, or omitted."""
 
-    schema_version: str = "soc.evidence_coverage.v3"
+    schema_version: str = "soc.evidence_coverage.v4"
     message_schemas: list[MessageSchemaObservation] = Field(default_factory=list)
     structured_field_paths: list[str] = Field(default_factory=list)
     parsed_field_paths: list[str] = Field(default_factory=list)
@@ -2180,6 +2227,7 @@ class EvidenceCoverageReport(BaseModel):
     scenario_source_paths: list[str] = Field(default_factory=list)
     llm_projected_paths: list[str] = Field(default_factory=list)
     llm_sanitized_paths: list[str] = Field(default_factory=list)
+    llm_compacted_encoded_paths: list[str] = Field(default_factory=list)
     llm_truncated_evidence_paths: list[str] = Field(default_factory=list)
     omissions: list[EvidenceCoverageOmission] = Field(default_factory=list)
     high_value_gaps: list[EvidenceCoverageGap] = Field(default_factory=list)

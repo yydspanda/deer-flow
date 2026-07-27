@@ -24,7 +24,18 @@ from soc_agent.contracts import (
 )
 from soc_agent.pipeline.field_importance import EvidenceFieldImportanceRegistry
 
-_DECODED_SEPARATELY_FIELDS = frozenset({"req_body", "rsp_body", "rule_labels", "req_header", "rsp_header"})
+_DECODED_SEPARATELY_FIELDS = frozenset(
+    {
+        "req_body",
+        "rsp_body",
+        "rule_labels",
+        "req_header",
+        "rsp_header",
+        "request_header_str",
+        "response_header_str",
+        "response_hqeader_str",
+    }
+)
 _SENSITIVE_FIELD_RE = re.compile(
     r"(?:authorization|cookie|password|passwd|secret|token|credential|pwd)",
     re.IGNORECASE,
@@ -101,6 +112,7 @@ def build_evidence_coverage_report(
     evidence_by_path = {item.source_path: item for item in [primary, *supplementary] if item is not None}
     projected_paths: list[str] = []
     sanitized_paths: list[str] = []
+    compacted_encoded_paths: list[str] = []
     truncated_evidence_paths: list[str] = []
     omissions: list[EvidenceCoverageOmission] = []
 
@@ -111,6 +123,7 @@ def build_evidence_coverage_report(
             continue
         projected_paths.extend(evidence.projected_field_paths)
         sanitized_paths.extend(evidence.sanitized_field_paths)
+        compacted_encoded_paths.extend(item.field_path for item in evidence.encoded_span_omissions)
         omissions.extend(
             EvidenceCoverageOmission(
                 field_path=path,
@@ -146,6 +159,7 @@ def build_evidence_coverage_report(
         structured_paths.extend(evidence.omitted_field_paths)
         projected_paths.extend(evidence.projected_field_paths)
         sanitized_paths.extend(evidence.sanitized_field_paths)
+        compacted_encoded_paths.extend(item.field_path for item in evidence.encoded_span_omissions)
         omissions.extend(
             EvidenceCoverageOmission(
                 field_path=path,
@@ -181,6 +195,8 @@ def build_evidence_coverage_report(
             warnings.append(f"degraded message schema: {observation.source_path}")
     if truncated_evidence_paths:
         warnings.append("bounded evidence omitted one or more fields; inspect coverage omissions for exact paths")
+    if compacted_encoded_paths:
+        warnings.append("bounded evidence compacted one or more encoded spans; original values remain in raw input")
     warnings.extend(f"unmapped high-value evidence: {item.field_path} -> {item.expected_target}" for item in high_value_gaps)
 
     parsed_paths = _sorted_unique(parsed_paths)
@@ -192,6 +208,7 @@ def build_evidence_coverage_report(
     scenario_paths = _sorted_unique(scenario_paths)
     projected_paths = _sorted_unique(projected_paths)
     sanitized_paths = _sorted_unique(sanitized_paths)
+    compacted_encoded_paths = _sorted_unique(compacted_encoded_paths)
     omissions = list({(item.field_path, item.reason): item for item in omissions}.values())
     return EvidenceCoverageReport(
         message_schemas=message_schemas,
@@ -204,6 +221,7 @@ def build_evidence_coverage_report(
         scenario_source_paths=scenario_paths,
         llm_projected_paths=projected_paths,
         llm_sanitized_paths=sanitized_paths,
+        llm_compacted_encoded_paths=compacted_encoded_paths,
         llm_truncated_evidence_paths=_sorted_unique(truncated_evidence_paths),
         omissions=omissions,
         high_value_gaps=high_value_gaps,
@@ -218,6 +236,7 @@ def build_evidence_coverage_report(
             "scenario_source_count": len(scenario_paths),
             "llm_projected_count": len(projected_paths),
             "llm_sanitized_count": len(sanitized_paths),
+            "llm_compacted_encoded_count": len(compacted_encoded_paths),
             "omission_count": len(omissions),
             "high_value_gap_count": len(high_value_gaps),
         },

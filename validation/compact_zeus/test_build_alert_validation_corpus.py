@@ -61,6 +61,7 @@ def _payload(alert_id: int, *, source_ip: str) -> dict:
 
 
 def _row(alert_id: int, payload: dict) -> dict:
+    hit_log = payload["alert"]["hitLog"][0]
     return {
         "alert_id": alert_id,
         "alert_full_data": {
@@ -71,8 +72,8 @@ def _row(alert_id: int, payload: dict) -> dict:
         },
         "agent_response": json.dumps({"alert_id": str(alert_id), "analysis_result": {}}),
         "risk_level": "medium",
-        "topic": "sec_guard_apt",
-        "topic_name": "APT",
+        "topic": hit_log["topic"],
+        "topic_name": hit_log["topicName"],
         "related_status_dict": Counter(),
         "status": "pending",
         "ignore_reason": None,
@@ -178,6 +179,50 @@ def test_normalizer_validation_reports_empty_structured_fallback_as_upstream_gap
     assert report["structured_fallback_unavailable_count"] == 1
     assert report["structured_fallback_projected_fields"] == 0
     assert report["policy_contract_violations"] == []
+
+
+def test_normalizer_validation_applies_encoded_compaction_to_every_pingan_topic() -> None:
+    topics = {
+        "T_GBD_zeus_data": "SIEM",
+        "edr-core-xc": "EDR",
+        "leagsoft-edr": "EDR",
+        "ptp-nids": "NIDS",
+        "sec_guard_apt": "APT",
+        "sec_guard_apt_detail": "APT Detail",
+        "sec_guard_wb": "Threat Intel",
+        "security_qthids": "HIDS",
+    }
+    blob = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" * 5
+    rows = []
+    for alert_id, (topic, topic_name) in enumerate(topics.items(), start=100):
+        payload = _payload(alert_id, source_ip=f"10.0.0.{alert_id}")
+        hit_log = payload["alert"]["hitLog"][0]
+        hit_log["topic"] = topic
+        hit_log["topicName"] = topic_name
+        raw_event = hit_log["zeusRawLogs"][0]
+        if topic == "T_GBD_zeus_data":
+            raw_event["payload"] = blob
+        else:
+            raw_event["message"] = json.dumps(
+                {
+                    "payload": blob,
+                    "source_ip": f"10.0.0.{alert_id}",
+                }
+            )
+        rows.append(_row(alert_id, payload))
+
+    report = validate_with_soc_normalizer(_source_frame(rows))
+
+    assert report["status"] == "passed"
+    assert report["llm_projection_analysis_count"] == len(topics)
+    assert report["llm_encoded_compaction"]["alerts"] == len(topics)
+    assert report["llm_encoded_compaction"]["spans"] == len(topics)
+    assert report["raw_payload_mutation_count"] == 0
+    for topic in topics:
+        details = report["topic_details"][topic]
+        assert details["llm_projection:evaluated"] == 1
+        assert details["llm_encoded_compaction:alerts"] == 1
+        assert details["llm_encoded_compaction:spans"] == 1
 
 
 def test_restricted_unpickler_rejects_unapproved_global(tmp_path: Path) -> None:

@@ -397,6 +397,12 @@ def validate_with_soc_normalizer(corpus: pd.DataFrame) -> dict[str, Any]:
     structured_fallback_unavailable_count = 0
     structured_fallback_projected_fields = 0
     structured_fallback_truncated_count = 0
+    llm_projection_analysis_count = 0
+    llm_encoded_compaction_alerts = 0
+    llm_encoded_compaction_spans = 0
+    llm_encoded_compaction_kinds: Counter[str] = Counter()
+    llm_projection_source_details: dict[str, Counter[str]] = {}
+    raw_payload_mutation_count = 0
 
     for _, row in corpus.iterrows():
         alert_id = int(row["alert_id"])
@@ -405,12 +411,50 @@ def validate_with_soc_normalizer(corpus: pd.DataFrame) -> dict[str, Any]:
         topic_counter["alerts"] += 1
         try:
             alert_data = _alert_data(row["alert_full_data"], alert_id=alert_id)
+            input_hash_before = canonical_sha256(alert_data)
             normalized = normalize_alert_payload(alert_data)
             if str(normalized.alert_id) != str(alert_id):
                 raise ValueError(f"normalized alert_id={normalized.alert_id!r} != {alert_id!r}")
             source_type = normalized.source.source_type.value
             source_type_counts[source_type] += 1
             topic_counter[f"source_type:{source_type}"] += 1
+            request = build_analysis_request_for_payload(
+                alert_data,
+                sensitive_evidence_mode=SensitiveEvidenceMode.FULL,
+            )
+            llm_projection_analysis_count += 1
+            topic_counter["llm_projection:evaluated"] += 1
+            source_projection = llm_projection_source_details.setdefault(
+                source_type,
+                Counter(),
+            )
+            source_projection["evaluated_alerts"] += 1
+            bounded_evidence = [
+                item
+                for item in [
+                    request.primary_evidence,
+                    *request.supplementary_evidence,
+                ]
+                if item is not None
+            ]
+            compacted = [omission for evidence in bounded_evidence for omission in evidence.encoded_span_omissions]
+            if compacted:
+                llm_encoded_compaction_alerts += 1
+                llm_encoded_compaction_spans += len(compacted)
+                llm_encoded_compaction_kinds.update(item.kind for item in compacted)
+                topic_counter["llm_encoded_compaction:alerts"] += 1
+                topic_counter["llm_encoded_compaction:spans"] += len(compacted)
+                source_projection["compacted_alerts"] += 1
+                source_projection["compacted_spans"] += len(compacted)
+            if canonical_sha256(alert_data) != input_hash_before:
+                raw_payload_mutation_count += 1
+                policy_contract_violations.append(
+                    {
+                        "alert_id": alert_id,
+                        "expected_policy": "immutable_raw_payload",
+                        "actual_policy": "payload_mutated_during_llm_projection",
+                    }
+                )
 
             policy = normalized.extensions.get("evidence_input_policy", {})
             policy_name = str(policy.get("name")) if isinstance(policy, Mapping) and policy.get("name") else "missing"
@@ -426,10 +470,6 @@ def validate_with_soc_normalizer(corpus: pd.DataFrame) -> dict[str, Any]:
                     }
                 )
             if expected_policy_name == "structured_fallback":
-                request = build_analysis_request_for_payload(
-                    alert_data,
-                    sensitive_evidence_mode=SensitiveEvidenceMode.FULL,
-                )
                 primary = request.primary_evidence
                 structured_fallback_analysis_count += 1
                 if primary is None and not _has_structured_raw_event(alert_data):
@@ -527,6 +567,14 @@ def validate_with_soc_normalizer(corpus: pd.DataFrame) -> dict[str, Any]:
         "structured_fallback_unavailable_count": (structured_fallback_unavailable_count),
         "structured_fallback_projected_fields": (structured_fallback_projected_fields),
         "structured_fallback_truncated_count": structured_fallback_truncated_count,
+        "llm_projection_analysis_count": llm_projection_analysis_count,
+        "llm_encoded_compaction": {
+            "alerts": llm_encoded_compaction_alerts,
+            "spans": llm_encoded_compaction_spans,
+            "kinds": dict(sorted(llm_encoded_compaction_kinds.items())),
+            "source_type_details": {source_type: dict(sorted(counts.items())) for source_type, counts in sorted(llm_projection_source_details.items())},
+        },
+        "raw_payload_mutation_count": raw_payload_mutation_count,
         "topics_normalized_as_other": other_topics,
         "topic_details": {topic: dict(sorted(counts.items())) for topic, counts in sorted(topic_details.items())},
     }

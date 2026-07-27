@@ -143,10 +143,18 @@ contracts
   the selected raw message's high trust merely because both live in the same `zeusRawLogs[]` item.
 - All parseable messages are retained. One message is selected as primary evidence and the remaining
   paths are supplementary evidence; selection and ordering must be deterministic and replayable.
-- Network/process observations from different raw messages must keep stable `observation_scope` and
-  source paths. Fact reconstruction may report contradiction only among claims in the same
-  observation; different requests, sessions, proxy hops or process executions must not be collapsed
-  into one synthetic conflict.
+- Network/HTTP/process observations from different raw messages must keep stable evidence paths.
+  Fact reconstruction may report contradiction only among claims in the same observation;
+  different requests, sessions, HTTP transactions, proxy hops or process executions must not be
+  collapsed into one synthetic conflict.
+- For PingAn NIDS, `sip/sport/dip/dport/proto` are the observed wire five-tuple. Nested
+  `alert.source/target` are rule-relative sensor endpoints and must remain separately named
+  observation fields; adapters must not silently reinterpret them as wire source/destination or
+  attacker/victim. `query` is not DNS/domain evidence without an explicit protocol contract.
+- PingAn NIDS `alert.action`, `alert.attack_res`, and HTTP status must carry typed field semantics.
+  Sensor `allowed`, a vendor result code, or HTTP 2xx cannot prove attack/exploit success or set the
+  Runtime verdict. NIDS `files[]` describes transaction/file-extraction metadata and must not be
+  promoted to endpoint file-write evidence without an explicit source contract and outcome artifact.
 - Vendor placeholder/default/non-observation fields must be emitted by the adapter as typed
   `SourceFieldSemantic`. `participates_in_entities=false` and `participates_in_reasoning=false` are hard guards:
   core Runtime and prompts must not recover the value through a different alias. Raw/parsed evidence
@@ -154,6 +162,18 @@ contracts
 - `LLMAnalysisRequest` may include only `BoundedAnalysisEvidence`: per-field and total-size bounded,
   parser/provenance annotated, and separated into primary/supplementary content. It must not dump the
   unbounded vendor payload into the prompt.
+- Long encoding-shaped spans are compacted through
+  `soc_agent.pipeline.encoded_context.compact_encoded_spans()` only after sensitive-mode projection
+  and before leaf-budget selection. This shared model-boundary rule applies to every selected
+  primary/supplementary evidence item regardless of vendor, source type, or topic; PingAn topics
+  must not opt in separately. The implementation does not decode values or mutate raw/parsed
+  evidence. Each marker retains kind, original character count, and a 12-character SHA-256 prefix;
+  the typed sidecar retains exact path and the complete SHA-256. Sidecar details stay in request/run
+  audit and are omitted from the prompt projection. Marker and sidecar metadata are non-factual and
+  must be excluded from grounding.
+- Production owns the algorithm under `backend/soc_agent/`. Code in that tree must never import
+  `validation.*`; validation tools may import production modules to exercise the exact deployed
+  behavior. Architecture tests enforce this dependency direction.
 - Prompting and post-analysis evidence validation must share the same bounded projection function.
   `AnalysisResult.evidence[].source` must name an approved section, exact projection path, or a
   bounded evidence `source_path#parsed.field.path`; its scalar value must be present under that
@@ -1051,6 +1071,9 @@ normalizers/hids.py
 ### Nested message decoding / 嵌套 message 解码约束
 
 - JSON parser 递归保留真实 object/array；JSON-in-string、HTTP headers、XFF chain 只通过 allowlisted decoder 处理，禁止无界递归猜测所有字符串。
+- PingAn NIDS 的 `request_header_str`、`response_header_str` 和历史拼写
+  `response_hqeader_str` 只允许按受限 JSON object 解码；strict decode 结果可作为 HTTP metadata
+  fallback，但 cookie/auth/token 等值仍由模型边界脱敏，header/body 不得被解释为执行成功事实。
 - nested decoder 必须限制字段名、最大长度和解析深度；失败写 parser warning，不中断告警。
 - `ParsedRawMessageEvidence.fields` 保留第一层解析结果，`decoded_fields` 保存受控二次解码结果；
   parser 层必须保持解析所得原始值，不在这里改写 password/token/cookie/header/body。完整原文仍以
@@ -1073,8 +1096,8 @@ normalizers/hids.py
 ### Evidence coverage 约束
 
 - `build_analysis_input` 必须生成 `EvidenceCoverageReport`，至少记录 message schema observations、
-  parsed/decoded/repaired paths、canonical/fact/scenario source paths、LLM projection、sanitization、truncation、
-  omissions 和 high-value gaps。
+  parsed/decoded/repaired paths、canonical/fact/scenario source paths、LLM projection、sanitization、
+  encoded compaction、truncation、omissions 和 high-value gaps。
 - structured fallback 必须记录实际投影的 leaf paths；`full` 只表示已选值保持原始，不表示绕过
   总预算，也不表示完整 `zeusRawLogs[]` 数组进入模型。
 - coverage report 是审计/漂移产物，不是 verdict。一个字段被解析但没有 canonical mapping 时不得
@@ -1083,6 +1106,12 @@ normalizers/hids.py
   同时记录 `llm_truncated_evidence_paths`，不能声称 leaf-level 完整送达。实现必须以
   `BoundedAnalysisEvidence.projected_field_paths/sanitized_field_paths/omitted_field_paths` 的实际结果
   生成 coverage，不能根据“曾参与候选排序”推断已送达。
+- `llm_compacted_encoded_paths` 必须来自实际
+  `BoundedAnalysisEvidence.encoded_span_omissions`，不能通过扫描 raw payload 猜测。字段仍可标记为
+  projected，但其 `<ENCODED:type:length:sha256=short-hash:OMITTED>` 占位符与完整
+  hash/path/length/kind 侧车不得成为 grounded `AnalysisResult.evidence`。
+- Adapter 可通过 typed `canonical_field_provenance` extension 描述 canonical 与 observation
+  字段的来源。Generic fact reconstructor 只校验/合并通用 contract，不识别供应商 aliases。
 - accepted repair 进入 bounded analysis 时，原字段 replacement reason 必须标为
   `replaced_by_repaired_projection`；rejected/error repair 标为 `sanitized_string_fallback`。repair 结果
   只进入 repaired paths，不得进入 decoded paths。

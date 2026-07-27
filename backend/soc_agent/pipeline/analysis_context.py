@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from soc_agent.contracts import (
     AlertInput,
     BoundedAnalysisEvidence,
+    EncodedSpanOmission,
     EvidenceLayer,
     EvidenceTrustLevel,
     ExtractedEntities,
@@ -23,6 +24,10 @@ from soc_agent.contracts import (
     SocSkillContext,
     SourceFieldSemantic,
 )
+from soc_agent.pipeline.encoded_context import (
+    OmittedEncodedSpan,
+    compact_encoded_spans,
+)
 from soc_agent.pipeline.evidence_coverage import build_evidence_coverage_report
 from soc_agent.skills import SocSkillResolver, build_soc_skill_context
 
@@ -30,7 +35,18 @@ _PRIMARY_EVIDENCE_MAX_CHARS = 6000
 _SUPPLEMENTARY_EVIDENCE_MAX_CHARS = 3000
 _MAX_SUPPLEMENTARY_EVIDENCE = 4
 _MAX_FIELD_CHARS = 1000
-_DECODED_SEPARATELY_FIELDS = frozenset({"req_body", "rsp_body", "rule_labels", "req_header", "rsp_header"})
+_DECODED_SEPARATELY_FIELDS = frozenset(
+    {
+        "req_body",
+        "rsp_body",
+        "rule_labels",
+        "req_header",
+        "rsp_header",
+        "request_header_str",
+        "response_header_str",
+        "response_hqeader_str",
+    }
+)
 _SENSITIVE_FIELD_RE = re.compile(r"(?:authorization|cookie|password|passwd|secret|token|credential|pwd)", re.IGNORECASE)
 _SENSITIVE_JSON_VALUE_RE = re.compile(
     r'(?P<prefix>"[^"\\]*(?:authorization|cookie|password|passwd|secret|token|credential|pwd)[^"\\]*"\s*:\s*)'
@@ -145,8 +161,8 @@ def project_analysis_context(request: LLMAnalysisRequest) -> dict[str, Any]:
         "extracted_entities": request.extracted_entities.model_dump(mode="json", exclude_none=True),
         "evidence": {
             "primary_evidence_path": request.primary_evidence_path,
-            "primary_evidence": request.primary_evidence.model_dump(mode="json", exclude_none=True) if request.primary_evidence is not None else None,
-            "supplementary_evidence": [item.model_dump(mode="json", exclude_none=True) for item in request.supplementary_evidence],
+            "primary_evidence": (_project_bounded_evidence(request.primary_evidence) if request.primary_evidence is not None else None),
+            "supplementary_evidence": [_project_bounded_evidence(item) for item in request.supplementary_evidence],
             "selected_input_path": fact.selected_input_path,
             "selected_input_available": fact.selected_input_available,
             "evidence_policy": fact.evidence_policy.model_dump(mode="json", exclude_none=True) if fact.evidence_policy is not None else None,
@@ -208,7 +224,16 @@ def _analysis_coverage_context(request: LLMAnalysisRequest) -> dict[str, Any]:
             for item in coverage.high_value_gaps
         ],
         "truncated_evidence_count": len(coverage.llm_truncated_evidence_paths),
+        "compacted_encoded_count": len(coverage.llm_compacted_encoded_paths),
     }
+
+
+def _project_bounded_evidence(
+    evidence: BoundedAnalysisEvidence,
+) -> dict[str, Any]:
+    projected = evidence.model_dump(mode="json", exclude_none=True)
+    projected.pop("encoded_span_omissions", None)
+    return projected
 
 
 def _bound_projection(value: Any, *, depth: int = 0) -> Any:
@@ -283,6 +308,7 @@ def _bounded_evidence_for_path(
             sanitized_paths,
             omitted_paths,
             omission_reasons,
+            encoded_span_omissions,
         ) = _bounded_parsed_projection(
             parsed,
             max_chars=max_chars,
@@ -300,6 +326,7 @@ def _bounded_evidence_for_path(
             sanitized_paths,
             omitted_paths,
             omission_reasons,
+            encoded_span_omissions,
         ) = _bounded_structured_projection(
             raw_value,
             source_path=path,
@@ -311,6 +338,17 @@ def _bounded_evidence_for_path(
         content_truncated = False
     elif isinstance(raw_value, str):
         content = raw_value if sensitive_evidence_mode is SensitiveEvidenceMode.FULL else _safe_string_fallback(raw_value)
+        compacted_content, compacted = compact_encoded_spans(content)
+        content = str(compacted_content)
+        encoded_span_omissions = [
+            EncodedSpanOmission(
+                field_path=path,
+                kind=item.kind,
+                original_chars=item.original_chars,
+                sha256=item.sha256,
+            )
+            for item in compacted
+        ]
         original_length = len(raw_value)
         parser_name = None
         field_truncated = False
@@ -328,6 +366,7 @@ def _bounded_evidence_for_path(
         sanitized_paths = []
         omitted_paths = []
         omission_reasons = {}
+        encoded_span_omissions = []
         content_truncated = len(content) > max_chars
     else:
         return None
@@ -347,6 +386,7 @@ def _bounded_evidence_for_path(
         sanitized_field_paths=sanitized_paths,
         omitted_field_paths=omitted_paths,
         omission_reasons=omission_reasons,
+        encoded_span_omissions=encoded_span_omissions,
     )
 
 
@@ -355,7 +395,15 @@ def _bounded_parsed_projection(
     *,
     max_chars: int,
     sensitive_evidence_mode: SensitiveEvidenceMode,
-) -> tuple[str, bool, list[str], list[str], list[str], dict[str, str]]:
+) -> tuple[
+    str,
+    bool,
+    list[str],
+    list[str],
+    list[str],
+    dict[str, str],
+    list[EncodedSpanOmission],
+]:
     if sensitive_evidence_mode is SensitiveEvidenceMode.FULL:
         safe_fields = deepcopy(parsed.fields)
         safe_decoded = deepcopy(parsed.decoded_fields)
@@ -374,6 +422,11 @@ def _bounded_parsed_projection(
         "repair_observations": [observation.model_dump(mode="json") for observation in parsed.repair_observations],
         "parser_warnings": parsed.warnings,
     }
+    compacted_root, compacted = compact_encoded_spans(candidate_root)
+    if not isinstance(compacted_root, dict):
+        raise TypeError("parsed evidence compaction must preserve the projection object")
+    candidate_root = compacted_root
+    encoded_span_omissions = [_parsed_encoded_span_omission(parsed.source_path, item) for item in compacted]
     leaves = _projection_leaves(candidate_root)
     leaves.sort(key=lambda item: (_projection_priority(item[0]), item[2]))
 
@@ -411,6 +464,7 @@ def _bounded_parsed_projection(
         sorted(set(sanitized_paths)),
         omitted_paths,
         omission_reasons,
+        encoded_span_omissions,
     )
 
 
@@ -420,8 +474,29 @@ def _bounded_structured_projection(
     source_path: str,
     max_chars: int,
     sensitive_evidence_mode: SensitiveEvidenceMode,
-) -> tuple[str, bool, list[str], list[str], list[str], dict[str, str]]:
+) -> tuple[
+    str,
+    bool,
+    list[str],
+    list[str],
+    list[str],
+    dict[str, str],
+    list[EncodedSpanOmission],
+]:
     candidate_root = deepcopy(dict(value)) if sensitive_evidence_mode is SensitiveEvidenceMode.FULL else _sanitize_mapping(value)
+    compacted_root, compacted = compact_encoded_spans(candidate_root)
+    if not isinstance(compacted_root, dict):
+        raise TypeError("structured evidence compaction must preserve the projection object")
+    candidate_root = compacted_root
+    encoded_span_omissions = [
+        EncodedSpanOmission(
+            field_path=f"{source_path}{item.path.removeprefix('$')}",
+            kind=item.kind,
+            original_chars=item.original_chars,
+            sha256=item.sha256,
+        )
+        for item in compacted
+    ]
     leaves = _projection_leaves(candidate_root)
     leaves.sort(key=lambda item: (_projection_priority(item[0]), item[2]))
 
@@ -453,6 +528,7 @@ def _bounded_structured_projection(
         sorted(set(sanitized_paths)),
         omitted_paths,
         omission_reasons,
+        encoded_span_omissions,
     )
 
 
@@ -555,6 +631,33 @@ def _projection_source_path(
     }[path[0]]
     relative = _format_projection_path(path[1:])
     return f"{source_path}#{namespace}.{relative}" if relative else None
+
+
+def _parsed_encoded_span_omission(
+    source_path: str,
+    omission: OmittedEncodedSpan,
+) -> EncodedSpanOmission:
+    for projection_name, namespace in (
+        ("fields", "parsed"),
+        ("decoded_fields", "decoded"),
+        ("repaired_fields", "repaired"),
+        ("header", "header"),
+    ):
+        prefix = f"$.{projection_name}"
+        if omission.path == prefix or omission.path.startswith((f"{prefix}.", f"{prefix}[")):
+            suffix = omission.path[len(prefix) :]
+            return EncodedSpanOmission(
+                field_path=f"{source_path}#{namespace}{suffix}",
+                kind=omission.kind,
+                original_chars=omission.original_chars,
+                sha256=omission.sha256,
+            )
+    return EncodedSpanOmission(
+        field_path=f"{source_path}#projection{omission.path.removeprefix('$')}",
+        kind=omission.kind,
+        original_chars=omission.original_chars,
+        sha256=omission.sha256,
+    )
 
 
 def _format_projection_path(path: tuple[str | int, ...]) -> str:

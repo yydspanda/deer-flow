@@ -49,6 +49,7 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
     primary_parsed = next((item for item in parsed_messages if item.source_path == f"{raw_event_path}.message"), None)
     parsed_fields = primary_parsed.fields if primary_parsed is not None else {}
     evidence_event = _merge_parsed_message(raw_event, primary_parsed)
+    sensor_alert = _as_dict(parsed_fields.get("alert"))
     origin = _json_object(evidence_event.get("_origin"))
     http_payload = _json_object(evidence_event.get("payload"))
     soar_asset = _first_soar_asset(alert.get("soar"))
@@ -75,8 +76,9 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
             # Platform ruleCode is the stable alert identity. Sensor rule ids remain
             # available in parsed evidence because they use a different namespace.
             "rule_code": _first_str(hit_log, ("ruleCode",)) or _first_str(evidence_event, ("str_rule_id", "rule_id")),
-            "rule_name": _first_str(parsed_fields, ("finding__title", "str_title", "rule_name")) or _first_str(hit_log, ("ruleName",)) or _first_str(raw_event, ("finding__title", "str_title")),
-            "rule_category": _first_str(parsed_fields, ("finding__type_name", "attack_type", "vuln_type", "event_type"))
+            "rule_name": _first_str(sensor_alert, ("signature",)) or _first_str(parsed_fields, ("finding__title", "str_title", "rule_name")) or _first_str(hit_log, ("ruleName",)) or _first_str(raw_event, ("finding__title", "str_title")),
+            "rule_category": _first_str(sensor_alert, ("category",))
+            or _first_str(parsed_fields, ("finding__type_name", "attack_type", "vuln_type", "event_type"))
             or _first_str(alert, ("tertiaryType", "secondaryType"))
             or _first_str(raw_event, ("finding__type_name", "attack_type", "vuln_type")),
         },
@@ -87,7 +89,8 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
         },
         "classification": {
             "severity": _first_str(evidence_event, ("severity", "risk_level", "hazard_rating", "threat_level", "event_level")) or _first_str(alert, ("riskLevel",)),
-            "category": _first_str(parsed_fields, ("finding__type_name", "attack_type", "vuln_type", "event_name", "event_type"))
+            "category": _first_str(sensor_alert, ("category",))
+            or _first_str(parsed_fields, ("finding__type_name", "attack_type", "vuln_type", "event_name", "event_type"))
             or _first_str(alert, ("tertiaryType", "secondaryType", "primaryType"))
             or _first_str(raw_event, ("finding__type_name", "attack_type", "vuln_type")),
             "tactic": _mitre_values(evidence_event, prefix="TA"),
@@ -108,6 +111,7 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
             "parsed_raw_messages": [item.model_dump(mode="json", exclude_none=True) for item in parsed_messages],
             "role_claims": [item.model_dump(mode="json", exclude_none=True) for item in role_claims],
             "scenario_signals": [item.model_dump(mode="json", exclude_none=True) for item in scenario_signals],
+            "field_importance_rules": _field_importance_rules(source_type),
             "source_field_semantics": _source_field_semantics(source_type, parsed_messages),
             "analysis_context_coverage": _analysis_context_coverage(original, alert),
             "evidence_input_policy": _evidence_input_policy(
@@ -122,6 +126,14 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
     }
 
     normalized = AlertInput.model_validate(_drop_none(canonical))
+    provenance = _canonical_field_provenance(
+        normalized,
+        source_type=source_type,
+        parsed_messages=parsed_messages,
+        primary_parsed=primary_parsed,
+    )
+    if provenance:
+        normalized.extensions["canonical_field_provenance"] = provenance
     normalized.detection.detection_key = normalized.detection.detection_key or _detection_key(normalized)
     return normalized
 
@@ -264,6 +276,10 @@ def _entities(
     forwarded_chain = decoded_request_header.get("forwarded_chain")
     decoded_forwarded = forwarded_chain[0] if isinstance(forwarded_chain, list) and forwarded_chain else None
     process_chain = _process_chain(_first_str(raw_event, ("event_content", "finding__desc", "str_desc")) or "")
+    nids_http, _ = _nids_http_projection(
+        raw_event,
+        decoded_fields=(parsed_message.decoded_fields if parsed_message is not None else None),
+    )
 
     if source_type is AlertSourceType.EDR:
         network = {
@@ -284,10 +300,25 @@ def _entities(
             "src_port": _first_str(raw_event, ("sport",)) or _first_str(origin, ("sport",)),
             "dst_port": _first_str(raw_event, ("dport",)) or _first_str(origin, ("dport",)),
             "protocol": _first_str(raw_event, ("proto", "labels_proto", "protocol")),
-            "domain": _first_str(raw_event, ("host",)),
-            "url": _first_str(origin, ("uri",)) or req.get("path"),
+            "application_protocol": _first_str(raw_event, ("app_proto",)),
+            "direction": _first_str(raw_event, ("direction",)),
+            "domain": nids_http.get("host") or _first_str(raw_event, ("host",)),
+            "url": nids_http.get("url") or _first_str(origin, ("uri",)) or req.get("path"),
         }
     network["observations"] = _network_observations(source_type, parsed_messages)
+
+    http = {
+        "method": req.get("method"),
+        "host": _first_str(raw_event, ("host",)) or req.get("host"),
+        "path": req.get("path") or _first_str(origin, ("uri",)),
+        "url": _first_str(origin, ("uri",)) or req.get("path"),
+        "status_code": _first_str(raw_event, ("rsp_status",)) or _first_str(origin, ("rsp_status",)),
+        "user_agent": _first_header_value(decoded_headers, "user-agent"),
+        "x_forwarded_for": _first_str(raw_event, ("x_forwarded_for",)) or _first_str(origin, ("xff",)) or decoded_forwarded,
+    }
+    if source_type is AlertSourceType.NIDS:
+        http = {**http, **nids_http}
+    http["observations"] = _http_observations(source_type, parsed_messages)
 
     return {
         "network": network,
@@ -330,15 +361,7 @@ def _entities(
             "file_path": _first_str(raw_event, ("process__file__path", "str_process_full", "str_suspicious_file")),
             "md5": _first_str(raw_event, ("process__file__hashes__md5", "str_md5", "str_suspicious_file_md5")),
         },
-        "http": {
-            "method": req.get("method"),
-            "host": _first_str(raw_event, ("host",)) or req.get("host"),
-            "path": req.get("path") or _first_str(origin, ("uri",)),
-            "url": _first_str(origin, ("uri",)) or req.get("path"),
-            "status_code": _first_str(raw_event, ("rsp_status",)) or _first_str(origin, ("rsp_status",)),
-            "user_agent": _first_header_value(decoded_headers, "user-agent"),
-            "x_forwarded_for": _first_str(raw_event, ("x_forwarded_for",)) or _first_str(origin, ("xff",)) or decoded_forwarded,
-        },
+        "http": http,
         "threat": {
             "iocs": _dedupe(
                 [
@@ -381,12 +404,393 @@ def _network_observations(
                 "src_port": _intish(_first_str(fields, ("sport", "src_port"))),
                 "dst_port": _intish(_first_str(fields, ("dport", "dst_port"))),
                 "protocol": _first_str(fields, ("proto", "labels_proto", "protocol")),
+                "application_protocol": _first_str(fields, ("app_proto",)),
+                "direction": _first_str(fields, ("direction",)),
+                "community_id": _first_str(fields, ("community_id",)),
+                "flow_id": fields.get("flow_id"),
+                "sensor_source_ip": _nested_str(
+                    fields,
+                    ("alert", "source", "ip"),
+                ),
+                "sensor_source_port": _nested_int(
+                    fields,
+                    ("alert", "source", "port"),
+                ),
+                "sensor_target_ip": _nested_str(
+                    fields,
+                    ("alert", "target", "ip"),
+                ),
+                "sensor_target_port": _nested_int(
+                    fields,
+                    ("alert", "target", "port"),
+                ),
+                "sensor_source_zone": _nested_str(
+                    fields,
+                    ("alert", "source", "zone"),
+                ),
+                "sensor_target_zone": _nested_str(
+                    fields,
+                    ("alert", "target", "zone"),
+                ),
+                "bytes_to_server": _nested_int(fields, ("flow", "bytes_toserver")),
+                "bytes_to_client": _nested_int(fields, ("flow", "bytes_toclient")),
+                "packets_to_server": _nested_int(fields, ("flow", "pkts_toserver")),
+                "packets_to_client": _nested_int(fields, ("flow", "pkts_toclient")),
                 "forwarded_chain": [str(value) for value in forwarded] if isinstance(forwarded, list) else [],
             }
         )
         if source_ip or destination_ip or observation.get("forwarded_chain"):
             observations.append(observation)
     return observations
+
+
+def _http_observations(
+    source_type: AlertSourceType,
+    parsed_messages: list[ParsedRawMessageEvidence],
+) -> list[dict[str, Any]]:
+    if source_type is not AlertSourceType.NIDS:
+        return []
+    observations: list[dict[str, Any]] = []
+    for parsed in parsed_messages:
+        projection, _ = _nids_http_projection(
+            parsed.fields,
+            decoded_fields=parsed.decoded_fields,
+        )
+        if not projection:
+            continue
+        observations.append(
+            _drop_none(
+                {
+                    "observation_id": f"http:{parsed.message_hash[:16]}",
+                    "evidence_path": f"{parsed.source_path}#parsed",
+                    "event_time": _first_str(parsed.header, ("timestamp", "event_time"))
+                    or _first_str(
+                        parsed.fields,
+                        ("timestamp", "time", "access_time", "first_access_time"),
+                    ),
+                    **projection,
+                }
+            )
+        )
+    return observations
+
+
+def _nids_http_projection(
+    fields: Mapping[str, Any],
+    *,
+    decoded_fields: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Project bounded HTTP transaction metadata while retaining bodies as evidence."""
+
+    http = _as_dict(fields.get("http"))
+
+    projection: dict[str, Any] = {}
+    source_paths: dict[str, str] = {}
+    decoded_request_headers = _decoded_nids_request_headers(decoded_fields)
+
+    def add(name: str, value: Any, source_path: str) -> None:
+        if value is None or value == "":
+            return
+        projection[name] = value
+        source_paths[name] = source_path
+
+    method = _first_str(http, ("http_method", "method"))
+    host = _first_str(http, ("hostname", "host"))
+    host_path = "http.hostname" if _first_str(http, ("hostname",)) else "http.host"
+    if host is None:
+        host, host_path = _nids_request_header(
+            http,
+            "host",
+            decoded_request_headers=decoded_request_headers,
+        )
+    url = _first_str(http, ("url",))
+    user_agent = _first_str(http, ("http_user_agent", "user_agent"))
+    user_agent_path = "http.http_user_agent" if _first_str(http, ("http_user_agent",)) else "http.user_agent"
+    if user_agent is None:
+        user_agent, user_agent_path = _nids_request_header(
+            http,
+            "user-agent",
+            decoded_request_headers=decoded_request_headers,
+        )
+    referer = _first_str(http, ("http_refer", "referer", "referrer"))
+    referer_path = "http.http_refer" if _first_str(http, ("http_refer",)) else ("http.referer" if _first_str(http, ("referer",)) else "http.referrer")
+    if referer is None:
+        referer, referer_path = _nids_request_header(
+            http,
+            "referer",
+            decoded_request_headers=decoded_request_headers,
+        )
+    x_forwarded_for = _first_str(http, ("xff", "x_forwarded_for"))
+    xff_path = "http.xff" if _first_str(http, ("xff",)) else "http.x_forwarded_for"
+    if x_forwarded_for is None:
+        sensor_alert = _as_dict(fields.get("alert"))
+        x_forwarded_for = _first_str(sensor_alert, ("xff",))
+        xff_path = "alert.xff"
+    if x_forwarded_for is None:
+        x_forwarded_for, xff_path = _nids_request_header(
+            http,
+            "x-forwarded-for",
+            decoded_request_headers=decoded_request_headers,
+        )
+
+    add("method", method, "http.http_method" if _first_str(http, ("http_method",)) else "http.method")
+    add("host", host, host_path)
+    add("path", url, "http.url")
+    add("url", url, "http.url")
+    add("protocol", _first_str(http, ("protocol",)), "http.protocol")
+    add("port", _intish(_first_str(http, ("http_port", "port"))), "http.http_port" if _first_str(http, ("http_port",)) else "http.port")
+    add("status_code", _intish(_first_str(http, ("status", "status_code"))), "http.status" if _first_str(http, ("status",)) else "http.status_code")
+    add("user_agent", user_agent, user_agent_path)
+    add("referer", referer, referer_path)
+    add("x_forwarded_for", _first_forwarded_address(x_forwarded_for), xff_path)
+    return projection, source_paths
+
+
+def _nids_request_header(
+    http: Mapping[str, Any],
+    target_name: str,
+    *,
+    decoded_request_headers: Mapping[str, Any],
+) -> tuple[str | None, str]:
+    headers = http.get("request_headers")
+    if isinstance(headers, list):
+        for index, item in enumerate(headers):
+            if not isinstance(item, Mapping):
+                continue
+            name = item.get("name")
+            value = item.get("value")
+            if isinstance(name, str) and name.strip().lower() == target_name.lower() and value is not None and str(value).strip():
+                return str(value).strip(), f"http.request_headers[{index}].value"
+    for name, value in decoded_request_headers.items():
+        if str(name).strip().lower() == target_name.lower() and value is not None and str(value).strip():
+            return str(value).strip(), f"decoded.request_header_str.{name}"
+    return None, f"http.request_headers.{target_name}"
+
+
+def _decoded_nids_request_headers(
+    decoded_fields: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(decoded_fields, Mapping):
+        return {}
+    value = decoded_fields.get("request_header_str")
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _first_forwarded_address(value: str | None) -> str | None:
+    if value is None:
+        return None
+    first = value.split(",", 1)[0].strip()
+    return first or None
+
+
+def _canonical_field_provenance(
+    alert: AlertInput,
+    *,
+    source_type: AlertSourceType,
+    parsed_messages: list[ParsedRawMessageEvidence],
+    primary_parsed: ParsedRawMessageEvidence | None,
+) -> list[dict[str, Any]]:
+    if source_type is not AlertSourceType.NIDS:
+        return []
+
+    provenance: list[dict[str, Any]] = []
+    if primary_parsed is not None:
+        fields = primary_parsed.fields
+        sensor_alert = _as_dict(fields.get("alert"))
+        network_sources = {
+            "source_ip": _first_present_path(fields, ("sip", "src_addr", "source_ip")),
+            "destination_ip": _first_present_path(fields, ("dip", "dst_addr")),
+            "src_port": _first_present_path(fields, ("sport", "src_port")),
+            "dst_port": _first_present_path(fields, ("dport", "dst_port")),
+            "protocol": _first_present_path(fields, ("proto", "labels_proto", "protocol")),
+            "application_protocol": _first_present_path(fields, ("app_proto",)),
+            "direction": _first_present_path(fields, ("direction",)),
+        }
+        for field_name, source_path in network_sources.items():
+            _append_provenance(
+                provenance,
+                canonical_path=f"entities.network.{field_name}",
+                selected_value=getattr(alert.entities.network, field_name),
+                parsed=primary_parsed,
+                source_path=source_path,
+            )
+
+        nids_http, http_sources = _nids_http_projection(
+            fields,
+            decoded_fields=primary_parsed.decoded_fields,
+        )
+        for field_name, source_path in http_sources.items():
+            _append_provenance(
+                provenance,
+                canonical_path=f"entities.http.{field_name}",
+                selected_value=getattr(alert.entities.http, field_name),
+                parsed=primary_parsed,
+                source_path=source_path,
+            )
+        if nids_http.get("host"):
+            _append_provenance(
+                provenance,
+                canonical_path="entities.network.domain",
+                selected_value=alert.entities.network.domain,
+                parsed=primary_parsed,
+                source_path=http_sources.get("host"),
+            )
+        if nids_http.get("url"):
+            _append_provenance(
+                provenance,
+                canonical_path="entities.network.url",
+                selected_value=alert.entities.network.url,
+                parsed=primary_parsed,
+                source_path=http_sources.get("url"),
+            )
+
+        _append_provenance(
+            provenance,
+            canonical_path="detection.rule_name",
+            selected_value=alert.detection.rule_name,
+            parsed=primary_parsed,
+            source_path="alert.signature" if _first_str(sensor_alert, ("signature",)) else None,
+        )
+        category_path = "alert.category" if _first_str(sensor_alert, ("category",)) else None
+        _append_provenance(
+            provenance,
+            canonical_path="detection.rule_category",
+            selected_value=alert.detection.rule_category,
+            parsed=primary_parsed,
+            source_path=category_path,
+        )
+        _append_provenance(
+            provenance,
+            canonical_path="classification.category",
+            selected_value=alert.classification.category,
+            parsed=primary_parsed,
+            source_path=category_path,
+        )
+    network_by_evidence = {item.evidence_path: (index, item) for index, item in enumerate(alert.entities.network.observations)}
+    http_by_evidence = {item.evidence_path: (index, item) for index, item in enumerate(alert.entities.http.observations)}
+    for parsed in parsed_messages:
+        evidence_path = f"{parsed.source_path}#parsed"
+        network_item = network_by_evidence.get(evidence_path)
+        if network_item is not None:
+            observation_index, observation = network_item
+            network_sources = {
+                "source_ip": _first_present_path(parsed.fields, ("sip", "src_addr", "source_ip")),
+                "destination_ip": _first_present_path(parsed.fields, ("dip", "dst_addr")),
+                "src_port": _first_present_path(parsed.fields, ("sport", "src_port")),
+                "dst_port": _first_present_path(parsed.fields, ("dport", "dst_port")),
+                "protocol": _first_present_path(parsed.fields, ("proto", "labels_proto", "protocol")),
+                "application_protocol": _first_present_path(parsed.fields, ("app_proto",)),
+                "direction": _first_present_path(parsed.fields, ("direction",)),
+                "community_id": _first_present_path(parsed.fields, ("community_id",)),
+                "flow_id": _first_present_path(parsed.fields, ("flow_id",)),
+                "sensor_source_ip": "alert.source.ip",
+                "sensor_source_port": "alert.source.port",
+                "sensor_target_ip": "alert.target.ip",
+                "sensor_target_port": "alert.target.port",
+                "sensor_source_zone": "alert.source.zone",
+                "sensor_target_zone": "alert.target.zone",
+                "bytes_to_server": "flow.bytes_toserver",
+                "bytes_to_client": "flow.bytes_toclient",
+                "packets_to_server": "flow.pkts_toserver",
+                "packets_to_client": "flow.pkts_toclient",
+            }
+            for field_name, source_path in network_sources.items():
+                _append_provenance(
+                    provenance,
+                    canonical_path=f"entities.network.observations[{observation_index}].{field_name}",
+                    selected_value=getattr(observation, field_name),
+                    parsed=parsed,
+                    source_path=source_path,
+                )
+
+        http_item = http_by_evidence.get(evidence_path)
+        if http_item is not None:
+            observation_index, observation = http_item
+            _, http_sources = _nids_http_projection(
+                parsed.fields,
+                decoded_fields=parsed.decoded_fields,
+            )
+            for field_name, source_path in http_sources.items():
+                _append_provenance(
+                    provenance,
+                    canonical_path=f"entities.http.observations[{observation_index}].{field_name}",
+                    selected_value=getattr(observation, field_name),
+                    parsed=parsed,
+                    source_path=source_path,
+                )
+    return provenance
+
+
+def _append_provenance(
+    target: list[dict[str, Any]],
+    *,
+    canonical_path: str,
+    selected_value: Any,
+    parsed: ParsedRawMessageEvidence,
+    source_path: str | None,
+) -> None:
+    if selected_value is None or selected_value == "" or not source_path:
+        return
+    target.append(
+        {
+            "canonical_path": canonical_path,
+            "selected_value": str(selected_value),
+            "selected_from": (f"{parsed.source_path}#{source_path}" if source_path.startswith(("decoded.", "repaired.", "parsed.")) else f"{parsed.source_path}#parsed.{source_path}"),
+            "source_layer": EvidenceLayer.RAW_MESSAGE.value,
+            "trust_level": EvidenceTrustLevel.HIGH.value,
+            "selection_reason": "pingan_raw_message_mapping",
+        }
+    )
+
+
+def _first_present_path(
+    fields: Mapping[str, Any],
+    aliases: tuple[str, ...],
+) -> str | None:
+    for alias in aliases:
+        if _first_str(dict(fields), (alias,)) is not None:
+            return alias
+    return None
+
+
+def _field_importance_rules(
+    source_type: AlertSourceType,
+) -> list[dict[str, Any]]:
+    if source_type is not AlertSourceType.NIDS:
+        return []
+    definitions = (
+        ("pingan.nids.source_ip", ["parsed.sip"], "entities.network.source_ip", "critical"),
+        ("pingan.nids.destination_ip", ["parsed.dip"], "entities.network.destination_ip", "critical"),
+        ("pingan.nids.src_port", ["parsed.sport"], "entities.network.src_port", "high"),
+        ("pingan.nids.dst_port", ["parsed.dport"], "entities.network.dst_port", "high"),
+        ("pingan.nids.protocol", ["parsed.proto"], "entities.network.protocol", "high"),
+        ("pingan.nids.application_protocol", ["parsed.app_proto"], "entities.network.application_protocol", "high"),
+        ("pingan.nids.direction", ["parsed.direction"], "entities.network.direction", "high"),
+        ("pingan.nids.signature", ["parsed.alert.signature"], "detection.rule_name", "critical"),
+        ("pingan.nids.category", ["parsed.alert.category"], "detection.rule_category", "high"),
+        ("pingan.nids.http.method", ["parsed.http.http_method"], "entities.http.method", "high"),
+        ("pingan.nids.http.host", ["parsed.http.hostname"], "entities.http.host", "high"),
+        ("pingan.nids.http.url", ["parsed.http.url"], "entities.http.url", "high"),
+        ("pingan.nids.http.status", ["parsed.http.status"], "entities.http.status_code", "high"),
+        ("pingan.nids.http.user_agent", ["parsed.http.http_user_agent"], "entities.http.user_agent", "high"),
+        (
+            "pingan.nids.http.xff",
+            ["parsed.http.xff", "parsed.alert.xff"],
+            "entities.http.x_forwarded_for",
+            "critical",
+        ),
+    )
+    return [
+        {
+            "rule_id": rule_id,
+            "source_patterns": source_patterns,
+            "expected_target": expected_target,
+            "importance": importance,
+            "source_types": [AlertSourceType.NIDS.value],
+            "reason": f"PingAn NIDS evidence should populate {expected_target}",
+        }
+        for rule_id, source_patterns, expected_target, importance in definitions
+    ]
 
 
 def _process_observations(parsed_messages: list[ParsedRawMessageEvidence]) -> list[dict[str, Any]]:
@@ -456,10 +860,11 @@ def _source_field_semantics(
 ) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
     for parsed in parsed_messages:
+        base_path = f"{parsed.source_path}#parsed"
         if source_type is AlertSourceType.HIDS and _first_str(parsed.fields, ("external_ip",)) == "1.1.1.1":
             observations.append(
                 {
-                    "field_path": f"{parsed.source_path}#parsed.external_ip",
+                    "field_path": f"{base_path}.external_ip",
                     "semantic_type": "source_placeholder",
                     "meaning": "vendor_default_value_not_observed_external_ip",
                     "participates_in_entities": False,
@@ -469,13 +874,84 @@ def _source_field_semantics(
         if _first_str(parsed.fields, ("host_md5",)):
             observations.append(
                 {
-                    "field_path": f"{parsed.source_path}#parsed.host_md5",
+                    "field_path": f"{base_path}.host_md5",
                     "semantic_type": "host_identity_digest",
                     "meaning": "host_identity_digest_not_file_hash",
                     "participates_in_entities": False,
                     "participates_in_reasoning": False,
                 }
             )
+        if source_type is AlertSourceType.NIDS:
+            if _nested_str(parsed.fields, ("alert", "action")):
+                observations.append(
+                    {
+                        "field_path": f"{base_path}.alert.action",
+                        "semantic_type": "sensor_enforcement_action",
+                        "meaning": "allowed_means_sensor_did_not_block_not_that_the_attack_succeeded",
+                        "participates_in_entities": False,
+                        "participates_in_reasoning": True,
+                    }
+                )
+            if _nested_str(parsed.fields, ("alert", "attack_res")):
+                observations.append(
+                    {
+                        "field_path": f"{base_path}.alert.attack_res",
+                        "semantic_type": "vendor_sensor_result_code",
+                        "meaning": "uninterpreted_vendor_code_not_detection_truth",
+                        "participates_in_entities": False,
+                        "participates_in_reasoning": False,
+                    }
+                )
+            if _nested_value(parsed.fields, ("http", "status")) is not None:
+                observations.append(
+                    {
+                        "field_path": f"{base_path}.http.status",
+                        "semantic_type": "http_response_status",
+                        "meaning": "response_status_is_not_proof_of_exploit_success",
+                        "participates_in_entities": True,
+                        "participates_in_reasoning": True,
+                    }
+                )
+            if _nested_str(parsed.fields, ("alert", "source", "ip")):
+                observations.append(
+                    {
+                        "field_path": f"{base_path}.alert.source.ip",
+                        "semantic_type": "sensor_rule_relative_endpoint",
+                        "meaning": "sensor_source_is_not_automatically_network_source_or_attacker",
+                        "participates_in_entities": False,
+                        "participates_in_reasoning": True,
+                    }
+                )
+            if _nested_str(parsed.fields, ("alert", "target", "ip")):
+                observations.append(
+                    {
+                        "field_path": f"{base_path}.alert.target.ip",
+                        "semantic_type": "sensor_rule_relative_endpoint",
+                        "meaning": "sensor_target_is_not_automatically_network_destination_or_victim",
+                        "participates_in_entities": False,
+                        "participates_in_reasoning": True,
+                    }
+                )
+            if _first_str(parsed.fields, ("query",)):
+                observations.append(
+                    {
+                        "field_path": f"{base_path}.query",
+                        "semantic_type": "sensor_query_context",
+                        "meaning": "query_is_not_dns_without_explicit_protocol_evidence",
+                        "participates_in_entities": False,
+                        "participates_in_reasoning": True,
+                    }
+                )
+            if isinstance(parsed.fields.get("files"), list) and parsed.fields["files"]:
+                observations.append(
+                    {
+                        "field_path": f"{base_path}.files",
+                        "semantic_type": "sensor_transaction_file_metadata",
+                        "meaning": "transaction_file_metadata_is_not_proof_of_endpoint_file_write",
+                        "participates_in_entities": False,
+                        "participates_in_reasoning": True,
+                    }
+                )
     return observations
 
 
@@ -617,6 +1093,7 @@ def _source_type(hit_log: dict[str, Any], raw_event: dict[str, Any]) -> AlertSou
 
 
 def _labels(alert: dict[str, Any], hit_log: dict[str, Any], raw_event: dict[str, Any]) -> dict[str, str]:
+    sensor_alert = _as_dict(raw_event.get("alert"))
     labels = {
         "alert_code": _first_str(alert, ("alertCode",)),
         "alert_name": _first_str(alert, ("alertName",)),
@@ -629,6 +1106,10 @@ def _labels(alert: dict[str, Any], hit_log: dict[str, Any], raw_event: dict[str,
         "topic_name": _first_str(hit_log, ("topicName",)),
         "attack_type": _first_str(raw_event, ("attack_type", "finding__type_name")),
         "host_state": _first_str(raw_event, ("host_state",)),
+        "sensor_action": _first_str(sensor_alert, ("action",)),
+        "sensor_attack_result": _first_str(sensor_alert, ("attack_res",)),
+        "sensor_severity": _first_str(sensor_alert, ("severity",)),
+        "sensor_signature_id": _first_str(sensor_alert, ("signature_id",)),
     }
     return {key: value for key, value in labels.items() if value is not None}
 
@@ -857,6 +1338,41 @@ def _json_object(value: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _nested_value(
+    source: Mapping[str, Any],
+    path: tuple[str, ...],
+) -> Any:
+    current: Any = source
+    for segment in path:
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(segment)
+    return current
+
+
+def _nested_str(
+    source: Mapping[str, Any],
+    path: tuple[str, ...],
+) -> str | None:
+    value = _nested_value(source, path)
+    if value is None or value == "":
+        return None
+    return str(value)
+
+
+def _nested_int(
+    source: Mapping[str, Any],
+    path: tuple[str, ...],
+) -> int | None:
+    value = _nested_value(source, path)
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _as_dict(value: Any) -> dict[str, Any]:

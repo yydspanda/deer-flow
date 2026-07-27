@@ -42,6 +42,10 @@ _SOURCE_PREFIXES: dict[str, tuple[str, ...]] = {
     "skill_context": ("skill_context",),
 }
 _COMPOSITE_SEPARATOR_RE = re.compile(r"\s*[,;，；]\s*")
+_ENCODED_OMISSION_MARKER_RE = re.compile(
+    r"<ENCODED:[a-z0-9_]+:\d+:sha256=[a-f0-9]{12}:OMITTED>",
+    re.IGNORECASE,
+)
 _OUTCOME_CLAIM_RE = re.compile(
     r"(?:攻击成功|利用成功|成功利用|写入成功|执行成功|已写入|已执行|已入侵|已攻陷|"
     r"successful(?:ly)?\s+(?:exploit|execut|writ)|confirmed\s+compromise|command\s+executed|file\s+(?:was\s+)?written)",
@@ -68,7 +72,7 @@ def ground_analysis_evidence(
     """Match every analyzer evidence value against the exact prompt projection."""
 
     context = project_analysis_context(request)
-    scalar_index = _scalar_index(context)
+    scalar_index = [(path, candidate) for path, candidate in _scalar_index(context) if ".encoded_span_omissions" not in path]
     scalar_index.extend(_bounded_evidence_content_index(request))
     items = [
         _ground_item(
@@ -296,7 +300,8 @@ def _scalar_index(value: Any, *, path: str = "") -> list[tuple[str, str]]:
         return result
     if value is None:
         return []
-    return [(path, _normalize_scalar(value))]
+    candidate = _normalize_groundable_scalar(value)
+    return [(path, candidate)] if candidate else []
 
 
 def _bounded_evidence_content_index(
@@ -320,6 +325,12 @@ def _normalize_scalar(value: str | int | float | bool) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return " ".join(str(value).strip().lower().split())
+
+
+def _normalize_groundable_scalar(value: str | int | float | bool) -> str:
+    if not isinstance(value, str):
+        return _normalize_scalar(value)
+    return _normalize_scalar(_ENCODED_OMISSION_MARKER_RE.sub(" ", value))
 
 
 def _normalize_search_text(value: str) -> str:

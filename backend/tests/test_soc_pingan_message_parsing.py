@@ -18,6 +18,7 @@ from soc_agent.core import SocAnalysisService, SocNormalizationService
 from soc_agent.core.runtime import build_analysis_request_for_payload
 from soc_agent.normalizers import normalize_alert_payload
 from soc_agent.normalizers.pingan_messages import parse_pingan_raw_message
+from soc_agent.pipeline.analysis_context import project_analysis_context
 
 
 def _payload(*messages: str, topic: str, topic_name: str, raw_fields: dict | None = None) -> dict:
@@ -102,6 +103,298 @@ def test_pingan_direct_json_message_uses_complete_json_parser_before_partial_kv(
     assert parsed["fields"] == fields
     assert parsed["header"] == {}
     assert alert.extensions["evidence_input_policy"]["name"] == "raw_message_first"
+
+
+def test_pingan_nids_projects_session_http_sensor_and_provenance_without_verdict_inference() -> None:
+    fields = {
+        "timestamp": "2026-07-14T10:00:00+08:00",
+        "sip": "198.51.100.10",
+        "sport": "43123",
+        "dip": "10.20.30.40",
+        "dport": "8080",
+        "proto": "TCP",
+        "app_proto": "http",
+        "direction": "to_server",
+        "community_id": "1:test-community",
+        "flow_id": 123456,
+        "flow": {
+            "bytes_toserver": 1400,
+            "bytes_toclient": 3200,
+            "pkts_toserver": 4,
+            "pkts_toclient": 6,
+        },
+        "payload": ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" * 5),
+        "query": "10.20.30.40",
+        "files": [
+            {
+                "filename": "/cgi-bin/execute",
+                "gaps": False,
+                "size": 42,
+                "state": "CLOSED",
+                "stored": False,
+                "tx_id": 7,
+            }
+        ],
+        "alert": {
+            "action": "allowed",
+            "attack_res": "1",
+            "category": "代码执行",
+            "severity": "4",
+            "signature": "Apache HTTP Server 远程命令执行",
+            "signature_id": 50002002,
+            "source": {"ip": "198.51.100.10", "port": 43123, "zone": "外网"},
+            "target": {"ip": "10.20.30.40", "port": 8080, "zone": "内网"},
+        },
+        "http": {
+            "http_method": "POST",
+            "hostname": "app.example.internal",
+            "url": "/cgi-bin/execute",
+            "protocol": "HTTP/1.1",
+            "http_port": 8080,
+            "status": 200,
+            "http_user_agent": "NidsFixture/1.0",
+            "http_refer": "https://portal.example.internal/",
+            "xff": "203.0.113.8, 10.0.0.2",
+            "http_request_body": "command=id",
+            "http_response_body": "uid=1000",
+        },
+    }
+    payload = _payload(
+        json.dumps(fields, ensure_ascii=False),
+        topic="ptp-nids",
+        topic_name="NIDS",
+    )
+
+    request = build_analysis_request_for_payload(payload)
+    alert = normalize_alert_payload(payload)
+
+    assert alert.raw == payload
+    assert alert.detection.rule_code == "RPAADM_MESSAGE_001"
+    assert alert.detection.rule_name == "Apache HTTP Server 远程命令执行"
+    assert alert.detection.rule_category == "代码执行"
+    assert alert.classification.severity == "high"
+    assert alert.classification.labels["sensor_action"] == "allowed"
+    assert alert.classification.labels["sensor_attack_result"] == "1"
+    assert alert.classification.labels["sensor_severity"] == "4"
+
+    network = alert.entities.network
+    assert (
+        network.source_ip,
+        network.src_port,
+        network.destination_ip,
+        network.dst_port,
+        network.protocol,
+    ) == ("198.51.100.10", 43123, "10.20.30.40", 8080, "TCP")
+    assert network.application_protocol == "http"
+    assert network.direction == "to_server"
+    assert network.domain == "app.example.internal"
+    assert network.url == "/cgi-bin/execute"
+    assert len(network.observations) == 1
+    observation = network.observations[0]
+    assert observation.community_id == "1:test-community"
+    assert observation.flow_id == 123456
+    assert observation.sensor_source_ip == "198.51.100.10"
+    assert observation.sensor_source_port == 43123
+    assert observation.sensor_target_ip == "10.20.30.40"
+    assert observation.sensor_target_port == 8080
+    assert observation.sensor_source_zone == "外网"
+    assert observation.sensor_target_zone == "内网"
+    assert observation.bytes_to_server == 1400
+    assert observation.bytes_to_client == 3200
+    assert observation.packets_to_server == 4
+    assert observation.packets_to_client == 6
+
+    http = alert.entities.http
+    assert http.method == "POST"
+    assert http.host == "app.example.internal"
+    assert http.path == "/cgi-bin/execute"
+    assert http.url == "/cgi-bin/execute"
+    assert http.protocol == "HTTP/1.1"
+    assert http.port == 8080
+    assert http.status_code == 200
+    assert http.user_agent == "NidsFixture/1.0"
+    assert http.referer == "https://portal.example.internal/"
+    assert http.x_forwarded_for == "203.0.113.8"
+    assert len(http.observations) == 1
+    assert http.observations[0].evidence_path.endswith("message#parsed")
+
+    assert any(item.scenario_type == "command_execution" for item in request.fact_reconstruction.scenario_hypotheses)
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    assert provenance["entities.network.src_port"].selected_from.endswith("message#parsed.sport")
+    assert provenance["entities.network.application_protocol"].selected_from.endswith("message#parsed.app_proto")
+    assert provenance["entities.http.method"].selected_from.endswith("message#parsed.http.http_method")
+    assert provenance["detection.rule_name"].selected_from.endswith("message#parsed.alert.signature")
+    assert not request.evidence_coverage.high_value_gaps
+    assert any(path.endswith("#parsed.http.http_request_body") for path in request.evidence_coverage.parsed_field_paths)
+    assert alert.entities.network.domain != fields["query"]
+    assert request.primary_evidence is not None
+    assert fields["payload"] not in request.primary_evidence.content
+    encoded_omission = request.primary_evidence.encoded_span_omissions[0]
+    assert f"<ENCODED:base64_like:320:sha256={encoded_omission.sha256[:12]}:OMITTED>" in request.primary_evidence.content
+    assert encoded_omission.field_path.endswith("message#parsed.payload")
+    assert request.evidence_coverage.llm_compacted_encoded_paths == [request.primary_evidence.encoded_span_omissions[0].field_path]
+    prompt_context = project_analysis_context(request)
+    assert "encoded_span_omissions" not in prompt_context["evidence"]["primary_evidence"]
+    assert prompt_context["evidence"]["coverage"]["compacted_encoded_count"] == 1
+    semantics = {item["field_path"].split("#parsed.", 1)[-1]: item for item in alert.extensions["source_field_semantics"]}
+    assert semantics["alert.action"]["meaning"] == ("allowed_means_sensor_did_not_block_not_that_the_attack_succeeded")
+    assert semantics["alert.attack_res"]["participates_in_reasoning"] is False
+    assert semantics["http.status"]["meaning"] == ("response_status_is_not_proof_of_exploit_success")
+    assert semantics["query"]["meaning"] == ("query_is_not_dns_without_explicit_protocol_evidence")
+    assert semantics["files"]["meaning"] == ("transaction_file_metadata_is_not_proof_of_endpoint_file_write")
+    assert alert.entities.file.file_name is None
+    assert alert.entities.file.file_path is None
+
+    changed_sensor_outcome = deepcopy(payload)
+    changed_fields = deepcopy(fields)
+    changed_fields["alert"]["action"] = "blocked"
+    changed_fields["alert"]["attack_res"] = "0"
+    changed_fields["http"]["status"] = 500
+    changed_sensor_outcome["alert"]["hitLog"][0]["zeusRawLogs"][0]["message"] = json.dumps(changed_fields, ensure_ascii=False)
+    baseline_run = SocAnalysisService().analyze(payload)
+    changed_run = SocAnalysisService().analyze(changed_sensor_outcome)
+    assert baseline_run.analysis.verdict == changed_run.analysis.verdict
+
+
+def test_pingan_nids_http_header_array_is_a_canonical_fallback() -> None:
+    fields = {
+        "sip": "198.51.100.10",
+        "sport": "43123",
+        "dip": "10.20.30.40",
+        "dport": "8080",
+        "proto": "TCP",
+        "alert": {
+            "category": "命令注入",
+            "signature": "通用命令执行 linux id",
+            "source": {"ip": "10.20.30.40", "port": 8080},
+            "target": {"ip": "198.51.100.10", "port": 43123},
+        },
+        "http": {
+            "request_headers": [
+                {"name": "Host", "value": "header.example.internal"},
+                {"name": "User-Agent", "value": "HeaderAgent/2.0"},
+                {
+                    "name": "X-Forwarded-For",
+                    "value": "203.0.113.9, 10.0.0.3",
+                },
+            ]
+        },
+    }
+
+    request = build_analysis_request_for_payload(
+        _payload(
+            json.dumps(fields, ensure_ascii=False),
+            topic="ptp-nids",
+            topic_name="NIDS",
+        )
+    )
+
+    assert request.canonical_entities.http.host == "header.example.internal"
+    assert request.canonical_entities.http.user_agent == "HeaderAgent/2.0"
+    assert request.canonical_entities.http.x_forwarded_for == "203.0.113.9"
+    assert request.canonical_entities.network.source_ip == "198.51.100.10"
+    assert request.canonical_entities.network.observations[0].sensor_source_ip == "10.20.30.40"
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    assert provenance["entities.http.host"].selected_from.endswith("message#parsed.http.request_headers[0].value")
+    assert provenance["entities.http.user_agent"].selected_from.endswith("message#parsed.http.request_headers[1].value")
+    assert provenance["entities.http.x_forwarded_for"].selected_from.endswith("message#parsed.http.request_headers[2].value")
+
+
+def test_pingan_nids_json_header_string_is_decoded_redacted_and_mapped() -> None:
+    fields = {
+        "sip": "198.51.100.10",
+        "sport": "43123",
+        "dip": "10.20.30.40",
+        "dport": "8080",
+        "proto": "TCP",
+        "alert": {
+            "category": "命令注入",
+            "signature": "通用命令执行 linux id",
+        },
+        "request_header_str": json.dumps(
+            {
+                "Host": "decoded.example.internal",
+                "User-Agent": "DecodedAgent/3.0",
+                "X-Forwarded-For": "203.0.113.10, 10.0.0.4",
+                "Cookie": "sid=must-not-enter-redacted-context",
+            }
+        ),
+        "response_header_str": json.dumps(
+            {
+                "Content-Type": "text/plain",
+                "Set-Cookie": "session=must-not-enter-redacted-context",
+            }
+        ),
+    }
+    payload = _payload(
+        json.dumps(fields, ensure_ascii=False),
+        topic="ptp-nids",
+        topic_name="NIDS",
+    )
+
+    alert = normalize_alert_payload(payload)
+    parsed = alert.extensions["parsed_raw_messages"][0]
+    assert parsed["decoded_fields"]["request_header_str"]["Host"] == ("decoded.example.internal")
+    assert parsed["decoded_fields"]["response_header_str"]["Content-Type"] == ("text/plain")
+    assert alert.entities.http.host == "decoded.example.internal"
+    assert alert.entities.http.user_agent == "DecodedAgent/3.0"
+    assert alert.entities.http.x_forwarded_for == "203.0.113.10"
+
+    request = build_analysis_request_for_payload(payload)
+    assert request.primary_evidence is not None
+    bounded = json.loads(request.primary_evidence.content)
+    assert bounded["fields"]["request_header_str"] == "[SEE decoded_fields]"
+    assert bounded["fields"]["response_header_str"] == "[SEE decoded_fields]"
+    assert bounded["decoded_fields"]["request_header_str"]["Cookie"] == "[REDACTED]"
+    assert bounded["decoded_fields"]["response_header_str"]["Set-Cookie"] == "[REDACTED]"
+    assert "must-not-enter-redacted-context" not in request.primary_evidence.content
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    assert provenance["entities.http.host"].selected_from.endswith("message#decoded.request_header_str.Host")
+    assert any(path.endswith("#decoded.request_header_str.Host") for path in request.evidence_coverage.decoded_field_paths)
+    assert any(item.field_path.endswith("#parsed.request_header_str") and item.reason == "replaced_by_decoded_projection" for item in request.evidence_coverage.omissions)
+
+
+def test_pingan_nids_multiple_messages_remain_independent_http_sessions() -> None:
+    first = {
+        "sip": "198.51.100.10",
+        "sport": "43123",
+        "dip": "10.20.30.40",
+        "dport": "8080",
+        "proto": "TCP",
+        "app_proto": "http",
+        "alert": {"category": "代码执行", "signature": "Web RCE"},
+        "http": {
+            "http_method": "POST",
+            "hostname": "app.example.internal",
+            "url": "/first",
+        },
+    }
+    second = {
+        **first,
+        "sport": "43124",
+        "http": {
+            "http_method": "GET",
+            "hostname": "app.example.internal",
+            "url": "/second",
+        },
+    }
+    request = build_analysis_request_for_payload(
+        _payload(
+            json.dumps(first, ensure_ascii=False),
+            json.dumps(second, ensure_ascii=False),
+            topic="ptp-nids",
+            topic_name="NIDS",
+        )
+    )
+
+    assert request.canonical_entities.network.src_port == 43123
+    assert [item.src_port for item in request.canonical_entities.network.observations] == [43123, 43124]
+    assert request.canonical_entities.http.path == "/first"
+    assert [item.path for item in request.canonical_entities.http.observations] == ["/first", "/second"]
+    assert len(request.supplementary_evidence) == 1
+    canonical_paths = {item.canonical_path for item in request.fact_reconstruction.canonical_field_provenance}
+    assert "entities.network.observations[1].src_port" in canonical_paths
+    assert "entities.http.observations[1].path" in canonical_paths
 
 
 def test_pingan_prefixed_json_parser_supports_edr_and_threat_intel() -> None:

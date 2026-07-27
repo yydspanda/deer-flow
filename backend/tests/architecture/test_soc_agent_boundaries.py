@@ -79,6 +79,12 @@ def test_pipeline_has_no_transport_or_infrastructure_imports() -> None:
         assert not (_imports(module) & forbidden), f"{module} imports transport or infrastructure code"
 
 
+def test_production_soc_agent_does_not_import_validation_code() -> None:
+    for module in _python_files(SOC_AGENT):
+        forbidden = {imported for imported in _imports(module) if imported == "validation" or imported.startswith("validation.")}
+        assert not forbidden, f"{module} imports validation-only code: {sorted(forbidden)}"
+
+
 def test_fact_reconstructor_does_not_know_vendor_role_aliases() -> None:
     source = (SOC_AGENT / "pipeline" / "fact_reconstructor.py").read_text(encoding="utf-8")
     forbidden_aliases = {"attack_sip", "alarm_sip", "str_attack_ip", "str_source_ip"}

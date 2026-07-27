@@ -21,7 +21,16 @@ _SYSLOG_HEADER_RE = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T[^ ]+)\s+"
     r"(?P<hostname>\S+)\s+(?P<program>[^\[]+)\[(?P<pid>\d+)\]"
 )
-_NESTED_JSON_FIELD_NAMES = frozenset({"rule_labels", "req_body", "rsp_body"})
+_NESTED_JSON_FIELD_NAMES = frozenset(
+    {
+        "rule_labels",
+        "req_body",
+        "rsp_body",
+        "request_header_str",
+        "response_header_str",
+        "response_hqeader_str",
+    }
+)
 _HTTP_HEADER_FIELD_NAMES = frozenset({"req_header", "rsp_header"})
 _FORWARDED_FIELD_NAMES = frozenset({"xff", "x_forwarded_for"})
 _MAX_NESTED_JSON_CHARS = 64_000
@@ -40,6 +49,9 @@ _REPAIR_POLICIES = {
     "req_body": _RepairPolicy((dict, list)),
     "rsp_body": _RepairPolicy((dict, list)),
     "rule_labels": _RepairPolicy((dict,), max_depth=6, max_nodes=256),
+    "request_header_str": _RepairPolicy((dict,), max_depth=4, max_nodes=256),
+    "response_header_str": _RepairPolicy((dict,), max_depth=4, max_nodes=256),
+    "response_hqeader_str": _RepairPolicy((dict,), max_depth=4, max_nodes=256),
 }
 
 
