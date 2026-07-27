@@ -217,14 +217,20 @@ Current SOC direction:
   proposal/ReviewQueue/outcome records; the Web campaign view can open only manifest-selected work and
   still writes through EV-02. A passed report is only eligible for governed rollout review and
   `auto_close_allowed` remains false.
-- PingAn `zeusRawLogs[].message` values are parsed only inside the PingAn normalizer. Deterministically
-  parsed message fields are high-trust primary facts; Zeus structured fields are reduced-trust
-  fallback candidates unless the source adapter has an explicit trusted-source policy. PingAn
+- PingAn `zeusRawLogs[].message` values are parsed only inside the PingAn normalizer. If at least one
+  message parses deterministically, parsed fields are the only analysis source: Zeus sibling fields
+  remain in immutable raw evidence and cannot enter canonical mapping, role/scenario facts, conflicts,
+  or LLM evidence. Structured fallback is allowed only when zero messages parse. PingAn
   `T_GBD_zeus_data` is the sole current exact-topic exception: its first structured event is
   high-trust fallback evidence; every other PingAn structured fallback defaults to low trust.
   Source type, missing `message`, similar topic names, and topic prefixes do not grant this
-  exception. Preserve the complete original payload for replay/audit and expose only bounded
-  primary/supplementary evidence content to analysis nodes.
+  exception. Preserve the complete original payload for replay/audit. The first parsed message plus
+  at most four full supplementary messages enter bounded evidence; exact-path, adapter-declared
+  high-value fields outside that budget may enter generic `BoundedEvidenceHighlight` records under
+  the same sensitive-evidence mode. Repeated highlights expose at most five representative paths;
+  complete path accounting remains in `EvidenceCoverageReport`. They must never reopen structured
+  fallback. Adapter fields with `participates_in_reasoning=false` are hard-filtered from model
+  projections while remaining in immutable raw/audit evidence.
 - PingAn Threat Intel mapping lives in `normalizers/pingan_threat_intel.py`: nested `net.*` is the
   observed wire session, while `attacker` / `victim` remain separate provider role assertions.
   `assets.ip` may be a CIDR/range scope and must not become a host IP; provider `result`, reputation,
@@ -246,6 +252,15 @@ Current SOC direction:
   observations remain empty. Malformed process hashes do not enter entities. Child process, file,
   registry, task, existence and MITRE fields remain typed investigation context and never prove
   maliciousness or success by themselves.
+- PingAn NDR/APT mapping lives in `backend/soc_agent/normalizers/pingan_ndr.py`. Every parsed
+  `sip/dip` message remains an independent wire observation; HTTP and network-content file metadata
+  remain per-message observations. The reviewed source's `ioc` field is a vendor detection
+  descriptor, not a typed IOC. `file_name/file_md5` never prove an endpoint write or compromise.
+- PingAn HIDS mapping lives in `backend/soc_agent/normalizers/pingan_hids.py`. Endpoint identity is
+  separate from packet direction, `external_ip=1.1.1.1` is a non-reasoning vendor placeholder, and
+  process/file evidence remains per-message. Only explicit `bounce_shell`, `honeypot`, and
+  `malic_opera` contracts create event-scoped network observations; canonical source/destination
+  remain empty.
 - Nested JSON-in-string and HTTP fields use allowlisted, size-bounded decoders. Raw bodies, headers,
   tokens, cookies, and credentials default to redaction before `BoundedAnalysisEvidence`. An
   explicitly approved model environment may set `SOC_LLM_SENSITIVE_EVIDENCE_MODE=full`; this mode
@@ -303,9 +318,11 @@ Current SOC direction:
   policy forces degraded evidence, human review, and `automation_allowed=false`.
 - Build the local real-alert validation corpus with
   `backend/.venv/bin/python validation/compact_zeus/build_alert_validation_corpus.py`.
-  The source PKL remains authoritative for existing IDs; exact JSON demos add lineage,
-  conflicts remain explicit variants, and missing demos append one canonical row. Raw inputs,
-  generated PKL/manifest and rich HTML/Excel outputs are sensitive and gitignored.
+  The authoritative source PKL lives under `datas/source/`; exact JSON demos under
+  `datas/legacy_demos/` add lineage, conflicts remain explicit variants, and missing demos append
+  one canonical row. Generated outputs stay under gitignored `validation/compact_zeus/data/`, split
+  into `corpus/`, `audits/`, `reviews/`, `compaction/`, and `exploration/`. Raw inputs, generated
+  PKL/manifest and rich HTML/Excel outputs are sensitive and gitignored.
   Historical `agent_response` values are model output, not analyst ground truth.
 - Reproduce the release-level local Alpha gate with `./scripts/soc-alpha-acceptance.sh all`.
   It covers representative APT/EDR/HIDS across CLI, SQL, registered Gateway handlers/services,

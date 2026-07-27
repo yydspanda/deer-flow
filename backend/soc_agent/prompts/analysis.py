@@ -70,6 +70,7 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
             "Keep evidence trust separate from semantic confidence: a faithfully parsed vendor field may still assert the wrong attacker or victim role.",
             "Treat tentative or conflicted role resolutions as provisional and cite their evidence gaps.",
             "Use evidence coverage warnings to identify parser degradation, sanitized fields, truncation, and high-value canonical gaps.",
+            "Use evidence.highlights as compact, adapter-governed values retained from messages outside the full supplementary-evidence budget; cite a representative highlight path and do not infer omitted sibling fields.",
             "Obey source_field_semantics from the adapter. Fields marked participates_in_reasoning=false are preserved for audit but must not support entities, facts, verdicts, or confidence.",
             "When fields conflict, explain the uncertainty instead of silently choosing one side.",
             "Every evidence item must quote a value present in the bounded context and use an exact dotted context path "

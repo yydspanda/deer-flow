@@ -141,8 +141,8 @@ def _flatten_leaves(value: Any, path: str = "") -> list[str]:
         result = []
         for index, item in enumerate(value):
             result.extend(_flatten_leaves(item, f"{path}[{index}]"))
-        return result or [path]
-    return [path] if path else []
+        return result or ([path] if path and _has_value(value) else [])
+    return [path] if path and _has_value(value) else []
 
 
 def _resolve_model_path(value: Any, path: str) -> Any:

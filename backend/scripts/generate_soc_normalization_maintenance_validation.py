@@ -26,14 +26,25 @@ from soc_agent.core import (
 )
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_SOURCE_DIR = REPO_ROOT / "datas/legacy_demos"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "backend/.deer-flow/soc-runtime-validation/step-05-normalization-maintenance"
+
+
+def _source_ref(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source-dir", type=Path, default=Path("../datas"))
+    parser.add_argument("--source-dir", type=Path, default=DEFAULT_SOURCE_DIR)
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path(".deer-flow/soc-runtime-validation/step-05-normalization-maintenance"),
+        default=DEFAULT_OUTPUT_DIR,
     )
     args = parser.parse_args()
     generate(args.source_dir, args.output_dir)
@@ -77,7 +88,7 @@ def generate(source_dir: Path, output_dir: Path) -> None:
         artifact = {
             "schema_version": "soc.runtime_validation_step.v1",
             "step": "normalization_maintenance",
-            "source_file": str(source_path),
+            "source_file": _source_ref(source_path),
             "source_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
             "run_id": run.run_id,
             "alert_id": run.alert_id,
@@ -90,7 +101,7 @@ def generate(source_dir: Path, output_dir: Path) -> None:
         )
         generated.append(
             {
-                "source": f"datas/{source_path.name}",
+                "source": _source_ref(source_path),
                 "artifact": artifact_path.name,
                 "output_contract": "soc.normalization_monitoring_result.v1",
                 "status": "generated",
@@ -200,7 +211,7 @@ def _write_runtime_steps(
             4: run.llm_analysis_request.model_dump(mode="json", exclude_none=False),
         }
         source = {
-            "file": f"datas/{source_path.name}",
+            "file": _source_ref(source_path),
             "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
             "size_bytes": source_path.stat().st_size,
         }
@@ -271,7 +282,7 @@ def _write_input_adapter_step(
         extensions = alert.extensions
         raw_messages = extensions.get("parsed_raw_messages", [])
         source = {
-            "file": f"datas/{source_path.name}",
+            "file": _source_ref(source_path),
             "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
             "size_bytes": source_path.stat().st_size,
         }

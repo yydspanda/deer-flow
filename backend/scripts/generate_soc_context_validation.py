@@ -42,11 +42,18 @@ from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 from soc_agent.pipeline.fact_reconstructor import reconstruct_facts
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_SOURCE_DIR = REPO_ROOT / "datas"
+DEFAULT_SOURCE_DIR = REPO_ROOT / "datas/legacy_demos"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "backend/.deer-flow/soc-runtime-validation"
 TENANT = "pingan-validation"
 ENVIRONMENT = "production"
 LIFECYCLE_TIME = datetime(2026, 3, 1, tzinfo=UTC)
+
+
+def _source_ref(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def main() -> int:
@@ -211,7 +218,7 @@ def _run_shadow_case(
                 "mode": "read_only_shadow",
             },
             "source": {
-                "file": f"datas/{source_path.name}",
+                "file": _source_ref(source_path),
                 "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
             },
             "boundary": _shadow_boundary(),
@@ -224,7 +231,7 @@ def _run_shadow_case(
         },
     )
     return {
-        "source": f"datas/{source_path.name}",
+        "source": _source_ref(source_path),
         "artifact": artifact_name,
         "match_status": result.status.value,
     }

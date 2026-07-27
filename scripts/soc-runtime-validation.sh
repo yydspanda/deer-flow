@@ -44,8 +44,8 @@ require_python() {
 require_samples() {
   local sample
   for sample in "${SAMPLES[@]}"; do
-    if [[ ! -f "$ROOT_DIR/datas/$sample.json" ]]; then
-      printf 'error: validation sample missing: datas/%s.json\n' "$sample" >&2
+    if [[ ! -f "$ROOT_DIR/datas/legacy_demos/$sample.json" ]]; then
+      printf 'error: validation sample missing: datas/legacy_demos/%s.json\n' "$sample" >&2
       exit 2
     fi
   done
@@ -93,7 +93,7 @@ run_soc_json_allow_pending() {
 }
 
 run_core() {
-  printf '[core] regenerating Steps 01-05 from datas/*.json\n'
+  printf '[core] regenerating Steps 01-05 from datas/legacy_demos/*.json\n'
   run_backend_module scripts.generate_soc_normalization_maintenance_validation
 }
 
@@ -106,7 +106,7 @@ run_live() {
   printf '[live] Step 06: bounded LLM analysis for apt-1965449\n'
   run_soc_json \
     "$VALIDATION_ROOT/step-06-live-llm/apt-1965449.step-06.json" \
-    analyze "$ROOT_DIR/datas/apt-1965449.json" \
+    analyze "$ROOT_DIR/datas/legacy_demos/apt-1965449.json" \
     --analyzer-mode llm --model-name "$MODEL_NAME" --pretty
 
   local runs_dir="$VALIDATION_ROOT/step-09-confidence-labeling/runs"
@@ -123,14 +123,14 @@ run_live() {
     printf '[live] Step 09 source run: %s\n' "$sample"
     run_soc_json \
       "$runs_dir/$sample.live.json" \
-      analyze "$ROOT_DIR/datas/$sample.json" \
+      analyze "$ROOT_DIR/datas/legacy_demos/$sample.json" \
       --analyzer-mode llm --model-name "$MODEL_NAME" --pretty
   done
 
   printf '[live] Step 07: offline normalization mapping suggestions\n'
   run_soc_json \
     "$VALIDATION_ROOT/step-07-live-normalization-suggestion/apt-1965449.step-07.json" \
-    normalize suggest "$ROOT_DIR/datas/apt-1965449.json" \
+    normalize suggest "$ROOT_DIR/datas/legacy_demos/apt-1965449.json" \
     --live-llm --model-name "$MODEL_NAME" --pretty
 
   printf '[live] Step 09: prepare a new pending label set without overwriting analyst truth\n'
@@ -153,7 +153,7 @@ run_evaluations() {
   for sample in "${SAMPLES[@]}"; do
     run_soc_json \
       "$replay_dir/$sample.deterministic.json" \
-      analyze "$ROOT_DIR/datas/$sample.json" --analyzer-mode stub --pretty
+      analyze "$ROOT_DIR/datas/legacy_demos/$sample.json" --analyzer-mode stub --pretty
   done
 
   printf '[evaluations] Step 10: main-orchestrator correlation bridge\n'

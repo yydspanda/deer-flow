@@ -10,7 +10,7 @@
 本验证的目标是在不解码、不修改原始告警的前提下，将这些连续长编码片段替换为
 可审计的短占位符。
 
-数据源：`validation/compact_zeus/data/full_alert_validation_corpus.pkl`。本报告按实际输入 DataFrame 统计，
+数据源：`validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl`。本报告按实际输入 DataFrame 统计，
 共 **212 条**；文件名中的数量不作为校验口径。
 
 ## 2. 处理范围

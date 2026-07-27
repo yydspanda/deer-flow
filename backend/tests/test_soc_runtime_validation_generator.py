@@ -39,7 +39,7 @@ def test_context_validation_generator_writes_append_only_lifecycle(
         context_validation,
         "_run_shadow_case",
         lambda **kwargs: {
-            "source": f"datas/{kwargs['name']}.json",
+            "source": f"datas/legacy_demos/{kwargs['name']}.json",
             "artifact": f"{kwargs['name']}.step-12.json",
             "match_status": "exact",
         },

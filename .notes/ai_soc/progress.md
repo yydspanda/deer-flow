@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `PI-01 first approved read-only provider`：PingAn NIDS/EDR/Threat Intel/SIEM Checkpoint C 已完成；下一步选择真实 dev/staging CMDB、EDR 或 TI 只读 endpoint，收集 owner、认证、tenant mapping、approved payload 与 smoke 证据。 |
+| 当前下一刀 | `PI-01 first approved read-only provider`：PingAn NIDS/NDR/APT/EDR/HIDS/Threat Intel/SIEM Checkpoint C 已完成；下一步选择真实 dev/staging CMDB、EDR 或 TI 只读 endpoint，收集 owner、认证、tenant mapping、approved payload 与 smoke 证据。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -202,6 +202,64 @@
 
 ## 进度记录
 
+### 2026-07-27 — PI-01 PingAn NDR/APT / HIDS Checkpoint C completed
+
+- 真实语料覆盖：
+  - NDR/APT：44 alerts / 105 messages，生成 105 network observations、63 HTTP
+    observations、20 `observed_artifact` file observations；43 条具有 canonical wire
+    source/destination；
+  - HIDS：23 alerts / 46 messages，生成 44 process observations / 122 process nodes、21
+    file observations 和 5 个事件契约限定的 network observations；
+  - 两类均为 0 known high-value gap、0 raw payload mutation。
+- Adapter 契约：
+  - 新增 `normalizers/pingan_ndr.py` 与 `normalizers/pingan_hids.py`，字段 alias 不进入 generic
+    Runtime；
+  - NDR `ioc` 经全语料确认是厂商检测描述，不按值形状冒充 typed IOC；`file_name/file_md5`
+    只形成网络内容 artifact，不证明终端落盘；
+  - HIDS endpoint identity 与 packet direction 分离；`external_ip=1.1.1.1` 是 non-reasoning
+    placeholder；只有 `bounce_shell/honeypot/malic_opera` 产生 event-scoped network
+    observations，canonical source/destination 保持为空；
+  - 补充消息中的 file/user/process summary 仍保留 exact provenance；HIDS `ppid` 即使没有
+    parent name 也通过通用 `parent_process_id` contract 保留；
+  - message 与 Zeus 外层加工字段不再混合：任意 message 确定性解析成功后，外层字段只留在
+    immutable raw，不进入 canonical/fact/scenario/conflict/LLM；仅零条 message 可解析时启用
+    structured fallback。
+- 覆盖监控修正：
+  - `EvidenceFieldImportanceRegistry` 只匹配非空 leaf，避免空字符串/null 制造假 mapping gap；
+  - `LLMAnalysisRequest v2` 增加 generic `BoundedEvidenceHighlight`：首条 primary + 最多四条
+    full supplementary 之外的 adapter-declared 高价值字段，仍按 exact path、敏感模式和总量
+    预算进入模型上下文；重复值保留 occurrence count 与最多 5 个代表路径，完整覆盖路径只留在
+    `EvidenceCoverageReport`，避免路径元数据挤占 Prompt；
+  - `participates_in_reasoning=false` 已从 Prompt 约束升级为投影硬过滤，并记录
+    `adapter_excluded_from_reasoning`；HIDS 默认 `1.1.1.1`、NIDS 未解释 result code 不再进入
+    bounded content；
+  - v3 实例级审计按 leaf name 覆盖嵌套 `_origin.*`/`payload.*`，不再因完整路径不同漏算；当前
+    NDR/HIDS 8,436 个非空 parsed leaf 实例全部有 typed consumer 或 exact semantic，未分类数、
+    high-value instance gap、structured-fallback violation 均为 0；后续出现任何非空未分类字段
+    会直接使 corpus audit 失败并进入 mapping maintenance。
+- 可复跑产物：
+  - `build_pingan_ndr_hids_field_audit.py`；
+  - `build_pingan_ndr_hids_review_artifacts.py` 生成 11 份敏感本地代表样本；
+  - `test_build_pingan_ndr_hids_field_audit.py` 锁定 strict message-only、嵌套 HTTP/漏洞字段、
+    placeholder、方向和 IOC 边界；生成数据已 gitignore。
+- 本地语料布局：
+  - 权威输入移动到 `datas/source/`，5 个历史 JSON 移动到 `datas/legacy_demos/`；
+  - gitignored 验证产物统一分到 `validation/compact_zeus/data/{corpus,audits,reviews,compaction,exploration}/`；
+  - 长期说明移动到 `validation/compact_zeus/docs/`，所有构建器、Runtime 验证脚本和报告引用
+    已切换到新路径，根目录不再混放 notebook、HTML、Excel 或敏感审阅 JSON。
+- 验证：
+  - 212 条 corpus rebuild：`edr=37, hids=23, ndr=44, nids=95, siem=10,
+    threat_intel=3`，8 个 topic 无 `other`；
+  - NIDS、NDR/HIDS、EDR、TI/SIEM 四组全量 field audit 均 passed；
+  - SOC tests：`584 passed`；architecture/migration：`17 passed`；compact validation fixtures：
+    `15 passed`；四组真实 field audit 均 passed；
+  - 新目录下重新生成 212-row corpus、四组 audit、五组 review artifacts 和 compaction 报告；
+    `./scripts/soc-runtime-validation.sh core` 已从 `datas/legacy_demos/` 成功重建 Steps 01-05；
+  - Ruff format/check、`git diff --check` passed；`codegraph sync .` 已纳入两个新 Adapter。
+- 下一步：
+  - `PI-01 first approved read-only provider`：选择真实 dev/staging CMDB、EDR 或 TI endpoint，
+    不继续用新增本地 mock 冒充 provider 完成。
+
 ### 2026-07-27 — PI-01 PingAn Threat Intel / SIEM Checkpoint C completed
 
 - Threat Intel adapter：
@@ -228,7 +286,7 @@
     0 pipeline-actor leak、0 raw payload mutation；
   - `build_pingan_ti_siem_review_artifacts.py` 生成 TI 单/多 message、SIEM email/machine-copy
     四份 `full` 模式本地 JSON；输出位于 gitignored
-    `validation/compact_zeus/data/pingan-ti-siem-checkpoint-c/`，不得提交。
+    `validation/compact_zeus/data/reviews/pingan-ti-siem-checkpoint-c/`，不得提交。
 - 验证：
   - PingAn parser + normalization maintenance + validation 聚焦回归：`42 passed`；
   - 完整 SOC + architecture 回归：`589 passed`；compact Zeus validation：`13 passed`；
@@ -274,8 +332,8 @@
     file observations；deterministic extractor 读取标准 observation 和 typed threat IOC，不读取
     vendor 字段。
 - 可复跑产物：
-  - `validation/compact_zeus/data/pingan-edr-field-audit.{before,after}.json`；
-  - `validation/compact_zeus/data/pingan-edr-checkpoint-c/{before,after}_adapter_mapping/` 五组
+  - `validation/compact_zeus/data/audits/pingan-edr-field-audit.{before,after}.json`；
+  - `validation/compact_zeus/data/reviews/pingan-edr-checkpoint-c/{before,after}_adapter_mapping/` 五组
     代表样本；生成数据均 gitignored、包含敏感真实告警，不提交；
   - 构建入口为 `build_pingan_edr_field_audit.py` 和
     `build_pingan_edr_review_artifacts.py`，合成 contract 回归为
@@ -338,8 +396,8 @@
   - marker 保留 kind/length/短 hash，path/kind/length/完整 hash 侧车保留在 request/run
     audit 但不进入 prompt；marker 与侧车均从 evidence grounding 排除，不能成为事实。
 - 可复跑产物：
-  - `validation/compact_zeus/data/pingan-nids-field-audit.json`；
-  - `validation/compact_zeus/data/pingan-nids-checkpoint-c/{before,after}_adapter_mapping/` 四组代表样本；
+  - `validation/compact_zeus/data/audits/pingan-nids-field-audit.json`；
+  - `validation/compact_zeus/data/reviews/pingan-nids-checkpoint-c/{before,after}_adapter_mapping/` 四组代表样本；
   - 生成数据均 gitignored、包含敏感真实告警，不提交。
 - 验证：
   - PingAn + prompt + encoded-context + grounding 聚焦测试：`38 passed`；
@@ -421,7 +479,7 @@
   - `T_GBD_zeus_data` 10 条都没有 message，fallback 正确，只需确认它作为 Zeus 模型/关联输出是否归为
     `siem`。
 - 审阅产物：
-  - 新增 `validation/compact_zeus/pingan_adapter_rebuild_review.md`，固定不变量、完整 Topic 基线、
+  - 新增 `validation/compact_zeus/docs/pingan_adapter_rebuild_review.md`，固定不变量、完整 Topic 基线、
     代表 alert IDs、候选 source types、JSON parser 顺序和 A-D 四个 checkpoint；
   - Checkpoint B/C 要分别审阅完整 parser 输出和 parsed-leaf coverage，不能把 parser success 当成字段
     已完整用于研判。
@@ -433,7 +491,7 @@
 ### 2026-07-24 — PI-01 real-alert corpus intake and lineage validation
 
 - 输入盘点：
-  - `datas/full_alert_2026_month_forth_sample_200.pkl` 的 `alert_full_data` 是主数据；文件名虽含 200，
+  - `datas/source/full_alert_2026_month_forth_sample_200.pkl` 的 `alert_full_data` 是主数据；文件名虽含 200，
     实际为 210 行、210 个唯一 `alert_id`；
   - 5 个历史 JSON 中，2 个与 PKL 精确一致，1 个 ID 已存在但有 5 处网络地址字段差异，2 个 ID
     不在 PKL；
@@ -1096,8 +1154,9 @@
 - 新增只读 `SocAuthorizedActivityService` 和 `soc context match`。Repository 缺失、读取失败或候选截断
   都返回 `unavailable`，不把基础设施故障伪装成 `not_found/exact`。
 - 定向合同/生命周期/CLI/架构测试 `35 passed`；SOC 全量加架构回归 `466 passed, 1 warning`，唯一
-  warning 是 DeerFlow MCP cache 既有 asyncio deprecation。真实 `datas/hids-1965448.json` 与
-  `datas/edr-1965810.json` shadow replay 都为 `exact`，产物位于 gitignored
+  warning 是 DeerFlow MCP cache 既有 asyncio deprecation。真实
+  `datas/legacy_demos/hids-1965448.json` 与 `datas/legacy_demos/edr-1965810.json` shadow replay
+  都为 `exact`，产物位于 gitignored
   `backend/.deer-flow/soc-runtime-validation/step-12-authorization-shadow/`。
 - 当前边界：AA-01 结果不写 AnalysisRun/ReviewQueue，不进入 LLM prompt，不生成 disposition，不关单。
   下一刀 `EX-01` 只负责 enrichment persistence/audit/context projection；之后 `DP-01` 才生成
@@ -1227,7 +1286,8 @@
   - 新增 `soc eval labels prepare PATH` 与 `soc eval labels validate LABEL_SET.json`；
     `soc eval confidence` 改为只消费完成校验的 label-set envelope，并输出 dataset hash 和 profile scope。
 - 真实样本验证：
-  - 使用 `deepseek-v4-pro`、`soc-analysis-v2`、`soc-runtime-v1` 成功运行 `datas/` 中 5 条
+  - 使用 `deepseek-v4-pro`、`soc-analysis-v2`、`soc-runtime-v1` 成功运行
+    `datas/legacy_demos/` 中 5 条
     APT/EDR/HIDS 样本。
   - gitignored 评审入口：
     `backend/.deer-flow/soc-runtime-validation/step-09-confidence-labeling/label-set.pending.json`。
@@ -1269,14 +1329,14 @@
     deprecation warning。Ruff format/check 和 `git diff --check` 通过。
   - 新增 evidence hallucination、source mismatch、composite evidence、response oversize、admission budget、
     retry/no-commit、non-retry review、idempotent retry 和 SQL bundle rollback 覆盖。
-  - 5 条 `datas/` 均按 `normalize -> entity_extract -> fact_reconstruct -> build_analysis_input ->
+  - 5 条 `datas/legacy_demos/` 均按 `normalize -> entity_extract -> fact_reconstruct -> build_analysis_input ->
     skill_context -> analyze_stub -> schema_validate -> evidence_grounding -> decide` 完成，均无 failure，
     stub evidence 全部落地。
   - `deepseek-v4-pro` live smoke 完成并进入 `needs_review`；当前 grounding 对保存的 live analysis 重检为
     `6 grounded / 1 ungrounded`，未落地项是模型合并的 role-resolution 自然语言，不允许高分掩盖。
     本地 DeerFlow `config.yaml` 已从 v9 安全升级到 v24，并保留 `config.yaml.bak`。
 - 下一步：
-  - 用 5 条 `datas/` 先完成技术 smoke，再由用户逐条审阅真实 LLM 输出建立人工 label set；只有标签量和
+  - 用 5 条 `datas/legacy_demos/` 先完成技术 smoke，再由用户逐条审阅真实 LLM 输出建立人工 label set；只有标签量和
     calibration 指标达到要求后，才讨论 versioned profile，当前继续全量人工复核。
 
 ### 2026-07-14 — Deterministic decision policy and confidence guard
@@ -1300,7 +1360,7 @@
     mock/failed evidence eligibility 和 scenario confidence。
 - 下一步：
   - 增加 LLM evidence grounding contract/validator，检查 evidence item 是否能回指 bounded input；随后用
-    5 条 `datas/` 建立人工标注集并运行离线 calibration，不打开自动处置。
+    5 条 `datas/legacy_demos/` 建立人工标注集并运行离线 calibration，不打开自动处置。
 
 ### 2026-07-14 — DeerFlow-backed live SOC Runtime LLM
 
@@ -1320,7 +1380,8 @@
   - Compose/K8s daemon 模板增加 analyzer/model 配置；K8s Secret 预留 provider key，daemon 启动前验证模型注册。
 - 真实验证：
   - DeerFlow 配置识别 `deepseek-v4-flash` 和 `deepseek-v4-pro`；本轮显式使用 `deepseek-v4-pro`。
-  - `datas/apt-1965449.json` 真实分析成功：`analyze_llm` parser 无 repair，最终 `needs_review`、
+  - `datas/legacy_demos/apt-1965449.json` 真实分析成功：`analyze_llm` parser 无 repair，最终
+    `needs_review`、
     `automation_allowed=false`；约 18.75 秒、8,949 input tokens、1,064 output tokens。
   - live normalization suggestion 成功，返回 31 条 governed candidate，全部仍需人工评审且不可自动应用。
 - 边界：
@@ -1333,7 +1394,7 @@
   - 完整 SOC regression：`406 passed`；仅 1 条既有 DeerFlow MCP cache asyncio deprecation warning。
   - Ruff check/format、daemon shell syntax 和 Compose overlay config 通过；overlay 服务列表包含 `soc-daemon`。
 - 下一步：
-  - 用 5 条 `datas/` 建人工标注集，评审 verdict/evidence/recommended action，确定 token 裁剪、并发和 confidence calibration 策略。
+  - 用 5 条 `datas/legacy_demos/` 建人工标注集，评审 verdict/evidence/recommended action，确定 token 裁剪、并发和 confidence calibration 策略。
 
 ### 2026-07-14 — Normalization maintenance and calibration loop
 
@@ -1358,17 +1419,18 @@
   - `soc eval confidence` 输出 accuracy/Brier/ECE/bins/versioned review threshold；小样本/单一类别 warning，
     `auto_action_allowed=false`。
   - nested JSON repair 增加 field-specific root、depth、node、key/value source-evidence domain guard。
-  - 新增 `backend/scripts/generate_soc_normalization_maintenance_validation.py`，可从 `datas/` 一次重生成
+  - 新增 `backend/scripts/generate_soc_normalization_maintenance_validation.py`，可从
+    `datas/legacy_demos/` 一次重生成
     gitignored Step 2-5 contract 快照；Step 5 显示每条真实样本触发的 maintenance issue，便于逐步审阅。
 - 验证：
   - backend Ruff check passed；完整 SOC suite `396 passed`。
   - frontend `pnpm check` passed；Alembic head 在全新 SQLite 文件升级成功。
   - `cd backend && UV_CACHE_DIR=/tmp/deer-flow-uv-cache uv run python -m scripts.generate_soc_normalization_maintenance_validation`
-    已重生成 5 条 `datas/` 样本的 Step 2-5 工件；`apt-1965449` 的 canonical/LLM request 已包含
+    已重生成 5 条 `datas/legacy_demos/` 样本的 Step 2-5 工件；`apt-1965449` 的 canonical/LLM request 已包含
     User-Agent，且 `high_value_gaps=[]`。
   - 已运行 `codegraph sync .`，新增验证脚本和本轮最终符号进入本地 CodeGraph 索引。
 - 下一步：
-  - 继续按 `datas/` 做 analyze/validate/decide 原始 contract 审阅；收集分析师标签后运行第一版
+  - 继续按 `datas/legacy_demos/` 做 analyze/validate/decide 原始 contract 审阅；收集分析师标签后运行第一版
     confidence calibration，不将 provisional threshold 写入生产配置。
 
 ### 2026-07-14 — Message schema drift and evidence coverage report
@@ -1396,7 +1458,7 @@
 - 验证：
   - 定向 parser/runtime/prompt tests：`48 passed`；Ruff format/check passed。
   - 完整 SOC regression：`383 passed`；仅 1 条既有 DeerFlow MCP cache asyncio deprecation warning。
-  - `datas/` baseline replay：5 个样本、6 个 accepted fingerprints、0 个 novel fingerprint；7 个
+  - `datas/legacy_demos/` baseline replay：5 个样本、6 个 accepted fingerprints、0 个 novel fingerprint；7 个
     recognized message observations、1 个 degraded observation，只有 nested body 损坏的
     `apt-1965449` 进入 suspicious samples。
   - parser v2 会有一次预期 fingerprint 变化；使用 v2 样本重建 baseline 后 replay 仍为 0 个 novel
@@ -1445,7 +1507,7 @@
 ### 2026-07-14 — PingAn raw-message parsing and evidence-priority repair
 
 - 背景：
-  - 使用 `datas/` 的 3 条 APT、1 条 EDR、1 条 HIDS 样本逐步测试 Runtime 时发现：旧实现只把
+  - 使用 `datas/legacy_demos/` 的 3 条 APT、1 条 EDR、1 条 HIDS 样本逐步测试 Runtime 时发现：旧实现只把
     `message` 路径标成 high trust，没有解析正文，也没有把正文放进 `LLMAnalysisRequest`。
   - HIDS 的 IP、host 和 process tree 因此完全漏提取；Fact Reconstruction 还会把 Zeus
     structured fallback 错误继承为 raw-message high trust。
@@ -1465,7 +1527,7 @@
   - `PYTHONPATH=. .venv/bin/python -m pytest tests/test_soc*.py -q`：`367 passed`，仅 1 条既有 MCP
     event-loop deprecation warning。
   - 定向 Runtime/Prompt/parser 测试：`41 passed`；Ruff checks passed；`git diff --check` passed。
-  - `datas/` 5/5 样本解析成功：APT -> `pingan_delimited_json`，EDR -> `pingan_comma_kv`，HIDS ->
+  - `datas/legacy_demos/` 5/5 样本解析成功：APT -> `pingan_delimited_json`，EDR -> `pingan_comma_kv`，HIDS ->
     `pingan_quoted_kv`；HIDS 现可提取 host IP、host name、`java/chattr` process；多日志进入
     supplementary evidence；所有样本 `raw_preserved=true`。
   - 已使用当前代码重生成

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build sensitive local before/after artifacts for PingAn EDR review."""
+"""Build sensitive local review artifacts for PingAn NDR/HIDS Checkpoint C."""
 
 from __future__ import annotations
 
@@ -26,44 +26,37 @@ from soc_agent.contracts import SensitiveEvidenceMode  # noqa: E402
 from soc_agent.core.runtime import build_analysis_request_for_payload  # noqa: E402
 from soc_agent.normalizers import normalize_alert_payload  # noqa: E402
 
-SCHEMA_VERSION = "soc.validation.pingan_edr_checkpoint_c.v1"
+SCHEMA_VERSION = "soc.validation.pingan_ndr_hids_checkpoint_c.v1"
 DEFAULT_CORPUS_PATH = (
     ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
 )
 DEFAULT_OUTPUT_DIR = (
-    ROOT / "validation/compact_zeus/data/reviews/pingan-edr-checkpoint-c"
+    ROOT / "validation/compact_zeus/data/reviews/pingan-ndr-hids-checkpoint-c"
 )
 
 REVIEW_SAMPLES = {
-    "xingchuang-registry-and-file": {
-        "alert_id": 1968376,
-        "review_focus": "nested process, registry and file evidence across messages",
-    },
-    "xingchuang-child-process": {
-        "alert_id": 1967231,
-        "review_focus": "child process and scheduled-task action details",
-    },
-    "xingchuang-file-action": {
-        "alert_id": 1967699,
-        "review_focus": "target file versus process image semantics",
-    },
-    "leagsoft-flat-kv": {
-        "alert_id": 1965810,
-        "review_focus": "existing flat EDR mapping regression",
-    },
-    "leagsoft-no-message": {
-        "alert_id": 1965795,
-        "review_focus": "structured fallback and explicit evidence gap",
-    },
+    "ndr-reverse-shell": (2025642, "reverse connection roles versus wire direction"),
+    "ndr-nested-http": (
+        1965449,
+        "nested HTTP bodies, request context and repair labels",
+    ),
+    "ndr-webshell-upload": (1978257, "HTTP and observed network-content file metadata"),
+    "ndr-command-execution": (1974996, "multiple messages and scenario evidence"),
+    "hids-web-command": (1965448, "process tree and default external-IP placeholder"),
+    "hids-reverse-shell": (1981436, "event-scoped outbound connection from endpoint"),
+    "hids-linux-backdoor": (1985655, "Linux process and artifact evidence"),
+    "hids-windows-backdoor": (1980407, "Windows process and artifact evidence"),
+    "hids-malicious-operation": (1973457, "actor, process and inbound source context"),
+    "hids-honeypot": (1980265, "event-scoped inbound source and ports"),
+    "hids-honey-file": (1983975, "file integrity artifact and process chain"),
 }
 
 
-def build_edr_review_artifact(
+def build_ndr_hids_review_artifact(
     *,
     cohort: str,
     row: Mapping[str, Any],
     review_focus: str,
-    phase: str,
 ) -> dict[str, Any]:
     payload = _alert_payload(row)
     alert = normalize_alert_payload(payload)
@@ -73,7 +66,6 @@ def build_edr_review_artifact(
     )
     return {
         "schema_version": SCHEMA_VERSION,
-        "phase": phase,
         "cohort": cohort,
         "review_focus": review_focus,
         "alert_id": alert.alert_id,
@@ -84,21 +76,19 @@ def build_edr_review_artifact(
             exclude_none=True,
         ),
         "parsed_raw_messages": alert.extensions.get("parsed_raw_messages", []),
-        "source_field_semantics": alert.extensions.get(
-            "source_field_semantics",
-            [],
+        "source_field_semantics": alert.extensions.get("source_field_semantics", []),
+        "extracted_entities": request.extracted_entities.model_dump(
+            mode="json", exclude_none=True
         ),
         "canonical_field_provenance": [
             item.model_dump(mode="json", exclude_none=True)
             for item in request.fact_reconstruction.canonical_field_provenance
         ],
         "fact_reconstruction": request.fact_reconstruction.model_dump(
-            mode="json",
-            exclude_none=True,
+            mode="json", exclude_none=True
         ),
         "evidence_coverage": request.evidence_coverage.model_dump(
-            mode="json",
-            exclude_none=True,
+            mode="json", exclude_none=True
         ),
         "bounded_analysis_evidence": {
             "primary": (
@@ -136,33 +126,26 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS_PATH)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument(
-        "--phase",
-        choices=("before_adapter_mapping", "after_adapter_mapping"),
-        default="before_adapter_mapping",
-    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     frame = load_dataframe_pickle(args.corpus)
-    phase_dir = args.output_dir / args.phase
     artifacts: list[dict[str, Any]] = []
-    for cohort, definition in REVIEW_SAMPLES.items():
-        alert_id = int(definition["alert_id"])
+    for cohort, (alert_id, review_focus) in REVIEW_SAMPLES.items():
         matches = frame.loc[frame["alert_id"] == alert_id]
         if len(matches) != 1:
             raise ValueError(
-                f"expected exactly one corpus row for alert_id={alert_id}, found {len(matches)}"
+                f"expected exactly one corpus row for alert_id={alert_id}, "
+                f"found {len(matches)}"
             )
-        artifact = build_edr_review_artifact(
+        artifact = build_ndr_hids_review_artifact(
             cohort=cohort,
             row=matches.iloc[0].to_dict(),
-            review_focus=str(definition["review_focus"]),
-            phase=args.phase,
+            review_focus=review_focus,
         )
-        output_path = phase_dir / f"{cohort}-{alert_id}.json"
+        output_path = args.output_dir / f"{cohort}-{alert_id}.json"
         _write_json(output_path, artifact)
         artifacts.append(
             {
@@ -174,12 +157,11 @@ def main() -> int:
         )
     index = {
         "schema_version": SCHEMA_VERSION,
-        "phase": args.phase,
         "corpus": str(args.corpus.resolve().relative_to(ROOT)),
         "sensitive_local_artifacts": True,
         "artifacts": artifacts,
     }
-    _write_json(phase_dir / "index.json", index)
+    _write_json(args.output_dir / "index.json", index)
     print(json.dumps(index, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 

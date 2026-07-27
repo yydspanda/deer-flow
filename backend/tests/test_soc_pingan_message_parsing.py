@@ -43,13 +43,18 @@ def _payload(*messages: str, topic: str, topic_name: str, raw_fields: dict | Non
     }
 
 
-def test_pingan_apt_message_fields_override_zeus_structured_fields() -> None:
+def test_pingan_apt_parsed_message_excludes_zeus_structured_fields_from_analysis() -> None:
     message = 'skyeye SyslogClient[1]: 2026-07-14 10:00:00|!sensor|!alarm|!{"attack_type":"代码执行","sip":"30.1.1.10","dip":"30.2.2.20","attacker":"30.2.2.20","victim":"30.1.1.10","severity":8}'
     payload = _payload(
         message,
         topic="sec_guard_apt",
         topic_name="SkyEye APT",
-        raw_fields={"sip": "198.51.100.10", "dip": "198.51.100.20"},
+        raw_fields={
+            "sip": "198.51.100.10",
+            "dip": "198.51.100.20",
+            "host": "processed-only.example.test",
+            "attack_type": "外层加工分类",
+        },
     )
 
     alert = normalize_alert_payload(payload)
@@ -67,13 +72,34 @@ def test_pingan_apt_message_fields_override_zeus_structured_fields() -> None:
     assert run.fact_reconstruction is not None
     resolutions = {item.role: item for item in run.fact_reconstruction.role_resolutions}
     assert resolutions["source"].selected_value == "30.1.1.10"
-    assert resolutions["source"].status is RoleResolutionStatus.CONFLICTED
+    assert resolutions["source"].status is RoleResolutionStatus.OBSERVED
     assert resolutions["impacted_asset"].selected_value == "30.1.1.10"
     provenance = {item.canonical_path: item for item in run.fact_reconstruction.canonical_field_provenance}
     assert provenance["entities.network.source_ip"].selected_from.endswith("message#parsed.sip")
     assert provenance["entities.network.source_ip"].source_layer is EvidenceLayer.RAW_MESSAGE
-    assert provenance["entities.network.source_ip"].alternative_values == ["198.51.100.10"]
-    assert any(item.conflict_type == "source_candidate_conflict" for item in run.fact_reconstruction.conflict_reports)
+    assert provenance["entities.network.source_ip"].alternative_values == []
+    assert alert.entities.http.host is None
+    assert alert.classification.category == "代码执行"
+    assert not any(item.source_layer is EvidenceLayer.RAW_STRUCTURED for item in run.fact_reconstruction.role_claims)
+    assert not any(item.conflict_type == "source_candidate_conflict" for item in run.fact_reconstruction.conflict_reports)
+    assert run.llm_analysis_request is not None
+    bounded_content = "\n".join(
+        item.content
+        for item in [
+            run.llm_analysis_request.primary_evidence,
+            *run.llm_analysis_request.supplementary_evidence,
+        ]
+        if item is not None
+    )
+    assert "198.51.100.10" not in bounded_content
+    assert "processed-only.example.test" not in bounded_content
+    projected_context = json.dumps(
+        project_analysis_context(run.llm_analysis_request),
+        ensure_ascii=False,
+    )
+    assert "198.51.100.10" not in projected_context
+    assert "processed-only.example.test" not in projected_context
+    assert "外层加工分类" not in projected_context
 
 
 def test_pingan_direct_json_message_uses_complete_json_parser_before_partial_kv() -> None:
@@ -239,6 +265,8 @@ def test_pingan_nids_projects_session_http_sensor_and_provenance_without_verdict
     semantics = {item["field_path"].split("#parsed.", 1)[-1]: item for item in alert.extensions["source_field_semantics"]}
     assert semantics["alert.action"]["meaning"] == ("allowed_means_sensor_did_not_block_not_that_the_attack_succeeded")
     assert semantics["alert.attack_res"]["participates_in_reasoning"] is False
+    attack_result_path = next(path for path in request.primary_evidence.omitted_field_paths if path.endswith("message#parsed.alert.attack_res"))
+    assert request.primary_evidence.omission_reasons[attack_result_path] == ("adapter_excluded_from_reasoning")
     assert semantics["http.status"]["meaning"] == ("response_status_is_not_proof_of_exploit_success")
     assert semantics["query"]["meaning"] == ("query_is_not_dns_without_explicit_protocol_evidence")
     assert semantics["files"]["meaning"] == ("transaction_file_metadata_is_not_proof_of_endpoint_file_write")
@@ -818,7 +846,7 @@ def test_pingan_edr_comma_kv_message_populates_canonical_entities() -> None:
     assert resolutions["attacker"].status is RoleResolutionStatus.TENTATIVE
     assert resolutions["attacker"].selected_value == "30.162.29.85"
     assert resolutions["impacted_asset"].selected_value == "10.43.107.39"
-    assert resolutions["impacted_asset"].status is RoleResolutionStatus.CONFLICTED
+    assert resolutions["impacted_asset"].status is RoleResolutionStatus.TENTATIVE
 
     claims = request.fact_reconstruction.role_claims
     attacker_claim = next(item for item in claims if item.role == "attacker")
@@ -864,7 +892,7 @@ def test_pingan_edr_self_attack_alias_and_digest_shaped_values_do_not_invent_net
     assert not any(item.role in {"source", "destination", "attacker"} for item in request.fact_reconstruction.role_claims)
 
 
-def test_pingan_edr_cross_layer_endpoint_excludes_false_remote_candidate() -> None:
+def test_pingan_edr_parsed_message_does_not_use_outer_endpoint_identity() -> None:
     message = "<14>[SourceIP:30.99.16.122][AuditDB.tbl_ud_pe_threat_alert]str_attack_ip=10.181.175.69,str_title=Endpoint-only split evidence"
     payload = _payload(
         message,
@@ -876,15 +904,19 @@ def test_pingan_edr_cross_layer_endpoint_excludes_false_remote_candidate() -> No
     result = SocNormalizationService().inspect(payload)
     alert = result.alert
 
-    assert alert.entities.host.ip_addresses == ["10.181.175.69"]
+    assert alert.entities.host.ip_addresses == []
     assert alert.entities.network.source_ip is None
     assert alert.entities.network.destination_ip is None
-    assert alert.entities.threat.iocs == []
+    assert alert.entities.threat.iocs == ["10.181.175.69"]
 
     request = build_analysis_request_for_payload(payload)
-    assert not any(item.role in {"source", "destination", "attacker"} for item in request.fact_reconstruction.role_claims)
+    assert not any(item.role in {"source", "destination"} for item in request.fact_reconstruction.role_claims)
+    attacker = next(item for item in request.fact_reconstruction.role_claims if item.role == "attacker")
+    assert attacker.value == "10.181.175.69"
+    assert attacker.evidence_path.endswith("message#parsed.str_attack_ip")
+    assert all(item.source_layer is EvidenceLayer.RAW_MESSAGE for item in request.fact_reconstruction.role_claims)
     attack_semantic = next(item for item in alert.extensions["source_field_semantics"] if item["semantic_type"] == "vendor_attack_ip_assertion")
-    assert attack_semantic["participates_in_entities"] is False
+    assert attack_semantic["participates_in_entities"] is True
 
 
 def test_pingan_edr_nested_details_preserve_endpoint_process_and_action_observations() -> None:
@@ -1021,20 +1053,37 @@ def test_pingan_hids_quoted_kv_message_extracts_host_ip_and_process_tree() -> No
     assert resolutions["victim"].selected_value == "30.232.21.35"
     assert resolutions["impacted_asset"].selected_value == "30.232.21.35"
     assert any(item.scenario_type == "command_execution" for item in request.fact_reconstruction.scenario_hypotheses)
-    assert alert.extensions["source_field_semantics"] == [
-        {
-            "field_path": "alert.hitLog[0].zeusRawLogs[0].message#parsed.external_ip",
-            "semantic_type": "source_placeholder",
-            "meaning": "vendor_default_value_not_observed_external_ip",
-            "participates_in_entities": False,
-            "participates_in_reasoning": False,
-        }
-    ]
+    semantics = {item["semantic_type"]: item for item in alert.extensions["source_field_semantics"]}
+    assert {
+        "source_placeholder",
+        "host_event_taxonomy",
+        "endpoint_process_observation",
+    } <= semantics.keys()
+    assert semantics["source_placeholder"]["participates_in_reasoning"] is False
+    assert request.primary_evidence is not None
+    assert "1.1.1.1" not in request.primary_evidence.content
+    placeholder_path = next(path for path in request.primary_evidence.omitted_field_paths if path.endswith("message#parsed.external_ip"))
+    assert request.primary_evidence.omission_reasons[placeholder_path] == ("adapter_excluded_from_reasoning")
     observation = alert.entities.process.observations[0]
     assert [(node.process_name, node.process_id) for node in observation.nodes] == [
         ("java", 3065),
         ("chattr", 3287784),
     ]
+
+
+def test_pingan_hids_preserves_parent_pid_without_inventing_parent_name() -> None:
+    message = 'qtAlert datatype="backdoor_diagnose_win" internal_ip="30.1.1.20" host_name="endpoint-20" pname="net1.exe" pid="9980" ppid="5160" cmd="net1 localgroup Administrators example\\user /add"'
+    payload = _payload(message, topic="security_qthids", topic_name="HIDS")
+
+    request = build_analysis_request_for_payload(payload)
+    process = request.canonical_entities.process
+
+    assert process.parent_process_name is None
+    assert process.parent_process_id == 5160
+    assert process.observations[0].parent_process_id == 5160
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    assert provenance["entities.process.parent_process_id"].selected_from.endswith("message#parsed.ppid")
+    assert provenance["entities.process.observations[0].parent_process_id"].selected_from.endswith("message#parsed.ppid")
 
 
 def test_pingan_multiple_messages_are_bounded_as_primary_and_supplementary() -> None:
@@ -1049,6 +1098,54 @@ def test_pingan_multiple_messages_are_bounded_as_primary_and_supplementary() -> 
     assert "30.1.1.10" in request.primary_evidence.content
     assert len(request.supplementary_evidence) == 1
     assert request.supplementary_evidence[0].source_path.endswith("zeusRawLogs[1].message")
+
+
+def test_pingan_high_value_fields_survive_full_supplementary_message_limit() -> None:
+    messages = [
+        "skyeye|!"
+        + json.dumps(
+            {
+                "sip": f"30.1.1.{index + 1}",
+                "dip": "30.2.2.20",
+                "attack_type": "网络行为",
+                "rule_id": f"RULE-{index + 1}",
+            },
+            ensure_ascii=False,
+        )
+        for index in range(5)
+    ]
+    messages.extend(
+        "skyeye|!"
+        + json.dumps(
+            {
+                "sip": f"30.1.1.{index + 1}",
+                "dip": "30.2.2.20",
+                "attack_type": "网络行为",
+                "hit_content": "late-high-value-marker",
+            },
+            ensure_ascii=False,
+        )
+        for index in range(5, 11)
+    )
+    payload = _payload(
+        *messages,
+        topic="sec_guard_apt",
+        topic_name="SkyEye APT",
+    )
+
+    request = build_analysis_request_for_payload(payload)
+
+    assert len(request.supplementary_evidence) == 4
+    highlight = next(item for item in request.evidence_highlights if item.value == "late-high-value-marker")
+    assert highlight.semantic_type == "sensor_match_excerpt"
+    assert highlight.occurrence_count == 6
+    assert len(highlight.evidence_paths) == 5
+    assert highlight.evidence_paths_truncated is True
+    highlighted_paths = {f"alert.hitLog[0].zeusRawLogs[{index}].message#parsed.hit_content" for index in range(5, 11)}
+    assert highlighted_paths <= set(request.evidence_coverage.llm_projected_paths)
+    assert not highlighted_paths & {item.field_path for item in request.evidence_coverage.omissions}
+    projected = project_analysis_context(request)
+    assert projected["evidence"]["highlights"][0]["schema_version"] == ("soc.bounded_evidence_highlight.v2")
 
 
 def test_supplementary_messages_remain_independent_network_observations() -> None:
@@ -1070,6 +1167,49 @@ def test_supplementary_messages_remain_independent_network_observations() -> Non
         "30.1.1.10",
         "30.1.1.11",
     ]
+
+
+def test_pingan_ndr_preserves_file_observations_without_promoting_vendor_ioc() -> None:
+    first = 'skyeye|!{"sip":"30.1.1.10","dip":"30.2.2.20","attack_type":"代码执行","ioc":"19023-发现反弹SHELL行为（Linux）"}'
+    second = 'skyeye|!{"sip":"30.1.1.10","dip":"30.2.2.20","file_name":"/tmp/payload.jsp","file_md5":"0123456789abcdef0123456789abcdef"}'
+    payload = _payload(first, second, topic="sec_guard_apt", topic_name="SkyEye APT")
+
+    request = build_analysis_request_for_payload(payload)
+    alert = request.canonical_entities
+
+    assert alert.file.file_name == "payload.jsp"
+    assert len(alert.file.observations) == 1
+    assert alert.file.observations[0].relation == "observed_artifact"
+    assert alert.threat.iocs == []
+    semantics = {item["semantic_type"] for item in normalize_alert_payload(payload).extensions["source_field_semantics"]}
+    assert "vendor_detection_descriptor" in semantics
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    assert provenance["entities.file.file_name"].selected_from.endswith("zeusRawLogs[1].message#parsed.file_name")
+    assert request.evidence_coverage.high_value_gaps == []
+
+
+def test_pingan_hids_keeps_network_direction_event_scoped() -> None:
+    first = 'qtAlert event_type="bounce_shell" internal_ip="30.3.3.30" external_ip="1.1.1.1" host_name="host-30" agent_id="agent-30" pname="bash" pid="100" cmd="bash -i" dst_ip="198.51.100.9" port="4444"'
+    second = 'qtAlert event_type="honey_file" internal_ip="30.3.3.30" host_name="host-30" uname="app" process_chain="java(10)->touch(11)" file_path="/srv/decoy.txt" md5="0123456789abcdef0123456789abcdef"'
+    payload = _payload(first, second, topic="security_qthids", topic_name="HIDS")
+
+    request = build_analysis_request_for_payload(payload)
+    alert = request.canonical_entities
+
+    assert alert.network.source_ip is None
+    assert alert.network.destination_ip is None
+    assert len(alert.network.observations) == 1
+    observation = alert.network.observations[0]
+    assert observation.source_ip == "30.3.3.30"
+    assert observation.destination_ip == "198.51.100.9"
+    assert observation.direction == "outbound"
+    assert alert.host.ip_addresses == ["30.3.3.30"]
+    assert alert.user.username == "app"
+    assert alert.file.file_path == "/srv/decoy.txt"
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    assert provenance["entities.user.username"].selected_from.endswith("zeusRawLogs[1].message#parsed.uname")
+    assert provenance["entities.file.file_name"].selected_from.endswith("zeusRawLogs[1].message#parsed.file_path")
+    assert request.evidence_coverage.high_value_gaps == []
 
 
 def test_pingan_host_identity_digest_is_not_a_file_hash_or_network_ioc() -> None:
@@ -1177,7 +1317,11 @@ def test_delimited_json_parser_decodes_supported_nested_json_and_http_headers() 
     assert coverage.message_schemas[0].status is MessageSchemaStatus.RECOGNIZED
     assert not coverage.high_value_gaps
     assert any(path.endswith("#parsed.payload.req_header") for path in coverage.llm_sanitized_paths)
-    assert set(coverage.llm_projected_paths) == set(request.primary_evidence.projected_field_paths)
+    highlight_paths = {path for item in request.evidence_highlights for path in item.evidence_paths}
+    assert set(coverage.llm_projected_paths) == {
+        *request.primary_evidence.projected_field_paths,
+        *highlight_paths,
+    }
     assert not set(request.primary_evidence.omitted_field_paths) & set(request.primary_evidence.projected_field_paths)
 
     full_request = build_analysis_request_for_payload(

@@ -35,8 +35,12 @@ from soc_agent.core.runtime import build_analysis_request_for_payload  # noqa: E
 from soc_agent.normalizers import normalize_alert_payload  # noqa: E402
 
 SCHEMA_VERSION = "soc.validation.pingan_ti_siem_field_audit.v1"
-DEFAULT_CORPUS_PATH = ROOT / "validation/compact_zeus/data/full_alert_validation_corpus.pkl"
-DEFAULT_OUTPUT_PATH = ROOT / "validation/compact_zeus/data/pingan-ti-siem-field-audit.json"
+DEFAULT_CORPUS_PATH = (
+    ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
+)
+DEFAULT_OUTPUT_PATH = (
+    ROOT / "validation/compact_zeus/data/audits/pingan-ti-siem-field-audit.json"
+)
 
 
 def build_ti_siem_field_audit(
@@ -92,7 +96,9 @@ def build_ti_siem_field_audit(
         network_observation_count += len(alert.entities.network.observations)
         if alert.entities.email is not None:
             email_observation_count += len(alert.entities.email.observations)
-        canonical_provenance_count += len(request.fact_reconstruction.canonical_field_provenance)
+        canonical_provenance_count += len(
+            request.fact_reconstruction.canonical_field_provenance
+        )
         for claim in request.fact_reconstruction.role_claims:
             role_counts[f"{source_key}:{claim.role}:{claim.claim_type.value}"] += 1
         for semantic in alert.extensions.get("source_field_semantics", []):
@@ -107,7 +113,10 @@ def build_ti_siem_field_audit(
             _count_target(
                 canonical_target_counts,
                 "threat_intel.network_session",
-                bool(alert.entities.network.source_ip and alert.entities.network.destination_ip),
+                bool(
+                    alert.entities.network.source_ip
+                    and alert.entities.network.destination_ip
+                ),
             )
             _count_target(
                 canonical_target_counts,
@@ -129,18 +138,33 @@ def build_ti_siem_field_audit(
                 "threat_intel.mitre",
                 bool(alert.classification.technique),
             )
-            threat_intel_asset_scope_leak_count += sum(1 for value in alert.entities.host.ip_addresses if "/" in value or "-" in value)
-            threat_intel_structured_role_claim_count += sum(1 for claim in request.fact_reconstruction.role_claims if claim.source_layer is EvidenceLayer.RAW_STRUCTURED)
+            threat_intel_asset_scope_leak_count += sum(
+                1
+                for value in alert.entities.host.ip_addresses
+                if "/" in value or "-" in value
+            )
+            threat_intel_structured_role_claim_count += sum(
+                1
+                for claim in request.fact_reconstruction.role_claims
+                if claim.source_layer is EvidenceLayer.RAW_STRUCTURED
+            )
             continue
 
-        subtypes = {str(event.get("subtype") or "unknown").strip().lower() for event in raw_events}
+        subtypes = {
+            str(event.get("subtype") or "unknown").strip().lower()
+            for event in raw_events
+        }
         for subtype in subtypes:
             subtype_alert_counts[subtype] += 1
             _append_sample_id(sample_ids, f"siem:{subtype}", alert.alert_id)
         for event in raw_events:
             subtype = str(event.get("subtype") or "unknown").strip().lower()
             subtype_raw_event_counts[subtype] += 1
-        selected_subtype = str(raw_events[0].get("subtype") or "unknown").strip().lower() if raw_events else "empty"
+        selected_subtype = (
+            str(raw_events[0].get("subtype") or "unknown").strip().lower()
+            if raw_events
+            else "empty"
+        )
         if selected_subtype == "suspicious_email":
             _count_target(
                 canonical_target_counts,
@@ -163,21 +187,40 @@ def build_ti_siem_field_audit(
         if alert.entities.user.username:
             siem_pipeline_actor_leak_count += 1
         evidence_policy = alert.extensions.get("evidence_input_policy")
-        selected_path = evidence_policy.get("selected_input_path") if isinstance(evidence_policy, Mapping) else None
-        siem_unselected_fact_claim_count += sum(
-            1 for claim in request.fact_reconstruction.role_claims if claim.source_layer is EvidenceLayer.RAW_STRUCTURED and (not isinstance(selected_path, str) or not claim.evidence_path.startswith(selected_path))
+        selected_path = (
+            evidence_policy.get("selected_input_path")
+            if isinstance(evidence_policy, Mapping)
+            else None
         )
-        if request.primary_evidence is None or request.primary_evidence.layer is not EvidenceLayer.RAW_STRUCTURED or request.primary_evidence.trust_level is not EvidenceTrustLevel.HIGH:
+        siem_unselected_fact_claim_count += sum(
+            1
+            for claim in request.fact_reconstruction.role_claims
+            if claim.source_layer is EvidenceLayer.RAW_STRUCTURED
+            and (
+                not isinstance(selected_path, str)
+                or not claim.evidence_path.startswith(selected_path)
+            )
+        )
+        if (
+            request.primary_evidence is None
+            or request.primary_evidence.layer is not EvidenceLayer.RAW_STRUCTURED
+            or request.primary_evidence.trust_level is not EvidenceTrustLevel.HIGH
+        ):
             siem_non_high_primary_evidence_count += 1
 
     checks = {
         "raw_payload_unchanged": raw_payload_mutation_count == 0,
         "threat_intel_asset_scope_not_host": (threat_intel_asset_scope_leak_count == 0),
-        "threat_intel_roles_from_message_only": (threat_intel_structured_role_claim_count == 0),
+        "threat_intel_roles_from_message_only": (
+            threat_intel_structured_role_claim_count == 0
+        ),
         "siem_does_not_invent_network_direction": (siem_directional_network_count == 0),
         "siem_pipeline_identity_not_actor": siem_pipeline_actor_leak_count == 0,
-        "siem_fact_claims_use_selected_event_only": siem_unselected_fact_claim_count == 0,
-        "siem_selected_evidence_is_high_trust_structured": (siem_non_high_primary_evidence_count == 0),
+        "siem_fact_claims_use_selected_event_only": siem_unselected_fact_claim_count
+        == 0,
+        "siem_selected_evidence_is_high_trust_structured": (
+            siem_non_high_primary_evidence_count == 0
+        ),
         "known_fields_have_no_high_value_gaps": not high_value_gap_counts,
     }
     return {
@@ -197,13 +240,17 @@ def build_ti_siem_field_audit(
         "high_value_gap_counts": dict(sorted(high_value_gap_counts.items())),
         "raw_payload_mutation_count": raw_payload_mutation_count,
         "threat_intel_asset_scope_leak_count": (threat_intel_asset_scope_leak_count),
-        "threat_intel_structured_role_claim_count": (threat_intel_structured_role_claim_count),
+        "threat_intel_structured_role_claim_count": (
+            threat_intel_structured_role_claim_count
+        ),
         "siem_directional_network_count": siem_directional_network_count,
         "siem_pipeline_actor_leak_count": siem_pipeline_actor_leak_count,
         "siem_unselected_fact_claim_count": siem_unselected_fact_claim_count,
         "siem_non_high_primary_evidence_count": (siem_non_high_primary_evidence_count),
         "checks": checks,
-        "representative_sample_ids": {cohort: values for cohort, values in sorted(sample_ids.items())},
+        "representative_sample_ids": {
+            cohort: values for cohort, values in sorted(sample_ids.items())
+        },
     }
 
 

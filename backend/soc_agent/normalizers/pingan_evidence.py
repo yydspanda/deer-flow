@@ -20,6 +20,7 @@ from soc_agent.normalizers.pingan_edr import (
     edr_endpoint_addresses,
     edr_ip_addresses,
 )
+from soc_agent.normalizers.pingan_hids import hids_endpoint_sources
 from soc_agent.normalizers.pingan_siem import (
     build_siem_scenario_signals,
     siem_machine_copy_impacted_asset,
@@ -37,9 +38,12 @@ _SCENARIO_SIGNAL_FIELDS = frozenset(
         "description",
         "event_content",
         "event_name",
+        "event_type",
         "finding__desc",
         "finding__title",
         "host_state",
+        "hit_rule_name",
+        "hit_rule_names",
         "ioc",
         "rule_name",
         "rule_desc",
@@ -63,8 +67,14 @@ def build_pingan_fact_inputs(
     claims: list[RoleClaim] = []
     signals: list[ScenarioSignal] = []
     raw_events = _iter_raw_events(alert)
-    parsed_message_paths = {parsed.source_path for parsed in parsed_messages}
-    edr_endpoints_by_scope = _edr_endpoint_addresses_by_scope(parsed_messages, raw_events) if source_type is AlertSourceType.EDR else {}
+    edr_endpoints_by_scope = (
+        _edr_endpoint_addresses_by_scope(
+            parsed_messages,
+            () if parsed_messages else raw_events,
+        )
+        if source_type is AlertSourceType.EDR
+        else {}
+    )
     for parsed in parsed_messages:
         base_path = f"{parsed.source_path}#parsed"
         claims.extend(
@@ -93,19 +103,17 @@ def build_pingan_fact_inputs(
     if source_type is AlertSourceType.THREAT_INTEL:
         signals.extend(build_threat_intel_scenario_signals(parsed_messages))
 
+    if parsed_messages:
+        # Parsed messages are authoritative for analysis. Matching Zeus
+        # processed fields remain preserved in AlertInput.raw, but cannot
+        # become claims, scenarios, conflicts, or analyzer evidence.
+        return _dedupe_claims(claims), _dedupe_signals(signals)
+
     for raw_position, (hit_log_index, raw_event_index, raw_event) in enumerate(raw_events):
         base_path = f"alert.hitLog[{hit_log_index}].zeusRawLogs[{raw_event_index}]"
-        if parsed_messages:
-            if f"{base_path}.message" not in parsed_message_paths:
-                continue
-        elif raw_position > 0:
+        if raw_position > 0:
             # Message-less fallback selects only the first raw event. Later
             # events remain in AlertInput.raw for audit and replay.
-            continue
-        if source_type is AlertSourceType.THREAT_INTEL and f"{base_path}.message" in parsed_message_paths:
-            # ThreatBook copies message values into many flattened Zeus fields.
-            # The parsed message is the authoritative typed source and duplicate
-            # processed aliases must not create artificial role conflicts.
             continue
         claims.extend(
             _claims_for_fields(
@@ -162,6 +170,18 @@ def _claims_for_fields(
             endpoint_confidence=endpoint_confidence,
             attacker_confidence=assertion_confidence,
             known_endpoint_addresses=known_edr_endpoints,
+        )
+        return claims
+
+    if source_type is AlertSourceType.HIDS:
+        _append_hids_role_claims(
+            claims,
+            fields,
+            base_path=base_path,
+            layer=layer,
+            trust=trust,
+            observation_confidence=observation_confidence,
+            endpoint_confidence=endpoint_confidence,
         )
         return claims
 
@@ -447,6 +467,87 @@ def _append_edr_role_claims(
                 rationale=("source product labeled a non-endpoint IP as an attack candidate; wire direction and attacker identity remain unconfirmed"),
             )
         )
+
+
+def _append_hids_role_claims(
+    claims: list[RoleClaim],
+    fields: Mapping[str, Any],
+    *,
+    base_path: str,
+    layer: EvidenceLayer,
+    trust: EvidenceTrustLevel,
+    observation_confidence: float,
+    endpoint_confidence: float,
+) -> None:
+    """Emit host identity and only event-contract network observations."""
+
+    endpoints = hids_endpoint_sources(fields)
+    for value, alias in endpoints:
+        evidence_path = f"{base_path}.{alias}"
+        for role, claim_type, confidence, rationale in (
+            (
+                "victim",
+                RoleClaimType.VENDOR_ASSERTION,
+                endpoint_confidence - 0.05,
+                "HIDS endpoint identity is a provisional victim candidate, not detection truth",
+            ),
+            (
+                "impacted_asset",
+                RoleClaimType.DERIVED_HYPOTHESIS,
+                endpoint_confidence,
+                "HIDS endpoint identity is an impacted asset candidate; ownership still requires corroboration",
+            ),
+        ):
+            _append_direct_claim(
+                claims,
+                role=role,
+                value=value,
+                claim_type=claim_type,
+                evidence_path=evidence_path,
+                base_path=base_path,
+                layer=layer,
+                trust=trust,
+                semantic_confidence=confidence,
+                rationale=rationale,
+            )
+
+    event_type = str(fields.get("event_type") or fields.get("datatype") or "").strip().lower()
+    endpoint_value, endpoint_alias = endpoints[0] if endpoints else (None, None)
+    observed_roles: list[tuple[str, str | None, str | None]] = []
+    if event_type == "bounce_shell":
+        observed_roles.extend(
+            [
+                ("source", endpoint_value, endpoint_alias),
+                ("destination", _first_ip_value(fields.get("dst_ip")), "dst_ip"),
+            ]
+        )
+    elif event_type in {"honeypot", "malic_opera"}:
+        observed_roles.extend(
+            [
+                ("source", _first_ip_value(fields.get("src_ip")), "src_ip"),
+                ("destination", endpoint_value, endpoint_alias),
+            ]
+        )
+    for role, value, alias in observed_roles:
+        if value is None or alias is None:
+            continue
+        _append_direct_claim(
+            claims,
+            role=role,
+            value=value,
+            claim_type=RoleClaimType.OBSERVATION,
+            evidence_path=f"{base_path}.{alias}",
+            base_path=base_path,
+            layer=layer,
+            trust=trust,
+            semantic_confidence=observation_confidence,
+            rationale=(f"HIDS {event_type} event contract identifies the observed network {role}"),
+        )
+
+
+def _first_ip_value(value: Any) -> str | None:
+    values = edr_ip_addresses(value)
+    return values[0] if values else None
 
 
 def _append_alias_claims(

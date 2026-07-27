@@ -169,9 +169,12 @@ from the reusable DeerFlow harness runtime. Entry surfaces call SOC core service
 loose payload handling stay in `soc_agent.normalizers`.
 
 For PingAn legacy alerts, `normalizers/pingan_platform.py` preserves the complete input while
-`normalizers/pingan_messages.py` deterministically parses `zeusRawLogs[].message`. Parsed message
-facts have higher trust than Zeus structured fallback fields. Analysis nodes receive only bounded
-primary/supplementary evidence through `LLMAnalysisRequest`, never the unbounded vendor payload.
+`normalizers/pingan_messages.py` deterministically parses `zeusRawLogs[].message`. If any message
+parses, parsed fields are the exclusive analysis source; Zeus sibling fields stay raw-only and cannot
+enter canonical mapping, facts, conflicts, or LLM evidence. Structured fallback is available only
+when zero messages parse. Analysis nodes receive only bounded primary/supplementary evidence and
+generic high-value `BoundedEvidenceHighlight` records through `LLMAnalysisRequest`, never the
+unbounded vendor payload.
 Confirmed PingAn topic mappings classify `ptp-nids` as `nids`, `sec_guard_wb` as
 `threat_intel`, and `T_GBD_zeus_data` as `siem`; these aliases must not leak into generic
 Runtime code. The message parser order is delimited JSON, complete direct/prefixed JSON
@@ -193,6 +196,17 @@ separate network/HTTP observation. Nested sensor `alert.source/target` are rule-
 not automatic wire or attacker/victim roles; generic `query` is not DNS without protocol evidence.
 Sensor `allowed`, vendor `attack_res`, and HTTP status are typed semantics, never exploit-success
 proof; NIDS `files[]` is transaction metadata, not endpoint file-write proof.
+PingAn NDR/APT message mapping lives in `soc_agent.normalizers.pingan_ndr`. It keeps every
+`sip/dip` message as an independent wire observation and projects HTTP context per message. The
+source field named `ioc` contains vendor detection descriptors in the reviewed corpus and must not
+be promoted by shape to a typed IOC. `file_name/file_md5` create `observed_artifact` network-content
+observations, not endpoint-write or compromise proof.
+PingAn HIDS message mapping lives in `soc_agent.normalizers.pingan_hids`. Agent/internal addresses
+identify the endpoint and provisional impacted asset; the vendor default `external_ip=1.1.1.1` is a
+non-reasoning placeholder. Process trees and artifacts remain per-message observations. Only
+reviewed event contracts (`bounce_shell`, `honeypot`, `malic_opera`) may create event-scoped network
+observations; top-level canonical source/destination stay empty so host identity is not mislabeled
+as packet direction.
 PingAn EDR nested `detailsN` mapping lives in `soc_agent.normalizers.pingan_edr`, not generic
 Runtime. The adapter keeps one canonical endpoint/process/file summary and emits every usable detail
 as provenance-backed process/file observations. Endpoint `iplist`, `str_source_ip`, and `device__ip`
@@ -213,7 +227,16 @@ in `soc_agent.normalizers.pingan_siem`: reviewed suspicious-email events may pop
 email contract, reviewed machine-copy events may populate host candidates, and neither path may
 infer network direction. Upstream `llm_ans`/`llm_score` remain model-derived evidence, `User=system`
 is a pipeline identity, and unknown subtypes remain bounded evidence with explicit mapping gaps.
-High-value field checks must inspect the selected structured fallback as well as parsed messages.
+High-value field checks must inspect the selected structured fallback as well as parsed messages,
+but never combine those views: a successful parsed-message view disables structured fallback.
+`LLMAnalysisRequest` keeps one primary and at most four full supplementary messages; adapter-owned
+exact-path semantics may project overflow values through bounded `BoundedEvidenceHighlight` records.
+Repeated highlights carry an occurrence count and at most five representative paths; complete path
+accounting remains in `EvidenceCoverageReport`. Fields marked `participates_in_reasoning=false` are
+hard-filtered from model projections while remaining raw/auditable.
+Instance-level audits must match nested leaf names (`_origin.*`, `payload.*`) and verify non-empty
+fields, rather than declaring coverage from aggregate path names alone; any non-empty field without
+a typed consumer or exact semantic must fail the corpus audit.
 Long encoding-shaped spans are compacted at the shared model boundary for every primary/supplementary evidence item,
 regardless of PingAn topic or future vendor, through `soc_agent.pipeline.encoded_context`;
 raw/parsed values are unchanged. The marker carries type, original length, and a short hash, while

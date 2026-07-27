@@ -43,10 +43,15 @@ from soc_agent.normalizers import normalize_alert_payload  # noqa: E402
 from soc_agent.pipeline.evidence_coverage import observe_message_schemas  # noqa: E402
 
 CORPUS_SCHEMA_VERSION = "soc.validation.alert_corpus.v1"
-DEFAULT_SOURCE_PATH = ROOT / "datas/full_alert_2026_month_forth_sample_200.pkl"
-DEFAULT_DEMO_DIR = ROOT / "datas"
-DEFAULT_OUTPUT_PATH = ROOT / "validation/compact_zeus/data/full_alert_validation_corpus.pkl"
-DEFAULT_MANIFEST_PATH = ROOT / "validation/compact_zeus/data/full_alert_validation_corpus.manifest.json"
+DEFAULT_SOURCE_PATH = ROOT / "datas/source/full_alert_2026_month_forth_sample_200.pkl"
+DEFAULT_DEMO_DIR = ROOT / "datas/legacy_demos"
+DEFAULT_OUTPUT_PATH = (
+    ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
+)
+DEFAULT_MANIFEST_PATH = (
+    ROOT
+    / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.manifest.json"
+)
 
 PROVENANCE_COLUMNS = [
     "corpus_schema_version",
@@ -89,7 +94,9 @@ def load_legacy_demos(demo_dir: Path) -> list[tuple[Path, dict[str, Any]]]:
         alert_id = _alert_id(payload)
         filename_id = _filename_alert_id(path)
         if filename_id is not None and filename_id != alert_id:
-            raise ValueError(f"{path}: filename alert ID {filename_id} != payload {alert_id}")
+            raise ValueError(
+                f"{path}: filename alert ID {filename_id} != payload {alert_id}"
+            )
         demos.append((path, payload))
     if not demos:
         raise ValueError(f"no legacy JSON demos found in {demo_dir}")
@@ -110,13 +117,22 @@ def build_corpus(
 
     corpus["corpus_schema_version"] = CORPUS_SCHEMA_VERSION
     corpus["sample_origin"] = "full_alert_sample"
-    corpus["source_refs"] = [[f"{source_ref}#alert_id={int(alert_id)}"] for alert_id in corpus["alert_id"]]
-    corpus["canonical_payload_sha256"] = [canonical_sha256(value) for value in corpus["alert_full_data"]]
+    corpus["source_refs"] = [
+        [f"{source_ref}#alert_id={int(alert_id)}"] for alert_id in corpus["alert_id"]
+    ]
+    corpus["canonical_payload_sha256"] = [
+        canonical_sha256(value) for value in corpus["alert_full_data"]
+    ]
     corpus["legacy_demo_status"] = "not_provided"
     corpus["legacy_demo_variants"] = [[] for _ in range(len(corpus))]
-    corpus["has_agent_response"] = [isinstance(value, str) and bool(value.strip()) for value in corpus["agent_response"]]
+    corpus["has_agent_response"] = [
+        isinstance(value, str) and bool(value.strip())
+        for value in corpus["agent_response"]
+    ]
 
-    index_by_alert_id = {int(alert_id): index for index, alert_id in enumerate(corpus["alert_id"])}
+    index_by_alert_id = {
+        int(alert_id): index for index, alert_id in enumerate(corpus["alert_id"])
+    }
     demo_records: list[dict[str, Any]] = []
     appended_rows: list[dict[str, Any]] = []
 
@@ -207,10 +223,18 @@ def build_corpus(
         "source_rows": len(source_frame),
         "source_unique_alert_ids": int(source_frame["alert_id"].nunique()),
         "legacy_demo_count": len(demo_records),
-        "legacy_demo_status_counts": dict(sorted(Counter(item["status"] for item in demo_records).items())),
+        "legacy_demo_status_counts": dict(
+            sorted(Counter(item["status"] for item in demo_records).items())
+        ),
         "legacy_demos": demo_records,
-        "appended_alert_ids": sorted(item["alert_id"] for item in demo_records if item["status"] == "appended"),
-        "conflicting_alert_ids": sorted(item["alert_id"] for item in demo_records if item["status"] == "conflict_pkl_authoritative"),
+        "appended_alert_ids": sorted(
+            item["alert_id"] for item in demo_records if item["status"] == "appended"
+        ),
+        "conflicting_alert_ids": sorted(
+            item["alert_id"]
+            for item in demo_records
+            if item["status"] == "conflict_pkl_authoritative"
+        ),
         "output_rows": len(corpus),
         "output_unique_alert_ids": int(corpus["alert_id"].nunique()),
         "source_rows_preserved": True,
@@ -283,7 +307,11 @@ def validate_corpus(corpus: pd.DataFrame) -> dict[str, Any]:
             continue
 
         hit_log = alert.get("hitLog")
-        first_hit = hit_log[0] if isinstance(hit_log, list) and hit_log and isinstance(hit_log[0], dict) else {}
+        first_hit = (
+            hit_log[0]
+            if isinstance(hit_log, list) and hit_log and isinstance(hit_log[0], dict)
+            else {}
+        )
         expected_metadata = {
             "risk_level": alert.get("riskLevel"),
             "status": alert.get("status"),
@@ -414,7 +442,9 @@ def validate_with_soc_normalizer(corpus: pd.DataFrame) -> dict[str, Any]:
             input_hash_before = canonical_sha256(alert_data)
             normalized = normalize_alert_payload(alert_data)
             if str(normalized.alert_id) != str(alert_id):
-                raise ValueError(f"normalized alert_id={normalized.alert_id!r} != {alert_id!r}")
+                raise ValueError(
+                    f"normalized alert_id={normalized.alert_id!r} != {alert_id!r}"
+                )
             source_type = normalized.source.source_type.value
             source_type_counts[source_type] += 1
             topic_counter[f"source_type:{source_type}"] += 1
@@ -437,7 +467,11 @@ def validate_with_soc_normalizer(corpus: pd.DataFrame) -> dict[str, Any]:
                 ]
                 if item is not None
             ]
-            compacted = [omission for evidence in bounded_evidence for omission in evidence.encoded_span_omissions]
+            compacted = [
+                omission
+                for evidence in bounded_evidence
+                for omission in evidence.encoded_span_omissions
+            ]
             if compacted:
                 llm_encoded_compaction_alerts += 1
                 llm_encoded_compaction_spans += len(compacted)
@@ -457,10 +491,18 @@ def validate_with_soc_normalizer(corpus: pd.DataFrame) -> dict[str, Any]:
                 )
 
             policy = normalized.extensions.get("evidence_input_policy", {})
-            policy_name = str(policy.get("name")) if isinstance(policy, Mapping) and policy.get("name") else "missing"
+            policy_name = (
+                str(policy.get("name"))
+                if isinstance(policy, Mapping) and policy.get("name")
+                else "missing"
+            )
             evidence_policy_counts[policy_name] += 1
             topic_counter[f"evidence_policy:{policy_name}"] += 1
-            expected_policy_name = "raw_message_first" if _has_non_empty_raw_message(alert_data) else "structured_fallback"
+            expected_policy_name = (
+                "raw_message_first"
+                if _has_non_empty_raw_message(alert_data)
+                else "structured_fallback"
+            )
             if policy_name != expected_policy_name:
                 policy_contract_violations.append(
                     {
@@ -475,7 +517,11 @@ def validate_with_soc_normalizer(corpus: pd.DataFrame) -> dict[str, Any]:
                 if primary is None and not _has_structured_raw_event(alert_data):
                     structured_fallback_unavailable_count += 1
                     topic_counter["structured_fallback:raw_event_unavailable"] += 1
-                elif primary is None or primary.layer is not EvidenceLayer.RAW_STRUCTURED or primary.sensitive_evidence_mode is not SensitiveEvidenceMode.FULL:
+                elif (
+                    primary is None
+                    or primary.layer is not EvidenceLayer.RAW_STRUCTURED
+                    or primary.sensitive_evidence_mode is not SensitiveEvidenceMode.FULL
+                ):
                     policy_contract_violations.append(
                         {
                             "alert_id": alert_id,
@@ -485,13 +531,17 @@ def validate_with_soc_normalizer(corpus: pd.DataFrame) -> dict[str, Any]:
                                 if primary is None
                                 else {
                                     "layer": primary.layer.value,
-                                    "sensitive_evidence_mode": (primary.sensitive_evidence_mode.value),
+                                    "sensitive_evidence_mode": (
+                                        primary.sensitive_evidence_mode.value
+                                    ),
                                 }
                             ),
                         }
                     )
                 else:
-                    structured_fallback_projected_fields += len(primary.projected_field_paths)
+                    structured_fallback_projected_fields += len(
+                        primary.projected_field_paths
+                    )
                     structured_fallback_truncated_count += int(primary.truncated)
                     if primary.sanitized_field_paths:
                         policy_contract_violations.append(
@@ -499,7 +549,9 @@ def validate_with_soc_normalizer(corpus: pd.DataFrame) -> dict[str, Any]:
                                 "alert_id": alert_id,
                                 "expected_policy": "full_mode_without_sanitization",
                                 "actual_policy": {
-                                    "sanitized_field_paths": (primary.sanitized_field_paths),
+                                    "sanitized_field_paths": (
+                                        primary.sanitized_field_paths
+                                    ),
                                 },
                             }
                         )
@@ -509,11 +561,17 @@ def validate_with_soc_normalizer(corpus: pd.DataFrame) -> dict[str, Any]:
                                 "alert_id": alert_id,
                                 "expected_policy": "first_structured_event_only",
                                 "actual_policy": {
-                                    "supplementary_count": len(request.supplementary_evidence),
+                                    "supplementary_count": len(
+                                        request.supplementary_evidence
+                                    ),
                                 },
                             }
                         )
-                if topic.lower() == "t_gbd_zeus_data" and isinstance(policy, Mapping) and policy.get("trust_level") != EvidenceTrustLevel.HIGH.value:
+                if (
+                    topic.lower() == "t_gbd_zeus_data"
+                    and isinstance(policy, Mapping)
+                    and policy.get("trust_level") != EvidenceTrustLevel.HIGH.value
+                ):
                     policy_contract_violations.append(
                         {
                             "alert_id": alert_id,
@@ -550,9 +608,15 @@ def validate_with_soc_normalizer(corpus: pd.DataFrame) -> dict[str, Any]:
                 }
             )
 
-    other_topics = sorted(topic for topic, counts in topic_details.items() if counts.get("source_type:other", 0))
+    other_topics = sorted(
+        topic
+        for topic, counts in topic_details.items()
+        if counts.get("source_type:other", 0)
+    )
     return {
-        "status": ("passed" if not errors and not policy_contract_violations else "failed"),
+        "status": (
+            "passed" if not errors and not policy_contract_violations else "failed"
+        ),
         "normalized_alerts": len(corpus) - len(errors),
         "errors": errors,
         "policy_contract_violations": policy_contract_violations,
@@ -564,7 +628,9 @@ def validate_with_soc_normalizer(corpus: pd.DataFrame) -> dict[str, Any]:
         "alerts_with_unsupported_message_schema": alerts_with_unsupported_schema,
         "alerts_without_message_observation": alerts_without_message_observation,
         "structured_fallback_analysis_count": structured_fallback_analysis_count,
-        "structured_fallback_unavailable_count": (structured_fallback_unavailable_count),
+        "structured_fallback_unavailable_count": (
+            structured_fallback_unavailable_count
+        ),
         "structured_fallback_projected_fields": (structured_fallback_projected_fields),
         "structured_fallback_truncated_count": structured_fallback_truncated_count,
         "llm_projection_analysis_count": llm_projection_analysis_count,
@@ -572,11 +638,17 @@ def validate_with_soc_normalizer(corpus: pd.DataFrame) -> dict[str, Any]:
             "alerts": llm_encoded_compaction_alerts,
             "spans": llm_encoded_compaction_spans,
             "kinds": dict(sorted(llm_encoded_compaction_kinds.items())),
-            "source_type_details": {source_type: dict(sorted(counts.items())) for source_type, counts in sorted(llm_projection_source_details.items())},
+            "source_type_details": {
+                source_type: dict(sorted(counts.items()))
+                for source_type, counts in sorted(llm_projection_source_details.items())
+            },
         },
         "raw_payload_mutation_count": raw_payload_mutation_count,
         "topics_normalized_as_other": other_topics,
-        "topic_details": {topic: dict(sorted(counts.items())) for topic, counts in sorted(topic_details.items())},
+        "topic_details": {
+            topic: dict(sorted(counts.items()))
+            for topic, counts in sorted(topic_details.items())
+        },
     }
 
 
@@ -592,7 +664,9 @@ def deep_difference_paths(left: Any, right: Any, *, path: str = "$") -> list[str
             if key not in left or key not in right:
                 differences.append(child_path)
             else:
-                differences.extend(deep_difference_paths(left[key], right[key], path=child_path))
+                differences.extend(
+                    deep_difference_paths(left[key], right[key], path=child_path)
+                )
         return differences
     if isinstance(left, list):
         if len(left) != len(right):
@@ -679,7 +753,11 @@ def _legacy_demo_row(
     alert = payload["alert"]
     alert_id = _alert_id(payload)
     hit_logs = alert.get("hitLog")
-    first_hit = hit_logs[0] if isinstance(hit_logs, list) and hit_logs and isinstance(hit_logs[0], dict) else {}
+    first_hit = (
+        hit_logs[0]
+        if isinstance(hit_logs, list) and hit_logs and isinstance(hit_logs[0], dict)
+        else {}
+    )
     full_data = {
         "app_code": "zeus",
         "flow_id": "alert_agent",
@@ -779,7 +857,11 @@ def _related_statuses(payload: Mapping[str, Any]) -> Counter[str]:
     related = payload.get("relatedAlertList")
     if not isinstance(related, list):
         return Counter()
-    return Counter(str(item["status"]) for item in related if isinstance(item, Mapping) and item.get("status") is not None)
+    return Counter(
+        str(item["status"])
+        for item in related
+        if isinstance(item, Mapping) and item.get("status") is not None
+    )
 
 
 def _has_non_empty_raw_message(payload: Mapping[str, Any]) -> bool:
@@ -811,7 +893,16 @@ def _has_structured_raw_event(payload: Mapping[str, Any]) -> bool:
     hit_logs = alert.get("hitLog")
     if not isinstance(hit_logs, list):
         return False
-    return any(isinstance(raw_log, Mapping) for hit_log in hit_logs if isinstance(hit_log, Mapping) for raw_log in (hit_log.get("zeusRawLogs") if isinstance(hit_log.get("zeusRawLogs"), list) else []))
+    return any(
+        isinstance(raw_log, Mapping)
+        for hit_log in hit_logs
+        if isinstance(hit_log, Mapping)
+        for raw_log in (
+            hit_log.get("zeusRawLogs")
+            if isinstance(hit_log.get("zeusRawLogs"), list)
+            else []
+        )
+    )
 
 
 def _json_compatible(value: Any) -> Any:
@@ -820,7 +911,10 @@ def _json_compatible(value: Any) -> Any:
             return None
         return value
     if isinstance(value, Mapping):
-        return {str(key): _json_compatible(child) for key, child in sorted(value.items(), key=lambda item: str(item[0]))}
+        return {
+            str(key): _json_compatible(child)
+            for key, child in sorted(value.items(), key=lambda item: str(item[0]))
+        }
     if isinstance(value, (list, tuple)):
         return [_json_compatible(child) for child in value]
     if hasattr(value, "item") and callable(value.item):
@@ -845,7 +939,14 @@ def _child_path(path: str, key: str) -> str:
 def _value_counts(frame: pd.DataFrame, column: str) -> dict[str, int]:
     if column not in frame:
         return {}
-    return {str(key): int(value) for key, value in frame[column].fillna("<null>").value_counts(dropna=False).sort_index().items()}
+    return {
+        str(key): int(value)
+        for key, value in frame[column]
+        .fillna("<null>")
+        .value_counts(dropna=False)
+        .sort_index()
+        .items()
+    }
 
 
 def _non_null_count(frame: pd.DataFrame, column: str) -> int:
@@ -891,9 +992,13 @@ def main() -> int:
     quality_report = validate_corpus(corpus)
     normalizer_report = validate_with_soc_normalizer(corpus)
     if quality_report["status"] != "passed":
-        raise ValueError(f"corpus quality validation failed: {quality_report['errors']}")
+        raise ValueError(
+            f"corpus quality validation failed: {quality_report['errors']}"
+        )
     if normalizer_report["status"] != "passed":
-        raise ValueError(f"SOC normalizer validation failed: errors={normalizer_report['errors']}, policy_contract_violations={normalizer_report['policy_contract_violations']}")
+        raise ValueError(
+            f"SOC normalizer validation failed: errors={normalizer_report['errors']}, policy_contract_violations={normalizer_report['policy_contract_violations']}"
+        )
 
     write_pickle_atomic(corpus, args.output)
     manifest = build_manifest(
@@ -915,8 +1020,12 @@ def main() -> int:
                 "rows": len(corpus),
                 "unique_alert_ids": int(corpus["alert_id"].nunique()),
                 "legacy_demo_status_counts": merge_report["legacy_demo_status_counts"],
-                "normalizer_source_type_counts": normalizer_report["source_type_counts"],
-                "topics_normalized_as_other": normalizer_report["topics_normalized_as_other"],
+                "normalizer_source_type_counts": normalizer_report[
+                    "source_type_counts"
+                ],
+                "topics_normalized_as_other": normalizer_report[
+                    "topics_normalized_as_other"
+                ],
             },
             ensure_ascii=False,
             indent=2,

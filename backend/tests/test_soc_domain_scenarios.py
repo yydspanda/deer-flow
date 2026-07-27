@@ -13,6 +13,7 @@ from soc_agent.contracts import (
     SocDomainName,
     SocDomainTriageRequest,
 )
+from soc_agent.core import SocAnalysisService
 from soc_agent.domain import SocDomainTriageService
 
 
@@ -72,6 +73,38 @@ def test_domain_triage_uses_internal_scenario_when_keyword_matches() -> None:
     scenario_keys = {finding.scenario_key for finding in result.findings if finding.scenario_key}
     assert "execution.reverse_shell" in scenario_keys
     assert "vendor.unmapped" not in scenario_keys
+
+
+def test_pingan_message_first_scenario_ignores_structured_sibling_fields() -> None:
+    message = 'skyeye|!{"sip":"30.1.1.10","dip":"30.2.2.20","attack_type":"普通网络行为"}'
+    payload = {
+        "alert": {
+            "alertId": "ALT-MESSAGE-FIRST-SCENARIO",
+            "alertCode": "PIE-MESSAGE-FIRST-SCENARIO",
+            "createAt": "2026-07-27T10:00:00+08:00",
+            "hitLog": [
+                {
+                    "topic": "sec_guard_apt",
+                    "topicName": "SkyEye APT",
+                    "ruleCode": "RULE-MESSAGE-FIRST",
+                    "zeusRawLogs": [
+                        {
+                            "message": message,
+                            "attack_type": "反弹 shell",
+                            "description": "processed-only reverse shell marker",
+                        }
+                    ],
+                }
+            ],
+        },
+        "relatedAlertList": [],
+    }
+    run = SocAnalysisService().analyze(payload)
+
+    result = SocDomainTriageService().triage(SocDomainTriageRequest(run=run, domain=SocDomainName.APT))
+
+    scenario_keys = {item.scenario_key for item in result.findings if item.scenario_key}
+    assert "execution.reverse_shell" not in scenario_keys
 
 
 def test_domain_triage_does_not_treat_mock_or_failed_evidence_as_authoritative() -> None:

@@ -26,25 +26,37 @@ from validation.compact_zeus.restricted_dataframe_pickle import (  # noqa: E402
 )
 
 SCHEMA_VERSION = "soc.validation.pingan_nids_checkpoint_c.v1"
-DEFAULT_CORPUS_PATH = ROOT / "validation/compact_zeus/data/full_alert_validation_corpus.pkl"
-DEFAULT_OUTPUT_DIR = ROOT / "validation/compact_zeus/data/pingan-nids-checkpoint-c"
+DEFAULT_CORPUS_PATH = (
+    ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
+)
+DEFAULT_OUTPUT_DIR = (
+    ROOT / "validation/compact_zeus/data/reviews/pingan-nids-checkpoint-c"
+)
 
 REVIEW_SAMPLES = {
     "structured-http": {
         "alert_id": 1976128,
-        "review_focus": ("Verify five-tuple, nested sensor detection, HTTP request/response, flow direction, role claims, and scenario signals."),
+        "review_focus": (
+            "Verify five-tuple, nested sensor detection, HTTP request/response, flow direction, role claims, and scenario signals."
+        ),
     },
     "header-string-only": {
         "alert_id": 1985831,
-        "review_focus": ("No structured HTTP object is available; verify whether bounded request/response header strings provide deterministic HTTP fields."),
+        "review_focus": (
+            "No structured HTTP object is available; verify whether bounded request/response header strings provide deterministic HTTP fields."
+        ),
     },
     "query-context": {
         "alert_id": 1970445,
-        "review_focus": ("Verify the generic query field remains bounded evidence and is not mislabeled as DNS or promoted to a canonical domain without protocol evidence."),
+        "review_focus": (
+            "Verify the generic query field remains bounded evidence and is not mislabeled as DNS or promoted to a canonical domain without protocol evidence."
+        ),
     },
     "multiple-messages": {
         "alert_id": 1979525,
-        "review_focus": ("Verify primary and supplementary messages remain separate observations and are not collapsed into one synthetic five-tuple."),
+        "review_focus": (
+            "Verify primary and supplementary messages remain separate observations and are not collapsed into one synthetic five-tuple."
+        ),
     },
 }
 
@@ -104,7 +116,9 @@ def main() -> int:
         alert_id = definition["alert_id"]
         matches = frame.loc[frame["alert_id"] == alert_id]
         if len(matches) != 1:
-            raise ValueError(f"expected exactly one corpus row for alert_id={alert_id}, found {len(matches)}")
+            raise ValueError(
+                f"expected exactly one corpus row for alert_id={alert_id}, found {len(matches)}"
+            )
         artifact = build_nids_review_artifact(
             cohort=cohort,
             row=matches.iloc[0].to_dict(),

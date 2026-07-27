@@ -27,8 +27,12 @@ from soc_agent.core import SocNormalizationService  # noqa: E402
 from soc_agent.core.runtime import build_analysis_request_for_payload  # noqa: E402
 
 SCHEMA_VERSION = "soc.validation.pingan_adapter_checkpoint_b.v1"
-DEFAULT_CORPUS_PATH = ROOT / "validation/compact_zeus/data/full_alert_validation_corpus.pkl"
-DEFAULT_OUTPUT_DIR = ROOT / "validation/compact_zeus/data/pingan-adapter-checkpoint-b"
+DEFAULT_CORPUS_PATH = (
+    ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
+)
+DEFAULT_OUTPUT_DIR = (
+    ROOT / "validation/compact_zeus/data/reviews/pingan-adapter-checkpoint-b"
+)
 
 REVIEW_SAMPLES = {
     "direct-nids-json": {
@@ -78,7 +82,11 @@ def build_review_artifact(
     parsed_messages = alert.extensions.get("parsed_raw_messages", [])
     policy = alert.extensions.get("evidence_input_policy", {})
 
-    parser_names = [str(item["parser_name"]) for item in parsed_messages if isinstance(item, Mapping) and item.get("parser_name")]
+    parser_names = [
+        str(item["parser_name"])
+        for item in parsed_messages
+        if isinstance(item, Mapping) and item.get("parser_name")
+    ]
     actual_parser = parser_names[0] if parser_names else None
     actual = {
         "source_type": alert.source.source_type.value,
@@ -91,7 +99,9 @@ def build_review_artifact(
         "primary_parser": expectation["expected_parser"],
     }
     if actual != expected:
-        raise AssertionError(f"alert_id={row['alert_id']} checkpoint mismatch: expected={expected!r}, actual={actual!r}")
+        raise AssertionError(
+            f"alert_id={row['alert_id']} checkpoint mismatch: expected={expected!r}, actual={actual!r}"
+        )
 
     canonical = {
         "schema_version": alert.schema_version,
@@ -104,7 +114,9 @@ def build_review_artifact(
             exclude_none=True,
         ),
         "entities": alert.entities.model_dump(mode="json", exclude_none=True),
-        "evidence": [item.model_dump(mode="json", exclude_none=True) for item in alert.evidence],
+        "evidence": [
+            item.model_dump(mode="json", exclude_none=True) for item in alert.evidence
+        ],
     }
     return {
         "schema_version": SCHEMA_VERSION,
@@ -146,7 +158,10 @@ def build_review_artifact(
             mode="json",
             exclude_none=True,
         ),
-        "source_field_semantics": [item.model_dump(mode="json", exclude_none=True) for item in request.source_field_semantics],
+        "source_field_semantics": [
+            item.model_dump(mode="json", exclude_none=True)
+            for item in request.source_field_semantics
+        ],
         "evidence_coverage": request.evidence_coverage.model_dump(
             mode="json",
             exclude_none=True,
@@ -160,7 +175,10 @@ def build_review_artifact(
                 if request.primary_evidence is not None
                 else None
             ),
-            "supplementary": [item.model_dump(mode="json", exclude_none=True) for item in request.supplementary_evidence],
+            "supplementary": [
+                item.model_dump(mode="json", exclude_none=True)
+                for item in request.supplementary_evidence
+            ],
         },
     }
 
@@ -218,7 +236,9 @@ def main() -> int:
         alert_id = expectation["alert_id"]
         matches = frame.loc[frame["alert_id"] == alert_id]
         if len(matches) != 1:
-            raise ValueError(f"expected exactly one corpus row for alert_id={alert_id}, found {len(matches)}")
+            raise ValueError(
+                f"expected exactly one corpus row for alert_id={alert_id}, found {len(matches)}"
+            )
         artifact = build_review_artifact(
             cohort=cohort,
             row=matches.iloc[0].to_dict(),

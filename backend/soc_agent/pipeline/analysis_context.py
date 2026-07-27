@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from soc_agent.contracts import (
     AlertInput,
     BoundedAnalysisEvidence,
+    BoundedEvidenceHighlight,
     EncodedSpanOmission,
     EvidenceLayer,
     EvidenceTrustLevel,
@@ -34,6 +35,10 @@ from soc_agent.skills import SocSkillResolver, build_soc_skill_context
 _PRIMARY_EVIDENCE_MAX_CHARS = 6000
 _SUPPLEMENTARY_EVIDENCE_MAX_CHARS = 3000
 _MAX_SUPPLEMENTARY_EVIDENCE = 4
+_MAX_EVIDENCE_HIGHLIGHTS = 100
+_MAX_HIGHLIGHT_PATHS = 5
+_MAX_HIGHLIGHT_VALUE_CHARS = 500
+_MAX_HIGHLIGHT_TOTAL_CHARS = 12_000
 _MAX_FIELD_CHARS = 1000
 _DECODED_SEPARATELY_FIELDS = frozenset(
     {
@@ -109,11 +114,19 @@ def build_llm_analysis_request(
         fact_reconstruction,
         sensitive_evidence_mode=sensitive_evidence_mode,
     )
+    evidence_highlights, highlighted_paths = _build_evidence_highlights(
+        alert,
+        fact_reconstruction,
+        primary_evidence,
+        supplementary_evidence,
+        sensitive_evidence_mode=sensitive_evidence_mode,
+    )
     evidence_coverage = build_evidence_coverage_report(
         alert,
         fact_reconstruction,
         primary_evidence,
         supplementary_evidence,
+        highlighted_paths=highlighted_paths,
     )
     warnings = [
         *fact_reconstruction.warnings,
@@ -132,6 +145,7 @@ def build_llm_analysis_request(
         primary_evidence_path=fact_reconstruction.selected_input_path,
         primary_evidence=primary_evidence,
         supplementary_evidence=supplementary_evidence,
+        evidence_highlights=evidence_highlights,
         evidence_coverage=evidence_coverage,
         source_field_semantics=_source_field_semantics(alert),
         conflict_count=len(fact_reconstruction.conflict_reports),
@@ -163,6 +177,7 @@ def project_analysis_context(request: LLMAnalysisRequest) -> dict[str, Any]:
             "primary_evidence_path": request.primary_evidence_path,
             "primary_evidence": (_project_bounded_evidence(request.primary_evidence) if request.primary_evidence is not None else None),
             "supplementary_evidence": [_project_bounded_evidence(item) for item in request.supplementary_evidence],
+            "highlights": [item.model_dump(mode="json", exclude_none=True) for item in request.evidence_highlights],
             "selected_input_path": fact.selected_input_path,
             "selected_input_available": fact.selected_input_available,
             "evidence_policy": fact.evidence_policy.model_dump(mode="json", exclude_none=True) if fact.evidence_policy is not None else None,
@@ -264,6 +279,8 @@ def _bounded_evidence(
         return None, []
 
     parsed_by_path = _parsed_messages_by_path(alert)
+    reasoning_priority_paths = _reasoning_priority_paths(alert)
+    non_reasoning_paths = _non_reasoning_paths(alert)
     primary = _bounded_evidence_for_path(
         alert,
         path=policy.selected_input_path,
@@ -271,6 +288,8 @@ def _bounded_evidence(
         trust_level=policy.trust_level,
         max_chars=_PRIMARY_EVIDENCE_MAX_CHARS,
         parsed=parsed_by_path.get(policy.selected_input_path),
+        reasoning_priority_paths=reasoning_priority_paths,
+        non_reasoning_paths=non_reasoning_paths,
         sensitive_evidence_mode=sensitive_evidence_mode,
     )
     supplementary: list[BoundedAnalysisEvidence] = []
@@ -282,11 +301,119 @@ def _bounded_evidence(
             trust_level=EvidenceTrustLevel.HIGH,
             max_chars=_SUPPLEMENTARY_EVIDENCE_MAX_CHARS,
             parsed=parsed_by_path.get(path),
+            reasoning_priority_paths=reasoning_priority_paths,
+            non_reasoning_paths=non_reasoning_paths,
             sensitive_evidence_mode=sensitive_evidence_mode,
         )
         if item is not None:
             supplementary.append(item)
     return primary, supplementary
+
+
+def _build_evidence_highlights(
+    alert: AlertInput,
+    fact_reconstruction: FactReconstructionResult,
+    primary: BoundedAnalysisEvidence | None,
+    supplementary: list[BoundedAnalysisEvidence],
+    *,
+    sensitive_evidence_mode: SensitiveEvidenceMode,
+) -> tuple[list[BoundedEvidenceHighlight], list[str]]:
+    projected_paths = {path for evidence in (primary, *supplementary) if evidence is not None for path in evidence.projected_field_paths}
+    typed_paths = {
+        *(item.selected_from for item in fact_reconstruction.canonical_field_provenance),
+        *(item.evidence_path for item in fact_reconstruction.role_claims),
+        *(path for item in fact_reconstruction.scenario_hypotheses for path in item.evidence_paths),
+    }
+    parsed_by_path = _parsed_messages_by_path(alert)
+    groups: dict[tuple[str, str, str, bool], dict[str, Any]] = {}
+    highlighted_paths: list[str] = []
+    total_chars = 0
+    for semantic in _source_field_semantics(alert):
+        if not semantic.participates_in_reasoning or semantic.field_path in projected_paths or semantic.field_path in typed_paths:
+            continue
+        value = _semantic_field_value(parsed_by_path, semantic.field_path)
+        bounded = _bounded_highlight_value(
+            value,
+            field_path=semantic.field_path,
+            sensitive_evidence_mode=sensitive_evidence_mode,
+        )
+        if bounded is None:
+            continue
+        rendered_value, truncated = bounded
+        key = (
+            semantic.semantic_type,
+            semantic.meaning,
+            rendered_value,
+            truncated,
+        )
+        existing = groups.get(key)
+        if existing is not None:
+            existing["occurrence_count"] += 1
+            highlighted_paths.append(semantic.field_path)
+            if len(existing["evidence_paths"]) < _MAX_HIGHLIGHT_PATHS:
+                existing["evidence_paths"].append(semantic.field_path)
+            else:
+                existing["evidence_paths_truncated"] = True
+            continue
+        item_chars = len(semantic.semantic_type) + len(semantic.meaning) + len(rendered_value)
+        if len(groups) >= _MAX_EVIDENCE_HIGHLIGHTS or total_chars + item_chars > _MAX_HIGHLIGHT_TOTAL_CHARS:
+            continue
+        groups[key] = {
+            "semantic_type": semantic.semantic_type,
+            "meaning": semantic.meaning,
+            "value": rendered_value,
+            "evidence_paths": [semantic.field_path],
+            "occurrence_count": 1,
+            "evidence_paths_truncated": False,
+            "truncated": truncated,
+            "sensitive_evidence_mode": sensitive_evidence_mode,
+        }
+        highlighted_paths.append(semantic.field_path)
+        total_chars += item_chars
+    return (
+        [BoundedEvidenceHighlight.model_validate(item) for item in groups.values()],
+        highlighted_paths,
+    )
+
+
+def _semantic_field_value(
+    parsed_by_path: Mapping[str, ParsedRawMessageEvidence],
+    field_path: str,
+) -> Any:
+    match = re.fullmatch(r"(.+)#(parsed|decoded|repaired)\.(.+)", field_path)
+    if match is None:
+        return None
+    source_path, namespace, relative_path = match.groups()
+    parsed = parsed_by_path.get(source_path)
+    if parsed is None:
+        return None
+    root = {
+        "parsed": parsed.fields,
+        "decoded": parsed.decoded_fields,
+        "repaired": parsed.repaired_fields,
+    }[namespace]
+    return _resolve_path(root, relative_path)
+
+
+def _bounded_highlight_value(
+    value: Any,
+    *,
+    field_path: str,
+    sensitive_evidence_mode: SensitiveEvidenceMode,
+) -> tuple[str, bool] | None:
+    if value is None or value == "":
+        return None
+    if sensitive_evidence_mode is SensitiveEvidenceMode.REDACT and _SENSITIVE_FIELD_RE.search(field_path):
+        return "[REDACTED]", False
+    safe_value = deepcopy(value) if sensitive_evidence_mode is SensitiveEvidenceMode.FULL else _sanitize_value(value)
+    if isinstance(safe_value, str) and sensitive_evidence_mode is SensitiveEvidenceMode.REDACT:
+        safe_value = _safe_string_fallback(safe_value)
+    compacted, encoded_omissions = compact_encoded_spans(safe_value)
+    rendered = compacted if isinstance(compacted, str) else json.dumps(compacted, ensure_ascii=False, sort_keys=True, default=str)
+    if not isinstance(rendered, str):
+        rendered = str(rendered)
+    truncated = bool(encoded_omissions) or len(rendered) > _MAX_HIGHLIGHT_VALUE_CHARS
+    return rendered[:_MAX_HIGHLIGHT_VALUE_CHARS], truncated
 
 
 def _bounded_evidence_for_path(
@@ -297,6 +424,8 @@ def _bounded_evidence_for_path(
     trust_level: EvidenceTrustLevel,
     max_chars: int,
     parsed: ParsedRawMessageEvidence | None,
+    reasoning_priority_paths: frozenset[str],
+    non_reasoning_paths: frozenset[str],
     sensitive_evidence_mode: SensitiveEvidenceMode,
 ) -> BoundedAnalysisEvidence | None:
     raw_value = _resolve_path(alert.raw, path)
@@ -312,6 +441,8 @@ def _bounded_evidence_for_path(
         ) = _bounded_parsed_projection(
             parsed,
             max_chars=max_chars,
+            reasoning_priority_paths=reasoning_priority_paths,
+            non_reasoning_paths=non_reasoning_paths,
             sensitive_evidence_mode=sensitive_evidence_mode,
         )
         original_length = parsed.original_length
@@ -331,6 +462,7 @@ def _bounded_evidence_for_path(
             raw_value,
             source_path=path,
             max_chars=max_chars,
+            non_reasoning_paths=non_reasoning_paths,
             sensitive_evidence_mode=sensitive_evidence_mode,
         )
         original_length = len(serialized)
@@ -394,6 +526,8 @@ def _bounded_parsed_projection(
     parsed: ParsedRawMessageEvidence,
     *,
     max_chars: int,
+    reasoning_priority_paths: frozenset[str],
+    non_reasoning_paths: frozenset[str],
     sensitive_evidence_mode: SensitiveEvidenceMode,
 ) -> tuple[
     str,
@@ -428,12 +562,29 @@ def _bounded_parsed_projection(
     candidate_root = compacted_root
     encoded_span_omissions = [_parsed_encoded_span_omission(parsed.source_path, item) for item in compacted]
     leaves = _projection_leaves(candidate_root)
-    leaves.sort(key=lambda item: (_projection_priority(item[0]), item[2]))
+    leaves.sort(
+        key=lambda item: (
+            _projection_priority(
+                item[0],
+                source_path=parsed.source_path,
+                reasoning_priority_paths=reasoning_priority_paths,
+            ),
+            item[2],
+        )
+    )
 
     projection: dict[str, Any] = {}
     projected_paths: list[str] = []
+    adapter_excluded_paths: set[str] = set()
     field_truncated = False
     for path_parts, value, _ in leaves:
+        source_path = _projection_source_path(parsed.source_path, path_parts)
+        if source_path is not None and _is_non_reasoning_path(
+            source_path,
+            non_reasoning_paths,
+        ):
+            adapter_excluded_paths.add(source_path)
+            continue
         bounded_value, value_truncated = _projection_value(
             value,
             sensitive_evidence_mode=sensitive_evidence_mode,
@@ -445,7 +596,6 @@ def _bounded_parsed_projection(
             continue
         projection = candidate
         field_truncated = field_truncated or value_truncated
-        source_path = _projection_source_path(parsed.source_path, path_parts)
         if source_path is not None:
             projected_paths.append(source_path)
 
@@ -454,7 +604,7 @@ def _bounded_parsed_projection(
     sanitized_paths = [] if sensitive_evidence_mode is SensitiveEvidenceMode.FULL else _sanitized_evidence_paths(parsed)
     projected_set = set(projected_paths)
     omitted_paths = sorted(set(all_paths) - projected_set)
-    omission_reasons = {path: ("sensitive_value_redacted" if path in sanitized_paths else "bounded_projection_budget") for path in omitted_paths}
+    omission_reasons = {path: ("adapter_excluded_from_reasoning" if path in adapter_excluded_paths else ("sensitive_value_redacted" if path in sanitized_paths else "bounded_projection_budget")) for path in omitted_paths}
     for path in sanitized_paths:
         omission_reasons.setdefault(path, "sensitive_or_raw_nested_value_sanitized")
     return (
@@ -473,6 +623,7 @@ def _bounded_structured_projection(
     *,
     source_path: str,
     max_chars: int,
+    non_reasoning_paths: frozenset[str],
     sensitive_evidence_mode: SensitiveEvidenceMode,
 ) -> tuple[
     str,
@@ -502,7 +653,12 @@ def _bounded_structured_projection(
 
     projection: dict[str, Any] = {}
     projected_paths: list[str] = []
+    adapter_excluded_paths: set[str] = set()
     for path_parts, field_value, _ in leaves:
+        field_path = _structured_source_path(source_path, path_parts)
+        if _is_non_reasoning_path(field_path, non_reasoning_paths):
+            adapter_excluded_paths.add(field_path)
+            continue
         bounded_value, _ = _projection_value(
             field_value,
             sensitive_evidence_mode=sensitive_evidence_mode,
@@ -512,13 +668,13 @@ def _bounded_structured_projection(
         if len(json.dumps(candidate, ensure_ascii=False, sort_keys=True, default=str)) > max_chars:
             continue
         projection = candidate
-        projected_paths.append(_structured_source_path(source_path, path_parts))
+        projected_paths.append(field_path)
 
     all_paths = [_structured_source_path(source_path, path_parts) for path_parts, _, _ in _projection_leaves(value)]
     sanitized_paths = [] if sensitive_evidence_mode is SensitiveEvidenceMode.FULL else _sensitive_mapping_paths(value, source_path=source_path)
     projected_set = set(projected_paths)
     omitted_paths = sorted(set(all_paths) - projected_set)
-    omission_reasons = {path: ("sensitive_value_redacted" if path in sanitized_paths else "bounded_projection_budget") for path in omitted_paths}
+    omission_reasons = {path: ("adapter_excluded_from_reasoning" if path in adapter_excluded_paths else ("sensitive_value_redacted" if path in sanitized_paths else "bounded_projection_budget")) for path in omitted_paths}
     for path in sanitized_paths:
         omission_reasons.setdefault(path, "sensitive_value_redacted")
     return (
@@ -605,7 +761,15 @@ def _assign_projection_path(
         current = current.setdefault(segment, [] if isinstance(path[index + 1], int) else {})
 
 
-def _projection_priority(path: tuple[str | int, ...]) -> int:
+def _projection_priority(
+    path: tuple[str | int, ...],
+    *,
+    source_path: str | None = None,
+    reasoning_priority_paths: frozenset[str] = frozenset(),
+) -> int:
+    projected_path = _projection_source_path(source_path, path) if source_path is not None else None
+    if projected_path in reasoning_priority_paths:
+        return 0
     keys = {str(part).lower() for part in path if isinstance(part, str)}
     if "header" in keys:
         return 0
@@ -616,6 +780,21 @@ def _projection_priority(path: tuple[str | int, ...]) -> int:
     if "fields" in keys:
         return 3
     return 4
+
+
+def _reasoning_priority_paths(alert: AlertInput) -> frozenset[str]:
+    return frozenset(semantic.field_path for semantic in _source_field_semantics(alert) if semantic.participates_in_reasoning and any(marker in semantic.field_path for marker in ("#parsed.", "#decoded.", "#repaired.")))
+
+
+def _non_reasoning_paths(alert: AlertInput) -> frozenset[str]:
+    return frozenset(semantic.field_path for semantic in _source_field_semantics(alert) if not semantic.participates_in_reasoning)
+
+
+def _is_non_reasoning_path(
+    field_path: str,
+    non_reasoning_paths: frozenset[str],
+) -> bool:
+    return any(field_path == excluded or field_path.startswith((f"{excluded}.", f"{excluded}[")) for excluded in non_reasoning_paths)
 
 
 def _projection_source_path(

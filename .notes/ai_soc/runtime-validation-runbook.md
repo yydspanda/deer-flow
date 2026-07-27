@@ -62,7 +62,7 @@ Docker Desktop，等待 Engine Ready，并确认当前发行版的 WSL Integrati
 
 | Seq | Directory / 目录 | Input / 输入 | Output / 重点产物 | Pass meaning / 通过含义 |
 |---:|---|---|---|---|
-| 1 | `step-01-input-adapter` | 5 条 `datas/*.json` | Adapter、source type、raw-message inventory | 输入来源和供应商 Adapter 被明确识别 |
+| 1 | `step-01-input-adapter` | 5 条 `datas/legacy_demos/*.json` | Adapter、source type、raw-message inventory | 输入来源和供应商 Adapter 被明确识别 |
 | 2 | `step-02-message-parsing` | Step 1 + 原始 payload | canonical alert、完整 message parse、decode/repair、coverage | 原始 payload 保留；可解析字段进入高信任 message projection |
 | 3 | `step-03-fact-reconstruction` | canonical + role/scenario claims | role resolutions、scenario hypotheses、conflicts、provenance | 不默认 attacker=source；角色不确定性和冲突可见 |
 | 4 | `step-04-build-analysis-input` | Step 3 | `LLMAnalysisRequest` | 模型只看到有界、脱敏、限长证据，不看到无限 raw payload |

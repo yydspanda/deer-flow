@@ -217,6 +217,25 @@ def test_configured_field_importance_rule_detects_vendor_neutral_gap() -> None:
     assert gap.importance == "critical"
 
 
+def test_configured_field_importance_rule_ignores_empty_source_value() -> None:
+    payload = _payload()
+    payload["alert"]["hitLog"][0]["zeusRawLogs"][0]["message"] = 'skyeye|!{"attack_type":"","sip":"30.1.1.10"}'
+    alert = normalize_alert_payload(payload)
+    alert.extensions["field_importance_rules"] = [
+        {
+            "rule_id": "empty-campaign-to-user-id-test",
+            "source_patterns": ["parsed.attack_type"],
+            "expected_target": "entities.user.user_id",
+            "importance": "critical",
+            "reason": "empty source values must not create mapping gaps",
+        }
+    ]
+
+    request = build_analysis_request_for_payload(alert.model_dump(mode="json"))
+
+    assert not any(item.rule_id == "empty-campaign-to-user-id-test" for item in request.evidence_coverage.high_value_gaps)
+
+
 def test_offline_suggestion_rejects_unobserved_paths_and_never_auto_applies() -> None:
     alert = normalize_alert_payload(_payload())
     alert.extensions["field_importance_rules"] = [

@@ -37,9 +37,11 @@ from soc_agent.normalizers import normalize_alert_payload  # noqa: E402
 
 SCHEMA_VERSION = "soc.validation.pingan_edr_field_audit.v1"
 DEFAULT_CORPUS_PATH = (
-    ROOT / "validation/compact_zeus/data/full_alert_validation_corpus.pkl"
+    ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
 )
-DEFAULT_OUTPUT_PATH = ROOT / "validation/compact_zeus/data/pingan-edr-field-audit.json"
+DEFAULT_OUTPUT_PATH = (
+    ROOT / "validation/compact_zeus/data/audits/pingan-edr-field-audit.json"
+)
 
 _DETAIL_KEY_RE = re.compile(r"details(?P<index>\d+)$", re.IGNORECASE)
 _HEX_HASH_LENGTHS = {"process_md5": 32, "process_sha256": 64}

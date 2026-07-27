@@ -450,18 +450,26 @@ The system must handle vendor differences without turning the core schema into a
    Supported nested JSON/HTTP fields are decoded by an allowlisted decoder with size limits;
    parser evidence preserves original values. Model-boundary projection defaults to redaction;
    an explicitly approved environment may select `SOC_LLM_SENSITIVE_EVIDENCE_MODE=full`.
-4. Fields parsed from the raw message are the highest-priority observable facts. Conflicting
-   `zeusRawLogs[]` structured fields remain visible as low-trust fallback candidates by default;
-   only exact topic `T_GBD_zeus_data` is currently allowlisted as high trust. Source type,
-   missing `message`, similar topic names, and prefixes do not grant that exception. Canonical
-   processed fields remain lower-trust derived values.
+4. PingAn uses a strict message-or-fallback boundary. If at least one `zeusRawLogs[].message`
+   is deterministically parsed, only parsed message fields may feed canonical mapping, role/scenario
+   facts, conflict reconstruction, and model-bound evidence. Zeus sibling/processed fields remain in
+   immutable raw evidence only; they cannot become low-trust alternative claims or synthetic
+   conflicts. Structured fallback is enabled only when zero messages parse. Exact topic
+   `T_GBD_zeus_data` is currently the sole high-trust structured-fallback allowlist; every other
+   fallback defaults to low trust. Similar topic names, prefixes, source type, and message absence do
+   not inherit the exception.
 5. The original payload is never replaced: `AlertInput.raw` and `AnalysisRun.input_payload`
    retain every hit log, raw event, message, and platform field for replay and audit.
-6. The first successfully parsed message becomes primary evidence; additional messages become
-   bounded supplementary evidence. Network, HTTP, and process facts remain per-message observations
-   with stable evidence paths; different sessions, HTTP transactions, or process executions are not
-   collapsed into one synthetic conflict. Analysis nodes receive size-bounded parsed content, not
-   only a source path and not the unbounded vendor payload.
+6. The first successfully parsed message becomes primary evidence; up to four additional messages
+   become full bounded supplementary evidence. Network, HTTP, file, and process facts remain
+   per-message observations with stable evidence paths; different sessions, HTTP transactions, or
+   process executions are not collapsed into one synthetic conflict. Exact-path
+   `SourceFieldSemantic` entries drive projection priority. High-value values outside the full-message
+   budget enter the generic, size-bounded `BoundedEvidenceHighlight` projection with occurrence count
+   and at most five representative provenance paths. Complete covered paths stay in
+   `EvidenceCoverageReport` rather than consuming Prompt tokens. Sensitive values still obey
+   redacted/full evidence mode. Analysis nodes receive this bounded contract, never the unbounded
+   vendor payload.
 7. PingAn NIDS maps the observed wire five-tuple (`sip/sport/dip/dport/proto`) into canonical
    source/destination fields and preserves every message as a `NetworkObservationRef`. Sensor
    `alert.source/target` are rule-relative endpoints stored separately on that observation; they are
@@ -473,7 +481,21 @@ The system must handle vendor differences without turning the core schema into a
    and HTTP 2xx does not prove exploit or command success. The adapter emits these constraints as
    `SourceFieldSemantic`; Suricata-style `files[]` remains transaction metadata and is not treated as
    proof of an endpoint file write. Generic Runtime remains vendor-neutral.
-9. PingAn EDR keeps a single canonical endpoint/process/file summary for ordinary consumers and
+9. PingAn NDR/APT preserves every parsed wire session as an independent network observation and
+   maps HTTP context per message. The reviewed source field named `ioc` contains vendor detection
+   descriptors rather than typed indicators, so value shape cannot promote it into the threat IOC
+   contract. `file_name/file_md5` become provenance-backed `observed_artifact` network-content
+   evidence; they do not prove endpoint persistence, exploit success, or compromise. These aliases
+   are owned by `normalizers/pingan_ndr.py`.
+10. PingAn HIDS treats `internal_ip/agent_ip` as endpoint identity and provisional impacted-asset
+    evidence, not packet source. The known `external_ip=1.1.1.1` default is retained as a
+    non-reasoning `SourceFieldSemantic` and excluded from host/IOC/peer projections. Process trees,
+    users and files remain per-message observations; `parent_process_id` preserves an observed ppid
+    even when no parent name is available. Only reviewed event contracts
+    (`bounce_shell`, `honeypot`, `malic_opera`) create event-scoped network observations; top-level
+    canonical source/destination stay empty. These aliases are owned by
+    `normalizers/pingan_hids.py`.
+11. PingAn EDR keeps a single canonical endpoint/process/file summary for ordinary consumers and
    preserves every nested `detailsN` record as a replayable `ProcessObservationRef` or
    `FileObservationRef` with an exact evidence path. `iplist`, `str_source_ip`, and `device__ip`
    identify the endpoint and provisional victim/impacted-asset candidates, not a network source.
@@ -486,31 +508,31 @@ The system must handle vendor differences without turning the core schema into a
    file, registry, scheduled-task, artifact-existence and MITRE fields are useful investigation
    context, but none of them alone proves maliciousness or attack success. PingAn aliases and the
    historical `process_mame` typo remain inside `normalizers/pingan_edr.py`.
-10. PingAn Threat Intel keeps the observed wire session and provider security roles separate.
+12. PingAn Threat Intel keeps the observed wire session and provider security roles separate.
    Nested `net.*` populates canonical session fields/observations; `attacker` and `victim` remain
    provider assertions, while `machine` is an impacted-host candidate. Asset CIDR/range scope never
    becomes a host IP. External peers/explicit IOCs, malware family and MITRE tags receive typed
    projections; provider `result=success`, reputation and severity/score metadata remain source
    semantics rather than exploit outcome or calibrated Runtime confidence. These aliases are owned
    by `normalizers/pingan_threat_intel.py`.
-11. PingAn SIEM uses reviewed subtype adapters over the selected high-trust structured fallback.
+13. PingAn SIEM uses reviewed subtype adapters over the selected high-trust structured fallback.
    `suspicious_email` projects bounded email metadata and deterministic email/domain/URL entities;
    body text and upstream model narrative/score stay source evidence. `standard_machine_copy`
    projects host name/IP candidates without inventing a network flow or attacker. High trust means
    source provenance, not model correctness; pipeline identity is not an event actor. Unknown
    subtypes keep bounded evidence and emit mapping gaps. These aliases are owned by
    `normalizers/pingan_siem.py`.
-12. If raw message parsing fails, Runtime preserves the raw text and emits a warning. If raw message
+14. If raw message parsing fails, Runtime preserves the raw text and emits a warning. If raw message
    is absent, PingAn projects only the first `zeusRawLogs[]` object as bounded structured evidence;
    later objects remain in `AlertInput.raw`. Trust is source-configured rather than inferred from
    message presence: `T_GBD_zeus_data` is a trusted internal SIEM/model source and uses high-trust
    structured fallback. Empty `zeusRawLogs=[]` is an upstream evidence gap, not synthetic evidence.
-13. Strict nested JSON failure does not discard the field. Runtime attempts a conservative repair:
+15. Strict nested JSON failure does not discard the field. Runtime attempts a conservative repair:
    accepted structures enter a separately labeled `repaired_fields` projection, while rejected or
    failed repair uses a policy-controlled string fallback. Repair is field-policy aware and validates root
    type, depth, node count, key length, and source-evidenced keys/string values. The original string
    always stays in `fields`, and repaired content never masquerades as strict-decoded source fact.
-14. Long encoding-shaped values are compacted only after redaction/full-mode selection and only in
+16. Long encoding-shaped values are compacted only after redaction/full-mode selection and only in
     model-bound evidence. The shared production boundary applies to every primary/supplementary
     evidence item, so every PingAn topic and future vendor receives the same protection without
     topic-specific branches. `backend/soc_agent/pipeline/encoded_context.py` owns the implementation;
@@ -519,29 +541,35 @@ The system must handle vendor differences without turning the core schema into a
     character count, and a short SHA-256 prefix; the audit sidecar records exact path and complete
     SHA-256. The sidecar is omitted from the prompt, and both marker/sidecar metadata are excluded
     from analyzer evidence grounding.
-15. Every selected message emits `MessageSchemaObservation`: `recognized` means the deterministic
+17. Every selected message emits `MessageSchemaObservation`: `recognized` means the deterministic
    parser handled the structure, `degraded` means partial/nested decoding failed, and `unsupported`
    means no parser handled the selected message. A structural fingerprint supports baseline diff.
-16. `EvidenceCoverageReport` records structured/parsed/decoded/repaired paths,
+18. `EvidenceCoverageReport` records structured/parsed/decoded/repaired paths,
     canonical/fact/scenario consumers, exact bounded LLM projection, redaction/full mode,
     encoded compaction, omission reasons, truncation, and known
     high-value gaps. A candidate path is not reported as projected unless its value is present in the
-    exact prompt projection. High-value expectations come from `EvidenceFieldImportanceRegistry`:
+    exact prompt projection, including `BoundedEvidenceHighlight` paths. High-value expectations come from `EvidenceFieldImportanceRegistry`:
     core provides vendor-neutral defaults, while source adapters may add typed rules in
     `AlertInput.extensions`. The registry evaluates both parsed message views and the selected
     `structured.*` fallback view. It is persisted for audit; the prompt receives only a compact
     coverage summary without vendor paths.
-17. Clean vendors may bypass heavy conflict handling, but still produce canonical evidence metadata.
-18. Vendor aliases stop at the source adapter. PingAn fields such as `attack_sip`, `alarm_sip`,
+    Empty/null source leaves do not create false mapping gaps; a non-empty unknown high-value field
+    remains an explicit maintenance issue. The NDR/HIDS corpus audit evaluates each non-empty parsed
+    leaf instance rather than relying only on path aggregates, so nested `_origin.*`, `payload.*`,
+    and messages beyond the full supplementary limit cannot pass through an uncounted blind spot.
+19. Clean vendors may bypass heavy conflict handling, but still produce canonical evidence metadata.
+20. Vendor aliases stop at the source adapter. PingAn fields such as `attack_sip`, `alarm_sip`,
    `str_source_ip`, and `str_attack_ip` are converted into vendor-neutral `RoleClaim` objects;
    the generic fact reconstructor does not interpret those aliases directly.
-19. Evidence trust and semantic confidence are separate. A value parsed faithfully from raw
+21. Evidence trust and semantic confidence are separate. A value parsed faithfully from raw
     message may still be a wrong attacker/victim assertion from the source product.
-20. Vendor-known placeholders or non-observation fields are emitted as `SourceFieldSemantic` with
+22. Vendor-known placeholders or non-observation fields are emitted as `SourceFieldSemantic` with
     explicit reasoning/entity permissions. For example, a vendor default external IP may remain in
     raw/parsed evidence for audit while being forbidden from canonical entities, IOC extraction and
-    network-peer reasoning. Core Runtime does not know vendor aliases or placeholder values.
-21. External SOAR/asset/related-alert context remains separated from event facts. Asset owner or
+    network-peer reasoning. `participates_in_reasoning=false` is enforced at the model projection
+    boundary with omission reason `adapter_excluded_from_reasoning`; it is not merely Prompt advice.
+    Core Runtime does not know vendor aliases or placeholder values.
+23. External SOAR/asset/related-alert context remains separated from event facts. Asset owner or
     logged-on account is not automatically the event actor; historical automated dispositions are
     not independent human evidence. Deferred external context is visible in coverage and is later
     admitted through typed investigation/correlation services.
@@ -1256,7 +1284,7 @@ Current real-alert Adapter coverage:
   never a production dependency.
 - Reproducible local evidence and representative sample paths are documented in
   `validation/compact_zeus/README.md` and
-  `validation/compact_zeus/pingan_adapter_rebuild_review.md`.
+  `validation/compact_zeus/docs/pingan_adapter_rebuild_review.md`.
 
 ### 11.1 What goes where / 平安内容怎么落位
 

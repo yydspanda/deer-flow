@@ -1845,6 +1845,7 @@ class ProcessObservationRef(BaseModel):
     evidence_path: str = Field(min_length=1)
     event_time: str | None = None
     host_name: str | None = None
+    parent_process_id: int | None = Field(default=None, ge=0)
     nodes: list[ProcessNodeRef] = Field(default_factory=list)
 
 
@@ -1854,6 +1855,7 @@ class ProcessEntityRef(BaseModel):
     process_path: str | None = None
     command_line: str | None = None
     parent_process_name: str | None = None
+    parent_process_id: int | None = Field(default=None, ge=0)
     parent_command_line: str | None = None
     md5: str | None = None
     sha256: str | None = None
@@ -1878,6 +1880,7 @@ class HostEntityRef(BaseModel):
 
 class FileObservationRelation(StrEnum):
     ENDPOINT_ACTION_TARGET = "endpoint_action_target"
+    OBSERVED_ARTIFACT = "observed_artifact"
 
 
 class FileObservationRef(BaseModel):
@@ -2149,6 +2152,20 @@ class BoundedAnalysisEvidence(BaseModel):
     encoded_span_omissions: list[EncodedSpanOmission] = Field(default_factory=list)
 
 
+class BoundedEvidenceHighlight(BaseModel):
+    """Compact model-visible value retained from evidence outside full-message budgets."""
+
+    schema_version: str = "soc.bounded_evidence_highlight.v2"
+    semantic_type: str = Field(min_length=1)
+    meaning: str = Field(min_length=1)
+    value: str = Field(min_length=1, max_length=1000)
+    evidence_paths: list[str] = Field(min_length=1, max_length=5)
+    occurrence_count: int = Field(default=1, ge=1)
+    evidence_paths_truncated: bool = False
+    truncated: bool = False
+    sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT
+
+
 class FieldTrust(BaseModel):
     """Trust annotation for one field considered during fact reconstruction."""
 
@@ -2358,7 +2375,7 @@ class ExtractedEntities(BaseModel):
 class LLMAnalysisRequest(BaseModel):
     """Bounded input contract for deterministic or configured LLM nodes."""
 
-    schema_version: str = "soc.llm_analysis_request.v1"
+    schema_version: str = "soc.llm_analysis_request.v2"
     alert_id: str
     tenant_id: str | None = None
     source: AlertSourceRef = Field(default_factory=AlertSourceRef)
@@ -2370,6 +2387,7 @@ class LLMAnalysisRequest(BaseModel):
     primary_evidence_path: str | None = None
     primary_evidence: BoundedAnalysisEvidence | None = None
     supplementary_evidence: list[BoundedAnalysisEvidence] = Field(default_factory=list)
+    evidence_highlights: list[BoundedEvidenceHighlight] = Field(default_factory=list)
     evidence_coverage: EvidenceCoverageReport = Field(default_factory=EvidenceCoverageReport)
     source_field_semantics: list[SourceFieldSemantic] = Field(default_factory=list)
     conflict_count: int = Field(default=0, ge=0)

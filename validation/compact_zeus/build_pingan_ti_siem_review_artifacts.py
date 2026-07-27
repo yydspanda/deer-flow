@@ -27,8 +27,12 @@ from soc_agent.core.runtime import build_analysis_request_for_payload  # noqa: E
 from soc_agent.normalizers import normalize_alert_payload  # noqa: E402
 
 SCHEMA_VERSION = "soc.validation.pingan_ti_siem_checkpoint_c.v1"
-DEFAULT_CORPUS_PATH = ROOT / "validation/compact_zeus/data/full_alert_validation_corpus.pkl"
-DEFAULT_OUTPUT_DIR = ROOT / "validation/compact_zeus/data/pingan-ti-siem-checkpoint-c"
+DEFAULT_CORPUS_PATH = (
+    ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
+)
+DEFAULT_OUTPUT_DIR = (
+    ROOT / "validation/compact_zeus/data/reviews/pingan-ti-siem-checkpoint-c"
+)
 
 REVIEW_SAMPLES = {
     "threat-intel-single-message": {
@@ -82,7 +86,10 @@ def build_ti_siem_review_artifact(
             mode="json",
             exclude_none=True,
         ),
-        "canonical_field_provenance": [item.model_dump(mode="json", exclude_none=True) for item in request.fact_reconstruction.canonical_field_provenance],
+        "canonical_field_provenance": [
+            item.model_dump(mode="json", exclude_none=True)
+            for item in request.fact_reconstruction.canonical_field_provenance
+        ],
         "fact_reconstruction": request.fact_reconstruction.model_dump(
             mode="json",
             exclude_none=True,
@@ -92,8 +99,15 @@ def build_ti_siem_review_artifact(
             exclude_none=True,
         ),
         "bounded_analysis_evidence": {
-            "primary": (request.primary_evidence.model_dump(mode="json", exclude_none=True) if request.primary_evidence is not None else None),
-            "supplementary": [item.model_dump(mode="json", exclude_none=True) for item in request.supplementary_evidence],
+            "primary": (
+                request.primary_evidence.model_dump(mode="json", exclude_none=True)
+                if request.primary_evidence is not None
+                else None
+            ),
+            "supplementary": [
+                item.model_dump(mode="json", exclude_none=True)
+                for item in request.supplementary_evidence
+            ],
         },
     }
 
@@ -131,7 +145,9 @@ def main() -> int:
         alert_id = int(definition["alert_id"])
         matches = frame.loc[frame["alert_id"] == alert_id]
         if len(matches) != 1:
-            raise ValueError(f"expected exactly one corpus row for alert_id={alert_id}, found {len(matches)}")
+            raise ValueError(
+                f"expected exactly one corpus row for alert_id={alert_id}, found {len(matches)}"
+            )
         artifact = build_ti_siem_review_artifact(
             cohort=cohort,
             row=matches.iloc[0].to_dict(),

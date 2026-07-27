@@ -36,8 +36,12 @@ from soc_agent.core.runtime import build_analysis_request_for_payload  # noqa: E
 from soc_agent.normalizers import normalize_alert_payload  # noqa: E402
 
 SCHEMA_VERSION = "soc.validation.pingan_nids_field_audit.v1"
-DEFAULT_CORPUS_PATH = ROOT / "validation/compact_zeus/data/full_alert_validation_corpus.pkl"
-DEFAULT_OUTPUT_PATH = ROOT / "validation/compact_zeus/data/pingan-nids-field-audit.json"
+DEFAULT_CORPUS_PATH = (
+    ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
+)
+DEFAULT_OUTPUT_PATH = (
+    ROOT / "validation/compact_zeus/data/audits/pingan-nids-field-audit.json"
+)
 
 _TARGET_PATHS = {
     "network.source_ip": ("entities", "network", "source_ip"),
@@ -174,8 +178,16 @@ def build_nids_field_audit(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             sensitive_evidence_mode=SensitiveEvidenceMode.FULL,
         )
         coverage = request.evidence_coverage
-        bounded_evidence = [item for item in [request.primary_evidence, *request.supplementary_evidence] if item is not None]
-        compacted = [omission for evidence in bounded_evidence for omission in evidence.encoded_span_omissions]
+        bounded_evidence = [
+            item
+            for item in [request.primary_evidence, *request.supplementary_evidence]
+            if item is not None
+        ]
+        compacted = [
+            omission
+            for evidence in bounded_evidence
+            for omission in evidence.encoded_span_omissions
+        ]
         if compacted:
             llm_compacted_encoded_alerts += 1
             llm_compacted_encoded_spans += len(compacted)
@@ -210,7 +222,10 @@ def build_nids_field_audit(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         for gap in coverage.high_value_gaps:
             high_value_gap_counts[gap.rule_id or gap.expected_target] += 1
 
-        parsed_messages = [ParsedRawMessageEvidence.model_validate(item) for item in alert.extensions.get("parsed_raw_messages", [])]
+        parsed_messages = [
+            ParsedRawMessageEvidence.model_validate(item)
+            for item in alert.extensions.get("parsed_raw_messages", [])
+        ]
         parsed_message_count += len(parsed_messages)
         messages_per_alert[len(parsed_messages)] += 1
         if len(parsed_messages) > 1:
@@ -282,7 +297,10 @@ def build_nids_field_audit(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                     alert_lanes_by_path[path].add("llm")
                 if value_is_present:
                     for group, prefixes in _FIELD_GROUP_PREFIXES.items():
-                        if any(path == prefix or path.startswith(prefix) for prefix in prefixes):
+                        if any(
+                            path == prefix or path.startswith(prefix)
+                            for prefix in prefixes
+                        ):
                             alert_present_groups.add(group)
             for signal_name in ("event_type", "app_proto", "direction"):
                 value = parsed.fields.get(signal_name)
@@ -294,12 +312,17 @@ def build_nids_field_audit(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                     semantic_message_values[semantic_name][str(value)] += 1
             for field_name in _ENCODED_CONTEXT_FIELDS:
                 if field_name in parsed.fields:
-                    encoded_context_shapes[field_name][_encoded_context_shape(parsed.fields[field_name])] += 1
+                    encoded_context_shapes[field_name][
+                        _encoded_context_shape(parsed.fields[field_name])
+                    ] += 1
             signature = _resolve_path(parsed.fields, ("alert", "signature"))
             if _has_value(signature):
                 sensor_signatures.add(str(signature))
                 alert_signatures.add(str(signature))
-            five_tuple = tuple(str(parsed.fields.get(name) or "") for name in ("sip", "sport", "dip", "dport", "proto"))
+            five_tuple = tuple(
+                str(parsed.fields.get(name) or "")
+                for name in ("sip", "sport", "dip", "dport", "proto")
+            )
             if all(five_tuple):
                 alert_five_tuples.add(five_tuple)
             direction = parsed.fields.get("direction")
@@ -307,7 +330,11 @@ def build_nids_field_audit(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 alert_directions.add(str(direction))
             source_zone = _resolve_path(parsed.fields, ("alert", "source", "zone"))
             target_zone = _resolve_path(parsed.fields, ("alert", "target", "zone"))
-            if _has_value(source_zone) and _has_value(target_zone) and _has_value(direction):
+            if (
+                _has_value(source_zone)
+                and _has_value(target_zone)
+                and _has_value(direction)
+            ):
                 zone_direction_counts[f"{source_zone}->{target_zone}|{direction}"] += 1
         multi_signature_alerts += int(len(alert_signatures) > 1)
         multi_five_tuple_alerts += int(len(alert_five_tuples) > 1)
@@ -387,7 +414,10 @@ def build_nids_field_audit(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "sample_ids": sample_ids,
         "topic_counts": dict(sorted(topic_counts.items())),
         "parsed_message_count": parsed_message_count,
-        "messages_per_alert": {str(message_count): alert_count for message_count, alert_count in sorted(messages_per_alert.items())},
+        "messages_per_alert": {
+            str(message_count): alert_count
+            for message_count, alert_count in sorted(messages_per_alert.items())
+        },
         "parser_counts": dict(sorted(parser_counts.items())),
         "schema_fingerprint_counts": dict(sorted(schema_fingerprint_counts.items())),
         "top_level_alert_presence": dict(
@@ -405,13 +435,24 @@ def build_nids_field_audit(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "field_group_alert_counts": {
             group: {
                 "alerts": field_group_alert_counts.get(group, 0),
-                "coverage_ratio": _ratio(field_group_alert_counts.get(group, 0), sample_count),
+                "coverage_ratio": _ratio(
+                    field_group_alert_counts.get(group, 0), sample_count
+                ),
             }
             for group in _FIELD_GROUP_PREFIXES
         },
-        "signal_message_values": {name: dict(sorted(values.items(), key=lambda item: (-item[1], item[0]))) for name, values in sorted(signal_message_values.items())},
-        "semantic_message_values": {name: dict(sorted(values.items(), key=lambda item: (-item[1], item[0]))) for name, values in sorted(semantic_message_values.items())},
-        "encoded_context_field_shapes": {name: dict(sorted(values.items())) for name, values in sorted(encoded_context_shapes.items())},
+        "signal_message_values": {
+            name: dict(sorted(values.items(), key=lambda item: (-item[1], item[0])))
+            for name, values in sorted(signal_message_values.items())
+        },
+        "semantic_message_values": {
+            name: dict(sorted(values.items(), key=lambda item: (-item[1], item[0])))
+            for name, values in sorted(semantic_message_values.items())
+        },
+        "encoded_context_field_shapes": {
+            name: dict(sorted(values.items()))
+            for name, values in sorted(encoded_context_shapes.items())
+        },
         "llm_encoded_compaction": {
             "alerts": llm_compacted_encoded_alerts,
             "spans": llm_compacted_encoded_spans,
@@ -429,11 +470,16 @@ def build_nids_field_audit(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "multiple_five_tuples": multi_five_tuple_alerts,
             "mixed_directions": mixed_direction_alerts,
         },
-        "representative_sample_ids": {cohort: values for cohort, values in sorted(representative_sample_ids.items())},
+        "representative_sample_ids": {
+            cohort: values
+            for cohort, values in sorted(representative_sample_ids.items())
+        },
         "canonical_target_coverage": {
             target: {
                 "alerts": canonical_target_counts.get(target, 0),
-                "coverage_ratio": _ratio(canonical_target_counts.get(target, 0), sample_count),
+                "coverage_ratio": _ratio(
+                    canonical_target_counts.get(target, 0), sample_count
+                ),
             }
             for target in _TARGET_PATHS
         },
@@ -457,7 +503,10 @@ def build_nids_field_audit(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "alerts": scenario_hypothesis_alerts,
             "coverage_ratio": _ratio(scenario_hypothesis_alerts, sample_count),
         },
-        "role_status_counts": {role: dict(sorted(values.items())) for role, values in sorted(role_status_counts.items())},
+        "role_status_counts": {
+            role: dict(sorted(values.items()))
+            for role, values in sorted(role_status_counts.items())
+        },
         "high_value_gap_counts": dict(sorted(high_value_gap_counts.items())),
         "fields": field_rows,
     }

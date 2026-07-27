@@ -589,6 +589,7 @@ def _matched_terms(corpus: str, keywords: tuple[str, ...]) -> list[str]:
 
 def _scenario_corpus(run: AnalysisRun, alert: AlertInput | None) -> str:
     values: list[str] = []
+    ignores_processed_fields = _ignores_processed_fields(alert)
     if alert is not None:
         values.extend(
             [
@@ -602,14 +603,15 @@ def _scenario_corpus(run: AnalysisRun, alert: AlertInput | None) -> str:
             ]
         )
         values.extend(_flatten_strings(alert.entities.model_dump(mode="json"), limit=80))
-        values.extend(_flatten_strings(alert.extensions, limit=80))
+        if not ignores_processed_fields:
+            values.extend(_flatten_strings(alert.extensions, limit=80))
     if run.analysis is not None:
         values.extend([run.analysis.summary, run.analysis.reason, run.analysis.recommended_action])
     if run.entities is not None:
         values.extend(run.entities.processes)
         values.extend(run.entities.urls)
         values.extend(run.entities.rule_names)
-    if run.input_payload is not None:
+    if run.input_payload is not None and not ignores_processed_fields:
         values.extend(_flatten_strings(run.input_payload, limit=120))
     return " ".join(str(item) for item in values if item).lower()
 
@@ -642,11 +644,24 @@ def _selected_raw_message(alert: AlertInput) -> str:
     policy = alert.extensions.get("evidence_input_policy")
     if not isinstance(policy, Mapping):
         return ""
-    selected_path = policy.get("selected_input_path")
-    if not isinstance(selected_path, str):
-        return ""
-    value: Any = alert.raw
-    for part in re.split(r"\.|\[|\]", selected_path):
+    paths = [policy.get("selected_input_path")]
+    supplementary = policy.get("supplementary_input_paths")
+    if isinstance(supplementary, list):
+        paths.extend(supplementary)
+    values = [_resolve_raw_path(alert.raw, path) for path in paths if isinstance(path, str)]
+    return " ".join(value for value in values if isinstance(value, str))
+
+
+def _ignores_processed_fields(alert: AlertInput | None) -> bool:
+    if alert is None:
+        return False
+    policy = alert.extensions.get("evidence_input_policy")
+    return bool(isinstance(policy, Mapping) and policy.get("ignore_processed_fields_for_reasoning") is True)
+
+
+def _resolve_raw_path(payload: Mapping[str, Any], path: str) -> Any:
+    value: Any = payload
+    for part in re.split(r"\.|\[|\]", path):
         if not part:
             continue
         if isinstance(value, Mapping):
@@ -654,8 +669,8 @@ def _selected_raw_message(alert: AlertInput) -> str:
         elif isinstance(value, list) and part.isdigit():
             value = value[int(part)] if int(part) < len(value) else None
         else:
-            return ""
-    return value if isinstance(value, str) else ""
+            return None
+    return value
 
 
 def _flatten_strings(value: Any, *, limit: int) -> list[str]:

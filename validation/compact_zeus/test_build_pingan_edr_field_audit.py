@@ -116,7 +116,7 @@ def test_edr_field_audit_tracks_nested_observations_and_invalid_hash_boundary() 
     assert (
         fields["details1.process_md5"]["lanes"]["canonical_provenance"]["messages"] == 0
     )
-    assert fields["details1.process_md5"]["lanes"]["llm"]["messages"] == 1
+    assert fields["details1.process_md5"]["lanes"]["llm"]["messages"] == 0
 
 
 def test_edr_review_artifact_exposes_typed_action_and_hash_semantics() -> None:

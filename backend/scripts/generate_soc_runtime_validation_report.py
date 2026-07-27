@@ -184,7 +184,12 @@ def _live_tracks(root: Path) -> list[dict[str, Any]]:
                 "grounded_count": grounding.get("grounded_count", 0),
                 "ungrounded_count": grounding.get("ungrounded_count", 0),
             },
-            "entries": [{"source": "datas/apt-1965449.json", "artifact": run_path.name}],
+            "entries": [
+                {
+                    "source": "datas/legacy_demos/apt-1965449.json",
+                    "artifact": run_path.name,
+                }
+            ],
         }
         _write_json(root / "step-06-live-llm/manifest.json", manifest)
         live_status = manifest["status"]

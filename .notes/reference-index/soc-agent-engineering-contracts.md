@@ -133,16 +133,21 @@ contracts
   PingAn field aliases.
 - Raw input is immutable evidence. Parsing adds `ParsedRawMessageEvidence`; it never replaces or
   deletes `AlertInput.raw` or `AnalysisRun.input_payload`.
-- Evidence priority for PingAn observable facts is fixed as: deterministically parsed raw message
-  (`raw_message/high`) > Zeus structured fallback (`raw_structured/low` by default; only an exact,
-  reviewed topic allowlist may override it) > canonical processed field (`processed_field/low` when
-  raw-first policy is active). The current sole override is exact topic `T_GBD_zeus_data`, whose
-  structured fallback is `high`; source type, missing `message`, similar names, and topic prefixes
-  must not grant that trust.
+- PingAn evidence selection is mutually exclusive, not a weighted merge. If any raw message parses,
+  only `raw_message/high` fields may enter canonical mapping, role/scenario facts, conflicts, and LLM
+  evidence; Zeus sibling/processed fields remain immutable raw-only audit data. If zero messages
+  parse, the first structured event may enter `raw_structured/low` fallback. The current sole trust
+  override is exact topic `T_GBD_zeus_data`, whose structured fallback is `high`; source type,
+  message absence, similar names, and topic prefixes must not grant that trust.
 - `FieldTrust` must describe the field actually used. A fallback structured field must never inherit
   the selected raw message's high trust merely because both live in the same `zeusRawLogs[]` item.
-- All parseable messages are retained. One message is selected as primary evidence and the remaining
-  paths are supplementary evidence; selection and ordering must be deterministic and replayable.
+- All parseable messages are retained. One message is selected as primary evidence and up to four
+  paths are full supplementary evidence; selection and ordering must be deterministic and replayable.
+  Adapter-owned, exact-path high-value values outside that budget may enter bounded
+  `BoundedEvidenceHighlight` records. A grouped highlight retains occurrence count and at most five
+  representative paths; complete covered paths stay in `EvidenceCoverageReport`. Highlight paths
+  count as model-visible coverage, obey the same sensitive-evidence mode, and cannot contain
+  structured fallback values.
 - Network/HTTP/process observations from different raw messages must keep stable evidence paths.
   Fact reconstruction may report contradiction only among claims in the same observation;
   different requests, sessions, HTTP transactions, proxy hops or process executions must not be
@@ -151,6 +156,18 @@ contracts
   `alert.source/target` are rule-relative sensor endpoints and must remain separately named
   observation fields; adapters must not silently reinterpret them as wire source/destination or
   attacker/victim. `query` is not DNS/domain evidence without an explicit protocol contract.
+- For PingAn NDR/APT, each parsed `sip/dip` message is an independent wire observation; HTTP and
+  network-content file metadata must retain the exact message evidence path. In the reviewed source
+  contract, `ioc` carries vendor rule/detection descriptors and must not be promoted to a typed IOC
+  by value shape. `file_name/file_md5` may create `observed_artifact` evidence but cannot prove an
+  endpoint write, exploit success, or compromise.
+- For PingAn HIDS, `internal_ip/agent_ip` are endpoint identity and provisional impacted-asset
+  evidence, not packet source. `external_ip=1.1.1.1` is a typed non-reasoning placeholder. Process
+  trees, users and artifacts stay per-message; an observed ppid is retained as generic
+  `parent_process_id` even without a parent name. Only reviewed event contracts (`bounce_shell`,
+  `honeypot`, `malic_opera`) may create event-scoped network observations; canonical
+  source/destination remain empty. Unknown event types with network-shaped fields must surface a
+  mapping issue rather than inherit direction from a known event.
 - For PingAn EDR, endpoint identity, security role, and wire direction are separate contracts.
   `str_source_ip`, `device__ip`, and `iplist` identify the observed endpoint/impacted-asset candidate;
   they are not packet sources. `str_attack_ip` may emit only validated non-endpoint vendor
@@ -179,12 +196,22 @@ contracts
   Runtime verdict. NIDS `files[]` describes transaction/file-extraction metadata and must not be
   promoted to endpoint file-write evidence without an explicit source contract and outcome artifact.
 - Vendor placeholder/default/non-observation fields must be emitted by the adapter as typed
-  `SourceFieldSemantic`. `participates_in_entities=false` and `participates_in_reasoning=false` are hard guards:
-  core Runtime and prompts must not recover the value through a different alias. Raw/parsed evidence
-  remains immutable for audit. Core code must not contain the vendor's placeholder value.
-- `LLMAnalysisRequest` may include only `BoundedAnalysisEvidence`: per-field and total-size bounded,
-  parser/provenance annotated, and separated into primary/supplementary content. It must not dump the
-  unbounded vendor payload into the prompt.
+  `SourceFieldSemantic`. `participates_in_entities=false` and `participates_in_reasoning=false` are
+  hard guards: model projection omits the exact path/container descendants with
+  `adapter_excluded_from_reasoning`; core Runtime and prompts must not recover the value through a
+  different alias. Raw/parsed evidence remains immutable for audit. Core code must not contain the
+  vendor's placeholder value.
+- Field-importance matching considers only non-empty source leaves. Empty strings, nulls and empty
+  containers cannot create false high-value mapping gaps; non-empty unsupported fields still must
+  surface an explicit gap.
+- Corpus acceptance for multi-message adapters is instance-level. Nested paths are matched by their
+  reviewed leaf semantics, and each non-empty value must be typed, model-visible through bounded
+  evidence/highlight, or explicitly excluded from reasoning. Path-level aggregate counts alone are
+  insufficient because they can hide later-message and nested-field omissions.
+- `LLMAnalysisRequest` may include only `BoundedAnalysisEvidence` plus
+  `BoundedEvidenceHighlight`: per-field and total-size bounded, parser/provenance annotated, and
+  separated into primary/supplementary/highlight content. It must not dump the unbounded vendor
+  payload into the prompt.
 - Long encoding-shaped spans are compacted through
   `soc_agent.pipeline.encoded_context.compact_encoded_spans()` only after sensitive-mode projection
   and before leaf-budget selection. This shared model-boundary rule applies to every selected

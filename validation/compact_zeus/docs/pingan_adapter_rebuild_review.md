@@ -1,6 +1,6 @@
 # PingAn Adapter Coverage Review
 
-Status: Checkpoint B implemented; awaiting parser-output and field-coverage review
+Status: Checkpoint C complete; Checkpoint D full-corpus replay pending
 
 Corpus: `soc.validation.alert_corpus.v1`, 212 unique alerts
 
@@ -11,10 +11,11 @@ vendor-neutral SOC Runtime.
 
 The following invariants remain unchanged:
 
-1. A non-empty `zeusRawLogs[].message` is the high-trust primary input.
-2. When `message` is absent or empty, the selected `zeusRawLogs[]` object is the
-   structured fallback.
-3. Successfully parsed message fields override duplicate Zeus processed fields.
+1. A deterministically parsed `zeusRawLogs[].message` is high-trust primary evidence.
+2. When zero messages parse, the selected `zeusRawLogs[]` object is the structured
+   fallback; this covers both absent messages and unsupported message schemas.
+3. Successfully parsed message fields are the exclusive analysis source. Zeus sibling
+   fields never merge with or override them and remain only in the immutable raw payload.
 4. The complete original alert remains under `AlertInput.raw` for audit and replay.
 5. Source classification, message parsing and field mapping remain inside the PingAn
    adapter. Generic Runtime code must not learn PingAn aliases.
@@ -22,11 +23,10 @@ The following invariants remain unchanged:
 ```mermaid
 flowchart TD
     A["PingAn alert_data"] --> B{"Non-empty message?"}
-    B -->|Yes| C["raw_message_first<br/>High-trust primary evidence"]
+    B -->|Yes| E{"Deterministic parser matched?"}
     B -->|No| D["structured_fallback<br/>Use complete selected zeusRawLogs object"]
-    C --> E{"Deterministic parser matched?"}
-    E -->|Yes| F["Parsed message fields<br/>override duplicate processed fields"]
-    E -->|No| G["Unsupported schema issue<br/>keep raw message and request parser work"]
+    E -->|Yes| F["raw_message_first<br/>Parsed fields are exclusive analysis evidence"]
+    E -->|No| G["Unsupported schema issue<br/>keep raw message and use structured fallback"]
     D --> H["Canonical mapping and fact inputs"]
     F --> H
     G --> H
@@ -188,10 +188,10 @@ Sensitive local review artifacts:
 
 | Cohort | Artifact |
 |---|---|
-| Direct NIDS JSON | `data/pingan-adapter-checkpoint-b/direct-nids-json-1976128.json` |
-| Prefixed EDR JSON | `data/pingan-adapter-checkpoint-b/prefixed-edr-json-1968376.json` |
-| Prefixed ThreatBook JSON | `data/pingan-adapter-checkpoint-b/prefixed-threat-intel-json-1965919.json` |
-| No-message SIEM fallback | `data/pingan-adapter-checkpoint-b/no-message-siem-fallback-1965802.json` |
+| Direct NIDS JSON | `data/reviews/pingan-adapter-checkpoint-b/direct-nids-json-1976128.json` |
+| Prefixed EDR JSON | `data/reviews/pingan-adapter-checkpoint-b/prefixed-edr-json-1968376.json` |
+| Prefixed ThreatBook JSON | `data/reviews/pingan-adapter-checkpoint-b/prefixed-threat-intel-json-1965919.json` |
+| No-message SIEM fallback | `data/reviews/pingan-adapter-checkpoint-b/no-message-siem-fallback-1965802.json` |
 
 Initial Checkpoint C signals (pre-mapping baseline):
 
@@ -259,6 +259,24 @@ adapter results are:
   typed email observations; four selected machine-copy alerts create host/IP candidates.
   Later structured events remain raw-only, no network direction is invented, and pipeline
   `User=system` is not treated as an actor.
+- NDR/APT: 44 alerts / 105 messages create 105 independent network observations, 63 HTTP
+  observations and 20 network-content file observations. The source's `ioc` field is a vendor
+  detection descriptor in this corpus and is not promoted to a typed IOC.
+- HIDS: 23 alerts / 46 messages create 44 process observations with 122 nodes, 21 file
+  observations and 5 event-scoped network observations. Canonical network direction stays empty;
+  the vendor default `external_ip=1.1.1.1` never becomes a host, peer or IOC.
+- The NDR/HIDS audit is instance-level: nested `_origin.*` and `payload.*` leaves, as well as
+  messages outside the four full-supplementary limit, must have a typed consumer, an exact semantic,
+  or an explicit non-reasoning exclusion. A parseable message disables Zeus structured sibling
+  fallback for canonical/fact/scenario/conflict/model use; the original payload remains unchanged.
+- The v3 NDR/HIDS audit accounts for 8,436 non-empty parsed-field instances. All 8,436 have a
+  typed consumer or exact semantic, zero remain unclassified, and zero high-value instances or
+  structured-fallback violations remain. Empty leaves are counted separately and do not satisfy
+  this gate.
+- High-value values outside the first primary plus four full supplementary messages enter bounded
+  highlights. Repeated values expose an occurrence count and at most five representative paths to
+  the model; complete path coverage remains in `EvidenceCoverageReport`. Adapter-declared
+  non-reasoning values remain raw/auditable but are hard-filtered from model evidence.
 
 The combined Threat Intel/SIEM audit records 159 canonical provenance entries, zero known
 high-value gaps, and zero raw-payload mutations. High-value checks now inspect the selected
@@ -275,5 +293,20 @@ backend/.venv/bin/python \
   validation/compact_zeus/build_pingan_ti_siem_review_artifacts.py
 ```
 
-The generated `data/pingan-ti-siem-*` files contain sensitive `full`-mode evidence, remain
+The generated `data/audits/pingan-ti-siem-*` and `data/reviews/pingan-ti-siem-*` files contain
+sensitive `full`-mode evidence, remain
 gitignored, and must not be committed.
+
+Reproduce the NDR/HIDS evidence with:
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/build_pingan_ndr_hids_field_audit.py
+
+backend/.venv/bin/python \
+  validation/compact_zeus/build_pingan_ndr_hids_review_artifacts.py
+```
+
+Checkpoint C is now complete for all six normalized source families in the 212-alert corpus:
+NIDS, NDR/APT, EDR, HIDS, Threat Intel and SIEM. Checkpoint D remains a single full-corpus replay;
+it does not add another Runtime node or reinterpret generated `agent_response` text as ground truth.

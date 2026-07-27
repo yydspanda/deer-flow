@@ -85,6 +85,8 @@ def build_evidence_coverage_report(
     fact: FactReconstructionResult,
     primary: BoundedAnalysisEvidence | None,
     supplementary: Sequence[BoundedAnalysisEvidence],
+    *,
+    highlighted_paths: Sequence[str] = (),
 ) -> EvidenceCoverageReport:
     """Build an auditable field-path coverage report for one analysis request."""
 
@@ -110,7 +112,8 @@ def build_evidence_coverage_report(
         repaired_paths.extend(message_repaired_paths)
 
     evidence_by_path = {item.source_path: item for item in [primary, *supplementary] if item is not None}
-    projected_paths: list[str] = []
+    highlighted_path_set = set(highlighted_paths)
+    projected_paths: list[str] = list(highlighted_path_set)
     sanitized_paths: list[str] = []
     compacted_encoded_paths: list[str] = []
     truncated_evidence_paths: list[str] = []
@@ -209,7 +212,7 @@ def build_evidence_coverage_report(
     projected_paths = _sorted_unique(projected_paths)
     sanitized_paths = _sorted_unique(sanitized_paths)
     compacted_encoded_paths = _sorted_unique(compacted_encoded_paths)
-    omissions = list({(item.field_path, item.reason): item for item in omissions}.values())
+    omissions = [item for item in {(item.field_path, item.reason): item for item in omissions}.values() if item.field_path not in highlighted_path_set]
     return EvidenceCoverageReport(
         message_schemas=message_schemas,
         structured_field_paths=structured_paths,
@@ -235,6 +238,7 @@ def build_evidence_coverage_report(
             "fact_source_count": len(fact_paths),
             "scenario_source_count": len(scenario_paths),
             "llm_projected_count": len(projected_paths),
+            "llm_highlighted_count": len(highlighted_path_set),
             "llm_sanitized_count": len(sanitized_paths),
             "llm_compacted_encoded_count": len(compacted_encoded_paths),
             "omission_count": len(omissions),

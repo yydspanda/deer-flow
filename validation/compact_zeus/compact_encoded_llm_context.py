@@ -67,7 +67,9 @@ def compact_zeus_raw_logs(
                     result[key] = visit(child, child_path)
             return result
         if isinstance(item, list):
-            return [visit(child, f"{path}[{index}]") for index, child in enumerate(item)]
+            return [
+                visit(child, f"{path}[{index}]") for index, child in enumerate(item)
+            ]
         return item
 
     return visit(value, "$"), omissions
@@ -132,8 +134,10 @@ def main() -> int:
         "input",
         nargs="?",
         type=Path,
-        default=Path("datas/apt-1965449.json"),
-        help="JSON payload to validate (default: datas/apt-1965449.json)",
+        default=Path("datas/legacy_demos/apt-1965449.json"),
+        help=(
+            "JSON payload to validate (default: datas/legacy_demos/apt-1965449.json)"
+        ),
     )
     parser.add_argument(
         "--min-blob-chars",
@@ -141,7 +145,9 @@ def main() -> int:
         default=256,
         help="Minimum generic Base64/Hex span length (default: 256)",
     )
-    parser.add_argument("--output", type=Path, help="Optional path for the compacted LLM-only JSON")
+    parser.add_argument(
+        "--output", type=Path, help="Optional path for the compacted LLM-only JSON"
+    )
     parser.add_argument(
         "--self-check",
         action="store_true",
@@ -154,7 +160,9 @@ def main() -> int:
         print("self_check=passed")
 
     source = json.loads(args.input.read_text(encoding="utf-8"))
-    compacted, omissions = compact_zeus_raw_logs(source, min_blob_chars=args.min_blob_chars)
+    compacted, omissions = compact_zeus_raw_logs(
+        source, min_blob_chars=args.min_blob_chars
+    )
     before_chars = _compact_json_size(source)
     after_chars = _compact_json_size(compacted)
     saved_chars = before_chars - after_chars
@@ -165,9 +173,13 @@ def main() -> int:
     print(f"before_chars={before_chars}")
     print(f"after_chars={after_chars}")
     print(f"saved_chars={saved_chars}")
-    print(f"reduction_percent={(saved_chars / before_chars * 100) if before_chars else 0:.2f}")
+    print(
+        f"reduction_percent={(saved_chars / before_chars * 100) if before_chars else 0:.2f}"
+    )
     for index, omission in enumerate(omissions, start=1):
-        print(f"match[{index}] kind={omission.kind} chars={omission.original_chars} sha256={omission.sha256[:12]} path={omission.path}")
+        print(
+            f"match[{index}] kind={omission.kind} chars={omission.original_chars} sha256={omission.sha256[:12]} path={omission.path}"
+        )
 
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -186,7 +198,9 @@ def main() -> int:
                         "before_chars": before_chars,
                         "after_chars": after_chars,
                         "saved_chars": saved_chars,
-                        "reduction_percent": round((saved_chars / before_chars * 100) if before_chars else 0, 2),
+                        "reduction_percent": round(
+                            (saved_chars / before_chars * 100) if before_chars else 0, 2
+                        ),
                     },
                     "omissions": [asdict(item) for item in omissions],
                     "llm_projection": compacted,
