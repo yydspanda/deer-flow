@@ -225,6 +225,18 @@ Current SOC direction:
   Source type, missing `message`, similar topic names, and topic prefixes do not grant this
   exception. Preserve the complete original payload for replay/audit and expose only bounded
   primary/supplementary evidence content to analysis nodes.
+- PingAn EDR nested `detailsN` handling lives in `backend/soc_agent/normalizers/pingan_edr.py`.
+  Keep one canonical endpoint/process/file summary and preserve each usable detail as an exact-path
+  process/file observation. `iplist`, `str_source_ip`, and `device__ip` are endpoint identity and
+  impacted-host evidence, not network source/destination. `str_attack_ip` may become only a
+  validated, non-endpoint vendor attacker/peer candidate; endpoint exclusion must compare parsed
+  message and structured fallback identities within the same raw-event observation scope.
+  `str_threat_value` and `str_activity_id`
+  are polymorphic vendor values and must not become network endpoints or hashes by string shape.
+  Without an explicit directional connection contract, canonical EDR source/destination and network
+  observations remain empty. Malformed process hashes do not enter entities. Child process, file,
+  registry, task, existence and MITRE fields remain typed investigation context and never prove
+  maliciousness or success by themselves.
 - Nested JSON-in-string and HTTP fields use allowlisted, size-bounded decoders. Raw bodies, headers,
   tokens, cookies, and credentials default to redaction before `BoundedAnalysisEvidence`. An
   explicitly approved model environment may set `SOC_LLM_SENSITIVE_EVIDENCE_MODE=full`; this mode

@@ -385,9 +385,12 @@ def test_pingan_legacy_edr_alert_normalizes_platform_envelope() -> None:
     assert alert.classification.category == "可疑横向移动"
     assert alert.classification.tactic == ["TA0008"]
     assert alert.classification.technique == ["T1021"]
-    assert alert.entities.network.source_ip == "10.43.107.39"
-    assert alert.entities.network.destination_ip == "30.162.29.85"
+    assert alert.entities.network.source_ip is None
+    assert alert.entities.network.destination_ip is None
+    assert alert.entities.network.observations == []
     assert alert.entities.host.host_name == "HOST-L12267.example.local"
+    assert alert.entities.host.ip_addresses == ["10.43.107.39"]
+    assert alert.entities.threat.iocs == ["30.162.29.85"]
     assert alert.entities.user.username == "analyst001"
     assert alert.entities.user.user_id is None
     assert alert.entities.process.process_name == "svchost.exe"
@@ -415,6 +418,8 @@ def test_pingan_legacy_edr_alert_normalizes_platform_envelope() -> None:
     assert by_key["user:analyst001"].role == "username"
     assert "user:S-1-5-21-example" not in by_key
     assert by_key["host:HOST-L12267.example.local"].role == "host_name"
+    assert by_key["ip:10.43.107.39"].role == "host_ip"
+    assert by_key["ip:30.162.29.85"].role == "threat_ioc"
     assert by_key["file_hash:7B88D0896FBF43469A9959D59824A514"].role == "md5"
 
 

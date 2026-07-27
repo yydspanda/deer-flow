@@ -436,6 +436,28 @@ def test_pingan_prefixed_json_parser_supports_edr_and_threat_intel() -> None:
         assert parsed["header"] == {"prefix": prefix.strip()}
 
 
+def test_pingan_edr_nested_mitre_aliases_do_not_leak_to_other_source_types() -> None:
+    fields = {
+        "details0": {
+            "attck_id": "TA0003,T1053.005",
+            "process_mame": "not-an-endpoint-process.exe",
+        }
+    }
+
+    alert = normalize_alert_payload(
+        _payload(
+            json.dumps(fields),
+            topic="sec_guard_wb",
+            topic_name="Threat Intel",
+        )
+    )
+
+    assert alert.source.source_type is AlertSourceType.THREAT_INTEL
+    assert alert.classification.tactic == []
+    assert alert.classification.technique == []
+    assert alert.entities.process.process_name is None
+
+
 def test_pingan_json_parser_rejects_non_object_incomplete_and_trailing_payloads() -> None:
     for message in (
         '[{"sip":"30.1.1.10"}]',
@@ -529,32 +551,225 @@ def test_pingan_structured_fallback_is_low_trust_outside_explicit_topic_allowlis
 
 
 def test_pingan_edr_comma_kv_message_populates_canonical_entities() -> None:
+    activity_id = "a" * 32
     message = (
         "<14>[SourceIP:30.99.16.122][AuditDB.tbl_ud_pe_threat_alert]"
-        "str_source_ip=10.43.107.39,str_threat_value=30.162.29.85,"
+        f"str_source_ip=10.43.107.39,str_attack_ip=30.162.29.85,"
+        f"str_threat_value={activity_id},str_activity_id={activity_id},"
         "str_title=横向移动,str_suspicious_file=C:\\Windows\\svchost.exe,"
         "str_agent_id=AGENT-001,str_process_short=svchost.exe,"
         "str_cmd=C:\\Windows\\svchost.exe -s RemoteRegistry,"
         "str_user_process=LOCAL SERVICE,str_source_host=HOST-001"
     )
-    payload = _payload(message, topic="leagsoft-edr", topic_name="EDR")
+    payload = _payload(
+        message,
+        topic="leagsoft-edr",
+        topic_name="EDR",
+        raw_fields={"device__ip": "198.51.100.10"},
+    )
 
     result = SocNormalizationService().inspect(payload)
     alert = result.alert
 
-    assert alert.entities.network.source_ip == "10.43.107.39"
-    assert alert.entities.network.destination_ip == "30.162.29.85"
+    assert alert.entities.network.source_ip is None
+    assert alert.entities.network.destination_ip is None
+    assert alert.entities.network.observations == []
     assert alert.entities.process.process_name == "svchost.exe"
     assert alert.entities.user.username == "LOCAL SERVICE"
     assert alert.entities.host.host_name == "HOST-001"
+    assert alert.entities.host.ip_addresses == ["10.43.107.39"]
+    assert alert.entities.threat.iocs == ["30.162.29.85"]
+    assert len(alert.entities.process.observations) == 1
+    flat_process = alert.entities.process.observations[0]
+    assert flat_process.evidence_path.endswith("message#parsed")
+    assert flat_process.nodes[0].process_name == "svchost.exe"
+    assert flat_process.nodes[0].process_path == "C:\\Windows\\svchost.exe"
+    assert flat_process.nodes[0].command_line == "C:\\Windows\\svchost.exe -s RemoteRegistry"
+    assert flat_process.nodes[0].username == "LOCAL SERVICE"
     assert result.entities.ips == ["10.43.107.39", "30.162.29.85"]
+    assert activity_id.upper() not in {item.value for item in result.entities.mentions}
+
     request = build_analysis_request_for_payload(payload)
     resolutions = {item.role: item for item in request.fact_reconstruction.role_resolutions}
-    assert resolutions["source"].selected_value == "10.43.107.39"
-    assert resolutions["destination"].selected_value == "30.162.29.85"
-    claims = {item.claim_id: item for item in request.fact_reconstruction.role_claims}
-    source_claim = claims[resolutions["source"].supporting_claim_ids[0]]
-    assert source_claim.source_layer is EvidenceLayer.RAW_MESSAGE
+    assert resolutions["source"].status is RoleResolutionStatus.UNRESOLVED
+    assert resolutions["destination"].status is RoleResolutionStatus.UNRESOLVED
+    assert resolutions["attacker"].status is RoleResolutionStatus.TENTATIVE
+    assert resolutions["attacker"].selected_value == "30.162.29.85"
+    assert resolutions["impacted_asset"].selected_value == "10.43.107.39"
+    assert resolutions["impacted_asset"].status is RoleResolutionStatus.CONFLICTED
+
+    claims = request.fact_reconstruction.role_claims
+    attacker_claim = next(item for item in claims if item.role == "attacker")
+    assert attacker_claim.source_layer is EvidenceLayer.RAW_MESSAGE
+    assert attacker_claim.evidence_path.endswith("message#parsed.str_attack_ip")
+    assert not any(item.role in {"source", "destination"} for item in claims)
+    assert not any(item.evidence_path.endswith((".str_threat_value", ".str_activity_id")) for item in claims)
+
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    assert "entities.network.source_ip" not in provenance
+    assert "entities.network.destination_ip" not in provenance
+    assert provenance["entities.host.ip_addresses[0]"].selected_from.endswith("message#parsed.str_source_ip")
+    assert provenance["entities.threat.iocs[0]"].selected_from.endswith("message#parsed.str_attack_ip")
+
+    semantics = {item["semantic_type"] for item in alert.extensions["source_field_semantics"]}
+    assert {
+        "endpoint_identity",
+        "polymorphic_vendor_threat_value",
+        "vendor_activity_identifier",
+        "vendor_attack_ip_assertion",
+    } <= semantics
+
+
+def test_pingan_edr_self_attack_alias_and_digest_shaped_values_do_not_invent_network_roles() -> None:
+    digest_shaped_id = "b" * 32
+    message = (
+        "<14>[SourceIP:30.99.16.122][AuditDB.tbl_ud_pe_threat_alert]"
+        "str_source_ip=10.181.175.69,str_attack_ip=10.181.175.69,"
+        f"str_threat_value={digest_shaped_id},str_activity_id={digest_shaped_id},"
+        "str_title=GalaxyLab_T1003-SAM-Dumping,str_source_host=HOST-SAM-001"
+    )
+
+    result = SocNormalizationService().inspect(_payload(message, topic="leagsoft-edr", topic_name="EDR"))
+    alert = result.alert
+
+    assert alert.entities.network.source_ip is None
+    assert alert.entities.network.destination_ip is None
+    assert alert.entities.threat.iocs == []
+    assert result.entities.ips == ["10.181.175.69"]
+    assert digest_shaped_id.upper() not in {item.value for item in result.entities.mentions}
+
+    request = build_analysis_request_for_payload(alert.raw)
+    assert not any(item.role in {"source", "destination", "attacker"} for item in request.fact_reconstruction.role_claims)
+
+
+def test_pingan_edr_cross_layer_endpoint_excludes_false_remote_candidate() -> None:
+    message = "<14>[SourceIP:30.99.16.122][AuditDB.tbl_ud_pe_threat_alert]str_attack_ip=10.181.175.69,str_title=Endpoint-only split evidence"
+    payload = _payload(
+        message,
+        topic="leagsoft-edr",
+        topic_name="EDR",
+        raw_fields={"device__ip": "10.181.175.69"},
+    )
+
+    result = SocNormalizationService().inspect(payload)
+    alert = result.alert
+
+    assert alert.entities.host.ip_addresses == ["10.181.175.69"]
+    assert alert.entities.network.source_ip is None
+    assert alert.entities.network.destination_ip is None
+    assert alert.entities.threat.iocs == []
+
+    request = build_analysis_request_for_payload(payload)
+    assert not any(item.role in {"source", "destination", "attacker"} for item in request.fact_reconstruction.role_claims)
+    attack_semantic = next(item for item in alert.extensions["source_field_semantics"] if item["semantic_type"] == "vendor_attack_ip_assertion")
+    assert attack_semantic["participates_in_entities"] is False
+
+
+def test_pingan_edr_nested_details_preserve_endpoint_process_and_action_observations() -> None:
+    valid_md5 = "a" * 32
+    valid_sha256 = "b" * 64
+    fields = {
+        "agent_id": "AGENT-XC-001",
+        "alert_describe": "计划任务与子进程异常",
+        "endpoint": "XC-ENDPOINT-001",
+        "iplist": "10.20.30.40,not-an-ip",
+        "details0": {
+            "attck_id": "TA0003,T1053.005",
+            "command": "C:\\Windows\\System32\\cmd.exe /c whoami",
+            "process_mame": "cmd.exe",
+            "process_md5": valid_md5,
+            "process_path": "C:\\Windows\\System32\\cmd.exe",
+            "process_pid": "1200",
+            "process_sha256": valid_sha256,
+            "process_user": "SYSTEM",
+            "rule_name": "Scheduled task child process",
+            "action_detail": {
+                "child_commandline": "powershell.exe -nop",
+                "child_name": "powershell.exe",
+                "child_path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                "child_pid": "1201",
+            },
+        },
+        "details1": {
+            "command": "reg.exe add HKCU\\Software\\Example",
+            "process_mame": "reg.exe",
+            "process_md5": "21",
+            "process_path": "C:\\Windows\\System32\\reg.exe",
+            "process_pid": "1300",
+            "process_sha256": "21",
+            "process_user": "analyst",
+            "rule_desc": "Registry and file action",
+            "action_detail": {
+                "file_name": "payload.dll",
+                "file_path": "C:\\Temp\\payload.dll",
+                "is_exist": "true",
+                "registry_key": "HKCU\\Software\\Example",
+                "task_name": "Updater",
+            },
+        },
+    }
+    payload = _payload(
+        json.dumps(fields, ensure_ascii=False),
+        topic="edr-core-xc",
+        topic_name="信创EDR",
+    )
+    original = deepcopy(payload)
+
+    result = SocNormalizationService().inspect(payload)
+    alert = result.alert
+
+    assert payload == original
+    assert alert.raw == original
+    assert alert.entities.host.host_name == "XC-ENDPOINT-001"
+    assert alert.entities.host.host_id == "AGENT-XC-001"
+    assert alert.entities.host.ip_addresses == ["10.20.30.40"]
+    assert alert.entities.network.source_ip is None
+    assert alert.entities.network.destination_ip is None
+    assert alert.entities.process.process_name == "cmd.exe"
+    assert alert.entities.process.process_id == 1200
+    assert alert.entities.process.md5 == valid_md5
+    assert alert.entities.process.sha256 == valid_sha256
+    assert alert.classification.tactic == ["TA0003"]
+    assert alert.classification.technique == ["T1053.005"]
+
+    observations = alert.entities.process.observations
+    assert len(observations) == 2
+    assert [node.process_name for node in observations[0].nodes] == [
+        "cmd.exe",
+        "powershell.exe",
+    ]
+    assert observations[1].nodes[0].process_name == "reg.exe"
+    assert observations[1].nodes[0].md5 is None
+    assert observations[1].nodes[0].sha256 is None
+    assert observations[1].evidence_path.endswith("message#parsed.details1")
+
+    file_observation = alert.entities.file.observations[0]
+    assert file_observation.file_name == "payload.dll"
+    assert file_observation.file_path == "C:\\Temp\\payload.dll"
+    assert file_observation.exists is True
+    assert file_observation.evidence_path.endswith("message#parsed.details1.action_detail")
+
+    request = build_analysis_request_for_payload(payload)
+    claims = request.fact_reconstruction.role_claims
+    assert any(item.role == "impacted_asset" and item.value == "10.20.30.40" for item in claims)
+    assert any(item.role == "victim" and item.value == "10.20.30.40" for item in claims)
+    assert not any(item.role in {"source", "destination"} and item.evidence_path.endswith(".iplist") for item in claims)
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    assert provenance["entities.process.observations[1].nodes[0].process_name"].selected_from.endswith("message#parsed.details1.process_mame")
+    assert "entities.process.observations[1].nodes[0].md5" not in provenance
+    assert request.evidence_coverage.high_value_gaps == []
+    semantics = {item["semantic_type"] for item in alert.extensions["source_field_semantics"]}
+    assert {
+        "endpoint_child_process_observation",
+        "endpoint_file_action_target",
+        "endpoint_registry_action_context",
+        "endpoint_scheduled_task_context",
+        "invalid_process_hash",
+        "vendor_mitre_classification",
+    } <= semantics
+    assert {"cmd.exe", "powershell.exe", "reg.exe"} <= set(result.entities.processes)
+    assert valid_md5.upper() in {item.value for item in result.entities.mentions}
+    assert "21" not in {item.value for item in result.entities.mentions}
 
 
 def test_pingan_hids_quoted_kv_message_extracts_host_ip_and_process_tree() -> None:

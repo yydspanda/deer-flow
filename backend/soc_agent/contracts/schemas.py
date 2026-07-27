@@ -1833,6 +1833,8 @@ class ProcessNodeRef(BaseModel):
     process_path: str | None = None
     command_line: str | None = None
     username: str | None = None
+    md5: str | None = None
+    sha256: str | None = None
 
 
 class ProcessObservationRef(BaseModel):
@@ -1847,10 +1849,13 @@ class ProcessObservationRef(BaseModel):
 
 class ProcessEntityRef(BaseModel):
     process_name: str | None = None
+    process_id: int | None = Field(default=None, ge=0)
     process_path: str | None = None
     command_line: str | None = None
     parent_process_name: str | None = None
     parent_command_line: str | None = None
+    md5: str | None = None
+    sha256: str | None = None
     observations: list[ProcessObservationRef] = Field(default_factory=list)
 
 
@@ -1870,12 +1875,47 @@ class HostEntityRef(BaseModel):
     ip_addresses: list[str] = Field(default_factory=list)
 
 
+class FileObservationRelation(StrEnum):
+    ENDPOINT_ACTION_TARGET = "endpoint_action_target"
+
+
+class FileObservationRef(BaseModel):
+    """One file artifact with exact evidence provenance and relation."""
+
+    observation_id: str = Field(min_length=1)
+    evidence_path: str = Field(min_length=1)
+    relation: FileObservationRelation
+    event_time: str | None = None
+    process_id: int | None = Field(default=None, ge=0)
+    file_name: str | None = None
+    file_path: str | None = None
+    sha256: str | None = None
+    sha1: str | None = None
+    md5: str | None = None
+    exists: bool | None = None
+
+    @model_validator(mode="after")
+    def require_artifact_identity(self) -> FileObservationRef:
+        if not any(
+            (
+                self.file_name,
+                self.file_path,
+                self.sha256,
+                self.sha1,
+                self.md5,
+            )
+        ):
+            raise ValueError("file observation requires a name, path, or hash")
+        return self
+
+
 class FileEntityRef(BaseModel):
     file_name: str | None = None
     file_path: str | None = None
     sha256: str | None = None
     sha1: str | None = None
     md5: str | None = None
+    observations: list[FileObservationRef] = Field(default_factory=list)
 
 
 class HttpObservationRef(BaseModel):

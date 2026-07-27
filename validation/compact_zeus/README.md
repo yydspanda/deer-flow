@@ -93,7 +93,8 @@ SHA-256 前缀，侧车记录 path 与完整 SHA-256。二者不能通过 eviden
 ```bash
 backend/.venv/bin/python -m pytest -q \
   validation/compact_zeus/test_build_alert_validation_corpus.py \
-  validation/compact_zeus/test_build_pingan_nids_field_audit.py
+  validation/compact_zeus/test_build_pingan_nids_field_audit.py \
+  validation/compact_zeus/test_build_pingan_edr_field_audit.py
 ```
 
 Notebook 只作为探索记录；可复跑规则以 Python 构建器、测试和 manifest 为准。
@@ -151,3 +152,48 @@ validation/compact_zeus/data/
 `llm` 四条使用通道，并单独统计五元组、网络/HTTP observation、high-value gap 和
 LLM encoded compaction。未进入 canonical 的字段仍保留在 parsed/bounded evidence；
 不能把“未 canonical 化”解释成“原始字段已丢失”。
+
+### Checkpoint C: EDR 字段使用
+
+重跑 37 条 EDR、60 个 message 的字段流向审计：
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/build_pingan_edr_field_audit.py \
+  --output validation/compact_zeus/data/pingan-edr-field-audit.after.json
+```
+
+生成五组敏感本地 before/after 审阅产物：
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/build_pingan_edr_review_artifacts.py \
+  --phase before_adapter_mapping
+
+backend/.venv/bin/python \
+  validation/compact_zeus/build_pingan_edr_review_artifacts.py \
+  --phase after_adapter_mapping
+```
+
+输出位于：
+
+```text
+validation/compact_zeus/data/
+├── pingan-edr-field-audit.before.json
+├── pingan-edr-field-audit.after.json
+└── pingan-edr-checkpoint-c/
+    ├── before_adapter_mapping/
+    └── after_adapter_mapping/
+```
+
+当前结果：5 条 `edr-core-xc` 告警包含 14 个 message、21 个 `detailsN` 记录；
+适配后整个 EDR 子集生成 30 个 process observations、39 个 process nodes 和 7 个
+file observations。19 个合法 MD5 与 19 个合法 SHA-256 可进入标准实体；2+2 个短值
+保持在 parsed/LLM evidence，并由 `invalid_process_hash` 语义明确禁止进入实体。
+`iplist`、`str_source_ip`、`device__ip` 只形成 endpoint host IP 与 provisional
+victim/impacted-asset claims；合法且不同于 endpoint 的 `str_attack_ip` 只形成 typed IOC
+与 tentative attacker candidate。端点排除会在同一 raw-event scope 内同时比较 message
+解析字段和 structured fallback，避免字段拆在两层时制造假远端。`str_threat_value`/`str_activity_id` 不按字符串形状映射为
+destination/hash。当前语料没有可靠 EDR directional connection contract，因此 37 条告警的
+canonical source/destination 和 network observations 均为 0；这属于安全的“未虚构方向”，
+不是字段丢失。所有 37 条输入的 raw payload hash 均保持不变。

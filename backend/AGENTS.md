@@ -192,8 +192,19 @@ PingAn NIDS maps the wire five-tuple into canonical network fields and keeps eve
 separate network/HTTP observation. Nested sensor `alert.source/target` are rule-relative endpoints,
 not automatic wire or attacker/victim roles; generic `query` is not DNS without protocol evidence.
 Sensor `allowed`, vendor `attack_res`, and HTTP status are typed semantics, never exploit-success
-proof; NIDS `files[]` is transaction metadata, not endpoint file-write proof. Long encoding-shaped
-spans are compacted at the shared model boundary for every primary/supplementary evidence item,
+proof; NIDS `files[]` is transaction metadata, not endpoint file-write proof.
+PingAn EDR nested `detailsN` mapping lives in `soc_agent.normalizers.pingan_edr`, not generic
+Runtime. The adapter keeps one canonical endpoint/process/file summary and emits every usable detail
+as provenance-backed process/file observations. Endpoint `iplist`, `str_source_ip`, and `device__ip`
+are impacted-host identity, not wire source/destination. A shape-valid, non-endpoint
+`str_attack_ip` is only a tentative vendor attacker/peer candidate and typed IOC. Endpoint
+exclusion combines parsed-message and structured-fallback identities in the same raw-event scope;
+`str_threat_value`/`str_activity_id` remain polymorphic vendor values and never become network
+endpoints or hashes by string shape. Without an explicit directional connection contract, canonical
+EDR source/destination and network observations remain empty. Only shape-valid process MD5/SHA-256
+values enter process/file entities. Child process, file, registry, scheduled-task,
+artifact-existence and MITRE fields remain typed investigation context and cannot by themselves
+prove maliciousness or success. Long encoding-shaped spans are compacted at the shared model boundary for every primary/supplementary evidence item,
 regardless of PingAn topic or future vendor, through `soc_agent.pipeline.encoded_context`;
 raw/parsed values are unchanged. The marker carries type, original length, and a short hash, while
 typed path/kind/length/full-hash metadata remains in request/run audit outside the prompt; both are

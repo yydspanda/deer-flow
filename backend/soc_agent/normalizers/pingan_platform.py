@@ -22,6 +22,18 @@ from soc_agent.contracts import (
     EvidenceTrustLevel,
     ParsedRawMessageEvidence,
 )
+from soc_agent.normalizers.pingan_edr import (
+    build_edr_canonical_field_provenance,
+    build_edr_file_observations,
+    build_edr_process_observations,
+    build_edr_source_field_semantics,
+    edr_endpoint_addresses,
+    edr_field_importance_rules,
+    edr_mitre_values,
+    edr_threat_indicators,
+    first_edr_detail,
+    validated_edr_digest,
+)
 from soc_agent.normalizers.pingan_evidence import build_pingan_fact_inputs
 from soc_agent.normalizers.pingan_messages import parse_pingan_raw_message
 
@@ -55,6 +67,8 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
     soar_asset = _first_soar_asset(alert.get("soar"))
 
     source_type = _source_type(hit_log, evidence_event)
+    primary_edr_detail = first_edr_detail(primary_parsed.fields) if source_type is AlertSourceType.EDR and primary_parsed is not None else None
+    primary_edr_fields = primary_edr_detail[1] if primary_edr_detail else {}
     role_claims, scenario_signals = build_pingan_fact_inputs(
         alert,
         parsed_messages=parsed_messages,
@@ -76,7 +90,14 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
             # Platform ruleCode is the stable alert identity. Sensor rule ids remain
             # available in parsed evidence because they use a different namespace.
             "rule_code": _first_str(hit_log, ("ruleCode",)) or _first_str(evidence_event, ("str_rule_id", "rule_id")),
-            "rule_name": _first_str(sensor_alert, ("signature",)) or _first_str(parsed_fields, ("finding__title", "str_title", "rule_name")) or _first_str(hit_log, ("ruleName",)) or _first_str(raw_event, ("finding__title", "str_title")),
+            "rule_name": _first_str(sensor_alert, ("signature",))
+            or _first_str(primary_edr_fields, ("rule_name", "rule_desc"))
+            or _first_str(
+                parsed_fields,
+                ("finding__title", "str_title", "rule_name", "alert_describe"),
+            )
+            or _first_str(hit_log, ("ruleName",))
+            or _first_str(raw_event, ("finding__title", "str_title")),
             "rule_category": _first_str(sensor_alert, ("category",))
             or _first_str(parsed_fields, ("finding__type_name", "attack_type", "vuln_type", "event_type"))
             or _first_str(alert, ("tertiaryType", "secondaryType"))
@@ -93,8 +114,18 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
             or _first_str(parsed_fields, ("finding__type_name", "attack_type", "vuln_type", "event_name", "event_type"))
             or _first_str(alert, ("tertiaryType", "secondaryType", "primaryType"))
             or _first_str(raw_event, ("finding__type_name", "attack_type", "vuln_type")),
-            "tactic": _mitre_values(evidence_event, prefix="TA"),
-            "technique": _mitre_values(evidence_event, prefix="T"),
+            "tactic": _dedupe(
+                [
+                    *_mitre_values(evidence_event, prefix="TA"),
+                    *(edr_mitre_values(parsed_messages, prefix="TA") if source_type is AlertSourceType.EDR else []),
+                ]
+            ),
+            "technique": _dedupe(
+                [
+                    *_mitre_values(evidence_event, prefix="T"),
+                    *(edr_mitre_values(parsed_messages, prefix="T") if source_type is AlertSourceType.EDR else []),
+                ]
+            ),
             "labels": _labels(alert, hit_log, evidence_event),
         },
         "entities": _entities(
@@ -112,7 +143,11 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
             "role_claims": [item.model_dump(mode="json", exclude_none=True) for item in role_claims],
             "scenario_signals": [item.model_dump(mode="json", exclude_none=True) for item in scenario_signals],
             "field_importance_rules": _field_importance_rules(source_type),
-            "source_field_semantics": _source_field_semantics(source_type, parsed_messages),
+            "source_field_semantics": _source_field_semantics(
+                source_type,
+                parsed_messages,
+                fallback_fields=raw_event,
+            ),
             "analysis_context_coverage": _analysis_context_coverage(original, alert),
             "evidence_input_policy": _evidence_input_policy(
                 hit_log_index,
@@ -270,22 +305,51 @@ def _entities(
     parsed_message: ParsedRawMessageEvidence | None,
     parsed_messages: list[ParsedRawMessageEvidence],
 ) -> dict[str, Any]:
+    primary_fields = parsed_message.fields if parsed_message is not None else {}
+
+    def source_value(aliases: tuple[str, ...]) -> str | None:
+        if source_type is AlertSourceType.EDR:
+            value = _first_str(primary_fields, aliases)
+            if value is not None:
+                return value
+        return _first_str(raw_event, aliases)
+
     req = _parse_request_line(_first_str(http_payload, ("req_header",)) or "")
     decoded_request_header = _decoded_request_header(parsed_message)
     decoded_headers = _as_dict(decoded_request_header.get("headers"))
     forwarded_chain = decoded_request_header.get("forwarded_chain")
     decoded_forwarded = forwarded_chain[0] if isinstance(forwarded_chain, list) and forwarded_chain else None
-    process_chain = _process_chain(_first_str(raw_event, ("event_content", "finding__desc", "str_desc")) or "")
+    process_chain = _process_chain(source_value(("event_content", "finding__desc", "str_desc")) or "")
     nids_http, _ = _nids_http_projection(
         raw_event,
         decoded_fields=(parsed_message.decoded_fields if parsed_message is not None else None),
     )
+    edr_detail = first_edr_detail(parsed_message.fields) if source_type is AlertSourceType.EDR and parsed_message is not None else None
+    edr_fields = edr_detail[1] if edr_detail else {}
+    edr_action = _as_dict(edr_fields.get("action_detail"))
+    edr_endpoint_ips = (
+        _selected_edr_endpoint_addresses(
+            parsed_messages,
+            fallback_fields=raw_event,
+        )
+        if source_type is AlertSourceType.EDR
+        else []
+    )
+    edr_iocs = (
+        _selected_edr_threat_indicators(
+            parsed_messages,
+            fallback_fields=raw_event,
+        )
+        if source_type is AlertSourceType.EDR
+        else []
+    )
 
     if source_type is AlertSourceType.EDR:
         network = {
-            "source_ip": _first_str(raw_event, ("str_source_ip", "device__ip")),
-            "destination_ip": _first_str(raw_event, ("str_attack_ip", "str_threat_value", "str_activity_id")),
-            "protocol": _first_str(raw_event, ("proto", "protocol")),
+            # Endpoint identity and vendor attack-role fields do not establish
+            # packet/session direction. Keep wire endpoints empty until the
+            # source contract supplies explicit directional observations.
+            "protocol": source_value(("proto", "protocol")),
         }
     elif source_type is AlertSourceType.HIDS:
         # A host alert's agent/internal IP identifies the impacted endpoint; it
@@ -320,31 +384,78 @@ def _entities(
         http = {**http, **nids_http}
     http["observations"] = _http_observations(source_type, parsed_messages)
 
+    process_md5_value = source_value(
+        (
+            "process__file__hashes__md5",
+            "str_md5",
+            "str_suspicious_file_md5",
+        ),
+    ) or _first_str(edr_fields, ("process_md5",))
+    process_sha256_value = source_value(
+        (
+            "process__file__hashes__sha256",
+            "str_sha256",
+            "str_suspicious_file_sha256",
+        ),
+    ) or _first_str(edr_fields, ("process_sha256",))
+    process_md5 = validated_edr_digest(process_md5_value, expected_length=32) if source_type is AlertSourceType.EDR else process_md5_value
+    process_sha256 = validated_edr_digest(process_sha256_value, expected_length=64) if source_type is AlertSourceType.EDR else process_sha256_value
+    process = {
+        "process_name": source_value(
+            (
+                "process__name",
+                "str_process_short",
+                "process__file__name",
+                "str_suspicious_process_ancestor_short",
+            ),
+        )
+        or _first_str(edr_fields, ("process_mame", "process_name"))
+        or (process_chain[-1] if process_chain else None),
+        "process_id": _intish(source_value(("process__pid", "str_process_id")) or _first_str(edr_fields, ("process_pid",))),
+        "process_path": source_value(("process__file__path", "str_process_full", "str_suspicious_file")) or _first_str(edr_fields, ("process_path",)),
+        "command_line": source_value(
+            (
+                "process__cmd_line",
+                "str_cmd",
+                "str_suspicious_process_ancestor_cmd",
+                "process__ancestor__cmd_line",
+            ),
+        )
+        or _first_str(edr_fields, ("command",)),
+        "parent_process_name": _basename(source_value(("process__parent_process__file__path", "str_parent_path_full"))) or (process_chain[-2] if len(process_chain) >= 2 else None),
+        "parent_command_line": source_value(("process__parent_process__cmd_line", "str_parent_cmd")),
+        "md5": process_md5,
+        "sha256": process_sha256,
+        "observations": (build_edr_process_observations(parsed_messages) if source_type is AlertSourceType.EDR else _process_observations(parsed_messages)),
+    }
+
+    action_file_name = _first_str(edr_action, ("file_name",))
+    action_file_path = _first_str(edr_action, ("file_path",))
+    action_file_selected = bool(action_file_name or action_file_path)
+    file_entity = {
+        "file_name": action_file_name or source_value(("process__file__name", "str_process_short")) or _first_str(edr_fields, ("process_mame", "process_name")),
+        "file_path": action_file_path or source_value(("process__file__path", "str_process_full", "str_suspicious_file")) or _first_str(edr_fields, ("process_path",)),
+        "md5": None if action_file_selected else process_md5,
+        "sha256": None if action_file_selected else process_sha256,
+        "observations": (build_edr_file_observations(parsed_messages) if source_type is AlertSourceType.EDR else []),
+    }
+
     return {
         "network": network,
-        "process": {
-            "process_name": _first_str(
-                raw_event,
-                ("process__name", "str_process_short", "process__file__name", "str_suspicious_process_ancestor_short"),
-            )
-            or (process_chain[-1] if process_chain else None),
-            "process_path": _first_str(raw_event, ("process__file__path", "str_process_full", "str_suspicious_file")),
-            "command_line": _first_str(raw_event, ("process__cmd_line", "str_cmd", "str_suspicious_process_ancestor_cmd", "process__ancestor__cmd_line")),
-            "parent_process_name": _basename(_first_str(raw_event, ("process__parent_process__file__path", "str_parent_path_full"))) or (process_chain[-2] if len(process_chain) >= 2 else None),
-            "parent_command_line": _first_str(raw_event, ("process__parent_process__cmd_line", "str_parent_cmd")),
-            "observations": _process_observations(parsed_messages),
-        },
+        "process": process,
         "user": {
             # CMDB/SOAR owners describe asset ownership, not the event actor.
-            "username": _first_str(raw_event, ("str_user_agent", "process__user__name", "str_user_process")),
-            "um_account": _first_str(raw_event, ("um", "um_account", "umAccount", "str_um_account")),
+            "username": source_value(("str_user_agent", "process__user__name", "str_user_process")) or _first_str(edr_fields, ("process_user",)),
+            "um_account": source_value(("um", "um_account", "umAccount", "str_um_account")),
         },
         "host": {
-            "host_name": _first_str(raw_event, ("host_name", "device__hostname", "str_source_host")),
-            "host_id": _first_str(raw_event, ("agent_id", "str_agent_id", "metadata__product__version")),
-            "asset_id": _first_str(raw_event, ("agent_id", "device__ip", "str_source_ip")),
-            "asset_group": _first_str(raw_event, ("device__org__ou_name", "str_dept_name", "dip_group", "asset_group")),
-            "ip_addresses": _dedupe(
+            "host_name": source_value(("host_name", "device__hostname", "str_source_host", "endpoint")),
+            "host_id": source_value(("agent_id", "str_agent_id", "metadata__product__version")),
+            "asset_id": (source_value(("agent_id", "str_agent_id")) or (edr_endpoint_ips[0] if edr_endpoint_ips else None)) if source_type is AlertSourceType.EDR else _first_str(raw_event, ("agent_id", "device__ip", "str_source_ip")),
+            "asset_group": source_value(("device__org__ou_name", "str_dept_name", "dip_group", "asset_group")),
+            "ip_addresses": edr_endpoint_ips
+            if source_type is AlertSourceType.EDR
+            else _dedupe(
                 [
                     value
                     for value in [
@@ -356,25 +467,46 @@ def _entities(
                 ]
             ),
         },
-        "file": {
-            "file_name": _first_str(raw_event, ("process__file__name", "str_process_short")),
-            "file_path": _first_str(raw_event, ("process__file__path", "str_process_full", "str_suspicious_file")),
-            "md5": _first_str(raw_event, ("process__file__hashes__md5", "str_md5", "str_suspicious_file_md5")),
-        },
+        "file": file_entity,
         "http": http,
-        "threat": {
-            "iocs": _dedupe(
-                [
-                    value
-                    for value in [
-                        _first_str(raw_event, ("ioc",)),
-                        _first_str(raw_event, ("str_threat_value", "str_attack_ip")) if source_type is AlertSourceType.EDR else None,
-                    ]
-                    if value
-                ]
-            )
-        },
+        "threat": {"iocs": edr_iocs if source_type is AlertSourceType.EDR else _dedupe([value for value in [_first_str(raw_event, ("ioc",))] if value])},
     }
+
+
+def _selected_edr_endpoint_addresses(
+    parsed_messages: list[ParsedRawMessageEvidence],
+    *,
+    fallback_fields: Mapping[str, Any],
+) -> list[str]:
+    for parsed in parsed_messages:
+        values = edr_endpoint_addresses(parsed.fields)
+        if values:
+            return values
+    return edr_endpoint_addresses(fallback_fields)
+
+
+def _selected_edr_threat_indicators(
+    parsed_messages: list[ParsedRawMessageEvidence],
+    *,
+    fallback_fields: Mapping[str, Any],
+) -> list[str]:
+    known_endpoint_addresses = _dedupe([value for parsed in parsed_messages for value in edr_endpoint_addresses(parsed.fields)] + edr_endpoint_addresses(fallback_fields))
+    parsed_values = _dedupe(
+        [
+            value
+            for parsed in parsed_messages
+            for value in edr_threat_indicators(
+                parsed.fields,
+                known_endpoint_addresses=known_endpoint_addresses,
+            )
+        ]
+    )
+    if parsed_values:
+        return parsed_values
+    return edr_threat_indicators(
+        fallback_fields,
+        known_endpoint_addresses=known_endpoint_addresses,
+    )
 
 
 def _network_observations(
@@ -384,14 +516,10 @@ def _network_observations(
     observations: list[dict[str, Any]] = []
     for parsed in parsed_messages:
         fields = parsed.fields
-        if source_type is AlertSourceType.HIDS:
+        if source_type in {AlertSourceType.EDR, AlertSourceType.HIDS}:
             continue
-        if source_type is AlertSourceType.EDR:
-            source_ip = _first_str(fields, ("str_source_ip", "device__ip"))
-            destination_ip = _first_str(fields, ("str_attack_ip", "str_threat_value", "str_activity_id"))
-        else:
-            source_ip = _first_str(fields, ("sip", "src_addr", "source_ip"))
-            destination_ip = _first_str(fields, ("dip", "dst_addr"))
+        source_ip = _first_str(fields, ("sip", "src_addr", "source_ip"))
+        destination_ip = _first_str(fields, ("dip", "dst_addr"))
         decoded_request = _decoded_request_header(parsed)
         forwarded = decoded_request.get("forwarded_chain")
         observation = _drop_none(
@@ -590,6 +718,12 @@ def _canonical_field_provenance(
     parsed_messages: list[ParsedRawMessageEvidence],
     primary_parsed: ParsedRawMessageEvidence | None,
 ) -> list[dict[str, Any]]:
+    if source_type is AlertSourceType.EDR:
+        return build_edr_canonical_field_provenance(
+            alert,
+            parsed_messages=parsed_messages,
+            primary_parsed=primary_parsed,
+        )
     if source_type is not AlertSourceType.NIDS:
         return []
 
@@ -756,6 +890,8 @@ def _first_present_path(
 def _field_importance_rules(
     source_type: AlertSourceType,
 ) -> list[dict[str, Any]]:
+    if source_type is AlertSourceType.EDR:
+        return edr_field_importance_rules()
     if source_type is not AlertSourceType.NIDS:
         return []
     definitions = (
@@ -857,8 +993,17 @@ def _usable_hids_external_ip(source_type: AlertSourceType, value: str | None) ->
 def _source_field_semantics(
     source_type: AlertSourceType,
     parsed_messages: list[ParsedRawMessageEvidence],
+    *,
+    fallback_fields: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    observations: list[dict[str, Any]] = []
+    observations = (
+        build_edr_source_field_semantics(
+            parsed_messages,
+            known_endpoint_addresses=edr_endpoint_addresses(fallback_fields),
+        )
+        if source_type is AlertSourceType.EDR
+        else []
+    )
     for parsed in parsed_messages:
         base_path = f"{parsed.source_path}#parsed"
         if source_type is AlertSourceType.HIDS and _first_str(parsed.fields, ("external_ip",)) == "1.1.1.1":

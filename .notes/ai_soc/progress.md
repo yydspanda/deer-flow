@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `PI-01 PingAn Adapter Checkpoint C / EDR`：NIDS 已完成 95 条字段流向审计与 mapping；下一步按相同方法审阅 EDR parsed fields、角色/进程/网络/用户实体和 bounded evidence coverage。 |
+| 当前下一刀 | `PI-01 PingAn Adapter Checkpoint C / TI + SIEM`：NIDS 与 EDR 字段流向审计和 mapping 已完成；下一步审阅 Threat Intel/SIEM parsed/fallback fields、角色/IOC/模型来源语义和 bounded evidence coverage。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -201,6 +201,60 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-27 — PI-01 PingAn EDR Checkpoint C completed
+
+- 语料与字段审计：
+  - 重放 37 条 EDR 告警、60 个 message；其中 5 条 `edr-core-xc` 包含 14 个 message、
+    21 个 nested `detailsN` 记录；31 条 `leagsoft-edr` 继续覆盖既有 flat KV 路径，另有
+    1 条 message-less structured fallback；
+  - Adapter 生成 30 个 process observations、39 个 process nodes 和 7 个 file
+    observations；5 条信创 EDR 的 endpoint/process/user/MITRE 信息进入 canonical 与
+    observation provenance，不再只对 LLM 可见；
+  - 19 个合法 MD5 与 19 个合法 SHA-256 可进入实体；2+2 个短值保持在 parsed/bounded
+    evidence，并通过 `invalid_process_hash` 禁止进入实体、hash mention 和 provenance；
+  - flat EDR 的 40 个 message 均有合法 `str_source_ip`，但 message 内 `device__ip` 为 0；
+    37 个非空 `str_attack_ip` 中 33 个等于 endpoint，`str_threat_value` 有 36 个、
+    `str_activity_id` 有 38 个是 32 位 digest-shaped vendor value，证明这些字段不能直接映射
+    wire destination/hash；
+  - 纠偏后 canonical network source/destination 和 directional network observations 均为 0，
+    endpoint IP 覆盖仍为 36/37；raw payload mutation count 为 0，EDR typed high-value gap 为 0。
+- Adapter/contract：
+  - 新增 `normalizers/pingan_edr.py`，集中管理 `detailsN`、历史 `process_mame` typo、
+    observation、provenance、field-importance 和 source-field semantics；generic Runtime 不识别
+    PingAn aliases；
+  - canonical process/file 保留单值摘要，多 message/detail 使用稳定 evidence path 的
+    `ProcessObservationRef` / `FileObservationRef` 回放；child process 不覆盖父进程；
+  - `iplist`、`str_source_ip`、`device__ip` 只形成 endpoint host IP 与 provisional
+    victim/impacted-asset claims，不生成 network source/destination；合法且不同于 endpoint 的
+    `str_attack_ip` 只生成 typed IOC 与 tentative vendor attacker candidate；
+    message 与 structured fallback 会在同一 raw-event observation scope 内交叉排除 endpoint，
+    字段分层时不会制造假 remote IOC/attacker；
+    `str_threat_value`/`str_activity_id` 不按字符串形状生成 destination/hash；
+  - file/registry/task/existence/MITRE 只作为 typed investigation context，不自动证明恶意或
+    攻击成功；没有显式 directional connection contract 时，EDR network observations 保持空；
+  - `ProcessEntityRef`/`ProcessNodeRef` 增加 process ID 与合法 hash，`FileEntityRef` 增加
+    file observations；deterministic extractor 读取标准 observation 和 typed threat IOC，不读取
+    vendor 字段。
+- 可复跑产物：
+  - `validation/compact_zeus/data/pingan-edr-field-audit.{before,after}.json`；
+  - `validation/compact_zeus/data/pingan-edr-checkpoint-c/{before,after}_adapter_mapping/` 五组
+    代表样本；生成数据均 gitignored、包含敏感真实告警，不提交；
+  - 构建入口为 `build_pingan_edr_field_audit.py` 和
+    `build_pingan_edr_review_artifacts.py`，合成 contract 回归为
+    `test_build_pingan_edr_field_audit.py`。
+- 验证：
+  - PingAn EDR/authorization/validation 聚焦回归：`45 passed`；validation corpus/NIDS/EDR：
+    `11 passed`；
+  - SOC architecture boundary：`11 passed`；完整 SOC 回归：`585 passed`；Ruff passed；
+  - `codegraph sync .` 完成，并可查询 `edr_attacker_candidates`、跨层 endpoint 回归测试及
+    新增 EDR adapter symbols；
+  - 212 条 corpus rebuild：`edr=37, hids=23, ndr=44, nids=95, siem=10,
+    threat_intel=3`，无 unexpected `other`。
+- 下一步：
+  - 继续 `PI-01 Checkpoint C / TI + SIEM`，先区分 Threat Intel observation、内部模型输出和
+    trusted structured fallback 的字段语义，再补 canonical/fact/scenario/LLM coverage；
+  - 真实 CMDB/EDR/TI provider endpoint/credential 仍 data-gated，不用新增 mock 冒充完成。
 
 ### 2026-07-24 — PI-01 all-topic encoded-context production boundary
 

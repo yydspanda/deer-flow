@@ -11,6 +11,7 @@ from soc_agent.contracts import AlertInput, EntityKind, EntityMention, Extracted
 
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 DOMAIN_RE = re.compile(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b")
+FILE_HASH_RE = re.compile(r"^(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{40}|[0-9A-Fa-f]{64})$")
 _FILE_LIKE_SUFFIXES = frozenset(
     {
         "asp",
@@ -44,6 +45,7 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
     user = alert.entities.user
     host = alert.entities.host
     http = alert.entities.http
+    threat = alert.entities.threat
 
     mentions: list[EntityMention] = []
     _add_ip_mention(
@@ -71,6 +73,12 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
             value,
             role="host_ip",
             evidence_path="entities.host.ip_addresses",
+        )
+    for index, value in enumerate(threat.iocs):
+        _add_ioc_mention(
+            mentions,
+            value,
+            evidence_path=f"entities.threat.iocs[{index}]",
         )
     for value in IP_RE.findall(process.command_line or ""):
         _add_ip_mention(
@@ -136,6 +144,58 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
         role="parent_process_name",
         evidence_path="entities.process.parent_process_name",
     )
+    _add_mention(
+        mentions,
+        EntityKind.FILE_HASH,
+        process.sha256,
+        role="process_sha256",
+        evidence_path="entities.process.sha256",
+    )
+    _add_mention(
+        mentions,
+        EntityKind.FILE_HASH,
+        process.md5,
+        role="process_md5",
+        evidence_path="entities.process.md5",
+    )
+    for observation_index, observation in enumerate(process.observations):
+        _add_mention(
+            mentions,
+            EntityKind.HOST,
+            observation.host_name,
+            role="process_observation_host",
+            evidence_path=f"entities.process.observations[{observation_index}].host_name",
+        )
+        for node_index, node in enumerate(observation.nodes):
+            node_path = f"entities.process.observations[{observation_index}].nodes[{node_index}]"
+            _add_mention(
+                mentions,
+                EntityKind.PROCESS,
+                node.process_name,
+                role="observed_process_name",
+                evidence_path=f"{node_path}.process_name",
+            )
+            _add_mention(
+                mentions,
+                EntityKind.USER,
+                node.username,
+                role="observed_process_user",
+                evidence_path=f"{node_path}.username",
+            )
+            _add_mention(
+                mentions,
+                EntityKind.FILE_HASH,
+                node.sha256,
+                role="observed_process_sha256",
+                evidence_path=f"{node_path}.sha256",
+            )
+            _add_mention(
+                mentions,
+                EntityKind.FILE_HASH,
+                node.md5,
+                role="observed_process_md5",
+                evidence_path=f"{node_path}.md5",
+            )
     _add_mention(mentions, EntityKind.USER, user.username, role="username", evidence_path="entities.user.username")
     _add_mention(mentions, EntityKind.USER, user.src_user, role="src_user", evidence_path="entities.user.src_user")
     _add_mention(mentions, EntityKind.USER, user.dst_user, role="dst_user", evidence_path="entities.user.dst_user")
@@ -153,6 +213,29 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
     )
     _add_mention(mentions, EntityKind.FILE_HASH, alert.entities.file.sha1, role="sha1", evidence_path="entities.file.sha1")
     _add_mention(mentions, EntityKind.FILE_HASH, alert.entities.file.md5, role="md5", evidence_path="entities.file.md5")
+    for observation_index, observation in enumerate(alert.entities.file.observations):
+        observation_path = f"entities.file.observations[{observation_index}]"
+        _add_mention(
+            mentions,
+            EntityKind.FILE_HASH,
+            observation.sha256,
+            role=f"{observation.relation}_sha256",
+            evidence_path=f"{observation_path}.sha256",
+        )
+        _add_mention(
+            mentions,
+            EntityKind.FILE_HASH,
+            observation.sha1,
+            role=f"{observation.relation}_sha1",
+            evidence_path=f"{observation_path}.sha1",
+        )
+        _add_mention(
+            mentions,
+            EntityKind.FILE_HASH,
+            observation.md5,
+            role=f"{observation.relation}_md5",
+            evidence_path=f"{observation_path}.md5",
+        )
     _add_mention(
         mentions,
         EntityKind.RULE_CODE,
@@ -228,6 +311,63 @@ def _add_ip_mention(
     except ValueError:
         return
     _add_mention(mentions, EntityKind.IP, normalized, role=role, evidence_path=evidence_path)
+
+
+def _add_ioc_mention(
+    mentions: list[EntityMention],
+    value: str,
+    *,
+    evidence_path: str,
+) -> None:
+    try:
+        normalized_ip = str(ipaddress.ip_address(value))
+    except ValueError:
+        normalized_ip = None
+    if normalized_ip is not None:
+        _add_mention(
+            mentions,
+            EntityKind.IP,
+            normalized_ip,
+            role="threat_ioc",
+            evidence_path=evidence_path,
+        )
+        return
+
+    if FILE_HASH_RE.fullmatch(value):
+        _add_mention(
+            mentions,
+            EntityKind.FILE_HASH,
+            value,
+            role="threat_ioc",
+            evidence_path=evidence_path,
+        )
+        return
+
+    parsed = urlsplit(value)
+    if parsed.scheme and parsed.hostname:
+        _add_mention(
+            mentions,
+            EntityKind.URL,
+            value,
+            role="threat_ioc",
+            evidence_path=evidence_path,
+        )
+        _add_mention(
+            mentions,
+            EntityKind.DOMAIN,
+            parsed.hostname,
+            role="threat_ioc_domain",
+            evidence_path=evidence_path,
+        )
+        return
+
+    _add_mention(
+        mentions,
+        EntityKind.DOMAIN,
+        value,
+        role="threat_ioc",
+        evidence_path=evidence_path,
+    )
 
 
 def _add_mention(

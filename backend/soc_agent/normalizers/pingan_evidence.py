@@ -15,10 +15,16 @@ from soc_agent.contracts import (
     RoleClaimType,
     ScenarioSignal,
 )
+from soc_agent.normalizers.pingan_edr import (
+    edr_attacker_candidates,
+    edr_endpoint_addresses,
+    edr_ip_addresses,
+)
 
 _SCENARIO_SIGNAL_FIELDS = frozenset(
     {
         "attack_type",
+        "alert_describe",
         "detail_info",
         "description",
         "event_content",
@@ -28,6 +34,7 @@ _SCENARIO_SIGNAL_FIELDS = frozenset(
         "host_state",
         "ioc",
         "rule_name",
+        "rule_desc",
         "str_desc",
         "str_title",
         "vuln_name",
@@ -46,14 +53,21 @@ def build_pingan_fact_inputs(
 
     claims: list[RoleClaim] = []
     signals: list[ScenarioSignal] = []
+    raw_events = _iter_raw_events(alert)
+    edr_endpoints_by_scope = _edr_endpoint_addresses_by_scope(parsed_messages, raw_events) if source_type is AlertSourceType.EDR else {}
     for parsed in parsed_messages:
+        base_path = f"{parsed.source_path}#parsed"
         claims.extend(
             _claims_for_fields(
                 parsed.fields,
-                base_path=f"{parsed.source_path}#parsed",
+                base_path=base_path,
                 layer=EvidenceLayer.RAW_MESSAGE,
                 trust=EvidenceTrustLevel.HIGH,
                 source_type=source_type,
+                known_edr_endpoints=edr_endpoints_by_scope.get(
+                    _observation_scope(base_path),
+                    (),
+                ),
             )
         )
         signals.extend(
@@ -66,7 +80,7 @@ def build_pingan_fact_inputs(
             )
         )
 
-    for hit_log_index, raw_event_index, raw_event in _iter_raw_events(alert):
+    for hit_log_index, raw_event_index, raw_event in raw_events:
         base_path = f"alert.hitLog[{hit_log_index}].zeusRawLogs[{raw_event_index}]"
         claims.extend(
             _claims_for_fields(
@@ -75,6 +89,7 @@ def build_pingan_fact_inputs(
                 layer=EvidenceLayer.RAW_STRUCTURED,
                 trust=EvidenceTrustLevel.MEDIUM,
                 source_type=source_type,
+                known_edr_endpoints=edr_endpoints_by_scope.get(base_path, ()),
             )
         )
         signals.extend(
@@ -96,6 +111,7 @@ def _claims_for_fields(
     layer: EvidenceLayer,
     trust: EvidenceTrustLevel,
     source_type: AlertSourceType,
+    known_edr_endpoints: Sequence[str] = (),
 ) -> list[RoleClaim]:
     claims: list[RoleClaim] = []
     observation_confidence = 0.9 if layer is EvidenceLayer.RAW_MESSAGE else 0.55
@@ -103,12 +119,19 @@ def _claims_for_fields(
     endpoint_confidence = 0.8 if layer is EvidenceLayer.RAW_MESSAGE else 0.5
 
     if source_type is AlertSourceType.EDR:
-        source_aliases = ("str_source_ip", "device__ip")
-        destination_aliases = ("str_attack_ip", "str_threat_value", "str_activity_id")
-        impacted_aliases = ("str_source_ip", "device__ip")
-        attacker_aliases = ("str_attack_ip", "str_threat_value", "str_activity_id")
-        victim_aliases = impacted_aliases
-    elif source_type is AlertSourceType.HIDS:
+        _append_edr_role_claims(
+            claims,
+            fields,
+            base_path=base_path,
+            layer=layer,
+            trust=trust,
+            endpoint_confidence=endpoint_confidence,
+            attacker_confidence=assertion_confidence,
+            known_endpoint_addresses=known_edr_endpoints,
+        )
+        return claims
+
+    if source_type is AlertSourceType.HIDS:
         source_aliases = ()
         destination_aliases = ()
         impacted_aliases = ("internal_ip", "agent_ip", "device__ip", "str_source_ip")
@@ -188,6 +211,80 @@ def _claims_for_fields(
         rationale="source adapter proposed an impacted asset candidate; asset ownership still requires corroboration",
     )
     return claims
+
+
+def _append_edr_role_claims(
+    claims: list[RoleClaim],
+    fields: Mapping[str, Any],
+    *,
+    base_path: str,
+    layer: EvidenceLayer,
+    trust: EvidenceTrustLevel,
+    endpoint_confidence: float,
+    attacker_confidence: float,
+    known_endpoint_addresses: Sequence[str],
+) -> None:
+    """Emit endpoint and vendor-role claims without inventing wire direction."""
+
+    observation_scope = _observation_scope(base_path)
+    for alias in (
+        "str_source_ip",
+        "device__ip",
+        "agent_ip",
+        "internal_ip",
+        "iplist",
+    ):
+        evidence_path = f"{base_path}.{alias}"
+        for value in edr_ip_addresses(fields.get(alias)):
+            for role, claim_type, confidence, rationale in (
+                (
+                    "victim",
+                    RoleClaimType.VENDOR_ASSERTION,
+                    endpoint_confidence - 0.05,
+                    "endpoint telemetry identifies the host as a provisional victim candidate",
+                ),
+                (
+                    "impacted_asset",
+                    RoleClaimType.DERIVED_HYPOTHESIS,
+                    endpoint_confidence,
+                    "endpoint telemetry identifies an impacted asset candidate; ownership still requires corroboration",
+                ),
+            ):
+                claims.append(
+                    RoleClaim(
+                        claim_id=_claim_id(role, value, evidence_path, claim_type),
+                        role=role,  # type: ignore[arg-type]
+                        value=value,
+                        claim_type=claim_type,
+                        evidence_path=evidence_path,
+                        observation_scope=observation_scope,
+                        source_layer=layer,
+                        evidence_trust=trust,
+                        semantic_confidence=confidence,
+                        rationale=rationale,
+                    )
+                )
+
+    evidence_path = f"{base_path}.str_attack_ip"
+    for value in edr_attacker_candidates(
+        fields,
+        known_endpoint_addresses=known_endpoint_addresses,
+    ):
+        claim_type = RoleClaimType.VENDOR_ASSERTION
+        claims.append(
+            RoleClaim(
+                claim_id=_claim_id("attacker", value, evidence_path, claim_type),
+                role="attacker",
+                value=value,
+                claim_type=claim_type,
+                evidence_path=evidence_path,
+                observation_scope=observation_scope,
+                source_layer=layer,
+                evidence_trust=trust,
+                semantic_confidence=attacker_confidence,
+                rationale=("source product labeled a non-endpoint IP as an attack candidate; wire direction and attacker identity remain unconfirmed"),
+            )
+        )
 
 
 def _append_alias_claims(
@@ -294,6 +391,20 @@ def _iter_raw_events(alert: Mapping[str, Any]) -> list[tuple[int, int, Mapping[s
             if isinstance(raw_event, Mapping):
                 result.append((hit_log_index, raw_event_index, raw_event))
     return result
+
+
+def _edr_endpoint_addresses_by_scope(
+    parsed_messages: Sequence[ParsedRawMessageEvidence],
+    raw_events: Sequence[tuple[int, int, Mapping[str, Any]]],
+) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for parsed in parsed_messages:
+        scope = _observation_scope(f"{parsed.source_path}#parsed")
+        result.setdefault(scope, []).extend(edr_endpoint_addresses(parsed.fields))
+    for hit_log_index, raw_event_index, raw_event in raw_events:
+        scope = f"alert.hitLog[{hit_log_index}].zeusRawLogs[{raw_event_index}]"
+        result.setdefault(scope, []).extend(edr_endpoint_addresses(raw_event))
+    return {scope: list(dict.fromkeys(addresses)) for scope, addresses in result.items()}
 
 
 def _claim_value(value: Any) -> str | None:

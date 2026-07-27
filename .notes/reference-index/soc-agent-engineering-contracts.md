@@ -151,6 +151,15 @@ contracts
   `alert.source/target` are rule-relative sensor endpoints and must remain separately named
   observation fields; adapters must not silently reinterpret them as wire source/destination or
   attacker/victim. `query` is not DNS/domain evidence without an explicit protocol contract.
+- For PingAn EDR, endpoint identity, security role, and wire direction are separate contracts.
+  `str_source_ip`, `device__ip`, and `iplist` identify the observed endpoint/impacted-asset candidate;
+  they are not packet sources. `str_attack_ip` may emit only validated non-endpoint vendor
+  attacker/peer candidates and typed IOCs, never a canonical destination. "Non-endpoint" is
+  evaluated across parsed-message and structured-fallback identities in the same raw-event
+  observation scope, not against only the current field dictionary. Polymorphic
+  `str_threat_value` and `str_activity_id` remain typed source semantics and cannot become IP/hash
+  entities by shape alone. When the source provides no explicit directional connection fields,
+  canonical EDR source/destination and network observations must remain empty.
 - PingAn NIDS `alert.action`, `alert.attack_res`, and HTTP status must carry typed field semantics.
   Sensor `allowed`, a vendor result code, or HTTP 2xx cannot prove attack/exploit success or set the
   Runtime verdict. NIDS `files[]` describes transaction/file-extraction metadata and must not be
@@ -1010,6 +1019,27 @@ normalizers/hids.py
 - 原始字段别名、大小写差异、header 命名差异必须在 `normalizers/` 层归一化，例如 `x-forwarded-for`、`X-Forwarded-For`、`xForwardedFor` -> `entities.http.x_forwarded_for`。
 - `pipeline/extractor.py` 只读取 canonical `AlertInput` 字段，不直接识别厂商原始字段名、HTTP header 原名或平台私有字段名。
 - 如果 extractor 需要新增实体来源，先确认 canonical schema 是否已有字段；没有字段时先扩展 contract/normalizer，再提取实体。
+
+#### PingAn EDR nested-detail contract
+
+- `backend/soc_agent/normalizers/pingan_edr.py` owns PingAn EDR aliases and the historical
+  `process_mame` typo. Generic Runtime、fact reconstruction 和 extractor 禁止识别这些名字。
+- `detailsN` 必须按数字下标排序。Adapter 可以选择第一条有效 detail 形成单值 canonical
+  process/file 摘要，但每条可用 detail 都必须形成带精确 `evidence_path` 的
+  `ProcessObservationRef`；child process 作为同一 observation 的独立 node，不能覆盖父进程。
+- 只有 endpoint file action 的 `file_name/file_path` 可形成 `FileObservationRef`。
+  registry/task 字段是 reasoning context，不得伪装成 file entity；file target、`is_exist` 和
+  child process observation 均不自动证明恶意或执行成功。
+- `iplist` 是 endpoint/impacted-host 证据，只能形成 host IP 与 provisional
+  `victim`/`impacted_asset` claims；不得由此生成 network `source`/`destination` 或 attacker。
+- `process_md5` 仅接受 32 位十六进制，`process_sha256` 仅接受 64 位十六进制。非法值保留在
+  parsed/bounded evidence，并输出 `invalid_process_hash` semantic，但不得进入 canonical entity、
+  extracted hash mention 或 provenance。
+- `attck_id/attack_id` 可映射 MITRE tactic/technique classification，并必须标注为 vendor
+  classification context；它不是 technique 已执行或攻击成功的真值。
+- Adapter 必须同时输出 observation-level canonical provenance、EDR field-importance rules 和
+  source-field semantics。新增/漂移的高价值 detail 字段必须能通过 `EvidenceCoverageReport` 或
+  schema baseline issue 暴露，不能因完整 raw payload 仍存在就静默忽略。
 
 ### Normalization / extraction report 约束
 
