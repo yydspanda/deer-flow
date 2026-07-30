@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Literal
 
@@ -132,6 +133,10 @@ class SkillStateConfig(BaseModel):
 class ExtensionsConfig(BaseModel):
     """Unified configuration for MCP servers and skills."""
 
+    middlewares: list[str] = Field(
+        default_factory=list,
+        description="AgentMiddleware class paths loaded into the lead-agent middleware chain. Each entry uses 'module.path:ClassName'.",
+    )
     mcp_servers: dict[str, McpServerConfig] = Field(
         default_factory=dict,
         description="Map of MCP server name to configuration",
@@ -143,6 +148,10 @@ class ExtensionsConfig(BaseModel):
     )
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
+    def to_file_dict(self) -> dict[str, Any]:
+        """Serialize in the public extensions_config.json shape."""
+        return self.model_dump(by_alias=True)
+
     @classmethod
     def resolve_config_path(cls, config_path: str | None = None) -> Path | None:
         """Resolve the extensions config file path.
@@ -152,7 +161,7 @@ class ExtensionsConfig(BaseModel):
         2. If provided `DEER_FLOW_EXTENSIONS_CONFIG_PATH` environment variable, use it.
         3. Otherwise, search the caller project root for `extensions_config.json`, then `mcp_config.json`.
         4. For backward compatibility, also search legacy backend/repository-root defaults.
-        5. If not found, return None (extensions are optional).
+        5. If not found via search, return None (extensions are optional).
 
         Args:
             config_path: Optional path to extensions config file.
@@ -165,15 +174,37 @@ class ExtensionsConfig(BaseModel):
             4. Finally, search backend/repository-root defaults for monorepo compatibility.
 
         Returns:
-            Path to the extensions config file if found, otherwise None.
+            Path to the extensions config file if found via the resolution
+            order above.
+
+            An explicit `config_path` argument or a set
+            `DEER_FLOW_EXTENSIONS_CONFIG_PATH` is an operator assertion that
+            one particular file must be used, so a missing file in either of
+            those two modes raises ``FileNotFoundError`` (see Raises below)
+            instead of degrading to "no config" — a bad Docker mount, typo,
+            or deleted production config should surface as a loud, actionable
+            error rather than silently starting with every MCP server and
+            skill absent.
+
+            Only the fallback *search* mode (no explicit argument and no env
+            var set) returns ``None`` when nothing is found: that case means
+            extensions were never configured in the first place, which is the
+            legitimate "extensions are optional" case some callers (e.g. the
+            MCP tools-cache staleness check in `deerflow.mcp.cache`) rely on
+            as a clean, expected signal.
+
+        Raises:
+            FileNotFoundError: If `config_path` is given, or
+                `DEER_FLOW_EXTENSIONS_CONFIG_PATH` is set, and the resolved
+                path does not exist.
         """
         if config_path:
             path = Path(config_path)
             if not path.exists():
                 raise FileNotFoundError(f"Extensions config file specified by param `config_path` not found at {path}")
             return path
-        elif os.getenv("DEER_FLOW_EXTENSIONS_CONFIG_PATH"):
-            path = Path(os.getenv("DEER_FLOW_EXTENSIONS_CONFIG_PATH"))
+        elif env_path := os.getenv("DEER_FLOW_EXTENSIONS_CONFIG_PATH"):
+            path = Path(env_path)
             if not path.exists():
                 raise FileNotFoundError(f"Extensions config file specified by environment variable `DEER_FLOW_EXTENSIONS_CONFIG_PATH` not found at {path}")
             return path
@@ -193,7 +224,9 @@ class ExtensionsConfig(BaseModel):
                 if path.exists():
                     return path
 
-            # Extensions are optional, so return None if not found
+            # Extensions are optional: unlike the explicit config_path/env-var
+            # branches above, finding nothing here is the expected case, so
+            # return None rather than raising.
             return None
 
     @classmethod
@@ -283,7 +316,7 @@ class ExtensionsConfig(BaseModel):
         skill_config = self.skills.get(skill_name)
         if skill_config is None:
             # Default to enabled for all skill categories
-            return skill_category in ("public", "custom", "legacy")
+            return skill_category in ("public", "custom", "legacy", "integrations")
         return skill_config.enabled
 
 
@@ -303,6 +336,25 @@ def get_extensions_config() -> ExtensionsConfig:
     if _extensions_config is None:
         _extensions_config = ExtensionsConfig.from_file()
     return _extensions_config
+
+
+#: Serializes read-modify-write cycles on ``extensions_config.json`` across every
+#: writer. Both the skills router (skill enable/disable) and the MCP router
+#: (server config updates) read this file, merge a change and write it back.
+#: While each RMW ran inline on the event loop they were implicitly serialized;
+#: once a writer offloads its RMW to a worker thread the loop is free to
+#: interleave the other writer inside the read->write window, and the second
+#: write silently drops the first one's change.
+#:
+#: This is a ``threading.Lock`` rather than an ``asyncio.Lock``, and it must be
+#: acquired *inside* the worker that performs the RMW. An asyncio lock held
+#: around ``await asyncio.to_thread(...)`` protects only the awaiting task: if
+#: that task is cancelled the context manager releases immediately while the
+#: worker thread keeps writing, letting a second writer in. Owning the lock from
+#: the worker keeps it held until the write and reload actually finish. It also
+#: has no event-loop affinity, so writers running on different loops still
+#: exclude each other.
+extensions_config_write_lock = threading.Lock()
 
 
 def reload_extensions_config(config_path: str | None = None) -> ExtensionsConfig:

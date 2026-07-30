@@ -13,6 +13,8 @@ FROM python:3.12-slim-bookworm AS builder
 ARG NODE_MAJOR=22
 ARG APT_MIRROR
 ARG UV_INDEX_URL
+ARG NPM_REGISTRY
+ARG LARK_CLI_NPM_VERSION=1.0.65
 # Optional extras to install (e.g. "postgres" for PostgreSQL support)
 # Usage: docker build --build-arg UV_EXTRAS=postgres,discord ...
 ARG UV_EXTRAS
@@ -36,6 +38,11 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# Install the official Lark/Feishu CLI used by the managed Lark integration.
+RUN if [ -n "${NPM_REGISTRY}" ]; then npm config set registry "${NPM_REGISTRY}"; fi \
+    && npm install -g @larksuite/cli@${LARK_CLI_NPM_VERSION} \
+    && lark-cli --version
+
 # Install uv (source image overridable via UV_IMAGE build arg)
 COPY --from=uv-source /uv /uvx /usr/local/bin/
 
@@ -45,25 +52,26 @@ WORKDIR /app
 # Copy backend source code
 COPY backend ./backend
 
-# Install dependencies with cache mount
-# `redis` is always installed because Docker Compose defaults the stream bridge
-# to Redis (DEER_FLOW_STREAM_BRIDGE_REDIS_URL); it is an optional extra elsewhere
-# so slim non-Docker installs do not pull it.
-# When UV_EXTRAS is set (comma- or whitespace-separated), installs optional dependencies.
+# Install dependencies with cache mount.
+# Accepts comma- or whitespace-separated names from UV_EXTRAS and installs one
+# validated --extra flag per name.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    sh -c 'cd backend && \
-    set -f; \
-    extras_flags=""; \
-    for extra in $(printf "%s" "$UV_EXTRAS" | tr "," " "); do \
-        case "$extra" in \
-            [!A-Za-z]* | *[!A-Za-z0-9_-]*) \
-                echo "UV_EXTRAS entry $extra is invalid (must match [A-Za-z][A-Za-z0-9_-]*)" >&2; \
-                exit 1; \
-                ;; \
+    set -eu; \
+    EXTRAS_FLAGS=""; \
+    if [ -n "${UV_EXTRAS:-}" ]; then \
+      for raw in $(printf '%s' "$UV_EXTRAS" | tr ',' ' '); do \
+        [ -z "$raw" ] && continue; \
+        case "$raw" in \
+          [!A-Za-z]* | *[!A-Za-z0-9_-]*) \
+            echo "[build] UV_EXTRAS entry '$raw' is invalid (must match [A-Za-z][A-Za-z0-9_-]*)" >&2; \
+            exit 1; \
+            ;; \
         esac; \
-        extras_flags="$extras_flags --extra $extra"; \
-    done; \
-    UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} uv sync --extra redis $extras_flags'
+        EXTRAS_FLAGS="$EXTRAS_FLAGS --extra $raw"; \
+      done; \
+    fi; \
+    cd backend; \
+    UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} uv sync --all-packages $EXTRAS_FLAGS
 
 # UTF-8 locale prevents UnicodeEncodeError on Chinese/emoji content in minimal
 # containers where locale configuration may be missing and the default encoding is not UTF-8.
@@ -95,7 +103,10 @@ ENV PYTHONIOENCODING=utf-8
 COPY --from=builder /usr/bin/node /usr/bin/node
 COPY --from=builder /usr/lib/node_modules /usr/lib/node_modules
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/bin/npm \
-    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/bin/npx
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/bin/npx \
+    && LARK_CLI_BIN="$(node -p 'const bin=require("/usr/lib/node_modules/@larksuite/cli/package.json").bin; typeof bin === "string" ? bin : (bin["lark-cli"] || Object.values(bin)[0])')" \
+    && ln -s "../lib/node_modules/@larksuite/cli/${LARK_CLI_BIN#./}" /usr/bin/lark-cli \
+    && lark-cli --version
 
 # Install Docker CLI (for DooD: allows starting sandbox containers via host Docker socket)
 COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
