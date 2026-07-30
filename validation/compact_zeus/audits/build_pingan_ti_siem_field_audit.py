@@ -11,17 +11,17 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 BACKEND_ROOT = ROOT / "backend"
 for import_root in (ROOT, BACKEND_ROOT):
     import_path = str(import_root)
     if import_path not in sys.path:
         sys.path.insert(0, import_path)
 
-from validation.compact_zeus.build_alert_validation_corpus import (  # noqa: E402
+from validation.compact_zeus.corpus.build_alert_validation_corpus import (  # noqa: E402
     canonical_sha256,
 )
-from validation.compact_zeus.restricted_dataframe_pickle import (  # noqa: E402
+from validation.compact_zeus.shared.restricted_dataframe_pickle import (  # noqa: E402
     load_dataframe_pickle,
 )
 

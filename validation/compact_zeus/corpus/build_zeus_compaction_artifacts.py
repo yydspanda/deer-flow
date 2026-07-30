@@ -33,15 +33,15 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from validation.compact_zeus.compact_encoded_llm_context import (  # noqa: E402
+from validation.compact_zeus.shared.compact_encoded_llm_context import (  # noqa: E402
     OmittedEncodedSpan,
     compact_zeus_raw_logs,
 )
-from validation.compact_zeus.restricted_dataframe_pickle import (  # noqa: E402
+from validation.compact_zeus.shared.restricted_dataframe_pickle import (  # noqa: E402
     load_dataframe_pickle,
 )
 

@@ -1704,6 +1704,16 @@ class EvidenceTrustLevel(StrEnum):
     UNKNOWN = "unknown"
 
 
+class FieldReasoningStatus(StrEnum):
+    """Whether one evidence path is eligible as an independent fact source."""
+
+    SELECTED_EVIDENCE = "selected_evidence"
+    SUPPLEMENTARY_EVIDENCE = "supplementary_evidence"
+    INCLUDED_CANONICAL_PROJECTION = "included_canonical_projection"
+    EXCLUDED_UNSELECTED_FALLBACK = "excluded_unselected_fallback"
+    EXCLUDED_DUPLICATE_PROJECTION = "excluded_duplicate_projection"
+
+
 class SensitiveEvidenceMode(StrEnum):
     """How bounded model evidence handles sensitive field values."""
 
@@ -2167,13 +2177,26 @@ class BoundedEvidenceHighlight(BaseModel):
 
 
 class FieldTrust(BaseModel):
-    """Trust annotation for one field considered during fact reconstruction."""
+    """Source trust and reasoning eligibility for one fact input path."""
 
     field_path: str
     layer: EvidenceLayer
-    trust_level: EvidenceTrustLevel = EvidenceTrustLevel.UNKNOWN
-    participates_in_fact_reconstruction: bool = True
+    source_trust: EvidenceTrustLevel = EvidenceTrustLevel.UNKNOWN
+    reasoning_status: FieldReasoningStatus
+    participates: bool
     reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_reasoning_status(self) -> FieldTrust:
+        participating_statuses = {
+            FieldReasoningStatus.SELECTED_EVIDENCE,
+            FieldReasoningStatus.SUPPLEMENTARY_EVIDENCE,
+            FieldReasoningStatus.INCLUDED_CANONICAL_PROJECTION,
+        }
+        expected = self.reasoning_status in participating_statuses
+        if self.participates is not expected:
+            raise ValueError("participates must agree with reasoning_status eligibility")
+        return self
 
 
 class RoleClaimType(StrEnum):

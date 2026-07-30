@@ -21,6 +21,7 @@ from soc_agent.contracts import (
     MessageSchemaObservation,
     MessageSchemaStatus,
     ParsedRawMessageEvidence,
+    SensitiveEvidenceMode,
 )
 from soc_agent.pipeline.field_importance import EvidenceFieldImportanceRegistry
 
@@ -137,23 +138,35 @@ def build_evidence_coverage_report(
         if evidence.truncated:
             truncated_evidence_paths.append(source_path)
 
-        parsed = parsed_by_path[source_path]
-        for relative_path in _flatten_leaves(parsed.fields):
-            full_path = f"{source_path}#parsed.{relative_path}"
-            field_name = relative_path.rsplit(".", 1)[-1].lower()
-            if _SENSITIVE_FIELD_RE.search(relative_path):
-                sanitized_paths.append(full_path)
-                omissions.append(EvidenceCoverageOmission(field_path=full_path, reason="sensitive_value_redacted"))
-            elif field_name in _DECODED_SEPARATELY_FIELDS:
-                sanitized_paths.append(full_path)
-                decoded_value = _resolve_relative_path(parsed.decoded_fields, relative_path)
-                repaired_value = _resolve_relative_path(parsed.repaired_fields, relative_path)
-                omissions.append(
-                    EvidenceCoverageOmission(
-                        field_path=full_path,
-                        reason=("replaced_by_decoded_projection" if decoded_value is not None else ("replaced_by_repaired_projection" if repaired_value is not None else "sanitized_string_fallback")),
+        if evidence.sensitive_evidence_mode is SensitiveEvidenceMode.REDACT:
+            parsed = parsed_by_path[source_path]
+            for relative_path in _flatten_leaves(parsed.fields):
+                full_path = f"{source_path}#parsed.{relative_path}"
+                field_name = relative_path.rsplit(".", 1)[-1].lower()
+                if _SENSITIVE_FIELD_RE.search(relative_path):
+                    sanitized_paths.append(full_path)
+                    omissions.append(
+                        EvidenceCoverageOmission(
+                            field_path=full_path,
+                            reason="sensitive_value_redacted",
+                        )
                     )
-                )
+                elif field_name in _DECODED_SEPARATELY_FIELDS:
+                    sanitized_paths.append(full_path)
+                    decoded_value = _resolve_relative_path(
+                        parsed.decoded_fields,
+                        relative_path,
+                    )
+                    repaired_value = _resolve_relative_path(
+                        parsed.repaired_fields,
+                        relative_path,
+                    )
+                    omissions.append(
+                        EvidenceCoverageOmission(
+                            field_path=full_path,
+                            reason=("replaced_by_decoded_projection" if decoded_value is not None else ("replaced_by_repaired_projection" if repaired_value is not None else "sanitized_string_fallback")),
+                        )
+                    )
 
     for source_path, evidence in evidence_by_path.items():
         if evidence.layer is not EvidenceLayer.RAW_STRUCTURED:

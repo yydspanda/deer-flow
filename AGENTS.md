@@ -317,7 +317,7 @@ Current SOC direction:
   not extra fixed Runtime nodes. A rejected LLM evidence citation is safe only when decision
   policy forces degraded evidence, human review, and `automation_allowed=false`.
 - Build the local real-alert validation corpus with
-  `backend/.venv/bin/python validation/compact_zeus/build_alert_validation_corpus.py`.
+  `backend/.venv/bin/python validation/compact_zeus/corpus/build_alert_validation_corpus.py`.
   The authoritative source PKL lives under `datas/source/`; exact JSON demos under
   `datas/legacy_demos/` add lineage, conflicts remain explicit variants, and missing demos append
   one canonical row. Generated outputs stay under gitignored `validation/compact_zeus/data/`, split

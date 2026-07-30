@@ -127,7 +127,7 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 
 | ID | Work / 工作 | Deliverable / 产出 | Acceptance / 验收 |
 |---|---|---|---|
-| `PI-01` | Real providers / 真实能力源 | **In Progress**: 已完成 212 条唯一 Zeus 告警的可追溯 corpus intake、PingAn source/parser Checkpoint B、structured fallback 修复，以及 NIDS/NDR/APT/EDR/HIDS/Threat Intel/SIEM 全部 Checkpoint C；下一步只选择第一项获批只读 dev/staging 集成，不再扩充本地 mock | corpus 保持唯一 ID、lineage 和显式敏感证据模式；10 条可用 structured fallback 均产生 bounded evidence，2 条空 rawLogs 显式报数据缺口；212/212 条、8/8 topic 经过统一生产 LLM 投影，112 条压缩 210 段且 raw hash 零变化；NIDS 95/95 五元组、128 network observations、67 HTTP observations 可回放；NDR/APT 44 alerts/105 messages 形成 105 network、63 HTTP、20 observed-artifact observations，vendor descriptor 不冒充 IOC；EDR 60 个 message/21 个 nested details 形成 30 process observations、39 process nodes、7 file observations，endpoint/attacker/wire-direction 语义分离；HIDS 46 messages 形成 44 process observations/122 nodes、21 file observations、5 event-scoped network observations，0 invented canonical direction/placeholder leak；TI 3 alerts/4 messages 形成 4 session observations并分离 provider roles；SIEM 6 email + 4 machine-copy alerts 形成 typed email/host entities，0 invented network direction；所有 source audit 为 0 known high-value gap、0 raw mutation；真实 provider contract、超时、权限、数据边界、审计、失败降级和 smoke 有证据 |
+| `PI-01` | Real providers / 真实能力源 | **In Progress**: 已完成 212 条唯一 Zeus 告警的可追溯 corpus intake、PingAn source/parser Checkpoint B、全部来源 Checkpoint C；Checkpoint D 的 D-0..D-4 已完成原始输入、单样本 normalization/entity/fact 与 bounded analysis input 分步验证，后续继续 Skill/Analyzer/Decision 单样本审阅，再扩展到跨来源与全量 deterministic Runtime 回放，最后选择第一项获批只读 dev/staging 集成；不再扩充本地 mock | D-0 保证 212 个唯一 ID、0 blocking row，区分 200 条 message、10 条可用 structured fallback 与 2 条空 rawLogs 上游缺口；D-1..D-4 证明样本 `1965449` 的 canonical normalization、事实/证据投影、raw immutability 与 coverage contract 可回放，且 0 known high-value gap；Checkpoint D 后续还需证明 Skill/Analyzer contract 和安全 Decision Policy 在代表样本及 212 条全量上可回放；最终真实 provider contract、超时、权限、数据边界、审计、失败降级和 smoke 有证据 |
 | `PI-02` | Real infrastructure / 真实基础设施 | Kafka、PostgreSQL、K8s 参数与容量/恢复测试 | 吞吐、端到端延迟、重试、DLQ、幂等、连接池和故障恢复满足试点门槛 |
 | `PI-03` | Real labels and calibration / 真实标签与校准 | 脱敏、人工标注的 scenario/confidence/correlation corpus | 来源、范围、版本和 reviewer 可审计；scorer/profile 仅在离线 gate 通过后进入 shadow |
 | `PI-04` | Operations and security / 运维与安全 | 可观测性、SLO、告警、secret、RBAC、审计保留和隐私策略 | 运营同事能定位任务/预警/延迟/模型/队列问题；安全评审通过 |
@@ -178,7 +178,12 @@ Completed:    BG-P1-04 - Governed memory activation (AC-39)
 Completed:    BG-P1-05 - Alpha E2E and docs reconciliation (AC-23, AC-24, AC-49)
 Completed:    BG-03 - Alpha readiness package and scoped accountable approval
 Current Stage: PI - Real Data & Production Integration
-In Progress:  PI-01 - first approved read-only dev/staging provider integration
-Next:         Select the first approved read-only dev/staging endpoint and collect connector smoke evidence
+In Progress:  PI-01 - Checkpoint D step-reviewed full-corpus Runtime replay, then first approved read-only provider
+Completed:    PI-01 Checkpoint D-0 - 212-row adapter-independent corpus inventory
+Completed:    PI-01 Checkpoint D-1 - alert 1965449 canonical normalization (parser warnings explicit)
+Completed:    PI-01 Checkpoint D-2 - alert 1965449 generic deterministic entity extraction
+Completed:    PI-01 Checkpoint D-3 - alert 1965449 fact reconstruction and role-resolution review
+Completed:    PI-01 Checkpoint D-4 - alert 1965449 bounded analysis input and EvidenceCoverageReport
+Next:         User reviews D-4; then D-5 resolves bounded SOC skill context only
 External inputs: Real endpoint/topic, authentication, tenant mapping, payload sample and data owner are required before connector smoke; do not substitute another mock
 ```

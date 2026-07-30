@@ -19,6 +19,8 @@ from soc_agent.contracts import (
     EvidenceInputPolicyName,
     EvidenceLayer,
     EvidenceTrustLevel,
+    FieldReasoningStatus,
+    FieldTrust,
     Verdict,
 )
 from soc_agent.core import SocAnalysisService, SocNormalizationService
@@ -35,6 +37,36 @@ def _sample(name: str) -> dict:
 
 def _analyze(payload: dict) -> AnalysisRun:
     return SocAnalysisService().analyze(payload)
+
+
+def test_field_trust_separates_source_trust_from_reasoning_eligibility() -> None:
+    trust = FieldTrust(
+        field_path="entities.network.source_ip",
+        layer=EvidenceLayer.PROCESSED_FIELD,
+        source_trust=EvidenceTrustLevel.HIGH,
+        reasoning_status=FieldReasoningStatus.EXCLUDED_DUPLICATE_PROJECTION,
+        participates=False,
+    )
+
+    assert trust.model_dump(mode="json") == {
+        "field_path": "entities.network.source_ip",
+        "layer": "processed_field",
+        "source_trust": "high",
+        "reasoning_status": "excluded_duplicate_projection",
+        "participates": False,
+        "reason": None,
+    }
+    with pytest.raises(
+        ValueError,
+        match="participates must agree with reasoning_status eligibility",
+    ):
+        FieldTrust(
+            field_path="entities.network.source_ip",
+            layer=EvidenceLayer.PROCESSED_FIELD,
+            source_trust=EvidenceTrustLevel.HIGH,
+            reasoning_status=FieldReasoningStatus.EXCLUDED_DUPLICATE_PROJECTION,
+            participates=True,
+        )
 
 
 def test_approved_scanner_returns_false_positive_candidate() -> None:
@@ -355,6 +387,11 @@ def test_pingan_legacy_apt_alert_normalizes_platform_envelope() -> None:
     assert run.fact_reconstruction.evidence_policy is not None
     assert run.fact_reconstruction.evidence_policy.name == EvidenceInputPolicyName.STRUCTURED_FALLBACK
     assert run.fact_reconstruction.selected_input_available is True
+    selected_trusts = [trust for trust in run.fact_reconstruction.field_trusts if trust.field_path == "alert.hitLog[0].zeusRawLogs[0]"]
+    assert len(selected_trusts) == 1
+    assert selected_trusts[0].source_trust == EvidenceTrustLevel.LOW
+    assert selected_trusts[0].reasoning_status == FieldReasoningStatus.SELECTED_EVIDENCE
+    assert selected_trusts[0].participates is True
     assert "evidence input policy selected low-trust structured fallback" in run.fact_reconstruction.warnings
     assert run.llm_analysis_request is not None
     assert run.llm_analysis_request.primary_evidence_path == "alert.hitLog[0].zeusRawLogs[0]"
@@ -448,8 +485,18 @@ def test_pingan_legacy_alert_prefers_raw_message_for_reasoning_input() -> None:
     assert run.llm_analysis_request.primary_evidence_path == "alert.hitLog[0].zeusRawLogs[0].message"
     assert run.llm_analysis_request.conflict_count >= 0
     field_trust_by_path = {trust.field_path: trust for trust in run.fact_reconstruction.field_trusts}
-    assert field_trust_by_path["alert.hitLog[0].zeusRawLogs[0].message"].trust_level == EvidenceTrustLevel.HIGH
-    assert field_trust_by_path["entities.network.source_ip"].participates_in_fact_reconstruction is False
+    selected_message_trust = field_trust_by_path["alert.hitLog[0].zeusRawLogs[0].message"]
+    assert selected_message_trust.source_trust == EvidenceTrustLevel.HIGH
+    assert selected_message_trust.reasoning_status == FieldReasoningStatus.SELECTED_EVIDENCE
+    assert selected_message_trust.participates is True
+    fallback_trust = field_trust_by_path["alert.hitLog[0].zeusRawLogs[0]"]
+    assert fallback_trust.source_trust == EvidenceTrustLevel.UNKNOWN
+    assert fallback_trust.reasoning_status == FieldReasoningStatus.EXCLUDED_UNSELECTED_FALLBACK
+    assert fallback_trust.participates is False
+    canonical_source_trust = field_trust_by_path["entities.network.source_ip"]
+    assert canonical_source_trust.source_trust == EvidenceTrustLevel.HIGH
+    assert canonical_source_trust.reasoning_status == FieldReasoningStatus.EXCLUDED_DUPLICATE_PROJECTION
+    assert canonical_source_trust.participates is False
 
 
 def test_pingan_legacy_fact_reconstruction_does_not_assume_attacker_is_network_source() -> None:

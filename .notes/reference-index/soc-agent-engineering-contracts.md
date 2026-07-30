@@ -139,8 +139,10 @@ contracts
   parse, the first structured event may enter `raw_structured/low` fallback. The current sole trust
   override is exact topic `T_GBD_zeus_data`, whose structured fallback is `high`; source type,
   message absence, similar names, and topic prefixes must not grant that trust.
-- `FieldTrust` must describe the field actually used. A fallback structured field must never inherit
-  the selected raw message's high trust merely because both live in the same `zeusRawLogs[]` item.
+- `FieldTrust.source_trust` must describe the actual source provenance. A fallback structured field
+  must never inherit the selected raw message's high trust merely because both live in the same
+  `zeusRawLogs[]` item. Reasoning exclusion is represented separately and must not lower an otherwise
+  high-trust source.
 - All parseable messages are retained. One message is selected as primary evidence and up to four
   paths are full supplementary evidence; selection and ordering must be deterministic and replayable.
   Adapter-owned, exact-path high-value values outside that budget may enter bounded
@@ -1137,7 +1139,19 @@ normalizers/hids.py
 
 - runtime 固定在 `entity_extract` 后、`analyze_stub` / 后续 `llm_analyze` 前执行 `fact_reconstruct`。
 - `FactReconstructionResult` 必须保存到 `AnalysisRun.fact_reconstruction`，随 run payload 一起持久化、replay、审计。
-- `FieldTrust` 只表达字段可信度和是否参与事实重建；不能直接改变 verdict。
+- `FieldTrust` 必须分离来源可信度与推理准入：`source_trust` 只表达 provenance reliability；
+  `reasoning_status` 与 `participates` 只表达该路径能否作为独立事实来源。它们不能直接改变 verdict。
+- policy 实际选中的输入使用 `selected_evidence`；显式 supplementary message 使用
+  `supplementary_evidence`，两者可以参与事实重建。Clean canonical/structured adapter 只有在 policy
+  允许 processed fields 时才可使用 `included_canonical_projection`。
+- `raw_message_first` 已成功选择 message 时，`fallback_input_path` 只能保留为
+  `source_trust=unknown`、`reasoning_status=excluded_unselected_fallback`、`participates=false` 的
+  审计记录；不能因为路径存在就让 Zeus sibling structured fields 重新进入事实层。Structured
+  fallback 被实际选中时，复用 selected-input trust，不重复生成第二条相同路径记录。
+- 从已选 raw evidence 标准化得到的 canonical 副本必须从 `CanonicalFieldProvenance` 继承
+  `source_trust`，同时标记为 `excluded_duplicate_projection`、`participates=false`。排除是为了避免
+  同一证据重复投票，不能把原本 high-trust 的值错误降为 low；缺少 provenance 时使用 unknown，
+  不猜测来源可信度。
 - source-specific adapter 负责把厂商别名转换成通用 `RoleClaim`；generic fact reconstructor 禁止识别 `attack_sip`、`alarm_sip`、`str_attack_ip` 等厂商字段。
 - `RoleClaim` 必须分开 `evidence_trust` 与 `semantic_confidence`。原始 message 解析成功只能提高前者，不能自动证明厂商的 attacker/victim 语义正确。
 - `RoleResolution` 当前角色包括 `source`、`destination`、`attacker`、`victim`、`impacted_asset`；状态包括 `observed`、`tentative`、`conflicted`、`confirmed`、`unresolved`。
@@ -1147,7 +1161,9 @@ normalizers/hids.py
   - 场景化角色不一致：`reverse_connection_attacker_destination_mismatch`、`reverse_connection_victim_source_mismatch`。
   - 源和目的重叠：`source_destination_overlap`。
 - 禁止使用全局 `attacker == source` / `victim == destination` 约束。正向攻击、反弹 shell、恶意外联、C2、横向移动、代理/NAT/XFF 的角色关系不同；未知场景不得伪造跨角色冲突。
-- 主 message、supplementary messages、structured fallback 都必须作为独立 claim source 参与冲突检查；supplementary 不能只进入 Prompt。
+- 主 message 和 supplementary messages 必须作为独立 claim source 参与冲突检查；supplementary
+  不能只进入 Prompt。Structured fallback 只有在没有可解析 message、且 policy 实际选择它时才能
+  成为 claim source；未选中的 fallback 只供 raw 审计。
 - 冲突裁决必须输出暂定值或 unresolved、支持/反对 claim IDs、语义置信度、证据缺口、人工核查清单和 automation guard；不能一边报告冲突，一边把值伪装成 confirmed。
 - fact layer 的 `automation_allowed` 始终为 false；即使角色由人工确认，也必须再经过 action policy/approval。
 - 事实重建只做 deterministic 规则；LLM 只能读取 fact layer 进行解释、补充候选或提出复核问题，不能绕过该层直接相信上游加工字段。
@@ -1179,6 +1195,9 @@ normalizers/hids.py
     contract 与审计，超预算字段必须作为 omission 记录。
   - `full` 不能成为通用部署默认，parser 也不能根据部署 mode 改变自身输出。
 - `CanonicalFieldProvenance` 必须展示 canonical path、selected value、selected source path/layer/trust、selection reason 和 alternatives，让 `raw_message_first` 可从运行产物直接验证。
+- `CanonicalFieldProvenance.selected_from` 必须能真实解释 `selected_value`。仅仅发现一个名称相似的
+  source field 不足以建立 provenance；若 canonical 值来自平台 metadata，而 message 中的近似字段
+  值不同，禁止把该 message 字段伪装成 selected source。
 
 ### Evidence coverage 约束
 
@@ -1187,6 +1206,11 @@ normalizers/hids.py
   encoded compaction、truncation、omissions 和 high-value gaps。
 - structured fallback 必须记录实际投影的 leaf paths；`full` 只表示已选值保持原始，不表示绕过
   总预算，也不表示完整 `zeusRawLogs[]` 数组进入模型。
+- `full` mode 下 `BoundedAnalysisEvidence.sanitized_field_paths`、
+  `EvidenceCoverageReport.llm_sanitized_paths` 与 `llm_sanitized_count` 必须为空/零；不能继续把
+  decoded replacement 或 sensitive-name path 误记为脱敏。源数据已有掩码保持原样，不视为 Runtime
+  sanitization。encoded-span compaction 独立计入 `llm_compacted_encoded_paths`，不能混入 sanitized
+  统计。
 - high-value mapping expectations apply to the selected structured fallback as well as parsed
   messages. Structured checks use exact selected-input provenance and must not scan later unselected
   `zeusRawLogs[]` entries as though they entered canonical analysis.

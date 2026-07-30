@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from validation.compact_zeus.build_alert_validation_corpus import (
+from validation.compact_zeus.corpus.build_alert_validation_corpus import (
     CORPUS_SCHEMA_VERSION,
     build_corpus,
     deep_difference_paths,
@@ -15,7 +15,9 @@ from validation.compact_zeus.build_alert_validation_corpus import (
     validate_with_soc_normalizer,
     write_pickle_atomic,
 )
-from validation.compact_zeus.restricted_dataframe_pickle import load_dataframe_pickle
+from validation.compact_zeus.shared.restricted_dataframe_pickle import (
+    load_dataframe_pickle,
+)
 
 SOURCE_COLUMNS = [
     "alert_id",
@@ -70,7 +72,9 @@ def _row(alert_id: int, payload: dict) -> dict:
             "alert_id": str(alert_id),
             "alert_data": payload,
         },
-        "agent_response": json.dumps({"alert_id": str(alert_id), "analysis_result": {}}),
+        "agent_response": json.dumps(
+            {"alert_id": str(alert_id), "analysis_result": {}}
+        ),
         "risk_level": "medium",
         "topic": hit_log["topic"],
         "topic_name": hit_log["topicName"],
@@ -134,7 +138,9 @@ def test_build_corpus_deduplicates_and_preserves_conflict_variant(
     variants = by_id.loc[2, "legacy_demo_variants"]
     assert len(variants) == 1
     assert variants[0]["alert_data"] == legacy_conflict
-    assert variants[0]["difference_paths"] == ["$.alert.hitLog[0].zeusRawLogs[0].source_ip"]
+    assert variants[0]["difference_paths"] == [
+        "$.alert.hitLog[0].zeusRawLogs[0].source_ip"
+    ]
     assert by_id.loc[3, "sample_origin"] == "legacy_demo"
     assert pd.isna(by_id.loc[3, "agent_response"])
     assert by_id.loc[3, "corpus_schema_version"] == CORPUS_SCHEMA_VERSION
@@ -169,7 +175,9 @@ def test_normalizer_validation_requires_bounded_structured_fallback() -> None:
     assert report["policy_contract_violations"] == []
 
 
-def test_normalizer_validation_reports_empty_structured_fallback_as_upstream_gap() -> None:
+def test_normalizer_validation_reports_empty_structured_fallback_as_upstream_gap() -> (
+    None
+):
     payload = _payload(12, source_ip="10.0.0.12")
     payload["alert"]["hitLog"][0]["zeusRawLogs"] = []
     report = validate_with_soc_normalizer(_source_frame([_row(12, payload)]))
@@ -181,7 +189,9 @@ def test_normalizer_validation_reports_empty_structured_fallback_as_upstream_gap
     assert report["policy_contract_violations"] == []
 
 
-def test_normalizer_validation_applies_encoded_compaction_to_every_pingan_topic() -> None:
+def test_normalizer_validation_applies_encoded_compaction_to_every_pingan_topic() -> (
+    None
+):
     topics = {
         "T_GBD_zeus_data": "SIEM",
         "edr-core-xc": "EDR",

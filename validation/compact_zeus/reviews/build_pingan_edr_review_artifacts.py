@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build sensitive local review artifacts for PingAn TI/SIEM Checkpoint C."""
+"""Build sensitive local before/after artifacts for PingAn EDR review."""
 
 from __future__ import annotations
 
@@ -11,14 +11,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 BACKEND_ROOT = ROOT / "backend"
 for import_root in (ROOT, BACKEND_ROOT):
     import_path = str(import_root)
     if import_path not in sys.path:
         sys.path.insert(0, import_path)
 
-from validation.compact_zeus.restricted_dataframe_pickle import (  # noqa: E402
+from validation.compact_zeus.shared.restricted_dataframe_pickle import (  # noqa: E402
     load_dataframe_pickle,
 )
 
@@ -26,39 +26,44 @@ from soc_agent.contracts import SensitiveEvidenceMode  # noqa: E402
 from soc_agent.core.runtime import build_analysis_request_for_payload  # noqa: E402
 from soc_agent.normalizers import normalize_alert_payload  # noqa: E402
 
-SCHEMA_VERSION = "soc.validation.pingan_ti_siem_checkpoint_c.v1"
+SCHEMA_VERSION = "soc.validation.pingan_edr_checkpoint_c.v1"
 DEFAULT_CORPUS_PATH = (
     ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
 )
 DEFAULT_OUTPUT_DIR = (
-    ROOT / "validation/compact_zeus/data/reviews/pingan-ti-siem-checkpoint-c"
+    ROOT / "validation/compact_zeus/data/reviews/pingan-edr-checkpoint-c"
 )
 
 REVIEW_SAMPLES = {
-    "threat-intel-single-message": {
-        "alert_id": 1965919,
-        "review_focus": "wire session, provider roles, IOC, malware and MITRE projection",
+    "xingchuang-registry-and-file": {
+        "alert_id": 1968376,
+        "review_focus": "nested process, registry and file evidence across messages",
     },
-    "threat-intel-multiple-messages": {
-        "alert_id": 1973156,
-        "review_focus": "independent message observations without flattened Zeus conflicts",
+    "xingchuang-child-process": {
+        "alert_id": 1967231,
+        "review_focus": "child process and scheduled-task action details",
     },
-    "siem-suspicious-email": {
-        "alert_id": 1966022,
-        "review_focus": "typed email entities versus upstream model narrative and score",
+    "xingchuang-file-action": {
+        "alert_id": 1967699,
+        "review_focus": "target file versus process image semantics",
     },
-    "siem-standard-machine-copy": {
-        "alert_id": 1965891,
-        "review_focus": "aggregate host candidates without invented network direction",
+    "leagsoft-flat-kv": {
+        "alert_id": 1965810,
+        "review_focus": "existing flat EDR mapping regression",
+    },
+    "leagsoft-no-message": {
+        "alert_id": 1965795,
+        "review_focus": "structured fallback and explicit evidence gap",
     },
 }
 
 
-def build_ti_siem_review_artifact(
+def build_edr_review_artifact(
     *,
     cohort: str,
     row: Mapping[str, Any],
     review_focus: str,
+    phase: str,
 ) -> dict[str, Any]:
     payload = _alert_payload(row)
     alert = normalize_alert_payload(payload)
@@ -68,6 +73,7 @@ def build_ti_siem_review_artifact(
     )
     return {
         "schema_version": SCHEMA_VERSION,
+        "phase": phase,
         "cohort": cohort,
         "review_focus": review_focus,
         "alert_id": alert.alert_id,
@@ -81,10 +87,6 @@ def build_ti_siem_review_artifact(
         "source_field_semantics": alert.extensions.get(
             "source_field_semantics",
             [],
-        ),
-        "extracted_entities": request.extracted_entities.model_dump(
-            mode="json",
-            exclude_none=True,
         ),
         "canonical_field_provenance": [
             item.model_dump(mode="json", exclude_none=True)
@@ -134,12 +136,18 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS_PATH)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--phase",
+        choices=("before_adapter_mapping", "after_adapter_mapping"),
+        default="before_adapter_mapping",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     frame = load_dataframe_pickle(args.corpus)
+    phase_dir = args.output_dir / args.phase
     artifacts: list[dict[str, Any]] = []
     for cohort, definition in REVIEW_SAMPLES.items():
         alert_id = int(definition["alert_id"])
@@ -148,12 +156,13 @@ def main() -> int:
             raise ValueError(
                 f"expected exactly one corpus row for alert_id={alert_id}, found {len(matches)}"
             )
-        artifact = build_ti_siem_review_artifact(
+        artifact = build_edr_review_artifact(
             cohort=cohort,
             row=matches.iloc[0].to_dict(),
             review_focus=str(definition["review_focus"]),
+            phase=args.phase,
         )
-        output_path = args.output_dir / f"{cohort}-{alert_id}.json"
+        output_path = phase_dir / f"{cohort}-{alert_id}.json"
         _write_json(output_path, artifact)
         artifacts.append(
             {
@@ -165,11 +174,12 @@ def main() -> int:
         )
     index = {
         "schema_version": SCHEMA_VERSION,
+        "phase": args.phase,
         "corpus": str(args.corpus.resolve().relative_to(ROOT)),
         "sensitive_local_artifacts": True,
         "artifacts": artifacts,
     }
-    _write_json(args.output_dir / "index.json", index)
+    _write_json(phase_dir / "index.json", index)
     print(json.dumps(index, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 

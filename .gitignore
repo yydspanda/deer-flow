@@ -76,6 +76,8 @@ validation/compact_zeus/*.pkl
 validation/compact_zeus/*.xlsx
 validation/compact_zeus/*.html
 validation/compact_zeus/*.ipynb
+# Imported internal reference implementations may contain credentials and endpoints.
+validation/original_works/
 
 .history/
 

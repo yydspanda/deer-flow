@@ -352,6 +352,42 @@ validation must distinguish model evidence quality from safety behavior: rejecte
 a quality finding, while the safety gate passes only when they force degraded evidence, human review,
 and `automation_allowed=false`.
 
+Checkpoint D starts with the adapter-independent D-0 corpus inventory. Run
+`validation/compact_zeus/checkpoint_d/build_checkpoint_d_corpus_inventory.py` before any full Runtime replay; it
+checks the canonical PKL hash, wrapper/ID/topic structure, and raw message versus structured-fallback
+availability without importing or invoking the PingAn normalizer, Runtime, model, or persistence.
+After D-0 is reviewed, D-1 uses
+`validation/compact_zeus/checkpoint_d/build_checkpoint_d_normalization_review.py` for exactly one canonical corpus
+row. Its artifact proves Adapter selection, parser/evidence policy, canonical provenance and raw
+immutability; it must stop before generic extraction, facts, analysis input, model, decision or
+persistence.
+After D-1 is reviewed, D-2 uses the public `inspect_alert_normalization()` boundary for the same row,
+checks that the replayed normalized semantics still match D-1, and records deterministic
+`ExtractedEntities` plus `ExtractionReport`. The comparison retains both complete hashes but permits
+only the runtime-generated `event.received_at` to differ when the source did not provide it; any other
+normalized difference fails the check. D-2 stops before facts, analysis input, skills, model, decision
+and persistence.
+After D-2 is reviewed, D-3 uses
+`validation/compact_zeus/checkpoint_d/build_checkpoint_d_fact_reconstruction_review.py` to replay D-1/D-2 and call
+the production `reconstruct_facts()` boundary. Its artifact contains the complete
+`FactReconstructionResult` plus only structural counts and chain hashes. With `raw_message_first`, the
+unselected structured fallback must remain a non-participating, unknown-trust audit record; only the
+selected message and supplementary messages may participate as raw evidence. `FieldTrust` keeps
+`source_trust` separate from `reasoning_status/participates`: a canonical projection derived from the
+selected message inherits its provenance trust but is marked `excluded_duplicate_projection` and
+non-participating. Canonical provenance must not claim a message source whose value does not explain
+the selected canonical value. D-3 stops before analysis input, skills, model, grounding, decision and
+persistence.
+After D-3 is reviewed, D-4 uses
+`validation/compact_zeus/checkpoint_d/build_checkpoint_d_bounded_analysis_input_review.py` to replay
+D-1 through D-3 and call the production bounded-analysis-input builder. The internal, gitignored
+PingAn review defaults to explicitly approved `full` evidence mode: selected values receive no
+additional sensitive-value redaction and coverage must report zero sanitized paths. Source-side
+masks remain unchanged. Encoded-span compaction is a separate bounded-context policy and must be
+reported only through `llm_compacted_encoded_paths`; complete values remain in immutable raw input.
+D-4 stops before skill resolution, prompt rendering, model invocation, grounding, decision and
+persistence.
+
 Release-level local Alpha acceptance is orchestrated from the repository root by
 `scripts/soc-alpha-acceptance.sh`. `all` resets an isolated output directory, runs representative
 APT/EDR/HIDS through CLI/SQL/registered Gateway handlers/services, real local Kafka

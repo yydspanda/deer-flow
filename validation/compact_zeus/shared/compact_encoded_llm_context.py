@@ -16,7 +16,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 BACKEND_ROOT = ROOT / "backend"
 for import_root in (ROOT, BACKEND_ROOT):
     import_path = str(import_root)

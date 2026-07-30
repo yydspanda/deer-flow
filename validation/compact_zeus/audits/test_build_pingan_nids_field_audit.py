@@ -4,14 +4,14 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from validation.compact_zeus.build_pingan_nids_field_audit import (  # noqa: E402
+from validation.compact_zeus.audits.build_pingan_nids_field_audit import (  # noqa: E402
     build_nids_field_audit,
 )
-from validation.compact_zeus.build_pingan_nids_review_artifacts import (  # noqa: E402
+from validation.compact_zeus.reviews.build_pingan_nids_review_artifacts import (  # noqa: E402
     build_nids_review_artifact,
 )
 
@@ -60,7 +60,9 @@ def _message(*, source_port: int, path: str) -> dict:
         "direction": "to_server",
         "query": "10.20.30.40",
         "request_header_str": "{}",
-        "packet": ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" * 5),
+        "packet": (
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" * 5
+        ),
         "files": [
             {
                 "filename": path,
@@ -121,7 +123,7 @@ def test_nids_field_audit_tracks_canonical_observation_and_query_lanes() -> None
     assert fields["query"]["lanes"]["llm"]["messages"] == 2
     assert report["encoded_context_policy"] == {
         "implementation": "backend/soc_agent/pipeline/encoded_context.py",
-        "validation_entrypoint": "validation/compact_zeus/compact_encoded_llm_context.py",
+        "validation_entrypoint": "validation/compact_zeus/shared/compact_encoded_llm_context.py",
         "scope": "LLM projection only",
         "decoding": False,
         "raw_payload_preserved": True,
@@ -145,6 +147,10 @@ def test_nids_review_artifact_exposes_source_field_semantics() -> None:
         phase="after_adapter_mapping",
     )
 
-    semantics = {item["semantic_type"]: item for item in artifact["source_field_semantics"]}
+    semantics = {
+        item["semantic_type"]: item for item in artifact["source_field_semantics"]
+    }
     assert semantics["sensor_enforcement_action"]["participates_in_reasoning"] is True
-    assert semantics["sensor_transaction_file_metadata"]["meaning"] == ("transaction_file_metadata_is_not_proof_of_endpoint_file_write")
+    assert semantics["sensor_transaction_file_metadata"]["meaning"] == (
+        "transaction_file_metadata_is_not_proof_of_endpoint_file_write"
+    )

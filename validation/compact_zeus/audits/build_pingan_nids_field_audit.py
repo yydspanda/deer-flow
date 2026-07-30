@@ -13,17 +13,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 BACKEND_ROOT = ROOT / "backend"
 for import_root in (ROOT, BACKEND_ROOT):
     import_path = str(import_root)
     if import_path not in sys.path:
         sys.path.insert(0, import_path)
 
-from validation.compact_zeus.compact_encoded_llm_context import (  # noqa: E402
+from validation.compact_zeus.shared.compact_encoded_llm_context import (  # noqa: E402
     compact_encoded_spans,
 )
-from validation.compact_zeus.restricted_dataframe_pickle import (  # noqa: E402
+from validation.compact_zeus.shared.restricted_dataframe_pickle import (  # noqa: E402
     load_dataframe_pickle,
 )
 
@@ -405,7 +405,7 @@ def build_nids_field_audit(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "sensitive_values_included": False,
         "encoded_context_policy": {
             "implementation": "backend/soc_agent/pipeline/encoded_context.py",
-            "validation_entrypoint": "validation/compact_zeus/compact_encoded_llm_context.py",
+            "validation_entrypoint": "validation/compact_zeus/shared/compact_encoded_llm_context.py",
             "scope": "LLM projection only",
             "decoding": False,
             "raw_payload_preserved": True,

@@ -89,7 +89,7 @@ write confirmed memory, or execute side-effect actions.
 | 原始日志 | Raw message | `raw_message`, `source.raw` | 供应商或平台原始文本，优先作为事实重建依据 |
 | 标准化 | Normalization | `normalizers/` | 将 PingAn/EDR/APT/HIDS/F5 等输入转成 canonical alert |
 | 证据层 | Evidence Layer | `EvidenceLayer` | 区分 raw、canonical、enriched、derived 等证据来源 |
-| 字段可信度 | Field Trust | `FieldTrust` | 表示字段来源可信程度和冲突情况 |
+| 字段可信度与推理准入 | Field Trust / Reasoning Eligibility | `FieldTrust` | `source_trust` 表示来源可信度；`reasoning_status/participates` 独立表示是否作为事实来源参与 |
 | 角色声明 | Role Claim | `RoleClaim` | 区分网络观测、厂商角色断言、场景推导、外部证据和人工确认 |
 | 场景假设 | Scenario Hypothesis | `ScenarioHypothesis` | 反弹 shell、C2、横向移动等带证据的暂定场景，不是最终 verdict |
 | 角色裁决 | Role Resolution | `RoleResolution` | 给出 observed/tentative/conflicted/confirmed/unresolved 状态和暂定值 |
@@ -610,6 +610,16 @@ Conflict adjudication / 冲突裁决：
   but it remains visibly provisional.
 - Supplementary raw messages participate as independent claim sources. They are not only appended
   to an LLM prompt.
+- An unselected structured fallback is audit evidence only. When `raw_message_first` succeeds, its
+  `FieldTrust` must be non-participating and it cannot re-enter claims, scenarios, conflicts, or the
+  model projection through the fact layer.
+- A canonical projection inherits `source_trust` from `CanonicalFieldProvenance`. When it duplicates
+  already selected raw evidence, it remains high-trust but uses
+  `reasoning_status=excluded_duplicate_projection` and `participates=false`; exclusion must never be
+  represented by lowering source trust.
+- Canonical provenance is an evidence contract, not a best-effort label: the recorded source path
+  must actually explain the selected value. Similar field names with different values are not valid
+  provenance.
 - Fact reconstruction never determines `response_target`. Action type, policy, asset evidence,
   approval, and the action adapter jointly determine an operational target later.
 - No role resolution alone enables an action. `automation_allowed` remains false at this layer,
@@ -1063,7 +1073,7 @@ not require rewriting core contracts.
 | --- | --- | --- |
 | `AlertInput` | Canonical alert input | Stable, extensible through typed optional sections and metadata |
 | `EvidenceLayer` | Evidence source/layer metadata | Stable |
-| `FieldTrust` | Field trust and provenance | Stable |
+| `FieldTrust` | Source trust plus independent reasoning eligibility | Stable v2: `source_trust`, `reasoning_status`, `participates` |
 | `CanonicalFieldProvenance` | Selected canonical source path and alternatives | Stable |
 | `RoleClaim` | Observable/asserted/derived role evidence | Stable |
 | `ScenarioHypothesis` | Evidence-backed scenario hypothesis | Stable |
@@ -1280,7 +1290,7 @@ Current real-alert Adapter coverage:
   any raw payload hash: NIDS contributes 180 spans/92 alerts, APT 8/3, APT Detail 3/3, and HIDS
   19/14. EDR, SIEM, and threat-intelligence samples were evaluated but had no qualifying long span.
   The production implementation is `backend/soc_agent/pipeline/encoded_context.py`; the local
-  `validation/compact_zeus/compact_encoded_llm_context.py` command is a regression/exploration caller,
+  `validation/compact_zeus/shared/compact_encoded_llm_context.py` command is a regression/exploration caller,
   never a production dependency.
 - Reproducible local evidence and representative sample paths are documented in
   `validation/compact_zeus/README.md` and
@@ -1393,10 +1403,13 @@ soc eval offline samples/ --live-llm --model-name deepseek-v4-pro --pretty
 
 # Build the local lineage-preserving real-alert validation corpus
 cd ..
-backend/.venv/bin/python validation/compact_zeus/build_alert_validation_corpus.py
+backend/.venv/bin/python validation/compact_zeus/corpus/build_alert_validation_corpus.py
+
+# Inventory all canonical inputs without invoking Adapter/Runtime/LLM
+backend/.venv/bin/python validation/compact_zeus/checkpoint_d/build_checkpoint_d_corpus_inventory.py
 
 # Rebuild the ZeusRawLogs compaction evidence from that unified corpus
-backend/.venv/bin/python validation/compact_zeus/build_zeus_compaction_artifacts.py
+backend/.venv/bin/python validation/compact_zeus/corpus/build_zeus_compaction_artifacts.py
 
 # Reproduce the complete local Runtime/evaluation/governance review package
 ./scripts/soc-runtime-validation.sh all
@@ -1414,10 +1427,17 @@ sidecar tracks. Exact commands, artifact contracts, and the latest local finding
 
 The local `validation/compact_zeus` corpus is a PI-01 payload-compatibility input, not an evaluation
 label set. It keeps one canonical row per alert ID, retains legacy conflicts as lineage, and preserves
-the source PKL rows unchanged. Historical `agent_response` values remain model outputs, and a corpus
-with no analyst `ground_label` cannot support accuracy, calibration, suppression, or automation
-claims. The generated PKL, manifest and rich reports contain or derive from internal alerts and remain
-gitignored.
+the source PKL rows unchanged. Checkpoint D is reviewed incrementally: D-0 inventories only the raw
+corpus structure and evidence availability; D-1 through D-3 review normalization, entities and facts;
+D-4 reviews the production bounded analysis request and exact evidence coverage without running
+skills, Prompt, model, grounding, decision or persistence. The internal gitignored D-4 review uses
+explicitly approved `full` mode, while generic deployments remain `redact` by default. Encoded-span
+compaction remains a separate token-budget mechanism and never rewrites immutable raw input. Later
+steps move from one representative sample to cross-source smoke and finally the 212-row deterministic
+Runtime replay. Historical `agent_response`
+values remain model outputs, and a corpus with no analyst `ground_label` cannot support accuracy,
+calibration, suppression, or automation claims. The generated PKL, manifest and rich reports contain
+or derive from internal alerts and remain gitignored.
 
 The release-level command is a different gate: it combines CLI, SQL, registered Gateway
 handlers/services, a real local Kafka-compatible broker, Review Web browser regression, feedback,
@@ -1452,11 +1472,11 @@ Delivery stages / 交付阶段：
 
 The authoritative work packages, gates, Parking Lot and anti-drift rules live in
 [`delivery-roadmap.md`](delivery-roadmap.md). The current implementation pointer lives only in
-[`progress.md`](progress.md). As of 2026-07-20, `BG-P0-01..BG-P1-05` and `BG-03` are complete, the
+[`progress.md`](progress.md). As of 2026-07-29, `BG-P0-01..BG-P1-05` and `BG-03` are complete, the
 Alpha Gate has a scoped owner approval, and Stage 4 is current. The only current task is `PI-01 Real
-providers`: inventory real capability sources and select the first approved read-only dev/staging
-integration. Missing endpoints, credentials or approved payloads remain explicit data gates and must
-not be replaced by another mock.
+providers`: finish the step-reviewed Checkpoint D payload/Runtime replay, then select the first
+approved read-only dev/staging integration. Missing endpoints, credentials or approved payloads
+remain explicit data gates and must not be replaced by another mock.
 
 `BG-03` uses `./scripts/soc-alpha-readiness.sh all` to bind the existing versioned acceptance report,
 full SOC regression, architecture/migration gates, the authoritative matrix and Stage 4 roadmap into

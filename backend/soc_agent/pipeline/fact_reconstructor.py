@@ -17,6 +17,7 @@ from soc_agent.contracts import (
     EvidenceLayer,
     EvidenceTrustLevel,
     FactReconstructionResult,
+    FieldReasoningStatus,
     FieldTrust,
     ParsedRawMessageEvidence,
     RoleClaim,
@@ -72,7 +73,6 @@ def reconstruct_facts(alert: AlertInput) -> FactReconstructionResult:
     elif policy.selected_layer is EvidenceLayer.RAW_MESSAGE and parsed_message is None:
         warnings.append("selected raw message has no deterministic parser output")
 
-    field_trusts = _field_trusts(alert, policy)
     role_claims = _role_claims(alert, policy, warnings)
     scenario_hypotheses = _scenario_hypotheses(alert)
     role_claims = _add_scenario_claims(role_claims, scenario_hypotheses, selected_input_path)
@@ -87,6 +87,7 @@ def reconstruct_facts(alert: AlertInput) -> FactReconstructionResult:
         _canonical_field_provenance(alert, role_claims, selected_input_path),
         _adapter_canonical_field_provenance(alert, warnings),
     )
+    field_trusts = _field_trusts(alert, policy, canonical_provenance)
 
     return FactReconstructionResult(
         evidence_policy=policy,
@@ -113,15 +114,20 @@ def _evidence_policy(alert: AlertInput, warnings: list[str]) -> EvidenceInputPol
         return None
 
 
-def _field_trusts(alert: AlertInput, policy: EvidenceInputPolicy | None) -> list[FieldTrust]:
+def _field_trusts(
+    alert: AlertInput,
+    policy: EvidenceInputPolicy | None,
+    canonical_provenance: Sequence[CanonicalFieldProvenance],
+) -> list[FieldTrust]:
     trusts: list[FieldTrust] = []
     if policy is not None and policy.selected_input_path:
         trusts.append(
             FieldTrust(
                 field_path=policy.selected_input_path,
                 layer=policy.selected_layer,
-                trust_level=policy.trust_level,
-                participates_in_fact_reconstruction=True,
+                source_trust=policy.trust_level,
+                reasoning_status=FieldReasoningStatus.SELECTED_EVIDENCE,
+                participates=True,
                 reason="selected by source normalizer evidence policy",
             )
         )
@@ -129,42 +135,70 @@ def _field_trusts(alert: AlertInput, policy: EvidenceInputPolicy | None) -> list
             FieldTrust(
                 field_path=path,
                 layer=EvidenceLayer.RAW_MESSAGE,
-                trust_level=EvidenceTrustLevel.HIGH,
-                participates_in_fact_reconstruction=True,
+                source_trust=EvidenceTrustLevel.HIGH,
+                reasoning_status=FieldReasoningStatus.SUPPLEMENTARY_EVIDENCE,
+                participates=True,
                 reason="supplementary raw message participates as an independent claim source",
             )
             for path in policy.supplementary_input_paths
         )
-    if policy is not None and policy.fallback_input_path:
+    if policy is not None and policy.fallback_input_path and policy.fallback_input_path != policy.selected_input_path:
         trusts.append(
             FieldTrust(
                 field_path=policy.fallback_input_path,
                 layer=EvidenceLayer.RAW_STRUCTURED,
-                trust_level=EvidenceTrustLevel.LOW if policy.trust_level is EvidenceTrustLevel.LOW else EvidenceTrustLevel.MEDIUM,
-                participates_in_fact_reconstruction=True,
-                reason="structured fallback evidence package",
+                source_trust=EvidenceTrustLevel.UNKNOWN,
+                reasoning_status=FieldReasoningStatus.EXCLUDED_UNSELECTED_FALLBACK,
+                participates=False,
+                reason="unselected structured fallback is retained for audit only",
             )
         )
 
     canonical_participates = not (policy is not None and policy.ignore_processed_fields_for_reasoning)
-    canonical_trust = EvidenceTrustLevel.LOW if not canonical_participates else EvidenceTrustLevel.MEDIUM
     for field_path, value in [
         ("entities.network.source_ip", alert.entities.network.source_ip),
         ("entities.network.destination_ip", alert.entities.network.destination_ip),
         ("entities.host.asset_id", alert.entities.host.asset_id),
-        ("entities.host.ip_addresses", alert.entities.host.ip_addresses[0] if alert.entities.host.ip_addresses else None),
+        (
+            "entities.host.ip_addresses[0]",
+            alert.entities.host.ip_addresses[0] if alert.entities.host.ip_addresses else None,
+        ),
     ]:
         if value:
             trusts.append(
                 FieldTrust(
                     field_path=field_path,
                     layer=EvidenceLayer.PROCESSED_FIELD,
-                    trust_level=canonical_trust,
-                    participates_in_fact_reconstruction=canonical_participates,
-                    reason="canonical normalized field",
+                    source_trust=_canonical_source_trust(
+                        field_path,
+                        canonical_provenance,
+                        policy,
+                        participates=canonical_participates,
+                    ),
+                    reasoning_status=(FieldReasoningStatus.INCLUDED_CANONICAL_PROJECTION if canonical_participates else FieldReasoningStatus.EXCLUDED_DUPLICATE_PROJECTION),
+                    participates=canonical_participates,
+                    reason=("canonical projection is eligible because processed fields are the selected evidence path" if canonical_participates else "canonical projection duplicates already selected source evidence"),
                 )
             )
     return trusts
+
+
+def _canonical_source_trust(
+    field_path: str,
+    canonical_provenance: Sequence[CanonicalFieldProvenance],
+    policy: EvidenceInputPolicy | None,
+    *,
+    participates: bool,
+) -> EvidenceTrustLevel:
+    provenance = next(
+        (item for item in canonical_provenance if item.canonical_path == field_path),
+        None,
+    )
+    if provenance is not None:
+        return provenance.trust_level
+    if participates and policy is not None:
+        return policy.trust_level
+    return EvidenceTrustLevel.UNKNOWN
 
 
 def _role_claims(

@@ -1,6 +1,6 @@
 # PingAn Adapter Coverage Review
 
-Status: Checkpoint C complete; Checkpoint D full-corpus replay pending
+Status: Checkpoint C complete; Checkpoint D-0/D-1/D-2/D-3 complete, staged Runtime replay pending
 
 Corpus: `soc.validation.alert_corpus.v1`, 212 unique alerts
 
@@ -143,6 +143,37 @@ Any important unmapped field becomes an explicit mapping issue. It must not be s
 discarded.
 
 ### Checkpoint D: full replay
+
+Checkpoint D is deliberately reviewable rather than one opaque command:
+
+1. **D-0 corpus inventory (complete)**: restricted-load the canonical PKL and check hash,
+   wrapper/ID/topic structure, raw event counts and message/fallback availability without invoking
+   Adapter, Runtime or LLM. Current result is 212 unique alerts, 0 blocking rows, 200 message-first,
+   10 structured-fallback candidates and 2 explicit empty-rawLogs gaps.
+2. **D-1 canonical normalization (complete)**: canonical PKL row `1965449` selected the PingAn NDR
+   adapter and `raw_message_first`; all lineage/raw-immutability checks passed. Four nested parser
+   warnings remain explicit: one conservative repair accepted and one unsupported repair rejected.
+3. **D-2 generic entity extraction (complete)**: the public Runtime inspection boundary reproduced
+   D-1 normalized semantics and emitted 12 deterministic, evidence-linked mentions. The only warning
+   is the expected absence of a process entity in this NDR/APT sample; no fact, model or decision node
+   ran.
+4. **D-3 fact reconstruction (complete)**: D1/D2 hashes remained stable; only the selected high-trust
+   message participates in facts. The structured fallback and processed canonical direction are
+   explicit non-participating audit records. Five role claims resolve to two observed network roles
+   and three tentative semantic roles, all with automation disabled. One tentative `web_attack`
+   hypothesis is present, with no conflict or warning. A false `rule_desc -> rule_name` provenance
+   attribution found during review was removed before the artifact was accepted.
+5. **D-4 onward (pending)**: continue the same sample one Runtime stage at a time, then cross-source
+   smoke, and only then run the final 212-alert deterministic Runtime replay.
+
+The D-0 artifact is
+`backend/.deer-flow/soc-runtime-validation/checkpoint-d/step-d0-corpus-inventory/corpus-inventory.json`.
+The D-1 artifact is
+`backend/.deer-flow/soc-runtime-validation/checkpoint-d/step-d1-canonical-normalization/1965449.normalization.json`.
+The D-2 artifact is
+`backend/.deer-flow/soc-runtime-validation/checkpoint-d/step-d2-generic-entity-extraction/1965449.entities.json`.
+The D-3 artifact is
+`backend/.deer-flow/soc-runtime-validation/checkpoint-d/step-d3-fact-reconstruction/1965449.facts.json`.
 
 Rerun all 212 alerts and require:
 
@@ -287,10 +318,10 @@ Reproduce the final TI/SIEM evidence with:
 
 ```bash
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_ti_siem_field_audit.py
+  validation/compact_zeus/audits/build_pingan_ti_siem_field_audit.py
 
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_ti_siem_review_artifacts.py
+  validation/compact_zeus/reviews/build_pingan_ti_siem_review_artifacts.py
 ```
 
 The generated `data/audits/pingan-ti-siem-*` and `data/reviews/pingan-ti-siem-*` files contain
@@ -301,10 +332,10 @@ Reproduce the NDR/HIDS evidence with:
 
 ```bash
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_ndr_hids_field_audit.py
+  validation/compact_zeus/audits/build_pingan_ndr_hids_field_audit.py
 
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_ndr_hids_review_artifacts.py
+  validation/compact_zeus/reviews/build_pingan_ndr_hids_review_artifacts.py
 ```
 
 Checkpoint C is now complete for all six normalized source families in the 212-alert corpus:

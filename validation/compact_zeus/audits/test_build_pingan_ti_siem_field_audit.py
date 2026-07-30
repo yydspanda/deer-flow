@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 
-from validation.compact_zeus.build_pingan_ti_siem_field_audit import (
+from validation.compact_zeus.audits.build_pingan_ti_siem_field_audit import (
     build_ti_siem_field_audit,
 )
-from validation.compact_zeus.build_pingan_ti_siem_review_artifacts import (
+from validation.compact_zeus.reviews.build_pingan_ti_siem_review_artifacts import (
     build_ti_siem_review_artifact,
 )
 
@@ -63,7 +63,12 @@ def _threat_intel_row() -> dict:
     return _row(
         1,
         topic="sec_guard_wb",
-        raw_events=[{"message": "tdpv3-svc Threatbook[123]: " + json.dumps(fields, ensure_ascii=False)}],
+        raw_events=[
+            {
+                "message": "tdpv3-svc Threatbook[123]: "
+                + json.dumps(fields, ensure_ascii=False)
+            }
+        ],
     )
 
 
@@ -115,8 +120,12 @@ def test_ti_siem_review_artifact_contains_canonical_and_bounded_views() -> None:
         review_focus="typed email projection",
     )
 
-    assert artifact["schema_version"] == ("soc.validation.pingan_ti_siem_checkpoint_c.v1")
-    assert artifact["canonical_alert_without_raw"]["entities"]["email"]["sender_addresses"] == ["sender@example.test"]
+    assert artifact["schema_version"] == (
+        "soc.validation.pingan_ti_siem_checkpoint_c.v1"
+    )
+    assert artifact["canonical_alert_without_raw"]["entities"]["email"][
+        "sender_addresses"
+    ] == ["sender@example.test"]
     assert artifact["extracted_entities"]["emails"] == [
         "sender@example.test",
         "recipient@example.test",

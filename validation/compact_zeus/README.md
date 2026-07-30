@@ -12,6 +12,11 @@ datas/
 └── legacy_demos/    # 历史 JSON demo；仅用于 lineage/回归
 
 validation/compact_zeus/
+├── checkpoint_d/    # Runtime D0-D3 逐步验证与契约测试
+├── corpus/          # 统一语料和压缩报告构建
+├── audits/          # Topic/Adapter 全量字段流向审计
+├── reviews/         # 人工审阅样本构建
+├── shared/          # 受限 PKL loader 与编码压缩复用工具
 ├── docs/            # 长期设计与审阅说明
 ├── data/            # gitignored 可再生产物
 │   ├── corpus/      # 统一 212 条语料及 manifest
@@ -19,9 +24,12 @@ validation/compact_zeus/
 │   ├── reviews/     # 人工审阅样本
 │   ├── compaction/  # HTML/Excel 压缩报告
 │   └── exploration/ # 本地 notebook
-├── build_*.py       # 可复跑构建/审计入口
-└── test_*.py        # 不依赖敏感产物的契约测试
+└── README.md        # 总入口与可复跑命令
 ```
+
+每个源码子目录都有自己的 `README.md`。脚本按职责归档，但所有生成物路径保持不变，
+因此旧的本地审阅 JSON 无需迁移。`checkpoint_d/` 是后续逐步复盘 Runtime 的首选入口；
+`audits/` 与 `reviews/` 用于 Adapter 批量覆盖验证，不代表 Runtime 固定流水线步骤。
 
 `datas/` 与 `data/` 都包含内部告警数据并被 Git 忽略。前者是输入，不得由验证脚本
 改写；后者的 `corpus/audits/reviews/compaction` 可按本 README 重建，`exploration`
@@ -39,7 +47,7 @@ validation/compact_zeus/
 
 ```bash
 backend/.venv/bin/python \
-  validation/compact_zeus/build_alert_validation_corpus.py
+  validation/compact_zeus/corpus/build_alert_validation_corpus.py
 ```
 
 输出：
@@ -86,10 +94,10 @@ Manifest 不保存原始字段值，只保存计数、hash、冲突路径和 ada
 
 ```bash
 backend/.venv/bin/python \
-  validation/compact_zeus/compact_encoded_llm_context.py --self-check
+  validation/compact_zeus/shared/compact_encoded_llm_context.py --self-check
 
 backend/.venv/bin/python \
-  validation/compact_zeus/build_zeus_compaction_artifacts.py
+  validation/compact_zeus/corpus/build_zeus_compaction_artifacts.py
 ```
 
 输出按职责分开：HTML/Excel 写入
@@ -120,16 +128,98 @@ SHA-256 前缀，侧车记录 path 与完整 SHA-256。二者不能通过 eviden
 
 ```bash
 backend/.venv/bin/python -m pytest -q \
-  validation/compact_zeus/test_build_alert_validation_corpus.py \
-  validation/compact_zeus/test_build_pingan_nids_field_audit.py \
-  validation/compact_zeus/test_build_pingan_edr_field_audit.py \
-  validation/compact_zeus/test_build_pingan_ti_siem_field_audit.py \
-  validation/compact_zeus/test_build_pingan_ndr_hids_field_audit.py
+  validation/compact_zeus/corpus \
+  validation/compact_zeus/audits \
+  validation/compact_zeus/checkpoint_d
 ```
 
 Notebook 只作为探索记录；可复跑规则以 Python 构建器、测试和 manifest 为准。
 
-## 4. PingAn Adapter 覆盖审阅
+## 4. Checkpoint D-0：原始输入盘点
+
+进入全量 Runtime 回放前，先独立运行 D-0：
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/checkpoint_d/build_checkpoint_d_corpus_inventory.py
+```
+
+输出写入：
+
+```text
+backend/.deer-flow/soc-runtime-validation/checkpoint-d/
+└── step-d0-corpus-inventory/corpus-inventory.json
+```
+
+D-0 只读取统一 PKL，验证文件 hash、212 个唯一告警、wrapper/alert ID、topic、
+`hitLog`、`zeusRawLogs` 和 `message` 可用性。逐行结果不复制原始 message 值，只记录
+计数、输入形态和 issue code。它明确不执行 message parsing、Normalizer、实体/事实重建、
+LLM 投影、Analyzer、Decision Policy 或持久化。`evidence_unavailable` 是上游输入缺口，
+与 Adapter/Runtime 失败分开报告。
+
+D-0 经人工确认后，D-1 只重放一条 message-first 样本的生产 canonical normalization：
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/checkpoint_d/build_checkpoint_d_normalization_review.py \
+  --alert-id 1965449
+```
+
+输出写入同一 Checkpoint D 树的 `step-d1-canonical-normalization/`。D-1 完整保留本地
+`normalized_alert` 供人工对照，同时检查 canonical corpus lineage、Adapter/source type、
+message parser、`raw_message_first`、canonical provenance 和 raw payload hash；它不运行 generic
+entity extraction、fact reconstruction、analysis input、LLM、decision 或 persistence。Canonical
+契约全部通过但存在嵌套 parser warning 时，状态为 `passed_with_parser_warnings`；accepted/rejected
+repair 分开计数，且 repaired value 不能冒充 strict decoded source fact。
+
+D-1 经人工确认后，D-2 使用 Runtime 的公开 `inspect_alert_normalization()` 边界重放同一
+canonical row，并将 normalized semantics 与 D-1 对比后运行 generic deterministic entity
+extraction。完整 hash 仍写入产物；当上游没有接收时间时，只允许 Runtime 生成的
+`event.received_at` 不同，其他差异均失败：
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/checkpoint_d/build_checkpoint_d_entity_extraction_review.py \
+  --alert-id 1965449
+```
+
+输出位于 `step-d2-generic-entity-extraction/`，包含完整 `ExtractedEntities`、mention 的
+kind/role/evidence path 和生产 `ExtractionReport`。D-2 不运行 fact reconstruction、analysis
+input、skill、LLM、decision 或 persistence；网络告警缺少 process/user/host 等实体属于显式
+extraction gap，不自动判为 Adapter 或告警失败。
+
+D-2 经人工确认后，D-3 重放 D1/D2 并调用生产 `reconstruct_facts()`：
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/checkpoint_d/build_checkpoint_d_fact_reconstruction_review.py \
+  --alert-id 1965449
+```
+
+输出位于 `step-d3-fact-reconstruction/`，保留完整 `FactReconstructionResult`：evidence policy、
+`FieldTrust`、canonical provenance、`RoleClaim`、`ScenarioHypothesis`、`RoleResolution`、
+`ConflictReport` 和 warnings。D-3 同时验证 D1 normalized semantics 与 D2 entities 未漂移；
+`raw_message_first` 成功时，未选中的 structured fallback 必须是 `unknown` trust、不可参与事实
+重建的审计记录；canonical duplicate projection 从 provenance 继承 `source_trust`，但使用
+`reasoning_status=excluded_duplicate_projection`、`participates=false` 防止同一证据重复投票。
+D-3 不构建 analysis input，不运行 skill、LLM、grounding、decision 或 persistence。
+
+D-3 经人工确认后，D-4 重放 D1-D3，并调用生产 `build_llm_analysis_request()` 生成真正会交给
+后续 Skill/Prompt 节点的 bounded contract 与 `EvidenceCoverageReport`：
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/checkpoint_d/build_checkpoint_d_bounded_analysis_input_review.py \
+  --alert-id 1965449
+```
+
+输出位于 `step-d4-bounded-analysis-input/`。当前 PingAn 内部验证经项目负责人明确批准，D-4
+默认使用 `full` mode，不额外脱敏已选中的 password/token/cookie/header/body；通用 Runtime
+部署默认仍为 `redact`。超长编码片段继续由 bounded-context compaction 替换为带 hash 的占位符，
+完整原文只保留在 immutable raw payload；coverage 将其计入 `llm_compacted_encoded_paths`，不得
+误记为 sanitized。D-4 不运行 skill resolution、Prompt、LLM、grounding、decision 或 persistence。
+
+## 5. PingAn Adapter 覆盖审阅
 
 在修改 PingAn Adapter 前，先审阅
 [`docs/pingan_adapter_rebuild_review.md`](docs/pingan_adapter_rebuild_review.md)。它记录
@@ -140,7 +230,7 @@ Notebook 只作为探索记录；可复跑规则以 Python 构建器、测试和
 
 ```bash
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_adapter_review_artifacts.py
+  validation/compact_zeus/reviews/build_pingan_adapter_review_artifacts.py
 ```
 
 输出位于 `validation/compact_zeus/data/reviews/pingan-adapter-checkpoint-b/`，包含完整解析
@@ -153,18 +243,18 @@ evidence mode，字段值保持原始且产物属于敏感本地数据，不得�
 
 ```bash
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_nids_field_audit.py
+  validation/compact_zeus/audits/build_pingan_nids_field_audit.py
 ```
 
 生成四组敏感本地 before/after 产物：
 
 ```bash
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_nids_review_artifacts.py \
+  validation/compact_zeus/reviews/build_pingan_nids_review_artifacts.py \
   --phase before_adapter_mapping
 
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_nids_review_artifacts.py \
+  validation/compact_zeus/reviews/build_pingan_nids_review_artifacts.py \
   --phase after_adapter_mapping
 ```
 
@@ -189,7 +279,7 @@ LLM encoded compaction。未进入 canonical 的字段仍保留在 parsed/bounde
 
 ```bash
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_edr_field_audit.py \
+  validation/compact_zeus/audits/build_pingan_edr_field_audit.py \
   --output validation/compact_zeus/data/audits/pingan-edr-field-audit.after.json
 ```
 
@@ -197,11 +287,11 @@ backend/.venv/bin/python \
 
 ```bash
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_edr_review_artifacts.py \
+  validation/compact_zeus/reviews/build_pingan_edr_review_artifacts.py \
   --phase before_adapter_mapping
 
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_edr_review_artifacts.py \
+  validation/compact_zeus/reviews/build_pingan_edr_review_artifacts.py \
   --phase after_adapter_mapping
 ```
 
@@ -234,14 +324,14 @@ canonical source/destination 和 network observations 均为 0；这属于安全
 
 ```bash
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_ti_siem_field_audit.py
+  validation/compact_zeus/audits/build_pingan_ti_siem_field_audit.py
 ```
 
 生成四组敏感本地代表样本：
 
 ```bash
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_ti_siem_review_artifacts.py
+  validation/compact_zeus/reviews/build_pingan_ti_siem_review_artifacts.py
 ```
 
 输出位于：
@@ -271,10 +361,10 @@ provenance、0 high-value gap、0 raw mutation。生成目录包含 `full` 模�
 
 ```bash
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_ndr_hids_field_audit.py
+  validation/compact_zeus/audits/build_pingan_ndr_hids_field_audit.py
 
 backend/.venv/bin/python \
-  validation/compact_zeus/build_pingan_ndr_hids_review_artifacts.py
+  validation/compact_zeus/reviews/build_pingan_ndr_hids_review_artifacts.py
 ```
 
 输出位于：

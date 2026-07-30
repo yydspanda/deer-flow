@@ -10,7 +10,6 @@ from typing import Any
 
 import pandas as pd
 
-
 ALLOWED_PICKLE_GLOBALS = {
     ("pandas", "DataFrame"),
     ("pandas", "Index"),

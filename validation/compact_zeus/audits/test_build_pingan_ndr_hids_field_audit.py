@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from validation.compact_zeus.build_pingan_ndr_hids_field_audit import (
+from validation.compact_zeus.audits.build_pingan_ndr_hids_field_audit import (
     build_ndr_hids_field_audit,
 )
-from validation.compact_zeus.build_pingan_ndr_hids_review_artifacts import (
+from validation.compact_zeus.reviews.build_pingan_ndr_hids_review_artifacts import (
     build_ndr_hids_review_artifact,
 )
 

@@ -4,14 +4,14 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from validation.compact_zeus.build_pingan_edr_field_audit import (  # noqa: E402
+from validation.compact_zeus.audits.build_pingan_edr_field_audit import (  # noqa: E402
     build_edr_field_audit,
 )
-from validation.compact_zeus.build_pingan_edr_review_artifacts import (  # noqa: E402
+from validation.compact_zeus.reviews.build_pingan_edr_review_artifacts import (  # noqa: E402
     build_edr_review_artifact,
 )
 

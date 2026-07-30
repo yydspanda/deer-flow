@@ -1331,6 +1331,8 @@ def test_delimited_json_parser_decodes_supported_nested_json_and_http_headers() 
     assert full_request.primary_evidence is not None
     assert "secret-token" in full_request.primary_evidence.content
     assert full_request.primary_evidence.sanitized_field_paths == []
+    assert full_request.evidence_coverage.llm_sanitized_paths == []
+    assert full_request.evidence_coverage.counts["llm_sanitized_count"] == 0
 
 
 def test_deferred_related_and_soar_context_is_explicit_in_coverage() -> None:

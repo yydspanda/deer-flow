@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-01` 进行中） |
-| 当前目标 | `PI-01 Real providers`：完成首批真实 payload coverage，选择并接通第一项经过批准的只读 dev/staging 能力源 |
+| 当前目标 | `PI-01 Real providers`：先完成 212 条真实 payload 的 Checkpoint D 分步 Runtime 回放，再选择并接通第一项经过批准的只读 dev/staging 能力源 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | `PI-01 first approved read-only provider`：PingAn NIDS/NDR/APT/EDR/HIDS/Threat Intel/SIEM Checkpoint C 已完成；下一步选择真实 dev/staging CMDB、EDR 或 TI 只读 endpoint，收集 owner、认证、tenant mapping、approved payload 与 smoke 证据。 |
+| 当前下一刀 | 用户审阅 `PI-01 Checkpoint D-4` 的 `1965449` bounded analysis input 与 `EvidenceCoverageReport`；确认后 D-5 只运行 deterministic SOC skill resolution，并停下审阅，不渲染 Prompt、不运行 LLM/decision。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -201,6 +201,213 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-30 — PI-01 Checkpoint D-4 bounded analysis input completed
+
+- D-3 已获用户确认；D-4 继续使用 canonical row `1965449/sec_guard_apt`。
+- 新增 D-4 构建器：
+  - 重放 D1-D3 并分别校验 normalized semantics、entities、facts hash；
+  - 调用生产 `build_llm_analysis_request()`，输出完整 `LLMAnalysisRequest` 与
+    `EvidenceCoverageReport`；
+  - 验证 raw payload 未修改、structured fallback 未进入 message-first 分析、parsed/decoded/
+    repaired 路径均被 projected/sanitized/omitted 之一覆盖；
+  - 明确不运行 skill resolution、Prompt、LLM、grounding、decision 或 persistence。
+- 用户明确当前是内部 PingAn SOC、由安全运营人员处理，因此本地 gitignored D-4 使用显式批准的
+  `full` mode；通用 Runtime 默认仍为 `redact`。修复 full mode coverage 误报：已选字段不额外脱敏，
+  `llm_sanitized_count=0`。源数据自身掩码保持不变。
+- D-4 结果：25 项链路/边界/coverage check 全部通过，状态
+  `passed_with_coverage_findings`；93 parsed、35 decoded、1 repaired、119 projected、0 sanitized、
+  4 encoded-compacted、11 adapter-excluded omissions、0 high-value gap。`detail_info`、`vuln_desc`、
+  headers、request/response body 均被投影；4 个超长 JWT 路径仅做 bounded-context compaction，
+  完整值仍在 immutable raw payload。
+- 可审阅产物：
+  - `backend/.deer-flow/soc-runtime-validation/checkpoint-d/step-d4-bounded-analysis-input/1965449.analysis-input.json`
+    （敏感、gitignored）。
+- 下一步：等用户审阅 D-4；确认后进入 D-5，只运行 deterministic SOC skill resolution，不渲染
+  Prompt、不调用模型、不执行 grounding/decision/persistence。
+
+### 2026-07-30 — FieldTrust source trust / reasoning eligibility split completed
+
+- 根据 D3 人工审阅结论重构 `FieldTrust`，不再用 `trust_level=low` 表达“该字段不参与推理”：
+  - `source_trust` 只记录来源可信度；
+  - `reasoning_status` 区分 `selected_evidence`、`supplementary_evidence`、
+    `included_canonical_projection`、`excluded_unselected_fallback` 与
+    `excluded_duplicate_projection`；
+  - `participates` 明确是否作为独立事实来源，并由 schema validator 保证与 status 一致。
+- canonical source/destination 从 `CanonicalFieldProvenance` 继承 source trust。样本 `1965449`
+  的两个 canonical IP 现在均为 `source_trust=high`，但标记
+  `excluded_duplicate_projection/participates=false`，避免同一 message 证据重复投票。
+- 未选中的 Zeus structured fallback 保持
+  `source_trust=unknown/excluded_unselected_fallback/participates=false`；实际 selected structured
+  fallback 仍复用 evidence policy trust。
+- D3 本地 artifact schema 升级为
+  `soc.validation.checkpoint_d.fact_reconstruction_review.v2`，增加 reasoning-status 计数与
+  provenance/source-trust 一致性检查。
+- 重新生成 D1-D3：D1/D2 语义与 12 mentions 未变；D3 `passed`，4 条 FieldTrust 中仅 selected
+  message 参与，状态计数为 1 selected、1 unselected fallback、2 duplicate projection。
+- 验证：相关 Runtime/Parser/Prompt/Grounding/Checkpoint 测试 `90 passed`；完整
+  `validation/compact_zeus` 测试 `20 passed`；Ruff check/format passed。
+- 下一步保持不变：继续人工审阅更新后的 D3 JSON；确认后进入 D4 bounded analysis input 与
+  `EvidenceCoverageReport`，不运行 skill/LLM/decision。
+
+### 2026-07-30 — Compact Zeus validation source layout organized
+
+- 将原先平铺在 `validation/compact_zeus/` 的验证代码按职责迁移到：
+  - `checkpoint_d/`：D0-D3 单告警 Runtime 逐步重放与契约测试；
+  - `corpus/`：canonical corpus 与压缩报告构建；
+  - `audits/`：各 PingAn topic/Adapter 的批量字段流向审计；
+  - `reviews/`：Checkpoint B/C 人工审阅样本构建；
+  - `shared/`：受限 pickle loader 与 encoded-context 验证工具；
+  - `docs/`：长期设计与审阅说明。
+- 每个源码目录新增简短 `README.md`，记录职责、依赖边界、入口、输出位置与敏感数据要求；
+  根 README 作为总导航。`validation/compact_zeus/data/` 与
+  `backend/.deer-flow/soc-runtime-validation/` 的生成物路径保持不变。
+- 修正全部 Python imports、脚本 `ROOT` 解析和活动 AGENTS/方案/进度文档命令；生产代码仍禁止
+  反向导入 `validation.*`。
+- 使用新路径完整重放 D0-D3：
+  - D0 `passed_with_known_input_gaps`，212 rows / 212 unique IDs；
+  - D1 `passed_with_parser_warnings`，message-first NDR normalization；
+  - D2 `passed_with_extraction_warnings`，12 mentions；
+  - D3 `passed`，36 provenance / 5 role claims / 0 conflicts。
+- 产物链未漂移：D1 semantic hash 为
+  `a46c94e80f40c20cfe6528e8791d1fd3b50fbb0b94f34e0bd33e70476d8b7a98`；D2 entity hash 为
+  `32aa63289f959ad25236f0031bfff4da8cf1016a363270c2d4c229eba6179243`；D3 replay hash 均匹配。
+- 验证：`backend/.venv/bin/python -m pytest -q validation/compact_zeus` -> `20 passed`；
+  Ruff check/format passed。
+- 下一步保持不变：由用户审阅 D3 JSON；确认后进入 D4 bounded analysis input 与
+  `EvidenceCoverageReport`，不运行 skill/LLM/decision。
+
+### 2026-07-30 — PI-01 Checkpoint D-3 single-alert fact reconstruction completed
+
+- D-2 已获用户确认；D-3 继续使用 canonical row `1965449/sec_guard_apt`。
+- 新增 D-3 构建器：
+  - `validation/compact_zeus/checkpoint_d/build_checkpoint_d_fact_reconstruction_review.py`；
+  - 重放生产 normalization/entity extraction，分别与 D1 normalized semantics、D2
+    `ExtractedEntities` 做 hash 校验后调用生产 `reconstruct_facts()`；
+  - 输出完整 `FactReconstructionResult`，不构建 analysis input，不运行 skill、LLM、grounding、
+    decision 或 persistence。
+- D-3 审阅中修复两处生产契约问题：
+  - 未选中的 `fallback_input_path` 过去被错误标成参与事实重建；现在 message-first 成功时只保留
+    `unknown` trust、`participates=false` 的审计记录，实际 selected structured fallback 复用唯一
+    selected-input trust；
+  - NDR provenance 过去可能把值不同的 `rule_desc` 误写成 canonical `rule_name` 来源；现在只有与
+    canonical 选择规则一致的 message 字段才产生该 provenance，本样本伪来源已删除。
+- D-3 结果：
+  - 16 项 chain/policy/trust/role/automation check 全部通过；D1/D2 hash 未漂移，raw 未修改；
+  - 4 条 `FieldTrust` 中仅 selected high-trust message 参与；structured fallback 与两个 canonical
+    processed direction field 均不参与；
+  - 5 条 claims：`source/destination` 是 `observation`、semantic confidence `0.9`；
+    `attacker/victim` 是供应商断言，`impacted_asset` 是 Adapter 推导候选，三者均为 `0.5`；
+  - resolutions 为 2 个 `observed`、3 个 `tentative`，全部 `automation_allowed=false`；
+  - 场景仅有 tentative `web_attack`，confidence `0.72`，包含 `detail_info` 等 8 条 evidence path；
+    0 conflict、0 warning；真实 message canonical provenance 为 36 条。
+- 可审阅产物：
+  - `backend/.deer-flow/soc-runtime-validation/checkpoint-d/step-d3-fact-reconstruction/1965449.facts.json`
+    （敏感、gitignored）。
+- 验证：
+  - D0-D3 focused suite：`5 passed`；
+  - `backend/tests/test_soc_agent_runtime.py`：`36 passed`；
+  - `backend/tests/test_soc_pingan_message_parsing.py`：`37 passed`；
+  - Ruff check/format passed。
+- 下一步：
+  - 等用户审阅 D-3；确认后进入 D-4，只构建 bounded analysis input 与
+    `EvidenceCoverageReport`，重点验证 `detail_info`、`vuln_desc`、headers/body、sanitization、
+    compaction 和 omission，不调用模型。
+
+### 2026-07-29 — PI-01 Checkpoint D-2 single-alert generic entity extraction completed
+
+- D-1 已获用户确认；D-2 继续使用同一 canonical row `1965449/sec_guard_apt`。
+- 新增 D-2 构建器：
+  - `validation/compact_zeus/checkpoint_d/build_checkpoint_d_entity_extraction_review.py`；
+  - 通过 Runtime 公开 `inspect_alert_normalization()` 边界执行生产 normalization + generic
+    deterministic entity extraction，并将 normalization 语义 hash 与 D-1 对比；
+  - 完整 hash 仍保留审计；仅当上游没有接收时间时，语义比较允许
+    `event.received_at` 这一项运行时生成值不同，任何其他 normalized 字段变化都会失败；
+  - 不执行 fact reconstruction、analysis input、skill、LLM、decision 或 persistence。
+- D-2 结果：
+  - 9 项 chain integrity / raw immutability / entity report check 全部通过；本次真实样本连
+    `event.received_at` 也完全一致；
+  - 共 12 个 deterministic mention，全部带 `confidence=1.0` 和 evidence path：2 IP、2 domain、
+    2 URL、1 asset、1 rule code、1 rule name、1 detection key、2 MITRE；
+  - 去重后的实体值包括 `10.28.121.248`、`30.184.42.99`、
+    `ehis-dataplus-stg.paic.com.cn`、`/api/user/sign-in`、资产组 `平安健康险`、规则与
+    `TA0001/T1190`；
+  - `process/user/host` 未抽取，其中生产 extractor 只对 process 生成 warning；对 NDR/APT
+    网络样本这是显式 extraction gap，不等同于 Adapter 或告警失败；状态为
+    `passed_with_extraction_warnings`。
+- 可审阅产物：
+  - `backend/.deer-flow/soc-runtime-validation/checkpoint-d/step-d2-generic-entity-extraction/1965449.entities.json`
+    （敏感、gitignored）。
+- 验证：
+  - D-0/D-1/D-2 focused suite：`4 passed`；
+  - Ruff check/format 与 `git diff --check` passed。
+- 下一步：
+  - 等用户审阅 D-2；确认后进入 `PI-01 Checkpoint D-3`，只运行 fact reconstruction，并再次
+    停下审阅。
+
+### 2026-07-29 — PI-01 Checkpoint D-1 single-alert canonical normalization completed
+
+- 代表样本：
+  - `alert_id=1965449`、`topic=sec_guard_apt`、expected source type `ndr`；
+  - canonical row 来自权威 PKL；历史 JSON 是 `conflict_pkl_authoritative` lineage，不作为本次输入。
+- 新增 D-1 构建器：
+  - `validation/compact_zeus/checkpoint_d/build_checkpoint_d_normalization_review.py`；
+  - 只选择一条 canonical `alert_data` 并调用生产 `normalize_alert_payload()`；
+  - 输出完整本地 `normalized_alert`、parser 摘要、evidence policy、canonical provenance 和 raw
+    hash checks；不读取历史 `agent_response`；
+  - 不运行 generic entity extraction、fact reconstruction、analysis input、skill、LLM、decision
+    或 persistence。
+- D-1 结果：
+  - PingAn adapter 与 `ndr` source type 选择正确；`raw_message_first/high` 选中
+    `alert.hitLog[0].zeusRawLogs[0].message`，processed sibling fields 标记为 reasoning-excluded；
+  - 14 项 canonical/lineage/immutability check 全部通过；输入 hash 未变化，`normalized.raw`
+    与 canonical `alert_data` 完全一致；D3 provenance 校正后 canonical provenance 为 36 条；
+  - parser `pingan_delimited_json/v2` 从 4,522 字符 message 提取 70 个字段；2 个 nested
+    top-level field strict decoded，`rsp_body` 保守 repair accepted，`req_body` 因引入无源 key
+    repair rejected；共有 4 条明确 parser warning；
+  - 状态因此为 `passed_with_parser_warnings`，不是无条件 `passed`；repaired value 不冒充 strict
+    decoded/source fact，原始字符串仍完整保留。
+- 可审阅产物：
+  - `backend/.deer-flow/soc-runtime-validation/checkpoint-d/step-d1-canonical-normalization/1965449.normalization.json`
+    （敏感、gitignored）。
+- 验证：
+  - D-0 + D-1 focused tests：`3 passed`；
+  - Ruff check/format passed。
+- 下一步：
+  - 等用户审阅 D-1；确认后进入 `PI-01 Checkpoint D-2`，只对同一 normalized alert 运行
+    generic entity extraction，并再次停下审阅。
+
+### 2026-07-29 — PI-01 Checkpoint D-0 corpus inventory completed
+
+- 清理了旧 Adapter 生成的本地 SOC Runtime/Alpha/Boss Demo 产物和隔离 SQLite；保留
+  DeerFlow `deerflow.db`、用户、memory 与 JWT 运行数据。
+- 新增 adapter-independent D-0 构建器：
+  - `validation/compact_zeus/checkpoint_d/build_checkpoint_d_corpus_inventory.py`；
+  - 通过 restricted unpickler 读取权威 corpus；
+  - 只检查 corpus hash、212 个唯一 ID、wrapper/payload ID、topic/source family、
+    `hitLog`、`zeusRawLogs` 和非空 `message` 可用性；
+  - 不解析 message，不导入或调用 PingAn Normalizer、Runtime、LLM、Decision Policy 或
+    persistence；逐行记录不复制原始 message 值。
+- D-0 真实语料结果：
+  - `212/212` rows，`212` unique alert IDs，0 duplicate、0 global issue、0 blocking row；
+  - `raw_message_available=200`、`structured_fallback_candidate=10`、
+    `evidence_unavailable=2`；
+  - 343 个 message 字段全部为非空 string；共 215 个 HitLog、358 个 raw event；
+  - 6 个预期来源族：`nids=95, ndr=44, edr=37, hids=23, siem=10,
+    threat_intel=3`；
+  - 两个已知上游缺口为 `1965452/sec_guard_apt` 与 `1965795/leagsoft-edr`：均有 HitLog，
+    但 `zeusRawLogs` 为空，不归因于 Adapter。
+- 可审阅产物：
+  - `backend/.deer-flow/soc-runtime-validation/checkpoint-d/step-d0-corpus-inventory/corpus-inventory.json`
+    （gitignored）。
+- 验证：
+  - `backend/.venv/bin/python -m pytest -q validation/compact_zeus/checkpoint_d/test_build_checkpoint_d_corpus_inventory.py`
+    -> `2 passed`；
+  - Ruff check/format passed；
+  - D-0 实跑状态为 `passed_with_known_input_gaps`。
+- 下一步：
+  - 等用户审阅 D-0；确认后进入 `PI-01 Checkpoint D-1`，只取一条
+    `raw_message_available` 代表样本检查 canonical normalization，再次停下审阅。
 
 ### 2026-07-27 — PI-01 PingAn NDR/APT / HIDS Checkpoint C completed
 
@@ -498,7 +705,7 @@
   - 210 个历史 `agent_response` 都是合法 JSON 且 ID 对齐，但它们是历史模型输出，不是人工标签；
     `ground_label` 非空数为 0。
 - 实现：
-  - 新增 `validation/compact_zeus/build_alert_validation_corpus.py`，使用受限 pickle loader 生成
+  - 新增 `validation/compact_zeus/corpus/build_alert_validation_corpus.py`，使用受限 pickle loader 生成
     `soc.validation.alert_corpus.v1`；
   - 每个 `alert_id` 只保留一个 canonical row；PKL 对已有 ID 权威，精确 JSON 只增加
     `source_refs`，冲突 JSON 完整保存在 `legacy_demo_variants`，缺失 JSON 包装为
@@ -520,11 +727,11 @@
     marker 后节省 3,437,530 字符，`alert_full_data` 字符压缩率 17.24%，非
     `zeusRawLogs` 字段变化数为 0。
 - 验证：
-  - `backend/.venv/bin/python -m pytest -q validation/compact_zeus/test_build_alert_validation_corpus.py`
+  - `backend/.venv/bin/python -m pytest -q validation/compact_zeus/corpus/test_build_alert_validation_corpus.py`
     -> `4 passed`；
   - `backend/.venv/bin/python -m ruff check validation/compact_zeus/*.py` -> passed；
-  - `backend/.venv/bin/python validation/compact_zeus/build_alert_validation_corpus.py` -> passed；
-  - `backend/.venv/bin/python validation/compact_zeus/build_zeus_compaction_artifacts.py` -> passed。
+  - `backend/.venv/bin/python validation/compact_zeus/corpus/build_alert_validation_corpus.py` -> passed；
+  - `backend/.venv/bin/python validation/compact_zeus/corpus/build_zeus_compaction_artifacts.py` -> passed。
 - 下一步：
   - 仍属于 `PI-01`：先将 `T_GBD_zeus_data`、`ptp-nids`、`sec_guard_wb` 的 `other` 分类及
     unsupported/degraded message schema 转成可审阅 adapter/parser coverage register；
