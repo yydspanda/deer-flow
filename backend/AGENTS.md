@@ -400,6 +400,11 @@ configured redacted/full policy. Repaired JSON is never a strict-decoded source 
 accepted-baseline drift checks. `LLMAnalysisRequest.evidence_coverage` records parsed/decoded usage,
 sanitization, truncation, omissions, and high-value mapping gaps; prompts receive only its compact
 path-free summary.
+Outer parser success is `recognized` even when a nested allowlisted body has a decode/repair warning;
+the original nested string and typed repair observation remain auditable. `soc.decision_policy.v3`
+treats encoded compaction alone as informational and routine bounded omission/truncation without a
+high-value gap as at most partial. Only degraded/unsupported outer schemas, high-value gaps or
+ungrounded analyzer citations directly degrade evidence; fact conflicts retain `conflicted`.
 
 The production SOC analysis node reuses `deerflow.models.create_chat_model()` through
 `soc_agent.llm.DeerFlowLLMChatClient`; do not add a second provider SDK/config path. Runtime selection
@@ -436,8 +441,8 @@ Decision path.
 self-report: `Decision.confidence_source`, `confidence_is_calibrated`, `evidence_state`,
 `review_reasons`, and `policy_version` must remain explicit. Until an approved, versioned calibration
 profile is wired into this policy, stub and live-LLM decisions require human review; a high raw score
-cannot erase conflicts, degraded/unsupported message schemas, high-value evidence gaps, truncation,
-or false-positive confirmation. Read-only mock or failed action evidence may remain visible for
+cannot erase conflicts, degraded/unsupported message schemas, high-value evidence gaps, ungrounded
+citations, or false-positive confirmation. Read-only mock or failed action evidence may remain visible for
 flow validation and audit, but cannot raise domain/scenario confidence or satisfy an evidence gap.
 
 Persisted analysis uses `AnalysisPersistence.save_analysis_bundle()` so run, summary, optional review
@@ -571,6 +576,19 @@ model-accuracy evaluation without human labels nor another Runtime node. If boun
 provenance-backed canonical/fact/scenario evidence are all absent, `EvidenceCoverageReport` must emit
 the vendor-neutral critical `analysis_evidence.unavailable` gap so Decision becomes degraded,
 review-required and non-automatable. Do not encode provider/topic names in this check.
+
+After D-10, D-11 runs every D-0 row twice through the non-persistent production control flow with
+`StubLLMAnalyzer`. Run it with
+`./scripts/soc-runtime-validation.sh checkpoint-d-full-corpus`. D-11 validates corpus/D-0 lineage,
+source mapping, exact nine-step execution, input preservation, bounded evidence, Grounding, Decision
+fail-closed behavior and semantic reexecution stability. It must not call a live model, database,
+repository replay, tenant policy, MCP or action. Stability excludes run IDs, timestamps, durations,
+step input hashes that duplicate prior outputs, and the normalize output hash whose source-missing
+`AlertEventRef.received_at` is ingestion-time metadata; all downstream semantic output hashes remain
+in scope. Save full runs only for failed/unstable rows under the gitignored diagnostics directory.
+D-11 must aggregate non-exclusive evidence-quality row counts and assert that routine truncation does
+not directly degrade, nested warnings preserve outer recognition, high-value gaps fail closed, and
+encoded compaction does not emit the historical truncation review reason.
 
 Tenant-specific environment exemptions are post-detection operational policy. PingAn adapters may
 emit provenance-backed generic environment/context candidates, but they cannot emit `safe`,

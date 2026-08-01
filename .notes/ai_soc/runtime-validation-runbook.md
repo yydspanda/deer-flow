@@ -60,6 +60,9 @@ SOC_VALIDATION_MODEL=deepseek-v4-pro ./scripts/soc-runtime-validation.sh checkpo
 # 按 topic 选择代表样本并纳入全部 known input gaps，执行 D10 真实模型完整 Runtime 回放
 SOC_VALIDATION_MODEL=deepseek-v4-pro ./scripts/soc-runtime-validation.sh checkpoint-d-cross-source
 
+# 全部 212 条各执行两次无模型 Runtime，验证 payload 兼容性与语义稳定性
+./scripts/soc-runtime-validation.sh checkpoint-d-full-corpus
+
 # 全部依次执行
 ./scripts/soc-runtime-validation.sh all
 ```
@@ -78,9 +81,11 @@ PKL 语料逐边界验证 deterministic D0-D6；`checkpoint-d-live` 只在确认
 Analyzer 生成 D7；`checkpoint-d-grounding` 再对 D7 运行 production D8 Grounding，不调用
 模型；`checkpoint-d-decision` 消费保存的 D5/D7/D8 并运行 production D9 Decision Policy，不写
 数据库；`checkpoint-d-cross-source` 从 D0 选择各 topic 代表样本和全部 known input gaps，使用
-显式配置的真实模型运行 production Runtime，产生模型费用且禁止回退 stub。后者保留五个 legacy demos、live model、correlation 和
+显式配置的真实模型运行 production Runtime，产生模型费用且禁止回退 stub；
+`checkpoint-d-full-corpus` 对全部 212 条执行双遍 stub Runtime，只验证结构兼容性、fail-closed 和
+语义稳定性，不执行持久化 replay。后者保留五个 legacy demos、live model、correlation 和
 governance 证据。D6 只是全语料 Skill 路由覆盖，D7-D10 是 Analyzer/Grounding/Decision/跨来源
-审阅边界，都不是固定 Runtime 新节点。
+审阅边界，D11 是全语料兼容性门禁，都不是固定 Runtime 新节点。
 
 ## 3. Step Contract / 每步看什么
 
@@ -111,6 +116,7 @@ Checkpoint D 当前增加：
 | D8 | `checkpoint-d/step-d8-evidence-grounding` | production source/value Grounding、description sibling-fact leakage、scenario 引用接受/拒绝状态；不运行 Decision |
 | D9 | `checkpoint-d/step-d9-decision-policy` | production Decision Policy、evidence state、review reasons、automation guard；不运行模型、租户处置或持久化 |
 | D10 | `checkpoint-d/step-d10-cross-source-runtime` | 8 topic / 6 source family 真实模型 representative matrix、完整 9-step Runtime、模型/token provenance、Grounding 质量和 known input gap fail-closed；无人工标签时不评估模型准确率 |
+| D11 | `checkpoint-d/step-d11-full-corpus-runtime` | 212 条 × 2 次 stub Runtime、D0/corpus lineage、九步兼容性、语义哈希稳定性、known gap fail-closed，以及 parser warning/compaction/omission/truncation/high-value gap/conflict/Grounding/Decision 分层统计与验收；仅失败行保存完整 diagnostic |
 
 ## 4. 2026-07-17 Latest Run / 本次实跑结果
 
@@ -131,7 +137,8 @@ Checkpoint D 当前增加：
    `ungrounded_analysis_evidence`。Runtime 正确将其降级为人工复核并保持
    `automation_allowed=false`，但模型引用质量仍是后续优化项。
 3. 5 条 confidence label 全部保持 pending；这是治理门禁的预期结果，不是失败。
-4. Step 5 对 APT 样本产生 schema degradation/evidence truncation issue；EDR/HIDS 无 issue。
+4. Step 5 对 APT 样本保留 nested decode warning/evidence truncation maintenance signal；外层 parser
+   成功时 schema 仍为 recognized，routine truncation 不再直接降级 Decision。
 5. Step 7 生成 14 条候选 mapping，全部禁止 auto-apply。
 6. Correlation 受控语料 retrieval precision `0.667`、recall `1.0`，replay diff `changed=false`；
    该数字不代表生产分布，也不能用于自动抑制。

@@ -247,9 +247,11 @@ contracts
 - Parser failure is explicit: preserve raw text, emit a warning, expose only bounded text to the
   analysis node, and keep structured fallback candidates at the trust selected by the source
   policy. PingAn defaults that trust to `low` except for its exact reviewed topic allowlist.
-- Every selected raw message must emit `MessageSchemaObservation`. `recognized` means parser grammar
-  success, `degraded` means partial/nested decode warnings, and `unsupported` means no deterministic
-  parser output exists; none of these statuses is a verdict or probability.
+- Every selected raw message must emit `MessageSchemaObservation`. `recognized` means the outer parser
+  grammar succeeded, including when a nested allowlisted field has a separately recorded decode/repair
+  warning; `degraded` is reserved for an explicitly incomplete outer parse, and `unsupported` means no
+  deterministic parser output exists. Nested damage is expressed by the preserved source string,
+  `NestedJsonRepairObservation` and warnings; none of these statuses is a verdict or probability.
 - `schema_fingerprint` hashes parser name/version plus structural field paths and types, never field
   values. Novelty is evaluated only against an explicitly accepted baseline; a first observation
   cannot call itself novel.
@@ -1274,6 +1276,13 @@ normalizers/hids.py
   evidence、human review 和 `automation_allowed=false`，但不能改写 detection verdict。存在
   provenance-backed canonical/fact/scenario evidence 的合法通用输入不能仅因没有 raw-message
   object 而触发该 gap。
+- Evidence quality 必须分层：`llm_compacted_encoded_paths` 单独存在是正常 Token 优化，不改变
+  `DecisionEvidenceState`；普通 omission/truncation 且无 high-value gap 时最多为 `partial`，不得产生
+  `truncated_analysis_evidence` 硬复核原因；degraded/unsupported outer schema、high-value gap 或
+  ungrounded analyzer evidence 才进入 `degraded`；fact conflict 优先进入 `conflicted`。
+- `DecisionReviewReason.TRUNCATED_ANALYSIS_EVIDENCE` 仅为历史持久化兼容保留。当前
+  `soc.decision_policy.v3` 不为 routine bounded budget pressure 生成该 reason；关键字段是否丢失必须由
+  typed `EvidenceFieldImportanceRegistry` / `high_value_gaps` 判断，不能从 `truncated=true` 猜测。
 
 ### Normalization maintenance / 归一化维护约束
 
@@ -1286,6 +1295,8 @@ normalizers/hids.py
 - missing baseline、novel/degraded/unsupported schema、high-value gap、evidence truncation 必须形成
   独立 `NormalizationMaintenanceIssue`，不能混入告警 `ReviewQueueItem`。Issue 必须有稳定 dedupe key、
   occurrence count、first/last seen、状态和处理理由；resolved/ignored 后复发必须 reopen。
+  Routine truncation issue 用于预算/映射运维观察，不等于 Decision degraded；encoded compaction 不得
+  冒充 truncation issue。
 - `NORMALIZATION_BASELINE_ACCEPTED`、`NORMALIZATION_DRIFT_DETECTED`、
   `NORMALIZATION_ISSUE_UPDATED` 是通知事件，不是 verdict/memory/action 事件。
 - Gateway `/api/soc/normalization/*`、CLI、Review TUI 和 Web 只能调用 maintenance service，不得直接
@@ -1310,8 +1321,10 @@ normalizers/hids.py
 - 当前 stub heuristic 与 LLM self-report 都未校准，必须包含 `confidence_not_calibrated` 并进入
   human review。未来只有经过人工标注、离线校准、版本审批和 replay 验证的 profile 才能改变该策略；
   `soc eval confidence` 的输出不会自动接入 Runtime。
-- `false_positive` 必须要求人工确认。fact conflict、degraded/unsupported message schema、high-value
-  evidence gap、LLM evidence truncation 等 guard 独立于 raw confidence，高分不能清除它们。
+- `false_positive` 必须要求人工确认。fact conflict、degraded/unsupported outer message schema、
+  high-value evidence gap 和 ungrounded analyzer evidence 等 hard guard 独立于 raw confidence，高分
+  不能清除它们。Routine truncation/omission 只表达 `partial`，encoded compaction 单独存在不改变
+  evidence state。
 - memory confidence 只在 confirmed/retrieval-enabled memory 内参与排序；不能让 pending candidate
   自动生效。
 - 不同层的 confidence/trust/status 禁止直接平均、相乘或折算成一个总分。任何聚合都必须先定义
@@ -2157,6 +2170,23 @@ tool permission denial rate
 - 默认未提供 replay response 时，只允许把 stub 结果序列化后再走一遍 LLM parser/runtime 链路，用于 smoke-test 工程路径；不能把该结果解释为真实模型质量。
 - eval report 必须至少包含 parse success、repair count、failed count、verdict diff、needs_review diff、confidence delta。
 - eval 只读样本，不写业务库、不生成 memory、不入 review queue；需要持久化评测历史时另建 eval repository/schema。
+
+### Checkpoint D cross-source/full-corpus contract
+
+- D10 是显式付费的真实模型代表样本回放：每个已知 topic 一条代表样本并包含全部 D0 known input
+  gap；必须记录 model/Prompt/Parser、usage、Grounding 和 Decision，禁止静默回退 stub。没有人工标签时
+  不能把 D10 当准确率或自动化上线依据。
+- D11 是无模型的全量兼容性 Gate：每个 D0 payload 通过公开 `SocAnalysisService` 九步控制流执行两
+  次，必须覆盖全部唯一 corpus 行、保持 input payload、使用 `analyze_stub`，并证明 Decision
+  fail-closed。它不是持久化 `replay(run_id)`，不得访问 DB、MCP、租户处置或 action。
+- D11 semantic projection 必须纳入下游 step output、normalization/extraction report 和 failure contract；
+  必须排除 `run_id`、时间戳、耗时、重复 step input hash，以及源缺失时由摄入生成的
+  `AlertEventRef.received_at` 所污染的 normalize raw output hash。原始 trace 差异仍保留为信息字段。
+- D11 主矩阵只保存紧凑摘要，真实输入不得复制进 212 行报告；仅失败或不稳定行可在 gitignored
+  `diagnostics/` 保存完整双运行结果。Stub verdict 只表示路径覆盖，不能作为模型质量。
+- D11 必须显式统计 parser warning、schema status、encoded compaction、omission reason、routine
+  truncation、high-value gap、conflict、Grounding 和 Decision review reason，并把 evidence-quality
+  分层规则做成 acceptance checks，而不是只输出人工阅读数字。
 
 ### Release-level Alpha acceptance contract
 

@@ -15,8 +15,9 @@ from soc_agent.contracts import (
 )
 from soc_agent.core.validator import validate_decision
 
-SOC_DECISION_POLICY_VERSION = "soc.decision_policy.v2"
+SOC_DECISION_POLICY_VERSION = "soc.decision_policy.v3"
 DEFAULT_REVIEW_BELOW = 0.75
+_INFORMATIONAL_WARNING_PREFIXES = ("bounded evidence compacted one or more encoded spans;",)
 
 
 class SocDecisionPolicy:
@@ -98,8 +99,6 @@ def _review_reasons(
         reasons.append(DecisionReviewReason.UNSUPPORTED_MESSAGE_SCHEMA)
     if request.evidence_coverage.high_value_gaps:
         reasons.append(DecisionReviewReason.HIGH_VALUE_EVIDENCE_GAP)
-    if request.evidence_coverage.llm_truncated_evidence_paths:
-        reasons.append(DecisionReviewReason.TRUNCATED_ANALYSIS_EVIDENCE)
     if grounding.ungrounded_count:
         reasons.append(DecisionReviewReason.UNGROUNDED_ANALYSIS_EVIDENCE)
     if any("outcome-success claim" in warning for warning in grounding.warnings):
@@ -121,18 +120,21 @@ def _evidence_state(
         return DecisionEvidenceState.CONFLICTED
 
     schema_statuses = {item.status for item in request.evidence_coverage.message_schemas}
-    if (
-        MessageSchemaStatus.DEGRADED in schema_statuses
-        or MessageSchemaStatus.UNSUPPORTED in schema_statuses
-        or request.evidence_coverage.high_value_gaps
-        or request.evidence_coverage.llm_truncated_evidence_paths
-        or grounding.ungrounded_count
-    ):
+    if MessageSchemaStatus.DEGRADED in schema_statuses or MessageSchemaStatus.UNSUPPORTED in schema_statuses or request.evidence_coverage.high_value_gaps or grounding.ungrounded_count:
         return DecisionEvidenceState.DEGRADED
 
-    if request.warnings or request.evidence_coverage.omissions:
+    if _has_partial_evidence(request):
         return DecisionEvidenceState.PARTIAL
     return DecisionEvidenceState.SUFFICIENT
+
+
+def _has_partial_evidence(request: LLMAnalysisRequest) -> bool:
+    coverage = request.evidence_coverage
+    if coverage.omissions or coverage.llm_truncated_evidence_paths:
+        return True
+    if any(observation.warnings for observation in coverage.message_schemas):
+        return True
+    return any(not warning.startswith(_INFORMATIONAL_WARNING_PREFIXES) for warning in request.warnings)
 
 
 __all__ = ["DEFAULT_REVIEW_BELOW", "SOC_DECISION_POLICY_VERSION", "SocDecisionPolicy"]

@@ -117,6 +117,28 @@ def test_malicious_ioc_returns_true_positive_candidate() -> None:
     assert DecisionReviewReason.STUB_ANALYZER in run.decision.review_reasons
 
 
+def test_stub_does_not_emit_empty_command_line_evidence() -> None:
+    run = _analyze(
+        {
+            "alert_id": "ALT-MALICIOUS-NO-COMMAND-001",
+            "source": {"source_type": "nids", "source_system": "test-nids"},
+            "detection": {"rule_name": "Malicious IOC callback"},
+            "entities": {
+                "network": {
+                    "source_ip": "192.0.2.10",
+                    "destination_ip": "198.51.100.20",
+                }
+            },
+        }
+    )
+
+    assert run.analysis is not None
+    assert all(item.value not in {None, ""} for item in run.analysis.evidence)
+    assert not any(item.source == "command_line" for item in run.analysis.evidence)
+    assert run.analysis_evidence_grounding is not None
+    assert run.analysis_evidence_grounding.ungrounded_count == 0
+
+
 def test_decision_policy_preserves_fact_conflict_guard() -> None:
     payload = _sample("pingan_legacy_apt.json")
     raw_event = payload["alert"]["hitLog"][0]["zeusRawLogs"][0]

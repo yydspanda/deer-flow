@@ -291,6 +291,11 @@ Current SOC direction:
   source fact. `MessageSchemaObservation` and accepted-baseline fingerprints expose parser drift,
   while `EvidenceCoverageReport` exposes parsed fields that were used, sanitized, omitted, or left
   outside canonical/fact/scenario mappings.
+- `MessageSchemaObservation.recognized` means the outer message parser succeeded; nested decode/repair
+  warnings do not turn the whole message schema into degraded. Under `soc.decision_policy.v3`, encoded
+  compaction alone is informational, routine bounded omission/truncation without a high-value gap is
+  at most partial, degraded/unsupported outer schema or high-value/ungrounded evidence is degraded,
+  and fact conflicts remain conflicted. The old truncation review reason is historical compatibility.
 - Persisted CLI/Kafka analysis injects `SocNormalizationMaintenanceService` after normal business
   writes. It creates deduplicated baseline/schema/coverage maintenance issues without changing the
   verdict. Baselines require explicit engineer/admin acceptance; mapping suggestions and confidence
@@ -357,7 +362,12 @@ Current SOC direction:
   D10 replays one representative per known topic plus every D0 known input gap through the configured
   real model and complete production Runtime; it records model/parser provenance, token usage,
   Grounding and Decision guards, but is not a model-accuracy evaluation without human labels. D6-D10
-  are not additional Runtime nodes. A blocked D8 must
+  are not additional Runtime nodes. Run deterministic D11 with
+  `./scripts/soc-runtime-validation.sh checkpoint-d-full-corpus`: it executes every D0 row twice
+  through the non-persistent stub Runtime, compares semantic outputs while excluding run IDs,
+  timestamps, durations and ingestion-only `received_at`, and must not call an LLM, DB, MCP, tenant
+  policy or action. D11 is a 212-row compatibility/reexecution-stability gate, not model evaluation or
+  persisted `SocAnalysisService.replay(run_id)`. A blocked D8 must
   become degraded/conflicted evidence, human review and `automation_allowed=false` in D9. An input
   with no bounded raw/highlight or provenance-backed canonical/fact/scenario evidence must emit the
   vendor-neutral critical `analysis_evidence.unavailable` coverage gap and fail closed.

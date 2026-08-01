@@ -547,8 +547,11 @@ The system must handle vendor differences without turning the core schema into a
     validity/identity/privileges, security outcome, and the private complete sidecar hash remain
     ungrounded.
 17. Every selected message emits `MessageSchemaObservation`: `recognized` means the deterministic
-   parser handled the structure, `degraded` means partial/nested decoding failed, and `unsupported`
-   means no parser handled the selected message. A structural fingerprint supports baseline diff.
+   parser handled the outer message structure, even when an allowlisted nested body has its own
+   decode/repair warning; `degraded` is reserved for an explicitly incomplete outer parse, and
+   `unsupported` means no parser handled the selected message. Nested field damage remains visible in
+   `NestedJsonRepairObservation`, the preserved source string, and parser warnings. A structural
+   fingerprint supports baseline diff.
 18. `EvidenceCoverageReport` records structured/parsed/decoded/repaired paths,
     canonical/fact/scenario consumers, exact bounded LLM projection, redaction/full mode,
     encoded compaction, omission reasons, truncation, and known
@@ -563,6 +566,11 @@ The system must handle vendor differences without turning the core schema into a
     evidence quality, not a verdict: Decision Policy degrades evidence state, requires review, and
     blocks automation. A valid canonical input with provenance-backed facts does not trigger this
     gap merely because it has no raw-message object.
+    Evidence quality is classified rather than collapsed: encoded-span compaction is informational;
+    routine bounded omissions/truncation with no high-value gap produce at most `partial`; an explicit
+    degraded/unsupported outer schema, high-value gap, or ungrounded analyzer citation produces
+    `degraded`; fact conflicts retain the stronger `conflicted` state. `soc.decision_policy.v3` no
+    longer emits `truncated_analysis_evidence` for ordinary budget pressure.
     Empty/null source leaves do not create false mapping gaps; a non-empty unknown high-value field
     remains an explicit maintenance issue. The NDR/HIDS corpus audit evaluates each non-empty parsed
     leaf instance rather than relying only on path aggregates, so nested `_origin.*`, `payload.*`,
@@ -595,7 +603,8 @@ Schema drift workflow / 结构漂移流程：
    the normal run/summary/queue/audit writes. Missing baseline, novel fingerprint, degraded or
    unsupported schema, high-value mapping gap, and bounded-evidence truncation become deduplicated
    `NormalizationMaintenanceIssue` records. Monitoring failure is fail-open for alert analysis and is
-   recorded in `NormalizationMonitoringResult.warnings`.
+   recorded in `NormalizationMonitoringResult.warnings`. A truncation maintenance issue is an
+   operational capacity/mapping signal; it does not by itself make the Decision evidence degraded.
 4. Accepting a baseline supersedes the prior active version and resolves covered `baseline_missing` /
    `novel_schema` issues. Recurrence increments `occurrence_count`; a resolved/ignored issue that
    recurs is reopened.
@@ -708,8 +717,9 @@ Rules:
   time. If authorization was not present in the exact bounded input used by the model, record the
   known business truth but mark the analyzer sample `excluded_missing_decisive_context`; do not use
   it to punish or calibrate the analyzer. Retain it for authorization-enrichment coverage metrics.
-- Missing coverage, degraded schemas, conflicts, and truncation can lower or cap an operational
-  conclusion, but no single score may silently erase those warnings.
+- Missing high-value coverage, degraded/unsupported outer schemas, conflicts, and ungrounded analyzer
+  citations cap an operational conclusion. Routine bounded omission remains `partial`, while encoded
+  compaction alone is informational; no confidence score may silently erase any of these signals.
 - Analyzer evidence uses one exact source path per item. Composite paths and descriptions that add
   uncited sibling facts are invalid. `#parsed`, `#decoded`, and `#repaired` citations are distinct
   provenance surfaces and must resolve to the exact bounded projection used for that model call.
@@ -769,15 +779,16 @@ does not prove evidence correctness. D8 runs deterministic `soc.analysis_evidenc
 - rejected items remain ungrounded, so existing Decision Policy must produce degraded evidence and
   human review rather than repairing the model's semantic output.
 
-The latest 2026-08-01 D7/D8 artifacts use `deepseek-v4-pro` with `soc-analysis-v8`. D7 passed its
-typed structural contract with 10 evidence items. D8 accepted 8 and rejected 2 descriptions that
-mixed uncited sibling facts; the trusted bounded provider outcome removed the earlier false
-`unproven_outcome_claim`. Execution passed while quality correctly remained blocked. Re-running the
-stochastic model produced different citation mistakes, which confirms that Prompt guidance cannot
-replace deterministic Grounding. D9 consumed the persisted D5/D7/D8 lineage and invoked the
-production `SocDecisionPolicy` without another model call or persistence. It preserved the
-`suspicious` detection verdict while producing `evidence_state=degraded`, `needs_review=true`, six
-structured review reasons and `automation_allowed=false`. D10 then replayed the complete production
+The latest 2026-08-02 D7/D8 artifacts use `deepseek-v4-pro` with `soc-analysis-v8` after rebuilding D5
+under the corrected outer-schema semantics. D7 passed its typed structural contract with 9 evidence
+items. D8 accepted 5 and rejected 4 descriptions that mixed uncited sibling facts. Execution passed
+while quality correctly remained blocked. Re-running the stochastic model produced different citation
+mistakes, which confirms that Prompt guidance cannot replace deterministic Grounding. D9 consumed the
+exact persisted D5/D7/D8 lineage and invoked `soc.decision_policy.v3` without another model call or
+persistence. It preserved the `suspicious` detection verdict while producing
+`evidence_state=degraded`, `needs_review=true`, four structured review reasons and
+`automation_allowed=false`; routine truncation and nested parser warnings were not among those hard
+reasons. D10 previously replayed the complete production
 Runtime with the configured `deepseek-v4-pro` analyzer for one median-shaped representative from each
 of 8 topics plus both known empty-input rows. All 10 real calls completed across 6 source families,
 using 167,042 tokens and producing 8 `suspicious`, 1 `needs_review`, and 1 `unknown` result. Grounding
@@ -785,8 +796,18 @@ accepted 67 of 87 evidence items and rejected 20, including 14 description-conte
 matrix passed its execution contract with quality findings and every Decision remained review-only
 with automation disabled. The empty rows exposed the generic critical
 `analysis_evidence.unavailable` gap rather than allowing the model to invent missing input. The next
-boundary is D11 full 212-row deterministic compatibility/replay-stability testing; it is deliberately
-separate from this paid live-model quality sample and is not a model-accuracy claim.
+boundary, D11, then executed all 212 D0 rows twice through the same non-persistent control flow with
+the stub analyzer. All 424 executions completed, all 212 semantic projections were stable, and both
+known empty-input rows failed closed; there were no Runtime exceptions, failed rows or diagnostics.
+Its 206 `unknown` / 6 `true_positive` stub outputs are control-flow coverage only, not a model-quality
+claim. D11.1 then corrected evidence-quality semantics: 343 outer messages are recognized even though
+12 rows retain nested parser warnings; 175 rows have routine truncation without a high-value gap and
+112 rows have encoded compaction. The resulting states are 6 `conflicted`, 2 `degraded`, 198 `partial`,
+and 6 `sufficient`; the only degraded rows are the two explicit high-value input gaps. All 220
+non-empty stub evidence items ground successfully after empty optional command-line citations were
+removed. D10 remains the paid cross-source live-model sample, while D11 proves full-corpus payload and
+Runtime compatibility. PI-01 now advances to the first approved read-only dev/staging provider intake
+rather than another local mock or alert-specific Prompt expansion.
 
 ---
 
@@ -1568,7 +1589,7 @@ node. The internal gitignored D-4 review uses
 explicitly approved `full` mode, while generic deployments remain `redact` by default. Encoded-span
 compaction remains a separate token-budget mechanism and never rewrites immutable raw input. Later
 steps move from one representative sample to analyzer/decision review, a paid live-model cross-source
-sample, and finally the 212-row deterministic Runtime compatibility replay. Historical `agent_response`
+sample, and finally the completed 212-row deterministic Runtime compatibility replay. Historical `agent_response`
 values remain model outputs, and a corpus with no analyst `ground_label` cannot support accuracy,
 calibration, suppression, or automation claims. The generated PKL, manifest and rich reports contain
 or derive from internal alerts and remain gitignored.

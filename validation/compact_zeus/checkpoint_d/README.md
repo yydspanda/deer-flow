@@ -18,6 +18,7 @@
 | D8 | `build_checkpoint_d_evidence_grounding_review.py` | 消费 D5/D7，调用 production Grounding 校验 source/value，并拒绝 description sibling facts | LLM、决策、correlation/memory、MCP/tool、持久化、ReviewQueue/action |
 | D9 | `build_checkpoint_d_decision_policy_review.py` | 消费 D5/D7/D8，调用 production Decision Policy 验证 fail-closed | LLM、重新 Grounding、租户处置、持久化、ReviewQueue/action |
 | D10 | `build_checkpoint_d_cross_source_runtime_review.py` | 每 topic 代表样本 + 全部 known input gaps，经显式配置真实 LLM 执行完整 production Runtime | DB、租户处置、模型准确率评测；不是 Runtime 节点 |
+| D11 | `build_checkpoint_d_full_corpus_runtime_review.py` | 212 条 D0 语料各执行两次 stub Runtime，验证全量兼容性与语义稳定性 | LLM、DB/repository replay、租户处置、MCP/tool、模型准确率评测；不是 Runtime 节点 |
 
 默认审阅样本为 `alert_id=1965449`。产物写入
 `backend/.deer-flow/soc-runtime-validation/checkpoint-d/step-d*/`，包含真实告警派生数据，
@@ -94,16 +95,20 @@ Decision 必须降级。模型拼出的 `key=value`、整段对象伪装成 scal
 未证实 outcome 不能绕过该边界。精确可见的 encoded-omission marker 只能证明值存在、编码形态和
 模型边界省略，不能证明隐藏内容、token 有效性或安全结果。
 
-当前 authoritative artifact 使用 `deepseek-v4-pro` / `soc-analysis-v8`，共 10 条 evidence：
-8 grounded、2 条 `description_context_leakage`。D8 execution contract 通过，但质量门正确保持
-`blocked`；两条拒绝分别把目标 IP 混入 source-IP evidence，以及把弱口令分类混入请求体 evidence。
-模型重跑具有随机性，不能通过反复付费采样替代 Grounding。
+当前 2026-08-02 authoritative artifact 使用 `deepseek-v4-pro` / `soc-analysis-v8`，共 9 条
+evidence：5 grounded、4 条 `description_context_leakage`。D8 execution contract 通过，但质量门正确
+保持 `blocked`。这是在 D11.1 outer-schema/Decision 语义修正后按 D5→D7→D8 lineage 重建的一次真实
+调用；模型重跑具有随机性，不能通过反复付费采样替代 Grounding。
 
 D9 直接消费已保存的 D5/D7/D8 artifact，并调用生产 `SocDecisionPolicy`。它不重跑模型、不重新
 Grounding、不写数据库，也不执行租户处置策略。审阅重点是确认 D8 的 rejected evidence 会形成
 degraded/conflicted evidence、结构化 human-review reason 和 `automation_allowed=false`，同时保留 D7 的
 detection verdict。产物位于
 `step-d9-decision-policy/<alert-id>.decision.json`。
+当前 D9 使用 `soc.decision_policy.v3`，保留 `suspicious` verdict，输出 `degraded`、review required、
+automation disabled；四个 review reasons 为 uncertain verdict、ungrounded evidence、raw confidence
+below threshold 和 confidence not calibrated。Routine truncation 与 nested warning 不再被误列为 hard
+degradation reason。
 
 ```bash
 ./scripts/soc-runtime-validation.sh checkpoint-d-decision
@@ -129,6 +134,29 @@ gap。2026-08-01 使用 `deepseek-v4-pro` 的 10/10 次真实调用共消耗 167
 ```bash
 ./scripts/soc-runtime-validation.sh checkpoint-d-cross-source
 # 可选：SOC_VALIDATION_MODEL=OTHER_MODEL ./scripts/soc-runtime-validation.sh checkpoint-d-cross-source
+```
+
+D11 不扩大真实模型费用，而是把 D10 已验证过的同一 production 控制流扩展到全部 212 条语料。
+每条输入在同一进程执行两次，比较排除 `run_id`、时间戳、耗时、重复 step input hash 和
+ingestion-only `event.received_at` 后的语义投影。它不是持久化
+`SocAnalysisService.replay(run_id)`，也不把 stub verdict 当模型质量。报告只保留紧凑行摘要；仅当
+合约失败或语义不稳定时，才在相邻 `diagnostics/` 保存完整双运行结果。
+
+2026-08-02 authoritative D11/D11.1 使用内部批准的 `full` evidence mode：212/212 行处理成功、424 次
+Runtime 执行、212/212 语义稳定、0 Runtime exception、0 failed row、0 diagnostic。全部 Decision
+保持 `needs_review=true` / `automation_allowed=false`；220 条非空 stub evidence 全部 grounded。206
+`unknown` 和 6 `true_positive` 只是 deterministic stub 路径覆盖，不是模型准确率结论。
+
+Evidence-quality correction 后，343 个 outer message schema 全部 recognized；12 行保留 50 条 nested
+parser warning，175 行存在无 high-value gap 的 routine truncation，112 行存在正常 encoded compaction。
+Decision states 为 6 `conflicted`、2 `degraded`、198 `partial`、6 `sufficient`；两条 degraded 正是
+`evidence_unavailable` high-value gap。报告 acceptance 还显式断言 routine truncation 不直接降级、
+nested warning 不否定 outer parser、encoded compaction 不产生历史 truncation review reason、high-value
+gap 必须 fail closed。
+
+```bash
+./scripts/soc-runtime-validation.sh checkpoint-d-full-corpus
+# 可选：SOC_VALIDATION_SENSITIVE_EVIDENCE_MODE=redact ./scripts/soc-runtime-validation.sh checkpoint-d-full-corpus
 ```
 
 ```bash

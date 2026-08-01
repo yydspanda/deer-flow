@@ -8,6 +8,7 @@ VALIDATION_ROOT="$BACKEND_DIR/.deer-flow/soc-runtime-validation"
 HISTORY_ROOT="$BACKEND_DIR/.deer-flow/soc-runtime-validation-history"
 MODEL_NAME="${SOC_VALIDATION_MODEL:-deepseek-v4-pro}"
 CHECKPOINT_D_ALERT_ID="${SOC_CHECKPOINT_D_ALERT_ID:-1965449}"
+CHECKPOINT_D_EVIDENCE_MODE="${SOC_VALIDATION_SENSITIVE_EVIDENCE_MODE:-full}"
 CHECKPOINT_D_CORPUS="$ROOT_DIR/validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
 
 SAMPLES=(
@@ -35,6 +36,8 @@ Commands:
                Run deterministic D9 Decision Policy review against saved D5/D7/D8 artifacts.
   checkpoint-d-cross-source
                Run D10 representative cross-source live-model Runtime replay using SOC_VALIDATION_MODEL.
+  checkpoint-d-full-corpus
+               Run D11 full-corpus two-pass deterministic Runtime compatibility and stability review.
   finalize     Rebuild manifests and RUN-INDEX.md from current artifacts.
   snapshot     Copy the current ignored artifact tree to a timestamped local backup.
   all          Run core, live, evaluations, and finalize in order.
@@ -203,6 +206,22 @@ run_checkpoint_d_cross_source() {
     --model-name "$MODEL_NAME"
 }
 
+run_checkpoint_d_full_corpus() {
+  local checkpoint_dir="$ROOT_DIR/validation/compact_zeus/checkpoint_d"
+  local d0_artifact="$VALIDATION_ROOT/checkpoint-d/step-d0-corpus-inventory/corpus-inventory.json"
+  require_checkpoint_d_corpus
+  if [[ ! -f "$d0_artifact" ]]; then
+    printf 'error: Checkpoint D0 artifact missing: %s\n' "$d0_artifact" >&2
+    printf 'run ./scripts/soc-runtime-validation.sh checkpoint-d first.\n' >&2
+    exit 2
+  fi
+  printf '[checkpoint-d-full-corpus] D11 two-pass deterministic Runtime replay: evidence_mode=%s\n' \
+    "$CHECKPOINT_D_EVIDENCE_MODE"
+  "$PYTHON" \
+    "$checkpoint_dir/build_checkpoint_d_full_corpus_runtime_review.py" \
+    --sensitive-evidence-mode "$CHECKPOINT_D_EVIDENCE_MODE"
+}
+
 run_live() {
   printf '[live] model preflight: %s\n' "$MODEL_NAME"
   run_soc_json \
@@ -327,6 +346,9 @@ main() {
       ;;
     checkpoint-d-cross-source)
       run_checkpoint_d_cross_source
+      ;;
+    checkpoint-d-full-corpus)
+      run_checkpoint_d_full_corpus
       ;;
     finalize)
       run_finalize

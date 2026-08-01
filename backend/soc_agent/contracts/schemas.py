@@ -2905,7 +2905,7 @@ class Decision(BaseModel):
     needs_review: bool
     review_reasons: list[DecisionReviewReason] = Field(default_factory=list)
     reason: str
-    policy_version: str = "soc.decision_policy.v2"
+    policy_version: str = "soc.decision_policy.v3"
     confidence_explanation: str | None = None
     automation_allowed: Literal[False] = False
 

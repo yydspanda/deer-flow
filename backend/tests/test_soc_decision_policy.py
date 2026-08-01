@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+from soc_agent.contracts import (
+    AnalysisEvidenceGroundingReport,
+    AnalysisResult,
+    DecisionEvidenceState,
+    DecisionReviewReason,
+    EvidenceCoverageGap,
+    EvidenceCoverageOmission,
+    EvidenceCoverageReport,
+    EvidenceItem,
+    LLMAnalysisRequest,
+    MessageSchemaObservation,
+    MessageSchemaStatus,
+    Verdict,
+)
+from soc_agent.core.decision_policy import SocDecisionPolicy
+
+
+def _analysis() -> AnalysisResult:
+    return AnalysisResult(
+        verdict=Verdict.TRUE_POSITIVE,
+        confidence=0.9,
+        summary="Bounded test analysis.",
+        evidence=[
+            EvidenceItem(
+                source="alert_id",
+                description="Runtime alert identifier.",
+                value="ALT-POLICY-001",
+            )
+        ],
+        reason="Policy semantics test.",
+        recommended_action="review",
+    )
+
+
+def _decide(request: LLMAnalysisRequest):  # noqa: ANN202
+    return SocDecisionPolicy().decide(
+        _analysis(),
+        request=request,
+        grounding=AnalysisEvidenceGroundingReport(),
+        analyzer_step_name="analyze_llm",
+    )
+
+
+def test_routine_bounded_omission_is_partial_not_degraded() -> None:
+    request = LLMAnalysisRequest(
+        alert_id="ALT-POLICY-001",
+        evidence_coverage=EvidenceCoverageReport(
+            llm_truncated_evidence_paths=["raw.message"],
+            omissions=[
+                EvidenceCoverageOmission(
+                    field_path="raw.message#parsed.vendor_detail",
+                    reason="bounded_projection_budget",
+                )
+            ],
+            warnings=["bounded evidence omitted one or more fields; inspect coverage omissions for exact paths"],
+        ),
+        warnings=["bounded evidence omitted one or more fields; inspect coverage omissions for exact paths"],
+    )
+
+    decision = _decide(request)
+
+    assert decision.evidence_state is DecisionEvidenceState.PARTIAL
+    assert DecisionReviewReason.TRUNCATED_ANALYSIS_EVIDENCE not in decision.review_reasons
+    assert decision.policy_version == "soc.decision_policy.v3"
+
+
+def test_encoded_compaction_alone_is_informational() -> None:
+    warning = "bounded evidence compacted one or more encoded spans; original values remain in raw input"
+    request = LLMAnalysisRequest(
+        alert_id="ALT-POLICY-001",
+        evidence_coverage=EvidenceCoverageReport(
+            llm_compacted_encoded_paths=["raw.message#parsed.payload"],
+            warnings=[warning],
+        ),
+        warnings=[warning],
+    )
+
+    decision = _decide(request)
+
+    assert decision.evidence_state is DecisionEvidenceState.SUFFICIENT
+
+
+def test_nested_decode_warning_preserves_recognized_outer_schema() -> None:
+    warning = "nested JSON repair rejected: payload.req_body"
+    request = LLMAnalysisRequest(
+        alert_id="ALT-POLICY-001",
+        evidence_coverage=EvidenceCoverageReport(
+            message_schemas=[
+                MessageSchemaObservation(
+                    source_path="raw.message",
+                    status=MessageSchemaStatus.RECOGNIZED,
+                    warnings=[warning],
+                )
+            ]
+        ),
+    )
+
+    decision = _decide(request)
+
+    assert decision.evidence_state is DecisionEvidenceState.PARTIAL
+    assert DecisionReviewReason.DEGRADED_MESSAGE_SCHEMA not in decision.review_reasons
+
+
+def test_high_value_gap_remains_degraded() -> None:
+    request = LLMAnalysisRequest(
+        alert_id="ALT-POLICY-001",
+        evidence_coverage=EvidenceCoverageReport(
+            high_value_gaps=[
+                EvidenceCoverageGap(
+                    field_path="raw.message#parsed.command_line",
+                    expected_target="llm_analysis_request.evidence",
+                    reason="critical field has no bounded projection or typed compensation",
+                    rule_id="test.command-line-gap",
+                    importance="critical",
+                )
+            ]
+        ),
+    )
+
+    decision = _decide(request)
+
+    assert decision.evidence_state is DecisionEvidenceState.DEGRADED
+    assert DecisionReviewReason.HIGH_VALUE_EVIDENCE_GAP in decision.review_reasons

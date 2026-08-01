@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-01` 进行中） |
-| 当前目标 | `PI-01 Real providers`：Checkpoint D10 已用真实 `deepseek-v4-pro` 证明 8 个 topic / 6 类来源共享同一 production Runtime，并对未落地引用和两条上游空证据 fail closed；下一步全量回放 212 条语料的结构兼容性 |
+| 当前目标 | `PI-01 Real providers`：Checkpoint D10 已完成真实模型跨来源抽样，D11 已完成 212 条双遍 Runtime 兼容性与稳定性 Gate；当前进入第一项真实只读 dev/staging provider intake |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | `PI-01 Checkpoint D11`：对 212 条唯一语料执行 production deterministic Runtime 全量兼容性回放与稳定性检查；输出紧凑矩阵和失败样本，不调用 LLM/DB/租户处置，也不把该结构检查当模型准确率。D10 已单独承担真实模型跨来源质量抽样。 |
+| 当前下一刀 | `PI-01 Real provider intake`：优先选择只读 CMDB/资产查询能力，确认真实 endpoint/tool contract、认证、租户映射、批准 payload 样例、数据边界和 owner 后接入 dev/staging smoke；外部参数未提供前不新增 mock。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -41,6 +41,47 @@
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / PI-01 In Progress** | 真实 provider、基础设施、标签、SLO 和 governed rollout；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+
+## 2026-08-02 — PI-01 Checkpoint D11 + D11.1 evidence-quality semantics
+
+- 新增 `build_checkpoint_d_full_corpus_runtime_review.py`、聚焦测试和唯一命令
+  `./scripts/soc-runtime-validation.sh checkpoint-d-full-corpus`。
+- D11 严格复用 `SocAnalysisService` 的 production 九步控制流；每个 D0 payload 在同一进程执行
+  两次 `StubLLMAnalyzer` Runtime，只验证全量 payload 兼容性、fail-closed 和语义稳定性，不调用
+  LLM、DB/repository replay、租户处置、MCP 或 action，也不评估模型质量。
+- 稳定性投影排除 `run_id`、时间戳、耗时、重复 step input hash 和 source 缺失时按摄入时间生成的
+  `AlertEventRef.received_at`；实体、事实、bounded input、Skill、Analyzer、Grounding、Decision 等
+  下游语义 output hash 仍全部参与比较。原始 trace 差异继续留在行摘要中供审计。
+- authoritative 结果：
+  - 212/212 行处理，424 次 Runtime 执行，212/212 语义稳定；
+  - 0 Runtime exception、0 failed row、0 diagnostic，8 topic / 6 source family 全覆盖；
+  - 两条 `evidence_unavailable` 均无 bounded evidence，并显式触发 fail-closed；
+  - 212 条均为 `needs_review=true` / `automation_allowed=false`；
+  - 220 条非空 stub evidence 全部 grounded；stub 不再为缺失的 optional command line/process 生成空引用；
+  - 206 `unknown` / 6 `true_positive` 只是 deterministic stub 路径覆盖，不是模型准确率结论。
+- D11.1 修正过宽的质量判级：
+  - outer parser 成功即为 `recognized`；nested decode/repair 失败保留原字符串、typed observation 和
+    warning，但不把整条 message schema 标为 degraded；
+  - encoded compaction 单独存在只记账；普通 omission/truncation 且无 high-value gap 时为 `partial`；
+    degraded/unsupported outer schema、high-value gap 或 ungrounded citation 才为 `degraded`，冲突仍为
+    `conflicted`；Decision Policy 升级为 `soc.decision_policy.v3`；
+  - corpus 分布为 343 个 recognized schema、12 个 parser-warning rows、175 个 routine-truncation rows、
+    112 个 encoded-compaction rows；Decision state 为 6 conflicted / 2 degraded / 198 partial / 6 sufficient；
+  - D11 acceptance 已锁定四条规则：routine truncation 不直接降级、nested warning 保持 outer
+    recognized、high-value gap fail closed、encoded compaction 不产生历史 truncation review reason。
+- 重建当前单样本 lineage：D0-D6 全部通过；D7 用 `deepseek-v4-pro` 真实调用一次（26,093 tokens）
+  得到 9 条 evidence；D8 为 5 grounded / 4 description leakage；D9/v3 保留 `suspicious`，仅由
+  ungrounded evidence 等四个现行 reason 进入 degraded/review/no-automation。旧 D5/D7/D8 hash 组合被
+  validation 正确拒绝，没有复用不一致产物。
+- 产物：
+  `backend/.deer-flow/soc-runtime-validation/checkpoint-d/step-d11-full-corpus-runtime/full-corpus-runtime-matrix.json`
+  （真实告警派生、gitignored）；仅失败/不稳定行才会生成 `diagnostics/*.json`，本次为 0。
+- 验证：D11.1 聚焦 Runtime/parser/policy/service/validation 回归 179 passed；完整 SOC + Checkpoint D
+ 回归 629 passed；真实 D11 重跑为 212/212 stable、0 failed check；D0-D6、当前 D7、D8、D9 均按
+  lineage 重建通过；changed-file Ruff、`git diff --check` 与 `codegraph sync .` 通过。
+- 下一步：Checkpoint D 兼容性主线结束；进入第一项获批只读 dev/staging provider intake，优先
+  CMDB/资产查询。需要真实 endpoint、认证方式、租户映射、批准 payload 样例和数据 owner；不再以
+  本地 mock 代替生产集成证据。
 
 ## 2026-08-01 — PI-01 Checkpoint D10 cross-source Runtime review
 
@@ -84,9 +125,11 @@
 - authoritative 结果：
   - execution `passed`，decision gate `guarded_review_required`；
   - D7 verdict `suspicious` 被原样保留；
-  - D8 的 8 grounded / 2 rejected 形成 `evidence_state=degraded`；
-  - review reasons 为 uncertain verdict、degraded message schema、truncated evidence、ungrounded
-    evidence、raw confidence below threshold 和 confidence not calibrated；
+  - 当前 D11.1 重建 lineage 的 D8 为 5 grounded / 4 rejected，仍形成
+    `evidence_state=degraded`；
+  - 当前 `soc.decision_policy.v3` review reasons 为 uncertain verdict、ungrounded evidence、raw
+    confidence below threshold 和 confidence not calibrated；nested warning / routine truncation 不再
+    冒充 hard degradation；
   - `needs_review=true`，`automation_allowed=false`。
 - 同步架构决定：PingAn `dev/local/staging` 免处置属于版本化 tenant disposition policy，不是
   detection truth、LLM memory 或 Runtime short-circuit。Adapter 只输出通用 context candidate；完整
@@ -237,7 +280,7 @@
 | 1 | Correlation Service MVP | Done | `SocCorrelationService` 基于 summary/evidence 输出相似告警、匹配原因和可复用证据；typed result 已进入 main report/domain/review summary | 不调用 LLM、不依赖真实 MCP、不改 decision；demo 当前告警可看到历史 run + reusable evidence |
 | 1.1 | Correlation -> Unified Investigation bridge | Done | 共享 summary repository、统一 deterministic scorer、`SocDomainTriageRequest.correlation_result`、`UnifiedInvestigationReport.correlation_result` 和 review counts 已接通 | metadata count 不是证据源；historical evidence 只按 matched `run_id` 加载；APT/EDR/HIDS eval 为 3 matches / 6 evidence / 0 failure |
 | 1.2 | Correlation quality baseline | Done | 已建 vendor-neutral same-incident / related-but-distinct / unrelated corpus；`soc eval correlation` 输出双任务指标、reason 分布、fan-out、evidence lineage/unrelated exposure，并支持 `--baseline-json` replay diff | scorer/report/fixture 版本显式；当前 8-pair baseline 暴露 retrieval/dedup precision 均约 0.667；`shadow_dedup_allowed=false` |
-| 1.3 | Correlation label corpus expansion | TODO / Stage 4 | 从脱敏真实告警准备 analyst-reviewed pairs，覆盖来源、时间窗口、跨规则同事件和同规则不同事件 cohort | 不以 8 条受控 pair 代表生产分布；标签来源/rationale/version 可审计；扩充后再比较 scorer v2，不直接切换生产规则；不阻塞 Boss Demo/Alpha code completeness |
+| 1.3 | [Correlation label corpus expansion](../archive/ai_soc/deferred/correlation-label-corpus-expansion.md) | Deferred / `PI-03` data-dependent | 从脱敏真实告警准备 analyst-reviewed pairs，覆盖来源、时间窗口、跨规则同事件和同规则不同事件 cohort | 不以 8 条受控 pair 代表生产分布；标签来源/rationale/version 可审计；扩充后再比较 scorer v2，不直接切换生产规则；不阻塞当前 `PI-01` |
 | 2 | External Disposition Sync Contract | Done | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol、in-memory repository、PostgreSQL persistence、ReviewQueue context API/Web/TUI/Lead Agent visibility；已接 high-trust mapped review/correction 和 pending memory candidate | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
 | 3 | Memory Tracking Contract | Partial | DB-first candidate persistence、review workflow、confirmed-memory boundary、retrieval policy 与 governed activation 已完成；`SocMemoryCandidateSourceBridge` 已接 correction、domain finding、analyst feedback 和 ReviewQueue review note；Kafka/Lead Agent 自动结论来源与 prompt injection 仍后置 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
 | 3.1 | Memory candidate DB/API/ReviewQueue visibility | Done | 已新增 `soc_memory_candidates`、repository、CLI `soc memory list/get`、Gateway `/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded visibility | candidate 仍为 `pending_review` 且 `runtime_decision_allowed=false`；不注入 prompt，不影响 verdict |
@@ -263,9 +306,10 @@
 | 11.9 | Structured disposition outcome capture | EV-02 Done | authenticated API/Web、Review TUI primary/sample command 和 trusted external disposition bridge 全部复用 `SocDispositionEvaluationService` | 不从 `close_reason` 猜标签；幂等、sample membership、独立 reviewer、supersession 和 closed queue 仍由 service 校验；不启用 auto-close |
 | 11.10 | Sample review campaign inbox | EV-03 Done | 新增 derived reviewer inbox、latest-outcome batch query、Gateway read API 和 Web `抽样复核` view；selected work 回到 EV-02 capture form | manifest 仍是唯一抽样真相；禁止挑样、第二写入口和 mutable campaign table；`auto_close_allowed=false` |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
-| D1 | Wiki/OKF export projection | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
+| D1 | [Wiki/OKF export projection](../archive/ai_soc/deferred/wiki-okf-memory-projection.md) | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
 | D2 | Prometheus / operations overview | Partial | normalization 运维页、Gateway bounded metrics 和 Kafka JSONL issue 摘要已完成；全局 Kafka/review/approval/runtime/算力 Prometheus exporter 和态势面板仍后置 | 当前 maintenance issue 可见；全系统运行态势不阻塞 SOC Agent Alpha |
 | D3 | High-risk real execute | Deferred | 等真实 staging adapter、审批策略、补偿和 adapter audit 成熟后再打开 | 生产 execute 前必须有 approval、dry-run、idempotency、回滚/补偿策略 |
+| D4 | [Adaptive normalization/parser evolution](../archive/ai_soc/deferred/adaptive-normalization-parser-evolution.md) | Deferred / production-data-dependent | 按真实 drift cohort 离线生成 parser/mapping/test 候选并治理发布 | 当前 deterministic parser/monitoring 已工作；不得逐告警调用 LLM 或自动改 Runtime |
 
 ## Phase 1 切片计划
 

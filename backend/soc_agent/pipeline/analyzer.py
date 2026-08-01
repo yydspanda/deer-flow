@@ -74,19 +74,27 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
     )
 
     if any(hint in haystack for hint in FALSE_POSITIVE_HINTS):
+        evidence = [
+            EvidenceItem(
+                source="detection",
+                description="规则或命令包含扫描器线索",
+                value=detection.detection_key,
+            )
+        ]
+        if entities.processes:
+            evidence.append(
+                EvidenceItem(
+                    source="entities",
+                    description="抽取到的进程实体",
+                    value=", ".join(entities.processes),
+                )
+            )
+        evidence.extend(context_evidence)
         return AnalysisResult(
             verdict=Verdict.FALSE_POSITIVE,
             confidence=0.82,
             summary="告警命中已知扫描器或批准工具特征，deterministic stub 判定为高概率误报候选。",
-            evidence=[
-                EvidenceItem(
-                    source="detection",
-                    description="规则或命令包含扫描器线索",
-                    value=detection.detection_key,
-                ),
-                EvidenceItem(source="entities", description="抽取到的进程实体", value=", ".join(entities.processes)),
-                *context_evidence,
-            ],
+            evidence=evidence,
             scenario_assessments=[
                 TriageScenarioAssessment(
                     scenario_name="授权扫描或安全工具活动",
@@ -107,19 +115,27 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
         )
 
     if any(hint in haystack for hint in TRUE_POSITIVE_HINTS):
+        evidence = [
+            EvidenceItem(
+                source="detection",
+                description="规则命中高危攻击线索",
+                value=detection.detection_key,
+            )
+        ]
+        if process.command_line:
+            evidence.append(
+                EvidenceItem(
+                    source="command_line",
+                    description="命令行或进程包含攻击特征",
+                    value=process.command_line,
+                )
+            )
+        evidence.extend(context_evidence)
         return AnalysisResult(
             verdict=Verdict.TRUE_POSITIVE,
             confidence=0.9,
             summary="告警包含恶意 IOC、攻击工具或高危行为线索，deterministic stub 判定为真阳性候选。",
-            evidence=[
-                EvidenceItem(
-                    source="detection",
-                    description="规则命中高危攻击线索",
-                    value=detection.detection_key,
-                ),
-                EvidenceItem(source="command_line", description="命令行或进程包含攻击特征", value=process.command_line),
-                *context_evidence,
-            ],
+            evidence=evidence,
             scenario_assessments=[
                 TriageScenarioAssessment(
                     scenario_name="高风险攻击行为或恶意工具活动",

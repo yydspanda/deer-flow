@@ -127,7 +127,7 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 
 | ID | Work / 工作 | Deliverable / 产出 | Acceptance / 验收 |
 |---|---|---|---|
-| `PI-01` | Real providers / 真实能力源 | **In Progress**: 已完成 212 条唯一 Zeus 告警的可追溯 corpus intake、PingAn source/parser Checkpoint B、全部来源 Checkpoint C；Checkpoint D 的 D0-D6 已覆盖单样本输入链和全量 Skill 路由，D7-D9 已验证真实 Analyzer、production Grounding 与 Decision fail-closed，D10 已完成 8 topic / 6 source family 的真实模型 representative Runtime matrix；下一步做全量 212 条 deterministic Runtime 兼容性回放，最后选择第一项获批只读 dev/staging 集成；不再扩充本地 mock 或围绕单条样本堆规则/Prompt | D0 保证 212 个唯一 ID、0 blocking row；D1-D5 证明样本 `1965449` 的 canonical normalization、事实/证据投影、raw immutability、coverage 和 bounded Skill-package contract；D6 为 212/212；authoritative D7 输出 10 条 evidence，D8 接受 8 条、拒绝 2 条 sibling-fact description；D9 保留 `suspicious` verdict 并阻止自动化；D10 的 10/10 次 `deepseek-v4-pro` 调用完成，67/87 evidence grounded、20 条被拒绝且全部 fail closed；最终真实 provider contract、超时、权限、数据边界、审计、失败降级和 smoke 有证据 |
+| `PI-01` | Real providers / 真实能力源 | **In Progress**: 已完成 212 条唯一 Zeus 告警的可追溯 corpus intake、PingAn source/parser Checkpoint B、全部来源 Checkpoint C；Checkpoint D 的 D0-D6 已覆盖单样本输入链和全量 Skill 路由，D7-D9 已验证真实 Analyzer、production Grounding 与 Decision fail-closed，D10 已完成 8 topic / 6 source family 的真实模型 representative Runtime matrix，D11/D11.1 已完成 212 条双遍 Runtime 兼容性、稳定性和 evidence-quality 语义 Gate；当前选择第一项获批只读 dev/staging provider，禁止再用 mock 代替真实集成或围绕单条样本堆规则/Prompt | D0 保证 212 个唯一 ID、0 blocking row；D1-D5 证明样本 `1965449` 的 canonical normalization、事实/证据投影、raw immutability、coverage 和 bounded Skill-package contract；D6 为 212/212；当前 lineage 的 D7 输出 9 条 evidence，D8 接受 5 条、拒绝 4 条 sibling-fact description；D9/v3 保留 `suspicious` verdict 并阻止自动化；D10 的历史 10/10 次 `deepseek-v4-pro` 调用完成，67/87 evidence grounded、20 条被拒绝且全部 fail closed；D11 为 212/212 processed/stable、0 failure，state 分布为 6 conflicted / 2 degraded / 198 partial / 6 sufficient；最终真实 provider contract、超时、权限、数据边界、审计、失败降级和 smoke 有证据 |
 | `PI-02` | Real infrastructure / 真实基础设施 | Kafka、PostgreSQL、K8s 参数与容量/恢复测试 | 吞吐、端到端延迟、重试、DLQ、幂等、连接池和故障恢复满足试点门槛 |
 | `PI-03` | Real labels and calibration / 真实标签与校准 | 脱敏、人工标注的 scenario/confidence/correlation corpus | 来源、范围、版本和 reviewer 可审计；scorer/profile 仅在离线 gate 通过后进入 shadow |
 | `PI-04` | Operations and security / 运维与安全 | 可观测性、SLO、告警、secret、RBAC、审计保留和隐私策略 | 运营同事能定位任务/预警/延迟/模型/队列问题；安全评审通过 |
@@ -141,11 +141,13 @@ Stage 4 的退出结果是 **Pilot Ready / 可试点**。正式 GA、自动关�
 
 以下事项有价值，但不能插入当前 Stage 4 的 `PI-01`：
 
-- Correlation pair corpus expansion 和 scorer v2。
+- [Correlation pair corpus expansion 和 scorer v2](../archive/ai_soc/deferred/correlation-label-corpus-expansion.md)。
 - 完整多 Sub Agent 并行自治与跨域攻击尝试。
-- Knowledge RAG、GraphRAG、PageIndex、Wiki/OKF projection。
+- Knowledge RAG、GraphRAG、PageIndex，以及
+  [DB memory -> Wiki/OKF projection](../archive/ai_soc/deferred/wiki-okf-memory-projection.md)。
 - Prometheus 全局系统态势和管理驾驶舱。
-- 更多 vendor/scenario adapter、自动 skill 优化和长期记忆治理。
+- [Adaptive normalization/parser evolution](../archive/ai_soc/deferred/adaptive-normalization-parser-evolution.md)、
+  更多 vendor/scenario adapter、自动 skill 优化和长期记忆治理。
 - 高风险 response adapter、补偿事务和自动化 rollout。
 
 只有当前阶段 Gate 通过，或用户明确决定替换当前目标，Parking Lot 项才可进入执行。
@@ -178,7 +180,7 @@ Completed:    BG-P1-04 - Governed memory activation (AC-39)
 Completed:    BG-P1-05 - Alpha E2E and docs reconciliation (AC-23, AC-24, AC-49)
 Completed:    BG-03 - Alpha readiness package and scoped accountable approval
 Current Stage: PI - Real Data & Production Integration
-In Progress:  PI-01 - Checkpoint D step-reviewed full-corpus Runtime replay, then first approved read-only provider
+In Progress:  PI-01 - first approved read-only dev/staging provider intake (real endpoint and payload required)
 Completed:    PI-01 Checkpoint D-0 - 212-row adapter-independent corpus inventory
 Completed:    PI-01 Checkpoint D-1 - alert 1965449 canonical normalization (parser warnings explicit)
 Completed:    PI-01 Checkpoint D-2 - alert 1965449 generic deterministic entity extraction
@@ -187,9 +189,10 @@ Completed:    PI-01 Checkpoint D-4 - alert 1965449 bounded analysis input and Ev
 Completed:    PI-01 Checkpoint D-5 - alert 1965449 bounded Skill-package context (3 selected, 387 estimated tokens)
 Completed:    PI-01 Checkpoint D-6 - 212-row Skill route coverage (212/212 processed, 0 failed/missed/misrouted)
 Completed:    PI-01 Checkpoint D-7 - live AnalysisResult.v2 and typed scenario contract (deepseek-v4-pro, no repair)
-Completed:    PI-01 Checkpoint D-8 - production Grounding (8 grounded, 2 description leakage, quality blocked)
-Completed:    PI-01 Checkpoint D-9 - production Decision Policy (degraded, review required, no automation)
+Completed:    PI-01 Checkpoint D-8 - current production Grounding lineage (5 grounded, 4 description leakage, quality blocked)
+Completed:    PI-01 Checkpoint D-9 - soc.decision_policy.v3 (degraded from ungrounded evidence, review required, no automation)
 Completed:    PI-01 Checkpoint D-10 - live deepseek-v4-pro 8-topic / 6-source Runtime matrix (10 calls, 167,042 tokens, quality findings fail closed)
-Next:         D-11 replays production deterministic Runtime across all 212 unique corpus rows and checks replay stability
+Completed:    PI-01 Checkpoint D-11/D11.1 - 212-row two-pass Runtime compatibility plus evidence-quality semantics (424 runs, 212 stable, 0 failures)
+Next:         Select and contract the first approved read-only dev/staging provider; prefer CMDB/asset lookup, do not substitute another mock
 External inputs: Real endpoint/topic, authentication, tenant mapping, payload sample and data owner are required before connector smoke; do not substitute another mock
 ```

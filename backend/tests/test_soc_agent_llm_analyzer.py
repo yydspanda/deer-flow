@@ -128,7 +128,7 @@ def test_json_llm_analyzer_runs_prompt_client_parser_and_runtime_trace() -> None
     assert analyze_step.metadata["selected_skills"]
     assert "candidate_hash" in analyze_step.metadata
     decide_step = next(step for step in run.steps if step.step_name == "decide")
-    assert decide_step.metadata["policy_version"] == "soc.decision_policy.v2"
+    assert decide_step.metadata["policy_version"] == "soc.decision_policy.v3"
     assert decide_step.metadata["confidence_source"] == "llm_self_report"
     assert decide_step.metadata["confidence_is_calibrated"] is False
     assert decide_step.metadata["review_reasons"] == ["confidence_not_calibrated"]

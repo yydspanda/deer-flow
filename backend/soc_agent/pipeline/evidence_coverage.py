@@ -45,7 +45,7 @@ _SENSITIVE_FIELD_RE = re.compile(
 
 
 def observe_message_schemas(alert: AlertInput) -> list[MessageSchemaObservation]:
-    """Describe recognized, degraded, and unsupported selected message shapes."""
+    """Describe whether each selected outer message shape was parsed."""
 
     parsed_by_path = _parsed_messages_by_path(alert)
     expected_paths = set(parsed_by_path)
@@ -74,7 +74,10 @@ def observe_message_schemas(alert: AlertInput) -> list[MessageSchemaObservation]
                 parser_name=parsed.parser_name,
                 parser_version=parsed.parser_version,
                 schema_fingerprint=_schema_fingerprint(parsed.parser_name, parsed.parser_version, signature),
-                status=(MessageSchemaStatus.DEGRADED if parsed.warnings else MessageSchemaStatus.RECOGNIZED),
+                # A ParsedRawMessageEvidence exists only after the outer message
+                # parser succeeds. Nested body decode/repair warnings remain
+                # visible below, but do not invalidate that outer schema.
+                status=MessageSchemaStatus.RECOGNIZED,
                 field_count=len(_flatten_leaves(parsed.fields)),
                 warnings=parsed.warnings,
             )
@@ -273,6 +276,7 @@ def build_evidence_coverage_report(
             "llm_highlighted_count": len(highlighted_path_set),
             "llm_sanitized_count": len(sanitized_paths),
             "llm_compacted_encoded_count": len(compacted_encoded_paths),
+            "llm_truncated_evidence_count": len(_sorted_unique(truncated_evidence_paths)),
             "omission_count": len(omissions),
             "high_value_gap_count": len(high_value_gaps),
         },

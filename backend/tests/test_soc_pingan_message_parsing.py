@@ -7,6 +7,8 @@ from pathlib import Path
 from soc_agent.cli import main
 from soc_agent.contracts import (
     AlertSourceType,
+    DecisionEvidenceState,
+    DecisionReviewReason,
     EvidenceLayer,
     EvidenceTrustLevel,
     MessageSchemaStatus,
@@ -1406,12 +1408,19 @@ def test_malformed_nested_bodies_use_accepted_repair_or_sanitized_string_fallbac
     assert "guanbi" in bounded["fields"]["payload"]["req_body"]
     assert bounded["repaired_fields"]["payload"]["rsp_body"]["uIdToken"] == "[REDACTED]"
     coverage = analysis_request.evidence_coverage
-    assert coverage.message_schemas[0].status is MessageSchemaStatus.DEGRADED
+    assert coverage.message_schemas[0].status is MessageSchemaStatus.RECOGNIZED
+    assert coverage.message_schemas[0].warnings == parsed["warnings"]
     assert any(path.endswith("#parsed.payload.req_body") for path in coverage.llm_projected_paths)
     assert any(path.endswith("#repaired.payload.rsp_body.uIdToken") for path in coverage.repaired_field_paths)
     assert any(item.reason == "sanitized_string_fallback" for item in coverage.omissions)
     assert any(item.reason == "replaced_by_repaired_projection" for item in coverage.omissions)
-    assert "degraded message schema" in " ".join(coverage.warnings)
+    assert "degraded message schema" not in " ".join(coverage.warnings)
+
+    run = SocAnalysisService().analyze(payload)
+    assert run.decision is not None
+    assert run.decision.evidence_state is DecisionEvidenceState.PARTIAL
+    assert DecisionReviewReason.DEGRADED_MESSAGE_SCHEMA not in run.decision.review_reasons
+    assert DecisionReviewReason.TRUNCATED_ANALYSIS_EVIDENCE not in run.decision.review_reasons
 
 
 def test_recoverable_nested_json_is_exposed_as_repaired_projection() -> None:
