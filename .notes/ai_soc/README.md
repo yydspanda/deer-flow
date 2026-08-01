@@ -14,7 +14,7 @@
 | 重跑 APT/EDR/HIDS Alpha 一键验收并审阅版本化报告 | `alpha-acceptance-runbook.md` | `audits/alpha-completeness-matrix.md` 的 `AC-23/24/49` |
 | 准备 Alpha Gate 评审、部署/回滚和 Stage 4 交接 | `alpha-readiness-package.md` | 本地 `backend/.deer-flow/soc-alpha-readiness/alpha-readiness-report.json` |
 | 查看 Alpha Gate 四方评审、具名批准范围与剩余部署门禁 | `alpha-gate-review.md` | `alpha-readiness-package.md` 的 Owner Review |
-| 重跑并逐步审阅 Runtime/LLM/correlation/governance 产物 | `runtime-validation-runbook.md` | 本地 `backend/.deer-flow/soc-runtime-validation/RUN-INDEX.md` |
+| 重跑并逐步审阅 Runtime/LLM/correlation/governance 或 Checkpoint D0-D10 产物 | `runtime-validation-runbook.md` | 本地 `backend/.deer-flow/soc-runtime-validation/` |
 | 判断产品方向和系统设计 | `soc-agent-solution.md` | `delivery-roadmap.md` 的阶段边界 |
 | 向老板/管理层解释为什么 Runtime 控制流程、LLM 只做受控推理 | `boss-demo-v0.1-runbook.md` | `soc-agent-solution.md` 的核心原则 |
 | 开始下一刀开发 | `progress.md` | `.notes/reference-index/soc-agent-engineering-contracts.md` |
@@ -22,6 +22,7 @@
 | 排查 message 新结构、字段遗漏、决策置信度和复核原因 | `soc-agent-solution.md` 的 Normalizer / Confidence 章节 | `.notes/reference-index/soc-agent-engineering-contracts.md` 的对应契约 |
 | 查看平安经验如何进入系统 | `capabilities/pingan/onboarding.md` | `capabilities/pingan/capability-cards.md` |
 | 拆分平安历史 prompt / 经验 / 工具 | `capabilities/pingan/knowledge-decomposition.md` | `memory/memory-tracking.md` |
+| 核对旧 Zeus `flows/` 的研判能力迁到哪里、哪些明确不迁 | `capabilities/pingan/legacy-zeus-capability-extraction.md` | `capabilities/pingan/knowledge-decomposition.md` |
 | 查看平安专属知识候选 | `capabilities/pingan/knowledge-candidates.md` | `capabilities/pingan/source-docs/` |
 | 查看当前哪些能力仍是 mock | `integrations/mock-and-real-register.md` | `capabilities/pingan/onboarding.md` 的 PA-12 |
 | 设计外部工单/处置状态回流 | `integrations/external-disposition-sync.md` | 工程契约 external disposition 章节 |
@@ -51,6 +52,7 @@ ai_soc/
 │   └── pingan/
 │       ├── onboarding.md              # 平安经验输入与能力卡流程
 │       ├── knowledge-decomposition.md # 平安经验拆分规则
+│       ├── legacy-zeus-capability-extraction.md # 旧 Zeus flows 研判能力去向与 D7/D8 验证边界
 │       ├── capability-cards.md        # PingAn capability card 台账
 │       ├── knowledge-candidates.md    # PingAn tenant memory/policy/eval 候选
 │       └── source-docs/               # 平安 APT/EDR/HIDS 原始经验资料

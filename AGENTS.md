@@ -165,6 +165,19 @@ Current SOC direction:
 - SOC model calls have independent process-local admission controls (`SOC_LLM_MAX_CONCURRENCY`,
   optional requests-per-minute, admission timeout, and `SOC_LLM_CALL_TIMEOUT_SECONDS`). Analyzer evidence is deterministically
   grounded against the exact bounded prompt projection before `SocDecisionPolicy` runs.
+- New live analyzer responses use `soc.analysis_result.v2`: open-vocabulary
+  `TriageScenarioAssessment` items distinguish upstream/inferred/hybrid origin and
+  detection/attempt/effect/impact stage, cite zero-based indexes into the same result's evidence,
+  retain competing explanations, gaps and executable manual checks, and have exactly one primary
+  when non-empty. `soc-analysis-v8` / `soc-analysis-json-parser-v5` reject unknown fields and
+  malformed references. This is reasoning output only; Grounding and `SocDecisionPolicy` still own
+  evidence admission and operational decision guards.
+- Evidence Grounding uses `soc.analysis_evidence_grounding.v2`. A source/value match is not enough:
+  if an evidence description imports a distinctive bounded fact outside its quoted value, the item
+  becomes `description_context_leakage` and remains ungrounded. Preserve matched and foreign paths,
+  never semantically repair the model output. An exact visible encoded-omission marker may ground
+  only field presence, encoding shape and boundary omission; its hidden bytes, private sidecar hash,
+  validity and outcome implications remain ungrounded.
 - Persisted analysis writes run/summary/optional review/audit as one `AnalysisPersistence` transaction.
   Retryable Runtime failures do not commit Kafka offsets or immediately create analyst queue noise;
   non-retryable failures are recorded, reviewed, and dead-lettered.
@@ -260,6 +273,9 @@ Current SOC direction:
   `sip/dip` message remains an independent wire observation; HTTP and network-content file metadata
   remain per-message observations. The reviewed source's `ioc` field is a vendor detection
   descriptor, not a typed IOC. `file_name/file_md5` never prove an endpoint write or compromise.
+  Reviewed `rule_name`, `attack_type`, `host_state`, and `rule_labels` values are emitted as generic
+  provider detection assertions by this adapter. They are trusted upstream assertions when present
+  in selected high-trust bounded evidence, but the adapter must not directly set Runtime verdicts.
 - PingAn HIDS mapping lives in `backend/soc_agent/normalizers/pingan_hids.py`. Endpoint identity is
   separate from packet direction, `external_ip=1.1.1.1` is a non-reasoning vendor placeholder, and
   process/file evidence remains per-message. Only explicit `bounce_shell`, `honeypot`, and
@@ -283,6 +299,10 @@ Current SOC direction:
 - Vendor aliases stop in source adapters. Adapters emit generic `RoleClaim` / `ScenarioSignal`
   contracts; generic fact reconstruction must not recognize PingAn field names, assume
   attacker=source or victim=destination, choose a response target, or enable automation.
+- Generic extraction keeps `ExtractedEntities.hosts` and `.assets` separate: only `EntityKind.HOST`
+  enters hosts, while asset IDs/groups enter assets. Skill routing uses canonical typed HTTP/email,
+  network and endpoint evidence; an arbitrary IP, file value or business asset name must not imply a
+  network session or endpoint event.
 - SOC Lead Agent work must reuse DeerFlow's existing `lead_agent` custom-agent mechanism
   wherever possible. Do not create a second SOC LangGraph runtime unless a future design
   explicitly proves DeerFlow's custom-agent/profile/skills/MCP path cannot satisfy the need.
@@ -290,6 +310,11 @@ Current SOC direction:
   `backend/soc_agent/agent_profile.py`, `backend/soc_agent/lead_agent_chat.py`,
   and `backend/soc_agent/skills.py`; DeerFlow-loadable SOC skills live under
   `skills/public/soc-*`.
+- Runtime `SocSkillContext.v2` is a deterministic, bounded projection from those same public Skill
+  packages. `SocSkillResolver` selects allowlisted package names; `build_soc_skill_context()` validates
+  packages with DeerFlow's parser and projects only `references/runtime-guidance.md` with package and
+  guidance hashes/token accounting. Do not restore a separate hardcoded summary table or inject full
+  `SKILL.md`/legacy prompts into every analysis call.
 - Read-only SOC action results such as `asset.lookup` / `asset.locate` are investigation
   evidence, not memory or verdict changes. They must flow through `InvestigationEvidence`
   and `InvestigationEvidenceRepository`, then re-enter analyst/Lead Agent context through
@@ -320,6 +345,27 @@ Current SOC direction:
   and must not be committed. Steps 7 and 9-12 are maintenance/evaluation/governance tracks,
   not extra fixed Runtime nodes. A rejected LLM evidence citation is safe only when decision
   policy forces degraded evidence, human review, and `automation_allowed=false`.
+- Reproduce deterministic Checkpoint D0-D6 with
+  `./scripts/soc-runtime-validation.sh checkpoint-d`; run the explicit-cost live D7 boundary with
+  `./scripts/soc-runtime-validation.sh checkpoint-d-live`, then run deterministic D8 with
+  `./scripts/soc-runtime-validation.sh checkpoint-d-grounding` and deterministic D9 with
+  `./scripts/soc-runtime-validation.sh checkpoint-d-decision`; run the explicit-cost live D10 with
+  `./scripts/soc-runtime-validation.sh checkpoint-d-cross-source`. D5 validates one sample's bounded
+  Skill package projection, D6 is an offline 212-row route/package coverage audit, D7 validates one
+  real model's typed Analyzer output, D8 applies production Grounding, and D9 applies production
+  Decision Policy without another model call, tenant disposition reconciliation or persistence.
+  D10 replays one representative per known topic plus every D0 known input gap through the configured
+  real model and complete production Runtime; it records model/parser provenance, token usage,
+  Grounding and Decision guards, but is not a model-accuracy evaluation without human labels. D6-D10
+  are not additional Runtime nodes. A blocked D8 must
+  become degraded/conflicted evidence, human review and `automation_allowed=false` in D9. An input
+  with no bounded raw/highlight or provenance-backed canonical/fact/scenario evidence must emit the
+  vendor-neutral critical `analysis_evidence.unavailable` coverage gap and fail closed.
+- Tenant environment exemptions such as a PingAn rule for confirmed `dev/local/staging` assets are
+  versioned tenant disposition policy, not detection truth, LLM memory or a Runtime short-circuit.
+  Vendor adapters emit only provenance-backed generic context candidates; governed resolution and
+  tenant policy reconciliation happen after the full detection Runtime. Generic core code must not
+  contain `tenant == pingan` or hostname-substring safety branches, and rollout starts shadow-only.
 - Build the local real-alert validation corpus with
   `backend/.venv/bin/python validation/compact_zeus/corpus/build_alert_validation_corpus.py`.
   The authoritative source PKL lives under `datas/source/`; exact JSON demos under

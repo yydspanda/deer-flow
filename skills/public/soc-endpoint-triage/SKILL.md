@@ -65,3 +65,7 @@ Explain the endpoint story in analyst terms:
 - safe next query/action
 
 Do not claim host isolation, process kill, account disablement, or quarantine unless an approved tool result proves it.
+
+## References
+
+Read `references/endpoint-scenario-playbooks.md` for reverse shell, web command, process-chain, persistence, privilege, credential-access, malware, and lateral-movement evidence checks.

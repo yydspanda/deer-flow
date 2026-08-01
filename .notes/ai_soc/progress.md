@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-01` 进行中） |
-| 当前目标 | `PI-01 Real providers`：先完成 212 条真实 payload 的 Checkpoint D 分步 Runtime 回放，再选择并接通第一项经过批准的只读 dev/staging 能力源 |
+| 当前目标 | `PI-01 Real providers`：Checkpoint D10 已用真实 `deepseek-v4-pro` 证明 8 个 topic / 6 类来源共享同一 production Runtime，并对未落地引用和两条上游空证据 fail closed；下一步全量回放 212 条语料的结构兼容性 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
-| LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程 |
-| 当前下一刀 | 用户审阅 `PI-01 Checkpoint D-4` 的 `1965449` bounded analysis input 与 `EvidenceCoverageReport`；确认后 D-5 只运行 deterministic SOC skill resolution，并停下审阅，不渲染 Prompt、不运行 LLM/decision。 |
+| LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
+| 当前下一刀 | `PI-01 Checkpoint D11`：对 212 条唯一语料执行 production deterministic Runtime 全量兼容性回放与稳定性检查；输出紧凑矩阵和失败样本，不调用 LLM/DB/租户处置，也不把该结构检查当模型准确率。D10 已单独承担真实模型跨来源质量抽样。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -41,6 +41,179 @@
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / PI-01 In Progress** | 真实 provider、基础设施、标签、SLO 和 governed rollout；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+
+## 2026-08-01 — PI-01 Checkpoint D10 cross-source Runtime review
+
+- 新增 `build_checkpoint_d_cross_source_runtime_review.py`、聚焦测试与
+  `./scripts/soc-runtime-validation.sh checkpoint-d-cross-source`。
+- D10 从 D0 inventory 按 topic 中位数距离自动选择代表样本，不硬编码 alert ID；另将全部
+  `evidence_unavailable` known gaps 纳入。每条样本调用同一个无持久化
+  `SocAnalysisService`，并强制使用显式配置的真实 LLM analyzer；stub 会直接使验收失败。
+- authoritative 结果：
+  - 8 个 topic、6 类 source family、8 条代表样本和 2 条 known input gap；
+  - 10/10 次 `deepseek-v4-pro` 调用完成相同 9-step production Runtime，消耗 150,795 input、
+    16,247 output、合计 167,042 tokens；0 Runtime failure、0 failed check；
+  - 模型输出为 8 `suspicious`、1 `needs_review`、1 `unknown`，不再是 deterministic stub 模板；
+  - 87 条模型 evidence 中 67 grounded、20 ungrounded，其中 14 条为
+    `description_context_leakage`；6 个样本产生可审计 quality finding，报告状态为
+    `passed_with_quality_findings`；
+  - 两条空 `zeusRawLogs` 告警无 bounded evidence，Runtime 现通过通用
+    `analysis_evidence.unavailable` critical coverage gap 明确记录上游证据不可用；
+  - Decision 均为 `evidence_state=degraded`、`needs_review=true`、
+    `automation_allowed=false`；模型未落地引用和输入缺口都没有被静默修复。输入缺口规则不含
+    PingAn/topic alias；已有 canonical/fact/scenario evidence 的合法通用输入不会误报。
+- 产物：
+  - `checkpoint-d/step-d10-cross-source-runtime/representative-matrix.json`；
+  - `checkpoint-d/step-d10-cross-source-runtime/runs/*.runtime.json`。
+- 验证：single-sample D7 真实调用通过；D10 真实批次 status
+  `passed_with_quality_findings`；真实产物记录 `deepseek-v4-pro` response metadata、Parser 版本和
+  token usage，且 D10 contract 禁止 stub；Checkpoint D + Runtime/LLM parser/Prompt/Grounding
+  组合回归 99 passed；Ruff、shell syntax、`git diff --check` 和 `codegraph sync .` 通过。
+- 下一步：
+  - `PI-01 Checkpoint D11` 将同一检查扩展到 212/212，并执行 deterministic replay stability；
+    先证明全量 payload/runtime 兼容性，再进入第一项真实只读 provider intake。
+
+## 2026-08-01 — PI-01 Checkpoint D9 Decision Policy review
+
+- 新增 deterministic D9 builder、测试和命令：
+  - `validation/compact_zeus/checkpoint_d/build_checkpoint_d_decision_policy_review.py`；
+  - `./scripts/soc-runtime-validation.sh checkpoint-d-decision`；
+  - artifact：`checkpoint-d/step-d9-decision-policy/1965449.decision.json`。
+- D9 直接消费 D5 request、D7 `AnalysisResult.v2` 和 D8 Grounding report，并校验三者 hash/alert
+  lineage；不调用模型、不重新 Grounding、不写数据库、不执行租户处置策略。
+- authoritative 结果：
+  - execution `passed`，decision gate `guarded_review_required`；
+  - D7 verdict `suspicious` 被原样保留；
+  - D8 的 8 grounded / 2 rejected 形成 `evidence_state=degraded`；
+  - review reasons 为 uncertain verdict、degraded message schema、truncated evidence、ungrounded
+    evidence、raw confidence below threshold 和 confidence not calibrated；
+  - `needs_review=true`，`automation_allowed=false`。
+- 同步架构决定：PingAn `dev/local/staging` 免处置属于版本化 tenant disposition policy，不是
+  detection truth、LLM memory 或 Runtime short-circuit。Adapter 只输出通用 context candidate；完整
+  Runtime 分析之后才做独立 operational disposition reconciliation，初期 shadow-only。
+- 验证：
+  - D9/D8 focused pytest：4 passed；
+  - changed-file Ruff format/check：passed；
+  - shell syntax：passed；
+  - 真实保存的 D5/D7/D8 -> D9：passed。
+- 下一步：
+  - `PI-01 Checkpoint D10` 建立跨来源 representative matrix；该步骤随后按产品负责人要求升级为
+    真实模型完整 Runtime 回放，不以单条 `1965449` 的特殊结果代替多格式验证。
+
+## 2026-08-01 — PI-01 provider assertion / D7-D8 correction
+
+- 修正 PingAn NDR/APT Adapter 的 source semantics：
+  - `rule_name/rule_desc/attack_type/host_state/rule_labels` 只在
+    `normalizers/pingan_ndr.py` 中映射为通用 provider detection assertions；
+  - `host_state` 的通用语义为 `provider_detection_outcome_assertion`，不再被描述成普通 workflow
+    state；Adapter 仍不直接写 Runtime verdict。
+- 修正通用 Grounding：
+  - 只有 exact path、`high` trust、实际进入 bounded projection 的 provider outcome assertion
+    才能满足 outcome source；Core 不识别 `host_state` 等 PingAn alias；
+  - 精确可见 encoded-omission marker 可 ground 值存在、encoding shape 和模型边界省略，但不能
+    ground 隐藏字节、私有 sidecar hash、token 有效性/身份/权限或安全结果；
+  - description audit 新增通用短端口检测，能拒绝把 `dport=80` 混入只引用目标 IP 的证据描述。
+- Prompt 升级到 `soc-analysis-v8`：要求 `evidence.value` 逐字复制最小 scalar leaf，不得拼接
+  `key=value`；IP/端口等多事实必须分条引用。Prompt 只提供指导，不能替代 deterministic Grounding。
+- 重建与真实验证：
+  - D0-D6 全部重建通过：212 unique alerts、0 blocking rows、D6 212/212 无失败；
+  - 中间 `soc-analysis-v7` 运行得到 12 evidence、D8 为 11 grounded / 1 value-not-found；
+  - authoritative `soc-analysis-v8` D7 structure passed，输出 10 evidence，primary scenario
+    `弱口令成功登录`、stage `effect_observed`；
+  - authoritative D8 execution passed / quality blocked：8 grounded、2
+    `description_context_leakage`，没有旧的 false `unproven_outcome_claim`；两条拒绝分别为
+    source-IP description 混入 destination IP，以及 request-body description 混入弱口令分类。
+- 验证：
+  - PingAn semantics / Prompt / Grounding 定向回归：56 passed；
+  - Analyzer/Runtime/D8 builder 组合回归：64 passed；
+  - v8 原子引用与短端口修订回归：27 passed；
+  - changed-file Ruff format/check：passed。
+- 结论与下一步：
+  - 不通过反复付费采样追求偶然全绿；最新 blocked quality 是模型引用错误被 fail-closed 的正确证据；
+  - `PI-01 Checkpoint D9` 继续消费当前 D5/D7/D8，验证 Decision Policy 输出 degraded evidence、
+    human review 和 `automation_allowed=false`，不调用模型、不写数据库。
+
+## 2026-07-31 — PI-01 Checkpoint D8 evidence Grounding (initial baseline, superseded)
+
+- 将 production Grounding 升级为 `soc.analysis_evidence_grounding.v2`：
+  - 新增 `description_context_leakage`，source/value 落地但 description 夹带其他 bounded
+    fact 时仍计入 ungrounded；
+  - 每项同时保留 `matched_context_paths` 与 `foreign_description_context_paths`；
+  - entity mention synthetic key 和显式 disclaimer 不参与 sibling-fact 误报；
+  - encoded omission marker、object-as-string 和未证实 outcome 继续 fail closed。
+- 新增 D8 builder/test/命令：
+  - `./scripts/soc-runtime-validation.sh checkpoint-d-grounding`;
+  - 产物：
+    `backend/.deer-flow/soc-runtime-validation/checkpoint-d/step-d8-evidence-grounding/1965449.grounding.json`;
+  - 只消费 D5/D7，不调用 LLM、不执行 Decision、不持久化。
+- 根据首轮 D8 反馈把 Prompt 升到 `soc-analysis-v6`，明确 marker 与 source redaction 规则；
+  真实模型仍产生语义污染，证明不能依赖 Prompt 替代 Grounding。
+- 当时的真实 D7/D8 baseline：
+  - model `deepseek-v4-pro`, parser `soc-analysis-json-parser-v5`;
+  - D7 structure `passed`, verdict `suspicious`, confidence `0.55`,
+    stage `effect_observed`, 15 evidence；
+  - D8 execution `passed` / quality `blocked`;
+  - 8 grounded、4 description leakage、3 value-not-found；
+  - 保留 `unproven_outcome_claim`，primary scenario 仍引用被拒绝 evidence。
+- 验证：
+  - 完整 SOC backend + architecture boundary 回归：611 passed；
+  - D7/D8/Prompt/Grounding/public Skill 定向回归：71 passed；
+  - D8 Grounding 聚焦回归：14 passed；
+  - Ruff check/format、Shell syntax、`git diff --check`：passed；
+  - 当时本地 D8 artifact 结果为 8 grounded / 4 leakage / 3
+    value-not-found。
+- 安全边界：
+  - D8 的 blocked quality 是正确拒绝结果，不是脚本失败；
+  - Grounding 不修复或重写模型证据；
+  - 下一步 D9 必须证明现有 Decision Policy 将该报告转成 degraded evidence、human review 和
+    `automation_allowed=false`。
+
+## 2026-07-31 — PI-01 Checkpoint D7 typed Analyzer output
+
+- 按 CodeGraph 确认现有 `AnalysisResult -> Prompt -> Parser -> Grounding ->
+  SocDecisionPolicy` 调用链，没有新增第二套 Runtime。
+- 审计旧 Zeus APT/NIDS/HIDS/EDR Flow 直接引用的 Prompt，只提炼告警研判方法：
+  - 保留场景识别、证据检查、行为阶段、竞争解释、缺口和人工核查。
+  - 明确不迁移攻击链/时间线、处置闭环、真实外部服务、邮件 Agent、NL2SQL/Chat BI。
+- 新增 `AnalysisResult.v2` 与 `TriageScenarioAssessment`：
+  - 开放词表场景，不要求固定 taxonomy；
+  - `upstream_hint|inferred|hybrid` 来源；
+  - detection/attempt/effect/impact/indeterminate 阶段；
+  - 唯一 primary、evidence index、竞争解释、证据缺口和人工核查。
+- Prompt/Parser：
+  - 首轮 `soc-analysis-v5`，初次 D8 反馈后当时升级为 `soc-analysis-v6`；后续 correction 见上方
+    2026-08-01 `soc-analysis-v8` 记录；
+  - `soc-analysis-json-parser-v5`;
+  - 缺失/未知字段、非法类型、越界 evidence index、重复场景和主场景数量错误均 fail closed。
+- Skill 提炼：
+  - Web：信息泄露、配置暴露、XXE、XSS、工具/扫描特征；
+  - Network：DNS/DNSLog、代理/C2、工具特征；
+  - Endpoint：暴力破解、远程访问、安全产品、蜜罐和授权运维；
+  - 所有场景继续把客户白名单留在 governed tenant context。
+- 新增 D7 builder、测试和命令：
+  - `./scripts/soc-runtime-validation.sh checkpoint-d-live`
+  - 产物：
+    `backend/.deer-flow/soc-runtime-validation/checkpoint-d/step-d7-analyzer-output/1965449.analyzer-output.json`
+- 真实运行：
+  - model `deepseek-v4-pro`;
+  - 当时 baseline verdict `suspicious`, confidence `0.55`;
+  - primary scenario `内部IP向stg环境登录接口使用疑似弱口令获取会话令牌`;
+  - stage `effect_observed`;
+  - 15 evidence / 6 gaps / 5 manual checks;
+  - parser repair `false`, D7 structure status `passed`.
+- 验证：
+  - 完整 SOC backend + architecture boundary 回归：606 passed；
+  - D5-D7 builders + public Skill 定向回归：54 passed；
+  - D7/parser 前序定向回归：21 passed；
+  - D7/SOC/Skill 前序组合回归：98 passed；
+  - D7 相关 Ruff check/format、Shell syntax、`git diff --check`：passed；
+  - changed-file Ruff check：passed；
+  - D0-D6 rerun：212/212 processed, 0 failures；
+  - D7 live call：passed.
+- 重要边界：
+  - D7 只证明真实模型和 typed contract 能协作，不证明 evidence 已落地或 verdict 正确。
+  - D8 已确认 description sibling facts、encoded omission 和未证实 outcome 风险并 fail
+    closed；当前下一步为 D9 Decision Policy 审阅。
 
 ## 能力与历史切片台账
 
@@ -201,6 +374,66 @@
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |
 
 ## 进度记录
+
+### 2026-07-31 — Legacy Zeus audit narrowed to alert flows
+
+- 按用户确认，将旧实现审计范围收紧为 `validation/original_works/zeus/flows/` 的告警研判主线；
+  EML/二维码、真实 CMDB/EDR/TI/标签接通、NL2SQL、Chat BI 和邮件 Agent 不再列为当前缺口。
+- 重写 `capabilities/pingan/legacy-zeus-capability-extraction.md`：逐文件覆盖 controller、schema、
+  description、APT/EDR/HIDS/NIDS/fallback flows 和 disposition helpers，分别标记 `Replaced`、
+  `Partial/D7`、`Excluded`，并映射到当前 Runtime、Skill、correlation、evidence、policy、approval
+  与 report contracts；`flows/` 的 14 个顶层 Python 文件和 12 个 disposition helper 文件共
+  26/26 均已完成去向审计。这里的“入表”只表示已审阅并明确保留、替代或排除，不表示照搬或迁移
+  26 个旧 Flow。
+- 固定 D7 carry-forward checklist：真实 analyzer 输出必须保留场景、证据引用、尝试/效果/影响层级、
+  历史上下文边界、证据缺口和人工核查，但不复制旧 LlamaIndex 控制流、攻击链/时间线或处置动作。
+- 审计确认两项不能宣称已完成的边界：`LLMAnalysisRequest.v2` 尚不包含 correlation/memory，历史
+  当前在分析后进入 orchestrator/review；`AnalysisResult` 尚无 typed LLM-discovered scenario
+  candidate，D7 必须决定新增契约或证明后置 finding 层足够。
+- 该记录当时的下一步 D7 已完成；当前权威下一步是 D8 evidence grounding，不插入旁支功能开发。
+
+### 2026-07-31 — PI-01 Checkpoint D-5/D-6 and SOC Skill package projection completed
+
+- 完成旧 Zeus `flows/` 一级能力盘点和迁移卫生：
+  - 删除 ignored 参考目录中的 163 个 `Zone.Identifier` 与 68 个缓存文件；
+  - `.gitignore` 阻止 Windows sidecar 再进入仓库；
+  - 新增 `capabilities/pingan/legacy-zeus-capability-extraction.md`，固定 Skill、Adapter、MCP、
+    governed context、policy/eval、report 和明确不迁移内容的归属。
+- 修复通用实体契约：`ExtractedEntities.hosts` 只保留 `EntityKind.HOST`，资产 ID/组进入新增
+  `assets`；样本 `1965449` 现在是 `hosts=[]`、`assets=[平安健康险]`，证据 mention/path 仍完整。
+- 重构 public SOC Skill taxonomy：
+  - `soc-waf-f5-triage` 改为 vendor-neutral `soc-web-application-triage`；
+  - 新增 `soc-email-phishing-triage`；
+  - network、endpoint、web、email 增加从旧 Zeus 泛化的场景 references，不包含平安字段、
+    白名单、组织事实或绝对成功规则。
+- `SocSkillContext.v2` 改为实际 Skill package 投影：Resolver 只选白名单 Skill；materializer 使用
+  DeerFlow parser 校验 package，只读取 `references/runtime-guidance.md`，记录 package/guidance
+  hash、来源、估算 token 与预算，不维护硬编码摘要表、不注入完整 `SKILL.md`。
+- Resolver 通过首次全语料失败报告收紧：typed HTTP/email/canonical observations 驱动专业路由；
+  `tentative/unresolved` 角色不再使 direction Skill 常驻；任意 IP/file/asset name 不再证明
+  network/endpoint 行为。首次 D6 的 212 条 direction 全选和 9 条 asset-only endpoint 误路由均已
+  修复后重跑。
+- D6 人工语义审阅暂存一项非阻塞风险：部分 HIDS 告警仅因宽泛关键词 `恶意` 选择
+  network/APT Skill，并因未区分端点与 Web 语境的 `命令执行` 选择 Web Skill。D6 的当前
+  `passed` 只证明路由、package 投影和覆盖统计机械一致；后续应优先使用 typed
+  evidence/scenario context 收紧跨域关键词，不把固定路由 confidence 当成研判概率。
+- 新增并实跑：
+  - D5 `1965449`: `soc-network-apt-triage`、`soc-web-application-triage`、
+    `soc-alert-triage`，3 个真实 package、当次 313 estimated tokens、13 项 check 全通过；
+    D7 前随 runtime guidance 增量重跑后的当前投影为 387 estimated tokens；
+  - D6: 212/212 processed、0 failure、0 typed HTTP/email miss、0 package mismatch、0
+    asset-only endpoint misroute；selection counts 为 alert 212、network 170、web 96、endpoint 67、
+    direction 8、email 6；其中 3 条 threat-intel 告警因 typed `host.ip_addresses` 正确选择
+    endpoint Skill，未把 `asset_group` 当成主机；
+  - `./scripts/soc-runtime-validation.sh checkpoint-d` 可单命令确定性重跑 D0-D6，不调用 LLM。
+- 验证：
+  - Ruff、`git diff --check`、`bash -n scripts/soc-runtime-validation.sh` 全部通过；
+  - SOC/architecture/Checkpoint D/public Skill 回归得到 657 passed，唯一 cwd 相对路径失败按
+    `backend/` 模块约定重跑后 3 passed，因此 658 个唯一测试均通过；
+  - Checkpoint D 编排最终 `exit=0`。
+- 该记录当时要求先审阅 gitignored
+  `checkpoint-d/step-d5-skill-context/1965449.skill-context.json`；D7 已完成，当前按
+  `delivery-roadmap.md` 进入 D8 evidence grounding，不先扩展更多 Skill 或 mock。
 
 ### 2026-07-30 — PI-01 Checkpoint D-4 bounded analysis input completed
 

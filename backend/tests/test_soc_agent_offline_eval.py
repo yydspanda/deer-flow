@@ -19,12 +19,29 @@ def _analysis_json(*, verdict: str = "false_positive", trailing_comma: bool = Fa
     suffix = "," if trailing_comma else ""
     return f"""
     {{
+      "schema_version": "soc.analysis_result.v2",
       "verdict": "{verdict}",
       "confidence": 0.81,
       "summary": "录制模型认为该告警可以进入复核。",
       "evidence": [
         {{"source": "eval", "description": "离线评测录制输出", "value": "golden"}}
       ],
+      "scenario_assessments": [
+        {{
+          "schema_version": "soc.triage_scenario_assessment.v1",
+          "scenario_name": "录制评测场景",
+          "scenario_key": "recorded_eval_scenario",
+          "is_primary": true,
+          "origin": "inferred",
+          "confidence": 0.75,
+          "activity_stage": "detection_hit",
+          "evidence_indices": [0],
+          "rationale": "录制响应用于验证结构化输出。",
+          "competing_explanations": []
+        }}
+      ],
+      "evidence_gaps": ["离线录制响应不包含实时环境上下文。"],
+      "manual_checks": ["人工复核录制响应与样本证据是否一致。"],
       "reason": "这是离线评测使用的可重放模型响应。",
       "recommended_action": "review_recorded_llm_output"{suffix}
     }}

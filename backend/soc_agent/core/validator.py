@@ -11,6 +11,10 @@ def validate_analysis_result(result: AnalysisResult) -> AnalysisResult:
     if result.verdict == "false_positive" and result.confidence >= 0.9:
         if "review" not in result.recommended_action.lower():
             raise ValueError("high-confidence false positives still require review")
+    if not result.manual_checks:
+        raise ValueError("analysis result must include at least one executable manual check")
+    if not result.scenario_assessments and not result.evidence_gaps:
+        raise ValueError("analysis without a scenario assessment must state at least one evidence gap")
     return result
 
 

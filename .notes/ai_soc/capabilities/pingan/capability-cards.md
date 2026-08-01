@@ -201,7 +201,7 @@ APT 不是一个单一判断逻辑。不同攻击类型关注的证据不同：�
 
 **Artifact Decision**
 
-- 跨客户攻击成功证据进入 `soc-network-apt-triage` / `soc-waf-f5-triage`。
+- 跨客户攻击成功证据进入 `soc-network-apt-triage` / `soc-web-application-triage`。
 - 平安 URI 例外、内部 host、特定忽略路径进入 tenant memory/eval。
 - 23 种原 prompt 不整体迁移；只抽通用步骤。
 
@@ -416,7 +416,7 @@ HIDS 告警误报和真实入侵都高度依赖主机上下文：谁登录、从
 | APT source content | Target artifact | 处理原则 |
 |---|---|---|
 | 攻击方向、受害资产、抑制目标判断方法 | `soc-network-apt-triage` + domain handler + eval | 只保留通用角色重建方法；平安网段、字段别名、内部域名进入 tenant artifact |
-| 弱口令、命令执行、文件读取、SQL 注入、webshell、代理工具等攻击成功证据 | `soc-network-apt-triage` / `soc-waf-f5-triage` + APT domain findings | 抽取“攻击尝试 vs 攻击成功”通用证据，不复制 23 个 prompt |
+| 弱口令、命令执行、文件读取、SQL 注入、webshell、代理工具等攻击成功证据 | `soc-network-apt-triage` / `soc-web-application-triage` + APT domain findings | 抽取“攻击尝试 vs 攻击成功”通用证据，不复制 23 个 prompt |
 | `attack_type` / 三级类型 / rule-like identifier 分流 | adapter/domain router config | 作为 vendor alias 和路由提示；不能成为必需主键 |
 | raw message、HTTP 五元组、请求/响应、packet_data 优先级 | PingAn adapter + field trust eval | 原始 message 优先；缺失才 fallback 加工字段，并记录低可信 |
 | URI、host、内部业务路径、内部系统例外 | tenant memory/config + eval | 只作为 PingAn tenant candidate，不进入 public skill |

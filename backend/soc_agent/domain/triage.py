@@ -350,7 +350,7 @@ def _infer_domain(run: AnalysisRun, skill_context: SocSkillContext) -> SocDomain
         return SocDomainName.EDR
     if "soc-network-apt-triage" in names:
         return SocDomainName.APT
-    if "soc-waf-f5-triage" in names:
+    if "soc-web-application-triage" in names:
         return SocDomainName.WAF_F5
     return SocDomainName.GENERIC
 

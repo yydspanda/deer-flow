@@ -242,18 +242,18 @@ def build_ndr_source_field_semantics(
             ),
             (
                 "rule_name",
-                "vendor_detection_rule_name",
-                "vendor_rule_name_is_detection_context_not_detection_truth",
+                "provider_detection_rule_name_assertion",
+                "reviewed_provider_rule_name_is_a_trusted_upstream_detection_assertion_and_supports_alert_classification",
             ),
             (
                 "rule_desc",
-                "vendor_detection_rule_description",
-                "vendor_rule_description_is_detection_context_not_detection_truth",
+                "provider_detection_rule_description_assertion",
+                "reviewed_provider_rule_description_is_a_trusted_upstream_detection_assertion_and_supports_alert_classification",
             ),
             (
                 "attack_type",
-                "vendor_attack_taxonomy",
-                "vendor_attack_type_is_scenario_context_not_observed_attack_progress",
+                "provider_detection_classification_assertion",
+                "reviewed_provider_attack_type_is_a_trusted_upstream_detection_classification_and_may_support_scenario_reasoning",
             ),
             (
                 "rule_id",
@@ -357,8 +357,8 @@ def build_ndr_source_field_semantics(
             ),
             (
                 "host_state",
-                "vendor_host_workflow_state",
-                "vendor_host_state_is_workflow_context_not_attack_outcome",
+                "provider_detection_outcome_assertion",
+                "reviewed_provider_host_state_is_a_trusted_upstream_detection_outcome_and_may_support_effect_stage_reasoning",
             ),
             (
                 "rule_state",
@@ -587,8 +587,8 @@ def build_ndr_source_field_semantics(
             ),
             (
                 "rule_labels",
-                "vendor_detection_rule_labels",
-                "vendor_rule_labels_are_detection_context_not_independent_confirmation",
+                "provider_detection_rule_label_assertion",
+                "reviewed_provider_rule_labels_are_trusted_upstream_detection_classification_evidence",
             ),
             (
                 "cookie",
@@ -780,8 +780,8 @@ def build_ndr_source_field_semantics(
             result.append(
                 _semantic(
                     f"{base_path.replace('#parsed', '#decoded')}.rule_labels",
-                    "decoded_vendor_rule_labels",
-                    "decoded_rule_labels_are_detection_context_not_independent_confirmation",
+                    "provider_detection_rule_label_assertion",
+                    "decoded_reviewed_provider_rule_labels_are_trusted_upstream_detection_classification_evidence",
                 )
             )
         if _first_str(fields, ("ioc",)):

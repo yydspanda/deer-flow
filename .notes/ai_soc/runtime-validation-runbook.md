@@ -45,6 +45,21 @@ SOC_VALIDATION_MODEL=deepseek-v4-pro ./scripts/soc-runtime-validation.sh live
 # 根据已有结果重建 manifest 和总索引
 ./scripts/soc-runtime-validation.sh finalize
 
+# 重跑 212 条真实语料的 Checkpoint D；D0-D6 全部确定性执行，不调用模型
+./scripts/soc-runtime-validation.sh checkpoint-d
+
+# 在已确认 D5 上调用真实模型并生成 D7 typed Analyzer 产物
+SOC_VALIDATION_MODEL=deepseek-v4-pro ./scripts/soc-runtime-validation.sh checkpoint-d-live
+
+# 对已保存的 D7 做 deterministic D8 Grounding，不再次调用模型
+./scripts/soc-runtime-validation.sh checkpoint-d-grounding
+
+# 对已保存的 D5/D7/D8 执行 production D9 Decision Policy，不调用模型或数据库
+./scripts/soc-runtime-validation.sh checkpoint-d-decision
+
+# 按 topic 选择代表样本并纳入全部 known input gaps，执行 D10 真实模型完整 Runtime 回放
+SOC_VALIDATION_MODEL=deepseek-v4-pro ./scripts/soc-runtime-validation.sh checkpoint-d-cross-source
+
 # 全部依次执行
 ./scripts/soc-runtime-validation.sh all
 ```
@@ -57,6 +72,15 @@ SOC_VALIDATION_MODEL=deepseek-v4-pro ./scripts/soc-runtime-validation.sh live
 
 Runtime 验证本身不需要 Docker。Boss Web 演示需要 Docker；若 CLI/socket 不可用，先启动
 Docker Desktop，等待 Engine Ready，并确认当前发行版的 WSL Integration 已开启。
+
+`checkpoint-d` 与下面的历史 Step 01-12 review package 是两条不同审阅轨道：前者按当前真实
+PKL 语料逐边界验证 deterministic D0-D6；`checkpoint-d-live` 只在确认后的 D5 上调用一次真实
+Analyzer 生成 D7；`checkpoint-d-grounding` 再对 D7 运行 production D8 Grounding，不调用
+模型；`checkpoint-d-decision` 消费保存的 D5/D7/D8 并运行 production D9 Decision Policy，不写
+数据库；`checkpoint-d-cross-source` 从 D0 选择各 topic 代表样本和全部 known input gaps，使用
+显式配置的真实模型运行 production Runtime，产生模型费用且禁止回退 stub。后者保留五个 legacy demos、live model、correlation 和
+governance 证据。D6 只是全语料 Skill 路由覆盖，D7-D10 是 Analyzer/Grounding/Decision/跨来源
+审阅边界，都不是固定 Runtime 新节点。
 
 ## 3. Step Contract / 每步看什么
 
@@ -76,6 +100,17 @@ Docker Desktop，等待 Engine Ready，并确认当前发行版的 WSL Integrati
 | 11 | `step-11-correlation-eval` | 8 条受控 pair | baseline + replay diff | lineage 无泄漏、重跑无变化；不开放生产 suppress |
 | 11 | `step-11-governed-context` | 授权业务真值 | proposed/active/history/query + SQLite | append-only、乐观版本、生命周期查询生效 |
 | 12 | `step-12-authorization-shadow` | HIDS/EDR + active facts | exact match records | 只读 shadow；不改检测真值、不关单、不授权动作 |
+
+Checkpoint D 当前增加：
+
+| Seq | Directory / 目录 | Review / 审阅重点 |
+|---:|---|---|
+| D5 | `checkpoint-d/step-d5-skill-context` | 选择原因、实际 Skill package、bounded guidance、package/projection hash、token budget；不调用 LLM |
+| D6 | `checkpoint-d/step-d6-skill-route-coverage` | 212 条 typed HTTP/email 路由覆盖、host/asset 误路由、package 投影完整性；离线评测 |
+| D7 | `checkpoint-d/step-d7-analyzer-output` | 真实模型、Prompt/Parser 版本、`AnalysisResult.v2`、开放场景、行为阶段、证据索引、竞争解释、缺口和核查项；不运行 Grounding/Decision |
+| D8 | `checkpoint-d/step-d8-evidence-grounding` | production source/value Grounding、description sibling-fact leakage、scenario 引用接受/拒绝状态；不运行 Decision |
+| D9 | `checkpoint-d/step-d9-decision-policy` | production Decision Policy、evidence state、review reasons、automation guard；不运行模型、租户处置或持久化 |
+| D10 | `checkpoint-d/step-d10-cross-source-runtime` | 8 topic / 6 source family 真实模型 representative matrix、完整 9-step Runtime、模型/token provenance、Grounding 质量和 known input gap fail-closed；无人工标签时不评估模型准确率 |
 
 ## 4. 2026-07-17 Latest Run / 本次实跑结果
 

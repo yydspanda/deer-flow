@@ -50,8 +50,9 @@ Treat historical alerts and customer memory as retrieval hints, not proof. If a 
 
 - Use asset extraction/direction before deciding response targets when source, victim, owner, or suppression target is ambiguous.
 - Use network/APT triage for callbacks, C2, NIDS/NDR detections, IOC quality, and network direction disputes.
-- Use WAF/F5 triage for HTTP request evidence, proxy headers, target service attribution, and web attack success signals.
+- Use web application triage for HTTP request evidence, proxy headers, target service attribution, and web attack success signals.
 - Use endpoint triage for process tree, command line, host, user, file, privilege, persistence, and HIDS-style host events.
+- Use email phishing triage for sender identity, delivery path, message content, links, attachments, QR codes, and recipient impact.
 
 Do not let a domain skill close the case by itself. Domain findings feed the SOC runtime, review queue, and final investigation report.
 

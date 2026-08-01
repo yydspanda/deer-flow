@@ -1,6 +1,6 @@
 ---
-name: soc-waf-f5-triage
-description: Use for WAF, F5, HTTP, x-forwarded-for, web attack, SQL injection, XSS, webshell, and external-to-internal web traffic investigation.
+name: soc-web-application-triage
+description: Use for HTTP, reverse-proxy, WAF, load-balancer, web attack, injection, command execution, file access, webshell, authentication, and client attribution investigation.
 allowed-tools:
   - ask_clarification
   - present_files
@@ -8,9 +8,9 @@ allowed-tools:
   - task
 ---
 
-# SOC WAF/F5 Triage
+# SOC Web Application Triage
 
-Use this skill when the alert involves WAF/F5, HTTP request evidence, proxy headers, web attack signatures, SQL injection, XSS, webshell attempts, URL paths, host headers, or client IP attribution.
+Use this skill when the alert involves HTTP request evidence, proxy headers, web attack signatures, SQL injection, XSS, webshell attempts, URL paths, host headers, or client IP attribution. WAF and F5 are possible sources, not the identity of this capability.
 
 ## Focus
 
@@ -21,7 +21,7 @@ Use this skill when the alert involves WAF/F5, HTTP request evidence, proxy head
 
 ## Knowledge Boundary
 
-- Keep WAF/F5 reasoning generic: HTTP evidence, proxy attribution, web attack success signals, target service, and suppression target.
+- Keep web reasoning generic: HTTP evidence, proxy attribution, web attack success signals, target service, and suppression target.
 - Customer-specific URI exceptions, internal domains, F5 policy names, VIPs, route tables, and suppression templates belong in tenant memory, adapter config, or policy.
 - This skill may propose read-only investigation or approval-gated response, but must not add rules, block clients, or suppress alerts directly.
 
@@ -59,4 +59,8 @@ Recommend these as proposals only when needed:
 - `threat_intel.ip_reputation.lookup` for client IP/domain reputation and freshness.
 - `security_tag.lookup` for authorized testing, maintenance, or allowlist evidence.
 
-Do not add WAF/F5 rules or blocks without approval.
+Do not add WAF/load-balancer rules or blocks without approval.
+
+## References
+
+Read `references/web-attack-playbooks.md` when the alert needs scenario-specific success criteria for injection, command execution, file access, upload, webshell, authentication, or scanning.

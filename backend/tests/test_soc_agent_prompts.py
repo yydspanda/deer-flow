@@ -32,6 +32,15 @@ def test_analysis_prompt_uses_bounded_llm_request_for_pingan_apt() -> None:
     assert prompt.context["evidence"]["primary_evidence_path"] == "alert.hitLog[0].zeusRawLogs[0]"
     assert "source_candidate_conflict" not in prompt.context["fact_reconstruction"]["conflict_types"]
     assert "field-trust" in prompt.system
+    assert "open vocabulary" in prompt.system
+    assert "detection_hit" in prompt.system
+    assert "<ENCODED:...:OMITTED>" in prompt.system
+    assert "marker-bearing scalar" in prompt.system
+    assert "does not reveal the hidden bytes" in prompt.system
+    assert "provider_detection_outcome_assertion" in prompt.system
+    assert "Never serialize a whole object" in prompt.system
+    assert "Copy evidence.value verbatim" in prompt.system
+    assert "an IP address and a port" in prompt.system
     assert "Return JSON only" in prompt.system
     assert "Bounded analysis context" in prompt.user
     assert prompt.context["skill_context"]["selected_skills"]
@@ -66,3 +75,7 @@ def test_analysis_prompt_handles_missing_evidence_policy() -> None:
     assert "missing evidence input policy" in prompt.context["fact_reconstruction"]["warnings"]
     assert "needs_review" in prompt.system
     assert "knowledge_candidates" in prompt.response_schema
+    assert prompt.response_schema["schema_version"] == "soc.analysis_result.v2"
+    assert "scenario_assessments" in prompt.response_schema
+    assert "evidence_gaps" in prompt.response_schema
+    assert "manual_checks" in prompt.response_schema

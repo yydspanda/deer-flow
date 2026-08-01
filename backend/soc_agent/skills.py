@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from hashlib import sha256
 from pathlib import Path
 
 from soc_agent.contracts import (
+    AlertEntitySet,
     AlertInput,
     AlertSourceType,
     AlertSummary,
     ExtractedEntities,
     LLMAnalysisRequest,
+    RoleResolutionStatus,
     SocSkillContext,
     SocSkillContextItem,
     SocSkillRecommendation,
@@ -21,7 +24,8 @@ from soc_agent.contracts import (
 SOC_ALERT_TRIAGE_SKILL = "soc-alert-triage"
 SOC_ENDPOINT_TRIAGE_SKILL = "soc-endpoint-triage"
 SOC_NETWORK_APT_TRIAGE_SKILL = "soc-network-apt-triage"
-SOC_WAF_F5_TRIAGE_SKILL = "soc-waf-f5-triage"
+SOC_WEB_APPLICATION_TRIAGE_SKILL = "soc-web-application-triage"
+SOC_EMAIL_PHISHING_TRIAGE_SKILL = "soc-email-phishing-triage"
 SOC_ASSET_DIRECTION_SKILL = "soc-asset-direction"
 SOC_ASSET_EXTRACTION_SKILL = "soc-asset-extraction"
 
@@ -30,24 +34,18 @@ SOC_LEAD_AGENT_SKILLS: tuple[str, ...] = (
     SOC_ALERT_TRIAGE_SKILL,
     SOC_ENDPOINT_TRIAGE_SKILL,
     SOC_NETWORK_APT_TRIAGE_SKILL,
-    SOC_WAF_F5_TRIAGE_SKILL,
+    SOC_WEB_APPLICATION_TRIAGE_SKILL,
+    SOC_EMAIL_PHISHING_TRIAGE_SKILL,
     SOC_ASSET_DIRECTION_SKILL,
     SOC_ASSET_EXTRACTION_SKILL,
 )
 SOC_SKILL_CONTEXT_TOKEN_BUDGET = 240
-SOC_SKILL_CONTEXT_SOURCE = "soc_skill_resolver"
+SOC_SKILL_CONTEXT_SOURCE = "soc_skill_package_projection"
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_PUBLIC_SKILL_ROOT = _REPO_ROOT / "skills" / "public"
-
-_SOC_SKILL_CONTEXT_SUMMARIES: dict[str, str] = {
-    SOC_ALERT_TRIAGE_SKILL: "General SOC triage: separate facts, inferred facts, conflicts, uncertainty, verdict, confidence, and safe next steps.",
-    SOC_ENDPOINT_TRIAGE_SKILL: "Endpoint triage: focus on host/user/process/file evidence, process ancestry, lateral movement, and approval-gated endpoint response.",
-    SOC_NETWORK_APT_TRIAGE_SKILL: "Network/APT triage: focus on direction, IOC quality, C2/callback behavior, role assignment, and historical similar alerts.",
-    SOC_WAF_F5_TRIAGE_SKILL: "WAF/F5 triage: focus on HTTP evidence, client IP attribution, x-forwarded-for, target application, web attack type, and suppression target.",
-    SOC_ASSET_DIRECTION_SKILL: "Asset and direction triage: resolve ownership, attacker/victim roles, traffic direction, affected asset, and response target conflicts.",
-    SOC_ASSET_EXTRACTION_SKILL: "Asset extraction: extract IP, domain, URL, host, user, and UM assets; assign roles; prepare guarded asset.lookup/asset.locate proposals.",
-}
+_RUNTIME_GUIDANCE_PATH = Path("references/runtime-guidance.md")
+_TOKEN_RE = re.compile(r"[\u3400-\u9fff]|[A-Za-z0-9_]+|[^\s]")
 
 _SOURCE_SKILLS: dict[AlertSourceType, tuple[str, str]] = {
     AlertSourceType.EDR: (SOC_ENDPOINT_TRIAGE_SKILL, "source_type is edr"),
@@ -56,8 +54,8 @@ _SOURCE_SKILLS: dict[AlertSourceType, tuple[str, str]] = {
     AlertSourceType.NIDS: (SOC_NETWORK_APT_TRIAGE_SKILL, "source_type is nids"),
     AlertSourceType.NDR: (SOC_NETWORK_APT_TRIAGE_SKILL, "source_type is ndr"),
     AlertSourceType.THREAT_INTEL: (SOC_NETWORK_APT_TRIAGE_SKILL, "source_type is threat_intel"),
-    AlertSourceType.WAF: (SOC_WAF_F5_TRIAGE_SKILL, "source_type is waf"),
-    AlertSourceType.F5: (SOC_WAF_F5_TRIAGE_SKILL, "source_type is f5"),
+    AlertSourceType.WAF: (SOC_WEB_APPLICATION_TRIAGE_SKILL, "source_type is waf"),
+    AlertSourceType.F5: (SOC_WEB_APPLICATION_TRIAGE_SKILL, "source_type is f5"),
     AlertSourceType.IAM: (SOC_ASSET_DIRECTION_SKILL, "source_type is iam"),
     AlertSourceType.CLOUD: (SOC_ASSET_DIRECTION_SKILL, "source_type is cloud"),
 }
@@ -67,14 +65,12 @@ _ENDPOINT_KEYWORDS = (
     "xdr",
     "hids",
     "endpoint",
-    "host",
     "process",
     "terminal",
     "lateral",
     "横向",
     "终端",
     "进程",
-    "主机",
 )
 _NETWORK_APT_KEYWORDS = (
     "apt",
@@ -90,7 +86,7 @@ _NETWORK_APT_KEYWORDS = (
     "恶意",
     "天眼",
 )
-_WAF_F5_KEYWORDS = (
+_WEB_APPLICATION_KEYWORDS = (
     "waf",
     "f5",
     "http",
@@ -99,11 +95,32 @@ _WAF_F5_KEYWORDS = (
     "sql injection",
     "xss",
     "webshell",
+    "path traversal",
+    "command execution",
+    "remote code execution",
+    "weak password",
     "注入",
-    "外到内",
+    "弱口令",
+    "命令执行",
+    "文件读取",
+    "文件上传",
+    "网页攻击",
+)
+_EMAIL_PHISHING_KEYWORDS = (
+    "phishing",
+    "suspicious email",
+    "email attack",
+    "sender spoof",
+    "business email compromise",
+    "mail attachment",
+    "钓鱼邮件",
+    "可疑邮件",
+    "邮件攻击",
+    "发件人",
+    "邮件附件",
 )
 _ASSET_DIRECTION_KEYWORDS = (
-    "asset",
+    "asset ownership",
     "ownership",
     "victim",
     "attacker",
@@ -115,24 +132,14 @@ _ASSET_DIRECTION_KEYWORDS = (
     "攻击者",
 )
 _ASSET_EXTRACTION_KEYWORDS = (
-    "asset",
-    "assets",
-    "asset_key",
-    "host",
-    "hostname",
-    "domain",
-    "url",
-    "uri",
-    "user",
-    "user_id",
-    "um",
-    "username",
-    "资产",
-    "主机",
-    "域名",
-    "链接",
-    "账号",
-    "用户",
+    "asset extraction",
+    "extract assets",
+    "identify assets",
+    "entity extraction",
+    "资产提取",
+    "资产抽取",
+    "提取资产",
+    "抽取资产",
 )
 
 
@@ -158,6 +165,7 @@ class SocSkillResolver:
             matched_field="default",
         )
         _add_source_skill(recommendations, request.source.source_type)
+        _add_canonical_entity_skills(recommendations, request.canonical_entities)
         _add_text_skills(
             recommendations,
             [
@@ -175,17 +183,19 @@ class SocSkillResolver:
             ],
         )
         _add_entity_skills(recommendations, request.extracted_entities)
+        _add_role_resolution_skills(recommendations, request)
+        if request.evidence_coverage.high_value_gaps:
+            recommendations.add(
+                SOC_ASSET_EXTRACTION_SKILL,
+                reason="evidence coverage reported high-value mapping gaps that require explicit extraction review",
+                confidence=0.69,
+                matched_field="evidence_coverage.high_value_gaps",
+            )
         if request.conflict_count > 0:
             recommendations.add(
                 SOC_ASSET_DIRECTION_SKILL,
                 reason="fact reconstruction reported field conflicts, so asset/direction review is needed",
                 confidence=0.68,
-                matched_field="fact_reconstruction.conflict_reports",
-            )
-            recommendations.add(
-                SOC_ASSET_EXTRACTION_SKILL,
-                reason="field conflicts require explicit asset extraction before ownership lookup",
-                confidence=0.67,
                 matched_field="fact_reconstruction.conflict_reports",
             )
         return self._resolution(request.alert_id, recommendations)
@@ -199,6 +209,7 @@ class SocSkillResolver:
             matched_field="default",
         )
         _add_source_skill(recommendations, alert.source.source_type)
+        _add_canonical_entity_skills(recommendations, alert.entities)
         _add_text_skills(
             recommendations,
             [
@@ -210,9 +221,6 @@ class SocSkillResolver:
                 alert.detection.rule_category,
                 alert.detection.detection_key,
                 alert.classification.category,
-                alert.entities.http.host,
-                alert.entities.http.url,
-                alert.entities.http.x_forwarded_for,
                 *alert.classification.tactic,
                 *alert.classification.technique,
                 *alert.classification.labels.values(),
@@ -240,8 +248,12 @@ class SocSkillResolver:
                 summary.rule_name,
                 summary.category,
                 summary.severity,
-                *summary.entity_keys,
             ],
+        )
+        _add_summary_entity_skills(
+            recommendations,
+            summary.entity_keys,
+            source_type=summary.source_type,
         )
         return self._resolution(summary.alert_id, recommendations)
 
@@ -265,26 +277,36 @@ def build_soc_skill_context(
     public_skill_root: Path | None = None,
     token_budget_per_skill: int = SOC_SKILL_CONTEXT_TOKEN_BUDGET,
 ) -> SocSkillContext:
-    """Build compact skill context for bounded prompts and chat streams."""
+    """Project reviewed, bounded guidance from selected DeerFlow skill packages."""
 
+    if token_budget_per_skill < 1:
+        raise ValueError("token_budget_per_skill must be positive")
     skill_root = public_skill_root or _DEFAULT_PUBLIC_SKILL_ROOT
     items: list[SocSkillContextItem] = []
     notes = list(resolution.notes)
     for recommendation in resolution.selected_skills:
-        content_hash = _skill_content_hash(skill_root, recommendation.skill_name)
-        if content_hash is None:
-            notes.append(f"skill file not found for {recommendation.skill_name}")
+        projected = _project_skill_package(
+            skill_root,
+            recommendation.skill_name,
+            token_budget=token_budget_per_skill,
+        )
+        if projected is None:
+            notes.append(f"valid skill package not found for {recommendation.skill_name}")
+            continue
+        guidance, guidance_source, guidance_hash, package_hash, estimated_token_count, projection_note = projected
+        if projection_note is not None:
+            notes.append(projection_note)
         items.append(
             SocSkillContextItem(
                 skill_name=recommendation.skill_name,
                 reason=recommendation.reason,
                 confidence=recommendation.confidence,
                 matched_fields=list(recommendation.matched_fields),
-                summary=_SOC_SKILL_CONTEXT_SUMMARIES.get(
-                    recommendation.skill_name,
-                    "SOC domain skill selected by resolver; use it only as bounded guidance.",
-                ),
-                content_hash=content_hash,
+                guidance=guidance,
+                guidance_source=guidance_source,
+                guidance_hash=guidance_hash,
+                package_hash=package_hash,
+                estimated_token_count=estimated_token_count,
                 token_budget=token_budget_per_skill,
             )
         )
@@ -292,6 +314,7 @@ def build_soc_skill_context(
         source=SOC_SKILL_CONTEXT_SOURCE,
         selected_skills=items,
         total_token_budget=sum(item.token_budget for item in items),
+        total_estimated_token_count=sum(item.estimated_token_count for item in items),
         notes=notes,
     )
 
@@ -341,19 +364,161 @@ def _add_entity_skills(recommendations: _RecommendationBuilder, entities: Extrac
             confidence=0.72,
             matched_field="extracted_entities.endpoint",
         )
-    if entities.ips or entities.domains or entities.urls:
+    if entities.emails:
+        recommendations.add(
+            SOC_EMAIL_PHISHING_TRIAGE_SKILL,
+            reason="extracted entities include email addresses",
+            confidence=0.74,
+            matched_field="extracted_entities.emails",
+        )
+
+
+def _add_canonical_entity_skills(
+    recommendations: _RecommendationBuilder,
+    entities: AlertEntitySet,
+) -> None:
+    http = entities.http
+    if http.observations or any(
+        value is not None
+        for value in (
+            http.method,
+            http.host,
+            http.path,
+            http.url,
+            http.protocol,
+            http.port,
+            http.status_code,
+            http.user_agent,
+            http.referer,
+            http.x_forwarded_for,
+        )
+    ):
+        recommendations.add(
+            SOC_WEB_APPLICATION_TRIAGE_SKILL,
+            reason="canonical entities contain HTTP transaction evidence",
+            confidence=0.76,
+            matched_field="canonical_entities.http",
+        )
+
+    email = entities.email
+    if email is not None and (email.observations or email.message_id or email.sender_addresses or email.recipient_addresses or email.cc_addresses or email.subject or email.links or email.attachment_names):
+        recommendations.add(
+            SOC_EMAIL_PHISHING_TRIAGE_SKILL,
+            reason="canonical entities contain typed email evidence",
+            confidence=0.80,
+            matched_field="canonical_entities.email",
+        )
+
+    process = entities.process
+    user = entities.user
+    host = entities.host
+    if (
+        process.observations
+        or any(
+            value is not None
+            for value in (
+                process.process_name,
+                process.process_id,
+                process.process_path,
+                process.command_line,
+                process.parent_process_name,
+                process.parent_process_id,
+                process.parent_command_line,
+                process.md5,
+                process.sha256,
+                user.username,
+                user.user_id,
+                user.um_account,
+                user.src_user,
+                user.dst_user,
+                host.host_name,
+                host.host_id,
+            )
+        )
+        or bool(host.ip_addresses)
+    ):
+        recommendations.add(
+            SOC_ENDPOINT_TRIAGE_SKILL,
+            reason="canonical entities contain endpoint, process, user, or host evidence",
+            confidence=0.73,
+            matched_field="canonical_entities.endpoint",
+        )
+
+    network = entities.network
+    if (
+        network.observations
+        or any(
+            value is not None
+            for value in (
+                network.source_ip,
+                network.destination_ip,
+                network.src_port,
+                network.dst_port,
+                network.protocol,
+                network.application_protocol,
+                network.direction,
+                network.domain,
+                network.url,
+            )
+        )
+        or entities.threat.iocs
+        or entities.threat.campaign
+        or entities.threat.threat_actor
+        or entities.threat.malware_family
+    ):
         recommendations.add(
             SOC_NETWORK_APT_TRIAGE_SKILL,
-            reason="network entities include IP, domain, or URL indicators",
-            confidence=0.66,
-            matched_field="extracted_entities.network",
+            reason="canonical entities contain wire-session or threat-indicator evidence",
+            confidence=0.72,
+            matched_field="canonical_entities.network_or_threat",
         )
-    if entities.ips or entities.domains or entities.urls or entities.hosts or entities.users:
+
+
+def _add_role_resolution_skills(
+    recommendations: _RecommendationBuilder,
+    request: LLMAnalysisRequest,
+) -> None:
+    for resolution in request.fact_reconstruction.role_resolutions:
+        if resolution.role not in {"attacker", "victim", "impacted_asset"}:
+            continue
+        if resolution.status is not RoleResolutionStatus.CONFLICTED:
+            continue
         recommendations.add(
-            SOC_ASSET_EXTRACTION_SKILL,
-            reason="alert entities include assets that may need extraction and ownership/location lookup",
-            confidence=0.67,
-            matched_field="extracted_entities.assets",
+            SOC_ASSET_DIRECTION_SKILL,
+            reason="security-role resolution contains competing claims",
+            confidence=0.72,
+            matched_field=f"fact_reconstruction.role_resolutions:{resolution.role}:{resolution.status.value}",
+        )
+
+
+def _add_summary_entity_skills(
+    recommendations: _RecommendationBuilder,
+    entity_keys: Iterable[str],
+    *,
+    source_type: AlertSourceType,
+) -> None:
+    kinds = {value.partition(":")[0].lower() for value in entity_keys if ":" in value}
+    if kinds & {"process", "host", "user", "file_hash"}:
+        recommendations.add(
+            SOC_ENDPOINT_TRIAGE_SKILL,
+            reason="summary contains endpoint entity keys",
+            confidence=0.70,
+            matched_field="summary.entity_keys:endpoint",
+        )
+    network_kinds = kinds & {"ip", "domain", "url"}
+    if network_kinds and not (network_kinds == {"ip"} and source_type in {AlertSourceType.EDR, AlertSourceType.XDR, AlertSourceType.HIDS}):
+        recommendations.add(
+            SOC_NETWORK_APT_TRIAGE_SKILL,
+            reason="summary contains network entity keys",
+            confidence=0.66,
+            matched_field="summary.entity_keys:network",
+        )
+    if "email" in kinds:
+        recommendations.add(
+            SOC_EMAIL_PHISHING_TRIAGE_SKILL,
+            reason="summary contains email entity keys",
+            confidence=0.74,
+            matched_field="summary.entity_keys:email",
         )
 
 
@@ -378,9 +543,16 @@ def _add_text_skills(recommendations: _RecommendationBuilder, values: Iterable[s
     _add_keyword_skill(
         recommendations,
         text,
-        _WAF_F5_KEYWORDS,
-        SOC_WAF_F5_TRIAGE_SKILL,
-        "WAF/F5 keyword matched in source, detection, classification, or HTTP fields",
+        _WEB_APPLICATION_KEYWORDS,
+        SOC_WEB_APPLICATION_TRIAGE_SKILL,
+        "web-application keyword matched in source, detection, or classification",
+    )
+    _add_keyword_skill(
+        recommendations,
+        text,
+        _EMAIL_PHISHING_KEYWORDS,
+        SOC_EMAIL_PHISHING_TRIAGE_SKILL,
+        "email/phishing keyword matched in source, detection, or classification",
     )
     _add_keyword_skill(
         recommendations,
@@ -411,8 +583,74 @@ def _add_keyword_skill(
     recommendations.add(skill_name, reason=reason, confidence=0.64, matched_field=f"keyword:{matched}")
 
 
-def _skill_content_hash(public_skill_root: Path, skill_name: str) -> str | None:
-    skill_path = public_skill_root / skill_name / "SKILL.md"
-    if not skill_path.exists():
+def _project_skill_package(
+    public_skill_root: Path,
+    skill_name: str,
+    *,
+    token_budget: int,
+) -> tuple[str, str, str, str, int, str | None] | None:
+    from deerflow.skills.parser import parse_skill_file
+    from deerflow.skills.types import SkillCategory
+
+    skill_dir = public_skill_root / skill_name
+    skill_path = skill_dir / "SKILL.md"
+    skill = parse_skill_file(
+        skill_path,
+        category=SkillCategory.PUBLIC,
+        relative_path=Path(skill_name),
+    )
+    if skill is None or skill.name != skill_name:
         return None
-    return sha256(skill_path.read_bytes()).hexdigest()
+
+    guidance_path = skill_dir / _RUNTIME_GUIDANCE_PATH
+    if guidance_path.is_file():
+        guidance = guidance_path.read_text(encoding="utf-8").strip()
+        guidance_source = _RUNTIME_GUIDANCE_PATH.as_posix()
+    else:
+        guidance = skill.description.strip()
+        guidance_source = "SKILL.md#description"
+    if not guidance:
+        return None
+
+    guidance, truncated = _bound_guidance(guidance, token_budget=token_budget)
+    estimated_token_count = _estimate_token_count(guidance)
+    package_hash = _skill_package_hash(skill_dir)
+    if package_hash is None:
+        return None
+    projection_note = None
+    if truncated:
+        projection_note = f"runtime guidance truncated to {token_budget} estimated tokens for {skill_name}"
+    return (
+        guidance,
+        guidance_source,
+        sha256(guidance.encode("utf-8")).hexdigest(),
+        package_hash,
+        estimated_token_count,
+        projection_note,
+    )
+
+
+def _bound_guidance(value: str, *, token_budget: int) -> tuple[str, bool]:
+    matches = list(_TOKEN_RE.finditer(value))
+    if len(matches) <= token_budget:
+        return value, False
+    return value[: matches[token_budget - 1].end()].rstrip(), True
+
+
+def _estimate_token_count(value: str) -> int:
+    return max(1, len(_TOKEN_RE.findall(value)))
+
+
+def _skill_package_hash(skill_dir: Path) -> str | None:
+    files = sorted(path for path in skill_dir.rglob("*") if path.is_file())
+    if not files:
+        return None
+    digest = sha256()
+    for path in files:
+        relative = path.relative_to(skill_dir).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        content = path.read_bytes()
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()

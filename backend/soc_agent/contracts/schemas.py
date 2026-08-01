@@ -25,6 +25,24 @@ class Verdict(StrEnum):
     NEEDS_REVIEW = "needs_review"
 
 
+class TriageActivityStage(StrEnum):
+    """Observed maturity of one analyzer scenario, not an attack verdict."""
+
+    DETECTION_HIT = "detection_hit"
+    ATTEMPT_OBSERVED = "attempt_observed"
+    EFFECT_OBSERVED = "effect_observed"
+    IMPACT_CONFIRMED = "impact_confirmed"
+    INDETERMINATE = "indeterminate"
+
+
+class TriageScenarioOrigin(StrEnum):
+    """How the analyzer arrived at one scenario assessment."""
+
+    UPSTREAM_HINT = "upstream_hint"
+    INFERRED = "inferred"
+    HYBRID = "hybrid"
+
+
 class DecisionConfidenceSource(StrEnum):
     """Origin of the confidence carried by an operational decision."""
 
@@ -77,6 +95,7 @@ class AnalysisEvidenceGroundingStatus(StrEnum):
     SOURCE_MISMATCH = "source_mismatch"
     VALUE_NOT_FOUND = "value_not_found"
     MISSING_VALUE = "missing_value"
+    DESCRIPTION_CONTEXT_LEAKAGE = "description_context_leakage"
 
 
 class RuntimeFailureKind(StrEnum):
@@ -856,24 +875,28 @@ class SocSkillResolution(BaseModel):
 
 
 class SocSkillContextItem(BaseModel):
-    """Compact, auditable skill context injected into bounded SOC prompts."""
+    """Reviewed package guidance injected into bounded SOC prompts."""
 
     skill_name: str = Field(min_length=1)
     reason: str = Field(min_length=1)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     matched_fields: list[str] = Field(default_factory=list)
-    summary: str = Field(min_length=1)
-    content_hash: str | None = None
+    guidance: str = Field(min_length=1)
+    guidance_source: str = Field(min_length=1)
+    guidance_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    package_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    estimated_token_count: int = Field(ge=1)
     token_budget: int = Field(default=240, ge=0)
 
 
 class SocSkillContext(BaseModel):
     """Bounded skill context derived from DeerFlow skill selection."""
 
-    schema_version: str = "soc.skill_context.v1"
-    source: str = "soc_skill_resolver"
+    schema_version: str = "soc.skill_context.v2"
+    source: str = "soc_skill_package_projection"
     selected_skills: list[SocSkillContextItem] = Field(default_factory=list)
     total_token_budget: int = Field(default=0, ge=0)
+    total_estimated_token_count: int = Field(default=0, ge=0)
     notes: list[str] = Field(default_factory=list)
 
 
@@ -2023,6 +2046,39 @@ class EvidenceItem(BaseModel):
         return value
 
 
+class TriageScenarioAssessment(BaseModel):
+    """One open-vocabulary scenario assessment grounded in analyzer evidence."""
+
+    schema_version: Literal["soc.triage_scenario_assessment.v1"] = "soc.triage_scenario_assessment.v1"
+    scenario_name: str = Field(min_length=1, max_length=256)
+    scenario_key: str | None = Field(default=None, min_length=1, max_length=256)
+    is_primary: bool = False
+    origin: TriageScenarioOrigin
+    confidence: float = Field(ge=0.0, le=1.0)
+    activity_stage: TriageActivityStage
+    evidence_indices: list[int] = Field(min_length=1, max_length=20)
+    rationale: str = Field(min_length=1, max_length=2000)
+    competing_explanations: list[str] = Field(default_factory=list, max_length=5)
+
+    @field_validator("evidence_indices")
+    @classmethod
+    def validate_evidence_indices(cls, values: list[int]) -> list[int]:
+        if any(value < 0 for value in values):
+            raise ValueError("scenario evidence indices must be non-negative")
+        if len(set(values)) != len(values):
+            raise ValueError("scenario evidence indices must be unique")
+        return values
+
+    @field_validator("competing_explanations")
+    @classmethod
+    def validate_competing_explanations(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("competing explanations must be non-empty strings")
+        if any(len(value) > 1000 for value in values):
+            raise ValueError("competing explanation exceeds 1000 characters")
+        return values
+
+
 class AnalysisEvidenceGroundingItem(BaseModel):
     """Deterministic grounding result for one analyzer evidence item."""
 
@@ -2030,16 +2086,21 @@ class AnalysisEvidenceGroundingItem(BaseModel):
     source: str = Field(min_length=1, max_length=256)
     status: AnalysisEvidenceGroundingStatus
     matched_context_paths: list[str] = Field(default_factory=list, max_length=10)
+    foreign_description_context_paths: list[str] = Field(
+        default_factory=list,
+        max_length=10,
+    )
     reason: str = Field(min_length=1, max_length=1000)
 
 
 class AnalysisEvidenceGroundingReport(BaseModel):
     """Audit report proving which analyzer claims came from bounded context."""
 
-    schema_version: str = "soc.analysis_evidence_grounding.v1"
+    schema_version: str = "soc.analysis_evidence_grounding.v2"
     total_count: int = Field(default=0, ge=0)
     grounded_count: int = Field(default=0, ge=0)
     ungrounded_count: int = Field(default=0, ge=0)
+    description_leakage_count: int = Field(default=0, ge=0)
     items: list[AnalysisEvidenceGroundingItem] = Field(default_factory=list, max_length=20)
     warnings: list[str] = Field(default_factory=list, max_length=20)
 
@@ -2052,6 +2113,9 @@ class AnalysisEvidenceGroundingReport(BaseModel):
         actual_grounded = sum(item.status is AnalysisEvidenceGroundingStatus.GROUNDED for item in self.items)
         if actual_grounded != self.grounded_count:
             raise ValueError("grounding grounded_count does not match item statuses")
+        actual_description_leakage = sum(item.status is AnalysisEvidenceGroundingStatus.DESCRIPTION_CONTEXT_LEAKAGE for item in self.items)
+        if actual_description_leakage != self.description_leakage_count:
+            raise ValueError("grounding description_leakage_count does not match item statuses")
         return self
 
 
@@ -2314,7 +2378,7 @@ class EvidenceCoverageOmission(BaseModel):
 
 
 class EvidenceCoverageGap(BaseModel):
-    """High-value parsed evidence not represented in the canonical contract."""
+    """High-value evidence absent from or not represented in analysis context."""
 
     field_path: str = Field(min_length=1)
     expected_target: str = Field(min_length=1)
@@ -2389,6 +2453,7 @@ class ExtractedEntities(BaseModel):
     processes: list[str] = Field(default_factory=list)
     users: list[str] = Field(default_factory=list)
     hosts: list[str] = Field(default_factory=list)
+    assets: list[str] = Field(default_factory=list)
     rule_codes: list[str] = Field(default_factory=list)
     rule_names: list[str] = Field(default_factory=list)
     rules: list[str] = Field(default_factory=list)
@@ -2768,10 +2833,17 @@ class ConfidenceCalibrationReport(BaseModel):
 
 
 class AnalysisResult(BaseModel):
+    schema_version: Literal["soc.analysis_result.v2"] = "soc.analysis_result.v2"
     verdict: Verdict
     confidence: float = Field(ge=0.0, le=1.0)
     summary: str = Field(min_length=1, max_length=4000)
     evidence: list[EvidenceItem] = Field(default_factory=list, max_length=20)
+    scenario_assessments: list[TriageScenarioAssessment] = Field(
+        default_factory=list,
+        max_length=10,
+    )
+    evidence_gaps: list[str] = Field(default_factory=list, max_length=20)
+    manual_checks: list[str] = Field(default_factory=list, max_length=20)
     reason: str = Field(min_length=1, max_length=8000)
     recommended_action: str = Field(min_length=1, max_length=1000)
     knowledge_candidates: list[str] = Field(default_factory=list, max_length=20)
@@ -2791,6 +2863,34 @@ class AnalysisResult(BaseModel):
         if any(len(value) > 2000 for value in values):
             raise ValueError("knowledge candidate exceeds 2000 characters")
         return values
+
+    @field_validator("evidence_gaps", "manual_checks")
+    @classmethod
+    def bound_triage_guidance(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("triage guidance entries must be non-empty strings")
+        if any(len(value) > 1000 for value in values):
+            raise ValueError("triage guidance entry exceeds 1000 characters")
+        return values
+
+    @model_validator(mode="after")
+    def validate_scenario_assessments(self) -> AnalysisResult:
+        if not self.scenario_assessments:
+            return self
+
+        primary_count = sum(item.is_primary for item in self.scenario_assessments)
+        if primary_count != 1:
+            raise ValueError("analysis result with scenario assessments requires exactly one primary scenario")
+
+        normalized_names = [item.scenario_name.strip().casefold() for item in self.scenario_assessments]
+        if len(set(normalized_names)) != len(normalized_names):
+            raise ValueError("analysis scenario names must be unique")
+
+        evidence_count = len(self.evidence)
+        invalid_indices = sorted({index for item in self.scenario_assessments for index in item.evidence_indices if index >= evidence_count})
+        if invalid_indices:
+            raise ValueError(f"scenario evidence indices must reference analysis evidence; invalid indices: {invalid_indices}")
+        return self
 
 
 class Decision(BaseModel):

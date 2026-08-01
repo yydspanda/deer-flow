@@ -346,7 +346,10 @@ PingAn NDR/APT message mapping lives in `soc_agent.normalizers.pingan_ndr`. It k
 `sip/dip` message as an independent wire observation and projects HTTP context per message. The
 source field named `ioc` contains vendor detection descriptors in the reviewed corpus and must not
 be promoted by shape to a typed IOC. `file_name/file_md5` create `observed_artifact` network-content
-observations, not endpoint-write or compromise proof.
+observations, not endpoint-write or compromise proof. Reviewed `rule_name`, `attack_type`,
+`host_state`, and `rule_labels` values become generic provider detection assertions. When their
+exact paths are model-visible under high-trust selected evidence they may support classification or
+effect-stage reasoning, but the adapter cannot write the Runtime verdict.
 PingAn HIDS message mapping lives in `soc_agent.normalizers.pingan_hids`. Agent/internal addresses
 identify the endpoint and provisional impacted asset; the vendor default `external_ip=1.1.1.1` is a
 non-reasoning placeholder. Process trees and artifacts remain per-message observations. Only
@@ -410,6 +413,23 @@ and independently bounded with `SOC_LLM_MAX_CONCURRENCY`, optional `SOC_LLM_REQU
 queue wait; call timeout limits one provider invocation and becomes retryable `analyzer_timeout`.
 `SOC_LLM_SENSITIVE_EVIDENCE_MODE=redact|full` controls the model-boundary projection and defaults to
 `redact`; `full` is allowed only after the target model environment is explicitly approved.
+
+New live analyzer output uses `soc.analysis_result.v2`. `TriageScenarioAssessment` is
+open-vocabulary and must distinguish upstream/inferred/hybrid origin plus
+detection/attempt/effect/impact/indeterminate stage. A non-empty list has exactly one primary, every
+scenario cites zero-based indexes into the same result's evidence, and the result carries competing
+explanations, evidence gaps, and non-empty manual checks. `soc-analysis-v8` and
+`soc-analysis-json-parser-v5` reject unknown fields and malformed references. This typed output does
+not replace evidence grounding or `SocDecisionPolicy`.
+
+Evidence grounding uses `soc.analysis_evidence_grounding.v2`. A grounded source/value whose
+description imports another distinctive bounded fact must be rejected as
+`description_context_leakage`; retain both matched and foreign context paths, but do not copy the
+foreign values into the report. An exact visible encoded-omission marker may ground only field
+presence, encoding shape, and boundary omission; hidden content, private sidecar hashes, validity,
+and outcome implications remain ungrounded. Object-as-string citations remain invalid. Grounding
+never repairs analyzer semantics; rejected evidence continues through the existing degraded-review
+Decision path.
 
 `soc_agent.core.SocDecisionPolicy` is the only Runtime boundary that converts validated
 `AnalysisResult` into an operational `Decision`. Analyzer confidence is currently an uncalibrated
@@ -533,6 +553,30 @@ masks remain unchanged. Encoded-span compaction is a separate bounded-context po
 reported only through `llm_compacted_encoded_paths`; complete values remain in immutable raw input.
 D-4 stops before skill resolution, prompt rendering, model invocation, grounding, decision and
 persistence.
+After D-4, D-5 validates the bounded public Skill-package projection, D-6 audits Skill routing over
+all 212 corpus rows, D-7 invokes one explicitly configured live analyzer, and D-8 applies production
+Grounding to its saved result. D-9 consumes the saved D-5/D-7/D-8 lineage and invokes the production
+`SocDecisionPolicy`; it must not call a model, reground or repair evidence, evaluate tenant
+disposition policy, write persistence, or touch ReviewQueue/actions. Run D-9 from the repository root
+with `./scripts/soc-runtime-validation.sh checkpoint-d-decision`. A blocked D-8 is accepted as safe
+only when D-9 reports degraded/conflicted evidence, structured human-review reasons and
+`automation_allowed=false` while preserving the analyzer detection verdict.
+After D-9, D-10 uses the D-0 inventory to select one median-shaped representative per topic plus every
+known input gap, then invokes the same non-persistent `SocAnalysisService` Runtime with the explicitly
+configured live analyzer for each. Run it with
+`./scripts/soc-runtime-validation.sh checkpoint-d-cross-source`; this incurs model cost and must never
+fall back to `StubLLMAnalyzer`. It validates source mapping, the exact nine-step sequence,
+model/prompt/parser provenance, bounded evidence, Grounding and Decision guards; it is neither a
+model-accuracy evaluation without human labels nor another Runtime node. If bounded raw/highlight evidence and
+provenance-backed canonical/fact/scenario evidence are all absent, `EvidenceCoverageReport` must emit
+the vendor-neutral critical `analysis_evidence.unavailable` gap so Decision becomes degraded,
+review-required and non-automatable. Do not encode provider/topic names in this check.
+
+Tenant-specific environment exemptions are post-detection operational policy. PingAn adapters may
+emit provenance-backed generic environment/context candidates, but they cannot emit `safe`,
+`skip_analysis`, a Runtime verdict or closure decision. Governed context resolution and a versioned
+tenant policy may later recommend `nonproduction_exempt`; generic Runtime code must not recognize
+PingAn aliases, hostname substrings or `stg == safe`, and initial rollout remains shadow-only.
 
 Release-level local Alpha acceptance is orchestrated from the repository root by
 `scripts/soc-alpha-acceptance.sh`. `all` resets an isolated output directory, runs representative

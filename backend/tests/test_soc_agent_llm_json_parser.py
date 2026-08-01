@@ -11,6 +11,7 @@ from soc_agent.llm.json_parser import MAX_ANALYSIS_RESPONSE_CHARS
 
 def _valid_payload() -> dict:
     return {
+        "schema_version": "soc.analysis_result.v2",
         "verdict": "suspicious",
         "confidence": 0.76,
         "summary": "存在可疑横向移动迹象，需要复核。",
@@ -21,6 +22,22 @@ def _valid_payload() -> dict:
                 "value": "svchost.exe",
             }
         ],
+        "scenario_assessments": [
+            {
+                "schema_version": "soc.triage_scenario_assessment.v1",
+                "scenario_name": "远程服务横向移动",
+                "scenario_key": "remote_service_lateral_movement",
+                "is_primary": True,
+                "origin": "inferred",
+                "confidence": 0.71,
+                "activity_stage": "attempt_observed",
+                "evidence_indices": [0],
+                "rationale": "进程行为与远程服务使用相符，但缺少目标侧执行结果。",
+                "competing_explanations": ["授权远程运维"],
+            }
+        ],
+        "evidence_gaps": ["缺少目标主机进程树和登录结果。"],
+        "manual_checks": ["查询目标主机同时间窗的登录事件和子进程。"],
         "reason": "检测到远程注册表相关行为，但仍需要资产和历史上下文确认。",
         "recommended_action": "review_and_investigate",
         "knowledge_candidates": [],
@@ -67,10 +84,25 @@ def test_parse_analysis_result_repairs_trailing_comma() -> None:
 def test_parse_analysis_result_repairs_unquoted_keys() -> None:
     raw = """
     {
+      schema_version: "soc.analysis_result.v2",
       verdict: suspicious,
       confidence: 0.76,
       summary: "存在可疑横向移动迹象，需要复核。",
       evidence: [{source: "fact_reconstruction", description: "命中可疑行为", value: "svchost.exe"}],
+      scenario_assessments: [{
+        schema_version: "soc.triage_scenario_assessment.v1",
+        scenario_name: "远程服务横向移动",
+        scenario_key: "remote_service_lateral_movement",
+        is_primary: true,
+        origin: inferred,
+        confidence: 0.71,
+        activity_stage: attempt_observed,
+        evidence_indices: [0],
+        rationale: "进程行为与远程服务使用相符。",
+        competing_explanations: ["授权远程运维"]
+      }],
+      evidence_gaps: ["缺少目标主机进程树。"],
+      manual_checks: ["查询目标主机同时间窗的进程树。"],
       reason: "检测到远程注册表相关行为，但仍需要资产和历史上下文确认。",
       recommended_action: "review_and_investigate",
       knowledge_candidates: []
@@ -173,6 +205,62 @@ def test_parse_analysis_result_rejects_string_confidence() -> None:
 
     assert exc.value.stage == "schema_validation"
     assert "confidence" in str(exc.value)
+
+
+def test_parse_analysis_result_rejects_missing_d7_contract_fields() -> None:
+    payload = _valid_payload()
+    del payload["manual_checks"]
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert exc.value.stage == "schema_validation"
+    assert "manual_checks" in str(exc.value)
+
+
+def test_parse_analysis_result_rejects_scenario_without_one_primary() -> None:
+    payload = _valid_payload()
+    payload["scenario_assessments"][0]["is_primary"] = False
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert exc.value.stage == "schema_validation"
+    assert "exactly one primary" in str(exc.value)
+
+
+def test_parse_analysis_result_rejects_out_of_range_scenario_evidence_index() -> None:
+    payload = _valid_payload()
+    payload["scenario_assessments"][0]["evidence_indices"] = [1]
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert exc.value.stage == "schema_validation"
+    assert "invalid indices" in str(exc.value)
+
+
+def test_parse_analysis_result_allows_unknown_scenario_with_explicit_gap() -> None:
+    payload = _valid_payload()
+    payload["scenario_assessments"] = []
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert parsed.result.scenario_assessments == []
+    assert parsed.result.evidence_gaps
+    assert parsed.result.manual_checks
+
+
+def test_parse_analysis_result_rejects_unknown_scenario_without_gap() -> None:
+    payload = _valid_payload()
+    payload["scenario_assessments"] = []
+    payload["evidence_gaps"] = []
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert exc.value.stage == "domain_validation"
+    assert "evidence gap" in str(exc.value)
 
 
 def test_parse_analysis_result_rejects_missing_evidence() -> None:

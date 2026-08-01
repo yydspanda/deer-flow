@@ -64,3 +64,8 @@ Recommend these as proposals only when needed:
 - `endpoint.process_tree.lookup` when network traffic must be tied to an endpoint process.
 
 Do not directly block IPs/domains or suppress alerts. Route those actions through approval.
+
+## References
+
+- Read `references/c2-and-suspicious-communication.md` for callback, beaconing, proxy/tunnel, malicious outbound, and suspicious communication analysis.
+- Read `references/exploit-success-evidence.md` when deciding whether a network detection shows an attempt, observed response, successful exploit, or confirmed impact.

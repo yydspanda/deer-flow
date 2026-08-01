@@ -162,7 +162,10 @@ contracts
   network-content file metadata must retain the exact message evidence path. In the reviewed source
   contract, `ioc` carries vendor rule/detection descriptors and must not be promoted to a typed IOC
   by value shape. `file_name/file_md5` may create `observed_artifact` evidence but cannot prove an
-  endpoint write, exploit success, or compromise.
+  endpoint write, exploit success, or compromise. Reviewed `rule_name`, `rule_desc`, `attack_type`,
+  `host_state`, and `rule_labels` fields are adapter-owned provider detection assertions. Their exact
+  values may support classification/effect-stage reasoning only when selected high-trust bounded
+  evidence contains the declared path; the adapter still cannot set the Runtime verdict.
 - For PingAn HIDS, `internal_ip/agent_ip` are endpoint identity and provisional impacted-asset
   evidence, not packet source. `external_ip=1.1.1.1` is a typed non-reasoning placeholder. Process
   trees, users and artifacts stay per-message; an observed ppid is retained as generic
@@ -221,8 +224,10 @@ contracts
   must not opt in separately. The implementation does not decode values or mutate raw/parsed
   evidence. Each marker retains kind, original character count, and a 12-character SHA-256 prefix;
   the typed sidecar retains exact path and the complete SHA-256. Sidecar details stay in request/run
-  audit and are omitted from the prompt projection. Marker and sidecar metadata are non-factual and
-  must be excluded from grounding.
+  audit and are omitted from the prompt projection. An exact marker-bearing scalar that is visible
+  in bounded evidence may ground only source-field presence, encoding shape and model-boundary
+  omission. It cannot ground hidden bytes, token validity/identity/privileges, security outcome, or
+  the private complete sidecar hash.
 - Production owns the algorithm under `backend/soc_agent/`. Code in that tree must never import
   `validation.*`; validation tools may import production modules to exercise the exact deployed
   behavior. Architecture tests enforce this dependency direction.
@@ -664,6 +669,33 @@ Authorized activity / 授权活动事实约束：
 - Web `抽样复核` 视图只负责 campaign/inbox 导航。点击条目后把服务端返回的
   `sample_id + proposal_id + queue` 交给 EV-02 capture form；不得建立第二个 outcome 写 API，不得允许手工
   换成 manifest 外 proposal，也不得根据 UI 状态关闭工单或开启 auto-close。
+
+Tenant disposition policy / 租户级处置策略约束：
+
+- `dev/local/staging`、测试资产、租户自定义免处置范围等属于 tenant operational policy，不是通用
+  detection truth、LLM 推断、confirmed memory 或永久白名单。默认通用策略不得假设 `stg == safe`。
+- source adapter 只能输出带 exact provenance 的 vendor-neutral environment/context candidate；不得输出
+  `safe`、`skip_analysis`、canonical disposition 或关闭决定。PingAn/Zeus 字段名只能停留在 PingAn adapter、
+  reviewed tenant mapping 或 fixture。
+- environment/context candidate 必须由 CMDB、authoritative source 或经治理的 tenant mapping 确认后才可参与
+  policy。仅凭 hostname、自由文本或 LLM 识别出的 `stg` 只能保留为 hint，不能触发免处置。
+- Base Runtime 不得因 tenant/environment policy 跳过 normalization、fact reconstruction、bounded analyzer、
+  Grounding 或 `SocDecisionPolicy`。Tenant disposition reconciliation 发生在 detection decision 之后，并写入
+  独立、可审计的 policy decision/proposal。
+- 通用 evaluator 只能消费 typed governed context、detection truth 和 versioned tenant policy；不得包含
+  `if tenant == pingan`、`if "stg" in hostname` 或厂商字段分支。租户差异必须是 data/config/plugin policy，
+  不能是 core code path。
+- policy 至少记录 `tenant_id`、stable policy id/version、typed conditions、environment/asset scope、
+  `valid_from/valid_until`、authoritative source、owner/reviewer/reason、rollout mode、content hash 和 audit
+  metadata。历史 replay 必须使用 alert event time 当时有效的 policy/context version。
+- detection truth 与 operational disposition 必须并存。例如真实命中可保持
+  `actual_verdict=true_positive`，同时由 PingAn 非生产策略建议
+  `operational_disposition=nonproduction_exempt`；不得仅因环境免处置改成 `false_positive`。
+- non-production exemption 与 authorized activity 是不同 policy input。前者描述租户对已确认环境的运营规则；
+  后者证明特定主体、目标、行为和时间范围内的活动获得授权，二者不得互相冒充。
+- 初始实现必须 shadow/recommendation-only，`auto_close_allowed=false`。只有分 policy version 的 replay、
+  analyst override、独立抽样复核、source freshness 和 rollback gate 达标并经授权批准后，才能单独开启自动
+  关单；没有租户 policy 的客户继续进入通用 review 流程。
 
 Security exercise / 护网与红蓝对抗事实约束：
 
@@ -1236,6 +1268,12 @@ normalizers/hids.py
 - high-value gap 规则必须通过 `EvidenceFieldImportanceRule` / `EvidenceFieldImportanceRegistry` 声明。
   Core 默认规则只能使用 vendor-neutral/标准协议语义；供应商字段规则由 adapter 写入 typed extension。
   无效 extension 规则忽略并保留现有 deterministic defaults，不能让一条坏配置中断告警。
+- 如果没有 bounded raw evidence/highlight，且 canonical provenance、role facts、scenario facts
+  也全部为空，Core 必须生成 critical `analysis_evidence.unavailable` gap；不得仅以低置信度或
+  `unknown` verdict 隐式表达上游输入缺失。该 gap 必须触发 `HIGH_VALUE_EVIDENCE_GAP`、degraded
+  evidence、human review 和 `automation_allowed=false`，但不能改写 detection verdict。存在
+  provenance-backed canonical/fact/scenario evidence 的合法通用输入不能仅因没有 raw-message
+  object 而触发该 gap。
 
 ### Normalization maintenance / 归一化维护约束
 
@@ -1310,6 +1348,28 @@ normalizers/hids.py
   - `FactReconstructionResult`。
   - `primary_evidence_path`、`conflict_count`、`conflict_types`、`warnings`。
 - analyzer 输出的 `AnalysisResult.evidence` 必须能引用 fact layer 中的关键不确定性，例如低可信 fallback 和字段冲突。
+- 新 LLM 输出必须使用 `soc.analysis_result.v2`，并显式包含：
+  - open-vocabulary `scenario_assessments`；不得要求场景预先存在于固定 taxonomy。
+  - `origin=upstream_hint|inferred|hybrid`、唯一 primary、未校准 scenario confidence。
+  - `activity_stage=detection_hit|attempt_observed|effect_observed|impact_confirmed|indeterminate`。
+  - 回指同一 `AnalysisResult.evidence` 的零基 `evidence_indices`。
+  - `competing_explanations`、`evidence_gaps`、非空 `manual_checks`。
+- 上游 `ScenarioHypothesis` 是输入提示，不是 LLM 输出真值。模型可以细化或拒绝它，但必须用 bounded
+  evidence 解释；不能把未知场景只埋在自然语言 `reason`。
+- 每个 evidence description 只能解释该项 source/value，不能夹带 sibling-field facts。Parser 负责
+  结构约束；`soc.analysis_evidence_grounding.v2` 额外审计 source/value 和 description：
+  - source/value 落地但 description 引入其他 bounded fact 时，状态必须是
+    `description_context_leakage`，不能算 grounded。
+  - 报告必须同时保留 `matched_context_paths` 与 `foreign_description_context_paths`，只记录路径，
+    不复制额外敏感值。
+  - entity mention 的 synthetic key、显式“不是/不代表/非独立证明”等 disclaimer 不能制造误报。
+  - 精确可见的 `<ENCODED:...:OMITTED>` marker-bearing scalar 只能证明该 source value 存在、
+    encoding shape 和模型边界省略；不能证明隐藏字节、token 有效性/身份/权限、安全结果或私有完整
+    sidecar hash。整段 object-as-string 不能作为 scalar evidence。
+  - `evidence.value` 必须逐字复制最小 scalar leaf，不得自行拼成 `key=value`；同一句需要 IP、端口等
+    多个事实时必须拆为多条 exact-path evidence。
+  - Grounding 不修复模型语义；任何拒绝继续通过既有 Decision Policy 触发 degraded evidence、
+    human review 和 `automation_allowed=false`。
 - deterministic stub 用于 request 结构、trace、replay、golden test 和低成本降级；它不是生产模型质量证明。
 - 真实模型通过 `DeerFlowLLMChatClient` 复用 `deerflow.models.create_chat_model()`；SOC 代码不得再实现一套
   provider SDK、API key 读取或模型 fallback。
@@ -1336,6 +1396,8 @@ normalizers/hids.py
 - parser semantic repair 只允许可证明无损的白名单形状转换并记录精确 repair log。目前只允许
   `verdict: [one_string] -> one_string` 与 `evidence[i].value: [one_scalar] -> one_scalar`；多元素数组、
   类型猜测和内容拼接必须失败并进入 typed Runtime failure。
+- 新模型响应不得带未声明的顶层或 scenario 字段；不得用字符串 confidence、布尔 evidence index、
+  越界 index、重复场景或零/多个 primary 绕过 `AnalysisResult.v2`。
 - Prompt compact JSON、模型响应、`AnalysisResult` 文本字段、evidence 数量/值长度、knowledge candidate
   数量/长度都必须有硬上限；超限必须在 Runtime 中形成 typed failure，不能进入 repair 无限消耗。
 - `DeerFlowLLMChatClient` 只可保存 allowlisted response metadata 和 token usage；provider headers、凭证、
@@ -1864,29 +1926,32 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 | 类型 | 所属层 | 负责什么 | 禁止什么 |
 |---|---|---|---|
 | Lead Agent prompt | DeerFlow `lead_agent` custom agent / `SocAgentChatService` / TUI / Web / Channels | 交互、任务理解、调查计划、选择 skill/tool、提出澄清问题 | 直接改 DB、memory、decision，绕过 core service 执行动作 |
-| Domain skill | DeerFlow `skills/public/soc-*` 或后续 SOC custom skill | 提供 EDR、APT、F5/WAF、资产归属、攻击方向、处置剧本等领域指导 | 自己执行工具、自己写 memory、把候选知识当 confirmed fact |
+| Domain skill | DeerFlow `skills/public/soc-*` 或后续 SOC custom skill | 提供 endpoint、network/APT、web application、email、资产归属、攻击方向等领域指导 | 自己执行工具、自己写 memory、把候选知识当 confirmed fact |
 | Node prompt | `soc_agent/prompts/` | 固定 pipeline 节点内的结构化推理，例如 `llm_analyze` | 自主改变主流程、直接调用 MCP/tool、输出未校验自然语言进入决策层 |
 | MCP/tool adapter | `soc_agent/tools/` / DeerFlow MCP bridge | 查询或执行外部能力 | 绕过 policy、审计、人类审批执行高风险动作 |
 
-当前 `soc-analysis-v3` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费 `LLMAnalysisRequest` 和后续受控 skill context，输出必须进入 `AnalysisResult` parser、schema validation、domain validation、evidence grounding，再由 Runtime 决定后续状态。
+当前 `soc-analysis-v8` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费 `LLMAnalysisRequest` 和后续受控 skill context，输出必须进入 `AnalysisResult.v2` parser、schema validation、domain validation、evidence grounding，再由 Runtime 决定后续状态。
 
-当前 `SocSkillResolver` 已作为薄层落地在 `backend/soc_agent/skills.py`，只输出 DeerFlow skill 名称和结构化 reason，不加载 `SKILL.md` 内容，不绕过 DeerFlow skill system。当前 DeerFlow 可加载的 SOC domain skills 是：
+当前 `SocSkillResolver` 已作为薄层落地在 `backend/soc_agent/skills.py`，只输出 DeerFlow skill 名称和结构化 reason。后续 `build_soc_skill_context()` 通过 DeerFlow parser 校验真实 public Skill package，并只投影包内受审阅、受预算约束的 `references/runtime-guidance.md`；它不把完整 `SKILL.md` 常驻 Runtime prompt，也不绕过 DeerFlow skill system。当前 DeerFlow 可加载的 SOC domain skills 是：
 
 - `soc-alert-triage`
 - `soc-endpoint-triage`
 - `soc-network-apt-triage`
-- `soc-waf-f5-triage`
+- `soc-web-application-triage`
+- `soc-email-phishing-triage`
 - `soc-asset-direction`
+- `soc-asset-extraction`
 
 `SocSkillResolver` 遵循：
 
 - 输入来自 `LLMAnalysisRequest`、`AlertSummary`、confirmed facts 或 analyst-selected context，不读取松散 raw vendor payload。
-- 当前先用 deterministic 规则选择 skill，例如 `source_type=edr/hids` -> `soc-endpoint-triage`，`source_type=f5/waf` -> `soc-waf-f5-triage`，存在方向冲突 -> `soc-asset-direction`。
+- 当前用 deterministic 规则选择 skill，例如 `source_type=edr/hids` -> `soc-endpoint-triage`，typed HTTP 或 `source_type=f5/waf` -> `soc-web-application-triage`，typed email -> `soc-email-phishing-triage`，明确方向冲突 -> `soc-asset-direction`。普通 `tentative/unresolved` 角色属于预期不确定性，不得让方向 Skill 对所有告警常驻。
+- `ExtractedEntities.hosts` 只允许 `EntityKind.HOST`；业务资产、资产 ID 和资产组进入 `assets`。IP/domain/url 的存在本身不证明是 network session，文件元数据本身也不证明存在 endpoint 行为；优先根据 canonical typed observations 路由。
 - LLM 可以在白名单 skill 候选中 rerank 或建议补充 skill，但不能动态加载未知 skill 后直接影响决策。
-- 选中的 skill 作为 bounded context 注入 prompt；必须记录 skill name、skill version/hash、注入摘要和 token 预算。
+- 选中的 Skill 作为 bounded context 注入 prompt；必须记录 skill name、选择原因、命中特征、package hash、guidance source/hash、估算 token 数和预算。
 - Skill 只能产生指导、候选解释、候选查询或 action proposal；写 DB、写 memory、执行 tool 必须回到 service/policy 层。
 
-当前实现：`SocSkillContext` 已接入 `LLMAnalysisRequest.skill_context`、`build_analysis_prompt()`、`JsonLLMAnalyzer.metadata`、`SocAgentChatService` 的 `soc.skill_context` stream event 和 TUI translate。实现只注入 compact summary + sha256 content hash + token budget，不把完整 `SKILL.md` 作为 analysis node prompt 上下文。
+当前实现：`SocSkillContext.v2` 已接入 `LLMAnalysisRequest.skill_context`、`build_analysis_prompt()`、`JsonLLMAnalyzer.metadata`、`SocAgentChatService` 的 `soc.skill_context` stream event 和 TUI translate。Runtime 只注入 Skill package 内的 bounded runtime guidance 及其双 hash/token metadata；完整 `SKILL.md` 和场景 references 仍由 DeerFlow Lead Agent 按需动态读取。`validation/compact_zeus/checkpoint_d` 的 D5 单样本产物验证该边界，D6 对全语料做 typed route/package coverage，D7 只验证真实 Analyzer 的 `AnalysisResult.v2` 结构；D6/D7 都不是 Runtime 新节点，D7 通过也不能替代 D8 Grounding。
 
 SOC Lead Agent profile 安装必须使用 DeerFlow per-user custom-agent storage。当前 `SocLeadAgentProfileInstaller` / `soc agent install-profile` 写入 `.deer-flow/users/{user_id}/agents/soc-triage/config.yaml` 和 `SOUL.md`，默认不覆盖，只有显式 `--overwrite` 才更新；legacy shared 同名 agent 存在时跳过，避免 shadow。不要为 SOC 自建第二套 agent profile storage。
 

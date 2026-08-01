@@ -140,6 +140,31 @@ def test_low_context_alert_needs_review() -> None:
     assert run.status == AnalysisRunStatus.NEEDS_REVIEW
     assert run.decision is not None
     assert run.decision.needs_review is True
+    assert run.llm_analysis_request is not None
+    assert not any(gap.rule_id == "analysis_evidence.unavailable" for gap in run.llm_analysis_request.evidence_coverage.high_value_gaps)
+
+
+def test_empty_analysis_evidence_is_an_explicit_critical_gap() -> None:
+    run = _analyze(
+        {
+            "alert_id": "ALT-NO-EVIDENCE-001",
+            "source": {
+                "source_type": "edr",
+                "source_system": "empty-upstream-alert",
+            },
+            "detection": {"rule_name": "Provider Alert Without Event Evidence"},
+        }
+    )
+
+    assert run.llm_analysis_request is not None
+    gap = next(gap for gap in run.llm_analysis_request.evidence_coverage.high_value_gaps if gap.rule_id == "analysis_evidence.unavailable")
+    assert gap.importance == "critical"
+    assert "evidence unavailable" in gap.reason
+    assert run.decision is not None
+    assert run.decision.evidence_state is DecisionEvidenceState.DEGRADED
+    assert DecisionReviewReason.HIGH_VALUE_EVIDENCE_GAP in run.decision.review_reasons
+    assert run.decision.needs_review is True
+    assert run.decision.automation_allowed is False
 
 
 def test_missing_fields_do_not_break_entity_extraction() -> None:
@@ -449,6 +474,7 @@ def test_pingan_legacy_edr_alert_normalizes_platform_envelope() -> None:
     assert "analyst001" in run.entities.users
     assert "S-1-5-21-example" not in run.entities.users
     assert "HOST-L12267.example.local" in run.entities.hosts
+    assert run.entities.assets == ["3E418648-A4BB-4D1A-A4A3-A7A159C21212"]
     by_key = {mention.key: mention for mention in run.entities.mentions}
     assert by_key["process:svchost.exe"].role == "process_name"
     assert by_key["process:services.exe"].role == "parent_process_name"

@@ -95,7 +95,7 @@ write confirmed memory, or execute side-effect actions.
 | 角色裁决 | Role Resolution | `RoleResolution` | 给出 observed/tentative/conflicted/confirmed/unresolved 状态和暂定值 |
 | 冲突报告 | Conflict Report | `ConflictReport` | 记录上游字段、加工字段、模型结论之间的冲突 |
 | 受限分析证据 | Bounded Analysis Evidence | `BoundedAnalysisEvidence` | 允许进入模型的限长、带来源证据；默认脱敏，批准环境可显式保留原值，不等于完整 raw payload |
-| Skill 选择上下文 | Skill Context | `SocSkillContext` | 当前选择清单、原因、摘要和 hash；不是完整 `SKILL.md` 正文 |
+| Skill 选择上下文 | Skill Context | `SocSkillContext.v2` | 当前选择清单、原因、命中特征、包内 bounded guidance、package/projection hash 与 token budget；不是完整 `SKILL.md` 正文 |
 | 分析运行 | Analysis Run | `AnalysisRun` | 一次 alert 分析的完整记录、trace、result |
 | 决策审计 | Decision Audit | `DecisionAuditRecord` | analyze/replay/correct 的判定沿革和证据策略摘要，不替代完整 run |
 | 业务变更审计 | Mutation Audit | `SocMutationAuditRecord` | L3 服务命令的追加式审计；记录 actor、来源、原因、幂等和有界结果，不保存原始敏感 payload |
@@ -309,7 +309,7 @@ flowchart TD
     N --> X["2. entity_extract<br/>code-first"]
     X --> F["3. fact_reconstruct<br/>RoleClaim + Scenario + Resolution"]
     F --> B["4. build_analysis_input<br/>bounded evidence + coverage"]
-    B --> S["5. skill_context<br/>allowlisted compact guidance"]
+    B --> S["5. skill_context<br/>allowlisted Skill-package guidance"]
     S --> J["📝 Pre-provider Journal<br/>running + bounded metadata"]
     J --> L["6. analyze_stub / analyze_llm<br/>DeerFlow model in explicit mode"]
     L --> V["7. schema_validate<br/>JSON + Pydantic + domain"]
@@ -486,7 +486,10 @@ The system must handle vendor differences without turning the core schema into a
    descriptors rather than typed indicators, so value shape cannot promote it into the threat IOC
    contract. `file_name/file_md5` become provenance-backed `observed_artifact` network-content
    evidence; they do not prove endpoint persistence, exploit success, or compromise. These aliases
-   are owned by `normalizers/pingan_ndr.py`.
+   are owned by `normalizers/pingan_ndr.py`. Reviewed `rule_name`, `rule_desc`, `attack_type`,
+   `host_state`, and `rule_labels` are emitted as generic provider detection assertions. Their exact
+   values may support classification or effect-stage reasoning only when present in selected
+   high-trust bounded evidence; the adapter does not write the Runtime verdict.
 10. PingAn HIDS treats `internal_ip/agent_ip` as endpoint identity and provisional impacted-asset
     evidence, not packet source. The known `external_ip=1.1.1.1` default is retained as a
     non-reasoning `SourceFieldSemantic` and excluded from host/IOC/peer projections. Process trees,
@@ -539,8 +542,10 @@ The system must handle vendor differences without turning the core schema into a
     validation tools import it, while production code is forbidden from importing `validation.*`.
     It never decodes or mutates raw/parsed input. Each marker records encoding kind, original
     character count, and a short SHA-256 prefix; the audit sidecar records exact path and complete
-    SHA-256. The sidecar is omitted from the prompt, and both marker/sidecar metadata are excluded
-    from analyzer evidence grounding.
+    SHA-256. The sidecar is omitted from the prompt. An exact marker-bearing scalar may ground only
+    source-field presence, encoding shape, and model-boundary omission; hidden bytes, token
+    validity/identity/privileges, security outcome, and the private complete sidecar hash remain
+    ungrounded.
 17. Every selected message emits `MessageSchemaObservation`: `recognized` means the deterministic
    parser handled the structure, `degraded` means partial/nested decoding failed, and `unsupported`
    means no parser handled the selected message. A structural fingerprint supports baseline diff.
@@ -553,6 +558,11 @@ The system must handle vendor differences without turning the core schema into a
     `AlertInput.extensions`. The registry evaluates both parsed message views and the selected
     `structured.*` fallback view. It is persisted for audit; the prompt receives only a compact
     coverage summary without vendor paths.
+    If bounded raw evidence, highlights, canonical provenance, role facts, and scenario facts are
+    all absent, Core emits the vendor-neutral critical gap `analysis_evidence.unavailable`. This is
+    evidence quality, not a verdict: Decision Policy degrades evidence state, requires review, and
+    blocks automation. A valid canonical input with provenance-backed facts does not trigger this
+    gap merely because it has no raw-message object.
     Empty/null source leaves do not create false mapping gaps; a non-empty unknown high-value field
     remains an explicit maintenance issue. The NDR/HIDS corpus audit evaluates each non-empty parsed
     leaf instance rather than relying only on path aggregates, so nested `_origin.*`, `payload.*`,
@@ -661,6 +671,7 @@ The system has several confidence-like values, but they are not interchangeable 
 | `MessageSchemaStatus` | Parser completeness: recognized/degraded/unsupported | Drift and maintenance alert; not a probability |
 | `ScenarioHypothesis.confidence` | Versioned deterministic heuristic score | Scenario ordering and review context; currently uncalibrated |
 | `RoleClaim/RoleResolution.semantic_confidence` | Strength of one role interpretation under a scenario | Provisional role explanation and automation guard |
+| `TriageScenarioAssessment.confidence` | LLM self-assessment for one open-vocabulary scenario | Analyst explanation/eval only; must cite `AnalysisResult.evidence` indexes |
 | `AnalysisResult.confidence` | Analyzer/LLM assessment for the verdict | Review display and eval only; cannot bypass validation or approval |
 | `Decision.confidence_source` | Provenance of the raw decision score | Distinguishes stub heuristic, LLM self-report, human confirmation, and external disposition |
 | Correction confirmation strength | Human/external categorical confirmation, optionally supplied by an analyst | Always uncalibrated; policy/explanation/source travel with the number |
@@ -719,6 +730,64 @@ Rules:
 - Successful mock evidence is visible for demo and audit only. Mock, denied, or failed action results
   cannot satisfy scenario tool requirements, raise domain/scenario confidence, or change verdict.
 
+### 5.6 Structured Analyzer Result / 结构化 Analyzer 结果
+
+The bounded analyzer emits `soc.analysis_result.v2`. It does not hide scenario reasoning inside a
+free-text `reason`:
+
+- `scenario_assessments` is open vocabulary. Upstream/deterministic scenario hypotheses are hints;
+  the analyzer may confirm, refine, or reject them.
+- `origin` distinguishes `upstream_hint`, `inferred`, and `hybrid`.
+- A non-empty list has exactly one `is_primary=true`.
+- `activity_stage` separates `detection_hit`, `attempt_observed`, `effect_observed`,
+  `impact_confirmed`, and `indeterminate`. A direct response/state change may be an observed effect
+  without proving material impact.
+- `evidence_indices` reference the same result's bounded `evidence` array. They do not cite raw data
+  outside `LLMAnalysisRequest`.
+- `competing_explanations`, `evidence_gaps`, and `manual_checks` keep uncertainty actionable while
+  still requiring a current verdict.
+- `recommended_action` remains a safe routing suggestion, not an executed action.
+
+`soc-analysis-v8` tells the model that each evidence description must be supported by that item's
+source/value alone, that `evidence.value` must be copied from one scalar leaf, and that IP/port or
+other multi-fact statements require separate exact-path evidence items. A visible encoded-omission
+marker may support only presence/shape/omission, never hidden token content or validity.
+`soc-analysis-json-parser-v5` rejects missing D7 fields, unsupported top-level or
+scenario fields, non-numeric confidence, invalid evidence indexes, duplicate scenarios, and
+zero/multiple primary scenarios. Existing stored v1-shaped objects may deserialize with empty
+defaults, but new model output must explicitly satisfy v2.
+
+Checkpoint D7 uses a real configured model only to prove this output boundary. A structural D7 pass
+does not prove evidence correctness. D8 runs deterministic `soc.analysis_evidence_grounding.v2`:
+
+- source/value mismatch, synthesized `key=value`, private omission-sidecar values, and non-scalar
+  object citations are rejected; an exact visible marker-bearing scalar has the narrower grounding
+  semantics described above;
+- a grounded value whose description imports another bounded fact becomes
+  `description_context_leakage`;
+- `matched_context_paths` and `foreign_description_context_paths` keep the rejection auditable;
+- rejected items remain ungrounded, so existing Decision Policy must produce degraded evidence and
+  human review rather than repairing the model's semantic output.
+
+The latest 2026-08-01 D7/D8 artifacts use `deepseek-v4-pro` with `soc-analysis-v8`. D7 passed its
+typed structural contract with 10 evidence items. D8 accepted 8 and rejected 2 descriptions that
+mixed uncited sibling facts; the trusted bounded provider outcome removed the earlier false
+`unproven_outcome_claim`. Execution passed while quality correctly remained blocked. Re-running the
+stochastic model produced different citation mistakes, which confirms that Prompt guidance cannot
+replace deterministic Grounding. D9 consumed the persisted D5/D7/D8 lineage and invoked the
+production `SocDecisionPolicy` without another model call or persistence. It preserved the
+`suspicious` detection verdict while producing `evidence_state=degraded`, `needs_review=true`, six
+structured review reasons and `automation_allowed=false`. D10 then replayed the complete production
+Runtime with the configured `deepseek-v4-pro` analyzer for one median-shaped representative from each
+of 8 topics plus both known empty-input rows. All 10 real calls completed across 6 source families,
+using 167,042 tokens and producing 8 `suspicious`, 1 `needs_review`, and 1 `unknown` result. Grounding
+accepted 67 of 87 evidence items and rejected 20, including 14 description-context leakages, so the
+matrix passed its execution contract with quality findings and every Decision remained review-only
+with automation disabled. The empty rows exposed the generic critical
+`analysis_evidence.unavailable` gap rather than allowing the model to invent missing input. The next
+boundary is D11 full 212-row deterministic compatibility/replay-stability testing; it is deliberately
+separate from this paid live-model quality sample and is not a model-accuracy claim.
+
 ---
 
 ## 6. SOC Lead Agent, Skills, MCP, and Tools / 智能体、技能、MCP、工具
@@ -737,7 +806,7 @@ SOC Lead Agent 的定位：
 flowchart TD
     Analyst["👤 Analyst"] --> Lead["🤖 SOC Lead Agent<br/>DeerFlow lead_agent profile"]
     Lead --> Context["📚 Bounded Review Context<br/>queue item / evidence / memory / external feedback"]
-    Lead --> Skill["🧩 SOC Skills<br/>APT / EDR / HIDS / Asset / Endpoint"]
+    Lead --> Skill["🧩 SOC Skills<br/>Network / Endpoint / Web / Email / Asset"]
     Lead --> Proposal["📌 Action Proposal<br/>what to check / who should review"]
     Proposal --> Router{"🛡️ Action Boundary"}
     Router -->|"read-only"| Adapter["🛠️ Action Adapter / MCP<br/>asset.lookup / process_tree.lookup / threat_intel.lookup"]
@@ -759,6 +828,22 @@ flowchart TD
 | Repeated operational conclusion / 历史处置经验 | Memory candidate then confirmed memory | This rule often flips attacker/victim direction under condition X |
 | Eval sample / 验证样本 | Eval fixture | Desensitized APT/EDR/HIDS examples |
 | Prompt fragment / 提示词片段 | Only if it is stable role/task instruction | Output requirements, evidence discipline |
+
+Public SOC Skill taxonomy is capability-oriented rather than vendor-oriented:
+
+- `soc-alert-triage` is the baseline evidence/verdict discipline.
+- `soc-network-apt-triage`, `soc-endpoint-triage`, `soc-web-application-triage`, and
+  `soc-email-phishing-triage` own reusable domain methods.
+- `soc-asset-direction` is selected for explicit role/direction ambiguity; ordinary tentative or
+  unresolved roles do not make it a global default.
+- `soc-asset-extraction` is selected for explicit extraction work or high-value mapping gaps, not
+  simply because a normalized entity already exists.
+
+Each public package may contain detailed `references/` for DeerFlow's dynamic Lead Agent loading.
+The deterministic Runtime uses only the reviewed `references/runtime-guidance.md` projection and
+records its source, package hash, guidance hash, estimated token count and budget in
+`SocSkillContext.v2`. This keeps one Skill package as the method source of truth without placing old
+Zeus long prompts or the full `SKILL.md` into every model call.
 
 ### 6.2 Sub Agent Strategy / 子智能体策略
 
@@ -1062,6 +1147,50 @@ Rules:
 - The canonical disposition remains `closed_benign_true_positive`; use a reason code such as
   `authorized_security_exercise` instead of creating one status per campaign type.
 
+#### 7.4.3 Tenant Disposition Policy / 租户级处置策略
+
+Environment and customer-specific operating rules are disposition context, not detection truth.
+For example, PingAn may decide that a confirmed `dev/local/staging` asset does not require an
+operational response. The product must support that rule without teaching the generic Runtime that
+`stg == safe` and without skipping technical analysis.
+
+```mermaid
+flowchart LR
+    A["Vendor Adapter<br/>environment hint"] --> C["Governed Context Resolver<br/>CMDB / trusted mapping"]
+    C --> R["Full Runtime Analysis<br/>detection truth + evidence"]
+    R --> P["Tenant Disposition Policy<br/>tenant + scope + version"]
+    P --> D["Operational Disposition<br/>review / exempt / escalate"]
+```
+
+Required separation:
+
+- A vendor adapter may emit a generic `EnvironmentClaim` or other context candidate with exact
+  provenance. It must not emit `safe`, `skip_analysis`, a Runtime verdict, or a closure decision.
+- A governed resolver confirms environment and applicability through an authoritative source such
+  as CMDB, or a reviewed tenant mapping. A hostname containing `stg` is only a hint unless that
+  mapping is explicitly governed as authoritative.
+- The fixed Runtime still performs normalization, fact reconstruction, bounded analysis, Grounding
+  and detection Decision. Tenant policy is reconciled after detection; it must not short-circuit the
+  technical analysis path.
+- A tenant policy is configuration/data with `tenant_id`, stable policy id and version, typed
+  conditions, environment/asset scope, validity, owner/reviewer, reason, rollout mode and audit
+  metadata. PingAn field aliases remain in its adapter or tenant mapping, never in generic policy
+  evaluation code.
+- A matched non-production policy may produce `operational_disposition=nonproduction_exempt` or an
+  equivalent canonical recommendation while preserving `detection_truth=true_positive` when the
+  detection is real. It must not relabel the event as `false_positive` merely because the target is
+  non-production.
+- Authorization and non-production exemption are separate policies. A scoped red-team or automation
+  authorization proves an activity was allowed; an environment policy expresses how that tenant
+  operates alerts for a confirmed environment.
+- Initial rollout is recommendation/shadow-only. Auto-close remains disabled until versioned replay,
+  override, sampled-review and rollback gates pass. Other tenants without this policy keep the
+  generic review behavior.
+
+The intended user-visible conclusion keeps both dimensions explicit, for example: “Weak-password
+activity was detected; the target is a confirmed PingAn staging asset; PingAn policy v1 recommends no
+operational action.” This is a governed policy result, not LLM memory or a universal security fact.
+
 ---
 
 ## 8. Data Contracts / 数据契约
@@ -1094,6 +1223,8 @@ not require rewriting core contracts.
 | `GovernedContextFact` | Shared typed fact envelope and lifecycle | GF-01 implemented stable contract |
 | `AuthorizedActivityPayload` | Time-, scope- and source-bounded authorized activity definition | GF-01 storage + AA-01 deterministic matcher implemented |
 | `SecurityExerciseCampaignFact` | Campaign scope and Rules of Engagement | Planned typed fact |
+| `TenantDispositionPolicy` | Versioned tenant-specific operating rule over governed context and detection truth | Planned; generic evaluator, tenant-owned data |
+| `TenantPolicyDecision` | Auditable match/no-match result and operational recommendation | Planned; cannot mutate detection truth or skip Runtime |
 | `ExerciseParticipantFact` | Event-time participant role and identifier mapping | Planned typed fact |
 | `ParticipantAttributionResult` | Deterministic participant identity resolution | Planned typed result |
 | `AuthorizationQuery` | Vendor-neutral event-time matching input | AA-01 implemented stable contract |
@@ -1430,11 +1561,14 @@ label set. It keeps one canonical row per alert ID, retains legacy conflicts as 
 the source PKL rows unchanged. Checkpoint D is reviewed incrementally: D-0 inventories only the raw
 corpus structure and evidence availability; D-1 through D-3 review normalization, entities and facts;
 D-4 reviews the production bounded analysis request and exact evidence coverage without running
-skills, Prompt, model, grounding, decision or persistence. The internal gitignored D-4 review uses
+Skill resolution, Prompt, model, grounding, decision or persistence. D-5 then validates only
+deterministic Skill selection and bounded package guidance projection; D-6 is a 212-row offline route
+coverage audit for typed HTTP/email, host-vs-asset semantics, and package availability, not a Runtime
+node. The internal gitignored D-4 review uses
 explicitly approved `full` mode, while generic deployments remain `redact` by default. Encoded-span
 compaction remains a separate token-budget mechanism and never rewrites immutable raw input. Later
-steps move from one representative sample to cross-source smoke and finally the 212-row deterministic
-Runtime replay. Historical `agent_response`
+steps move from one representative sample to analyzer/decision review, a paid live-model cross-source
+sample, and finally the 212-row deterministic Runtime compatibility replay. Historical `agent_response`
 values remain model outputs, and a corpus with no analyst `ground_label` cannot support accuracy,
 calibration, suppression, or automation claims. The generated PKL, manifest and rich reports contain
 or derive from internal alerts and remain gitignored.
@@ -1501,6 +1635,7 @@ production labels, operational SLOs, and high-risk response adapters are still u
 | Reuse DeerFlow `create_chat_model` for Runtime LLM | One provider/config/tracing implementation; no SOC-specific SDK client |
 | Centralize detection decisions in `SocDecisionPolicy` | Keep confidence provenance, grounding guards and detection review reasons deterministic and auditable |
 | Reconcile operational disposition separately and deterministically | Preserve `detection truth != operational disposition`; authorization may make a true positive benign but cannot make the behavior disappear |
+| Treat environment exemptions as tenant disposition policy | Support PingAn non-production operations without encoding `stg == safe`, skipping analysis, or changing generic detection truth |
 | Use a typed `GovernedContextFact` envelope | Reuse tenant, event-time validity, source, status, revocation and audit without creating an untyped universal fact matcher |
 | Compose exercise attribution and authorization | A red/blue/white-team identity match does not by itself authorize the observed target or behavior |
 | Use canonical `AlertInput` | Vendor-neutral core |

@@ -44,12 +44,29 @@ def _analysis_json(*, trailing_comma: bool = False) -> str:
     suffix = "," if trailing_comma else ""
     return f"""
     {{
+      "schema_version": "soc.analysis_result.v2",
       "verdict": "true_positive",
       "confidence": 0.91,
       "summary": "LLM 判断该告警包含高危外联线索。",
       "evidence": [
         {{"source": "detection", "description": "规则命中高危行为", "value": "EDR-IOC-001"}}
       ],
+      "scenario_assessments": [
+        {{
+          "schema_version": "soc.triage_scenario_assessment.v1",
+          "scenario_name": "恶意外联",
+          "scenario_key": "malicious_outbound",
+          "is_primary": true,
+          "origin": "inferred",
+          "confidence": 0.84,
+          "activity_stage": "attempt_observed",
+          "evidence_indices": [0],
+          "rationale": "规则命中高危外联行为。",
+          "competing_explanations": ["授权安全测试"]
+        }}
+      ],
+      "evidence_gaps": ["缺少终端进程与网络连接关联。"],
+      "manual_checks": ["查询源主机同时间窗的进程网络连接。"],
       "reason": "存在可解释的高危行为证据，需要升级复核。",
       "recommended_action": "escalate_to_analyst"{suffix}
     }}
@@ -85,6 +102,7 @@ def test_json_llm_analyzer_runs_prompt_client_parser_and_runtime_trace() -> None
     assert run.status == AnalysisRunStatus.NEEDS_REVIEW
     assert run.analysis is not None
     assert run.analysis.verdict == Verdict.TRUE_POSITIVE
+    assert run.analysis.scenario_assessments[0].scenario_name == "恶意外联"
     assert run.model_name == "soc-model-response"
     assert run.prompt_version == ANALYSIS_PROMPT_VERSION
     assert run.decision is not None

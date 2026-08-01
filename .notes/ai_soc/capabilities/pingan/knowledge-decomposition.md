@@ -55,7 +55,8 @@ PingAn docs
 | `soc-asset-extraction` | 从 bounded context 抽取 IP/DOMAIN/URL/HOST/USER/UM 等资产；生成 lookup proposal | 平安 BU/PA code 映射表、Zeus 查询方式 |
 | `soc-endpoint-triage` | EDR/XDR/endpoint 进程树、命令行、路径、用户、权限、横向移动研判方法 | 平安安全软件路径、特定账号、特定部门 |
 | `soc-network-apt-triage` | APT/NDR/NIDS/C2/IOC/HTTP 攻击方向和攻击成功证据 | 天眼具体字段模板、平安内部域名例外 |
-| `soc-waf-f5-triage` | HTTP、WAF/F5、XFF、URI、web attack、代理链和抑制目标判断 | 平安 F5 策略名、内部业务域名白名单 |
+| `soc-web-application-triage` | HTTP、WAF/F5、XFF、URI、web attack、代理链和抑制目标判断 | 平安 F5 策略名、内部业务域名白名单 |
+| `soc-email-phishing-triage` | 可疑邮件、发件人、投递、正文意图、URL、附件、QR 和用户影响判断 | 平安 VIP/可信发件人、内部邮箱 ID、特定活动例外 |
 
 ### HIDS 的处理
 
@@ -77,7 +78,7 @@ PingAn docs
 | APT 攻击方向、内到外/外到内/内到内/我方攻击互联网的判断方法 | `soc-network-apt-triage` + domain handler |
 | 天眼/Zeus 字段方向不可靠，raw message 和五元组优先 | `soc-asset-direction` + PingAn field trust rule |
 | `attack_type` 到场景的映射 | adapter/domain router config，不写死通用 skill |
-| SQLi/XSS/webshell/文件读取/弱口令等通用攻击成功证据 | `soc-network-apt-triage` / `soc-waf-f5-triage` |
+| SQLi/XSS/webshell/文件读取/弱口令等通用攻击成功证据 | `soc-network-apt-triage` / `soc-web-application-triage` |
 | URI 含内部业务路径、内部域名、特殊主机例外 | PingAn `environment_fact` / `benign_pattern` memory |
 | 威胁情报 IP 评分、黑白名单、渗透测试名单 | read-only MCP/action adapter |
 | IP 封堵策略、strategyId、封堵时长 | high-risk action adapter + policy/config |
@@ -160,7 +161,7 @@ SOC Lead Agent prompt 只应该包含这些稳定规则：
 - 按 source/domain/entity/conflict 选择 skill。
 - EDR/HIDS/host/process/user 走 endpoint/host skill。
 - APT/NIDS/NDR/IOC/HTTP 走 network/APT skill。
-- WAF/F5/HTTP proxy/XFF 走 WAF/F5 skill。
+- WAF/F5/HTTP proxy/XFF 走 web application skill；可疑邮件 typed evidence 走 email phishing skill。
 - 资产方向不清楚时走 asset-direction + asset-extraction。
 - 需要外部事实时发 read-only action proposal。
 - 涉及封禁、隔离、禁用账号、改工单、下策略时发 high-risk/analyst-write proposal。

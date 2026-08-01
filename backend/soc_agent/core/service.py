@@ -4125,6 +4125,7 @@ def _entity_keys(run: AnalysisRun) -> list[str]:
         *(f"process:{value}" for value in run.entities.processes),
         *(f"user:{value}" for value in run.entities.users),
         *(f"host:{value}" for value in run.entities.hosts),
+        *(f"asset:{value}" for value in run.entities.assets),
         *(f"rule_code:{value}" for value in run.entities.rule_codes),
         *(f"rule_name:{value}" for value in run.entities.rule_names),
         *(f"rule:{value}" for value in run.entities.rules if value),

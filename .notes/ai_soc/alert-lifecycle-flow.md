@@ -172,7 +172,7 @@ flowchart TD
     E --> F["2️⃣ entity_extract<br/>抽取 IP / host / user / process / rule"]
     F --> G["3️⃣ fact_reconstruct<br/>重建事实、角色、字段可信度和冲突"]
     G --> H["4️⃣ build_analysis_input<br/>构造 LLMAnalysisRequest"]
-    H --> I["5️⃣ skill_context<br/>选择白名单 SOC skills"]
+    H --> I["5️⃣ skill_context<br/>白名单选择 + Skill-package bounded guidance"]
     I --> PJ["📝 Pre-provider journal<br/>running + bounded metadata"]
     PJ --> J["6️⃣ analyze_stub / LLM analyzer<br/>受控分析节点"]
     J --> K["7️⃣ schema_validate<br/>Pydantic schema + domain validation"]
@@ -202,11 +202,11 @@ flowchart TD
 | `entity_extract` | Extract security entities | 抽取 IP、域名、URL、host、user/UM、process、file、rule_code/rule_name 等实体 | `ExtractedEntities` |
 | `fact_reconstruct` | Rebuild and adjudicate facts | 把厂商字段声明转换为 `RoleClaim`，结合场景假设裁决 source/destination/attacker/victim/impacted asset；只在同一 observation 内判冲突，不把不同请求或不同进程执行压成一条会话；冲突时给暂定结论、证据缺口和核查清单，但不确定 response target | `FactReconstructionResult v2`, `RoleResolution`, `ConflictReport` |
 | `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型；按结构化字段和高价值优先级构造合法 JSON 投影，精确记录 projected/sanitized/omitted path，跨消息保留关键请求和进程证据 | `LLMAnalysisRequest` |
-| `skill_context` | Resolve SOC skills | 根据 source type、场景、实体、冲突选择 SOC skills；当前产物是名称/原因/摘要/hash 的选择清单，不是完整 `SKILL.md` 正文 | `SocSkillContext` |
+| `skill_context` | Resolve and project SOC skills | 根据 canonical typed source/entity/conflict 选择 SOC Skills，再从真实 public package 投影受预算约束的 `runtime-guidance.md`；记录选择原因、package/guidance hash 和 token accounting，不注入完整 `SKILL.md` | `SocSkillContext.v2` |
 | `pre-provider journal` | Commit non-rollbackable call metadata | 在调用 analyzer/provider 前先把同一个 run 以 `running` 落到 `soc_analysis_runs`；只写 request hash/schema、模型、步骤、来源、证据计数、skill、request/trace/actor 和哈希后的幂等键，不写渲染 prompt、provider header/response、credential/token | `AnalysisRequestJournal` |
-| `analyze_stub / LLM analyzer` | Run bounded reasoning | 默认 deterministic stub；显式选择后通过 DeerFlow `create_chat_model` 调用真实模型，输出仍必须经过 JSON/schema/domain validation | `AnalysisNodeOutput` |
-| `schema_validate` | Validate model result | 严格校验 JSON schema、字段类型、domain rule，坏 JSON 需要 repair 后再校验 | `AnalysisResult` |
-| `evidence_grounding` | Ground model claims | 对每条 `AnalysisResult.evidence` 校验唯一精确 source 是否是实际 bounded path，value 是否存在，并区分 `#parsed/#decoded/#repaired`；拒绝 composite citation，HTTP 200/工单状态等若被模型扩写成“攻击成功”则标为未证实 outcome claim | `AnalysisEvidenceGroundingReport` |
+| `analyze_stub / LLM analyzer` | Run bounded reasoning | 默认 deterministic stub；显式选择后通过 DeerFlow `create_chat_model` 调用真实模型。输出当前 verdict，并把开放场景、来源、行为阶段、竞争解释、证据缺口和人工核查项结构化；上游场景只是提示 | `AnalysisNodeOutput`, `AnalysisResult.v2`, `TriageScenarioAssessment` |
+| `schema_validate` | Validate model result | 严格校验 JSON schema、字段类型和 domain rule；坏 JSON 只允许有审计记录的无损 repair。场景列表非空时只能有一个 primary，evidence index 必须回指本结果，未知字段被拒绝 | `AnalysisResult.v2` |
+| `evidence_grounding` | Ground model claims | `soc.analysis_evidence_grounding.v2` 对每条 `AnalysisResult.evidence` 校验唯一精确 source、逐字 scalar value 和 description；区分 `#parsed/#decoded/#repaired`，拒绝 composite citation、拼接 `key=value`、object-as-string 和未证实 outcome。精确可见的 encoded-omission marker 只证明值存在、编码形态和模型边界省略，不证明隐藏内容/有效性。source/value 虽落地但 description 夹带 sibling facts 时标为 `description_context_leakage`，同时记录 matched/foreign paths 并计入 ungrounded | `AnalysisEvidenceGroundingReport v2` |
 | `decide` | Apply deterministic decision policy | `SocDecisionPolicy` 将已校验结果转换成 operational decision；保留 raw confidence 来源、校准状态、证据状态、结构化复核原因和 policy version。当前 stub/LLM 分数均未校准，因此必须复核；高分不能覆盖冲突、schema 降级、关键证据缺口、截断或误报确认 | `Decision` |
 | `normalization_monitor` | Detect parser/mapping maintenance work | 在业务结果已落库后检查基线、新结构、解析降级、关键字段缺口和 evidence truncation；失败只写 warning | `NormalizationMonitoringResult`, `NormalizationMaintenanceIssue` |
 

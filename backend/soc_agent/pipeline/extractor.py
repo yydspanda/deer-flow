@@ -307,7 +307,8 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
     emails = _values_by_kind(mentions, EntityKind.EMAIL)
     processes = _values_by_kind(mentions, EntityKind.PROCESS)
     users = _values_by_kind(mentions, EntityKind.USER)
-    hosts = _dedupe([*_values_by_kind(mentions, EntityKind.HOST), *_values_by_kind(mentions, EntityKind.ASSET)])
+    hosts = _values_by_kind(mentions, EntityKind.HOST)
+    assets = _values_by_kind(mentions, EntityKind.ASSET)
     rule_codes = _values_by_kind(mentions, EntityKind.RULE_CODE)
     rule_names = _values_by_kind(mentions, EntityKind.RULE_NAME)
     rules = _dedupe([*rule_codes, *rule_names, *_values_by_kind(mentions, EntityKind.RULE)])
@@ -330,6 +331,7 @@ def extract_entities(alert: AlertInput) -> ExtractedEntities:
         processes=processes,
         users=users,
         hosts=hosts,
+        assets=assets,
         rule_codes=rule_codes,
         rule_names=rule_names,
         rules=rules,

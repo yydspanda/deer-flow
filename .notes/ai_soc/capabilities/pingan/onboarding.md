@@ -113,7 +113,7 @@ field experience
 | P0 | APT 攻击方向重建 | skill + domain handler | skill 有基础，domain handler 未落地 | 收集方向判断规则、raw message 示例、反例 |
 | P0 | EDR 进程树研判 | read-only adapter + domain handler | `endpoint.process_tree.lookup` mock 已落地 | 收集真实 EDR process tree 字段和 finding 模板 |
 | P1 | HIDS 主机事件研判 | skill + domain handler | 未落地 | 收集 HIDS 事件类型、关键字段、误报规则 |
-| P1 | F5/WAF 攻击方向和抑制目标 | skill + domain handler | `soc-waf-f5-triage` skill 有基础 | 收集 URI、method、source/target、抑制目标规则 |
+| P1 | F5/WAF 攻击方向和抑制目标 | skill + domain handler | `soc-web-application-triage` skill 有基础 | 收集 URI、method、source/target、抑制目标规则 |
 | P1 | 历史相似告警复用 | correlation service | 下一刀 | 基于 summary/evidence 先做 deterministic |
 | P2 | 处置动作：封禁/隔离/策略下发 | high-risk adapter | approval boundary 已有，真实执行未开 | 等 staging 工具和审批策略成熟 |
 | P2 | 经验记忆和 lesson | memory candidate | 方案已有，代码未收口 | 等 domain/correlation 输出稳定后接入 |
@@ -163,7 +163,7 @@ field experience
 | Card ID | 来源 | 名称 | 默认落点 | 为什么先做 |
 |---|---|---|---|---|
 | `PA-APT-001` | `PA-APT-SRC` | APT 攻击方向重建 | `soc-network-apt-triage` + domain handler + field trust eval | 上游方向字段可能反，直接影响受害资产和抑制目标 |
-| `PA-APT-002` | `PA-APT-SRC` | APT 攻击类型场景化研判 | `soc-network-apt-triage` / `soc-waf-f5-triage` + domain handler | 不同攻击类型证据不同，必须区分攻击尝试和攻击成功 |
+| `PA-APT-002` | `PA-APT-SRC` | APT 攻击类型场景化研判 | `soc-network-apt-triage` / `soc-web-application-triage` + domain handler | 不同攻击类型证据不同，必须区分攻击尝试和攻击成功 |
 | `PA-APT-003` | `PA-APT-SRC` | 威胁情报 IP 查询 | read-only `threat_intel.ip_reputation.lookup` | APT 判断经常需要外部情报，但只能作为 evidence |
 | `PA-APT-004` | `PA-APT-SRC` | 授权/白名单/演练标签查询 | read-only `security_tag.lookup` | 避免把授权扫描、演练、白名单误判为攻击 |
 | `PA-EDR-001` | `PA-EDR-SRC` | EDR 进程树研判 | `soc-endpoint-triage` + existing `endpoint.process_tree.lookup` | EDR 是否真实入侵主要靠进程链和命令行证据 |

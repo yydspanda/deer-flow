@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from soc_agent.contracts import (
     AlertInput,
     BoundedAnalysisEvidence,
+    EvidenceCoverageGap,
     EvidenceCoverageOmission,
     EvidenceCoverageReport,
     EvidenceInputPolicy,
@@ -202,6 +203,24 @@ def build_evidence_coverage_report(
     fact_paths = [item.evidence_path for item in fact.role_claims]
     scenario_paths = [path for item in fact.scenario_hypotheses for path in item.evidence_paths]
     high_value_gaps = EvidenceFieldImportanceRegistry.for_alert(alert).find_gaps(alert, parsed_by_path)
+    if not any(
+        (
+            evidence_by_path,
+            highlighted_path_set,
+            canonical_paths,
+            fact_paths,
+            scenario_paths,
+        )
+    ):
+        high_value_gaps.append(
+            EvidenceCoverageGap(
+                field_path="input_payload",
+                expected_target="llm_analysis_request.primary_evidence",
+                reason=("upstream input evidence unavailable: no bounded raw, canonical, fact, or scenario evidence could be projected"),
+                rule_id="analysis_evidence.unavailable",
+                importance="critical",
+            )
+        )
 
     warnings: list[str] = []
     for observation in message_schemas:

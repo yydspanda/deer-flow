@@ -1188,6 +1188,20 @@ def test_pingan_ndr_preserves_file_observations_without_promoting_vendor_ioc() -
     assert request.evidence_coverage.high_value_gaps == []
 
 
+def test_pingan_ndr_marks_reviewed_detection_fields_as_upstream_assertions() -> None:
+    message = 'skyeye|!{"sip":"30.1.1.10","dip":"30.2.2.20","rule_name":"成功失陷","rule_desc":"弱口令登录检测","attack_type":"弱口令","host_state":"攻击成功","rule_labels":"{\\"category\\":\\"弱口令\\"}"}'
+
+    alert = normalize_alert_payload(_payload(message, topic="sec_guard_apt", topic_name="SkyEye APT"))
+    semantics = {item["field_path"].split("#", 1)[-1]: item for item in alert.extensions["source_field_semantics"]}
+
+    assert semantics["parsed.rule_name"]["semantic_type"] == ("provider_detection_rule_name_assertion")
+    assert semantics["parsed.attack_type"]["semantic_type"] == ("provider_detection_classification_assertion")
+    assert semantics["parsed.host_state"]["semantic_type"] == ("provider_detection_outcome_assertion")
+    assert semantics["parsed.host_state"]["participates_in_reasoning"] is True
+    assert semantics["parsed.rule_labels"]["semantic_type"] == ("provider_detection_rule_label_assertion")
+    assert semantics["decoded.rule_labels"]["semantic_type"] == ("provider_detection_rule_label_assertion")
+
+
 def test_pingan_hids_keeps_network_direction_event_scoped() -> None:
     first = 'qtAlert event_type="bounce_shell" internal_ip="30.3.3.30" external_ip="1.1.1.1" host_name="host-30" agent_id="agent-30" pname="bash" pid="100" cmd="bash -i" dst_ip="198.51.100.9" port="4444"'
     second = 'qtAlert event_type="honey_file" internal_ip="30.3.3.30" host_name="host-30" uname="app" process_chain="java(10)->touch(11)" file_path="/srv/decoy.txt" md5="0123456789abcdef0123456789abcdef"'

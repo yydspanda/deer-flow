@@ -11,6 +11,9 @@ from soc_agent.contracts import (
     AnalysisResult,
     EvidenceItem,
     LLMAnalysisRequest,
+    TriageActivityStage,
+    TriageScenarioAssessment,
+    TriageScenarioOrigin,
     Verdict,
 )
 
@@ -84,6 +87,21 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
                 EvidenceItem(source="entities", description="抽取到的进程实体", value=", ".join(entities.processes)),
                 *context_evidence,
             ],
+            scenario_assessments=[
+                TriageScenarioAssessment(
+                    scenario_name="授权扫描或安全工具活动",
+                    scenario_key="authorized_security_activity",
+                    is_primary=True,
+                    origin=TriageScenarioOrigin.INFERRED,
+                    confidence=0.72,
+                    activity_stage=TriageActivityStage.DETECTION_HIT,
+                    evidence_indices=[0],
+                    rationale="规则或实体文本命中扫描器、批准工具等启发式线索。",
+                    competing_explanations=["未经授权的扫描或攻击工具伪装"],
+                )
+            ],
+            evidence_gaps=["缺少带有效期、范围和来源的授权活动事实。"],
+            manual_checks=["核对该工具、源资产、目标范围和事件时间是否落在有效授权窗口内。"],
             reason=f"当前证据更符合授权扫描或安全工具活动，但 deterministic stub 不自动关闭告警。{reason_suffix}",
             recommended_action="review_and_close_if_approved",
         )
@@ -102,6 +120,21 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
                 EvidenceItem(source="command_line", description="命令行或进程包含攻击特征", value=process.command_line),
                 *context_evidence,
             ],
+            scenario_assessments=[
+                TriageScenarioAssessment(
+                    scenario_name="高风险攻击行为或恶意工具活动",
+                    scenario_key="high_risk_security_behavior",
+                    is_primary=True,
+                    origin=TriageScenarioOrigin.INFERRED,
+                    confidence=0.8,
+                    activity_stage=TriageActivityStage.ATTEMPT_OBSERVED,
+                    evidence_indices=[0],
+                    rationale="规则、IOC、进程或命令文本命中高风险启发式线索。",
+                    competing_explanations=["安全测试工具、误标 IOC 或合法运维行为"],
+                )
+            ],
+            evidence_gaps=["缺少独立的执行结果、主机影响或业务影响证据。"],
+            manual_checks=["核对进程树、网络连接和资产侧结果，确认是否产生实际效果或影响。"],
             reason=f"检测到高风险关键字，需要分析师优先复核和升级调查。{reason_suffix}",
             recommended_action="escalate_to_analyst",
         )
@@ -114,6 +147,8 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
             EvidenceItem(source="alert_id", description="告警已进入固定分析流程", value=request.alert_id),
             *context_evidence,
         ],
+        evidence_gaps=["缺少可稳定识别场景及判断真伪的行为、历史或环境证据。"],
+        manual_checks=["补查原始行为上下文、资产归属和同时间窗相关事件后重新研判。"],
         reason=f"缺少历史关联、环境知识或明确 IOC，不能可靠自动判断。{reason_suffix}",
         recommended_action="needs_human_review",
     )

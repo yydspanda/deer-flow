@@ -36,6 +36,7 @@ def _corpus() -> pd.DataFrame:
                                     "dport": "443",
                                     "proto": "tcp",
                                     "host": "example.test",
+                                    "asset_group": "Example Business Unit",
                                     "attack_type": "test-attempt",
                                 }
                             )
@@ -88,12 +89,15 @@ def test_entity_extraction_review_matches_d1_and_emits_deterministic_mentions() 
     assert all(review["acceptance"]["checks"].values())
     extraction = review["entity_extraction"]
     assert extraction["kind_counts"] == {
+        "asset": 1,
         "domain": 2,
         "ip": 2,
         "rule": 1,
         "rule_code": 1,
         "rule_name": 1,
     }
+    assert extraction["entities"]["hosts"] == []
+    assert extraction["entities"]["assets"] == ["Example Business Unit"]
     assert extraction["extraction_report"]["warnings"] == [
         "no process entity extracted"
     ]

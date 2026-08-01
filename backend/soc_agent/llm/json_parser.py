@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from soc_agent.contracts import AnalysisResult
 
-ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v4"
+ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v5"
 MAX_ANALYSIS_RESPONSE_CHARS = 100_000
 MAX_STRUCTURED_EVIDENCE_VALUE_CHARS = 4_000
 
@@ -267,6 +267,39 @@ def _validate_analysis_result_data(data: dict[str, Any], *, repair_applied: bool
 
 
 def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) -> None:
+    required_fields = {
+        "schema_version",
+        "verdict",
+        "confidence",
+        "summary",
+        "evidence",
+        "scenario_assessments",
+        "evidence_gaps",
+        "manual_checks",
+        "reason",
+        "recommended_action",
+    }
+    allowed_fields = {*required_fields, "knowledge_candidates"}
+    missing_fields = sorted(required_fields - data.keys())
+    if missing_fields:
+        raise LLMOutputParseError(
+            f"LLM output is missing required fields: {', '.join(missing_fields)}",
+            stage="schema_validation",
+            repair_applied=repair_applied,
+        )
+    unknown_fields = sorted(data.keys() - allowed_fields)
+    if unknown_fields:
+        raise LLMOutputParseError(
+            f"LLM output contains unsupported fields: {', '.join(unknown_fields)}",
+            stage="schema_validation",
+            repair_applied=repair_applied,
+        )
+    if data.get("schema_version") != "soc.analysis_result.v2":
+        raise LLMOutputParseError(
+            "LLM output schema_version must be 'soc.analysis_result.v2'",
+            stage="schema_validation",
+            repair_applied=repair_applied,
+        )
     confidence = data.get("confidence")
     if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
         raise LLMOutputParseError(
@@ -274,6 +307,70 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
             stage="schema_validation",
             repair_applied=repair_applied,
         )
+    scenario_assessments = data.get("scenario_assessments")
+    if not isinstance(scenario_assessments, list):
+        raise LLMOutputParseError(
+            "LLM output scenario_assessments must be a JSON array",
+            stage="schema_validation",
+            repair_applied=repair_applied,
+        )
+    for index, assessment in enumerate(scenario_assessments):
+        if not isinstance(assessment, dict):
+            raise LLMOutputParseError(
+                f"LLM output scenario_assessments[{index}] must be a JSON object",
+                stage="schema_validation",
+                repair_applied=repair_applied,
+            )
+        allowed_scenario_fields = {
+            "schema_version",
+            "scenario_name",
+            "scenario_key",
+            "is_primary",
+            "origin",
+            "confidence",
+            "activity_stage",
+            "evidence_indices",
+            "rationale",
+            "competing_explanations",
+        }
+        unknown_scenario_fields = sorted(assessment.keys() - allowed_scenario_fields)
+        if unknown_scenario_fields:
+            raise LLMOutputParseError(
+                f"LLM output scenario_assessments[{index}] contains unsupported fields: {', '.join(unknown_scenario_fields)}",
+                stage="schema_validation",
+                repair_applied=repair_applied,
+            )
+        scenario_confidence = assessment.get("confidence")
+        if isinstance(scenario_confidence, bool) or not isinstance(
+            scenario_confidence,
+            (int, float),
+        ):
+            raise LLMOutputParseError(
+                f"LLM output scenario_assessments[{index}].confidence must be a JSON number",
+                stage="schema_validation",
+                repair_applied=repair_applied,
+            )
+        evidence_indices = assessment.get("evidence_indices")
+        if not isinstance(evidence_indices, list) or not evidence_indices or any(isinstance(item, bool) or not isinstance(item, int) for item in evidence_indices):
+            raise LLMOutputParseError(
+                f"LLM output scenario_assessments[{index}].evidence_indices must be a non-empty JSON integer array",
+                stage="schema_validation",
+                repair_applied=repair_applied,
+            )
+        if not isinstance(assessment.get("is_primary"), bool):
+            raise LLMOutputParseError(
+                f"LLM output scenario_assessments[{index}].is_primary must be a JSON boolean",
+                stage="schema_validation",
+                repair_applied=repair_applied,
+            )
+    for field_name in ("evidence_gaps", "manual_checks"):
+        values = data.get(field_name)
+        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+            raise LLMOutputParseError(
+                f"LLM output {field_name} must be a JSON string array",
+                stage="schema_validation",
+                repair_applied=repair_applied,
+            )
     evidence = data.get("evidence")
     if not isinstance(evidence, list) or not evidence:
         raise LLMOutputParseError(

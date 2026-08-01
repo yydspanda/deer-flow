@@ -7,6 +7,8 @@ PYTHON="$BACKEND_DIR/.venv/bin/python"
 VALIDATION_ROOT="$BACKEND_DIR/.deer-flow/soc-runtime-validation"
 HISTORY_ROOT="$BACKEND_DIR/.deer-flow/soc-runtime-validation-history"
 MODEL_NAME="${SOC_VALIDATION_MODEL:-deepseek-v4-pro}"
+CHECKPOINT_D_ALERT_ID="${SOC_CHECKPOINT_D_ALERT_ID:-1965449}"
+CHECKPOINT_D_CORPUS="$ROOT_DIR/validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
 
 SAMPLES=(
   "apt-1965449"
@@ -24,12 +26,21 @@ Commands:
   core         Regenerate deterministic Steps 01-05.
   live         Run live LLM Steps 06-09 using SOC_VALIDATION_MODEL.
   evaluations  Run deterministic replay, correlation, and governance Steps 10-12.
+  checkpoint-d Run corpus inventory, sample D1-D5, and full-corpus D6 routing audit.
+  checkpoint-d-live
+               Run live D7 structured analyzer-output review using SOC_VALIDATION_MODEL.
+  checkpoint-d-grounding
+               Run deterministic D8 evidence grounding against the saved D7 artifact.
+  checkpoint-d-decision
+               Run deterministic D9 Decision Policy review against saved D5/D7/D8 artifacts.
+  checkpoint-d-cross-source
+               Run D10 representative cross-source live-model Runtime replay using SOC_VALIDATION_MODEL.
   finalize     Rebuild manifests and RUN-INDEX.md from current artifacts.
   snapshot     Copy the current ignored artifact tree to a timestamped local backup.
   all          Run core, live, evaluations, and finalize in order.
 
 The artifact tree contains real-alert-derived local data and is gitignored.
-The live command calls the configured model and may incur model cost.
+The live, checkpoint-d-live, and checkpoint-d-cross-source commands call the configured model and may incur model cost.
 EOF
 }
 
@@ -49,6 +60,14 @@ require_samples() {
       exit 2
     fi
   done
+}
+
+require_checkpoint_d_corpus() {
+  if [[ ! -f "$CHECKPOINT_D_CORPUS" ]]; then
+    printf 'error: Checkpoint D corpus missing: %s\n' "$CHECKPOINT_D_CORPUS" >&2
+    printf 'build it with validation/compact_zeus/corpus/build_alert_validation_corpus.py first.\n' >&2
+    exit 2
+  fi
 }
 
 run_backend_module() {
@@ -95,6 +114,93 @@ run_soc_json_allow_pending() {
 run_core() {
   printf '[core] regenerating Steps 01-05 from datas/legacy_demos/*.json\n'
   run_backend_module scripts.generate_soc_normalization_maintenance_validation
+}
+
+run_checkpoint_d() {
+  local checkpoint_dir="$ROOT_DIR/validation/compact_zeus/checkpoint_d"
+  printf '[checkpoint-d] D0 corpus inventory\n'
+  "$PYTHON" "$checkpoint_dir/build_checkpoint_d_corpus_inventory.py"
+  printf '[checkpoint-d] D1-D5 sample alert: %s\n' "$CHECKPOINT_D_ALERT_ID"
+  "$PYTHON" "$checkpoint_dir/build_checkpoint_d_normalization_review.py" --alert-id "$CHECKPOINT_D_ALERT_ID"
+  "$PYTHON" "$checkpoint_dir/build_checkpoint_d_entity_extraction_review.py" --alert-id "$CHECKPOINT_D_ALERT_ID"
+  "$PYTHON" "$checkpoint_dir/build_checkpoint_d_fact_reconstruction_review.py" --alert-id "$CHECKPOINT_D_ALERT_ID"
+  "$PYTHON" "$checkpoint_dir/build_checkpoint_d_bounded_analysis_input_review.py" --alert-id "$CHECKPOINT_D_ALERT_ID"
+  "$PYTHON" "$checkpoint_dir/build_checkpoint_d_skill_context_review.py" --alert-id "$CHECKPOINT_D_ALERT_ID"
+  printf '[checkpoint-d] D6 full-corpus skill routing coverage\n'
+  "$PYTHON" "$checkpoint_dir/build_checkpoint_d_skill_route_coverage.py"
+}
+
+run_checkpoint_d_live() {
+  local checkpoint_dir="$ROOT_DIR/validation/compact_zeus/checkpoint_d"
+  local d5_artifact="$VALIDATION_ROOT/checkpoint-d/step-d5-skill-context/$CHECKPOINT_D_ALERT_ID.skill-context.json"
+  if [[ ! -f "$d5_artifact" ]]; then
+    printf 'error: Checkpoint D5 artifact missing: %s\n' "$d5_artifact" >&2
+    printf 'run ./scripts/soc-runtime-validation.sh checkpoint-d first.\n' >&2
+    exit 2
+  fi
+  printf '[checkpoint-d-live] D7 analyzer output: alert=%s model=%s\n' \
+    "$CHECKPOINT_D_ALERT_ID" "$MODEL_NAME"
+  "$PYTHON" \
+    "$checkpoint_dir/build_checkpoint_d_analyzer_output_review.py" \
+    --alert-id "$CHECKPOINT_D_ALERT_ID" \
+    --model-name "$MODEL_NAME"
+}
+
+run_checkpoint_d_grounding() {
+  local checkpoint_dir="$ROOT_DIR/validation/compact_zeus/checkpoint_d"
+  local d5_artifact="$VALIDATION_ROOT/checkpoint-d/step-d5-skill-context/$CHECKPOINT_D_ALERT_ID.skill-context.json"
+  local d7_artifact="$VALIDATION_ROOT/checkpoint-d/step-d7-analyzer-output/$CHECKPOINT_D_ALERT_ID.analyzer-output.json"
+  if [[ ! -f "$d5_artifact" ]]; then
+    printf 'error: Checkpoint D5 artifact missing: %s\n' "$d5_artifact" >&2
+    printf 'run ./scripts/soc-runtime-validation.sh checkpoint-d first.\n' >&2
+    exit 2
+  fi
+  if [[ ! -f "$d7_artifact" ]]; then
+    printf 'error: Checkpoint D7 artifact missing: %s\n' "$d7_artifact" >&2
+    printf 'run ./scripts/soc-runtime-validation.sh checkpoint-d-live first.\n' >&2
+    exit 2
+  fi
+  printf '[checkpoint-d-grounding] D8 evidence grounding: alert=%s\n' \
+    "$CHECKPOINT_D_ALERT_ID"
+  "$PYTHON" \
+    "$checkpoint_dir/build_checkpoint_d_evidence_grounding_review.py" \
+    --alert-id "$CHECKPOINT_D_ALERT_ID"
+}
+
+run_checkpoint_d_decision() {
+  local checkpoint_dir="$ROOT_DIR/validation/compact_zeus/checkpoint_d"
+  local d5_artifact="$VALIDATION_ROOT/checkpoint-d/step-d5-skill-context/$CHECKPOINT_D_ALERT_ID.skill-context.json"
+  local d7_artifact="$VALIDATION_ROOT/checkpoint-d/step-d7-analyzer-output/$CHECKPOINT_D_ALERT_ID.analyzer-output.json"
+  local d8_artifact="$VALIDATION_ROOT/checkpoint-d/step-d8-evidence-grounding/$CHECKPOINT_D_ALERT_ID.grounding.json"
+  local artifact
+  for artifact in "$d5_artifact" "$d7_artifact" "$d8_artifact"; do
+    if [[ ! -f "$artifact" ]]; then
+      printf 'error: Checkpoint D prerequisite missing: %s\n' "$artifact" >&2
+      printf 'run checkpoint-d, checkpoint-d-live, and checkpoint-d-grounding first.\n' >&2
+      exit 2
+    fi
+  done
+  printf '[checkpoint-d-decision] D9 Decision Policy: alert=%s\n' \
+    "$CHECKPOINT_D_ALERT_ID"
+  "$PYTHON" \
+    "$checkpoint_dir/build_checkpoint_d_decision_policy_review.py" \
+    --alert-id "$CHECKPOINT_D_ALERT_ID"
+}
+
+run_checkpoint_d_cross_source() {
+  local checkpoint_dir="$ROOT_DIR/validation/compact_zeus/checkpoint_d"
+  local d0_artifact="$VALIDATION_ROOT/checkpoint-d/step-d0-corpus-inventory/corpus-inventory.json"
+  require_checkpoint_d_corpus
+  if [[ ! -f "$d0_artifact" ]]; then
+    printf 'error: Checkpoint D0 artifact missing: %s\n' "$d0_artifact" >&2
+    printf 'run ./scripts/soc-runtime-validation.sh checkpoint-d first.\n' >&2
+    exit 2
+  fi
+  printf '[checkpoint-d-cross-source] D10 live-model representative Runtime replay: model=%s\n' \
+    "$MODEL_NAME"
+  "$PYTHON" \
+    "$checkpoint_dir/build_checkpoint_d_cross_source_runtime_review.py" \
+    --model-name "$MODEL_NAME"
 }
 
 run_live() {
@@ -205,6 +311,22 @@ main() {
     evaluations)
       require_samples
       run_evaluations
+      ;;
+    checkpoint-d)
+      require_checkpoint_d_corpus
+      run_checkpoint_d
+      ;;
+    checkpoint-d-live)
+      run_checkpoint_d_live
+      ;;
+    checkpoint-d-grounding)
+      run_checkpoint_d_grounding
+      ;;
+    checkpoint-d-decision)
+      run_checkpoint_d_decision
+      ;;
+    checkpoint-d-cross-source)
+      run_checkpoint_d_cross_source
       ;;
     finalize)
       run_finalize

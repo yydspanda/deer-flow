@@ -12,7 +12,9 @@ from soc_agent.contracts import (
     AnalysisEvidenceGroundingReport,
     AnalysisEvidenceGroundingStatus,
     AnalysisResult,
+    EvidenceTrustLevel,
     LLMAnalysisRequest,
+    TriageActivityStage,
 )
 from soc_agent.pipeline.analysis_context import project_analysis_context
 
@@ -46,6 +48,50 @@ _ENCODED_OMISSION_MARKER_RE = re.compile(
     r"<ENCODED:[a-z0-9_]+:\d+:sha256=[a-f0-9]{12}:OMITTED>",
     re.IGNORECASE,
 )
+_DISTINCTIVE_PATH_TOKEN_RE = re.compile(
+    r"(?:0x[0-9a-f]{4,}|(?<![a-f0-9])[a-f0-9]{12,}(?![a-f0-9]))",
+    re.IGNORECASE,
+)
+_SHORT_DESCRIPTION_FACTS = frozenset(
+    {
+        "delete",
+        "dns",
+        "get",
+        "head",
+        "http",
+        "https",
+        "options",
+        "patch",
+        "post",
+        "put",
+        "rdp",
+        "ssh",
+        "tcp",
+        "udp",
+    }
+)
+_DESCRIPTION_FACT_STOPLIST = frozenset(
+    {
+        "false",
+        "high",
+        "low",
+        "medium",
+        "none",
+        "null",
+        "true",
+        "unknown",
+    }
+)
+_DESCRIPTION_FACT_DISCLAIMERS = (
+    "不代表",
+    "不能证明",
+    "无法证明",
+    "不是",
+    "并非",
+    "非独立",
+    "not evidence",
+    "not proof",
+)
 _OUTCOME_CLAIM_RE = re.compile(
     r"(?:攻击成功|利用成功|成功利用|写入成功|执行成功|已写入|已执行|已入侵|已攻陷|"
     r"successful(?:ly)?\s+(?:exploit|execut|writ)|confirmed\s+compromise|command\s+executed|file\s+(?:was\s+)?written)",
@@ -58,11 +104,16 @@ _OUTCOME_ARTIFACT_KEYS = frozenset(
         "created_file",
         "execution_result",
         "file_created",
+        "authentication_result",
+        "callback_observed",
+        "login_result",
+        "persistence_result",
         "process_id",
         "shell_output",
         "write_result",
     }
 )
+_PROVIDER_OUTCOME_SEMANTIC_TYPE = "provider_detection_outcome_assertion"
 
 
 def ground_analysis_evidence(
@@ -78,6 +129,7 @@ def ground_analysis_evidence(
         _ground_item(
             index,
             evidence.source,
+            evidence.description,
             evidence.value,
             scalar_index,
             request=request,
@@ -86,15 +138,19 @@ def ground_analysis_evidence(
     ]
     grounded_count = sum(item.status is AnalysisEvidenceGroundingStatus.GROUNDED for item in items)
     ungrounded_count = len(items) - grounded_count
+    description_leakage_count = sum(item.status is AnalysisEvidenceGroundingStatus.DESCRIPTION_CONTEXT_LEAKAGE for item in items)
     warnings = []
     if ungrounded_count:
         warnings.append(f"{ungrounded_count} analyzer evidence item(s) could not be grounded in bounded context")
+    if description_leakage_count:
+        warnings.append(f"{description_leakage_count} analyzer evidence item(s) describe bounded-context facts outside their cited value")
     if _has_unproven_outcome_claim(analysis, request):
         warnings.append("analysis contains an outcome-success claim without an explicit bounded outcome artifact")
     return AnalysisEvidenceGroundingReport(
         total_count=len(items),
         grounded_count=grounded_count,
         ungrounded_count=ungrounded_count,
+        description_leakage_count=description_leakage_count,
         items=items,
         warnings=warnings,
     )
@@ -103,6 +159,7 @@ def ground_analysis_evidence(
 def _ground_item(
     evidence_index: int,
     source: str,
+    description: str,
     value: str | int | float | bool | None,
     scalar_index: list[tuple[str, str]],
     *,
@@ -127,18 +184,136 @@ def _ground_item(
     candidates = [(path, candidate) for path, candidate in scalar_index if any(_path_matches(path, prefix) for prefix in source_prefixes)]
     matched_paths = _matching_paths(value, candidates)
     if matched_paths:
+        foreign_description_paths = _foreign_description_context_paths(
+            description,
+            value,
+            source,
+            scalar_index,
+        )
+        if foreign_description_paths:
+            return _item(
+                evidence_index,
+                source,
+                AnalysisEvidenceGroundingStatus.DESCRIPTION_CONTEXT_LEAKAGE,
+                matched_paths=matched_paths,
+                foreign_description_paths=foreign_description_paths,
+                reason=("evidence value was grounded, but its description also cites bounded-context facts outside the quoted value"),
+            )
         return _item(
             evidence_index,
             source,
             AnalysisEvidenceGroundingStatus.GROUNDED,
             matched_paths=matched_paths,
-            reason="evidence value was found in the declared bounded-context source",
+            reason=(
+                "encoded-omission marker was found in the declared bounded-context source; it grounds only the visible field presence, encoding kind, and omission metadata"
+                if isinstance(value, str) and _ENCODED_OMISSION_MARKER_RE.search(value)
+                else "evidence value was found in the declared bounded-context source"
+            ),
         )
     return _item(
         evidence_index,
         source,
         AnalysisEvidenceGroundingStatus.VALUE_NOT_FOUND,
         reason="evidence value was not found in the declared bounded-context source",
+    )
+
+
+def _foreign_description_context_paths(
+    description: str,
+    value: str | int | float | bool,
+    source: str,
+    scalar_index: list[tuple[str, str]],
+) -> list[str]:
+    """Find distinctive bounded facts mentioned outside one evidence value."""
+
+    foreign_paths: list[str] = []
+    for path, candidate in scalar_index:
+        if _is_synthetic_description_audit_path(path):
+            continue
+        if not _is_distinctive_description_fact(path, candidate):
+            continue
+        if not _description_affirms_fact(description, candidate):
+            continue
+        if _description_contains_fact(str(value), candidate):
+            continue
+        if _description_contains_fact(source, candidate):
+            continue
+        foreign_paths.append(path)
+
+    for path, _candidate in scalar_index:
+        for token in _DISTINCTIVE_PATH_TOKEN_RE.findall(path):
+            if not _description_contains_fact(description, token):
+                continue
+            if _description_contains_fact(str(value), token):
+                continue
+            if _description_contains_fact(source, token):
+                continue
+            foreign_paths.append(path)
+    return list(dict.fromkeys(foreign_paths))[:10]
+
+
+def _is_synthetic_description_audit_path(path: str) -> bool:
+    leaf = path.rsplit(".", 1)[-1].split("[", 1)[0]
+    return leaf == "key"
+
+
+def _is_distinctive_description_fact(path: str, value: str) -> bool:
+    normalized = _normalize_search_text(value)
+    if not normalized or normalized in _DESCRIPTION_FACT_STOPLIST:
+        return False
+    if normalized in _SHORT_DESCRIPTION_FACTS:
+        return True
+    compact = normalized.replace(" ", "")
+    if compact.isdigit():
+        leaf = path.rsplit(".", 1)[-1].split("[", 1)[0].lower()
+        if "port" in leaf:
+            return 0 <= int(compact) <= 65535
+        return len(compact) >= 3
+    if any("\u4e00" <= char <= "\u9fff" for char in compact):
+        return len(compact) >= 3
+    if any(char.isdigit() for char in compact):
+        return len(compact) >= 4
+    if any(char in value for char in "./:@_-"):
+        return len(compact) >= 5
+    return len(compact) >= 8
+
+
+def _description_affirms_fact(text: str, fact: str) -> bool:
+    normalized_text = _normalize_search_text(text)
+    normalized_fact = _normalize_search_text(fact)
+    if not normalized_text or not normalized_fact:
+        return False
+
+    if " " in normalized_fact or any("\u4e00" <= char <= "\u9fff" for char in normalized_fact):
+        matches = re.finditer(re.escape(normalized_fact), normalized_text)
+    else:
+        matches = re.finditer(
+            rf"(?<!\w){re.escape(normalized_fact)}(?!\w)",
+            normalized_text,
+        )
+    for match in matches:
+        index = match.start()
+        prefix = normalized_text[max(0, index - 24) : index]
+        suffix = normalized_text[index + len(normalized_fact) : index + len(normalized_fact) + 24]
+        surrounding = f"{prefix} {suffix}"
+        if not any(disclaimer in surrounding for disclaimer in _DESCRIPTION_FACT_DISCLAIMERS):
+            return True
+    return False
+
+
+def _description_contains_fact(text: str, fact: str) -> bool:
+    normalized_text = _normalize_search_text(text)
+    normalized_fact = _normalize_search_text(fact)
+    if not normalized_text or not normalized_fact:
+        return False
+    if " " in normalized_fact or any("\u4e00" <= char <= "\u9fff" for char in normalized_fact):
+        return normalized_fact in normalized_text
+    return (
+        re.search(
+            rf"(?<!\w){re.escape(normalized_fact)}(?!\w)",
+            normalized_text,
+        )
+        is not None
     )
 
 
@@ -177,13 +352,29 @@ def _has_unproven_outcome_claim(
             analysis.reason,
             analysis.recommended_action,
             *(item.description for item in analysis.evidence),
+            *(item.rationale for item in analysis.scenario_assessments),
+            *(explanation for item in analysis.scenario_assessments for explanation in item.competing_explanations),
         ]
     )
-    if not _contains_positive_outcome_claim(analysis_text):
+    claims_confirmed_impact = any(item.activity_stage is TriageActivityStage.IMPACT_CONFIRMED for item in analysis.scenario_assessments)
+    if not claims_confirmed_impact and not _contains_positive_outcome_claim(analysis_text):
         return False
     context = project_analysis_context(request)
     keys = _mapping_keys(context)
-    return not bool(keys & _OUTCOME_ARTIFACT_KEYS)
+    return not (bool(keys & _OUTCOME_ARTIFACT_KEYS) or _has_bounded_provider_outcome_assertion(request))
+
+
+def _has_bounded_provider_outcome_assertion(request: LLMAnalysisRequest) -> bool:
+    """Accept adapter-declared outcomes only when the exact high-trust value is model-visible."""
+
+    evidence_items = [item for item in (request.primary_evidence, *request.supplementary_evidence) if item is not None and item.trust_level is EvidenceTrustLevel.HIGH]
+    for semantic in request.source_field_semantics:
+        if semantic.semantic_type != _PROVIDER_OUTCOME_SEMANTIC_TYPE or not semantic.participates_in_reasoning:
+            continue
+        for evidence in evidence_items:
+            if semantic.field_path in evidence.projected_field_paths and semantic.field_path not in evidence.omitted_field_paths:
+                return True
+    return False
 
 
 def _contains_positive_outcome_claim(value: str) -> bool:
@@ -328,13 +519,17 @@ def _normalize_scalar(value: str | int | float | bool) -> str:
 
 
 def _normalize_groundable_scalar(value: str | int | float | bool) -> str:
-    if not isinstance(value, str):
-        return _normalize_scalar(value)
-    return _normalize_scalar(_ENCODED_OMISSION_MARKER_RE.sub(" ", value))
+    return _normalize_scalar(value)
 
 
 def _normalize_search_text(value: str) -> str:
-    return " ".join(re.sub(r"[^\w\u4e00-\u9fff]+", " ", value.lower()).split())
+    return " ".join(
+        re.sub(
+            r"[^\w\u4e00-\u9fff]+",
+            " ",
+            value.lower().replace("_", " "),
+        ).split()
+    )
 
 
 def _path_matches(path: str, prefix: str) -> bool:
@@ -347,6 +542,7 @@ def _item(
     status: AnalysisEvidenceGroundingStatus,
     *,
     matched_paths: list[str] | None = None,
+    foreign_description_paths: list[str] | None = None,
     reason: str,
 ) -> AnalysisEvidenceGroundingItem:
     return AnalysisEvidenceGroundingItem(
@@ -354,6 +550,7 @@ def _item(
         source=source,
         status=status,
         matched_context_paths=matched_paths or [],
+        foreign_description_context_paths=foreign_description_paths or [],
         reason=reason,
     )
 

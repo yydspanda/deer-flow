@@ -4,6 +4,7 @@ docker/.cache/
 .omc/
 # OS generated files
 .DS_Store
+*:Zone.Identifier
 *.local
 ._*
 .Spotlight-V100
