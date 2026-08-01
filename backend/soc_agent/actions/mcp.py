@@ -496,6 +496,7 @@ class SocMcpToolActionAdapter:
             )
             if not isinstance(raw_result, Mapping):
                 raise SocMcpToolProviderError("MCP tool returned a non-object result")
+            _raise_for_mcp_tool_error(raw_result)
             result = _select_output_fields(raw_result, self._output_fields)
         except Exception as exc:  # noqa: BLE001 - external provider boundary maps failures to action result
             return SocAgentActionResult(
@@ -574,6 +575,22 @@ def _select_output_fields(result: Mapping[str, Any], output_fields: tuple[str, .
     if not output_fields:
         return {}
     return {field: result[field] for field in output_fields if field in result}
+
+
+def _raise_for_mcp_tool_error(result: Mapping[str, Any]) -> None:
+    if result.get("isError") is not True and result.get("is_error") is not True:
+        return
+    message = "MCP tool reported an error"
+    content = result.get("content")
+    if isinstance(content, list):
+        for item in content:
+            if not isinstance(item, Mapping):
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                message = text.strip()[:500]
+                break
+    raise SocMcpToolProviderError(message)
 
 
 def _load_deerflow_cached_mcp_tools() -> Iterable[Any]:

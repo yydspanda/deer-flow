@@ -806,8 +806,9 @@ claim. D11.1 then corrected evidence-quality semantics: 343 outer messages are r
 and 6 `sufficient`; the only degraded rows are the two explicit high-value input gaps. All 220
 non-empty stub evidence items ground successfully after empty optional command-line citations were
 removed. D10 remains the paid cross-source live-model sample, while D11 proves full-corpus payload and
-Runtime compatibility. PI-01 now advances to the first approved read-only dev/staging provider intake
-rather than another local mock or alert-specific Prompt expansion.
+Runtime compatibility. PI-01 then split the first approved read-only asset-provider intake into D12-A
+production-shaped code plus an explicitly fake external-network smoke, and D12-B internal real smoke.
+D12-A cannot substitute for D12-B or close the real-provider gate.
 
 ---
 
@@ -1480,6 +1481,22 @@ The PA track is a capability onboarding method, not a separate product architect
 PA-12 must not be marked complete by adding more mock behavior. It requires real endpoint,
 credentials, smoke report, and payload/latency/error evaluation.
 
+### 11.3 Checkpoint D12 Asset Provider Boundary / 资产能力源边界
+
+`D12-A` and `D12-B` are intentionally separate deliverables:
+
+| Deliverable / 交付物 | Status / 状态 | Meaning / 含义 |
+| --- | --- | --- |
+| D12-A provider implementation | Done / `fake-only` | PingAn-owned ZEUS HTTP/signing port, asset-to-BU/UM workflow port, fallback service, stdio MCP server, explicit action/MCP config and regression tests; every smoke result is `mocked=true` |
+| D12-B internal real smoke | Waiting / data-gated | Internal endpoint, credentials, signer/workflow imports, tenant mapping and approved payload are required; acceptance requires `mocked=false` success/not-found/auth-failure/timeout and persisted `InvestigationEvidence` evidence |
+
+The provider receives an already-extracted `asset_key`, type and optional role. It does not extract
+assets, infer attacker/victim roles, select a response target, alter the Runtime verdict, close a
+ReviewQueue item, confirm memory, or authorize an action. PingAn protocol and fallback details remain
+inside `soc_agent.integrations.pingan`; generic Runtime/Core code depends only on existing
+`asset.locate` and `InvestigationEvidence` contracts. Fake/internal modes are mutually exclusive and
+an internal configuration error must fail closed rather than falling back to fake data.
+
 ---
 
 ## 12. Security and Permission Model / 安全与权限模型
@@ -1627,11 +1644,12 @@ Delivery stages / 交付阶段：
 
 The authoritative work packages, gates, Parking Lot and anti-drift rules live in
 [`delivery-roadmap.md`](delivery-roadmap.md). The current implementation pointer lives only in
-[`progress.md`](progress.md). As of 2026-07-29, `BG-P0-01..BG-P1-05` and `BG-03` are complete, the
+[`progress.md`](progress.md). As of 2026-08-02, `BG-P0-01..BG-P1-05` and `BG-03` are complete, the
 Alpha Gate has a scoped owner approval, and Stage 4 is current. The only current task is `PI-01 Real
-providers`: finish the step-reviewed Checkpoint D payload/Runtime replay, then select the first
-approved read-only dev/staging integration. Missing endpoints, credentials or approved payloads
-remain explicit data gates and must not be replaced by another mock.
+providers`: Checkpoint D0-D11.1 and D12-A provider code/fake smoke are complete; D12-B internal real
+asset-provider smoke is waiting for endpoint, credentials, signer/workflow imports, tenant mapping
+and approved payloads. Those inputs remain explicit data gates and must not be replaced by another
+mock.
 
 `BG-03` uses `./scripts/soc-alpha-readiness.sh all` to bind the existing versioned acceptance report,
 full SOC regression, architecture/migration gates, the authoritative matrix and Stage 4 roadmap into
@@ -1662,6 +1680,7 @@ production labels, operational SLOs, and high-risk response adapters are still u
 | Use canonical `AlertInput` | Vendor-neutral core |
 | Use adapters for PingAn and future vendors | Extensible source integration |
 | Use read-only investigation evidence first | Makes tools useful before risky automation |
+| Split provider code-complete from real-provider acceptance | D12-A `mocked=true` cannot satisfy D12-B `mocked=false` internal smoke |
 | Use approval inbox for high-risk actions | Production-safe execution boundary |
 | Use candidate-first memory | Prevent memory pollution |
 | Treat Kafka as ingestion adapter | It is not the product UX itself |

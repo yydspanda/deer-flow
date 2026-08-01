@@ -127,7 +127,7 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 
 | ID | Work / 工作 | Deliverable / 产出 | Acceptance / 验收 |
 |---|---|---|---|
-| `PI-01` | Real providers / 真实能力源 | **In Progress**: 已完成 212 条唯一 Zeus 告警的可追溯 corpus intake、PingAn source/parser Checkpoint B、全部来源 Checkpoint C；Checkpoint D 的 D0-D6 已覆盖单样本输入链和全量 Skill 路由，D7-D9 已验证真实 Analyzer、production Grounding 与 Decision fail-closed，D10 已完成 8 topic / 6 source family 的真实模型 representative Runtime matrix，D11/D11.1 已完成 212 条双遍 Runtime 兼容性、稳定性和 evidence-quality 语义 Gate；当前选择第一项获批只读 dev/staging provider，禁止再用 mock 代替真实集成或围绕单条样本堆规则/Prompt | D0 保证 212 个唯一 ID、0 blocking row；D1-D5 证明样本 `1965449` 的 canonical normalization、事实/证据投影、raw immutability、coverage 和 bounded Skill-package contract；D6 为 212/212；当前 lineage 的 D7 输出 9 条 evidence，D8 接受 5 条、拒绝 4 条 sibling-fact description；D9/v3 保留 `suspicious` verdict 并阻止自动化；D10 的历史 10/10 次 `deepseek-v4-pro` 调用完成，67/87 evidence grounded、20 条被拒绝且全部 fail closed；D11 为 212/212 processed/stable、0 failure，state 分布为 6 conflicted / 2 degraded / 198 partial / 6 sufficient；最终真实 provider contract、超时、权限、数据边界、审计、失败降级和 smoke 有证据 |
+| `PI-01` | Real providers / 真实能力源 | **In Progress**: Checkpoint D0-D11.1 已完成；D12-A 已交付 PingAn `asset.locate` 的 production-shaped provider、MCP/config 边界和 `mocked=true` fake smoke。D12-B 仍等待内网真实 endpoint、凭证、signer、workflow runner、tenant mapping 与批准 payload，禁止把 D12-A 或其他 mock 当成真实 provider 完成证据 | D12-A 只证明代码、协议、fallback 和 fail-closed；D12-B 必须保存 `mocked=false` 的成功、查无、鉴权失败、超时及 `InvestigationEvidence` smoke，确认 latency、payload/result size、裁剪、敏感信息和审计后，才可关闭 `PA-12` 并认定第一项 PI-01 real provider 完成 |
 | `PI-02` | Real infrastructure / 真实基础设施 | Kafka、PostgreSQL、K8s 参数与容量/恢复测试 | 吞吐、端到端延迟、重试、DLQ、幂等、连接池和故障恢复满足试点门槛 |
 | `PI-03` | Real labels and calibration / 真实标签与校准 | 脱敏、人工标注的 scenario/confidence/correlation corpus | 来源、范围、版本和 reviewer 可审计；scorer/profile 仅在离线 gate 通过后进入 shadow |
 | `PI-04` | Operations and security / 运维与安全 | 可观测性、SLO、告警、secret、RBAC、审计保留和隐私策略 | 运营同事能定位任务/预警/延迟/模型/队列问题；安全评审通过 |
@@ -180,7 +180,7 @@ Completed:    BG-P1-04 - Governed memory activation (AC-39)
 Completed:    BG-P1-05 - Alpha E2E and docs reconciliation (AC-23, AC-24, AC-49)
 Completed:    BG-03 - Alpha readiness package and scoped accountable approval
 Current Stage: PI - Real Data & Production Integration
-In Progress:  PI-01 - first approved read-only dev/staging provider intake (real endpoint and payload required)
+In Progress:  PI-01 - first approved read-only dev/staging provider intake
 Completed:    PI-01 Checkpoint D-0 - 212-row adapter-independent corpus inventory
 Completed:    PI-01 Checkpoint D-1 - alert 1965449 canonical normalization (parser warnings explicit)
 Completed:    PI-01 Checkpoint D-2 - alert 1965449 generic deterministic entity extraction
@@ -193,6 +193,8 @@ Completed:    PI-01 Checkpoint D-8 - current production Grounding lineage (5 gro
 Completed:    PI-01 Checkpoint D-9 - soc.decision_policy.v3 (degraded from ungrounded evidence, review required, no automation)
 Completed:    PI-01 Checkpoint D-10 - live deepseek-v4-pro 8-topic / 6-source Runtime matrix (10 calls, 167,042 tokens, quality findings fail closed)
 Completed:    PI-01 Checkpoint D-11/D11.1 - 212-row two-pass Runtime compatibility plus evidence-quality semantics (424 runs, 212 stable, 0 failures)
-Next:         Select and contract the first approved read-only dev/staging provider; prefer CMDB/asset lookup, do not substitute another mock
-External inputs: Real endpoint/topic, authentication, tenant mapping, payload sample and data owner are required before connector smoke; do not substitute another mock
+Completed:    PI-01 Checkpoint D12-A - PingAn asset provider code + fake MCP smoke (`mocked=true`; not real-provider evidence)
+Waiting:      PI-01 Checkpoint D12-B - internal real asset-provider smoke (`mocked=false` required)
+Next:         Move D12-A package/config to the internal environment and run D12-B; do not add another fake substitute
+External inputs: Real ZEUS endpoint/app credentials, signer/runtime imports, workflow IDs, tenant mapping, approved payload sample and data owner
 ```

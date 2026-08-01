@@ -87,6 +87,24 @@ Analyzer 生成 D7；`checkpoint-d-grounding` 再对 D7 运行 production D8 Gro
 governance 证据。D6 只是全语料 Skill 路由覆盖，D7-D10 是 Analyzer/Grounding/Decision/跨来源
 审阅边界，D11 是全语料兼容性门禁，都不是固定 Runtime 新节点。
 
+### 2.1 D12 Asset Provider Handoff / 资产能力源交接
+
+D12 不是固定 Runtime 新节点，而是 PI-01 的外部只读 provider 接入验证。D12-A 已在外网通过
+fake transport 验证代码、协议和 MCP/action 链路；它必须保留 `mocked=true`，不能作为真实接入证据。
+完整命令、配置变量和内网交接说明见
+`backend/samples/mcp/pingan_asset/README.md`。
+
+D12-A 产物默认保存到：
+
+```text
+backend/.deer-flow/soc-runtime-validation/checkpoint-d/
+  step-d12-pingan-asset-provider/d12-a-fake-smoke.json
+```
+
+D12-B 必须在内网使用 `extensions.internal.example.json` 的副本和真实环境变量运行同一条
+`soc mcp smoke` 路径，并分别保留成功、查无、鉴权失败、超时和 evidence persistence 报告。
+只有结果明确 `mocked=false` 后，才能把 D12-B、PA-12 或第一项 PI-01 provider 标记为完成。
+
 ## 3. Step Contract / 每步看什么
 
 | Seq | Directory / 目录 | Input / 输入 | Output / 重点产物 | Pass meaning / 通过含义 |
@@ -117,6 +135,8 @@ Checkpoint D 当前增加：
 | D9 | `checkpoint-d/step-d9-decision-policy` | production Decision Policy、evidence state、review reasons、automation guard；不运行模型、租户处置或持久化 |
 | D10 | `checkpoint-d/step-d10-cross-source-runtime` | 8 topic / 6 source family 真实模型 representative matrix、完整 9-step Runtime、模型/token provenance、Grounding 质量和 known input gap fail-closed；无人工标签时不评估模型准确率 |
 | D11 | `checkpoint-d/step-d11-full-corpus-runtime` | 212 条 × 2 次 stub Runtime、D0/corpus lineage、九步兼容性、语义哈希稳定性、known gap fail-closed，以及 parser warning/compaction/omission/truncation/high-value gap/conflict/Grounding/Decision 分层统计与验收；仅失败行保存完整 diagnostic |
+| D12-A | `checkpoint-d/step-d12-pingan-asset-provider` | production-shaped PingAn asset provider + fake MCP smoke；必须为 `mocked=true`，只证明代码/协议/fallback |
+| D12-B | 内网指定报告目录 | 真实 ZEUS/workflow provider smoke；必须为 `mocked=false`，覆盖成功/查无/鉴权失败/超时和 `InvestigationEvidence` |
 
 ## 4. 2026-07-17 Latest Run / 本次实跑结果
 

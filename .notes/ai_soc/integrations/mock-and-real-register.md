@@ -1,6 +1,6 @@
 # SOC Agent Mock 与真实接入台账
 
-> Updated: 2026-07-20
+> Updated: 2026-08-02
 >
 > 目的：集中记录当前 SOC Agent 里哪些能力只是 mock、fixture、in-memory 或本地 smoke，用来验证工程链路；后续接入真实 PingAn / 客户环境时，必须按本台账替换、复测和重新验收。
 
@@ -19,6 +19,7 @@
 |---|---|---|---|---|
 | `asset.lookup` | in-memory read-only adapter，部分 smoke 可走 MCP-backed config | `backend/soc_agent/actions/adapters.py`、`backend/soc_agent/actions/mcp.py` | 验证资产查询 action contract、policy、approval preflight、evidence 写入 | 替换为 CMDB / 资产系统 / 客户资产服务 read-only adapter 或 MCP-backed adapter |
 | `asset.locate` | 本地 stdio MCP mock tool | `backend/scripts/soc_dev_mcp_server.py`、`backend/samples/mcp/` | 模拟 Zeus/CMDB/asset_to_bu 归属定位，验证 Lead Agent proposal -> MCP adapter -> evidence | 替换为真实资产归属/BU/owner/处置归属服务；保存 `soc.mcp_action_smoke_report.v1` |
+| `D12-A` PingAn asset provider | **Implemented production-shaped code with fake transport; still mock** | `backend/soc_agent/integrations/pingan/`、`backend/scripts/soc_pingan_asset_mcp_server.py`、`backend/samples/mcp/pingan_asset/` | 外网验证 ZEUS 签名调用边界、`searchAssetInfo -> asset_to_bu -> UM` 降级编排、MCP/action 映射和 fail-closed；产物明确 `mocked=true` | 只有 `D12-B` 内网注入真实 endpoint/secret/signer/workflow runner 并产生 `mocked=false` smoke 证据后才算 real；D12-A 不能关闭 `PA-12` / `PI-01` |
 | `endpoint.process_tree.lookup` | in-memory EDR process-tree mock adapter | `backend/soc_agent/actions/adapters.py` | 验证 EDR 进程树 evidence、Lead Agent proposal、Review context 复用 | 替换为真实 EDR read-only 查询 API/MCP；补字段裁剪和进程树大小上限 |
 | `host.event_context.lookup` | in-memory host event-context mock adapter | `backend/soc_agent/actions/adapters.py` | 验证 HIDS/主机上下文只读查询和 PingAn PA-07 P0 能力 | 替换为 HIDS / 主机日志 / EDR host telemetry 查询服务 |
 | `threat_intel.ip_reputation.lookup` | in-memory 威胁情报 mock adapter | `backend/soc_agent/actions/adapters.py` | 验证 APT 情报查询 evidence 形态，避免 domain handler 自己假设情报 | 替换为企业威胁情报、TI 平台或外部情报 provider 的 read-only adapter |

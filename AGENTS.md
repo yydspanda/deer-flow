@@ -325,6 +325,12 @@ Current SOC direction:
   and `InvestigationEvidenceRepository`, then re-enter analyst/Lead Agent context through
   `SocReviewService.get_investigation_context()`; do not let entry layers write evidence
   or mutate decisions directly.
+- PingAn asset-provider code lives only under `backend/soc_agent/integrations/pingan/` and uses the
+  existing generic `asset.locate` MCP/action boundary. Checkpoint D12-A is production-shaped code with
+  a fake transport and must always expose `mocked=true`; it is not PA-12 or PI-01 real-provider
+  evidence. Only the internal D12-B smoke with real endpoint/credentials/imports, approved payloads,
+  persisted `InvestigationEvidence`, and `mocked=false` may close that gate. Internal mode must fail
+  closed when configuration is missing and must never silently fall back to fake data.
 - `endpoint.process_tree.lookup` is currently a read-only in-memory/mock EDR investigation
   adapter used to validate process-tree evidence flow before real EDR MCP credentials exist;
   do not treat it as production EDR integration.

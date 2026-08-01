@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-01` 进行中） |
-| 当前目标 | `PI-01 Real providers`：Checkpoint D10 已完成真实模型跨来源抽样，D11 已完成 212 条双遍 Runtime 兼容性与稳定性 Gate；当前进入第一项真实只读 dev/staging provider intake |
+| 当前目标 | `PI-01 Real providers`：Checkpoint D12-A 的 PingAn 资产 provider 代码与 fake smoke 已完成，但仍是 `fake-only`；D12-B 内网真实 smoke 尚未完成 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | `PI-01 Real provider intake`：优先选择只读 CMDB/资产查询能力，确认真实 endpoint/tool contract、认证、租户映射、批准 payload 样例、数据边界和 owner 后接入 dev/staging smoke；外部参数未提供前不新增 mock。 |
+| 当前下一刀 | `PI-01 Checkpoint D12-B`：移植现有 provider 到内网，注入真实 ZEUS endpoint/app ID/key、`isec_sign`、Agent Platform runner/workflow ID 与 tenant mapping，完成 `mocked=false` 的成功、查无、鉴权失败、超时和 `InvestigationEvidence` smoke。外部参数未提供前保持 `Waiting / data-gated`。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -41,6 +41,41 @@
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / PI-01 In Progress** | 真实 provider、基础设施、标签、SLO 和 governed rollout；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+
+## 2026-08-02 — PI-01 Checkpoint D12-A implemented; D12-B remains data-gated
+
+- 产品负责人确认外网环境无法访问 PingAn `search_asset_info`、`asset_to_bu` 和 UM workflow；允许先参考
+  `validation/original_works/zeus/flows/disposition_tools/asset_locator.py` 实现可移植代码并用 fake
+  transport 测试，之后移植内网执行真实验证。
+- D12 固定拆成两个不能互相冒充的交付物：
+  - `D12-A Provider implementation`：外网完成通用 action contract、PingAn adapter、Zeus
+    `isec_sign` 鉴权调用边界、`searchAssetInfo -> asset_to_bu -> UM` 降级编排、fake transport 与测试；
+    所有结果必须声明 `mocked=true`，状态只能是 code-complete/tested。
+  - `D12-B Internal real smoke`：内网注入真实 endpoint、secret、signer、workflow runner 和 tenant
+    mapping，保存成功、查无、鉴权失败、超时及端到端 `InvestigationEvidence` 报告；只有真实调用结果
+    明确 `mocked=false` 后，才能作为 `PA-12` / `PI-01 real provider` 完成证据。
+- 旧实现只作为接口语义参考：资产提取和角色重建继续由当前 Runtime/Skill 负责；PingAn adapter 只查询
+  已提取资产并返回归属候选，不直接决定 verdict、response target、ReviewQueue、memory 或 action。
+- D12-A 已实现：
+  - PingAn provider 位于 `backend/soc_agent/integrations/pingan/asset_location.py`，MCP server 位于
+    `backend/soc_agent/integrations/pingan/asset_mcp_server.py`；通用 Runtime/Core 不 import 平安实现；
+  - 保留旧 ZEUS `/public/searchAssetInfo` 请求体、`isec_sign` 边界和
+    `searchAssetInfo -> asset_to_bu -> UM` 降级顺序，但资产提取、角色判断和处置决策不进入 provider；
+  - `fake` 与 `internal` 模式严格互斥；internal 配置缺失直接失败，MCP `isError=true` 在字段裁剪前
+    映射为 failed action，不能产生空对象成功；
+  - 多个归属候选返回 `ambiguous=true`，不沿用旧代码“取第一条即定案”的行为；原始 provider
+    response 不写入结果，只输出有界归属候选和 attempt provenance；
+  - fake smoke 产物位于
+    `backend/.deer-flow/soc-runtime-validation/checkpoint-d/step-d12-pingan-asset-provider/d12-a-fake-smoke.json`
+    （gitignored），明确记录 `mocked=true`、`provider_mode=fake`、`decision_impact=none`；
+  - 运行与内网交接命令记录在 `backend/samples/mcp/pingan_asset/README.md`。
+- 验证：D12/MCP 聚焦回归 41 passed；包含 core/Lead Agent/architecture 的扩展回归 153 passed；
+  完整 `tests/test_soc_*.py` + architecture 回归 632 passed；changed-file Ruff、JSON config parse 和
+  `git diff --check` 通过。D12-A stdio smoke 成功并保存 `mocked=true` 报告；D12-B missing-config
+  smoke 以退出码 1、`SocMcpToolProviderError` 和 `external_side_effect=not_executed` fail closed；
+  `codegraph sync .` 已同步新增 provider/MCP symbols，并可查询 `PingAnAssetLocatorService`。
+- 当前状态：`D12-A Done / fake-only`；`D12-B Waiting / internal-network-and-credential-gated`。
+  在 D12-B 保存真实 `mocked=false` smoke 前，`PA-12` 与 `PI-01 real provider` 必须继续保持未完成。
 
 ## 2026-08-02 — PI-01 Checkpoint D11 + D11.1 evidence-quality semantics
 
@@ -277,6 +312,8 @@
 | 0.10 | `PA-10` PingAn domain triage MVP | Done | 已新增 `SocDomainTriageRequest/Result/Finding` contract、`SocDomainTriageService`、APT/EDR/HIDS deterministic handlers 和 `soc eval pingan-domain` | 子研判只输出 finding/evidence/recommendation；消费 skill context 和 read-only evidence refs；不写 DB、不执行 action、不改 verdict |
 | 0.11 | `PA-11` PingAn main orchestrator demo | Done | `SocMainOrchestratorService`、`UnifiedInvestigationReport`、`soc eval pingan-main` 已覆盖 APT/EDR/HIDS analyze -> correlation -> read-only evidence -> domain finding -> review summary | 每条当前告警命中 seeded historical run，并只复用该 historical `run_id` 的 evidence；不写 DB、不执行高风险动作 |
 | 0.12 | `PA-12` real PingAn MCP/API replacement | Waiting | 等真实 PingAn dev/staging MCP/API endpoint/凭证后替换 mock provider，保存 smoke/eval report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险；不能用本地 mock 假装完成 |
+| 0.13 | `D12-A` PingAn asset provider implementation | Done / fake-only | 已建立可移植 `asset.locate` provider、ZEUS HTTP/signing port、workflow port、stdio MCP server、显式 config 与 fake smoke | fake 输出始终 `mocked=true`；internal 缺配置 fail closed；该状态不标记 PA-12/PI-01 real provider Done |
+| 0.14 | `D12-B` PingAn asset provider internal smoke | Waiting / data-gated | 内网配置真实 Zeus endpoint/app ID/key、`isec_sign`、Agent Platform runner/workflow IDs 和 tenant mapping，执行真实 smoke | 成功、查无、鉴权失败、超时和 InvestigationEvidence 全部留证；真实响应为 `mocked=false`；完成前 D12/PA-12 保持未完成 |
 | 1 | Correlation Service MVP | Done | `SocCorrelationService` 基于 summary/evidence 输出相似告警、匹配原因和可复用证据；typed result 已进入 main report/domain/review summary | 不调用 LLM、不依赖真实 MCP、不改 decision；demo 当前告警可看到历史 run + reusable evidence |
 | 1.1 | Correlation -> Unified Investigation bridge | Done | 共享 summary repository、统一 deterministic scorer、`SocDomainTriageRequest.correlation_result`、`UnifiedInvestigationReport.correlation_result` 和 review counts 已接通 | metadata count 不是证据源；historical evidence 只按 matched `run_id` 加载；APT/EDR/HIDS eval 为 3 matches / 6 evidence / 0 failure |
 | 1.2 | Correlation quality baseline | Done | 已建 vendor-neutral same-incident / related-but-distinct / unrelated corpus；`soc eval correlation` 输出双任务指标、reason 分布、fan-out、evidence lineage/unrelated exposure，并支持 `--baseline-json` replay diff | scorer/report/fixture 版本显式；当前 8-pair baseline 暴露 retrieval/dedup precision 均约 0.667；`shadow_dedup_allowed=false` |

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "pingan_asset": {
+      "enabled": true,
+      "type": "stdio",
+      "command": "$SOC_PINGAN_ASSET_MCP_PYTHON",
+      "args": ["$SOC_PINGAN_ASSET_MCP_SERVER"],
+      "env": {
+        "SOC_PINGAN_ASSET_PROVIDER_MODE": "fake"
+      }
+    }
+  },
+  "skills": {}
+}

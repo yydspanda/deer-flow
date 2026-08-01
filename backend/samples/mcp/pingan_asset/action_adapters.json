@@ -1,0 +1,71 @@
+{
+  "adapters": [
+    {
+      "schema_version": "soc.mcp_action_adapter_config.v1",
+      "enabled": true,
+      "owner": "soc-platform",
+      "environment": "dev-or-staging",
+      "adapter_id": "asset-locate-pingan-mcp",
+      "route": "asset.locate",
+      "action": "asset.locate",
+      "risk_level": "read_only",
+      "adapter_kind": "mcp",
+      "external_side_effect": "read",
+      "dry_run_supported": true,
+      "execute_supported": true,
+      "idempotency_required": false,
+      "required_payload_fields": ["asset_key"],
+      "required_context_refs": ["thread_id"],
+      "description": "Read-only PingAn ZEUS/asset-to-BU ownership lookup through an allowlisted MCP tool.",
+      "payload_schema": {
+        "type": "object",
+        "required": ["asset_key"],
+        "properties": {
+          "asset_key": {"type": "string"},
+          "asset_type": {"type": "string"},
+          "role": {"type": "string"},
+          "um": {"type": "string"},
+          "context_refs": {"type": "object"}
+        }
+      },
+      "metadata": {
+        "checkpoint": "D12",
+        "d12_a_fake_capable": true,
+        "real_completion_requires": "D12-B internal smoke",
+        "decision_impact": "none"
+      },
+      "mcp": {
+        "server": "pingan_asset",
+        "tool": "pingan_asset_asset_locate",
+        "timeout_seconds": 15,
+        "input_mapping": {
+          "asset_key": "query",
+          "asset_type": "asset_type",
+          "role": "role",
+          "um": "um"
+        },
+        "output_fields": [
+          "schema_version",
+          "query",
+          "asset_type",
+          "role",
+          "found",
+          "resolved",
+          "ambiguous",
+          "company_code",
+          "company_name",
+          "biz_group",
+          "source",
+          "candidates",
+          "attempts",
+          "mocked",
+          "provider_mode",
+          "evidence_boundary",
+          "decision_impact",
+          "raw_response_included"
+        ],
+        "result_schema_version": "soc.pingan_asset_location_result.v1"
+      }
+    }
+  ]
+}

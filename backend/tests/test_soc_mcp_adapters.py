@@ -808,6 +808,41 @@ def test_mcp_adapter_execute_maps_provider_error_to_failed_result() -> None:
     assert "provider timeout" in result.message
 
 
+def test_mcp_adapter_execute_maps_mcp_is_error_result_to_failed_result() -> None:
+    provider = FakeSocMcpToolProvider(
+        {
+            "cmdb_asset_lookup": {
+                "isError": True,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "provider configuration is unavailable",
+                    }
+                ],
+            }
+        }
+    )
+    registry = SocActionAdapterRegistry([_asset_lookup_adapter(provider)])
+
+    result = registry.execute(
+        SocAgentActionCommand(
+            route="asset.lookup",
+            action="asset.lookup",
+            dry_run=False,
+            payload={
+                "asset_key": "10.10.1.5",
+                "context_refs": {"thread_id": "SOC-THREAD-1"},
+            },
+        ),
+        context=_context(),
+    )
+
+    assert result.status == "failed"
+    assert result.payload["external_side_effect"] == "not_executed"
+    assert result.payload["error_type"] == "SocMcpToolProviderError"
+    assert "provider configuration is unavailable" in result.message
+
+
 def test_mcp_adapter_constructor_rejects_non_read_only_descriptor() -> None:
     descriptor = mcp_read_only_adapter_descriptor(
         adapter_id="bad",

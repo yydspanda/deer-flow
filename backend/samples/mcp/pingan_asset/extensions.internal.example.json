@@ -1,0 +1,32 @@
+{
+  "mcpServers": {
+    "pingan_asset": {
+      "enabled": true,
+      "type": "stdio",
+      "command": "$SOC_PINGAN_ASSET_MCP_PYTHON",
+      "args": ["$SOC_PINGAN_ASSET_MCP_SERVER"],
+      "env": {
+        "SOC_PINGAN_ASSET_PROVIDER_MODE": "internal",
+        "SOC_PINGAN_PROVIDER_IMPORT_PATHS": "$SOC_PINGAN_PROVIDER_IMPORT_PATHS",
+        "SOC_PINGAN_ZEUS_BASE_URL": "$SOC_PINGAN_ZEUS_BASE_URL",
+        "SOC_PINGAN_ZEUS_APP_ID": "$SOC_PINGAN_ZEUS_APP_ID",
+        "SOC_PINGAN_ZEUS_APP_KEY": "$SOC_PINGAN_ZEUS_APP_KEY",
+        "SOC_PINGAN_ZEUS_SIGNER_IMPORT": "util.util_tools:isec_sign",
+        "SOC_PINGAN_ZEUS_ASSET_PATH": "/public/searchAssetInfo",
+        "SOC_PINGAN_ZEUS_COMPANY_CODE": "all",
+        "SOC_PINGAN_ZEUS_QUERY_TYPE": "1",
+        "SOC_PINGAN_ZEUS_PAGE_SIZE": "10",
+        "SOC_PINGAN_ZEUS_TIMEOUT_SECONDS": "10",
+        "SOC_PINGAN_ASSET_OWNERSHIP_OVERRIDES_JSON": "[{\"match_biz_group\":\"云桌面分组\",\"company_code\":\"PA011\",\"company_name\":\"平安科技\"}]",
+        "SOC_PINGAN_ASSET_WORKFLOW_ENABLED": "true",
+        "SOC_PINGAN_WORKFLOW_RUNNER_IMPORT": "model.agent_platform.util_tools:run_workflow",
+        "SOC_PINGAN_WORKFLOW_APP_ID": "YHSYS",
+        "SOC_PINGAN_WORKFLOW_OPERATOR": "$SOC_PINGAN_WORKFLOW_OPERATOR",
+        "SOC_PINGAN_WORKFLOW_TERMINAL_ID": "1087710",
+        "SOC_PINGAN_WORKFLOW_DATACENTER_ID": "1087787",
+        "SOC_PINGAN_WORKFLOW_USER_ID": "1092332"
+      }
+    }
+  },
+  "skills": {}
+}

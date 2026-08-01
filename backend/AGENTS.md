@@ -314,6 +314,16 @@ The fork-specific SOC business extension lives under `backend/soc_agent/` and mu
 from the reusable DeerFlow harness runtime. Entry surfaces call SOC core services; vendor aliases and
 loose payload handling stay in `soc_agent.normalizers`.
 
+Provider-side PingAn integrations live under `soc_agent.integrations.pingan`, separate from source
+normalizers and generic Runtime/Core. The asset-location integration reuses the generic
+`asset.locate -> SocMcpToolActionAdapter -> InvestigationEvidence` chain and receives already-extracted
+asset candidates. It may preserve PingAn ZEUS signing/wire and asset-to-BU/UM fallback semantics, but
+must not extract roles, choose response targets, alter verdicts, close reviews, confirm memory, or
+authorize actions. Its `fake` and `internal` modes are mutually exclusive: fake output must expose
+`mocked=true`; internal mode must fail startup/tool execution when endpoint, credentials, signer or
+workflow imports are unavailable, never silently downgrade to fake. D12-A code/fake smoke does not
+complete PA-12; only D12-B internal smoke with `mocked=false` and persisted evidence does.
+
 For PingAn legacy alerts, `normalizers/pingan_platform.py` preserves the complete input while
 `normalizers/pingan_messages.py` deterministically parses `zeusRawLogs[].message`. If any message
 parses, parsed fields are the exclusive analysis source; Zeus sibling fields stay raw-only and cannot

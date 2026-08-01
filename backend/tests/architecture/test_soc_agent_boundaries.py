@@ -92,6 +92,13 @@ def test_fact_reconstructor_does_not_know_vendor_role_aliases() -> None:
     assert not {alias for alias in forbidden_aliases if alias in source}
 
 
+def test_generic_soc_layers_do_not_import_pingan_provider_integrations() -> None:
+    for package in ("actions", "contracts", "core", "domain", "pipeline"):
+        for module in _python_files(SOC_AGENT / package):
+            vendor_imports = {imported for imported in _imports(module) if imported == "soc_agent.integrations.pingan" or imported.startswith("soc_agent.integrations.pingan.")}
+            assert not vendor_imports, f"{module} imports PingAn provider code: {sorted(vendor_imports)}"
+
+
 def test_governed_context_lifecycle_is_vendor_neutral() -> None:
     source = "\n".join(
         path.read_text(encoding="utf-8")
