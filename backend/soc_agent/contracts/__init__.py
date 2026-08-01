@@ -53,6 +53,14 @@ from soc_agent.contracts.ingestion import (
     SocExternalDispositionIngressCommand,
 )
 from soc_agent.contracts.mutations import SocMutationAuditRecord, SocMutationOperation
+from soc_agent.contracts.operations import (
+    SocOperationsAvailability,
+    SocOperationsKafkaSnapshot,
+    SocOperationsMeasurementGap,
+    SocOperationsPersistedSnapshot,
+    SocOperationsSnapshot,
+    SocPersistedOperationsMetrics,
+)
 from soc_agent.contracts.schemas import (
     CORRELATION_SCORING_POLICY_VERSION,
     SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION,
@@ -547,6 +555,11 @@ __all__ = [
     "SocExternalDispositionRecord",
     "SocExternalDispositionStatusMapping",
     "SocOperationalDisposition",
+    "SocOperationsAvailability",
+    "SocOperationsKafkaSnapshot",
+    "SocOperationsMeasurementGap",
+    "SocOperationsPersistedSnapshot",
+    "SocOperationsSnapshot",
     "SocEndpointNetworkConnection",
     "SocEndpointProcessNode",
     "SocEndpointProcessTreeRecord",
@@ -561,6 +574,7 @@ __all__ = [
     "UnifiedInvestigationReport",
     "UnifiedInvestigationView",
     "SocThreatIntelReputationRecord",
+    "SocPersistedOperationsMetrics",
     "SourceFieldSemantic",
     "SocSecurityTagRecord",
     "UserEntityRef",

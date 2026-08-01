@@ -13,6 +13,7 @@ from app.gateway.routers import (
     soc_external_dispositions,
     soc_memory,
     soc_normalization,
+    soc_operations,
     soc_review,
 )
 from app.gateway.routers.soc_dependencies import soc_service_context_from_request
@@ -62,6 +63,7 @@ def _soc_openapi() -> dict:
         soc_external_dispositions,
         soc_memory,
         soc_normalization,
+        soc_operations,
         soc_review,
     ):
         app.include_router(module.router)

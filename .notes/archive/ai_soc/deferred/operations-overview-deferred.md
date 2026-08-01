@@ -1,6 +1,7 @@
 # SOC Operations Overview Deferred Requirement
 
-> 状态：Deferred / 后续优化项。当前不进入实现队列；主目标仍是先让 SOC Agent 告警流转闭环跑通。
+> 历史状态：Deferred。2026-08-02 已激活最小 `PI-04-A Operations Snapshot`；本文件描述的完整 Web、
+> Prometheus、lag/算力指标和生产 SLO 仍后置。当前契约以 `delivery-roadmap.md` 为准。
 
 ## 背景
 
@@ -148,4 +149,3 @@ Prometheus 是采集和告警手段之一，不是运营观察台本身。
 - 研发可以从一个入口定位 Kafka、DB、daemon、LLM、review、approval 哪一段出问题。
 - 任何展示的指标都能追溯到明确的数据源和时间窗口。
 - 观察台不影响 SOC Agent 主链路吞吐和可靠性。
-

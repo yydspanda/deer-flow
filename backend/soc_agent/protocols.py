@@ -49,6 +49,8 @@ from soc_agent.contracts import (
     SocMemoryRecordStatus,
     SocMutationAuditRecord,
     SocMutationOperation,
+    SocOperationsKafkaSnapshot,
+    SocPersistedOperationsMetrics,
 )
 
 
@@ -184,6 +186,22 @@ class AnalysisPersistence(Protocol):
         review_item: ReviewQueueItem | None,
         audit_record: DecisionAuditRecord,
     ) -> None: ...
+
+
+class SocOperationsRepositoryError(RuntimeError):
+    """Sanitized failure raised by a read-only operations repository."""
+
+
+class SocOperationsRepository(Protocol):
+    """Exact aggregate read boundary for SOC operational persistence."""
+
+    def read_persisted_metrics(self) -> SocPersistedOperationsMetrics: ...
+
+
+class SocOperationsKafkaProbe(Protocol):
+    """Secret-free Kafka readiness projection used by operations surfaces."""
+
+    def snapshot(self, *, check_connectivity: bool = False) -> SocOperationsKafkaSnapshot: ...
 
 
 class InvestigationEvidenceRepository(Protocol):

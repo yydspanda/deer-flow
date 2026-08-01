@@ -324,6 +324,14 @@ authorize actions. Its `fake` and `internal` modes are mutually exclusive: fake 
 workflow imports are unavailable, never silently downgrade to fake. D12-A code/fake smoke does not
 complete PA-12; only D12-B internal smoke with `mocked=false` and persisted evidence does.
 
+PI-04-A operational visibility is a separate read-only service boundary. Contracts live in
+`soc_agent.contracts.operations`, exact SQL aggregates in `soc_agent.db.operations`, Kafka projection
+in `soc_agent.operations`, and composition in `SocOperationsService`. Both `soc ops snapshot` and
+Gateway `GET /api/soc/operations/snapshot` consume that service. The API is passive and never polls a
+broker; CLI broker probing requires `--check-broker`. Snapshot output exposes no database URL, broker
+address, credential, or raw exception, does not infer overall health, and marks consumer lag, model
+compute, and production SLO evidence as `not_measured` until real telemetry exists.
+
 For PingAn legacy alerts, `normalizers/pingan_platform.py` preserves the complete input while
 `normalizers/pingan_messages.py` deterministically parses `zeusRawLogs[].message`. If any message
 parses, parsed fields are the exclusive analysis source; Zeus sibling fields stay raw-only and cannot

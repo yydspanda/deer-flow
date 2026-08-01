@@ -183,6 +183,18 @@ Kafka ingestion, ReviewQueue Web/TUI, governed context, shadow disposition propo
 and append-only evaluation outcomes are available; production response side effects
 remain approval-gated and disabled without a real adapter.
 
+Inspect exact persisted backlog counts and passive Kafka readiness without exposing
+connection details:
+
+```bash
+soc ops snapshot --database-url "$SOC_DATABASE_URL" --pretty
+# Add --check-broker only for an explicit connectivity probe.
+```
+
+The same passive snapshot is available from `GET /api/soc/operations/snapshot`.
+Consumer lag, model compute, and production SLO status remain explicitly
+`not_measured` until those telemetry sources are connected.
+
 Run the release-level local Alpha gate from the repository root:
 
 ```bash

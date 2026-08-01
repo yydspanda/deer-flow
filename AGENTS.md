@@ -331,6 +331,12 @@ Current SOC direction:
   evidence. Only the internal D12-B smoke with real endpoint/credentials/imports, approved payloads,
   persisted `InvestigationEvidence`, and `mocked=false` may close that gate. Internal mode must fail
   closed when configuration is missing and must never silently fall back to fake data.
+- PI-04-A operational visibility uses `SocOperationsService` and the versioned
+  `soc.operations_snapshot.v1` contract. `soc ops snapshot` and
+  `GET /api/soc/operations/snapshot` expose exact, unpaginated SOC persistence aggregates plus a
+  secret-free Kafka readiness projection. The Gateway endpoint is passive; only the CLI's explicit
+  `--check-broker` may perform a connectivity probe. The snapshot must not infer an overall health
+  verdict or claim lag, model compute, or production SLO evidence when those signals are not measured.
 - `endpoint.process_tree.lookup` is currently a read-only in-memory/mock EDR investigation
   adapter used to validate process-tree evidence flow before real EDR MCP credentials exist;
   do not treat it as production EDR integration.
@@ -410,7 +416,7 @@ SOC delivery plan (the only execution order is `.notes/ai_soc/delivery-roadmap.m
 | `BD` Boss Demo v0.1 | Done: browser-first repeatable golden path |
 | `AA` SOC Alpha Completeness Audit | Done: unique 50-row matrix and frozen blocker set |
 | `BG` Close Blocking Gaps | Done: Alpha Gate passed 2026-07-20 |
-| `PI` Real Data & Production Integration | Current: `PI-01` real provider and approved-payload intake in progress |
+| `PI` Real Data & Production Integration | Current: `PI-04-A` done, `PI-04-B` thin Web view next; `PI-01/D12-B` remains Waiting/data-gated |
 
 ### SOC Agent Development Workflow
 

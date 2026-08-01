@@ -23,6 +23,7 @@ from soc_agent.db.models import (
     SocNormalizationSchemaBaselineRow,
     SocReviewQueueRow,
 )
+from soc_agent.db.operations import SqlAlchemySocOperationsRepository
 from soc_agent.db.repositories import SqlAlchemyAlertRepository
 
 __all__ = [
@@ -46,6 +47,7 @@ __all__ = [
     "SocReviewQueueRow",
     "SocBase",
     "SqlAlchemyAlertRepository",
+    "SqlAlchemySocOperationsRepository",
     "create_soc_tables",
     "resolve_database_url",
     "to_sync_database_url",

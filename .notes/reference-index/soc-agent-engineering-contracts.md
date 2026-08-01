@@ -1003,6 +1003,19 @@ Kafka daemon / consumer adapter 约束：
   - `--skip-database-check` 只允许用于配置检查或本地排障；生产 readiness 不应跳过 DB 检查。
   - status 输出中的 database URL 必须 redacted，不得泄露 password、SASL secret 或 TLS secret。
   - exit code 必须和 `ready` 对齐：ready 返回 `0`，unready 返回非零。
+- `SocOperationsService` 是跨 Runtime/Review/Approval/Normalization/Memory/Kafka 的只读运营聚合边界：
+  - contract 固定为 `soc.operations_snapshot.v1`；CLI 使用 `soc ops snapshot`，Gateway 使用
+    `GET /api/soc/operations/snapshot`，入口不得自行查询多张表或拼接近似计数。
+  - persisted counters 必须使用无分页上限的 SQL aggregate；禁止从 `list(limit=...)`、Web 当前页或
+    daemon 进程内计数推断 lifetime backlog。
+  - Gateway snapshot 必须是 passive read，不得 poll Kafka、处理 message、commit offset、写 DLQ 或改
+    业务状态。只有 CLI 显式 `--check-broker` 时才允许复用轻量 broker checker。
+  - 输出只允许 database backend、配置项数量、可用性和稳定 error code；database URL、broker address、
+    username、credential、raw exception/diagnostic 不得进入 contract、API 或 CLI JSON。
+  - snapshot 不输出总体 `healthy` 分数。未采集的 consumer lag、模型/算力和 production SLO 必须标记
+    `not_measured`，不能用 `0`、`true` 或默认阈值冒充正常。
+  - PI-04-A 不改变 Runtime、Kafka consumer、ReviewQueue、approval 或 memory 主流程；完整 Web、
+    Prometheus、SLO threshold/alerting 属于后续 PI-04 切片。
 - `SocDaemonMessage` 的 Kafka metadata 必须保留 `topic`、`partition`、`offset`、`key`；daemon idempotency key 固定为 `kafka:{topic}:{partition}:{offset}`。
 - dead-letter payload 必须使用 `soc.kafka_dead_letter.v1`，至少包含 failed_at、topic、partition、offset、key、headers、value、error_type、error_message；payload 不得包含 secret。
 - 真实 consumer CLI/daemon 入口只能做配置读取、adapter 构造、runner loop 和 graceful shutdown；业务处理仍归 `SocDaemonService`。

@@ -23,12 +23,12 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-01` 进行中） |
-| 当前目标 | `PI-01 Real providers`：Checkpoint D12-A 的 PingAn 资产 provider 代码与 fake smoke 已完成，但仍是 `fake-only`；D12-B 内网真实 smoke 尚未完成 |
+| 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-04-A` 已完成） |
+| 当前目标 | 保持 `PI-01/D12-B` Waiting；下一切片为 `PI-04-B`，只把已冻结的 Operations Snapshot 接入轻量 Web 运营视图，不新增指标口径 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | `PI-01 Checkpoint D12-B`：移植现有 provider 到内网，注入真实 ZEUS endpoint/app ID/key、`isec_sign`、Agent Platform runner/workflow ID 与 tenant mapping，完成 `mocked=false` 的成功、查无、鉴权失败、超时和 `InvestigationEvidence` smoke。外部参数未提供前保持 `Waiting / data-gated`。 |
+| 当前下一刀 | `PI-04-B`：薄 Web 运营视图只消费 `/api/soc/operations/snapshot`；不做 Prometheus、SLO 阈值、Kafka lag、算力采集或前端二次聚合。`PI-01/D12-B` 保持 Waiting。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -40,7 +40,29 @@
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
-| `PI` | Real Data & Production Integration | **Current / PI-01 In Progress** | 真实 provider、基础设施、标签、SLO 和 governed rollout；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+| `PI` | Real Data & Production Integration | **Current / PI-04-A Done; PI-04-B Next** | D12-B 真实 provider 暂停等待内网输入；只读运行态契约已完成，下一步接薄 Web 消费面；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+
+## 2026-08-02 — PI-04-A operations snapshot completed; D12-B remains parked
+
+- `92d3bfff feat(soc): add gated PingAn asset provider` 已推送到 `origin/yyds-dev`。
+- 产品负责人决定 D12-B 暂时空置：它继续保持 `Waiting / data-gated`，不删除、不降级验收条件，也不以
+  新 fake provider 替代；未来只有内网 `mocked=false` smoke 才能恢复并关闭 PI-01。
+- Stage 4 内部执行指针切换到并完成 `PI-04-A`。选择理由：PI-02 需要真实 Kafka/PostgreSQL/K8s 参数，PI-03
+  需要人工标签；Operations Snapshot 可以复用现有真实 DB/Kafka/normalization 信号，先解决运营人员
+  无法统一查看任务、积压和组件可用性的产品问题。
+- 已新增 `soc.operations_snapshot.v1`、`SocOperationsService`、独立 SQL aggregate repository 和
+  secret-free Kafka probe。run status、open ReviewQueue、pending approval、normalization backlog/baseline、
+  pending memory candidate 均为无分页上限的精确 aggregate，不从 `list(limit=...)` 估算。
+- 公共入口为 `soc ops snapshot` 和 passive `GET /api/soc/operations/snapshot`；只有 CLI 显式
+  `--check-broker` 执行 connectivity probe。输出不包含 DB URL、broker address、username、credential 或
+  raw diagnostic，也不输出 overall health。
+- Kafka consumer lag、模型/算力和 production SLO 继续显式为 `not_measured`；本切片没有 migration，
+  没有改变 Runtime/Kafka consumer/Review/Approval/Memory 主流程。
+- 验证：changed-file Ruff 通过；最终 operations/transport/architecture 聚焦回归 33 passed；完整
+  `tests/test_soc_*.py` + architecture 重跑 641 passed。第一次全量中的 demo stdout capture 偶发失败在
+  isolated/组合重跑均通过，最终完整重跑无失败。
+- 下一刀建议 `PI-04-B`：建立薄 Web 运营视图，只展示已冻结 snapshot；完整 Prometheus、SLO alerting、
+  Kafka lag 与模型算力 telemetry 继续后置。
 
 ## 2026-08-02 — PI-01 Checkpoint D12-A implemented; D12-B remains data-gated
 

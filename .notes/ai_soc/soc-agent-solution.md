@@ -1645,11 +1645,21 @@ Delivery stages / 交付阶段：
 The authoritative work packages, gates, Parking Lot and anti-drift rules live in
 [`delivery-roadmap.md`](delivery-roadmap.md). The current implementation pointer lives only in
 [`progress.md`](progress.md). As of 2026-08-02, `BG-P0-01..BG-P1-05` and `BG-03` are complete, the
-Alpha Gate has a scoped owner approval, and Stage 4 is current. The only current task is `PI-01 Real
-providers`: Checkpoint D0-D11.1 and D12-A provider code/fake smoke are complete; D12-B internal real
-asset-provider smoke is waiting for endpoint, credentials, signer/workflow imports, tenant mapping
-and approved payloads. Those inputs remain explicit data gates and must not be replaced by another
-mock.
+Alpha Gate has a scoped owner approval, and Stage 4 is current. Checkpoint D0-D11.1 and D12-A
+provider code/fake smoke are complete; D12-B internal real asset-provider smoke is explicitly parked
+as `Waiting / data-gated` until endpoint, credentials, signer/workflow imports, tenant mapping and
+approved payloads exist. Those inputs must not be replaced by another mock. `PI-04-A SOC Operations
+Snapshot` is complete; the next slice is the thin `PI-04-B` Web consumer view.
+
+PI-04-A introduces `soc.operations_snapshot.v1` as a read-only operational projection. It uses exact
+SQL aggregates over SOC-owned run, review, approval, normalization and memory tables, then composes a
+secret-free Kafka configuration/readiness projection through `SocOperationsService`. The public
+surfaces are `soc ops snapshot` and passive `GET /api/soc/operations/snapshot`; only the CLI's
+explicit `--check-broker` performs broker IO. The contract intentionally has no overall `healthy`
+field. Kafka consumer lag, model/GPU utilization and production SLO compliance remain named
+`not_measured` gaps until real telemetry and approved time-window thresholds are connected. Full Web
+operations UI, Prometheus export and SLO alerting remain later PI-04 slices. `PI-04-B` may expose the
+already-frozen snapshot in Web, but must not recompute counts or invent frontend health semantics.
 
 `BG-03` uses `./scripts/soc-alpha-readiness.sh all` to bind the existing versioned acceptance report,
 full SOC regression, architecture/migration gates, the authoritative matrix and Stage 4 roadmap into

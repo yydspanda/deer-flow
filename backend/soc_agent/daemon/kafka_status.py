@@ -55,7 +55,11 @@ def build_kafka_daemon_status(
     """Build a lightweight readiness snapshot for SOC Kafka daemon wiring."""
 
     database = _database_status(database_url, check_database=check_database)
-    kafka = _broker_status(kafka_settings, check_broker=check_broker, broker_checker=broker_checker)
+    kafka = build_kafka_broker_status(
+        kafka_settings,
+        check_broker=check_broker,
+        broker_checker=broker_checker,
+    )
     return KafkaDaemonStatus(
         ready=database.reachable and kafka.adapter_configured and (kafka.reachable is not False),
         database=database,
@@ -86,12 +90,14 @@ def _database_status(database_url: str | None, *, check_database: bool) -> Kafka
     return KafkaDaemonDatabaseStatus(configured=True, reachable=True, url=_redacted_database_url(resolved_url))
 
 
-def _broker_status(
+def build_kafka_broker_status(
     settings: KafkaConsumerSettings,
     *,
     check_broker: bool,
     broker_checker: Callable[[KafkaConsumerSettings], None] | None,
 ) -> KafkaDaemonBrokerStatus:
+    """Project broker configuration and an optional explicit connectivity check."""
+
     status = KafkaDaemonBrokerStatus(
         enabled=settings.enabled,
         adapter_configured=not settings.enabled,

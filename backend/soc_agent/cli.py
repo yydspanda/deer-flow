@@ -69,6 +69,7 @@ from soc_agent.contracts import (
     SocMemoryRetrievalActivationCommand,
     SocMemoryRetrievalResult,
     SocOperationalDisposition,
+    SocOperationsAvailability,
     Verdict,
 )
 from soc_agent.core import (
@@ -153,6 +154,7 @@ from soc_agent.normalizers import (
     build_normalization_suggestion_report,
     run_live_normalization_suggestion,
 )
+from soc_agent.operations import build_soc_operations_service
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -211,6 +213,8 @@ def main(argv: list[str] | None = None) -> int:
         return _mcp_tools(args)
     if args.command == "llm" and args.llm_command == "status":
         return _llm_status(args)
+    if args.command == "ops" and args.ops_command == "snapshot":
+        return _ops_snapshot(args)
     if args.command == "daemon" and args.daemon_command == "process":
         return _daemon_process(args)
     if args.command == "daemon" and args.daemon_command == "consume":
@@ -554,6 +558,16 @@ def _build_parser() -> argparse.ArgumentParser:
     llm_status = llm_subparsers.add_parser("status", help="Show secret-free SOC LLM model resolution status")
     _add_analyzer_args(llm_status)
     llm_status.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+
+    ops = subparsers.add_parser("ops", help="SOC operational visibility helpers")
+    ops_subparsers = ops.add_subparsers(dest="ops_command")
+    ops_snapshot = ops_subparsers.add_parser(
+        "snapshot",
+        help="Show exact persisted backlog and secret-free Kafka readiness",
+    )
+    ops_snapshot.add_argument("--check-broker", action="store_true", help="Attempt an explicit Kafka broker connectivity check")
+    ops_snapshot.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(ops_snapshot)
 
     daemon = subparsers.add_parser("daemon", help="SOC daemon helpers")
     daemon_subparsers = daemon.add_subparsers(dest="daemon_command")
@@ -2752,6 +2766,16 @@ def _daemon_status(args: argparse.Namespace) -> int:
     )
     print(status.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0 if status.ready else 1
+
+
+def _ops_snapshot(args: argparse.Namespace) -> int:
+    snapshot = build_soc_operations_service(database_url=args.database_url).get_snapshot(check_broker=args.check_broker)
+    print(snapshot.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    if snapshot.persisted.availability is not SocOperationsAvailability.AVAILABLE:
+        return 1
+    if snapshot.kafka.availability is SocOperationsAvailability.UNAVAILABLE:
+        return 1
+    return 0
 
 
 def _daemon_service_from_args(args: argparse.Namespace) -> SocDaemonService:

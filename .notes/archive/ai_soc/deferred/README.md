@@ -6,7 +6,7 @@
 | Deferred item | 当前状态 | 重新进入执行队列的主要条件 |
 |---|---|---|
 | [Kafka worker pool / concurrency](kafka-worker-pool-concurrency-plan.md) | 基础契约已完成，并发实现暂缓 | 有真实 Kafka、DB、LLM 吞吐和延迟数据 |
-| [SOC operations overview](operations-overview-deferred.md) | 局部指标已有，全局观察台暂缓 | 主链路和指标口径稳定，运营查询形成真实需求 |
+| [SOC operations overview](operations-overview-deferred.md) | `PI-04-A` 最小只读 snapshot 已激活；完整 Web/Prometheus/SLO 仍暂缓 | 真实 telemetry、时间窗阈值和运营 owner 到位 |
 | [Correlation label corpus expansion](correlation-label-corpus-expansion.md) | 8-pair 工程基线已有，真实标签扩充暂缓 | 有获批脱敏数据、分析师 reviewer 和版本化标签流程 |
 | [DB memory to Wiki/OKF projection](wiki-okf-memory-projection.md) | DB-first memory 已建立，展示投影暂缓 | DB 生命周期稳定并出现明确协作/审阅需求 |
 | [Adaptive normalization and parser evolution](adaptive-normalization-parser-evolution.md) | deterministic 监控与离线 suggestion 已有，自动候选治理暂缓 | 有真实漂移 cohort、owner、review/replay/rollback 流程 |

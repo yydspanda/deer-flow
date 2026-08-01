@@ -82,6 +82,9 @@
     "/api/soc/normalization/metrics": [
       "get"
     ],
+    "/api/soc/operations/snapshot": [
+      "get"
+    ],
     "/api/soc/review/disposition-outcomes": [
       "post"
     ],
