@@ -8,7 +8,7 @@ import pytest
 
 from deerflow.config.paths import get_paths
 from deerflow.runtime.user_context import get_effective_user_id
-from soc_agent.actions.adapters import InMemoryAssetLookupActionAdapter, InMemoryEndpointProcessTreeLookupActionAdapter, SocActionAdapterRegistry
+from soc_agent.actions.adapters import InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
 from soc_agent.actions.mcp import SocMcpToolDescriptor, build_mcp_action_adapter_registry
 from soc_agent.actions.proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.contracts import (
@@ -30,7 +30,7 @@ from soc_agent.contracts import (
     SocAssetLookupRecord,
     Verdict,
 )
-from soc_agent.core import InMemoryInvestigationEvidenceRepository, SocAgentActionDispatcher, SocAgentApprovalService, SocAgentCapabilityRouter
+from soc_agent.core import SocAgentActionDispatcher, SocAgentApprovalService, SocAgentCapabilityRouter
 from soc_agent.lead_agent_chat import SocLeadAgentChatService, SocLeadAgentProfileNotInstalledError, SocLeadAgentReviewContextError
 from soc_agent.skills import SOC_LEAD_AGENT_NAME
 
@@ -365,44 +365,6 @@ def test_soc_lead_agent_chat_service_dispatches_mcp_asset_locate_proposal() -> N
             "server_name": "soc_dev",
         }
     ]
-
-
-def test_soc_lead_agent_chat_service_dispatches_endpoint_process_tree_mock_proposal() -> None:
-    content = (
-        "I will inspect endpoint process-tree evidence before recommending containment.\n"
-        '<soc_action_proposal>{"route":"endpoint.process_tree.lookup","action":"endpoint.process_tree.lookup",'
-        '"reason":"Inspect endpoint process tree for suspicious process/network behavior.",'
-        '"payload":{"host_key":"endpoint-1"},"confidence":0.72}</soc_action_proposal>'
-    )
-    client = ProposalFakeDeerFlowClient(content)
-    evidence_repository = InMemoryInvestigationEvidenceRepository()
-    registry = SocActionAdapterRegistry([InMemoryEndpointProcessTreeLookupActionAdapter()])
-    service = SocLeadAgentChatService(
-        client_factory=lambda: client,
-        require_profile=False,
-        action_proposal_boundary=SocLeadAgentActionProposalBoundary(
-            read_only_capability_router=SocAgentCapabilityRouter(allowed_routes={"endpoint.process_tree.lookup"}),
-            read_only_action_dispatcher=SocAgentActionDispatcher(
-                action_adapter_registry=registry,
-                evidence_repository=evidence_repository,
-            ),
-        ),
-    )
-    context = ServiceRequestContext(actor=ActorContext(actor_id="analyst", surface=EntrySurface.TUI))
-
-    events = list(service.stream(SocAgentChatRequest(message="inspect process tree", thread_id="SOC-THREAD-1"), context=context))
-
-    action_event = events[6]
-    assert action_event.data["kind"] == "soc.action_result"
-    assert action_event.data["action"] == "endpoint.process_tree.lookup"
-    assert action_event.data["status"] == "success"
-    assert action_event.data["payload"]["process_tree_found"] is True
-    assert action_event.data["payload"]["process_tree"]["process_tree_id"] == "ptree-mock-001"
-    assert action_event.data["payload"]["evidence_id"].startswith("EVI-")
-    saved = evidence_repository.list_evidence(thread_id="SOC-THREAD-1")
-    assert len(saved) == 1
-    assert saved[0].action == "endpoint.process_tree.lookup"
-    assert saved[0].result_payload["process_tree"]["processes"][0]["process_name"] == "powershell.exe"
 
 
 def test_soc_lead_agent_read_only_action_proposal_requires_route_allowlist() -> None:

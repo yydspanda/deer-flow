@@ -1,65 +1,13 @@
 {
   "schema_version": "soc.pingan_capability_eval_fixture.v1",
   "sample_id": "pingan-edr-action-evidence",
-  "scenario": "EDR process-tree lookup plus missing threat-intel fact",
+  "scenario": "EDR alert-native evidence plus missing threat-intel fact",
   "source_path": "backend/samples/alerts/pingan_legacy_edr.json",
   "expected_source_type": "edr",
   "mock_records": {
-    "endpoint.process_tree.lookup": [
-      {
-        "host_key": "HOST-L12267.example.local",
-        "hostname": "HOST-L12267.example.local",
-        "primary_ip": "10.43.107.39",
-        "process_tree_id": "ptree-pa08-edr-001",
-        "processes": [
-          {
-            "pid": 780,
-            "parent_pid": 640,
-            "process_name": "services.exe",
-            "command_line": "C:\\windows\\system32\\services.exe",
-            "user": "LOCAL SERVICE",
-            "risk_tags": ["service_control"]
-          },
-          {
-            "pid": 944,
-            "parent_pid": 780,
-            "process_name": "svchost.exe",
-            "command_line": "C:\\windows\\system32\\svchost.exe -k localService -p -s RemoteRegistry",
-            "user": "LOCAL SERVICE",
-            "risk_tags": ["remote_registry", "lateral_movement_candidate"]
-          }
-        ],
-        "network_connections": [
-          {
-            "process_name": "svchost.exe",
-            "remote_ip": "30.162.29.85",
-            "remote_port": 445,
-            "direction": "inbound",
-            "protocol": "tcp"
-          }
-        ],
-        "source": "pa08-fixture",
-        "mocked": true
-      }
-    ],
     "threat_intel.ip_reputation.lookup": []
   },
   "actions": [
-    {
-      "route": "endpoint.process_tree.lookup",
-      "payload": {
-        "host_key": "HOST-L12267.example.local"
-      },
-      "expect_payload_values": {
-        "process_tree_found": true,
-        "process_tree.process_tree_id": "ptree-pa08-edr-001",
-        "external_side_effect": "read",
-        "read_only": true
-      },
-      "expect_payload_contains": {
-        "process_tree.processes.1.risk_tags": "lateral_movement_candidate"
-      }
-    },
     {
       "route": "threat_intel.ip_reputation.lookup",
       "payload": {

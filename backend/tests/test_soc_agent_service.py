@@ -667,11 +667,11 @@ def test_correlation_service_returns_matches_and_reusable_evidence() -> None:
     evidence_repository.save_evidence(
         InvestigationEvidence(
             evidence_id="EVI-RELATED-1",
-            route="endpoint.process_tree.lookup",
-            action="endpoint.process_tree.lookup",
+            route="asset.lookup",
+            action="asset.lookup",
             status="success",
-            message="Process tree lookup completed.",
-            result_payload={"root_process": "browser.exe", "risk": "low"},
+            message="Asset context lookup completed.",
+            result_payload={"asset_key": "workstation-1", "risk": "low"},
             run_id=related.run_id,
             alert_id=related.alert_id,
         )
@@ -1329,18 +1329,7 @@ def test_agent_action_policy_treats_asset_locate_as_read_only() -> None:
     assert decision.risk_level is SocAgentRiskLevel.READ_ONLY
     assert decision.requires_human_approval is False
 
-    process_tree_decision = SocAgentActionPolicy().check(
-        action="endpoint.process_tree.lookup",
-        route="endpoint.process_tree.lookup",
-        request=SocAgentChatRequest(message="lookup process tree"),
-        context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI)),
-    )
-    assert process_tree_decision.allowed is True
-    assert process_tree_decision.risk_level is SocAgentRiskLevel.READ_ONLY
-    assert process_tree_decision.requires_human_approval is False
-
     for action in (
-        "host.event_context.lookup",
         "threat_intel.ip_reputation.lookup",
         "security_tag.lookup",
     ):
@@ -1353,6 +1342,20 @@ def test_agent_action_policy_treats_asset_locate_as_read_only() -> None:
         assert decision.allowed is True
         assert decision.risk_level is SocAgentRiskLevel.READ_ONLY
         assert decision.requires_human_approval is False
+
+
+@pytest.mark.parametrize("action", ["endpoint.process_tree.lookup", "host.event_context.lookup"])
+def test_agent_action_policy_rejects_unavailable_context_lookup_actions(action: str) -> None:
+    decision = SocAgentActionPolicy().check(
+        action=action,
+        route=action,
+        request=SocAgentChatRequest(message=f"lookup {action}"),
+        context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI)),
+    )
+
+    assert decision.allowed is False
+    assert decision.risk_level is SocAgentRiskLevel.UNKNOWN
+    assert decision.requires_human_approval is False
 
 
 def test_agent_chat_service_dispatches_explicit_read_only_asset_lookup_adapter() -> None:

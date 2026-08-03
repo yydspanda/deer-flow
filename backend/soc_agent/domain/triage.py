@@ -144,50 +144,35 @@ class _EdrDomainTriageHandler:
     def triage(self, request: SocDomainTriageRequest) -> SocDomainTriageResult:
         evidence = request.investigation_evidence
         skill_names = _skill_names(request.skill_context)
-        all_process_tree_evidence = _evidence_by_route(
-            evidence,
-            "endpoint.process_tree.lookup",
-            found_key="process_tree_found",
-            include_mocked=True,
-        )
-        process_tree_evidence = [item for item in all_process_tree_evidence if not evidence_is_mocked(item)]
-        risk_tags = sorted(_risk_tags_from_process_tree(process_tree_evidence))
+        attached_evidence = successful_evidence(evidence, include_mocked=True)
         evidence_refs = _merge_refs(
-            _evidence_ids(all_process_tree_evidence),
+            _evidence_ids(attached_evidence),
             _correlation_refs(request),
         )
-        limitations: list[str] = []
-        if not process_tree_evidence:
-            limitations.append("No endpoint process-tree evidence was attached.")
-        if not risk_tags:
-            limitations.append("No process risk tags were present in attached endpoint evidence.")
-        if len(all_process_tree_evidence) > len(process_tree_evidence):
-            limitations.append("Mock process-tree evidence is visible for flow validation but does not raise finding confidence.")
-
-        severe_tags = {"credential_access", "lateral_movement_candidate", "remote_registry", "persistence"}
-        severity = SocDomainFindingSeverity.HIGH if severe_tags.intersection(risk_tags) else SocDomainFindingSeverity.MEDIUM
-        disposition = SocDomainFindingDisposition.SUSPICIOUS if risk_tags else SocDomainFindingDisposition.NEEDS_MORE_EVIDENCE
-        confidence = 0.75 if risk_tags else 0.5
+        mocked_evidence = [item for item in attached_evidence if evidence_is_mocked(item)]
+        limitations = ["Attached mock investigation evidence does not raise finding confidence."] if mocked_evidence else []
+        severity = SocDomainFindingSeverity.MEDIUM
+        confidence = 0.5
         finding = SocDomainFinding(
             domain=self.domain,
-            title="EDR process-tree triage",
-            summary=("Endpoint evidence should be reviewed through parent-child process chain, command line, user context, and network activity before deciding containment."),
+            title="EDR alert-native triage",
+            summary=("Use process, command-line, user, file, and network facts already carried by the alert before deciding containment."),
             severity=severity,
-            disposition=disposition,
+            disposition=SocDomainFindingDisposition.NEEDS_MORE_EVIDENCE,
             confidence=confidence,
             evidence_profile=_evidence_profile_for_request(
                 request,
-                used_sources=["raw_log", "endpoint_process_tree", "similar_alerts", "confirmed_memory"],
+                used_sources=["raw_log", "similar_alerts", "confirmed_memory"],
                 gaps=limitations,
             ),
             current_conclusion=_finding_conclusion(
-                "当前结论：EDR 告警需要结合进程树、命令行、用户上下文、历史相似处置和 memory 判断；证据不足时仍应给出复核路径，不直接中止。",
+                "当前结论：EDR 告警直接使用原始告警携带的进程、命令行、账号、文件和网络事实，并结合历史相似处置与 memory 判断；不依赖额外进程树查询。",
                 risk_level=severity,
                 confidence=confidence,
                 recommended_action="manual_review",
                 recommended_queue="endpoint_review",
                 rationale=[
-                    "进程树和命令行是 endpoint 场景的核心证据。",
+                    "原始 EDR/HIDS 告警中的进程树和命令行仍是 endpoint 场景的核心证据。",
                     "历史相似处置和 confirmed memory 应作为常规研判输入，而不是工具缺失后的降级替代。",
                 ],
             ),
@@ -205,8 +190,8 @@ class _EdrDomainTriageHandler:
                 "若需要隔离或封禁，先生成高风险处置 proposal 并走审批。",
             ],
             metadata={
-                "risk_tags": risk_tags,
-                "mock_evidence_count": len(all_process_tree_evidence) - len(process_tree_evidence),
+                "attached_investigation_evidence_count": len(attached_evidence),
+                "mock_evidence_count": len(mocked_evidence),
             },
         )
         return _result(request, self.domain, self.handler_id, [finding])
@@ -219,45 +204,36 @@ class _HidsDomainTriageHandler:
     def triage(self, request: SocDomainTriageRequest) -> SocDomainTriageResult:
         evidence = request.investigation_evidence
         skill_names = _skill_names(request.skill_context)
-        all_host_context = _evidence_by_route(
-            evidence,
-            "host.event_context.lookup",
-            found_key="host_event_context_found",
-            include_mocked=True,
-        )
         all_active_tags = _active_security_tags(evidence, include_mocked=True)
-        host_context = [item for item in all_host_context if not evidence_is_mocked(item)]
         active_tags = [item for item in all_active_tags if not evidence_is_mocked(item)]
-        mocked_evidence = [item for item in [*all_host_context, *all_active_tags] if evidence_is_mocked(item)]
+        mocked_evidence = [item for item in all_active_tags if evidence_is_mocked(item)]
         evidence_refs = _merge_refs(
-            _evidence_ids(all_host_context + all_active_tags),
+            _evidence_ids(all_active_tags),
             _correlation_refs(request),
         )
         limitations: list[str] = []
-        if not host_context:
-            limitations.append("No HIDS host-event context evidence was attached.")
         if not active_tags:
             limitations.append("No active maintenance or authorization tag was attached.")
         if mocked_evidence:
-            limitations.append("Mock host/tag evidence is visible for flow validation but does not raise finding confidence.")
+            limitations.append("Mock security-tag evidence is visible for flow validation but does not raise finding confidence.")
 
         disposition = SocDomainFindingDisposition.BENIGN_AUTHORIZED_CANDIDATE if active_tags else SocDomainFindingDisposition.NEEDS_MORE_EVIDENCE
-        confidence = 0.68 if active_tags and host_context else 0.5
+        confidence = 0.62 if active_tags else 0.5
         severity = SocDomainFindingSeverity.LOW if active_tags else SocDomainFindingSeverity.MEDIUM
         finding = SocDomainFinding(
             domain=self.domain,
-            title="HIDS host-event context triage",
-            summary=("Host-event context and security tags can explain some HIDS events, but this remains a reviewable finding until analyst confirmation."),
+            title="HIDS alert-native triage",
+            summary=("Host/process facts carried by the alert and governed security tags can explain some HIDS events, but this remains reviewable until analyst confirmation."),
             severity=severity,
             disposition=disposition,
             confidence=confidence,
             evidence_profile=_evidence_profile_for_request(
                 request,
-                used_sources=["raw_log", "host_event_context", "security_tag", "similar_alerts", "confirmed_memory"],
+                used_sources=["raw_log", "security_tag", "similar_alerts", "confirmed_memory"],
                 gaps=limitations,
             ),
             current_conclusion=_finding_conclusion(
-                "当前结论：HIDS 主机事件需要结合事件上下文、登录账号、维护标签、历史相似处置和 memory 复核；存在授权标签时可作为误报/授权运维候选。",
+                "当前结论：HIDS 主机事件直接使用原始告警携带的事件、进程和登录账号，结合维护标签、历史相似处置和 memory 复核；不依赖额外主机上下文查询。",
                 risk_level=severity,
                 confidence=confidence,
                 recommended_action="manual_review",
@@ -282,7 +258,6 @@ class _HidsDomainTriageHandler:
             ],
             metadata={
                 "active_security_tag_count": len(active_tags),
-                "host_context_count": len(host_context),
                 "mock_evidence_count": len(mocked_evidence),
             },
         )
@@ -448,24 +423,6 @@ def _max_reputation_score(evidence: list[InvestigationEvidence]) -> int:
             if isinstance(score, int):
                 scores.append(score)
     return max(scores, default=0)
-
-
-def _risk_tags_from_process_tree(evidence: list[InvestigationEvidence]) -> set[str]:
-    risk_tags: set[str] = set()
-    for item in evidence:
-        process_tree = item.result_payload.get("process_tree")
-        if not isinstance(process_tree, Mapping):
-            continue
-        processes = process_tree.get("processes")
-        if not isinstance(processes, list):
-            continue
-        for process in processes:
-            if not isinstance(process, Mapping):
-                continue
-            tags = process.get("risk_tags")
-            if isinstance(tags, list):
-                risk_tags.update(str(tag) for tag in tags if tag)
-    return risk_tags
 
 
 def _merge_refs(existing: list[str], additions: list[str]) -> list[str]:

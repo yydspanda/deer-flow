@@ -38,12 +38,12 @@ card
 | `PA-APT-003` | P0 | APT | 威胁情报 IP 信誉查询 | read-only action adapter | read-only | Expanded |
 | `PA-APT-004` | P0 | APT/EDR | 渗透测试/白名单/授权标签查询 | read-only action adapter | read-only | Expanded |
 | `PA-APT-005` | P2 | APT | IP 封堵候选 | high-risk action proposal + approval policy | high-risk | Boundary defined |
-| `PA-EDR-001` | P0 | EDR | EDR 进程树、路径和命令行研判 | skill + domain handler + existing mock evidence | read-only | Expanded |
+| `PA-EDR-001` | P0 | EDR | EDR 进程树、路径和命令行研判 | normalizer + bounded alert-native evidence + skill/domain handler | read-only | Expanded |
 | `PA-EDR-002` | P1 | EDR | LoginData/System 文件读取分支 | domain handler + policy/eval | read-only | Expanded |
 | `PA-EDR-003` | P1 | EDR | 提权行为研判 | skill + domain handler + identity memory candidate | read-only | Expanded |
 | `PA-EDR-004` | P1 | EDR | UM/账号提取与身份模式 | entity extraction + tenant memory candidate | read-only | Expanded |
 | `PA-EDR-005` | P2 | EDR | UM 封禁与 EDR IP 隔离候选 | high-risk action proposal + approval policy | high-risk | Boundary defined |
-| `PA-HIDS-001` | P0 | HIDS | HIDS 主机事件上下文查询 | read-only action adapter | read-only | Expanded |
+| `PA-HIDS-001` | P0 | HIDS | HIDS 告警原生主机事件上下文研判 | normalizer + bounded alert-native evidence + skill/domain handler | read-only | Expanded |
 | `PA-HIDS-002` | P0 | HIDS | HIDS event_type 场景化研判 | endpoint/host skill + domain handler | read-only | Expanded |
 | `PA-HIDS-003` | P1 | HIDS | HIDS 误报/授权运维模式沉淀 | tenant memory candidate + eval | read-only | Expanded |
 | `PA-HIDS-004` | P2 | HIDS | 服务器隔离候选 | high-risk action proposal + approval policy | high-risk | Boundary defined |
@@ -306,18 +306,18 @@ EDR 告警主要靠 process tree、command line、path trust、user privilege �
 - process tree：process、parent、ancestor、path、cmd、user、hash。
 - path classification：system path、program files、user writable、unknown。
 - account context：user、UM-like account、privilege。
-- existing evidence：`endpoint.process_tree.lookup`。
+- existing evidence：告警原生 process observations、父子进程、命令行、账号、文件与网络连接投影。
 
 **Output**
 
 - `endpoint_finding`：suspicious_process、suspicious_cmd、path_risk、user_risk、confidence。
-- `recommended_queries`：asset.locate、security_tag、host/event context。
+- `recommended_queries`：asset.locate、security_tag、threat intelligence；进程/主机上下文不发外部查询。
 
 **Artifact Decision**
 
 - 通用研判方法进入 `soc-endpoint-triage`。
 - 平安安全软件路径、部门、账号例外进入 tenant memory/config/eval。
-- 进程树查询复用 existing `endpoint.process_tree.lookup` mock，未来真实 EDR MCP/API。
+- 进程树和命令行来自 PingAn normalizer 保留的告警原生证据；当前不定义额外 EDR 查询 action。
 
 **Failure Modes**
 
@@ -331,7 +331,7 @@ EDR 告警主要靠 process tree、command line、path trust、user privilege �
 - path safe 只能降低风险，不能单独判忽略。
 - 平安特定安全路径不得进入 public skill。
 
-### PA-HIDS-001 — HIDS 主机事件上下文查询
+### PA-HIDS-001 — HIDS 告警原生主机事件上下文
 
 **Source**
 
@@ -350,11 +350,11 @@ HIDS 告警误报和真实入侵都高度依赖主机上下文：谁登录、从
 
 **Output**
 
-- `host.event_context.lookup` evidence：recent logins、process context、related commands、source IPs、host criticality、event summary。
+- bounded host evidence：recent logins、process context、related commands、source IPs、host identity、event summary，并保留原始字段 provenance。
 
 **Artifact Decision**
 
-- read-only action adapter，短期 mock。
+- PingAn normalizer、bounded analysis evidence 和 domain finding；不建立外部主机上下文查询 mock。
 - 通用 HIDS 方法先复用 `soc-endpoint-triage`；若 HIDS 卡片继续膨胀，再新增 `soc-host-hids-triage`。
 - 平安机房、域名、组名、具体误报例外进 tenant memory/eval。
 
@@ -575,7 +575,7 @@ EDR 相关 public skill 只能增加这些通用方法：
 - 用户可写目录、临时目录、下载目录、脚本解释器、Office 子进程、浏览器下载执行等通常需要更高关注。
 - 提权研判要看操作者、目标权限、组变更、执行上下文、是否符合授权运维。
 - 凭证/浏览器数据/系统敏感文件读取要区分正常软件访问、可疑批量读取、恶意工具访问。
-- 如果证据不足，输出 uncertainty 和 recommended read-only queries，例如 `endpoint.process_tree.lookup`、`asset.locate`、`security_tag.lookup`。
+- 如果证据不足，输出 uncertainty，并只建议已配置的 `asset.locate`、`security_tag.lookup` 或 `threat_intel.ip_reputation.lookup`；不得虚构额外进程树/主机上下文查询。
 
 EDR public skill 不能包含：
 
@@ -614,7 +614,7 @@ EdrTriageResult
 约束：
 
 - domain handler 不直接调用 EDR MCP，不直接写 DB，不直接改 verdict。
-- `recommended_readonly_actions` 只能输出 action proposal，例如 `endpoint.process_tree.lookup`、`asset.locate`、`security_tag.lookup`。
+- `recommended_readonly_actions` 只能输出已配置的 action proposal，例如 `asset.locate`、`security_tag.lookup`、`threat_intel.ip_reputation.lookup`。
 - `recommended_high_risk_actions` 只能生成 approval-gated proposal，例如 `account.disable_um`、`endpoint.isolate_host`、`endpoint.isolate_ip`。
 - result 后续由 Main SOC Agent / Runtime 合并，不由 EDR handler 单独决定关闭或转交。
 
@@ -622,10 +622,10 @@ EdrTriageResult
 
 | Action | Input | Output evidence | Trigger condition | Failure behavior |
 |---|---|---|---|---|
-| `endpoint.process_tree.lookup` | host/agent/process identifiers, event time | process tree, parent/ancestor, cmd, user, hash, network hints | 原始告警缺进程链或进程链不完整 | failed/empty evidence；不得编造进程链 |
 | `asset.locate` | IP/HOST/UM/account candidates, role hints | owner, business group, environment, criticality, source | 需要定位受害资产、分单 BU 或处置归属 | 多结果标记 ambiguity；查不到不阻塞 review |
 | `security_tag.lookup` | IP/HOST/USER/tool/process, tag types, alert time | authorized_scan, pentest, allowlist, security_team, valid_until | 需要排除授权测试、安全团队工具、白名单行为 | 只返回 evidence；不得自动关闭 |
-| `host.event_context.lookup` | host, event time, user/process hints | login context, related commands, recent events | EDR 告警需要补充主机上下文时 | 查不到返回 empty evidence；不升级风险 |
+
+进程链、命令行和主机上下文缺失时记录 bounded evidence gap 并给出人工核查清单，不调用不存在的外部查询能力。
 
 ### 6.5 EDR High-Risk Action Boundary
 
@@ -707,7 +707,7 @@ PA-03 后续至少需要这些脱敏 fixture：
 | host_name、internal_ip、event_type、event_level、event_content、detail_* 字段 | PingAn adapter + canonical host/process/event context | 字段名只进 adapter/mapping/eval；core 和 public skill 消费 canonical entities/evidence |
 | HIDS event_type 分流 | domain router config + HIDS domain handler | event_type 作为 vendor alias / scenario facet；不能成为 core 必需字段 |
 | 可疑操作、后门、反弹 shell、web command、暴破、病毒、提权、蜜罐、webshell 通用研判 | `soc-endpoint-triage` / future `soc-host-hids-triage` + domain handler | 抽取通用主机行为方法；不复制 0415 prompt |
-| 进程链、登录用户、来源 IP、执行命令、主机事件上下文 | read-only `host.event_context.lookup` + evidence | 查询结果写 `InvestigationEvidence`，不直接关闭或转交 |
+| 进程链、登录用户、来源 IP、执行命令、主机事件上下文 | PingAn normalizer + bounded alert-native evidence | 保留 exact path/provenance，直接进入领域研判，不创建虚假外部查询结果 |
 | 内部组名、账号、脚本路径、机房、内部域名、内部安全工具 | tenant memory/config + eval | 只作为 PingAn tenant candidate，必须 pending review / validity |
 | `bruteforce_inter` 等“平安场景常忽略”规则 | tenant `benign_pattern` / policy candidate | 不能全局化；其他客户内网暴破可能高危 |
 | 服务器隔离 operateType/templateId/请求体 | high-risk action proposal + approval policy | 只定义候选边界；真实模板和 ID 不写入 public skill |
@@ -722,7 +722,7 @@ HIDS 相关 public skill 只能增加这些通用方法：
 - 反弹 shell / web command / webshell / 后门 / 提权等事件要优先看进程链、命令行、父进程、用户权限、来源 IP、目标主机角色。
 - 区分 malicious indicators 和 benign indicators，不能因为某个内部标签或测试关键字直接忽略。
 - 内网暴破、运维工具、健康检查、安全测试都只能作为候选解释，需要 tenant evidence 或 security tag 支撑。
-- 如果 evidence 不足，输出 uncertainty 和 recommended read-only queries，例如 `host.event_context.lookup`、`asset.locate`、`security_tag.lookup`。
+- 如果 evidence 不足，输出 uncertainty 和人工核查清单；read-only proposal 仅限已配置的 `asset.locate`、`security_tag.lookup` 或威胁情报。
 
 HIDS public skill 不能包含：
 
@@ -741,7 +741,7 @@ HidsTriageRequest
   normalized_entities
   field_trust_report
   conflict_report
-  host_event_context
+  alert_native_host_context
   detection_aliases
   existing_evidence_refs
   confirmed_memory_refs
@@ -761,7 +761,7 @@ HidsTriageResult
 约束：
 
 - domain handler 不直接调用 HIDS MCP，不直接写 DB，不直接改 verdict。
-- `recommended_readonly_actions` 只能输出 action proposal，例如 `host.event_context.lookup`、`asset.locate`、`security_tag.lookup`。
+- `recommended_readonly_actions` 只能输出已配置的 action proposal，例如 `asset.locate`、`security_tag.lookup`、`threat_intel.ip_reputation.lookup`。
 - `recommended_high_risk_actions` 只能生成 approval-gated proposal，例如 `host.isolate_server` 或 `endpoint.isolate_host`。
 - result 后续由 Main SOC Agent / Runtime 合并，不由 HIDS handler 单独决定关闭或转交。
 
@@ -769,10 +769,10 @@ HidsTriageResult
 
 | Action | Input | Output evidence | Trigger condition | Failure behavior |
 |---|---|---|---|---|
-| `host.event_context.lookup` | host/internal_ip, event time window, user/process hints | recent logins, process tree/context, commands, source IPs, related host events | 原始 HIDS 告警缺上下文或需要确认登录/进程链 | failed/empty evidence；不得编造主机上下文 |
 | `asset.locate` | HOST/IP candidates, role hints | owner, business group, environment, criticality, source | 需要定位主机归属、环境或隔离影响面 | 多结果标记 ambiguity；查不到不执行隔离 |
 | `security_tag.lookup` | HOST/IP/USER/tool/process, tag types, alert time | authorized_ops, pentest, security_team, maintenance, valid_until | 需要排除授权运维、安全测试、白名单行为 | 只返回 evidence；不得自动关闭 |
-| `endpoint.process_tree.lookup` | host/process identifiers, event time | expanded process tree, parent/ancestor, cmd, user, hash | HIDS 只给出片段进程链，需要 endpoint/host 补充 | failed/empty evidence；不升级风险 |
+
+HIDS 原始告警上下文不完整时记录 schema/evidence gap 并转人工核查；当前不通过逐告警外部查询补齐。
 
 ### 7.5 HIDS High-Risk Action Boundary
 
@@ -786,7 +786,7 @@ host.isolate_server proposal
     - host finding
     - disposal_target finding
     - asset locate evidence
-    - host event context evidence
+    - alert-native host/process evidence
     - security tag evidence or explicit skip reason
     - approval actor
     - idempotency key
@@ -853,7 +853,7 @@ PA-04 后续至少需要这些脱敏 fixture：
 下一步不是直接写所有能力，而是按这个顺序小步实现。`PA-06`、`PA-07`、`PA-08`、`PA-09`、`PA-10` 已完成；当前继续 PingAn 专项，下一刀进入 `PA-11` Main Orchestrator demo。
 
 1. Done：`PA-06` 对 `skills/public/soc-*` 做最小增量修订，只补通用研判方法，不补平安事实。
-2. Done：`PA-07` 实现 `host.event_context.lookup`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup` mock read-only action adapters。
+2. Done / revised：`PA-07` 保留 `threat_intel.ip_reputation.lookup`、`security_tag.lookup` mock read-only action adapters；进程树和主机上下文查询 mock 已删除，改用告警原生证据。
 3. Done：`PA-08` 为 APT/EDR/HIDS 每类建立至少 1 条脱敏 eval fixture，并可通过 `soc eval pingan` 回归。
 4. Done：`PA-09` 接 PingAn memory candidate 入口，保持 `pending_review`，不直接确认记忆。
 5. Done：`PA-10` 接 APT / EDR / HIDS domain triage MVP，只输出 finding/evidence/recommendation。

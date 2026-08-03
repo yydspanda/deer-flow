@@ -49,10 +49,10 @@ Keep benign indicators as review context unless policy and evidence explicitly s
 
 Recommend these as proposals only when needed:
 
-- `endpoint.process_tree.lookup` for missing ancestry, command-line, user, hash, and callback context.
-- `host.event_context.lookup` for recent logins, related commands, and host-local event context.
 - `asset.locate` for ownership, criticality, and response-target ambiguity.
 - `security_tag.lookup` for authorization, testing, maintenance, or allowlist evidence.
+
+Process ancestry, command lines, login context, hashes, and network activity must come from the alert's bounded native evidence. Do not propose an external process-tree or host-context query when no such provider is configured.
 
 ## Output
 

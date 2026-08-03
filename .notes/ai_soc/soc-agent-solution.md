@@ -180,7 +180,7 @@ flowchart TB
     end
 
     subgraph Data["🗄️ Data / 数据层"]
-        DB["PostgreSQL in prod<br/>SQLite only for local smoke"]
+        DB["PostgreSQL in staging/prod<br/>SQLite for local/internal DEV"]
         AUDIT_DB["Decision + Mutation Audit<br/>durable SQL"]
         MEMORY_DB["Memory Tables"]
     end
@@ -843,7 +843,8 @@ flowchart TD
 | Content type / 内容 | Belongs to / 应放在 | Example / 例子 |
 | --- | --- | --- |
 | Reusable investigation method / 通用研判方法 | Public SOC skill | How to reason about reverse shell, malicious outbound, process tree |
-| External system query / 外部系统查询 | MCP or action adapter | CMDB lookup, EDR process tree, threat intel reputation |
+| External system query / 外部系统查询 | MCP or action adapter | Asset ownership, threat-intel reputation, governed security tags |
+| Alert-native endpoint/host evidence / 告警原生终端与主机证据 | Normalizer + bounded evidence | Process tree, command line, login user, host events carried by EDR/HIDS alerts |
 | Governed operational fact / 有治理的运营事实 | Governed context registry + typed source adapter | Exercise participant, approved scanner campaign, maintenance window, asset state |
 | Tenant-specific descriptive fact / 租户描述性事实 | Scoped memory or policy/config | Internal domain meaning, investigation note, special business-system context |
 | Vendor field mapping / 字段映射 | Normalizer adapter | PingAn `zeusRawLogs[].message` mapping |
@@ -1277,8 +1278,10 @@ Contract rules:
 
 ## 9. Persistence and Runtime Data / 存储与运行数据
 
-Production and staging should use PostgreSQL as the SOC business store. Local SQLite can be
-used only for smoke/demo convenience when explicitly configured.
+Production and staging should use PostgreSQL as the SOC business store. Local development and the
+current PingAn internal DEV validation follow DeerFlow `database.backend: sqlite` and automatically
+use the separate `{database.sqlite_dir}/soc_agent_dev.db`; explicit CLI/env database URLs remain
+overrides. SQLite evidence cannot satisfy PostgreSQL/staging acceptance.
 
 Main persistence categories:
 

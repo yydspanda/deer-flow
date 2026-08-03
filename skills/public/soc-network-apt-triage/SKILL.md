@@ -61,7 +61,8 @@ Recommend these as proposals only when needed:
 - `asset.locate` for victim, affected asset, owner, environment, or response target ambiguity.
 - `threat_intel.ip_reputation.lookup` for external IP/domain/URL quality and freshness.
 - `security_tag.lookup` for authorization, testing, maintenance, or allowlist evidence.
-- `endpoint.process_tree.lookup` when network traffic must be tied to an endpoint process.
+
+When network traffic must be tied to a process, use process and connection facts already present in the alert's bounded native evidence. Do not assume a separate endpoint process-tree provider exists.
 
 Do not directly block IPs/domains or suppress alerts. Route those actions through approval.
 

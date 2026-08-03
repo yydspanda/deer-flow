@@ -9,7 +9,10 @@ from soc_agent.daemon.kafka_status import build_kafka_daemon_status
 from soc_agent.db import create_soc_tables
 
 
-def test_kafka_daemon_status_reports_missing_database() -> None:
+def test_kafka_daemon_status_reports_missing_database(monkeypatch) -> None:
+    monkeypatch.delenv("SOC_DATABASE_URL", raising=False)
+    monkeypatch.setattr("soc_agent.db.config._database_url_from_deerflow_config", lambda: None)
+
     status = build_kafka_daemon_status(database_url=None, kafka_settings=KafkaConsumerSettings(), check_database=True)
 
     assert status.ready is False

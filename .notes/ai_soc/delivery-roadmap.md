@@ -37,13 +37,10 @@ flowchart LR
 | `BD` Boss Demo v0.1 | **Done** | 一条 8-10 分钟、浏览器优先、可重复的 golden path | `BD-01..03` 与 BD Gate 已通过 |
 | `AA` SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 唯一的 Complete/Gap/Mock/Data-gated/Deferred 矩阵 | 审计矩阵和 P0/P1 阻塞清单已于 2026-07-18 确认 |
 | `BG` Close Blocking Gaps | **Done / Alpha Gate Passed 2026-07-20** | P0/P1、Alpha readiness technical gate、独立评审与具名批准已完成 | `BG-03` 已批准进入 Stage 4 integration preparation |
-| `PI` Real Data & Production Integration | **Current / PI-04-A Done; PI-04-B Next** | 真实 PingAn/通用 provider、Kafka/PostgreSQL/K8s 和运营验证 | Pilot readiness review 通过 |
+| `PI` Real Data & Production Integration | **Current / PI-01 D12-B DEV Intake** | 真实 PingAn/通用 provider；基础设施和运营扩展按可用输入后置 | Pilot readiness review 通过 |
 
 Boss Demo v0.1 和 Alpha 完整性审计已于 2026-07-18 分别通过 BD Gate、AA Gate；冻结的
-`BG-P0-01..BG-P1-05` 与 `BG-03` 已于 2026-07-20 关闭。`PI-01/D12-B` 因缺少内网 endpoint、credential、
-signer/workflow import、tenant mapping 和 approved payload 暂停为 `Waiting / data-gated`，不得以新增 mock
-冒充完成。`PI-04-A SOC Operations Snapshot` 已完成，下一项为只消费冻结 contract 的 `PI-04-B` 薄 Web
-运营视图；这仍不代表共享部署、试点或生产已批准。
+`BG-P0-01..BG-P1-05` 与 `BG-03` 已于 2026-07-20 关闭。`PI-04-A SOC Operations Snapshot` 已完成；产品负责人已于 2026-08-03 将执行指针切回 `PI-01/D12-B`，先完成内网 DEV 信息收集、配置预检和真实资产 Provider smoke。当前 DEV 统一使用独立本地 SQLite，不收集 Kafka/K8s/PostgreSQL 参数；这些基础设施项保持后续路线，不阻塞本轮。未经证实的进程树/主机上下文查询 mock 已删除，不得以新增 mock 冒充真实能力。
 
 ## 3. Stage 1 - Boss Demo v0.1
 
@@ -128,8 +125,8 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 
 | ID | Work / 工作 | Deliverable / 产出 | Acceptance / 验收 |
 |---|---|---|---|
-| `PI-01` | Real providers / 真实能力源 | **Waiting / data-gated**: Checkpoint D0-D11.1 已完成；D12-A 已交付 PingAn `asset.locate` 的 production-shaped provider、MCP/config 边界和 `mocked=true` fake smoke。产品负责人决定暂时停放 D12-B，等待内网真实 endpoint、凭证、signer、workflow runner、tenant mapping 与批准 payload | D12-A 只证明代码、协议、fallback 和 fail-closed；D12-B 必须保存 `mocked=false` 的成功、查无、鉴权失败、超时及 `InvestigationEvidence` smoke，确认 latency、payload/result size、裁剪、敏感信息和审计后，才可关闭 `PA-12` 并认定第一项 PI-01 real provider 完成 |
-| `PI-02` | Real infrastructure / 真实基础设施 | Kafka、PostgreSQL、K8s 参数与容量/恢复测试 | 吞吐、端到端延迟、重试、DLQ、幂等、连接池和故障恢复满足试点门槛 |
+| `PI-01` | Real providers / 真实能力源 | **Current / intake**: Checkpoint D0-D11.1 和 D12-A 已完成；按 `integrations/pingan-dev-information-collection.md` 收集 root config、DEV 环境选择、approved test cases、ZEUS TI/tag 与外部状态反馈契约，随后执行 D12-B | D12-A 只证明代码、协议、fallback 和 fail-closed；D12-B 必须保存 `mocked=false` 的成功、查无、鉴权失败、超时及 `InvestigationEvidence` smoke，确认 latency、payload/result size、裁剪、敏感信息和审计后，才可关闭 `PA-12` 并认定第一项 PI-01 real provider 完成 |
+| `PI-02` | Real infrastructure / 真实基础设施 | **Parked until inputs exist**: Kafka/PostgreSQL/K8s 参数与容量/恢复测试；本轮内网 DEV 使用独立本地 SQLite | 吞吐、端到端延迟、重试、DLQ、幂等、连接池和故障恢复满足试点门槛 |
 | `PI-03` | Real labels and calibration / 真实标签与校准 | 脱敏、人工标注的 scenario/confidence/correlation corpus | 来源、范围、版本和 reviewer 可审计；scorer/profile 仅在离线 gate 通过后进入 shadow |
 | `PI-04` | Operations and security / 运维与安全 | **PI-04-A Done / PI-04-B Next**: `soc.operations_snapshot.v1` 已通过精确 persisted aggregates、secret-free Kafka projection、CLI/API 和回归；下一步只接薄 Web 消费面，后续再接 Prometheus、真实 telemetry、SLO 和安全运营流程 | 运营同事能定位任务/预警/延迟/模型/队列问题；任何未采集的 lag/算力/SLO 必须标记 `not_measured`，不能用默认值冒充健康 |
 | `PI-05` | Governed rollout / 受治理上线 | shadow -> limited pilot -> controlled action 的阶段评审 | 不因单次评测自动开放 auto-close 或高风险执行；每一档可回滚 |
@@ -181,7 +178,7 @@ Completed:    BG-P1-04 - Governed memory activation (AC-39)
 Completed:    BG-P1-05 - Alpha E2E and docs reconciliation (AC-23, AC-24, AC-49)
 Completed:    BG-03 - Alpha readiness package and scoped accountable approval
 Current Stage: PI - Real Data & Production Integration
-Waiting:      PI-01 - first approved read-only dev/staging provider intake (D12-B parked/data-gated)
+Current:      PI-01 - D12-B internal DEV information collection and provider preflight preparation
 Completed:    PI-01 Checkpoint D-0 - 212-row adapter-independent corpus inventory
 Completed:    PI-01 Checkpoint D-1 - alert 1965449 canonical normalization (parser warnings explicit)
 Completed:    PI-01 Checkpoint D-2 - alert 1965449 generic deterministic entity extraction
@@ -195,8 +192,8 @@ Completed:    PI-01 Checkpoint D-9 - soc.decision_policy.v3 (degraded from ungro
 Completed:    PI-01 Checkpoint D-10 - live deepseek-v4-pro 8-topic / 6-source Runtime matrix (10 calls, 167,042 tokens, quality findings fail closed)
 Completed:    PI-01 Checkpoint D-11/D11.1 - 212-row two-pass Runtime compatibility plus evidence-quality semantics (424 runs, 212 stable, 0 failures)
 Completed:    PI-01 Checkpoint D12-A - PingAn asset provider code + fake MCP smoke (`mocked=true`; not real-provider evidence)
-Waiting:      PI-01 Checkpoint D12-B - internal real asset-provider smoke (`mocked=false` required)
+In Progress:  PI-01 Checkpoint D12-B - internal real asset-provider intake/smoke (`mocked=false` required)
 Completed:    PI-04-A - SOC Operations Snapshot contract, exact persisted counters, Kafka readiness projection, CLI/API
-Next:         PI-04-B - thin Web operator view consuming the frozen snapshot; no frontend metric recomputation
-External inputs: D12-B still requires real ZEUS endpoint/app credentials, signer/runtime imports, workflow IDs, tenant mapping, approved payload sample and data owner
+Next:         D12-B root-config profile/preflight, then real asset.locate smoke; PI-04-B remains parked
+External inputs: redacted root_config/environment selection plus internal-only approved D12-B test cases; import names, workflow IDs and ZEUS request/response contracts are already derived from legacy code
 ```

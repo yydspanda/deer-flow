@@ -105,7 +105,7 @@ PingAn docs
 | 主机可疑操作、后门、反弹 shell、web command、暴破、病毒、提权、蜜罐、webshell 判断方法 | `soc-endpoint-triage`，后续可拆 `soc-host-hids-triage` |
 | event_type 到 process part 的映射 | domain router config |
 | 内部安全组、特定账号、特定工具、特定脚本路径误报 | PingAn `benign_pattern` / `environment_fact` memory |
-| HIDS 主机上下文、进程链、登录用户查询 | read-only `host.event_context.lookup` adapter |
+| HIDS 主机上下文、进程链、登录用户 | PingAn normalizer + bounded alert-native evidence + endpoint/HIDS skill |
 | 主机隔离 | high-risk `endpoint.isolate_host` / `host.isolate_server` action |
 | HIDS 0415 版本的新增过程和规则 | versioned memory candidate / eval cases，不直接塞 skill |
 
@@ -137,8 +137,6 @@ PingAn 经验进入 DB memory 时，建议使用这些类型：
 | Route | 风险等级 | 来源 | 说明 |
 |---|---|---|---|
 | `asset.locate` | read-only | APT/EDR/HIDS | 查资产归属、BU、owner、环境、重要性 |
-| `endpoint.process_tree.lookup` | read-only | EDR | 查进程树、父子进程、命令行、网络连接 |
-| `host.event_context.lookup` | read-only | HIDS | 查主机事件上下文、登录用户、进程链 |
 | `threat_intel.ip_reputation.lookup` | read-only | APT | 查 IP 情报、威胁标签、时效、地理信息 |
 | `security_tag.lookup` | read-only | APT/EDR | 查渗透测试名单、黑白名单、内部授权标签 |
 | `disposal.template.lookup` | read-only | APT/EDR/HIDS | 查处置模板候选，不执行 |
@@ -150,8 +148,8 @@ PingAn 经验进入 DB memory 时，建议使用这些类型：
 短期 mock：
 
 - `asset.locate` 已有本地 mock。
-- `endpoint.process_tree.lookup` 已有 mock。
-- 下一批优先 mock `host.event_context.lookup`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup`。
+- `threat_intel.ip_reputation.lookup`、`security_tag.lookup` 已有本地 mock，下一步替换为共用 ZEUS 鉴权的真实 DEV Provider。
+- 不建立进程树或主机上下文查询 mock；相应信息使用告警原生证据。
 
 ## 8. 主 Agent 提示词只放路由原则
 
@@ -174,7 +172,7 @@ SOC Lead Agent prompt 只应该包含这些稳定规则：
 | 1 | 给现有六个 `soc-*` skill 补 Knowledge Boundary | 防止 PingAn 知识继续污染通用 skill |
 | 2 | 从 PingAn docs 抽 P0 capability cards | Done：已新增 `capabilities/pingan/capability-cards.md`；`PA-02` APT、`PA-03` EDR、`PA-04` HIDS 已展开 |
 | 3 | 设计 `PingAnKnowledgeCandidate` 清单 | Done：已新增 `capabilities/pingan/knowledge-candidates.md`；每条标注 target artifact、tenant scope、source、validity、review owner，默认 `pending_review` |
-| 4 | mock read-only adapters | `host.event_context.lookup`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup` |
+| 4 | mock read-only adapters | `threat_intel.ip_reputation.lookup`、`security_tag.lookup`；进程/主机上下文仅使用告警原生证据 |
 | 5 | 建 eval fixtures | 每类至少 1 条脱敏样例，验证 skill/memory/router 不走偏 |
 | 6 | 接 memory candidate | 只写 `pending_review`，不自动 confirmed |
 

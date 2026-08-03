@@ -178,16 +178,30 @@ soc analyze samples/alerts/approved_scanner.json --pretty
 
 The runtime keeps deterministic control flow and uses a deterministic analyzer by
 default; an explicitly selected DeerFlow model can run the bounded LLM node. SOC
-business persistence supports PostgreSQL, while focused local tests may use SQLite.
+business persistence supports PostgreSQL. With local `database.backend: sqlite`, SOC
+commands and Gateway routes automatically use the separate
+`{database.sqlite_dir}/soc_agent_dev.db`; `--database-url` and `SOC_DATABASE_URL`
+remain explicit overrides.
 Kafka ingestion, ReviewQueue Web/TUI, governed context, shadow disposition proposals,
 and append-only evaluation outcomes are available; production response side effects
 remain approval-gated and disabled without a real adapter.
+
+Internal DEV validation uses that isolated local SOC SQLite database. Endpoint process trees,
+commands, login context, and host events are consumed from bounded alert-native evidence;
+the Runtime does not advertise synthetic process-tree or host-context lookup actions.
+
+Initialize or upgrade the local SOC schema from `backend/`; no database URL is needed when
+`config.yaml` uses `database.backend: sqlite`:
+
+```bash
+soc db upgrade
+```
 
 Inspect exact persisted backlog counts and passive Kafka readiness without exposing
 connection details:
 
 ```bash
-soc ops snapshot --database-url "$SOC_DATABASE_URL" --pretty
+soc ops snapshot --pretty
 # Add --check-broker only for an explicit connectivity probe.
 ```
 
@@ -225,7 +239,7 @@ technical pass remains `pending_owner_review` and `production_ready=false`; see
 Open the SOC review workbench:
 
 ```bash
-soc review tui --actor-id analyst-1 --database-url "$SOC_DATABASE_URL"
+soc review tui --actor-id analyst-1
 ```
 
 After a ReviewQueue item is closed, disposition labels remain a separate explicit

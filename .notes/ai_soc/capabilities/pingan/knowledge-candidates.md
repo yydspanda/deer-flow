@@ -377,7 +377,7 @@ evidence_required:
 - `validity`: `source_versioned`
 - `decision_impact`: `policy_candidate`
 
-内容：服务器隔离只能作为 high-risk proposal，需要 host finding、disposal target、asset locate、host event context、security tag 或 explicit skip reason。
+内容：服务器隔离只能作为 high-risk proposal，需要 host finding、disposal target、asset locate、告警原生 host/process evidence、security tag 或 explicit skip reason。
 
 验收：
 

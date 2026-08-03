@@ -144,9 +144,12 @@ Current SOC direction:
   docs instead of modifying upstream core code. Only touch existing DeerFlow core files
   for small, generic extension points or framework fixes that are clearly useful beyond
   SOC, and keep those changes easy to explain for future upstream sync.
-- PostgreSQL is the production/staging SOC business store. Local tests, demos, Runtime validation and
-  Alpha acceptance may use purpose-specific isolated SQLite files under `backend/.deer-flow/`; do not
-  reuse DeerFlow's generic `alerts.db` or claim SQLite evidence as PostgreSQL production evidence.
+- PostgreSQL is the production/staging SOC business store. When DeerFlow uses
+  `database.backend: sqlite`, SOC persistence resolves automatically to the separate
+  `{database.sqlite_dir}/soc_agent_dev.db`; explicit `--database-url` and `SOC_DATABASE_URL`
+  still take precedence. Local tests, demos, Runtime validation and Alpha acceptance may use
+  other purpose-specific isolated SQLite files under `backend/.deer-flow/`; never reuse
+  DeerFlow's `deerflow.db` or claim SQLite evidence as PostgreSQL production evidence.
 - SOC persistence code lives under `backend/soc_agent/db/` and implements repository
   protocols from `backend/soc_agent/protocols.py`; keep it separate from DeerFlow harness
   persistence unless a generic upstream extension point is genuinely needed.
@@ -342,9 +345,10 @@ Current SOC direction:
   secret-free Kafka readiness projection. The Gateway endpoint is passive; only the CLI's explicit
   `--check-broker` may perform a connectivity probe. The snapshot must not infer an overall health
   verdict or claim lag, model compute, or production SLO evidence when those signals are not measured.
-- `endpoint.process_tree.lookup` is currently a read-only in-memory/mock EDR investigation
-  adapter used to validate process-tree evidence flow before real EDR MCP credentials exist;
-  do not treat it as production EDR integration.
+- SOC Runtime does not expose `endpoint.process_tree.lookup` or `host.event_context.lookup`.
+  Process trees, commands, login context, and host events must come from the alert's bounded native
+  evidence. Do not reintroduce mock routes or degrade a decision merely because those external
+  providers do not exist; a future real provider requires an explicit product decision and contract.
 - Phase 2 correlation is an explicit service bridge, not a hidden Runtime node.
   `SocAnalysisService` and `SocCorrelationService` must share the same
   `AlertSummaryRepository`; `CorrelationResult` enters `UnifiedInvestigationReport` and

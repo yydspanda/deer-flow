@@ -37,12 +37,13 @@
       "subject_evidence": [
         {
           "evidence_id": "EVI-EVAL-ENDPOINT-CURRENT",
-          "route": "endpoint.process_tree.lookup",
-          "action": "endpoint.process_tree.lookup",
+          "route": "asset.lookup",
+          "action": "asset.lookup",
           "status": "success",
-          "message": "Current-run process tree.",
+          "message": "Current-run asset context.",
           "result_payload": {
-            "root_process": "winlogon.exe"
+            "asset_key": "workstation-001",
+            "criticality": "high"
           },
           "run_id": "RUN-EVAL-ENDPOINT-CURRENT",
           "alert_id": "ALT-EVAL-ENDPOINT-001",
@@ -79,13 +80,13 @@
           "evidence": [
             {
               "evidence_id": "EVI-EVAL-ENDPOINT-SAME",
-              "route": "endpoint.process_tree.lookup",
-              "action": "endpoint.process_tree.lookup",
+              "route": "asset.lookup",
+              "action": "asset.lookup",
               "status": "success",
-              "message": "Historical process tree for the duplicate delivery.",
+              "message": "Historical asset context for the duplicate delivery.",
               "result_payload": {
-                "root_process": "winlogon.exe",
-                "risk": "high"
+                "asset_key": "workstation-001",
+                "criticality": "high"
               },
               "run_id": "RUN-EVAL-ENDPOINT-SAME",
               "alert_id": "ALT-EVAL-ENDPOINT-001",
@@ -122,13 +123,13 @@
           "evidence": [
             {
               "evidence_id": "EVI-EVAL-ENDPOINT-RELATED",
-              "route": "endpoint.process_tree.lookup",
-              "action": "endpoint.process_tree.lookup",
+              "route": "asset.lookup",
+              "action": "asset.lookup",
               "status": "success",
-              "message": "Historical process tree for a related occurrence.",
+              "message": "Historical asset context for a related occurrence.",
               "result_payload": {
-                "root_process": "explorer.exe",
-                "risk": "medium"
+                "asset_key": "workstation-001",
+                "criticality": "high"
               },
               "run_id": "RUN-EVAL-ENDPOINT-RELATED",
               "alert_id": "ALT-EVAL-ENDPOINT-002",
@@ -205,12 +206,12 @@
           "evidence": [
             {
               "evidence_id": "EVI-EVAL-ENDPOINT-ZERO",
-              "route": "host.event_context.lookup",
-              "action": "host.event_context.lookup",
+              "route": "asset.lookup",
+              "action": "asset.lookup",
               "status": "success",
-              "message": "Host context for an unrelated event.",
+              "message": "Asset context for an unrelated event.",
               "result_payload": {
-                "host": "server-099"
+                "asset_key": "server-099"
               },
               "run_id": "RUN-EVAL-ENDPOINT-ZERO",
               "alert_id": "ALT-EVAL-HIDS-001",
@@ -417,12 +418,12 @@
           "evidence": [
             {
               "evidence_id": "EVI-EVAL-NETWORK-ZERO",
-              "route": "endpoint.process_tree.lookup",
-              "action": "endpoint.process_tree.lookup",
+              "route": "asset.lookup",
+              "action": "asset.lookup",
               "status": "success",
-              "message": "Process tree for an unrelated endpoint alert.",
+              "message": "Asset context for an unrelated endpoint alert.",
               "result_payload": {
-                "root_process": "services.exe"
+                "asset_key": "workstation-099"
               },
               "run_id": "RUN-EVAL-NETWORK-ZERO",
               "alert_id": "ALT-EVAL-EDR-099",

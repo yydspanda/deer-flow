@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+
+SOC_LOCAL_SQLITE_FILENAME = "soc_agent_dev.db"
 
 
 def resolve_database_url(explicit_url: str | None = None) -> str:
@@ -11,7 +14,10 @@ def resolve_database_url(explicit_url: str | None = None) -> str:
     Resolution order:
     1. Explicit CLI/API argument.
     2. ``SOC_DATABASE_URL``.
-    3. DeerFlow ``database.postgres_url`` when ``database.backend=postgres``.
+    3. DeerFlow database config:
+       - ``database.postgres_url`` when ``database.backend=postgres``;
+       - an isolated ``soc_agent_dev.db`` beside DeerFlow's SQLite file when
+         ``database.backend=sqlite``.
     """
 
     if explicit_url:
@@ -22,7 +28,7 @@ def resolve_database_url(explicit_url: str | None = None) -> str:
     config_url = _database_url_from_deerflow_config()
     if config_url:
         return config_url
-    raise ValueError("database URL required; pass --database-url, set SOC_DATABASE_URL, or configure database.backend=postgres")
+    raise ValueError("database URL required; pass --database-url, set SOC_DATABASE_URL, or configure database.backend=sqlite|postgres")
 
 
 def to_sync_database_url(database_url: str) -> str:
@@ -45,6 +51,12 @@ def _database_url_from_deerflow_config() -> str | None:
         database = get_app_config().database
     except Exception:
         return None
-    if database.backend != "postgres" or not database.postgres_url:
-        return None
-    return database.postgres_url
+    if database.backend == "postgres":
+        return database.postgres_url or None
+    if database.backend == "sqlite":
+        sqlite_dir = getattr(database, "sqlite_dir", None)
+        if not isinstance(sqlite_dir, str) or not sqlite_dir.strip():
+            return None
+        sqlite_path = Path(sqlite_dir).expanduser().resolve() / SOC_LOCAL_SQLITE_FILENAME
+        return f"sqlite:///{sqlite_path}"
+    return None

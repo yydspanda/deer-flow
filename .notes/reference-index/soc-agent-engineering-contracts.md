@@ -858,9 +858,9 @@ SOC Agent chat stream 约束：
   - D12 PingAn provider 保留经审阅的 ZEUS `/public/searchAssetInfo` 请求体与 `isec_sign(data, app_id, app_key)` 鉴权边界，以及 `searchAssetInfo -> asset_to_bu -> UM` 降级语义；endpoint、secret、signer import、workflow runner/ID、operator 和 tenant ownership override 只能来自显式环境/配置，不能写入通用 Runtime 或提交 secret。
   - D12-A `fake` 和 D12-B `internal` 模式必须互斥。fake transport/result 必须声明 `mocked=true`、`provider_mode=fake`、`decision_impact=none`；internal 配置缺失或 import/provider 失败必须 fail closed，禁止静默回退 fake。只有真实 `mocked=false` smoke 才能作为 PA-12/PI-01 real-provider 证据。
   - 多个有效资产归属必须返回 bounded candidates 与 `ambiguous=true`，不能默认选择第一条；原始 provider response、签名 header 和 secret 不得进入 `SocAgentActionResult`、`InvestigationEvidence` 或 smoke 报告。provider 只输出有界归属与 attempt provenance，且不得直接修改 verdict、ReviewQueue、memory 或 action authority。
-  - `endpoint.process_tree.lookup` 是 read-only endpoint investigation action，用于在没有真实 EDR MCP 时验证进程树查询、证据沉淀和 Lead Agent proposal bridge；当前实现为 `InMemoryEndpointProcessTreeLookupActionAdapter`，默认返回 mock EDR process tree，不代表真实 EDR 接入。
+  - SOC Runtime 不提供 `endpoint.process_tree.lookup` 或 `host.event_context.lookup`。进程树、父子进程、命令行、登录上下文和主机事件只能来自告警自身经过 normalizer/bounded evidence 处理后的原生证据；不存在外部 Provider 不能被建模为缺工具降级，更不能用 mock 结果补齐。
   - SOC Lead Agent 可以用 `<soc_action_proposal>...</soc_action_proposal>` 提出 `asset.lookup` / `asset.locate` 这类 read-only proposal；`SocLeadAgentActionProposalBoundary` 只能在注入 read-only router/dispatcher 时把它转成同一条 router/policy/dispatcher/registry 链路。
-  - SOC Lead Agent 可以提出 `endpoint.process_tree.lookup` proposal，但必须先检查 `InvestigationContext.action_evidence` / bounded artifact `action_evidence`，复用已有新鲜结果，避免重复查询。
+  - SOC Lead Agent 不得提出不存在的进程树或主机上下文查询。只有显式注册且经过租户配置治理的 `asset.locate`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup` 等真实/待替换边界才能形成 read-only proposal。
   - `soc-asset-extraction` skill 只负责资产抽取、角色标注、disposal target 建议和 `asset.lookup` / `asset.locate` proposal 生成约束；skill 不得直接查询 Zeus/CMDB/EDR/SOAR，不得宣称 company code、BU、owner 或处置结果。
   - Lead Agent 不得直接调用 adapter、MCP 或资产系统；普通自然语言、Markdown 建议、模型自称“已查询”都不能触发 read-only lookup。
   - MCP-backed SOC action 必须实现为 `SocActionAdapter`，并先注册 `SocAgentActionAdapterDescriptor`；SOC route/action 到 MCP server/tool 的映射只能存在于 adapter/config 层，不能暴露给 Lead Agent 作为自由 tool 选择。
@@ -884,7 +884,8 @@ SOC Agent chat stream 约束：
   - `backend/scripts/soc_dev_mcp_server.py` 和 `backend/samples/mcp/soc_dev_*.json` 只用于本地真实 stdio MCP smoke，不是生产配置。样例 `extensions_config` 使用 `$SOC_DEV_MCP_PYTHON` / `$SOC_DEV_MCP_SERVER` 环境变量传绝对路径，避免 DeerFlow stdio tool 执行时切换 cwd 后找不到相对路径。
   - `backend/scripts/soc_dev_mcp_server.py` 当前提供两个本地 mock read-only tools：`asset_lookup` 返回静态资产记录，`asset_locate` 模拟 Zeus/CMDB/asset_to_bu 远程归属定位并返回 `mocked=true`；这两个工具只能用于开发 smoke 和 proposal bridge 验证。
   - `soc chat tui --lead-agent --mcp-action-config PATH` 是显式 dev/staging 注入入口；不传配置时保持本地 in-memory read-only adapter，不得隐式扫描或自动启用任意 MCP action config。
-  - `soc chat tui --lead-agent` 当前使用 SOC repository 写入 read-only action evidence；不传 `--mcp-action-config` 时默认包含本地 `asset.lookup` 与 `endpoint.process_tree.lookup` mock adapter；`InMemoryInvestigationEvidenceRepository` 只用于单元测试和无数据库的局部 service wiring。
+  - `soc chat tui --lead-agent` 当前使用 SOC repository 写入 read-only action evidence；不传 `--mcp-action-config` 时本地 registry 只包含 `asset.lookup`、`threat_intel.ip_reputation.lookup` 和 `security_tag.lookup` mock adapter；`InMemoryInvestigationEvidenceRepository` 只用于单元测试和无数据库的局部 service wiring。
+  - PingAn 内网 DEV 的 SOC 业务库固定使用独立本地 SQLite。`resolve_database_url()` 在没有显式参数和 `SOC_DATABASE_URL` 时，若 DeerFlow 为 `database.backend: sqlite`，必须自动使用 `{database.sqlite_dir}/soc_agent_dev.db`，不能复用 `deerflow.db`；`soc db upgrade` 必须创建缺失的 SQLite 父目录。当前不收集 PostgreSQL、Kafka 或 K8s DEV 参数，也不能用 SQLite 结果声明准生产/生产基础设施已验收。生产/准生产 PostgreSQL 目标保持不变。
   - 真实 dev/staging MCP smoke 不是当前阻塞项；只有拿到真实 endpoint/凭证后才替换本地 fixture 并保存 `soc.mcp_action_smoke_report.v1`。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
     - `POST /api/soc/approvals/grants`
@@ -1067,7 +1068,7 @@ SOC repository 实现约束：
   `soc_external_dispositions`、`soc_memory_candidates`、`soc_memory_records`、normalization baseline/issues、
   `soc_governed_context_facts`、`soc_authorization_enrichments` 和 `soc_disposition_proposals`。
 - 单元测试可以用 SQLite in-memory 验证 SQLAlchemy 映射。
-- 本地开发/人工验收可以用独立 SOC SQLite 文件，例如 `backend/.deer-flow/data/soc_agent_dev.db`，并通过 `SOC_DATABASE_URL=sqlite:////.../soc_agent_dev.db` 显式启用。
+- 本地开发/人工验收默认跟随 DeerFlow `database.backend: sqlite`，自动使用独立的 `{database.sqlite_dir}/soc_agent_dev.db`；显式 `--database-url` / `SOC_DATABASE_URL` 仅用于隔离测试文件或覆盖默认路径。
 - 准生产、生产和长期联调环境必须指向 PostgreSQL；不得把本地 SQLite 例外扩大成生产架构。
 
 ### 三类模型必须分清
@@ -1996,7 +1997,7 @@ MCP/tool 调用、审批和处置必须继续通过 SOC service/action/policy bo
 
 后续 MCP/tool 调用遵循：
 
-- 查询类工具默认仍需通过 allowlist、rate limit、audit，例如资产归属查询、EDR 进程树查询、历史告警查询。
+- 查询类工具默认仍需通过 allowlist、rate limit、audit，例如资产归属、威胁情报、安全标签和历史告警查询；不存在的进程树/主机上下文 Provider 不进入 allowlist。
 - 处置类工具默认高风险，例如 IP 封禁、EDR 隔离、禁用账号、下发阻断，必须有人类审批或明确 playbook 授权。
 - LLM 输出只能是 `ToolActionProposal` / `ActionProposal` 一类结构化候选，不能直接调用 adapter。
 - 真实 adapter 必须注册到 `SocActionAdapterRegistry`，并通过 `SocAgentActionAdapterDescriptor` 声明 side-effect、必需参数和 dry-run/execute 能力。

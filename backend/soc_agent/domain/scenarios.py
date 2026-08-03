@@ -43,7 +43,7 @@ _SCENARIO_RULES: tuple[dict[str, Any], ...] = (
             "socat exec",
             "powershell -nop",
         ),
-        "required_routes": ("endpoint.process_tree.lookup", "asset.lookup"),
+        "required_routes": ("asset.locate", "threat_intel.ip_reputation.lookup"),
         "checklist": (
             "确认父进程是否为 Web 服务、脚本解释器、计划任务或异常启动器。",
             "确认外联 IP 是否为授权运维跳板、业务依赖或威胁情报命中对象。",
@@ -72,7 +72,7 @@ _SCENARIO_RULES: tuple[dict[str, Any], ...] = (
             "cmd.php",
             "shell.php",
         ),
-        "required_routes": ("asset.lookup", "host.event_context.lookup"),
+        "required_routes": ("asset.locate", "security_tag.lookup"),
         "checklist": (
             "确认请求路径、上传文件、脚本后缀和 Web 目录是否异常。",
             "检查同资产近期是否存在命令执行、文件写入或异常外联。",
@@ -98,7 +98,7 @@ _SCENARIO_RULES: tuple[dict[str, Any], ...] = (
             "admin$",
             "ipc$",
         ),
-        "required_routes": ("endpoint.process_tree.lookup", "asset.lookup"),
+        "required_routes": ("asset.locate", "security_tag.lookup"),
         "checklist": (
             "确认源主机、目标主机、账号和协议是否符合正常运维路径。",
             "检查同账号是否在短时间内访问多台主机。",
@@ -125,7 +125,7 @@ _SCENARIO_RULES: tuple[dict[str, Any], ...] = (
             "bitsadmin",
             "process_execution",
         ),
-        "required_routes": ("endpoint.process_tree.lookup", "host.event_context.lookup"),
+        "required_routes": ("asset.locate", "security_tag.lookup"),
         "checklist": (
             "确认命令行、父进程、执行用户和执行时间是否符合业务行为。",
             "检查命令是否下载脚本、执行内存载荷或连接未知地址。",
@@ -149,7 +149,7 @@ _SCENARIO_RULES: tuple[dict[str, Any], ...] = (
             "dns tunnel",
             "dns隧道",
         ),
-        "required_routes": ("threat_intel.ip_reputation.lookup", "asset.lookup"),
+        "required_routes": ("threat_intel.ip_reputation.lookup", "asset.locate"),
         "checklist": (
             "确认外联方向、源资产、目标 IP/域名和协议端口。",
             "核对目标是否命中威胁情报、授权运维跳板或业务依赖。",
@@ -171,7 +171,7 @@ _SCENARIO_RULES: tuple[dict[str, Any], ...] = (
             "token impersonation",
             "高权限",
         ),
-        "required_routes": ("endpoint.process_tree.lookup", "host.event_context.lookup"),
+        "required_routes": ("asset.locate", "security_tag.lookup"),
         "checklist": (
             "确认低权限到高权限的进程链、账号变化和触发时间。",
             "核对是否存在授权变更、补丁安装、运维脚本或漏洞利用迹象。",
@@ -195,7 +195,7 @@ _SCENARIO_RULES: tuple[dict[str, Any], ...] = (
             "异常登录",
             "credential_access",
         ),
-        "required_routes": ("endpoint.process_tree.lookup", "host.event_context.lookup"),
+        "required_routes": ("asset.locate", "security_tag.lookup"),
         "checklist": (
             "确认账号、来源、目标资产、登录时间和认证方式是否异常。",
             "检查是否存在 LSASS 访问、凭证导出、暴力破解或多点登录。",
@@ -340,8 +340,6 @@ def evidence_profile_for_request(
         "memory_candidates": _count_status(metadata.get("memory_candidate_count")),
         "read_only_action_evidence": "available" if successful_evidence(request.investigation_evidence) else "missing",
         "mock_action_evidence": "available" if successful_mock_evidence else "missing",
-        "endpoint_process_tree": "available" if "endpoint.process_tree.lookup" in available_routes else "not_available_in_context",
-        "host_event_context": "available" if "host.event_context.lookup" in available_routes else "not_available_in_context",
         "threat_intel": "available" if "threat_intel.ip_reputation.lookup" in available_routes else "not_available_in_context",
         "asset_lookup": "available" if "asset.lookup" in available_routes or "asset.locate" in available_routes else "not_available_in_context",
     }

@@ -44,14 +44,6 @@ Action proposal boundary:
 - To locate business ownership for an extracted asset, use:
   <soc_action_proposal>{"route":"asset.locate","action":"asset.locate","reason":"Locate the impacted asset owner before assigning disposal target.","payload":{"asset_key":"10.10.1.5","asset_type":"IP","role":"target"},
   "confidence":0.74}</soc_action_proposal>
-- To inspect endpoint process-tree evidence without real EDR MCP credentials, use the read-only mock boundary:
-  <soc_action_proposal>{"route":"endpoint.process_tree.lookup","action":"endpoint.process_tree.lookup",
-  "reason":"Inspect endpoint process tree for suspicious process/network behavior.",
-  "payload":{"host_key":"endpoint-1"},"confidence":0.72}</soc_action_proposal>
-- To inspect host/HIDS context, use:
-  <soc_action_proposal>{"route":"host.event_context.lookup","action":"host.event_context.lookup",
-  "reason":"Collect recent host login, command, and event context for the alert window.",
-  "payload":{"host_key":"web-01"},"confidence":0.7}</soc_action_proposal>
 - To check external IP reputation, use:
   <soc_action_proposal>{"route":"threat_intel.ip_reputation.lookup","action":"threat_intel.ip_reputation.lookup",
   "reason":"Check IP reputation freshness before using the IOC in risk reasoning.",

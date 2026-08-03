@@ -22,8 +22,8 @@ def test_pingan_capability_eval_runs_default_fixtures() -> None:
 
     assert report.schema_version == "soc.pingan_capability_eval_report.v1"
     assert report.sample_count == 3
-    assert report.action_count == 6
-    assert report.evidence_count == 6
+    assert report.action_count == 4
+    assert report.evidence_count == 4
     assert report.failed_count == 0
     assert report.passed_count == 3
     assert report.source_type_counts == {"edr": 1, "hids": 1, "ndr": 1}
@@ -39,6 +39,8 @@ def test_pingan_capability_eval_runs_default_fixtures() -> None:
     hids = by_sample["pingan-hids-action-evidence"]
     assert hids.source_type.value == "hids"
     assert all(action.evidence_id for action in hids.actions)
+    unavailable_routes = {"endpoint.process_tree.lookup", "host.event_context.lookup"}
+    assert unavailable_routes.isdisjoint(action.route for result in report.results for action in result.actions)
 
 
 def test_cli_eval_pingan_outputs_report(capsys) -> None:
@@ -115,10 +117,10 @@ def test_pingan_main_orchestrator_eval_runs_default_fixtures() -> None:
 
     assert report.schema_version == "soc.pingan_main_orchestrator_eval_report.v1"
     assert report.sample_count == 3
-    assert report.route_step_count == 6
-    assert report.evidence_count == 6
+    assert report.route_step_count == 4
+    assert report.evidence_count == 4
     assert report.correlation_match_count == 3
-    assert report.reusable_evidence_count == 6
+    assert report.reusable_evidence_count == 4
     assert report.domain_finding_count >= 6
     assert report.failed_count == 0
     assert report.passed_count == 3
@@ -147,7 +149,7 @@ def test_pingan_main_orchestrator_eval_runs_default_fixtures() -> None:
     assert apt.report.metadata["executes_high_risk_actions"] is False
 
     hids = by_sample["pingan-hids-action-evidence"]
-    assert hids.report.review_context.action_evidence_count == 2
+    assert hids.report.review_context.action_evidence_count == 1
     assert hids.report.review_context.domain_finding_count >= 1
     assert "execution.suspicious_command" in {finding.scenario_key for result in hids.report.domain_triage_results for finding in result.findings}
 

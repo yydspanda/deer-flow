@@ -1048,6 +1048,7 @@ def test_cli_daemon_status_outputs_readiness_json(tmp_path: Path, monkeypatch: p
 
 def test_cli_daemon_status_returns_unready_when_database_missing(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     monkeypatch.delenv("SOC_DATABASE_URL", raising=False)
+    monkeypatch.setattr("soc_agent.db.config._database_url_from_deerflow_config", lambda: None)
 
     exit_code = main(["daemon", "status", "--pretty"])
 
@@ -1061,6 +1062,8 @@ def test_cli_daemon_status_returns_unready_when_database_missing(monkeypatch: py
 
 def test_cli_daemon_consume_enabled_requires_database_before_kafka(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     monkeypatch.setenv("SOC_KAFKA_ENABLED", "true")
+    monkeypatch.delenv("SOC_DATABASE_URL", raising=False)
+    monkeypatch.setattr("soc_agent.db.config._database_url_from_deerflow_config", lambda: None)
 
     exit_code = main(["daemon", "consume"])
 

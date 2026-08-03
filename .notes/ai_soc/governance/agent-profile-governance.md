@@ -106,7 +106,7 @@ draft
 
 | 风险等级 | 例子 | 默认策略 |
 |---|---|---|
-| `readonly` | 资产查询、EDR 进程树查询、威胁情报查询、历史告警查询、PostgreSQL readonly 查询 | 可开放 draft 绑定，active 仍需 allowlist 和 audit |
+| `readonly` | 资产查询、威胁情报查询、安全标签、历史告警查询、PostgreSQL readonly 查询 | 可开放 draft 绑定，active 仍需 allowlist 和 audit；只能绑定真实存在且已评审的 Provider |
 | `analyst_write` | review correction、case note、ticket update、memory propose fact | 需要用户身份和 service command，不能直接写 confirmed knowledge |
 | `high_risk` | block IP、isolate endpoint、disable account、push firewall rule、suppress alert rule、任意生产变更 MCP | 必须 human approval，默认 dry-run，不允许 profile 自行启用 |
 
@@ -182,4 +182,3 @@ class SocAgentProfile(BaseModel):
 - 能 rollback 到上一 active 版本。
 - 能禁止 draft/staging 影响生产决策。
 - 能证明 high-risk MCP/tool 没有绕过 approval。
-

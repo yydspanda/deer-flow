@@ -480,10 +480,10 @@ sequenceDiagram
 |---|---|---|---|
 | `asset.lookup` | read-only | Look up asset metadata | 查询资产记录 |
 | `asset.locate` | read-only mock MCP | Locate owner/BU/environment | 定位资产归属、BU、环境 |
-| `endpoint.process_tree.lookup` | read-only mock | Fetch process tree evidence | 查询终端进程树证据 |
-| `host.event_context.lookup` | read-only mock | Fetch host event context | 查询主机事件上下文 |
 | `threat_intel.ip_reputation.lookup` | read-only mock | Fetch IP reputation | 查询 IP 威胁情报 |
 | `security_tag.lookup` | read-only mock | Fetch security tags | 查询授权、测试、白名单等标签 |
+
+进程树、命令行、登录上下文和主机事件直接来自告警原生证据，经 Normalizer、Fact Reconstruction 和 bounded evidence 进入研判；当前不存在额外 EDR/HIDS 查询 action。
 
 Tool boundary / 工具边界：
 

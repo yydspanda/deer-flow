@@ -1,6 +1,6 @@
 # SOC Agent Mock 与真实接入台账
 
-> Updated: 2026-08-02
+> Updated: 2026-08-03
 >
 > 目的：集中记录当前 SOC Agent 里哪些能力只是 mock、fixture、in-memory 或本地 smoke，用来验证工程链路；后续接入真实 PingAn / 客户环境时，必须按本台账替换、复测和重新验收。
 
@@ -20,8 +20,6 @@
 | `asset.lookup` | in-memory read-only adapter，部分 smoke 可走 MCP-backed config | `backend/soc_agent/actions/adapters.py`、`backend/soc_agent/actions/mcp.py` | 验证资产查询 action contract、policy、approval preflight、evidence 写入 | 替换为 CMDB / 资产系统 / 客户资产服务 read-only adapter 或 MCP-backed adapter |
 | `asset.locate` | 本地 stdio MCP mock tool | `backend/scripts/soc_dev_mcp_server.py`、`backend/samples/mcp/` | 模拟 Zeus/CMDB/asset_to_bu 归属定位，验证 Lead Agent proposal -> MCP adapter -> evidence | 替换为真实资产归属/BU/owner/处置归属服务；保存 `soc.mcp_action_smoke_report.v1` |
 | `D12-A` PingAn asset provider | **Implemented production-shaped code with fake transport; still mock** | `backend/soc_agent/integrations/pingan/`、`backend/scripts/soc_pingan_asset_mcp_server.py`、`backend/samples/mcp/pingan_asset/` | 外网验证 ZEUS 签名调用边界、`searchAssetInfo -> asset_to_bu -> UM` 降级编排、MCP/action 映射和 fail-closed；产物明确 `mocked=true` | 只有 `D12-B` 内网注入真实 endpoint/secret/signer/workflow runner 并产生 `mocked=false` smoke 证据后才算 real；D12-A 不能关闭 `PA-12` / `PI-01` |
-| `endpoint.process_tree.lookup` | in-memory EDR process-tree mock adapter | `backend/soc_agent/actions/adapters.py` | 验证 EDR 进程树 evidence、Lead Agent proposal、Review context 复用 | 替换为真实 EDR read-only 查询 API/MCP；补字段裁剪和进程树大小上限 |
-| `host.event_context.lookup` | in-memory host event-context mock adapter | `backend/soc_agent/actions/adapters.py` | 验证 HIDS/主机上下文只读查询和 PingAn PA-07 P0 能力 | 替换为 HIDS / 主机日志 / EDR host telemetry 查询服务 |
 | `threat_intel.ip_reputation.lookup` | in-memory 威胁情报 mock adapter | `backend/soc_agent/actions/adapters.py` | 验证 APT 情报查询 evidence 形态，避免 domain handler 自己假设情报 | 替换为企业威胁情报、TI 平台或外部情报 provider 的 read-only adapter |
 | `security_tag.lookup` | in-memory 标签/授权/白名单 mock adapter | `backend/soc_agent/actions/adapters.py` | 验证授权扫描、演练、维护窗口、白名单等标签 evidence 形态 | 替换为安全标签、变更、演练、白名单、维护窗口等真实数据源 |
 | Authorized-activity source facts | GF-01 lifecycle/DB 与 AA-01 matcher 是真实确定性实现；当前 HIDS/EDR shadow facts 由已确认业务真值构造为本地 in-memory fixture | `backend/soc_agent/contracts/governed_context.py`、`backend/soc_agent/authorization/`、gitignored `step-12-authorization-shadow/` | 验证 event-time lifecycle/scope/freshness/recurrence 和 exact explanation；不代表已接变更/扫描器/维护系统 | 接真实 change/scanner/maintenance/CMDB source adapter，同步 source ref/version/freshness 后重新跑 shadow replay；不得把 validation fixture 当生产 active fact |
@@ -32,7 +30,7 @@
 | 高风险响应动作 | 当前只有 proposal、policy、approval、一次性 grant、dry-run/execute preflight；`external_side_effect=not_executed` | `backend/soc_agent/actions/adapters.py`、`backend/soc_agent/core/service.py` | 验证封禁 IP、隔离主机等动作在执行前的权限、审批、幂等和审计边界 | 接入真实 EDR/F5/SOAR/防火墙 adapter；必须补回滚/补偿、执行结果核验和失败重试，默认仍需人工审批 |
 | LLM analyzer | **真实路径已完成**：默认 deterministic stub；显式模式复用 DeerFlow `create_chat_model` | `backend/soc_agent/llm/`、`backend/soc_agent/core/runtime.py` | stub 保证回归/回放；`SOC_ANALYZER_MODE=llm` 或 CLI flag 调用已注册模型；有独立 concurrency/RPM admission、输出上限、evidence grounding、typed failure；raw confidence 当前均标记为 uncalibrated 并进入复核 | 持续补人工标注集、离线校准和成本预算；真实输出仍需 JSON/schema/domain/grounding validation 和 `SocDecisionPolicy` |
 | Normalization suggestion | **真实路径已完成**：deterministic/replay/live LLM 三种离线模式 | `backend/soc_agent/normalizers/suggestions.py` | 发现 mapping 候选并严格校验 observed source path / canonical whitelist | 所有建议仍需工程师复核，`auto_apply_allowed=false` |
-| SQL/in-memory repositories in tests | in-memory repository 或 SQLite 单元测试 | `backend/soc_agent/*/repository.py`、`backend/tests/` | 单元测试和无 DB 局部 wiring | 生产/准生产必须走 PostgreSQL migration + SQLAlchemy repository；本地开发可用 SOC SQLite 测试库 |
+| SQL/in-memory repositories in tests | in-memory repository 或 SQLite 单元测试 | `backend/soc_agent/*/repository.py`、`backend/tests/` | 单元测试和无 DB 局部 wiring；PingAn 内网 DEV 在 DeerFlow `database.backend: sqlite` 下自动使用 `{database.sqlite_dir}/soc_agent_dev.db` | 生产/准生产必须走 PostgreSQL migration + SQLAlchemy repository；当前 DEV 不收集 PostgreSQL 参数 |
 
 ### 2.1 容易被误判为 Mock、但已经是真实实现的部分
 
@@ -60,7 +58,7 @@
 | Evidence grounding / Runtime failure / atomic bundle | 确定性生产防护 | No | 模型证据必须回指 bounded context；run/summary/review/audit 同事务；retryable failure 不 commit Kafka offset |
 | Domain/scenario finding confidence | 可回放 heuristic score | No direct replacement | 只用于 finding 排序/解释；mock/failed evidence 不得抬分，后续用标注集评测版本常量 |
 | Correlation / memory retrieval score | 确定性检索分数 | No direct replacement | 后续 LLM 只能 bounded rerank，不能扩大查询或直接生效 memory |
-| CMDB/EDR/HIDS/TI/security-tag results | 当前部分为 mock external facts | **Must replace with real provider** | 这是当前真实缺口；不能让 LLM 生成或猜测外部事实 |
+| Asset/TI/security-tag results | 当前部分为 mock external facts | **Must replace with real provider** | 这是当前真实缺口；不能让 LLM 生成或猜测外部事实；进程/主机上下文直接使用告警原生证据 |
 | Main orchestrator demo | 可重复 MVP 编排 | Evolve through services/Lead Agent | demo 不是生产自主 Agent；生产入口继续复用同一 Runtime/service/policy 边界 |
 
 ## 3. PA-12 的真实完成标准
@@ -79,8 +77,6 @@
 下列能力仍是 credential-gated，不属于本轮 LLM 接入遗漏：
 
 - `asset.lookup` / `asset.locate`：需要 CMDB、Zeus 或资产服务 endpoint。
-- `endpoint.process_tree.lookup`：需要真实 EDR 查询接口。
-- `host.event_context.lookup`：需要 HIDS/EDR/日志平台查询接口。
 - `threat_intel.ip_reputation.lookup`：需要企业或外部 TI provider。
 - `security_tag.lookup`：需要白名单、演练、变更、维护窗口等权威数据源。
 - `authorized_activity` source sync：需要 change/scanner/maintenance/CMDB 的事实来源、版本和 freshness；
@@ -90,6 +86,10 @@
 
 大模型可以建议“应查询什么”，但不能虚构这些系统的查询结果。真实 endpoint/凭证到位后，只替换
 adapter/provider/config，并继续将结果作为 `InvestigationEvidence` 回流。
+
+### 3.2 已删除的未确认能力
+
+`endpoint.process_tree.lookup` 和 `host.event_context.lookup` 已从 action contract、默认 registry、Lead Agent prompt、domain/scenario routing、fixture 和测试中删除。平安当前没有这两个外部查询能力，且逐告警调用成本不可接受；进程树、命令行、登录上下文和主机事件继续从原始告警的 bounded native evidence 获取。未来只有确认存在真实 Provider 并重新完成产品/工程评审后，才允许以新的显式 contract 接入，不能恢复旧 mock。
 
 ## 4. External Disposition 不是 MCP
 

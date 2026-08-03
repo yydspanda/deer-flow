@@ -17,13 +17,9 @@ from pydantic import BaseModel, Field
 
 from soc_agent.actions.adapters import (
     ASSET_LOOKUP_ACTION,
-    ENDPOINT_PROCESS_TREE_LOOKUP_ACTION,
-    HOST_EVENT_CONTEXT_LOOKUP_ACTION,
     SECURITY_TAG_LOOKUP_ACTION,
     THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION,
     InMemoryAssetLookupActionAdapter,
-    InMemoryEndpointProcessTreeLookupActionAdapter,
-    InMemoryHostEventContextLookupActionAdapter,
     InMemorySecurityTagLookupActionAdapter,
     InMemoryThreatIntelIpReputationLookupActionAdapter,
     SocActionAdapterRegistry,
@@ -443,8 +439,6 @@ def _registry_for_fixture(fixture: PingAnCapabilityEvalFixture) -> SocActionAdap
     return SocActionAdapterRegistry(
         [
             InMemoryAssetLookupActionAdapter(records=_records(fixture, ASSET_LOOKUP_ACTION)),
-            InMemoryEndpointProcessTreeLookupActionAdapter(records=_records(fixture, ENDPOINT_PROCESS_TREE_LOOKUP_ACTION)),
-            InMemoryHostEventContextLookupActionAdapter(records=_records(fixture, HOST_EVENT_CONTEXT_LOOKUP_ACTION)),
             InMemorySecurityTagLookupActionAdapter(records=_records(fixture, SECURITY_TAG_LOOKUP_ACTION)),
             InMemoryThreatIntelIpReputationLookupActionAdapter(records=_records(fixture, THREAT_INTEL_IP_REPUTATION_LOOKUP_ACTION)),
         ]

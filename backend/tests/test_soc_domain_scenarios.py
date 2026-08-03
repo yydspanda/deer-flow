@@ -107,62 +107,6 @@ def test_pingan_message_first_scenario_ignores_structured_sibling_fields() -> No
     assert "execution.reverse_shell" not in scenario_keys
 
 
-def test_domain_triage_does_not_treat_mock_or_failed_evidence_as_authoritative() -> None:
-    alert = AlertInput(
-        alert_id="ALT-MOCK-EVIDENCE",
-        source=AlertSourceRef(source_type=AlertSourceType.EDR),
-        detection=DetectionRuleRef(rule_name="Endpoint process alert"),
-    )
-    run = AnalysisRun(
-        run_id="RUN-MOCK-EVIDENCE",
-        alert_id=alert.alert_id,
-        status=AnalysisRunStatus.NEEDS_REVIEW,
-        input_payload=alert.model_dump(mode="json"),
-    )
-    evidence = [
-        InvestigationEvidence(
-            evidence_id="EVI-MOCK",
-            route="endpoint.process_tree.lookup",
-            action="endpoint.process_tree.lookup",
-            status="success",
-            message="mock process tree",
-            mocked=True,
-            result_payload={
-                "process_tree_found": True,
-                "process_tree": {"processes": [{"risk_tags": ["credential_access"]}]},
-            },
-        ),
-        InvestigationEvidence(
-            evidence_id="EVI-FAILED",
-            route="endpoint.process_tree.lookup",
-            action="endpoint.process_tree.lookup",
-            status="failed",
-            message="real provider failed",
-            result_payload={
-                "process_tree_found": True,
-                "process_tree": {"processes": [{"risk_tags": ["credential_access"]}]},
-            },
-        ),
-    ]
-
-    result = SocDomainTriageService().triage(
-        SocDomainTriageRequest(
-            run=run,
-            domain=SocDomainName.EDR,
-            investigation_evidence=evidence,
-        )
-    )
-
-    finding = result.findings[0]
-    assert finding.disposition is SocDomainFindingDisposition.NEEDS_MORE_EVIDENCE
-    assert finding.confidence == 0.5
-    assert finding.evidence_refs == ["EVI-MOCK"]
-    assert finding.metadata["risk_tags"] == []
-    assert finding.metadata["mock_evidence_count"] == 1
-    assert finding.evidence_profile.sources["mock_action_evidence"] == "available"
-    assert finding.evidence_profile.sources["read_only_action_evidence"] == "missing"
-
-
 def test_scenario_confidence_only_uses_successful_non_mock_evidence() -> None:
     alert = AlertInput(
         alert_id="ALT-REVERSE-SHELL-EVIDENCE",
@@ -177,18 +121,18 @@ def test_scenario_confidence_only_uses_successful_non_mock_evidence() -> None:
         input_payload=alert.model_dump(mode="json"),
     )
     mock_evidence = InvestigationEvidence(
-        evidence_id="EVI-MOCK-PROCESS-TREE",
-        route="endpoint.process_tree.lookup",
-        action="endpoint.process_tree.lookup",
+        evidence_id="EVI-MOCK-THREAT-INTEL",
+        route="threat_intel.ip_reputation.lookup",
+        action="threat_intel.ip_reputation.lookup",
         status="success",
-        message="mock process tree",
+        message="mock threat intelligence",
         mocked=True,
-        result_payload={"process_tree_found": True},
+        result_payload={"reputation_found": True},
     )
     real_evidence = mock_evidence.model_copy(
         update={
-            "evidence_id": "EVI-REAL-PROCESS-TREE",
-            "message": "real process tree",
+            "evidence_id": "EVI-REAL-THREAT-INTEL",
+            "message": "real threat intelligence",
             "mocked": False,
         }
     )
@@ -213,5 +157,5 @@ def test_scenario_confidence_only_uses_successful_non_mock_evidence() -> None:
     mocked = next(item for item in with_mock.findings if item.scenario_key == "execution.reverse_shell")
     authoritative = next(item for item in with_real.findings if item.scenario_key == "execution.reverse_shell")
     assert mocked.confidence == baseline.confidence
-    assert "EVI-MOCK-PROCESS-TREE" in mocked.evidence_refs
+    assert "EVI-MOCK-THREAT-INTEL" in mocked.evidence_refs
     assert authoritative.confidence > mocked.confidence

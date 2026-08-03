@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-04-A` 已完成） |
-| 当前目标 | 保持 `PI-01/D12-B` Waiting；下一切片为 `PI-04-B`，只把已冻结的 Operations Snapshot 接入轻量 Web 运营视图，不新增指标口径 |
+| 当前目标 | `PI-01/D12-B` 内网 DEV 信息收集、配置预检和真实资产 Provider smoke；随后接真实 ZEUS TI、安全标签和可用的外部状态反馈 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
-| 数据库策略 | 生产/准生产使用 PostgreSQL；本地开发可用 SOC SQLite 测试库跑 Web/API/CLI 闭环 |
+| 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 PingAn 内网 DEV 统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | `PI-04-B`：薄 Web 运营视图只消费 `/api/soc/operations/snapshot`；不做 Prometheus、SLO 阈值、Kafka lag、算力采集或前端二次聚合。`PI-01/D12-B` 保持 Waiting。 |
+| 当前下一刀 | 按 `integrations/pingan-dev-information-collection.md` 获取脱敏 root_config/环境选择契约，补 DEV-only preflight，再进入 D12-B 内网 `mocked=false` smoke；Kafka/K8s/PostgreSQL/PI-04-B 当前不插队。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -40,7 +40,16 @@
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
-| `PI` | Real Data & Production Integration | **Current / PI-04-A Done; PI-04-B Next** | D12-B 真实 provider 暂停等待内网输入；只读运行态契约已完成，下一步接薄 Web 消费面；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+| `PI` | Real Data & Production Integration | **Current / PI-01 D12-B DEV Intake** | PI-04-A 已完成；当前收集内网 DEV 契约并接第一个真实只读 Provider；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+
+## 2026-08-03 — PI-01 D12-B resumed; unconfirmed context lookup mocks removed
+
+- 产品负责人确认平安当前不具备独立 EDR 进程树查询或 HIDS 主机上下文查询能力，逐告警补查耗时也不可接受；相应 mock action、contract、默认 registry、Lead Agent proposal、policy、domain/scenario route、fixture 和测试已删除。
+- 进程树、命令行、登录账号和主机事件继续由 PingAn normalizer 从告警原生 message/structured fallback 提取，经 bounded native evidence 进入 Runtime；不存在外部工具不再被记作能力缺口或决策降级原因。
+- D12-B 执行指针恢复。新增 `integrations/pingan-dev-information-collection.md`，区分已从旧代码确认的信息、需要脱敏带出的接口契约和只能留在内网的 secret/test values。
+- 当前 DEV 数据库固定为 `backend/.deer-flow/data/soc_agent_dev.db`；`resolve_database_url()` 在没有显式参数和 `SOC_DATABASE_URL` 时，会根据 DeerFlow `database.backend: sqlite` 自动选择该独立文件，`soc db upgrade` 会创建缺失的父目录。显式 URL 仍优先，DeerFlow PostgreSQL 配置仍用于准生产/生产。Kafka、K8s、PostgreSQL DEV 和真实高风险动作不进入本轮收集或实现。
+- 验证：changed-file Ruff 通过；聚焦 action/Lead Agent/domain/eval 回归 `146 passed`；SQLite resolution/migration/CLI 聚焦回归 `51 passed`；最终完整 `tests/test_soc_*.py` 加 SOC architecture gate `643 passed`；修改后的三份 eval JSON 可解析，`git diff --check` 通过。
+- 下一步：取得脱敏 `root_config`/环境选择逻辑后，实现 DEV-only profile/preflight，再复制项目到内网执行 D12-B `mocked=false` smoke。
 
 ## 2026-08-02 — PI-04-A operations snapshot completed; D12-B remains parked
 
@@ -328,16 +337,16 @@
 | 0.4 | `PA-04` HIDS source decomposition | Done | 已扩展 HIDS cards：主机事件上下文、event_type 场景化研判、误报/授权运维模式、服务器隔离候选 | 通用 host/endpoint 方法进 skill/domain handler；平安组名、账号、路径、机房、域名、隔离模板只进 tenant artifact 或 approval-gated action |
 | 0.5 | `PA-05` PingAnKnowledgeCandidate register | Done | 已新增 `.notes/ai_soc/capabilities/pingan/knowledge-candidates.md`，从 APT/EDR/HIDS expanded cards 抽候选知识清单，标注 target_artifact、tenant_scope、source_doc、source_section、status、validity、review owner | 每条平安专属经验都能回答“放哪里、为什么、是否过期、由谁确认”，且默认 pending_review，不直接影响 runtime decision |
 | 0.6 | `PA-06` public skills minimal revisions | Done | 已对 `skills/public/soc-*` 做最小增量修订，只吸收跨客户通用的 APT/EDR/HIDS/WAF/asset 研判方法 | `rg` 检查 public skills 不出现平安字段、内部环境、账号/组织、白名单、模板 ID、策略 ID 或处置阈值 |
-| 0.7 | `PA-07` P0 read-only mock action adapters | Done | 已实现 `host.event_context.lookup`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup` mock adapters，并接入 read-only policy/default registry | 通过 `SocActionAdapterRegistry` 调用；成功结果写 `InvestigationEvidence`；不改 verdict/memory |
+| 0.7 | `PA-07` P0 read-only mock action adapters | Done / revised | 保留 `threat_intel.ip_reputation.lookup`、`security_tag.lookup` mock adapters；未经证实的进程树/主机上下文查询 mock 已删除 | 外部查询通过 `SocActionAdapterRegistry`；进程/主机上下文使用告警原生证据；不改 verdict/memory |
 | 0.8 | `PA-08` PingAn eval fixtures | Done | 已新增 `backend/samples/eval/pingan/` 三条 fixture、`backend/samples/alerts/pingan_legacy_hids.json`、`backend/soc_agent/eval/pingan.py` 和 `soc eval pingan` | APT/EDR/HIDS 各 1 条脱敏 fixture；覆盖字段冲突、查不到外部事实、误报/授权标签；read-only success 写 `InvestigationEvidence` |
 | 0.9 | `PA-09` PingAn memory candidate entry | Done | 已新增 `SocMemoryCandidate` contracts、`MemoryCandidateRepository` protocol、in-memory repository 和 `SocMemoryService.propose_candidate()` | 候选默认 `pending_review`，携带 source/evidence/validity/idempotency/facets/review 信息；不自动 confirmed，不影响 runtime decision |
 | 0.10 | `PA-10` PingAn domain triage MVP | Done | 已新增 `SocDomainTriageRequest/Result/Finding` contract、`SocDomainTriageService`、APT/EDR/HIDS deterministic handlers 和 `soc eval pingan-domain` | 子研判只输出 finding/evidence/recommendation；消费 skill context 和 read-only evidence refs；不写 DB、不执行 action、不改 verdict |
 | 0.11 | `PA-11` PingAn main orchestrator demo | Done | `SocMainOrchestratorService`、`UnifiedInvestigationReport`、`soc eval pingan-main` 已覆盖 APT/EDR/HIDS analyze -> correlation -> read-only evidence -> domain finding -> review summary | 每条当前告警命中 seeded historical run，并只复用该 historical `run_id` 的 evidence；不写 DB、不执行高风险动作 |
 | 0.12 | `PA-12` real PingAn MCP/API replacement | Waiting | 等真实 PingAn dev/staging MCP/API endpoint/凭证后替换 mock provider，保存 smoke/eval report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险；不能用本地 mock 假装完成 |
 | 0.13 | `D12-A` PingAn asset provider implementation | Done / fake-only | 已建立可移植 `asset.locate` provider、ZEUS HTTP/signing port、workflow port、stdio MCP server、显式 config 与 fake smoke | fake 输出始终 `mocked=true`；internal 缺配置 fail closed；该状态不标记 PA-12/PI-01 real provider Done |
-| 0.14 | `D12-B` PingAn asset provider internal smoke | Waiting / data-gated | 内网配置真实 Zeus endpoint/app ID/key、`isec_sign`、Agent Platform runner/workflow IDs 和 tenant mapping，执行真实 smoke | 成功、查无、鉴权失败、超时和 InvestigationEvidence 全部留证；真实响应为 `mocked=false`；完成前 D12/PA-12 保持未完成 |
+| 0.14 | `D12-B` PingAn asset provider internal smoke | In Progress / intake | 按内网收集说明准备脱敏 root config/环境选择契约和 internal-only test cases，再执行真实 smoke | 成功、查无、鉴权失败、超时和 InvestigationEvidence 全部留证；真实响应为 `mocked=false`；完成前 D12/PA-12 保持未完成 |
 | 1 | Correlation Service MVP | Done | `SocCorrelationService` 基于 summary/evidence 输出相似告警、匹配原因和可复用证据；typed result 已进入 main report/domain/review summary | 不调用 LLM、不依赖真实 MCP、不改 decision；demo 当前告警可看到历史 run + reusable evidence |
-| 1.1 | Correlation -> Unified Investigation bridge | Done | 共享 summary repository、统一 deterministic scorer、`SocDomainTriageRequest.correlation_result`、`UnifiedInvestigationReport.correlation_result` 和 review counts 已接通 | metadata count 不是证据源；historical evidence 只按 matched `run_id` 加载；APT/EDR/HIDS eval 为 3 matches / 6 evidence / 0 failure |
+| 1.1 | Correlation -> Unified Investigation bridge | Done | 共享 summary repository、统一 deterministic scorer、`SocDomainTriageRequest.correlation_result`、`UnifiedInvestigationReport.correlation_result` 和 review counts 已接通 | metadata count 不是证据源；historical evidence 只按 matched `run_id` 加载；移除两个无效 mock 后 APT/EDR/HIDS eval 为 3 matches / 4 evidence / 0 failure |
 | 1.2 | Correlation quality baseline | Done | 已建 vendor-neutral same-incident / related-but-distinct / unrelated corpus；`soc eval correlation` 输出双任务指标、reason 分布、fan-out、evidence lineage/unrelated exposure，并支持 `--baseline-json` replay diff | scorer/report/fixture 版本显式；当前 8-pair baseline 暴露 retrieval/dedup precision 均约 0.667；`shadow_dedup_allowed=false` |
 | 1.3 | [Correlation label corpus expansion](../archive/ai_soc/deferred/correlation-label-corpus-expansion.md) | Deferred / `PI-03` data-dependent | 从脱敏真实告警准备 analyst-reviewed pairs，覆盖来源、时间窗口、跨规则同事件和同规则不同事件 cohort | 不以 8 条受控 pair 代表生产分布；标签来源/rationale/version 可审计；扩充后再比较 scorer v2，不直接切换生产规则；不阻塞当前 `PI-01` |
 | 2 | External Disposition Sync Contract | Done | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol、in-memory repository、PostgreSQL persistence、ReviewQueue context API/Web/TUI/Lead Agent visibility；已接 high-trust mapped review/correction 和 pending memory candidate | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
@@ -449,10 +458,10 @@
 | 73 | Action adapter registry contract planning | Done | 规划真实 `response.block_ip` / `endpoint.isolate_host` / MCP tool adapter registry 的 contract、幂等、审计和 dry-run 要求；新增 registry/descriptor/protocol/dry-run-only adapter，不直接接生产动作 |
 | 74 | Approval service adapter dry-run integration | Done | `SocAgentApprovalService.dry_run_approved_action()` 在 token 校验后可选调用 action adapter registry dry-run，校验 allowlist、payload 和 context refs；默认仍兼容无 registry 的 token-only dry-run |
 | 75 | Execute adapter preflight before token consume | Done | `execute_approved_action()` 在消费 token 前可选校验 adapter 存在性、execute 支持度、payload 和 context refs；仍不接生产副作用 |
-| 76 | First concrete safe read-only adapter | Done | 先接只读查询类 adapter（资产归属查询或 EDR 进程树查询），验证 adapter descriptor、dry-run、execute preflight 与审计 payload；不接封禁/隔离等写动作 |
+| 76 | First concrete safe read-only adapter | Done | 先接资产归属只读 adapter，验证 descriptor、dry-run、execute preflight 与审计 payload；不接封禁/隔离等写动作 |
 | 77 | Read-only adapter dispatcher / tool gateway wiring | Done | 明确 `asset.lookup` 如何通过受控 route/tool gateway 进入运行态；默认不加入 chat router 白名单；结果必须写入 action result / audit payload |
 | 78 | SOC Lead Agent read-only tool proposal bridge | Done | Lead Agent 只能通过结构化 envelope 请求 `asset.lookup` 等只读能力；bridge 转成同一条 router/policy/dispatcher/registry 链路；不直接调用 adapter/MCP |
-| 79 | MCP adapter bridge / real read-only data source planning | Done | 规划真实资产系统、EDR 只读查询或 MCP readonly tool 如何通过 adapter descriptor 接入；write/destructive 仍走 approval |
+| 79 | MCP adapter bridge / real read-only data source planning | Done | 规划真实资产、TI、安全标签或其他已确认 read-only tool 如何通过 adapter descriptor 接入；write/destructive 仍走 approval |
 | 80 | MCP tool provider port + fake provider adapter tests | Done | 定义 SOC MCP provider port、fake provider 和 read-only MCP adapter skeleton；不接真实 MCP server |
 | 81 | MCP-backed read-only `asset.lookup` adapter config builder | Done | 用 fake provider 固定显式配置到 MCP-backed `asset.lookup` adapter registry 的构造方式；不接真实 MCP server |
 | 82 | SOC action package structure hygiene | Done | 将 action adapter、proposal、MCP adapter 收口到 `backend/soc_agent/actions/`，删除根目录旧入口；架构测试防止继续往根目录新增 action-like 模块 |
@@ -461,12 +470,12 @@
 | 85 | Dev/staging read-only MCP smoke report contract | Done | `soc mcp smoke` 输出 versioned report，记录 latency、failure、payload size、result size、tool/config 和 output_fields 裁剪信息 |
 | 86 | MCP smoke readiness inventory | Done | `soc mcp tools` 可安全列出 DeerFlow cached MCP tools，`soc mcp smoke/tools --report-path` 可落盘报告；无 MCP config 时 tool_count=0 |
 | 87 | Local real MCP fixture and read-only smoke | Done | 本地 stdio MCP server + sample extensions/action config 可验证 `soc_dev_asset_lookup` discovery 和 `asset.lookup` execute smoke |
-| 88 | Real dev/staging MCP replacement | Waiting | 等真实 CMDB/EDR MCP endpoint/凭证可用后，再替换本地 fixture、保存 smoke report 并评估延迟、失败率、字段裁剪和接入风险 |
+| 88 | Real dev/staging MCP replacement | In Progress / PI-01 | 先接真实 PingAn 资产、TI、安全标签 DEV Provider，再替换对应 fixture、保存 smoke report 并评估延迟、失败率、字段裁剪和接入风险 |
 | 89 | Upstream MCP sync compatibility retest | Done | 同步 upstream/main 后，SOC MCP adapter 显式传递 `mcp.server`，并重新验证 DeerFlow MCP 前缀重叠路由、local stdio discovery 和 `asset.lookup` execute smoke |
 | 90 | Asset extraction skill + asset.locate MCP mock | Done | 根据资产提取/定位原型，新增 `soc-asset-extraction` skill、`asset.locate` read-only policy、mock MCP tool/config，并让 Lead Agent proposal bridge 可通过 MCP-backed adapter 执行只读定位 |
 | 91 | Read-only action result evidence bridge | Done | 新增 `InvestigationEvidence` contract、repository protocol、in-memory store；read-only action success 后可记录 evidence，ReviewQueue context / Lead Agent artifact / Web/TUI 可展示 |
 | 92 | InvestigationEvidence PostgreSQL persistence / Gateway wiring | Done | 新增 `soc_investigation_evidence` migration、ORM row、SQLAlchemy repository 方法；Gateway/CLI ReviewService 和 Lead Agent read-only dispatcher 使用同一 repository 共享 evidence |
-| 93 | Lead Agent evidence reuse + endpoint process-tree mock adapter | Done | Lead Agent bounded context 明确复用既有 action_evidence；新增 `endpoint.process_tree.lookup` read-only in-memory/mock adapter、policy、proposal 示例和测试 |
+| 93 | Lead Agent evidence reuse + endpoint process-tree mock adapter | Removed / superseded 2026-08-03 | evidence reuse 保留；未经证实且高耗时的进程树查询 mock、policy 和 proposal 已删除，改用告警原生 bounded evidence |
 | 94 | PingAn SOC capability onboarding | Done | 新增 `.notes/ai_soc/capabilities/pingan/onboarding.md`，固定经验 -> capability card -> skill/MCP/normalizer/domain/eval/memory 的转化流程 |
 | 95 | Correlation Service + Unified Report Bridge | Done | 结构化 correlation service/CLI 基于 summary + evidence 找历史 match；typed result 已进入 main report/domain/review summary；不调用 LLM、不改 Runtime decision |
 | 96 | External Disposition Sync Contract MVP | Done | 固定外部预警/工单/处置系统状态与理由同步协议；新增 mapper/service/repository MVP，Zeus 只是 mock fixture |

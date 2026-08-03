@@ -111,7 +111,7 @@ field experience
 | P0 | ZEUS/天眼 raw message first | normalizer / field trust | 已有方案和代码基础 | 后续继续补真实样本 drift case |
 | P0 | 资产提取与归属定位 | skill + read-only MCP adapter | `soc-asset-extraction` + `asset.locate` mock 已落地 | 用真实字段/样例补 capability card |
 | P0 | APT 攻击方向重建 | skill + domain handler | skill 有基础，domain handler 未落地 | 收集方向判断规则、raw message 示例、反例 |
-| P0 | EDR 进程树研判 | read-only adapter + domain handler | `endpoint.process_tree.lookup` mock 已落地 | 收集真实 EDR process tree 字段和 finding 模板 |
+| P0 | EDR 进程树研判 | alert-native evidence + skill + domain handler | PingAn EDR/HIDS normalizer 已保留原生进程/命令字段 | 用真实告警继续校验 bounded evidence 覆盖和 finding 模板 |
 | P1 | HIDS 主机事件研判 | skill + domain handler | 未落地 | 收集 HIDS 事件类型、关键字段、误报规则 |
 | P1 | F5/WAF 攻击方向和抑制目标 | skill + domain handler | `soc-web-application-triage` skill 有基础 | 收集 URI、method、source/target、抑制目标规则 |
 | P1 | 历史相似告警复用 | correlation service | 下一刀 | 基于 summary/evidence 先做 deterministic |
@@ -136,7 +136,7 @@ field experience
 |---|---|---|---|
 | `PA-APT-SRC` | `.notes/ai_soc/capabilities/pingan/source-docs/apt-alert-assess-flow.md` | 天眼/APT 告警、攻击方向、威胁情报、封禁策略、字段可信度 | 拆成 APT direction、threat intel、security tag、response policy、eval cases |
 | `PA-EDR-SRC` | `.notes/ai_soc/capabilities/pingan/source-docs/edr-alert-assess-flow.md` | EDR 进程树、命令行、账号/UM、资产归属、终端处置 | 拆成 endpoint triage、process tree evidence、asset locate、identity pattern、high-risk action |
-| `PA-HIDS-SRC` | `.notes/ai_soc/capabilities/pingan/source-docs/hids-alert-assess-flow.md` | HIDS 主机事件、登录用户、进程链、后门/反弹 shell/web command、误报经验 | 拆成 host triage、host event context lookup、benign pattern、eval cases |
+| `PA-HIDS-SRC` | `.notes/ai_soc/capabilities/pingan/source-docs/hids-alert-assess-flow.md` | HIDS 主机事件、登录用户、进程链、后门/反弹 shell/web command、误报经验 | 拆成 host triage、alert-native host context、benign pattern、eval cases |
 
 ### 5.3 Execution Backlog
 
@@ -149,7 +149,7 @@ field experience
 | `PA-04` | Done | 拆 `PA-HIDS-SRC` | 已在 `capabilities/pingan/capability-cards.md` 展开 HIDS host event context、event_type triage、benign/authorized ops、host isolation boundary | HIDS 先复用 endpoint/host skill；必要时再新增 `soc-host-hids-triage` |
 | `PA-05` | Done | 建立 `PingAnKnowledgeCandidate` 清单 | 已新增 `capabilities/pingan/knowledge-candidates.md`，每条候选标注 `target_artifact`、`tenant_scope`、`source_doc`、`source_section`、`status=pending_review` | 任意经验都能回答“放哪里、为什么、是否过期、由谁确认”；默认不能影响 runtime decision |
 | `PA-06` | Done | 对 public skills 做最小增量修订 | 已更新 `skills/public/soc-*`，只补通用 APT/EDR/HIDS/WAF/asset 研判方法，不补平安事实 | `rg` 检查 public skills 不出现平安内部字段/规则/模板/账号等敏感或专属内容 |
-| `PA-07` | Done | 实现 P0 read-only mock action adapters | 已实现 `host.event_context.lookup`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup` mock adapter | 通过 `SocActionAdapterRegistry` 调用；成功结果写 `InvestigationEvidence`；不改 verdict/memory |
+| `PA-07` | Done / revised | 实现 P0 read-only mock action adapters | 保留 `threat_intel.ip_reputation.lookup`、`security_tag.lookup` mock adapter；已删除未经证实且高耗时的进程树/主机上下文查询 mock | 外部查询通过 `SocActionAdapterRegistry`；进程/主机上下文来自告警原生证据；不改 verdict/memory |
 | `PA-08` | Done | 建 eval fixtures | 已新增 `backend/samples/eval/pingan/` 三条 fixture、`backend/samples/alerts/pingan_legacy_hids.json` 和 `soc eval pingan` | APT / EDR / HIDS 各 1 条脱敏 fixture；覆盖字段冲突、查不到外部事实、误报/授权标签；成功结果写 `InvestigationEvidence` |
 | `PA-09` | Done | 接 memory candidate 入口 | 已新增 `SocMemoryCandidate` contract、`MemoryCandidateRepository`、in-memory repository 和 `SocMemoryService.propose_candidate()` | 只写 `pending_review`；含 source/evidence/validity/idempotency/facets/review 信息；不自动 confirmed |
 | `PA-10` | Done | 接 domain triage MVP | 已新增 APT / EDR / HIDS domain handlers，读取 capability card refs、skill context、evidence refs 并输出 domain findings | 子研判只输出 finding/evidence/recommendation，不直接写 DB 或执行动作 |
@@ -166,9 +166,9 @@ field experience
 | `PA-APT-002` | `PA-APT-SRC` | APT 攻击类型场景化研判 | `soc-network-apt-triage` / `soc-web-application-triage` + domain handler | 不同攻击类型证据不同，必须区分攻击尝试和攻击成功 |
 | `PA-APT-003` | `PA-APT-SRC` | 威胁情报 IP 查询 | read-only `threat_intel.ip_reputation.lookup` | APT 判断经常需要外部情报，但只能作为 evidence |
 | `PA-APT-004` | `PA-APT-SRC` | 授权/白名单/演练标签查询 | read-only `security_tag.lookup` | 避免把授权扫描、演练、白名单误判为攻击 |
-| `PA-EDR-001` | `PA-EDR-SRC` | EDR 进程树研判 | `soc-endpoint-triage` + existing `endpoint.process_tree.lookup` | EDR 是否真实入侵主要靠进程链和命令行证据 |
+| `PA-EDR-001` | `PA-EDR-SRC` | EDR 进程树研判 | PingAn normalizer + bounded alert-native evidence + `soc-endpoint-triage` | EDR 是否真实入侵主要靠告警携带的进程链和命令行证据 |
 | `PA-EDR-002` | `PA-EDR-SRC` | 账号/UM/身份模式 | tenant `identity_pattern` memory candidate + entity extraction eval | 账号经常决定处置对象，但格式和组织语义有租户差异 |
-| `PA-HIDS-001` | `PA-HIDS-SRC` | HIDS 主机事件上下文 | read-only `host.event_context.lookup` + host/endpoint skill | HIDS 告警需要主机上下文，否则误报率高 |
+| `PA-HIDS-001` | `PA-HIDS-SRC` | HIDS 主机事件上下文 | PingAn normalizer + bounded alert-native evidence + host/endpoint skill | HIDS 告警需要完整保留自身主机事件上下文，否则误报率高 |
 | `PA-RESP-001` | APT/EDR/HIDS | 封禁/隔离/禁用账号候选 | high-risk action proposal + approval policy | 必须先固定审批边界，不能让 Agent 自主执行 |
 
 ### 5.5 Done Definition
