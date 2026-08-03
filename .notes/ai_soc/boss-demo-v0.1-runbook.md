@@ -102,7 +102,7 @@ sqlite:////app/backend/.deer-flow/data/soc_boss_demo.db
 ./scripts/soc-boss-demo.sh start \
   --reset \
   --analyzer-mode llm \
-  --model-name deepseek-v4-pro
+  --model-name deepseek-v4-flash
 ```
 
 规则：

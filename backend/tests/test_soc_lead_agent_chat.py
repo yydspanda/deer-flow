@@ -38,6 +38,7 @@ from soc_agent.skills import SOC_LEAD_AGENT_NAME
 class FakeDeerFlowClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None]] = []
+        self.stream_options: list[dict[str, object]] = []
 
     def stream(
         self,
@@ -46,8 +47,8 @@ class FakeDeerFlowClient:
         thread_id: str | None = None,
         **kwargs,
     ) -> Iterator[SimpleNamespace]:
-        del kwargs
         self.calls.append((message, thread_id))
+        self.stream_options.append(dict(kwargs))
         yield SimpleNamespace(type="values", data={"title": "SOC"})
         yield SimpleNamespace(type="messages-tuple", data={"type": "ai", "id": "m1", "content": "ready"})
         yield SimpleNamespace(type="end", data={"usage": {"total_tokens": 1}})
@@ -146,11 +147,25 @@ def test_soc_lead_agent_chat_service_streams_through_deerflow_client() -> None:
         "actor_surface": "tui",
     }
     assert client.calls == [("hello", "SOC-THREAD-1")]
+    assert client.stream_options == [{}]
     assert events[1].type == "values"
     assert events[1].data["thread_id"] == "SOC-THREAD-1"
     assert events[2].data["content"] == "ready"
     assert events[3].type == "end"
     assert events[3].data["thread_id"] == "SOC-THREAD-1"
+
+
+def test_soc_lead_agent_chat_service_forwards_explicit_model_override() -> None:
+    client = FakeDeerFlowClient()
+    service = SocLeadAgentChatService(
+        model_name="deepseek-v4-pro",
+        client_factory=lambda: client,
+        require_profile=False,
+    )
+
+    list(service.stream(SocAgentChatRequest(message="hello", thread_id="SOC-THREAD-1")))
+
+    assert client.stream_options == [{"model_name": "deepseek-v4-pro"}]
 
 
 def test_soc_lead_agent_chat_service_bridges_review_context_to_deerflow_client() -> None:

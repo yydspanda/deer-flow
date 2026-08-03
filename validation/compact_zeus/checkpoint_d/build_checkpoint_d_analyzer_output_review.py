@@ -35,7 +35,7 @@ from soc_agent.protocols import LLMAnalyzer  # noqa: E402
 SCHEMA_VERSION = "soc.validation.checkpoint_d.analyzer_output_review.v1"
 DEFAULT_CHECKPOINT_D_ROOT = ROOT / "backend/.deer-flow/soc-runtime-validation/checkpoint-d"
 DEFAULT_ALERT_ID = 1965449
-DEFAULT_MODEL_NAME = "deepseek-v4-pro"
+DEFAULT_MODEL_NAME = "deepseek-v4-flash"
 _ALLOWED_D5_STATUSES = {"passed", "passed_with_projection_notes"}
 
 

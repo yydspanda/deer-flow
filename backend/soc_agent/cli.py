@@ -518,6 +518,7 @@ def _build_parser() -> argparse.ArgumentParser:
     chat_tui.add_argument("--queue-id", help="Open a review queue context on launch")
     chat_tui.add_argument("--message", help="Send an initial message on launch")
     chat_tui.add_argument("--lead-agent", action="store_true", help="Use DeerFlow lead_agent with agent_name=soc-triage")
+    chat_tui.add_argument("--model-name", help="Override the configured default model for DeerFlow SOC Lead Agent")
     chat_tui.add_argument("--mcp-action-config", help="Optional SOC MCP read-only action adapter JSON/YAML config for lead-agent proposals")
     _add_database_args(chat_tui)
 
@@ -2480,6 +2481,7 @@ def _chat_tui(args: argparse.Namespace) -> int:
         read_only_routes = {descriptor.route for descriptor in read_only_adapter_registry.list_descriptors()}
         chat_service = (
             SocLeadAgentChatService(
+                model_name=args.model_name,
                 review_service=review_service,
                 action_proposal_boundary=SocLeadAgentActionProposalBoundary(
                     approval_service=approval_service,

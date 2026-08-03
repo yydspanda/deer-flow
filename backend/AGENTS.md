@@ -436,6 +436,12 @@ and independently bounded with `SOC_LLM_MAX_CONCURRENCY`, optional `SOC_LLM_REQU
 queue wait; call timeout limits one provider invocation and becomes retryable `analyzer_timeout`.
 `SOC_LLM_SENSITIVE_EVIDENCE_MODE=redact|full` controls the model-boundary projection and defaults to
 `redact`; `full` is allowed only after the target model environment is explicitly approved.
+The local SOC validation and Boss Demo command examples currently select `deepseek-v4-flash`.
+Historical D7/D10/Boss Demo artifacts retain the model name that actually produced them; changing a
+default never rewrites prior provenance.
+The `soc-triage` profile leaves its model unpinned and therefore inherits the first configured model;
+the Web request or `soc chat tui --lead-agent --model-name NAME` may explicitly override it through
+DeerFlow's existing request-level model resolution.
 
 New live analyzer output uses `soc.analysis_result.v2`. `TriageScenarioAssessment` is
 open-vocabulary and must distinguish upstream/inferred/hybrid origin plus

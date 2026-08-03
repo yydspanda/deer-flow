@@ -52,12 +52,14 @@ class SocLeadAgentChatService:
         self,
         *,
         agent_name: str = SOC_LEAD_AGENT_NAME,
+        model_name: str | None = None,
         client_factory: Callable[[], DeerFlowClientLike] | None = None,
         require_profile: bool = True,
         review_service: ReviewContextProvider | None = None,
         action_proposal_boundary: SocLeadAgentActionProposalBoundary | None = None,
     ) -> None:
         self._agent_name = agent_name
+        self._model_name = model_name.strip() if model_name and model_name.strip() else None
         self._client_factory = client_factory or (lambda: DeerFlowClient(agent_name=agent_name))
         self._require_profile = require_profile
         self._review_service = review_service
@@ -120,7 +122,8 @@ class SocLeadAgentChatService:
             )
             message = render_lead_agent_review_context_message(message=message, artifact=artifact)
         client = self._client_factory()
-        for event in client.stream(message, thread_id=thread_id):
+        stream_options = {"model_name": self._model_name} if self._model_name else {}
+        for event in client.stream(message, thread_id=thread_id, **stream_options):
             stream_event = _coerce_stream_event(event, thread_id=thread_id)
             yield from _review_action_proposals(
                 stream_event,

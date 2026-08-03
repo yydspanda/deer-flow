@@ -70,7 +70,7 @@ Commands:
 Examples:
   ./scripts/soc-boss-demo.sh prepare --reset
   ./scripts/soc-boss-demo.sh start --reset
-  ./scripts/soc-boss-demo.sh start --reset --analyzer-mode llm --model-name deepseek-v4-pro
+  ./scripts/soc-boss-demo.sh start --reset --analyzer-mode llm --model-name deepseek-v4-flash
 EOF
 }
 

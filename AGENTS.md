@@ -162,6 +162,11 @@ Current SOC direction:
 - SOC Runtime live analysis reuses DeerFlow `create_chat_model` through `backend/soc_agent/llm/`.
   Select it explicitly with `SOC_ANALYZER_MODE=llm` / `SOC_LLM_MODEL` or CLI
   `--analyzer-mode llm --model-name NAME`; the default remains deterministic for tests and replay.
+  Local live validation uses `deepseek-v4-flash` when `SOC_VALIDATION_MODEL` is unset; saved artifacts
+  retain the model provenance from the run that produced them.
+- The current first configured model is `deepseek-v4-flash`, so unpinned SOC Lead Agent runs inherit
+  Flash. Web requests may select another registered model, and `soc chat tui --lead-agent
+  --model-name NAME` provides the same explicit per-run override for the SOC TUI.
 - SOC model calls have independent process-local admission controls (`SOC_LLM_MAX_CONCURRENCY`,
   optional requests-per-minute, admission timeout, and `SOC_LLM_CALL_TIMEOUT_SECONDS`). Analyzer evidence is deterministically
   grounded against the exact bounded prompt projection before `SocDecisionPolicy` runs.
