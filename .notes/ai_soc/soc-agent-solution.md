@@ -831,7 +831,7 @@ flowchart TD
     Lead --> Skill["🧩 SOC Skills<br/>Network / Endpoint / Web / Email / Asset"]
     Lead --> Proposal["📌 Action Proposal<br/>what to check / who should review"]
     Proposal --> Router{"🛡️ Action Boundary"}
-    Router -->|"read-only"| Adapter["🛠️ Action Adapter / MCP<br/>asset.lookup / process_tree.lookup / threat_intel.lookup"]
+    Router -->|"read-only"| Adapter["🛠️ Action Adapter / MCP<br/>asset.lookup / asset.locate / threat_intel / security_tag"]
     Router -->|"high-risk"| Approval["🛂 Approval Inbox"]
     Adapter --> Evidence["🔎 InvestigationEvidence"]
     Evidence --> Context
@@ -1491,7 +1491,7 @@ credentials, smoke report, and payload/latency/error evaluation.
 | Deliverable / 交付物 | Status / 状态 | Meaning / 含义 |
 | --- | --- | --- |
 | D12-A provider implementation | Done / `fake-only` | PingAn-owned ZEUS HTTP/signing port, asset-to-BU/UM workflow port, fallback service, stdio MCP server, explicit action/MCP config and regression tests; every smoke result is `mocked=true` |
-| D12-B internal real smoke | In Progress / preflight-ready | Local DEV model profile, portable ZEUS signer, no-network preflight and direct smoke entry are implemented; internal Agent Platform `run_workflow`, network and approved payloads remain required. Acceptance still requires `mocked=false` success/not-found/auth-failure/timeout and persisted `InvestigationEvidence` evidence |
+| D12-B internal real smoke | In Progress / execution-ready | Local DEV model profile, portable ZEUS signer, no-network preflight, direct seven-class runner and MCP evidence/readback acceptance runner are implemented. `--plan-only` is request-free; live requires explicit confirmation, a private matrix and bounded `0600` reports. Evidence acceptance reuses the generic Dispatcher/Repository/Review Context and verifies Lead Agent projection plus immutable base Run/Review state. Internal Agent Platform `run_workflow`, network and approved payloads remain required; only real `mocked=false` reports plus deployed Web/TUI smoke may close the gate |
 
 The provider receives an already-extracted `asset_key`, type and optional role. It does not extract
 assets, infer attacker/victim roles, select a response target, alter the Runtime verdict, close a
@@ -1681,8 +1681,9 @@ The authoritative work packages, gates, Parking Lot and anti-drift rules live in
 [`progress.md`](progress.md). As of 2026-08-04, `BG-P0-01..BG-P1-05` and `BG-03` are complete, the
 Alpha Gate has a scoped owner approval, and Stage 4 is current. Checkpoint D0-D11.1 and D12-A
 provider code/fake smoke are complete; D12-B internal real asset-provider smoke is the current task,
-with code/preflight ready and internal Agent Platform runtime plus approved cases required for
-`mocked=false` evidence. Those inputs must not be replaced by another mock. After D12-B, the fixed
+with code/preflight/direct case-matrix runner ready and internal Agent Platform runtime plus approved
+private cases required for `mocked=false` evidence. Those inputs must not be replaced by another
+mock. After D12-B, the fixed
 order is real TI, real security/governed-context facts, real external disposition source, governed
 read-only investigation orchestration, and internal shadow E2E (`PI-01A..E`). `PI-04-A SOC Operations
 Snapshot` is complete; `PI-04-B` remains parked behind that sequence.

@@ -1,0 +1,58 @@
+# SOC Agent Integration Work Index / 外部接入工作索引
+
+本文件只回答“`integrations/` 里哪些已经完成、哪些仍未完成、未完成项归属哪个权威任务”。它不是
+第二份路线图，不改变执行顺序；当前任务和先后顺序始终以
+[`../delivery-roadmap.md`](../delivery-roadmap.md) 与 [`../progress.md`](../progress.md) 为准。
+
+## 1. Complete Crosswalk / 完整交叉台账
+
+| Capability / 能力 | Current nature / 当前性质 | Authoritative task / 归属 | Planned implementation / 计划落点 |
+|---|---|---|---|
+| Legacy model/ZEUS/status/path audit | **Done / reference** | 已完成审计 | [`pingan-legacy-source-audit.md`](pingan-legacy-source-audit.md)；只保留协议和租户边界，不迁移旧控制流 |
+| D12-A asset provider | **Done / fake-only** | D12-A | PingAn provider、portable signer、fallback、MCP/action 契约已完成；不能代替真实验收 |
+| Real `asset.locate` | **Current / data-gated** | `D12-B` | preflight/direct seven-case runner 与 MCP/Dispatcher/evidence/shared-context acceptance runner 已实现；内网 confirmed matrix -> real evidence report -> deployed Web/TUI smoke |
+| `asset.lookup` simple-record route | **Local scaffold / unresolved production route** | `PI-01D` route consolidation | 它与 ownership-oriented `asset.locate` 语义不同；PI-01E 前必须选择真实 adapter、显式映射并保持独立 result schema，或从该 tenant allowlist 禁用，不能保留默认 mock |
+| Real threat intelligence | **Queued / mock replacement** | `PI-01A` | PingAn `/public/indicatorSearch` adapter；generic 层只认识 `threat_intel.ip_reputation.lookup` |
+| Real security-tag lookup | **Queued / mock replacement** | `PI-01B1` | PingAn `/public/searchTagContent` adapter；保留 validity/scope/source/version/freshness |
+| Authoritative authorized-activity facts | **Data-gated / fixture replacement** | `PI-01B2` | change/scanner/maintenance/exercise-roster source adapter -> existing Governed Context lifecycle；不能由 tag lookup 自动冒充完成 |
+| External disposition core | **Done / source missing** | 已完成 canonical service | Contract、Gateway ingress、UoW、SQL、Review/Correction/Memory candidate、Web/TUI 已完成 |
+| Real Zeus status/reason feed | **Queued / data-gated** | `PI-01C` | Webhook/polling/DB-view source adapter -> `SocExternalDispositionIngressCommand`；不得直写 repository |
+| Automatic read-only investigation | **Gap / not a mock** | `PI-01D` | deterministic versioned planner -> allowlisted dispatcher/registry -> persisted `InvestigationEvidence` |
+| Internal shadow journey | **Queued** | `PI-01E` | Runtime batch 与 investigation batch 分离，按 `5 -> 50 -> all` 验证质量、成本、延迟和零越权副作用 |
+| Deployed Review Web/Gateway/auth smoke | **Data-gated** | `PI-01E` / `PI-04-B` | 真实 Gateway、身份、网络和 SOC SQLite 上验证 Review/Investigation readback；Playwright transport fixture 不冒充部署证据 |
+| Historical EDR path catalog | **Done / investigation-only** | 已完成当前目标 | exact path + optional MD5、lineage、freshness、MCP/action/evidence 已完成；始终不是 allowlist |
+| Path-catalog decision impact | **Deferred / optional** | `PI-03D`，需重新排期 | 只有人工标签、scope/validity owner 和 replay gate 到位后，才允许建立独立 promotion proposal；不能修改现有目录即获得决策权 |
+| Feedback-derived Skill backlog | **Deferred / unimplemented** | `PI-03C` | 重复 external reason/analyst correction -> versioned `SkillImprovementCandidate` -> human review + replay；不自动改或发布 Skill |
+| Real labels and model calibration | **Data-gated** | `PI-03A/B` | immutable corpus manifest、人工 reviewer/rationale、scenario/verdict/evidence 评测和校准；模型自报 confidence 不是概率 |
+| Correlation pair expansion | **Deferred / data-gated** | `PI-03B` | `same_incident` / `related_distinct` / `unrelated` 人工标签及 scorer replay diff |
+| Adaptive parser evolution | **Deferred / data-gated** | `PI-03E` 或独立治理切片 | 先 drift cohort + candidate bundle，再 dual-run/replay/approval/canary/rollback；禁止线上单告警自改 parser |
+| Real Kafka/PostgreSQL/K8s | **Parked / inputs absent** | `PI-02` | 真实 ACL/TLS/lag/DLQ、PostgreSQL migration/recovery、K8s deployment/rollback；当前 DEV SQLite 不冒充验收 |
+| Kafka worker concurrency | **Deferred / measurement-gated** | `PI-02` 子任务 | 真实串行瓶颈成立后，先 bounded queue，再 partition-aware commit 和 backpressure |
+| Operations Web/telemetry/SLO | **Partially done** | `PI-04-B/C` | Snapshot CLI/API 已完成；`PI-01E` 后做薄 Web，再接真实 telemetry、Prometheus 和 SLO |
+| Wiki/OKF memory projection | **Deferred / optional** | `PI-03` 之后 | DB source of truth -> versioned read-only export；Wiki 编辑只能回流 proposal |
+| Real high-risk actions | **Deferred / governance-gated** | `PI-05` | 真实 EDR/F5/SOAR adapter、审批/grant、幂等、结果核验、补偿和回滚；默认人工审批 |
+
+## 2. Explicit Non-backlog / 明确不作为待办
+
+- `endpoint.process_tree.lookup` 与 `host.event_context.lookup` 已删除，不因旧 Mock 或文档提及而恢复。
+- bounded LLM entity enrichment 和 correlation LLM rerank 只是可选扩展，不是当前已承诺任务；没有人工标签
+  证明确定性基线不足前，不进入路线图。
+- 完整多 Agent 自治、攻击链/时间线展示和自动高风险处置不属于当前 PI-01 完成条件。
+- 旧 ZEUS `status != 1 -> skip AI`、旧路径模糊 allowlist 和旧硬编码风险评分明确不迁移。
+
+## 3. Document Roles / 文档分工
+
+| Document | Role / 作用 |
+|---|---|
+| [`mock-and-real-register.md`](mock-and-real-register.md) | 判断某项当前是 real、mock、fixture、local smoke、gap 还是 data-gated |
+| [`pingan-dev-information-collection.md`](pingan-dev-information-collection.md) | 进入内网前后需要准备的非敏感契约、真实测试值和环境条件 |
+| [`pingan-internal-continuation-handoff.md`](pingan-internal-continuation-handoff.md) | 内网执行命令、case matrix、验收 checklist 和结果带回边界 |
+| [`external-disposition-sync.md`](external-disposition-sync.md) | 外部状态/理由 canonical contract、学习边界和 Skill 候选计划 |
+| [`pingan-legacy-source-audit.md`](pingan-legacy-source-audit.md) | 已完成的旧实现审计结论，不作为新的执行队列 |
+
+## 4. Update Rule / 更新规则
+
+- 新增或替换真实 Provider 时，同步本索引和 `mock-and-real-register.md`。
+- 任一项从 queued/deferred 进入执行前，必须先在 `delivery-roadmap.md` 获得 task ID，并更新
+  `progress.md` 当前指针。
+- 内网验收完成后，把 evidence 摘要写回权威文档；交接单完成使命后归档，不长期复制状态。

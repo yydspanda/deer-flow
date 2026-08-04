@@ -25,7 +25,8 @@
 | 核对旧 Zeus `flows/` 的研判能力迁到哪里、哪些明确不迁 | `capabilities/pingan/legacy-zeus-capability-extraction.md` | `capabilities/pingan/knowledge-decomposition.md` |
 | 查看平安专属知识候选 | `capabilities/pingan/knowledge-candidates.md` | `capabilities/pingan/source-docs/` |
 | 查看当前哪些能力仍是 mock | `integrations/mock-and-real-register.md` | `capabilities/pingan/onboarding.md` 的 PA-12 |
-| 去内网收集 D12-B 和后续 DEV 接入信息 | `integrations/pingan-dev-information-collection.md` | `integrations/mock-and-real-register.md` |
+| 盘点所有外部接入、未完成项及其权威任务归属 | `integrations/README.md` | `delivery-roadmap.md` 的 PI 阶段 |
+| 去内网收集并执行 D12-B seven-case/MCP/证据回读验收，或准备后续 DEV 接入 | `integrations/pingan-internal-continuation-handoff.md` | `integrations/pingan-dev-information-collection.md` |
 | 查看旧 sec-model/ZEUS 状态/safe-path 审计结论 | `integrations/pingan-legacy-source-audit.md` | `integrations/pingan-internal-continuation-handoff.md` |
 | 设计外部工单/处置状态回流 | `integrations/external-disposition-sync.md` | 工程契约 external disposition 章节 |
 | 设计记忆和经验沉淀 | `memory/memory-tracking.md` | `alert-lifecycle-flow.md` 的 memory flow |
@@ -59,6 +60,7 @@ ai_soc/
 │       ├── knowledge-candidates.md    # PingAn tenant memory/policy/eval 候选
 │       └── source-docs/               # 平安 APT/EDR/HIDS 原始经验资料
 ├── integrations/
+│   ├── README.md                       # 外部接入完成/未完成/deferred 全量交叉索引
 │   ├── external-disposition-sync.md   # 外部工单/状态/理由同步协议
 │   ├── pingan-dev-information-collection.md # 内网 DEV 配置/契约/样本收集清单
 │   ├── pingan-legacy-source-audit.md  # 旧模型/签名/状态/safe-path 源码审计

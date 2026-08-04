@@ -324,6 +324,27 @@ authorize actions. Its `fake` and `internal` modes are mutually exclusive: fake 
 workflow imports are unavailable, never silently downgrade to fake. D12-A code/fake smoke does not
 complete PA-12; only D12-B internal smoke with `mocked=false` and persisted evidence does.
 
+D12-B direct-provider acceptance is orchestrated by
+`integrations/pingan/d12b_acceptance.py` and `scripts/soc_pingan_d12b_matrix.py`. The tracked
+example may be inspected with `--plan-only`, which issues no request and omits query/UM values.
+Live execution requires `--confirm-live`, an ignored `*.local.yaml|yml|json` matrix with mode `0600`,
+and an explicit report path. Per-case configuration changes are environment-variable references
+limited to the reviewed ZEUS DEV fault-injection allowlist; aggregate reports contain hashes,
+expected/observed attempt stages, latency and error classes, but no raw query, UM, Provider body or
+override value. A passed direct matrix still does not replace the separate MCP, persisted evidence,
+Web/TUI/Lead Agent readback, and security checks in the D12-B Done gate.
+
+The next D12-B gate is implemented by
+`integrations/pingan/d12b_evidence_acceptance.py` and
+`scripts/soc_pingan_d12b_evidence.py`. It selects one approved successful case from the same
+private matrix, requires an existing open ReviewQueue item, and invokes `asset.locate` through
+the configured MCP adapter plus `SocAgentActionDispatcher`; it must never call the PingAn
+Provider directly. A passing report requires real/internal/investigation-only result markers,
+persisted `InvestigationEvidence`, readback through `SocReviewService`, visibility in the bounded
+Lead Agent context, request/trace provenance, and stable AnalysisRun/ReviewQueue model hashes. The report contains IDs,
+hashes, check codes, and error types only. It does not render Web/TUI, so deployed browser/TUI
+transport remains a separate internal smoke rather than an inferred pass.
+
 The historical PingAn EDR workbook is compiled by
 `scripts/soc_pingan_software_path_catalog.py` into a Git-ignored, mode-`0600` SQLite catalog and
 served by `integrations/pingan/software_path_mcp_server.py`. The generic boundary is the read-only

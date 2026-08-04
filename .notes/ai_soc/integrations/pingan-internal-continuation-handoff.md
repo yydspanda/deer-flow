@@ -129,10 +129,14 @@ SOC Runtime asset candidate
 - `backend/soc_agent/integrations/pingan/asset_location.py`
 - `backend/soc_agent/integrations/pingan/zeus_signing.py`
 - `backend/soc_agent/integrations/pingan/dev_validation.py`
+- `backend/soc_agent/integrations/pingan/d12b_acceptance.py`
+- `backend/soc_agent/integrations/pingan/d12b_evidence_acceptance.py`
 - `backend/soc_agent/integrations/pingan/asset_mcp_server.py`
 - `backend/scripts/soc_pingan_asset_mcp_server.py`
 - `backend/scripts/soc_pingan_dev_preflight.py`
 - `backend/scripts/soc_pingan_asset_direct_smoke.py`
+- `backend/scripts/soc_pingan_d12b_matrix.py`
+- `backend/scripts/soc_pingan_d12b_evidence.py`
 - `backend/samples/pingan_dev/`
 - `backend/samples/mcp/pingan_asset/`
 
@@ -163,6 +167,8 @@ backend/.deer-flow/soc-internal-validation/d12b/reports/
 - [x] preflight 在请求发出前阻止未知环境、隐式 PRD、fake transport、未 allowlist ZEUS host 和非 loopback model endpoint。
 - [x] direct-provider smoke 脚本已实现，不能用 MCP smoke 替代这层验收。
 - [x] 报告区分 `found`、`not_found`、`ambiguous`、`authentication_failed`、`timeout`、`provider_unavailable`、`invalid_response`、`preflight_failed` 和 `invalid_configuration`。
+- [x] 七类 direct-provider case matrix runner 已实现：`--plan-only` 不发请求，live 必须显式 `--confirm-live`、使用 `0600` 的 `*.local.yaml|yml|json` 并指定 report path。
+- [x] aggregate report 使用 `soc.pingan_asset_case_matrix_report.v1`，只保留 query hash、预期/实际 outcome、attempt stage/status、latency 和 error class；不含 raw query/UM、Provider body 或环境 override value。
 - [ ] 保留原始响应仅用于内网审计；投影结果使用当前类型化 contract，不把完整内部响应传给 LLM。
 
 ### 3.5 Direct provider and fallback verification / 直接接口与降级链
@@ -182,6 +188,10 @@ backend/.deer-flow/soc-internal-validation/d12b/reports/
 ```bash
 cp backend/samples/pingan_dev/config.example.yaml config.pingan-dev.local  # only when absent
 cp backend/samples/pingan_dev/env.example .env.soc-dev.local              # only when absent
+mkdir -p backend/.deer-flow/soc-internal-validation/d12b/reports
+cp backend/samples/pingan_dev/d12b-test-cases.example.yaml \
+  backend/.deer-flow/soc-internal-validation/d12b/test-cases.local.yaml   # only when absent
+chmod 600 backend/.deer-flow/soc-internal-validation/d12b/test-cases.local.yaml
 git check-ignore -v config.pingan-dev.local .env.soc-dev.local
 # Fill/verify real DEV values, then:
 source ./.env.soc-dev.local
@@ -202,6 +212,21 @@ backend/.venv/bin/python backend/scripts/soc_pingan_asset_direct_smoke.py \
   --role victim \
   --report-path "$D12B_REPORT_DIR/direct-success.json"
 ```
+
+先只检查七类 coverage，不发网络请求；确认 private matrix 中所有 placeholder 已替换后，再显式执行真实 DEV matrix：
+
+```bash
+backend/.venv/bin/python backend/scripts/soc_pingan_d12b_matrix.py \
+  --cases backend/.deer-flow/soc-internal-validation/d12b/test-cases.local.yaml \
+  --plan-only
+
+backend/.venv/bin/python backend/scripts/soc_pingan_d12b_matrix.py \
+  --cases backend/.deer-flow/soc-internal-validation/d12b/test-cases.local.yaml \
+  --confirm-live \
+  --report-path "$D12B_REPORT_DIR/direct-provider-cases.json"
+```
+
+`--confirm-live` 会发真实内网 DEV 请求。它会拒绝非 `.local` 文件名、group/world-readable 权限、未替换 placeholder、缺失 fault-injection 环境变量或缺失 report path；不能为通过验收而跳过这些门禁。
 
 Preflight 当前在外网应只因内部 `run_workflow` 包不存在而失败；内网必须先修正这个 import，不能跳过 preflight 强行请求。
 
@@ -249,12 +274,35 @@ export D12B_ASSET_KEY="<approved-internal-test-value>"
 
 ### 3.7 Business-chain verification / 业务链路验收
 
-- [ ] 通过 `SocActionAdapterRegistry`/Action Dispatcher 调用，不允许业务入口直接调用 Provider。
-- [ ] 真实结果持久化为 `InvestigationEvidence`，并保留 route/action/provider/trace provenance。
-- [ ] 同一证据可从 ReviewQueue investigation context 读取。
-- [ ] Web、Review TUI 和 Lead Agent bounded context 能看到经过裁剪的资产归属结果。
+- [x] 验收执行器已固定通过 `SocActionAdapterRegistry`/Action Dispatcher 调用；业务入口不直接调用 Provider。
+- [x] 验收执行器已实现 `InvestigationEvidence` 持久化、ReviewQueue investigation context 回读、Lead Agent bounded artifact 回读和基础 Run/Review 不变式检查。
+- [ ] 在内网用真实成功 case 运行执行器，保存 `mocked=false` 报告。
+- [ ] Web/Review TUI 使用同一 investigation context 的 deployed render smoke 通过；执行器只证明共享服务契约，不冒充浏览器/TUI 渲染。
 - [ ] 验证 Provider 没有修改 Runtime verdict、ReviewQueue 状态、memory 或 action approval。
 - [ ] 验证失败结果不会提高 finding confidence，也不会触发自动关闭或自动响应。
+
+先从同一 SOC SQLite 选择一个已有的 open ReviewQueue 工单，再选择 private matrix 中
+`expected_outcome=found` 的 case。下面命令会真实调用一次内网 MCP；不接受 negative/fault-injection case：
+
+```bash
+cd backend
+./.venv/bin/python -m soc_agent.cli review list --pretty
+
+export D12B_QUEUE_ID="<existing-open-review-queue-id>"
+export D12B_CASE_ID="search-hit"
+
+./.venv/bin/python scripts/soc_pingan_d12b_evidence.py \
+  --cases .deer-flow/soc-internal-validation/d12b/test-cases.local.yaml \
+  --case-id "$D12B_CASE_ID" \
+  --queue-id "$D12B_QUEUE_ID" \
+  --confirm-live \
+  --report-path "$D12B_REPORT_DIR/evidence-readback.json"
+```
+
+通过条件包括：`provider_mode=internal`、`mocked=false`、
+`evidence_boundary=investigation_only`、`decision_impact=none`、
+`raw_response_included=false`、证据带同一 `request_id/trace_id`、可从 Review Context/Lead Agent artifact 读回，并且
+AnalysisRun/ReviewQueue 序列化哈希前后一致。报告不保存 raw query、UM 或 Provider body。
 
 ### 3.8 Real-alert end-to-end verification / 真实告警端到端
 
@@ -280,7 +328,7 @@ export D12B_ASSET_KEY="<approved-internal-test-value>"
 - [ ] MCP tools/smoke 证明真实工具可发现、可调用。
 - [ ] success、not-found、authentication failure、timeout 和 ambiguous 语义已验证。
 - [ ] 至少一个真实结果明确 `mocked=false`、`provider_mode=internal`。
-- [ ] `InvestigationEvidence` 持久化及 Web/TUI/Lead Agent 回读已验证。
+- [ ] `InvestigationEvidence` 持久化、共享 Review/Lead Agent context 回读和 deployed Web/TUI render 已分别验证。
 - [ ] 敏感字段、裁剪、延迟、错误和审计检查通过。
 - [ ] 没有 fake fallback、没有 verdict/memory/close/action 越权副作用。
 
@@ -291,7 +339,8 @@ D12-B 通过后按下面顺序推进。每项都复用 generic action、typed re
 | Order | Generic route / boundary | PingAn source | Current state | Completion evidence |
 |---|---|---|---|---|
 | `PI-01A` | `threat_intel.ip_reputation.lookup` | `POST /public/indicatorSearch` | in-memory mock | real DEV hit/not-found/error smoke + persisted evidence |
-| `PI-01B` | `security_tag.lookup` | `POST /public/searchTagContent` | in-memory mock | valid/expired/not-found/error smoke + governed evidence |
+| `PI-01B1` | `security_tag.lookup` | `POST /public/searchTagContent` | in-memory mock | valid/expired/not-found/error smoke + governed evidence |
+| `PI-01B2` | authorized-activity fact source | change/scanner/maintenance/exercise roster | lifecycle/matcher real, source facts are fixture | real source version/scope/freshness sync or explicit data-gated status with disposition automation disabled |
 | `PI-01C` | external disposition canonical ingress | Zeus status/reason feed | canonical service real, source feed fixture | authenticated real source adapter + idempotency/order/replay evidence |
 | `PI-01D` | governed read-only investigation orchestration | existing action dispatcher/registry/evidence | only caller-supplied `action_specs`; daemon/batch do not auto-enrich | deterministic allowlisted plan + persisted evidence + immutable base run |
 | `PI-01E` | internal shadow end-to-end | real Runtime + PI-01 providers | not started | `5 -> 50 -> all` investigation report with latency/cost/error/review/no-side-effect gates |
@@ -305,7 +354,9 @@ D12-B 通过后按下面顺序推进。每项都复用 generic action、typed re
 - [ ] 验证 approved hit、not-found、invalid response、auth failure、timeout 和多来源结果。
 - [ ] 真实证据经 `InvestigationEvidence` 回流并可被 Grounding 引用；完整内部响应不得传给 LLM。
 
-### 4.2 PI-01B Security tags / 安全标签
+### 4.2 PI-01B Security tags and authorized facts / 安全标签与授权事实
+
+#### PI-01B1 Security-tag lookup / 安全标签查询
 
 - [ ] 复用 ZEUS 认证，核对 IP/host/UM/domain 等可查询对象类型。
 - [ ] 明确 `label`、`tagCode`、`tagType`、`isValid`、`expireTime`、时区和永久有效语义。
@@ -313,6 +364,17 @@ D12-B 通过后按下面顺序推进。每项都复用 generic action、typed re
 - [ ] 验证有效、过期、查无、auth failure、timeout 和多个冲突标签。
 - [ ] 授权扫描、护网/红蓝队、维护窗口和白名单只能成为 governed context/evidence；不能直接判安全或关闭告警。
 - [ ] 标签需要保留 scope、source、version、validity 和 freshness；过期或超范围标签不得参与 tenant disposition。
+
+#### PI-01B2 Authoritative fact source / 权威事实来源
+
+- [ ] 确认可用来源：change、scanner、maintenance、exercise roster、CMDB 或其他权威系统；不得用
+  `security_tag.lookup` 的存在自动声称这些来源已接入。
+- [ ] source adapter 生成 vendor-neutral `GovernedContextFact` command，复用现有生命周期、版本、撤销、
+  event-time 和 matcher 服务；PingAn 字段不进入 generic matcher。
+- [ ] 验证护网红/蓝/白队身份、授权目标/行为、扫描器、变更窗口和维护窗口的 scope 组合；身份命中不
+  自动等于当前行为已授权。
+- [ ] 若 DEV 没有真实来源，记录 `data-gated`，继续保持 authorization enrichment shadow-only、
+  `auto_close_allowed=false`，不能用 validation fixture 关闭 gate。
 
 ### 4.3 PI-01C Zeus status/reason feedback / 状态理由回流
 
@@ -335,6 +397,7 @@ POST /api/soc/external-dispositions
 
 - [ ] 新增 vendor-neutral `SocEnrichmentPlan` 和 deterministic planner；输入只使用 canonical entities、typed scenarios、evidence gaps 和 tenant policy。
 - [ ] 首版只允许已注册的 `asset.locate`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup`，禁止自然语言拼接任意 tool name/payload。
+- [ ] 审阅 `asset.lookup` simple-record route：为 PingAn 显式配置真实 adapter 并保留独立 result schema，或从 tenant allowlist 禁用；不得让 PI-01E 使用默认 in-memory mock。
 - [ ] 复用 `SocAgentActionDispatcher`、`SocActionAdapterRegistry` 和 `InvestigationEvidenceRepository`；不得在通用 Runtime 内加入 PingAn 分支或外部 IO。
 - [ ] Provider failure、normal not-found、partial result 和 schema drift 必须是不同状态；base `AnalysisRun` 保持不可变。
 - [ ] Kafka/PKL 调查模式必须显式开启、可限流和可回放；默认 Runtime compatibility batch 继续不调用 MCP。
@@ -371,7 +434,7 @@ cd backend
 
 验收边界：结果必须保持 `mocked=false`、`provider_mode=local_catalog`、`candidate_only=true`、`allowlist=false`、`evidence_boundary=investigation_only`、`decision_impact=none` 和 `automation_eligible=false`。`D:`、用户可写和临时目录即使命中历史忽略记录也仍为 `high` attention。该能力已完成代码与本地数据编译，不属于 D12-B 外部真实资产 Provider gate，也不能据此关闭 `PA-12`。
 
-### 4.5 Internal Runtime batch / 内网 5000+ 告警批跑
+### 4.7 Internal Runtime batch / 内网 5000+ 告警批跑
 
 批跑入口复用生产 `SocAnalysisService`，不是第二套 Runtime，也不自动调用 MCP。完整用法见 `validation/compact_zeus/internal_batch/README.md`。先加载 DEV 配置并只做计划：
 
@@ -394,9 +457,10 @@ DEV 默认不持久化；需要验证 ReviewQueue/审计/维护问题时，先�
 
 路径目录与资产定位是独立的调查 enrichment。批跑不会为了方便而把它们偷偷塞进固定 Runtime；需通过 Lead Agent/Action Dispatcher 调用并持久化 `InvestigationEvidence`。
 
-### 4.6 PI-01 exit gate / 阶段门槛
+### 4.8 PI-01 exit gate / 阶段门槛
 
 - [ ] 资产、TI、安全标签三个真实只读 Provider 均有 `mocked=false` DEV smoke 和持久化证据。
+- [ ] 授权活动权威来源已完成真实 source sync；若 DEV 不可获得，明确记录 `PI-01B2 data-gated`，且授权型 disposition/automation 继续关闭。
 - [ ] 可获得的 Zeus 状态/理由 source feed 已通过 canonical ingress；若 DEV 无入口，明确记录 data-gated，而不是以 fixture 标记 Done。
 - [ ] Provider success/not-found/failure、敏感信息、延迟、审计和 schema drift 均可见。
 - [ ] 至少一组 APT/NDR 与一组 EDR/HIDS 真实告警完成 Runtime + provider + ReviewQueue/Lead Agent 回读。
@@ -418,6 +482,9 @@ DEV 默认不持久化；需要验证 ReviewQueue/审计/维护问题时，先�
 - [ ] 评估 Runtime/LLM 的 verdict、scenario、evidence grounding、manual checks 和 review routing。
 - [ ] 校准 confidence，但不把模型自报分数当概率，也不以单一 tenant 的分布代表通用产品。
 - [ ] 扩充人工标注的 correlation pair corpus，区分 `same_incident`、`related_distinct`、`unrelated`。
+- [ ] 重复 external reason/analyst correction 通过 `PI-03C` 形成可追溯、可回放、人工评审的 `SkillImprovementCandidate`，不得自动改 Skill。
+- [ ] 路径目录等 tenant candidate knowledge 只有在 `PI-03D` 人工标签、scope/validity owner 和 replay gate 通过后才可提出 promotion；默认保持 investigation-only。
+- [ ] parser 漂移只有形成稳定 cohort 后才进入 `PI-03E` candidate bundle/dual-run/replay/approval，禁止 Runtime 自修改。
 - [ ] 记录成本、延迟、人工接管率、错误类型和 provider contribution。
 - [ ] 评测通过后只允许进入 shadow review；不得直接开放 auto-close、抑制或高风险动作。
 
@@ -496,9 +563,9 @@ soc-internal-validation/
 
 ```text
 Current: PI-01 / D12-B Internal Real Asset Provider
-Ready:   local DEV model profile + portable ZEUS signer + preflight + direct smoke entry
+Ready:   local DEV model profile + portable ZEUS signer + preflight + direct smoke + seven-case matrix runner
 First:   make model gateway and internal run_workflow import available; pass preflight
-Next:    run direct ZEUS/fallback case matrix and existing MCP tools/smoke
+Next:    fill private matrix; run plan-only, confirmed direct ZEUS/fallback matrix and existing MCP tools/smoke
 Gate:    persist mocked=false InvestigationEvidence and verify Web/TUI/Lead Agent readback
 Queued:  PI-01A -> PI-01B -> PI-01C -> PI-01D -> PI-01E
 ```

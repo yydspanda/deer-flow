@@ -1143,6 +1143,8 @@ class InvestigationEvidence(BaseModel):
     thread_id: str | None = None
     source_proposal_id: str | None = None
     context_hash: str | None = None
+    request_id: str | None = Field(default=None, max_length=256)
+    trace_id: str | None = Field(default=None, max_length=256)
     actor: ActorContext | None = None
     created_at: datetime = Field(default_factory=utc_now)
 

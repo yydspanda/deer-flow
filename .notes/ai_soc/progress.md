@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 PingAn 内网 DEV 统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | 在内网使 `model.agent_platform.util_tools:run_workflow` 可导入，启动本地模型 gateway，执行 preflight、direct Provider 和 MCP `mocked=false` case matrix；完成 D12-B 前不启动 `PI-01A..E`，Kafka/K8s/PostgreSQL/PI-04-B/deferred 当前不插队。 |
+| 当前下一刀 | 在内网使 `model.agent_platform.util_tools:run_workflow` 可导入，启动本地模型 gateway，执行 preflight、direct Provider/MCP `mocked=false` case matrix，再运行 evidence persistence/readback acceptance 和 deployed Web/TUI smoke；完成 D12-B 前不启动 `PI-01A..E`，Kafka/K8s/PostgreSQL/PI-04-B/deferred 当前不插队。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -41,6 +41,36 @@
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / PI-01 D12-B Internal Smoke** | PI-04-A 已完成；DEV profile/signer/preflight 已就绪，当前等待内网 Agent Platform import 和真实 case matrix；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+
+## 2026-08-04 — D12-B MCP evidence persistence/readback acceptance implemented
+
+- 新增独立 PingAn 验收模块 `d12b_evidence_acceptance.py` 与 CLI `soc_pingan_d12b_evidence.py`；它从同一 mode-`0600` private matrix 选择一个 `expected_outcome=found` case，并要求已有 open ReviewQueue 工单。
+- 执行路径固定为 `SocAgentCapabilityRouter -> SocAgentActionDispatcher -> MCP action adapter -> InvestigationEvidenceRepository`，没有直接调用 PingAn Provider，也没有向通用 Runtime 添加 tenant 分支。
+- 通过门槛同时检查 `provider_mode=internal`、`mocked=false`、`evidence_boundary=investigation_only`、`decision_impact=none`、`raw_response_included=false`、request/trace provenance、证据持久化、共享 Review Context/Lead Agent artifact 可见，以及 AnalysisRun/ReviewQueue 哈希前后不变。
+- bounded report 只保存 matrix/case/query hash、queue/run/alert/evidence ID、门槛代码和错误类型；不保存 raw query、UM 或 Provider body。它明确标记 `web_or_tui_render_executed=false`，因此不冒充 deployed browser/TUI smoke。
+- 隔离回归覆盖 real-shaped success、missing case、非成功 case、mock result 和 Provider failure；MCP/Dispatcher/Context/architecture 相关组合测试 `159 passed`，全部 PingAn 测试 `89 passed`。其中 mock 结果保留 append-only evidence 但 D12-B gate 失败，Provider failure 不持久化成功证据。
+- `codegraph sync .` 已纳入 evidence acceptance 模块与 CLI 共 41 个新节点；`run_pingan_d12b_evidence_acceptance` 可直接查询，索引状态为 up to date。
+- 外网仍未发起平安内部请求，也没有真实 `mocked=false` 报告。D12-B 继续保持 Current；内网先跑 direct/MCP matrix，再运行该 evidence acceptance，最后补 deployed Web/TUI render 与性能/安全 checklist。
+
+## 2026-08-04 — D12-B direct-provider case matrix implemented
+
+- 新增 `soc.pingan_asset_case_matrix.v1` 私有输入、无值 `plan.v1` 和 bounded `report.v1`；七类必测语义固定为 ZEUS direct hit、asset-to-BU fallback、UM fallback、definite miss、ambiguous、authentication failure 和 timeout。
+- 新增 `soc_pingan_d12b_matrix.py`：`--plan-only` 只检查 coverage 且明确 `external_requests_issued=false`；真实执行必须显式 `--confirm-live`、使用 mode-`0600` 的 `*.local.yaml|yml|json` 并指定 report path。
+- fallback 验收不只比较最终 outcome，还按顺序比较 expected attempt，并拒绝 forbidden stage；因此能证明 direct hit 未进入 workflow、只有明确 `not_found` 才降级、鉴权/超时没有伪装成查无。
+- 负向 case 只允许通过白名单环境变量引用覆盖 ZEUS DEV URL/allowlist/App ID/App Key/timeout；aggregate report 只保留 query hash、阶段/状态、latency 和 error class，不保存 raw query、UM、Provider body 或 override value。
+- `write_validation_report()` 改为同目录临时文件 + `fsync` + atomic replace，并强制最终文件 `0600`。验证结果：全部 PingAn 回归 `83 passed`，Provider/Action/architecture 组合 `59 passed`，既有 MCP adapter 隔离回归 `32 passed`；Ruff、format、`git diff --check` 和 example `--plan-only` 通过。一次把两个 stdio MCP 套件串在同一 pytest 进程时暴露既有 closed-capture 顺序污染，隔离重跑全部通过，本切片未修改该上游路径。
+- 外网没有执行任何内部请求，也没有产生 `mocked=false` 证据；`codegraph sync .` 已纳入 2 个新增 Python 文件、41 个节点，并可查询 `run_pingan_asset_case_matrix`。
+- D12-B 仍是 Current：下一步在内网补齐 private cases 和 Agent Platform import，跑 confirmed direct matrix；随后继续 MCP、`InvestigationEvidence` 持久化及 Web/TUI/Lead Agent 回读，不能因 direct matrix 通过就提前关闭 gate。
+
+## 2026-08-04 — Integration/deferred unfinished-work crosswalk completed
+
+- 新增 `integrations/README.md` 作为非权威状态索引，把 integration 目录中的 Done、Current、Queued、Data-gated、Deferred 和明确非待办逐项映射到 `delivery-roadmap.md`；不建立第二套执行顺序。
+- 补出第一次盘点遗漏的独立 gate：`PI-01B1` 是真实 `security_tag.lookup`，`PI-01B2` 是 change/scanner/maintenance/exercise-roster 等权威授权事实来源同步；B1 不能冒充 B2，B2 不可获得时 automation 保持关闭。
+- 明确 `asset.lookup` 与 `asset.locate` 不是同义 route：前者是简单资产记录，后者是业务/处置归属；`PI-01D` 必须为前者配置真实 adapter/映射或从 tenant allowlist 禁用，PI-01E 不得继续使用默认 mock。
+- 将唯一未落正式工作包的 External Disposition `SkillImprovementCandidate` 固定为 `PI-03C`，补 contract/source refs/人工状态机/replay 边界；路径目录的可选治理升级进入 `PI-03D`，默认继续永久 investigation-only。
+- PI-03 同步拆为人工标签基础、Runtime/model/correlation 评测、Skill 候选、tenant knowledge promotion 和 adaptive parser governance；所有项都要求人工来源与离线 replay，不自动激活。
+- 修正旧文档差异：PI-04-B 改为等待 `PI-01E` 真实 telemetry；内网收集顺序补 PI-01D/E；handoff 章节编号和 PI-01B/PI-03 checklist 已统一。
+- 当前执行指针没有变化：仍只执行 `PI-01/D12-B`，上述 queued/deferred 项不得插队。
 
 ## 2026-08-04 — PI-01 real integration and deferred plan reconciled
 

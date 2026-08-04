@@ -274,6 +274,8 @@ def _action_evidence_payload(evidence: InvestigationEvidence) -> dict[str, Any]:
         "thread_id": evidence.thread_id,
         "source_proposal_id": evidence.source_proposal_id,
         "context_hash": evidence.context_hash,
+        "request_id": evidence.request_id,
+        "trace_id": evidence.trace_id,
         "created_at": evidence.created_at.isoformat(),
         "result_payload": evidence.result_payload,
     }

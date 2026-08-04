@@ -1427,7 +1427,11 @@ def test_read_only_action_result_can_be_recorded_as_investigation_evidence() -> 
     events = list(
         service.stream(
             request,
-            context=ServiceRequestContext(actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI)),
+            context=ServiceRequestContext(
+                request_id="REQ-EVIDENCE-1",
+                trace_id="TRACE-EVIDENCE-1",
+                actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI),
+            ),
         )
     )
 
@@ -1445,6 +1449,8 @@ def test_read_only_action_result_can_be_recorded_as_investigation_evidence() -> 
     assert evidence[0].thread_id == "SOC-THREAD-1"
     assert evidence[0].source_proposal_id == "PROP-1"
     assert evidence[0].context_hash == "ctx-hash"
+    assert evidence[0].request_id == "REQ-EVIDENCE-1"
+    assert evidence[0].trace_id == "TRACE-EVIDENCE-1"
     assert evidence[0].actor is not None
     assert evidence[0].actor.actor_id == "analyst-1"
     assert evidence[0].result_payload["asset_record"]["asset_id"] == "asset-001"

@@ -3486,6 +3486,8 @@ def _investigation_evidence_from_action_result(
         thread_id=_string_ref(refs, "thread_id") or request.thread_id,
         source_proposal_id=_string_ref(refs, "proposal_id"),
         context_hash=_string_ref(refs, "context_hash"),
+        request_id=context.request_id,
+        trace_id=context.trace_id,
         actor=context.actor,
     )
 

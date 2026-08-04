@@ -332,7 +332,8 @@ Current SOC direction:
   evidence, not memory or verdict changes. They must flow through `InvestigationEvidence`
   and `InvestigationEvidenceRepository`, then re-enter analyst/Lead Agent context through
   `SocReviewService.get_investigation_context()`; do not let entry layers write evidence
-  or mutate decisions directly.
+  or mutate decisions directly. New Dispatcher-created evidence copies the current
+  `ServiceRequestContext.request_id/trace_id` for Action/MCP/Provider correlation.
 - PingAn asset-provider code lives only under `backend/soc_agent/integrations/pingan/` and uses the
   existing generic `asset.locate` MCP/action boundary. Checkpoint D12-A is production-shaped code with
   a fake transport and must always expose `mocked=true`; it is not PA-12 or PI-01 real-provider
@@ -342,9 +343,19 @@ Current SOC direction:
   The reviewed ZEUS signer is reimplemented without legacy import-time dependencies at
   `soc_agent.integrations.pingan.zeus_signing:isec_sign`; do not restore the old module's default key
   or import all of `util.util_tools`. Use `backend/samples/pingan_dev/`,
-  `soc_pingan_dev_preflight.py`, and `soc_pingan_asset_direct_smoke.py` for D12-B. Real DEV values may
-  live in verified Git-ignored `*.local` files. A provider failure is not a normal miss and must stop
-  the fallback chain; only explicit `not_found` can advance from ZEUS to workflow/UM.
+  `soc_pingan_dev_preflight.py`, `soc_pingan_asset_direct_smoke.py`, and
+  `soc_pingan_d12b_matrix.py` for D12-B. After direct/MCP semantics pass, use
+  `soc_pingan_d12b_evidence.py` to route one approved successful matrix case through the MCP action
+  adapter and `SocAgentActionDispatcher`, persist `InvestigationEvidence`, and read it through the
+  shared Review/Lead Agent context. Real DEV values may live in verified Git-ignored `*.local`
+  files. Both live runners require explicit `--confirm-live`; the matrix requires a mode-`0600`
+  `*.local.yaml|yml|json` case file and an explicit report path; its aggregate report must omit raw
+  query/UM values, Provider responses and override values. A provider failure is not a normal miss
+  and must stop the fallback chain; only explicit `not_found` can advance from ZEUS to workflow/UM.
+  The evidence runner also requires an existing open ReviewQueue item and must prove the base
+  AnalysisRun and ReviewQueue item remain unchanged. Its service/context readback does not claim an
+  actual Web/TUI render. A passed direct matrix does not replace MCP, persisted-evidence or
+  UI/context readback evidence.
 - PingAn ZEUS lifecycle codes and reasons belong in a PingAn source adapter that emits
   `SocExternalDispositionIngressCommand`; generic Runtime must not recognize those status codes or
   copy the legacy `status != 1 -> skip AI` behavior. The historical EDR safe-path workbook is

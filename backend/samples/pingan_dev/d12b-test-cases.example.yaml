@@ -1,0 +1,120 @@
+schema_version: soc.pingan_asset_case_matrix.v1
+matrix_id: pingan-d12b-dev-asset-provider
+required_case_kinds:
+  - search_hit
+  - asset_to_bu_fallback
+  - um_fallback
+  - not_found
+  - ambiguous
+  - authentication_failure
+  - timeout
+cases:
+  - case_id: zeus-direct-hit
+    kind: search_hit
+    query: <approved-zeus-hit-value>
+    asset_type: IP
+    role: victim
+    expected_outcome: found
+    expected_attempts:
+      - stage: search_asset_info
+        status: found
+    forbidden_stages:
+      - asset_to_bu
+      - um
+
+  - case_id: asset-to-bu-fallback
+    kind: asset_to_bu_fallback
+    query: <approved-workflow-hit-value>
+    asset_type: IP
+    role: victim
+    expected_outcome: found
+    expected_attempts:
+      - stage: search_asset_info
+        status: not_found
+      - stage: asset_to_bu
+        status: found
+    forbidden_stages:
+      - um
+
+  - case_id: um-fallback
+    kind: um_fallback
+    query: <approved-asset-miss-value>
+    asset_type: IP
+    role: victim
+    um: <approved-um-hit-value>
+    expected_outcome: found
+    expected_attempts:
+      - stage: search_asset_info
+        status: not_found
+      - stage: asset_to_bu
+        lookup_kind: datacenter
+        status: not_found
+      - stage: asset_to_bu
+        lookup_kind: terminal
+        status: not_found
+      - stage: um
+        lookup_kind: user
+        status: found
+
+  - case_id: definite-not-found
+    kind: not_found
+    query: <approved-definite-miss-value>
+    asset_type: IP
+    role: related_asset
+    expected_outcome: not_found
+    expected_attempts:
+      - stage: search_asset_info
+        status: not_found
+      - stage: asset_to_bu
+        lookup_kind: datacenter
+        status: not_found
+      - stage: asset_to_bu
+        lookup_kind: terminal
+        status: not_found
+    forbidden_stages:
+      - um
+
+  - case_id: ambiguous-ownership
+    kind: ambiguous
+    query: <approved-ambiguous-value>
+    asset_type: DOMAIN
+    role: related_asset
+    expected_outcome: ambiguous
+    expected_attempts:
+      - stage: search_asset_info
+        status: found
+    forbidden_stages:
+      - asset_to_bu
+      - um
+
+  - case_id: authentication-failure
+    kind: authentication_failure
+    query: <approved-auth-test-value>
+    asset_type: IP
+    role: victim
+    expected_outcome: authentication_failed
+    expected_attempts:
+      - stage: search_asset_info
+        status: failed
+    forbidden_stages:
+      - asset_to_bu
+      - um
+    environment_overrides:
+      SOC_PINGAN_ZEUS_APP_KEY: D12B_INVALID_ZEUS_APP_KEY
+
+  - case_id: timeout
+    kind: timeout
+    query: <approved-timeout-test-value>
+    asset_type: IP
+    role: victim
+    expected_outcome: timeout
+    expected_attempts:
+      - stage: search_asset_info
+        status: failed
+    forbidden_stages:
+      - asset_to_bu
+      - um
+    environment_overrides:
+      SOC_PINGAN_ZEUS_BASE_URL: D12B_TIMEOUT_ZEUS_BASE_URL
+      SOC_PINGAN_ZEUS_ALLOWED_HOSTS: D12B_TIMEOUT_ZEUS_ALLOWED_HOSTS
+      SOC_PINGAN_ZEUS_TIMEOUT_SECONDS: D12B_TIMEOUT_SECONDS

@@ -150,17 +150,34 @@ external_disposition:{tenant_id|default}:{external_system}:{external_case_id}:{s
 
 ## 9. 实现切片
 
-| 顺序 | 切片 | 验收 |
-|---|---|---|
+| 顺序 | 状态 | 切片 | 验收 |
+|---|---|---|---|
 | 1 | Done | `SocExternalDispositionEvent` contract + mapper tests | Zeus/通用样例都能转成 canonical event |
 | 2 | Done | `SocExternalDispositionService` + repository protocol | 幂等、状态映射、unmatched、audit 都有测试 |
 | 3 | Done | Zeus adapter mock fixture | 用 fixture 模拟 Zeus 状态/理由更新，不接真实 endpoint |
 | 4 | Done | Review/Correction integration | 高置信外部结论能同步本地 review/correction |
 | 5 | Done | Memory candidate integration | reason 生成 pending candidate，不写 confirmed memory |
 | 6 | Done | External disposition DB/API visibility | external disposition record 和 memory candidate id 能进入 ReviewQueue context |
-| 7 | Planned | Skill improvement candidate backlog | 重复 reason 可聚合成待评审优化项 |
+| 7 | Deferred / `PI-03C` | Skill improvement candidate backlog | 重复 reason/correction 可聚合成可追溯、可回放、只读的待评审优化项；不得自动改 Skill |
 | 8 | Done | Web/TUI visibility | ReviewQueue context 显示外部处置历史和理由 |
 | 9 | Done | EV-02 structured outcome bridge | 符合 gate 的 external event 通过 evaluation service 幂等写 outcome；不覆盖 analyst primary，skip reason 可审计 |
+
+### 9.1 PI-03C Skill improvement candidate / Skill 改进候选
+
+这一项没有遗漏，但在真实反馈形成重复 cohort 前保持 Deferred。第一版实现边界：
+
+- `SkillImprovementCandidate` 必须记录 tenant、目标 Skill/package version、scenario/failure facet、聚合
+  policy version、source disposition/correction refs、代表样本、建议修改和 replay set refs。
+- 聚合键只能使用版本化、可解释的 typed facet；LLM 可离线总结候选，但不能丢失 source refs，也不能
+  自己决定多个 case 属于同一缺陷。
+- 单条 reason 不创建 Skill 修改任务；达到策略阈值也只生成 pending backlog，由 Skill owner/分析师确认。
+- confirm 只批准进入 Skill 修改与评测流程，不直接编辑 `skills/public/`，不激活新版本，也不写
+  confirmed memory。
+- 候选必须支持 reject、supersede、expire 和 replay；Skill 修改后用绑定样本和反例回放，防止只修一个
+  租户表达而破坏通用能力。
+
+退出门槛：幂等聚合、来源追溯、人工状态机、权限/审计、Skill version linkage 和 replay diff 均有
+测试；在此之前，重复 reason 仍只作为 external disposition 与 memory candidate 输入保存。
 
 ## 10. 市场化扩展要求
 

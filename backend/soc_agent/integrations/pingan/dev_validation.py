@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -275,11 +276,22 @@ def run_pingan_asset_direct_smoke(
 
 def write_validation_report(report: BaseModel, path: str | Path) -> None:
     destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(
-        json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    payload = json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        dir=destination.parent,
     )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+        destination.chmod(0o600)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _validate_zeus_host(

@@ -125,10 +125,10 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 
 | ID | Work / 工作 | Deliverable / 产出 | Acceptance / 验收 |
 |---|---|---|---|
-| `PI-01` | Real providers and governed investigation / 真实能力源与受控调查 | **Current / D12-B internal smoke**: Checkpoint D0-D11.1 和 D12-A 已完成；DEV profile、portable signer、preflight 和 direct smoke entry 已就绪。D12-B 后严格按 `PI-01A..E` 接 TI、安全标签、状态回流、只读调查编排和内网 shadow | 每项真实 Provider 都有 `mocked=false` case matrix；Kafka/批处理可通过确定性 allowlist 编排形成持久化调查证据，但不得修改基础 Runtime verdict、关单、写 confirmed memory 或执行高风险动作 |
+| `PI-01` | Real providers and governed investigation / 真实能力源与受控调查 | **Current / D12-B internal smoke**: Checkpoint D0-D11.1 和 D12-A 已完成；DEV profile、portable signer、preflight、direct seven-case runner 和 MCP evidence/readback acceptance runner 已就绪，真实 evidence 仍待内网执行。D12-B 后严格按 `PI-01A..E` 接 TI、安全标签、状态回流、只读调查编排和内网 shadow | 每项真实 Provider 都有 `mocked=false` case matrix；Kafka/批处理可通过确定性 allowlist 编排形成持久化调查证据，但不得修改基础 Runtime verdict、关单、写 confirmed memory 或执行高风险动作 |
 | `PI-02` | Real infrastructure / 真实基础设施 | **Parked until inputs exist**: Kafka/PostgreSQL/K8s 参数与容量/恢复测试；本轮内网 DEV 使用独立本地 SQLite | 吞吐、端到端延迟、重试、DLQ、幂等、连接池和故障恢复满足试点门槛 |
-| `PI-03` | Real labels and calibration / 真实标签与校准 | 脱敏、人工标注的 scenario/confidence/correlation corpus | 来源、范围、版本和 reviewer 可审计；scorer/profile 仅在离线 gate 通过后进入 shadow |
-| `PI-04` | Operations and security / 运维与安全 | **PI-04-A Done / PI-04-B Parked**: `soc.operations_snapshot.v1` 已通过精确 persisted aggregates、secret-free Kafka projection、CLI/API 和回归；D12-B 完成后再排薄 Web，后续再接 Prometheus、真实 telemetry、SLO 和安全运营流程 | 运营同事能定位任务/预警/延迟/模型/队列问题；任何未采集的 lag/算力/SLO 必须标记 `not_measured`，不能用默认值冒充健康 |
+| `PI-03` | Real labels, learning and calibration / 真实标签、学习与校准 | 脱敏人工标签、scenario/verdict/evidence 与 correlation 评测、反馈型 Skill 候选；parser/path governance 仅按独立 gate 激活 | 来源、范围、版本和 reviewer 可审计；scorer/profile/Skill/parser/tenant knowledge 只能在离线 replay 和人工批准后进入 shadow |
+| `PI-04` | Operations and security / 运维与安全 | **PI-04-A Done / PI-04-B Parked**: `soc.operations_snapshot.v1` 已通过精确 persisted aggregates、secret-free Kafka projection、CLI/API 和回归；`PI-01E` 产生真实 shadow telemetry 后再排薄 Web，后续再接 Prometheus、真实 telemetry、SLO 和安全运营流程 | 运营同事能定位任务/预警/延迟/模型/队列问题；任何未采集的 lag/算力/SLO 必须标记 `not_measured`，不能用默认值冒充健康 |
 | `PI-05` | Governed rollout / 受治理上线 | shadow -> limited pilot -> controlled action 的阶段评审 | 不因单次评测自动开放 auto-close 或高风险执行；每一档可回滚 |
 
 ### 6.1 PI-01 Execution Order / 真实能力与调查主线
@@ -140,12 +140,17 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 
 | Order | ID | Work / 工作 | Implementation boundary / 实现边界 | Exit evidence / 退出证据 |
 |---|---|---|---|---|
-| 1 | `D12-B` | Real asset provider / 真实资产定位 | 仅在 PingAn integration 内接 ZEUS + workflow/UM 降级链；generic 层仍只认识 `asset.locate` | direct + MCP success/not-found/auth/timeout/ambiguous；至少一项 `mocked=false`；持久化证据可回读 |
+| 1 | `D12-B` | Real asset provider / 真实资产定位 | 仅在 PingAn integration 内接 ZEUS + workflow/UM 降级链；generic 层仍只认识 `asset.locate`；现有 acceptance runner 复用 Dispatcher/Review Context，不新增 Runtime 节点 | direct + MCP success/not-found/auth/timeout/ambiguous；至少一项 `mocked=false`；持久化证据可从共享 Review/Lead Agent context 回读且基础 Run/Review 不变；deployed Web/TUI smoke 单独通过 |
 | 2 | `PI-01A` | Real threat intelligence / 真实威胁情报 | 复用 ZEUS 鉴权，PingAn adapter 映射 `/public/indicatorSearch`；generic route 保持 `threat_intel.ip_reputation.lookup` | hit/not-found/provider-failure/timeout、裁剪、freshness、lineage 和持久化证据通过 |
 | 3 | `PI-01B` | Real security tags and governed facts / 安全标签与治理事实 | `/public/searchTagContent` 只输出 typed provider result；授权扫描、护网、红蓝队、维护窗口等权威事实再映射到现有 Governed Context 生命周期 | valid/expired/out-of-scope/conflict/not-found/error 均可解释；标签不能直接判安全或关单 |
 | 4 | `PI-01C` | Real external disposition source / 真实状态理由回流 | Zeus/工单 source adapter 只生成 `SocExternalDispositionIngressCommand`，继续走现有 authenticated ingress/service/UoW | 幂等、乱序、重放、更正、未知状态和 trust mapping 通过；reason 只生成待评审知识候选 |
-| 5 | `PI-01D` | Governed read-only investigation orchestration / 受控只读调查编排 | 新增 application-level planner/service；从 canonical entity、scenario、evidence gap 和 tenant policy 生成版本化 allowlisted action plan，复用现有 dispatcher/registry/evidence repository | asset/TI/tag 自动调查可回放；Provider 失败与正常查无可区分；基础 `AnalysisRun` 不可变且所有副作用保持关闭 |
+| 5 | `PI-01D` | Governed read-only investigation orchestration / 受控只读调查编排 | 新增 application-level planner/service；从 canonical entity、scenario、evidence gap 和 tenant policy 生成版本化 allowlisted action plan，复用现有 dispatcher/registry/evidence repository | asset/TI/tag 自动调查可回放；`asset.lookup` 与 `asset.locate` 完成 route consolidation；Provider 失败与正常查无可区分；基础 `AnalysisRun` 不可变且所有副作用保持关闭 |
 | 6 | `PI-01E` | Internal shadow end-to-end / 内网影子全链路 | 分开运行 Runtime compatibility batch 与 investigation workflow batch；先 `5 -> 50 -> all`，受 Provider 限流和费用控制 | 报告覆盖 provider hit/not-found/error、有效证据率、P95 latency、LLM/tool cost、review rate 和越权变更计数；后者必须为 0 |
+
+`PI-01B` 包含两个不能互相冒充的子 gate：`PI-01B1` 是按实体查询安全标签的 request/response
+Provider；`PI-01B2` 是 change/scanner/maintenance/exercise-roster 等权威来源向 Governed Context
+同步带版本、有效期和 scope 的事实。完成 B1 不代表 B2 完成。若 DEV 暂无 B2 来源，必须显式记录
+`data-gated` 并保持授权型 disposition/automation 关闭，不能用测试 fixture 补齐。
 
 `PI-01D` 的固定结构是：
 
@@ -161,6 +166,18 @@ immutable base Runtime run
 Kafka/批处理不允许让 LLM 自由发现并执行任意工具。交互式 Lead Agent 可以提出候选动作，但仍须经过
 同一个 route/action/policy/adapter 边界。若外部证据需要形成更新后的调查结论，应新增带版本和
 Grounding 的 investigation addendum，而不是覆写原始 Runtime run。
+
+### 6.2 PI-03 Decomposition / 标签与学习工作包
+
+PI-03 目前不是 Current，但下面的未完成项已有固定落点，不再散落为“以后优化”：
+
+| ID | Work / 工作 | First slice / 第一刀 | Gate / 门槛 |
+|---|---|---|---|
+| `PI-03A` | Human label foundation / 人工标签基础 | immutable corpus manifest、reviewer/rationale/provenance/supersede contract | 没有来源和 reviewer 的标签不得用于质量声明 |
+| `PI-03B` | Runtime/model/correlation evaluation / Runtime、模型与关联评测 | 对 scenario/verdict/evidence/review routing 和三类 correlation pair 做版本化 replay diff | 分报告 retrieval 与 duplicate identity；模型 self-confidence 不当作概率 |
+| `PI-03C` | Feedback-derived Skill candidates / 反馈型 Skill 候选 | 重复 external reason/analyst correction 聚合为 `SkillImprovementCandidate`，绑定 Skill、样本引用、失败 facet 和回放集 | 只进人工 backlog，不自动编辑、激活或发布 Skill |
+| `PI-03D` | Tenant knowledge promotion / 租户知识治理升级 | 对路径目录等 candidate knowledge 生成独立 promotion proposal，补 scope/validity/owner 和标签 replay | 默认保持 investigation-only；目录更新本身永不获得 decision impact |
+| `PI-03E` | Adaptive parser governance / 自适应解析治理 | drift cohort report + candidate bundle；之后才允许 dual-run/replay/approval/canary/rollback | 禁止单告警 LLM 解析和 Runtime 自修改；无稳定 cohort 不启动 |
 
 ### PI Gate / 生产集成门禁
 
@@ -225,7 +242,7 @@ Completed:    PI-01 Checkpoint D-11/D11.1 - 212-row two-pass Runtime compatibili
 Completed:    PI-01 Checkpoint D12-A - PingAn asset provider code + fake MCP smoke (`mocked=true`; not real-provider evidence)
 In Progress:  PI-01 Checkpoint D12-B - internal real asset-provider smoke (`mocked=false` required)
 Completed:    PI-04-A - SOC Operations Snapshot contract, exact persisted counters, Kafka readiness projection, CLI/API
-Next:         pass internal preflight (`run_workflow` import + local model/ZEUS availability), then direct and MCP asset.locate case matrix
+Next:         pass internal preflight, direct/MCP asset.locate matrix, evidence persistence/readback acceptance, then deployed Web/TUI smoke
 Queued:       PI-01A -> PI-01B -> PI-01C -> PI-01D -> PI-01E; PI-02/PI-04-B and deferred work do not insert ahead of this sequence
 External inputs: internal Agent Platform runtime/dependencies and approved D12-B test values; root config, model endpoint shape, signer, workflow IDs and ZEUS request/response contracts are already derived from legacy source
 ```

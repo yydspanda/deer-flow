@@ -148,6 +148,10 @@ Provider 只返回类型化情报事实，不把旧代码中的 hardcoded score/
 
 标签只形成 governed investigation evidence；不能直接把告警判安全、关闭工单或写 confirmed memory。
 
+安全标签查询与权威授权事实同步是两个独立 gate。还需确认 change、scanner、maintenance、exercise
+roster 或其他系统能否提供带 source/version/scope/validity 的事实；若当前 DEV 没有入口，记录
+`PI-01B2 data-gated`，不得用本地 fixture 或标签查询结果冒充完整授权事实来源。
+
 ### 4.3 ZEUS external disposition feedback / 老系统状态与理由回流
 
 如果 DEV 已有可用入口，请收集：
@@ -204,19 +208,23 @@ backend/.deer-flow/data/soc_agent_dev.db
 | `pingan-dev-contract.yaml` | Yes | 非敏感能力开关、endpoint path、timeout、错误码、字段语义 |
 | `zeus-*-response.redacted.json` | Yes after review | TI/tag/feedback 的脱敏成功、查无和错误响应 |
 | `.env.soc-dev.local` / `config.pingan-dev.local` | Out-of-band only | 可包含真实 URL、App ID/App Key、model key、operator、CA/PYTHONPATH；必须 Git ignored，可随完整工作目录或受控方式复制到内网 |
-| `d12b-test-cases.local.yaml` | No | 真实 IP/host/UM 和 expected result |
-| `d12b-smoke-report.local.json` | No by default | 调用结果、latency、大小、attempt/error 分类；先审查再决定是否脱敏带出 |
+| `d12b-test-cases.local.yaml` | No | 真实 IP/host/UM、expected outcome/attempt 和 fault-injection 环境变量引用；文件权限 `0600` |
+| `direct-provider-cases.json` | No by default | `soc.pingan_asset_case_matrix_report.v1`；只含 query hash、latency、attempt/error 分类，不含 raw query/UM/Provider body/override value |
+| `evidence-readback.json` | No by default | `soc.pingan_d12b_evidence_acceptance.v1`；只含 ID/hash/check/error type，证明 MCP/Dispatcher/evidence/shared context 和 Run/Review 不变式，不含 raw lookup/result |
 
 ## 8. Implementation Order After Collection / 收集后的实现顺序
 
 ```text
 DEV profile + no-network preflight (implemented)
-    -> D12-B direct ZEUS/workflow smoke (internal DEV)
-    -> asset.locate MCP/action/evidence persistence smoke
+    -> D12-B seven-case plan (implemented, no network)
+    -> D12-B direct ZEUS/workflow matrix (runner implemented; execute in internal DEV)
+    -> asset.locate MCP/action/evidence persistence + shared Review/Lead Agent context acceptance (runner implemented; execute in internal DEV)
+    -> deployed Web/Review TUI render smoke for the same evidence
     -> real threat_intel.ip_reputation.lookup provider
-    -> real security_tag.lookup provider
+    -> real security_tag.lookup provider + authoritative-fact source status
     -> external disposition source adapter, if DEV transport exists
-    -> one real alert end-to-end Runtime + Lead Agent + ReviewQueue review
+    -> governed read-only investigation planner/service
+    -> APT/NDR and EDR/HIDS shadow Runtime + Provider + ReviewQueue/Lead Agent review
 ```
 
 每一步都必须区分 `found`、`not_found`、`failed`，记录 `mocked=false`、环境、延迟、payload/result size 和裁剪状态；任何失败都不得静默回退到 fake provider。
