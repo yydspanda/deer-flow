@@ -12,12 +12,12 @@
 | D12-A asset provider | **Done / fake-only** | D12-A | PingAn provider、portable signer、fallback、MCP/action 契约已完成；不能代替真实验收 |
 | Real `asset.locate` | **Parked / internal evidence pending** | `D12-B` | preflight/direct seven-case runner 与 MCP/Dispatcher/evidence/shared-context acceptance runner 已实现；恢复后仍需内网 confirmed matrix -> real evidence report -> deployed Web/TUI smoke |
 | `asset.lookup` simple-record route | **Local scaffold / unresolved production route** | `PI-01D` route consolidation | 它与 ownership-oriented `asset.locate` 语义不同；PI-01E 前必须选择真实 adapter、显式映射并保持独立 result schema，或从该 tenant allowlist 禁用，不能保留默认 mock |
-| Real threat intelligence | **Current / code-complete, internal smoke pending** | `PI-01A` | PingAn `/public/indicatorSearch` typed Provider + stdio MCP + action/evidence 已实现；generic 层只认识 `threat_intel.ip_reputation.lookup`；仍需真实 DEV `mocked=false` 验收 |
-| Real security-tag lookup | **Queued / mock replacement** | `PI-01B1` | PingAn `/public/searchTagContent` adapter；保留 validity/scope/source/version/freshness |
+| Real threat intelligence | **Code-complete / internal smoke pending** | `PI-01A` | PingAn `/public/indicatorSearch` typed Provider + stdio MCP + action/evidence 已实现；generic 层只认识 `threat_intel.ip_reputation.lookup`；仍需真实 DEV `mocked=false` 验收 |
+| Real security-tag lookup | **Code-complete / internal smoke pending** | `PI-01B1` | PingAn `/public/searchTagContent` typed Provider + stdio MCP + action/evidence 已实现；保留 validity/scope/source observation，缺失 expiry 默认 fail closed；仍需真实 DEV 字段与 `mocked=false` 验收 |
 | Authoritative authorized-activity facts | **Data-gated / fixture replacement** | `PI-01B2` | change/scanner/maintenance/exercise-roster source adapter -> existing Governed Context lifecycle；不能由 tag lookup 自动冒充完成 |
 | External disposition core | **Done / source missing** | 已完成 canonical service | Contract、Gateway ingress、UoW、SQL、Review/Correction/Memory candidate、Web/TUI 已完成 |
-| Real Zeus status/reason feed | **Queued / data-gated** | `PI-01C` | Webhook/polling/DB-view source adapter -> `SocExternalDispositionIngressCommand`；不得直写 repository |
-| Automatic read-only investigation | **Gap / not a mock** | `PI-01D` | deterministic versioned planner -> allowlisted dispatcher/registry -> persisted `InvestigationEvidence` |
+| Real Zeus status/reason feed | **Data-gated / source contract absent** | `PI-01C` | 已知旧轮询 endpoint/status enum 不足以定义稳定事件、reason、版本和乱序语义；拿到真实 feed contract 后才实现 source adapter -> `SocExternalDispositionIngressCommand` |
+| Automatic read-only investigation | **D1-D3 implemented / D4 current; not a mock** | `PI-01D` | Planner/Plan、strict default-off composition、durable execution/attempt/evidence、逐次 result-mode 校验、retry/recovery/replay 与 Kafka/internal-batch opt-in 已实现；当前补 shadow report/telemetry/addendum |
 | Internal shadow journey | **Queued** | `PI-01E` | Runtime batch 与 investigation batch 分离，按 `5 -> 50 -> all` 验证质量、成本、延迟和零越权副作用 |
 | Deployed Review Web/Gateway/auth smoke | **Data-gated** | `PI-01E` / `PI-04-B` | 真实 Gateway、身份、网络和 SOC SQLite 上验证 Review/Investigation readback；Playwright transport fixture 不冒充部署证据 |
 | Historical EDR path catalog | **Done / investigation-only** | 已完成当前目标 | exact path + optional MD5、lineage、freshness、MCP/action/evidence 已完成；始终不是 allowlist |

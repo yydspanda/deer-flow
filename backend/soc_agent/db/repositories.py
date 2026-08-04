@@ -37,6 +37,8 @@ from soc_agent.contracts import (
     SocDispositionOutcomeReviewKind,
     SocDispositionProposalRecord,
     SocDispositionSampleManifest,
+    SocEnrichmentActionAttempt,
+    SocEnrichmentExecution,
     SocExternalDispositionRecord,
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
@@ -55,6 +57,8 @@ from soc_agent.db.models import (
     SocDispositionOutcomeRow,
     SocDispositionProposalRow,
     SocDispositionSampleManifestRow,
+    SocEnrichmentActionAttemptRow,
+    SocEnrichmentExecutionRow,
     SocExternalDispositionRow,
     SocGovernedContextFactRow,
     SocInvestigationEvidenceRow,
@@ -522,6 +526,11 @@ class SqlAlchemyAlertRepository:
                     setattr(row, key, value)
             session.commit()
 
+    def get_evidence(self, evidence_id: str) -> InvestigationEvidence | None:
+        with self._session_factory() as session:
+            row = session.get(SocInvestigationEvidenceRow, evidence_id)
+            return InvestigationEvidence.model_validate(row.evidence_payload) if row is not None else None
+
     def list_evidence(
         self,
         *,
@@ -547,6 +556,127 @@ class SqlAlchemyAlertRepository:
                 query = query.where(or_(*filters))
             result = session.execute(query.order_by(SocInvestigationEvidenceRow.created_at.desc()).limit(limit))
             return [InvestigationEvidence.model_validate(row.evidence_payload) for row in result.scalars()]
+
+    def create_enrichment_execution(self, execution: SocEnrichmentExecution) -> bool:
+        payload = execution.model_dump(mode="json")
+        with self._session_factory() as session:
+            session.add(
+                SocEnrichmentExecutionRow(
+                    execution_id=execution.execution_id,
+                    **_enrichment_execution_row_values(execution, payload),
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                return False
+            return True
+
+    def get_enrichment_execution(
+        self,
+        execution_id: str,
+    ) -> SocEnrichmentExecution | None:
+        with self._session_factory() as session:
+            row = session.get(SocEnrichmentExecutionRow, execution_id)
+            return SocEnrichmentExecution.model_validate(row.execution_payload) if row is not None else None
+
+    def find_enrichment_execution_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SocEnrichmentExecution | None:
+        with self._session_factory() as session:
+            row = session.execute(select(SocEnrichmentExecutionRow).where(SocEnrichmentExecutionRow.idempotency_key == idempotency_key).limit(1)).scalar_one_or_none()
+            return SocEnrichmentExecution.model_validate(row.execution_payload) if row is not None else None
+
+    def compare_and_set_enrichment_execution(
+        self,
+        execution: SocEnrichmentExecution,
+        *,
+        expected_version: int,
+    ) -> bool:
+        if execution.version != expected_version + 1:
+            raise ValueError("enrichment execution CAS must increment version by one")
+        payload = execution.model_dump(mode="json")
+        values = _enrichment_execution_row_values(execution, payload)
+        with self._session_factory() as session:
+            result = session.execute(
+                update(SocEnrichmentExecutionRow)
+                .where(
+                    SocEnrichmentExecutionRow.execution_id == execution.execution_id,
+                    SocEnrichmentExecutionRow.version == expected_version,
+                    SocEnrichmentExecutionRow.idempotency_key == execution.idempotency_key,
+                )
+                .values(**values)
+            )
+            session.commit()
+            return result.rowcount == 1
+
+    def create_enrichment_action_attempt(
+        self,
+        attempt: SocEnrichmentActionAttempt,
+    ) -> bool:
+        payload = attempt.model_dump(mode="json")
+        with self._session_factory() as session:
+            session.add(
+                SocEnrichmentActionAttemptRow(
+                    attempt_id=attempt.attempt_id,
+                    **_enrichment_attempt_row_values(attempt, payload),
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                return False
+            return True
+
+    def get_enrichment_action_attempt(
+        self,
+        attempt_id: str,
+    ) -> SocEnrichmentActionAttempt | None:
+        with self._session_factory() as session:
+            row = session.get(SocEnrichmentActionAttemptRow, attempt_id)
+            return SocEnrichmentActionAttempt.model_validate(row.attempt_payload) if row is not None else None
+
+    def compare_and_set_enrichment_action_attempt(
+        self,
+        attempt: SocEnrichmentActionAttempt,
+        *,
+        expected_version: int,
+    ) -> bool:
+        if attempt.version != expected_version + 1:
+            raise ValueError("enrichment attempt CAS must increment version by one")
+        payload = attempt.model_dump(mode="json")
+        values = _enrichment_attempt_row_values(attempt, payload)
+        with self._session_factory() as session:
+            result = session.execute(
+                update(SocEnrichmentActionAttemptRow)
+                .where(
+                    SocEnrichmentActionAttemptRow.attempt_id == attempt.attempt_id,
+                    SocEnrichmentActionAttemptRow.version == expected_version,
+                    SocEnrichmentActionAttemptRow.action_idempotency_key == attempt.action_idempotency_key,
+                )
+                .values(**values)
+            )
+            session.commit()
+            return result.rowcount == 1
+
+    def list_enrichment_action_attempts(
+        self,
+        execution_id: str,
+    ) -> list[SocEnrichmentActionAttempt]:
+        with self._session_factory() as session:
+            rows = session.execute(
+                select(SocEnrichmentActionAttemptRow)
+                .where(SocEnrichmentActionAttemptRow.execution_id == execution_id)
+                .order_by(
+                    SocEnrichmentActionAttemptRow.plan_action_id,
+                    SocEnrichmentActionAttemptRow.attempt_number,
+                    SocEnrichmentActionAttemptRow.started_at,
+                )
+            ).scalars()
+            return [SocEnrichmentActionAttempt.model_validate(row.attempt_payload) for row in rows]
 
     def save_authorization_enrichment(self, record: AuthorizationEnrichmentRecord) -> None:
         payload = record.model_dump(mode="json")
@@ -1398,6 +1528,50 @@ def _evidence_row_values(evidence: InvestigationEvidence, payload: dict) -> dict
         "message": evidence.message,
         "created_at": evidence.created_at,
         "evidence_payload": payload,
+    }
+
+
+def _enrichment_execution_row_values(
+    execution: SocEnrichmentExecution,
+    payload: dict,
+) -> dict:
+    return {
+        "idempotency_key": execution.idempotency_key,
+        "trigger": execution.trigger.value,
+        "run_id": execution.run_id,
+        "alert_id": execution.alert_id,
+        "thread_id": execution.thread_id,
+        "plan_id": execution.plan.plan_id,
+        "status": execution.status.value,
+        "version": execution.version,
+        "retryable": execution.retryable,
+        "replay_of_execution_id": execution.replay_of_execution_id,
+        "created_at": execution.created_at,
+        "updated_at": execution.updated_at,
+        "completed_at": execution.completed_at,
+        "execution_payload": payload,
+    }
+
+
+def _enrichment_attempt_row_values(
+    attempt: SocEnrichmentActionAttempt,
+    payload: dict,
+) -> dict:
+    return {
+        "execution_id": attempt.execution_id,
+        "plan_action_id": attempt.plan_action_id,
+        "attempt_number": attempt.attempt_number,
+        "action_idempotency_key": attempt.action_idempotency_key,
+        "route": attempt.route,
+        "action": attempt.action,
+        "adapter_id": attempt.adapter_id,
+        "status": attempt.status.value,
+        "version": attempt.version,
+        "retryable": attempt.retryable,
+        "evidence_id": attempt.evidence_id,
+        "started_at": attempt.started_at,
+        "ended_at": attempt.ended_at,
+        "attempt_payload": payload,
     }
 
 

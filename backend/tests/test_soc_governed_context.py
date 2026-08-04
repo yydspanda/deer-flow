@@ -378,6 +378,8 @@ def test_soc_migration_head_creates_governance_and_approval_lifecycle_schema(tmp
         assert "soc_disposition_proposals" in inspect(engine).get_table_names()
         assert "soc_disposition_sample_manifests" in inspect(engine).get_table_names()
         assert "soc_disposition_outcomes" in inspect(engine).get_table_names()
+        assert "soc_enrichment_executions" in inspect(engine).get_table_names()
+        assert "soc_enrichment_action_attempts" in inspect(engine).get_table_names()
         approval_request_columns = {column["name"] for column in inspect(engine).get_columns("soc_approval_requests")}
         assert {
             "resolved_at",
@@ -390,7 +392,7 @@ def test_soc_migration_head_creates_governance_and_approval_lifecycle_schema(tmp
         assert "uq_soc_approval_grants_request" in approval_grant_constraints
         with engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM soc_alembic_version")).scalar_one()
-        assert revision == "0018_mutation_audit"
+        assert revision == "0019_enrichment_executions"
     finally:
         engine.dispose()
 

@@ -1243,6 +1243,10 @@ not require rewriting core contracts.
 | `UnifiedInvestigationView` | Read-optimized investigation projection | Stable as display/read model |
 | `UnifiedInvestigationReport` | Main-orchestrator analysis/correlation/evidence/domain report | Stable bounded report; no direct state mutation |
 | `InvestigationEvidence` | Tool/MCP evidence record | Stable |
+| `SocEnrichmentPolicy` | Versioned tenant allowlist, scope and action budget for automatic read-only investigation | PI-01D1 implemented; default has no enabled route |
+| `SocEnrichmentPlan` | Immutable, replayable read-only action plan with skips, provenance and decision guard | PI-01D1 implemented; execution only through Dispatcher/Registry |
+| `SocEnrichmentCompositionConfig` | Default-off tenant policy plus exact route/action/adapter binding and required result mode | PI-01D2 implemented; strict JSON/YAML application config |
+| `SocEnrichmentAdapterBinding` | Exact `route/action/adapter_id/adapter_kind` identity selected at startup | PI-01D2 implemented; no free tool discovery or fallback |
 | `GovernedContextFact` | Shared typed fact envelope and lifecycle | GF-01 implemented stable contract |
 | `AuthorizedActivityPayload` | Time-, scope- and source-bounded authorized activity definition | GF-01 storage + AA-01 deterministic matcher implemented |
 | `SecurityExerciseCampaignFact` | Campaign scope and Rules of Engagement | Planned typed fact |
@@ -1508,7 +1512,7 @@ investigation-only evidence. Neither may add a PingAn branch to generic Runtime 
 
 ### 11.3.1 PI-01A Threat-intelligence Provider / 威胁情报能力源
 
-`PI-01A` is the current work package while D12-B waits for internal execution. The generic boundary
+`PI-01A` retains an open internal evidence gate while D12-B waits for internal execution. The generic boundary
 remains `threat_intel.ip_reputation.lookup`; PingAn authentication, `/public/indicatorSearch`,
 `ipAnalyseReport` and `ipReputationReport` exist only under
 `soc_agent.integrations.pingan.threat_intel`. The stdio MCP and explicit action config replace the
@@ -1523,12 +1527,36 @@ Results are always investigation-only, have no decision impact, and become usefu
 normal MCP action -> Dispatcher -> `InvestigationEvidence` path. Generic evidence consumption
 unwraps the typed `mcp_result` envelope rather than adding a PingAn-specific branch.
 
+### 11.3.2 PI-01B1 Security-tag Provider / 安全标签能力源
+
+The current code slice replaces the local-only `security_tag.lookup` mock with a PingAn-owned
+`/public/searchTagContent` Provider, stdio MCP and explicit action config. The generic route and
+`SocSecurityTagRecord` remain vendor-neutral; ZEUS authentication, request fields and response aliases
+stop in `soc_agent.integrations.pingan.security_tag`. No external IO or PingAn branch enters the fixed
+Runtime.
+
+The Provider preserves exact entity scope and distinguishes `active`, `expired`, `inactive`,
+`conflicted`, `unknown`, `out_of_scope`, `unusable` and `not_found`. Unlike the legacy client, it does
+not discard expired/disabled rows before returning a result. Missing or invalid `expireTime` fails
+closed to `unknown`; open-ended validity can be enabled only by explicit tenant configuration after
+the internal source owner confirms that semantic. A response SHA-256 identifies the observed payload,
+but is not presented as a ZEUS business version; `provider_version` and source freshness stay unknown
+until a reviewed field contract exists.
+
+Every result is `InvestigationEvidence` with `decision_impact=none`,
+`authorization_fact_created=false` and `automation_eligible=false`. An active tag may support an
+analyst-visible explanation, but it cannot declare an alert benign, close ReviewQueue, authorize a
+response action, or complete `PI-01B2`. Only a separately governed change/scanner/maintenance/exercise
+source adapter may create versioned `GovernedContextFact` records for deterministic authorization
+matching.
+
 ### 11.4 Governed Read-only Investigation Orchestration / 受控只读调查编排
 
-Real Provider availability and alert-workflow integration are separate gates. Today the Main
-Orchestrator can execute caller-supplied `action_specs`, while Kafka daemon and the internal PKL batch
-run only `SocAnalysisService`. The production integration path therefore adds an application-level
-investigation planner/service outside the fixed Runtime:
+Real Provider availability and alert-workflow integration are separate gates. `PI-01D1` adds an
+application-level investigation planner outside the fixed Runtime; `PI-01D2` adds its strict,
+default-off application composition; `PI-01D3` adds the explicit durable execution bridge used by the
+Kafka daemon and internal PKL batch. Both entry paths still invoke no investigation tool when the
+composition/action configuration is omitted:
 
 ```text
 immutable AnalysisRun
@@ -1539,13 +1567,50 @@ immutable AnalysisRun
   -> correlation, domain triage, ReviewQueue, Web/TUI and Lead Agent context
 ```
 
-The planner consumes canonical typed entities, scenario assessments, evidence gaps and tenant policy;
-it must not inspect PingAn aliases or let an LLM invent tool names and payloads. Interactive Lead Agent
-proposals still pass through the same policy/adapter boundary. Provider errors are not normal misses,
-the base Runtime result is immutable, and the first rollout is shadow-only: no verdict overwrite,
-ReviewQueue close, confirmed-memory write or high-risk action. If enriched evidence later warrants a
-new conclusion, persist a versioned, grounded investigation addendum instead of mutating the original
-run.
+The implemented v1 planner consumes only provenance-backed `EntityMention`, deterministic
+`RoleResolution`, the completed run status and an explicit `SocEnrichmentPolicy`. It supports only the
+exact routes `asset.lookup`, `asset.locate`, `threat_intel.ip_reputation.lookup` and
+`security_tag.lookup`; policy must select at most one asset route. Tenant matching, internal CIDR scope,
+entity kind/role allowlists, per-route/total budgets, semantic de-duplication, stable plan/action IDs,
+invalid entity skips and role-conflict notes are part of the plan. TI lookup defaults to blocked until
+tenant internal-network scope is configured, preventing internal or special IPs from being sent to a
+reputation Provider.
+
+The planner never invokes a Provider, reads PingAn aliases, changes the run, chooses a response target,
+or emits high-risk actions. `SocMainOrchestratorService` converts planned actions to the same
+`SocAgentCapabilityRouter -> SocAgentActionDispatcher -> SocActionAdapterRegistry` path used by explicit
+actions; an identical explicit action wins de-duplication. Successful results enter the injected
+`InvestigationEvidenceRepository`, while `UnifiedInvestigationReport` retains the immutable plan and
+planned/explicit lineage. Current tests use in-memory adapters/repository, so D1 is not real Provider or
+production persistence evidence.
+
+`soc.enrichment_composition.v1` binds one tenant policy to exact
+`route/action/adapter_id/adapter_kind` entries. `build_soc_main_orchestrator_service()` validates every
+binding against `SocActionAdapterRegistry.list_descriptors()` before constructing the Planner. It fails
+closed when a route is missing, adapter identity/kind drifts, the adapter is not executable read-only,
+or its required payload/context cannot be guaranteed by Planner + Orchestrator. An enabled composition
+must inject an explicit evidence repository; the disabled default creates no Planner and performs no MCP
+tool discovery.
+
+Mock/real separation is descriptor-level and versioned: in-memory/local demo adapters declare
+`mock_only`; a provider that cannot return fake data may declare `real_only`; PingAn asset/TI/tag MCP
+adapters declare `runtime_declared` plus `result_mode_field=mocked`. A real composition rejects
+`mock_only`, and a mock composition rejects `real_only`. `runtime_declared` passing D2 startup validation
+also requires MCP `output_fields` to retain `mocked`; it does not prove a real call. D3 inspects every
+returned `mocked` value before evidence is accepted for
+that execution mode. No enabled PingAn real composition is committed before tenant internal network
+scope is reviewed.
+
+Scenario assessments and evidence gaps are deliberately not v1 execution triggers: current scenario
+names/gap text can contain model-generated free text. They may influence routing only after a separate
+typed, versioned trigger contract is introduced and evaluated. `PI-01D2` completed explicit
+config/composition, policy-to-registry startup validation and tenant asset-route consolidation. D3 now
+implements Kafka/internal-batch persistence, cross-process idempotency, per-result mock/real validation,
+failure/retry and replay. Interactive Lead Agent proposals continue through
+the same action boundary. Provider errors are not normal misses, and rollout remains shadow-only: no
+verdict overwrite, ReviewQueue close, confirmed-memory write or high-risk action. If enriched evidence
+later warrants a new conclusion, persist a versioned, grounded investigation addendum instead of
+mutating the original run.
 
 ---
 
@@ -1698,12 +1763,30 @@ The authoritative work packages, gates, Parking Lot and anti-drift rules live in
 [`progress.md`](progress.md). As of 2026-08-04, `BG-P0-01..BG-P1-05` and `BG-03` are complete, the
 Alpha Gate has a scoped owner approval, and Stage 4 is current. Checkpoint D0-D11.1 and D12-A
 provider code/fake smoke are complete. D12-B has complete execution tooling but is explicitly
-`Parked / internal evidence pending`; its `mocked=false` asset-provider gate remains open. The current
-task is PI-01A real threat intelligence: production-shaped PingAn Provider/MCP, bounded mapping and
-external regression are complete, while real DEV smoke and actual response-field review remain.
-The subsequent fixed order is real security/governed-context facts, real external disposition
-source, governed read-only investigation orchestration, and internal shadow E2E (`PI-01B..E`).
+`Parked / internal evidence pending`; its `mocked=false` asset-provider gate remains open. PI-01A
+threat intelligence has production-shaped PingAn Provider/MCP, bounded mapping and external regression,
+while real DEV smoke and actual response-field review remain. PI-01B1 security-tag lookup also has
+production-shaped Provider/MCP and external validity/scope regression, while real DEV object-type/expiry
+semantics and `mocked=false` evidence remain. PI-01B2 and PI-01C are explicitly data-gated because the
+available material does not define authoritative activity-source or stable status/reason event contracts.
+PI-01D1/D2/D3 are complete: versioned planner contracts, optional Main Orchestrator bridge, strict
+composition, exact Registry binding, durable execution/attempt state, per-result mock/real validation,
+bounded retry/stale recovery/linked replay, and explicit Kafka/internal-batch integration are covered by
+deterministic regression. D3 always starts from an existing persisted `AnalysisRun`; it does not rerun
+the LLM or let Provider output overwrite the base verdict. Omitted composition/action config preserves
+Runtime-only behavior. The current task is PI-01D4 shadow report, Provider/plan telemetry and a bounded
+investigation addendum before PI-01E.
 `PI-04-A SOC Operations Snapshot` is complete; `PI-04-B` remains parked behind that sequence.
+
+PI-01D3 persists `SocEnrichmentExecution` and `SocEnrichmentActionAttempt` through migration
+`0019_enrichment_executions`. The immutable plan records exactly which typed candidates and reviewed
+policy produced each action. Actual action results are checked against
+`mock_only|runtime_declared|real_only` before deterministic `InvestigationEvidence` is written; normal
+not-found is evidence, while Provider/contract failure is not. Kafka retryable failures retain the
+offset, internal batch resume locks source/model/composition/action-config hashes, and completed
+identities do not repeat Provider calls. Operators can inspect or create an explicitly confirmed linked
+replay through `soc investigation get|replay`. These mechanics prove reliable orchestration, not true
+Provider quality, model accuracy or Pilot readiness.
 
 PI-04-A introduces `soc.operations_snapshot.v1` as a read-only operational projection. It uses exact
 SQL aggregates over SOC-owned run, review, approval, normalization and memory tables, then composes a

@@ -20,6 +20,7 @@ from soc_agent.actions.mcp import (
     build_mcp_action_adapter,
     build_mcp_action_adapter_registry,
     build_mcp_action_adapter_registry_from_file,
+    build_mcp_action_adapter_registry_from_files,
     inspect_mcp_tool_inventory,
     load_mcp_action_adapter_configs,
     mcp_read_only_adapter_descriptor,
@@ -77,6 +78,7 @@ def test_mcp_adapter_config_builder_creates_read_only_asset_lookup_registry() ->
         "tool": "cmdb_asset_lookup",
         "timeout_seconds": 7,
         "result_schema_version": "soc.asset_lookup_result.v1",
+        "output_fields": ["asset_found", "asset_record"],
     }
     assert descriptor.metadata["config"]["owner"] == "soc-platform"
     assert descriptor.metadata["config"]["environment"] == "dev"
@@ -224,6 +226,46 @@ def test_build_mcp_action_adapter_registry_from_file_executes_cached_provider(tm
         "asset_found": True,
         "asset_record": {"asset_id": "asset-001"},
     }
+
+
+def test_build_mcp_action_adapter_registry_from_files_combines_explicit_allowlists(
+    tmp_path: Path,
+) -> None:
+    asset_path = tmp_path / "asset.json"
+    tag_path = tmp_path / "tag.json"
+    asset_path.write_text(json.dumps({"adapters": [_asset_lookup_config()]}), encoding="utf-8")
+    tag_path.write_text(
+        json.dumps({"adapters": [_security_tag_lookup_config()]}),
+        encoding="utf-8",
+    )
+
+    registry = build_mcp_action_adapter_registry_from_files(
+        [asset_path, tag_path],
+        FakeSocMcpToolProvider({}),
+    )
+
+    assert [(item.route, item.action) for item in registry.list_descriptors()] == [
+        ("asset.lookup", "asset.lookup"),
+        ("security_tag.lookup", "security_tag.lookup"),
+    ]
+
+
+def test_build_mcp_action_adapter_registry_from_files_rejects_cross_file_duplicate(
+    tmp_path: Path,
+) -> None:
+    first_path = tmp_path / "first.json"
+    second_path = tmp_path / "second.json"
+    first_path.write_text(json.dumps({"adapters": [_asset_lookup_config()]}), encoding="utf-8")
+    second_path.write_text(
+        json.dumps({"adapters": [_asset_lookup_config() | {"adapter_id": "asset-lookup-duplicate-mcp"}]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SocActionAdapterRegistryError, match="already registered"):
+        build_mcp_action_adapter_registry_from_files(
+            [first_path, second_path],
+            FakeSocMcpToolProvider({}),
+        )
 
 
 def test_run_mcp_action_adapter_smoke_reports_live_metrics(tmp_path: Path) -> None:
@@ -953,6 +995,31 @@ def _asset_lookup_config() -> dict[str, Any]:
             "input_mapping": {"asset_key": "query"},
             "output_fields": ["asset_found", "asset_record"],
             "result_schema_version": "soc.asset_lookup_result.v1",
+        },
+    }
+
+
+def _security_tag_lookup_config() -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "owner": "soc-platform",
+        "environment": "dev",
+        "adapter_id": "security-tag-mcp",
+        "route": "security_tag.lookup",
+        "action": "security_tag.lookup",
+        "required_payload_fields": ["entity_key", "entity_type"],
+        "required_context_refs": ["thread_id"],
+        "description": "Read-only security-tag lookup through MCP.",
+        "mcp": {
+            "server": "security-tags",
+            "tool": "security_tag_lookup",
+            "timeout_seconds": 7,
+            "input_mapping": {
+                "entity_key": "query",
+                "entity_type": "entity_type",
+            },
+            "output_fields": ["security_tag_found", "records"],
+            "result_schema_version": "soc.security_tag_lookup_result.v1",
         },
     }
 

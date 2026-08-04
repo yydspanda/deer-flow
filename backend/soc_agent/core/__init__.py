@@ -20,9 +20,18 @@ from soc_agent.core.disposition_proposal import (
     DispositionProposalIneligibleError,
     SocDispositionProposalService,
 )
+from soc_agent.core.enrichment import SocEnrichmentPlanner
+from soc_agent.core.enrichment_repository import InMemorySocEnrichmentExecutionRepository
 from soc_agent.core.evidence import InMemoryInvestigationEvidenceRepository
 from soc_agent.core.external_disposition import SocExternalDispositionService
 from soc_agent.core.governed_context import SocGovernedContextService
+from soc_agent.core.investigation_workflow import (
+    SocEnrichmentWorkflowBusyError,
+    SocEnrichmentWorkflowConflictError,
+    SocEnrichmentWorkflowError,
+    SocEnrichmentWorkflowPersistenceError,
+    SocInvestigationWorkflowService,
+)
 from soc_agent.core.normalization_maintenance import SocNormalizationMaintenanceService
 from soc_agent.core.operations import SocOperationsService
 from soc_agent.core.orchestrator import SocMainOrchestratorService
@@ -52,6 +61,7 @@ __all__ = [
     "DeterministicAnalysisRuntime",
     "AuthorizationEnrichmentIdempotencyConflictError",
     "InMemoryInvestigationEvidenceRepository",
+    "InMemorySocEnrichmentExecutionRepository",
     "InMemoryAlertSummaryRepository",
     "NoopEventSink",
     "SocAgentActionDispatcher",
@@ -72,9 +82,15 @@ __all__ = [
     "SocDispositionEvaluationService",
     "SocDispositionProposalService",
     "SocDomainTriageService",
+    "SocEnrichmentPlanner",
+    "SocEnrichmentWorkflowBusyError",
+    "SocEnrichmentWorkflowConflictError",
+    "SocEnrichmentWorkflowError",
+    "SocEnrichmentWorkflowPersistenceError",
     "SocExternalDispositionService",
     "SocGovernedContextService",
     "SocMainOrchestratorService",
+    "SocInvestigationWorkflowService",
     "SocMemoryService",
     "SocNormalizationService",
     "SocNormalizationMaintenanceService",

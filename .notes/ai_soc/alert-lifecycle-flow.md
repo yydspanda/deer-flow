@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow / SOC 预警完整流转
 
-> Updated: 2026-07-18
+> Updated: 2026-08-04
 >
 > 本文只描述当前项目里的 SOC Agent 端到端运行过程、状态流转、数据写入和安全边界。
 >
@@ -34,6 +34,8 @@ flowchart TD
     B --> C["⚙️ SocAnalysisService<br/>统一分析入口 / analysis entry"]
     C --> D["⚙️ Fixed Runtime Pipeline<br/>固定流水线 / deterministic control flow"]
     D --> E["🗃️ SOC Business Store<br/>run + summary + queue + decision audit"]
+    E -.->|"Explicit opt-in only"| E0["⚙️ SocEnrichmentPlanner<br/>版本化只读调查计划 / default off"]
+    E0 --> E1["🗃️ Durable Investigation Ledger<br/>immutable plan + execution + attempts"]
     E --> W["🛠️ Normalization Monitor<br/>schema baseline + drift + coverage"]
     W --> X["🗃️ Maintenance Store<br/>baseline + deduplicated issues"]
     X --> Y["🧑‍💻 CLI / TUI / Web / Metrics<br/>归一化运维"]
@@ -63,7 +65,9 @@ flowchart TD
 
     J --> K["🧰 Read-only action proposal<br/>只读工具建议 / read-only proposal"]
     K --> L["⚙️ Policy + Dispatcher + Adapter Registry<br/>策略、调度、适配器"]
+    E1 --> L
     L --> M["🗃️ InvestigationEvidence<br/>只读证据入库 / evidence persistence"]
+    M --> E1
     M --> G
 
     J --> N["🛡️ High-risk action proposal<br/>高风险动作建议 / risky proposal"]
@@ -93,26 +97,32 @@ flowchart TD
    fallback 和 `_soc_ingress` provenance，再生成 `SocDaemonMessage`；裸 alert object、错误版本、超限
    payload 或保留键冲突进入现有 DLQ/commit 语义。
 2. Runtime 按固定步骤生成 `AnalysisRun`、`AlertSummary`、`ReviewQueueItem` 和 audit。
-3. 分析师通过 ReviewQueue 打开统一调查上下文。
-4. Lead Agent 只能拿 bounded context，并只能提出结构化 action proposal。
-5. 只读工具结果写成 `InvestigationEvidence`，回到调查上下文。
-6. 高风险动作只进入审批 inbox 和 grant boundary，当前不执行生产副作用。
-7. 人工 correction、review note、外部处置理由、domain finding 都只能先形成 pending memory candidate。
-8. confirmed memory 默认不可检索；只有 memory governor 经 role/reason/version/validity/review/audit
+3. `soc.enrichment_composition.v1` 显式启用并通过 Registry fail-fast 后，D3 workflow 从已持久化的基础
+   run 生成不可变 `SocEnrichmentPlan`，保存 execution/attempt，再把 exact allowlisted read-only action
+   送入同一 Dispatcher。Kafka 与内网 batch 都是显式 opt-in；默认 composition 关闭时只跑固定 Runtime。
+   每个实际结果先校验 mock/real provenance，再写确定性 `InvestigationEvidence`；正常查无与 Provider
+   failure 分开，retryable failure 不提交 Kafka offset，重复消息复用已完成 execution。
+4. 分析师通过 ReviewQueue 打开统一调查上下文。
+5. Lead Agent 只能拿 bounded context，并只能提出结构化 action proposal。
+6. 自动计划和 Lead Agent proposal 都必须走 Policy、Dispatcher、Adapter Registry；只读结果写成
+   `InvestigationEvidence` 后回到调查上下文，不能回写基础 Runtime verdict。
+7. 高风险动作只进入审批 inbox 和 grant boundary，当前不执行生产副作用。
+8. 人工 correction、review note、外部处置理由、domain finding 都只能先形成 pending memory candidate。
+9. confirmed memory 默认不可检索；只有 memory governor 经 role/reason/version/validity/review/audit
    状态迁移后才可进入 bounded context，且不直接改 runtime verdict。
-9. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
+10. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
    但不能改变 verdict、ReviewQueue 或分析成功状态。
-10. 显式 authorization enrichment 把确定性匹配保存为独立记录；不会回写 Runtime decision。
-11. DP-01 只有在 exact + current true-positive 时生成 shadow proposal；proposal 进入调查视图，但仍由
+11. 显式 authorization enrichment 把确定性匹配保存为独立记录；不会回写 Runtime decision。
+12. DP-01 只有在 exact + current true-positive 时生成 shadow proposal；proposal 进入调查视图，但仍由
     人工决定是否关单，系统不会自动应用。
-12. EV-01 不从 close reason 猜结论。它保存显式 primary/sample outcome，用可复现 manifest 防止挑样，
+13. EV-01 不从 close reason 猜结论。它保存显式 primary/sample outcome，用可复现 manifest 防止挑样，
     再计算 precision、override、sample agreement、freshness 和 fact fan-out。
-13. EV-02 已把 authenticated API/Web、Review TUI 和受门控的 trusted external feedback 接到同一
+14. EV-02 已把 authenticated API/Web、Review TUI 和受门控的 trusted external feedback 接到同一
     evaluation service；各入口仍必须提供显式结构化标签和幂等身份。
-14. EV-03 从 immutable manifest、proposal、ReviewQueue 和 latest outcomes 派生 reviewer-specific inbox；
+15. EV-03 从 immutable manifest、proposal、ReviewQueue 和 latest outcomes 派生 reviewer-specific inbox；
     Web 只能打开 manifest-selected work，并回到 EV-02 写入口，不保存第二套 campaign 状态。
-15. Gate 通过只表示可进入治理 rollout review；当前仍固定 `auto_close_allowed=false`。
-16. correction、close/note、memory review/retrieval activation、approval lifecycle/action boundary 和 external disposition
+16. Gate 通过只表示可进入治理 rollout review；当前仍固定 `auto_close_allowed=false`。
+17. correction、close/note、memory review/retrieval activation、approval lifecycle/action boundary 和 external disposition
     都通过 `SocMutationUnitOfWork` 原子写入业务状态与 `soc_mutation_audit_log`；进程事件只在提交后发出。
 
 Current governed-context boundary / 当前边界：GF-01 已能通过 `SocGovernedContextService` 和
@@ -127,7 +137,43 @@ outcome 同样投影到统一调查上下文。
 `security_tag.lookup` 仍只是 `InvestigationEvidence`；护网 campaign/participant attribution 尚未实现。
 该 proposal 只建议 `closed_benign_true_positive`，固定 shadow/not-applied，仍以人工 ReviewQueue 为准。
 
-### 1.1 Authorization Shadow Path / 授权事实只读旁路
+### 1.1 Optional Automatic Read-only Plan / 可选自动只读调查计划
+
+```mermaid
+flowchart LR
+    A["⚙️ Completed AnalysisRun<br/>基础研判结果"] --> P{"🔐 Composition enabled?<br/>默认关闭"}
+    P -->|"No / default"| N["🚫 No automatic tool call<br/>默认不自动查询"]
+    P -->|"Yes"| B["📜 Exact adapter binding<br/>route + action + ID + kind"]
+    B --> F{"🛡️ Startup validation<br/>read-only + inputs + mock/real"}
+    F -->|"Fail"| X["⛔ Fail closed<br/>不启动自动调查"]
+    F -->|"Pass"| E["⚙️ SocEnrichmentPlanner<br/>typed entity + role + tenant policy"]
+    E --> Q["📋 SocEnrichmentPlan<br/>stable ID + skips + budgets"]
+    Q --> D["⚙️ Capability Router + Dispatcher"]
+    D --> R["🧰 Exact registered read-only adapter / MCP"]
+    R --> V["🗃️ InvestigationEvidence repository boundary"]
+    V --> C["🔎 Correlation + Domain + Review Context"]
+```
+
+当前 `PI-01D1/D2/D3` 已实现 production-shaped planner contract、严格 application composition 和
+durable investigation workflow：
+
+- Planner 只读 `EntityMention`、`RoleResolution`、run status 和版本化 tenant policy，不读 PingAn 字段别名。
+- 当前 exact route 只有 `asset.lookup`、`asset.locate`、`threat_intel.ip_reputation.lookup`、
+  `security_tag.lookup`；同一 tenant 最多启用一个 asset route。
+- 默认没有 enabled route；TI 默认要求内部 CIDR scope，内部/特殊 IP 不发送给 reputation Provider。
+- 无效实体、无候选、预算耗尽和 tenant 不匹配都进入 plan 的结构化 `skipped`，不靠日志猜原因。
+- Planner 不调用 Provider；Dispatcher 才能执行。D3 execution/attempt/evidence 可写 SQL repository，
+  但本地 SQLite/mock 结果仍不是 `mocked=false` 或生产数据库证据。
+- Composition 以 exact `route/action/adapter_id/adapter_kind` 锁定 Registry，拒绝非只读、Planner 无法
+  提供的必需输入和 mock/real 性质冲突；校验过程不发现或调用 MCP tool。
+- PingAn MCP 的 `runtime_declared` 只表示实际结果必须含 `mocked` 声明，不代表已完成真实调用；D3 会在
+  每次 evidence 写入前核验它。模式不符进入 non-retryable contract failure，不会保存伪造 evidence。
+- Migration `0019_enrichment_executions` 保存 execution/attempt ledger；bounded retry 只重试失败 action，
+  stale recovery 优先读取确定性 evidence，linked replay 使用新幂等键且不修改原 run。
+- `soc investigation get|replay` 是操作入口；内网 batch 还要求 `--persist` 与
+  `--confirm-investigation`。所有配置省略时 Runtime/daemon/batch 保持原行为且不调用 Provider。
+
+### 1.2 Authorization Shadow Path / 授权事实只读旁路
 
 ```mermaid
 flowchart LR
@@ -141,7 +187,7 @@ flowchart LR
     P --> I["👁️ InvestigationContext<br/>Web / TUI / Lead Agent"]
     P --> G{"⚙️ DP-01 Gate<br/>exact + current TP?"}
     G -->|"yes"| D["🗃️ Shadow Disposition Proposal<br/>closed_benign_true_positive"]
-    G -->|"no"| F["🚫 Fail closed<br/>no proposal"]
+    G -->|"no"| X["🚫 Fail closed<br/>no proposal"]
     D --> I
     D --> H["🧑‍💻 Human Review<br/>人工决定是否关单"]
     H --> O["🗃️ Explicit Outcome<br/>confirmed / overridden / inconclusive"]
@@ -274,7 +320,7 @@ flowchart LR
 | `soc_review_queue` | Human review queue | 分析师复核入口；close 不等于改判 |
 | `soc_decision_audit_log` | Decision audit records | analyze/replay/correct/external disposition 的审计链 |
 | `soc_mutation_audit_log` | L3 mutation audit records | correction、close/note、memory review/retrieval activation、approval 和 external disposition 的 actor/provenance/reason/idempotency/result 追加式审计；不保存原始敏感 payload |
-| `soc_investigation_evidence` | Read-only action results | 资产查询、EDR 进程树、威胁情报等只读调查结果 |
+| `soc_investigation_evidence` | Read-only action results | 资产归属、威胁情报、安全标签、软件路径等只读调查结果；不包含已删除的外部 EDR/HIDS 查询 mock |
 | `soc_external_dispositions` | External ticket feedback | Zeus/ITSM/SOAR 外部状态、理由、映射和同步结果 |
 | `soc_disposition_proposals` | Shadow operational proposals | 保存 true-positive + exact authorization 产生的未应用处置建议 |
 | `soc_disposition_sample_manifests` | Reproducible QA samples | 保存 scope/population/seed hash/selected proposal ids，防止人工挑样 |
@@ -481,7 +527,7 @@ sequenceDiagram
 | `asset.lookup` | read-only | Look up asset metadata | 查询资产记录 |
 | `asset.locate` | production-shaped MCP; real smoke parked | Locate owner/BU/environment | 定位资产归属、BU、环境；真实内网验收暂存 |
 | `threat_intel.ip_reputation.lookup` | production-shaped PingAn MCP; real smoke pending | Fetch bounded IP reputation | 查询 IP 情报、时效和来源链；结果只作为调查证据 |
-| `security_tag.lookup` | read-only mock | Fetch security tags | 查询授权、测试、白名单等标签 |
+| `security_tag.lookup` | production-shaped PingAn MCP; real smoke pending | Fetch bounded security tags | 查询 active/expired/inactive/conflicted/unknown 标签；只形成调查证据，不创建授权事实 |
 
 进程树、命令行、登录上下文和主机事件直接来自告警原生证据，经 Normalizer、Fact Reconstruction 和 bounded evidence 进入研判；当前不存在额外 EDR/HIDS 查询 action。
 

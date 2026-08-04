@@ -8,20 +8,25 @@ point, not a second Runtime and not a Kafka replacement.
 
 - PKL is loaded with the repository's restricted DataFrame unpickler.
 - Live LLM execution always requires `--confirm-live`.
+- Read-only investigation Providers are independently default-off and require
+  `--confirm-investigation` before execution.
 - Default execution is non-persistent and single-worker.
 - Persisted SQLite execution is restricted to one worker.
 - Every item is written atomically with mode `0600`; the output directory is
   mode `0700` and Git-ignored.
-- Resume validates source, payload, model, evidence mode, persistence, and
-  database-kind fingerprints. Completed items are skipped; failed items retry
-  unless `--skip-existing-failures` is set.
+- Resume validates source, payload, model, evidence mode, persistence,
+  database kind, enrichment composition, and every action-config fingerprint.
+  Completed items are skipped; failed items retry unless
+  `--skip-existing-failures` is set.
 - Full item artifacts contain the preserved input payload and are sensitive.
   Do not copy them back outside the approved environment without review.
 
-This runner executes the fixed SOC Runtime only. It does not autonomously call
-MCP tools. `asset.locate` and `endpoint.software_path.lookup` remain governed
-Lead Agent/Action Dispatcher enrichments whose results enter
-`InvestigationEvidence` separately.
+By default this runner executes the fixed SOC Runtime only and calls no MCP
+tool. PI-01D3 adds an explicit optional bridge after a successful persisted
+`AnalysisRun`: deterministic Planner -> Policy -> Dispatcher -> exact Adapter
+Registry -> durable `InvestigationEvidence`. It never routes from free text and
+cannot mutate the base verdict. `endpoint.software_path.lookup` is not in the
+automatic Planner allowlist and remains a governed analyst/Lead Agent action.
 
 ## Recommended ramp
 
@@ -113,13 +118,59 @@ backend/.deer-flow/data/soc_agent_dev.db
 For 5,000 live rows, do not increase workers until the five/50-row latency,
 error rate, model concurrency, and local database behavior are reviewed.
 
+## Optional PI-01D3 investigation
+
+Validate a local composition and MCP allowlist without calling either the LLM
+or a Provider:
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py \
+  --source /approved/path/alerts-5000.pkl \
+  --limit 5 \
+  --plan-only \
+  --enrichment-composition backend/samples/enrichment/enabled.dev-mcp.yaml \
+  --enrichment-action-config backend/samples/mcp/soc_dev_action_adapters.json
+```
+
+Execution requires a migrated SOC database, `--persist`, and a separate
+confirmation for Provider reads:
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py \
+  --source /approved/path/alerts-5000.pkl \
+  --output-dir "$BATCH_DIR" \
+  --analyzer-mode llm \
+  --model-name deepseek-v4-flash \
+  --limit 5 \
+  --persist --workers 1 \
+  --confirm-live \
+  --enrichment-composition /approved/path/pingan-enrichment.local.yaml \
+  --enrichment-action-config backend/samples/mcp/pingan_asset/action_adapters.json \
+  --enrichment-action-config backend/samples/mcp/pingan_threat_intel/action_adapters.json \
+  --enrichment-action-config backend/samples/mcp/pingan_security_tag/action_adapters.json \
+  --confirm-investigation
+```
+
+The local composition must bind only reviewed routes and tenant network scope,
+and use `required_result_mode: real` for the internal profile. Every returned
+`runtime_declared` result must contain `mocked=false`; a mismatch is a contract
+failure and writes no evidence. Normal not-found is retained as evidence,
+while Provider failure is retryable only within the configured budget.
+
+Each item stores both `analysis_run` and, when enabled,
+`investigation_workflow`. If investigation fails, the item is failed but the
+successful base run remains present. Duplicate/resumed items reuse the durable
+execution; completed Provider calls and evidence are not repeated.
+
 ## Artifacts
 
 ```text
 <output-dir>/
 ├── manifest.json       # source/model/persistence lineage and aggregate status
 ├── results.jsonl       # one compact summary per source row
-├── items/              # full AnalysisRun or bounded error per row
+├── items/              # full AnalysisRun plus optional investigation metadata/error
 └── .batch.lock         # advisory process lock; it may remain after exit
 ```
 

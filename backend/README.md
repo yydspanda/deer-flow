@@ -186,6 +186,13 @@ Kafka ingestion, ReviewQueue Web/TUI, governed context, shadow disposition propo
 and append-only evaluation outcomes are available; production response side effects
 remain approval-gated and disabled without a real adapter.
 
+Automatic read-only investigation is default-off and runs after an existing persisted
+`AnalysisRun`, never inside the fixed Runtime. Kafka daemon commands may opt in with one
+explicit enrichment composition and repeatable `--enrichment-action-config` allowlists.
+Execution, attempts, result mode, retries, evidence, and linked replay are durable; inspect
+or replay them with `soc investigation get|replay`. Replay requires a new idempotency key,
+reason, explicit configs, and `--confirm-investigation`.
+
 Internal DEV validation uses that isolated local SOC SQLite database. Endpoint process trees,
 commands, login context, and host events are consumed from bounded alert-native evidence;
 the Runtime does not advertise synthetic process-tree or host-context lookup actions.
@@ -225,9 +232,11 @@ backend/.venv/bin/python \
   --model-name deepseek-v4-flash --limit 5 --plan-only
 ```
 
-The runner reuses the production `SocAnalysisService`; it does not invoke MCP enrichment tools.
-See `validation/compact_zeus/internal_batch/README.md` and the internal continuation handoff before
-running a live or persistent batch.
+The runner reuses the production `SocAnalysisService` and invokes no MCP tool by default. Its
+optional PI-01D3 bridge requires `--persist`, explicit composition/action configs, and
+`--confirm-investigation`; successful base analysis remains in the item artifact even when
+investigation fails. See `validation/compact_zeus/internal_batch/README.md` and the internal
+continuation handoff before running a live or persistent batch.
 
 Initialize or upgrade the local SOC schema from `backend/`; no database URL is needed when
 `config.yaml` uses `database.backend: sqlite`:

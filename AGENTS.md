@@ -334,6 +334,29 @@ Current SOC direction:
   `SocReviewService.get_investigation_context()`; do not let entry layers write evidence
   or mutate decisions directly. New Dispatcher-created evidence copies the current
   `ServiceRequestContext.request_id/trace_id` for Action/MCP/Provider correlation.
+- PI-01D automatic investigation is an application-level bridge outside the fixed Runtime.
+  `SocEnrichmentPlanner` consumes only typed entity mentions, role resolutions, completed-run status,
+  and an explicit versioned `SocEnrichmentPolicy`; it must not inspect vendor aliases, call a Provider,
+  parse free-text scenario/gap output, or mutate the run. The default policy enables no route. V1 allows
+  only exact `asset.lookup|asset.locate|threat_intel.ip_reputation.lookup|security_tag.lookup` routes,
+  at most one asset route, tenant/network scope, and bounded per-route/total budgets. Planned actions
+  still pass through Capability Router, Action Policy, Dispatcher, and exact Adapter Registry;
+  successful results use the injected evidence repository. PI-01D1 is this contract and optional Main
+  Orchestrator bridge. PI-01D2 adds default-off `soc.enrichment_composition.v1` and
+  `build_soc_main_orchestrator_service()`: exact route/action/adapter ID/kind, read-only execution,
+  Planner inputs, and `mock_only|runtime_declared|real_only` result provenance must validate at startup
+  without discovering or invoking MCP tools. Enabled composition requires an explicit evidence
+  repository. PI-01D3 adds `SocInvestigationWorkflowService` plus migration
+  `0019_enrichment_executions`: it starts from an existing persisted `AnalysisRun`, stores the
+  immutable plan and per-action attempts, validates every actual result against the configured
+  `mock_only|runtime_declared|real_only` mode before writing deterministic
+  `InvestigationEvidence`, distinguishes normal not-found from Provider failure, and supports
+  bounded retry, stale-attempt recovery and linked replay without mutating the base run. Kafka
+  daemon and internal PKL batch wiring are explicit opt-in through one composition plus one or more
+  action-adapter config files; omitting them preserves Runtime-only behavior. Duplicate Kafka/batch
+  identities reuse the durable execution instead of repeating completed Provider calls. Operators
+  use `soc investigation get|replay`; replay requires a new idempotency key, a reason, explicit
+  config and confirmation.
 - PingAn asset-provider code lives only under `backend/soc_agent/integrations/pingan/` and uses the
   existing generic `asset.locate` MCP/action boundary. Checkpoint D12-A is production-shaped code with
   a fake transport and must always expose `mocked=true`; it is not PA-12 or PI-01 real-provider
@@ -367,6 +390,15 @@ Current SOC direction:
   stable source semantics, provider `score`, `confidence` and `last_seen` remain unset. MCP results
   persist as investigation-only evidence and generic consumers must use the common typed
   `mcp_result` envelope rather than adding PingAn branches.
+- PingAn security-tag provider code lives under
+  `backend/soc_agent/integrations/pingan/security_tag.py` and uses only the generic
+  `security_tag.lookup` MCP/action route. It reuses ZEUS signing/credentials but keeps
+  `/public/searchTagContent` fields inside the PingAn integration. Preserve active, expired, inactive,
+  conflicting, unknown, out-of-scope and unusable records; never discard them into not-found. Missing
+  `expireTime` is unknown unless an explicit reviewed tenant setting allows open-ended validity.
+  Response hash is observation provenance, not provider version. Every result remains
+  investigation-only with `decision_impact=none`, `authorization_fact_created=false` and no automatic
+  benign verdict, close, action authorization or PI-01B2 governed-fact creation.
 - PingAn ZEUS lifecycle codes and reasons belong in a PingAn source adapter that emits
   `SocExternalDispositionIngressCommand`; generic Runtime must not recognize those status codes or
   copy the legacy `status != 1 -> skip AI` behavior. The historical EDR safe-path workbook is
@@ -475,7 +507,7 @@ SOC delivery plan (the only execution order is `.notes/ai_soc/delivery-roadmap.m
 | `BD` Boss Demo v0.1 | Done: browser-first repeatable golden path |
 | `AA` SOC Alpha Completeness Audit | Done: unique 50-row matrix and frozen blocker set |
 | `BG` Close Blocking Gaps | Done: Alpha Gate passed 2026-07-20 |
-| `PI` Real Data & Production Integration | Current: `PI-01A` PingAn TI Provider/MCP implemented, internal `mocked=false` smoke pending; `D12-B` parked with its gate unchanged; `PI-04-A` done and `PI-04-B` parked |
+| `PI` Real Data & Production Integration | Current: `PI-01D4` shadow report, Provider/plan telemetry and investigation addendum boundary; D1-D3 investigation planning/composition/persistence done, B2/C data-gated, PingAn asset/TI/tag real-smoke gates retained; `PI-04-A` done and `PI-04-B` parked |
 
 ### SOC Agent Development Workflow
 

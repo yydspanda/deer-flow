@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from soc_agent.contracts.authorization import AuthorizationFactRef, AuthorizationMatchResult, AuthorizationQuery
 from soc_agent.contracts.common import ActorContext, EntrySurface
+from soc_agent.contracts.enrichment import SocEnrichmentPlan
 
 
 def utc_now() -> datetime:
@@ -3235,6 +3236,18 @@ class SocOrchestratorActionSpec(BaseModel):
     route: str = Field(min_length=1)
     action: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    origin: Literal["explicit", "planned"] = "explicit"
+    plan_action_id: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def planned_origin_requires_action_id(self) -> SocOrchestratorActionSpec:
+        if self.action is not None and self.action != self.route:
+            raise ValueError("orchestrator action must exactly match its route")
+        if self.origin == "planned" and self.plan_action_id is None:
+            raise ValueError("planned orchestrator action requires plan_action_id")
+        if self.origin == "explicit" and self.plan_action_id is not None:
+            raise ValueError("explicit orchestrator action cannot carry plan_action_id")
+        return self
 
 
 class SocOrchestratorRouteStep(BaseModel):
@@ -3246,6 +3259,16 @@ class SocOrchestratorRouteStep(BaseModel):
     message: str = Field(min_length=1)
     evidence_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    origin: Literal["explicit", "planned"] = "explicit"
+    plan_action_id: str | None = None
+
+    @model_validator(mode="after")
+    def origin_matches_plan_action(self) -> SocOrchestratorRouteStep:
+        if self.origin == "planned" and self.plan_action_id is None:
+            raise ValueError("planned route step requires plan_action_id")
+        if self.origin == "explicit" and self.plan_action_id is not None:
+            raise ValueError("explicit route step cannot carry plan_action_id")
+        return self
 
 
 class SocOrchestratorReviewContextSummary(BaseModel):
@@ -3284,6 +3307,7 @@ class UnifiedInvestigationReport(BaseModel):
     sample_id: str | None = None
     run: AnalysisRun
     skill_context: SocSkillContext = Field(default_factory=SocSkillContext)
+    enrichment_plan: SocEnrichmentPlan | None = None
     route_steps: list[SocOrchestratorRouteStep] = Field(default_factory=list)
     investigation_evidence: list[InvestigationEvidence] = Field(default_factory=list)
     correlation_result: CorrelationResult | None = None

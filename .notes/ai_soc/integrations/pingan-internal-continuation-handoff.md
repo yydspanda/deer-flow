@@ -2,8 +2,8 @@
 
 > Type: temporary transfer artifact / 临时复制交接文件
 > Reconciled: 2026-08-04
-> Current pointer: `PI-01A Threat Intelligence`; `D12-B` is parked with its acceptance gate unchanged
-> Next action: run real ZEUS TI hit/not-found/error/timeout smoke, then persist and read back `mocked=false` evidence
+> Current pointer: `PI-01D4 Shadow Report & Telemetry`; D12-B and PI-01A/B1 retain their internal acceptance gates
+> Next external action: build the D4 shadow report/addendum boundary; internal operators may independently run the retained asset/TI/tag `mocked=false` gates through the completed D3 workflow
 
 本文件只保留**尚未完成**的工作，便于复制到内网 Mac 后继续开发和验证。它不是新的权威路线；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
@@ -16,6 +16,9 @@
 - `D0-D11.1`：通用 SOC Runtime、LLM、Grounding、Decision Policy 和 212 条 corpus 稳定性验证。
 - `D12-A`：PingAn `asset.locate` 生产形态代码、fake transport、stdio MCP、fallback 编排和 fail-closed；结果仍为 `mocked=true`。
 - `D12-B 外网准备`：内网模型 profile、无旧依赖 ZEUS signer、DEV-only preflight 和 direct-provider smoke 脚本已实现；尚未产生内网 `mocked=false` 证据。
+- `PI-01A 外网实现`：`/public/indicatorSearch` typed Provider、stdio MCP、action/evidence 和 fake/persistence 回归已完成；尚未产生真实 DEV `mocked=false` 证据。
+- `PI-01B1 外网实现`：`/public/searchTagContent` typed Provider、stdio MCP、validity/scope mapping 和 fake/persistence 回归已完成；尚未产生真实 DEV `mocked=false` 证据。
+- `PI-01D1/D2/D3`：versioned `SocEnrichmentPolicy/Plan`、deterministic Planner、strict default-off composition、durable execution/attempt/evidence、逐次 mock/real 校验、bounded retry/recovery/replay 与 Kafka/internal-batch opt-in 已实现；默认仍只跑固定 Runtime。
 - `PingAn EDR 路径目录`：旧 XLSX 已编译为版本化、精确匹配、只读的本地 SQLite 目录；可经 MCP/action 写入调查证据，但不是 allowlist，不能改变 verdict。
 - `PI-04-A`：`soc.operations_snapshot.v1`、CLI/API 和精确持久化计数。
 
@@ -66,10 +69,9 @@ git check-ignore -v .env.soc-dev.local config.pingan-dev.local \
 ## 2. Remaining Execution Order / 剩余执行顺序
 
 ```text
-PI-01A 真实 threat_intel.ip_reputation.lookup（Current）
-  -> PI-01B 真实 security_tag.lookup
-  -> PI-01C Zeus 状态/理由回流 source adapter
-  -> PI-01D 受控只读调查编排
+PI-01D1/D2 planner + strict composition（Done）
+  -> PI-01D3 Kafka/internal batch persistent investigation workflow（Done）
+  -> PI-01D4 shadow report/telemetry/addendum boundary（Current）
   -> PI-01E 内网 shadow 全链路
   -> PI-02 真实 Kafka/PostgreSQL/K8s（当前暂停）
   -> PI-03 人工标签、评测与校准
@@ -78,9 +80,18 @@ PI-01A 真实 threat_intel.ip_reputation.lookup（Current）
 
 D12-B 真实 asset.locate（Parked，可独立恢复）
   -> 仍需原 direct/MCP/persistence/Web/TUI gate，不由 PI-01A 替代
+
+PI-01A 真实 threat_intel.ip_reputation.lookup（Code-complete / internal evidence pending）
+  -> 仍需 hit/not-found/error/timeout/actual-field/persistence gate，不由 PI-01B1 替代
+
+PI-01B1 真实 security_tag.lookup（Code-complete / internal evidence pending）
+  -> 仍需 exact/expired/inactive/no-expiry/not-found/error/persistence gate
+
+PI-01B2 / PI-01C（Data-gated）
+  -> 等真实权威活动来源与稳定状态/理由事件协议，不用 fixture 或旧枚举猜测实现
 ```
 
-项目不新增 `D13` 编号。D12-B 暂存不阻塞 PI-01A，但必须在 PI-01E/Pilot readiness 前恢复并关闭。
+项目不新增 `D13` 编号。D12-B 与 PI-01A/B1 的内网证据门槛不阻塞 PI-01D4 通用代码推进，但必须在 PI-01E/Pilot readiness 前恢复并关闭。
 
 当前内网 DEV 只使用：
 
@@ -336,15 +347,15 @@ AnalysisRun/ReviewQueue 序列化哈希前后一致。报告不保存 raw query�
 
 ## 4. PI-01 - Remaining Real Read-only Providers / 其他真实只读能力
 
-D12-B 已按产品决定暂存，下面的 PI-01A 成为当前主线。每项都复用 generic action、typed result、InvestigationEvidence、审计和失败契约；PingAn 字段与鉴权只能存在于 `backend/soc_agent/integrations/pingan/`。D12-B 仍须在 PI-01E/Pilot readiness 前恢复并通过。
+D12-B 已按产品决定暂存，PI-01A/B1 已完成外网可实现代码，PI-01D3 durable investigation workflow 也已完成；当前主线进入不依赖真实内网参数的 PI-01D4 shadow report/telemetry/addendum。每个真实 Provider 仍复用 generic action、typed result、InvestigationEvidence、审计和失败契约；PingAn 字段与鉴权只能存在于 `backend/soc_agent/integrations/pingan/`。D12-B 与 PI-01A/B1 仍须在 PI-01E/Pilot readiness 前恢复并通过各自真实门槛。
 
 | Order | Generic route / boundary | PingAn source | Current state | Completion evidence |
 |---|---|---|---|---|
 | `PI-01A` | `threat_intel.ip_reputation.lookup` | `POST /public/indicatorSearch` | production-shaped Provider/MCP + fake/persistence regression complete; internal evidence pending | real DEV hit/not-found/error smoke + persisted evidence |
-| `PI-01B1` | `security_tag.lookup` | `POST /public/searchTagContent` | in-memory mock | valid/expired/not-found/error smoke + governed evidence |
+| `PI-01B1` | `security_tag.lookup` | `POST /public/searchTagContent` | production-shaped Provider/MCP + fake/persistence regression complete; internal evidence pending | exact/expired/inactive/unknown/out-of-scope/conflict/not-found/error smoke + persisted evidence |
 | `PI-01B2` | authorized-activity fact source | change/scanner/maintenance/exercise roster | lifecycle/matcher real, source facts are fixture | real source version/scope/freshness sync or explicit data-gated status with disposition automation disabled |
-| `PI-01C` | external disposition canonical ingress | Zeus status/reason feed | canonical service real, source feed fixture | authenticated real source adapter + idempotency/order/replay evidence |
-| `PI-01D` | governed read-only investigation orchestration | existing action dispatcher/registry/evidence | only caller-supplied `action_specs`; daemon/batch do not auto-enrich | deterministic allowlisted plan + persisted evidence + immutable base run |
+| `PI-01C` | external disposition canonical ingress | Zeus status/reason feed | canonical service real; source contract data-gated | authenticated real source adapter + idempotency/order/replay evidence |
+| `PI-01D` | governed read-only investigation orchestration | existing action dispatcher/registry/evidence | D1-D3 done; daemon/batch explicit opt-in, default Runtime-only; D4 current | deterministic allowlisted plan + persisted/idempotent workflow evidence + immutable base run + shadow telemetry/addendum |
 | `PI-01E` | internal shadow end-to-end | real Runtime + PI-01 providers | not started | `5 -> 50 -> all` investigation report with latency/cost/error/review/no-side-effect gates |
 
 ### 4.1 PI-01A Threat intelligence / 威胁情报
@@ -378,10 +389,27 @@ export DEER_FLOW_EXTENSIONS_CONFIG_PATH="$PWD/samples/pingan_dev/extensions.exam
 
 - [ ] 复用 ZEUS 认证，核对 IP/host/UM/domain 等可查询对象类型。
 - [ ] 明确 `label`、`tagCode`、`tagType`、`isValid`、`expireTime`、时区和永久有效语义。
-- [ ] 实现 PingAn typed provider/MCP adapter，generic Runtime 只认识 `security_tag.lookup`。
+- [x] 实现 PingAn typed provider/MCP adapter，generic Runtime 只认识 `security_tag.lookup`。
 - [ ] 验证有效、过期、查无、auth failure、timeout 和多个冲突标签。
-- [ ] 授权扫描、护网/红蓝队、维护窗口和白名单只能成为 governed context/evidence；不能直接判安全或关闭告警。
-- [ ] 标签需要保留 scope、source、version、validity 和 freshness；过期或超范围标签不得参与 tenant disposition。
+- [x] 授权扫描、护网/红蓝队、维护窗口和白名单只能成为 investigation evidence；输出固定 `authorization_fact_created=false`，不能直接判安全或关闭告警。
+- [x] 外网契约已保留 exact scope、source path、observed response hash、validity 和 unknown freshness；过期、失效、冲突或超范围标签不产生 active match。真实 provider version/freshness 仍待内网字段确认。
+
+内网从仓库根目录 source `.env.soc-dev.local`，再进入 `backend/` 执行：
+
+```bash
+export PI01B1_TAG_ENTITY="<approved-dev-ip-host-domain-or-account>"
+export PI01B1_TAG_ENTITY_TYPE="ip"
+export DEER_FLOW_EXTENSIONS_CONFIG_PATH="$PWD/samples/pingan_dev/extensions.example.json"
+
+./.venv/bin/python -m soc_agent.cli mcp tools --include-schema --pretty
+./.venv/bin/python -m soc_agent.cli mcp smoke \
+  samples/mcp/pingan_security_tag/action_adapters.json \
+  --route security_tag.lookup \
+  --json "{\"entity_key\":\"$PI01B1_TAG_ENTITY\",\"entity_type\":\"$PI01B1_TAG_ENTITY_TYPE\",\"context_refs\":{\"thread_id\":\"PI-01B1-TAG-SMOKE\"}}" \
+  --pretty
+```
+
+分别使用 approved exact-hit、expired、inactive/no-expiry、definite miss 和 provider-mismatch 值；鉴权失败与 timeout 只能使用获批 DEV negative profile。`status=success + lookup_status=not_found` 才是正常查无；`out_of_scope/unusable/conflicted/unknown` 是可审计的 fail-closed 结果，MCP/action `status=failed` 才是 Provider 调用失败。Provider 兼容旧客户端未校验顶层 `code` 的响应，但当 `code` 存在时只接受 `200`，并且只有明确的 `data: []` 才能表示查无；`data: null`、缺少 `data` 或非成功 `code` 都必须失败。内网 smoke 仍需保存脱敏响应，确认该业务码契约。缺失 `expireTime` 默认不能算 active；只有 ZEUS owner 明确确认其永久有效语义后，才能在 Git-ignored 本地配置启用 `SOC_PINGAN_SECURITY_TAG_ALLOW_OPEN_ENDED_VALIDITY=true`。
 
 #### PI-01B2 Authoritative fact source / 权威事实来源
 
@@ -413,12 +441,13 @@ POST /api/soc/external-dispositions
 
 ### 4.4 PI-01D Governed read-only investigation / 受控只读调查
 
-- [ ] 新增 vendor-neutral `SocEnrichmentPlan` 和 deterministic planner；输入只使用 canonical entities、typed scenarios、evidence gaps 和 tenant policy。
-- [ ] 首版只允许已注册的 `asset.locate`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup`，禁止自然语言拼接任意 tool name/payload。
+- [x] 新增 vendor-neutral `SocEnrichmentPlan` 和 deterministic planner；输入只使用 canonical typed entities、role resolutions、completed run status 和 tenant policy。
+- [x] 首版只允许 exact registered `asset.lookup|asset.locate|threat_intel.ip_reputation.lookup|security_tag.lookup`，禁止自然语言拼接任意 tool name/payload。
 - [ ] 审阅 `asset.lookup` simple-record route：为 PingAn 显式配置真实 adapter 并保留独立 result schema，或从 tenant allowlist 禁用；不得让 PI-01E 使用默认 in-memory mock。
-- [ ] 复用 `SocAgentActionDispatcher`、`SocActionAdapterRegistry` 和 `InvestigationEvidenceRepository`；不得在通用 Runtime 内加入 PingAn 分支或外部 IO。
-- [ ] Provider failure、normal not-found、partial result 和 schema drift 必须是不同状态；base `AnalysisRun` 保持不可变。
-- [ ] Kafka/PKL 调查模式必须显式开启、可限流和可回放；默认 Runtime compatibility batch 继续不调用 MCP。
+- [x] 复用 `SocAgentActionDispatcher`、`SocActionAdapterRegistry` 和 `InvestigationEvidenceRepository`；通用 Runtime 没有 PingAn 分支或外部 IO。
+- [x] Provider failure、normal not-found、result-mode contract failure、denied 和 interrupted 是不同状态；base `AnalysisRun` 保持不可变。
+- [x] Kafka/PKL 调查模式显式开启，受 action/retry budget 限制且可 linked replay；默认 Runtime compatibility batch 继续不调用 MCP。
+- [ ] `PI-01D4` 增加 shadow report、Provider/plan telemetry 和 analyst-visible investigation addendum；不得从日志反推不存在的 latency/cost/SLO。
 
 ### 4.5 PI-01E Internal shadow / 内网影子验证
 
@@ -454,7 +483,7 @@ cd backend
 
 ### 4.7 Internal Runtime batch / 内网 5000+ 告警批跑
 
-批跑入口复用生产 `SocAnalysisService`，不是第二套 Runtime，也不自动调用 MCP。完整用法见 `validation/compact_zeus/internal_batch/README.md`。先加载 DEV 配置并只做计划：
+批跑入口复用生产 `SocAnalysisService`，不是第二套 Runtime。默认不调用 MCP；只有显式提供 composition、一个或多个 action config、`--persist` 和 `--confirm-investigation` 才在基础 run 后执行 D3 只读调查。完整用法见 `validation/compact_zeus/internal_batch/README.md`。先加载 DEV 配置并只做 Runtime 计划：
 
 ```bash
 source ./.env.soc-dev.local
@@ -473,7 +502,7 @@ backend/.deer-flow/soc-internal-validation/runtime-batches/<batch>/
 
 DEV 默认不持久化；需要验证 ReviewQueue/审计/维护问题时，先执行 `soc db upgrade`，从首批开始固定加入 `--persist --workers 1`，数据库仍为独立 `backend/.deer-flow/data/soc_agent_dev.db`。5,000+ live 运行前先审阅 5/50 条的输入完整性、Grounding、Decision guard、失败率、延迟和 token；批跑完成只证明技术执行完成，不证明模型准确率。
 
-路径目录与资产定位是独立的调查 enrichment。批跑不会为了方便而把它们偷偷塞进固定 Runtime；需通过 Lead Agent/Action Dispatcher 调用并持久化 `InvestigationEvidence`。
+路径目录不在 automatic Planner allowlist，仍需通过 Lead Agent/Action Dispatcher 显式调用。资产、TI 和安全标签可由 D3 的 exact composition opt in，但不会被偷偷塞进固定 Runtime；结果必须通过 Dispatcher 并持久化为 `InvestigationEvidence`。批次 manifest 会锁定 composition/action-config hash，重复完成项不会重复 Provider 调用。
 
 ### 4.8 PI-01 exit gate / 阶段门槛
 
@@ -580,12 +609,13 @@ soc-internal-validation/
 ## 10. Resume Pointer / 下次继续位置
 
 ```text
-Current: PI-01A PingAn ZEUS Threat Intelligence
-Ready:   typed Provider + stdio MCP + action config + bounded mapping/freshness/lineage regression
-First:   source local DEV profile; run approved hit/not-found/error/timeout through the TI MCP
-Next:    review actual response-field coverage; persist mocked=false InvestigationEvidence and read it back
-Parked:  D12-B asset.locate internal matrix/persistence/Web-TUI gate, unchanged
-Queued:  PI-01B -> PI-01C -> PI-01D -> PI-01E
+Current: PI-01D4 shadow report, Provider/plan telemetry and investigation addendum
+Ready:   PI-01D1-D3 planner + strict composition + durable opt-in Kafka/internal-batch workflow
+First:   define the read-only shadow report/addendum contract and exact measured fields
+Next:    project plan/action hit, not-found, failure, retry, latency and evidence coverage without changing the fixed Runtime decision
+Pending internal evidence: D12-B asset, PI-01A TI, PI-01B1 security-tag gates
+Data-gated: PI-01B2 authoritative activity source, PI-01C stable status/reason feed contract
+Queued:  PI-01E
 ```
 
 不要因为接口暂时不可用而增加新的 fake Provider。不可获得的输入应明确标记 `data-gated`；已有真实能力只替换 adapter/provider/config，不改变通用 Runtime 控制流和核心服务契约。

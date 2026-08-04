@@ -32,7 +32,9 @@
         "checkpoint": "D12",
         "d12_a_fake_capable": true,
         "real_completion_requires": "D12-B internal smoke",
-        "decision_impact": "none"
+        "decision_impact": "none",
+        "result_provenance_contract": "runtime_declared",
+        "result_mode_field": "mocked"
       },
       "mcp": {
         "server": "pingan_asset",

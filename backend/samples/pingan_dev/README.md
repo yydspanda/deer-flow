@@ -10,8 +10,8 @@ redacted there.
 - `config.example.yaml`: DeerFlow profile for the OpenAI-compatible LiteLLM
   endpoint exposed by the legacy `sec-model` process.
 - `env.example`: shell environment for the model, PingAn `asset.locate`,
-  threat intelligence, and historical software-path lookup.
-- `extensions.example.json`: one DeerFlow MCP profile that registers all three
+  threat intelligence, security-tag lookup, and historical software-path lookup.
+- `extensions.example.json`: one DeerFlow MCP profile that registers all four
   PingAn read-only tools. It contains environment references, not credentials.
 - `d12b-test-cases.example.yaml`: value-free seven-case D12-B matrix. Copy it
   into the ignored internal validation directory and replace every placeholder
@@ -48,7 +48,7 @@ backend/.deer-flow/pingan-context/software-path-catalog.build-report.json
 
 After sourcing `.env.soc-dev.local`, `extensions.example.json` exposes
 `asset.locate`, `threat_intel.ip_reputation.lookup`, and
-`endpoint.software_path.lookup`. Every result writes only
+`security_tag.lookup`, and `endpoint.software_path.lookup`. Every result writes only
 `InvestigationEvidence(decision_impact=none)` through the normal action
 dispatcher. It cannot skip Runtime, mark an alert benign, close a review, or
 write confirmed memory.
@@ -65,7 +65,7 @@ chmod 600 .env.soc-dev.local config.pingan-dev.local
 
 If root `extensions_config.json` is absent, create it from
 `backend/samples/pingan_dev/extensions.example.json`. If it already exists,
-merge only the `pingan_asset`, `pingan_threat_intel`, and
+merge only the `pingan_asset`, `pingan_threat_intel`, `pingan_security_tag`, and
 `pingan_software_path` `mcpServers` entries;
 do not overwrite unrelated MCP configuration. The resulting root file is
 Git-ignored.
@@ -160,6 +160,26 @@ Use an approved DEV IP in `PI01A_TI_IP`. Run separate known-hit and known-miss
 queries, then exercise approved invalid-auth and timeout profiles. A real
 PI-01A result must show `mocked=false`, preserve label source paths and
 freshness, omit the full ZEUS response, and remain investigation-only.
+
+Then exercise PI-01B1 with an approved exact entity value:
+
+```bash
+export PI01B1_TAG_ENTITY="<approved-dev-ip-host-domain-or-account>"
+export PI01B1_TAG_ENTITY_TYPE="ip"
+
+./.venv/bin/python -m soc_agent.cli mcp smoke \
+  samples/mcp/pingan_security_tag/action_adapters.json \
+  --route security_tag.lookup \
+  --json "{\"entity_key\":\"$PI01B1_TAG_ENTITY\",\"entity_type\":\"$PI01B1_TAG_ENTITY_TYPE\",\"context_refs\":{\"thread_id\":\"PI-01B1-TAG-SMOKE\"}}" \
+  --pretty
+```
+
+Run separate exact-hit, expired, inactive/no-expiry, not-found, auth-failure,
+timeout, and provider-mismatch cases. A real result must show `mocked=false`.
+Missing `expireTime` stays `unknown` unless the internal ZEUS owner explicitly
+confirms open-ended validity and the local setting is changed. A tag match is
+still ordinary `InvestigationEvidence`; it does not complete PI-01B2 or create
+an authorized-activity fact.
 
 After an approved alert has produced an open ReviewQueue item in the same SOC
 SQLite database, bind one successful private matrix case to that queue and

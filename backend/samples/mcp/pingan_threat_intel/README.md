@@ -10,6 +10,11 @@ geographic multipliers, whitelist decisions, blocking rules, or raw provider
 response. `score` and `confidence` stay unset unless a future reviewed provider
 contract gives those fields stable semantics.
 
+The action descriptor declares `result_provenance_contract=runtime_declared`
+and `result_mode_field=mocked`. Composition validates its exact adapter identity
+without invoking the tool; the persistent investigation workflow must still
+verify each returned `mocked` value before accepting the configured result mode.
+
 ## External-network fake smoke
 
 Run from `backend/`:

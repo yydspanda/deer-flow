@@ -22,12 +22,17 @@ from soc_agent.actions.adapters import (
 from soc_agent.actions.mcp import (
     DeerFlowCachedMcpToolProvider,
     build_mcp_action_adapter_registry_from_file,
+    build_mcp_action_adapter_registry_from_files,
     inspect_mcp_tool_inventory,
     run_mcp_action_adapter_smoke,
 )
 from soc_agent.actions.proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.agent_profile import SocLeadAgentProfileInstaller
-from soc_agent.application import build_soc_analysis_service
+from soc_agent.application import (
+    build_soc_analysis_service,
+    build_soc_investigation_workflow_service,
+    load_soc_enrichment_composition_config,
+)
 from soc_agent.contracts import (
     ActorContext,
     ActorType,
@@ -59,6 +64,9 @@ from soc_agent.contracts import (
     SocDispositionProposalCommand,
     SocDispositionSampleCreateCommand,
     SocDomainName,
+    SocEnrichmentExecutionStatus,
+    SocEnrichmentReplayCommand,
+    SocEnrichmentWorkflowResult,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateStatus,
@@ -208,6 +216,10 @@ def main(argv: list[str] | None = None) -> int:
         return _mcp_smoke(args)
     if args.command == "mcp" and args.mcp_command == "tools":
         return _mcp_tools(args)
+    if args.command == "investigation" and args.investigation_command == "get":
+        return _investigation_get(args)
+    if args.command == "investigation" and args.investigation_command == "replay":
+        return _investigation_replay(args)
     if args.command == "llm" and args.llm_command == "status":
         return _llm_status(args)
     if args.command == "ops" and args.ops_command == "snapshot":
@@ -551,6 +563,35 @@ def _build_parser() -> argparse.ArgumentParser:
     mcp_tools.add_argument("--report-path", help="Optional path to write the inventory report JSON")
     mcp_tools.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
+    investigation = subparsers.add_parser(
+        "investigation",
+        help="Inspect and replay persisted read-only investigation executions",
+    )
+    investigation_subparsers = investigation.add_subparsers(dest="investigation_command")
+    investigation_get = investigation_subparsers.add_parser(
+        "get",
+        help="Get one persisted investigation execution and its attempts",
+    )
+    investigation_get.add_argument("execution_id")
+    investigation_get.add_argument("--pretty", action="store_true")
+    _add_database_args(investigation_get)
+    investigation_replay = investigation_subparsers.add_parser(
+        "replay",
+        help="Create a linked replay under the current explicit composition",
+    )
+    investigation_replay.add_argument("execution_id")
+    investigation_replay.add_argument("--reason", required=True)
+    investigation_replay.add_argument("--idempotency-key", required=True)
+    investigation_replay.add_argument("--actor-id", default="soc-investigation-cli")
+    investigation_replay.add_argument(
+        "--confirm-investigation",
+        action="store_true",
+        help="Required before replay invokes configured read-only providers",
+    )
+    investigation_replay.add_argument("--pretty", action="store_true")
+    _add_enrichment_args(investigation_replay)
+    _add_database_args(investigation_replay)
+
     llm = subparsers.add_parser("llm", help="SOC bounded LLM runtime helpers")
     llm_subparsers = llm.add_subparsers(dest="llm_command")
     llm_status = llm_subparsers.add_parser("status", help="Show secret-free SOC LLM model resolution status")
@@ -574,6 +615,7 @@ def _build_parser() -> argparse.ArgumentParser:
     daemon_process.add_argument("--json", dest="json_payload", help="Inline daemon message JSON object")
     daemon_process.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_analyzer_args(daemon_process)
+    _add_enrichment_args(daemon_process)
     _add_database_args(daemon_process)
     daemon_status = daemon_subparsers.add_parser("status", help="Show SOC Kafka daemon readiness status")
     daemon_status.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
@@ -589,6 +631,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     daemon_consume.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_analyzer_args(daemon_consume)
+    _add_enrichment_args(daemon_consume)
     _add_database_args(daemon_consume)
     daemon_run = daemon_subparsers.add_parser("run", help="Run the SOC Kafka daemon until stopped")
     daemon_run.add_argument(
@@ -623,6 +666,7 @@ def _build_parser() -> argparse.ArgumentParser:
     daemon_run.add_argument("--include-results", action="store_true", help="Include per-loop results in output JSON")
     daemon_run.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_analyzer_args(daemon_run)
+    _add_enrichment_args(daemon_run)
     _add_database_args(daemon_run)
 
     eval_cmd = subparsers.add_parser("eval", help="SOC offline evaluation helpers")
@@ -1114,6 +1158,19 @@ def _add_analyzer_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--model-name",
         help="Override SOC_LLM_MODEL with a DeerFlow configured model name",
+    )
+
+
+def _add_enrichment_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--enrichment-composition",
+        help="Explicit PI-01D3 enrichment composition JSON/YAML; disabled when omitted",
+    )
+    parser.add_argument(
+        "--enrichment-action-config",
+        action="append",
+        default=[],
+        help=("SOC MCP action-adapter JSON/YAML paired with --enrichment-composition; repeat for multiple explicit provider configs"),
     )
 
 
@@ -2609,6 +2666,70 @@ def _mcp_tools(args: argparse.Namespace) -> int:
     return 0 if report.status == "success" else 1
 
 
+def _investigation_get(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        execution = repository.get_enrichment_execution(args.execution_id)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if execution is None:
+        print(f"error: investigation execution {args.execution_id} not found", file=sys.stderr)
+        return 1
+    result = SocEnrichmentWorkflowResult(
+        execution=execution,
+        attempts=repository.list_enrichment_action_attempts(execution.execution_id),
+        idempotent_replay=False,
+        provider_invocation_count=0,
+        evidence_persisted_count=execution.evidence_count,
+    )
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _investigation_replay(args: argparse.Namespace) -> int:
+    if not args.confirm_investigation:
+        print("error: investigation replay requires --confirm-investigation", file=sys.stderr)
+        return 2
+    try:
+        repository = _repository_from_args(args)
+        service = _investigation_service_from_args(args, repository)
+        if service is None:
+            raise ValueError("investigation replay requires explicit enrichment configuration")
+        result = service.replay(
+            SocEnrichmentReplayCommand(
+                execution_id=args.execution_id,
+                reason=args.reason,
+            ),
+            context=ServiceRequestContext(
+                actor=ActorContext(
+                    actor_id=args.actor_id,
+                    actor_type=ActorType.USER,
+                    surface=EntrySurface.CLI,
+                    roles=["soc_investigator"],
+                ),
+                trace_id=f"soc-investigation-replay:{args.execution_id}",
+                idempotency_key=args.idempotency_key,
+            ),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return (
+        1
+        if result.execution.status
+        in {
+            SocEnrichmentExecutionStatus.RETRYABLE_FAILED,
+            SocEnrichmentExecutionStatus.FAILED,
+        }
+        else 0
+    )
+
+
 def _llm_status(args: argparse.Namespace) -> int:
     try:
         status = configured_soc_llm_status(settings=_llm_settings_from_args(args))
@@ -2622,16 +2743,7 @@ def _llm_status(args: argparse.Namespace) -> int:
 def _daemon_process(args: argparse.Namespace) -> int:
     try:
         payload = _load_payload(args.path, args.json_payload)
-        repository = _repository_from_args(args)
-        analysis_service = _analysis_service_for_repository(
-            repository,
-            settings=_llm_settings_from_args(args),
-        )
-        approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
-        result = SocDaemonService(
-            analysis_service=analysis_service,
-            approval_service=approval_service,
-        ).process_message(payload)
+        result = _daemon_service_from_args(args).process_message(payload)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -2782,9 +2894,35 @@ def _daemon_service_from_args(args: argparse.Namespace) -> SocDaemonService:
         settings=_llm_settings_from_args(args),
     )
     approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
+    investigation_service = _investigation_service_from_args(args, repository)
     return SocDaemonService(
         analysis_service=analysis_service,
         approval_service=approval_service,
+        investigation_service=investigation_service,
+    )
+
+
+def _investigation_service_from_args(
+    args: argparse.Namespace,
+    repository: SqlAlchemyAlertRepository,
+):
+    composition_path = getattr(args, "enrichment_composition", None)
+    action_config_paths = list(getattr(args, "enrichment_action_config", None) or [])
+    if not composition_path and not action_config_paths:
+        return None
+    if not composition_path or not action_config_paths:
+        raise ValueError("--enrichment-composition and at least one --enrichment-action-config must be provided together")
+    composition = load_soc_enrichment_composition_config(composition_path)
+    registry = build_mcp_action_adapter_registry_from_files(
+        action_config_paths,
+        DeerFlowCachedMcpToolProvider(use_one_shot_invocation=True),
+    )
+    return build_soc_investigation_workflow_service(
+        composition=composition,
+        action_adapter_registry=registry,
+        run_repository=repository,
+        execution_repository=repository,
+        evidence_repository=repository,
     )
 
 

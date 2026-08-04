@@ -41,6 +41,11 @@ from soc_agent.contracts import (
     SocDispositionOutcomeReviewKind,
     SocDispositionProposalRecord,
     SocDispositionSampleManifest,
+    SocEnrichmentActionAttempt,
+    SocEnrichmentExecution,
+    SocEnrichmentExecutionCommand,
+    SocEnrichmentPlan,
+    SocEnrichmentWorkflowResult,
     SocEvent,
     SocExternalDispositionRecord,
     SocMemoryCandidate,
@@ -209,6 +214,8 @@ class InvestigationEvidenceRepository(Protocol):
 
     def save_evidence(self, evidence: InvestigationEvidence) -> None: ...
 
+    def get_evidence(self, evidence_id: str) -> InvestigationEvidence | None: ...
+
     def list_evidence(
         self,
         *,
@@ -218,6 +225,56 @@ class InvestigationEvidenceRepository(Protocol):
         thread_id: str | None = None,
         limit: int = 20,
     ) -> list[InvestigationEvidence]: ...
+
+
+class SocEnrichmentExecutionRepository(Protocol):
+    """Persistent, optimistic-concurrency boundary for PI-01D3 execution state."""
+
+    def create_enrichment_execution(self, execution: SocEnrichmentExecution) -> bool: ...
+
+    def get_enrichment_execution(self, execution_id: str) -> SocEnrichmentExecution | None: ...
+
+    def find_enrichment_execution_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SocEnrichmentExecution | None: ...
+
+    def compare_and_set_enrichment_execution(
+        self,
+        execution: SocEnrichmentExecution,
+        *,
+        expected_version: int,
+    ) -> bool: ...
+
+    def create_enrichment_action_attempt(self, attempt: SocEnrichmentActionAttempt) -> bool: ...
+
+    def get_enrichment_action_attempt(
+        self,
+        attempt_id: str,
+    ) -> SocEnrichmentActionAttempt | None: ...
+
+    def compare_and_set_enrichment_action_attempt(
+        self,
+        attempt: SocEnrichmentActionAttempt,
+        *,
+        expected_version: int,
+    ) -> bool: ...
+
+    def list_enrichment_action_attempts(
+        self,
+        execution_id: str,
+    ) -> list[SocEnrichmentActionAttempt]: ...
+
+
+class SocInvestigationWorkflowPort(Protocol):
+    """Existing-run investigation bridge used by daemon and batch entry points."""
+
+    def execute(
+        self,
+        command: SocEnrichmentExecutionCommand | Mapping[str, Any],
+        *,
+        context: ServiceRequestContext,
+    ) -> SocEnrichmentWorkflowResult: ...
 
 
 class AuthorizationEnrichmentRepository(Protocol):
@@ -568,6 +625,8 @@ class SocActionAdapter(Protocol):
 class SocActionAdapterRegistryPort(Protocol):
     """Allowlisted registry boundary for approved SOC response action adapters."""
 
+    def list_descriptors(self) -> list[SocAgentActionAdapterDescriptor]: ...
+
     def dry_run(
         self,
         command: SocAgentActionCommand,
@@ -588,6 +647,12 @@ class SocActionAdapterRegistryPort(Protocol):
         *,
         context: ServiceRequestContext,
     ) -> SocAgentActionResult: ...
+
+
+class SocEnrichmentPlannerPort(Protocol):
+    """Build an immutable read-only action plan from a completed analysis run."""
+
+    def plan(self, run: AnalysisRun, *, thread_id: str) -> SocEnrichmentPlan: ...
 
 
 class SocEventSink(Protocol):

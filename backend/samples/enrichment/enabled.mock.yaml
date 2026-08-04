@@ -1,0 +1,32 @@
+schema_version: soc.enrichment_composition.v1
+enabled: true
+required_result_mode: mock
+policy:
+  schema_version: soc.enrichment_policy.v1
+  policy_version: example-tenant-enrichment-v1
+  tenant_id: example-tenant
+  enabled_routes:
+    - asset.lookup
+    - threat_intel.ip_reputation.lookup
+    - security_tag.lookup
+  asset_route: asset.lookup
+  internal_networks:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+  threat_intel_requires_internal_networks: true
+  max_actions_total: 8
+  max_actions_per_route: 3
+bindings:
+  - route: asset.lookup
+    action: asset.lookup
+    adapter_id: asset-lookup-in-memory
+    adapter_kind: service
+  - route: threat_intel.ip_reputation.lookup
+    action: threat_intel.ip_reputation.lookup
+    adapter_id: threat-intel-ip-reputation-in-memory
+    adapter_kind: service
+  - route: security_tag.lookup
+    action: security_tag.lookup
+    adapter_id: security-tag-in-memory
+    adapter_kind: service

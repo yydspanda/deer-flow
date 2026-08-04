@@ -74,6 +74,9 @@ from soc_agent.contracts import (
     SocDispositionProposalRecord,
     SocDomainTriageRequest,
     SocDomainTriageResult,
+    SocEnrichmentExecutionCommand,
+    SocEnrichmentExecutionStatus,
+    SocEnrichmentExecutionTrigger,
     SocEvent,
     SocEventType,
     SocMemoryCandidate,
@@ -120,6 +123,7 @@ from soc_agent.protocols import (
     SocDispositionProposalRepository,
     SocEventSink,
     SocExternalDispositionRepository,
+    SocInvestigationWorkflowPort,
     SocMutationAuditRepository,
     SocMutationRepository,
     SocMutationUnitOfWork,
@@ -128,6 +132,7 @@ from soc_agent.skills import SocSkillResolver
 
 from .access_control import require_actor_roles
 from .errors import (
+    SocEnrichmentWorkflowError,
     SocServiceAuthorizationError,
     SocServiceConflictError,
     SocServiceError,
@@ -2132,9 +2137,11 @@ class SocDaemonService:
         *,
         analysis_service: SocAnalysisService | None = None,
         approval_service: SocAgentApprovalService | None = None,
+        investigation_service: SocInvestigationWorkflowPort | None = None,
     ) -> None:
         self._analysis_service = analysis_service
         self._approval_service = approval_service
+        self._investigation_service = investigation_service
 
     def start(self) -> None:
         raise SocServiceNotImplementedError("daemon lifecycle is owned by SocKafkaConsumerRunner")
@@ -2180,8 +2187,42 @@ class SocDaemonService:
     def _process_alert_message(self, message: SocDaemonMessage) -> SocDaemonProcessResult:
         if self._analysis_service is None:
             raise SocServiceNotImplementedError("process alert message requires a SocAnalysisService")
-        run = self._analysis_service.analyze(message.payload, context=_daemon_request_context(message))
+        request_context = _daemon_request_context(message)
+        run = self._analysis_service.analyze(message.payload, context=request_context)
         failed = run.status is AnalysisRunStatus.FAILED
+        investigation_payload: dict[str, Any] = {}
+        investigation_error: str | None = None
+        investigation_retryable = False
+        if not failed and self._investigation_service is not None:
+            try:
+                workflow_result = self._investigation_service.execute(
+                    SocEnrichmentExecutionCommand(
+                        run_id=run.run_id,
+                        thread_id=f"THR-{run.run_id}",
+                        trigger=(SocEnrichmentExecutionTrigger.KAFKA if message.topic is not None else SocEnrichmentExecutionTrigger.MANUAL),
+                    ),
+                    context=request_context,
+                )
+                execution = workflow_result.execution
+                investigation_payload = {
+                    "investigation_execution_id": execution.execution_id,
+                    "investigation_status": execution.status.value,
+                    "investigation_attempt_count": execution.attempt_count,
+                    "investigation_evidence_count": execution.evidence_count,
+                    "investigation_provider_invocation_count": workflow_result.provider_invocation_count,
+                    "investigation_idempotent_replay": workflow_result.idempotent_replay,
+                }
+                if execution.status in {
+                    SocEnrichmentExecutionStatus.RETRYABLE_FAILED,
+                    SocEnrichmentExecutionStatus.FAILED,
+                }:
+                    failed = True
+                    investigation_retryable = execution.retryable
+                    investigation_error = execution.last_error or (f"persistent investigation ended as {execution.status.value}")
+            except SocEnrichmentWorkflowError as exc:
+                failed = True
+                investigation_retryable = exc.retryable
+                investigation_error = str(exc)
         return SocDaemonProcessResult(
             message_id=message.message_id,
             kind=message.kind,
@@ -2192,15 +2233,16 @@ class SocDaemonService:
             normalization_issue_count=(len(run.normalization_monitoring_result.issues) if run.normalization_monitoring_result is not None else 0),
             normalization_issue_ids=([item.issue_id for item in run.normalization_monitoring_result.issues] if run.normalization_monitoring_result is not None else []),
             normalization_warnings=(run.normalization_monitoring_result.warnings if run.normalization_monitoring_result is not None else []),
-            error=run.failure.message if run.failure is not None else None,
+            error=(run.failure.message if run.failure is not None else investigation_error),
             payload={
                 "topic": message.topic,
                 "partition": message.partition,
                 "offset": message.offset,
                 "key": message.key,
                 "idempotency_key": _daemon_idempotency_key(message),
-                "failure_kind": run.failure.kind.value if run.failure is not None else None,
-                "retryable": run.failure.retryable if run.failure is not None else False,
+                "failure_kind": (run.failure.kind.value if run.failure is not None else ("investigation_workflow" if investigation_error is not None else None)),
+                "retryable": (run.failure.retryable if run.failure is not None else investigation_retryable),
+                **investigation_payload,
             },
         )
 

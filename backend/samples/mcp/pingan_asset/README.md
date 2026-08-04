@@ -10,6 +10,12 @@ It does not extract assets, choose a response target, change a verdict, or
 authorize an action. The generic SOC route remains `asset.locate`; this MCP
 server only returns bounded `InvestigationEvidence` data.
 
+The action descriptor declares `result_provenance_contract=runtime_declared`
+and `result_mode_field=mocked`. PI-01D2 composition may therefore bind it to a
+mock or real profile, but the later execution workflow must verify the returned
+`mocked` value on every call; startup validation alone is not real-provider
+evidence.
+
 ## D12-A: external-network fake smoke
 
 Run from `backend/`:

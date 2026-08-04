@@ -34,12 +34,24 @@ from validation.compact_zeus.shared.restricted_dataframe_pickle import (  # noqa
     load_dataframe_pickle,
 )
 
-from soc_agent.application import build_soc_analysis_service  # noqa: E402
+from soc_agent.actions.mcp import (  # noqa: E402
+    DeerFlowCachedMcpToolProvider,
+    build_mcp_action_adapter_registry_from_files,
+)
+from soc_agent.application import (  # noqa: E402
+    build_soc_analysis_service,
+    build_soc_investigation_workflow_service,
+    load_soc_enrichment_composition_config,
+    validate_soc_enrichment_registry,
+)
 from soc_agent.contracts import (  # noqa: E402
     ActorContext,
     ActorType,
     EntrySurface,
     ServiceRequestContext,
+    SocEnrichmentExecutionCommand,
+    SocEnrichmentExecutionStatus,
+    SocEnrichmentExecutionTrigger,
 )
 from soc_agent.db import (  # noqa: E402
     SqlAlchemyAlertRepository,
@@ -84,6 +96,9 @@ class BatchExecutionConfig:
     retry_failures: bool
     fail_fast: bool
     checkpoint_every: int
+    investigation_enrichment_enabled: bool = False
+    enrichment_composition_sha256: str | None = None
+    enrichment_action_config_sha256s: tuple[str, ...] = ()
 
 
 def prepare_batch_items(
@@ -139,8 +154,19 @@ def execute_batch(
     config: BatchExecutionConfig,
     source_row_count: int,
     source_errors: Sequence[Mapping[str, Any]] = (),
+    investigation_service: Any | None = None,
 ) -> dict[str, Any]:
     """Execute selected rows, checkpoint atomically, and support exact resume."""
+
+    if config.investigation_enrichment_enabled:
+        if not config.persist:
+            raise ValueError("investigation enrichment requires persisted batch runs")
+        if investigation_service is None:
+            raise ValueError("investigation enrichment is enabled but no investigation service was provided")
+        if not config.enrichment_composition_sha256 or not config.enrichment_action_config_sha256s:
+            raise ValueError("investigation enrichment requires composition and action-config fingerprints")
+    elif investigation_service is not None:
+        raise ValueError("investigation service was provided while investigation enrichment is disabled")
 
     output_dir = config.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -189,7 +215,12 @@ def execute_batch(
         stop_after_failure = False
         if config.workers == 1:
             for item in pending:
-                record = _analyze_item(item, analysis_service=analysis_service, config=config)
+                record = _analyze_item(
+                    item,
+                    analysis_service=analysis_service,
+                    config=config,
+                    investigation_service=investigation_service,
+                )
                 _write_item(items_dir, record)
                 existing[item.source_index] = record
                 completed_since_checkpoint += 1
@@ -207,6 +238,7 @@ def execute_batch(
                         item,
                         analysis_service=analysis_service,
                         config=config,
+                        investigation_service=investigation_service,
                     ): item
                     for item in pending
                 }
@@ -255,6 +287,7 @@ def _analyze_item(
     *,
     analysis_service: Any,
     config: BatchExecutionConfig,
+    investigation_service: Any | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
     context = ServiceRequestContext(
@@ -276,23 +309,6 @@ def _analyze_item(
     }
     try:
         run = analysis_service.analyze(item.payload, context=context)
-        run_payload = run.model_dump(mode="json", exclude_none=True)
-        run_status = str(run_payload.get("status") or "unknown")
-        outcome = "completed" if run_status in _SUCCESS_RUN_STATUSES else "failed"
-        return {
-            "schema_version": ITEM_SCHEMA_VERSION,
-            "outcome": outcome,
-            "source": source,
-            "execution": {
-                "analyzer_mode": config.analyzer_mode,
-                "requested_model_name": config.model_name,
-                "persisted": config.persist,
-                "duration_ms": round((time.monotonic() - started) * 1000, 3),
-                "completed_at": datetime.now(UTC).isoformat(),
-            },
-            "summary": _run_summary(run_payload),
-            "analysis_run": run_payload,
-        }
     except Exception as exc:  # noqa: BLE001 - one row must not lose the batch
         return {
             "schema_version": ITEM_SCHEMA_VERSION,
@@ -302,15 +318,78 @@ def _analyze_item(
                 "analyzer_mode": config.analyzer_mode,
                 "requested_model_name": config.model_name,
                 "persisted": config.persist,
+                "investigation_enrichment_enabled": config.investigation_enrichment_enabled,
                 "duration_ms": round((time.monotonic() - started) * 1000, 3),
                 "completed_at": datetime.now(UTC).isoformat(),
             },
             "summary": {"runtime_status": "exception"},
             "error": {
+                "stage": "analysis_runtime",
                 "error_type": type(exc).__name__,
                 "message": _safe_error(exc),
             },
         }
+
+    run_payload = run.model_dump(mode="json", exclude_none=True)
+    run_status = str(run_payload.get("status") or "unknown")
+    outcome = "completed" if run_status in _SUCCESS_RUN_STATUSES else "failed"
+    record: dict[str, Any] = {
+        "schema_version": ITEM_SCHEMA_VERSION,
+        "outcome": outcome,
+        "source": source,
+        "execution": {
+            "analyzer_mode": config.analyzer_mode,
+            "requested_model_name": config.model_name,
+            "persisted": config.persist,
+            "investigation_enrichment_enabled": config.investigation_enrichment_enabled,
+            "duration_ms": round((time.monotonic() - started) * 1000, 3),
+            "completed_at": datetime.now(UTC).isoformat(),
+        },
+        "summary": _run_summary(run_payload),
+        "analysis_run": run_payload,
+    }
+    if investigation_service is None or outcome != "completed":
+        return record
+
+    investigation_context = context.model_copy(update={"idempotency_key": f"{context.idempotency_key}:investigation"})
+    try:
+        workflow_result = investigation_service.execute(
+            SocEnrichmentExecutionCommand(
+                run_id=run.run_id,
+                thread_id=f"THR-{run.run_id}",
+                trigger=SocEnrichmentExecutionTrigger.INTERNAL_BATCH,
+            ),
+            context=investigation_context,
+        )
+    except Exception as exc:  # noqa: BLE001 - preserve the completed base run
+        record["outcome"] = "failed"
+        record["summary"]["investigation_status"] = "exception"
+        record["error"] = {
+            "stage": "investigation_workflow",
+            "error_type": type(exc).__name__,
+            "message": _safe_error(exc),
+        }
+        record["execution"]["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
+        record["execution"]["completed_at"] = datetime.now(UTC).isoformat()
+        return record
+
+    workflow_payload = workflow_result.model_dump(mode="json", exclude_none=True)
+    record["investigation_workflow"] = workflow_payload
+    record["summary"].update(_investigation_summary(workflow_payload))
+    if workflow_result.execution.status in {
+        SocEnrichmentExecutionStatus.RETRYABLE_FAILED,
+        SocEnrichmentExecutionStatus.FAILED,
+    }:
+        record["outcome"] = "failed"
+        record["error"] = {
+            "stage": "investigation_workflow",
+            "error_type": workflow_result.execution.last_error_type or "InvestigationWorkflowFailed",
+            "message": workflow_result.execution.last_error or (f"investigation workflow ended as {workflow_result.execution.status.value}"),
+            "retryable": workflow_result.execution.retryable,
+        }
+    record["execution"]["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
+    record["execution"]["completed_at"] = datetime.now(UTC).isoformat()
+    return record
 
 
 def _run_summary(run: Mapping[str, Any]) -> dict[str, Any]:
@@ -335,6 +414,25 @@ def _run_summary(run: Mapping[str, Any]) -> dict[str, Any]:
         "grounded_evidence_count": grounding.get("grounded_count"),
         "ungrounded_evidence_count": grounding.get("ungrounded_count"),
         "usage": usage,
+    }
+
+
+def _investigation_summary(result: Mapping[str, Any]) -> dict[str, Any]:
+    execution = _mapping(result.get("execution"))
+    plan = _mapping(execution.get("plan"))
+    return {
+        "investigation_execution_id": execution.get("execution_id"),
+        "investigation_status": execution.get("status"),
+        "investigation_trigger": execution.get("trigger"),
+        "investigation_plan_status": plan.get("status"),
+        "investigation_planned_action_count": len(plan.get("actions") or []),
+        "investigation_attempt_count": execution.get("attempt_count"),
+        "investigation_success_count": execution.get("success_count"),
+        "investigation_not_found_count": execution.get("not_found_count"),
+        "investigation_failed_count": execution.get("failed_count"),
+        "investigation_evidence_count": execution.get("evidence_count"),
+        "investigation_provider_invocation_count": result.get("provider_invocation_count"),
+        "investigation_idempotent_replay": result.get("idempotent_replay"),
     }
 
 
@@ -387,10 +485,17 @@ def _build_manifest(
             "retry_failures": config.retry_failures,
             "fail_fast": config.fail_fast,
             "resumed_completed_count": resumed_count,
+            "investigation_enrichment_enabled": config.investigation_enrichment_enabled,
+            "enrichment_composition_sha256": config.enrichment_composition_sha256,
+            "enrichment_action_config_sha256s": list(config.enrichment_action_config_sha256s),
+            "fixed_runtime_independently_usable": True,
             "secrets_included": False,
         },
         "safety": {
             "live_model_requires_explicit_confirmation": True,
+            "investigation_provider_calls_require_explicit_confirmation": True,
+            "investigation_actions_are_exact_allowlisted_read_only": True,
+            "investigation_cannot_mutate_base_runtime_decision": True,
             "source_pickle_loaded_with_restricted_unpickler": True,
             "raw_payloads_are_local_sensitive_artifacts": True,
             "artifact_file_mode": "0600",
@@ -422,6 +527,7 @@ def _summarize_records(
     outcomes = Counter(str(item.get("outcome") or "unknown") for item in records)
     runtime_statuses = Counter(str(_mapping(item.get("summary")).get("runtime_status") or "unknown") for item in records)
     verdicts = Counter(str(_mapping(item.get("summary")).get("verdict") or "unknown") for item in records)
+    investigation_statuses = Counter(str(_mapping(item.get("summary")).get("investigation_status")) for item in records if _mapping(item.get("summary")).get("investigation_status") is not None)
     review_count = sum(_mapping(item.get("summary")).get("needs_review") is True for item in records)
     automation_allowed_count = sum(_mapping(item.get("summary")).get("automation_allowed") is True for item in records)
     return {
@@ -435,6 +541,7 @@ def _summarize_records(
         "automation_allowed_count": automation_allowed_count,
         "runtime_status_counts": dict(sorted(runtime_statuses.items())),
         "verdict_counts": dict(sorted(verdicts.items())),
+        "investigation_status_counts": dict(sorted(investigation_statuses.items())),
     }
 
 
@@ -501,6 +608,18 @@ def _validate_resume(
         ),
         "execution.persist": (execution.get("persist"), config.persist),
         "execution.database_kind": (execution.get("database_kind"), config.database_kind),
+        "execution.investigation_enrichment_enabled": (
+            execution.get("investigation_enrichment_enabled", False),
+            config.investigation_enrichment_enabled,
+        ),
+        "execution.enrichment_composition_sha256": (
+            execution.get("enrichment_composition_sha256"),
+            config.enrichment_composition_sha256,
+        ),
+        "execution.enrichment_action_config_sha256s": (
+            tuple(execution.get("enrichment_action_config_sha256s") or ()),
+            config.enrichment_action_config_sha256s,
+        ),
     }
     mismatches = [name for name, (actual, wanted) in expected.items() if actual != wanted]
     if mismatches:
@@ -668,6 +787,9 @@ def _plan_payload(
     database_kind: str,
     workers: int,
     output_dir: Path,
+    investigation_enrichment_enabled: bool = False,
+    enrichment_composition_sha256: str | None = None,
+    enrichment_action_config_sha256s: Sequence[str] = (),
 ) -> dict[str, Any]:
     return {
         "schema_version": "soc.pingan_internal_runtime_batch_plan.v1",
@@ -687,6 +809,10 @@ def _plan_payload(
             "database_kind": database_kind,
             "workers": workers,
             "output_dir": str(output_dir.resolve()),
+            "investigation_enrichment_enabled": investigation_enrichment_enabled,
+            "enrichment_composition_sha256": enrichment_composition_sha256,
+            "enrichment_action_config_sha256s": list(enrichment_action_config_sha256s),
+            "fixed_runtime_independently_usable": True,
         },
         "recommended_ramp": [5, 50, "all"],
         "secrets_included": False,
@@ -708,11 +834,28 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-existing-failures", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--checkpoint-every", type=int, default=25)
+    parser.add_argument(
+        "--enrichment-composition",
+        type=Path,
+        help="Explicit PI-01D3 enrichment composition; omitted keeps Runtime-only mode",
+    )
+    parser.add_argument(
+        "--enrichment-action-config",
+        action="append",
+        default=[],
+        type=Path,
+        help="Explicit MCP action-adapter config; repeat for multiple providers",
+    )
     parser.add_argument("--plan-only", action="store_true")
     parser.add_argument(
         "--confirm-live",
         action="store_true",
         help="Required before any selected row calls a real LLM",
+    )
+    parser.add_argument(
+        "--confirm-investigation",
+        action="store_true",
+        help="Required before explicitly enabled read-only investigation providers are called",
     )
     return parser.parse_args(argv)
 
@@ -746,6 +889,36 @@ def main(argv: Sequence[str] | None = None) -> int:
         if settings.mode is SocAnalyzerMode.LLM and args.workers > settings.max_concurrency:
             raise ValueError("workers cannot exceed SOC_LLM_MAX_CONCURRENCY for a live batch")
 
+        composition_path = args.enrichment_composition.expanduser().resolve() if args.enrichment_composition is not None else None
+        action_config_paths = [path.expanduser().resolve() for path in args.enrichment_action_config]
+        investigation_enabled = composition_path is not None or bool(action_config_paths)
+        if investigation_enabled and (composition_path is None or not action_config_paths):
+            raise ValueError("--enrichment-composition and at least one --enrichment-action-config must be provided together")
+        if investigation_enabled and not args.persist and not args.plan_only:
+            raise ValueError("investigation enrichment requires --persist")
+        if investigation_enabled and items and not args.plan_only and not args.confirm_investigation:
+            raise ValueError("investigation enrichment requires --confirm-investigation")
+        for config_path in [
+            *([composition_path] if composition_path is not None else []),
+            *action_config_paths,
+        ]:
+            if not config_path.is_file():
+                raise ValueError(f"enrichment config does not exist: {config_path}")
+
+        enrichment_composition_sha256 = _sha256_file(composition_path) if composition_path is not None else None
+        enrichment_action_config_sha256s = tuple(_sha256_file(path) for path in action_config_paths)
+        composition = None
+        registry = None
+        if investigation_enabled:
+            composition = load_soc_enrichment_composition_config(composition_path)
+            if not composition.enabled:
+                raise ValueError("investigation enrichment requires an enabled composition")
+            registry = build_mcp_action_adapter_registry_from_files(
+                action_config_paths,
+                DeerFlowCachedMcpToolProvider(use_one_shot_invocation=True),
+            )
+            validate_soc_enrichment_registry(composition, registry)
+
         database_url = resolve_database_url(args.database_url) if args.persist else None
         database_kind = _database_kind(database_url, persist=args.persist)
         if args.persist and database_kind == "sqlite" and args.workers != 1:
@@ -764,6 +937,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             database_kind=database_kind,
             workers=args.workers,
             output_dir=output_dir,
+            investigation_enrichment_enabled=investigation_enabled,
+            enrichment_composition_sha256=enrichment_composition_sha256,
+            enrichment_action_config_sha256s=enrichment_action_config_sha256s,
         )
         if args.plan_only:
             print(json.dumps(plan, ensure_ascii=False, indent=2))
@@ -777,9 +953,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             repository = SqlAlchemyAlertRepository(sessionmaker(bind=engine, expire_on_commit=False))
         service = build_soc_analysis_service(repository, settings=settings)
+        investigation_service = None
+        if investigation_enabled:
+            if repository is None or composition is None or registry is None:
+                raise ValueError("investigation enrichment requires a persisted repository and validated config")
+            investigation_service = build_soc_investigation_workflow_service(
+                composition=composition,
+                action_adapter_registry=registry,
+                run_repository=repository,
+                execution_repository=repository,
+                evidence_repository=repository,
+            )
         manifest = execute_batch(
             items,
             analysis_service=service,
+            investigation_service=investigation_service,
             config=BatchExecutionConfig(
                 source_path=source,
                 source_sha256=source_sha256,
@@ -794,6 +982,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 retry_failures=not args.skip_existing_failures,
                 fail_fast=args.fail_fast,
                 checkpoint_every=args.checkpoint_every,
+                investigation_enrichment_enabled=investigation_enabled,
+                enrichment_composition_sha256=enrichment_composition_sha256,
+                enrichment_action_config_sha256s=enrichment_action_config_sha256s,
             ),
             source_row_count=len(frame),
             source_errors=source_errors,

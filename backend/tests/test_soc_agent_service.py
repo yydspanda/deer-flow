@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -55,6 +56,8 @@ from soc_agent.contracts import (
     SocDomainFindingSeverity,
     SocDomainName,
     SocDomainTriageResult,
+    SocEnrichmentExecutionStatus,
+    SocEnrichmentExecutionTrigger,
     SocEvent,
     SocEventType,
     SocMemoryCandidateCreateCommand,
@@ -109,6 +112,35 @@ class RecordingEventSink:
 
     def emit(self, event: SocEvent) -> None:
         self.events.append(event)
+
+
+class RecordingInvestigationService:
+    def __init__(
+        self,
+        *,
+        status: SocEnrichmentExecutionStatus = SocEnrichmentExecutionStatus.COMPLETED,
+        retryable: bool = False,
+    ) -> None:
+        self.status = status
+        self.retryable = retryable
+        self.calls: list[tuple[object, ServiceRequestContext]] = []
+
+    def execute(self, command: object, *, context: ServiceRequestContext) -> object:
+        self.calls.append((command, context))
+        execution = SimpleNamespace(
+            execution_id="EEXEC-DAEMON-001",
+            status=self.status,
+            attempt_count=1,
+            evidence_count=0 if self.status is SocEnrichmentExecutionStatus.RETRYABLE_FAILED else 1,
+            retryable=self.retryable,
+            last_error_type=("ProviderExecutionError" if self.status is SocEnrichmentExecutionStatus.RETRYABLE_FAILED else None),
+            last_error=("provider temporarily unavailable" if self.status is SocEnrichmentExecutionStatus.RETRYABLE_FAILED else None),
+        )
+        return SimpleNamespace(
+            execution=execution,
+            provider_invocation_count=1,
+            idempotent_replay=False,
+        )
 
 
 class InMemoryAlertRepository:
@@ -1948,6 +1980,58 @@ def test_daemon_service_processes_alert_message_through_analysis_service() -> No
     assert sink.events[0].actor.surface is EntrySurface.DAEMON
     assert sink.events[0].request_id.startswith("REQ-")
     assert sink.events[1].payload["idempotency_key"] == "kafka:soc.alerts:1:42"
+
+
+def test_daemon_service_runs_explicit_investigation_after_base_analysis() -> None:
+    repository = InMemoryAlertRepository()
+    investigation_service = RecordingInvestigationService()
+    message = SocDaemonMessage(
+        message_id="SDM-ENRICH-001",
+        kind="alert",
+        payload=_sample("approved_scanner.json"),
+        topic="soc.alerts.raw.v1",
+        partition=2,
+        offset=9,
+    )
+
+    result = SocDaemonService(
+        analysis_service=SocAnalysisService(repository=repository),
+        investigation_service=investigation_service,
+    ).process_message(message)
+
+    assert result.status == "processed"
+    assert result.payload["investigation_execution_id"] == "EEXEC-DAEMON-001"
+    assert result.payload["investigation_status"] == "completed"
+    command, context = investigation_service.calls[0]
+    assert command.run_id == result.run_id
+    assert command.trigger is SocEnrichmentExecutionTrigger.KAFKA
+    assert context.idempotency_key == "kafka:soc.alerts.raw.v1:2:9"
+
+
+def test_daemon_service_propagates_retryable_investigation_failure() -> None:
+    investigation_service = RecordingInvestigationService(
+        status=SocEnrichmentExecutionStatus.RETRYABLE_FAILED,
+        retryable=True,
+    )
+    message = SocDaemonMessage(
+        message_id="SDM-ENRICH-RETRY-001",
+        kind="alert",
+        payload=_sample("approved_scanner.json"),
+        topic="soc.alerts.raw.v1",
+        partition=2,
+        offset=10,
+    )
+
+    result = SocDaemonService(
+        analysis_service=SocAnalysisService(repository=InMemoryAlertRepository()),
+        investigation_service=investigation_service,
+    ).process_message(message)
+
+    assert result.status == "failed"
+    assert result.error == "provider temporarily unavailable"
+    assert result.payload["failure_kind"] == "investigation_workflow"
+    assert result.payload["retryable"] is True
+    assert result.payload["investigation_status"] == "retryable_failed"
 
 
 def test_daemon_service_processes_approval_request_message_to_shared_inbox() -> None:

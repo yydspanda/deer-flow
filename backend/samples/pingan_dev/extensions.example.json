@@ -54,6 +54,24 @@
         "SOC_PINGAN_THREAT_INTEL_FRESHNESS_DAYS": "180",
         "SOC_PINGAN_THREAT_INTEL_TIMEZONE": "Asia/Shanghai"
       }
+    },
+    "pingan_security_tag": {
+      "enabled": true,
+      "type": "stdio",
+      "command": "$SOC_PINGAN_SECURITY_TAG_MCP_PYTHON",
+      "args": ["$SOC_PINGAN_SECURITY_TAG_MCP_SERVER"],
+      "env": {
+        "SOC_PINGAN_SECURITY_TAG_PROVIDER_MODE": "internal",
+        "SOC_PINGAN_ZEUS_BASE_URL": "$SOC_PINGAN_ZEUS_BASE_URL",
+        "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "$SOC_PINGAN_ZEUS_ALLOWED_HOSTS",
+        "SOC_PINGAN_ZEUS_APP_ID": "$SOC_PINGAN_ZEUS_APP_ID",
+        "SOC_PINGAN_ZEUS_APP_KEY": "$SOC_PINGAN_ZEUS_APP_KEY",
+        "SOC_PINGAN_SECURITY_TAG_PATH": "/public/searchTagContent",
+        "SOC_PINGAN_SECURITY_TAG_TIMEOUT_SECONDS": "10",
+        "SOC_PINGAN_SECURITY_TAG_MAX_RESPONSE_BYTES": "2000000",
+        "SOC_PINGAN_SECURITY_TAG_TIMEZONE": "Asia/Shanghai",
+        "SOC_PINGAN_SECURITY_TAG_ALLOW_OPEN_ENDED_VALIDITY": "false"
+      }
     }
   },
   "skills": {}

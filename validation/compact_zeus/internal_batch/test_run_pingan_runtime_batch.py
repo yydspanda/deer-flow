@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -9,6 +10,11 @@ from validation.compact_zeus.internal_batch.run_pingan_runtime_batch import (
     execute_batch,
     main,
     prepare_batch_items,
+)
+
+from soc_agent.contracts import (
+    SocEnrichmentExecutionStatus,
+    SocEnrichmentExecutionTrigger,
 )
 
 
@@ -58,6 +64,52 @@ class _FakeService:
         if alert_id in self.fail_alert_ids:
             raise TimeoutError("provider timeout")
         return _FakeRun(alert_id, run_id=f"RUN-{alert_id}")
+
+
+class _FakeInvestigationExecution:
+    status = SocEnrichmentExecutionStatus.COMPLETED
+    last_error_type = None
+    last_error = None
+    retryable = False
+
+
+class _FakeInvestigationResult:
+    execution = _FakeInvestigationExecution()
+
+    def model_dump(self, **_kwargs: object) -> dict[str, object]:
+        return {
+            "schema_version": "soc.enrichment_workflow_result.v1",
+            "execution": {
+                "execution_id": "EEXEC-BATCH-001",
+                "trigger": "internal_batch",
+                "status": "completed",
+                "plan": {
+                    "status": "planned",
+                    "actions": [{"action_id": "EA-001"}],
+                },
+                "attempt_count": 1,
+                "success_count": 1,
+                "not_found_count": 0,
+                "failed_count": 0,
+                "evidence_count": 1,
+            },
+            "attempts": [],
+            "idempotent_replay": False,
+            "provider_invocation_count": 1,
+            "execution_persisted": True,
+            "attempts_persisted": True,
+            "evidence_persisted_count": 1,
+            "base_run_mutated": False,
+        }
+
+
+class _FakeInvestigationService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, object]] = []
+
+    def execute(self, command: object, *, context: object) -> _FakeInvestigationResult:
+        self.calls.append((command, context))
+        return _FakeInvestigationResult()
 
 
 def test_prepare_batch_items_preserves_valid_rows_and_reports_invalid_rows() -> None:
@@ -173,6 +225,34 @@ def test_resume_rejects_changed_source_fingerprint(tmp_path: Path) -> None:
         )
 
 
+def test_execute_batch_explicitly_runs_persisted_internal_investigation(
+    tmp_path: Path,
+) -> None:
+    frame = _frame([451])
+    items, _ = prepare_batch_items(frame)
+    investigation_service = _FakeInvestigationService()
+
+    manifest = execute_batch(
+        items,
+        analysis_service=_FakeService(),
+        investigation_service=investigation_service,
+        config=_config(tmp_path, resume=False, enrichment=True),
+        source_row_count=1,
+    )
+
+    assert manifest["status"] == "completed"
+    assert manifest["summary"]["investigation_status_counts"] == {"completed": 1}
+    command, context = investigation_service.calls[0]
+    assert command.run_id == "RUN-451"
+    assert command.trigger is SocEnrichmentExecutionTrigger.INTERNAL_BATCH
+    assert context.idempotency_key.endswith(":investigation")
+    [item_path] = (tmp_path / "batch/items").glob("*.json")
+    record = json.loads(item_path.read_text(encoding="utf-8"))
+    assert record["analysis_run"]["run_id"] == "RUN-451"
+    assert record["summary"]["investigation_execution_id"] == "EEXEC-BATCH-001"
+    assert record["investigation_workflow"]["base_run_mutated"] is False
+
+
 def test_live_plan_only_does_not_require_execution_confirmation(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -204,6 +284,71 @@ def test_live_plan_only_does_not_require_execution_confirmation(
     assert '"estimated_model_call_count": 1' in output
 
 
+def test_investigation_plan_only_validates_config_without_persistence_or_confirmation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "alerts.pkl"
+    source.write_bytes(b"restricted-loader-fixture")
+    monkeypatch.setattr(
+        "validation.compact_zeus.internal_batch.run_pingan_runtime_batch.load_dataframe_pickle",
+        lambda *_args, **_kwargs: _frame([511]),
+    )
+    root = Path(__file__).resolve().parents[3]
+
+    exit_code = main(
+        [
+            "--source",
+            str(source),
+            "--limit",
+            "1",
+            "--plan-only",
+            "--enrichment-composition",
+            str(root / "backend/samples/enrichment/enabled.dev-mcp.yaml"),
+            "--enrichment-action-config",
+            str(root / "backend/samples/mcp/soc_dev_action_adapters.json"),
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["execution"]["investigation_enrichment_enabled"] is True
+    assert len(output["execution"]["enrichment_action_config_sha256s"]) == 1
+    assert output["execution"]["fixed_runtime_independently_usable"] is True
+
+
+def test_investigation_plan_only_rejects_disabled_composition(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "alerts.pkl"
+    source.write_bytes(b"restricted-loader-fixture")
+    monkeypatch.setattr(
+        "validation.compact_zeus.internal_batch.run_pingan_runtime_batch.load_dataframe_pickle",
+        lambda *_args, **_kwargs: _frame([512]),
+    )
+    root = Path(__file__).resolve().parents[3]
+
+    exit_code = main(
+        [
+            "--source",
+            str(source),
+            "--limit",
+            "1",
+            "--plan-only",
+            "--enrichment-composition",
+            str(root / "backend/samples/enrichment/disabled.yaml"),
+            "--enrichment-action-config",
+            str(root / "backend/samples/mcp/soc_dev_action_adapters.json"),
+        ]
+    )
+
+    assert exit_code == 2
+    assert "requires an enabled composition" in capsys.readouterr().err
+
+
 def _frame(alert_ids: list[int]) -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -224,6 +369,7 @@ def _config(
     *,
     resume: bool,
     source_sha256: str = "a" * 64,
+    enrichment: bool = False,
 ) -> BatchExecutionConfig:
     return BatchExecutionConfig(
         source_path=tmp_path / "source.pkl",
@@ -232,11 +378,14 @@ def _config(
         analyzer_mode="stub",
         model_name=None,
         sensitive_evidence_mode="redact",
-        persist=False,
-        database_kind="none",
+        persist=enrichment,
+        database_kind="sqlite" if enrichment else "none",
         workers=1,
         resume=resume,
         retry_failures=True,
         fail_fast=False,
         checkpoint_every=1,
+        investigation_enrichment_enabled=enrichment,
+        enrichment_composition_sha256="b" * 64 if enrichment else None,
+        enrichment_action_config_sha256s=(("c" * 64,) if enrichment else ()),
     )

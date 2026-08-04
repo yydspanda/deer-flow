@@ -27,7 +27,8 @@
       },
       "metadata": {
         "dev_only": true,
-        "external_system": "soc_dev_mcp_server"
+        "external_system": "soc_dev_mcp_server",
+        "result_provenance_contract": "mock_only"
       },
       "mcp": {
         "server": "soc_dev",
@@ -77,7 +78,8 @@
       "metadata": {
         "dev_only": true,
         "external_system": "soc_dev_mcp_server",
-        "mocked_remote_call": true
+        "mocked_remote_call": true,
+        "result_provenance_contract": "mock_only"
       },
       "mcp": {
         "server": "soc_dev",

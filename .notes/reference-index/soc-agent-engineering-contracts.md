@@ -479,6 +479,31 @@ Main orchestrator 约束：
 - report metadata 必须显式标记 `handler_output_only`、`writes_db`、`executes_high_risk_actions` 等边界语义；eval 必须验证这些字段，防止 demo 链路被误当生产处置链路。
 - `PA-12` 真实 PingAn MCP/API 替换只能替换 action adapter/provider/config，不能改变 Main Orchestrator contract；DEV profile、portable signer、preflight/direct smoke code ready 只表示 `In Progress`，在内网保存 `mocked=false` direct/MCP/persisted-evidence 证据前不得标记 Done，也不允许用本地 mock 冒充完成。
 
+PI-01D automatic enrichment 约束：
+
+- `SocEnrichmentPlanner` 是 application/core service port，不是固定 Runtime node。Normalizer、entity extractor、fact reconstruction、LLM analyzer 和 `SocDecisionPolicy` 都不得调用 Provider/MCP。
+- `SocEnrichmentPolicy(soc.enrichment_policy.v1)` 是 tenant-owned explicit allowlist。默认 `enabled_routes=[]`；v1 只接受 `asset.lookup`、`asset.locate`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup`，并要求 `asset.lookup` / `asset.locate` 最多选择一个。
+- `SocEnrichmentPlan(soc.enrichment_plan.v1)` 必须保存 policy version、run/alert/tenant/thread lineage、稳定 input hash/plan ID、planned action、structured skip 和硬边界 `decision_immutable=true`、`high_risk_actions_allowed=false`。
+- v1 planner 只能读取 provenance-backed `EntityMention`、`RoleResolution`、completed run status 和显式 tenant policy。不得读取 raw vendor alias、自然语言 recommendation、模型自由文本 evidence gap 或从 scenario name 猜 tool/payload。
+- 若未来使用 scenario/gap 触发 route，必须先新增版本化 typed trigger contract、allowlist 和离线 replay；不能直接解析 LLM 文本。
+- Planner 只生成计划，不调用 Provider、不写 repository、不修改 `AnalysisRun`、不选择 response target。invalid entity、tenant mismatch、缺 network scope、内部/特殊 IP、无候选和预算耗尽必须成为结构化 skip，而不是异常或静默丢弃。
+- TI 自动查询默认要求 tenant internal CIDR 配置；已配置内部地址和语言运行库判定的 non-global/special 地址不得发送给 reputation Provider。关闭该门槛必须是显式、版本化 tenant policy 决策。
+- 每个 route 有 entity kind/role allowlist、per-route budget 和 total budget；计划 action 按规范化实体去重。相同 run + policy 的 plan/action identity 不得因 Web/TUI/Kafka `thread_id` 不同而改变。
+- 角色冲突不阻止无副作用查询，但必须保留在 rationale 中；任何 planned action 都不得据此选择封禁、隔离、抑制或其他 response target。
+- Main Orchestrator 合并 explicit 和 planned action 时，完全相同的 explicit action 优先；所有 action 仍必须经过 exact Capability Router、Action Policy、Dispatcher 和 Adapter Registry。Planner 不得拿到 MCP client 或 Provider object。
+- Action result 只通过 injected `InvestigationEvidenceRepository` 保存；基础 run model dump 必须前后相同。测试中的 in-memory adapter/repository 只证明 contract，不证明真实 Provider 或生产 persistence。
+- `SocEnrichmentCompositionConfig(soc.enrichment_composition.v1)` 默认 `enabled=false`。启用时必须指定 tenant、`required_result_mode`、至少一个 policy route，以及与 enabled routes 完全相等且 route 唯一的 `SocEnrichmentAdapterBinding`；不得靠目录扫描、模糊匹配或 MCP inventory 自动启用工具。
+- Composition binding 必须锁定 exact `route/action/adapter_id/adapter_kind`。`SocActionAdapterRegistryPort` 必须暴露只读 `list_descriptors()`；startup validation 不得调用 Adapter、Provider 或 MCP tool。
+- 启动校验必须要求 Adapter `risk_level=read_only`、`external_side_effect=read`、`execute_supported=true`，并确认其 `required_payload_fields` / `required_context_refs` 都是 Planner + Orchestrator 对该 route 保证提供的字段。任一漂移都必须 fail closed。
+- Adapter descriptor 的 `metadata.result_provenance_contract` 只允许 `mock_only`、`runtime_declared`、`real_only`。real composition 拒绝 `mock_only`，mock composition 拒绝 `real_only`；`runtime_declared` 还必须声明 `metadata.result_mode_field=mocked`，MCP descriptor 的 allowlisted `output_fields` 必须实际保留该字段。通过该静态校验不等于真实调用成功，持久化 workflow 必须逐次检查实际 result mode。
+- 启用 enrichment 的 composition root 必须显式注入 `InvestigationEvidenceRepository`，不能静默退回 process-local repository。In-memory repository 只用于测试；Kafka/internal batch 必须复用持久化 SOC repository。
+- `PI-01D1/D2/D3` 已完成 contract/planner、可选 Main Orchestrator bridge、显式配置、policy-route/registry startup validation、asset route consolidation 和 durable investigation workflow。`SocEnrichmentExecution` 必须绑定 existing run、immutable plan、composition hash、trigger、result mode、request/trace/actor 和 stable idempotency key；`SocEnrichmentActionAttempt` 必须绑定 execution/action/attempt number、exact adapter、result/evidence hash和 retry state。SQL 状态由 migration `0019_enrichment_executions` 持久化并使用 optimistic CAS。
+- 同一个 Kafka topic/partition/offset 或 batch source/payload identity 重试时必须找到同一 execution。`completed|no_actions|blocked|failed` 不得隐式重新调用 Provider；`retryable_failed` 只重试尚未成功的 action。非重试失败只能通过显式 linked replay 重新执行，replay 必须有新 idempotency key、reason 和 `replay_of_execution_id`。
+- Provider 调用后、attempt finalize 前发生进程丢失时，stale recovery 必须先查确定性 evidence ID；已有 evidence 就完成旧 attempt，不得重复外部查询。没有 evidence 才记录 interrupted 并在 retry budget 内新建下一 attempt。stale window 必须大于受控 Provider timeout。
+- `runtime_declared` Adapter 的实际 result 必须在 evidence 写入前暴露 boolean `mocked`；与 composition `required_result_mode` 不一致时进入 non-retryable contract failure，不能保存 evidence。`success` 与 route-specific normal `not_found` 都可保存只读 evidence；Provider failure、denied、contract failure 和 interrupted 不得伪装为 miss。
+- Kafka daemon 和内网 PKL batch 只能通过显式 composition + 一个或多个 action-adapter config opt in；配置省略时固定 Runtime 路径必须保持可独立运行。内网 batch 还必须要求 persistence、显式 Provider confirmation，并把 composition/action-config SHA-256 写入 manifest/resume guard。基础分析成功而调查失败时仍须保留完整 `AnalysisRun` artifact。
+- 持久化 workflow 必须返回准确的 execution/attempt/evidence/provider-invocation metadata，不能沿用 PA-11 demo 固定的 `writes_db=false`。`soc investigation get|replay` 是当前 operator surface；两者都复用 service/repository，不得从 CLI 直接调用 Provider。
+
 Unified investigation view 约束：
 
 - `UnifiedInvestigationView` / `InvestigationTimelineItem` 是 ReviewQueue 打开单个工单时的只读分析师视图 contract，不是新的 source of truth。
@@ -761,7 +786,7 @@ Review queue 约束：
 - `SocReviewService.close_queue_item()` 只表示复核待办已处理，不等价于修改 verdict；需要改判必须走 `CorrectionCommand`。
 - `SocReviewService.add_note()` 只表示记录分析师观察并提出候选记忆，不等价于关闭 queue、修改 verdict 或确认 memory。
 - `soc_review_queue` 保存扁平索引字段和完整 `item_payload`，字段优先服务列表、筛选和复核入口：`status`、`priority`、`alert_id`、`run_id`、`source_type`、`rule_code`、`verdict`、`updated_at`。
-- `InvestigationEvidence` 是只读查询、定位、EDR process tree 等 investigation action 的结果证据，不是原始告警证据、不是 confirmed memory、不是 operational verdict。
+- `InvestigationEvidence` 是资产定位、威胁情报、安全标签、软件路径等只读 investigation action 的结果证据，不是原始告警证据、不是 confirmed memory、不是 operational verdict。当前不存在外部 EDR process-tree/HIDS-context action。
 - `InvestigationEvidenceRepository.save_evidence()` 只能在 service/action boundary 调用；CLI/API/TUI/Web/daemon 入口不能自己拼 evidence 绕过 dispatcher。
 - Dispatcher 生成的 `InvestigationEvidence` 必须复制当前 `ServiceRequestContext.request_id/trace_id`，使 Action -> MCP -> Provider -> persisted evidence 可关联；旧记录允许为空，但新执行不得仅依赖 thread/queue ID 代替调用链 provenance。
 - `SocReviewService.get_investigation_context()` 是聚合 action evidence、external disposition feedback 和 memory candidates 的边界；ReviewQueue API/TUI/Web/Lead Agent context bridge 都从 `InvestigationContext.action_evidence` / `InvestigationContext.external_dispositions` / `InvestigationContext.memory_candidates` 读取，不直接查 repository。
@@ -862,6 +887,9 @@ SOC Agent chat stream 约束：
   - PingAn `threat_intel.ip_reputation.lookup` provider 只能位于 `soc_agent.integrations.pingan`；generic contracts/core/domain 只消费 `SocThreatIntelReputationRecord` 和 typed MCP result。内部模式必须复用 portable `isec_sign`、共享 ZEUS credential、HTTPS 和显式 host allowlist，配置/HTTP/timeout/schema failure 必须与正常 not-found 分离且禁止 fake fallback。
   - `/public/indicatorSearch` 只允许投影已审阅的 `ipAnalyseReport` / `ipReputationReport` 标签、scene/carrier/location 和 update time。每个 label 保留 exact source path；完整响应只保留 hash，未审阅字段只能暴露 bounded 字段名 warning，不能把值传给 LLM。旧硬编码风险公式、地理乘数、白名单和封禁规则不得迁移；没有稳定字段契约时 `score`、`confidence`、`last_seen` 必须留空。
   - TI freshness 由显式 tenant 配置和 provider update time计算；无法解析时间时返回 `unknown` 并按 stale-like evidence 处理，不能默认新鲜。所有结果固定 `evidence_boundary=investigation_only`、`decision_impact=none`、`automation_eligible=false`、`raw_response_included=false`。
+  - PingAn `security_tag.lookup` provider 只能位于 `soc_agent.integrations.pingan`；generic contracts/core/domain 只消费 `SocSecurityTagRecord` 和 typed MCP result。内部模式复用 portable `isec_sign`、共享 ZEUS credential、HTTPS 与显式 host allowlist，配置/HTTP/timeout/schema failure 必须与正常 `not_found` 分离且禁止 fake fallback。
+  - `/public/searchTagContent` 只允许投影审阅过的 `tagValue`、`tagType`、`tagCode`、`isValid`、`expireTime` 和 labels；完整响应只保留 SHA-256，未审阅字段只能暴露 bounded 字段名 warning。响应 hash 是 observation provenance，不得冒充 provider business version；没有稳定 update/version 字段时 `provider_version=null`、`source_freshness=unknown`。
+  - security-tag validity 必须区分 `active/expired/inactive/conflicted/unknown/out_of_scope/unusable/not_found`。过期、失效和矛盾记录不得预过滤成查无；缺失/非法 `expireTime` 默认 `unknown`，只有经 source owner 审阅并显式配置后才能接受 open-ended validity。任一结果固定 `decision_impact=none`、`authorization_fact_created=false`、`automation_eligible=false`；它不能直接判安全、关单、授权动作或替代 PI-01B2 governed fact source。
   - SOC Runtime 不提供 `endpoint.process_tree.lookup` 或 `host.event_context.lookup`。进程树、父子进程、命令行、登录上下文和主机事件只能来自告警自身经过 normalizer/bounded evidence 处理后的原生证据；不存在外部 Provider 不能被建模为缺工具降级，更不能用 mock 结果补齐。
   - SOC Lead Agent 可以用 `<soc_action_proposal>...</soc_action_proposal>` 提出 `asset.lookup` / `asset.locate` 这类 read-only proposal；`SocLeadAgentActionProposalBoundary` 只能在注入 read-only router/dispatcher 时把它转成同一条 router/policy/dispatcher/registry 链路。
   - SOC Lead Agent 不得提出不存在的进程树或主机上下文查询。只有显式注册且经过租户配置治理的 `asset.locate`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup` 等真实/待替换边界才能形成 read-only proposal。
@@ -892,6 +920,7 @@ SOC Agent chat stream 约束：
   - `soc chat tui --lead-agent` 当前使用 SOC repository 写入 read-only action evidence；不传 `--mcp-action-config` 时本地 registry 只包含 `asset.lookup`、`threat_intel.ip_reputation.lookup` 和 `security_tag.lookup` mock adapter；`InMemoryInvestigationEvidenceRepository` 只用于单元测试和无数据库的局部 service wiring。
   - PingAn 内网 DEV 的 SOC 业务库固定使用独立本地 SQLite。`resolve_database_url()` 在没有显式参数和 `SOC_DATABASE_URL` 时，若 DeerFlow 为 `database.backend: sqlite`，必须自动使用 `{database.sqlite_dir}/soc_agent_dev.db`，不能复用 `deerflow.db`；`soc db upgrade` 必须创建缺失的 SQLite 父目录。当前不收集 PostgreSQL、Kafka 或 K8s DEV 参数，也不能用 SQLite 结果声明准生产/生产基础设施已验收。生产/准生产 PostgreSQL 目标保持不变。
   - 当前 `PI-01A` 的 PingAn TI Provider/MCP 已完成 production-shaped code 与 fake/persistence 回归；真实 DEV `mocked=false` hit/not-found/error/timeout、实际字段 coverage 和 evidence readback 仍是退出门槛。`D12-B` 按产品决定暂存，但其资产 Provider 门槛没有关闭。
+  - 当前执行指针为 `PI-01D4`。D1-D3 planner/composition/durable workflow 已完成；PingAn security-tag Provider/MCP 已完成 production-shaped code 与 fake/persistence 回归，真实 DEV 对象类型、有效期语义、exact/expired/inactive/not-found/error 和 `mocked=false` evidence readback 门槛继续保留。PI-01B2/C 因真实 source contract 缺失标为 data-gated；完成 B1 不得冒充 `PI-01B2` 权威授权事实来源。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
     - `POST /api/soc/approvals/grants`
     - `POST /api/soc/approvals/actions/dry-run`
@@ -1071,7 +1100,8 @@ SOC repository 实现约束：
 - SOC 当前持久化表包括 `soc_analysis_runs`、`soc_decision_audit_log`、`soc_alert_summaries`、
   `soc_review_queue`、`soc_approval_requests`、`soc_approval_grants`、`soc_investigation_evidence`、
   `soc_external_dispositions`、`soc_memory_candidates`、`soc_memory_records`、normalization baseline/issues、
-  `soc_governed_context_facts`、`soc_authorization_enrichments` 和 `soc_disposition_proposals`。
+  `soc_governed_context_facts`、`soc_authorization_enrichments`、`soc_disposition_proposals`、
+  `soc_enrichment_executions` 和 `soc_enrichment_action_attempts`。
 - 单元测试可以用 SQLite in-memory 验证 SQLAlchemy 映射。
 - 本地开发/人工验收默认跟随 DeerFlow `database.backend: sqlite`，自动使用独立的 `{database.sqlite_dir}/soc_agent_dev.db`；显式 `--database-url` / `SOC_DATABASE_URL` 仅用于隔离测试文件或覆盖默认路径。
 - 准生产、生产和长期联调环境必须指向 PostgreSQL；不得把本地 SQLite 例外扩大成生产架构。

@@ -21,7 +21,33 @@ class SocServiceConflictError(SocServiceError):
     """Raised when a state transition conflicts with persisted SOC state."""
 
 
+class SocEnrichmentWorkflowError(SocServiceError):
+    """Base failure raised at the persistent investigation boundary."""
+
+    retryable = False
+
+
+class SocEnrichmentWorkflowConflictError(SocEnrichmentWorkflowError):
+    """The same durable identity was reused for different semantics."""
+
+
+class SocEnrichmentWorkflowBusyError(SocEnrichmentWorkflowError):
+    """Another process owns a non-stale execution claim."""
+
+    retryable = True
+
+
+class SocEnrichmentWorkflowPersistenceError(SocEnrichmentWorkflowError):
+    """Optimistic persistence state changed unexpectedly."""
+
+    retryable = True
+
+
 __all__ = [
+    "SocEnrichmentWorkflowBusyError",
+    "SocEnrichmentWorkflowConflictError",
+    "SocEnrichmentWorkflowError",
+    "SocEnrichmentWorkflowPersistenceError",
     "SocServiceAuthorizationError",
     "SocServiceConflictError",
     "SocServiceError",

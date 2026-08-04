@@ -361,8 +361,29 @@ action, or write memory.
 All non-HTTP SOC entry points that need the complete analysis pipeline use
 `soc_agent.application.build_soc_analysis_service`; do not copy CLI-private assembly into validation
 or daemon code. The internal PingAn PKL runner under `validation/compact_zeus/internal_batch/` is a
-resumable consumer of this composition root. Live batches require explicit confirmation and remain
-separate from MCP/action enrichment and model-accuracy evaluation.
+resumable consumer of this composition root. Live LLM batches require explicit confirmation. Its
+PI-01D3 investigation bridge is separately default-off and requires persistence, explicit
+composition/action configs, and `--confirm-investigation`; omitting those options runs only the fixed
+Runtime. Investigation completion is not model-accuracy evidence.
+
+Automatic read-only investigation is separate from that fixed analysis composition. Contracts live
+in `soc_agent.contracts.enrichment`, deterministic planning in `soc_agent.core.enrichment`, and the
+optional bridge in `SocMainOrchestratorService`. The planner accepts typed entities/role resolutions
+plus a versioned tenant policy and returns an immutable `SocEnrichmentPlan`; it does not own a Provider,
+MCP client, repository, or Runtime node. Default policy enables no routes. Exact planned actions must
+still pass through the existing router/policy/dispatcher/registry chain, and explicit duplicate actions
+take precedence. PI-01D1 tests use in-memory adapters/repository only. PI-01D2 composition lives in
+`soc_agent.application.enrichment`: it is default-off, locks exact route/action/adapter identity and
+kind, validates read-only execution plus Planner-provided inputs, and separates
+`mock_only|runtime_declared|real_only` descriptors without discovering or invoking MCP tools. Enabled
+composition requires an explicit evidence repository. PI-01D3 is implemented in
+`soc_agent.core.investigation_workflow`: execution/attempt state is durable through migration
+`0019_enrichment_executions`, actual result mode is checked before evidence persistence, not-found is
+not a Provider failure, retries are bounded, stale work is recoverable, and replay creates a linked
+execution without mutating the base run. Kafka daemon and internal PKL batch use this service only
+when explicit composition and repeatable action-config arguments are supplied. Completed duplicate
+identities do not repeat Provider calls or evidence writes. `soc investigation get|replay` is the
+operator boundary; replay additionally requires a new idempotency key, reason and confirmation.
 
 PI-04-A operational visibility is a separate read-only service boundary. Contracts live in
 `soc_agent.contracts.operations`, exact SQL aggregates in `soc_agent.db.operations`, Kafka projection
@@ -1868,3 +1889,11 @@ IO or tenant conditions to the fixed SOC Runtime. Internal ZEUS mode requires
 HTTPS, an explicit host allowlist and credentials, and fails closed instead of
 falling back to fake data. Keep the legacy TI scoring, whitelist and blocking
 rules out of the provider and generic domain services.
+The security-tag implementation uses the same boundary through generic
+`security_tag.lookup`. It must preserve expired, inactive, unknown, conflicting
+and out-of-scope rows rather than reducing them to not-found. Missing expiry is
+not permanent validity unless an explicit tenant setting records that reviewed
+source semantic. Response SHA-256 is observation provenance, not a provider
+business version. Tag evidence always keeps `decision_impact=none` and
+`authorization_fact_created=false`; only the governed authorized-activity
+service may create or match authorization facts.

@@ -15,6 +15,7 @@ from soc_agent.contracts import (
     ServiceRequestContext,
     SocAgentChatRequest,
     SocDomainTriageRequest,
+    SocEnrichmentPlan,
     SocMainOrchestratorRequest,
     SocOrchestratorActionSpec,
     SocOrchestratorReviewContextSummary,
@@ -24,7 +25,12 @@ from soc_agent.contracts import (
 )
 from soc_agent.core.evidence import InMemoryInvestigationEvidenceRepository
 from soc_agent.domain import SocDomainTriageService
-from soc_agent.protocols import InvestigationEvidenceRepository, SocActionAdapterRegistryPort
+from soc_agent.protocols import (
+    InvestigationEvidenceRepository,
+    SocActionAdapterRegistryPort,
+    SocEnrichmentPlannerPort,
+)
+from soc_agent.utils.hashing import stable_hash
 
 from .correlation import InMemoryAlertSummaryRepository, SocCorrelationService
 from .service import SocAgentActionDispatcher, SocAgentCapabilityRouter, SocAnalysisService
@@ -42,6 +48,7 @@ class SocMainOrchestratorService:
         correlation_service: SocCorrelationService | None = None,
         domain_triage_service: SocDomainTriageService | None = None,
         evidence_repository: InvestigationEvidenceRepository | None = None,
+        enrichment_planner: SocEnrichmentPlannerPort | None = None,
     ) -> None:
         self._evidence_repository = evidence_repository or InMemoryInvestigationEvidenceRepository()
         if analysis_service is None and correlation_service is None:
@@ -63,6 +70,7 @@ class SocMainOrchestratorService:
             evidence_repository=self._evidence_repository,
         )
         self._domain_triage_service = domain_triage_service or SocDomainTriageService()
+        self._enrichment_planner = enrichment_planner
 
     def run(
         self,
@@ -75,8 +83,13 @@ class SocMainOrchestratorService:
         run = self._analysis_service.analyze(orchestrator_request.payload, context=request_context)
         skill_context = _skill_context_from_run(run)
         thread_id = orchestrator_request.thread_id or f"THR-{orchestrator_request.sample_id or run.run_id}"
-        route_steps = self._dispatch_read_only_actions(
+        enrichment_plan = self._enrichment_planner.plan(run, thread_id=thread_id) if self._enrichment_planner is not None else None
+        action_specs, planned_deduplicated_count = _merge_action_specs(
             orchestrator_request.action_specs,
+            enrichment_plan,
+        )
+        route_steps = self._dispatch_read_only_actions(
+            action_specs,
             run_id=run.run_id,
             alert_id=run.alert_id,
             thread_id=thread_id,
@@ -114,6 +127,7 @@ class SocMainOrchestratorService:
             sample_id=orchestrator_request.sample_id,
             run=run,
             skill_context=skill_context,
+            enrichment_plan=enrichment_plan,
             route_steps=route_steps,
             investigation_evidence=evidence,
             correlation_result=correlation_result,
@@ -123,6 +137,9 @@ class SocMainOrchestratorService:
                 **orchestrator_request.metadata,
                 "thread_id": thread_id,
                 "route_step_count": len(route_steps),
+                "planned_enrichment_enabled": enrichment_plan is not None,
+                "planned_enrichment_action_count": (len(enrichment_plan.actions) if enrichment_plan is not None else 0),
+                "planned_enrichment_deduplicated_count": planned_deduplicated_count,
                 "correlation_enabled": True,
                 "correlation_match_count": correlation_match_count,
                 "reusable_correlation_evidence_count": reusable_evidence_count,
@@ -186,6 +203,8 @@ class SocMainOrchestratorService:
                     message=result.message,
                     evidence_id=evidence_id if isinstance(evidence_id, str) else None,
                     payload=result.payload,
+                    origin=spec.origin,
+                    plan_action_id=spec.plan_action_id,
                 )
             )
         return route_steps
@@ -206,6 +225,8 @@ def _chat_request_for_action_spec(
     context_refs.setdefault("run_id", run_id)
     context_refs.setdefault("thread_id", thread_id)
     context_refs.setdefault("proposal_id", f"PA11-{sample_id or run_id}-{index + 1}")
+    if spec.plan_action_id is not None:
+        context_refs.setdefault("enrichment_action_id", spec.plan_action_id)
     payload["context_refs"] = context_refs
     return SocAgentChatRequest(
         message=f"Run orchestrator read-only action {spec.route}",
@@ -216,8 +237,41 @@ def _chat_request_for_action_spec(
             "soc_route": spec.route,
             "action_payload": payload,
             "orchestrator_sample_id": sample_id,
+            "orchestrator_action_origin": spec.origin,
+            "enrichment_action_id": spec.plan_action_id,
         },
     )
+
+
+def _merge_action_specs(
+    explicit_specs: list[SocOrchestratorActionSpec],
+    enrichment_plan: SocEnrichmentPlan | None,
+) -> tuple[list[SocOrchestratorActionSpec], int]:
+    merged = list(explicit_specs)
+    seen = {_action_spec_key(spec) for spec in explicit_specs}
+    deduplicated = 0
+    if enrichment_plan is None:
+        return merged, deduplicated
+    for planned in enrichment_plan.actions:
+        spec = SocOrchestratorActionSpec(
+            route=planned.route,
+            action=planned.action,
+            payload=planned.payload,
+            origin="planned",
+            plan_action_id=planned.action_id,
+        )
+        key = _action_spec_key(spec)
+        if key in seen:
+            deduplicated += 1
+            continue
+        seen.add(key)
+        merged.append(spec)
+    return merged, deduplicated
+
+
+def _action_spec_key(spec: SocOrchestratorActionSpec) -> tuple[str, str, str]:
+    payload = {key: value for key, value in spec.payload.items() if key != "context_refs"}
+    return spec.route, spec.action or spec.route, stable_hash(payload)
 
 
 def _skill_context_from_run(run: AnalysisRun) -> SocSkillContext:

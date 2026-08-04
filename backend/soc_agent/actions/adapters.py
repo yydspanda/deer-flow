@@ -225,6 +225,7 @@ def asset_lookup_adapter_descriptor(
         idempotency_required=False,
         required_payload_fields=["asset_key"],
         description="Read-only asset inventory lookup adapter.",
+        metadata={"result_provenance_contract": "mock_only"},
     )
 
 
@@ -332,6 +333,7 @@ def threat_intel_ip_reputation_lookup_adapter_descriptor(
         idempotency_required=False,
         required_payload_fields=["ip"],
         description="Read-only threat intelligence IP reputation lookup adapter.",
+        metadata={"result_provenance_contract": "mock_only"},
     )
 
 
@@ -426,6 +428,7 @@ def security_tag_lookup_adapter_descriptor(
         idempotency_required=False,
         required_payload_fields=["entity_key"],
         description="Read-only security tag lookup adapter.",
+        metadata={"result_provenance_contract": "mock_only"},
     )
 
 

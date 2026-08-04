@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-04-A` 已完成） |
-| 当前目标 | `PI-01A` 平安 ZEUS 真实威胁情报 Provider；`D12-B` 保留为 `Parked / internal evidence pending`，不降低其真实资产 Provider 门槛 |
+| 当前目标 | `PI-01D4` 基于 D3 durable investigation ledger 增加 shadow report、Provider/plan telemetry 和 analyst-visible investigation addendum；D12-B、PI-01A/B1 保留各自 internal evidence gate |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 PingAn 内网 DEV 统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | 在内网用 approved IP 对 `/public/indicatorSearch` 跑 `PI-01A` hit/not-found/error/timeout smoke，核对实际 `ipAnalyseReport` / `ipReputationReport` 字段覆盖，并通过既有 MCP Action/Dispatcher 保存、回读 `mocked=false` InvestigationEvidence；随后进入 `PI-01B1`。 |
+| 当前下一刀 | `PI-01D4` 先定义只读 shadow report/addendum contract，再投影 plan/action hit、not-found、failure、retry、latency 和 evidence coverage；不得回写基础 Runtime verdict、自动关单、写 confirmed memory 或开放高风险动作。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -40,7 +40,55 @@
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
-| `PI` | Real Data & Production Integration | **Current / PI-01A Threat Intelligence** | D12-B 验收代码保留但内网证据暂存；当前 TI Provider/MCP 代码已完成外网回归，等待真实 DEV `mocked=false` evidence；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+| `PI` | Real Data & Production Integration | **Current / PI-01D4 Shadow Report & Telemetry** | D1-D3 planner、strict composition 与 durable workflow 已完成；D12-B、TI、security-tag 保留内网 gate，B2/C data-gated；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+
+## 2026-08-04 — PI-01D3 persistent investigation workflow completed
+
+- 新增 `soc.enrichment_execution.v1`、`soc.enrichment_action_attempt.v1`、execution/replay command、retry policy 和 `soc.enrichment_workflow_result.v1`。执行从已持久化的 `AnalysisRun` 开始，不重复运行 LLM，也不修改基础 run/decision。
+- 新增 SQL/in-memory execution repository 与 migration `0019_enrichment_executions`；execution idempotency、action-attempt identity 和 optimistic CAS 同时约束跨进程重复消息、并发 claim 和恢复。
+- `SocInvestigationWorkflowService` 保存不可变 plan，逐条经过 Router -> Action Policy -> Dispatcher -> exact Adapter Registry。实际 Provider 结果在写 evidence 前校验 `mock_only|runtime_declared|real_only`；`runtime_declared` 必须真实返回 boolean `mocked`，模式不符 fail closed 且不写 evidence。
+- 结果明确区分 `success`、正常 `not_found`、Provider failure、contract failure、denied 和 interrupted。Provider failure 仅按版本化 retry policy 重试；进程中断后先检查确定性 evidence ID，已有 evidence 时恢复 attempt，避免再次查询；达到上限后进入 terminal failed。
+- Kafka `SocDaemonService` 以 topic/partition/offset 幂等键执行调查。retryable investigation failure 继续沿用 worker 的 no-commit/no-DLQ 语义；完成、无动作、blocked 和正常 not-found 可正常提交。未传 enrichment 配置时 daemon 行为不变。
+- 内网 PKL runner 增加独立 opt-in：必须 `--persist`、composition、一个或多个 repeatable action config 和 `--confirm-investigation`。基础分析成功后才执行调查；调查失败仍在 item 中保留完整 `analysis_run`。manifest/resume 同时锁定 composition/action-config SHA-256，Runtime-only 模式继续独立可用。
+- MCP Registry 新增多配置文件组合加载，便于分别审阅 PingAn asset/TI/security-tag allowlist；跨文件重复 route/action 启动即失败。新增 `enabled.dev-mcp.yaml` 本地 D3 示例。
+- 新增 `soc investigation get|replay`。get 只读 durable execution/attempt；replay 必须新 idempotency key、理由、显式 composition/action configs 和确认，并生成 `replay_of_execution_id` 关联执行。
+- 验证：changed Python Ruff format/check 通过；D3/daemon/MCP 聚焦回归通过；完整 SOC、architecture 和 internal-batch 回归为 `747 passed`。下一步固定为 `PI-01D4` shadow report、Provider/plan telemetry 和 investigation addendum boundary。
+
+## 2026-08-04 — PI-01D2 enrichment composition completed
+
+- 新增 `soc.enrichment_composition.v1`：默认关闭；启用时必须指定 tenant、版本化 `SocEnrichmentPolicy`、统一 `required_result_mode` 和与 enabled routes 完全相等的 adapter bindings。
+- Composition 强制 tenant 只能选择 `asset.lookup` 或 `asset.locate` 之一；TI 自动查询还必须提供显式 tenant internal CIDR，避免把内部地址发往 reputation Provider。
+- 新增 `build_soc_main_orchestrator_service()` application composition root 和 JSON/YAML loader。启用 enrichment 时必须显式注入 Registry 与 Evidence Repository；未启用时不创建 Planner，也不发现或调用 MCP tool。
+- 启动校验按 exact `route/action/adapter_id/adapter_kind` 锁定 Registry，要求 `risk_level=read_only`、`external_side_effect=read`、`execute_supported=true`，并验证 Adapter 必需 payload/context 均可由 Planner + Orchestrator 保证。配置缺失、身份漂移或输入契约不匹配均 fail closed。
+- Adapter descriptor 新增标准化结果来源声明：in-memory/local dev 使用 `mock_only`；PingAn asset/TI/security-tag MCP 使用 `runtime_declared + result_mode_field=mocked`，且 MCP `output_fields` 必须保留该字段；`real` composition 拒绝 `mock_only`，`mock` composition 拒绝 `real_only`。`runtime_declared` 只通过启动校验，D3 必须对每次实际结果校验 `mocked`，不能据此宣称 Provider 已真实接入。
+- 新增 `backend/samples/enrichment/disabled.yaml` 和 `enabled.mock.yaml`。未提供经过审阅的 PingAn internal network scope 前，不提交可直接启用的 PingAn real composition；现有三个 PingAn MCP config 已能组合成 exact real profile 并在不发现/调用 tool 的情况下通过静态校验。
+- 聚焦 composition/planner/MCP/adapter 回归 `74 passed`；完整 `tests/test_soc_*.py + tests/architecture/test_soc_agent_boundaries.py` 为 `728 passed`；Ruff format/check 通过。
+- D2 不接 Kafka 或 PKL batch、不持久化 plan execution state，也不验证实际 Provider 返回模式。下一步固定为 `PI-01D3`：独立 persistent investigation workflow、跨进程幂等、Provider failure/retry/replay 和准确 persistence metadata。
+
+## 2026-08-04 — PI-01D1 deterministic read-only enrichment planner completed
+
+- 先审阅既有 PingAn/ZEUS 源码与 integration 台账：旧 `/public/getAlertBrief` 只暴露 status enum，没有稳定 source event ID/version/reason/乱序更正 contract；现有材料也没有 change/scanner/maintenance/exercise-roster 权威 source contract。因此 `PI-01B2` 与 `PI-01C` 明确标为 `Data-gated`，未用 fixture、旧枚举或新 mock 冒充真实接入。
+- 新增 `soc.enrichment_policy.v1` 与 `soc.enrichment_plan.v1`：保存 tenant、policy version、run/alert/thread lineage、稳定 input/plan/action identity、planned/skipped candidates、预算和 `decision_immutable=true` / `high_risk_actions_allowed=false` 硬边界。
+- 新增 `SocEnrichmentPlanner`：只读取 typed `EntityMention`、`RoleResolution`、completed run status 和显式 tenant policy；不读 PingAn alias、raw payload、模型自由文本、Provider/MCP 或 repository。默认没有 enabled route。
+- v1 exact allowlist 只有 `asset.lookup`、`asset.locate`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup`，asset route 必须 tenant 级二选一。TI 默认要求 tenant internal CIDR，内部/non-global IP 不发送给 reputation Provider；invalid entity、无候选、tenant mismatch、缺 scope 和预算耗尽均产生结构化 skip。
+- 计划按规范化实体去重并保留 evidence refs/角色冲突；角色冲突仍可触发无副作用查询，但 rationale 明确禁止选择 response target。同一 run + policy 的 plan/action identity 不受 Web/TUI/Kafka thread ID 影响。
+- `SocMainOrchestratorService` 支持可选 Planner 注入，把 planned action 合并到既有 Router -> Action Policy -> Dispatcher -> exact Adapter Registry -> injected Evidence Repository 链；完全相同的 explicit action 优先。`UnifiedInvestigationReport` 保存 plan、planned/explicit lineage 和 dedupe count，基础 `AnalysisRun` 前后 model dump 不变。
+- 明确 D1 边界：当前回归使用 in-memory adapter/repository，只证明 production-shaped contract，不是 `mocked=false` Provider 或生产 DB evidence；默认 composition、Kafka daemon 和内网 PKL Runtime batch 仍未自动调用工具。scenario/gap 自由文本也没有成为执行触发器。
+- 验证：Planner + Main Orchestrator/PingAn eval 聚焦回归 `15 passed`；完整 `tests/test_soc_*.py + tests/architecture/test_soc_agent_boundaries.py` 为 `710 passed`；changed Python Ruff check/format 通过。
+- `codegraph sync .` 已纳入新增 contract/planner；`codegraph query "SocEnrichmentPlanner"` 和 `codegraph query "SocEnrichmentPlan"` 均可定位实现、port、validator 与测试引用。
+- 下一步固定为 `PI-01D2`：显式 config/composition、policy-route/registry startup validation、mock/real 性质隔离和 tenant asset route consolidation；随后 D3 才接 Kafka/internal batch persistence、幂等、失败/重试和 replay，并替换 PA-11 demo 固定的 `writes_db=false` 报告语义。
+
+## 2026-08-04 — PI-01B1 PingAn security-tag provider implemented
+
+- 新增 PingAn-owned `/public/searchTagContent` Provider、typed result 和 stdio MCP；通用层继续只认识 `security_tag.lookup`，没有向固定 Runtime 加入 PingAn 字段、鉴权或外部 IO。
+- Provider 复用 portable `isec_sign` 与共享 ZEUS App ID/App Key；internal 模式强制 HTTPS + host allowlist、缺配置 fail closed，绝不回退 fake。generic Action/Dispatcher 可将结果保存为 `InvestigationEvidence`，MCP envelope 可被既有 Domain Triage 读取。
+- 修正旧客户端“先过滤再返回”造成的语义丢失：现在显式保留 `active/expired/inactive/conflicted/unknown/out_of_scope/unusable/not_found`，过期、失效、范围不符和 schema 问题不会伪装成正常查无。
+- 修正旧客户端忽略顶层业务码的失败边界：响应未提供 `code` 时保持兼容；提供时只接受 `200`，且只有明确的 `data: []` 是正常查无，`data: null`、缺少 `data` 和非成功业务码均 fail closed。真实内网仍需确认该响应 envelope。
+- 缺失/非法 `expireTime` 默认 `unknown`；只有 source owner 明确确认永久有效语义后，Git-ignored tenant 配置才能开启 open-ended validity。exact entity scope 支持 IP 规范化，非 exact 记录不产生 active match。
+- 只投影审阅过的 `tagValue/tagType/tagCode/isValid/expireTime/labels`；完整响应不出 Provider。`response_sha256` 只表示本次 observation，不能冒充 ZEUS business version；当前 `provider_version=null`、`source_freshness=unknown`。
+- 所有结果固定 `evidence_boundary=investigation_only`、`decision_impact=none`、`authorization_fact_created=false`、`automation_eligible=false`。命中标签不能直接判安全、关单、授权动作、写 confirmed memory，也不能冒充 `PI-01B2` 权威授权事实来源。
+- 聚焦 Provider/MCP/Action/Domain/CLI fake 回归 `14 passed`，完整 SOC + architecture 回归 `702 passed`；Ruff、format、JSON examples 和 `git diff --check` 通过。真实 DEV `mocked=false` 调用尚未执行，当前仍为 `In Progress / code-complete, internal smoke pending`。
+- `codegraph sync .` 已纳入最终 Provider/MCP 实现；索引可直接定位 `PingAnSecurityTagService`、`PingAnSecurityTagResult` 和环境 builder。
 
 ## 2026-08-04 — PI-01A PingAn threat-intelligence provider implemented
 

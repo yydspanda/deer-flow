@@ -18,6 +18,10 @@ class InMemoryInvestigationEvidenceRepository:
     def save_evidence(self, evidence: InvestigationEvidence) -> None:
         self._evidence[evidence.evidence_id] = evidence
 
+    def get_evidence(self, evidence_id: str) -> InvestigationEvidence | None:
+        evidence = self._evidence.get(evidence_id)
+        return evidence.model_copy(deep=True) if evidence is not None else None
+
     def list_evidence(
         self,
         *,

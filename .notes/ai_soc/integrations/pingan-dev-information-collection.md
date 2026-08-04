@@ -144,9 +144,11 @@ Provider 只返回类型化情报事实，不把旧代码中的 hardcoded score/
 - `isValid`、`expireTime` 的准确语义、时区和永久有效表示。
 - 一条有效标签、一条过期标签、一条查无结果；实际值只留内网。
 - 脱敏后的成功、查无、业务错误响应各一份。
+- 确认顶层 `code` 的成功值及缺失语义，并确认正常查无是否始终返回明确的 `data: []`；`data: null` 不按查无处理。
 - 哪些标签属于授权扫描、红蓝队/护网、白名单、维护窗口或内部安全工具。
 
-标签只形成 governed investigation evidence；不能直接把告警判安全、关闭工单或写 confirmed memory。
+标签只形成 ordinary `InvestigationEvidence`；不能直接把告警判安全、关闭工单、写 confirmed memory
+或创建 `GovernedContextFact`。
 
 安全标签查询与权威授权事实同步是两个独立 gate。还需确认 change、scanner、maintenance、exercise
 roster 或其他系统能否提供带 source/version/scope/validity 的事实；若当前 DEV 没有入口，记录
@@ -218,9 +220,14 @@ backend/.deer-flow/data/soc_agent_dev.db
 DEV profile + no-network preflight (implemented)
     -> PI-01A threat_intel.ip_reputation.lookup Provider/MCP (implemented externally)
     -> PI-01A real DEV hit/not-found/error/timeout + actual field coverage + evidence readback
-    -> real security_tag.lookup provider + authoritative-fact source status
-    -> external disposition source adapter, if DEV transport exists
-    -> governed read-only investigation planner/service
+    -> PI-01B1 security_tag.lookup Provider/MCP (implemented externally)
+    -> PI-01B1 real DEV entity/validity/scope/error coverage + evidence readback
+    -> PI-01B2 authoritative-fact source availability (currently data-gated)
+    -> external disposition source contract, if DEV transport/event schema exists (currently data-gated)
+    -> PI-01D1 governed planner/service (implemented externally)
+    -> PI-01D2 strict config/composition (implemented externally)
+    -> PI-01D3 persistent Kafka/batch investigation workflow (implemented externally)
+    -> PI-01D4 shadow report/telemetry/addendum boundary
     -> APT/NDR and EDR/HIDS shadow Runtime + Provider + ReviewQueue/Lead Agent review
 
 Parked but still required before Pilot readiness:

@@ -1,0 +1,7 @@
+schema_version: soc.enrichment_composition.v1
+enabled: false
+policy:
+  schema_version: soc.enrichment_policy.v1
+  policy_version: enrichment-disabled-v1
+  enabled_routes: []
+bindings: []

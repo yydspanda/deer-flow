@@ -333,6 +333,25 @@ def build_mcp_action_adapter_registry_from_file(
     )
 
 
+def build_mcp_action_adapter_registry_from_files(
+    config_paths: Iterable[str | Path],
+    provider: SocMcpToolProviderPort,
+    *,
+    base_adapters: Iterable[Any] = (),
+) -> SocActionAdapterRegistry:
+    """Build one registry from multiple explicit allowlist config files."""
+
+    paths = list(config_paths)
+    if not paths:
+        raise SocActionAdapterRegistryError("at least one MCP action adapter config file is required")
+    configs = [config for path in paths for config in load_mcp_action_adapter_configs(path)]
+    return build_mcp_action_adapter_registry(
+        configs,
+        provider,
+        base_adapters=base_adapters,
+    )
+
+
 def run_mcp_action_adapter_smoke(
     config_path: str | Path,
     provider: SocMcpToolProviderPort,
@@ -879,6 +898,7 @@ def _descriptor_metadata(config: SocMcpActionAdapterConfig) -> dict[str, Any]:
         "tool": config.mcp.tool,
         "timeout_seconds": config.mcp.timeout_seconds,
         "result_schema_version": config.mcp.result_schema_version,
+        "output_fields": list(config.mcp.output_fields),
     }
     metadata["config"] = {
         "schema_version": config.schema_version,
@@ -914,6 +934,7 @@ __all__ = [
     "build_mcp_action_adapter",
     "build_mcp_action_adapter_registry",
     "build_mcp_action_adapter_registry_from_file",
+    "build_mcp_action_adapter_registry_from_files",
     "inspect_mcp_tool_inventory",
     "load_mcp_action_adapter_configs",
     "mcp_read_only_adapter_descriptor",
