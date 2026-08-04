@@ -17,6 +17,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
+from time import monotonic
 from typing import Any, Literal, Protocol
 from urllib.parse import urljoin
 from uuid import uuid4
@@ -35,6 +36,15 @@ class PingAnAssetProviderConfigurationError(PingAnAssetProviderError, ValueError
 
 class PingAnAssetProviderUnavailableError(PingAnAssetProviderError):
     """Raised when every configured external lookup failed rather than missed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempts: Sequence[PingAnAssetLocationAttempt] = (),
+    ) -> None:
+        super().__init__(message)
+        self.attempts = tuple(attempts)
 
 
 class PingAnAssetType(StrEnum):
@@ -117,6 +127,7 @@ class PingAnAssetLocationAttempt(BaseModel):
     status: Literal["found", "not_found", "failed"]
     candidate_count: int = Field(default=0, ge=0)
     response_code: int | str | None = None
+    duration_ms: int = Field(default=0, ge=0)
     mocked: bool
     error_type: str | None = None
     error_message: str | None = None
@@ -370,6 +381,7 @@ class PingAnAssetLocatorService:
                 candidates = self._try_search(request.query, search_type, attempts)
                 if candidates:
                     return self._result(request, candidates=candidates, attempts=attempts)
+                self._raise_if_latest_attempt_failed(attempts)
 
             for workflow_kind in _workflow_plan(request.asset_type):
                 candidates = self._try_workflow(
@@ -381,6 +393,7 @@ class PingAnAssetLocatorService:
                 )
                 if candidates:
                     return self._result(request, candidates=candidates, attempts=attempts)
+                self._raise_if_latest_attempt_failed(attempts)
 
         um = request.um or (request.query if request.asset_type is PingAnAssetType.USER else None)
         if um:
@@ -393,12 +406,22 @@ class PingAnAssetLocatorService:
             )
             if candidates:
                 return self._result(request, candidates=candidates, attempts=attempts)
+            self._raise_if_latest_attempt_failed(attempts)
 
         if not attempts:
             raise PingAnAssetProviderUnavailableError(f"no PingAn asset location provider is configured for asset type {request.asset_type}")
-        if all(item.status == "failed" for item in attempts):
-            raise PingAnAssetProviderUnavailableError("all configured PingAn asset location providers failed")
         return self._result(request, candidates=[], attempts=attempts)
+
+    @staticmethod
+    def _raise_if_latest_attempt_failed(
+        attempts: Sequence[PingAnAssetLocationAttempt],
+    ) -> None:
+        if attempts and attempts[-1].status == "failed":
+            latest = attempts[-1]
+            raise PingAnAssetProviderUnavailableError(
+                f"PingAn asset location provider failed at {latest.stage}",
+                attempts=attempts,
+            )
 
     def _try_search(
         self,
@@ -406,6 +429,7 @@ class PingAnAssetLocatorService:
         asset_type: PingAnAssetType,
         attempts: list[PingAnAssetLocationAttempt],
     ) -> list[PingAnAssetLocationCandidate]:
+        started = monotonic()
         try:
             response = self._search.search(keyword=query, asset_types=[asset_type])
             response_code = _response_code(response)
@@ -420,6 +444,7 @@ class PingAnAssetLocatorService:
                     status=status,
                     candidate_count=len(candidates),
                     response_code=response_code,
+                    duration_ms=_elapsed_ms(started),
                     mocked=self._search.mocked,
                 )
             )
@@ -430,6 +455,7 @@ class PingAnAssetLocatorService:
                     stage="search_asset_info",
                     lookup_kind=asset_type.value,
                     status="failed",
+                    duration_ms=_elapsed_ms(started),
                     mocked=self._search.mocked,
                     error_type=exc.__class__.__name__,
                     error_message=_sanitized_error_message(exc),
@@ -448,6 +474,7 @@ class PingAnAssetLocatorService:
     ) -> list[PingAnAssetLocationCandidate]:
         if self._workflow is None or self._workflow_config is None:
             return []
+        started = monotonic()
         workflow_id = {
             "terminal": self._workflow_config.terminal_workflow_id,
             "datacenter": self._workflow_config.datacenter_workflow_id,
@@ -475,6 +502,7 @@ class PingAnAssetLocatorService:
                     lookup_kind=lookup_kind,
                     status="found" if candidates else "not_found",
                     candidate_count=len(candidates),
+                    duration_ms=_elapsed_ms(started),
                     mocked=self._workflow.mocked,
                 )
             )
@@ -485,6 +513,7 @@ class PingAnAssetLocatorService:
                     stage=stage,
                     lookup_kind=lookup_kind,
                     status="failed",
+                    duration_ms=_elapsed_ms(started),
                     mocked=self._workflow.mocked,
                     error_type=exc.__class__.__name__,
                     error_message=_sanitized_error_message(exc),
@@ -808,6 +837,10 @@ def _sanitized_error_message(exc: Exception) -> str:
     if isinstance(exc, httpx.RequestError):
         return "provider request failed"
     return "provider call failed"
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, round((monotonic() - started) * 1000))
 
 
 def _configure_import_paths(env: Mapping[str, str]) -> None:

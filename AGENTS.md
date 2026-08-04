@@ -339,6 +339,34 @@ Current SOC direction:
   evidence. Only the internal D12-B smoke with real endpoint/credentials/imports, approved payloads,
   persisted `InvestigationEvidence`, and `mocked=false` may close that gate. Internal mode must fail
   closed when configuration is missing and must never silently fall back to fake data.
+  The reviewed ZEUS signer is reimplemented without legacy import-time dependencies at
+  `soc_agent.integrations.pingan.zeus_signing:isec_sign`; do not restore the old module's default key
+  or import all of `util.util_tools`. Use `backend/samples/pingan_dev/`,
+  `soc_pingan_dev_preflight.py`, and `soc_pingan_asset_direct_smoke.py` for D12-B. Real DEV values may
+  live in verified Git-ignored `*.local` files. A provider failure is not a normal miss and must stop
+  the fallback chain; only explicit `not_found` can advance from ZEUS to workflow/UM.
+- PingAn ZEUS lifecycle codes and reasons belong in a PingAn source adapter that emits
+  `SocExternalDispositionIngressCommand`; generic Runtime must not recognize those status codes or
+  copy the legacy `status != 1 -> skip AI` behavior. The historical EDR safe-path workbook is
+  model-derived candidate knowledge, not an allowlist. Its implemented offline compiler and exact
+  lookup live under `backend/soc_agent/integrations/pingan/software_path_catalog.py`; the stdio MCP
+  uses the generic `endpoint.software_path.lookup` action. Build it with
+  `backend/scripts/soc_pingan_software_path_catalog.py build`; generated SQLite/report files stay
+  Git-ignored and mode `0600`. Historical ignored disposition never overrides current path-control
+  context: `D:`, user-writable, and temporary paths remain high-attention. Results preserve source
+  hash/row lineage and freshness, emit investigation-only evidence, and can never directly skip
+  Runtime, mark false positive, close a review, authorize an action, or write confirmed memory.
+- Internal PingAn PKL scale validation uses
+  `validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py`. It must build the shared
+  `SocAnalysisService` through `soc_agent.application.build_soc_analysis_service`, load DataFrame
+  pickles with the restricted loader, require `--confirm-live` for LLM calls, and write only
+  Git-ignored mode-`0700/0600` artifacts. Keep it resumable by source/payload/model/config hashes and
+  expand runs `5 -> 50 -> all`; batch completion is not model-accuracy evidence. It runs the fixed
+  Runtime and must not silently invoke MCP enrichment tools.
+- Build internal handoff artifacts with `scripts/build_pingan_internal_transfer.py`. Source and
+  private data/configuration are separate archives with independent manifests and SHA-256
+  inspection. Never put `*.local`, PKL, XLSX, SQLite, credentials, or generated internal results in
+  the source archive or Git.
 - PI-04-A operational visibility uses `SocOperationsService` and the versioned
   `soc.operations_snapshot.v1` contract. `soc ops snapshot` and
   `GET /api/soc/operations/snapshot` expose exact, unpaginated SOC persistence aggregates plus a
@@ -425,7 +453,7 @@ SOC delivery plan (the only execution order is `.notes/ai_soc/delivery-roadmap.m
 | `BD` Boss Demo v0.1 | Done: browser-first repeatable golden path |
 | `AA` SOC Alpha Completeness Audit | Done: unique 50-row matrix and frozen blocker set |
 | `BG` Close Blocking Gaps | Done: Alpha Gate passed 2026-07-20 |
-| `PI` Real Data & Production Integration | Current: `PI-04-A` done, `PI-04-B` thin Web view next; `PI-01/D12-B` remains Waiting/data-gated |
+| `PI` Real Data & Production Integration | Current: `PI-04-A` done; `PI-01/D12-B` profile/signer/preflight code ready, internal `run_workflow` + real `mocked=false` smoke next; `PI-04-B` parked |
 
 ### SOC Agent Development Workflow
 

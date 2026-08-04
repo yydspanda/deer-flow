@@ -23,6 +23,17 @@ from soc_agent.integrations.pingan.asset_location import (
     StaticPingAnAssetWorkflowPort,
     build_pingan_asset_locator_from_env,
 )
+from soc_agent.integrations.pingan.software_path_catalog import (
+    PINGAN_SOFTWARE_PATH_LOOKUP_ACTION,
+    PingAnSoftwarePathCatalog,
+    PingAnSoftwarePathCatalogBuildReport,
+    PingAnSoftwarePathCatalogError,
+    PingAnSoftwarePathContextResult,
+    PingAnSoftwarePathLookupActionAdapter,
+    classify_pingan_path,
+    compile_pingan_software_path_catalog,
+    normalize_windows_path,
+)
 
 __all__ = [
     "CallablePingAnAssetWorkflowPort",
@@ -38,7 +49,16 @@ __all__ = [
     "PingAnAssetProviderUnavailableError",
     "PingAnAssetType",
     "PingAnAssetWorkflowConfig",
+    "PINGAN_SOFTWARE_PATH_LOOKUP_ACTION",
+    "PingAnSoftwarePathCatalog",
+    "PingAnSoftwarePathCatalogBuildReport",
+    "PingAnSoftwarePathCatalogError",
+    "PingAnSoftwarePathContextResult",
+    "PingAnSoftwarePathLookupActionAdapter",
     "StaticPingAnAssetSearchPort",
     "StaticPingAnAssetWorkflowPort",
     "build_pingan_asset_locator_from_env",
+    "classify_pingan_path",
+    "compile_pingan_software_path_catalog",
+    "normalize_windows_path",
 ]

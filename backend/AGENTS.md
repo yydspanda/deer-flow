@@ -324,6 +324,25 @@ authorize actions. Its `fake` and `internal` modes are mutually exclusive: fake 
 workflow imports are unavailable, never silently downgrade to fake. D12-A code/fake smoke does not
 complete PA-12; only D12-B internal smoke with `mocked=false` and persisted evidence does.
 
+The historical PingAn EDR workbook is compiled by
+`scripts/soc_pingan_software_path_catalog.py` into a Git-ignored, mode-`0600` SQLite catalog and
+served by `integrations/pingan/software_path_mcp_server.py`. The generic boundary is the read-only
+`endpoint.software_path.lookup` action; all tenant classification and workbook parsing remain in
+`integrations/pingan/software_path_catalog.py`. Matching is exact normalized Windows path with an
+optional MD5 check: do not restore basename, version wildcard, prefix, or deleted-segment fuzzy
+matching from the legacy implementation. Historical disposition and directory control are distinct;
+in particular, `D:`, user-writable, and temporary paths remain high-attention after a match. Results
+must retain `candidate_only=true`, `evidence_boundary=investigation_only`, `decision_impact=none`,
+and `automation_eligible=false`, then flow through the action dispatcher into
+`InvestigationEvidence`. They cannot skip Runtime, set a verdict, close ReviewQueue, authorize an
+action, or write memory.
+
+All non-HTTP SOC entry points that need the complete analysis pipeline use
+`soc_agent.application.build_soc_analysis_service`; do not copy CLI-private assembly into validation
+or daemon code. The internal PingAn PKL runner under `validation/compact_zeus/internal_batch/` is a
+resumable consumer of this composition root. Live batches require explicit confirmation and remain
+separate from MCP/action enrichment and model-accuracy evaluation.
+
 PI-04-A operational visibility is a separate read-only service boundary. Contracts live in
 `soc_agent.contracts.operations`, exact SQL aggregates in `soc_agent.db.operations`, Kafka projection
 in `soc_agent.operations`, and composition in `SocOperationsService`. Both `soc ops snapshot` and

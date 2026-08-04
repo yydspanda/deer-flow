@@ -1,13 +1,13 @@
 # SOC Agent Mock 与真实接入台账
 
-> Updated: 2026-08-03
+> Updated: 2026-08-04
 >
 > 目的：集中记录当前 SOC Agent 里哪些能力只是 mock、fixture、in-memory 或本地 smoke，用来验证工程链路；后续接入真实 PingAn / 客户环境时，必须按本台账替换、复测和重新验收。
 
 ## 1. 总原则
 
 - Mock 只能证明协议、服务边界、展示链路和回归测试能跑通，不能证明生产系统已接入。
-- `PA-12` 真实 PingAn MCP/API 替换当前仍是 `Waiting`；本地 mock、fake fixture、in-memory adapter 不能冒充完成。
+- `PA-12` 真实 PingAn MCP/API 替换当前为 `In Progress / internal smoke`：DEV profile、portable signer、preflight 和 direct smoke entry 已实现，但在产生内网 `mocked=false` 证据前仍不能算完成；本地 mock、fake fixture、in-memory adapter 不能冒充完成。
 - Read-only mock 的成功结果可以写入 `InvestigationEvidence` 用于 demo/eval，但必须带 `mocked=true`、fixture source 或 adapter id，不能当作生产事实，不能满足场景证据要求，也不能提高 domain/scenario confidence。
 - 外部 free-text reason、LLM 总结、分析师备注、mock tool result 都只能生成 `SocMemoryCandidate(status=pending_review)`；不能直接写 confirmed memory 或 active lesson。
 - 真实替换时只能替换 adapter/provider/config，不得改变 core service contract、Main Orchestrator contract、ReviewQueue contract 或 Lead Agent bounded context contract。
@@ -20,6 +20,7 @@
 | `asset.lookup` | in-memory read-only adapter，部分 smoke 可走 MCP-backed config | `backend/soc_agent/actions/adapters.py`、`backend/soc_agent/actions/mcp.py` | 验证资产查询 action contract、policy、approval preflight、evidence 写入 | 替换为 CMDB / 资产系统 / 客户资产服务 read-only adapter 或 MCP-backed adapter |
 | `asset.locate` | 本地 stdio MCP mock tool | `backend/scripts/soc_dev_mcp_server.py`、`backend/samples/mcp/` | 模拟 Zeus/CMDB/asset_to_bu 归属定位，验证 Lead Agent proposal -> MCP adapter -> evidence | 替换为真实资产归属/BU/owner/处置归属服务；保存 `soc.mcp_action_smoke_report.v1` |
 | `D12-A` PingAn asset provider | **Implemented production-shaped code with fake transport; still mock** | `backend/soc_agent/integrations/pingan/`、`backend/scripts/soc_pingan_asset_mcp_server.py`、`backend/samples/mcp/pingan_asset/` | 外网验证 ZEUS 签名调用边界、`searchAssetInfo -> asset_to_bu -> UM` 降级编排、MCP/action 映射和 fail-closed；产物明确 `mocked=true` | 只有 `D12-B` 内网注入真实 endpoint/secret/signer/workflow runner 并产生 `mocked=false` smoke 证据后才算 real；D12-A 不能关闭 `PA-12` / `PI-01` |
+| `D12-B` PingAn internal validation | **Code/config prepared; real evidence pending** | `backend/samples/pingan_dev/`、`backend/scripts/soc_pingan_dev_preflight.py`、`backend/scripts/soc_pingan_asset_direct_smoke.py` | 真实值保存在 Git-ignored local profile；preflight 不发请求，direct smoke 输出 bounded report；portable signer 已真实实现 | 内网提供 Agent Platform `run_workflow` 依赖和 approved cases，通过 direct + MCP + persisted evidence case matrix；至少一项 `mocked=false` 后才改变 real-provider 状态 |
 | `threat_intel.ip_reputation.lookup` | in-memory 威胁情报 mock adapter | `backend/soc_agent/actions/adapters.py` | 验证 APT 情报查询 evidence 形态，避免 domain handler 自己假设情报 | 替换为企业威胁情报、TI 平台或外部情报 provider 的 read-only adapter |
 | `security_tag.lookup` | in-memory 标签/授权/白名单 mock adapter | `backend/soc_agent/actions/adapters.py` | 验证授权扫描、演练、维护窗口、白名单等标签 evidence 形态 | 替换为安全标签、变更、演练、白名单、维护窗口等真实数据源 |
 | Authorized-activity source facts | GF-01 lifecycle/DB 与 AA-01 matcher 是真实确定性实现；当前 HIDS/EDR shadow facts 由已确认业务真值构造为本地 in-memory fixture | `backend/soc_agent/contracts/governed_context.py`、`backend/soc_agent/authorization/`、gitignored `step-12-authorization-shadow/` | 验证 event-time lifecycle/scope/freshness/recurrence 和 exact explanation；不代表已接变更/扫描器/维护系统 | 接真实 change/scanner/maintenance/CMDB source adapter，同步 source ref/version/freshness 后重新跑 shadow replay；不得把 validation fixture 当生产 active fact |
@@ -43,6 +44,7 @@
 | SOC Lead Agent | DeerFlow 真实 agent path | 复用 DeerFlow `lead_agent`、profile、skills 和 MCP；mock 的是部分外部查询结果，不是 Lead Agent 运行时本身 |
 | GF-01 / AA-01 | deterministic production contracts/services | Fact lifecycle、历史版本选择和 matcher 不是 mock；EX/DP/EV persistence/evaluation 已实现，当前缺口是权威事实来源同步和 governed rollout |
 | External disposition canonical ingress | authenticated application boundary | Gateway route、SQL repository、transactional service、RBAC 和 exact-retry/conflict 语义是真实实现；mock/data-gated 的是 Zeus/ITSM/SOAR source feed、签名和凭证 |
+| PingAn historical software-path catalog | deterministic local compiler + read-only MCP/action | 真实编译旧 XLSX 并精确查询版本化 SQLite；不是 mock，也不是权威 allowlist。输出固定为 investigation-only、decision impact none；源数据缺少人工 reviewer/scope/validity，因此不能用于自动判良、跳过 Runtime 或关闭告警 |
 | Alpha acceptance orchestrator | real local/test acceptance code | `scripts/soc-alpha-acceptance.sh` 调真实 CLI/service/SQL/Kafka/browser test 并生成版本化报告；其中 analyzer/provider/browser transport/基础设施性质由报告逐项披露，不因总状态 passed 而变成 production real |
 
 ### 2.2 Runtime heuristic / LLM replacement audit
@@ -63,7 +65,7 @@
 
 ## 3. PA-12 的真实完成标准
 
-`PA-12` 不等于“mock adapter 都写完”。只有满足下面条件，才能从 `Waiting` 改成 `Done`：
+`PA-12` 不等于“mock adapter 都写完”。只有满足下面条件，才能从 `In Progress` 改成 `Done`：
 
 1. 拿到真实 dev/staging endpoint、MCP server 或 API adapter 配置，不把 secret 写入仓库。
 2. 每个真实 provider 都通过 `SocActionAdapterRegistry` 或 MCP-backed adapter 显式注册，不能让 Lead Agent 自由调用任意 MCP tool。
@@ -135,4 +137,4 @@ Aggregate `passed` 只表示上述边界内的本地 Alpha 门禁全部成立。
 
 ## 7. 当前下一步
 
-当前交付顺序只以 `.notes/ai_soc/delivery-roadmap.md` 和 `.notes/ai_soc/progress.md` 为准；本台账不再维护平行的 next-step 列表。`PA-12` 真实 provider 与 external source feed 继续保持 data-gated，在 endpoint/凭证/允许测试数据到位前不得用更多 mock 或 LLM 伪造事实冒充接入。
+当前交付顺序只以 `.notes/ai_soc/delivery-roadmap.md` 和 `.notes/ai_soc/progress.md` 为准；本台账不再维护平行的 next-step 列表。`PA-12` 的外网代码准备已完成，真实 provider 仍由内网 `run_workflow` 依赖、网络和 approved cases gated；external source feed 也仍 data-gated。不得用更多 mock 或 LLM 伪造事实冒充接入。

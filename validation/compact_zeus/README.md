@@ -17,6 +17,7 @@ validation/compact_zeus/
 ├── audits/          # Topic/Adapter 全量字段流向审计
 ├── reviews/         # 人工审阅样本构建
 ├── shared/          # 受限 PKL loader 与编码压缩复用工具
+├── internal_batch/  # 内网 5 -> 50 -> all、可续跑的生产 Runtime 批跑入口
 ├── docs/            # 长期设计与审阅说明
 ├── data/            # gitignored 可再生产物
 │   ├── corpus/      # 统一 212 条语料及 manifest
@@ -124,7 +125,21 @@ SHA-256 前缀，侧车记录 path 与完整 SHA-256。二者不能通过 eviden
 - EDR、SIEM、Threat Intel 已检查但当前样本无满足阈值的长编码片段；
 - raw payload hash 变化数为 0。
 
-## 3. 测试
+## 3. 内网 Runtime 批跑
+
+`internal_batch/run_pingan_runtime_batch.py` 使用同一个生产
+`SocAnalysisService` 重放 PKL，不复制 Runtime 组装逻辑。它通过受限 unpickler 加载
+`alert_full_data.alert_data`，默认单 worker、非持久化；真实模型必须显式
+`--confirm-live`。输出逐条原子写入 Git-ignored、权限受限的
+`backend/.deer-flow/soc-internal-validation/runtime-batches/`，支持指纹校验后的
+`--resume`。
+
+内网运行按 `5 -> 50 -> all` 扩大，完整命令、SQLite 持久化边界和产物解释见
+[`internal_batch/README.md`](internal_batch/README.md)。该入口只跑固定 Runtime，不自动
+调用 `asset.locate` 或 `endpoint.software_path.lookup`；这些 enrichment 继续由
+Lead Agent/Action Dispatcher 治理。
+
+## 4. 测试
 
 ```bash
 backend/.venv/bin/python -m pytest -q \
@@ -135,7 +150,7 @@ backend/.venv/bin/python -m pytest -q \
 
 Notebook 只作为探索记录；可复跑规则以 Python 构建器、测试和 manifest 为准。
 
-## 4. Checkpoint D-0：原始输入盘点
+## 5. Checkpoint D-0：原始输入盘点
 
 进入全量 Runtime 回放前，先独立运行 D-0：
 
@@ -219,7 +234,7 @@ backend/.venv/bin/python \
 完整原文只保留在 immutable raw payload；coverage 将其计入 `llm_compacted_encoded_paths`，不得
 误记为 sanitized。D-4 不运行 skill resolution、Prompt、LLM、grounding、decision 或 persistence。
 
-## 5. PingAn Adapter 覆盖审阅
+## 6. PingAn Adapter 覆盖审阅
 
 在修改 PingAn Adapter 前，先审阅
 [`docs/pingan_adapter_rebuild_review.md`](docs/pingan_adapter_rebuild_review.md)。它记录

@@ -1,0 +1,64 @@
+config_version: 31
+log_level: info
+
+# This profile keeps the public DeerFlow model name stable while routing the
+# provider model ID through the internal OpenAI-compatible LiteLLM gateway.
+models:
+  - name: deepseek-v4-flash
+    display_name: PingAn DeepSeek V4 Flash
+    use: deerflow.models.patched_deepseek:PatchedChatDeepSeek
+    model: $PINGAN_LITELLM_MODEL
+    api_base: $PINGAN_LITELLM_BASE_URL
+    api_key: $PINGAN_LITELLM_API_KEY
+    request_timeout: 600.0
+    max_retries: 1
+    supports_thinking: false
+
+tool_groups:
+  - name: file:read
+  - name: file:write
+  - name: bash
+
+tools:
+  - name: ls
+    group: file:read
+    use: deerflow.sandbox.tools:ls_tool
+  - name: read_file
+    group: file:read
+    use: deerflow.sandbox.tools:read_file_tool
+  - name: glob
+    group: file:read
+    use: deerflow.sandbox.tools:glob_tool
+    max_results: 200
+  - name: grep
+    group: file:read
+    use: deerflow.sandbox.tools:grep_tool
+    max_results: 100
+  - name: write_file
+    group: file:write
+    use: deerflow.sandbox.tools:write_file_tool
+  - name: str_replace
+    group: file:write
+    use: deerflow.sandbox.tools:str_replace_tool
+  - name: bash
+    group: bash
+    use: deerflow.sandbox.tools:bash_tool
+
+tool_search:
+  enabled: false
+
+sandbox:
+  use: deerflow.sandbox.local:LocalSandboxProvider
+  allow_host_bash: true
+  bash_command_timeout: 600
+
+skills:
+  container_path: /mnt/skills
+
+database:
+  backend: sqlite
+  sqlite_dir: .deer-flow/data
+
+run_events:
+  backend: memory
+  track_token_usage: true

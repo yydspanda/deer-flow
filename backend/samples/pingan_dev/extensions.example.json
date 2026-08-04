@@ -26,6 +26,16 @@
         "SOC_PINGAN_WORKFLOW_DATACENTER_ID": "1087787",
         "SOC_PINGAN_WORKFLOW_USER_ID": "1092332"
       }
+    },
+    "pingan_software_path": {
+      "enabled": true,
+      "type": "stdio",
+      "command": "$SOC_PINGAN_SOFTWARE_PATH_MCP_PYTHON",
+      "args": ["$SOC_PINGAN_SOFTWARE_PATH_MCP_SERVER"],
+      "env": {
+        "SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH": "$SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH",
+        "SOC_PINGAN_SOFTWARE_PATH_FRESHNESS_DAYS": "$SOC_PINGAN_SOFTWARE_PATH_FRESHNESS_DAYS"
+      }
     }
   },
   "skills": {}

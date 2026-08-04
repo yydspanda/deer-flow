@@ -109,7 +109,7 @@ field experience
 | 优先级 | 能力 | 类型 | 当前状态 | 下一步 |
 |---|---|---|---|---|
 | P0 | ZEUS/天眼 raw message first | normalizer / field trust | 已有方案和代码基础 | 后续继续补真实样本 drift case |
-| P0 | 资产提取与归属定位 | skill + read-only MCP adapter | `soc-asset-extraction` + `asset.locate` mock 已落地 | 用真实字段/样例补 capability card |
+| P0 | 资产提取与归属定位 | skill + read-only MCP adapter | `soc-asset-extraction` + D12-A fake 已落地；D12-B DEV profile/preflight ready | 内网跑真实 `mocked=false` case matrix 和 evidence 回读 |
 | P0 | APT 攻击方向重建 | skill + domain handler | skill 有基础，domain handler 未落地 | 收集方向判断规则、raw message 示例、反例 |
 | P0 | EDR 进程树研判 | alert-native evidence + skill + domain handler | PingAn EDR/HIDS normalizer 已保留原生进程/命令字段 | 用真实告警继续校验 bounded evidence 覆盖和 finding 模板 |
 | P1 | HIDS 主机事件研判 | skill + domain handler | 未落地 | 收集 HIDS 事件类型、关键字段、误报规则 |
@@ -154,7 +154,7 @@ field experience
 | `PA-09` | Done | 接 memory candidate 入口 | 已新增 `SocMemoryCandidate` contract、`MemoryCandidateRepository`、in-memory repository 和 `SocMemoryService.propose_candidate()` | 只写 `pending_review`；含 source/evidence/validity/idempotency/facets/review 信息；不自动 confirmed |
 | `PA-10` | Done | 接 domain triage MVP | 已新增 APT / EDR / HIDS domain handlers，读取 capability card refs、skill context、evidence refs 并输出 domain findings | 子研判只输出 finding/evidence/recommendation，不直接写 DB 或执行动作 |
 | `PA-11` | Done | 接 Main Orchestrator demo | 已新增 `SocMainOrchestratorService`、`UnifiedInvestigationReport`、`soc eval pingan-main` | APT/EDR/HIDS demo 能看到 analyze -> skill -> read-only evidence -> domain finding -> review context；仍不写 DB、不执行高风险动作 |
-| `PA-12` | Waiting | 真实 PingAn MCP/API 替换 mock | 等 dev/staging endpoint/凭证后替换 mock adapter provider | 保存 smoke report；评估 latency、失败率、敏感字段裁剪、payload size；不能用本地 mock 假装完成 |
+| `PA-12` | In Progress / internal smoke | 真实 PingAn MCP/API 替换 mock | DEV profile、portable ZEUS signer、preflight 和 direct smoke entry 已完成；等待内网 `run_workflow` import、网络和 approved cases | 保存 direct/MCP/persisted evidence smoke；评估 latency、失败率、敏感字段裁剪、payload size；至少一个结果 `mocked=false`，不能用本地 mock 假装完成 |
 
 ### 5.4 P0 Capability Cards
 
@@ -275,8 +275,8 @@ Slice 0: PingAn SOC capability onboarding
 当前建议执行顺序：
 
 1. 已完成 `SocCorrelationService` MVP、`PA-01..PA-11` PingAn 可见链路。
-2. `PA-12` 只在真实 dev/staging PingAn MCP/API 参数可用时推进：替换 provider、跑 smoke/eval、保存报告，并评估延迟、失败率、字段裁剪和敏感信息风险。
-3. 在真实接口未就绪前，下一刀应转向外部处置反馈、typed memory tracking 或 Web/TUI 可见化，而不是继续堆更多 mock。
+2. `PA-12` 当前继续推进：在内网加载本地 profile 和 Agent Platform 包，通过 preflight 后跑 direct/MCP/persistence smoke，并评估延迟、失败率、字段裁剪和敏感信息风险。
+3. 在内网真实 smoke 完成前，不切换到新的 mock 或 PI-04-B；阻塞项明确记录为 internal dependency/network/test-case gate。
 4. 做 Memory Tracking Contract 时，用这些 card 固定 memory type、topics、canonical detection、vendor aliases、scenario facets 和 evidence refs。
 5. 做 Web/TUI 可见化时，用 `UnifiedInvestigationReport` 展示 route、skill、evidence、domain finding 和 review context。
 

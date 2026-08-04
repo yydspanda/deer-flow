@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-04-A` 已完成） |
-| 当前目标 | `PI-01/D12-B` 内网 DEV 信息收集、配置预检和真实资产 Provider smoke；随后接真实 ZEUS TI、安全标签和可用的外部状态反馈 |
+| 当前目标 | `PI-01/D12-B` 内网 DEV 配置预检和真实资产 Provider smoke；随后接真实 ZEUS TI、安全标签和可用的外部状态反馈 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 PingAn 内网 DEV 统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | 按 `integrations/pingan-dev-information-collection.md` 获取脱敏 root_config/环境选择契约，补 DEV-only preflight，再进入 D12-B 内网 `mocked=false` smoke；Kafka/K8s/PostgreSQL/PI-04-B 当前不插队。 |
+| 当前下一刀 | 在内网使 `model.agent_platform.util_tools:run_workflow` 可导入，启动本地模型 gateway，执行 preflight、direct Provider 和 MCP `mocked=false` case matrix；Kafka/K8s/PostgreSQL/PI-04-B 当前不插队。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -40,7 +40,39 @@
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
-| `PI` | Real Data & Production Integration | **Current / PI-01 D12-B DEV Intake** | PI-04-A 已完成；当前收集内网 DEV 契约并接第一个真实只读 Provider；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+| `PI` | Real Data & Production Integration | **Current / PI-01 D12-B Internal Smoke** | PI-04-A 已完成；DEV profile/signer/preflight 已就绪，当前等待内网 Agent Platform import 和真实 case matrix；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+
+## 2026-08-04 — Internal PKL batch and split transfer bundle prepared
+
+- 新增共享 `soc_agent.application.build_soc_analysis_service` composition root；CLI 与内网批跑不再各自组装一套 Runtime。
+- 新增受限 DataFrame PKL loader 驱动的 resumable batch：按 source/payload/model/evidence/persistence 指纹续跑，live 必须 `--confirm-live`，默认单 worker、非持久化，逐条完整结果和紧凑 JSONL 均写 Git-ignored `0700/0600` 目录。
+- 当前 210 行源 PKL 的 plan-only 验证得到 210 个有效输入、0 个 wrapper error；2 行 stub smoke 和 resume 已验证，不调用模型/MCP、不允许 automation。内网按 `5 -> 50 -> all` 跑 5000+ 数据，技术完成不冒充 PI-03 准确率验收。
+- 新增 `build_pingan_internal_transfer.py`：把当前含未提交改动的源码与凭证/PKL/XLSX/compiled SQLite 分成两个 archive；各自携带独立 manifest，支持 SHA-256/member/path 安全检查，私有包及内容强制 `0600`。
+- XLSX 已作为私有 overlay 输入并同时提供已编译目录，内网可直接查询或从源 workbook 重建；它仍是 investigation-only candidate knowledge，不是 allowlist。
+- 修正 live `--plan-only` 误要求执行确认的问题；实际计划显示当前 PKL 210 行、选中 5 行即精确预估 5 次模型调用。批跑 resume 保留原 batch ID/start time 并记录 `resumed_at`。最终 SOC/architecture 回归 `663 passed`，transfer/batch 回归 `12 passed`，changed-file Ruff 与 `git diff --check` 通过。
+
+## 2026-08-04 — PingAn historical EDR software-path catalog implemented
+
+- 将旧 `Deepseek_Qwen_32B_EDR_Analysis_Ignored_Paths_Sup (1).xlsx` 从“后续候选”落实为 PingAn integration 内的离线编译目录；没有把 Excel 或租户规则放进 generic Runtime。
+- 新增 `software_path_catalog.py`：编译 source SHA、行级 lineage、历史 disposition、出现次数/时间、规则码、进程名和可关联 MD5 到 Git-ignored SQLite。首次真实构建覆盖 3,654 行，得到 1,329 个路径条目和 7,656 个去重 observation；60 行原始日志 JSON 异常被显式计数，未阻止路径目录构建。
+- 查询只做 Windows 路径大小写/分隔符规范化后的 exact match，并可选校验 MD5；拒绝迁移旧实现的 basename、版本通配、前缀和删除目录段模糊匹配。
+- 历史处置与位置治理分离：命中历史“忽略”只表示 candidate context；`D:`、用户可写和临时目录仍为 high attention，C 盘系统路径仍需防范 LOLBin。
+- 新增 `endpoint.software_path.lookup` read-only action、stdio MCP 和 PingAn DEV 组合 extensions profile。结果经 Action Dispatcher 写 `InvestigationEvidence`，固定 `decision_impact=none`、`automation_eligible=false`，不能跳过 Runtime、改 verdict、关单、授权动作或写 confirmed memory。
+- 生成的 catalog/build report 与私有 XLSX 均被 Git 忽略；compiler 原子替换目录并设置文件权限 `0600`。
+- 聚焦单元测试覆盖真实编译语义、D/C 盘分类、hash mismatch/staleness、no-fuzzy、MCP 输出和 InvestigationEvidence 持久化。真实 catalog 重建后，`soc mcp tools` 发现 `pingan_software_path_software_path_lookup`，`soc mcp smoke` 经 MCP-backed Action Adapter 成功返回 `D:\\ps\\psexec.exe` 的 high-attention candidate context；扩展 action/service/Lead Agent/architecture 回归 `139 passed`，changed-file Ruff 和 `git diff --check` 通过；`codegraph sync .` 新增 2 个文件、41 个节点。
+- 当前交付指针不变：继续 `PI-01/D12-B` 内网真实 `asset.locate` smoke；路径目录不是 D12-B 外部 Provider 完成证据。
+
+## 2026-08-03 — D12-B portable DEV profile, signer, preflight and direct smoke prepared
+
+- 已审阅 `validation/original_works/raw_program/sec-model`：确认 LOCAL profile 的 OpenAI-compatible loopback endpoint 和 `DeepSeek_V4_Flash` provider alias；DeerFlow 仍使用稳定 profile 名 `deepseek-v4-flash`。
+- 新增 `backend/samples/pingan_dev/`，并在 Git-ignored `config.pingan-dev.local` / `.env.soc-dev.local` 中准备实际 DEV 配置。真实值可直接留在本地配置，不进入 commit。
+- 旧 `util.util_tools:isec_sign` 因 import-time 依赖旧 `service`/pandas/OpenAI 等模块不可移植；新增 `integrations/pingan/zeus_signing.py`，保持签名 material/header wire contract、移除默认 App Key，并以固定 timestamp/nonce 测试锁定兼容性。
+- 新增 D12-B no-network preflight 与 direct-provider smoke 脚本；报告不输出 secret/raw query，区分 hit/not-found/ambiguous/auth/timeout/unavailable/invalid response，并在每个 sanitized provider attempt 记录耗时。外网 preflight 当前只被内部 Agent Platform `run_workflow` 依赖阻塞，这是预期 data gate。
+- 修复资产 fallback：外部调用失败不再被当成正常查无继续降级；只有明确 `not_found` 才进入下一层，失败携带 sanitized attempts 并 fail closed。
+- 审阅 ZEUS 0..10 状态流转：旧“status != 待审阅就跳过 AI”不迁移；后续由 PingAn source adapter 转 `SocExternalDispositionIngressCommand`，generic Runtime 不识别 ZEUS status。
+- 审阅 3,654 行 EDR safe-path XLSX：它是历史模型输出候选，不是权威白名单；后续只做版本化 PingAn tenant knowledge/InvestigationEvidence，不允许 match 即忽略。详见 `integrations/pingan-legacy-source-audit.md`。
+- 验证：changed-file Ruff 通过；PingAn provider/preflight/signer + SOC architecture 聚焦回归 `35 passed`；真实 local model profile 正确解析为 `PatchedChatDeepSeek` + loopback `DeepSeek_V4_Flash` + SQLite；外网 preflight 只报告内部 workflow runner 缺失，direct smoke 返回 `preflight_failed` 且 `external_attempt_count=0`，证明未越过预检发请求；两个 local config 权限设为 `0600`；`codegraph sync .` 纳入 2 个新增代码文件、41 个节点。
+- 下一步：复制/重建 ignored local config 到内网，提供 Agent Platform import root，启动旧模型 gateway，通过 preflight 后执行 D12-B direct + MCP case matrix。
 
 ## 2026-08-03 — PI-01 D12-B resumed; unconfirmed context lookup mocks removed
 
@@ -330,7 +362,7 @@
 
 | 顺序 | 待办 | 状态 | 做什么 | 验收标准 |
 |---|---|---|---|---|
-| 0 | PingAn knowledge decomposition | Partial / credential-gated | 已完成 `PA-01..PA-11`；`PA-12` 等真实 PingAn MCP/API endpoint/凭证 | 通用 skill 不含平安内部知识；每条平安经验都有 target artifact、tenant scope、来源和验收方式；PA-12 不能用 mock 冒充完成 |
+| 0 | PingAn knowledge decomposition | Partial / internal-smoke-gated | 已完成 `PA-01..PA-11`；`PA-12` 的 DEV profile/signer/preflight 已就绪，等待内网真实 smoke | 通用 skill 不含平安内部知识；每条平安经验都有 target artifact、tenant scope、来源和验收方式；PA-12 不能用 mock 冒充完成 |
 | 0.1 | `PA-01` PingAn capability card register | Done | 已新增 `.notes/ai_soc/capabilities/pingan/capability-cards.md`，从 APT/EDR/HIDS 三份源文档抽出 P0/P1/P2 cards | P0 card 已明确 source、场景、输入、输出、落点、风险等级、失败模式和验收要求；mock MCP 必须等 card 明确后再做 |
 | 0.2 | `PA-02` APT source decomposition | Done | 已扩展 `PA-APT-001..005`：攻击方向、场景化研判、威胁情报、security tag、IP 封堵高风险边界；拆出 skill/domain handler/eval/memory/action 边界 | APT 通用方法进 public skill/domain handler；平安字段、URI 例外、内部环境、策略和阈值只进 tenant artifact |
 | 0.3 | `PA-03` EDR source decomposition | Done | 已扩展 EDR cards：进程树、路径/命令行、LoginData/System、提权、UM/账号、终端处置候选 | 通用 endpoint 方法进 skill/domain handler；平安路径、账号、部门、BU 和封禁/隔离策略只进 tenant artifact 或 approval-gated action |
@@ -342,9 +374,9 @@
 | 0.9 | `PA-09` PingAn memory candidate entry | Done | 已新增 `SocMemoryCandidate` contracts、`MemoryCandidateRepository` protocol、in-memory repository 和 `SocMemoryService.propose_candidate()` | 候选默认 `pending_review`，携带 source/evidence/validity/idempotency/facets/review 信息；不自动 confirmed，不影响 runtime decision |
 | 0.10 | `PA-10` PingAn domain triage MVP | Done | 已新增 `SocDomainTriageRequest/Result/Finding` contract、`SocDomainTriageService`、APT/EDR/HIDS deterministic handlers 和 `soc eval pingan-domain` | 子研判只输出 finding/evidence/recommendation；消费 skill context 和 read-only evidence refs；不写 DB、不执行 action、不改 verdict |
 | 0.11 | `PA-11` PingAn main orchestrator demo | Done | `SocMainOrchestratorService`、`UnifiedInvestigationReport`、`soc eval pingan-main` 已覆盖 APT/EDR/HIDS analyze -> correlation -> read-only evidence -> domain finding -> review summary | 每条当前告警命中 seeded historical run，并只复用该 historical `run_id` 的 evidence；不写 DB、不执行高风险动作 |
-| 0.12 | `PA-12` real PingAn MCP/API replacement | Waiting | 等真实 PingAn dev/staging MCP/API endpoint/凭证后替换 mock provider，保存 smoke/eval report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险；不能用本地 mock 假装完成 |
+| 0.12 | `PA-12` real PingAn MCP/API replacement | In Progress / internal smoke | DEV profile、portable signer、preflight/direct smoke entry 已完成；内网补 Agent Platform import、approved cases 和 `mocked=false` 证据 | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险；不能用本地 mock 假装完成 |
 | 0.13 | `D12-A` PingAn asset provider implementation | Done / fake-only | 已建立可移植 `asset.locate` provider、ZEUS HTTP/signing port、workflow port、stdio MCP server、显式 config 与 fake smoke | fake 输出始终 `mocked=true`；internal 缺配置 fail closed；该状态不标记 PA-12/PI-01 real provider Done |
-| 0.14 | `D12-B` PingAn asset provider internal smoke | In Progress / intake | 按内网收集说明准备脱敏 root config/环境选择契约和 internal-only test cases，再执行真实 smoke | 成功、查无、鉴权失败、超时和 InvestigationEvidence 全部留证；真实响应为 `mocked=false`；完成前 D12/PA-12 保持未完成 |
+| 0.14 | `D12-B` PingAn asset provider internal smoke | In Progress / preflight-ready | root config/模型/签名已审计，本地 profile、preflight 和 direct smoke 已实现；下一步在内网加载 `run_workflow` 并执行真实 case matrix | 成功、查无、鉴权失败、超时和 InvestigationEvidence 全部留证；真实响应为 `mocked=false`；完成前 D12/PA-12 保持未完成 |
 | 1 | Correlation Service MVP | Done | `SocCorrelationService` 基于 summary/evidence 输出相似告警、匹配原因和可复用证据；typed result 已进入 main report/domain/review summary | 不调用 LLM、不依赖真实 MCP、不改 decision；demo 当前告警可看到历史 run + reusable evidence |
 | 1.1 | Correlation -> Unified Investigation bridge | Done | 共享 summary repository、统一 deterministic scorer、`SocDomainTriageRequest.correlation_result`、`UnifiedInvestigationReport.correlation_result` 和 review counts 已接通 | metadata count 不是证据源；historical evidence 只按 matched `run_id` 加载；移除两个无效 mock 后 APT/EDR/HIDS eval 为 3 matches / 4 evidence / 0 failure |
 | 1.2 | Correlation quality baseline | Done | 已建 vendor-neutral same-incident / related-but-distinct / unrelated corpus；`soc eval correlation` 输出双任务指标、reason 分布、fan-out、evidence lineage/unrelated exposure，并支持 `--baseline-json` replay diff | scorer/report/fixture 版本显式；当前 8-pair baseline 暴露 retrieval/dedup precision 均约 0.667；`shadow_dedup_allowed=false` |

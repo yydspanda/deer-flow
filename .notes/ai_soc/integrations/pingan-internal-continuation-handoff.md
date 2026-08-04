@@ -1,13 +1,13 @@
 # PingAn SOC Internal Continuation Handoff / 平安内网续作交接单
 
 > Type: temporary transfer artifact / 临时复制交接文件
-> Reconciled: 2026-08-03
+> Reconciled: 2026-08-04
 > Current pointer: `PI-01 / D12-B Internal Real Asset Provider`
-> Next action: DEV profile/preflight, then direct ZEUS and `asset.locate` real smoke
+> Next action: source local DEV profile, pass preflight, then run direct ZEUS and `asset.locate` real smoke
 
 本文件只保留**尚未完成**的工作，便于复制到内网 Mac 后继续开发和验证。它不是新的权威路线；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
-任何真实 URL、App Key、Token、账号密码、企业 CA、IP、UM、未脱敏告警和完整响应都只能留在内网，不得写入 Git 或复制回外网。
+真实 URL、App Key、Token、账号密码、企业 CA、IP、UM、未脱敏告警和完整响应可以写入已确认 Git-ignored 的 `*.local` / `.deer-flow/` 文件供本地运行，但不得进入 commit。当前外网工作区已经准备了可运行的本地配置；通过 Git 迁移时，需在内网从 sample 重建或另行复制这些 ignored 文件。
 
 ## 1. Baseline / 已完成与已删除边界
 
@@ -15,6 +15,8 @@
 
 - `D0-D11.1`：通用 SOC Runtime、LLM、Grounding、Decision Policy 和 212 条 corpus 稳定性验证。
 - `D12-A`：PingAn `asset.locate` 生产形态代码、fake transport、stdio MCP、fallback 编排和 fail-closed；结果仍为 `mocked=true`。
+- `D12-B 外网准备`：内网模型 profile、无旧依赖 ZEUS signer、DEV-only preflight 和 direct-provider smoke 脚本已实现；尚未产生内网 `mocked=false` 证据。
+- `PingAn EDR 路径目录`：旧 XLSX 已编译为版本化、精确匹配、只读的本地 SQLite 目录；可经 MCP/action 写入调查证据，但不是 allowlist，不能改变 verdict。
 - `PI-04-A`：`soc.operations_snapshot.v1`、CLI/API 和精确持久化计数。
 
 以下能力已经明确删除，后续不得恢复旧 Mock，也不属于待完成项：
@@ -23,6 +25,43 @@
 - `host.event_context.lookup`
 
 进程树、父子进程、命令行、登录账号和主机事件继续从告警自身的 PingAn normalizer、canonical facts 和 bounded native evidence 获取，不依赖外部查询 Provider。
+
+### 1.1 Transfer bundle / 内网迁移包
+
+外网仓库根目录执行：
+
+```bash
+python3 scripts/build_pingan_internal_transfer.py --include-private-overlay
+```
+
+脚本会在 Git-ignored 的 `backend/.deer-flow/internal-transfer/` 中生成三类文件：
+
+- `deer-flow-pingan-source-*.tar.gz`：当前 tracked + non-ignored untracked 源码，包含未提交的新代码；明确排除凭证、PKL、XLSX、SQLite、Git 元数据、虚拟环境和生成物。
+- `deer-flow-pingan-private-overlay-*.tar.gz`：仅包含 `.env.soc-dev.local`、`config.pingan-dev.local`、当前 PKL、历史 EDR XLSX 及其已编译路径目录；只能走获批的内部传输通道。
+- `transfer-report-*.json`：两个包的 SHA-256、大小、文件数、Git commit/branch/dirty 状态；不含 secret 内容。
+
+复制前分别验包：
+
+```bash
+python3 scripts/build_pingan_internal_transfer.py --inspect \
+  backend/.deer-flow/internal-transfer/deer-flow-pingan-source-<timestamp>.tar.gz
+python3 scripts/build_pingan_internal_transfer.py --inspect \
+  backend/.deer-flow/internal-transfer/deer-flow-pingan-private-overlay-<timestamp>.tar.gz
+```
+
+内网 Mac 叠加解压并安装：
+
+```bash
+mkdir -p ~/work/soc-transfer
+tar -xzf /approved/path/deer-flow-pingan-source-<timestamp>.tar.gz -C ~/work/soc-transfer
+tar -xzf /approved/path/deer-flow-pingan-private-overlay-<timestamp>.tar.gz -C ~/work/soc-transfer
+cd ~/work/soc-transfer/deer-flow-pingan-internal
+cd backend && uv sync --locked --extra pingan-dev && cd ..
+git check-ignore -v .env.soc-dev.local config.pingan-dev.local \
+  datas/source/full_alert_2026_month_forth_sample_200.pkl
+```
+
+两个 archive 在外网均为 `0600`；私有覆盖包内的文件也强制为 `0600`。源码包和私有包保留独立 manifest/README，叠加解压不会相互覆盖。先核对 `transfer-report` 中的 SHA-256，再删除或隔离中转副本。
 
 ## 2. Remaining Execution Order / 剩余执行顺序
 
@@ -71,7 +110,8 @@ SOC Runtime asset candidate
 
 | Contract | Current value |
 |---|---|
-| Signer import | `util.util_tools:isec_sign` |
+| Legacy signer source | `util.util_tools:isec_sign` |
+| Portable signer import | `soc_agent.integrations.pingan.zeus_signing:isec_sign` |
 | Signer call | `isec_sign(data=..., app_id=..., app_key=...)` |
 | Workflow runner | `model.agent_platform.util_tools:run_workflow` |
 | Asset endpoint | `POST /public/searchAssetInfo` |
@@ -85,18 +125,24 @@ SOC Runtime asset candidate
 现有实现位置：
 
 - `backend/soc_agent/integrations/pingan/asset_location.py`
+- `backend/soc_agent/integrations/pingan/zeus_signing.py`
+- `backend/soc_agent/integrations/pingan/dev_validation.py`
 - `backend/soc_agent/integrations/pingan/asset_mcp_server.py`
 - `backend/scripts/soc_pingan_asset_mcp_server.py`
+- `backend/scripts/soc_pingan_dev_preflight.py`
+- `backend/scripts/soc_pingan_asset_direct_smoke.py`
+- `backend/samples/pingan_dev/`
 - `backend/samples/mcp/pingan_asset/`
 
 ### 3.3 Inputs to prepare inside DEV / 内网准备项
 
-- [ ] 脱敏审阅 `root_config` 和直接依赖的环境加载代码，确认如何选择 `dev/stg/prd`。
-- [ ] 确认 DEV 不会缺省连接 PRD；SOC preflight 必须拒绝未知环境和隐式 PRD。
-- [ ] 确认当前虚拟环境可 import `util.util_tools`、`util.root_config`、`model.agent_platform.util_tools`。
+- [x] 已审阅 `root_config` 和 LOCAL/DEV 环境选择；本地模型 gateway 为 OpenAI-compatible loopback endpoint。
+- [x] preflight 强制 `SOC_PINGAN_ENV=dev`、`env_profile=LOCAL` 和显式 ZEUS host allowlist，不允许隐式 PRD。
+- [x] ZEUS signer 已在本项目内实现，不需要 import 整个旧 `util.util_tools`。
+- [ ] 确认当前虚拟环境可 import `model.agent_platform.util_tools:run_workflow`。
 - [ ] 若不能直接 import，在本地配置 `SOC_PINGAN_PROVIDER_IMPORT_PATHS`，不把真实绝对路径提交 Git。
-- [ ] 确认 `run_workflow` 是同步、异步还是可能返回 awaitable。
-- [ ] 在本地 secret 文件中配置 DEV ZEUS base URL、App ID、App Key 和 workflow operator。
+- [x] 旧源代码以同步函数调用 `run_workflow(app_id, workflow_id, query_data)`，兼容 `dict` / JSON string / `None`；内网 smoke 核对安装版本未漂移。
+- [x] 外网工作区的 Git-ignored `.env.soc-dev.local` 已填入旧源码中的 DEV ZEUS base URL、App ID、App Key 和 workflow operator；复制到内网后核对是否仍有效。
 - [ ] 确认企业 CA、代理、客户端证书、来源 IP 白名单和 `companyCode: all` 要求。
 - [ ] 准备已知命中、确定查无、UM fallback、ambiguous、鉴权失败和 timeout 测试值。
 - [ ] 核对 workflow ID、旧 ownership override 和错误码是否仍有效。
@@ -111,10 +157,10 @@ backend/.deer-flow/soc-internal-validation/d12b/reports/
 
 ### 3.4 Pending code slice / 尚需实现的代码
 
-- [ ] 增加 DEV-only environment profile/preflight：显式检查环境、imports、必需配置和 fake/internal 互斥，不输出 secret。
-- [ ] preflight 必须在请求发出前阻止未知环境、隐式 PRD、fake transport 混入 internal mode。
-- [ ] 增加薄的 internal direct-provider smoke 脚本或等价测试入口，直接调用当前 PingAn Provider，并按 case 输出结构化报告；该入口当前尚不存在，不能把下面的 MCP smoke 当成全部 D12-B 验收。
-- [ ] 报告区分 `found`、`not_found`、`ambiguous`、`authentication_failed`、`timeout`、`provider_unavailable` 和 `invalid_response`。
+- [x] DEV-only environment profile/preflight 已实现：显式检查环境、imports、必需配置和 fake/internal 互斥，不输出 secret。
+- [x] preflight 在请求发出前阻止未知环境、隐式 PRD、fake transport、未 allowlist ZEUS host 和非 loopback model endpoint。
+- [x] direct-provider smoke 脚本已实现，不能用 MCP smoke 替代这层验收。
+- [x] 报告区分 `found`、`not_found`、`ambiguous`、`authentication_failed`、`timeout`、`provider_unavailable`、`invalid_response`、`preflight_failed` 和 `invalid_configuration`。
 - [ ] 保留原始响应仅用于内网审计；投影结果使用当前类型化 contract，不把完整内部响应传给 LLM。
 
 ### 3.5 Direct provider and fallback verification / 直接接口与降级链
@@ -129,28 +175,42 @@ backend/.deer-flow/soc-internal-validation/d12b/reports/
 
 ### 3.6 Existing MCP commands / 已存在、可直接执行的 MCP 命令
 
-先从 `backend/` 执行数据库初始化：
+从仓库根目录加载本地 profile。真实值可以直接保存在这两个 ignored 文件：
 
 ```bash
-unset SOC_DATABASE_URL
-# config.yaml -> database.backend: sqlite automatically resolves to
-# backend/.deer-flow/data/soc_agent_dev.db; migration creates missing parent dirs.
-./.venv/bin/python -m soc_agent.cli db upgrade
+cp backend/samples/pingan_dev/config.example.yaml config.pingan-dev.local  # only when absent
+cp backend/samples/pingan_dev/env.example .env.soc-dev.local              # only when absent
+git check-ignore -v config.pingan-dev.local .env.soc-dev.local
+# Fill/verify real DEV values, then:
+source ./.env.soc-dev.local
+export D12B_REPORT_DIR="$PWD/backend/.deer-flow/soc-internal-validation/d12b/reports"
+export D12B_ASSET_KEY="<approved-internal-test-value>"
+mkdir -p "$D12B_REPORT_DIR"
 ```
 
-然后配置内网本地环境。真实值不要写进本文：
+运行无网络预检和一个 approved direct case：
 
 ```bash
-export SOC_PINGAN_ASSET_MCP_PYTHON="$PWD/.venv/bin/python"
-export SOC_PINGAN_ASSET_MCP_SERVER="$PWD/scripts/soc_pingan_asset_mcp_server.py"
-export SOC_PINGAN_PROVIDER_IMPORT_PATHS="<internal-import-root>"
-export SOC_PINGAN_ZEUS_BASE_URL="<dev-only>"
-export SOC_PINGAN_ZEUS_APP_ID="<dev-only>"
-export SOC_PINGAN_ZEUS_APP_KEY="<dev-only>"
-export SOC_PINGAN_WORKFLOW_OPERATOR="<dev-service-identity-or-um>"
-export DEER_FLOW_EXTENSIONS_CONFIG_PATH="$PWD/samples/mcp/pingan_asset/extensions.internal.example.json"
-export D12B_REPORT_DIR="$PWD/.deer-flow/soc-internal-validation/d12b/reports"
-mkdir -p "$D12B_REPORT_DIR"
+backend/.venv/bin/python backend/scripts/soc_pingan_dev_preflight.py \
+  --report-path "$D12B_REPORT_DIR/preflight.json"
+
+backend/.venv/bin/python backend/scripts/soc_pingan_asset_direct_smoke.py \
+  --query "$D12B_ASSET_KEY" \
+  --asset-type IP \
+  --role victim \
+  --report-path "$D12B_REPORT_DIR/direct-success.json"
+```
+
+Preflight 当前在外网应只因内部 `run_workflow` 包不存在而失败；内网必须先修正这个 import，不能跳过 preflight 强行请求。
+
+然后进入 `backend/` 初始化独立 SQLite 并执行 MCP：
+
+```bash
+cd backend
+unset SOC_DATABASE_URL
+# DEER_FLOW_CONFIG_PATH -> database.backend: sqlite automatically resolves to
+# backend/.deer-flow/data/soc_agent_dev.db; migration creates missing parent dirs.
+./.venv/bin/python -m soc_agent.cli db upgrade
 ```
 
 工具发现：
@@ -265,7 +325,57 @@ POST /api/soc/external-dispositions
 - [ ] 区分人工确认理由与自动流程输出；只有符合现有 correction policy 的输入才能进入 correction/memory-candidate 路径。
 - [ ] source adapter 不得直接写 repository、ReviewQueue 或 memory。
 
-### 4.4 PI-01 exit gate / 阶段门槛
+旧源码状态码已经确认：`0 已忽略`、`1 待审阅`、`2 退回中`、`3 待确认`、`4 处理中`、`5 待复核`、`6 待关闭`、`7 子单处理中`、`8 子单已关闭`、`9 已关闭`、`10 编辑`。旧实现的“status != 1 就跳过 AI”不得迁移；状态码本身不等于 true/false verdict。具体映射边界见 `pingan-legacy-source-audit.md`。
+
+### 4.4 PingAn EDR software-path context / 路径调查知识（已实现）
+
+旧 XLSX 已编译为 Git-ignored SQLite 目录。它保留源文件 SHA、源告警行、历史 disposition、出现次数、时间范围、规则码及可关联的 MD5；不保存原始日志正文。查询只允许精确规范化路径及可选 MD5，不使用旧代码的 basename、版本通配、前缀或删目录段模糊匹配。
+
+在内网仓库根目录构建并查询：
+
+```bash
+backend/.venv/bin/python backend/scripts/soc_pingan_software_path_catalog.py build
+backend/.venv/bin/python backend/scripts/soc_pingan_software_path_catalog.py query \
+  'D:\\ps\\psexec.exe'
+```
+
+加载 `.env.soc-dev.local` 后，统一 `backend/samples/pingan_dev/extensions.example.json` 同时注册资产和路径 MCP。执行 action smoke：
+
+```bash
+cd backend
+./.venv/bin/python -m soc_agent.cli mcp smoke \
+  samples/mcp/pingan_software_path/action_adapters.json \
+  --route endpoint.software_path.lookup \
+  --json '{"path":"D:\\ps\\psexec.exe","context_refs":{"thread_id":"PATH-CONTEXT-SMOKE"}}' \
+  --pretty
+```
+
+验收边界：结果必须保持 `mocked=false`、`provider_mode=local_catalog`、`candidate_only=true`、`allowlist=false`、`evidence_boundary=investigation_only`、`decision_impact=none` 和 `automation_eligible=false`。`D:`、用户可写和临时目录即使命中历史忽略记录也仍为 `high` attention。该能力已完成代码与本地数据编译，不属于 D12-B 外部真实资产 Provider gate，也不能据此关闭 `PA-12`。
+
+### 4.5 Internal Runtime batch / 内网 5000+ 告警批跑
+
+批跑入口复用生产 `SocAnalysisService`，不是第二套 Runtime，也不自动调用 MCP。完整用法见 `validation/compact_zeus/internal_batch/README.md`。先加载 DEV 配置并只做计划：
+
+```bash
+source ./.env.soc-dev.local
+backend/.venv/bin/python \
+  validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py \
+  --source /approved/path/alerts-5000.pkl \
+  --analyzer-mode llm --model-name deepseek-v4-flash \
+  --limit 5 --plan-only
+```
+
+再按 `5 -> 50 -> all` 逐步扩大；第一次 live 必须显式 `--confirm-live`，后续使用同一 `--output-dir --resume`。每行完整 `AnalysisRun`、紧凑 `results.jsonl` 和批次 manifest 写入 mode `0700/0600` 的 Git-ignored：
+
+```text
+backend/.deer-flow/soc-internal-validation/runtime-batches/<batch>/
+```
+
+DEV 默认不持久化；需要验证 ReviewQueue/审计/维护问题时，先执行 `soc db upgrade`，从首批开始固定加入 `--persist --workers 1`，数据库仍为独立 `backend/.deer-flow/data/soc_agent_dev.db`。5,000+ live 运行前先审阅 5/50 条的输入完整性、Grounding、Decision guard、失败率、延迟和 token；批跑完成只证明技术执行完成，不证明模型准确率。
+
+路径目录与资产定位是独立的调查 enrichment。批跑不会为了方便而把它们偷偷塞进固定 Runtime；需通过 Lead Agent/Action Dispatcher 调用并持久化 `InvestigationEvidence`。
+
+### 4.6 PI-01 exit gate / 阶段门槛
 
 - [ ] 资产、TI、安全标签三个真实只读 Provider 均有 `mocked=false` DEV smoke 和持久化证据。
 - [ ] 可获得的 Zeus 状态/理由 source feed 已通过 canonical ingress；若 DEV 无入口，明确记录 data-gated，而不是以 fixture 标记 Done。
@@ -342,6 +452,7 @@ soc-internal-validation/
 │   ├── mcp-smoke-cases.json
 │   ├── evidence-persistence.json
 │   └── e2e-alert-cases.json
+├── runtime-batches/       # PKL 5 -> 50 -> all Runtime batch artifacts
 ├── pi01-threat-intel/
 ├── pi01-security-tags/
 ├── pi01-external-disposition/
@@ -366,9 +477,9 @@ soc-internal-validation/
 
 ```text
 Current: PI-01 / D12-B Internal Real Asset Provider
-First:   collect/review redacted root_config and DEV environment-selection contract
-Then:    implement DEV-only profile/preflight and direct-provider smoke entry
-Next:    run direct ZEUS/fallback cases and existing MCP tools/smoke
+Ready:   local DEV model profile + portable ZEUS signer + preflight + direct smoke entry
+First:   make model gateway and internal run_workflow import available; pass preflight
+Next:    run direct ZEUS/fallback case matrix and existing MCP tools/smoke
 Gate:    persist mocked=false InvestigationEvidence and verify Web/TUI/Lead Agent readback
 After:   PI-01A real threat intelligence provider
 ```

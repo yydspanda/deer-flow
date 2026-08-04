@@ -52,6 +52,11 @@ Action proposal boundary:
   <soc_action_proposal>{"route":"security_tag.lookup","action":"security_tag.lookup",
   "reason":"Check whether this entity has active authorization or maintenance evidence.",
   "payload":{"entity_key":"host:web-01"},"confidence":0.7}</soc_action_proposal>
+- To check a PingAn EDR process/file path against historical candidate knowledge, use:
+  <soc_action_proposal>{"route":"endpoint.software_path.lookup","action":"endpoint.software_path.lookup",
+  "reason":"Check exact historical path and hash context while preserving D-drive location risk.",
+  "payload":{"path":"D:\\tools\\example.exe","md5":"0123456789abcdef0123456789abcdef"},"confidence":0.68}</soc_action_proposal>
+- Historical path results are not an allowlist. A D-drive, user-writable, or temporary path remains higher-attention even after an exact historical match.
 - Do not claim read-only lookup, location, or process-tree results unless SOC runtime returns a tool/action result or the bounded context already contains matching action_evidence.
 """
 

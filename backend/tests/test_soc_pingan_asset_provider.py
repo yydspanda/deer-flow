@@ -104,6 +104,7 @@ def test_locator_uses_search_asset_info_first_and_returns_bounded_result() -> No
     assert result.decision_impact == "none"
     assert result.raw_response_included is False
     assert [item.stage for item in result.attempts] == ["search_asset_info"]
+    assert all(item.duration_ms >= 0 for item in result.attempts)
     assert workflow.calls == []
 
 
@@ -251,8 +252,34 @@ def test_locator_fails_when_every_configured_provider_errors() -> None:
     )
     locator = _locator(search=search, workflow=workflow)
 
-    with pytest.raises(PingAnAssetProviderUnavailableError, match="all configured"):
+    with pytest.raises(PingAnAssetProviderUnavailableError, match="search_asset_info") as exc_info:
         locator.locate({"query": "192.0.2.50", "asset_type": "IP"})
+
+    assert [attempt.status for attempt in exc_info.value.attempts] == ["failed"]
+    assert workflow.calls == []
+
+
+def test_locator_does_not_treat_workflow_failure_as_a_normal_miss() -> None:
+    search = StaticPingAnAssetSearchPort({})
+    workflow = StaticPingAnAssetWorkflowPort(
+        {
+            (1087787, "192.0.2.60"): RuntimeError("datacenter unavailable"),
+            (1087710, "192.0.2.60"): {
+                "company_code": "PA011",
+                "company_name": "must not be reached",
+            },
+        }
+    )
+    locator = _locator(search=search, workflow=workflow)
+
+    with pytest.raises(PingAnAssetProviderUnavailableError, match="asset_to_bu") as exc_info:
+        locator.locate({"query": "192.0.2.60", "asset_type": "IP"})
+
+    assert [attempt.status for attempt in exc_info.value.attempts] == [
+        "not_found",
+        "failed",
+    ]
+    assert [call["workflow_id"] for call in workflow.calls] == [1087787]
 
 
 def test_environment_builder_never_silently_falls_back_from_internal_to_fake() -> None:

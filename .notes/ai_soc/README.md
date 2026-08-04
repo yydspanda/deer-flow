@@ -26,6 +26,7 @@
 | 查看平安专属知识候选 | `capabilities/pingan/knowledge-candidates.md` | `capabilities/pingan/source-docs/` |
 | 查看当前哪些能力仍是 mock | `integrations/mock-and-real-register.md` | `capabilities/pingan/onboarding.md` 的 PA-12 |
 | 去内网收集 D12-B 和后续 DEV 接入信息 | `integrations/pingan-dev-information-collection.md` | `integrations/mock-and-real-register.md` |
+| 查看旧 sec-model/ZEUS 状态/safe-path 审计结论 | `integrations/pingan-legacy-source-audit.md` | `integrations/pingan-internal-continuation-handoff.md` |
 | 设计外部工单/处置状态回流 | `integrations/external-disposition-sync.md` | 工程契约 external disposition 章节 |
 | 设计记忆和经验沉淀 | `memory/memory-tracking.md` | `alert-lifecycle-flow.md` 的 memory flow |
 | 管理授权活动、影子处置建议、抽样 outcome 与评测 gate，规划变更窗口与护网身份 | `governance/governed-context-facts.md` | `soc-agent-solution.md` Section 7.4 |
@@ -60,6 +61,8 @@ ai_soc/
 ├── integrations/
 │   ├── external-disposition-sync.md   # 外部工单/状态/理由同步协议
 │   ├── pingan-dev-information-collection.md # 内网 DEV 配置/契约/样本收集清单
+│   ├── pingan-legacy-source-audit.md  # 旧模型/签名/状态/safe-path 源码审计
+│   ├── pingan-internal-continuation-handoff.md # 内网剩余步骤和命令
 │   └── mock-and-real-register.md      # mock/fixture/真实替换台账
 ├── memory/
 │   └── memory-tracking.md             # DB-first memory 与 retrieval policy

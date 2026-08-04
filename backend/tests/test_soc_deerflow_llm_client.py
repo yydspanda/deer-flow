@@ -216,7 +216,7 @@ def test_cli_analyze_passes_explicit_model_selection_to_runtime(monkeypatch, cap
         captured.append(settings)
         return StubLLMAnalyzer()
 
-    monkeypatch.setattr("soc_agent.cli.build_configured_analyzer", fake_build)
+    monkeypatch.setattr("soc_agent.application.analysis.build_configured_analyzer", fake_build)
 
     exit_code = main(
         [

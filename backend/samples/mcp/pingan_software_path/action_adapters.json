@@ -1,0 +1,71 @@
+{
+  "adapters": [
+    {
+      "schema_version": "soc.mcp_action_adapter_config.v1",
+      "enabled": true,
+      "owner": "soc-platform",
+      "environment": "dev-or-staging",
+      "adapter_id": "pingan-software-path-mcp",
+      "route": "endpoint.software_path.lookup",
+      "action": "endpoint.software_path.lookup",
+      "risk_level": "read_only",
+      "adapter_kind": "mcp",
+      "external_side_effect": "read",
+      "dry_run_supported": true,
+      "execute_supported": true,
+      "idempotency_required": false,
+      "required_payload_fields": ["path"],
+      "required_context_refs": ["thread_id"],
+      "description": "Read-only exact lookup against historical PingAn EDR path candidate knowledge.",
+      "payload_schema": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": {"type": "string"},
+          "md5": {"type": "string"},
+          "context_refs": {"type": "object"}
+        }
+      },
+      "metadata": {
+        "tenant": "pingan",
+        "candidate_only": true,
+        "allowlist": false,
+        "evidence_boundary": "investigation_only",
+        "decision_impact": "none"
+      },
+      "mcp": {
+        "server": "pingan_software_path",
+        "tool": "pingan_software_path_software_path_lookup",
+        "timeout_seconds": 10,
+        "input_mapping": {
+          "path": "path",
+          "md5": "md5"
+        },
+        "output_fields": [
+          "schema_version",
+          "query_path",
+          "normalized_path",
+          "query_md5",
+          "matched",
+          "match_type",
+          "control_zone",
+          "location_attention",
+          "historical_context",
+          "catalog_id",
+          "catalog_schema_version",
+          "source_sha256",
+          "warnings",
+          "provider_mode",
+          "mocked",
+          "candidate_only",
+          "allowlist",
+          "evidence_boundary",
+          "decision_impact",
+          "automation_eligible",
+          "raw_rows_included"
+        ],
+        "result_schema_version": "soc.pingan_software_path_context.v1"
+      }
+    }
+  ]
+}

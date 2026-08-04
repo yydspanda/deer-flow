@@ -911,6 +911,10 @@ memory-zh = [
 monocle = [
     { name = "deerflow-harness", extra = ["monocle"] },
 ]
+pingan-dev = [
+    { name = "openpyxl" },
+    { name = "pandas" },
+]
 postgres = [
     { name = "deerflow-harness", extra = ["postgres"] },
 ]
@@ -953,6 +957,8 @@ requires-dist = [
     { name = "langgraph-sdk", specifier = ">=0.1.51" },
     { name = "lark-oapi", specifier = ">=1.4.0" },
     { name = "markdown-to-mrkdwn", specifier = ">=0.3.1" },
+    { name = "openpyxl", marker = "extra == 'pingan-dev'", specifier = ">=3.1.5" },
+    { name = "pandas", marker = "extra == 'pingan-dev'", specifier = ">=2.2.0" },
     { name = "pyjwt", specifier = ">=2.13.0" },
     { name = "python-multipart", specifier = ">=0.0.31" },
     { name = "python-telegram-bot", specifier = ">=21.0" },
@@ -961,7 +967,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
     { name = "wecom-aibot-python-sdk", specifier = ">=0.1.6" },
 ]
-provides-extras = ["postgres", "redis", "discord", "kafka", "monocle", "browser", "memory-zh"]
+provides-extras = ["postgres", "redis", "discord", "kafka", "monocle", "browser", "memory-zh", "pingan-dev"]
 
 [package.metadata.requires-dev]
 dev = [

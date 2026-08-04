@@ -190,6 +190,45 @@ Internal DEV validation uses that isolated local SOC SQLite database. Endpoint p
 commands, login context, and host events are consumed from bounded alert-native evidence;
 the Runtime does not advertise synthetic process-tree or host-context lookup actions.
 
+For PingAn internal DEV, start from `samples/pingan_dev/`. The tracked profile routes
+`deepseek-v4-flash` through the local OpenAI-compatible model gateway and configures the
+real `asset.locate` boundary plus the local historical software-path MCP through
+environment variables. Put runnable credentials in
+Git-ignored `config.pingan-dev.local` / `.env.soc-dev.local`, then run the no-network
+`scripts/soc_pingan_dev_preflight.py` before `scripts/soc_pingan_asset_direct_smoke.py`
+or MCP smoke. The self-contained ZEUS signer does not import the legacy application;
+the internal Agent Platform `run_workflow` package must still be available on the DEV host.
+
+Compile the private historical EDR workbook once, then query it through the generic
+`endpoint.software_path.lookup` action:
+
+```bash
+python scripts/soc_pingan_software_path_catalog.py build
+python scripts/soc_pingan_software_path_catalog.py query 'D:\\ps\\psexec.exe'
+```
+
+The generated SQLite catalog is Git-ignored and mode `0600`. Results are exact-match,
+investigation-only candidate context: they preserve lineage and freshness while keeping
+path-location attention separate from historical ignored dispositions. They are not an
+allowlist and cannot alter Runtime verdicts, close reviews, authorize actions, or write
+confirmed memory. See `samples/mcp/pingan_software_path/README.md` for MCP smoke commands.
+
+For approved internal PKL validation, install the optional workbook/batch dependencies and use the
+resumable `5 -> 50 -> all` runner from the repository root:
+
+```bash
+uv sync --locked --extra pingan-dev
+cd ..
+backend/.venv/bin/python \
+  validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py \
+  --source /approved/path/alerts.pkl --analyzer-mode llm \
+  --model-name deepseek-v4-flash --limit 5 --plan-only
+```
+
+The runner reuses the production `SocAnalysisService`; it does not invoke MCP enrichment tools.
+See `validation/compact_zeus/internal_batch/README.md` and the internal continuation handoff before
+running a live or persistent batch.
+
 Initialize or upgrade the local SOC schema from `backend/`; no database URL is needed when
 `config.yaml` uses `database.backend: sqlite`:
 

@@ -27,6 +27,7 @@ from soc_agent.actions.mcp import (
 )
 from soc_agent.actions.proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.agent_profile import SocLeadAgentProfileInstaller
+from soc_agent.application import build_soc_analysis_service
 from soc_agent.contracts import (
     ActorContext,
     ActorType,
@@ -71,7 +72,6 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.core import (
-    DeterministicAnalysisRuntime,
     SocAgentActionDispatcher,
     SocAgentApprovalService,
     SocAgentCapabilityRouter,
@@ -142,7 +142,6 @@ from soc_agent.lead_agent import build_soc_lead_agent_profile
 from soc_agent.lead_agent_chat import SocLeadAgentChatService
 from soc_agent.llm import (
     SocLLMSettings,
-    build_configured_analyzer,
     build_configured_chat_client,
     configured_soc_llm_status,
 )
@@ -3159,26 +3158,7 @@ def _analysis_service_for_repository(
     *,
     settings: SocLLMSettings | None = None,
 ) -> SocAnalysisService:
-    maintenance = (
-        SocNormalizationMaintenanceService(
-            baseline_repository=repository,
-            issue_repository=repository,
-        )
-        if repository is not None
-        else None
-    )
-    return SocAnalysisService(
-        runtime=DeterministicAnalysisRuntime(
-            analyzer=build_configured_analyzer(settings=settings),
-            sensitive_evidence_mode=settings.sensitive_evidence_mode,
-        ),
-        repository=repository,
-        summary_repository=repository,
-        audit_repository=repository,
-        review_queue_repository=repository,
-        analysis_persistence=repository,
-        normalization_maintenance_monitor=maintenance,
-    )
+    return build_soc_analysis_service(repository, settings=settings)
 
 
 def _llm_settings_from_args(args: argparse.Namespace) -> SocLLMSettings:

@@ -1491,7 +1491,7 @@ credentials, smoke report, and payload/latency/error evaluation.
 | Deliverable / 交付物 | Status / 状态 | Meaning / 含义 |
 | --- | --- | --- |
 | D12-A provider implementation | Done / `fake-only` | PingAn-owned ZEUS HTTP/signing port, asset-to-BU/UM workflow port, fallback service, stdio MCP server, explicit action/MCP config and regression tests; every smoke result is `mocked=true` |
-| D12-B internal real smoke | Waiting / data-gated | Internal endpoint, credentials, signer/workflow imports, tenant mapping and approved payload are required; acceptance requires `mocked=false` success/not-found/auth-failure/timeout and persisted `InvestigationEvidence` evidence |
+| D12-B internal real smoke | In Progress / preflight-ready | Local DEV model profile, portable ZEUS signer, no-network preflight and direct smoke entry are implemented; internal Agent Platform `run_workflow`, network and approved payloads remain required. Acceptance still requires `mocked=false` success/not-found/auth-failure/timeout and persisted `InvestigationEvidence` evidence |
 
 The provider receives an already-extracted `asset_key`, type and optional role. It does not extract
 assets, infer attacker/victim roles, select a response target, alter the Runtime verdict, close a
@@ -1499,6 +1499,12 @@ ReviewQueue item, confirm memory, or authorize an action. PingAn protocol and fa
 inside `soc_agent.integrations.pingan`; generic Runtime/Core code depends only on existing
 `asset.locate` and `InvestigationEvidence` contracts. Fake/internal modes are mutually exclusive and
 an internal configuration error must fail closed rather than falling back to fake data.
+
+The portable signer preserves the reviewed legacy ZEUS wire contract but has no default credential
+and no import-time dependency on the old application. ZEUS lifecycle status/reason integration and
+the historical EDR safe-path candidate dataset also stay PingAn-owned: status events enter the
+canonical external-disposition service, while safe-path matches may only become governed,
+investigation-only evidence. Neither may add a PingAn branch to generic Runtime control flow.
 
 ---
 

@@ -9,22 +9,23 @@
 
 这份文档用于在内网一次性收集 SOC Agent 接入 DEV 所需的信息。外网先完成可移植代码、类型化配置、预检和 smoke 脚本；项目复制到内网 Mac 后，只填本地配置并执行验证，不再来回复制修改业务代码。
 
-收集时分成两类：
+配置分成两类：
 
-- **可提供给外网开发**：模块结构、配置键名、接口路径、请求/响应结构、状态枚举、脱敏样例和失败语义。
-- **只能留在内网 Mac**：真实 URL、App Key、Token、账号密码、企业 CA、未脱敏 IP/UM/告警和完整内部响应。
+- **Tracked / 可提交**：模块结构、配置键名、接口路径、请求/响应结构、状态枚举、脱敏样例和失败语义。
+- **Local / 不提交**：真实 URL、App Key、Token、账号密码、企业 CA、IP/UM、测试 case 和完整内部响应。它们可以直接写入 `.env.soc-dev.local`、`config.pingan-dev.local` 及 `.deer-flow/` 验收文件，只要先确认 Git 忽略规则生效。
 
-任何 secret 都不要写入本文件、聊天、Git、sample JSON 或 smoke report。
+不要把 secret 写进 tracked 文档、sample 或 commit；本地 runnable config 不必用占位符。
 
 ### Quick collection checklist / 本次最小收集包
 
-你下一次只需先带回下面这些非敏感信息，便可开始 D12-B 代码准备：
+旧项目源码审计和外网代码准备已经完成。复制到内网后只需补完以下运行输入：
 
-- [ ] 脱敏的 `root_config`，以及它直接调用的 DEV/STG/PRD 环境选择片段。
-- [ ] 选择 DEV 所需的环境变量/配置键名和合法值，不含真实 secret。
-- [ ] 内网 Mac 能否 import `util.util_tools`、`util.root_config`、`model.agent_platform.util_tools`；不能时只说明需要加入哪一层父目录，真实绝对路径留在内网。
-- [ ] `run_workflow` 的同步/异步返回形态，以及内部包需要的 Python 版本、公司 PyPI 或企业 CA 情况。
-- [ ] 确认 DEV ZEUS 需要哪些网络前置条件：代理、CA、客户端证书、IP 白名单；不给真实凭证。
+- [x] `root_config`、LOCAL/DEV 环境选择和本地 OpenAI-compatible model endpoint 已从源代码确认。
+- [x] ZEUS signer 已提取为本项目内的无旧依赖实现，不再要求 import 整个 `util.util_tools`。
+- [ ] 内网 Mac 能否 import `model.agent_platform.util_tools:run_workflow`；不能时把旧 Agent Platform 包父目录写入本地 `SOC_PINGAN_PROVIDER_IMPORT_PATHS`。
+- [x] 旧调用方以同步函数使用 `run_workflow(app_id, workflow_id, query_data)`；返回 `dict`、JSON string 或 `None`。
+- [ ] 内部包需要的 Python 版本、公司 PyPI 或企业 CA 情况。
+- [ ] 确认并配置 DEV ZEUS 网络前置条件：代理、CA、客户端证书、IP 白名单。
 - [ ] 确认是否能在内网准备资产命中、查无、UM fallback、ambiguous、鉴权失败和 timeout 测试 case；真实测试值留在内网。
 
 D12-B 之后再收集：TI 和安全标签的脱敏成功/查无/错误响应，以及可用时的 Zeus 状态理由回流协议。
@@ -37,7 +38,7 @@ D12-B 之后再收集：TI 和安全标签的脱敏成功/查无/错误响应，
 
 | Item | Known contract |
 |---|---|
-| ZEUS signer | `util.util_tools:isec_sign`，调用形态 `isec_sign(data=..., app_id=..., app_key=...)` |
+| ZEUS signer | 旧协议来自 `util.util_tools:isec_sign`；可移植实现为 `soc_agent.integrations.pingan.zeus_signing:isec_sign` |
 | Workflow runner | `model.agent_platform.util_tools:run_workflow` |
 | Shared ZEUS config | 旧代码通过 `util.root_config` 读取 `ZEUS_SYSTEM_URL`、`ZEUS_APP_ID`、`ZEUS_APP_KEY` |
 | Asset API | `POST /public/searchAssetInfo`，签名鉴权，`companyCode` header |
@@ -47,40 +48,45 @@ D12-B 之后再收集：TI 和安全标签的脱敏成功/查无/错误响应，
 | Threat intelligence | `POST /public/indicatorSearch`，与资产接口共用 ZEUS App ID/App Key |
 | Security tags | `POST /public/searchTagContent`，与资产接口共用 ZEUS App ID/App Key |
 | Success parsing | `searchAssetInfo` 和 `run_workflow` 的成功响应结构按旧代码实现并做兼容解析 |
+| Local model endpoint | LOCAL profile exposes OpenAI-compatible `http://localhost:4001/v1/`; provider alias is `DeepSeek_V4_Flash` |
+| ZEUS status map | `0..10` 对应已忽略、待审阅、退回中、待确认、处理中、待复核、待关闭、子单处理中、子单已关闭、已关闭、编辑 |
 
 SOC Runtime 不实现 `endpoint.process_tree.lookup` 或 `host.event_context.lookup`。进程树、命令行、登录账号和主机事件只使用告警自身携带的 bounded native evidence。
+
+完整源码结论和 safe-path 数据边界见 `pingan-legacy-source-audit.md`。
 
 ## 3. Priority A - Required Before D12-B / D12-B 前必须收集
 
 ### 3.1 DEV environment selection / DEV 环境选择
 
-请提供**脱敏后的** `root_config` 及其直接依赖的环境加载片段，重点回答：
+该项已完成源码审计：
 
-- `util.root_config` 如何选择 `dev/stg/prd`：环境变量、配置文件、配置中心还是不同模块。
-- 选择 DEV 所需的键名和合法值，例如 `APP_ENV=dev`；只给键名和示例，不给 secret。
-- `isec_sign` 和 `run_workflow` 是否自动继承同一个环境，还是分别配置。
-- DEV 配置缺失时抛出的异常类型或表现。
-- 是否存在“默认连 PRD”的行为；如有，必须在 SOC preflight 中显式拦截。
+- 旧模块通过 `env_profile` 选择 profile；本项目 D12-B 强制 `env_profile=LOCAL` 与 `SOC_PINGAN_ENV=dev`。
+- DeerFlow 的模型 endpoint、ZEUS endpoint 和 workflow runner 分别显式配置，不依赖旧 `root_config` 的隐式全局读取。
+- `soc_pingan_dev_preflight.py` 会在发请求前拒绝未知环境、非 LOCAL profile、非 internal provider、未 allowlist 的 ZEUS host 和非 loopback model endpoint。
+- 实际 DEV URL/App ID/App Key 可以直接写入 Git-ignored `.env.soc-dev.local`。
 
-期望提供：
+已提供：
 
 ```text
-root_config.redacted.py
-environment-loader.redacted.py        # 仅在 root_config 依赖它时
+backend/samples/pingan_dev/config.example.yaml
+backend/samples/pingan_dev/env.example
+config.pingan-dev.local               # Git ignored; real values allowed
+.env.soc-dev.local                    # Git ignored; real values allowed
 ```
 
 ### 3.2 Internal Python availability / 内部 Python 依赖可用性
 
-导入路径已经确定，只需在内网确认：
+签名不再依赖旧项目，只需在内网确认 workflow runner：
 
-- 项目虚拟环境能否直接 import `util.util_tools`、`util.root_config` 和 `model.agent_platform.util_tools`。
+- 项目虚拟环境能否 import `model.agent_platform.util_tools:run_workflow`。
 - 若不能，需加入哪个**父目录**到 `PYTHONPATH`；真实绝对路径只留在内网 `.env`。
-- `run_workflow` 是同步函数还是会返回 awaitable。
+- [x] 旧调用点是同步调用；内网 smoke 再确认安装版本没有发生接口漂移。
 - 内部包是否需要公司 PyPI、特定 Python 版本或企业 CA。
 
 ### 3.3 Local-only ZEUS settings / 只留内网的 ZEUS 配置
 
-下列值只需确认“DEV 可用”，实际值写入内网 `.env.soc-dev.local`：
+下列实际值直接写入 `.env.soc-dev.local`，该文件必须保持 Git ignored：
 
 ```text
 SOC_PINGAN_ENV=dev
@@ -160,12 +166,7 @@ Provider 只返回类型化情报事实，不把旧代码中的 hardcoded score/
 
 ### 5.1 LLM DEV configuration
 
-确认内网 DEV 能使用的模型配置：
-
-- DeerFlow `config.yaml` 中的模型名称，默认目标为 `deepseek-v4-flash`。
-- Base URL/API key 的本地配置键名；真实值不带出内网。
-- 是否需要代理、企业 CA、并发/RPM 限制。
-- DEV 是否允许 `SOC_LLM_SENSITIVE_EVIDENCE_MODE=full`；未批准时保持默认脱敏模式。
+已确认并提供 `backend/samples/pingan_dev/config.example.yaml`：DeerFlow profile 名为 `deepseek-v4-flash`，向本地 OpenAI-compatible gateway 发送 provider alias `DeepSeek_V4_Flash`。Base URL 和 API key 从 `.env.soc-dev.local` 注入；仍需在内网确认代理/CA、并发/RPM 限制及 `SOC_LLM_SENSITIVE_EVIDENCE_MODE=full` 的使用范围。
 
 ### 5.2 SQLite-only DEV database
 
@@ -199,18 +200,18 @@ backend/.deer-flow/data/soc_agent_dev.db
 
 | Artifact | Can leave intranet? | Content |
 |---|---|---|
-| `root_config.redacted.py` | Yes | DEV/STG/PRD 选择逻辑、键名和模块关系；secret 替换为 `<redacted>` |
+| `pingan-legacy-source-audit.md` | Yes | 已审阅的环境、状态、签名和 safe-path 边界 |
 | `pingan-dev-contract.yaml` | Yes | 非敏感能力开关、endpoint path、timeout、错误码、字段语义 |
 | `zeus-*-response.redacted.json` | Yes after review | TI/tag/feedback 的脱敏成功、查无和错误响应 |
-| `.env.soc-dev.local` | No | 真实 URL、App ID/App Key、operator、CA/PYTHONPATH |
+| `.env.soc-dev.local` / `config.pingan-dev.local` | Out-of-band only | 可包含真实 URL、App ID/App Key、model key、operator、CA/PYTHONPATH；必须 Git ignored，可随完整工作目录或受控方式复制到内网 |
 | `d12b-test-cases.local.yaml` | No | 真实 IP/host/UM 和 expected result |
 | `d12b-smoke-report.local.json` | No by default | 调用结果、latency、大小、attempt/error 分类；先审查再决定是否脱敏带出 |
 
 ## 8. Implementation Order After Collection / 收集后的实现顺序
 
 ```text
-Root config/profile adapter + DEV-only preflight
-    -> D12-B direct ZEUS/workflow smoke
+DEV profile + no-network preflight (implemented)
+    -> D12-B direct ZEUS/workflow smoke (internal DEV)
     -> asset.locate MCP/action/evidence persistence smoke
     -> real threat_intel.ip_reputation.lookup provider
     -> real security_tag.lookup provider

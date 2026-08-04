@@ -3146,6 +3146,7 @@ class SocAgentActionPolicy:
             "asset.lookup",
             "asset.locate",
             "chat.ready_message",
+            "endpoint.software_path.lookup",
             "review.open_context",
             "security_tag.lookup",
             "threat_intel.ip_reputation.lookup",

@@ -477,7 +477,7 @@ Main orchestrator 约束：
 - Main orchestrator 只能调用已有 core service、router、policy/dispatcher、adapter registry 和 domain triage service；不能直接读写 repository、不能直接调用 MCP/tool、不能直接执行高风险动作、不能确认 memory。
 - PA-11 report 中的 read-only action result 必须先写 `InvestigationEvidence`，再通过 evidence refs 进入 domain finding 和 review context；不能让 route step payload 直接改变 verdict。
 - report metadata 必须显式标记 `handler_output_only`、`writes_db`、`executes_high_risk_actions` 等边界语义；eval 必须验证这些字段，防止 demo 链路被误当生产处置链路。
-- `PA-12` 真实 PingAn MCP/API 替换只能替换 action adapter/provider/config，不能改变 Main Orchestrator contract；真实 endpoint/凭证缺失时状态为 Waiting，不允许用本地 mock 冒充完成。
+- `PA-12` 真实 PingAn MCP/API 替换只能替换 action adapter/provider/config，不能改变 Main Orchestrator contract；DEV profile、portable signer、preflight/direct smoke code ready 只表示 `In Progress`，在内网保存 `mocked=false` direct/MCP/persisted-evidence 证据前不得标记 Done，也不允许用本地 mock 冒充完成。
 
 Unified investigation view 约束：
 
@@ -855,9 +855,9 @@ SOC Agent chat stream 约束：
   - `asset.lookup` 可以登记为 read-only policy action，但不能默认加入 chat router 白名单；运行态调用只能通过显式 `soc_route=asset.lookup`、显式 `action_payload.asset_key`、显式 router allowlist 和注入的 action adapter registry 打开。
   - `asset.locate` 是 read-only business ownership / BU location action，用于把已提取资产定位到公司、业务组、处置归属或 mock 远程查询结果；它和 `asset.lookup` 一样不能默认加入 chat router 白名单，只能通过显式 proposal、router allowlist 和注入的 MCP-backed action adapter registry 打开。
   - PingAn `asset.locate` provider 只能位于 `soc_agent.integrations.pingan`；`actions/contracts/core/domain/pipeline` 不得 import 该 vendor package。provider 输入必须是已提取的 `asset_key`、类型、可选角色/UM 和 bounded context refs，不能重新执行资产抽取、攻击/受害角色裁决或处置目标选择。
-  - D12 PingAn provider 保留经审阅的 ZEUS `/public/searchAssetInfo` 请求体与 `isec_sign(data, app_id, app_key)` 鉴权边界，以及 `searchAssetInfo -> asset_to_bu -> UM` 降级语义；endpoint、secret、signer import、workflow runner/ID、operator 和 tenant ownership override 只能来自显式环境/配置，不能写入通用 Runtime 或提交 secret。
+  - D12 PingAn provider 保留经审阅的 ZEUS `/public/searchAssetInfo` 请求体与 `isec_sign(data, app_id, app_key)` 鉴权边界，以及 `searchAssetInfo -> asset_to_bu -> UM` 降级语义。Portable signer 固定为 PingAn-owned `soc_agent.integrations.pingan.zeus_signing:isec_sign`，不得恢复旧模块的默认 App Key 或 import 整个 `util.util_tools`；endpoint、secret、workflow runner/ID、operator 和 tenant ownership override 只能来自显式环境/配置。真实值可写入已验证 Git-ignored 且权限受限的 `*.local` 文件，不能进入通用 Runtime 或 commit。
   - D12-A `fake` 和 D12-B `internal` 模式必须互斥。fake transport/result 必须声明 `mocked=true`、`provider_mode=fake`、`decision_impact=none`；internal 配置缺失或 import/provider 失败必须 fail closed，禁止静默回退 fake。只有真实 `mocked=false` smoke 才能作为 PA-12/PI-01 real-provider 证据。
-  - 多个有效资产归属必须返回 bounded candidates 与 `ambiguous=true`，不能默认选择第一条；原始 provider response、签名 header 和 secret 不得进入 `SocAgentActionResult`、`InvestigationEvidence` 或 smoke 报告。provider 只输出有界归属与 attempt provenance，且不得直接修改 verdict、ReviewQueue、memory 或 action authority。
+  - 多个有效资产归属必须返回 bounded candidates 与 `ambiguous=true`，不能默认选择第一条；原始 provider response、签名 header 和 secret 不得进入 `SocAgentActionResult`、`InvestigationEvidence` 或 smoke 报告。每个 attempt 至少记录 stage、lookup kind、`found|not_found|failed`、candidate count、mock provenance、sanitized error 和 `duration_ms`。只有明确 `not_found` 才可进入下一层；authentication/network/timeout/schema failure 必须立即 fail closed，不能伪装成查无。provider 不得直接修改 verdict、ReviewQueue、memory 或 action authority。
   - SOC Runtime 不提供 `endpoint.process_tree.lookup` 或 `host.event_context.lookup`。进程树、父子进程、命令行、登录上下文和主机事件只能来自告警自身经过 normalizer/bounded evidence 处理后的原生证据；不存在外部 Provider 不能被建模为缺工具降级，更不能用 mock 结果补齐。
   - SOC Lead Agent 可以用 `<soc_action_proposal>...</soc_action_proposal>` 提出 `asset.lookup` / `asset.locate` 这类 read-only proposal；`SocLeadAgentActionProposalBoundary` 只能在注入 read-only router/dispatcher 时把它转成同一条 router/policy/dispatcher/registry 链路。
   - SOC Lead Agent 不得提出不存在的进程树或主机上下文查询。只有显式注册且经过租户配置治理的 `asset.locate`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup` 等真实/待替换边界才能形成 read-only proposal。
