@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "pingan_threat_intel": {
+      "enabled": true,
+      "type": "stdio",
+      "command": "$SOC_PINGAN_THREAT_INTEL_MCP_PYTHON",
+      "args": ["$SOC_PINGAN_THREAT_INTEL_MCP_SERVER"],
+      "env": {
+        "SOC_PINGAN_THREAT_INTEL_PROVIDER_MODE": "internal",
+        "SOC_PINGAN_ZEUS_BASE_URL": "$SOC_PINGAN_ZEUS_BASE_URL",
+        "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "$SOC_PINGAN_ZEUS_ALLOWED_HOSTS",
+        "SOC_PINGAN_ZEUS_APP_ID": "$SOC_PINGAN_ZEUS_APP_ID",
+        "SOC_PINGAN_ZEUS_APP_KEY": "$SOC_PINGAN_ZEUS_APP_KEY",
+        "SOC_PINGAN_THREAT_INTEL_PATH": "/public/indicatorSearch",
+        "SOC_PINGAN_THREAT_INTEL_TIMEOUT_SECONDS": "10",
+        "SOC_PINGAN_THREAT_INTEL_MAX_RESPONSE_BYTES": "2000000",
+        "SOC_PINGAN_THREAT_INTEL_FRESHNESS_DAYS": "180",
+        "SOC_PINGAN_THREAT_INTEL_TIMEZONE": "Asia/Shanghai"
+      }
+    }
+  },
+  "skills": {}
+}

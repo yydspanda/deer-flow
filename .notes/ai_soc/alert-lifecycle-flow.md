@@ -479,8 +479,8 @@ sequenceDiagram
 | Route / Action | Type | What It Does | 中文说明 |
 |---|---|---|---|
 | `asset.lookup` | read-only | Look up asset metadata | 查询资产记录 |
-| `asset.locate` | read-only mock MCP | Locate owner/BU/environment | 定位资产归属、BU、环境 |
-| `threat_intel.ip_reputation.lookup` | read-only mock | Fetch IP reputation | 查询 IP 威胁情报 |
+| `asset.locate` | production-shaped MCP; real smoke parked | Locate owner/BU/environment | 定位资产归属、BU、环境；真实内网验收暂存 |
+| `threat_intel.ip_reputation.lookup` | production-shaped PingAn MCP; real smoke pending | Fetch bounded IP reputation | 查询 IP 情报、时效和来源链；结果只作为调查证据 |
 | `security_tag.lookup` | read-only mock | Fetch security tags | 查询授权、测试、白名单等标签 |
 
 进程树、命令行、登录上下文和主机事件直接来自告警原生证据，经 Normalizer、Fact Reconstruction 和 bounded evidence 进入研判；当前不存在额外 EDR/HIDS 查询 action。

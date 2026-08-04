@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-04-A` 已完成） |
-| 当前目标 | `PI-01/D12-B` 内网 DEV 配置预检和真实资产 Provider smoke；随后严格按 `PI-01A..E` 完成真实 TI、安全标签/治理事实、外部状态回流、受控只读调查编排和内网 shadow E2E |
+| 当前目标 | `PI-01A` 平安 ZEUS 真实威胁情报 Provider；`D12-B` 保留为 `Parked / internal evidence pending`，不降低其真实资产 Provider 门槛 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 PingAn 内网 DEV 统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | 在内网使 `model.agent_platform.util_tools:run_workflow` 可导入，启动本地模型 gateway，执行 preflight、direct Provider/MCP `mocked=false` case matrix，再运行 evidence persistence/readback acceptance 和 deployed Web/TUI smoke；完成 D12-B 前不启动 `PI-01A..E`，Kafka/K8s/PostgreSQL/PI-04-B/deferred 当前不插队。 |
+| 当前下一刀 | 在内网用 approved IP 对 `/public/indicatorSearch` 跑 `PI-01A` hit/not-found/error/timeout smoke，核对实际 `ipAnalyseReport` / `ipReputationReport` 字段覆盖，并通过既有 MCP Action/Dispatcher 保存、回读 `mocked=false` InvestigationEvidence；随后进入 `PI-01B1`。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -40,7 +40,19 @@
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
-| `PI` | Real Data & Production Integration | **Current / PI-01 D12-B Internal Smoke** | PI-04-A 已完成；DEV profile/signer/preflight 已就绪，当前等待内网 Agent Platform import 和真实 case matrix；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+| `PI` | Real Data & Production Integration | **Current / PI-01A Threat Intelligence** | D12-B 验收代码保留但内网证据暂存；当前 TI Provider/MCP 代码已完成外网回归，等待真实 DEV `mocked=false` evidence；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+
+## 2026-08-04 — PI-01A PingAn threat-intelligence provider implemented
+
+- 产品负责人明确暂存 `D12-B`。它保持 `Parked / internal evidence pending`，已有 preflight、seven-case matrix、MCP persistence/readback 和 UI smoke 门槛均不删除、不降级，也不因 PI-01A 推进而标记完成。
+- 新增 PingAn-owned `/public/indicatorSearch` Provider、typed result 和 stdio MCP；通用层仍只认识 `threat_intel.ip_reputation.lookup`，没有向固定 Runtime 加入 PingAn 分支或外部 IO。
+- Provider 复用 portable `isec_sign` 与共享 ZEUS App ID/App Key，internal 模式强制 HTTPS + host allowlist、缺配置 fail closed；fake/internal 模式互斥，fake 结果始终 `mocked=true`。
+- 只投影审阅过的 `judgments`、`tags_classes`、`threatbook_lab`、scene、carrier、location 和 update time。每个 label 保留精确 source path，完整响应只保留 SHA-256；未审阅字段名进入 bounded mapping warning，其值不出 Provider。
+- 旧实现的风险分公式、地理乘数、白名单/封禁规则没有迁移。`score`、`confidence` 和 `last_seen` 不把 provider update time 或未知分值伪装成稳定事实；freshness 使用显式 tenant 配置，未知时间按 stale-like evidence 处理。
+- MCP-backed Action 结果可经 Dispatcher 写 `InvestigationEvidence`。通用 Domain Evidence helper 现在同时消费 direct result 和 `mcp_result` envelope，修复“证据已保存但 domain handler 看不到 typed result”的衔接缺口。
+- 外网回归覆盖 hit、not-found、partial branch、unknown freshness、transport failure、MCP、Action persistence、Domain Triage 和 CLI fake smoke；真实 `mocked=false` ZEUS 调用未在外网执行。当前状态为 `In Progress / code-complete, internal smoke pending`，不能冒充 PI-01A Done。
+- 全量 SOC + architecture 回归 `688 passed`；随后针对 invalid JSON、未来时间、scalar path、response/label 上限的最后边界加固继续通过聚焦回归。Ruff、format、JSON example、`git diff --check` 均通过。
+- `codegraph sync .` 已纳入最终实现；索引可直接定位 `PingAnThreatIntelService`、`build_pingan_threat_intel_service_from_env` 和通用 `evidence_result_payload`。
 
 ## 2026-08-04 — D12-B MCP evidence persistence/readback acceptance implemented
 
@@ -415,7 +427,8 @@
 | 0.11 | `PA-11` PingAn main orchestrator demo | Done | `SocMainOrchestratorService`、`UnifiedInvestigationReport`、`soc eval pingan-main` 已覆盖 APT/EDR/HIDS analyze -> correlation -> read-only evidence -> domain finding -> review summary | 每条当前告警命中 seeded historical run，并只复用该 historical `run_id` 的 evidence；不写 DB、不执行高风险动作 |
 | 0.12 | `PA-12` real PingAn MCP/API replacement | In Progress / internal smoke | DEV profile、portable signer、preflight/direct smoke entry 已完成；内网补 Agent Platform import、approved cases 和 `mocked=false` 证据 | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险；不能用本地 mock 假装完成 |
 | 0.13 | `D12-A` PingAn asset provider implementation | Done / fake-only | 已建立可移植 `asset.locate` provider、ZEUS HTTP/signing port、workflow port、stdio MCP server、显式 config 与 fake smoke | fake 输出始终 `mocked=true`；internal 缺配置 fail closed；该状态不标记 PA-12/PI-01 real provider Done |
-| 0.14 | `D12-B` PingAn asset provider internal smoke | In Progress / preflight-ready | root config/模型/签名已审计，本地 profile、preflight 和 direct smoke 已实现；下一步在内网加载 `run_workflow` 并执行真实 case matrix | 成功、查无、鉴权失败、超时和 InvestigationEvidence 全部留证；真实响应为 `mocked=false`；完成前 D12/PA-12 保持未完成 |
+| 0.14 | `D12-B` PingAn asset provider internal smoke | Parked / internal evidence pending | root config/模型/签名已审计，preflight、direct matrix 和 MCP evidence acceptance 已实现；按产品决定暂存，恢复时直接在内网补真实 case matrix | 成功、查无、鉴权失败、超时和 InvestigationEvidence 全部留证；真实响应为 `mocked=false`；暂存不等于完成 |
+| 0.15 | `PI-01A` PingAn threat-intelligence provider | In Progress / internal smoke pending | production-shaped Provider、stdio MCP、action config、bounded field mapping、freshness/lineage 和 fake/persistence 回归已完成 | 真实 DEV hit/not-found/error/timeout；实际字段 coverage 经复核；`mocked=false` evidence 可持久化回读；不迁移旧评分/封禁规则 |
 | 1 | Correlation Service MVP | Done | `SocCorrelationService` 基于 summary/evidence 输出相似告警、匹配原因和可复用证据；typed result 已进入 main report/domain/review summary | 不调用 LLM、不依赖真实 MCP、不改 decision；demo 当前告警可看到历史 run + reusable evidence |
 | 1.1 | Correlation -> Unified Investigation bridge | Done | 共享 summary repository、统一 deterministic scorer、`SocDomainTriageRequest.correlation_result`、`UnifiedInvestigationReport.correlation_result` 和 review counts 已接通 | metadata count 不是证据源；historical evidence 只按 matched `run_id` 加载；移除两个无效 mock 后 APT/EDR/HIDS eval 为 3 matches / 4 evidence / 0 failure |
 | 1.2 | Correlation quality baseline | Done | 已建 vendor-neutral same-incident / related-but-distinct / unrelated corpus；`soc eval correlation` 输出双任务指标、reason 分布、fan-out、evidence lineage/unrelated exposure，并支持 `--baseline-json` replay diff | scorer/report/fixture 版本显式；当前 8-pair baseline 暴露 retrieval/dedup precision 均约 0.667；`shadow_dedup_allowed=false` |

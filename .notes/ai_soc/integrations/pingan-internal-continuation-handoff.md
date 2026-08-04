@@ -2,8 +2,8 @@
 
 > Type: temporary transfer artifact / 临时复制交接文件
 > Reconciled: 2026-08-04
-> Current pointer: `PI-01 / D12-B Internal Real Asset Provider`
-> Next action: source local DEV profile, pass preflight, then run direct ZEUS and `asset.locate` real smoke
+> Current pointer: `PI-01A Threat Intelligence`; `D12-B` is parked with its acceptance gate unchanged
+> Next action: run real ZEUS TI hit/not-found/error/timeout smoke, then persist and read back `mocked=false` evidence
 
 本文件只保留**尚未完成**的工作，便于复制到内网 Mac 后继续开发和验证。它不是新的权威路线；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
@@ -66,8 +66,7 @@ git check-ignore -v .env.soc-dev.local config.pingan-dev.local \
 ## 2. Remaining Execution Order / 剩余执行顺序
 
 ```text
-D12-B 真实 asset.locate
-  -> PI-01A 真实 threat_intel.ip_reputation.lookup
+PI-01A 真实 threat_intel.ip_reputation.lookup（Current）
   -> PI-01B 真实 security_tag.lookup
   -> PI-01C Zeus 状态/理由回流 source adapter
   -> PI-01D 受控只读调查编排
@@ -76,9 +75,12 @@ D12-B 真实 asset.locate
   -> PI-03 人工标签、评测与校准
   -> PI-04B+ Web 运营视图、Telemetry、Prometheus/SLO
   -> PI-05 Shadow -> Limited Pilot -> Controlled Rollout
+
+D12-B 真实 asset.locate（Parked，可独立恢复）
+  -> 仍需原 direct/MCP/persistence/Web/TUI gate，不由 PI-01A 替代
 ```
 
-项目不新增 `D13` 编号。D12-B 完成后继续使用 `PI-01..PI-05`。
+项目不新增 `D13` 编号。D12-B 暂存不阻塞 PI-01A，但必须在 PI-01E/Pilot readiness 前恢复并关闭。
 
 当前内网 DEV 只使用：
 
@@ -334,11 +336,11 @@ AnalysisRun/ReviewQueue 序列化哈希前后一致。报告不保存 raw query�
 
 ## 4. PI-01 - Remaining Real Read-only Providers / 其他真实只读能力
 
-D12-B 通过后按下面顺序推进。每项都复用 generic action、typed result、InvestigationEvidence、审计和失败契约；PingAn 字段与鉴权只能存在于 `backend/soc_agent/integrations/pingan/`。
+D12-B 已按产品决定暂存，下面的 PI-01A 成为当前主线。每项都复用 generic action、typed result、InvestigationEvidence、审计和失败契约；PingAn 字段与鉴权只能存在于 `backend/soc_agent/integrations/pingan/`。D12-B 仍须在 PI-01E/Pilot readiness 前恢复并通过。
 
 | Order | Generic route / boundary | PingAn source | Current state | Completion evidence |
 |---|---|---|---|---|
-| `PI-01A` | `threat_intel.ip_reputation.lookup` | `POST /public/indicatorSearch` | in-memory mock | real DEV hit/not-found/error smoke + persisted evidence |
+| `PI-01A` | `threat_intel.ip_reputation.lookup` | `POST /public/indicatorSearch` | production-shaped Provider/MCP + fake/persistence regression complete; internal evidence pending | real DEV hit/not-found/error smoke + persisted evidence |
 | `PI-01B1` | `security_tag.lookup` | `POST /public/searchTagContent` | in-memory mock | valid/expired/not-found/error smoke + governed evidence |
 | `PI-01B2` | authorized-activity fact source | change/scanner/maintenance/exercise roster | lifecycle/matcher real, source facts are fixture | real source version/scope/freshness sync or explicit data-gated status with disposition automation disabled |
 | `PI-01C` | external disposition canonical ingress | Zeus status/reason feed | canonical service real, source feed fixture | authenticated real source adapter + idempotency/order/replay evidence |
@@ -347,12 +349,28 @@ D12-B 通过后按下面顺序推进。每项都复用 generic action、typed re
 
 ### 4.1 PI-01A Threat intelligence / 威胁情报
 
-- [ ] 复用 ZEUS DEV base URL、App ID/App Key 和 `isec_sign`，不要复制认证逻辑到 generic Runtime。
+- [x] 复用 ZEUS DEV base URL、App ID/App Key 和 portable `isec_sign`，没有复制认证逻辑到 generic Runtime。
 - [ ] 核对 `ipAnalyseReport`、`ipReputationReport`、时间、来源和过期语义。
-- [ ] 实现 PingAn typed provider/MCP adapter，generic Runtime 只认识 `threat_intel.ip_reputation.lookup`。
-- [ ] 不迁移旧代码里的硬编码风险评分、地理规则或封禁规则；Provider 返回事实，不直接给 verdict。
+- [x] 实现 PingAn typed provider/MCP adapter，generic Runtime 只认识 `threat_intel.ip_reputation.lookup`。
+- [x] 不迁移旧代码里的硬编码风险评分、地理规则或封禁规则；Provider 返回事实，不直接给 verdict。
 - [ ] 验证 approved hit、not-found、invalid response、auth failure、timeout 和多来源结果。
 - [ ] 真实证据经 `InvestigationEvidence` 回流并可被 Grounding 引用；完整内部响应不得传给 LLM。
+
+内网从仓库根目录 source `.env.soc-dev.local`，再进入 `backend/` 执行：
+
+```bash
+export PI01A_TI_IP="<approved-dev-ip>"
+export DEER_FLOW_EXTENSIONS_CONFIG_PATH="$PWD/samples/pingan_dev/extensions.example.json"
+
+./.venv/bin/python -m soc_agent.cli mcp tools --include-schema --pretty
+./.venv/bin/python -m soc_agent.cli mcp smoke \
+  samples/mcp/pingan_threat_intel/action_adapters.json \
+  --route threat_intel.ip_reputation.lookup \
+  --json "{\"ip\":\"$PI01A_TI_IP\",\"context_refs\":{\"thread_id\":\"PI-01A-TI-SMOKE\"}}" \
+  --pretty
+```
+
+分别使用 approved hit 和 definite miss；鉴权失败与 timeout 必须使用获批的 DEV negative profile，不能指向生产。`status=success + reputation_found=false` 才是正常查无，MCP/action `status=failed` 是 Provider 失败，两者不得合并。
 
 ### 4.2 PI-01B Security tags and authorized facts / 安全标签与授权事实
 
@@ -562,12 +580,12 @@ soc-internal-validation/
 ## 10. Resume Pointer / 下次继续位置
 
 ```text
-Current: PI-01 / D12-B Internal Real Asset Provider
-Ready:   local DEV model profile + portable ZEUS signer + preflight + direct smoke + seven-case matrix runner
-First:   make model gateway and internal run_workflow import available; pass preflight
-Next:    fill private matrix; run plan-only, confirmed direct ZEUS/fallback matrix and existing MCP tools/smoke
-Gate:    persist mocked=false InvestigationEvidence and verify Web/TUI/Lead Agent readback
-Queued:  PI-01A -> PI-01B -> PI-01C -> PI-01D -> PI-01E
+Current: PI-01A PingAn ZEUS Threat Intelligence
+Ready:   typed Provider + stdio MCP + action config + bounded mapping/freshness/lineage regression
+First:   source local DEV profile; run approved hit/not-found/error/timeout through the TI MCP
+Next:    review actual response-field coverage; persist mocked=false InvestigationEvidence and read it back
+Parked:  D12-B asset.locate internal matrix/persistence/Web-TUI gate, unchanged
+Queued:  PI-01B -> PI-01C -> PI-01D -> PI-01E
 ```
 
 不要因为接口暂时不可用而增加新的 fake Provider。不可获得的输入应明确标记 `data-gated`；已有真实能力只替换 adapter/provider/config，不改变通用 Runtime 控制流和核心服务契约。

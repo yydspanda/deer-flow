@@ -1857,3 +1857,14 @@ See `docs/` directory for detailed documentation:
 - [PATH_EXAMPLES.md](docs/PATH_EXAMPLES.md) - Path types and usage
 - [summarization.md](docs/summarization.md) - Context summarization
 - [plan_mode_usage.md](docs/plan_mode_usage.md) - Plan mode with TodoList
+
+### SOC PingAn provider boundary
+
+PingAn-only HTTP paths, authentication and field mappings live under
+`soc_agent/integrations/pingan/`. The threat-intelligence implementation uses
+`threat_intel.ip_reputation.lookup` through the existing MCP action adapter and
+persists successful reads as `InvestigationEvidence`; it must not add external
+IO or tenant conditions to the fixed SOC Runtime. Internal ZEUS mode requires
+HTTPS, an explicit host allowlist and credentials, and fails closed instead of
+falling back to fake data. Keep the legacy TI scoring, whitelist and blocking
+rules out of the provider and generic domain services.

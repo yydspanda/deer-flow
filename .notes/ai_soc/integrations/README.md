@@ -10,9 +10,9 @@
 |---|---|---|---|
 | Legacy model/ZEUS/status/path audit | **Done / reference** | 已完成审计 | [`pingan-legacy-source-audit.md`](pingan-legacy-source-audit.md)；只保留协议和租户边界，不迁移旧控制流 |
 | D12-A asset provider | **Done / fake-only** | D12-A | PingAn provider、portable signer、fallback、MCP/action 契约已完成；不能代替真实验收 |
-| Real `asset.locate` | **Current / data-gated** | `D12-B` | preflight/direct seven-case runner 与 MCP/Dispatcher/evidence/shared-context acceptance runner 已实现；内网 confirmed matrix -> real evidence report -> deployed Web/TUI smoke |
+| Real `asset.locate` | **Parked / internal evidence pending** | `D12-B` | preflight/direct seven-case runner 与 MCP/Dispatcher/evidence/shared-context acceptance runner 已实现；恢复后仍需内网 confirmed matrix -> real evidence report -> deployed Web/TUI smoke |
 | `asset.lookup` simple-record route | **Local scaffold / unresolved production route** | `PI-01D` route consolidation | 它与 ownership-oriented `asset.locate` 语义不同；PI-01E 前必须选择真实 adapter、显式映射并保持独立 result schema，或从该 tenant allowlist 禁用，不能保留默认 mock |
-| Real threat intelligence | **Queued / mock replacement** | `PI-01A` | PingAn `/public/indicatorSearch` adapter；generic 层只认识 `threat_intel.ip_reputation.lookup` |
+| Real threat intelligence | **Current / code-complete, internal smoke pending** | `PI-01A` | PingAn `/public/indicatorSearch` typed Provider + stdio MCP + action/evidence 已实现；generic 层只认识 `threat_intel.ip_reputation.lookup`；仍需真实 DEV `mocked=false` 验收 |
 | Real security-tag lookup | **Queued / mock replacement** | `PI-01B1` | PingAn `/public/searchTagContent` adapter；保留 validity/scope/source/version/freshness |
 | Authoritative authorized-activity facts | **Data-gated / fixture replacement** | `PI-01B2` | change/scanner/maintenance/exercise-roster source adapter -> existing Governed Context lifecycle；不能由 tag lookup 自动冒充完成 |
 | External disposition core | **Done / source missing** | 已完成 canonical service | Contract、Gateway ingress、UoW、SQL、Review/Correction/Memory candidate、Web/TUI 已完成 |

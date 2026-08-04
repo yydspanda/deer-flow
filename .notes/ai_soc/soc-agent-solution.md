@@ -1491,7 +1491,7 @@ credentials, smoke report, and payload/latency/error evaluation.
 | Deliverable / 交付物 | Status / 状态 | Meaning / 含义 |
 | --- | --- | --- |
 | D12-A provider implementation | Done / `fake-only` | PingAn-owned ZEUS HTTP/signing port, asset-to-BU/UM workflow port, fallback service, stdio MCP server, explicit action/MCP config and regression tests; every smoke result is `mocked=true` |
-| D12-B internal real smoke | In Progress / execution-ready | Local DEV model profile, portable ZEUS signer, no-network preflight, direct seven-class runner and MCP evidence/readback acceptance runner are implemented. `--plan-only` is request-free; live requires explicit confirmation, a private matrix and bounded `0600` reports. Evidence acceptance reuses the generic Dispatcher/Repository/Review Context and verifies Lead Agent projection plus immutable base Run/Review state. Internal Agent Platform `run_workflow`, network and approved payloads remain required; only real `mocked=false` reports plus deployed Web/TUI smoke may close the gate |
+| D12-B internal real smoke | Parked / execution-ready | Local DEV model profile, portable ZEUS signer, no-network preflight, direct seven-class runner and MCP evidence/readback acceptance runner are implemented. Product owner parked internal execution on 2026-08-04; the private matrix, `mocked=false`, persistence/readback and deployed Web/TUI gates remain unchanged and must pass when resumed |
 
 The provider receives an already-extracted `asset_key`, type and optional role. It does not extract
 assets, infer attacker/victim roles, select a response target, alter the Runtime verdict, close a
@@ -1505,6 +1505,23 @@ and no import-time dependency on the old application. ZEUS lifecycle status/reas
 the historical EDR safe-path candidate dataset also stay PingAn-owned: status events enter the
 canonical external-disposition service, while safe-path matches may only become governed,
 investigation-only evidence. Neither may add a PingAn branch to generic Runtime control flow.
+
+### 11.3.1 PI-01A Threat-intelligence Provider / 威胁情报能力源
+
+`PI-01A` is the current work package while D12-B waits for internal execution. The generic boundary
+remains `threat_intel.ip_reputation.lookup`; PingAn authentication, `/public/indicatorSearch`,
+`ipAnalyseReport` and `ipReputationReport` exist only under
+`soc_agent.integrations.pingan.threat_intel`. The stdio MCP and explicit action config replace the
+in-memory adapter without changing Runtime control flow.
+
+The provider emits only reviewed, bounded facts: labels with exact source paths, selected
+scene/carrier/location context, provider update time, configurable freshness, response hash and
+mapping warnings for unreviewed field names. It never exports the full response. The legacy
+hardcoded risk formula, geographic multiplier, whitelist and blocking decisions are deliberately
+excluded; absent stable provider semantics, `score`, `confidence` and `last_seen` remain unset.
+Results are always investigation-only, have no decision impact, and become useful only after the
+normal MCP action -> Dispatcher -> `InvestigationEvidence` path. Generic evidence consumption
+unwraps the typed `mcp_result` envelope rather than adding a PingAn-specific branch.
 
 ### 11.4 Governed Read-only Investigation Orchestration / 受控只读调查编排
 
@@ -1680,13 +1697,13 @@ The authoritative work packages, gates, Parking Lot and anti-drift rules live in
 [`delivery-roadmap.md`](delivery-roadmap.md). The current implementation pointer lives only in
 [`progress.md`](progress.md). As of 2026-08-04, `BG-P0-01..BG-P1-05` and `BG-03` are complete, the
 Alpha Gate has a scoped owner approval, and Stage 4 is current. Checkpoint D0-D11.1 and D12-A
-provider code/fake smoke are complete; D12-B internal real asset-provider smoke is the current task,
-with code/preflight/direct case-matrix runner ready and internal Agent Platform runtime plus approved
-private cases required for `mocked=false` evidence. Those inputs must not be replaced by another
-mock. After D12-B, the fixed
-order is real TI, real security/governed-context facts, real external disposition source, governed
-read-only investigation orchestration, and internal shadow E2E (`PI-01A..E`). `PI-04-A SOC Operations
-Snapshot` is complete; `PI-04-B` remains parked behind that sequence.
+provider code/fake smoke are complete. D12-B has complete execution tooling but is explicitly
+`Parked / internal evidence pending`; its `mocked=false` asset-provider gate remains open. The current
+task is PI-01A real threat intelligence: production-shaped PingAn Provider/MCP, bounded mapping and
+external regression are complete, while real DEV smoke and actual response-field review remain.
+The subsequent fixed order is real security/governed-context facts, real external disposition
+source, governed read-only investigation orchestration, and internal shadow E2E (`PI-01B..E`).
+`PI-04-A SOC Operations Snapshot` is complete; `PI-04-B` remains parked behind that sequence.
 
 PI-04-A introduces `soc.operations_snapshot.v1` as a read-only operational projection. It uses exact
 SQL aggregates over SOC-owned run, review, approval, normalization and memory tables, then composes a

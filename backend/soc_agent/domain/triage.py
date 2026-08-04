@@ -17,7 +17,7 @@ from soc_agent.contracts import (
     SocDomainTriageResult,
     SocSkillContext,
 )
-from soc_agent.domain.evidence import evidence_is_mocked, successful_evidence
+from soc_agent.domain.evidence import evidence_is_mocked, evidence_result_payload, successful_evidence
 from soc_agent.domain.scenarios import (
     evidence_profile_for_request as _evidence_profile_for_request,
 )
@@ -382,7 +382,7 @@ def _evidence_by_route(
 ) -> list[InvestigationEvidence]:
     result = [item for item in successful_evidence(evidence, include_mocked=include_mocked) if item.route == route or item.action == route]
     if found_key is not None:
-        result = [item for item in result if item.result_payload.get(found_key) is True]
+        result = [item for item in result if evidence_result_payload(item).get(found_key) is True]
     return result
 
 
@@ -398,7 +398,7 @@ def _active_security_tags(
             "security_tag.lookup",
             include_mocked=include_mocked,
         )
-        if item.result_payload.get("has_active") is True
+        if evidence_result_payload(item).get("has_active") is True
     ]
 
 
@@ -417,7 +417,7 @@ def _correlation_refs(request: SocDomainTriageRequest) -> list[str]:
 def _max_reputation_score(evidence: list[InvestigationEvidence]) -> int:
     scores: list[int] = []
     for item in evidence:
-        reputation = item.result_payload.get("reputation")
+        reputation = evidence_result_payload(item).get("reputation")
         if isinstance(reputation, Mapping):
             score = reputation.get("score")
             if isinstance(score, int):

@@ -356,6 +356,17 @@ Current SOC direction:
   AnalysisRun and ReviewQueue item remain unchanged. Its service/context readback does not claim an
   actual Web/TUI render. A passed direct matrix does not replace MCP, persisted-evidence or
   UI/context readback evidence.
+- PingAn threat-intelligence provider code lives under
+  `backend/soc_agent/integrations/pingan/threat_intel.py` and uses only the generic
+  `threat_intel.ip_reputation.lookup` MCP/action route. It reuses the portable ZEUS signer and shared
+  App ID/App Key, requires HTTPS plus an explicit host allowlist in internal mode, and never falls
+  back to fake data after an internal configuration/provider failure. Only reviewed
+  `ipAnalyseReport`/`ipReputationReport` fields leave the provider; label source paths, freshness,
+  response hash and omitted-field-name warnings are preserved while the full response stays private.
+  Do not migrate the legacy hardcoded risk score, geo multiplier, whitelist or blocking logic; absent
+  stable source semantics, provider `score`, `confidence` and `last_seen` remain unset. MCP results
+  persist as investigation-only evidence and generic consumers must use the common typed
+  `mcp_result` envelope rather than adding PingAn branches.
 - PingAn ZEUS lifecycle codes and reasons belong in a PingAn source adapter that emits
   `SocExternalDispositionIngressCommand`; generic Runtime must not recognize those status codes or
   copy the legacy `status != 1 -> skip AI` behavior. The historical EDR safe-path workbook is
@@ -464,7 +475,7 @@ SOC delivery plan (the only execution order is `.notes/ai_soc/delivery-roadmap.m
 | `BD` Boss Demo v0.1 | Done: browser-first repeatable golden path |
 | `AA` SOC Alpha Completeness Audit | Done: unique 50-row matrix and frozen blocker set |
 | `BG` Close Blocking Gaps | Done: Alpha Gate passed 2026-07-20 |
-| `PI` Real Data & Production Integration | Current: `PI-04-A` done; `PI-01/D12-B` profile/signer/preflight code ready, internal `run_workflow` + real `mocked=false` smoke next; `PI-04-B` parked |
+| `PI` Real Data & Production Integration | Current: `PI-01A` PingAn TI Provider/MCP implemented, internal `mocked=false` smoke pending; `D12-B` parked with its gate unchanged; `PI-04-A` done and `PI-04-B` parked |
 
 ### SOC Agent Development Workflow
 

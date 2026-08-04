@@ -216,15 +216,15 @@ backend/.deer-flow/data/soc_agent_dev.db
 
 ```text
 DEV profile + no-network preflight (implemented)
-    -> D12-B seven-case plan (implemented, no network)
-    -> D12-B direct ZEUS/workflow matrix (runner implemented; execute in internal DEV)
-    -> asset.locate MCP/action/evidence persistence + shared Review/Lead Agent context acceptance (runner implemented; execute in internal DEV)
-    -> deployed Web/Review TUI render smoke for the same evidence
-    -> real threat_intel.ip_reputation.lookup provider
+    -> PI-01A threat_intel.ip_reputation.lookup Provider/MCP (implemented externally)
+    -> PI-01A real DEV hit/not-found/error/timeout + actual field coverage + evidence readback
     -> real security_tag.lookup provider + authoritative-fact source status
     -> external disposition source adapter, if DEV transport exists
     -> governed read-only investigation planner/service
     -> APT/NDR and EDR/HIDS shadow Runtime + Provider + ReviewQueue/Lead Agent review
+
+Parked but still required before Pilot readiness:
+    D12-B seven-case direct/MCP/evidence/Web-TUI acceptance (runners implemented)
 ```
 
 每一步都必须区分 `found`、`not_found`、`failed`，记录 `mocked=false`、环境、延迟、payload/result size 和裁剪状态；任何失败都不得静默回退到 fake provider。

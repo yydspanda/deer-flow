@@ -9,9 +9,9 @@ redacted there.
 
 - `config.example.yaml`: DeerFlow profile for the OpenAI-compatible LiteLLM
   endpoint exposed by the legacy `sec-model` process.
-- `env.example`: shell environment for the model, PingAn `asset.locate`, and
-  historical software-path lookup.
-- `extensions.example.json`: one DeerFlow MCP profile that registers both
+- `env.example`: shell environment for the model, PingAn `asset.locate`,
+  threat intelligence, and historical software-path lookup.
+- `extensions.example.json`: one DeerFlow MCP profile that registers all three
   PingAn read-only tools. It contains environment references, not credentials.
 - `d12b-test-cases.example.yaml`: value-free seven-case D12-B matrix. Copy it
   into the ignored internal validation directory and replace every placeholder
@@ -46,8 +46,9 @@ backend/.deer-flow/pingan-context/software-path-catalog.sqlite
 backend/.deer-flow/pingan-context/software-path-catalog.build-report.json
 ```
 
-After sourcing `.env.soc-dev.local`, `extensions.example.json` exposes both
-`asset.locate` and `endpoint.software_path.lookup`. The latter writes only
+After sourcing `.env.soc-dev.local`, `extensions.example.json` exposes
+`asset.locate`, `threat_intel.ip_reputation.lookup`, and
+`endpoint.software_path.lookup`. Every result writes only
 `InvestigationEvidence(decision_impact=none)` through the normal action
 dispatcher. It cannot skip Runtime, mark an alert benign, close a review, or
 write confirmed memory.
@@ -64,7 +65,8 @@ chmod 600 .env.soc-dev.local config.pingan-dev.local
 
 If root `extensions_config.json` is absent, create it from
 `backend/samples/pingan_dev/extensions.example.json`. If it already exists,
-merge only the `pingan_asset` and `pingan_software_path` `mcpServers` entries;
+merge only the `pingan_asset`, `pingan_threat_intel`, and
+`pingan_software_path` `mcpServers` entries;
 do not overwrite unrelated MCP configuration. The resulting root file is
 Git-ignored.
 
@@ -144,7 +146,20 @@ cd backend
   --route endpoint.software_path.lookup \
   --json '{"path":"D:\\ps\\psexec.exe","context_refs":{"thread_id":"PATH-CONTEXT-SMOKE"}}' \
   --pretty
+
+export PI01A_TI_IP="<approved-dev-ip>"
+
+./.venv/bin/python -m soc_agent.cli mcp smoke \
+  samples/mcp/pingan_threat_intel/action_adapters.json \
+  --route threat_intel.ip_reputation.lookup \
+  --json "{\"ip\":\"$PI01A_TI_IP\",\"context_refs\":{\"thread_id\":\"PI-01A-TI-SMOKE\"}}" \
+  --pretty
 ```
+
+Use an approved DEV IP in `PI01A_TI_IP`. Run separate known-hit and known-miss
+queries, then exercise approved invalid-auth and timeout profiles. A real
+PI-01A result must show `mocked=false`, preserve label source paths and
+freshness, omit the full ZEUS response, and remain investigation-only.
 
 After an approved alert has produced an open ReviewQueue item in the same SOC
 SQLite database, bind one successful private matrix case to that queue and

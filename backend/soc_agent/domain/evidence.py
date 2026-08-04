@@ -14,6 +14,15 @@ def evidence_is_mocked(evidence: InvestigationEvidence) -> bool:
     return evidence.mocked or _contains_mock_marker(evidence.result_payload)
 
 
+def evidence_result_payload(evidence: InvestigationEvidence) -> Mapping[str, Any]:
+    """Return the typed provider result from direct or MCP action evidence."""
+
+    mcp_result = evidence.result_payload.get("mcp_result")
+    if isinstance(mcp_result, Mapping):
+        return mcp_result
+    return evidence.result_payload
+
+
 def successful_evidence(
     evidence: Sequence[InvestigationEvidence],
     *,
@@ -45,4 +54,9 @@ def _contains_mock_marker(value: Any) -> bool:
     return False
 
 
-__all__ = ["evidence_is_mocked", "successful_evidence", "successful_evidence_routes"]
+__all__ = [
+    "evidence_is_mocked",
+    "evidence_result_payload",
+    "successful_evidence",
+    "successful_evidence_routes",
+]
