@@ -70,6 +70,8 @@ D12-B 真实 asset.locate
   -> PI-01A 真实 threat_intel.ip_reputation.lookup
   -> PI-01B 真实 security_tag.lookup
   -> PI-01C Zeus 状态/理由回流 source adapter
+  -> PI-01D 受控只读调查编排
+  -> PI-01E 内网 shadow 全链路
   -> PI-02 真实 Kafka/PostgreSQL/K8s（当前暂停）
   -> PI-03 人工标签、评测与校准
   -> PI-04B+ Web 运营视图、Telemetry、Prometheus/SLO
@@ -291,6 +293,8 @@ D12-B 通过后按下面顺序推进。每项都复用 generic action、typed re
 | `PI-01A` | `threat_intel.ip_reputation.lookup` | `POST /public/indicatorSearch` | in-memory mock | real DEV hit/not-found/error smoke + persisted evidence |
 | `PI-01B` | `security_tag.lookup` | `POST /public/searchTagContent` | in-memory mock | valid/expired/not-found/error smoke + governed evidence |
 | `PI-01C` | external disposition canonical ingress | Zeus status/reason feed | canonical service real, source feed fixture | authenticated real source adapter + idempotency/order/replay evidence |
+| `PI-01D` | governed read-only investigation orchestration | existing action dispatcher/registry/evidence | only caller-supplied `action_specs`; daemon/batch do not auto-enrich | deterministic allowlisted plan + persisted evidence + immutable base run |
+| `PI-01E` | internal shadow end-to-end | real Runtime + PI-01 providers | not started | `5 -> 50 -> all` investigation report with latency/cost/error/review/no-side-effect gates |
 
 ### 4.1 PI-01A Threat intelligence / 威胁情报
 
@@ -327,7 +331,22 @@ POST /api/soc/external-dispositions
 
 旧源码状态码已经确认：`0 已忽略`、`1 待审阅`、`2 退回中`、`3 待确认`、`4 处理中`、`5 待复核`、`6 待关闭`、`7 子单处理中`、`8 子单已关闭`、`9 已关闭`、`10 编辑`。旧实现的“status != 1 就跳过 AI”不得迁移；状态码本身不等于 true/false verdict。具体映射边界见 `pingan-legacy-source-audit.md`。
 
-### 4.4 PingAn EDR software-path context / 路径调查知识（已实现）
+### 4.4 PI-01D Governed read-only investigation / 受控只读调查
+
+- [ ] 新增 vendor-neutral `SocEnrichmentPlan` 和 deterministic planner；输入只使用 canonical entities、typed scenarios、evidence gaps 和 tenant policy。
+- [ ] 首版只允许已注册的 `asset.locate`、`threat_intel.ip_reputation.lookup`、`security_tag.lookup`，禁止自然语言拼接任意 tool name/payload。
+- [ ] 复用 `SocAgentActionDispatcher`、`SocActionAdapterRegistry` 和 `InvestigationEvidenceRepository`；不得在通用 Runtime 内加入 PingAn 分支或外部 IO。
+- [ ] Provider failure、normal not-found、partial result 和 schema drift 必须是不同状态；base `AnalysisRun` 保持不可变。
+- [ ] Kafka/PKL 调查模式必须显式开启、可限流和可回放；默认 Runtime compatibility batch 继续不调用 MCP。
+
+### 4.5 PI-01E Internal shadow / 内网影子验证
+
+- [ ] 先 5 条验证结构和权限，再 50 条看 provider/error/cost 分布，最后才讨论 all。
+- [ ] 保存 provider hit/not-found/error、有效证据率、P95 latency、LLM/tool cost、review rate 和 schema drift。
+- [ ] 验证 verdict 覆写、自动关单、confirmed memory 写入和高风险 side effect 均为 0。
+- [ ] 只有人工标签才能进入 PI-03 质量结论；批跑完成本身不是准确率证明。
+
+### 4.6 PingAn EDR software-path context / 路径调查知识（已实现）
 
 旧 XLSX 已编译为 Git-ignored SQLite 目录。它保留源文件 SHA、源告警行、历史 disposition、出现次数、时间范围、规则码及可关联的 MD5；不保存原始日志正文。查询只允许精确规范化路径及可选 MD5，不使用旧代码的 basename、版本通配、前缀或删目录段模糊匹配。
 
@@ -481,7 +500,7 @@ Ready:   local DEV model profile + portable ZEUS signer + preflight + direct smo
 First:   make model gateway and internal run_workflow import available; pass preflight
 Next:    run direct ZEUS/fallback case matrix and existing MCP tools/smoke
 Gate:    persist mocked=false InvestigationEvidence and verify Web/TUI/Lead Agent readback
-After:   PI-01A real threat intelligence provider
+Queued:  PI-01A -> PI-01B -> PI-01C -> PI-01D -> PI-01E
 ```
 
 不要因为接口暂时不可用而增加新的 fake Provider。不可获得的输入应明确标记 `data-gated`；已有真实能力只替换 adapter/provider/config，不改变通用 Runtime 控制流和核心服务契约。

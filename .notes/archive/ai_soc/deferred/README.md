@@ -3,13 +3,17 @@
 这个目录保存已经认可价值、但明确不进入当前执行队列的工作。它们不是当前路线图，也不能从这里
 直接启动开发；权威执行顺序仍由 `.notes/ai_soc/delivery-roadmap.md` 决定。
 
-| Deferred item | 当前状态 | 重新进入执行队列的主要条件 |
-|---|---|---|
-| [Kafka worker pool / concurrency](kafka-worker-pool-concurrency-plan.md) | 基础契约已完成，并发实现暂缓 | 有真实 Kafka、DB、LLM 吞吐和延迟数据 |
-| [SOC operations overview](operations-overview-deferred.md) | `PI-04-A` 最小只读 snapshot 已激活；完整 Web/Prometheus/SLO 仍暂缓 | 真实 telemetry、时间窗阈值和运营 owner 到位 |
-| [Correlation label corpus expansion](correlation-label-corpus-expansion.md) | 8-pair 工程基线已有，真实标签扩充暂缓 | 有获批脱敏数据、分析师 reviewer 和版本化标签流程 |
-| [DB memory to Wiki/OKF projection](wiki-okf-memory-projection.md) | DB-first memory 已建立，展示投影暂缓 | DB 生命周期稳定并出现明确协作/审阅需求 |
-| [Adaptive normalization and parser evolution](adaptive-normalization-parser-evolution.md) | deterministic 监控与离线 suggestion 已有，自动候选治理暂缓 | 有真实漂移 cohort、owner、review/replay/rollback 流程 |
+| Deferred item | Target / 目标阶段 | 重新进入队列的条件 | 激活后的第一刀 |
+|---|---|---|---|
+| [Kafka worker pool / concurrency](kafka-worker-pool-concurrency-plan.md) | `PI-02` | 有真实 Kafka、DB、LLM P50/P95、lag 和失败数据，串行模式实测不达标 | 在默认 concurrency=`1` 下加入 bounded queue/poller，先验证顺序提交、背压和优雅退出，不直接打开多 worker |
+| [SOC operations overview](operations-overview-deferred.md) | `PI-04-B/C` | `PI-01E` 已产生真实 shadow telemetry，并明确时间窗、阈值和运营 owner | `PI-04-B` 只做现有 snapshot 的薄 Web 消费页；Prometheus/SLO 作为后续独立切片，不在前端重算健康度 |
+| [Correlation label corpus expansion](correlation-label-corpus-expansion.md) | `PI-03` | 有获批脱敏 pair、分析师 reviewer 和版本化标签流程 | 先建立 immutable manifest + reviewer/rationale/provenance/supersede contract，再扩 corpus 和跑 scorer replay diff |
+| [DB memory to Wiki/OKF projection](wiki-okf-memory-projection.md) | `PI-03` 之后 | DB 生命周期和检索价值已被真实使用验证，且分析师提出明确协作需求 | 先做 DB -> versioned read-only export；Wiki 编辑只能回流 proposal，不允许直接改变 active memory |
+| [Adaptive normalization and parser evolution](adaptive-normalization-parser-evolution.md) | `PI-03` 或独立治理切片 | `PI-01E`/5000+ 批跑产生可重复 drift cohort，并有 owner、review/replay/rollback 流程 | 先实现按 tenant/source/parser/fingerprint 聚合的 cohort report + candidate bundle；不自动生成或上线 parser |
+
+不在本目录、但必须和上述工作一起排期的反馈项：真实 external disposition/分析师 correction 累积后，
+在 `PI-03` 增加 `SkillImprovementCandidate` 聚合。它只生成受影响 Skill、样本引用、失败模式、建议
+修改和回放集，不自动修改或发布 Skill。
 
 ## 使用规则
 

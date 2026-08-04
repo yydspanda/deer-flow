@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-04-A` 已完成） |
-| 当前目标 | `PI-01/D12-B` 内网 DEV 配置预检和真实资产 Provider smoke；随后接真实 ZEUS TI、安全标签和可用的外部状态反馈 |
+| 当前目标 | `PI-01/D12-B` 内网 DEV 配置预检和真实资产 Provider smoke；随后严格按 `PI-01A..E` 完成真实 TI、安全标签/治理事实、外部状态回流、受控只读调查编排和内网 shadow E2E |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 PingAn 内网 DEV 统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | 在内网使 `model.agent_platform.util_tools:run_workflow` 可导入，启动本地模型 gateway，执行 preflight、direct Provider 和 MCP `mocked=false` case matrix；Kafka/K8s/PostgreSQL/PI-04-B 当前不插队。 |
+| 当前下一刀 | 在内网使 `model.agent_platform.util_tools:run_workflow` 可导入，启动本地模型 gateway，执行 preflight、direct Provider 和 MCP `mocked=false` case matrix；完成 D12-B 前不启动 `PI-01A..E`，Kafka/K8s/PostgreSQL/PI-04-B/deferred 当前不插队。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -41,6 +41,15 @@
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / PI-01 D12-B Internal Smoke** | PI-04-A 已完成；DEV profile/signer/preflight 已就绪，当前等待内网 Agent Platform import 和真实 case matrix；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+
+## 2026-08-04 — PI-01 real integration and deferred plan reconciled
+
+- 审阅 `.notes/ai_soc/integrations/` 与 `.notes/archive/ai_soc/deferred/`，确认它们不是同一类 backlog：integration 文档包含当前执行 runbook、已完成审计和真实接入缺口；deferred 只有满足显式触发条件后才能重新排期。
+- 发现并固定关键 reachability gap：`SocMainOrchestratorService` 当前只执行调用方传入的 `action_specs`，Kafka daemon 和内网 PKL batch 只跑固定 Runtime；真实 Provider 接通后不会自动进入连续告警调查。
+- 在 `delivery-roadmap.md` 增加唯一顺序：`D12-B -> PI-01A TI -> PI-01B security/governed facts -> PI-01C external disposition -> PI-01D governed read-only orchestration -> PI-01E internal shadow`。
+- `PI-01D` 固定为 application-level deterministic planner，复用现有 dispatcher/registry/evidence；不把外部 IO 放入 Runtime，不让 LLM 自由路由 Kafka 工具，不覆写基础 verdict、关单、写 confirmed memory 或执行高风险动作。
+- Deferred 激活顺序和第一实现切片已收口：PI-03 先做可审计 label/correlation/skill candidate；adaptive parser 先做 drift cohort/candidate bundle；PI-04-B 先做 snapshot 薄 Web；Kafka concurrency 必须由真实吞吐证明；Wiki/OKF 只做 DB 单向投影。
+- 本切片仅做规划与文档一致性修复，没有修改业务代码，也没有改变当前执行指针；下一刀仍是 `PI-01/D12-B` 内网真实资产 Provider smoke。
 
 ## 2026-08-04 — Internal PKL batch and split transfer bundle prepared
 

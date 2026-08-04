@@ -1506,6 +1506,30 @@ the historical EDR safe-path candidate dataset also stay PingAn-owned: status ev
 canonical external-disposition service, while safe-path matches may only become governed,
 investigation-only evidence. Neither may add a PingAn branch to generic Runtime control flow.
 
+### 11.4 Governed Read-only Investigation Orchestration / 受控只读调查编排
+
+Real Provider availability and alert-workflow integration are separate gates. Today the Main
+Orchestrator can execute caller-supplied `action_specs`, while Kafka daemon and the internal PKL batch
+run only `SocAnalysisService`. The production integration path therefore adds an application-level
+investigation planner/service outside the fixed Runtime:
+
+```text
+immutable AnalysisRun
+  -> deterministic, versioned SocEnrichmentPlanner
+  -> allowlisted read-only actions
+  -> existing SocAgentActionDispatcher / SocActionAdapterRegistry
+  -> persisted InvestigationEvidence
+  -> correlation, domain triage, ReviewQueue, Web/TUI and Lead Agent context
+```
+
+The planner consumes canonical typed entities, scenario assessments, evidence gaps and tenant policy;
+it must not inspect PingAn aliases or let an LLM invent tool names and payloads. Interactive Lead Agent
+proposals still pass through the same policy/adapter boundary. Provider errors are not normal misses,
+the base Runtime result is immutable, and the first rollout is shadow-only: no verdict overwrite,
+ReviewQueue close, confirmed-memory write or high-risk action. If enriched evidence later warrants a
+new conclusion, persist a versioned, grounded investigation addendum instead of mutating the original
+run.
+
 ---
 
 ## 12. Security and Permission Model / 安全与权限模型
@@ -1654,12 +1678,14 @@ Delivery stages / 交付阶段：
 
 The authoritative work packages, gates, Parking Lot and anti-drift rules live in
 [`delivery-roadmap.md`](delivery-roadmap.md). The current implementation pointer lives only in
-[`progress.md`](progress.md). As of 2026-08-02, `BG-P0-01..BG-P1-05` and `BG-03` are complete, the
+[`progress.md`](progress.md). As of 2026-08-04, `BG-P0-01..BG-P1-05` and `BG-03` are complete, the
 Alpha Gate has a scoped owner approval, and Stage 4 is current. Checkpoint D0-D11.1 and D12-A
-provider code/fake smoke are complete; D12-B internal real asset-provider smoke is explicitly parked
-as `Waiting / data-gated` until endpoint, credentials, signer/workflow imports, tenant mapping and
-approved payloads exist. Those inputs must not be replaced by another mock. `PI-04-A SOC Operations
-Snapshot` is complete; the next slice is the thin `PI-04-B` Web consumer view.
+provider code/fake smoke are complete; D12-B internal real asset-provider smoke is the current task,
+with code/preflight ready and internal Agent Platform runtime plus approved cases required for
+`mocked=false` evidence. Those inputs must not be replaced by another mock. After D12-B, the fixed
+order is real TI, real security/governed-context facts, real external disposition source, governed
+read-only investigation orchestration, and internal shadow E2E (`PI-01A..E`). `PI-04-A SOC Operations
+Snapshot` is complete; `PI-04-B` remains parked behind that sequence.
 
 PI-04-A introduces `soc.operations_snapshot.v1` as a read-only operational projection. It uses exact
 SQL aggregates over SOC-owned run, review, approval, normalization and memory tables, then composes a

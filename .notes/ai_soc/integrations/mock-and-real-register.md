@@ -21,6 +21,7 @@
 | `asset.locate` | 本地 stdio MCP mock tool | `backend/scripts/soc_dev_mcp_server.py`、`backend/samples/mcp/` | 模拟 Zeus/CMDB/asset_to_bu 归属定位，验证 Lead Agent proposal -> MCP adapter -> evidence | 替换为真实资产归属/BU/owner/处置归属服务；保存 `soc.mcp_action_smoke_report.v1` |
 | `D12-A` PingAn asset provider | **Implemented production-shaped code with fake transport; still mock** | `backend/soc_agent/integrations/pingan/`、`backend/scripts/soc_pingan_asset_mcp_server.py`、`backend/samples/mcp/pingan_asset/` | 外网验证 ZEUS 签名调用边界、`searchAssetInfo -> asset_to_bu -> UM` 降级编排、MCP/action 映射和 fail-closed；产物明确 `mocked=true` | 只有 `D12-B` 内网注入真实 endpoint/secret/signer/workflow runner 并产生 `mocked=false` smoke 证据后才算 real；D12-A 不能关闭 `PA-12` / `PI-01` |
 | `D12-B` PingAn internal validation | **Code/config prepared; real evidence pending** | `backend/samples/pingan_dev/`、`backend/scripts/soc_pingan_dev_preflight.py`、`backend/scripts/soc_pingan_asset_direct_smoke.py` | 真实值保存在 Git-ignored local profile；preflight 不发请求，direct smoke 输出 bounded report；portable signer 已真实实现 | 内网提供 Agent Platform `run_workflow` 依赖和 approved cases，通过 direct + MCP + persisted evidence case matrix；至少一项 `mocked=false` 后才改变 real-provider 状态 |
+| Automatic read-only investigation orchestration | **Application gap; not a mock provider** | `backend/soc_agent/core/orchestrator.py`、`backend/soc_agent/core/service.py` | Main Orchestrator 可执行调用方显式给出的 `action_specs`；Lead Agent 可提议动作；Kafka daemon/内网 PKL batch 当前只跑固定 Runtime | `PI-01D` 新增确定性、版本化、allowlisted enrichment plan；复用 dispatcher/registry/evidence，不在 Runtime 内做外部 IO，不允许改基础 verdict/close/memory/automation |
 | `threat_intel.ip_reputation.lookup` | in-memory 威胁情报 mock adapter | `backend/soc_agent/actions/adapters.py` | 验证 APT 情报查询 evidence 形态，避免 domain handler 自己假设情报 | 替换为企业威胁情报、TI 平台或外部情报 provider 的 read-only adapter |
 | `security_tag.lookup` | in-memory 标签/授权/白名单 mock adapter | `backend/soc_agent/actions/adapters.py` | 验证授权扫描、演练、维护窗口、白名单等标签 evidence 形态 | 替换为安全标签、变更、演练、白名单、维护窗口等真实数据源 |
 | Authorized-activity source facts | GF-01 lifecycle/DB 与 AA-01 matcher 是真实确定性实现；当前 HIDS/EDR shadow facts 由已确认业务真值构造为本地 in-memory fixture | `backend/soc_agent/contracts/governed_context.py`、`backend/soc_agent/authorization/`、gitignored `step-12-authorization-shadow/` | 验证 event-time lifecycle/scope/freshness/recurrence 和 exact explanation；不代表已接变更/扫描器/维护系统 | 接真实 change/scanner/maintenance/CMDB source adapter，同步 source ref/version/freshness 后重新跑 shadow replay；不得把 validation fixture 当生产 active fact |
@@ -88,6 +89,10 @@
 
 大模型可以建议“应查询什么”，但不能虚构这些系统的查询结果。真实 endpoint/凭证到位后，只替换
 adapter/provider/config，并继续将结果作为 `InvestigationEvidence` 回流。
+
+还要区分 **provider readiness** 和 **workflow reachability**：D12-B、PI-01A、PI-01B 分别证明真实
+能力源可调用；只有 `PI-01D` 才证明 Kafka/批处理能够根据 typed context 受控选择并保存这些只读
+调查结果。内网 PKL Runtime 批跑继续默认不调用 MCP；调查批跑必须是显式模式和独立报告。
 
 ### 3.2 已删除的未确认能力
 
