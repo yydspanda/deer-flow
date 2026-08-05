@@ -1778,6 +1778,18 @@ verdict. D4 invokes no Provider and creates no second report truth table. Omitte
 config preserves Runtime-only behavior. The current task is PI-01E internal shadow end-to-end.
 `PI-04-A SOC Operations Snapshot` is complete; `PI-04-B` remains parked behind that sequence.
 
+PI-01E 的代码侧验收入口位于
+`validation/compact_zeus/internal_batch/evaluate_pingan_shadow.py`。它成对读取同一 source cohort 的
+Runtime-only batch 与 persisted investigation batch，并生成
+`soc.pingan_internal_shadow_acceptance.v1`。该投影不调用 LLM、MCP discovery 或 Provider；它校验
+source/row/payload/config 指纹、模型与 evidence profile、deterministic pre-LLM projection、
+`required_result_mode=real`、真实结果、evidence coverage，以及 base-run mutation、auto-close、
+confirmed-memory write 和 high-risk action 全部为零。PingAn shadow 明确禁用本地开发
+`asset.lookup`，只允许 `asset.locate` 或无 asset route。报告同时汇总 Provider
+hit/not-found/error、有效证据率、action-attempt P95、review rate、LLM usage、schema observation，并把
+Provider 网络延迟和费用缺口明确标记为 `not_measured`。`5 -> 50 -> all` 每一档都需人工审阅；技术
+pass 不自动扩容、不评估模型准确率，也不声明 Pilot Ready。
+
 PI-01D3 persists `SocEnrichmentExecution` and `SocEnrichmentActionAttempt` through migration
 `0019_enrichment_executions`. The immutable plan records exactly which typed candidates and reviewed
 policy produced each action. Actual action results are checked against

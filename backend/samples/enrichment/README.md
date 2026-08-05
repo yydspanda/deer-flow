@@ -11,6 +11,11 @@ configure MCP transport or credentials.
   `asset-lookup-soc-dev-mcp` adapter in
   `backend/samples/mcp/soc_dev_action_adapters.json`. It exercises the D3
   persistent MCP workflow while still requiring `required_result_mode: mock`.
+- `pingan-internal-shadow.example.yaml` is the secret-free PI-01E starting
+  profile. It requires real results, selects PingAn `asset.locate` plus
+  `security_tag.lookup`, and deliberately excludes the development-only
+  `asset.lookup` route. Copy it to a Git-ignored operator-owned file before
+  changing tenant policy.
 
 The composition and the action-adapter registry are independent allowlists. At
 startup, `build_soc_main_orchestrator_service()` requires every enabled route to
@@ -23,6 +28,12 @@ and the existing MCP configs under `backend/samples/mcp/pingan_*`. Do not copy
 the mock sample into an internal real profile: use `required_result_mode: real`
 and bind the exact PingAn MCP adapter IDs. Their `runtime_declared` contract
 means D3 must also verify each returned `mocked` value before persisting evidence.
+The tracked PI-01E example does not enable threat intelligence because no
+tenant network ranges belong in a public sample. To enable
+`threat_intel.ip_reputation.lookup`, the internal owner must add that route,
+its exact binding, and reviewed `internal_networks`, then include the PingAn TI
+action config. Do not insert guessed RFC1918 or PingAn ranges merely to satisfy
+schema validation.
 
 Kafka daemon commands accept repeated `--enrichment-action-config` arguments so
 an internal profile can combine the separately reviewed PingAn asset, threat

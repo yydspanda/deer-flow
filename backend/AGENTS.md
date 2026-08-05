@@ -393,6 +393,13 @@ action-attempt latency is measured; Provider-network latency and cost remain exp
 addendum has `reasoning_status=not_requested`, produces no new conclusion, and may be projected into
 Review/Web/TUI/Lead Agent context without changing the base run. `soc investigation get|report|replay`
 is the operator boundary; replay additionally requires a new idempotency key, reason and confirmation.
+PI-01E paired acceptance remains under `validation/compact_zeus/internal_batch/`, not production
+Runtime. Run one provider-free compatibility batch and one explicit persisted investigation batch over
+the same cohort, then use `evaluate_pingan_shadow.py` to validate real-only config, exact fingerprints,
+deterministic pre-LLM compatibility, evidence coverage and zero unauthorized side effects. The
+evaluator must never discover/invoke MCP tools, include raw data or internal paths in its report, infer
+model accuracy, auto-expand a cohort, or claim Pilot readiness. PingAn PI-01E selects `asset.locate` or
+no asset route; the local-development `asset.lookup` route is a blocking failure.
 
 PI-04-A operational visibility is a separate read-only service boundary. Contracts live in
 `soc_agent.contracts.operations`, exact SQL aggregates in `soc_agent.db.operations`, Kafka projection

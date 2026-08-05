@@ -366,6 +366,17 @@ Current SOC direction:
   may display the addendum, but it cannot overwrite the base verdict, close work, confirm memory or
   authorize an action. Operators use `soc investigation get|report|replay`; replay requires a new
   idempotency key, a reason, explicit config and confirmation.
+- PI-01E internal shadow uses two separate outputs from
+  `validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py`: one Runtime-only compatibility
+  batch and one explicitly persisted investigation batch over the exact same cohort. Seal each
+  `5 -> 50 -> all` stage with `evaluate_pingan_shadow.py`. The evaluator performs no LLM/MCP/Provider
+  call; it validates source/cohort/config fingerprints, deterministic pre-LLM compatibility,
+  `required_result_mode=real`, no PingAn `asset.lookup`, no mock result, complete evidence, and zero
+  base-run mutation/auto-close/confirmed-memory/high-risk flags. Its
+  `soc.pingan_internal_shadow_acceptance.v1` report is secret-free and review-gated: a pass never
+  evaluates accuracy, advances the cohort automatically, or claims Pilot readiness. The PingAn sample
+  composition uses `asset.locate`; TI remains disabled until reviewed tenant network ranges are added
+  to an operator-owned local copy.
 - PingAn asset-provider code lives only under `backend/soc_agent/integrations/pingan/` and uses the
   existing generic `asset.locate` MCP/action boundary. Checkpoint D12-A is production-shaped code with
   a fake transport and must always expose `mocked=true`; it is not PA-12 or PI-01 real-provider

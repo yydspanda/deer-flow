@@ -1,0 +1,25 @@
+schema_version: soc.enrichment_composition.v1
+enabled: true
+required_result_mode: real
+policy:
+  schema_version: soc.enrichment_policy.v1
+  policy_version: pingan-dev-shadow-v1
+  tenant_id: pingan
+  enabled_routes:
+    - asset.locate
+    - security_tag.lookup
+  asset_route: asset.locate
+  max_actions_total: 4
+  max_actions_per_route: 2
+retry_policy:
+  max_attempts_per_action: 3
+  stale_after_seconds: 300
+bindings:
+  - route: asset.locate
+    action: asset.locate
+    adapter_id: asset-locate-pingan-mcp
+    adapter_kind: mcp
+  - route: security_tag.lookup
+    action: security_tag.lookup
+    adapter_id: security-tag-pingan-mcp
+    adapter_kind: mcp

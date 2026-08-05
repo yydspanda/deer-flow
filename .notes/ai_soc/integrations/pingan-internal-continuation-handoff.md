@@ -3,7 +3,7 @@
 > Type: temporary transfer artifact / 临时复制交接文件
 > Reconciled: 2026-08-05
 > Current pointer: `PI-01E Internal Shadow End-to-End`; D12-B and PI-01A/B1 retain their internal acceptance gates
-> Next external action: review real-only composition/adapters, then run separate 5-row Runtime-only and investigation-shadow batches using the completed D1-D4 workflow/reporting boundary
+> Next external action: create/review the operator-owned real-only composition, run separate same-cohort 5-row Runtime-only and investigation batches, then seal `--ramp-stage 5` before any expansion
 
 本文件只保留**尚未完成**的工作，便于复制到内网 Mac 后继续开发和验证。它不是新的权威路线；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
@@ -443,7 +443,7 @@ POST /api/soc/external-dispositions
 
 - [x] 新增 vendor-neutral `SocEnrichmentPlan` 和 deterministic planner；输入只使用 canonical typed entities、role resolutions、completed run status 和 tenant policy。
 - [x] 首版只允许 exact registered `asset.lookup|asset.locate|threat_intel.ip_reputation.lookup|security_tag.lookup`，禁止自然语言拼接任意 tool name/payload。
-- [ ] 审阅 `asset.lookup` simple-record route：为 PingAn 显式配置真实 adapter 并保留独立 result schema，或从 tenant allowlist 禁用；不得让 PI-01E 使用默认 in-memory mock。
+- [x] PingAn PI-01E 选择从 tenant allowlist 禁用 `asset.lookup`：tracked real-only 示例改用 `asset.locate`，paired evaluator 将任何 `asset.lookup` 选中视为 blocking failure；实际内网 operator 配置仍须通过同一 gate。
 - [x] 复用 `SocAgentActionDispatcher`、`SocActionAdapterRegistry` 和 `InvestigationEvidenceRepository`；通用 Runtime 没有 PingAn 分支或外部 IO。
 - [x] Provider failure、normal not-found、result-mode contract failure、denied 和 interrupted 是不同状态；base `AnalysisRun` 保持不可变。
 - [x] Kafka/PKL 调查模式显式开启，受 action/retry budget 限制且可 linked replay；默认 Runtime compatibility batch 继续不调用 MCP。
@@ -451,6 +451,7 @@ POST /api/soc/external-dispositions
 
 ### 4.5 PI-01E Internal shadow / 内网影子验证
 
+- [x] 增加无外部 IO 的 paired evaluator：锁定同 cohort/config 指纹、deterministic pre-LLM compatibility、real/mock、evidence、P95/review/schema/measurement gap 与零越权计数；报告不自动扩容、不声明 accuracy/Pilot Ready。
 - [ ] 先 5 条验证结构和权限，再 50 条看 provider/error/cost 分布，最后才讨论 all。
 - [ ] 保存 provider hit/not-found/error、有效证据率、P95 latency、LLM/tool cost、review rate 和 schema drift。
 - [ ] 验证 verdict 覆写、自动关单、confirmed memory 写入和高风险 side effect 均为 0。
@@ -610,9 +611,9 @@ soc-internal-validation/
 
 ```text
 Current: PI-01E internal Runtime compatibility and governed investigation shadow
-Ready:   PI-01D1-D4 planner + strict composition + durable workflow + recomputable report/addendum
-First:   review real-only composition/adapters; map or disable asset.lookup; run separate 5-row Runtime-only and investigation batches
-Next:    inspect hit/not-found/error, evidence coverage, action-attempt P95, explicit cost/provider-latency gaps, review and unauthorized-mutation counts before expanding to 50
+Ready:   PI-01D1-D4 plus paired evaluator and PingAn real-only asset.locate/security-tag example; asset.lookup is a blocking failure
+First:   create the operator-owned internal composition, confirm Provider/tenant scope, then run separate 5-row Runtime-only and investigation batches
+Next:    seal `--ramp-stage 5`; review hit/not-found/error, evidence coverage, action-attempt P95, cost/provider-latency gaps, review and four zero-side-effect counts before expanding to 50
 Pending internal evidence: D12-B asset, PI-01A TI, PI-01B1 security-tag gates
 Data-gated: PI-01B2 authoritative activity source, PI-01C stable status/reason feed contract
 Queued:  PI-02/PI-04-B only after PI-01E evidence and stage review

@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 PingAn 内网 DEV 统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | `PI-01E` 先审阅内网 composition/adapter 配置并处理 `asset.lookup` 的真实映射或禁用，再跑 5 条 Runtime-only 与 5 条 investigation shadow；核对 hit/not-found/error、evidence coverage、action-attempt latency、review/越权计数以及明确的 cost/provider-latency measurement gaps。 |
+| 当前下一刀 | 将 `pingan-internal-shadow.example.yaml` 复制为内网 operator-owned 配置，核对真实 Provider/tenant scope 后跑同 cohort 的 5 条 Runtime-only 与 5 条 investigation；再用 `evaluate_pingan_shadow.py --ramp-stage 5` 生成报告并人工审阅，未通过不得扩至 50。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -41,6 +41,28 @@
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / PI-01E Internal Shadow** | D1-D4 planner、strict composition、durable workflow 与 read-only reporting 已完成；D12-B、TI、security-tag 保留内网 gate，B2/C data-gated；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+
+## 2026-08-05 — PI-01E paired shadow acceptance tooling completed
+
+- 新增 `evaluate_pingan_shadow.py` 与版本化 `soc.pingan_internal_shadow_acceptance.v1`：成对读取同一
+  cohort 的 Runtime-only / persisted investigation 批次，不调用 LLM、MCP discovery 或 Provider。
+- gate 锁定 source/row/payload/config 指纹、相同 model/evidence profile、deterministic pre-LLM
+  projection、完整 batch/report、`required_result_mode=real`、至少一个真实 Provider result、无 mock、无
+  final failure/缺失 evidence；每个 configured route 都必须至少产生一个 planned action 与 real terminal
+  result，避免一个可用 Provider 掩盖未执行的 binding；base-run mutation、auto-close、confirmed-memory
+  write、high-risk action 四类越权计数均为零。
+- 报告汇总 Provider hit/not-found/error rate、有效证据率、action-attempt P50/P95/max、Runtime review
+  rate、LLM token/货币成本采集状态和 message schema observation；Provider 网络耗时与费用没有来源时
+  继续明确 `not_measured`，不填伪造的 0。
+- 新增 `pingan-internal-shadow.example.yaml`，以 `required_result_mode=real` 绑定 `asset.locate` 与
+  `security_tag.lookup`，明确禁用开发用 `asset.lookup`。TI 不预填猜测网段；内网 owner 加入已审阅
+  `internal_networks` 后才能启用 TI route/binding/config。
+- 任何技术 pass 均固定 `model_accuracy_evaluated=false`、`pilot_ready=false`、
+  `automatic_expansion_allowed=false`；5/50/all 每档都必须人工审阅。当前未产生真实内网 5 条证据，
+  PI-01E 仍为 Current，D12-B 与 PI-01A/B1 的 `mocked=false` gate 仍开放。
+- Ruff format/check 与聚焦 internal-batch 回归通过（`13 passed`）；完整 SOC、architecture 和
+  internal-batch 回归为 `755 passed`。`codegraph sync .` 完成，`evaluate_shadow_batches` 与
+  `_summarize_records` 查询可定位新入口和既有汇总点。
 
 ## 2026-08-05 — PI-01D4 shadow report and investigation addendum completed
 

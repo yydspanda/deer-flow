@@ -154,6 +154,7 @@ class _FakeInvestigationReportingService:
                 "measurement_gaps": ["provider_cost_not_measured"],
                 "base_run_mutated": False,
                 "auto_close_allowed": False,
+                "confirmed_memory_write_allowed": False,
                 "high_risk_actions_allowed": False,
             }
         )
@@ -316,6 +317,7 @@ def test_execute_batch_explicitly_runs_persisted_internal_investigation(
     assert record["investigation_addendum"]["addendum_id"] == "IADD-BATCH-001"
     assert manifest["summary"]["investigation_shadow"]["evidence_coverage_ratio"] == 1.0
     assert manifest["summary"]["investigation_shadow"]["unauthorized_base_run_mutation_count"] == 0
+    assert manifest["summary"]["investigation_shadow"]["confirmed_memory_write_allowed_count"] == 0
 
 
 def test_live_plan_only_does_not_require_execution_confirmation(

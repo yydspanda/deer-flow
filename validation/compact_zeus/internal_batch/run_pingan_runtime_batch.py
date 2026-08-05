@@ -627,6 +627,7 @@ def _summarize_records(
             "measurement_gap_counts": dict(sorted(investigation_measurement_gaps.items())),
             "unauthorized_base_run_mutation_count": sum(item.get("base_run_mutated") is not False for item in investigation_reports),
             "auto_close_allowed_count": sum(item.get("auto_close_allowed") is not False for item in investigation_reports),
+            "confirmed_memory_write_allowed_count": sum(item.get("confirmed_memory_write_allowed") is not False for item in investigation_reports),
             "high_risk_actions_allowed_count": sum(item.get("high_risk_actions_allowed") is not False for item in investigation_reports),
         },
     }

@@ -172,6 +172,59 @@ mock/real result counts, evidence coverage, and action-attempt P50/P95/max
 latency. Provider-network latency and tool cost remain explicit
 `not_measured` gaps rather than fabricated zeros.
 
+## PI-01E paired shadow gate
+
+PI-01E uses two different directories over the exact same source cohort:
+
+1. a Runtime compatibility batch with no enrichment arguments and no Provider
+   calls;
+2. a persisted investigation batch with a reviewed real-only composition and
+   explicit action configs.
+
+For PingAn, start from
+`backend/samples/enrichment/pingan-internal-shadow.example.yaml`. It selects
+`asset.locate` and explicitly leaves `asset.lookup` disabled. The tracked
+example also leaves threat intelligence disabled until the internal owner adds
+reviewed tenant network ranges. Keep the operator copy Git-ignored.
+
+After both five-row batches complete, seal and evaluate them without calling
+the LLM, MCP discovery, or any Provider:
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/internal_batch/evaluate_pingan_shadow.py \
+  --runtime-batch-dir "$RUNTIME_BATCH_DIR" \
+  --investigation-batch-dir "$INVESTIGATION_BATCH_DIR" \
+  --enrichment-composition /approved/path/pingan-enrichment.local.yaml \
+  --enrichment-action-config backend/samples/mcp/pingan_asset/action_adapters.json \
+  --enrichment-action-config backend/samples/mcp/pingan_security_tag/action_adapters.json \
+  --ramp-stage 5 \
+  --report-path "$INVESTIGATION_BATCH_DIR/pi-01e-shadow-gate-5.json"
+```
+
+If the internal composition also enables threat intelligence, pass its action
+config to both the investigation runner and evaluator in the same order. The
+evaluator checks the sealed config hashes against the batch manifest.
+
+`soc.pingan_internal_shadow_acceptance.v1` verifies:
+
+- identical source rows and payload fingerprints across both batches;
+- identical model/evidence profiles and deterministic pre-LLM projections;
+- Runtime-only isolation, persisted real-only investigation, and exact adapter
+  bindings;
+- no `asset.lookup`, mock result, missing evidence, verdict mutation,
+  auto-close, confirmed-memory write, or high-risk action;
+- at least one planned action and real terminal result for every configured
+  route, so one working Provider cannot hide an unexercised binding;
+- Provider hit/not-found/error rates, effective evidence rate, action-attempt
+  P50/P95/max, review rate, LLM token/cost status, and schema observations;
+- explicit `not_measured` Provider-network latency and monetary-cost gaps.
+
+A passing five-row report only makes the batch eligible for human review before
+expanding to 50. It never expands automatically, does not evaluate model
+accuracy, and always retains `pilot_ready=false`. Preserve each stage report
+before resuming the two batch directories to 50 and then all.
+
 ## Artifacts
 
 ```text
@@ -179,6 +232,7 @@ latency. Provider-network latency and tool cost remain explicit
 ├── manifest.json       # lineage, aggregate status, and optional shadow telemetry
 ├── results.jsonl       # one compact summary per source row
 ├── items/              # full AnalysisRun plus optional workflow/report/addendum/error
+├── pi-01e-*.json       # optional secret-free paired gate report
 └── .batch.lock         # advisory process lock; it may remain after exit
 ```
 
