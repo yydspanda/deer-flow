@@ -1775,20 +1775,41 @@ bounded retry/stale recovery/linked replay, explicit Kafka/internal-batch integr
 shadow report/addendum projection are covered by deterministic regression. D3 always starts from an
 existing persisted `AnalysisRun`; it does not rerun the LLM or let Provider output overwrite the base
 verdict. D4 invokes no Provider and creates no second report truth table. Omitted composition/action
-config preserves Runtime-only behavior. The current task is PI-01E internal shadow end-to-end.
+config preserves Runtime-only behavior. PI-01E uses an external-simulation gate before any internal
+real acceptance. Both the five-row and 50-row external rehearsals have passed; the current task is a
+fresh five-row `internal_real` run in approved PingAn DEV. The 50-row simulation persisted 157/157 fake
+MCP results without failure or unauthorized side effects, but all results were normal not-found. It is
+therefore delivery-shape evidence only and does not prove a real Provider hit mapping.
 `PI-04-A SOC Operations Snapshot` is complete; `PI-04-B` remains parked behind that sequence.
 
 PI-01E 的代码侧验收入口位于
 `validation/compact_zeus/internal_batch/evaluate_pingan_shadow.py`。它成对读取同一 source cohort 的
 Runtime-only batch 与 persisted investigation batch，并生成
-`soc.pingan_internal_shadow_acceptance.v1`。该投影不调用 LLM、MCP discovery 或 Provider；它校验
-source/row/payload/config 指纹、模型与 evidence profile、deterministic pre-LLM projection、
-`required_result_mode=real`、真实结果、evidence coverage，以及 base-run mutation、auto-close、
-confirmed-memory write 和 high-risk action 全部为零。PingAn shadow 明确禁用本地开发
+`soc.pingan_shadow_acceptance.v2`。该投影不调用 LLM、MCP discovery 或 Provider；它校验
+source/row/payload、trusted tenant、composition/action/extensions config 指纹、模型与 evidence profile、
+deterministic pre-LLM projection、result-mode/evidence coverage，以及 base-run mutation、auto-close、
+confirmed-memory write 和 high-risk action 全部为零。`external_simulation` 只接受 mock composition、
+fake MCP server 和 `mocked=true`；`internal_real` 只接受 real composition、internal MCP server 和
+`mocked=false`。两种报告通过 `evidence_class` 与 claims 明确隔离，仿真通过永远不能关闭真实 Provider
+gate。PingAn shadow 明确禁用本地开发
 `asset.lookup`，只允许 `asset.locate` 或无 asset route。报告同时汇总 Provider
 hit/not-found/error、有效证据率、action-attempt P95、review rate、LLM usage、schema observation，并把
 Provider 网络延迟和费用缺口明确标记为 `not_measured`。`5 -> 50 -> all` 每一档都需人工审阅；技术
 pass 不自动扩容、不评估模型准确率，也不声明 Pilot Ready。
+
+live investigation batch 在任何 LLM 调用前必须对启用的 action config 执行真实 MCP `list_tools()`，
+精确验证 `(server, tool)`；静态文件中存在配置不能替代工具发现。批跑若已持久化 failed
+`AnalysisRun`，显式 `--resume` 必须通过公共 `SocAnalysisService.replay()` 建立 linked replay，并记录
+`analysis_retry_of_run_id`；不得复用旧幂等键得到同一失败 run，也不得覆盖失败审计。该恢复规则只处理
+基础分析失败；已完成调查 execution 仍复用 durable identity，不重复调用 Provider。
+
+所有后续内网依赖采用相同的 **external simulation before internal acceptance** 规则：外网必须先用
+同一 production Provider/MCP/action 代码、显式 fake transport、冻结配置和真实本地样本完成契约、
+错误矩阵、持久化、回放、报告与安全门禁；进入内网后只注入 endpoint/secret/批准 case 并切换 result
+mode。外网不能确认 wire/source contract 的能力继续 `data-gated`，不得用 mock 猜出不存在的接口。
+PingAn 批跑可用 `--default-tenant-id pingan` 为缺失 tenant 的离线导出补充可信 ingress metadata；若
+源告警已有不同 tenant，runner 必须拒绝，且 PingAn Adapter 必须把 tenant 传入 canonical alert 与
+`LLMAnalysisRequest`。
 
 PI-01D3 persists `SocEnrichmentExecution` and `SocEnrichmentActionAttempt` through migration
 `0019_enrichment_executions`. The immutable plan records exactly which typed candidates and reviewed

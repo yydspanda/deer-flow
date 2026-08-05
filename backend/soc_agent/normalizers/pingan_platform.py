@@ -116,6 +116,7 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
 
     canonical = {
         "schema_version": "soc.alert.v1",
+        "tenant_id": original.get("tenant_id") or original.get("tenantId"),
         "alert_id": _first_str(alert, ("alertId", "alertCode")) or _first_str(evidence_event, ("alarm_id", "finding__uid")),
         "source": {
             "source_type": source_type.value,

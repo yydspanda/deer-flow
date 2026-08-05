@@ -501,7 +501,11 @@ PI-01D automatic enrichment 约束：
 - 同一个 Kafka topic/partition/offset 或 batch source/payload identity 重试时必须找到同一 execution。`completed|no_actions|blocked|failed` 不得隐式重新调用 Provider；`retryable_failed` 只重试尚未成功的 action。非重试失败只能通过显式 linked replay 重新执行，replay 必须有新 idempotency key、reason 和 `replay_of_execution_id`。
 - Provider 调用后、attempt finalize 前发生进程丢失时，stale recovery 必须先查确定性 evidence ID；已有 evidence 就完成旧 attempt，不得重复外部查询。没有 evidence 才记录 interrupted 并在 retry budget 内新建下一 attempt。stale window 必须大于受控 Provider timeout。
 - `runtime_declared` Adapter 的实际 result 必须在 evidence 写入前暴露 boolean `mocked`；与 composition `required_result_mode` 不一致时进入 non-retryable contract failure，不能保存 evidence。`success` 与 route-specific normal `not_found` 都可保存只读 evidence；Provider failure、denied、contract failure 和 interrupted 不得伪装为 miss。
-- Kafka daemon 和内网 PKL batch 只能通过显式 composition + 一个或多个 action-adapter config opt in；配置省略时固定 Runtime 路径必须保持可独立运行。内网 batch 还必须要求 persistence、显式 Provider confirmation，并把 composition/action-config SHA-256 写入 manifest/resume guard。基础分析成功而调查失败时仍须保留完整 `AnalysisRun` artifact。
+- Kafka daemon 和 PKL batch 只能通过显式 composition + 一个或多个 action-adapter config + 一个显式 MCP extensions config opt in；配置省略时固定 Runtime 路径必须保持可独立运行。batch 调查模式必须要求 persistence、显式 Provider confirmation，并把 composition/action/extensions-config SHA-256 写入 manifest/resume guard。基础分析成功而调查失败时仍须保留完整 `AnalysisRun` artifact。
+- 任何依赖内网的已确认 Provider/源系统必须先通过外网 simulation package：复用相同 production Provider/MCP/action 代码，只替换为显式 fake transport，并覆盖配置、成功/查无/失败、持久化、回放、报告与零副作用。`external_simulation` 只能接受 `mocked=true`，`internal_real` 只能接受 `mocked=false`；仿真通过不得关闭真实 gate。尚无稳定 wire/source contract 的能力继续 data-gated，不得发明 mock Provider。
+- live investigation batch 必须在首个 LLM 调用前通过实际 MCP `list_tools()` 精确发现每个启用 action config 的 `(server, tool)`；仅解析 extensions/action 文件不构成 runtime 可用性证明。缺 command/env、server 或 tool 时 fail fast，且 `--plan-only` 仍保持无 MCP discovery/Provider 调用。
+- internal batch 对已持久化 failed `AnalysisRun` 的显式 `--resume` 必须调用公共 `SocAnalysisService.replay()` 创建 linked replay，并记录旧 run lineage；不得复用原 idempotency key 返回同一失败 run，不得覆盖失败审计。已完成 investigation execution 仍按 durable identity 复用，不得重复 Provider 调用或 evidence 写入。
+- 离线批次可用显式 `--default-tenant-id` 补充源导出缺失的可信 ingress tenant；若源 payload 已声明不同 tenant 必须 fail closed。Vendor Adapter 必须把该 generic tenant metadata 传入 canonical `AlertInput` 与 `LLMAnalysisRequest`，不能只留在 raw payload。
 - 持久化 workflow 必须返回准确的 execution/attempt/evidence/provider-invocation metadata，不能沿用 PA-11 demo 固定的 `writes_db=false`。`soc investigation get|report|replay` 是当前 operator surface；三者都复用 service/repository，report 只读重建，CLI 不得直接调用 Provider。
 
 Unified investigation view 约束：
@@ -936,7 +940,7 @@ SOC Agent chat stream 约束：
     run/alert/thread/route/action/plan-action 完全一致；evidence content hash 必须进入 projection source
     hash。报告与 addendum 应从同一 snapshot 成对生成，避免跨读取状态不一致。CLI 操作入口为
     `soc investigation report EXECUTION_ID`；内部 batch 只能聚合同一 contract，不得重新实现统计语义。
-  - 当前执行指针为 `PI-01E`。D1-D4 planner/composition/durable workflow/reporting 已完成；PingAn security-tag Provider/MCP 已完成 production-shaped code 与 fake/persistence 回归，真实 DEV 对象类型、有效期语义、exact/expired/inactive/not-found/error 和 `mocked=false` evidence readback 门槛继续保留。PI-01B2/C 因真实 source contract 缺失标为 data-gated；完成 B1 不得冒充 `PI-01B2` 权威授权事实来源。
+  - 当前执行指针为 `PI-01E internal real 5`。D1-D4 planner/composition/durable workflow/reporting 已完成，外网 5-row 与 50-row paired simulation 均已通过；50 条中的 157 个 fake Provider 结果全部为正常 not-found，因此真实 hit mapping 未被证明。下一档仅为内网 real 5。PingAn asset、TI 与 security-tag 仍分别保留真实 DEV hit/not-found/error、对象/字段/有效期语义和 `mocked=false` evidence readback 门槛；paired report 本身固定 `closes_real_provider_gate=false`。PI-01B2/C 因真实 source contract 缺失标为 data-gated；完成 B1 不得冒充 `PI-01B2` 权威授权事实来源。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
     - `POST /api/soc/approvals/grants`
     - `POST /api/soc/approvals/actions/dry-run`

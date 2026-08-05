@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "pingan_asset": {
+      "enabled": true,
+      "type": "stdio",
+      "command": "$SOC_PINGAN_ASSET_MCP_PYTHON",
+      "args": ["$SOC_PINGAN_ASSET_MCP_SERVER"],
+      "env": {
+        "SOC_PINGAN_ASSET_PROVIDER_MODE": "fake"
+      }
+    },
+    "pingan_security_tag": {
+      "enabled": true,
+      "type": "stdio",
+      "command": "$SOC_PINGAN_SECURITY_TAG_MCP_PYTHON",
+      "args": ["$SOC_PINGAN_SECURITY_TAG_MCP_SERVER"],
+      "env": {
+        "SOC_PINGAN_SECURITY_TAG_PROVIDER_MODE": "fake",
+        "SOC_PINGAN_SECURITY_TAG_TIMEZONE": "Asia/Shanghai",
+        "SOC_PINGAN_SECURITY_TAG_ALLOW_OPEN_ENDED_VALIDITY": "false",
+        "SOC_PINGAN_SECURITY_TAG_MAX_RESPONSE_BYTES": "2000000"
+      }
+    }
+  },
+  "skills": {}
+}

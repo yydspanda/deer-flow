@@ -36,7 +36,7 @@ shape. It is not PI-01A real-provider evidence.
 
 ## Internal DEV profile
 
-Use `extensions.internal.example.json` from a Git-ignored local profile. The
+Use the tracked `extensions.internal.example.json` directly; inject secrets through environment variables. The
 internal provider requires an HTTPS ZEUS URL whose hostname is explicitly in
 `SOC_PINGAN_ZEUS_ALLOWED_HOSTS`, shared App ID/App Key credentials, and the
 reviewed portable signer. Missing or invalid configuration fails closed and

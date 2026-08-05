@@ -395,11 +395,21 @@ Review/Web/TUI/Lead Agent context without changing the base run. `soc investigat
 is the operator boundary; replay additionally requires a new idempotency key, reason and confirmation.
 PI-01E paired acceptance remains under `validation/compact_zeus/internal_batch/`, not production
 Runtime. Run one provider-free compatibility batch and one explicit persisted investigation batch over
-the same cohort, then use `evaluate_pingan_shadow.py` to validate real-only config, exact fingerprints,
-deterministic pre-LLM compatibility, evidence coverage and zero unauthorized side effects. The
-evaluator must never discover/invoke MCP tools, include raw data or internal paths in its report, infer
-model accuracy, auto-expand a cohort, or claim Pilot readiness. PingAn PI-01E selects `asset.locate` or
-no asset route; the local-development `asset.lookup` route is a blocking failure.
+the same cohort. The batch runner requires and fingerprints an explicit MCP extensions config; trusted
+offline tenant metadata may be supplied with `--default-tenant-id`, but a conflicting source tenant is
+rejected. Use `evaluate_pingan_shadow.py` first in `external_simulation` mode, which requires fake MCP
+Provider modes and only `mocked=true`; later `internal_real` requires internal modes and only
+`mocked=false`. Both validate exact fingerprints, tenant scope, deterministic pre-LLM compatibility,
+evidence coverage and zero unauthorized side effects. The evaluator must never discover/invoke MCP
+tools, include raw data or internal paths, infer model accuracy, auto-expand a cohort, or claim Pilot
+readiness. A simulated pass is never real-provider evidence. PingAn PI-01E selects `asset.locate` or no
+asset route; local-development `asset.lookup` is a blocking failure. The live investigation runner,
+unlike the evaluator, must call MCP `list_tools()` before the first LLM invocation and require every
+enabled action's exact server/tool binding. When `--resume` encounters a persisted failed base
+`AnalysisRun`, it must create a linked replay through `SocAnalysisService.replay()` and preserve the old
+run lineage; it must not reuse the same failed idempotent run. External simulation stages 5 and 50 are
+complete, but all 157 stage-50 fake results were normal not-found. The current gate is internal-real 5,
+and Provider-specific hit/not-found/error acceptance remains separate.
 
 PI-04-A operational visibility is a separate read-only service boundary. Contracts live in
 `soc_agent.contracts.operations`, exact SQL aggregates in `soc_agent.db.operations`, Kafka projection

@@ -2,8 +2,8 @@
 
 > Type: temporary transfer artifact / 临时复制交接文件
 > Reconciled: 2026-08-05
-> Current pointer: `PI-01E Internal Shadow End-to-End`; D12-B and PI-01A/B1 retain their internal acceptance gates
-> Next external action: create/review the operator-owned real-only composition, run separate same-cohort 5-row Runtime-only and investigation batches, then seal `--ramp-stage 5` before any expansion
+> Current pointer: `PI-01E Internal Real 5`; D12-B and PI-01A/B1 retain their internal acceptance gates
+> Next action: in approved PingAn DEV, inject environment secrets/cases, pass live MCP inventory, and run fresh paired `internal_real` stage 5
 
 本文件只保留**尚未完成**的工作，便于复制到内网 Mac 后继续开发和验证。它不是新的权威路线；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
@@ -42,6 +42,15 @@ python3 scripts/build_pingan_internal_transfer.py --include-private-overlay
 - `deer-flow-pingan-source-*.tar.gz`：当前 tracked + non-ignored untracked 源码，包含未提交的新代码；明确排除凭证、PKL、XLSX、SQLite、Git 元数据、虚拟环境和生成物。
 - `deer-flow-pingan-private-overlay-*.tar.gz`：仅包含 `.env.soc-dev.local`、`config.pingan-dev.local`、当前 PKL、历史 EDR XLSX 及其已编译路径目录；只能走获批的内部传输通道。
 - `transfer-report-*.json`：两个包的 SHA-256、大小、文件数、Git commit/branch/dirty 状态；不含 secret 内容。
+
+当前已验证交付包（2026-08-05，包含 external simulation 50 与 linked replay/MCP inventory 修复）：
+
+- source：`deer-flow-pingan-source-20260805T075109Z.tar.gz`，SHA-256
+  `59800c7e2a1568e2d967878b8496972ed6363872b97792490ecbd15b5644f898`，2,495 files；
+- private overlay：`deer-flow-pingan-private-overlay-20260805T075109Z.tar.gz`，SHA-256
+  `f081d40b82e05e1ed3a5734e9fb6deb733df60a7ee5e709ce054846dc10e3ec6`，6 files；
+- report：`transfer-report-20260805T075109Z.json`；两个 archive 与 report 均为 mode `0600`，
+  两次 `--inspect` 均得到 `manifest_valid=true`、`safe_member_paths=true`。
 
 复制前分别验包：
 
@@ -443,17 +452,19 @@ POST /api/soc/external-dispositions
 
 - [x] 新增 vendor-neutral `SocEnrichmentPlan` 和 deterministic planner；输入只使用 canonical typed entities、role resolutions、completed run status 和 tenant policy。
 - [x] 首版只允许 exact registered `asset.lookup|asset.locate|threat_intel.ip_reputation.lookup|security_tag.lookup`，禁止自然语言拼接任意 tool name/payload。
-- [x] PingAn PI-01E 选择从 tenant allowlist 禁用 `asset.lookup`：tracked real-only 示例改用 `asset.locate`，paired evaluator 将任何 `asset.lookup` 选中视为 blocking failure；实际内网 operator 配置仍须通过同一 gate。
+- [x] PingAn PI-01E 选择从 tenant allowlist 禁用 `asset.lookup`：tracked simulated/real composition 均改用 `asset.locate`，paired evaluator 将任何 `asset.lookup` 选中视为 blocking failure；内网不再现场创建另一份临时 composition。
 - [x] 复用 `SocAgentActionDispatcher`、`SocActionAdapterRegistry` 和 `InvestigationEvidenceRepository`；通用 Runtime 没有 PingAn 分支或外部 IO。
 - [x] Provider failure、normal not-found、result-mode contract failure、denied 和 interrupted 是不同状态；base `AnalysisRun` 保持不可变。
 - [x] Kafka/PKL 调查模式显式开启，受 action/retry budget 限制且可 linked replay；默认 Runtime compatibility batch 继续不调用 MCP。
 - [x] `PI-01D4` 已增加 recomputable shadow report、Provider/plan telemetry 和 analyst-visible deterministic investigation addendum；只测 action-attempt latency，Provider 网络耗时/cost/SLO 无来源时明确 `not_measured`。
 
-### 4.5 PI-01E Internal shadow / 内网影子验证
+### 4.5 PI-01E External simulation -> Internal shadow / 外网仿真到内网影子
 
-- [x] 增加无外部 IO 的 paired evaluator：锁定同 cohort/config 指纹、deterministic pre-LLM compatibility、real/mock、evidence、P95/review/schema/measurement gap 与零越权计数；报告不自动扩容、不声明 accuracy/Pilot Ready。
-- [ ] 先 5 条验证结构和权限，再 50 条看 provider/error/cost 分布，最后才讨论 all。
-- [ ] 保存 provider hit/not-found/error、有效证据率、P95 latency、LLM/tool cost、review rate 和 schema drift。
+- [x] paired evaluator 已升级为显式 `external_simulation|internal_real`；同时封存同 cohort、tenant、composition/action/extensions 指纹、deterministic pre-LLM compatibility、real/mock、evidence、P95/review/schema/measurement gap 与零越权计数。
+- [x] 外网 5 条 rehearsal 已通过：11 次 asset/tag fake MCP 调用、11 条 `mocked=true` evidence、0 failure/missing evidence/越权副作用；报告明确不能关闭真实 gate。
+- [x] 同一外网批次已扩至 50：50/50 paired completion、157/157 fake evidence、0 failure/missing evidence/越权副作用；Provider 全部 not-found，因此真实 hit mapping 未被该报告证明。
+- [ ] 直接使用 tracked `pingan-internal-shadow.yaml` 与 `pingan_shadow/extensions.internal.json`，只注入内网环境变量和 approved cases；live runner 先完成精确 MCP tool inventory，再运行 `internal_real` 5 条。
+- [ ] 保存两类报告的 provider hit/not-found/error、有效证据率、P95 latency、LLM/tool cost、review rate 和 schema drift；不得混合统计。
 - [ ] 验证 verdict 覆写、自动关单、confirmed memory 写入和高风险 side effect 均为 0。
 - [ ] 只有人工标签才能进入 PI-03 质量结论；批跑完成本身不是准确率证明。
 
@@ -610,13 +621,14 @@ soc-internal-validation/
 ## 10. Resume Pointer / 下次继续位置
 
 ```text
-Current: PI-01E internal Runtime compatibility and governed investigation shadow
-Ready:   PI-01D1-D4 plus paired evaluator and PingAn real-only asset.locate/security-tag example; asset.lookup is a blocking failure
-First:   create the operator-owned internal composition, confirm Provider/tenant scope, then run separate 5-row Runtime-only and investigation batches
-Next:    seal `--ramp-stage 5`; review hit/not-found/error, evidence coverage, action-attempt P95, cost/provider-latency gaps, review and four zero-side-effect counts before expanding to 50
+Current: PI-01E internal real shadow stage 5
+Ready:   PI-01D1-D4, dual-mode paired evaluator, tracked simulated/internal asset.locate + security-tag profiles; asset.lookup is a blocking failure
+Passed:  external simulation stages 5 and 50; stage 50 has 157/157 `mocked=true` evidence, 0 failures/unauthorized side effects and no observed Provider hit; not real-provider evidence
+First:   inject approved internal endpoint/secrets/cases and pass exact live MCP tool inventory before any LLM call
+Next:    run fresh paired `internal_real --ramp-stage 5`, then human-review the report and each Provider-specific hit/not-found/error evidence
 Pending internal evidence: D12-B asset, PI-01A TI, PI-01B1 security-tag gates
 Data-gated: PI-01B2 authoritative activity source, PI-01C stable status/reason feed contract
 Queued:  PI-02/PI-04-B only after PI-01E evidence and stage review
 ```
 
-不要因为接口暂时不可用而增加新的 fake Provider。不可获得的输入应明确标记 `data-gated`；已有真实能力只替换 adapter/provider/config，不改变通用 Runtime 控制流和核心服务契约。
+已确认存在的内网能力必须先用同一 production Provider/MCP/action 加显式 fake transport 完成外网仿真；该前置门槛已完成。不可获得且 contract 未冻结的输入仍标记 `data-gated`，不得发明新 Provider。进入内网只切换 adapter/provider 配置和 secret，不改变通用 Runtime 控制流与核心服务契约。

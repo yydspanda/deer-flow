@@ -18,7 +18,7 @@
 | External disposition core | **Done / source missing** | 已完成 canonical service | Contract、Gateway ingress、UoW、SQL、Review/Correction/Memory candidate、Web/TUI 已完成 |
 | Real Zeus status/reason feed | **Data-gated / source contract absent** | `PI-01C` | 已知旧轮询 endpoint/status enum 不足以定义稳定事件、reason、版本和乱序语义；拿到真实 feed contract 后才实现 source adapter -> `SocExternalDispositionIngressCommand` |
 | Automatic read-only investigation | **D1-D4 implemented; not a mock** | `PI-01D` | Planner/Plan、strict default-off composition、durable execution/attempt/evidence、逐次 result-mode 校验、retry/recovery/replay、recomputable shadow report/addendum 与 Kafka/internal-batch opt-in 已实现；报告无 Provider 调用或第二套状态 |
-| Internal shadow journey | **Current / evaluator ready, real 5 pending** | `PI-01E` | Runtime batch 与 investigation batch 分离；`soc.pingan_internal_shadow_acceptance.v1` 已封装同 cohort/config、real result、P95/review/schema/measurement gaps 与零越权 gate，仍需内网按 `5 -> 50 -> all` 产生真实证据 |
+| External simulation -> internal shadow | **Current / simulated 5+50 passed; internal real 5 next** | `PI-01E` | Runtime/investigation batch 分离；`soc.pingan_shadow_acceptance.v2` 按 evidence class 校验 tenant、composition/action/extensions、mock/real、P95/review/schema/gaps 与零越权。外网 50 条为 50/50 completed、157/157 fake evidence、0 failure/越权；全部为 not-found，真实 hit mapping 与内网 real 5 仍待验收 |
 | Deployed Review Web/Gateway/auth smoke | **Data-gated** | `PI-01E` / `PI-04-B` | 真实 Gateway、身份、网络和 SOC SQLite 上验证 Review/Investigation readback；Playwright transport fixture 不冒充部署证据 |
 | Historical EDR path catalog | **Done / investigation-only** | 已完成当前目标 | exact path + optional MD5、lineage、freshness、MCP/action/evidence 已完成；始终不是 allowlist |
 | Path-catalog decision impact | **Deferred / optional** | `PI-03D`，需重新排期 | 只有人工标签、scope/validity owner 和 replay gate 到位后，才允许建立独立 promotion proposal；不能修改现有目录即获得决策权 |
@@ -53,6 +53,8 @@
 ## 4. Update Rule / 更新规则
 
 - 新增或替换真实 Provider 时，同步本索引和 `mock-and-real-register.md`。
+- 任一内网依赖先用同一 production code + fake transport 完成外网 simulation package；无稳定 contract
+  的能力保持 data-gated，不为仿真虚构 Provider。
 - 任一项从 queued/deferred 进入执行前，必须先在 `delivery-roadmap.md` 获得 task ID，并更新
   `progress.md` 当前指针。
 - 内网验收完成后，把 evidence 摘要写回权威文档；交接单完成使命后归档，不长期复制状态。

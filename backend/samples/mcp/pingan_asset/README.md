@@ -50,7 +50,7 @@ mapping. It is not PA-12 or PI-01 real-provider evidence.
 
 ## D12-B: internal real smoke
 
-Use `extensions.internal.example.json` as the template. Export the ZEUS base
+Use the tracked `extensions.internal.example.json` directly. Export the ZEUS base
 URL, app ID, app key, operator, Python path, server path, and (when the legacy
 modules are not installed) `SOC_PINGAN_PROVIDER_IMPORT_PATHS` in the internal
 shell. Multiple import roots use the platform path separator. Do not write the
@@ -71,7 +71,7 @@ The defaults retained from the reviewed legacy implementation are:
 Before retaining these values, verify them with the internal service owner.
 Then rerun the same `soc mcp smoke` command using the internal extensions
 config, changing `DEER_FLOW_EXTENSIONS_CONFIG_PATH` to
-`extensions.internal.example.json` (or its operator-owned copy) and the report
+`extensions.internal.example.json` and the report
 name to an explicit D12-B case such as `d12-b-success-smoke.json`. A real pass
 must contain `mocked=false` and must separately capture:
 

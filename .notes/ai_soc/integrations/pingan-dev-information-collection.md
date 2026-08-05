@@ -9,6 +9,10 @@
 
 这份文档用于在内网一次性收集 SOC Agent 接入 DEV 所需的信息。外网先完成可移植代码、类型化配置、预检和 smoke 脚本；项目复制到内网 Mac 后，只填本地配置并执行验证，不再来回复制修改业务代码。
 
+执行顺序固定为 `external_simulation 5 -> external_simulation 50 -> internal_real 5`。前两档已通过；
+当前只缺本文件中的 endpoint/secret/approved case 和内网执行。内网直接使用 tracked secret-free
+composition/extensions，真实值只通过环境变量注入，不再现场增加临时 Mock 或修改核心业务代码。
+
 配置分成两类：
 
 - **Tracked / 可提交**：模块结构、配置键名、接口路径、请求/响应结构、状态枚举、脱敏样例和失败语义。

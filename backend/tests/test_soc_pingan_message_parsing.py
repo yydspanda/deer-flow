@@ -45,6 +45,22 @@ def _payload(*messages: str, topic: str, topic_name: str, raw_fields: dict | Non
     }
 
 
+def test_pingan_adapter_preserves_trusted_ingress_tenant() -> None:
+    payload = _payload(
+        'sensor SyslogClient[1]: 2026-07-14 10:00:00|!sensor|!alarm|!{"sip":"30.1.1.10"}',
+        topic="sec_guard_apt",
+        topic_name="SkyEye APT",
+    )
+    payload["tenant_id"] = "pingan"
+
+    alert = normalize_alert_payload(payload)
+    request = build_analysis_request_for_payload(payload)
+
+    assert alert.tenant_id == "pingan"
+    assert request.tenant_id == "pingan"
+    assert alert.raw["tenant_id"] == "pingan"
+
+
 def test_pingan_apt_parsed_message_excludes_zeus_structured_fields_from_analysis() -> None:
     message = 'skyeye SyslogClient[1]: 2026-07-14 10:00:00|!sensor|!alarm|!{"attack_type":"代码执行","sip":"30.1.1.10","dip":"30.2.2.20","attacker":"30.2.2.20","victim":"30.1.1.10","severity":8}'
     payload = _payload(

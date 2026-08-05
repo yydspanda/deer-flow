@@ -37,10 +37,10 @@ flowchart LR
 | `BD` Boss Demo v0.1 | **Done** | 一条 8-10 分钟、浏览器优先、可重复的 golden path | `BD-01..03` 与 BD Gate 已通过 |
 | `AA` SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 唯一的 Complete/Gap/Mock/Data-gated/Deferred 矩阵 | 审计矩阵和 P0/P1 阻塞清单已于 2026-07-18 确认 |
 | `BG` Close Blocking Gaps | **Done / Alpha Gate Passed 2026-07-20** | P0/P1、Alpha readiness technical gate、独立评审与具名批准已完成 | `BG-03` 已批准进入 Stage 4 integration preparation |
-| `PI` Real Data & Production Integration | **Current / PI-01E Internal Shadow** | 真实 PingAn/通用 provider；基础设施和运营扩展按可用输入后置 | Pilot readiness review 通过 |
+| `PI` Real Data & Production Integration | **Current / PI-01E External Simulation -> Internal Real** | 真实 PingAn/通用 provider；所有内网依赖先完成外网仿真交付包 | Pilot readiness review 通过 |
 
 Boss Demo v0.1 和 Alpha 完整性审计已于 2026-07-18 分别通过 BD Gate、AA Gate；冻结的
-`BG-P0-01..BG-P1-05` 与 `BG-03` 已于 2026-07-20 关闭。`PI-04-A SOC Operations Snapshot` 已完成。产品负责人于 2026-08-04 明确将已具备完整验收工具、但仍需内网输入的 `D12-B` 暂存为 `Parked / internal evidence pending`。`PI-01A` 与 `PI-01B1` 已完成 production-shaped Provider/MCP 的外网可验证部分并保留各自真实内网 gate；`PI-01B2` 和 `PI-01C` 因缺真实权威来源/事件协议标为 `Data-gated`，不能用 fixture 或旧代码猜测补齐。`PI-01D1/D2/D3/D4` 已完成版本化只读调查计划、显式 composition、Registry fail-fast、durable execution/attempt ledger、逐次 result-mode 校验、Kafka/internal-batch opt-in，以及从持久状态重建的 shadow report/addendum。`PI-01E` 的 paired acceptance evaluator 与 PingAn real-only `asset.locate` composition 示例已完成代码侧准备；当前仍需在内网先跑同 cohort 的 5 条 Runtime-only 与 5 条 investigation，真实报告通过人工审阅后才能扩至 50。所有真实 `mocked=false` 门槛均未降低。当前 DEV 统一使用独立本地 SQLite，不收集真实 Kafka/K8s/PostgreSQL 参数；未经证实的进程树/主机上下文查询 mock 已删除，不得以新增 mock 冒充真实能力。
+`BG-P0-01..BG-P1-05` 与 `BG-03` 已于 2026-07-20 关闭。`PI-04-A SOC Operations Snapshot` 已完成。产品负责人于 2026-08-04 明确将已具备完整验收工具、但仍需内网输入的 `D12-B` 暂存为 `Parked / internal evidence pending`。`PI-01A` 与 `PI-01B1` 已完成 production-shaped Provider/MCP 的外网可验证部分并保留各自真实内网 gate；`PI-01B2` 和 `PI-01C` 因缺真实权威来源/事件协议标为 `Data-gated`，不能用 fixture 或旧代码猜测补齐。`PI-01D1/D2/D3/D4` 已完成版本化只读调查计划、显式 composition、Registry fail-fast、durable execution/attempt ledger、逐次 result-mode 校验、Kafka/internal-batch opt-in，以及从持久状态重建的 shadow report/addendum。2026-08-05 起，所有需要内网才能完成的已确认能力必须先完成外网 simulation package；PI-01E 五条及五十条 paired external simulation 均已通过，当前只进入批准内网的五条 `internal_real`，不再扩充外网 Mock。所有真实 `mocked=false` 门槛均未降低。当前 DEV 统一使用独立本地 SQLite，不收集真实 Kafka/K8s/PostgreSQL 参数；未经证实的进程树/主机上下文查询 mock 已删除，不得以“先仿真”为由恢复或虚构能力。
 
 ## 3. Stage 1 - Boss Demo v0.1
 
@@ -125,7 +125,7 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 
 | ID | Work / 工作 | Deliverable / 产出 | Acceptance / 验收 |
 |---|---|---|---|
-| `PI-01` | Real providers and governed investigation / 真实能力源与受控调查 | **Current / PI-01E**: `D12-B`、TI、security-tag 保留内网 gate；B2/C data-gated；D1-D4 planner/composition/durable workflow/reporting 已完成，当前进入内网 shadow | 每项真实 Provider 都有 `mocked=false` 验收证据；Kafka/批处理可通过确定性 allowlist 编排形成持久化调查证据与只读报告，但不得修改基础 Runtime verdict、关单、写 confirmed memory 或执行高风险动作 |
+| `PI-01` | Real providers and governed investigation / 真实能力源与受控调查 | **Current / PI-01E internal real 5**: external 5/50 passed；D12-B、TI、security-tag 保留内网 gate；B2/C data-gated；D1-D4 已完成 | 每个内网依赖先有 `mocked=true` 外网仿真报告，再有独立 `mocked=false` 内网验收证据；两类 evidence 不互换，且均不得修改基础 Runtime verdict、关单、写 confirmed memory 或执行高风险动作 |
 | `PI-02` | Real infrastructure / 真实基础设施 | **Parked until inputs exist**: Kafka/PostgreSQL/K8s 参数与容量/恢复测试；本轮内网 DEV 使用独立本地 SQLite | 吞吐、端到端延迟、重试、DLQ、幂等、连接池和故障恢复满足试点门槛 |
 | `PI-03` | Real labels, learning and calibration / 真实标签、学习与校准 | 脱敏人工标签、scenario/verdict/evidence 与 correlation 评测、反馈型 Skill 候选；parser/path governance 仅按独立 gate 激活 | 来源、范围、版本和 reviewer 可审计；scorer/profile/Skill/parser/tenant knowledge 只能在离线 replay 和人工批准后进入 shadow |
 | `PI-04` | Operations and security / 运维与安全 | **PI-04-A Done / PI-04-B Parked**: `soc.operations_snapshot.v1` 已通过精确 persisted aggregates、secret-free Kafka projection、CLI/API 和回归；`PI-01E` 产生真实 shadow telemetry 后再排薄 Web，后续再接 Prometheus、真实 telemetry、SLO 和安全运营流程 | 运营同事能定位任务/预警/延迟/模型/队列问题；任何未采集的 lag/算力/SLO 必须标记 `not_measured`，不能用默认值冒充健康 |
@@ -138,7 +138,8 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 按 tenant 精确规划并执行 typed read-only action。Kafka daemon 与内网 PKL 批跑只有在显式传入
 composition/action 配置后才进入该桥；默认仍只执行固定 `SocAnalysisService`。D4 已能从持久化
 ledger/evidence 重建 shadow report、telemetry 和 addendum；它不能把“已接线”冒充真实 Provider
-质量或 Pilot readiness。当前 PI-01E 只在批准的内网配置和数据上收集真实 shadow 证据。
+质量或 Pilot readiness。当前 PI-01E 先在外网以同一生产代码和 fake transport 完成 rehearsal，再在
+批准的内网配置和数据上收集独立真实 shadow 证据。
 
 | Order | ID | Work / 工作 | Implementation boundary / 实现边界 | Exit evidence / 退出证据 |
 |---|---|---|---|---|
@@ -147,7 +148,7 @@ ledger/evidence 重建 shadow report、telemetry 和 addendum；它不能把“�
 | 3 | `PI-01B` | Real security tags and governed facts / 安全标签与治理事实 | `/public/searchTagContent` 只输出 typed provider result；授权扫描、护网、红蓝队、维护窗口等权威事实再映射到现有 Governed Context 生命周期 | valid/expired/out-of-scope/conflict/not-found/error 均可解释；标签不能直接判安全或关单 |
 | 4 | `PI-01C` | Real external disposition source / 真实状态理由回流 | Zeus/工单 source adapter 只生成 `SocExternalDispositionIngressCommand`，继续走现有 authenticated ingress/service/UoW | 幂等、乱序、重放、更正、未知状态和 trust mapping 通过；reason 只生成待评审知识候选 |
 | 5 | `PI-01D` | Governed read-only investigation orchestration / 受控只读调查编排 | application-level planner/service；D1 只消费 typed entity/role + tenant policy，后续只有新增 typed trigger contract 后才可消费 scenario/gap；复用现有 dispatcher/registry/evidence repository | asset/TI/tag 自动调查可回放；`asset.lookup` 与 `asset.locate` 完成 route consolidation；Provider 失败与正常查无可区分；基础 `AnalysisRun` 不可变且所有副作用保持关闭 |
-| 6 | `PI-01E` | Internal shadow end-to-end / 内网影子全链路 | 分开运行 Runtime compatibility batch 与 investigation workflow batch；先 `5 -> 50 -> all`，受 Provider 限流和费用控制 | 报告覆盖 provider hit/not-found/error、有效证据率、P95 latency、LLM/tool cost、review rate 和越权变更计数；后者必须为 0 |
+| 6 | `PI-01E` | External rehearsal -> internal shadow / 外网仿真到内网影子 | 两种环境均分开运行 Runtime compatibility 与 persisted investigation；外网 `external_simulation` 要求 fake/`mocked=true`，内网 `internal_real` 要求 internal/`mocked=false`；先 5 后 50 | 两类报告均覆盖 provider hit/not-found/error、有效证据率、P95、LLM/tool cost、review rate 和越权计数；外网 pass 仅允许进入下一档，不关闭真实 gate |
 
 Current status / 当前状态：`D12-B` 为 `Parked / internal evidence pending`；其代码、私有 case matrix 和验收门槛全部保留。`PI-01A` 已完成 production-shaped PingAn Provider、stdio MCP、generic action config、显式 fake smoke，以及 hit/not-found/partial/error/freshness/trim/lineage/persistence 回归；真实内网 `mocked=false` smoke 与实际响应字段复核仍是退出门槛，因此不能标记 Done。`PI-01B1` 已完成 `/public/searchTagContent` Provider/MCP/action 的外网可验证部分，保留 active/expired/inactive/conflicted/unknown/out-of-scope/unusable/not-found 语义；真实 DEV 响应、对象类型、无过期时间语义与持久化 `mocked=false` 证据仍待内网验收。
 
@@ -228,6 +229,7 @@ Stage 4 的退出结果是 **Pilot Ready / 可试点**。正式 GA、自动关�
 8. 研究和参考项目查询必须服务当前 task 的明确决策，不以“继续研究”替代交付。
 9. CodeGraph 在切片明确后用于找复用点；完成代码修改后执行 `codegraph sync .`。
 10. 每次阶段转换都在 `progress.md` 留下 Gate 证据、未完成项去向和下一任务。
+11. 任何内网依赖先交付外网 simulation package；内网阶段只能填充环境变量、批准样本并运行既有验收。无稳定 contract 的能力保持 data-gated，不用 mock 猜测。
 
 ## 9. Current Execution Pointer / 当前执行指针
 
@@ -244,7 +246,7 @@ Completed:    BG-P1-04 - Governed memory activation (AC-39)
 Completed:    BG-P1-05 - Alpha E2E and docs reconciliation (AC-23, AC-24, AC-49)
 Completed:    BG-03 - Alpha readiness package and scoped accountable approval
 Current Stage: PI - Real Data & Production Integration
-Current:      PI-01E - internal Runtime compatibility and governed investigation shadow batches
+Current:      PI-01E - internal real shadow stage 5
 Completed:    PI-01 Checkpoint D-0 - 212-row adapter-independent corpus inventory
 Completed:    PI-01 Checkpoint D-1 - alert 1965449 canonical normalization (parser warnings explicit)
 Completed:    PI-01 Checkpoint D-2 - alert 1965449 generic deterministic entity extraction
@@ -267,9 +269,11 @@ Completed:    PI-01D1 - versioned deterministic enrichment plan + optional Main 
 Completed:    PI-01D2 - strict enrichment composition, exact registry binding and mock/real provenance validation
 Completed:    PI-01D3 - durable investigation ledger, opt-in Kafka/internal-batch bridge, retry/recovery/replay and per-result mode enforcement
 Completed:    PI-01D4 - recomputable shadow report, deterministic investigation addendum, context/CLI/batch projections
-Completed:    PI-01E tooling - paired same-cohort/config gate, per-route real-result coverage, metrics and zero-side-effect validation (no real internal batch evidence yet)
+Completed:    PI-01E tooling - dual-mode paired gate, exact composition/action/extensions fingerprints, tenant scope, per-route result coverage and zero-side-effect validation
+Completed:    PI-01E external simulation stage 5 - same 5-row live-LLM cohort; 11 fake MCP calls/evidence, 0 failures/missing evidence/unauthorized side effects; report explicitly cannot close real gates
+Completed:    PI-01E external simulation stage 50 - 50/50 paired completion; 157 fake MCP calls/evidence, 0 failures/missing evidence/unauthorized side effects; no Provider hit observed and real gates remain open
 Completed:    PI-04-A - SOC Operations Snapshot contract, exact persisted counters, Kafka readiness projection, CLI/API
-Next:         PI-01E create/review the operator-owned real-only composition, run paired same-cohort 5-row batches, then seal and review the stage-5 gate report
+Next:         In approved PingAn DEV, inject environment secrets and approved cases, pass live MCP inventory/preflight, then run fresh paired `internal_real` stage 5 and human-review its report
 Required internal evidence: D12-B asset, PI-01A TI and PI-01B1 security-tag `mocked=false` gates remain open
-External inputs: approved internal data/config/provider access are now required; PI-01B2/C source contracts remain separately data-gated
+Internal inputs: endpoint/secrets/approved hit/not-found/error cases are now required; PI-01B2/C source contracts remain separately data-gated
 ```

@@ -11,11 +11,13 @@ configure MCP transport or credentials.
   `asset-lookup-soc-dev-mcp` adapter in
   `backend/samples/mcp/soc_dev_action_adapters.json`. It exercises the D3
   persistent MCP workflow while still requiring `required_result_mode: mock`.
-- `pingan-internal-shadow.example.yaml` is the secret-free PI-01E starting
-  profile. It requires real results, selects PingAn `asset.locate` plus
-  `security_tag.lookup`, and deliberately excludes the development-only
-  `asset.lookup` route. Copy it to a Git-ignored operator-owned file before
-  changing tenant policy.
+- `pingan-external-simulation.yaml` is the required first PI-01E profile. It
+  uses the PingAn MCP adapters with fake transports and requires every result
+  to be `mocked=true`.
+- `pingan-internal-shadow.yaml` is the matching secret-free real
+  profile. It keeps the same PingAn `asset.locate` and `security_tag.lookup`
+  bindings, requires `mocked=false`, and can be used directly because endpoint
+  and credentials live in environment variables rather than this file.
 
 The composition and the action-adapter registry are independent allowlists. At
 startup, `build_soc_main_orchestrator_service()` requires every enabled route to
@@ -23,11 +25,10 @@ match one exact `route`, `action`, `adapter_id`, and `adapter_kind`. It rejects
 write-capable adapters, unsupported required inputs, and mock/real provenance
 mismatches.
 
-PingAn internal composition must be created from reviewed tenant network scope
-and the existing MCP configs under `backend/samples/mcp/pingan_*`. Do not copy
-the mock sample into an internal real profile: use `required_result_mode: real`
-and bind the exact PingAn MCP adapter IDs. Their `runtime_declared` contract
-means D3 must also verify each returned `mocked` value before persisting evidence.
+PingAn external rehearsal and internal acceptance must use their separate
+tracked compositions. Their `runtime_declared` contract means D3 verifies each
+returned `mocked` value before persisting evidence; the paired gate also checks
+the exact composition, action-config and extensions-config fingerprints.
 The tracked PI-01E example does not enable threat intelligence because no
 tenant network ranges belong in a public sample. To enable
 `threat_intel.ip_reputation.lookup`, the internal owner must add that route,

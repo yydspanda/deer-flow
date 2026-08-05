@@ -256,6 +256,9 @@ Current SOC direction:
   complete path accounting remains in `EvidenceCoverageReport`. They must never reopen structured
   fallback. Adapter fields with `participates_in_reasoning=false` are hard-filtered from model
   projections while remaining in immutable raw/audit evidence.
+- PingAn normalization preserves trusted generic ingress metadata such as top-level `tenant_id` in
+  canonical `AlertInput` and `LLMAnalysisRequest`. Offline batch `--default-tenant-id` may fill only a
+  missing tenant; it must reject, not overwrite, a conflicting source tenant.
 - PingAn Threat Intel mapping lives in `normalizers/pingan_threat_intel.py`: nested `net.*` is the
   observed wire session, while `attacker` / `victim` remain separate provider role assertions.
   `assets.ip` may be a CIDR/range scope and must not become a host IP; provider `result`, reputation,
@@ -366,17 +369,24 @@ Current SOC direction:
   may display the addendum, but it cannot overwrite the base verdict, close work, confirm memory or
   authorize an action. Operators use `soc investigation get|report|replay`; replay requires a new
   idempotency key, a reason, explicit config and confirmation.
-- PI-01E internal shadow uses two separate outputs from
+- PI-01E uses two separate outputs from
   `validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py`: one Runtime-only compatibility
   batch and one explicitly persisted investigation batch over the exact same cohort. Seal each
-  `5 -> 50 -> all` stage with `evaluate_pingan_shadow.py`. The evaluator performs no LLM/MCP/Provider
-  call; it validates source/cohort/config fingerprints, deterministic pre-LLM compatibility,
-  `required_result_mode=real`, no PingAn `asset.lookup`, no mock result, complete evidence, and zero
-  base-run mutation/auto-close/confirmed-memory/high-risk flags. Its
-  `soc.pingan_internal_shadow_acceptance.v1` report is secret-free and review-gated: a pass never
-  evaluates accuracy, advances the cohort automatically, or claims Pilot readiness. The PingAn sample
-  composition uses `asset.locate`; TI remains disabled until reviewed tenant network ranges are added
-  to an operator-owned local copy.
+  `5 -> 50 -> all` stage with `evaluate_pingan_shadow.py`. Every internal dependency must first pass
+  `external_simulation` with the same production Provider/MCP/action code plus explicit fake transport;
+  only a separate `internal_real` run may later use `mocked=false`. The evaluator performs no
+  LLM/MCP/Provider call and validates source/cohort/tenant plus composition/action/extensions config
+  fingerprints, deterministic pre-LLM compatibility, exact Provider modes, no PingAn `asset.lookup`,
+  complete evidence, and zero base-run mutation/auto-close/confirmed-memory/high-risk flags. Its
+  `soc.pingan_shadow_acceptance.v2` report is secret-free and review-gated; a simulated pass always
+  retains `real_provider_evidence=false` and cannot close a real gate. Before a live investigation
+  batch invokes the LLM, the runner must discover every configured `(server, tool)` through actual MCP
+  `list_tools()`; static config validation alone is insufficient. Explicit resume of a persisted failed
+  base `AnalysisRun` must use `SocAnalysisService.replay()` and preserve the prior run lineage, while
+  completed investigation executions continue to reuse their durable identity. Missing source/wire
+  contracts remain data-gated and must not be invented as fake Providers. External simulation stages 5
+  and 50 have passed; the current next stage is a fresh internal-real stage 5. The 50-row fake cohort had
+  no Provider hit, so each real Provider still needs separate hit/not-found/error acceptance.
 - PingAn asset-provider code lives only under `backend/soc_agent/integrations/pingan/` and uses the
   existing generic `asset.locate` MCP/action boundary. Checkpoint D12-A is production-shaped code with
   a fake transport and must always expose `mocked=true`; it is not PA-12 or PI-01 real-provider
@@ -527,7 +537,7 @@ SOC delivery plan (the only execution order is `.notes/ai_soc/delivery-roadmap.m
 | `BD` Boss Demo v0.1 | Done: browser-first repeatable golden path |
 | `AA` SOC Alpha Completeness Audit | Done: unique 50-row matrix and frozen blocker set |
 | `BG` Close Blocking Gaps | Done: Alpha Gate passed 2026-07-20 |
-| `PI` Real Data & Production Integration | Current: `PI-01E` internal shadow end-to-end; D1-D4 investigation planning/composition/persistence/reporting done, B2/C data-gated, PingAn asset/TI/tag real-smoke gates retained; `PI-04-A` done and `PI-04-B` parked |
+| `PI` Real Data & Production Integration | Current: `PI-01E` internal-real stage 5; external simulation 5/50 passed, D1-D4 done, B2/C data-gated, PingAn real-smoke gates retained; `PI-04-A` done and `PI-04-B` parked |
 
 ### SOC Agent Development Workflow
 

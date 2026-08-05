@@ -1,8 +1,9 @@
-# PingAn Internal Runtime Batch
+# PingAn Runtime Batch Validation
 
 This runner replays a Pandas PKL export through the same production
-`SocAnalysisService` used by `soc analyze`. It is an internal validation entry
-point, not a second Runtime and not a Kafka replacement.
+`SocAnalysisService` used by `soc analyze`. It supports external fake-Provider
+rehearsal and later internal real acceptance; it is not a second Runtime and
+not a Kafka replacement.
 
 ## Safety and scope
 
@@ -15,11 +16,15 @@ point, not a second Runtime and not a Kafka replacement.
 - Every item is written atomically with mode `0600`; the output directory is
   mode `0700` and Git-ignored.
 - Resume validates source, payload, model, evidence mode, persistence,
-  database kind, enrichment composition, and every action-config fingerprint.
+  database kind, trusted tenant default, enrichment composition, every
+  action-config fingerprint, and the exact MCP extensions-config fingerprint.
   Completed items are skipped; failed items retry unless
   `--skip-existing-failures` is set.
 - Full item artifacts contain the preserved input payload and are sensitive.
   Do not copy them back outside the approved environment without review.
+- `--default-tenant-id` fills only missing trusted ingress metadata. A source
+  row that already declares another tenant is rejected; the value is sealed in
+  the manifest and must match the enrichment-policy tenant.
 
 By default this runner executes the fixed SOC Runtime only and calls no MCP
 tool. PI-01D3 adds an explicit optional bridge after a successful persisted
@@ -48,6 +53,7 @@ backend/.venv/bin/python \
   --analyzer-mode llm \
   --model-name deepseek-v4-flash \
   --limit 5 \
+  --default-tenant-id pingan \
   --plan-only
 ```
 
@@ -63,6 +69,7 @@ backend/.venv/bin/python \
   --analyzer-mode llm \
   --model-name deepseek-v4-flash \
   --limit 5 \
+  --default-tenant-id pingan \
   --confirm-live
 ```
 
@@ -78,6 +85,7 @@ backend/.venv/bin/python \
   --analyzer-mode llm \
   --model-name deepseek-v4-flash \
   --limit 50 \
+  --default-tenant-id pingan \
   --confirm-live \
   --resume
 ```
@@ -91,13 +99,14 @@ backend/.venv/bin/python \
   --output-dir "$BATCH_DIR" \
   --analyzer-mode llm \
   --model-name deepseek-v4-flash \
+  --default-tenant-id pingan \
   --confirm-live \
   --resume
 ```
 
 If interrupted, rerun the exact command with `--resume`. Do not change the
-source file, model, sensitive-evidence mode, or persistence mode inside one
-batch directory.
+source file, model, sensitive-evidence mode, trusted tenant default, or
+persistence mode inside one batch directory.
 
 ## Optional SQLite persistence
 
@@ -132,8 +141,10 @@ backend/.venv/bin/python \
   --source /approved/path/alerts-5000.pkl \
   --limit 5 \
   --plan-only \
+  --default-tenant-id pingan \
   --enrichment-composition backend/samples/enrichment/enabled.dev-mcp.yaml \
-  --enrichment-action-config backend/samples/mcp/soc_dev_action_adapters.json
+  --enrichment-action-config backend/samples/mcp/soc_dev_action_adapters.json \
+  --enrichment-extensions-config backend/samples/mcp/soc_dev_extensions_config.json
 ```
 
 Execution requires a migrated SOC database, `--persist`, and a separate
@@ -147,26 +158,40 @@ backend/.venv/bin/python \
   --analyzer-mode llm \
   --model-name deepseek-v4-flash \
   --limit 5 \
+  --default-tenant-id pingan \
   --persist --workers 1 \
   --confirm-live \
-  --enrichment-composition /approved/path/pingan-enrichment.local.yaml \
+  --enrichment-composition backend/samples/enrichment/pingan-external-simulation.yaml \
   --enrichment-action-config backend/samples/mcp/pingan_asset/action_adapters.json \
-  --enrichment-action-config backend/samples/mcp/pingan_threat_intel/action_adapters.json \
   --enrichment-action-config backend/samples/mcp/pingan_security_tag/action_adapters.json \
+  --enrichment-extensions-config backend/samples/mcp/pingan_shadow/extensions.simulated.json \
   --confirm-investigation
 ```
 
-The local composition must bind only reviewed routes and tenant network scope,
-and use `required_result_mode: real` for the internal profile. Every returned
-`runtime_declared` result must contain `mocked=false`; a mismatch is a contract
-failure and writes no evidence. Normal not-found is retained as evidence,
+Before the first LLM call, live investigation mode connects to every enabled
+MCP server and requires the exact `(server, tool)` named by each action config.
+Missing command/environment, server, or tool fails the batch before analysis;
+`--plan-only` intentionally performs only static config validation and no MCP
+discovery.
+
+The external composition uses `required_result_mode: mock` and the combined
+extensions profile starts the real PingAn MCP server code with fake transports.
+Every returned `runtime_declared` result must contain `mocked=true`; a mismatch
+is a contract failure and writes no evidence. For internal acceptance, switch
+only to `pingan-internal-shadow.yaml` and
+`pingan_shadow/extensions.internal.json`, inject reviewed environment
+values, and require `mocked=false`. Normal not-found is retained as evidence,
 while Provider failure is retryable only within the configured budget.
 
 Each item stores `analysis_run` and, when enabled, `investigation_workflow`,
 `investigation_shadow_report`, and `investigation_addendum`. If investigation
 fails, the item is failed but the successful base run remains present.
 Duplicate/resumed items reuse the durable execution; completed Provider calls
-and evidence are not repeated. The manifest's `summary.investigation_shadow`
+and evidence are not repeated. When explicit `--resume` encounters a persisted
+failed base `AnalysisRun`, the runner uses `SocAnalysisService.replay()` to
+create a linked run and records `execution.analysis_retry_of_run_id`; reusing
+the original failed idempotency result is forbidden. The manifest's
+`summary.investigation_shadow`
 aggregates plan/hit/not-found/failure/retry/provider-call counts, route and
 mock/real result counts, evidence coverage, and action-attempt P50/P95/max
 latency. Provider-network latency and tool cost remain explicit
@@ -174,18 +199,22 @@ latency. Provider-network latency and tool cost remain explicit
 
 ## PI-01E paired shadow gate
 
-PI-01E uses two different directories over the exact same source cohort:
+Each PI-01E evidence class uses two different directories over the exact same
+source cohort:
 
 1. a Runtime compatibility batch with no enrichment arguments and no Provider
    calls;
-2. a persisted investigation batch with a reviewed real-only composition and
-   explicit action configs.
+2. a persisted investigation batch with an explicit composition, action
+   configs and extensions config.
 
-For PingAn, start from
-`backend/samples/enrichment/pingan-internal-shadow.example.yaml`. It selects
-`asset.locate` and explicitly leaves `asset.lookup` disabled. The tracked
-example also leaves threat intelligence disabled until the internal owner adds
-reviewed tenant network ranges. Keep the operator copy Git-ignored.
+Always run `external_simulation` first with
+`backend/samples/enrichment/pingan-external-simulation.yaml` and
+`backend/samples/mcp/pingan_shadow/extensions.simulated.json`. It selects
+`asset.locate` plus `security_tag.lookup`, explicitly leaves `asset.lookup`
+disabled, and expects only `mocked=true`. The matching tracked internal files
+use the same routes with `required_result_mode=real` and Provider mode
+`internal`; secrets remain environment-only. Threat intelligence stays disabled
+until reviewed tenant network ranges exist.
 
 After both five-row batches complete, seal and evaluate them without calling
 the LLM, MCP discovery, or any Provider:
@@ -195,24 +224,50 @@ backend/.venv/bin/python \
   validation/compact_zeus/internal_batch/evaluate_pingan_shadow.py \
   --runtime-batch-dir "$RUNTIME_BATCH_DIR" \
   --investigation-batch-dir "$INVESTIGATION_BATCH_DIR" \
-  --enrichment-composition /approved/path/pingan-enrichment.local.yaml \
+  --enrichment-composition backend/samples/enrichment/pingan-external-simulation.yaml \
   --enrichment-action-config backend/samples/mcp/pingan_asset/action_adapters.json \
   --enrichment-action-config backend/samples/mcp/pingan_security_tag/action_adapters.json \
+  --enrichment-extensions-config backend/samples/mcp/pingan_shadow/extensions.simulated.json \
+  --acceptance-mode external_simulation \
   --ramp-stage 5 \
-  --report-path "$INVESTIGATION_BATCH_DIR/pi-01e-shadow-gate-5.json"
+  --report-path "$INVESTIGATION_BATCH_DIR/pi-01e-external-simulation-5.json"
 ```
 
 If the internal composition also enables threat intelligence, pass its action
 config to both the investigation runner and evaluator in the same order. The
 evaluator checks the sealed config hashes against the batch manifest.
 
-`soc.pingan_internal_shadow_acceptance.v1` verifies:
+After external stage 50 passes, start new internal batch directories and use
+the tracked real files without copying them:
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/internal_batch/evaluate_pingan_shadow.py \
+  --runtime-batch-dir "$INTERNAL_RUNTIME_BATCH_DIR" \
+  --investigation-batch-dir "$INTERNAL_INVESTIGATION_BATCH_DIR" \
+  --enrichment-composition backend/samples/enrichment/pingan-internal-shadow.yaml \
+  --enrichment-action-config backend/samples/mcp/pingan_asset/action_adapters.json \
+  --enrichment-action-config backend/samples/mcp/pingan_security_tag/action_adapters.json \
+  --enrichment-extensions-config backend/samples/mcp/pingan_shadow/extensions.internal.json \
+  --acceptance-mode internal_real \
+  --ramp-stage 5 \
+  --report-path "$INTERNAL_INVESTIGATION_BATCH_DIR/pi-01e-internal-real-5.json"
+```
+
+The internal investigation runner must use those same three config classes and
+their environment-injected secrets. Any fake Provider mode or `mocked=true`
+result is a blocking failure; do not relabel the external artifacts.
+
+`soc.pingan_shadow_acceptance.v2` verifies:
 
 - identical source rows and payload fingerprints across both batches;
 - identical model/evidence profiles and deterministic pre-LLM projections;
-- Runtime-only isolation, persisted real-only investigation, and exact adapter
-  bindings;
-- no `asset.lookup`, mock result, missing evidence, verdict mutation,
+- Runtime-only isolation, persisted investigation, exact adapter bindings and
+  exact enabled MCP servers/provider modes;
+- exact trusted tenant scope and composition/action/extensions fingerprints;
+- mode-specific result provenance: all mock for `external_simulation`, all real
+  for `internal_real`;
+- no `asset.lookup`, missing evidence, verdict mutation,
   auto-close, confirmed-memory write, or high-risk action;
 - at least one planned action and real terminal result for every configured
   route, so one working Provider cannot hide an unexercised binding;
@@ -220,10 +275,17 @@ evaluator checks the sealed config hashes against the batch manifest.
   P50/P95/max, review rate, LLM token/cost status, and schema observations;
 - explicit `not_measured` Provider-network latency and monetary-cost gaps.
 
-A passing five-row report only makes the batch eligible for human review before
-expanding to 50. It never expands automatically, does not evaluate model
-accuracy, and always retains `pilot_ready=false`. Preserve each stage report
-before resuming the two batch directories to 50 and then all.
+A passing five-row external report only makes the simulated batch eligible for
+human review before expanding to external 50. It cannot close a real Provider
+gate. The reviewed 2026-08-05 stage-50 report is Git-ignored at
+`backend/.deer-flow/soc-internal-validation/external-simulation/pi-01e-20260805-50-v2/pi-01e-external-simulation-50.json`:
+both cohorts completed 50/50, 157/157 fake results became evidence, and no
+failure or unauthorized side effect occurred. All Provider results were normal
+not-found, so the report warns that the hit path was not observed and retains
+`closes_real_provider_gate=false`. Start separate internal-real directories at
+5; do not relabel or reuse mock artifacts as real. No report expands
+automatically, evaluates model accuracy, closes a Provider-specific gate, or
+sets `pilot_ready=true`.
 
 ## Artifacts
 

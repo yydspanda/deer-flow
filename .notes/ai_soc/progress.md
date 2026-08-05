@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-04-A` 已完成） |
-| 当前目标 | `PI-01E` 在内网分别运行 Runtime compatibility batch 与 governed investigation workflow batch，按 `5 -> 50 -> all` 收集真实 shadow 证据；D12-B、PI-01A/B1 保留各自 internal evidence gate |
+| 当前目标 | `PI-01E` 外网 50-row paired simulation 已通过；下一档仅为内网 `internal_real` 5-row gate，且 D12-B、TI、security-tag 仍分别需要真实 Provider 验收 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 PingAn 内网 DEV 统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | 将 `pingan-internal-shadow.example.yaml` 复制为内网 operator-owned 配置，核对真实 Provider/tenant scope 后跑同 cohort 的 5 条 Runtime-only 与 5 条 investigation；再用 `evaluate_pingan_shadow.py --ramp-stage 5` 生成报告并人工审阅，未通过不得扩至 50。 |
+| 当前下一刀 | 在批准的平安 DEV 中注入 endpoint/secret/approved cases，先执行真实 MCP inventory/preflight，再以新目录运行同 cohort 的 Runtime-only 与 persisted investigation 各 5 条，封存 `--acceptance-mode internal_real --ramp-stage 5`；外网不再扩充 Mock。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -40,7 +40,78 @@
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
-| `PI` | Real Data & Production Integration | **Current / PI-01E Internal Shadow** | D1-D4 planner、strict composition、durable workflow 与 read-only reporting 已完成；D12-B、TI、security-tag 保留内网 gate，B2/C data-gated；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+| `PI` | Real Data & Production Integration | **Current / PI-01E Internal Real 5** | D1-D4 与 50-row external simulation 已完成；D12-B、TI、security-tag 保留各自内网 gate，B2/C data-gated | Pilot readiness review 通过 |
+
+## 2026-08-05 — PI-01E external simulation stage 50 passed
+
+- 外网 50 条 Runtime-only 与 persisted investigation 使用同一真实 PKL cohort、tenant `pingan`、
+  DeepSeek Flash 和 full evidence，最终均为 `50/50 completed`。配对报告位于 Git-ignored
+  `backend/.deer-flow/soc-internal-validation/external-simulation/pi-01e-20260805-50-v2/pi-01e-external-simulation-50.json`，
+  schema 为 `soc.pingan_shadow_acceptance.v2`，gate `passed` 且无 blocking failure。
+- investigation 共生成 157 个计划动作与 157 次 fake MCP 调用：`asset.locate=65`、
+  `security_tag.lookup=92`；157 条 `mocked=true` evidence 全部持久化，0 Provider/contract failure、
+  0 missing evidence、0 base-run mutation、0 auto-close、0 confirmed-memory write、0 high-risk action。
+  本 cohort 的 fake Provider 全部返回正常 `not_found`，因此报告保留
+  `provider_hit_path_not_observed` warning；它不阻塞仿真，但真实 hit mapping 必须由各 Provider 的内网
+  acceptance 单独证明。
+- 配对兼容性为 50 条共享、0 deterministic pre-LLM projection mismatch、0 review-routing difference。
+  两次 live LLM verdict 有 26 条差异，只作为非确定性提示；本 gate 不评估模型准确率。两组共暴露
+  2 个 high-value mapping gap；LLM 费用、Provider 网络耗时与 Provider 费用继续明确为
+  `not_measured`，不能解释为零。
+- 批跑过程中发现：持久化的 failed `AnalysisRun` 不能继续复用原 idempotency key 重试。runner 现仅在
+  显式 `--resume` 且前一 run 确认为 failed 时调用公共 `SocAnalysisService.replay()`，建立 linked replay，
+  并在 item 中记录 `analysis_retry_of_run_id`；不会覆盖或伪装旧失败。实跑用该路径恢复 3 条 LLM
+  非法输出并完成 50 条。
+- live investigation 现于任何 LLM 调用前，通过实际 MCP `list_tools()` 校验所有启用 action 的精确
+  `(server, tool)`；缺 command/env、server 或 tool 均 fail fast。`--plan-only` 仍只做静态配置验证，
+  不发现或调用 MCP。
+- 报告固定声明 `external_simulation_passed=true`、`real_provider_evidence=false`、
+  `closes_real_provider_gate=false`、`pilot_ready=false`、`next_stage=internal_real_5`，且下一档仍需人工
+  review。外网不再增加临时 Provider 或 Mock，执行指针进入内网真实 5 条。
+- PingAn parser + evaluator + batch runner 聚焦回归 `59 passed`；从 `backend/` 运行完整 SOC、
+  architecture 与 internal-batch 回归 `763 passed`。Ruff format/check、tracked extensions 与最终报告
+  JSON 解析、`git diff --check` 均通过。`codegraph sync .` 同步 2 个代码文件、41 个节点；
+  `_validate_live_mcp_tool_inventory` 与 `_failed_analysis_run_id` 均可查询定位。
+- 迁移包脚本回归 `7 passed`；重新生成并 inspect 通过
+  `deer-flow-pingan-source-20260805T075109Z.tar.gz`（2,495 files）与
+  `deer-flow-pingan-private-overlay-20260805T075109Z.tar.gz`（6 files），两个 archive/manifest 均有效且
+  mode `0600`。精确 SHA-256 记录在临时内网交接单与同目录 `transfer-report-20260805T075109Z.json`。
+
+## 2026-08-05 — PI-01E external simulation stage 5 passed
+
+- 产品规则调整：后续所有已确认但依赖内网的能力，必须先用相同 production Provider/MCP/action 代码在
+  外网完成 fake-transport rehearsal；内网阶段只注入 endpoint/secret/approved case 并切换为 real。
+  没有稳定 wire/source contract 的能力仍为 data-gated，不得用 mock 猜测。
+- `evaluate_pingan_shadow.py` 升级为 `soc.pingan_shadow_acceptance.v2`，强制显式
+  `external_simulation|internal_real`：前者要求 mock composition、fake MCP 和全部 `mocked=true`；后者
+  要求 real composition、internal MCP 和全部 `mocked=false`。报告分别声明 evidence class、是否属于
+  real-provider evidence、是否可关闭真实 gate。
+- batch runner 新增显式 `--enrichment-extensions-config`，将 extensions SHA-256 与 composition/action
+  指纹一起写入 manifest/resume guard；不再隐式依赖仓库根 MCP 配置。新增
+  `--default-tenant-id`，只补充缺失的可信 ingress tenant，源数据已有不同 tenant 时 fail closed。
+- rehearsal 暴露并修复 PingAn Adapter 漏传顶层 `tenant_id`：该字段现在进入 canonical `AlertInput` 与
+  `LLMAnalysisRequest`；修复保持在 PingAn normalizer，不向通用 Runtime 写入 PingAn 分支。
+- 新增 tracked、secret-free 配置：`pingan-external-simulation.yaml`、
+  `pingan_shadow/extensions.simulated.json` 与 `extensions.internal.json`。asset/tag 两种环境保持
+  同 route/action/adapter 绑定；TI 在缺 reviewed tenant network 前继续关闭。
+- 实际外网 stage-5 结果保存在 Git-ignored
+  `backend/.deer-flow/soc-internal-validation/external-simulation/pi-01e-20260805-v3/`：
+  - Runtime-only 与 investigation 使用相同 5-row PKL cohort、DeepSeek Flash、full evidence、tenant pingan；
+  - 11 planned actions / 11 fake MCP invocations / 11 `mocked=true` persisted evidence；
+  - `asset.locate=5`、`security_tag.lookup=6`，全部为正常 not-found；
+  - 0 final failure、0 missing evidence、0 base-run mutation、0 auto-close、0 confirmed-memory write、
+    0 high-risk action，deterministic projection mismatch=0；
+  - gate `passed`，但固定 `real_provider_evidence=false`、`closes_real_provider_gate=false`、
+    `pilot_ready=false`；下一档是 `external_simulation_50`。
+- rehearsal 过程中保留两类可审计失败：首次缺 tenant 被 Planner 以 `tenant_mismatch` 阻断；一次 LLM
+  结构缺 `verdict` 被 parser 拒绝并仅重试失败行。它们均未被静默降级。
+- 聚焦 PingAn parser + paired evaluator + batch runner 回归 `56 passed`；从 `backend/` 使用绝对
+  `PYTHONPATH=<repo>/backend:<repo>` 运行完整 SOC、architecture 与 internal-batch 回归
+  `760 passed`。根目录组合执行曾因一个旧测试把 `samples/` 解释为根目录而得到
+  `759 passed / 1 failed`，该文件按约定的 backend 工作目录独立重跑 `3 passed`；这属于调用目录
+  差异，不是业务回归。
+- Ruff format/check、两个 extensions JSON 解析与 `git diff --check` 通过；`codegraph sync .` 同步
+  2 个变更代码文件、41 个节点，查询 `ShadowAcceptanceMode` 与 `default_tenant_id` 均可定位新入口。
 
 ## 2026-08-05 — PI-01E paired shadow acceptance tooling completed
 
@@ -54,7 +125,7 @@
 - 报告汇总 Provider hit/not-found/error rate、有效证据率、action-attempt P50/P95/max、Runtime review
   rate、LLM token/货币成本采集状态和 message schema observation；Provider 网络耗时与费用没有来源时
   继续明确 `not_measured`，不填伪造的 0。
-- 新增 `pingan-internal-shadow.example.yaml`，以 `required_result_mode=real` 绑定 `asset.locate` 与
+- 新增 `pingan-internal-shadow.yaml`（最初以 `.example` 命名），以 `required_result_mode=real` 绑定 `asset.locate` 与
   `security_tag.lookup`，明确禁用开发用 `asset.lookup`。TI 不预填猜测网段；内网 owner 加入已审阅
   `internal_networks` 后才能启用 TI route/binding/config。
 - 任何技术 pass 均固定 `model_accuracy_evaluated=false`、`pilot_ready=false`、

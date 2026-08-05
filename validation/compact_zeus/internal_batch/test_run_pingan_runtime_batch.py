@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -10,8 +11,10 @@ from validation.compact_zeus.internal_batch.run_pingan_runtime_batch import (
     execute_batch,
     main,
     prepare_batch_items,
+    _validate_live_mcp_tool_inventory,
 )
 
+from soc_agent.actions.mcp import SocMcpToolDescriptor
 from soc_agent.contracts import (
     SocEnrichmentExecutionStatus,
     SocEnrichmentExecutionTrigger,
@@ -64,6 +67,57 @@ class _FakeService:
         if alert_id in self.fail_alert_ids:
             raise TimeoutError("provider timeout")
         return _FakeRun(alert_id, run_id=f"RUN-{alert_id}")
+
+
+class _FakeFailedRun:
+    def __init__(self, alert_id: str, *, run_id: str) -> None:
+        self.alert_id = alert_id
+        self.run_id = run_id
+
+    def model_dump(self, **_kwargs: object) -> dict[str, object]:
+        return {
+            "run_id": self.run_id,
+            "alert_id": self.alert_id,
+            "status": "failed",
+            "model_name": "stub",
+            "prompt_version": "stub",
+            "failure": {
+                "error_type": "LLMOutputParseError",
+                "retryable": False,
+                "message": "invalid structured output",
+            },
+            "steps": [],
+        }
+
+
+class _FakePersistedFailureService:
+    def analyze(self, payload: dict[str, object], *, context: object) -> _FakeFailedRun:
+        alert_id = str(payload["alert_id"])
+        return _FakeFailedRun(alert_id, run_id=f"RUN-FAILED-{alert_id}")
+
+
+class _FakeReplayService:
+    def __init__(self) -> None:
+        self.analyze_calls: list[str] = []
+        self.replay_calls: list[tuple[str, str]] = []
+
+    def analyze(self, payload: dict[str, object], *, context: object) -> _FakeRun:
+        self.analyze_calls.append(str(payload["alert_id"]))
+        raise AssertionError("persisted failed runs must use replay")
+
+    def replay(self, run_id: str, *, context: object) -> _FakeRun:
+        idempotency_key = str(getattr(context, "idempotency_key"))
+        self.replay_calls.append((run_id, idempotency_key))
+        alert_id = run_id.removeprefix("RUN-FAILED-")
+        return _FakeRun(alert_id, run_id=f"RUN-REPLAY-{alert_id}")
+
+
+class _FakeMcpInventoryProvider:
+    def __init__(self, descriptors: list[SocMcpToolDescriptor]) -> None:
+        self._descriptors = descriptors
+
+    def list_tools(self) -> list[SocMcpToolDescriptor]:
+        return list(self._descriptors)
 
 
 class _FakeInvestigationExecution:
@@ -122,7 +176,9 @@ class _FakeProjection:
 
 
 class _FakeInvestigationReportingService:
-    def get_report_bundle(self, execution_id: str) -> tuple[_FakeProjection, _FakeProjection]:
+    def get_report_bundle(
+        self, execution_id: str
+    ) -> tuple[_FakeProjection, _FakeProjection]:
         return self.get_shadow_report(execution_id), self.get_addendum(execution_id)
 
     def get_shadow_report(self, execution_id: str) -> _FakeProjection:
@@ -201,6 +257,32 @@ def test_prepare_batch_items_preserves_valid_rows_and_reports_invalid_rows() -> 
     ]
 
 
+def test_prepare_batch_items_adds_missing_trusted_tenant_and_rejects_mismatch() -> None:
+    frame = pd.DataFrame(
+        [
+            {"alert_full_data": {"alert_data": {"alert_id": 111, "topic": "edr"}}},
+            {
+                "alert_full_data": {
+                    "alert_data": {
+                        "alert_id": 112,
+                        "topic": "edr",
+                        "tenant_id": "another-tenant",
+                    }
+                }
+            },
+        ]
+    )
+
+    items, errors = prepare_batch_items(frame, default_tenant_id="pingan")
+
+    assert len(items) == 1
+    assert items[0].payload["tenant_id"] == "pingan"
+    assert len(errors) == 1
+    assert errors[0]["source_index"] == 1
+    assert errors[0]["error_type"] == "ValueError"
+    assert "does not match default tenant" in errors[0]["error"]
+
+
 def test_execute_batch_writes_private_artifacts_and_resumes_completed_rows(
     tmp_path: Path,
 ) -> None:
@@ -266,6 +348,45 @@ def test_execute_batch_retries_failed_rows_on_resume(tmp_path: Path) -> None:
     assert resumed_service.calls == ["302"]
 
 
+def test_persisted_failed_analysis_uses_linked_replay_on_resume(
+    tmp_path: Path,
+) -> None:
+    frame = _frame([303])
+    items, _ = prepare_batch_items(frame)
+    first_config = replace(
+        _config(tmp_path, resume=False),
+        persist=True,
+        database_kind="sqlite",
+    )
+
+    first = execute_batch(
+        items,
+        analysis_service=_FakePersistedFailureService(),
+        config=first_config,
+        source_row_count=1,
+    )
+    assert first["summary"]["failed_count"] == 1
+
+    replay_service = _FakeReplayService()
+    resumed = execute_batch(
+        items,
+        analysis_service=replay_service,
+        config=replace(first_config, resume=True),
+        source_row_count=1,
+    )
+
+    assert resumed["status"] == "completed"
+    assert replay_service.analyze_calls == []
+    assert len(replay_service.replay_calls) == 1
+    retry_run_id, retry_idempotency_key = replay_service.replay_calls[0]
+    assert retry_run_id == "RUN-FAILED-303"
+    assert retry_idempotency_key.endswith(":analysis-retry:RUN-FAILED-303")
+    [item_path] = (tmp_path / "batch/items").glob("*.json")
+    record = json.loads(item_path.read_text(encoding="utf-8"))
+    assert record["analysis_run"]["run_id"] == "RUN-REPLAY-303"
+    assert record["execution"]["analysis_retry_of_run_id"] == "RUN-FAILED-303"
+
+
 def test_resume_rejects_changed_source_fingerprint(tmp_path: Path) -> None:
     frame = _frame([401])
     items, _ = prepare_batch_items(frame)
@@ -316,8 +437,18 @@ def test_execute_batch_explicitly_runs_persisted_internal_investigation(
     assert record["investigation_shadow_report"]["report_id"] == "ISHR-BATCH-001"
     assert record["investigation_addendum"]["addendum_id"] == "IADD-BATCH-001"
     assert manifest["summary"]["investigation_shadow"]["evidence_coverage_ratio"] == 1.0
-    assert manifest["summary"]["investigation_shadow"]["unauthorized_base_run_mutation_count"] == 0
-    assert manifest["summary"]["investigation_shadow"]["confirmed_memory_write_allowed_count"] == 0
+    assert (
+        manifest["summary"]["investigation_shadow"][
+            "unauthorized_base_run_mutation_count"
+        ]
+        == 0
+    )
+    assert (
+        manifest["summary"]["investigation_shadow"][
+            "confirmed_memory_write_allowed_count"
+        ]
+        == 0
+    )
 
 
 def test_live_plan_only_does_not_require_execution_confirmation(
@@ -375,6 +506,8 @@ def test_investigation_plan_only_validates_config_without_persistence_or_confirm
             str(root / "backend/samples/enrichment/enabled.dev-mcp.yaml"),
             "--enrichment-action-config",
             str(root / "backend/samples/mcp/soc_dev_action_adapters.json"),
+            "--enrichment-extensions-config",
+            str(root / "backend/samples/mcp/soc_dev_extensions_config.json"),
         ]
     )
 
@@ -382,6 +515,7 @@ def test_investigation_plan_only_validates_config_without_persistence_or_confirm
     output = json.loads(capsys.readouterr().out)
     assert output["execution"]["investigation_enrichment_enabled"] is True
     assert len(output["execution"]["enrichment_action_config_sha256s"]) == 1
+    assert len(output["execution"]["enrichment_extensions_config_sha256"]) == 64
     assert output["execution"]["fixed_runtime_independently_usable"] is True
 
 
@@ -409,11 +543,71 @@ def test_investigation_plan_only_rejects_disabled_composition(
             str(root / "backend/samples/enrichment/disabled.yaml"),
             "--enrichment-action-config",
             str(root / "backend/samples/mcp/soc_dev_action_adapters.json"),
+            "--enrichment-extensions-config",
+            str(root / "backend/samples/mcp/soc_dev_extensions_config.json"),
         ]
     )
 
     assert exit_code == 2
     assert "requires an enabled composition" in capsys.readouterr().err
+
+
+def test_investigation_plan_requires_explicit_extensions_config(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "alerts.pkl"
+    source.write_bytes(b"restricted-loader-fixture")
+    monkeypatch.setattr(
+        "validation.compact_zeus.internal_batch.run_pingan_runtime_batch.load_dataframe_pickle",
+        lambda *_args, **_kwargs: _frame([513]),
+    )
+    root = Path(__file__).resolve().parents[3]
+
+    exit_code = main(
+        [
+            "--source",
+            str(source),
+            "--limit",
+            "1",
+            "--plan-only",
+            "--enrichment-composition",
+            str(root / "backend/samples/enrichment/enabled.dev-mcp.yaml"),
+            "--enrichment-action-config",
+            str(root / "backend/samples/mcp/soc_dev_action_adapters.json"),
+        ]
+    )
+
+    assert exit_code == 2
+    assert (
+        "--enrichment-extensions-config must be provided together"
+        in capsys.readouterr().err
+    )
+
+
+def test_live_mcp_preflight_requires_every_configured_server_tool() -> None:
+    root = Path(__file__).resolve().parents[3]
+    action_config = root / "backend/samples/mcp/pingan_asset/action_adapters.json"
+
+    with pytest.raises(ValueError, match="pingan_asset/pingan_asset_asset_locate"):
+        _validate_live_mcp_tool_inventory(
+            _FakeMcpInventoryProvider([]),
+            [action_config],
+        )
+
+    tool_names = _validate_live_mcp_tool_inventory(
+        _FakeMcpInventoryProvider(
+            [
+                SocMcpToolDescriptor(
+                    name="pingan_asset_asset_locate",
+                    server="pingan_asset",
+                )
+            ]
+        ),
+        [action_config],
+    )
+    assert tool_names == ("pingan_asset_asset_locate",)
 
 
 def _frame(alert_ids: list[int]) -> pd.DataFrame:
@@ -455,4 +649,5 @@ def _config(
         investigation_enrichment_enabled=enrichment,
         enrichment_composition_sha256="b" * 64 if enrichment else None,
         enrichment_action_config_sha256s=(("c" * 64,) if enrichment else ()),
+        enrichment_extensions_config_sha256="d" * 64 if enrichment else None,
     )

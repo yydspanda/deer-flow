@@ -101,7 +101,7 @@ backend/.deer-flow/soc-runtime-validation/checkpoint-d/
   step-d12-pingan-asset-provider/d12-a-fake-smoke.json
 ```
 
-D12-B 必须在内网使用 `extensions.internal.example.json` 的副本和真实环境变量运行同一条
+D12-B 必须在内网直接使用 tracked `extensions.internal.example.json` 并注入真实环境变量运行同一条
 `soc mcp smoke` 路径，并分别保留成功、查无、鉴权失败、超时和 evidence persistence 报告。
 只有结果明确 `mocked=false` 后，才能把 D12-B、PA-12 或第一项 PI-01 provider 标记为完成。
 
