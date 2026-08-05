@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from math import ceil
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -40,6 +41,7 @@ from soc_agent.actions.mcp import (  # noqa: E402
 )
 from soc_agent.application import (  # noqa: E402
     build_soc_analysis_service,
+    build_soc_investigation_reporting_service,
     build_soc_investigation_workflow_service,
     load_soc_enrichment_composition_config,
     validate_soc_enrichment_registry,
@@ -155,6 +157,7 @@ def execute_batch(
     source_row_count: int,
     source_errors: Sequence[Mapping[str, Any]] = (),
     investigation_service: Any | None = None,
+    investigation_reporting_service: Any | None = None,
 ) -> dict[str, Any]:
     """Execute selected rows, checkpoint atomically, and support exact resume."""
 
@@ -163,10 +166,12 @@ def execute_batch(
             raise ValueError("investigation enrichment requires persisted batch runs")
         if investigation_service is None:
             raise ValueError("investigation enrichment is enabled but no investigation service was provided")
+        if investigation_reporting_service is None:
+            raise ValueError("investigation enrichment is enabled but no investigation reporting service was provided")
         if not config.enrichment_composition_sha256 or not config.enrichment_action_config_sha256s:
             raise ValueError("investigation enrichment requires composition and action-config fingerprints")
-    elif investigation_service is not None:
-        raise ValueError("investigation service was provided while investigation enrichment is disabled")
+    elif investigation_service is not None or investigation_reporting_service is not None:
+        raise ValueError("investigation services were provided while investigation enrichment is disabled")
 
     output_dir = config.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -220,6 +225,7 @@ def execute_batch(
                     analysis_service=analysis_service,
                     config=config,
                     investigation_service=investigation_service,
+                    investigation_reporting_service=investigation_reporting_service,
                 )
                 _write_item(items_dir, record)
                 existing[item.source_index] = record
@@ -239,6 +245,7 @@ def execute_batch(
                         analysis_service=analysis_service,
                         config=config,
                         investigation_service=investigation_service,
+                        investigation_reporting_service=investigation_reporting_service,
                     ): item
                     for item in pending
                 }
@@ -288,6 +295,7 @@ def _analyze_item(
     analysis_service: Any,
     config: BatchExecutionConfig,
     investigation_service: Any | None = None,
+    investigation_reporting_service: Any | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
     context = ServiceRequestContext(
@@ -376,6 +384,27 @@ def _analyze_item(
     workflow_payload = workflow_result.model_dump(mode="json", exclude_none=True)
     record["investigation_workflow"] = workflow_payload
     record["summary"].update(_investigation_summary(workflow_payload))
+    if investigation_reporting_service is None:
+        raise ValueError("investigation reporting service is required after workflow execution")
+    try:
+        bundle = investigation_reporting_service.get_report_bundle(workflow_result.execution.execution_id)
+        if bundle is None:
+            raise RuntimeError("persisted investigation could not be projected into a D4 report")
+        shadow_report, addendum = bundle
+    except Exception as exc:  # noqa: BLE001 - retain D3 state when D4 projection fails
+        record["outcome"] = "failed"
+        record["error"] = {
+            "stage": "investigation_reporting",
+            "error_type": type(exc).__name__,
+            "message": _safe_error(exc),
+        }
+        record["execution"]["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
+        record["execution"]["completed_at"] = datetime.now(UTC).isoformat()
+        return record
+    shadow_payload = shadow_report.model_dump(mode="json", exclude_none=True)
+    record["investigation_shadow_report"] = shadow_payload
+    record["investigation_addendum"] = addendum.model_dump(mode="json", exclude_none=True)
+    record["summary"].update(_investigation_reporting_summary(shadow_payload))
     if workflow_result.execution.status in {
         SocEnrichmentExecutionStatus.RETRYABLE_FAILED,
         SocEnrichmentExecutionStatus.FAILED,
@@ -433,6 +462,19 @@ def _investigation_summary(result: Mapping[str, Any]) -> dict[str, Any]:
         "investigation_evidence_count": execution.get("evidence_count"),
         "investigation_provider_invocation_count": result.get("provider_invocation_count"),
         "investigation_idempotent_replay": result.get("idempotent_replay"),
+    }
+
+
+def _investigation_reporting_summary(report: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "investigation_report_id": report.get("report_id"),
+        "investigation_retry_count": report.get("retry_count"),
+        "investigation_evidence_coverage_ratio": report.get("evidence_coverage_ratio"),
+        "investigation_persisted_evidence_count": report.get("persisted_evidence_count"),
+        "investigation_missing_evidence_count": report.get("missing_evidence_count"),
+        "investigation_attempt_latency_ms_p95": report.get("attempt_latency_ms_p95"),
+        "investigation_cost_measurement_status": report.get("cost_measurement_status"),
+        "investigation_measurement_gaps": list(report.get("measurement_gaps") or []),
     }
 
 
@@ -528,6 +570,28 @@ def _summarize_records(
     runtime_statuses = Counter(str(_mapping(item.get("summary")).get("runtime_status") or "unknown") for item in records)
     verdicts = Counter(str(_mapping(item.get("summary")).get("verdict") or "unknown") for item in records)
     investigation_statuses = Counter(str(_mapping(item.get("summary")).get("investigation_status")) for item in records if _mapping(item.get("summary")).get("investigation_status") is not None)
+    investigation_reports = [_mapping(item.get("investigation_shadow_report")) for item in records if _mapping(item.get("investigation_shadow_report"))]
+    investigation_routes = Counter()
+    investigation_measurement_gaps = Counter()
+    investigation_attempt_latencies: list[float] = []
+    real_result_count = 0
+    mock_result_count = 0
+    for record in records:
+        workflow = _mapping(record.get("investigation_workflow"))
+        for attempt in workflow.get("attempts") or []:
+            duration = _attempt_duration_ms(_mapping(attempt))
+            if duration is not None:
+                investigation_attempt_latencies.append(duration)
+    for report in investigation_reports:
+        investigation_measurement_gaps.update(str(item) for item in report.get("measurement_gaps") or [])
+        for route in report.get("routes") or []:
+            route_payload = _mapping(route)
+            route_name = str(route_payload.get("route") or "unknown")
+            investigation_routes[route_name] += int(route_payload.get("planned_action_count") or 0)
+            real_result_count += int(route_payload.get("real_result_count") or 0)
+            mock_result_count += int(route_payload.get("mock_result_count") or 0)
+    planned_action_count = sum(int(item.get("planned_action_count") or 0) for item in investigation_reports)
+    persisted_evidence_count = sum(int(item.get("persisted_evidence_count") or 0) for item in investigation_reports)
     review_count = sum(_mapping(item.get("summary")).get("needs_review") is True for item in records)
     automation_allowed_count = sum(_mapping(item.get("summary")).get("automation_allowed") is True for item in records)
     return {
@@ -542,7 +606,50 @@ def _summarize_records(
         "runtime_status_counts": dict(sorted(runtime_statuses.items())),
         "verdict_counts": dict(sorted(verdicts.items())),
         "investigation_status_counts": dict(sorted(investigation_statuses.items())),
+        "investigation_shadow": {
+            "report_count": len(investigation_reports),
+            "planned_action_count": planned_action_count,
+            "success_count": sum(int(item.get("success_count") or 0) for item in investigation_reports),
+            "not_found_count": sum(int(item.get("not_found_count") or 0) for item in investigation_reports),
+            "failed_count": sum(int(item.get("failed_count") or 0) for item in investigation_reports),
+            "retry_count": sum(int(item.get("retry_count") or 0) for item in investigation_reports),
+            "provider_invocation_count": sum(int(item.get("provider_invocation_count") or 0) for item in investigation_reports),
+            "persisted_evidence_count": persisted_evidence_count,
+            "missing_evidence_count": sum(int(item.get("missing_evidence_count") or 0) for item in investigation_reports),
+            "evidence_coverage_ratio": (persisted_evidence_count / planned_action_count if planned_action_count else 0.0),
+            "attempt_latency_sample_count": len(investigation_attempt_latencies),
+            "attempt_latency_ms_p50": _nearest_rank_percentile(investigation_attempt_latencies, 0.50),
+            "attempt_latency_ms_p95": _nearest_rank_percentile(investigation_attempt_latencies, 0.95),
+            "route_planned_action_counts": dict(sorted(investigation_routes.items())),
+            "real_result_count": real_result_count,
+            "mock_result_count": mock_result_count,
+            "cost_measurement_status_counts": dict(sorted(Counter(str(item.get("cost_measurement_status") or "not_measured") for item in investigation_reports).items())),
+            "measurement_gap_counts": dict(sorted(investigation_measurement_gaps.items())),
+            "unauthorized_base_run_mutation_count": sum(item.get("base_run_mutated") is not False for item in investigation_reports),
+            "auto_close_allowed_count": sum(item.get("auto_close_allowed") is not False for item in investigation_reports),
+            "high_risk_actions_allowed_count": sum(item.get("high_risk_actions_allowed") is not False for item in investigation_reports),
+        },
     }
+
+
+def _attempt_duration_ms(attempt: Mapping[str, Any]) -> float | None:
+    started_at = attempt.get("started_at")
+    ended_at = attempt.get("ended_at")
+    if not isinstance(started_at, str) or not isinstance(ended_at, str):
+        return None
+    try:
+        started = datetime.fromisoformat(started_at)
+        ended = datetime.fromisoformat(ended_at)
+    except ValueError:
+        return None
+    return max(0.0, round((ended - started).total_seconds() * 1000, 3))
+
+
+def _nearest_rank_percentile(values: Sequence[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, ceil(percentile * len(ordered)) - 1)]
 
 
 def _load_existing_items(
@@ -600,14 +707,20 @@ def _validate_resume(
     execution = _mapping(previous.get("execution"))
     expected = {
         "source.sha256": (source.get("sha256"), config.source_sha256),
-        "execution.analyzer_mode": (execution.get("analyzer_mode"), config.analyzer_mode),
+        "execution.analyzer_mode": (
+            execution.get("analyzer_mode"),
+            config.analyzer_mode,
+        ),
         "execution.model_name": (execution.get("model_name"), config.model_name),
         "execution.sensitive_evidence_mode": (
             execution.get("sensitive_evidence_mode"),
             config.sensitive_evidence_mode,
         ),
         "execution.persist": (execution.get("persist"), config.persist),
-        "execution.database_kind": (execution.get("database_kind"), config.database_kind),
+        "execution.database_kind": (
+            execution.get("database_kind"),
+            config.database_kind,
+        ),
         "execution.investigation_enrichment_enabled": (
             execution.get("investigation_enrichment_enabled", False),
             config.investigation_enrichment_enabled,
@@ -713,7 +826,11 @@ def _alert_id(
     *,
     source_index: int,
 ) -> str:
-    for value in (row.get("alert_id"), wrapper.get("alert_id"), payload.get("alert_id")):
+    for value in (
+        row.get("alert_id"),
+        wrapper.get("alert_id"),
+        payload.get("alert_id"),
+    ):
         if value is not None and str(value).strip() and str(value).lower() != "nan":
             return str(value).strip()
     return f"row-{source_index}"
@@ -954,6 +1071,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             repository = SqlAlchemyAlertRepository(sessionmaker(bind=engine, expire_on_commit=False))
         service = build_soc_analysis_service(repository, settings=settings)
         investigation_service = None
+        investigation_reporting_service = None
         if investigation_enabled:
             if repository is None or composition is None or registry is None:
                 raise ValueError("investigation enrichment requires a persisted repository and validated config")
@@ -964,10 +1082,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 execution_repository=repository,
                 evidence_repository=repository,
             )
+            investigation_reporting_service = build_soc_investigation_reporting_service(
+                run_repository=repository,
+                execution_repository=repository,
+                evidence_repository=repository,
+            )
         manifest = execute_batch(
             items,
             analysis_service=service,
             investigation_service=investigation_service,
+            investigation_reporting_service=investigation_reporting_service,
             config=BatchExecutionConfig(
                 source_path=source,
                 source_sha256=source_sha256,

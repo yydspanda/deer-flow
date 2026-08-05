@@ -227,8 +227,8 @@ DEV profile + no-network preflight (implemented)
     -> PI-01D1 governed planner/service (implemented externally)
     -> PI-01D2 strict config/composition (implemented externally)
     -> PI-01D3 persistent Kafka/batch investigation workflow (implemented externally)
-    -> PI-01D4 shadow report/telemetry/addendum boundary
-    -> APT/NDR and EDR/HIDS shadow Runtime + Provider + ReviewQueue/Lead Agent review
+    -> PI-01D4 shadow report/telemetry/addendum boundary (implemented externally)
+    -> PI-01E APT/NDR and EDR/HIDS shadow Runtime + Provider + ReviewQueue/Lead Agent review (current)
 
 Parked but still required before Pilot readiness:
     D12-B seven-case direct/MCP/evidence/Web-TUI acceptance (runners implemented)

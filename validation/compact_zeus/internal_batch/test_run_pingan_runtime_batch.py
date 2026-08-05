@@ -67,6 +67,7 @@ class _FakeService:
 
 
 class _FakeInvestigationExecution:
+    execution_id = "EEXEC-BATCH-001"
     status = SocEnrichmentExecutionStatus.COMPLETED
     last_error_type = None
     last_error = None
@@ -110,6 +111,65 @@ class _FakeInvestigationService:
     def execute(self, command: object, *, context: object) -> _FakeInvestigationResult:
         self.calls.append((command, context))
         return _FakeInvestigationResult()
+
+
+class _FakeProjection:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+
+    def model_dump(self, **_kwargs: object) -> dict[str, object]:
+        return dict(self._payload)
+
+
+class _FakeInvestigationReportingService:
+    def get_report_bundle(self, execution_id: str) -> tuple[_FakeProjection, _FakeProjection]:
+        return self.get_shadow_report(execution_id), self.get_addendum(execution_id)
+
+    def get_shadow_report(self, execution_id: str) -> _FakeProjection:
+        assert execution_id == "EEXEC-BATCH-001"
+        return _FakeProjection(
+            {
+                "schema_version": "soc.investigation_shadow_report.v1",
+                "report_id": "ISHR-BATCH-001",
+                "planned_action_count": 1,
+                "attempt_count": 1,
+                "retry_count": 0,
+                "provider_invocation_count": 1,
+                "success_count": 1,
+                "not_found_count": 0,
+                "failed_count": 0,
+                "persisted_evidence_count": 1,
+                "missing_evidence_count": 0,
+                "evidence_coverage_ratio": 1.0,
+                "attempt_latency_ms_p95": 12.0,
+                "routes": [
+                    {
+                        "route": "asset.lookup",
+                        "planned_action_count": 1,
+                        "real_result_count": 1,
+                        "mock_result_count": 0,
+                    }
+                ],
+                "cost_measurement_status": "not_measured",
+                "measurement_gaps": ["provider_cost_not_measured"],
+                "base_run_mutated": False,
+                "auto_close_allowed": False,
+                "high_risk_actions_allowed": False,
+            }
+        )
+
+    def get_addendum(self, execution_id: str) -> _FakeProjection:
+        assert execution_id == "EEXEC-BATCH-001"
+        return _FakeProjection(
+            {
+                "schema_version": "soc.investigation_addendum.v1",
+                "addendum_id": "IADD-BATCH-001",
+                "execution_id": execution_id,
+                "summary": "Read-only investigation completed.",
+                "shadow_only": True,
+                "decision_impact": "none",
+            }
+        )
 
 
 def test_prepare_batch_items_preserves_valid_rows_and_reports_invalid_rows() -> None:
@@ -236,6 +296,7 @@ def test_execute_batch_explicitly_runs_persisted_internal_investigation(
         items,
         analysis_service=_FakeService(),
         investigation_service=investigation_service,
+        investigation_reporting_service=_FakeInvestigationReportingService(),
         config=_config(tmp_path, resume=False, enrichment=True),
         source_row_count=1,
     )
@@ -251,6 +312,10 @@ def test_execute_batch_explicitly_runs_persisted_internal_investigation(
     assert record["analysis_run"]["run_id"] == "RUN-451"
     assert record["summary"]["investigation_execution_id"] == "EEXEC-BATCH-001"
     assert record["investigation_workflow"]["base_run_mutated"] is False
+    assert record["investigation_shadow_report"]["report_id"] == "ISHR-BATCH-001"
+    assert record["investigation_addendum"]["addendum_id"] == "IADD-BATCH-001"
+    assert manifest["summary"]["investigation_shadow"]["evidence_coverage_ratio"] == 1.0
+    assert manifest["summary"]["investigation_shadow"]["unauthorized_base_run_mutation_count"] == 0
 
 
 def test_live_plan_only_does_not_require_execution_confirmation(

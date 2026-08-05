@@ -219,6 +219,7 @@ function timelineKindLabel(kind: SocInvestigationTimelineItem["kind"]) {
     correlation: "关联",
     domain_finding: "领域发现",
     read_only_evidence: "只读证据",
+    investigation_addendum: "调查附录",
     authorization_enrichment: "授权上下文",
     disposition_proposal: "影子处置建议",
     disposition_outcome: "影子评测结果",
@@ -250,6 +251,7 @@ function UnifiedInvestigationViewSection({
     (result) => result.findings,
   );
   const timeline = view.evidence_timeline.slice(0, 8);
+  const latestAddendum = (view.investigation_addenda ?? [])[0];
   return (
     <section className="rounded-md border">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b p-4">
@@ -299,6 +301,28 @@ function UnifiedInvestigationViewSection({
           </div>
         </div>
       </div>
+
+      {latestAddendum ? (
+        <div className="border-t px-4 py-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-medium">只读调查附录</div>
+              <p className="text-muted-foreground mt-1 text-xs">
+                {latestAddendum.summary}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="outline">{latestAddendum.execution_status}</Badge>
+              <Badge variant="secondary">
+                evidence {formatPercent(latestAddendum.evidence_coverage_ratio)}
+              </Badge>
+              {latestAddendum.analyst_attention_required ? (
+                <Badge variant="outline">attention required</Badge>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid border-t xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
         <div className="border-b p-4 xl:border-r xl:border-b-0">

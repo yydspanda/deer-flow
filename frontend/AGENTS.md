@@ -106,6 +106,13 @@ only server-returned manifest items and must hand `sample_id/proposal_id/queue` 
 capture form rather than adding a second write path. Keep campaign progress derived and
 `auto_close_allowed=false`.
 
+The same ReviewQueue context may include `investigation_addenda` produced by the backend's
+PI-01D4 read-only reporting service. The workbench may display the deterministic execution summary,
+status, evidence coverage, and attention flag, but it must not infer a new verdict, Provider quality,
+or action permission from that projection. Treat `new_conclusion_produced=false`, `shadow_only=true`,
+and `decision_impact=none` as server-owned contract boundaries; do not recompute D3 ledger telemetry
+or evidence matching in React.
+
 All SOC HTTP calls remain under `core/soc/api.ts`. The compatible contract uses `/api/soc/*`, direct
 typed success bodies, `X-SOC-API-Version: 1`, and RFC Problem Details mapped to `SocApiError`.
 State-changing callers provide stable idempotency keys when the endpoint requires them; request IDs

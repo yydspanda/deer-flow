@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from soc_agent.contracts.authorization import AuthorizationFactRef, AuthorizationMatchResult, AuthorizationQuery
 from soc_agent.contracts.common import ActorContext, EntrySurface
 from soc_agent.contracts.enrichment import SocEnrichmentPlan
+from soc_agent.contracts.investigation_reporting import SocInvestigationAddendum
 
 
 def utc_now() -> datetime:
@@ -944,6 +945,7 @@ class SocLeadAgentReviewContextArtifact(BaseModel):
     summary: dict[str, Any] | None = None
     similar_alerts: list[dict[str, Any]] = Field(default_factory=list)
     action_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    investigation_addenda: list[dict[str, Any]] = Field(default_factory=list)
     external_dispositions: list[dict[str, Any]] = Field(default_factory=list)
     authorization_enrichments: list[dict[str, Any]] = Field(default_factory=list)
     disposition_proposals: list[dict[str, Any]] = Field(default_factory=list)
@@ -3328,6 +3330,7 @@ class InvestigationTimelineItem(BaseModel):
         "correlation",
         "domain_finding",
         "read_only_evidence",
+        "investigation_addendum",
         "authorization_enrichment",
         "disposition_proposal",
         "disposition_outcome",
@@ -3364,11 +3367,13 @@ class UnifiedInvestigationView(BaseModel):
     primary_reason: str | None = None
     correlation_result: CorrelationResult | None = None
     domain_triage_results: list[SocDomainTriageResult] = Field(default_factory=list)
+    investigation_addenda: list[SocInvestigationAddendum] = Field(default_factory=list)
     evidence_timeline: list[InvestigationTimelineItem] = Field(default_factory=list)
     counts: dict[str, int] = Field(default_factory=dict)
     boundary_notes: list[str] = Field(
         default_factory=lambda: [
             "This view is read-only analyst context.",
+            "Investigation addenda summarize durable read-only lookups and never replace the Runtime verdict.",
             "Domain findings and relevant memories do not change the operational verdict.",
             "Authorization enrichments are shadow matches and do not change detection truth or disposition.",
             "Disposition proposals are shadow-only and require human review; they do not close review items.",
@@ -3389,6 +3394,7 @@ class InvestigationContext(BaseModel):
     audit_records: list[DecisionAuditRecord] = Field(default_factory=list)
     similar_alerts: list[SimilarAlertMatch] = Field(default_factory=list)
     action_evidence: list[InvestigationEvidence] = Field(default_factory=list)
+    investigation_addenda: list[SocInvestigationAddendum] = Field(default_factory=list)
     authorization_enrichments: list[AuthorizationEnrichmentRecord] = Field(default_factory=list)
     disposition_proposals: list[SocDispositionProposalRecord] = Field(default_factory=list)
     disposition_outcomes: list[SocDispositionOutcomeRecord] = Field(default_factory=list)

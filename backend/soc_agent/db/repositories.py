@@ -589,6 +589,27 @@ class SqlAlchemyAlertRepository:
             row = session.execute(select(SocEnrichmentExecutionRow).where(SocEnrichmentExecutionRow.idempotency_key == idempotency_key).limit(1)).scalar_one_or_none()
             return SocEnrichmentExecution.model_validate(row.execution_payload) if row is not None else None
 
+    def list_enrichment_executions(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        limit: int = 20,
+    ) -> list[SocEnrichmentExecution]:
+        with self._session_factory() as session:
+            query = select(SocEnrichmentExecutionRow)
+            if run_id is not None:
+                query = query.where(SocEnrichmentExecutionRow.run_id == run_id)
+            if alert_id is not None:
+                query = query.where(SocEnrichmentExecutionRow.alert_id == alert_id)
+            rows = session.execute(
+                query.order_by(
+                    SocEnrichmentExecutionRow.created_at.desc(),
+                    SocEnrichmentExecutionRow.execution_id.desc(),
+                ).limit(max(0, limit))
+            ).scalars()
+            return [SocEnrichmentExecution.model_validate(row.execution_payload) for row in rows]
+
     def compare_and_set_enrichment_execution(
         self,
         execution: SocEnrichmentExecution,

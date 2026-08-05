@@ -73,6 +73,13 @@ from soc_agent.contracts.ingestion import (
     SocAlertRawEnvelope,
     SocExternalDispositionIngressCommand,
 )
+from soc_agent.contracts.investigation_reporting import (
+    SocInvestigationAddendum,
+    SocInvestigationAddendumItem,
+    SocInvestigationMeasurementStatus,
+    SocInvestigationRouteTelemetry,
+    SocInvestigationShadowReport,
+)
 from soc_agent.contracts.mutations import SocMutationAuditRecord, SocMutationOperation
 from soc_agent.contracts.operations import (
     SocOperationsAvailability,
@@ -431,6 +438,11 @@ __all__ = [
     "InvestigationEvidence",
     "InvestigationContext",
     "InvestigationTimelineItem",
+    "SocInvestigationAddendum",
+    "SocInvestigationAddendumItem",
+    "SocInvestigationMeasurementStatus",
+    "SocInvestigationRouteTelemetry",
+    "SocInvestigationShadowReport",
     "LLMAnalysisRequest",
     "MessageSchemaObservation",
     "MessageSchemaStatus",

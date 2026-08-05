@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow / SOC 预警完整流转
 
-> Updated: 2026-08-04
+> Updated: 2026-08-05
 >
 > 本文只描述当前项目里的 SOC Agent 端到端运行过程、状态流转、数据写入和安全边界。
 >
@@ -36,6 +36,8 @@ flowchart TD
     D --> E["🗃️ SOC Business Store<br/>run + summary + queue + decision audit"]
     E -.->|"Explicit opt-in only"| E0["⚙️ SocEnrichmentPlanner<br/>版本化只读调查计划 / default off"]
     E0 --> E1["🗃️ Durable Investigation Ledger<br/>immutable plan + execution + attempts"]
+    E1 --> E2["⚙️ Investigation Reporting<br/>只读重建 / no Provider call"]
+    E2 --> E3["🔎 Shadow Report + Addendum<br/>遥测与确定性调查附录"]
     E --> W["🛠️ Normalization Monitor<br/>schema baseline + drift + coverage"]
     W --> X["🗃️ Maintenance Store<br/>baseline + deduplicated issues"]
     X --> Y["🧑‍💻 CLI / TUI / Web / Metrics<br/>归一化运维"]
@@ -68,7 +70,9 @@ flowchart TD
     E1 --> L
     L --> M["🗃️ InvestigationEvidence<br/>只读证据入库 / evidence persistence"]
     M --> E1
+    M --> E2
     M --> G
+    E3 --> G
 
     J --> N["🛡️ High-risk action proposal<br/>高风险动作建议 / risky proposal"]
     N --> O["🛡️ Approval Inbox + Grant<br/>审批请求和一次性授权"]
@@ -102,27 +106,30 @@ flowchart TD
    送入同一 Dispatcher。Kafka 与内网 batch 都是显式 opt-in；默认 composition 关闭时只跑固定 Runtime。
    每个实际结果先校验 mock/real provenance，再写确定性 `InvestigationEvidence`；正常查无与 Provider
    failure 分开，retryable failure 不提交 Kafka offset，重复消息复用已完成 execution。
-4. 分析师通过 ReviewQueue 打开统一调查上下文。
-5. Lead Agent 只能拿 bounded context，并只能提出结构化 action proposal。
-6. 自动计划和 Lead Agent proposal 都必须走 Policy、Dispatcher、Adapter Registry；只读结果写成
+4. D4 reporting service 从同一个 execution/attempt/evidence 快照只读重建 shadow report 和
+   investigation addendum。它不调用 Provider、不新增报告表、不产生第二个分析结论；只测量实际
+   action-attempt latency，Provider 网络耗时和费用没有来源时明确 `not_measured`。
+5. 分析师通过 ReviewQueue 打开统一调查上下文；Web、TUI、CLI 和 Lead Agent 都读取同一 addendum。
+6. Lead Agent 只能拿 bounded context，并只能提出结构化 action proposal。
+7. 自动计划和 Lead Agent proposal 都必须走 Policy、Dispatcher、Adapter Registry；只读结果写成
    `InvestigationEvidence` 后回到调查上下文，不能回写基础 Runtime verdict。
-7. 高风险动作只进入审批 inbox 和 grant boundary，当前不执行生产副作用。
-8. 人工 correction、review note、外部处置理由、domain finding 都只能先形成 pending memory candidate。
-9. confirmed memory 默认不可检索；只有 memory governor 经 role/reason/version/validity/review/audit
+8. 高风险动作只进入审批 inbox 和 grant boundary，当前不执行生产副作用。
+9. 人工 correction、review note、外部处置理由、domain finding 都只能先形成 pending memory candidate。
+10. confirmed memory 默认不可检索；只有 memory governor 经 role/reason/version/validity/review/audit
    状态迁移后才可进入 bounded context，且不直接改 runtime verdict。
-10. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
+11. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
    但不能改变 verdict、ReviewQueue 或分析成功状态。
-11. 显式 authorization enrichment 把确定性匹配保存为独立记录；不会回写 Runtime decision。
-12. DP-01 只有在 exact + current true-positive 时生成 shadow proposal；proposal 进入调查视图，但仍由
+12. 显式 authorization enrichment 把确定性匹配保存为独立记录；不会回写 Runtime decision。
+13. DP-01 只有在 exact + current true-positive 时生成 shadow proposal；proposal 进入调查视图，但仍由
     人工决定是否关单，系统不会自动应用。
-13. EV-01 不从 close reason 猜结论。它保存显式 primary/sample outcome，用可复现 manifest 防止挑样，
+14. EV-01 不从 close reason 猜结论。它保存显式 primary/sample outcome，用可复现 manifest 防止挑样，
     再计算 precision、override、sample agreement、freshness 和 fact fan-out。
-14. EV-02 已把 authenticated API/Web、Review TUI 和受门控的 trusted external feedback 接到同一
+15. EV-02 已把 authenticated API/Web、Review TUI 和受门控的 trusted external feedback 接到同一
     evaluation service；各入口仍必须提供显式结构化标签和幂等身份。
-15. EV-03 从 immutable manifest、proposal、ReviewQueue 和 latest outcomes 派生 reviewer-specific inbox；
+16. EV-03 从 immutable manifest、proposal、ReviewQueue 和 latest outcomes 派生 reviewer-specific inbox；
     Web 只能打开 manifest-selected work，并回到 EV-02 写入口，不保存第二套 campaign 状态。
-16. Gate 通过只表示可进入治理 rollout review；当前仍固定 `auto_close_allowed=false`。
-17. correction、close/note、memory review/retrieval activation、approval lifecycle/action boundary 和 external disposition
+17. Gate 通过只表示可进入治理 rollout review；当前仍固定 `auto_close_allowed=false`。
+18. correction、close/note、memory review/retrieval activation、approval lifecycle/action boundary 和 external disposition
     都通过 `SocMutationUnitOfWork` 原子写入业务状态与 `soc_mutation_audit_log`；进程事件只在提交后发出。
 
 Current governed-context boundary / 当前边界：GF-01 已能通过 `SocGovernedContextService` 和
@@ -154,8 +161,8 @@ flowchart LR
     V --> C["🔎 Correlation + Domain + Review Context"]
 ```
 
-当前 `PI-01D1/D2/D3` 已实现 production-shaped planner contract、严格 application composition 和
-durable investigation workflow：
+当前 `PI-01D1/D2/D3/D4` 已实现 production-shaped planner contract、严格 application composition、
+durable investigation workflow 和只读 reporting projection：
 
 - Planner 只读 `EntityMention`、`RoleResolution`、run status 和版本化 tenant policy，不读 PingAn 字段别名。
 - 当前 exact route 只有 `asset.lookup`、`asset.locate`、`threat_intel.ip_reputation.lookup`、
@@ -170,7 +177,13 @@ durable investigation workflow：
   每次 evidence 写入前核验它。模式不符进入 non-retryable contract failure，不会保存伪造 evidence。
 - Migration `0019_enrichment_executions` 保存 execution/attempt ledger；bounded retry 只重试失败 action，
   stale recovery 优先读取确定性 evidence，linked replay 使用新幂等键且不修改原 run。
-- `soc investigation get|replay` 是操作入口；内网 batch 还要求 `--persist` 与
+- `SocInvestigationReportingService` 从 ledger 和 exact referenced evidence 重建
+  `soc.investigation_shadow_report.v1` 与 `soc.investigation_addendum.v1`；不调用 Provider，不新增报告表。
+- report 公开 plan/result/retry/mock-real/evidence coverage 与 action-attempt latency；Provider 网络耗时和
+  cost 无来源时明确 `not_measured`。addendum 固定不产生新结论、无 decision impact。
+- evidence ref 必须匹配 run/alert/thread/route/action/plan-action，证据内容 hash 参与报告 identity；
+  Review/Web/TUI/Lead Agent 只消费这份有界投影。
+- `soc investigation get|report|replay` 是操作入口；内网 batch 还要求 `--persist` 与
   `--confirm-investigation`。所有配置省略时 Runtime/daemon/batch 保持原行为且不调用 Provider。
 
 ### 1.2 Authorization Shadow Path / 授权事实只读旁路

@@ -17,8 +17,8 @@
 | Authoritative authorized-activity facts | **Data-gated / fixture replacement** | `PI-01B2` | change/scanner/maintenance/exercise-roster source adapter -> existing Governed Context lifecycle；不能由 tag lookup 自动冒充完成 |
 | External disposition core | **Done / source missing** | 已完成 canonical service | Contract、Gateway ingress、UoW、SQL、Review/Correction/Memory candidate、Web/TUI 已完成 |
 | Real Zeus status/reason feed | **Data-gated / source contract absent** | `PI-01C` | 已知旧轮询 endpoint/status enum 不足以定义稳定事件、reason、版本和乱序语义；拿到真实 feed contract 后才实现 source adapter -> `SocExternalDispositionIngressCommand` |
-| Automatic read-only investigation | **D1-D3 implemented / D4 current; not a mock** | `PI-01D` | Planner/Plan、strict default-off composition、durable execution/attempt/evidence、逐次 result-mode 校验、retry/recovery/replay 与 Kafka/internal-batch opt-in 已实现；当前补 shadow report/telemetry/addendum |
-| Internal shadow journey | **Queued** | `PI-01E` | Runtime batch 与 investigation batch 分离，按 `5 -> 50 -> all` 验证质量、成本、延迟和零越权副作用 |
+| Automatic read-only investigation | **D1-D4 implemented; not a mock** | `PI-01D` | Planner/Plan、strict default-off composition、durable execution/attempt/evidence、逐次 result-mode 校验、retry/recovery/replay、recomputable shadow report/addendum 与 Kafka/internal-batch opt-in 已实现；报告无 Provider 调用或第二套状态 |
+| Internal shadow journey | **Current** | `PI-01E` | Runtime batch 与 investigation batch 分离，按 `5 -> 50 -> all` 验证质量、真实 Provider、成本/measurement gaps、延迟和零越权副作用 |
 | Deployed Review Web/Gateway/auth smoke | **Data-gated** | `PI-01E` / `PI-04-B` | 真实 Gateway、身份、网络和 SOC SQLite 上验证 Review/Investigation readback；Playwright transport fixture 不冒充部署证据 |
 | Historical EDR path catalog | **Done / investigation-only** | 已完成当前目标 | exact path + optional MD5、lineage、freshness、MCP/action/evidence 已完成；始终不是 allowlist |
 | Path-catalog decision impact | **Deferred / optional** | `PI-03D`，需重新排期 | 只有人工标签、scope/validity owner 和 replay gate 到位后，才允许建立独立 promotion proposal；不能修改现有目录即获得决策权 |

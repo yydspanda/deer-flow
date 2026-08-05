@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-04-A` 已完成） |
-| 当前目标 | `PI-01D4` 基于 D3 durable investigation ledger 增加 shadow report、Provider/plan telemetry 和 analyst-visible investigation addendum；D12-B、PI-01A/B1 保留各自 internal evidence gate |
+| 当前目标 | `PI-01E` 在内网分别运行 Runtime compatibility batch 与 governed investigation workflow batch，按 `5 -> 50 -> all` 收集真实 shadow 证据；D12-B、PI-01A/B1 保留各自 internal evidence gate |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 PingAn 内网 DEV 统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | `PI-01D4` 先定义只读 shadow report/addendum contract，再投影 plan/action hit、not-found、failure、retry、latency 和 evidence coverage；不得回写基础 Runtime verdict、自动关单、写 confirmed memory 或开放高风险动作。 |
+| 当前下一刀 | `PI-01E` 先审阅内网 composition/adapter 配置并处理 `asset.lookup` 的真实映射或禁用，再跑 5 条 Runtime-only 与 5 条 investigation shadow；核对 hit/not-found/error、evidence coverage、action-attempt latency、review/越权计数以及明确的 cost/provider-latency measurement gaps。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -40,7 +40,29 @@
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
-| `PI` | Real Data & Production Integration | **Current / PI-01D4 Shadow Report & Telemetry** | D1-D3 planner、strict composition 与 durable workflow 已完成；D12-B、TI、security-tag 保留内网 gate，B2/C data-gated；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+| `PI` | Real Data & Production Integration | **Current / PI-01E Internal Shadow** | D1-D4 planner、strict composition、durable workflow 与 read-only reporting 已完成；D12-B、TI、security-tag 保留内网 gate，B2/C data-gated；共享部署/试点/生产仍未批准 | Pilot readiness review 通过 |
+
+## 2026-08-05 — PI-01D4 shadow report and investigation addendum completed
+
+- 新增 `soc.investigation_shadow_report.v1` 与 `soc.investigation_addendum.v1`，由
+  `SocInvestigationReportingService` 从 D3 durable execution/attempt ledger 和已核验的
+  `InvestigationEvidence` 只读重建；没有新增迁移、报告真值表或 Provider 调用。
+- shadow report 投影 plan/skipped、hit/not-found/final failure、retry/provider call、mock/real、evidence
+  coverage 和 action-attempt P50/P95/max latency。Provider 网络耗时与费用没有真实数据源时明确为
+  `not_measured`，不以 0 冒充测量值。
+- addendum 只汇总执行状态和可安全展示的 evidence message，固定
+  `reasoning_status=not_requested`、`new_conclusion_produced=false`、`decision_impact=none`；它不会覆写
+  base Runtime verdict、自动关单、确认 memory 或授权 action。
+- evidence reference 必须匹配 execution/run/alert/thread/route/action/plan-action lineage；证据内容 hash
+  进入 projection identity，避免相同 evidence ID 指向变更内容时生成相同报告。
+- Review Context、Unified Investigation View、Web、TUI 和 bounded Lead Agent artifact 已接入 addendum；
+  新增 `soc investigation report EXECUTION_ID`。内网 batch item 同时保存 workflow/report/addendum，
+  manifest 聚合 shadow telemetry。
+- 验证：在 `backend/` 以 `PYTHONPATH=.:..` 运行完整 SOC、architecture 和 internal-batch 回归
+  `750 passed`；D4/batch 聚焦回归 `11 passed`；Ruff 通过；锁文件依赖恢复后完整 frontend
+  `pnpm check` 通过，SOC Review Chromium E2E `3 passed`，其中包含 investigation addendum 可见性断言。
+- 下一步固定为 `PI-01E`：在批准的内网 DEV 中分开跑 Runtime compatibility 和 investigation shadow，
+  从 5 条开始；D12-B、PI-01A/B1 的 `mocked=false` gate 必须在 Pilot readiness 前关闭。
 
 ## 2026-08-04 — PI-01D3 persistent investigation workflow completed
 

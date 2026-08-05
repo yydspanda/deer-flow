@@ -159,6 +159,11 @@ def render_context(context: InvestigationContext) -> RenderableType:
             "action_evidence",
             ", ".join(f"{item.action}:{item.status}" for item in context.action_evidence[:5]),
         )
+    if context.investigation_addenda:
+        table.add_row(
+            "investigation_addenda",
+            ", ".join(f"{item.execution_id}:{item.execution_status.value}/coverage={item.evidence_coverage_ratio:.0%}" for item in context.investigation_addenda[:5]),
+        )
     if context.authorization_enrichments:
         table.add_row(
             "authorization",
@@ -197,6 +202,7 @@ def render_context(context: InvestigationContext) -> RenderableType:
                 f"correlation={view.counts.get('correlation_matches', 0)} "
                 f"domain={view.counts.get('domain_findings', 0)} "
                 f"evidence={view.counts.get('action_evidence', 0)} "
+                f"addenda={view.counts.get('investigation_addenda', 0)} "
                 f"authorization={view.counts.get('authorization_enrichments', 0)} "
                 f"disposition={view.counts.get('disposition_proposals', 0)} "
                 f"outcomes={view.counts.get('disposition_outcomes', 0)} "

@@ -1760,7 +1760,7 @@ Delivery stages / 交付阶段：
 
 The authoritative work packages, gates, Parking Lot and anti-drift rules live in
 [`delivery-roadmap.md`](delivery-roadmap.md). The current implementation pointer lives only in
-[`progress.md`](progress.md). As of 2026-08-04, `BG-P0-01..BG-P1-05` and `BG-03` are complete, the
+[`progress.md`](progress.md). As of 2026-08-05, `BG-P0-01..BG-P1-05` and `BG-03` are complete, the
 Alpha Gate has a scoped owner approval, and Stage 4 is current. Checkpoint D0-D11.1 and D12-A
 provider code/fake smoke are complete. D12-B has complete execution tooling but is explicitly
 `Parked / internal evidence pending`; its `mocked=false` asset-provider gate remains open. PI-01A
@@ -1769,13 +1769,13 @@ while real DEV smoke and actual response-field review remain. PI-01B1 security-t
 production-shaped Provider/MCP and external validity/scope regression, while real DEV object-type/expiry
 semantics and `mocked=false` evidence remain. PI-01B2 and PI-01C are explicitly data-gated because the
 available material does not define authoritative activity-source or stable status/reason event contracts.
-PI-01D1/D2/D3 are complete: versioned planner contracts, optional Main Orchestrator bridge, strict
+PI-01D1/D2/D3/D4 are complete: versioned planner contracts, optional Main Orchestrator bridge, strict
 composition, exact Registry binding, durable execution/attempt state, per-result mock/real validation,
-bounded retry/stale recovery/linked replay, and explicit Kafka/internal-batch integration are covered by
-deterministic regression. D3 always starts from an existing persisted `AnalysisRun`; it does not rerun
-the LLM or let Provider output overwrite the base verdict. Omitted composition/action config preserves
-Runtime-only behavior. The current task is PI-01D4 shadow report, Provider/plan telemetry and a bounded
-investigation addendum before PI-01E.
+bounded retry/stale recovery/linked replay, explicit Kafka/internal-batch integration, and read-only
+shadow report/addendum projection are covered by deterministic regression. D3 always starts from an
+existing persisted `AnalysisRun`; it does not rerun the LLM or let Provider output overwrite the base
+verdict. D4 invokes no Provider and creates no second report truth table. Omitted composition/action
+config preserves Runtime-only behavior. The current task is PI-01E internal shadow end-to-end.
 `PI-04-A SOC Operations Snapshot` is complete; `PI-04-B` remains parked behind that sequence.
 
 PI-01D3 persists `SocEnrichmentExecution` and `SocEnrichmentActionAttempt` through migration
@@ -1785,8 +1785,26 @@ policy produced each action. Actual action results are checked against
 not-found is evidence, while Provider/contract failure is not. Kafka retryable failures retain the
 offset, internal batch resume locks source/model/composition/action-config hashes, and completed
 identities do not repeat Provider calls. Operators can inspect or create an explicitly confirmed linked
-replay through `soc investigation get|replay`. These mechanics prove reliable orchestration, not true
+replay through `soc investigation get|replay`, and generate the D4 projection through
+`soc investigation report`. These mechanics prove reliable orchestration, not true
 Provider quality, model accuracy or Pilot readiness.
+
+PI-01D4 adds the reporting boundary in `contracts/investigation_reporting.py` and
+`core/investigation_reporting.py`. `SocInvestigationReportingService` reads one persisted execution,
+its attempts and exact referenced `InvestigationEvidence`, validates run/alert/thread/route/action/
+plan-action lineage, and derives both `soc.investigation_shadow_report.v1` and
+`soc.investigation_addendum.v1` from one snapshot. Evidence content hashes participate in the source
+hash, so a reused evidence ID cannot conceal changed content. The shadow report exposes secret-free
+plan, result, retry, Provider-call, mock/real, evidence-coverage and action-attempt latency telemetry.
+Provider-network latency and cost remain named `not_measured` gaps until those sources exist. The
+addendum is an execution summary, not a second analysis: it fixes `reasoning_status=not_requested`,
+`new_conclusion_produced=false`, `decision_impact=none` and `projection_persisted=false`. Review Context,
+Unified Investigation View, Web, TUI and the bounded Lead Agent artifact may display it; none may use it
+to overwrite the Runtime verdict, close a queue, confirm memory or authorize an action. Operators use
+`soc investigation report EXECUTION_ID`; internal batch items retain workflow/report/addendum and the
+manifest aggregates the same measured fields. A future LLM-grounded post-investigation conclusion
+requires a separate versioned contract, grounding and persistence decision; it must never silently
+change this deterministic D4 projection.
 
 PI-04-A introduces `soc.operations_snapshot.v1` as a read-only operational projection. It uses exact
 SQL aggregates over SOC-owned run, review, approval, normalization and memory tables, then composes a

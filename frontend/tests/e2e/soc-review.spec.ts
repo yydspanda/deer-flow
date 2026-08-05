@@ -24,6 +24,10 @@ test.describe("SOC review workbench", () => {
         "Local fixture returned an explicit mock reputation result.",
       ),
     ).toBeVisible();
+    await expect(page.getByText("只读调查附录")).toBeVisible();
+    await expect(
+      page.getByText(/Read-only investigation completed: 1 hit/),
+    ).toBeVisible();
 
     const memorySection = page.locator("section").filter({
       has: page.getByRole("heading", { name: "候选记忆" }),

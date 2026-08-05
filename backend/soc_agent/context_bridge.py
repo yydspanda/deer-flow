@@ -22,6 +22,7 @@ _MAX_EVIDENCE_ITEMS = 5
 _MAX_SIMILAR_ALERTS = 5
 _MAX_FACT_ITEMS = 10
 _MAX_ACTION_EVIDENCE_ITEMS = 5
+_MAX_INVESTIGATION_ADDENDUM_ITEMS = 5
 _MAX_AUTHORIZATION_ENRICHMENT_ITEMS = 5
 _MAX_DISPOSITION_PROPOSAL_ITEMS = 5
 _MAX_DISPOSITION_OUTCOME_ITEMS = 10
@@ -35,6 +36,7 @@ _LEAD_AGENT_CONTEXT_INSTRUCTIONS = [
     "Do not execute response actions from this context.",
     "High-risk actions must be proposed as bounded action requests and routed through SOC approval.",
     "Before proposing a duplicate read-only lookup, inspect action_evidence and reuse fresh matching results.",
+    "Treat investigation_addenda as shadow summaries of durable read-only lookups; they never replace the Runtime verdict.",
     "Treat external_dispositions as operator feedback; pending memory candidates are not confirmed reusable knowledge.",
     "Treat authorization_enrichments as read-only shadow context; they never replace detection truth or authorize disposition by themselves.",
     "Treat disposition_proposals as shadow recommendations only; they cannot close a review item or authorize a response action.",
@@ -71,6 +73,7 @@ def build_lead_agent_review_context_artifact(
     summary_payload = _summary_payload(context.summary)
     similar_payload = [_similar_alert_payload(match) for match in context.similar_alerts[:_MAX_SIMILAR_ALERTS]]
     action_evidence_payload = [_action_evidence_payload(item) for item in context.action_evidence[:_MAX_ACTION_EVIDENCE_ITEMS]]
+    investigation_addenda_payload = [_investigation_addendum_payload(item) for item in context.investigation_addenda[:_MAX_INVESTIGATION_ADDENDUM_ITEMS]]
     authorization_enrichment_payload = [_authorization_enrichment_payload(item) for item in context.authorization_enrichments[:_MAX_AUTHORIZATION_ENRICHMENT_ITEMS]]
     disposition_proposal_payload = [_disposition_proposal_payload(item) for item in context.disposition_proposals[:_MAX_DISPOSITION_PROPOSAL_ITEMS]]
     disposition_outcome_payload = [_disposition_outcome_payload(item) for item in context.disposition_outcomes[:_MAX_DISPOSITION_OUTCOME_ITEMS]]
@@ -88,6 +91,7 @@ def build_lead_agent_review_context_artifact(
         "summary": summary_payload,
         "similar_alerts": similar_payload,
         "action_evidence": action_evidence_payload,
+        "investigation_addenda": investigation_addenda_payload,
         "authorization_enrichments": authorization_enrichment_payload,
         "disposition_proposals": disposition_proposal_payload,
         "disposition_outcomes": disposition_outcome_payload,
@@ -111,6 +115,7 @@ def build_lead_agent_review_context_artifact(
         summary=summary_payload,
         similar_alerts=similar_payload,
         action_evidence=action_evidence_payload,
+        investigation_addenda=investigation_addenda_payload,
         authorization_enrichments=authorization_enrichment_payload,
         disposition_proposals=disposition_proposal_payload,
         disposition_outcomes=disposition_outcome_payload,
@@ -282,6 +287,30 @@ def _action_evidence_payload(evidence: InvestigationEvidence) -> dict[str, Any]:
     if evidence.actor is not None:
         payload["actor"] = evidence.actor.model_dump(mode="json", exclude_none=True)
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _investigation_addendum_payload(addendum: Any) -> dict[str, Any]:
+    return {
+        "addendum_id": addendum.addendum_id,
+        "source_report_id": addendum.source_report_id,
+        "execution_id": addendum.execution_id,
+        "run_id": addendum.run_id,
+        "alert_id": addendum.alert_id,
+        "trigger": addendum.trigger.value,
+        "execution_status": addendum.execution_status.value,
+        "source_updated_at": addendum.source_updated_at.isoformat(),
+        "base_runtime_status": addendum.base_runtime_status,
+        "base_runtime_verdict": addendum.base_runtime_verdict,
+        "summary": addendum.summary,
+        "items": [item.model_dump(mode="json", exclude_none=True) for item in addendum.items[:10]],
+        "evidence_refs": addendum.evidence_refs[:20],
+        "evidence_coverage_ratio": addendum.evidence_coverage_ratio,
+        "analyst_attention_required": addendum.analyst_attention_required,
+        "measurement_gaps": addendum.measurement_gaps[:10],
+        "new_conclusion_produced": addendum.new_conclusion_produced,
+        "shadow_only": addendum.shadow_only,
+        "decision_impact": addendum.decision_impact,
+    }
 
 
 def _authorization_enrichment_payload(record: Any) -> dict[str, Any]:

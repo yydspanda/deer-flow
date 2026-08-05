@@ -239,6 +239,14 @@ class SocEnrichmentExecutionRepository(Protocol):
         idempotency_key: str,
     ) -> SocEnrichmentExecution | None: ...
 
+    def list_enrichment_executions(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        limit: int = 20,
+    ) -> list[SocEnrichmentExecution]: ...
+
     def compare_and_set_enrichment_execution(
         self,
         execution: SocEnrichmentExecution,

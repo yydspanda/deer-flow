@@ -354,9 +354,18 @@ Current SOC direction:
   bounded retry, stale-attempt recovery and linked replay without mutating the base run. Kafka
   daemon and internal PKL batch wiring are explicit opt-in through one composition plus one or more
   action-adapter config files; omitting them preserves Runtime-only behavior. Duplicate Kafka/batch
-  identities reuse the durable execution instead of repeating completed Provider calls. Operators
-  use `soc investigation get|replay`; replay requires a new idempotency key, a reason, explicit
-  config and confirmation.
+  identities reuse the durable execution instead of repeating completed Provider calls. PI-01D4 adds
+  `SocInvestigationReportingService` as a pure read-only projection over that ledger plus validated
+  `InvestigationEvidence`: `soc.investigation_shadow_report.v1` exposes secret-free plan/action/result,
+  retry, evidence-coverage and action-attempt latency telemetry, while
+  `soc.investigation_addendum.v1` exposes a deterministic analyst summary with
+  `reasoning_status=not_requested` and no new conclusion. Reports are recomputable and are not stored
+  in another truth table; referenced evidence must match the execution/run/alert/thread/route/action
+  lineage, and its content hash participates in report identity. Provider-network latency and cost
+  remain explicit `not_measured` gaps until a real source exists. Review/Web/TUI/Lead Agent context
+  may display the addendum, but it cannot overwrite the base verdict, close work, confirm memory or
+  authorize an action. Operators use `soc investigation get|report|replay`; replay requires a new
+  idempotency key, a reason, explicit config and confirmation.
 - PingAn asset-provider code lives only under `backend/soc_agent/integrations/pingan/` and uses the
   existing generic `asset.locate` MCP/action boundary. Checkpoint D12-A is production-shaped code with
   a fake transport and must always expose `mocked=true`; it is not PA-12 or PI-01 real-provider
@@ -507,7 +516,7 @@ SOC delivery plan (the only execution order is `.notes/ai_soc/delivery-roadmap.m
 | `BD` Boss Demo v0.1 | Done: browser-first repeatable golden path |
 | `AA` SOC Alpha Completeness Audit | Done: unique 50-row matrix and frozen blocker set |
 | `BG` Close Blocking Gaps | Done: Alpha Gate passed 2026-07-20 |
-| `PI` Real Data & Production Integration | Current: `PI-01D4` shadow report, Provider/plan telemetry and investigation addendum boundary; D1-D3 investigation planning/composition/persistence done, B2/C data-gated, PingAn asset/TI/tag real-smoke gates retained; `PI-04-A` done and `PI-04-B` parked |
+| `PI` Real Data & Production Integration | Current: `PI-01E` internal shadow end-to-end; D1-D4 investigation planning/composition/persistence/reporting done, B2/C data-gated, PingAn asset/TI/tag real-smoke gates retained; `PI-04-A` done and `PI-04-B` parked |
 
 ### SOC Agent Development Workflow
 

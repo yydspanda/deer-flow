@@ -22,6 +22,7 @@ from soc_agent.core import (
     SocCorrelationService,
     SocDomainTriageService,
     SocEnrichmentPlanner,
+    SocInvestigationReportingService,
     SocInvestigationWorkflowService,
     SocMainOrchestratorService,
 )
@@ -166,6 +167,21 @@ def build_soc_investigation_workflow_service(
     )
 
 
+def build_soc_investigation_reporting_service(
+    *,
+    run_repository: AlertRepository,
+    execution_repository: SocEnrichmentExecutionRepository,
+    evidence_repository: InvestigationEvidenceRepository,
+) -> SocInvestigationReportingService:
+    """Build the D4 read-only projection service from durable repositories."""
+
+    return SocInvestigationReportingService(
+        run_repository=run_repository,
+        execution_repository=execution_repository,
+        evidence_repository=evidence_repository,
+    )
+
+
 def _coerce_composition(
     value: SocEnrichmentCompositionConfig | Mapping[str, Any],
     *,
@@ -225,6 +241,7 @@ def _validate_result_provenance(
 __all__ = [
     "SocEnrichmentCompositionError",
     "build_soc_investigation_workflow_service",
+    "build_soc_investigation_reporting_service",
     "build_soc_main_orchestrator_service",
     "load_soc_enrichment_composition_config",
     "validate_soc_enrichment_registry",

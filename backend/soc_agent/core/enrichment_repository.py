@@ -55,6 +55,25 @@ class InMemorySocEnrichmentExecutionRepository:
                 return None
             return self._executions[execution_id].model_copy(deep=True)
 
+    def list_enrichment_executions(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        limit: int = 20,
+    ) -> list[SocEnrichmentExecution]:
+        with self._lock:
+            executions = [item.model_copy(deep=True) for item in self._executions.values()]
+        if run_id is not None:
+            executions = [item for item in executions if item.run_id == run_id]
+        if alert_id is not None:
+            executions = [item for item in executions if item.alert_id == alert_id]
+        return sorted(
+            executions,
+            key=lambda item: (item.created_at, item.execution_id),
+            reverse=True,
+        )[: max(0, limit)]
+
     def compare_and_set_enrichment_execution(
         self,
         execution: SocEnrichmentExecution,

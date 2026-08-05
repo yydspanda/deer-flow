@@ -30,6 +30,7 @@ from soc_agent.actions.proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.agent_profile import SocLeadAgentProfileInstaller
 from soc_agent.application import (
     build_soc_analysis_service,
+    build_soc_investigation_reporting_service,
     build_soc_investigation_workflow_service,
     load_soc_enrichment_composition_config,
 )
@@ -218,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
         return _mcp_tools(args)
     if args.command == "investigation" and args.investigation_command == "get":
         return _investigation_get(args)
+    if args.command == "investigation" and args.investigation_command == "report":
+        return _investigation_report(args)
     if args.command == "investigation" and args.investigation_command == "replay":
         return _investigation_replay(args)
     if args.command == "llm" and args.llm_command == "status":
@@ -575,6 +578,13 @@ def _build_parser() -> argparse.ArgumentParser:
     investigation_get.add_argument("execution_id")
     investigation_get.add_argument("--pretty", action="store_true")
     _add_database_args(investigation_get)
+    investigation_report = investigation_subparsers.add_parser(
+        "report",
+        help="Project secret-free shadow telemetry and an analyst addendum",
+    )
+    investigation_report.add_argument("execution_id")
+    investigation_report.add_argument("--pretty", action="store_true")
+    _add_database_args(investigation_report)
     investigation_replay = investigation_subparsers.add_parser(
         "replay",
         help="Create a linked replay under the current explicit composition",
@@ -1566,6 +1576,7 @@ def _review_context(args: argparse.Namespace) -> int:
             audit_repository=repository,
             review_queue_repository=repository,
             evidence_repository=repository,
+            enrichment_execution_repository=repository,
             authorization_enrichment_repository=repository,
             disposition_proposal_repository=repository,
             disposition_evaluation_repository=repository,
@@ -1715,6 +1726,19 @@ def _review_context_summary_payload(context: InvestigationContext) -> dict[str, 
         "primary_reason": view.primary_reason if view is not None else context.queue_item.reason,
         "counts": counts,
         "scenario_findings": findings,
+        "investigation_addenda": [
+            {
+                "addendum_id": item.addendum_id,
+                "execution_id": item.execution_id,
+                "execution_status": item.execution_status.value,
+                "summary": item.summary,
+                "evidence_coverage_ratio": item.evidence_coverage_ratio,
+                "analyst_attention_required": item.analyst_attention_required,
+                "shadow_only": item.shadow_only,
+                "decision_impact": item.decision_impact,
+            }
+            for item in context.investigation_addenda
+        ],
         "authorization_enrichments": authorization_enrichments,
         "disposition_proposals": disposition_proposals,
         "memory_candidates": memory_candidates,
@@ -2487,6 +2511,7 @@ def _review_tui(args: argparse.Namespace) -> int:
                 audit_repository=repository,
                 review_queue_repository=repository,
                 evidence_repository=repository,
+                enrichment_execution_repository=repository,
                 authorization_enrichment_repository=repository,
                 disposition_proposal_repository=repository,
                 disposition_evaluation_repository=repository,
@@ -2523,6 +2548,7 @@ def _chat_tui(args: argparse.Namespace) -> int:
             audit_repository=repository,
             review_queue_repository=repository,
             evidence_repository=repository,
+            enrichment_execution_repository=repository,
             authorization_enrichment_repository=repository,
             disposition_proposal_repository=repository,
             disposition_evaluation_repository=repository,
@@ -2684,6 +2710,31 @@ def _investigation_get(args: argparse.Namespace) -> int:
         evidence_persisted_count=execution.evidence_count,
     )
     print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _investigation_report(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        service = build_soc_investigation_reporting_service(
+            run_repository=repository,
+            execution_repository=repository,
+            evidence_repository=repository,
+        )
+        bundle = service.get_report_bundle(args.execution_id)
+    except (RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if bundle is None:
+        print(f"error: investigation execution {args.execution_id} not found", file=sys.stderr)
+        return 1
+    shadow_report, addendum = bundle
+    payload = {
+        "schema_version": "soc.investigation_report_bundle.v1",
+        "shadow_report": shadow_report.model_dump(mode="json", exclude_none=True),
+        "investigation_addendum": addendum.model_dump(mode="json", exclude_none=True),
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2 if args.pretty else None))
     return 0
 
 

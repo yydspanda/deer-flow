@@ -541,6 +541,7 @@ export type SocInvestigationTimelineKind =
   | "correlation"
   | "domain_finding"
   | "read_only_evidence"
+  | "investigation_addendum"
   | "authorization_enrichment"
   | "disposition_proposal"
   | "disposition_outcome"
@@ -564,6 +565,58 @@ export interface SocInvestigationTimelineItem {
   payload: Record<string, unknown>;
 }
 
+export interface SocInvestigationAddendumItem {
+  plan_action_id: string;
+  route: string;
+  action: string;
+  adapter_id?: string | null;
+  status: string;
+  attempt_count: number;
+  retry_count: number;
+  provider_invoked: boolean;
+  result_mode?: "mock" | "real" | null;
+  evidence_id?: string | null;
+  evidence_available: boolean;
+  evidence_summary?: string | null;
+  latest_attempt_latency_ms?: number | null;
+}
+
+export interface SocInvestigationAddendum {
+  schema_version: string;
+  addendum_id: string;
+  projection_version: string;
+  source_report_id: string;
+  source_hash: string;
+  execution_id: string;
+  run_id: string;
+  alert_id: string;
+  trigger: string;
+  execution_status: string;
+  generated_at: string;
+  source_updated_at: string;
+  base_runtime_status: string;
+  base_runtime_verdict?: SocVerdict | null;
+  summary: string;
+  items: SocInvestigationAddendumItem[];
+  evidence_refs: string[];
+  evidence_coverage_ratio: number;
+  analyst_attention_required: boolean;
+  measurement_gaps: string[];
+  addendum_kind: "read_only_execution_summary";
+  reasoning_status: "not_requested";
+  new_conclusion_produced: false;
+  grounding_status: "deterministic_evidence_reference_check";
+  projection_persisted: false;
+  durable_sources_persisted: true;
+  shadow_only: true;
+  decision_impact: "none";
+  base_run_mutated: false;
+  automation_allowed: false;
+  auto_close_allowed: false;
+  confirmed_memory_write_allowed: false;
+  high_risk_actions_allowed: false;
+}
+
 export interface SocUnifiedInvestigationView {
   schema_version: string;
   view_id: string;
@@ -579,6 +632,7 @@ export interface SocUnifiedInvestigationView {
   primary_reason?: string | null;
   correlation_result?: SocCorrelationResult | null;
   domain_triage_results: SocDomainTriageResult[];
+  investigation_addenda: SocInvestigationAddendum[];
   evidence_timeline: SocInvestigationTimelineItem[];
   counts: Record<string, number>;
   boundary_notes: string[];
@@ -841,6 +895,7 @@ export interface SocInvestigationContext {
   audit_records: SocDecisionAuditRecord[];
   similar_alerts: SocSimilarAlertMatch[];
   action_evidence: SocInvestigationEvidence[];
+  investigation_addenda: SocInvestigationAddendum[];
   authorization_enrichments: SocAuthorizationEnrichmentRecord[];
   disposition_proposals: SocDispositionProposalRecord[];
   disposition_outcomes: SocDispositionOutcomeRecord[];

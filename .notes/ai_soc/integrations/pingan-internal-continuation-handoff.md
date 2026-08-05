@@ -1,9 +1,9 @@
 # PingAn SOC Internal Continuation Handoff / 平安内网续作交接单
 
 > Type: temporary transfer artifact / 临时复制交接文件
-> Reconciled: 2026-08-04
-> Current pointer: `PI-01D4 Shadow Report & Telemetry`; D12-B and PI-01A/B1 retain their internal acceptance gates
-> Next external action: build the D4 shadow report/addendum boundary; internal operators may independently run the retained asset/TI/tag `mocked=false` gates through the completed D3 workflow
+> Reconciled: 2026-08-05
+> Current pointer: `PI-01E Internal Shadow End-to-End`; D12-B and PI-01A/B1 retain their internal acceptance gates
+> Next external action: review real-only composition/adapters, then run separate 5-row Runtime-only and investigation-shadow batches using the completed D1-D4 workflow/reporting boundary
 
 本文件只保留**尚未完成**的工作，便于复制到内网 Mac 后继续开发和验证。它不是新的权威路线；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
@@ -71,8 +71,8 @@ git check-ignore -v .env.soc-dev.local config.pingan-dev.local \
 ```text
 PI-01D1/D2 planner + strict composition（Done）
   -> PI-01D3 Kafka/internal batch persistent investigation workflow（Done）
-  -> PI-01D4 shadow report/telemetry/addendum boundary（Current）
-  -> PI-01E 内网 shadow 全链路
+  -> PI-01D4 shadow report/telemetry/addendum boundary（Done）
+  -> PI-01E 内网 shadow 全链路（Current）
   -> PI-02 真实 Kafka/PostgreSQL/K8s（当前暂停）
   -> PI-03 人工标签、评测与校准
   -> PI-04B+ Web 运营视图、Telemetry、Prometheus/SLO
@@ -91,7 +91,7 @@ PI-01B2 / PI-01C（Data-gated）
   -> 等真实权威活动来源与稳定状态/理由事件协议，不用 fixture 或旧枚举猜测实现
 ```
 
-项目不新增 `D13` 编号。D12-B 与 PI-01A/B1 的内网证据门槛不阻塞 PI-01D4 通用代码推进，但必须在 PI-01E/Pilot readiness 前恢复并关闭。
+项目不新增 `D13` 编号。D12-B 与 PI-01A/B1 的内网证据门槛没有被 D4 通用代码关闭，必须在 PI-01E/Pilot readiness 前恢复并关闭。
 
 当前内网 DEV 只使用：
 
@@ -347,7 +347,7 @@ AnalysisRun/ReviewQueue 序列化哈希前后一致。报告不保存 raw query�
 
 ## 4. PI-01 - Remaining Real Read-only Providers / 其他真实只读能力
 
-D12-B 已按产品决定暂存，PI-01A/B1 已完成外网可实现代码，PI-01D3 durable investigation workflow 也已完成；当前主线进入不依赖真实内网参数的 PI-01D4 shadow report/telemetry/addendum。每个真实 Provider 仍复用 generic action、typed result、InvestigationEvidence、审计和失败契约；PingAn 字段与鉴权只能存在于 `backend/soc_agent/integrations/pingan/`。D12-B 与 PI-01A/B1 仍须在 PI-01E/Pilot readiness 前恢复并通过各自真实门槛。
+D12-B 已按产品决定暂存，PI-01A/B1 已完成外网可实现代码，PI-01D1-D4 的 planner、composition、durable workflow 与 read-only reporting 也已完成；当前主线进入需要真实内网参数和批准数据的 PI-01E shadow end-to-end。每个真实 Provider 仍复用 generic action、typed result、InvestigationEvidence、审计和失败契约；PingAn 字段与鉴权只能存在于 `backend/soc_agent/integrations/pingan/`。D12-B 与 PI-01A/B1 仍须在 PI-01E/Pilot readiness 前恢复并通过各自真实门槛。
 
 | Order | Generic route / boundary | PingAn source | Current state | Completion evidence |
 |---|---|---|---|---|
@@ -355,8 +355,8 @@ D12-B 已按产品决定暂存，PI-01A/B1 已完成外网可实现代码，PI-0
 | `PI-01B1` | `security_tag.lookup` | `POST /public/searchTagContent` | production-shaped Provider/MCP + fake/persistence regression complete; internal evidence pending | exact/expired/inactive/unknown/out-of-scope/conflict/not-found/error smoke + persisted evidence |
 | `PI-01B2` | authorized-activity fact source | change/scanner/maintenance/exercise roster | lifecycle/matcher real, source facts are fixture | real source version/scope/freshness sync or explicit data-gated status with disposition automation disabled |
 | `PI-01C` | external disposition canonical ingress | Zeus status/reason feed | canonical service real; source contract data-gated | authenticated real source adapter + idempotency/order/replay evidence |
-| `PI-01D` | governed read-only investigation orchestration | existing action dispatcher/registry/evidence | D1-D3 done; daemon/batch explicit opt-in, default Runtime-only; D4 current | deterministic allowlisted plan + persisted/idempotent workflow evidence + immutable base run + shadow telemetry/addendum |
-| `PI-01E` | internal shadow end-to-end | real Runtime + PI-01 providers | not started | `5 -> 50 -> all` investigation report with latency/cost/error/review/no-side-effect gates |
+| `PI-01D` | governed read-only investigation orchestration | existing action dispatcher/registry/evidence | D1-D4 done; daemon/batch explicit opt-in, default Runtime-only; reporting is recomputable and read-only | deterministic allowlisted plan + persisted/idempotent workflow evidence + immutable base run + shadow telemetry/addendum |
+| `PI-01E` | internal shadow end-to-end | real Runtime + PI-01 providers | current | `5 -> 50 -> all` investigation report with latency/cost-or-explicit-gap/error/review/no-side-effect gates |
 
 ### 4.1 PI-01A Threat intelligence / 威胁情报
 
@@ -447,7 +447,7 @@ POST /api/soc/external-dispositions
 - [x] 复用 `SocAgentActionDispatcher`、`SocActionAdapterRegistry` 和 `InvestigationEvidenceRepository`；通用 Runtime 没有 PingAn 分支或外部 IO。
 - [x] Provider failure、normal not-found、result-mode contract failure、denied 和 interrupted 是不同状态；base `AnalysisRun` 保持不可变。
 - [x] Kafka/PKL 调查模式显式开启，受 action/retry budget 限制且可 linked replay；默认 Runtime compatibility batch 继续不调用 MCP。
-- [ ] `PI-01D4` 增加 shadow report、Provider/plan telemetry 和 analyst-visible investigation addendum；不得从日志反推不存在的 latency/cost/SLO。
+- [x] `PI-01D4` 已增加 recomputable shadow report、Provider/plan telemetry 和 analyst-visible deterministic investigation addendum；只测 action-attempt latency，Provider 网络耗时/cost/SLO 无来源时明确 `not_measured`。
 
 ### 4.5 PI-01E Internal shadow / 内网影子验证
 
@@ -609,13 +609,13 @@ soc-internal-validation/
 ## 10. Resume Pointer / 下次继续位置
 
 ```text
-Current: PI-01D4 shadow report, Provider/plan telemetry and investigation addendum
-Ready:   PI-01D1-D3 planner + strict composition + durable opt-in Kafka/internal-batch workflow
-First:   define the read-only shadow report/addendum contract and exact measured fields
-Next:    project plan/action hit, not-found, failure, retry, latency and evidence coverage without changing the fixed Runtime decision
+Current: PI-01E internal Runtime compatibility and governed investigation shadow
+Ready:   PI-01D1-D4 planner + strict composition + durable workflow + recomputable report/addendum
+First:   review real-only composition/adapters; map or disable asset.lookup; run separate 5-row Runtime-only and investigation batches
+Next:    inspect hit/not-found/error, evidence coverage, action-attempt P95, explicit cost/provider-latency gaps, review and unauthorized-mutation counts before expanding to 50
 Pending internal evidence: D12-B asset, PI-01A TI, PI-01B1 security-tag gates
 Data-gated: PI-01B2 authoritative activity source, PI-01C stable status/reason feed contract
-Queued:  PI-01E
+Queued:  PI-02/PI-04-B only after PI-01E evidence and stage review
 ```
 
 不要因为接口暂时不可用而增加新的 fake Provider。不可获得的输入应明确标记 `data-gated`；已有真实能力只替换 adapter/provider/config，不改变通用 Runtime 控制流和核心服务契约。

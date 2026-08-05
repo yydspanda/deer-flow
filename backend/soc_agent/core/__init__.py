@@ -25,6 +25,10 @@ from soc_agent.core.enrichment_repository import InMemorySocEnrichmentExecutionR
 from soc_agent.core.evidence import InMemoryInvestigationEvidenceRepository
 from soc_agent.core.external_disposition import SocExternalDispositionService
 from soc_agent.core.governed_context import SocGovernedContextService
+from soc_agent.core.investigation_reporting import (
+    SocInvestigationReportingError,
+    SocInvestigationReportingService,
+)
 from soc_agent.core.investigation_workflow import (
     SocEnrichmentWorkflowBusyError,
     SocEnrichmentWorkflowConflictError,
@@ -91,6 +95,8 @@ __all__ = [
     "SocGovernedContextService",
     "SocMainOrchestratorService",
     "SocInvestigationWorkflowService",
+    "SocInvestigationReportingError",
+    "SocInvestigationReportingService",
     "SocMemoryService",
     "SocNormalizationService",
     "SocNormalizationMaintenanceService",

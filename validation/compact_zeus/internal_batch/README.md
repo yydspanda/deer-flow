@@ -27,6 +27,9 @@ tool. PI-01D3 adds an explicit optional bridge after a successful persisted
 Registry -> durable `InvestigationEvidence`. It never routes from free text and
 cannot mutate the base verdict. `endpoint.software_path.lookup` is not in the
 automatic Planner allowlist and remains a governed analyst/Lead Agent action.
+PI-01D4 then projects the persisted workflow into a secret-free shadow report
+and a deterministic analyst addendum. Projection calls no Provider, creates no
+new conclusion, and writes no second report state.
 
 ## Recommended ramp
 
@@ -118,7 +121,7 @@ backend/.deer-flow/data/soc_agent_dev.db
 For 5,000 live rows, do not increase workers until the five/50-row latency,
 error rate, model concurrency, and local database behavior are reviewed.
 
-## Optional PI-01D3 investigation
+## Optional PI-01D3/D4 investigation and reporting
 
 Validate a local composition and MCP allowlist without calling either the LLM
 or a Provider:
@@ -159,18 +162,23 @@ and use `required_result_mode: real` for the internal profile. Every returned
 failure and writes no evidence. Normal not-found is retained as evidence,
 while Provider failure is retryable only within the configured budget.
 
-Each item stores both `analysis_run` and, when enabled,
-`investigation_workflow`. If investigation fails, the item is failed but the
-successful base run remains present. Duplicate/resumed items reuse the durable
-execution; completed Provider calls and evidence are not repeated.
+Each item stores `analysis_run` and, when enabled, `investigation_workflow`,
+`investigation_shadow_report`, and `investigation_addendum`. If investigation
+fails, the item is failed but the successful base run remains present.
+Duplicate/resumed items reuse the durable execution; completed Provider calls
+and evidence are not repeated. The manifest's `summary.investigation_shadow`
+aggregates plan/hit/not-found/failure/retry/provider-call counts, route and
+mock/real result counts, evidence coverage, and action-attempt P50/P95/max
+latency. Provider-network latency and tool cost remain explicit
+`not_measured` gaps rather than fabricated zeros.
 
 ## Artifacts
 
 ```text
 <output-dir>/
-├── manifest.json       # source/model/persistence lineage and aggregate status
+├── manifest.json       # lineage, aggregate status, and optional shadow telemetry
 ├── results.jsonl       # one compact summary per source row
-├── items/              # full AnalysisRun plus optional investigation metadata/error
+├── items/              # full AnalysisRun plus optional workflow/report/addendum/error
 └── .batch.lock         # advisory process lock; it may remain after exit
 ```
 

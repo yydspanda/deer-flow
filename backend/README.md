@@ -189,9 +189,13 @@ remain approval-gated and disabled without a real adapter.
 Automatic read-only investigation is default-off and runs after an existing persisted
 `AnalysisRun`, never inside the fixed Runtime. Kafka daemon commands may opt in with one
 explicit enrichment composition and repeatable `--enrichment-action-config` allowlists.
-Execution, attempts, result mode, retries, evidence, and linked replay are durable; inspect
-or replay them with `soc investigation get|replay`. Replay requires a new idempotency key,
-reason, explicit configs, and `--confirm-investigation`.
+Execution, attempts, result mode, retries, evidence, and linked replay are durable. Inspect
+them with `soc investigation get`, generate the recomputable D4 report/addendum bundle with
+`soc investigation report`, or create a linked replay with `soc investigation replay`.
+The report reads persisted execution state and validated evidence without calling a Provider
+or changing the base run. It measures action-attempt latency and evidence coverage; Provider
+network latency and cost remain explicit `not_measured` gaps until those sources exist. Replay
+requires a new idempotency key, reason, explicit configs, and `--confirm-investigation`.
 
 Internal DEV validation uses that isolated local SOC SQLite database. Endpoint process trees,
 commands, login context, and host events are consumed from bounded alert-native evidence;
@@ -233,10 +237,13 @@ backend/.venv/bin/python \
 ```
 
 The runner reuses the production `SocAnalysisService` and invokes no MCP tool by default. Its
-optional PI-01D3 bridge requires `--persist`, explicit composition/action configs, and
+optional PI-01D3/D4 bridge requires `--persist`, explicit composition/action configs, and
 `--confirm-investigation`; successful base analysis remains in the item artifact even when
-investigation fails. See `validation/compact_zeus/internal_batch/README.md` and the internal
-continuation handoff before running a live or persistent batch.
+investigation fails. Enabled items include the durable workflow plus a secret-free shadow report
+and deterministic investigation addendum, while the manifest aggregates route/result/retry,
+evidence-coverage and action-attempt latency telemetry. See
+`validation/compact_zeus/internal_batch/README.md` and the internal continuation handoff before
+running a live or persistent batch.
 
 Initialize or upgrade the local SOC schema from `backend/`; no database URL is needed when
 `config.yaml` uses `database.backend: sqlite`:

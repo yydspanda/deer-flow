@@ -121,6 +121,7 @@ from soc_agent.protocols import (
     SocAgentApprovalRequestRepository,
     SocDispositionEvaluationRepository,
     SocDispositionProposalRepository,
+    SocEnrichmentExecutionRepository,
     SocEventSink,
     SocExternalDispositionRepository,
     SocInvestigationWorkflowPort,
@@ -139,6 +140,7 @@ from .errors import (
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
 )
+from .investigation_reporting import SocInvestigationReportingService
 from .mutation_audit import (
     BufferedSocEventSink,
     build_mutation_audit,
@@ -688,6 +690,7 @@ class SocReviewService:
         audit_repository: DecisionAuditRepository | None = None,
         review_queue_repository: ReviewQueueRepository | None = None,
         evidence_repository: InvestigationEvidenceRepository | None = None,
+        enrichment_execution_repository: SocEnrichmentExecutionRepository | None = None,
         authorization_enrichment_repository: AuthorizationEnrichmentRepository | None = None,
         disposition_proposal_repository: SocDispositionProposalRepository | None = None,
         disposition_evaluation_repository: SocDispositionEvaluationRepository | None = None,
@@ -704,6 +707,7 @@ class SocReviewService:
         self._audit_repository = audit_repository
         self._review_queue_repository = review_queue_repository
         self._evidence_repository = evidence_repository
+        self._enrichment_execution_repository = enrichment_execution_repository
         self._authorization_enrichment_repository = authorization_enrichment_repository
         self._disposition_proposal_repository = disposition_proposal_repository
         self._disposition_evaluation_repository = disposition_evaluation_repository
@@ -1096,6 +1100,7 @@ class SocReviewService:
             audit_repository=repository if self._audit_repository is not None else None,
             review_queue_repository=(repository if self._review_queue_repository is not None else None),
             evidence_repository=repository if self._evidence_repository is not None else None,
+            enrichment_execution_repository=(repository if self._enrichment_execution_repository is not None else None),
             authorization_enrichment_repository=(repository if self._authorization_enrichment_repository is not None else None),
             disposition_proposal_repository=(repository if self._disposition_proposal_repository is not None else None),
             disposition_evaluation_repository=(repository if self._disposition_evaluation_repository is not None else None),
@@ -1149,6 +1154,15 @@ class SocReviewService:
                 limit=20,
             )
             if self._evidence_repository is not None
+            else []
+        )
+        investigation_addenda = (
+            SocInvestigationReportingService(
+                run_repository=self._repository,
+                execution_repository=self._enrichment_execution_repository,
+                evidence_repository=self._evidence_repository,
+            ).list_addenda_for_run(item.run_id, limit=10)
+            if self._enrichment_execution_repository is not None and self._evidence_repository is not None
             else []
         )
         authorization_enrichments = (
@@ -1209,6 +1223,7 @@ class SocReviewService:
             audit_records=audit_records,
             similar_alerts=similar_alerts,
             action_evidence=action_evidence,
+            investigation_addenda=investigation_addenda,
             authorization_enrichments=authorization_enrichments,
             disposition_proposals=disposition_proposals,
             disposition_outcomes=disposition_outcomes,
@@ -3734,6 +3749,7 @@ def _unified_investigation_view_from_context(context: InvestigationContext) -> U
         primary_reason=decision.reason if decision is not None else (analysis.reason if analysis is not None else context.queue_item.reason),
         correlation_result=context.correlation_result,
         domain_triage_results=context.domain_triage_results,
+        investigation_addenda=context.investigation_addenda,
         evidence_timeline=timeline,
         counts={
             "similar_alerts": len(context.similar_alerts),
@@ -3741,6 +3757,7 @@ def _unified_investigation_view_from_context(context: InvestigationContext) -> U
             "reusable_evidence": context.correlation_result.reusable_evidence_count if context.correlation_result is not None else 0,
             "domain_findings": sum(len(result.findings) for result in context.domain_triage_results),
             "action_evidence": len(context.action_evidence),
+            "investigation_addenda": len(context.investigation_addenda),
             "authorization_enrichments": len(context.authorization_enrichments),
             "exact_authorization_matches": sum(item.match_result.status.value == "exact" for item in context.authorization_enrichments),
             "disposition_proposals": len(context.disposition_proposals),
@@ -3886,6 +3903,32 @@ def _investigation_timeline_from_context(context: InvestigationContext) -> list[
                 payload={
                     "result_payload": evidence.result_payload,
                     "source_proposal_id": evidence.source_proposal_id,
+                },
+            )
+        )
+    for addendum in context.investigation_addenda:
+        items.append(
+            InvestigationTimelineItem(
+                kind="investigation_addendum",
+                title="Read-only investigation addendum",
+                summary=addendum.summary,
+                status=addendum.execution_status.value,
+                source_id=addendum.addendum_id,
+                source_refs={
+                    "addendum_id": addendum.addendum_id,
+                    "execution_id": addendum.execution_id,
+                    "run_id": addendum.run_id,
+                },
+                occurred_at=addendum.source_updated_at,
+                payload={
+                    "source_report_id": addendum.source_report_id,
+                    "evidence_refs": addendum.evidence_refs,
+                    "evidence_coverage_ratio": addendum.evidence_coverage_ratio,
+                    "analyst_attention_required": addendum.analyst_attention_required,
+                    "measurement_gaps": addendum.measurement_gaps,
+                    "shadow_only": addendum.shadow_only,
+                    "decision_impact": addendum.decision_impact,
+                    "new_conclusion_produced": addendum.new_conclusion_produced,
                 },
             )
         )

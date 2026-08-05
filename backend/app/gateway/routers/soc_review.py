@@ -76,6 +76,7 @@ def get_soc_review_service(request: Request) -> SocReviewService:
         audit_repository=repository,
         review_queue_repository=repository,
         evidence_repository=repository,
+        enrichment_execution_repository=repository,
         authorization_enrichment_repository=repository,
         disposition_proposal_repository=repository,
         disposition_evaluation_repository=repository,

@@ -382,8 +382,17 @@ composition requires an explicit evidence repository. PI-01D3 is implemented in
 not a Provider failure, retries are bounded, stale work is recoverable, and replay creates a linked
 execution without mutating the base run. Kafka daemon and internal PKL batch use this service only
 when explicit composition and repeatable action-config arguments are supplied. Completed duplicate
-identities do not repeat Provider calls or evidence writes. `soc investigation get|replay` is the
-operator boundary; replay additionally requires a new idempotency key, reason and confirmation.
+identities do not repeat Provider calls or evidence writes. PI-01D4 reporting lives in
+`soc_agent.contracts.investigation_reporting` and `soc_agent.core.investigation_reporting`.
+`SocInvestigationReportingService` reads the durable execution/attempt ledger and referenced
+`InvestigationEvidence`; it invokes no Provider and persists no second report state. It emits
+`soc.investigation_shadow_report.v1` for secret-free execution telemetry and
+`soc.investigation_addendum.v1` for deterministic analyst context. Evidence references must match
+the execution lineage, and evidence content hashes participate in projection identity. Only
+action-attempt latency is measured; Provider-network latency and cost remain explicit gaps. The
+addendum has `reasoning_status=not_requested`, produces no new conclusion, and may be projected into
+Review/Web/TUI/Lead Agent context without changing the base run. `soc investigation get|report|replay`
+is the operator boundary; replay additionally requires a new idempotency key, reason and confirmation.
 
 PI-04-A operational visibility is a separate read-only service boundary. Contracts live in
 `soc_agent.contracts.operations`, exact SQL aggregates in `soc_agent.db.operations`, Kafka projection
