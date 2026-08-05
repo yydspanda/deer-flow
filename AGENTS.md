@@ -386,7 +386,11 @@ Current SOC direction:
   completed investigation executions continue to reuse their durable identity. Missing source/wire
   contracts remain data-gated and must not be invented as fake Providers. External simulation stages 5
   and 50 have passed; the current next stage is a fresh internal-real stage 5. The 50-row fake cohort had
-  no Provider hit, so each real Provider still needs separate hit/not-found/error acceptance.
+  no Provider hit, so each real Provider still needs separate hit/not-found/error acceptance. Internal
+  operators use `run_pingan_internal_shadow.py`: default mode is static-only; live mode requires
+  `--execute --confirm-live --confirm-investigation` and fail-closed orchestration of existing preflight,
+  batch, migration and evaluator CLIs. Fresh live output roots must be missing or empty; resume requires
+  the matching stage orchestration report. It is validation tooling, not a second Runtime.
 - PingAn asset-provider code lives only under `backend/soc_agent/integrations/pingan/` and uses the
   existing generic `asset.locate` MCP/action boundary. Checkpoint D12-A is production-shaped code with
   a fake transport and must always expose `mocked=true`; it is not PA-12 or PI-01 real-provider

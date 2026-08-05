@@ -1803,6 +1803,13 @@ live investigation batch 在任何 LLM 调用前必须对启用的 action config
 `analysis_retry_of_run_id`；不得复用旧幂等键得到同一失败 run，也不得覆盖失败审计。该恢复规则只处理
 基础分析失败；已完成调查 execution 仍复用 durable identity，不重复调用 Provider。
 
+内网 `PI-01E` 的唯一操作入口为 validation-only
+`run_pingan_internal_shadow.py`。它不实现第二套 Runtime，只按 fail-closed 顺序组合现有环境 preflight、
+`--preflight-investigation` MCP inventory、purpose-specific SQLite migration、provider-free Runtime batch、
+persisted investigation batch 与 paired evaluator。默认只执行静态 plan；live 必须同时显式确认模型调用
+与只读 Provider 调用。它生成 `soc.pingan_internal_shadow_orchestration.v1` 步骤报告，但该报告不是新的
+业务真值，也不能替代 `AnalysisRun`、investigation ledger 或 `soc.pingan_shadow_acceptance.v2`。
+
 所有后续内网依赖采用相同的 **external simulation before internal acceptance** 规则：外网必须先用
 同一 production Provider/MCP/action 代码、显式 fake transport、冻结配置和真实本地样本完成契约、
 错误矩阵、持久化、回放、报告与安全门禁；进入内网后只注入 endpoint/secret/批准 case 并切换 result

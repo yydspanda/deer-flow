@@ -237,26 +237,56 @@ If the internal composition also enables threat intelligence, pass its action
 config to both the investigation runner and evaluator in the same order. The
 evaluator checks the sealed config hashes against the batch manifest.
 
-After external stage 50 passes, start new internal batch directories and use
-the tracked real files without copying them:
+After external stage 50 passes, use the fixed internal-real orchestrator. Its
+default mode runs both static batch plans only: it performs no MCP discovery,
+LLM call, Provider call, database migration, or output write.
+
+```bash
+source ./.env.soc-dev.local
+export PI01E_ROOT="$PWD/backend/.deer-flow/soc-internal-validation/internal-real/pingan-dev-001"
+
+backend/.venv/bin/python \
+  validation/compact_zeus/internal_batch/run_pingan_internal_shadow.py \
+  --source /approved/path/alerts-5000.pkl \
+  --output-root "$PI01E_ROOT" \
+  --ramp-stage 5
+```
+
+After reviewing that single JSON plan, execute the same source/root/stage with
+all three explicit acknowledgements:
 
 ```bash
 backend/.venv/bin/python \
-  validation/compact_zeus/internal_batch/evaluate_pingan_shadow.py \
-  --runtime-batch-dir "$INTERNAL_RUNTIME_BATCH_DIR" \
-  --investigation-batch-dir "$INTERNAL_INVESTIGATION_BATCH_DIR" \
-  --enrichment-composition backend/samples/enrichment/pingan-internal-shadow.yaml \
-  --enrichment-action-config backend/samples/mcp/pingan_asset/action_adapters.json \
-  --enrichment-action-config backend/samples/mcp/pingan_security_tag/action_adapters.json \
-  --enrichment-extensions-config backend/samples/mcp/pingan_shadow/extensions.internal.json \
-  --acceptance-mode internal_real \
+  validation/compact_zeus/internal_batch/run_pingan_internal_shadow.py \
+  --source /approved/path/alerts-5000.pkl \
+  --output-root "$PI01E_ROOT" \
   --ramp-stage 5 \
-  --report-path "$INTERNAL_INVESTIGATION_BATCH_DIR/pi-01e-internal-real-5.json"
+  --execute --confirm-live --confirm-investigation
 ```
 
-The internal investigation runner must use those same three config classes and
-their environment-injected secrets. Any fake Provider mode or `mocked=true`
-result is a blocking failure; do not relabel the external artifacts.
+The thin orchestrator does not implement Runtime or Provider behavior. It
+stops on the first failed step and invokes existing boundaries in this order:
+
+1. PingAn no-network environment preflight;
+2. actual MCP server startup and exact `list_tools()` inventory, without LLM
+   or Provider tool invocation;
+3. migration of a purpose-specific SQLite database inside the output root;
+4. provider-free Runtime compatibility batch;
+5. persisted real read-only investigation batch;
+6. `evaluate_pingan_shadow.py --acceptance-mode internal_real`.
+
+An interruption or retry uses the exact same command plus `--resume`. Only the
+two batch steps receive that flag; the environment/MCP preflights and evaluator
+always rerun. The orchestration report is `orchestration-<stage>.json`, mode
+`0600`; it records step status and the final gate summary but never captures
+environment values. Any fake Provider mode or `mocked=true` result is a
+blocking failure; do not relabel the external artifacts.
+
+Fresh live execution accepts only a missing or empty `--output-root`; it fails
+before preflight if the directory already contains data. Resume requires that
+the same root already contains the matching `orchestration-<stage>.json`.
+These checks prevent an accidental repository-root `chmod`, evidence mixing,
+or a resume against a different stage.
 
 `soc.pingan_shadow_acceptance.v2` verifies:
 

@@ -77,11 +77,20 @@ repository root so `$PWD` resolves correctly:
 source ./.env.soc-dev.local
 ```
 
-Both local files end in `.local` and are ignored by the repository. Confirm
-that before adding any real value:
+Both local files end in `.local` and are ignored by the repository. In a Git
+clone, confirm that before adding any real value:
 
 ```bash
 git check-ignore -v .env.soc-dev.local config.pingan-dev.local
+```
+
+The standalone internal transfer archive intentionally excludes `.git/`, so
+`git check-ignore` is unavailable after extracting that archive. On the target
+Mac, verify the private-overlay permissions instead; both results must start
+with `600`:
+
+```bash
+stat -f '%Lp %N' .env.soc-dev.local config.pingan-dev.local
 ```
 
 Prepare the private D12-B matrix separately. It contains approved IP/host/UM

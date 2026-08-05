@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 PingAn 内网 DEV 统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | 在批准的平安 DEV 中注入 endpoint/secret/approved cases，先执行真实 MCP inventory/preflight，再以新目录运行同 cohort 的 Runtime-only 与 persisted investigation 各 5 条，封存 `--acceptance-mode internal_real --ramp-stage 5`；外网不再扩充 Mock。 |
+| 当前下一刀 | 将最新迁移包带入批准的平安 DEV，加载 `.env.soc-dev.local`，先运行 `run_pingan_internal_shadow.py` 默认静态计划，再以同 source/root 加 `--execute --confirm-live --confirm-investigation` 完成 `internal_real` 5 条；外网不再扩充 Mock。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -41,6 +41,37 @@
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / PI-01E Internal Real 5** | D1-D4 与 50-row external simulation 已完成；D12-B、TI、security-tag 保留各自内网 gate，B2/C data-gated | Pilot readiness review 通过 |
+
+## 2026-08-05 — PI-01E internal-real one-command orchestration prepared
+
+- 新增 `run_pingan_internal_shadow.py` 作为 validation-only 薄编排入口；它只调用既有 DEV preflight、
+  Runtime batch runner、SOC migration 和 paired evaluator，不复制 Runtime、Planner、MCP、Provider、
+  persistence 或 gate 逻辑，也不进入生产服务。
+- 默认模式只运行 Runtime-only 与 investigation 两个 `--plan-only` 静态计划，输出一份
+  `soc.pingan_internal_shadow_orchestration.v1` JSON；不发现 MCP、不调用 LLM/Provider、不迁移 DB、
+  不创建 output root。live 必须同时提供 `--execute --confirm-live --confirm-investigation`。
+- live 顺序固定为：PingAn 环境 preflight -> 实际 MCP `list_tools()` inventory -> purpose-specific SQLite
+  migration -> provider-free Runtime batch -> persisted real investigation batch -> `internal_real` paired gate。
+  任一步失败立即停止；orchestration report 以 `0600` 保存步骤状态和最终 gate 摘要，不记录环境值。
+- `--resume` 只传给两个 batch；环境/MCP preflight 与 evaluator 每次重跑。批次仍由原 runner 锁定
+  source/model/tenant/composition/action/extensions 指纹，并复用已完成 analysis/investigation identity。
+- fresh live 只接受不存在或为空的 output root；续跑必须存在同 stage 的 orchestration report。校验发生在
+  `chmod`、环境预检和模型/Provider 调用之前，防止误指仓库目录、混合旧 evidence 或跨 stage 续跑。
+- 外网使用现有 210-row PKL 的 stage-5 默认 plan smoke 已通过，且暴露并修复 venv Python symlink 被错误
+  resolve 为系统解释器的问题。该 smoke 没有访问平安环境，也没有创建真实内网 evidence；当前 gate
+  仍为 `internal_real_5`。
+- 使用 simulated extensions 启动真实 PingAn asset/security-tag MCP server 代码的 inventory smoke 已
+  精确发现 `pingan_asset_asset_locate` 与 `pingan_security_tag_security_tag_lookup`，且无需
+  `--confirm-live`/`--confirm-investigation`，证明该模式只做工具发现。internal-batch 聚焦回归
+  `32 passed`，完整 SOC/architecture/internal-batch 回归 `775 passed`，Ruff 与 `git diff --check`
+  通过。`codegraph sync .` 同步 2 个代码文件、41 个节点，`run_orchestration` 与
+  `InternalShadowPlan` 可查询定位。
+- 迁移包测试 `7 passed`；source/private archive 均完成逐文件 inspect、路径安全和 manifest 校验，
+  archive/report 权限均为 `0600`。为避免 archive hash 写回包内文档造成自引用，精确文件名、大小、
+  文件数与 SHA-256 只以构建后同 timestamp 的外部 `transfer-report-*.json` 为准。
+- 最新 source/private 包已在全新 `/tmp` 目录叠加解包；私有 payload 均保持 `0600`，独立源码目录按
+  设计不含 `.git/`，从该目录运行默认 static plan 成功且未创建 output root。交接文档已因此移除独立
+  解包流程中的无效 `git check-ignore`，改为 Mac `stat` 权限检查；Git clone 场景仍可额外检查 ignore。
 
 ## 2026-08-05 — PI-01E external simulation stage 50 passed
 

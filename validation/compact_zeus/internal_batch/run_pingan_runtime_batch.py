@@ -1228,7 +1228,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="Explicit DeerFlow MCP extensions config used by this investigation batch",
     )
-    parser.add_argument("--plan-only", action="store_true")
+    execution_mode = parser.add_mutually_exclusive_group()
+    execution_mode.add_argument("--plan-only", action="store_true")
+    execution_mode.add_argument(
+        "--preflight-investigation",
+        action="store_true",
+        help=(
+            "Start configured MCP servers and verify exact server/tool inventory, then exit without calling the LLM or any Provider tool"
+        ),
+    )
     parser.add_argument(
         "--confirm-live",
         action="store_true",
@@ -1280,6 +1288,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             settings.mode is SocAnalyzerMode.LLM
             and items
             and not args.plan_only
+            and not args.preflight_investigation
             and not args.confirm_live
         ):
             raise ValueError("live LLM batch requires --confirm-live")
@@ -1315,15 +1324,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             or extensions_config_path is None
         ):
             raise ValueError(
-                "--enrichment-composition, at least one --enrichment-action-config, and "
-                "--enrichment-extensions-config must be provided together"
+                "--enrichment-composition, at least one --enrichment-action-config, and --enrichment-extensions-config must be provided together"
             )
-        if investigation_enabled and not args.persist and not args.plan_only:
+        if args.preflight_investigation and not investigation_enabled:
+            raise ValueError(
+                "--preflight-investigation requires explicit enrichment configuration"
+            )
+        if (
+            investigation_enabled
+            and not args.persist
+            and not args.plan_only
+            and not args.preflight_investigation
+        ):
             raise ValueError("investigation enrichment requires --persist")
         if (
             investigation_enabled
             and items
             and not args.plan_only
+            and not args.preflight_investigation
             and not args.confirm_investigation
         ):
             raise ValueError(
@@ -1350,6 +1368,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         composition = None
         registry = None
+        live_mcp_tool_names: tuple[str, ...] = ()
         if investigation_enabled:
             os.environ["DEER_FLOW_EXTENSIONS_CONFIG_PATH"] = str(extensions_config_path)
             extensions_config_overridden = True
@@ -1360,7 +1379,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             mcp_provider = DeerFlowCachedMcpToolProvider(use_one_shot_invocation=True)
             if not args.plan_only:
-                _validate_live_mcp_tool_inventory(
+                live_mcp_tool_names = _validate_live_mcp_tool_inventory(
                     mcp_provider,
                     action_config_paths,
                 )
@@ -1398,7 +1417,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             enrichment_action_config_sha256s=enrichment_action_config_sha256s,
             enrichment_extensions_config_sha256=enrichment_extensions_config_sha256,
         )
-        if args.plan_only:
+        if args.preflight_investigation:
+            plan["execution"]["live_mcp_inventory_verified"] = True
+            plan["execution"]["live_mcp_tool_names"] = list(live_mcp_tool_names)
+        if args.plan_only or args.preflight_investigation:
             print(json.dumps(plan, ensure_ascii=False, indent=2))
             return 0
 

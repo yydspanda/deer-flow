@@ -409,7 +409,12 @@ enabled action's exact server/tool binding. When `--resume` encounters a persist
 `AnalysisRun`, it must create a linked replay through `SocAnalysisService.replay()` and preserve the old
 run lineage; it must not reuse the same failed idempotent run. External simulation stages 5 and 50 are
 complete, but all 157 stage-50 fake results were normal not-found. The current gate is internal-real 5,
-and Provider-specific hit/not-found/error acceptance remains separate.
+and Provider-specific hit/not-found/error acceptance remains separate. Use
+`validation/compact_zeus/internal_batch/run_pingan_internal_shadow.py` as the thin internal operator
+entry: default static planning performs no IO, while live execution requires independent LLM and
+read-only Provider confirmations and stops before later steps after any failure. It composes existing
+CLIs and must never become another backend Runtime/service implementation. Reject a non-empty output
+root before fresh live execution; resume requires the matching stage orchestration report.
 
 PI-04-A operational visibility is a separate read-only service boundary. Contracts live in
 `soc_agent.contracts.operations`, exact SQL aggregates in `soc_agent.db.operations`, Kafka projection

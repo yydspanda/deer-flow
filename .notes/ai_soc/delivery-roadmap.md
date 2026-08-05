@@ -272,8 +272,9 @@ Completed:    PI-01D4 - recomputable shadow report, deterministic investigation 
 Completed:    PI-01E tooling - dual-mode paired gate, exact composition/action/extensions fingerprints, tenant scope, per-route result coverage and zero-side-effect validation
 Completed:    PI-01E external simulation stage 5 - same 5-row live-LLM cohort; 11 fake MCP calls/evidence, 0 failures/missing evidence/unauthorized side effects; report explicitly cannot close real gates
 Completed:    PI-01E external simulation stage 50 - 50/50 paired completion; 157 fake MCP calls/evidence, 0 failures/missing evidence/unauthorized side effects; no Provider hit observed and real gates remain open
+Completed:    PI-01E internal-real operator entry - static-by-default, dual-confirm live orchestration of environment/MCP preflight, isolated SQLite, paired batches and gate; no internal evidence produced externally
 Completed:    PI-04-A - SOC Operations Snapshot contract, exact persisted counters, Kafka readiness projection, CLI/API
-Next:         In approved PingAn DEV, inject environment secrets and approved cases, pass live MCP inventory/preflight, then run fresh paired `internal_real` stage 5 and human-review its report
+Next:         In approved PingAn DEV, review the static `run_pingan_internal_shadow.py` plan, rerun with both live confirmations, and human-review the resulting `internal_real` stage-5 report
 Required internal evidence: D12-B asset, PI-01A TI and PI-01B1 security-tag `mocked=false` gates remain open
 Internal inputs: endpoint/secrets/approved hit/not-found/error cases are now required; PI-01B2/C source contracts remain separately data-gated
 ```

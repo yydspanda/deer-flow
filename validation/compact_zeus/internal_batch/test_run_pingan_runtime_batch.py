@@ -8,10 +8,10 @@ import pandas as pd
 import pytest
 from validation.compact_zeus.internal_batch.run_pingan_runtime_batch import (
     BatchExecutionConfig,
+    _validate_live_mcp_tool_inventory,
     execute_batch,
     main,
     prepare_batch_items,
-    _validate_live_mcp_tool_inventory,
 )
 
 from soc_agent.actions.mcp import SocMcpToolDescriptor
@@ -608,6 +608,79 @@ def test_live_mcp_preflight_requires_every_configured_server_tool() -> None:
         [action_config],
     )
     assert tool_names == ("pingan_asset_asset_locate",)
+
+
+def test_investigation_preflight_discovers_tools_without_llm_or_provider_calls(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "alerts.pkl"
+    source.write_bytes(b"restricted-loader-fixture")
+    monkeypatch.setattr(
+        "validation.compact_zeus.internal_batch.run_pingan_runtime_batch.load_dataframe_pickle",
+        lambda *_args, **_kwargs: _frame([514]),
+    )
+    monkeypatch.setattr(
+        "validation.compact_zeus.internal_batch.run_pingan_runtime_batch._validate_live_mcp_tool_inventory",
+        lambda *_args, **_kwargs: ("soc_dev_asset_lookup",),
+    )
+    monkeypatch.setattr(
+        "validation.compact_zeus.internal_batch.run_pingan_runtime_batch.build_soc_analysis_service",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("preflight must exit before analysis service construction")
+        ),
+    )
+    root = Path(__file__).resolve().parents[3]
+
+    exit_code = main(
+        [
+            "--source",
+            str(source),
+            "--analyzer-mode",
+            "llm",
+            "--model-name",
+            "deepseek-v4-flash",
+            "--limit",
+            "1",
+            "--preflight-investigation",
+            "--enrichment-composition",
+            str(root / "backend/samples/enrichment/enabled.dev-mcp.yaml"),
+            "--enrichment-action-config",
+            str(root / "backend/samples/mcp/soc_dev_action_adapters.json"),
+            "--enrichment-extensions-config",
+            str(root / "backend/samples/mcp/soc_dev_extensions_config.json"),
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["execution"]["live_mcp_inventory_verified"] is True
+    assert output["execution"]["live_mcp_tool_names"] == ["soc_dev_asset_lookup"]
+
+
+def test_investigation_preflight_requires_explicit_enrichment_config(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "alerts.pkl"
+    source.write_bytes(b"restricted-loader-fixture")
+    monkeypatch.setattr(
+        "validation.compact_zeus.internal_batch.run_pingan_runtime_batch.load_dataframe_pickle",
+        lambda *_args, **_kwargs: _frame([515]),
+    )
+
+    exit_code = main(
+        [
+            "--source",
+            str(source),
+            "--preflight-investigation",
+        ]
+    )
+
+    assert exit_code == 2
+    assert "requires explicit enrichment configuration" in capsys.readouterr().err
 
 
 def _frame(alert_ids: list[int]) -> pd.DataFrame:

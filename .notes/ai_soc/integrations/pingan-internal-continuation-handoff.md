@@ -43,14 +43,10 @@ python3 scripts/build_pingan_internal_transfer.py --include-private-overlay
 - `deer-flow-pingan-private-overlay-*.tar.gz`：仅包含 `.env.soc-dev.local`、`config.pingan-dev.local`、当前 PKL、历史 EDR XLSX 及其已编译路径目录；只能走获批的内部传输通道。
 - `transfer-report-*.json`：两个包的 SHA-256、大小、文件数、Git commit/branch/dirty 状态；不含 secret 内容。
 
-当前已验证交付包（2026-08-05，包含 external simulation 50 与 linked replay/MCP inventory 修复）：
-
-- source：`deer-flow-pingan-source-20260805T075109Z.tar.gz`，SHA-256
-  `59800c7e2a1568e2d967878b8496972ed6363872b97792490ecbd15b5644f898`，2,495 files；
-- private overlay：`deer-flow-pingan-private-overlay-20260805T075109Z.tar.gz`，SHA-256
-  `f081d40b82e05e1ed3a5734e9fb6deb733df60a7ee5e709ce054846dc10e3ec6`，6 files；
-- report：`transfer-report-20260805T075109Z.json`；两个 archive 与 report 均为 mode `0600`，
-  两次 `--inspect` 均得到 `manifest_valid=true`、`safe_member_paths=true`。
+不要把本 tracked 文档中的文件名或 hash 当作当前包清单：把 archive 自身的 SHA 写回 archive 内文档
+会形成不可稳定的自引用。每次构建后，以同目录、同 timestamp 的 `transfer-report-*.json` 为唯一外部
+清单，核对 source/private archive 的文件名、SHA-256、大小和文件数；再分别运行 `--inspect`，要求
+`manifest_valid=true`、`safe_member_paths=true`。archive 与 report 均必须为 mode `0600`。
 
 复制前分别验包：
 
@@ -69,11 +65,14 @@ tar -xzf /approved/path/deer-flow-pingan-source-<timestamp>.tar.gz -C ~/work/soc
 tar -xzf /approved/path/deer-flow-pingan-private-overlay-<timestamp>.tar.gz -C ~/work/soc-transfer
 cd ~/work/soc-transfer/deer-flow-pingan-internal
 cd backend && uv sync --locked --extra pingan-dev && cd ..
-git check-ignore -v .env.soc-dev.local config.pingan-dev.local \
+stat -f '%Lp %N' .env.soc-dev.local config.pingan-dev.local \
   datas/source/full_alert_2026_month_forth_sample_200.pkl
 ```
 
 两个 archive 在外网均为 `0600`；私有覆盖包内的文件也强制为 `0600`。源码包和私有包保留独立 manifest/README，叠加解压不会相互覆盖。先核对 `transfer-report` 中的 SHA-256，再删除或隔离中转副本。
+独立源码包有意排除 `.git/`，所以以上 Mac 解包流程使用 `stat` 验证私有文件权限，输出应以 `600`
+开头；不要在独立解包目录执行 `git check-ignore`。只有将私有覆盖包叠加到一个现有 Git clone 时，才额外
+使用 `git check-ignore -v ...` 确认本地文件不会进入提交。
 
 ## 2. Remaining Execution Order / 剩余执行顺序
 
@@ -214,7 +213,8 @@ mkdir -p backend/.deer-flow/soc-internal-validation/d12b/reports
 cp backend/samples/pingan_dev/d12b-test-cases.example.yaml \
   backend/.deer-flow/soc-internal-validation/d12b/test-cases.local.yaml   # only when absent
 chmod 600 backend/.deer-flow/soc-internal-validation/d12b/test-cases.local.yaml
-git check-ignore -v config.pingan-dev.local .env.soc-dev.local
+stat -f '%Lp %N' config.pingan-dev.local .env.soc-dev.local \
+  backend/.deer-flow/soc-internal-validation/d12b/test-cases.local.yaml
 # Fill/verify real DEV values, then:
 source ./.env.soc-dev.local
 export D12B_REPORT_DIR="$PWD/backend/.deer-flow/soc-internal-validation/d12b/reports"
@@ -463,10 +463,34 @@ POST /api/soc/external-dispositions
 - [x] paired evaluator 已升级为显式 `external_simulation|internal_real`；同时封存同 cohort、tenant、composition/action/extensions 指纹、deterministic pre-LLM compatibility、real/mock、evidence、P95/review/schema/measurement gap 与零越权计数。
 - [x] 外网 5 条 rehearsal 已通过：11 次 asset/tag fake MCP 调用、11 条 `mocked=true` evidence、0 failure/missing evidence/越权副作用；报告明确不能关闭真实 gate。
 - [x] 同一外网批次已扩至 50：50/50 paired completion、157/157 fake evidence、0 failure/missing evidence/越权副作用；Provider 全部 not-found，因此真实 hit mapping 未被该报告证明。
-- [ ] 直接使用 tracked `pingan-internal-shadow.yaml` 与 `pingan_shadow/extensions.internal.json`，只注入内网环境变量和 approved cases；live runner 先完成精确 MCP tool inventory，再运行 `internal_real` 5 条。
+- [x] 已新增固定薄编排入口 `run_pingan_internal_shadow.py`：默认仅验证两组静态计划；live 时依次执行环境预检、实际 MCP inventory、隔离 SQLite migration、Runtime-only、persisted investigation 和 paired gate，任一步失败即停止。
+- [ ] 在内网直接使用 tracked `pingan-internal-shadow.yaml` 与 `pingan_shadow/extensions.internal.json`，只注入环境变量和 approved cases，通过该入口运行 `internal_real` 5 条。
 - [ ] 保存两类报告的 provider hit/not-found/error、有效证据率、P95 latency、LLM/tool cost、review rate 和 schema drift；不得混合统计。
 - [ ] 验证 verdict 覆写、自动关单、confirmed memory 写入和高风险 side effect 均为 0。
 - [ ] 只有人工标签才能进入 PI-03 质量结论；批跑完成本身不是准确率证明。
+
+内网根目录先运行默认静态计划；确认 source/hash、5 次模型调用、固定 internal composition 和输出目录后，
+再追加三个 live 确认参数：
+
+```bash
+source ./.env.soc-dev.local
+export PI01E_ROOT="$PWD/backend/.deer-flow/soc-internal-validation/internal-real/pingan-dev-001"
+
+backend/.venv/bin/python \
+  validation/compact_zeus/internal_batch/run_pingan_internal_shadow.py \
+  --source /approved/path/alerts-5000.pkl \
+  --output-root "$PI01E_ROOT" --ramp-stage 5
+
+backend/.venv/bin/python \
+  validation/compact_zeus/internal_batch/run_pingan_internal_shadow.py \
+  --source /approved/path/alerts-5000.pkl \
+  --output-root "$PI01E_ROOT" --ramp-stage 5 \
+  --execute --confirm-live --confirm-investigation
+```
+
+首次 live 的 `--output-root` 必须不存在或为空；非空目录会在任何 preflight 前被拒绝，避免覆盖或混入
+旧证据。中断后只在完全相同的第二条命令末尾追加 `--resume`；续跑目录必须保留匹配当前 stage 的
+`orchestration-<stage>.json`。不得更换 source、root、model、tenant 或 tracked 配置后复用旧目录。
 
 ### 4.6 PingAn EDR software-path context / 路径调查知识（已实现）
 
@@ -624,8 +648,8 @@ soc-internal-validation/
 Current: PI-01E internal real shadow stage 5
 Ready:   PI-01D1-D4, dual-mode paired evaluator, tracked simulated/internal asset.locate + security-tag profiles; asset.lookup is a blocking failure
 Passed:  external simulation stages 5 and 50; stage 50 has 157/157 `mocked=true` evidence, 0 failures/unauthorized side effects and no observed Provider hit; not real-provider evidence
-First:   inject approved internal endpoint/secrets/cases and pass exact live MCP tool inventory before any LLM call
-Next:    run fresh paired `internal_real --ramp-stage 5`, then human-review the report and each Provider-specific hit/not-found/error evidence
+First:   source `.env.soc-dev.local`, run `run_pingan_internal_shadow.py` without `--execute`, and review the static plan
+Next:    rerun the same source/root with `--execute --confirm-live --confirm-investigation`; the fixed sequence performs MCP inventory before LLM and seals `internal_real` stage 5
 Pending internal evidence: D12-B asset, PI-01A TI, PI-01B1 security-tag gates
 Data-gated: PI-01B2 authoritative activity source, PI-01C stable status/reason feed contract
 Queued:  PI-02/PI-04-B only after PI-01E evidence and stage review
