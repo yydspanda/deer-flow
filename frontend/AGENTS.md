@@ -129,6 +129,13 @@ record version, reason, idempotency key and enable validity/review settings. Do 
 `retrieval_enabled` or infer governance eligibility in the browser; refresh server records after the
 mutation. Display policy/review metadata and the retrieval skipped counters returned by the API.
 
+The SOC operations page at `/workspace/soc/operations` is a thin read-only consumer of
+`soc.operations_snapshot.v1` through `core/soc/api.ts` and `useSocOperationsSnapshot()`. It may refresh
+the passive endpoint and translate server-owned availability values for display, but it must not query
+SOC persistence directly, actively probe Kafka, recompute aggregates, infer an overall health verdict,
+or turn `not_measured` into a healthy zero. SQLite and Playwright fixture data must be labeled as
+local/test evidence and kept distinct from deployed Gateway/auth, production telemetry and SLO proof.
+
 ### Key Patterns
 
 - **Server Components by default**, `"use client"` only for interactive components

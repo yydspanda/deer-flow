@@ -35,6 +35,7 @@ import type {
   SocNormalizationMaintenanceIssue,
   SocNormalizationOperationsMetrics,
   SocNormalizationSchemaBaseline,
+  SocOperationsSnapshot,
   SocRequestContext,
   SocReviewCloseRequest,
   SocReviewCorrectionRequest,
@@ -135,6 +136,19 @@ async function readJson<T>(response: Response, fallbackMessage: string) {
     );
   }
   return response.json() as Promise<T>;
+}
+
+export async function getSocOperationsSnapshot(
+  context?: SocRequestContext,
+): Promise<SocOperationsSnapshot> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/operations/snapshot`,
+    { headers: buildSocHeaders(context) },
+  );
+  return readJson<SocOperationsSnapshot>(
+    response,
+    "Failed to load SOC operations snapshot",
+  );
 }
 
 export async function listSocReviewItems({

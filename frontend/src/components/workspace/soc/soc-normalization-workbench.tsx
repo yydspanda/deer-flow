@@ -2,6 +2,7 @@
 
 import {
   AlertTriangleIcon,
+  ActivityIcon,
   BanIcon,
   CheckCircle2Icon,
   EyeIcon,
@@ -151,6 +152,12 @@ export function SocNormalizationWorkbench() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/workspace/soc/operations">
+              <ActivityIcon className="size-4" />
+              运营观察
+            </Link>
+          </Button>
           <Button variant="outline" size="sm" asChild>
             <Link href="/workspace/soc/review">
               <ShieldCheckIcon className="size-4" />

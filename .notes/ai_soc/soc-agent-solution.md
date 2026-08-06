@@ -2,7 +2,7 @@
 
 Status: Active review baseline
 
-Last updated: 2026-07-27
+Last updated: 2026-08-05
 
 Primary audience: product review, architecture review, engineering review, security review
 
@@ -712,6 +712,23 @@ Rules:
   label set may enter `soc eval confidence`, which reports accuracy, Brier score, expected calibration
   error and non-empty bins and emits a provenance-bound `review_below` profile. Small or single-class
   sets are warned; the profile remains offline and `auto_action_allowed` is always false.
+- `PI-03A` adds an immutable provenance seal around that label set. `soc eval labels seal` records the
+  exact label-set hash, sample identity hash, tenant/environment, data class, source references,
+  rationale, reviewer/status summary and optional superseded-manifest lineage; `verify` detects payload
+  or review-summary drift. `simulation` and `desensitized_real` use separate supersession chains.
+  A simulation manifest always exposes `mocked=true` and `real_quality_claim_allowed=false`: it can
+  prove the review/calibration software flow is executable, but it cannot support a real accuracy,
+  threshold, pilot or production claim. Quality promotion remains a separate evaluated and approved
+  gate rather than a boolean written by the corpus manifest.
+- `PI-03B` composes the existing offline Runtime/parser, scenario taxonomy, correlation and confidence
+  evaluators into `soc.quality_evaluation_report.v1`; it does not introduce another verdict, scorer or
+  Runtime. `ConfidenceCalibrationSample.review_source` distinguishes `human_review` from
+  `simulation_fixture`, and a `desensitized_real` corpus rejects synthetic labels. `soc eval confidence`
+  requires the exact manifest, while `soc eval quality` records stable component hashes and can diff a
+  prior report without treating generated run/finding IDs as behavioral changes. The aggregate may mark
+  the engineering flow passed, but always keeps real-quality claims, profile publication, rollout and
+  automation disabled. Grounding gaps, missing taxonomy coverage and correlation false positives remain
+  visible limitations instead of being hidden behind one green status.
 - Calibration must separate detection truth from operational disposition. A sample can have
   `actual_verdict=true_positive` and `actual_disposition=closed_benign_true_positive` at the same
   time. If authorization was not present in the exact bounded input used by the model, record the
@@ -1776,11 +1793,14 @@ shadow report/addendum projection are covered by deterministic regression. D3 al
 existing persisted `AnalysisRun`; it does not rerun the LLM or let Provider output overwrite the base
 verdict. D4 invokes no Provider and creates no second report truth table. Omitted composition/action
 config preserves Runtime-only behavior. PI-01E uses an external-simulation gate before any internal
-real acceptance. Both the five-row and 50-row external rehearsals have passed; the current task is a
-fresh five-row `internal_real` run in approved PingAn DEV. The 50-row simulation persisted 157/157 fake
-MCP results without failure or unauthorized side effects, but all results were normal not-found. It is
-therefore delivery-shape evidence only and does not prove a real Provider hit mapping.
-`PI-04-A SOC Operations Snapshot` is complete; `PI-04-B` remains parked behind that sequence.
+real acceptance. Both the five-row and 50-row external rehearsals have passed; the fresh five-row
+`internal_real` run in approved PingAn DEV remains separate Real Integration Debt. The 50-row simulation
+persisted 157/157 fake MCP results without failure or unauthorized side effects, but all results were
+normal not-found. It is therefore delivery-shape evidence only and does not prove a real Provider hit
+mapping. PI-03A/B/C and PI-04A/B simulation/local product slices are complete. PI-05A now freezes and
+rehearses the governed rollout contract without changing a real stage; the product completion pointer
+is `PI-05B Simulation Completion Gate`. Real Provider, infrastructure, quality, telemetry, owner and
+cohort-enforcement evidence remain independent gates.
 
 PI-01E 的代码侧验收入口位于
 `validation/compact_zeus/internal_batch/evaluate_pingan_shadow.py`。它成对读取同一 source cohort 的
@@ -1846,15 +1866,47 @@ manifest aggregates the same measured fields. A future LLM-grounded post-investi
 requires a separate versioned contract, grounding and persistence decision; it must never silently
 change this deterministic D4 projection.
 
+PI-03C feedback-derived Skill governance lives in `soc_agent.contracts.skill_improvement`,
+`SocSkillImprovementService`, `SkillImprovementRepository`, migration `0020_skill_improvement_backlog`
+and `soc skill-improvement ingest|list|get|review|replay`. A deterministic aggregation key binds tenant,
+data class, exact Skill package/guidance hash, scenario, typed failure facet and the complete versioned
+policy. Only distinct source IDs count toward the threshold. Candidate approval means only "eligible to
+enter the human Skill change and evaluation workflow"; every record keeps Skill mutation/activation,
+memory write, Runtime decision and real-quality claims disabled. Reviewed candidates freeze, explicit
+replacement lineage governs supersession, and aggregation replay never impersonates post-change Skill
+behavior replay. The external simulation used four synthetic observations and produced one versioned
+pending candidate with stable replay; it is not real analyst truth. Real correction/external disposition
+reason must first pass a server-owned classifier that supplies the target Skill/version, scenario and
+typed failure facet. Until that contract exists, raw reason remains external/correction history plus a
+pending memory candidate and cannot enter PI-03C automatically.
+
 PI-04-A introduces `soc.operations_snapshot.v1` as a read-only operational projection. It uses exact
 SQL aggregates over SOC-owned run, review, approval, normalization and memory tables, then composes a
 secret-free Kafka configuration/readiness projection through `SocOperationsService`. The public
 surfaces are `soc ops snapshot` and passive `GET /api/soc/operations/snapshot`; only the CLI's
 explicit `--check-broker` performs broker IO. The contract intentionally has no overall `healthy`
 field. Kafka consumer lag, model/GPU utilization and production SLO compliance remain named
-`not_measured` gaps until real telemetry and approved time-window thresholds are connected. Full Web
-operations UI, Prometheus export and SLO alerting remain later PI-04 slices. `PI-04-B` may expose the
-already-frozen snapshot in Web, but must not recompute counts or invent frontend health semantics.
+`not_measured` gaps until real telemetry and approved time-window thresholds are connected. `PI-04-B`
+adds `/workspace/soc/operations` as a thin typed consumer of that already-frozen snapshot. It refreshes
+passively, labels SQLite as local/test evidence, exposes missing production SLO evidence, and never
+recomputes counts or frontend health semantics. Deterministic Playwright fixtures prove transport and
+desktop/mobile rendering only; deployed Gateway/auth, Prometheus, real lag/compute telemetry and SLO
+alerting remain Real Integration Debt.
+
+PI-05A adds a separate rollout-governance boundary, not another Agent Runtime. The versioned
+`soc.rollout_plan.v1` names a bounded tenant/source/scenario/operator/time cohort, feature flag, five
+independent owner roles, seven real-evidence gates and the complete rollback procedure. The pure
+`SocRolloutRehearsalService` and `soc rollout rehearse` exercise virtual
+`not_started -> shadow -> limited_pilot -> controlled_rollout -> shadow` transitions, stage-gate
+assessment and rollback without invoking Provider, Kafka, database mutation, feature-flag service,
+Zeus or response adapters. Its `soc.rollout_rehearsal_report.v1` can pass the engineering rehearsal
+while simultaneously preserving `current_real_stage=not_started`, zero real transitions/effects and
+false production approval, rollout claim, auto-close, external mutation and high-risk action flags.
+Simulation evidence is schema-forbidden from closing a real gate, and stable semantic replay ignores
+generation timestamps. PI-05B will only aggregate the existing PI simulation artifacts into a
+fail-closed completion report; it cannot claim Pilot Ready. A real rollout controller is PI-05C and
+must be connected to deployed cohort enforcement, fresh PI-01..04 evidence, accountable approvals,
+audit and an actually executable rollback path rather than a disconnected local state machine.
 
 `BG-03` uses `./scripts/soc-alpha-readiness.sh all` to bind the existing versioned acceptance report,
 full SOC regression, architecture/migration gates, the authoritative matrix and Stage 4 roadmap into

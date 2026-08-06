@@ -31,6 +31,10 @@ from soc_agent.contracts import (
     ServiceRequestContext,
     SimilarAlertMatch,
     SimilarAlertQuery,
+    SkillFeedbackObservation,
+    SkillFeedbackSourceType,
+    SkillImprovementCandidate,
+    SkillImprovementCandidateStatus,
     SocAgentActionAdapterDescriptor,
     SocAgentActionCommand,
     SocAgentActionResult,
@@ -46,6 +50,7 @@ from soc_agent.contracts import (
     SocEnrichmentExecutionCommand,
     SocEnrichmentPlan,
     SocEnrichmentWorkflowResult,
+    SocEvaluationDataClass,
     SocEvent,
     SocExternalDispositionRecord,
     SocMemoryCandidate,
@@ -564,6 +569,55 @@ class GovernedContextFactRepository(Protocol):
     ) -> list[GovernedContextFact]: ...
 
 
+class SkillImprovementRepository(Protocol):
+    """Persistence boundary for PI-03C feedback and candidate backlog."""
+
+    def save_skill_feedback_observation(self, observation: SkillFeedbackObservation) -> None: ...
+
+    def get_skill_feedback_observation(self, observation_id: str) -> SkillFeedbackObservation | None: ...
+
+    def find_skill_feedback_observation_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SkillFeedbackObservation | None: ...
+
+    def list_skill_feedback_observations(
+        self,
+        *,
+        aggregation_key: str | None = None,
+        tenant_id: str | None = None,
+        data_class: SocEvaluationDataClass | None = None,
+        source_type: SkillFeedbackSourceType | None = None,
+        limit: int = 500,
+    ) -> list[SkillFeedbackObservation]: ...
+
+    def save_skill_improvement_candidate(self, candidate: SkillImprovementCandidate) -> None: ...
+
+    def compare_and_set_skill_improvement_candidate(
+        self,
+        candidate: SkillImprovementCandidate,
+        *,
+        expected_version: int,
+    ) -> bool: ...
+
+    def get_skill_improvement_candidate(self, candidate_id: str) -> SkillImprovementCandidate | None: ...
+
+    def find_skill_improvement_candidate_by_aggregation_key(
+        self,
+        aggregation_key: str,
+    ) -> SkillImprovementCandidate | None: ...
+
+    def list_skill_improvement_candidates(
+        self,
+        *,
+        status: SkillImprovementCandidateStatus | None = None,
+        tenant_id: str | None = None,
+        data_class: SocEvaluationDataClass | None = None,
+        skill_name: str | None = None,
+        limit: int = 100,
+    ) -> list[SkillImprovementCandidate]: ...
+
+
 class SocMutationAuditRepository(Protocol):
     """Append-only persistence for service-level state mutation audits."""
 
@@ -599,6 +653,7 @@ class SocMutationRepository(
     SocAgentApprovalGrantRepository,
     SocAgentApprovalRequestRepository,
     SocMutationAuditRepository,
+    SkillImprovementRepository,
     Protocol,
 ):
     """Composite repository exposed only inside one mutation transaction."""

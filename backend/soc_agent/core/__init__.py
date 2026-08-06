@@ -39,6 +39,11 @@ from soc_agent.core.investigation_workflow import (
 from soc_agent.core.normalization_maintenance import SocNormalizationMaintenanceService
 from soc_agent.core.operations import SocOperationsService
 from soc_agent.core.orchestrator import SocMainOrchestratorService
+from soc_agent.core.rollout import (
+    SocRolloutRehearsalService,
+    load_soc_rollout_rehearsal_report,
+    load_soc_rollout_rehearsal_request,
+)
 from soc_agent.core.service import (
     DeterministicAnalysisRuntime,
     NoopEventSink,
@@ -59,6 +64,7 @@ from soc_agent.core.service import (
     SocServiceNotImplementedError,
     SocSkillResolutionService,
 )
+from soc_agent.core.skill_improvement import SocSkillImprovementService
 from soc_agent.domain import SocDomainTriageService
 
 __all__ = [
@@ -101,6 +107,7 @@ __all__ = [
     "SocNormalizationService",
     "SocNormalizationMaintenanceService",
     "SocOperationsService",
+    "SocRolloutRehearsalService",
     "SocReviewService",
     "SocServiceAuthorizationError",
     "SocServiceConflictError",
@@ -108,4 +115,7 @@ __all__ = [
     "SocServiceNotImplementedError",
     "SocServiceNotFoundError",
     "SocSkillResolutionService",
+    "SocSkillImprovementService",
+    "load_soc_rollout_rehearsal_report",
+    "load_soc_rollout_rehearsal_request",
 ]

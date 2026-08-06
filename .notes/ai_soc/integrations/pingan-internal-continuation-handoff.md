@@ -2,10 +2,10 @@
 
 > Type: temporary transfer artifact / 临时复制交接文件
 > Reconciled: 2026-08-05
-> Current pointer: `PI-01E Internal Real 5`; D12-B and PI-01A/B1 retain their internal acceptance gates
-> Next action: in approved PingAn DEV, inject environment secrets/cases, pass live MCP inventory, and run fresh paired `internal_real` stage 5
+> Status: `Real Integration Debt / parked`; this is no longer the current product-development pointer
+> Resume action: when approved PingAn DEV is available, inject environment secrets/cases, pass live MCP inventory, and run fresh paired `internal_real` stage 5
 
-本文件只保留**尚未完成**的工作，便于复制到内网 Mac 后继续开发和验证。它不是新的权威路线；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
+本文件只保留**真实内网接入尚未完成**的工作，便于未来复制到内网 Mac 后恢复验证。它不是新的权威路线，也不阻塞当前 PI-03..05 仿真产品流程；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
 真实 URL、App Key、Token、账号密码、企业 CA、IP、UM、未脱敏告警和完整响应可以写入已确认 Git-ignored 的 `*.local` / `.deer-flow/` 文件供本地运行，但不得进入 commit。当前外网工作区已经准备了可运行的本地配置；通过 Git 迁移时，需在内网从 sample 重建或另行复制这些 ignored 文件。
 
@@ -74,17 +74,15 @@ stat -f '%Lp %N' .env.soc-dev.local config.pingan-dev.local \
 开头；不要在独立解包目录执行 `git check-ignore`。只有将私有覆盖包叠加到一个现有 Git clone 时，才额外
 使用 `git check-ignore -v ...` 确认本地文件不会进入提交。
 
-## 2. Remaining Execution Order / 剩余执行顺序
+## 2. Parked Real-Integration Order / 已停放的真实接入顺序
 
 ```text
-PI-01D1/D2 planner + strict composition（Done）
-  -> PI-01D3 Kafka/internal batch persistent investigation workflow（Done）
-  -> PI-01D4 shadow report/telemetry/addendum boundary（Done）
-  -> PI-01E 内网 shadow 全链路（Current）
-  -> PI-02 真实 Kafka/PostgreSQL/K8s（当前暂停）
-  -> PI-03 人工标签、评测与校准
-  -> PI-04B+ Web 运营视图、Telemetry、Prometheus/SLO
-  -> PI-05 Shadow -> Limited Pilot -> Controlled Rollout
+PI-01D1-D4 + PI-01E external simulation（Done）
+  -> PI-01E 内网 shadow 全链路（Parked Real Integration Debt）
+  -> PI-02 真实 Kafka/PostgreSQL/K8s（Parked / inputs absent）
+
+当前产品完成轨已经完成 PI-03C simulation 与 PI-04B thin Operations Web，并转到 PI-05 rehearsal；这些任务不在
+本内网交接单内，也不等待本节债务完成。
 
 D12-B 真实 asset.locate（Parked，可独立恢复）
   -> 仍需原 direct/MCP/persistence/Web/TUI gate，不由 PI-01A 替代
@@ -565,7 +563,8 @@ DEV 默认不持久化；需要验证 ReviewQueue/审计/维护问题时，先�
 - [ ] 评估 Runtime/LLM 的 verdict、scenario、evidence grounding、manual checks 和 review routing。
 - [ ] 校准 confidence，但不把模型自报分数当概率，也不以单一 tenant 的分布代表通用产品。
 - [ ] 扩充人工标注的 correlation pair corpus，区分 `same_incident`、`related_distinct`、`unrelated`。
-- [ ] 重复 external reason/analyst correction 通过 `PI-03C` 形成可追溯、可回放、人工评审的 `SkillImprovementCandidate`，不得自动改 Skill。
+- [x] `PI-03C` 通用 simulation 已形成可追溯、可回放、人工评审的 `SkillImprovementCandidate`，且不得自动改 Skill。
+- [ ] 真实 external reason/analyst correction 仍需 server-owned classifier 映射目标 Skill/version、scenario 与 failure facet；不得按自由文本自动聚类。
 - [ ] 路径目录等 tenant candidate knowledge 只有在 `PI-03D` 人工标签、scope/validity owner 和 replay gate 通过后才可提出 promotion；默认保持 investigation-only。
 - [ ] parser 漂移只有形成稳定 cohort 后才进入 `PI-03E` candidate bundle/dual-run/replay/approval，禁止 Runtime 自修改。
 - [ ] 记录成本、延迟、人工接管率、错误类型和 provider contribution。
@@ -575,7 +574,7 @@ DEV 默认不持久化；需要验证 ReviewQueue/审计/维护问题时，先�
 
 `PI-04-A Operations Snapshot` 已完成，不重做。剩余：
 
-- [ ] `PI-04-B` 薄 Web 运营视图，只消费现有 `soc.operations_snapshot.v1`，不复制后端判断逻辑。
+- [x] `PI-04-B` 薄 Web 运营视图已完成，只消费现有 `soc.operations_snapshot.v1`，不复制后端判断逻辑；本地 Playwright fixture 不冒充 deployed/production evidence。
 - [ ] 接真实 Kafka lag、队列深度、吞吐、处理延迟和失败/DLQ telemetry。
 - [ ] 接 LLM 调用量、并发、排队、耗时、失败、token 和成本 telemetry。
 - [ ] 接 Provider 成功率、not-found、超时、schema drift、payload/result size 和 dependency health。
@@ -583,6 +582,11 @@ DEV 默认不持久化；需要验证 ReviewQueue/审计/维护问题时，先�
 - [ ] 未测量信号必须明确 `not_measured`，不能用默认值推断整体健康。
 
 ## 8. PI-05 - Governed Rollout / 受治理上线
+
+外网 `PI-05A` 已完成 vendor-neutral simulation rehearsal：`soc rollout rehearse` 能虚拟演练三档推进和
+完整回滚，但固定保持 `mocked=true`、真实 transition/effect 为 0。下面的 checkbox 仍代表真实内网/
+部署环境验收，不能因为 PI-05A 通过而勾选。当前产品轨进入 `PI-05B` completion gate，真实执行仍归
+`PI-05C Real Integration Debt`。
 
 ### 8.1 Shadow
 
@@ -642,17 +646,17 @@ soc-internal-validation/
 
 不得带回：secret、认证头、完整内部响应、真实 IP/UM、未脱敏告警、内网绝对路径和企业 CA 私钥。
 
-## 10. Resume Pointer / 下次继续位置
+## 10. Real-Debt Resume Pointer / 真实接入恢复位置
 
 ```text
-Current: PI-01E internal real shadow stage 5
+Status:  Parked Real Integration Debt; current product pointer is PI-05B Simulation Completion Gate
 Ready:   PI-01D1-D4, dual-mode paired evaluator, tracked simulated/internal asset.locate + security-tag profiles; asset.lookup is a blocking failure
 Passed:  external simulation stages 5 and 50; stage 50 has 157/157 `mocked=true` evidence, 0 failures/unauthorized side effects and no observed Provider hit; not real-provider evidence
 First:   source `.env.soc-dev.local`, run `run_pingan_internal_shadow.py` without `--execute`, and review the static plan
 Next:    rerun the same source/root with `--execute --confirm-live --confirm-investigation`; the fixed sequence performs MCP inventory before LLM and seals `internal_real` stage 5
 Pending internal evidence: D12-B asset, PI-01A TI, PI-01B1 security-tag gates
 Data-gated: PI-01B2 authoritative activity source, PI-01C stable status/reason feed contract
-Queued:  PI-02/PI-04-B only after PI-01E evidence and stage review
+Does not block: completed PI-03/04/05A simulation work or current PI-05B completion gate
 ```
 
 已确认存在的内网能力必须先用同一 production Provider/MCP/action 加显式 fake transport 完成外网仿真；该前置门槛已完成。不可获得且 contract 未冻结的输入仍标记 `data-gated`，不得发明新 Provider。进入内网只切换 adapter/provider 配置和 secret，不改变通用 Runtime 控制流与核心服务契约。

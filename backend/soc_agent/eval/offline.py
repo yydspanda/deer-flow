@@ -9,7 +9,14 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from soc_agent.contracts import AnalysisRun, AnalysisRunStatus, PipelineStepStatus, Verdict
+from soc_agent.contracts import (
+    AnalysisRun,
+    AnalysisRunStatus,
+    DecisionEvidenceState,
+    DecisionReviewReason,
+    PipelineStepStatus,
+    Verdict,
+)
 from soc_agent.core import DeterministicAnalysisRuntime, SocAnalysisService
 from soc_agent.llm import JsonLLMAnalyzer, LLMChatClient, LLMChatResponse
 
@@ -42,6 +49,12 @@ class OfflineEvalSampleResult(BaseModel):
     stub_needs_review: bool | None = None
     llm_needs_review: bool | None = None
     needs_review_changed: bool = False
+    grounded_evidence_count: int = Field(default=0, ge=0)
+    ungrounded_evidence_count: int = Field(default=0, ge=0)
+    decision_evidence_state: DecisionEvidenceState | None = None
+    decision_review_reasons: list[DecisionReviewReason] = Field(default_factory=list)
+    scenario_assessment_count: int = Field(default=0, ge=0)
+    primary_scenario_key: str | None = None
     parse_success: bool = False
     repair_applied: bool = False
     parser_version: str | None = None
@@ -55,7 +68,7 @@ class OfflineEvalSampleResult(BaseModel):
 class OfflineEvalReport(BaseModel):
     """Aggregate report for offline SOC analyzer evaluation."""
 
-    schema_version: str = "soc.offline_eval_report.v1"
+    schema_version: str = "soc.offline_eval_report.v2"
     sample_count: int = Field(default=0, ge=0)
     stub_success_count: int = Field(default=0, ge=0)
     llm_success_count: int = Field(default=0, ge=0)
@@ -64,6 +77,11 @@ class OfflineEvalReport(BaseModel):
     failed_count: int = Field(default=0, ge=0)
     verdict_diff_count: int = Field(default=0, ge=0)
     needs_review_diff_count: int = Field(default=0, ge=0)
+    llm_needs_review_count: int = Field(default=0, ge=0)
+    grounded_evidence_count: int = Field(default=0, ge=0)
+    ungrounded_evidence_count: int = Field(default=0, ge=0)
+    degraded_evidence_sample_count: int = Field(default=0, ge=0)
+    scenario_assessment_count: int = Field(default=0, ge=0)
     average_abs_confidence_delta: float = Field(default=0.0, ge=0.0)
     results: list[OfflineEvalSampleResult] = Field(default_factory=list)
 
@@ -173,6 +191,11 @@ def _sample_result(*, sample_id: str, path: str, stub_run: AnalysisRun, llm_run:
     stub_needs_review = _needs_review(stub_run)
     llm_needs_review = _needs_review(llm_run)
     analyze_step = _find_step(llm_run, "analyze_llm")
+    grounding = llm_run.analysis_evidence_grounding
+    primary_scenario = next(
+        (assessment for assessment in (llm_run.analysis.scenario_assessments if llm_run.analysis is not None else []) if assessment.is_primary),
+        None,
+    )
 
     return OfflineEvalSampleResult(
         sample_id=sample_id,
@@ -190,6 +213,12 @@ def _sample_result(*, sample_id: str, path: str, stub_run: AnalysisRun, llm_run:
         stub_needs_review=stub_needs_review,
         llm_needs_review=llm_needs_review,
         needs_review_changed=stub_needs_review is not None and llm_needs_review is not None and stub_needs_review != llm_needs_review,
+        grounded_evidence_count=grounding.grounded_count if grounding is not None else 0,
+        ungrounded_evidence_count=grounding.ungrounded_count if grounding is not None else 0,
+        decision_evidence_state=llm_run.decision.evidence_state if llm_run.decision is not None else None,
+        decision_review_reasons=list(llm_run.decision.review_reasons) if llm_run.decision is not None else [],
+        scenario_assessment_count=len(llm_run.analysis.scenario_assessments) if llm_run.analysis is not None else 0,
+        primary_scenario_key=primary_scenario.scenario_key if primary_scenario is not None else None,
         parse_success=analyze_step is not None and analyze_step.status is PipelineStepStatus.SUCCESS,
         repair_applied=bool(analyze_step and analyze_step.metadata.get("repair_applied")),
         parser_version=str(analyze_step.metadata["parser_version"]) if analyze_step and "parser_version" in analyze_step.metadata else None,
@@ -212,6 +241,11 @@ def _report(results: list[OfflineEvalSampleResult]) -> OfflineEvalReport:
         failed_count=sum(result.llm_status is AnalysisRunStatus.FAILED for result in results),
         verdict_diff_count=sum(result.verdict_changed for result in results),
         needs_review_diff_count=sum(result.needs_review_changed for result in results),
+        llm_needs_review_count=sum(result.llm_needs_review is True for result in results),
+        grounded_evidence_count=sum(result.grounded_evidence_count for result in results),
+        ungrounded_evidence_count=sum(result.ungrounded_evidence_count for result in results),
+        degraded_evidence_sample_count=sum(result.decision_evidence_state in {DecisionEvidenceState.DEGRADED, DecisionEvidenceState.CONFLICTED} for result in results),
+        scenario_assessment_count=sum(result.scenario_assessment_count for result in results),
         average_abs_confidence_delta=(sum(deltas) / len(deltas)) if deltas else 0.0,
         results=results,
     )

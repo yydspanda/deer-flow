@@ -324,6 +324,12 @@ authorize actions. Its `fake` and `internal` modes are mutually exclusive: fake 
 workflow imports are unavailable, never silently downgrade to fake. D12-A code/fake smoke does not
 complete PA-12; only D12-B internal smoke with `mocked=false` and persisted evidence does.
 
+Unavailable PingAn DEV integrations do not block unrelated product slices. Use an explicit fake/mock
+configuration to complete the frozen workflow, preserve `mocked=true` in every result/report, and keep
+the corresponding `mocked=false` acceptance in the Real Integration Debt ledger. Simulation may prove
+workflow reachability but cannot close Provider, infrastructure, real-label, pilot, or production gates.
+Do not invent an endpoint or source adapter when the source contract itself is still unknown.
+
 D12-B direct-provider acceptance is orchestrated by
 `integrations/pingan/d12b_acceptance.py` and `scripts/soc_pingan_d12b_matrix.py`. The tracked
 example may be inspected with `--plan-only`, which issues no request and omits query/UM values.
@@ -416,6 +422,31 @@ read-only Provider confirmations and stops before later steps after any failure.
 CLIs and must never become another backend Runtime/service implementation. Reject a non-empty output
 root before fresh live execution; resume requires the matching stage orchestration report.
 
+PI-03A label-corpus governance lives in `soc_agent.eval.labels` and the generic contracts module.
+`soc eval labels prepare` produces a raw-payload-free pending review bundle; `seal` binds its exact
+payload/sample hashes, scope, provenance, review summary and optional supersession; `verify` reports
+integrity independently of review/calibration readiness. Simulation manifests always retain
+`mocked=true` and `real_quality_claim_allowed=false`, and cannot supersede or be superseded by a real
+corpus. These offline artifacts do not write production configuration or authorize automation.
+
+PI-03B composition lives in `soc_agent.eval.quality`. `soc eval confidence` requires the exact corpus
+manifest and returns a non-publishable execution envelope; `soc eval quality` reuses offline Runtime,
+scenario, correlation and confidence evaluators and supports stable semantic replay diff. Reviewed
+labels must identify `human_review` or `simulation_fixture`, and real corpora reject synthetic labels.
+An engineering-flow pass never enables a quality claim, calibration-profile publication, rollout, or
+automation. `offline_eval_report.v2` includes Grounding, evidence-state, review-reason and scenario
+coverage signals so the composed report cannot hide those gaps.
+
+PI-03C Skill feedback governance lives in `soc_agent.contracts.skill_improvement`,
+`core/skill_improvement.py`, `soc_agent.skill_improvement`, and migration
+`0020_skill_improvement_backlog`. `soc skill-improvement ingest|list|get|review|replay` must use that
+service/repository boundary. Aggregation keys bind tenant, simulation/real data class, exact Skill
+package/guidance hash, scenario, typed failure facet, and all policy parameters; only distinct source
+IDs count. Simulation and real feedback cannot mix. Review is authenticated, idempotent, versioned and
+audited, but even `approved_for_change` keeps Skill mutation/activation, memory write, Runtime decision
+and real-quality claims false. Aggregation replay does not execute Skill behavior. Raw analyst/external
+reason cannot enter this lane until a server-owned classifier supplies the exact typed grouping fields.
+
 PI-04-A operational visibility is a separate read-only service boundary. Contracts live in
 `soc_agent.contracts.operations`, exact SQL aggregates in `soc_agent.db.operations`, Kafka projection
 in `soc_agent.operations`, and composition in `SocOperationsService`. Both `soc ops snapshot` and
@@ -423,6 +454,19 @@ Gateway `GET /api/soc/operations/snapshot` consume that service. The API is pass
 broker; CLI broker probing requires `--check-broker`. Snapshot output exposes no database URL, broker
 address, credential, or raw exception, does not infer overall health, and marks consumer lag, model
 compute, and production SLO evidence as `not_measured` until real telemetry exists.
+
+PI-04-B is intentionally frontend-only over that frozen contract. `/workspace/soc/operations` may
+refresh the passive Gateway endpoint but must not add a second operations service, browser-side
+aggregation, broker check, or inferred health verdict. Playwright/SQLite evidence is local/test
+evidence, not deployed Gateway/auth, PostgreSQL, real Kafka lag, model compute, Prometheus or SLO proof.
+
+PI-05A rollout rehearsal contracts live in `soc_agent.contracts.rollout`; the pure read-only service
+is `SocRolloutRehearsalService`, exposed by `soc rollout rehearse`. V1 requires the complete owner,
+real-gate, bounded cohort, and ordered rollback contract. It accepts only explicit simulation plans,
+cannot mark a real gate passed with simulation evidence, and must emit zero real transitions and
+external effects. It never calls a Provider, broker, repository mutation, feature-flag service, Zeus,
+or response adapter. A stable replay proves only the control flow; real cohort enforcement and stage
+transition remain PI-05C integration work.
 
 For PingAn legacy alerts, `normalizers/pingan_platform.py` preserves the complete input while
 `normalizers/pingan_messages.py` deterministically parses `zeusRawLogs[].message`. If any message
@@ -622,10 +666,10 @@ the repository protocols and migration `0012_normalization_maintenance`. Persist
 injects the monitor after run/summary/review/audit writes; monitor failures are warnings and must not
 fail alert analysis. Operational surfaces are Gateway `/api/soc/normalization/*`, CLI
 `soc normalize baseline-accept|baselines|issues|issue-update`, Review TUI `/normalization`, and Web
-`/workspace/soc/normalization`. `soc normalize suggest` and `soc eval confidence` are offline-only;
+`/workspace/soc/normalization`. `soc normalize suggest`, `soc eval confidence`, and `soc eval quality` are offline-only;
 their outputs cannot mutate adapters, baselines, runtime policy, or automatic-action thresholds.
-Confidence calibration must first use `soc eval labels prepare|validate`; only analyst-accepted,
-traceable, single-model/prompt/pipeline labels may enter `soc eval confidence`.
+Confidence calibration must first use `soc eval labels prepare|validate|seal`; only integrity-verified,
+fully reviewed, traceable, single-model/prompt/pipeline labels may enter `soc eval confidence`.
 
 Local step-by-step Runtime review is orchestrated from the repository root by
 `scripts/soc-runtime-validation.sh`. `scripts.generate_soc_normalization_maintenance_validation`

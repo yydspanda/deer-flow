@@ -30,6 +30,10 @@ from soc_agent.contracts import (
     ReviewQueueStatus,
     SimilarAlertMatch,
     SimilarAlertQuery,
+    SkillFeedbackObservation,
+    SkillFeedbackSourceType,
+    SkillImprovementCandidate,
+    SkillImprovementCandidateStatus,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
     SocAgentApprovalRequestStatus,
@@ -39,6 +43,7 @@ from soc_agent.contracts import (
     SocDispositionSampleManifest,
     SocEnrichmentActionAttempt,
     SocEnrichmentExecution,
+    SocEvaluationDataClass,
     SocExternalDispositionRecord,
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
@@ -68,6 +73,8 @@ from soc_agent.db.models import (
     SocNormalizationMaintenanceIssueRow,
     SocNormalizationSchemaBaselineRow,
     SocReviewQueueRow,
+    SocSkillFeedbackObservationRow,
+    SocSkillImprovementCandidateRow,
 )
 from soc_agent.disposition import DispositionEvaluationConflictError, DispositionProposalConflictError
 from soc_agent.domain.correlation import score_similar_alert
@@ -1351,6 +1358,156 @@ class SqlAlchemyAlertRepository:
             result = session.execute(query.order_by(SocNormalizationMaintenanceIssueRow.last_seen_at.desc()).limit(limit))
             return [NormalizationMaintenanceIssue.model_validate(row.issue_payload) for row in result.scalars()]
 
+    def save_skill_feedback_observation(self, observation: SkillFeedbackObservation) -> None:
+        payload = observation.model_dump(mode="json")
+        with self._session_factory() as session:
+            existing = session.get(SocSkillFeedbackObservationRow, observation.observation_id)
+            if existing is not None:
+                if existing.observation_payload != payload:
+                    raise ValueError(f"skill feedback observation {observation.observation_id} already exists")
+                return
+            session.add(
+                SocSkillFeedbackObservationRow(
+                    observation_id=observation.observation_id,
+                    **_skill_feedback_observation_row_values(observation, payload),
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise ValueError("skill feedback idempotency or aggregation/source identity already exists") from exc
+
+    def get_skill_feedback_observation(
+        self,
+        observation_id: str,
+    ) -> SkillFeedbackObservation | None:
+        with self._session_factory() as session:
+            row = session.get(SocSkillFeedbackObservationRow, observation_id)
+            return SkillFeedbackObservation.model_validate(row.observation_payload) if row is not None else None
+
+    def find_skill_feedback_observation_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SkillFeedbackObservation | None:
+        with self._session_factory() as session:
+            row = session.execute(select(SocSkillFeedbackObservationRow).where(SocSkillFeedbackObservationRow.idempotency_key == idempotency_key).limit(1)).scalar_one_or_none()
+            return SkillFeedbackObservation.model_validate(row.observation_payload) if row is not None else None
+
+    def list_skill_feedback_observations(
+        self,
+        *,
+        aggregation_key: str | None = None,
+        tenant_id: str | None = None,
+        data_class: SocEvaluationDataClass | None = None,
+        source_type: SkillFeedbackSourceType | None = None,
+        limit: int = 500,
+    ) -> list[SkillFeedbackObservation]:
+        with self._session_factory() as session:
+            query = select(SocSkillFeedbackObservationRow)
+            if aggregation_key is not None:
+                query = query.where(SocSkillFeedbackObservationRow.aggregation_key == aggregation_key)
+            if tenant_id is not None:
+                query = query.where(SocSkillFeedbackObservationRow.tenant_id == tenant_id)
+            if data_class is not None:
+                query = query.where(SocSkillFeedbackObservationRow.data_class == data_class.value)
+            if source_type is not None:
+                query = query.where(SocSkillFeedbackObservationRow.source_type == source_type.value)
+            rows = session.execute(
+                query.order_by(
+                    SocSkillFeedbackObservationRow.observed_at.asc(),
+                    SocSkillFeedbackObservationRow.observation_id.asc(),
+                ).limit(limit)
+            ).scalars()
+            return [SkillFeedbackObservation.model_validate(row.observation_payload) for row in rows]
+
+    def save_skill_improvement_candidate(
+        self,
+        candidate: SkillImprovementCandidate,
+    ) -> None:
+        payload = candidate.model_dump(mode="json")
+        with self._session_factory() as session:
+            existing = session.get(SocSkillImprovementCandidateRow, candidate.candidate_id)
+            if existing is not None:
+                if existing.candidate_payload != payload:
+                    raise ValueError(f"skill improvement candidate {candidate.candidate_id} already exists")
+                return
+            session.add(
+                SocSkillImprovementCandidateRow(
+                    candidate_id=candidate.candidate_id,
+                    **_skill_improvement_candidate_row_values(candidate, payload),
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise ValueError(f"skill improvement aggregation key {candidate.aggregation_key} already exists") from exc
+
+    def compare_and_set_skill_improvement_candidate(
+        self,
+        candidate: SkillImprovementCandidate,
+        *,
+        expected_version: int,
+    ) -> bool:
+        if candidate.version != expected_version + 1:
+            raise ValueError("skill improvement candidate version must increment by one")
+        payload = candidate.model_dump(mode="json")
+        with self._session_factory() as session:
+            result = session.execute(
+                update(SocSkillImprovementCandidateRow)
+                .where(
+                    SocSkillImprovementCandidateRow.candidate_id == candidate.candidate_id,
+                    SocSkillImprovementCandidateRow.version == expected_version,
+                )
+                .values(**_skill_improvement_candidate_row_values(candidate, payload))
+            )
+            session.commit()
+            return result.rowcount == 1
+
+    def get_skill_improvement_candidate(
+        self,
+        candidate_id: str,
+    ) -> SkillImprovementCandidate | None:
+        with self._session_factory() as session:
+            row = session.get(SocSkillImprovementCandidateRow, candidate_id)
+            return SkillImprovementCandidate.model_validate(row.candidate_payload) if row is not None else None
+
+    def find_skill_improvement_candidate_by_aggregation_key(
+        self,
+        aggregation_key: str,
+    ) -> SkillImprovementCandidate | None:
+        with self._session_factory() as session:
+            row = session.execute(select(SocSkillImprovementCandidateRow).where(SocSkillImprovementCandidateRow.aggregation_key == aggregation_key).limit(1)).scalar_one_or_none()
+            return SkillImprovementCandidate.model_validate(row.candidate_payload) if row is not None else None
+
+    def list_skill_improvement_candidates(
+        self,
+        *,
+        status: SkillImprovementCandidateStatus | None = None,
+        tenant_id: str | None = None,
+        data_class: SocEvaluationDataClass | None = None,
+        skill_name: str | None = None,
+        limit: int = 100,
+    ) -> list[SkillImprovementCandidate]:
+        with self._session_factory() as session:
+            query = select(SocSkillImprovementCandidateRow)
+            if status is not None:
+                query = query.where(SocSkillImprovementCandidateRow.status == status.value)
+            if tenant_id is not None:
+                query = query.where(SocSkillImprovementCandidateRow.tenant_id == tenant_id)
+            if data_class is not None:
+                query = query.where(SocSkillImprovementCandidateRow.data_class == data_class.value)
+            if skill_name is not None:
+                query = query.where(SocSkillImprovementCandidateRow.skill_name == skill_name)
+            rows = session.execute(
+                query.order_by(
+                    SocSkillImprovementCandidateRow.updated_at.desc(),
+                    SocSkillImprovementCandidateRow.candidate_id.desc(),
+                ).limit(limit)
+            ).scalars()
+            return [SkillImprovementCandidate.model_validate(row.candidate_payload) for row in rows]
+
 
 def _upsert_run(session: Session, run: AnalysisRun) -> None:
     payload = run.model_dump(mode="json")
@@ -2036,4 +2193,53 @@ def _normalization_issue_row_values(issue: NormalizationMaintenanceIssue, payloa
         "resolved_at": issue.resolved_at,
         "resolution_reason": issue.resolution_reason,
         "issue_payload": payload,
+    }
+
+
+def _skill_feedback_observation_row_values(
+    observation: SkillFeedbackObservation,
+    payload: dict,
+) -> dict:
+    return {
+        "idempotency_key": observation.idempotency_key,
+        "aggregation_key": observation.aggregation_key,
+        "content_hash": observation.content_hash,
+        "tenant_id": observation.tenant_id,
+        "data_class": observation.data_class.value,
+        "source_type": observation.source.source_type.value,
+        "source_id": observation.source.source_id,
+        "skill_name": observation.target_skill.skill_name,
+        "package_hash": observation.target_skill.package_hash,
+        "scenario_key": observation.scenario_key,
+        "failure_facet": observation.failure_facet.value,
+        "mocked": observation.mocked,
+        "observed_at": observation.source.observed_at,
+        "created_at": observation.created_at,
+        "observation_payload": payload,
+    }
+
+
+def _skill_improvement_candidate_row_values(
+    candidate: SkillImprovementCandidate,
+    payload: dict,
+) -> dict:
+    return {
+        "aggregation_key": candidate.aggregation_key,
+        "aggregation_policy_version": candidate.aggregation_policy_version,
+        "candidate_content_hash": candidate.candidate_content_hash,
+        "version": candidate.version,
+        "status": candidate.status.value,
+        "tenant_id": candidate.tenant_id,
+        "data_class": candidate.data_class.value,
+        "skill_name": candidate.target_skill.skill_name,
+        "package_hash": candidate.target_skill.package_hash,
+        "scenario_key": candidate.scenario_key,
+        "failure_facet": candidate.failure_facet.value,
+        "occurrence_count": candidate.occurrence_count,
+        "mocked": candidate.mocked,
+        "reviewed_by_actor_id": (candidate.reviewed_by.actor_id if candidate.reviewed_by is not None else None),
+        "reviewed_at": candidate.reviewed_at,
+        "created_at": candidate.created_at,
+        "updated_at": candidate.updated_at,
+        "candidate_payload": payload,
     }

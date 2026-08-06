@@ -20,6 +20,7 @@ import {
   getSocApprovalRequest,
   getSocDispositionSampleReviewInbox,
   getSocNormalizationMetrics,
+  getSocOperationsSnapshot,
   getSocReviewContext,
   listSocApprovalRequests,
   listSocDispositionSampleCampaigns,
@@ -746,5 +747,45 @@ describe("SOC normalization API", () => {
     );
     const headers = firstFetchInit().headers as Headers;
     expect(headers.get("idempotency-key")).toBe("normalization-resolve-1");
+  });
+});
+
+describe("SOC operations API", () => {
+  test("loads the passive operations snapshot with SOC transport headers", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, {
+        schema_version: "soc.operations_snapshot.v1",
+        generated_at: "2026-08-05T08:00:00Z",
+        persisted: { availability: "not_configured" },
+        kafka: {
+          availability: "not_measured",
+          enabled: true,
+          settings_valid: true,
+          checked: false,
+          bootstrap_server_count: 1,
+          alert_topic_count: 1,
+          approval_request_topic_count: 1,
+          dead_letter_configured: true,
+          consumer_lag_availability: "not_measured",
+        },
+        measurement_gaps: [],
+        production_slo_evidence_available: false,
+      }),
+    );
+
+    await expect(
+      getSocOperationsSnapshot({ actorId: "operator-1", surface: "web" }),
+    ).resolves.toMatchObject({
+      schema_version: "soc.operations_snapshot.v1",
+      production_slo_evidence_available: false,
+    });
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/operations/snapshot",
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+    const headers = firstFetchInit().headers as Headers;
+    expect(headers.get("x-soc-actor-id")).toBe("operator-1");
+    expect(headers.get("x-soc-surface")).toBe("web");
   });
 });

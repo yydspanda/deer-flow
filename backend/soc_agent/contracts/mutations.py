@@ -25,6 +25,8 @@ class SocMutationOperation(StrEnum):
     APPROVAL_ACTION_DRY_RUN = "approval.action.dry_run"
     APPROVAL_ACTION_EXECUTE = "approval.action.execute"
     EXTERNAL_DISPOSITION_APPLY = "external_disposition.apply"
+    SKILL_FEEDBACK_INGEST = "skill_feedback.ingest"
+    SKILL_IMPROVEMENT_REVIEW = "skill_improvement.review"
 
 
 class SocMutationAuditRecord(BaseModel):

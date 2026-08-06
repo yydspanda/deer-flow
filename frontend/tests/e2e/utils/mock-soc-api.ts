@@ -407,6 +407,70 @@ function normalizationIssue(state: MockSocApiState) {
   };
 }
 
+function operationsSnapshot() {
+  return {
+    schema_version: "soc.operations_snapshot.v1",
+    generated_at: NOW,
+    persisted: {
+      availability: "available",
+      backend: "sqlite",
+      metrics: {
+        measurement_scope: "lifetime",
+        analysis_run_count: 18,
+        analysis_run_status_counts: {
+          failed: 2,
+          needs_review: 4,
+          success: 12,
+        },
+        latest_analysis_started_at: NOW,
+        latest_analysis_completed_at: NOW,
+        open_review_count: 4,
+        oldest_open_review_created_at: NOW,
+        pending_approval_request_count: 1,
+        oldest_pending_approval_created_at: NOW,
+        open_normalization_issue_count: 3,
+        critical_open_normalization_issue_count: 1,
+        active_normalization_baseline_count: 6,
+        pending_memory_candidate_count: 2,
+      },
+    },
+    kafka: {
+      availability: "not_measured",
+      enabled: true,
+      settings_valid: true,
+      checked: false,
+      reachable: null,
+      bootstrap_server_count: 1,
+      alert_topic_count: 1,
+      approval_request_topic_count: 1,
+      dead_letter_configured: true,
+      consumer_lag_availability: "not_measured",
+      error_code: null,
+    },
+    measurement_gaps: [
+      {
+        metric: "kafka.consumer_lag",
+        availability: "not_measured",
+        reason:
+          "PI-04-A does not collect consumer-group offsets or broker lag.",
+      },
+      {
+        metric: "model.compute_utilization",
+        availability: "not_measured",
+        reason:
+          "PI-04-A does not collect provider-side compute, GPU, or capacity telemetry.",
+      },
+      {
+        metric: "production.slo_compliance",
+        availability: "not_measured",
+        reason:
+          "Production SLO thresholds and time-window evidence are not yet approved.",
+      },
+    ],
+    production_slo_evidence_available: false,
+  };
+}
+
 async function fulfill(route: Route, body: unknown, status = 200) {
   await route.fulfill({
     status,
@@ -617,6 +681,9 @@ export function mockSocAPI(
     }
     if (method === "GET" && path === "/api/soc/normalization/issues") {
       return fulfill(route, { items: [normalizationIssue(state)] });
+    }
+    if (method === "GET" && path === "/api/soc/operations/snapshot") {
+      return fulfill(route, operationsSnapshot());
     }
     if (method === "GET" && path === "/api/soc/normalization/baselines") {
       return fulfill(route, {

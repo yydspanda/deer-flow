@@ -327,6 +327,7 @@ def test_confidence_calibration_outputs_review_only_profile() -> None:
             summary="Reviewed test prediction.",
             recommended_action="Keep review-only.",
             review_status=ConfidenceLabelReviewStatus.ACCEPTED,
+            review_source="human_review",
             reviewer_id="analyst-1",
             reviewed_at="2026-07-15T00:00:00Z",
             review_reason="Golden test label.",

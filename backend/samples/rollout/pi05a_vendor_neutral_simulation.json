@@ -1,0 +1,194 @@
+{
+  "schema_version": "soc.rollout_rehearsal_request.v1",
+  "plan": {
+    "schema_version": "soc.rollout_plan.v1",
+    "policy_version": "soc.rollout_rehearsal_policy.v1",
+    "plan_id": "ROLLOUT-PI05A-VENDOR-NEUTRAL-SIMULATION-V1",
+    "plan_version": "pi05a-simulation-v1",
+    "data_class": "simulation",
+    "mocked": true,
+    "entry_stage": "shadow",
+    "target_stage": "controlled_rollout",
+    "scope": {
+      "cohort_id": "vendor-neutral-simulation-cohort",
+      "tenant_ids": [
+        "vendor-neutral-simulation"
+      ],
+      "source_types": [
+        "network_detection",
+        "endpoint_detection",
+        "host_detection"
+      ],
+      "scenario_keys": [
+        "credential_access",
+        "command_execution",
+        "malicious_outbound"
+      ],
+      "operator_ids": [
+        "simulation-analyst"
+      ],
+      "feature_flag": "soc.rollout.pi05a.simulation",
+      "window_start": "2026-08-05T09:00:00+08:00",
+      "window_end": "2026-08-05T18:00:00+08:00",
+      "maximum_alert_count": 50
+    },
+    "owners": [
+      {
+        "role": "product_risk",
+        "owner_id": "simulation-product-owner",
+        "responsibility": "Review scope, customer impact, and promotion criteria.",
+        "confirmed_for_real_rollout": false
+      },
+      {
+        "role": "soc_operations",
+        "owner_id": "simulation-soc-operations-owner",
+        "responsibility": "Review analyst workload, escalation, and rollback handling.",
+        "confirmed_for_real_rollout": false
+      },
+      {
+        "role": "security",
+        "owner_id": "simulation-security-owner",
+        "responsibility": "Review data, permissions, audit, and side-effect boundaries.",
+        "confirmed_for_real_rollout": false
+      },
+      {
+        "role": "platform_sre",
+        "owner_id": "simulation-platform-owner",
+        "responsibility": "Review infrastructure, telemetry, SLO, and incident controls.",
+        "confirmed_for_real_rollout": false
+      },
+      {
+        "role": "response_system",
+        "owner_id": "simulation-response-owner",
+        "responsibility": "Review downstream response-system and compensation boundaries.",
+        "confirmed_for_real_rollout": false
+      }
+    ],
+    "gates": [
+      {
+        "gate_id": "pi01.real_provider_evidence",
+        "required_for_stages": [
+          "shadow",
+          "limited_pilot",
+          "controlled_rollout"
+        ],
+        "status": "open",
+        "data_class": "simulation",
+        "mocked": true,
+        "reason": "External PI-01E simulation passed, but PingAn mocked=false provider evidence is still pending.",
+        "evidence_refs": [
+          "simulation://pi01e/external-shadow-50"
+        ]
+      },
+      {
+        "gate_id": "pi02.production_infrastructure",
+        "required_for_stages": [
+          "shadow",
+          "limited_pilot",
+          "controlled_rollout"
+        ],
+        "status": "open",
+        "data_class": "simulation",
+        "mocked": true,
+        "reason": "Local SQLite and broker evidence does not prove production PostgreSQL, Kafka, or K8s readiness.",
+        "evidence_refs": [
+          "simulation://pi02/local-alpha"
+        ]
+      },
+      {
+        "gate_id": "pi03.real_quality_evaluation",
+        "required_for_stages": [
+          "limited_pilot",
+          "controlled_rollout"
+        ],
+        "status": "open",
+        "data_class": "simulation",
+        "mocked": true,
+        "reason": "PI-03B validates the evaluation flow with synthetic labels only.",
+        "evidence_refs": [
+          "simulation://pi03b/quality-evaluation"
+        ]
+      },
+      {
+        "gate_id": "pi04.operations_slo",
+        "required_for_stages": [
+          "limited_pilot",
+          "controlled_rollout"
+        ],
+        "status": "not_measured",
+        "data_class": "simulation",
+        "mocked": true,
+        "reason": "PI-04B exposes the read-only view, but real telemetry and approved SLO windows are not measured.",
+        "evidence_refs": [
+          "simulation://pi04b/operations-web"
+        ]
+      },
+      {
+        "gate_id": "pi05.accountable_owners",
+        "required_for_stages": [
+          "shadow",
+          "limited_pilot",
+          "controlled_rollout"
+        ],
+        "status": "open",
+        "data_class": "simulation",
+        "mocked": true,
+        "reason": "Simulation identities exercise role coverage but are not accountable real-environment approvals.",
+        "evidence_refs": []
+      },
+      {
+        "gate_id": "pi05.rollback_readiness",
+        "required_for_stages": [
+          "shadow",
+          "limited_pilot",
+          "controlled_rollout"
+        ],
+        "status": "open",
+        "data_class": "simulation",
+        "mocked": true,
+        "reason": "The rollback sequence is rehearsed in memory and has not been exercised against a deployed environment.",
+        "evidence_refs": []
+      },
+      {
+        "gate_id": "pi05.cohort_isolation",
+        "required_for_stages": [
+          "controlled_rollout"
+        ],
+        "status": "open",
+        "data_class": "simulation",
+        "mocked": true,
+        "reason": "The cohort and feature flag are contract values; no real flag service or tenant isolation has been exercised.",
+        "evidence_refs": []
+      }
+    ],
+    "rollback": {
+      "trigger_ids": [
+        "operator_stop",
+        "runtime_failure_rate",
+        "review_backlog",
+        "provider_failure_rate",
+        "evidence_quality_degradation",
+        "security_incident"
+      ],
+      "actions": [
+        "pause_ingress",
+        "disable_cohort",
+        "preserve_evidence",
+        "route_inflight_to_human",
+        "notify_owners",
+        "verify_no_external_mutation"
+      ],
+      "simulated_target_stage": "shadow",
+      "evidence_retention_required": true,
+      "resume_requires_new_review": true
+    },
+    "read_only_provider_actions_only": true,
+    "auto_close_allowed": false,
+    "external_state_mutation_allowed": false,
+    "high_risk_action_execution_allowed": false
+  },
+  "injected_rollback_trigger_id": "operator_stop",
+  "requested_by": "simulation-fixture:pi05a-v1",
+  "rationale": "Exercise the complete governed rollout and rollback control flow without claiming a real deployment or approval.",
+  "confirm_simulation_only": true
+}

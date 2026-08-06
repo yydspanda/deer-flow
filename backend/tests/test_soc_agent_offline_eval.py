@@ -62,6 +62,9 @@ def test_offline_eval_default_replays_stub_result_through_llm_parser() -> None:
     assert report.parse_success_count == 2
     assert report.verdict_diff_count == 0
     assert report.repair_count == 0
+    assert report.llm_needs_review_count == 2
+    assert report.grounded_evidence_count + report.ungrounded_evidence_count > 0
+    assert report.scenario_assessment_count == 2
     assert {result.model_name for result in report.results} == {"stub-replay"}
 
 
@@ -169,6 +172,8 @@ def test_cli_eval_offline_outputs_report(capsys) -> None:
     data = json.loads(captured.out)
 
     assert code == 0
-    assert data["schema_version"] == "soc.offline_eval_report.v1"
+    assert data["schema_version"] == "soc.offline_eval_report.v2"
     assert data["sample_count"] == 1
     assert data["parse_success_count"] == 1
+    assert data["llm_needs_review_count"] == 1
+    assert "decision_review_reasons" in data["results"][0]

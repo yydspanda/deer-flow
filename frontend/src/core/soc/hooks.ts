@@ -16,6 +16,7 @@ import {
   getSocMemoryCandidate,
   getSocMemoryRecord,
   getSocNormalizationMetrics,
+  getSocOperationsSnapshot,
   getSocApprovalRequest,
   getSocReviewContext,
   listSocMemoryCandidates,
@@ -150,6 +151,11 @@ export const socNormalizationQueryKeys = {
     [...socNormalizationQueryKeys.all, "issues", status, limit] as const,
   baselines: () => [...socNormalizationQueryKeys.all, "baselines"] as const,
   metrics: () => [...socNormalizationQueryKeys.all, "metrics"] as const,
+};
+
+export const socOperationsQueryKeys = {
+  all: ["soc-operations"] as const,
+  snapshot: () => [...socOperationsQueryKeys.all, "snapshot"] as const,
 };
 
 function useSocWebRequestContext(): SocRequestContext {
@@ -335,6 +341,16 @@ export function useSocNormalizationMetrics() {
     queryFn: () => getSocNormalizationMetrics(context),
   });
   return { metrics: query.data ?? null, ...query };
+}
+
+export function useSocOperationsSnapshot() {
+  const context = useSocWebRequestContext();
+  const query = useQuery({
+    queryKey: socOperationsQueryKeys.snapshot(),
+    queryFn: () => getSocOperationsSnapshot(context),
+    refetchInterval: 30_000,
+  });
+  return { snapshot: query.data ?? null, ...query };
 }
 
 export function useUpdateSocNormalizationIssue() {

@@ -26,7 +26,7 @@
 | 查看平安专属知识候选 | `capabilities/pingan/knowledge-candidates.md` | `capabilities/pingan/source-docs/` |
 | 查看当前哪些能力仍是 mock | `integrations/mock-and-real-register.md` | `capabilities/pingan/onboarding.md` 的 PA-12 |
 | 盘点所有外部接入、未完成项及其权威任务归属 | `integrations/README.md` | `delivery-roadmap.md` 的 PI 阶段 |
-| 执行当前 PI-01E 内网 shadow 全链路；或查看已完成的 D4 report/addendum、补跑 PI-01A/B1、恢复 D12-B 内网验收 | `delivery-roadmap.md` 的 PI-01D/PI-01E 分解 | `integrations/pingan-internal-continuation-handoff.md` |
+| 重跑 PI-05A rollout rehearsal、执行当前 PI-05B 仿真完成门禁，或恢复已停放的 PingAn 真实接入验收 | `delivery-roadmap.md` 的 PI-03..05 分解 | `backend/samples/rollout/README.md`；真实接入再看 `integrations/pingan-internal-continuation-handoff.md` |
 | 查看旧 sec-model/ZEUS 状态/safe-path 审计结论 | `integrations/pingan-legacy-source-audit.md` | `integrations/pingan-internal-continuation-handoff.md` |
 | 设计外部工单/处置状态回流 | `integrations/external-disposition-sync.md` | 工程契约 external disposition 章节 |
 | 设计记忆和经验沉淀 | `memory/memory-tracking.md` | `alert-lifecycle-flow.md` 的 memory flow |

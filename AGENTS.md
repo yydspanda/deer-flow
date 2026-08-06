@@ -155,6 +155,11 @@ Current SOC direction:
   persistence unless a generic upstream extension point is genuinely needed.
 - SOC schema migrations live under `backend/soc_agent/db/migrations/` and are applied with
   `soc db upgrade`; the migration version table is `soc_alembic_version`.
+- PingAn DEV dependencies do not block the product-completion track. When live internal access is
+  unavailable, use only explicit fake/mock configurations whose outputs retain `mocked=true`, finish
+  the frozen product workflow, and record the corresponding `mocked=false` acceptance as separate
+  Real Integration Debt. A simulated pass never closes a real Provider, infrastructure, label-quality,
+  pilot, or production gate; an unfrozen source contract remains data-gated rather than invented.
 - Kafka/Redpanda daemon ingestion is implemented; local broker default is `localhost:9092`, while
   production ACL/capacity/recovery evidence remains data-gated. Topic `soc.alerts.raw.v1` accepts only
   strict `SocAlertRawEnvelope(schema_version=soc.alert.raw.v1)` payloads, not bare vendor alerts.
@@ -312,6 +317,16 @@ Current SOC direction:
   verdict. Baselines require explicit engineer/admin acceptance; mapping suggestions and confidence
   calibration are offline-only and never auto-apply. Operators use `soc normalize issues`, Review TUI
   `/normalization`, or `/workspace/soc/normalization`.
+- PI-03A label governance uses `soc eval labels prepare|seal|verify`. The corpus manifest seals the
+  exact label-set/sample identity, tenant/environment, data class, reviewer summary, source/rationale
+  and supersession lineage. `simulation` always means `mocked=true` and
+  `real_quality_claim_allowed=false`; integrity verification is separate from review completion and
+  calibration readiness, and simulation/real manifests use separate supersession chains.
+- PI-03B uses `soc eval quality` to compose the existing offline Runtime/parser, scenario, correlation
+  and manifest-bound confidence evaluators. Reviewed labels declare `human_review` or
+  `simulation_fixture`; a real corpus rejects synthetic labels. The stable replay report may pass its
+  engineering flow but always keeps real-quality claims, profile publication, rollout and automation
+  disabled. `soc eval confidence` now requires `--corpus-manifest`.
 - Vendor aliases stop in source adapters. Adapters emit generic `RoleClaim` / `ScenarioSignal`
   contracts; generic fact reconstruction must not recognize PingAn field names, assume
   attacker=source or victim=destination, choose a response target, or enable automation.
@@ -461,6 +476,18 @@ Current SOC direction:
   secret-free Kafka readiness projection. The Gateway endpoint is passive; only the CLI's explicit
   `--check-broker` may perform a connectivity probe. The snapshot must not infer an overall health
   verdict or claim lag, model compute, or production SLO evidence when those signals are not measured.
+- PI-04-B adds the thin `/workspace/soc/operations` Web consumer. Frontend code must call only the
+  typed `core/soc` snapshot client/hook, must not query SOC tables, actively probe Kafka, aggregate
+  counts, or infer overall health. It must preserve backend availability and `not_measured` values,
+  label SQLite as local/test evidence, and keep Playwright fixture evidence separate from deployed
+  Gateway/auth/telemetry evidence.
+- PI-05A uses `soc_agent.contracts.rollout` plus the pure `SocRolloutRehearsalService` and
+  `soc rollout rehearse`. The V1 simulation must retain all five owner roles, seven real gates, a
+  bounded cohort, and the ordered rollback procedure. Simulation evidence cannot close a real gate;
+  every report keeps the real stage at `not_started`, real transitions/effects at zero, and production
+  approval, auto-close, external mutation and high-risk actions disabled. It does not call Provider,
+  Kafka, persistence mutation, feature-flag, Zeus or response systems. Real cohort enforcement remains
+  separate PI-05C integration debt.
 - SOC Runtime does not expose `endpoint.process_tree.lookup` or `host.event_context.lookup`.
   Process trees, commands, login context, and host events must come from the alert's bounded native
   evidence. Do not reintroduce mock routes or degrade a decision merely because those external
@@ -541,7 +568,7 @@ SOC delivery plan (the only execution order is `.notes/ai_soc/delivery-roadmap.m
 | `BD` Boss Demo v0.1 | Done: browser-first repeatable golden path |
 | `AA` SOC Alpha Completeness Audit | Done: unique 50-row matrix and frozen blocker set |
 | `BG` Close Blocking Gaps | Done: Alpha Gate passed 2026-07-20 |
-| `PI` Real Data & Production Integration | Current: `PI-01E` internal-real stage 5; external simulation 5/50 passed, D1-D4 done, B2/C data-gated, PingAn real-smoke gates retained; `PI-04-A` done and `PI-04-B` parked |
+| `PI` Real Data & Production Integration | Current product track: `PI-05B` simulation completion gate; PI-01 external simulation, PI-03A/B/C, PI-04A/B and PI-05A are done, while PingAn `mocked=false`, real telemetry, feedback classification and PI-05C rollout controls remain separate Real Integration Debt |
 
 ### SOC Agent Development Workflow
 

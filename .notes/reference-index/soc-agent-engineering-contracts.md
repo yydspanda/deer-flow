@@ -537,7 +537,7 @@ External disposition sync 约束：
 - 外部预警/工单/处置系统的状态和理由同步必须走 vendor-neutral `SocExternalDispositionEvent`，Zeus 只是第一个 adapter；core service 不能出现 Zeus 专属分支。
 - `SocExternalDispositionEvent` schema version 固定为 `soc.external_disposition.v1`，至少包含 `external_system`、`external_case_id`、`external_status`、`updated_at`、`raw_payload_hash`，可选包含 `tenant_id`、`source_event_id`、`source_version`、`external_alert_ref`、`soc_alert_id`、`soc_run_id`、`soc_queue_id`、`external_reason`、`external_tags`、`operator`；多租户部署时 `tenant_id` 必须由认证上下文或 adapter 配置补齐。
 - 外部系统 adapter 只负责认证、解码、字段映射、redaction、幂等键生成和调用 `SocExternalDispositionService`；adapter 不得直接写 repository、不得直接调用 `SocReviewService.correct()`、不得直接写 memory 或 skill。
-- `SocExternalDispositionService` 是外部反馈写入本地 audit、review/correction、external disposition record、memory candidate 和 skill improvement candidate 的唯一 service 边界。
+- `SocExternalDispositionService` 是外部反馈写入本地 audit、review/correction、external disposition record 和 memory candidate 的唯一 source service 边界。它只有在 server-owned mapping/classifier 已生成完整 typed Skill feedback 时，才允许组合 `SocSkillImprovementService`；原始 reason 不得直接聚类或创建 Skill candidate。
 - 当前 External Disposition Contract MVP 已实现 contract/mapper/service/repository 边界；`SocExternalDispositionService.apply_event()` 对 high-trust、mapped、唯一定位且可映射 verdict 的事件复用 `SocReviewService.correct()` 同步 operational correction / review close。mapped、可定位且带 reason 的事件可以通过注入的 `SocMemoryService.propose_candidate()` 生成 pending memory candidate；低可信只能生成候选不能改判，未知状态、无法定位、无 reason 或非可学习状态不能生成候选。
 - `soc_external_dispositions` 是当前 `SocExternalDispositionRecord` 的 SOC business store 表；`SqlAlchemyAlertRepository` 实现 `SocExternalDispositionRepository` 方法。生产和本地持久化都必须通过 migration `0009_external_dispositions` 或 `create_soc_tables()` 创建该表。
 - 外部处置历史必须通过 `SocReviewService.get_investigation_context()` 聚合到 `InvestigationContext.external_dispositions`；ReviewQueue API/TUI/Web/Lead Agent bounded context 只能消费该字段，不能直接查 `soc_external_dispositions`。
@@ -547,6 +547,27 @@ External disposition sync 约束：
 - 外部 free-text reason 默认只是 case feedback；只能生成 `SocMemoryCandidate(status=pending_review)` 或 `SkillImprovementCandidate(status=pending_review)`，不得直接成为 confirmed memory、active lesson、active skill 或 prompt 修改。
 - 外部处置同步必须记录 source surface、operator、mapping version、apply status、target refs、idempotency key 和 audit event，支持 replay diff、撤销和客户审计。
 - Webhook、Kafka、polling 和 manual import 都是 transport adapter；进入 core service 前必须归一成同一 `SocExternalDispositionEvent`，不能为每种 transport 复制业务状态机。
+
+PI-03C Skill improvement governance 约束：
+
+- `SkillFeedbackObservation` 必须明确 tenant、`simulation|desensitized_real`、source ID、精确 Skill
+  package/guidance hash、scenario、typed failure facet、代表样本和 replay refs。LLM/free-text 不能决定两个
+  case 是否属于同一 cohort。
+- 聚合键必须包含完整版本化 policy 参数；只有同一键下达到 distinct-source threshold 才创建
+  `SkillImprovementCandidate(status=pending_review)`。重复 webhook/重试和同一 source ID 不得重复计数。
+- simulation 只能使用 `simulation_fixture`，真实数据不能使用该 source lane；两类 observation/candidate
+  不得聚合或 supersede。simulation 永远 `mocked=true` 且不能产生真实质量声明。
+- `SocSkillImprovementService` 是 ingest/list/get/review/replay 的唯一业务边界；repository 只保存 typed
+  observation/candidate。candidate review 需要可信身份、`soc_skill_reviewer|soc_engineer|soc_admin`、
+  idempotency、expected version 和 mutation audit。
+- `approve_for_change` 只允许进入人工修改与评测流程。所有 observation/candidate 固定禁止 Skill 写入、
+  activation、memory write、Runtime decision 和 real-quality claim；任何代码不得根据状态直接编辑
+  `skills/public`。
+- reviewed candidate 冻结；后续同 package cohort 反馈只用于 replay。`supersede` 必须指向同 tenant、同
+  data class、同 Skill/scenario/facet 的显式 replacement candidate。
+- 当前 replay 只重算 aggregation/source/replay-set integrity，并明确
+  `skill_behavior_replay_executed=false`。真正修改 Skill 后仍必须运行绑定正例/反例的 behavior replay，才可
+  进入独立 package promotion review。
 
 Governed context fact / 受治理上下文事实约束：
 
@@ -1072,6 +1093,23 @@ Kafka daemon / consumer adapter 约束：
     `not_measured`，不能用 `0`、`true` 或默认阈值冒充正常。
   - PI-04-A 不改变 Runtime、Kafka consumer、ReviewQueue、approval 或 memory 主流程；完整 Web、
     Prometheus、SLO threshold/alerting 属于后续 PI-04 切片。
+  - PI-04-B Web 固定为 `core/soc` typed API/hook 的薄消费者：不得直接查表、主动 broker probe、复制
+    aggregate 或推导 overall health；必须原样区分 `available|unavailable|not_configured|not_measured`。
+    SQLite/Playwright 只能标为 local/test evidence，不能关闭 deployed Gateway/auth、真实 lag/算力、
+    Prometheus 或 production SLO gate。
+- PI-05A rollout rehearsal 是 vendor-neutral、纯内存、零副作用的控制流验证：
+  - contracts 固定在 `soc_agent.contracts.rollout`，入口必须经 `SocRolloutRehearsalService`；CLI 只负责
+    读取 `soc.rollout_rehearsal_request.v1`、可选 baseline 和输出报告，不能自行修改 gate 或 stage。
+  - V1 plan 必须完整包含 5 类 owner、7 个不可削弱 stage scope 的 real gate、bounded cohort/feature-flag
+    描述和有序 6 步 rollback；simulation owner 不能声明 real confirmation，simulation evidence 不能把
+    real gate 标为 `passed`。
+  - `soc.rollout_rehearsal_report.v1` 的 engineering pass 只证明虚拟
+    `shadow -> limited_pilot -> controlled_rollout -> rollback` 可复跑；必须固定
+    `current_real_stage=not_started`、`real_stage_transition_count=0`、`external_effect_count=0`，并保持
+    production approval、auto-close、external mutation、high-risk action 和 real-rollout claim 全部 false。
+  - service 不得调用 Provider、Kafka、repository mutation、feature-flag service、Zeus 或 response adapter。
+    相同 semantic input 必须产生稳定 ID/hash 和 replay diff；真实 rollout controller/cohort enforcement
+    只能在 PI-05C 以 fresh evidence、独立 owner approval、审计和可执行回滚另行实现。
 - `SocDaemonMessage` 的 Kafka metadata 必须保留 `topic`、`partition`、`offset`、`key`；daemon idempotency key 固定为 `kafka:{topic}:{partition}:{offset}`。
 - dead-letter payload 必须使用 `soc.kafka_dead_letter.v1`，至少包含 failed_at、topic、partition、offset、key、headers、value、error_type、error_message；payload 不得包含 secret。
 - 真实 consumer CLI/daemon 入口只能做配置读取、adapter 构造、runner loop 和 graceful shutdown；业务处理仍归 `SocDaemonService`。
@@ -1410,9 +1448,25 @@ normalizers/hids.py
 - `pending_review` 不能参与 calibration；无法确定真实结论的样本应标为 `excluded`，不得把
   `unknown/needs_review` 冒充 accepted ground truth。同一 `input_hash` 的 replay 不能重复计权，
   不同 model/prompt/pipeline scope 不能混入同一个 profile。
-- `soc eval confidence` 只消费完成治理校验的 label set，输出 accuracy、Brier score、ECE、non-empty
-  bins、dataset hash 和 versioned `review_below` profile。样本不足、实际 verdict 单一或无满足支持度的
-  阈值必须 warning；当前 profile 的 `auto_action_allowed` 固定为 false，不自动写生产配置。
+- `soc eval confidence` 必须同时消费完成治理校验的 label set 和与其 exact hash/identity 匹配的 corpus
+  manifest，输出 manifest verification 加 accuracy、Brier score、ECE、non-empty bins、dataset hash 和
+  versioned `review_below` profile。样本不足、实际 verdict 单一或无满足支持度的阈值必须 warning；
+  当前 profile 的 `auto_action_allowed`、`profile_publish_allowed` 固定为 false，不自动写生产配置。
+- `PI-03A` label set 必须再由 `soc.confidence_label_corpus_manifest.v1` 封存：记录 exact payload
+  SHA-256、sample identity SHA-256、tenant/environment、`simulation|desensitized_real` data class、
+  source refs、creator/rationale、review summary 和显式 supersession lineage。`seal` 不等于 review，
+  `verify` 只证明 integrity，不等于 calibration readiness；二者必须分别报告。
+- `simulation` corpus 必须为 `mocked=true`，并且 manifest/verification 都固定
+  `real_quality_claim_allowed=false`。simulation 与 real corpus 禁止共用 supersession chain；仿真通过
+  可以推进产品流程，但不能关闭真实标签 gate、发布 calibration profile、声明模型准确率或开放自动化。
+- Reviewed label 必须显式携带 `review_source=human_review|simulation_fixture`；pending label 不得带 review
+  source，真实 corpus 不得包含 simulation-fixture label。不得用伪造 reviewer id 把 synthetic truth
+  包装成人工真值。
+- `soc eval quality` 只组合现有 offline/scenario/correlation/confidence evaluator，输出
+  `soc.quality_evaluation_report.v1`。component pass 只表示工程链可执行；aggregate 必须固定
+  `real_quality_claim_allowed=false`、`profile_publish_allowed=false`、`rollout_allowed=false`、
+  `automation_allowed=false`，并保留 Grounding、taxonomy coverage、correlation false positive 和小样本
+  limitation。Replay diff 使用去除 generated run/finding ID 和 timestamp 的稳定语义 hash。
 
 ### Investigation evidence eligibility / 调查证据采信约束
 

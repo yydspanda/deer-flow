@@ -24,6 +24,8 @@ from soc_agent.db.models import (
     SocNormalizationMaintenanceIssueRow,
     SocNormalizationSchemaBaselineRow,
     SocReviewQueueRow,
+    SocSkillFeedbackObservationRow,
+    SocSkillImprovementCandidateRow,
 )
 from soc_agent.db.operations import SqlAlchemySocOperationsRepository
 from soc_agent.db.repositories import SqlAlchemyAlertRepository
@@ -49,6 +51,8 @@ __all__ = [
     "SocNormalizationMaintenanceIssueRow",
     "SocNormalizationSchemaBaselineRow",
     "SocReviewQueueRow",
+    "SocSkillFeedbackObservationRow",
+    "SocSkillImprovementCandidateRow",
     "SocBase",
     "SqlAlchemyAlertRepository",
     "SqlAlchemySocOperationsRepository",

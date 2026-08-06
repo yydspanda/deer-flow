@@ -262,6 +262,7 @@ export const zhCN: Translations = {
     demoChats: "演示对话",
     agents: "智能体",
     scheduledTasks: "定时任务",
+    socOperations: "SOC 运营",
     agentsDisabledTooltip: "功能未启用",
   },
 

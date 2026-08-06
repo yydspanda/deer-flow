@@ -1,0 +1,38 @@
+{
+  "schema_version": "soc.confidence_label_corpus_manifest.v1",
+  "manifest_id": "CLCM-812ECC62B638",
+  "created_at": "2026-08-05T00:00:00Z",
+  "corpus_version": "pi03b-simulation-v1",
+  "tenant_id": "vendor-neutral-simulation",
+  "environment": "local-dev",
+  "data_class": "simulation",
+  "created_by": "simulation-fixture:pi03b-v1",
+  "rationale": "Exercise all PI-03B evaluation paths without claiming real SOC quality.",
+  "source_refs": [
+    "fixture:pi03b:synthetic-labels-v1"
+  ],
+  "label_set_id": "CLS-PI03B-SIMULATION-V1",
+  "label_set_sha256": "0382386b300f10fa4e5e988936a406f35b73fa0ef461200e785ceb5bac81d198",
+  "sample_count": 4,
+  "sample_ids": [
+    "CLS-SIM-1",
+    "CLS-SIM-2",
+    "CLS-SIM-3",
+    "CLS-SIM-4"
+  ],
+  "sample_identity_sha256": "d892e496eb91b2f944ea0b755fa1192119f469864008e050d9bb93df4fbad67f",
+  "accepted_count": 4,
+  "pending_count": 0,
+  "excluded_count": 0,
+  "reviewer_ids": [
+    "simulation-fixture:pi03b-v1"
+  ],
+  "review_source_counts": {
+    "simulation_fixture": 4
+  },
+  "calibration_input_eligible": true,
+  "mocked": true,
+  "real_quality_claim_allowed": false,
+  "supersedes_manifest_id": null,
+  "supersedes_manifest_sha256": null
+}

@@ -90,6 +90,20 @@ class ConfidenceLabelReviewStatus(StrEnum):
     EXCLUDED = "excluded"
 
 
+class ConfidenceLabelReviewSource(StrEnum):
+    """Who or what assigned a reviewed offline label."""
+
+    HUMAN_REVIEW = "human_review"
+    SIMULATION_FIXTURE = "simulation_fixture"
+
+
+class SocEvaluationDataClass(StrEnum):
+    """Whether an evaluation corpus contains simulated or approved real data."""
+
+    SIMULATION = "simulation"
+    DESENSITIZED_REAL = "desensitized_real"
+
+
 class AnalysisEvidenceGroundingStatus(StrEnum):
     """Whether one analyzer evidence item can be traced to bounded input."""
 
@@ -165,6 +179,8 @@ class SocEventType(StrEnum):
     DISPOSITION_PROPOSAL_RECORDED = "disposition.proposal_recorded"
     DISPOSITION_SAMPLE_CREATED = "disposition.sample_created"
     DISPOSITION_OUTCOME_RECORDED = "disposition.outcome_recorded"
+    SKILL_FEEDBACK_INGESTED = "skill_feedback.ingested"
+    SKILL_IMPROVEMENT_CANDIDATE_UPDATED = "skill_improvement.candidate_updated"
 
 
 class AuditAction(StrEnum):
@@ -2698,20 +2714,26 @@ class ConfidenceCalibrationSample(BaseModel):
     evidence_ungrounded_count: int = Field(default=0, ge=0)
     review_reasons: list[DecisionReviewReason] = Field(default_factory=list)
     review_status: ConfidenceLabelReviewStatus = ConfidenceLabelReviewStatus.PENDING_REVIEW
+    review_source: ConfidenceLabelReviewSource | None = None
     reviewer_id: str | None = None
     reviewed_at: datetime | None = None
     review_reason: str | None = None
 
     @model_validator(mode="after")
     def validate_review_state(self) -> ConfidenceCalibrationSample:
-        review_fields = (self.reviewer_id, self.reviewed_at, self.review_reason)
+        review_fields = (
+            self.review_source,
+            self.reviewer_id,
+            self.reviewed_at,
+            self.review_reason,
+        )
         if self.review_status is ConfidenceLabelReviewStatus.PENDING_REVIEW:
             if self.actual_verdict is not None or any(value is not None for value in review_fields):
                 raise ValueError("pending confidence label cannot carry analyst review fields")
             return self
 
-        if not self.reviewer_id or self.reviewed_at is None or not self.review_reason:
-            raise ValueError("reviewed confidence label requires reviewer_id, reviewed_at, and review_reason")
+        if self.review_source is None or not self.reviewer_id or self.reviewed_at is None or not self.review_reason:
+            raise ValueError("reviewed confidence label requires review_source, reviewer_id, reviewed_at, and review_reason")
         if self.review_status is ConfidenceLabelReviewStatus.ACCEPTED:
             if self.actual_verdict is None:
                 raise ValueError("accepted confidence label requires actual_verdict")
@@ -2727,6 +2749,118 @@ class ConfidenceCalibrationLabelSet(BaseModel):
     label_set_id: str = Field(min_length=1)
     created_at: datetime = Field(default_factory=utc_now)
     samples: list[ConfidenceCalibrationSample] = Field(min_length=1, max_length=10000)
+
+
+class ConfidenceLabelCorpusManifest(BaseModel):
+    """Immutable provenance seal around one reviewed confidence label set."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "soc.confidence_label_corpus_manifest.v1"
+    manifest_id: str = Field(min_length=1)
+    created_at: datetime = Field(default_factory=utc_now)
+    corpus_version: str = Field(min_length=1, max_length=200)
+    tenant_id: str = Field(min_length=1, max_length=200)
+    environment: str = Field(min_length=1, max_length=100)
+    data_class: SocEvaluationDataClass
+    created_by: str = Field(min_length=1, max_length=200)
+    rationale: str = Field(min_length=1, max_length=4000)
+    source_refs: list[str] = Field(min_length=1, max_length=100)
+    label_set_id: str = Field(min_length=1)
+    label_set_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sample_count: int = Field(ge=1, le=10000)
+    sample_ids: list[str] = Field(min_length=1, max_length=10000)
+    sample_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    accepted_count: int = Field(ge=0)
+    pending_count: int = Field(ge=0)
+    excluded_count: int = Field(ge=0)
+    reviewer_ids: list[str] = Field(default_factory=list, max_length=1000)
+    review_source_counts: dict[str, int] = Field(default_factory=dict)
+    calibration_input_eligible: bool = False
+    mocked: bool
+    real_quality_claim_allowed: bool = False
+    supersedes_manifest_id: str | None = None
+    supersedes_manifest_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @field_validator(
+        "corpus_version",
+        "tenant_id",
+        "environment",
+        "created_by",
+        "rationale",
+    )
+    @classmethod
+    def strip_manifest_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("corpus manifest text fields must not be blank")
+        return normalized
+
+    @field_validator("source_refs", "sample_ids", "reviewer_ids")
+    @classmethod
+    def require_unique_manifest_values(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("corpus manifest list values must not be blank")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("corpus manifest list values must be unique")
+        return normalized
+
+    @field_validator("review_source_counts")
+    @classmethod
+    def validate_review_source_counts(cls, values: dict[str, int]) -> dict[str, int]:
+        allowed = {item.value for item in ConfidenceLabelReviewSource}
+        if any(key not in allowed for key in values):
+            raise ValueError("corpus manifest contains an unknown review source")
+        if any(count < 0 for count in values.values()):
+            raise ValueError("corpus manifest review-source counts cannot be negative")
+        return dict(sorted(values.items()))
+
+    @model_validator(mode="after")
+    def validate_integrity_boundary(self) -> ConfidenceLabelCorpusManifest:
+        if self.sample_count != len(self.sample_ids):
+            raise ValueError("sample_count must match sample_ids")
+        if self.accepted_count + self.pending_count + self.excluded_count != self.sample_count:
+            raise ValueError("review status counts must match sample_count")
+        if sum(self.review_source_counts.values()) != self.accepted_count + self.excluded_count:
+            raise ValueError("review-source counts must match reviewed sample count")
+        if self.data_class is SocEvaluationDataClass.DESENSITIZED_REAL and self.review_source_counts.get(ConfidenceLabelReviewSource.SIMULATION_FIXTURE.value, 0):
+            raise ValueError("a real corpus cannot contain simulation-fixture labels")
+        if self.mocked is not (self.data_class is SocEvaluationDataClass.SIMULATION):
+            raise ValueError("mocked must match the evaluation data class")
+        if self.real_quality_claim_allowed:
+            raise ValueError("a corpus manifest cannot authorize real quality claims")
+        supersession = (
+            self.supersedes_manifest_id,
+            self.supersedes_manifest_sha256,
+        )
+        if any(value is not None for value in supersession) and not all(value is not None for value in supersession):
+            raise ValueError("supersession requires both manifest id and manifest hash")
+        if self.supersedes_manifest_id == self.manifest_id:
+            raise ValueError("a corpus manifest cannot supersede itself")
+        return self
+
+
+class ConfidenceLabelCorpusVerificationReport(BaseModel):
+    """Integrity result for one manifest and its exact label-set payload."""
+
+    schema_version: str = "soc.confidence_label_corpus_verification.v1"
+    manifest_id: str
+    label_set_id: str
+    data_class: SocEvaluationDataClass
+    mocked: bool
+    integrity_passed: bool
+    label_set_hash_matches: bool
+    sample_identity_matches: bool
+    review_summary_matches: bool
+    review_source_summary_matches: bool
+    calibration_input_eligible: bool
+    real_quality_claim_allowed: bool = False
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ConfidenceLabelSetValidationReport(BaseModel):

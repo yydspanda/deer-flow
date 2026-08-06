@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ActivityIcon,
   AlertTriangleIcon,
   CheckCircle2Icon,
   ClipboardCheckIcon,
@@ -1883,6 +1884,12 @@ export function SocReviewQueueWorkbench() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/workspace/soc/operations">
+              <ActivityIcon className="size-4" />
+              运营观察
+            </Link>
+          </Button>
           <ToggleGroup
             type="single"
             variant="outline"

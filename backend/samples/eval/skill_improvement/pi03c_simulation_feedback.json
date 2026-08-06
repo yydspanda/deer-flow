@@ -1,0 +1,124 @@
+{
+  "schema_version": "soc.skill_feedback_simulation_fixture.v1",
+  "data_notice": "Simulation only; not human-reviewed truth and not a real Skill defect claim.",
+  "observations": [
+    {
+      "idempotency_key": "pi03c-simulation-reverse-shell-001",
+      "tenant_id": "tenant-simulation",
+      "data_class": "simulation",
+      "source": {
+        "source_type": "simulation_fixture",
+        "source_id": "SIM-CORRECTION-001",
+        "run_id": "RUN-SIM-REVERSE-SHELL-001",
+        "alert_id": "ALERT-SIM-REVERSE-SHELL-001",
+        "observed_at": "2026-08-05T01:01:00Z"
+      },
+      "target_skill": {
+        "skill_name": "soc-network-apt-triage",
+        "package_hash": "5b4d67d365ee24b16b22c73f3bf8430cbefea80f0eef95cd007de1664f850431",
+        "guidance_hash": "f840ccfc16ce9a799c7fa8065798df8f4d6453d781242c4573c8695590ddcf28"
+      },
+      "scenario_key": "reverse_shell",
+      "failure_facet": "manual_check_guidance_inadequate",
+      "feedback_summary": "The bounded guidance did not ask the analyst to verify process ownership for a reverse connection.",
+      "suggested_change": "Add a bounded process-owner verification step when reverse-connection evidence is present.",
+      "representative_sample_ref": "fixture://pi03c/reverse-shell/001",
+      "replay_set_refs": [
+        "fixture://pi03c/replay/reverse-shell-positive-001",
+        "fixture://pi03c/replay/normal-outbound-negative-001"
+      ],
+      "metadata": {
+        "fixture_kind": "synthetic_correction"
+      }
+    },
+    {
+      "idempotency_key": "pi03c-simulation-reverse-shell-002",
+      "tenant_id": "tenant-simulation",
+      "data_class": "simulation",
+      "source": {
+        "source_type": "simulation_fixture",
+        "source_id": "SIM-CORRECTION-002",
+        "run_id": "RUN-SIM-REVERSE-SHELL-002",
+        "alert_id": "ALERT-SIM-REVERSE-SHELL-002",
+        "observed_at": "2026-08-05T01:02:00Z"
+      },
+      "target_skill": {
+        "skill_name": "soc-network-apt-triage",
+        "package_hash": "5b4d67d365ee24b16b22c73f3bf8430cbefea80f0eef95cd007de1664f850431",
+        "guidance_hash": "f840ccfc16ce9a799c7fa8065798df8f4d6453d781242c4573c8695590ddcf28"
+      },
+      "scenario_key": "reverse_shell",
+      "failure_facet": "manual_check_guidance_inadequate",
+      "feedback_summary": "The bounded guidance did not ask the analyst to verify process ownership for a reverse connection.",
+      "suggested_change": "Add a bounded process-owner verification step when reverse-connection evidence is present.",
+      "representative_sample_ref": "fixture://pi03c/reverse-shell/002",
+      "replay_set_refs": [
+        "fixture://pi03c/replay/reverse-shell-positive-002",
+        "fixture://pi03c/replay/normal-outbound-negative-001"
+      ],
+      "metadata": {
+        "fixture_kind": "synthetic_correction"
+      }
+    },
+    {
+      "idempotency_key": "pi03c-simulation-reverse-shell-003",
+      "tenant_id": "tenant-simulation",
+      "data_class": "simulation",
+      "source": {
+        "source_type": "simulation_fixture",
+        "source_id": "SIM-EXTERNAL-DISPOSITION-003",
+        "run_id": "RUN-SIM-REVERSE-SHELL-003",
+        "alert_id": "ALERT-SIM-REVERSE-SHELL-003",
+        "queue_id": "REV-SIM-REVERSE-SHELL-003",
+        "external_system": "simulated-ticketing",
+        "observed_at": "2026-08-05T01:03:00Z"
+      },
+      "target_skill": {
+        "skill_name": "soc-network-apt-triage",
+        "package_hash": "5b4d67d365ee24b16b22c73f3bf8430cbefea80f0eef95cd007de1664f850431",
+        "guidance_hash": "f840ccfc16ce9a799c7fa8065798df8f4d6453d781242c4573c8695590ddcf28"
+      },
+      "scenario_key": "reverse_shell",
+      "failure_facet": "manual_check_guidance_inadequate",
+      "feedback_summary": "The bounded guidance did not ask the analyst to verify process ownership for a reverse connection.",
+      "suggested_change": "Add a bounded process-owner verification step when reverse-connection evidence is present.",
+      "representative_sample_ref": "fixture://pi03c/reverse-shell/003",
+      "replay_set_refs": [
+        "fixture://pi03c/replay/reverse-shell-positive-003",
+        "fixture://pi03c/replay/normal-outbound-negative-001"
+      ],
+      "metadata": {
+        "fixture_kind": "synthetic_external_feedback"
+      }
+    },
+    {
+      "idempotency_key": "pi03c-simulation-reverse-shell-004",
+      "tenant_id": "tenant-simulation",
+      "data_class": "simulation",
+      "source": {
+        "source_type": "simulation_fixture",
+        "source_id": "SIM-CORRECTION-004",
+        "run_id": "RUN-SIM-REVERSE-SHELL-004",
+        "alert_id": "ALERT-SIM-REVERSE-SHELL-004",
+        "observed_at": "2026-08-05T01:04:00Z"
+      },
+      "target_skill": {
+        "skill_name": "soc-network-apt-triage",
+        "package_hash": "5b4d67d365ee24b16b22c73f3bf8430cbefea80f0eef95cd007de1664f850431",
+        "guidance_hash": "f840ccfc16ce9a799c7fa8065798df8f4d6453d781242c4573c8695590ddcf28"
+      },
+      "scenario_key": "reverse_shell",
+      "failure_facet": "manual_check_guidance_inadequate",
+      "feedback_summary": "The bounded guidance did not ask the analyst to verify process ownership for a reverse connection.",
+      "suggested_change": "Add a bounded process-owner verification step when reverse-connection evidence is present.",
+      "representative_sample_ref": "fixture://pi03c/reverse-shell/004",
+      "replay_set_refs": [
+        "fixture://pi03c/replay/reverse-shell-positive-004",
+        "fixture://pi03c/replay/normal-outbound-negative-001"
+      ],
+      "metadata": {
+        "fixture_kind": "synthetic_correction"
+      }
+    }
+  ]
+}

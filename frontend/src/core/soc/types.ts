@@ -1085,3 +1085,61 @@ export interface SocNormalizationOperationsMetrics {
   source_system_counts: Record<string, number>;
   active_baseline_count: number;
 }
+
+export type SocOperationsAvailability =
+  | "available"
+  | "unavailable"
+  | "not_configured"
+  | "not_measured";
+
+export interface SocPersistedOperationsMetrics {
+  measurement_scope: "lifetime";
+  analysis_run_count: number;
+  analysis_run_status_counts: Record<string, number>;
+  latest_analysis_started_at?: string | null;
+  latest_analysis_completed_at?: string | null;
+  open_review_count: number;
+  oldest_open_review_created_at?: string | null;
+  pending_approval_request_count: number;
+  oldest_pending_approval_created_at?: string | null;
+  open_normalization_issue_count: number;
+  critical_open_normalization_issue_count: number;
+  active_normalization_baseline_count: number;
+  pending_memory_candidate_count: number;
+}
+
+export interface SocOperationsPersistedSnapshot {
+  availability: SocOperationsAvailability;
+  backend?: string | null;
+  metrics?: SocPersistedOperationsMetrics | null;
+  error_code?: string | null;
+}
+
+export interface SocOperationsKafkaSnapshot {
+  availability: SocOperationsAvailability;
+  enabled: boolean;
+  settings_valid: boolean;
+  checked: boolean;
+  reachable?: boolean | null;
+  bootstrap_server_count: number;
+  alert_topic_count: number;
+  approval_request_topic_count: number;
+  dead_letter_configured: boolean;
+  consumer_lag_availability: "not_measured";
+  error_code?: string | null;
+}
+
+export interface SocOperationsMeasurementGap {
+  metric: string;
+  availability: "not_measured";
+  reason: string;
+}
+
+export interface SocOperationsSnapshot {
+  schema_version: "soc.operations_snapshot.v1";
+  generated_at: string;
+  persisted: SocOperationsPersistedSnapshot;
+  kafka: SocOperationsKafkaSnapshot;
+  measurement_gaps: SocOperationsMeasurementGap[];
+  production_slo_evidence_available: false;
+}

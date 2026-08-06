@@ -164,4 +164,76 @@ test.describe("SOC review workbench", () => {
     });
     expect(request?.idempotencyKey).toBeTruthy();
   });
+
+  test("renders the passive operations snapshot without inventing health", async ({
+    page,
+  }, testInfo) => {
+    mockLangGraphAPI(page, { threads: [] });
+    const state = mockSocAPI(page);
+
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto("/workspace/soc/operations");
+
+    await expect(
+      page.getByRole("heading", { name: "SOC 运营观察" }),
+    ).toBeVisible();
+    await expect(page.getByTestId("operations-data-nature")).toContainText(
+      "SQLite 本地或仿真证据",
+    );
+    await expect(page.getByText("Analysis runs / 分析运行")).toBeVisible();
+    await expect(page.getByText("18", { exact: true })).toBeVisible();
+    await expect(page.getByText("kafka.consumer_lag")).toBeVisible();
+    await expect(
+      page.getByText("缺少测量不等于健康，也不等于故障。"),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Production SLO evidence: not available"),
+    ).toBeVisible();
+
+    expect(
+      state.requests.filter(
+        (request) => request.path === "/api/soc/operations/snapshot",
+      ),
+    ).toEqual([expect.objectContaining({ method: "GET", body: null })]);
+
+    const horizontalOverflow = async () =>
+      page.evaluate(() => {
+        const main = document.querySelector(
+          '[data-testid="soc-operations-scroll"]',
+        );
+        return {
+          document: document.documentElement.scrollWidth > window.innerWidth,
+          main: main ? main.scrollWidth > main.clientWidth : true,
+        };
+      });
+
+    await expect(horizontalOverflow()).resolves.toEqual({
+      document: false,
+      main: false,
+    });
+    await page.screenshot({
+      path: testInfo.outputPath("soc-operations-desktop.png"),
+      fullPage: true,
+    });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(
+      page.getByRole("heading", { name: "SOC 运营观察" }),
+    ).toBeVisible();
+    await expect(horizontalOverflow()).resolves.toEqual({
+      document: false,
+      main: false,
+    });
+    await page.screenshot({
+      path: testInfo.outputPath("soc-operations-mobile-top.png"),
+      fullPage: false,
+    });
+    await page.getByTestId("soc-operations-scroll").evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await page.screenshot({
+      path: testInfo.outputPath("soc-operations-mobile-bottom.png"),
+      fullPage: false,
+    });
+  });
 });

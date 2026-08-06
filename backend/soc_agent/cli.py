@@ -56,6 +56,12 @@ from soc_agent.contracts import (
     ReviewQueueCloseCommand,
     ReviewQueueStatus,
     ServiceRequestContext,
+    SkillFeedbackObservationCreateCommand,
+    SkillImprovementAggregationPolicy,
+    SkillImprovementCandidate,
+    SkillImprovementCandidateStatus,
+    SkillImprovementReviewCommand,
+    SkillImprovementReviewDecision,
     SocAgentActionCommand,
     SocDispositionEvaluationGatePolicy,
     SocDispositionEvaluationScope,
@@ -68,6 +74,7 @@ from soc_agent.contracts import (
     SocEnrichmentExecutionStatus,
     SocEnrichmentReplayCommand,
     SocEnrichmentWorkflowResult,
+    SocEvaluationDataClass,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateStatus,
@@ -78,6 +85,7 @@ from soc_agent.contracts import (
     SocMemoryRetrievalResult,
     SocOperationalDisposition,
     SocOperationsAvailability,
+    SocRolloutRehearsalRequest,
     Verdict,
 )
 from soc_agent.core import (
@@ -97,8 +105,11 @@ from soc_agent.core import (
     SocNormalizationMaintenanceService,
     SocNormalizationService,
     SocReviewService,
+    SocRolloutRehearsalService,
     SocServiceError,
+    SocSkillImprovementService,
     SocSkillResolutionService,
+    load_soc_rollout_rehearsal_report,
 )
 from soc_agent.daemon import (
     JsonLineKafkaDaemonMetricSink,
@@ -129,23 +140,27 @@ from soc_agent.demo import (
 from soc_agent.eval import (
     DEFAULT_CORRELATION_EVAL_FIXTURE,
     DEFAULT_PINGAN_CAPABILITY_EVAL_DIR,
+    build_confidence_label_corpus_manifest,
     build_confidence_label_set,
-    calibrate_confidence,
-    calibration_samples_from_label_set,
+    build_soc_quality_evaluation_report,
     load_analysis_runs_for_labeling,
+    load_confidence_label_corpus_manifest,
     load_confidence_label_set,
     load_correlation_eval_fixture,
     load_correlation_eval_report,
     load_eval_responses_jsonl,
     load_pingan_capability_eval_fixtures,
     load_scenario_eval_report,
+    load_soc_quality_evaluation_report,
     run_correlation_eval,
+    run_manifest_bound_confidence_calibration,
     run_offline_eval,
     run_pingan_capability_eval,
     run_pingan_domain_triage_eval,
     run_pingan_main_orchestrator_eval,
     run_scenario_eval,
     validate_confidence_label_set,
+    verify_confidence_label_corpus_manifest,
 )
 from soc_agent.lead_agent import build_soc_lead_agent_profile
 from soc_agent.lead_agent_chat import SocLeadAgentChatService
@@ -161,6 +176,8 @@ from soc_agent.normalizers import (
     run_live_normalization_suggestion,
 )
 from soc_agent.operations import build_soc_operations_service
+
+DEFAULT_ROLLOUT_REHEARSAL_FIXTURE = Path(__file__).resolve().parents[1] / "samples" / "rollout" / "pi05a_vendor_neutral_simulation.json"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -227,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
         return _llm_status(args)
     if args.command == "ops" and args.ops_command == "snapshot":
         return _ops_snapshot(args)
+    if args.command == "rollout" and args.rollout_command == "rehearse":
+        return _rollout_rehearse(args)
     if args.command == "daemon" and args.daemon_command == "process":
         return _daemon_process(args)
     if args.command == "daemon" and args.daemon_command == "consume":
@@ -251,8 +270,14 @@ def main(argv: list[str] | None = None) -> int:
         return _eval_labels_prepare(args)
     if args.command == "eval" and args.eval_command == "labels" and args.eval_labels_command == "validate":
         return _eval_labels_validate(args)
+    if args.command == "eval" and args.eval_command == "labels" and args.eval_labels_command == "seal":
+        return _eval_labels_seal(args)
+    if args.command == "eval" and args.eval_command == "labels" and args.eval_labels_command == "verify":
+        return _eval_labels_verify(args)
     if args.command == "eval" and args.eval_command == "confidence":
         return _eval_confidence(args)
+    if args.command == "eval" and args.eval_command == "quality":
+        return _eval_quality(args)
     if args.command == "demo" and args.demo_command == "run":
         return _demo_run(args)
     if args.command == "demo" and args.demo_command == "alert":
@@ -273,6 +298,16 @@ def main(argv: list[str] | None = None) -> int:
         return _memory_records_get(args)
     if args.command == "memory" and args.memory_command == "records" and args.memory_records_command == "retrieval":
         return _memory_records_retrieval(args)
+    if args.command == "skill-improvement" and args.skill_improvement_command == "ingest":
+        return _skill_improvement_ingest(args)
+    if args.command == "skill-improvement" and args.skill_improvement_command == "list":
+        return _skill_improvement_list(args)
+    if args.command == "skill-improvement" and args.skill_improvement_command == "get":
+        return _skill_improvement_get(args)
+    if args.command == "skill-improvement" and args.skill_improvement_command == "review":
+        return _skill_improvement_review(args)
+    if args.command == "skill-improvement" and args.skill_improvement_command == "replay":
+        return _skill_improvement_replay(args)
     if args.command == "disposition" and args.disposition_command == "propose":
         return _disposition_propose(args)
     if args.command == "disposition" and args.disposition_command == "list":
@@ -618,6 +653,25 @@ def _build_parser() -> argparse.ArgumentParser:
     ops_snapshot.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(ops_snapshot)
 
+    rollout = subparsers.add_parser("rollout", help="Governed SOC rollout rehearsal helpers")
+    rollout_subparsers = rollout.add_subparsers(dest="rollout_command")
+    rollout_rehearse = rollout_subparsers.add_parser(
+        "rehearse",
+        help="Run a side-effect-free Shadow-to-Controlled-Rollout simulation",
+    )
+    rollout_rehearse.add_argument(
+        "path",
+        nargs="?",
+        default=str(DEFAULT_ROLLOUT_REHEARSAL_FIXTURE),
+        help="Versioned rollout rehearsal request JSON",
+    )
+    rollout_rehearse.add_argument(
+        "--baseline-json",
+        help="Prior rehearsal report used for stable semantic replay diff",
+    )
+    rollout_rehearse.add_argument("--output", help="Optional report JSON output path")
+    rollout_rehearse.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+
     daemon = subparsers.add_parser("daemon", help="SOC daemon helpers")
     daemon_subparsers = daemon.add_subparsers(dest="daemon_command")
     daemon_process = daemon_subparsers.add_parser("process", help="Process one decoded SOC daemon message JSON")
@@ -747,16 +801,73 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     eval_labels_validate.add_argument("path", help="Confidence label-set JSON path")
     eval_labels_validate.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    eval_labels_seal = eval_labels_subparsers.add_parser(
+        "seal",
+        help="Seal one exact label set into an immutable provenance manifest",
+    )
+    eval_labels_seal.add_argument("path", help="Confidence label-set JSON path")
+    eval_labels_seal.add_argument("--corpus-version", required=True)
+    eval_labels_seal.add_argument("--tenant-id", required=True)
+    eval_labels_seal.add_argument("--environment", required=True)
+    eval_labels_seal.add_argument(
+        "--data-class",
+        required=True,
+        choices=[item.value for item in SocEvaluationDataClass],
+    )
+    eval_labels_seal.add_argument("--created-by", required=True)
+    eval_labels_seal.add_argument("--rationale", required=True)
+    eval_labels_seal.add_argument(
+        "--source-ref",
+        action="append",
+        required=True,
+        help="Stable non-secret provenance reference; repeat for multiple sources",
+    )
+    eval_labels_seal.add_argument(
+        "--supersedes-manifest",
+        help="Prior corpus manifest JSON when this version explicitly supersedes it",
+    )
+    eval_labels_seal.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    eval_labels_verify = eval_labels_subparsers.add_parser(
+        "verify",
+        help="Verify a corpus manifest against the exact label-set payload",
+    )
+    eval_labels_verify.add_argument("manifest", help="Confidence corpus manifest JSON path")
+    eval_labels_verify.add_argument("label_set", help="Confidence label-set JSON path")
+    eval_labels_verify.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     eval_confidence = eval_subparsers.add_parser(
         "confidence",
-        help="Calibrate analysis confidence from one governed, fully reviewed label set",
+        help="Calibrate analysis confidence from one sealed, fully reviewed corpus",
     )
     eval_confidence.add_argument("path", help="Reviewed confidence label-set JSON path")
+    eval_confidence.add_argument(
+        "--corpus-manifest",
+        required=True,
+        help="Verified corpus manifest bound to the exact label set",
+    )
     eval_confidence.add_argument("--bins", type=int, default=10, help="Number of confidence bins")
     eval_confidence.add_argument("--target-accuracy", type=float, default=0.9)
     eval_confidence.add_argument("--minimum-samples", type=int, default=30)
     eval_confidence.add_argument("--minimum-threshold-samples", type=int, default=10)
     eval_confidence.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    eval_quality = eval_subparsers.add_parser(
+        "quality",
+        help="Run the composed PI-03B offline quality flow with explicit corpus provenance",
+    )
+    eval_quality.add_argument("path", help="Path to an alert JSON file or directory")
+    eval_quality.add_argument("--glob", default="*.json", help="Glob used when PATH is a directory")
+    eval_quality.add_argument("--label-set", required=True, help="Reviewed confidence label-set JSON path")
+    eval_quality.add_argument("--corpus-manifest", required=True, help="Manifest bound to the label set")
+    eval_quality.add_argument(
+        "--correlation-fixture",
+        default=str(DEFAULT_CORRELATION_EVAL_FIXTURE),
+        help="Versioned correlation fixture JSON",
+    )
+    eval_quality.add_argument("--baseline-json", help="Prior quality report for stable replay diff")
+    eval_quality.add_argument("--bins", type=int, default=10, help="Number of confidence bins")
+    eval_quality.add_argument("--target-accuracy", type=float, default=0.9)
+    eval_quality.add_argument("--minimum-samples", type=int, default=30)
+    eval_quality.add_argument("--minimum-threshold-samples", type=int, default=10)
+    eval_quality.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
     demo = subparsers.add_parser("demo", help="SOC persistent demo helpers")
     demo_subparsers = demo.add_subparsers(dest="demo_command")
@@ -921,6 +1032,107 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_records_retrieval.add_argument("--actor-id", default="soc-memory-cli", help="Memory governor actor id")
     memory_records_retrieval.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(memory_records_retrieval)
+
+    skill_improvement = subparsers.add_parser(
+        "skill-improvement",
+        help="Governed feedback-derived Skill improvement backlog",
+    )
+    skill_improvement_subparsers = skill_improvement.add_subparsers(dest="skill_improvement_command")
+    skill_improvement_ingest = skill_improvement_subparsers.add_parser(
+        "ingest",
+        help="Ingest typed feedback observations and aggregate pending candidates",
+    )
+    skill_improvement_ingest.add_argument(
+        "path",
+        help="JSON command, command list, or object containing observations",
+    )
+    skill_improvement_ingest.add_argument(
+        "--threshold",
+        type=int,
+        default=3,
+        help="Minimum distinct typed sources required to create a candidate",
+    )
+    skill_improvement_ingest.add_argument(
+        "--init-db",
+        action="store_true",
+        help="Create SOC tables before explicit local simulation",
+    )
+    skill_improvement_ingest.add_argument(
+        "--actor-id",
+        default="soc-skill-feedback-cli",
+        help="Authenticated engineer actor id",
+    )
+    skill_improvement_ingest.add_argument(
+        "--pretty",
+        action="store_true",
+        help="Pretty-print output JSON",
+    )
+    skill_improvement_ingest.add_argument(
+        "--output",
+        help="Optional path for the complete ingest report JSON",
+    )
+    _add_database_args(skill_improvement_ingest)
+    skill_improvement_list = skill_improvement_subparsers.add_parser(
+        "list",
+        help="List Skill improvement candidates",
+    )
+    skill_improvement_list.add_argument(
+        "--status",
+        choices=["all", *[item.value for item in SkillImprovementCandidateStatus]],
+        default=SkillImprovementCandidateStatus.PENDING_REVIEW.value,
+    )
+    skill_improvement_list.add_argument("--tenant-id")
+    skill_improvement_list.add_argument(
+        "--data-class",
+        choices=["all", *[item.value for item in SocEvaluationDataClass]],
+        default="all",
+    )
+    skill_improvement_list.add_argument("--skill-name")
+    skill_improvement_list.add_argument("--limit", type=int, default=100)
+    skill_improvement_list.add_argument("--pretty", action="store_true")
+    _add_database_args(skill_improvement_list)
+    skill_improvement_get = skill_improvement_subparsers.add_parser(
+        "get",
+        help="Get one Skill improvement candidate",
+    )
+    skill_improvement_get.add_argument("candidate_id")
+    skill_improvement_get.add_argument("--pretty", action="store_true")
+    _add_database_args(skill_improvement_get)
+    skill_improvement_review = skill_improvement_subparsers.add_parser(
+        "review",
+        help="Approve for change, reject, supersede, or expire a candidate",
+    )
+    skill_improvement_review.add_argument("candidate_id")
+    skill_improvement_review.add_argument(
+        "--decision",
+        required=True,
+        choices=[item.value for item in SkillImprovementReviewDecision],
+    )
+    skill_improvement_review.add_argument("--reason", required=True)
+    skill_improvement_review.add_argument("--expected-version", type=int, required=True)
+    skill_improvement_review.add_argument("--superseded-by-candidate-id")
+    skill_improvement_review.add_argument("--idempotency-key", required=True)
+    skill_improvement_review.add_argument(
+        "--actor-id",
+        default="soc-skill-reviewer-cli",
+    )
+    skill_improvement_review.add_argument("--pretty", action="store_true")
+    _add_database_args(skill_improvement_review)
+    skill_improvement_replay = skill_improvement_subparsers.add_parser(
+        "replay",
+        help="Recompute candidate aggregation and show source/replay-set drift",
+    )
+    skill_improvement_replay.add_argument("candidate_id")
+    skill_improvement_replay.add_argument(
+        "--baseline-json",
+        help="Optional prior SkillImprovementCandidate JSON",
+    )
+    skill_improvement_replay.add_argument(
+        "--output",
+        help="Optional path for the replay report JSON",
+    )
+    skill_improvement_replay.add_argument("--pretty", action="store_true")
+    _add_database_args(skill_improvement_replay)
 
     disposition = subparsers.add_parser("disposition", help="Shadow operational disposition proposals")
     disposition_subparsers = disposition.add_subparsers(dest="disposition_command")
@@ -1509,7 +1721,15 @@ def _normalize_suggest(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001 - CLI boundary reports provider failures
         print(f"error: normalization suggestion model call failed: {exc}", file=sys.stderr)
         return 1
-    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    rendered = report.model_dump_json(
+        indent=2 if args.pretty else None,
+        exclude_none=True,
+    )
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(f"{rendered}\n", encoding="utf-8")
+    print(rendered)
     return 0
 
 
@@ -1939,6 +2159,177 @@ def _load_memory_retrieval_result(path: str) -> SocMemoryRetrievalResult:
     except OSError as exc:
         raise ValueError(f"cannot read memory retrieval baseline: {exc}") from exc
     return SocMemoryRetrievalResult.model_validate(payload)
+
+
+def _skill_improvement_ingest(args: argparse.Namespace) -> int:
+    try:
+        if args.init_db:
+            create_soc_tables(_engine_from_args(args))
+        repository = _repository_from_args(args)
+        service = SocSkillImprovementService(repository=repository)
+        policy = SkillImprovementAggregationPolicy(
+            minimum_distinct_sources=args.threshold,
+        )
+        commands = _load_skill_feedback_commands(args.path)
+        results = [
+            service.ingest_feedback(
+                command,
+                context=_cli_context(args.actor_id, roles=["soc_engineer"]),
+                policy=policy,
+            )
+            for command in commands
+        ]
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: Skill improvement database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    candidate_ids = sorted({result.candidate.candidate_id for result in results if result.candidate is not None})
+    output = {
+        "schema_version": "soc.skill_improvement_ingest_report.v1",
+        "input_count": len(commands),
+        "simulation_count": sum(command.data_class is SocEvaluationDataClass.SIMULATION for command in commands),
+        "real_feedback_count": sum(command.data_class is SocEvaluationDataClass.DESENSITIZED_REAL for command in commands),
+        "candidate_ids": candidate_ids,
+        "candidate_count": len(candidate_ids),
+        "mocked": all(command.data_class is SocEvaluationDataClass.SIMULATION for command in commands),
+        "skill_mutation_allowed": False,
+        "skill_activation_allowed": False,
+        "real_quality_claim_allowed": False,
+        "results": [result.model_dump(mode="json", exclude_none=True) for result in results],
+    }
+    rendered = json.dumps(
+        output,
+        ensure_ascii=False,
+        indent=2 if args.pretty else None,
+    )
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(f"{rendered}\n", encoding="utf-8")
+    print(rendered)
+    return 0
+
+
+def _skill_improvement_list(args: argparse.Namespace) -> int:
+    try:
+        candidates = SocSkillImprovementService(repository=_repository_from_args(args)).list_candidates(
+            status=(None if args.status == "all" else SkillImprovementCandidateStatus(args.status)),
+            tenant_id=args.tenant_id,
+            data_class=(None if args.data_class == "all" else SocEvaluationDataClass(args.data_class)),
+            skill_name=args.skill_name,
+            limit=args.limit,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: Skill improvement database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(
+        json.dumps(
+            [item.model_dump(mode="json", exclude_none=True) for item in candidates],
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+        )
+    )
+    return 0
+
+
+def _skill_improvement_get(args: argparse.Namespace) -> int:
+    try:
+        candidate = SocSkillImprovementService(repository=_repository_from_args(args)).get_candidate(args.candidate_id)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: Skill improvement database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(candidate.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _skill_improvement_review(args: argparse.Namespace) -> int:
+    try:
+        command = SkillImprovementReviewCommand(
+            candidate_id=args.candidate_id,
+            decision=SkillImprovementReviewDecision(args.decision),
+            reason=args.reason,
+            expected_version=args.expected_version,
+            superseded_by_candidate_id=args.superseded_by_candidate_id,
+        )
+        context = _cli_context(
+            args.actor_id,
+            roles=["soc_skill_reviewer"],
+        ).model_copy(update={"idempotency_key": args.idempotency_key})
+        result = SocSkillImprovementService(repository=_repository_from_args(args)).review_candidate(command, context=context)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: Skill improvement database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _skill_improvement_replay(args: argparse.Namespace) -> int:
+    try:
+        baseline = _load_skill_improvement_candidate(args.baseline_json) if args.baseline_json else None
+        report = SocSkillImprovementService(repository=_repository_from_args(args)).replay_candidate(args.candidate_id, baseline=baseline)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SQLAlchemyError as exc:
+        print(f"error: Skill improvement database access failed: {exc}", file=sys.stderr)
+        return 1
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _load_skill_feedback_commands(
+    path: str,
+) -> list[SkillFeedbackObservationCreateCommand]:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid Skill feedback JSON: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"cannot read Skill feedback JSON: {exc}") from exc
+    if isinstance(payload, dict) and "observations" in payload:
+        payload = payload["observations"]
+    if isinstance(payload, dict):
+        payload = [payload]
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("Skill feedback JSON must contain one or more observations")
+    return [SkillFeedbackObservationCreateCommand.model_validate(item) for item in payload]
+
+
+def _load_skill_improvement_candidate(path: str) -> SkillImprovementCandidate:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid Skill improvement candidate JSON: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"cannot read Skill improvement candidate JSON: {exc}") from exc
+    return SkillImprovementCandidate.model_validate(payload)
 
 
 def _context_fact_propose(args: argparse.Namespace) -> int:
@@ -2938,6 +3329,32 @@ def _ops_snapshot(args: argparse.Namespace) -> int:
     return 0
 
 
+def _rollout_rehearse(args: argparse.Namespace) -> int:
+    try:
+        request = SocRolloutRehearsalRequest.model_validate(
+            _load_object_input(
+                args.path,
+                None,
+                payload_label="rollout rehearsal request",
+            )
+        )
+        baseline = load_soc_rollout_rehearsal_report(args.baseline_json) if args.baseline_json else None
+        report = SocRolloutRehearsalService().rehearse(request, baseline=baseline)
+        rendered = report.model_dump_json(
+            indent=2 if args.pretty else None,
+            exclude_none=True,
+        )
+        _write_report(args.output, rendered)
+    except ValueError as exc:
+        print(f"error: rollout rehearsal failed: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"error: cannot write rollout rehearsal report: {exc}", file=sys.stderr)
+        return 1
+    print(rendered)
+    return 0 if report.engineering_rehearsal_passed else 1
+
+
 def _daemon_service_from_args(args: argparse.Namespace) -> SocDaemonService:
     repository = _repository_from_args(args)
     analysis_service = _analysis_service_for_repository(
@@ -3116,20 +3533,61 @@ def _eval_scenarios(args: argparse.Namespace) -> int:
 def _eval_confidence(args: argparse.Namespace) -> int:
     try:
         label_set = load_confidence_label_set(args.path)
-        samples = calibration_samples_from_label_set(label_set)
-        report = calibrate_confidence(
-            samples,
+        manifest = load_confidence_label_corpus_manifest(args.corpus_manifest)
+        report = run_manifest_bound_confidence_calibration(
+            manifest,
+            label_set,
             bin_count=args.bins,
             target_accuracy=args.target_accuracy,
             minimum_samples=args.minimum_samples,
             minimum_threshold_samples=args.minimum_threshold_samples,
-            label_set_id=label_set.label_set_id,
         )
     except ValueError as exc:
         print(f"error: confidence calibration failed: {exc}", file=sys.stderr)
         return 2
     print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
+
+
+def _eval_quality(args: argparse.Namespace) -> int:
+    try:
+        samples = _load_payload_samples(args.path, args.glob)
+        label_set = load_confidence_label_set(args.label_set)
+        manifest = load_confidence_label_corpus_manifest(args.corpus_manifest)
+        baseline = load_soc_quality_evaluation_report(args.baseline_json) if args.baseline_json else None
+        confidence = run_manifest_bound_confidence_calibration(
+            manifest,
+            label_set,
+            bin_count=args.bins,
+            target_accuracy=args.target_accuracy,
+            minimum_samples=args.minimum_samples,
+            minimum_threshold_samples=args.minimum_threshold_samples,
+        )
+        offline = run_offline_eval(samples, model_name="stub-replay")
+        scenarios = run_scenario_eval(
+            samples,
+            baseline=baseline.scenario_evaluation if baseline is not None else None,
+        )
+        correlation = run_correlation_eval(
+            load_correlation_eval_fixture(args.correlation_fixture),
+            baseline=baseline.correlation_evaluation if baseline is not None else None,
+        )
+        report = build_soc_quality_evaluation_report(
+            corpus_manifest_id=manifest.manifest_id,
+            offline_runtime=offline,
+            scenario_evaluation=scenarios,
+            correlation_evaluation=correlation,
+            confidence_calibration=confidence,
+            baseline=baseline,
+        )
+    except ValueError as exc:
+        print(f"error: quality evaluation failed: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: preserve an actionable failure
+        print(f"error: quality evaluation failed: {exc}", file=sys.stderr)
+        return 1
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if report.engineering_flow_passed else 1
 
 
 def _eval_labels_prepare(args: argparse.Namespace) -> int:
@@ -3152,6 +3610,40 @@ def _eval_labels_validate(args: argparse.Namespace) -> int:
         return 2
     print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0 if report.calibratable else 1
+
+
+def _eval_labels_seal(args: argparse.Namespace) -> int:
+    try:
+        label_set = load_confidence_label_set(args.path)
+        supersedes = load_confidence_label_corpus_manifest(args.supersedes_manifest) if args.supersedes_manifest else None
+        manifest = build_confidence_label_corpus_manifest(
+            label_set,
+            corpus_version=args.corpus_version,
+            tenant_id=args.tenant_id,
+            environment=args.environment,
+            data_class=SocEvaluationDataClass(args.data_class),
+            created_by=args.created_by,
+            rationale=args.rationale,
+            source_refs=args.source_ref,
+            supersedes=supersedes,
+        )
+    except ValueError as exc:
+        print(f"error: confidence corpus seal failed: {exc}", file=sys.stderr)
+        return 2
+    print(manifest.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _eval_labels_verify(args: argparse.Namespace) -> int:
+    try:
+        manifest = load_confidence_label_corpus_manifest(args.manifest)
+        label_set = load_confidence_label_set(args.label_set)
+        report = verify_confidence_label_corpus_manifest(manifest, label_set)
+    except ValueError as exc:
+        print(f"error: confidence corpus verification failed: {exc}", file=sys.stderr)
+        return 2
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0 if report.integrity_passed else 1
 
 
 def _demo_alert(args: argparse.Namespace) -> int:

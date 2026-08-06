@@ -23,12 +23,12 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-04-A` 已完成） |
-| 当前目标 | `PI-01E` 外网 50-row paired simulation 已通过；下一档仅为内网 `internal_real` 5-row gate，且 D12-B、TI、security-tag 仍分别需要真实 Provider 验收 |
+| 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-05A` 已完成） |
+| 当前目标 | 产品完成轨进入 `PI-05B` Simulation Completion Gate；PingAn DEV 依赖均使用显式 mock，真实 Provider/telemetry/feedback classifier/部署审批作为独立接入债务保留 |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
-| 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 PingAn 内网 DEV 统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
+| 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | 将最新迁移包带入批准的平安 DEV，加载 `.env.soc-dev.local`，先运行 `run_pingan_internal_shadow.py` 默认静态计划，再以同 source/root 加 `--execute --confirm-live --confirm-investigation` 完成 `internal_real` 5 条；外网不再扩充 Mock。 |
+| 当前下一刀 | `PI-05B`：只读汇总 PI-01E、PI-03、PI-04 和 PI-05A 的仿真证据，生成 fail-closed completion report；只能声明仿真产品轨完整，固定 `pilot_ready=false`。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -40,7 +40,101 @@
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
-| `PI` | Real Data & Production Integration | **Current / PI-01E Internal Real 5** | D1-D4 与 50-row external simulation 已完成；D12-B、TI、security-tag 保留各自内网 gate，B2/C data-gated | Pilot readiness review 通过 |
+| `PI` | Real Data & Production Integration | **Current / Simulation Completion Track** | PI-01 仿真、PI-03A/B/C、PI-04A/B 与 PI-05A 已完成，真实接入债务开放；当前推进 PI-05B completion gate | Pilot readiness review 通过；仿真不得关闭真实 gate |
+
+## 2026-08-05 — PI-05A governed rollout simulation rehearsal completed
+
+- 新增 vendor-neutral `soc.rollout_plan.v1` 与 `soc.rollout_rehearsal_report.v1`。V1 强制包含独立的
+  product/risk、SOC operations、security、platform/SRE、response-system 五类负责人，七个不可由仿真
+  关闭的真实门禁，以及 `pause ingress -> disable cohort -> preserve evidence -> route inflight to human ->
+  notify owners -> verify no external mutation` 六步有序回滚。
+- `SocRolloutRehearsalService` 是纯内存只读演练，不是部署控制器；CLI 新增 `soc rollout rehearse`，默认
+  使用 `backend/samples/rollout/pi05a_vendor_neutral_simulation.json`，支持 report 输出和 semantic baseline
+  diff。任何缺 owner/gate/rollback step、削弱 gate stage 或用 simulation 标记 real gate passed 的输入都被
+  schema 拒绝。
+- 当前 ignored 报告位于
+  `backend/.deer-flow/soc-internal-validation/pi-05a-simulation/`：16 个步骤完成，虚拟 stage transition 4 次，
+  rollback passed；真实 stage transition=0、external effect=0、auto-close/external mutation/high-risk action/
+  production approval 全部 false。Shadow、Limited Pilot、Controlled Rollout 分别仍有 4/6/7 个真实 gate
+  阻塞。
+- 同一输入二次运行保持 `SRR-69CDFFB1F4B5`，`diff.changed=false`。聚焦 contract/service/CLI/safety
+  回归 `7 passed`；完整 SOC/architecture/internal-batch 回归 `799 passed`，SOC Python Ruff、
+  `git diff --check` 通过。CodeGraph 增量同步 2 个文件/41 个节点，查询
+  `SocRolloutRehearsalService` 可定位新边界。该结果只证明 rollout control flow 可复跑，不证明 feature
+  flag、deployed daemon、真实 owner、Provider、SLO 或 Pilot readiness。
+- 当前产品指针进入 `PI-05B`：聚合 PI-01/03/04/05 仿真证据形成 completion gate；真实上线控制保留为
+  `PI-05C Real Integration Debt`，不实现与真实 cohort enforcement 脱节的假状态机。
+
+## 2026-08-05 — PI-04B thin Operations Web completed with local simulation evidence
+
+- 新增 `/workspace/soc/operations`，严格经 `core/soc` typed API 与 TanStack Query 每 30 秒只读消费
+  `GET /api/soc/operations/snapshot`；页面不查询业务表、不主动探测 broker、不在 React 计算 aggregate 或
+  overall health。
+- 页面展示 lifetime run/review/approval/normalization/memory 精确计数、持久化 backend、Kafka
+  configuration/readiness observation，以及 `kafka.consumer_lag`、`model.compute_utilization`、
+  `production.slo_compliance` 三项明确 `not_measured` 缺口。SQLite 被标注为 local/test evidence，生产 SLO
+  evidence 固定显示 unavailable。
+- Workspace 导航、ReviewQueue 和 Normalization workbench 均可进入运营页；错误态、保留旧快照的刷新失败态、
+  loading、桌面和移动端布局均已覆盖。
+- 前端完整 Rstest `898 passed`；Next production build + Playwright 运营页场景通过。`1440x1000` 与
+  `390x844` 均验证 document/内部 scroll container 无横向溢出，并保存 desktop/mobile top/mobile bottom
+  截图到 Git-ignored `frontend/test-results/`。
+- Playwright HTTP 数据为 deterministic fixture，证明 React/transport contract，不证明真实 Gateway/auth、
+  Kafka lag、模型算力、Prometheus、SLO 或生产部署；这些继续登记为 Real Integration Debt。
+- 当前产品指针进入 `PI-05A` governed rollout simulation rehearsal。
+
+## 2026-08-05 — PI-03C simulated Skill improvement backlog completed
+
+- 新增 vendor-neutral `SkillFeedbackObservation` / `SkillImprovementCandidate` contract；聚合键固定绑定
+  tenant、`simulation|desensitized_real`、精确 Skill package/guidance hash、scenario、typed failure facet 和
+  `soc.skill_improvement_aggregation.v1` 完整策略。自由文本或 LLM 不能自行合并 cohort。
+- migration `0020_skill_improvement_backlog` 增加 immutable feedback 与 versioned candidate 两张 SOC 表；
+  `SocSkillImprovementService` 实现 distinct-source threshold、幂等、乐观锁、人工
+  `approve_for_change|reject|supersede|expire`、冻结、mutation audit 和 aggregation replay。
+- 所有 observation/candidate 固定 `skill_mutation_allowed=false`、`skill_activation_allowed=false`、
+  `memory_write_allowed=false`、`runtime_decision_allowed=false`、`real_quality_claim_allowed=false`；批准只表示
+  可以进入人工 Skill 修改与评测流程，不修改 `skills/public`。
+- CLI 新增 `soc skill-improvement ingest|list|get|review|replay`。4 条明确
+  `simulation_fixture` 的输入在第 3 条创建候选、第 4 条更新到 version 2；ignored SQLite/report 位于
+  `backend/.deer-flow/soc-internal-validation/pi-03c-simulation/`，replay `changed=false`、
+  `source_integrity_passed=true`。
+- 聚焦 contract/service/SQL/CLI/migration 回归 `9 passed`。真实 analyst correction / external disposition
+  reason 仍须由 server-owned classifier 生成目标 Skill/scenario/failure facet；原始 free-text 不自动进入本
+  backlog，该接线保留为 Real Integration Debt。
+- 当前产品指针进入 `PI-04B`；`PI-03D/E` 仍按数据门槛 Deferred，不插入薄 Web 切片。
+
+## 2026-08-05 — PI-03B composed simulation quality gate completed
+
+- 新增 manifest-bound calibration execution：`soc eval confidence` 现在必须提供 exact corpus
+  manifest；integrity、review completion 和 calibration readiness 分开校验。label 增加
+  `human_review|simulation_fixture` 来源，真实 corpus 明确拒绝 synthetic label。
+- `soc eval quality` 复用现有 `offline`、`scenarios`、`correlation`、`confidence` 实现，生成
+  `soc.quality_evaluation_report.v1`，不复制评分算法。`offline_eval_report.v2` 同时暴露 Grounding、
+  evidence state、review reasons 和 scenario assessment 覆盖。
+- 提交的 4 条纯合成 label/manifest fixture 明确 `simulation_fixture`、`mocked=true`。本地 ignored
+  报告对 8 个 alert fixture 全量运行：8/8 parser 成功、0 failed、11 grounded/1 ungrounded、8 条均
+  review；scenario 覆盖 4 个 key、缺 3 个；correlation 8 pair，fixture 内 retrieval/dedup 合计 3 个
+  false-positive；合成 calibration accuracy=0.5、Brier=0.230625，只用于验证计算路径。
+- 四个组件 engineering status 均 passed，但 `real_quality_claim_allowed=false`、
+  `profile_publish_allowed=false`、`rollout_allowed=false`、`automation_allowed=false`。同输入第二次运行
+  evaluation ID 一致，semantic replay diff 为 `changed=false`。聚焦回归 `36 passed`。
+- 当前指针进入 `PI-03C`；以上统计不代表 DeepSeek 或生产 SOC 准确率。
+
+## 2026-08-05 — PI-03A simulation label corpus completed
+
+- 产品负责人确认：凡依赖 PingAn DEV 的流程先以显式 mock/fixture 走完，所有真实接入门槛登记为
+  `Real Integration Debt`，不再阻塞 PI-03..05 产品流程；mock 仍必须保留 `mocked=true`，不能冒充
+  `mocked=false` 或真实质量证据。
+- 新增 `soc.confidence_label_corpus_manifest.v1` 与
+  `soc.confidence_label_corpus_verification.v1`，封存 label-set hash、样本 identity、tenant/environment、
+  data class、reviewer/status 汇总、来源、理由和 supersession lineage。`simulation` 与
+  `desensitized_real` 使用独立版本链，manifest 永远不能直接授权真实质量声明。
+- CLI 新增 `soc eval labels seal` 与 `soc eval labels verify`。在 Git-ignored
+  `backend/.deer-flow/soc-internal-validation/pi-03a-simulation/` 中，5 条现有 live-LLM Runtime
+  产物已完成 `prepare -> seal -> verify`：integrity passed；5 条仍为 `pending_review`；
+  `mocked=true`、`calibration_input_eligible=false`、`real_quality_claim_allowed=false`。
+- 聚焦回归为 `9 passed`。当前产品指针转到 `PI-03B` 仿真质量评测；D12-B、PI-01A/B1、PI-01E
+  internal-real 以及真实 Kafka/PostgreSQL/K8s 继续保留为独立债务。
 
 ## 2026-08-05 — PI-01E internal-real one-command orchestration prepared
 

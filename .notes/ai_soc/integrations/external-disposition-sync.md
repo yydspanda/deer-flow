@@ -164,7 +164,7 @@ external_disposition:{tenant_id|default}:{external_system}:{external_case_id}:{s
 
 ### 9.1 PI-03C Skill improvement candidate / Skill 改进候选
 
-这一项没有遗漏，但在真实反馈形成重复 cohort 前保持 Deferred。第一版实现边界：
+通用治理链已经在外网以 simulation 完成；真实 source classification 仍保持 data-gated。当前实现边界：
 
 - `SkillImprovementCandidate` 必须记录 tenant、目标 Skill/package version、scenario/failure facet、聚合
   policy version、source disposition/correction refs、代表样本、建议修改和 replay set refs。
@@ -176,8 +176,21 @@ external_disposition:{tenant_id|default}:{external_system}:{external_case_id}:{s
 - 候选必须支持 reject、supersede、expire 和 replay；Skill 修改后用绑定样本和反例回放，防止只修一个
   租户表达而破坏通用能力。
 
-退出门槛：幂等聚合、来源追溯、人工状态机、权限/审计、Skill version linkage 和 replay diff 均有
-测试；在此之前，重复 reason 仍只作为 external disposition 与 memory candidate 输入保存。
+当前代码位于 `soc_agent.contracts.skill_improvement`、`SocSkillImprovementService`、
+`SkillImprovementRepository` 和 migration `0020_skill_improvement_backlog`；CLI 为
+`soc skill-improvement ingest|list|get|review|replay`。4 条 `simulation_fixture` 已验证第 3 个独立来源创建
+pending candidate、第 4 个来源更新版本以及稳定 aggregation replay。该结果固定 `mocked=true`，不代表真实
+analyst/external feedback。
+
+真实接线不能把 `external_reason` 直接送入文本聚类。`SocExternalDispositionService` 或 correction application
+boundary 只有在 server-owned mapping/classifier 已明确目标 Skill/package hash、scenario 和 typed failure facet
+后，才可调用 `SocSkillImprovementService.ingest_feedback()`；否则 reason 继续只保存为 external disposition、
+correction 和 pending memory candidate。该真实 classifier/source wiring 是 Real Integration Debt。
+
+仿真退出门槛已通过：幂等聚合、来源追溯、人工状态机、权限/审计、Skill version linkage 和 aggregation
+replay diff 均有测试。真实退出门槛仍要求 approved feedback contract、server-owned classifier、真实来源样本
+和 Skill 修改后的 behavior replay；在此之前，真实 reason 仍只作为 external disposition 与 memory
+candidate 输入保存。
 
 ## 10. 市场化扩展要求
 
