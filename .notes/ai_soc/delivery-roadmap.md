@@ -129,7 +129,7 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 | `PI-02` | Infrastructure / 基础设施 | **Local Simulation Done / Real Debt Parked**: SQLite、local Redpanda/Kafka、worker/DLQ/幂等已有 Alpha 证据；真实 Kafka/PostgreSQL/K8s 参数暂缺 | 当前只要求本地流程可重复；生产吞吐、ACL/TLS、恢复、连接池和 K8s gate 保持开放 |
 | `PI-03` | Labels, learning and calibration / 标签、学习与校准 | **PI-03A/B/C Simulation Done / Real Feedback Debt Open**: corpus、统一质量 replay 和反馈型 Skill backlog 均已走通；真实人工标签和 source classifier 仍开放 | 仿真可以验证治理代码，但不能生成真实准确率声明；任何 profile/Skill/parser promotion 仍需人工批准与真实标签 |
 | `PI-04` | Operations and security / 运维与安全 | **PI-04A/B Done / Real Telemetry Debt Open**: Snapshot CLI/API 与薄 Web 已完成；本地/仿真数据性质、无 overall health 和 `not_measured` 缺口显式可见 | Web 只消费冻结 snapshot；Playwright fixture 不冒充 deployed Gateway 或真实 lag/算力/Prometheus/SLO |
-| `PI-05` | Governed rollout / 受治理上线 | **PI-05A Done / PI-05B Current**: vendor-neutral plan/gate/rollback 仿真已完成；下一步汇总 PI-01/03/04/05 仿真证据形成 Simulation Completion Gate | 仿真不得开放 auto-close、真实副作用或生产批准；完成报告必须同时保留真实 scope/owner/evidence/telemetry/rollback 缺口和 `pilot_ready=false` |
+| `PI-05` | Governed rollout / 受治理上线 | **PI-05A/B Simulation Done / PI-05C Real Debt Open**: rollout rehearsal 与五组件 Simulation Completion Gate 均已完成；真实控制器不在外网伪造 | completion report 必须保持 7 个 real gate 为 open、真实 transition/effect 为 0、`pilot_ready=false`、`production_ready=false`；只有 PI-05C 的真实环境证据可推进 stage |
 
 ### 6.1 PI-01 Execution Order / 真实能力与调查主线
 
@@ -203,8 +203,11 @@ PI-03 仿真产品轨已完成 A/B/C。每个切片都先用明确的 `simulatio
 | ID | Work / 工作 | Status / 状态 | Gate / 门槛 |
 |---|---|---|---|
 | `PI-05A` | Rollout contract and rehearsal / 上线契约与演练 | **Done (simulation)**: `soc.rollout_plan.v1`、`soc.rollout_rehearsal_report.v1`、5 类 owner、7 个真实 gate、3 档虚拟推进和完整 6 步回滚已实现；CLI `soc rollout rehearse` 可稳定 replay | 报告固定 `mocked=true`、真实 transition/effect 为 0，所有 real gate 均未关闭；不能调用 Provider、broker、feature flag、Zeus 或响应动作 |
-| `PI-05B` | Simulation Completion Gate / 仿真完成门禁 | **Current**: 只读汇总 PI-01E external simulation、PI-03 quality/Skill、PI-04 operations 和 PI-05A rehearsal 的版本/hash/claim boundary | 允许声明“产品仿真轨完整可复跑”，但固定 `pilot_ready=false`、`production_ready=false`；缺失 artifact 或发现真实 gate 被仿真关闭时 fail closed |
+| `PI-05B` | Simulation Completion Gate / 仿真完成门禁 | **Done (simulation)**: `soc rollout completion` 只读汇总 PI-01E、PI-03B/C、PI-04 与 PI-05A 六个 artifact；五组件 typed check、artifact/semantic hash、稳定 replay 和 7 项 real debt 已落地 | 本地报告 `SCG-6EEDC5DC3417` 五组件 passed、replay `changed=false`；缺失/坏 artifact 或仿真越权声明 fail closed，固定 `pilot_ready=false`、`production_ready=false` |
 | `PI-05C` | Real rollout control / 真实上线控制 | **Real Integration Debt**: 在真实 telemetry、owner、feature flag/cohort enforcement 和 deployed runtime 到位后另行实施 | 不在外网用断开的假 state machine 冒充；任何真实 stage transition 必须有 fresh gate evidence、独立批准、审计和可执行回滚 |
+
+PI-05B 的可复跑命令和 artifact 生成顺序见
+`backend/samples/rollout/README.md`。该 Gate 结束产品仿真实现轨，不会自动切换到 PI-05C；只有真实环境输入到位后才恢复对应 integration debt。
 
 ### PI Gate / 生产集成门禁
 
@@ -255,7 +258,7 @@ Completed:    BG-P1-04 - Governed memory activation (AC-39)
 Completed:    BG-P1-05 - Alpha E2E and docs reconciliation (AC-23, AC-24, AC-49)
 Completed:    BG-03 - Alpha readiness package and scoped accountable approval
 Current Stage: PI - Real Data & Production Integration
-Current:      PI-05B - simulation completion gate and real-debt handoff
+Current:      Product simulation track complete; no fake PI-05C implementation
 Completed:    PI-01 Checkpoint D-0 - 212-row adapter-independent corpus inventory
 Completed:    PI-01 Checkpoint D-1 - alert 1965449 canonical normalization (parser warnings explicit)
 Completed:    PI-01 Checkpoint D-2 - alert 1965449 generic deterministic entity extraction
@@ -288,7 +291,8 @@ Completed:    PI-03C simulation Skill backlog - four typed synthetic feedback ob
 Completed:    PI-04-A - SOC Operations Snapshot contract, exact persisted counters, Kafka readiness projection, CLI/API
 Completed:    PI-04-B - thin Web consumer, explicit local/simulation evidence, not_measured gaps, desktop/mobile Playwright overflow and screenshot evidence
 Completed:    PI-05A - vendor-neutral rollout plan/gate/rollback contract, 16-step virtual rehearsal and stable replay; 0 real transitions/effects
-Next:         PI-05B - aggregate PI-01/03/04/05 simulation evidence into one fail-closed completion report while keeping pilot_ready=false
+Completed:    PI-05B - five-component fail-closed completion report SCG-6EEDC5DC3417; stable replay, seven real gates open, pilot_ready/production_ready false
+Next evidence: PI-05C only after deployed telemetry, accountable owners, cohort enforcement and executable rollback exist; do not implement a disconnected fake controller
 Real Integration Debt: D12-B asset, PI-01A TI, PI-01B1 security-tag and PI-01E internal-real shadow remain open; existing operator package is retained
 Data-gated:   PI-01B2/C source contracts, real feedback-to-typed-Skill-facet classification, and real Kafka/PostgreSQL/K8s inputs remain separately parked
 ```

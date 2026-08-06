@@ -1110,6 +1110,17 @@ Kafka daemon / consumer adapter 约束：
   - service 不得调用 Provider、Kafka、repository mutation、feature-flag service、Zeus 或 response adapter。
     相同 semantic input 必须产生稳定 ID/hash 和 replay diff；真实 rollout controller/cohort enforcement
     只能在 PI-05C 以 fresh evidence、独立 owner approval、审计和可执行回滚另行实现。
+- PI-05B simulation completion 是 `soc_agent.eval.completion` 下的离线只读聚合边界：
+  - `soc.simulation_completion_request.v1` 必须显式列出 PI-01E、PI-03B、PI-03C ingest/replay、PI-04 和
+    PI-05A artifact；路径只用于本地读取，不得进入输出报告。CLI 入口是 `soc rollout completion`。
+  - 输出 `soc.simulation_completion_report.v1` 必须恰有五个 component，保存 artifact schema/id/SHA-256、
+    stable semantic hash、逐项 check 与限制；缺失、坏 JSON/typed contract 或仿真越权 claim 必须形成 failed
+    component 和非零 CLI 退出，不得用手工说明替代。
+  - completion pass 只能表示产品仿真轨完整可复跑。报告必须固定 `mocked=true`、real stage
+    `not_started`、real transition/effect=0、Pilot/Production/real rollout/auto-close/external mutation/high-risk
+    action 全部 false，并逐项保留全部 7 个 `SocRolloutGateId` 为 open Real Integration Debt。
+  - stable replay 的语义 identity 忽略生成时间；原始 artifact byte hash 单独保留并在 diff 中独立报告。
+    evaluator 不得调用 Runtime、LLM、Provider、broker、数据库 mutation、feature flag、Zeus 或 action。
 - `SocDaemonMessage` 的 Kafka metadata 必须保留 `topic`、`partition`、`offset`、`key`；daemon idempotency key 固定为 `kafka:{topic}:{partition}:{offset}`。
 - dead-letter payload 必须使用 `soc.kafka_dead_letter.v1`，至少包含 failed_at、topic、partition、offset、key、headers、value、error_type、error_message；payload 不得包含 secret。
 - 真实 consumer CLI/daemon 入口只能做配置读取、adapter 构造、runner loop 和 graceful shutdown；业务处理仍归 `SocDaemonService`。

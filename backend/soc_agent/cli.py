@@ -60,6 +60,7 @@ from soc_agent.contracts import (
     SkillImprovementAggregationPolicy,
     SkillImprovementCandidate,
     SkillImprovementCandidateStatus,
+    SkillImprovementIngestReport,
     SkillImprovementReviewCommand,
     SkillImprovementReviewDecision,
     SocAgentActionCommand,
@@ -152,6 +153,8 @@ from soc_agent.eval import (
     load_pingan_capability_eval_fixtures,
     load_scenario_eval_report,
     load_soc_quality_evaluation_report,
+    load_soc_simulation_completion_report,
+    load_soc_simulation_completion_request,
     run_correlation_eval,
     run_manifest_bound_confidence_calibration,
     run_offline_eval,
@@ -159,6 +162,7 @@ from soc_agent.eval import (
     run_pingan_domain_triage_eval,
     run_pingan_main_orchestrator_eval,
     run_scenario_eval,
+    run_soc_simulation_completion,
     validate_confidence_label_set,
     verify_confidence_label_corpus_manifest,
 )
@@ -178,6 +182,7 @@ from soc_agent.normalizers import (
 from soc_agent.operations import build_soc_operations_service
 
 DEFAULT_ROLLOUT_REHEARSAL_FIXTURE = Path(__file__).resolve().parents[1] / "samples" / "rollout" / "pi05a_vendor_neutral_simulation.json"
+DEFAULT_SIMULATION_COMPLETION_FIXTURE = Path(__file__).resolve().parents[1] / "samples" / "rollout" / "pi05b_local_simulation.json"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -246,6 +251,8 @@ def main(argv: list[str] | None = None) -> int:
         return _ops_snapshot(args)
     if args.command == "rollout" and args.rollout_command == "rehearse":
         return _rollout_rehearse(args)
+    if args.command == "rollout" and args.rollout_command == "completion":
+        return _rollout_completion(args)
     if args.command == "daemon" and args.daemon_command == "process":
         return _daemon_process(args)
     if args.command == "daemon" and args.daemon_command == "consume":
@@ -650,6 +657,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Show exact persisted backlog and secret-free Kafka readiness",
     )
     ops_snapshot.add_argument("--check-broker", action="store_true", help="Attempt an explicit Kafka broker connectivity check")
+    ops_snapshot.add_argument("--output", help="Optional snapshot JSON output path")
     ops_snapshot.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(ops_snapshot)
 
@@ -671,6 +679,22 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     rollout_rehearse.add_argument("--output", help="Optional report JSON output path")
     rollout_rehearse.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    rollout_completion = rollout_subparsers.add_parser(
+        "completion",
+        help="Aggregate PI simulation artifacts into a fail-closed completion report",
+    )
+    rollout_completion.add_argument(
+        "path",
+        nargs="?",
+        default=str(DEFAULT_SIMULATION_COMPLETION_FIXTURE),
+        help="Versioned simulation completion request JSON",
+    )
+    rollout_completion.add_argument(
+        "--baseline-json",
+        help="Prior completion report used for stable semantic replay diff",
+    )
+    rollout_completion.add_argument("--output", help="Optional report JSON output path")
+    rollout_completion.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
     daemon = subparsers.add_parser("daemon", help="SOC daemon helpers")
     daemon_subparsers = daemon.add_subparsers(dest="daemon_command")
@@ -867,6 +891,7 @@ def _build_parser() -> argparse.ArgumentParser:
     eval_quality.add_argument("--target-accuracy", type=float, default=0.9)
     eval_quality.add_argument("--minimum-samples", type=int, default=30)
     eval_quality.add_argument("--minimum-threshold-samples", type=int, default=10)
+    eval_quality.add_argument("--output", help="Optional quality report JSON output path")
     eval_quality.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
     demo = subparsers.add_parser("demo", help="SOC persistent demo helpers")
@@ -2190,28 +2215,17 @@ def _skill_improvement_ingest(args: argparse.Namespace) -> int:
         return 3
 
     candidate_ids = sorted({result.candidate.candidate_id for result in results if result.candidate is not None})
-    output = {
-        "schema_version": "soc.skill_improvement_ingest_report.v1",
-        "input_count": len(commands),
-        "simulation_count": sum(command.data_class is SocEvaluationDataClass.SIMULATION for command in commands),
-        "real_feedback_count": sum(command.data_class is SocEvaluationDataClass.DESENSITIZED_REAL for command in commands),
-        "candidate_ids": candidate_ids,
-        "candidate_count": len(candidate_ids),
-        "mocked": all(command.data_class is SocEvaluationDataClass.SIMULATION for command in commands),
-        "skill_mutation_allowed": False,
-        "skill_activation_allowed": False,
-        "real_quality_claim_allowed": False,
-        "results": [result.model_dump(mode="json", exclude_none=True) for result in results],
-    }
-    rendered = json.dumps(
-        output,
-        ensure_ascii=False,
-        indent=2 if args.pretty else None,
+    output = SkillImprovementIngestReport(
+        input_count=len(commands),
+        simulation_count=sum(command.data_class is SocEvaluationDataClass.SIMULATION for command in commands),
+        real_feedback_count=sum(command.data_class is SocEvaluationDataClass.DESENSITIZED_REAL for command in commands),
+        candidate_ids=candidate_ids,
+        candidate_count=len(candidate_ids),
+        mocked=all(command.data_class is SocEvaluationDataClass.SIMULATION for command in commands),
+        results=results,
     )
-    if args.output:
-        output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(f"{rendered}\n", encoding="utf-8")
+    rendered = output.model_dump_json(indent=2 if args.pretty else None, exclude_none=True)
+    _write_report(args.output, rendered)
     print(rendered)
     return 0
 
@@ -2291,6 +2305,8 @@ def _skill_improvement_replay(args: argparse.Namespace) -> int:
     try:
         baseline = _load_skill_improvement_candidate(args.baseline_json) if args.baseline_json else None
         report = SocSkillImprovementService(repository=_repository_from_args(args)).replay_candidate(args.candidate_id, baseline=baseline)
+        rendered = report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True)
+        _write_report(args.output, rendered)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -2300,7 +2316,10 @@ def _skill_improvement_replay(args: argparse.Namespace) -> int:
     except SocServiceError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 3
-    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    except OSError as exc:
+        print(f"error: cannot write Skill improvement replay report: {exc}", file=sys.stderr)
+        return 1
+    print(rendered)
     return 0
 
 
@@ -3320,8 +3339,14 @@ def _daemon_status(args: argparse.Namespace) -> int:
 
 
 def _ops_snapshot(args: argparse.Namespace) -> int:
-    snapshot = build_soc_operations_service(database_url=args.database_url).get_snapshot(check_broker=args.check_broker)
-    print(snapshot.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    try:
+        snapshot = build_soc_operations_service(database_url=args.database_url).get_snapshot(check_broker=args.check_broker)
+        rendered = snapshot.model_dump_json(indent=2 if args.pretty else None, exclude_none=True)
+        _write_report(args.output, rendered)
+    except OSError as exc:
+        print(f"error: cannot write operations snapshot: {exc}", file=sys.stderr)
+        return 1
+    print(rendered)
     if snapshot.persisted.availability is not SocOperationsAvailability.AVAILABLE:
         return 1
     if snapshot.kafka.availability is SocOperationsAvailability.UNAVAILABLE:
@@ -3353,6 +3378,31 @@ def _rollout_rehearse(args: argparse.Namespace) -> int:
         return 1
     print(rendered)
     return 0 if report.engineering_rehearsal_passed else 1
+
+
+def _rollout_completion(args: argparse.Namespace) -> int:
+    try:
+        request_path = Path(args.path)
+        request = load_soc_simulation_completion_request(request_path)
+        baseline = load_soc_simulation_completion_report(args.baseline_json) if args.baseline_json else None
+        report = run_soc_simulation_completion(
+            request,
+            artifact_base_dir=request_path.resolve().parent,
+            baseline=baseline,
+        )
+        rendered = report.model_dump_json(
+            indent=2 if args.pretty else None,
+            exclude_none=True,
+        )
+        _write_report(args.output, rendered)
+    except ValueError as exc:
+        print(f"error: simulation completion failed: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"error: cannot write simulation completion report: {exc}", file=sys.stderr)
+        return 1
+    print(rendered)
+    return 0 if report.engineering_completion_gate_passed else 1
 
 
 def _daemon_service_from_args(args: argparse.Namespace) -> SocDaemonService:
@@ -3580,13 +3630,15 @@ def _eval_quality(args: argparse.Namespace) -> int:
             confidence_calibration=confidence,
             baseline=baseline,
         )
+        rendered = report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True)
+        _write_report(args.output, rendered)
     except ValueError as exc:
         print(f"error: quality evaluation failed: {exc}", file=sys.stderr)
         return 2
     except Exception as exc:  # noqa: BLE001 - CLI boundary: preserve an actionable failure
         print(f"error: quality evaluation failed: {exc}", file=sys.stderr)
         return 1
-    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    print(rendered)
     return 0 if report.engineering_flow_passed else 1
 
 
@@ -3954,7 +4006,9 @@ def _load_json_object(json_payload: str, *, payload_label: str) -> dict[str, Any
 def _write_report(path: str | None, content: str) -> None:
     if not path:
         return
-    Path(path).write_text(f"{content}\n", encoding="utf-8")
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(f"{content}\n", encoding="utf-8")
 
 
 def _load_schema_fingerprint_baseline(path: str | None) -> set[str] | None:

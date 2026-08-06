@@ -488,6 +488,13 @@ Current SOC direction:
   approval, auto-close, external mutation and high-risk actions disabled. It does not call Provider,
   Kafka, persistence mutation, feature-flag, Zeus or response systems. Real cohort enforcement remains
   separate PI-05C integration debt.
+- PI-05B lives in `soc_agent.eval.completion` and is exposed by `soc rollout completion`. It reads the
+  explicit PI-01E, PI-03B/C, PI-04 and PI-05A artifact set without invoking Runtime or external systems.
+  Missing/malformed artifacts or simulation reports that overclaim a real gate fail closed. A pass means
+  only that the product simulation track is complete and replayable: all seven real rollout gates stay
+  open, the real stage remains `not_started`, and Pilot/Production/side-effect flags remain false. Do not
+  implement PI-05C as a disconnected fake controller while deployed telemetry, owners, cohort
+  enforcement and executable rollback are absent.
 - SOC Runtime does not expose `endpoint.process_tree.lookup` or `host.event_context.lookup`.
   Process trees, commands, login context, and host events must come from the alert's bounded native
   evidence. Do not reintroduce mock routes or degrade a decision merely because those external
@@ -568,7 +575,7 @@ SOC delivery plan (the only execution order is `.notes/ai_soc/delivery-roadmap.m
 | `BD` Boss Demo v0.1 | Done: browser-first repeatable golden path |
 | `AA` SOC Alpha Completeness Audit | Done: unique 50-row matrix and frozen blocker set |
 | `BG` Close Blocking Gaps | Done: Alpha Gate passed 2026-07-20 |
-| `PI` Real Data & Production Integration | Current product track: `PI-05B` simulation completion gate; PI-01 external simulation, PI-03A/B/C, PI-04A/B and PI-05A are done, while PingAn `mocked=false`, real telemetry, feedback classification and PI-05C rollout controls remain separate Real Integration Debt |
+| `PI` Real Data & Production Integration | Product simulation track complete through `PI-05B`; PingAn `mocked=false`, production infrastructure, real labels, telemetry/SLO, accountable owners and PI-05C rollout controls remain open Real Integration Debt |
 
 ### SOC Agent Development Workflow
 

@@ -288,11 +288,23 @@ def test_cli_ops_snapshot_reads_empty_local_database(
     capsys,
 ) -> None:
     database_url = f"sqlite+pysqlite:///{tmp_path / 'soc-ops.db'}"
+    output_path = tmp_path / "reports" / "operations.json"
     create_soc_tables(create_engine(database_url))
     monkeypatch.delenv("SOC_KAFKA_ENABLED", raising=False)
 
-    exit_code = main(["ops", "snapshot", "--database-url", database_url, "--pretty"])
+    exit_code = main(
+        [
+            "ops",
+            "snapshot",
+            "--database-url",
+            database_url,
+            "--output",
+            str(output_path),
+            "--pretty",
+        ]
+    )
     payload = json.loads(capsys.readouterr().out)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
 
     assert exit_code == 0
     assert payload["schema_version"] == "soc.operations_snapshot.v1"
@@ -300,3 +312,4 @@ def test_cli_ops_snapshot_reads_empty_local_database(
     assert payload["persisted"]["backend"] == "sqlite"
     assert payload["persisted"]["metrics"]["analysis_run_count"] == 0
     assert payload["kafka"]["availability"] == "not_configured"
+    assert saved == payload

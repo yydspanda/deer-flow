@@ -1903,10 +1903,17 @@ Zeus or response adapters. Its `soc.rollout_rehearsal_report.v1` can pass the en
 while simultaneously preserving `current_real_stage=not_started`, zero real transitions/effects and
 false production approval, rollout claim, auto-close, external mutation and high-risk action flags.
 Simulation evidence is schema-forbidden from closing a real gate, and stable semantic replay ignores
-generation timestamps. PI-05B will only aggregate the existing PI simulation artifacts into a
-fail-closed completion report; it cannot claim Pilot Ready. A real rollout controller is PI-05C and
-must be connected to deployed cohort enforcement, fresh PI-01..04 evidence, accountable approvals,
-audit and an actually executable rollback path rather than a disconnected local state machine.
+generation timestamps. PI-05B is implemented in `soc_agent.eval.completion` and exposed through
+`soc rollout completion`. Its `soc.simulation_completion_report.v1` reads six existing artifacts as
+five typed components: PI-01E external simulation, PI-03B quality, PI-03C ingest/replay, PI-04
+operations, and PI-05A rehearsal. Each component validates schema, simulation provenance, semantic
+identity/replay, safety counts and claim boundaries. Missing/malformed evidence or a simulation claim
+that closes a real gate fails closed. The local completion `SCG-6EEDC5DC3417` is stable across replay,
+but still keeps all seven real gates open, `current_real_stage=not_started`, and both
+`pilot_ready=false` and `production_ready=false`. A real rollout controller is PI-05C and must be
+connected to deployed cohort enforcement, fresh PI-01..04 evidence, accountable approvals, audit and
+an actually executable rollback path rather than a disconnected local state machine. Product
+simulation implementation ends at PI-05B; unavailable real inputs are not replaced by more mocks.
 
 `BG-03` uses `./scripts/soc-alpha-readiness.sh all` to bind the existing versioned acceptance report,
 full SOC regression, architecture/migration gates, the authoritative matrix and Stage 4 roadmap into

@@ -29,7 +29,7 @@
 | Real Kafka/PostgreSQL/K8s | **Parked / inputs absent** | `PI-02` | 真实 ACL/TLS/lag/DLQ、PostgreSQL migration/recovery、K8s deployment/rollback；当前 DEV SQLite 不冒充验收 |
 | Kafka worker concurrency | **Deferred / measurement-gated** | `PI-02` 子任务 | 真实串行瓶颈成立后，先 bounded queue，再 partition-aware commit 和 backpressure |
 | Operations Web/telemetry/SLO | **PI-04A/B done / real telemetry debt open** | `PI-04-B/C` | Snapshot CLI/API + `/workspace/soc/operations` 已完成；Web 不重算健康并显式展示 local/test 与 `not_measured`。真实 lag、LLM/Provider telemetry、Prometheus/SLO 仍待接入 |
-| Governed rollout rehearsal | **PI-05A simulation done / real rollout debt open** | `PI-05A/C` | `soc rollout rehearse` 已冻结 5 类 owner、7 个 real gate、三档虚拟推进和完整回滚；稳定 replay 只证明流程可复跑，真实 transition/effect 始终为 0。PI-05B 汇总仿真完成证据；真实 feature flag/cohort enforcement、owner approval、telemetry 和 deployed rollback 归 PI-05C |
+| Governed rollout and completion | **PI-05A/B simulation done / real rollout debt open** | `PI-05A/B/C` | `soc rollout rehearse` 已冻结 owner/gate/rollback；`soc rollout completion` 已将 PI-01E、PI-03B/C、PI-04、PI-05A 六个 artifact 汇总为五组件 fail-closed report。两者只证明仿真可复跑，固定真实 transition/effect=0 与 Pilot/Production=false；真实 feature flag/cohort enforcement、owner approval、telemetry 和 deployed rollback 归 PI-05C |
 | Wiki/OKF memory projection | **Deferred / optional** | `PI-03` 之后 | DB source of truth -> versioned read-only export；Wiki 编辑只能回流 proposal |
 | Real high-risk actions | **Deferred / governance-gated** | `PI-05` | 真实 EDR/F5/SOAR adapter、审批/grant、幂等、结果核验、补偿和回滚；默认人工审批 |
 

@@ -197,6 +197,7 @@ def test_cli_quality_runs_complete_simulation_flow(tmp_path: Path, capsys: pytes
     manifest = _simulation_manifest(label_set)
     label_path = tmp_path / "labels.json"
     manifest_path = tmp_path / "manifest.json"
+    output_path = tmp_path / "reports" / "quality.json"
     label_path.write_text(label_set.model_dump_json(indent=2), encoding="utf-8")
     manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
 
@@ -217,10 +218,13 @@ def test_cli_quality_runs_complete_simulation_flow(tmp_path: Path, capsys: pytes
             "4",
             "--minimum-threshold-samples",
             "1",
+            "--output",
+            str(output_path),
             "--pretty",
         ]
     )
     payload = json.loads(capsys.readouterr().out)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
 
     assert code == 0
     assert payload["schema_version"] == "soc.quality_evaluation_report.v1"
@@ -229,3 +233,4 @@ def test_cli_quality_runs_complete_simulation_flow(tmp_path: Path, capsys: pytes
     assert payload["real_quality_claim_allowed"] is False
     assert payload["profile_publish_allowed"] is False
     assert payload["rollout_allowed"] is False
+    assert saved == payload

@@ -247,6 +247,41 @@ class SkillImprovementAggregationResult(BaseModel):
     note: str = Field(min_length=1)
 
 
+class SkillImprovementIngestReport(BaseModel):
+    """Typed PI-03C ingest summary consumed by offline completion checks."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.skill_improvement_ingest_report.v1"] = "soc.skill_improvement_ingest_report.v1"
+    input_count: int = Field(ge=1)
+    simulation_count: int = Field(ge=0)
+    real_feedback_count: int = Field(ge=0)
+    candidate_ids: list[str] = Field(default_factory=list)
+    candidate_count: int = Field(ge=0)
+    mocked: bool
+    skill_mutation_allowed: Literal[False] = False
+    skill_activation_allowed: Literal[False] = False
+    real_quality_claim_allowed: Literal[False] = False
+    results: list[SkillImprovementAggregationResult] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_ingest_summary(self) -> SkillImprovementIngestReport:
+        if self.input_count != len(self.results):
+            raise ValueError("input_count must match the number of aggregation results")
+        if self.input_count != self.simulation_count + self.real_feedback_count:
+            raise ValueError("feedback data-class counts must add up to input_count")
+        if self.mocked is not (self.simulation_count == self.input_count):
+            raise ValueError("ingest mocked state must match its feedback data classes")
+        if len(set(self.candidate_ids)) != len(self.candidate_ids):
+            raise ValueError("candidate_ids must be unique")
+        if self.candidate_count != len(self.candidate_ids):
+            raise ValueError("candidate_count must match candidate_ids")
+        result_candidate_ids = {result.candidate.candidate_id for result in self.results if result.candidate is not None}
+        if result_candidate_ids != set(self.candidate_ids):
+            raise ValueError("candidate_ids must match candidates projected by aggregation results")
+        return self
+
+
 class SkillImprovementReviewCommand(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -318,6 +353,7 @@ __all__ = [
     "SkillImprovementCandidate",
     "SkillImprovementCandidateStatus",
     "SkillImprovementFailureFacet",
+    "SkillImprovementIngestReport",
     "SkillImprovementReplayDiff",
     "SkillImprovementReplayReport",
     "SkillImprovementRepresentativeSample",

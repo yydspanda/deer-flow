@@ -23,12 +23,12 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（Alpha Gate 已通过，`PI-05A` 已完成） |
-| 当前目标 | 产品完成轨进入 `PI-05B` Simulation Completion Gate；PingAn DEV 依赖均使用显式 mock，真实 Provider/telemetry/feedback classifier/部署审批作为独立接入债务保留 |
+| 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（产品仿真轨 `PI-05A/B` 已完成） |
+| 当前目标 | 仿真实现轨已收口；真实 Provider/infra/quality/telemetry/owner/rollback/cohort enforcement 作为 7 项 Real Integration Debt 保留，输入到位前不伪造 PI-05C |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | `PI-05B`：只读汇总 PI-01E、PI-03、PI-04 和 PI-05A 的仿真证据，生成 fail-closed completion report；只能声明仿真产品轨完整，固定 `pilot_ready=false`。 |
+| 当前下一刀 | 无新的 fake/mock 产品切片。恢复工作时按 `delivery-roadmap.md` 的 Real Integration Debt 选择已有真实输入；优先级由实际可用的 PingAn `mocked=false` Provider、真实标签或部署 telemetry 决定。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -40,7 +40,29 @@
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
-| `PI` | Real Data & Production Integration | **Current / Simulation Completion Track** | PI-01 仿真、PI-03A/B/C、PI-04A/B 与 PI-05A 已完成，真实接入债务开放；当前推进 PI-05B completion gate | Pilot readiness review 通过；仿真不得关闭真实 gate |
+| `PI` | Real Data & Production Integration | **Current / Simulation Track Complete, Real Debt Open** | PI-01 external simulation、PI-03A/B/C、PI-04A/B、PI-05A/B 已完成；7 个真实 gate 均保持 open | 只有 fresh real evidence、具名 owner approval 和可执行 rollback 到位后才能进入 Pilot readiness review |
+
+## 2026-08-06 — PI-05B Simulation Completion Gate completed
+
+- 新增 `soc.simulation_completion_request.v1` / `soc.simulation_completion_report.v1` 与
+  `soc rollout completion`。离线 evaluator 只读取 PI-01E external simulation、PI-03B quality、PI-03C
+  ingest/replay、PI-04 operations snapshot 和 PI-05A rehearsal 六个 artifact，不调用 Runtime、LLM、
+  Provider、Kafka、数据库 mutation、feature flag、Zeus 或响应动作。
+- 五个组件分别核对 typed schema、simulation provenance、内部 pass/hash/replay、mock evidence/side-effect
+  计数和 claim boundary。缺失、坏 JSON/contract 或仿真声称 real Provider/Pilot/rollout 会形成 failed
+  component 并让 CLI 返回 1；不允许用叙述性声明补证据。
+- `soc eval quality`、`soc skill-improvement replay` 与 `soc ops snapshot` 补齐 `--output`，共同使用会创建
+  父目录的 `_write_report()`；PI-03C ingest 由正式 `SkillImprovementIngestReport` 校验，不再输出裸 dict。
+- 本地报告位于 Git-ignored
+  `backend/.deer-flow/soc-internal-validation/pi-05b-simulation/`：completion ID
+  `SCG-6EEDC5DC3417`，五组件均 passed，二次 replay `changed=false` 且 artifact bytes 无变化。
+- 报告固定 `mocked=true`、`current_real_stage=not_started`、real transition/effect=0、
+  `pilot_ready=false`、`production_ready=false`，并逐项保留 PI-01 Provider、PI-02 infrastructure、PI-03
+  real quality、PI-04 SLO、PI-05 owner/rollback/cohort isolation 七个 open debt。
+- 聚焦 PI-03/04/05 测试 `31 passed`；完整 SOC、architecture 与 PingAn internal-batch 回归
+  `803 passed in 216.48s`，Ruff 通过。`codegraph sync .` 纳入 2 个新增 Python 文件/41 个节点，查询
+  `run_soc_simulation_completion` 可定位 evaluator、CLI 和测试引用。产品仿真轨到此完成；下一步只在
+  真实输入可用时恢复对应债务，不实现与部署环境脱节的假 PI-05C controller。
 
 ## 2026-08-05 — PI-05A governed rollout simulation rehearsal completed
 

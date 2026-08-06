@@ -585,8 +585,8 @@ DEV 默认不持久化；需要验证 ReviewQueue/审计/维护问题时，先�
 
 外网 `PI-05A` 已完成 vendor-neutral simulation rehearsal：`soc rollout rehearse` 能虚拟演练三档推进和
 完整回滚，但固定保持 `mocked=true`、真实 transition/effect 为 0。下面的 checkbox 仍代表真实内网/
-部署环境验收，不能因为 PI-05A 通过而勾选。当前产品轨进入 `PI-05B` completion gate，真实执行仍归
-`PI-05C Real Integration Debt`。
+部署环境验收，不能因为 PI-05A 通过而勾选。`PI-05B` completion gate 也已通过：它只聚合既有仿真
+artifact，仍固定 Pilot/Production=false。真实执行继续归 `PI-05C Real Integration Debt`。
 
 ### 8.1 Shadow
 
@@ -649,14 +649,14 @@ soc-internal-validation/
 ## 10. Real-Debt Resume Pointer / 真实接入恢复位置
 
 ```text
-Status:  Parked Real Integration Debt; current product pointer is PI-05B Simulation Completion Gate
+Status:  Parked Real Integration Debt; PI-05A/B product simulation track is complete
 Ready:   PI-01D1-D4, dual-mode paired evaluator, tracked simulated/internal asset.locate + security-tag profiles; asset.lookup is a blocking failure
 Passed:  external simulation stages 5 and 50; stage 50 has 157/157 `mocked=true` evidence, 0 failures/unauthorized side effects and no observed Provider hit; not real-provider evidence
 First:   source `.env.soc-dev.local`, run `run_pingan_internal_shadow.py` without `--execute`, and review the static plan
 Next:    rerun the same source/root with `--execute --confirm-live --confirm-investigation`; the fixed sequence performs MCP inventory before LLM and seals `internal_real` stage 5
 Pending internal evidence: D12-B asset, PI-01A TI, PI-01B1 security-tag gates
 Data-gated: PI-01B2 authoritative activity source, PI-01C stable status/reason feed contract
-Does not block: completed PI-03/04/05A simulation work or current PI-05B completion gate
+Does not block: completed PI-03/04/05A/05B simulation work
 ```
 
 已确认存在的内网能力必须先用同一 production Provider/MCP/action 加显式 fake transport 完成外网仿真；该前置门槛已完成。不可获得且 contract 未冻结的输入仍标记 `data-gated`，不得发明新 Provider。进入内网只切换 adapter/provider 配置和 secret，不改变通用 Runtime 控制流与核心服务契约。

@@ -261,6 +261,8 @@ def test_idempotency_key_reuse_with_changed_content_is_rejected() -> None:
 def test_cli_ingest_list_and_replay_simulation(tmp_path, capsys) -> None:
     database_url = f"sqlite:///{tmp_path / 'pi03c.db'}"
     fixture_path = tmp_path / "feedback.json"
+    ingest_output = tmp_path / "reports" / "ingest.json"
+    replay_output = tmp_path / "reports" / "replay.json"
     fixture_path.write_text(
         "[" + ",".join(_command(index).model_dump_json() for index in range(1, 4)) + "]",
         encoding="utf-8",
@@ -277,12 +279,15 @@ def test_cli_ingest_list_and_replay_simulation(tmp_path, capsys) -> None:
                 "--init-db",
                 "--database-url",
                 database_url,
+                "--output",
+                str(ingest_output),
             ]
         )
         == 0
     )
     ingest_report = capsys.readouterr().out
     candidate_id = json.loads(ingest_report)["candidate_ids"][0]
+    assert json.loads(ingest_output.read_text(encoding="utf-8")) == json.loads(ingest_report)
 
     assert (
         main(
@@ -306,10 +311,13 @@ def test_cli_ingest_list_and_replay_simulation(tmp_path, capsys) -> None:
                 candidate_id,
                 "--database-url",
                 database_url,
+                "--output",
+                str(replay_output),
             ]
         )
         == 0
     )
     replay = json.loads(capsys.readouterr().out)
+    assert json.loads(replay_output.read_text(encoding="utf-8")) == replay
     assert replay["changed"] is False
     assert replay["skill_behavior_replay_executed"] is False

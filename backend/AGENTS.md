@@ -468,6 +468,16 @@ external effects. It never calls a Provider, broker, repository mutation, featur
 or response adapter. A stable replay proves only the control flow; real cohort enforcement and stage
 transition remain PI-05C integration work.
 
+PI-05B completion aggregation lives in `soc_agent.eval.completion` and is exposed by
+`soc rollout completion`. The request names six existing reports which are assessed as five typed
+components: PI-01E, PI-03B, PI-03C ingest/replay, PI-04 and PI-05A. Artifact paths never enter output;
+schema/id/SHA-256, semantic hashes, checks and limitations do. Missing/malformed artifacts or a
+simulation report that claims a real gate fail closed and return a nonzero CLI status. A pass remains
+`mocked=true`, keeps all seven real gates open and fixes Pilot/Production/side-effect permissions to
+false. This evaluator must remain offline and read-only: no Runtime, LLM, Provider, broker, persistence
+mutation, feature flag, Zeus or action call. Do not create a fake PI-05C controller without deployed
+cohort enforcement, telemetry, accountable approvals and executable rollback.
+
 For PingAn legacy alerts, `normalizers/pingan_platform.py` preserves the complete input while
 `normalizers/pingan_messages.py` deterministically parses `zeusRawLogs[].message`. If any message
 parses, parsed fields are the exclusive analysis source; Zeus sibling fields stay raw-only and cannot

@@ -1,0 +1,15 @@
+{
+  "schema_version": "soc.simulation_completion_request.v1",
+  "request_id": "pi05b-local-simulation-v1",
+  "requested_by": "simulation-fixture:pi05b-v1",
+  "rationale": "Aggregate the completed local PI simulation track without closing any real rollout gate.",
+  "artifacts": {
+    "pi01_external_simulation": "../../.deer-flow/soc-internal-validation/external-simulation/pi-01e-20260805-50-v2/pi-01e-external-simulation-50.json",
+    "pi03_quality_evaluation": "../../.deer-flow/soc-internal-validation/pi-03b-simulation/quality-report-replay.json",
+    "pi03_skill_ingest": "../../.deer-flow/soc-internal-validation/pi-03c-simulation/ingest-report.json",
+    "pi03_skill_replay": "../../.deer-flow/soc-internal-validation/pi-03c-simulation/replay-report.json",
+    "pi04_operations_snapshot": "../../.deer-flow/soc-internal-validation/pi-04b-simulation/operations-snapshot.json",
+    "pi05_rollout_rehearsal": "../../.deer-flow/soc-internal-validation/pi-05a-simulation/rehearsal-replay.json"
+  },
+  "confirm_simulation_only": true
+}
