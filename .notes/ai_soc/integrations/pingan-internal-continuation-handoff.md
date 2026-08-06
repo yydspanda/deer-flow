@@ -1,7 +1,7 @@
 # PingAn SOC Internal Continuation Handoff / 平安内网续作交接单
 
 > Type: temporary transfer artifact / 临时复制交接文件
-> Reconciled: 2026-08-05
+> Reconciled: 2026-08-06
 > Status: `Real Integration Debt / parked`; this is no longer the current product-development pointer
 > Resume action: when approved PingAn DEV is available, inject environment secrets/cases, pass live MCP inventory, and run fresh paired `internal_real` stage 5
 
@@ -81,8 +81,8 @@ PI-01D1-D4 + PI-01E external simulation（Done）
   -> PI-01E 内网 shadow 全链路（Parked Real Integration Debt）
   -> PI-02 真实 Kafka/PostgreSQL/K8s（Parked / inputs absent）
 
-当前产品完成轨已经完成 PI-03C simulation 与 PI-04B thin Operations Web，并转到 PI-05 rehearsal；这些任务不在
-本内网交接单内，也不等待本节债务完成。
+当前产品完成轨已经完成 PI-03A/B/C、PI-04A/B 与 PI-05A/B，并在 Simulation Completion Gate 收口；这些任务不在
+本内网交接单内，也不等待本节债务完成。PI-05C 只在真实部署输入到位后恢复，不在外网实现假控制器。
 
 D12-B 真实 asset.locate（Parked，可独立恢复）
   -> 仍需原 direct/MCP/persistence/Web/TUI gate，不由 PI-01A 替代

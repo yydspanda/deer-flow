@@ -64,6 +64,25 @@
   `run_soc_simulation_completion` 可定位 evaluator、CLI 和测试引用。产品仿真轨到此完成；下一步只在
   真实输入可用时恢复对应债务，不实现与部署环境脱节的假 PI-05C controller。
 
+## 2026-08-06 — Real Integration Debt readiness audit and fresh internal handoff
+
+- 在不发网络请求、不调用 LLM/Provider 的前提下重新审计 D12-B 与 PI-01E internal-real 入口。D12-B
+  preflight 的 DEV 环境、LOCAL legacy profile、internal mode、必需配置、ZEUS HTTPS host allowlist 和
+  loopback model profile 共 6 项通过；唯一失败项是外网环境无法 import
+  `model.agent_platform.util_tools:run_workflow`，符合已登记的内网依赖边界。
+- 使用当前 200 条 PKL、`deepseek-v4-flash` 和 `ramp-stage=5` 执行 internal-real orchestrator 的
+  static-only 模式；Runtime-only 与 persisted investigation 两份 plan 均通过，确认 composition、action
+  config、internal MCP profile、SQLite 路径和 paired evaluator 可以进入真实执行序列。该结果不包含
+  LLM/MCP/Provider 调用，不能关闭任何真实 gate。
+- 本机仍没有私有 D12-B hit/not-found/ambiguous/auth/timeout case matrix，`.env.soc-dev.local` 也未配置
+  PI-01A threat-intel 与 PI-01B1 security-tag 的真实 DEV 变量，因此没有尝试 live execution。
+- 从干净的 `yyds-dev` 提交 `36f25b87` 重建 source + private-overlay 内网迁移包；两个 archive 均为
+  mode `0600`，`safe_member_paths=true`、`manifest_valid=true` 且逐文件 hash 全量通过。具体文件名、
+  SHA-256 和大小只以 Git-ignored `backend/.deer-flow/internal-transfer/transfer-report-*.json` 为准，
+  不写入 tracked 文档形成过时清单。
+- 当前指针不变：产品仿真实现轨已结束。下一次有效执行是在批准的内网 DEV 补齐 workflow import 和
+  私有 case 后运行 fresh `internal_real` stage 5；外网不新增 fake PI-05C controller。
+
 ## 2026-08-05 — PI-05A governed rollout simulation rehearsal completed
 
 - 新增 vendor-neutral `soc.rollout_plan.v1` 与 `soc.rollout_rehearsal_report.v1`。V1 强制包含独立的
