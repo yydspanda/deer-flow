@@ -113,6 +113,14 @@ or action permission from that projection. Treat `new_conclusion_produced=false`
 and `decision_impact=none` as server-owned contract boundaries; do not recompute D3 ledger telemetry
 or evidence matching in React.
 
+The ReviewQueue `soc-triage` chat link carries `queue_id` only as a run identity hint. The browser must
+never build or submit a ReviewQueue artifact, context hash, run/alert lineage, or actor identity. The
+Gateway owns those values and stores an immutable server-reserved thread binding. Keep the queue query
+when a new thread receives its server ID; when an existing thread is reopened without the query, read
+the returned binding metadata only to restore the queue-aware UI. A bound thread cannot be reused for
+another queue. Acceptance sends only message ID plus human reason and remains a pending candidate;
+the UI must not infer context validity, currentness, or memory authority.
+
 All SOC HTTP calls remain under `core/soc/api.ts`. The compatible contract uses `/api/soc/*`, direct
 typed success bodies, `X-SOC-API-Version: 1`, and RFC Problem Details mapped to `SocApiError`.
 State-changing callers provide stable idempotency keys when the endpoint requires them; request IDs

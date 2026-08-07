@@ -325,6 +325,52 @@ class TestStream:
         assert call_kwargs["context"]["thread_id"] == "t1"
         assert call_kwargs["context"]["agent_name"] == "test-agent-1"
 
+    def test_namespaced_runtime_context_is_deep_copied_into_stream(self, client):
+        agent = _make_agent_mock([{"messages": [AIMessage(content="ok", id="ai-1")]}])
+        extension_value = {"queue_id": "REV-1", "nested": ["original"]}
+
+        with (
+            patch.object(client, "_ensure_agent"),
+            patch.object(client, "_agent", agent),
+        ):
+            list(
+                client.stream(
+                    "hi",
+                    thread_id="t1",
+                    runtime_context={"__soc_review_context": extension_value},
+                )
+            )
+
+        extension_value["nested"].append("mutated")
+        runtime_context = agent.stream.call_args.kwargs["context"]
+        assert runtime_context["__soc_review_context"] == {
+            "queue_id": "REV-1",
+            "nested": ["original"],
+        }
+
+    @pytest.mark.parametrize(
+        "runtime_context, error",
+        [
+            ({"soc_review_context": {}}, "namespaced"),
+            ({"__deerflow_internal": {}}, "reserved"),
+            ("not-a-mapping", "mapping"),
+        ],
+    )
+    def test_runtime_context_rejects_untrusted_shapes(
+        self,
+        client,
+        runtime_context,
+        error,
+    ):
+        with pytest.raises((TypeError, ValueError), match=error):
+            list(
+                client.stream(
+                    "hi",
+                    thread_id="t1",
+                    runtime_context=runtime_context,
+                )
+            )
+
     def test_full_mode_overwrites_internal_delta_before_agent_creation(self, client):
         from deerflow.runtime.checkpoint_mode import (
             CHECKPOINT_MODE_METADATA_KEY,
@@ -1222,6 +1268,10 @@ class TestEnsureAgent:
         config = client._get_runnable_config("t1")
 
         with (
+            patch(
+                "deerflow.client.load_agent_config",
+                return_value=SimpleNamespace(skills=None, middlewares=None),
+            ),
             patch("deerflow.client.create_chat_model"),
             patch("deerflow.client.create_agent", return_value=mock_agent) as mock_create_agent,
             patch("deerflow.client.build_middlewares", return_value=[]) as mock_build_middlewares,
@@ -1242,6 +1292,89 @@ class TestEnsureAgent:
         assert mock_apply_prompt.call_args.kwargs.get("agent_name") == "custom-agent"
         assert mock_apply_prompt.call_args.kwargs.get("available_skills") == {"test_skill"}
         assert mock_create_agent.call_args.kwargs["state_schema"] is ThreadState
+
+    def test_named_agent_loads_profile_skills_and_middlewares(self, client):
+        """Embedded named agents must honor the same operator-owned profile as Gateway."""
+        mock_agent = MagicMock()
+        config = client._get_runnable_config("t-profile")
+        client._agent_name = "custom-agent"
+        profile = SimpleNamespace(
+            skills=["profile-skill"],
+            middlewares=["example.middleware:AuditMiddleware"],
+        )
+
+        with (
+            patch(
+                "deerflow.client.load_agent_config",
+                return_value=profile,
+            ) as mock_load_agent_config,
+            patch("deerflow.client.create_chat_model"),
+            patch(
+                "deerflow.client.create_agent",
+                return_value=mock_agent,
+            ),
+            patch(
+                "deerflow.client.build_middlewares",
+                return_value=[],
+            ) as mock_build_middlewares,
+            patch(
+                "deerflow.client.apply_prompt_template",
+                return_value="prompt",
+            ) as mock_apply_prompt,
+            patch(
+                "deerflow.client.get_enabled_skills_for_config",
+                return_value=[],
+            ) as mock_get_skills,
+            patch.object(client, "_get_tools", return_value=[]),
+            patch(
+                "deerflow.runtime.checkpointer.get_checkpointer",
+                return_value=None,
+            ),
+        ):
+            client._ensure_agent(config, context={"user_id": "analyst-1"})
+
+        mock_load_agent_config.assert_called_once_with(
+            "custom-agent",
+            user_id="analyst-1",
+        )
+        mock_get_skills.assert_called_once_with(
+            client._app_config,
+            user_id="analyst-1",
+        )
+        assert mock_build_middlewares.call_args.kwargs["available_skills"] == {"profile-skill"}
+        assert mock_build_middlewares.call_args.kwargs["agent_middleware_paths"] == ["example.middleware:AuditMiddleware"]
+        assert mock_apply_prompt.call_args.kwargs["available_skills"] == {"profile-skill"}
+
+    def test_explicit_embedded_skills_override_profile_skills(self, client):
+        mock_agent = MagicMock()
+        config = client._get_runnable_config("t-profile-override")
+        client._agent_name = "custom-agent"
+        client._available_skills = {"explicit-skill"}
+        profile = SimpleNamespace(
+            skills=["profile-skill"],
+            middlewares=["example.middleware:AuditMiddleware"],
+        )
+
+        with (
+            patch("deerflow.client.load_agent_config", return_value=profile),
+            patch("deerflow.client.create_chat_model"),
+            patch("deerflow.client.create_agent", return_value=mock_agent),
+            patch(
+                "deerflow.client.build_middlewares",
+                return_value=[],
+            ) as mock_build_middlewares,
+            patch("deerflow.client.apply_prompt_template", return_value="prompt"),
+            patch("deerflow.client.get_enabled_skills_for_config", return_value=[]),
+            patch.object(client, "_get_tools", return_value=[]),
+            patch(
+                "deerflow.runtime.checkpointer.get_checkpointer",
+                return_value=None,
+            ),
+        ):
+            client._ensure_agent(config)
+
+        assert mock_build_middlewares.call_args.kwargs["available_skills"] == {"explicit-skill"}
+        assert mock_build_middlewares.call_args.kwargs["agent_middleware_paths"] == ["example.middleware:AuditMiddleware"]
 
     def test_delta_mode_selects_state_and_normalizes_middleware(self, client):
         mock_agent = MagicMock()
@@ -1334,7 +1467,20 @@ class TestEnsureAgent:
         """_ensure_agent does not recreate if config key unchanged."""
         mock_agent = MagicMock()
         client._agent = mock_agent
-        client._agent_config_key = (None, True, False, False, None, None, None, None, "full", 10, None)
+        client._agent_config_key = (
+            None,
+            True,
+            False,
+            False,
+            None,
+            None,
+            None,
+            None,
+            (),
+            "full",
+            10,
+            None,
+        )
 
         config = client._get_runnable_config("t1")
         client._ensure_agent(config)

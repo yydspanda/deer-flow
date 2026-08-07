@@ -2,7 +2,7 @@
 
 Status: Active review baseline
 
-Last updated: 2026-08-05
+Last updated: 2026-08-06
 
 Primary audience: product review, architecture review, engineering review, security review
 
@@ -843,17 +843,36 @@ SOC Lead Agent 的定位：
 
 ```mermaid
 flowchart TD
-    Analyst["👤 Analyst"] --> Lead["🤖 SOC Lead Agent<br/>DeerFlow lead_agent profile"]
+    Analyst["👤 Analyst"] --> Surface{"🖥️ Entry Surface<br/>入口"}
+    Surface -->|"Web / Gateway"| Lead["🤖 SOC Lead Agent<br/>DeerFlow lead_agent profile"]
+    Surface -->|"soc chat tui --lead-agent"| TuiBridge["🛡️ SocLeadAgentChatService<br/>outer proposal bridge"]
+    TuiBridge --> Lead
     Lead --> Context["📚 Bounded Review Context<br/>queue item / evidence / memory / external feedback"]
     Lead --> Skill["🧩 SOC Skills<br/>Network / Endpoint / Web / Email / Asset"]
     Lead --> Proposal["📌 Action Proposal<br/>what to check / who should review"]
-    Proposal --> Router{"🛡️ Action Boundary"}
+    Proposal -->|"Web / Gateway run"| WebBridge["🛡️ Web/Gateway per-agent middleware<br/>SocLeadAgentApprovalMiddleware"]
+    Proposal -->|"SOC TUI run"| TuiBoundary["🛡️ TUI outer service boundary<br/>existing proposal parser"]
+    WebBridge --> Router{"🛡️ Shared Action Boundary"}
+    TuiBoundary --> Router
     Router -->|"read-only"| Adapter["🛠️ Action Adapter / MCP<br/>asset.lookup / asset.locate / threat_intel / security_tag"]
     Router -->|"high-risk"| Approval["🛂 Approval Inbox"]
     Adapter --> Evidence["🔎 InvestigationEvidence"]
     Evidence --> Context
     Approval --> Audit["🧾 Audit/Event"]
 ```
+
+`SocLeadAgentProfile.v2` installs the Web/Gateway middleware as trusted operator configuration.
+Existing per-user `soc-triage` profiles are not silently overwritten and require
+`soc agent install-profile --overwrite` to adopt it. Both surface bridges accept only explicit
+`<soc_action_proposal>` JSON markers and converge on `SocLeadAgentActionProposalBoundary`; normal
+assistant prose cannot trigger an action. The model may describe only the candidate action. Stable
+proposal/decision/request IDs, actor identity, source, run/thread context and idempotency are owned by
+the server. A message is bounded to five valid proposals.
+
+This bridge is not a general tool-call interceptor. High-risk SOC adapters must remain outside the
+Lead Agent's unrestricted DeerFlow/MCP tool set. The middleware can create a pending approval request,
+but it never executes the action; approved execution still uses the SOC grant, dry-run, adapter and
+mutation-audit boundaries.
 
 ### 6.1 Skill vs MCP vs Memory / Skill、MCP、Memory 怎么分
 
@@ -887,20 +906,59 @@ Zeus long prompts or the full `SKILL.md` into every model call.
 
 ### 6.2 Sub Agent Strategy / 子智能体策略
 
-Long-term, APT/EDR/HIDS/network/endpoint/domain-specific agents should be sub-agents or
-specialized profiles under a SOC orchestrator, not independent uncontrolled agents.
+SOC specialist reasoning uses DeerFlow's native custom-subagent registry and `task` tool. It does not
+create another SOC LangGraph, persistence path, MCP stack, stream protocol, or tool runtime.
 
-长期结构：
+当前采用 capability-oriented profiles，而不是为每个厂商或 topic 创建一个 Agent：
 
-| Role / 角色 | Purpose / 用途 | Timing / 时机 |
+| Role / 角色 | Covers / 覆盖 | Authority / 权限 |
 | --- | --- | --- |
-| SOC Lead Agent | Main analyst-facing orchestrator | Current direction |
-| APT triage sub-agent | Network/APT alert reasoning | After domain flow stabilizes |
-| EDR triage sub-agent | Endpoint/process/file/account reasoning | After process-tree evidence flow stabilizes |
-| HIDS triage sub-agent | Host intrusion and integrity reasoning | After generic scenario taxonomy stabilizes |
-| Threat hunting agent | Cross-alert hunting and IOC/TTP expansion | Later |
-| Detection engineering agent | Rule tuning, false-positive pattern analysis | Later |
-| Attack simulation agent | Authorized red-team or validation workflows | Later, strict scope and approval |
+| SOC Lead Agent | analyst conversation, bounded ReviewQueue context, routing, synthesis, action proposal | 唯一面向运营的主控；仍不能绕过 service/policy/approval |
+| Network specialist | APT、NDR/NIDS、C2、恶意外联、IOC、方向与网络角色 | bounded evidence + projected Skill guidance + advisory result |
+| Endpoint specialist | EDR、HIDS、主机、进程、命令行、文件、账号、横向移动 | bounded evidence + projected Skill guidance + advisory result；EDR/HIDS 不因来源名称重复拆 Agent |
+| Web specialist | HTTP、WAF/F5、反向代理、注入、webshell、认证与攻击效果 | bounded evidence + projected Skill guidance + advisory result |
+| Email specialist | phishing、sender identity、link/attachment/QR、delivery 和 recipient impact | bounded evidence + projected Skill guidance + advisory result |
+| Threat hunting / detection engineering / attack simulation | 跨告警狩猎、规则优化、授权攻防 | Later；必须另有数据范围、评测、RBAC 和审批契约 |
+
+```mermaid
+flowchart LR
+    R["⚙️ SOC Runtime<br/>确定性事实、LLM 受控分析、Decision"] --> Q["📬 ReviewQueue<br/>bounded system context"]
+    Q --> L["🧠 SOC Lead Agent<br/>主控综合与用户交互"]
+    L -->|"需要专项第二视角"| T["🧰 DeerFlow task<br/>受控委派"]
+    T --> N["🌐 Network"]
+    T --> E["🖥️ Endpoint<br/>EDR + HIDS"]
+    T --> W["🌍 Web"]
+    T --> M["✉️ Email"]
+    N --> A["📄 Advisory result<br/>非 evidence / verdict"]
+    E --> A
+    W --> A
+    M --> A
+    A --> L
+    L -->|"重新依据系统证据综合"| U["👤 Analyst"]
+    L -->|"候选动作"| P["🛂 Policy + Approval"]
+```
+
+Delegation rules / 委派规则：
+
+- Runtime 主流程不委派。它继续稳定地完成 normalization、fact reconstruction、bounded LLM
+  analysis、grounding、decision 和 persistence。
+- Lead Agent 只有在专项第二视角、上下文隔离或跨域并行存在明确收益时才委派；常规一条告警不因
+  `source_type` 自动多跑多个模型。
+- 子智能体 profile 固定 `tools=[]` 和 `skills=[]`：它不读文件、不动态发现 Skill、不读 repository、
+  不执行 Provider/MCP/action。server 只投影当前 ReviewQueue 的 bounded case evidence 和适用
+  public Skill 中已评审的 `references/runtime-guidance.md`。
+- `SocLeadAgentDelegationMiddleware` 只对 `soc-triage` 生效；没有 trusted ReviewQueue artifact 不能委派。
+  每个 chat run 最多两个不同专家，Lead Agent 问题最多 1200 字符，server 投影最多
+  32K 字符，并记录 case/task/projection hash。重复专家、越界 agent、action marker 和
+  stopped/capped result 均 fail closed。
+- 子智能体结果是 advisory artifact。Lead Agent 必须把它与 Runtime/ReviewQueue 的 exact evidence
+  refs 重新综合；专家文本本身不能成为 `InvestigationEvidence` 或提高自动化权限。
+- fake Provider 证据可以被专家看到以验证流程，但必须保留 `mocked=true`；专家不得把它描述为真实
+  客户事实。
+- `PI-01G1..G3` 已于 2026-08-07 完成：profile/config installer + runtime doctor、受控委派协议、
+  native task event/replay 回归，以及 NIDS network 和 EDR endpoint 的 `deepseek-v4-flash` 代表样本。
+  `AC-30` 的防守产品缺口已关闭；Provider 真实性、网络方向/角色质量校准和 hunting/
+  red-team 自治仍是独立 gate，不由该 smoke 代替。
 
 All agents share SOC contracts, service boundaries, approval, and memory policy.
 
@@ -952,6 +1010,11 @@ Current safety posture:
 
 - Read-only investigation actions can produce `InvestigationEvidence`.
 - High-risk actions create approval requests.
+- Web/Gateway `soc-triage` output enters the approval boundary through the operator-owned per-agent
+  middleware; the embedded SOC TUI uses its existing outer service bridge. Both share the same
+  parser, policy and approval service rather than duplicating approval semantics.
+- The model cannot choose proposal/request/decision IDs, actor identity or context lineage. Server
+  IDs are deterministic across graph replay, and one model message is capped at five proposals.
 - Request lifecycle is `pending -> approved/rejected/expired`; approve loads the persisted request by ID and one request can create at most one grant.
 - Exact resolution retries are idempotent; stale, forged, or semantically changed retries are rejected.
 - Execute boundary exists, but real production side effects must wait for real adapter review.
@@ -1376,6 +1439,36 @@ Rules:
 
 - LLM-discovered knowledge is candidate knowledge only.
 - Correction, review note, domain finding, external feedback, and repeated pattern can all create candidates.
+- A Lead Agent answer is not a memory source by itself. PI-03F1 requires an analyst to explicitly accept one
+  stable assistant message in an open ReviewQueue context and provide a reuse reason; the result remains a
+  `review_note`-origin `pending_review` candidate. Non-Lead-Agent TUI mode cannot perform this mutation.
+- PI-03F2 provides the authenticated Web/Gateway command. The client sends only queue/thread/message identity
+  plus the human reason; Gateway verifies thread ownership and `soc-triage` metadata, resolves the latest
+  visible terminal assistant text from the current server-owned checkpoint branch, and stores checkpoint/hash
+  provenance before calling the same `SocReviewService.add_note()` boundary. Stale, tool-calling, hidden,
+  ambiguous or client-forged text cannot cross this boundary, and a closed ReviewQueue rejects a new source.
+- Direct DeerFlow Web chat now sends only `context.soc_review_queue_id` as an identity hint. Gateway requires
+  authenticated `lead_agent(agent_name=soc-triage)`, validates queue/run/alert/tenant lineage, and atomically
+  binds the caller-owned thread to one queue. The binding is server-reserved and immutable; a different queue
+  requires a new thread. Every run reloads `SocReviewService.get_investigation_context()` and rebuilds the
+  bounded artifact rather than trusting the URL or reusing the first snapshot.
+- `SocLeadAgentReviewContextMiddleware` injects that artifact transiently into the model call under a 48,000
+  character cap and stamps exact artifact/hash/business/chat lineage on the resulting assistant message. Web
+  acceptance verifies route queue + thread binding + message provenance and records the accepted snapshot.
+  It deliberately does not compare with a newly rebuilt hash after candidate creation, because the mutation
+  itself changes ReviewQueue context and would break idempotent retry. This still grants no verdict, close,
+  confirmed-memory, retrieval, approval, or action authority and does not replace the TUI context bridge.
+- Client-facing thread-state updates strip the reserved SOC review-context provenance from submitted messages.
+  A manual checkpoint rewrite therefore invalidates conclusion acceptance instead of manufacturing trusted
+  middleware lineage; normal server-side graph writes retain the provenance.
+- Kafka/batch records are observations, not memories. PI-03F3 uses
+  `soc.memory_pattern_aggregation.v1`: choose one strongest vendor-neutral dimension (primary scenario,
+  canonical detection key, then category), isolate tenant/environment/`simulation|operational`, and place the
+  canonical timezone-aware source event time in a fixed UTC window. The default 24-hour policy requires both
+  5 observations and 5 distinct alert sources before proposing exactly one frozen `pending_review`
+  repeated-pattern candidate. Missing/naive event time is ineligible; later observations are replay-only and
+  supersession is manual. Never write one candidate per alert/finding, and never treat recurrence as evidence
+  of benignness, maliciousness, authorization, impact, or a permitted action.
 - Confirmation requires explicit human action through `SocMemoryService`.
 - Confirmation does not make a record retrievable. `SocMemoryService.set_retrieval_activation()` is the
   only enable/disable boundary and requires an authorized memory governor, reason, expected record

@@ -8,7 +8,7 @@ test.describe("SOC review workbench", () => {
     page,
   }) => {
     mockLangGraphAPI(page, { threads: [] });
-    const state = mockSocAPI(page);
+    const state = await mockSocAPI(page);
 
     await page.goto("/workspace/soc/review");
 
@@ -28,6 +28,12 @@ test.describe("SOC review workbench", () => {
     await expect(
       page.getByText(/Read-only investigation completed: 1 hit/),
     ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "Lead Agent" }),
+    ).toHaveAttribute(
+      "href",
+      "/workspace/agents/soc-triage/chats/new?queue_id=REV-ALPHA-001",
+    );
 
     const memorySection = page.locator("section").filter({
       has: page.getByRole("heading", { name: "候选记忆" }),
@@ -105,7 +111,7 @@ test.describe("SOC review workbench", () => {
     page,
   }) => {
     mockLangGraphAPI(page, { threads: [] });
-    const state = mockSocAPI(page, { queueStatus: "closed" });
+    const state = await mockSocAPI(page, { queueStatus: "closed" });
 
     await page.goto("/workspace/soc/review");
     await page.getByRole("radio", { name: "抽样复核批次" }).click();
@@ -139,7 +145,7 @@ test.describe("SOC review workbench", () => {
     page,
   }) => {
     mockLangGraphAPI(page, { threads: [] });
-    const state = mockSocAPI(page);
+    const state = await mockSocAPI(page);
 
     await page.goto("/workspace/soc/normalization");
 
@@ -169,7 +175,7 @@ test.describe("SOC review workbench", () => {
     page,
   }, testInfo) => {
     mockLangGraphAPI(page, { threads: [] });
-    const state = mockSocAPI(page);
+    const state = await mockSocAPI(page);
 
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto("/workspace/soc/operations");

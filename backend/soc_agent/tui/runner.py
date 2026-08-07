@@ -50,6 +50,8 @@ def run_review_tui(
 def run_chat_tui(
     service: SocChatServiceLike,
     *,
+    review_service: SocReviewService | None = None,
+    lead_agent_mode: bool = False,
     initial_queue_id: str | None = None,
     initial_message: str | None = None,
 ) -> None:
@@ -60,6 +62,8 @@ def run_chat_tui(
 
     SocAgentChatTUI(
         service,
+        review_service=review_service,
+        lead_agent_mode=lead_agent_mode,
         initial_queue_id=initial_queue_id,
         initial_message=initial_message,
     ).run()

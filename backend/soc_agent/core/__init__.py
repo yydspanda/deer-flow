@@ -36,6 +36,7 @@ from soc_agent.core.investigation_workflow import (
     SocEnrichmentWorkflowPersistenceError,
     SocInvestigationWorkflowService,
 )
+from soc_agent.core.memory_patterns import SocMemoryPatternService
 from soc_agent.core.normalization_maintenance import SocNormalizationMaintenanceService
 from soc_agent.core.operations import SocOperationsService
 from soc_agent.core.orchestrator import SocMainOrchestratorService
@@ -104,6 +105,7 @@ __all__ = [
     "SocInvestigationReportingError",
     "SocInvestigationReportingService",
     "SocMemoryService",
+    "SocMemoryPatternService",
     "SocNormalizationService",
     "SocNormalizationMaintenanceService",
     "SocOperationsService",

@@ -485,10 +485,10 @@ async function fulfill(route: Route, body: unknown, status = 200) {
   });
 }
 
-export function mockSocAPI(
+export async function mockSocAPI(
   page: Page,
   options: MockSocApiOptions = {},
-): MockSocApiState {
+): Promise<MockSocApiState> {
   const state: MockSocApiState = {
     requests: [],
     queueStatus: options.queueStatus ?? "open",
@@ -496,7 +496,7 @@ export function mockSocAPI(
     normalizationStatus: "open",
   };
 
-  void page.route("**/api/soc/**", async (route) => {
+  await page.route("**/api/soc/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;

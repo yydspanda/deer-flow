@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Coroutine
 from http import HTTPStatus
 from typing import Annotated, Any, Literal
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -14,20 +13,23 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import Response
 
+from app.gateway.soc_request_context import (
+    SOC_REQUEST_ID_HEADER,
+    SOC_REQUEST_ID_MAX_LENGTH,
+    generate_soc_request_id,
+    normalize_soc_request_id,
+    resolve_soc_trace_id,
+    soc_request_id_from_request,
+    soc_trace_id_from_request,
+)
 from deerflow.trace_context import (
     TRACE_ID_HEADER,
-    generate_trace_id,
-    get_current_trace_id,
-    normalize_trace_id,
 )
 
 SOC_API_VERSION = "1"
 SOC_API_VERSION_HEADER = "X-SOC-API-Version"
-SOC_REQUEST_ID_HEADER = "X-Request-Id"
 SOC_IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
-_MAX_REQUEST_ID_LENGTH = 128
 _MAX_IDEMPOTENCY_KEY_LENGTH = 512
-_REQUEST_ID_ALLOWED_PUNCTUATION = frozenset("-._:")
 
 
 class SocValidationIssue(BaseModel):
@@ -102,7 +104,7 @@ async def _declare_soc_request_headers(
         str | None,
         Header(
             alias=SOC_REQUEST_ID_HEADER,
-            max_length=_MAX_REQUEST_ID_LENGTH,
+            max_length=SOC_REQUEST_ID_MAX_LENGTH,
             description="Optional caller request ID; echoed in the response.",
         ),
     ] = None,
@@ -139,8 +141,8 @@ class SocAPIRoute(APIRoute):
 
         async def soc_route_handler(request: Request) -> Response:
             incoming_request_id = request.headers.get(SOC_REQUEST_ID_HEADER)
-            request_id = normalize_soc_request_id(incoming_request_id) or _generate_request_id()
-            trace_id = _resolve_trace_id(request)
+            request_id = normalize_soc_request_id(incoming_request_id) or generate_soc_request_id()
+            trace_id = resolve_soc_trace_id(request)
             request.state.soc_request_id = request_id
             request.state.soc_trace_id = trace_id
 
@@ -149,7 +151,7 @@ class SocAPIRoute(APIRoute):
                     request,
                     status_code=400,
                     code="soc.invalid_request_id",
-                    detail=(f"{SOC_REQUEST_ID_HEADER} must be 1-{_MAX_REQUEST_ID_LENGTH} characters using letters, digits, '-', '.', '_', or ':'"),
+                    detail=(f"{SOC_REQUEST_ID_HEADER} must be 1-{SOC_REQUEST_ID_MAX_LENGTH} characters using letters, digits, '-', '.', '_', or ':'"),
                 )
 
             try:
@@ -174,41 +176,6 @@ def create_soc_router(*, prefix: str, tags: list[str]) -> APIRouter:
         dependencies=[Depends(_declare_soc_request_headers)],
         responses=SOC_COMMON_RESPONSES,
     )
-
-
-def normalize_soc_request_id(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    request_id = value.strip()
-    if not request_id or len(request_id) > _MAX_REQUEST_ID_LENGTH:
-        return None
-    if not all(character.isascii() and (character.isalnum() or character in _REQUEST_ID_ALLOWED_PUNCTUATION) for character in request_id):
-        return None
-    return request_id
-
-
-def soc_request_id_from_request(request: Request) -> str:
-    request_id = normalize_soc_request_id(getattr(request.state, "soc_request_id", None))
-    if request_id is None:
-        request_id = normalize_soc_request_id(request.headers.get(SOC_REQUEST_ID_HEADER)) or _generate_request_id()
-        request.state.soc_request_id = request_id
-    return request_id
-
-
-def soc_trace_id_from_request(request: Request) -> str:
-    trace_id = normalize_trace_id(getattr(request.state, "soc_trace_id", None))
-    if trace_id is None:
-        trace_id = _resolve_trace_id(request)
-        request.state.soc_trace_id = trace_id
-    return trace_id
-
-
-def _generate_request_id() -> str:
-    return f"req_{uuid4().hex}"
-
-
-def _resolve_trace_id(request: Request) -> str:
-    return get_current_trace_id() or normalize_trace_id(request.headers.get(TRACE_ID_HEADER)) or generate_trace_id()
 
 
 def _validation_problem_response(request: Request, exc: RequestValidationError) -> JSONResponse:

@@ -40,6 +40,7 @@ def _build_custom_subagent_config(name: str, *, app_config: Any | None = None) -
         system_prompt=custom.system_prompt,
         tools=custom.tools,
         disallowed_tools=custom.disallowed_tools,
+        disallowed_output_markers=custom.disallowed_output_markers,
         skills=custom.skills,
         model=custom.model,
         max_turns=custom.max_turns,

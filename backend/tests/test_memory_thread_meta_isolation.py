@@ -119,6 +119,57 @@ async def test_update_metadata_denied(store):
 
 @pytest.mark.anyio
 @pytest.mark.no_auto_user
+async def test_bind_metadata_once_preserves_first_value(store):
+    with _as_user(USER_A):
+        await store.create("t-alpha", metadata={"existing": True})
+        first = await store.bind_metadata_once(
+            "t-alpha",
+            "server_binding",
+            {"queue_id": "REV-1"},
+        )
+        second = await store.bind_metadata_once(
+            "t-alpha",
+            "server_binding",
+            {"queue_id": "REV-2"},
+        )
+        row = await store.get("t-alpha")
+
+    assert first == {"queue_id": "REV-1"}
+    assert second == first
+    assert row is not None
+    assert row["metadata"] == {
+        "existing": True,
+        "server_binding": {"queue_id": "REV-1"},
+    }
+
+
+@pytest.mark.anyio
+@pytest.mark.no_auto_user
+async def test_get_or_create_is_owned_and_preserves_first_record(store):
+    with _as_user(USER_A):
+        first = await store.get_or_create(
+            "t-first-run",
+            assistant_id="lead_agent",
+            metadata={"agent_name": "soc-triage"},
+        )
+        second = await store.get_or_create(
+            "t-first-run",
+            assistant_id="other",
+            metadata={"agent_name": "other"},
+        )
+
+    with _as_user(USER_B):
+        denied = await store.get_or_create("t-first-run")
+
+    assert first is not None
+    assert second == first
+    assert second["assistant_id"] == "lead_agent"
+    assert second["metadata"] == {"agent_name": "soc-triage"}
+    assert denied is None
+
+
+@pytest.mark.anyio
+@pytest.mark.no_auto_user
 async def test_delete_denied(store):
     """User B cannot delete User A's thread."""
     with _as_user(USER_A):

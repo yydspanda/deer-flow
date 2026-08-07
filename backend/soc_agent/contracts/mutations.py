@@ -18,6 +18,7 @@ class SocMutationOperation(StrEnum):
     REVIEW_NOTE = "review.note"
     MEMORY_REVIEW = "memory.review"
     MEMORY_RETRIEVAL_ACTIVATION = "memory.retrieval_activation"
+    MEMORY_PATTERN_OBSERVATION_INGEST = "memory_pattern_observation.ingest"
     APPROVAL_REQUEST_SUBMIT = "approval.request.submit"
     APPROVAL_REQUEST_APPROVE = "approval.request.approve"
     APPROVAL_REQUEST_REJECT = "approval.request.reject"

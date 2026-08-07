@@ -568,6 +568,60 @@ def test_task_tool_emits_running_and_completed_events(monkeypatch):
     assert events[-1]["result"] == "all done"
 
 
+def test_task_tool_rejects_disallowed_output_before_completion_event(monkeypatch):
+    marker = "<forbidden_result>"
+    config = _make_subagent_config()
+    config.disallowed_output_markers = [marker]
+    runtime = _make_runtime()
+    events = []
+
+    async def fake_emit_custom_event(payload, *, writer):
+        writer(payload)
+
+    class DummyExecutor:
+        def __init__(self, **kwargs):
+            del kwargs
+
+        def execute_async(self, prompt, task_id=None):
+            del prompt
+            return task_id or "generated-task-id"
+
+    monkeypatch.setattr(task_tool_module, "SubagentStatus", FakeSubagentStatus)
+    monkeypatch.setattr(task_tool_module, "SubagentExecutor", DummyExecutor)
+    monkeypatch.setattr(task_tool_module, "get_subagent_config", lambda _: config)
+    monkeypatch.setattr(
+        task_tool_module,
+        "get_background_task_result",
+        lambda _: _make_result(
+            FakeSubagentStatus.COMPLETED,
+            result=f"private prefix {marker} private suffix",
+        ),
+    )
+    monkeypatch.setattr(task_tool_module, "get_stream_writer", lambda: events.append)
+    monkeypatch.setattr(task_tool_module, "aemit_custom_event", fake_emit_custom_event)
+    monkeypatch.setattr(task_tool_module.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr("deerflow.tools.get_available_tools", MagicMock(return_value=[]))
+
+    output = _run_task_tool(
+        runtime=runtime,
+        description="policy check",
+        prompt="return bounded advice",
+        subagent_type="general-purpose",
+        tool_call_id="tc-output-policy",
+    )
+
+    message = _task_tool_message(output)
+    assert [event["type"] for event in events] == ["task_started", "task_failed"]
+    assert events[-1]["policy_reason"] == "disallowed_output_marker"
+    assert all(marker not in str(event) for event in events)
+    assert marker not in str(message.content)
+    assert message.additional_kwargs[SUBAGENT_STATUS_KEY] == "failed"
+    assert message.additional_kwargs["subagent_output_policy"] == {
+        "status": "rejected",
+        "reason": "disallowed_output_marker",
+    }
+
+
 def test_task_tool_emits_cumulative_usage_on_running_event(monkeypatch):
     config = _make_subagent_config()
     runtime = _make_runtime()

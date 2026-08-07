@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import partial
+from typing import Protocol
 from uuid import uuid4
 
 from rich.text import Text
@@ -13,13 +14,24 @@ from textual.widgets import Input, Static
 
 from deerflow.tui.render import render_status, render_transcript
 from deerflow.tui.theme import THEME
-from deerflow.tui.view_state import RunEnded, RunStarted, SystemMessage, UserSubmitted, initial_state, reduce
+from deerflow.tui.view_state import AssistantRow, RunEnded, RunStarted, SystemMessage, UserSubmitted, ViewState, initial_state, reduce
 from deerflow.tui.widgets.composer import ComposerInput
-from soc_agent.contracts import ActorContext, EntrySurface, ServiceRequestContext, SocAgentChatRequest
+from soc_agent.contracts import ActorContext, EntrySurface, ReviewNoteCommand, ReviewNoteOrigin, ReviewNoteResult, ServiceRequestContext, SocAgentChatRequest
+from soc_agent.core import SocServiceError
 from soc_agent.tui.chat_runtime import stream_actions
 from soc_agent.tui.runner import SocChatServiceLike
 
 _HELP_TEXT = "Commands: /open REV-...  /help  /quit"
+_LEAD_AGENT_HELP_TEXT = "Commands: /open REV-...  /accept-conclusion REUSE_REASON  /help  /quit"
+
+
+class ReviewNoteServiceLike(Protocol):
+    def add_note(
+        self,
+        command: ReviewNoteCommand,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> ReviewNoteResult: ...
 
 
 class SocAgentChatTUI(App):
@@ -70,15 +82,20 @@ class SocAgentChatTUI(App):
         self,
         service: SocChatServiceLike,
         *,
+        review_service: ReviewNoteServiceLike | None = None,
+        lead_agent_mode: bool = False,
         initial_queue_id: str | None = None,
         initial_message: str | None = None,
     ) -> None:
         super().__init__()
         self.service = service
+        self.review_service = review_service
+        self.lead_agent_mode = lead_agent_mode
         self.initial_queue_id = initial_queue_id
         self.initial_message = initial_message
         self.state = initial_state()
         self._thread_id: str | None = None
+        self._active_queue_id = initial_queue_id.strip() if initial_queue_id else None
         self._streaming = False
         self._cancelled = False
         self._transcript_dirty = False
@@ -110,7 +127,13 @@ class SocAgentChatTUI(App):
             self.exit()
             return
         if text == "/help":
-            self._dispatch(SystemMessage(_HELP_TEXT))
+            self._dispatch(SystemMessage(_chat_help_text(lead_agent_mode=self.lead_agent_mode)))
+            return
+        if text == "/accept-conclusion" or text.startswith("/accept-conclusion "):
+            if not self.lead_agent_mode:
+                self._dispatch(SystemMessage("Conclusion acceptance requires soc chat tui --lead-agent.", tone="error"))
+                return
+            self._accept_last_conclusion(text.removeprefix("/accept-conclusion").strip())
             return
         self._send_to_agent(text)
 
@@ -123,6 +146,8 @@ class SocAgentChatTUI(App):
             self._refresh_header()
         self._cancelled = False
         request = _chat_request_from_text(text, thread_id=self._thread_id, queue_id=queue_id)
+        if request.queue_id:
+            self._active_queue_id = request.queue_id
         self._dispatch(UserSubmitted(text))
         self.run_worker(
             partial(self._stream_worker, request),
@@ -130,6 +155,33 @@ class SocAgentChatTUI(App):
             exclusive=True,
             group="soc-agent-chat",
         )
+
+    def _accept_last_conclusion(self, reason: str) -> None:
+        if not self.lead_agent_mode:
+            self._dispatch(SystemMessage("Conclusion acceptance requires soc chat tui --lead-agent.", tone="error"))
+            return
+        if self._streaming:
+            self._dispatch(SystemMessage("Still working; wait for the current run to finish.", tone="error"))
+            return
+        if self.review_service is None:
+            self._dispatch(SystemMessage("Review note service is not configured.", tone="error"))
+            return
+        try:
+            command = _accepted_lead_agent_note_command(
+                self.state,
+                queue_id=self._active_queue_id,
+                thread_id=self._thread_id,
+                acceptance_reason=reason,
+            )
+            result = self.review_service.add_note(
+                command,
+                context=_tui_request_context(idempotency_key=(f"lead-agent-acceptance:{command.queue_id}:{command.source_thread_id}:{command.source_message_id}")),
+            )
+        except (SocServiceError, ValueError) as exc:
+            self._dispatch(SystemMessage(str(exc), tone="error"))
+            return
+        candidate_id = result.memory_candidate.candidate_id if result.memory_candidate is not None else "unknown"
+        self._dispatch(SystemMessage(f"Created pending memory candidate {candidate_id}."))
 
     def _stream_worker(self, request: SocAgentChatRequest) -> None:
         for action in stream_actions(self.service, request, context=_tui_request_context()):
@@ -198,6 +250,10 @@ def render_chat_header(*, thread_label: str) -> Text:
     return text
 
 
+def _chat_help_text(*, lead_agent_mode: bool) -> str:
+    return _LEAD_AGENT_HELP_TEXT if lead_agent_mode else _HELP_TEXT
+
+
 def _chat_request_from_text(text: str, *, thread_id: str | None, queue_id: str | None = None) -> SocAgentChatRequest:
     stripped = text.strip()
     resolved_queue_id = queue_id.strip() if queue_id else None
@@ -212,5 +268,40 @@ def _thread_label(thread_id: str | None) -> str:
     return thread_id
 
 
-def _tui_request_context() -> ServiceRequestContext:
-    return ServiceRequestContext(actor=ActorContext(actor_id="soc-agent-tui", surface=EntrySurface.TUI, roles=["soc_analyst"]))
+def _accepted_lead_agent_note_command(
+    state: ViewState,
+    *,
+    queue_id: str | None,
+    thread_id: str | None,
+    acceptance_reason: str,
+) -> ReviewNoteCommand:
+    if not queue_id:
+        raise ValueError("Open a ReviewQueue item before accepting a Lead Agent conclusion.")
+    if not thread_id:
+        raise ValueError("Lead Agent thread identity is unavailable.")
+    reason = acceptance_reason.strip()
+    if not reason:
+        raise ValueError("Acceptance reason is required.")
+    message = next(
+        (row for row in reversed(state.rows) if isinstance(row, AssistantRow) and not row.error and row.text.strip()),
+        None,
+    )
+    if message is None:
+        raise ValueError("No Lead Agent conclusion is available to accept.")
+    if not message.id:
+        raise ValueError("The latest Lead Agent conclusion has no stable message identity.")
+    return ReviewNoteCommand(
+        queue_id=queue_id,
+        note=message.text,
+        origin=ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION,
+        source_thread_id=thread_id,
+        source_message_id=message.id,
+        acceptance_reason=reason,
+    )
+
+
+def _tui_request_context(*, idempotency_key: str | None = None) -> ServiceRequestContext:
+    return ServiceRequestContext(
+        actor=ActorContext(actor_id="soc-agent-tui", surface=EntrySurface.TUI, roles=["soc_analyst"]),
+        idempotency_key=idempotency_key,
+    )

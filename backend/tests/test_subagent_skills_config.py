@@ -105,6 +105,7 @@ class TestCustomSubagentConfig:
         assert config.system_prompt == "You are a test agent."
         assert config.tools is None
         assert config.disallowed_tools == ["task", "ask_clarification", "present_files"]
+        assert config.disallowed_output_markers == []
         assert config.skills is None
         assert config.model == "inherit"
         assert config.max_turns == 50
@@ -116,12 +117,14 @@ class TestCustomSubagentConfig:
             system_prompt="You are a data analysis subagent.",
             tools=["bash", "read_file", "write_file"],
             disallowed_tools=["task"],
+            disallowed_output_markers=["<forbidden_result>"],
             skills=["data-analysis", "visualization"],
             model="qwen3:32b",
             max_turns=80,
             timeout_seconds=600,
         )
         assert config.tools == ["bash", "read_file", "write_file"]
+        assert config.disallowed_output_markers == ["<forbidden_result>"]
         assert config.skills == ["data-analysis", "visualization"]
         assert config.model == "qwen3:32b"
         assert config.max_turns == 80
@@ -275,6 +278,7 @@ class TestLoadSubagentsConfigWithSkills:
                         "system_prompt": "You are a data analysis subagent.",
                         "skills": ["data-analysis", "visualization"],
                         "tools": ["bash", "read_file"],
+                        "disallowed_output_markers": ["<forbidden_result>"],
                         "max_turns": 80,
                         "timeout_seconds": 600,
                     },
@@ -286,6 +290,7 @@ class TestLoadSubagentsConfigWithSkills:
         custom = cfg.custom_agents["analysis"]
         assert custom.skills == ["data-analysis", "visualization"]
         assert custom.tools == ["bash", "read_file"]
+        assert custom.disallowed_output_markers == ["<forbidden_result>"]
         assert custom.max_turns == 80
         assert custom.timeout_seconds == 600
 

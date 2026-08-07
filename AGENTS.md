@@ -219,6 +219,35 @@ Current SOC direction:
   append-only `SocMutationAuditRecord` rows; process events are emitted only after commit.
 - LLM-discovered knowledge is candidate knowledge only. It must be confirmed by a human before
   it can affect future decisions.
+- A Lead Agent response must never be persisted as memory automatically. PI-03F1 treats an analyst's
+  explicit acceptance as a `review_note` source: queue/thread/message/reason lineage is required and
+  the result remains `pending_review`. The non-Lead-Agent TUI cannot perform this mutation. CLI/TUI
+  lineage is captured/attested provenance only. PI-03F2 Web/Gateway acceptance accepts no assistant
+  body: it requires authenticated thread ownership and idempotency, then resolves the latest visible
+  terminal `soc-triage` assistant message from the current server-owned checkpoint branch and records
+  checkpoint/text-hash provenance. A closed ReviewQueue rejects a new source. Direct Web
+  `soc-triage` runs treat `context.soc_review_queue_id` only as an identity hint: Gateway authenticates
+  the actor, validates queue/run/alert/tenant lineage, atomically binds the owned DeerFlow thread to
+  that queue, and rebuilds the bounded artifact through `SocReviewService` on every run. The binding
+  is server-reserved and immutable; a different queue requires a new thread. The profile's review-
+  context middleware injects the artifact transiently under a 48,000-character cap and stamps the
+  exact context hash/lineage on the assistant message. Web acceptance must match both the thread
+  binding and that message provenance, then records the accepted snapshot hash; it must not compare
+  against a newly rebuilt mutable context after the acceptance mutation. Client-facing thread-state
+  mutation strips this reserved provenance from submitted messages, so a manual checkpoint rewrite
+  invalidates acceptance instead of forging trusted model lineage. Existing installed
+  `soc-triage` profiles gain this middleware only after `soc agent install-profile --overwrite`.
+  PI-03F3 persists opt-in Kafka/batch results as immutable
+  `MemoryPatternObservation` rows through `SocMemoryPatternService` and migration
+  `0021_memory_pattern_observations`; never create one memory candidate per alert, run, finding, or
+  offset. Cohorts use the strongest available vendor-neutral dimension (primary scenario, canonical
+  detection key, then category), canonical timezone-aware source event time, and strict
+  tenant/environment/`simulation|operational` isolation. The default policy is a fixed 24-hour UTC
+  window with both support and distinct-source thresholds set to 5. Crossing it creates exactly one
+  frozen `pending_review` repeated-pattern candidate; later observations are replay-only and
+  supersession is manual. Missing/naive event time or aggregation failure is reported without failing
+  base Runtime processing. `soc memory patterns list|replay` are read-only operator surfaces;
+  recurrence never changes verdict, enables retrieval, confirms memory, or authorizes an action.
 - Confirmation creates a retrieval-disabled SOC memory record. Only
   `SocMemoryService.set_retrieval_activation()` may enable/disable retrieval, with
   `soc_memory_reviewer|soc_admin`, trusted auth provenance, reason, expected version, validity/review
@@ -341,6 +370,27 @@ Current SOC direction:
   `backend/soc_agent/agent_profile.py`, `backend/soc_agent/lead_agent_chat.py`,
   and `backend/soc_agent/skills.py`; DeerFlow-loadable SOC skills live under
   `skills/public/soc-*`.
+- PI-01G SOC specialists reuse DeerFlow `subagents.custom_agents`, the native `task` tool, model
+  inheritance and task events. Definitions and the explicit root-config installer
+  live in `backend/soc_agent/subagents.py`; use `soc agent install-subagents` for a dry-run and
+  `--apply` only after review. Profiles are capability-oriented: network, endpoint (EDR/HIDS), web and
+  email. They have no tools and no dynamic Skill loader; the trusted Lead Agent middleware projects the
+  matching reviewed `references/runtime-guidance.md` plus bounded ReviewQueue evidence. Delegation
+  requires that server-owned case context, allows at most two distinct managed specialists per chat
+  run, and records stable lineage. Stopped/capped output and action markers fail closed. Specialist
+  text is advisory only and must never create evidence, change a verdict, write memory,
+  approve/execute an action, or replace the fixed Runtime. PI-01G1..G3 closed AC-30 on 2026-08-07;
+  real Provider and real-label quality gates remain separate debt.
+- SOC Lead Agent profile v2 installs the trusted per-agent
+  `SocLeadAgentApprovalMiddleware`. Standard Web/Gateway `soc-triage` runs therefore route explicit
+  `<soc_action_proposal>` output through the shared SOC action policy and Approval Inbox; the embedded
+  `soc chat tui --lead-agent` path keeps its existing outer `SocLeadAgentChatService` proposal bridge.
+  Existing installed profiles gain this middleware only after explicit
+  `soc agent install-profile --overwrite`. Model output may supply only route/action/reason/payload/
+  confidence: proposal IDs, actor, source, request identity and context references are server-owned,
+  stable across replay, and cannot be forged by the model. The middleware never executes high-risk
+  actions. High-risk adapters must not be exposed as unrestricted DeerFlow/MCP tools; approved
+  execution continues through the SOC approval/action service boundary.
 - Runtime `SocSkillContext.v2` is a deterministic, bounded projection from those same public Skill
   packages. `SocSkillResolver` selects allowlisted package names; `build_soc_skill_context()` validates
   packages with DeerFlow's parser and projects only `references/runtime-guidance.md` with package and

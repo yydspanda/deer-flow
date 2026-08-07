@@ -23,12 +23,12 @@
 
 | 项 | 状态 |
 |---|---|
-| 当前交付阶段 | `PI` Stage 4 - Real Data & Production Integration（产品仿真轨 `PI-05A/B` 已完成） |
-| 当前目标 | 仿真实现轨已收口；真实 Provider/infra/quality/telemetry/owner/rollback/cohort enforcement 作为 7 项 Real Integration Debt 保留，输入到位前不伪造 PI-05C |
+| 当前交付阶段 | `PI` Stage 4 - Product Gap Reconciliation + Real Data & Production Integration |
+| 当前目标 | 外网可实现的产品流已补齐，`PI-01G1..G3` 已复用 DeerFlow 原生 custom subagents 完成 capability-oriented SOC 专家委派；真实 Provider/infra/quality/telemetry/owner/rollback/cohort enforcement 继续作为独立 Real Integration Debt |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | 无新的 fake/mock 产品切片。恢复工作时按 `delivery-roadmap.md` 的 Real Integration Debt 选择已有真实输入；优先级由实际可用的 PingAn `mocked=false` Provider、真实标签或部署 telemetry 决定。 |
+| 当前下一刀 | 无新的 mock-only 产品切片。有批准内网配置时按 RID 恢复 `D12-B / PI-01A / PI-01B1`；有具名人工标注 corpus/correlation pairs 时恢复 PI-03 真实质量评测，不再用新仿真冒充真实证据。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -40,7 +40,147 @@
 | `BD` | Boss Demo v0.1 | **Done / BD Gate Passed** | 已交付浏览器优先 golden path、可重置数据和演示验收 | `BD-01..03` 和 BD Gate 已全部通过 |
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
-| `PI` | Real Data & Production Integration | **Current / Simulation Track Complete, Real Debt Open** | PI-01 external simulation、PI-03A/B/C、PI-04A/B、PI-05A/B 已完成；7 个真实 gate 均保持 open | 只有 fresh real evidence、具名 owner approval 和可执行 rollback 到位后才能进入 Pilot readiness review |
+| `PI` | Real Data & Production Integration | **Current / External Product Complete + Real Debt Open** | 既有 simulation、PI-01F/F2 和 PI-01G 专家子智能体产品链已完成；7 个真实 gate 保持 open | 外网产品完整性缺口已关闭；fresh real evidence、具名 owner approval、cohort enforcement 和可执行 rollback 到位后才能进入 Pilot readiness review |
+
+## 2026-08-07 — PI-01G1..G3 native SOC specialist delegation completed
+
+- 用户明确要求先不等待内网，继续完成外网可实现的完整产品流；权威路线已把 `AC-30` 从 Parking Lot
+  重开为 `PI-01G1..G3`。真实 PingAn 和生产基础设施仍留在独立 Real Integration Debt，不被重新命名
+  为 Done。
+- 新增 `backend/soc_agent/subagents.py`，直接产出 DeerFlow `CustomSubagentConfig`，不新建 SOC graph、
+  task executor、skill loader、stream protocol 或模型调用层。四个 capability profiles 为 network、endpoint
+  （共同覆盖 EDR/HIDS）、web 和 email，避免按厂商/topic 无限复制 Agent。
+- 每个 specialist 只继承父模型，`tools=[]` 且 `skills=[]`；不读文件、不动态发现 Skill、不调
+  Provider/MCP/action，不能递归 `task`。服务端从当前 ReviewQueue artifact 投影受控证据和
+  对应 public Skill 的 `runtime-guidance.md`。`max_turns=32` 是当前 18 层 middleware graph 的 recursion
+  budget，不是允许 32 轮自主动作；仍保留 300s 超时。
+- 新增 `soc agent subagents` 与 `soc agent install-subagents [--config PATH] [--apply] [--overwrite]`。
+  CLI 默认 dry-run；同名不同配置默认原子失败，显式 overwrite 也只替换四个受管 entry，其他 operator
+  root config/custom agents 保留。
+- `G2` 已在 per-agent `SocLeadAgentDelegationMiddleware` 中强制 specialist allowlist、必须有服务端
+  ReviewQueue context、单任务 1200 字符、每个 chat run 最多两个不同专家、stable lineage、
+  32K 投影上限、action-marker 拒绝和 capped/failed 结果降级。规则位于 SOC profile middleware，
+  没有把 SOC 语义写进 DeerFlow 通用 executor。
+- `G3` 已用原生 `task_started/task_completed/task_failed` 事件和 stable replay identity 回归，并使用
+  `deepseek-v4-flash` 完成 NIDS network 与 EDR endpoint 代表样本。通过报告位于 Git-ignored
+  `backend/.deer-flow/soc-lead-agent-validation/SOC-PI01G-SMOKE-20260807T091947Z.json`（network）和
+  `SOC-PI01G-SMOKE-20260807T083748Z.json`（endpoint）；两次均有且只有一个预期专家完成、0 failed/capped、
+  `real_model_called=true`、`provider_acceptance_claimed=false`。
+- 最终门禁：Lead Agent/subagent 专项 backend `383 passed`；Ruff check/format 通过；frontend
+  ESLint + TypeScript 通过，Rstest `899 passed`，Chromium Agent Chat `8 passed`；`git diff --check`
+  通过；`codegraph sync .` 同步 2 个 changed files / 41 nodes。
+- 所有 mock/fixture/内网待替换项及真实验收命令统一维护在
+  `integrations/mock-and-real-register.md` 的 RID 矩阵，不新建重复台账。
+
+## 2026-08-07 — PI-01F2 direct Web ReviewQueue context completed
+
+- 浏览器只发送 `context.soc_review_queue_id` identity hint；不发送 artifact、hash、run/alert lineage 或
+  actor。Gateway 只接受 authenticated `lead_agent(agent_name=soc-triage)`，通过统一
+  `SocReviewService.get_investigation_context()` 重建 bounded artifact，并核对 queue/run/alert/summary/tenant
+  lineage。
+- DeerFlow `ThreadMetaStore` 新增 owner-scoped `get_or_create()`：首轮 stateless `/runs/stream` 可在 run
+  admission 前安全创建线程。Gateway 随后以 write-once server-reserved metadata 保存 queue/run/alert binding；
+  同线程后续省略 URL hint 也会复用绑定，不同 queue 必须新建 thread，客户端 create/patch 不能伪造该键。
+- `SocLeadAgentReviewContextMiddleware` 每轮只向 model request 临时插入 System authority contract + hidden
+  Human artifact，48,000 characters 超限在 admission 前 fail closed；artifact 不写 checkpoint/history。
+  terminal AI message 保存 artifact/schema/context/skill hash、业务 lineage、chat thread/run 和 rendered size。
+- Web acceptance 现在必须同时匹配 route queue、immutable thread binding 和 message provenance，并把 exact
+  snapshot hash 写入 review-note lineage。它不在 mutation 后重算 current hash：首次采纳新增 candidate 会
+  改变 InvestigationContext，重算会破坏合法 idempotent retry。结果仍只是 `pending_review` candidate。
+- 通用 thread-state ingress 会从客户端提交的 message 中剥离保留 SOC provenance；手工 checkpoint rewrite
+  只能让 acceptance fail closed，不能伪造 middleware 的可信上下文来源，其他 additional kwargs 保持不变。
+- Web 在新线程 URL 保留 queue hint；重开既有 thread 时可从只读 server binding 恢复 queue-aware UI。旧
+  `soc-triage` profile 必须显式运行 `soc agent install-profile --overwrite` 才获得 context + approval 两个
+  middleware。
+- 验证：相关 Gateway/context/message/profile/thread store 回归 `297 passed`；backend Ruff format/check
+  与 frontend ESLint + TypeScript 通过；Chromium 覆盖新线程 hint 与既有 thread binding 恢复，`2 passed`。
+  `codegraph sync .` 新增 2 个文件/41 个节点，并可直接查询 Gateway 注入函数、profile middleware 和
+  thread-store `get_or_create`。下一步回到真实集成债务，不再用新 fake slice 冒充 `mocked=false` evidence。
+
+## 2026-08-06 — PI-03F3 typed Kafka/batch repeated-pattern source completed
+
+- 新增 `soc.memory_pattern_observation.v1`、`soc.memory_pattern_aggregation.v1` 和
+  `SocMemoryPatternService`。每个完成的 Kafka/批处理 Runtime 结果只形成一条 immutable observation，
+  不形成逐告警 candidate；持久化表为 `soc_memory_pattern_observations`，migration head 升至
+  `0021_memory_pattern_observations`。
+- cohort 只选一个最强可用的 vendor-neutral 维度：primary scenario -> canonical detection key ->
+  category；不要求 `rule_code`，也不使用 topic/detection/scenario/entity 四维联合硬 key。scope 固定隔离
+  tenant、environment 与 `simulation|operational` data class。
+- window 使用 canonical `AlertInput.event.event_time` 的 UTC 固定窗口，不使用本次 `run.started_at`。
+  缺失 event time 或上游提供 naive time 时 fail closed 为 `skipped_ineligible`；不得猜测租户时区。
+- 默认窗口 24 小时，minimum support=5 且 minimum distinct sources=5。第一次达到双门槛只创建一个
+  frozen `pending_review` repeated-pattern candidate；后续 observation 仅在 replay 中呈现 added IDs，
+  candidate 不自动更新，supersession 固定 `manual_only`。
+- candidate 仍复用 `SocMemoryService.propose_candidate()`，`runtime_decision_allowed=false`；重复出现不证明
+  benign/malicious、授权、影响或处置动作，也不会 confirm memory、启用 retrieval、改 verdict 或授权 action。
+- Kafka daemon 和 internal batch 均为显式 default-off；启用时必须配置 environment/data class，批处理还
+  要求 persistence。聚合失败只返回 `failed_non_blocking`，不改变基础 Runtime 成功、Kafka offset 或调查链。
+- 新增只读 `soc memory patterns list|replay`；replay 校验冻结 observation/evidence-set hash，不写 candidate。
+- 验证：Ruff 通过；memory-pattern contract/service/SQL/CLI/daemon `10 passed`；核心 service/memory/UoW/
+  migration `95 + 16 + 21 passed`；Kafka `56 passed`；internal batch `16 passed`；Skill improvement
+  regression `8 passed`。下一刀先冻结已登记的 direct Web queue-context binding，不把它混入本切片。
+
+## 2026-08-06 — PI-03F2 authenticated Web conclusion acceptance completed
+
+- Gateway 新增 `POST /api/soc/review/items/{queue_id}/lead-agent-threads/{thread_id}/accept`。请求体只允许
+  `message_id` 与 `acceptance_reason`，必须携带 authenticated thread ownership 和 `Idempotency-Key`；客户端
+  不能提交 assistant 正文。
+- `resolve_soc_lead_agent_message()` 从 server-owned thread metadata 和当前 materialized checkpoint branch
+  解析消息，只接受 `agent_name=soc-triage` 的最后一条可见、无 tool call、非 summary、非空且长度受限的
+  assistant message；stale、regenerated/superseded、重复 ID、错误 agent 或不可用 checkpoint 全部 fail closed。
+- 服务端保存 checkpoint ID 和 message text SHA-256，再复用 `SocReviewService.add_note()`；只有 open
+  ReviewQueue 可创建新候选。结果仍是 `review_note` 来源的 `pending_review`，不会 confirm/activate memory、
+  修改 verdict、关闭工单或执行动作。
+- ReviewQueue Web 可打开 `soc-triage` 对话并保留 `queue_id`；对话页仅提交当前稳定 assistant message ID
+  和分析师填写的采纳理由。该 Web 链路证明服务端消息真实性，不等价于证明该对话已注入对应工单的
+  bounded ReviewQueue context；后者仍是独立产品缺口，当前只有 `SocLeadAgentChatService` TUI 路径具备
+  server-built bounded context bridge。
+- API contract snapshot、resolver/router/core service、frontend API/UI 测试已补齐：F2 后端 25 项、完整
+  `test_soc_agent_service.py` 95 项、PI-01F/F1 聚焦 25 项、前端 899 项和 SOC Review Playwright 4 项均通过；
+  Ruff、ESLint、TypeScript 通过。SOC Playwright fixture 还改为显式等待 route 注册，浏览器测试使用与 Next
+  dev server 同源的 `localhost`。下一刀进入 `PI-03F3`，先冻结 typed aggregation 契约，再允许 Kafka/
+  批处理重复模式成为单个候选来源。
+- `codegraph sync .` 已完成，索引为 2,042 files / 46,201 nodes / 115,606 edges；查询
+  `resolve_soc_lead_agent_message` 可定位 resolver、Gateway route import 和回归测试。旧的
+  `backend/.deer-flow/internal-transfer/` 仍为空，本切片没有打包、提交或推送。
+
+## 2026-08-06 — PI-03F1 explicit analyst acceptance source completed
+
+- 新增 `ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION`。只有分析师明确提交 queue/thread/message 和
+  acceptance reason 时，现有 `SocReviewService.add_note()` 才通过 `SocMemoryCandidateSourceBridge` 生成
+  `detection_lesson` 候选；source type 仍是 `review_note`，因为权威来源是人工采纳而不是模型。
+- `soc chat tui --lead-agent` 新增 `/accept-conclusion REUSE_REASON`，选取当前 ReviewQueue 会话最后一条
+  带稳定 ID 的 assistant message；非 Lead Agent TUI 不显示也不能执行该命令。CLI 的 `soc review note`
+  提供对应显式 lineage 参数。
+- 候选稳定记录 surface/queue/run/alert/thread/message/origin/evidence refs，保持 `pending_review`、
+  `runtime_decision_allowed=false`，不会自动 confirm、激活 retrieval、改 verdict、关队列或执行动作。
+- 当前 CLI/TUI lineage 是人工声明/当前 stream 捕获的 provenance，不是 Gateway 服务端消息真实性证明。
+  下一刀 `PI-03F2` 必须从 authenticated server-owned thread store 解析 assistant 原文；之后 `PI-03F3`
+  才以 typed aggregation policy 接 Kafka/batch 重复模式，禁止逐告警写 memory。
+
+## 2026-08-06 — PI-01F interactive Lead Agent governance bridge completed
+
+- 找到实际缺口：`SocLeadAgentChatService` 已经为 `soc chat tui --lead-agent` 处理结构化 proposal，但标准
+  DeerFlow Web/Gateway custom-agent 路径会直接运行 `lead_agent(agent_name=soc-triage)`，此前不会进入
+  SOC Approval Inbox。
+- DeerFlow 增加通用、operator-owned 的 `AgentConfig.middlewares` 扩展：只应用于对应 lead/custom agent，
+  先于 global `extensions.middlewares` 加载，精确重复项去重；普通 API/model-managed agent update 只能保留，
+  不能写入该字段。SOC 业务逻辑仍全部位于 `backend/soc_agent/`。
+- `SocLeadAgentProfile.v2` 安装 `SocLeadAgentApprovalMiddleware`。Web/Gateway 在 `after_model` 解析显式
+  `<soc_action_proposal>`；TUI 保留原外层 service bridge。两条入口共用 proposal parser、action policy 和
+  approval service，不建立第二套审批语义。
+- 模型只能提供 route/action/reason/payload/confidence；proposal/decision/request ID、actor、source、context
+  与 idempotency 由服务端稳定生成。一条消息最多 5 个 proposal；相同 replay 幂等，内容变化仍冲突。
+- middleware 只创建只读结果或 pending approval request，从不执行高风险动作；高风险 adapter 仍不得作为
+  unrestricted DeerFlow/MCP tool 暴露。旧的 per-user `soc-triage` profile 只有显式
+  `soc agent install-profile --overwrite` 才升级。
+- 先前自动生成的本地 transfer archive 属于过早交付，已全部清理。项目未完成；后续只有用户明确要求或
+  真实内网交接开始时才打包，普通切片/仿真 gate 不再触发打包。
+- 聚焦 middleware/chat/profile/config/assembly/approval/architecture 回归分组共 `55 passed`；SOC Python
+  Ruff format/check、`git diff --check` 通过。`codegraph sync .` 纳入 2 个新增代码文件/41 个节点，查询
+  `SocLeadAgentApprovalMiddleware` 可定位 class、hooks、profile 常量和测试引用。
+- 下一刀按 `delivery-roadmap.md` 的 `PI-03F` 收口 memory candidate 来源；不把 action proposal、每条告警或
+  每个 finding 自动写成记忆。
 
 ## 2026-08-06 — PI-05B Simulation Completion Gate completed
 
@@ -61,10 +201,10 @@
   real quality、PI-04 SLO、PI-05 owner/rollback/cohort isolation 七个 open debt。
 - 聚焦 PI-03/04/05 测试 `31 passed`；完整 SOC、architecture 与 PingAn internal-batch 回归
   `803 passed in 216.48s`，Ruff 通过。`codegraph sync .` 纳入 2 个新增 Python 文件/41 个节点，查询
-  `run_soc_simulation_completion` 可定位 evaluator、CLI 和测试引用。产品仿真轨到此完成；下一步只在
-  真实输入可用时恢复对应债务，不实现与部署环境脱节的假 PI-05C controller。
+  `run_soc_simulation_completion` 可定位 evaluator、CLI 和测试引用。该报告当时结束既定仿真清单，
+  但随后 PI-01F 审计证明它不是“项目完成”声明；最新执行指针以本文件顶部和 `delivery-roadmap.md` 为准。
 
-## 2026-08-06 — Real Integration Debt readiness audit and fresh internal handoff
+## 2026-08-06 — Real Integration Debt readiness audit and intermediate handoff (historical)
 
 - 在不发网络请求、不调用 LLM/Provider 的前提下重新审计 D12-B 与 PI-01E internal-real 入口。D12-B
   preflight 的 DEV 环境、LOCAL legacy profile、internal mode、必需配置、ZEUS HTTPS host allowlist 和
@@ -79,9 +219,9 @@
 - 从干净的 `yyds-dev` 提交 `36f25b87` 重建 source + private-overlay 内网迁移包；两个 archive 均为
   mode `0600`，`safe_member_paths=true`、`manifest_valid=true` 且逐文件 hash 全量通过。具体文件名、
   SHA-256 和大小只以 Git-ignored `backend/.deer-flow/internal-transfer/transfer-report-*.json` 为准，
-  不写入 tracked 文档形成过时清单。
-- 当前指针不变：产品仿真实现轨已结束。下一次有效执行是在批准的内网 DEV 补齐 workflow import 和
-  私有 case 后运行 fresh `internal_real` stage 5；外网不新增 fake PI-05C controller。
+  不写入 tracked 文档形成过时清单。该中间 archive 后来因交付时机过早由 PI-01F 清理，不是当前产物。
+- 当时的指针是等待批准的内网 DEV 补齐 workflow import 和私有 case 后运行 fresh `internal_real`
+  stage 5；PI-01F 已纠正为继续做产品缺口收口，最新指针不再引用这条历史记录。
 
 ## 2026-08-05 — PI-05A governed rollout simulation rehearsal completed
 
@@ -763,7 +903,7 @@
 | 1.2 | Correlation quality baseline | Done | 已建 vendor-neutral same-incident / related-but-distinct / unrelated corpus；`soc eval correlation` 输出双任务指标、reason 分布、fan-out、evidence lineage/unrelated exposure，并支持 `--baseline-json` replay diff | scorer/report/fixture 版本显式；当前 8-pair baseline 暴露 retrieval/dedup precision 均约 0.667；`shadow_dedup_allowed=false` |
 | 1.3 | [Correlation label corpus expansion](../archive/ai_soc/deferred/correlation-label-corpus-expansion.md) | Deferred / `PI-03` data-dependent | 从脱敏真实告警准备 analyst-reviewed pairs，覆盖来源、时间窗口、跨规则同事件和同规则不同事件 cohort | 不以 8 条受控 pair 代表生产分布；标签来源/rationale/version 可审计；扩充后再比较 scorer v2，不直接切换生产规则；不阻塞当前 `PI-01` |
 | 2 | External Disposition Sync Contract | Done | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol、in-memory repository、PostgreSQL persistence、ReviewQueue context API/Web/TUI/Lead Agent visibility；已接 high-trust mapped review/correction 和 pending memory candidate | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
-| 3 | Memory Tracking Contract | Partial | DB-first candidate persistence、review workflow、confirmed-memory boundary、retrieval policy 与 governed activation 已完成；`SocMemoryCandidateSourceBridge` 已接 correction、domain finding、analyst feedback 和 ReviewQueue review note；Kafka/Lead Agent 自动结论来源与 prompt injection 仍后置 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；wiki/OKF 只作为后期 projection |
+| 3 | Memory Tracking Contract | Partial | DB-first candidate/review/retrieval governance 已完成；source bridge 已接 correction、domain finding、analyst feedback、review note、CLI/TUI/Web 显式采纳和 PI-03F3 Kafka/batch typed aggregate。Web queue-grounded context 与 governed prompt injection 仍后置 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；repeated observation 与 active memory 分离；wiki/OKF 只作为后期 projection |
 | 3.1 | Memory candidate DB/API/ReviewQueue visibility | Done | 已新增 `soc_memory_candidates`、repository、CLI `soc memory list/get`、Gateway `/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded visibility | candidate 仍为 `pending_review` 且 `runtime_decision_allowed=false`；不注入 prompt，不影响 verdict |
 | 3.2 | Memory candidate review workflow / confirmed-memory boundary | Done | 已新增 `SocMemoryCandidateReviewCommand/Result`、`SocMemoryRecord`、`soc_memory_records`、`soc memory review`、`soc memory records list/get`、Gateway review/records API 和 ReviewQueue Web 操作入口 | confirm/reject/deprecate/expire 只能走 `SocMemoryService`；`confirm` 生成 `SocMemoryRecord(retrieval_enabled=false)`；不注入 prompt，不影响 verdict |
 | 3.3 | Confirmed memory retrieval policy / unified visibility MVP | Done | 已新增 `SocMemoryQuery`、`SocMemoryMatch`、`SocMemoryRetrievalResult`、`SocMemoryService.find_relevant_records()`、CLI `soc memory search`、Gateway `/api/soc/memory/search`、`InvestigationContext.relevant_memories` 和 Web/TUI/Lead Agent 可见化 | 只返回 `retrieval_enabled=true`、confirmed、未过期 record；返回 score/match reason/token estimate/hash/version；不注入 prompt，不影响 verdict |
@@ -773,7 +913,7 @@
 | 6 | Main SOC Agent Orchestrator MVP | Done for Phase 2 bridge | 已串起 analyze、skill context、correlation、read-only action evidence、domain triage、review summary，输出 `UnifiedInvestigationReport` | APT/EDR/HIDS demo 能看到主控用了哪些 skill、历史 match/reasons/evidence、route、finding 和 review context |
 | 7 | Web/TUI visible investigation | Done for MVP | 已新增 `UnifiedInvestigationView`、`InvestigationTimelineItem`，`InvestigationContext` 聚合 correlation result、domain triage results、evidence timeline、external feedback、memory candidates 和 relevant memories；Web/TUI/Lead Agent bounded artifact 可见 | 分析师能区分 runtime decision、domain findings、read-only evidence、外部人工反馈、人工 correction、retrieval-enabled memory；视图只读，不改 verdict |
 | 8 | Demo / Eval Script | Done for APT/EDR/HIDS + single-alert MVP | `soc demo run`/`soc demo alert` 保持持久化调查演示；`soc eval pingan-main` 额外验证无 DB 的 current + historical correlation 主编排链 | 可分别演示持久化 Web/TUI context 与 bounded orchestrator report；mock action evidence 明确标记，不冒充真实 PA-12 |
-| 9 | Memory candidate source integration | Partial | 已新增 `SocMemoryCandidateSourceBridge`：correction 会自动生成 pending candidate 并回写 `memory_candidate_id`，domain finding 已有幂等 bridge/factory，analyst feedback 可进入 candidate content/facets/metadata，`SocReviewService.add_note()` / `soc review note` 可把 ReviewQueue review note 生成 pending candidate；Kafka daemon、Lead Agent proposal 等来源待接 | 每类来源都有 source/evidence/validity/idempotency/facet；候选默认 pending review；confirmed/retrieval gate 仍由 `SocMemoryService` 控制 |
+| 9 | Memory candidate source integration | Done for PI-03F | `SocMemoryCandidateSourceBridge` 已接 correction/domain finding/feedback/review note；PI-03F1/F2 已接人工采纳 Lead Agent message；PI-03F3 以 immutable observation + 24h UTC source-event-time cohort + 5/5 双门槛接 Kafka/batch，只创建一个 frozen pending candidate | 模型输出、每条 alert/finding/offset 均不能直接写 candidate；重复出现不证明 verdict/authorization/impact/action；confirmed/retrieval gate 仍由 `SocMemoryService` 控制 |
 | 10 | Normalization maintenance loop | Done for MVP | 持久化 schema baseline、主动 monitor、去重/reopen issue、SocEvent、CLI/API/Web/TUI、Kafka metric 摘要；字段重要性 registry、离线 suggestion、confidence calibration 和 repair domain guard 已落地 | 新 schema/解析降级/关键映射缺口不静默；首次观察不自批 baseline；suggestion 不自动改代码；calibration profile 不自动放行动作 |
 | 11 | DeerFlow-backed live Runtime LLM | Done for MVP | 新增 `DeerFlowLLMChatClient`、`SocLLMSettings`，统一装配 analyze/replay/demo/Kafka；offline eval 和 normalize suggest 支持 live model | 显式选择模型；未知模型 fail-fast；输出过 JSON/schema/domain validation；trace 记录安全 metadata/usage；模型不能执行动作 |
 | 11.1 | Deterministic decision policy / confidence guard | Done for uncalibrated MVP | 新增 `SocDecisionPolicy`，把 raw analyzer score、来源、校准状态、证据状态、结构化 review reasons 和 policy version 分开；mock/failed evidence 不参与 domain/scenario 置信度 | stub/LLM self-report 当前全部进入复核；误报、冲突、schema 降级/不支持、关键证据缺口、截断等 guard 不会被高分覆盖；summary/queue/audit 保留原因 |
@@ -839,7 +979,7 @@
 | 41 | approval inbox TUI consumption | Done | `soc review tui` 展示 pending approval request，支持打开详情并 approve 生成 execution token；不执行真实动作 |
 | 42 | TUI approved-action dry-run / execute command | Done | `soc review tui` 支持 dry-run token 校验和 execute boundary token 消费；execute 要求显式 idempotency key；仍不执行外部副作用 |
 | 43 | Kafka daemon scaffold / approval request ingestion | Done | 新增 versioned daemon message contract、`SocDaemonService.process_message()` 和 `soc daemon process` 本地入口；支持 alert 分析与 approval_request 入箱；尚未连接 Kafka broker |
-| 44 | SOC Lead Agent approval middleware | Planned | 等 SOC Lead Agent / skills / MCP tool chain 落地后接入；当前只保留 service-level approval boundary，不提前做无宿主 middleware |
+| 44 | SOC Lead Agent approval middleware | Done (`PI-01F`) | Web/Gateway `soc-triage` 通过 operator-owned per-agent middleware 进入统一 approval boundary；SOC TUI 保留既有外层 bridge；稳定 server IDs、最多 5 proposals、replay 幂等，高风险不自动执行 |
 | 45 | Kafka consumer adapter planning | Done | 新增并归档 `.notes/archive/ai_soc/implementation-plans/kafka-consumer-adapter-plan.md`，明确 mapper/runner/offset/dead-letter/metrics 方案和下一刀 |
 | 46 | Kafka record -> daemon message mapper | Done | 新增 `soc_agent.daemon.kafka_mapper`，纯 stdlib + contracts；支持 alert/approval topics、custom topic set、坏 JSON/未知 topic 错误 |
 | 47 | Kafka consumer runner skeleton | Done | 新增 `SocKafkaConsumerRunner` 和 `KafkaConsumerPort`，串行 map -> process -> commit；mapper/service failure 进 dead-letter，仍不接真实 broker |
@@ -893,7 +1033,7 @@
 | 95 | Correlation Service + Unified Report Bridge | Done | 结构化 correlation service/CLI 基于 summary + evidence 找历史 match；typed result 已进入 main report/domain/review summary；不调用 LLM、不改 Runtime decision |
 | 96 | External Disposition Sync Contract MVP | Done | 固定外部预警/工单/处置系统状态与理由同步协议；新增 mapper/service/repository MVP，Zeus 只是 mock fixture |
 | 100 | External Disposition Review/Correction Integration | Done | 高可信 mapped external disposition 在唯一定位本地 target 后复用 `SocReviewService.correct()`，同步 operational correction 并关闭 review queue；低可信/未知/无法定位不改判 |
-| 97 | Memory Tracking Contract | Partial | `SocMemoryCandidate` 已完成 DB/API/ReviewQueue visibility 和 review workflow；`confirm` 会生成 retrieval-disabled `SocMemoryRecord`；retrieval policy/query/result/unified visibility MVP 已完成；TUI/Web/Kafka/Lead Agent/domain/external disposition 结论先生成 candidate，不直接写生效 memory；wiki/OKF 后期只做 projection |
+| 97 | Memory Tracking Contract | Partial | `SocMemoryCandidate` 已完成 DB/API/ReviewQueue visibility、review workflow 与 governed retrieval；PI-03F1/F2 只在分析师显式采纳后保存 review-note candidate；PI-03F3 已完成 Kafka/batch typed aggregate source；PI-01F2 已完成 Web queue-grounded Lead Agent context。固定 Runtime analyzer 的 memory PromptBuilder injection 未开启；wiki/OKF 后期只做 projection |
 | 98 | PingAn Domain Triage MVP | Done | 新增 `SocDomainTriageService` 和 APT/EDR/HIDS deterministic handlers；`soc eval pingan-domain` 可验证三类样本输出 domain findings、capability card refs 和 evidence refs |
 | 99 | PingAn Main Orchestrator Demo | Done | `soc eval pingan-main` 验证 APT/EDR/HIDS historical + current analyze -> correlation -> skill -> read-only evidence -> domain finding -> review summary |
 | 101 | Phase 2 Correlation Eval Baseline | Done | 新增版本化 scorer ID、same/related/unrelated pair corpus、双任务 precision/recall、reason/fan-out/evidence 报告和 replay diff；不启用 dedup suppression |

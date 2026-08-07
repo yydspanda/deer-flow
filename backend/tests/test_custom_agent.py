@@ -99,10 +99,12 @@ class TestAgentConfig:
             description="Specialized for code review",
             model="deepseek-v3",
             tool_groups=["file:read", "bash"],
+            middlewares=["example.middleware:AuditMiddleware"],
         )
         assert cfg.name == "code-reviewer"
         assert cfg.model == "deepseek-v3"
         assert cfg.tool_groups == ["file:read", "bash"]
+        assert cfg.middlewares == ["example.middleware:AuditMiddleware"]
 
     def test_config_from_dict(self):
         from deerflow.config.agents_config import AgentConfig
@@ -761,7 +763,9 @@ class TestAgentsAPI:
             "tool_groups": ["file:read", "bash"],
             "soul": "You are specialized.",
         }
-        response = agent_client.post("/api/agents", json=payload)
+        with patch("app.gateway.routers.agents.get_app_config") as get_app_config:
+            get_app_config.return_value.get_model_config.return_value = object()
+            response = agent_client.post("/api/agents", json=payload)
         assert response.status_code == 201
         data = response.json()
         assert data["model"] == "deepseek-v3"

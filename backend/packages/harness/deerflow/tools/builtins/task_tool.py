@@ -195,6 +195,21 @@ def _merge_skill_allowlists(parent: list[str] | None, child: list[str] | None) -
     return [skill for skill in child if skill in parent_set]
 
 
+def _first_disallowed_output_marker(
+    result: Any,
+    markers: list[str] | None,
+) -> str | None:
+    """Return the first configured literal present in a completed result."""
+    if not markers:
+        return None
+    text = "" if result is None else str(result)
+    normalized = text.casefold()
+    for marker in markers:
+        if marker.casefold() in normalized:
+            return marker
+    return None
+
+
 def _task_result_command(
     *,
     tool_call_id: str,
@@ -204,8 +219,19 @@ def _task_result_command(
     stop_reason: SubagentStopReasonValue | None = None,
     model_name: str | None = None,
     usage: dict[str, int] | None = None,
+    additional_metadata: dict[str, object] | None = None,
 ) -> Command:
     content, metadata_error = format_subagent_result_message(status, result=result, error=error, stop_reason=stop_reason)
+    additional_kwargs = make_subagent_additional_kwargs(
+        status,
+        result=result,
+        error=metadata_error,
+        stop_reason=stop_reason,
+        model_name=model_name,
+        token_usage=usage,
+    )
+    if additional_metadata:
+        additional_kwargs.update(additional_metadata)
     return Command(
         update={
             "messages": [
@@ -213,14 +239,7 @@ def _task_result_command(
                     content=content,
                     tool_call_id=tool_call_id,
                     name="task",
-                    additional_kwargs=make_subagent_additional_kwargs(
-                        status,
-                        result=result,
-                        error=metadata_error,
-                        stop_reason=stop_reason,
-                        model_name=model_name,
-                        token_usage=usage,
-                    ),
+                    additional_kwargs=additional_kwargs,
                 )
             ]
         }
@@ -496,6 +515,43 @@ async def task_tool(
             if result.status == SubagentStatus.COMPLETED:
                 _cache_subagent_usage(tool_call_id, usage, enabled=cache_token_usage)
                 _report_subagent_usage(runtime, result)
+                disallowed_marker = _first_disallowed_output_marker(
+                    result.result,
+                    config.disallowed_output_markers,
+                )
+                if disallowed_marker is not None:
+                    error = "Subagent result rejected by its configured output policy; no result content was emitted."
+                    await aemit_custom_event(
+                        {
+                            "type": "task_failed",
+                            "task_id": task_id,
+                            "error": error,
+                            "usage": usage,
+                            "model_name": effective_model,
+                            "policy_reason": "disallowed_output_marker",
+                        },
+                        writer=writer,
+                    )
+                    logger.warning(
+                        "[trace=%s] Task %s result rejected by output marker policy (%s chars)",
+                        trace_id,
+                        task_id,
+                        len(disallowed_marker),
+                    )
+                    cleanup_background_task(task_id)
+                    return _task_result_command(
+                        tool_call_id=tool_call_id,
+                        status="failed",
+                        error=error,
+                        model_name=effective_model,
+                        usage=usage,
+                        additional_metadata={
+                            "subagent_output_policy": {
+                                "status": "rejected",
+                                "reason": "disallowed_output_marker",
+                            }
+                        },
+                    )
                 await aemit_custom_event(
                     {
                         "type": "task_completed",

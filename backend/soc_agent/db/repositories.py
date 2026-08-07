@@ -22,6 +22,9 @@ from soc_agent.contracts import (
     GovernedContextFact,
     GovernedContextFactQuery,
     InvestigationEvidence,
+    MemoryPatternDataClass,
+    MemoryPatternObservation,
+    MemoryPatternSourceType,
     NormalizationBaselineStatus,
     NormalizationMaintenanceIssue,
     NormalizationMaintenanceIssueStatus,
@@ -68,6 +71,7 @@ from soc_agent.db.models import (
     SocGovernedContextFactRow,
     SocInvestigationEvidenceRow,
     SocMemoryCandidateRow,
+    SocMemoryPatternObservationRow,
     SocMemoryRecordRow,
     SocMutationAuditRow,
     SocNormalizationMaintenanceIssueRow,
@@ -1358,6 +1362,81 @@ class SqlAlchemyAlertRepository:
             result = session.execute(query.order_by(SocNormalizationMaintenanceIssueRow.last_seen_at.desc()).limit(limit))
             return [NormalizationMaintenanceIssue.model_validate(row.issue_payload) for row in result.scalars()]
 
+    def save_memory_pattern_observation(
+        self,
+        observation: MemoryPatternObservation,
+    ) -> None:
+        payload = observation.model_dump(mode="json")
+        with self._session_factory() as session:
+            existing = session.get(
+                SocMemoryPatternObservationRow,
+                observation.observation_id,
+            )
+            if existing is not None:
+                if existing.observation_payload != payload:
+                    raise ValueError(f"memory pattern observation {observation.observation_id} already exists")
+                return
+            session.add(
+                SocMemoryPatternObservationRow(
+                    observation_id=observation.observation_id,
+                    **_memory_pattern_observation_row_values(observation, payload),
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise ValueError("memory pattern idempotency or aggregation/source identity already exists") from exc
+
+    def get_memory_pattern_observation(
+        self,
+        observation_id: str,
+    ) -> MemoryPatternObservation | None:
+        with self._session_factory() as session:
+            row = session.get(SocMemoryPatternObservationRow, observation_id)
+            return MemoryPatternObservation.model_validate(row.observation_payload) if row is not None else None
+
+    def find_memory_pattern_observation_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> MemoryPatternObservation | None:
+        with self._session_factory() as session:
+            row = session.execute(select(SocMemoryPatternObservationRow).where(SocMemoryPatternObservationRow.idempotency_key == idempotency_key).limit(1)).scalar_one_or_none()
+            return MemoryPatternObservation.model_validate(row.observation_payload) if row is not None else None
+
+    def list_memory_pattern_observations(
+        self,
+        *,
+        aggregation_key: str | None = None,
+        lineage_key: str | None = None,
+        tenant_id: str | None = None,
+        environment: str | None = None,
+        data_class: MemoryPatternDataClass | None = None,
+        source_type: MemoryPatternSourceType | None = None,
+        limit: int = 500,
+    ) -> list[MemoryPatternObservation]:
+        with self._session_factory() as session:
+            query = select(SocMemoryPatternObservationRow)
+            if aggregation_key is not None:
+                query = query.where(SocMemoryPatternObservationRow.aggregation_key == aggregation_key)
+            if lineage_key is not None:
+                query = query.where(SocMemoryPatternObservationRow.lineage_key == lineage_key)
+            if tenant_id is not None:
+                query = query.where(SocMemoryPatternObservationRow.tenant_id == tenant_id)
+            if environment is not None:
+                query = query.where(SocMemoryPatternObservationRow.environment == environment)
+            if data_class is not None:
+                query = query.where(SocMemoryPatternObservationRow.data_class == data_class.value)
+            if source_type is not None:
+                query = query.where(SocMemoryPatternObservationRow.source_type == source_type.value)
+            rows = session.execute(
+                query.order_by(
+                    SocMemoryPatternObservationRow.observed_at.asc(),
+                    SocMemoryPatternObservationRow.observation_id.asc(),
+                ).limit(limit)
+            ).scalars()
+            return [MemoryPatternObservation.model_validate(row.observation_payload) for row in rows]
+
     def save_skill_feedback_observation(self, observation: SkillFeedbackObservation) -> None:
         payload = observation.model_dump(mode="json")
         with self._session_factory() as session:
@@ -2193,6 +2272,33 @@ def _normalization_issue_row_values(issue: NormalizationMaintenanceIssue, payloa
         "resolved_at": issue.resolved_at,
         "resolution_reason": issue.resolution_reason,
         "issue_payload": payload,
+    }
+
+
+def _memory_pattern_observation_row_values(
+    observation: MemoryPatternObservation,
+    payload: dict,
+) -> dict:
+    return {
+        "idempotency_key": observation.idempotency_key,
+        "aggregation_key": observation.aggregation_key,
+        "lineage_key": observation.lineage_key,
+        "content_hash": observation.content_hash,
+        "tenant_id": observation.tenant_id,
+        "environment": observation.environment,
+        "data_class": observation.data_class.value,
+        "source_type": observation.source.source_type.value,
+        "source_id": observation.source.source_id,
+        "run_id": observation.source.run_id,
+        "alert_id": observation.source.alert_id,
+        "pattern_dimension": observation.signature.dimension.value,
+        "pattern_value": observation.signature.value,
+        "mocked": observation.mocked,
+        "observed_at": observation.source.observed_at,
+        "window_start": observation.window_start,
+        "window_end": observation.window_end,
+        "created_at": observation.created_at,
+        "observation_payload": payload,
     }
 
 

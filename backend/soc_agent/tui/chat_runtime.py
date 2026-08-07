@@ -48,6 +48,21 @@ def stream_actions(
 
 def _translate_custom(data: dict[str, Any]) -> list[Action]:
     kind = data.get("kind")
+    task_event_type = data.get("type")
+    if task_event_type in {
+        "task_started",
+        "task_running",
+        "task_completed",
+        "task_failed",
+        "task_cancelled",
+        "task_timed_out",
+    }:
+        return [
+            SystemMessage(
+                _specialist_task_event_text(task_event_type, data),
+                tone=("error" if task_event_type in {"task_failed", "task_cancelled", "task_timed_out"} else "info"),
+            )
+        ]
     if kind == "soc.review_context":
         return [
             SystemMessage(
@@ -144,6 +159,41 @@ def _translate_custom(data: dict[str, Any]) -> list[Action]:
             )
         ]
     return []
+
+
+def _specialist_task_event_text(event_type: str, data: dict[str, Any]) -> str:
+    status_labels = {
+        "task_started": "started",
+        "task_running": "running",
+        "task_completed": "completed",
+        "task_failed": "failed",
+        "task_cancelled": "cancelled",
+        "task_timed_out": "timed out",
+    }
+    parts = [f"SOC specialist {status_labels[event_type]}"]
+    task_id = _as_str(data.get("task_id"))
+    if task_id:
+        parts.append(f"task={task_id}")
+    description = _as_str(data.get("description"))
+    if description:
+        parts.append(description)
+    model_name = _as_str(data.get("model_name"))
+    if model_name:
+        parts.append(f"model={model_name}")
+    if event_type == "task_running":
+        message_index = data.get("message_index")
+        total_messages = data.get("total_messages")
+        if isinstance(message_index, int) and isinstance(total_messages, int):
+            parts.append(f"progress={message_index}/{total_messages}")
+    usage = data.get("usage")
+    if isinstance(usage, dict):
+        total_tokens = usage.get("total_tokens")
+        if isinstance(total_tokens, int):
+            parts.append(f"tokens={total_tokens}")
+    error = _as_str(data.get("error"))
+    if error:
+        parts.append(error)
+    return " | ".join(parts)
 
 
 def _review_context_text(*, queue_id: str, run_id: str, alert_id: str) -> str:

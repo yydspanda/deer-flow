@@ -86,7 +86,7 @@ provider/infrastructure row remains `Mock` or `Data-gated`.
 | `AC-27` | Main orchestrator eval/demo service | Complete | - | `SocMainOrchestratorService` produces a bounded unified report in PingAn eval/tests | Maintain as eval/demo |
 | `AC-28` | Live Main Orchestrator application wiring | Deferred | P2 | Live product already composes ReviewContext without this service; wiring it now could create a second orchestration path | Parking Lot |
 | `AC-29` | DeerFlow SOC Lead Agent TUI path | Complete | - | Installed `soc-triage` profile, bounded review artifact, stream and proposal boundary are executable | Maintain |
-| `AC-30` | Specialized APT/EDR/HIDS/Hunting Sub Agents | Deferred | P2 | Current domain handlers/skills are sufficient for Alpha; autonomous sub-agent delegation is later work | Parking Lot |
+| `AC-30` | Specialized SOC Sub Agents | Complete | - | `PI-01G1..G3` provide capability-oriented network, endpoint (EDR/HIDS), web and email specialists through DeerFlow native delegation, bounded ReviewQueue projection and advisory-only authority; native event/replay tests plus real-model NIDS/EDR smokes passed | Maintain; hunting/red-team agents remain separately deferred |
 | `AC-31` | Read-only action/evidence boundary | Complete | - | Policy, dispatcher, registry, adapter/MCP and `InvestigationEvidence` return path exist | Maintain |
 | `AC-32` | Local CMDB/EDR/HIDS/TI/security-tag providers | Mock | P2 | Results are explicitly local/in-memory/stdio fixtures and cannot satisfy production fact requirements | PI |
 | `AC-33` | Real investigation providers | Data-gated | P2 | Requires real endpoints, credentials, payload contracts, redaction and smoke evidence | PI |
@@ -189,7 +189,7 @@ These rows cannot be “fixed” by adding more local mocks.
 | `AC-06` Worker pool/backpressure | 10k alerts/day and current Alpha can validate serial semantics first | PI capacity model shows serial path misses SLO |
 | `AC-10` Gateway analyze/replay API | CLI/Kafka cover Alpha ingestion and replay | Product requires browser/API alert submission |
 | `AC-28` Live Main Orchestrator wiring | ReviewContext already composes live investigation; wiring could duplicate orchestration | One explicit product journey requires the unified report service online |
-| `AC-30` Specialized Sub Agents | Domain handlers/skills and Lead Agent cover Alpha | Domain eval and tool contracts stabilize; parallel delegation has a measurable benefit |
+| `AC-30` Specialized Sub Agents (**closed 2026-08-07**) | Re-entered as `PI-01G` after the product owner prioritized the complete external product flow; G1 profiles, G2 governed delegation and G3 native event/replay plus representative real-model validation passed | Re-enter only for a demonstrated defect in the four defensive profiles; hunting/red-team agents remain a separate governed scope |
 | `AC-41` Automatic domain/Lead/Kafka lesson capture | Automatic capture can create noise; analyst note/correction already closes the learning loop | Candidate quality/volume policy and review owner are defined |
 | `AC-45` Exercise campaign/participant facts | Authorization alone is safe; identity attribution requires separate governed data | Real exercise roster/campaign source and privacy/RBAC review exist |
 | `AC-46` Generic event stream/SSE | Required mutations will receive durable audit first | Product needs live run progress or cross-service event consumers |

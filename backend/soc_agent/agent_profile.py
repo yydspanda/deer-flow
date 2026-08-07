@@ -111,6 +111,8 @@ def _profile_config(profile: SocLeadAgentProfile, agent_name: str) -> dict[str, 
     }
     if profile.tool_groups is not None:
         config["tool_groups"] = profile.tool_groups
+    if profile.middlewares:
+        config["middlewares"] = profile.middlewares
     return config
 
 

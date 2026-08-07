@@ -6,7 +6,6 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any
-from uuid import uuid4
 
 from pydantic import ValidationError
 
@@ -22,10 +21,23 @@ from soc_agent.contracts import (
     SocAgentStreamEvent,
 )
 from soc_agent.core import SocAgentActionDispatcher, SocAgentActionPolicy, SocAgentApprovalService, SocAgentCapabilityRouter
+from soc_agent.utils.hashing import stable_hash
 
 ACTION_PROPOSAL_START = "<soc_action_proposal>"
 ACTION_PROPOSAL_END = "</soc_action_proposal>"
 _ACTION_PROPOSAL_RE = re.compile(rf"{re.escape(ACTION_PROPOSAL_START)}\s*(.*?)\s*{re.escape(ACTION_PROPOSAL_END)}", re.DOTALL)
+_MAX_ACTION_PROPOSALS_PER_MESSAGE = 5
+_MODEL_PROPOSAL_FIELDS = frozenset({"route", "action", "reason", "payload", "confidence"})
+_PROPOSAL_CONTEXT_FIELDS = frozenset(
+    {
+        "thread_id",
+        "queue_id",
+        "run_id",
+        "alert_id",
+        "context_hash",
+        "proposed_by",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -79,6 +91,7 @@ class SocLeadAgentActionProposalBoundary:
             run_id=proposal.run_id,
         )
         decision = self._action_policy.check(action=proposal.action, route=proposal.route, request=chat_request, context=context)
+        decision = _stable_permission_decision(decision, proposal)
         approval_request: SocAgentApprovalRequest | None = None
         submitted = False
         read_only_tool_result = self._review_read_only_tool_proposal(proposal, decision=decision, context=context)
@@ -123,6 +136,7 @@ def extract_action_proposals_from_text(
     text: str,
     *,
     defaults: dict[str, Any] | None = None,
+    proposal_id_seed: str | None = None,
 ) -> ActionProposalParseResult:
     """Extract explicit SOC action proposals from a lead-agent text message."""
 
@@ -144,7 +158,21 @@ def extract_action_proposals_from_text(
             if not isinstance(item, dict):
                 errors.append(f"proposal block {index}.{item_index} must be a JSON object")
                 continue
-            payload = _proposal_payload(item, metadata)
+            if len(proposals) >= _MAX_ACTION_PROPOSALS_PER_MESSAGE:
+                errors.append(f"proposal block {index}.{item_index} exceeds the {_MAX_ACTION_PROPOSALS_PER_MESSAGE}-proposal message limit")
+                continue
+            proposal_id = None
+            if proposal_id_seed is not None:
+                proposal_id = _stable_contract_id(
+                    "SAP",
+                    {
+                        "seed": proposal_id_seed,
+                        "block_index": index,
+                        "item_index": item_index,
+                        "proposal": {key: item.get(key) for key in sorted(_MODEL_PROPOSAL_FIELDS)},
+                    },
+                )
+            payload = _proposal_payload(item, metadata, proposal_id=proposal_id)
             try:
                 proposals.append(SocAgentActionProposal.model_validate(payload))
             except ValidationError as exc:
@@ -162,13 +190,13 @@ def approval_request_from_action_proposal(
     """Convert a high-risk proposal into a pending approval request."""
 
     return SocAgentApprovalRequest(
-        approval_request_id=decision.approval_request_id or f"APR-{uuid4().hex[:12].upper()}",
+        approval_request_id=decision.approval_request_id or _stable_contract_id("APR", {"proposal_id": proposal.proposal_id}),
         permission_decision_id=decision.decision_id,
         route=decision.route,
         action=decision.action,
         risk_level=decision.risk_level,
         reason=f"Lead Agent proposed action {proposal.action}: {proposal.reason}",
-        requested_by=decision.actor or context.actor,
+        requested_by=proposal.proposed_by or decision.actor or context.actor,
         source_proposal_id=proposal.proposal_id,
         action_payload=proposal.payload,
         context_refs={
@@ -269,17 +297,70 @@ def action_result_event(result: SocAgentActionResult) -> SocAgentStreamEvent:
     )
 
 
-def _proposal_payload(item: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(item)
+def proposal_service_context(
+    context: ServiceRequestContext,
+    proposal: SocAgentActionProposal,
+) -> ServiceRequestContext:
+    """Derive one stable mutation identity per proposal.
+
+    A single model message may contain several proposals. Reusing the turn's
+    request ID for each one would collide in the mutation-audit repository;
+    deriving the identity from the server-owned proposal ID also makes graph
+    replay idempotent.
+    """
+
+    return context.model_copy(
+        update={
+            "request_id": _stable_contract_id("REQ", {"proposal_id": proposal.proposal_id}),
+            "idempotency_key": f"soc-action-proposal:{proposal.proposal_id}",
+        }
+    )
+
+
+def _proposal_payload(
+    item: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    proposal_id: str | None,
+) -> dict[str, Any]:
+    # IDs, source, actor and context references are server-owned. The model is
+    # allowed to supply only the action candidate itself.
+    payload = {key: item[key] for key in _MODEL_PROPOSAL_FIELDS if key in item}
     if "route" not in payload and isinstance(payload.get("action"), str):
         payload["route"] = payload["action"]
     if "action" not in payload and isinstance(payload.get("route"), str):
         payload["action"] = payload["route"]
     for key, value in metadata.items():
+        if key not in _PROPOSAL_CONTEXT_FIELDS:
+            continue
         if value is not None:
             payload[key] = value
+    if proposal_id is not None:
+        payload["proposal_id"] = proposal_id
     payload["source"] = "lead_agent"
     return payload
+
+
+def _stable_permission_decision(
+    decision: SocAgentPermissionDecision,
+    proposal: SocAgentActionProposal,
+) -> SocAgentPermissionDecision:
+    identity = {
+        "proposal_id": proposal.proposal_id,
+        "route": decision.route,
+        "action": decision.action,
+        "policy_version": decision.policy_version,
+    }
+    update: dict[str, Any] = {
+        "decision_id": _stable_contract_id("PERM", identity),
+    }
+    if decision.requires_human_approval:
+        update["approval_request_id"] = _stable_contract_id("APR", identity)
+    return decision.model_copy(update=update)
+
+
+def _stable_contract_id(prefix: str, value: Any) -> str:
+    return f"{prefix}-{stable_hash(value)[:12].upper()}"
 
 
 def _read_only_tool_chat_request(proposal: SocAgentActionProposal) -> SocAgentChatRequest:
@@ -326,5 +407,6 @@ __all__ = [
     "approval_request_from_action_proposal",
     "extract_action_proposals_from_text",
     "permission_decision_event",
+    "proposal_service_context",
     "route_decision_event",
 ]

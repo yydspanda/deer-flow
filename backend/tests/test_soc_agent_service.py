@@ -31,6 +31,7 @@ from soc_agent.contracts import (
     EntrySurface,
     InvestigationEvidence,
     ReviewNoteCommand,
+    ReviewNoteOrigin,
     ReviewQueueCloseCommand,
     ReviewQueueItem,
     ReviewQueueStatus,
@@ -1071,6 +1072,122 @@ def test_review_service_add_note_proposes_pending_memory_candidate_idempotently(
     context = service.get_investigation_context(open_item.queue_id)
     assert [item.candidate_id for item in context.memory_candidates] == [candidate.candidate_id]
     assert context.run.decision == run.decision
+
+
+def test_review_service_records_explicit_human_acceptance_of_lead_agent_conclusion() -> None:
+    repository = InMemoryAlertRepository()
+    summary_repository = InMemorySummaryRepository()
+    review_repository = InMemoryReviewQueueRepository()
+    memory_repository = InMemoryMemoryCandidateRepository()
+    run = SocAnalysisService(
+        repository=repository,
+        summary_repository=summary_repository,
+        review_queue_repository=review_repository,
+    ).analyze(_sample("pingan_legacy_apt.json"))
+    open_item = review_repository.get_open_review_item_by_run(run.run_id)
+    assert open_item is not None
+    service = SocReviewService(
+        repository=repository,
+        summary_repository=summary_repository,
+        review_queue_repository=review_repository,
+        memory_candidate_repository=memory_repository,
+    )
+    command = ReviewNoteCommand(
+        queue_id=open_item.queue_id,
+        note="This reverse connection should be reviewed as victim-to-attacker callback traffic.",
+        origin=ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION,
+        source_thread_id="SOC-TUI-THREAD-1",
+        source_message_id="assistant-message-7",
+        acceptance_reason="The analyst verified the direction against the raw wire observation.",
+        scenario_key="execution.reverse_shell",
+        domain=SocDomainName.APT,
+    )
+    context = ServiceRequestContext(
+        actor=ActorContext(actor_id="analyst-1", surface=EntrySurface.TUI, roles=["soc_analyst"]),
+        idempotency_key="accept-lead-agent-message-7",
+    )
+
+    first = service.add_note(command, context=context)
+    second = service.add_note(command, context=context)
+
+    assert first.memory_candidate is not None
+    assert second.memory_candidate is not None
+    assert second.memory_candidate.candidate_id == first.memory_candidate.candidate_id
+    candidate = first.memory_candidate
+    assert candidate.status is SocMemoryCandidateStatus.PENDING_REVIEW
+    assert candidate.candidate_type is SocMemoryCandidateType.DETECTION_LESSON
+    assert candidate.source.source_type is SocMemoryCandidateSourceType.REVIEW_NOTE
+    assert candidate.source.source_surface is EntrySurface.TUI
+    assert candidate.source.thread_id == "SOC-TUI-THREAD-1"
+    assert candidate.source.message_id == "assistant-message-7"
+    assert candidate.source.metadata["origin"] == "accepted_lead_agent_conclusion"
+    assert candidate.facets["review_note_origin"] == ["accepted_lead_agent_conclusion"]
+    assert "lead-agent-accepted" in candidate.labels
+    assert "lead_agent_thread:SOC-TUI-THREAD-1" in candidate.evidence_refs
+    assert "lead_agent_message:assistant-message-7" in candidate.evidence_refs
+    assert candidate.metadata["lead_agent_output_auto_persisted"] is False
+    assert candidate.runtime_decision_allowed is False
+    assert candidate.proposed_by is not None
+    assert candidate.proposed_by.actor_id == "analyst-1"
+
+
+def test_review_service_rejects_new_lead_agent_acceptance_after_queue_close() -> None:
+    repository = InMemoryAlertRepository()
+    summary_repository = InMemorySummaryRepository()
+    review_repository = InMemoryReviewQueueRepository()
+    memory_repository = InMemoryMemoryCandidateRepository()
+    run = SocAnalysisService(
+        repository=repository,
+        summary_repository=summary_repository,
+        review_queue_repository=review_repository,
+    ).analyze(_sample("pingan_legacy_apt.json"))
+    item = review_repository.get_open_review_item_by_run(run.run_id)
+    assert item is not None
+    item.status = ReviewQueueStatus.CLOSED
+    review_repository.save_review_item(item)
+    service = SocReviewService(
+        repository=repository,
+        summary_repository=summary_repository,
+        review_queue_repository=review_repository,
+        memory_candidate_repository=memory_repository,
+    )
+
+    with pytest.raises(SocServiceConflictError, match="is closed"):
+        service.add_note(
+            ReviewNoteCommand(
+                queue_id=item.queue_id,
+                note="A stale conclusion must not become a new candidate.",
+                origin=ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION,
+                source_thread_id="SOC-TUI-THREAD-CLOSED",
+                source_message_id="assistant-message-closed",
+                acceptance_reason="Attempted after review closure.",
+            ),
+            context=ServiceRequestContext(
+                actor=ActorContext(
+                    actor_id="analyst-web",
+                    surface=EntrySurface.WEB,
+                    roles=["soc_analyst"],
+                    auth_source=ActorAuthSource.SESSION,
+                )
+            ),
+        )
+
+    assert memory_repository.list_memory_candidates() == []
+
+
+def test_review_note_contract_rejects_unconfirmed_or_forged_lead_agent_lineage() -> None:
+    with pytest.raises(ValueError, match="requires source_thread_id"):
+        ReviewNoteCommand(
+            queue_id="REV-1",
+            note="candidate conclusion",
+            origin=ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION,
+        )
+    with pytest.raises(ValueError, match="only valid"):
+        ReviewNoteCommand(
+            queue_id="REV-1",
+            note="ordinary analyst note",
+            source_thread_id="forged-thread",
+        )
 
 
 def test_memory_source_bridge_proposes_domain_finding_candidate_idempotently() -> None:

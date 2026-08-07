@@ -16,6 +16,21 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > [!NOTE]
 > **DeerFlow 2.0 is a ground-up rewrite.** It shares no code with v1. If you're looking for the original Deep Research framework, it's maintained on the [`1.x` branch](https://github.com/bytedance/deer-flow/tree/main-1.x) — contributions there are still welcome. Active development has moved to 2.0.
 
+> [!NOTE]
+> This fork's SOC branch adds a governed `soc-triage` profile and ReviewQueue workspace. Opening Lead
+> Agent chat from a queue binds that chat thread to one queue item; every turn receives a fresh,
+> server-built bounded investigation context. The model cannot switch the binding, approve actions,
+> or write active memory. An analyst may explicitly submit the latest grounded response as a
+> pending memory candidate. Install or refresh the profile with
+> `cd backend && ./.venv/bin/python -m soc_agent.cli agent install-profile --overwrite`. The SOC extension also provides
+> bounded network, endpoint (EDR/HIDS), web, and email specialist profiles through DeerFlow's native
+> subagent registry. Preview their root-config merge with
+> `./.venv/bin/python -m soc_agent.cli agent install-subagents --config ../config.yaml --pretty`; add `--apply` only after
+> review, then run `./.venv/bin/python -m soc_agent.cli agent doctor --pretty`. Specialists receive a
+> server-built ReviewQueue/Skill-guidance projection and no tools; their output is advisory and cannot
+> bypass SOC evidence, memory, or approval services. The repeatable real-model smoke and report fields
+> are documented in `validation/compact_zeus/internal_batch/README.md`.
+
 ## Official Website
 
 Learn more and see **real demos** on our [**official website**](https://deerflow.tech).

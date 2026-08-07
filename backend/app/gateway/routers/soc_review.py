@@ -6,14 +6,28 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.gateway.routers.soc_dependencies import get_or_create_soc_repository, soc_service_context_from_request
+from app.gateway.authz import require_permission
 from app.gateway.routers.soc_transport import create_soc_router
+from app.gateway.soc_dependencies import (
+    get_or_create_soc_repository,
+    get_soc_review_service,
+    soc_service_context_from_request,
+)
+from app.gateway.soc_lead_agent_messages import (
+    SocLeadAgentMessageConflictError,
+    SocLeadAgentMessageNotFoundError,
+    SocLeadAgentMessageUnavailableError,
+    resolve_soc_lead_agent_message,
+)
 from soc_agent.contracts import (
     AnalysisRun,
     CorrectionCommand,
     InvestigationContext,
+    ReviewNoteCommand,
+    ReviewNoteOrigin,
+    ReviewNoteResult,
     ReviewQueueCloseCommand,
     ReviewQueueItem,
     ReviewQueueStatus,
@@ -32,6 +46,7 @@ from soc_agent.core import (
     SocDispositionEvaluationService,
     SocReviewService,
     SocServiceAuthorizationError,
+    SocServiceConflictError,
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
 )
@@ -53,6 +68,15 @@ class ReviewCorrectionRequest(BaseModel):
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
+class LeadAgentConclusionAcceptanceRequest(BaseModel):
+    """Human acceptance command; assistant text is always server-resolved."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: str = Field(min_length=1, max_length=256)
+    acceptance_reason: str = Field(min_length=1, max_length=2_000)
+
+
 class DispositionOutcomeRecordRequest(BaseModel):
     proposal_id: str = Field(min_length=1, max_length=64)
     observed_disposition: SocOperationalDisposition
@@ -62,28 +86,6 @@ class DispositionOutcomeRecordRequest(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list, max_length=300)
     observed_at: datetime | None = None
     supersedes_outcome_id: str | None = Field(default=None, min_length=1, max_length=64)
-
-
-def get_soc_review_service(request: Request) -> SocReviewService:
-    injected = getattr(request.app.state, "soc_review_service", None)
-    if injected is not None:
-        return injected
-
-    repository = get_or_create_soc_repository(request)
-    return SocReviewService(
-        repository=repository,
-        summary_repository=repository,
-        audit_repository=repository,
-        review_queue_repository=repository,
-        evidence_repository=repository,
-        enrichment_execution_repository=repository,
-        authorization_enrichment_repository=repository,
-        disposition_proposal_repository=repository,
-        disposition_evaluation_repository=repository,
-        external_disposition_repository=repository,
-        memory_candidate_repository=repository,
-        memory_record_repository=repository,
-    )
 
 
 ReviewServiceDep = Annotated[SocReviewService, Depends(get_soc_review_service)]
@@ -174,6 +176,66 @@ def correct_review_run(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post(
+    "/items/{queue_id}/lead-agent-threads/{thread_id}/accept",
+    response_model=ReviewNoteResult,
+)
+@require_permission("threads", "read", owner_check=True, require_existing=True)
+async def accept_lead_agent_conclusion(
+    queue_id: str,
+    thread_id: str,
+    body: LeadAgentConclusionAcceptanceRequest,
+    request: Request,
+    service: ReviewServiceDep,
+) -> ReviewNoteResult:
+    """Resolve and accept one completed SOC Lead Agent message as candidate memory."""
+
+    context = soc_service_context_from_request(request, include_soc_roles=True)
+    if context.idempotency_key is None:
+        raise HTTPException(status_code=400, detail="Idempotency-Key header is required")
+    try:
+        resolved = await resolve_soc_lead_agent_message(
+            request,
+            thread_id=thread_id,
+            message_id=body.message_id,
+            queue_id=queue_id,
+        )
+        return service.add_note(
+            ReviewNoteCommand(
+                queue_id=queue_id,
+                note=resolved.text,
+                origin=ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION,
+                source_thread_id=resolved.thread_id,
+                source_message_id=resolved.message_id,
+                acceptance_reason=body.acceptance_reason,
+                metadata={
+                    "message_resolution": "gateway_checkpoint_state",
+                    "agent_name": resolved.agent_name,
+                    "checkpoint_id": resolved.checkpoint_id,
+                    "message_text_sha256": resolved.text_sha256,
+                    "review_context_artifact_schema_version": (resolved.context_provenance.artifact_schema_version),
+                    "review_context_artifact_id": (resolved.context_provenance.artifact_id),
+                    "review_context_hash": resolved.context_provenance.context_hash,
+                    "review_context_skill_hash": (resolved.context_provenance.skill_context_hash),
+                    "review_context_chat_run_id": (resolved.context_provenance.chat_run_id),
+                },
+            ),
+            context=context,
+        )
+    except SocLeadAgentMessageNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (SocLeadAgentMessageConflictError, SocServiceConflictError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (SocLeadAgentMessageUnavailableError, SocServiceNotImplementedError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/disposition-outcomes", response_model=SocDispositionOutcomeApplyResult)

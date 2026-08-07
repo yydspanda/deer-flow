@@ -685,6 +685,52 @@ class SocSkillFeedbackObservationRow(SocBase):
     observation_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
+class SocMemoryPatternObservationRow(SocBase):
+    """Immutable PI-03F3 source observation; it is not confirmed memory."""
+
+    __tablename__ = "soc_memory_pattern_observations"
+    __table_args__ = (
+        UniqueConstraint(
+            "aggregation_key",
+            "source_id",
+            name="uq_soc_memory_pattern_aggregation_source",
+        ),
+        Index(
+            "ix_soc_memory_pattern_scope_window",
+            "tenant_id",
+            "environment",
+            "data_class",
+            "window_start",
+        ),
+        Index(
+            "ix_soc_memory_pattern_lineage_window",
+            "lineage_key",
+            "window_start",
+        ),
+    )
+
+    observation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(512), unique=True, index=True, nullable=False)
+    aggregation_key: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    lineage_key: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    environment: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    data_class: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    source_id: Mapped[str] = mapped_column(String(256), index=True, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    alert_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    pattern_dimension: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    pattern_value: Mapped[str] = mapped_column(String(256), index=True, nullable=False)
+    mocked: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    observation_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
 class SocSkillImprovementCandidateRow(SocBase):
     """Current governed backlog state for one exact aggregation cohort."""
 

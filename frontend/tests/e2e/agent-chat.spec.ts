@@ -20,6 +20,12 @@ const MOCK_AGENTS = [
   },
 ];
 
+const SOC_AGENT = {
+  name: "soc-triage",
+  description: "SOC review and investigation agent",
+  system_prompt: "Review bounded SOC investigation context.",
+};
+
 test.describe("Agent chat", () => {
   test("agent gallery page loads and shows agents", async ({ page }) => {
     mockLangGraphAPI(page, { agents: MOCK_AGENTS });
@@ -76,6 +82,87 @@ test.describe("Agent chat", () => {
     await expect(
       page.locator("header span", { hasText: "test-agent" }),
     ).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("forwards the ReviewQueue identity in direct SOC agent runs", async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page, { agents: [...MOCK_AGENTS, SOC_AGENT] });
+    let streamBody: Record<string, unknown> | undefined;
+    const captureRun = (route: Parameters<typeof handleRunStream>[0]) => {
+      streamBody = route.request().postDataJSON() as Record<string, unknown>;
+      return handleRunStream(route);
+    };
+    await page.route("**/api/langgraph/runs/stream", captureRun);
+    await page.route("**/api/langgraph/threads/*/runs/stream", captureRun);
+
+    await page.goto(
+      "/workspace/agents/soc-triage/chats/new?queue_id=REV-ALPHA-001",
+    );
+    const textarea = page.getByPlaceholder(/how can i assist you/i);
+    await expect(textarea).toBeVisible({ timeout: 15_000 });
+    await textarea.fill("Review the current alert evidence");
+    await textarea.press("Enter");
+
+    await expect(page.getByText("Hello from DeerFlow!")).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect.poll(() => streamBody).toBeDefined();
+    expect(streamBody).toMatchObject({
+      context: {
+        agent_name: "soc-triage",
+        soc_review_queue_id: "REV-ALPHA-001",
+      },
+    });
+    await expect(page).toHaveURL(/queue_id=REV-ALPHA-001$/);
+  });
+
+  test("restores the ReviewQueue identity from an existing thread binding", async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page, {
+      agents: [...MOCK_AGENTS, SOC_AGENT],
+      threads: [
+        {
+          thread_id: MOCK_THREAD_ID,
+          title: "Bound SOC review",
+          agent_name: "soc-triage",
+          metadata: {
+            soc_lead_agent_review_thread_binding: {
+              schema_version: "soc.lead_agent_review_thread_binding.v1",
+              queue_id: "REV-BOUND-001",
+              run_id: "RUN-BOUND-001",
+              alert_id: "ALERT-BOUND-001",
+              bound_by_actor_id: "analyst-1",
+              bound_at: "2026-08-06T00:00:00Z",
+            },
+          },
+        },
+      ],
+    });
+    let streamBody: Record<string, unknown> | undefined;
+    const captureRun = (route: Parameters<typeof handleRunStream>[0]) => {
+      streamBody = route.request().postDataJSON() as Record<string, unknown>;
+      return handleRunStream(route);
+    };
+    await page.route("**/api/langgraph/runs/stream", captureRun);
+    await page.route("**/api/langgraph/threads/*/runs/stream", captureRun);
+
+    await page.goto(`/workspace/agents/soc-triage/chats/${MOCK_THREAD_ID}`);
+    await expect(page.getByText("REV-BOUND-001", { exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
+    const textarea = page.getByPlaceholder(/how can i assist you/i);
+    await textarea.fill("Continue this review");
+    await textarea.press("Enter");
+
+    await expect.poll(() => streamBody).toBeDefined();
+    expect(streamBody).toMatchObject({
+      context: {
+        agent_name: "soc-triage",
+        soc_review_queue_id: "REV-BOUND-001",
+      },
+    });
   });
 
   test("agent chat can regenerate its latest response", async ({ page }) => {

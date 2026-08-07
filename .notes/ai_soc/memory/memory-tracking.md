@@ -1,6 +1,6 @@
 # SOC Memory Tracking
 
-> Updated: 2026-07-08
+> Updated: 2026-08-06
 >
 > 目的：定义 SOC Agent 后续如何沉淀 topic / detection / scenario 级经验，并把 SOC TUI、Kafka daemon、ReviewQueue、Lead Agent 和 domain triage 中的重要结论转成可审计、可确认、可回滚的业务记忆。
 
@@ -31,7 +31,7 @@ Typed memory DB contract
   -> Wiki/OKF export projection later
 ```
 
-当前实现进度：`SocMemoryCandidate` DB/API/CLI/Web/TUI/Lead Agent visibility 已完成；`SocMemoryService.review_candidate()` 已支持 `confirm_candidate`、`confirm`、`reject`、`deprecate`、`expire`；`confirm` 会创建 `SocMemoryRecord(status=confirmed, retrieval_enabled=false)`。`SocMemoryService.find_relevant_records()` 已支持 retrieval-enabled gate、score、match reason、token budget 和 `InvestigationContext.relevant_memories`；prompt injection、memory replay diff 和 retrieval enablement workflow 后续再做。
+当前实现进度：`SocMemoryCandidate` DB/API/CLI/Web/TUI/Lead Agent visibility 已完成；`SocMemoryService.review_candidate()` 已支持 `confirm_candidate`、`confirm`、`reject`、`deprecate`、`expire`；`confirm` 会创建 `SocMemoryRecord(status=confirmed, retrieval_enabled=false)`。`SocMemoryService.find_relevant_records()` 已支持 governed activation、score、match reason、token budget、replay diff 和 `InvestigationContext.relevant_memories`。PI-03F1/F2 已把 CLI/TUI/Web 中“分析师明确采纳的 Lead Agent 结论”接到既有 review-note source bridge，并让 Web/Gateway 从服务端当前 checkpoint 核验消息正文；PI-03F3 已把 Kafka/批处理接成 default-off immutable observation + typed aggregate source。Direct Web queue-grounded context injection 已完成，因而治理通过的 `relevant_memories` 可随同 bounded artifact 进入 SOC Lead Agent；固定 Runtime analyzer 的独立 PromptBuilder memory 注入仍未开启。
 
 ## 2. 不是四维硬主键
 
@@ -219,12 +219,58 @@ score =
 
 | 来源 | 可生成什么 | 默认状态 | 说明 |
 |---|---|---|---|
-| SOC TUI 人工纠正 | detection lesson / negative memory | `pending_review` 或 `confirmed_candidate` | 分析师明确确认时可更高可信 |
-| ReviewQueue close/correct | correction lesson / negative memory | `pending_review` | close 不等于改判；correct 更适合提取经验 |
-| Kafka daemon 批量结果 | repeated pattern candidate | `pending_review` | 自动流量必须保守，不能直接 confirmed |
-| Lead Agent 研判总结 | memory candidate | `pending_review` | LLM 只能提候选，不能自行确认 |
+| SOC TUI / ReviewQueue 人工纠正 | detection lesson / negative memory | `pending_review` | 人工改判是候选来源，不直接生成生效记忆 |
+| ReviewQueue note | procedure / detection lesson | `pending_review` | 普通 note 与显式采纳 Lead Agent 结论共用 `SocReviewService.add_note()` |
+| Kafka daemon / batch 稳定重复模式 | repeated pattern candidate | `pending_review` | 必须先通过 typed aggregation policy 和 distinct-source threshold，禁止逐告警写入 |
+| 分析师明确采纳的 Lead Agent 结论 | detection lesson | `pending_review` | LLM 输出本身不是来源；人工 acceptance + queue/thread/message/reason 才能提候选 |
 | Domain triage result | topic/scenario candidate | `pending_review` | APT/EDR/HIDS/F5 finding 稳定后再接 |
 | InvestigationEvidence | evidence ref | 不直接是 memory | 可作为候选记忆的证据 |
+
+### 7.1 PI-03F 来源治理边界
+
+PI-03F 不增加第二套 memory service。人工 note/correction 等来源继续走
+`SocMemoryCandidateSourceBridge -> SocMemoryService.propose_candidate()`；Kafka/批处理先由
+`SocMemoryPatternService` 保存 typed aggregate observation，达到门槛后再调用同一个
+`SocMemoryService.propose_candidate()`。两条路径都不能绕过 pending-review boundary。
+
+当前已完成的 PI-03F1/F2：
+
+- `soc chat tui --lead-agent` 中，分析师显式执行 `/accept-conclusion REUSE_REASON`，系统选取当前
+  ReviewQueue 上下文内最后一条带稳定 message ID 的 assistant 消息。
+- CLI 可通过 `soc review note --lead-agent-thread-id ... --lead-agent-message-id ...
+  --acceptance-reason ...` 记录同类人工采纳。
+- source type 仍为 `review_note`，因为权威来源是分析师的采纳动作；`origin`、surface、queue、run、alert、
+  thread、message 和 acceptance reason 用于区分与追溯。
+- 结果始终是 `pending_review`；不会自动 confirm、启用 retrieval、修改 verdict、关闭 ReviewQueue 或执行动作。
+- 非 `--lead-agent` TUI 不暴露该命令。CLI/TUI 保存分析师声明并由当前 stream 捕获的 lineage，不冒充
+  server-side message verification。
+- authenticated Web/Gateway command 只接收 queue/thread/message/reason；thread ownership、
+  `agent_name=soc-triage` 和当前 checkpoint branch 由服务端核验，assistant 正文不由客户端提交。只有最后
+  一条可见、非 summary、无 tool call 的稳定 assistant message 可被采纳；服务端保留 checkpoint ID 与
+  text SHA-256，并拒绝 closed ReviewQueue 上的新候选。
+- Web 从 ReviewQueue 打开对话时只提交 queue identity hint。Gateway 对 owner-owned DeerFlow thread 写入
+  immutable queue/run/alert binding，每轮通过 `SocReviewService` 重建 bounded artifact；profile middleware
+  只在 model request 临时注入，并把 exact context hash/lineage 写入 assistant message provenance。采纳必须
+  同时匹配 route queue、thread binding 与 message provenance，仍只生成 `pending_review`。首次采纳改变当前
+  InvestigationContext，因此幂等 retry 复用已保存 snapshot hash，不重算 post-mutation current hash。
+
+PI-03F3 已完成 Kafka/批处理来源，冻结规则如下：
+
+- 每条完成的 Runtime 结果只写 `MemoryPatternObservation`，单条 alert/run/finding/offset 不能形成候选。
+- 从 primary scenario、canonical detection key、category 中只选择第一个可用维度；`rule_code` 不是必填项，
+  也不使用多维联合硬 key。
+- cohort 严格隔离 tenant、environment 和 `simulation|operational` data class，并按 canonical
+  timezone-aware `AlertInput.event.event_time` 落入固定 UTC window。缺失或 naive event time 时跳过聚合，
+  不使用 `run.started_at` 伪造历史窗口，也不猜租户时区。
+- policy `soc.memory_pattern_aggregation.v1` 默认 window=24h、minimum support=5、minimum distinct
+  sources=5；两个门槛必须同时满足。
+- 首次过门槛只通过既有 `SocMemoryService.propose_candidate()` 创建一个 frozen `pending_review`
+  repeated-pattern candidate。后续 observation 只进入 replay diff；自动更新和自动 supersession 均禁止，
+  supersession 固定 `manual_only`。
+- evidence-set hash、observation IDs、source IDs、policy/window/scope 均冻结进 candidate metadata；
+  `soc memory patterns list|replay` 只读检查 cohort 和快照完整性。
+- recurrence 不证明 benign/malicious、授权、攻击影响或处置动作，不能改变 Runtime decision、确认记忆、
+  启用 retrieval 或执行 action。Kafka/batch sidecar 默认关闭，聚合失败不阻断基础分析。
 
 ## 8. 状态机
 
@@ -303,12 +349,19 @@ soc memory reconcile
 - `soc correct`、`soc review tui`、ReviewQueue Web correction 产生 memory candidate。
 - 候选内容来自 structured correction、domain finding、evidence refs 和 analyst reason。
 - 先写 `pending_review`，人工确认后才进入 `confirmed`。
+- PI-03F1 已增加显式 Lead Agent conclusion acceptance；它复用 review-note bridge，不自动保存模型输出。
+- PI-03F2 已补 authenticated Gateway/Web 服务端 message resolution；后续 PI-01F2 又补齐 server-built
+  queue context、immutable thread binding 和 exact message provenance。二者仍是独立边界：context bridge
+  证明模型拿到了哪份 snapshot，acceptance 证明分析师采纳的是哪条 server-owned assistant message。
 
 ### Slice E：Kafka Daemon Memory Candidate
 
-- daemon 只能生成 repeated pattern candidate，默认 `pending_review`。
-- 幂等键必须包含 `topic/partition/offset` 或 run id，避免重放污染 memory。
-- 批量命中可以增加 evidence_count，但不能直接 confirmed。
+- **Done / PI-03F3**：daemon 和 internal batch 只在显式配置时启用同一
+  `SocMemoryPatternService`；默认行为保持 Runtime-only。
+- 每条 alert/offset 只成为 immutable observation/evidence ref。固定 UTC source-event-time window 达到
+  5 support + 5 distinct sources 后，创建一个 frozen `pending_review` candidate。
+- 幂等、scope、evidence-set hash、manual-only supersession 和 read-only replay 已落地；migration 为
+  `0021_memory_pattern_observations`，运维入口为 `soc memory patterns list|replay`。
 
 ### Slice F：Wiki/OKF Export Projection
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.gateway.routers import soc_review
+from app.gateway.soc_lead_agent_messages import ResolvedSocLeadAgentMessage
 from soc_agent.contracts import (
     AlertSummary,
     AnalysisRun,
@@ -25,6 +27,7 @@ from soc_agent.contracts import (
     SocExternalDispositionCanonicalStatus,
     SocExternalDispositionEvent,
     SocExternalDispositionRecord,
+    SocLeadAgentReviewContextProvenance,
     SocMemoryCandidate,
     SocMemoryCandidateCreateCommand,
     SocMemoryCandidateSource,
@@ -216,6 +219,10 @@ class FakeRequest:
             self.state.user = SimpleNamespace(id=user_id, system_role="user")
 
 
+class BypassAuthFakeRequest(FakeRequest):
+    _deerflow_test_bypass_auth = True
+
+
 @pytest.fixture
 def review_api() -> tuple[SocReviewService, InMemorySocRepository, ReviewQueueItem]:
     repository = InMemorySocRepository()
@@ -402,6 +409,94 @@ def test_soc_review_api_corrects_run_and_closes_open_item(review_api) -> None:
     assert repository.get_review_item(item.queue_id).status == ReviewQueueStatus.CLOSED
 
 
+@pytest.mark.asyncio
+async def test_soc_review_api_accepts_server_resolved_lead_agent_message(
+    review_api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, item = review_api
+
+    async def resolve_message(request, *, thread_id, message_id, queue_id):
+        assert thread_id == "thread-soc-1"
+        assert message_id == "assistant-message-9"
+        assert queue_id == item.queue_id
+        return ResolvedSocLeadAgentMessage(
+            thread_id=thread_id,
+            message_id=message_id,
+            agent_name="soc-triage",
+            text="Server-resolved analyst conclusion.",
+            text_sha256="a" * 64,
+            checkpoint_id="checkpoint-9",
+            context_provenance=SocLeadAgentReviewContextProvenance(
+                artifact_id="LCTX-ACCEPT-1",
+                queue_id=item.queue_id,
+                run_id=item.run_id,
+                alert_id=item.alert_id,
+                context_hash="b" * 64,
+                skill_context_hash="c" * 64,
+                chat_thread_id=thread_id,
+                chat_run_id="chat-run-9",
+                rendered_char_count=2_048,
+                context_created_at=datetime(2026, 8, 6, tzinfo=UTC),
+            ),
+        )
+
+    monkeypatch.setattr(soc_review, "resolve_soc_lead_agent_message", resolve_message)
+    result = await soc_review.accept_lead_agent_conclusion(
+        queue_id=item.queue_id,
+        thread_id="thread-soc-1",
+        body=soc_review.LeadAgentConclusionAcceptanceRequest(
+            message_id="assistant-message-9",
+            acceptance_reason="Analyst verified the conclusion against the alert evidence.",
+        ),
+        request=BypassAuthFakeRequest(
+            {
+                "x-soc-surface": "web",
+                "idempotency-key": "accept:web:thread-soc-1:assistant-message-9",
+            },
+            user_id="analyst-web",
+        ),
+        service=service,
+    )
+
+    assert result.memory_candidate is not None
+    candidate = result.memory_candidate
+    assert "Server-resolved analyst conclusion." in candidate.content
+    assert candidate.source.thread_id == "thread-soc-1"
+    assert candidate.source.message_id == "assistant-message-9"
+    assert candidate.source.source_surface is EntrySurface.WEB
+    assert candidate.source.metadata["message_resolution"] == "gateway_checkpoint_state"
+    assert candidate.source.metadata["checkpoint_id"] == "checkpoint-9"
+    assert candidate.source.metadata["message_text_sha256"] == "a" * 64
+    assert candidate.source.metadata["review_context_artifact_id"] == "LCTX-ACCEPT-1"
+    assert candidate.source.metadata["review_context_hash"] == "b" * 64
+    assert candidate.source.metadata["review_context_skill_hash"] == "c" * 64
+    assert candidate.source.metadata["review_context_chat_run_id"] == "chat-run-9"
+    assert candidate.status is SocMemoryCandidateStatus.PENDING_REVIEW
+    assert candidate.runtime_decision_allowed is False
+
+
+@pytest.mark.asyncio
+async def test_soc_review_api_requires_idempotency_for_lead_agent_acceptance(
+    review_api,
+) -> None:
+    service, _, item = review_api
+
+    with pytest.raises(HTTPException) as exc_info:
+        await soc_review.accept_lead_agent_conclusion(
+            queue_id=item.queue_id,
+            thread_id="thread-soc-1",
+            body=soc_review.LeadAgentConclusionAcceptanceRequest(
+                message_id="assistant-message-9",
+                acceptance_reason="Analyst verified this conclusion.",
+            ),
+            request=BypassAuthFakeRequest(user_id="analyst-web"),
+            service=service,
+        )
+
+    assert exc_info.value.status_code == 400
+
+
 def test_soc_review_api_records_explicit_disposition_outcome_with_authenticated_actor() -> None:
     class RecordingDispositionEvaluationService:
         command = None
@@ -521,6 +616,7 @@ def test_soc_review_router_exposes_mvp_paths() -> None:
 
     assert "/api/soc/review/items" in paths
     assert "/api/soc/review/items/{queue_id}/context" in paths
+    assert "/api/soc/review/items/{queue_id}/lead-agent-threads/{thread_id}/accept" in paths
     assert "/api/soc/review/items/{queue_id}/close" in paths
     assert "/api/soc/review/runs/{run_id}/correct" in paths
     assert "/api/soc/review/disposition-outcomes" in paths

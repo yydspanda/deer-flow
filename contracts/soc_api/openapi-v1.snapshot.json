@@ -103,6 +103,9 @@
     "/api/soc/review/items/{queue_id}/context": [
       "get"
     ],
+    "/api/soc/review/items/{queue_id}/lead-agent-threads/{thread_id}/accept": [
+      "post"
+    ],
     "/api/soc/review/runs/{run_id}/correct": [
       "post"
     ]

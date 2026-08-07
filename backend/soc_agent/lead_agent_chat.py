@@ -7,7 +7,6 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from deerflow.client import DeerFlowClient
-from deerflow.config.agents_config import load_agent_config
 from soc_agent.actions.proposals import (
     SocLeadAgentActionProposalBoundary,
     action_proposal_error_event,
@@ -16,10 +15,18 @@ from soc_agent.actions.proposals import (
     approval_request_event,
     extract_action_proposals_from_text,
     permission_decision_event,
+    proposal_service_context,
     route_decision_event,
 )
-from soc_agent.context_bridge import build_lead_agent_review_context_artifact, render_lead_agent_review_context_message
+from soc_agent.context_bridge import (
+    SOC_LEAD_AGENT_REVIEW_CONTEXT_ARTIFACT_RUNTIME_KEY,
+    build_lead_agent_review_context_artifact,
+)
 from soc_agent.contracts import InvestigationContext, ServiceRequestContext, SocAgentChatRequest, SocAgentStreamEvent
+from soc_agent.lead_agent import (
+    SocLeadAgentRuntimeConfigurationError,
+    validate_soc_lead_agent_runtime_configuration,
+)
 from soc_agent.skills import SOC_LEAD_AGENT_NAME
 
 
@@ -75,7 +82,10 @@ class SocLeadAgentChatService:
         request_context = context or ServiceRequestContext()
         thread_id = chat_request.thread_id or f"SOC-LEAD-{uuid4().hex[:12].upper()}"
         if self._require_profile:
-            _ensure_profile_installed(self._agent_name)
+            _ensure_profile_installed(
+                self._agent_name,
+                require_specialists=bool(chat_request.queue_id),
+            )
 
         yield SocAgentStreamEvent(
             type="custom",
@@ -87,6 +97,7 @@ class SocLeadAgentChatService:
             },
         )
         message = _operator_message(chat_request)
+        artifact = None
         proposal_defaults: dict[str, Any] = {
             "thread_id": thread_id,
             "queue_id": chat_request.queue_id,
@@ -120,9 +131,20 @@ class SocLeadAgentChatService:
                     "artifact": artifact.model_dump(mode="json", exclude_none=True),
                 },
             )
-            message = render_lead_agent_review_context_message(message=message, artifact=artifact)
         client = self._client_factory()
         stream_options = {"model_name": self._model_name} if self._model_name else {}
+        if artifact is not None:
+            stream_options.update(
+                {
+                    "subagent_enabled": True,
+                    "runtime_context": {
+                        SOC_LEAD_AGENT_REVIEW_CONTEXT_ARTIFACT_RUNTIME_KEY: artifact.model_dump(
+                            mode="json",
+                            exclude_none=True,
+                        )
+                    },
+                }
+            )
         for event in client.stream(message, thread_id=thread_id, **stream_options):
             stream_event = _coerce_stream_event(event, thread_id=thread_id)
             yield from _review_action_proposals(
@@ -133,11 +155,19 @@ class SocLeadAgentChatService:
             )
 
 
-def _ensure_profile_installed(agent_name: str) -> None:
+def _ensure_profile_installed(
+    agent_name: str,
+    *,
+    require_specialists: bool = False,
+) -> None:
+    if agent_name != SOC_LEAD_AGENT_NAME:
+        raise SocLeadAgentProfileNotInstalledError(f"unsupported SOC Lead Agent profile: {agent_name}")
     try:
-        load_agent_config(agent_name)
-    except FileNotFoundError as exc:
-        raise SocLeadAgentProfileNotInstalledError(f"SOC Lead Agent profile '{agent_name}' is not installed. Run `soc agent install-profile` first.") from exc
+        validate_soc_lead_agent_runtime_configuration(
+            require_specialists=require_specialists,
+        )
+    except SocLeadAgentRuntimeConfigurationError as exc:
+        raise SocLeadAgentProfileNotInstalledError(str(exc)) from exc
 
 
 def _coerce_stream_event(event: Any, *, thread_id: str) -> SocAgentStreamEvent:
@@ -164,7 +194,21 @@ def _review_action_proposals(
         yield event
         return
 
-    parse_result = extract_action_proposals_from_text(content, defaults=proposal_defaults)
+    proposal_id_seed = ":".join(
+        str(value)
+        for value in (
+            proposal_defaults.get("thread_id"),
+            proposal_defaults.get("queue_id"),
+            proposal_defaults.get("run_id"),
+            event.data.get("id"),
+        )
+        if value
+    )
+    parse_result = extract_action_proposals_from_text(
+        content,
+        defaults=proposal_defaults,
+        proposal_id_seed=proposal_id_seed or None,
+    )
     if parse_result.clean_text:
         data = dict(event.data)
         data["content"] = parse_result.clean_text
@@ -173,7 +217,10 @@ def _review_action_proposals(
         yield action_proposal_error_event(error)
     for proposal in parse_result.proposals:
         yield action_proposal_event(proposal)
-        result = boundary.review(proposal, context=context)
+        result = boundary.review(
+            proposal,
+            context=proposal_service_context(context, proposal),
+        )
         if result.read_only_tool_result is not None:
             yield route_decision_event(result.read_only_tool_result.route_decision)
         yield permission_decision_event(result.permission_decision)

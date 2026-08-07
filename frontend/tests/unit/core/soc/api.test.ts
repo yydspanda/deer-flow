@@ -11,6 +11,7 @@ rs.mock("@/core/config", () => ({
 import { fetch as fetcher } from "@/core/api/fetcher";
 import {
   SocApiError,
+  acceptSocLeadAgentConclusion,
   closeSocReviewItem,
   correctSocReviewRun,
   createSocApprovalGrant,
@@ -206,6 +207,42 @@ describe("SOC review API", () => {
     expect(headers.get("x-soc-surface")).toBe("web");
     expect(headers.get("x-trace-id")).toBe("trace-1");
     expect(headers.get("idempotency-key")).toBe("idem-1");
+  });
+
+  test("accepts a Lead Agent conclusion by server-owned message reference", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, {
+        queue_item: { queue_id: "REV-1" },
+        memory_candidate: { candidate_id: "MEM-CAND-1" },
+      }),
+    );
+
+    await acceptSocLeadAgentConclusion(
+      "REV/1",
+      "thread/1",
+      {
+        message_id: "assistant-message-9",
+        acceptance_reason: "Analyst verified the conclusion.",
+      },
+      {
+        actorId: "analyst-1",
+        surface: "web",
+        idempotencyKey: "accept-web-1",
+      },
+    );
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/review/items/REV%2F1/lead-agent-threads/thread%2F1/accept",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          message_id: "assistant-message-9",
+          acceptance_reason: "Analyst verified the conclusion.",
+        }),
+      }),
+    );
+    const headers = firstFetchInit().headers as Headers;
+    expect(headers.get("idempotency-key")).toBe("accept-web-1");
   });
 
   test("posts correction request body", async () => {

@@ -43,6 +43,24 @@ class ThreadMetaStore(abc.ABC):
         pass
 
     @abc.abstractmethod
+    async def get_or_create(
+        self,
+        thread_id: str,
+        *,
+        assistant_id: str | None = None,
+        user_id: str | None | _AutoSentinel = AUTO,
+        display_name: str | None = None,
+        metadata: dict | None = None,
+    ) -> dict | None:
+        """Atomically return an owned thread record, creating it when absent.
+
+        Return ``None`` when the thread ID already belongs to another owner.
+        Unlike ``create()``, this operation is safe for first-run races where
+        several requests may try to materialize the same client-generated ID.
+        """
+        pass
+
+    @abc.abstractmethod
     async def get(self, thread_id: str, *, user_id: str | None | _AutoSentinel = AUTO) -> dict | None:
         pass
 
@@ -84,6 +102,23 @@ class ThreadMetaStore(abc.ABC):
         refreshed so the change bumps recency ordering. Pass ``touch=False``
         for metadata that is not conversation activity (e.g. pin/unpin) so the
         thread keeps its place in ``updated_at``-sorted lists.
+        """
+        pass
+
+    @abc.abstractmethod
+    async def bind_metadata_once(
+        self,
+        thread_id: str,
+        key: str,
+        value: Any,
+        *,
+        user_id: str | None | _AutoSentinel = AUTO,
+    ) -> Any | None:
+        """Atomically set one server-owned metadata key if absent.
+
+        Return the stored value whether this call created it or another caller
+        won the race. Return ``None`` when the thread is absent or inaccessible.
+        The operation does not change thread recency.
         """
         pass
 

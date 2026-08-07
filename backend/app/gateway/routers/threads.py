@@ -69,6 +69,10 @@ from deerflow.runtime.secret_context import redact_metadata_secrets
 from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.utils.file_io import run_file_io
 from deerflow.utils.time import coerce_iso, now_iso
+from soc_agent.context_bridge import (
+    SOC_LEAD_AGENT_REVIEW_CONTEXT_PROVENANCE_MESSAGE_KEY,
+    SOC_LEAD_AGENT_REVIEW_THREAD_BINDING_METADATA_KEY,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/threads", tags=["threads"])
@@ -96,7 +100,13 @@ def _checkpoint_mode_http_error(exc: Exception, thread_id: str) -> HTTPException
 # owner identity through the API surface. Defense-in-depth — the
 # row-level invariant is still ``threads_meta.user_id`` populated from
 # the auth contextvar; this list closes the metadata-blob echo gap.
-_SERVER_RESERVED_METADATA_KEYS: frozenset[str] = frozenset({"owner_id", "user_id"})
+_SERVER_RESERVED_METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        "owner_id",
+        "user_id",
+        SOC_LEAD_AGENT_REVIEW_THREAD_BINDING_METADATA_KEY,
+    }
+)
 _SIDECAR_METADATA_KEY = "deerflow_sidecar"
 _BRANCH_METADATA_KEY = "deerflow_branch"
 # Thread-scoped runtime channels a branch must NOT inherit from its parent:
@@ -116,6 +126,44 @@ def _strip_reserved_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     if not metadata:
         return metadata or {}
     return {k: v for k, v in metadata.items() if k not in _SERVER_RESERVED_METADATA_KEYS}
+
+
+def _strip_server_reserved_message_metadata(values: dict[str, Any]) -> dict[str, Any]:
+    """Remove model-output provenance from client-authored state updates.
+
+    SOC middleware writes this marker directly through the graph. The generic
+    thread-state API must not let a thread owner forge the same marker on an
+    arbitrary assistant message and then cross the Lead Agent acceptance
+    boundary with it.
+    """
+    messages = values.get("messages")
+    if not isinstance(messages, list):
+        return values
+
+    sanitized_messages: list[Any] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            sanitized_messages.append(message)
+            continue
+        sanitized = dict(message)
+        _strip_reserved_additional_kwargs(sanitized)
+        constructor_kwargs = sanitized.get("kwargs")
+        if isinstance(constructor_kwargs, dict):
+            sanitized_constructor_kwargs = dict(constructor_kwargs)
+            _strip_reserved_additional_kwargs(sanitized_constructor_kwargs)
+            sanitized["kwargs"] = sanitized_constructor_kwargs
+        sanitized_messages.append(sanitized)
+
+    return {**values, "messages": sanitized_messages}
+
+
+def _strip_reserved_additional_kwargs(payload: dict[str, Any]) -> None:
+    additional_kwargs = payload.get("additional_kwargs")
+    if not isinstance(additional_kwargs, dict):
+        return
+    sanitized = dict(additional_kwargs)
+    sanitized.pop(SOC_LEAD_AGENT_REVIEW_CONTEXT_PROVENANCE_MESSAGE_KEY, None)
+    payload["additional_kwargs"] = sanitized
 
 
 def _is_pin_metadata_patch(metadata: dict[str, Any]) -> bool:
@@ -1254,7 +1302,7 @@ async def update_thread_state(thread_id: str, body: ThreadStateUpdateRequest, re
         as_node=mutation_node,
         checkpoint_id=body.checkpoint_id,
     )
-    values = dict(body.values or {})
+    values = _strip_server_reserved_message_metadata(dict(body.values or {}))
     writable_channels = graph_writable_channels(getattr(accessor, "graph", None))
     if writable_channels is not None:
         unknown_fields = sorted(set(values) - writable_channels)

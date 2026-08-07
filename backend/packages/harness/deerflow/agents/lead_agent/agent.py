@@ -276,6 +276,7 @@ def build_middlewares(
     agent_name: str | None = None,
     custom_middlewares: list[AgentMiddleware] | None = None,
     *,
+    agent_middleware_paths: list[str] | None = None,
     available_skills: set[str] | None = None,
     app_config: AppConfig | None = None,
     deferred_setup=None,
@@ -295,6 +296,8 @@ def build_middlewares(
         model_name: Resolved runtime model name; gates vision-only middleware.
         agent_name: If provided, MemoryMiddleware will use per-agent memory storage.
         custom_middlewares: Optional list of custom middlewares to inject into the chain.
+        agent_middleware_paths: Trusted zero-argument middleware class paths
+            declared by this custom agent's operator-owned config.
         app_config: Explicit AppConfig; falls back to ``get_app_config()`` when omitted.
         deferred_setup: Optional deferred-MCP-tool setup that attaches
             ``DeferredToolFilterMiddleware`` when ``tool_search`` is enabled.
@@ -449,7 +452,10 @@ def build_middlewares(
     if custom_middlewares:
         middlewares.extend(custom_middlewares)
 
-    configured_middlewares = load_configured_extension_middlewares(resolved_app_config)
+    configured_middlewares = load_configured_extension_middlewares(
+        resolved_app_config,
+        agent_middleware_paths=agent_middleware_paths,
+    )
     if configured_middlewares:
         middlewares.extend(configured_middlewares)
 
@@ -764,6 +770,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
                 model_name=model_name,
                 agent_name=agent_name,
                 available_skills=available_skills,
+                agent_middleware_paths=agent_config.middlewares if agent_config else None,
                 app_config=resolved_app_config,
                 deferred_setup=setup,
                 mcp_routing_middleware=mcp_routing_middleware,

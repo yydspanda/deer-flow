@@ -39,7 +39,7 @@ from deerflow.agents.lead_agent.agent import build_middlewares
 from deerflow.agents.lead_agent.prompt import apply_prompt_template, get_enabled_skills_for_config
 from deerflow.agents.thread_state import get_thread_state_schema, normalize_middleware_state_schemas
 from deerflow.authz.principal import build_principal_from_context
-from deerflow.config.agents_config import AGENT_NAME_PATTERN
+from deerflow.config.agents_config import AGENT_NAME_PATTERN, load_agent_config
 from deerflow.config.app_config import get_app_config, is_trace_correlation_enabled, reload_app_config
 from deerflow.config.extensions_config import ExtensionsConfig, SkillStateConfig, get_extensions_config, reload_extensions_config
 from deerflow.config.paths import get_paths
@@ -82,6 +82,34 @@ _EMBEDDED_AUTHORIZATION_CONTEXT_KEYS = frozenset(
         "authz_attributes",
     }
 )
+_EMBEDDED_RUNTIME_CONTEXT_RESERVED_KEYS = frozenset(
+    {
+        *_EMBEDDED_AUTHORIZATION_CONTEXT_KEYS,
+        "agent_name",
+        "app_config",
+        "deerflow_trace_id",
+        "run_id",
+        "thread_id",
+    }
+)
+
+
+def _validated_embedded_runtime_context(value: Any) -> dict[str, Any]:
+    """Copy an internal extension namespace without exposing runtime identity keys."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError("runtime_context must be a mapping")
+    if len(value) > 32:
+        raise ValueError("runtime_context supports at most 32 extension keys")
+    copied: dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not key.startswith("__"):
+            raise ValueError("runtime_context keys must be namespaced strings beginning with '__'")
+        if key in _EMBEDDED_RUNTIME_CONTEXT_RESERVED_KEYS or key.startswith("__deerflow"):
+            raise ValueError(f"runtime_context key is reserved: {key}")
+        copied[key] = copy.deepcopy(item)
+    return copied
 
 
 def _run_async_from_sync(coro):
@@ -264,6 +292,13 @@ class DeerFlowClient:
         if context is not None:
             cfg.update(context)
 
+        effective_user_id = cfg.get("user_id") or get_effective_user_id()
+        agent_config = load_agent_config(self._agent_name, user_id=effective_user_id) if self._agent_name else None
+        available_skills = self._available_skills
+        if available_skills is None and agent_config is not None and agent_config.skills is not None:
+            available_skills = set(agent_config.skills)
+        agent_middleware_paths = tuple(agent_config.middlewares or ()) if agent_config else ()
+
         authorization_identity = None
         if self._app_config.authorization.enabled:
             principal = build_principal_from_context(
@@ -287,7 +322,8 @@ class DeerFlowClient:
             cfg.get("max_concurrent_subagents"),
             cfg.get("max_total_subagents"),
             self._agent_name,
-            frozenset(self._available_skills) if self._available_skills is not None else None,
+            frozenset(available_skills) if available_skills is not None else None,
+            agent_middleware_paths,
             self._checkpoint_channel_mode,
             self._checkpoint_snapshot_frequency,
             authorization_identity,
@@ -306,9 +342,12 @@ class DeerFlowClient:
 
         # Add framework-provided tools before authorization so Layer 1 sees
         # every capability that can become model-visible.
-        skills_list = get_enabled_skills_for_config(self._app_config)
-        if self._available_skills is not None:
-            skills_list = [s for s in skills_list if s.name in self._available_skills]
+        skills_list = get_enabled_skills_for_config(
+            self._app_config,
+            user_id=effective_user_id,
+        )
+        if available_skills is not None:
+            skills_list = [s for s in skills_list if s.name in available_skills]
         skill_setup = build_skill_search_setup(
             skills_list,
             enabled=self._app_config.skills.deferred_discovery,
@@ -338,8 +377,6 @@ class DeerFlowClient:
         )
         mcp_routing_hints_section = get_mcp_routing_hints_prompt_section(authorized_tools, deferred_names=deferred_setup.deferred_names)
 
-        effective_user_id = cfg.get("user_id") or get_effective_user_id()
-
         kwargs: dict[str, Any] = {
             # attach_tracing=False because ``stream()`` injects tracing
             # callbacks at the graph invocation root so a single embedded run
@@ -352,8 +389,9 @@ class DeerFlowClient:
                     config,
                     model_name=model_name,
                     agent_name=self._agent_name,
-                    available_skills=self._available_skills,
+                    available_skills=available_skills,
                     custom_middlewares=self._middlewares,
+                    agent_middleware_paths=list(agent_middleware_paths),
                     app_config=self._app_config,
                     deferred_setup=deferred_setup,
                     mcp_routing_middleware=mcp_routing_middleware,
@@ -368,7 +406,7 @@ class DeerFlowClient:
                 max_concurrent_subagents=max_concurrent_subagents,
                 max_total_subagents=max_total_subagents,
                 agent_name=self._agent_name,
-                available_skills=self._available_skills,
+                available_skills=available_skills,
                 app_config=self._app_config,
                 deferred_names=deferred_setup.deferred_names,
                 mcp_routing_hints_section=mcp_routing_hints_section,
@@ -799,6 +837,8 @@ class DeerFlowClient:
                 plan_mode, subagent_enabled, recursion_limit). Trusted embedded
                 callers may also provide user_id, user_role, oauth_provider,
                 oauth_id, channel_user_id, is_internal, and authz_attributes.
+                ``runtime_context`` accepts a deep-copied mapping whose keys
+                begin with ``__``; identity/auth/config keys remain reserved.
 
         Yields:
             StreamEvent with one of:
@@ -851,6 +891,7 @@ class DeerFlowClient:
         for key in _EMBEDDED_AUTHORIZATION_CONTEXT_KEYS:
             if key in kwargs:
                 context[key] = kwargs[key]
+        context.update(_validated_embedded_runtime_context(kwargs.get("runtime_context")))
 
         configurable = config.get("configurable") or {}
         deerflow_trace_id = get_current_trace_id()
@@ -871,13 +912,13 @@ class DeerFlowClient:
             deerflow_trace_id=deerflow_trace_id,
         )
 
+        if self._agent_name:
+            context["agent_name"] = self._agent_name
         self._ensure_agent(config, context=context)
 
         state: dict[str, Any] = {"messages": [HumanMessage(content=message, additional_kwargs={"run_id": run_id})]}
         if deerflow_trace_id:
             context[DEERFLOW_TRACE_METADATA_KEY] = deerflow_trace_id
-        if self._agent_name:
-            context["agent_name"] = self._agent_name
 
         seen_ids: set[str] = set()
         # Cross-mode handoff: ids already streamed via LangGraph ``messages``

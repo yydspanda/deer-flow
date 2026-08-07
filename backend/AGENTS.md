@@ -314,6 +314,25 @@ The fork-specific SOC business extension lives under `backend/soc_agent/` and mu
 from the reusable DeerFlow harness runtime. Entry surfaces call SOC core services; vendor aliases and
 loose payload handling stay in `soc_agent.normalizers`.
 
+SOC specialist reasoning is configured by `soc_agent/subagents.py` and loaded by DeerFlow's existing
+`SubagentsAppConfig`/registry/task executor. `soc agent install-subagents` defaults to a dry-run root
+`config.yaml` merge; `--apply` is explicit and conflicting managed names fail unless `--overwrite` is
+also explicit. The four profiles are network, endpoint (EDR/HIDS), web and email. They are tool-free,
+single-response reasoners (`tools=[]`, `skills=[]`): the server projects the matching reviewed public
+Skill `references/runtime-guidance.md` together with bounded ReviewQueue evidence, so specialists do
+not discover files or inherit Provider/MCP/action tools. `max_turns=32` is the current LangGraph
+recursion budget for the middleware-heavy graph, not permission for a 32-action loop. Specialist text
+is advisory only and cannot enter `InvestigationEvidence`, mutate Runtime/ReviewQueue, write memory,
+or emit an executable action proposal.
+
+Lead-only enforcement lives in `SocLeadAgentDelegationMiddleware`, not in DeerFlow's generic executor.
+It requires server-bound ReviewQueue context, allows only the four managed names, limits a chat run to
+two distinct specialists, caps the Lead Agent's narrow task at 1,200 characters and the server-built
+projection at 32,000 characters, records stable case/task/projection lineage, rejects action markers,
+and treats any stopped/capped subagent as failed. Validate the installed profile/config with
+`soc agent doctor`; run the real-model representative smoke with
+`validation/compact_zeus/internal_batch/validate_soc_lead_agent_delegation.py`.
+
 Provider-side PingAn integrations live under `soc_agent.integrations.pingan`, separate from source
 normalizers and generic Runtime/Core. The asset-location integration reuses the generic
 `asset.locate -> SocMcpToolActionAdapter -> InvestigationEvidence` chain and receives already-extracted
@@ -656,6 +675,39 @@ expired activations and overdue reviews. Public surfaces are
 `POST /api/soc/memory/records/{memory_id}/retrieval`, `soc memory records retrieval`, and read-only
 `soc memory search --baseline-json` diffing.
 
+Lead Agent output is not a memory write trigger. `ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION`
+represents a human-owned `SocReviewService.add_note()` mutation with queue/thread/message/reason
+lineage and still creates only a `pending_review` review-note candidate. The TUI command is available
+only under `soc chat tui --lead-agent`; CLI/TUI provenance is not server-side message verification.
+Gateway/Web uses
+`POST /api/soc/review/items/{queue_id}/lead-agent-threads/{thread_id}/accept`: clients send only a
+message ID and human reason. `app.gateway.soc_lead_agent_messages` requires authenticated thread
+ownership at the route, checks `agent_name=soc-triage`, resolves the latest visible terminal assistant
+message from the current materialized checkpoint, and rejects stale/tool/hidden/ambiguous content.
+The resulting review note records checkpoint/text-hash provenance and requires an open queue. Direct
+Web runs may send only `context.soc_review_queue_id`; `app.gateway.soc_lead_agent_context` requires an
+authenticated `lead_agent(agent_name=soc-triage)`, creates or reads the caller-owned first-run thread,
+persists an immutable server-reserved queue/run/alert binding, validates tenant and business lineage,
+and rebuilds the artifact through `SocReviewService` before each run. One thread cannot switch queues.
+`SocLeadAgentReviewContextMiddleware` adds the bounded artifact only to the model request, never to
+thread message history, and stamps exact artifact/hash/chat-run provenance on the resulting AI
+message. The hard rendered limit is 48,000 characters and fails before run admission. Acceptance must
+match route queue, thread binding and message provenance; it persists that exact snapshot rather than
+recomputing a post-mutation current hash. Client-facing `POST /api/threads/{thread_id}/state` strips
+the reserved SOC provenance key from submitted messages; any manual message rewrite therefore fails
+the acceptance provenance check. Existing operator profiles require
+`soc agent install-profile --overwrite` to gain both SOC middlewares. Kafka and batch recurrence
+learning is an explicit default-off sidecar: `SocMemoryPatternService` projects only completed runs
+with a canonical timezone-aware source `event_time`, stores immutable observations in
+`soc_memory_pattern_observations` (migration `0021`), and isolates cohorts by tenant, environment and
+`simulation|operational` data class. A cohort uses exactly one strongest available generic dimension
+(primary scenario, canonical detection key, then category), a fixed 24-hour UTC window, and default
+support/distinct-source thresholds of 5/5. The first threshold crossing creates one frozen
+`pending_review` repeated-pattern candidate through the existing `SocMemoryService`; later observations
+are replay-only, supersession is manual, and recurrence has no decision/retrieval/action authority.
+Missing/naive event time and aggregation failures are observable but non-blocking. Operators inspect
+or deterministically replay cohorts with `soc memory patterns list|replay`.
+
 L3 SOC mutations use `core.access_control.require_actor_roles()` inside the service boundary. A caller
 must have a non-anonymous actor, a non-unknown `ActorContext.auth_source`, and a command-specific role;
 Gateway authentication/route checks do not replace this rule. Gateway derives `soc_analyst` or
@@ -974,7 +1026,7 @@ Before changing a later authorization phase, read the [authorization RFC](../doc
 28. **LoopDetectionMiddleware** - *(optional, if `loop_detection.enabled`)* Detects repeated tool-call loops; hard-stop clears both structured `tool_calls` and raw provider tool-call metadata before forcing a final text answer; stamps `loop_capped` via `consume_stop_reason` (#3875 Phase 2), symmetric to `TokenBudgetMiddleware`
 29. **TokenBudgetMiddleware** - *(optional, if `token_budget.enabled`)* Enforces per-run token limits
 30. **Custom middlewares** - *(optional)* Any `custom_middlewares` passed to `build_middlewares` are injected here, before config-declared extensions and the terminal-response/safety/clarification tail
-31. **Configured extension middlewares** - *(optional, if `extensions.middlewares` is set in `config.yaml` or `extensions_config.json`)* Zero-argument `AgentMiddleware` classes loaded from `module.path:ClassName` entries via `deerflow.reflection.resolve_class`. Missing packages, invalid classes, and broken modules fail loudly at agent creation. These run after built-ins/programmatic custom middleware and after the lead/subagent loop/token guards, but before the terminal-response/safety/clarification tail; subagents receive the same configured extension middleware class list before their safety tail. Treat these files as trusted operator config because middleware paths instantiate arbitrary code. Gateway skill/MCP toggle endpoints preserve this field through `to_file_dict()` but must not add a write path for `extensions.middlewares` without an explicit trust-boundary review. Lead-only vs subagent-only middleware lists and per-context constructor parameters are not expressible in this MVP.
+31. **Configured extension middlewares** - *(optional)* Zero-argument `AgentMiddleware` classes are loaded from trusted `module.path:ClassName` entries via `deerflow.reflection.resolve_class`; missing packages, invalid classes, and broken modules fail loudly at agent creation. Global `extensions.middlewares` entries still apply to both lead agents and subagents. A custom agent may additionally declare operator-owned `AgentConfig.middlewares`; those entries apply only to that lead/custom-agent instance, load before the global list, and exact duplicate paths are instantiated once. Both lists run after built-ins/programmatic custom middleware and the lead/subagent loop/token guards, but before the terminal-response/safety/clarification tail. Middleware paths instantiate arbitrary code, so Gateway/API/model-managed agent updates must preserve but never write either list without an explicit trust-boundary review; `AgentConfig.middlewares` intentionally remains outside `MANAGED_AGENT_CONFIG_FIELDS`. Per-context constructor parameters are not expressible in this MVP.
 32. **TerminalResponseMiddleware** - When a provider returns an empty terminal `AIMessage` after tool execution, injects a hidden recovery prompt and retries the model once; a second empty response is replaced in checkpoint state by a visible error fallback marked for the run worker, so the run finishes as an error instead of a silent success
 33. **ModelLengthFinishReasonMiddleware** - Records `stop_reason=model_length_capped` when provider-specific length detectors match a terminal `AIMessage` without tool-call intent (`finish_reason=length` / `MAX_TOKENS`, or `stop_reason=max_tokens`), preserving the original assistant content and never reparsing textual tool-call-like envelopes
 34. **SafetyFinishReasonMiddleware** - *(optional, if `safety_finish_reason.enabled`)* Suppresses tool execution when the provider safety-terminated the response (e.g. `finish_reason=content_filter`); registered after terminal-response/custom/configured middlewares so LangChain's reverse-order `after_model` dispatch runs it first

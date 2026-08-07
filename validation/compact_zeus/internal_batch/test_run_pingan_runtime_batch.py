@@ -16,6 +16,9 @@ from validation.compact_zeus.internal_batch.run_pingan_runtime_batch import (
 
 from soc_agent.actions.mcp import SocMcpToolDescriptor
 from soc_agent.contracts import (
+    MemoryPatternAggregationPolicy,
+    MemoryPatternDataClass,
+    MemoryPatternSourceType,
     SocEnrichmentExecutionStatus,
     SocEnrichmentExecutionTrigger,
 )
@@ -118,6 +121,42 @@ class _FakeMcpInventoryProvider:
 
     def list_tools(self) -> list[SocMcpToolDescriptor]:
         return list(self._descriptors)
+
+
+class _FakePatternObservation:
+    observation_id = "MPO-BATCH-001"
+    aggregation_key = "a" * 64
+
+
+class _FakePatternResult:
+    observation = _FakePatternObservation()
+    support_count = 1
+    distinct_source_count = 1
+    threshold_met = False
+    candidate = None
+    candidate_created = False
+
+    def model_dump(self, **_kwargs: object) -> dict[str, object]:
+        return {
+            "schema_version": "soc.memory_pattern_aggregation_result.v1",
+            "observation": {
+                "observation_id": self.observation.observation_id,
+                "aggregation_key": self.observation.aggregation_key,
+            },
+            "support_count": self.support_count,
+            "distinct_source_count": self.distinct_source_count,
+            "threshold_met": self.threshold_met,
+            "candidate_created": self.candidate_created,
+        }
+
+
+class _FakeMemoryPatternService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def observe_run(self, run: object, **kwargs: object) -> _FakePatternResult:
+        self.calls.append({"run": run, **kwargs})
+        return _FakePatternResult()
 
 
 class _FakeInvestigationExecution:
@@ -681,6 +720,73 @@ def test_investigation_preflight_requires_explicit_enrichment_config(
 
     assert exit_code == 2
     assert "requires explicit enrichment configuration" in capsys.readouterr().err
+
+
+def test_explicit_memory_pattern_batch_bridge_is_persisted_and_non_blocking(
+    tmp_path: Path,
+) -> None:
+    items, errors = prepare_batch_items(_frame([1]))
+    pattern_service = _FakeMemoryPatternService()
+    config = replace(
+        _config(tmp_path, resume=False),
+        persist=True,
+        database_kind="sqlite",
+        memory_pattern_enabled=True,
+        memory_pattern_environment="dev",
+        memory_pattern_data_class=MemoryPatternDataClass.SIMULATION.value,
+        memory_pattern_policy=MemoryPatternAggregationPolicy(),
+    )
+
+    manifest = execute_batch(
+        items,
+        analysis_service=_FakeService(),
+        memory_pattern_service=pattern_service,
+        config=config,
+        source_row_count=1,
+        source_errors=errors,
+    )
+
+    item_path = next((tmp_path / "batch/items").glob("*.json"))
+    record = json.loads(item_path.read_text(encoding="utf-8"))
+    assert manifest["status"] == "completed"
+    assert record["summary"]["memory_pattern_status"] == "observed"
+    assert record["memory_pattern_aggregation"]["base_run_mutated"] is False
+    assert record["memory_pattern_aggregation"]["direct_memory_write"] is False
+    assert (
+        pattern_service.calls[0]["source_type"] is MemoryPatternSourceType.BATCH_ALERT
+    )
+    assert pattern_service.calls[0]["environment"] == "dev"
+    assert pattern_service.calls[0]["data_class"] is MemoryPatternDataClass.SIMULATION
+
+
+def test_memory_pattern_batch_bridge_requires_persistence_and_explicit_service(
+    tmp_path: Path,
+) -> None:
+    items, _ = prepare_batch_items(_frame([1]))
+    enabled = replace(
+        _config(tmp_path, resume=False),
+        memory_pattern_enabled=True,
+        memory_pattern_environment="dev",
+        memory_pattern_data_class=MemoryPatternDataClass.SIMULATION.value,
+        memory_pattern_policy=MemoryPatternAggregationPolicy(),
+    )
+
+    with pytest.raises(ValueError, match="requires persisted batch runs"):
+        execute_batch(
+            items,
+            analysis_service=_FakeService(),
+            memory_pattern_service=_FakeMemoryPatternService(),
+            config=enabled,
+            source_row_count=1,
+        )
+
+    with pytest.raises(ValueError, match="no service was provided"):
+        execute_batch(
+            items,
+            analysis_service=_FakeService(),
+            config=replace(enabled, persist=True, database_kind="sqlite"),
+            source_row_count=1,
+        )
 
 
 def _frame(alert_ids: list[int]) -> pd.DataFrame:

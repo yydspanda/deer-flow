@@ -3,6 +3,7 @@
 import {
   ActivityIcon,
   AlertTriangleIcon,
+  BotIcon,
   CheckCircle2Icon,
   ClipboardCheckIcon,
   CircleIcon,
@@ -2029,12 +2030,24 @@ export function SocReviewQueueWorkbench() {
                       {fallbackSelectedItem.run_id}
                     </p>
                   </div>
-                  <div className="text-muted-foreground text-right text-xs">
-                    <div>
-                      更新 {formatTime(fallbackSelectedItem.updated_at)}
-                    </div>
-                    <div>
-                      创建 {formatTime(fallbackSelectedItem.created_at)}
+                  <div className="flex items-start gap-3">
+                    {fallbackSelectedItem.status === "open" && (
+                      <Button asChild size="sm" variant="outline">
+                        <Link
+                          href={`/workspace/agents/soc-triage/chats/new?queue_id=${encodeURIComponent(fallbackSelectedItem.queue_id)}`}
+                        >
+                          <BotIcon />
+                          Lead Agent
+                        </Link>
+                      </Button>
+                    )}
+                    <div className="text-muted-foreground text-right text-xs">
+                      <div>
+                        更新 {formatTime(fallbackSelectedItem.updated_at)}
+                      </div>
+                      <div>
+                        创建 {formatTime(fallbackSelectedItem.created_at)}
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -7,6 +7,11 @@ from deerflow.config.agents_config import load_agent_config, load_agent_soul
 from deerflow.config.paths import get_paths
 from soc_agent.agent_profile import SocLeadAgentProfileInstaller
 from soc_agent.cli import main
+from soc_agent.lead_agent import (
+    SOC_LEAD_AGENT_APPROVAL_MIDDLEWARE,
+    SOC_LEAD_AGENT_DELEGATION_MIDDLEWARE,
+    SOC_LEAD_AGENT_REVIEW_CONTEXT_MIDDLEWARE,
+)
 from soc_agent.skills import SOC_ALERT_TRIAGE_SKILL, SOC_LEAD_AGENT_NAME
 
 
@@ -40,6 +45,11 @@ def test_soc_profile_install_creates_deerflow_user_agent_profile(tmp_path: Path,
     assert cfg.name == SOC_LEAD_AGENT_NAME
     assert cfg.skills is not None
     assert SOC_ALERT_TRIAGE_SKILL in cfg.skills
+    assert cfg.middlewares == [
+        SOC_LEAD_AGENT_REVIEW_CONTEXT_MIDDLEWARE,
+        SOC_LEAD_AGENT_DELEGATION_MIDDLEWARE,
+        SOC_LEAD_AGENT_APPROVAL_MIDDLEWARE,
+    ]
     assert "SOC Triage Agent" in (load_agent_soul(SOC_LEAD_AGENT_NAME, user_id="soc-user") or "")
 
 

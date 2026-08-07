@@ -9,7 +9,9 @@ from soc_agent.contracts import (
     AlertInput,
     AnalysisRun,
     CorrectionRecord,
+    EntrySurface,
     ReviewNoteCommand,
+    ReviewNoteOrigin,
     ReviewQueueItem,
     ServiceRequestContext,
     SocDomainFinding,
@@ -109,7 +111,12 @@ class SocMemoryCandidateSourceBridge:
         context: ServiceRequestContext | None = None,
     ) -> SocMemoryCandidate:
         return self._memory_service.propose_candidate(
-            memory_candidate_command_from_review_note(run, command, queue_item=queue_item),
+            memory_candidate_command_from_review_note(
+                run,
+                command,
+                queue_item=queue_item,
+                source_surface=context.actor.surface if context is not None else None,
+            ),
             context=context,
         )
 
@@ -252,53 +259,71 @@ def memory_candidate_command_from_review_note(
     command: ReviewNoteCommand,
     *,
     queue_item: ReviewQueueItem,
+    source_surface: EntrySurface | None = None,
 ) -> SocMemoryCandidateCreateCommand:
     """Build a pending candidate from a free-form analyst review note."""
 
     alert = _normalized_alert(run)
+    accepted_lead_agent = command.origin is ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION
     stable_key = _stable_review_note_key(run, command, queue_item=queue_item)
     evidence_refs = _review_note_evidence_refs(run, command, queue_item=queue_item)
     facets = {
         **_run_facets(run, alert=alert),
         "candidate_source": ["review_note"],
+        "review_note_origin": [command.origin.value],
         "queue_id": [queue_item.queue_id],
         **({"scenario_key": [command.scenario_key]} if command.scenario_key else {}),
         **({"domain": [command.domain.value]} if command.domain is not None else {}),
         **({"finding_id": [command.finding_id]} if command.finding_id else {}),
     }
     return SocMemoryCandidateCreateCommand(
-        candidate_type=SocMemoryCandidateType.PROCEDURE,
+        candidate_type=(SocMemoryCandidateType.DETECTION_LESSON if accepted_lead_agent else SocMemoryCandidateType.PROCEDURE),
         target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
-        summary=f"Review note for {run.run_id}",
+        summary=(f"Analyst-accepted Lead Agent conclusion for {run.run_id}" if accepted_lead_agent else f"Review note for {run.run_id}"),
         content=_review_note_content(run, command, queue_item=queue_item),
         tenant_scope=_tenant_scope(alert),
         tenant_id=alert.tenant_id if alert is not None else None,
         source=SocMemoryCandidateSource(
             source_type=SocMemoryCandidateSourceType.REVIEW_NOTE,
+            source_surface=source_surface,
             source_id=f"review_note:{stable_key}",
             run_id=run.run_id,
             alert_id=run.alert_id,
             queue_id=queue_item.queue_id,
+            thread_id=command.source_thread_id,
+            message_id=command.source_message_id,
             metadata={
+                **command.metadata,
+                "origin": command.origin.value,
                 "scenario_key": command.scenario_key,
                 "domain": command.domain.value if command.domain is not None else None,
                 "finding_id": command.finding_id,
                 "note_length": len(command.note),
-                **command.metadata,
+                "acceptance_reason_length": len(command.acceptance_reason) if command.acceptance_reason is not None else None,
             },
         ),
         evidence_refs=_dedupe(evidence_refs),
-        validity=SocMemoryCandidateValidity(notes="Review note must be confirmed before it becomes reusable SOC memory."),
+        validity=SocMemoryCandidateValidity(
+            notes=("Analyst-accepted Lead Agent conclusion must be reviewed before it becomes reusable SOC memory." if accepted_lead_agent else "Review note must be confirmed before it becomes reusable SOC memory.")
+        ),
         idempotency_key=f"memory_candidate:review_note:{stable_key}",
         confidence=command.confidence,
         facets=facets,
         decision_impact=SocMemoryDecisionImpact.REVIEW_HINT,
         review_owner="soc_analyst",
-        labels=["review-note", "candidate-only", *(["scenario-feedback"] if command.scenario_key else [])],
+        labels=[
+            "review-note",
+            "candidate-only",
+            *(["lead-agent-accepted"] if accepted_lead_agent else []),
+            *(["scenario-feedback"] if command.scenario_key else []),
+        ],
         metadata={
             "runtime_decision_allowed": False,
             "source": "review_note",
+            "review_note_origin": command.origin.value,
             "note_length": len(command.note),
+            "human_acceptance_required": True,
+            "lead_agent_output_auto_persisted": False,
             "scenario_key_present": bool(command.scenario_key),
             "finding_id_present": bool(command.finding_id),
         },
@@ -394,12 +419,21 @@ def _review_note_content(
     *,
     queue_item: ReviewQueueItem,
 ) -> str:
+    accepted_lead_agent = command.origin is ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION
     lines = [
-        f"Analyst review note: {_normalize_feedback(command.note) or command.note}",
+        (f"Analyst-accepted Lead Agent conclusion: {_normalize_feedback(command.note) or command.note}" if accepted_lead_agent else f"Analyst review note: {_normalize_feedback(command.note) or command.note}"),
         f"Queue: {queue_item.queue_id}",
         f"Run: {run.run_id}",
         f"Alert: {run.alert_id}",
     ]
+    if accepted_lead_agent:
+        lines.extend(
+            [
+                f"Lead Agent thread: {command.source_thread_id}",
+                f"Lead Agent message: {command.source_message_id}",
+                f"Analyst acceptance reason: {_normalize_feedback(command.acceptance_reason) or command.acceptance_reason}",
+            ]
+        )
     if command.domain is not None:
         lines.append(f"Domain: {command.domain.value}")
     if command.scenario_key:
@@ -488,6 +522,10 @@ def _stable_review_note_key(
             command.domain.value if command.domain is not None else "",
             command.scenario_key or "",
             command.finding_id or "",
+            command.origin.value,
+            command.source_thread_id or "",
+            command.source_message_id or "",
+            _normalize_feedback(command.acceptance_reason) or "",
             normalized_note,
         ]
     )
@@ -502,6 +540,13 @@ def _review_note_evidence_refs(
 ) -> list[str]:
     refs = _base_evidence_refs(run, queue_id=queue_item.queue_id)
     refs.insert(0, f"review_note:{queue_item.queue_id}")
+    if command.origin is ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION:
+        refs.extend(
+            [
+                f"lead_agent_thread:{command.source_thread_id}",
+                f"lead_agent_message:{command.source_message_id}",
+            ]
+        )
     if command.finding_id:
         refs.append(f"domain_finding:{command.finding_id}")
     if command.scenario_key:

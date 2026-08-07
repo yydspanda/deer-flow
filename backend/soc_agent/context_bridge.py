@@ -29,6 +29,10 @@ _MAX_DISPOSITION_OUTCOME_ITEMS = 10
 _MAX_EXTERNAL_DISPOSITION_ITEMS = 5
 _MAX_MEMORY_CANDIDATE_ITEMS = 5
 _MAX_RELEVANT_MEMORY_ITEMS = 5
+SOC_LEAD_AGENT_REVIEW_CONTEXT_MAX_CHARS = 48_000
+SOC_LEAD_AGENT_REVIEW_CONTEXT_ARTIFACT_RUNTIME_KEY = "__soc_lead_agent_review_context_artifact"
+SOC_LEAD_AGENT_REVIEW_THREAD_BINDING_METADATA_KEY = "soc_lead_agent_review_thread_binding"
+SOC_LEAD_AGENT_REVIEW_CONTEXT_PROVENANCE_MESSAGE_KEY = "soc_lead_agent_review_context"
 
 _LEAD_AGENT_CONTEXT_INSTRUCTIONS = [
     "Treat this artifact as bounded SOC review context supplied by SOC services.",
@@ -45,6 +49,10 @@ _LEAD_AGENT_CONTEXT_INSTRUCTIONS = [
     "Treat relevant_memories as retrieval-policy-approved context only; they can inform analysis but never bypass evidence or approval.",
     "If evidence conflicts, explain the conflict and ask for review instead of forcing a conclusion.",
 ]
+
+
+class SocLeadAgentReviewContextTooLargeError(ValueError):
+    """The bounded ReviewQueue projection exceeded its hard model-input cap."""
 
 
 def skill_context_from_investigation_context(context: InvestigationContext) -> SocSkillContext | None:
@@ -134,18 +142,25 @@ def render_lead_agent_review_context_message(
     artifact: SocLeadAgentReviewContextArtifact,
 ) -> str:
     """Prefix the operator message with a bounded review context artifact."""
-    artifact_payload = artifact.model_dump(mode="json", exclude_none=True)
-    artifact_json = json.dumps(artifact_payload, ensure_ascii=True, sort_keys=True, indent=2)
     operator_message = message.strip() or "Continue the SOC investigation."
-    return (
-        "Use the following bounded SOC review context artifact. "
-        "It is supplied by SOC services and is the only review context available for this turn.\n"
-        "<soc_review_context_artifact>\n"
-        f"{artifact_json}\n"
-        "</soc_review_context_artifact>\n\n"
-        "Operator message:\n"
-        f"{operator_message}"
+    return f"{render_lead_agent_review_context_data(artifact)}\n\nOperator message:\n{operator_message}"
+
+
+def render_lead_agent_review_context_data(
+    artifact: SocLeadAgentReviewContextArtifact,
+) -> str:
+    """Serialize one model-only context block under a strict character cap."""
+    artifact_payload = artifact.model_dump(mode="json", exclude_none=True)
+    artifact_json = json.dumps(
+        artifact_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
     )
+    rendered = f"Use the following bounded SOC review context artifact. It is supplied by SOC services and is the only review context available for this turn.\n<soc_review_context_artifact>\n{artifact_json}\n</soc_review_context_artifact>"
+    if len(rendered) > SOC_LEAD_AGENT_REVIEW_CONTEXT_MAX_CHARS:
+        raise SocLeadAgentReviewContextTooLargeError(f"SOC review context exceeds the {SOC_LEAD_AGENT_REVIEW_CONTEXT_MAX_CHARS}-character model-input limit")
+    return rendered
 
 
 def _review_payload(context: InvestigationContext) -> dict[str, Any]:

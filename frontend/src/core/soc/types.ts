@@ -367,6 +367,8 @@ export interface SocMemoryCandidateSource {
   run_id?: string | null;
   alert_id?: string | null;
   queue_id?: string | null;
+  thread_id?: string | null;
+  message_id?: string | null;
   correction_id?: string | null;
   eval_sample_id?: string | null;
   metadata: Record<string, unknown>;
@@ -915,6 +917,16 @@ export interface SocReviewCorrectionRequest {
   verdict: SocVerdict;
   reason: string;
   confidence?: number | null;
+}
+
+export interface SocLeadAgentConclusionAcceptanceRequest {
+  message_id: string;
+  acceptance_reason: string;
+}
+
+export interface SocReviewNoteResult {
+  queue_item: SocReviewQueueItem;
+  memory_candidate?: SocMemoryCandidate | null;
 }
 
 export type SocAgentRiskLevel =

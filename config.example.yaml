@@ -1460,12 +1460,21 @@ sandbox:
 #   #       - bash
 #   #       - read_file
 #   #       - write_file
+#   #     disallowed_output_markers: # Literal markers rejected before parent/UI emission
+#   #       - "<forbidden_result>"
 #   #     skills:                 # Skill discovery/activation allowlist (null = all, [] = none)
 #   #       - data-analysis
 #   #       - visualization
 #   #     model: inherit          # 'inherit' uses parent's model
 #   #     max_turns: 80
 #   #     timeout_seconds: 600
+#   #
+#   # This fork's reviewed SOC network/endpoint/web/email profiles are generated
+#   # by the SOC extension instead of being duplicated in this generic template:
+#   #   cd backend
+#   #   ./.venv/bin/python -m soc_agent.cli agent install-subagents --config ../config.yaml          # dry run
+#   #   ./.venv/bin/python -m soc_agent.cli agent install-subagents --config ../config.yaml --apply  # reviewed merge
+#   #   ./.venv/bin/python -m soc_agent.cli agent doctor --pretty                                   # profile + specialist contract
 #
 #   # Model override: by default, subagents inherit the lead agent's model.
 #   # Set `model` to use a different model (e.g., a local Ollama model for cost savings).

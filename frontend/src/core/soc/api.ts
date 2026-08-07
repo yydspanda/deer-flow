@@ -16,6 +16,7 @@ import type {
   SocApprovalResolutionRequest,
   SocApprovalRequestListResponse,
   SocInvestigationContext,
+  SocLeadAgentConclusionAcceptanceRequest,
   SocMemoryCandidate,
   SocMemoryCandidateListResponse,
   SocMemoryCandidateReviewRequest,
@@ -41,6 +42,7 @@ import type {
   SocReviewCorrectionRequest,
   SocReviewQueueItem,
   SocReviewQueueListResponse,
+  SocReviewNoteResult,
   SocReviewQueueStatus,
 } from "./types";
 
@@ -251,6 +253,26 @@ export async function closeSocReviewItem(
   return readJson<SocReviewQueueItem>(
     response,
     "Failed to close SOC review item",
+  );
+}
+
+export async function acceptSocLeadAgentConclusion(
+  queueId: string,
+  threadId: string,
+  request: SocLeadAgentConclusionAcceptanceRequest,
+  context?: SocRequestContext,
+): Promise<SocReviewNoteResult> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/review/items/${encodeURIComponent(queueId)}/lead-agent-threads/${encodeURIComponent(threadId)}/accept`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocReviewNoteResult>(
+    response,
+    "Failed to accept SOC Lead Agent conclusion",
   );
 }
 

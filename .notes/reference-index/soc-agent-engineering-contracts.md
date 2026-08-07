@@ -775,6 +775,54 @@ SOC memory tracking 约束：
 - 候选记忆来源桥接固定在 `soc_agent.memory.sources.SocMemoryCandidateSourceBridge`：新增来源必须先构造 `SocMemoryCandidateCreateCommand`，再经 `SocMemoryService.propose_candidate()` 写入，不得在 Web/TUI/Kafka/Lead Agent/domain handler 内直接拼 repository row。
 - `SocReviewService.correct()` 是 correction -> pending memory candidate 的 service 边界；当注入 `MemoryCandidateRepository` 时，它会把 candidate id 回写到 `CorrectionRecord.memory_candidate_id`、audit payload 和 event payload。外部反馈如果复用 correction 链路，不得再重复创建第二条 correction candidate。
 - `SocReviewService.add_note()` 是 ReviewQueue review note -> pending memory candidate 的 service 边界；`soc review note`、Web/TUI note action 和后续 Lead Agent/Kafka note source 都必须通过它或同级 service 方法进入 `SocMemoryCandidateSourceBridge`，不得直接写 `soc_memory_candidates`。Review note source type 固定为 `review_note`，幂等键必须至少覆盖 queue/run/alert/note，并可附加 scenario/domain/finding refs。
+- 分析师采纳 Lead Agent 结论必须是显式 human mutation，不是模型回调或 assistant message 自动写入。当前
+  `ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION` 要求 queue、thread、message 和 acceptance reason，保留
+  actor surface，并仍生成 `pending_review` 的 `review_note` source；非 Lead Agent TUI 不得暴露采纳命令。
+  CLI/TUI lineage 属于人工声明/当前 stream provenance，不能冒充服务端消息真实性。Gateway/Web 固定使用
+  `POST /api/soc/review/items/{queue_id}/lead-agent-threads/{thread_id}/accept`：请求体只允许 message ID 和
+  acceptance reason，要求 authenticated thread read/ownership 与 `Idempotency-Key`，不得接收 assistant 文本。
+  Gateway 必须从 thread metadata + 当前 materialized checkpoint branch 解析 `soc-triage` 的最后一条可见
+  terminal assistant message，拒绝 stale/superseded、hidden/summary、tool-call、empty、oversized、ambiguous
+  和不可用状态，并保存 checkpoint ID/text hash provenance 后调用 `SocReviewService.add_note()`。只有 open
+  ReviewQueue 可创建新来源；idempotent retry 仍可返回已存在结果。
+- Direct Web `soc-triage` 的 `context.soc_review_queue_id` 只是客户端 identity hint，不是可信 context。
+  Gateway 必须要求 authenticated `lead_agent`、校验线程 ownership 与 agent identity，通过
+  `SocReviewService.get_investigation_context()` 重建 bounded artifact，并验证 queue/run/alert/summary/tenant
+  lineage。首次 run 使用 owner-scoped atomic get-or-create；线程 metadata 中的 queue/run/alert binding 是
+  server-reserved、write-once，已有绑定只能复用，切换 queue 必须创建新线程。
+- Web bounded artifact 只能放入 server runtime context。`SocLeadAgentReviewContextMiddleware` 在每次 model
+  call 中临时注入 System authority contract + hidden Human data，不得把 artifact 写入 checkpoint/history；
+  rendered projection 超过 48,000 characters 必须在 run admission 前 fail closed。每轮都重新读取当前
+  InvestigationContext，不允许只复用首次 artifact。
+- 每条由该 context 生成的 terminal AI message 必须保存
+  `SocLeadAgentReviewContextProvenance`，至少包括 artifact/schema/hash、queue/run/alert、chat thread/run、
+  skill hash、rendered size 与 context creation time。Web acceptance 必须同时匹配 route queue、immutable
+  thread binding 和 message provenance，再保存被采纳的 exact snapshot hash。不得在 acceptance 写入 note/
+  candidate 后重算 current context hash，否则合法幂等 retry 会因自身 mutation 失效。该桥不替代 TUI
+  `SocLeadAgentChatService`，也不授予 verdict、memory、close 或 action authority。
+- Client-facing `POST /api/threads/{thread_id}/state` 必须剥离提交消息中的保留 SOC review-context
+  provenance；人工 checkpoint rewrite 只能使 acceptance fail closed，不能伪造 middleware 生成的可信
+  lineage。服务端 graph/middleware 的正常 checkpoint 写入不经过该 ingress，不受此规则影响。
+- Kafka/批处理不得逐 alert、run、finding 或 offset 创建 memory candidate。PI-03F3 固定使用
+  `MemoryPatternObservationCreateCommand -> SocMemoryPatternService`：每个 completed Runtime result 最多写
+  一条 immutable observation，且 Kafka/batch composition 均默认关闭；sidecar 的 ineligible/error 只进入
+  结果状态，不得让基础 Runtime 失败或改变 Kafka commit 语义。
+- `soc.memory_pattern_aggregation.v1` 的 cohort 只能选择一个最强可用 generic dimension：primary
+  scenario -> canonical detection key -> category。`rule_code` 不是必填项；禁止把 topic/rule/scenario/entity
+  拼成供应商绑定联合 key。aggregation key 必须包含 policy、lineage、固定 window，lineage 必须隔离 tenant、
+  environment 与 `simulation|operational` data class。
+- fixed window 只能使用从原 Runtime input 重建出的 canonical timezone-aware
+  `AlertInput.event.event_time`，不能使用 replay/run started time。缺失或 naive source time 必须
+  `skipped_ineligible`，不得在 generic layer 猜测时区。默认 window=86400s、minimum support=5、minimum
+  distinct sources=5，两个门槛同时满足才允许创建一个 candidate。
+- 过门槛后必须通过已有 `SocMemoryService.propose_candidate()` 创建 exactly one frozen
+  `pending_review` repeated-pattern candidate；snapshot 保存 policy/window/scope、observation/source IDs 和
+  evidence-set hash。后续 observation 只能由 replay 报告为 added，candidate 不自动修改或 supersede，
+  supersession 固定 `manual_only`。recurrence 不证明 benign/malicious、authorization、impact 或 action。
+- `soc_memory_pattern_observations` 是 observation store，migration 为
+  `0021_memory_pattern_observations`；它不是 confirmed memory 表。`soc memory patterns list|replay` 只能调用
+  `SocMemoryPatternService` 做只读 inspection/recomputation，replay 固定
+  `candidate_mutation_performed=false`。
 - `SocDomainTriageResult/SocDomainFinding` 可以通过 source bridge 生成 domain finding candidate，但必须由显式 service/entry 调用；只读 investigation context assembly 不能在渲染/读取过程中写 candidate。
 - `soc_memory_candidates` 是当前 `SocMemoryCandidate` 的 SOC business store 表；`SqlAlchemyAlertRepository` 实现 `MemoryCandidateRepository` 方法。生产和本地持久化都必须通过 migration `0010_memory_candidates` 或 `create_soc_tables()` 创建该表。
 - `soc_memory_records` 是 `SocMemoryRecord` 的 SOC business store 表；`confirm` decision 会从 candidate 派生一条 `SocMemoryRecord(status=confirmed, retrieval_enabled=false)`，生产和本地持久化都必须通过 migration `0011_memory_records` 或 `create_soc_tables()` 创建该表。
@@ -794,7 +842,10 @@ SOC memory tracking 约束：
   - `GET /api/soc/memory/records/{memory_id}`
   - `POST /api/soc/memory/records/{memory_id}/retrieval`
   - `POST /api/soc/memory/search`
-- `soc memory list/get/review/search` 和 `soc memory records list/get/retrieval` 是本地/运维查询、评审、治理式启停和检索记忆的 headless CLI；它只能调用 `SocMemoryService`，不能直接查 repository row。`soc memory search --baseline-json` 只生成 deterministic `SocMemoryRetrievalDiff`，不写业务状态。
+- `soc memory list/get/review/search`、`soc memory records list/get/retrieval` 和
+  `soc memory patterns list/replay` 是本地/运维查询、评审、治理式启停、检索记忆和重复模式审计的
+  headless CLI；它们只能调用相应 core service，不能直接查 repository row。`soc memory search
+  --baseline-json` 与 pattern replay 都是 deterministic read-only diff/recomputation，不写业务状态。
 - Kafka daemon 生成 memory candidate 时，幂等键必须包含 `topic/partition/offset` 或 run id；重复消费不能增加重复 fact 或污染 evidence count。
 - `pending_review`、`confirmed_candidate`、`confirmed` candidate 和 `SocMemoryRecord(retrieval_enabled=false)` 默认都不进入全局 prompt 注入；只有经治理激活、activation/review/source validity 均有效且检索评分/预算通过的 confirmed record 才可以进入 `InvestigationContext.relevant_memories`。PromptBuilder 注入仍是后续独立切片。当前 `InvestigationContext.memory_candidates` 只用于展示和人工评审，不参与 runtime verdict。
 - Memory 检索必须返回 match reason、score、memory id、version/hash、token estimate 和 skipped counters，支持后续 replay diff 和回滚。
@@ -962,7 +1013,7 @@ SOC Agent chat stream 约束：
     run/alert/thread/route/action/plan-action 完全一致；evidence content hash 必须进入 projection source
     hash。报告与 addendum 应从同一 snapshot 成对生成，避免跨读取状态不一致。CLI 操作入口为
     `soc investigation report EXECUTION_ID`；内部 batch 只能聚合同一 contract，不得重新实现统计语义。
-  - 当前执行指针为 `PI-01E internal real 5`。D1-D4 planner/composition/durable workflow/reporting 已完成，外网 5-row 与 50-row paired simulation 均已通过；50 条中的 157 个 fake Provider 结果全部为正常 not-found，因此真实 hit mapping 未被证明。下一档仅为内网 real 5。PingAn asset、TI 与 security-tag 仍分别保留真实 DEV hit/not-found/error、对象/字段/有效期语义和 `mocked=false` evidence readback 门槛；paired report 本身固定 `closes_real_provider_gate=false`。PI-01B2/C 因真实 source contract 缺失标为 data-gated；完成 B1 不得冒充 `PI-01B2` 权威授权事实来源。
+  - 当前执行指针为 Real Integration Debt evidence preparation；下一次有批准的内网配置和凭证时，使用 fresh internal-real stage-5 cohort 一并恢复 `D12-B / PI-01A / PI-01B1`。D1-D4 planner/composition/durable workflow/reporting 已完成，外网 5-row 与 50-row paired simulation 均已通过；50 条中的 157 个 fake Provider 结果全部为正常 not-found，因此真实 hit mapping 未被证明。PingAn asset、TI 与 security-tag 仍分别保留真实 DEV hit/not-found/error、对象/字段/有效期语义和 `mocked=false` evidence readback 门槛；paired report 本身固定 `closes_real_provider_gate=false`。PI-01B2/C 因真实 source contract 缺失标为 data-gated；完成 B1 不得冒充 `PI-01B2` 权威授权事实来源。
   - Gateway approved action API 路径固定在 `/api/soc/approvals/*`：
     - `POST /api/soc/approvals/grants`
     - `POST /api/soc/approvals/actions/dry-run`
@@ -2106,11 +2157,29 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 
 当前实现：`SocSkillContext.v2` 已接入 `LLMAnalysisRequest.skill_context`、`build_analysis_prompt()`、`JsonLLMAnalyzer.metadata`、`SocAgentChatService` 的 `soc.skill_context` stream event 和 TUI translate。Runtime 只注入 Skill package 内的 bounded runtime guidance 及其双 hash/token metadata；完整 `SKILL.md` 和场景 references 仍由 DeerFlow Lead Agent 按需动态读取。`validation/compact_zeus/checkpoint_d` 的 D5 单样本产物验证该边界，D6 对全语料做 typed route/package coverage，D7 只验证真实 Analyzer 的 `AnalysisResult.v2` 结构；D6/D7 都不是 Runtime 新节点，D7 通过也不能替代 D8 Grounding。
 
-SOC Lead Agent profile 安装必须使用 DeerFlow per-user custom-agent storage。当前 `SocLeadAgentProfileInstaller` / `soc agent install-profile` 写入 `.deer-flow/users/{user_id}/agents/soc-triage/config.yaml` 和 `SOUL.md`，默认不覆盖，只有显式 `--overwrite` 才更新；legacy shared 同名 agent 存在时跳过，避免 shadow。不要为 SOC 自建第二套 agent profile storage。
+SOC Lead Agent profile 安装必须使用 DeerFlow per-user custom-agent storage。当前 `SocLeadAgentProfileInstaller` / `soc agent install-profile` 写入 `.deer-flow/users/{user_id}/agents/soc-triage/config.yaml` 和 `SOUL.md`，profile v2 还写入 operator-owned `middlewares`。默认不覆盖，只有显式 `--overwrite` 才更新；因此旧安装必须由 operator 明确覆盖后才同时获得 ReviewQueue context 与 approval middleware。legacy shared 同名 agent 存在时跳过，避免 shadow。不要为 SOC 自建第二套 agent profile storage。
 
-SOC Lead Agent chat entry 必须复用 DeerFlow embedded client / gateway runtime。当前 `SocLeadAgentChatService` 通过 `DeerFlowClient(agent_name="soc-triage")` 转发 stream，并发出 `soc.lead_agent_entry` marker；它不是 SOC action executor。ReviewQueue context 已通过 `backend/soc_agent/context_bridge.py` 以 bounded `SocLeadAgentReviewContextArtifact` 接入：只能由 `SocReviewService.get_investigation_context()` 取数，必须记录 context hash / skill context hash，不能把完整 raw payload 或 repository 访问权交给 Lead Agent。
+SOC specialist subagent 必须复用 DeerFlow root `config.yaml -> subagents.custom_agents`、
+`CustomSubagentConfig`、registry、`task` executor、model inheritance 和原生 task events。
+当前 definitions/installer 只允许位于 `soc_agent.subagents`；`soc agent install-subagents` 默认 dry-run，
+只有 `--apply` 写 root config，同名不同配置默认原子失败，`--overwrite` 也只能替换受管 SOC names 并
+保留其他 operator config。Profile 必须 capability-oriented：network、endpoint（EDR/HIDS）、web、email；
+不得按 vendor/topic/rule 无限生成 Agent。当前 profile 必须 `tools=[]` 且 `skills=[]`；只能使用
+`SocLeadAgentDelegationMiddleware` 从 trusted ReviewQueue artifact 投影的 case evidence 和与该专家匹配的
+`SocSkillContext.v2` `runtime-guidance.md`。它不得继承 Provider/MCP/action、shell、file-read/write、
+递归 task 或 approval 权限。`max_turns=32` 是当前 middleware graph 的 recursion budget，不是 32 次
+自主行动额度。Specialist output 是 advisory artifact，
+不是 `InvestigationEvidence`、`AnalysisResult`、`Decision`、memory candidate、approval request 或 action
+result。Lead Agent operator middleware 必须校验 specialist allowlist、trusted case context、单任务 1200
+字符、server projection 32K 字符、同一 chat run 最多两个不同专家、context/task/projection
+lineage 和输出 marker；任何 stopped/capped result 必须标记 `execution_failed`。不得修改
+DeerFlow 通用 executor 来硬编码 SOC 规则。`PI-01G1..G3` 已用原生 task event/replay 回归和
+NIDS/EDR `deepseek-v4-flash` 代表样本关闭 `AC-30`；两次报告均保持
+`provider_acceptance_claimed=false`，不关闭任何 Real Integration Debt。
 
-SOC Lead Agent action proposal 必须走 `backend/soc_agent/actions/proposals.py`。根目录不保留 `backend/soc_agent/action_proposals.py` 兼容入口。只有 `<soc_action_proposal>...</soc_action_proposal>` 显式 JSON marker 会被解析成 `SocAgentActionProposal`；普通自然语言、Markdown 建议、模型自称“已执行”的文本都不能触发动作。`SocLeadAgentActionProposalBoundary` 只能调用 `SocAgentActionPolicy`，并在高风险时生成 pending `SocAgentApprovalRequest`；approval request 必须携带 `source_proposal_id`、`action_payload`、`context_refs`。本边界不执行 MCP/tool，不调用外部处置 adapter，不修改业务状态。
+SOC Lead Agent chat entry 必须复用 DeerFlow embedded client / gateway runtime。当前 `SocLeadAgentChatService` 通过 `DeerFlowClient(agent_name="soc-triage")` 转发 stream，并发出 `soc.lead_agent_entry` marker；它不是 SOC action executor。入口治理分两条但共用同一 proposal/service boundary：标准 Web/Gateway custom-agent 运行由 per-agent `SocLeadAgentApprovalMiddleware` 在 `after_model` 处理完整结构化 marker；`soc chat tui --lead-agent` 保留 `SocLeadAgentChatService` 的外层 proposal bridge，避免在 embedded client 内重复处理。ReviewQueue context 已通过 `backend/soc_agent/context_bridge.py` 以 bounded `SocLeadAgentReviewContextArtifact` 接入：只能由 `SocReviewService.get_investigation_context()` 取数，必须记录 context hash / skill context hash，不能把完整 raw payload 或 repository 访问权交给 Lead Agent。
+
+SOC Lead Agent action proposal 必须走 `backend/soc_agent/actions/proposals.py`。根目录不保留 `backend/soc_agent/action_proposals.py` 兼容入口。只有 `<soc_action_proposal>...</soc_action_proposal>` 显式 JSON marker 会被解析成 `SocAgentActionProposal`；普通自然语言、Markdown 建议、模型自称“已执行”的文本都不能触发动作。每条模型消息最多接收 5 个有效 proposal，模型只可提交 `route/action/reason/payload/confidence`；`proposal_id`、source、actor、thread/run/queue/alert/context 引用、request ID 与 idempotency key 都由 server 注入。proposal、permission decision、approval request 和 mutation request identity 必须由同一 server seed 稳定派生，使 graph replay 对相同意图幂等；相同 identity 下语义变化仍必须冲突，不能用忽略 `created_at` 掩盖内容变化。`SocLeadAgentActionProposalBoundary` 只能调用 `SocAgentActionPolicy`，并在高风险时生成 pending `SocAgentApprovalRequest`；approval request 必须携带 `source_proposal_id`、`action_payload`、`context_refs`。本边界和 middleware 都不直接执行高风险 MCP/tool、不调用外部处置 adapter、不修改业务状态；失败必须 fail closed 并输出 secret-light error/event。
 
 Approval inbox 客户端必须展示 proposal 溯源字段。Web/TUI 至少要让审批人看到 `source_proposal_id`、`action_payload`、`context_refs`；展示层不能改写这些字段，不能绕过 approval grant / dry-run / execute boundary。
 
@@ -2130,10 +2199,13 @@ SOC Lead Agent、Domain Sub Agent、Skill 和 MCP/tool group 的开放配置以 
 
 - Profile、skill、MCP 绑定必须有 `draft -> validated -> staging -> active -> archived` 生命周期。
 - `draft` / `staging` 不能影响生产决策；`active` 必须记录审批人、评测集版本、profile hash、skill hash、tool group hash。
-- Middleware preset 只能由代码定义，不能由用户自由新增/删除。
+- Middleware preset 只能由代码/operator-owned profile 定义，不能由模型、普通用户或 agent HTTP update 自由新增/删除。DeerFlow `AgentConfig.middlewares` 是通用可信扩展点，不是业务用户可编辑字段；per-agent 列表先于 global `extensions.middlewares` 加载，精确重复项只实例化一次。
 - 用户可配置 readonly MCP 候选；`high_risk` tool group 必须由管理员/审批流程启用，并继续走 human approval。
-- SOC Lead Agent custom-agent profile 只写 DeerFlow 支持的 `name/description/model/tool_groups/skills/SOUL.md` 语义；不得向 profile 增加自定义 `mcp` 字段作为生产执行绑定。MCP server 连接属于 DeerFlow `extensions_config.json` / `mcp_config.json`，SOC action 到 MCP tool 的业务绑定属于 action adapter allowlist。
-- Runtime 只能从 active profile registry 选择 profile；LLM 只能在白名单候选内建议 rerank，不能动态加载未知 profile/skill/tool。
+- SOC Lead Agent custom-agent profile 只写 DeerFlow 支持的 `name/description/model/tool_groups/skills/middlewares/SOUL.md` 语义；其中 `middlewares` 只能由可信安装器/operator 管理。不得向 profile 增加自定义 `mcp` 字段作为生产执行绑定。MCP server 连接属于 DeerFlow `extensions_config.json` / `mcp_config.json`，SOC action 到 MCP tool 的业务绑定属于 action adapter allowlist。高风险 adapter 不得作为 unrestricted DeerFlow/MCP tool 直接暴露给模型。
+- 固定 SOC Runtime 不选择或执行交互式 subagent profile。当前只有服务端绑定 ReviewQueue 的
+  `soc-triage` 可在 `SocLeadAgentDelegationMiddleware` 白名单内选择 managed specialist；LLM
+  不能动态加载未知 profile/skill/tool。未来若实现 active profile registry，其他路由也必须经该
+  治理状态和白名单，不得反向改变 Runtime 主流程。
 - 所有 profile 选择、skill 注入、tool proposal、tool result 都必须进入 trace/audit，支持 replay diff 和 rollback。
 
 ### Model fallback
@@ -2371,7 +2443,7 @@ tool permission denial rate
 |---|---|
 | Local Alpha complete | 九步 Runtime、CLI/Kafka ingress、SQL、Review Web/TUI、Lead Agent、API v1 transport、audit/replay、memory/governed context 的代码可控门禁 |
 | Mock / fixture | 本地 CMDB/EDR/HIDS/TI/tag facts、脱敏样本、browser HTTP fixture；只验证 contract/flow |
-| Deferred | Kafka result topics/worker pool、通用 durable event/SSE、专业 Sub Agent 自治、Knowledge RAG、Prometheus 全局态势 |
+| Deferred | Kafka result topics/worker pool、通用 durable event/SSE、Threat Hunting/Detection Engineering/Attack Simulation 自治 Agent、Knowledge RAG、Prometheus 全局态势；network/endpoint/web/email specialist 已由 PI-01G 完成 |
 | Data-gated PI | 真实 provider/source feed、PostgreSQL/Kafka/K8s capacity/recovery、生产标签与校准、真实响应动作 |
 
 任何 maturity 变化都先更新唯一完整性矩阵，再同步本工程契约；不得在本节新增平行 backlog。

@@ -138,7 +138,10 @@ def test_make_lead_agent_uses_server_auth_identity_for_all_user_scoped_inputs(mo
 
     def _load_agent_config(name, *, user_id=None):
         captured["agent_config_user_id"] = user_id
-        return AgentConfig(name=name)
+        return AgentConfig(
+            name=name,
+            middlewares=[f"{__name__}:ConfiguredGuardMiddleware"],
+        )
 
     def _load_skills(available_skills, *, app_config, user_id=None):
         captured["skills_user_id"] = user_id
@@ -146,6 +149,7 @@ def test_make_lead_agent_uses_server_auth_identity_for_all_user_scoped_inputs(mo
 
     def _build_middlewares(config, model_name, agent_name=None, **kwargs):
         captured["middleware_user_id"] = kwargs.get("user_id")
+        captured["agent_middleware_paths"] = kwargs.get("agent_middleware_paths")
         return []
 
     def _apply_prompt_template(**kwargs):
@@ -177,6 +181,7 @@ def test_make_lead_agent_uses_server_auth_identity_for_all_user_scoped_inputs(mo
 
     assert captured == {
         "agent_config_user_id": "authenticated-user",
+        "agent_middleware_paths": [f"{__name__}:ConfiguredGuardMiddleware"],
         "skills_user_id": "authenticated-user",
         "middleware_user_id": "authenticated-user",
         "prompt_user_id": "authenticated-user",
@@ -897,6 +902,7 @@ def test_build_middlewares_injects_configured_extension_middlewares(monkeypatch)
         {"configurable": {"is_plan_mode": False, "subagent_enabled": False}},
         model_name="safe-model",
         custom_middlewares=[manual_middleware],
+        agent_middleware_paths=[f"{__name__}:ConfiguredGuardMiddleware"],
         app_config=app_config,
     )
 
@@ -910,6 +916,7 @@ def test_build_middlewares_injects_configured_extension_middlewares(monkeypatch)
         "ClarificationMiddleware",
     ]
     assert middlewares[middleware_types.index("ConfiguredGuardMiddleware") - 1] is manual_middleware
+    assert middleware_types.count("ConfiguredGuardMiddleware") == 1
 
 
 def test_build_middlewares_passes_subagent_total_limit_from_app_config(monkeypatch):

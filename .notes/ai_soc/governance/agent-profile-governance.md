@@ -26,12 +26,12 @@ Policy / Approval / Audit
 
 | 概念 | 说明 | 例子 |
 |---|---|---|
-| SOC Lead Agent Profile | 面向分析师的主控交互/编排 profile，负责理解任务、规划调查、选择 domain sub agent / skill / tool | `soc-lead-agent` |
-| Domain Sub Agent Profile | 单一安全领域的专项分析 profile，负责局部证据分析和建议，不负责最终状态流转 | `edr-subagent`、`hids-subagent`、`apt-subagent`、`f5-waf-subagent` |
+| SOC Lead Agent Profile | 面向分析师的主控交互/编排 profile，负责理解任务、规划调查、选择 domain specialist / skill / action proposal | `soc-triage` |
+| Domain Specialist Profile | capability-oriented 的专项第二视角，负责局部证据分析和建议，不负责最终状态流转 | `soc-network-specialist`、`soc-endpoint-specialist`、`soc-web-specialist`、`soc-email-specialist` |
 | Domain Skill | 领域知识、SOP、字段解释、研判方法、提示词片段 | `edr-triage`、`asset-context`、`attack-direction` |
 | MCP/tool group | 查询或执行外部系统能力的受控工具组 | `asset-readonly`、`edr-readonly`、`firewall-response` |
-| Middleware Preset | 代码定义的 middleware 组合，不允许用户自由拼装 | `soc_lead`、`domain_readonly`、`high_risk_approval_required` |
-| Profile Registry | SOC Runtime 可选择的 profile 注册表，记录版本、状态、风险等级、可用 skill/tool group | `SocAgentProfileRegistry` |
+| Middleware Preset | 代码/operator 定义的 middleware 组合，不允许普通用户或模型自由拼装 | 当前 `SocLeadAgentApprovalMiddleware`；后续可形成命名 preset |
+| Profile Registry | 未来开放自定义 profile 时才需要的治理注册表；当前四个 specialist 是代码/operator-owned managed config | Target: `SocAgentProfileRegistry` |
 
 ## 3. Lifecycle
 
@@ -96,6 +96,8 @@ draft
 - SOC Runtime pipeline 主流程。
 - `SocAnalysisService`、`SocReviewService`、`SocMemoryService` 的业务语义。
 - middleware preset 的定义和组合。
+- DeerFlow custom-agent `middlewares` 路径；该字段只允许可信 profile installer/operator 写入，普通
+  agent update API 必须原样保留而不能新增、删除或替换。
 - high-risk MCP/tool group 的生产启用。
 - approval policy、audit policy、rate limit、cost budget。
 - confirmed memory / confirmed lesson 的直接写入。
@@ -108,42 +110,67 @@ draft
 |---|---|---|
 | `readonly` | 资产查询、威胁情报查询、安全标签、历史告警查询、PostgreSQL readonly 查询 | 可开放 draft 绑定，active 仍需 allowlist 和 audit；只能绑定真实存在且已评审的 Provider |
 | `analyst_write` | review correction、case note、ticket update、memory propose fact | 需要用户身份和 service command，不能直接写 confirmed knowledge |
-| `high_risk` | block IP、isolate endpoint、disable account、push firewall rule、suppress alert rule、任意生产变更 MCP | 必须 human approval，默认 dry-run，不允许 profile 自行启用 |
+| `high_risk` | block IP、isolate endpoint、disable account、push firewall rule、suppress alert rule、任意生产变更 MCP | 必须 human approval，默认 dry-run，不允许 profile 自行启用，也不得作为 unrestricted DeerFlow/MCP tool 暴露给模型 |
 
 MCP/tool result 必须写入 run trace / audit，不能只进入 prompt 后丢失。
 
 ## 8. Runtime Selection
 
-Profile 由 Runtime 或受控 router 选择，不由 LLM 自由决定。
+Runtime 不选择或运行 specialist；它仍固定完成告警处理。只有绑定 ReviewQueue 的
+`soc-triage` Lead Agent 可在需要专项第二视角时提议 DeerFlow `task` 委派。LLM 可选择的专家
+仍由 `SocLeadAgentDelegationMiddleware` 强制白名单：
 
-早期 deterministic 规则：
-
-| 条件 | profile |
+| 问题类型 | 允许的 specialist |
 |---|---|
-| `source_type=edr` | `edr-subagent` |
-| `source_type=hids` | `hids-subagent` |
-| `source_type=apt` | `apt-subagent` |
-| `source_type=f5` / `waf` | `f5-waf-subagent` |
-| 资产归属/重要性问题 | `asset-context` skill |
-| 攻击方向冲突 | `attack-direction` skill |
-| 分析师自由提问 / case 汇总 | `soc-lead-agent` |
+| APT、NDR/NIDS、C2、方向/网络角色 | `soc-network-specialist` |
+| EDR、HIDS、进程、文件、账号、终端影响 | `soc-endpoint-specialist` |
+| HTTP、WAF/F5、反向代理、webshell、认证 | `soc-web-specialist` |
+| phishing、邮件身份、链接/附件/QR、收件人影响 | `soc-email-specialist` |
 
-LLM 可以在白名单候选中建议 rerank，但 Runtime 必须记录采纳/拒绝原因。
+它不允许 `general-purpose`/`bash`，不按 `source_type` 自动多跑模型，也不将专家文本回写为事实。
 
-## 9. Suggested Code Shape
+## 9. Current Code Shape
 
 ```text
-backend/soc_agent/agents/
-  profiles.py              # SocAgentProfile + registry
-  factory.py               # 基于 DeerFlow lead_agent 派生 SOC agent/profile runtime
-  middleware_presets.py    # 代码定义 preset
-  tool_groups.py           # SOC tool group registry + risk level
-  prompts/
-    soc-lead/SOUL.md
-    edr-subagent/SOUL.md
-    hids-subagent/SOUL.md
-    apt-subagent/SOUL.md
+backend/soc_agent/
+  lead_agent.py            # soc-triage profile template + SOUL + trusted middleware path
+  agent_profile.py         # DeerFlow per-user profile installer
+  lead_agent_chat.py       # embedded SOC TUI outer proposal bridge
+  middlewares/
+    lead_agent_review_context.py # transient Web context injection + message provenance
+    lead_agent_delegation.py     # bounded native task policy + stable advisory lineage
+    lead_agent_approval.py # standard Web/Gateway after_model approval bridge
+  subagents.py             # four managed DeerFlow CustomSubagentConfig profiles + installer
+  actions/
+    proposals.py           # shared proposal parser/policy/approval boundary
+
+backend/app/gateway/
+  soc_lead_agent_context.py  # authenticated queue/thread binding + artifact construction
+  soc_lead_agent_messages.py # current-checkpoint assistant message resolver
+  routers/soc_review.py      # authenticated human acceptance -> pending candidate
 ```
+
+DeerFlow generic extension point is `AgentConfig.middlewares`; per-agent paths load before global
+`extensions.middlewares` and exact duplicates are removed. SOC does not create a second LangGraph
+runtime or a second profile store. A future profile registry/preset lifecycle remains governed work,
+not a reason to replace these current boundaries.
+
+Action proposal governance and memory-source acceptance are separate boundaries. The profile
+middleware may turn an explicit proposal marker into a read-only result or Approval Inbox request;
+it never writes memory. Conversely, the Web acceptance route can submit only a server-resolved
+terminal assistant message to `SocReviewService.add_note()` after explicit human acceptance; it never
+executes a proposal. Direct Web chat treats the queue ID only as an identity hint; Gateway builds the
+bounded artifact through `SocReviewService`, persists a server-owned immutable thread binding, and the
+profile middleware injects it transiently on every model call. The terminal assistant message carries
+exact context provenance, which acceptance must match with the route queue and thread binding. This
+Web bridge and the TUI outer bridge share contracts but remain separate entry adapters.
+
+Specialist profiles are intentionally tool-free (`tools=[]`, `skills=[]`). The delegation middleware
+filters the current `SocSkillContext.v2` by specialist and injects only reviewed runtime guidance with
+the server-built bounded case. It enforces at most two distinct specialists per chat run, a 1,200
+character Lead Agent question, a 32,000 character total projection, stable hashes, and fail-closed
+handling for stopped/capped output or action markers. `max_turns=32` is the graph recursion budget
+needed by the current middleware chain, not a user-configurable autonomous turn allowance.
 
 Profile contract 草案：
 
@@ -167,7 +194,7 @@ class SocAgentProfile(BaseModel):
 | Phase | 做什么 | 不做什么 |
 |---|---|---|
 | Phase 1 | 代码内置 profile 模板；不开放前端生成；固定 Runtime 和 ReviewQueue 闭环 | Profile Studio、生产自动处置 |
-| Phase 2 | Runtime 根据 `source_type` / detection key 选择内置 profile；记录 profile/skill version | LLM 自由加载未知 skill |
+| Phase 2 | 绑定 ReviewQueue 的 Lead Agent 在 middleware 白名单内选择内置 capability specialist；记录 case/task/projection/profile lineage | Runtime 按 `source_type` 自动多跑模型；LLM 自由加载未知 skill/agent |
 | Phase 3 | draft profile API/CLI、schema validate、offline eval、staging 状态 | draft 直接生产生效 |
 | Phase 4 | Web Profile Studio：同事可创建 draft、跑 eval、提交审批；daemon 可灰度 active profile | 高风险工具无审批执行 |
 | Phase 5 | profile marketplace/governance、跨团队复用、知识/RAG 联动、stale profile 检测 | 无版本审计的 prompt 管理 |

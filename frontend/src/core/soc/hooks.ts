@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { useAuth } from "@/core/auth/AuthProvider";
 
 import {
+  acceptSocLeadAgentConclusion,
   closeSocReviewItem,
   correctSocReviewRun,
   createSocApprovalGrant,
@@ -39,6 +40,7 @@ import type {
   SocApprovalResolutionRequest,
   SocAgentApprovalRequestStatus,
   SocDispositionOutcomeRecordRequest,
+  SocLeadAgentConclusionAcceptanceRequest,
   SocMemoryCandidateReviewRequest,
   SocMemoryCandidateStatus,
   SocMemoryQuery,
@@ -250,6 +252,29 @@ export function useCloseSocReviewItem() {
       void queryClient.invalidateQueries({
         queryKey: socReviewQueryKeys.context(queueId),
       });
+    },
+  });
+}
+
+export function useAcceptSocLeadAgentConclusion() {
+  const context = useSocWebRequestContext();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      queueId,
+      threadId,
+      request,
+    }: {
+      queueId: string;
+      threadId: string;
+      request: SocLeadAgentConclusionAcceptanceRequest;
+    }) => acceptSocLeadAgentConclusion(queueId, threadId, request, context),
+    onSuccess: (_data, { queueId }) => {
+      void queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all });
+      void queryClient.invalidateQueries({
+        queryKey: socReviewQueryKeys.context(queueId),
+      });
+      void queryClient.invalidateQueries({ queryKey: socMemoryQueryKeys.all });
     },
   });
 }

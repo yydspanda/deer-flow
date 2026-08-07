@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow / SOC 预警完整流转
 
-> Updated: 2026-08-05
+> Updated: 2026-08-06
 >
 > 本文只描述当前项目里的 SOC Agent 端到端运行过程、状态流转、数据写入和安全边界。
 >
@@ -34,6 +34,10 @@ flowchart TD
     B --> C["⚙️ SocAnalysisService<br/>统一分析入口 / analysis entry"]
     C --> D["⚙️ Fixed Runtime Pipeline<br/>固定流水线 / deterministic control flow"]
     D --> E["🗃️ SOC Business Store<br/>run + summary + queue + decision audit"]
+    E -.->|"Kafka / batch explicit opt-in"| MR1["🗃️ MemoryPatternObservation<br/>immutable recurrence source"]
+    MR1 --> MR2{"⚙️ Typed Aggregate Gate<br/>UTC event window + support 5 + distinct 5"}
+    MR2 -->|"below threshold"| MR3["🔎 Retain + replay<br/>不创建候选"]
+    MR2 -->|"first threshold crossing"| R
     E -.->|"Explicit opt-in only"| E0["⚙️ SocEnrichmentPlanner<br/>版本化只读调查计划 / default off"]
     E0 --> E1["🗃️ Durable Investigation Ledger<br/>immutable plan + execution + attempts"]
     E1 --> E2["⚙️ Investigation Reporting<br/>只读重建 / no Provider call"]
@@ -65,7 +69,8 @@ flowchart TD
     H --> I["🧑‍💻 Web / TUI / CLI<br/>分析师查看 / analyst surfaces"]
     H --> J["🧠 SOC Lead Agent bounded context<br/>受限上下文 / bounded context"]
 
-    J --> K["🧰 Read-only action proposal<br/>只读工具建议 / read-only proposal"]
+    J --> J1{"🛡️ Proposal Governance Bridge<br/>Web/Gateway middleware<br/>or TUI outer service"}
+    J1 --> K["🧰 Read-only action proposal<br/>只读工具建议 / read-only proposal"]
     K --> L["⚙️ Policy + Dispatcher + Adapter Registry<br/>策略、调度、适配器"]
     E1 --> L
     L --> M["🗃️ InvestigationEvidence<br/>只读证据入库 / evidence persistence"]
@@ -74,12 +79,14 @@ flowchart TD
     M --> G
     E3 --> G
 
-    J --> N["🛡️ High-risk action proposal<br/>高风险动作建议 / risky proposal"]
+    J1 --> N["🛡️ High-risk action proposal<br/>高风险动作建议 / risky proposal"]
     N --> O["🛡️ Approval Inbox + Grant<br/>审批请求和一次性授权"]
     O --> P["🚫 Execute boundary only<br/>事务化消费 token，不执行生产副作用"]
     O --> P1["🗃️ Mutation Audit<br/>request / resolution / action boundary"]
 
-    I --> Q["🧑‍💻 Correction / Review Note<br/>人工改判或备注"]
+    I --> Q["🧑‍💻 Correction / Review Note<br/>人工改判、备注或显式采纳结论"]
+    J --> Q0["🧠 Lead Agent conclusion<br/>模型输出本身不写记忆"]
+    Q0 -->|"analyst accepts + reason"| Q
     Q --> R["🧠📌 MemoryCandidate<br/>pending_review 候选记忆"]
     R --> S["✅ SocMemoryRecord<br/>confirmed memory, retrieval gated"]
     S --> G
@@ -110,26 +117,43 @@ flowchart TD
    investigation addendum。它不调用 Provider、不新增报告表、不产生第二个分析结论；只测量实际
    action-attempt latency，Provider 网络耗时和费用没有来源时明确 `not_measured`。
 5. 分析师通过 ReviewQueue 打开统一调查上下文；Web、TUI、CLI 和 Lead Agent 都读取同一 addendum。
-6. Lead Agent 只能拿 bounded context，并只能提出结构化 action proposal。
-7. 自动计划和 Lead Agent proposal 都必须走 Policy、Dispatcher、Adapter Registry；只读结果写成
+6. Lead Agent 只能拿 bounded context，并只能提出结构化 action proposal。标准 Web/Gateway
+   `soc-triage` 运行由 profile v2 的 per-agent middleware 截获 marker；SOC TUI 由现有
+   `SocLeadAgentChatService` 外层桥处理。两条入口共用 proposal parser、Policy 和 Approval Service。
+7. 模型不能提供 proposal/request/decision ID、actor 或 context lineage；这些字段由服务端稳定派生，
+   相同 graph replay 幂等，一条消息最多接收 5 个有效 proposal。
+8. 自动计划和 Lead Agent proposal 都必须走 Policy、Dispatcher、Adapter Registry；只读结果写成
    `InvestigationEvidence` 后回到调查上下文，不能回写基础 Runtime verdict。
-8. 高风险动作只进入审批 inbox 和 grant boundary，当前不执行生产副作用。
-9. 人工 correction、review note、外部处置理由、domain finding 都只能先形成 pending memory candidate。
-10. confirmed memory 默认不可检索；只有 memory governor 经 role/reason/version/validity/review/audit
+9. 高风险动作只进入审批 inbox 和 grant boundary，middleware 不执行动作；高风险 adapter 不能作为
+   unrestricted DeerFlow/MCP tool 暴露给模型，当前也不执行生产副作用。
+10. 人工 correction、review note、外部处置理由、domain finding 都只能先形成 pending memory candidate。
+    Lead Agent 输出不会自动落记忆；PI-03F1 允许 `--lead-agent` TUI/CLI 在 open ReviewQueue 上由分析师
+    明确采纳一条稳定 assistant message 并填写复用理由。PI-03F2 Web/Gateway 只接收 message ID 和理由，
+    从 authenticated server-owned 当前 checkpoint 解析 `soc-triage` 最后一条 terminal assistant 原文，
+    再复用 `SocReviewService.add_note()`。Direct Web 的 queue ID 只是 identity hint；Gateway 会把 owner-owned
+    thread 一次性绑定到 queue/run/alert，每轮从 `SocReviewService` 重建 bounded context，middleware 临时注入
+    模型并在 assistant message 保存 exact context provenance。不同 queue 必须新建 thread，artifact 不进入
+    checkpoint/history，采纳仍只生成 `pending_review` candidate。Kafka/批处理也不能逐告警写 candidate；
+    PI-03F3 只在显式启用时把完成的 run 保存为 immutable observation，以 tenant/environment/data class
+    隔离，按 primary scenario -> canonical detection key -> category 选择一个 cohort 维度，并使用 canonical
+    timezone-aware source event time 的固定 UTC 窗口。默认 24h 内同时达到 5 support + 5 distinct sources
+    才提出一个 frozen `pending_review` repeated-pattern candidate；后续记录仅供 replay，重复本身不证明
+    真假、授权、影响或处置权限。
+11. confirmed memory 默认不可检索；只有 memory governor 经 role/reason/version/validity/review/audit
    状态迁移后才可进入 bounded context，且不直接改 runtime verdict。
-11. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
+12. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
    但不能改变 verdict、ReviewQueue 或分析成功状态。
-12. 显式 authorization enrichment 把确定性匹配保存为独立记录；不会回写 Runtime decision。
-13. DP-01 只有在 exact + current true-positive 时生成 shadow proposal；proposal 进入调查视图，但仍由
+13. 显式 authorization enrichment 把确定性匹配保存为独立记录；不会回写 Runtime decision。
+14. DP-01 只有在 exact + current true-positive 时生成 shadow proposal；proposal 进入调查视图，但仍由
     人工决定是否关单，系统不会自动应用。
-14. EV-01 不从 close reason 猜结论。它保存显式 primary/sample outcome，用可复现 manifest 防止挑样，
+15. EV-01 不从 close reason 猜结论。它保存显式 primary/sample outcome，用可复现 manifest 防止挑样，
     再计算 precision、override、sample agreement、freshness 和 fact fan-out。
-15. EV-02 已把 authenticated API/Web、Review TUI 和受门控的 trusted external feedback 接到同一
+16. EV-02 已把 authenticated API/Web、Review TUI 和受门控的 trusted external feedback 接到同一
     evaluation service；各入口仍必须提供显式结构化标签和幂等身份。
-16. EV-03 从 immutable manifest、proposal、ReviewQueue 和 latest outcomes 派生 reviewer-specific inbox；
+17. EV-03 从 immutable manifest、proposal、ReviewQueue 和 latest outcomes 派生 reviewer-specific inbox；
     Web 只能打开 manifest-selected work，并回到 EV-02 写入口，不保存第二套 campaign 状态。
-17. Gate 通过只表示可进入治理 rollout review；当前仍固定 `auto_close_allowed=false`。
-18. correction、close/note、memory review/retrieval activation、approval lifecycle/action boundary 和 external disposition
+18. Gate 通过只表示可进入治理 rollout review；当前仍固定 `auto_close_allowed=false`。
+19. correction、close/note、memory review/retrieval activation、approval lifecycle/action boundary 和 external disposition
     都通过 `SocMutationUnitOfWork` 原子写入业务状态与 `soc_mutation_audit_log`；进程事件只在提交后发出。
 
 Current governed-context boundary / 当前边界：GF-01 已能通过 `SocGovernedContextService` 和
@@ -378,6 +402,10 @@ flowchart TD
     N --> O["🔎 UnifiedInvestigationView<br/>统一视图、计数、时间线"]
     O --> P["🧑‍💻 Web / TUI / CLI"]
     O --> Q["🧠 Lead Agent bounded artifact"]
+    Q -->|"需要专项第二视角"| R["🧰 Native task + delegation guard"]
+    R --> S["🌐 / 🖥️ / 🌍 / ✉️ Specialist<br/>Network / Endpoint / Web / Email"]
+    S --> T["📄 Advisory result<br/>非 evidence / verdict / action"]
+    T --> Q
 ```
 
 `InvestigationContext` 是分析师打开一个 queue item 时的核心只读视图。它不是新的 source of truth，而是把已有数据组合起来：
@@ -399,6 +427,11 @@ flowchart TD
 | `relevant_memories` | Retrieval-gated memories | confirmed 且 activation policy/有效期/复核期均有效的记忆；直接布尔开关无效 |
 | `domain_triage_results` | Domain/scenario findings | APT/EDR/HIDS/通用场景发现 |
 | `investigation_view` | Unified view | 面向 Web/TUI/Lead Agent 的统一时间线和计数 |
+
+Lead Agent 委派不会新建 Runtime 分支或新的事实表。服务端从上述同一
+`InvestigationContext` 构造专家投影，过滤为对应 domain 的 Skill guidance，然后通过 DeerFlow
+原生 `task` 事件返回 advisory text。专家文本只帮助 Lead Agent 组织复核；不持久化为
+`InvestigationEvidence`，不覆盖 Runtime decision，不确认 memory，也不发放 approval/action。
 
 ### 4.1 Main Orchestrator Correlation Bridge / 主编排历史关联
 
@@ -647,6 +680,8 @@ flowchart TD
     C["🧑‍💻 Review Note<br/>soc review note"] --> B
     D["🧩 Domain Finding<br/>场景 finding"] --> B
     E["🧾 External Reason<br/>外部处置理由"] --> B
+    A0["🧠 Lead Agent message<br/>模型输出"] --> A1["🧑‍💻 Explicit acceptance<br/>人工采纳 + reuse reason"]
+    A1 --> B
 
     B --> F["⚙️ SocMemoryService.propose_candidate"]
     F --> G["🗃️ SocMemoryCandidate<br/>status=pending_review<br/>runtime_decision_allowed=false"]
@@ -677,6 +712,7 @@ Memory 规则：
 |---|---|---|---|
 | `soc correct` | correction lesson | `pending_review` | 改判会更新 operational decision，但记忆仍需评审 |
 | `soc review note` | analyst observation | `pending_review` | 备注只形成候选记忆，不改 queue status，不改 verdict |
+| accepted Lead Agent conclusion | analyst-owned detection lesson | `pending_review` | CLI/TUI 保存 captured lineage；Web 由 Gateway 从当前 checkpoint 解析原文，客户端不能提交正文 |
 | domain finding | scenario lesson | `pending_review` | finding 可沉淀为经验，但必须显式调用 bridge |
 | external reason | external feedback lesson | `pending_review` | 外部 reason 不能直接 confirmed |
 | confirmed candidate | memory record | `confirmed`, `retrieval_enabled=false` | 默认仍不被检索；不能由 repository/demo 直接改布尔值 |
@@ -691,7 +727,10 @@ legacy/direct flag、activation 已过期、review 已逾期、record 非 confir
 
 ```mermaid
 flowchart TD
-    A["🧑‍💻 Analyst writes note<br/>分析师写备注"] --> B["🚪 soc review note QUEUE_ID --note ..."]
+    A["🧑‍💻 Analyst writes note<br/>分析师写备注"] --> B["🚪 CLI / TUI / Web command"]
+    A0["🧠 Lead Agent assistant message"] --> A1["🧑‍💻 Explicit accept + reason"]
+    A1 --> B0["🔐 CLI/TUI captured lineage<br/>or Gateway checkpoint resolution"]
+    B0 --> B
     B --> C["⚙️ SocReviewService.add_note"]
     C --> D["🗃️ load ReviewQueueItem"]
     C --> E["🗃️ load AnalysisRun"]
@@ -707,6 +746,8 @@ Review note 保存什么：
 
 - 原始 note 文本。
 - `queue_id`、`run_id`、`alert_id`。
+- 显式采纳时额外保存 `origin`、`thread_id`、`message_id`、acceptance reason；Web 还保存 checkpoint ID
+  和 assistant text SHA-256，不保存客户端声称的正文。
 - 可选 `domain`、`scenario_key`、`finding_id`。
 - runtime summary、runtime reason、runtime verdict。
 - facets：source type、vendor/product、rule_code/rule_name、entities、scenario、domain。
@@ -760,6 +801,9 @@ soc memory list --queue-id REV-... --pretty
 
 # Open DeerFlow-aligned SOC chat entry
 soc chat tui --queue-id REV-... --lead-agent
+
+# In Lead Agent TUI, explicitly accept the latest stable assistant message
+/accept-conclusion "Verified against the alert evidence and reusable for this scenario"
 
 # Recover a stale process-lost provider call; the original run remains interrupted
 soc recover RUN-... --reason "worker exited during provider call" --database-url "$SOC_DATABASE_URL" --pretty

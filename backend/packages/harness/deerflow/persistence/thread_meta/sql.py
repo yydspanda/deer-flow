@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import case, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -62,6 +63,35 @@ class ThreadMetaRepository(ThreadMetaStore):
             await session.commit()
             await session.refresh(row)
             return self._row_to_dict(row)
+
+    async def get_or_create(
+        self,
+        thread_id: str,
+        *,
+        assistant_id: str | None = None,
+        user_id: str | None | _AutoSentinel = AUTO,
+        display_name: str | None = None,
+        metadata: dict | None = None,
+    ) -> dict | None:
+        resolved_user_id = resolve_user_id(
+            user_id,
+            method_name="ThreadMetaRepository.get_or_create",
+        )
+        existing = await self.get(thread_id, user_id=resolved_user_id)
+        if existing is not None:
+            return existing
+        try:
+            return await self.create(
+                thread_id,
+                assistant_id=assistant_id,
+                user_id=resolved_user_id,
+                display_name=display_name,
+                metadata=metadata,
+            )
+        except IntegrityError:
+            # The primary key resolves concurrent first-run creation. Return
+            # the winner only when it belongs to this caller.
+            return await self.get(thread_id, user_id=resolved_user_id)
 
     async def get(
         self,
@@ -241,6 +271,38 @@ class ThreadMetaRepository(ThreadMetaStore):
                 # hook, and preserves recency ordering.
                 flag_modified(row, "updated_at")
             await session.commit()
+
+    async def bind_metadata_once(
+        self,
+        thread_id: str,
+        key: str,
+        value: Any,
+        *,
+        user_id: str | None | _AutoSentinel = AUTO,
+    ) -> Any | None:
+        """Atomically establish one immutable metadata binding."""
+        resolved_user_id = resolve_user_id(
+            user_id,
+            method_name="ThreadMetaRepository.bind_metadata_once",
+        )
+        async with self._sf() as session:
+            if session.get_bind().dialect.name == "sqlite":
+                await session.execute(text("BEGIN IMMEDIATE"))
+                row = await session.get(ThreadMetaRow, thread_id)
+            else:
+                result = await session.execute(select(ThreadMetaRow).where(ThreadMetaRow.thread_id == thread_id).with_for_update())
+                row = result.scalar_one_or_none()
+            if row is None:
+                return None
+            if resolved_user_id is not None and row.user_id != resolved_user_id:
+                return None
+            metadata = dict(row.metadata_json or {})
+            if key not in metadata:
+                metadata[key] = value
+                row.metadata_json = metadata
+                flag_modified(row, "updated_at")
+                await session.commit()
+            return metadata.get(key)
 
     async def update_owner(
         self,

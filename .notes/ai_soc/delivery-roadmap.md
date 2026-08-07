@@ -37,10 +37,18 @@ flowchart LR
 | `BD` Boss Demo v0.1 | **Done** | 一条 8-10 分钟、浏览器优先、可重复的 golden path | `BD-01..03` 与 BD Gate 已通过 |
 | `AA` SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 唯一的 Complete/Gap/Mock/Data-gated/Deferred 矩阵 | 审计矩阵和 P0/P1 阻塞清单已于 2026-07-18 确认 |
 | `BG` Close Blocking Gaps | **Done / Alpha Gate Passed 2026-07-20** | P0/P1、Alpha readiness technical gate、独立评审与具名批准已完成 | `BG-03` 已批准进入 Stage 4 integration preparation |
-| `PI` Real Data & Production Integration | **Current / Simulation Completion Track** | 先用显式 mock 走完产品、评测、运营和治理流程；真实 PingAn 接入作为独立债务验收 | Pilot readiness review 通过；真实 gate 不因仿真通过而关闭 |
+| `PI` Real Data & Production Integration | **Current / External product-complete; real debt open** | 外网可实现的产品流和 `PI-01G1..G3` DeerFlow 原生 SOC 专家委派已完成；真实 PingAn/infra/quality/telemetry/rollout 仍按独立债务验收 | 外网完整性不再新增仿真切片；fresh real evidence、具名 owner、cohort enforcement 与可执行 rollback 到位后再通过 Pilot readiness review；仿真不关闭真实 gate |
 
 Boss Demo v0.1 和 Alpha 完整性审计已于 2026-07-18 分别通过 BD Gate、AA Gate；冻结的
-`BG-P0-01..BG-P1-05` 与 `BG-03` 已于 2026-07-20 关闭。`PI-04-A SOC Operations Snapshot` 已完成。产品负责人于 2026-08-05 决定：当前无法在外网访问的 PingAn DEV 能力统一使用显式 mock 走完产品流程，并把真实 `mocked=false` 验收单独登记为 `Real Integration Debt`，不再阻塞后续切片。`D12-B`、`PI-01A/B1` 的 production-shaped Provider/MCP 和内网验收工具保留；`PI-01B2/C` 无稳定来源契约，仍为 data-gated，仿真只覆盖现有 vendor-neutral service boundary，不虚构供应商接口。`PI-01D1-D4` 与 `PI-01E` 5/50 条 external simulation 已通过，因此产品完成轨切到 `PI-03`。所有 mock 必须带 `mocked=true`，所有真实 gate 均保持开放。当前 DEV 使用独立本地 SQLite；真实 Kafka/K8s/PostgreSQL 参数继续停放。
+`BG-P0-01..BG-P1-05` 与 `BG-03` 已于 2026-07-20 关闭。`PI-04-A SOC Operations Snapshot` 已完成。产品负责人于 2026-08-05 决定：当前无法在外网访问的 PingAn DEV 能力统一使用显式 mock 走完产品流程，并把真实 `mocked=false` 验收单独登记为 `Real Integration Debt`，不再阻塞后续切片。`D12-B`、`PI-01A/B1` 的 production-shaped Provider/MCP 和内网验收工具保留；`PI-01B2/C` 无稳定来源契约，仍为 data-gated，仿真只覆盖现有 vendor-neutral service boundary，不虚构供应商接口。`PI-01D1-D4`、`PI-01E` 5/50 条 external simulation 和 `PI-05B` 仿真汇总已通过，但 completion report 不是项目完工声明：随后审计出的 Web/Gateway Lead Agent 审批入口由 `PI-01F` 补齐，memory candidate 来源完整性继续由 `PI-03F` 收口。所有 mock 必须带 `mocked=true`，所有真实 gate 均保持开放。当前 DEV 使用独立本地 SQLite；真实 Kafka/K8s/PostgreSQL 参数继续停放。
+
+2026-08-07 产品负责人进一步决定：暂不等待内网，优先完成仍可在外网实现的完整 SOC 产品流。
+`AC-30` 因此从 Parking Lot 重开为 `PI-01G`，并已通过 `G1..G3` 关闭。该工作复用 DeerFlow
+原生 custom subagent registry、`task` executor、model inheritance 和 task events；不新增第二套
+LangGraph Runtime。四个 specialist 本身无 tool、无动态 Skill 读取，只分析由 server 投影的
+bounded ReviewQueue 证据和已评审 `runtime-guidance.md`。专家回答是 advisory reasoning，
+不是证据、verdict、memory、approval 或 action authority。任何专家看到的 fake Provider 结果
+仍必须保留 `mocked=true`，并继续由统一 Mock/Real 台账追踪内网替换验收。
 
 ## 3. Stage 1 - Boss Demo v0.1
 
@@ -125,7 +133,7 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 
 | ID | Work / 工作 | Deliverable / 产出 | Acceptance / 验收 |
 |---|---|---|---|
-| `PI-01` | Providers and governed investigation / 能力源与受控调查 | **Simulation Done / Real Debt Open**: D1-D4 与 external 5/50 passed；D12-B、TI、security-tag 的真实 gate 保留；B2/C data-gated | 仿真证明 workflow reachability；真实 `mocked=false` 证据另行关闭 Provider gate；两者均不得越权修改基础 Runtime |
+| `PI-01` | Providers and governed investigation / 能力源与受控调查 | **External product flow complete / Real Debt Open**: D1-D4、external 5/50、PI-01F/F2 和 PI-01G1..G3 passed；D12-B、TI、security-tag 的真实 gate 保留；B2/C data-gated | 仿真证明 workflow reachability；Web/Gateway/TUI proposal 与专家委派均进入统一治理边界；真实 `mocked=false` 证据另行关闭 Provider gate；任何入口不得越权修改基础 Runtime |
 | `PI-02` | Infrastructure / 基础设施 | **Local Simulation Done / Real Debt Parked**: SQLite、local Redpanda/Kafka、worker/DLQ/幂等已有 Alpha 证据；真实 Kafka/PostgreSQL/K8s 参数暂缺 | 当前只要求本地流程可重复；生产吞吐、ACL/TLS、恢复、连接池和 K8s gate 保持开放 |
 | `PI-03` | Labels, learning and calibration / 标签、学习与校准 | **PI-03A/B/C Simulation Done / Real Feedback Debt Open**: corpus、统一质量 replay 和反馈型 Skill backlog 均已走通；真实人工标签和 source classifier 仍开放 | 仿真可以验证治理代码，但不能生成真实准确率声明；任何 profile/Skill/parser promotion 仍需人工批准与真实标签 |
 | `PI-04` | Operations and security / 运维与安全 | **PI-04A/B Done / Real Telemetry Debt Open**: Snapshot CLI/API 与薄 Web 已完成；本地/仿真数据性质、无 overall health 和 `not_measured` 缺口显式可见 | Web 只消费冻结 snapshot；Playwright fixture 不冒充 deployed Gateway 或真实 lag/算力/Prometheus/SLO |
@@ -139,7 +147,8 @@ Stage 3 不负责解决真实凭证、生产标签数量或企业基础设施未
 composition/action 配置后才进入该桥；默认仍只执行固定 `SocAnalysisService`。D4 已能从持久化
 ledger/evidence 重建 shadow report、telemetry 和 addendum；它不能把“已接线”冒充真实 Provider
 质量或 Pilot readiness。当前 external simulation 已完成，产品完成轨继续 PI-03..05；真实 PingAn
-shadow 证据留在独立债务轨，恢复时继续使用已经准备好的同一套验收入口。
+shadow 证据留在独立债务轨，恢复时继续使用已经准备好的同一套验收入口。`PI-01F2` 已补 direct Web
+`soc-triage` 的 authenticated ReviewQueue context binding；它关闭产品入口缺口，但不改变任何真实 gate。
 
 | Order | ID | Work / 工作 | Implementation boundary / 实现边界 | Exit evidence / 退出证据 |
 |---|---|---|---|---|
@@ -149,8 +158,17 @@ shadow 证据留在独立债务轨，恢复时继续使用已经准备好的同�
 | 4 | `PI-01C` | Real external disposition source / 真实状态理由回流 | Zeus/工单 source adapter 只生成 `SocExternalDispositionIngressCommand`，继续走现有 authenticated ingress/service/UoW | 幂等、乱序、重放、更正、未知状态和 trust mapping 通过；reason 只生成待评审知识候选 |
 | 5 | `PI-01D` | Governed read-only investigation orchestration / 受控只读调查编排 | application-level planner/service；D1 只消费 typed entity/role + tenant policy，后续只有新增 typed trigger contract 后才可消费 scenario/gap；复用现有 dispatcher/registry/evidence repository | asset/TI/tag 自动调查可回放；`asset.lookup` 与 `asset.locate` 完成 route consolidation；Provider 失败与正常查无可区分；基础 `AnalysisRun` 不可变且所有副作用保持关闭 |
 | 6 | `PI-01E` | External rehearsal -> internal shadow / 外网仿真到内网影子 | 两种环境均分开运行 Runtime compatibility 与 persisted investigation；外网 `external_simulation` 要求 fake/`mocked=true`，内网 `internal_real` 要求 internal/`mocked=false`；先 5 后 50 | 两类报告均覆盖 provider hit/not-found/error、有效证据率、P95、LLM/tool cost、review rate 和越权计数；外网 pass 仅允许进入下一档，不关闭真实 gate |
+| 7 | `PI-01F` | Interactive Lead Agent governance bridge / 交互式主控治理桥 | DeerFlow 增加 operator-owned per-agent middleware 扩展；SOC Web/Gateway profile 使用审批 middleware，SOC TUI 保留外层 service bridge；两者共用 proposal/policy/approval service | 结构化 proposal 可稳定 replay；模型不能伪造 ID/actor/context；高风险只入 Approval Inbox，不直接执行或作为 unrestricted MCP tool 暴露 |
+| 8 | `PI-01F2` | Direct Web ReviewQueue context bridge / Web 工单上下文桥 | 客户端只传 queue identity hint；Gateway 通过 ReviewService 重建 bounded artifact、写 owner-scoped immutable thread binding；profile middleware transient injection + message provenance | 首轮新线程和后续重开均可用；每轮 fresh rebuild；48k hard cap；acceptance 匹配 queue/binding/message snapshot；不改 verdict/close/memory/action authority |
+| 9 | `PI-01G1` | Native SOC specialist profiles / 原生专家配置 | **Done**: 在 `soc_agent` 中声明 capability-oriented network、endpoint、web、email profiles，直接生成 DeerFlow `CustomSubagentConfig`；显式 installer 只合并这些 root `config.yaml` entries，冲突默认 fail closed | DeerFlow registry/doctor 可解析全部 profile；`tools=[]`/`skills=[]`，只继承父模型；不能递归 task、读写文件、运行 shell 或调用 MCP/action；CLI dry-run/apply 与保留 operator config 回归通过 |
+| 10 | `PI-01G2` | Governed delegation contract / 受控委派协议 | **Done**: SOC Lead Agent profile 增加 lead-only middleware；只允许 SOC specialist names、trusted ReviewQueue context、1,200-char narrow task、32K server projection、每 chat run 最多两个不同专家、stable lineage；specialist output 仅作为 advisory artifact | general-purpose/bash/未知 subagent、未绑定 context、超预算、重复专家、action marker 和 stopped/capped output 均 fail closed；专家结果不能写 evidence/verdict/memory/approval，Lead Agent 必须重新综合并引用系统证据 |
+| 11 | `PI-01G3` | Product surfaces and replay / 产品入口与回放 | **Done**: Web/TUI 复用 DeerFlow native `task_*` events/subtask state；stable delegated identity 回归通过；NIDS network 与 EDR endpoint 代表样本使用真实 `deepseek-v4-flash` 完成 | 两个 smoke 都是一个预期专家 completed、0 failed/capped、advisory provenance 存在；外部 fake evidence 保留 `mocked=true`、`provider_acceptance_claimed=false`；无专家时基础 Runtime/Lead Agent 仍可独立给结论 |
 
 Current status / 当前状态：`D12-B` 为 `Parked / internal evidence pending`；其代码、私有 case matrix 和验收门槛全部保留。`PI-01A` 已完成 production-shaped PingAn Provider、stdio MCP、generic action config、显式 fake smoke，以及 hit/not-found/partial/error/freshness/trim/lineage/persistence 回归；真实内网 `mocked=false` smoke 与实际响应字段复核仍是退出门槛，因此不能标记 Done。`PI-01B1` 已完成 `/public/searchTagContent` Provider/MCP/action 的外网可验证部分，保留 active/expired/inactive/conflicted/unknown/out-of-scope/unusable/not-found 语义；真实 DEV 响应、对象类型、无过期时间语义与持久化 `mocked=false` 证据仍待内网验收。
+
+`PI-01G1..G3` 的防守产品链已完成，不再是当前进行项。其实时模型报告只证明
+DeerFlow Lead Agent -> native task -> specialist -> advisory synthesis 可运行；它们不证明
+PingAn Provider 已接通，也不提供生产准确率声明。
 
 `PI-01B` 包含两个不能互相冒充的子 gate：`PI-01B1` 是按实体查询安全标签的 request/response
 Provider；`PI-01B2` 是 change/scanner/maintenance/exercise-roster 等权威来源向 Governed Context
@@ -186,6 +204,18 @@ Grounding 的 investigation addendum，而不是覆写原始 Runtime run。
 | `PI-01D3` | **Done** | Kafka/内网 batch 的独立 durable investigation workflow；持久化 immutable plan/execution/attempt/evidence，补跨进程幂等、bounded retry、stale recovery、linked replay 和逐次 result-mode 校验 | Runtime batch 可独立；Provider failure 不伪装 miss；重复消息不重复已完成查询/证据；Kafka retryable failure 不提交 offset；migration/CLI/回归通过 |
 | `PI-01D4` | **Done** | `soc.investigation_shadow_report.v1`、`soc.investigation_addendum.v1`、只读 reporting service、Review/Web/TUI/Lead Agent 投影、CLI 与内网 batch 聚合 | 可测 hit/not-found/error/retry/action-attempt latency/evidence coverage；未接来源的 Provider 网络耗时与 cost 明确 `not_measured`；addendum 不产生新结论，仍无 verdict overwrite、auto-close、memory confirm 或高风险动作 |
 
+`PI-01F` 已补齐交互式入口治理：通用 DeerFlow 只增加可信 per-agent middleware 装配能力，SOC
+middleware、proposal parser、policy 和 approval persistence 仍留在 `backend/soc_agent/`。标准 Web/Gateway
+custom-agent path 使用 profile middleware，SOC TUI 保留既有外层 service bridge；二者不会重复处理同一
+proposal。该切片只关闭“proposal 能否进入治理边界”的缺口，不代表真实 Provider、生产副作用或整个产品
+已经完成。
+
+`PI-01F2` 已补齐 direct Web ReviewQueue context：URL/request 中的 queue ID 不是 artifact，只用于服务端
+定位。Gateway 要求 authenticated `lead_agent/soc-triage`，校验业务 lineage，把 thread 一次性绑定到
+queue/run/alert，并在每轮从 ReviewService 重建 context。Middleware 的注入只存在于 model request，AI
+message 保存 exact provenance；Web acceptance 采纳该 snapshot 而不是 mutation 后的新 hash。现有 profile
+必须显式 `soc agent install-profile --overwrite` 才获得 context + approval 两个 middleware。
+
 ### 6.2 PI-03 Decomposition / 标签与学习工作包
 
 PI-03 仿真产品轨已完成 A/B/C。每个切片都先用明确的 `simulation` data class 走通，再保留真实标签 gate：
@@ -197,6 +227,7 @@ PI-03 仿真产品轨已完成 A/B/C。每个切片都先用明确的 `simulatio
 | `PI-03C` | Feedback-derived Skill candidates / 反馈型 Skill 候选 | **Done (simulation)**: typed observation、distinct-source threshold、Skill package hash、scenario/failure facet、SQL backlog、RBAC/audit/state machine 和 aggregation replay 已完成 | 4 条 synthetic feedback 生成一个 `mocked=true` pending candidate；不自动编辑、激活或发布 Skill。真实 correction/external reason 到 typed facet 的 server-owned classifier 仍为 Real Integration Debt |
 | `PI-03D` | Tenant knowledge promotion / 租户知识治理升级 | 对路径目录等 candidate knowledge 生成独立 promotion proposal，补 scope/validity/owner 和标签 replay | 默认保持 investigation-only；目录更新本身永不获得 decision impact |
 | `PI-03E` | Adaptive parser governance / 自适应解析治理 | drift cohort report + candidate bundle；之后才允许 dual-run/replay/approval/canary/rollback | 禁止单告警 LLM 解析和 Runtime 自修改；无稳定 cohort 不启动 |
+| `PI-03F` | Governed memory candidate source completion / 记忆候选来源收口 | **Done**: F1 已完成 CLI/TUI 显式采纳；F2 已完成 authenticated Gateway/Web server-side message resolution；F3 已完成默认关闭的 Kafka/batch typed observation、固定窗口聚合、5/5 双门槛、冻结候选和只读 replay | 禁止逐告警、逐 finding、模型自说自话地写 candidate；所有来源带 typed provenance/idempotency/scope，保持 `pending_review`，confirmed/retrieval 仍需人工治理；重复出现不等于真假、授权、影响或处置结论 |
 
 ### 6.3 PI-05 Decomposition / 受治理上线工作包
 
@@ -240,8 +271,9 @@ Stage 4 的退出结果是 **Pilot Ready / 可试点**。正式 GA、自动关�
 8. 研究和参考项目查询必须服务当前 task 的明确决策，不以“继续研究”替代交付。
 9. CodeGraph 在切片明确后用于找复用点；完成代码修改后执行 `codegraph sync .`。
 10. 每次阶段转换都在 `progress.md` 留下 Gate 证据、未完成项去向和下一任务。
-11. 任何 PingAn DEV 依赖先交付显式 simulation package；仿真 gate 通过后产品完成轨可以继续，真实 `mocked=false` gate 进入独立债务轨，不得用它反向阻塞无关产品切片。
+11. 任何 PingAn DEV 依赖先交付显式 simulation implementation + evidence；仿真 gate 通过后产品完成轨可以继续，真实 `mocked=false` gate 进入独立债务轨，不得用它反向阻塞无关产品切片。
 12. 仿真只能覆盖已经冻结的 contract；无稳定 contract 的能力保持 data-gated，不用 mock 猜测。所有报告同时给出 simulation status 和 real-integration status，禁止把两者压成一个 Done。
+13. Transfer archive / 迁移包不是切片完成产物。只有用户明确要求打包或已进入实际内网交接窗口时才生成；普通实现、仿真 gate 或阶段报告完成后不得自动打包。过时 archive 立即清理，源码与可复现脚本才是长期交付基础。
 
 ## 9. Current Execution Pointer / 当前执行指针
 
@@ -258,7 +290,7 @@ Completed:    BG-P1-04 - Governed memory activation (AC-39)
 Completed:    BG-P1-05 - Alpha E2E and docs reconciliation (AC-23, AC-24, AC-49)
 Completed:    BG-03 - Alpha readiness package and scoped accountable approval
 Current Stage: PI - Real Data & Production Integration
-Current:      Product simulation track complete; no fake PI-05C implementation
+Current:      PI - external product-complete; no additional mock-only product slice is open
 Completed:    PI-01 Checkpoint D-0 - 212-row adapter-independent corpus inventory
 Completed:    PI-01 Checkpoint D-1 - alert 1965449 canonical normalization (parser warnings explicit)
 Completed:    PI-01 Checkpoint D-2 - alert 1965449 generic deterministic entity extraction
@@ -285,6 +317,14 @@ Completed:    PI-01E tooling - dual-mode paired gate, exact composition/action/e
 Completed:    PI-01E external simulation stage 5 - same 5-row live-LLM cohort; 11 fake MCP calls/evidence, 0 failures/missing evidence/unauthorized side effects; report explicitly cannot close real gates
 Completed:    PI-01E external simulation stage 50 - 50/50 paired completion; 157 fake MCP calls/evidence, 0 failures/missing evidence/unauthorized side effects; no Provider hit observed and real gates remain open
 Completed:    PI-01E internal-real operator entry - static-by-default, dual-confirm live orchestration of environment/MCP preflight, isolated SQLite, paired batches and gate; no internal evidence produced externally
+Completed:    PI-01F - operator-owned per-agent middleware plus SOC Web/Gateway approval bridge; TUI keeps its outer bridge; stable server IDs and no high-risk auto-execution
+Completed:    PI-01F2 - authenticated direct Web ReviewQueue context, immutable owner-scoped thread binding, per-run fresh bounded artifact, transient middleware injection and exact assistant provenance
+Completed:    PI-01G1 - capability-oriented network/endpoint/web/email profiles, explicit root-config installer and fail-closed runtime doctor
+Completed:    PI-01G2 - lead-only bounded delegation middleware, server-owned case/Skill projection, two-distinct-specialist limit, stable lineage and advisory authority guard
+Completed:    PI-01G3 - native task-event/replay regression plus real-model NIDS network and EDR endpoint representative smoke; Provider acceptance remains false
+Completed:    PI-03F1 - explicit CLI/TUI analyst acceptance of one stable Lead Agent message -> pending review-note candidate; no automatic model-output persistence
+Completed:    PI-03F2 - authenticated Web acceptance resolves the latest terminal SOC assistant message from server-owned current checkpoint state; client sends no model text and result remains pending review
+Completed:    PI-03F3 - opt-in Kafka/batch immutable observations, strongest-dimension cohorts, canonical source-event-time windows, 5/5 thresholds, one frozen pending candidate, manual-only supersession and read-only replay
 Completed:    PI-03A simulation label foundation - five live-LLM runs prepared, sealed and verified with immutable manifest; mocked=true and no real-quality claim
 Completed:    PI-03B simulation quality gate - composed offline/scenario/correlation/manifest-bound confidence evaluation; 8/8 alerts passed and replay semantic diff is stable
 Completed:    PI-03C simulation Skill backlog - four typed synthetic feedback observations produced one versioned pending candidate; SQL/RBAC/audit/freeze/replay passed, with every mutation/activation/quality claim disabled
@@ -292,7 +332,10 @@ Completed:    PI-04-A - SOC Operations Snapshot contract, exact persisted counte
 Completed:    PI-04-B - thin Web consumer, explicit local/simulation evidence, not_measured gaps, desktop/mobile Playwright overflow and screenshot evidence
 Completed:    PI-05A - vendor-neutral rollout plan/gate/rollback contract, 16-step virtual rehearsal and stable replay; 0 real transitions/effects
 Completed:    PI-05B - five-component fail-closed completion report SCG-6EEDC5DC3417; stable replay, seven real gates open, pilot_ready/production_ready false
+Next:         Resume one exact RID item only when its required real input exists; do not create another disconnected mock slice
+Quality next: PI-03 real labeled evaluation when approved human-reviewed corpus/correlation pairs are supplied; include network direction/role calibration
+Parallel debt: Resume D12-B / PI-01A / PI-01B1 only when approved internal config and credentials are available
 Next evidence: PI-05C only after deployed telemetry, accountable owners, cohort enforcement and executable rollback exist; do not implement a disconnected fake controller
-Real Integration Debt: D12-B asset, PI-01A TI, PI-01B1 security-tag and PI-01E internal-real shadow remain open; existing operator package is retained
+Real Integration Debt: D12-B asset, PI-01A TI, PI-01B1 security-tag and PI-01E internal-real shadow remain open; no local transfer archive is retained or regenerated until explicit internal handoff
 Data-gated:   PI-01B2/C source contracts, real feedback-to-typed-Skill-facet classification, and real Kafka/PostgreSQL/K8s inputs remain separately parked
 ```

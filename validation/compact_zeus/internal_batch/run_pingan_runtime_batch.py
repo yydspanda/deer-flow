@@ -51,11 +51,15 @@ from soc_agent.contracts import (  # noqa: E402
     ActorContext,
     ActorType,
     EntrySurface,
+    MemoryPatternAggregationPolicy,
+    MemoryPatternDataClass,
+    MemoryPatternSourceType,
     ServiceRequestContext,
     SocEnrichmentExecutionCommand,
     SocEnrichmentExecutionStatus,
     SocEnrichmentExecutionTrigger,
 )
+from soc_agent.core import SocMemoryPatternService  # noqa: E402
 from soc_agent.db import (  # noqa: E402
     SqlAlchemyAlertRepository,
     resolve_database_url,
@@ -66,6 +70,7 @@ from soc_agent.llm import (  # noqa: E402
     SocLLMSettings,
     resolve_soc_model_name,
 )
+from soc_agent.memory import MemoryPatternIneligibleError  # noqa: E402
 
 MANIFEST_SCHEMA_VERSION = "soc.pingan_internal_runtime_batch_manifest.v1"
 ITEM_SCHEMA_VERSION = "soc.pingan_internal_runtime_batch_item.v1"
@@ -106,6 +111,10 @@ class BatchExecutionConfig:
     enrichment_composition_sha256: str | None = None
     enrichment_action_config_sha256s: tuple[str, ...] = ()
     enrichment_extensions_config_sha256: str | None = None
+    memory_pattern_enabled: bool = False
+    memory_pattern_environment: str | None = None
+    memory_pattern_data_class: str | None = None
+    memory_pattern_policy: MemoryPatternAggregationPolicy | None = None
 
 
 def prepare_batch_items(
@@ -177,6 +186,7 @@ def execute_batch(
     source_errors: Sequence[Mapping[str, Any]] = (),
     investigation_service: Any | None = None,
     investigation_reporting_service: Any | None = None,
+    memory_pattern_service: Any | None = None,
 ) -> dict[str, Any]:
     """Execute selected rows, checkpoint atomically, and support exact resume."""
 
@@ -204,6 +214,25 @@ def execute_batch(
     ):
         raise ValueError(
             "investigation services were provided while investigation enrichment is disabled"
+        )
+    if config.memory_pattern_enabled:
+        if not config.persist:
+            raise ValueError("memory pattern aggregation requires persisted batch runs")
+        if memory_pattern_service is None:
+            raise ValueError(
+                "memory pattern aggregation is enabled but no service was provided"
+            )
+        if (
+            not config.memory_pattern_environment
+            or not config.memory_pattern_data_class
+            or config.memory_pattern_policy is None
+        ):
+            raise ValueError(
+                "memory pattern aggregation requires environment, data class, and policy"
+            )
+    elif memory_pattern_service is not None:
+        raise ValueError(
+            "memory pattern service was provided while aggregation is disabled"
         )
 
     output_dir = config.output_dir.resolve()
@@ -264,6 +293,7 @@ def execute_batch(
                     previous_record=existing.get(item.source_index),
                     investigation_service=investigation_service,
                     investigation_reporting_service=investigation_reporting_service,
+                    memory_pattern_service=memory_pattern_service,
                 )
                 _write_item(items_dir, record)
                 existing[item.source_index] = record
@@ -287,6 +317,7 @@ def execute_batch(
                         previous_record=existing.get(item.source_index),
                         investigation_service=investigation_service,
                         investigation_reporting_service=investigation_reporting_service,
+                        memory_pattern_service=memory_pattern_service,
                     ): item
                     for item in pending
                 }
@@ -346,6 +377,7 @@ def _analyze_item(
     previous_record: Mapping[str, Any] | None = None,
     investigation_service: Any | None = None,
     investigation_reporting_service: Any | None = None,
+    memory_pattern_service: Any | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
     context = ServiceRequestContext(
@@ -437,6 +469,15 @@ def _analyze_item(
     }
     if retry_of_run_id is not None:
         record["execution"]["analysis_retry_of_run_id"] = retry_of_run_id
+    if memory_pattern_service is not None:
+        _observe_batch_memory_pattern(
+            record,
+            run=run,
+            item=item,
+            config=config,
+            context=context,
+            memory_pattern_service=memory_pattern_service,
+        )
     if investigation_service is None or outcome != "completed":
         return record
 
@@ -518,6 +559,68 @@ def _analyze_item(
     record["execution"]["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
     record["execution"]["completed_at"] = datetime.now(UTC).isoformat()
     return record
+
+
+def _observe_batch_memory_pattern(
+    record: dict[str, Any],
+    *,
+    run: Any,
+    item: BatchItem,
+    config: BatchExecutionConfig,
+    context: ServiceRequestContext,
+    memory_pattern_service: Any,
+) -> None:
+    assert config.memory_pattern_environment is not None
+    assert config.memory_pattern_data_class is not None
+    transport_ref = (
+        f"batch:{config.source_sha256}:{item.source_index}:{item.payload_sha256}"
+    )
+    try:
+        result = memory_pattern_service.observe_run(
+            run,
+            source_type=MemoryPatternSourceType.BATCH_ALERT,
+            transport_ref=transport_ref,
+            environment=config.memory_pattern_environment,
+            data_class=MemoryPatternDataClass(config.memory_pattern_data_class),
+            context=context,
+        )
+    except MemoryPatternIneligibleError as exc:
+        record["memory_pattern_aggregation"] = {
+            "status": "skipped_ineligible",
+            "reason": _safe_error(exc),
+            "base_run_mutated": False,
+        }
+        record["summary"]["memory_pattern_status"] = "skipped_ineligible"
+        return
+    except Exception as exc:  # noqa: BLE001 - learning is non-blocking for the batch
+        record["memory_pattern_aggregation"] = {
+            "status": "failed_non_blocking",
+            "error_type": type(exc).__name__,
+            "error": _safe_error(exc),
+            "base_run_mutated": False,
+        }
+        record["summary"]["memory_pattern_status"] = "failed_non_blocking"
+        return
+    record["memory_pattern_aggregation"] = {
+        "status": "observed",
+        "result": result.model_dump(mode="json", exclude_none=True),
+        "base_run_mutated": False,
+        "direct_memory_write": False,
+    }
+    record["summary"].update(
+        {
+            "memory_pattern_status": "observed",
+            "memory_pattern_observation_id": result.observation.observation_id,
+            "memory_pattern_aggregation_key": result.observation.aggregation_key,
+            "memory_pattern_support_count": result.support_count,
+            "memory_pattern_distinct_source_count": result.distinct_source_count,
+            "memory_pattern_threshold_met": result.threshold_met,
+            "memory_pattern_candidate_id": (
+                result.candidate.candidate_id if result.candidate is not None else None
+            ),
+            "memory_pattern_candidate_created": result.candidate_created,
+        }
+    )
 
 
 def _run_summary(run: Mapping[str, Any]) -> dict[str, Any]:
@@ -637,6 +740,14 @@ def _build_manifest(
                 config.enrichment_action_config_sha256s
             ),
             "enrichment_extensions_config_sha256": config.enrichment_extensions_config_sha256,
+            "memory_pattern_enabled": config.memory_pattern_enabled,
+            "memory_pattern_environment": config.memory_pattern_environment,
+            "memory_pattern_data_class": config.memory_pattern_data_class,
+            "memory_pattern_policy": (
+                config.memory_pattern_policy.model_dump(mode="json")
+                if config.memory_pattern_policy is not None
+                else None
+            ),
             "fixed_runtime_independently_usable": True,
             "secrets_included": False,
         },
@@ -645,6 +756,9 @@ def _build_manifest(
             "investigation_provider_calls_require_explicit_confirmation": True,
             "investigation_actions_are_exact_allowlisted_read_only": True,
             "investigation_cannot_mutate_base_runtime_decision": True,
+            "memory_pattern_observations_cannot_mutate_base_runtime_decision": True,
+            "memory_pattern_candidates_require_distinct_source_threshold": True,
+            "memory_pattern_candidate_confirmation_remains_human_gated": True,
             "source_pickle_loaded_with_restricted_unpickler": True,
             "raw_payloads_are_local_sensitive_artifacts": True,
             "artifact_file_mode": "0600",
@@ -730,6 +844,16 @@ def _summarize_records(
         _mapping(item.get("summary")).get("automation_allowed") is True
         for item in records
     )
+    memory_pattern_statuses = Counter(
+        str(_mapping(item.get("summary")).get("memory_pattern_status"))
+        for item in records
+        if _mapping(item.get("summary")).get("memory_pattern_status") is not None
+    )
+    memory_pattern_candidate_ids = {
+        str(value)
+        for item in records
+        if (value := _mapping(item.get("summary")).get("memory_pattern_candidate_id"))
+    }
     return {
         "selected_count": selected_count,
         "recorded_count": len(records),
@@ -739,6 +863,16 @@ def _summarize_records(
         "source_error_count": source_error_count,
         "needs_review_count": review_count,
         "automation_allowed_count": automation_allowed_count,
+        "memory_pattern": {
+            "status_counts": dict(sorted(memory_pattern_statuses.items())),
+            "candidate_count": len(memory_pattern_candidate_ids),
+            "candidate_ids": sorted(memory_pattern_candidate_ids),
+            "candidate_created_count": sum(
+                _mapping(item.get("summary")).get("memory_pattern_candidate_created")
+                is True
+                for item in records
+            ),
+        },
         "runtime_status_counts": dict(sorted(runtime_statuses.items())),
         "verdict_counts": dict(sorted(verdicts.items())),
         "investigation_status_counts": dict(sorted(investigation_statuses.items())),
@@ -950,6 +1084,26 @@ def _validate_resume(
             execution.get("enrichment_extensions_config_sha256"),
             config.enrichment_extensions_config_sha256,
         ),
+        "execution.memory_pattern_enabled": (
+            execution.get("memory_pattern_enabled", False),
+            config.memory_pattern_enabled,
+        ),
+        "execution.memory_pattern_environment": (
+            execution.get("memory_pattern_environment"),
+            config.memory_pattern_environment,
+        ),
+        "execution.memory_pattern_data_class": (
+            execution.get("memory_pattern_data_class"),
+            config.memory_pattern_data_class,
+        ),
+        "execution.memory_pattern_policy": (
+            execution.get("memory_pattern_policy"),
+            (
+                config.memory_pattern_policy.model_dump(mode="json")
+                if config.memory_pattern_policy is not None
+                else None
+            ),
+        ),
     }
     mismatches = [
         name for name, (actual, wanted) in expected.items() if actual != wanted
@@ -1133,6 +1287,9 @@ def _plan_payload(
     enrichment_composition_sha256: str | None = None,
     enrichment_action_config_sha256s: Sequence[str] = (),
     enrichment_extensions_config_sha256: str | None = None,
+    memory_pattern_environment: str | None = None,
+    memory_pattern_data_class: str | None = None,
+    memory_pattern_policy: MemoryPatternAggregationPolicy | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": "soc.pingan_internal_runtime_batch_plan.v1",
@@ -1159,6 +1316,14 @@ def _plan_payload(
             "enrichment_composition_sha256": enrichment_composition_sha256,
             "enrichment_action_config_sha256s": list(enrichment_action_config_sha256s),
             "enrichment_extensions_config_sha256": enrichment_extensions_config_sha256,
+            "memory_pattern_enabled": memory_pattern_policy is not None,
+            "memory_pattern_environment": memory_pattern_environment,
+            "memory_pattern_data_class": memory_pattern_data_class,
+            "memory_pattern_policy": (
+                memory_pattern_policy.model_dump(mode="json")
+                if memory_pattern_policy is not None
+                else None
+            ),
             "fixed_runtime_independently_usable": True,
         },
         "recommended_ramp": [5, 50, "all"],
@@ -1247,6 +1412,33 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Required before explicitly enabled read-only investigation providers are called",
     )
+    parser.add_argument(
+        "--memory-pattern-data-class",
+        choices=[item.value for item in MemoryPatternDataClass],
+        help=(
+            "Explicitly enable persisted repeated-pattern observations; omitted "
+            "keeps PI-03F3 disabled"
+        ),
+    )
+    parser.add_argument(
+        "--memory-pattern-environment",
+        help="Required environment scope when repeated-pattern observations are enabled",
+    )
+    parser.add_argument(
+        "--memory-pattern-window-seconds",
+        type=int,
+        default=86_400,
+    )
+    parser.add_argument(
+        "--memory-pattern-minimum-support",
+        type=int,
+        default=5,
+    )
+    parser.add_argument(
+        "--memory-pattern-minimum-distinct-sources",
+        type=int,
+        default=5,
+    )
     return parser.parse_args(argv)
 
 
@@ -1268,6 +1460,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if args.default_tenant_id is not None and not default_tenant_id:
             raise ValueError("--default-tenant-id must not be blank")
+        memory_pattern_data_class = args.memory_pattern_data_class
+        memory_pattern_environment = (
+            args.memory_pattern_environment.strip()
+            if args.memory_pattern_environment
+            else None
+        )
+        if (memory_pattern_data_class is None) != (memory_pattern_environment is None):
+            raise ValueError(
+                "--memory-pattern-data-class and --memory-pattern-environment must be provided together"
+            )
+        memory_pattern_policy = (
+            MemoryPatternAggregationPolicy(
+                window_seconds=args.memory_pattern_window_seconds,
+                minimum_support=args.memory_pattern_minimum_support,
+                minimum_distinct_sources=args.memory_pattern_minimum_distinct_sources,
+            )
+            if memory_pattern_data_class is not None
+            else None
+        )
+        if (
+            memory_pattern_policy is not None
+            and not args.persist
+            and not args.plan_only
+        ):
+            raise ValueError("memory pattern aggregation requires --persist")
         source_sha256 = _sha256_file(source)
         frame = load_dataframe_pickle(source, required_columns={"alert_full_data"})
         items, source_errors = prepare_batch_items(
@@ -1416,6 +1633,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             enrichment_composition_sha256=enrichment_composition_sha256,
             enrichment_action_config_sha256s=enrichment_action_config_sha256s,
             enrichment_extensions_config_sha256=enrichment_extensions_config_sha256,
+            memory_pattern_environment=memory_pattern_environment,
+            memory_pattern_data_class=memory_pattern_data_class,
+            memory_pattern_policy=memory_pattern_policy,
         )
         if args.preflight_investigation:
             plan["execution"]["live_mcp_inventory_verified"] = True
@@ -1436,6 +1656,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         service = build_soc_analysis_service(repository, settings=settings)
         investigation_service = None
         investigation_reporting_service = None
+        memory_pattern_service = None
         if investigation_enabled:
             if repository is None or composition is None or registry is None:
                 raise ValueError(
@@ -1453,11 +1674,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 execution_repository=repository,
                 evidence_repository=repository,
             )
+        if memory_pattern_policy is not None:
+            if repository is None:
+                raise ValueError(
+                    "memory pattern aggregation requires a persisted repository"
+                )
+            memory_pattern_service = SocMemoryPatternService(
+                repository=repository,
+                candidate_repository=repository,
+                policy=memory_pattern_policy,
+            )
         manifest = execute_batch(
             items,
             analysis_service=service,
             investigation_service=investigation_service,
             investigation_reporting_service=investigation_reporting_service,
+            memory_pattern_service=memory_pattern_service,
             config=BatchExecutionConfig(
                 source_path=source,
                 source_sha256=source_sha256,
@@ -1477,6 +1709,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 enrichment_composition_sha256=enrichment_composition_sha256,
                 enrichment_action_config_sha256s=enrichment_action_config_sha256s,
                 enrichment_extensions_config_sha256=enrichment_extensions_config_sha256,
+                memory_pattern_enabled=memory_pattern_policy is not None,
+                memory_pattern_environment=memory_pattern_environment,
+                memory_pattern_data_class=memory_pattern_data_class,
+                memory_pattern_policy=memory_pattern_policy,
             ),
             source_row_count=len(frame),
             source_errors=source_errors,

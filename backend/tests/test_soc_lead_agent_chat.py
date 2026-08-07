@@ -6,11 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from deerflow.config.paths import get_paths
-from deerflow.runtime.user_context import get_effective_user_id
 from soc_agent.actions.adapters import InMemoryAssetLookupActionAdapter, SocActionAdapterRegistry
 from soc_agent.actions.mcp import SocMcpToolDescriptor, build_mcp_action_adapter_registry
 from soc_agent.actions.proposals import SocLeadAgentActionProposalBoundary
+from soc_agent.agent_profile import SocLeadAgentProfileInstaller
+from soc_agent.context_bridge import (
+    SOC_LEAD_AGENT_REVIEW_CONTEXT_ARTIFACT_RUNTIME_KEY,
+)
 from soc_agent.contracts import (
     ActorContext,
     AlertSourceType,
@@ -200,9 +202,12 @@ def test_soc_lead_agent_chat_service_bridges_review_context_to_deerflow_client()
 
     sent_message, sent_thread_id = client.calls[0]
     assert sent_thread_id == "SOC-THREAD-1"
-    assert "<soc_review_context_artifact>" in sent_message
-    assert '"queue_id": "REV-1"' in sent_message
-    assert "Operator message:\nOpen and investigate this SOC review context." in sent_message
+    assert sent_message == "Open and investigate this SOC review context."
+    assert client.stream_options[0]["subagent_enabled"] is True
+    runtime_context = client.stream_options[0]["runtime_context"]
+    artifact_payload = runtime_context[SOC_LEAD_AGENT_REVIEW_CONTEXT_ARTIFACT_RUNTIME_KEY]
+    assert artifact_payload["queue_id"] == "REV-1"
+    assert artifact_payload["context_hash"] == events[1].data["context_hash"]
     assert events[2].type == "values"
     assert events[-1].type == "end"
 
@@ -413,9 +418,7 @@ def test_soc_lead_agent_chat_service_requires_installed_profile(tmp_path: Path, 
 
 def test_soc_lead_agent_chat_service_accepts_installed_profile(tmp_path: Path, monkeypatch) -> None:
     _reset_deerflow_home(tmp_path, monkeypatch)
-    agent_dir = get_paths().user_agent_dir(get_effective_user_id(), SOC_LEAD_AGENT_NAME)
-    agent_dir.mkdir(parents=True)
-    (agent_dir / "config.yaml").write_text(f"name: {SOC_LEAD_AGENT_NAME}\n", encoding="utf-8")
+    SocLeadAgentProfileInstaller().install()
 
     client = FakeDeerFlowClient()
     service = SocLeadAgentChatService(client_factory=lambda: client, require_profile=True)

@@ -214,10 +214,15 @@ class AgentConfig(BaseModel):
     # webhook events from the gateway dispatcher. None means "no GitHub
     # integration", which is the case for every existing agent.
     github: GitHubAgentConfig | None = None
+    # Trusted operators may attach zero-argument AgentMiddleware classes to a
+    # specific custom agent. This field is intentionally not managed by the
+    # agent HTTP/tool update surfaces: loading Python classes is an operator
+    # configuration capability, not a model- or end-user-editable setting.
+    middlewares: list[str] | None = None
 
 
 # Fields explicitly managed by agent-update surfaces. Anything else declared
-# on :class:`AgentConfig` — currently ``github``, and any future field — is
+# on :class:`AgentConfig` — currently ``github`` and ``middlewares``, plus any future field — is
 # preserved verbatim by :func:`preserve_non_managed_fields` so update surfaces
 # do not silently drop hand-authored configuration. Some surfaces expose only a
 # subset of these managed fields (for example, the harness ``update_agent``
@@ -249,7 +254,9 @@ def preserve_non_managed_fields(existing_cfg: AgentConfig) -> dict[str, object]:
     update API does not expose as an argument. Without this, operators who
     hand-author a ``github:`` block on a custom agent would silently lose
     it the next time the agent or a UI editor touched ``description`` /
-    ``model`` / ``tool_groups`` / ``skills``.
+    ``model`` / ``tool_groups`` / ``skills``. Operator-owned middleware paths
+    therefore survive ordinary custom-agent edits without becoming writable
+    through those surfaces.
 
     ``exclude_unset=True`` is recursive in Pydantic v2, so a sub-field the
     user did not write (and that defaulted to a Pydantic default) is not

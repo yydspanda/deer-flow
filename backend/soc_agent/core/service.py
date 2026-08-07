@@ -41,6 +41,8 @@ from soc_agent.contracts import (
     InvestigationEvidence,
     InvestigationTimelineItem,
     LLMAnalysisRequest,
+    MemoryPatternDataClass,
+    MemoryPatternSourceType,
     MessageSchemaStatus,
     NormalizationDriftReport,
     NormalizationDriftSample,
@@ -48,6 +50,7 @@ from soc_agent.contracts import (
     NormalizationMonitoringResult,
     NormalizationReport,
     ReviewNoteCommand,
+    ReviewNoteOrigin,
     ReviewNoteResult,
     ReviewQueueCloseCommand,
     ReviewQueueItem,
@@ -99,7 +102,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.core.runtime import analyze_alert, build_analysis_request_for_payload, inspect_alert_normalization
-from soc_agent.memory import SocMemoryCandidateSourceBridge
+from soc_agent.memory import MemoryPatternIneligibleError, SocMemoryCandidateSourceBridge
 from soc_agent.normalizers import load_mapping_config, normalize_alert_payload
 from soc_agent.protocols import (
     AlertRepository,
@@ -113,6 +116,7 @@ from soc_agent.protocols import (
     InvestigationEvidenceRepository,
     LLMAnalyzer,
     MemoryCandidateRepository,
+    MemoryPatternObserver,
     MemoryRecordRepository,
     NormalizationMaintenanceMonitor,
     ReviewQueueRepository,
@@ -1052,6 +1056,8 @@ class SocReviewService:
         item = self._review_queue_repository.get_review_item(command.queue_id)
         if item is None:
             raise SocServiceNotFoundError(f"review queue item {command.queue_id} not found")
+        if command.origin is ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION and item.status is not ReviewQueueStatus.OPEN:
+            raise SocServiceConflictError(f"review queue item {command.queue_id} is closed; Lead Agent conclusions can only be accepted for open review work")
 
         run = self._repository.get_run(item.run_id)
         if run is None:
@@ -2153,10 +2159,18 @@ class SocDaemonService:
         analysis_service: SocAnalysisService | None = None,
         approval_service: SocAgentApprovalService | None = None,
         investigation_service: SocInvestigationWorkflowPort | None = None,
+        memory_pattern_observer: MemoryPatternObserver | None = None,
+        memory_pattern_environment: str | None = None,
+        memory_pattern_data_class: MemoryPatternDataClass | None = None,
     ) -> None:
+        if memory_pattern_observer is not None and (not memory_pattern_environment or memory_pattern_data_class is None):
+            raise ValueError("memory pattern observer requires an explicit environment and data class")
         self._analysis_service = analysis_service
         self._approval_service = approval_service
         self._investigation_service = investigation_service
+        self._memory_pattern_observer = memory_pattern_observer
+        self._memory_pattern_environment = memory_pattern_environment
+        self._memory_pattern_data_class = memory_pattern_data_class
 
     def start(self) -> None:
         raise SocServiceNotImplementedError("daemon lifecycle is owned by SocKafkaConsumerRunner")
@@ -2205,6 +2219,11 @@ class SocDaemonService:
         request_context = _daemon_request_context(message)
         run = self._analysis_service.analyze(message.payload, context=request_context)
         failed = run.status is AnalysisRunStatus.FAILED
+        memory_pattern_payload = self._observe_memory_pattern(
+            message,
+            run,
+            context=request_context,
+        )
         investigation_payload: dict[str, Any] = {}
         investigation_error: str | None = None
         investigation_retryable = False
@@ -2257,9 +2276,59 @@ class SocDaemonService:
                 "idempotency_key": _daemon_idempotency_key(message),
                 "failure_kind": (run.failure.kind.value if run.failure is not None else ("investigation_workflow" if investigation_error is not None else None)),
                 "retryable": (run.failure.retryable if run.failure is not None else investigation_retryable),
+                **memory_pattern_payload,
                 **investigation_payload,
             },
         )
+
+    def _observe_memory_pattern(
+        self,
+        message: SocDaemonMessage,
+        run: AnalysisRun,
+        *,
+        context: ServiceRequestContext,
+    ) -> dict[str, Any]:
+        if self._memory_pattern_observer is None:
+            return {}
+        if run.status not in {AnalysisRunStatus.SUCCESS, AnalysisRunStatus.NEEDS_REVIEW}:
+            return {"memory_pattern_status": "skipped_runtime_failed"}
+        if message.topic is None or message.partition is None or message.offset is None:
+            return {"memory_pattern_status": "skipped_non_kafka_source"}
+        assert self._memory_pattern_environment is not None
+        assert self._memory_pattern_data_class is not None
+        transport_ref = f"kafka:{message.topic}:{message.partition}:{message.offset}"
+        try:
+            result = self._memory_pattern_observer.observe_run(
+                run,
+                source_type=MemoryPatternSourceType.KAFKA_ALERT,
+                transport_ref=transport_ref,
+                environment=self._memory_pattern_environment,
+                data_class=self._memory_pattern_data_class,
+                context=context,
+            )
+        except MemoryPatternIneligibleError as exc:
+            return {
+                "memory_pattern_status": "skipped_ineligible",
+                "memory_pattern_reason": str(exc)[:500],
+            }
+        except Exception as exc:  # noqa: BLE001 - learning must not fail alert handling
+            return {
+                "memory_pattern_status": "failed_non_blocking",
+                "memory_pattern_error_type": type(exc).__name__,
+                "memory_pattern_error": str(exc)[:500],
+            }
+        return {
+            "memory_pattern_status": "observed",
+            "memory_pattern_observation_id": result.observation.observation_id,
+            "memory_pattern_aggregation_key": result.observation.aggregation_key,
+            "memory_pattern_support_count": result.support_count,
+            "memory_pattern_distinct_source_count": result.distinct_source_count,
+            "memory_pattern_threshold_met": result.threshold_met,
+            "memory_pattern_candidate_id": (result.candidate.candidate_id if result.candidate is not None else None),
+            "memory_pattern_candidate_created": result.candidate_created,
+            "memory_pattern_candidate_frozen": result.candidate_frozen,
+            "memory_pattern_idempotent": result.idempotent,
+        }
 
 
 def _daemon_request_context(message: SocDaemonMessage) -> ServiceRequestContext:
@@ -2390,7 +2459,10 @@ class SocAgentApprovalService:
                 "submitted_by": context.actor,
             }
         )
-        command_payload = submitted.model_dump(mode="json")
+        # ``created_at`` is server-generated observation metadata, not caller
+        # intent. Excluding it keeps a replayed, semantically identical action
+        # proposal idempotent across process restarts.
+        command_payload = submitted.model_dump(mode="json", exclude={"created_at"})
         existing_audit = self._find_mutation_audit(
             SocMutationOperation.APPROVAL_REQUEST_SUBMIT,
             context,
@@ -3012,7 +3084,9 @@ class SocAgentApprovalService:
         existing: SocAgentApprovalRequest,
         submitted: SocAgentApprovalRequest,
     ) -> SocAgentApprovalRequest:
-        if existing == submitted:
+        existing_intent = existing.model_dump(mode="json", exclude={"created_at"})
+        submitted_intent = submitted.model_dump(mode="json", exclude={"created_at"})
+        if existing_intent == submitted_intent:
             return existing
         raise SocServiceConflictError(f"approval request {submitted.approval_request_id} already exists with different content")
 

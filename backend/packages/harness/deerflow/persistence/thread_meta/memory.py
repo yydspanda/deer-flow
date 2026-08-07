@@ -7,6 +7,7 @@ router for thread records.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from langgraph.store.base import BaseStore
@@ -22,6 +23,7 @@ SEARCH_PAGE_SIZE = 500
 class MemoryThreadMetaStore(ThreadMetaStore):
     def __init__(self, store: BaseStore) -> None:
         self._store = store
+        self._metadata_binding_lock = asyncio.Lock()
 
     async def _get_owned_record(
         self,
@@ -63,6 +65,42 @@ class MemoryThreadMetaStore(ThreadMetaStore):
         }
         await self._store.aput(THREADS_NS, thread_id, record)
         return record
+
+    async def get_or_create(
+        self,
+        thread_id: str,
+        *,
+        assistant_id: str | None = None,
+        user_id: str | None | _AutoSentinel = AUTO,
+        display_name: str | None = None,
+        metadata: dict | None = None,
+    ) -> dict | None:
+        resolved_user_id = resolve_user_id(
+            user_id,
+            method_name="MemoryThreadMetaStore.get_or_create",
+        )
+        async with self._metadata_binding_lock:
+            item = await self._store.aget(THREADS_NS, thread_id)
+            if item is not None:
+                record = dict(item.value)
+                if resolved_user_id is not None and record.get("user_id") != resolved_user_id:
+                    return None
+                return record
+
+            now = now_iso()
+            record = {
+                "thread_id": thread_id,
+                "assistant_id": assistant_id,
+                "user_id": resolved_user_id,
+                "display_name": display_name,
+                "status": "idle",
+                "metadata": metadata or {},
+                "values": {},
+                "created_at": now,
+                "updated_at": now,
+            }
+            await self._store.aput(THREADS_NS, thread_id, record)
+            return record
 
     async def get(self, thread_id: str, *, user_id: str | None | _AutoSentinel = AUTO) -> dict | None:
         return await self._get_owned_record(thread_id, user_id, "MemoryThreadMetaStore.get")
@@ -146,6 +184,29 @@ class MemoryThreadMetaStore(ThreadMetaStore):
         if touch:
             record["updated_at"] = now_iso()
         await self._store.aput(THREADS_NS, thread_id, record)
+
+    async def bind_metadata_once(
+        self,
+        thread_id: str,
+        key: str,
+        value: Any,
+        *,
+        user_id: str | None | _AutoSentinel = AUTO,
+    ) -> Any | None:
+        async with self._metadata_binding_lock:
+            record = await self._get_owned_record(
+                thread_id,
+                user_id,
+                "MemoryThreadMetaStore.bind_metadata_once",
+            )
+            if record is None:
+                return None
+            metadata = dict(record.get("metadata") or {})
+            if key not in metadata:
+                metadata[key] = value
+                record["metadata"] = metadata
+                await self._store.aput(THREADS_NS, thread_id, record)
+            return metadata.get(key)
 
     async def update_owner(self, thread_id: str, owner_user_id: str, *, user_id: str | None | _AutoSentinel = AUTO) -> None:
         record = await self._get_owned_record(thread_id, user_id, "MemoryThreadMetaStore.update_owner")

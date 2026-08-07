@@ -1,6 +1,7 @@
 """Configuration for the subagent system loaded from config.yaml."""
 
 import logging
+from typing import Annotated
 
 from pydantic import BaseModel, Field
 
@@ -99,6 +100,11 @@ class CustomSubagentConfig(BaseModel):
     disallowed_tools: list[str] | None = Field(
         default_factory=lambda: ["task", "ask_clarification", "present_files"],
         description="Tool names to deny",
+    )
+    disallowed_output_markers: list[Annotated[str, Field(min_length=1, max_length=256)]] = Field(
+        default_factory=list,
+        max_length=32,
+        description=("Case-insensitive literal markers that fail the delegated task before its result is emitted to parent/UI streams"),
     )
     skills: list[str] | None = Field(
         default=None,

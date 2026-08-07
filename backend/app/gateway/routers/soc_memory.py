@@ -8,8 +8,11 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app.gateway.routers.soc_dependencies import get_or_create_soc_repository, soc_service_context_from_request
 from app.gateway.routers.soc_transport import create_soc_router
+from app.gateway.soc_dependencies import (
+    get_or_create_soc_repository,
+    soc_service_context_from_request,
+)
 from soc_agent.contracts import (
     SocMemoryCandidate,
     SocMemoryCandidateReviewCommand,

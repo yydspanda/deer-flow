@@ -30,6 +30,7 @@ from app.gateway.internal_auth import (
     get_trusted_internal_owner_user_id,
 )
 from app.gateway.run_models import RunCreateRequest
+from app.gateway.soc_lead_agent_context import inject_soc_lead_agent_review_context
 from app.gateway.utils import sanitize_log_param
 from deerflow.agents.middlewares.dynamic_context_middleware import _DYNAMIC_CONTEXT_REMINDER_KEY, _REMINDER_DATE_KEY
 from deerflow.agents.middlewares.view_image_middleware import _IMAGE_CONTEXT_MESSAGE_MARKER_KEY
@@ -1086,6 +1087,14 @@ async def start_run(
             request,
             internal_owner_user=internal_owner_user,
             request_context=getattr(body, "context", None),
+        )
+        await inject_soc_lead_agent_review_context(
+            config=config,
+            request_context=getattr(body, "context", None),
+            assistant_id=body.assistant_id or "lead_agent",
+            thread_id=thread_id,
+            request=request,
+            thread_store=run_ctx.thread_store,
         )
 
         async def run_after_metadata(record: RunRecord) -> None:

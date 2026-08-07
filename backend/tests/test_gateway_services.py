@@ -984,6 +984,71 @@ async def test_start_run_checkpoint_validation_failure_does_not_admit_run(_stub_
 
 
 @pytest.mark.asyncio
+async def test_start_run_routes_soc_queue_hint_through_server_context_bridge(
+    _stub_app_config,
+) -> None:
+    from unittest.mock import patch
+
+    from app.gateway.services import start_run
+    from deerflow.runtime import RunManager
+    from deerflow.runtime.runs.store.memory import MemoryRunStore
+
+    captured: dict[str, object] = {}
+
+    async def fake_context_bridge(
+        *,
+        config,
+        request_context,
+        assistant_id,
+        thread_id,
+        request,
+        thread_store,
+    ):
+        captured["request_context"] = request_context
+        captured["assistant_id"] = assistant_id
+        captured["thread_id"] = thread_id
+        captured["request"] = request
+        captured["thread_store"] = thread_store
+        config.setdefault("context", {})["__soc_test_artifact"] = {"queue_id": "REV-1"}
+
+    async def fake_run_agent(*_args, **kwargs):
+        captured["run_config"] = kwargs["config"]
+
+    run_manager = RunManager(store=MemoryRunStore())
+    request = _make_start_run_request(run_manager, auth_source="session")
+    body = _run_create_request(
+        context={
+            "agent_name": "soc-triage",
+            "soc_review_queue_id": "REV-1",
+        }
+    )
+
+    with (
+        patch("app.gateway.services.resolve_agent_factory", return_value=object()),
+        patch(
+            "app.gateway.services.inject_soc_lead_agent_review_context",
+            side_effect=fake_context_bridge,
+        ),
+        patch("app.gateway.services.run_agent", side_effect=fake_run_agent),
+    ):
+        record = await start_run(body, "thread-soc-1", request)
+        assert record.task is not None
+        await record.task
+
+    assert captured["thread_id"] == "thread-soc-1"
+    assert captured["request_context"] == {
+        "agent_name": "soc-triage",
+        "soc_review_queue_id": "REV-1",
+    }
+    assert captured["assistant_id"] == "lead_agent"
+    assert captured["request"] is request
+    assert captured["thread_store"] is request.app.state.thread_store
+    run_config = captured["run_config"]
+    assert isinstance(run_config, dict)
+    assert run_config["context"]["__soc_test_artifact"] == {"queue_id": "REV-1"}
+
+
+@pytest.mark.asyncio
 async def test_pending_cancel_bypasses_thread_metadata_and_logs_failure(_stub_app_config, caplog):
     from unittest.mock import AsyncMock, patch
 

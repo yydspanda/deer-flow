@@ -17,7 +17,8 @@ not a Kafka replacement.
   mode `0700` and Git-ignored.
 - Resume validates source, payload, model, evidence mode, persistence,
   database kind, trusted tenant default, enrichment composition, every
-  action-config fingerprint, and the exact MCP extensions-config fingerprint.
+  action-config fingerprint, the exact MCP extensions-config fingerprint, and
+  optional repeated-pattern policy/scope fingerprints.
   Completed items are skipped; failed items retry unless
   `--skip-existing-failures` is set.
 - Full item artifacts contain the preserved input payload and are sensitive.
@@ -129,6 +130,49 @@ backend/.deer-flow/data/soc_agent_dev.db
 
 For 5,000 live rows, do not increase workers until the five/50-row latency,
 error rate, model concurrency, and local database behavior are reviewed.
+
+## Optional PI-03F3 repeated-pattern observations
+
+Repeated-pattern learning is independently default-off. It runs only after a
+successful persisted Runtime result, and each row is an immutable observation,
+not a memory candidate. Enable it from the first run with explicit scope and
+policy arguments:
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py \
+  --source /approved/path/alerts-5000.pkl \
+  --output-dir "$BATCH_DIR" \
+  --analyzer-mode llm \
+  --model-name deepseek-v4-flash \
+  --limit 5 \
+  --default-tenant-id pingan \
+  --persist --workers 1 \
+  --confirm-live \
+  --memory-pattern-data-class operational \
+  --memory-pattern-environment dev \
+  --memory-pattern-window-seconds 86400 \
+  --memory-pattern-minimum-support 5 \
+  --memory-pattern-minimum-distinct-sources 5
+```
+
+The cohort uses one strongest available generic dimension: primary scenario,
+canonical detection key, then category. Tenant, environment, and data class
+never share a cohort. Its window uses canonical timezone-aware source
+`event_time`; missing or naive source time produces a non-blocking
+`skipped_ineligible` result rather than guessing a timezone or using batch run
+time. Reaching both thresholds creates one frozen `pending_review` candidate;
+later rows are replay-only. Inspect persisted state with:
+
+```bash
+cd backend
+./.venv/bin/python -m soc_agent.cli memory patterns list --environment dev --data-class operational --pretty
+./.venv/bin/python -m soc_agent.cli memory patterns replay AGGREGATION_KEY --pretty
+cd ..
+```
+
+Changing any pattern option during `--resume` is rejected. Aggregation failure
+does not change the base Runtime verdict or item completion state.
 
 ## Optional PI-01D3/D4 investigation and reporting
 
@@ -316,6 +360,62 @@ not-found, so the report warns that the hit path was not observed and retains
 5; do not relabel or reuse mock artifacts as real. No report expands
 automatically, evaluates model accuracy, closes a Provider-specific gate, or
 sets `pilot_ready=true`.
+
+## PI-01G native specialist delegation smoke
+
+This smoke validates the real DeerFlow Lead Agent -> native `task` -> managed
+SOC specialist path against one persisted ReviewQueue item. It calls the
+configured model; it does not turn simulated Provider results into real facts.
+
+Install or refresh the managed configuration first:
+
+```bash
+cd backend
+./.venv/bin/python -m soc_agent.cli agent install-profile --overwrite --pretty
+./.venv/bin/python -m soc_agent.cli agent install-subagents \
+  --config ../config.yaml --apply --overwrite --pretty
+./.venv/bin/python -m soc_agent.cli agent doctor --pretty
+cd ..
+```
+
+Run one narrow specialist expectation from the repository root:
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/internal_batch/validate_soc_lead_agent_delegation.py \
+  --database-url sqlite:////ABSOLUTE/PATH/TO/soc-shadow.db \
+  --queue-id REV-EXAMPLE \
+  --model-name deepseek-v4-flash \
+  --expected-specialist soc-network-specialist
+```
+
+For endpoint evidence, select `soc-endpoint-specialist` and pass a narrow
+endpoint-specific `--message`; web and email use their corresponding managed
+names. The command requires exactly one completed delegation to the expected
+specialist. It fails when context is missing, a task fails, the graph is
+capped/stopped, provenance is absent, or a different/multiple specialist set
+completes.
+
+Reports default to the Git-ignored directory:
+
+```text
+backend/.deer-flow/soc-lead-agent-validation/SOC-PI01G-SMOKE-*.json
+```
+
+Review these report fields:
+
+- `summary.passed=true` and exactly one expected completed specialist;
+- one ReviewQueue context event and at least one native `task_started` plus
+  `task_completed`, with zero `task_failed` and zero capped tasks;
+- one accepted `soc_specialist_delegation` provenance record with bounded
+  context/task/projection lineage;
+- `real_model_called=true` and `provider_acceptance_claimed=false`;
+- any action evidence inside the case retains its original `mocked` status.
+
+The reviewed 2026-08-07 local evidence includes one NIDS network case and one
+EDR endpoint case. Those reports close the PI-01G product execution gate only;
+they do not close D12-B, PI-01A/B, PI-03 real-quality, or production rollout
+gates.
 
 ## Artifacts
 

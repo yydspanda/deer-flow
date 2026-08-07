@@ -1,12 +1,23 @@
 "use client";
 
-import { BotIcon, PlusSquare } from "lucide-react";
-import { useParams, useRouter } from "next/navigation";
+import { BookCheckIcon, BotIcon, InboxIcon, PlusSquare } from "lucide-react";
+import Link from "next/link";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Textarea } from "@/components/ui/textarea";
 import { AgentWelcome } from "@/components/workspace/agent-welcome";
 import { ArtifactTrigger } from "@/components/workspace/artifacts";
 import { ChatBox, useThreadChat } from "@/components/workspace/chats";
@@ -42,6 +53,7 @@ import { isHiddenFromUIMessage } from "@/core/messages/utils";
 import { useModels } from "@/core/models/hooks";
 import { useNotification } from "@/core/notification/hooks";
 import { useLocalSettings, useThreadSettings } from "@/core/settings";
+import { useAcceptSocLeadAgentConclusion } from "@/core/soc";
 import {
   useThreadMetadata,
   useThreadStream,
@@ -55,12 +67,14 @@ import { cn } from "@/lib/utils";
 export default function AgentChatPage() {
   const { t } = useI18n();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const { agent_name } = useParams<{
     agent_name: string;
   }>();
 
   const { agent } = useAgent(agent_name);
+  const requestedReviewQueueId = searchParams.get("queue_id")?.trim() ?? "";
 
   const { threadId, setThreadId, isNewThread, setIsNewThread, isMock } =
     useThreadChat();
@@ -68,6 +82,8 @@ export default function AgentChatPage() {
   // the thread. `isWelcomeMode` controls only the centered welcome layout, so
   // it can flip immediately on submit without triggering eager history loads.
   const [isWelcomeMode, setIsWelcomeMode] = useState(isNewThread);
+  const [acceptDialogOpen, setAcceptDialogOpen] = useState(false);
+  const [acceptanceReason, setAcceptanceReason] = useState("");
   const [settings, setSettings] = useThreadSettings(threadId);
   const [localSettings, setLocalSettings] = useLocalSettings();
   const { tokenUsageEnabled } = useModels();
@@ -79,9 +95,29 @@ export default function AgentChatPage() {
     enabled: !isNewThread && !isMock,
     isMock,
   });
+  const storedReviewBinding = threadMetadata.data?.metadata
+    ?.soc_lead_agent_review_thread_binding as
+    | Record<string, unknown>
+    | undefined;
+  const storedReviewQueueId =
+    typeof storedReviewBinding?.queue_id === "string"
+      ? storedReviewBinding.queue_id.trim()
+      : "";
+  const reviewQueueId =
+    agent_name === "soc-triage"
+      ? storedReviewQueueId !== ""
+        ? storedReviewQueueId
+        : requestedReviewQueueId !== ""
+          ? requestedReviewQueueId
+          : null
+      : null;
+  const reviewQueueQuery = reviewQueueId
+    ? `?queue_id=${encodeURIComponent(reviewQueueId)}`
+    : "";
   const backendTokenUsage = threadTokenUsageToTokenUsage(threadTokenUsage.data);
 
   const { showNotification } = useNotification();
+  const acceptConclusion = useAcceptSocLeadAgentConclusion();
 
   useEffect(() => {
     setIsWelcomeMode(isNewThread);
@@ -100,7 +136,11 @@ export default function AgentChatPage() {
   } = useThreadStream({
     threadId: isNewThread ? undefined : threadId,
     displayThreadId: threadId,
-    context: { ...settings.context, agent_name: agent_name },
+    context: {
+      ...settings.context,
+      agent_name: agent_name,
+      ...(reviewQueueId ? { soc_review_queue_id: reviewQueueId } : {}),
+    },
     isMock,
     onSend: () => {
       setIsWelcomeMode(false);
@@ -110,7 +150,7 @@ export default function AgentChatPage() {
       history.replaceState(
         null,
         "",
-        `/workspace/agents/${agent_name}/chats/${createdThreadId}`,
+        `/workspace/agents/${agent_name}/chats/${createdThreadId}${reviewQueueQuery}`,
       );
       setThreadId(createdThreadId);
       setIsNewThread(false);
@@ -146,7 +186,9 @@ export default function AgentChatPage() {
       !hasMoreHistory &&
       !hasThreadMessages
     ) {
-      router.replace(`/workspace/agents/${agent_name}/chats/new`);
+      router.replace(
+        `/workspace/agents/${agent_name}/chats/new${reviewQueueQuery}`,
+      );
     }
   }, [
     agent_name,
@@ -159,6 +201,7 @@ export default function AgentChatPage() {
     threadMetadata.data,
     threadMetadata.isFetching,
     threadMetadata.isLoading,
+    reviewQueueQuery,
   ]);
 
   const handleSubmit = useCallback(
@@ -232,6 +275,61 @@ export default function AgentChatPage() {
       ),
     [thread.messages],
   );
+  const latestAssistantConclusion = useMemo(() => {
+    const message = [...thread.messages]
+      .reverse()
+      .find((item) => item.type === "ai" && !isHiddenFromUIMessage(item));
+    if (
+      !message ||
+      message.type !== "ai" ||
+      !message.id ||
+      message.id.startsWith("opt-") ||
+      (message.tool_calls?.length ?? 0) > 0
+    ) {
+      return null;
+    }
+    const text = textOfMessage(message)?.trim();
+    return text ? { messageId: message.id, text } : null;
+  }, [thread.messages]);
+  const canAcceptConclusion =
+    reviewQueueId !== null &&
+    latestAssistantConclusion !== null &&
+    !isNewThread &&
+    !isMock &&
+    !thread.isLoading &&
+    !acceptConclusion.isPending;
+
+  const handleAcceptConclusion = useCallback(async () => {
+    const reason = acceptanceReason.trim();
+    if (!reviewQueueId || !latestAssistantConclusion || !reason) {
+      return;
+    }
+    try {
+      const result = await acceptConclusion.mutateAsync({
+        queueId: reviewQueueId,
+        threadId,
+        request: {
+          message_id: latestAssistantConclusion.messageId,
+          acceptance_reason: reason,
+        },
+      });
+      setAcceptDialogOpen(false);
+      setAcceptanceReason("");
+      toast.success(
+        result.memory_candidate
+          ? `已生成待审核记忆候选 ${result.memory_candidate.candidate_id}`
+          : "Lead Agent 结论已记录",
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "采纳结论失败");
+    }
+  }, [
+    acceptConclusion,
+    acceptanceReason,
+    latestAssistantConclusion,
+    reviewQueueId,
+    threadId,
+  ]);
 
   return (
     <ThreadContext.Provider value={{ thread, isMock }}>
@@ -263,13 +361,40 @@ export default function AgentChatPage() {
                 <ThreadTitle threadId={threadId} thread={thread} />
               </div>
               <div className="flex shrink-0 items-center sm:mr-4">
+                {reviewQueueId && (
+                  <Tooltip content={`返回复核队列 ${reviewQueueId}`}>
+                    <Button asChild size="sm" variant="ghost">
+                      <Link href="/workspace/soc/review">
+                        <InboxIcon />
+                        <span className="hidden max-w-36 truncate sm:inline">
+                          {reviewQueueId}
+                        </span>
+                      </Link>
+                    </Button>
+                  </Tooltip>
+                )}
+                {reviewQueueId && (
+                  <Tooltip content="将最后一条完整回复提交为待审核记忆候选">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!canAcceptConclusion}
+                      onClick={() => setAcceptDialogOpen(true)}
+                    >
+                      <BookCheckIcon />
+                      <span className="hidden sm:inline">采纳结论</span>
+                    </Button>
+                  </Tooltip>
+                )}
                 <Tooltip content={t.agents.newChat}>
                   <Button
                     className="px-2 sm:px-3"
                     size="sm"
                     variant="secondary"
                     onClick={() => {
-                      router.push(`/workspace/agents/${agent_name}/chats/new`);
+                      router.push(
+                        `/workspace/agents/${agent_name}/chats/new${reviewQueueQuery}`,
+                      );
                     }}
                   >
                     <PlusSquare />
@@ -420,6 +545,45 @@ export default function AgentChatPage() {
             </main>
           </div>
         </ChatBox>
+        <Dialog open={acceptDialogOpen} onOpenChange={setAcceptDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>采纳 Lead Agent 结论</DialogTitle>
+              <DialogDescription>
+                确认后，这条结论将进入待审核记忆候选，不会直接影响后续研判。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <p className="text-muted-foreground line-clamp-4 text-sm">
+                {latestAssistantConclusion?.text}
+              </p>
+              <Textarea
+                value={acceptanceReason}
+                maxLength={2000}
+                placeholder="填写你核验并采纳该结论的理由"
+                rows={4}
+                onChange={(event) => setAcceptanceReason(event.target.value)}
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setAcceptDialogOpen(false)}
+              >
+                取消
+              </Button>
+              <Button
+                disabled={
+                  !canAcceptConclusion || acceptanceReason.trim().length === 0
+                }
+                onClick={() => void handleAcceptConclusion()}
+              >
+                <BookCheckIcon />
+                提交候选
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </SidecarProvider>
     </ThreadContext.Provider>
   );

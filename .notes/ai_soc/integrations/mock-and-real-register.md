@@ -1,6 +1,6 @@
 # SOC Agent Mock 与真实接入台账
 
-> Updated: 2026-08-05
+> Updated: 2026-08-07
 >
 > 目的：集中记录当前 SOC Agent 里哪些能力只是 mock、fixture、in-memory 或本地 smoke，用来验证工程链路；后续接入真实 PingAn / 客户环境时，必须按本台账替换、复测和重新验收。
 
@@ -55,6 +55,7 @@
 | `NullKafkaConsumerPort` | disabled-mode adapter | `SOC_KAFKA_ENABLED=false` 时明确不连接 broker；启用后使用 `ConfluentKafkaConsumerPort`，不是用 null adapter 冒充消费成功 |
 | SOC SQLite | 本地真实持久化 | 本地开发可以真实保存 SOC 数据；生产/准生产目标仍是 PostgreSQL，不应把 SQLite 测试结果当生产验收 |
 | SOC Lead Agent | DeerFlow 真实 agent path | 复用 DeerFlow `lead_agent`、profile、skills 和 MCP；mock 的是部分外部查询结果，不是 Lead Agent 运行时本身 |
+| SOC specialist subagents | DeerFlow 真实 custom-subagent path | `PI-01G` 复用原生 registry/`task`/model/task events；profile 本身 `tools=[]`/`skills=[]`，只接收服务端投影的 bounded case 和已评审 Skill guidance。专家文本是 advisory reasoning，不是 mock tool result，也不是 evidence/verdict。NIDS/EDR `deepseek-v4-flash` smoke 已通过，但其 fake Provider evidence 仍保留 `mocked=true` 且 `provider_acceptance_claimed=false` |
 | GF-01 / AA-01 | deterministic production contracts/services | Fact lifecycle、历史版本选择和 matcher 不是 mock；EX/DP/EV persistence/evaluation 已实现，当前缺口是权威事实来源同步和 governed rollout |
 | External disposition canonical ingress | authenticated application boundary | Gateway route、SQL repository、transactional service、RBAC 和 exact-retry/conflict 语义是真实实现；mock/data-gated 的是 Zeus/ITSM/SOAR source feed、签名和凭证 |
 | PingAn historical software-path catalog | deterministic local compiler + read-only MCP/action | 真实编译旧 XLSX 并精确查询版本化 SQLite；不是 mock，也不是权威 allowlist。输出固定为 investigation-only、decision impact none；源数据缺少人工 reviewer/scope/validity，因此不能用于自动判良、跳过 Runtime 或关闭告警 |
@@ -152,6 +153,31 @@ Gateway/service 边界，不新建第二套状态同步逻辑。
 Aggregate `passed` 只表示上述边界内的本地 Alpha 门禁全部成立。详细命令、artifact 和失败语义见
 `../alpha-acceptance-runbook.md`。
 
-## 7. 当前下一步
+## 7. 内网迁移实现与真实验收矩阵
 
-当前交付顺序只以 `.notes/ai_soc/delivery-roadmap.md` 和 `.notes/ai_soc/progress.md` 为准；本台账不再维护平行的 next-step 列表。所有确认存在但依赖内网的能力先完成外网 simulation package，再进入内网 real acceptance；尚无稳定 source contract 的能力继续 data-gated。任何 mock 或 LLM 输出都不得伪装成真实外部事实。
+这张表是外网完成产品流后迁移内网时的唯一 replacement checklist。每项只允许从现有
+production-shaped adapter/ingress/runner 注入真实配置，不允许到内网再临时改 core contract。
+
+| Debt ID | 外网当前状态 | 内网需要提供/实现 | 必跑验证与证据 | 关闭条件 |
+|---|---|---|---|---|
+| `RID-01 D12-B asset.locate` | 同一 Provider/MCP/action 代码 + fake transport，`mocked=true` | ZEUS DEV endpoint、App ID/Key、signer、`run_workflow`、批准的 hit/not-found/UM/ambiguous cases | preflight、direct matrix、MCP smoke、Dispatcher persistence/readback、Web/TUI readback | 至少一个真实 hit，完整失败矩阵，所有成功 evidence `mocked=false`，基础 verdict/Review 不变 |
+| `RID-02 PI-01A threat intelligence` | production-shaped Provider/MCP + fake | `/public/indicatorSearch` DEV 响应与批准 IP cases，共用 ZEUS 鉴权 | hit/not-found/error/timeout/freshness/trim/lineage/persistence | 真实字段映射复核通过且 evidence `mocked=false` |
+| `RID-03 PI-01B1 security tag` | production-shaped Provider/MCP + fake | `/public/searchTagContent` DEV 对象类型、expiry/永久语义与批准 entity cases | active/expired/inactive/conflict/out-of-scope/not-found/error + persistence | 真实响应语义冻结且 evidence `mocked=false`；仍不冒充 B2 权威事实同步 |
+| `RID-04 PI-01B2 governed facts` | lifecycle/matcher 已实现；source contract data-gated | change/scanner/maintenance/exercise roster 权威源、version、scope、validity、owner、privacy/RBAC | source adapter replay、乱序/修订/过期/冲突、event-time match | 真实 source contract 冻结并写 append-only fact；fixture 不再承担生产事实 |
+| `RID-05 PI-01C external disposition` | canonical authenticated ingress/service 已实现；source feed data-gated | Zeus/ITSM/SOAR 稳定 event ID、status/reason/version/ordering、签名与 tenant mapping | webhook/Kafka/poll adapter 的幂等、乱序、重放、更正、unknown status、trust mapping | 真实 source adapter 只生成 canonical command，SQL/UoW/audit 通过 |
+| `RID-06 PI-01E internal shadow` | external 5/50 simulation passed | 同 cohort approved PKL、real composition/action/extensions config、isolated DEV SQLite | Runtime-only + persisted investigation 5 -> 50 -> all、paired evaluator | all Provider results符合 `internal_real`/`mocked=false`；不得以 external report 替代 |
+| `RID-07 PI-02 infrastructure` | SQLite + local Redpanda flow passed | 生产前另行提供 Kafka ACL/TLS/topic/group/DLQ、PostgreSQL、K8s/worker 参数 | throughput/lag/backpressure/restart/replay/idempotency/migration/connection-pool/rollback | 约一万告警/日目标和 SLO 证据通过；DEV 继续 SQLite 不阻塞产品开发 |
+| `RID-08 PI-03 real quality` | simulation manifest/eval/calibration flow passed；PI-01G 专家执行链路已通，但 NIDS 结果仍暴露 upstream role/direction assertion 可能过度加权 | 批准脱敏 corpus、具名 reviewer、labels/rationale、correlation pairs，包含 network tuple / TCP initiator / attacker-victim 反例 | seal/verify/quality/confidence replay，按 source/scenario/specialist 分层 | 只能由 `human_review` real corpus 产生质量声明或 profile promotion；不用 Runtime 硬编码伪造语义校准 |
+| `RID-09 PI-04 telemetry` | local Snapshot/Web passed | deployed Kafka/model/Provider metrics、Prometheus scrape、owner 和 SLO | lag/throughput/latency/error/cost/schema drift dashboards and alerts | `not_measured` 被真实指标替换并通过值班/留存评审 |
+| `RID-10 PI-05 rollout/actions` | virtual rollout + approval boundary passed，0 external effect | deployed cohort enforcement、具名 owner、feature flag、真实 rollback、EDR/F5/SOAR adapter | Shadow -> Limited Pilot rehearsal、approval-gated dry-run/execute、compensation | fresh gates 全部通过；`pilot_ready` 才可变 true，高风险动作仍默认人工审批 |
+
+`PI-01G` 专家子智能体本身不是内网 Provider debt：只要配置的模型可用，它就是 DeerFlow 真实执行
+路径。当前外网 NIDS network 与 EDR endpoint 代表报告分别保存为 Git-ignored
+`backend/.deer-flow/soc-lead-agent-validation/SOC-PI01G-SMOKE-20260807T091947Z.json` 和
+`SOC-PI01G-SMOKE-20260807T083748Z.json`；它们证明真实 model/task/event 链路，明确不声称
+Provider 验收。内网迁移只需安装相同 profiles 并重跑 registry/Web/TUI smoke；专家看到的
+RID-01..05 结果必须继续按各自 `mocked` provenance 解释，不能由模型文本替代真实验收。
+
+## 8. 当前下一步
+
+当前交付顺序只以 `.notes/ai_soc/delivery-roadmap.md` 和 `.notes/ai_soc/progress.md` 为准；本台账不再维护平行的 next-step 列表。`PI-01G1..G3` 外网产品完整性切片已于 2026-08-07 完成，RID-01..10 保持独立开放。之后只在真实输入就绪时恢复对应 RID：已确认但依赖内网的能力进入 real acceptance，尚无稳定 source contract 的能力继续 data-gated。任何 mock、专家文本或 LLM 输出都不得伪装成真实外部事实。

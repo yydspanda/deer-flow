@@ -165,6 +165,7 @@ class SocEventType(StrEnum):
     REVIEW_CORRECTED = "review.corrected"
     REVIEW_REQUESTED = "review.requested"
     MEMORY_UPDATED = "memory.updated"
+    MEMORY_PATTERN_OBSERVED = "memory_pattern.observed"
     NORMALIZATION_BASELINE_ACCEPTED = "normalization.baseline_accepted"
     NORMALIZATION_DRIFT_DETECTED = "normalization.drift_detected"
     NORMALIZATION_ISSUE_UPDATED = "normalization.issue_updated"
@@ -272,7 +273,15 @@ class SocMemoryCandidateSourceType(StrEnum):
     EXTERNAL_DISPOSITION = "external_disposition"
     MANUAL_NOTE = "manual_note"
     REVIEW_NOTE = "review_note"
+    REPEATED_PATTERN = "repeated_pattern"
     EVAL_FIXTURE = "eval_fixture"
+
+
+class ReviewNoteOrigin(StrEnum):
+    """Human-owned origin of a review note proposed as candidate memory."""
+
+    ANALYST_NOTE = "analyst_note"
+    ACCEPTED_LEAD_AGENT_CONCLUSION = "accepted_lead_agent_conclusion"
 
 
 class SocOperationalDisposition(StrEnum):
@@ -921,11 +930,12 @@ class SocSkillContext(BaseModel):
 class SocLeadAgentProfile(BaseModel):
     """DeerFlow custom-agent profile payload recommended for SOC triage."""
 
-    schema_version: str = "soc.lead_agent_profile.v1"
+    schema_version: str = "soc.lead_agent_profile.v2"
     name: str = "soc-triage"
     description: str
     skills: list[str] = Field(default_factory=list)
     tool_groups: list[str] | None = None
+    middlewares: list[str] = Field(default_factory=list)
     soul: str
 
 
@@ -939,6 +949,21 @@ class SocLeadAgentInstallResult(BaseModel):
     config_path: str
     soul_path: str
     status: Literal["dry_run", "created", "updated", "skipped"]
+    dry_run: bool = False
+    overwrite: bool = False
+    message: str
+
+
+class SocSpecialistSubagentInstallResult(BaseModel):
+    """Result of merging SOC specialists into DeerFlow root configuration."""
+
+    schema_version: str = "soc.specialist_subagent_install_result.v1"
+    config_path: str
+    status: Literal["dry_run", "created", "updated", "unchanged"]
+    agent_names: list[str] = Field(default_factory=list)
+    existing_custom_agent_names: list[str] = Field(default_factory=list)
+    changed_agent_names: list[str] = Field(default_factory=list)
+    overwritten_agent_names: list[str] = Field(default_factory=list)
     dry_run: bool = False
     overwrite: bool = False
     message: str
@@ -972,6 +997,100 @@ class SocLeadAgentReviewContextArtifact(BaseModel):
     skill_context: SocSkillContext | None = None
     instructions: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class SocSpecialistDelegationContext(BaseModel):
+    """Server-built bounded case context passed to one SOC specialist."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.specialist_delegation_context.v1"] = "soc.specialist_delegation_context.v1"
+    delegation_id: str = Field(min_length=1, max_length=256)
+    specialist_name: str = Field(min_length=1, max_length=128)
+    chat_thread_id: str = Field(min_length=1, max_length=128)
+    chat_run_id: str = Field(min_length=1, max_length=128)
+    tool_call_id: str = Field(min_length=1, max_length=256)
+    queue_id: str = Field(min_length=1, max_length=64)
+    run_id: str = Field(min_length=1, max_length=64)
+    alert_id: str = Field(min_length=1, max_length=128)
+    artifact_id: str = Field(min_length=1, max_length=64)
+    context_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    skill_context_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    task_description: str = Field(min_length=1, max_length=160)
+    lead_agent_task: str = Field(min_length=1, max_length=4000)
+    evidence_context: dict[str, Any] = Field(default_factory=dict)
+    projection_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    context_source: Literal["soc_review_service"] = "soc_review_service"
+    result_authority: Literal["advisory_only"] = "advisory_only"
+    decision_impact: Literal["none"] = "none"
+    external_fact_authority: bool = False
+    action_allowed: bool = False
+    memory_write_allowed: bool = False
+
+
+class SocSpecialistDelegationProvenance(BaseModel):
+    """Trusted metadata stamped on a native DeerFlow specialist task result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.specialist_delegation_provenance.v1"] = "soc.specialist_delegation_provenance.v1"
+    delegation_id: str = Field(min_length=1, max_length=256)
+    specialist_name: str = Field(min_length=1, max_length=128)
+    chat_thread_id: str = Field(min_length=1, max_length=128)
+    chat_run_id: str = Field(min_length=1, max_length=128)
+    tool_call_id: str = Field(min_length=1, max_length=256)
+    queue_id: str = Field(min_length=1, max_length=64)
+    run_id: str = Field(min_length=1, max_length=64)
+    alert_id: str = Field(min_length=1, max_length=128)
+    artifact_id: str = Field(min_length=1, max_length=64)
+    context_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    task_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    projection_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    bounded_context_char_count: int = Field(ge=1)
+    result_status: Literal[
+        "accepted_advisory",
+        "execution_failed",
+        "rejected_action_marker",
+    ] = "accepted_advisory"
+    result_authority: Literal["advisory_only"] = "advisory_only"
+    decision_impact: Literal["none"] = "none"
+    external_fact_authority: bool = False
+    action_allowed: bool = False
+    memory_write_allowed: bool = False
+
+
+class SocLeadAgentReviewThreadBinding(BaseModel):
+    """Server-owned immutable binding between one DeerFlow thread and review item."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.lead_agent_review_thread_binding.v1"] = "soc.lead_agent_review_thread_binding.v1"
+    queue_id: str = Field(min_length=1, max_length=64)
+    run_id: str = Field(min_length=1, max_length=64)
+    alert_id: str = Field(min_length=1, max_length=128)
+    bound_by_actor_id: str = Field(min_length=1, max_length=256)
+    bound_at: datetime = Field(default_factory=utc_now)
+
+
+class SocLeadAgentReviewContextProvenance(BaseModel):
+    """Exact bounded review context consumed by one Lead Agent model output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.lead_agent_review_context_provenance.v1"] = "soc.lead_agent_review_context_provenance.v1"
+    artifact_schema_version: Literal["soc.lead_agent_review_context_artifact.v1"] = "soc.lead_agent_review_context_artifact.v1"
+    artifact_id: str = Field(min_length=1, max_length=64)
+    queue_id: str = Field(min_length=1, max_length=64)
+    run_id: str = Field(min_length=1, max_length=64)
+    alert_id: str = Field(min_length=1, max_length=128)
+    context_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    skill_context_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    chat_thread_id: str = Field(min_length=1, max_length=256)
+    chat_run_id: str = Field(min_length=1, max_length=256)
+    rendered_char_count: int = Field(ge=1)
+    source: Literal["gateway_soc_review_service"] = "gateway_soc_review_service"
+    injection_mode: Literal["transient_model_context"] = "transient_model_context"
+    context_created_at: datetime
 
 
 class SocAgentRouteDecision(BaseModel):
@@ -1180,6 +1299,8 @@ class SocMemoryCandidateSource(BaseModel):
     run_id: str | None = None
     alert_id: str | None = None
     queue_id: str | None = None
+    thread_id: str | None = None
+    message_id: str | None = None
     correction_id: str | None = None
     eval_sample_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -1193,6 +1314,8 @@ class SocMemoryCandidateSource(BaseModel):
             self.run_id,
             self.alert_id,
             self.queue_id,
+            self.thread_id,
+            self.message_id,
             self.correction_id,
             self.eval_sample_id,
         )
@@ -3183,12 +3306,30 @@ class ReviewNoteCommand(BaseModel):
     """Analyst note captured from a review queue item as candidate memory."""
 
     queue_id: str = Field(min_length=1)
-    note: str = Field(min_length=1)
+    note: str = Field(min_length=1, max_length=12_000)
+    origin: ReviewNoteOrigin = ReviewNoteOrigin.ANALYST_NOTE
+    source_thread_id: str | None = Field(default=None, min_length=1, max_length=256)
+    source_message_id: str | None = Field(default=None, min_length=1, max_length=256)
+    acceptance_reason: str | None = Field(default=None, min_length=1, max_length=2_000)
     scenario_key: str | None = None
     domain: SocDomainName | None = None
     finding_id: str | None = None
     confidence: float = Field(default=0.55, ge=0.0, le=1.0)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_lead_agent_lineage_only_for_explicit_acceptance(self) -> ReviewNoteCommand:
+        lineage = (
+            self.source_thread_id,
+            self.source_message_id,
+            self.acceptance_reason,
+        )
+        if self.origin is ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION:
+            if any(value is None or not value.strip() for value in lineage):
+                raise ValueError("accepted Lead Agent conclusion requires source_thread_id, source_message_id, and acceptance_reason")
+        elif any(value is not None for value in lineage):
+            raise ValueError("Lead Agent lineage is only valid for accepted_lead_agent_conclusion notes")
+        return self
 
 
 class ReviewNoteResult(BaseModel):

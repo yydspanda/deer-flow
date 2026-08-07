@@ -162,6 +162,44 @@ class TestThreadMetaRepository:
         assert record["updated_at"] == original
 
     @pytest.mark.anyio
+    async def test_bind_metadata_once_preserves_first_value_and_recency(self, repo):
+        await repo.create("t1", metadata={"a": 1})
+        original = (await repo.get("t1"))["updated_at"]
+
+        first = await repo.bind_metadata_once("t1", "server_binding", {"value": 1})
+        second = await repo.bind_metadata_once("t1", "server_binding", {"value": 2})
+
+        record = await repo.get("t1")
+        assert first == {"value": 1}
+        assert second == first
+        assert record["metadata"] == {"a": 1, "server_binding": {"value": 1}}
+        assert record["updated_at"] == original
+
+    @pytest.mark.anyio
+    async def test_get_or_create_returns_owned_winner(self, repo):
+        first = await repo.get_or_create(
+            "first-run",
+            assistant_id="lead_agent",
+            metadata={"agent_name": "soc-triage"},
+        )
+        second = await repo.get_or_create(
+            "first-run",
+            assistant_id="other",
+            metadata={"agent_name": "other"},
+        )
+
+        assert first is not None
+        assert second == first
+        assert second["assistant_id"] == "lead_agent"
+        assert second["metadata"] == {"agent_name": "soc-triage"}
+
+    @pytest.mark.anyio
+    async def test_get_or_create_rejects_existing_other_owner(self, repo):
+        await repo.create("owned", user_id="user-a")
+
+        assert await repo.get_or_create("owned", user_id="user-b") is None
+
+    @pytest.mark.anyio
     async def test_concurrent_metadata_updates_preserve_disjoint_keys(self, repo):
         for index in range(10):
             thread_id = f"concurrent-{index}"

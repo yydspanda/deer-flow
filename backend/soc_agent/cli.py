@@ -48,11 +48,15 @@ from soc_agent.contracts import (
     GovernedContextFactTransitionCommand,
     GovernedContextFactType,
     InvestigationContext,
+    MemoryPatternAggregationPolicy,
+    MemoryPatternDataClass,
+    MemoryPatternSourceType,
     NormalizationBaselineAcceptCommand,
     NormalizationBaselineStatus,
     NormalizationMaintenanceIssueStatus,
     NormalizationMaintenanceIssueUpdateCommand,
     ReviewNoteCommand,
+    ReviewNoteOrigin,
     ReviewQueueCloseCommand,
     ReviewQueueStatus,
     ServiceRequestContext,
@@ -102,6 +106,7 @@ from soc_agent.core import (
     SocDispositionEvaluationService,
     SocDispositionProposalService,
     SocGovernedContextService,
+    SocMemoryPatternService,
     SocMemoryService,
     SocNormalizationMaintenanceService,
     SocNormalizationService,
@@ -166,7 +171,11 @@ from soc_agent.eval import (
     validate_confidence_label_set,
     verify_confidence_label_corpus_manifest,
 )
-from soc_agent.lead_agent import build_soc_lead_agent_profile
+from soc_agent.lead_agent import (
+    SocLeadAgentRuntimeConfigurationError,
+    build_soc_lead_agent_profile,
+    validate_soc_lead_agent_runtime_configuration,
+)
 from soc_agent.lead_agent_chat import SocLeadAgentChatService
 from soc_agent.llm import (
     SocLLMSettings,
@@ -180,6 +189,10 @@ from soc_agent.normalizers import (
     run_live_normalization_suggestion,
 )
 from soc_agent.operations import build_soc_operations_service
+from soc_agent.subagents import (
+    SocSpecialistSubagentConfigInstaller,
+    build_soc_specialist_subagent_config_fragment,
+)
 
 DEFAULT_ROLLOUT_REHEARSAL_FIXTURE = Path(__file__).resolve().parents[1] / "samples" / "rollout" / "pi05a_vendor_neutral_simulation.json"
 DEFAULT_SIMULATION_COMPLETION_FIXTURE = Path(__file__).resolve().parents[1] / "samples" / "rollout" / "pi05b_local_simulation.json"
@@ -235,6 +248,12 @@ def main(argv: list[str] | None = None) -> int:
         return _agent_resolve_skills(args)
     if args.command == "agent" and args.agent_command == "install-profile":
         return _agent_install_profile(args)
+    if args.command == "agent" and args.agent_command == "subagents":
+        return _agent_subagents(args)
+    if args.command == "agent" and args.agent_command == "install-subagents":
+        return _agent_install_subagents(args)
+    if args.command == "agent" and args.agent_command == "doctor":
+        return _agent_doctor(args)
     if args.command == "mcp" and args.mcp_command == "smoke":
         return _mcp_smoke(args)
     if args.command == "mcp" and args.mcp_command == "tools":
@@ -299,6 +318,10 @@ def main(argv: list[str] | None = None) -> int:
         return _memory_review(args)
     if args.command == "memory" and args.memory_command == "search":
         return _memory_search(args)
+    if args.command == "memory" and args.memory_command == "patterns" and args.memory_patterns_command == "list":
+        return _memory_patterns_list(args)
+    if args.command == "memory" and args.memory_command == "patterns" and args.memory_patterns_command == "replay":
+        return _memory_patterns_replay(args)
     if args.command == "memory" and args.memory_command == "records" and args.memory_records_command == "list":
         return _memory_records_list(args)
     if args.command == "memory" and args.memory_command == "records" and args.memory_records_command == "get":
@@ -548,6 +571,9 @@ def _build_parser() -> argparse.ArgumentParser:
     review_note.add_argument("--domain", choices=[item.value for item in SocDomainName], help="Optional SOC domain this note applies to")
     review_note.add_argument("--finding-id", help="Optional domain finding id this note applies to")
     review_note.add_argument("--confidence", type=float, default=0.55, help="Candidate confidence, 0..1")
+    review_note.add_argument("--lead-agent-thread-id", help="Thread containing an explicitly accepted Lead Agent conclusion")
+    review_note.add_argument("--lead-agent-message-id", help="Assistant message containing the accepted conclusion")
+    review_note.add_argument("--acceptance-reason", help="Why the analyst believes this conclusion is reusable")
     review_note.add_argument("--metadata-json", help="Optional JSON object attached to the candidate source metadata")
     review_note.add_argument("--actor-id", default="soc-cli", help="Analyst actor id")
     review_note.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
@@ -585,6 +611,41 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_install_profile.add_argument("--dry-run", action="store_true", help="Show the target path and action without writing files")
     agent_install_profile.add_argument("--overwrite", action="store_true", help="Overwrite an existing user-scoped SOC profile")
     agent_install_profile.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    agent_subagents = agent_subparsers.add_parser(
+        "subagents",
+        help="Show the bounded SOC specialist custom-subagent config fragment",
+    )
+    agent_subagents.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    agent_install_subagents = agent_subparsers.add_parser(
+        "install-subagents",
+        help="Merge bounded SOC specialist profiles into DeerFlow root config.yaml",
+    )
+    agent_install_subagents.add_argument("--config", help="DeerFlow root config.yaml path")
+    agent_install_subagents.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write the reviewed merge; without this flag the command is a dry run",
+    )
+    agent_install_subagents.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace only conflicting SOC specialist entries; preserve other custom agents",
+    )
+    agent_install_subagents.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    agent_doctor = agent_subparsers.add_parser(
+        "doctor",
+        help="Validate the installed SOC Lead Agent and specialist governance contract",
+    )
+    agent_doctor.add_argument(
+        "--without-specialists",
+        action="store_true",
+        help="Validate only the Lead Agent profile",
+    )
+    agent_doctor.add_argument(
+        "--user-id",
+        help="Validate the user-scoped SOC Lead Agent profile for this DeerFlow user",
+    )
+    agent_doctor.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     agent_resolve_skills = agent_subparsers.add_parser("resolve-skills", help="Resolve SOC domain skills for one alert payload")
     agent_resolve_skills.add_argument("path", nargs="?", help="Path to alert JSON file")
     agent_resolve_skills.add_argument("--json", dest="json_payload", help="Inline alert JSON object")
@@ -720,6 +781,7 @@ def _build_parser() -> argparse.ArgumentParser:
     daemon_consume.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_analyzer_args(daemon_consume)
     _add_enrichment_args(daemon_consume)
+    _add_memory_pattern_args(daemon_consume)
     _add_database_args(daemon_consume)
     daemon_run = daemon_subparsers.add_parser("run", help="Run the SOC Kafka daemon until stopped")
     daemon_run.add_argument(
@@ -755,6 +817,7 @@ def _build_parser() -> argparse.ArgumentParser:
     daemon_run.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_analyzer_args(daemon_run)
     _add_enrichment_args(daemon_run)
+    _add_memory_pattern_args(daemon_run)
     _add_database_args(daemon_run)
 
     eval_cmd = subparsers.add_parser("eval", help="SOC offline evaluation helpers")
@@ -1057,6 +1120,37 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_records_retrieval.add_argument("--actor-id", default="soc-memory-cli", help="Memory governor actor id")
     memory_records_retrieval.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(memory_records_retrieval)
+    memory_patterns = memory_subparsers.add_parser(
+        "patterns",
+        help="Inspect and replay PI-03F3 repeated-pattern observations",
+    )
+    memory_patterns_subparsers = memory_patterns.add_subparsers(dest="memory_patterns_command")
+    memory_patterns_list = memory_patterns_subparsers.add_parser(
+        "list",
+        help="List immutable repeated-pattern source observations",
+    )
+    memory_patterns_list.add_argument("--aggregation-key")
+    memory_patterns_list.add_argument("--lineage-key")
+    memory_patterns_list.add_argument("--tenant-id")
+    memory_patterns_list.add_argument("--environment")
+    memory_patterns_list.add_argument(
+        "--data-class",
+        choices=[item.value for item in MemoryPatternDataClass],
+    )
+    memory_patterns_list.add_argument(
+        "--source-type",
+        choices=[item.value for item in MemoryPatternSourceType],
+    )
+    memory_patterns_list.add_argument("--limit", type=int, default=100)
+    memory_patterns_list.add_argument("--pretty", action="store_true")
+    _add_database_args(memory_patterns_list)
+    memory_patterns_replay = memory_patterns_subparsers.add_parser(
+        "replay",
+        help="Recompute one cohort without mutating its candidate",
+    )
+    memory_patterns_replay.add_argument("aggregation_key")
+    memory_patterns_replay.add_argument("--pretty", action="store_true")
+    _add_database_args(memory_patterns_replay)
 
     skill_improvement = subparsers.add_parser(
         "skill-improvement",
@@ -1418,6 +1512,33 @@ def _add_enrichment_args(parser: argparse.ArgumentParser) -> None:
         action="append",
         default=[],
         help=("SOC MCP action-adapter JSON/YAML paired with --enrichment-composition; repeat for multiple explicit provider configs"),
+    )
+
+
+def _add_memory_pattern_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--memory-pattern-data-class",
+        choices=[item.value for item in MemoryPatternDataClass],
+        help=("Explicitly enable repeated-pattern observations for this daemon; omitted keeps PI-03F3 disabled"),
+    )
+    parser.add_argument(
+        "--memory-pattern-environment",
+        help="Required environment scope when repeated-pattern observations are enabled",
+    )
+    parser.add_argument(
+        "--memory-pattern-window-seconds",
+        type=int,
+        default=86_400,
+    )
+    parser.add_argument(
+        "--memory-pattern-minimum-support",
+        type=int,
+        default=5,
+    )
+    parser.add_argument(
+        "--memory-pattern-minimum-distinct-sources",
+        type=int,
+        default=5,
     )
 
 
@@ -1860,6 +1981,20 @@ def _review_note(args: argparse.Namespace) -> int:
             ReviewNoteCommand(
                 queue_id=args.queue_id,
                 note=args.note,
+                origin=(
+                    ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION
+                    if any(
+                        (
+                            args.lead_agent_thread_id,
+                            args.lead_agent_message_id,
+                            args.acceptance_reason,
+                        )
+                    )
+                    else ReviewNoteOrigin.ANALYST_NOTE
+                ),
+                source_thread_id=args.lead_agent_thread_id,
+                source_message_id=args.lead_agent_message_id,
+                acceptance_reason=args.acceptance_reason,
                 scenario_key=args.scenario_key,
                 domain=SocDomainName(args.domain) if args.domain else None,
                 finding_id=args.finding_id,
@@ -2082,6 +2217,54 @@ def _memory_search(args: argparse.Namespace) -> int:
         return 3
 
     print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _memory_patterns_list(args: argparse.Namespace) -> int:
+    if args.limit < 1 or args.limit > 10_000:
+        print("error: --limit must be between 1 and 10000", file=sys.stderr)
+        return 2
+    try:
+        repository = _repository_from_args(args)
+        observations = SocMemoryPatternService(
+            repository=repository,
+            candidate_repository=repository,
+        ).list_observations(
+            aggregation_key=args.aggregation_key,
+            lineage_key=args.lineage_key,
+            tenant_id=args.tenant_id,
+            environment=args.environment,
+            data_class=(MemoryPatternDataClass(args.data_class) if args.data_class else None),
+            source_type=(MemoryPatternSourceType(args.source_type) if args.source_type else None),
+            limit=args.limit,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(
+        json.dumps(
+            [item.model_dump(mode="json", exclude_none=True) for item in observations],
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+        )
+    )
+    return 0
+
+
+def _memory_patterns_replay(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        report = SocMemoryPatternService(
+            repository=repository,
+            candidate_repository=repository,
+        ).replay(args.aggregation_key)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
 
 
@@ -2987,6 +3170,8 @@ def _chat_tui(args: argparse.Namespace) -> int:
         )
         run_chat_tui(
             chat_service,
+            review_service=review_service,
+            lead_agent_mode=args.lead_agent,
             initial_queue_id=args.queue_id,
             initial_message=args.message,
         )
@@ -3045,6 +3230,46 @@ def _agent_install_profile(args: argparse.Namespace) -> int:
         return 2
 
     print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _agent_subagents(args: argparse.Namespace) -> int:
+    payload = build_soc_specialist_subagent_config_fragment()
+    print(json.dumps(payload, ensure_ascii=False, indent=2 if args.pretty else None))
+    return 0
+
+
+def _agent_install_subagents(args: argparse.Namespace) -> int:
+    try:
+        result = SocSpecialistSubagentConfigInstaller().install(
+            config_path=args.config,
+            dry_run=not args.apply,
+            overwrite=args.overwrite,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _agent_doctor(args: argparse.Namespace) -> int:
+    try:
+        report = validate_soc_lead_agent_runtime_configuration(
+            require_specialists=not args.without_specialists,
+            user_id=args.user_id,
+        )
+    except SocLeadAgentRuntimeConfigurationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(
+        json.dumps(
+            report,
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+        )
+    )
     return 0
 
 
@@ -3413,10 +3638,48 @@ def _daemon_service_from_args(args: argparse.Namespace) -> SocDaemonService:
     )
     approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
     investigation_service = _investigation_service_from_args(args, repository)
+    memory_pattern_service, memory_pattern_environment, memory_pattern_data_class = _memory_pattern_service_from_args(args, repository)
     return SocDaemonService(
         analysis_service=analysis_service,
         approval_service=approval_service,
         investigation_service=investigation_service,
+        memory_pattern_observer=memory_pattern_service,
+        memory_pattern_environment=memory_pattern_environment,
+        memory_pattern_data_class=memory_pattern_data_class,
+    )
+
+
+def _memory_pattern_service_from_args(
+    args: argparse.Namespace,
+    repository: SqlAlchemyAlertRepository,
+) -> tuple[SocMemoryPatternService | None, str | None, MemoryPatternDataClass | None]:
+    data_class_value = getattr(args, "memory_pattern_data_class", None)
+    environment_value = getattr(args, "memory_pattern_environment", None)
+    if data_class_value is None and environment_value is None:
+        return None, None, None
+    if data_class_value is None or environment_value is None:
+        raise ValueError("--memory-pattern-data-class and --memory-pattern-environment must be provided together")
+    environment = environment_value.strip()
+    if not environment:
+        raise ValueError("--memory-pattern-environment must not be blank")
+    policy = MemoryPatternAggregationPolicy(
+        window_seconds=getattr(args, "memory_pattern_window_seconds", 86_400),
+        minimum_support=getattr(args, "memory_pattern_minimum_support", 5),
+        minimum_distinct_sources=getattr(
+            args,
+            "memory_pattern_minimum_distinct_sources",
+            5,
+        ),
+    )
+    data_class = MemoryPatternDataClass(data_class_value)
+    return (
+        SocMemoryPatternService(
+            repository=repository,
+            candidate_repository=repository,
+            policy=policy,
+        ),
+        environment,
+        data_class,
     )
 
 

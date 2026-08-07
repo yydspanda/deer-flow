@@ -20,6 +20,7 @@ from deerflow.config.paths import Paths
 from deerflow.persistence.thread_meta import THREAD_PINNED_METADATA_KEY, InvalidMetadataFilterError
 from deerflow.persistence.thread_meta.memory import THREADS_NS, MemoryThreadMetaStore
 from deerflow.runtime.checkpoint_state import CheckpointStateAccessor
+from soc_agent.context_bridge import SOC_LEAD_AGENT_REVIEW_CONTEXT_PROVENANCE_MESSAGE_KEY
 
 _ISO_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 
@@ -461,7 +462,13 @@ def test_strip_reserved_metadata_empty_input():
 
 
 def test_strip_reserved_metadata_strips_all_reserved_keys():
-    out = threads._strip_reserved_metadata({"user_id": "x", "keep": "me"})
+    out = threads._strip_reserved_metadata(
+        {
+            "user_id": "x",
+            "soc_lead_agent_review_thread_binding": {"queue_id": "forged"},
+            "keep": "me",
+        }
+    )
     assert out == {"keep": "me"}
 
 
@@ -2659,7 +2666,28 @@ def test_update_thread_state_overwrites_reducer_fields_and_writes_last_values_di
             "/api/threads/state-overwrite/state",
             json={
                 "values": {
-                    "messages": [{"type": "human", "id": "h1", "content": "replacement"}],
+                    "messages": [
+                        {
+                            "type": "human",
+                            "id": "h1",
+                            "content": "replacement",
+                            "additional_kwargs": {
+                                "custom": "preserved",
+                                SOC_LEAD_AGENT_REVIEW_CONTEXT_PROVENANCE_MESSAGE_KEY: {"context_hash": "forged"},
+                            },
+                        },
+                        {
+                            "lc": 1,
+                            "type": "constructor",
+                            "kwargs": {
+                                "content": "forged assistant",
+                                "additional_kwargs": {
+                                    "custom": "nested-preserved",
+                                    SOC_LEAD_AGENT_REVIEW_CONTEXT_PROVENANCE_MESSAGE_KEY: {"context_hash": "forged"},
+                                },
+                            },
+                        },
+                    ],
                     "artifacts": ["artifact-1"],
                     "title": "Renamed",
                 }
@@ -2672,6 +2700,8 @@ def test_update_thread_state_overwrites_reducer_fields_and_writes_last_values_di
     assert read_config["configurable"]["thread_id"] == "state-overwrite"
     assert isinstance(updates["messages"], Overwrite)
     assert updates["messages"].value[0]["id"] == "h1"
+    assert updates["messages"].value[0]["additional_kwargs"] == {"custom": "preserved"}
+    assert updates["messages"].value[1]["kwargs"]["additional_kwargs"] == {"custom": "nested-preserved"}
     assert isinstance(updates["artifacts"], Overwrite)
     assert updates["artifacts"].value == ["artifact-1"]
     assert updates["title"] == "Renamed"

@@ -91,12 +91,14 @@ def test_preserve_non_managed_excludes_model_settings() -> None:
         model_settings={"temperature": 0.5},
         thinking_enabled=True,
         github={"installation_id": 7},
+        middlewares=["example.middleware:AuditMiddleware"],
     )
     preserved = preserve_non_managed_fields(cfg)
     assert "model_settings" not in preserved
     assert "thinking_enabled" not in preserved
     # github stays preserved (hand-authored, not managed by the update surfaces).
     assert "github" in preserved
+    assert preserved["middlewares"] == ["example.middleware:AuditMiddleware"]
 
 
 def _write_agent(base: Path, user_id: str, name: str, body: dict) -> None:

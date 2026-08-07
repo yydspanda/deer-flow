@@ -21,6 +21,10 @@ from soc_agent.contracts import (
     GovernedContextFactQuery,
     InvestigationEvidence,
     LLMAnalysisRequest,
+    MemoryPatternAggregationResult,
+    MemoryPatternDataClass,
+    MemoryPatternObservation,
+    MemoryPatternSourceType,
     NormalizationBaselineStatus,
     NormalizationMaintenanceIssue,
     NormalizationMaintenanceIssueStatus,
@@ -414,6 +418,52 @@ class MemoryCandidateRepository(Protocol):
     ) -> list[SocMemoryCandidate]: ...
 
 
+class MemoryPatternObservationRepository(Protocol):
+    """Immutable persistence boundary for repeated-pattern source observations."""
+
+    def save_memory_pattern_observation(
+        self,
+        observation: MemoryPatternObservation,
+    ) -> None: ...
+
+    def get_memory_pattern_observation(
+        self,
+        observation_id: str,
+    ) -> MemoryPatternObservation | None: ...
+
+    def find_memory_pattern_observation_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> MemoryPatternObservation | None: ...
+
+    def list_memory_pattern_observations(
+        self,
+        *,
+        aggregation_key: str | None = None,
+        lineage_key: str | None = None,
+        tenant_id: str | None = None,
+        environment: str | None = None,
+        data_class: MemoryPatternDataClass | None = None,
+        source_type: MemoryPatternSourceType | None = None,
+        limit: int = 500,
+    ) -> list[MemoryPatternObservation]: ...
+
+
+class MemoryPatternObserver(Protocol):
+    """Optional application bridge used by Kafka and batch entry surfaces."""
+
+    def observe_run(
+        self,
+        run: AnalysisRun,
+        *,
+        source_type: MemoryPatternSourceType,
+        transport_ref: str,
+        environment: str,
+        data_class: MemoryPatternDataClass,
+        context: ServiceRequestContext,
+    ) -> MemoryPatternAggregationResult: ...
+
+
 class MemoryRecordRepository(Protocol):
     """Persistence boundary for confirmed SOC memory records."""
 
@@ -653,6 +703,7 @@ class SocMutationRepository(
     SocAgentApprovalGrantRepository,
     SocAgentApprovalRequestRepository,
     SocMutationAuditRepository,
+    MemoryPatternObservationRepository,
     SkillImprovementRepository,
     Protocol,
 ):
