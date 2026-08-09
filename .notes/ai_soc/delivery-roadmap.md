@@ -333,7 +333,8 @@ Completed:    PI-04-B - thin Web consumer, explicit local/simulation evidence, n
 Completed:    PI-05A - vendor-neutral rollout plan/gate/rollback contract, 16-step virtual rehearsal and stable replay; 0 real transitions/effects
 Completed:    PI-05B - five-component fail-closed completion report SCG-6EEDC5DC3417; stable replay, seven real gates open, pilot_ready/production_ready false
 Completed:    UP-01 - post-upstream compatibility gate on current HEAD: SOC/architecture 842, Lead/Subagent 387, frontend unit 1014 and browser 18 passed; network/endpoint real-model specialist smokes passed while Provider acceptance remained false
-Next:         Freeze external Mock completeness and migration readiness across PI-01..PI-05; fill only demonstrated product/contract/runbook gaps, not another disconnected mock capability
+Completed:    External Mock/transfer freeze - RID-01..10 crosswalk audited; clean-worktree gate, 30-file handoff inventory, PingAn DEV config v33 and 142-test migration/provider/batch regression passed
+Next:         At the actual handoff window, build and inspect clean-commit source/private archives; then execute RID-01..10 inside PingAn DEV without changing generic Runtime contracts
 Internal handoff: After the external deliverable is frozen and copied into PingAn DEV, close D12-B / PI-01A / PI-01B1 and the remaining RID items with `mocked=false` evidence
 Quality next: In the internal stage, run PI-03 real labeled evaluation when approved human-reviewed corpus/correlation pairs are supplied; include network direction/role calibration
 Parallel debt: Keep D12-B / PI-01A / PI-01B1 explicitly mocked and open during external development even when partial interface details are known

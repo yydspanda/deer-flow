@@ -8,7 +8,8 @@ redacted there.
 ## Files
 
 - `config.example.yaml`: DeerFlow profile for the OpenAI-compatible LiteLLM
-  endpoint exposed by the legacy `sec-model` process.
+  endpoint exposed by the legacy `sec-model` process. Its `config_version`
+  must match the root `config.example.yaml`.
 - `env.example`: shell environment for the model, PingAn `asset.locate`,
   threat intelligence, security-tag lookup, and historical software-path lookup.
 - `extensions.example.json`: one DeerFlow MCP profile that registers all four
@@ -83,6 +84,11 @@ clone, confirm that before adding any real value:
 ```bash
 git check-ignore -v .env.soc-dev.local config.pingan-dev.local
 ```
+
+Before building the final internal transfer archives, commit the intended
+source and require `git status --short` to be empty. The transfer builder rejects
+a dirty worktree by default. `--allow-dirty` creates a development-only archive
+whose report is explicitly ineligible for final handoff.
 
 The standalone internal transfer archive intentionally excludes `.git/`, so
 `git check-ignore` is unavailable after extracting that archive. On the target

@@ -545,7 +545,8 @@ Current SOC direction:
 - Build internal handoff artifacts with `scripts/build_pingan_internal_transfer.py`. Source and
   private data/configuration are separate archives with independent manifests and SHA-256
   inspection. Never put `*.local`, PKL, XLSX, SQLite, credentials, or generated internal results in
-  the source archive or Git.
+  the source archive or Git. The builder rejects a dirty worktree by default; `--allow-dirty` is
+  development-only and any such report is ineligible for final internal handoff.
 - PI-04-A operational visibility uses `SocOperationsService` and the versioned
   `soc.operations_snapshot.v1` contract. `soc ops snapshot` and
   `GET /api/soc/operations/snapshot` expose exact, unpaginated SOC persistence aggregates plus a

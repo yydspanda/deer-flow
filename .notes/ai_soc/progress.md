@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | `UP-01` upstream 合并兼容性复验已通过；下一刀是外网 Mock 完整性与迁移就绪冻结审计。平安内网 Provider、数据源和基础设施在外网阶段继续使用显式 Mock 并登记 RID，待外网交付冻结后再整体迁入内网逐项完成 `mocked=false` 验收。 |
+| 当前下一刀 | 外网 Mock 完整性与迁移就绪冻结审计已通过；下一步只在实际内网交接窗口生成 clean-commit source/private 包，并按 RID-01..10 执行真实验收。平安内网 Provider、数据源和基础设施在外网阶段继续使用显式 Mock，任何 simulation 都不关闭 `mocked=false` gate。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -65,6 +65,25 @@
   `ready`，四个 specialists 与三个治理 middleware 均通过。该操作未引入任何真实平安配置或凭证。
 - 后续仍遵循双阶段交付：先在外网完成并冻结契约一致的 Mock 产品流、测试、台账和迁移材料；再一次性
   迁入平安内网，按 RID 逐项替换并取得 `mocked=false` 证据。UP-01 不是新 PI，也不改变 PI 顺序。
+
+## 2026-08-09 — External Mock and transfer readiness frozen
+
+- 完成 RID-01..10 外网产物交叉审计：D12-B、TI、Security Tag 使用同一 production-shaped
+  Provider/MCP/action + fake transport；B2/C 保持 data-gated；internal shadow、quality、operations、rollout
+  的 runner 和 claim boundary 均可迁移，真实 gate 全部保持 open。
+- `scripts/build_pingan_internal_transfer.py` 默认拒绝 dirty worktree。只有 clean commit 可以生成最终交接
+  候选；`--allow-dirty` 只供开发验包，报告固定
+  `dirty_override_used=true`、`final_handoff_eligible=false`。
+- 构建器新增 30 项关键迁移源码清单，覆盖 profile、Provider、MCP、D12 matrix/evidence、external/internal
+  shadow runner/evaluator 和权威交接文档；缺一项即 fail closed。Source archive 继续排除 local config、
+  PKL、XLSX、SQLite、secret 与生成结果，private overlay 独立封装并强制权限。
+- PingAn DEV tracked sample 与 Git-ignored local config 已从 `config_version: 31` 对齐到上游当前 `v33`；
+  新增回归锁住 sample/root 版本一致，避免迁入内网后才触发配置升级。
+- 聚焦迁移测试 `19 passed`；扩大到 asset/D12/TI/tag/path/signing、enrichment composition 和 internal-batch
+  mock/real 切换后为 `142 passed`。实际 dirty 默认构建被拒绝；显式 override 临时 source 包
+  2673/2673 文件通过 manifest/SHA/path-safety 检查，但明确不可交付且只保存在 `/tmp`。
+- 下一步不是新增另一项 Mock：实际交接窗口先 commit 后做一次 clean source/private build + inspect，再到
+  PingAn DEV 按 RID 执行 `mocked=false` acceptance。真实 Kafka/K8s/PostgreSQL 输入仍不在当前 DEV 范围。
 
 ## 2026-08-07 — PI-01G1..G3 native SOC specialist delegation completed
 

@@ -1,6 +1,6 @@
 # SOC Agent Mock 与真实接入台账
 
-> Updated: 2026-08-07
+> Updated: 2026-08-09
 >
 > 目的：集中记录当前 SOC Agent 里哪些能力只是 mock、fixture、in-memory 或本地 smoke，用来验证工程链路；后续接入真实 PingAn / 客户环境时，必须按本台账替换、复测和重新验收。
 
@@ -170,6 +170,24 @@ production-shaped adapter/ingress/runner 注入真实配置，不允许到内网
 | `RID-08 PI-03 real quality` | simulation manifest/eval/calibration flow passed；PI-01G 专家执行链路已通，但 NIDS 结果仍暴露 upstream role/direction assertion 可能过度加权 | 批准脱敏 corpus、具名 reviewer、labels/rationale、correlation pairs，包含 network tuple / TCP initiator / attacker-victim 反例 | seal/verify/quality/confidence replay，按 source/scenario/specialist 分层 | 只能由 `human_review` real corpus 产生质量声明或 profile promotion；不用 Runtime 硬编码伪造语义校准 |
 | `RID-09 PI-04 telemetry` | local Snapshot/Web passed | deployed Kafka/model/Provider metrics、Prometheus scrape、owner 和 SLO | lag/throughput/latency/error/cost/schema drift dashboards and alerts | `not_measured` 被真实指标替换并通过值班/留存评审 |
 | `RID-10 PI-05 rollout/actions` | virtual rollout + approval boundary passed，0 external effect | deployed cohort enforcement、具名 owner、feature flag、真实 rollback、EDR/F5/SOAR adapter | Shadow -> Limited Pilot rehearsal、approval-gated dry-run/execute、compensation | fresh gates 全部通过；`pilot_ready` 才可变 true，高风险动作仍默认人工审批 |
+
+### 7.1 External freeze audit / 外网冻结审计
+
+2026-08-09 已完成一次不访问内网的交付冻结审计：
+
+| RID group | 外网可迁移产物 | 冻结结论 | 进入内网后仍需完成 |
+|---|---|---|---|
+| `RID-01..03` | production-shaped PingAn Provider、stdio MCP、action/evidence、fake matrix 与 local profile | 代码/配置/runner 均进入迁移源码必需清单；外网结果继续固定 `mocked=true` | approved cases + real endpoint/secret，逐项取得 `mocked=false` direct/MCP/persistence/readback 证据 |
+| `RID-04..05` | vendor-neutral Governed Context 与 External Disposition service/ingress | 通用生命周期可迁移；权威 source contract 仍 data-gated，未虚构 PingAn Provider | 冻结真实 change/roster/status/reason/version/ordering contract 后再写 source adapter |
+| `RID-06` | external 5/50、internal runner、paired evaluator、real-only composition | runner/config/验收逻辑随源码迁移；external report 不关闭 internal gate | 在隔离 SQLite 上按 `5 -> 50 -> all` 重跑 approved PKL 和 internal-real evidence |
+| `RID-07` | SQLite DEV、local Kafka/Redpanda 协议链 | DEV 继续 SQLite；未制造不存在的 Kafka/K8s/PostgreSQL 参数 | 真实基础设施输入到位后单独验收，不阻塞当前内网 DEV 模型/Provider 测试 |
+| `RID-08..10` | label/quality/Skill backlog、Operations Web、rollout/approval 的 simulation contracts | 产品流程可迁移且 claim boundary 已冻结；所有 real gates 保持 open | 真实 labels/telemetry/owners/cohort/rollback/action adapters 到位后逐项关闭 |
+
+`scripts/build_pingan_internal_transfer.py` 现在默认拒绝 dirty worktree，并核对 30 个关键 source/sample/
+runner/doc 文件。只有 clean commit 构建的报告可以给出 `final_handoff_eligible=true`；显式
+`--allow-dirty` 只生成开发验包，固定为不可交付。PingAn DEV 配置模板与根配置版本均为 `v33`。
+专项冻结回归为 `142 passed`；它验证本地 Provider/fake、mock/real 配置边界、D12 evidence、enrichment
+composition 和 internal-batch runner，不产生任何真实内网 evidence，因此 `RID-01..10` 状态均未被误关。
 
 `PI-01G` 专家子智能体本身不是内网 Provider debt：只要配置的模型可用，它就是 DeerFlow 真实执行
 路径。当前外网 NIDS network 与 EDR endpoint 代表报告分别保存为 Git-ignored

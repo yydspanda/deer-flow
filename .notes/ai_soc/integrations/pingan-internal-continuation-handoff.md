@@ -1,7 +1,7 @@
 # PingAn SOC Internal Continuation Handoff / 平安内网续作交接单
 
 > Type: temporary transfer artifact / 临时复制交接文件
-> Reconciled: 2026-08-06
+> Reconciled: 2026-08-09
 > Status: `Real Integration Debt / parked`; this is no longer the current product-development pointer
 > Resume action: when approved PingAn DEV is available, inject environment secrets/cases, pass live MCP inventory, and run fresh paired `internal_real` stage 5
 
@@ -34,14 +34,31 @@
 外网仓库根目录执行：
 
 ```bash
+git status --short
 python3 scripts/build_pingan_internal_transfer.py --include-private-overlay
 ```
 
+最终交接包要求第一条命令无输出。构建器默认拒绝 dirty worktree，保证 source archive 可以对应到唯一
+commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
+`dirty_override_used=true`、`final_handoff_eligible=false`，禁止作为最终内网交付。
+
 脚本会在 Git-ignored 的 `backend/.deer-flow/internal-transfer/` 中生成三类文件：
 
-- `deer-flow-pingan-source-*.tar.gz`：当前 tracked + non-ignored untracked 源码，包含未提交的新代码；明确排除凭证、PKL、XLSX、SQLite、Git 元数据、虚拟环境和生成物。
+- `deer-flow-pingan-source-*.tar.gz`：当前 clean commit 对应的 tracked 源码；明确排除凭证、PKL、XLSX、SQLite、Git 元数据、虚拟环境和生成物。
 - `deer-flow-pingan-private-overlay-*.tar.gz`：仅包含 `.env.soc-dev.local`、`config.pingan-dev.local`、当前 PKL、历史 EDR XLSX 及其已编译路径目录；只能走获批的内部传输通道。
 - `transfer-report-*.json`：两个包的 SHA-256、大小、文件数、Git commit/branch/dirty 状态；不含 secret 内容。
+
+构建前还会核对 30 个冻结的关键源码入口，覆盖 PingAn DEV profile、D12-B、TI、Security Tag、
+external/internal shadow、paired evaluator、RID 台账和交接文档。任一入口缺失都会 fail closed，不生成
+看似完整但无法续作的迁移包。
+
+外网冻结前先运行不触网的迁移专项回归：
+
+```bash
+PYTHONPATH=. backend/.venv/bin/pytest -q \
+  scripts/test_build_pingan_internal_transfer.py \
+  backend/tests/test_soc_pingan_dev_validation.py
+```
 
 不要把本 tracked 文档中的文件名或 hash 当作当前包清单：把 archive 自身的 SHA 写回 archive 内文档
 会形成不可稳定的自引用。每次构建后，以同目录、同 timestamp 的 `transfer-report-*.json` 为唯一外部

@@ -45,7 +45,9 @@ SOURCE_FORBIDDEN_NAMES = frozenset(
         "extensions_config.json",
     }
 )
-SOURCE_FORBIDDEN_SUFFIXES = frozenset({".db", ".key", ".pem", ".pkl", ".sqlite", ".sqlite3", ".xlsx"})
+SOURCE_FORBIDDEN_SUFFIXES = frozenset(
+    {".db", ".key", ".pem", ".pkl", ".sqlite", ".sqlite3", ".xlsx"}
+)
 PRIVATE_OVERLAY_PATHS = (
     ".env.soc-dev.local",
     "config.pingan-dev.local",
@@ -53,6 +55,38 @@ PRIVATE_OVERLAY_PATHS = (
     "datas/source/full_alert_2026_month_forth_sample_200.pkl",
     "backend/.deer-flow/pingan-context/software-path-catalog.sqlite",
     "backend/.deer-flow/pingan-context/software-path-catalog.build-report.json",
+)
+REQUIRED_HANDOFF_SOURCE_PATHS = (
+    ".notes/ai_soc/delivery-roadmap.md",
+    ".notes/ai_soc/integrations/README.md",
+    ".notes/ai_soc/integrations/mock-and-real-register.md",
+    ".notes/ai_soc/integrations/pingan-internal-continuation-handoff.md",
+    "AGENTS.md",
+    "backend/samples/pingan_dev/README.md",
+    "backend/samples/pingan_dev/config.example.yaml",
+    "backend/samples/pingan_dev/d12b-test-cases.example.yaml",
+    "backend/samples/pingan_dev/env.example",
+    "backend/samples/pingan_dev/extensions.example.json",
+    "backend/samples/enrichment/pingan-external-simulation.yaml",
+    "backend/samples/enrichment/pingan-internal-shadow.yaml",
+    "backend/samples/mcp/pingan_asset/action_adapters.json",
+    "backend/samples/mcp/pingan_shadow/extensions.internal.json",
+    "backend/samples/mcp/pingan_threat_intel/action_adapters.json",
+    "backend/samples/mcp/pingan_security_tag/action_adapters.json",
+    "backend/scripts/soc_pingan_asset_direct_smoke.py",
+    "backend/scripts/soc_pingan_d12b_evidence.py",
+    "backend/scripts/soc_pingan_d12b_matrix.py",
+    "backend/scripts/soc_pingan_dev_preflight.py",
+    "backend/scripts/soc_pingan_security_tag_mcp_server.py",
+    "backend/scripts/soc_pingan_threat_intel_mcp_server.py",
+    "backend/soc_agent/integrations/pingan/asset_location.py",
+    "backend/soc_agent/integrations/pingan/security_tag.py",
+    "backend/soc_agent/integrations/pingan/threat_intel.py",
+    "scripts/build_pingan_internal_transfer.py",
+    "validation/compact_zeus/internal_batch/README.md",
+    "validation/compact_zeus/internal_batch/evaluate_pingan_shadow.py",
+    "validation/compact_zeus/internal_batch/run_pingan_internal_shadow.py",
+    "validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py",
 )
 
 
@@ -96,13 +130,16 @@ def build_transfer_archives(
     root: Path = ROOT,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     include_private_overlay: bool = False,
+    allow_dirty: bool = False,
 ) -> dict[str, Any]:
+    git_info = _git_info(root)
+    _assert_source_freeze_allowed(git_info, allow_dirty=allow_dirty)
     output_dir = output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     output_dir.chmod(0o700)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     source_paths = collect_source_paths(root)
-    git_info = _git_info(root)
+    _assert_required_handoff_sources(source_paths)
     source_manifest = _archive_manifest(
         archive_kind="source",
         root=root,
@@ -117,7 +154,7 @@ def build_transfer_archives(
         root=root,
         paths=source_paths,
         manifest=source_manifest,
-        readme=_source_readme(timestamp),
+        readme=_source_readme(timestamp, worktree_dirty=git_info["worktree_dirty"]),
     )
     archives: dict[str, Any] = {
         "source": _archive_result(source_path, source_manifest),
@@ -125,7 +162,9 @@ def build_transfer_archives(
 
     if include_private_overlay:
         private_paths = [Path(item) for item in PRIVATE_OVERLAY_PATHS]
-        missing = [path.as_posix() for path in private_paths if not (root / path).is_file()]
+        missing = [
+            path.as_posix() for path in private_paths if not (root / path).is_file()
+        ]
         if missing:
             raise ValueError(f"private overlay inputs are missing: {missing}")
         private_manifest = _archive_manifest(
@@ -136,7 +175,9 @@ def build_transfer_archives(
             git_info=git_info,
             private=True,
         )
-        private_path = output_dir / f"deer-flow-pingan-private-overlay-{timestamp}.tar.gz"
+        private_path = (
+            output_dir / f"deer-flow-pingan-private-overlay-{timestamp}.tar.gz"
+        )
         _write_archive(
             private_path,
             root=root,
@@ -154,6 +195,11 @@ def build_transfer_archives(
         "created_at": datetime.now(UTC).isoformat(),
         "output_directory": str(output_dir),
         "archives": archives,
+        "source_worktree_dirty": git_info["worktree_dirty"],
+        "required_source_file_count": len(REQUIRED_HANDOFF_SOURCE_PATHS),
+        "required_source_inventory_complete": True,
+        "dirty_override_used": bool(git_info["worktree_dirty"] and allow_dirty),
+        "final_handoff_eligible": not git_info["worktree_dirty"],
         "secrets_in_console_output": False,
     }
     report_path = output_dir / f"transfer-report-{timestamp}.json"
@@ -169,7 +215,12 @@ def inspect_archive(path: Path) -> dict[str, Any]:
     with tarfile.open(archive, "r:gz") as handle:
         members = handle.getmembers()
         _assert_safe_members(members)
-        manifest_members = [member for member in members if member.name.startswith(f"{ARCHIVE_ROOT}/TRANSFER-MANIFEST.") and member.name.endswith(".json")]
+        manifest_members = [
+            member
+            for member in members
+            if member.name.startswith(f"{ARCHIVE_ROOT}/TRANSFER-MANIFEST.")
+            and member.name.endswith(".json")
+        ]
         if len(manifest_members) != 1:
             raise ValueError("archive must contain exactly one transfer manifest")
         manifest_member = manifest_members[0]
@@ -193,7 +244,9 @@ def inspect_archive(path: Path) -> dict[str, Any]:
                 raise ValueError("archive manifest contains an invalid file entry")
             relative = item["path"]
             if relative in expected:
-                raise ValueError(f"archive manifest contains a duplicate path: {relative}")
+                raise ValueError(
+                    f"archive manifest contains a duplicate path: {relative}"
+                )
             if archive_kind == "source":
                 _assert_source_path_safe(Path(relative))
             expected[relative] = item
@@ -203,7 +256,9 @@ def inspect_archive(path: Path) -> dict[str, Any]:
             manifest_member.name,
             f"{ARCHIVE_ROOT}/INTERNAL-BUNDLE-README.{archive_kind}.md",
         }
-        expected_names = metadata_names | {f"{ARCHIVE_ROOT}/{relative}" for relative in expected}
+        expected_names = metadata_names | {
+            f"{ARCHIVE_ROOT}/{relative}" for relative in expected
+        }
         actual_names = {member.name for member in members}
         if actual_names != expected_names or len(actual_names) != len(members):
             raise ValueError("archive member inventory does not match its manifest")
@@ -258,7 +313,9 @@ def _write_archive(
             _add_bytes(
                 archive,
                 f"{ARCHIVE_ROOT}/TRANSFER-MANIFEST.{archive_kind}.json",
-                (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+                (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode(
+                    "utf-8"
+                ),
                 mode=0o600,
             )
             for relative in paths:
@@ -346,11 +403,22 @@ def _source_path_excluded(relative: str) -> bool:
 
 def _assert_source_path_safe(relative: Path) -> None:
     if relative.name in SOURCE_FORBIDDEN_NAMES:
-        raise ValueError(f"forbidden local configuration entered source archive: {relative}")
+        raise ValueError(
+            f"forbidden local configuration entered source archive: {relative}"
+        )
     if relative.suffix.lower() in SOURCE_FORBIDDEN_SUFFIXES:
         raise ValueError(f"forbidden private data entered source archive: {relative}")
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError(f"unsafe source archive path: {relative}")
+
+
+def _assert_required_handoff_sources(paths: Sequence[Path]) -> None:
+    available = {path.as_posix() for path in paths}
+    missing = sorted(set(REQUIRED_HANDOFF_SOURCE_PATHS) - available)
+    if missing:
+        raise ValueError(
+            f"required internal handoff source files are missing: {missing}"
+        )
 
 
 def _assert_safe_members(members: Iterable[tarfile.TarInfo]) -> None:
@@ -362,7 +430,9 @@ def _assert_safe_members(members: Iterable[tarfile.TarInfo]) -> None:
         if member.isdev() or member.isfifo():
             raise ValueError(f"unsupported archive member: {member.name}")
         if member.islnk():
-            raise ValueError(f"hard links are unsupported in transfer archives: {member.name}")
+            raise ValueError(
+                f"hard links are unsupported in transfer archives: {member.name}"
+            )
         if member.issym():
             target = PurePosixPath(member.linkname)
             if target.is_absolute() or ".." in target.parts:
@@ -413,13 +483,35 @@ def _git_info(root: Path) -> dict[str, Any]:
     }
 
 
-def _source_readme(timestamp: str) -> str:
+def _assert_source_freeze_allowed(
+    git_info: dict[str, Any],
+    *,
+    allow_dirty: bool,
+) -> None:
+    worktree_dirty = git_info.get("worktree_dirty")
+    if not isinstance(worktree_dirty, bool):
+        raise ValueError("Git worktree state is unavailable; refusing transfer build")
+    if worktree_dirty and not allow_dirty:
+        raise ValueError(
+            "Git worktree is dirty; commit the intended source first or use "
+            "--allow-dirty for a development-only archive"
+        )
+
+
+def _source_readme(timestamp: str, *, worktree_dirty: bool) -> str:
+    source_state = (
+        "This development-only archive was explicitly built from a dirty worktree. "
+        "It is not eligible for final internal handoff; rebuild from a clean commit."
+        if worktree_dirty
+        else "This archive was built from a clean committed worktree and is eligible for handoff review."
+    )
     return f"""# PingAn Internal Source Bundle
 
-Built at `{timestamp}` from the current working tree, including non-ignored
-uncommitted source files. It excludes credentials, private PKL/XLSX, generated
-SQLite, virtual environments, Node dependencies, Git metadata, static knowledge
-snapshots, archived notes, and large demo media.
+Built at `{timestamp}`. {source_state}
+
+It excludes credentials, private PKL/XLSX, generated SQLite, virtual environments,
+Node dependencies, Git metadata, static knowledge snapshots, archived notes, and
+large demo media.
 
 Extract this archive first. Then extract the separately protected private-overlay
 archive into the same parent directory. Read:
@@ -462,7 +554,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--include-private-overlay", action="store_true")
-    parser.add_argument("--inspect", type=Path, help="Inspect one existing archive instead of building")
+    parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Build a development-only archive from a dirty worktree; never use for final handoff",
+    )
+    parser.add_argument(
+        "--inspect", type=Path, help="Inspect one existing archive instead of building"
+    )
     return parser.parse_args(argv)
 
 
@@ -475,10 +574,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             report = build_transfer_archives(
                 output_dir=args.output_dir,
                 include_private_overlay=args.include_private_overlay,
+                allow_dirty=args.allow_dirty,
             )
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
-    except (OSError, subprocess.CalledProcessError, tarfile.TarError, ValueError) as exc:
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        tarfile.TarError,
+        ValueError,
+    ) as exc:
         print(f"error: {str(exc)[:1000] or type(exc).__name__}", file=sys.stderr)
         return 1
 

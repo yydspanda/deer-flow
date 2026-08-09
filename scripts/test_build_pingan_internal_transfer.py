@@ -7,11 +7,49 @@ from pathlib import Path
 import pytest
 from scripts.build_pingan_internal_transfer import (
     ARCHIVE_ROOT,
+    REQUIRED_HANDOFF_SOURCE_PATHS,
     _archive_manifest,
+    _assert_required_handoff_sources,
+    _assert_source_freeze_allowed,
     _assert_source_path_safe,
     _write_archive,
     inspect_archive,
 )
+
+
+def test_transfer_freeze_rejects_dirty_worktree_by_default() -> None:
+    with pytest.raises(ValueError, match="worktree is dirty"):
+        _assert_source_freeze_allowed(
+            {"worktree_dirty": True},
+            allow_dirty=False,
+        )
+
+
+def test_transfer_freeze_allows_explicit_development_override() -> None:
+    _assert_source_freeze_allowed(
+        {"worktree_dirty": True},
+        allow_dirty=True,
+    )
+
+
+def test_transfer_freeze_allows_clean_worktree() -> None:
+    _assert_source_freeze_allowed(
+        {"worktree_dirty": False},
+        allow_dirty=False,
+    )
+
+
+def test_transfer_freeze_requires_complete_handoff_inventory() -> None:
+    with pytest.raises(
+        ValueError, match="required internal handoff source files are missing"
+    ):
+        _assert_required_handoff_sources([Path(REQUIRED_HANDOFF_SOURCE_PATHS[0])])
+
+
+def test_transfer_freeze_accepts_complete_handoff_inventory() -> None:
+    _assert_required_handoff_sources(
+        [Path(item) for item in REQUIRED_HANDOFF_SOURCE_PATHS]
+    )
 
 
 def test_transfer_archive_round_trip_verifies_manifest_digests(tmp_path: Path) -> None:

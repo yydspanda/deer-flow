@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import yaml
+
 from deerflow.config.app_config import AppConfig
 from soc_agent.integrations.pingan.asset_location import (
     PingAnAssetLocationAttempt,
@@ -41,6 +43,14 @@ def test_pingan_dev_model_sample_loads_as_deerflow_profile(
     assert model.api_base == "http://localhost:4001/v1/"
     assert model.api_key == "local-proxy-test-key"
     assert config.database.backend == "sqlite"
+
+
+def test_pingan_dev_sample_tracks_current_config_version() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    root_example = yaml.safe_load((repo_root / "config.example.yaml").read_text(encoding="utf-8"))
+    pingan_example = yaml.safe_load((repo_root / "backend/samples/pingan_dev/config.example.yaml").read_text(encoding="utf-8"))
+
+    assert pingan_example["config_version"] == root_example["config_version"]
 
 
 def test_pingan_dev_preflight_validates_profile_without_network_or_secret_output(
