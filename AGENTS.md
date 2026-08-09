@@ -35,6 +35,18 @@ Nginx is the single public entry: it serves the frontend and proxies `/api/langg
 to the Gateway's LangGraph runtime, rewriting it to Gateway's native `/api/*` routes; all
 other `/api/*` go straight to the Gateway REST routers. See
 [backend/AGENTS.md](backend/AGENTS.md) for the runtime and router detail.
+It compresses HTML and configured textual assets, while deliberately leaving SSE,
+fonts, images, audio, and video uncompressed at the proxy layer.
+
+Both compose files publish that entry as `"${BIND_HOST:-127.0.0.1}:${PORT:-2026}:2026"`
+— **loopback by default**, matching the README's documented deployment model. A bare
+`"${PORT}:2026"` binds `0.0.0.0`, which does not.
+Nginx itself listens `default_server` on IPv4+IPv6 and the
+Gateway binds `0.0.0.0:8001` inside the container on purpose — both are container-
+internal; the published nginx port is the entire external surface, and the Gateway's
+`8001` is deliberately not published. Any new published port needs an explicit bind
+address; `backend/tests/test_compose_default_bind_host.py` pins this for every service
+in both compose files.
 
 ## Repository Map
 
@@ -44,7 +56,11 @@ deer-flow/
 ├── config.example.yaml             # Template -> copy to config.yaml
 ├── extensions_config.example.json  # Template -> copy to extensions_config.json
 ├── backend/                        # Python backend — see backend/AGENTS.md
-├── frontend/                       # Next.js frontend — see frontend/AGENTS.md
+│   ├── Makefile                    # Per-module backend commands (dev, gateway, test, lint, migrate-rev)
+│   ├── packages/extension-api/     # deerflow-extension-api package (import: deerflow_extension_api.*) — public extension contract
+│   ├── packages/harness/           # deerflow-harness package (import: deerflow.*) — agent framework
+│   └── app/                        # FastAPI Gateway + IM channels (import: app.*)
+├── frontend/                       # Next.js frontend (pnpm) — see frontend/AGENTS.md
 ├── docker/                         # docker-compose files, nginx config, provisioner
 ├── skills/                         # Agent skills: public/ (committed), custom/ (gitignored)
 │                                    # Managed integration skill packs are global at .deer-flow/integrations/skills/{provider}/
@@ -55,6 +71,11 @@ deer-flow/
 ├── validation/                     # Local/offline validation builders; generated sensitive artifacts are gitignored
 └── docs/                           # Cross-cutting docs, plans, and design notes
 ```
+
+Third-party extensions are loaded from a top-level `plugins:` list in `config.yaml`
+(operator-controlled on purpose — that list causes code to be imported, so it is deliberately
+kept out of the API-writable `extensions_config.json`). See the Extension System section in
+[backend/AGENTS.md](backend/AGENTS.md).
 
 Runtime config lives at the **repo root**: copy `config.example.yaml` → `config.yaml`
 (main app config) and `extensions_config.example.json` → `extensions_config.json` (MCP
@@ -91,7 +112,12 @@ make up / down
 make docker-start / docker-stop / docker-logs
 ```
 
-Per-module commands drive a single module:
+Docker log and restart commands resolve `DEER_FLOW_ROOT` from the current
+checkout before invoking Compose, matching the start and stop commands.
+
+Run `make help` for the full list.
+
+**Per-module commands drive a single module** (run inside that module):
 
 ```bash
 cd backend && make dev

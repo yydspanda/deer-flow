@@ -70,9 +70,40 @@ top-level `config.yaml -> tool_search.auto_promote_top_k` setting.
 - `tool_search.auto_promote_top_k`: global limit for auto-promoted deferred MCP
   schemas per model call. Default `3`; valid range `1..5`.
 
-## Per-Tool Timeout (Stdio MCP Servers)
+## Tool Name Prefixes
 
-For `stdio` MCP servers, set `tool_call_timeout` to limit each individual MCP tool call in seconds:
+DeerFlow prefixes discovered MCP tool names with `<server_name>_` by default.
+This avoids collisions when two enabled servers expose tools with the same
+name. A server that already namespaces its own tools can opt out:
+
+```json
+{
+  "mcpServers": {
+    "semantic-scholar": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["s2-mcp-server"],
+      "tool_name_prefix": false
+    }
+  }
+}
+```
+
+With this setting, a server tool named `semantic_scholar_search_papers` keeps
+that name instead of becoming
+`semantic-scholar_semantic_scholar_search_papers`. The default is `true` for
+backward compatibility. Disable it only when every resulting tool name remains
+unique across the enabled servers. Stdio tools continue to use DeerFlow's
+persistent per-thread session pool regardless of this setting.
+
+## Server Timeouts (Stdio MCP Servers)
+
+Two independent timeouts bound stdio MCP servers. `session_init_timeout` covers
+server bring-up — tool discovery (subprocess spawn + `initialize` +
+`tools/list`) and persistent-session initialization — and defaults to 60s so a
+hung server (e.g. `npx` blocked on a package download, or a server that never
+answers `initialize`) cannot block agent construction indefinitely. Set it to
+`null` to disable:
 
 ```json
 {
@@ -85,13 +116,17 @@ For `stdio` MCP servers, set `tool_call_timeout` to limit each individual MCP to
          "env": {
             "GITHUB_TOKEN": "$GITHUB_TOKEN"
          },
+         "session_init_timeout": 60,
          "tool_call_timeout": 60
       }
    }
 }
 ```
 
-`tool_call_timeout` only applies to `stdio` servers. `http` and `sse` servers use transport-level timeouts, and DeerFlow logs a warning if `tool_call_timeout` is configured for those transports.
+`tool_call_timeout` limits each individual tool call in seconds and applies only
+to `stdio` servers; `http` and `sse` servers use transport-level timeouts, and
+DeerFlow logs a warning if `tool_call_timeout` is configured for those
+transports.
 
 ## Filesystem MCP Servers
 

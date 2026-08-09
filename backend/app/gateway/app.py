@@ -216,6 +216,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     config = get_gateway_config()
     logger.info(f"Starting API Gateway on {config.host}:{config.port}")
 
+    from deerflow.skills.projection import ensure_public_skill_projection
+
+    public_projection_ready = await asyncio.to_thread(ensure_public_skill_projection, app_config=startup_config)
+    if public_projection_ready:
+        logger.info("Ensured the public skill projection; user projections repair lazily on sandbox acquire")
+
     # Agent observability (Monocle). Off by default; enabled with
     # MONOCLE_TRACING. Initialized here at startup — not at import time — so a
     # plain `import deerflow.agents` never installs a process-global tracer.
@@ -568,6 +574,44 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     # runtime toggle would otherwise leave the log formatter (installed once by
     # configure_logging() at lifespan startup) out of sync with the middleware.
     app.add_middleware(TraceMiddleware, enabled=_resolve_trace_enabled_for_app_construction())
+
+    # Python extensions load once while the Gateway app is constructed. Agent
+    # middleware builders consume the same immutable set through the process
+    # singleton; app.state exposes it to the Gateway runtime.
+    from deerflow.extensions import (
+        EMPTY_EXTENSIONS,
+        ExtensionLoadError,
+        initialize_runtime_diagnostics,
+        load_extensions,
+        set_loaded_extensions,
+    )
+
+    # Resolving the configured plugin list is deliberately outside the
+    # fail-open guard below: a config.yaml that exists but cannot be parsed or
+    # validated is a configuration failure, not an extension failure. Reporting
+    # it as the latter would silently drop a `required: true` extension instead
+    # of failing the boot. Only an absent config.yaml is tolerated, mirroring
+    # _resolve_trace_enabled_for_app_construction() — create_app() runs at
+    # import time, and lifespan still performs strict config loading before
+    # serving.
+    try:
+        configured_plugins = get_app_config().plugins
+    except FileNotFoundError:
+        logger.debug("config.yaml not found while constructing Gateway app; loading no extensions for this app instance")
+        configured_plugins = []
+
+    try:
+        loaded_extensions, extension_diagnostics = load_extensions(configured_plugins)
+    except ExtensionLoadError:
+        # `required: true` makes the extension part of the startup contract.
+        # Booting without it would silently change configured behaviour.
+        raise
+    except Exception:
+        logger.exception("Extension loading failed; continuing with no extensions")
+        loaded_extensions, extension_diagnostics = EMPTY_EXTENSIONS, []
+    set_loaded_extensions(loaded_extensions)
+    app.state.extensions = loaded_extensions
+    app.state.extension_diagnostics = initialize_runtime_diagnostics(extension_diagnostics)
 
     # Include routers
     # Models API is mounted at /api/models

@@ -91,6 +91,8 @@ Async task delegation with concurrent execution:
 LLM-powered persistent context retention across conversations:
 
 - **Automatic extraction**: Analyzes conversations for user context, facts, and preferences
+- **Scope-safe writes**: Middleware extraction stores only durable, descriptive user-level facts; global summaries also require descriptive authority, while contradiction removals and consolidated facts fail closed when scope metadata is missing or task/project-local
+- **Atomic replacements**: A contradiction removal linked to a replacement runs only after the replacement survives scope/confidence gates, deduplication, and fact-limit trimming
 - **Structured storage**: User context (work, personal, top-of-mind), history, and confidence-scored facts
 - **Debounced updates**: Batches updates to minimize LLM calls (configurable wait time)
 - **System prompt injection**: Top facts + context injected into agent prompts
@@ -385,6 +387,7 @@ no services required:
 uv pip install 'deerflow-harness[tui]'   # optional 'textual' dependency
 deerflow                                 # launch the TUI
 deerflow --print "summarize this repo"   # headless one-shot
+deerflow --recursion-limit 250 --print "run a longer task"
 ```
 
 Sessions opened in the TUI appear in the Web UI sidebar (it writes the shared
