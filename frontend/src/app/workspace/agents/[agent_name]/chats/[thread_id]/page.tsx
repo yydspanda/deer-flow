@@ -20,6 +20,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Textarea } from "@/components/ui/textarea";
 import { AgentWelcome } from "@/components/workspace/agent-welcome";
 import { ArtifactTrigger } from "@/components/workspace/artifacts";
+import { BrowserTrigger } from "@/components/workspace/browser-view";
 import { ChatBox, useThreadChat } from "@/components/workspace/chats";
 import { ContextUsageBadge } from "@/components/workspace/context-usage-badge";
 import { ExportTrigger } from "@/components/workspace/export-trigger";
@@ -43,6 +44,7 @@ import { TokenUsageIndicator } from "@/components/workspace/token-usage-indicato
 import { Tooltip } from "@/components/workspace/tooltip";
 import { useActiveGoal } from "@/components/workspace/use-active-goal";
 import { useAgent } from "@/core/agents";
+import { useBrowserControlEnabled } from "@/core/features";
 import { useI18n } from "@/core/i18n/hooks";
 import {
   buildHumanInputResponseText,
@@ -90,6 +92,7 @@ export default function AgentChatPage() {
   const [acceptanceReason, setAcceptanceReason] = useState("");
   const [settings, setSettings] = useThreadSettings(threadId);
   const [localSettings, setLocalSettings] = useLocalSettings();
+  const { enabled: browserControlEnabled } = useBrowserControlEnabled();
   const { tokenUsageEnabled } = useModels();
   const threadTokenUsage = useThreadTokenUsage(
     isNewThread || isMock ? undefined : threadId,
@@ -268,6 +271,11 @@ export default function AgentChatPage() {
     ? localSettings.tokenUsage.inlineMode
     : "off";
   const hasTodos = (thread.values.todos?.length ?? 0) > 0;
+  const agentBrowserEnabled =
+    agent !== null &&
+    (agent.tool_groups == null || agent.tool_groups.includes("browser"));
+  const browserEnabled =
+    !isNewThread && !isMock && browserControlEnabled && agentBrowserEnabled;
   const { activeGoal, hasGoal, setLocalGoal } = useActiveGoal(
     threadId,
     thread.values.goal,
@@ -343,7 +351,7 @@ export default function AgentChatPage() {
         context={{ ...settings.context, agent_name }}
         isMock={isMock}
       >
-        <ChatBox threadId={threadId}>
+        <ChatBox threadId={threadId} browserEnabled={browserEnabled}>
           <div className="relative flex size-full min-h-0 justify-between">
             <header
               className={cn(
@@ -423,6 +431,7 @@ export default function AgentChatPage() {
                   <ContextUsageBadge contextUsage={contextUsage} />
                 )}
                 <SidecarTrigger />
+                {browserEnabled && <BrowserTrigger />}
                 <ExportTrigger threadId={threadId} />
                 <ArtifactTrigger />
               </div>
