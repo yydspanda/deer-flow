@@ -180,4 +180,4 @@ RID-01..05 结果必须继续按各自 `mocked` provenance 解释，不能由模
 
 ## 8. 当前下一步
 
-当前交付顺序只以 `.notes/ai_soc/delivery-roadmap.md` 和 `.notes/ai_soc/progress.md` 为准；本台账不再维护平行的 next-step 列表。`PI-01G1..G3` 外网产品完整性切片已于 2026-08-07 完成，RID-01..10 保持独立开放。之后只在真实输入就绪时恢复对应 RID：已确认但依赖内网的能力进入 real acceptance，尚无稳定 source contract 的能力继续 data-gated。任何 mock、专家文本或 LLM 输出都不得伪装成真实外部事实。
+当前交付顺序只以 `.notes/ai_soc/delivery-roadmap.md` 和 `.notes/ai_soc/progress.md` 为准；本台账不再维护平行的 next-step 列表。`PI-01G1..G3` 外网产品完整性切片已于 2026-08-07 完成，RID-01..10 保持独立开放。外网阶段即使已知部分接口细节，也只实现契约一致且明确 `mocked=true` 的完整产品流，不直接关闭任何平安内网 RID；外网代码、测试、台账和迁移材料冻结后，才在平安 DEV 按 RID 逐项进入 real acceptance。尚无稳定 source contract 的能力继续 data-gated。任何 mock、专家文本或 LLM 输出都不得伪装成真实外部事实。

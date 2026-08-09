@@ -332,9 +332,11 @@ Completed:    PI-04-A - SOC Operations Snapshot contract, exact persisted counte
 Completed:    PI-04-B - thin Web consumer, explicit local/simulation evidence, not_measured gaps, desktop/mobile Playwright overflow and screenshot evidence
 Completed:    PI-05A - vendor-neutral rollout plan/gate/rollback contract, 16-step virtual rehearsal and stable replay; 0 real transitions/effects
 Completed:    PI-05B - five-component fail-closed completion report SCG-6EEDC5DC3417; stable replay, seven real gates open, pilot_ready/production_ready false
-Next:         Resume one exact RID item only when its required real input exists; do not create another disconnected mock slice
-Quality next: PI-03 real labeled evaluation when approved human-reviewed corpus/correlation pairs are supplied; include network direction/role calibration
-Parallel debt: Resume D12-B / PI-01A / PI-01B1 only when approved internal config and credentials are available
+Completed:    UP-01 - post-upstream compatibility gate on current HEAD: SOC/architecture 842, Lead/Subagent 387, frontend unit 1014 and browser 18 passed; network/endpoint real-model specialist smokes passed while Provider acceptance remained false
+Next:         Freeze external Mock completeness and migration readiness across PI-01..PI-05; fill only demonstrated product/contract/runbook gaps, not another disconnected mock capability
+Internal handoff: After the external deliverable is frozen and copied into PingAn DEV, close D12-B / PI-01A / PI-01B1 and the remaining RID items with `mocked=false` evidence
+Quality next: In the internal stage, run PI-03 real labeled evaluation when approved human-reviewed corpus/correlation pairs are supplied; include network direction/role calibration
+Parallel debt: Keep D12-B / PI-01A / PI-01B1 explicitly mocked and open during external development even when partial interface details are known
 Next evidence: PI-05C only after deployed telemetry, accountable owners, cohort enforcement and executable rollback exist; do not implement a disconnected fake controller
 Real Integration Debt: D12-B asset, PI-01A TI, PI-01B1 security-tag and PI-01E internal-real shadow remain open; no local transfer archive is retained or regenerated until explicit internal handoff
 Data-gated:   PI-01B2/C source contracts, real feedback-to-typed-Skill-facet classification, and real Kafka/PostgreSQL/K8s inputs remain separately parked

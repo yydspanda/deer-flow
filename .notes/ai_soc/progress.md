@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | 无新的 mock-only 产品切片。有批准内网配置时按 RID 恢复 `D12-B / PI-01A / PI-01B1`；有具名人工标注 corpus/correlation pairs 时恢复 PI-03 真实质量评测，不再用新仿真冒充真实证据。 |
+| 当前下一刀 | `UP-01` upstream 合并兼容性复验已通过；下一刀是外网 Mock 完整性与迁移就绪冻结审计。平安内网 Provider、数据源和基础设施在外网阶段继续使用显式 Mock 并登记 RID，待外网交付冻结后再整体迁入内网逐项完成 `mocked=false` 验收。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -41,6 +41,30 @@
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / External Product Complete + Real Debt Open** | 既有 simulation、PI-01F/F2 和 PI-01G 专家子智能体产品链已完成；7 个真实 gate 保持 open | 外网产品完整性缺口已关闭；fresh real evidence、具名 owner approval、cohort enforcement 和可执行 rollback 到位后才能进入 Pilot readiness review |
+
+## 2026-08-09 — UP-01 post-upstream compatibility gate passed
+
+- 在 `yyds-dev` 合入两次最新 upstream 后，重新审计了 SOC 直接复用的 DeerFlow Lead Agent、
+  `DeerFlowClient`、native subagent executor、Gateway thread/run 服务和前端 Agent Chat。上游新增的
+  Extension API 当前首个能力切片只提供 middleware contribution；它不能替代 SOC Gateway 路由、
+  persistence、ReviewQueue 服务或可信 thread binding。现有 per-agent profile middleware 已通过回归，
+  本轮不做无收益的 Plugin 迁移。
+- 修复上游通用 subagent availability 测试读取本机 operator `config.yaml` 的环境污染：测试现在显式使用
+  空 `SubagentsAppConfig`，因此已安装的四个 SOC custom specialists 不再改变通用 builtin inventory 断言；
+  Runtime 行为未修改。
+- 当前 HEAD 验证：SOC/架构 `842 passed`；Lead/Subagent `387 passed`；frontend ESLint + TypeScript 通过，
+  Rstest `1014 passed`；Chromium Agent Chat + SOC Review `18 passed`。Playwright 未启动真实 Gateway，
+  可选 token-usage/workspace-change/browser 代理请求出现预期 connection-refused 日志，但不影响受测 Mock
+  路由和通过结论。
+- 使用 `deepseek-v4-flash` 在现有 SQLite ReviewQueue 上重跑真实模型委派：network 报告
+  `SOC-PI01G-SMOKE-20260809T024634Z.json`、endpoint 报告
+  `SOC-PI01G-SMOKE-20260809T024808Z.json` 均 `passed=true`，各自只有一个预期 specialist、0 failed/capped，
+  provenance 完整且 `provider_acceptance_claimed=false`。报告继续保存在 Git-ignored
+  `backend/.deer-flow/soc-lead-agent-validation/`。
+- 本机 Git-ignored `config.yaml` 已由 v24 合并升级至 v33，并保留 `config.yaml.bak`；profile doctor 为
+  `ready`，四个 specialists 与三个治理 middleware 均通过。该操作未引入任何真实平安配置或凭证。
+- 后续仍遵循双阶段交付：先在外网完成并冻结契约一致的 Mock 产品流、测试、台账和迁移材料；再一次性
+  迁入平安内网，按 RID 逐项替换并取得 `mocked=false` 证据。UP-01 不是新 PI，也不改变 PI 顺序。
 
 ## 2026-08-07 — PI-01G1..G3 native SOC specialist delegation completed
 

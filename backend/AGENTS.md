@@ -1998,6 +1998,9 @@ CI.
 - Run the full offline suite before and after your change: `make test`
 - Tests must pass before a feature is considered complete
 - For lightweight config/utility modules, prefer pure unit tests with no external dependencies
+- Tests for config-driven registries must pass an explicit test configuration instead of
+  reading the ambient root `config.yaml`; operator-owned custom agents, plugins, tools, or
+  other local entries must not change an offline test's expected inventory.
 - If a module causes circular import issues in tests, add a `sys.modules` mock in `tests/conftest.py` (see existing example for `deerflow.subagents.executor`)
 
 ```bash
