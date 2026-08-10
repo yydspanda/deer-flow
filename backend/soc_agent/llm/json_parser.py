@@ -4,20 +4,72 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from json_repair import loads as repair_json_loads
 from pydantic import ValidationError
 
-from soc_agent.contracts import AnalysisResult
+from soc_agent.contracts import (
+    AnalysisContextCatalogItem,
+    AnalysisEvidenceCatalogItem,
+    AnalysisResult,
+)
 
-ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v5"
+ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v10"
 MAX_ANALYSIS_RESPONSE_CHARS = 100_000
 MAX_STRUCTURED_EVIDENCE_VALUE_CHARS = 4_000
 
 _THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.IGNORECASE | re.DOTALL)
 _OPEN_THINK_RE = re.compile(r"<think\b[^>]*>", re.IGNORECASE)
+_KNOWLEDGE_DESTINATIONS = frozenset(
+    {
+        "general_skill",
+        "tenant_memory",
+        "governed_context",
+        "provider_requirement",
+        "adapter_mapping",
+        "tenant_policy",
+        "evaluation_fixture",
+        "reject_or_verify",
+    }
+)
+_KNOWLEDGE_DESTINATION_ALIASES = {
+    "skill": "general_skill",
+    "memory": "tenant_memory",
+    "context": "governed_context",
+    "provider": "provider_requirement",
+    "tool": "provider_requirement",
+    "mcp": "provider_requirement",
+    "adapter": "adapter_mapping",
+    "normalizer": "adapter_mapping",
+    "parser": "adapter_mapping",
+    "policy": "tenant_policy",
+    "evaluation": "evaluation_fixture",
+    "eval": "evaluation_fixture",
+    "reject": "reject_or_verify",
+    "verify": "reject_or_verify",
+}
+_KNOWLEDGE_SCOPES = frozenset({"global", "tenant", "provider", "source", "detection", "scenario", "event"})
+_KNOWLEDGE_SCOPE_ALIASES = {
+    "generic": "global",
+    "cross_tenant": "global",
+    "organization": "tenant",
+    "org": "tenant",
+    "company": "tenant",
+    "vendor": "provider",
+    "adapter": "provider",
+    "product": "provider",
+    "topic": "source",
+    "system": "source",
+    "rule": "detection",
+    "rule_code": "detection",
+    "alert": "event",
+    "case": "event",
+    "current_alert": "event",
+}
+_EMPTY_CONTEXT_REFERENCE_SENTINELS = frozenset({"", "none", "null", "n/a", "na", "not_applicable", "无", "不适用"})
 
 
 class LLMOutputParseError(ValueError):
@@ -48,7 +100,12 @@ class ParsedAnalysisResult:
     candidate_text: str = ""
 
 
-def parse_analysis_result_output(response_content: Any) -> ParsedAnalysisResult:
+def parse_analysis_result_output(
+    response_content: Any,
+    *,
+    evidence_catalog: Sequence[AnalysisEvidenceCatalogItem] = (),
+    context_catalog: Sequence[AnalysisContextCatalogItem] = (),
+) -> ParsedAnalysisResult:
     """Parse LLM content into a domain-validated ``AnalysisResult``.
 
     This follows DeerFlow's conservative pattern first: extract text from modern
@@ -70,7 +127,11 @@ def parse_analysis_result_output(response_content: Any) -> ParsedAnalysisResult:
     strict = _parse_strict_json_object(text)
     if strict is not None:
         data, candidate_text = strict
-        normalized, semantic_repair_log = _normalize_analysis_result_shape(data)
+        normalized, semantic_repair_log = _normalize_analysis_result_shape(
+            data,
+            evidence_catalog=evidence_catalog,
+            context_catalog=context_catalog,
+        )
         return ParsedAnalysisResult(
             result=_validate_analysis_result_data(normalized, repair_applied=bool(semantic_repair_log)),
             repair_applied=bool(semantic_repair_log),
@@ -80,7 +141,11 @@ def parse_analysis_result_output(response_content: Any) -> ParsedAnalysisResult:
 
     candidate_text = _extract_repair_candidate(text)
     repaired = _repair_json_object(candidate_text)
-    normalized, semantic_repair_log = _normalize_analysis_result_shape(repaired.data)
+    normalized, semantic_repair_log = _normalize_analysis_result_shape(
+        repaired.data,
+        evidence_catalog=evidence_catalog,
+        context_catalog=context_catalog,
+    )
     return ParsedAnalysisResult(
         result=_validate_analysis_result_data(normalized, repair_applied=True),
         repair_applied=True,
@@ -153,7 +218,15 @@ def _parse_strict_json_object(text: str) -> tuple[dict[str, Any], str] | None:
 
 
 def _looks_like_analysis_result_object(data: dict[str, Any]) -> bool:
-    return {"verdict", "confidence", "summary", "evidence", "reason", "recommended_action"}.issubset(data)
+    return {
+        "verdict",
+        "confidence",
+        "summary",
+        "evidence",
+        "reasoning",
+        "reason",
+        "recommended_action",
+    }.issubset(data)
 
 
 def _extract_repair_candidate(text: str) -> str:
@@ -191,8 +264,13 @@ def _repair_json_object(candidate_text: str) -> _RepairedJson:
     return _RepairedJson(data=repaired, log=normalized_log)
 
 
-def _normalize_analysis_result_shape(data: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Apply only lossless, explicitly audited schema-shape repairs."""
+def _normalize_analysis_result_shape(
+    data: dict[str, Any],
+    *,
+    evidence_catalog: Sequence[AnalysisEvidenceCatalogItem],
+    context_catalog: Sequence[AnalysisContextCatalogItem],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Apply audited repairs; only inert candidate hints may degrade safely."""
 
     normalized = dict(data)
     repair_log: list[dict[str, Any]] = []
@@ -206,6 +284,45 @@ def _normalize_analysis_result_shape(data: dict[str, Any]) -> tuple[dict[str, An
                 "repair": "single_item_array_to_scalar",
             }
         )
+
+    scenario_assessments = data.get("scenario_assessments")
+    if isinstance(scenario_assessments, list):
+        normalized_assessments = list(scenario_assessments)
+        for index, item in enumerate(scenario_assessments):
+            if not isinstance(item, Mapping):
+                continue
+            normalized_item = dict(item)
+            changed = False
+            is_primary = item.get("is_primary")
+            if isinstance(is_primary, str) and is_primary.casefold() in {
+                "true",
+                "false",
+            }:
+                normalized_item["is_primary"] = is_primary.casefold() == "true"
+                repair_log.append(
+                    {
+                        "stage": "schema_normalization",
+                        "field": f"scenario_assessments[{index}].is_primary",
+                        "repair": "json_boolean_string_to_boolean",
+                        "original_value": is_primary,
+                        "normalized_value": normalized_item["is_primary"],
+                    }
+                )
+                changed = True
+            rationale = item.get("rationale")
+            if (rationale is None or rationale == "") and isinstance(item.get("evidence_refs"), list) and item["evidence_refs"] and isinstance(item.get("reasoning_refs"), list) and item["reasoning_refs"]:
+                normalized_item["rationale"] = "Model omitted a separate scenario rationale; rely only on the cited E-* facts and R-* reasoning."
+                repair_log.append(
+                    {
+                        "stage": "schema_normalization",
+                        "field": f"scenario_assessments[{index}].rationale",
+                        "repair": "missing_redundant_rationale_to_explicit_placeholder",
+                    }
+                )
+                changed = True
+            if changed:
+                normalized_assessments[index] = normalized_item
+        normalized["scenario_assessments"] = normalized_assessments
 
     evidence = data.get("evidence")
     if isinstance(evidence, list):
@@ -236,7 +353,479 @@ def _normalize_analysis_result_shape(data: dict[str, Any]) -> tuple[dict[str, An
             )
         normalized["evidence"] = normalized_evidence
 
+    normalized = _deduplicate_exact_evidence_items(normalized, repair_log=repair_log)
+    normalized = _drop_empty_reasoning_context_references(
+        normalized,
+        repair_log=repair_log,
+    )
+
+    candidates = data.get("knowledge_candidates")
+    if isinstance(candidates, list):
+        normalized_candidates = list(candidates)
+        for index, item in enumerate(candidates):
+            if not isinstance(item, dict):
+                continue
+            normalized_item = dict(item)
+            changed = False
+            destination = item.get("destination_hint")
+            if isinstance(destination, str) and destination not in _KNOWLEDGE_DESTINATIONS:
+                normalized_destination = _KNOWLEDGE_DESTINATION_ALIASES.get(
+                    destination.casefold(),
+                    "reject_or_verify",
+                )
+                normalized_item["destination_hint"] = normalized_destination
+                repair_log.append(
+                    {
+                        "stage": "candidate_hint_normalization",
+                        "field": f"knowledge_candidates[{index}].destination_hint",
+                        "repair": "unsupported_hint_to_governed_destination",
+                        "original_value": destination,
+                        "normalized_value": normalized_destination,
+                    }
+                )
+                changed = True
+            scope = item.get("scope_hint")
+            if isinstance(scope, str) and scope not in _KNOWLEDGE_SCOPES:
+                normalized_scope = _KNOWLEDGE_SCOPE_ALIASES.get(
+                    scope.casefold(),
+                    "event",
+                )
+                normalized_item["scope_hint"] = normalized_scope
+                repair_log.append(
+                    {
+                        "stage": "candidate_hint_normalization",
+                        "field": f"knowledge_candidates[{index}].scope_hint",
+                        "repair": "unsupported_hint_to_bounded_scope",
+                        "original_value": scope,
+                        "normalized_value": normalized_scope,
+                    }
+                )
+                changed = True
+            if changed:
+                normalized_candidates[index] = normalized_item
+        normalized["knowledge_candidates"] = normalized_candidates
+
+    normalized = _normalize_catalog_references(
+        normalized,
+        evidence_catalog=evidence_catalog,
+        context_catalog=context_catalog,
+        repair_log=repair_log,
+    )
+    normalized = _deduplicate_exact_reference_lists(
+        normalized,
+        repair_log=repair_log,
+    )
+    normalized = _deduplicate_exact_evidence_items(
+        normalized,
+        repair_log=repair_log,
+    )
+    normalized = _materialize_context_reference_basis(
+        normalized,
+        context_catalog=context_catalog,
+        repair_log=repair_log,
+    )
+    normalized = _materialize_referenced_catalog_evidence(
+        normalized,
+        evidence_catalog=evidence_catalog,
+        repair_log=repair_log,
+    )
+
     return (normalized, repair_log) if repair_log else (data, [])
+
+
+def _deduplicate_exact_evidence_items(
+    data: dict[str, Any],
+    *,
+    repair_log: list[dict[str, Any]],
+) -> dict[str, Any]:
+    evidence = data.get("evidence")
+    if not isinstance(evidence, list):
+        return data
+    first_by_ref: dict[str, Mapping[str, Any]] = {}
+    normalized_evidence: list[Any] = []
+    removed_indexes: list[int] = []
+    for index, item in enumerate(evidence):
+        if not isinstance(item, Mapping):
+            normalized_evidence.append(item)
+            continue
+        reference = item.get("evidence_ref")
+        if not isinstance(reference, str):
+            normalized_evidence.append(item)
+            continue
+        first = first_by_ref.get(reference)
+        if first is None:
+            first_by_ref[reference] = item
+            normalized_evidence.append(item)
+            continue
+        if item.get("source") == first.get("source") and type(item.get("value")) is type(first.get("value")) and item.get("value") == first.get("value"):
+            removed_indexes.append(index)
+            continue
+        normalized_evidence.append(item)
+    if not removed_indexes:
+        return data
+    normalized = dict(data)
+    normalized["evidence"] = normalized_evidence
+    repair_log.append(
+        {
+            "stage": "schema_normalization",
+            "field": "evidence",
+            "repair": "remove_exact_duplicate_evidence_refs",
+            "removed_indexes": removed_indexes,
+        }
+    )
+    return normalized
+
+
+def _materialize_context_reference_basis(
+    data: dict[str, Any],
+    *,
+    context_catalog: Sequence[AnalysisContextCatalogItem],
+    repair_log: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Derive redundant basis labels from explicit governed context references."""
+
+    if not context_catalog:
+        return data
+    basis_by_ref = {
+        item.context_ref: {
+            "skill": "skill",
+            "adapter_contract": "adapter_contract",
+            "confirmed_memory": "confirmed_memory",
+            "governed_context": "governed_context",
+            "tool_result": "tool_result",
+        }[item.kind.value]
+        for item in context_catalog
+    }
+    reasoning = data.get("reasoning")
+    if not isinstance(reasoning, list):
+        return data
+    normalized_reasoning = list(reasoning)
+    changed = False
+    for index, item in enumerate(reasoning):
+        if not isinstance(item, Mapping):
+            continue
+        references = item.get("context_refs")
+        basis = item.get("basis")
+        if not isinstance(references, list) or not isinstance(basis, list):
+            continue
+        required = [basis_by_ref[reference] for reference in references if isinstance(reference, str) and reference in basis_by_ref]
+        additions = [value for value in dict.fromkeys(required) if value not in basis]
+        if not additions:
+            continue
+        normalized_item = dict(item)
+        normalized_item["basis"] = [*basis, *additions]
+        normalized_reasoning[index] = normalized_item
+        repair_log.append(
+            {
+                "stage": "catalog_reference_normalization",
+                "field": f"reasoning[{index}].basis",
+                "repair": "derive_basis_from_explicit_context_refs",
+                "normalized_value": additions,
+            }
+        )
+        changed = True
+    if not changed:
+        return data
+    normalized = dict(data)
+    normalized["reasoning"] = normalized_reasoning
+    return normalized
+
+
+def _deduplicate_exact_reference_lists(
+    data: dict[str, Any],
+    *,
+    repair_log: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Remove repeated identical IDs without changing reference meaning."""
+
+    normalized = dict(data)
+    changed = False
+    for collection_name, field_names in (
+        ("reasoning", ("evidence_refs", "context_refs")),
+        ("scenario_assessments", ("evidence_refs", "reasoning_refs")),
+        ("knowledge_candidates", ("evidence_refs", "reasoning_refs")),
+    ):
+        collection = normalized.get(collection_name)
+        if not isinstance(collection, list):
+            continue
+        normalized_collection = list(collection)
+        for index, item in enumerate(collection):
+            if not isinstance(item, Mapping):
+                continue
+            normalized_item = dict(item)
+            item_changed = False
+            for field_name in field_names:
+                references = normalized_item.get(field_name)
+                if not isinstance(references, list):
+                    continue
+                seen: set[str] = set()
+                deduplicated: list[Any] = []
+                for reference in references:
+                    if isinstance(reference, str) and reference in seen:
+                        continue
+                    deduplicated.append(reference)
+                    if isinstance(reference, str):
+                        seen.add(reference)
+                if len(deduplicated) == len(references):
+                    continue
+                normalized_item[field_name] = deduplicated
+                repair_log.append(
+                    {
+                        "stage": "catalog_reference_normalization",
+                        "field": f"{collection_name}[{index}].{field_name}",
+                        "repair": "remove_exact_duplicate_references",
+                        "removed_count": len(references) - len(deduplicated),
+                    }
+                )
+                item_changed = True
+            if item_changed:
+                normalized_collection[index] = normalized_item
+                changed = True
+        normalized[collection_name] = normalized_collection
+    return normalized if changed else data
+
+
+def _drop_empty_reasoning_context_references(
+    data: dict[str, Any],
+    *,
+    repair_log: list[dict[str, Any]],
+) -> dict[str, Any]:
+    reasoning = data.get("reasoning")
+    if not isinstance(reasoning, list):
+        return data
+    normalized_reasoning = list(reasoning)
+    changed = False
+    for index, item in enumerate(reasoning):
+        if not isinstance(item, Mapping):
+            continue
+        references = item.get("context_refs")
+        if not isinstance(references, list):
+            continue
+        retained = [reference for reference in references if not (reference is None or (isinstance(reference, str) and reference.strip().casefold() in _EMPTY_CONTEXT_REFERENCE_SENTINELS))]
+        if len(retained) == len(references):
+            continue
+        normalized_item = dict(item)
+        normalized_item["context_refs"] = retained
+        normalized_reasoning[index] = normalized_item
+        repair_log.append(
+            {
+                "stage": "schema_normalization",
+                "field": f"reasoning[{index}].context_refs",
+                "repair": "remove_empty_context_reference_sentinels",
+                "removed_count": len(references) - len(retained),
+            }
+        )
+        changed = True
+    if not changed:
+        return data
+    normalized = dict(data)
+    normalized["reasoning"] = normalized_reasoning
+    return normalized
+
+
+def _normalize_catalog_references(
+    data: dict[str, Any],
+    *,
+    evidence_catalog: Sequence[AnalysisEvidenceCatalogItem],
+    context_catalog: Sequence[AnalysisContextCatalogItem],
+    repair_log: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not evidence_catalog and not context_catalog:
+        return data
+
+    normalized = dict(data)
+    evidence_by_ref = {item.evidence_ref: item for item in evidence_catalog}
+    evidence_ref_rewrites: dict[str, str] = {}
+    raw_evidence = data.get("evidence")
+    if isinstance(raw_evidence, list):
+        normalized_evidence = list(raw_evidence)
+        for index, item in enumerate(raw_evidence):
+            if not isinstance(item, Mapping):
+                continue
+            original_ref = item.get("evidence_ref")
+            if isinstance(original_ref, str) and original_ref in evidence_by_ref:
+                bound_item = evidence_by_ref[original_ref]
+                if item.get("source") == bound_item.source_path and type(item.get("value")) is type(bound_item.value) and item.get("value") == bound_item.value:
+                    continue
+            corrected_ref = _resolve_evidence_item_reference(
+                item,
+                evidence_catalog=evidence_catalog,
+            )
+            if corrected_ref is None or corrected_ref == original_ref:
+                continue
+            normalized_item = dict(item)
+            normalized_item["evidence_ref"] = corrected_ref
+            normalized_evidence[index] = normalized_item
+            if isinstance(original_ref, str):
+                evidence_ref_rewrites.setdefault(original_ref, corrected_ref)
+            repair_log.append(
+                {
+                    "stage": "catalog_reference_normalization",
+                    "field": f"evidence[{index}].evidence_ref",
+                    "repair": "exact_catalog_fact_to_reference",
+                    "original_value": original_ref,
+                    "normalized_value": corrected_ref,
+                }
+            )
+        normalized["evidence"] = normalized_evidence
+
+    evidence_refs = set(evidence_by_ref)
+    context_refs = {item.context_ref for item in context_catalog}
+    for collection_name, fields in (
+        ("reasoning", ("evidence_refs", "context_refs")),
+        ("scenario_assessments", ("evidence_refs", "reasoning_refs")),
+        ("knowledge_candidates", ("evidence_refs", "reasoning_refs")),
+    ):
+        values = normalized.get(collection_name)
+        if not isinstance(values, list):
+            continue
+        normalized_values = list(values)
+        for index, item in enumerate(values):
+            if not isinstance(item, Mapping):
+                continue
+            normalized_item = dict(item)
+            changed = False
+            for field_name in fields:
+                references = item.get(field_name)
+                if not isinstance(references, list):
+                    continue
+                if field_name == "evidence_refs":
+                    allowed = evidence_refs
+                    rewrites = evidence_ref_rewrites
+                elif field_name == "context_refs":
+                    allowed = context_refs
+                    rewrites = {}
+                else:
+                    continue
+                repaired_refs: list[Any] = []
+                field_changed = False
+                for reference in references:
+                    repaired = _resolve_reference(
+                        reference,
+                        allowed=allowed,
+                        explicit_rewrites=rewrites,
+                    )
+                    repaired_refs.append(repaired)
+                    field_changed = field_changed or repaired != reference
+                if field_changed:
+                    normalized_item[field_name] = repaired_refs
+                    repair_log.append(
+                        {
+                            "stage": "catalog_reference_normalization",
+                            "field": f"{collection_name}[{index}].{field_name}",
+                            "repair": "unique_catalog_reference_expansion",
+                            "original_value": references,
+                            "normalized_value": repaired_refs,
+                        }
+                    )
+                    changed = True
+            if changed:
+                normalized_values[index] = normalized_item
+        normalized[collection_name] = normalized_values
+    return normalized
+
+
+def _resolve_evidence_item_reference(
+    item: Mapping[str, Any],
+    *,
+    evidence_catalog: Sequence[AnalysisEvidenceCatalogItem],
+) -> str | None:
+    source = item.get("source")
+    value = item.get("value")
+    exact_matches = [catalog_item.evidence_ref for catalog_item in evidence_catalog if source == catalog_item.source_path and type(value) is type(catalog_item.value) and value == catalog_item.value]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    reference = item.get("evidence_ref")
+    resolved = _resolve_reference(
+        reference,
+        allowed={catalog_item.evidence_ref for catalog_item in evidence_catalog},
+        explicit_rewrites={},
+    )
+    return resolved if isinstance(resolved, str) and resolved in {catalog_item.evidence_ref for catalog_item in evidence_catalog} else None
+
+
+def _materialize_referenced_catalog_evidence(
+    data: dict[str, Any],
+    *,
+    evidence_catalog: Sequence[AnalysisEvidenceCatalogItem],
+    repair_log: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Dereference valid E-* IDs that the model cited but did not copy to evidence[]."""
+
+    if not evidence_catalog:
+        return data
+    catalog_by_ref = {item.evidence_ref: item for item in evidence_catalog}
+    raw_evidence = data.get("evidence")
+    if not isinstance(raw_evidence, list):
+        return data
+    existing_refs = {item.get("evidence_ref") for item in raw_evidence if isinstance(item, Mapping) and isinstance(item.get("evidence_ref"), str)}
+    referenced_refs: list[str] = []
+    for collection_name in (
+        "reasoning",
+        "scenario_assessments",
+        "knowledge_candidates",
+    ):
+        collection = data.get(collection_name)
+        if not isinstance(collection, list):
+            continue
+        for item in collection:
+            if not isinstance(item, Mapping):
+                continue
+            references = item.get("evidence_refs")
+            if not isinstance(references, list):
+                continue
+            referenced_refs.extend(reference for reference in references if isinstance(reference, str))
+
+    materialized: list[str] = []
+    normalized_evidence = list(raw_evidence)
+    for reference in dict.fromkeys(referenced_refs):
+        if reference in existing_refs:
+            continue
+        catalog_item = catalog_by_ref.get(reference)
+        if catalog_item is None:
+            continue
+        normalized_evidence.append(
+            {
+                "evidence_ref": catalog_item.evidence_ref,
+                "source": catalog_item.source_path,
+                "description": "Referenced current-alert catalog fact",
+                "value": catalog_item.value,
+            }
+        )
+        existing_refs.add(reference)
+        materialized.append(reference)
+    if not materialized:
+        return data
+    normalized = dict(data)
+    normalized["evidence"] = normalized_evidence
+    repair_log.append(
+        {
+            "stage": "catalog_reference_normalization",
+            "field": "evidence",
+            "repair": "materialize_referenced_catalog_facts",
+            "normalized_value": materialized,
+        }
+    )
+    return normalized
+
+
+def _resolve_reference(
+    reference: Any,
+    *,
+    allowed: set[str],
+    explicit_rewrites: Mapping[str, str],
+) -> Any:
+    if not isinstance(reference, str):
+        return reference
+    if reference in explicit_rewrites:
+        return explicit_rewrites[reference]
+    normalized = reference.upper()
+    if normalized in allowed:
+        return normalized
+    if not re.fullmatch(r"(?:E|S|A|M|C|T)-[A-F0-9]{8,11}", normalized):
+        return reference
+    matches = [candidate for candidate in allowed if candidate.startswith(normalized)]
+    return matches[0] if len(matches) == 1 else reference
 
 
 def _is_evidence_scalar(value: Any) -> bool:
@@ -273,13 +862,15 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
         "confidence",
         "summary",
         "evidence",
+        "reasoning",
         "scenario_assessments",
         "evidence_gaps",
         "manual_checks",
         "reason",
         "recommended_action",
+        "knowledge_candidates",
     }
-    allowed_fields = {*required_fields, "knowledge_candidates"}
+    allowed_fields = set(required_fields)
     missing_fields = sorted(required_fields - data.keys())
     if missing_fields:
         raise LLMOutputParseError(
@@ -294,9 +885,9 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
             stage="schema_validation",
             repair_applied=repair_applied,
         )
-    if data.get("schema_version") != "soc.analysis_result.v2":
+    if data.get("schema_version") != "soc.analysis_result.v3":
         raise LLMOutputParseError(
-            "LLM output schema_version must be 'soc.analysis_result.v2'",
+            "LLM output schema_version must be 'soc.analysis_result.v3'",
             stage="schema_validation",
             repair_applied=repair_applied,
         )
@@ -329,7 +920,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
             "origin",
             "confidence",
             "activity_stage",
-            "evidence_indices",
+            "evidence_refs",
+            "reasoning_refs",
             "rationale",
             "competing_explanations",
         }
@@ -350,13 +942,14 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                 stage="schema_validation",
                 repair_applied=repair_applied,
             )
-        evidence_indices = assessment.get("evidence_indices")
-        if not isinstance(evidence_indices, list) or not evidence_indices or any(isinstance(item, bool) or not isinstance(item, int) for item in evidence_indices):
-            raise LLMOutputParseError(
-                f"LLM output scenario_assessments[{index}].evidence_indices must be a non-empty JSON integer array",
-                stage="schema_validation",
-                repair_applied=repair_applied,
-            )
+        for reference_field in ("evidence_refs", "reasoning_refs"):
+            references = assessment.get(reference_field)
+            if not isinstance(references, list) or not references or any(not isinstance(item, str) for item in references):
+                raise LLMOutputParseError(
+                    f"LLM output scenario_assessments[{index}].{reference_field} must be a non-empty JSON string array",
+                    stage="schema_validation",
+                    repair_applied=repair_applied,
+                )
         if not isinstance(assessment.get("is_primary"), bool):
             raise LLMOutputParseError(
                 f"LLM output scenario_assessments[{index}].is_primary must be a JSON boolean",
@@ -378,3 +971,102 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
             stage="schema_validation",
             repair_applied=repair_applied,
         )
+    allowed_evidence_fields = {"evidence_ref", "source", "description", "value"}
+    for index, item in enumerate(evidence):
+        if not isinstance(item, dict):
+            raise LLMOutputParseError(
+                f"LLM output evidence[{index}] must be a JSON object",
+                stage="schema_validation",
+                repair_applied=repair_applied,
+            )
+        unknown = sorted(item.keys() - allowed_evidence_fields)
+        missing = sorted(allowed_evidence_fields - item.keys())
+        if unknown or missing:
+            raise LLMOutputParseError(
+                f"LLM output evidence[{index}] has missing={missing} unsupported={unknown}",
+                stage="schema_validation",
+                repair_applied=repair_applied,
+            )
+
+    reasoning = data.get("reasoning")
+    if not isinstance(reasoning, list) or not reasoning:
+        raise LLMOutputParseError(
+            "LLM output reasoning must be a non-empty JSON array",
+            stage="schema_validation",
+            repair_applied=repair_applied,
+        )
+    allowed_reasoning_fields = {
+        "schema_version",
+        "reasoning_id",
+        "statement",
+        "basis",
+        "evidence_refs",
+        "context_refs",
+        "confidence",
+    }
+    for index, item in enumerate(reasoning):
+        if not isinstance(item, dict):
+            raise LLMOutputParseError(
+                f"LLM output reasoning[{index}] must be a JSON object",
+                stage="schema_validation",
+                repair_applied=repair_applied,
+            )
+        unknown = sorted(item.keys() - allowed_reasoning_fields)
+        missing = sorted(allowed_reasoning_fields - item.keys())
+        if unknown or missing:
+            raise LLMOutputParseError(
+                f"LLM output reasoning[{index}] has missing={missing} unsupported={unknown}",
+                stage="schema_validation",
+                repair_applied=repair_applied,
+            )
+        for reference_field in ("basis", "evidence_refs", "context_refs"):
+            references = item.get(reference_field)
+            if not isinstance(references, list) or any(not isinstance(reference, str) for reference in references):
+                raise LLMOutputParseError(
+                    f"LLM output reasoning[{index}].{reference_field} must be a JSON string array",
+                    stage="schema_validation",
+                    repair_applied=repair_applied,
+                )
+        reasoning_confidence = item.get("confidence")
+        if isinstance(reasoning_confidence, bool) or not isinstance(
+            reasoning_confidence,
+            (int, float),
+        ):
+            raise LLMOutputParseError(
+                f"LLM output reasoning[{index}].confidence must be a JSON number",
+                stage="schema_validation",
+                repair_applied=repair_applied,
+            )
+
+    candidates = data.get("knowledge_candidates")
+    if not isinstance(candidates, list):
+        raise LLMOutputParseError(
+            "LLM output knowledge_candidates must be a JSON array",
+            stage="schema_validation",
+            repair_applied=repair_applied,
+        )
+    allowed_candidate_fields = {
+        "schema_version",
+        "candidate_id",
+        "statement",
+        "destination_hint",
+        "scope_hint",
+        "evidence_refs",
+        "reasoning_refs",
+        "rationale",
+    }
+    for index, item in enumerate(candidates):
+        if not isinstance(item, dict):
+            raise LLMOutputParseError(
+                f"LLM output knowledge_candidates[{index}] must be a JSON object",
+                stage="schema_validation",
+                repair_applied=repair_applied,
+            )
+        unknown = sorted(item.keys() - allowed_candidate_fields)
+        missing = sorted(allowed_candidate_fields - item.keys())
+        if unknown or missing:
+            raise LLMOutputParseError(
+                f"LLM output knowledge_candidates[{index}] has missing={missing} unsupported={unknown}",
+                stage="schema_validation",
+                repair_applied=repair_applied,
+            )

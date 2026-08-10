@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
@@ -45,6 +46,41 @@ class TriageScenarioOrigin(StrEnum):
     HYBRID = "hybrid"
 
 
+class AnalysisReasoningBasis(StrEnum):
+    """Explicit source class used by one model reasoning statement."""
+
+    CURRENT_EVIDENCE = "current_evidence"
+    GENERAL_SECURITY_KNOWLEDGE = "general_security_knowledge"
+    SKILL = "skill"
+    ADAPTER_CONTRACT = "adapter_contract"
+    CONFIRMED_MEMORY = "confirmed_memory"
+    GOVERNED_CONTEXT = "governed_context"
+    TOOL_RESULT = "tool_result"
+
+
+class AnalysisContextReferenceKind(StrEnum):
+    """Governed non-alert context made visible to an analysis node."""
+
+    SKILL = "skill"
+    ADAPTER_CONTRACT = "adapter_contract"
+    CONFIRMED_MEMORY = "confirmed_memory"
+    GOVERNED_CONTEXT = "governed_context"
+    TOOL_RESULT = "tool_result"
+
+
+class AnalysisKnowledgeDestination(StrEnum):
+    """Model-suggested destination for candidate knowledge under review."""
+
+    GENERAL_SKILL = "general_skill"
+    TENANT_MEMORY = "tenant_memory"
+    GOVERNED_CONTEXT = "governed_context"
+    PROVIDER_REQUIREMENT = "provider_requirement"
+    ADAPTER_MAPPING = "adapter_mapping"
+    TENANT_POLICY = "tenant_policy"
+    EVALUATION_FIXTURE = "evaluation_fixture"
+    REJECT_OR_VERIFY = "reject_or_verify"
+
+
 class DecisionConfidenceSource(StrEnum):
     """Origin of the confidence carried by an operational decision."""
 
@@ -78,6 +114,7 @@ class DecisionReviewReason(StrEnum):
     TRUNCATED_ANALYSIS_EVIDENCE = "truncated_analysis_evidence"
     FACT_CONFLICT = "fact_conflict"
     UNGROUNDED_ANALYSIS_EVIDENCE = "ungrounded_analysis_evidence"
+    UNGROUNDED_ANALYSIS_REASONING = "ungrounded_analysis_reasoning"
     UNPROVEN_OUTCOME_CLAIM = "unproven_outcome_claim"
     ANALYSIS_FAILED = "analysis_failed"
 
@@ -112,6 +149,8 @@ class AnalysisEvidenceGroundingStatus(StrEnum):
     VALUE_NOT_FOUND = "value_not_found"
     MISSING_VALUE = "missing_value"
     DESCRIPTION_CONTEXT_LEAKAGE = "description_context_leakage"
+    REFERENCE_NOT_FOUND = "reference_not_found"
+    UNSUPPORTED_REFERENCE = "unsupported_reference"
 
 
 class RuntimeFailureKind(StrEnum):
@@ -2126,6 +2165,10 @@ class AlertEntitySet(BaseModel):
 
 
 class EvidenceItem(BaseModel):
+    evidence_ref: str | None = Field(
+        default=None,
+        pattern=r"^E-[A-F0-9]{12}$",
+    )
     source: str = Field(min_length=1, max_length=256)
     description: str = Field(min_length=1, max_length=2000)
     value: str | int | float | bool | None = None
@@ -2138,27 +2181,144 @@ class EvidenceItem(BaseModel):
         return value
 
 
+class AnalysisEvidenceCatalogItem(BaseModel):
+    """One exact current-alert scalar visible to the bounded analyzer."""
+
+    schema_version: Literal["soc.analysis_evidence_catalog_item.v1"] = "soc.analysis_evidence_catalog_item.v1"
+    evidence_ref: str = Field(pattern=r"^E-[A-F0-9]{12}$")
+    source_path: str = Field(min_length=1, max_length=512)
+    value: str | int | float | bool | None
+    value_type: Literal["string", "integer", "number", "boolean", "null"]
+    trust_level: EvidenceTrustLevel = EvidenceTrustLevel.UNKNOWN
+    source_kind: Literal["current_alert"] = "current_alert"
+
+
+class AnalysisContextCatalogItem(BaseModel):
+    """One governed non-alert reference available to model reasoning."""
+
+    schema_version: Literal["soc.analysis_context_catalog_item.v1"] = "soc.analysis_context_catalog_item.v1"
+    context_ref: str = Field(pattern=r"^(?:S|A|M|C|T)-[A-F0-9]{12}$")
+    kind: AnalysisContextReferenceKind
+    label: str = Field(min_length=1, max_length=256)
+    source_id: str = Field(min_length=1, max_length=512)
+    summary: str = Field(min_length=1, max_length=4000)
+    content_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+    @model_validator(mode="after")
+    def validate_reference_namespace(self) -> AnalysisContextCatalogItem:
+        expected_prefix = {
+            AnalysisContextReferenceKind.SKILL: "S-",
+            AnalysisContextReferenceKind.ADAPTER_CONTRACT: "A-",
+            AnalysisContextReferenceKind.CONFIRMED_MEMORY: "M-",
+            AnalysisContextReferenceKind.GOVERNED_CONTEXT: "C-",
+            AnalysisContextReferenceKind.TOOL_RESULT: "T-",
+        }[self.kind]
+        if not self.context_ref.startswith(expected_prefix):
+            raise ValueError(f"context_ref for {self.kind.value} must start with {expected_prefix}")
+        return self
+
+
+class AnalysisReasoningItem(BaseModel):
+    """One explicit inference whose support class is auditable."""
+
+    schema_version: Literal["soc.analysis_reasoning_item.v1"] = "soc.analysis_reasoning_item.v1"
+    reasoning_id: str = Field(pattern=r"^R-[0-9]{2}$")
+    statement: str = Field(min_length=1, max_length=3000)
+    basis: list[AnalysisReasoningBasis] = Field(min_length=1, max_length=7)
+    evidence_refs: list[str] = Field(min_length=1, max_length=20)
+    context_refs: list[str] = Field(default_factory=list, max_length=20)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_support_namespaces(self) -> AnalysisReasoningItem:
+        if len(set(self.basis)) != len(self.basis):
+            raise ValueError("reasoning basis values must be unique")
+        if len(set(self.evidence_refs)) != len(self.evidence_refs):
+            raise ValueError("reasoning evidence_refs must be unique")
+        if len(set(self.context_refs)) != len(self.context_refs):
+            raise ValueError("reasoning context_refs must be unique")
+        if any(not re.fullmatch(r"E-[A-F0-9]{12}", ref) for ref in self.evidence_refs):
+            raise ValueError("reasoning evidence_refs must use E-* references")
+        if any(not re.fullmatch(r"(?:S|A|M|C|T)-[A-F0-9]{12}", ref) for ref in self.context_refs):
+            raise ValueError("reasoning context_refs must use S/A/M/C/T references")
+
+        required_prefixes = {
+            AnalysisReasoningBasis.SKILL: "S-",
+            AnalysisReasoningBasis.ADAPTER_CONTRACT: "A-",
+            AnalysisReasoningBasis.CONFIRMED_MEMORY: "M-",
+            AnalysisReasoningBasis.GOVERNED_CONTEXT: "C-",
+            AnalysisReasoningBasis.TOOL_RESULT: "T-",
+        }
+        for basis, prefix in required_prefixes.items():
+            if basis in self.basis and not any(ref.startswith(prefix) for ref in self.context_refs):
+                raise ValueError(f"reasoning basis {basis.value} requires a {prefix} context reference")
+        return self
+
+
+class AnalysisKnowledgeCandidate(BaseModel):
+    """Model-proposed knowledge that remains inert until human review."""
+
+    schema_version: Literal["soc.analysis_knowledge_candidate.v1"] = "soc.analysis_knowledge_candidate.v1"
+    candidate_id: str = Field(pattern=r"^K-[0-9]{2}$")
+    statement: str = Field(min_length=1, max_length=2000)
+    destination_hint: AnalysisKnowledgeDestination
+    scope_hint: Literal[
+        "global",
+        "tenant",
+        "provider",
+        "source",
+        "detection",
+        "scenario",
+        "event",
+    ]
+    evidence_refs: list[str] = Field(min_length=1, max_length=20)
+    reasoning_refs: list[str] = Field(min_length=1, max_length=20)
+    rationale: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_candidate_references(self) -> AnalysisKnowledgeCandidate:
+        if len(set(self.evidence_refs)) != len(self.evidence_refs):
+            raise ValueError("knowledge candidate evidence_refs must be unique")
+        if len(set(self.reasoning_refs)) != len(self.reasoning_refs):
+            raise ValueError("knowledge candidate reasoning_refs must be unique")
+        if any(not re.fullmatch(r"E-[A-F0-9]{12}", ref) for ref in self.evidence_refs):
+            raise ValueError("knowledge candidate evidence_refs must use E-* references")
+        if any(not re.fullmatch(r"R-[0-9]{2}", ref) for ref in self.reasoning_refs):
+            raise ValueError("knowledge candidate reasoning_refs must use R-* references")
+        return self
+
+
 class TriageScenarioAssessment(BaseModel):
     """One open-vocabulary scenario assessment grounded in analyzer evidence."""
 
-    schema_version: Literal["soc.triage_scenario_assessment.v1"] = "soc.triage_scenario_assessment.v1"
+    schema_version: Literal["soc.triage_scenario_assessment.v2"] = "soc.triage_scenario_assessment.v2"
     scenario_name: str = Field(min_length=1, max_length=256)
     scenario_key: str | None = Field(default=None, min_length=1, max_length=256)
     is_primary: bool = False
     origin: TriageScenarioOrigin
     confidence: float = Field(ge=0.0, le=1.0)
     activity_stage: TriageActivityStage
-    evidence_indices: list[int] = Field(min_length=1, max_length=20)
+    evidence_refs: list[str] = Field(min_length=1, max_length=20)
+    reasoning_refs: list[str] = Field(min_length=1, max_length=20)
     rationale: str = Field(min_length=1, max_length=2000)
     competing_explanations: list[str] = Field(default_factory=list, max_length=5)
 
-    @field_validator("evidence_indices")
+    @field_validator("evidence_refs")
     @classmethod
-    def validate_evidence_indices(cls, values: list[int]) -> list[int]:
-        if any(value < 0 for value in values):
-            raise ValueError("scenario evidence indices must be non-negative")
+    def validate_evidence_refs(cls, values: list[str]) -> list[str]:
+        if any(not re.fullmatch(r"E-[A-F0-9]{12}", value) for value in values):
+            raise ValueError("scenario evidence_refs must use E-* references")
         if len(set(values)) != len(values):
-            raise ValueError("scenario evidence indices must be unique")
+            raise ValueError("scenario evidence_refs must be unique")
+        return values
+
+    @field_validator("reasoning_refs")
+    @classmethod
+    def validate_reasoning_refs(cls, values: list[str]) -> list[str]:
+        if any(not re.fullmatch(r"R-[0-9]{2}", value) for value in values):
+            raise ValueError("scenario reasoning_refs must use R-* references")
+        if len(set(values)) != len(values):
+            raise ValueError("scenario reasoning_refs must be unique")
         return values
 
     @field_validator("competing_explanations")
@@ -2175,6 +2335,7 @@ class AnalysisEvidenceGroundingItem(BaseModel):
     """Deterministic grounding result for one analyzer evidence item."""
 
     evidence_index: int = Field(ge=0)
+    evidence_ref: str = Field(pattern=r"^E-[A-F0-9]{12}$")
     source: str = Field(min_length=1, max_length=256)
     status: AnalysisEvidenceGroundingStatus
     matched_context_paths: list[str] = Field(default_factory=list, max_length=10)
@@ -2185,15 +2346,34 @@ class AnalysisEvidenceGroundingItem(BaseModel):
     reason: str = Field(min_length=1, max_length=1000)
 
 
+class AnalysisReasoningGroundingItem(BaseModel):
+    """Reference-integrity result for one explicit model inference."""
+
+    reasoning_index: int = Field(ge=0)
+    reasoning_id: str = Field(pattern=r"^R-[0-9]{2}$")
+    status: AnalysisEvidenceGroundingStatus
+    evidence_refs: list[str] = Field(default_factory=list, max_length=20)
+    context_refs: list[str] = Field(default_factory=list, max_length=20)
+    missing_refs: list[str] = Field(default_factory=list, max_length=20)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 class AnalysisEvidenceGroundingReport(BaseModel):
     """Audit report proving which analyzer claims came from bounded context."""
 
-    schema_version: str = "soc.analysis_evidence_grounding.v2"
+    schema_version: str = "soc.analysis_evidence_grounding.v3"
     total_count: int = Field(default=0, ge=0)
     grounded_count: int = Field(default=0, ge=0)
     ungrounded_count: int = Field(default=0, ge=0)
     description_leakage_count: int = Field(default=0, ge=0)
-    items: list[AnalysisEvidenceGroundingItem] = Field(default_factory=list, max_length=20)
+    items: list[AnalysisEvidenceGroundingItem] = Field(default_factory=list, max_length=40)
+    reasoning_total_count: int = Field(default=0, ge=0)
+    reasoning_grounded_count: int = Field(default=0, ge=0)
+    reasoning_ungrounded_count: int = Field(default=0, ge=0)
+    reasoning_items: list[AnalysisReasoningGroundingItem] = Field(
+        default_factory=list,
+        max_length=20,
+    )
     warnings: list[str] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode="after")
@@ -2208,6 +2388,13 @@ class AnalysisEvidenceGroundingReport(BaseModel):
         actual_description_leakage = sum(item.status is AnalysisEvidenceGroundingStatus.DESCRIPTION_CONTEXT_LEAKAGE for item in self.items)
         if actual_description_leakage != self.description_leakage_count:
             raise ValueError("grounding description_leakage_count does not match item statuses")
+        if self.reasoning_total_count != len(self.reasoning_items):
+            raise ValueError("reasoning grounding total_count must equal item count")
+        if self.reasoning_grounded_count + self.reasoning_ungrounded_count != self.reasoning_total_count:
+            raise ValueError("reasoning grounding counts must sum to total_count")
+        actual_reasoning_grounded = sum(item.status is AnalysisEvidenceGroundingStatus.GROUNDED for item in self.reasoning_items)
+        if actual_reasoning_grounded != self.reasoning_grounded_count:
+            raise ValueError("reasoning grounding grounded_count does not match item statuses")
         return self
 
 
@@ -2555,7 +2742,7 @@ class ExtractedEntities(BaseModel):
 class LLMAnalysisRequest(BaseModel):
     """Bounded input contract for deterministic or configured LLM nodes."""
 
-    schema_version: str = "soc.llm_analysis_request.v2"
+    schema_version: str = "soc.llm_analysis_request.v3"
     alert_id: str
     tenant_id: str | None = None
     source: AlertSourceRef = Field(default_factory=AlertSourceRef)
@@ -2574,6 +2761,14 @@ class LLMAnalysisRequest(BaseModel):
     conflict_types: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     skill_context: SocSkillContext = Field(default_factory=SocSkillContext)
+    evidence_catalog: list[AnalysisEvidenceCatalogItem] = Field(
+        default_factory=list,
+        max_length=1200,
+    )
+    context_catalog: list[AnalysisContextCatalogItem] = Field(
+        default_factory=list,
+        max_length=100,
+    )
 
 
 class NormalizationReport(BaseModel):
@@ -3043,11 +3238,12 @@ class ConfidenceCalibrationReport(BaseModel):
 
 
 class AnalysisResult(BaseModel):
-    schema_version: Literal["soc.analysis_result.v2"] = "soc.analysis_result.v2"
+    schema_version: Literal["soc.analysis_result.v3"] = "soc.analysis_result.v3"
     verdict: Verdict
     confidence: float = Field(ge=0.0, le=1.0)
     summary: str = Field(min_length=1, max_length=4000)
-    evidence: list[EvidenceItem] = Field(default_factory=list, max_length=20)
+    evidence: list[EvidenceItem] = Field(default_factory=list, max_length=40)
+    reasoning: list[AnalysisReasoningItem] = Field(min_length=1, max_length=20)
     scenario_assessments: list[TriageScenarioAssessment] = Field(
         default_factory=list,
         max_length=10,
@@ -3056,22 +3252,43 @@ class AnalysisResult(BaseModel):
     manual_checks: list[str] = Field(default_factory=list, max_length=20)
     reason: str = Field(min_length=1, max_length=8000)
     recommended_action: str = Field(min_length=1, max_length=1000)
-    knowledge_candidates: list[str] = Field(default_factory=list, max_length=20)
+    knowledge_candidates: list[AnalysisKnowledgeCandidate] = Field(
+        default_factory=list,
+        max_length=20,
+    )
 
     @field_validator("evidence")
     @classmethod
     def require_evidence(cls, evidence: list[EvidenceItem]) -> list[EvidenceItem]:
         if not evidence:
             raise ValueError("analysis result must include at least one evidence item")
+        refs = [item.evidence_ref for item in evidence]
+        if any(ref is None for ref in refs):
+            raise ValueError("analysis evidence must include an E-* evidence_ref")
+        if len(set(refs)) != len(refs):
+            raise ValueError("analysis evidence_refs must be unique")
         return evidence
+
+    @field_validator("reasoning")
+    @classmethod
+    def require_unique_reasoning_ids(
+        cls,
+        values: list[AnalysisReasoningItem],
+    ) -> list[AnalysisReasoningItem]:
+        ids = [item.reasoning_id for item in values]
+        if len(set(ids)) != len(ids):
+            raise ValueError("analysis reasoning IDs must be unique")
+        return values
 
     @field_validator("knowledge_candidates")
     @classmethod
-    def bound_knowledge_candidates(cls, values: list[str]) -> list[str]:
-        if any(not value.strip() for value in values):
-            raise ValueError("knowledge candidates must be non-empty strings")
-        if any(len(value) > 2000 for value in values):
-            raise ValueError("knowledge candidate exceeds 2000 characters")
+    def require_unique_knowledge_candidate_ids(
+        cls,
+        values: list[AnalysisKnowledgeCandidate],
+    ) -> list[AnalysisKnowledgeCandidate]:
+        ids = [item.candidate_id for item in values]
+        if len(set(ids)) != len(ids):
+            raise ValueError("analysis knowledge candidate IDs must be unique")
         return values
 
     @field_validator("evidence_gaps", "manual_checks")
@@ -3085,21 +3302,32 @@ class AnalysisResult(BaseModel):
 
     @model_validator(mode="after")
     def validate_scenario_assessments(self) -> AnalysisResult:
-        if not self.scenario_assessments:
-            return self
+        if self.scenario_assessments:
+            primary_count = sum(item.is_primary for item in self.scenario_assessments)
+            if primary_count != 1:
+                raise ValueError("analysis result with scenario assessments requires exactly one primary scenario")
 
-        primary_count = sum(item.is_primary for item in self.scenario_assessments)
-        if primary_count != 1:
-            raise ValueError("analysis result with scenario assessments requires exactly one primary scenario")
+            normalized_names = [item.scenario_name.strip().casefold() for item in self.scenario_assessments]
+            if len(set(normalized_names)) != len(normalized_names):
+                raise ValueError("analysis scenario names must be unique")
 
-        normalized_names = [item.scenario_name.strip().casefold() for item in self.scenario_assessments]
-        if len(set(normalized_names)) != len(normalized_names):
-            raise ValueError("analysis scenario names must be unique")
+        evidence_refs = {item.evidence_ref for item in self.evidence if item.evidence_ref is not None}
+        reasoning_ids = {item.reasoning_id for item in self.reasoning}
+        invalid_reasoning_evidence_refs = sorted({ref for item in self.reasoning for ref in item.evidence_refs if ref not in evidence_refs})
+        if invalid_reasoning_evidence_refs:
+            raise ValueError(f"reasoning evidence_refs must reference analysis evidence; invalid refs: {invalid_reasoning_evidence_refs}")
+        invalid_evidence_refs = sorted({ref for item in self.scenario_assessments for ref in item.evidence_refs if ref not in evidence_refs})
+        if invalid_evidence_refs:
+            raise ValueError(f"scenario evidence_refs must reference analysis evidence; invalid refs: {invalid_evidence_refs}")
+        invalid_reasoning_refs = sorted({ref for item in self.scenario_assessments for ref in item.reasoning_refs if ref not in reasoning_ids})
+        if invalid_reasoning_refs:
+            raise ValueError(f"scenario reasoning_refs must reference analysis reasoning; invalid refs: {invalid_reasoning_refs}")
 
-        evidence_count = len(self.evidence)
-        invalid_indices = sorted({index for item in self.scenario_assessments for index in item.evidence_indices if index >= evidence_count})
-        if invalid_indices:
-            raise ValueError(f"scenario evidence indices must reference analysis evidence; invalid indices: {invalid_indices}")
+        for candidate in self.knowledge_candidates:
+            missing_evidence = sorted(set(candidate.evidence_refs) - evidence_refs)
+            missing_reasoning = sorted(set(candidate.reasoning_refs) - reasoning_ids)
+            if missing_evidence or missing_reasoning:
+                raise ValueError(f"knowledge candidate references must resolve inside AnalysisResult; candidate={candidate.candidate_id}, missing_evidence={missing_evidence}, missing_reasoning={missing_reasoning}")
         return self
 
 

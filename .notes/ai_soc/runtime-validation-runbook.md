@@ -4,6 +4,25 @@
 > Storage: `backend/.deer-flow/soc-runtime-validation/` (gitignored, contains real-alert-derived data).  
 > Latest local index: `backend/.deer-flow/soc-runtime-validation/RUN-INDEX.md`.
 
+日常审阅一条告警的完整链路时，优先使用新的固定 10 告警统一入口，而不是跨历史目录拼接：
+
+```bash
+backend/.venv/bin/python validation/compact_zeus/e2e/run_ten_alert_e2e.py
+backend/.venv/bin/python validation/compact_zeus/e2e/run_ten_alert_e2e.py \
+  --execute --confirm-live --confirm-investigation
+```
+
+统一结果位于 `backend/.deer-flow/soc-validation/e2e-ten-current/`，说明见
+`validation/compact_zeus/e2e/README.md`。该固定 cohort 排除已知输入缺口
+`1965452/1965795`，改用完整的 `2025642/1980502`；旧三个 validation 根目录仍是专项和
+历史证据，不再是一次端到端审阅的必经入口。
+
+2026-08-10 最新同版代码 fresh 实跑：10/10 结构与安全门禁通过，6 `suspicious`、4 `needs_review`，
+全部进入 ReviewQueue 且 `automation_allowed=false`。模型质量仍为 `review_required`：3 个 case 共
+3 条 `E-*` exact typed fact 和 5 条关联 `R-*` 被拒绝；另外生成 20 个 `K-*` 待审知识候选，其中
+17 个 support grounded。先看 `SUMMARY.md`，再看对应 case 的 `04/06/07/08` 和
+`knowledge-review/REVIEW.md`；不得把 structural pass 当作模型准确率或真实 Provider 通过。
+
 ## 1. What Is Actually Linear / 真正固定流水线
 
 ```mermaid
@@ -13,13 +32,14 @@ flowchart LR
     C --> D["🧭 Fact Reconstruct<br/>事实/角色/冲突重建"]
     D --> E["📦 Bounded Input<br/>有界、脱敏模型输入"]
     E --> F["🧰 Skill Context<br/>技能上下文"]
-    F --> G["🧠 Analyze<br/>Stub 或 Live LLM"]
+    F --> RC["🔖 Reference Catalog<br/>E-* + S/A/M/C/T-*"]
+    RC --> G["🧠 Analyze<br/>E-* facts + R-* reasoning"]
     G --> H["✅ Schema Validate<br/>结构与领域校验"]
-    H --> I["🔗 Evidence Grounding<br/>证据落地校验"]
+    H --> I["🔗 Evidence Grounding v3<br/>事实 tuple + 推理引用"]
     I --> J["⚖️ Decide<br/>确定性决策策略"]
 ```
 
-`normalize -> entity_extract -> fact_reconstruct -> build_analysis_input -> skill_context -> analyze -> schema_validate -> evidence_grounding -> decide`
+`normalize -> entity_extract -> fact_reconstruct -> build_analysis_input -> skill_context -> reference_catalog -> analyze -> schema_validate -> evidence_grounding -> decide`
 
 以下编号是审阅轨道，不应被误解为都在上述主流水线中：
 
@@ -130,7 +150,7 @@ Checkpoint D 当前增加：
 |---:|---|---|
 | D5 | `checkpoint-d/step-d5-skill-context` | 选择原因、实际 Skill package、bounded guidance、package/projection hash、token budget；不调用 LLM |
 | D6 | `checkpoint-d/step-d6-skill-route-coverage` | 212 条 typed HTTP/email 路由覆盖、host/asset 误路由、keyword-only 跨来源域误路由、package 投影完整性；离线评测 |
-| D7 | `checkpoint-d/step-d7-analyzer-output` | 真实模型、Prompt/Parser 版本、`AnalysisResult.v2`、开放场景、行为阶段、证据索引、竞争解释、缺口和核查项；不运行 Grounding/Decision |
+| D7 | `checkpoint-d/step-d7-analyzer-output` | 真实模型、Prompt/Parser 版本、`AnalysisResult.v3`、`E-*` 事实、`R-*` 推理、开放场景、行为阶段、竞争解释、缺口和核查项；不运行 Grounding/Decision |
 | D8 | `checkpoint-d/step-d8-evidence-grounding` | production source/value Grounding、description sibling-fact leakage、scenario 引用接受/拒绝状态；不运行 Decision |
 | D9 | `checkpoint-d/step-d9-decision-policy` | production Decision Policy、evidence state、review reasons、automation guard；不运行模型、租户处置或持久化 |
 | D10 | `checkpoint-d/step-d10-cross-source-runtime` | 8 topic / 6 source family 真实模型 representative matrix、完整 9-step Runtime、模型/token provenance、Grounding 质量和 known input gap fail-closed；无人工标签时不评估模型准确率 |

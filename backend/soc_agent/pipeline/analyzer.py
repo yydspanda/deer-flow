@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from soc_agent.contracts import (
     AnalysisNodeOutput,
+    AnalysisReasoningBasis,
+    AnalysisReasoningItem,
     AnalysisResult,
     EvidenceItem,
     LLMAnalysisRequest,
@@ -16,6 +18,7 @@ from soc_agent.contracts import (
     TriageScenarioOrigin,
     Verdict,
 )
+from soc_agent.pipeline.reference_catalog import evidence_item_from_catalog
 
 FALSE_POSITIVE_HINTS = ("approved", "scanner", "securityscan", "nmap", "nessus")
 TRUE_POSITIVE_HINTS = ("malicious", "mimikatz", "cobalt", "ransom", "ioc", "backdoor")
@@ -75,26 +78,42 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
 
     if any(hint in haystack for hint in FALSE_POSITIVE_HINTS):
         evidence = [
-            EvidenceItem(
-                source="detection",
+            evidence_item_from_catalog(
+                request,
                 description="规则或命令包含扫描器线索",
-                value=detection.detection_key,
+                preferred_paths=(
+                    "detection.detection_key",
+                    "detection.rule_code",
+                    "detection.rule_name",
+                ),
             )
         ]
         if entities.processes:
-            evidence.append(
-                EvidenceItem(
-                    source="entities",
-                    description="抽取到的进程实体",
-                    value=", ".join(entities.processes),
-                )
+            process_evidence = _catalog_evidence_for_value(
+                request,
+                entities.processes[0],
+                description="抽取到的进程实体",
             )
+            if process_evidence is not None:
+                evidence.append(process_evidence)
         evidence.extend(context_evidence)
+        evidence = _dedupe_evidence(evidence)
+        reasoning = AnalysisReasoningItem(
+            reasoning_id="R-01",
+            statement="规则或行为文本与扫描器或安全工具特征相符，但仍需授权上下文确认。",
+            basis=[
+                AnalysisReasoningBasis.CURRENT_EVIDENCE,
+                AnalysisReasoningBasis.GENERAL_SECURITY_KNOWLEDGE,
+            ],
+            evidence_refs=_evidence_refs(evidence),
+            confidence=0.72,
+        )
         return AnalysisResult(
             verdict=Verdict.FALSE_POSITIVE,
             confidence=0.82,
             summary="告警命中已知扫描器或批准工具特征，deterministic stub 判定为高概率误报候选。",
             evidence=evidence,
+            reasoning=[reasoning],
             scenario_assessments=[
                 TriageScenarioAssessment(
                     scenario_name="授权扫描或安全工具活动",
@@ -103,7 +122,8 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
                     origin=TriageScenarioOrigin.INFERRED,
                     confidence=0.72,
                     activity_stage=TriageActivityStage.DETECTION_HIT,
-                    evidence_indices=[0],
+                    evidence_refs=[_required_evidence_ref(evidence[0])],
+                    reasoning_refs=[reasoning.reasoning_id],
                     rationale="规则或实体文本命中扫描器、批准工具等启发式线索。",
                     competing_explanations=["未经授权的扫描或攻击工具伪装"],
                 )
@@ -116,26 +136,42 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
 
     if any(hint in haystack for hint in TRUE_POSITIVE_HINTS):
         evidence = [
-            EvidenceItem(
-                source="detection",
+            evidence_item_from_catalog(
+                request,
                 description="规则命中高危攻击线索",
-                value=detection.detection_key,
+                preferred_paths=(
+                    "detection.detection_key",
+                    "detection.rule_code",
+                    "detection.rule_name",
+                ),
             )
         ]
         if process.command_line:
-            evidence.append(
-                EvidenceItem(
-                    source="command_line",
-                    description="命令行或进程包含攻击特征",
-                    value=process.command_line,
-                )
+            command_evidence = _catalog_evidence_for_value(
+                request,
+                process.command_line,
+                description="命令行或进程包含攻击特征",
             )
+            if command_evidence is not None:
+                evidence.append(command_evidence)
         evidence.extend(context_evidence)
+        evidence = _dedupe_evidence(evidence)
+        reasoning = AnalysisReasoningItem(
+            reasoning_id="R-01",
+            statement="规则、IOC、进程或命令文本符合高风险安全行为特征。",
+            basis=[
+                AnalysisReasoningBasis.CURRENT_EVIDENCE,
+                AnalysisReasoningBasis.GENERAL_SECURITY_KNOWLEDGE,
+            ],
+            evidence_refs=_evidence_refs(evidence),
+            confidence=0.8,
+        )
         return AnalysisResult(
             verdict=Verdict.TRUE_POSITIVE,
             confidence=0.9,
             summary="告警包含恶意 IOC、攻击工具或高危行为线索，deterministic stub 判定为真阳性候选。",
             evidence=evidence,
+            reasoning=[reasoning],
             scenario_assessments=[
                 TriageScenarioAssessment(
                     scenario_name="高风险攻击行为或恶意工具活动",
@@ -144,7 +180,8 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
                     origin=TriageScenarioOrigin.INFERRED,
                     confidence=0.8,
                     activity_stage=TriageActivityStage.ATTEMPT_OBSERVED,
-                    evidence_indices=[0],
+                    evidence_refs=[_required_evidence_ref(evidence[0])],
+                    reasoning_refs=[reasoning.reasoning_id],
                     rationale="规则、IOC、进程或命令文本命中高风险启发式线索。",
                     competing_explanations=["安全测试工具、误标 IOC 或合法运维行为"],
                 )
@@ -155,14 +192,28 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
             recommended_action="escalate_to_analyst",
         )
 
+    evidence = [
+        evidence_item_from_catalog(
+            request,
+            description="告警已进入固定分析流程",
+            preferred_paths=("alert_id",),
+        ),
+        *context_evidence,
+    ]
+    evidence = _dedupe_evidence(evidence)
+    reasoning = AnalysisReasoningItem(
+        reasoning_id="R-01",
+        statement="当前有界证据不足以稳定判断告警真伪，需要补充行为、历史或环境上下文。",
+        basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
+        evidence_refs=_evidence_refs(evidence),
+        confidence=0.45,
+    )
     return AnalysisResult(
         verdict=Verdict.UNKNOWN,
         confidence=0.45,
         summary="当前字段不足以稳定判断真伪，deterministic stub 将该告警交给人工复核。",
-        evidence=[
-            EvidenceItem(source="alert_id", description="告警已进入固定分析流程", value=request.alert_id),
-            *context_evidence,
-        ],
+        evidence=evidence,
+        reasoning=[reasoning],
         evidence_gaps=["缺少可稳定识别场景及判断真伪的行为、历史或环境证据。"],
         manual_checks=["补查原始行为上下文、资产归属和同时间窗相关事件后重新研判。"],
         reason=f"缺少历史关联、环境知识或明确 IOC，不能可靠自动判断。{reason_suffix}",
@@ -172,24 +223,61 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
 
 def _context_evidence(request: LLMAnalysisRequest) -> list[EvidenceItem]:
     evidence: list[EvidenceItem] = []
-    if request.conflict_count:
-        evidence.append(
-            EvidenceItem(
-                source="fact_reconstruction",
-                description="事实重建发现字段冲突",
-                value=", ".join(request.conflict_types),
-            )
+    if request.conflict_count and request.conflict_types:
+        conflict = _catalog_evidence_for_value(
+            request,
+            request.conflict_types[0],
+            description="事实重建发现字段冲突",
         )
+        if conflict is not None:
+            evidence.append(conflict)
     fallback_warnings = [warning for warning in request.warnings if "fallback" in warning.lower()]
     if fallback_warnings:
-        evidence.append(
-            EvidenceItem(
-                source="fact_reconstruction",
-                description="事实重建使用低可信 fallback",
-                value="; ".join(fallback_warnings),
-            )
+        fallback = _catalog_evidence_for_value(
+            request,
+            fallback_warnings[0],
+            description="事实重建使用低可信 fallback",
         )
+        if fallback is not None:
+            evidence.append(fallback)
     return evidence
+
+
+def _catalog_evidence_for_value(
+    request: LLMAnalysisRequest,
+    value: str,
+    *,
+    description: str,
+) -> EvidenceItem | None:
+    item = next(
+        (candidate for candidate in request.evidence_catalog if type(candidate.value) is type(value) and candidate.value == value),
+        None,
+    )
+    if item is None:
+        return None
+    return EvidenceItem(
+        evidence_ref=item.evidence_ref,
+        source=item.source_path,
+        description=description,
+        value=item.value,
+    )
+
+
+def _dedupe_evidence(evidence: list[EvidenceItem]) -> list[EvidenceItem]:
+    unique: dict[str, EvidenceItem] = {}
+    for item in evidence:
+        unique.setdefault(_required_evidence_ref(item), item)
+    return list(unique.values())
+
+
+def _evidence_refs(evidence: list[EvidenceItem]) -> list[str]:
+    return [_required_evidence_ref(item) for item in evidence]
+
+
+def _required_evidence_ref(evidence: EvidenceItem) -> str:
+    if evidence.evidence_ref is None:
+        raise ValueError("stub evidence must reference the current-alert catalog")
+    return evidence.evidence_ref
 
 
 def _reason_suffix(request: LLMAnalysisRequest) -> str:

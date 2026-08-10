@@ -17,6 +17,8 @@ from soc_agent.contracts import (
     ActorContext,
     AlertSourceType,
     AlertSummary,
+    AnalysisReasoningBasis,
+    AnalysisReasoningItem,
     AnalysisResult,
     AnalysisRun,
     AnalysisRunStatus,
@@ -434,7 +436,23 @@ def _investigation_context() -> InvestigationContext:
         verdict=Verdict.SUSPICIOUS,
         confidence=0.62,
         summary="Suspicious endpoint activity needs analyst review.",
-        evidence=[EvidenceItem(source="edr", description="Process connected to suspicious IP", value="1.2.3.4")],
+        evidence=[
+            EvidenceItem(
+                evidence_ref="E-000000000001",
+                source="edr",
+                description="Process connected to suspicious IP",
+                value="1.2.3.4",
+            )
+        ],
+        reasoning=[
+            AnalysisReasoningItem(
+                reasoning_id="R-01",
+                statement="EDR evidence is suspicious but incomplete.",
+                basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
+                evidence_refs=["E-000000000001"],
+                confidence=0.62,
+            )
+        ],
         reason="EDR evidence is suspicious but incomplete.",
         recommended_action="Review endpoint process tree before containment.",
     )

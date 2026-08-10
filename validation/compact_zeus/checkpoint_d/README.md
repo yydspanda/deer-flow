@@ -14,7 +14,7 @@
 | D4 | `build_checkpoint_d_bounded_analysis_input_review.py` | 重放 D1-D3 后调用生产 bounded analysis input 与 `EvidenceCoverageReport` | Skill resolution、Prompt、LLM、grounding、决策、持久化 |
 | D5 | `build_checkpoint_d_skill_context_review.py` | 消费确认后的 D4，通过生产入口选择 Skill 并投影包内 bounded Runtime guidance | Prompt、LLM、grounding、决策、持久化 |
 | D6 | `build_checkpoint_d_skill_route_coverage.py` | 212 条语料离线重放 D1-D5，审计 typed HTTP/email、host/asset 与 package 路由覆盖 | Prompt、LLM、决策、持久化；不是 Runtime 节点 |
-| D7 | `build_checkpoint_d_analyzer_output_review.py` | 消费确认后的 D5，渲染生产 Prompt，调用显式配置的真实 LLM，并校验 `AnalysisResult.v2` 和 typed scenario contract | grounding、决策、correlation/memory、MCP/tool、持久化、ReviewQueue/action |
+| D7 | `build_checkpoint_d_analyzer_output_review.py` | 消费确认后的 D5，渲染生产 Prompt，调用显式配置的真实 LLM，并校验 `AnalysisResult.v3`、E/R 引用和 typed scenario contract | grounding、决策、correlation/memory、MCP/tool、持久化、ReviewQueue/action |
 | D8 | `build_checkpoint_d_evidence_grounding_review.py` | 消费 D5/D7，调用 production Grounding 校验 source/value，并拒绝 description sibling facts | LLM、决策、correlation/memory、MCP/tool、持久化、ReviewQueue/action |
 | D9 | `build_checkpoint_d_decision_policy_review.py` | 消费 D5/D7/D8，调用 production Decision Policy 验证 fail-closed | LLM、重新 Grounding、租户处置、持久化、ReviewQueue/action |
 | D10 | `build_checkpoint_d_cross_source_runtime_review.py` | 每 topic 代表样本 + 全部 known input gaps，经显式配置真实 LLM 执行完整 production Runtime | DB、租户处置、模型准确率评测；不是 Runtime 节点 |
@@ -85,25 +85,25 @@ D6 是离线路由覆盖，不是第六个生产 Runtime 节点。它必须检�
 对应专业 Skill、业务 asset/group 不会单独被当成 endpoint host、typed `host.ip_addresses` 仍作为
 endpoint identity、所有选中 Skill 都能从真实 package 投影，并保留每条样本的选择原因供审阅。
 
-D7 只证明真实 Analyzer 能输出合法的开放场景、行为阶段、evidence 引用、竞争解释、证据缺口
-和人工核查清单。`status=passed` 是结构验收，不是事实质量验收。
+D7 只证明真实 Analyzer 能输出合法的 `AnalysisResult.v3`：`E-*` 当前告警事实、`R-*` 显式推理、
+开放场景、行为阶段、竞争解释、证据缺口、人工核查清单和 `K-*` 待审知识候选。
+`status=passed` 是结构验收，不是事实或推理准确率验收。
 
-D8 使用 `soc.analysis_evidence_grounding.v2`。如果 source/value 能落地、但 description 引用了
-quoted value 之外的有界字段，该项状态为 `description_context_leakage`，同时保留
-`matched_context_paths` 和 `foreign_description_context_paths`；它仍计入 ungrounded，后续
-Decision 必须降级。模型拼出的 `key=value`、整段对象伪装成 scalar、私有 omission sidecar 值和
-未证实 outcome 不能绕过该边界。精确可见的 encoded-omission marker 只能证明值存在、编码形态和
-模型边界省略，不能证明隐藏内容、token 有效性或安全结果。
+D8 使用 `soc.analysis_evidence_grounding.v3`。每个 `E-*` 必须与 Runtime 目录中的 source path 和
+typed scalar 完全一致；每个 `R-*` 必须引用已落地 `E-*`，并为其使用的 `S/A/M/C/T-*` 受治理上下文
+声明匹配 basis。Grounded reasoning 表示引用链完整，不表示推理句是日志字面事实或已校准真值。
+Parser 只能对唯一目录关系进行有日志的机械修复，不能修补安全语义。精确可见的 encoded-omission
+marker 仍只能证明值存在、编码形态和模型边界省略，不能证明隐藏内容、token 有效性或安全结果。
 
-当前 2026-08-02 authoritative artifact 使用 `deepseek-v4-pro` / `soc-analysis-v8`，共 9 条
+历史 2026-08-02 v2 authoritative artifact 使用 `deepseek-v4-pro` / `soc-analysis-v8`，共 9 条
 evidence：5 grounded、4 条 `description_context_leakage`。D8 execution contract 通过，但质量门正确
 保持 `blocked`。这是在 D11.1 outer-schema/Decision 语义修正后按 D5→D7→D8 lineage 重建的一次真实
 调用；模型重跑具有随机性，不能通过反复付费采样替代 Grounding。
 
 D9 直接消费已保存的 D5/D7/D8 artifact，并调用生产 `SocDecisionPolicy`。它不重跑模型、不重新
 Grounding、不写数据库，也不执行租户处置策略。审阅重点是确认 D8 的 rejected evidence 会形成
-degraded/conflicted evidence、结构化 human-review reason 和 `automation_allowed=false`，同时保留 D7 的
-detection verdict。产物位于
+或 reasoning 会形成 degraded/conflicted evidence、结构化 human-review reason 和
+`automation_allowed=false`，同时保留 D7 的 detection verdict。产物位于
 `step-d9-decision-policy/<alert-id>.decision.json`。
 当前 D9 使用 `soc.decision_policy.v3`，保留 `suspicious` verdict，输出 `degraded`、review required、
 automation disabled；四个 review reasons 为 uncertain verdict、ungrounded evidence、raw confidence
@@ -123,7 +123,7 @@ mapping、模型/Prompt/Parser provenance、bounded evidence、Grounding、Decis
 automation guard。它会产生模型费用；没有人工标签时仍不能据此声称模型准确率，也不是新的
 Runtime 节点。
 
-当前 authoritative D10 覆盖 8 个 topic、6 类 source family、8 条代表样本和 2 条 known input
+历史 v2 authoritative D10 覆盖 8 个 topic、6 类 source family、8 条代表样本和 2 条 known input
 gap。2026-08-01 使用 `deepseek-v4-pro` 的 10/10 次真实调用共消耗 167,042 tokens，得到
 8 `suspicious`、1 `needs_review`、1 `unknown`；0 Runtime failure、0 failed check，报告状态为
 `passed_with_quality_findings`。87 条模型 evidence 中 67 条 grounded、20 条 ungrounded，其中

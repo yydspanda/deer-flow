@@ -16,6 +16,7 @@ from soc_agent.llm import (
     build_optional_llm_analyzer,
 )
 from soc_agent.pipeline.analyzer import StubLLMAnalyzer
+from soc_agent.pipeline.reference_catalog import evidence_ref_for
 from soc_agent.prompts import ANALYSIS_PROMPT_VERSION
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
@@ -42,25 +43,38 @@ def _sample(name: str) -> dict:
 
 def _analysis_json(*, trailing_comma: bool = False) -> str:
     suffix = "," if trailing_comma else ""
+    evidence_ref = evidence_ref_for("detection.rule_code", "EDR-IOC-001")
     return f"""
     {{
-      "schema_version": "soc.analysis_result.v2",
+      "schema_version": "soc.analysis_result.v3",
       "verdict": "true_positive",
       "confidence": 0.91,
       "summary": "LLM 判断该告警包含高危外联线索。",
       "evidence": [
-        {{"source": "detection", "description": "规则命中高危行为", "value": "EDR-IOC-001"}}
+        {{"evidence_ref": "{evidence_ref}", "source": "detection.rule_code", "description": "规则编号", "value": "EDR-IOC-001"}}
+      ],
+      "reasoning": [
+        {{
+          "schema_version": "soc.analysis_reasoning_item.v1",
+          "reasoning_id": "R-01",
+          "statement": "该规则与当前行为共同支持高危外联研判。",
+          "basis": ["current_evidence", "general_security_knowledge"],
+          "evidence_refs": ["{evidence_ref}"],
+          "context_refs": [],
+          "confidence": 0.84
+        }}
       ],
       "scenario_assessments": [
         {{
-          "schema_version": "soc.triage_scenario_assessment.v1",
+          "schema_version": "soc.triage_scenario_assessment.v2",
           "scenario_name": "恶意外联",
           "scenario_key": "malicious_outbound",
           "is_primary": true,
           "origin": "inferred",
           "confidence": 0.84,
           "activity_stage": "attempt_observed",
-          "evidence_indices": [0],
+          "evidence_refs": ["{evidence_ref}"],
+          "reasoning_refs": ["R-01"],
           "rationale": "规则命中高危外联行为。",
           "competing_explanations": ["授权安全测试"]
         }}
@@ -68,7 +82,8 @@ def _analysis_json(*, trailing_comma: bool = False) -> str:
       "evidence_gaps": ["缺少终端进程与网络连接关联。"],
       "manual_checks": ["查询源主机同时间窗的进程网络连接。"],
       "reason": "存在可解释的高危行为证据，需要升级复核。",
-      "recommended_action": "escalate_to_analyst"{suffix}
+      "recommended_action": "escalate_to_analyst",
+      "knowledge_candidates": []{suffix}
     }}
     """
 
@@ -145,6 +160,7 @@ def test_default_runtime_still_uses_stub_analyzer() -> None:
         "fact_reconstruct",
         "build_analysis_input",
         "skill_context",
+        "reference_catalog",
         "analyze_stub",
         "schema_validate",
         "evidence_grounding",
@@ -164,6 +180,7 @@ def test_llm_evidence_not_present_in_bounded_context_forces_review() -> None:
     assert run.analysis_evidence_grounding.ungrounded_count == 1
     assert run.decision is not None
     assert DecisionReviewReason.UNGROUNDED_ANALYSIS_EVIDENCE in run.decision.review_reasons
+    assert DecisionReviewReason.UNGROUNDED_ANALYSIS_REASONING in run.decision.review_reasons
 
 
 def test_live_model_failure_keeps_requested_model_in_failed_trace() -> None:

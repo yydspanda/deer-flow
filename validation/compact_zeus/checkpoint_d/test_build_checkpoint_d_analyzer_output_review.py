@@ -27,35 +27,50 @@ from validation.compact_zeus.checkpoint_d.test_build_checkpoint_d_bounded_analys
 )
 
 from soc_agent.llm import JsonLLMAnalyzer
+from soc_agent.pipeline.reference_catalog import evidence_ref_for
 
 
 class _Client:
     def complete(self, messages, *, model_name):
         assert messages[0]["role"] == "system"
         assert messages[1]["role"] == "user"
+        evidence_ref = evidence_ref_for("alert_id", "1")
         return json.dumps(
             {
-                "schema_version": "soc.analysis_result.v2",
+                "schema_version": "soc.analysis_result.v3",
                 "verdict": "suspicious",
                 "confidence": 0.78,
                 "summary": "弱口令攻击尝试存在，但尚无账号失陷证据。",
                 "evidence": [
                     {
+                        "evidence_ref": evidence_ref,
                         "source": "alert_id",
                         "description": "当前告警进入受控研判节点",
                         "value": "1",
                     }
                 ],
+                "reasoning": [
+                    {
+                        "schema_version": "soc.analysis_reasoning_item.v1",
+                        "reasoning_id": "R-01",
+                        "statement": "上游场景提示与当前告警上下文支持攻击尝试。",
+                        "basis": ["current_evidence", "general_security_knowledge"],
+                        "evidence_refs": [evidence_ref],
+                        "context_refs": [],
+                        "confidence": 0.74,
+                    }
+                ],
                 "scenario_assessments": [
                     {
-                        "schema_version": ("soc.triage_scenario_assessment.v1"),
+                        "schema_version": ("soc.triage_scenario_assessment.v2"),
                         "scenario_name": "弱口令攻击",
                         "scenario_key": "weak_password_attack",
                         "is_primary": True,
                         "origin": "hybrid",
                         "confidence": 0.74,
                         "activity_stage": "attempt_observed",
-                        "evidence_indices": [0],
+                        "evidence_refs": [evidence_ref],
+                        "reasoning_refs": ["R-01"],
                         "rationale": "上游场景提示与当前告警上下文支持攻击尝试。",
                         "competing_explanations": ["授权测试或正常登录失败"],
                     }
@@ -118,9 +133,13 @@ def test_analyzer_output_review_validates_live_typed_scenario_contract() -> None
     assert review["acceptance"]["status"] == "passed"
     assert review["acceptance"]["failed_checks"] == []
     assert all(review["acceptance"]["checks"].values())
-    assert review["analysis_result"]["schema_version"] == "soc.analysis_result.v2"
-    assert review["scenario_review"]["primary_scenario"]["scenario_name"] == ("弱口令攻击")
-    assert review["scenario_review"]["primary_scenario"]["activity_stage"] == ("attempt_observed")
+    assert review["analysis_result"]["schema_version"] == "soc.analysis_result.v3"
+    assert review["scenario_review"]["primary_scenario"]["scenario_name"] == (
+        "弱口令攻击"
+    )
+    assert review["scenario_review"]["primary_scenario"]["activity_stage"] == (
+        "attempt_observed"
+    )
     assert review["scope"]["not_performed"] == [
         "evidence_grounding",
         "decision_policy",

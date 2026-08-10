@@ -759,8 +759,24 @@ Rules:
 
 ### 5.6 Structured Analyzer Result / 结构化 Analyzer 结果
 
-The bounded analyzer emits `soc.analysis_result.v2`. It does not hide scenario reasoning inside a
-free-text `reason`:
+The bounded analyzer emits `soc.analysis_result.v3`. Runtime, not the model, first creates two
+reference catalogs from the exact bounded request:
+
+- `E-*` is one replay-stable current-alert scalar fact, bound to an exact source path, typed value,
+  trust level, and the immutable request projection.
+- `S-*` is reviewed Skill guidance; `A-*` is an adapter contract; `M-*` is confirmed and
+  retrieval-active memory; `C-*` is governed operational context; `T-*` is a bounded tool result.
+- `R-*` is an explicit model inference. It must cite at least one `E-*`, declare its basis, and cite
+  the matching governed context namespace when it relies on `S/A/M/C/T`.
+- `K-*` is an inert knowledge suggestion linked to `E-*` and `R-*`; it is not evidence, Memory,
+  Skill, adapter behavior, tenant policy, or a current-alert decision.
+
+This deliberately separates “what the alert actually contains” from “what the LLM concludes from
+security expertise.” It allows the model to recognize RemoteRegistry, reverse Shell, credential
+dumping, phishing, or another open-vocabulary scenario without requiring the inference sentence to
+appear literally in the alert, while still making every input fact and governed dependency auditable.
+
+`scenario_assessments` then provides the structured scenario view:
 
 - `scenario_assessments` is open vocabulary. Upstream/deterministic scenario hypotheses are hints;
   the analyzer may confirm, refine, or reject them.
@@ -769,34 +785,32 @@ free-text `reason`:
 - `activity_stage` separates `detection_hit`, `attempt_observed`, `effect_observed`,
   `impact_confirmed`, and `indeterminate`. A direct response/state change may be an observed effect
   without proving material impact.
-- `evidence_indices` reference the same result's bounded `evidence` array. They do not cite raw data
-  outside `LLMAnalysisRequest`.
+- `evidence_refs` cite exact `E-*` facts and `reasoning_refs` cite explicit `R-*` in the same result.
 - `competing_explanations`, `evidence_gaps`, and `manual_checks` keep uncertainty actionable while
   still requiring a current verdict.
 - `recommended_action` remains a safe routing suggestion, not an executed action.
 
-`soc-analysis-v8` tells the model that each evidence description must be supported by that item's
-source/value alone, that `evidence.value` must be copied from one scalar leaf, and that IP/port or
-other multi-fact statements require separate exact-path evidence items. A visible encoded-omission
-marker may support only presence/shape/omission, never hidden token content or validity.
-`soc-analysis-json-parser-v5` rejects missing D7 fields, unsupported top-level or
-scenario fields, non-numeric confidence, invalid evidence indexes, duplicate scenarios, and
-zero/multiple primary scenarios. Existing stored v1-shaped objects may deserialize with empty
-defaults, but new model output must explicitly satisfy v2.
+`soc-analysis-v12` requires the model to select at most 40 exact catalog facts and place all security
+interpretation in `reasoning[]`. `soc-analysis-json-parser-v10` validates the strict v3 schema and
+may apply only semantics-free, logged normalization when the relation is already unique: recover an
+`E-*` from an exact path/value tuple, materialize an exact catalog fact cited elsewhere, remove an
+exact duplicate, drop an explicit empty context sentinel, or derive a redundant basis label from an
+already explicit valid `S/A/M/C/T` reference. Unknown, conflicting, or ambiguous references fail;
+the parser does not rewrite model conclusions.
 
 Checkpoint D7 uses a real configured model only to prove this output boundary. A structural D7 pass
-does not prove evidence correctness. D8 runs deterministic `soc.analysis_evidence_grounding.v2`:
+does not prove evidence correctness. D8 runs deterministic `soc.analysis_evidence_grounding.v3`:
 
-- source/value mismatch, synthesized `key=value`, private omission-sidecar values, and non-scalar
-  object citations are rejected; an exact visible marker-bearing scalar has the narrower grounding
-  semantics described above;
-- a grounded value whose description imports another bounded fact becomes
-  `description_context_leakage`;
-- `matched_context_paths` and `foreign_description_context_paths` keep the rejection auditable;
-- rejected items remain ungrounded, so existing Decision Policy must produce degraded evidence and
-  human review rather than repairing the model's semantic output.
+- every selected `E-*`, source path, and typed scalar value must exactly match the Runtime catalog;
+- every `R-*` must resolve all cited `E-*` and `S/A/M/C/T` references and declare the required basis;
+- a grounded `R-*` means the inference has valid support references, not that the inference is
+  literal telemetry, calibrated truth, or authority to execute an action;
+- a visible encoded-omission marker proves only field presence, encoding shape, and boundary
+  omission, never hidden bytes, validity, identity, or outcome;
+- rejected evidence or reasoning remains ungrounded, so `SocDecisionPolicy` produces degraded
+  evidence and human review instead of repairing security semantics.
 
-The latest 2026-08-02 D7/D8 artifacts use `deepseek-v4-pro` with `soc-analysis-v8` after rebuilding D5
+The historical 2026-08-02 v2 D7/D8 artifacts use `deepseek-v4-pro` with `soc-analysis-v8` after rebuilding D5
 under the corrected outer-schema semantics. D7 passed its typed structural contract with 9 evidence
 items. D8 accepted 5 and rejected 4 descriptions that mixed uncited sibling facts. Execution passed
 while quality correctly remained blocked. Re-running the stochastic model produced different citation
@@ -826,6 +840,24 @@ removed. D10 remains the paid cross-source live-model sample, while D11 proves f
 Runtime compatibility. PI-01 then split the first approved read-only asset-provider intake into D12-A
 production-shaped code plus an explicitly fake external-network smoke, and D12-B internal real smoke.
 D12-A cannot substitute for D12-B or close the real-provider gate.
+
+The current daily full-journey validation is the fixed ten-alert runner under
+`validation/compact_zeus/e2e/`. It uses production `SocAnalysisService`, the configured live model,
+an isolated SQLite database, simulated read-only PingAn Providers, ReviewQueue, and bounded Lead
+Agent context. It also compiles each result's `K-*` items into one
+`knowledge-review/REVIEW.md`. Exact-statement deduplication is review ergonomics only: every item
+remains `pending_review`, unresolved support is visible, and no automatic Memory/Skill/adapter/policy
+write occurs. This current v3 path supersedes the old citation shape for new runs; the D7-D11 numbers
+above remain historical evidence of the earlier v2 contract.
+
+The 2026-08-10 fresh v3 ten-alert run completed 10/10 structural/safety journeys with six
+`suspicious` and four `needs_review` analyzer verdicts, ten persisted ReviewQueue items, and 33
+simulated read-only investigation records. Exact Grounding retained three model-quality cases: two
+typed/value-copy deviations and one invented Adapter reference, yielding three rejected `E-*` facts
+and five dependent `R-*` items. The review package contains 20 `K-*` candidates; 17 have fully
+grounded support and three remain unresolved. This is the intended distinction between usable LLM
+reasoning and production authority: quality defects stay visible, while no candidate, mock result, or
+uncalibrated model score can authorize automation.
 
 ---
 

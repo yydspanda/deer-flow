@@ -6,14 +6,16 @@ import pandas as pd
 
 from soc_agent.contracts import (
     AnalysisNodeOutput,
+    AnalysisReasoningBasis,
+    AnalysisReasoningItem,
     AnalysisResult,
-    EvidenceItem,
     TriageActivityStage,
     TriageScenarioAssessment,
     TriageScenarioOrigin,
     Verdict,
 )
 from soc_agent.core import DeterministicAnalysisRuntime, SocAnalysisService
+from soc_agent.pipeline.reference_catalog import evidence_item_from_catalog
 from validation.compact_zeus.checkpoint_d.build_checkpoint_d_corpus_inventory import (
     build_inventory,
 )
@@ -33,16 +35,24 @@ class _FakeLiveAnalyzer:
     prompt_version = "test-live-prompt-v1"
 
     def analyze(self, request) -> AnalysisNodeOutput:  # noqa: ANN001
+        evidence = evidence_item_from_catalog(
+            request,
+            description="The analyzed alert identifier.",
+            preferred_paths=("alert_id",),
+        )
         return AnalysisNodeOutput(
             analysis=AnalysisResult(
                 verdict=Verdict.SUSPICIOUS,
                 confidence=0.8,
                 summary="Synthetic live analyzer result for contract testing.",
-                evidence=[
-                    EvidenceItem(
-                        source="alert_id",
-                        description="The analyzed alert identifier.",
-                        value=request.alert_id,
+                evidence=[evidence],
+                reasoning=[
+                    AnalysisReasoningItem(
+                        reasoning_id="R-01",
+                        statement="The selected fact requires analyst review.",
+                        basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
+                        evidence_refs=[evidence.evidence_ref],
+                        confidence=0.7,
                     )
                 ],
                 scenario_assessments=[
@@ -52,7 +62,8 @@ class _FakeLiveAnalyzer:
                         origin=TriageScenarioOrigin.INFERRED,
                         confidence=0.7,
                         activity_stage=TriageActivityStage.INDETERMINATE,
-                        evidence_indices=[0],
+                        evidence_refs=[evidence.evidence_ref],
+                        reasoning_refs=["R-01"],
                         rationale="Exercises the live analyzer Runtime contract.",
                     )
                 ],

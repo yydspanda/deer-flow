@@ -6,12 +6,14 @@ import pandas as pd
 
 from soc_agent.contracts import (
     AnalysisNodeOutput,
+    AnalysisReasoningBasis,
+    AnalysisReasoningItem,
     AnalysisResult,
-    EvidenceItem,
     SensitiveEvidenceMode,
     Verdict,
 )
 from soc_agent.core import DeterministicAnalysisRuntime, SocAnalysisService
+from soc_agent.pipeline.reference_catalog import evidence_item_from_catalog
 from validation.compact_zeus.checkpoint_d.build_checkpoint_d_corpus_inventory import (
     build_inventory,
 )
@@ -128,16 +130,24 @@ class _ChangingStubAnalyzer:
 
     def analyze(self, request) -> AnalysisNodeOutput:  # noqa: ANN001
         self._call_count += 1
+        evidence = evidence_item_from_catalog(
+            request,
+            description="Analyzed alert identifier.",
+            preferred_paths=("alert_id",),
+        )
         return AnalysisNodeOutput(
             analysis=AnalysisResult(
                 verdict=Verdict.UNKNOWN,
                 confidence=0.4 + (self._call_count * 0.01),
                 summary="Synthetic changing output.",
-                evidence=[
-                    EvidenceItem(
-                        source="alert_id",
-                        description="Analyzed alert identifier.",
-                        value=request.alert_id,
+                evidence=[evidence],
+                reasoning=[
+                    AnalysisReasoningItem(
+                        reasoning_id="R-01",
+                        statement="The selected fact requires analyst review.",
+                        basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
+                        evidence_refs=[evidence.evidence_ref],
+                        confidence=0.4 + (self._call_count * 0.01),
                     )
                 ],
                 evidence_gaps=["Synthetic stability test gap."],

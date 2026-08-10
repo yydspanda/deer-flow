@@ -6,12 +6,15 @@ SOC route/action names; MCP server/tool names stay inside adapter config.
 
 from __future__ import annotations
 
+import asyncio
 import concurrent.futures
 import json
+import logging
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal, Protocol, Self
 
 import yaml
@@ -25,6 +28,8 @@ from soc_agent.contracts import (
     SocAgentActionResult,
     SocAgentRiskLevel,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -71,8 +76,12 @@ class DeerFlowCachedMcpToolProvider:
     ) -> None:
         self._tools_loader = tools_loader or _load_deerflow_cached_mcp_tools
         self._use_one_shot_invocation = tools_loader is None and use_one_shot_invocation
+        self._one_shot_descriptors: tuple[SocMcpToolDescriptor, ...] | None = None
+        self._one_shot_descriptors_lock = Lock()
 
     def list_tools(self) -> list[SocMcpToolDescriptor]:
+        if self._use_one_shot_invocation:
+            return list(self._load_one_shot_descriptors())
         tools = self._load_tools()
         return [
             SocMcpToolDescriptor(
@@ -92,9 +101,9 @@ class DeerFlowCachedMcpToolProvider:
         timeout_seconds: int,
         server_name: str | None = None,
     ) -> Mapping[str, Any]:
-        tool = self._tool_by_name(tool_name)
         try:
             if self._use_one_shot_invocation:
+                self._validate_one_shot_tool_available(tool_name, server_name=server_name)
                 raw_result = _invoke_mcp_tool_once_with_timeout(
                     tool_name,
                     payload,
@@ -102,6 +111,7 @@ class DeerFlowCachedMcpToolProvider:
                     server_name=server_name,
                 )
             else:
+                tool = self._tool_by_name(tool_name)
                 raw_result = _invoke_tool_with_timeout(
                     tool,
                     payload,
@@ -124,6 +134,28 @@ class DeerFlowCachedMcpToolProvider:
             return list(self._tools_loader())
         except Exception as exc:  # noqa: BLE001 - provider boundary wraps cache/config failures
             raise SocMcpToolProviderError(f"Failed to load DeerFlow cached MCP tools: {exc}") from exc
+
+    def _load_one_shot_descriptors(self) -> tuple[SocMcpToolDescriptor, ...]:
+        with self._one_shot_descriptors_lock:
+            if self._one_shot_descriptors is None:
+                try:
+                    descriptors = _load_deerflow_one_shot_mcp_descriptors()
+                except Exception as exc:  # noqa: BLE001 - provider boundary wraps config/discovery failures
+                    raise SocMcpToolProviderError(f"Failed to discover DeerFlow MCP tools one-shot: {exc}") from exc
+                self._one_shot_descriptors = tuple(sorted(descriptors, key=lambda item: ((item.server or ""), item.name)))
+            return self._one_shot_descriptors
+
+    def _validate_one_shot_tool_available(
+        self,
+        tool_name: str,
+        *,
+        server_name: str | None,
+    ) -> None:
+        for descriptor in self._load_one_shot_descriptors():
+            if descriptor.name == tool_name and (server_name is None or descriptor.server == server_name):
+                return
+        target = f"{server_name}/{tool_name}" if server_name else tool_name
+        raise SocMcpToolNotFoundError(f"MCP tool {target!r} is not available in one-shot discovery")
 
 
 class SocMcpToolBindingConfig(BaseModel):
@@ -616,6 +648,93 @@ def _load_deerflow_cached_mcp_tools() -> Iterable[Any]:
     from deerflow.mcp.cache import get_cached_mcp_tools
 
     return get_cached_mcp_tools()
+
+
+def _load_deerflow_one_shot_mcp_descriptors() -> list[SocMcpToolDescriptor]:
+    """Discover MCP tools without creating DeerFlow's process-global session cache."""
+
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="soc-mcp-one-shot-discovery",
+    )
+    future = executor.submit(_run_list_mcp_tools_once)
+    try:
+        return future.result()
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _run_list_mcp_tools_once() -> list[SocMcpToolDescriptor]:
+    return asyncio.run(_list_mcp_tools_once())
+
+
+async def _list_mcp_tools_once() -> list[SocMcpToolDescriptor]:
+    from langchain_mcp_adapters.sessions import create_session
+
+    from deerflow.config.extensions_config import ExtensionsConfig
+    from deerflow.mcp.client import build_servers_config
+    from deerflow.mcp.oauth import get_initial_oauth_headers
+
+    extensions_config = ExtensionsConfig.from_file()
+    servers_config = build_servers_config(extensions_config)
+    initial_oauth_headers = await get_initial_oauth_headers(extensions_config)
+    for server_name, auth_header in initial_oauth_headers.items():
+        connection = servers_config.get(server_name)
+        if connection is None or connection.get("transport") not in {"sse", "http"}:
+            continue
+        headers = dict(connection.get("headers") or {})
+        headers["Authorization"] = auth_header
+        connection["headers"] = headers
+
+    async def discover_server(
+        server_name: str,
+        connection: Mapping[str, Any],
+    ) -> list[SocMcpToolDescriptor]:
+        server_config = extensions_config.mcp_servers.get(server_name)
+        timeout_seconds = server_config.session_init_timeout if server_config is not None else None
+
+        async def discover() -> list[SocMcpToolDescriptor]:
+            async with create_session(dict(connection)) as session:
+                await session.initialize()
+                response = await session.list_tools()
+            descriptors: list[SocMcpToolDescriptor] = []
+            for tool in getattr(response, "tools", ()):
+                original_name = str(getattr(tool, "name", "") or "")
+                if not original_name:
+                    continue
+                name = f"{server_name}_{original_name}" if server_config is None or server_config.tool_name_prefix else original_name
+                descriptors.append(
+                    SocMcpToolDescriptor(
+                        name=name,
+                        server=server_name,
+                        description=str(getattr(tool, "description", "") or ""),
+                        input_schema=_json_safe(getattr(tool, "inputSchema", None) or getattr(tool, "input_schema", None) or {}),
+                    )
+                )
+            return descriptors
+
+        if timeout_seconds is None:
+            return await discover()
+        return await asyncio.wait_for(
+            discover(),
+            timeout=float(timeout_seconds),
+        )
+
+    results = await asyncio.gather(
+        *(discover_server(server_name, connection) for server_name, connection in servers_config.items()),
+        return_exceptions=True,
+    )
+    descriptors: list[SocMcpToolDescriptor] = []
+    for server_name, result in zip(servers_config, results, strict=True):
+        if isinstance(result, BaseException):
+            logger.warning(
+                "Skipping MCP server %r after one-shot discovery failed: %s",
+                server_name,
+                result,
+            )
+            continue
+        descriptors.extend(result)
+    return descriptors
 
 
 def _invoke_tool_with_timeout(

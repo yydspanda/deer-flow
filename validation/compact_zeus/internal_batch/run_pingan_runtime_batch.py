@@ -115,6 +115,7 @@ class BatchExecutionConfig:
     memory_pattern_environment: str | None = None
     memory_pattern_data_class: str | None = None
     memory_pattern_policy: MemoryPatternAggregationPolicy | None = None
+    requested_alert_ids: tuple[str, ...] = ()
 
 
 def prepare_batch_items(
@@ -123,6 +124,7 @@ def prepare_batch_items(
     start_index: int = 0,
     limit: int | None = None,
     default_tenant_id: str | None = None,
+    alert_ids: Sequence[str] | None = None,
 ) -> tuple[list[BatchItem], list[dict[str, Any]]]:
     """Validate source wrappers and return bounded row selections plus input errors."""
 
@@ -130,6 +132,38 @@ def prepare_batch_items(
         raise ValueError("start_index must be >= 0")
     if limit is not None and limit < 1:
         raise ValueError("limit must be >= 1")
+    requested_alert_ids = _normalize_requested_alert_ids(alert_ids)
+    if requested_alert_ids and (start_index != 0 or limit is not None):
+        raise ValueError(
+            "alert-id selection cannot be combined with start-index or limit"
+        )
+    if requested_alert_ids:
+        all_items, errors = prepare_batch_items(
+            frame,
+            default_tenant_id=default_tenant_id,
+        )
+        by_alert_id: dict[str, BatchItem] = {}
+        duplicate_source_ids: set[str] = set()
+        for item in all_items:
+            if item.alert_id in by_alert_id:
+                duplicate_source_ids.add(item.alert_id)
+            else:
+                by_alert_id[item.alert_id] = item
+        duplicate_requested_ids = sorted(
+            duplicate_source_ids.intersection(requested_alert_ids)
+        )
+        if duplicate_requested_ids:
+            raise ValueError(
+                "source contains duplicate requested alert ids: "
+                + ", ".join(duplicate_requested_ids)
+            )
+        missing = [
+            alert_id for alert_id in requested_alert_ids if alert_id not in by_alert_id
+        ]
+        if missing:
+            raise ValueError("requested alert ids are missing: " + ", ".join(missing))
+        return [by_alert_id[alert_id] for alert_id in requested_alert_ids], errors
+
     stop = len(frame) if limit is None else min(len(frame), start_index + limit)
     items: list[BatchItem] = []
     errors: list[dict[str, Any]] = []
@@ -175,6 +209,22 @@ def prepare_batch_items(
                 }
             )
     return items, errors
+
+
+def _normalize_requested_alert_ids(
+    alert_ids: Sequence[str] | None,
+) -> tuple[str, ...]:
+    if not alert_ids:
+        return ()
+    normalized = tuple(str(alert_id).strip() for alert_id in alert_ids)
+    if any(not alert_id for alert_id in normalized):
+        raise ValueError("alert ids must not be blank")
+    duplicates = sorted(
+        alert_id for alert_id, count in Counter(normalized).items() if count > 1
+    )
+    if duplicates:
+        raise ValueError("duplicate requested alert ids: " + ", ".join(duplicates))
+    return normalized
 
 
 def execute_batch(
@@ -718,6 +768,7 @@ def _build_manifest(
             "sha256": config.source_sha256,
             "row_count": source_row_count,
             "selected_count": selected_count,
+            "requested_alert_ids": list(config.requested_alert_ids),
             "source_error_count": len(source_errors),
             "source_errors": [dict(item) for item in source_errors[:100]],
             "source_errors_truncated": len(source_errors) > 100,
@@ -1050,6 +1101,10 @@ def _validate_resume(
     execution = _mapping(previous.get("execution"))
     expected = {
         "source.sha256": (source.get("sha256"), config.source_sha256),
+        "source.requested_alert_ids": (
+            tuple(source.get("requested_alert_ids") or ()),
+            config.requested_alert_ids,
+        ),
         "execution.analyzer_mode": (
             execution.get("analyzer_mode"),
             config.analyzer_mode,
@@ -1290,6 +1345,7 @@ def _plan_payload(
     memory_pattern_environment: str | None = None,
     memory_pattern_data_class: str | None = None,
     memory_pattern_policy: MemoryPatternAggregationPolicy | None = None,
+    requested_alert_ids: Sequence[str] = (),
 ) -> dict[str, Any]:
     return {
         "schema_version": "soc.pingan_internal_runtime_batch_plan.v1",
@@ -1298,6 +1354,7 @@ def _plan_payload(
             "sha256": source_sha256,
             "row_count": source_row_count,
             "selected_count": len(items),
+            "requested_alert_ids": list(requested_alert_ids),
             "input_error_count": len(source_errors),
         },
         "execution": {
@@ -1363,6 +1420,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--limit", type=int)
+    parser.add_argument(
+        "--alert-id",
+        action="append",
+        default=[],
+        help=(
+            "Select one exact alert ID; repeat for an ordered fixed cohort. "
+            "Cannot be combined with --start-index or --limit."
+        ),
+    )
     parser.add_argument("--analyzer-mode", choices=["stub", "llm"])
     parser.add_argument("--model-name")
     parser.add_argument("--workers", type=int, default=1)
@@ -1487,11 +1553,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("memory pattern aggregation requires --persist")
         source_sha256 = _sha256_file(source)
         frame = load_dataframe_pickle(source, required_columns={"alert_full_data"})
+        requested_alert_ids = _normalize_requested_alert_ids(args.alert_id)
         items, source_errors = prepare_batch_items(
             frame,
             start_index=args.start_index,
             limit=args.limit,
             default_tenant_id=default_tenant_id,
+            alert_ids=requested_alert_ids,
         )
         settings = SocLLMSettings.from_env().with_overrides(
             mode=args.analyzer_mode,
@@ -1636,6 +1704,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             memory_pattern_environment=memory_pattern_environment,
             memory_pattern_data_class=memory_pattern_data_class,
             memory_pattern_policy=memory_pattern_policy,
+            requested_alert_ids=requested_alert_ids,
         )
         if args.preflight_investigation:
             plan["execution"]["live_mcp_inventory_verified"] = True
@@ -1713,6 +1782,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 memory_pattern_environment=memory_pattern_environment,
                 memory_pattern_data_class=memory_pattern_data_class,
                 memory_pattern_policy=memory_pattern_policy,
+                requested_alert_ids=requested_alert_ids,
             ),
             source_row_count=len(frame),
             source_errors=source_errors,

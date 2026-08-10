@@ -22,7 +22,7 @@ from validation.compact_zeus.checkpoint_d.test_build_checkpoint_d_analyzer_outpu
 from soc_agent.llm import JsonLLMAnalyzer
 
 
-def _d5_d7_d8_reviews(*, leak_description: bool) -> tuple[dict, dict, dict]:
+def _d5_d7_d8_reviews(*, break_evidence_value: bool) -> tuple[dict, dict, dict]:
     d5_review = _d5_review()
     d7_review = build_analyzer_output_review(
         d5_review,
@@ -32,12 +32,10 @@ def _d5_d7_d8_reviews(*, leak_description: bool) -> tuple[dict, dict, dict]:
             model_name="test-live-model",
         ),
     )
-    if leak_description:
+    if break_evidence_value:
         d7_review = deepcopy(d7_review)
-        foreign_rule_code = d5_review["llm_analysis_request"]["detection"]["rule_code"]
-        d7_review["analysis_result"]["evidence"][0]["description"] += (
-            f"，并命中规则 {foreign_rule_code}"
-        )
+        value = d7_review["analysis_result"]["evidence"][0]["value"]
+        d7_review["analysis_result"]["evidence"][0]["value"] = f"{value}-tampered"
         d7_review["analysis_result_sha256"] = canonical_sha256(
             d7_review["analysis_result"]
         )
@@ -50,7 +48,7 @@ def _d5_d7_d8_reviews(*, leak_description: bool) -> tuple[dict, dict, dict]:
 
 
 def test_decision_review_proves_blocked_grounding_is_fail_closed() -> None:
-    d5_review, d7_review, d8_review = _d5_d7_d8_reviews(leak_description=True)
+    d5_review, d7_review, d8_review = _d5_d7_d8_reviews(break_evidence_value=True)
 
     review = build_decision_policy_review(
         d5_review,
@@ -73,7 +71,7 @@ def test_decision_review_proves_blocked_grounding_is_fail_closed() -> None:
 
 
 def test_decision_review_rejects_broken_d8_lineage() -> None:
-    d5_review, d7_review, d8_review = _d5_d7_d8_reviews(leak_description=False)
+    d5_review, d7_review, d8_review = _d5_d7_d8_reviews(break_evidence_value=False)
     broken_d8 = deepcopy(d8_review)
     broken_d8["input"]["d7_analysis_result_sha256"] = "wrong-hash"
 

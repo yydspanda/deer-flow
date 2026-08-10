@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from soc_agent.contracts import (
     AnalysisEvidenceGroundingReport,
+    AnalysisReasoningBasis,
+    AnalysisReasoningItem,
     AnalysisResult,
     DecisionEvidenceState,
     DecisionReviewReason,
@@ -24,9 +26,19 @@ def _analysis() -> AnalysisResult:
         summary="Bounded test analysis.",
         evidence=[
             EvidenceItem(
+                evidence_ref="E-000000000001",
                 source="alert_id",
                 description="Runtime alert identifier.",
                 value="ALT-POLICY-001",
+            )
+        ],
+        reasoning=[
+            AnalysisReasoningItem(
+                reasoning_id="R-01",
+                statement="The current alert fact requires policy evaluation.",
+                basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
+                evidence_refs=["E-000000000001"],
+                confidence=0.9,
             )
         ],
         reason="Policy semantics test.",

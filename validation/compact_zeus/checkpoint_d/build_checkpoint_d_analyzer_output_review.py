@@ -33,7 +33,9 @@ from soc_agent.prompts import build_analysis_prompt  # noqa: E402
 from soc_agent.protocols import LLMAnalyzer  # noqa: E402
 
 SCHEMA_VERSION = "soc.validation.checkpoint_d.analyzer_output_review.v1"
-DEFAULT_CHECKPOINT_D_ROOT = ROOT / "backend/.deer-flow/soc-runtime-validation/checkpoint-d"
+DEFAULT_CHECKPOINT_D_ROOT = (
+    ROOT / "backend/.deer-flow/soc-runtime-validation/checkpoint-d"
+)
 DEFAULT_ALERT_ID = 1965449
 DEFAULT_MODEL_NAME = "deepseek-v4-flash"
 _ALLOWED_D5_STATUSES = {"passed", "passed_with_projection_notes"}
@@ -57,33 +59,62 @@ def build_analyzer_output_review(
     request = LLMAnalysisRequest.model_validate(d5_request_payload)
     prompt = build_analysis_prompt(request)
     node_output = analyzer.analyze(request)
-    request_hash_after = canonical_sha256(request.model_dump(mode="json", exclude_none=True))
+    request_hash_after = canonical_sha256(
+        request.model_dump(mode="json", exclude_none=True)
+    )
     result_payload = node_output.analysis.model_dump(mode="json", exclude_none=True)
     assessments = node_output.analysis.scenario_assessments
     primary_assessments = [item for item in assessments if item.is_primary]
-    selected_skills = [item.skill_name for item in request.skill_context.selected_skills]
+    evidence_refs = {item.evidence_ref for item in node_output.analysis.evidence}
+    reasoning_refs = {item.reasoning_id for item in node_output.analysis.reasoning}
+    selected_skills = [
+        item.skill_name for item in request.skill_context.selected_skills
+    ]
 
     checks = {
-        "d5_acceptance_allows_continuation": d5_acceptance.get("status") in _ALLOWED_D5_STATUSES,
-        "d5_alert_id_matches": str(_mapping_path(skill_context_review, "input", "alert_id")) == str(alert_id),
+        "d5_acceptance_allows_continuation": d5_acceptance.get("status")
+        in _ALLOWED_D5_STATUSES,
+        "d5_alert_id_matches": str(
+            _mapping_path(skill_context_review, "input", "alert_id")
+        )
+        == str(alert_id),
         "d5_request_unchanged": request_hash_before == request_hash_after,
-        "live_llm_analyzer_used": node_output.model_name != "stub" and analyzer.step_name == "analyze_llm",
+        "live_llm_analyzer_used": node_output.model_name != "stub"
+        and analyzer.step_name == "analyze_llm",
         "prompt_version_matches": node_output.prompt_version == prompt.prompt_version,
         "parser_version_recorded": bool(node_output.parser_version),
-        "analysis_schema_is_v2": result_payload.get("schema_version") == "soc.analysis_result.v2",
+        "analysis_schema_is_v3": result_payload.get("schema_version")
+        == "soc.analysis_result.v3",
         "evidence_is_non_empty": bool(node_output.analysis.evidence),
+        "reasoning_is_non_empty": bool(node_output.analysis.reasoning),
         "scenario_assessment_is_non_empty": bool(assessments),
         "exactly_one_primary_scenario": len(primary_assessments) == 1,
-        "scenario_evidence_references_are_valid": all(0 <= evidence_index < len(node_output.analysis.evidence) for item in assessments for evidence_index in item.evidence_indices),
-        "scenario_activity_stages_are_explicit": all(bool(item.activity_stage.value) for item in assessments),
+        "scenario_evidence_references_are_valid": all(
+            reference in evidence_refs
+            for item in assessments
+            for reference in item.evidence_refs
+        ),
+        "scenario_reasoning_references_are_valid": all(
+            reference in reasoning_refs
+            for item in assessments
+            for reference in item.reasoning_refs
+        ),
+        "scenario_activity_stages_are_explicit": all(
+            bool(item.activity_stage.value) for item in assessments
+        ),
         "manual_checks_are_non_empty": bool(node_output.analysis.manual_checks),
         "d7_fields_are_serialized": {
             "scenario_assessments",
+            "reasoning",
             "evidence_gaps",
             "manual_checks",
         }
         <= result_payload.keys(),
-        "selected_skills_reach_prompt_context": selected_skills == [item["skill_name"] for item in prompt.context["skill_context"]["selected_skills"]],
+        "selected_skills_reach_prompt_context": selected_skills
+        == [
+            item["skill_name"]
+            for item in prompt.context["skill_context"]["selected_skills"]
+        ],
     }
     failed_checks = sorted(name for name, passed in checks.items() if not passed)
     status = "failed" if failed_checks else "passed"
@@ -97,7 +128,8 @@ def build_analyzer_output_review(
                 "production_prompt_rendering",
                 "configured_live_llm_analyzer_call",
                 "json_parse_and_conservative_repair",
-                "analysis_result_v2_schema_validation",
+                "analysis_result_v3_schema_validation",
+                "explicit_fact_and_reasoning_reference_validation",
                 "typed_scenario_assessment_validation",
             ],
             "not_performed": [
@@ -122,6 +154,7 @@ def build_analyzer_output_review(
             "failed_checks": failed_checks,
             "checks": checks,
             "evidence_count": len(node_output.analysis.evidence),
+            "reasoning_count": len(node_output.analysis.reasoning),
             "scenario_assessment_count": len(assessments),
             "evidence_gap_count": len(node_output.analysis.evidence_gaps),
             "manual_check_count": len(node_output.analysis.manual_checks),
@@ -139,9 +172,18 @@ def build_analyzer_output_review(
             "metadata": _bounded_analyzer_metadata(node_output.metadata),
         },
         "scenario_review": {
-            "upstream_hypotheses": [item.model_dump(mode="json", exclude_none=True) for item in request.fact_reconstruction.scenario_hypotheses],
-            "primary_scenario": (primary_assessments[0].model_dump(mode="json", exclude_none=True) if len(primary_assessments) == 1 else None),
-            "all_scenarios": [item.model_dump(mode="json", exclude_none=True) for item in assessments],
+            "upstream_hypotheses": [
+                item.model_dump(mode="json", exclude_none=True)
+                for item in request.fact_reconstruction.scenario_hypotheses
+            ],
+            "primary_scenario": (
+                primary_assessments[0].model_dump(mode="json", exclude_none=True)
+                if len(primary_assessments) == 1
+                else None
+            ),
+            "all_scenarios": [
+                item.model_dump(mode="json", exclude_none=True) for item in assessments
+            ],
         },
         "analysis_result": result_payload,
         "analysis_result_sha256": canonical_sha256(result_payload),
@@ -209,9 +251,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    skill_context_review_path = args.skill_context_review or (DEFAULT_CHECKPOINT_D_ROOT / "step-d5-skill-context" / f"{args.alert_id}.skill-context.json")
-    output_dir = args.output_dir or (DEFAULT_CHECKPOINT_D_ROOT / "step-d7-analyzer-output")
-    skill_context_review = json.loads(skill_context_review_path.read_text(encoding="utf-8"))
+    skill_context_review_path = args.skill_context_review or (
+        DEFAULT_CHECKPOINT_D_ROOT
+        / "step-d5-skill-context"
+        / f"{args.alert_id}.skill-context.json"
+    )
+    output_dir = args.output_dir or (
+        DEFAULT_CHECKPOINT_D_ROOT / "step-d7-analyzer-output"
+    )
+    skill_context_review = json.loads(
+        skill_context_review_path.read_text(encoding="utf-8")
+    )
     settings = SocLLMSettings.from_env().with_overrides(
         mode=args.analyzer_mode,
         model_name=args.model_name,

@@ -7,6 +7,8 @@ import pytest
 
 from soc_agent.cli import main
 from soc_agent.contracts import (
+    AnalysisReasoningBasis,
+    AnalysisReasoningItem,
     AnalysisResult,
     AnalysisRun,
     AnalysisRunStatus,
@@ -38,7 +40,23 @@ def _live_run(*, suffix: str = "1", confidence: float = 0.81) -> AnalysisRun:
         verdict=Verdict.TRUE_POSITIVE,
         confidence=confidence,
         summary="Bounded evidence indicates malicious activity.",
-        evidence=[EvidenceItem(source="primary_evidence.content", description="Observed IOC", value="ioc-1")],
+        evidence=[
+            EvidenceItem(
+                evidence_ref="E-000000000001",
+                source="primary_evidence.content",
+                description="Observed IOC",
+                value="ioc-1",
+            )
+        ],
+        reasoning=[
+            AnalysisReasoningItem(
+                reasoning_id="R-01",
+                statement="The observed behavior matches the alert context.",
+                basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
+                evidence_refs=["E-000000000001"],
+                confidence=confidence,
+            )
+        ],
         reason="The observed behavior matches the alert context.",
         recommended_action="Review and contain the affected asset.",
     )

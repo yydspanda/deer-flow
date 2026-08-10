@@ -16,6 +16,8 @@ from soc_agent.contracts import (
     AlertInput,
     AlertSourceRef,
     AlertSourceType,
+    AnalysisReasoningBasis,
+    AnalysisReasoningItem,
     AnalysisResult,
     AnalysisRun,
     AnalysisRunStatus,
@@ -86,9 +88,19 @@ def _run(*, category: str = "弱口令", host: str = "ehis-dataplus-stg.paic.com
         summary="Weak-password detection against an internal staging service requires review.",
         evidence=[
             EvidenceItem(
+                evidence_ref="E-000000000001",
                 source="canonical_entities.http.host",
                 description="Observed HTTP host",
                 value=host,
+            )
+        ],
+        reasoning=[
+            AnalysisReasoningItem(
+                reasoning_id="R-01",
+                statement="The upstream alert is credible, while authorization and impact remain unresolved.",
+                basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
+                evidence_refs=["E-000000000001"],
+                confidence=0.62,
             )
         ],
         reason="The upstream alert is credible, while authorization and impact remain unresolved.",

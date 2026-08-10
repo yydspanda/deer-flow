@@ -45,6 +45,7 @@ from soc_agent.pipeline.evidence_coverage import observe_message_schemas
 from soc_agent.pipeline.evidence_grounding import ground_analysis_evidence
 from soc_agent.pipeline.extractor import extract_entities
 from soc_agent.pipeline.fact_reconstructor import reconstruct_facts
+from soc_agent.pipeline.reference_catalog import finalize_analysis_reference_catalogs
 from soc_agent.protocols import AnalysisBeforeProviderHook, DecisionPolicy, LLMAnalyzer
 from soc_agent.utils.hashing import stable_hash
 
@@ -90,7 +91,8 @@ def build_analysis_request_for_payload(
         fact_reconstruction,
         sensitive_evidence_mode=sensitive_evidence_mode,
     )
-    return request.model_copy(update={"skill_context": resolve_skill_context_for_request(request)})
+    request = request.model_copy(update={"skill_context": resolve_skill_context_for_request(request)})
+    return finalize_analysis_reference_catalogs(request)
 
 
 def analyze_alert(
@@ -101,7 +103,7 @@ def analyze_alert(
     before_provider: AnalysisBeforeProviderHook | None = None,
     sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
 ) -> AnalysisRun:
-    """Analyze one alert through the fixed nine-step pipeline."""
+    """Analyze one alert through the fixed ten-step pipeline."""
 
     input_payload = _jsonable(payload)
     analysis_node = analyzer or StubLLMAnalyzer()
@@ -142,6 +144,12 @@ def analyze_alert(
             resolve_skill_context_for_request,
         )
         analysis_request = analysis_request.model_copy(update={"skill_context": skill_context})
+        analysis_request = _run_step(
+            run,
+            "reference_catalog",
+            analysis_request,
+            finalize_analysis_reference_catalogs,
+        )
         run.llm_analysis_request = analysis_request
         if before_provider is not None:
             try:
@@ -378,6 +386,12 @@ def _run_step[T](
         trace.warnings.extend(output.warnings)
     if isinstance(output, LLMAnalysisRequest):
         trace.warnings.extend(output.warnings)
+        trace.metadata.update(
+            {
+                "evidence_catalog_count": len(output.evidence_catalog),
+                "context_catalog_count": len(output.context_catalog),
+            }
+        )
     if isinstance(output, SocSkillContext):
         trace.metadata.update(
             {
@@ -391,6 +405,8 @@ def _run_step[T](
             {
                 "grounded_count": output.grounded_count,
                 "ungrounded_count": output.ungrounded_count,
+                "reasoning_grounded_count": output.reasoning_grounded_count,
+                "reasoning_ungrounded_count": output.reasoning_ungrounded_count,
             }
         )
     if isinstance(output, AnalysisNodeOutput):

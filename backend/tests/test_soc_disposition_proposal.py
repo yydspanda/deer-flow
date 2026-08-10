@@ -12,6 +12,8 @@ from soc_agent.context_bridge import build_lead_agent_review_context_artifact
 from soc_agent.contracts import (
     ActorContext,
     ActorType,
+    AnalysisReasoningBasis,
+    AnalysisReasoningItem,
     AnalysisResult,
     AnalysisRun,
     AnalysisRunStatus,
@@ -85,9 +87,19 @@ def _run(*, verdict: Verdict = Verdict.TRUE_POSITIVE) -> AnalysisRun:
             summary="Observed behavior is real and requires operational context.",
             evidence=[
                 EvidenceItem(
+                    evidence_ref="E-000000000001",
                     source="canonical",
                     description="Canonical behavior signature",
                     value="behavior_signature=java->chattr",
+                )
+            ],
+            reasoning=[
+                AnalysisReasoningItem(
+                    reasoning_id="R-01",
+                    statement="Canonical evidence supports the detection truth.",
+                    basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
+                    evidence_refs=["E-000000000001"],
+                    confidence=0.93,
                 )
             ],
             reason="Canonical evidence supports the detection truth.",

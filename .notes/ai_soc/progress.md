@@ -27,8 +27,8 @@
 | 当前目标 | 外网可实现的产品流已补齐，`PI-01G1..G3` 已复用 DeerFlow 原生 custom subagents 完成 capability-oriented SOC 专家委派；真实 Provider/infra/quality/telemetry/owner/rollback/cohort enforcement 继续作为独立 Real Integration Debt |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
-| LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | PingAn 内网 Apple Silicon 离线 backend toolchain、自包含 Agent Platform client、旧源码 YHSYS PRD private profile 与 LiteLLM chat smoke 已准备；private overlay 仅余 3 个 D12-B 负例注入值和 approved cases，进入内网后先验证模型，再按 RID-01..10 执行真实验收。任何 simulation 都不关闭 `mocked=false` gate。 |
+| LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v3`，以 `E-*` 原子事实、`R-*` 推理和受治理 `S/A/M/C/T-*` 上下文分离事实与解释 |
+| 当前下一刀 | 先人工审阅最终 `e2e-ten-current` 的 3 个模型质量 finding 与 20 个 `K-*` 知识候选，决定 reject / adapter backlog / tenant memory / governed context；随后恢复 PingAn 内网 RID-01..10 真实验收。任何 simulation 都不关闭 `mocked=false` gate。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -41,6 +41,39 @@
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / External Product Complete + Real Debt Open** | 既有 simulation、PI-01F/F2 和 PI-01G 专家子智能体产品链已完成；7 个真实 gate 保持 open | 外网产品完整性缺口已关闭；fresh real evidence、具名 owner approval、cohort enforcement 和可执行 rollback 到位后才能进入 Pilot readiness review |
+
+## 2026-08-10 — Ten complete-alert unified E2E validation passed with quality findings
+
+- 新增 `validation/compact_zeus/e2e/` 作为日常完整链路的唯一审阅入口；不再要求从
+  `soc-runtime-validation`、`soc-internal-validation` 和 `soc-lead-agent-validation` 手工拼接一次告警。
+  三个旧根目录继续保留专项/历史证据。
+- 固定 10 条完整告警：D10 的 8 条完整代表样本，加 `2025642` NDR 反弹 Shell 和 `1980502` EDR
+  SAM Dumping。明确排除上游证据缺失的 `1965452/1965795`，输入选择按 alert ID 和 manifest 顺序
+  fail closed，不再依赖 DataFrame 行号。
+- 统一运行器复用生产 `SocAnalysisService`，使用 `deepseek-v4-flash`、独立
+  `backend/.deer-flow/soc-validation/e2e-ten-current/soc-e2e.sqlite`、PingAn tenant-policy shadow 和现有
+ 只读模拟 MCP Provider。每条输出 `00-ingress` 到 `11-knowledge-candidates`，再生成
+  `final-conclusion.json`；原始 payload、Runtime trace、Grounding、Decision、InvestigationEvidence、
+  ReviewQueue 和 Lead Agent bounded context 均在同一目录。
+- Analyzer 契约升级为 `AnalysisResult.v3`：Runtime 为当前告警生成精确 typed `E-*` 事实目录，为
+  Skill/Adapter/Confirmed Memory/Governed Context/Tool Result 生成 `S/A/M/C/T-*` 目录；模型只在
+  `R-*` 中表达安全推理。`soc-analysis-v12` / `soc-analysis-json-parser-v10` 只做有日志、无安全语义的
+  唯一关系修复，Grounding v3 分别校验事实 tuple 和推理引用完整性。
+- 最终 fresh 实跑结果：10/10 structural/safety acceptance passed，6 `suspicious`、4 `needs_review`，10/10 进入
+  ReviewQueue，10/10 tenant-policy decision，33 条 mock InvestigationEvidence，0 base-run mutation，
+  0 automation/high-risk/auto-close/confirmed-memory permission。10 条都不是模型准确率声明，真实 Provider
+  debt 保持 open。
+- 模型质量单列为 `quality_status=review_required`：3 个 case 共 3 条 `E-*` 和 5 条关联 `R-*` 被拒绝。
+  `1965794` 把 typed boolean `true` 复制成字符串，`1965802` 丢失正文尾部 CRLF，`1965449` 引用了不存在
+  的 `A-*`。这三类都保留为真实质量 finding；不通过猜测 Adapter 引用或放宽 exact typed tuple 洗绿。
+- 20 个 typed `K-*` 已汇总到 `knowledge-review/REVIEW.md`；17 个 support grounded、3 个 unresolved。
+  所有候选保持 `pending_review`、`decision_impact=none`，没有 Memory/Skill/Adapter/Policy 自动写入。
+- fresh run 中模型空响应、timeout、重复引用、字符串 boolean 和冗余字段缺失均先 fail closed；只有可证明
+  无安全语义的结构关系进入 parser repair，失败项通过同一 batch `--resume` 重试，最终 10/10 完成。
+- 验证：Ruff 与聚焦 backend/validation 回归通过（`60 + 93 + 35 + 48 = 236 passed`）；每个 case
+  13 个 JSON 文件齐全，根目录 `0700`、JSON `0600`。统一本地产物含完整内部告警衍生数据且 Git ignored。
+- 已按长期开发流程执行 `codegraph sync .`，新增 2 个源码文件、41 个索引节点；下一刀可直接查询
+  `reference_catalog` 和固定十条 E2E runner。
 
 ## 2026-08-10 — Tenant disposition policy v1 shadow path completed
 

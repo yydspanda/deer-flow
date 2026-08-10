@@ -97,6 +97,7 @@ def test_approved_scanner_returns_false_positive_candidate() -> None:
         "fact_reconstruct",
         "build_analysis_input",
         "skill_context",
+        "reference_catalog",
         "analyze_stub",
         "schema_validate",
         "evidence_grounding",
@@ -444,7 +445,8 @@ def test_pingan_legacy_apt_alert_normalizes_platform_envelope() -> None:
     assert run.llm_analysis_request.primary_evidence_path == "alert.hitLog[0].zeusRawLogs[0]"
     assert "evidence input policy selected low-trust structured fallback" in run.llm_analysis_request.warnings
     assert run.analysis is not None
-    assert any(item.description == "事实重建使用低可信 fallback" for item in run.analysis.evidence)
+    catalog = {item.evidence_ref: item for item in run.llm_analysis_request.evidence_catalog}
+    assert all(item.evidence_ref in catalog and item.source == catalog[item.evidence_ref].source_path and item.value == catalog[item.evidence_ref].value for item in run.analysis.evidence)
     assert "30.180.248.178" in run.entities.ips
     assert "30.185.76.75" in run.entities.ips
     assert "app.example.internal" in run.entities.domains

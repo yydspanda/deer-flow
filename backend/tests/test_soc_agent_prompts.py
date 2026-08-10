@@ -38,9 +38,10 @@ def test_analysis_prompt_uses_bounded_llm_request_for_pingan_apt() -> None:
     assert "marker-bearing scalar" in prompt.system
     assert "does not reveal the hidden bytes" in prompt.system
     assert "provider_detection_outcome_assertion" in prompt.system
-    assert "Never serialize a whole object" in prompt.system
-    assert "Copy evidence.value verbatim" in prompt.system
-    assert "an IP address and a port" in prompt.system
+    assert "Do not serialize or synthesize arrays" in prompt.system
+    assert "exact scalar paired with that E-* ID" in str(prompt.response_schema)
+    assert "general_security_knowledge" in prompt.system
+    assert "Each distinct current-alert scalar fact" in prompt.system
     assert "Return JSON only" in prompt.system
     assert "Bounded analysis context" in prompt.user
     assert prompt.context["skill_context"]["selected_skills"]
@@ -75,7 +76,8 @@ def test_analysis_prompt_handles_missing_evidence_policy() -> None:
     assert "missing evidence input policy" in prompt.context["fact_reconstruction"]["warnings"]
     assert "needs_review" in prompt.system
     assert "knowledge_candidates" in prompt.response_schema
-    assert prompt.response_schema["schema_version"] == "soc.analysis_result.v2"
+    assert prompt.response_schema["schema_version"] == "soc.analysis_result.v3"
+    assert "reasoning" in prompt.response_schema
     assert "scenario_assessments" in prompt.response_schema
     assert "evidence_gaps" in prompt.response_schema
     assert "manual_checks" in prompt.response_schema

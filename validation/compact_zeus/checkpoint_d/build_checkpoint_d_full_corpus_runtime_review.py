@@ -61,6 +61,7 @@ EXPECTED_RUNTIME_STEPS = (
     "fact_reconstruct",
     "build_analysis_input",
     "skill_context",
+    "reference_catalog",
     "analyze_stub",
     "schema_validate",
     "evidence_grounding",

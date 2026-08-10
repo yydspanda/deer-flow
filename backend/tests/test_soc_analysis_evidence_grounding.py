@@ -4,7 +4,10 @@ import json
 from pathlib import Path
 
 from soc_agent.contracts import (
+    AnalysisEvidenceCatalogItem,
     AnalysisEvidenceGroundingStatus,
+    AnalysisReasoningBasis,
+    AnalysisReasoningItem,
     AnalysisResult,
     BoundedAnalysisEvidence,
     EncodedSpanOmission,
@@ -19,6 +22,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.core.runtime import build_analysis_request_for_payload
 from soc_agent.pipeline.evidence_grounding import ground_analysis_evidence
+from soc_agent.pipeline.reference_catalog import finalize_analysis_reference_catalogs
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
 
@@ -28,12 +32,49 @@ def _request():
     return build_analysis_request_for_payload(payload)
 
 
-def _analysis(*evidence: EvidenceItem) -> AnalysisResult:
+def _catalog_item(request, *, path: str | None = None, value: object = None):
+    for item in request.evidence_catalog:
+        if path is not None and item.source_path != path:
+            continue
+        if value is not None and (type(item.value) is not type(value) or item.value != value):
+            continue
+        return item
+    raise AssertionError(f"catalog item not found: path={path!r} value={value!r}")
+
+
+def _evidence(item: AnalysisEvidenceCatalogItem, description: str = "当前告警事实") -> EvidenceItem:
+    return EvidenceItem(
+        evidence_ref=item.evidence_ref,
+        source=item.source_path,
+        description=description,
+        value=item.value,
+    )
+
+
+def _analysis(
+    *evidence: EvidenceItem,
+    reasoning: list[AnalysisReasoningItem] | None = None,
+    summary: str = "测试分析结果",
+    scenarios: list[TriageScenarioAssessment] | None = None,
+) -> AnalysisResult:
+    evidence_refs = [item.evidence_ref for item in evidence]
+    assert all(evidence_refs)
     return AnalysisResult(
         verdict=Verdict.TRUE_POSITIVE,
         confidence=0.9,
-        summary="测试分析结果",
+        summary=summary,
         evidence=list(evidence),
+        reasoning=reasoning
+        or [
+            AnalysisReasoningItem(
+                reasoning_id="R-01",
+                statement="当前事实与待调查安全行为相关。",
+                basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
+                evidence_refs=evidence_refs,
+                confidence=0.8,
+            )
+        ],
+        scenario_assessments=scenarios or [],
         evidence_gaps=["测试上下文未覆盖完整调查信息。"],
         manual_checks=["人工复核测试证据。"],
         reason="测试证据落地校验",
@@ -41,289 +82,130 @@ def _analysis(*evidence: EvidenceItem) -> AnalysisResult:
     )
 
 
-def test_grounding_accepts_value_from_declared_bounded_source() -> None:
-    report = ground_analysis_evidence(
-        _analysis(EvidenceItem(source="detection", description="规则编号", value="EDR-IOC-001")),
-        _request(),
-    )
+def test_grounding_accepts_exact_current_alert_catalog_fact() -> None:
+    request = _request()
+    item = _catalog_item(request, path="detection.rule_code", value="EDR-IOC-001")
+
+    report = ground_analysis_evidence(_analysis(_evidence(item, "规则编号")), request)
 
     assert report.grounded_count == 1
     assert report.ungrounded_count == 0
+    assert report.reasoning_grounded_count == 1
     assert report.items[0].status is AnalysisEvidenceGroundingStatus.GROUNDED
-    assert "detection.rule_code" in report.items[0].matched_context_paths
+    assert report.items[0].matched_context_paths == ["detection.rule_code"]
 
 
-def test_grounding_rejects_description_that_cites_a_sibling_context_value() -> None:
-    report = ground_analysis_evidence(
-        _analysis(
-            EvidenceItem(
-                source="detection",
-                description="规则 EDR-IOC-001 命中目标 198.51.100.77",
-                value="EDR-IOC-001",
-            )
-        ),
-        _request(),
+def test_grounding_report_accepts_up_to_forty_selected_evidence_items() -> None:
+    request = _request()
+    catalog_items = request.evidence_catalog[:30]
+    reasoning = AnalysisReasoningItem(
+        reasoning_id="R-01",
+        statement="所选事实共同构成当前告警的有界调查上下文。",
+        basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
+        evidence_refs=[catalog_items[0].evidence_ref],
+        confidence=0.8,
     )
 
-    assert report.grounded_count == 0
-    assert report.ungrounded_count == 1
-    assert report.description_leakage_count == 1
-    assert report.items[0].status is AnalysisEvidenceGroundingStatus.DESCRIPTION_CONTEXT_LEAKAGE
-    assert "detection.rule_code" in report.items[0].matched_context_paths
-    assert any(path.endswith("destination_ip") for path in report.items[0].foreign_description_context_paths)
-
-
-def test_grounding_rejects_description_that_cites_a_sibling_path_key() -> None:
-    request = _request().model_copy(
-        update={
-            "primary_evidence": BoundedAnalysisEvidence(
-                source_path="raw.message",
-                layer=EvidenceLayer.RAW_MESSAGE,
-                trust_level=EvidenceTrustLevel.HIGH,
-                content=('{"decoded_fields":{"rule_labels":{"0x100604":{"parent_name":"弱口令"},"0x100600":{"name":"弱口令"}}}}'),
-            )
-        }
-    )
     report = ground_analysis_evidence(
         _analysis(
-            EvidenceItem(
-                source="raw.message#decoded.rule_labels.0x100604.parent_name",
-                description="0x100604 为弱口令，父标签 0x100600 也为弱口令",
-                value="弱口令",
-            )
+            *(_evidence(item) for item in catalog_items),
+            reasoning=[reasoning],
         ),
         request,
     )
 
-    assert report.items[0].status is AnalysisEvidenceGroundingStatus.DESCRIPTION_CONTEXT_LEAKAGE
-    assert report.description_leakage_count == 1
-    assert any("0x100600" in path for path in report.items[0].foreign_description_context_paths)
+    assert report.total_count == 30
+    assert report.grounded_count == 30
 
 
-def test_grounding_rejects_uncited_short_port_in_description() -> None:
-    request = _request().model_copy(
-        update={
-            "primary_evidence": BoundedAnalysisEvidence(
-                source_path="raw.message",
-                layer=EvidenceLayer.RAW_MESSAGE,
-                trust_level=EvidenceTrustLevel.HIGH,
-                content='{"fields":{"dip":"30.184.42.99","dport":80}}',
-            )
-        }
+def test_grounding_rejects_unknown_evidence_reference() -> None:
+    evidence = EvidenceItem(
+        evidence_ref="E-000000000000",
+        source="detection.rule_code",
+        description="不存在的目录引用",
+        value="EDR-IOC-001",
     )
+
+    report = ground_analysis_evidence(_analysis(evidence), _request())
+
+    assert report.items[0].status is AnalysisEvidenceGroundingStatus.REFERENCE_NOT_FOUND
+    assert report.reasoning_items[0].status is AnalysisEvidenceGroundingStatus.REFERENCE_NOT_FOUND
+
+
+def test_grounding_rejects_source_or_value_changed_after_reference_selection() -> None:
+    request = _request()
+    item = _catalog_item(request, path="detection.rule_code", value="EDR-IOC-001")
+    wrong_source = _evidence(item).model_copy(update={"source": "detection.rule_name"})
+    wrong_value = _evidence(item).model_copy(update={"value": "RISK-DOES-NOT-EXIST"})
+
+    source_report = ground_analysis_evidence(_analysis(wrong_source), request)
+    value_report = ground_analysis_evidence(_analysis(wrong_value), request)
+
+    assert source_report.items[0].status is AnalysisEvidenceGroundingStatus.SOURCE_MISMATCH
+    assert value_report.items[0].status is AnalysisEvidenceGroundingStatus.VALUE_NOT_FOUND
+
+
+def test_grounding_allows_declared_general_security_reasoning() -> None:
+    request = _request()
+    item = _catalog_item(request, path="canonical_entities.process.process_name", value="powershell.exe")
+    reasoning = AnalysisReasoningItem(
+        reasoning_id="R-01",
+        statement="隐藏运行的 PowerShell 常见于攻击脚本执行，但仍需结合上下文确认。",
+        basis=[
+            AnalysisReasoningBasis.CURRENT_EVIDENCE,
+            AnalysisReasoningBasis.GENERAL_SECURITY_KNOWLEDGE,
+        ],
+        evidence_refs=[item.evidence_ref],
+        confidence=0.78,
+    )
+
     report = ground_analysis_evidence(
-        _analysis(
-            EvidenceItem(
-                source="raw.message#parsed.dip",
-                description="目标 IP 为 30.184.42.99，目标端口为 80",
-                value="30.184.42.99",
-            )
-        ),
+        _analysis(_evidence(item, "进程名"), reasoning=[reasoning]),
         request,
     )
 
-    assert report.items[0].status is (AnalysisEvidenceGroundingStatus.DESCRIPTION_CONTEXT_LEAKAGE)
-    assert any(path.endswith("fields.dport") for path in report.items[0].foreign_description_context_paths)
-
-
-def test_grounding_accepts_equivalent_punctuation_from_the_quoted_value() -> None:
-    user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) HeadlessChrome/146.0.0.0"
-    request = _request().model_copy(
-        update={
-            "primary_evidence": BoundedAnalysisEvidence(
-                source_path="raw.message",
-                layer=EvidenceLayer.RAW_MESSAGE,
-                trust_level=EvidenceTrustLevel.HIGH,
-                content=json.dumps(
-                    {
-                        "decoded_fields": {
-                            "payload": {"req_header": {"headers": {"user-agent": [user_agent]}}},
-                            "rule_labels": {"0x110A02": {"os": "Mac OS X 10.15"}},
-                        }
-                    }
-                ),
-            )
-        }
-    )
-    report = ground_analysis_evidence(
-        _analysis(
-            EvidenceItem(
-                source=("raw.message#decoded.payload.req_header.headers.user-agent[0]"),
-                description="User-Agent 显示 Mac OS X 10.15 和 HeadlessChrome",
-                value=user_agent,
-            )
-        ),
-        request,
-    )
-
-    assert report.grounded_count == 1
+    assert report.reasoning_grounded_count == 1
     assert report.description_leakage_count == 0
 
 
-def test_grounding_ignores_synthetic_entity_keys_in_description_audit() -> None:
-    report = ground_analysis_evidence(
-        _analysis(
-            EvidenceItem(
-                source="canonical_entities.network.source_ip",
-                description="源 IP 10.0.9.9 是私有地址",
-                value="10.0.9.9",
-            )
-        ),
-        _request(),
+def test_grounding_requires_governed_reference_for_skill_reasoning() -> None:
+    request = _request()
+    fact = _catalog_item(request, path="detection.rule_code", value="EDR-IOC-001")
+    skill = next(item for item in request.context_catalog if item.context_ref.startswith("S-"))
+    accepted = AnalysisReasoningItem(
+        reasoning_id="R-01",
+        statement="按终端研判 Skill，应补查同时间窗子进程。",
+        basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE, AnalysisReasoningBasis.SKILL],
+        evidence_refs=[fact.evidence_ref],
+        context_refs=[skill.context_ref],
+        confidence=0.8,
     )
+    missing = accepted.model_copy(update={"context_refs": ["S-000000000000"]})
+    undeclared = accepted.model_copy(update={"basis": [AnalysisReasoningBasis.CURRENT_EVIDENCE]})
 
-    assert report.grounded_count == 1
-    assert report.description_leakage_count == 0
+    accepted_report = ground_analysis_evidence(_analysis(_evidence(fact), reasoning=[accepted]), request)
+    missing_report = ground_analysis_evidence(_analysis(_evidence(fact), reasoning=[missing]), request)
+    undeclared_report = ground_analysis_evidence(_analysis(_evidence(fact), reasoning=[undeclared]), request)
 
-
-def test_grounding_does_not_treat_an_explicit_disclaimer_as_a_sibling_claim() -> None:
-    request = _request().model_copy(
-        update={
-            "primary_evidence": BoundedAnalysisEvidence(
-                source_path="raw.message",
-                layer=EvidenceLayer.RAW_MESSAGE,
-                trust_level=EvidenceTrustLevel.HIGH,
-                content='{"fields":{"host_state":"攻击成功"}}',
-            )
-        }
-    )
-    report = ground_analysis_evidence(
-        _analysis(
-            EvidenceItem(
-                source="detection",
-                description="该规则名只是检测器分类，并非独立攻击成功证明",
-                value="EDR-IOC-001",
-            )
-        ),
-        request,
-    )
-
-    assert report.grounded_count == 1
-    assert report.description_leakage_count == 0
+    assert accepted_report.reasoning_grounded_count == 1
+    assert missing_report.reasoning_items[0].status is AnalysisEvidenceGroundingStatus.REFERENCE_NOT_FOUND
+    assert undeclared_report.reasoning_items[0].status is AnalysisEvidenceGroundingStatus.UNSUPPORTED_REFERENCE
 
 
-def test_grounding_rejects_hallucinated_value_and_unknown_source() -> None:
-    report = ground_analysis_evidence(
-        _analysis(
-            EvidenceItem(source="detection", description="不存在的规则", value="RISK-DOES-NOT-EXIST"),
-            EvidenceItem(source="provider_private_state", description="不存在的来源", value="secret"),
-        ),
-        _request(),
-    )
-
-    assert report.grounded_count == 0
-    assert report.ungrounded_count == 2
-    assert report.items[0].status is AnalysisEvidenceGroundingStatus.VALUE_NOT_FOUND
-    assert report.items[1].status is AnalysisEvidenceGroundingStatus.SOURCE_MISMATCH
-
-
-def test_grounding_accepts_composite_values_only_when_every_part_exists() -> None:
-    report = ground_analysis_evidence(
-        _analysis(
-            EvidenceItem(
-                source="entities",
-                description="通信两端",
-                value="10.0.9.9, 198.51.100.77",
-            )
-        ),
-        _request(),
-    )
-
-    assert report.grounded_count == 1
-    assert len(report.items[0].matched_context_paths) >= 2
-
-
-def test_grounding_rejects_composite_source_paths() -> None:
-    report = ground_analysis_evidence(
-        _analysis(
-            EvidenceItem(
-                source="detection, entities",
-                description="来源必须是一个精确路径",
-                value="EDR-IOC-001",
-            )
-        ),
-        _request(),
-    )
-
-    assert report.items[0].status is AnalysisEvidenceGroundingStatus.SOURCE_MISMATCH
-
-
-def test_grounding_flags_http_success_claim_without_outcome_artifact() -> None:
-    request = _request().model_copy(
-        update={
-            "primary_evidence": BoundedAnalysisEvidence(
-                source_path="raw.message",
-                layer=EvidenceLayer.RAW_MESSAGE,
-                trust_level=EvidenceTrustLevel.HIGH,
-                content='{"decoded_fields": {"response": {"status_code": 200}}}',
-            )
-        }
-    )
-    analysis = _analysis(EvidenceItem(source="primary_evidence", description="HTTP响应", value="200")).model_copy(update={"summary": "目标返回 HTTP 200，说明漏洞利用成功"})
+def test_grounding_flags_success_claim_without_outcome_artifact() -> None:
+    request = _request()
+    item = _catalog_item(request, path="detection.rule_code", value="EDR-IOC-001")
+    analysis = _analysis(_evidence(item), summary="规则命中说明漏洞利用成功")
 
     report = ground_analysis_evidence(analysis, request)
 
     assert "outcome-success claim" in " ".join(report.warnings)
 
 
-def test_grounding_accepts_approved_section_shorthand_and_structured_punctuation() -> None:
-    request = _request().model_copy(
-        update={
-            "primary_evidence": BoundedAnalysisEvidence(
-                source_path="raw.message",
-                layer=EvidenceLayer.RAW_MESSAGE,
-                trust_level=EvidenceTrustLevel.HIGH,
-                content=('{"fields": {"attack_sip": "10.0.9.9", "rsp_status": 200}, "decoded_fields": {"response": {"server": "nginx/1.21.3"}}}'),
-            )
-        }
-    )
-    report = ground_analysis_evidence(
-        _analysis(
-            EvidenceItem(
-                source="primary_evidence.content",
-                description="厂商声明攻击源",
-                value="attack_sip: 10.0.9.9",
-            ),
-            EvidenceItem(
-                source="evidence.primary_evidence.content",
-                description="响应状态",
-                value="rsp_status: 200",
-            ),
-            EvidenceItem(
-                source="raw.message#parsed.attack_sip",
-                description="原始消息解析字段",
-                value="10.0.9.9",
-            ),
-            EvidenceItem(
-                source="raw.message#parsed.fields.rsp_status",
-                description="显式 parsed root",
-                value="200",
-            ),
-            EvidenceItem(
-                source="raw.message#decoded.response.server",
-                description="显式 decoded 路径",
-                value="nginx/1.21.3",
-            ),
-        ),
-        request,
-    )
-
-    assert report.grounded_count == 5
-    assert report.ungrounded_count == 0
-
-
 def test_grounding_does_not_flag_explicitly_unconfirmed_outcome() -> None:
-    request = _request().model_copy(
-        update={
-            "primary_evidence": BoundedAnalysisEvidence(
-                source_path="raw.message",
-                layer=EvidenceLayer.RAW_MESSAGE,
-                trust_level=EvidenceTrustLevel.HIGH,
-                content='{"decoded_fields": {"response": {"status_code": 200}}}',
-            )
-        }
-    )
-    analysis = _analysis(EvidenceItem(source="primary_evidence", description="HTTP响应", value="200")).model_copy(update={"summary": "HTTP 200 无法确认代码执行或文件写入是否成功"})
+    request = _request()
+    item = _catalog_item(request, path="detection.rule_code", value="EDR-IOC-001")
+    analysis = _analysis(_evidence(item), summary="规则命中无法确认代码执行是否成功")
 
     report = ground_analysis_evidence(analysis, request)
 
@@ -332,114 +214,78 @@ def test_grounding_does_not_flag_explicitly_unconfirmed_outcome() -> None:
 
 def test_grounding_flags_impact_confirmed_stage_without_outcome_artifact() -> None:
     request = _request()
-    analysis = _analysis(
-        EvidenceItem(
-            source="detection",
-            description="规则命中",
-            value="EDR-IOC-001",
-        )
-    ).model_copy(
-        update={
-            "scenario_assessments": [
-                TriageScenarioAssessment(
-                    scenario_name="终端失陷",
-                    scenario_key="endpoint_compromise",
-                    is_primary=True,
-                    origin=TriageScenarioOrigin.INFERRED,
-                    confidence=0.9,
-                    activity_stage=TriageActivityStage.IMPACT_CONFIRMED,
-                    evidence_indices=[0],
-                    rationale="规则名称指向终端失陷。",
-                )
-            ]
-        }
+    item = _catalog_item(request, path="detection.rule_code", value="EDR-IOC-001")
+    scenario = TriageScenarioAssessment(
+        scenario_name="终端失陷",
+        scenario_key="endpoint_compromise",
+        is_primary=True,
+        origin=TriageScenarioOrigin.INFERRED,
+        confidence=0.9,
+        activity_stage=TriageActivityStage.IMPACT_CONFIRMED,
+        evidence_refs=[item.evidence_ref],
+        reasoning_refs=["R-01"],
+        rationale="规则与行为共同指向终端失陷。",
     )
 
-    report = ground_analysis_evidence(analysis, request)
+    report = ground_analysis_evidence(_analysis(_evidence(item), scenarios=[scenario]), request)
 
     assert "outcome-success claim" in " ".join(report.warnings)
 
 
-def test_grounding_accepts_visible_encoded_omission_marker_but_rejects_private_sidecar_hash() -> None:
+def test_grounding_encoded_marker_proves_only_visible_omission() -> None:
     digest = "a" * 64
     marker = f"<ENCODED:base64_like:320:sha256={digest[:12]}:OMITTED>"
-    request = _request().model_copy(
-        update={
-            "primary_evidence": BoundedAnalysisEvidence(
-                source_path="raw.message",
-                layer=EvidenceLayer.RAW_MESSAGE,
-                trust_level=EvidenceTrustLevel.HIGH,
-                content=f'{{"fields": {{"payload": "{marker}"}}}}',
-                encoded_span_omissions=[
-                    EncodedSpanOmission(
-                        field_path="raw.message#parsed.payload",
-                        kind="base64_like",
-                        original_chars=320,
-                        sha256=digest,
-                    )
-                ],
-            )
-        }
+    request = finalize_analysis_reference_catalogs(
+        _request().model_copy(
+            update={
+                "primary_evidence": BoundedAnalysisEvidence(
+                    source_path="raw.message",
+                    layer=EvidenceLayer.RAW_MESSAGE,
+                    trust_level=EvidenceTrustLevel.HIGH,
+                    content=json.dumps({"fields": {"payload": marker}}),
+                    encoded_span_omissions=[
+                        EncodedSpanOmission(
+                            field_path="raw.message#parsed.payload",
+                            kind="base64_like",
+                            original_chars=320,
+                            sha256=digest,
+                        )
+                    ],
+                )
+            }
+        )
     )
+    marker_item = _catalog_item(request, value=marker)
 
-    report = ground_analysis_evidence(
-        _analysis(
-            EvidenceItem(
-                source="raw.message#parsed.payload",
-                description="模型边界中的编码占位符",
-                value=marker,
-            ),
-            EvidenceItem(
-                source="primary_evidence",
-                description="省略内容的审计哈希",
-                value=digest,
-            ),
-        ),
-        request,
-    )
+    report = ground_analysis_evidence(_analysis(_evidence(marker_item)), request)
 
-    assert report.grounded_count == 1
-    assert report.ungrounded_count == 1
     assert report.items[0].status is AnalysisEvidenceGroundingStatus.GROUNDED
-    assert "grounds only the visible field presence" in report.items[0].reason
-    assert report.items[1].status is AnalysisEvidenceGroundingStatus.VALUE_NOT_FOUND
+    assert "proves only visible presence" in report.items[0].reason
+    assert not any(item.value == digest for item in request.evidence_catalog)
 
 
-def test_grounding_accepts_only_high_trust_bounded_provider_outcome_assertions() -> None:
+def test_grounding_accepts_only_high_trust_bounded_provider_outcome_assertion() -> None:
     field_path = "raw.message#parsed.host_state"
     primary = BoundedAnalysisEvidence(
         source_path="raw.message",
         layer=EvidenceLayer.RAW_MESSAGE,
         trust_level=EvidenceTrustLevel.HIGH,
-        content='{"fields":{"host_state":"攻击成功"}}',
+        content='{"host_state":"攻击成功"}',
         projected_field_paths=[field_path],
     )
-    request = _request().model_copy(
-        update={
-            "primary_evidence": primary,
-            "source_field_semantics": [
-                SourceFieldSemantic(
-                    field_path=field_path,
-                    semantic_type="provider_detection_outcome_assertion",
-                    meaning="reviewed provider outcome",
-                    participates_in_reasoning=True,
-                )
-            ],
-        }
+    semantic = SourceFieldSemantic(
+        field_path=field_path,
+        semantic_type="provider_detection_outcome_assertion",
+        meaning="reviewed provider outcome",
+        participates_in_reasoning=True,
     )
-    analysis = _analysis(
-        EvidenceItem(
-            source=field_path,
-            description="上游检测结果标记为攻击成功",
-            value="攻击成功",
-        )
-    ).model_copy(update={"summary": "上游检测结果为攻击成功"})
+    request = finalize_analysis_reference_catalogs(_request().model_copy(update={"primary_evidence": primary, "source_field_semantics": [semantic]}))
+    item = _catalog_item(request, value="攻击成功")
+    analysis = _analysis(_evidence(item), summary="上游检测结果为攻击成功")
+    low_trust_request = finalize_analysis_reference_catalogs(request.model_copy(update={"primary_evidence": primary.model_copy(update={"trust_level": EvidenceTrustLevel.LOW})}))
 
     report = ground_analysis_evidence(analysis, request)
-    low_trust_report = ground_analysis_evidence(
-        analysis,
-        request.model_copy(update={"primary_evidence": primary.model_copy(update={"trust_level": EvidenceTrustLevel.LOW})}),
-    )
+    low_trust_report = ground_analysis_evidence(analysis, low_trust_request)
 
     assert "outcome-success claim" not in " ".join(report.warnings)
     assert "outcome-success claim" in " ".join(low_trust_report.warnings)

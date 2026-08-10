@@ -256,11 +256,15 @@ flowchart TD
     F --> G["3️⃣ fact_reconstruct<br/>重建事实、角色、字段可信度和冲突"]
     G --> H["4️⃣ build_analysis_input<br/>构造 LLMAnalysisRequest"]
     H --> I["5️⃣ skill_context<br/>白名单选择 + Skill-package bounded guidance"]
-    I --> PJ["📝 Pre-provider journal<br/>running + bounded metadata"]
-    PJ --> J["6️⃣ analyze_stub / LLM analyzer<br/>受控分析节点"]
-    J --> K["7️⃣ schema_validate<br/>Pydantic schema + domain validation"]
-    K --> L["8️⃣ evidence_grounding<br/>证据值回指 bounded context"]
-    L --> M["9️⃣ SocDecisionPolicy<br/>生成受控 Decision"]
+    I --> RC["6️⃣ reference_catalog<br/>E-* facts + S/A/M/C/T context"]
+    RC --> PJ["📝 Pre-provider journal<br/>running + bounded metadata"]
+    PJ --> J["7️⃣ analyze_stub / LLM analyzer<br/>E-* facts + R-* reasoning + K-* candidates"]
+    J -.-> KC["💡 K-* candidate knowledge<br/>只建议、不生效"]
+    KC -.-> KR["🧑‍💻 Human review package<br/>Memory / Skill / Adapter / Policy 分流"]
+    KR -.-> KX["🚫 No automatic write or decision impact"]
+    J --> K["8️⃣ schema_validate<br/>Pydantic schema + domain validation"]
+    K --> L["9️⃣ evidence_grounding<br/>校验 E-* 精确事实与 R-* 引用完整性"]
+    L --> M["🔟 SocDecisionPolicy<br/>生成受控 Decision"]
 
     M --> N{"needs_review?<br/>是否需要复核"}
     N -->|Yes| O["AnalysisRun.status = needs_review"]
@@ -284,12 +288,14 @@ flowchart TD
 | `normalize` | Convert vendor payload to canonical alert | 把不同供应商、平安 Zeus envelope、EDR/APT/HIDS 原始字段转成统一 `AlertInput`；保留每条 message 的 network/process observation，并用 `SourceFieldSemantic` 阻止供应商占位值进入实体和推理 | `AlertInput`, `NormalizationReport` |
 | `entity_extract` | Extract security entities | 抽取 IP、域名、URL、host、user/UM、process、file、rule_code/rule_name 等实体 | `ExtractedEntities` |
 | `fact_reconstruct` | Rebuild and adjudicate facts | 把厂商字段声明转换为 `RoleClaim`，结合场景假设裁决 source/destination/attacker/victim/impacted asset；只在同一 observation 内判冲突，不把不同请求或不同进程执行压成一条会话；冲突时给暂定结论、证据缺口和核查清单，但不确定 response target | `FactReconstructionResult v2`, `RoleResolution`, `ConflictReport` |
-| `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型；按结构化字段和高价值优先级构造合法 JSON 投影，精确记录 projected/sanitized/omitted path，跨消息保留关键请求和进程证据 | `LLMAnalysisRequest` |
+| `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型；按结构化字段和高价值优先级构造合法 JSON 投影，精确记录 projected/sanitized/omitted path，跨消息保留关键请求和进程证据 | `LLMAnalysisRequest.v3` |
 | `skill_context` | Resolve and project SOC skills | 根据 canonical typed source/entity/conflict 选择 SOC Skills，再从真实 public package 投影受预算约束的 `runtime-guidance.md`；记录选择原因、package/guidance hash 和 token accounting，不注入完整 `SKILL.md` | `SocSkillContext.v2` |
+| `reference_catalog` | Build deterministic fact and context references | Runtime 从同一份模型可见投影生成稳定引用：当前告警原子事实为 `E-*`；Skill/Adapter/Confirmed Memory/Governed Context/Tool Result 分别为 `S/A/M/C/T-*`。引用绑定精确 path、typed scalar 或受治理来源，新增供应商字段只要进入通用 bounded projection 就自动进入目录，不需要为每条告警写规则 | `AnalysisEvidenceCatalogItem[]`, `AnalysisContextCatalogItem[]` |
 | `pre-provider journal` | Commit non-rollbackable call metadata | 在调用 analyzer/provider 前先把同一个 run 以 `running` 落到 `soc_analysis_runs`；只写 request hash/schema、模型、步骤、来源、证据计数、skill、request/trace/actor 和哈希后的幂等键，不写渲染 prompt、provider header/response、credential/token | `AnalysisRequestJournal` |
-| `analyze_stub / LLM analyzer` | Run bounded reasoning | 默认 deterministic stub；显式选择后通过 DeerFlow `create_chat_model` 调用真实模型。输出当前 verdict，并把开放场景、来源、行为阶段、竞争解释、证据缺口和人工核查项结构化；上游场景只是提示 | `AnalysisNodeOutput`, `AnalysisResult.v2`, `TriageScenarioAssessment` |
-| `schema_validate` | Validate model result | 严格校验 JSON schema、字段类型和 domain rule；坏 JSON 只允许有审计记录的无损 repair。场景列表非空时只能有一个 primary，evidence index 必须回指本结果，未知字段被拒绝 | `AnalysisResult.v2` |
-| `evidence_grounding` | Ground model claims | `soc.analysis_evidence_grounding.v2` 对每条 `AnalysisResult.evidence` 校验唯一精确 source、逐字 scalar value 和 description；区分 `#parsed/#decoded/#repaired`，拒绝 composite citation、拼接 `key=value`、object-as-string 和未证实 outcome。精确可见的 encoded-omission marker 只证明值存在、编码形态和模型边界省略，不证明隐藏内容/有效性。source/value 虽落地但 description 夹带 sibling facts 时标为 `description_context_leakage`，同时记录 matched/foreign paths 并计入 ungrounded | `AnalysisEvidenceGroundingReport v2` |
+| `analyze_stub / LLM analyzer` | Run bounded reasoning | 默认 deterministic stub；显式选择后通过 DeerFlow `create_chat_model` 调用真实模型。`evidence[]` 只复制 `E-*` 原子事实；`R-*` 承载通用安全知识、Skill、Adapter、Memory、运营上下文或工具结果支持的推理；开放场景引用 `E-* + R-*`；`K-*` 仅是待人工审核的知识建议 | `AnalysisNodeOutput`, `AnalysisResult.v3`, `TriageScenarioAssessment.v2` |
+| `schema_validate` | Validate model result | 严格校验 JSON schema、字段类型和 domain rule。只允许可审计、无安全语义的机械修复，例如唯一 path/value 恢复 `E-*`、补出已引用的目录事实、精确去重、从已显式引用的 `S/A/M/C/T-*` 补冗余 basis；歧义引用、冲突值和未知字段拒绝 | `AnalysisResult.v3`, parser repair log |
+| `evidence_grounding` | Ground facts and reasoning references | `soc.analysis_evidence_grounding.v3` 先逐条验证 `E-*` 的 reference、source path 和 typed scalar，再验证每个 `R-*` 的 `E-*` 与 `S/A/M/C/T-*` 引用及 basis。Grounded reasoning 只表示输入引用完整，不表示推理是原始日志字面事实、已校准真值或可直接处置 | `AnalysisEvidenceGroundingReport.v3` |
+| `knowledge candidate review` | Review model-suggested reusable knowledge | `K-*` 必须回指本轮 `E-* + R-*`。生产 Runtime 只把它作为 analysis 的 inert data；验证工具可汇总为人工审核包并建议 `general_skill / tenant_memory / governed_context / provider_requirement / adapter_mapping / tenant_policy / evaluation_fixture / reject_or_verify`，但不会自动写入或激活任何目标 | `K-* pending_review`, validation `knowledge-review/REVIEW.md` |
 | `decide` | Apply deterministic decision policy | `SocDecisionPolicy` 将已校验结果转换成 operational decision；保留 raw confidence 来源、校准状态、证据状态、结构化复核原因和 policy version。当前 stub/LLM 分数均未校准，因此必须复核；高分不能覆盖冲突、schema 降级、关键证据缺口、截断或误报确认 | `Decision` |
 | `normalization_monitor` | Detect parser/mapping maintenance work | 在业务结果已落库后检查基线、新结构、解析降级、关键字段缺口和 evidence truncation；失败只写 warning | `NormalizationMonitoringResult`, `NormalizationMaintenanceIssue` |
 
@@ -300,7 +306,7 @@ flowchart LR
     A["🧠 AnalysisResult<br/>verdict + raw confidence"] --> B["⚙️ SocDecisionPolicy<br/>确定性策略"]
     C["🔎 EvidenceCoverage<br/>schema / gap / truncation"] --> B
     D["⚖️ FactReconstruction<br/>conflicts"] --> B
-    GR["🔗 EvidenceGrounding<br/>model claims traced to context"] --> B
+    GR["🔗 EvidenceGrounding v3<br/>E-* exact facts + R-* references"] --> B
     B --> E["📋 Decision<br/>confidence_source<br/>evidence_state<br/>review_reasons<br/>policy_version"]
     E --> F{"👤 Human review required?"}
     F -->|Current stub / LLM: Yes| Q["🗃️ ReviewQueue"]

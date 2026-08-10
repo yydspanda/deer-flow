@@ -101,6 +101,8 @@ def _review_reasons(
         reasons.append(DecisionReviewReason.HIGH_VALUE_EVIDENCE_GAP)
     if grounding.ungrounded_count:
         reasons.append(DecisionReviewReason.UNGROUNDED_ANALYSIS_EVIDENCE)
+    if grounding.reasoning_ungrounded_count:
+        reasons.append(DecisionReviewReason.UNGROUNDED_ANALYSIS_REASONING)
     if any("outcome-success claim" in warning for warning in grounding.warnings):
         reasons.append(DecisionReviewReason.UNPROVEN_OUTCOME_CLAIM)
     if analysis.confidence < review_below:
@@ -120,7 +122,7 @@ def _evidence_state(
         return DecisionEvidenceState.CONFLICTED
 
     schema_statuses = {item.status for item in request.evidence_coverage.message_schemas}
-    if MessageSchemaStatus.DEGRADED in schema_statuses or MessageSchemaStatus.UNSUPPORTED in schema_statuses or request.evidence_coverage.high_value_gaps or grounding.ungrounded_count:
+    if MessageSchemaStatus.DEGRADED in schema_statuses or MessageSchemaStatus.UNSUPPORTED in schema_statuses or request.evidence_coverage.high_value_gaps or grounding.ungrounded_count or grounding.reasoning_ungrounded_count:
         return DecisionEvidenceState.DEGRADED
 
     if _has_partial_evidence(request):

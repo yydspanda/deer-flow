@@ -322,6 +322,39 @@ def test_prepare_batch_items_adds_missing_trusted_tenant_and_rejects_mismatch() 
     assert "does not match default tenant" in errors[0]["error"]
 
 
+def test_prepare_batch_items_selects_exact_alert_ids_in_requested_order() -> None:
+    frame = _frame([301, 302, 303])
+
+    items, errors = prepare_batch_items(
+        frame,
+        alert_ids=["303", "301"],
+    )
+
+    assert errors == []
+    assert [item.alert_id for item in items] == ["303", "301"]
+    assert [item.source_index for item in items] == [2, 0]
+
+
+@pytest.mark.parametrize(
+    ("alert_ids", "message"),
+    [
+        (["301", "301"], "duplicate requested alert ids"),
+        (["999"], "requested alert ids are missing: 999"),
+    ],
+)
+def test_prepare_batch_items_rejects_invalid_exact_selection(
+    alert_ids: list[str],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        prepare_batch_items(_frame([301, 302]), alert_ids=alert_ids)
+
+
+def test_prepare_batch_items_rejects_mixed_index_and_id_selection() -> None:
+    with pytest.raises(ValueError, match="cannot be combined"):
+        prepare_batch_items(_frame([301, 302]), limit=1, alert_ids=["301"])
+
+
 def test_execute_batch_writes_private_artifacts_and_resumes_completed_rows(
     tmp_path: Path,
 ) -> None:
@@ -519,6 +552,36 @@ def test_live_plan_only_does_not_require_execution_confirmation(
     assert exit_code == 0
     output = capsys.readouterr().out
     assert '"estimated_model_call_count": 1' in output
+
+
+def test_plan_only_records_exact_alert_id_selection(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "alerts.pkl"
+    source.write_bytes(b"restricted-loader-fixture")
+    monkeypatch.setattr(
+        "validation.compact_zeus.internal_batch.run_pingan_runtime_batch.load_dataframe_pickle",
+        lambda *_args, **_kwargs: _frame([501, 502, 503]),
+    )
+
+    exit_code = main(
+        [
+            "--source",
+            str(source),
+            "--alert-id",
+            "503",
+            "--alert-id",
+            "501",
+            "--plan-only",
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["source"]["selected_count"] == 2
+    assert output["source"]["requested_alert_ids"] == ["503", "501"]
 
 
 def test_investigation_plan_only_validates_config_without_persistence_or_confirmation(

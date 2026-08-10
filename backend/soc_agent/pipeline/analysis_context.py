@@ -205,6 +205,27 @@ def project_analysis_context(request: LLMAnalysisRequest) -> dict[str, Any]:
             "warnings": request.warnings,
         },
         "skill_context": request.skill_context.model_dump(mode="json", exclude_none=True),
+        "reference_catalogs": {
+            "current_alert_evidence": [
+                {
+                    "evidence_ref": item.evidence_ref,
+                    "source_path": item.source_path,
+                    "value": item.value,
+                    "trust_level": item.trust_level.value,
+                }
+                for item in request.evidence_catalog
+            ],
+            "reasoning_context": [
+                {
+                    "context_ref": item.context_ref,
+                    "kind": item.kind.value,
+                    "label": item.label,
+                    "source_id": item.source_id,
+                    "summary": item.summary,
+                }
+                for item in request.context_catalog
+            ],
+        },
     }
     bounded = _bound_projection(context)
     if not isinstance(bounded, dict):

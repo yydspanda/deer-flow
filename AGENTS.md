@@ -223,19 +223,26 @@ Current SOC direction:
 - SOC model calls have independent process-local admission controls (`SOC_LLM_MAX_CONCURRENCY`,
   optional requests-per-minute, admission timeout, and `SOC_LLM_CALL_TIMEOUT_SECONDS`). Analyzer evidence is deterministically
   grounded against the exact bounded prompt projection before `SocDecisionPolicy` runs.
-- New live analyzer responses use `soc.analysis_result.v2`: open-vocabulary
-  `TriageScenarioAssessment` items distinguish upstream/inferred/hybrid origin and
-  detection/attempt/effect/impact stage, cite zero-based indexes into the same result's evidence,
-  retain competing explanations, gaps and executable manual checks, and have exactly one primary
-  when non-empty. `soc-analysis-v8` / `soc-analysis-json-parser-v5` reject unknown fields and
-  malformed references. This is reasoning output only; Grounding and `SocDecisionPolicy` still own
-  evidence admission and operational decision guards.
-- Evidence Grounding uses `soc.analysis_evidence_grounding.v2`. A source/value match is not enough:
-  if an evidence description imports a distinctive bounded fact outside its quoted value, the item
-  becomes `description_context_leakage` and remains ungrounded. Preserve matched and foreign paths,
-  never semantically repair the model output. An exact visible encoded-omission marker may ground
-  only field presence, encoding shape and boundary omission; its hidden bytes, private sidecar hash,
-  validity and outcome implications remain ungrounded.
+- New live analyzer responses use `soc.analysis_result.v3`. Before the model call, Runtime builds a
+  replay-stable current-alert fact catalog (`E-*`) and governed context catalogs: Skill (`S-*`),
+  adapter contract (`A-*`), confirmed memory (`M-*`), governed context (`C-*`), and tool result
+  (`T-*`). `evidence[]` may contain only exact `E-*` path/value pairs. Security interpretation belongs
+  in explicit `R-*` reasoning items with declared basis and references; open-vocabulary scenario
+  assessments cite both `E-*` and `R-*`. `soc-analysis-v12` / `soc-analysis-json-parser-v10` reject
+  unresolved or ambiguous references. The parser may perform only auditable mechanical repairs: map
+  an exact path/value to its unique `E-*`, materialize a valid cited catalog fact, remove an exact
+  duplicate fact/reference, normalize a strict JSON boolean string, remove an explicit empty context
+  sentinel, derive the redundant basis label from an already explicit valid `S/A/M/C/T` reference,
+  or mark a missing scenario rationale with an explicit non-semantic placeholder when both E/R
+  support lists exist. It must not infer security semantics.
+- Evidence Grounding uses `soc.analysis_evidence_grounding.v3`. It first proves each `E-*` reference,
+  exact source path and typed scalar value, then verifies every `R-*` reference and governed-context
+  namespace. A grounded reasoning item proves reference integrity, not that its model inference is
+  literal telemetry or automatically correct. An exact visible encoded-omission marker proves only
+  field presence, encoding shape and boundary omission; hidden bytes, validity and outcome remain
+  ungrounded. Any evidence or reasoning reference failure keeps the deterministic degraded-review
+  guard. Model-generated `K-*` knowledge candidates are inert review suggestions and must never
+  directly write Memory, modify a Skill/adapter/policy, or affect the current decision.
 - Persisted analysis writes run/summary/optional review/audit as one `AnalysisPersistence` transaction.
   Retryable Runtime failures do not commit Kafka offsets or immediately create analyst queue noise;
   non-retryable failures are recorded, reviewed, and dead-lettered.
@@ -633,6 +640,15 @@ Current SOC direction:
   and must not be committed. Steps 7 and 9-12 are maintenance/evaluation/governance tracks,
   not extra fixed Runtime nodes. A rejected LLM evidence citation is safe only when decision
   policy forces degraded evidence, human review, and `automation_allowed=false`.
+- Use `validation/compact_zeus/e2e/run_ten_alert_e2e.py` as the canonical one-directory
+  full-journey review for ten complete alerts. Its fixed cohort intentionally excludes D10's known
+  input gaps `1965452` and `1965795`, replacing them with complete NDR/EDR cases `2025642` and
+  `1980502`. It persists through the production service into an isolated SQLite database, invokes
+  the configured live model only with explicit confirmation, uses simulated read-only PingAn
+  Providers, and writes chronological per-alert artifacts under
+  `backend/.deer-flow/soc-validation/e2e-ten-current/`. Its `knowledge-review/` package is an inert
+  human-review surface and cannot write or activate knowledge. Historical validation roots remain
+  specialized evidence, not inputs that must be manually joined for this review.
 - Reproduce deterministic Checkpoint D0-D6 with
   `./scripts/soc-runtime-validation.sh checkpoint-d`; run the explicit-cost live D7 boundary with
   `./scripts/soc-runtime-validation.sh checkpoint-d-live`, then run deterministic D8 with

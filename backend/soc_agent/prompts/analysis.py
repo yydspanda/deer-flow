@@ -10,8 +10,8 @@ from typing import Any
 from soc_agent.contracts import LLMAnalysisRequest, Verdict
 from soc_agent.pipeline.analysis_context import project_analysis_context
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v8"
-MAX_ANALYSIS_CONTEXT_CHARS = 120_000
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v12"
+MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 
 class AnalysisPromptSizeError(ValueError):
@@ -70,13 +70,16 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
             "Keep evidence trust separate from semantic confidence: a faithfully parsed vendor field may still assert the wrong attacker or victim role.",
             "Treat tentative or conflicted role resolutions as provisional and cite their evidence gaps.",
             "Treat upstream or deterministic scenario hypotheses as hints, not truth. Confirm, revise, or reject them from bounded evidence.",
+            "Separate current-alert facts from reasoning. evidence[] contains only exact E-* catalog facts; reasoning[] contains interpretation and inference.",
+            "Security expertise is expected: you may infer from general security knowledge or reviewed Skill guidance when the inference is explicitly labeled in reasoning.basis.",
+            "A valid inference does not need to appear verbatim in the alert. Its cited current-alert facts and any required S/A/M/C/T context references must exist.",
             "Scenario names are open vocabulary: infer a more accurate scenario when the provided hints do not fit, without inventing a closed taxonomy.",
             "For each scenario assessment, classify the observed activity as detection_hit, attempt_observed, effect_observed, impact_confirmed, or indeterminate.",
             "Use detection_hit when only a detector assertion exists; attempt_observed when attack-like input or behavior is visible without a resulting system effect.",
             "Use effect_observed for a directly observed response or state change such as an issued session token, command output, new process, or file write; this still does not by itself prove material impact.",
             "Use impact_confirmed only when independent bounded evidence confirms asset, account, data, or business impact. Use indeterminate only when evidence cannot place the activity reliably.",
             "The first scenario assessment marked is_primary=true is the current primary explanation. If scenarios are present, exactly one must be primary.",
-            "Scenario evidence_indices are zero-based indexes into the response evidence array; every scenario must cite at least one evidence item.",
+            "Every scenario cites E-* evidence_refs and R-* reasoning_refs from the same response.",
             "Use evidence coverage warnings to identify parser degradation, sanitized fields, truncation, and high-value canonical gaps.",
             "Use evidence.highlights as compact, adapter-governed values retained from messages outside the full supplementary-evidence budget; cite a representative highlight path and do not infer omitted sibling fields.",
             "Obey source_field_semantics from the adapter. Fields marked participates_in_reasoning=false are preserved for audit but must not support entities, facts, verdicts, or confidence.",
@@ -86,17 +89,16 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
             ),
             "A provider_detection_outcome_assertion may support effect_observed when its exact high-trust value is visible and cited. It does not by itself establish impact_confirmed.",
             "When fields conflict, explain the uncertainty instead of silently choosing one side.",
-            "Every evidence item must quote a value present in the bounded context and use an exact dotted context path "
-            "or one of these source sections: alert_id, source, detection, classification, entities, canonical_entities, "
-            "extracted_entities, fact_reconstruction, primary_evidence, supplementary_evidence, evidence_coverage, "
-            "skill_context.",
-            "Each evidence source must identify exactly one source section or path; do not combine multiple paths into a comma-separated source.",
-            "A BoundedAnalysisEvidence source_path may be extended with an exact projected_field_paths entry using #parsed, #decoded, or #repaired only when the quoted value is visible inside that bounded evidence content.",
-            "An evidence description may interpret its quoted value, but it must not introduce additional sibling-field facts; cite each additional fact as a separate evidence item with its own exact source.",
-            "The evidence description must be supported by that item's source and value alone. Never use one item to describe a token, header, rule label, role, or asset fact that is absent from its quoted value.",
-            "Never serialize a whole object or array as one evidence value. Cite the smallest relevant scalar leaf with its exact #parsed, #decoded, or #repaired path.",
-            "Copy evidence.value verbatim from that scalar leaf. Do not prepend a field name, path, label, or key= text unless those characters are part of the source scalar itself.",
-            "When a statement needs multiple scalar facts, such as an IP address and a port, emit one evidence item per fact and cite each exact source path.",
+            "Select every evidence item from reference_catalogs.current_alert_evidence. Copy its evidence_ref, source_path, and scalar value exactly.",
+            "Select at most 40 evidence items. Prefer facts actually used by reasoning, scenario assessments, or knowledge candidates.",
+            "evidence.description is only a short observation label. Do not use it as the place for security interpretation; put interpretation in reasoning[].",
+            "Each distinct current-alert scalar fact needs its own E-* item. Do not serialize or synthesize arrays, objects, key=value text, or comma-joined facts.",
+            "Each reasoning item must cite at least one selected E-* fact. Use basis=current_evidence for direct synthesis and basis=general_security_knowledge for security-domain inference.",
+            "basis=skill requires an S-* reference; adapter_contract requires A-*; confirmed_memory requires M-*; governed_context requires C-*; tool_result requires T-*.",
+            "The converse is also required: every S/A/M/C/T context_ref must have its matching skill/adapter_contract/confirmed_memory/governed_context/tool_result basis label.",
+            "Use context_refs=[] when no governed context is needed. Never write none, null, prose, or E-* IDs in context_refs.",
+            "Every E-* evidence_ref must appear at most once in evidence[].",
+            "Never treat Skill, memory, adapter semantics, governed context, or tool output as proof that an uncited event occurred in this alert.",
             (
                 "An exact visible <ENCODED:...:OMITTED> marker may establish only that the named source value existed, matched the stated encoding shape, "
                 "and was omitted at the model boundary. Quote the marker-bearing scalar and exact source path."
@@ -111,6 +113,7 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
                 "a resulting process, endpoint telemetry, or an exact high-trust provider outcome assertion declared by source_field_semantics."
             ),
             "Do not fabricate correlation, memory, authorization, asset, threat-intelligence, or tool results that are absent from the bounded context.",
+            "knowledge_candidates are inert review suggestions. Link each candidate to E-* and R-* support, suggest a destination and scope, and never treat it as confirmed memory.",
             "Always provide a current verdict even when evidence is incomplete. State the remaining evidence gaps and executable manual checks separately.",
             "recommended_action is a safe routing suggestion only; manual_checks are concrete analyst verification steps. Neither may claim an action was executed.",
             f"Allowed verdict values: {verdict_values}.",
@@ -140,27 +143,40 @@ def _user_prompt(context: Mapping[str, Any], response_schema: Mapping[str, Any])
 
 def _analysis_response_schema() -> dict[str, Any]:
     return {
-        "schema_version": "soc.analysis_result.v2",
+        "schema_version": "soc.analysis_result.v3",
         "verdict": f"one of: {', '.join(item.value for item in Verdict)}",
         "confidence": "number from 0.0 to 1.0",
         "summary": "short analyst-facing Chinese summary, non-empty",
         "evidence": [
             {
-                "source": "exact bounded-context path/section, or bounded source_path#parsed.field.path",
-                "description": "why this exact quoted value matters; no sibling-field facts",
-                "value": "verbatim scalar leaf: string, number, boolean, or null; never synthesized key=value text",
+                "evidence_ref": "exact E-* ID from current_alert_evidence",
+                "source": "exact source_path paired with that E-* ID",
+                "description": "short observation label only; put interpretation in reasoning",
+                "value": "exact scalar paired with that E-* ID",
+            }
+        ],
+        "reasoning": [
+            {
+                "schema_version": "soc.analysis_reasoning_item.v1",
+                "reasoning_id": "R-01, R-02, ...; unique",
+                "statement": "explicit security interpretation or inference",
+                "basis": ["one or more of: current_evidence, general_security_knowledge, skill, adapter_contract, confirmed_memory, governed_context, tool_result"],
+                "evidence_refs": ["selected E-* evidence IDs supporting this inference"],
+                "context_refs": ["required S/A/M/C/T IDs, or empty when not needed"],
+                "confidence": "number from 0.0 to 1.0",
             }
         ],
         "scenario_assessments": [
             {
-                "schema_version": "soc.triage_scenario_assessment.v1",
+                "schema_version": "soc.triage_scenario_assessment.v2",
                 "scenario_name": "open-vocabulary scenario name",
                 "scenario_key": "optional stable generic key, or null",
                 "is_primary": "boolean; exactly one true when this array is non-empty",
                 "origin": "one of: upstream_hint, inferred, hybrid",
                 "confidence": "number from 0.0 to 1.0",
                 "activity_stage": ("one of: detection_hit, attempt_observed, effect_observed, impact_confirmed, indeterminate"),
-                "evidence_indices": ["zero-based indexes into evidence; at least one"],
+                "evidence_refs": ["E-* IDs selected in evidence; at least one"],
+                "reasoning_refs": ["R-* IDs selected in reasoning; at least one"],
                 "rationale": "bounded-evidence reasoning for this scenario",
                 "competing_explanations": ["plausible benign or alternative explanation; may be empty"],
             }
@@ -169,7 +185,18 @@ def _analysis_response_schema() -> dict[str, Any]:
         "manual_checks": ["concrete analyst verification step; at least one is required"],
         "reason": "Chinese reasoning summary, non-empty; include uncertainty when conflicts or fallback evidence exist",
         "recommended_action": "short action string, non-empty; no direct destructive action",
-        "knowledge_candidates": ["optional candidate knowledge strings; candidates are pending review only and must not be treated as confirmed facts"],
+        "knowledge_candidates": [
+            {
+                "schema_version": "soc.analysis_knowledge_candidate.v1",
+                "candidate_id": "K-01, K-02, ...; unique",
+                "statement": "one reusable candidate statement",
+                "destination_hint": "one of: general_skill, tenant_memory, governed_context, provider_requirement, adapter_mapping, tenant_policy, evaluation_fixture, reject_or_verify",
+                "scope_hint": "one of: global, tenant, provider, source, detection, scenario, event",
+                "evidence_refs": ["supporting selected E-* IDs"],
+                "reasoning_refs": ["supporting R-* IDs"],
+                "rationale": "why this may be reusable and what still requires review",
+            }
+        ],
     }
 
 

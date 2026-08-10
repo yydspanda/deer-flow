@@ -30,9 +30,14 @@ from soc_agent.skills import (  # noqa: E402
     SOC_ALERT_TRIAGE_SKILL,
     SocSkillResolver,
 )
+from soc_agent.pipeline.reference_catalog import (  # noqa: E402
+    finalize_analysis_reference_catalogs,
+)
 
 SCHEMA_VERSION = "soc.validation.checkpoint_d.skill_context_review.v1"
-DEFAULT_CHECKPOINT_D_ROOT = ROOT / "backend/.deer-flow/soc-runtime-validation/checkpoint-d"
+DEFAULT_CHECKPOINT_D_ROOT = (
+    ROOT / "backend/.deer-flow/soc-runtime-validation/checkpoint-d"
+)
 DEFAULT_ALERT_ID = 1965449
 _ALLOWED_D4_STATUSES = {"passed", "passed_with_coverage_findings"}
 
@@ -54,7 +59,9 @@ def build_skill_context_review(
     request = LLMAnalysisRequest.model_validate(d4_request_payload)
     resolution = SocSkillResolver().resolve_for_analysis_request(request)
     skill_context = resolve_skill_context_for_request(request)
-    enriched_request = request.model_copy(update={"skill_context": skill_context})
+    enriched_request = finalize_analysis_reference_catalogs(
+        request.model_copy(update={"skill_context": skill_context})
+    )
     d4_hash_after = canonical_sha256(d4_request_payload)
 
     request_before = request.model_dump(mode="json", exclude_none=True)
@@ -63,6 +70,10 @@ def build_skill_context_review(
     after_without_context = dict(request_after)
     before_without_context.pop("skill_context", None)
     after_without_context.pop("skill_context", None)
+    before_without_context.pop("evidence_catalog", None)
+    after_without_context.pop("evidence_catalog", None)
+    before_without_context.pop("context_catalog", None)
+    after_without_context.pop("context_catalog", None)
 
     selected_resolution_names = [item.skill_name for item in resolution.selected_skills]
     selected_context_names = [item.skill_name for item in skill_context.selected_skills]
@@ -76,8 +87,12 @@ def build_skill_context_review(
     ]
     package_items = skill_context.selected_skills
     checks = {
-        "d4_acceptance_allows_continuation": d4_acceptance.get("status") in _ALLOWED_D4_STATUSES,
-        "d4_alert_id_matches": str(_mapping_path(analysis_input_review, "input", "alert_id")) == str(alert_id),
+        "d4_acceptance_allows_continuation": d4_acceptance.get("status")
+        in _ALLOWED_D4_STATUSES,
+        "d4_alert_id_matches": str(
+            _mapping_path(analysis_input_review, "input", "alert_id")
+        )
+        == str(alert_id),
         "d4_skill_context_is_empty": _mapping_path(
             d4_request_payload,
             "skill_context",
@@ -85,15 +100,43 @@ def build_skill_context_review(
         )
         == [],
         "d4_payload_unchanged": d4_hash_before == d4_hash_after,
-        "only_skill_context_changed": canonical_sha256(before_without_context) == canonical_sha256(after_without_context),
+        "only_skill_and_reference_catalogs_changed": canonical_sha256(
+            before_without_context
+        )
+        == canonical_sha256(after_without_context),
         "baseline_skill_selected": SOC_ALERT_TRIAGE_SKILL in selected_resolution_names,
-        "resolution_and_projection_match": selected_resolution_names == selected_context_names,
-        "all_selected_packages_projected": len(package_items) == len(resolution.selected_skills),
-        "guidance_comes_from_skill_packages": all(item.guidance_source in {"references/runtime-guidance.md", "SKILL.md#description"} for item in package_items),
-        "guidance_is_within_per_skill_budget": all(item.estimated_token_count <= item.token_budget for item in package_items),
-        "guidance_hashes_are_present": all(len(item.guidance_hash) == 64 and len(item.package_hash) == 64 for item in package_items),
-        "total_budget_matches_items": skill_context.total_token_budget == sum(item.token_budget for item in package_items),
-        "estimated_token_count_matches_items": (skill_context.total_estimated_token_count == sum(item.estimated_token_count for item in package_items)),
+        "resolution_and_projection_match": selected_resolution_names
+        == selected_context_names,
+        "all_selected_packages_projected": len(package_items)
+        == len(resolution.selected_skills),
+        "guidance_comes_from_skill_packages": all(
+            item.guidance_source
+            in {"references/runtime-guidance.md", "SKILL.md#description"}
+            for item in package_items
+        ),
+        "guidance_is_within_per_skill_budget": all(
+            item.estimated_token_count <= item.token_budget for item in package_items
+        ),
+        "guidance_hashes_are_present": all(
+            len(item.guidance_hash) == 64 and len(item.package_hash) == 64
+            for item in package_items
+        ),
+        "total_budget_matches_items": skill_context.total_token_budget
+        == sum(item.token_budget for item in package_items),
+        "estimated_token_count_matches_items": (
+            skill_context.total_estimated_token_count
+            == sum(item.estimated_token_count for item in package_items)
+        ),
+        "current_alert_evidence_catalog_is_non_empty": bool(
+            enriched_request.evidence_catalog
+        ),
+        "selected_skills_have_context_references": all(
+            any(
+                context.kind.value == "skill" and context.label == skill.skill_name
+                for context in enriched_request.context_catalog
+            )
+            for skill in package_items
+        ),
     }
     failed_checks = sorted(name for name, passed in checks.items() if not passed)
     if failed_checks:
@@ -116,6 +159,7 @@ def build_skill_context_review(
                 "bounded_runtime_guidance_projection",
                 "skill_package_and_projection_hashing",
                 "token_budget_validation",
+                "current_alert_and_reasoning_context_reference_catalog_build",
             ],
             "not_performed": [
                 "prompt_rendering",
@@ -140,6 +184,8 @@ def build_skill_context_review(
             "rejected_skill_count": len(rejected_skills),
             "total_estimated_token_count": skill_context.total_estimated_token_count,
             "total_token_budget": skill_context.total_token_budget,
+            "evidence_catalog_count": len(enriched_request.evidence_catalog),
+            "context_catalog_count": len(enriched_request.context_catalog),
         },
         "selection_features": _selection_features(request),
         "resolution": resolution_payload,
@@ -163,8 +209,26 @@ def _selection_features(request: LLMAnalysisRequest) -> dict[str, Any]:
             "rule_category": request.detection.rule_category,
         },
         "typed_evidence": {
-            "http": bool(http.observations or http.method or http.host or http.path or http.url or http.status_code is not None),
-            "email": bool(email and (email.observations or email.message_id or email.sender_addresses or email.recipient_addresses or email.subject or email.links or email.attachment_names)),
+            "http": bool(
+                http.observations
+                or http.method
+                or http.host
+                or http.path
+                or http.url
+                or http.status_code is not None
+            ),
+            "email": bool(
+                email
+                and (
+                    email.observations
+                    or email.message_id
+                    or email.sender_addresses
+                    or email.recipient_addresses
+                    or email.subject
+                    or email.links
+                    or email.attachment_names
+                )
+            ),
         },
         "extracted_entity_counts": {
             "ips": len(entities.ips),
@@ -184,7 +248,10 @@ def _selection_features(request: LLMAnalysisRequest) -> dict[str, Any]:
             }
             for item in request.fact_reconstruction.role_resolutions
         ],
-        "scenario_types": [item.scenario_type for item in request.fact_reconstruction.scenario_hypotheses],
+        "scenario_types": [
+            item.scenario_type
+            for item in request.fact_reconstruction.scenario_hypotheses
+        ],
         "conflict_count": request.conflict_count,
         "conflict_types": list(request.conflict_types),
         "high_value_gap_count": len(request.evidence_coverage.high_value_gaps),
@@ -228,9 +295,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    analysis_input_review_path = args.analysis_input_review or (DEFAULT_CHECKPOINT_D_ROOT / "step-d4-bounded-analysis-input" / f"{args.alert_id}.analysis-input.json")
-    output_dir = args.output_dir or (DEFAULT_CHECKPOINT_D_ROOT / "step-d5-skill-context")
-    analysis_input_review = json.loads(analysis_input_review_path.read_text(encoding="utf-8"))
+    analysis_input_review_path = args.analysis_input_review or (
+        DEFAULT_CHECKPOINT_D_ROOT
+        / "step-d4-bounded-analysis-input"
+        / f"{args.alert_id}.analysis-input.json"
+    )
+    output_dir = args.output_dir or (
+        DEFAULT_CHECKPOINT_D_ROOT / "step-d5-skill-context"
+    )
+    analysis_input_review = json.loads(
+        analysis_input_review_path.read_text(encoding="utf-8")
+    )
     review = build_skill_context_review(
         analysis_input_review,
         alert_id=args.alert_id,
@@ -244,8 +319,13 @@ def main() -> int:
                 "alert_id": args.alert_id,
                 "status": review["acceptance"]["status"],
                 "failed_checks": review["acceptance"]["failed_checks"],
-                "selected_skills": [item["skill_name"] for item in review["skill_context"]["selected_skills"]],
-                "total_estimated_token_count": review["acceptance"]["total_estimated_token_count"],
+                "selected_skills": [
+                    item["skill_name"]
+                    for item in review["skill_context"]["selected_skills"]
+                ],
+                "total_estimated_token_count": review["acceptance"][
+                    "total_estimated_token_count"
+                ],
             },
             ensure_ascii=False,
             indent=2,

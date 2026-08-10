@@ -2005,8 +2005,6 @@ def _memory_query_from_investigation_context(context: InvestigationContext) -> S
     if context.run.analysis is not None:
         text_terms.extend(_memory_text_terms(context.run.analysis.summary))
         text_terms.extend(_memory_text_terms(context.run.analysis.reason))
-        for candidate in context.run.analysis.knowledge_candidates:
-            _add_memory_query_facet(facets, "knowledge_candidate", candidate)
 
     request = context.run.llm_analysis_request
     if request is not None:

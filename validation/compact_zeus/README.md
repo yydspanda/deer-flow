@@ -18,6 +18,7 @@ validation/compact_zeus/
 ├── reviews/         # 人工审阅样本构建
 ├── shared/          # 受限 PKL loader 与编码压缩复用工具
 ├── internal_batch/  # 内网 5 -> 50 -> all、可续跑的生产 Runtime 批跑入口
+├── e2e/             # 固定 10 条完整告警的统一端到端审阅入口
 ├── docs/            # 长期设计与审阅说明
 ├── data/            # gitignored 可再生产物
 │   ├── corpus/      # 统一 212 条语料及 manifest
@@ -141,8 +142,31 @@ Lead Agent/Action Dispatcher 治理。
 
 ## 4. 测试
 
+### 4.1 统一 10 告警端到端验证
+
+不再跨 `soc-runtime-validation`、`soc-internal-validation` 和
+`soc-lead-agent-validation` 拼接一次完整告警。先查看计划，再显式运行 10 次真实模型调用：
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/e2e/run_ten_alert_e2e.py
+
+backend/.venv/bin/python \
+  validation/compact_zeus/e2e/run_ten_alert_e2e.py \
+  --execute --confirm-live --confirm-investigation
+```
+
+输出统一写入 `backend/.deer-flow/soc-validation/e2e-ten-current/`；每条告警都包含
+`00-ingress.json` 到 `11-knowledge-candidates.json` 及
+`final-conclusion.json`，根目录另有待人工审核的 `knowledge-review/REVIEW.md`。固定样本、
+`E-*` 原子事实 / `R-*` 推理引用、两个被排除的输入缺口、替代样本和审阅边界见
+[`e2e/README.md`](e2e/README.md)。
+
+### 4.2 验证脚本测试
+
 ```bash
 backend/.venv/bin/python -m pytest -q \
+  validation/compact_zeus/e2e \
   validation/compact_zeus/corpus \
   validation/compact_zeus/audits \
   validation/compact_zeus/checkpoint_d

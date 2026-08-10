@@ -598,6 +598,76 @@ def test_deerflow_cached_mcp_provider_loads_tools_from_lazy_cache(monkeypatch: p
     assert result == {"asset_found": True, "asset_record": {"asset_id": "asset-001"}}
 
 
+def test_deerflow_one_shot_provider_avoids_process_global_mcp_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import soc_agent.actions.mcp as soc_mcp
+
+    discovery_calls: list[bool] = []
+    invocation_calls: list[dict[str, Any]] = []
+
+    def discover() -> list[SocMcpToolDescriptor]:
+        discovery_calls.append(True)
+        return [
+            SocMcpToolDescriptor(
+                name="cmdb_asset_lookup",
+                server="cmdb",
+                description="Lookup asset ownership.",
+                input_schema={"type": "object"},
+            )
+        ]
+
+    def invoke(
+        tool_name: str,
+        payload: Mapping[str, Any],
+        *,
+        timeout_seconds: int,
+        server_name: str | None,
+    ) -> dict[str, Any]:
+        invocation_calls.append(
+            {
+                "tool_name": tool_name,
+                "payload": dict(payload),
+                "timeout_seconds": timeout_seconds,
+                "server_name": server_name,
+            }
+        )
+        return {"asset_found": True}
+
+    monkeypatch.setattr(soc_mcp, "_load_deerflow_one_shot_mcp_descriptors", discover)
+    monkeypatch.setattr(soc_mcp, "_invoke_mcp_tool_once_with_timeout", invoke)
+    monkeypatch.setattr(
+        soc_mcp,
+        "_load_deerflow_cached_mcp_tools",
+        lambda: (_ for _ in ()).throw(AssertionError("global cache must not load")),
+    )
+    provider = DeerFlowCachedMcpToolProvider(use_one_shot_invocation=True)
+
+    assert provider.list_tools() == [
+        SocMcpToolDescriptor(
+            name="cmdb_asset_lookup",
+            server="cmdb",
+            description="Lookup asset ownership.",
+            input_schema={"type": "object"},
+        )
+    ]
+    assert provider.invoke(
+        "cmdb_asset_lookup",
+        {"query": "10.10.1.5"},
+        timeout_seconds=7,
+        server_name="cmdb",
+    ) == {"asset_found": True}
+    assert discovery_calls == [True]
+    assert invocation_calls == [
+        {
+            "tool_name": "cmdb_asset_lookup",
+            "payload": {"query": "10.10.1.5"},
+            "timeout_seconds": 7,
+            "server_name": "cmdb",
+        }
+    ]
+
+
 def test_deerflow_cached_mcp_provider_normalizes_content_and_artifact_result() -> None:
     tool = FakeCachedMcpTool(
         name="cmdb_asset_lookup",

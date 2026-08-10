@@ -60,7 +60,11 @@ class JsonLLMAnalyzer:
     def analyze(self, request: LLMAnalysisRequest) -> AnalysisNodeOutput:
         prompt = build_analysis_prompt(request)
         response = _coerce_chat_response(self._client.complete(prompt.messages(), model_name=self.model_name))
-        parsed = parse_analysis_result_output(response.content)
+        parsed = parse_analysis_result_output(
+            response.content,
+            evidence_catalog=request.evidence_catalog,
+            context_catalog=request.context_catalog,
+        )
 
         metadata: dict[str, Any] = {
             "analyzer": "json_llm",

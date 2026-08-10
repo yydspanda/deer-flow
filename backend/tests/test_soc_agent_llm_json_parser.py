@@ -4,34 +4,51 @@ import json
 
 import pytest
 
-from soc_agent.contracts import Verdict
+from soc_agent.contracts import (
+    AnalysisContextCatalogItem,
+    AnalysisEvidenceCatalogItem,
+    Verdict,
+)
 from soc_agent.llm import ANALYSIS_JSON_PARSER_VERSION, LLMOutputParseError, parse_analysis_result_output
 from soc_agent.llm.json_parser import MAX_ANALYSIS_RESPONSE_CHARS
 
 
 def _valid_payload() -> dict:
     return {
-        "schema_version": "soc.analysis_result.v2",
+        "schema_version": "soc.analysis_result.v3",
         "verdict": "suspicious",
         "confidence": 0.76,
         "summary": "存在可疑横向移动迹象，需要复核。",
         "evidence": [
             {
+                "evidence_ref": "E-A1B2C3D4E5F6",
                 "source": "fact_reconstruction",
                 "description": "角色候选和进程行为支持可疑判断",
                 "value": "svchost.exe",
             }
         ],
+        "reasoning": [
+            {
+                "schema_version": "soc.analysis_reasoning_item.v1",
+                "reasoning_id": "R-01",
+                "statement": "该进程行为与远程服务横向移动的常见模式相符。",
+                "basis": ["current_evidence", "general_security_knowledge"],
+                "evidence_refs": ["E-A1B2C3D4E5F6"],
+                "context_refs": [],
+                "confidence": 0.71,
+            }
+        ],
         "scenario_assessments": [
             {
-                "schema_version": "soc.triage_scenario_assessment.v1",
+                "schema_version": "soc.triage_scenario_assessment.v2",
                 "scenario_name": "远程服务横向移动",
                 "scenario_key": "remote_service_lateral_movement",
                 "is_primary": True,
                 "origin": "inferred",
                 "confidence": 0.71,
                 "activity_stage": "attempt_observed",
-                "evidence_indices": [0],
+                "evidence_refs": ["E-A1B2C3D4E5F6"],
+                "reasoning_refs": ["R-01"],
                 "rationale": "进程行为与远程服务使用相符，但缺少目标侧执行结果。",
                 "competing_explanations": ["授权远程运维"],
             }
@@ -84,20 +101,30 @@ def test_parse_analysis_result_repairs_trailing_comma() -> None:
 def test_parse_analysis_result_repairs_unquoted_keys() -> None:
     raw = """
     {
-      schema_version: "soc.analysis_result.v2",
+      schema_version: "soc.analysis_result.v3",
       verdict: suspicious,
       confidence: 0.76,
       summary: "存在可疑横向移动迹象，需要复核。",
-      evidence: [{source: "fact_reconstruction", description: "命中可疑行为", value: "svchost.exe"}],
+      evidence: [{evidence_ref: "E-A1B2C3D4E5F6", source: "fact_reconstruction", description: "命中可疑行为", value: "svchost.exe"}],
+      reasoning: [{
+        schema_version: "soc.analysis_reasoning_item.v1",
+        reasoning_id: "R-01",
+        statement: "该行为与远程服务横向移动模式相符。",
+        basis: [current_evidence, general_security_knowledge],
+        evidence_refs: ["E-A1B2C3D4E5F6"],
+        context_refs: [],
+        confidence: 0.71
+      }],
       scenario_assessments: [{
-        schema_version: "soc.triage_scenario_assessment.v1",
+        schema_version: "soc.triage_scenario_assessment.v2",
         scenario_name: "远程服务横向移动",
         scenario_key: "remote_service_lateral_movement",
         is_primary: true,
         origin: inferred,
         confidence: 0.71,
         activity_stage: attempt_observed,
-        evidence_indices: [0],
+        evidence_refs: ["E-A1B2C3D4E5F6"],
+        reasoning_refs: ["R-01"],
         rationale: "进程行为与远程服务使用相符。",
         competing_explanations: ["授权远程运维"]
       }],
@@ -229,15 +256,16 @@ def test_parse_analysis_result_rejects_scenario_without_one_primary() -> None:
     assert "exactly one primary" in str(exc.value)
 
 
-def test_parse_analysis_result_rejects_out_of_range_scenario_evidence_index() -> None:
+def test_parse_analysis_result_rejects_unknown_scenario_evidence_reference() -> None:
     payload = _valid_payload()
-    payload["scenario_assessments"][0]["evidence_indices"] = [1]
+    payload["scenario_assessments"][0]["evidence_refs"] = ["E-000000000000"]
 
     with pytest.raises(LLMOutputParseError) as exc:
         parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
 
     assert exc.value.stage == "schema_validation"
-    assert "invalid indices" in str(exc.value)
+    assert "scenario evidence_refs" in str(exc.value)
+    assert "invalid refs" in str(exc.value)
 
 
 def test_parse_analysis_result_allows_unknown_scenario_with_explicit_gap() -> None:
@@ -249,6 +277,360 @@ def test_parse_analysis_result_allows_unknown_scenario_with_explicit_gap() -> No
     assert parsed.result.scenario_assessments == []
     assert parsed.result.evidence_gaps
     assert parsed.result.manual_checks
+
+
+def test_parse_analysis_result_accepts_typed_inert_knowledge_candidate() -> None:
+    payload = _valid_payload()
+    payload["knowledge_candidates"] = [
+        {
+            "schema_version": "soc.analysis_knowledge_candidate.v1",
+            "candidate_id": "K-01",
+            "statement": "远程服务告警应结合授权变更记录复核。",
+            "destination_hint": "general_skill",
+            "scope_hint": "global",
+            "evidence_refs": ["E-A1B2C3D4E5F6"],
+            "reasoning_refs": ["R-01"],
+            "rationale": "该核查步骤可跨租户复用，但仍需人工审核。",
+        }
+    ]
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    candidate = parsed.result.knowledge_candidates[0]
+    assert candidate.candidate_id == "K-01"
+    assert candidate.destination_hint.value == "general_skill"
+
+
+def test_parse_analysis_result_rejects_unresolved_knowledge_candidate_reference() -> None:
+    payload = _valid_payload()
+    payload["knowledge_candidates"] = [
+        {
+            "schema_version": "soc.analysis_knowledge_candidate.v1",
+            "candidate_id": "K-01",
+            "statement": "未经当前结果支撑的候选。",
+            "destination_hint": "reject_or_verify",
+            "scope_hint": "event",
+            "evidence_refs": ["E-000000000000"],
+            "reasoning_refs": ["R-01"],
+            "rationale": "测试引用完整性。",
+        }
+    ]
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert exc.value.stage == "schema_validation"
+    assert "knowledge candidate references" in str(exc.value)
+
+
+def test_parse_analysis_result_safely_normalizes_inert_candidate_hints() -> None:
+    payload = _valid_payload()
+    payload["knowledge_candidates"] = [
+        {
+            "schema_version": "soc.analysis_knowledge_candidate.v1",
+            "candidate_id": "K-01",
+            "statement": "该建议需要人工决定最终落点。",
+            "destination_hint": "detection",
+            "scope_hint": "adapter",
+            "evidence_refs": ["E-A1B2C3D4E5F6"],
+            "reasoning_refs": ["R-01"],
+            "rationale": "候选元数据不能阻断核心研判。",
+        }
+    ]
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    candidate = parsed.result.knowledge_candidates[0]
+    assert parsed.repair_applied is True
+    assert candidate.destination_hint.value == "reject_or_verify"
+    assert candidate.scope_hint == "provider"
+    assert [item["stage"] for item in parsed.repair_log] == [
+        "candidate_hint_normalization",
+        "candidate_hint_normalization",
+    ]
+
+
+def test_parse_analysis_result_repairs_reference_only_from_exact_catalog_fact() -> None:
+    payload = _valid_payload()
+    truncated = "E-A1B2C3D4E5F"
+    payload["evidence"][0]["evidence_ref"] = truncated
+    payload["reasoning"][0]["evidence_refs"] = [truncated]
+    payload["scenario_assessments"][0]["evidence_refs"] = [truncated]
+    catalog = [
+        AnalysisEvidenceCatalogItem(
+            evidence_ref="E-A1B2C3D4E5F6",
+            source_path="fact_reconstruction",
+            value="svchost.exe",
+            value_type="string",
+        )
+    ]
+
+    parsed = parse_analysis_result_output(
+        json.dumps(payload, ensure_ascii=False),
+        evidence_catalog=catalog,
+    )
+
+    assert parsed.result.evidence[0].evidence_ref == "E-A1B2C3D4E5F6"
+    assert parsed.result.reasoning[0].evidence_refs == ["E-A1B2C3D4E5F6"]
+    assert parsed.result.scenario_assessments[0].evidence_refs == ["E-A1B2C3D4E5F6"]
+    assert any(item["repair"] == "exact_catalog_fact_to_reference" for item in parsed.repair_log)
+
+
+def test_parse_analysis_result_materializes_valid_catalog_fact_cited_only_by_reasoning() -> None:
+    payload = _valid_payload()
+    payload["reasoning"][0]["evidence_refs"].append("E-111111111111")
+    payload["scenario_assessments"][0]["evidence_refs"].append("E-111111111111")
+    catalog = [
+        AnalysisEvidenceCatalogItem(
+            evidence_ref="E-A1B2C3D4E5F6",
+            source_path="fact_reconstruction",
+            value="svchost.exe",
+            value_type="string",
+        ),
+        AnalysisEvidenceCatalogItem(
+            evidence_ref="E-111111111111",
+            source_path="entities.process.command_line",
+            value="reg add HKLM\\SYSTEM\\CurrentControlSet\\Services",
+            value_type="string",
+        ),
+    ]
+
+    parsed = parse_analysis_result_output(
+        json.dumps(payload, ensure_ascii=False),
+        evidence_catalog=catalog,
+    )
+
+    assert parsed.repair_applied is True
+    assert [item.evidence_ref for item in parsed.result.evidence] == [
+        "E-A1B2C3D4E5F6",
+        "E-111111111111",
+    ]
+    materialized = parsed.result.evidence[1]
+    assert materialized.source == "entities.process.command_line"
+    assert materialized.value == "reg add HKLM\\SYSTEM\\CurrentControlSet\\Services"
+    assert any(item["repair"] == "materialize_referenced_catalog_facts" for item in parsed.repair_log)
+
+
+def test_parse_analysis_result_accepts_bounded_evidence_list_over_twenty_items() -> None:
+    payload = _valid_payload()
+    payload["evidence"] = [
+        {
+            "evidence_ref": f"E-{index:012X}",
+            "source": f"facts[{index}]",
+            "description": "Observed current-alert fact",
+            "value": index,
+        }
+        for index in range(22)
+    ]
+    payload["reasoning"][0]["evidence_refs"] = ["E-000000000000"]
+    payload["scenario_assessments"][0]["evidence_refs"] = ["E-000000000000"]
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert len(parsed.result.evidence) == 22
+
+
+def test_parse_analysis_result_removes_exact_duplicate_evidence_reference() -> None:
+    payload = _valid_payload()
+    duplicate = dict(payload["evidence"][0])
+    duplicate["description"] = "Same fact repeated with another observation label"
+    payload["evidence"].append(duplicate)
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert parsed.repair_applied is True
+    assert len(parsed.result.evidence) == 1
+    assert any(item["repair"] == "remove_exact_duplicate_evidence_refs" for item in parsed.repair_log)
+
+
+def test_parse_analysis_result_rebinds_duplicate_reference_from_exact_catalog_tuple() -> None:
+    payload = _valid_payload()
+    payload["evidence"].append(
+        {
+            "evidence_ref": "E-A1B2C3D4E5F6",
+            "source": "canonical_entities.host.ip",
+            "description": "Impacted endpoint IP",
+            "value": "10.28.53.42",
+        }
+    )
+    catalog = [
+        AnalysisEvidenceCatalogItem(
+            evidence_ref="E-A1B2C3D4E5F6",
+            source_path="fact_reconstruction",
+            value="svchost.exe",
+            value_type="string",
+        ),
+        AnalysisEvidenceCatalogItem(
+            evidence_ref="E-111111111111",
+            source_path="canonical_entities.host.ip",
+            value="10.28.53.42",
+            value_type="string",
+        ),
+    ]
+
+    parsed = parse_analysis_result_output(
+        json.dumps(payload, ensure_ascii=False),
+        evidence_catalog=catalog,
+    )
+
+    assert [item.evidence_ref for item in parsed.result.evidence] == [
+        "E-A1B2C3D4E5F6",
+        "E-111111111111",
+    ]
+    assert any(item["repair"] == "exact_catalog_fact_to_reference" and item["field"] == "evidence[1].evidence_ref" for item in parsed.repair_log)
+
+
+def test_parse_analysis_result_does_not_merge_conflicting_duplicate_evidence() -> None:
+    payload = _valid_payload()
+    duplicate = dict(payload["evidence"][0])
+    duplicate["value"] = "different.exe"
+    payload["evidence"].append(duplicate)
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert exc.value.stage == "schema_validation"
+    assert "evidence_refs must be unique" in str(exc.value)
+
+
+@pytest.mark.parametrize(("raw_value", "expected"), [("true", True), ("FALSE", False)])
+def test_parse_analysis_result_repairs_json_boolean_string_for_primary_scenario(
+    raw_value: str,
+    expected: bool,
+) -> None:
+    payload = _valid_payload()
+    payload["scenario_assessments"][0]["is_primary"] = raw_value
+    if expected is False:
+        payload["scenario_assessments"] = []
+        payload["scenario_assessments"].append(
+            {
+                **_valid_payload()["scenario_assessments"][0],
+                "is_primary": raw_value,
+            }
+        )
+
+    if expected is False:
+        with pytest.raises(LLMOutputParseError) as exc:
+            parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+        assert "exactly one primary" in str(exc.value)
+        return
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert parsed.result.scenario_assessments[0].is_primary is expected
+    assert any(item["repair"] == "json_boolean_string_to_boolean" for item in parsed.repair_log)
+
+
+def test_parse_analysis_result_marks_missing_scenario_rationale_without_inference() -> None:
+    payload = _valid_payload()
+    del payload["scenario_assessments"][0]["rationale"]
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert parsed.result.scenario_assessments[0].rationale == ("Model omitted a separate scenario rationale; rely only on the cited E-* facts and R-* reasoning.")
+    assert any(item["repair"] == "missing_redundant_rationale_to_explicit_placeholder" for item in parsed.repair_log)
+
+
+def test_parse_analysis_result_keeps_missing_scenario_rationale_strict_without_refs() -> None:
+    payload = _valid_payload()
+    del payload["scenario_assessments"][0]["rationale"]
+    payload["scenario_assessments"][0]["reasoning_refs"] = []
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert exc.value.stage == "schema_validation"
+
+
+def test_parse_analysis_result_removes_empty_context_reference_sentinel() -> None:
+    payload = _valid_payload()
+    payload["reasoning"][0]["context_refs"] = ["none", None, "不适用"]
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert parsed.repair_applied is True
+    assert parsed.result.reasoning[0].context_refs == []
+    assert any(item["repair"] == "remove_empty_context_reference_sentinels" for item in parsed.repair_log)
+
+
+def test_parse_analysis_result_removes_exact_duplicate_reasoning_references() -> None:
+    payload = _valid_payload()
+    payload["reasoning"][0]["evidence_refs"] = [
+        "E-A1B2C3D4E5F6",
+        "E-A1B2C3D4E5F6",
+    ]
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert parsed.result.reasoning[0].evidence_refs == ["E-A1B2C3D4E5F6"]
+    assert any(item["repair"] == "remove_exact_duplicate_references" and item["field"] == "reasoning[0].evidence_refs" for item in parsed.repair_log)
+
+
+def test_parse_analysis_result_keeps_invalid_nonempty_context_reference_strict() -> None:
+    payload = _valid_payload()
+    payload["reasoning"][0]["context_refs"] = ["current alert only"]
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert exc.value.stage == "schema_validation"
+    assert "context_refs must use" in str(exc.value)
+
+
+def test_parse_analysis_result_derives_basis_from_explicit_context_reference() -> None:
+    payload = _valid_payload()
+    payload["reasoning"][0]["context_refs"] = ["S-111111111111"]
+    context_catalog = [
+        AnalysisContextCatalogItem(
+            context_ref="S-111111111111",
+            kind="skill",
+            label="soc-endpoint-triage",
+            source_id="references/runtime-guidance.md",
+            summary="Reviewed endpoint triage guidance.",
+        )
+    ]
+
+    parsed = parse_analysis_result_output(
+        json.dumps(payload, ensure_ascii=False),
+        context_catalog=context_catalog,
+    )
+
+    assert parsed.repair_applied is True
+    assert [item.value for item in parsed.result.reasoning[0].basis] == [
+        "current_evidence",
+        "general_security_knowledge",
+        "skill",
+    ]
+    assert any(item["repair"] == "derive_basis_from_explicit_context_refs" for item in parsed.repair_log)
+
+
+def test_parse_analysis_result_does_not_guess_ambiguous_catalog_reference() -> None:
+    payload = _valid_payload()
+    payload["evidence"][0].update(
+        {
+            "evidence_ref": "E-A1B2C3D4E5F",
+            "source": "unknown.path",
+            "value": "unknown",
+        }
+    )
+    catalog = [
+        AnalysisEvidenceCatalogItem(
+            evidence_ref=reference,
+            source_path=f"facts[{index}]",
+            value=f"value-{index}",
+            value_type="string",
+        )
+        for index, reference in enumerate(("E-A1B2C3D4E5F6", "E-A1B2C3D4E5FA"))
+    ]
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(
+            json.dumps(payload, ensure_ascii=False),
+            evidence_catalog=catalog,
+        )
+
+    assert exc.value.stage == "schema_validation"
+    assert "evidence_ref" in str(exc.value)
 
 
 def test_parse_analysis_result_rejects_unknown_scenario_without_gap() -> None:

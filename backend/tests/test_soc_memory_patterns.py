@@ -14,6 +14,8 @@ from soc_agent.contracts import (
     AlertClassification,
     AlertSourceRef,
     AlertSourceType,
+    AnalysisReasoningBasis,
+    AnalysisReasoningItem,
     AnalysisResult,
     AnalysisRun,
     AnalysisRunStatus,
@@ -70,7 +72,23 @@ def _run(
             verdict=Verdict.SUSPICIOUS,
             confidence=0.7,
             summary="Repeated endpoint behavior requires review.",
-            evidence=[EvidenceItem(source="canonical", description="Observed process", value="cmd.exe")],
+            evidence=[
+                EvidenceItem(
+                    evidence_ref="E-000000000001",
+                    source="canonical",
+                    description="Observed process",
+                    value="cmd.exe",
+                )
+            ],
+            reasoning=[
+                AnalysisReasoningItem(
+                    reasoning_id="R-01",
+                    statement="The bounded process evidence supports this hypothesis.",
+                    basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
+                    evidence_refs=["E-000000000001"],
+                    confidence=0.7,
+                )
+            ],
             scenario_assessments=[
                 TriageScenarioAssessment(
                     scenario_name="Credential access behavior",
@@ -79,7 +97,8 @@ def _run(
                     origin=TriageScenarioOrigin.INFERRED,
                     confidence=0.7,
                     activity_stage=TriageActivityStage.ATTEMPT_OBSERVED,
-                    evidence_indices=[0],
+                    evidence_refs=["E-000000000001"],
+                    reasoning_refs=["R-01"],
                     rationale="The bounded process evidence supports this hypothesis.",
                 )
             ],

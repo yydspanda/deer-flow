@@ -7,6 +7,7 @@ from soc_agent.cli import main
 from soc_agent.contracts import AnalysisRunStatus, Verdict
 from soc_agent.eval import OfflineEvalResponse, load_eval_responses_jsonl, run_offline_eval
 from soc_agent.llm import LLMChatResponse
+from soc_agent.pipeline.reference_catalog import evidence_ref_for
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
 
@@ -17,25 +18,38 @@ def _sample(name: str) -> dict:
 
 def _analysis_json(*, verdict: str = "false_positive", trailing_comma: bool = False) -> str:
     suffix = "," if trailing_comma else ""
+    evidence_ref = evidence_ref_for("detection.rule_code", "EDR-IOC-001")
     return f"""
     {{
-      "schema_version": "soc.analysis_result.v2",
+      "schema_version": "soc.analysis_result.v3",
       "verdict": "{verdict}",
       "confidence": 0.81,
       "summary": "录制模型认为该告警可以进入复核。",
       "evidence": [
-        {{"source": "eval", "description": "离线评测录制输出", "value": "golden"}}
+        {{"evidence_ref": "{evidence_ref}", "source": "detection.rule_code", "description": "规则编号", "value": "EDR-IOC-001"}}
+      ],
+      "reasoning": [
+        {{
+          "schema_version": "soc.analysis_reasoning_item.v1",
+          "reasoning_id": "R-01",
+          "statement": "录制响应用于验证结构化推理输出。",
+          "basis": ["current_evidence"],
+          "evidence_refs": ["{evidence_ref}"],
+          "context_refs": [],
+          "confidence": 0.75
+        }}
       ],
       "scenario_assessments": [
         {{
-          "schema_version": "soc.triage_scenario_assessment.v1",
+          "schema_version": "soc.triage_scenario_assessment.v2",
           "scenario_name": "录制评测场景",
           "scenario_key": "recorded_eval_scenario",
           "is_primary": true,
           "origin": "inferred",
           "confidence": 0.75,
           "activity_stage": "detection_hit",
-          "evidence_indices": [0],
+          "evidence_refs": ["{evidence_ref}"],
+          "reasoning_refs": ["R-01"],
           "rationale": "录制响应用于验证结构化输出。",
           "competing_explanations": []
         }}
@@ -43,7 +57,8 @@ def _analysis_json(*, verdict: str = "false_positive", trailing_comma: bool = Fa
       "evidence_gaps": ["离线录制响应不包含实时环境上下文。"],
       "manual_checks": ["人工复核录制响应与样本证据是否一致。"],
       "reason": "这是离线评测使用的可重放模型响应。",
-      "recommended_action": "review_recorded_llm_output"{suffix}
+      "recommended_action": "review_recorded_llm_output",
+      "knowledge_candidates": []{suffix}
     }}
     """
 

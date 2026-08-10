@@ -656,22 +656,22 @@ The `soc-triage` profile leaves its model unpinned and therefore inherits the fi
 the Web request or `soc chat tui --lead-agent --model-name NAME` may explicitly override it through
 DeerFlow's existing request-level model resolution.
 
-New live analyzer output uses `soc.analysis_result.v2`. `TriageScenarioAssessment` is
-open-vocabulary and must distinguish upstream/inferred/hybrid origin plus
-detection/attempt/effect/impact/indeterminate stage. A non-empty list has exactly one primary, every
-scenario cites zero-based indexes into the same result's evidence, and the result carries competing
-explanations, evidence gaps, and non-empty manual checks. `soc-analysis-v8` and
-`soc-analysis-json-parser-v5` reject unknown fields and malformed references. This typed output does
-not replace evidence grounding or `SocDecisionPolicy`.
+New live analyzer output uses `soc.analysis_result.v3`. Runtime attaches a deterministic exact-scalar
+fact catalog (`E-*`) plus governed Skill (`S-*`), adapter-contract (`A-*`), confirmed-memory (`M-*`),
+governed-context (`C-*`), and tool-result (`T-*`) catalogs to `LLMAnalysisRequest.v3`. Model evidence
+may only copy exact `E-*` reference/path/typed-value tuples. Explicit `R-*` items carry security
+interpretation with declared basis and references, while open-vocabulary scenario assessments cite
+both `E-*` and `R-*`. `soc-analysis-v12` and `soc-analysis-json-parser-v10` reject unresolved or
+ambiguous references. Parser repair is limited to auditable, semantics-free normalization of an
+already unique catalog relation; it must never invent an event fact or security conclusion.
 
-Evidence grounding uses `soc.analysis_evidence_grounding.v2`. A grounded source/value whose
-description imports another distinctive bounded fact must be rejected as
-`description_context_leakage`; retain both matched and foreign context paths, but do not copy the
-foreign values into the report. An exact visible encoded-omission marker may ground only field
-presence, encoding shape, and boundary omission; hidden content, private sidecar hashes, validity,
-and outcome implications remain ungrounded. Object-as-string citations remain invalid. Grounding
-never repairs analyzer semantics; rejected evidence continues through the existing degraded-review
-Decision path.
+Evidence grounding uses `soc.analysis_evidence_grounding.v3`: validate exact `E-*` tuples first, then
+validate `R-*` references and required context namespaces. General security reasoning is valid when
+it cites grounded current facts and declares its basis; grounding proves reference integrity, not the
+truth of the inference. Exact encoded-omission markers prove only visible presence, shape, and model-
+boundary omission. Any ungrounded evidence/reasoning continues through the degraded-review Decision
+path. Model-generated typed `K-*` knowledge candidates are review-only and have no decision, Memory,
+Skill, adapter, or policy mutation authority.
 
 `soc_agent.core.SocDecisionPolicy` is the only Runtime boundary that converts validated
 `AnalysisResult` into an operational `Decision`. Analyzer confidence is currently an uncalibrated
@@ -792,6 +792,16 @@ evaluation, and governance tracks; do not infer a twelve-node Runtime from their
 validation must distinguish model evidence quality from safety behavior: rejected citations remain
 a quality finding, while the safety gate passes only when they force degraded evidence, human review,
 and `automation_allowed=false`.
+
+For one chronological full-journey review, use
+`validation/compact_zeus/e2e/run_ten_alert_e2e.py`. It selects an exact ten-alert cohort by ID,
+persists through the production `SocAnalysisService` into an isolated SQLite database, runs the live
+analyzer only after explicit confirmation, and projects Runtime, Grounding, Decision, simulated
+read-only investigation, ReviewQueue and bounded Lead Agent context into one private output root.
+It also compiles typed analyzer knowledge suggestions into an inert `knowledge-review/` package;
+generation performs no Memory, Skill, adapter, policy, or decision mutation.
+The cohort excludes known evidence-unavailable rows; this path validates complete alert journeys and
+does not replace the separate fail-closed input-gap tests.
 
 Checkpoint D starts with the adapter-independent D-0 corpus inventory. Run
 `validation/compact_zeus/checkpoint_d/build_checkpoint_d_corpus_inventory.py` before any full Runtime replay; it

@@ -140,6 +140,9 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "validation/compact_zeus/internal_batch/evaluate_pingan_shadow.py",
     "validation/compact_zeus/internal_batch/run_pingan_internal_shadow.py",
     "validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py",
+    "validation/compact_zeus/e2e/README.md",
+    "validation/compact_zeus/e2e/run_ten_alert_e2e.py",
+    "validation/compact_zeus/e2e/ten-alert-cases.json",
     "validation/compact_zeus/policy/README.md",
     "validation/compact_zeus/policy/validate_tenant_policy_shadow.py",
 )
@@ -640,6 +643,7 @@ archive into the same parent directory. Read:
 - `.notes/ai_soc/integrations/pingan-internal-continuation-handoff.md`
 - `backend/samples/pingan_dev/README.md`
 - `validation/compact_zeus/internal_batch/README.md`
+- `validation/compact_zeus/e2e/README.md`
 
 Install backend dependencies with the separately transferred Apple Silicon
 offline toolchain bundle. No public network or system Python 3.12 is required:

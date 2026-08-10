@@ -63,6 +63,7 @@ EXPECTED_RUNTIME_STEPS = (
     "fact_reconstruct",
     "build_analysis_input",
     "skill_context",
+    "reference_catalog",
     "analyze_llm",
     "schema_validate",
     "evidence_grounding",
@@ -546,7 +547,7 @@ def _review_run(
         ),
         "analysis_result_v2_is_complete": (
             analysis is not None
-            and analysis.schema_version == "soc.analysis_result.v2"
+            and analysis.schema_version == "soc.analysis_result.v3"
             and bool(analysis.evidence)
             and bool(analysis.scenario_assessments)
             and len(primary_scenarios) == 1
