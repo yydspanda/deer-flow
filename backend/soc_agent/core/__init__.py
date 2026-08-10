@@ -66,6 +66,7 @@ from soc_agent.core.service import (
     SocSkillResolutionService,
 )
 from soc_agent.core.skill_improvement import SocSkillImprovementService
+from soc_agent.core.tenant_policy import SocTenantPolicyEvaluationService
 from soc_agent.domain import SocDomainTriageService
 
 __all__ = [
@@ -118,6 +119,7 @@ __all__ = [
     "SocServiceNotFoundError",
     "SocSkillResolutionService",
     "SocSkillImprovementService",
+    "SocTenantPolicyEvaluationService",
     "load_soc_rollout_rehearsal_report",
     "load_soc_rollout_rehearsal_request",
 ]

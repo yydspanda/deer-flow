@@ -24,4 +24,12 @@ Separate repeated attempts, authentication failure, successful login, session cr
 
 Security software detections, honeypot events, scanners, maintenance tools, and system-path binaries remain observations. Confirm the executable, signer/hash, invoking identity, scope, time window, parent process, and governed authorization before treating them as benign. A trusted path or familiar product name alone is insufficient.
 
+## Installers, Deployment, And Developer Tooling
+
+Installers, software updaters, enterprise deployment systems, login scripts, IDEs, remote administration clients, and build agents can produce PowerShell, registry persistence, DLL loading, system discovery, or bulk command patterns. Reconstruct the complete parent-child chain and command semantics; check signer/hash, package origin, expected path, invoking identity, deployment window, and later behavior. No single product name, parent process, path, or signature is enough to suppress the alert.
+
+## Rule Family And Match Quality
+
+Treat a broad custom rule family or ATT&CK label as detection provenance, not a benign or malicious verdict. Compare the rule's matched primitive with the behavior actually observed. Preserve tenant-specific rule families and historical false-positive rates as governed memory or evaluation data, never as universal Skill truth.
+
 For every scenario, state observed behavior, strongest competing benign explanation, current verdict, evidence gaps, and manual checks.

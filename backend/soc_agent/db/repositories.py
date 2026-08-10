@@ -54,6 +54,7 @@ from soc_agent.contracts import (
     SocMemoryRecordStatus,
     SocMutationAuditRecord,
     SocMutationOperation,
+    TenantPolicyDecision,
 )
 from soc_agent.db.models import (
     SocAlertSummaryRow,
@@ -79,6 +80,7 @@ from soc_agent.db.models import (
     SocReviewQueueRow,
     SocSkillFeedbackObservationRow,
     SocSkillImprovementCandidateRow,
+    SocTenantPolicyDecisionRow,
 )
 from soc_agent.disposition import DispositionEvaluationConflictError, DispositionProposalConflictError
 from soc_agent.domain.correlation import score_similar_alert
@@ -86,6 +88,7 @@ from soc_agent.governed_context import (
     GovernedContextFactVersionConflictError,
     validate_governed_context_fact_append,
 )
+from soc_agent.tenant_policy import TenantPolicyDecisionConflictError
 
 MutationWriteHook = Callable[[int], None]
 
@@ -833,6 +836,68 @@ class SqlAlchemyAlertRepository:
                 query = query.where(target_filter)
             result = session.execute(query.order_by(SocDispositionProposalRow.created_at.desc()).limit(limit))
             return [_disposition_proposal_from_row(row) for row in result.scalars()]
+
+    def save_tenant_policy_decision(self, decision: TenantPolicyDecision) -> None:
+        payload = decision.model_dump(mode="json")
+        with self._session_factory() as session:
+            if session.get(SocTenantPolicyDecisionRow, decision.decision_id) is not None:
+                raise TenantPolicyDecisionConflictError(f"tenant policy decision {decision.decision_id} already exists")
+            session.add(
+                SocTenantPolicyDecisionRow(
+                    decision_id=decision.decision_id,
+                    **_tenant_policy_decision_row_values(decision, payload),
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise TenantPolicyDecisionConflictError("tenant policy decision identity already exists") from exc
+
+    def get_tenant_policy_decision(self, decision_id: str) -> TenantPolicyDecision | None:
+        with self._session_factory() as session:
+            row = session.get(SocTenantPolicyDecisionRow, decision_id)
+            return _tenant_policy_decision_from_row(row) if row is not None else None
+
+    def find_tenant_policy_decision_by_key(self, decision_key: str) -> TenantPolicyDecision | None:
+        with self._session_factory() as session:
+            result = session.execute(select(SocTenantPolicyDecisionRow).where(SocTenantPolicyDecisionRow.decision_key == decision_key).limit(1))
+            row = result.scalar_one_or_none()
+            return _tenant_policy_decision_from_row(row) if row is not None else None
+
+    def find_tenant_policy_decision_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> TenantPolicyDecision | None:
+        with self._session_factory() as session:
+            result = session.execute(select(SocTenantPolicyDecisionRow).where(SocTenantPolicyDecisionRow.idempotency_key == idempotency_key).limit(1))
+            row = result.scalar_one_or_none()
+            return _tenant_policy_decision_from_row(row) if row is not None else None
+
+    def list_tenant_policy_decisions(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        tenant_id: str | None = None,
+        policy_id: str | None = None,
+        limit: int = 100,
+    ) -> list[TenantPolicyDecision]:
+        target_filters = []
+        if run_id:
+            target_filters.append(SocTenantPolicyDecisionRow.run_id == run_id)
+        if alert_id:
+            target_filters.append(SocTenantPolicyDecisionRow.alert_id == alert_id)
+        if tenant_id:
+            target_filters.append(SocTenantPolicyDecisionRow.tenant_id == tenant_id)
+        if policy_id:
+            target_filters.append(SocTenantPolicyDecisionRow.policy_id == policy_id)
+        with self._session_factory() as session:
+            query = select(SocTenantPolicyDecisionRow)
+            for target_filter in target_filters:
+                query = query.where(target_filter)
+            result = session.execute(query.order_by(SocTenantPolicyDecisionRow.created_at.desc()).limit(limit))
+            return [_tenant_policy_decision_from_row(row) for row in result.scalars()]
 
     def save_disposition_sample_manifest(self, manifest: SocDispositionSampleManifest) -> None:
         payload = manifest.model_dump(mode="json")
@@ -1940,6 +2005,74 @@ def _disposition_proposal_from_row(
     if indexed_values != contract_values:
         raise ValueError(f"disposition proposal row {row.proposal_id} does not match its typed payload")
     return proposal
+
+
+def _tenant_policy_decision_row_values(
+    decision: TenantPolicyDecision,
+    payload: dict,
+) -> dict:
+    return {
+        "decision_key": decision.decision_key,
+        "idempotency_key": decision.idempotency_key,
+        "run_id": decision.run_id,
+        "alert_id": decision.alert_id,
+        "tenant_id": decision.tenant_id,
+        "environment": decision.environment,
+        "policy_id": decision.policy_id,
+        "policy_version": decision.policy_version,
+        "policy_hash": decision.policy_hash,
+        "policy_time": decision.policy_time,
+        "evaluation_status": decision.evaluation_status.value,
+        "selected_rule_id": decision.selected_rule_id,
+        "detection_verdict": decision.detection_truth.verdict.value,
+        "recommended_disposition": (decision.recommended_disposition.value if decision.recommended_disposition is not None else None),
+        "created_by_actor_id": decision.evaluated_by.actor_id,
+        "created_at": decision.created_at,
+        "decision_payload": payload,
+    }
+
+
+def _tenant_policy_decision_from_row(
+    row: SocTenantPolicyDecisionRow,
+) -> TenantPolicyDecision:
+    decision = TenantPolicyDecision.model_validate(row.decision_payload)
+    indexed_values = {
+        "decision_id": row.decision_id,
+        "decision_key": row.decision_key,
+        "idempotency_key": row.idempotency_key,
+        "run_id": row.run_id,
+        "alert_id": row.alert_id,
+        "tenant_id": row.tenant_id,
+        "environment": row.environment,
+        "policy_id": row.policy_id,
+        "policy_version": row.policy_version,
+        "policy_hash": row.policy_hash,
+        "evaluation_status": row.evaluation_status,
+        "selected_rule_id": row.selected_rule_id,
+        "detection_verdict": row.detection_verdict,
+        "recommended_disposition": row.recommended_disposition,
+        "created_by_actor_id": row.created_by_actor_id,
+    }
+    contract_values = {
+        "decision_id": decision.decision_id,
+        "decision_key": decision.decision_key,
+        "idempotency_key": decision.idempotency_key,
+        "run_id": decision.run_id,
+        "alert_id": decision.alert_id,
+        "tenant_id": decision.tenant_id,
+        "environment": decision.environment,
+        "policy_id": decision.policy_id,
+        "policy_version": decision.policy_version,
+        "policy_hash": decision.policy_hash,
+        "evaluation_status": decision.evaluation_status.value,
+        "selected_rule_id": decision.selected_rule_id,
+        "detection_verdict": decision.detection_truth.verdict.value,
+        "recommended_disposition": (decision.recommended_disposition.value if decision.recommended_disposition is not None else None),
+        "created_by_actor_id": decision.evaluated_by.actor_id,
+    }
+    if indexed_values != contract_values:
+        raise ValueError(f"tenant policy decision row {row.decision_id} does not match its typed payload")
+    return decision
 
 
 def _disposition_sample_manifest_from_row(

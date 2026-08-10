@@ -1,6 +1,6 @@
 # PingAn SOC Capability Onboarding
 
-> Updated: 2026-07-07
+> Updated: 2026-08-10
 >
 > 目的：把用户掌握的平安 SOC 工具、MCP、skill、研判经验和处置经验，持续、可审计地嵌入 DeerFlow SOC Agent，而不是零散写进 prompt。
 >
@@ -137,6 +137,7 @@ field experience
 | `PA-APT-SRC` | `.notes/ai_soc/capabilities/pingan/source-docs/apt-alert-assess-flow.md` | 天眼/APT 告警、攻击方向、威胁情报、封禁策略、字段可信度 | 拆成 APT direction、threat intel、security tag、response policy、eval cases |
 | `PA-EDR-SRC` | `.notes/ai_soc/capabilities/pingan/source-docs/edr-alert-assess-flow.md` | EDR 进程树、命令行、账号/UM、资产归属、终端处置 | 拆成 endpoint triage、process tree evidence、asset locate、identity pattern、high-risk action |
 | `PA-HIDS-SRC` | `.notes/ai_soc/capabilities/pingan/source-docs/hids-alert-assess-flow.md` | HIDS 主机事件、登录用户、进程链、后门/反弹 shell/web command、误报经验 | 拆成 host triage、alert-native host context、benign pattern、eval cases |
+| `PA-SKILL-DEMO-20260805` | `validation/original_works/security-log-analysis/security-log-analysis/` | 同事整理的通用框架、APT/NIDS/EDR/HIDS 案例、平安公共知识和处置建议 | 按 `security-log-analysis-skill-audit.md` 拆解；原包不直接安装或进入生产依赖 |
 
 ### 5.3 Execution Backlog
 
@@ -155,6 +156,7 @@ field experience
 | `PA-10` | Done | 接 domain triage MVP | 已新增 APT / EDR / HIDS domain handlers，读取 capability card refs、skill context、evidence refs 并输出 domain findings | 子研判只输出 finding/evidence/recommendation，不直接写 DB 或执行动作 |
 | `PA-11` | Done | 接 Main Orchestrator demo | 已新增 `SocMainOrchestratorService`、`UnifiedInvestigationReport`、`soc eval pingan-main` | APT/EDR/HIDS demo 能看到 analyze -> skill -> read-only evidence -> domain finding -> review context；仍不写 DB、不执行高风险动作 |
 | `PA-12` | In Progress / internal smoke | 真实 PingAn MCP/API 替换 mock | DEV profile、portable ZEUS signer、preflight 和 direct smoke entry 已完成；等待内网 `run_workflow` import、网络和 approved cases | 保存 direct/MCP/persisted evidence smoke；评估 latency、失败率、敏感字段裁剪、payload size；至少一个结果 `mocked=false`，不能用本地 mock 假装完成 |
+| `PA-13` | Done | 审计同事 `security-log-analysis` Skill Demo 并修复 D6 宽泛关键词路由 | `security-log-analysis-skill-audit.md`、source-aware `SocSkillResolver`、公共 Skill 最小增量、D6 v2 route gate | 不整体安装 Demo；typed evidence 优先；HIDS 不再因 `恶意/命令执行` 跨域；PingAn 专属事实只形成 governed candidate |
 
 ### 5.4 P0 Capability Cards
 

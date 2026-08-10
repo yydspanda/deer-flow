@@ -60,6 +60,27 @@ _SOURCE_SKILLS: dict[AlertSourceType, tuple[str, str]] = {
     AlertSourceType.CLOUD: (SOC_ASSET_DIRECTION_SKILL, "source_type is cloud"),
 }
 
+_ENDPOINT_SOURCE_TYPES = frozenset(
+    {
+        AlertSourceType.EDR,
+        AlertSourceType.XDR,
+        AlertSourceType.HIDS,
+    }
+)
+_NETWORK_SOURCE_TYPES = frozenset(
+    {
+        AlertSourceType.NIDS,
+        AlertSourceType.NDR,
+        AlertSourceType.THREAT_INTEL,
+    }
+)
+_WEB_SOURCE_TYPES = frozenset(
+    {
+        AlertSourceType.WAF,
+        AlertSourceType.F5,
+    }
+)
+
 _ENDPOINT_KEYWORDS = (
     "edr",
     "xdr",
@@ -79,11 +100,11 @@ _NETWORK_APT_KEYWORDS = (
     "c2",
     "beacon",
     "command and control",
-    "malware",
+    "malicious outbound",
+    "callback",
     "ioc",
     "外联",
     "反连",
-    "恶意",
     "天眼",
 )
 _WEB_APPLICATION_KEYWORDS = (
@@ -96,15 +117,20 @@ _WEB_APPLICATION_KEYWORDS = (
     "xss",
     "webshell",
     "path traversal",
+    "web attack",
+    "web command",
+    "web应用",
+    "网页攻击",
+    "注入",
+)
+_WEB_APPLICATION_CONTEXTUAL_KEYWORDS = (
     "command execution",
     "remote code execution",
     "weak password",
-    "注入",
     "弱口令",
     "命令执行",
     "文件读取",
     "文件上传",
-    "网页攻击",
 )
 _EMAIL_PHISHING_KEYWORDS = (
     "phishing",
@@ -181,6 +207,7 @@ class SocSkillResolver:
                 *request.classification.technique,
                 *request.classification.labels.values(),
             ],
+            source_type=request.source.source_type,
         )
         _add_entity_skills(recommendations, request.extracted_entities)
         _add_role_resolution_skills(recommendations, request)
@@ -225,6 +252,7 @@ class SocSkillResolver:
                 *alert.classification.technique,
                 *alert.classification.labels.values(),
             ],
+            source_type=alert.source.source_type,
         )
         if entities is not None:
             _add_entity_skills(recommendations, entities)
@@ -249,6 +277,7 @@ class SocSkillResolver:
                 summary.category,
                 summary.severity,
             ],
+            source_type=summary.source_type,
         )
         _add_summary_entity_skills(
             recommendations,
@@ -344,6 +373,9 @@ class _RecommendationBuilder:
 
     def items(self) -> list[SocSkillRecommendation]:
         return sorted(self._items.values(), key=lambda item: (-item.confidence, item.skill_name))
+
+    def contains(self, skill_name: str) -> bool:
+        return skill_name in self._items
 
 
 def _add_source_skill(recommendations: _RecommendationBuilder, source_type: AlertSourceType | None) -> None:
@@ -522,7 +554,12 @@ def _add_summary_entity_skills(
         )
 
 
-def _add_text_skills(recommendations: _RecommendationBuilder, values: Iterable[str | None]) -> None:
+def _add_text_skills(
+    recommendations: _RecommendationBuilder,
+    values: Iterable[str | None],
+    *,
+    source_type: AlertSourceType,
+) -> None:
     text = " ".join(value for value in values if value).lower()
     if not text:
         return
@@ -532,6 +569,7 @@ def _add_text_skills(recommendations: _RecommendationBuilder, values: Iterable[s
         _ENDPOINT_KEYWORDS,
         SOC_ENDPOINT_TRIAGE_SKILL,
         "endpoint keyword matched in source, detection, classification, or entities",
+        allow_create=_keyword_route_may_create(SOC_ENDPOINT_TRIAGE_SKILL, source_type),
     )
     _add_keyword_skill(
         recommendations,
@@ -539,6 +577,7 @@ def _add_text_skills(recommendations: _RecommendationBuilder, values: Iterable[s
         _NETWORK_APT_KEYWORDS,
         SOC_NETWORK_APT_TRIAGE_SKILL,
         "network/APT keyword matched in source, detection, classification, or entities",
+        allow_create=_keyword_route_may_create(SOC_NETWORK_APT_TRIAGE_SKILL, source_type),
     )
     _add_keyword_skill(
         recommendations,
@@ -546,6 +585,15 @@ def _add_text_skills(recommendations: _RecommendationBuilder, values: Iterable[s
         _WEB_APPLICATION_KEYWORDS,
         SOC_WEB_APPLICATION_TRIAGE_SKILL,
         "web-application keyword matched in source, detection, or classification",
+        allow_create=_keyword_route_may_create(SOC_WEB_APPLICATION_TRIAGE_SKILL, source_type),
+    )
+    _add_keyword_skill(
+        recommendations,
+        text,
+        _WEB_APPLICATION_CONTEXTUAL_KEYWORDS,
+        SOC_WEB_APPLICATION_TRIAGE_SKILL,
+        "web-application behavior keyword matched within typed or source-scoped web context",
+        allow_create=source_type in (_NETWORK_SOURCE_TYPES | _WEB_SOURCE_TYPES),
     )
     _add_keyword_skill(
         recommendations,
@@ -570,15 +618,28 @@ def _add_text_skills(recommendations: _RecommendationBuilder, values: Iterable[s
     )
 
 
+def _keyword_route_may_create(skill_name: str, source_type: AlertSourceType) -> bool:
+    """Prevent ambiguous text from overriding a known source-domain boundary."""
+
+    if source_type in _ENDPOINT_SOURCE_TYPES:
+        return skill_name not in {SOC_NETWORK_APT_TRIAGE_SKILL, SOC_WEB_APPLICATION_TRIAGE_SKILL}
+    if source_type in _NETWORK_SOURCE_TYPES:
+        return skill_name != SOC_ENDPOINT_TRIAGE_SKILL
+    if source_type in _WEB_SOURCE_TYPES:
+        return skill_name not in {SOC_ENDPOINT_TRIAGE_SKILL, SOC_NETWORK_APT_TRIAGE_SKILL}
+    return True
+
+
 def _add_keyword_skill(
     recommendations: _RecommendationBuilder,
     text: str,
     keywords: tuple[str, ...],
     skill_name: str,
     reason: str,
+    allow_create: bool = True,
 ) -> None:
     matched = next((keyword for keyword in keywords if keyword in text), None)
-    if matched is None:
+    if matched is None or (not allow_create and not recommendations.contains(skill_name)):
         return
     recommendations.add(skill_name, reason=reason, confidence=0.64, matched_field=f"keyword:{matched}")
 

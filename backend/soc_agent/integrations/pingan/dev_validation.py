@@ -91,7 +91,7 @@ def run_pingan_dev_preflight(
     config_loader: Callable[[str], AppConfig] | None = None,
     locator_builder: Callable[[Mapping[str, str]], PingAnAssetLocatorService] = build_pingan_asset_locator_from_env,
 ) -> PingAnDevPreflightReport:
-    """Validate DEV-only configuration and imports without issuing a request."""
+    """Validate DEV-only configuration and transports without issuing a request."""
 
     env = dict(os.environ if environ is None else environ)
     checks: list[PingAnDevPreflightCheck] = []
@@ -108,13 +108,6 @@ def run_pingan_dev_preflight(
     )
     _append_boolean_check(
         checks,
-        check_id="environment.legacy_profile_local",
-        passed=env.get("env_profile", "").strip().upper() == "LOCAL",
-        passed_detail="Legacy modules explicitly select their LOCAL profile.",
-        failed_detail="env_profile must explicitly equal LOCAL for the reviewed DEV stack.",
-    )
-    _append_boolean_check(
-        checks,
         check_id="provider.internal_mode",
         passed=provider_mode == "internal",
         passed_detail="Asset provider mode is internal and cannot use fake transports.",
@@ -125,15 +118,20 @@ def run_pingan_dev_preflight(
         "SOC_PINGAN_ZEUS_BASE_URL",
         "SOC_PINGAN_ZEUS_APP_ID",
         "SOC_PINGAN_ZEUS_APP_KEY",
-        "SOC_PINGAN_ZEUS_SIGNER_IMPORT",
-        "SOC_PINGAN_WORKFLOW_RUNNER_IMPORT",
+    )
+    workflow_required_names = (
+        "SOC_PINGAN_WORKFLOW_ENV",
+        "SOC_PINGAN_WORKFLOW_BASE_URL",
+        "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS",
         "SOC_PINGAN_WORKFLOW_APP_ID",
-        "SOC_PINGAN_WORKFLOW_OPERATOR",
+        "SOC_PINGAN_WORKFLOW_APP_SECRET",
         "SOC_PINGAN_WORKFLOW_TERMINAL_ID",
         "SOC_PINGAN_WORKFLOW_DATACENTER_ID",
         "SOC_PINGAN_WORKFLOW_USER_ID",
     )
-    missing = [name for name in required_names if not env.get(name, "").strip()]
+    workflow_enabled = _env_bool(env, "SOC_PINGAN_ASSET_WORKFLOW_ENABLED", True)
+    names = (*required_names, *(workflow_required_names if workflow_enabled else ()))
+    missing = [name for name in names if not env.get(name, "").strip()]
     _append_boolean_check(
         checks,
         check_id="provider.required_configuration",
@@ -143,6 +141,8 @@ def run_pingan_dev_preflight(
     )
 
     _validate_zeus_host(env, checks)
+    if workflow_enabled:
+        _validate_workflow_host(env, checks)
     _validate_deerflow_model_profile(
         env,
         checks,
@@ -166,7 +166,7 @@ def run_pingan_dev_preflight(
                 PingAnDevPreflightCheck(
                     check_id="provider.imports_and_construction",
                     status=PingAnDevPreflightStatus.PASSED,
-                    detail="Signer and workflow callables resolve and the internal Provider constructs without network I/O.",
+                    detail="Tracked ZEUS signer and Agent Platform HTTP client construct without network I/O.",
                 )
             )
 
@@ -310,6 +310,25 @@ def _validate_zeus_host(
     )
 
 
+def _validate_workflow_host(
+    env: Mapping[str, str],
+    checks: list[PingAnDevPreflightCheck],
+) -> None:
+    parsed = urlparse(env.get("SOC_PINGAN_WORKFLOW_BASE_URL", ""))
+    allowed_hosts = {value.strip().lower() for value in env.get("SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS", "").split(",") if value.strip()}
+    target = env.get("SOC_PINGAN_WORKFLOW_ENV", "").strip().lower()
+    host_allowed = parsed.scheme == "https" and bool(parsed.hostname) and parsed.hostname.lower() in allowed_hosts
+    production_confirmed = target != "prd" or env.get("SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION", "").strip() == "CALL_PINGAN_PRD"
+    passed = target in {"dev", "stg", "prd"} and host_allowed and production_confirmed
+    _append_boolean_check(
+        checks,
+        check_id="provider.workflow_host_allowlist",
+        passed=passed,
+        passed_detail=f"Agent Platform {target.upper()} target uses HTTPS, an explicit host allowlist, and the required environment guard.",
+        failed_detail=("Agent Platform target must be dev/stg/prd, use an allowlisted HTTPS host, and PRD additionally requires SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD."),
+    )
+
+
 def _validate_deerflow_model_profile(
     env: Mapping[str, str],
     checks: list[PingAnDevPreflightCheck],
@@ -358,16 +377,16 @@ def _validate_deerflow_model_profile(
 
 def _provider_construction_error_detail(
     exc: Exception,
-    env: Mapping[str, str],
+    _env: Mapping[str, str],
 ) -> str:
-    message = str(exc)
-    signer_import = env.get("SOC_PINGAN_ZEUS_SIGNER_IMPORT", "")
-    workflow_import = env.get("SOC_PINGAN_WORKFLOW_RUNNER_IMPORT", "")
-    if signer_import and repr(signer_import) in message:
-        return "Configured ZEUS signer callable cannot be imported; check the tracked signer module and backend import root."
-    if workflow_import and repr(workflow_import) in message:
-        return "Configured internal workflow runner cannot be imported; add the legacy Agent Platform package to the DEV environment."
-    return f"Provider construction failed ({exc.__class__.__name__}); check configured import roots and internal dependencies."
+    return f"Provider construction failed ({exc.__class__.__name__}); check the typed ZEUS and Agent Platform HTTP configuration."
+
+
+def _env_bool(env: Mapping[str, str], name: str, default: bool) -> bool:
+    raw = env.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _append_boolean_check(
@@ -394,7 +413,7 @@ def _classify_provider_failure(
     error_types = {item.error_type or "" for item in attempts}
     if "http 401" in messages or "http 403" in messages:
         return "authentication_failed"
-    if "TimeoutException" in error_types or "timed out" in messages:
+    if error_types & {"TimeoutException", "PingAnAgentWorkflowTimeoutError"} or "timed out" in messages:
         return "timeout"
     if error_types & {"JSONDecodeError", "ValidationError", "TypeError"}:
         return "invalid_response"

@@ -178,6 +178,7 @@ class SocEventType(StrEnum):
     AUTHORIZATION_ENRICHMENT_RECORDED = "authorization.enrichment_recorded"
     AUTHORIZATION_ENRICHMENT_REPLAYED = "authorization.enrichment_replayed"
     DISPOSITION_PROPOSAL_RECORDED = "disposition.proposal_recorded"
+    TENANT_POLICY_DECISION_RECORDED = "tenant_policy.decision_recorded"
     DISPOSITION_SAMPLE_CREATED = "disposition.sample_created"
     DISPOSITION_OUTCOME_RECORDED = "disposition.outcome_recorded"
     SKILL_FEEDBACK_INGESTED = "skill_feedback.ingested"

@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 from scripts.build_pingan_internal_transfer import (
     ARCHIVE_ROOT,
+    PRIVATE_ENV_REQUIRED_KEYS,
     REQUIRED_HANDOFF_SOURCE_PATHS,
     _archive_manifest,
+    _assert_private_overlay_config_ready,
     _assert_required_handoff_sources,
     _assert_source_freeze_allowed,
     _assert_source_path_safe,
@@ -50,6 +52,39 @@ def test_transfer_freeze_accepts_complete_handoff_inventory() -> None:
     _assert_required_handoff_sources(
         [Path(item) for item in REQUIRED_HANDOFF_SOURCE_PATHS]
     )
+
+
+def test_private_overlay_config_accepts_current_dynamic_profile(tmp_path: Path) -> None:
+    _write_private_profiles(tmp_path)
+
+    _assert_private_overlay_config_ready(tmp_path)
+
+
+def test_private_overlay_config_rejects_obsolete_import_contract(
+    tmp_path: Path,
+) -> None:
+    _write_private_profiles(
+        tmp_path,
+        extra='export SOC_PINGAN_WORKFLOW_RUNNER_IMPORT="legacy:run_workflow"\n',
+    )
+
+    with pytest.raises(ValueError, match="obsolete keys"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+
+def test_private_overlay_config_rejects_placeholder_or_user_path(
+    tmp_path: Path,
+) -> None:
+    _write_private_profiles(
+        tmp_path,
+        overrides={"SOC_PINGAN_WORKFLOW_APP_SECRET": "<internal-secret>"},
+    )
+    with pytest.raises(ValueError, match="unresolved values"):
+        _assert_private_overlay_config_ready(tmp_path)
+
+    _write_private_profiles(tmp_path, config_text="path: /Users/example/deer-flow\n")
+    with pytest.raises(ValueError, match="developer-specific path"):
+        _assert_private_overlay_config_ready(tmp_path)
 
 
 def test_transfer_archive_round_trip_verifies_manifest_digests(tmp_path: Path) -> None:
@@ -113,3 +148,24 @@ def test_inspect_rejects_escaping_symlink(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="unsafe archive symlink target"):
         inspect_archive(archive)
+
+
+def _write_private_profiles(
+    root: Path,
+    *,
+    overrides: dict[str, str] | None = None,
+    extra: str = "",
+    config_text: str = "models: []\n",
+) -> None:
+    values = {name: f"value-{name.lower()}" for name in PRIVATE_ENV_REQUIRED_KEYS}
+    values.update(overrides or {})
+    env_path = root / ".env.soc-dev.local"
+    env_path.write_text(
+        "".join(f'export {name}="{value}"\n' for name, value in sorted(values.items()))
+        + extra,
+        encoding="utf-8",
+    )
+    config_path = root / "config.pingan-dev.local"
+    config_path.write_text(config_text, encoding="utf-8")
+    env_path.chmod(0o600)
+    config_path.chmod(0o600)

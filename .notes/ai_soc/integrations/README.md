@@ -9,8 +9,9 @@
 | Capability / 能力 | Current nature / 当前性质 | Authoritative task / 归属 | Planned implementation / 计划落点 |
 |---|---|---|---|
 | Legacy model/ZEUS/status/path audit | **Done / reference** | 已完成审计 | [`pingan-legacy-source-audit.md`](pingan-legacy-source-audit.md)；只保留协议和租户边界，不迁移旧控制流 |
+| Internal LiteLLM connectivity | **Code-complete / internal smoke pending** | D12-B environment gate | loopback-only fixed-prompt `chat.completions` smoke 已实现；内网启动 `sec_know_model` 后保存不含正文/凭证的 `soc.pingan_litellm_smoke.v1` pass report |
 | D12-A asset provider | **Done / fake-only** | D12-A | PingAn provider、portable signer、fallback、MCP/action 契约已完成；不能代替真实验收 |
-| Real `asset.locate` | **Parked / internal evidence pending** | `D12-B` | preflight/direct seven-case runner 与 MCP/Dispatcher/evidence/shared-context acceptance runner 已实现；恢复后仍需内网 confirmed matrix -> real evidence report -> deployed Web/TUI smoke |
+| Real `asset.locate` | **Parked / internal evidence pending** | `D12-B` | 自包含 ZEUS signer + Agent Platform HTTP client、旧源码 `YHSYS` PRD private-profile preparer、固定 legacy operator、Apple Silicon 离线 backend toolchain、preflight/direct seven-case runner 与 MCP/Dispatcher/evidence/shared-context acceptance runner 已实现；恢复后只核对剩余环境配置/cases，再做 confirmed matrix -> real evidence report -> deployed Web/TUI smoke |
 | `asset.lookup` simple-record route | **Local scaffold / disabled for PingAn PI-01E** | `PI-01D` route consolidation | 它与 ownership-oriented `asset.locate` 语义不同；PingAn real-only 示例选择 `asset.locate`，paired evaluator 将选中 `asset.lookup` 视为 blocking failure；其他 tenant 若保留它仍须独立真实 adapter/result schema |
 | Real threat intelligence | **Code-complete / internal smoke pending** | `PI-01A` | PingAn `/public/indicatorSearch` typed Provider + stdio MCP + action/evidence 已实现；generic 层只认识 `threat_intel.ip_reputation.lookup`；仍需真实 DEV `mocked=false` 验收 |
 | Real security-tag lookup | **Code-complete / internal smoke pending** | `PI-01B1` | PingAn `/public/searchTagContent` typed Provider + stdio MCP + action/evidence 已实现；保留 validity/scope/source observation，缺失 expiry 默认 fail closed；仍需真实 DEV 字段与 `mocked=false` 验收 |

@@ -28,6 +28,10 @@ For directory listing, API documentation, debug endpoint, source-control metadat
 
 Exploit-framework, scanner, scripted user-agent, and payload signatures support an attack or test hypothesis. Authorization must come from scoped governed context; a hardcoded hostname, path, user agent, or source range must not auto-suppress the alert.
 
+## Attack-Like Content Carried As Data
+
+Code assistants, query consoles, preview APIs, repositories, ticket systems, and upload services can legitimately carry SQL, shell, source code, exploit strings, or webshell-like text as data. Identify the receiving endpoint's purpose and whether the content was merely transported, rendered, stored, interpreted, or executed. A known business endpoint is supporting context only; use scoped governed facts and response or server-side effects before deciding benignness or exploit success.
+
 ## Proxy And Target Attribution
 
 Keep client candidate, forwarded chain, CDN/reverse proxy/load balancer, protected service, business owner, and response target separate. Use trusted topology or asset evidence to resolve them; never block shared infrastructure by field position alone.

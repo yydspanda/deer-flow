@@ -26,10 +26,13 @@ composition/extensions，真实值只通过环境变量注入，不再现场增�
 
 - [x] `root_config`、LOCAL/DEV 环境选择和本地 OpenAI-compatible model endpoint 已从源代码确认。
 - [x] ZEUS signer 已提取为本项目内的无旧依赖实现，不再要求 import 整个 `util.util_tools`。
-- [ ] 内网 Mac 能否 import `model.agent_platform.util_tools:run_workflow`；不能时把旧 Agent Platform 包父目录写入本地 `SOC_PINGAN_PROVIDER_IMPORT_PATHS`。
-- [x] 旧调用方以同步函数使用 `run_workflow(app_id, workflow_id, query_data)`；返回 `dict`、JSON string 或 `None`。
-- [ ] 内部包需要的 Python 版本、公司 PyPI 或企业 CA 情况。
-- [ ] 确认并配置 DEV ZEUS 网络前置条件：代理、CA、客户端证书、IP 白名单。
+- [x] Agent Platform wire contract 已从旧源码提取到本项目自包含 HTTP client，不再 import 旧项目的 `run_workflow`。
+- [x] Apple Silicon 的 CPython `3.12.3`、`uv` 和锁定依赖已打成无公网、无管理员权限的独立离线包。
+- [x] 已提供固定无业务数据的 LiteLLM `chat.completions` smoke；报告不保存 key、响应 ID 或模型原文。
+- [ ] 在内网启动 `sec_know_model` 后执行 LiteLLM smoke，并保存 `outcome=passed` 的 `0600` 报告。
+- [x] Agent Platform 的 `YHSYS` PRD URL、credential 与固定 `message.by=WANGWENBIN520` 已从旧源码确认；迁移器只把 secret 写入 Git-ignored `0600` env，真实调用仍需显式 PRD confirmation 和 `--confirm-live`。
+- [x] 首轮按直接访问 DEV/STG 设计，不配置代理、自定义 CA 或客户端证书；只有真实 smoke 明确报出网络前置条件时才补。
+- [ ] 确认 DEV 服务是否存在来源 IP 白名单，以及当前 Mac 是否已放行。
 - [ ] 确认是否能在内网准备资产命中、查无、UM fallback、ambiguous、鉴权失败和 timeout 测试 case；真实测试值留在内网。
 
 D12-B 之后再收集：TI 和安全标签的脱敏成功/查无/错误响应，以及可用时的 Zeus 状态理由回流协议。
@@ -43,12 +46,16 @@ D12-B 之后再收集：TI 和安全标签的脱敏成功/查无/错误响应，
 | Item | Known contract |
 |---|---|
 | ZEUS signer | 旧协议来自 `util.util_tools:isec_sign`；可移植实现为 `soc_agent.integrations.pingan.zeus_signing:isec_sign` |
-| Workflow runner | `model.agent_platform.util_tools:run_workflow` |
+| Workflow transport | 本项目 `HttpPingAnAgentWorkflowPort`；复现旧 auth -> create -> poll wire contract，不依赖旧 Python 包 |
 | Shared ZEUS config | 旧代码通过 `util.root_config` 读取 `ZEUS_SYSTEM_URL`、`ZEUS_APP_ID`、`ZEUS_APP_KEY` |
 | Asset API | `POST /public/searchAssetInfo`，签名鉴权，`companyCode` header |
 | Asset workflow chain | `searchAssetInfo -> asset_to_bu -> UM`，查无才进入下一步 |
 | Workflow IDs | terminal `1087710`、datacenter `1087787`、user `1092332` |
-| Workflow app ID | `YHSYS` |
+| Workflow app ID | `YHSYS`；这是旧三条归属 workflow 的 Agent Platform 应用/租户身份，不是模型名或操作人 |
+| Workflow operator | 旧三条归属 workflow 固定 `message.by=WANGWENBIN520`；平安 Adapter 不接受环境覆盖 |
+| Agent Platform STG | 旧 LOCAL/STG profile 均为 `https://agents-api-stg-new.paic.com.cn` |
+| Agent Platform PRD | 旧 PRD profile 为 `https://agents-api-sze.paic.com.cn`；新代码要求显式 PRD confirmation |
+| YHSYS credential coverage | 旧源码只在 PRD branch 登记 `YHSYS`；当前真实验证因此使用该 reviewed PRD profile，不虚构 STG credential |
 | Threat intelligence | `POST /public/indicatorSearch`，与资产接口共用 ZEUS App ID/App Key |
 | Security tags | `POST /public/searchTagContent`，与资产接口共用 ZEUS App ID/App Key |
 | Success parsing | `searchAssetInfo` 和 `run_workflow` 的成功响应结构按旧代码实现并做兼容解析 |
@@ -65,9 +72,9 @@ SOC Runtime 不实现 `endpoint.process_tree.lookup` 或 `host.event_context.loo
 
 该项已完成源码审计：
 
-- 旧模块通过 `env_profile` 选择 profile；本项目 D12-B 强制 `env_profile=LOCAL` 与 `SOC_PINGAN_ENV=dev`。
+- 旧模块通过 `env_profile` 选择 profile；新项目不读取该全局变量。D12-B 部署环境使用 `SOC_PINGAN_ENV=dev`，Agent Platform 上游目标另由 `SOC_PINGAN_WORKFLOW_ENV=dev|stg|prd` 显式选择。
 - DeerFlow 的模型 endpoint、ZEUS endpoint 和 workflow runner 分别显式配置，不依赖旧 `root_config` 的隐式全局读取。
-- `soc_pingan_dev_preflight.py` 会在发请求前拒绝未知环境、非 LOCAL profile、非 internal provider、未 allowlist 的 ZEUS host 和非 loopback model endpoint。
+- `soc_pingan_dev_preflight.py` 会在发请求前拒绝未知环境、非 internal provider、未 allowlist 的 ZEUS/Agent Platform host、非 loopback model endpoint，以及未二次确认的 PRD workflow target。
 - 实际 DEV URL/App ID/App Key 可以直接写入 Git-ignored `.env.soc-dev.local`。
 
 已提供：
@@ -79,14 +86,18 @@ config.pingan-dev.local               # Git ignored; real values allowed
 .env.soc-dev.local                    # Git ignored; real values allowed
 ```
 
-### 3.2 Internal Python availability / 内部 Python 依赖可用性
+### 3.2 Offline Python toolchain / 离线 Python 工具链
 
-签名不再依赖旧项目，只需在内网确认 workflow runner：
+内网机器无需预装 Python `3.12.3`，也无需公司 PyPI：
 
-- 项目虚拟环境能否 import `model.agent_platform.util_tools:run_workflow`。
-- 若不能，需加入哪个**父目录**到 `PYTHONPATH`；真实绝对路径只留在内网 `.env`。
-- [x] 旧调用点是同步调用；内网 smoke 再确认安装版本没有发生接口漂移。
-- 内部包是否需要公司 PyPI、特定 Python 版本或企业 CA。
+- 外网构建 `deer-flow-pingan-macos-arm64-offline-<timestamp>.tar.gz`。
+- 包内固定 Apple Silicon CPython `3.12.3`、`uv` 和当前 `backend/uv.lock` 的 `pingan-dev` 依赖缓存。
+- 安装器只写项目内的 `backend/.deer-flow/toolchain/`、`backend/.deer-flow/offline/` 和 `backend/.venv/`。
+- 安装过程强制 `--offline --no-python-downloads`，不使用 `sudo`，不修改系统 Python 或 `sec_know_model/.venv`。
+- checkout 路径由 `backend/scripts/soc_pingan_local_paths.py` 基于脚本位置解析，不写死某位同事的 `/Users/...`。
+- 平安 Maven/PyPI 镜像只用于离线安装之后的可选依赖维护。项目使用 `uv` 而不是 Poetry；
+  `backend/samples/pingan_dev/uv-index.env.example` 提供 `UV_DEFAULT_INDEX` 和精确 host:port 的
+  `UV_INSECURE_HOST`。它不进入仓库全局配置，也不替代当前 lock 对应的离线包。
 
 ### 3.3 Local-only ZEUS settings / 只留内网的 ZEUS 配置
 
@@ -97,15 +108,34 @@ SOC_PINGAN_ENV=dev
 SOC_PINGAN_ZEUS_BASE_URL=<internal-only>
 SOC_PINGAN_ZEUS_APP_ID=<internal-only>
 SOC_PINGAN_ZEUS_APP_KEY=<internal-only>
-SOC_PINGAN_WORKFLOW_OPERATOR=<internal-only service identity or UM>
+SOC_PINGAN_WORKFLOW_ENV=prd
+SOC_PINGAN_WORKFLOW_BASE_URL=https://agents-api-sze.paic.com.cn
+SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS=agents-api-sze.paic.com.cn
+SOC_PINGAN_WORKFLOW_APP_ID=YHSYS
+SOC_PINGAN_WORKFLOW_APP_SECRET=<written by the legacy-profile preparer>
+SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD
 ```
+
+在外网准备 checkout、构建 private overlay 之前运行：
+
+```bash
+backend/.venv/bin/python \
+  backend/scripts/soc_pingan_prepare_legacy_workflow_profile.py --apply
+```
+
+该脚本只用 AST 静态读取旧 `agent_config.py`，不 import/执行旧项目；输出只包含 profile 元数据和
+`credential_present=true`，不包含 secret 或 secret hash。旧源码本身不进入 source bundle，写好的 env
+只进入受保护 private overlay。
 
 还需确认：
 
-- DEV 是否要求代理、企业 CA、客户端证书或来源 IP 白名单。
+- 首轮不使用代理、自定义 CA 或客户端证书；如真实 TLS/连接错误证明需要，再按实际错误补配置，不预先增加复杂度。
+- DEV 是否要求来源 IP 白名单。
 - `companyCode: all` 是否仍允许。
 - 请求超时、限流和典型 HTTP/业务错误码。
-- Workflow `message.by` 应使用当前用户 UM、固定服务账号还是调用方身份。
+- 旧源码把三条 workflow 的 `message.by` 固定为 `WANGWENBIN520`，本次兼容实现保持一致；若未来平台 owner 要求调用人透传，应作为新的已评审协议版本实现，而不是临时环境覆盖。
+- 旧源码没有 `YHSYS` STG credential，因此不再要求或猜测 STG secret；当前 workflow profile 明确指向 reviewed PRD endpoint。
+- PRD profile 同时锁定 environment/base URL/allowlist/secret，并需要显式 confirmation；真正发请求还必须由 live runner 的 `--confirm-live` 二次确认。
 - 旧资产归属修正规则是否仍有效；如存在新的 BU/company code override，提供脱敏规则表。
 
 ### 3.4 D12-B test matrix / D12-B 测试矩阵
@@ -176,7 +206,12 @@ roster 或其他系统能否提供带 source/version/scope/validity 的事实；
 
 ### 5.1 LLM DEV configuration
 
-已确认并提供 `backend/samples/pingan_dev/config.example.yaml`：DeerFlow profile 名为 `deepseek-v4-flash`，向本地 OpenAI-compatible gateway 发送 provider alias `DeepSeek_V4_Flash`。Base URL 和 API key 从 `.env.soc-dev.local` 注入；仍需在内网确认代理/CA、并发/RPM 限制及 `SOC_LLM_SENSITIVE_EVIDENCE_MODE=full` 的使用范围。
+已确认并提供 `backend/samples/pingan_dev/config.example.yaml`：DeerFlow profile 名为 `deepseek-v4-flash`，向本地 OpenAI-compatible gateway 发送 provider alias `DeepSeek_V4_Flash`。Base URL 和 API key 从 `.env.soc-dev.local` 注入；仍需在内网确认并发/RPM 限制及 `SOC_LLM_SENSITIVE_EVIDENCE_MODE=full` 的使用范围。
+
+验证分两层：`GET /models` 只证明 gateway 和凭证的基础可达性；
+`backend/scripts/soc_pingan_litellm_smoke.py --confirm-live --report-path ...` 才真实调用一次
+`POST /v1/chat/completions`。该脚本只接受 loopback endpoint，使用固定无业务提示词，并保存不含响应正文的
+`soc.pingan_litellm_smoke.v1` 报告。
 
 ### 5.2 SQLite-only DEV database
 
@@ -213,15 +248,17 @@ backend/.deer-flow/data/soc_agent_dev.db
 | `pingan-legacy-source-audit.md` | Yes | 已审阅的环境、状态、签名和 safe-path 边界 |
 | `pingan-dev-contract.yaml` | Yes | 非敏感能力开关、endpoint path、timeout、错误码、字段语义 |
 | `zeus-*-response.redacted.json` | Yes after review | TI/tag/feedback 的脱敏成功、查无和错误响应 |
-| `.env.soc-dev.local` / `config.pingan-dev.local` | Out-of-band only | 可包含真实 URL、App ID/App Key、model key、operator、CA/PYTHONPATH；必须 Git ignored，可随完整工作目录或受控方式复制到内网 |
+| `.env.soc-dev.local` / `config.pingan-dev.local` | Out-of-band only | 可包含真实 URL、App ID/App Key、model key 和必要网络配置；必须 Git ignored，可随完整工作目录或受控方式复制到内网；workflow operator 由 Adapter 固定，不在 env 中 |
 | `d12b-test-cases.local.yaml` | No | 真实 IP/host/UM、expected outcome/attempt 和 fault-injection 环境变量引用；文件权限 `0600` |
 | `direct-provider-cases.json` | No by default | `soc.pingan_asset_case_matrix_report.v1`；只含 query hash、latency、attempt/error 分类，不含 raw query/UM/Provider body/override value |
 | `evidence-readback.json` | No by default | `soc.pingan_d12b_evidence_acceptance.v1`；只含 ID/hash/check/error type，证明 MCP/Dispatcher/evidence/shared context 和 Run/Review 不变式，不含 raw lookup/result |
+| `litellm-smoke.json` | Yes after review | 固定无业务 prompt 的连通性报告；只含模型、状态、latency、token、文本长度/hash，不含 key 或模型原文 |
 
 ## 8. Implementation Order After Collection / 收集后的实现顺序
 
 ```text
 DEV profile + no-network preflight (implemented)
+    -> loopback LiteLLM chat.completions smoke (implemented; internal execution pending)
     -> PI-01A threat_intel.ip_reputation.lookup Provider/MCP (implemented externally)
     -> PI-01A real DEV hit/not-found/error/timeout + actual field coverage + evidence readback
     -> PI-01B1 security_tag.lookup Provider/MCP (implemented externally)

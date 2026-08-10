@@ -53,6 +53,47 @@ def test_pingan_dev_sample_tracks_current_config_version() -> None:
     assert pingan_example["config_version"] == root_example["config_version"]
 
 
+def test_internal_asset_profiles_forward_self_contained_workflow_http_config() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    profile_paths = (
+        repo_root / "backend/samples/pingan_dev/extensions.example.json",
+        repo_root / "backend/samples/mcp/pingan_asset/extensions.internal.example.json",
+        repo_root / "backend/samples/mcp/pingan_shadow/extensions.internal.json",
+    )
+    required = {
+        "SOC_PINGAN_ZEUS_ALLOWED_HOSTS",
+        "SOC_PINGAN_WORKFLOW_ENV",
+        "SOC_PINGAN_WORKFLOW_BASE_URL",
+        "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS",
+        "SOC_PINGAN_WORKFLOW_APP_ID",
+        "SOC_PINGAN_WORKFLOW_APP_SECRET",
+        "SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION",
+    }
+    obsolete = {
+        "SOC_PINGAN_PROVIDER_IMPORT_PATHS",
+        "SOC_PINGAN_ZEUS_SIGNER_IMPORT",
+        "SOC_PINGAN_WORKFLOW_RUNNER_IMPORT",
+        "SOC_PINGAN_WORKFLOW_OPERATOR",
+    }
+
+    for profile_path in profile_paths:
+        payload = json.loads(profile_path.read_text(encoding="utf-8"))
+        asset_env = payload["mcpServers"]["pingan_asset"]["env"]
+        assert required <= set(asset_env), profile_path
+        assert obsolete.isdisjoint(asset_env), profile_path
+
+
+def test_pingan_uv_index_is_opt_in_and_does_not_pollute_project_metadata() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    profile = (repo_root / "backend/samples/pingan_dev/uv-index.env.example").read_text(encoding="utf-8")
+    project = (repo_root / "backend/pyproject.toml").read_text(encoding="utf-8")
+
+    assert 'UV_DEFAULT_INDEX="http://maven.paic.com.cn:8445/repository/pypi/simple/"' in profile
+    assert 'UV_INSECURE_HOST="maven.paic.com.cn:8445"' in profile
+    assert "maven.paic.com.cn" not in project
+    assert "tool.poetry.source" not in project
+
+
 def test_pingan_dev_preflight_validates_profile_without_network_or_secret_output(
     tmp_path: Path,
 ) -> None:
@@ -129,7 +170,7 @@ def test_pingan_dev_preflight_rejects_fake_mode_and_unapproved_host(
     }
 
 
-def test_pingan_dev_preflight_names_missing_workflow_boundary_without_exposing_import(
+def test_pingan_dev_preflight_sanitizes_transport_construction_failure(
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "config.local"
@@ -137,7 +178,7 @@ def test_pingan_dev_preflight_names_missing_workflow_boundary_without_exposing_i
     env = _valid_env(config_path)
 
     def locator_builder(_values):
-        raise PingAnAssetProviderConfigurationError("cannot resolve configured callable 'example.workflow:run'")
+        raise PingAnAssetProviderConfigurationError("workflow configuration contains secret-value")
 
     report = run_pingan_dev_preflight(
         env,
@@ -152,8 +193,8 @@ def test_pingan_dev_preflight_names_missing_workflow_boundary_without_exposing_i
 
     failed = next(item for item in report.checks if item.check_id == "provider.imports_and_construction")
     assert failed.status is PingAnDevPreflightStatus.FAILED
-    assert "workflow runner" in failed.detail
-    assert "example.workflow" not in failed.detail
+    assert "typed ZEUS and Agent Platform HTTP configuration" in failed.detail
+    assert "secret-value" not in failed.detail
 
 
 def test_direct_smoke_reports_internal_found_result_without_raw_query() -> None:
@@ -240,16 +281,16 @@ def test_direct_smoke_classifies_authentication_failure_from_sanitized_attempt()
 def _valid_env(config_path: Path) -> dict[str, str]:
     return {
         "SOC_PINGAN_ENV": "dev",
-        "env_profile": "LOCAL",
         "SOC_PINGAN_ASSET_PROVIDER_MODE": "internal",
         "SOC_PINGAN_ZEUS_BASE_URL": "https://zeus.dev.example",
         "SOC_PINGAN_ZEUS_ALLOWED_HOSTS": "zeus.dev.example",
         "SOC_PINGAN_ZEUS_APP_ID": "app-id",
         "SOC_PINGAN_ZEUS_APP_KEY": "zeus-secret",
-        "SOC_PINGAN_ZEUS_SIGNER_IMPORT": "example.signer:sign",
-        "SOC_PINGAN_WORKFLOW_RUNNER_IMPORT": "example.workflow:run",
+        "SOC_PINGAN_WORKFLOW_ENV": "stg",
+        "SOC_PINGAN_WORKFLOW_BASE_URL": "https://agent-stg.example",
+        "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS": "agent-stg.example",
         "SOC_PINGAN_WORKFLOW_APP_ID": "YHSYS",
-        "SOC_PINGAN_WORKFLOW_OPERATOR": "operator",
+        "SOC_PINGAN_WORKFLOW_APP_SECRET": "workflow-secret",
         "SOC_PINGAN_WORKFLOW_TERMINAL_ID": "1087710",
         "SOC_PINGAN_WORKFLOW_DATACENTER_ID": "1087787",
         "SOC_PINGAN_WORKFLOW_USER_ID": "1092332",

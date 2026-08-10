@@ -28,7 +28,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v2` |
-| 当前下一刀 | 外网 Mock 完整性与迁移就绪冻结审计已通过；下一步只在实际内网交接窗口生成 clean-commit source/private 包，并按 RID-01..10 执行真实验收。平安内网 Provider、数据源和基础设施在外网阶段继续使用显式 Mock，任何 simulation 都不关闭 `mocked=false` gate。 |
+| 当前下一刀 | PingAn 内网 Apple Silicon 离线 backend toolchain、自包含 Agent Platform client、旧源码 YHSYS PRD private profile 与 LiteLLM chat smoke 已准备；private overlay 仅余 3 个 D12-B 负例注入值和 approved cases，进入内网后先验证模型，再按 RID-01..10 执行真实验收。任何 simulation 都不关闭 `mocked=false` gate。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -41,6 +41,104 @@
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / External Product Complete + Real Debt Open** | 既有 simulation、PI-01F/F2 和 PI-01G 专家子智能体产品链已完成；7 个真实 gate 保持 open | 外网产品完整性缺口已关闭；fresh real evidence、具名 owner approval、cohort enforcement 和可执行 rollback 到位后才能进入 Pilot readiness review |
+
+## 2026-08-10 — Tenant disposition policy v1 shadow path completed
+
+- 将旧 `security-log-analysis` 与 ZEUS flows 中的租户运营策略从 public Skill、通用 Runtime、Memory 和
+  Provider 中正式分离。新增 vendor-neutral `TenantDispositionPolicy` / `TenantPolicyDecision`、typed rule
+  conditions、逐条件 evidence path、exact policy hash、event-time policy lineage，以及固定的
+  detection/ReviewQueue/action/memory zero-impact guard。
+- 新增 `SocTenantPolicyEvaluationService` 和 generic `PostAnalysisObserver` 接线：主分析事务先提交
+  run/summary/review/audit，策略再 best-effort 执行并独立写入 `soc_tenant_policy_decisions`（migration
+  `0022`）。策略失败不回滚主分析；analysis idempotent retry 会再次观察并按 decision key 去重。
+- PingAn v1 仅作为 tenant data 位于
+  `backend/soc_agent/integrations/pingan/policies/tenant-disposition-v1.json`。已抽取 exact authorized activity
+  internal non-production credential review 一条影子规则；未复制旧 scanner/account/path/product 静态
+  列表，也未复制现有 EX-01/DP-01 的授权处置职责。hostname pattern 只触发
+  `no_automated_response + manual checks`，不确认环境、不输出 benign/exempt disposition；exact authorized
+  activity 仍必须走 persisted enrichment + open ReviewQueue + true-positive proposal lineage。
+- 自动启用边界为 `SOC_TENANT_DISPOSITION_POLICY_PATH` + `SOC_TENANT_POLICY_ENVIRONMENT`，legacy naive
+  event time 仅在显式 `SOC_TENANT_POLICY_EVENT_TIMEZONE` 下本地化并记录 assumed lineage。未配置 policy 的
+  tenant 零额外行为；带有效期 policy 缺 event time 时 fail closed。
+- 新增 `soc tenant-policy evaluate|list|get` 和
+  `validation/compact_zeus/policy/validate_tenant_policy_shadow.py`。真实已保存 DeepSeek Runtime 样例结果：
+  `1965449` 从 `suspicious/0.62` 保持不变，命中 `internal-nonproduction-credential-review` 后只得到
+  `no_automated_response`；`1966442` no-match 并保持 standard triage。两条 Runtime object 均未改写，所有
+  operational impact guard 为 `none`。
+- focused contract/service/SQL/migration/CLI tests 为 `21 passed`；真实样例 shadow validation 为 2/2
+  detection unchanged、2/2 Runtime unchanged、all shadow-only。该切片没有关闭任何内网 `mocked=false`
+  gate，也没有开启 auto-close；当前 PI 内网执行指针保持不变。
+
+## 2026-08-10 — PA-13 colleague Skill audit and source-aware routing completed
+
+- 审计 `validation/original_works/security-log-analysis/security-log-analysis/` 的 3000+ 行
+  `SKILL.md`、公共知识和 APT/NIDS/EDR/HIDS 案例。结论是有价值但不能整体安装：其中混合了通用方法、
+  PingAn 环境事实、vendor 字段、历史误报、tenant policy 和直接处置指令。新增
+  `capabilities/pingan/security-log-analysis-skill-audit.md` 固定逐类归属、拒绝项和后续 governed
+  candidate 边界；`PA-SKILL-DEMO-20260805` / `PA-13` 已纳入 onboarding。
+- 公共 Skill 只吸收跨租户方法：四问 evidence review、dual-use 工具/服务、截断 payload、代理/角色分离、
+  installer/deployment/IDE/remote-admin 上下文、rule-family match quality，以及“攻击字符串作为业务数据”
+  与实际解释/执行效果的区分。未复制内部网段、域名、系统、工具、账号、路径、规则 ID 或处置策略。
+- 修复 2026-07-31 已记录的 `SocSkillResolver` 风险：source type 与 typed canonical evidence 为强信号；
+  文本只作 fallback；已知 endpoint/network/web 来源不再因 `恶意`、`命令执行` 等宽泛词跨域，typed
+  cross-domain evidence 仍保留。Unknown source 的模糊文本不再强猜 domain。
+- Checkpoint D6 升为 `soc.validation.checkpoint_d.skill_route_coverage.v2`，新增
+  `ambiguous_keywords_do_not_cross_known_source_domains` gate。真实 212-row 重跑为 212/212、0 failure、
+  0 failed check；Network 选择 170 -> 153，Web 96 -> 83。HIDS 跨域从 17 条降到 4 条，剩余 4 条全部
+  有 canonical network/threat evidence；keyword-only finding 为 0。每条 Skill 数量分布为 2 个 107 条、
+  3 个 103 条、4 个 2 条。
+- 验证：resolver/D6 focused `19 passed`；public Skill、Skill parser/reviewer、PI-03C governance 与 SOC
+  architecture focused `107 passed`；prompt/analyzer/Runtime/service/Lead Agent/PingAn capability/TUI
+  回归 `179 passed`；Ruff 与 `git diff --check` 通过。`codegraph sync .` 已纳入 resolver 和 D6 v2，
+  post-sync query 可定位两个新增 route guard。该切片不改变 PI 当前执行指针，也不把同事 Demo 视为
+  production Skill 或真实质量标签。
+
+## 2026-08-10 — PingAn internal runtime boundary and offline Mac handoff prepared
+
+- 将 `validation/original_works/agent_platform` 作为三条资产归属 workflow 的当前权威协议来源：
+  PingAn Adapter 固定 `message.by=WANGWENBIN520`，删除可误覆盖该字段的
+  `SOC_PINGAN_WORKFLOW_OPERATOR`；通用 Runtime/Action 契约不变。
+- 新增 legacy-profile preparer：使用 AST 静态提取旧源码唯一 `YHSYS` PRD endpoint/credential，原位迁移
+  Git-ignored `0600` env，删除旧 import/operator 字段。输出只报告 credential presence，不包含 secret、
+  secret hash，也不 import/执行旧包；PRD client 与 live runner 的双重显式确认仍保留。
+- 已对当前 ignored env 执行迁移并重复验证幂等；无网络 preflight 的环境、Provider、ZEUS allowlist、
+  Agent Platform PRD allowlist/guard、模型 profile 和 client construction 全部通过。private-overlay freeze
+  现在只报告缺少 `D12B_INVALID_ZEUS_APP_KEY` 与 timeout endpoint/allowlist 三个不可由源码推导的测试值。
+- 重新审阅旧 `config.py`、Agent Platform 调用源码与 `apt_alert_assess.py`：`YHSYS` 是三条资产归属
+  workflow 使用的 Agent Platform 应用/租户身份；`message.by` 是操作人/审计身份；SOC 模型只通过
+  `http://localhost:4001/v1/` 的标准 OpenAI-compatible `chat.completions` 边界访问
+  `DeepSeek_V4_Flash`，不负责启动或导入 `sec_know_model`。
+- 新增 `HttpPingAnAgentWorkflowPort`，在 PingAn integration 内复现认证、异步 workflow 创建、轮询、
+  token cache、超时、响应大小、HTTPS host allowlist 和显式 PRD guard。资产 Provider 不再依赖
+  `model.agent_platform.util_tools:run_workflow`、旧 `PYTHONPATH` 或 Redis；通用 Runtime 未增加 PingAn
+  分支。
+- 更新 DEV env/MCP profiles：当前 workflow 使用旧源码实际具备的 `YHSYS` PRD profile；endpoint、
+  allowlist 与 secret 进入 private env，operator 由 PingAn Adapter 固定；PRD 必须额外设置
+  `CALL_PINGAN_PRD`。ZEUS asset URL 也在实际 transport 构造和调用时
+  强制 HTTPS allowlist，不只依赖 preflight。
+- 新增 checkout path resolver，所有本地配置从脚本位置解析 repo/config/SQLite/report 路径，不把
+  `/Users/zhangjianming627` 写入生产配置。
+- 新增 Apple Silicon offline builder。一次真实构建已完成 CPython `3.12.3`、uv `0.10.9` 和 229 个
+  macOS arm64 锁定 backend dependency 的在线预热 + fresh offline sync；生成约 529 MB 的 Git-ignored
+  包，`inspect` 通过 manifest、artifact SHA-256、路径安全和无 symlink 检查。内网不需要公网、公司
+  PyPI、管理员权限或预装 Python 3.12，也不会修改 `sec_know_model/.venv`。
+- 新增 loopback-only LiteLLM smoke：真实调用固定无业务数据的 `/v1/chat/completions`，报告只保留模型、
+  HTTP 状态、耗时、token、输出长度与 SHA-256。`GET /models` 只作基础诊断，不能替代该 pass gate。
+- 增加 `uv-index.env.example` 作为 PingAn 内网后续依赖维护入口；首次安装仍强制使用已验的离线包，
+  内网 HTTP index 不进入根 `pyproject.toml` 或外网 canonical lock。
+- 加固 private-overlay freeze gate：旧 import 字段、缺失/占位的模型/ZEUS/workflow/fault-case 配置、
+  `/Users/...` 路径或非 `0600` local config 都会在任何 archive 写出前 fail closed。迁移前的旧 local
+  env 已被实际验出并拒绝；迁移后已消除旧字段，只剩三个明确的负例测试值尚未提供。
+- 外网专项回归 `49 passed`；CodeGraph 已增量同步。另用 dirty override 演练了 2,683 文件的 source
+  archive，manifest/digest/path 检查全部通过且报告固定 `final_handoff_eligible=false`；其中已确认包含
+  Agent Platform client、LiteLLM smoke、path resolver 和 uv index profile。最终包仍须等 clean commit。
+- 迁移文档和 source bundle required-file gate 已同步；旧的 import/PYTHONPATH/在线 `uv sync` 指引已
+  删除。当前 2026-08-09 source/private archives 已落后于工作树，不能交付；必须在本切片 clean commit
+  后重建。新增 workflow/profile/transfer 专项为 `52 passed`，SOC architecture boundary 为 `12 passed`。
+  仍未完成且不能在外网声称通过的包括内网 LiteLLM pass、真实 workflow/ZEUS 请求、approved cases、
+  direct/MCP/persistence/Web/TUI readback，以及后续 RID 的真实 evidence。
+- `codegraph sync .` 已纳入 legacy profile preparer 与固定-operator Adapter 变更；tracked diff secret scan
+  与 `git diff --check` 均通过。
 
 ## 2026-08-09 — UP-01 post-upstream compatibility gate passed
 

@@ -5,8 +5,17 @@ this package. Generic SOC Runtime and action services consume their typed
 results through vendor-neutral routes such as ``asset.locate``.
 """
 
+from soc_agent.integrations.pingan.agent_workflow import (
+    HttpPingAnAgentWorkflowPort,
+    PingAnAgentWorkflowConfigurationError,
+    PingAnAgentWorkflowError,
+    PingAnAgentWorkflowHttpConfig,
+    PingAnAgentWorkflowResponseError,
+    PingAnAgentWorkflowTimeoutError,
+)
 from soc_agent.integrations.pingan.asset_location import (
-    CallablePingAnAssetWorkflowPort,
+    PINGAN_LEGACY_WORKFLOW_APP_ID,
+    PINGAN_LEGACY_WORKFLOW_OPERATOR,
     HttpPingAnZeusAssetSearchPort,
     PingAnAssetLocationAttempt,
     PingAnAssetLocationCandidate,
@@ -47,6 +56,15 @@ from soc_agent.integrations.pingan.d12b_evidence_acceptance import (
     PingAnD12BEvidenceRepositoryPort,
     run_pingan_d12b_evidence_acceptance,
 )
+from soc_agent.integrations.pingan.legacy_workflow_profile import (
+    LEGACY_AGENT_CONFIG_PATH,
+    LEGACY_PROFILE_SCHEMA_VERSION,
+    LEGACY_WORKFLOW_ENV_PATH,
+    PingAnLegacyWorkflowProfile,
+    PingAnLegacyWorkflowProfileError,
+    load_legacy_workflow_profile,
+    prepare_legacy_workflow_env,
+)
 from soc_agent.integrations.pingan.security_tag import (
     HttpPingAnZeusSecurityTagPort,
     PingAnSecurityTagConfigurationError,
@@ -71,6 +89,10 @@ from soc_agent.integrations.pingan.software_path_catalog import (
     compile_pingan_software_path_catalog,
     normalize_windows_path,
 )
+from soc_agent.integrations.pingan.tenant_disposition import (
+    PINGAN_TENANT_DISPOSITION_POLICY_PATH,
+    load_pingan_tenant_disposition_policy,
+)
 from soc_agent.integrations.pingan.threat_intel import (
     HttpPingAnZeusThreatIntelPort,
     PingAnThreatIntelConfigurationError,
@@ -87,7 +109,13 @@ from soc_agent.integrations.pingan.threat_intel import (
 )
 
 __all__ = [
-    "CallablePingAnAssetWorkflowPort",
+    "LEGACY_AGENT_CONFIG_PATH",
+    "LEGACY_PROFILE_SCHEMA_VERSION",
+    "LEGACY_WORKFLOW_ENV_PATH",
+    "PINGAN_LEGACY_WORKFLOW_APP_ID",
+    "PINGAN_LEGACY_WORKFLOW_OPERATOR",
+    "PINGAN_TENANT_DISPOSITION_POLICY_PATH",
+    "HttpPingAnAgentWorkflowPort",
     "HttpPingAnZeusAssetSearchPort",
     "HttpPingAnZeusSecurityTagPort",
     "HttpPingAnZeusThreatIntelPort",
@@ -113,6 +141,8 @@ __all__ = [
     "PingAnD12BEvidenceCheck",
     "PingAnD12BEvidenceCheckStatus",
     "PingAnD12BEvidenceRepositoryPort",
+    "PingAnLegacyWorkflowProfile",
+    "PingAnLegacyWorkflowProfileError",
     "PingAnSecurityTagConfigurationError",
     "PingAnSecurityTagItem",
     "PingAnSecurityTagProviderError",
@@ -135,6 +165,11 @@ __all__ = [
     "PingAnAssetProviderUnavailableError",
     "PingAnAssetType",
     "PingAnAssetWorkflowConfig",
+    "PingAnAgentWorkflowConfigurationError",
+    "PingAnAgentWorkflowError",
+    "PingAnAgentWorkflowHttpConfig",
+    "PingAnAgentWorkflowResponseError",
+    "PingAnAgentWorkflowTimeoutError",
     "PINGAN_SOFTWARE_PATH_LOOKUP_ACTION",
     "PingAnSoftwarePathCatalog",
     "PingAnSoftwarePathCatalogBuildReport",
@@ -152,7 +187,10 @@ __all__ = [
     "classify_pingan_path",
     "compile_pingan_software_path_catalog",
     "load_pingan_asset_case_matrix",
+    "load_pingan_tenant_disposition_policy",
+    "load_legacy_workflow_profile",
     "normalize_windows_path",
+    "prepare_legacy_workflow_env",
     "run_pingan_asset_case_matrix",
     "run_pingan_d12b_evidence_acceptance",
 ]

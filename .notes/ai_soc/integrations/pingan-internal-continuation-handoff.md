@@ -1,13 +1,13 @@
 # PingAn SOC Internal Continuation Handoff / 平安内网续作交接单
 
 > Type: temporary transfer artifact / 临时复制交接文件
-> Reconciled: 2026-08-09
+> Reconciled: 2026-08-10
 > Status: `Real Integration Debt / parked`; this is no longer the current product-development pointer
 > Resume action: when approved PingAn DEV is available, inject environment secrets/cases, pass live MCP inventory, and run fresh paired `internal_real` stage 5
 
 本文件只保留**真实内网接入尚未完成**的工作，便于未来复制到内网 Mac 后恢复验证。它不是新的权威路线，也不阻塞当前 PI-03..05 仿真产品流程；外网仓库仍以 `.notes/ai_soc/delivery-roadmap.md`、`.notes/ai_soc/progress.md` 和工程契约为准。内网结果回传后，应把状态和验收证据更新回权威文档，再删除或归档本文件。
 
-真实 URL、App Key、Token、账号密码、企业 CA、IP、UM、未脱敏告警和完整响应可以写入已确认 Git-ignored 的 `*.local` / `.deer-flow/` 文件供本地运行，但不得进入 commit。当前外网工作区已经准备了可运行的本地配置；通过 Git 迁移时，需在内网从 sample 重建或另行复制这些 ignored 文件。
+真实 URL、App Key、Token、账号密码、企业 CA、IP、UM、未脱敏告警和完整响应可以写入已确认 Git-ignored 的 `*.local` / `.deer-flow/` 文件供本地运行，但不得进入 commit。Tracked sample 已准备完毕；当前 ignored `.env.soc-dev.local` 可由 legacy-profile preparer 原位迁移：它删除旧 import/operator 字段，从已审阅源码导入 `YHSYS` PRD profile，并保留其他本地值。剩余 ZEUS/model/fault-case 配置仍须核对。首轮采用直接访问，不预配代理、自定义 CA 或客户端证书。
 
 ## 1. Baseline / 已完成与已删除边界
 
@@ -15,7 +15,7 @@
 
 - `D0-D11.1`：通用 SOC Runtime、LLM、Grounding、Decision Policy 和 212 条 corpus 稳定性验证。
 - `D12-A`：PingAn `asset.locate` 生产形态代码、fake transport、stdio MCP、fallback 编排和 fail-closed；结果仍为 `mocked=true`。
-- `D12-B 外网准备`：内网模型 profile、无旧依赖 ZEUS signer、DEV-only preflight 和 direct-provider smoke 脚本已实现；尚未产生内网 `mocked=false` 证据。
+- `D12-B 外网准备`：内网模型 profile、固定无业务数据的 LiteLLM chat smoke、无旧依赖 ZEUS signer、自包含 Agent Platform HTTP client、DEV-only preflight 和 direct-provider smoke 脚本已实现；尚未产生内网 LiteLLM pass 或 Provider `mocked=false` 证据。
 - `PI-01A 外网实现`：`/public/indicatorSearch` typed Provider、stdio MCP、action/evidence 和 fake/persistence 回归已完成；尚未产生真实 DEV `mocked=false` 证据。
 - `PI-01B1 外网实现`：`/public/searchTagContent` typed Provider、stdio MCP、validity/scope mapping 和 fake/persistence 回归已完成；尚未产生真实 DEV `mocked=false` 证据。
 - `PI-01D1/D2/D3`：versioned `SocEnrichmentPolicy/Plan`、deterministic Planner、strict default-off composition、durable execution/attempt/evidence、逐次 mock/real 校验、bounded retry/recovery/replay 与 Kafka/internal-batch opt-in 已实现；默认仍只跑固定 Runtime。
@@ -34,21 +34,33 @@
 外网仓库根目录执行：
 
 ```bash
+backend/.venv/bin/python \
+  backend/scripts/soc_pingan_prepare_legacy_workflow_profile.py --apply
 git status --short
 python3 scripts/build_pingan_internal_transfer.py --include-private-overlay
+backend/.venv/bin/python scripts/build_pingan_macos_offline_bundle.py
 ```
 
-最终交接包要求第一条命令无输出。构建器默认拒绝 dirty worktree，保证 source archive 可以对应到唯一
+第一条命令只静态解析旧源码并更新 `0600` 的 Git-ignored env；输出必须是
+`credential_present=true`、`secret_in_output=false`，不得出现 secret。旧源码本身被 source bundle 排除，
+实际凭证只随 private overlay 进入内网。
+
+最终交接包要求 `git status --short` 无输出。构建器默认拒绝 dirty worktree，保证 source archive 可以对应到唯一
 commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
 `dirty_override_used=true`、`final_handoff_eligible=false`，禁止作为最终内网交付。
+启用 `--include-private-overlay` 时，构建器还会在写出任何 archive 前检查两个 local config 均为
+`0600`、不含 `/Users/...` 硬编码、不含旧 import/operator 字段，并要求 LiteLLM/ZEUS/workflow/fault-case
+的关键变量都存在且不是占位值。未先执行 profile preparer 的旧 `.env.soc-dev.local` 会被明确拒绝，
+这是预期保护，不是打包器故障。
 
-脚本会在 Git-ignored 的 `backend/.deer-flow/internal-transfer/` 中生成三类文件：
+两个脚本会在 Git-ignored 的 `backend/.deer-flow/internal-transfer/` 中生成四类文件：
 
 - `deer-flow-pingan-source-*.tar.gz`：当前 clean commit 对应的 tracked 源码；明确排除凭证、PKL、XLSX、SQLite、Git 元数据、虚拟环境和生成物。
 - `deer-flow-pingan-private-overlay-*.tar.gz`：仅包含 `.env.soc-dev.local`、`config.pingan-dev.local`、当前 PKL、历史 EDR XLSX 及其已编译路径目录；只能走获批的内部传输通道。
 - `transfer-report-*.json`：两个包的 SHA-256、大小、文件数、Git commit/branch/dirty 状态；不含 secret 内容。
+- `deer-flow-pingan-macos-arm64-offline-*.tar.gz` 与同 timestamp report：项目私有 CPython `3.12.3`、`uv` 和当前 `backend/uv.lock --extra pingan-dev` 的 macOS arm64 离线缓存。目标机器无需公网、公司 PyPI、管理员权限或预装 Python 3.12。
 
-构建前还会核对 30 个冻结的关键源码入口，覆盖 PingAn DEV profile、D12-B、TI、Security Tag、
+构建前还会核对冻结的关键源码入口，覆盖 PingAn DEV profile、D12-B、TI、Security Tag、
 external/internal shadow、paired evaluator、RID 台账和交接文档。任一入口缺失都会 fail closed，不生成
 看似完整但无法续作的迁移包。
 
@@ -57,7 +69,12 @@ external/internal shadow、paired evaluator、RID 台账和交接文档。任一
 ```bash
 PYTHONPATH=. backend/.venv/bin/pytest -q \
   scripts/test_build_pingan_internal_transfer.py \
-  backend/tests/test_soc_pingan_dev_validation.py
+  scripts/test_build_pingan_macos_offline_bundle.py \
+  backend/tests/test_soc_pingan_agent_workflow.py \
+  backend/tests/test_soc_pingan_legacy_workflow_profile.py \
+  backend/tests/test_soc_pingan_dev_validation.py \
+  backend/tests/test_soc_pingan_litellm_smoke.py \
+  backend/tests/test_soc_pingan_local_paths.py
 ```
 
 不要把本 tracked 文档中的文件名或 hash 当作当前包清单：把 archive 自身的 SHA 写回 archive 内文档
@@ -72,19 +89,37 @@ python3 scripts/build_pingan_internal_transfer.py --inspect \
   backend/.deer-flow/internal-transfer/deer-flow-pingan-source-<timestamp>.tar.gz
 python3 scripts/build_pingan_internal_transfer.py --inspect \
   backend/.deer-flow/internal-transfer/deer-flow-pingan-private-overlay-<timestamp>.tar.gz
+backend/.venv/bin/python scripts/build_pingan_macos_offline_bundle.py --inspect \
+  backend/.deer-flow/internal-transfer/deer-flow-pingan-macos-arm64-offline-<timestamp>.tar.gz
 ```
 
-内网 Mac 叠加解压并安装：
+内网 Mac 先叠加源码与私有配置，再安装离线 backend toolchain。默认 checkout 为当前用户的
+`$HOME/deer-flow`；对当前开发者它自然解析到已确认路径，对其他同事无需修改脚本或配置：
 
 ```bash
-mkdir -p ~/work/soc-transfer
-tar -xzf /approved/path/deer-flow-pingan-source-<timestamp>.tar.gz -C ~/work/soc-transfer
-tar -xzf /approved/path/deer-flow-pingan-private-overlay-<timestamp>.tar.gz -C ~/work/soc-transfer
-cd ~/work/soc-transfer/deer-flow-pingan-internal
-cd backend && uv sync --locked --extra pingan-dev && cd ..
+TRANSFER_ROOT="$HOME/soc-transfer"
+TARGET_REPO="$HOME/deer-flow"
+mkdir -p "$TRANSFER_ROOT"
+tar -xzf /approved/path/deer-flow-pingan-source-<timestamp>.tar.gz -C "$TRANSFER_ROOT"
+tar -xzf /approved/path/deer-flow-pingan-private-overlay-<timestamp>.tar.gz -C "$TRANSFER_ROOT"
+mv "$TRANSFER_ROOT/deer-flow-pingan-internal" "$TARGET_REPO"
+
+mkdir -p "$TRANSFER_ROOT/toolchain"
+tar -xzf /approved/path/deer-flow-pingan-macos-arm64-offline-<timestamp>.tar.gz \
+  -C "$TRANSFER_ROOT/toolchain"
+"$TRANSFER_ROOT/toolchain/deer-flow-pingan-macos-arm64-offline/install-offline.sh" \
+  "$TARGET_REPO"
+
+cd "$TARGET_REPO"
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
+source ./.env.soc-dev.local
 stat -f '%Lp %N' .env.soc-dev.local config.pingan-dev.local \
   datas/source/full_alert_2026_month_forth_sample_200.pkl
 ```
+
+首次安装不访问任何软件源。后续确需在平安内网解析新增依赖时，本项目使用 `uv` 而不是 Poetry；只对该次
+维护命令 source `backend/samples/pingan_dev/uv-index.env.example`。不要把 PingAn HTTP index 写进根
+`pyproject.toml`，也不要未经评审提交含内网 registry 的 `uv.lock`。
 
 两个 archive 在外网均为 `0600`；私有覆盖包内的文件也强制为 `0600`。源码包和私有包保留独立 manifest/README，叠加解压不会相互覆盖。先核对 `transfer-report` 中的 SHA-256，再删除或隔离中转副本。
 独立源码包有意排除 `.git/`，所以以上 Mac 解包流程使用 `stat` 验证私有文件权限，输出应以 `600`
@@ -151,18 +186,24 @@ SOC Runtime asset candidate
 | Legacy signer source | `util.util_tools:isec_sign` |
 | Portable signer import | `soc_agent.integrations.pingan.zeus_signing:isec_sign` |
 | Signer call | `isec_sign(data=..., app_id=..., app_key=...)` |
-| Workflow runner | `model.agent_platform.util_tools:run_workflow` |
+| Workflow transport | 本项目 `HttpPingAnAgentWorkflowPort`，复现旧 auth -> async create -> poll contract |
 | Asset endpoint | `POST /public/searchAssetInfo` |
 | ZEUS config keys | `ZEUS_SYSTEM_URL`、`ZEUS_APP_ID`、`ZEUS_APP_KEY` |
 | Terminal workflow | `1087710` |
 | Datacenter workflow | `1087787` |
 | User/UM workflow | `1092332` |
-| Workflow app ID | `YHSYS` |
+| Workflow app ID | `YHSYS`，即旧三条归属 workflow 的 Agent Platform 应用/租户身份 |
+| Workflow operator | 旧三条归属 workflow 固定 `message.by=WANGWENBIN520`；Adapter 不接受 env 覆盖 |
+| Reviewed STG endpoint | `https://agents-api-stg-new.paic.com.cn` |
+| Reviewed PRD endpoint | `https://agents-api-sze.paic.com.cn`；必须显式 production confirmation |
+| YHSYS source coverage | 旧配置只在 PRD branch 包含该 app；当前验证使用该 reviewed PRD profile，不虚构 STG secret |
 | Generic action route | `asset.locate` |
 
 现有实现位置：
 
 - `backend/soc_agent/integrations/pingan/asset_location.py`
+- `backend/soc_agent/integrations/pingan/agent_workflow.py`
+- `backend/soc_agent/integrations/pingan/legacy_workflow_profile.py`
 - `backend/soc_agent/integrations/pingan/zeus_signing.py`
 - `backend/soc_agent/integrations/pingan/dev_validation.py`
 - `backend/soc_agent/integrations/pingan/d12b_acceptance.py`
@@ -170,6 +211,7 @@ SOC Runtime asset candidate
 - `backend/soc_agent/integrations/pingan/asset_mcp_server.py`
 - `backend/scripts/soc_pingan_asset_mcp_server.py`
 - `backend/scripts/soc_pingan_dev_preflight.py`
+- `backend/scripts/soc_pingan_prepare_legacy_workflow_profile.py`
 - `backend/scripts/soc_pingan_asset_direct_smoke.py`
 - `backend/scripts/soc_pingan_d12b_matrix.py`
 - `backend/scripts/soc_pingan_d12b_evidence.py`
@@ -179,13 +221,18 @@ SOC Runtime asset candidate
 ### 3.3 Inputs to prepare inside DEV / 内网准备项
 
 - [x] 已审阅 `root_config` 和 LOCAL/DEV 环境选择；本地模型 gateway 为 OpenAI-compatible loopback endpoint。
-- [x] preflight 强制 `SOC_PINGAN_ENV=dev`、`env_profile=LOCAL` 和显式 ZEUS host allowlist，不允许隐式 PRD。
+- [x] LiteLLM chat smoke 与不含正文/凭证的 `soc.pingan_litellm_smoke.v1` 报告已实现。
+- [ ] 启动内网模型服务后取得 `litellm-smoke.json -> outcome=passed`；`GET /models` 不能替代该验收。
+- [x] preflight 强制 `SOC_PINGAN_ENV=dev`，并要求 ZEUS 与 Agent Platform 都使用显式 HTTPS host allowlist；不读取旧 `env_profile`。
 - [x] ZEUS signer 已在本项目内实现，不需要 import 整个旧 `util.util_tools`。
-- [ ] 确认当前虚拟环境可 import `model.agent_platform.util_tools:run_workflow`。
-- [ ] 若不能直接 import，在本地配置 `SOC_PINGAN_PROVIDER_IMPORT_PATHS`，不把真实绝对路径提交 Git。
-- [x] 旧源代码以同步函数调用 `run_workflow(app_id, workflow_id, query_data)`，兼容 `dict` / JSON string / `None`；内网 smoke 核对安装版本未漂移。
-- [x] 外网工作区的 Git-ignored `.env.soc-dev.local` 已填入旧源码中的 DEV ZEUS base URL、App ID、App Key 和 workflow operator；复制到内网后核对是否仍有效。
-- [ ] 确认企业 CA、代理、客户端证书、来源 IP 白名单和 `companyCode: all` 要求。
+- [x] Agent Platform wire contract 已提取为本项目自包含 HTTP client，不需要旧 Python 包、`PYTHONPATH`、Redis token manager 或 `run_workflow` import。
+- [x] 通过 legacy-profile preparer 从旧源码静态导入 PRD base URL、allowlist、`YHSYS` app secret；不 import/执行旧项目，也不在输出中暴露 secret。
+- [x] `message.by` 按旧源码固定为 `WANGWENBIN520`，不再要求操作人环境变量。
+- [x] PRD 只有在 environment/URL/allowlist/secret 全部显式切换且设置 `SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD` 时才允许构造 client。
+- [x] 已对 Git-ignored `.env.soc-dev.local` 执行 profile preparer，旧 import/operator 字段已删除，权限与无网络 preflight 已通过。
+- [ ] 补齐 `D12B_INVALID_ZEUS_APP_KEY`、`D12B_TIMEOUT_ZEUS_BASE_URL`、`D12B_TIMEOUT_ZEUS_ALLOWED_HOSTS` 三个 approved 负例测试值；它们不能从旧源码推导。
+- [x] 首轮不配置代理、自定义 CA 或客户端证书；只有 smoke 的实际连接/TLS 错误才能触发该配置。
+- [ ] 确认来源 IP 白名单和 `companyCode: all` 要求。
 - [ ] 准备已知命中、确定查无、UM fallback、ambiguous、鉴权失败和 timeout 测试值。
 - [ ] 核对 workflow ID、旧 ownership override 和错误码是否仍有效。
 
@@ -199,8 +246,8 @@ backend/.deer-flow/soc-internal-validation/d12b/reports/
 
 ### 3.4 Pending code slice / 尚需实现的代码
 
-- [x] DEV-only environment profile/preflight 已实现：显式检查环境、imports、必需配置和 fake/internal 互斥，不输出 secret。
-- [x] preflight 在请求发出前阻止未知环境、隐式 PRD、fake transport、未 allowlist ZEUS host 和非 loopback model endpoint。
+- [x] DEV-only environment profile/preflight 已实现：显式检查环境、必需配置、tracked HTTP client 和 fake/internal 互斥，不输出 secret。
+- [x] preflight 在请求发出前阻止未知环境、未确认 PRD、fake transport、未 allowlist ZEUS/Agent Platform host 和非 loopback model endpoint。
 - [x] direct-provider smoke 脚本已实现，不能用 MCP smoke 替代这层验收。
 - [x] 报告区分 `found`、`not_found`、`ambiguous`、`authentication_failed`、`timeout`、`provider_unavailable`、`invalid_response`、`preflight_failed` 和 `invalid_configuration`。
 - [x] 七类 direct-provider case matrix runner 已实现：`--plan-only` 不发请求，live 必须显式 `--confirm-live`、使用 `0600` 的 `*.local.yaml|yml|json` 并指定 report path。
@@ -230,9 +277,10 @@ cp backend/samples/pingan_dev/d12b-test-cases.example.yaml \
 chmod 600 backend/.deer-flow/soc-internal-validation/d12b/test-cases.local.yaml
 stat -f '%Lp %N' config.pingan-dev.local .env.soc-dev.local \
   backend/.deer-flow/soc-internal-validation/d12b/test-cases.local.yaml
-# Fill/verify real DEV values, then:
+# Resolve this checkout instead of hardcoding one developer path, then fill/verify real DEV values:
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
 source ./.env.soc-dev.local
-export D12B_REPORT_DIR="$PWD/backend/.deer-flow/soc-internal-validation/d12b/reports"
+export D12B_REPORT_DIR="$SOC_REPO_ROOT/backend/.deer-flow/soc-internal-validation/d12b/reports"
 export D12B_ASSET_KEY="<approved-internal-test-value>"
 mkdir -p "$D12B_REPORT_DIR"
 ```
@@ -240,6 +288,10 @@ mkdir -p "$D12B_REPORT_DIR"
 运行无网络预检和一个 approved direct case：
 
 ```bash
+backend/.venv/bin/python backend/scripts/soc_pingan_litellm_smoke.py \
+  --confirm-live \
+  --report-path "$SOC_INTERNAL_VALIDATION_ROOT/model/litellm-smoke.json"
+
 backend/.venv/bin/python backend/scripts/soc_pingan_dev_preflight.py \
   --report-path "$D12B_REPORT_DIR/preflight.json"
 
@@ -265,7 +317,8 @@ backend/.venv/bin/python backend/scripts/soc_pingan_d12b_matrix.py \
 
 `--confirm-live` 会发真实内网 DEV 请求。它会拒绝非 `.local` 文件名、group/world-readable 权限、未替换 placeholder、缺失 fault-injection 环境变量或缺失 report path；不能为通过验收而跳过这些门禁。
 
-Preflight 当前在外网应只因内部 `run_workflow` 包不存在而失败；内网必须先修正这个 import，不能跳过 preflight 强行请求。
+Preflight 不发网络请求。外网只会因为真实内网 URL/credential 仍是占位值而失败；不存在“缺少旧
+`run_workflow` 包”的前置条件。内网必须先让 preflight 完整通过，不能跳过后强行请求。
 
 然后进入 `backend/` 初始化独立 SQLite 并执行 MCP：
 
@@ -488,6 +541,7 @@ POST /api/soc/external-dispositions
 再追加三个 live 确认参数：
 
 ```bash
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
 source ./.env.soc-dev.local
 export PI01E_ROOT="$PWD/backend/.deer-flow/soc-internal-validation/internal-real/pingan-dev-001"
 
@@ -537,6 +591,7 @@ cd backend
 批跑入口复用生产 `SocAnalysisService`，不是第二套 Runtime。默认不调用 MCP；只有显式提供 composition、一个或多个 action config、`--persist` 和 `--confirm-investigation` 才在基础 run 后执行 D3 只读调查。完整用法见 `validation/compact_zeus/internal_batch/README.md`。先加载 DEV 配置并只做 Runtime 计划：
 
 ```bash
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
 source ./.env.soc-dev.local
 backend/.venv/bin/python \
   validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py \
@@ -635,6 +690,8 @@ artifact，仍固定 Pilot/Production=false。真实执行继续归 `PI-05C Real
 
 ```text
 soc-internal-validation/
+├── model/
+│   └── litellm-smoke.json
 ├── d12b/
 │   ├── preflight.json
 │   ├── direct-provider-cases.json

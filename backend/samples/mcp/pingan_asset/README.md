@@ -50,25 +50,34 @@ mapping. It is not PA-12 or PI-01 real-provider evidence.
 
 ## D12-B: internal real smoke
 
-Use the tracked `extensions.internal.example.json` directly. Export the ZEUS base
-URL, app ID, app key, operator, Python path, server path, and (when the legacy
-modules are not installed) `SOC_PINGAN_PROVIDER_IMPORT_PATHS` in the internal
-shell. Multiple import roots use the platform path separator. Do not write the
-secret into this repository.
+Use the tracked `extensions.internal.example.json` directly. Export the ZEUS
+and Agent Platform URLs, exact host allowlists, app credentials, workflow
+operator, Python path and server path in the internal shell. Do not write a
+secret into a tracked file. The implementation is self-contained and does not
+need `SOC_PINGAN_PROVIDER_IMPORT_PATHS` or an importable legacy Agent Platform
+package.
 
 The defaults retained from the reviewed legacy implementation are:
 
-- signer import: `util.util_tools:isec_sign`
-- workflow runner: `model.agent_platform.util_tools:run_workflow`
+- portable signer: `soc_agent.integrations.pingan.zeus_signing:isec_sign`
+- workflow transport: `soc_agent.integrations.pingan.agent_workflow:HttpPingAnAgentWorkflowPort`
+- Agent Platform auth: `POST /appid/auth/login`
+- Agent Platform execution: create an asynchronous workflow run, then poll its
+  result until `completed` or a bounded failure/timeout
 - ZEUS path: `/public/searchAssetInfo`
 - terminal workflow: `1087710`
 - datacenter workflow: `1087787`
 - user workflow: `1092332`
 - workflow app ID: `YHSYS`
+- workflow `message.by`: analyst UM or approved service identity used for audit
+  provenance; it is not the app ID or app secret
 - reviewed legacy ownership alias: `云桌面分组 -> PA011 / 平安科技`, supplied through
   `SOC_PINGAN_ASSET_OWNERSHIP_OVERRIDES_JSON` rather than generic Runtime code
 
 Before retaining these values, verify them with the internal service owner.
+DEV/STG and PRD are separate explicit profiles. PRD additionally requires
+`SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION=CALL_PINGAN_PRD`; changing only a URL is
+insufficient.
 Then rerun the same `soc mcp smoke` command using the internal extensions
 config, changing `DEER_FLOW_EXTENSIONS_CONFIG_PATH` to
 `extensions.internal.example.json` and the report

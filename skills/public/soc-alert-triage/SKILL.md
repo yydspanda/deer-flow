@@ -35,6 +35,15 @@ Use this skill for the general SOC triage loop.
 4. Decide whether this is likely true positive, false positive, suspicious, unknown, or needs review.
 5. Propose the next safe action: gather context, open review, replay, correct, escalate, or request approval.
 
+Before finalizing, answer four questions explicitly:
+
+1. What direct harmful behavior or effect is actually observed?
+2. Could the observation be one step in a broader attack sequence, and is that sequence evidenced here?
+3. What legitimate user, administrator, deployment, development, or security-operation context could explain it?
+4. Which missing facts could materially change the verdict?
+
+Do not turn the strongest benign alternative into a false-positive verdict without scoped evidence. Do not turn an incomplete alert into a true-positive verdict merely because its rule name is severe.
+
 ## Evidence Review Method
 
 Separate the analysis into these buckets before giving a verdict:

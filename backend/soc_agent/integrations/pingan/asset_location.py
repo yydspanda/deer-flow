@@ -8,22 +8,29 @@ selection, and verdict changes deliberately stay outside this provider.
 
 from __future__ import annotations
 
-import importlib
 import ipaddress
 import json
 import os
 import re
-import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from time import monotonic
 from typing import Any, Literal, Protocol
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from soc_agent.integrations.pingan.agent_workflow import (
+    HttpPingAnAgentWorkflowPort,
+    PingAnAgentWorkflowHttpConfig,
+)
+from soc_agent.integrations.pingan.zeus_signing import isec_sign
+
+PINGAN_LEGACY_WORKFLOW_APP_ID = "YHSYS"
+PINGAN_LEGACY_WORKFLOW_OPERATOR = "WANGWENBIN520"
 
 
 class PingAnAssetProviderError(RuntimeError):
@@ -174,7 +181,6 @@ class PingAnAssetWorkflowConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     app_id: str = Field(min_length=1)
-    operator: str = Field(min_length=1)
     terminal_workflow_id: int = Field(gt=0)
     datacenter_workflow_id: int = Field(gt=0)
     user_workflow_id: int = Field(gt=0)
@@ -227,6 +233,7 @@ class HttpPingAnZeusAssetSearchPort:
         self,
         *,
         base_url: str,
+        allowed_hosts: Sequence[str],
         app_id: str,
         app_key: str,
         signer: Callable[..., Mapping[str, Any]],
@@ -241,7 +248,12 @@ class HttpPingAnZeusAssetSearchPort:
             raise PingAnAssetProviderConfigurationError("ZEUS base URL, app ID, and app key are required")
         if timeout_seconds <= 0 or page_size <= 0:
             raise PingAnAssetProviderConfigurationError("ZEUS timeout and page size must be positive")
+        normalized_hosts = {item.strip().lower() for item in allowed_hosts if item.strip()}
+        parsed_base = urlparse(base_url)
+        if parsed_base.scheme != "https" or not parsed_base.hostname or parsed_base.hostname.lower() not in normalized_hosts or parsed_base.username or parsed_base.password or parsed_base.query or parsed_base.fragment:
+            raise PingAnAssetProviderConfigurationError("ZEUS base URL must use an explicitly allowlisted HTTPS host")
         self._base_url = base_url.rstrip("/") + "/"
+        self._allowed_hosts = normalized_hosts
         self._app_id = app_id
         self._app_key = app_key
         self._signer = signer
@@ -270,8 +282,12 @@ class HttpPingAnZeusAssetSearchPort:
         client = self._client or httpx.Client()
         owns_client = self._client is None
         try:
+            url = urljoin(self._base_url, self._endpoint_path)
+            parsed_url = urlparse(url)
+            if parsed_url.scheme != "https" or (parsed_url.hostname or "").lower() not in self._allowed_hosts:
+                raise PingAnAssetProviderConfigurationError("resolved ZEUS asset URL left the configured host allowlist")
             response = client.post(
-                urljoin(self._base_url, self._endpoint_path),
+                url,
                 json=request_body,
                 headers=headers,
                 timeout=self._timeout_seconds,
@@ -284,18 +300,6 @@ class HttpPingAnZeusAssetSearchPort:
         if not isinstance(result, Mapping):
             raise PingAnAssetProviderError("ZEUS searchAssetInfo returned a non-object JSON response")
         return result
-
-
-class CallablePingAnAssetWorkflowPort:
-    """Adapter around the legacy/internal ``run_workflow`` callable."""
-
-    mocked = False
-
-    def __init__(self, runner: Callable[[str, int, Mapping[str, Any]], Any]) -> None:
-        self._runner = runner
-
-    def run(self, *, app_id: str, workflow_id: int, query_data: Mapping[str, Any]) -> Any:
-        return self._runner(app_id, workflow_id, dict(query_data))
 
 
 class StaticPingAnAssetSearchPort:
@@ -487,7 +491,6 @@ class PingAnAssetLocatorService:
                 query_data=_workflow_query_data(
                     lookup_kind=lookup_kind,
                     query=query,
-                    operator=self._workflow_config.operator,
                     asset_type=asset_type,
                 ),
             )
@@ -564,13 +567,12 @@ def build_pingan_asset_locator_from_env(
     if mode != "internal":
         raise PingAnAssetProviderConfigurationError("SOC_PINGAN_ASSET_PROVIDER_MODE must be fake or internal")
 
-    _configure_import_paths(env)
-    signer = _load_callable(_require_env(env, "SOC_PINGAN_ZEUS_SIGNER_IMPORT"))
     search = HttpPingAnZeusAssetSearchPort(
         base_url=_require_env(env, "SOC_PINGAN_ZEUS_BASE_URL"),
+        allowed_hosts=_require_env(env, "SOC_PINGAN_ZEUS_ALLOWED_HOSTS").split(","),
         app_id=_require_env(env, "SOC_PINGAN_ZEUS_APP_ID"),
         app_key=_require_env(env, "SOC_PINGAN_ZEUS_APP_KEY"),
-        signer=signer,
+        signer=isec_sign,
         timeout_seconds=_float_env(env, "SOC_PINGAN_ZEUS_TIMEOUT_SECONDS", 10.0),
         endpoint_path=env.get("SOC_PINGAN_ZEUS_ASSET_PATH", "/public/searchAssetInfo"),
         company_code_header=env.get("SOC_PINGAN_ZEUS_COMPANY_CODE", "all"),
@@ -581,10 +583,29 @@ def build_pingan_asset_locator_from_env(
     workflow: PingAnAssetWorkflowPort | None = None
     workflow_config: PingAnAssetWorkflowConfig | None = None
     if _bool_env(env, "SOC_PINGAN_ASSET_WORKFLOW_ENABLED", True):
-        workflow = CallablePingAnAssetWorkflowPort(_load_callable(_require_env(env, "SOC_PINGAN_WORKFLOW_RUNNER_IMPORT")))
+        app_id = _require_env(env, "SOC_PINGAN_WORKFLOW_APP_ID")
+        try:
+            workflow = HttpPingAnAgentWorkflowPort(
+                PingAnAgentWorkflowHttpConfig(
+                    environment=_workflow_environment(env),
+                    base_url=_require_env(env, "SOC_PINGAN_WORKFLOW_BASE_URL"),
+                    allowed_hosts=_require_env(env, "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS"),
+                    app_id=app_id,
+                    app_secret=_require_env(env, "SOC_PINGAN_WORKFLOW_APP_SECRET"),
+                    allow_prd=env.get("SOC_PINGAN_WORKFLOW_PRD_CONFIRMATION", "").strip() == "CALL_PINGAN_PRD",
+                    auth_path=env.get("SOC_PINGAN_WORKFLOW_AUTH_PATH", "/appid/auth/login"),
+                    request_timeout_seconds=_float_env(env, "SOC_PINGAN_WORKFLOW_REQUEST_TIMEOUT_SECONDS", 15.0),
+                    workflow_timeout_seconds=_float_env(env, "SOC_PINGAN_WORKFLOW_TIMEOUT_SECONDS", 600.0),
+                    poll_interval_seconds=_float_env(env, "SOC_PINGAN_WORKFLOW_POLL_INTERVAL_SECONDS", 2.0),
+                    token_ttl_seconds=_float_env(env, "SOC_PINGAN_WORKFLOW_TOKEN_TTL_SECONDS", 3600.0),
+                    max_request_bytes=_int_env(env, "SOC_PINGAN_WORKFLOW_MAX_REQUEST_BYTES", 1_000_000),
+                    max_response_bytes=_int_env(env, "SOC_PINGAN_WORKFLOW_MAX_RESPONSE_BYTES", 2_000_000),
+                )
+            )
+        except ValueError as exc:
+            raise PingAnAssetProviderConfigurationError("PingAn Agent Platform workflow configuration is invalid") from exc
         workflow_config = PingAnAssetWorkflowConfig(
-            app_id=_require_env(env, "SOC_PINGAN_WORKFLOW_APP_ID"),
-            operator=_require_env(env, "SOC_PINGAN_WORKFLOW_OPERATOR"),
+            app_id=app_id,
             terminal_workflow_id=_int_env_required(env, "SOC_PINGAN_WORKFLOW_TERMINAL_ID"),
             datacenter_workflow_id=_int_env_required(env, "SOC_PINGAN_WORKFLOW_DATACENTER_ID"),
             user_workflow_id=_int_env_required(env, "SOC_PINGAN_WORKFLOW_USER_ID"),
@@ -652,7 +673,6 @@ def _build_fake_locator() -> PingAnAssetLocatorService:
         workflow_port=workflow,
         workflow_config=PingAnAssetWorkflowConfig(
             app_id="FAKE-YHSYS",
-            operator="fake-operator",
             terminal_workflow_id=1087710,
             datacenter_workflow_id=1087787,
             user_workflow_id=1092332,
@@ -746,7 +766,6 @@ def _workflow_query_data(
     *,
     lookup_kind: Literal["terminal", "datacenter", "user"],
     query: str,
-    operator: str,
     asset_type: PingAnAssetType,
 ) -> dict[str, Any]:
     if lookup_kind == "user":
@@ -761,7 +780,7 @@ def _workflow_query_data(
     return {
         "message": {
             "message_id": uuid4().hex,
-            "by": operator,
+            "by": PINGAN_LEGACY_WORKFLOW_OPERATOR,
             "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "content": json.dumps([{"type": "text", "text": text}], ensure_ascii=False),
             "content_type": "object_array",
@@ -843,16 +862,6 @@ def _elapsed_ms(started: float) -> int:
     return max(0, round((monotonic() - started) * 1000))
 
 
-def _configure_import_paths(env: Mapping[str, str]) -> None:
-    raw = env.get("SOC_PINGAN_PROVIDER_IMPORT_PATHS", "").strip()
-    if not raw:
-        return
-    for value in reversed(raw.split(os.pathsep)):
-        path = value.strip()
-        if path and path not in sys.path:
-            sys.path.insert(0, path)
-
-
 def _ownership_overrides_from_env(
     env: Mapping[str, str],
 ) -> list[PingAnAssetOwnershipOverride]:
@@ -869,19 +878,6 @@ def _ownership_overrides_from_env(
         return [PingAnAssetOwnershipOverride.model_validate(value) for value in values]
     except ValueError as exc:
         raise PingAnAssetProviderConfigurationError("SOC_PINGAN_ASSET_OWNERSHIP_OVERRIDES_JSON contains an invalid rule") from exc
-
-
-def _load_callable(spec: str) -> Callable[..., Any]:
-    module_name, separator, attribute = spec.partition(":")
-    if not separator or not module_name or not attribute:
-        raise PingAnAssetProviderConfigurationError("callable import must use module.path:attribute format")
-    try:
-        value = getattr(importlib.import_module(module_name), attribute)
-    except (ImportError, AttributeError) as exc:
-        raise PingAnAssetProviderConfigurationError(f"cannot resolve configured callable {spec!r}") from exc
-    if not callable(value):
-        raise PingAnAssetProviderConfigurationError(f"configured value {spec!r} is not callable")
-    return value
 
 
 def _require_env(env: Mapping[str, str], name: str) -> str:
@@ -929,8 +925,16 @@ def _bool_env(env: Mapping[str, str], name: str, default: bool) -> bool:
     raise PingAnAssetProviderConfigurationError(f"environment variable {name} must be a boolean")
 
 
+def _workflow_environment(env: Mapping[str, str]) -> Literal["dev", "stg", "prd"]:
+    value = _require_env(env, "SOC_PINGAN_WORKFLOW_ENV").lower()
+    if value not in {"dev", "stg", "prd"}:
+        raise PingAnAssetProviderConfigurationError("SOC_PINGAN_WORKFLOW_ENV must be dev, stg, or prd")
+    return value  # type: ignore[return-value]
+
+
 __all__ = [
-    "CallablePingAnAssetWorkflowPort",
+    "PINGAN_LEGACY_WORKFLOW_APP_ID",
+    "PINGAN_LEGACY_WORKFLOW_OPERATOR",
     "HttpPingAnZeusAssetSearchPort",
     "PingAnAssetLocationAttempt",
     "PingAnAssetLocationCandidate",

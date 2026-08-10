@@ -904,6 +904,14 @@ records its source, package hash, guidance hash, estimated token count and budge
 `SocSkillContext.v2`. This keeps one Skill package as the method source of truth without placing old
 Zeus long prompts or the full `SKILL.md` into every model call.
 
+Skill routing follows an evidence hierarchy rather than a keyword vote. Source type and typed canonical
+HTTP/email/network/endpoint evidence are strong signals. Explicit domain wording is a fallback; broad
+behavior words such as malicious activity or command execution may reinforce a compatible route but
+cannot create a cross-domain Skill for a known source by themselves. Typed cross-domain evidence is
+never discarded. Checkpoint D6 v2 audits this boundary over the complete local corpus. Tenant-specific
+Skill demos are decomposed before use; see
+[`capabilities/pingan/security-log-analysis-skill-audit.md`](capabilities/pingan/security-log-analysis-skill-audit.md).
+
 ### 6.2 Sub Agent Strategy / 子智能体策略
 
 SOC specialist reasoning uses DeerFlow's native custom-subagent registry and `task` tool. It does not
@@ -1259,10 +1267,16 @@ operational response. The product must support that rule without teaching the ge
 
 ```mermaid
 flowchart LR
-    A["Vendor Adapter<br/>environment hint"] --> C["Governed Context Resolver<br/>CMDB / trusted mapping"]
-    C --> R["Full Runtime Analysis<br/>detection truth + evidence"]
-    R --> P["Tenant Disposition Policy<br/>tenant + scope + version"]
-    P --> D["Operational Disposition<br/>review / exempt / escalate"]
+    A["🧾 Vendor Alert<br/>厂商告警"] --> R["⚙️ Full SOC Runtime<br/>完整技术研判"]
+    R --> DB["💾 Analysis Persistence<br/>run + summary + review + audit"]
+    DB --> O["👁️ PostAnalysisObserver<br/>持久化后观察器"]
+    O --> P["📋 TenantDispositionPolicy<br/>租户策略版本/作用域/有效期"]
+    O --> G["🛡️ AuthorizedActivityMatcher<br/>可选授权事实匹配"]
+    P --> E["⚖️ Generic Policy Evaluator<br/>通用确定性评估器"]
+    G --> E
+    E --> D["🗃️ TenantPolicyDecision<br/>独立 append-only 影子决策"]
+    D --> H["👤 Analyst Review<br/>人工确认处置"]
+    D -. "never mutates" .-> R
 ```
 
 Required separation:
@@ -1289,6 +1303,32 @@ Required separation:
 - Initial rollout is recommendation/shadow-only. Auto-close remains disabled until versioned replay,
   override, sampled-review and rollback gates pass. Other tenants without this policy keep the
   generic review behavior.
+
+Current implementation (`soc.tenant_disposition_policy.v1` / `soc.tenant_policy_decision.v1`):
+
+- Generic contracts, evaluator and repository live in `backend/soc_agent/contracts/tenant_policy.py`,
+  `tenant_policy/`, and `core/tenant_policy.py`; migration `0022_tenant_policy_decisions` stores one
+  immutable decision per `run + exact policy content hash`.
+- `SocAnalysisService` invokes generic `PostAnalysisObserver` instances only after the main
+  run/summary/review/audit transaction. Observer failure is logged and cannot roll back or fail the
+  already-persisted analysis. Idempotent analysis retries re-run the observer and deduplicate by the
+  same decision key.
+- Operators opt in with `SOC_TENANT_DISPOSITION_POLICY_PATH`,
+  `SOC_TENANT_POLICY_ENVIRONMENT`, and optional `SOC_TENANT_POLICY_EVENT_TIMEZONE`. No configured
+  policy means no evaluation and no PingAn import in generic composition.
+- PingAn v1 is isolated as data at
+  `backend/soc_agent/integrations/pingan/policies/tenant-disposition-v1.json`. Its initial rule covers
+  only internal non-production credential-alert review: a hostname pattern can recommend no automated
+  response plus explicit authorization checks, but cannot confirm the environment or propose an
+  exempt/benign disposition. Exact authorized activity remains on the existing
+  `AuthorizationEnrichmentRecord -> SocDispositionProposalRecord` path so the tenant policy cannot
+  bypass persisted fact, open-queue, and true-positive lineage.
+- Policy version selection uses timezone-aware alert event time. A configured timezone may localize
+  a legacy naive timestamp and records `alert_event_time_timezone_assumed`; no implicit timezone is
+  guessed. Bounded policies without event time do not apply.
+- `soc tenant-policy evaluate|list|get` provides replay and inspection. The generated validation under
+  `backend/.deer-flow/soc-runtime-validation/tenant-policy-shadow/` proves on real saved Runtime
+  results that detection truth and the Runtime object remain unchanged.
 
 The intended user-visible conclusion keeps both dimensions explicit, for example: “Weak-password
 activity was detected; the target is a confirmed PingAn staging asset; PingAn policy v1 recommends no
@@ -1330,8 +1370,8 @@ not require rewriting core contracts.
 | `GovernedContextFact` | Shared typed fact envelope and lifecycle | GF-01 implemented stable contract |
 | `AuthorizedActivityPayload` | Time-, scope- and source-bounded authorized activity definition | GF-01 storage + AA-01 deterministic matcher implemented |
 | `SecurityExerciseCampaignFact` | Campaign scope and Rules of Engagement | Planned typed fact |
-| `TenantDispositionPolicy` | Versioned tenant-specific operating rule over governed context and detection truth | Planned; generic evaluator, tenant-owned data |
-| `TenantPolicyDecision` | Auditable match/no-match result and operational recommendation | Planned; cannot mutate detection truth or skip Runtime |
+| `TenantDispositionPolicy` | Versioned tenant-specific operating rule over governed context and detection truth | Implemented v1; generic JSON evaluator, tenant-owned data, shadow-only |
+| `TenantPolicyDecision` | Auditable match/no-match result and operational recommendation | Implemented v1 + migration `0022`; cannot mutate detection truth, ReviewQueue, action or memory |
 | `ExerciseParticipantFact` | Event-time participant role and identifier mapping | Planned typed fact |
 | `ParticipantAttributionResult` | Deterministic participant identity resolution | Planned typed result |
 | `AuthorizationQuery` | Vendor-neutral event-time matching input | AA-01 implemented stable contract |
@@ -1827,7 +1867,7 @@ corpus structure and evidence availability; D-1 through D-3 review normalization
 D-4 reviews the production bounded analysis request and exact evidence coverage without running
 Skill resolution, Prompt, model, grounding, decision or persistence. D-5 then validates only
 deterministic Skill selection and bounded package guidance projection; D-6 is a 212-row offline route
-coverage audit for typed HTTP/email, host-vs-asset semantics, and package availability, not a Runtime
+coverage audit for typed HTTP/email, host-vs-asset semantics, keyword-only cross-domain routing, and package availability, not a Runtime
 node. The internal gitignored D-4 review uses
 explicitly approved `full` mode, while generic deployments remain `redact` by default. Encoded-span
 compaction remains a separate token-budget mechanism and never rewrites immutable raw input. Later

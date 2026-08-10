@@ -10,6 +10,7 @@ import pytest
 
 from soc_agent import cli as soc_cli
 from soc_agent.integrations.pingan.asset_location import (
+    PINGAN_LEGACY_WORKFLOW_OPERATOR,
     HttpPingAnZeusAssetSearchPort,
     PingAnAssetLocationQuery,
     PingAnAssetLocatorService,
@@ -25,7 +26,6 @@ from soc_agent.integrations.pingan.asset_location import (
 
 _WORKFLOW_CONFIG = PingAnAssetWorkflowConfig(
     app_id="YHSYS",
-    operator="analyst001",
     terminal_workflow_id=1087710,
     datacenter_workflow_id=1087787,
     user_workflow_id=1092332,
@@ -49,6 +49,7 @@ def test_http_search_port_preserves_legacy_signing_and_wire_contract() -> None:
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         port = HttpPingAnZeusAssetSearchPort(
             base_url="https://isec.example.internal",
+            allowed_hosts=("isec.example.internal",),
             app_id="SEC-MODEL",
             app_key="not-logged-secret",
             signer=signer,
@@ -72,6 +73,17 @@ def test_http_search_port_preserves_legacy_signing_and_wire_contract() -> None:
     assert sent["body"] == expected_body
     assert sent["headers"]["x-isec-signature"] == "signed-value"
     assert sent["headers"]["companycode"] == "all"
+
+
+def test_http_search_port_requires_an_allowlisted_https_host() -> None:
+    with pytest.raises(PingAnAssetProviderConfigurationError, match="allowlisted HTTPS"):
+        HttpPingAnZeusAssetSearchPort(
+            base_url="https://isec.example.internal",
+            allowed_hosts=("other.example.internal",),
+            app_id="SEC-MODEL",
+            app_key="secret",
+            signer=lambda **_: {},
+        )
 
 
 def test_locator_uses_search_asset_info_first_and_returns_bounded_result() -> None:
@@ -147,7 +159,7 @@ def test_locator_falls_back_from_search_to_datacenter_then_terminal_workflow() -
     assert [item.lookup_kind for item in result.attempts] == ["IP", "datacenter", "terminal"]
     assert [call["workflow_id"] for call in workflow.calls] == [1087787, 1087710]
     assert workflow.calls[0]["query_data"]["args"] == {"ip": "203.0.113.20"}
-    assert workflow.calls[0]["query_data"]["message"]["by"] == "analyst001"
+    assert workflow.calls[0]["query_data"]["message"]["by"] == PINGAN_LEGACY_WORKFLOW_OPERATOR
 
 
 def test_locator_uses_um_only_after_asset_sources_miss() -> None:
@@ -283,7 +295,7 @@ def test_locator_does_not_treat_workflow_failure_as_a_normal_miss() -> None:
 
 
 def test_environment_builder_never_silently_falls_back_from_internal_to_fake() -> None:
-    with pytest.raises(PingAnAssetProviderConfigurationError, match="SOC_PINGAN_ZEUS_SIGNER_IMPORT"):
+    with pytest.raises(PingAnAssetProviderConfigurationError, match="SOC_PINGAN_ZEUS_BASE_URL"):
         build_pingan_asset_locator_from_env({"SOC_PINGAN_ASSET_PROVIDER_MODE": "internal"})
 
     result = build_pingan_asset_locator_from_env({"SOC_PINGAN_ASSET_PROVIDER_MODE": "fake"}).locate({"query": "10.10.1.5", "asset_type": "IP"})

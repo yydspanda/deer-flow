@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -56,10 +57,45 @@ PRIVATE_OVERLAY_PATHS = (
     "backend/.deer-flow/pingan-context/software-path-catalog.sqlite",
     "backend/.deer-flow/pingan-context/software-path-catalog.build-report.json",
 )
+PRIVATE_ENV_REQUIRED_KEYS = frozenset(
+    {
+        "PINGAN_LITELLM_BASE_URL",
+        "PINGAN_LITELLM_API_KEY",
+        "PINGAN_LITELLM_MODEL",
+        "SOC_PINGAN_ENV",
+        "SOC_PINGAN_ASSET_PROVIDER_MODE",
+        "SOC_PINGAN_ZEUS_BASE_URL",
+        "SOC_PINGAN_ZEUS_ALLOWED_HOSTS",
+        "SOC_PINGAN_ZEUS_APP_ID",
+        "SOC_PINGAN_ZEUS_APP_KEY",
+        "D12B_INVALID_ZEUS_APP_KEY",
+        "D12B_TIMEOUT_ZEUS_BASE_URL",
+        "D12B_TIMEOUT_ZEUS_ALLOWED_HOSTS",
+        "SOC_PINGAN_WORKFLOW_ENV",
+        "SOC_PINGAN_WORKFLOW_BASE_URL",
+        "SOC_PINGAN_WORKFLOW_ALLOWED_HOSTS",
+        "SOC_PINGAN_WORKFLOW_APP_ID",
+        "SOC_PINGAN_WORKFLOW_APP_SECRET",
+        "SOC_PINGAN_WORKFLOW_TERMINAL_ID",
+        "SOC_PINGAN_WORKFLOW_DATACENTER_ID",
+        "SOC_PINGAN_WORKFLOW_USER_ID",
+    }
+)
+PRIVATE_ENV_OBSOLETE_KEYS = frozenset(
+    {
+        "env_profile",
+        "SOC_PINGAN_PROVIDER_IMPORT_PATHS",
+        "SOC_PINGAN_ZEUS_SIGNER_IMPORT",
+        "SOC_PINGAN_WORKFLOW_RUNNER_IMPORT",
+        "SOC_PINGAN_WORKFLOW_OPERATOR",
+    }
+)
+_SHELL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 REQUIRED_HANDOFF_SOURCE_PATHS = (
     ".notes/ai_soc/delivery-roadmap.md",
     ".notes/ai_soc/integrations/README.md",
     ".notes/ai_soc/integrations/mock-and-real-register.md",
+    ".notes/ai_soc/integrations/pingan-dev-information-collection.md",
     ".notes/ai_soc/integrations/pingan-internal-continuation-handoff.md",
     "AGENTS.md",
     "backend/samples/pingan_dev/README.md",
@@ -67,9 +103,12 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/samples/pingan_dev/d12b-test-cases.example.yaml",
     "backend/samples/pingan_dev/env.example",
     "backend/samples/pingan_dev/extensions.example.json",
+    "backend/samples/pingan_dev/uv-index.env.example",
     "backend/samples/enrichment/pingan-external-simulation.yaml",
     "backend/samples/enrichment/pingan-internal-shadow.yaml",
     "backend/samples/mcp/pingan_asset/action_adapters.json",
+    "backend/samples/mcp/pingan_asset/extensions.internal.example.json",
+    "backend/samples/mcp/pingan_asset/README.md",
     "backend/samples/mcp/pingan_shadow/extensions.internal.json",
     "backend/samples/mcp/pingan_threat_intel/action_adapters.json",
     "backend/samples/mcp/pingan_security_tag/action_adapters.json",
@@ -77,16 +116,32 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/scripts/soc_pingan_d12b_evidence.py",
     "backend/scripts/soc_pingan_d12b_matrix.py",
     "backend/scripts/soc_pingan_dev_preflight.py",
+    "backend/scripts/soc_pingan_local_paths.py",
+    "backend/scripts/soc_pingan_litellm_smoke.py",
     "backend/scripts/soc_pingan_security_tag_mcp_server.py",
     "backend/scripts/soc_pingan_threat_intel_mcp_server.py",
+    "backend/scripts/soc_pingan_prepare_legacy_workflow_profile.py",
+    "backend/soc_agent/integrations/pingan/agent_workflow.py",
     "backend/soc_agent/integrations/pingan/asset_location.py",
+    "backend/soc_agent/integrations/pingan/legacy_workflow_profile.py",
+    "backend/soc_agent/integrations/pingan/litellm_smoke.py",
+    "backend/soc_agent/integrations/pingan/policies/tenant-disposition-v1.json",
     "backend/soc_agent/integrations/pingan/security_tag.py",
     "backend/soc_agent/integrations/pingan/threat_intel.py",
+    "backend/soc_agent/contracts/tenant_policy.py",
+    "backend/soc_agent/core/tenant_policy.py",
+    "backend/soc_agent/tenant_policy/evaluator.py",
+    "backend/soc_agent/tenant_policy/loader.py",
+    "backend/soc_agent/db/migrations/versions/0022_tenant_policy_decisions.py",
+    "scripts/build_pingan_macos_offline_bundle.py",
     "scripts/build_pingan_internal_transfer.py",
+    "scripts/test_build_pingan_macos_offline_bundle.py",
     "validation/compact_zeus/internal_batch/README.md",
     "validation/compact_zeus/internal_batch/evaluate_pingan_shadow.py",
     "validation/compact_zeus/internal_batch/run_pingan_internal_shadow.py",
     "validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py",
+    "validation/compact_zeus/policy/README.md",
+    "validation/compact_zeus/policy/validate_tenant_policy_shadow.py",
 )
 
 
@@ -137,6 +192,15 @@ def build_transfer_archives(
     output_dir = output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     output_dir.chmod(0o700)
+    private_paths: list[Path] | None = None
+    if include_private_overlay:
+        private_paths = [Path(item) for item in PRIVATE_OVERLAY_PATHS]
+        missing = [
+            path.as_posix() for path in private_paths if not (root / path).is_file()
+        ]
+        if missing:
+            raise ValueError(f"private overlay inputs are missing: {missing}")
+        _assert_private_overlay_config_ready(root)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     source_paths = collect_source_paths(root)
     _assert_required_handoff_sources(source_paths)
@@ -161,12 +225,7 @@ def build_transfer_archives(
     }
 
     if include_private_overlay:
-        private_paths = [Path(item) for item in PRIVATE_OVERLAY_PATHS]
-        missing = [
-            path.as_posix() for path in private_paths if not (root / path).is_file()
-        ]
-        if missing:
-            raise ValueError(f"private overlay inputs are missing: {missing}")
+        assert private_paths is not None
         private_manifest = _archive_manifest(
             archive_kind="private_overlay",
             root=root,
@@ -498,6 +557,68 @@ def _assert_source_freeze_allowed(
         )
 
 
+def _assert_private_overlay_config_ready(root: Path) -> None:
+    """Reject stale or placeholder local profiles before packaging secrets."""
+
+    env_path = root / ".env.soc-dev.local"
+    config_path = root / "config.pingan-dev.local"
+    for path in (env_path, config_path):
+        if path.stat().st_mode & 0o077:
+            raise ValueError(f"private overlay config must be mode 0600: {path.name}")
+        if "/Users/" in path.read_text(encoding="utf-8"):
+            raise ValueError(
+                f"private overlay config contains a developer-specific path: {path.name}"
+            )
+
+    values = _shell_export_values(env_path.read_text(encoding="utf-8"))
+    obsolete = sorted(PRIVATE_ENV_OBSOLETE_KEYS & values.keys())
+    if obsolete:
+        raise ValueError(
+            "private environment contains obsolete keys: " + ", ".join(obsolete)
+        )
+    missing = sorted(PRIVATE_ENV_REQUIRED_KEYS - values.keys())
+    if missing:
+        raise ValueError(
+            "private environment is missing required keys: " + ", ".join(missing)
+        )
+    unresolved = sorted(
+        name
+        for name in PRIVATE_ENV_REQUIRED_KEYS
+        if _is_unresolved_private_value(values[name])
+    )
+    if unresolved:
+        raise ValueError(
+            "private environment contains unresolved values: " + ", ".join(unresolved)
+        )
+
+
+def _shell_export_values(content: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("export "):
+            continue
+        assignment = line.removeprefix("export ").strip()
+        name, separator, raw_value = assignment.partition("=")
+        name = name.strip()
+        if not separator or not _SHELL_NAME.fullmatch(name):
+            continue
+        value = raw_value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        values[name] = value.strip()
+    return values
+
+
+def _is_unresolved_private_value(value: str) -> bool:
+    normalized = value.strip()
+    return (
+        not normalized
+        or (normalized.startswith("<") and normalized.endswith(">"))
+        or normalized.lower() in {"changeme", "todo", "replace-me"}
+    )
+
+
 def _source_readme(timestamp: str, *, worktree_dirty: bool) -> str:
     source_state = (
         "This development-only archive was explicitly built from a dirty worktree. "
@@ -520,12 +641,17 @@ archive into the same parent directory. Read:
 - `backend/samples/pingan_dev/README.md`
 - `validation/compact_zeus/internal_batch/README.md`
 
-Install backend dependencies with:
+Install backend dependencies with the separately transferred Apple Silicon
+offline toolchain bundle. No public network or system Python 3.12 is required:
 
 ```bash
-cd backend
-uv sync --locked --extra pingan-dev
+tar -xzf deer-flow-pingan-macos-arm64-offline-<timestamp>.tar.gz
+deer-flow-pingan-macos-arm64-offline/install-offline.sh /absolute/path/to/deer-flow
 ```
+
+Do not run an online `uv sync` inside the restricted network. The authoritative
+commands and package verification steps are in
+`.notes/ai_soc/integrations/pingan-internal-continuation-handoff.md`.
 """
 
 

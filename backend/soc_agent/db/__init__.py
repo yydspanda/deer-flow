@@ -27,6 +27,7 @@ from soc_agent.db.models import (
     SocReviewQueueRow,
     SocSkillFeedbackObservationRow,
     SocSkillImprovementCandidateRow,
+    SocTenantPolicyDecisionRow,
 )
 from soc_agent.db.operations import SqlAlchemySocOperationsRepository
 from soc_agent.db.repositories import SqlAlchemyAlertRepository
@@ -40,6 +41,7 @@ __all__ = [
     "SocDecisionAuditLogRow",
     "SocDispositionOutcomeRow",
     "SocDispositionProposalRow",
+    "SocTenantPolicyDecisionRow",
     "SocDispositionSampleManifestRow",
     "SocEnrichmentActionAttemptRow",
     "SocEnrichmentExecutionRow",

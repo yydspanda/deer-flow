@@ -85,6 +85,70 @@ def test_skill_resolver_selects_network_apt_skill_for_apt_context() -> None:
     assert SOC_ALERT_TRIAGE_SKILL in skill_names
 
 
+def test_skill_resolver_does_not_cross_route_hids_from_ambiguous_keywords() -> None:
+    request = LLMAnalysisRequest(
+        alert_id="ALT-HIDS-COMMAND",
+        source=AlertSourceRef(source_type=AlertSourceType.HIDS, product="Host Agent"),
+        detection=DetectionRuleRef(rule_name="[恶意命令执行] 可疑系统命令"),
+        canonical_entities=AlertEntitySet(
+            process=ProcessEntityRef(
+                process_name="sh",
+                parent_process_name="sshd",
+                command_line="id",
+            )
+        ),
+    )
+
+    skill_names = _skill_names(request)
+
+    assert SOC_ENDPOINT_TRIAGE_SKILL in skill_names
+    assert SOC_NETWORK_APT_TRIAGE_SKILL not in skill_names
+    assert SOC_WEB_APPLICATION_TRIAGE_SKILL not in skill_names
+
+
+def test_skill_resolver_keeps_typed_cross_domain_evidence_for_hids() -> None:
+    request = LLMAnalysisRequest(
+        alert_id="ALT-HIDS-HTTP",
+        source=AlertSourceRef(source_type=AlertSourceType.HIDS, product="Host Agent"),
+        detection=DetectionRuleRef(rule_name="Web command execution"),
+        canonical_entities=AlertEntitySet(
+            process=ProcessEntityRef(process_name="sh", parent_process_name="java"),
+            network=NetworkEntityRef(source_ip="10.0.0.5", destination_ip="198.51.100.2"),
+            http=HttpEntityRef(method="POST", host="app.example", path="/execute"),
+        ),
+    )
+
+    skill_names = _skill_names(request)
+
+    assert SOC_ENDPOINT_TRIAGE_SKILL in skill_names
+    assert SOC_NETWORK_APT_TRIAGE_SKILL in skill_names
+    assert SOC_WEB_APPLICATION_TRIAGE_SKILL in skill_names
+
+
+def test_skill_resolver_uses_network_source_to_scope_web_behavior_keyword() -> None:
+    request = LLMAnalysisRequest(
+        alert_id="ALT-NIDS-WEB-COMMAND",
+        source=AlertSourceRef(source_type=AlertSourceType.NIDS, product="Network IDS"),
+        detection=DetectionRuleRef(rule_name="Web命令执行"),
+    )
+
+    skill_names = _skill_names(request)
+
+    assert SOC_NETWORK_APT_TRIAGE_SKILL in skill_names
+    assert SOC_WEB_APPLICATION_TRIAGE_SKILL in skill_names
+    assert SOC_ENDPOINT_TRIAGE_SKILL not in skill_names
+
+
+def test_skill_resolver_does_not_guess_domain_from_ambiguous_unknown_text() -> None:
+    request = LLMAnalysisRequest(
+        alert_id="ALT-UNKNOWN-COMMAND",
+        source=AlertSourceRef(source_type=AlertSourceType.UNKNOWN),
+        detection=DetectionRuleRef(rule_name="恶意命令执行"),
+    )
+
+    assert _skill_names(request) == [SOC_ALERT_TRIAGE_SKILL]
+
+
 def test_skill_resolver_selects_web_and_asset_direction_for_http_conflict() -> None:
     request = LLMAnalysisRequest(
         alert_id="ALT-F5",

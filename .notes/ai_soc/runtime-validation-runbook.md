@@ -129,7 +129,7 @@ Checkpoint D 当前增加：
 | Seq | Directory / 目录 | Review / 审阅重点 |
 |---:|---|---|
 | D5 | `checkpoint-d/step-d5-skill-context` | 选择原因、实际 Skill package、bounded guidance、package/projection hash、token budget；不调用 LLM |
-| D6 | `checkpoint-d/step-d6-skill-route-coverage` | 212 条 typed HTTP/email 路由覆盖、host/asset 误路由、package 投影完整性；离线评测 |
+| D6 | `checkpoint-d/step-d6-skill-route-coverage` | 212 条 typed HTTP/email 路由覆盖、host/asset 误路由、keyword-only 跨来源域误路由、package 投影完整性；离线评测 |
 | D7 | `checkpoint-d/step-d7-analyzer-output` | 真实模型、Prompt/Parser 版本、`AnalysisResult.v2`、开放场景、行为阶段、证据索引、竞争解释、缺口和核查项；不运行 Grounding/Decision |
 | D8 | `checkpoint-d/step-d8-evidence-grounding` | production source/value Grounding、description sibling-fact leakage、scenario 引用接受/拒绝状态；不运行 Decision |
 | D9 | `checkpoint-d/step-d9-decision-policy` | production Decision Policy、evidence state、review reasons、automation guard；不运行模型、租户处置或持久化 |

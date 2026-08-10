@@ -45,15 +45,25 @@ from soc_agent.skills import (  # noqa: E402
     SOC_EMAIL_PHISHING_TRIAGE_SKILL,
     SOC_ENDPOINT_TRIAGE_SKILL,
     SOC_LEAD_AGENT_SKILLS,
+    SOC_NETWORK_APT_TRIAGE_SKILL,
     SOC_WEB_APPLICATION_TRIAGE_SKILL,
     SocSkillResolver,
     build_soc_skill_context,
 )
 
-SCHEMA_VERSION = "soc.validation.checkpoint_d.skill_route_coverage.v1"
-DEFAULT_CORPUS_PATH = ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
-DEFAULT_OUTPUT_PATH = ROOT / "backend/.deer-flow/soc-runtime-validation/checkpoint-d" / "step-d6-skill-route-coverage" / "skill-route-coverage.json"
+SCHEMA_VERSION = "soc.validation.checkpoint_d.skill_route_coverage.v2"
+DEFAULT_CORPUS_PATH = (
+    ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
+)
+DEFAULT_OUTPUT_PATH = (
+    ROOT
+    / "backend/.deer-flow/soc-runtime-validation/checkpoint-d"
+    / "step-d6-skill-route-coverage"
+    / "skill-route-coverage.json"
+)
 _ENDPOINT_SOURCES = {"edr", "xdr", "hids"}
+_NETWORK_SOURCES = {"nids", "ndr", "threat_intel"}
+_WEB_SOURCES = {"waf", "f5"}
 
 
 def build_skill_route_coverage(
@@ -76,6 +86,7 @@ def build_skill_route_coverage(
     email_route_misses: list[str] = []
     package_projection_mismatches: list[str] = []
     asset_only_endpoint_misroutes: list[str] = []
+    keyword_only_cross_domain_misroutes: list[dict[str, Any]] = []
 
     for row_index, row in corpus.iterrows():
         alert_id = _optional_string(row.get("alert_id")) or f"row-{row_index}"
@@ -118,8 +129,21 @@ def build_skill_route_coverage(
                 email_route_misses.append(row_key)
             if resolution_names != context_names or context.notes:
                 package_projection_mismatches.append(row_key)
-            if inspection.entities.assets and not has_endpoint and SOC_ENDPOINT_TRIAGE_SKILL in context_names:
+            if (
+                inspection.entities.assets
+                and not has_endpoint
+                and SOC_ENDPOINT_TRIAGE_SKILL in context_names
+            ):
                 asset_only_endpoint_misroutes.append(row_key)
+            for recommendation in resolution.selected_skills:
+                if _is_keyword_only_cross_domain_route(source_type, recommendation):
+                    keyword_only_cross_domain_misroutes.append(
+                        {
+                            "row_key": row_key,
+                            "skill_name": recommendation.skill_name,
+                            "matched_fields": list(recommendation.matched_fields),
+                        }
+                    )
 
             records.append(
                 {
@@ -127,9 +151,14 @@ def build_skill_route_coverage(
                     "alert_id": alert_id,
                     "topic": topic,
                     "source_type": source_type,
-                    "selected_skills": [item.model_dump(mode="json", exclude_none=True) for item in resolution.selected_skills],
+                    "selected_skills": [
+                        item.model_dump(mode="json", exclude_none=True)
+                        for item in resolution.selected_skills
+                    ],
                     "projected_skill_names": context_names,
-                    "skill_context_sha256": canonical_sha256(context.model_dump(mode="json", exclude_none=True)),
+                    "skill_context_sha256": canonical_sha256(
+                        context.model_dump(mode="json", exclude_none=True)
+                    ),
                     "estimated_token_count": context.total_estimated_token_count,
                     "entity_counts": {
                         "ips": len(inspection.entities.ips),
@@ -146,7 +175,9 @@ def build_skill_route_coverage(
                         "has_email": has_email,
                         "has_endpoint": has_endpoint,
                         "conflict_count": request.conflict_count,
-                        "high_value_gap_count": len(request.evidence_coverage.high_value_gaps),
+                        "high_value_gap_count": len(
+                            request.evidence_coverage.high_value_gaps
+                        ),
                     },
                 }
             )
@@ -170,6 +201,7 @@ def build_skill_route_coverage(
         "typed_email_always_routes_email_skill": not email_route_misses,
         "all_selected_skills_project_from_packages": not package_projection_mismatches,
         "asset_only_entities_do_not_route_endpoint": not asset_only_endpoint_misroutes,
+        "ambiguous_keywords_do_not_cross_known_source_domains": not keyword_only_cross_domain_misroutes,
         "all_profile_skill_packages_project": package_inventory["all_projected"],
     }
     failed_checks = sorted(name for name, passed in checks.items() if not passed)
@@ -188,6 +220,7 @@ def build_skill_route_coverage(
                 "full_corpus_deterministic_d1_d5_replay",
                 "typed_evidence_route_coverage",
                 "host_asset_route_regression",
+                "source_aware_keyword_route_regression",
                 "skill_package_projection_inventory",
             ],
             "not_performed": [
@@ -215,8 +248,14 @@ def build_skill_route_coverage(
         "coverage": {
             "skill_selection_counts": dict(sorted(skill_counts.items())),
             "source_type_counts": dict(sorted(source_counts.items())),
-            "selection_count_distribution": {str(key): value for key, value in sorted(selection_count_distribution.items())},
-            "source_skill_counts": {source: dict(sorted(counts.items())) for source, counts in sorted(source_skill_counts.items())},
+            "selection_count_distribution": {
+                str(key): value
+                for key, value in sorted(selection_count_distribution.items())
+            },
+            "source_skill_counts": {
+                source: dict(sorted(counts.items()))
+                for source, counts in sorted(source_skill_counts.items())
+            },
         },
         "findings": {
             "baseline_missing": baseline_missing,
@@ -225,11 +264,36 @@ def build_skill_route_coverage(
             "email_route_misses": email_route_misses,
             "package_projection_mismatches": package_projection_mismatches,
             "asset_only_endpoint_misroutes": asset_only_endpoint_misroutes,
+            "keyword_only_cross_domain_misroutes": keyword_only_cross_domain_misroutes,
             "failures": failures,
         },
         "profile_skill_package_inventory": package_inventory,
         "routes": records,
     }
+
+
+def _is_keyword_only_cross_domain_route(
+    source_type: str,
+    recommendation: SocSkillRecommendation,
+) -> bool:
+    if not recommendation.matched_fields or not all(
+        matched_field.startswith("keyword:")
+        for matched_field in recommendation.matched_fields
+    ):
+        return False
+    if source_type in _ENDPOINT_SOURCES:
+        return recommendation.skill_name in {
+            SOC_NETWORK_APT_TRIAGE_SKILL,
+            SOC_WEB_APPLICATION_TRIAGE_SKILL,
+        }
+    if source_type in _NETWORK_SOURCES:
+        return recommendation.skill_name == SOC_ENDPOINT_TRIAGE_SKILL
+    if source_type in _WEB_SOURCES:
+        return recommendation.skill_name in {
+            SOC_ENDPOINT_TRIAGE_SKILL,
+            SOC_NETWORK_APT_TRIAGE_SKILL,
+        }
+    return False
 
 
 def _package_inventory() -> dict[str, Any]:
@@ -250,8 +314,13 @@ def _package_inventory() -> dict[str, Any]:
     return {
         "configured_skill_names": list(SOC_LEAD_AGENT_SKILLS),
         "projected_skill_names": list(projected),
-        "missing_skill_names": [skill_name for skill_name in SOC_LEAD_AGENT_SKILLS if skill_name not in projected],
-        "all_projected": len(projected) == len(SOC_LEAD_AGENT_SKILLS) and not context.notes,
+        "missing_skill_names": [
+            skill_name
+            for skill_name in SOC_LEAD_AGENT_SKILLS
+            if skill_name not in projected
+        ],
+        "all_projected": len(projected) == len(SOC_LEAD_AGENT_SKILLS)
+        and not context.notes,
         "items": [
             {
                 "skill_name": item.skill_name,
@@ -301,7 +370,19 @@ def _has_http(request: Any) -> bool:
 
 def _has_email(request: Any) -> bool:
     email = request.canonical_entities.email
-    return bool(email and (email.observations or email.message_id or email.sender_addresses or email.recipient_addresses or email.cc_addresses or email.subject or email.links or email.attachment_names))
+    return bool(
+        email
+        and (
+            email.observations
+            or email.message_id
+            or email.sender_addresses
+            or email.recipient_addresses
+            or email.cc_addresses
+            or email.subject
+            or email.links
+            or email.attachment_names
+        )
+    )
 
 
 def _has_endpoint(

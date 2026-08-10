@@ -115,6 +115,7 @@ from soc_agent.core import (
     SocServiceError,
     SocSkillImprovementService,
     SocSkillResolutionService,
+    SocTenantPolicyEvaluationService,
     load_soc_rollout_rehearsal_report,
 )
 from soc_agent.daemon import (
@@ -192,6 +193,10 @@ from soc_agent.operations import build_soc_operations_service
 from soc_agent.subagents import (
     SocSpecialistSubagentConfigInstaller,
     build_soc_specialist_subagent_config_fragment,
+)
+from soc_agent.tenant_policy import (
+    StaticTenantPolicyResolver,
+    load_tenant_disposition_policies,
 )
 
 DEFAULT_ROLLOUT_REHEARSAL_FIXTURE = Path(__file__).resolve().parents[1] / "samples" / "rollout" / "pi05a_vendor_neutral_simulation.json"
@@ -360,6 +365,12 @@ def main(argv: list[str] | None = None) -> int:
             return _disposition_outcome_get(args)
     if args.command == "disposition" and args.disposition_command == "evaluate":
         return _disposition_evaluate(args)
+    if args.command == "tenant-policy" and args.tenant_policy_command == "evaluate":
+        return _tenant_policy_evaluate(args)
+    if args.command == "tenant-policy" and args.tenant_policy_command == "list":
+        return _tenant_policy_list(args)
+    if args.command == "tenant-policy" and args.tenant_policy_command == "get":
+        return _tenant_policy_get(args)
     if args.command == "context" and args.context_command == "propose":
         return _context_fact_propose(args)
     if args.command == "context" and args.context_command == "revise":
@@ -1361,6 +1372,41 @@ def _build_parser() -> argparse.ArgumentParser:
     disposition_evaluate.add_argument("--proposal-limit", type=int, default=10_000)
     disposition_evaluate.add_argument("--pretty", action="store_true")
     _add_database_args(disposition_evaluate)
+
+    tenant_policy = subparsers.add_parser(
+        "tenant-policy",
+        help="Evaluate and inspect shadow tenant disposition policy decisions",
+    )
+    tenant_policy_subparsers = tenant_policy.add_subparsers(dest="tenant_policy_command")
+    tenant_policy_evaluate = tenant_policy_subparsers.add_parser(
+        "evaluate",
+        help="Evaluate one persisted Runtime result against an operator policy pack",
+    )
+    tenant_policy_evaluate.add_argument("run_id")
+    tenant_policy_evaluate.add_argument("--policy-path", required=True)
+    tenant_policy_evaluate.add_argument("--environment", required=True)
+    tenant_policy_evaluate.add_argument("--event-timezone")
+    tenant_policy_evaluate.add_argument("--actor-id", default="soc-policy-operator")
+    tenant_policy_evaluate.add_argument("--pretty", action="store_true")
+    _add_database_args(tenant_policy_evaluate)
+    tenant_policy_list = tenant_policy_subparsers.add_parser(
+        "list",
+        help="List persisted shadow tenant policy decisions",
+    )
+    tenant_policy_list.add_argument("--run-id")
+    tenant_policy_list.add_argument("--alert-id")
+    tenant_policy_list.add_argument("--tenant-id")
+    tenant_policy_list.add_argument("--policy-id")
+    tenant_policy_list.add_argument("--limit", type=int, default=100)
+    tenant_policy_list.add_argument("--pretty", action="store_true")
+    _add_database_args(tenant_policy_list)
+    tenant_policy_get = tenant_policy_subparsers.add_parser(
+        "get",
+        help="Get one persisted shadow tenant policy decision",
+    )
+    tenant_policy_get.add_argument("decision_id")
+    tenant_policy_get.add_argument("--pretty", action="store_true")
+    _add_database_args(tenant_policy_get)
 
     context = subparsers.add_parser("context", help="Governed operational context fact helpers")
     context_subparsers = context.add_subparsers(dest="context_command")
@@ -2953,6 +2999,76 @@ def _disposition_evaluation_context(actor_id: str, *, role: str) -> ServiceReque
             roles=[role],
         )
     )
+
+
+def _tenant_policy_evaluate(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        run = repository.get_run(args.run_id)
+        if run is None:
+            print(f"error: analysis run {args.run_id} not found", file=sys.stderr)
+            return 2
+        service = SocTenantPolicyEvaluationService(
+            policy_resolver=StaticTenantPolicyResolver(load_tenant_disposition_policies(args.policy_path)),
+            repository=repository,
+            environment=args.environment,
+            authorized_activity_service=SocAuthorizedActivityService(repository=repository),
+            event_timezone=args.event_timezone,
+        )
+        decision = service.evaluate(
+            run,
+            context=ServiceRequestContext(
+                actor=ActorContext(
+                    actor_id=args.actor_id,
+                    actor_type=ActorType.USER,
+                    surface=EntrySurface.CLI,
+                    roles=["soc_policy_operator"],
+                )
+            ),
+        )
+    except (OSError, ValueError, SQLAlchemyError) as exc:
+        print(f"error: tenant policy evaluation failed: {exc}", file=sys.stderr)
+        return 2
+    if decision is None:
+        print("error: no active tenant policy applies to this run", file=sys.stderr)
+        return 3
+    print(decision.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _tenant_policy_list(args: argparse.Namespace) -> int:
+    try:
+        items = _repository_from_args(args).list_tenant_policy_decisions(
+            run_id=args.run_id,
+            alert_id=args.alert_id,
+            tenant_id=args.tenant_id,
+            policy_id=args.policy_id,
+            limit=args.limit,
+        )
+    except (ValueError, SQLAlchemyError) as exc:
+        print(f"error: tenant policy database access failed: {exc}", file=sys.stderr)
+        return 2
+    print(
+        json.dumps(
+            [item.model_dump(mode="json", exclude_none=True) for item in items],
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+        )
+    )
+    return 0
+
+
+def _tenant_policy_get(args: argparse.Namespace) -> int:
+    try:
+        item = _repository_from_args(args).get_tenant_policy_decision(args.decision_id)
+    except (ValueError, SQLAlchemyError) as exc:
+        print(f"error: tenant policy database access failed: {exc}", file=sys.stderr)
+        return 2
+    if item is None:
+        print(f"error: tenant policy decision {args.decision_id} not found", file=sys.stderr)
+        return 2
+    print(item.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
 
 
 def _context_authorization_enrich(args: argparse.Namespace) -> int:

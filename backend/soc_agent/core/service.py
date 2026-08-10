@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections import Counter
-from collections.abc import Callable, Collection, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -119,6 +120,7 @@ from soc_agent.protocols import (
     MemoryPatternObserver,
     MemoryRecordRepository,
     NormalizationMaintenanceMonitor,
+    PostAnalysisObserver,
     ReviewQueueRepository,
     SocActionAdapterRegistryPort,
     SocAgentApprovalGrantRepository,
@@ -153,6 +155,8 @@ from .mutation_audit import (
     mutation_uow_from,
     validate_mutation_retry,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class DeterministicAnalysisRuntime:
@@ -217,6 +221,7 @@ class SocAnalysisService:
         review_queue_repository: ReviewQueueRepository | None = None,
         analysis_persistence: AnalysisPersistence | None = None,
         normalization_maintenance_monitor: NormalizationMaintenanceMonitor | None = None,
+        post_analysis_observers: Sequence[PostAnalysisObserver] = (),
         event_sink: SocEventSink | None = None,
     ) -> None:
         self._runtime = runtime or DeterministicAnalysisRuntime()
@@ -226,6 +231,7 @@ class SocAnalysisService:
         self._review_queue_repository = review_queue_repository
         self._analysis_persistence = analysis_persistence
         self._normalization_maintenance_monitor = normalization_maintenance_monitor
+        self._post_analysis_observers = tuple(post_analysis_observers)
         self._event_sink = event_sink or NoopEventSink()
 
     def analyze(
@@ -355,6 +361,7 @@ class SocAnalysisService:
         )
 
         if existing_run := self._find_existing_idempotent_run(context, action=audit_action):
+            self._observe_post_analysis(existing_run, context=context)
             self._emit_analysis_completion(existing_run, context=context, replay_of_run_id=replay_of_run_id, idempotent_replay=True)
             return existing_run
 
@@ -406,8 +413,26 @@ class SocAnalysisService:
             if self._repository is not None:
                 self._repository.save_run(run)
 
+        self._observe_post_analysis(run, context=context)
+
         self._emit_analysis_completion(run, context=context, replay_of_run_id=replay_of_run_id, idempotent_replay=False)
         return run
+
+    def _observe_post_analysis(
+        self,
+        run: AnalysisRun,
+        *,
+        context: ServiceRequestContext,
+    ) -> None:
+        for observer in self._post_analysis_observers:
+            try:
+                observer.observe(run, context=context)
+            except Exception:  # noqa: BLE001 - post-analysis shadow work must not fail the persisted run
+                logger.exception(
+                    "post-analysis observer %s failed for run %s",
+                    type(observer).__name__,
+                    run.run_id,
+                )
 
     def _run_runtime_with_journal(
         self,

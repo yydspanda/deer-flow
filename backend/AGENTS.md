@@ -340,6 +340,14 @@ recursion budget for the middleware-heavy graph, not permission for a 32-action 
 is advisory only and cannot enter `InvestigationEvidence`, mutate Runtime/ReviewQueue, write memory,
 or emit an executable action proposal.
 
+Runtime Skill selection lives in `soc_agent/skills.py`. Treat source type and typed canonical evidence
+as strong signals; use text only as a fallback. An ambiguous detection phrase such as command execution
+must not create a Network/Web Skill for a known EDR/HIDS source, or an Endpoint Skill for a known
+NIDS/NDR/WAF/F5 source, unless compatible typed evidence already selected that domain. Public Skills
+contain tenant-neutral method only. Customer ranges, systems, tools, rule families, paths, allowlists,
+and historical dispositions belong in governed context, scoped memory, adapter/config, or eval data.
+Checkpoint D6 v2 must keep `keyword_only_cross_domain_misroutes` empty across the full corpus.
+
 Lead-only enforcement lives in `SocLeadAgentDelegationMiddleware`, not in DeerFlow's generic executor.
 It requires server-bound ReviewQueue context, allows only the four managed names, limits a chat run to
 two distinct specialists, caps the Lead Agent's narrow task at 1,200 characters and the server-built
@@ -355,8 +363,33 @@ asset candidates. It may preserve PingAn ZEUS signing/wire and asset-to-BU/UM fa
 must not extract roles, choose response targets, alter verdicts, close reviews, confirm memory, or
 authorize actions. Its `fake` and `internal` modes are mutually exclusive: fake output must expose
 `mocked=true`; internal mode must fail startup/tool execution when endpoint, credentials, signer or
-workflow imports are unavailable, never silently downgrade to fake. D12-A code/fake smoke does not
+workflow HTTP configuration are unavailable, never silently downgrade to fake. ZEUS signing and the
+reviewed Agent Platform auth/create/poll protocol are self-contained under this package; do not restore
+legacy `PYTHONPATH` injection or `model.agent_platform.util_tools:run_workflow` imports. D12-A code/fake smoke does not
 complete PA-12; only D12-B internal smoke with `mocked=false` and persisted evidence does.
+
+PingAn internal handoff uses three separate artifacts: a clean-commit source archive, a protected
+private overlay, and an Apple Silicon offline backend toolchain bundle. The offline installer carries
+CPython 3.12.3, uv and the exact `backend/uv.lock --extra pingan-dev` cache; it writes only under
+`backend/.deer-flow/` and `backend/.venv/`, needs no sudo/public network, and must not modify the
+separate `sec_know_model` virtual environment. Resolve checkout-specific paths with
+`backend/scripts/soc_pingan_local_paths.py`; never commit a developer-specific `/Users/...` path.
+The transfer builder validates the ignored local env/config before writing an included private overlay:
+obsolete import keys, unresolved required values, fixed developer paths, or modes broader than `0600`
+must fail closed.
+The reviewed PingAn ownership workflows keep the old `message.by=WANGWENBIN520` inside the PingAn
+adapter; `SOC_PINGAN_WORKFLOW_OPERATOR` is obsolete and must be rejected from final private profiles.
+Before freezing the overlay, `scripts/soc_pingan_prepare_legacy_workflow_profile.py --apply` statically
+extracts the sole `YHSYS` PRD endpoint/credential from the reviewed legacy source into the ignored env.
+It must not import the legacy package, expose/hash the secret, or weaken the PRD/live confirmation gates.
+The SOC model sees the internal model service only through its loopback OpenAI-compatible
+`http://localhost:4001/v1/` boundary. Agent Platform DEV/STG/PRD selection is a separate explicit
+HTTP profile; PRD additionally requires the exact production confirmation guard.
+Validate that model boundary with `scripts/soc_pingan_litellm_smoke.py`: it sends one fixed prompt and
+stores only bounded metadata/hash, never model text or credentials. A successful model inventory call
+does not replace this chat-completion smoke. Initial backend installation uses the verified offline
+bundle; `samples/pingan_dev/uv-index.env.example` is an opt-in uv maintenance profile for the trusted
+intranet and must not be added as a tracked global index.
 
 Unavailable PingAn DEV integrations do not block unrelated product slices. Use an explicit fake/mock
 configuration to complete the frozen workflow, preserve `mocked=true` in every result/report, and keep
@@ -827,11 +860,17 @@ D-11 must aggregate non-exclusive evidence-quality row counts and assert that ro
 not directly degrade, nested warnings preserve outer recognition, high-value gaps fail closed, and
 encoded compaction does not emit the historical truncation review reason.
 
-Tenant-specific environment exemptions are post-detection operational policy. PingAn adapters may
-emit provenance-backed generic environment/context candidates, but they cannot emit `safe`,
-`skip_analysis`, a Runtime verdict or closure decision. Governed context resolution and a versioned
-tenant policy may later recommend `nonproduction_exempt`; generic Runtime code must not recognize
-PingAn aliases, hostname substrings or `stg == safe`, and initial rollout remains shadow-only.
+Tenant-specific environment handling is post-detection operational policy. PingAn adapters may emit
+provenance-backed generic environment/context candidates, but they cannot emit `safe`,
+`skip_analysis`, a Runtime verdict or closure decision. The implemented v1 contracts/evaluator live
+in `soc_agent.contracts.tenant_policy` and `soc_agent.tenant_policy`; orchestration is
+`SocTenantPolicyEvaluationService`, invoked through `SocAnalysisService` post-analysis observers only
+after the main transaction. Migration `0022_tenant_policy_decisions` persists immutable decisions.
+Generic code must not recognize PingAn aliases, CIDRs, hostname substrings or `stg == safe`; those
+values stay in an operator-owned policy pack. A hostname hint may produce only shadow manual/no-auto
+response guidance, never an exemption. Version resolution uses alert event time, and naive values
+require an explicit IANA timezone. Every decision has zero detection/ReviewQueue/action/memory impact;
+CLI replay/inspection is `soc tenant-policy evaluate|list|get`.
 
 Release-level local Alpha acceptance is orchestrated from the repository root by
 `scripts/soc-alpha-acceptance.sh`. `all` resets an isolated output directory, runs representative

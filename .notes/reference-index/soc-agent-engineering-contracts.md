@@ -732,6 +732,9 @@ Tenant disposition policy / 租户级处置策略约束：
   reviewed tenant mapping 或 fixture。
 - environment/context candidate 必须由 CMDB、authoritative source 或经治理的 tenant mapping 确认后才可参与
   policy。仅凭 hostname、自由文本或 LLM 识别出的 `stg` 只能保留为 hint，不能触发免处置。
+- v1 允许 hostname/environment hint 在独立 shadow policy 中触发
+  `manual_validation_required`/`no_automated_response` 建议，但 `recommended_disposition` 必须为空，且必须列出
+  authoritative environment 与 authorization 核验项；hint 仍不得生成 exempt/benign/false-positive 结论。
 - Base Runtime 不得因 tenant/environment policy 跳过 normalization、fact reconstruction、bounded analyzer、
   Grounding 或 `SocDecisionPolicy`。Tenant disposition reconciliation 发生在 detection decision 之后，并写入
   独立、可审计的 policy decision/proposal。
@@ -746,9 +749,24 @@ Tenant disposition policy / 租户级处置策略约束：
   `operational_disposition=nonproduction_exempt`；不得仅因环境免处置改成 `false_positive`。
 - non-production exemption 与 authorized activity 是不同 policy input。前者描述租户对已确认环境的运营规则；
   后者证明特定主体、目标、行为和时间范围内的活动获得授权，二者不得互相冒充。
+- 带 `authorization_statuses` 条件的 tenant rule 不得直接设置 `recommended_disposition`。授权处置必须继续
+  经过 persisted `AuthorizationEnrichmentRecord`、open ReviewQueue、current true-positive truth 和
+  `SocDispositionProposalService`；policy schema 应 fail closed 拒绝绕过该链的规则文件。
 - 初始实现必须 shadow/recommendation-only，`auto_close_allowed=false`。只有分 policy version 的 replay、
   analyst override、独立抽样复核、source freshness 和 rollback gate 达标并经授权批准后，才能单独开启自动
   关单；没有租户 policy 的客户继续进入通用 review 流程。
+- v1 实现固定为 `TenantDispositionPolicy` -> `TenantPolicyDecision`，由 `SocAnalysisService` 在主分析事务提交
+  后通过通用 `PostAnalysisObserver` 调用。结果写入 migration `0022` 的 append-only
+  `soc_tenant_policy_decisions`；observer 失败不得回滚主分析，幂等重试按 `run_id + policy id/version/hash`
+  去重。决策必须固定 `shadow_only=true`、`auto_apply_allowed=false`，并声明 detection/ReviewQueue/action/
+  memory impact 全为 `none`。
+- policy resolver 必须按 alert event time 选择有效版本。naive timestamp 只有在 operator 显式配置 IANA
+  timezone 后才可本地化，并在 decision 中标记 `alert_event_time_timezone_assumed`；不得按主机本地时区猜测。
+  带有效期的 policy 在 event time 缺失时 fail closed。每条 decision 必须保存 exact policy content hash、
+  policy time/source、selected rule 和逐条件 evidence path。
+- 通用 composition 仅认识 `SOC_TENANT_DISPOSITION_POLICY_PATH`、环境和时区；PingAn v1 是
+  `integrations/pingan/policies/tenant-disposition-v1.json` 的 tenant data。generic evaluator 中不得 import
+  PingAn module 或出现 PingAn 字段、网段、主机模式。
 
 Security exercise / 护网与红蓝对抗事实约束：
 
@@ -2150,12 +2168,13 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 
 - 输入来自 `LLMAnalysisRequest`、`AlertSummary`、confirmed facts 或 analyst-selected context，不读取松散 raw vendor payload。
 - 当前用 deterministic 规则选择 skill，例如 `source_type=edr/hids` -> `soc-endpoint-triage`，typed HTTP 或 `source_type=f5/waf` -> `soc-web-application-triage`，typed email -> `soc-email-phishing-triage`，明确方向冲突 -> `soc-asset-direction`。普通 `tentative/unresolved` 角色属于预期不确定性，不得让方向 Skill 对所有告警常驻。
+- 路由信号分级：source type 与 canonical typed evidence 是强信号；明确 domain 文本只是 fallback；`恶意`、`命令执行`、`文件读取/上传` 等跨域行为词只能强化已由来源或 typed evidence 建立的兼容路由，不能单独让已知 endpoint/network/web 来源跨域。typed cross-domain evidence 不得因该约束被裁掉。D6 v2 必须验证 `keyword_only_cross_domain_misroutes=[]`。
 - `ExtractedEntities.hosts` 只允许 `EntityKind.HOST`；业务资产、资产 ID 和资产组进入 `assets`。IP/domain/url 的存在本身不证明是 network session，文件元数据本身也不证明存在 endpoint 行为；优先根据 canonical typed observations 路由。
 - LLM 可以在白名单 skill 候选中 rerank 或建议补充 skill，但不能动态加载未知 skill 后直接影响决策。
 - 选中的 Skill 作为 bounded context 注入 prompt；必须记录 skill name、选择原因、命中特征、package hash、guidance source/hash、估算 token 数和预算。
 - Skill 只能产生指导、候选解释、候选查询或 action proposal；写 DB、写 memory、执行 tool 必须回到 service/policy 层。
 
-当前实现：`SocSkillContext.v2` 已接入 `LLMAnalysisRequest.skill_context`、`build_analysis_prompt()`、`JsonLLMAnalyzer.metadata`、`SocAgentChatService` 的 `soc.skill_context` stream event 和 TUI translate。Runtime 只注入 Skill package 内的 bounded runtime guidance 及其双 hash/token metadata；完整 `SKILL.md` 和场景 references 仍由 DeerFlow Lead Agent 按需动态读取。`validation/compact_zeus/checkpoint_d` 的 D5 单样本产物验证该边界，D6 对全语料做 typed route/package coverage，D7 只验证真实 Analyzer 的 `AnalysisResult.v2` 结构；D6/D7 都不是 Runtime 新节点，D7 通过也不能替代 D8 Grounding。
+当前实现：`SocSkillContext.v2` 已接入 `LLMAnalysisRequest.skill_context`、`build_analysis_prompt()`、`JsonLLMAnalyzer.metadata`、`SocAgentChatService` 的 `soc.skill_context` stream event 和 TUI translate。Runtime 只注入 Skill package 内的 bounded runtime guidance 及其双 hash/token metadata；完整 `SKILL.md` 和场景 references 仍由 DeerFlow Lead Agent 按需动态读取。`validation/compact_zeus/checkpoint_d` 的 D5 单样本产物验证该边界，D6 v2 对全语料做 typed route、keyword-only cross-domain 和 package coverage，D7 只验证真实 Analyzer 的 `AnalysisResult.v2` 结构；D6/D7 都不是 Runtime 新节点，D7 通过也不能替代 D8 Grounding。
 
 SOC Lead Agent profile 安装必须使用 DeerFlow per-user custom-agent storage。当前 `SocLeadAgentProfileInstaller` / `soc agent install-profile` 写入 `.deer-flow/users/{user_id}/agents/soc-triage/config.yaml` 和 `SOUL.md`，profile v2 还写入 operator-owned `middlewares`。默认不覆盖，只有显式 `--overwrite` 才更新；因此旧安装必须由 operator 明确覆盖后才同时获得 ReviewQueue context 与 approval middleware。legacy shared 同名 agent 存在时跳过，避免 shadow。不要为 SOC 自建第二套 agent profile storage。
 

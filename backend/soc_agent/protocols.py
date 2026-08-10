@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
+from datetime import datetime
 from typing import Any, Protocol
 
 from soc_agent.contracts import (
@@ -65,6 +66,8 @@ from soc_agent.contracts import (
     SocMutationOperation,
     SocOperationsKafkaSnapshot,
     SocPersistedOperationsMetrics,
+    TenantDispositionPolicy,
+    TenantPolicyDecision,
 )
 
 
@@ -126,6 +129,29 @@ class NormalizationMaintenanceMonitor(Protocol):
         *,
         context: ServiceRequestContext,
     ) -> NormalizationMonitoringResult: ...
+
+
+class PostAnalysisObserver(Protocol):
+    """Optional best-effort observer invoked only after analysis persistence."""
+
+    def observe(
+        self,
+        run: AnalysisRun,
+        *,
+        context: ServiceRequestContext,
+    ) -> None: ...
+
+
+class TenantDispositionPolicyResolver(Protocol):
+    """Resolve an operator-owned policy without importing tenant code."""
+
+    def resolve(
+        self,
+        *,
+        tenant_id: str | None,
+        environment: str,
+        evaluated_at: datetime | None = None,
+    ) -> TenantDispositionPolicy | None: ...
 
 
 class AlertRepository(Protocol):
@@ -342,6 +368,31 @@ class SocDispositionProposalRepository(Protocol):
         enrichment_id: str | None = None,
         limit: int = 50,
     ) -> list[SocDispositionProposalRecord]: ...
+
+
+class TenantPolicyDecisionRepository(Protocol):
+    """Append-only persistence boundary for shadow tenant policy decisions."""
+
+    def save_tenant_policy_decision(self, decision: TenantPolicyDecision) -> None: ...
+
+    def get_tenant_policy_decision(self, decision_id: str) -> TenantPolicyDecision | None: ...
+
+    def find_tenant_policy_decision_by_key(self, decision_key: str) -> TenantPolicyDecision | None: ...
+
+    def find_tenant_policy_decision_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> TenantPolicyDecision | None: ...
+
+    def list_tenant_policy_decisions(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        tenant_id: str | None = None,
+        policy_id: str | None = None,
+        limit: int = 100,
+    ) -> list[TenantPolicyDecision]: ...
 
 
 class SocDispositionEvaluationRepository(Protocol):

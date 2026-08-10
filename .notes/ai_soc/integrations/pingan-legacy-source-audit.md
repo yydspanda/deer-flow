@@ -55,15 +55,19 @@ It also emits the reviewed legacy headers (`App-Sign`, `App-Id`, `App-Timestamp`
 backend/soc_agent/integrations/pingan/zeus_signing.py:isec_sign
 ```
 
-It has no default App ID/App Key and is covered by a deterministic wire-contract test. `run_workflow` remains an injected internal dependency:
+It has no default App ID/App Key and is covered by a deterministic wire-contract test. The old `run_workflow` call was also audited down to its HTTP contract and is now implemented by:
 
 ```text
-model.agent_platform.util_tools:run_workflow
+backend/soc_agent/integrations/pingan/agent_workflow.py:HttpPingAnAgentWorkflowPort
 ```
 
-The workflow implementation and its dependencies must exist on the internal Mac. The generic action remains `asset.locate`; neither signer nor workflow module is imported by generic Runtime code.
+It authenticates at `/appid/auth/login`, creates an asynchronous workflow run,
+and polls the bounded result endpoint. The internal Mac no longer needs the old
+Agent Platform Python package, Redis token manager or injected `PYTHONPATH`.
+The generic action remains `asset.locate`; neither signer nor workflow client is
+imported by generic Runtime code.
 
-Reviewed call sites invoke `run_workflow(app_id, workflow_id, query_data)` synchronously and parse a final-node `dict`, JSON string, or `None`. IP/host fallback order is datacenter then terminal; domain uses datacenter and UM uses the user workflow. Internal smoke must still detect any installed-version drift.
+Reviewed call sites invoke `run_workflow(app_id, workflow_id, query_data)` synchronously and parse a final-node `dict`, JSON string, or `None`. The new client preserves that port contract while owning the HTTP transport. IP/host fallback order is datacenter then terminal; domain uses datacenter and UM uses the user workflow. Internal smoke must still detect wire-response drift.
 
 ## 4. ZEUS Alert Status / 告警状态
 
@@ -180,11 +184,14 @@ must never grant decision impact.
 Code/config ready outside intranet:
   - DeerFlow local model profile
   - self-contained ZEUS signer
+  - self-contained Agent Platform HTTP client
+  - macOS arm64 offline Python/uv/dependency bundle
   - D12-B no-network preflight
   - direct asset Provider smoke entry
+  - legacy YHSYS PRD profile preparer; secret output is forbidden
 
 Still requires internal DEV:
-  - Agent Platform run_workflow import and dependencies
+  - run the prepared YHSYS PRD profile and verify the reviewed wire contract
   - approved asset hit/not-found/fallback/error test values
   - direct ZEUS and MCP mocked=false evidence
   - persisted InvestigationEvidence and UI/TUI/Lead Agent readback
