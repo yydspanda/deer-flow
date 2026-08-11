@@ -5,6 +5,7 @@ from soc_agent.core.authorization_enrichment import (
     SocAuthorizationEnrichmentService,
 )
 from soc_agent.core.authorized_activity import SocAuthorizedActivityService
+from soc_agent.core.automation import SocAutomationError, SocAutomationService
 from soc_agent.core.correlation import (
     InMemoryAlertSummaryRepository,
     SocCorrelationService,
@@ -83,6 +84,8 @@ __all__ = [
     "SocAgentChatService",
     "SocAnalysisService",
     "SocAuthorizedActivityService",
+    "SocAutomationError",
+    "SocAutomationService",
     "SocAuthorizationEnrichmentService",
     "SocCorrelationService",
     "SocDaemonService",

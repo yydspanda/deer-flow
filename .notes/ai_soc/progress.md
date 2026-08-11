@@ -24,11 +24,11 @@
 | 项 | 状态 |
 |---|---|
 | 当前交付阶段 | `PI` Stage 4 - Product Gap Reconciliation + Real Data & Production Integration |
-| 当前目标 | 外网可实现的产品流已补齐，`PI-01G1..G3` 已复用 DeerFlow 原生 custom subagents 完成 capability-oriented SOC 专家委派；真实 Provider/infra/quality/telemetry/owner/rollback/cohort enforcement 继续作为独立 Real Integration Debt |
+| 当前目标 | 外网产品链已补齐 post-Runtime effective decision 与受治理动作自动化；真实 Provider/infra/quality/telemetry/owner/rollback/cohort enforcement 继续作为独立 Real Integration Debt |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v3`，以 `E-*` 原子事实、`R-*` 推理和受治理 `S/A/M/C/T-*` 上下文分离事实与解释 |
-| 当前下一刀 | 先人工审阅最终 `e2e-ten-current` 的 3 个模型质量 finding 与 20 个 `K-*` 知识候选，决定 reject / adapter backlog / tenant memory / governed context；随后恢复 PingAn 内网 RID-01..10 真实验收。任何 simulation 都不关闭 `mocked=false` gate。 |
+| 当前下一刀 | 在内网为真实抑制/封禁/隔离 adapter 和租户 policy 收集 owner review、rollback 与 fresh label evidence；此前保持默认关闭或 shadow。随后让人工 Approval Grant 与 automatic Authorization 收敛到同一个 external execution service。任何 simulation 都不关闭 `mocked=false` gate。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -41,6 +41,61 @@
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / External Product Complete + Real Debt Open** | 既有 simulation、PI-01F/F2 和 PI-01G 专家子智能体产品链已完成；7 个真实 gate 保持 open | 外网产品完整性缺口已关闭；fresh real evidence、具名 owner approval、cohort enforcement 和可执行 rollback 到位后才能进入 Pilot readiness review |
+
+## 2026-08-11 — Effective decision and governed response automation redesigned
+
+- 将 `AnalysisRun.decision` 固定为 immutable base decision，新增 post-Runtime
+  `SocAutomationService`，分别追加保存 effective decision、operational disposition、action authorization
+  和 external execution；模型、Skill、Memory 文本和 adapter result 均不能自己获得动作权限。
+- Memory review 可显式附加 `SocMemoryDecisionDirective(reinforce|override)`；只有 exact record version、
+  retrieval activation、record/activation validity、review due、minimum score 和 required facet match 全部
+  通过才影响 effective decision。原 run 不被覆盖，before/after、Memory ID/version/hash 和其他 contributor
+  全部留痕；互相冲突的 override 强制停止本轮 disposition/action rule selection。
+- Memory SQL retrieval 增加 `soc_memory_record_facets` 倒排索引和 migration backfill。候选先在完整 eligible
+  corpus 中按 exact facets 召回，再做 scoring/candidate/top-K budget；不再以最新 200 条作为相关性边界。
+- 自动动作不要求 Memory。受评审的 server-owned policy 可直接依据当前 effective decision、tenant/env、
+  validity、verdict、evidence state、model/prompt/Decision Policy version、confidence、scenario 和 exact
+  target/adapter 授权。自动规则必须显式匹配
+  `needs_review`；若在 `true` 时仍执行，必须另写 `review_required_override_reason`，且 ReviewQueue 保留。
+- replay run 固定拒绝 automatic external action，避免历史回放重复真实副作用。
+- `shadow` 只留痕，`enforced` 必须有 reviewer/time；真实调用还要求
+  `SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=true` 和程序注入的 exact registry。adapter 必须声明
+  write/destructive、execute support 与 idempotency。retryable failure 最多 3 次并复用同一 external key。
+- Migration `0023_governed_automation_and_memory_index` 新增 facet index、decision/disposition/
+  authorization/execution 五类表；CLI `soc automation lineage --run-id|--alert-id` 可回看完整因果链。
+- 当前人类 Approval 的 Alpha execute boundary 尚未与新 automatic path 的真实 external execution service
+  收敛；这是明确后续项，不能在此切片中冒充已完成。真实高风险 adapter、owner policy、rollback 和生产
+  quality gate 仍是 Real Integration Debt。
+- 十告警 E2E 已升级到 report/case v2，每条新增
+  `12-effective-decision-and-automation.json`，并提供 `compare_ten_alert_e2e.py` 分离 live LLM base
+  drift 与有 transition lineage 的 effective change。2026-08-11 fresh run 为 10/10 passed、10 unchanged
+  decision transitions、0 Memory contributor；validation-only policy 对 3 条 NDR case 产生 3 条无 Memory
+  automatic authorization 和 3 次 mocked/idempotent execution，真实外部调用 0。首次 timeout/empty
+  output 通过 `--resume` 只重试 2 条失败项；同输入旧/新比较显示 3 条 base verdict 重采样、Grounding
+  `+30`、rejected `-2`，未把这些变化错误归因给 Memory/automation。
+
+## 2026-08-11 — Confirmed memory lifecycle and fixed Runtime injection validated
+
+- 在基线 E2E SQLite 的隔离副本中，对告警 `1965802` 执行同 verdict 人工确认：原 run
+  `RUN-DFE8BC6ADD07` 保持 `suspicious`，ReviewQueue 关闭，并生成唯一
+  `pending_review` 候选 `MC-6290A4F13C0F`；告警审核本身没有直接写生效 Memory。
+- 独立 memory review 确认该候选后创建 `MEM-94B04755582D`，初始
+  `retrieval_enabled=false`；治理启用后版本为 `v4`，有效期、复核期限、actor、reason、expected-version
+  和 mutation audit 均已持久化，状态标签与 metadata 同步为 retrieval enabled。
+- 新增 `ConfirmedMemoryAnalysisRequestEnricher`：persisted Runtime 在 provider 调用前，基于 canonical
+  source/detection/category/entity/conflict/skill 构造 vendor-neutral query；不以 alert/run ID 评分，最多投影
+  5 条、900 token，并把命中记录放入 `M-*` context catalog。检索失败脱敏且不阻断基础分析。
+- 真实 `deepseek-v4-flash` replay `RUN-C00EA5ED8A72` 命中 `MEM-94B04755582D@v4`，生成
+  `M-EF77F4BACAC8`；模型 `R-01` 明确声明 `confirmed_memory` basis 并同时引用当前告警 `E-*`。
+  Grounding 为 15/15 evidence、6/6 reasoning、0 rejected；该 record 当时没有 typed directive，因此最终仍为
+  `suspicious/0.72`、`needs_review=true`。它只证明普通 Memory 上下文注入，不代表所有确认 Memory 都永远
+  不能影响 effective decision。
+- 修正同 verdict 人工确认候选的文案，不再表达为 “changed suspicious to suspicious”；修正 retrieval
+  enable/disable 后顶层字段、labels 和 metadata 的一致性。相关 Runtime/LLM/repository/memory 回归为
+  `85 passed`，Ruff 通过。
+- 验收产物位于 Git-ignored
+  `backend/.deer-flow/soc-validation/memory-review-1965802/`。本次同源 replay 只证明生命周期、检索和引用
+  机制，不是泛化准确率结论；质量收益必须再用未参与该 Memory 生成的 held-out 相似告警评估。
 
 ## 2026-08-10 — Ten complete-alert unified E2E validation passed with quality findings
 
@@ -1077,11 +1132,12 @@
 | 1.2 | Correlation quality baseline | Done | 已建 vendor-neutral same-incident / related-but-distinct / unrelated corpus；`soc eval correlation` 输出双任务指标、reason 分布、fan-out、evidence lineage/unrelated exposure，并支持 `--baseline-json` replay diff | scorer/report/fixture 版本显式；当前 8-pair baseline 暴露 retrieval/dedup precision 均约 0.667；`shadow_dedup_allowed=false` |
 | 1.3 | [Correlation label corpus expansion](../archive/ai_soc/deferred/correlation-label-corpus-expansion.md) | Deferred / `PI-03` data-dependent | 从脱敏真实告警准备 analyst-reviewed pairs，覆盖来源、时间窗口、跨规则同事件和同规则不同事件 cohort | 不以 8 条受控 pair 代表生产分布；标签来源/rationale/version 可审计；扩充后再比较 scorer v2，不直接切换生产规则；不阻塞当前 `PI-01` |
 | 2 | External Disposition Sync Contract | Done | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol、in-memory repository、PostgreSQL persistence、ReviewQueue context API/Web/TUI/Lead Agent visibility；已接 high-trust mapped review/correction 和 pending memory candidate | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
-| 3 | Memory Tracking Contract | Partial | DB-first candidate/review/retrieval governance 已完成；source bridge 已接 correction、domain finding、analyst feedback、review note、CLI/TUI/Web 显式采纳和 PI-03F3 Kafka/batch typed aggregate。Web queue-grounded context 与 governed prompt injection 仍后置 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；repeated observation 与 active memory 分离；wiki/OKF 只作为后期 projection |
+| 3 | Memory Tracking Contract | Done for DB/Runtime; Wiki projection deferred | DB-first candidate/review/retrieval governance、source bridges、full-corpus facet index、fixed Runtime `M-*` injection 和 typed effective-decision directive 已完成 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；每条告警不创建 memory；wiki/OKF 只作为后期 projection |
 | 3.1 | Memory candidate DB/API/ReviewQueue visibility | Done | 已新增 `soc_memory_candidates`、repository、CLI `soc memory list/get`、Gateway `/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded visibility | candidate 仍为 `pending_review` 且 `runtime_decision_allowed=false`；不注入 prompt，不影响 verdict |
-| 3.2 | Memory candidate review workflow / confirmed-memory boundary | Done | 已新增 `SocMemoryCandidateReviewCommand/Result`、`SocMemoryRecord`、`soc_memory_records`、`soc memory review`、`soc memory records list/get`、Gateway review/records API 和 ReviewQueue Web 操作入口 | confirm/reject/deprecate/expire 只能走 `SocMemoryService`；`confirm` 生成 `SocMemoryRecord(retrieval_enabled=false)`；不注入 prompt，不影响 verdict |
-| 3.3 | Confirmed memory retrieval policy / unified visibility MVP | Done | 已新增 `SocMemoryQuery`、`SocMemoryMatch`、`SocMemoryRetrievalResult`、`SocMemoryService.find_relevant_records()`、CLI `soc memory search`、Gateway `/api/soc/memory/search`、`InvestigationContext.relevant_memories` 和 Web/TUI/Lead Agent 可见化 | 只返回 `retrieval_enabled=true`、confirmed、未过期 record；返回 score/match reason/token estimate/hash/version；不注入 prompt，不影响 verdict |
+| 3.2 | Memory candidate review workflow / confirmed-memory boundary | Done | `SocMemoryService`/CLI/Gateway 支持 confirm/reject/deprecate/expire；confirm 可选择附加审核后的 `SocMemoryDecisionDirective` | 默认 record retrieval-disabled；自由文本无改判权限；typed directive 不能从文本推断，override 必须有 required facets |
+| 3.3 | Confirmed memory retrieval policy / unified visibility MVP | Done | `SocMemoryQuery`、full-corpus facet index、score/reason/budget、CLI/API/ReviewQueue/Web/TUI/Lead Agent 和 fixed Runtime `M-*` injection 已接通 | 只返回 governed active records；top-K 是投影预算而非最新-N扫描；普通 `M-*` 只作 reasoning context |
 | 3.4 | Governed confirmed-memory retrieval activation | Done | `SocMemoryRetrievalActivationCommand` 和 `SocMemoryService.set_retrieval_activation()` 统一 role/reason/expected-version/validity/review/audit 语义；CLI/API/Web/Boss Demo 均复用该入口，search 支持 baseline diff | 直接写布尔值、过期 activation、逾期 review 或无治理 metadata 的 record 均不能进入 bounded retrieval；事务失败不留下 record/audit 半写状态 |
+| 3.5 | Effective decision + governed response automation | Done for code/simulation; real gate open | `SocAutomationService`、strict policy、four lineage records/tables、CLI lineage、Memory directive、no-Memory automatic action、idempotent retry 已实现 | 默认关闭；shadow 不授权；Memory conflict 停止 rule selection；真实 adapter/owner/rollback/labels 未验收前不得启用生产 enforced execution |
 | 4 | Domain Sub-Agent Contract | Done for PA-10 | 已固定 `SocDomainTriageRequest`、`SocDomainTriageResult`、`SocDomainFinding` 结构 | EDR/APT/HIDS 已共用同一 schema；子研判不能直接改 decision 或写 DB |
 | 5 | Generic security scenario recognition | Partial | deterministic MVP 已完成：第一批场景包括反弹 shell、webshell、横向移动、命令/代码执行、恶意外联、提权、凭证滥用；未命中内部 taxonomy 但存在上游场景提示时输出 `vendor.unmapped` 候选 finding；已暴露 `SCENARIO_TAXONOMY_VERSION`/keys/snapshot；PingAn domain eval 和 vendor-neutral `soc eval scenarios` 都输出 covered/missing/unmapped 计数，`--baseline-json` 可生成 replay diff | 任何来源的告警都通过统一 `SocDomainTriageResult/Finding` 输出场景化 finding；Evidence Fusion First；未映射厂商场景不阻断研判、不改 verdict、不写 confirmed memory；eval 能作为 replay diff 基线；LLM 后续只能在 bounded context 中识别场景，不能直接改 verdict 或写 confirmed memory |
 | 6 | Main SOC Agent Orchestrator MVP | Done for Phase 2 bridge | 已串起 analyze、skill context、correlation、read-only action evidence、domain triage、review summary，输出 `UnifiedInvestigationReport` | APT/EDR/HIDS demo 能看到主控用了哪些 skill、历史 match/reasons/evidence、route、finding 和 review context |

@@ -2,7 +2,7 @@
 
 Status: Active review baseline
 
-Last updated: 2026-08-06
+Last updated: 2026-08-11
 
 Primary audience: product review, architecture review, engineering review, security review
 
@@ -28,7 +28,7 @@ Review should answer these questions first:
 | The agent is not a fragile prompt wrapper? / 是否避免 prompt-only agent | Sections 1, 4, 6, 10 |
 | Data contracts are stable? / 数据协议是否稳定 | Sections 8, 9 |
 | PingAn knowledge is reusable and not hard-coded? / 平安经验是否可迁移 | Section 11 |
-| Memory is useful but not polluting decisions? / 记忆是否可控 | Section 10 |
+| Memory can help decisions without becoming hidden authority? / 记忆如何受控改判 | Sections 7.2, 10 and `governance/decision-disposition-action-automation.md` |
 | Governed context is typed, scoped and auditable? / 运营事实是否强类型、有范围、时效和审计 | Section 7.4 |
 | Approval and side effects are safe? / 审批和副作用是否安全 | Sections 7, 12 |
 | The Alpha journey is reproducible and honestly scoped? / Alpha 是否可复跑且边界真实 | Section 13 and `.notes/ai_soc/alpha-acceptance-runbook.md` |
@@ -54,7 +54,7 @@ SOC Agent 是一个在 DeerFlow 上增量构建的安全运营智能体系统：
 - LLM handles bounded reasoning inside controlled nodes / LLM 只在受控节点内做研判。
 - Skills provide reusable investigation playbooks / Skill 承载可复用研判方法。
 - MCP or action adapters provide external capabilities / MCP 或 Action Adapter 承载外部系统能力。
-- Human approval gates high-risk actions / 高风险动作必须人工审批。
+- Governed authorization gates high-risk actions / 高风险动作必须经过独立授权；默认人工审批，已评审的服务端策略可在精确范围内自动授权。
 - Memory is candidate-first and review-gated / 记忆先进入候选，确认后才可检索使用。
 - Operational context uses typed governed facts, not memory or permanent whitelists / 授权活动、
   护网参与者、变更窗口等运营上下文使用强类型受治理事实，不是记忆，也不是永久白名单。
@@ -67,7 +67,7 @@ SOC Agent 是一个在 DeerFlow 上增量构建的安全运营智能体系统：
 flowchart LR
     A["🧭 Runtime<br/>固定主流程"] --> B["🧩 Deterministic Code<br/>解析、校验、状态、审计"]
     A --> C["🤖 LLM Node<br/>受控研判、结构化输出"]
-    A --> D["🛠️ Tool/MCP<br/>只读查询或审批后动作"]
+    A --> D["🛠️ Tool/MCP<br/>只读查询或授权后动作"]
     A --> E["👤 Human Review<br/>复核、纠正、确认记忆"]
 
     C -. "may suggest / 可建议" .-> A
@@ -77,7 +77,7 @@ flowchart LR
 ```
 
 LLM can recommend routes from a whitelist, but it cannot rewrite the pipeline, skip validation,
-write confirmed memory, or execute side-effect actions.
+write confirmed memory, grant action authority, or execute side-effect actions by itself.
 
 ---
 
@@ -98,6 +98,11 @@ write confirmed memory, or execute side-effect actions.
 | Skill 选择上下文 | Skill Context | `SocSkillContext.v2` | 当前选择清单、原因、命中特征、包内 bounded guidance、package/projection hash 与 token budget；不是完整 `SKILL.md` 正文 |
 | 分析运行 | Analysis Run | `AnalysisRun` | 一次 alert 分析的完整记录、trace、result |
 | 决策审计 | Decision Audit | `DecisionAuditRecord` | analyze/replay/correct 的判定沿革和证据策略摘要，不替代完整 run |
+| 基础研判 | Base Detection Decision | `AnalysisRun.decision` | 固定 Runtime 对当前告警形成的不可变基础判断 |
+| 有效研判 | Effective Detection Decision | `SocDecisionTransitionRecord.after` | 在基础判断上应用符合条件的受治理 typed Memory 指令后的当前有效判断 |
+| 决策迁移 | Decision Transition | `SocDecisionTransitionRecord` | 追加保存 before/after、Memory/证据/模型/策略 contributor 与 hash |
+| 动作授权 | Action Authorization | `SocActionAuthorizationRecord` | 独立判断精确 route/action/target/adapter 是否可执行；不等同于 verdict 或 Memory |
+| 动作执行 | Action Execution | `SocActionExecutionRecord` | 保存真实调用 attempt、幂等键、外部 request ID、前后状态和错误 |
 | 业务变更审计 | Mutation Audit | `SocMutationAuditRecord` | L3 服务命令的追加式审计；记录 actor、来源、原因、幂等和有界结果，不保存原始敏感 payload |
 | 预警摘要 | Alert Summary | `AlertSummary` | 轻量读模型，用于列表、关联、复核和 demo |
 | 复核队列 | Review Queue | `ReviewQueueItem` | 需要分析师看的工作项 |
@@ -121,7 +126,7 @@ write confirmed memory, or execute side-effect actions.
 | MCP 工具 | MCP Tool | MCP server tool | 外部系统能力的标准工具接口，例如 CMDB/EDR/TI |
 | 动作建议 | Action Proposal | `SocAgentActionProposal` | Agent 建议下一步查什么或做什么 |
 | 审批请求 | Approval Request | `SocAgentApprovalRequest` | 高风险动作进入统一审批 inbox |
-| 审批授权 | Approval Grant | `SocAgentApprovalGrant` | 一次性 execution token，不等于自动执行 |
+| 审批授权 | Approval Grant | `SocAgentApprovalGrant` | 人工授权模式的一次性 execution token；与自动策略授权是两种并列来源 |
 | 处置反馈 | External Disposition | `SocExternalDispositionEvent` | Zeus/老平台/工单系统同步回来的状态和理由 |
 | 候选记忆 | Memory Candidate | `SocMemoryCandidate` | 待复核的经验、事实、模式、反馈 |
 | 确认记忆 | Confirmed Memory | `SocMemoryRecord` | 人类确认后的可检索记忆，默认仍受 retrieval policy 约束 |
@@ -172,6 +177,7 @@ flowchart TB
         LEAD_CHAT["SocLeadAgentChatService<br/>DeerFlow stream"]
         DISPOSITION["SocExternalDispositionService"]
         APPROVAL["SocAgentApprovalService"]
+        AUTOMATION["SocAutomationService<br/>effective decision + authorization"]
     end
 
     subgraph Runtime["🧭 Runtime / 固定运行时"]
@@ -183,6 +189,7 @@ flowchart TB
         DB["PostgreSQL in staging/prod<br/>SQLite for local/internal DEV"]
         AUDIT_DB["Decision + Mutation Audit<br/>durable SQL"]
         MEMORY_DB["Memory Tables"]
+        AUTOMATION_DB["Decision / Disposition / Authorization / Execution Lineage"]
     end
 
     CLI --> ANALYSIS
@@ -200,6 +207,8 @@ flowchart TB
     DISPOSITION --> REVIEW
     REVIEW --> MEMORY
     ANALYSIS --> PIPELINE
+    ANALYSIS -. "post-Runtime observer" .-> AUTOMATION
+    MEMORY --> AUTOMATION
     PIPELINE --> TRACE
     TRACE --> DB
     REVIEW --> DB
@@ -207,6 +216,7 @@ flowchart TB
     APPROVAL --> AUDIT_DB
     REVIEW --> AUDIT_DB
     MEMORY --> AUDIT_DB
+    AUTOMATION --> AUTOMATION_DB
 ```
 
 Product conclusion:
@@ -235,19 +245,22 @@ flowchart TD
     F --> A1["🪪 7. Governed Context Enrichment<br/>campaign / participant / authorization"]
     A1 --> G["📚 8. Context Assembly<br/>similar alerts / evidence / memory / external feedback"]
     G --> D1["⚖️ 9. Disposition Reconciliation<br/>detection truth != operational disposition"]
-    D1 --> H{"👤 10. Review Routing<br/>new / partial / conflict / expired?"}
+    D1 --> H{"⚙️ 10. Effective Decision + Routing<br/>Memory directive optional"}
     H -->|"yes"| H1["Review Queue<br/>conclusion + gaps + checklist"]
     H -->|"exact governed match"| H2["Shadow / policy-gated disposition<br/>closed_benign_true_positive candidate"]
     H1 --> I{"✅ Analyst action<br/>复核动作"}
     H2 --> I
     I -->|"correct / close / note"| J["📝 11. Audit + State Update<br/>status / reason / trace"]
-    I -->|"high-risk action"| K["🛂 Approval Inbox<br/>request -> grant -> dry-run/execute boundary"]
+    H -->|"reviewed automatic policy"| K0["🔐 Automatic Authorization<br/>Memory not required"]
+    I -->|"human-approval policy"| K["🛂 Approval Inbox<br/>request -> grant -> action boundary"]
     J --> L["🧬 12. Memory Candidate<br/>pending_review only"]
     K --> J
+    K0 --> K1["⚡ Exact Action Adapter<br/>idempotent execution"]
+    K1 --> J
     L --> M{"👤 Memory Review<br/>人工确认"}
     M -->|"confirm"| N["📖 Confirmed Memory<br/>default retrieval-disabled"]
     N --> P["🛡️ Governed Activation<br/>role + reason + version + validity + review"]
-    P -->|"eligible"| Q["🔎 Bounded Retrieval<br/>context only"]
+    P -->|"eligible"| Q["🔎 Bounded Retrieval<br/>M-* context + optional typed directive"]
     M -->|"reject / expire"| O["🗃️ Archive / no runtime effect"]
 ```
 
@@ -264,7 +277,12 @@ Important behavior:
 - Only a complete governed-context chain that matches event time, tenant/environment, participant,
   subject, target and behavior scope may reduce repetitive review. Identity attribution alone is not
   authorization. Partial, expired, conflicting or new patterns still go to humans.
-- High-risk actions go to approval inbox. Approval grant is still not automatic execution.
+- High-risk actions never execute merely because the model proposed them. Each exact action must receive
+  either a human Approval Grant or a reviewed, versioned `SocAutomationPolicy` authorization. Automatic
+  policy does not require a Memory match; a typed Memory directive may change the effective decision but
+  never grants action authority.
+- Policy is default-off. Shadow mode only records lineage. Enforced execution additionally requires an
+  explicit execution flag and an injected, reviewed, exact-match idempotent adapter registry.
 
 ---
 
@@ -287,6 +305,7 @@ Important behavior:
 | `SocAnalysisService` | Analyze alert, replay run, update summary | Runtime determinism, trace, validation |
 | `SocReviewService` | Review queue, correction, notes, investigation context | State transition, audit, memory candidate bridge |
 | `SocMemoryService` | Candidate review, governed retrieval activation, confirmed memory retrieval | Human confirmation, optimistic concurrency, validity/review and audit boundary |
+| `SocAutomationService` | Reconcile base/effective decision, disposition, action authorization and execution after Runtime | Default-off policy, Memory directive gates, exact adapter, before/after lineage, idempotency |
 | `SocDaemonService` | Background ingestion orchestration | Idempotency, backoff, worker result |
 | `SocAgentChatService` | Deterministic SOC chat/event shell | Bounded context and proposal parsing; not the DeerFlow Lead Agent stream |
 | `SocLeadAgentChatService` | DeerFlow `soc-triage` Lead Agent streaming entry | Reuse DeerFlow profile/skills/MCP, bounded review artifact and proposal boundary |
@@ -310,11 +329,12 @@ flowchart TD
     X --> F["3. fact_reconstruct<br/>RoleClaim + Scenario + Resolution"]
     F --> B["4. build_analysis_input<br/>bounded evidence + coverage"]
     B --> S["5. skill_context<br/>allowlisted Skill-package guidance"]
-    S --> J["📝 Pre-provider Journal<br/>running + bounded metadata"]
-    J --> L["6. analyze_stub / analyze_llm<br/>DeerFlow model in explicit mode"]
-    L --> V["7. schema_validate<br/>JSON + Pydantic + domain"]
-    V --> G["8. evidence_grounding<br/>claim value -> bounded context path"]
-    G --> R["9. SocDecisionPolicy<br/>detection decision guards"]
+    S --> C["6. reference_catalog<br/>governed Memory retrieval + E/S/A/M/C/T freeze"]
+    C --> J["📝 Pre-provider Journal<br/>running + bounded metadata"]
+    J --> L["7. analyze_stub / analyze_llm<br/>DeerFlow model in explicit mode"]
+    L --> V["8. schema_validate<br/>JSON + Pydantic + domain"]
+    V --> G["9. evidence_grounding<br/>claim value -> bounded context path"]
+    G --> R["10. SocDecisionPolicy<br/>immutable base decision guards"]
     R --> P["🔒 Atomic analysis bundle<br/>run + summary + review + audit"]
     L -->|failure| E["⚠️ RuntimeFailure<br/>typed + sanitized + retryable"]
     E --> P
@@ -323,11 +343,13 @@ flowchart TD
 ```
 
 `SocCorrelationService`, `SocDomainTriageService`, investigation actions, governed-context matching,
-memory retrieval, and the DeerFlow SOC Lead Agent are **not hidden nodes inside this base
-Runtime**. They consume the persisted run through explicit orchestration/review services. The base
-Runtime produces the detection assessment; a later deterministic disposition reconciliation may
-combine it with governed authorization facts without rewriting the immutable original run. This
-keeps one-alert execution replayable while allowing richer investigation workflows to evolve
+and the DeerFlow SOC Lead Agent are **not hidden autonomous nodes inside this base Runtime**. Confirmed
+Memory retrieval is the narrow exception: an explicit `AnalysisRequestEnricher` queries
+`SocMemoryService` during `reference_catalog`, before provider journaling, and freezes bounded `M-*`
+context. It does not mutate the base Decision. `SocAutomationService` then runs as a default-off
+post-analysis observer, preserving that immutable base result while appending effective-decision,
+disposition, authorization and execution lineage. This keeps one-alert execution replayable while
+allowing richer investigation workflows to evolve.
 independently.
 
 The primary analysis bundle has its own `AnalysisPersistence` transaction. L3 service commands use
@@ -1022,43 +1044,59 @@ It should show:
 - Read-only investigation evidence.
 - Human checklist and suggested next steps.
 
-### 7.2 Approval Boundary / 审批边界
+### 7.2 Decision, Authorization, and Execution / 决策、授权与执行边界
 
-High-risk actions must follow this path:
+High-risk actions have two governed authorization modes. Neither mode gives the model authority:
 
 ```mermaid
-sequenceDiagram
-    participant Agent as 🤖 SOC Agent
-    participant Approval as 🛂 Approval Service
-    participant Inbox as 📬 Approval Inbox
-    participant Human as 👤 Approver
-    participant Adapter as 🛠️ Action Adapter
-    participant Audit as 🧾 Audit
-
-    Agent->>Approval: submit SocAgentApprovalRequest
-    Approval->>Inbox: persist pending request
-    Human->>Approval: approve/reject/expire by request ID
-    Approval->>Inbox: atomic pending -> terminal transition
-    Approval->>Approval: approved only: create one-time grant in same transaction
-    Human->>Approval: dry-run / execute boundary
-    Approval->>Adapter: preflight allowed adapter/payload/context
-    Adapter-->>Approval: dry-run result or execution boundary result
-    Approval->>Audit: commit durable mutation audit
+flowchart TD
+    R["⚙️ Runtime Base Decision<br/>immutable"] --> E["🔁 Effective Decision<br/>typed Memory directive optional"]
+    M["✅ Confirmed Memory"] -. "free text: context only<br/>typed directive: scoped transition" .-> E
+    E --> P{"🛡️ SocAutomationPolicy<br/>exact tenant/env/version/rule"}
+    P -->|"human_approval"| A["📬 Approval Inbox"]
+    A --> H["🧑‍💻 Approver"]
+    H --> G["🎟️ One-time Grant"]
+    P -->|"automatic_policy"| U["🔐 Machine Authorization"]
+    G --> X["🧰 Exact Adapter Preflight"]
+    U --> X
+    X --> Y["⚡ External Execution"]
+    Y --> Z["🗃️ Attempt + idempotency<br/>external before/after state"]
 ```
 
-Current safety posture:
+Current contract:
 
-- Read-only investigation actions can produce `InvestigationEvidence`.
-- High-risk actions create approval requests.
-- Web/Gateway `soc-triage` output enters the approval boundary through the operator-owned per-agent
-  middleware; the embedded SOC TUI uses its existing outer service bridge. Both share the same
-  parser, policy and approval service rather than duplicating approval semantics.
-- The model cannot choose proposal/request/decision IDs, actor identity or context lineage. Server
-  IDs are deterministic across graph replay, and one model message is capped at five proposals.
-- Request lifecycle is `pending -> approved/rejected/expired`; approve loads the persisted request by ID and one request can create at most one grant.
-- Exact resolution retries are idempotent; stale, forged, or semantically changed retries are rejected.
-- Execute boundary exists, but real production side effects must wait for real adapter review.
-- Approval grant is single-use. Request/grant/result changes and their secret-safe mutation audit commit in one command transaction through migration `0018_mutation_audit`.
+- Read-only investigation actions continue to produce `InvestigationEvidence`; they are not this
+  response-automation authority.
+- `AnalysisRun.decision` remains immutable. Optional reviewed `SocMemoryDecisionDirective` produces an
+  append-only effective-decision transition after exact version/content/facets identity validation;
+  ordinary Memory text cannot do so, and no Memory directly
+  authorizes an action.
+- A current alert can receive automatic action authorization without any Memory. The authority is the
+  reviewed server-owned policy plus the exact effective decision, target and adapter identity.
+- Automatic action rules must explicitly match verdict, evidence state, model name, Prompt version,
+  Decision Policy version, minimum confidence and `needs_review`. Normal rules match
+  `needs_review=false`. Matching `needs_review=true` is allowed only
+  with a separate `review_required_override_reason`; it leaves ReviewQueue open and does not pretend
+  that a human reviewed the alert.
+- The model cannot choose transition/authorization/execution IDs, actor identity, policy version,
+  adapter binding or context lineage. Lead Agent proposals still enter the human Approval path unless
+  a separate reviewed automation rule independently matches the persisted run.
+- Policy is absent by default. `shadow` records proposed lineage but cannot authorize. `enforced`
+  additionally requires reviewer/time/validity; actual execution also requires
+  `SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=true` and an injected exact registry.
+- Automatic execution uses one stable external idempotency key across bounded retries. It records
+  success, retryable/terminal failure, skipped expiry, external request ID and external before/after
+  state in append-only SQL rows.
+- Replay may recompute and compare policy lineage, but it can never receive automatic external-action
+  authorization; historical replay must not repeat a side effect.
+- Existing human request lifecycle remains `pending -> approved|rejected|expired`, with at most one
+  one-time grant. The current Alpha `SocAgentApprovalService.execute_approved_action()` validates and
+  consumes the boundary but must not yet be described as a completed real external side effect. A
+  later convergence slice must route both Grant and automatic Authorization through one external
+  execution service.
+
+The exact contracts, configuration and current limitations are maintained in
+`governance/decision-disposition-action-automation.md`.
 
 ### 7.3 External Disposition Sync / 外部处置反馈同步
 
@@ -1421,7 +1459,13 @@ not require rewriting core contracts.
 | `SocAgentApprovalGrant` | One-time approval grant | Stable |
 | `SocExternalDispositionEvent` | External status/reason update | Stable |
 | `SocMemoryCandidate` | Pending memory proposal | Stable |
-| `SocMemoryRecord` | Confirmed memory | Stable retrieval policy |
+| `SocMemoryRecord` | Confirmed memory plus optional reviewer-authored typed directive | Stable retrieval policy; free text has no deterministic authority |
+| `SocMemoryDecisionDirective` | Explicit reviewed reinforce/override effect for a sufficiently matched active Memory | Stable v1; never inferred from text and never authorizes action |
+| `SocAutomationPolicy` | Server-owned tenant/environment response policy | Strict v1; default-off, shadow/enforced, reviewed validity and exact rules |
+| `SocDecisionTransitionRecord` | Immutable base/effective decision before/after lineage | Implemented v1 + migration `0023` |
+| `SocDispositionTransitionRecord` | Append-only operational disposition transition | Implemented v1 + migration `0023` |
+| `SocActionAuthorizationRecord` | Human or automatic authorization for one exact action target | Implemented v1 + migration `0023`; Memory optional |
+| `SocActionExecutionRecord` | External attempt, idempotency, result and before/after state | Implemented v1 + migration `0023` |
 
 Contract rules:
 
@@ -1453,6 +1497,11 @@ Main persistence categories:
 | Context match audit | Authorization/attribution/applicability result | Replayable against event time and policy version |
 | Memory candidates | Pending learning | Human review required |
 | Confirmed memory | Reviewed experience | Confirm creates it disabled; a versioned, audited activation policy with validity and review gates controls retrieval |
+| Memory facet index | Relevance-first candidate retrieval | Exact-facet and text lanes search the complete eligible corpus, merge scoped fallback, then share one scorer before candidate/top-K limits |
+| Decision transitions | Base/effective detection lineage | Immutable before/after plus evidence/model/Skill/Memory/policy contributors |
+| Disposition transitions | Operational handling lineage | Proposed in shadow or applied in enforced policy mode |
+| Action authorizations | Independent execution authority | Human or automatic mode; exact policy/rule/target/adapter, Memory not required |
+| Action executions | External side-effect attempts | Stable idempotency key, bounded retry, external request and before/after state |
 | Decision audit | Verdict lineage | analyze/replay/correct/external decision metadata and policy provenance |
 | Mutation audit | L3 command lineage | Append-only actor/auth source/reason/idempotency/command hash/bounded result; no raw payload or secrets |
 | Process events | Local signaling | Buffered until SQL commit; generic durable event streaming remains a later capability |
@@ -1503,7 +1552,10 @@ flowchart TD
     G -->|"enable: reason + expected version<br/>valid-until + review period"| P["✅ Governed activation<br/>CAS + mutation audit"]
     G -->|"disable"| NO["🚫 retrieval disabled"]
     P --> RP{"🔎 Retrieval policy<br/>confirmed + current activation<br/>review current + budget + match"}
-    RP -->|"eligible"| CTX["📚 InvestigationContext.relevant_memories"]
+    RP -->|"eligible"| CTX["📚 M-* / Investigation Context<br/>free text = reasoning only"]
+    CTX --> TD{"📎 Reviewed typed directive<br/>exact version + score + facets?"}
+    TD -->|"yes"| TR["🔁 Effective Decision Transition<br/>before / after"]
+    TD -->|"no"| RO["🧠 Reasoning context only"]
     RP -->|"direct flag / expired / overdue / weak"| NO
 ```
 
@@ -1551,6 +1603,13 @@ Rules:
   metadata, as well as expired activation or overdue review. `soc memory search --baseline-json` exposes
   deterministic before/after match changes for governance review.
 - Confirmed memory retrieval is budgeted and reasoned; it is not dumped blindly into prompts.
+- Candidate selection is relevance-first across the full eligible corpus through the normalized facet
+  index; top-K is a final model-context budget, not a latest-200 database scan.
+- Free-form Memory remains reasoning context. A deterministic effective-decision change requires a
+  reviewer-authored `SocMemoryDecisionDirective` and exact version/activation/validity/review/score/facet
+  gates. The transition is appended; the original Runtime decision is not rewritten.
+- Memory never grants action authority. A separate reviewed `SocAutomationPolicy` can authorize the
+  current alert with or without Memory, and always records independent authorization/execution lineage.
 - Active operational facts are not confirmed memory. Memory may describe how a scanner or exercise
   team tends to behave, but only governed-context services and typed matchers can determine identity,
   campaign applicability and authorization for a specific event time.
@@ -1804,7 +1863,7 @@ mutating the original run.
 | L1 | Read external data | Allowed through read-only adapter/MCP with audit |
 | L2 | Generate recommendation | Allowed, must be labeled recommendation |
 | L3 | Change internal SOC state | Requires trusted `auth_source`, command-specific role and service method |
-| L4 | Execute external side effect | Approval required, adapter reviewed |
+| L4 | Execute external side effect | Independent governed authorization required: human Grant or reviewed enforced automation policy; exact adapter/idempotency/audit mandatory |
 | L5 | Destructive or attack simulation | Explicit scope, approval, audit, later phase only |
 
 Security invariants:
@@ -1848,6 +1907,9 @@ soc memory records retrieval <memory-id> --action enable --expected-version 1 \
   --reason "approved reusable lesson" --valid-until 2026-10-01T00:00:00+08:00 \
   --review-after-days 30 --idempotency-key memory-enable-001
 soc memory search --term "reverse shell" --term "internal host" --baseline-json previous-search.json
+
+# Inspect base/effective decision, disposition, authorization and execution lineage
+soc automation lineage --run-id <run-id> --database-url "$SOC_DATABASE_URL" --pretty
 
 # Chat through DeerFlow-aligned SOC Lead Agent
 soc chat tui --queue-id <queue-id> --lead-agent
@@ -1927,7 +1989,8 @@ Acceptance criteria for the first complete demo:
 - Read-only action/MCP result becomes `InvestigationEvidence`.
 - Analyst note/correction can create pending memory candidate.
 - External disposition can sync status/reason into review context.
-- No high-risk action is executed without approval boundary.
+- No high-risk action is executed from model/Memory text alone. Every execution has a human Grant or
+  reviewed automatic-policy authorization plus exact adapter and append-only execution lineage.
 
 Delivery stages / 交付阶段：
 

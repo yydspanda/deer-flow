@@ -89,6 +89,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateReviewResult,
     SocMemoryCandidateStatus,
+    SocMemoryDecisionImpact,
     SocMemoryMatch,
     SocMemoryQuery,
     SocMemoryRecord,
@@ -104,12 +105,14 @@ from soc_agent.contracts import (
 )
 from soc_agent.core.runtime import analyze_alert, build_analysis_request_for_payload, inspect_alert_normalization
 from soc_agent.memory import MemoryPatternIneligibleError, SocMemoryCandidateSourceBridge
+from soc_agent.memory.scoring import score_memory_record
 from soc_agent.normalizers import load_mapping_config, normalize_alert_payload
 from soc_agent.protocols import (
     AlertRepository,
     AlertSummaryRepository,
     AnalysisBeforeProviderHook,
     AnalysisPersistence,
+    AnalysisRequestEnricher,
     AnalysisRuntime,
     AuthorizationEnrichmentRepository,
     DecisionAuditRepository,
@@ -167,10 +170,12 @@ class DeterministicAnalysisRuntime:
         *,
         analyzer: LLMAnalyzer | None = None,
         decision_policy: DecisionPolicy | None = None,
+        analysis_request_enricher: AnalysisRequestEnricher | None = None,
         sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
     ) -> None:
         self._analyzer = analyzer
         self._decision_policy = decision_policy
+        self._analysis_request_enricher = analysis_request_enricher
         self._sensitive_evidence_mode = sensitive_evidence_mode
 
     def analyze(self, payload: Mapping[str, Any]) -> AnalysisRun:
@@ -178,6 +183,7 @@ class DeterministicAnalysisRuntime:
             payload,
             analyzer=self._analyzer,
             decision_policy=self._decision_policy,
+            analysis_request_enricher=self._analysis_request_enricher,
             sensitive_evidence_mode=self._sensitive_evidence_mode,
         )
 
@@ -192,6 +198,7 @@ class DeterministicAnalysisRuntime:
             analyzer=self._analyzer,
             decision_policy=self._decision_policy,
             before_provider=before_provider,
+            analysis_request_enricher=self._analysis_request_enricher,
             sensitive_evidence_mode=self._sensitive_evidence_mode,
         )
 
@@ -1448,6 +1455,7 @@ class SocMemoryService:
             )
         elif command.decision is SocMemoryCandidateReviewDecision.CONFIRM:
             _validate_memory_candidate_transition(candidate.status, command.decision)
+            _validate_memory_decision_directive(candidate, command)
             if self._record_repository is None:
                 raise SocServiceNotImplementedError("confirming a memory candidate requires a MemoryRecordRepository")
             candidate = self._transition_candidate(
@@ -1747,7 +1755,12 @@ class SocMemoryService:
                 "retrieval_updated_at": now,
                 "retrieval_reason": command.reason,
                 "updated_at": now,
-                "metadata": {**record.metadata, **command.metadata},
+                "labels": _retrieval_activation_labels(record.labels, enabled=retrieval_enabled),
+                "metadata": {
+                    **record.metadata,
+                    **command.metadata,
+                    "retrieval_enabled": retrieval_enabled,
+                },
             }
         )
         if not self._record_repository.compare_and_set_memory_record(
@@ -1814,25 +1827,33 @@ class SocMemoryService:
         if self._record_repository is None:
             raise SocServiceNotImplementedError("find_relevant_records requires a MemoryRecordRepository")
 
-        candidate_records: list[SocMemoryRecord] = []
-        for status in query.statuses:
-            candidate_records.extend(
-                self._record_repository.list_memory_records(
-                    status=status,
+        find_candidates = getattr(
+            self._record_repository,
+            "find_memory_candidate_records",
+            None,
+        )
+        if callable(find_candidates):
+            candidate_records = find_candidates(query)
+        else:
+            candidate_records = []
+            for status in query.statuses:
+                candidate_records.extend(
+                    self._record_repository.list_memory_records(
+                        status=status,
+                        tenant_scope=query.tenant_scope,
+                        tenant_id=query.tenant_id,
+                        retrieval_enabled=None,
+                        limit=query.candidate_limit,
+                    )
+                )
+            if not query.statuses:
+                candidate_records = self._record_repository.list_memory_records(
+                    status=None,
                     tenant_scope=query.tenant_scope,
                     tenant_id=query.tenant_id,
                     retrieval_enabled=None,
                     limit=query.candidate_limit,
                 )
-            )
-        if not query.statuses:
-            candidate_records = self._record_repository.list_memory_records(
-                status=None,
-                tenant_scope=query.tenant_scope,
-                tenant_id=query.tenant_id,
-                retrieval_enabled=None,
-                limit=query.candidate_limit,
-            )
 
         deduped_records: dict[str, SocMemoryRecord] = {}
         for record in candidate_records:
@@ -1884,7 +1905,7 @@ class SocMemoryService:
                 skipped_expired += 1
                 continue
 
-            score, match_reasons, matched_facets = _score_memory_record(record, query)
+            score, match_reasons, matched_facets = score_memory_record(record, query)
             if score < query.min_score:
                 skipped_below_min_score += 1
                 continue
@@ -1957,7 +1978,8 @@ def _memory_record_from_candidate(
         evidence_refs=candidate.evidence_refs,
         validity=candidate.validity,
         confidence=candidate.confidence,
-        decision_impact=candidate.decision_impact,
+        decision_impact=(SocMemoryDecisionImpact.DETECTION_DECISION if command.decision_directive is not None else candidate.decision_impact),
+        decision_directive=command.decision_directive,
         content_hash=f"sha256:{_stable_sha256(content)}",
         facets_hash=f"sha256:{facets_hash}",
         created_by=actor,
@@ -1971,6 +1993,26 @@ def _memory_record_from_candidate(
             "retrieval_enabled": False,
         },
     )
+
+
+def _validate_memory_decision_directive(
+    candidate: SocMemoryCandidate,
+    command: SocMemoryCandidateReviewCommand,
+) -> None:
+    directive = command.decision_directive
+    if directive is None:
+        return
+    candidate_keys = {str(key).strip() for key, values in candidate.facets.items() if str(key).strip() and any(str(value).strip() for value in values)}
+    missing = sorted(set(directive.required_facet_keys) - candidate_keys)
+    if missing:
+        raise SocServiceError("memory decision directive requires missing candidate facets: " + ", ".join(missing))
+
+
+def _retrieval_activation_labels(labels: list[str], *, enabled: bool) -> list[str]:
+    state_label = "retrieval-enabled" if enabled else "retrieval-disabled"
+    result = set(labels) - {"retrieval-enabled", "retrieval-disabled"}
+    result.add(state_label)
+    return sorted(result)
 
 
 def _memory_query_from_investigation_context(context: InvestigationContext) -> SocMemoryQuery:
@@ -2062,69 +2104,6 @@ def _memory_text_terms(text: str | None) -> list[str]:
         if len(terms) >= 12:
             break
     return terms
-
-
-def _score_memory_record(record: SocMemoryRecord, query: SocMemoryQuery) -> tuple[float, list[str], dict[str, list[str]]]:
-    score = float(record.confidence)
-    match_reasons: list[str] = []
-    matched_facets: dict[str, list[str]] = {}
-
-    if query.memory_types and record.memory_type in query.memory_types:
-        score += 2.0
-        match_reasons.append(f"memory_type:{record.memory_type.value}")
-
-    record_facets = _normalized_memory_facets(record.facets)
-    query_facets = _normalized_memory_facets(query.facets)
-    for key, query_values in query_facets.items():
-        record_values = record_facets.get(key, set())
-        overlap = sorted(query_values & record_values)
-        if not overlap:
-            continue
-        weight = _memory_facet_weight(key)
-        score += weight * len(overlap)
-        matched_facets[key] = overlap
-        match_reasons.append(f"facet:{key}={','.join(overlap[:3])}")
-
-    haystack = f"{record.summary}\n{record.content}".lower()
-    for term in query.text_terms:
-        normalized_term = term.lower()
-        if normalized_term and normalized_term in haystack:
-            score += 1.25
-            match_reasons.append(f"text:{term[:40]}")
-
-    evidence_overlap = sorted(set(record.evidence_refs) & set(query.evidence_refs))
-    if evidence_overlap:
-        score += 3.0 * len(evidence_overlap)
-        match_reasons.append(f"evidence:{','.join(evidence_overlap[:3])}")
-
-    if not match_reasons and not query.facets and not query.text_terms and not query.evidence_refs:
-        match_reasons.append("broad:policy_allowed")
-
-    return round(score, 3), match_reasons, matched_facets
-
-
-def _normalized_memory_facets(facets: dict[str, list[str]]) -> dict[str, set[str]]:
-    normalized: dict[str, set[str]] = {}
-    for key, values in facets.items():
-        normalized_key = str(key).strip()
-        if not normalized_key:
-            continue
-        normalized_values = {str(value).strip().lower() for value in values if str(value).strip()}
-        if normalized_values:
-            normalized[normalized_key] = normalized_values
-    return normalized
-
-
-def _memory_facet_weight(key: str) -> float:
-    if key in {"detection_key", "rule_code", "canonical_detection", "vendor_alias"}:
-        return 4.0
-    if key in {"topic", "skill", "skill_reason", "category", "candidate_type"}:
-        return 2.5
-    if key in {"entity", "asset", "host", "user", "ip"}:
-        return 2.0
-    if key in {"source_type", "source_system", "severity", "conflict_type", "action"}:
-        return 1.5
-    return 1.0
 
 
 def _estimate_memory_tokens(record: SocMemoryRecord) -> int:

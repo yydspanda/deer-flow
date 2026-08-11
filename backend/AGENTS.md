@@ -108,6 +108,25 @@ make format             # Format code with ruff
 make migrate-rev MSG="..."  # Autogenerate a new alembic revision (see Schema Migrations section)
 ```
 
+SOC test scope must follow the blast radius instead of expanding every edit into the
+entire `test_soc_*.py` corpus:
+
+- **Focused (default while developing):** run the tests for the changed service,
+  contract, repository, adapter, or validation builder. Include the SOC architecture
+  boundary test when imports or ownership boundaries change.
+- **Component:** run the related Runtime, persistence, Gateway, daemon, Memory, or
+  integration group when a shared contract crosses modules.
+- **Full SOC regression:** run all `tests/test_soc_*.py` plus
+  `tests/architecture/test_soc_agent_boundaries.py` only for a SOC milestone, release
+  gate, broad migration, or an explicit request. It is a large mixed suite, not the
+  per-edit feedback loop.
+- Live-model, broker, browser, PingAn-internal, and generated-corpus validations remain
+  explicit acceptance commands. A unit-test pass cannot substitute for them, and they
+  must not run implicitly from a focused test command.
+
+Record the exact focused/component command in the change summary. If a full regression
+is not run, say so directly; do not imply that focused coverage is the complete suite.
+
 The root `detect-thread-boundaries` target statically inventories execution
 boundaries under `backend/app/` and `backend/packages/harness/deerflow/`. It
 prints a concise count by execution domain and writes the complete, versioned
@@ -665,6 +684,20 @@ both `E-*` and `R-*`. `soc-analysis-v12` and `soc-analysis-json-parser-v10` reje
 ambiguous references. Parser repair is limited to auditable, semantics-free normalization of an
 already unique catalog relation; it must never invent an event fact or security conclusion.
 
+Persisted SOC Runtime composition injects `ConfirmedMemoryAnalysisRequestEnricher` after Skill
+resolution and before reference-catalog finalization/provider journaling. It builds a vendor-neutral
+query from canonical request dimensions and uses `SocMemoryService.find_relevant_records()`; only
+confirmed, explicitly retrieval-enabled, in-validity and review-current records may become bounded
+`M-*` context. Alert/run IDs are audit metadata, not matching facets. SQL candidate selection runs
+independent normalized exact-facet and text lanes across the complete eligible corpus, merges the
+scoped fallback, and only then applies shared scoring and budgets; do not restore latest-N-only
+retrieval. Retrieval failure is sanitized and non-blocking. An `M-*` item is
+reasoning context, never current-alert `E-*` evidence. Free-form Memory is neither a deterministic
+verdict nor action authority. A confirmed record may carry a human-reviewed
+`SocMemoryDecisionDirective`; only exact-version/content/facets-hash, activation-current, validity-current,
+review-current, minimum-score, required-facet matches may apply it to the post-Runtime effective
+decision. Conflicting overrides require review, and no directive directly authorizes an action.
+
 Evidence grounding uses `soc.analysis_evidence_grounding.v3`: validate exact `E-*` tuples first, then
 validate `R-*` references and required context namespaces. General security reasoning is valid when
 it cites grounded current facts and declares its basis; grounding proves reference integrity, not the
@@ -673,14 +706,30 @@ boundary omission. Any ungrounded evidence/reasoning continues through the degra
 path. Model-generated typed `K-*` knowledge candidates are review-only and have no decision, Memory,
 Skill, adapter, or policy mutation authority.
 
-`soc_agent.core.SocDecisionPolicy` is the only Runtime boundary that converts validated
-`AnalysisResult` into an operational `Decision`. Analyzer confidence is currently an uncalibrated
+`soc_agent.core.SocDecisionPolicy` is the only base-Runtime boundary that converts validated
+`AnalysisResult` into the immutable base `Decision`. Analyzer confidence is currently an uncalibrated
 self-report: `Decision.confidence_source`, `confidence_is_calibrated`, `evidence_state`,
 `review_reasons`, and `policy_version` must remain explicit. Until an approved, versioned calibration
 profile is wired into this policy, stub and live-LLM decisions require human review; a high raw score
 cannot erase conflicts, degraded/unsupported message schemas, high-value evidence gaps, ungrounded
 citations, or false-positive confirmation. Read-only mock or failed action evidence may remain visible for
 flow validation and audit, but cannot raise domain/scenario confidence or satisfy an evidence gap.
+
+`soc_agent.core.SocAutomationService` is the separate default-off post-Runtime reconciliation and
+response boundary. It records a base/effective `SocDecisionTransitionRecord`, optionally applies only
+the reviewed typed Memory directive above, then evaluates a strict tenant/environment/version/validity
+`SocAutomationPolicy`. Policy matching and action authorization do not require Memory: a current
+high-risk decision may independently authorize a pinned external action. Automatic rules must name
+verdict, evidence state, exact model/prompt/Decision Policy versions, minimum confidence, and exact
+`needs_review` state. Replay runs never receive automatic external-action authorization. Matching
+`needs_review=true` additionally requires `review_required_override_reason`; the ReviewQueue remains
+open and the record must not claim human review. Shadow policies cannot authorize, and enforced
+execution still requires the explicit execution env flag plus an injected registry whose exact
+adapter declares write/destructive side effect, execute support, and idempotency. Migration `0023`
+adds the Memory facet index and append-only decision/disposition/authorization/execution tables.
+Use `soc automation lineage --run-id|--alert-id` for the full chain. Existing human approval remains a
+valid authorization mode, but its Alpha action boundary is not yet the same real external-execution
+service used by automatic policy execution; do not silently claim or duplicate that convergence.
 
 Persisted analysis uses `AnalysisPersistence.save_analysis_bundle()` so run, summary, optional review
 item, and audit record commit atomically. `RuntimeFailure` owns sanitized failure kind/retryability:
@@ -800,6 +849,12 @@ analyzer only after explicit confirmation, and projects Runtime, Grounding, Deci
 read-only investigation, ReviewQueue and bounded Lead Agent context into one private output root.
 It also compiles typed analyzer knowledge suggestions into an inert `knowledge-review/` package;
 generation performs no Memory, Skill, adapter, policy, or decision mutation.
+With explicit automation-simulation confirmation it additionally writes
+`12-effective-decision-and-automation.json`: base Runtime decision stays immutable, while effective
+decision, Memory contributors, disposition, authorization and execution are append-only lineage.
+The response adapter is validation-only and must persist `mocked=true`; no simulated result closes a
+real Provider/action gate. `compare_ten_alert_e2e.py` compares old/new reports without attributing
+live-model resampling to Memory or automation.
 The cohort excludes known evidence-unavailable rows; this path validates complete alert journeys and
 does not replace the separate fail-closed input-gap tests.
 
@@ -850,7 +905,7 @@ After D-9, D-10 uses the D-0 inventory to select one median-shaped representativ
 known input gap, then invokes the same non-persistent `SocAnalysisService` Runtime with the explicitly
 configured live analyzer for each. Run it with
 `./scripts/soc-runtime-validation.sh checkpoint-d-cross-source`; this incurs model cost and must never
-fall back to `StubLLMAnalyzer`. It validates source mapping, the exact nine-step sequence,
+fall back to `StubLLMAnalyzer`. It validates source mapping, the exact ten-step sequence,
 model/prompt/parser provenance, bounded evidence, Grounding and Decision guards; it is neither a
 model-accuracy evaluation without human labels nor another Runtime node. If bounded raw/highlight evidence and
 provenance-backed canonical/fact/scenario evidence are all absent, `EvidenceCoverageReport` must emit
@@ -860,7 +915,7 @@ review-required and non-automatable. Do not encode provider/topic names in this 
 After D-10, D-11 runs every D-0 row twice through the non-persistent production control flow with
 `StubLLMAnalyzer`. Run it with
 `./scripts/soc-runtime-validation.sh checkpoint-d-full-corpus`. D-11 validates corpus/D-0 lineage,
-source mapping, exact nine-step execution, input preservation, bounded evidence, Grounding, Decision
+source mapping, exact ten-step execution, input preservation, bounded evidence, Grounding, Decision
 fail-closed behavior and semantic reexecution stability. It must not call a live model, database,
 repository replay, tenant policy, MCP or action. Stability excludes run IDs, timestamps, durations,
 step input hashes that duplicate prior outputs, and the normalize output hash whose source-missing

@@ -7,11 +7,13 @@ from collections.abc import Iterable
 from soc_agent.contracts import (
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
+    SocMemoryQuery,
     SocMemoryRecord,
     SocMemoryRecordStatus,
     SocMutationAuditRecord,
     SocMutationOperation,
 )
+from soc_agent.memory.scoring import score_memory_record
 
 
 class InMemoryMemoryCandidateRepository:
@@ -110,6 +112,35 @@ class InMemoryMemoryCandidateRepository:
         if retrieval_enabled is not None:
             items = [item for item in items if item.retrieval_enabled is retrieval_enabled]
         return sorted(items, key=lambda item: item.updated_at, reverse=True)[:limit]
+
+    def find_memory_candidate_records(
+        self,
+        query: SocMemoryQuery,
+    ) -> list[SocMemoryRecord]:
+        """Select relevant candidates across the complete in-memory corpus."""
+
+        items = [
+            record
+            for record in self._records.values()
+            if (not query.statuses or record.status in query.statuses)
+            and (not query.memory_types or record.memory_type in query.memory_types)
+            and (query.tenant_scope is None or record.tenant_scope == query.tenant_scope)
+            and (query.tenant_id is None or record.tenant_id == query.tenant_id)
+        ]
+        ranked = sorted(
+            items,
+            key=lambda record: (
+                score_memory_record(record, query)[0],
+                record.updated_at,
+            ),
+            reverse=True,
+        )
+        relevant = [record for record in ranked if score_memory_record(record, query)[1]]
+        selected = relevant[: query.candidate_limit]
+        if len(selected) < query.candidate_limit:
+            selected_ids = {record.memory_id for record in selected}
+            selected.extend(record for record in ranked if record.memory_id not in selected_ids)
+        return selected[: query.candidate_limit]
 
     def append_mutation_audit(self, record: SocMutationAuditRecord) -> None:
         key = (record.operation, record.idempotency_key)

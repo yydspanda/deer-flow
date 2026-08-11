@@ -303,6 +303,59 @@ class SocMemoryDecisionImpact(StrEnum):
     ROUTING_HINT = "routing_hint"
     SUPPRESSION_HINT = "suppression_hint"
     RESPONSE_POLICY_HINT = "response_policy_hint"
+    DETECTION_DECISION = "detection_decision"
+
+
+class SocMemoryDecisionEffect(StrEnum):
+    """Typed effect explicitly approved for one confirmed memory record."""
+
+    REINFORCE = "reinforce"
+    OVERRIDE = "override"
+
+
+class SocMemoryReviewEffect(StrEnum):
+    """How an approved memory directive changes the base review requirement."""
+
+    PRESERVE = "preserve"
+    REQUIRE = "require"
+    CLEAR = "clear"
+
+
+class SocMemoryDecisionDirective(BaseModel):
+    """Reviewed, machine-readable decision effect carried by confirmed memory.
+
+    Free-form memory text never becomes an executable directive. A reviewer must
+    explicitly attach this contract while confirming the candidate, and Runtime
+    retrieval governance still decides whether the record is eligible.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_decision_directive.v1"] = "soc.memory_decision_directive.v1"
+    effect: SocMemoryDecisionEffect
+    target_verdict: Verdict
+    review_effect: SocMemoryReviewEffect = SocMemoryReviewEffect.PRESERVE
+    suggested_action: str | None = Field(default=None, min_length=1, max_length=1000)
+    minimum_match_score: float = Field(default=5.0, ge=0.0, le=1000.0)
+    required_facet_keys: list[str] = Field(default_factory=list, max_length=20)
+    rationale: str = Field(min_length=1, max_length=2000)
+    policy_version: Literal["soc.memory_decision_directive_policy.v1"] = "soc.memory_decision_directive_policy.v1"
+
+    @field_validator("required_facet_keys")
+    @classmethod
+    def normalize_required_facet_keys(cls, values: list[str]) -> list[str]:
+        normalized = [str(value).strip() for value in values if str(value).strip()]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("required_facet_keys must be unique")
+        return sorted(normalized)
+
+    @model_validator(mode="after")
+    def require_scoped_override(self) -> SocMemoryDecisionDirective:
+        if self.effect is SocMemoryDecisionEffect.OVERRIDE and not self.required_facet_keys:
+            raise ValueError("memory decision override requires at least one required facet key")
+        if self.review_effect is SocMemoryReviewEffect.CLEAR and self.target_verdict is Verdict.UNKNOWN:
+            raise ValueError("unknown memory verdict cannot clear human review")
+        return self
 
 
 class SocMemoryCandidateSourceType(StrEnum):
@@ -1408,7 +1461,16 @@ class SocMemoryCandidateReviewCommand(BaseModel):
     reason: str = Field(min_length=1)
     record_summary: str | None = None
     record_content: str | None = None
+    decision_directive: SocMemoryDecisionDirective | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def restrict_decision_directive_to_confirmation(
+        self,
+    ) -> SocMemoryCandidateReviewCommand:
+        if self.decision_directive is not None and self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
+            raise ValueError("decision_directive is allowed only when confirming a memory candidate")
+        return self
 
 
 class SocMemoryCandidate(BaseModel):
@@ -1463,6 +1525,7 @@ class SocMemoryRecord(BaseModel):
     validity: SocMemoryCandidateValidity
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     decision_impact: SocMemoryDecisionImpact = SocMemoryDecisionImpact.NONE
+    decision_directive: SocMemoryDecisionDirective | None = None
     content_hash: str = Field(min_length=1)
     facets_hash: str = Field(min_length=1)
     retrieval_enabled: bool = False
@@ -2203,6 +2266,7 @@ class AnalysisContextCatalogItem(BaseModel):
     source_id: str = Field(min_length=1, max_length=512)
     summary: str = Field(min_length=1, max_length=4000)
     content_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_reference_namespace(self) -> AnalysisContextCatalogItem:

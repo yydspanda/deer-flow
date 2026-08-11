@@ -74,7 +74,7 @@ Release-level local Alpha 还必须从仓库根目录运行：
 soc_agent/
 ├── contracts/          # 所有跨边界 schema：API/Kafka/Event/LLM/Tool
 ├── normalizers/        # 外部厂商/flat payload -> canonical contracts
-├── pipeline/           # 九步固定 Runtime 的纯处理节点
+├── pipeline/           # 十步固定 Runtime 的纯处理节点（含 reference_catalog）
 ├── core/               # Runtime、稳定 service、UoW、validator 和业务编排
 ├── domain/             # correlation、domain triage 等内部稳定领域逻辑
 ├── actions/            # action proposal、adapter registry、MCP/HTTP/vendor action adapters
@@ -524,13 +524,13 @@ PingAn SOC capability onboarding 约束：
 - capability card 只能分类落到以下稳定 artifact：domain skill、normalizer/field trust rule、read-only action adapter、high-risk action adapter、domain handler、eval fixture、memory candidate、authorized-activity fact proposal。不得直接把一段经验文本粘进生产 prompt 后生效。
 - 内部系统 endpoint、账号、token、cookie、真实敏感样本不得写入仓库；真实连接只能通过本地 config、environment secret 或部署 secret 注入。
 - read-only 工具经验必须通过 `SocActionAdapterRegistry` / MCP-backed adapter 落地，结果写 `InvestigationEvidence`；不能让 Lead Agent 直接用自然语言调用内部系统。
-- 处置类经验必须走 approval request / approval grant / dry-run / execute boundary；未经过 staging smoke 和 adapter-level audit 前，生产 execute 只能保持 no external side effect。
+- 处置类经验必须走独立 authorization / dry-run / execute boundary：默认使用 approval request / grant；只有经过评审的服务端 playbook policy 才可在精确范围内自动授权。未经过 staging smoke 和 adapter-level audit 前，生产 execute 只能保持 no external side effect。
 - 经验记忆必须先进入 `pending_review` 或 eval fixture；只有人工确认、版本化和可回滚后才允许作为 confirmed memory 或 active lesson 影响后续判断。
 - `.notes/ai_soc/capabilities/pingan/source-docs/` 中的历史 prompt 原文必须先按 `.notes/ai_soc/capabilities/pingan/knowledge-decomposition.md` 拆解；不得整体复制进 Lead Agent prompt、analysis node prompt 或 public skill。
 - `skills/public/soc-*` 只能包含跨客户通用研判方法；平安内部域名、部门、账号、BU/PA code、路径、白名单、具体 `rule_code`、模板 ID、策略 ID、operateType 等必须进入 tenant memory、adapter mapping、policy/config 或 eval fixture。
 - 平安环境知识进入 memory 时必须带 tenant scope、source doc/section、status、validity 和 evidence refs；默认 `pending_review`，不能直接 confirmed。扫描、渗透测试、运维窗口、自动化服务等“当前是否被授权”的动态事实不得用 memory 代替，必须进入 authorized-activity fact lifecycle。
 - 平安字段名和字段别名只能出现在 adapter/normalizer/mapping tests 或脱敏 fixture 中；core contract、public skill 和 Lead Agent prompt 必须消费 canonical fields。
-- 平安处置经验如果需要外部事实查询，必须先建 read-only MCP/action adapter；如果会改变外部状态，必须是 high-risk/analyst-write action 并走 approval。
+- 平安处置经验如果需要外部事实查询，必须先建 read-only MCP/action adapter；如果会改变外部状态，必须是 high-risk/analyst-write action，并经过人工 approval 或明确的服务端 playbook authorization。
 
 External disposition sync 约束：
 
@@ -2407,7 +2407,7 @@ tool permission denial rate
 - D10 是显式付费的真实模型代表样本回放：每个已知 topic 一条代表样本并包含全部 D0 known input
   gap；必须记录 model/Prompt/Parser、usage、Grounding 和 Decision，禁止静默回退 stub。没有人工标签时
   不能把 D10 当准确率或自动化上线依据。
-- D11 是无模型的全量兼容性 Gate：每个 D0 payload 通过公开 `SocAnalysisService` 九步控制流执行两
+- D11 是无模型的全量兼容性 Gate：每个 D0 payload 通过公开 `SocAnalysisService` 十步控制流执行两
   次，必须覆盖全部唯一 corpus 行、保持 input payload、使用 `analyze_stub`，并证明 Decision
   fail-closed。它不是持久化 `replay(run_id)`，不得访问 DB、MCP、租户处置或 action。
 - D11 semantic projection 必须纳入下游 step output、normalization/extraction report 和 failure contract；
@@ -2460,9 +2460,83 @@ tool permission denial rate
 
 | Maturity / 成熟度 | Current scope / 当前范围 |
 |---|---|
-| Local Alpha complete | 九步 Runtime、CLI/Kafka ingress、SQL、Review Web/TUI、Lead Agent、API v1 transport、audit/replay、memory/governed context 的代码可控门禁 |
+| Local Alpha complete | 十步 Runtime、CLI/Kafka ingress、SQL、Review Web/TUI、Lead Agent、API v1 transport、audit/replay、memory/governed context 的代码可控门禁 |
 | Mock / fixture | 本地 CMDB/EDR/HIDS/TI/tag facts、脱敏样本、browser HTTP fixture；只验证 contract/flow |
 | Deferred | Kafka result topics/worker pool、通用 durable event/SSE、Threat Hunting/Detection Engineering/Attack Simulation 自治 Agent、Knowledge RAG、Prometheus 全局态势；network/endpoint/web/email specialist 已由 PI-01G 完成 |
 | Data-gated PI | 真实 provider/source feed、PostgreSQL/Kafka/K8s capacity/recovery、生产标签与校准、真实响应动作 |
 
 任何 maturity 变化都先更新唯一完整性矩阵，再同步本工程契约；不得在本节新增平行 backlog。
+
+## 二十三、Effective Decision 与受治理响应自动化
+
+### 23.1 五层状态必须分离
+
+- `AnalysisRun.decision` 是 immutable base detection decision。`SocDecisionPolicy` 仍是固定 Runtime
+  中唯一生成它的组件；post-Runtime service 不得回写该对象。
+- `SocDecisionTransitionRecord.after` 是 effective detection decision。任何 Memory reinforcement/
+  override 必须追加 transition，并保存 before/after、transition kind、policy hash 和 bounded contributors。
+- `SocDispositionTransitionRecord` 是 operational disposition，不是 detection truth。
+- `SocActionAuthorizationRecord` 是某个 exact route/action/target/adapter 的权限决定，不是 verdict、
+  Memory、模型建议或 Approval Request。
+- `SocActionExecutionRecord` 是外部调用事实；授权成功不等于执行成功，必须单独保存 attempt/result/error。
+
+### 23.2 Memory 检索与改判
+
+- SQL repository 必须在完整 eligible corpus 上分别执行 `soc_memory_record_facets` exact-facet lane 和
+  text lane，与 scoped fallback 合并后再用共享 scorer 应用 candidate limit 和最终 top-K/token budget。
+  禁止恢复“先取最新 200 条再评分”的实现；大量新但宽泛匹配的记录不能遮蔽旧的强相关 Memory。
+- `M-*` 自由文本只是 reasoning context，永远不是 `E-*` 当前告警事实，也不能直接产生 deterministic
+  decision effect 或 action authorization。
+- 只有 `SocMemoryCandidateReviewCommand(decision=confirm)` 可携带
+  `SocMemoryDecisionDirective`。该指令不得从 candidate/record 自由文本、LLM 输出或标签自动推断。
+- `effect=override` 必须至少声明一个 `required_facet_key`；`target_verdict=unknown` 不得 clear review。
+  confirm 前 service 必须验证 required facet key 在 candidate 中存在非空值。
+- 应用 directive 前必须重新加载 exact `memory_id/version/content_hash/facets_hash`，并验证 confirmed status、受治理 retrieval
+  activation policy、actor/reason、record validity、activation validity、review due、minimum match score
+  和全部 required matched facets。任一失败时只保留普通 `M-*` 上下文。
+- 多条 override 指向不同 verdict 时 transition 固定为 `conflicted`、`needs_review=true`，并停止本轮
+  disposition/action rule selection；禁止按最新时间、最高分或 list 顺序选第一条。
+- Memory directive 可以改变 effective decision，但永不直接授权、执行动作或关闭 ReviewQueue。
+
+### 23.3 自动策略与人工审批
+
+- `SocAutomationPolicy` 是 server-owned、strict `extra=forbid`、tenant/environment/version/validity-bound
+  配置。缺 `SOC_AUTOMATION_POLICY_PATH` 时不得构建 observer；`shadow` 只能留痕；`enforced` 必须有
+  `reviewed_by/reviewed_at`。
+- Policy selection 使用 effective decision，并不要求任何 Memory contributor。当前告警自身的
+  evidence/model/Skill/context 可以独立匹配规则并获得 automatic authorization。
+- automatic action rule 必须显式声明 verdicts、evidence states、model names、Prompt versions、Decision
+  Policy versions、minimum confidence 和 `needs_review`。模型、Prompt 或基础 Decision Policy 版本变化时，
+  旧规则不得继续自动授权。
+  若匹配 `needs_review=true`，还必须提供非空 `review_required_override_reason`；该例外只允许精确动作
+  先执行，不删除 ReviewQueue、不清除 base/effective review state、不伪造 human contributor。
+- `human_approval` 与 `automatic_policy` 是并列 authorization modes。Lead Agent proposal 默认仍走前者；
+  模型不得通过 proposal 声称某条 automatic rule 已匹配。
+- automatic authorization 只接受 exact registered descriptor：route/action/adapter ID 全等，
+  `execute_supported=true`，`external_side_effect=write|destructive`，`idempotency_required=true`。目标必须
+  由 canonical Runtime facts/role resolution 确定性解析，不能由模型自由文本或 provider response 选择。
+- 实际执行还要求 `SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=true` 和 composition root 注入 registry。
+  仅有 policy 文件不得触发调用。
+- replay run 可以重算 transition 与 policy match，但 automatic external action 固定拒绝；不得因历史回放
+  生成新的外部副作用或新的外部 idempotency identity。
+- 当前 `SocAgentApprovalService.execute_approved_action()` 仍是 Alpha grant/preflight/token boundary；不能
+  把它描述为已完成真实外部副作用。后续收敛必须让 human Grant 和 automatic Authorization 共用一个
+  external execution service，不得复制 adapter 业务逻辑。
+
+### 23.4 幂等、失败与审计
+
+- decision/disposition/authorization identity 必须包含 source transition、selected rule、policy version/hash、
+  exact action/target 和模式；重复 observer 运行返回已保存记录。
+- external idempotency key 固定从 authorization key 派生，同一授权的 retryable attempts 必须复用它。
+  默认最多 3 次；attempt 递增。`succeeded|failed_terminal|skipped` 不得再次执行。
+- 授权过期后只写 `skipped` execution。target 缺失、adapter 缺失/不匹配、不支持 execute、非 write/
+  destructive 或不要求 idempotency 均 fail closed。
+- Post-analysis observer failure 不回滚已提交 base Runtime bundle，但必须写 sanitized operator log；不得因
+  automation failure 把已完成分析伪装成失败或重复提交 Kafka offset。
+- Migration `0023_governed_automation_and_memory_index` 拥有
+  `soc_memory_record_facets`、`soc_decision_transitions`、`soc_disposition_transitions`、
+  `soc_action_authorizations`、`soc_action_executions`。旧 Memory JSON 的 facet backfill 必须兼容 SQLite
+  driver 返回 string/bytes 的情况。
+- `soc automation lineage --run-id|--alert-id` 是当前 read-only operator surface。输出必须同时暴露
+  decision before/after、disposition、authorization reason/mode 和每次 execution；不得输出 credential、
+  provider header、rendered prompt 或完整敏感 response。

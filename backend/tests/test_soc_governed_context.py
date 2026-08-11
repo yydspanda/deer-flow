@@ -384,6 +384,11 @@ def test_soc_migration_head_creates_governance_and_approval_lifecycle_schema(tmp
         assert "soc_skill_improvement_candidates" in inspect(engine).get_table_names()
         assert "soc_memory_pattern_observations" in inspect(engine).get_table_names()
         assert "soc_tenant_policy_decisions" in inspect(engine).get_table_names()
+        assert "soc_memory_record_facets" in inspect(engine).get_table_names()
+        assert "soc_decision_transitions" in inspect(engine).get_table_names()
+        assert "soc_disposition_transitions" in inspect(engine).get_table_names()
+        assert "soc_action_authorizations" in inspect(engine).get_table_names()
+        assert "soc_action_executions" in inspect(engine).get_table_names()
         approval_request_columns = {column["name"] for column in inspect(engine).get_columns("soc_approval_requests")}
         assert {
             "resolved_at",
@@ -396,7 +401,81 @@ def test_soc_migration_head_creates_governance_and_approval_lifecycle_schema(tmp
         assert "uq_soc_approval_grants_request" in approval_grant_constraints
         with engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM soc_alembic_version")).scalar_one()
-        assert revision == "0022_tenant_policy_decisions"
+        assert revision == "0023_governed_automation"
+    finally:
+        engine.dispose()
+
+
+def test_soc_migration_backfills_existing_memory_facets(tmp_path) -> None:
+    database_path = tmp_path / "soc-memory-facet-backfill.db"
+    database_url = f"sqlite:///{database_path}"
+    upgrade_soc_schema(database_url, revision="0022_tenant_policy_decisions")
+    payload = {
+        "memory_id": "MEM-PRE-0023",
+        "facets": {
+            "source_type": ["nids"],
+            "detection_key": ["pingan:apt:test"],
+        },
+        "evidence_refs": ["review:legacy-1"],
+    }
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO soc_memory_records (
+                        memory_id, version, memory_type, target_artifact,
+                        status, tenant_scope, tenant_id, source_candidate_id,
+                        source_type, source_run_id, source_alert_id,
+                        source_queue_id, content_hash, facets_hash,
+                        retrieval_enabled, confidence, created_by_actor_id,
+                        deprecated_by_actor_id, deprecated_at, summary, content,
+                        created_at, updated_at, record_payload
+                    ) VALUES (
+                        :memory_id, 1, 'detection_lesson', 'tenant_memory',
+                        'confirmed', 'tenant-a', 'tenant-a', :candidate_id,
+                        'manual_note', NULL, NULL, NULL, :content_hash,
+                        :facets_hash, 1, 0.9, 'reviewer', NULL, NULL,
+                        'Legacy record', 'Legacy content', :created_at,
+                        :updated_at, :record_payload
+                    )
+                    """
+                ),
+                {
+                    "memory_id": payload["memory_id"],
+                    "candidate_id": "MC-PRE-0023",
+                    "content_hash": "sha256:" + "a" * 64,
+                    "facets_hash": "sha256:" + "b" * 64,
+                    "created_at": NOW,
+                    "updated_at": NOW,
+                    "record_payload": json.dumps(payload),
+                },
+            )
+    finally:
+        engine.dispose()
+
+    upgrade_soc_schema(database_url)
+
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT facet_key, facet_value
+                    FROM soc_memory_record_facets
+                    WHERE memory_id = :memory_id
+                    ORDER BY facet_key, facet_value
+                    """
+                ),
+                {"memory_id": payload["memory_id"]},
+            ).all()
+        assert rows == [
+            ("__evidence_ref__", "review:legacy-1"),
+            ("detection_key", "pingan:apt:test"),
+            ("source_type", "nids"),
+        ]
     finally:
         engine.dispose()
 

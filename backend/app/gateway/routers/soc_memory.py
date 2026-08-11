@@ -19,6 +19,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateReviewResult,
     SocMemoryCandidateStatus,
+    SocMemoryDecisionDirective,
     SocMemoryQuery,
     SocMemoryRecord,
     SocMemoryRecordStatus,
@@ -52,6 +53,7 @@ class MemoryCandidateReviewRequest(BaseModel):
     reason: str = Field(min_length=1)
     record_summary: str | None = None
     record_content: str | None = None
+    decision_directive: SocMemoryDecisionDirective | None = None
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
@@ -130,6 +132,7 @@ def review_memory_candidate(
                 reason=payload.reason,
                 record_summary=payload.record_summary,
                 record_content=payload.record_content,
+                decision_directive=payload.decision_directive,
                 metadata=payload.metadata,
             ),
             context=soc_service_context_from_request(request, include_soc_roles=True),

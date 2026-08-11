@@ -1722,7 +1722,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             repository = SqlAlchemyAlertRepository(
                 sessionmaker(bind=engine, expire_on_commit=False)
             )
-        service = build_soc_analysis_service(repository, settings=settings)
+        service = build_soc_analysis_service(
+            repository,
+            settings=settings,
+            action_adapter_registry=registry,
+        )
         investigation_service = None
         investigation_reporting_service = None
         memory_pattern_service = None

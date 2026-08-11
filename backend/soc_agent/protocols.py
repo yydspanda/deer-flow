@@ -40,16 +40,20 @@ from soc_agent.contracts import (
     SkillFeedbackSourceType,
     SkillImprovementCandidate,
     SkillImprovementCandidateStatus,
+    SocActionAuthorizationRecord,
+    SocActionExecutionRecord,
     SocAgentActionAdapterDescriptor,
     SocAgentActionCommand,
     SocAgentActionResult,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
     SocAgentApprovalRequestStatus,
+    SocDecisionTransitionRecord,
     SocDispositionOutcomeRecord,
     SocDispositionOutcomeReviewKind,
     SocDispositionProposalRecord,
     SocDispositionSampleManifest,
+    SocDispositionTransitionRecord,
     SocEnrichmentActionAttempt,
     SocEnrichmentExecution,
     SocEnrichmentExecutionCommand,
@@ -60,6 +64,7 @@ from soc_agent.contracts import (
     SocExternalDispositionRecord,
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
+    SocMemoryQuery,
     SocMemoryRecord,
     SocMemoryRecordStatus,
     SocMutationAuditRecord,
@@ -84,6 +89,7 @@ class AnalysisRuntime(Protocol):
 
 
 AnalysisBeforeProviderHook = Callable[[AnalysisRun, LLMAnalysisRequest, str], None]
+AnalysisRequestEnricher = Callable[[LLMAnalysisRequest], LLMAnalysisRequest]
 
 
 class JournaledAnalysisRuntime(Protocol):
@@ -541,6 +547,75 @@ class MemoryRecordRepository(Protocol):
         retrieval_enabled: bool | None = None,
         limit: int = 50,
     ) -> list[SocMemoryRecord]: ...
+
+    def find_memory_candidate_records(
+        self,
+        query: SocMemoryQuery,
+    ) -> list[SocMemoryRecord]: ...
+
+
+class SocAutomationRepository(Protocol):
+    """Append-only persistence boundary for governed automation lineage."""
+
+    def save_decision_transition(self, record: SocDecisionTransitionRecord) -> None: ...
+
+    def find_decision_transition_by_key(
+        self,
+        transition_key: str,
+    ) -> SocDecisionTransitionRecord | None: ...
+
+    def save_disposition_transition(self, record: SocDispositionTransitionRecord) -> None: ...
+
+    def find_disposition_transition_by_key(
+        self,
+        transition_key: str,
+    ) -> SocDispositionTransitionRecord | None: ...
+
+    def save_action_authorization(self, record: SocActionAuthorizationRecord) -> None: ...
+
+    def find_action_authorization_by_key(
+        self,
+        authorization_key: str,
+    ) -> SocActionAuthorizationRecord | None: ...
+
+    def save_action_execution(self, record: SocActionExecutionRecord) -> None: ...
+
+    def find_action_execution_by_key(
+        self,
+        execution_key: str,
+    ) -> SocActionExecutionRecord | None: ...
+
+    def list_decision_transitions(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SocDecisionTransitionRecord]: ...
+
+    def list_disposition_transitions(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SocDispositionTransitionRecord]: ...
+
+    def list_action_authorizations(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SocActionAuthorizationRecord]: ...
+
+    def list_action_executions(
+        self,
+        *,
+        run_id: str | None = None,
+        authorization_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SocActionExecutionRecord]: ...
 
 
 class SocExternalDispositionRepository(Protocol):

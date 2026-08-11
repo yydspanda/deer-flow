@@ -39,6 +39,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateType,
     SocMemoryCandidateValidity,
     SocMemoryDecisionImpact,
+    SocMemoryQuery,
     SocMemoryRecordStatus,
     SocMemoryRetrievalActivationAction,
     SocMemoryRetrievalActivationCommand,
@@ -741,6 +742,145 @@ def test_sqlalchemy_memory_candidate_repository_persists_and_filters_candidates(
         )
         is False
     )
+
+
+def test_sqlalchemy_memory_candidates_rank_old_exact_match_before_recent_rows() -> None:
+    repository = _repository()
+    now = datetime.now(UTC) + timedelta(seconds=1)
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        mutation_audit_repository=repository,
+        now_provider=lambda: now,
+    )
+    candidate = service.propose_candidate(_repository_memory_candidate_command())
+    review = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Create SQL relevance fixture.",
+        ),
+        context=_analyst_context(),
+    )
+    assert review.memory_record is not None
+    active = service.set_retrieval_activation(
+        SocMemoryRetrievalActivationCommand(
+            memory_id=review.memory_record.memory_id,
+            action=SocMemoryRetrievalActivationAction.ENABLE,
+            expected_record_version=review.memory_record.version,
+            reason="Enable SQL relevance fixture.",
+            activation_valid_until=now + timedelta(days=90),
+            review_after_days=30,
+        ),
+        context=_memory_governor_context(),
+    ).record
+    repository.save_memory_record(
+        active.model_copy(
+            update={
+                "memory_id": "MEM-SQL-OLD-RELEVANT",
+                "source_candidate_id": "MC-SQL-OLD-RELEVANT",
+                "facets": {"source_type": ["nids"]},
+                "updated_at": now - timedelta(days=365),
+            }
+        )
+    )
+    for index in range(205):
+        repository.save_memory_record(
+            active.model_copy(
+                update={
+                    "memory_id": f"MEM-SQL-RECENT-{index:03d}",
+                    "source_candidate_id": f"MC-SQL-RECENT-{index:03d}",
+                    "facets": {"source_type": ["edr"]},
+                    "updated_at": now + timedelta(seconds=index),
+                }
+            )
+        )
+
+    result = service.find_relevant_records(
+        SocMemoryQuery(
+            tenant_scope="pingan",
+            tenant_id="pingan",
+            facets={"source_type": ["nids"]},
+            candidate_limit=200,
+        )
+    )
+
+    assert [match.memory_id for match in result.matches] == ["MEM-SQL-OLD-RELEVANT"]
+
+
+def test_sqlalchemy_memory_candidates_rank_old_text_match_before_recent_type_rows() -> None:
+    repository = _repository()
+    now = datetime.now(UTC) + timedelta(seconds=1)
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        mutation_audit_repository=repository,
+        now_provider=lambda: now,
+    )
+    candidate = service.propose_candidate(
+        _repository_memory_candidate_command(
+            idempotency_key="memory:repo:old-text-match",
+        )
+    )
+    review = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Create SQL text relevance fixture.",
+        ),
+        context=_analyst_context(),
+    )
+    assert review.memory_record is not None
+    active = service.set_retrieval_activation(
+        SocMemoryRetrievalActivationCommand(
+            memory_id=review.memory_record.memory_id,
+            action=SocMemoryRetrievalActivationAction.ENABLE,
+            expected_record_version=review.memory_record.version,
+            reason="Enable SQL text relevance fixture.",
+            activation_valid_until=now + timedelta(days=90),
+            review_after_days=30,
+        ),
+        context=_memory_governor_context(),
+    ).record
+    repository.save_memory_record(
+        active.model_copy(
+            update={
+                "memory_id": "MEM-SQL-OLD-TEXT-RELEVANT",
+                "source_candidate_id": "MC-SQL-OLD-TEXT-RELEVANT",
+                "summary": "Legacy callback signature",
+                "content": "Observed legacy-c2-callback-signature during review.",
+                "facets": {"source_type": ["nids"]},
+                "updated_at": now - timedelta(days=365),
+            }
+        )
+    )
+    for index in range(205):
+        repository.save_memory_record(
+            active.model_copy(
+                update={
+                    "memory_id": f"MEM-SQL-TYPE-ONLY-{index:03d}",
+                    "source_candidate_id": f"MC-SQL-TYPE-ONLY-{index:03d}",
+                    "summary": "Recent unrelated operation",
+                    "content": "This record shares only the requested memory type.",
+                    "facets": {"source_type": ["nids"]},
+                    "updated_at": now + timedelta(seconds=index),
+                }
+            )
+        )
+
+    result = service.find_relevant_records(
+        SocMemoryQuery(
+            tenant_scope="pingan",
+            tenant_id="pingan",
+            memory_types=[active.memory_type],
+            facets={"source_type": ["nids"]},
+            text_terms=["legacy-c2-callback-signature"],
+            candidate_limit=200,
+        )
+    )
+
+    assert result.matches[0].memory_id == "MEM-SQL-OLD-TEXT-RELEVANT"
+    assert "text:legacy-c2-callback-signature" in result.matches[0].match_reasons
 
 
 def test_review_service_context_loads_sqlalchemy_memory_candidates() -> None:

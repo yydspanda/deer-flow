@@ -46,7 +46,7 @@ from soc_agent.pipeline.evidence_grounding import ground_analysis_evidence
 from soc_agent.pipeline.extractor import extract_entities
 from soc_agent.pipeline.fact_reconstructor import reconstruct_facts
 from soc_agent.pipeline.reference_catalog import finalize_analysis_reference_catalogs
-from soc_agent.protocols import AnalysisBeforeProviderHook, DecisionPolicy, LLMAnalyzer
+from soc_agent.protocols import AnalysisBeforeProviderHook, AnalysisRequestEnricher, DecisionPolicy, LLMAnalyzer
 from soc_agent.utils.hashing import stable_hash
 
 
@@ -78,6 +78,7 @@ def inspect_alert_normalization(
 def build_analysis_request_for_payload(
     payload: Mapping[str, Any],
     *,
+    analysis_request_enricher: AnalysisRequestEnricher | None = None,
     sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
 ) -> LLMAnalysisRequest:
     """Build bounded analysis input without running analyzer or decision nodes."""
@@ -92,7 +93,10 @@ def build_analysis_request_for_payload(
         sensitive_evidence_mode=sensitive_evidence_mode,
     )
     request = request.model_copy(update={"skill_context": resolve_skill_context_for_request(request)})
-    return finalize_analysis_reference_catalogs(request)
+    return _enrich_and_finalize_analysis_request(
+        request,
+        analysis_request_enricher=analysis_request_enricher,
+    )
 
 
 def analyze_alert(
@@ -101,6 +105,7 @@ def analyze_alert(
     analyzer: LLMAnalyzer | None = None,
     decision_policy: DecisionPolicy | None = None,
     before_provider: AnalysisBeforeProviderHook | None = None,
+    analysis_request_enricher: AnalysisRequestEnricher | None = None,
     sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
 ) -> AnalysisRun:
     """Analyze one alert through the fixed ten-step pipeline."""
@@ -148,7 +153,10 @@ def analyze_alert(
             run,
             "reference_catalog",
             analysis_request,
-            finalize_analysis_reference_catalogs,
+            lambda request: _enrich_and_finalize_analysis_request(
+                request,
+                analysis_request_enricher=analysis_request_enricher,
+            ),
         )
         run.llm_analysis_request = analysis_request
         if before_provider is not None:
@@ -385,11 +393,15 @@ def _run_step[T](
     if isinstance(output, FactReconstructionResult):
         trace.warnings.extend(output.warnings)
     if isinstance(output, LLMAnalysisRequest):
+        context_kind_counts: dict[str, int] = {}
+        for item in output.context_catalog:
+            context_kind_counts[item.kind.value] = context_kind_counts.get(item.kind.value, 0) + 1
         trace.warnings.extend(output.warnings)
         trace.metadata.update(
             {
                 "evidence_catalog_count": len(output.evidence_catalog),
                 "context_catalog_count": len(output.context_catalog),
+                "context_kind_counts": context_kind_counts,
             }
         )
     if isinstance(output, SocSkillContext):
@@ -431,6 +443,16 @@ def _run_step[T](
         )
 
     return output
+
+
+def _enrich_and_finalize_analysis_request(
+    request: LLMAnalysisRequest,
+    *,
+    analysis_request_enricher: AnalysisRequestEnricher | None,
+) -> LLMAnalysisRequest:
+    if analysis_request_enricher is not None:
+        request = analysis_request_enricher(request)
+    return finalize_analysis_reference_catalogs(request)
 
 
 def _jsonable(value: Any) -> Any:

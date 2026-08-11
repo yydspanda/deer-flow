@@ -1,6 +1,6 @@
 # SOC Alert Lifecycle Flow / SOC 预警完整流转
 
-> Updated: 2026-08-06
+> Updated: 2026-08-11
 >
 > 本文只描述当前项目里的 SOC Agent 端到端运行过程、状态流转、数据写入和安全边界。
 >
@@ -20,9 +20,9 @@
 | 🔎 | Investigation context | 调查上下文、关联、证据、时间线 |
 | 🧩 | Domain finding | APT/EDR/HIDS/通用场景研判结果 |
 | 🧠📌 | Memory candidate | 候选记忆，待人工评审 |
-| ✅ | Confirmed memory | 已确认记忆，但默认不自动影响判定 |
-| 🛡️ | Approval boundary | 高风险动作审批边界 |
-| 🚫 | Forbidden mutation | 不允许自动改判、自动处置或绕过服务 |
+| ✅ | Confirmed memory | 已确认记忆；普通文本只作上下文，审核后的 typed directive 可受控影响 effective decision |
+| 🛡️ | Authorization boundary | 人工 Approval 或服务端自动策略授权边界 |
+| 🚫 | Forbidden mutation | 不允许模型/自由文本 Memory 绕过服务直接改判或执行 |
 | 🛠️ | Maintenance | 解析器、Schema 基线和字段映射维护 |
 | 🪪 | Governed context | 带时效、范围、来源和撤销语义的运营事实 |
 
@@ -47,6 +47,15 @@ flowchart TD
     X --> Y["🧑‍💻 CLI / TUI / Web / Metrics<br/>归一化运维"]
 
     E --> F["🔎 ReviewQueue<br/>人工复核入口 / analyst review item"]
+    E -.->|"SOC_AUTOMATION_POLICY_PATH<br/>default off"| A0["⚙️ SocAutomationService<br/>post-Runtime governance"]
+    A0 --> A1["🗃️ DecisionTransition<br/>base -> effective before/after"]
+    A1 --> A2{"🛡️ Versioned Automation Policy<br/>tenant / env / validity / exact rule"}
+    A2 -->|"no match"| A3["🚫 No disposition or action"]
+    A2 -->|"shadow"| A4["👁️ Proposed lineage only"]
+    A2 -->|"human_approval"| A5["🗃️ Authorization: requires_human<br/>尚未自动写 Approval Inbox"]
+    A2 -->|"automatic_policy"| A6["🔐 Machine Authorization<br/>Memory not required"]
+    A6 -->|"execute flag + exact registry"| A7["⚡ Idempotent Adapter Execution"]
+    A7 --> A8["🗃️ ActionExecution<br/>attempt + external before/after"]
     E --> Z1["⚙️ Explicit Authorization Enrichment<br/>显式授权上下文匹配"]
     Z0["🪪 Governed Fact History<br/>授权事实版本历史"] --> Z1
     Z1 --> Z2["🗃️ AuthorizationEnrichmentRecord<br/>append-only match snapshot"]
@@ -90,6 +99,7 @@ flowchart TD
     Q --> R["🧠📌 MemoryCandidate<br/>pending_review 候选记忆"]
     R --> S["✅ SocMemoryRecord<br/>confirmed memory, retrieval gated"]
     S --> G
+    S -. "future matching run: optional typed directive" .-> A0
 
     T["🧾 External disposition<br/>Zeus / ITSM / SOAR 状态理由"] --> U["⚙️ SocExternalDispositionService<br/>外部反馈归一化"]
     U --> V["🗃️ atomic external disposition<br/>state + decision/mutation audit"]
@@ -124,8 +134,10 @@ flowchart TD
    相同 graph replay 幂等，一条消息最多接收 5 个有效 proposal。
 8. 自动计划和 Lead Agent proposal 都必须走 Policy、Dispatcher、Adapter Registry；只读结果写成
    `InvestigationEvidence` 后回到调查上下文，不能回写基础 Runtime verdict。
-9. 高风险动作只进入审批 inbox 和 grant boundary，middleware 不执行动作；高风险 adapter 不能作为
-   unrestricted DeerFlow/MCP tool 暴露给模型，当前也不执行生产副作用。
+9. Lead Agent 提出的高风险动作仍只进入审批 inbox 和 grant boundary，middleware 不执行动作；高风险
+   adapter 不能作为 unrestricted DeerFlow/MCP tool 暴露给模型。独立的 post-Runtime automation observer
+   可以在 reviewed enforced policy 匹配时直接授权，不要求 Memory；只有显式 execution flag 和注入的
+   exact reviewed registry 同时存在时才调用 adapter，并写独立 execution lineage。
 10. 人工 correction、review note、外部处置理由、domain finding 都只能先形成 pending memory candidate。
     Lead Agent 输出不会自动落记忆；PI-03F1 允许 `--lead-agent` TUI/CLI 在 open ReviewQueue 上由分析师
     明确采纳一条稳定 assistant message 并填写复用理由。PI-03F2 Web/Gateway 只接收 message ID 和理由，
@@ -140,7 +152,9 @@ flowchart TD
     才提出一个 frozen `pending_review` repeated-pattern candidate；后续记录仅供 replay，重复本身不证明
     真假、授权、影响或处置权限。
 11. confirmed memory 默认不可检索；只有 memory governor 经 role/reason/version/validity/review/audit
-   状态迁移后才可进入 bounded context，且不直接改 runtime verdict。
+   状态迁移后才可进入 bounded context。普通 `M-*` 不直接改判；若确认时另附审核后的 typed decision
+   directive，且 future match 的 exact version/score/required facets 全部满足，则只追加 effective-decision
+   before/after transition，不改写原 Runtime Decision，也不直接授权动作。
 12. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
    但不能改变 verdict、ReviewQueue 或分析成功状态。
 13. 显式 authorization enrichment 把确定性匹配保存为独立记录；不会回写 Runtime decision。
@@ -152,9 +166,11 @@ flowchart TD
     evaluation service；各入口仍必须提供显式结构化标签和幂等身份。
 17. EV-03 从 immutable manifest、proposal、ReviewQueue 和 latest outcomes 派生 reviewer-specific inbox；
     Web 只能打开 manifest-selected work，并回到 EV-02 写入口，不保存第二套 campaign 状态。
-18. Gate 通过只表示可进入治理 rollout review；当前仍固定 `auto_close_allowed=false`。
+18. EV-01/DP-01 旧 shadow gate 仍固定 `auto_close_allowed=false`；它与新的通用
+   `SocAutomationPolicy` 是两条不同合同，不能把 shadow proposal 误当作已授权动作。
 19. correction、close/note、memory review/retrieval activation、approval lifecycle/action boundary 和 external disposition
-    都通过 `SocMutationUnitOfWork` 原子写入业务状态与 `soc_mutation_audit_log`；进程事件只在提交后发出。
+   都通过 `SocMutationUnitOfWork` 原子写入业务状态与 `soc_mutation_audit_log`；post-Runtime automation
+   使用 migration `0023` 的四类 append-only lineage 表。两类审计互补，不能互相替代。
 
 Current governed-context boundary / 当前边界：GF-01 已能通过 `SocGovernedContextService` 和
 `soc_governed_context_facts` 保存、审批、暂停、撤销、过期及回放 typed fact versions；AA-01 已能从
@@ -290,7 +306,7 @@ flowchart TD
 | `fact_reconstruct` | Rebuild and adjudicate facts | 把厂商字段声明转换为 `RoleClaim`，结合场景假设裁决 source/destination/attacker/victim/impacted asset；只在同一 observation 内判冲突，不把不同请求或不同进程执行压成一条会话；冲突时给暂定结论、证据缺口和核查清单，但不确定 response target | `FactReconstructionResult v2`, `RoleResolution`, `ConflictReport` |
 | `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型；按结构化字段和高价值优先级构造合法 JSON 投影，精确记录 projected/sanitized/omitted path，跨消息保留关键请求和进程证据 | `LLMAnalysisRequest.v3` |
 | `skill_context` | Resolve and project SOC skills | 根据 canonical typed source/entity/conflict 选择 SOC Skills，再从真实 public package 投影受预算约束的 `runtime-guidance.md`；记录选择原因、package/guidance hash 和 token accounting，不注入完整 `SKILL.md` | `SocSkillContext.v2` |
-| `reference_catalog` | Build deterministic fact and context references | Runtime 从同一份模型可见投影生成稳定引用：当前告警原子事实为 `E-*`；Skill/Adapter/Confirmed Memory/Governed Context/Tool Result 分别为 `S/A/M/C/T-*`。引用绑定精确 path、typed scalar 或受治理来源，新增供应商字段只要进入通用 bounded projection 就自动进入目录，不需要为每条告警写规则 | `AnalysisEvidenceCatalogItem[]`, `AnalysisContextCatalogItem[]` |
+| `reference_catalog` | Retrieve governed Memory and freeze deterministic references | Runtime 先通过 `ConfirmedMemoryAnalysisRequestEnricher -> SocMemoryService` 用 canonical facets 做 relevance-first 检索，再从同一份模型可见投影生成稳定引用：当前告警原子事实为 `E-*`；Skill/Adapter/Confirmed Memory/Governed Context/Tool Result 分别为 `S/A/M/C/T-*`。SQL facet index 跨完整 eligible corpus 选候选，top-K 只是最终上下文预算；新增供应商字段只要进入通用 bounded projection 就自动进入目录 | `AnalysisEvidenceCatalogItem[]`, `AnalysisContextCatalogItem[]` |
 | `pre-provider journal` | Commit non-rollbackable call metadata | 在调用 analyzer/provider 前先把同一个 run 以 `running` 落到 `soc_analysis_runs`；只写 request hash/schema、模型、步骤、来源、证据计数、skill、request/trace/actor 和哈希后的幂等键，不写渲染 prompt、provider header/response、credential/token | `AnalysisRequestJournal` |
 | `analyze_stub / LLM analyzer` | Run bounded reasoning | 默认 deterministic stub；显式选择后通过 DeerFlow `create_chat_model` 调用真实模型。`evidence[]` 只复制 `E-*` 原子事实；`R-*` 承载通用安全知识、Skill、Adapter、Memory、运营上下文或工具结果支持的推理；开放场景引用 `E-* + R-*`；`K-*` 仅是待人工审核的知识建议 | `AnalysisNodeOutput`, `AnalysisResult.v3`, `TriageScenarioAssessment.v2` |
 | `schema_validate` | Validate model result | 严格校验 JSON schema、字段类型和 domain rule。只允许可审计、无安全语义的机械修复，例如唯一 path/value 恢复 `E-*`、补出已引用的目录事实、精确去重、从已显式引用的 `S/A/M/C/T-*` 补冗余 basis；歧义引用、冲突值和未知字段拒绝 | `AnalysisResult.v3`, parser repair log |
@@ -302,21 +318,30 @@ flowchart TD
 ### Decision State / 决策状态
 
 ```mermaid
-flowchart LR
+flowchart TD
     A["🧠 AnalysisResult<br/>verdict + raw confidence"] --> B["⚙️ SocDecisionPolicy<br/>确定性策略"]
     C["🔎 EvidenceCoverage<br/>schema / gap / truncation"] --> B
     D["⚖️ FactReconstruction<br/>conflicts"] --> B
     GR["🔗 EvidenceGrounding v3<br/>E-* exact facts + R-* references"] --> B
-    B --> E["📋 Decision<br/>confidence_source<br/>evidence_state<br/>review_reasons<br/>policy_version"]
-    E --> F{"👤 Human review required?"}
-    F -->|Current stub / LLM: Yes| Q["🗃️ ReviewQueue"]
-    F -->|Future calibrated policy only| H["✅ Success state<br/>仍不代表允许自动处置"]
+    B --> E["📋 Base Decision<br/>immutable Runtime result"]
+    M["✅ Active Memory<br/>ordinary M-* or typed directive"] --> T{"📎 Directive gates pass?"}
+    E --> T
+    T -->|"no / ordinary text"| U["🔁 Effective Decision unchanged"]
+    T -->|"yes"| V["🔁 Effective Decision reinforced / overridden"]
+    T -->|"conflicting overrides"| W["⚠️ Effective Decision conflicted<br/>review required"]
+    U --> P{"🛡️ Automation Policy match?"}
+    V --> P
+    W --> Q
+    P -->|"none / shadow"| Q["🗃️ ReviewQueue or no action"]
+    P -->|"human_approval"| H["🛂 Approval required"]
+    P -->|"automatic_policy"| X["🔐 Machine authorization<br/>Memory not required"]
 ```
 
 `AnalysisResult.confidence` 是分析器原始自评，不是生产概率。当前
-`Decision.calibrated_probability=null`、`confidence_is_calibrated=false`；只有经过人工标注、离线校准、
-版本化审批和 replay 验证的 profile，才有资格在未来改变复核策略。mock/failed/denied 调查证据不满足
-场景所需证据，也不能提高 finding confidence；它们只在调查时间线或 demo 审计中可见。
+`Decision.calibrated_probability=null`、`confidence_is_calibrated=false`；基础 Runtime 因此通常保留
+ReviewQueue。受评审的自动策略若要在 `needs_review=true` 时仍对精确动作授权，必须显式匹配该状态并
+记录 `review_required_override_reason`；这不会删除 ReviewQueue 或伪装成人工复核。mock/failed/denied
+调查证据不满足场景所需证据，也不能提高 finding confidence；它们只在调查时间线或 demo 审计中可见。
 
 人工 correction 的数字是未校准 confirmation strength，来源固定为 `human_confirmation`；只有通过
 外部状态 trust/mapping/target gate 后由 service 内部调用的 correction 才是 `external_disposition`。
@@ -350,6 +375,11 @@ flowchart LR
     MTX --> N["🗃️ soc_external_dispositions"]
     O["⚙️ SocMemoryService"] --> MTX
     MTX --> P["🗃️ soc_memory_records<br/>confirmed but retrieval gated"]
+    P --> PF["🗃️ soc_memory_record_facets<br/>full-corpus relevance index"]
+    AT["⚙️ SocAutomationService<br/>post-Runtime"] --> DT["🗃️ soc_decision_transitions"]
+    AT --> DS["🗃️ soc_disposition_transitions"]
+    AT --> AA["🗃️ soc_action_authorizations"]
+    AT --> AX["🗃️ soc_action_executions"]
     Q["🛠️ SocNormalizationMaintenanceService"] --> R["🗃️ soc_normalization_schema_baselines"]
     Q --> S["🗃️ soc_normalization_maintenance_issues"]
 ```
@@ -369,7 +399,12 @@ flowchart LR
 | `soc_disposition_sample_manifests` | Reproducible QA samples | 保存 scope/population/seed hash/selected proposal ids，防止人工挑样 |
 | `soc_disposition_outcomes` | Append-only evaluation labels | 保存 primary/sample 结构化结论和 supersession lineage，不改 queue/verdict |
 | `soc_memory_candidates` | Reviewable knowledge proposals | 候选记忆，默认 `pending_review`，不影响 runtime decision |
-| `soc_memory_records` | Confirmed memory records | 已确认记忆，默认不可检索；保存 activation policy、有效期、复核期限、治理 actor/reason 和 record version，仍不自动注入 prompt |
+| `soc_memory_records` | Confirmed memory records | 已确认记忆，默认不可检索；符合 activation/有效期/复核条件后可进入 `M-*`；普通文本只作推理上下文，可选 typed directive 受额外 gate 约束 |
+| `soc_memory_record_facets` | Memory relevance index | normalized exact facet 倒排索引；先跨完整 eligible corpus 召回，再进入 bounded scoring/top-K |
+| `soc_decision_transitions` | Base/effective decision lineage | 保存 before/after、transition kind、Memory/证据/模型/Skill/策略 contributor 与 policy hash |
+| `soc_disposition_transitions` | Operational disposition lineage | shadow 为 proposed，enforced 为 applied；不覆盖 detection truth |
+| `soc_action_authorizations` | Independent action authority | 保存 human/automatic mode、exact target/adapter、原因、有效期和 selected rule；Memory 可有可无 |
+| `soc_action_executions` | External attempts | 保存 attempt、稳定幂等键、external request ID、前后状态以及 retryable/terminal/skipped 结果 |
 | `soc_approval_requests` | Approval request lifecycle | 高风险动作审批 inbox；保存 pending/approved/rejected/expired 终态和处理元数据 |
 | `soc_approval_grants` | One-time approval grants | 一次性授权 token，当前 execute boundary 不执行生产副作用 |
 | `soc_normalization_schema_baselines` | Approved parser fingerprints | 人工批准的 tenant/source/adapter/parser/version 基线；新版本 supersede 旧版本 |
@@ -627,6 +662,35 @@ Approval flow 当前做什么：
 8. 当前不会对生产系统产生外部副作用；每个 request/resolve/dry-run/execute 命令都和追加式
    `SocMutationAuditRecord` 在同一事务提交，审计不保存原始 action payload 或 secret。
 
+### 7.1 Automatic Policy Flow / 自动策略流
+
+```mermaid
+flowchart TD
+    A["📋 Persisted Base Decision"] --> B["🔁 SocDecisionTransition<br/>Memory directive optional"]
+    B --> C{"🛡️ Strict policy match"}
+    C -->|"none"| N["🚫 no action"]
+    C -->|"shadow"| S["👁️ shadow-only authorization record"]
+    C -->|"human_approval"| H["🗃️ requires_human authorization<br/>当前不自动桥接 inbox"]
+    C -->|"automatic_policy"| U{"🔐 exact target + adapter gates"}
+    U -->|"fail"| D["🚫 denied authorization"]
+    U -->|"pass"| E["✅ authorized + expires_at"]
+    E --> F{"execute flag enabled?"}
+    F -->|"no"| G["🗃️ authorization only"]
+    F -->|"yes"| X["⚡ adapter preflight + execute"]
+    X --> R["🗃️ execution attempt<br/>same idempotency key across retries"]
+```
+
+- 该路径是 persisted analysis 的 default-off post-analysis observer，不属于十步 Runtime。
+- `human_approval` 当前只形成 `requires_human` authorization record，尚未自动创建现有 Approval Inbox
+  request；不能把两张表当成已经打通。
+- `automatic_policy` 不要求 Memory。若 effective decision 仍 `needs_review=true`，规则必须显式匹配并
+  填写 `review_required_override_reason`；ReviewQueue 保留。
+- 自动规则还必须锁定 model、Prompt 和 Decision Policy 版本；replay 只重算留痕，固定拒绝外部自动动作。
+- Memory override 冲突时不选择任何 rule。目标缺失、policy/env/tenant/validity 不符、adapter 未注册或
+  不具备 execute/write-or-destructive/idempotency contract 时都 fail closed。
+- 当前真实 write/destructive adapter、生产 owner approval 和 rollback evidence 仍 data-gated；本地可执行
+  adapter 只证明合同、幂等和 lineage。
+
 ## 8. External Disposition Sync / 外部处置反馈流
 
 ```mermaid
@@ -696,7 +760,7 @@ flowchart TD
     H --> I["⚙️ SocMemoryService.review_candidate"]
 
     I -->|confirm_candidate| J["candidate.status=confirmed_candidate<br/>仍不生效"]
-    I -->|confirm| K["candidate.status=confirmed"]
+    I -->|"confirm + optional typed directive"| K["candidate.status=confirmed"]
     K --> L["✅ SocMemoryRecord<br/>status=confirmed<br/>retrieval_enabled=false"]
     I -->|reject| M["candidate.status=rejected"]
     I -->|deprecate / expire| N["candidate/record deprecated or expired"]
@@ -708,8 +772,11 @@ flowchart TD
     U -->|"pass"| V["🗃️ atomic CAS + mutation audit<br/>version + 1; post-commit event"]
     V --> W{"🔎 retrieval eligibility<br/>confirmed + governed policy<br/>activation current + review current"}
     W -->|No| X["skip retrieval<br/>计入 skipped counter"]
-    W -->|Yes| Q["🔎 relevant_memories<br/>进入调查上下文"]
-    Q --> R["🚫 context only<br/>不自动改判、不自动处置"]
+    W -->|Yes| Q["🔎 relevant_memories + Runtime M-*<br/>进入受限上下文"]
+    Q --> R{"📎 typed directive gates pass?"}
+    R -->|"no / text only"| R0["🧠 reasoning context only"]
+    R -->|"yes"| R1["🔁 effective decision transition<br/>before / after"]
+    R1 --> R2["🛡️ separate automation policy<br/>Memory itself never authorizes"]
 ```
 
 Memory 规则：
@@ -723,8 +790,10 @@ Memory 规则：
 | external reason | external feedback lesson | `pending_review` | 外部 reason 不能直接 confirmed |
 | confirmed candidate | memory record | `confirmed`, `retrieval_enabled=false` | 默认仍不被检索；不能由 repository/demo 直接改布尔值 |
 | governed activation | retrieval state transition | `enabled` or `disabled`, version incremented | 只能经 `SocMemoryService`；enable 必须有角色、理由、有效期、复核期、expected version 和幂等键 |
+| reviewed typed directive | effective decision input | optional on `confirm` | exact version/score/required facets 全部通过才 reinforce/override；自由文本不自动生成，且不授权动作 |
 
-Retrieval 的最终筛选不是只看一个布尔值。`find_relevant_records()` 还会拒绝无治理 metadata 的
+Retrieval 的最终筛选不是只看一个布尔值，也不是只看最新 200 条。SQL 先通过 normalized facet index
+跨完整 eligible corpus 召回候选，再进入评分和 top-K/token budget。`find_relevant_records()` 还会拒绝无治理 metadata 的
 legacy/direct flag、activation 已过期、review 已逾期、record 非 confirmed 或 source validity 已过期的记录；
 这些原因分别计数。`soc memory search --baseline-json` 可输出同一 query 前后新增、删除和变化的 match，
 用于 activation replay/diff 审阅，但不会写库或改变 verdict。
@@ -805,6 +874,9 @@ soc review note REV-... --note "..." --scenario-key execution.reverse_shell --do
 # Inspect pending candidates for a queue item
 soc memory list --queue-id REV-... --pretty
 
+# Inspect base/effective decision, disposition, authorization and execution lineage
+soc automation lineage --run-id RUN-... --database-url "$SOC_DATABASE_URL" --pretty
+
 # Open DeerFlow-aligned SOC chat entry
 soc chat tui --queue-id REV-... --lead-agent
 
@@ -815,7 +887,7 @@ soc chat tui --queue-id REV-... --lead-agent
 soc recover RUN-... --reason "worker exited during provider call" --database-url "$SOC_DATABASE_URL" --pretty
 ```
 
-Release-level Alpha acceptance is intentionally outside the nine Runtime nodes. It orchestrates the
+Release-level Alpha acceptance is intentionally outside the ten Runtime nodes. It orchestrates the
 same public paths and seals their evidence without adding another business workflow:
 
 ```mermaid

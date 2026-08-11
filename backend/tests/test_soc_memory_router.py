@@ -15,11 +15,15 @@ from soc_agent.contracts import (
     SocMemoryCandidateStatus,
     SocMemoryCandidateType,
     SocMemoryCandidateValidity,
+    SocMemoryDecisionDirective,
+    SocMemoryDecisionEffect,
     SocMemoryDecisionImpact,
     SocMemoryQuery,
     SocMemoryRecordStatus,
     SocMemoryRetrievalActivationAction,
+    SocMemoryReviewEffect,
     SocMemoryTargetArtifact,
+    Verdict,
 )
 from soc_agent.core import SocMemoryService
 from soc_agent.memory import InMemoryMemoryCandidateRepository
@@ -151,6 +155,39 @@ def test_soc_memory_api_reviews_candidate_and_lists_record() -> None:
     )
     assert enabled_search.returned_count == 1
     assert enabled_search.matches[0].memory_id == result.memory_record.memory_id
+
+
+def test_soc_memory_api_preserves_reviewed_decision_directive() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        mutation_audit_repository=repository,
+    )
+    candidate = service.propose_candidate(_memory_candidate_command())
+    directive = SocMemoryDecisionDirective(
+        effect=SocMemoryDecisionEffect.OVERRIDE,
+        target_verdict=Verdict.FALSE_POSITIVE,
+        review_effect=SocMemoryReviewEffect.CLEAR,
+        minimum_match_score=0.8,
+        required_facet_keys=["tenant"],
+        rationale="Reviewed tenant-scoped false-positive pattern.",
+    )
+
+    result = soc_memory.review_memory_candidate(
+        candidate.candidate_id,
+        soc_memory.MemoryCandidateReviewRequest(
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Reviewer approved a bounded decision directive.",
+            decision_directive=directive,
+        ),
+        request=FakeRequest(),
+        service=service,
+    )
+
+    assert result.memory_record is not None
+    assert result.memory_record.decision_impact is SocMemoryDecisionImpact.DETECTION_DECISION
+    assert result.memory_record.decision_directive == directive
 
 
 def test_soc_memory_api_rejects_analyst_retrieval_activation() -> None:

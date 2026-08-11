@@ -1,0 +1,14 @@
+{
+  "schema_version": "soc.memory_decision_directive.v1",
+  "effect": "override",
+  "target_verdict": "true_positive",
+  "review_effect": "clear",
+  "suggested_action": "apply the reviewed tenant response policy",
+  "minimum_match_score": 6.0,
+  "required_facet_keys": [
+    "detection_key",
+    "source_type"
+  ],
+  "rationale": "A memory reviewer approved this decision effect only for records matching both scoped facets.",
+  "policy_version": "soc.memory_decision_directive_policy.v1"
+}

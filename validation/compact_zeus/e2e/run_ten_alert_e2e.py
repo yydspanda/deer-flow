@@ -39,10 +39,14 @@ from validation.compact_zeus.e2e.knowledge_review import (  # noqa: E402
     compile_knowledge_review_package,
     render_knowledge_review_markdown,
 )
+from validation.compact_zeus.e2e.automation_simulation import (  # noqa: E402
+    DEFAULT_SIMULATION_POLICY,
+    run_governed_automation_simulation,
+)
 
 CASES_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_cases.v1"
-REPORT_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_report.v1"
-CASE_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_case.v1"
+REPORT_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_report.v2"
+CASE_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_case.v2"
 RUN_MANIFEST_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_run.v1"
 DEFAULT_CASES = Path(__file__).with_name("ten-alert-cases.json")
 DEFAULT_SOURCE = (
@@ -122,6 +126,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--confirm-live", action="store_true")
     parser.add_argument("--confirm-investigation", action="store_true")
+    parser.add_argument(
+        "--governed-automation-simulation",
+        action="store_true",
+        help=(
+            "Evaluate the real post-Runtime automation service with the tracked "
+            "E2E policy and an isolated mocked response adapter"
+        ),
+    )
+    parser.add_argument("--confirm-automation-simulation", action="store_true")
     output_mode = parser.add_mutually_exclusive_group()
     output_mode.add_argument("--resume", action="store_true")
     output_mode.add_argument(
@@ -250,6 +263,7 @@ def build_dossier(
     cases: Sequence[CaseSpec],
     source: Path,
     model_name: str,
+    governed_automation_simulation: bool = False,
 ) -> dict[str, Any]:
     records = _load_batch_records(paths.batch)
     missing = [case.alert_id for case in cases if case.alert_id not in records]
@@ -279,6 +293,25 @@ def build_dossier(
     )
     case_results: list[dict[str, Any]] = []
     try:
+        if governed_automation_simulation:
+            simulation_runs = []
+            for case in cases:
+                run_payload = _required_mapping(
+                    records[case.alert_id],
+                    "analysis_run",
+                )
+                run_id = _required_text(run_payload, "run_id")
+                persisted_run = repository.get_run(run_id)
+                if persisted_run is None:
+                    raise ValueError(
+                        f"persisted run is missing for alert {case.alert_id}"
+                    )
+                simulation_runs.append(persisted_run)
+            run_governed_automation_simulation(
+                simulation_runs,
+                automation_repository=repository,
+                memory_repository=repository,
+            )
         _ensure_private_directory(paths.cases)
         for case in cases:
             result = _build_case_dossier(
@@ -287,6 +320,7 @@ def build_dossier(
                 repository=repository,
                 review_service=review_service,
                 output_dir=paths.cases / case.alert_id,
+                automation_expected=governed_automation_simulation,
             )
             case_results.append(result)
     finally:
@@ -312,6 +346,24 @@ def build_dossier(
         str(_mapping(item.get("source")).get("source_type") or "unknown")
         for item in case_results
     )
+    automation_items = [_mapping(item.get("automation")) for item in case_results]
+    transition_kinds = Counter(
+        str(item.get("decision_transition_kind"))
+        for item in automation_items
+        if item.get("decision_transition_kind")
+    )
+    authorization_decisions = Counter(
+        str(decision)
+        for item in automation_items
+        for decision in item.get("action_authorization_decisions") or []
+        if decision
+    )
+    execution_statuses = Counter(
+        str(status)
+        for item in automation_items
+        for status in item.get("action_execution_statuses") or []
+        if status
+    )
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "generated_at": datetime.now(UTC).isoformat(),
@@ -333,6 +385,12 @@ def build_dossier(
             "tenant_policy": "shadow-only post-Runtime advice",
             "lead_agent": "bounded context projection only; no advisory chat is treated as Runtime truth",
             "knowledge_candidates": "human-review package only; no automatic memory, Skill, adapter, or policy mutation",
+            "governed_automation": (
+                "tracked policy plus validation-only mocked response adapter"
+                if governed_automation_simulation
+                else "not evaluated"
+            ),
+            "automation_simulation_performs_real_external_calls": False,
             "mocked_provider_results_are_real_integration_evidence": False,
         },
         "input": {
@@ -390,6 +448,44 @@ def build_dossier(
             "knowledge_review_candidate_count": _mapping(
                 knowledge_review.get("summary")
             ).get("review_candidate_count", 0),
+            "decision_transition_count": sum(
+                int(item.get("decision_transition_count") or 0)
+                for item in automation_items
+            ),
+            "decision_transition_kind_counts": dict(sorted(transition_kinds.items())),
+            "effective_decision_changed_count": sum(
+                bool(item.get("effective_decision_changed"))
+                for item in automation_items
+            ),
+            "memory_contributor_count": sum(
+                int(item.get("memory_contributor_count") or 0)
+                for item in automation_items
+            ),
+            "disposition_transition_count": sum(
+                int(item.get("disposition_transition_count") or 0)
+                for item in automation_items
+            ),
+            "action_authorization_count": sum(
+                int(item.get("action_authorization_count") or 0)
+                for item in automation_items
+            ),
+            "action_authorization_decision_counts": dict(
+                sorted(authorization_decisions.items())
+            ),
+            "automatic_authorization_without_memory_count": sum(
+                int(item.get("automatic_authorization_without_memory_count") or 0)
+                for item in automation_items
+            ),
+            "action_execution_count": sum(
+                int(item.get("action_execution_count") or 0)
+                for item in automation_items
+            ),
+            "action_execution_status_counts": dict(sorted(execution_statuses.items())),
+            "mocked_action_execution_count": sum(
+                int(item.get("mocked_execution_count") or 0)
+                for item in automation_items
+            ),
+            "real_external_action_call_count": 0,
         },
         "knowledge_review": {
             "status": knowledge_review.get("status"),
@@ -412,6 +508,7 @@ def _build_case_dossier(
     repository: SqlAlchemyAlertRepository,
     review_service: SocReviewService,
     output_dir: Path,
+    automation_expected: bool,
 ) -> dict[str, Any]:
     _ensure_private_directory(output_dir)
     run_payload = _required_mapping(record, "analysis_run")
@@ -424,6 +521,22 @@ def _build_case_dossier(
     alert_summary = repository.get_alert_summary(run_id)
     audit_records = repository.list_audit_records(run_id)
     policy_decisions = repository.list_tenant_policy_decisions(
+        run_id=run_id,
+        limit=20,
+    )
+    decision_transitions = repository.list_decision_transitions(
+        run_id=run_id,
+        limit=20,
+    )
+    disposition_transitions = repository.list_disposition_transitions(
+        run_id=run_id,
+        limit=20,
+    )
+    action_authorizations = repository.list_action_authorizations(
+        run_id=run_id,
+        limit=20,
+    )
+    action_executions = repository.list_action_executions(
         run_id=run_id,
         limit=20,
     )
@@ -456,6 +569,49 @@ def _build_case_dossier(
         run_payload.get("steps") if isinstance(run_payload.get("steps"), list) else []
     )
     step_names = [str(_mapping(item).get("step_name")) for item in steps]
+    decision_transition_payloads = [
+        item.model_dump(mode="json", exclude_none=True) for item in decision_transitions
+    ]
+    disposition_transition_payloads = [
+        item.model_dump(mode="json", exclude_none=True)
+        for item in disposition_transitions
+    ]
+    action_authorization_payloads = [
+        item.model_dump(mode="json", exclude_none=True)
+        for item in action_authorizations
+    ]
+    action_execution_payloads = [
+        item.model_dump(mode="json", exclude_none=True) for item in action_executions
+    ]
+    latest_decision_transition = (
+        decision_transition_payloads[0] if decision_transition_payloads else {}
+    )
+    effective_decision = _mapping(latest_decision_transition.get("after")) or {
+        "verdict": decision.get("verdict"),
+        "confidence": decision.get("confidence"),
+        "evidence_state": decision.get("evidence_state"),
+        "suggested_action": decision.get("suggested_action"),
+        "needs_review": decision.get("needs_review"),
+        "policy_version": decision.get("policy_version"),
+    }
+    memory_contributors = [
+        contributor
+        for transition in decision_transition_payloads
+        for contributor in transition.get("contributors") or []
+        if _mapping(contributor).get("kind") == "confirmed_memory"
+    ]
+    automatic_authorizations_without_memory = [
+        authorization
+        for authorization in action_authorization_payloads
+        if authorization.get("mode") == "automatic_policy"
+        and not any(
+            _mapping(contributor).get("kind") == "confirmed_memory"
+            for contributor in authorization.get("contributors") or []
+        )
+    ]
+    mocked_execution_count = sum(
+        _automation_execution_is_mocked(item) for item in action_execution_payloads
+    )
     checks = {
         "batch_completed": record.get("outcome") == "completed",
         "alert_id_matches": str(run_payload.get("alert_id")) == case.alert_id,
@@ -489,7 +645,14 @@ def _build_case_dossier(
         "lead_agent_context_available_when_reviewable": (
             queue_item is None or lead_agent_artifact is not None
         ),
-        "automation_remains_disabled": decision.get("automation_allowed") is False,
+        "base_runtime_automation_guarded": decision.get("automation_allowed") is False,
+        "governed_decision_transition_recorded": (
+            not automation_expected or len(decision_transition_payloads) == 1
+        ),
+        "automation_simulation_executions_are_mocked": (
+            not action_execution_payloads
+            or mocked_execution_count == len(action_execution_payloads)
+        ),
     }
     failed_checks = sorted(name for name, passed in checks.items() if not passed)
     primary_scenario = _primary_scenario(analysis)
@@ -512,9 +675,51 @@ def _build_case_dossier(
         item.model_dump(mode="json", exclude_none=True) for item in policy_decisions
     ]
     investigation_report = _mapping(record.get("investigation_shadow_report"))
+    base_runtime_decision = {
+        "verdict": decision.get("verdict"),
+        "confidence": decision.get("confidence"),
+        "confidence_source": decision.get("confidence_source"),
+        "evidence_state": decision.get("evidence_state"),
+        "suggested_action": decision.get("suggested_action"),
+        "needs_review": decision.get("needs_review"),
+        "automation_allowed": decision.get("automation_allowed"),
+        "policy_version": decision.get("policy_version"),
+        "review_reasons": decision.get("review_reasons"),
+    }
+    automation_summary = {
+        "simulation_enabled": automation_expected,
+        "simulation_policy": (
+            _display_path(DEFAULT_SIMULATION_POLICY) if automation_expected else None
+        ),
+        "decision_transition_count": len(decision_transition_payloads),
+        "decision_transition_kind": latest_decision_transition.get("transition_kind"),
+        "memory_contributor_count": len(memory_contributors),
+        "effective_decision_changed": bool(
+            latest_decision_transition
+            and _mapping(latest_decision_transition.get("before")) != effective_decision
+        ),
+        "selected_rule_id": _selected_automation_rule_id(
+            disposition_transition_payloads,
+            action_authorization_payloads,
+        ),
+        "disposition_transition_count": len(disposition_transition_payloads),
+        "action_authorization_count": len(action_authorization_payloads),
+        "action_authorization_decisions": [
+            item.get("decision") for item in action_authorization_payloads
+        ],
+        "automatic_authorization_without_memory_count": len(
+            automatic_authorizations_without_memory
+        ),
+        "action_execution_count": len(action_execution_payloads),
+        "action_execution_statuses": [
+            item.get("status") for item in action_execution_payloads
+        ],
+        "mocked_execution_count": mocked_execution_count,
+        "real_external_call_count": 0,
+    }
     final_conclusion = {
-        "verdict": analysis.get("verdict"),
-        "confidence": analysis.get("confidence"),
+        "verdict": effective_decision.get("verdict"),
+        "confidence": effective_decision.get("confidence"),
         "summary": analysis.get("summary"),
         "reason": analysis.get("reason"),
         "recommended_action": analysis.get("recommended_action"),
@@ -524,9 +729,12 @@ def _build_case_dossier(
             if primary_scenario is not None
             else None
         ),
-        "evidence_state": decision.get("evidence_state"),
-        "needs_review": decision.get("needs_review"),
+        "base_runtime_decision": base_runtime_decision,
+        "effective_decision": effective_decision,
+        "evidence_state": effective_decision.get("evidence_state"),
+        "needs_review": effective_decision.get("needs_review"),
         "automation_allowed": decision.get("automation_allowed"),
+        "automation": automation_summary,
         "grounded_evidence_count": grounding.get("grounded_count"),
         "ungrounded_evidence_count": grounding.get("ungrounded_count"),
         "tenant_policy": _policy_conclusion(policy_payloads),
@@ -610,6 +818,21 @@ def _build_case_dossier(
             ),
         },
         "11-knowledge-candidates.json": knowledge_candidate_review,
+        "12-effective-decision-and-automation.json": {
+            "base_runtime_decision": base_runtime_decision,
+            "effective_decision": effective_decision,
+            "decision_transitions": decision_transition_payloads,
+            "disposition_transitions": disposition_transition_payloads,
+            "action_authorizations": action_authorization_payloads,
+            "action_executions": action_execution_payloads,
+            "summary": automation_summary,
+            "authority_boundary": {
+                "analysis_run_decision_mutated": False,
+                "memory_is_action_authority": False,
+                "automatic_policy_can_authorize_without_memory": True,
+                "simulation_external_calls_performed": 0,
+            },
+        },
     }
     for filename, payload in stages.items():
         _write_json(output_dir / filename, _mapping(payload))
@@ -664,6 +887,7 @@ def _build_case_dossier(
             "decision_count": len(policy_payloads),
             **_policy_conclusion(policy_payloads),
         },
+        "automation": automation_summary,
         "review": {
             "queue_id": queue_item.queue_id if queue_item is not None else None,
             "status": queue_item.status.value if queue_item is not None else None,
@@ -710,6 +934,27 @@ def _policy_conclusion(decisions: Sequence[Mapping[str, Any]]) -> dict[str, Any]
     }
 
 
+def _selected_automation_rule_id(
+    dispositions: Sequence[Mapping[str, Any]],
+    authorizations: Sequence[Mapping[str, Any]],
+) -> str | None:
+    for item in (*authorizations, *dispositions):
+        value = item.get("selected_rule_id")
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _automation_execution_is_mocked(payload: Mapping[str, Any]) -> bool:
+    result_payload = _mapping(payload.get("result_payload"))
+    adapter_payload = _mapping(result_payload.get("payload"))
+    return (
+        adapter_payload.get("mocked") is True
+        and adapter_payload.get("provider_mode") == "e2e_simulation"
+        and adapter_payload.get("external_side_effect") == "simulated_only"
+    )
+
+
 def _grounding_quality_findings(grounding: Mapping[str, Any]) -> list[str]:
     total = int(grounding.get("total_count") or 0)
     grounded = int(grounding.get("grounded_count") or 0)
@@ -743,6 +988,7 @@ def _load_batch_records(batch_dir: Path) -> dict[str, dict[str, Any]]:
 
 
 def _render_summary_markdown(report: Mapping[str, Any]) -> str:
+    summary = _mapping(report.get("summary"))
     lines = [
         "# SOC Ten-Alert End-to-End Validation",
         "",
@@ -750,12 +996,21 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
         f"- Quality: `{report.get('quality_status')}`",
         f"- Generated: `{report.get('generated_at')}`",
         "- Pass meaning: structural/safety chain passed; this is not a model-accuracy claim",
-        "- Authoritative result: fixed SOC Runtime decision persisted to ReviewQueue",
+        "- Authoritative result: immutable base Runtime decision plus append-only effective-decision/action lineage",
         "- Provider mode: simulated read-only; results do not close real integration debt",
         "- Lead Agent: bounded context is generated, but no chat text replaces Runtime truth",
+        (
+            "- Governed automation: "
+            f"{summary.get('decision_transition_count', 0)} decision transitions, "
+            f"{summary.get('automatic_authorization_without_memory_count', 0)} "
+            "automatic authorizations without Memory, "
+            f"{summary.get('mocked_action_execution_count', 0)} mocked executions, "
+            "0 real external calls"
+        ),
+        f"- Confirmed Memory contributors: {summary.get('memory_contributor_count', 0)}",
         "",
-        "| Alert | Source | Topic | Primary scenario | Verdict | Confidence | Evidence | Queue priority | Quality | Status |",
-        "| --- | --- | --- | --- | --- | ---: | --- | --- | --- | --- |",
+        "| Alert | Source | Topic | Primary scenario | Base -> Effective | Confidence | Evidence | Automation | Queue | Quality | Status |",
+        "| --- | --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- |",
     ]
     for item in report.get("cases") or []:
         if not isinstance(item, Mapping):
@@ -765,6 +1020,15 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
         scenario = _mapping(conclusion.get("primary_scenario"))
         grounding = _mapping(item.get("grounding"))
         review = _mapping(item.get("review"))
+        base_decision = _mapping(conclusion.get("base_runtime_decision"))
+        effective_decision = _mapping(conclusion.get("effective_decision"))
+        automation = _mapping(item.get("automation"))
+        execution_statuses = automation.get("action_execution_statuses") or []
+        automation_label = (
+            ", ".join(str(value) for value in execution_statuses)
+            or automation.get("selected_rule_id")
+            or "no rule"
+        )
         lines.append(
             "| "
             + " | ".join(
@@ -773,12 +1037,16 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
                     _md(source.get("source_type")),
                     _md(source.get("topic")),
                     _md(scenario.get("scenario_name") or scenario.get("scenario_key")),
-                    _md(conclusion.get("verdict")),
+                    _md(
+                        f"{base_decision.get('verdict') or conclusion.get('verdict')} -> "
+                        f"{effective_decision.get('verdict') or conclusion.get('verdict')}"
+                    ),
                     _md(conclusion.get("confidence")),
                     _md(
                         f"{grounding.get('grounded_count', 0)} grounded / "
                         f"{grounding.get('ungrounded_count', 0)} rejected"
                     ),
+                    _md(automation_label),
                     _md(review.get("priority") or "none"),
                     _md(item.get("quality_status")),
                     _md(item.get("acceptance_status")),
@@ -792,7 +1060,7 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
             "## Per-alert files",
             "",
             "Each `cases/<alert_id>/` directory contains `00-ingress.json` through "
-            "`11-knowledge-candidates.json`, followed by `final-conclusion.json`.",
+            "`12-effective-decision-and-automation.json`, followed by `final-conclusion.json`.",
             "The numbered files are chronological; no separate historical validation directory "
             "is needed to understand one alert.",
             "Candidate knowledge is consolidated in `knowledge-review/REVIEW.md`; it remains pending human review and is never written to Memory automatically.",
@@ -849,6 +1117,7 @@ def _write_run_manifest(
     model_name: str,
     batch_command: Sequence[str],
     report: Mapping[str, Any],
+    governed_automation_simulation: bool,
 ) -> None:
     payload = {
         "schema_version": RUN_MANIFEST_SCHEMA_VERSION,
@@ -866,6 +1135,18 @@ def _write_run_manifest(
         "may_contain_source_secrets": True,
         "contains_sensitive_alert_payloads": True,
         "provider_mode": "simulated_read_only",
+        "governed_automation_simulation": governed_automation_simulation,
+        "automation_simulation_policy": (
+            _display_path(DEFAULT_SIMULATION_POLICY)
+            if governed_automation_simulation
+            else None
+        ),
+        "automation_simulation_policy_sha256": (
+            _sha256_file(DEFAULT_SIMULATION_POLICY)
+            if governed_automation_simulation
+            else None
+        ),
+        "real_external_action_call_count": 0,
     }
     _write_json(paths.run_manifest, payload)
 
@@ -967,6 +1248,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError(
                 "--execute requires --confirm-live and --confirm-investigation"
             )
+        if (
+            args.execute
+            and args.governed_automation_simulation
+            and not args.confirm_automation_simulation
+        ):
+            raise ValueError(
+                "--governed-automation-simulation requires "
+                "--confirm-automation-simulation"
+            )
+        if (
+            args.confirm_automation_simulation
+            and not args.governed_automation_simulation
+        ):
+            raise ValueError(
+                "--confirm-automation-simulation requires "
+                "--governed-automation-simulation"
+            )
         cases_manifest, cases = load_case_manifest(cases_path)
         paths = build_paths(args.output_root)
         batch_command = build_batch_command(
@@ -992,6 +1290,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "batch_command": list(batch_command),
                         "live_model_call_count": len(cases),
                         "provider_mode": "simulated_read_only",
+                        "governed_automation_simulation": (
+                            args.governed_automation_simulation
+                        ),
+                        "automation_simulation_policy": (
+                            _display_path(DEFAULT_SIMULATION_POLICY)
+                            if args.governed_automation_simulation
+                            else None
+                        ),
+                        "real_external_action_call_count": 0,
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -1022,6 +1329,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             cases=cases,
             source=source,
             model_name=args.model_name,
+            governed_automation_simulation=(args.governed_automation_simulation),
         )
         _write_run_manifest(
             paths=paths,
@@ -1030,6 +1338,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             model_name=args.model_name,
             batch_command=batch_command,
             report=report,
+            governed_automation_simulation=(args.governed_automation_simulation),
         )
         print(
             json.dumps(

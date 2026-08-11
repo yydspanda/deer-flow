@@ -10,6 +10,11 @@
 backend/.venv/bin/python validation/compact_zeus/e2e/run_ten_alert_e2e.py
 backend/.venv/bin/python validation/compact_zeus/e2e/run_ten_alert_e2e.py \
   --execute --confirm-live --confirm-investigation
+
+backend/.venv/bin/python validation/compact_zeus/e2e/run_ten_alert_e2e.py \
+  --output-root backend/.deer-flow/soc-validation/e2e-ten-governed-current \
+  --execute --confirm-live --confirm-investigation \
+  --governed-automation-simulation --confirm-automation-simulation
 ```
 
 统一结果位于 `backend/.deer-flow/soc-validation/e2e-ten-current/`，说明见
@@ -17,11 +22,26 @@ backend/.venv/bin/python validation/compact_zeus/e2e/run_ten_alert_e2e.py \
 `1965452/1965795`，改用完整的 `2025642/1980502`；旧三个 validation 根目录仍是专项和
 历史证据，不再是一次端到端审阅的必经入口。
 
+governed simulation 会额外生成每条告警的
+`12-effective-decision-and-automation.json`：`08-decision.json` 仍是不可变 base Runtime
+decision，`12-*` 才是 effective decision、Memory contributor、disposition、authorization 和
+execution 的追加留痕。模拟 adapter 固定 `mocked=true` 且不发真实外部请求。使用
+`compare_ten_alert_e2e.py` 对比旧、新 `summary.json`；base LLM 重采样差异不能冒充
+Memory/automation 效果。
+
 2026-08-10 最新同版代码 fresh 实跑：10/10 结构与安全门禁通过，6 `suspicious`、4 `needs_review`，
 全部进入 ReviewQueue 且 `automation_allowed=false`。模型质量仍为 `review_required`：3 个 case 共
 3 条 `E-*` exact typed fact 和 5 条关联 `R-*` 被拒绝；另外生成 20 个 `K-*` 待审知识候选，其中
 17 个 support grounded。先看 `SUMMARY.md`，再看对应 case 的 `04/06/07/08` 和
 `knowledge-review/REVIEW.md`；不得把 structural pass 当作模型准确率或真实 Provider 通过。
+
+2026-08-11 governed simulation fresh 实跑位于
+`backend/.deer-flow/soc-validation/e2e-ten-governed-20260811/`：10/10 passed，9
+`suspicious` / 1 `needs_review`，10 decision transitions、0 Memory contributor、3 无 Memory automatic
+authorizations、3 mocked idempotent executions、0 real external call。首次 2 条模型失败通过
+`--resume` 仅重试失败项后完成。与 2026-08-10 基线的同输入比较位于
+`e2e-ten-comparison-20260811/COMPARISON.md`；3 条 base verdict 变化只归为 live-model 重采样，
+不能归因给 automation。
 
 ## 1. What Is Actually Linear / 真正固定流水线
 

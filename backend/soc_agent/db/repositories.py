@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import Integer, and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -37,19 +38,24 @@ from soc_agent.contracts import (
     SkillFeedbackSourceType,
     SkillImprovementCandidate,
     SkillImprovementCandidateStatus,
+    SocActionAuthorizationRecord,
+    SocActionExecutionRecord,
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
     SocAgentApprovalRequestStatus,
+    SocDecisionTransitionRecord,
     SocDispositionOutcomeRecord,
     SocDispositionOutcomeReviewKind,
     SocDispositionProposalRecord,
     SocDispositionSampleManifest,
+    SocDispositionTransitionRecord,
     SocEnrichmentActionAttempt,
     SocEnrichmentExecution,
     SocEvaluationDataClass,
     SocExternalDispositionRecord,
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
+    SocMemoryQuery,
     SocMemoryRecord,
     SocMemoryRecordStatus,
     SocMutationAuditRecord,
@@ -57,15 +63,19 @@ from soc_agent.contracts import (
     TenantPolicyDecision,
 )
 from soc_agent.db.models import (
+    SocActionAuthorizationRow,
+    SocActionExecutionRow,
     SocAlertSummaryRow,
     SocAnalysisRunRow,
     SocApprovalGrantRow,
     SocApprovalRequestRow,
     SocAuthorizationEnrichmentRow,
     SocDecisionAuditLogRow,
+    SocDecisionTransitionRow,
     SocDispositionOutcomeRow,
     SocDispositionProposalRow,
     SocDispositionSampleManifestRow,
+    SocDispositionTransitionRow,
     SocEnrichmentActionAttemptRow,
     SocEnrichmentExecutionRow,
     SocExternalDispositionRow,
@@ -73,6 +83,7 @@ from soc_agent.db.models import (
     SocInvestigationEvidenceRow,
     SocMemoryCandidateRow,
     SocMemoryPatternObservationRow,
+    SocMemoryRecordFacetRow,
     SocMemoryRecordRow,
     SocMutationAuditRow,
     SocNormalizationMaintenanceIssueRow,
@@ -88,6 +99,7 @@ from soc_agent.governed_context import (
     GovernedContextFactVersionConflictError,
     validate_governed_context_fact_append,
 )
+from soc_agent.memory.scoring import score_memory_record
 from soc_agent.tenant_policy import TenantPolicyDecisionConflictError
 
 MutationWriteHook = Callable[[int], None]
@@ -899,6 +911,149 @@ class SqlAlchemyAlertRepository:
             result = session.execute(query.order_by(SocTenantPolicyDecisionRow.created_at.desc()).limit(limit))
             return [_tenant_policy_decision_from_row(row) for row in result.scalars()]
 
+    def save_decision_transition(self, record: SocDecisionTransitionRecord) -> None:
+        self._save_append_only_row(
+            SocDecisionTransitionRow(
+                transition_id=record.transition_id,
+                **_decision_transition_row_values(record),
+            )
+        )
+
+    def find_decision_transition_by_key(
+        self,
+        transition_key: str,
+    ) -> SocDecisionTransitionRecord | None:
+        with self._session_factory() as session:
+            row = session.execute(select(SocDecisionTransitionRow).where(SocDecisionTransitionRow.transition_key == transition_key).limit(1)).scalar_one_or_none()
+            return SocDecisionTransitionRecord.model_validate(row.transition_payload) if row is not None else None
+
+    def save_disposition_transition(
+        self,
+        record: SocDispositionTransitionRecord,
+    ) -> None:
+        self._save_append_only_row(
+            SocDispositionTransitionRow(
+                transition_id=record.transition_id,
+                **_disposition_transition_row_values(record),
+            )
+        )
+
+    def find_disposition_transition_by_key(
+        self,
+        transition_key: str,
+    ) -> SocDispositionTransitionRecord | None:
+        with self._session_factory() as session:
+            row = session.execute(select(SocDispositionTransitionRow).where(SocDispositionTransitionRow.transition_key == transition_key).limit(1)).scalar_one_or_none()
+            return SocDispositionTransitionRecord.model_validate(row.transition_payload) if row is not None else None
+
+    def save_action_authorization(
+        self,
+        record: SocActionAuthorizationRecord,
+    ) -> None:
+        self._save_append_only_row(
+            SocActionAuthorizationRow(
+                authorization_id=record.authorization_id,
+                **_action_authorization_row_values(record),
+            )
+        )
+
+    def find_action_authorization_by_key(
+        self,
+        authorization_key: str,
+    ) -> SocActionAuthorizationRecord | None:
+        with self._session_factory() as session:
+            row = session.execute(select(SocActionAuthorizationRow).where(SocActionAuthorizationRow.authorization_key == authorization_key).limit(1)).scalar_one_or_none()
+            return SocActionAuthorizationRecord.model_validate(row.authorization_payload) if row is not None else None
+
+    def save_action_execution(self, record: SocActionExecutionRecord) -> None:
+        self._save_append_only_row(
+            SocActionExecutionRow(
+                execution_id=record.execution_id,
+                **_action_execution_row_values(record),
+            )
+        )
+
+    def find_action_execution_by_key(
+        self,
+        execution_key: str,
+    ) -> SocActionExecutionRecord | None:
+        with self._session_factory() as session:
+            row = session.execute(select(SocActionExecutionRow).where(SocActionExecutionRow.execution_key == execution_key).limit(1)).scalar_one_or_none()
+            return SocActionExecutionRecord.model_validate(row.execution_payload) if row is not None else None
+
+    def list_decision_transitions(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SocDecisionTransitionRecord]:
+        with self._session_factory() as session:
+            query = select(SocDecisionTransitionRow)
+            if run_id is not None:
+                query = query.where(SocDecisionTransitionRow.run_id == run_id)
+            if alert_id is not None:
+                query = query.where(SocDecisionTransitionRow.alert_id == alert_id)
+            rows = session.execute(query.order_by(SocDecisionTransitionRow.created_at.desc()).limit(limit)).scalars()
+            return [SocDecisionTransitionRecord.model_validate(row.transition_payload) for row in rows]
+
+    def list_action_authorizations(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SocActionAuthorizationRecord]:
+        with self._session_factory() as session:
+            query = select(SocActionAuthorizationRow)
+            if run_id is not None:
+                query = query.where(SocActionAuthorizationRow.run_id == run_id)
+            if alert_id is not None:
+                query = query.where(SocActionAuthorizationRow.alert_id == alert_id)
+            rows = session.execute(query.order_by(SocActionAuthorizationRow.created_at.desc()).limit(limit)).scalars()
+            return [SocActionAuthorizationRecord.model_validate(row.authorization_payload) for row in rows]
+
+    def list_disposition_transitions(
+        self,
+        *,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SocDispositionTransitionRecord]:
+        with self._session_factory() as session:
+            query = select(SocDispositionTransitionRow)
+            if run_id is not None:
+                query = query.where(SocDispositionTransitionRow.run_id == run_id)
+            if alert_id is not None:
+                query = query.where(SocDispositionTransitionRow.alert_id == alert_id)
+            rows = session.execute(query.order_by(SocDispositionTransitionRow.created_at.desc()).limit(limit)).scalars()
+            return [SocDispositionTransitionRecord.model_validate(row.transition_payload) for row in rows]
+
+    def list_action_executions(
+        self,
+        *,
+        run_id: str | None = None,
+        authorization_id: str | None = None,
+        limit: int = 100,
+    ) -> list[SocActionExecutionRecord]:
+        with self._session_factory() as session:
+            query = select(SocActionExecutionRow)
+            if run_id is not None:
+                query = query.where(SocActionExecutionRow.run_id == run_id)
+            if authorization_id is not None:
+                query = query.where(SocActionExecutionRow.authorization_id == authorization_id)
+            rows = session.execute(query.order_by(SocActionExecutionRow.started_at.desc()).limit(limit)).scalars()
+            return [SocActionExecutionRecord.model_validate(row.execution_payload) for row in rows]
+
+    def _save_append_only_row(self, row: Any) -> None:
+        with self._session_factory() as session:
+            session.add(row)
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise ValueError("append-only SOC automation identity already exists") from exc
+
     def save_disposition_sample_manifest(self, manifest: SocDispositionSampleManifest) -> None:
         payload = manifest.model_dump(mode="json")
         with self._session_factory() as session:
@@ -1189,6 +1344,8 @@ class SqlAlchemyAlertRepository:
             else:
                 for key, value in _memory_record_row_values(record, payload).items():
                     setattr(row, key, value)
+            session.flush()
+            _replace_memory_record_facets(session, record)
             session.commit()
 
     def compare_and_set_memory_record(
@@ -1209,8 +1366,11 @@ class SqlAlchemyAlertRepository:
                 )
                 .values(**_memory_record_row_values(record, payload))
             )
+            if result.rowcount != 1:
+                return False
+            _replace_memory_record_facets(session, record)
             session.commit()
-            return result.rowcount == 1
+            return True
 
     def get_memory_record(self, memory_id: str) -> SocMemoryRecord | None:
         with self._session_factory() as session:
@@ -1247,6 +1407,86 @@ class SqlAlchemyAlertRepository:
                 query = query.where(SocMemoryRecordRow.retrieval_enabled == retrieval_enabled)
             result = session.execute(query.order_by(SocMemoryRecordRow.updated_at.desc()).limit(limit))
             return [SocMemoryRecord.model_validate(row.record_payload) for row in result.scalars()]
+
+    def find_memory_candidate_records(
+        self,
+        query: SocMemoryQuery,
+    ) -> list[SocMemoryRecord]:
+        """Return relevance-first candidates without applying a recency window first.
+
+        Each relevance signal gets its own lane.  In particular, a broad memory-type
+        match must not fill the candidate window before an older exact-facet or text
+        match has had a chance to enter it.
+        """
+
+        with self._session_factory() as session:
+            filters = _memory_record_scope_filters(query)
+            exact_pairs = _memory_query_exact_pairs(query)
+            text_filters = _memory_query_text_filters(query)
+            lane_rows: dict[str, SocMemoryRecordRow] = {}
+
+            def append_lane(statement: Any) -> None:
+                rows = session.execute(statement.limit(query.candidate_limit)).scalars()
+                for row in rows:
+                    lane_rows.setdefault(row.memory_id, row)
+
+            if exact_pairs:
+                exact_match = (
+                    select(
+                        SocMemoryRecordFacetRow.memory_id.label("memory_id"),
+                        func.count(SocMemoryRecordFacetRow.facet_id).label("match_count"),
+                    )
+                    .where(
+                        or_(
+                            *[
+                                and_(
+                                    SocMemoryRecordFacetRow.facet_key == key,
+                                    SocMemoryRecordFacetRow.facet_value_hash == value_hash,
+                                )
+                                for key, value_hash in exact_pairs
+                            ]
+                        )
+                    )
+                    .group_by(SocMemoryRecordFacetRow.memory_id)
+                    .subquery()
+                )
+                append_lane(
+                    select(SocMemoryRecordRow)
+                    .join(
+                        exact_match,
+                        exact_match.c.memory_id == SocMemoryRecordRow.memory_id,
+                    )
+                    .where(*filters)
+                    .order_by(
+                        exact_match.c.match_count.desc(),
+                        SocMemoryRecordRow.updated_at.desc(),
+                    )
+                )
+
+            if text_filters:
+                text_match_count = func.cast(text_filters[0], Integer)
+                for text_filter in text_filters[1:]:
+                    text_match_count += func.cast(text_filter, Integer)
+                append_lane(
+                    select(SocMemoryRecordRow)
+                    .where(*filters, or_(*text_filters))
+                    .order_by(
+                        text_match_count.desc(),
+                        SocMemoryRecordRow.updated_at.desc(),
+                    )
+                )
+
+            append_lane(select(SocMemoryRecordRow).where(*filters).order_by(SocMemoryRecordRow.updated_at.desc()))
+
+            candidates = [SocMemoryRecord.model_validate(row.record_payload) for row in lane_rows.values()]
+            return sorted(
+                candidates,
+                key=lambda record: (
+                    score_memory_record(record, query)[0],
+                    record.updated_at,
+                ),
+                reverse=True,
+            )[: query.candidate_limit]
 
     def append_governed_context_fact(
         self,
@@ -2075,6 +2315,98 @@ def _tenant_policy_decision_from_row(
     return decision
 
 
+def _decision_transition_row_values(
+    record: SocDecisionTransitionRecord,
+) -> dict[str, Any]:
+    return {
+        "transition_key": record.transition_key,
+        "run_id": record.run_id,
+        "alert_id": record.alert_id,
+        "tenant_id": record.tenant_id,
+        "before_verdict": record.before.verdict.value,
+        "after_verdict": record.after.verdict.value,
+        "before_needs_review": record.before.needs_review,
+        "after_needs_review": record.after.needs_review,
+        "transition_kind": record.transition_kind.value,
+        "policy_id": record.policy_id,
+        "policy_version": record.policy_version,
+        "policy_hash": record.policy_hash,
+        "created_by_actor_id": record.created_by.actor_id,
+        "created_at": record.created_at,
+        "transition_payload": record.model_dump(mode="json"),
+    }
+
+
+def _disposition_transition_row_values(
+    record: SocDispositionTransitionRecord,
+) -> dict[str, Any]:
+    return {
+        "transition_key": record.transition_key,
+        "run_id": record.run_id,
+        "alert_id": record.alert_id,
+        "tenant_id": record.tenant_id,
+        "decision_transition_id": record.decision_transition_id,
+        "before_disposition": record.before.value if record.before is not None else None,
+        "after_disposition": record.after.value if record.after is not None else None,
+        "transition_kind": record.transition_kind.value,
+        "policy_id": record.policy_id,
+        "policy_version": record.policy_version,
+        "selected_rule_id": record.selected_rule_id,
+        "created_by_actor_id": record.created_by.actor_id,
+        "created_at": record.created_at,
+        "transition_payload": record.model_dump(mode="json"),
+    }
+
+
+def _action_authorization_row_values(
+    record: SocActionAuthorizationRecord,
+) -> dict[str, Any]:
+    return {
+        "authorization_key": record.authorization_key,
+        "run_id": record.run_id,
+        "alert_id": record.alert_id,
+        "tenant_id": record.tenant_id,
+        "decision_transition_id": record.decision_transition_id,
+        "disposition_transition_id": record.disposition_transition_id,
+        "mode": record.mode.value,
+        "decision": record.decision.value,
+        "route": record.route,
+        "action": record.action,
+        "adapter_id": record.adapter_id,
+        "target_type": record.target_type.value,
+        "target_value": record.target_value,
+        "policy_id": record.policy_id,
+        "policy_version": record.policy_version,
+        "selected_rule_id": record.selected_rule_id,
+        "expires_at": record.expires_at,
+        "authorized_by_actor_id": record.authorized_by.actor_id,
+        "created_at": record.created_at,
+        "authorization_payload": record.model_dump(mode="json"),
+    }
+
+
+def _action_execution_row_values(
+    record: SocActionExecutionRecord,
+) -> dict[str, Any]:
+    return {
+        "execution_key": record.execution_key,
+        "authorization_id": record.authorization_id,
+        "run_id": record.run_id,
+        "alert_id": record.alert_id,
+        "route": record.route,
+        "action": record.action,
+        "adapter_id": record.adapter_id,
+        "status": record.status.value,
+        "attempt": record.attempt,
+        "idempotency_key": record.idempotency_key,
+        "external_request_id": record.external_request_id,
+        "executed_by_actor_id": record.executed_by.actor_id,
+        "started_at": record.started_at,
+        "ended_at": record.ended_at,
+        "execution_payload": record.model_dump(mode="json"),
+    }
+
+
 def _disposition_sample_manifest_from_row(
     row: SocDispositionSampleManifestRow,
 ) -> SocDispositionSampleManifest:
@@ -2226,6 +2558,90 @@ def _memory_record_row_values(record: SocMemoryRecord, payload: dict) -> dict:
         "updated_at": record.updated_at,
         "record_payload": payload,
     }
+
+
+def _replace_memory_record_facets(
+    session: Session,
+    record: SocMemoryRecord,
+) -> None:
+    session.execute(delete(SocMemoryRecordFacetRow).where(SocMemoryRecordFacetRow.memory_id == record.memory_id))
+    session.add_all(
+        SocMemoryRecordFacetRow(
+            memory_id=record.memory_id,
+            facet_key=key,
+            facet_value=value,
+            facet_value_hash=value_hash,
+        )
+        for key, value, value_hash in _memory_record_exact_values(record)
+    )
+
+
+def _memory_record_exact_values(
+    record: SocMemoryRecord,
+) -> list[tuple[str, str, str]]:
+    exact_values: set[tuple[str, str]] = set()
+    for raw_key, values in record.facets.items():
+        key = str(raw_key).strip().casefold()
+        if not key:
+            continue
+        for raw_value in values:
+            value = str(raw_value).strip()
+            if value:
+                exact_values.add((key, value))
+    for evidence_ref in record.evidence_refs:
+        value = str(evidence_ref).strip()
+        if value:
+            exact_values.add(("__evidence_ref__", value))
+    return [(key, value, _memory_exact_value_hash(value)) for key, value in sorted(exact_values)]
+
+
+def _memory_record_scope_filters(query: SocMemoryQuery) -> list[Any]:
+    filters: list[Any] = []
+    if query.statuses:
+        filters.append(SocMemoryRecordRow.status.in_([status.value for status in query.statuses]))
+    if query.tenant_scope is not None:
+        filters.append(SocMemoryRecordRow.tenant_scope == query.tenant_scope)
+    if query.tenant_id is not None:
+        filters.append(SocMemoryRecordRow.tenant_id == query.tenant_id)
+    if query.memory_types:
+        filters.append(SocMemoryRecordRow.memory_type.in_([memory_type.value for memory_type in query.memory_types]))
+    return filters
+
+
+def _memory_query_exact_pairs(query: SocMemoryQuery) -> list[tuple[str, str]]:
+    pairs: set[tuple[str, str]] = set()
+    for raw_key, values in query.facets.items():
+        key = str(raw_key).strip().casefold()
+        if not key:
+            continue
+        for raw_value in values:
+            value = str(raw_value).strip()
+            if value:
+                pairs.add((key, _memory_exact_value_hash(value)))
+    for evidence_ref in query.evidence_refs:
+        value = str(evidence_ref).strip()
+        if value:
+            pairs.add(("__evidence_ref__", _memory_exact_value_hash(value)))
+    return sorted(pairs)
+
+
+def _memory_query_text_filters(query: SocMemoryQuery) -> list[Any]:
+    filters: list[Any] = []
+    for term in query.text_terms:
+        normalized = str(term).strip().casefold()
+        if not normalized:
+            continue
+        filters.append(
+            or_(
+                func.lower(SocMemoryRecordRow.summary).contains(normalized),
+                func.lower(SocMemoryRecordRow.content).contains(normalized),
+            )
+        )
+    return filters
+
+
+def _memory_exact_value_hash(value: str) -> str:
+    return hashlib.sha256(value.strip().casefold().encode("utf-8")).hexdigest()
 
 
 def _mutation_audit_row_values(record: SocMutationAuditRecord, payload: dict) -> dict:

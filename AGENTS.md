@@ -235,6 +235,35 @@ Current SOC direction:
   sentinel, derive the redundant basis label from an already explicit valid `S/A/M/C/T` reference,
   or mark a missing scenario rationale with an explicit non-semantic placeholder when both E/R
   support lists exist. It must not infer security semantics.
+- Persisted Runtime resolves confirmed Memory after Skill selection and before reference-catalog
+  finalization/provider journaling. It queries only through `SocMemoryService`, projects at most the
+  bounded retrieval result as `M-*`, and treats retrieval failure as non-blocking. Only confirmed,
+  explicitly retrieval-enabled, validity-current and review-current records are eligible; alert/run
+  IDs are lineage metadata rather than match facets. SQL candidate selection runs independent exact-
+  facet and text lanes across the complete eligible corpus, merges them with the scoped fallback, then
+  applies shared scoring and candidate/top-K budgets; it must not regress to latest-N-only retrieval.
+  `M-*` is reasoning context, never `E-*`
+  current evidence. Free-form Memory has no deterministic decision or action authority. Only a
+  human-reviewed `SocMemoryDecisionDirective` attached during candidate confirmation may change the
+  post-Runtime effective decision, and only when the exact record version/content/facets hashes, activation, validity,
+  review due, minimum score, and required-facet matches all pass. It never directly authorizes an
+  action.
+- Governed response automation is a separate default-off post-Runtime layer. `SocAutomationService`
+  preserves the immutable base `AnalysisRun.decision`, writes an append-only before/after
+  `SocDecisionTransitionRecord`, then evaluates a tenant/environment/version/validity-bound
+  server-owned `SocAutomationPolicy`. It may produce disposition, action authorization, and action
+  execution records even when no Memory matched. Automatic rules require explicit verdict,
+  evidence-state, model name, prompt version, Decision Policy version, confidence, and `needs_review`
+  matches plus an exact pinned idempotent write or destructive adapter. Replay runs never receive
+  automatic external-action authorization. A rule that executes while `needs_review=true` must carry a separately reviewed
+  `review_required_override_reason`; this does not remove the ReviewQueue or impersonate human review.
+  Memory, model output, Skills, tools, or an adapter result cannot grant this authority. No policy path
+  means no automation; shadow mode never authorizes; enforced execution additionally requires
+  `SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=true` and an injected reviewed registry. Migration `0023`
+  stores the Memory facet index and decision/disposition/authorization/execution lineage; inspect it
+  with `soc automation lineage`. The existing human Approval flow remains supported, but its Alpha
+  execute boundary must not be described as a completed production side effect until both authorization
+  modes converge on one external execution service.
 - Evidence Grounding uses `soc.analysis_evidence_grounding.v3`. It first proves each `E-*` reference,
   exact source path and typed scalar value, then verifies every `R-*` reference and governed-context
   namespace. A grounded reasoning item proves reference integrity, not that its model inference is
@@ -648,7 +677,11 @@ Current SOC direction:
   Providers, and writes chronological per-alert artifacts under
   `backend/.deer-flow/soc-validation/e2e-ten-current/`. Its `knowledge-review/` package is an inert
   human-review surface and cannot write or activate knowledge. Historical validation roots remain
-  specialized evidence, not inputs that must be manually joined for this review.
+  specialized evidence, not inputs that must be manually joined for this review. The optional
+  governed-automation simulation adds `12-effective-decision-and-automation.json` through the real
+  `SocAutomationService` and a validation-only `mocked=true` adapter; it never calls an external
+  response system. Use `compare_ten_alert_e2e.py` to compare same-cohort reports, keeping live-model
+  base-output drift separate from append-only effective-decision transitions.
 - Reproduce deterministic Checkpoint D0-D6 with
   `./scripts/soc-runtime-validation.sh checkpoint-d`; run the explicit-cost live D7 boundary with
   `./scripts/soc-runtime-validation.sh checkpoint-d-live`, then run deterministic D8 with

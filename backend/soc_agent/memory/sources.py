@@ -135,10 +135,12 @@ def memory_candidate_command_from_correction(
     evidence_refs.insert(0, f"correction:{correction.correction_id}")
     evidence_refs.extend(_correction_evidence_refs(correction))
     content = _correction_content(run, correction)
+    same_verdict = correction.previous_verdict is correction.corrected_verdict
+    summary_prefix = "Review confirmation" if same_verdict else "Correction feedback"
     return SocMemoryCandidateCreateCommand(
         candidate_type=_candidate_type_for_correction(correction.corrected_verdict),
         target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
-        summary=f"Correction feedback for {run.run_id}: {correction.corrected_verdict.value}",
+        summary=f"{summary_prefix} for {run.run_id}: {correction.corrected_verdict.value}",
         content=content,
         tenant_scope=_tenant_scope(alert),
         tenant_id=alert.tenant_id if alert is not None else None,
@@ -389,7 +391,11 @@ def _correction_evidence_refs(correction: CorrectionRecord) -> list[str]:
 def _correction_content(run: AnalysisRun, correction: CorrectionRecord) -> str:
     previous = correction.previous_verdict.value if correction.previous_verdict is not None else "unknown"
     summary = run.analysis.summary if run.analysis is not None else "No runtime analysis summary."
-    return f"Analyst correction changed verdict from {previous} to {correction.corrected_verdict.value}.\nReason: {correction.reason}\nRuntime summary: {summary}"
+    if correction.previous_verdict is correction.corrected_verdict:
+        disposition = f"Analyst confirmed the existing verdict as {correction.corrected_verdict.value}."
+    else:
+        disposition = f"Analyst correction changed verdict from {previous} to {correction.corrected_verdict.value}."
+    return f"{disposition}\nReason: {correction.reason}\nRuntime summary: {summary}"
 
 
 def _domain_finding_content(finding: SocDomainFinding, *, analyst_feedback: str | None = None) -> str:

@@ -154,13 +154,20 @@ backend/.venv/bin/python \
 backend/.venv/bin/python \
   validation/compact_zeus/e2e/run_ten_alert_e2e.py \
   --execute --confirm-live --confirm-investigation
+
+backend/.venv/bin/python \
+  validation/compact_zeus/e2e/run_ten_alert_e2e.py \
+  --output-root backend/.deer-flow/soc-validation/e2e-ten-governed-current \
+  --execute --confirm-live --confirm-investigation \
+  --governed-automation-simulation --confirm-automation-simulation
 ```
 
 输出统一写入 `backend/.deer-flow/soc-validation/e2e-ten-current/`；每条告警都包含
-`00-ingress.json` 到 `11-knowledge-candidates.json` 及
+`00-ingress.json` 到 `12-effective-decision-and-automation.json` 及
 `final-conclusion.json`，根目录另有待人工审核的 `knowledge-review/REVIEW.md`。固定样本、
 `E-*` 原子事实 / `R-*` 推理引用、两个被排除的输入缺口、替代样本和审阅边界见
-[`e2e/README.md`](e2e/README.md)。
+[`e2e/README.md`](e2e/README.md)。automation simulation 只调用 validation-only mock adapter，
+不会访问外部封禁系统；同 cohort 新旧结果使用 `compare_ten_alert_e2e.py` 对比。
 
 ### 4.2 验证脚本测试
 

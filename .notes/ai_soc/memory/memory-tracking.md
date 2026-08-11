@@ -1,6 +1,6 @@
 # SOC Memory Tracking
 
-> Updated: 2026-08-06
+> Updated: 2026-08-11
 >
 > 目的：定义 SOC Agent 后续如何沉淀 topic / detection / scenario 级经验，并把 SOC TUI、Kafka daemon、ReviewQueue、Lead Agent 和 domain triage 中的重要结论转成可审计、可确认、可回滚的业务记忆。
 
@@ -31,7 +31,7 @@ Typed memory DB contract
   -> Wiki/OKF export projection later
 ```
 
-当前实现进度：`SocMemoryCandidate` DB/API/CLI/Web/TUI/Lead Agent visibility 已完成；`SocMemoryService.review_candidate()` 已支持 `confirm_candidate`、`confirm`、`reject`、`deprecate`、`expire`；`confirm` 会创建 `SocMemoryRecord(status=confirmed, retrieval_enabled=false)`。`SocMemoryService.find_relevant_records()` 已支持 governed activation、score、match reason、token budget、replay diff 和 `InvestigationContext.relevant_memories`。PI-03F1/F2 已把 CLI/TUI/Web 中“分析师明确采纳的 Lead Agent 结论”接到既有 review-note source bridge，并让 Web/Gateway 从服务端当前 checkpoint 核验消息正文；PI-03F3 已把 Kafka/批处理接成 default-off immutable observation + typed aggregate source。Direct Web queue-grounded context injection 已完成，因而治理通过的 `relevant_memories` 可随同 bounded artifact 进入 SOC Lead Agent；固定 Runtime analyzer 的独立 PromptBuilder memory 注入仍未开启。
+当前实现进度：`SocMemoryCandidate` DB/API/CLI/Web/TUI/Lead Agent visibility 已完成；`SocMemoryService.review_candidate()` 已支持 `confirm_candidate`、`confirm`、`reject`、`deprecate`、`expire`；`confirm` 会创建 `SocMemoryRecord(status=confirmed, retrieval_enabled=false)`。`SocMemoryService.find_relevant_records()` 已支持 governed activation、relevance-first candidate selection、score、match reason、token budget、replay diff 和 `InvestigationContext.relevant_memories`。PI-03F1/F2 已把 CLI/TUI/Web 中“分析师明确采纳的 Lead Agent 结论”接到既有 review-note source bridge，并让 Web/Gateway 从服务端当前 checkpoint 核验消息正文；PI-03F3 已把 Kafka/批处理接成 default-off immutable observation + typed aggregate source。固定 Runtime 现在也会在 LLM 调用前，通过 `ConfirmedMemoryAnalysisRequestEnricher` 查询同一 `SocMemoryService`，并把命中的受治理记录投影为 `M-*` context。普通 Memory 文本仍不是 `E-*` 当前告警事实，也没有可执行权限；只有审核人在确认时显式附加的 `SocMemoryDecisionDirective`，通过完整检索与治理条件后，才可在 post-Runtime 层形成带 before/after 的有效研判变更。Memory 永不直接授权动作。
 
 ## 2. 不是四维硬主键
 
@@ -123,7 +123,7 @@ Typed Memory Record
 | `benign_pattern` | 常见误报 / 授权行为模式 | confirmed、未过期且 retrieval policy 允许后可注入 | “某内部安全组执行指定扫描工具通常为授权测试” |
 | `environment_fact` | 环境事实 / 授权资产 / 业务背景 | confirmed、未过期且 retrieval policy 允许后可注入 | “SecurityScan 是公司漏扫工具” |
 | `identity_pattern` | 租户身份/账号模式 | confirmed、未过期且 retrieval policy 允许后可注入 | “外包账号通常使用 EX- 前缀” |
-| `response_policy_hint` | 处置策略提示 | confirmed 后可作为建议，不自动执行 | “该场景优先转 BU，不直接封 IP” |
+| `response_policy_hint` | 处置策略提示 | 普通内容只作建议；可选 typed directive 仍须独立治理 | “该场景优先转 BU，不直接封 IP” |
 | `negative_memory` | 被驳回结论 / 禁止重复建议 | confirmed + retrieval policy 允许后用于抑制 | “不要把 X 类日志云加工字段当攻击方向事实” |
 | `case_memory` | 当前 case 临时上下文 | 只在当前 case 注入 | “本工单已查过 endpoint process tree” |
 
@@ -213,7 +213,41 @@ score =
   - stale_penalty
 ```
 
-只取 top K 条进入 prompt / Lead Agent bounded context，并记录 `match_reason`、`score`、`memory_id`、`version` 和 `content_hash`，用于 replay diff。
+只取 top K 条进入 prompt / Lead Agent bounded context，并记录 `match_reason`、`score`、`memory_id`、`version` 和 `content_hash`，用于 replay diff。这里的 top K 是**最终投影预算**，不是“只从最新 K/200 条记录中查找”。SQL repository 先通过 `soc_memory_record_facets` 对完整可用 corpus 做 exact facet 候选召回，再做 text/type/fallback 和统一评分；旧而相关的 Memory 不会被大量新但无关的记录淹没。
+
+### 6.1 固定 Runtime 的检索边界
+
+固定 Runtime 在 Skill 选择完成后、reference catalog 冻结和 provider journal 写入前执行一次只读检索：
+
+```text
+canonical LLMAnalysisRequest
+  -> vendor-neutral SocMemoryQuery
+  -> SocMemoryService.find_relevant_records()
+  -> confirmed + retrieval-enabled + validity/review gates
+  -> top 5 / 900-token bounded projection
+  -> M-* context catalog
+  -> prompt + request journal boundary
+```
+
+- Query 只使用 canonical source、detection、category、severity、entity、conflict 和 selected-skill facets；通用 Runtime 不识别 PingAn 字段别名。
+- `alert_id` / `run_id` 只进入检索审计 metadata，不作为匹配 facet，避免把“同一告警 ID”误当成经验相关性。
+- `M-*` 只能被 `R-*` reasoning 作为 `confirmed_memory` basis 引用，不能伪装成 `E-*` 当前告警事实。自由文本本身不能改判。
+- 检索异常只产生脱敏 warning，不阻断基础告警分析；没有命中时保持原 Runtime 行为。
+- Memory 命中不等于结构化决策权限。只有 record 携带审核后的 `SocMemoryDecisionDirective`，且 exact version、activation、validity、review due、minimum score 和 required facet match 全部通过，才可在 `SocAutomationService` 中改变 effective decision；原 `AnalysisRun.decision` 保持不可变。
+
+### 6.2 Typed Decision Directive / 结构化改判指令
+
+Memory review `confirm` 可以选择附加 `SocMemoryDecisionDirective`，但不能从自由文本自动推断：
+
+- `effect=reinforce|override`；override 必须声明至少一个 required facet key。
+- `target_verdict` 明确写出目标，不从 summary/content 猜测。
+- `review_effect=preserve|require|clear` 明确说明是否保留人工复核；`unknown` 不能清除复核。
+- `minimum_match_score` 和 `required_facet_keys` 约束未来适用范围。
+- 冲突的多条 override 产生 `conflicted` transition，不按时间或分数随便选一条，并停止本轮 disposition/action rule selection。
+- 每次作用都保存 `SocDecisionTransitionRecord.before/after`、Memory ID/version/hash、匹配分数和策略来源，支持 Memory 使用前后效果统计。
+- 该 directive 只影响 effective detection decision；动作是否获准由独立的 `SocAutomationPolicy` 或人工 Approval 决定，即使没有 Memory 也可以授权。
+
+完整边界见 `../governance/decision-disposition-action-automation.md`。
 
 ## 7. 写入来源
 
@@ -282,6 +316,8 @@ stateDiagram-v2
     Pending --> Confirmed: confirm
     ConfirmedCandidate --> Confirmed: confirm
     Confirmed --> RecordConfirmed: create SocMemoryRecord(retrieval_enabled=false)
+    RecordConfirmed --> RetrievalEnabled: governed enable
+    RetrievalEnabled --> RecordConfirmed: disable / expiry / review overdue
     Confirmed --> Deprecated: deprecate
     Confirmed --> Expired: expire
     RecordConfirmed --> RecordDeprecated: deprecate linked record
@@ -291,7 +327,7 @@ stateDiagram-v2
 
 注入规则：
 
-- 当前 `confirmed` record 也不能默认注入 analysis prompt；只有 `retrieval_enabled=true` 且通过 `SocMemoryService.find_relevant_records()` 命中的 record 可以作为 `InvestigationContext.relevant_memories` 展示给 Web/TUI/Lead Agent。
+- `confirmed` record 不会默认注入；只有 `retrieval_enabled=true`、未过期、未超过 review due 且通过 `SocMemoryService.find_relevant_records()` 命中的 record，才可进入 `InvestigationContext.relevant_memories` 或固定 Runtime 的 `M-*` bounded context。若携带 typed directive，还必须通过本节额外 match gate 才能影响 effective decision。
 - `confirmed_candidate` 默认不全局注入；可以在当前 TUI/correction 会话内局部引用。
 - `pending_review` 不注入，只展示给分析师确认。
 - `rejected` 不注入，并用于抑制重复错误建议。
@@ -342,7 +378,16 @@ soc memory reconcile
 - 已新增 `SocMemoryService.find_relevant_records(SocMemoryQuery)`。
 - 已支持 type/status/tenant/facets/text/evidence refs 多路召回、score、match reason、token budget、hash/version 和 skipped counters。
 - 已接 CLI `soc memory search`、Gateway `/api/soc/memory/search`、ReviewQueue context/Web/TUI/Lead Agent bounded artifact 可见化。
-- PromptBuilder 注入仍未开启；后续只允许 retrieval policy 通过、`retrieval_enabled=true`、confirmed 且未过期的结果进入 bounded prompt。
+- 已接固定 Runtime pre-LLM enricher；只允许 retrieval policy 通过、`retrieval_enabled=true`、confirmed 且未过期/未超 review due 的 top-K 结果以 `M-*` 进入 bounded prompt。
+- SQL repository 已增加 normalized facet index；候选检索先跨完整 corpus 找相关记录，再按 `candidate_limit` 限制后续精排，不使用“最新 200 条”作为召回边界。
+- 2026-08-11 使用告警 `1965802` 完成人工确认、候选确认、检索启用和真实模型 replay：`RUN-C00EA5ED8A72` 的 context catalog 包含 `MEM-94B04755582D@v4`，模型以 `confirmed_memory` basis 引用它；该旧 record 没有 typed directive，因此只证明上下文引用，不应再被解释为“所有 Memory 都不能改判”。
+
+### Slice C2：Governed Decision Impact / 受治理改判
+
+- 已增加 `SocMemoryDecisionDirective`，只能由审核人在 confirm 命令/API 中显式提交。
+- 已增加 post-Runtime `SocDecisionTransitionRecord`，保存基础与有效研判的 before/after 和全部 contributor lineage。
+- 已覆盖 reinforce、override、冲突、过期/过审/版本不符、分数不足和 required-facet 缺失边界。
+- Memory 不产生动作权限；无 Memory 的当前告警也可由独立的、服务端版本化策略获得 action authorization。
 
 ### Slice D：TUI / ReviewQueue Memory Candidate
 

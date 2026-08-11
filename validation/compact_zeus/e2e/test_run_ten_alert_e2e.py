@@ -3,6 +3,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from soc_agent.automation import load_soc_automation_policy
+from soc_agent.contracts import (
+    ActorAuthSource,
+    ActorContext,
+    ActorType,
+    EntrySurface,
+    ServiceRequestContext,
+    SocAgentActionCommand,
+)
+from validation.compact_zeus.e2e.automation_simulation import (
+    DEFAULT_SIMULATION_POLICY,
+    E2ESimulatedNetworkBlockAdapter,
+)
 from validation.compact_zeus.e2e.run_ten_alert_e2e import (
     DEFAULT_CASES,
     _grounding_quality_findings,
@@ -83,6 +96,67 @@ def test_plan_only_is_read_only_and_exposes_fixed_cohort(
     assert "--plan-only" in output["batch_command"]
     assert output["batch_command"][0].endswith("backend/.venv/bin/python")
     assert not (tmp_path / "output").exists()
+
+
+def test_plan_exposes_opt_in_governed_automation_simulation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    source = tmp_path / "source.pkl"
+    source.write_bytes(b"plan-only-does-not-read-source")
+
+    exit_code = main(
+        [
+            "--source",
+            str(source),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--python-executable",
+            str(Path(__file__).resolve().parents[3] / "backend/.venv/bin/python"),
+            "--governed-automation-simulation",
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["governed_automation_simulation"] is True
+    assert output["automation_simulation_policy"].endswith(
+        "automation-policy.simulation.json"
+    )
+    assert output["real_external_action_call_count"] == 0
+    assert not (tmp_path / "output").exists()
+
+
+def test_automation_simulation_policy_and_adapter_are_explicitly_mocked() -> None:
+    policy = load_soc_automation_policy(DEFAULT_SIMULATION_POLICY)
+    adapter = E2ESimulatedNetworkBlockAdapter()
+    context = ServiceRequestContext(
+        actor=ActorContext(
+            actor_id="test-e2e",
+            actor_type=ActorType.SYSTEM,
+            surface=EntrySurface.DAEMON,
+            roles=["validation_fixture"],
+            auth_source=ActorAuthSource.SYSTEM,
+        ),
+        idempotency_key="test-e2e-idempotency",
+    )
+
+    result = adapter.execute(
+        SocAgentActionCommand(
+            route="response.block_ip",
+            action="response.block_ip",
+            dry_run=False,
+            payload={"ip": "192.0.2.10", "duration_seconds": 60},
+        ),
+        context=context,
+    )
+
+    assert policy.environment == "e2e-simulation"
+    assert policy.mode.value == "enforced"
+    assert adapter.descriptor.metadata["mocked"] is True
+    assert result.payload["mocked"] is True
+    assert result.payload["provider_mode"] == "e2e_simulation"
+    assert result.payload["external_side_effect"] == "simulated_only"
 
 
 def test_grounding_quality_findings_separate_safety_pass_from_model_quality() -> None:

@@ -1,0 +1,62 @@
+{
+  "schema_version": "soc.automation_policy.v1",
+  "policy_id": "pingan-e2e-governed-response-simulation",
+  "policy_version": "2026-08-11.1",
+  "tenant_id": "pingan",
+  "environment": "e2e-simulation",
+  "mode": "enforced",
+  "valid_from": "2026-08-11T00:00:00Z",
+  "valid_until": "2030-01-01T00:00:00Z",
+  "reviewed_by": "validation-fixture-only",
+  "reviewed_at": "2026-08-11T00:00:00Z",
+  "rules": [
+    {
+      "rule_id": "simulate-reviewed-network-source-block",
+      "name": "Simulate a governed network-source block",
+      "priority": 100,
+      "enabled": true,
+      "match": {
+        "verdicts": [
+          "suspicious",
+          "needs_review"
+        ],
+        "source_types": [
+          "ndr",
+          "nids"
+        ],
+        "evidence_states": [
+          "sufficient",
+          "partial",
+          "degraded",
+          "conflicted"
+        ],
+        "model_names": [
+          "deepseek-v4-flash"
+        ],
+        "prompt_versions": [
+          "soc-analysis-v12"
+        ],
+        "decision_policy_versions": [
+          "soc.decision_policy.v3"
+        ],
+        "minimum_confidence": 0.5,
+        "needs_review": true
+      },
+      "disposition": "suppressed",
+      "action": {
+        "route": "response.block_ip",
+        "action": "response.block_ip",
+        "adapter_id": "e2e-simulated-network-block",
+        "target_selector": "attacker_ip",
+        "target_payload_field": "ip",
+        "static_payload": {
+          "duration_seconds": 3600,
+          "validation_only": true
+        }
+      },
+      "authorization_mode": "automatic_policy",
+      "review_required_override_reason": "This isolated E2E fixture validates automatic-policy lineage against a mocked adapter; it is not an approval for any real tenant action.",
+      "rationale": "Exercise no-Memory automatic authorization, exact target selection, idempotency, and before/after execution lineage without contacting an external system."
+    }
+  ]
+}

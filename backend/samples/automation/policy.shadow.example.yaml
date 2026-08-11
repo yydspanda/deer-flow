@@ -1,0 +1,43 @@
+schema_version: soc.automation_policy.v1
+policy_id: replace-with-tenant-response-policy
+policy_version: 2026-08-11.1
+tenant_id: replace-with-tenant-id
+environment: dev
+mode: shadow
+valid_from: 2026-08-11T00:00:00Z
+valid_until: 2030-01-01T00:00:00Z
+rules:
+  - rule_id: reviewed-high-confidence-source-block
+    name: Reviewed high-confidence source block
+    priority: 100
+    enabled: true
+    match:
+      verdicts:
+        - true_positive
+      source_types:
+        - nids
+        - ndr
+      evidence_states:
+        - sufficient
+      model_names:
+        - deepseek-v4-flash
+      prompt_versions:
+        - soc-analysis-v12
+      decision_policy_versions:
+        - soc.decision_policy.v3
+      minimum_confidence: 0.9
+      needs_review: false
+    disposition: suppressed
+    action:
+      route: response.block_ip
+      action: response.block_ip
+      adapter_id: replace-with-reviewed-idempotent-adapter
+      target_selector: attacker_ip
+      target_payload_field: ip
+      static_payload:
+        duration_seconds: 3600
+    authorization_mode: automatic_policy
+    rationale: >-
+      Example only. A reviewed, versioned tenant policy may authorize this
+      exact adapter after the Runtime has produced a sufficient, non-review
+      true-positive decision.

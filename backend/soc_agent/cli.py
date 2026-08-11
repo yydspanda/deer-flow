@@ -83,6 +83,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateStatus,
+    SocMemoryDecisionDirective,
     SocMemoryQuery,
     SocMemoryRecordStatus,
     SocMemoryRetrievalActivationAction,
@@ -371,6 +372,8 @@ def main(argv: list[str] | None = None) -> int:
         return _tenant_policy_list(args)
     if args.command == "tenant-policy" and args.tenant_policy_command == "get":
         return _tenant_policy_get(args)
+    if args.command == "automation" and args.automation_command == "lineage":
+        return _automation_lineage(args)
     if args.command == "context" and args.context_command == "propose":
         return _context_fact_propose(args)
     if args.command == "context" and args.context_command == "revise":
@@ -1053,6 +1056,15 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_review.add_argument("--reason", required=True, help="Human review reason")
     memory_review.add_argument("--record-summary", help="Optional confirmed memory summary override")
     memory_review.add_argument("--record-content", help="Optional confirmed memory content override")
+    memory_directive_group = memory_review.add_mutually_exclusive_group()
+    memory_directive_group.add_argument(
+        "--decision-directive",
+        help="Path to a reviewed SocMemoryDecisionDirective JSON object",
+    )
+    memory_directive_group.add_argument(
+        "--decision-directive-json",
+        help="Inline reviewed SocMemoryDecisionDirective JSON object",
+    )
     memory_review.add_argument("--actor-id", default="soc-cli", help="Review actor id")
     memory_review.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(memory_review)
@@ -1407,6 +1419,22 @@ def _build_parser() -> argparse.ArgumentParser:
     tenant_policy_get.add_argument("decision_id")
     tenant_policy_get.add_argument("--pretty", action="store_true")
     _add_database_args(tenant_policy_get)
+
+    automation = subparsers.add_parser(
+        "automation",
+        help="Inspect governed decision, disposition, authorization, and execution lineage",
+    )
+    automation_subparsers = automation.add_subparsers(dest="automation_command")
+    automation_lineage = automation_subparsers.add_parser(
+        "lineage",
+        help="Show the append-only automation lineage for one run or alert",
+    )
+    automation_scope = automation_lineage.add_mutually_exclusive_group(required=True)
+    automation_scope.add_argument("--run-id")
+    automation_scope.add_argument("--alert-id")
+    automation_lineage.add_argument("--limit", type=int, default=100)
+    automation_lineage.add_argument("--pretty", action="store_true")
+    _add_database_args(automation_lineage)
 
     context = subparsers.add_parser("context", help="Governed operational context fact helpers")
     context_subparsers = context.add_subparsers(dest="context_command")
@@ -2219,6 +2247,15 @@ def _memory_get(args: argparse.Namespace) -> int:
 def _memory_review(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
+        decision_directive = None
+        if args.decision_directive or args.decision_directive_json:
+            decision_directive = SocMemoryDecisionDirective.model_validate(
+                _load_object_input(
+                    args.decision_directive,
+                    args.decision_directive_json,
+                    payload_label="memory decision directive",
+                )
+            )
         result = SocMemoryService(candidate_repository=repository, record_repository=repository).review_candidate(
             SocMemoryCandidateReviewCommand(
                 candidate_id=args.candidate_id,
@@ -2226,6 +2263,7 @@ def _memory_review(args: argparse.Namespace) -> int:
                 reason=args.reason,
                 record_summary=args.record_summary,
                 record_content=args.record_content,
+                decision_directive=decision_directive,
             ),
             context=ServiceRequestContext(
                 actor=ActorContext(
@@ -3068,6 +3106,66 @@ def _tenant_policy_get(args: argparse.Namespace) -> int:
         print(f"error: tenant policy decision {args.decision_id} not found", file=sys.stderr)
         return 2
     print(item.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _automation_lineage(args: argparse.Namespace) -> int:
+    if args.limit < 1 or args.limit > 10_000:
+        print("error: --limit must be between 1 and 10000", file=sys.stderr)
+        return 2
+    try:
+        repository = _repository_from_args(args)
+        decisions = repository.list_decision_transitions(
+            run_id=args.run_id,
+            alert_id=args.alert_id,
+            limit=args.limit,
+        )
+        dispositions = repository.list_disposition_transitions(
+            run_id=args.run_id,
+            alert_id=args.alert_id,
+            limit=args.limit,
+        )
+        authorizations = repository.list_action_authorizations(
+            run_id=args.run_id,
+            alert_id=args.alert_id,
+            limit=args.limit,
+        )
+        if args.run_id:
+            executions = repository.list_action_executions(
+                run_id=args.run_id,
+                limit=args.limit,
+            )
+        else:
+            execution_by_id = {}
+            for authorization in authorizations:
+                for execution in repository.list_action_executions(
+                    authorization_id=authorization.authorization_id,
+                    limit=args.limit,
+                ):
+                    execution_by_id.setdefault(execution.execution_id, execution)
+            executions = sorted(
+                execution_by_id.values(),
+                key=lambda item: item.started_at,
+                reverse=True,
+            )[: args.limit]
+    except (ValueError, SQLAlchemyError) as exc:
+        print(f"error: automation lineage database access failed: {exc}", file=sys.stderr)
+        return 2
+    payload = {
+        "schema_version": "soc.automation_lineage_view.v1",
+        "scope": {"run_id": args.run_id, "alert_id": args.alert_id},
+        "decision_transitions": [item.model_dump(mode="json", exclude_none=True) for item in decisions],
+        "disposition_transitions": [item.model_dump(mode="json", exclude_none=True) for item in dispositions],
+        "action_authorizations": [item.model_dump(mode="json", exclude_none=True) for item in authorizations],
+        "action_executions": [item.model_dump(mode="json", exclude_none=True) for item in executions],
+    }
+    print(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+        )
+    )
     return 0
 
 

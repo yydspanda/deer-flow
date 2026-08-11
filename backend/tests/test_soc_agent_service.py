@@ -2809,6 +2809,9 @@ def test_memory_service_retrieval_requires_enabled_confirmed_records() -> None:
     assert enabled_result.total_token_estimate == match.token_estimate
     assert activation.record.version == confirmed.memory_record.version + 1
     assert activation.record.retrieval_review_due_at == now + timedelta(days=30)
+    assert "retrieval-enabled" in activation.record.labels
+    assert "retrieval-disabled" not in activation.record.labels
+    assert activation.record.metadata["retrieval_enabled"] is True
     assert activation.audit_id is not None
     audits = repository.list_mutation_audits(operation=SocMutationOperation.MEMORY_RETRIEVAL_ACTIVATION)
     assert [audit.audit_id for audit in audits] == [activation.audit_id]
@@ -2848,10 +2851,79 @@ def test_memory_service_retrieval_requires_enabled_confirmed_records() -> None:
     disabled_result_after_activation = service.find_relevant_records(query)
     assert disabled.record.version == activation.record.version + 1
     assert disabled.record.retrieval_enabled is False
+    assert "retrieval-disabled" in disabled.record.labels
+    assert "retrieval-enabled" not in disabled.record.labels
+    assert disabled.record.metadata["retrieval_enabled"] is False
     assert build_memory_retrieval_diff(
         enabled_result,
         disabled_result_after_activation,
     ).removed_memory_ids == [activation.record.memory_id]
+
+
+def test_memory_retrieval_does_not_hide_old_relevant_record_behind_recent_limit() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    now = datetime.now(UTC) + timedelta(seconds=1)
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        mutation_audit_repository=repository,
+        now_provider=lambda: now,
+    )
+    candidate = service.propose_candidate(_pingan_memory_candidate_command())
+    confirmed = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Create a governed retrieval fixture.",
+        ),
+        context=_analyst_context(),
+    )
+    assert confirmed.memory_record is not None
+    active = service.set_retrieval_activation(
+        SocMemoryRetrievalActivationCommand(
+            memory_id=confirmed.memory_record.memory_id,
+            action=SocMemoryRetrievalActivationAction.ENABLE,
+            expected_record_version=confirmed.memory_record.version,
+            reason="Enable the retrieval fixture.",
+            activation_valid_until=now + timedelta(days=90),
+            review_after_days=30,
+        ),
+        context=_memory_governor_context(),
+    ).record
+
+    old_relevant_id = "MEM-OLD-RELEVANT"
+    repository.save_memory_record(
+        active.model_copy(
+            update={
+                "memory_id": old_relevant_id,
+                "source_candidate_id": "MC-OLD-RELEVANT",
+                "facets": {"source_type": ["nids"]},
+                "updated_at": now - timedelta(days=365),
+            }
+        )
+    )
+    for index in range(250):
+        repository.save_memory_record(
+            active.model_copy(
+                update={
+                    "memory_id": f"MEM-RECENT-{index:03d}",
+                    "source_candidate_id": f"MC-RECENT-{index:03d}",
+                    "facets": {"source_type": ["edr"]},
+                    "updated_at": now + timedelta(seconds=index),
+                }
+            )
+        )
+
+    result = service.find_relevant_records(
+        SocMemoryQuery(
+            tenant_scope=active.tenant_scope,
+            tenant_id=active.tenant_id,
+            facets={"source_type": ["nids"]},
+            candidate_limit=200,
+        )
+    )
+
+    assert [match.memory_id for match in result.matches] == [old_relevant_id]
 
 
 def test_memory_service_retrieval_activation_requires_governor_role() -> None:
