@@ -3,8 +3,8 @@
 This package exposes the reviewed EDR workbook as **historical investigation
 context**, not as an allowlist. The compiler preserves source lineage and keeps
 path-control risk separate from prior ignored dispositions. In particular,
-`D:` remains a higher-attention location even when an exact historical match
-exists.
+`D:` remains a higher-attention location even when an exact or path-family
+historical match exists.
 
 ## Build the local catalog
 
@@ -30,8 +30,10 @@ backend/.venv/bin/python backend/scripts/soc_pingan_software_path_catalog.py que
   --md5 0123456789abcdef0123456789abcdef
 ```
 
-Matching is intentionally limited to exact normalized paths, with optional MD5
-agreement. The old basename and path-segment deletion heuristics are not used.
+The catalog preserves exact normalized paths and may infer a conservative family
+when at least two distinct `safe_paths` rows differ in exactly one recognized
+deployment segment. `other_paths` never creates a family. The old basename,
+prefix, broad version wildcard, and path-segment deletion heuristics are not used.
 
 ## MCP and SOC action smoke
 
@@ -65,3 +67,19 @@ Every result keeps:
 It may enrich Review, TUI, Web, and Lead Agent context through normal
 `InvestigationEvidence` persistence. It cannot skip Runtime, mark an alert
 false-positive, close ReviewQueue, authorize an action, or write memory.
+
+This MCP boundary is intentionally different from the separately governed
+PingAn fast-disposition policy. Operators may enable that default-off policy with:
+
+```bash
+export SOC_TENANT_POLICY_ENABLED=true
+export SOC_TENANT_DISPOSITION_POLICY_PATH="$PWD/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json"
+export SOC_TENANT_POLICY_ENVIRONMENT=dev
+export SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true
+```
+
+The policy provider reads canonical EDR paths directly from the completed run.
+It emits `all_relevant_paths_safe` only when every relevant path is covered by an
+exact `safe_paths` entry or a safe-path family. Both match types then have the
+same direct `ignored` effect. Partial coverage, `other_paths`-only matches, or
+hash conflicts fail closed and continue normal triage.

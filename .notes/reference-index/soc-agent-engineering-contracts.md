@@ -738,9 +738,16 @@ Tenant disposition policy / 租户级处置策略约束：
 - Base Runtime 不得因 tenant/environment policy 跳过 normalization、fact reconstruction、bounded analyzer、
   Grounding 或 `SocDecisionPolicy`。Tenant disposition reconciliation 发生在 detection decision 之后，并写入
   独立、可审计的 policy decision/proposal。
-- 通用 evaluator 只能消费 typed governed context、detection truth 和 versioned tenant policy；不得包含
+- 通用 evaluator 只能消费 typed governed context、detection truth、versioned tenant policy 和显式注入的
+  `TenantPolicySignalResolution`；不得包含
   `if tenant == pingan`、`if "stg" in hostname` 或厂商字段分支。租户差异必须是 data/config/plugin policy，
   不能是 core code path。
+- `TenantPolicySignal` 必须保存 stable signal id/key/value、provider id/version、source ref/hash、bounded
+  evidence paths 和有限 typed attributes。`TenantPolicySignalResolution` 必须明确
+  `completed|not_applicable|failed_closed`；provider 抛错时只能生成无 signal 的 failed-closed resolution，
+  不能让规则误命中或失败主 Runtime。Decision key/content hash 必须包含完整 resolution lineage。
+- signal provider 只读 completed canonical run 和自己的 tenant source，不得回写 run、repository、Memory，
+  不得授权动作。generic evaluator 只做 exact key/value 匹配；不得解释 subject、attributes 或厂商来源。
 - policy 至少记录 `tenant_id`、stable policy id/version、typed conditions、environment/asset scope、
   `valid_from/valid_until`、authoritative source、owner/reviewer/reason、rollout mode、content hash 和 audit
   metadata。历史 replay 必须使用 alert event time 当时有效的 policy/context version。
@@ -764,17 +771,24 @@ Tenant disposition policy / 租户级处置策略约束：
   timezone 后才可本地化，并在 decision 中标记 `alert_event_time_timezone_assumed`；不得按主机本地时区猜测。
   带有效期的 policy 在 event time 缺失时 fail closed。每条 decision 必须保存 exact policy content hash、
   policy time/source、selected rule 和逐条件 evidence path。
-- 通用 composition 仅认识 `SOC_TENANT_POLICY_ENABLED`（默认 false）、policy path、环境、时区以及可选
+- 通用 composition 认识 `SOC_TENANT_POLICY_ENABLED`（默认 false）、policy path、环境、时区、可选
   advisor mode/Skill path/model。只配置 path 但未显式 enable 必须 fail startup；advisor 只在 deterministic
   no-match 后执行。其 strict output 必须引用 exact `E-*`，可选引用现有 `R-*` 和 `S/A/M/C/T-*`，并保存
   model/Prompt/Skill/response hash；调用、schema 或引用校验失败固定持久化 fail-closed no-match。
 - PingAn v2 位于 `integrations/pingan/policies/tenant-disposition-v2.json`，组合策略位于
-  `integrations/pingan/policy_skills/disposition/SKILL.md`。generic evaluator/composition 不得 import PingAn
-  module 或出现 PingAn 字段、网段、规则码、主机模式。PingAn 当前确认 canonical `status=200` 只证明请求
+  `integrations/pingan/policy_skills/disposition/SKILL.md`。generic evaluator 不得 import PingAn module 或
+  出现 PingAn 字段、网段、规则码、主机模式；application composition 只可在显式 PingAn provider 开关打开
+  后注入 integration port，默认关闭时不得加载它。PingAn 当前确认 canonical `status=200` 只证明请求
   成功，单独出现不得升级或忽略。确定性非 `200` 规则只读取 canonical HTTP `100..599` 状态，要求至少一条
   HTTP 事务且所有事务均非 `200`；工单、Workflow、转发、规则、抑制和处置状态不参与。强制转交
   rule_code 优先于该忽略规则。明确攻击成功/失陷使该规则弃权，但不能确定性升级；明确成功、
   `企图/尝试` 和响应效果必须交给 Runtime/Policy Skill 组合判断。明确失败仍可按审阅规则忽略。
+- PingAn EDR 安全路径快速策略是独立默认关闭的 signal provider。catalog 保留全部 exact path，只允许从
+  `safe_paths` 中至少两个不同成员、动态段和来源告警推导一个变量目录段 family；`other_paths` 不得建族。
+  当前告警所有 canonical process/executable path 完整命中 exact safe path 或 safe family 后才可发
+  `all_relevant_paths_safe`，两种 match 对 `ignored` 具有同等直接效力。任一未知/非法/超预算路径、
+  `other_paths`-only、多个 hash 或 hash mismatch 都必须 fail closed。MCP action 仍永久
+  `decision_impact=none`；只有受审阅 enforced Tenant Policy 可消费该 signal，且必须保留 Runtime truth。
 
 Security exercise / 护网与红蓝对抗事实约束：
 

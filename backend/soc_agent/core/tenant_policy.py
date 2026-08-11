@@ -16,6 +16,8 @@ from soc_agent.contracts import (
     TenantDispositionPolicy,
     TenantPolicyDecision,
     TenantPolicyEvaluationStatus,
+    TenantPolicySignalProviderStatus,
+    TenantPolicySignalResolution,
     TenantPolicyTimeSource,
 )
 from soc_agent.core.authorized_activity import SocAuthorizedActivityService
@@ -25,6 +27,7 @@ from soc_agent.protocols import (
     TenantDispositionPolicyResolver,
     TenantPolicyAdvisor,
     TenantPolicyDecisionRepository,
+    TenantPolicySignalProvider,
 )
 from soc_agent.tenant_policy import (
     TenantPolicyDecisionConflictError,
@@ -47,6 +50,7 @@ class SocTenantPolicyEvaluationService:
         event_timezone: str | None = None,
         event_sink: SocEventSink | None = None,
         advisor: TenantPolicyAdvisor | None = None,
+        signal_providers: tuple[TenantPolicySignalProvider, ...] = (),
     ) -> None:
         if not environment.strip():
             raise ValueError("tenant policy environment must be non-empty")
@@ -57,6 +61,7 @@ class SocTenantPolicyEvaluationService:
         self._event_timezone = event_timezone
         self._event_sink = event_sink
         self._advisor = advisor
+        self._signal_providers = tuple(signal_providers)
 
     def observe(
         self,
@@ -96,12 +101,14 @@ class SocTenantPolicyEvaluationService:
             run,
             inspection=inspection,
         )
+        signal_resolutions = self._signal_resolutions(policy, run)
         try:
             decision = evaluate_tenant_policy(
                 policy,
                 run,
                 environment=self._environment,
                 authorization_result=authorization_result,
+                signal_resolutions=signal_resolutions,
                 triggered_by=context.actor,
                 policy_time=policy_time,
                 policy_time_source=policy_time_source,
@@ -146,6 +153,30 @@ class SocTenantPolicyEvaluationService:
                 )
             )
         return decision
+
+    def _signal_resolutions(
+        self,
+        policy: TenantDispositionPolicy,
+        run: AnalysisRun,
+    ) -> tuple[TenantPolicySignalResolution, ...]:
+        resolutions: list[TenantPolicySignalResolution] = []
+        for provider in self._signal_providers:
+            try:
+                resolution = provider.resolve(
+                    policy,
+                    run,
+                    environment=self._environment,
+                )
+            except Exception as exc:  # noqa: BLE001 - optional provider failures must fail closed
+                resolution = TenantPolicySignalResolution(
+                    provider_id=provider.provider_id,
+                    provider_version=provider.provider_version,
+                    status=TenantPolicySignalProviderStatus.FAILED_CLOSED,
+                    warnings=["Tenant policy context provider failed; no signal from this provider may match."],
+                    error_code=type(exc).__name__,
+                )
+            resolutions.append(resolution)
+        return tuple(resolutions)
 
     def _authorization_result(
         self,

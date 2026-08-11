@@ -19,6 +19,7 @@ validation/compact_zeus/
 ├── shared/          # 受限 PKL loader 与编码压缩复用工具
 ├── internal_batch/  # 内网 5 -> 50 -> all、可续跑的生产 Runtime 批跑入口
 ├── e2e/             # 固定 10 条完整告警的统一端到端审阅入口
+├── policy/          # post-Runtime Tenant Policy 与 PingAn EDR 快速策略验收
 ├── docs/            # 长期设计与审阅说明
 ├── data/            # gitignored 可再生产物
 │   ├── corpus/      # 统一 212 条语料及 manifest
@@ -169,7 +170,19 @@ backend/.venv/bin/python \
 [`e2e/README.md`](e2e/README.md)。automation simulation 只调用 validation-only mock adapter，
 不会访问外部封禁系统；同 cohort 新旧结果使用 `compare_ten_alert_e2e.py` 对比。
 
-### 4.2 验证脚本测试
+### 4.2 PingAn EDR 安全路径 10 条专项验收
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/policy/validate_pingan_edr_safe_path_fast_policy.py
+```
+
+该命令只使用 stub 验证真实 EDR 输入、路径目录、PingAn Tenant Policy 和 Effective
+Decision 的确定性集成，不进行模型质量评估，也不授权/执行外部动作。主报告位于命令输出的
+`acceptance.json`；固定样本、正反例断言和真实路径族覆盖缺口见
+[`policy/README.md`](policy/README.md)。
+
+### 4.3 验证脚本测试
 
 ```bash
 backend/.venv/bin/python -m pytest -q \

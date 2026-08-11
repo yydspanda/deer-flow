@@ -16,7 +16,7 @@
       "idempotency_required": false,
       "required_payload_fields": ["path"],
       "required_context_refs": ["thread_id"],
-      "description": "Read-only exact lookup against historical PingAn EDR path candidate knowledge.",
+      "description": "Read-only exact/path-family lookup against historical PingAn EDR path candidate knowledge.",
       "payload_schema": {
         "type": "object",
         "required": ["path"],
@@ -48,9 +48,11 @@
           "query_md5",
           "matched",
           "match_type",
+          "exact_safe_path_candidate",
           "control_zone",
           "location_attention",
           "historical_context",
+          "path_family_context",
           "catalog_id",
           "catalog_schema_version",
           "source_sha256",
@@ -64,7 +66,7 @@
           "automation_eligible",
           "raw_rows_included"
         ],
-        "result_schema_version": "soc.pingan_software_path_context.v1"
+        "result_schema_version": "soc.pingan_software_path_context.v2"
       }
     }
   ]

@@ -213,6 +213,30 @@ non-`200`; exact forced-transfer rules take priority. Provider success/compromis
 ignore rule from matching but do not deterministically escalate; response effects, request-body
 semantics and attack-attempt cases remain bounded Policy-Skill/Runtime reasoning.
 
+PingAn EDR also has a separate, high-throughput software-path policy. It is disabled by default and
+requires both the tenant-policy layer and a compiled local catalog:
+
+```bash
+export SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true
+export SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH=/approved/software-path-catalog.sqlite
+```
+
+When every canonical process/executable path in the alert matches either an exact legacy
+`safe_paths` entry or a conservatively inferred safe-path family, the reviewed PingAn policy records
+`ignored` and clears per-alert review. Exact and family matches have the same disposition authority.
+Unknown paths, `other_paths`-only entries, hash conflicts, invalid paths, or an over-budget path set
+emit no aggregate signal and fall back to normal triage. The immutable Runtime verdict remains visible.
+
+Run the fixed ten-alert real-EDR integration acceptance from the repository root:
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/policy/validate_pingan_edr_safe_path_fast_policy.py
+```
+
+It uses the deterministic analyzer to test normalization, catalog matching, tenant-policy persistence,
+and effective-decision lineage without making an LLM quality claim or authorizing an external action.
+
 Automatic read-only investigation is default-off and runs after an existing persisted
 `AnalysisRun`, never inside the fixed Runtime. Kafka daemon commands may opt in with one
 explicit enrichment composition and repeatable `--enrichment-action-config` allowlists.
@@ -245,11 +269,13 @@ python scripts/soc_pingan_software_path_catalog.py build
 python scripts/soc_pingan_software_path_catalog.py query 'D:\\ps\\psexec.exe'
 ```
 
-The generated SQLite catalog is Git-ignored and mode `0600`. Results are exact-match,
-investigation-only candidate context: they preserve lineage and freshness while keeping
-path-location attention separate from historical ignored dispositions. They are not an
-allowlist and cannot alter Runtime verdicts, close reviews, authorize actions, or write
-confirmed memory. See `samples/mcp/pingan_software_path/README.md` for MCP smoke commands.
+The generated SQLite catalog is Git-ignored and mode `0600`. It preserves every exact path and also
+infers conservative one-variable-segment families from `safe_paths` only; it does not restore the old
+basename, prefix, version-wildcard, or deleted-segment fuzzy matching. The read-only MCP result remains
+investigation-only candidate context and cannot alter Runtime verdicts, close reviews, authorize
+actions, or write confirmed memory. Only the separately enabled PingAn tenant-policy signal provider
+can turn complete exact/family coverage into an auditable `ignored` disposition. See
+`samples/mcp/pingan_software_path/README.md` for MCP smoke commands.
 
 For approved internal PKL validation, install the optional workbook/batch dependencies and use the
 resumable `5 -> 50 -> all` runner from the repository root:

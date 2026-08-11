@@ -78,8 +78,79 @@ class TenantPolicyTimeSource(StrEnum):
     EVALUATION_TIME_FALLBACK = "evaluation_time_fallback"
 
 
+class TenantPolicySignalProviderStatus(StrEnum):
+    """Outcome of one optional, read-only tenant policy signal provider."""
+
+    COMPLETED = "completed"
+    NOT_APPLICABLE = "not_applicable"
+    FAILED_CLOSED = "failed_closed"
+
+
 class TenantPolicyModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class TenantPolicySignal(TenantPolicyModel):
+    """One governed provider signal consumed by generic tenant policy rules."""
+
+    schema_version: Literal["soc.tenant_policy_signal.v1"] = "soc.tenant_policy_signal.v1"
+    signal_id: str = Field(min_length=1, max_length=128)
+    signal_key: str = Field(min_length=1, max_length=256)
+    signal_value: str = Field(min_length=1, max_length=256)
+    provider_id: str = Field(min_length=1, max_length=256)
+    provider_version: str = Field(min_length=1, max_length=128)
+    source_ref: str = Field(min_length=1, max_length=1000)
+    source_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    subject: str | None = Field(default=None, min_length=1, max_length=4096)
+    evidence_paths: list[str] = Field(default_factory=list, max_length=50)
+    attributes: dict[str, str | int | float | bool] = Field(default_factory=dict, max_length=50)
+
+    @field_validator("signal_key", "signal_value", "provider_id", "provider_version", "source_ref")
+    @classmethod
+    def strip_required_signal_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("tenant policy signal text must be non-empty")
+        return normalized
+
+    @field_validator("evidence_paths")
+    @classmethod
+    def normalize_signal_evidence_paths(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("tenant policy signal evidence paths must be non-empty")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("tenant policy signal evidence paths must be unique")
+        return normalized
+
+
+class TenantPolicySignalResolution(TenantPolicyModel):
+    """Auditable output of one signal provider, including fail-closed outcomes."""
+
+    schema_version: Literal["soc.tenant_policy_signal_resolution.v1"] = "soc.tenant_policy_signal_resolution.v1"
+    provider_id: str = Field(min_length=1, max_length=256)
+    provider_version: str = Field(min_length=1, max_length=128)
+    status: TenantPolicySignalProviderStatus
+    source_ref: str | None = Field(default=None, min_length=1, max_length=1000)
+    source_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    signals: list[TenantPolicySignal] = Field(default_factory=list, max_length=200)
+    warnings: list[str] = Field(default_factory=list, max_length=50)
+    error_code: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_provider_outcome(self) -> TenantPolicySignalResolution:
+        if self.status is TenantPolicySignalProviderStatus.COMPLETED:
+            if self.error_code is not None:
+                raise ValueError("completed tenant policy signal resolution cannot carry an error")
+        elif self.status is TenantPolicySignalProviderStatus.NOT_APPLICABLE:
+            if self.signals or self.error_code is not None:
+                raise ValueError("not-applicable tenant policy signal resolution cannot carry signals or an error")
+        else:
+            if self.signals or self.error_code is None:
+                raise ValueError("failed-closed tenant policy signal resolution requires an error and no signals")
+        if any(signal.provider_id != self.provider_id or signal.provider_version != self.provider_version for signal in self.signals):
+            raise ValueError("tenant policy signal provider lineage must match its resolution")
+        return self
 
 
 class TenantPolicyRuleMatch(TenantPolicyModel):
@@ -105,6 +176,7 @@ class TenantPolicyRuleMatch(TenantPolicyModel):
     http_status_codes: list[int] = Field(default_factory=list, max_length=50)
     http_status_excluded_codes: list[int] = Field(default_factory=list, max_length=50)
     authorization_statuses: list[AuthorizationMatchStatus] = Field(default_factory=list, max_length=10)
+    policy_signals: dict[str, list[str]] = Field(default_factory=dict, max_length=50)
 
     @model_validator(mode="after")
     def require_condition(self) -> TenantPolicyRuleMatch:
@@ -124,6 +196,7 @@ class TenantPolicyRuleMatch(TenantPolicyModel):
                 self.http_status_codes,
                 self.http_status_excluded_codes,
                 self.authorization_statuses,
+                self.policy_signals,
             )
         ):
             raise ValueError("tenant policy rule requires at least one match condition")
@@ -151,7 +224,7 @@ class TenantPolicyRuleMatch(TenantPolicyModel):
             raise ValueError("tenant policy HTTP status codes must be in range 100..599")
         return sorted(set(values))
 
-    @field_validator("classification_labels", "classification_labels_excluded")
+    @field_validator("classification_labels", "classification_labels_excluded", "policy_signals")
     @classmethod
     def validate_classification_labels(
         cls,
@@ -390,6 +463,8 @@ class TenantPolicyDecision(TenantPolicyModel):
     decision_source: TenantPolicyDecisionSource = TenantPolicyDecisionSource.DETERMINISTIC_RULE
     selected_rule_id: str | None = Field(default=None, min_length=1, max_length=128)
     rule_evaluations: list[TenantPolicyRuleEvaluation] = Field(default_factory=list, max_length=200)
+    policy_signal_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    policy_signal_resolutions: list[TenantPolicySignalResolution] = Field(default_factory=list, max_length=20)
     detection_truth: SocDetectionTruthSnapshot
     runtime_suggested_action: str | None = Field(default=None, max_length=1000)
     authorization_status: AuthorizationMatchStatus | None = None
@@ -473,5 +548,8 @@ __all__ = [
     "TenantPolicyReviewEffect",
     "TenantPolicyRuleEvaluation",
     "TenantPolicyRuleMatch",
+    "TenantPolicySignal",
+    "TenantPolicySignalProviderStatus",
+    "TenantPolicySignalResolution",
     "TenantPolicyTimeSource",
 ]

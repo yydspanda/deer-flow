@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from fnmatch import fnmatchcase
 from ipaddress import ip_address, ip_network
@@ -27,6 +28,8 @@ from soc_agent.contracts import (
     TenantPolicyResponsePosture,
     TenantPolicyReviewEffect,
     TenantPolicyRuleEvaluation,
+    TenantPolicySignal,
+    TenantPolicySignalResolution,
     TenantPolicyTimeSource,
 )
 from soc_agent.utils.hashing import stable_hash
@@ -42,6 +45,7 @@ def evaluate_tenant_policy(
     *,
     environment: str,
     authorization_result: AuthorizationMatchResult | None = None,
+    signal_resolutions: Sequence[TenantPolicySignalResolution] = (),
     triggered_by: ActorContext | None = None,
     policy_time: datetime | None = None,
     policy_time_source: TenantPolicyTimeSource | None = None,
@@ -74,6 +78,8 @@ def evaluate_tenant_policy(
         raise TenantPolicyNotApplicableError("tenant policy has expired")
 
     detection_truth = _detection_truth_snapshot(run)
+    resolved_signals = tuple(signal_resolutions)
+    signal_hash = stable_hash([item.model_dump(mode="json") for item in resolved_signals]) if resolved_signals else None
     networks = tuple(ip_network(value, strict=False) for value in policy.internal_networks)
     evaluations = [
         _evaluate_rule(
@@ -82,6 +88,7 @@ def evaluate_tenant_policy(
             detection_truth=detection_truth,
             internal_networks=networks,
             authorization_result=authorization_result,
+            signal_resolutions=resolved_signals,
         )
         for rule in policy.rules
         if rule.enabled
@@ -97,6 +104,7 @@ def evaluate_tenant_policy(
             "policy_id": policy.policy_id,
             "policy_version": policy.policy_version,
             "policy_hash": policy_hash,
+            "policy_signal_hash": signal_hash,
         }
     )
     evaluator = ActorContext(
@@ -132,6 +140,8 @@ def evaluate_tenant_policy(
             decision_source=TenantPolicyDecisionSource.DETERMINISTIC_RULE,
             selected_rule_id=selected.rule_id,
             rule_evaluations=evaluations,
+            policy_signal_hash=signal_hash,
+            policy_signal_resolutions=list(resolved_signals),
             detection_truth=detection_truth,
             runtime_suggested_action=(run.decision.suggested_action if run.decision else None),
             authorization_status=(authorization_result.status if authorization_result else None),
@@ -174,6 +184,8 @@ def evaluate_tenant_policy(
         evaluation_status=TenantPolicyEvaluationStatus.NO_MATCH,
         decision_source=TenantPolicyDecisionSource.NO_MATCH,
         rule_evaluations=evaluations,
+        policy_signal_hash=signal_hash,
+        policy_signal_resolutions=list(resolved_signals),
         detection_truth=detection_truth,
         runtime_suggested_action=(run.decision.suggested_action if run.decision else None),
         authorization_status=(authorization_result.status if authorization_result else None),
@@ -275,6 +287,7 @@ def _evaluate_rule(
     detection_truth: SocDetectionTruthSnapshot,
     internal_networks: tuple,
     authorization_result: AuthorizationMatchResult | None,
+    signal_resolutions: Sequence[TenantPolicySignalResolution],
 ) -> TenantPolicyRuleEvaluation:
     request = run.llm_analysis_request
     assert request is not None
@@ -460,6 +473,28 @@ def _evaluate_rule(
                 f"actual={actual.value if actual else '<unavailable>'}; allowed={','.join(item.value for item in match.authorization_statuses)}",
             )
         )
+    if match.policy_signals:
+        available: dict[str, list[TenantPolicySignal]] = {}
+        for resolution in signal_resolutions:
+            for signal in resolution.signals:
+                available.setdefault(signal.signal_key.strip().casefold(), []).append(signal)
+        for configured_key, configured_values in sorted(match.policy_signals.items()):
+            normalized_key = configured_key.strip().casefold()
+            expected = {value.strip().casefold() for value in configured_values}
+            candidates = available.get(normalized_key, [])
+            matched_signals = [signal for signal in candidates if signal.signal_value.strip().casefold() in expected]
+            conditions.append(
+                _condition(
+                    f"policy_signal:{configured_key}",
+                    bool(matched_signals),
+                    sorted({path for signal in matched_signals for path in signal.evidence_paths}),
+                    (
+                        f"matched_signal_ids={','.join(signal.signal_id for signal in matched_signals) or '<none>'}; "
+                        f"actual={','.join(sorted({signal.signal_value for signal in candidates})) or '<missing>'}; "
+                        f"allowed={','.join(sorted(expected))}"
+                    ),
+                )
+            )
 
     return TenantPolicyRuleEvaluation(
         rule_id=rule.rule_id,

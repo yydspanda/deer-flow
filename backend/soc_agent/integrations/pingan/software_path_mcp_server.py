@@ -33,6 +33,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "normalized_path",
         "matched",
         "match_type",
+        "exact_safe_path_candidate",
         "control_zone",
         "location_attention",
         "catalog_id",
@@ -57,6 +58,8 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "control_zone": {"type": "string"},
         "location_attention": {"type": "string"},
         "historical_context": {"type": "object"},
+        "path_family_context": {"type": "object"},
+        "exact_safe_path_candidate": {"type": "boolean"},
         "catalog_id": {"type": "string"},
         "catalog_schema_version": {"type": "string"},
         "source_sha256": {"type": "string"},
@@ -117,7 +120,7 @@ def _handle_message(
                 "protocolVersion": protocol_version,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": _SERVER_NAME, "version": _SERVER_VERSION},
-                "instructions": "Historical PingAn EDR path context only. Results are not an allowlist or verdict.",
+                "instructions": "Historical PingAn EDR exact/path-family context only. This MCP remains investigation-only; optional tenant policy authority is separate.",
             },
         )
     if method == "notifications/initialized":
@@ -129,7 +132,7 @@ def _handle_message(
                 "tools": [
                     {
                         "name": _TOOL_NAME,
-                        "description": "Look up exact historical EDR path/hash context without changing the SOC decision.",
+                        "description": "Look up exact or inferred-family historical EDR path/hash context without changing the SOC decision.",
                         "inputSchema": _INPUT_SCHEMA,
                         "outputSchema": _OUTPUT_SCHEMA,
                     }

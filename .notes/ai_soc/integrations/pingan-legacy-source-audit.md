@@ -11,7 +11,7 @@
 - 内网模型服务是 OpenAI-compatible endpoint，可直接由 DeerFlow model profile 使用。
 - ZEUS 请求签名协议已提取为无旧项目依赖的 PingAn signer；真实凭证写入本地、Git 忽略的配置。
 - ZEUS 状态是外部工单生命周期，不等于检测真值；必须经 PingAn source adapter 进入通用 external-disposition ingress。
-- EDR safe-path 表是历史模型输出聚合，不是人工确认的权威白名单；只能作为版本化、可审阅的租户调查知识，不能命中即忽略。
+- EDR safe-path 表是历史模型输出聚合，不进入通用 Runtime，也不是通用白名单。MCP 查询仍只提供调查知识；项目负责人另行批准的默认关闭 PingAn 快速策略，可在完整路径覆盖时形成独立 `ignored` 运营判断。
 
 ```text
 PingAn source/config/knowledge
@@ -136,47 +136,58 @@ Implemented boundary:
 ```text
 workbook/source export
   -> offline compiler and quality report
-  -> versioned PingAn software-path candidate SQLite catalog
-  -> exact normalized path + optional MD5 match with provenance/freshness
-  -> InvestigationEvidence (tenant knowledge, decision_impact=none)
-  -> Review/Web/TUI/Lead Agent bounded investigation context
+  -> versioned PingAn software-path SQLite catalog
+       |- exact normalized path + optional MD5
+       `- conservative one-variable families from safe_paths only
+  -> read-only MCP / InvestigationEvidence (decision_impact=none)
+  -> optional PingAn policy signal (all relevant paths covered)
+  -> Tenant Policy Decision = ignored; Runtime truth preserved
 ```
 
 Implementation:
 
 - compiler/query: `backend/scripts/soc_pingan_software_path_catalog.py`;
 - tenant implementation: `backend/soc_agent/integrations/pingan/software_path_catalog.py`;
+- fast-policy signal provider: `backend/soc_agent/integrations/pingan/software_path_policy.py`;
 - stdio MCP: `backend/soc_agent/integrations/pingan/software_path_mcp_server.py`;
 - generic action: `endpoint.software_path.lookup`;
 - generated local catalog: `backend/.deer-flow/pingan-context/software-path-catalog.sqlite`.
 
-The first real compilation produced 1,329 unique path entries and 7,656
-deduplicated row/bucket observations from all 3,654 rows. The build report records
+The 2026-08-11 real compilation produced 1,329 unique path entries, 7,656
+deduplicated row/bucket observations, 12 conservative path families and 136 family
+members from all 3,654 rows. The build report records
 the source SHA-256, malformed counts, control-zone distribution, legacy buckets,
 and source dispositions. The source XLSX and generated catalog remain Git-ignored;
 the catalog and report are mode `0600`.
 
-The compiler deliberately does **not** carry over the old fuzzy matching. It
-normalizes Windows separators/case and then requires an exact path; an optional
-MD5 can strengthen the match or expose a hash mismatch. It separately classifies
-path-control context. `D:`, user-writable and temporary paths remain high-attention
-even after a historical ignored match; a managed `C:` path can still be a LOLBin.
+The compiler deliberately does **not** carry over the old broad fuzzy matching. It
+normalizes Windows separators/case, retains exact paths, and may infer only one
+recognized variable directory segment when at least two distinct `safe_paths` and
+source alerts support the same fixed prefix/file name. `other_paths` cannot create a
+family. Basename-only, prefix, broad version wildcard and deleted-segment matching
+remain forbidden. Optional MD5 can strengthen a match or force fast-policy failure.
+Path-control context remains separate: `D:`, user-writable and temporary paths are
+still high-attention in investigation output.
 
-Required before any future decision impact:
+Governed fast-disposition boundary:
 
 - deduplicate and normalize Windows paths without hiding the original value;
 - retain row lineage, occurrence count, source model, dataset version and compile time;
 - separate `safe_paths` from `other_paths`; never promote an item because it merely ends in `.exe`;
-- define host/application/environment scope and validity/review dates;
-- evaluate false-positive and false-negative examples against human labels;
-- never use `match => false_positive`, `match => close`, or `match => skip Runtime`.
+- keep the feature default-off and require the reviewed PingAn enforced policy;
+- extract paths only from the canonical completed EDR run, never raw vendor aliases in generic policy;
+- require every relevant process/executable path to match an exact `safe_paths` entry or safe family;
+- give exact and family matches equal `ignored` authority after complete coverage;
+- fail closed for partial/unknown paths, `other_paths`-only matches, invalid paths, hash conflicts or path-budget overflow;
+- preserve `Base -> Memory -> Tenant Policy -> Effective` lineage and never skip Runtime or relabel technical truth.
 
-This is not per-alert memory. One compiled dataset version is queried only when
-EDR path evidence warrants it, and its match is returned as bounded investigation
-context. Current output is permanently marked `candidate_only=true`,
-`automation_eligible=false`, and cannot affect a decision. A future governed
-promotion requires a separate contract and evaluation; changing this catalog alone
-must never grant decision impact.
+This is not per-alert memory. The MCP output remains permanently marked
+`candidate_only=true`, `automation_eligible=false`, and cannot affect a decision.
+Decision authority belongs only to the separate versioned policy signal/provider
+contract enabled by `SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true`; changing or
+querying the catalog alone never grants authority. This deliberately accepts lower
+accuracy for an operator-selected high-throughput mode without contaminating the
+generic Runtime.
 
 ## 6. Current Execution Pointer / 当前落点
 

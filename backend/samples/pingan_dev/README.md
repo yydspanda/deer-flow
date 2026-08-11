@@ -13,9 +13,10 @@ redacted there.
 - `env.example`: shell environment for the model, post-Runtime PingAn tenant
   disposition policy, `asset.locate`, threat intelligence, security-tag lookup,
   and historical software-path lookup.
-- `../../soc_agent/integrations/pingan/policies/tenant-disposition-v1.json`:
-  versioned shadow-only PingAn operational guidance. It preserves Runtime
-  detection truth and cannot close ReviewQueue or execute an action.
+- `../../soc_agent/integrations/pingan/policies/tenant-disposition-v2.json`:
+  reviewed PingAn operational policy. It preserves Runtime detection truth;
+  enforced rules may change effective disposition/review but cannot authorize an
+  external action.
 - `uv-index.env.example`: optional PingAn-intranet uv index for later dependency
   maintenance; it is not used by the offline first install.
 - `extensions.example.json`: one DeerFlow MCP profile that registers all four
@@ -37,10 +38,11 @@ redacted there.
 ## Historical EDR path catalog
 
 The legacy XLSX is compiled locally rather than loaded for every alert. The
-result is candidate investigation knowledge, never an allowlist. Exact matches
-retain source lineage and freshness; directory control remains a separate
-signal, so a `D:` path stays high-attention even when it appeared in historical
-ignored alerts.
+result keeps exact candidate investigation knowledge and conservatively inferred
+one-segment path families. Families are built only from repeated `safe_paths`;
+`other_paths` and broad fuzzy matching never create them. Directory control
+remains separate, so a `D:` path stays high-attention even when it appeared in
+historical ignored alerts.
 
 From the repository root, build the Git-ignored catalog and inspect one path:
 
@@ -64,6 +66,15 @@ After sourcing `.env.soc-dev.local`, `extensions.example.json` exposes
 `InvestigationEvidence(decision_impact=none)` through the normal action
 dispatcher. It cannot skip Runtime, mark an alert benign, close a review, or
 write confirmed memory.
+
+The MCP lookup itself remains investigation-only. For the separately approved
+high-throughput operating mode, set
+`SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true` together with the tenant
+policy settings in `env.example`. The post-Runtime PingAn policy then assigns
+the same direct `ignored` disposition to complete exact-safe-path and
+safe-path-family coverage. One unknown path, `other_paths`-only match, invalid
+path, path-budget overflow, or hash conflict disables the aggregate signal and
+returns the alert to normal triage.
 
 ## Offline backend installation
 

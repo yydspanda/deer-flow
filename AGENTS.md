@@ -380,6 +380,12 @@ Current SOC direction:
   values remain subject to Runtime/Policy-Skill analysis. Exact governed authorization may produce
   `closed_benign_true_positive` while preserving technical truth. Use
   `soc tenant-policy evaluate|list|get` and `soc automation lineage` for replay and inspection.
+  Generic rules may also consume versioned `TenantPolicySignal` values from explicitly injected,
+  read-only providers; provider failure is recorded and fails closed. PingAn's separately gated
+  `SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true` provider emits an aggregate signal only when
+  every canonical EDR process/executable path matches an exact `safe_paths` entry or a conservatively
+  inferred safe-path family. Its reviewed enforced rule gives exact and family matches equal direct
+  operational `ignored` effect while preserving Runtime detection truth and zero action authority.
 - PingAn `zeusRawLogs[].message` values are parsed only inside the PingAn normalizer. If at least one
   message parses deterministically, parsed fields are the only analysis source: Zeus sibling fields
   remain in immutable raw evidence and cannot enter canonical mapping, role/scenario facts, conflicts,
@@ -608,14 +614,17 @@ Current SOC direction:
 - PingAn ZEUS lifecycle codes and reasons belong in a PingAn source adapter that emits
   `SocExternalDispositionIngressCommand`; generic Runtime must not recognize those status codes or
   copy the legacy `status != 1 -> skip AI` behavior. The historical EDR safe-path workbook is
-  model-derived candidate knowledge, not an allowlist. Its implemented offline compiler and exact
-  lookup live under `backend/soc_agent/integrations/pingan/software_path_catalog.py`; the stdio MCP
+  model-derived source knowledge, not a generic allowlist. Its implemented offline compiler, exact
+  lookup and conservative `safe_paths`-only one-segment families live under
+  `backend/soc_agent/integrations/pingan/software_path_catalog.py`; the stdio MCP
   uses the generic `endpoint.software_path.lookup` action. Build it with
   `backend/scripts/soc_pingan_software_path_catalog.py build`; generated SQLite/report files stay
   Git-ignored and mode `0600`. Historical ignored disposition never overrides current path-control
-  context: `D:`, user-writable, and temporary paths remain high-attention. Results preserve source
-  hash/row lineage and freshness, emit investigation-only evidence, and can never directly skip
-  Runtime, mark false positive, close a review, authorize an action, or write confirmed memory.
+  context: `D:`, user-writable, and temporary paths remain high-attention. MCP results preserve source
+  hash/row/family lineage and freshness, emit investigation-only evidence, and can never directly skip
+  Runtime, mark false positive, close a review, authorize an action, or write confirmed memory. Only
+  the separate post-Runtime PingAn policy-signal provider may convert complete exact/family coverage
+  into `ignored`; `other_paths`, partial coverage and hash conflicts never receive that authority.
 - Internal PingAn PKL scale validation uses
   `validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py`. It must build the shared
   `SocAnalysisService` through `soc_agent.application.build_soc_analysis_service`, load DataFrame

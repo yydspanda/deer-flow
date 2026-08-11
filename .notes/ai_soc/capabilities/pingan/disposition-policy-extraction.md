@@ -81,6 +81,7 @@ flowchart LR
 |---:|---|---|
 | 10 | `authorized-activity-operational-close` | 精确授权活动，保留技术真值并运营关闭 |
 | 20 | `legacy-forced-transfer-rule-code` | 两个经审阅的历史 rule_code 强制转交 |
+| 25 | `edr-safe-software-path-fast-ignore` | 全部 canonical EDR 路径命中精确 `safe_paths` 或安全路径族，运营忽略 |
 | 30 | `canonical-http-non-200-ignore` | canonical HTTP 全部非 200，运营忽略 |
 | 31 | `provider-confirmed-request-failure-ignore` | 上游明确请求/攻击失败，运营忽略 |
 
@@ -120,6 +121,7 @@ flowchart LR
 | `PA-CTX-EXERCISE-01` | 扫描器、红蓝白队、护网、维护窗口、安全测试 | 有主体、目标、行为和时效的授权事实 | Governed Context / authorized activity | Lifecycle implemented; real feed data-gated |
 | `PA-MEM-BEHAVIOR-01` | 历史关联处置、已确认正常命令/进程链/业务行为 | 可复用但需版本、有效期和人工确认的经验 | Confirmed Memory | Infrastructure implemented; content onboarding ongoing |
 | `PA-TOOL-PATH-01` | EDR 安全路径表；`edr_alert_assess.py:429-448` | 路径、hash 和历史处置查询上下文 | `endpoint.software_path.lookup` | Implemented; 命中不等于天然安全，D 盘重点关注 |
+| `PA-POL-PATH-01` | 同一 EDR 安全路径表 + 项目负责人确认的高吞吐模式 | 全路径精确/路径族覆盖可直接运营忽略 | PingAn policy signal + deterministic tenant rule | Implemented; default-off，exact/family 同等奏效，Runtime truth retained |
 | `PA-TOOL-ASSET-01` | APT/NIDS/EDR/HIDS asset/BUS/owner 定位 | 资产归属、环境、处置目标候选 | `asset.locate` Provider | Product path implemented; real intranet acceptance open |
 | `PA-TOOL-TI-01` | APT IP intelligence/risk score | IP 信誉、标签、时效 | `threat_intel.ip_reputation.lookup` | Product path implemented; real intranet acceptance open |
 | `PA-TOOL-TAG-01` | 渗透名单、扫描器指纹、安全标签 | 当前实体的标签调查结果 | `security_tag.lookup`; confirmed authorization uses Governed Context | Product path implemented; real feed/authority open |
@@ -135,13 +137,14 @@ flowchart LR
 - EDR: 登录数据/系统文件读取、提权、历史安全路径、通用 LLM 兜底和后续处置目标。
 - HIDS: 可疑操作、后门检测、反弹 Shell、Web 命令、内外网爆破、病毒、提权、蜜罐、WebShell。
 
-这些场景已经进入通用 Skill/Runtime 方法或平安 Policy Skill；其中的内部系统、人名、部门、路径和“一律忽略”例子没有被当成永久规则激活。
+这些场景已经进入通用 Skill/Runtime 方法或平安 Policy Skill。内部系统、人名、部门和宽泛字符串白名单没有被永久激活；软件路径只有在显式开启的 PingAn 高吞吐策略中，按版本化 exact/family 完整覆盖契约生效。
 
 ## 5. Implemented Artifacts / 已实现载体
 
 | Artifact | Role |
 |---|---|
-| `backend/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json` | 服务端持有、版本化、按优先级执行的四条精确规则 |
+| `backend/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json` | 服务端持有、版本化、按优先级执行的五条精确规则 |
+| `backend/soc_agent/integrations/pingan/software_path_policy.py` | 将 canonical EDR 路径的完整 exact/family 覆盖转成受审计策略信号；不进入通用 Runtime |
 | `backend/soc_agent/integrations/pingan/policy_skills/disposition/SKILL.md` | deterministic no-match 后的受限组合语义策略；不进入普通 Skill 自动发现 |
 | `skills/public/soc-network-apt-triage/` | 跨租户网络/APT 方法、C2/隧道与利用成功证据 |
 | `skills/public/soc-web-application-triage/` | HTTP、代理链、Web 攻击与响应效果 |
@@ -159,6 +162,10 @@ SOC_TENANT_DISPOSITION_POLICY_PATH=backend/soc_agent/integrations/pingan/policie
 SOC_TENANT_POLICY_ENVIRONMENT=dev
 SOC_TENANT_POLICY_EVENT_TIMEZONE=Asia/Shanghai
 
+# EDR 安全软件路径高吞吐策略默认关闭
+SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH=backend/.deer-flow/pingan-context/software-path-catalog.sqlite
+SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true
+
 # 组合语义策略默认关闭；只启用确定性规则时保持 off
 SOC_TENANT_POLICY_ADVISOR_MODE=llm
 SOC_TENANT_POLICY_SKILL_PATH=backend/soc_agent/integrations/pingan/policy_skills/disposition/SKILL.md
@@ -166,6 +173,8 @@ SOC_TENANT_POLICY_MODEL=deepseek-v4-flash
 ```
 
 - 总开关默认 `false`；只给 path 而未显式打开会启动失败。
+- 路径快速策略还要求自己的显式开关和 catalog；精确 `safe_paths` 与安全路径族同等直接 `ignored`，但必须覆盖当前告警全部相关路径。
+- 任一路径未知、仅命中 `other_paths`、哈希冲突、非法或超预算时不产生聚合信号，回到正常 Runtime/Policy Skill 结果。
 - Advisor 只在 deterministic `no_match` 后运行；调用、schema 或引用校验失败保存 `failed_closed + no_match`。
 - 没有 `SOC_AUTOMATION_POLICY_PATH` 时可以形成运营 disposition，但不会授权或执行动作。
 - 真正执行仍需 `SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=true` 和受评审 registry。
@@ -208,9 +217,10 @@ Memory contributor、0 action authorization/execution、0 real external call；�
 live-model 重采样，各自 base 到 effective 的 verdict/review 变化为 0。
 
 该 v2.2 结果现为历史基线：v2.3 已删除 `provider-confirmed-success-escalation`。当前代码以
-`pingan-disposition-v2.3.0` 和 Policy Skill `v1.2.0` 为准；`攻击成功/失陷` 只阻止非 `200` 直接忽略，
+`pingan-disposition-v2.4.0` 和 Policy Skill `v1.2.0` 为准；`攻击成功/失陷` 只阻止非 `200` 直接忽略，
 随后进入 Policy Skill。组件测试覆盖确定性弃权与 advisor 接管；新的完整 live 十条重跑尚未执行，不能
-把上述 v2.2 命中数量当作 v2.3 当前验收。
+把上述 v2.2 命中数量当作 v2.4 当前验收。v2.4 新增的 EDR 路径 exact/family 快速忽略目前只有 catalog
+真实构建与聚焦组件证据，尚未进入同一 live 十条 cohort。
 
 ## 8. Extraction Acceptance / 后续抽取准则
 

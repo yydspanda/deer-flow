@@ -439,16 +439,28 @@ transport remains a separate internal smoke rather than an inferred pass.
 
 The historical PingAn EDR workbook is compiled by
 `scripts/soc_pingan_software_path_catalog.py` into a Git-ignored, mode-`0600` SQLite catalog and
-served by `integrations/pingan/software_path_mcp_server.py`. The generic boundary is the read-only
-`endpoint.software_path.lookup` action; all tenant classification and workbook parsing remain in
-`integrations/pingan/software_path_catalog.py`. Matching is exact normalized Windows path with an
-optional MD5 check: do not restore basename, version wildcard, prefix, or deleted-segment fuzzy
-matching from the legacy implementation. Historical disposition and directory control are distinct;
-in particular, `D:`, user-writable, and temporary paths remain high-attention after a match. Results
-must retain `candidate_only=true`, `evidence_boundary=investigation_only`, `decision_impact=none`,
-and `automation_eligible=false`, then flow through the action dispatcher into
-`InvestigationEvidence`. They cannot skip Runtime, set a verdict, close ReviewQueue, authorize an
-action, or write memory.
+served by `integrations/pingan/software_path_mcp_server.py`. The compiler preserves exact normalized
+Windows paths and may infer a one-variable-segment family only from at least two distinct
+`safe_paths` members and source alerts; `other_paths` cannot create a family. Do not restore basename,
+broad version wildcard, prefix, or deleted-segment fuzzy matching from the legacy implementation.
+The generic MCP boundary is the read-only `endpoint.software_path.lookup` action; its results must
+retain `candidate_only=true`, `evidence_boundary=investigation_only`, `decision_impact=none`, and
+`automation_eligible=false`, then flow through the action dispatcher into `InvestigationEvidence`.
+The MCP cannot skip Runtime, set a verdict/disposition, close ReviewQueue, authorize an action, or
+write memory. A separate default-off post-Runtime provider in
+`integrations/pingan/software_path_policy.py` may emit a typed tenant-policy signal when every
+canonical EDR process/executable path matches either an exact `safe_paths` entry or one inferred safe
+family. The PingAn policy gives exact and family coverage equal direct `ignored` effect while keeping
+the Runtime decision immutable; unknown paths, `other_paths`-only matches, hash conflicts, invalid
+paths, or path-budget overflow fail closed. Generic tenant-policy code sees only typed signals and
+must not import PingAn catalog semantics.
+The repeatable real-payload integration gate is
+`validation/compact_zeus/policy/validate_pingan_edr_safe_path_fast_policy.py`: it fixes four
+exact-safe positive cases and six fail-closed EDR cases, runs the production service with a stub
+analyzer and isolated SQLite, and verifies persisted four-stage lineage plus zero action authority.
+Absence of a new path-family instance in the real cohort is a reported coverage gap, not a reason to
+replace it with a synthetic real-data claim; family authority remains covered by focused component
+fixtures.
 
 All non-HTTP SOC entry points that need the complete analysis pipeline use
 `soc_agent.application.build_soc_analysis_service`; do not copy CLI-private assembly into validation
@@ -949,6 +961,12 @@ combine them with current effect evidence. Attempt-only outcomes also remain for
 analysis. External side effects still require a separate `SocAutomationPolicy` or
 human grant. CLI replay/inspection is `soc tenant-policy evaluate|list|get` plus
 `soc automation lineage`.
+Generic policy rules may also match versioned `TenantPolicySignal` values produced by explicitly
+injected, read-only providers. Provider failures are retained as failed-closed resolutions and cannot
+match a rule. PingAn's software-path provider is separately gated by
+`SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true`; complete exact `safe_paths` or inferred safe-family
+coverage gives both match types equal direct operational `ignored` effect. It still preserves the
+Runtime detection truth and grants no external-action authority.
 
 Release-level local Alpha acceptance is orchestrated from the repository root by
 `scripts/soc-alpha-acceptance.sh`. `all` resets an isolated output directory, runs representative

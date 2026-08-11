@@ -1341,7 +1341,8 @@ flowchart LR
     A["🧾 Vendor Alert<br/>厂商告警"] --> R["⚙️ Full SOC Runtime<br/>完整技术研判"]
     R --> B["📋 Base Decision<br/>不可变技术判断"]
     B --> M["✅ Memory Stage<br/>可选 reviewed directive"]
-    M --> E["⚖️ Deterministic Tenant Rules<br/>精确规则优先"]
+    M --> P["🔌 Governed Policy Signals<br/>可选只读租户信号"]
+    P --> E["⚖️ Deterministic Tenant Rules<br/>精确规则优先"]
     E -->|matched| D["🗃️ TenantPolicyDecision"]
     E -->|no match + enabled| S["🧠 Reviewed Policy Skill<br/>组合运营语义"]
     S --> D
@@ -1364,6 +1365,9 @@ Required separation:
   conditions, environment/asset scope, validity, owner/reviewer, reason, rollout mode and audit
   metadata. PingAn field aliases remain in its adapter or tenant mapping, never in generic policy
   evaluation code.
+- Optional read-only policy-signal providers run only in this post-Runtime layer. They emit typed,
+  hashed and source-bound values; a provider failure is recorded and fails closed. Generic policy
+  evaluation never imports the vendor catalog or interprets vendor fields.
 - A matched non-production policy may produce canonical `ignored` or
   `closed_benign_true_positive` disposition while preserving `detection_truth=true_positive` when
   the detection is real. It must not relabel the event as `false_positive` merely because the target
@@ -1391,15 +1395,21 @@ Current implementation (`soc.tenant_disposition_policy.v1` / `soc.tenant_policy_
   independently overridable. No enabled policy means no tenant decision and no PingAn import in
   generic composition.
 - PingAn v2 is isolated under `backend/soc_agent/integrations/pingan/`. Exact authorization, two exact
-  old rule codes, explicit provider failure, and canonical all-non-`200` HTTP handling are deterministic
+  old rule codes, EDR safe-software-path coverage, explicit provider failure, and canonical all-non-`200` HTTP handling are deterministic
   tenant rules. `200` means request success only and produces no disposition by itself. Only canonical
   HTTP `100..599` values participate; workflow/ticket/forwarding/disposition status fields are excluded.
   Forced-transfer rules outrank non-`200` ignore. Provider success/compromise labels make non-`200`
   handling abstain but do not deterministically escalate; success, attempt-only and response-body
   semantics remain bounded Policy-Skill reasoning.
-- Scanner rosters, red/blue/white-team identity, maintenance windows, software paths and business
-  behavior are not copied into generic rules. They must arrive as exact Governed Context, confirmed
-  Memory or typed tool results with scope, event-time validity and source lineage.
+- The default-off PingAn EDR path provider reads canonical process/executable paths and a local v2
+  catalog. It emits `all_relevant_paths_safe` only when every relevant path matches either an exact
+  `safe_paths` entry or a conservative one-variable safe-path family. Both match types directly yield
+  operational `ignored` under the reviewed enforced policy; partial coverage, `other_paths`-only
+  matches, hash conflict, invalid input, or budget overflow fail closed. Runtime detection truth is
+  preserved, and the investigation MCP remains decision-free.
+- Scanner rosters, red/blue/white-team identity, maintenance windows and business behavior are not
+  copied into generic rules. They must arrive as exact Governed Context, confirmed Memory or typed
+  provider signals/tool results with scope, validity and source lineage.
 - Policy version selection uses timezone-aware alert event time. A configured timezone may localize
   a legacy naive timestamp and records `alert_event_time_timezone_assumed`; no implicit timezone is
   guessed. Bounded policies without event time do not apply.
@@ -1458,6 +1468,7 @@ not require rewriting core contracts.
 | `AuthorizedActivityPayload` | Time-, scope- and source-bounded authorized activity definition | GF-01 storage + AA-01 deterministic matcher implemented |
 | `SecurityExerciseCampaignFact` | Campaign scope and Rules of Engagement | Planned typed fact |
 | `TenantDispositionPolicy` | Versioned tenant-specific operating rule over governed context and detection truth | Contract v1; default-off generic evaluator, tenant-owned deterministic rules, reviewed shadow/enforced mode |
+| `TenantPolicySignal` / `TenantPolicySignalResolution` | Versioned, hashed output of an optional read-only tenant provider | Implemented v1; provider failure fails closed, vendor semantics remain outside generic evaluator |
 | `TenantPolicyAdvice` | Strict bounded output of an optional tenant policy Skill | Implemented v1; exact E/R/context refs, no detection or action authority |
 | `TenantPolicyDecision` | Auditable deterministic/advisor match or no-match operational decision | Implemented v1 + migrations `0022/0024`; enforced may affect effective review/disposition, never detection truth/action/memory |
 | `ExerciseParticipantFact` | Event-time participant role and identifier mapping | Planned typed fact |

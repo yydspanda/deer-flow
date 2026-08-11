@@ -33,14 +33,17 @@ from soc_agent.contracts import (
 )
 
 PINGAN_SOFTWARE_PATH_LOOKUP_ACTION = "endpoint.software_path.lookup"
-PINGAN_SOFTWARE_PATH_CATALOG_SCHEMA = "soc.pingan_software_path_catalog.v1"
-PINGAN_SOFTWARE_PATH_BUILD_REPORT_SCHEMA = "soc.pingan_software_path_catalog_build.v1"
-PINGAN_SOFTWARE_PATH_RESULT_SCHEMA = "soc.pingan_software_path_context.v1"
+PINGAN_SOFTWARE_PATH_CATALOG_SCHEMA = "soc.pingan_software_path_catalog.v2"
+PINGAN_SOFTWARE_PATH_BUILD_REPORT_SCHEMA = "soc.pingan_software_path_catalog_build.v2"
+PINGAN_SOFTWARE_PATH_RESULT_SCHEMA = "soc.pingan_software_path_context.v2"
 DEFAULT_CATALOG_ENV = "SOC_PINGAN_SOFTWARE_PATH_CATALOG_PATH"
 
 _REQUIRED_WORKBOOK_COLUMNS = frozenset({"alertId", "flag", "zeusRawLogs", "path_parser"})
-_EXECUTABLE_EXTENSIONS = frozenset({".bat", ".cmd", ".com", ".dll", ".exe", ".jar", ".js", ".msi", ".ps1", ".scr", ".vbs"})
+_EXECUTABLE_EXTENSIONS = frozenset({".bat", ".cmd", ".com", ".dll", ".exe", ".jar", ".js", ".msi", ".ps1", ".scr", ".sys", ".vbs"})
 _MD5_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+_PATH_FAMILY_PLACEHOLDER = "{dynamic_segment}"
+_MIN_PATH_FAMILY_MEMBERS = 2
+_DEPLOYMENT_CACHE_PARENT_NAMES = frozenset({"ccmcache"})
 
 
 class PingAnSoftwarePathCatalogError(RuntimeError):
@@ -70,6 +73,9 @@ class PingAnSoftwarePathMatchType(StrEnum):
     EXACT_PATH = "exact_path"
     EXACT_PATH_AND_MD5 = "exact_path_and_md5"
     EXACT_PATH_HASH_MISMATCH = "exact_path_hash_mismatch"
+    PATH_FAMILY = "path_family"
+    PATH_FAMILY_AND_MD5 = "path_family_and_md5"
+    PATH_FAMILY_HASH_MISMATCH = "path_family_hash_mismatch"
 
 
 class PingAnSoftwarePathFreshness(StrEnum):
@@ -83,8 +89,8 @@ class _StrictModel(BaseModel):
 
 
 class PingAnSoftwarePathCatalogBuildReport(_StrictModel):
-    schema_version: Literal["soc.pingan_software_path_catalog_build.v1"] = PINGAN_SOFTWARE_PATH_BUILD_REPORT_SCHEMA
-    catalog_schema_version: Literal["soc.pingan_software_path_catalog.v1"] = PINGAN_SOFTWARE_PATH_CATALOG_SCHEMA
+    schema_version: Literal["soc.pingan_software_path_catalog_build.v2"] = PINGAN_SOFTWARE_PATH_BUILD_REPORT_SCHEMA
+    catalog_schema_version: Literal["soc.pingan_software_path_catalog.v2"] = PINGAN_SOFTWARE_PATH_CATALOG_SCHEMA
     catalog_id: str
     catalog_path: str
     source_path: str
@@ -97,6 +103,8 @@ class PingAnSoftwarePathCatalogBuildReport(_StrictModel):
     path_entry_count: int = Field(ge=0)
     observation_count: int = Field(ge=0)
     executable_like_entry_count: int = Field(ge=0)
+    path_family_count: int = Field(ge=0)
+    path_family_member_count: int = Field(ge=0)
     control_zone_counts: dict[str, int] = Field(default_factory=dict)
     legacy_bucket_counts: dict[str, int] = Field(default_factory=dict)
     source_flag_counts: dict[str, int] = Field(default_factory=dict)
@@ -122,8 +130,23 @@ class PingAnSoftwarePathHistoricalContext(_StrictModel):
     source_alert_ids_truncated: bool = False
 
 
+class PingAnSoftwarePathFamilyContext(_StrictModel):
+    """One conservatively inferred family built only from legacy safe_paths."""
+
+    family_id: str = Field(min_length=1, max_length=128)
+    pattern_path: str = Field(min_length=1, max_length=4096)
+    variable_segment_kind: str = Field(min_length=1, max_length=64)
+    query_variable_segment: str = Field(min_length=1, max_length=512)
+    member_path_count: int = Field(ge=2)
+    source_alert_count: int = Field(ge=1)
+    occurrence_count: int = Field(ge=1)
+    known_md5s: list[str] = Field(default_factory=list, max_length=20)
+    source_alert_ids: list[str] = Field(default_factory=list, max_length=10)
+    source_alert_ids_truncated: bool = False
+
+
 class PingAnSoftwarePathContextResult(_StrictModel):
-    schema_version: Literal["soc.pingan_software_path_context.v1"] = PINGAN_SOFTWARE_PATH_RESULT_SCHEMA
+    schema_version: Literal["soc.pingan_software_path_context.v2"] = PINGAN_SOFTWARE_PATH_RESULT_SCHEMA
     query_path: str = Field(min_length=1, max_length=4096)
     normalized_path: str = Field(min_length=1, max_length=4096)
     query_md5: str | None = None
@@ -132,8 +155,10 @@ class PingAnSoftwarePathContextResult(_StrictModel):
     control_zone: PingAnSoftwarePathControlZone
     location_attention: PingAnSoftwarePathAttention
     historical_context: PingAnSoftwarePathHistoricalContext | None = None
+    path_family_context: PingAnSoftwarePathFamilyContext | None = None
+    exact_safe_path_candidate: bool = False
     catalog_id: str
-    catalog_schema_version: Literal["soc.pingan_software_path_catalog.v1"] = PINGAN_SOFTWARE_PATH_CATALOG_SCHEMA
+    catalog_schema_version: Literal["soc.pingan_software_path_catalog.v2"] = PINGAN_SOFTWARE_PATH_CATALOG_SCHEMA
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     warnings: list[str] = Field(default_factory=list)
     provider_mode: Literal["local_catalog"] = "local_catalog"
@@ -157,7 +182,7 @@ class PingAnSoftwarePathContextResult(_StrictModel):
 
 
 class PingAnSoftwarePathCatalog:
-    """Read-only exact-match lookup over a compiled local catalog."""
+    """Read-only exact and inferred-family lookup over a compiled local catalog."""
 
     def __init__(self, path: str | Path, *, freshness_days: int = 180) -> None:
         self.path = Path(path).expanduser().resolve()
@@ -192,14 +217,59 @@ class PingAnSoftwarePathCatalog:
         normalized_md5 = _normalize_optional_md5(md5)
         control_zone, attention = classify_pingan_path(normalized_path)
         row = self._entry(normalized_path)
+        family_match = self._family_entry(normalized_path)
         warnings = _path_warnings(control_zone)
-        if row is None:
+        if row is None and family_match is None:
             return PingAnSoftwarePathContextResult(
                 query_path=path,
                 normalized_path=normalized_path,
                 query_md5=normalized_md5,
                 control_zone=control_zone,
                 location_attention=attention,
+                catalog_id=self.catalog_id,
+                source_sha256=self.source_sha256,
+                warnings=warnings,
+            )
+
+        family_context = None
+        family_match_type = None
+        if family_match is not None:
+            family_row, query_variable_segment = family_match
+            family_known_md5s = _json_string_list(family_row["md5s_json"], limit=20)
+            if normalized_md5 and family_known_md5s and normalized_md5 not in family_known_md5s:
+                family_match_type = PingAnSoftwarePathMatchType.PATH_FAMILY_HASH_MISMATCH
+            elif normalized_md5 and normalized_md5 in family_known_md5s:
+                family_match_type = PingAnSoftwarePathMatchType.PATH_FAMILY_AND_MD5
+            else:
+                family_match_type = PingAnSoftwarePathMatchType.PATH_FAMILY
+            family_alert_ids = _json_string_list(family_row["source_alert_ids_json"], limit=11)
+            family_context = PingAnSoftwarePathFamilyContext(
+                family_id=str(family_row["family_id"]),
+                pattern_path=str(family_row["pattern_path"]),
+                variable_segment_kind=str(family_row["variable_segment_kind"]),
+                query_variable_segment=query_variable_segment,
+                member_path_count=int(family_row["member_path_count"]),
+                source_alert_count=int(family_row["source_alert_count"]),
+                occurrence_count=int(family_row["occurrence_count"]),
+                known_md5s=family_known_md5s,
+                source_alert_ids=family_alert_ids[:10],
+                source_alert_ids_truncated=len(family_alert_ids) > 10,
+            )
+            warnings.append("Path matched an inferred family compiled only from historical safe_paths; the family pattern and member lineage are retained for audit.")
+            if family_match_type is PingAnSoftwarePathMatchType.PATH_FAMILY_HASH_MISMATCH:
+                warnings.append("The path family matched, but the supplied MD5 differs from every cataloged family MD5.")
+
+        if row is None:
+            assert family_match_type is not None
+            return PingAnSoftwarePathContextResult(
+                query_path=path,
+                normalized_path=normalized_path,
+                query_md5=normalized_md5,
+                matched=True,
+                match_type=family_match_type,
+                control_zone=control_zone,
+                location_attention=attention,
+                path_family_context=family_context,
                 catalog_id=self.catalog_id,
                 source_sha256=self.source_sha256,
                 warnings=warnings,
@@ -243,6 +313,8 @@ class PingAnSoftwarePathCatalog:
             control_zone=control_zone,
             location_attention=attention,
             historical_context=historical,
+            path_family_context=family_context,
+            exact_safe_path_candidate="safe_paths" in historical.legacy_path_buckets,
             catalog_id=self.catalog_id,
             source_sha256=self.source_sha256,
             warnings=warnings,
@@ -267,6 +339,29 @@ class PingAnSoftwarePathCatalog:
                 "SELECT * FROM path_entries WHERE path_hash = ? AND normalized_path = ?",
                 (_sha256_text(normalized_path), normalized_path),
             ).fetchone()
+
+    def _family_entry(self, normalized_path: str) -> tuple[sqlite3.Row, str] | None:
+        components = _path_components(normalized_path)
+        if len(components) < 3:
+            return None
+        file_name = components[-1]
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM path_families
+                WHERE file_name = ? AND segment_count = ?
+                ORDER BY member_path_count DESC, family_id
+                """,
+                (file_name, len(components)),
+            ).fetchall()
+        for row in rows:
+            pattern_components = _path_components(str(row["pattern_path"]))
+            if len(pattern_components) != len(components):
+                continue
+            variable_index = int(row["variable_index"])
+            if all(index == variable_index or actual == expected for index, (actual, expected) in enumerate(zip(components, pattern_components, strict=True))):
+                return row, components[variable_index]
+        return None
 
     def _source_alert_ids(self, path_hash: str, *, limit: int) -> list[str]:
         with self._connect() as connection:
@@ -394,6 +489,7 @@ def compile_pingan_software_path_catalog(
     generated_at = datetime.now(UTC)
     catalog_id = f"PSC-{source_sha256[:16].upper()}"
     entries, observations, metrics = _read_workbook(source)
+    path_families = _build_path_families(entries, observations)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
     try:
@@ -401,6 +497,7 @@ def compile_pingan_software_path_catalog(
             temporary,
             entries=entries,
             observations=observations,
+            path_families=path_families,
             metadata={
                 "schema_version": PINGAN_SOFTWARE_PATH_CATALOG_SCHEMA,
                 "catalog_id": catalog_id,
@@ -411,6 +508,7 @@ def compile_pingan_software_path_catalog(
                 "allowlist": "false",
                 "evidence_boundary": "investigation_only",
                 "decision_impact": "none",
+                "path_family_inference": "safe_paths_only",
             },
         )
         os.replace(temporary, target)
@@ -431,6 +529,8 @@ def compile_pingan_software_path_catalog(
         path_entry_count=len(entries),
         observation_count=len(observations),
         executable_like_entry_count=sum(bool(entry["executable_like"]) for entry in entries.values()),
+        path_family_count=len(path_families),
+        path_family_member_count=sum(len(family["member_path_hashes"]) for family in path_families.values()),
         control_zone_counts=_count_values(entry["control_zone"] for entry in entries.values()),
         legacy_bucket_counts=_count_values(observation["legacy_bucket"] for observation in observations),
         source_flag_counts=metrics["source_flag_counts"],
@@ -448,6 +548,41 @@ def normalize_windows_path(value: str) -> str:
     if is_unc and not normalized.startswith("\\\\"):
         normalized = "\\" + normalized
     return normalized.lower()
+
+
+def is_executable_like_path(value: str) -> bool:
+    try:
+        normalized = normalize_windows_path(value)
+    except ValueError:
+        return False
+    return ntpath.splitext(normalized)[1].lower() in _EXECUTABLE_EXTENSIONS
+
+
+def _path_components(value: str) -> list[str]:
+    normalized = normalize_windows_path(value)
+    drive, tail = ntpath.splitdrive(normalized)
+    segments = [segment for segment in tail.strip("\\").split("\\") if segment]
+    return [drive.lower(), *segments] if drive else segments
+
+
+def _join_path_components(components: list[str]) -> str:
+    if not components:
+        raise ValueError("path family components cannot be empty")
+    head, *tail = components
+    return head + "\\" + "\\".join(tail) if tail else head
+
+
+def _variable_segment_kind(segment: str, *, parent: str) -> str | None:
+    normalized = segment.casefold()
+    if parent.casefold() in _DEPLOYMENT_CACHE_PARENT_NAMES and re.fullmatch(r"[a-z0-9]{1,4}", normalized):
+        return "deployment_cache_slot"
+    if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", normalized):
+        return "uuid"
+    if len(normalized) >= 4 and normalized.isdigit():
+        return "numeric"
+    if len(normalized) >= 8 and re.fullmatch(r"[0-9a-f]+", normalized):
+        return "hex"
+    return None
 
 
 def classify_pingan_path(
@@ -589,11 +724,79 @@ def _read_workbook(
         workbook.close()
 
 
+def _build_path_families(
+    entries: Mapping[str, Mapping[str, Any]],
+    observations: Iterable[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Infer one-variable path families only from executable legacy safe_paths."""
+
+    safe_observations: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for observation in observations:
+        if observation["legacy_bucket"] == "safe_paths":
+            safe_observations[str(observation["path_hash"])].append(observation)
+
+    candidates: dict[tuple[str, str], dict[str, Any]] = {}
+    for path_hash, entry in entries.items():
+        if not entry["executable_like"] or path_hash not in safe_observations:
+            continue
+        components = _path_components(str(entry["normalized_path"]))
+        if len(components) < 4:
+            continue
+        for variable_index in range(2, len(components) - 1):
+            variable_segment = components[variable_index]
+            variable_kind = _variable_segment_kind(
+                variable_segment,
+                parent=components[variable_index - 1],
+            )
+            if variable_kind is None:
+                continue
+            pattern_components = list(components)
+            pattern_components[variable_index] = _PATH_FAMILY_PLACEHOLDER
+            pattern_path = _join_path_components(pattern_components)
+            group = candidates.setdefault(
+                (pattern_path, variable_kind),
+                {
+                    "pattern_path": pattern_path,
+                    "file_name": components[-1],
+                    "segment_count": len(components),
+                    "variable_index": variable_index,
+                    "variable_segment_kind": variable_kind,
+                    "variable_segments": set(),
+                    "member_path_hashes": set(),
+                },
+            )
+            group["variable_segments"].add(variable_segment)
+            group["member_path_hashes"].add(path_hash)
+
+    families: dict[str, dict[str, Any]] = {}
+    for group in candidates.values():
+        if len(group["member_path_hashes"]) < _MIN_PATH_FAMILY_MEMBERS or len(group["variable_segments"]) < _MIN_PATH_FAMILY_MEMBERS:
+            continue
+        member_observations = [observation for path_hash in group["member_path_hashes"] for observation in safe_observations[path_hash]]
+        source_alert_ids = {str(item["alert_id"]) for item in member_observations}
+        if len(source_alert_ids) < _MIN_PATH_FAMILY_MEMBERS:
+            continue
+        family_hash = _sha256_text(group["pattern_path"])
+        families[family_hash] = {
+            **group,
+            "family_id": f"PSF-{family_hash[:20].upper()}",
+            "source_alert_ids": source_alert_ids,
+            "occurrence_count": len(member_observations),
+            "first_seen_at": _minimum_text(item.get("observed_at") for item in member_observations),
+            "last_seen_at": _maximum_text(item.get("observed_at") for item in member_observations),
+            "process_names": _non_empty_text_set(item.get("process_name") for item in member_observations),
+            "md5s": _non_empty_text_set(item.get("md5") for item in member_observations),
+            "rule_codes": _non_empty_text_set(item.get("rule_code") for item in member_observations),
+        }
+    return families
+
+
 def _write_catalog(
     path: Path,
     *,
     entries: Mapping[str, Mapping[str, Any]],
     observations: Iterable[Mapping[str, Any]],
+    path_families: Mapping[str, Mapping[str, Any]],
     metadata: Mapping[str, str],
 ) -> None:
     with sqlite3.connect(path) as connection:
@@ -638,6 +841,32 @@ def _write_catalog(
             );
             CREATE INDEX ix_path_observations_path_hash ON path_observations(path_hash);
             CREATE INDEX ix_path_observations_alert_id ON path_observations(alert_id);
+            CREATE TABLE path_families (
+                family_id TEXT PRIMARY KEY,
+                pattern_path TEXT NOT NULL UNIQUE,
+                file_name TEXT NOT NULL,
+                segment_count INTEGER NOT NULL,
+                variable_index INTEGER NOT NULL,
+                variable_segment_kind TEXT NOT NULL,
+                member_path_count INTEGER NOT NULL,
+                source_alert_count INTEGER NOT NULL,
+                occurrence_count INTEGER NOT NULL,
+                first_seen_at TEXT,
+                last_seen_at TEXT,
+                process_names_json TEXT NOT NULL,
+                md5s_json TEXT NOT NULL,
+                rule_codes_json TEXT NOT NULL,
+                source_alert_ids_json TEXT NOT NULL
+            );
+            CREATE TABLE path_family_members (
+                family_id TEXT NOT NULL,
+                path_hash TEXT NOT NULL,
+                PRIMARY KEY(family_id, path_hash),
+                FOREIGN KEY(family_id) REFERENCES path_families(family_id),
+                FOREIGN KEY(path_hash) REFERENCES path_entries(path_hash)
+            );
+            CREATE INDEX ix_path_families_file_segments ON path_families(file_name, segment_count);
+            CREATE INDEX ix_path_family_members_path_hash ON path_family_members(path_hash);
             """
         )
         connection.executemany(
@@ -698,6 +927,41 @@ def _write_catalog(
                 )
                 for item in observations
             ],
+        )
+        connection.executemany(
+            """
+            INSERT INTO path_families(
+                family_id, pattern_path, file_name, segment_count,
+                variable_index, variable_segment_kind, member_path_count,
+                source_alert_count, occurrence_count, first_seen_at,
+                last_seen_at, process_names_json, md5s_json,
+                rule_codes_json, source_alert_ids_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    family["family_id"],
+                    family["pattern_path"],
+                    family["file_name"],
+                    family["segment_count"],
+                    family["variable_index"],
+                    family["variable_segment_kind"],
+                    len(family["member_path_hashes"]),
+                    len(family["source_alert_ids"]),
+                    family["occurrence_count"],
+                    family["first_seen_at"],
+                    family["last_seen_at"],
+                    _json_set(family["process_names"], limit=100),
+                    _json_set(family["md5s"], limit=100),
+                    _json_set(family["rule_codes"], limit=100),
+                    _json_set(family["source_alert_ids"]),
+                )
+                for family in sorted(path_families.values(), key=lambda item: item["pattern_path"])
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO path_family_members(family_id, path_hash) VALUES (?, ?)",
+            [(family["family_id"], path_hash) for family in sorted(path_families.values(), key=lambda item: item["pattern_path"]) for path_hash in sorted(family["member_path_hashes"])],
         )
         connection.commit()
 
@@ -812,6 +1076,20 @@ def _update_seen_range(entry: dict[str, Any], observed_at: str | None) -> None:
         entry["first_seen_at"] = observed_at
     if entry["last_seen_at"] is None or observed_at > entry["last_seen_at"]:
         entry["last_seen_at"] = observed_at
+
+
+def _minimum_text(values: Iterable[Any]) -> str | None:
+    normalized = [text for value in values if (text := _cell_text(value))]
+    return min(normalized) if normalized else None
+
+
+def _maximum_text(values: Iterable[Any]) -> str | None:
+    normalized = [text for value in values if (text := _cell_text(value))]
+    return max(normalized) if normalized else None
+
+
+def _non_empty_text_set(values: Iterable[Any]) -> set[str]:
+    return {text for value in values if (text := _cell_text(value))}
 
 
 def _parse_json_object(value: Any) -> dict[str, Any] | None:
@@ -929,11 +1207,13 @@ __all__ = [
     "PingAnSoftwarePathContextResult",
     "PingAnSoftwarePathControlZone",
     "PingAnSoftwarePathFreshness",
+    "PingAnSoftwarePathFamilyContext",
     "PingAnSoftwarePathHistoricalContext",
     "PingAnSoftwarePathLookupActionAdapter",
     "PingAnSoftwarePathMatchType",
     "classify_pingan_path",
     "compile_pingan_software_path_catalog",
+    "is_executable_like_path",
     "normalize_windows_path",
     "pingan_software_path_adapter_descriptor",
 ]

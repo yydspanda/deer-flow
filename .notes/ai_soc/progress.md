@@ -42,6 +42,17 @@
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / External Product Complete + Real Debt Open** | 既有 simulation、PI-01F/F2 和 PI-01G 专家子智能体产品链已完成；7 个真实 gate 保持 open | 外网产品完整性缺口已关闭；fresh real evidence、具名 owner approval、cohort enforcement 和可执行 rollback 到位后才能进入 Pilot readiness review |
 
+## 2026-08-11 — PingAn EDR exact/path-family fast ignore implemented
+
+- 将历史安全软件路径目录升级到 `soc.pingan_software_path_catalog.v2`：全部 1,329 个精确路径继续保留，只有 `safe_paths` 中至少两个不同路径、动态段和来源告警支持时，才推导一个单动态目录段路径族；不恢复 basename、prefix、宽版本通配或删除目录段模糊匹配。
+- 对真实 3,654 行 XLSX 重新构建得到 7,656 个 observation、12 个保守路径族和 136 个 family member；当前族均为 `ccmcache` 部署槽位，没有把 `System32/SysWOW64` 或 Program Files 版本目录误泛化。
+- 新增通用 `TenantPolicySignal` / `TenantPolicySignalResolution` 与 provider port。通用 Tenant Policy 只匹配受审计信号，不读取 PingAn Excel、字段别名或路径模板；provider 异常保存为 `failed_closed`，不能匹配规则。
+- 新增默认关闭的 `PingAnSoftwarePathPolicySignalProvider` 和 `edr-safe-software-path-fast-ignore`。显式开启后，当前告警全部 canonical EDR 进程/可执行路径命中精确 `safe_paths` 或路径族即可直接形成运营 `ignored`；精确和路径族具有同等效力。
+- 任一路径未知、仅命中 `other_paths`、路径非法、数量超过 50、多个 hash 冲突或目录 hash 不一致时不发聚合信号，继续正常研判。基础 Runtime verdict 不改写，外部动作权限仍为零。
+- `endpoint.software_path.lookup` MCP 继续永久保持 `candidate_only=true`、`decision_impact=none`；调查工具和处置策略是两个独立权限边界。开关为 `SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED=true`，并要求 Tenant Policy 总开关和 v2 catalog。
+- 聚焦验证覆盖 exact/family 同等忽略、精确 `other_paths` 优先于宽路径族、`other_paths` 不建族、System32 不泛化、未知路径/hash mismatch 失败关闭、配置默认关闭、策略持久化和四阶段 Effective lineage：software-path catalog/policy + tenant-policy 共 `41 passed`，SOC architecture `12 passed`。changed-file Ruff 与 `git diff --check` 通过；真实 workbook v2 重建确认 `1,329 exact / 12 families / 136 members`，family query 成功；`codegraph sync .` 纳入 2 个新增文件、41 个节点。
+- 新增固定 10 条真实 EDR 专项验收：4 条纯精确 `safe_paths` 形成 `ignored` 并将 effective review 从 true 清为 false；6 条 `other_paths`、hash mismatch、未知或安全/未知混合路径全部 fail closed。10/10 Runtime 完成、10/10 四阶段 lineage、10/10 base verdict/confidence 未变、0 action authorization、0 execution。当前真实 corpus 没有新的 path-family query，报告如实标记 coverage gap，family 的同等忽略权限继续由组件正反例覆盖。可重复入口为 `validation/compact_zeus/policy/validate_pingan_edr_safe_path_fast_policy.py`，本地产物位于 `backend/.deer-flow/soc-validation/edr-safe-path-ten/<UTC>/`。
+
 ## 2026-08-11 — PingAn policy became an independent four-stage decision
 
 - Post-Runtime lineage 升级为 `Base -> Memory -> Tenant Policy -> Effective`。`AnalysisRun.decision`

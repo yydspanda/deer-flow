@@ -74,6 +74,7 @@ from soc_agent.contracts import (
     TenantDispositionPolicy,
     TenantPolicyAdvisorResult,
     TenantPolicyDecision,
+    TenantPolicySignalResolution,
 )
 
 
@@ -169,6 +170,21 @@ class TenantPolicyAdvisor(Protocol):
         policy: TenantDispositionPolicy,
         run: AnalysisRun,
     ) -> TenantPolicyAdvisorResult: ...
+
+
+class TenantPolicySignalProvider(Protocol):
+    """Resolve optional governed context without importing tenant logic into the evaluator."""
+
+    provider_id: str
+    provider_version: str
+
+    def resolve(
+        self,
+        policy: TenantDispositionPolicy,
+        run: AnalysisRun,
+        *,
+        environment: str,
+    ) -> TenantPolicySignalResolution: ...
 
 
 class AlertRepository(Protocol):

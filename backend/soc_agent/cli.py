@@ -29,6 +29,7 @@ from soc_agent.actions.mcp import (
 from soc_agent.actions.proposals import SocLeadAgentActionProposalBoundary
 from soc_agent.agent_profile import SocLeadAgentProfileInstaller
 from soc_agent.application import (
+    build_configured_tenant_policy_signal_providers,
     build_soc_analysis_service,
     build_soc_investigation_reporting_service,
     build_soc_investigation_workflow_service,
@@ -3052,6 +3053,7 @@ def _tenant_policy_evaluate(args: argparse.Namespace) -> int:
             environment=args.environment,
             authorized_activity_service=SocAuthorizedActivityService(repository=repository),
             event_timezone=args.event_timezone,
+            signal_providers=build_configured_tenant_policy_signal_providers(),
         )
         decision = service.evaluate(
             run,

@@ -68,9 +68,13 @@ verdict 变化只归因于 live-model 重采样；每条自身 base 到 effectiv
 初次受限网络执行失败后仅重试失败 case；两个模型格式/空输出失败也只重试对应 case，未放宽 Parser 或
 Grounding 契约。
 
-该 v2.2 结果现为历史基线。当前 `pingan-disposition-v2.3.0` 已删除确定性
+该 v2.2 结果现为历史基线。当前 `pingan-disposition-v2.4.0` 已删除确定性
 `provider-confirmed-success-escalation`：成功/失陷标签只使 canonical 非 `200` 忽略规则弃权，随后由
-Policy Skill 结合效果证据处理。组件测试已覆盖该交接；完整 v2.3 live 十条尚未重跑。
+Policy Skill 结合效果证据处理。v2.4 还新增默认关闭的 EDR 安全路径 exact/family 快速忽略；完整 live
+十条 LLM 尚未重跑，当前可引用 catalog 真实构建、聚焦组件测试，以及固定 10 条真实 EDR 的 stub
+策略集成验收：4 条精确路径直接忽略、6 条失败关闭、0 动作授权/执行。该专项不声明 LLM 质量；当前
+corpus 没有真实 path-family 新实例，不能把组件 fixture 冒充真实命中。命令与产物说明见
+`validation/compact_zeus/policy/README.md`。
 
 ## 1. What Is Actually Linear / 真正固定流水线
 

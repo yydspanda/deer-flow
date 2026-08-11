@@ -21,7 +21,11 @@ from soc_agent.llm import (
     build_configured_chat_client,
 )
 from soc_agent.memory import ConfirmedMemoryAnalysisRequestEnricher
-from soc_agent.protocols import PostAnalysisObserver, SocActionAdapterRegistryPort
+from soc_agent.protocols import (
+    PostAnalysisObserver,
+    SocActionAdapterRegistryPort,
+    TenantPolicySignalProvider,
+)
 from soc_agent.tenant_policy import (
     LLMTenantPolicyAdvisor,
     StaticTenantPolicyResolver,
@@ -131,6 +135,7 @@ def _build_post_analysis_observers(
                 skill_path=advisor_skill_path,
             )
         policies = load_tenant_disposition_policies(policy_path)
+        signal_providers = build_configured_tenant_policy_signal_providers()
         observers.append(
             SocTenantPolicyEvaluationService(
                 policy_resolver=StaticTenantPolicyResolver(policies),
@@ -139,8 +144,14 @@ def _build_post_analysis_observers(
                 authorized_activity_service=SocAuthorizedActivityService(repository=repository),
                 event_timezone=os.environ.get("SOC_TENANT_POLICY_EVENT_TIMEZONE") or None,
                 advisor=advisor,
+                signal_providers=signal_providers,
             )
         )
+    elif _strict_env_bool(
+        "SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED",
+        default=False,
+    ):
+        raise ValueError("SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED requires SOC_TENANT_POLICY_ENABLED=true")
 
     automation_path = os.environ.get("SOC_AUTOMATION_POLICY_PATH", "").strip()
     if automation_path or tenant_policy_enabled:
@@ -185,4 +196,22 @@ def _strict_env_bool(name: str, *, default: bool) -> bool:
     raise ValueError(f"{name} must be a strict boolean")
 
 
-__all__ = ["build_soc_analysis_service"]
+def build_configured_tenant_policy_signal_providers() -> tuple[TenantPolicySignalProvider, ...]:
+    """Build optional tenant integration providers without changing Runtime."""
+
+    if not _strict_env_bool(
+        "SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED",
+        default=False,
+    ):
+        return ()
+    from soc_agent.integrations.pingan.software_path_policy import (
+        PingAnSoftwarePathPolicySignalProvider,
+    )
+
+    return (PingAnSoftwarePathPolicySignalProvider.from_env(),)
+
+
+__all__ = [
+    "build_configured_tenant_policy_signal_providers",
+    "build_soc_analysis_service",
+]

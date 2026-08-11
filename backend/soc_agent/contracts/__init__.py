@@ -440,6 +440,9 @@ from soc_agent.contracts.tenant_policy import (
     TenantPolicyReviewEffect,
     TenantPolicyRuleEvaluation,
     TenantPolicyRuleMatch,
+    TenantPolicySignal,
+    TenantPolicySignalProviderStatus,
+    TenantPolicySignalResolution,
     TenantPolicyTimeSource,
 )
 
@@ -487,6 +490,9 @@ __all__ = [
     "TenantPolicyReviewEffect",
     "TenantPolicyRuleEvaluation",
     "TenantPolicyRuleMatch",
+    "TenantPolicySignal",
+    "TenantPolicySignalProviderStatus",
+    "TenantPolicySignalResolution",
     "TenantPolicyTimeSource",
     "AuthorizationDimension",
     "AuthorizationDimensionEvaluation",
