@@ -14,6 +14,7 @@ from soc_agent.contracts import (
     SocAutomationPolicy,
     SocAutomationRule,
     SocDecisionSnapshot,
+    SocOperationalDisposition,
 )
 from soc_agent.utils.hashing import stable_hash
 
@@ -48,6 +49,9 @@ def select_automation_rule(
     policy: SocAutomationPolicy,
     run: AnalysisRun,
     decision: SocDecisionSnapshot,
+    *,
+    tenant_policy_rule_id: str | None = None,
+    tenant_disposition: SocOperationalDisposition | None = None,
 ) -> SocAutomationRule | None:
     request = run.llm_analysis_request
     analysis = run.analysis
@@ -63,6 +67,12 @@ def select_automation_rule(
             continue
         if match.source_types and request.source.source_type not in match.source_types:
             continue
+        if match.rule_codes and (request.detection.rule_code or "") not in match.rule_codes:
+            continue
+        if match.detection_keys and (request.detection.detection_key or "") not in match.detection_keys:
+            continue
+        if match.tenant_policy_rule_ids and tenant_policy_rule_id not in match.tenant_policy_rule_ids:
+            continue
         if match.evidence_states and decision.evidence_state not in match.evidence_states:
             continue
         if match.model_names and run.model_name not in match.model_names:
@@ -77,6 +87,19 @@ def select_automation_rule(
             continue
         expected_scenarios = {value.casefold() for value in match.scenario_keys}
         if expected_scenarios and not (scenario_keys & expected_scenarios):
+            continue
+        if (
+            tenant_disposition
+            in {
+                SocOperationalDisposition.CLOSED_TRUE_POSITIVE,
+                SocOperationalDisposition.CLOSED_FALSE_POSITIVE,
+                SocOperationalDisposition.CLOSED_BENIGN_TRUE_POSITIVE,
+                SocOperationalDisposition.IGNORED,
+                SocOperationalDisposition.DUPLICATE,
+            }
+            and rule.action is not None
+            and not match.tenant_policy_rule_ids
+        ):
             continue
         return rule
     return None

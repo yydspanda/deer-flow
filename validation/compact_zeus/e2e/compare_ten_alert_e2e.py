@@ -16,6 +16,7 @@ COMPARISON_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_comparison.v1"
 SUPPORTED_REPORT_SCHEMAS = {
     "soc.validation.e2e_ten_alert_report.v1",
     "soc.validation.e2e_ten_alert_report.v2",
+    "soc.validation.e2e_ten_alert_report.v3",
 }
 
 
@@ -84,6 +85,7 @@ def compare_reports(
             "base_model_output_can_vary_between_live_calls": True,
             "base_verdict_delta_is_not_attributed_to_memory_or_automation": True,
             "effective_decision_delta_requires_append_only_transition_lineage": True,
+            "tenant_policy_is_independent_from_runtime_detection_truth": True,
             "mocked_execution_is_not_real_provider_evidence": True,
         },
         "summary": {
@@ -112,6 +114,10 @@ def compare_reports(
             ),
             "memory_contributor_count": current_summary.get(
                 "memory_contributor_count",
+                0,
+            ),
+            "tenant_policy_decision_count": current_summary.get(
+                "tenant_policy_decision_count",
                 0,
             ),
             "automatic_authorization_without_memory_count": (
@@ -145,6 +151,7 @@ def _compare_case(
     baseline_grounding = _mapping(baseline.get("grounding"))
     current_grounding = _mapping(current.get("grounding"))
     automation = _mapping(current.get("automation"))
+    tenant_policy = _mapping(current.get("tenant_policy"))
     base_verdict_changed = baseline_base.get("verdict") != current_base.get("verdict")
     effective_changed = current_base.get("verdict") != current_effective.get(
         "verdict"
@@ -183,6 +190,9 @@ def _compare_case(
             baseline.get("quality_status") != current.get("quality_status")
         ),
         "automation": automation,
+        "memory_stage": _mapping(automation.get("memory_stage")),
+        "tenant_policy_stage": _mapping(automation.get("tenant_policy_stage")),
+        "tenant_policy": tenant_policy,
         "interpretation": (
             "live_model_resampling_or_runtime_change"
             if base_verdict_changed
@@ -233,10 +243,11 @@ def render_markdown(comparison: Mapping[str, Any]) -> str:
         f"- Same-input cases: `{summary.get('same_input_hash_count')}/{summary.get('case_count')}`",
         f"- Base verdict changes: `{summary.get('base_verdict_changed_count')}`; these are not automatically attributed to Memory or automation",
         f"- Effective verdict/review changes with transition lineage: `{summary.get('effective_verdict_changed_from_base_count')}`",
+        f"- PingAn tenant policy decisions: `{summary.get('tenant_policy_decision_count')}`",
         f"- Automatic authorizations without Memory: `{summary.get('automatic_authorization_without_memory_count')}`",
         f"- Mocked action executions: `{summary.get('mocked_action_execution_count')}`; real external calls: `{summary.get('real_external_action_call_count')}`",
         "",
-        "| Alert | Source | Old base | New base | New effective | Grounded old -> new | Rejected old -> new | Rule | Authorization | Execution |",
+        "| Alert | Source | Old base | New base | Memory stage | PingAn Policy | New effective | Grounded old -> new | Rejected old -> new | Action auth/execution |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for item in comparison.get("cases") or []:
@@ -247,6 +258,9 @@ def render_markdown(comparison: Mapping[str, Any]) -> str:
         effective = _mapping(item.get("current_effective_decision"))
         grounding = _mapping(item.get("grounding"))
         automation = _mapping(item.get("automation"))
+        memory_stage = _mapping(item.get("memory_stage"))
+        tenant_stage = _mapping(item.get("tenant_policy_stage"))
+        tenant_policy = _mapping(item.get("tenant_policy"))
         lines.append(
             "| "
             + " | ".join(
@@ -255,6 +269,12 @@ def render_markdown(comparison: Mapping[str, Any]) -> str:
                     _md(item.get("source_type")),
                     _md(old_base.get("verdict")),
                     _md(new_base.get("verdict")),
+                    _md(memory_stage.get("status") or "none"),
+                    _md(
+                        f"{tenant_stage.get('status') or 'none'} / "
+                        f"{tenant_policy.get('decision_source') or 'none'} / "
+                        f"{tenant_policy.get('selected_rule_id') or 'no-match'}"
+                    ),
                     _md(effective.get("verdict")),
                     _md(
                         f"{grounding.get('baseline_grounded')} -> "
@@ -264,24 +284,27 @@ def render_markdown(comparison: Mapping[str, Any]) -> str:
                         f"{grounding.get('baseline_ungrounded')} -> "
                         f"{grounding.get('current_ungrounded')}"
                     ),
-                    _md(automation.get("selected_rule_id") or "none"),
                     _md(
-                        ", ".join(
-                            str(value)
-                            for value in automation.get(
-                                "action_authorization_decisions"
+                        "auth="
+                        + (
+                            ", ".join(
+                                str(value)
+                                for value in automation.get(
+                                    "action_authorization_decisions"
+                                )
+                                or []
                             )
-                            or []
+                            or "none"
                         )
-                        or "none"
-                    ),
-                    _md(
-                        ", ".join(
-                            str(value)
-                            for value in automation.get("action_execution_statuses")
-                            or []
+                        + "; exec="
+                        + (
+                            ", ".join(
+                                str(value)
+                                for value in automation.get("action_execution_statuses")
+                                or []
+                            )
+                            or "none"
                         )
-                        or "none"
                     ),
                 ]
             )

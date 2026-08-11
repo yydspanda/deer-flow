@@ -76,7 +76,7 @@ The following candidate groups are discovered but are not automatically activate
 | scanner, red-team, test, and maintenance catalog | authorized-activity facts | actor/scope/time/purpose match; a name or IP match alone does not close an alert |
 | internal software, path, process-chain, and admin-tool cases | `benign_pattern` / `environment_fact` candidate | `pending_review`, expiry/review date, evidence lineage, no automatic suppression |
 | custom detection rule-family behavior | `detection_lesson` plus eval fixture | source-versioned, reviewed false-positive/true-positive counterexamples |
-| `dev/stg/test` handling suggestions | tenant disposition policy v1 | implemented as isolated shadow data; hostname remains a hint, so no benign/exempt disposition without governed confirmation |
+| `dev/stg/test` handling suggestions | PingAn Policy Skill / governed context | environment name remains a hint; no benign/exempt disposition without exact governed confirmation or another reviewed rule |
 | historical APT/EDR/HIDS cases | desensitized labeled eval corpus | analyst truth, rationale, corpus manifest, supersession lineage |
 
 Exact internal values remain in the source material until an operator deliberately onboards them through the corresponding governed service. They are not duplicated into public Skills or this audit.
@@ -113,12 +113,20 @@ The first non-Skill migration from this source is now implemented:
 - generic contracts/evaluator: `backend/soc_agent/contracts/tenant_policy.py` and
   `backend/soc_agent/tenant_policy/`;
 - post-persistence service: `backend/soc_agent/core/tenant_policy.py`;
-- PingAn-owned policy data:
-  `backend/soc_agent/integrations/pingan/policies/tenant-disposition-v1.json`;
-- append-only persistence: migration `0022_tenant_policy_decisions`;
+- PingAn-owned deterministic policy data:
+  `backend/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json`;
+- PingAn-owned bounded policy Skill:
+  `backend/soc_agent/integrations/pingan/policy_skills/disposition/SKILL.md`;
+- append-only persistence: migration `0022_tenant_policy_decisions` plus migration `0024` four-stage indexes;
 - replay/inspection: `soc tenant-policy evaluate|list|get`;
 - real saved-result validation: `validation/compact_zeus/policy/`.
 
-This closes only the `dev/stg/test` policy-candidate extraction. Internal scanners, red-team rosters,
-maintenance windows, products, accounts, paths and historical false-positive cases still require the
-governed fact/memory/eval onboarding named above; they were not silently copied into the policy pack.
+Exact authorization, two reviewed rule codes, canonical all-non-`200` HTTP handling, and explicit
+adapter-normalized provider failure outcomes are deterministic. `200` means request success only and
+produces no disposition by itself. Forced-transfer rules outrank non-`200` ignore; provider
+success/compromise labels instead make that ignore rule abstain and remain Policy-Skill/Runtime work
+alongside `企图/尝试` and response-body semantics. Internal scanners,
+red-team rosters, maintenance windows, products, accounts, paths and historical false-positive cases
+still require governed fact/memory/tool onboarding; they were not silently copied into the policy pack.
+The complete deduplicated source-family catalog is
+`capabilities/pingan/disposition-policy-extraction.md`.

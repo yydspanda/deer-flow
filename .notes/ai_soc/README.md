@@ -25,7 +25,8 @@
 | 查看平安经验如何进入系统 | `capabilities/pingan/onboarding.md` | `capabilities/pingan/capability-cards.md` |
 | 拆分平安历史 prompt / 经验 / 工具 | `capabilities/pingan/knowledge-decomposition.md` | `memory/memory-tracking.md` |
 | 审阅同事提供的 PingAn `security-log-analysis` Skill Demo | `capabilities/pingan/security-log-analysis-skill-audit.md` | `capabilities/pingan/onboarding.md` 的 PA-13 |
-| 重跑 PingAn 租户处置策略的 post-Runtime 影子验证 | `soc-agent-solution.md` Section 7.4.3 | `validation/compact_zeus/policy/README.md` 与本地 `tenant-policy-shadow/summary.json` |
+| 审阅 PingAn 处置策略来源、200/非200语义、确定性规则与 Policy Skill 分工 | `capabilities/pingan/disposition-policy-extraction.md` | `soc-agent-solution.md` Section 7.4.3 |
+| 重跑 PingAn 租户处置策略与四阶段端到端验证 | `validation/compact_zeus/e2e/README.md` | 本地 `e2e-ten-pingan-policy-current/SUMMARY.md` |
 | 核对旧 Zeus `flows/` 的研判能力迁到哪里、哪些明确不迁 | `capabilities/pingan/legacy-zeus-capability-extraction.md` | `capabilities/pingan/knowledge-decomposition.md` |
 | 查看平安专属知识候选 | `capabilities/pingan/knowledge-candidates.md` | `capabilities/pingan/source-docs/` |
 | 查看当前哪些能力仍是 mock | `integrations/mock-and-real-register.md` | `capabilities/pingan/onboarding.md` 的 PA-12 |
@@ -61,6 +62,7 @@ ai_soc/
 │       ├── onboarding.md              # 平安经验输入与能力卡流程
 │       ├── knowledge-decomposition.md # 平安经验拆分规则
 │       ├── legacy-zeus-capability-extraction.md # 旧 Zeus flows 研判能力去向与 D7/D8 验证边界
+│       ├── disposition-policy-extraction.md # 平安处置经验来源、分层归属、配置与回放边界
 │       ├── capability-cards.md        # PingAn capability card 台账
 │       ├── knowledge-candidates.md    # PingAn tenant memory/policy/eval 候选
 │       ├── security-log-analysis-skill-audit.md # 同事 Skill Demo 的拆解、路由修复与迁移边界

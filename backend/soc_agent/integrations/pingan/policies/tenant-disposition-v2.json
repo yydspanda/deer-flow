@@ -1,0 +1,158 @@
+{
+  "schema_version": "soc.tenant_disposition_policy.v1",
+  "policy_id": "pingan.soc.disposition",
+  "policy_version": "pingan-disposition-v2.3.0",
+  "tenant_id": "pingan",
+  "applicable_environments": [
+    "dev",
+    "stg",
+    "prd"
+  ],
+  "owner": "PingAn SOC Operations",
+  "source_ref": ".notes/ai_soc/capabilities/pingan/disposition-policy-extraction.md",
+  "change_reason": "Remove deterministic escalation from provider attack-success labels; canonical non-200 HTTP ignores only when no explicit provider success/compromise label requires bounded Policy-Skill interpretation. HTTP 200 alone has no tenant-policy disposition.",
+  "reviewed_by": "pingan-soc-project-owner",
+  "reviewed_at": "2026-08-11T00:00:00+08:00",
+  "internal_networks": [
+    "10.0.0.0/8",
+    "30.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "215.0.0.0/8"
+  ],
+  "rules": [
+    {
+      "rule_id": "authorized-activity-operational-close",
+      "name": "平安已授权活动运营关闭",
+      "priority": 10,
+      "match": {
+        "source_types": [
+          "siem",
+          "edr",
+          "xdr",
+          "hids",
+          "nids",
+          "ndr",
+          "waf",
+          "f5"
+        ],
+        "detection_verdicts": [
+          "true_positive",
+          "suspicious",
+          "needs_review"
+        ],
+        "authorization_statuses": [
+          "exact"
+        ]
+      },
+      "recommendation": {
+        "response_posture": "no_automated_response",
+        "recommended_disposition": "closed_benign_true_positive",
+        "review_effect": "clear",
+        "suggested_action": "保留技术检测结论，按精确命中的授权活动范围关闭运营处置。",
+        "summary": "当前行为与有效、范围完整且事件时间匹配的授权活动事实精确一致；保留基础技术研判，运营上按授权良性真阳性关闭。",
+        "rationale": [
+          "平安旧流程会依据有效渗透测试名单或扫描器身份关闭预警。",
+          "新策略不相信单一标签或字符串；只有 subject、target、behavior、tenant、environment 和 event time 全部精确匹配的 Governed Context 授权事实才可应用。"
+        ],
+        "manual_checks": []
+      }
+    },
+    {
+      "rule_id": "legacy-forced-transfer-rule-code",
+      "name": "平安明确规则码转交",
+      "priority": 20,
+      "match": {
+        "source_types": [
+          "ndr"
+        ],
+        "rule_codes": [
+          "RPAADM_002267",
+          "RPAADM_000558"
+        ]
+      },
+      "recommendation": {
+        "response_posture": "manual_validation_required",
+        "recommended_disposition": "escalated",
+        "review_effect": "require",
+        "suggested_action": "按平安历史规则转交；封禁或抑制必须继续通过独立 Automation Policy 授权。",
+        "summary": "告警命中平安旧流程中明确的强制转交规则码，形成独立 escalated 运营决策；不在租户策略层直接执行封禁。",
+        "rationale": [
+          "旧 APT 流程对两个精确规则码直接设置转交并进入后续风险评分与封禁链。",
+          "新实现保留规则码处置经验，但将转交、动作授权和真实执行拆开留痕。"
+        ],
+        "manual_checks": [
+          "确认对应 Automation Policy 的模型、证据、目标和 adapter 版本仍在评审有效期内。"
+        ]
+      }
+    },
+    {
+      "rule_id": "canonical-http-non-200-ignore",
+      "name": "平安 canonical HTTP 非 200 忽略",
+      "priority": 30,
+      "match": {
+        "source_types": [
+          "ndr",
+          "nids",
+          "waf",
+          "f5"
+        ],
+        "http_status_excluded_codes": [
+          200
+        ],
+        "classification_labels_excluded": {
+          "host_state": [
+            "攻击成功",
+            "失陷"
+          ]
+        }
+      },
+      "recommendation": {
+        "response_posture": "no_automated_response",
+        "recommended_disposition": "ignored",
+        "review_effect": "clear",
+        "suggested_action": "保留 Runtime 技术检测结论，按明确的 HTTP 非 200 请求结果忽略本次运营告警，不执行自动响应。",
+        "summary": "当前告警至少包含一个 canonical HTTP 响应状态，且所有 canonical HTTP 状态均非 200；在没有更高优先级授权、强制转交或需要组合研判的成功/失陷标记时按平安策略忽略。",
+        "rationale": [
+          "该规则只读取 canonical_entities.http.status_code 与 HTTP observations，不读取工单、转发、规则或处置状态字段。",
+          "同一告警只要包含 HTTP 200、明确攻击成功/失陷标签或命中强制转交规则，就不会由本规则忽略；成功/失陷标签本身不产生确定性转交，而交给 Policy Skill 综合研判。"
+        ],
+        "manual_checks": []
+      }
+    },
+    {
+      "rule_id": "provider-confirmed-request-failure-ignore",
+      "name": "平安上游明确请求失败忽略",
+      "priority": 31,
+      "match": {
+        "source_types": [
+          "ndr",
+          "nids",
+          "waf",
+          "f5"
+        ],
+        "classification_labels": {
+          "host_state": [
+            "失败",
+            "攻击失败",
+            "请求失败"
+          ]
+        }
+      },
+      "recommendation": {
+        "response_posture": "no_automated_response",
+        "recommended_disposition": "ignored",
+        "review_effect": "clear",
+        "suggested_action": "保留 Runtime 技术检测结论，按上游明确请求失败/攻击失败状态忽略本次运营告警，不执行自动响应。",
+        "summary": "当前告警包含平安 Adapter 规范化后的明确请求失败或攻击失败状态；在没有更高优先级授权、强制转交或成功标记时按平安策略忽略。",
+        "rationale": [
+          "该规则匹配 classification.labels.host_state 的精确值，不把其他 status 字段猜成请求结果。",
+          "企图或尝试只表示检测到了攻击尝试，不等于请求失败，不能由本规则直接忽略。",
+          "请求失败类运营忽略不改变 Runtime 对攻击尝试本身的技术检测结论。"
+        ],
+        "manual_checks": []
+      }
+    }
+  ],
+  "policy_mode": "enforced"
+}

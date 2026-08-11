@@ -72,6 +72,7 @@ from soc_agent.contracts import (
     SocOperationsKafkaSnapshot,
     SocPersistedOperationsMetrics,
     TenantDispositionPolicy,
+    TenantPolicyAdvisorResult,
     TenantPolicyDecision,
 )
 
@@ -158,6 +159,16 @@ class TenantDispositionPolicyResolver(Protocol):
         environment: str,
         evaluated_at: datetime | None = None,
     ) -> TenantDispositionPolicy | None: ...
+
+
+class TenantPolicyAdvisor(Protocol):
+    """Optional bounded policy-Skill reasoning behind a tenant adapter."""
+
+    def advise(
+        self,
+        policy: TenantDispositionPolicy,
+        run: AnalysisRun,
+    ) -> TenantPolicyAdvisorResult: ...
 
 
 class AlertRepository(Protocol):
@@ -377,7 +388,7 @@ class SocDispositionProposalRepository(Protocol):
 
 
 class TenantPolicyDecisionRepository(Protocol):
-    """Append-only persistence boundary for shadow tenant policy decisions."""
+    """Append-only persistence boundary for tenant policy decisions."""
 
     def save_tenant_policy_decision(self, decision: TenantPolicyDecision) -> None: ...
 

@@ -732,9 +732,9 @@ Tenant disposition policy / 租户级处置策略约束：
   reviewed tenant mapping 或 fixture。
 - environment/context candidate 必须由 CMDB、authoritative source 或经治理的 tenant mapping 确认后才可参与
   policy。仅凭 hostname、自由文本或 LLM 识别出的 `stg` 只能保留为 hint，不能触发免处置。
-- v1 允许 hostname/environment hint 在独立 shadow policy 中触发
-  `manual_validation_required`/`no_automated_response` 建议，但 `recommended_disposition` 必须为空，且必须列出
-  authoritative environment 与 authorization 核验项；hint 仍不得生成 exempt/benign/false-positive 结论。
+- 单一 hostname/environment hint 只能触发 `manual_validation_required` 或 no-match，不得独自生成
+  exempt/benign/false-positive 结论。只有 reviewed deterministic rule，或引用 exact `E-*` 且通过完整
+  environment/effect/evidence-quality 条件的 bounded policy Skill，才可形成 operational disposition。
 - Base Runtime 不得因 tenant/environment policy 跳过 normalization、fact reconstruction、bounded analyzer、
   Grounding 或 `SocDecisionPolicy`。Tenant disposition reconciliation 发生在 detection decision 之后，并写入
   独立、可审计的 policy decision/proposal。
@@ -749,24 +749,32 @@ Tenant disposition policy / 租户级处置策略约束：
   `operational_disposition=nonproduction_exempt`；不得仅因环境免处置改成 `false_positive`。
 - non-production exemption 与 authorized activity 是不同 policy input。前者描述租户对已确认环境的运营规则；
   后者证明特定主体、目标、行为和时间范围内的活动获得授权，二者不得互相冒充。
-- 带 `authorization_statuses` 条件的 tenant rule 不得直接设置 `recommended_disposition`。授权处置必须继续
-  经过 persisted `AuthorizationEnrichmentRecord`、open ReviewQueue、current true-positive truth 和
-  `SocDispositionProposalService`；policy schema 应 fail closed 拒绝绕过该链的规则文件。
-- 初始实现必须 shadow/recommendation-only，`auto_close_allowed=false`。只有分 policy version 的 replay、
-  analyst override、独立抽样复核、source freshness 和 rollback gate 达标并经授权批准后，才能单独开启自动
-  关单；没有租户 policy 的客户继续进入通用 review 流程。
-- v1 实现固定为 `TenantDispositionPolicy` -> `TenantPolicyDecision`，由 `SocAnalysisService` 在主分析事务提交
+- 带 `authorization_statuses` 条件并设置 disposition 的 tenant rule 只允许 `exact`。匹配输入必须来自
+  event-time、scope、source freshness 都通过的 Governed Context matcher；ambiguous/conflict/expired/
+  unavailable 不得形成 disposition。技术 verdict 必须保留为 true positive/suspicious，不得改成 false positive。
+- 租户层默认关闭。`shadow` 只记录 proposal；owner/reviewer/time 完整的 `enforced` policy 可在 post-Runtime
+  effective stage 改变 review requirement 和 operational disposition。它永远不能授权/执行动作；自动关单、
+  封禁、隔离或抑制仍需独立 `SocAutomationPolicy`/Grant、adapter、rollout 和 rollback gate。
+- contract v1 实现固定为 `TenantDispositionPolicy` -> `TenantPolicyDecision`，由 `SocAnalysisService` 在主分析事务提交
   后通过通用 `PostAnalysisObserver` 调用。结果写入 migration `0022` 的 append-only
   `soc_tenant_policy_decisions`；observer 失败不得回滚主分析，幂等重试按 `run_id + policy id/version/hash`
-  去重。决策必须固定 `shadow_only=true`、`auto_apply_allowed=false`，并声明 detection/ReviewQueue/action/
-  memory impact 全为 `none`。
+  去重。`shadow_only` 必须与 policy mode 一致；no-match/shadow 不可 apply，reviewed enforced match 才可
+  `auto_apply_allowed=true`。所有模式的 detection/action/memory impact 固定为 none。
 - policy resolver 必须按 alert event time 选择有效版本。naive timestamp 只有在 operator 显式配置 IANA
   timezone 后才可本地化，并在 decision 中标记 `alert_event_time_timezone_assumed`；不得按主机本地时区猜测。
   带有效期的 policy 在 event time 缺失时 fail closed。每条 decision 必须保存 exact policy content hash、
   policy time/source、selected rule 和逐条件 evidence path。
-- 通用 composition 仅认识 `SOC_TENANT_DISPOSITION_POLICY_PATH`、环境和时区；PingAn v1 是
-  `integrations/pingan/policies/tenant-disposition-v1.json` 的 tenant data。generic evaluator 中不得 import
-  PingAn module 或出现 PingAn 字段、网段、主机模式。
+- 通用 composition 仅认识 `SOC_TENANT_POLICY_ENABLED`（默认 false）、policy path、环境、时区以及可选
+  advisor mode/Skill path/model。只配置 path 但未显式 enable 必须 fail startup；advisor 只在 deterministic
+  no-match 后执行。其 strict output 必须引用 exact `E-*`，可选引用现有 `R-*` 和 `S/A/M/C/T-*`，并保存
+  model/Prompt/Skill/response hash；调用、schema 或引用校验失败固定持久化 fail-closed no-match。
+- PingAn v2 位于 `integrations/pingan/policies/tenant-disposition-v2.json`，组合策略位于
+  `integrations/pingan/policy_skills/disposition/SKILL.md`。generic evaluator/composition 不得 import PingAn
+  module 或出现 PingAn 字段、网段、规则码、主机模式。PingAn 当前确认 canonical `status=200` 只证明请求
+  成功，单独出现不得升级或忽略。确定性非 `200` 规则只读取 canonical HTTP `100..599` 状态，要求至少一条
+  HTTP 事务且所有事务均非 `200`；工单、Workflow、转发、规则、抑制和处置状态不参与。强制转交
+  rule_code 优先于该忽略规则。明确攻击成功/失陷使该规则弃权，但不能确定性升级；明确成功、
+  `企图/尝试` 和响应效果必须交给 Runtime/Policy Skill 组合判断。明确失败仍可按审阅规则忽略。
 
 Security exercise / 护网与红蓝对抗事实约束：
 
@@ -2469,12 +2477,17 @@ tool permission denial rate
 
 ## 二十三、Effective Decision 与受治理响应自动化
 
-### 23.1 五层状态必须分离
+### 23.1 七层状态必须分离
 
 - `AnalysisRun.decision` 是 immutable base detection decision。`SocDecisionPolicy` 仍是固定 Runtime
   中唯一生成它的组件；post-Runtime service 不得回写该对象。
-- `SocDecisionTransitionRecord.after` 是 effective detection decision。任何 Memory reinforcement/
-  override 必须追加 transition，并保存 before/after、transition kind、policy hash 和 bounded contributors。
+- `SocDecisionTransitionRecord.stages` 必须严格按 `Base -> Memory -> Tenant Policy -> Effective` 排列，
+  每一阶段的 `before` 必须等于上一阶段的 `after`。Memory reinforcement/override、租户策略 Decision 和
+  最终 disposition 都必须保存 source/version/hash、selected rule 和 bounded contributors。
+- `TenantPolicyDecision` 是独立运营判断。它可以在 reviewed `enforced` 模式改变 effective review/disposition，
+  但不能改 `AnalysisRun.decision` 的 detection truth/confidence，也不能授予动作权限。
+- `SocDecisionTransitionRecord.after` 与 `effective_disposition` 是四阶段解析后的最终有效结果；原 base 决策
+  仍可独立统计和回放。
 - `SocDispositionTransitionRecord` 是 operational disposition，不是 detection truth。
 - `SocActionAuthorizationRecord` 是某个 exact route/action/target/adapter 的权限决定，不是 verdict、
   Memory、模型建议或 Approval Request。
@@ -2501,10 +2514,14 @@ tool permission denial rate
 ### 23.3 自动策略与人工审批
 
 - `SocAutomationPolicy` 是 server-owned、strict `extra=forbid`、tenant/environment/version/validity-bound
-  配置。缺 `SOC_AUTOMATION_POLICY_PATH` 时不得构建 observer；`shadow` 只能留痕；`enforced` 必须有
-  `reviewed_by/reviewed_at`。
+  动作策略。缺 `SOC_AUTOMATION_POLICY_PATH` 时不得选择 action/disposition automation rule；但如果租户
+  policy 已启用，仍必须构建 effective-decision resolver 以保存四阶段 lineage。`shadow` 只能留痕；
+  `enforced` 必须有 `reviewed_by/reviewed_at`。
 - Policy selection 使用 effective decision，并不要求任何 Memory contributor。当前告警自身的
   evidence/model/Skill/context 可以独立匹配规则并获得 automatic authorization。
+- Automation rule 可显式匹配 exact `rule_code`、`detection_key` 或已持久化
+  `tenant_policy_rule_id`。若 tenant disposition 已是 ignored/closed/duplicate，带 action 的规则必须显式
+  绑定该 tenant rule，否则禁止隐式覆盖关闭类 disposition。
 - automatic action rule 必须显式声明 verdicts、evidence states、model names、Prompt versions、Decision
   Policy versions、minimum confidence 和 `needs_review`。模型、Prompt 或基础 Decision Policy 版本变化时，
   旧规则不得继续自动授权。
@@ -2537,6 +2554,8 @@ tool permission denial rate
   `soc_memory_record_facets`、`soc_decision_transitions`、`soc_disposition_transitions`、
   `soc_action_authorizations`、`soc_action_executions`。旧 Memory JSON 的 facet backfill 必须兼容 SQLite
   driver 返回 string/bytes 的情况。
+- Migration `0024_decision_stages` 增加 tenant policy mode/review/application 索引，以及 Memory/Tenant stage、
+  tenant decision ID 和 effective disposition 索引。完整四阶段对象仍保存在 transition payload 中。
 - `soc automation lineage --run-id|--alert-id` 是当前 read-only operator surface。输出必须同时暴露
   decision before/after、disposition、authorization reason/mode 和每次 execution；不得输出 credential、
   provider header、rendered prompt 或完整敏感 response。

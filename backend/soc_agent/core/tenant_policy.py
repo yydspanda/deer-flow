@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from soc_agent.contracts import (
     AnalysisRun,
+    AnalysisRunStatus,
     AuthorizationMatchResult,
     NormalizationInspectionResult,
     ServiceRequestContext,
@@ -14,6 +15,7 @@ from soc_agent.contracts import (
     SocEventType,
     TenantDispositionPolicy,
     TenantPolicyDecision,
+    TenantPolicyEvaluationStatus,
     TenantPolicyTimeSource,
 )
 from soc_agent.core.authorized_activity import SocAuthorizedActivityService
@@ -21,17 +23,19 @@ from soc_agent.core.runtime import inspect_alert_normalization
 from soc_agent.protocols import (
     SocEventSink,
     TenantDispositionPolicyResolver,
+    TenantPolicyAdvisor,
     TenantPolicyDecisionRepository,
 )
 from soc_agent.tenant_policy import (
     TenantPolicyDecisionConflictError,
     TenantPolicyNotApplicableError,
+    apply_tenant_policy_advisor_result,
     evaluate_tenant_policy,
 )
 
 
 class SocTenantPolicyEvaluationService:
-    """Evaluate and persist shadow-only policy advice after the main transaction."""
+    """Evaluate and persist an independent tenant decision after Runtime."""
 
     def __init__(
         self,
@@ -42,6 +46,7 @@ class SocTenantPolicyEvaluationService:
         authorized_activity_service: SocAuthorizedActivityService | None = None,
         event_timezone: str | None = None,
         event_sink: SocEventSink | None = None,
+        advisor: TenantPolicyAdvisor | None = None,
     ) -> None:
         if not environment.strip():
             raise ValueError("tenant policy environment must be non-empty")
@@ -51,6 +56,7 @@ class SocTenantPolicyEvaluationService:
         self._authorized_activity_service = authorized_activity_service
         self._event_timezone = event_timezone
         self._event_sink = event_sink
+        self._advisor = advisor
 
     def observe(
         self,
@@ -58,6 +64,11 @@ class SocTenantPolicyEvaluationService:
         *,
         context: ServiceRequestContext,
     ) -> None:
+        if run.status not in {
+            AnalysisRunStatus.SUCCESS,
+            AnalysisRunStatus.NEEDS_REVIEW,
+        }:
+            return
         self.evaluate(run, context=context)
 
     def evaluate(
@@ -97,6 +108,11 @@ class SocTenantPolicyEvaluationService:
             )
         except TenantPolicyNotApplicableError:
             return None
+        if decision.evaluation_status is TenantPolicyEvaluationStatus.NO_MATCH and self._advisor is not None:
+            decision = apply_tenant_policy_advisor_result(
+                decision,
+                self._advisor.advise(policy, run),
+            )
 
         existing = self._repository.find_tenant_policy_decision_by_key(decision.decision_key)
         if existing is not None:
@@ -123,7 +139,9 @@ class SocTenantPolicyEvaluationService:
                         "policy_id": decision.policy_id,
                         "policy_version": decision.policy_version,
                         "evaluation_status": decision.evaluation_status.value,
-                        "shadow_only": True,
+                        "policy_mode": decision.policy_mode.value,
+                        "shadow_only": decision.shadow_only,
+                        "auto_apply_allowed": decision.auto_apply_allowed,
                     },
                 )
             )

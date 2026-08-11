@@ -44,13 +44,16 @@ def _report(*, current: bool) -> dict:
             automation = {
                 "decision_transition_count": 1,
                 "effective_decision_changed": index == 1,
-                "selected_rule_id": (
-                    "simulate-reviewed-network-source-block" if index == 1 else None
-                ),
-                "action_authorization_decisions": (
-                    ["authorized"] if index == 1 else []
-                ),
-                "action_execution_statuses": (["succeeded"] if index == 1 else []),
+                "memory_stage": {
+                    "stage": "memory",
+                    "status": "reinforced" if index == 1 else "no_input",
+                },
+                "tenant_policy_stage": {
+                    "stage": "tenant_policy",
+                    "status": "applied" if index == 2 else "no_match",
+                },
+                "action_authorization_decisions": [],
+                "action_execution_statuses": [],
             }
         cases.append(
             {
@@ -70,11 +73,19 @@ def _report(*, current: bool) -> dict:
                 ),
                 "final_conclusion": final_conclusion,
                 "automation": automation,
+                "tenant_policy": {
+                    "decision_source": (
+                        "llm_policy_skill" if index == 2 else "no_match"
+                    ),
+                    "selected_rule_id": (
+                        "llm-policy-skill-advice" if index == 2 else None
+                    ),
+                },
             }
         )
     return {
         "schema_version": (
-            "soc.validation.e2e_ten_alert_report.v2"
+            "soc.validation.e2e_ten_alert_report.v3"
             if current
             else "soc.validation.e2e_ten_alert_report.v1"
         ),
@@ -86,8 +97,9 @@ def _report(*, current: bool) -> dict:
         "summary": {
             "decision_transition_count": 10 if current else 0,
             "memory_contributor_count": 0,
-            "automatic_authorization_without_memory_count": 1 if current else 0,
-            "mocked_action_execution_count": 1 if current else 0,
+            "tenant_policy_decision_count": 10 if current else 0,
+            "automatic_authorization_without_memory_count": 0,
+            "mocked_action_execution_count": 0,
             "real_external_action_call_count": 0,
         },
         "cases": cases,
@@ -107,8 +119,9 @@ def test_compare_reports_separates_live_base_drift_from_effective_transition() -
     assert summary["same_input_hash_count"] == 10
     assert summary["base_verdict_changed_count"] == 1
     assert summary["effective_verdict_changed_from_base_count"] == 1
-    assert summary["automatic_authorization_without_memory_count"] == 1
-    assert summary["mocked_action_execution_count"] == 1
+    assert summary["tenant_policy_decision_count"] == 10
+    assert summary["automatic_authorization_without_memory_count"] == 0
+    assert summary["mocked_action_execution_count"] == 0
     assert summary["real_external_action_call_count"] == 0
     assert comparison["cases"][0]["interpretation"] == (
         "live_model_resampling_or_runtime_change"

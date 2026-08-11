@@ -11,10 +11,10 @@ backend/.venv/bin/python validation/compact_zeus/e2e/run_ten_alert_e2e.py
 backend/.venv/bin/python validation/compact_zeus/e2e/run_ten_alert_e2e.py \
   --execute --confirm-live --confirm-investigation
 
+# 保留旧结果时用独立 output root，便于逐条比较
 backend/.venv/bin/python validation/compact_zeus/e2e/run_ten_alert_e2e.py \
-  --output-root backend/.deer-flow/soc-validation/e2e-ten-governed-current \
-  --execute --confirm-live --confirm-investigation \
-  --governed-automation-simulation --confirm-automation-simulation
+  --output-root backend/.deer-flow/soc-validation/e2e-ten-pingan-policy-current \
+  --execute --confirm-live --confirm-investigation
 ```
 
 统一结果位于 `backend/.deer-flow/soc-validation/e2e-ten-current/`，说明见
@@ -22,12 +22,13 @@ backend/.venv/bin/python validation/compact_zeus/e2e/run_ten_alert_e2e.py \
 `1965452/1965795`，改用完整的 `2025642/1980502`；旧三个 validation 根目录仍是专项和
 历史证据，不再是一次端到端审阅的必经入口。
 
-governed simulation 会额外生成每条告警的
-`12-effective-decision-and-automation.json`：`08-decision.json` 仍是不可变 base Runtime
-decision，`12-*` 才是 effective decision、Memory contributor、disposition、authorization 和
-execution 的追加留痕。模拟 adapter 固定 `mocked=true` 且不发真实外部请求。使用
+每条告警会生成 `12-effective-decision-and-automation.json`：`08-decision.json` 仍是不可变 base
+Runtime decision，`12-*` 按 `Base -> Memory -> PingAn Policy -> Effective` 保存阶段判断、运营
+disposition、authorization 和 execution 的追加留痕。固定十条入口已删除人为构造的网络自动封禁
+策略；它启用真实 PingAn policy pack 和 policy Skill，但没有独立 Automation Policy，因此动作授权/
+执行必须均为 0。只读调查 adapter 仍固定 `mocked=true` 且不发真实外部请求。使用
 `compare_ten_alert_e2e.py` 对比旧、新 `summary.json`；base LLM 重采样差异不能冒充
-Memory/automation 效果。
+Memory、PingAn policy 或 automation 效果。
 
 2026-08-10 最新同版代码 fresh 实跑：10/10 结构与安全门禁通过，6 `suspicious`、4 `needs_review`，
 全部进入 ReviewQueue 且 `automation_allowed=false`。模型质量仍为 `review_required`：3 个 case 共
@@ -35,13 +36,41 @@ Memory/automation 效果。
 17 个 support grounded。先看 `SUMMARY.md`，再看对应 case 的 `04/06/07/08` 和
 `knowledge-review/REVIEW.md`；不得把 structural pass 当作模型准确率或真实 Provider 通过。
 
-2026-08-11 governed simulation fresh 实跑位于
+2026-08-11 旧 governed simulation fresh 实跑位于
 `backend/.deer-flow/soc-validation/e2e-ten-governed-20260811/`：10/10 passed，9
 `suspicious` / 1 `needs_review`，10 decision transitions、0 Memory contributor、3 无 Memory automatic
 authorizations、3 mocked idempotent executions、0 real external call。首次 2 条模型失败通过
 `--resume` 仅重试失败项后完成。与 2026-08-10 基线的同输入比较位于
 `e2e-ten-comparison-20260811/COMPARISON.md`；3 条 base verdict 变化只归为 live-model 重采样，
-不能归因给 automation。
+不能归因给 automation。该合成业务规则现已删除，只保留为历史证据；新的 PingAn policy 实跑结果
+以本手册后续验收记录和目标目录 `SUMMARY.md` 为准。
+
+2026-08-11 PingAn v2.1 policy/Skill 历史结果位于
+`backend/.deer-flow/soc-validation/e2e-ten-pingan-policy-20260811/`：10/10 passed、10 四阶段
+transition、2 deterministic HTTP-200 escalation、6 completed Skill advice、2 Skill failed-closed、
+3 escalated + 2 unknown disposition、0 ignored、0 Memory contributor、0 action authorization/execution、
+0 real external call。0 ignored 的原因不是规则失效，而是本 cohort 没有样本同时满足非 `200`、非生产、
+内部范围、无成功效果和无高价值缺口/冲突。与旧 current baseline 的比较位于
+`e2e-ten-pingan-policy-comparison-20260811/COMPARISON.md`：10/10 input hash 相同，3 条 base verdict
+变化归为 live-model 重采样，effective verdict 相对各自 base 变化为 0。该报告早于 v2.2 的 canonical
+全非 `200`、provider 成功/失败优先级修复，不可作为当前策略验收。
+
+2026-08-11 PingAn v2.2 fresh + failure-only resume 实跑位于
+`backend/.deer-flow/soc-validation/e2e-ten-pingan-policy-v2.2-20260811/`：10/10 passed，7
+`needs_review` / 3 `suspicious`，10 个 ReviewQueue、10 个四阶段 transition、33 条
+`mocked=true` 只读调查证据。确定性规则只命中 1 条上游明确“攻击成功”告警；其余 9 条进入 Policy
+Skill，得到 3 条已校验 advice、6 条 no-match（其中 2 次 advisor fail-closed）。最终 disposition 为 2
+`escalated`、1 `unknown`；0 Memory contributor、0 action authorization/execution、0 real external
+call。该固定 cohort 没有 canonical HTTP 全非 `200`、明确失败或强制 rule code 样本，相关确定性边界由
+组件测试覆盖。与旧 v2.1 的同输入比较位于
+`e2e-ten-pingan-policy-v2.2-comparison-20260811/COMPARISON.md`：10/10 input hash 相同，5 条 base
+verdict 变化只归因于 live-model 重采样；每条自身 base 到 effective 的 verdict/review 变化仍为 0。
+初次受限网络执行失败后仅重试失败 case；两个模型格式/空输出失败也只重试对应 case，未放宽 Parser 或
+Grounding 契约。
+
+该 v2.2 结果现为历史基线。当前 `pingan-disposition-v2.3.0` 已删除确定性
+`provider-confirmed-success-escalation`：成功/失陷标签只使 canonical 非 `200` 忽略规则弃权，随后由
+Policy Skill 结合效果证据处理。组件测试已覆盖该交接；完整 v2.3 live 十条尚未重跑。
 
 ## 1. What Is Actually Linear / 真正固定流水线
 

@@ -389,6 +389,20 @@ def test_soc_migration_head_creates_governance_and_approval_lifecycle_schema(tmp
         assert "soc_disposition_transitions" in inspect(engine).get_table_names()
         assert "soc_action_authorizations" in inspect(engine).get_table_names()
         assert "soc_action_executions" in inspect(engine).get_table_names()
+        tenant_policy_columns = {column["name"] for column in inspect(engine).get_columns("soc_tenant_policy_decisions")}
+        assert {
+            "policy_mode",
+            "review_effect",
+            "auto_apply_allowed",
+            "disposition_impact",
+        }.issubset(tenant_policy_columns)
+        decision_transition_columns = {column["name"] for column in inspect(engine).get_columns("soc_decision_transitions")}
+        assert {
+            "memory_stage_status",
+            "tenant_policy_stage_status",
+            "tenant_policy_decision_id",
+            "effective_disposition",
+        }.issubset(decision_transition_columns)
         approval_request_columns = {column["name"] for column in inspect(engine).get_columns("soc_approval_requests")}
         assert {
             "resolved_at",
@@ -401,7 +415,7 @@ def test_soc_migration_head_creates_governance_and_approval_lifecycle_schema(tmp
         assert "uq_soc_approval_grants_request" in approval_grant_constraints
         with engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM soc_alembic_version")).scalar_one()
-        assert revision == "0023_governed_automation"
+        assert revision == "0024_decision_stages"
     finally:
         engine.dispose()
 

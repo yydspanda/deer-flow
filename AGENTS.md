@@ -357,19 +357,29 @@ Current SOC direction:
   proposal/ReviewQueue/outcome records; the Web campaign view can open only manifest-selected work and
   still writes through EV-02. A passed report is only eligible for governed rollout review and
   `auto_close_allowed` remains false.
-- Tenant operational handling is a post-Runtime shadow layer. Generic contracts/evaluation live in
+- Tenant operational handling is a default-off post-Runtime decision layer. Generic contracts/evaluation live in
   `soc_agent.contracts.tenant_policy`, `soc_agent.tenant_policy`, and
   `SocTenantPolicyEvaluationService`; migration `0022_tenant_policy_decisions` stores append-only
-  `TenantPolicyDecision` rows after the main analysis transaction. Enable automatic observation only
-  with `SOC_TENANT_DISPOSITION_POLICY_PATH` plus an explicit environment. Policy resolution uses
+  `TenantPolicyDecision` rows after the main analysis transaction, while migration `0024_decision_stages`
+  indexes `Base -> Memory -> Tenant Policy -> Effective` lineage. Enable it only with
+  `SOC_TENANT_POLICY_ENABLED=true`, an explicit policy path, and an environment. Policy resolution uses
   alert event time; a naive vendor timestamp needs an explicit IANA timezone and records assumed
   lineage. PingAn CIDRs/host patterns/rules stay in its JSON policy pack, never generic evaluator
-  code. A hostname/environment hint may request manual validation or no automated response, but it
-  cannot produce benign/exempt disposition without governed confirmation. Every v1 decision remains
-  shadow-only and has no detection, ReviewQueue, action, or memory impact; use
-  `soc tenant-policy evaluate|list|get` for replay and inspection. A rule conditioned on
-  authorization status cannot set a disposition directly; it must use the existing persisted
-  authorization enrichment and disposition proposal path.
+  code. Exact deterministic rules run first; deterministic no-match may invoke a separately enabled,
+  reviewed policy Skill through `SOC_TENANT_POLICY_ADVISOR_MODE=llm` and
+  `SOC_TENANT_POLICY_SKILL_PATH`. Advisor output must be strict, reference-grounded and fully hashed;
+  failure persists a fail-closed no-match. Shadow policy only records a proposal; reviewed enforced
+  policy may change effective review/disposition but never Runtime detection truth or action authority.
+  PingAn's reviewed policy treats HTTP `200` as request success only: it does not itself escalate or
+  ignore. A deterministic rule may ignore an alert only when at least one canonical `100..599` HTTP
+  status exists and every canonical HTTP transaction is non-`200`; workflow, ticket, forwarding,
+  suppression and disposition status fields are excluded. Exact forced-transfer codes outrank that
+  rule. Adapter-normalized provider success/compromise assertions make deterministic non-`200`
+  handling abstain, but do not themselves set a disposition; the bounded Policy Skill must combine
+  them with current effect evidence. Explicit provider failure may be ignored, while attempt-only
+  values remain subject to Runtime/Policy-Skill analysis. Exact governed authorization may produce
+  `closed_benign_true_positive` while preserving technical truth. Use
+  `soc tenant-policy evaluate|list|get` and `soc automation lineage` for replay and inspection.
 - PingAn `zeusRawLogs[].message` values are parsed only inside the PingAn normalizer. If at least one
   message parses deterministically, parsed fields are the only analysis source: Zeus sibling fields
   remain in immutable raw evidence and cannot enter canonical mapping, role/scenario facts, conflicts,
@@ -707,7 +717,9 @@ Current SOC direction:
   versioned tenant disposition policy, not detection truth, LLM memory or a Runtime short-circuit.
   Vendor adapters emit only provenance-backed generic context candidates; governed resolution and
   tenant policy reconciliation happen after the full detection Runtime. Generic core code must not
-  contain `tenant == pingan` or hostname-substring safety branches, and rollout starts shadow-only.
+  contain `tenant == pingan` or hostname-substring safety branches. The layer defaults off; operators
+  choose reviewed `shadow|enforced` policy explicitly, and external actions still require a separate
+  Automation Policy or human Approval Grant.
 - Build the local real-alert validation corpus with
   `backend/.venv/bin/python validation/compact_zeus/corpus/build_alert_validation_corpus.py`.
   The authoritative source PKL lives under `datas/source/`; exact JSON demos under

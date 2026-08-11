@@ -43,6 +43,7 @@ from soc_agent.contracts import (
     SocAgentApprovalGrant,
     SocAgentApprovalRequest,
     SocAgentApprovalRequestStatus,
+    SocDecisionStageKind,
     SocDecisionTransitionRecord,
     SocDispositionOutcomeRecord,
     SocDispositionOutcomeReviewKind,
@@ -2266,6 +2267,10 @@ def _tenant_policy_decision_row_values(
         "selected_rule_id": decision.selected_rule_id,
         "detection_verdict": decision.detection_truth.verdict.value,
         "recommended_disposition": (decision.recommended_disposition.value if decision.recommended_disposition is not None else None),
+        "policy_mode": decision.policy_mode.value,
+        "review_effect": decision.review_effect.value,
+        "auto_apply_allowed": decision.auto_apply_allowed,
+        "disposition_impact": decision.disposition_impact,
         "created_by_actor_id": decision.evaluated_by.actor_id,
         "created_at": decision.created_at,
         "decision_payload": payload,
@@ -2291,6 +2296,10 @@ def _tenant_policy_decision_from_row(
         "selected_rule_id": row.selected_rule_id,
         "detection_verdict": row.detection_verdict,
         "recommended_disposition": row.recommended_disposition,
+        "policy_mode": row.policy_mode,
+        "review_effect": row.review_effect,
+        "auto_apply_allowed": row.auto_apply_allowed,
+        "disposition_impact": row.disposition_impact,
         "created_by_actor_id": row.created_by_actor_id,
     }
     contract_values = {
@@ -2308,9 +2317,26 @@ def _tenant_policy_decision_from_row(
         "selected_rule_id": decision.selected_rule_id,
         "detection_verdict": decision.detection_truth.verdict.value,
         "recommended_disposition": (decision.recommended_disposition.value if decision.recommended_disposition is not None else None),
+        "policy_mode": decision.policy_mode.value,
+        "review_effect": decision.review_effect.value,
+        "auto_apply_allowed": decision.auto_apply_allowed,
+        "disposition_impact": decision.disposition_impact,
         "created_by_actor_id": decision.evaluated_by.actor_id,
     }
-    if indexed_values != contract_values:
+    comparable_indexed_values = {
+        key: value
+        for key, value in indexed_values.items()
+        if value is not None
+        or key
+        not in {
+            "policy_mode",
+            "review_effect",
+            "auto_apply_allowed",
+            "disposition_impact",
+        }
+    }
+    comparable_contract_values = {key: contract_values[key] for key in comparable_indexed_values}
+    if comparable_indexed_values != comparable_contract_values:
         raise ValueError(f"tenant policy decision row {row.decision_id} does not match its typed payload")
     return decision
 
@@ -2318,6 +2344,9 @@ def _tenant_policy_decision_from_row(
 def _decision_transition_row_values(
     record: SocDecisionTransitionRecord,
 ) -> dict[str, Any]:
+    stages = {stage.stage: stage for stage in record.stages}
+    memory_stage = stages.get(SocDecisionStageKind.MEMORY)
+    tenant_stage = stages.get(SocDecisionStageKind.TENANT_POLICY)
     return {
         "transition_key": record.transition_key,
         "run_id": record.run_id,
@@ -2328,6 +2357,10 @@ def _decision_transition_row_values(
         "before_needs_review": record.before.needs_review,
         "after_needs_review": record.after.needs_review,
         "transition_kind": record.transition_kind.value,
+        "memory_stage_status": (memory_stage.status.value if memory_stage is not None else None),
+        "tenant_policy_stage_status": (tenant_stage.status.value if tenant_stage is not None else None),
+        "tenant_policy_decision_id": (tenant_stage.source_decision_id if tenant_stage is not None else None),
+        "effective_disposition": (record.effective_disposition.value if record.effective_disposition is not None else None),
         "policy_id": record.policy_id,
         "policy_version": record.policy_version,
         "policy_hash": record.policy_hash,

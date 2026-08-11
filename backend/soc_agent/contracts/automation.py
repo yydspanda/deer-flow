@@ -51,6 +51,26 @@ class SocDecisionTransitionKind(StrEnum):
     CONFLICTED = "conflicted"
 
 
+class SocDecisionStageKind(StrEnum):
+    BASE = "base"
+    MEMORY = "memory"
+    TENANT_POLICY = "tenant_policy"
+    EFFECTIVE = "effective"
+
+
+class SocDecisionStageStatus(StrEnum):
+    OBSERVED = "observed"
+    DISABLED = "disabled"
+    NO_INPUT = "no_input"
+    NO_MATCH = "no_match"
+    SHADOW_MATCHED = "shadow_matched"
+    UNCHANGED = "unchanged"
+    REINFORCED = "reinforced"
+    OVERRIDDEN = "overridden"
+    APPLIED = "applied"
+    CONFLICTED = "conflicted"
+
+
 class SocDispositionTransitionKind(StrEnum):
     NO_CHANGE = "no_change"
     PROPOSED = "proposed"
@@ -113,6 +133,26 @@ class SocDecisionSnapshot(BaseModel):
     policy_version: str = Field(min_length=1, max_length=128)
 
 
+class SocDecisionStageEvaluation(BaseModel):
+    """One replayable stage in Base -> Memory -> Tenant -> Effective."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stage: SocDecisionStageKind
+    status: SocDecisionStageStatus
+    before: SocDecisionSnapshot | None = None
+    after: SocDecisionSnapshot
+    disposition_before: SocOperationalDisposition | None = None
+    disposition_after: SocOperationalDisposition | None = None
+    source_id: str | None = Field(default=None, max_length=512)
+    source_version: str | None = Field(default=None, max_length=128)
+    source_hash: str | None = Field(default=None, max_length=128)
+    source_decision_id: str | None = Field(default=None, max_length=64)
+    selected_rule_id: str | None = Field(default=None, max_length=128)
+    contributors: list[SocAutomationContributorRef] = Field(default_factory=list, max_length=300)
+    summary: str = Field(min_length=1, max_length=2000)
+
+
 class SocAutomationRuleMatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -120,6 +160,9 @@ class SocAutomationRuleMatch(BaseModel):
     source_types: list[AlertSourceType] = Field(default_factory=list, max_length=20)
     evidence_states: list[DecisionEvidenceState] = Field(default_factory=list, max_length=10)
     scenario_keys: list[str] = Field(default_factory=list, max_length=50)
+    rule_codes: list[str] = Field(default_factory=list, max_length=100)
+    detection_keys: list[str] = Field(default_factory=list, max_length=100)
+    tenant_policy_rule_ids: list[str] = Field(default_factory=list, max_length=100)
     model_names: list[str] = Field(default_factory=list, max_length=20)
     prompt_versions: list[str] = Field(default_factory=list, max_length=20)
     decision_policy_versions: list[str] = Field(default_factory=list, max_length=20)
@@ -128,6 +171,9 @@ class SocAutomationRuleMatch(BaseModel):
 
     @field_validator(
         "scenario_keys",
+        "rule_codes",
+        "detection_keys",
+        "tenant_policy_rule_ids",
         "model_names",
         "prompt_versions",
         "decision_policy_versions",
@@ -229,7 +275,10 @@ class SocAutomationPolicy(BaseModel):
 class SocDecisionTransitionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["soc.decision_transition.v1"] = "soc.decision_transition.v1"
+    schema_version: Literal[
+        "soc.decision_transition.v1",
+        "soc.decision_transition.v2",
+    ] = "soc.decision_transition.v2"
     transition_id: str = Field(default_factory=lambda: f"DTR-{uuid4().hex[:16].upper()}")
     transition_key: str = Field(pattern=r"^[0-9a-f]{64}$")
     run_id: str = Field(min_length=1, max_length=64)
@@ -237,7 +286,9 @@ class SocDecisionTransitionRecord(BaseModel):
     tenant_id: str | None = Field(default=None, max_length=128)
     before: SocDecisionSnapshot
     after: SocDecisionSnapshot
+    effective_disposition: SocOperationalDisposition | None = None
     transition_kind: SocDecisionTransitionKind
+    stages: list[SocDecisionStageEvaluation] = Field(default_factory=list, max_length=4)
     contributors: list[SocAutomationContributorRef] = Field(default_factory=list, max_length=300)
     policy_id: str = Field(min_length=1, max_length=128)
     policy_version: str = Field(min_length=1, max_length=128)
@@ -245,6 +296,29 @@ class SocDecisionTransitionRecord(BaseModel):
     counterfactual_status: Literal["not_measured", "paired_replay"] = "not_measured"
     created_by: ActorContext
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def validate_stage_lineage(self) -> SocDecisionTransitionRecord:
+        if not self.stages:
+            return self
+        expected = [
+            SocDecisionStageKind.BASE,
+            SocDecisionStageKind.MEMORY,
+            SocDecisionStageKind.TENANT_POLICY,
+            SocDecisionStageKind.EFFECTIVE,
+        ]
+        if [stage.stage for stage in self.stages] != expected:
+            raise ValueError("decision transition stages must be Base -> Memory -> Tenant Policy -> Effective")
+        if self.stages[0].after != self.before:
+            raise ValueError("base decision stage must equal transition before")
+        for previous, current in zip(self.stages, self.stages[1:]):
+            if current.before != previous.after:
+                raise ValueError("each decision stage before snapshot must equal the previous stage after snapshot")
+        if self.stages[-1].after != self.after:
+            raise ValueError("effective decision stage must equal transition after")
+        if self.stages[-1].disposition_after != self.effective_disposition:
+            raise ValueError("effective stage disposition must equal transition disposition")
+        return self
 
 
 class SocDispositionTransitionRecord(BaseModel):
@@ -333,6 +407,8 @@ class SocAutomationEvaluationResult(BaseModel):
     authorization: SocActionAuthorizationRecord | None = None
     execution: SocActionExecutionRecord | None = None
     selected_rule_id: str | None = None
+    tenant_policy_decision_id: str | None = None
+    effective_disposition: SocOperationalDisposition | None = None
     idempotent: bool = False
 
 
@@ -353,6 +429,9 @@ __all__ = [
     "SocAutomationRuleMatch",
     "SocAutomationTargetSelector",
     "SocDecisionSnapshot",
+    "SocDecisionStageEvaluation",
+    "SocDecisionStageKind",
+    "SocDecisionStageStatus",
     "SocDecisionTransitionKind",
     "SocDecisionTransitionRecord",
     "SocDispositionTransitionKind",

@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from soc_agent.automation import automation_policy_hash, select_automation_rule
+from soc_agent.automation import (
+    automation_policy_hash as compute_automation_policy_hash,
+)
+from soc_agent.automation import (
+    select_automation_rule,
+)
 from soc_agent.contracts import (
     SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION,
     ActorAuthSource,
@@ -33,6 +39,9 @@ from soc_agent.contracts import (
     SocAutomationRule,
     SocAutomationTargetSelector,
     SocDecisionSnapshot,
+    SocDecisionStageEvaluation,
+    SocDecisionStageKind,
+    SocDecisionStageStatus,
     SocDecisionTransitionKind,
     SocDecisionTransitionRecord,
     SocDispositionTransitionKind,
@@ -41,19 +50,35 @@ from soc_agent.contracts import (
     SocMemoryRecord,
     SocMemoryRecordStatus,
     SocMemoryReviewEffect,
+    SocOperationalDisposition,
+    TenantPolicyDecision,
+    TenantPolicyEvaluationStatus,
+    TenantPolicyMode,
+    TenantPolicyReviewEffect,
 )
 from soc_agent.protocols import (
     MemoryRecordRepository,
     SocActionAdapterRegistryPort,
     SocAutomationRepository,
+    TenantPolicyDecisionRepository,
 )
 from soc_agent.utils.hashing import stable_hash
 
-EFFECTIVE_DECISION_POLICY_VERSION = "soc.effective_decision_policy.v1"
+EFFECTIVE_DECISION_POLICY_VERSION = "soc.effective_decision_policy.v2"
+EFFECTIVE_DECISION_POLICY_ID = "soc.effective_decision"
 
 
 class SocAutomationError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class _TenantPolicyOutcome:
+    after: SocDecisionSnapshot
+    disposition: SocOperationalDisposition | None
+    stage: SocDecisionStageEvaluation
+    contributors: list[SocAutomationContributorRef]
+    decision: TenantPolicyDecision | None
 
 
 class SocAutomationService:
@@ -68,9 +93,11 @@ class SocAutomationService:
         self,
         *,
         repository: SocAutomationRepository,
-        policy: SocAutomationPolicy,
+        policy: SocAutomationPolicy | None,
         environment: str,
         memory_repository: MemoryRecordRepository | None = None,
+        tenant_policy_repository: TenantPolicyDecisionRepository | None = None,
+        tenant_policy_application_enabled: bool = False,
         action_adapter_registry: SocActionAdapterRegistryPort | None = None,
         execute_authorized_actions: bool = False,
         authorization_ttl_seconds: int = 900,
@@ -87,13 +114,22 @@ class SocAutomationService:
         self._policy = policy
         self._environment = environment.strip()
         self._memory_repository = memory_repository
+        self._tenant_policy_repository = tenant_policy_repository
+        self._tenant_policy_application_enabled = tenant_policy_application_enabled
         self._registry = action_adapter_registry
         self._execute_authorized_actions = execute_authorized_actions
         self._authorization_ttl_seconds = authorization_ttl_seconds
         self._max_execution_attempts = max_execution_attempts
         self._now = now_provider or (lambda: datetime.now(UTC))
+        if tenant_policy_application_enabled and tenant_policy_repository is None:
+            raise ValueError("tenant policy application requires a decision repository")
 
     def observe(self, run: AnalysisRun, *, context: ServiceRequestContext) -> None:
+        if run.status not in {
+            AnalysisRunStatus.SUCCESS,
+            AnalysisRunStatus.NEEDS_REVIEW,
+        }:
+            return
         self.evaluate(run, context=context)
 
     def evaluate(
@@ -104,34 +140,106 @@ class SocAutomationService:
     ) -> SocAutomationEvaluationResult:
         now = self._now()
         self._validate_run_and_policy(run, now=now)
-        policy_hash = automation_policy_hash(self._policy)
-        before = _decision_snapshot(run)
-        after, transition_kind, memory_contributors = self._effective_decision(
+        base = _decision_snapshot(run)
+        memory_after, memory_kind, memory_contributors = self._effective_decision(
             run,
-            before,
+            base,
             now=now,
+        )
+        memory_stage = SocDecisionStageEvaluation(
+            stage=SocDecisionStageKind.MEMORY,
+            status=_memory_stage_status(memory_kind, memory_contributors),
+            before=base,
+            after=memory_after,
+            contributors=memory_contributors,
+            summary=_memory_stage_summary(memory_kind, memory_contributors),
+        )
+        tenant_outcome = self._tenant_policy_outcome(run, memory_after)
+        transition_kind = _aggregate_transition_kind(
+            base,
+            tenant_outcome.after,
+            memory_kind=memory_kind,
+            tenant_status=tenant_outcome.stage.status,
+        )
+        selected_rule = None
+        if self._policy is not None and transition_kind is not SocDecisionTransitionKind.CONFLICTED:
+            selected_rule = select_automation_rule(
+                self._policy,
+                run,
+                tenant_outcome.after,
+                tenant_policy_rule_id=(tenant_outcome.decision.selected_rule_id if tenant_outcome.decision is not None else None),
+                tenant_disposition=tenant_outcome.disposition,
+            )
+        effective_disposition = _effective_disposition(
+            tenant_outcome.disposition,
+            policy=self._policy,
+            rule=selected_rule,
         )
         contributors = _base_contributors(run)
         contributors.extend(memory_contributors)
-        contributors.append(
-            SocAutomationContributorRef(
-                kind=SocAutomationContributorKind.SYSTEM_POLICY,
-                role=SocAutomationContributorRole.OBSERVED,
-                ref_id=self._policy.policy_id,
-                version=self._policy.policy_version,
-                content_hash=policy_hash,
+        contributors.extend(tenant_outcome.contributors)
+        automation_policy_hash = None
+        if self._policy is not None:
+            automation_policy_hash = compute_automation_policy_hash(self._policy)
+            contributors.append(
+                SocAutomationContributorRef(
+                    kind=SocAutomationContributorKind.SYSTEM_POLICY,
+                    role=SocAutomationContributorRole.OBSERVED,
+                    ref_id=self._policy.policy_id,
+                    version=self._policy.policy_version,
+                    content_hash=automation_policy_hash,
+                )
             )
-        )
         contributors = _dedupe_contributors(contributors)
+
+        stages = [
+            SocDecisionStageEvaluation(
+                stage=SocDecisionStageKind.BASE,
+                status=SocDecisionStageStatus.OBSERVED,
+                after=base,
+                contributors=_base_contributors(run),
+                summary="Immutable Runtime decision before governed post-processing.",
+            ),
+            memory_stage,
+            tenant_outcome.stage,
+            SocDecisionStageEvaluation(
+                stage=SocDecisionStageKind.EFFECTIVE,
+                status=(
+                    SocDecisionStageStatus.CONFLICTED
+                    if transition_kind is SocDecisionTransitionKind.CONFLICTED
+                    else SocDecisionStageStatus.APPLIED
+                    if tenant_outcome.after != base or effective_disposition is not None
+                    else SocDecisionStageStatus.UNCHANGED
+                ),
+                before=tenant_outcome.after,
+                after=tenant_outcome.after,
+                disposition_before=tenant_outcome.disposition,
+                disposition_after=effective_disposition,
+                source_id=(self._policy.policy_id if selected_rule and self._policy else EFFECTIVE_DECISION_POLICY_ID),
+                source_version=(self._policy.policy_version if selected_rule and self._policy else EFFECTIVE_DECISION_POLICY_VERSION),
+                selected_rule_id=(selected_rule.rule_id if selected_rule else None),
+                contributors=contributors,
+                summary="Final governed decision after Memory, tenant policy, and optional automation policy evaluation.",
+            ),
+        ]
+        resolution_hash = stable_hash(
+            {
+                "contract": EFFECTIVE_DECISION_POLICY_VERSION,
+                "tenant_policy_enabled": self._tenant_policy_application_enabled,
+                "tenant_policy_decision_key": (tenant_outcome.decision.decision_key if tenant_outcome.decision is not None else None),
+                "automation_policy_hash": automation_policy_hash,
+            }
+        )
 
         decision_key = stable_hash(
             {
                 "run_id": run.run_id,
-                "before": before.model_dump(mode="json"),
-                "after": after.model_dump(mode="json"),
+                "before": base.model_dump(mode="json"),
+                "after": tenant_outcome.after.model_dump(mode="json"),
+                "effective_disposition": (effective_disposition.value if effective_disposition else None),
+                "stages": [stage.model_dump(mode="json") for stage in stages],
                 "contributors": [item.model_dump(mode="json") for item in contributors],
-                "policy_hash": policy_hash,
-                "contract": EFFECTIVE_DECISION_POLICY_VERSION,
+                "resolution_hash": resolution_hash,
             }
         )
         decision_transition = self._repository.find_decision_transition_by_key(decision_key)
@@ -142,23 +250,26 @@ class SocAutomationService:
                 run_id=run.run_id,
                 alert_id=run.alert_id,
                 tenant_id=run.llm_analysis_request.tenant_id,
-                before=before,
-                after=after,
+                before=base,
+                after=tenant_outcome.after,
+                effective_disposition=effective_disposition,
                 transition_kind=transition_kind,
+                stages=stages,
                 contributors=contributors,
-                policy_id=self._policy.policy_id,
-                policy_version=self._policy.policy_version,
-                policy_hash=policy_hash,
+                policy_id=EFFECTIVE_DECISION_POLICY_ID,
+                policy_version=EFFECTIVE_DECISION_POLICY_VERSION,
+                policy_hash=resolution_hash,
                 created_by=context.actor,
                 created_at=now,
             )
             self._repository.save_decision_transition(decision_transition)
 
-        selected_rule = None if transition_kind is SocDecisionTransitionKind.CONFLICTED else select_automation_rule(self._policy, run, after)
         disposition = self._disposition_transition(
             run,
             decision_transition,
             selected_rule,
+            tenant_policy_decision=tenant_outcome.decision,
+            tenant_disposition=tenant_outcome.disposition,
             contributors=contributors,
             context=context,
             now=now,
@@ -181,6 +292,8 @@ class SocAutomationService:
             authorization=authorization,
             execution=execution,
             selected_rule_id=selected_rule.rule_id if selected_rule else None,
+            tenant_policy_decision_id=(tenant_outcome.decision.decision_id if tenant_outcome.decision is not None else None),
+            effective_disposition=effective_disposition,
             idempotent=idempotent,
         )
 
@@ -194,6 +307,8 @@ class SocAutomationService:
             raise SocAutomationError("automation requires a completed Runtime run")
         if run.decision is None or run.llm_analysis_request is None:
             raise SocAutomationError("automation requires a completed Runtime decision")
+        if self._policy is None:
+            return
         tenant_id = run.llm_analysis_request.tenant_id
         if tenant_id != self._policy.tenant_id:
             raise SocAutomationError(f"automation policy tenant {self._policy.tenant_id!r} does not match run tenant {tenant_id!r}")
@@ -307,26 +422,202 @@ class SocAutomationService:
             )
         return eligible
 
+    def _tenant_policy_outcome(
+        self,
+        run: AnalysisRun,
+        before: SocDecisionSnapshot,
+    ) -> _TenantPolicyOutcome:
+        if not self._tenant_policy_application_enabled:
+            return _TenantPolicyOutcome(
+                after=before,
+                disposition=None,
+                stage=SocDecisionStageEvaluation(
+                    stage=SocDecisionStageKind.TENANT_POLICY,
+                    status=SocDecisionStageStatus.DISABLED,
+                    before=before,
+                    after=before,
+                    summary="Tenant policy application is disabled by operator configuration.",
+                ),
+                contributors=[],
+                decision=None,
+            )
+        if self._tenant_policy_repository is None or run.llm_analysis_request is None:
+            return _TenantPolicyOutcome(
+                after=before,
+                disposition=None,
+                stage=SocDecisionStageEvaluation(
+                    stage=SocDecisionStageKind.TENANT_POLICY,
+                    status=SocDecisionStageStatus.NO_INPUT,
+                    before=before,
+                    after=before,
+                    summary="No persisted tenant policy decision is available.",
+                ),
+                contributors=[],
+                decision=None,
+            )
+        decisions = [
+            item
+            for item in self._tenant_policy_repository.list_tenant_policy_decisions(
+                run_id=run.run_id,
+                tenant_id=run.llm_analysis_request.tenant_id,
+                limit=100,
+            )
+            if item.environment == self._environment
+        ]
+        decision = max(decisions, key=lambda item: (item.created_at, item.decision_id)) if decisions else None
+        if decision is None:
+            return _TenantPolicyOutcome(
+                after=before,
+                disposition=None,
+                stage=SocDecisionStageEvaluation(
+                    stage=SocDecisionStageKind.TENANT_POLICY,
+                    status=SocDecisionStageStatus.NO_INPUT,
+                    before=before,
+                    after=before,
+                    summary="No persisted tenant policy decision matches this run and environment.",
+                ),
+                contributors=[],
+                decision=None,
+            )
+        contributor = SocAutomationContributorRef(
+            kind=SocAutomationContributorKind.TENANT_POLICY,
+            role=(
+                SocAutomationContributorRole.OBSERVED
+                if decision.policy_mode is TenantPolicyMode.SHADOW or decision.evaluation_status is TenantPolicyEvaluationStatus.NO_MATCH
+                else SocAutomationContributorRole.OVERRIDES
+                if decision.recommended_disposition is not None or decision.review_effect is TenantPolicyReviewEffect.CLEAR
+                else SocAutomationContributorRole.SUPPORTS
+            ),
+            ref_id=decision.decision_id,
+            version=decision.policy_version,
+            content_hash=decision.policy_hash,
+            detail=decision.summary,
+        )
+        common = {
+            "stage": SocDecisionStageKind.TENANT_POLICY,
+            "before": before,
+            "after": before,
+            "source_id": decision.policy_id,
+            "source_version": decision.policy_version,
+            "source_hash": decision.policy_hash,
+            "source_decision_id": decision.decision_id,
+            "selected_rule_id": decision.selected_rule_id,
+            "contributors": [contributor],
+            "summary": decision.summary,
+        }
+        if decision.evaluation_status is TenantPolicyEvaluationStatus.NO_MATCH:
+            return _TenantPolicyOutcome(
+                after=before,
+                disposition=None,
+                stage=SocDecisionStageEvaluation(
+                    status=SocDecisionStageStatus.NO_MATCH,
+                    **common,
+                ),
+                contributors=[contributor],
+                decision=decision,
+            )
+        if decision.policy_mode is TenantPolicyMode.SHADOW:
+            return _TenantPolicyOutcome(
+                after=before,
+                disposition=None,
+                stage=SocDecisionStageEvaluation(
+                    status=SocDecisionStageStatus.SHADOW_MATCHED,
+                    disposition_after=decision.recommended_disposition,
+                    **common,
+                ),
+                contributors=[contributor],
+                decision=decision,
+            )
+        if not decision.auto_apply_allowed:
+            after = before.model_copy(
+                update={
+                    "needs_review": True,
+                    "policy_version": EFFECTIVE_DECISION_POLICY_VERSION,
+                }
+            )
+            return _TenantPolicyOutcome(
+                after=after,
+                disposition=None,
+                stage=SocDecisionStageEvaluation(
+                    status=SocDecisionStageStatus.CONFLICTED,
+                    after=after,
+                    **{key: value for key, value in common.items() if key != "after"},
+                ),
+                contributors=[contributor],
+                decision=decision,
+            )
+
+        needs_review = before.needs_review
+        if decision.review_effect is TenantPolicyReviewEffect.REQUIRE:
+            needs_review = True
+        elif decision.review_effect is TenantPolicyReviewEffect.CLEAR:
+            needs_review = False
+        after = before.model_copy(
+            update={
+                "suggested_action": decision.suggested_action or before.suggested_action,
+                "needs_review": needs_review,
+                "policy_version": EFFECTIVE_DECISION_POLICY_VERSION,
+            }
+        )
+        return _TenantPolicyOutcome(
+            after=after,
+            disposition=decision.recommended_disposition,
+            stage=SocDecisionStageEvaluation(
+                status=(SocDecisionStageStatus.APPLIED if after != before or decision.recommended_disposition is not None else SocDecisionStageStatus.UNCHANGED),
+                after=after,
+                disposition_after=decision.recommended_disposition,
+                **{key: value for key, value in common.items() if key != "after"},
+            ),
+            contributors=[contributor],
+            decision=decision,
+        )
+
     def _disposition_transition(
         self,
         run: AnalysisRun,
         decision: SocDecisionTransitionRecord,
         rule: SocAutomationRule | None,
         *,
+        tenant_policy_decision: TenantPolicyDecision | None,
+        tenant_disposition: SocOperationalDisposition | None,
         contributors: list[SocAutomationContributorRef],
         context: ServiceRequestContext,
         now: datetime,
     ) -> SocDispositionTransitionRecord | None:
-        if rule is None or rule.disposition is None:
+        automation_disposition = rule.disposition if rule is not None else None
+        if automation_disposition is None and tenant_disposition is None:
             return None
-        transition_kind = SocDispositionTransitionKind.APPLIED if self._policy.mode is SocAutomationPolicyMode.ENFORCED else SocDispositionTransitionKind.PROPOSED
+        if automation_disposition is not None:
+            assert self._policy is not None
+            assert rule is not None
+            transition_kind = SocDispositionTransitionKind.APPLIED if self._policy.mode is SocAutomationPolicyMode.ENFORCED else SocDispositionTransitionKind.PROPOSED
+            before_disposition = tenant_disposition
+            after_disposition = automation_disposition
+            policy_id = self._policy.policy_id
+            policy_version = self._policy.policy_version
+            selected_rule_id = rule.rule_id if rule is not None else None
+            transition_contributors = [
+                *contributors,
+                _rule_contributor(self._policy, rule),
+            ]
+        else:
+            assert tenant_policy_decision is not None
+            transition_kind = SocDispositionTransitionKind.APPLIED
+            before_disposition = None
+            after_disposition = tenant_disposition
+            policy_id = tenant_policy_decision.policy_id
+            policy_version = tenant_policy_decision.policy_version
+            selected_rule_id = tenant_policy_decision.selected_rule_id
+            transition_contributors = contributors
         key = stable_hash(
             {
                 "decision_transition_id": decision.transition_id,
-                "disposition": rule.disposition.value,
-                "rule_id": rule.rule_id,
-                "policy_version": self._policy.policy_version,
-                "mode": self._policy.mode.value,
+                "before_disposition": (before_disposition.value if before_disposition else None),
+                "after_disposition": (after_disposition.value if after_disposition else None),
+                "rule_id": selected_rule_id,
+                "policy_id": policy_id,
+                "policy_version": policy_version,
+                "transition_kind": transition_kind.value,
             }
         )
         existing = self._repository.find_disposition_transition_by_key(key)
@@ -338,13 +629,13 @@ class SocAutomationService:
             alert_id=run.alert_id,
             tenant_id=run.llm_analysis_request.tenant_id,
             decision_transition_id=decision.transition_id,
-            before=None,
-            after=rule.disposition,
+            before=before_disposition,
+            after=after_disposition,
             transition_kind=transition_kind,
-            contributors=_dedupe_contributors([*contributors, _rule_contributor(self._policy, rule)]),
-            policy_id=self._policy.policy_id,
-            policy_version=self._policy.policy_version,
-            selected_rule_id=rule.rule_id,
+            contributors=_dedupe_contributors(transition_contributors),
+            policy_id=policy_id,
+            policy_version=policy_version,
+            selected_rule_id=selected_rule_id,
             created_by=context.actor,
             created_at=now,
         )
@@ -363,6 +654,8 @@ class SocAutomationService:
     ) -> SocActionAuthorizationRecord | None:
         if rule is None or rule.action is None:
             return None
+        if self._policy is None:
+            raise SocAutomationError("action rule requires an automation policy")
         target = _resolve_action_target(run, rule.action.target_selector)
         descriptor = _find_descriptor(self._registry, rule)
         authorization_decision, reason, risk_level = _authorization_decision(
@@ -429,6 +722,8 @@ class SocAutomationService:
         *,
         now: datetime,
     ) -> SocActionExecutionRecord:
+        if self._policy is None:
+            raise SocAutomationError("action execution requires an automation policy")
         if self._registry is None:
             raise SocAutomationError("authorized action execution requires an adapter registry")
         prior_attempts = self._repository.list_action_executions(
@@ -530,6 +825,63 @@ def _decision_snapshot(run: AnalysisRun) -> SocDecisionSnapshot:
         needs_review=decision.needs_review,
         policy_version=decision.policy_version,
     )
+
+
+def _memory_stage_status(
+    transition_kind: SocDecisionTransitionKind,
+    contributors: list[SocAutomationContributorRef],
+) -> SocDecisionStageStatus:
+    if transition_kind is SocDecisionTransitionKind.CONFLICTED:
+        return SocDecisionStageStatus.CONFLICTED
+    if transition_kind is SocDecisionTransitionKind.OVERRIDDEN:
+        return SocDecisionStageStatus.OVERRIDDEN
+    if transition_kind is SocDecisionTransitionKind.REINFORCED:
+        return SocDecisionStageStatus.REINFORCED
+    if contributors:
+        return SocDecisionStageStatus.NO_MATCH
+    return SocDecisionStageStatus.NO_INPUT
+
+
+def _memory_stage_summary(
+    transition_kind: SocDecisionTransitionKind,
+    contributors: list[SocAutomationContributorRef],
+) -> str:
+    if transition_kind is SocDecisionTransitionKind.CONFLICTED:
+        return "Conflicting reviewed Memory directives required review and blocked downstream automation."
+    if transition_kind is SocDecisionTransitionKind.OVERRIDDEN:
+        return "An eligible reviewed Memory directive changed the effective detection state."
+    if transition_kind is SocDecisionTransitionKind.REINFORCED:
+        return "Eligible reviewed Memory directives reinforced the base detection state."
+    if contributors:
+        return "Reviewed Memory directives were present but none applied to this base decision."
+    return "No eligible reviewed Memory decision directive was present."
+
+
+def _aggregate_transition_kind(
+    before: SocDecisionSnapshot,
+    after: SocDecisionSnapshot,
+    *,
+    memory_kind: SocDecisionTransitionKind,
+    tenant_status: SocDecisionStageStatus,
+) -> SocDecisionTransitionKind:
+    if memory_kind is SocDecisionTransitionKind.CONFLICTED or tenant_status is SocDecisionStageStatus.CONFLICTED:
+        return SocDecisionTransitionKind.CONFLICTED
+    if before.verdict is not after.verdict:
+        return SocDecisionTransitionKind.OVERRIDDEN
+    if before != after or memory_kind is SocDecisionTransitionKind.REINFORCED:
+        return SocDecisionTransitionKind.REINFORCED
+    return SocDecisionTransitionKind.UNCHANGED
+
+
+def _effective_disposition(
+    tenant_disposition: SocOperationalDisposition | None,
+    *,
+    policy: SocAutomationPolicy | None,
+    rule: SocAutomationRule | None,
+) -> SocOperationalDisposition | None:
+    if policy is not None and policy.mode is SocAutomationPolicyMode.ENFORCED and rule is not None and rule.disposition is not None:
+        return rule.disposition
+    return tenant_disposition
 
 
 def _memory_record_is_active(

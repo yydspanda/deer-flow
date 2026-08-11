@@ -849,12 +849,14 @@ analyzer only after explicit confirmation, and projects Runtime, Grounding, Deci
 read-only investigation, ReviewQueue and bounded Lead Agent context into one private output root.
 It also compiles typed analyzer knowledge suggestions into an inert `knowledge-review/` package;
 generation performs no Memory, Skill, adapter, policy, or decision mutation.
-With explicit automation-simulation confirmation it additionally writes
-`12-effective-decision-and-automation.json`: base Runtime decision stays immutable, while effective
-decision, Memory contributors, disposition, authorization and execution are append-only lineage.
-The response adapter is validation-only and must persist `mocked=true`; no simulated result closes a
-real Provider/action gate. `compare_ten_alert_e2e.py` compares old/new reports without attributing
-live-model resampling to Memory or automation.
+It always writes `12-effective-decision-and-automation.json`: base Runtime decision stays immutable,
+while `Base -> Memory -> PingAn Policy -> Effective`, disposition, authorization and execution are
+append-only lineage. The fixed business E2E no longer installs the synthetic network-blocking policy;
+it enables the reviewed PingAn policy pack/Skill and requires zero action authorization/execution when
+no separate Automation Policy is configured. The read-only investigation adapter remains validation-
+only with `mocked=true`; no simulated result closes a real Provider/action gate.
+`compare_ten_alert_e2e.py` compares old/new reports without attributing live-model resampling to Memory,
+tenant policy or automation. The separate reviewed-Memory rerun remains an independent local experiment.
 The cohort excludes known evidence-unavailable rows; this path validates complete alert journeys and
 does not replace the separate fail-closed input-gap tests.
 
@@ -925,17 +927,28 @@ D-11 must aggregate non-exclusive evidence-quality row counts and assert that ro
 not directly degrade, nested warnings preserve outer recognition, high-value gaps fail closed, and
 encoded compaction does not emit the historical truncation review reason.
 
-Tenant-specific environment handling is post-detection operational policy. PingAn adapters may emit
+Tenant-specific environment handling is default-off post-detection operational policy. PingAn adapters may emit
 provenance-backed generic environment/context candidates, but they cannot emit `safe`,
 `skip_analysis`, a Runtime verdict or closure decision. The implemented v1 contracts/evaluator live
 in `soc_agent.contracts.tenant_policy` and `soc_agent.tenant_policy`; orchestration is
 `SocTenantPolicyEvaluationService`, invoked through `SocAnalysisService` post-analysis observers only
-after the main transaction. Migration `0022_tenant_policy_decisions` persists immutable decisions.
+after the main transaction. Migration `0022_tenant_policy_decisions` persists immutable decisions and
+migration `0024_decision_stages` indexes the four-stage effective lineage.
 Generic code must not recognize PingAn aliases, CIDRs, hostname substrings or `stg == safe`; those
-values stay in an operator-owned policy pack. A hostname hint may produce only shadow manual/no-auto
-response guidance, never an exemption. Version resolution uses alert event time, and naive values
-require an explicit IANA timezone. Every decision has zero detection/ReviewQueue/action/memory impact;
-CLI replay/inspection is `soc tenant-policy evaluate|list|get`.
+values stay in an operator-owned policy pack. Enable the layer only with
+`SOC_TENANT_POLICY_ENABLED=true`, a policy path and an explicit environment. Exact deterministic rules
+run first; no-match may invoke a separately enabled reviewed policy Skill. Advisor output is strict
+JSON, exact-reference validated and hashed; any failure persists a fail-closed no-match. Shadow policy
+cannot apply changes; reviewed enforced policy may change effective review/disposition while preserving
+the immutable Runtime detection truth and zero action/memory authority. PingAn's reviewed `status=200`
+semantics mean request success only and produce no disposition by themselves. Deterministic non-`200`
+ignore reads only canonical `100..599` HTTP statuses and requires all observed HTTP transactions to be
+non-`200`; exact forced-transfer rules have higher priority. Explicit provider success/compromise
+labels make that ignore rule abstain but do not deterministically escalate; Policy Skill/Runtime must
+combine them with current effect evidence. Attempt-only outcomes also remain for Runtime/Policy-Skill
+analysis. External side effects still require a separate `SocAutomationPolicy` or
+human grant. CLI replay/inspection is `soc tenant-policy evaluate|list|get` plus
+`soc automation lineage`.
 
 Release-level local Alpha acceptance is orchestrated from the repository root by
 `scripts/soc-alpha-acceptance.sh`. `all` resets an isolated output directory, runs representative

@@ -6,12 +6,14 @@
 
 ## 1. 核心结论
 
-系统必须分开五件事，不能把它们都叫“模型结论”或“自动化”：
+系统必须分开七件事，不能把它们都叫“模型结论”或“自动化”：
 
 | 层 | English | 当前权威对象 | 负责什么 |
 |---|---|---|---|
 | 基础研判 | Base Detection Decision | `AnalysisRun.decision` | Runtime 对当前告警形成的不可变基础判断 |
-| 有效研判 | Effective Detection Decision | `SocDecisionTransitionRecord.after` | 将符合条件的结构化 Memory 指令应用到基础判断，并保留 before/after |
+| 记忆阶段 | Memory Decision Stage | `SocDecisionTransitionRecord.stages[1]` | 将符合条件的 reviewed typed Memory directive 应用到基础判断；普通 Memory 只作上下文 |
+| 租户策略阶段 | Tenant Policy Decision Stage | `TenantPolicyDecision` + `stages[2]` | 将平安等租户运营规则形成独立判断；不改写技术检测真值 |
+| 有效研判 | Effective Decision | `SocDecisionTransitionRecord.after` + `effective_disposition` | 汇总 Base、Memory、租户策略和可选自动化 policy，形成最终可复盘结果 |
 | 运营处置 | Operational Disposition | `SocDispositionTransitionRecord` | 表达升级、复核、抑制、关闭等业务状态意图 |
 | 动作授权 | Action Authorization | `SocActionAuthorizationRecord` | 判断某个精确动作、目标和 adapter 是否获准执行 |
 | 动作执行 | Action Execution | `SocActionExecutionRecord` | 调用外部系统并保存尝试、幂等键、结果及前后状态 |
@@ -21,6 +23,8 @@
 - LLM 只产生基础研判和理由，不能直接授权外部动作。
 - 普通 `M-*` 文本是推理上下文，不具备改判或授权能力。
 - 只有人工确认时显式附加的 `SocMemoryDecisionDirective`，在检索、版本、有效期、复核期、匹配分数和 required facets 全部通过后，才可改变有效研判。
+- 租户策略在完整 Runtime 和 Memory 阶段之后运行。精确条件由确定性规则处理；确定性 `no_match` 后可由受版本/hash 约束的 policy Skill 处理组合语义。
+- 租户策略必须有显式总开关。它可以在 `enforced` 模式改变复核要求和运营 disposition，但不能更改 `AnalysisRun.decision.verdict/confidence`，也不能授权动作。
 - Memory 永远不直接授权动作。动作授权只来自受评审、版本化、服务端持有的 `SocAutomationPolicy` 或人工 Approval Grant。
 - 因此，当前告警没有命中任何 Memory，只要有效研判和策略条件满足，也可以获得自动动作授权。
 
@@ -33,11 +37,17 @@ flowchart TD
 
     M["✅ Active Confirmed Memory<br/>检索启用且有效"] --> D{"📎 Typed Decision Directive?<br/>是否有审核后的结构化指令"}
     D -->|No| C["📚 Reasoning Context Only<br/>只帮助 LLM 推理"]
-    D -->|Yes + exact match| E["🔁 Effective Decision<br/>有效研判 before / after"]
+    D -->|Yes + exact match| E["🔁 Memory-stage Decision<br/>记忆阶段 before / after"]
     B --> E
     C -. "no direct mutation" .-> E
 
-    E --> P{"🛡️ Server-owned Automation Policy<br/>租户 + 环境 + 有效期 + 精确规则"}
+    E --> TP{"🛡️ Tenant Policy<br/>确定性规则优先"}
+    TP -->|no match + advisor enabled| TPS["🧠 Reviewed Policy Skill<br/>组合运营语义"]
+    TP --> TD["📋 Tenant Policy Decision"]
+    TPS --> TD
+    TD --> F["📋 Four-stage Effective Decision<br/>Base / Memory / Tenant / Effective"]
+
+    F --> P{"🛡️ Server-owned Automation Policy<br/>租户 + 环境 + 有效期 + 精确动作规则"}
     P -->|No match / disabled| Q["🧑‍💻 Review or no action<br/>复核或不动作"]
     P -->|Shadow| S["👁️ Proposed lineage only<br/>只记录不执行"]
     P -->|Human approval| H["🛂 Approval Inbox + Grant<br/>人工审批授权"]
@@ -48,7 +58,7 @@ flowchart TD
     X --> Y["⚡ External Action<br/>抑制 / 封禁 / 隔离"]
     Y --> Z["🗃️ Execution Record<br/>attempt + idempotency + external state"]
 
-    E --> DT["🗃️ Decision Transition"]
+    F --> DT["🗃️ Decision Transition<br/>four stages"]
     P --> DP["🗃️ Disposition Transition"]
     H --> AU["🗃️ Authorization Record"]
     U --> AU
@@ -102,14 +112,19 @@ contributors: current evidence + model reasoning + M-* + policy version/hash
 
 ## 4. 没有 Memory 也能自动动作
 
-`SocAutomationPolicy` 匹配的是有效研判，而不是“是否命中 Memory”。以下两条路径同等合法：
+`SocAutomationPolicy` 匹配的是 Memory 与租户策略处理后的有效研判，而不是“是否命中 Memory”。以下两条路径同等合法：
 
 ```text
 当前证据 + LLM + Decision Policy -> effective suspicious -> policy -> block
 
 当前证据 + LLM + Decision Policy + reviewed Memory override
   -> effective suspicious -> policy -> block
+
+当前证据 + LLM + Decision Policy + PingAn policy disposition
+  -> effective suspicious/escalated -> policy -> exact governed action
 ```
+
+租户策略与动作策略不是同一层。租户策略可以说“平安运营上忽略、转交或关闭良性真阳性”，但只有单独的 Automation Policy 才能说“对哪个目标、通过哪个 adapter、以什么幂等键执行什么动作”。
 
 自动动作规则必须显式声明：
 
@@ -144,12 +159,14 @@ contributors: current evidence + model reasoning + M-* + policy version/hash
 
 ## 6. 持久化与查询
 
-Migration `0023_governed_automation_and_memory_index` 增加：
+Migration `0023_governed_automation_and_memory_index` 增加基础 Memory/自动化 lineage；migration
+`0024_decision_stages` 增加可索引的租户策略与四阶段摘要：
 
 | Table | 记录内容 |
 |---|---|
 | `soc_memory_record_facets` | Memory facet 倒排索引；先按相关性跨完整 corpus 召回，不再只看最新 200 条 |
-| `soc_decision_transitions` | 基础研判与有效研判 before/after、贡献者、policy hash |
+| `soc_decision_transitions` | Base/Memory/Tenant/Effective 四阶段、before/after、最终 disposition、贡献者和 policy hash |
+| `soc_tenant_policy_decisions` | 确定性规则或 policy Skill 形成的独立租户运营判断及完整来源 |
 | `soc_disposition_transitions` | 处置建议或应用状态及来源 |
 | `soc_action_authorizations` | 授权模式、目标、adapter、原因、有效期和贡献者 |
 | `soc_action_executions` | 每次尝试、稳定幂等键、外部 request ID、前后状态和错误 |
@@ -180,6 +197,11 @@ cd backend
 - typed Memory decision directive 的 review/API/CLI/service contract；
 - relevance-first Memory facet index 和旧数据 migration backfill；
 - post-Runtime effective-decision、disposition、authorization、execution service；
+- `Base -> Memory -> Tenant Policy -> Effective` 四阶段 lineage 和 migration `0024`；
+- 默认关闭的租户策略总开关、确定性规则优先和可选 LLM policy Skill；
+- PingAn canonical HTTP 全非 `200` 忽略、明确 provider 失败忽略、强制转交优先级和组合语义 Policy
+  Skill；`200` 单独不产生 disposition，非 HTTP `status` 字段不参与；provider 成功/失陷标签只使非
+  `200` 规则弃权，由 Policy Skill 结合效果证据判断；
 - 无 Memory 自动授权、Memory override、幂等、重试和 SQL lineage 测试；
 - 仍需复核的 current-alert decision 只有在规则显式提供 `review_required_override_reason` 时才可自动授权；
 - 默认关闭、shadow/enforced 区分和 CLI lineage 查询。
@@ -191,3 +213,5 @@ cd backend
 - 真实标签上的阈值、错误改判率和自动动作质量 gate；
 - 人工 Approval Grant 与自动 Authorization 共用同一 external execution service；
 - Web 侧 lineage 和策略管理/只读展示。
+
+固定十条业务 E2E 已删除人为构造的网络自动封禁策略。该验证只启用 PingAn tenant policy/Skill；没有另行配置真实 Automation Policy 时，正确结果是有四阶段判断和运营 disposition，但 action authorization/execution 均为 0。通用自动化能力继续由单元/组件测试验证，不再用假业务规则制造“3 条自动封禁成功”。

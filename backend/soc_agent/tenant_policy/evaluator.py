@@ -14,13 +14,18 @@ from soc_agent.contracts import (
     AuthorizationMatchResult,
     EntrySurface,
     SocDetectionTruthSnapshot,
+    SocOperationalDisposition,
     TenantDispositionPolicy,
     TenantDispositionRule,
     TenantNetworkScope,
+    TenantPolicyAdvisorResult,
     TenantPolicyConditionEvaluation,
     TenantPolicyDecision,
+    TenantPolicyDecisionSource,
     TenantPolicyEvaluationStatus,
+    TenantPolicyMode,
     TenantPolicyResponsePosture,
+    TenantPolicyReviewEffect,
     TenantPolicyRuleEvaluation,
     TenantPolicyTimeSource,
 )
@@ -95,7 +100,7 @@ def evaluate_tenant_policy(
         }
     )
     evaluator = ActorContext(
-        actor_id="tenant-policy-shadow",
+        actor_id="tenant-policy-evaluator",
         actor_type=ActorType.SYSTEM,
         surface=(triggered_by.surface if triggered_by else EntrySurface.DAEMON),
         roles=["soc_policy_evaluator"],
@@ -124,20 +129,29 @@ def evaluate_tenant_policy(
             policy_time=effective_time,
             policy_time_source=resolved_time_source,
             evaluation_status=TenantPolicyEvaluationStatus.MATCHED,
+            decision_source=TenantPolicyDecisionSource.DETERMINISTIC_RULE,
             selected_rule_id=selected.rule_id,
             rule_evaluations=evaluations,
             detection_truth=detection_truth,
             runtime_suggested_action=(run.decision.suggested_action if run.decision else None),
             authorization_status=(authorization_result.status if authorization_result else None),
             authorization_query_id=(authorization_result.query_id if authorization_result else None),
+            policy_mode=policy.policy_mode,
             response_posture=recommendation.response_posture,
             recommended_disposition=recommendation.recommended_disposition,
+            review_effect=recommendation.review_effect,
+            suggested_action=recommendation.suggested_action,
             summary=recommendation.summary,
             rationale=recommendation.rationale,
             manual_checks=recommendation.manual_checks,
             evaluated_by=evaluator,
             triggered_by=trigger,
             created_at=now,
+            **_application_fields(
+                policy_mode=policy.policy_mode,
+                review_effect=recommendation.review_effect,
+                recommended_disposition=recommendation.recommended_disposition,
+            ),
         )
 
     return TenantPolicyDecision(
@@ -158,19 +172,100 @@ def evaluate_tenant_policy(
         policy_time=effective_time,
         policy_time_source=resolved_time_source,
         evaluation_status=TenantPolicyEvaluationStatus.NO_MATCH,
+        decision_source=TenantPolicyDecisionSource.NO_MATCH,
         rule_evaluations=evaluations,
         detection_truth=detection_truth,
         runtime_suggested_action=(run.decision.suggested_action if run.decision else None),
         authorization_status=(authorization_result.status if authorization_result else None),
         authorization_query_id=(authorization_result.query_id if authorization_result else None),
+        policy_mode=policy.policy_mode,
         response_posture=TenantPolicyResponsePosture.STANDARD_TRIAGE,
+        review_effect=TenantPolicyReviewEffect.PRESERVE,
         summary="No tenant disposition rule matched; retain the Runtime decision and normal review path.",
         rationale=["Tenant policy evaluation completed without an applicable rule."],
         manual_checks=[],
         evaluated_by=evaluator,
         triggered_by=trigger,
         created_at=now,
+        shadow_only=policy.policy_mode is TenantPolicyMode.SHADOW,
     )
+
+
+def apply_tenant_policy_advisor_result(
+    decision: TenantPolicyDecision,
+    result: TenantPolicyAdvisorResult,
+) -> TenantPolicyDecision:
+    """Resolve an advisor result into the same append-only decision contract."""
+
+    advice = result.advice
+    provenance = result.provenance
+    policy_hash = stable_hash(
+        {
+            "deterministic_policy_hash": decision.policy_hash,
+            "advisor_id": provenance.advisor_id,
+            "model_name": provenance.model_name,
+            "prompt_version": provenance.prompt_version,
+            "prompt_hash": provenance.prompt_hash,
+            "skill_name": provenance.skill_name,
+            "skill_version": provenance.skill_version,
+            "skill_hash": provenance.skill_hash,
+        }
+    )
+    decision_key = stable_hash(
+        {
+            "run_id": decision.run_id,
+            "policy_id": decision.policy_id,
+            "policy_version": decision.policy_version,
+            "policy_hash": policy_hash,
+        }
+    )
+    rule_id = "llm-policy-skill-advice"
+    rule_evaluations = [
+        *decision.rule_evaluations,
+        TenantPolicyRuleEvaluation(
+            rule_id=rule_id,
+            rule_name=(f"{provenance.skill_name}@{provenance.skill_version} bounded advice"),
+            priority=9_000,
+            matched=(advice.evaluation_status is TenantPolicyEvaluationStatus.MATCHED),
+            conditions=[
+                TenantPolicyConditionEvaluation(
+                    condition="policy_skill_grounding",
+                    matched=(advice.evaluation_status is TenantPolicyEvaluationStatus.MATCHED),
+                    evidence_paths=list(advice.evidence_refs),
+                    detail=("Policy Skill advice references resolved against the bounded current-alert catalog and Runtime reasoning."),
+                )
+            ],
+        ),
+    ]
+    updates: dict[str, object] = {
+        "decision_key": decision_key,
+        "idempotency_key": f"tenant-policy:{decision_key}",
+        "policy_hash": policy_hash,
+        "decision_source": TenantPolicyDecisionSource.LLM_POLICY_SKILL,
+        "evaluation_status": advice.evaluation_status,
+        "selected_rule_id": (rule_id if advice.evaluation_status is TenantPolicyEvaluationStatus.MATCHED else None),
+        "rule_evaluations": rule_evaluations,
+        "response_posture": advice.response_posture,
+        "recommended_disposition": advice.recommended_disposition,
+        "review_effect": advice.review_effect,
+        "suggested_action": advice.suggested_action,
+        "summary": advice.summary,
+        "rationale": advice.rationale,
+        "manual_checks": advice.manual_checks,
+        "advisor_advice": advice,
+        "advisor_provenance": provenance,
+    }
+    if advice.evaluation_status is TenantPolicyEvaluationStatus.MATCHED:
+        updates.update(
+            _application_fields(
+                policy_mode=decision.policy_mode,
+                review_effect=advice.review_effect,
+                recommended_disposition=advice.recommended_disposition,
+            )
+        )
+    payload = decision.model_dump(mode="python")
+    payload.update(updates)
+    return TenantPolicyDecision.model_validate(payload)
 
 
 def _evaluate_rule(
@@ -223,6 +318,28 @@ def _evaluate_rule(
                 f"actual={','.join(sorted(categories)) or '<missing>'}; allowed={','.join(sorted(expected))}",
             )
         )
+    if match.rule_codes:
+        actual = request.detection.rule_code
+        expected = {item.strip().casefold() for item in match.rule_codes}
+        conditions.append(
+            _condition(
+                "rule_code",
+                bool(actual and actual.strip().casefold() in expected),
+                ["llm_analysis_request.detection.rule_code"],
+                f"actual={actual or '<missing>'}; allowed={','.join(sorted(expected))}",
+            )
+        )
+    if match.detection_keys:
+        actual = request.detection.detection_key
+        expected = {item.strip().casefold() for item in match.detection_keys}
+        conditions.append(
+            _condition(
+                "detection_key",
+                bool(actual and actual.strip().casefold() in expected),
+                ["llm_analysis_request.detection.detection_key"],
+                f"actual={actual or '<missing>'}; allowed={','.join(sorted(expected))}",
+            )
+        )
     if match.scenario_keys:
         scenario_keys = {item.scenario_key.strip().casefold() for item in (run.analysis.scenario_assessments if run.analysis else []) if item.scenario_key}
         expected = {item.strip().casefold() for item in match.scenario_keys}
@@ -234,6 +351,40 @@ def _evaluate_rule(
                 f"actual={','.join(sorted(scenario_keys)) or '<missing>'}; allowed={','.join(sorted(expected))}",
             )
         )
+    if match.classification_labels:
+        labels = {key.strip().casefold(): (key, value) for key, value in request.classification.labels.items() if key.strip()}
+        for configured_key, configured_values in sorted(match.classification_labels.items()):
+            normalized_key = configured_key.strip().casefold()
+            source_key, actual = labels.get(
+                normalized_key,
+                (configured_key, None),
+            )
+            expected = {value.strip().casefold() for value in configured_values}
+            conditions.append(
+                _condition(
+                    f"classification_label:{configured_key}",
+                    bool(actual is not None and actual.strip().casefold() in expected),
+                    [f"llm_analysis_request.classification.labels.{source_key}"],
+                    (f"actual={actual or '<missing>'}; allowed={','.join(sorted(expected))}"),
+                )
+            )
+    if match.classification_labels_excluded:
+        labels = {key.strip().casefold(): (key, value) for key, value in request.classification.labels.items() if key.strip()}
+        for configured_key, configured_values in sorted(match.classification_labels_excluded.items()):
+            normalized_key = configured_key.strip().casefold()
+            source_key, actual = labels.get(
+                normalized_key,
+                (configured_key, None),
+            )
+            excluded = {value.strip().casefold() for value in configured_values}
+            conditions.append(
+                _condition(
+                    f"classification_label_excluded:{configured_key}",
+                    bool(actual is None or actual.strip().casefold() not in excluded),
+                    [f"llm_analysis_request.classification.labels.{source_key}"],
+                    (f"actual={actual or '<missing>'}; excluded={','.join(sorted(excluded))}"),
+                )
+            )
     if match.source_ip_scope is not None:
         value = request.canonical_entities.network.source_ip
         conditions.append(
@@ -269,6 +420,34 @@ def _evaluate_rule(
                     "llm_analysis_request.canonical_entities.http.observations[].host",
                 ],
                 f"actual={','.join(sorted(hosts)) or '<missing>'}; patterns={','.join(patterns)}",
+            )
+        )
+    if match.http_status_codes:
+        statuses = _http_status_codes(run)
+        expected = set(match.http_status_codes)
+        conditions.append(
+            _condition(
+                "http_status_code",
+                bool(statuses & expected),
+                [
+                    "llm_analysis_request.canonical_entities.http.status_code",
+                    "llm_analysis_request.canonical_entities.http.observations[].status_code",
+                ],
+                f"actual={','.join(str(item) for item in sorted(statuses)) or '<missing>'}; allowed={','.join(str(item) for item in sorted(expected))}",
+            )
+        )
+    if match.http_status_excluded_codes:
+        statuses = _http_status_codes(run)
+        excluded = set(match.http_status_excluded_codes)
+        conditions.append(
+            _condition(
+                "http_status_excluded_code",
+                bool(statuses) and not bool(statuses & excluded),
+                [
+                    "llm_analysis_request.canonical_entities.http.status_code",
+                    "llm_analysis_request.canonical_entities.http.observations[].status_code",
+                ],
+                (f"actual={','.join(str(item) for item in sorted(statuses)) or '<missing>'}; excluded={','.join(str(item) for item in sorted(excluded))}"),
             )
         )
     if match.authorization_statuses:
@@ -334,6 +513,30 @@ def _http_hosts(run: AnalysisRun) -> set[str]:
     return {value.strip().casefold() for value in values if value and value.strip()}
 
 
+def _http_status_codes(run: AnalysisRun) -> set[int]:
+    request = run.llm_analysis_request
+    assert request is not None
+    http = request.canonical_entities.http
+    values = [http.status_code, *(item.status_code for item in http.observations)]
+    return {value for value in values if value is not None and 100 <= value <= 599}
+
+
+def _application_fields(
+    *,
+    policy_mode: TenantPolicyMode,
+    review_effect: TenantPolicyReviewEffect,
+    recommended_disposition: SocOperationalDisposition | None,
+) -> dict[str, object]:
+    enforced = policy_mode is TenantPolicyMode.ENFORCED
+    return {
+        "shadow_only": not enforced,
+        "requires_human_review": (True if not enforced else review_effect is not TenantPolicyReviewEffect.CLEAR),
+        "auto_apply_allowed": enforced,
+        "review_queue_impact": review_effect.value if enforced else "none",
+        "disposition_impact": ("eligible" if enforced and recommended_disposition is not None else "proposed" if recommended_disposition is not None else "none"),
+    }
+
+
 def _normalized_values(*values: str | None) -> set[str]:
     return {value.strip().casefold() for value in values if value and value.strip()}
 
@@ -363,4 +566,8 @@ def _aware_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-__all__ = ["TenantPolicyNotApplicableError", "evaluate_tenant_policy"]
+__all__ = [
+    "TenantPolicyNotApplicableError",
+    "apply_tenant_policy_advisor_result",
+    "evaluate_tenant_policy",
+]

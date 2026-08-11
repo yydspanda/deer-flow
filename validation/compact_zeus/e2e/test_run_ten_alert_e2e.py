@@ -3,21 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from soc_agent.automation import load_soc_automation_policy
-from soc_agent.contracts import (
-    ActorAuthSource,
-    ActorContext,
-    ActorType,
-    EntrySurface,
-    ServiceRequestContext,
-    SocAgentActionCommand,
-)
-from validation.compact_zeus.e2e.automation_simulation import (
-    DEFAULT_SIMULATION_POLICY,
-    E2ESimulatedNetworkBlockAdapter,
-)
 from validation.compact_zeus.e2e.run_ten_alert_e2e import (
     DEFAULT_CASES,
+    PINGAN_POLICY,
+    PINGAN_POLICY_SKILL,
+    _execution_environment,
     _grounding_quality_findings,
     build_batch_command,
     build_paths,
@@ -90,7 +80,9 @@ def test_plan_only_is_read_only_and_exposes_fixed_cohort(
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
-    assert output["live_model_call_count"] == 10
+    assert output["runtime_live_model_call_count"] == 10
+    assert output["maximum_policy_advisor_call_count"] == 10
+    assert output["maximum_total_live_model_call_count"] == 20
     assert output["provider_mode"] == "simulated_read_only"
     assert output["alert_ids"][-2:] == ["2025642", "1980502"]
     assert "--plan-only" in output["batch_command"]
@@ -98,7 +90,7 @@ def test_plan_only_is_read_only_and_exposes_fixed_cohort(
     assert not (tmp_path / "output").exists()
 
 
-def test_plan_exposes_opt_in_governed_automation_simulation(
+def test_plan_exposes_pingan_policy_without_synthetic_automation(
     tmp_path: Path,
     capsys,
 ) -> None:
@@ -113,50 +105,27 @@ def test_plan_exposes_opt_in_governed_automation_simulation(
             str(tmp_path / "output"),
             "--python-executable",
             str(Path(__file__).resolve().parents[3] / "backend/.venv/bin/python"),
-            "--governed-automation-simulation",
         ]
     )
 
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
-    assert output["governed_automation_simulation"] is True
-    assert output["automation_simulation_policy"].endswith(
-        "automation-policy.simulation.json"
-    )
+    assert output["tenant_policy"].endswith("tenant-disposition-v2.json")
+    assert output["tenant_policy_skill"].endswith("disposition/SKILL.md")
+    assert output["synthetic_automation_policy_installed"] is False
     assert output["real_external_action_call_count"] == 0
     assert not (tmp_path / "output").exists()
 
 
-def test_automation_simulation_policy_and_adapter_are_explicitly_mocked() -> None:
-    policy = load_soc_automation_policy(DEFAULT_SIMULATION_POLICY)
-    adapter = E2ESimulatedNetworkBlockAdapter()
-    context = ServiceRequestContext(
-        actor=ActorContext(
-            actor_id="test-e2e",
-            actor_type=ActorType.SYSTEM,
-            surface=EntrySurface.DAEMON,
-            roles=["validation_fixture"],
-            auth_source=ActorAuthSource.SYSTEM,
-        ),
-        idempotency_key="test-e2e-idempotency",
-    )
+def test_execution_environment_enables_pingan_policy_skill_only() -> None:
+    python_executable = Path("/tmp/python")
+    environment = _execution_environment(python_executable)
 
-    result = adapter.execute(
-        SocAgentActionCommand(
-            route="response.block_ip",
-            action="response.block_ip",
-            dry_run=False,
-            payload={"ip": "192.0.2.10", "duration_seconds": 60},
-        ),
-        context=context,
-    )
-
-    assert policy.environment == "e2e-simulation"
-    assert policy.mode.value == "enforced"
-    assert adapter.descriptor.metadata["mocked"] is True
-    assert result.payload["mocked"] is True
-    assert result.payload["provider_mode"] == "e2e_simulation"
-    assert result.payload["external_side_effect"] == "simulated_only"
+    assert environment["SOC_TENANT_POLICY_ENABLED"] == "true"
+    assert environment["SOC_TENANT_DISPOSITION_POLICY_PATH"] == str(PINGAN_POLICY)
+    assert environment["SOC_TENANT_POLICY_ADVISOR_MODE"] == "llm"
+    assert environment["SOC_TENANT_POLICY_SKILL_PATH"] == str(PINGAN_POLICY_SKILL)
+    assert "SOC_AUTOMATION_POLICY_PATH" not in environment
 
 
 def test_grounding_quality_findings_separate_safety_pass_from_model_quality() -> None:

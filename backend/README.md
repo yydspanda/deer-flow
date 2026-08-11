@@ -186,7 +186,32 @@ commands and Gateway routes automatically use the separate
 remain explicit overrides.
 Kafka ingestion, ReviewQueue Web/TUI, governed context, shadow disposition proposals,
 and append-only evaluation outcomes are available; production response side effects
-remain approval-gated and disabled without a real adapter.
+remain disabled without a reviewed Automation Policy or human grant plus a real adapter.
+
+Tenant-specific operational handling is a separate default-off post-Runtime layer. It records
+`Base -> Memory -> Tenant Policy -> Effective` without rewriting the immutable Runtime decision.
+Enable deterministic tenant rules explicitly; the optional policy Skill runs only after a
+deterministic no-match:
+
+```bash
+export SOC_TENANT_POLICY_ENABLED=true
+export SOC_TENANT_DISPOSITION_POLICY_PATH=/reviewed/policy.json
+export SOC_TENANT_POLICY_ENVIRONMENT=dev
+
+# Optional bounded LLM policy advisor
+export SOC_TENANT_POLICY_ADVISOR_MODE=llm
+export SOC_TENANT_POLICY_SKILL_PATH=/reviewed/policy-skill/SKILL.md
+export SOC_TENANT_POLICY_MODEL=deepseek-v4-flash
+```
+
+Tenant policy may change effective review/disposition only when its reviewed mode is `enforced`.
+It never authorizes blocking, isolation, suppression, or another external action; that requires an
+independent `SOC_AUTOMATION_POLICY_PATH`. For PingAn, the integration-owned policy treats HTTP
+`200` as request success only and does not derive a disposition from it. A deterministic ignore rule
+uses only canonical HTTP `100..599` statuses and applies when every observed HTTP transaction is
+non-`200`; exact forced-transfer rules take priority. Provider success/compromise labels prevent this
+ignore rule from matching but do not deterministically escalate; response effects, request-body
+semantics and attack-attempt cases remain bounded Policy-Skill/Runtime reasoning.
 
 Automatic read-only investigation is default-off and runs after an existing persisted
 `AnalysisRun`, never inside the fixed Runtime. Kafka daemon commands may opt in with one

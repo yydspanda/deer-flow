@@ -42,6 +42,42 @@
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / External Product Complete + Real Debt Open** | 既有 simulation、PI-01F/F2 和 PI-01G 专家子智能体产品链已完成；7 个真实 gate 保持 open | 外网产品完整性缺口已关闭；fresh real evidence、具名 owner approval、cohort enforcement 和可执行 rollback 到位后才能进入 Pilot readiness review |
 
+## 2026-08-11 — PingAn policy became an independent four-stage decision
+
+- Post-Runtime lineage 升级为 `Base -> Memory -> Tenant Policy -> Effective`。`AnalysisRun.decision`
+  仍不可变；migration `0024_decision_stages` 增加 Memory/Tenant 阶段、租户策略 decision 和最终
+  disposition 的可索引摘要。
+- 增加显式总开关 `SOC_TENANT_POLICY_ENABLED`（默认 false）。确定性租户规则优先；只有 no-match 且
+  `SOC_TENANT_POLICY_ADVISOR_MODE=llm` 时才调用 reviewed policy Skill。调用结果保存 model、Prompt、Skill、
+  response hash 和精确 E/R/context 引用；调用或校验失败固定 `failed_closed + no_match`。
+- PingAn v2.3 policy pack 当前包含：exact authorized activity 良性真阳性关闭、两个历史精确 rule code
+  转交、canonical HTTP 全非 `200` 忽略、明确 provider 请求/攻击失败忽略。
+  `200` 只表示请求成功，单独不产生 disposition；只有 canonical HTTP `100..599` 参与，工单/Workflow/
+  转发/处置 status 被排除。强制转交优先于非 `200`；明确成功/失陷使忽略规则弃权但不确定性升级，
+  与 `企图/尝试` 一样保留给 Runtime/Policy Skill 结合效果判断。
+- 扫描器、红蓝白队、护网名单、维护窗口、安全软件、业务系统与历史正常行为没有写死在通用 Runtime；
+  分别要求 Governed Context、Confirmed Memory 或 typed Tool Result。策略 Skill 也不能授权动作。
+- 删除固定十告警入口中的 `simulate-reviewed-network-source-block` 和 validation-only automation policy。
+  新 E2E 直接启用 PingAn v2 policy/Skill；没有单独 Automation Policy 时，预期 authorization/execution
+  均为 0。通用自动动作引擎继续由组件测试覆盖；reviewed-Memory `1965802` 实验保留为独立验证证据。
+- 来源、分层归属、开关和审计方法记录在
+  `capabilities/pingan/disposition-policy-extraction.md`。旧 v2.1 十条 live E2E 位于
+  `e2e-ten-pingan-policy-20260811/`：10/10 passed、2 deterministic HTTP-200 escalation、6 completed
+  Policy Skill advice、2 failed-closed、3 escalated + 2 unknown disposition、0 ignored、0 Memory
+  contributor、0 action authorization/execution、0 real external call。0 ignored 是因为没有样本满足完整
+  非 `200` 非生产无效果条件。旧新比较 10/10 input hash 相同，3 条 base verdict 变化只归因于模型重采样，
+  effective verdict 相对各自 base 变化为 0。该结果已标为历史基线，不能把旧
+  `HTTP-200 escalation` 统计当成当前验收。
+- v2.2 已在新目录 `e2e-ten-pingan-policy-v2.2-20260811/` 重跑：10/10 passed；唯一确定性命中为
+  `provider-confirmed-success-escalation`，其余 9 条进入 Policy Skill，形成 3 条 advice、6 条 no-match
+  （2 次 advisor fail-closed）。最终 2 `escalated` + 1 `unknown` disposition，10 四阶段 transition、
+  0 Memory contributor、0 action authorization/execution、0 real external call。固定 cohort 不含
+  canonical HTTP 全非 `200`、明确失败或强制 rule code 样本，相应正反例由组件测试覆盖。与 v2.1 的
+  同输入比较位于 `e2e-ten-pingan-policy-v2.2-comparison-20260811/`；5 条 base verdict 差异只归因于
+  live-model 重采样，每条自身 base 到 effective 的 verdict/review 变化为 0。该结果现为历史基线：
+  v2.3 已删除确定性 provider-success escalation，组件测试已覆盖“成功标签令非 `200` 规则弃权 ->
+  Policy Skill 接管”；完整 v2.3 live 十条尚待显式重跑。
+
 ## 2026-08-11 — Effective decision and governed response automation redesigned
 
 - 将 `AnalysisRun.decision` 固定为 immutable base decision，新增 post-Runtime
@@ -72,7 +108,8 @@
   decision transitions、0 Memory contributor；validation-only policy 对 3 条 NDR case 产生 3 条无 Memory
   automatic authorization 和 3 次 mocked/idempotent execution，真实外部调用 0。首次 timeout/empty
   output 通过 `--resume` 只重试 2 条失败项；同输入旧/新比较显示 3 条 base verdict 重采样、Grounding
-  `+30`、rejected `-2`，未把这些变化错误归因给 Memory/automation。
+  `+30`、rejected `-2`，未把这些变化错误归因给 Memory/automation。该 validation-only 合成业务规则现已
+  从固定十条入口删除，本段仅保留历史记录。
 
 ## 2026-08-11 — Confirmed memory lifecycle and fixed Runtime injection validated
 
@@ -139,7 +176,7 @@
 - 新增 `SocTenantPolicyEvaluationService` 和 generic `PostAnalysisObserver` 接线：主分析事务先提交
   run/summary/review/audit，策略再 best-effort 执行并独立写入 `soc_tenant_policy_decisions`（migration
   `0022`）。策略失败不回滚主分析；analysis idempotent retry 会再次观察并按 decision key 去重。
-- PingAn v1 仅作为 tenant data 位于
+- PingAn v1 当时仅作为 tenant data 位于已被 v2 取代的历史
   `backend/soc_agent/integrations/pingan/policies/tenant-disposition-v1.json`。已抽取 exact authorized activity
   internal non-production credential review 一条影子规则；未复制旧 scanner/account/path/product 静态
   列表，也未复制现有 EX-01/DP-01 的授权处置职责。hostname pattern 只触发

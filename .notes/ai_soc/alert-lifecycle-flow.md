@@ -47,8 +47,13 @@ flowchart TD
     X --> Y["🧑‍💻 CLI / TUI / Web / Metrics<br/>归一化运维"]
 
     E --> F["🔎 ReviewQueue<br/>人工复核入口 / analyst review item"]
-    E -.->|"SOC_AUTOMATION_POLICY_PATH<br/>default off"| A0["⚙️ SocAutomationService<br/>post-Runtime governance"]
-    A0 --> A1["🗃️ DecisionTransition<br/>base -> effective before/after"]
+    E -.->|"SOC_TENANT_POLICY_ENABLED<br/>default off"| TP0["⚙️ Tenant Policy Evaluator<br/>精确规则优先"]
+    TP0 -->|"deterministic no-match + advisor enabled"| TP2["🧠 Reviewed Policy Skill<br/>组合运营语义"]
+    TP0 --> TP1["🗃️ TenantPolicyDecision<br/>独立运营判断"]
+    TP2 --> TP1
+    E -.->|"tenant policy or automation enabled"| A0["⚙️ SocAutomationService<br/>post-Runtime resolver"]
+    TP1 --> A0
+    A0 --> A1["🗃️ DecisionTransition<br/>Base -> Memory -> Tenant -> Effective"]
     A1 --> A2{"🛡️ Versioned Automation Policy<br/>tenant / env / validity / exact rule"}
     A2 -->|"no match"| A3["🚫 No disposition or action"]
     A2 -->|"shadow"| A4["👁️ Proposed lineage only"]
@@ -155,22 +160,29 @@ flowchart TD
    状态迁移后才可进入 bounded context。普通 `M-*` 不直接改判；若确认时另附审核后的 typed decision
    directive，且 future match 的 exact version/score/required facets 全部满足，则只追加 effective-decision
    before/after transition，不改写原 Runtime Decision，也不直接授权动作。
-12. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
+12. 租户运营策略在 Memory 阶段之后形成独立 `TenantPolicyDecision`。精确规则先确定性匹配；仅在
+    no-match 且显式启用时，受版本/hash 约束的 policy Skill 才处理组合语义。PingAn 当前确认语义中
+    canonical `status=200` 只表示请求成功，单独不升级也不忽略；所有 canonical HTTP 事务均非 `200` 或
+    上游明确请求失败时可形成运营忽略。强制转交 rule_code 优先；明确攻击成功/失陷只阻止非 `200` 规则
+    直接忽略，本身不确定性转交，仍由 Runtime/Policy Skill 结合效果研判。`企图/尝试` 同样保留给组合
+    研判。`enforced` 可改变有效复核/disposition，但不改技术 verdict，也不授权动作。
+13. 持久化分析完成后，Normalization Monitor 对 schema/coverage 做旁路检查；它可以创建维护问题，
    但不能改变 verdict、ReviewQueue 或分析成功状态。
-13. 显式 authorization enrichment 把确定性匹配保存为独立记录；不会回写 Runtime decision。
-14. DP-01 只有在 exact + current true-positive 时生成 shadow proposal；proposal 进入调查视图，但仍由
-    人工决定是否关单，系统不会自动应用。
-15. EV-01 不从 close reason 猜结论。它保存显式 primary/sample outcome，用可复现 manifest 防止挑样，
-    再计算 precision、override、sample agreement、freshness 和 fact fan-out。
-16. EV-02 已把 authenticated API/Web、Review TUI 和受门控的 trusted external feedback 接到同一
-    evaluation service；各入口仍必须提供显式结构化标签和幂等身份。
-17. EV-03 从 immutable manifest、proposal、ReviewQueue 和 latest outcomes 派生 reviewer-specific inbox；
-    Web 只能打开 manifest-selected work，并回到 EV-02 写入口，不保存第二套 campaign 状态。
-18. EV-01/DP-01 旧 shadow gate 仍固定 `auto_close_allowed=false`；它与新的通用
+14. 显式 authorization enrichment 把确定性匹配保存为独立记录；不会回写 Runtime decision。
+15. DP-01 只有在 exact + current true-positive 时生成 shadow proposal；proposal 进入调查视图，但仍由
+   人工决定是否关单，系统不会自动应用。
+16. EV-01 不从 close reason 猜结论。它保存显式 primary/sample outcome，用可复现 manifest 防止挑样，
+   再计算 precision、override、sample agreement、freshness 和 fact fan-out。
+17. EV-02 已把 authenticated API/Web、Review TUI 和受门控的 trusted external feedback 接到同一
+   evaluation service；各入口仍必须提供显式结构化标签和幂等身份。
+18. EV-03 从 immutable manifest、proposal、ReviewQueue 和 latest outcomes 派生 reviewer-specific inbox；
+   Web 只能打开 manifest-selected work，并回到 EV-02 写入口，不保存第二套 campaign 状态。
+19. EV-01/DP-01 旧 shadow gate 仍固定 `auto_close_allowed=false`；它与新的通用
    `SocAutomationPolicy` 是两条不同合同，不能把 shadow proposal 误当作已授权动作。
-19. correction、close/note、memory review/retrieval activation、approval lifecycle/action boundary 和 external disposition
+20. correction、close/note、memory review/retrieval activation、approval lifecycle/action boundary 和 external disposition
    都通过 `SocMutationUnitOfWork` 原子写入业务状态与 `soc_mutation_audit_log`；post-Runtime automation
-   使用 migration `0023` 的四类 append-only lineage 表。两类审计互补，不能互相替代。
+   使用 migration `0023` 的四类 append-only lineage 表，migration `0024` 增加租户策略和四阶段索引。
+   两类审计互补，不能互相替代。
 
 Current governed-context boundary / 当前边界：GF-01 已能通过 `SocGovernedContextService` 和
 `soc_governed_context_facts` 保存、审批、暂停、撤销、过期及回放 typed fact versions；AA-01 已能从
@@ -326,11 +338,13 @@ flowchart TD
     B --> E["📋 Base Decision<br/>immutable Runtime result"]
     M["✅ Active Memory<br/>ordinary M-* or typed directive"] --> T{"📎 Directive gates pass?"}
     E --> T
-    T -->|"no / ordinary text"| U["🔁 Effective Decision unchanged"]
-    T -->|"yes"| V["🔁 Effective Decision reinforced / overridden"]
-    T -->|"conflicting overrides"| W["⚠️ Effective Decision conflicted<br/>review required"]
-    U --> P{"🛡️ Automation Policy match?"}
-    V --> P
+    T -->|"no / ordinary text"| U["🔁 Memory Stage unchanged"]
+    T -->|"yes"| V["🔁 Memory Stage reinforced / overridden"]
+    T -->|"conflicting overrides"| W["⚠️ Memory Stage conflicted<br/>review required"]
+    U --> TP{"🛡️ Tenant Policy<br/>deterministic then optional Skill"}
+    V --> TP
+    TP --> F["📋 Effective Decision<br/>technical truth + operational disposition"]
+    F --> P{"🛡️ Automation Policy match?"}
     W --> Q
     P -->|"none / shadow"| Q["🗃️ ReviewQueue or no action"]
     P -->|"human_approval"| H["🛂 Approval required"]
@@ -342,6 +356,11 @@ flowchart TD
 ReviewQueue。受评审的自动策略若要在 `needs_review=true` 时仍对精确动作授权，必须显式匹配该状态并
 记录 `review_required_override_reason`；这不会删除 ReviewQueue 或伪装成人工复核。mock/failed/denied
 调查证据不满足场景所需证据，也不能提高 finding confidence；它们只在调查时间线或 demo 审计中可见。
+
+租户策略是独立的运营判断，不是第二次技术检测。`SOC_TENANT_POLICY_ENABLED` 默认关闭；开启后必须
+固定 policy/environment，策略 Skill 仍需单独启用。持久化 lineage 固定包含 Base、Memory、Tenant
+Policy、Effective 四个阶段。没有独立 `SocAutomationPolicy` 时，即使 PingAn enforced policy 形成
+`ignored`、`escalated` 或 `closed_benign_true_positive`，也不会产生封禁、隔离或抑制授权。
 
 人工 correction 的数字是未校准 confirmation strength，来源固定为 `human_confirmation`；只有通过
 外部状态 trust/mapping/target gate 后由 service 内部调用的 correction 才是 `external_disposition`。
@@ -376,6 +395,8 @@ flowchart LR
     O["⚙️ SocMemoryService"] --> MTX
     MTX --> P["🗃️ soc_memory_records<br/>confirmed but retrieval gated"]
     P --> PF["🗃️ soc_memory_record_facets<br/>full-corpus relevance index"]
+    TP["⚙️ SocTenantPolicyEvaluationService<br/>post-Runtime"] --> TPD["🗃️ soc_tenant_policy_decisions<br/>deterministic / policy Skill"]
+    TPD --> AT
     AT["⚙️ SocAutomationService<br/>post-Runtime"] --> DT["🗃️ soc_decision_transitions"]
     AT --> DS["🗃️ soc_disposition_transitions"]
     AT --> AA["🗃️ soc_action_authorizations"]
@@ -401,7 +422,8 @@ flowchart LR
 | `soc_memory_candidates` | Reviewable knowledge proposals | 候选记忆，默认 `pending_review`，不影响 runtime decision |
 | `soc_memory_records` | Confirmed memory records | 已确认记忆，默认不可检索；符合 activation/有效期/复核条件后可进入 `M-*`；普通文本只作推理上下文，可选 typed directive 受额外 gate 约束 |
 | `soc_memory_record_facets` | Memory relevance index | normalized exact facet 倒排索引；先跨完整 eligible corpus 召回，再进入 bounded scoring/top-K |
-| `soc_decision_transitions` | Base/effective decision lineage | 保存 before/after、transition kind、Memory/证据/模型/Skill/策略 contributor 与 policy hash |
+| `soc_tenant_policy_decisions` | Tenant operational decisions | 保存确定性规则或 policy Skill 的独立决策、E/R/context 引用及 model/prompt/Skill provenance；不改技术检测真值 |
+| `soc_decision_transitions` | Four-stage effective lineage | 保存 Base/Memory/Tenant/Effective、before/after、最终 disposition、贡献者与 policy hash |
 | `soc_disposition_transitions` | Operational disposition lineage | shadow 为 proposed，enforced 为 applied；不覆盖 detection truth |
 | `soc_action_authorizations` | Independent action authority | 保存 human/automatic mode、exact target/adapter、原因、有效期和 selected rule；Memory 可有可无 |
 | `soc_action_executions` | External attempts | 保存 attempt、稳定幂等键、external request ID、前后状态以及 retryable/terminal/skipped 结果 |
@@ -666,8 +688,10 @@ Approval flow 当前做什么：
 
 ```mermaid
 flowchart TD
-    A["📋 Persisted Base Decision"] --> B["🔁 SocDecisionTransition<br/>Memory directive optional"]
-    B --> C{"🛡️ Strict policy match"}
+    A["📋 Persisted Base Decision"] --> M["✅ Memory Stage<br/>directive optional"]
+    M --> T["🛡️ Tenant Policy Stage<br/>deterministic / policy Skill"]
+    T --> B["🔁 Four-stage DecisionTransition<br/>effective decision + disposition"]
+    B --> C{"🛡️ Separate Automation Policy match"}
     C -->|"none"| N["🚫 no action"]
     C -->|"shadow"| S["👁️ shadow-only authorization record"]
     C -->|"human_approval"| H["🗃️ requires_human authorization<br/>当前不自动桥接 inbox"]
@@ -685,6 +709,8 @@ flowchart TD
   request；不能把两张表当成已经打通。
 - `automatic_policy` 不要求 Memory。若 effective decision 仍 `needs_review=true`，规则必须显式匹配并
   填写 `review_required_override_reason`；ReviewQueue 保留。
+- Tenant Policy 可以单独输出运营 disposition，但不具备 action authority。缺少
+  `SOC_AUTOMATION_POLICY_PATH` 时四阶段 lineage 仍会保存，authorization/execution 必须为 0。
 - 自动规则还必须锁定 model、Prompt 和 Decision Policy 版本；replay 只重算留痕，固定拒绝外部自动动作。
 - Memory override 冲突时不选择任何 rule。目标缺失、policy/env/tenant/validity 不符、adapter 未注册或
   不具备 execute/write-or-destructive/idempotency contract 时都 fail closed。

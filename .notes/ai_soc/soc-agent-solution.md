@@ -99,8 +99,9 @@ write confirmed memory, grant action authority, or execute side-effect actions b
 | 分析运行 | Analysis Run | `AnalysisRun` | 一次 alert 分析的完整记录、trace、result |
 | 决策审计 | Decision Audit | `DecisionAuditRecord` | analyze/replay/correct 的判定沿革和证据策略摘要，不替代完整 run |
 | 基础研判 | Base Detection Decision | `AnalysisRun.decision` | 固定 Runtime 对当前告警形成的不可变基础判断 |
-| 有效研判 | Effective Detection Decision | `SocDecisionTransitionRecord.after` | 在基础判断上应用符合条件的受治理 typed Memory 指令后的当前有效判断 |
-| 决策迁移 | Decision Transition | `SocDecisionTransitionRecord` | 追加保存 before/after、Memory/证据/模型/策略 contributor 与 hash |
+| 租户策略判断 | Tenant Policy Decision | `TenantPolicyDecision` | 完整 Runtime/Memory 之后的独立运营判断；确定性规则优先，可选 bounded Policy Skill |
+| 有效研判 | Effective Decision | `SocDecisionTransitionRecord.after` + `effective_disposition` | 汇总 Base、Memory、Tenant Policy 后的当前有效技术判断、复核要求与运营处置 |
+| 决策迁移 | Decision Transition | `SocDecisionTransitionRecord` | 追加保存 Base/Memory/Tenant/Effective 四阶段、before/after、contributors 与 hash |
 | 动作授权 | Action Authorization | `SocActionAuthorizationRecord` | 独立判断精确 route/action/target/adapter 是否可执行；不等同于 verdict 或 Memory |
 | 动作执行 | Action Execution | `SocActionExecutionRecord` | 保存真实调用 attempt、幂等键、外部 request ID、前后状态和错误 |
 | 业务变更审计 | Mutation Audit | `SocMutationAuditRecord` | L3 服务命令的追加式审计；记录 actor、来源、原因、幂等和有界结果，不保存原始敏感 payload |
@@ -1338,15 +1339,15 @@ operational response. The product must support that rule without teaching the ge
 ```mermaid
 flowchart LR
     A["🧾 Vendor Alert<br/>厂商告警"] --> R["⚙️ Full SOC Runtime<br/>完整技术研判"]
-    R --> DB["💾 Analysis Persistence<br/>run + summary + review + audit"]
-    DB --> O["👁️ PostAnalysisObserver<br/>持久化后观察器"]
-    O --> P["📋 TenantDispositionPolicy<br/>租户策略版本/作用域/有效期"]
-    O --> G["🛡️ AuthorizedActivityMatcher<br/>可选授权事实匹配"]
-    P --> E["⚖️ Generic Policy Evaluator<br/>通用确定性评估器"]
-    G --> E
-    E --> D["🗃️ TenantPolicyDecision<br/>独立 append-only 影子决策"]
-    D --> H["👤 Analyst Review<br/>人工确认处置"]
-    D -. "never mutates" .-> R
+    R --> B["📋 Base Decision<br/>不可变技术判断"]
+    B --> M["✅ Memory Stage<br/>可选 reviewed directive"]
+    M --> E["⚖️ Deterministic Tenant Rules<br/>精确规则优先"]
+    E -->|matched| D["🗃️ TenantPolicyDecision"]
+    E -->|no match + enabled| S["🧠 Reviewed Policy Skill<br/>组合运营语义"]
+    S --> D
+    D --> F["📋 Effective Decision<br/>Base / Memory / Tenant / Effective"]
+    F --> AP["🛡️ Separate Automation Policy<br/>独立动作授权"]
+    D -. "never rewrites detection truth" .-> B
 ```
 
 Required separation:
@@ -1363,46 +1364,62 @@ Required separation:
   conditions, environment/asset scope, validity, owner/reviewer, reason, rollout mode and audit
   metadata. PingAn field aliases remain in its adapter or tenant mapping, never in generic policy
   evaluation code.
-- A matched non-production policy may produce `operational_disposition=nonproduction_exempt` or an
-  equivalent canonical recommendation while preserving `detection_truth=true_positive` when the
-  detection is real. It must not relabel the event as `false_positive` merely because the target is
-  non-production.
+- A matched non-production policy may produce canonical `ignored` or
+  `closed_benign_true_positive` disposition while preserving `detection_truth=true_positive` when
+  the detection is real. It must not relabel the event as `false_positive` merely because the target
+  is non-production.
 - Authorization and non-production exemption are separate policies. A scoped red-team or automation
   authorization proves an activity was allowed; an environment policy expresses how that tenant
   operates alerts for a confirmed environment.
-- Initial rollout is recommendation/shadow-only. Auto-close remains disabled until versioned replay,
-  override, sampled-review and rollback gates pass. Other tenants without this policy keep the
-  generic review behavior.
+- Policy activation is an explicit operator decision. `shadow` only records a proposal; reviewed
+  `enforced` policy may change review/disposition in the post-Runtime effective stage. Neither mode
+  grants an external-action permission. Other tenants without an enabled policy keep the generic
+  review behavior.
 
 Current implementation (`soc.tenant_disposition_policy.v1` / `soc.tenant_policy_decision.v1`):
 
-- Generic contracts, evaluator and repository live in `backend/soc_agent/contracts/tenant_policy.py`,
-  `tenant_policy/`, and `core/tenant_policy.py`; migration `0022_tenant_policy_decisions` stores one
-  immutable decision per `run + exact policy content hash`.
+- Generic contracts, evaluator/advisor and repository live in
+  `backend/soc_agent/contracts/tenant_policy.py`, `tenant_policy/`, and `core/tenant_policy.py`;
+  migration `0022` stores immutable policy decisions and migration `0024` adds indexed policy mode,
+  review effect and four-stage effective-decision lineage.
 - `SocAnalysisService` invokes generic `PostAnalysisObserver` instances only after the main
   run/summary/review/audit transaction. Observer failure is logged and cannot roll back or fail the
   already-persisted analysis. Idempotent analysis retries re-run the observer and deduplicate by the
   same decision key.
-- Operators opt in with `SOC_TENANT_DISPOSITION_POLICY_PATH`,
-  `SOC_TENANT_POLICY_ENVIRONMENT`, and optional `SOC_TENANT_POLICY_EVENT_TIMEZONE`. No configured
-  policy means no evaluation and no PingAn import in generic composition.
-- PingAn v1 is isolated as data at
-  `backend/soc_agent/integrations/pingan/policies/tenant-disposition-v1.json`. Its initial rule covers
-  only internal non-production credential-alert review: a hostname pattern can recommend no automated
-  response plus explicit authorization checks, but cannot confirm the environment or propose an
-  exempt/benign disposition. Exact authorized activity remains on the existing
-  `AuthorizationEnrichmentRecord -> SocDispositionProposalRecord` path so the tenant policy cannot
-  bypass persisted fact, open-queue, and true-positive lineage.
+- Operators must explicitly set `SOC_TENANT_POLICY_ENABLED=true`, policy path and environment.
+  `SOC_TENANT_POLICY_ADVISOR_MODE=llm` additionally requires a reviewed `SKILL.md`; model selection is
+  independently overridable. No enabled policy means no tenant decision and no PingAn import in
+  generic composition.
+- PingAn v2 is isolated under `backend/soc_agent/integrations/pingan/`. Exact authorization, two exact
+  old rule codes, explicit provider failure, and canonical all-non-`200` HTTP handling are deterministic
+  tenant rules. `200` means request success only and produces no disposition by itself. Only canonical
+  HTTP `100..599` values participate; workflow/ticket/forwarding/disposition status fields are excluded.
+  Forced-transfer rules outrank non-`200` ignore. Provider success/compromise labels make non-`200`
+  handling abstain but do not deterministically escalate; success, attempt-only and response-body
+  semantics remain bounded Policy-Skill reasoning.
+- Scanner rosters, red/blue/white-team identity, maintenance windows, software paths and business
+  behavior are not copied into generic rules. They must arrive as exact Governed Context, confirmed
+  Memory or typed tool results with scope, event-time validity and source lineage.
 - Policy version selection uses timezone-aware alert event time. A configured timezone may localize
   a legacy naive timestamp and records `alert_event_time_timezone_assumed`; no implicit timezone is
   guessed. Bounded policies without event time do not apply.
-- `soc tenant-policy evaluate|list|get` provides replay and inspection. The generated validation under
-  `backend/.deer-flow/soc-runtime-validation/tenant-policy-shadow/` proves on real saved Runtime
-  results that detection truth and the Runtime object remain unchanged.
+- Deterministic no-match may invoke the bounded advisor. Its output is strict JSON with exact
+  `E/R/S/A/M/C/T` references, and persistence records model, Prompt, Skill and response hashes. Any
+  call/schema/reference failure becomes `failed_closed + no_match` and preserves review.
+- A separate `SocAutomationPolicy` is still required for suppression, blocking or isolation. With no
+  automation policy, tenant disposition may be applied and audited but action authorization and
+  execution remain zero.
+- `soc tenant-policy evaluate|list|get` and `soc automation lineage` provide replay and four-stage
+  inspection. The fixed ten-alert E2E uses the real PingAn policy/Skill and no longer installs a fake
+  business blocking rule.
 
 The intended user-visible conclusion keeps both dimensions explicit, for example: “Weak-password
-activity was detected; the target is a confirmed PingAn staging asset; PingAn policy v1 recommends no
-operational action.” This is a governed policy result, not LLM memory or a universal security fact.
+activity was detected; all canonical HTTP transactions returned non-200, no forced-transfer rule
+matched, and no provider success/compromise assertion required combination analysis; PingAn policy v2
+recommends ignore and clears per-alert review.” The base
+technical decision remains available beside this operational decision. Source extraction and the
+exact `200`/non-`200` boundary are recorded in
+`capabilities/pingan/disposition-policy-extraction.md`.
 
 ---
 
@@ -1440,8 +1457,9 @@ not require rewriting core contracts.
 | `GovernedContextFact` | Shared typed fact envelope and lifecycle | GF-01 implemented stable contract |
 | `AuthorizedActivityPayload` | Time-, scope- and source-bounded authorized activity definition | GF-01 storage + AA-01 deterministic matcher implemented |
 | `SecurityExerciseCampaignFact` | Campaign scope and Rules of Engagement | Planned typed fact |
-| `TenantDispositionPolicy` | Versioned tenant-specific operating rule over governed context and detection truth | Implemented v1; generic JSON evaluator, tenant-owned data, shadow-only |
-| `TenantPolicyDecision` | Auditable match/no-match result and operational recommendation | Implemented v1 + migration `0022`; cannot mutate detection truth, ReviewQueue, action or memory |
+| `TenantDispositionPolicy` | Versioned tenant-specific operating rule over governed context and detection truth | Contract v1; default-off generic evaluator, tenant-owned deterministic rules, reviewed shadow/enforced mode |
+| `TenantPolicyAdvice` | Strict bounded output of an optional tenant policy Skill | Implemented v1; exact E/R/context refs, no detection or action authority |
+| `TenantPolicyDecision` | Auditable deterministic/advisor match or no-match operational decision | Implemented v1 + migrations `0022/0024`; enforced may affect effective review/disposition, never detection truth/action/memory |
 | `ExerciseParticipantFact` | Event-time participant role and identifier mapping | Planned typed fact |
 | `ParticipantAttributionResult` | Deterministic participant identity resolution | Planned typed result |
 | `AuthorizationQuery` | Vendor-neutral event-time matching input | AA-01 implemented stable contract |
@@ -1462,7 +1480,7 @@ not require rewriting core contracts.
 | `SocMemoryRecord` | Confirmed memory plus optional reviewer-authored typed directive | Stable retrieval policy; free text has no deterministic authority |
 | `SocMemoryDecisionDirective` | Explicit reviewed reinforce/override effect for a sufficiently matched active Memory | Stable v1; never inferred from text and never authorizes action |
 | `SocAutomationPolicy` | Server-owned tenant/environment response policy | Strict v1; default-off, shadow/enforced, reviewed validity and exact rules |
-| `SocDecisionTransitionRecord` | Immutable base/effective decision before/after lineage | Implemented v1 + migration `0023` |
+| `SocDecisionTransitionRecord` | Immutable Base/Memory/Tenant/Effective stage lineage | Implemented v2 + migrations `0023/0024` |
 | `SocDispositionTransitionRecord` | Append-only operational disposition transition | Implemented v1 + migration `0023` |
 | `SocActionAuthorizationRecord` | Human or automatic authorization for one exact action target | Implemented v1 + migration `0023`; Memory optional |
 | `SocActionExecutionRecord` | External attempt, idempotency, result and before/after state | Implemented v1 + migration `0023` |

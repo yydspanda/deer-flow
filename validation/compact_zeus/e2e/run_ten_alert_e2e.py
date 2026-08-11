@@ -39,14 +39,10 @@ from validation.compact_zeus.e2e.knowledge_review import (  # noqa: E402
     compile_knowledge_review_package,
     render_knowledge_review_markdown,
 )
-from validation.compact_zeus.e2e.automation_simulation import (  # noqa: E402
-    DEFAULT_SIMULATION_POLICY,
-    run_governed_automation_simulation,
-)
 
 CASES_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_cases.v1"
-REPORT_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_report.v2"
-CASE_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_case.v2"
+REPORT_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_report.v3"
+CASE_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_case.v3"
 RUN_MANIFEST_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_run.v1"
 DEFAULT_CASES = Path(__file__).with_name("ten-alert-cases.json")
 DEFAULT_SOURCE = (
@@ -57,7 +53,10 @@ RUNTIME_BATCH_RUNNER = (
     ROOT / "validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py"
 )
 PINGAN_POLICY = (
-    BACKEND_ROOT / "soc_agent/integrations/pingan/policies/tenant-disposition-v1.json"
+    BACKEND_ROOT / "soc_agent/integrations/pingan/policies/tenant-disposition-v2.json"
+)
+PINGAN_POLICY_SKILL = (
+    BACKEND_ROOT / "soc_agent/integrations/pingan/policy_skills/disposition/SKILL.md"
 )
 ENRICHMENT_COMPOSITION = (
     BACKEND_ROOT / "samples/enrichment/pingan-external-simulation.yaml"
@@ -126,15 +125,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--confirm-live", action="store_true")
     parser.add_argument("--confirm-investigation", action="store_true")
-    parser.add_argument(
-        "--governed-automation-simulation",
-        action="store_true",
-        help=(
-            "Evaluate the real post-Runtime automation service with the tracked "
-            "E2E policy and an isolated mocked response adapter"
-        ),
-    )
-    parser.add_argument("--confirm-automation-simulation", action="store_true")
     output_mode = parser.add_mutually_exclusive_group()
     output_mode.add_argument("--resume", action="store_true")
     output_mode.add_argument(
@@ -263,7 +253,6 @@ def build_dossier(
     cases: Sequence[CaseSpec],
     source: Path,
     model_name: str,
-    governed_automation_simulation: bool = False,
 ) -> dict[str, Any]:
     records = _load_batch_records(paths.batch)
     missing = [case.alert_id for case in cases if case.alert_id not in records]
@@ -293,25 +282,6 @@ def build_dossier(
     )
     case_results: list[dict[str, Any]] = []
     try:
-        if governed_automation_simulation:
-            simulation_runs = []
-            for case in cases:
-                run_payload = _required_mapping(
-                    records[case.alert_id],
-                    "analysis_run",
-                )
-                run_id = _required_text(run_payload, "run_id")
-                persisted_run = repository.get_run(run_id)
-                if persisted_run is None:
-                    raise ValueError(
-                        f"persisted run is missing for alert {case.alert_id}"
-                    )
-                simulation_runs.append(persisted_run)
-            run_governed_automation_simulation(
-                simulation_runs,
-                automation_repository=repository,
-                memory_repository=repository,
-            )
         _ensure_private_directory(paths.cases)
         for case in cases:
             result = _build_case_dossier(
@@ -320,7 +290,6 @@ def build_dossier(
                 repository=repository,
                 review_service=review_service,
                 output_dir=paths.cases / case.alert_id,
-                automation_expected=governed_automation_simulation,
             )
             case_results.append(result)
     finally:
@@ -345,6 +314,33 @@ def build_dossier(
     source_types = Counter(
         str(_mapping(item.get("source")).get("source_type") or "unknown")
         for item in case_results
+    )
+    tenant_policy_items = [_mapping(item.get("tenant_policy")) for item in case_results]
+    tenant_policy_sources = Counter(
+        str(item.get("decision_source") or "unavailable")
+        for item in tenant_policy_items
+    )
+    tenant_policy_statuses = Counter(
+        str(item.get("evaluation_status") or "unavailable")
+        for item in tenant_policy_items
+    )
+    tenant_policy_rules = Counter(
+        str(item.get("selected_rule_id"))
+        for item in tenant_policy_items
+        if item.get("selected_rule_id")
+    )
+    tenant_policy_dispositions = Counter(
+        str(item.get("recommended_disposition"))
+        for item in tenant_policy_items
+        if item.get("recommended_disposition")
+    )
+    tenant_policy_review_effects = Counter(
+        str(item.get("review_effect") or "unavailable") for item in tenant_policy_items
+    )
+    tenant_policy_advisor_statuses = Counter(
+        str(advisor.get("status"))
+        for item in tenant_policy_items
+        if (advisor := _mapping(item.get("advisor"))).get("status")
     )
     automation_items = [_mapping(item.get("automation")) for item in case_results]
     transition_kinds = Counter(
@@ -382,15 +378,16 @@ def build_dossier(
             "authoritative_path": "ingress -> fixed Runtime -> persisted decision -> ReviewQueue",
             "acceptance_semantics": "structural and safety acceptance; not a model-accuracy claim",
             "investigation": "simulated read-only PingAn MCP providers",
-            "tenant_policy": "shadow-only post-Runtime advice",
+            "tenant_policy": (
+                "default-off PingAn deterministic rules plus bounded LLM policy Skill; "
+                "enabled explicitly for this validation"
+            ),
             "lead_agent": "bounded context projection only; no advisory chat is treated as Runtime truth",
             "knowledge_candidates": "human-review package only; no automatic memory, Skill, adapter, or policy mutation",
             "governed_automation": (
-                "tracked policy plus validation-only mocked response adapter"
-                if governed_automation_simulation
-                else "not evaluated"
+                "effective-decision lineage only; no synthetic action policy or "
+                "response adapter is installed"
             ),
-            "automation_simulation_performs_real_external_calls": False,
             "mocked_provider_results_are_real_integration_evidence": False,
         },
         "input": {
@@ -419,6 +416,24 @@ def build_dossier(
             "tenant_policy_decision_count": sum(
                 int(_mapping(item.get("tenant_policy")).get("decision_count") or 0)
                 for item in case_results
+            ),
+            "tenant_policy_decision_source_counts": dict(
+                sorted(tenant_policy_sources.items())
+            ),
+            "tenant_policy_evaluation_status_counts": dict(
+                sorted(tenant_policy_statuses.items())
+            ),
+            "tenant_policy_selected_rule_counts": dict(
+                sorted(tenant_policy_rules.items())
+            ),
+            "tenant_policy_disposition_counts": dict(
+                sorted(tenant_policy_dispositions.items())
+            ),
+            "tenant_policy_review_effect_counts": dict(
+                sorted(tenant_policy_review_effects.items())
+            ),
+            "tenant_policy_advisor_status_counts": dict(
+                sorted(tenant_policy_advisor_statuses.items())
             ),
             "investigation_evidence_count": sum(
                 int(_mapping(item.get("investigation")).get("evidence_count") or 0)
@@ -508,7 +523,6 @@ def _build_case_dossier(
     repository: SqlAlchemyAlertRepository,
     review_service: SocReviewService,
     output_dir: Path,
-    automation_expected: bool,
 ) -> dict[str, Any]:
     _ensure_private_directory(output_dir)
     run_payload = _required_mapping(record, "analysis_run")
@@ -636,7 +650,7 @@ def _build_case_dossier(
         "review_queue_consistent": (
             (queue_item is not None) == bool(decision.get("needs_review"))
         ),
-        "tenant_policy_shadow_recorded": len(policy_decisions) == 1,
+        "tenant_policy_decision_recorded": len(policy_decisions) == 1,
         "investigation_workflow_recorded": bool(record.get("investigation_workflow")),
         "investigation_did_not_mutate_runtime": _mapping(
             record.get("investigation_shadow_report")
@@ -647,12 +661,10 @@ def _build_case_dossier(
         ),
         "base_runtime_automation_guarded": decision.get("automation_allowed") is False,
         "governed_decision_transition_recorded": (
-            not automation_expected or len(decision_transition_payloads) == 1
+            len(decision_transition_payloads) == 1
         ),
-        "automation_simulation_executions_are_mocked": (
-            not action_execution_payloads
-            or mocked_execution_count == len(action_execution_payloads)
-        ),
+        "no_synthetic_action_authorization": not action_authorization_payloads,
+        "no_synthetic_action_execution": not action_execution_payloads,
     }
     failed_checks = sorted(name for name, passed in checks.items() if not passed)
     primary_scenario = _primary_scenario(analysis)
@@ -687,12 +699,26 @@ def _build_case_dossier(
         "review_reasons": decision.get("review_reasons"),
     }
     automation_summary = {
-        "simulation_enabled": automation_expected,
-        "simulation_policy": (
-            _display_path(DEFAULT_SIMULATION_POLICY) if automation_expected else None
-        ),
+        "simulation_enabled": False,
+        "simulation_policy": None,
         "decision_transition_count": len(decision_transition_payloads),
         "decision_transition_kind": latest_decision_transition.get("transition_kind"),
+        "decision_stages": latest_decision_transition.get("stages") or [],
+        "memory_stage": _decision_stage(
+            latest_decision_transition,
+            "memory",
+        ),
+        "tenant_policy_stage": _decision_stage(
+            latest_decision_transition,
+            "tenant_policy",
+        ),
+        "effective_stage": _decision_stage(
+            latest_decision_transition,
+            "effective",
+        ),
+        "effective_disposition": latest_decision_transition.get(
+            "effective_disposition"
+        ),
         "memory_contributor_count": len(memory_contributors),
         "effective_decision_changed": bool(
             latest_decision_transition
@@ -830,6 +856,7 @@ def _build_case_dossier(
                 "analysis_run_decision_mutated": False,
                 "memory_is_action_authority": False,
                 "automatic_policy_can_authorize_without_memory": True,
+                "synthetic_automation_policy_installed": False,
                 "simulation_external_calls_performed": 0,
             },
         },
@@ -927,10 +954,48 @@ def _policy_conclusion(decisions: Sequence[Mapping[str, Any]]) -> dict[str, Any]
     decision = decisions[0]
     return {
         "evaluation_status": decision.get("evaluation_status"),
+        "decision_source": decision.get("decision_source"),
         "selected_rule_id": decision.get("selected_rule_id"),
+        "policy_mode": decision.get("policy_mode"),
         "response_posture": decision.get("response_posture"),
         "recommended_disposition": decision.get("recommended_disposition"),
+        "review_effect": decision.get("review_effect"),
+        "auto_apply_allowed": decision.get("auto_apply_allowed"),
         "shadow_only": decision.get("shadow_only"),
+        "advisor": _advisor_conclusion(decision),
+    }
+
+
+def _decision_stage(
+    transition: Mapping[str, Any],
+    stage_name: str,
+) -> dict[str, Any] | None:
+    for item in transition.get("stages") or []:
+        stage = _mapping(item)
+        if stage.get("stage") == stage_name:
+            return stage
+    return None
+
+
+def _advisor_conclusion(decision: Mapping[str, Any]) -> dict[str, Any] | None:
+    provenance = _mapping(decision.get("advisor_provenance"))
+    advice = _mapping(decision.get("advisor_advice"))
+    if not provenance and not advice:
+        return None
+    return {
+        "status": provenance.get("status"),
+        "model_name": provenance.get("model_name"),
+        "prompt_version": provenance.get("prompt_version"),
+        "prompt_hash": provenance.get("prompt_hash"),
+        "skill_name": provenance.get("skill_name"),
+        "skill_version": provenance.get("skill_version"),
+        "skill_hash": provenance.get("skill_hash"),
+        "repair_applied": provenance.get("repair_applied"),
+        "error_code": provenance.get("error_code"),
+        "policy_signal_keys": advice.get("policy_signal_keys") or [],
+        "evidence_refs": advice.get("evidence_refs") or [],
+        "reasoning_refs": advice.get("reasoning_refs") or [],
+        "context_refs": advice.get("context_refs") or [],
     }
 
 
@@ -1007,10 +1072,17 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
             f"{summary.get('mocked_action_execution_count', 0)} mocked executions, "
             "0 real external calls"
         ),
+        (
+            "- PingAn policy decisions: "
+            f"sources={summary.get('tenant_policy_decision_source_counts', {})}, "
+            f"rules={summary.get('tenant_policy_selected_rule_counts', {})}, "
+            f"advisor={summary.get('tenant_policy_advisor_status_counts', {})}, "
+            f"dispositions={summary.get('tenant_policy_disposition_counts', {})}"
+        ),
         f"- Confirmed Memory contributors: {summary.get('memory_contributor_count', 0)}",
         "",
-        "| Alert | Source | Topic | Primary scenario | Base -> Effective | Confidence | Evidence | Automation | Queue | Quality | Status |",
-        "| --- | --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- |",
+        "| Alert | Source | Topic | Primary scenario | Base -> Effective | Confidence | Evidence | PingAn policy | Action | Queue | Quality | Status |",
+        "| --- | --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- |",
     ]
     for item in report.get("cases") or []:
         if not isinstance(item, Mapping):
@@ -1023,6 +1095,10 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
         base_decision = _mapping(conclusion.get("base_runtime_decision"))
         effective_decision = _mapping(conclusion.get("effective_decision"))
         automation = _mapping(item.get("automation"))
+        tenant_policy = _mapping(item.get("tenant_policy"))
+        tenant_policy_label = tenant_policy.get("selected_rule_id") or (
+            f"{tenant_policy.get('decision_source')}:{tenant_policy.get('evaluation_status')}"
+        )
         execution_statuses = automation.get("action_execution_statuses") or []
         automation_label = (
             ", ".join(str(value) for value in execution_statuses)
@@ -1046,6 +1122,7 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
                         f"{grounding.get('grounded_count', 0)} grounded / "
                         f"{grounding.get('ungrounded_count', 0)} rejected"
                     ),
+                    _md(tenant_policy_label),
                     _md(automation_label),
                     _md(review.get("priority") or "none"),
                     _md(item.get("quality_status")),
@@ -1072,12 +1149,21 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
 
 def _execution_environment(python_executable: Path) -> dict[str, str]:
     env = os.environ.copy()
+    for key in (
+        "SOC_AUTOMATION_POLICY_PATH",
+        "SOC_AUTOMATION_ENVIRONMENT",
+        "SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS",
+    ):
+        env.pop(key, None)
     env.update(
         {
             "SOC_LLM_SENSITIVE_EVIDENCE_MODE": "full",
+            "SOC_TENANT_POLICY_ENABLED": "true",
             "SOC_TENANT_DISPOSITION_POLICY_PATH": str(PINGAN_POLICY),
             "SOC_TENANT_POLICY_ENVIRONMENT": "dev",
             "SOC_TENANT_POLICY_EVENT_TIMEZONE": "Asia/Shanghai",
+            "SOC_TENANT_POLICY_ADVISOR_MODE": "llm",
+            "SOC_TENANT_POLICY_SKILL_PATH": str(PINGAN_POLICY_SKILL),
             "SOC_PINGAN_ASSET_MCP_PYTHON": str(python_executable),
             "SOC_PINGAN_ASSET_MCP_SERVER": str(
                 BACKEND_ROOT / "scripts/soc_pingan_asset_mcp_server.py"
@@ -1117,7 +1203,6 @@ def _write_run_manifest(
     model_name: str,
     batch_command: Sequence[str],
     report: Mapping[str, Any],
-    governed_automation_simulation: bool,
 ) -> None:
     payload = {
         "schema_version": RUN_MANIFEST_SCHEMA_VERSION,
@@ -1135,17 +1220,13 @@ def _write_run_manifest(
         "may_contain_source_secrets": True,
         "contains_sensitive_alert_payloads": True,
         "provider_mode": "simulated_read_only",
-        "governed_automation_simulation": governed_automation_simulation,
-        "automation_simulation_policy": (
-            _display_path(DEFAULT_SIMULATION_POLICY)
-            if governed_automation_simulation
-            else None
-        ),
-        "automation_simulation_policy_sha256": (
-            _sha256_file(DEFAULT_SIMULATION_POLICY)
-            if governed_automation_simulation
-            else None
-        ),
+        "tenant_policy_enabled": True,
+        "tenant_policy": _display_path(PINGAN_POLICY),
+        "tenant_policy_sha256": _sha256_file(PINGAN_POLICY),
+        "tenant_policy_advisor_mode": "llm",
+        "tenant_policy_skill": _display_path(PINGAN_POLICY_SKILL),
+        "tenant_policy_skill_sha256": _sha256_file(PINGAN_POLICY_SKILL),
+        "synthetic_automation_policy_installed": False,
         "real_external_action_call_count": 0,
     }
     _write_json(paths.run_manifest, payload)
@@ -1248,23 +1329,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError(
                 "--execute requires --confirm-live and --confirm-investigation"
             )
-        if (
-            args.execute
-            and args.governed_automation_simulation
-            and not args.confirm_automation_simulation
-        ):
-            raise ValueError(
-                "--governed-automation-simulation requires "
-                "--confirm-automation-simulation"
-            )
-        if (
-            args.confirm_automation_simulation
-            and not args.governed_automation_simulation
-        ):
-            raise ValueError(
-                "--confirm-automation-simulation requires "
-                "--governed-automation-simulation"
-            )
         cases_manifest, cases = load_case_manifest(cases_path)
         paths = build_paths(args.output_root)
         batch_command = build_batch_command(
@@ -1288,16 +1352,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "alert_ids": [case.alert_id for case in cases],
                         "excluded": cases_manifest.get("excluded"),
                         "batch_command": list(batch_command),
-                        "live_model_call_count": len(cases),
+                        "runtime_live_model_call_count": len(cases),
+                        "maximum_policy_advisor_call_count": len(cases),
+                        "maximum_total_live_model_call_count": len(cases) * 2,
                         "provider_mode": "simulated_read_only",
-                        "governed_automation_simulation": (
-                            args.governed_automation_simulation
-                        ),
-                        "automation_simulation_policy": (
-                            _display_path(DEFAULT_SIMULATION_POLICY)
-                            if args.governed_automation_simulation
-                            else None
-                        ),
+                        "tenant_policy": _display_path(PINGAN_POLICY),
+                        "tenant_policy_skill": _display_path(PINGAN_POLICY_SKILL),
+                        "synthetic_automation_policy_installed": False,
                         "real_external_action_call_count": 0,
                     },
                     ensure_ascii=False,
@@ -1329,7 +1390,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             cases=cases,
             source=source,
             model_name=args.model_name,
-            governed_automation_simulation=(args.governed_automation_simulation),
         )
         _write_run_manifest(
             paths=paths,
@@ -1338,7 +1398,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             model_name=args.model_name,
             batch_command=batch_command,
             report=report,
-            governed_automation_simulation=(args.governed_automation_simulation),
         )
         print(
             json.dumps(

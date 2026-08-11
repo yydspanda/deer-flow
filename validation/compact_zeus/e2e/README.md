@@ -25,8 +25,9 @@ backend/.venv/bin/python \
   validation/compact_zeus/e2e/run_ten_alert_e2e.py
 ```
 
-计划必须显示 10 个固定 ID、`deepseek-v4-flash`、10 次模型调用和
-`simulated_read_only` Provider。
+计划必须显示 10 个固定 ID、`deepseek-v4-flash`、10 次 Runtime 模型调用、最多 10 次
+PingAn Policy Skill 调用和 `simulated_read_only` Provider。精确确定性策略命中的告警不会再调用
+Policy Skill，因此实际总调用数位于 10 到 20 之间。
 
 ## Execute
 
@@ -38,22 +39,10 @@ backend/.venv/bin/python \
   --confirm-investigation
 ```
 
-要同时验证 post-Runtime effective decision、无 Memory 的 automatic policy authorization
-和幂等执行留痕，使用隔离模拟开关：
-
-```bash
-backend/.venv/bin/python \
-  validation/compact_zeus/e2e/run_ten_alert_e2e.py \
-  --output-root backend/.deer-flow/soc-validation/e2e-ten-governed-current \
-  --execute \
-  --confirm-live \
-  --confirm-investigation \
-  --governed-automation-simulation \
-  --confirm-automation-simulation
-```
-
-该模式调用真实 `SocAutomationService`，但 action adapter 只存在于本验证模块；其所有成功
-结果都必须带 `mocked=true`、`provider_mode=e2e_simulation`，真实外部调用数固定为 0。
+该入口始终验证 `Base -> Memory -> PingAn Policy -> Effective` 四阶段留痕。十条业务验收不再安装
+`simulate-reviewed-network-source-block` 合成策略，也不创建 mock 封禁；动作授权/执行必须均为 0。
+通用 Automation 引擎由 `backend/tests/test_soc_automation.py` 独立验证，真实租户动作只能由另行评审的
+Automation Policy 和 adapter 验收。
 
 已有同一输出需要续跑时加 `--resume`；明确要丢弃旧结果并重新开始时才使用
 `--replace`。
@@ -92,9 +81,10 @@ backend/.deer-flow/soc-validation/e2e-ten-current/
 ReviewQueue 和 Lead Agent 有界上下文。
 
 `12-effective-decision-and-automation.json` 不能与 `08-decision.json` 混为一谈：后者是不可变的
-base Runtime decision；前者追加保存 effective decision、Memory contributor、operational
-disposition、action authorization 和 execution lineage。Memory 可以经 reviewed typed directive
-影响 effective decision，但永远不直接授权动作；server-owned policy 可以在没有 Memory 时独立授权。
+base Runtime decision；前者按 `Base -> Memory -> PingAn Policy -> Effective` 保存阶段快照、
+operational disposition 和可选 action lineage。Memory 可以经 reviewed typed directive 影响
+effective decision；PingAn 策略通过精确规则或版本化 Policy Skill 形成独立 Decision；二者都不直接
+授权动作。
 
 保留旧结果后，可生成同 cohort 的逐条对比：
 
@@ -129,6 +119,57 @@ Parser 只允许无安全语义的机械修复并记录 repair log：唯一 path
 根据已显式引用的 `S/A/M/C/T-*` 补齐对应的冗余 basis，以及在 E/R 引用都存在时用明确占位说明
 标记模型漏写的 scenario rationale。歧义引用、冲突事实和安全语义缺失仍然拒绝。
 
+## Previous PingAn Policy Result
+
+2026-08-11 v2.1 fresh + failure-only resume 历史输出位于
+`backend/.deer-flow/soc-validation/e2e-ten-pingan-policy-20260811/`：
+
+- 10/10 structural/safety acceptance passed；10 个 ReviewQueue、10 个四阶段 decision transition、
+  33 条 `mocked=true` 只读调查证据；
+- Base verdict 为 5 `suspicious`、4 `needs_review`、1 `unknown`；没有 Memory directive contributor；
+- 2 条命中确定性 `http-200-success-signal-escalation`；6 条得到已校验 Policy Skill advice；2 条
+  Policy Skill 输出校验失败后 `failed_closed + no_match`；
+- disposition 为 3 `escalated`、2 `unknown`，其余不设置 disposition；8 条要求 review、2 条 preserve；
+  没有样本同时满足非 `200`、非生产、内部范围、无效果和无关键缺口的完整忽略条件，因此 0 ignored；
+- 0 action authorization、0 action execution、0 real external call。旧的三条合成 Mock 封禁已消失；
+- 2 个模型质量 case：`1971013` 拒绝 1 条 evidence 和 1 条 reasoning，`1965919` 拒绝 1 条 reasoning；
+  safety gate 保持生效；
+- 与 `e2e-ten-current` 同输入比较为 10/10 input hash 一致、3 条 base verdict 因 live-model 重采样变化、
+  effective verdict 相对各自 base 变化为 0。比较文件位于
+  `e2e-ten-pingan-policy-comparison-20260811/COMPARISON.md`。
+
+该报告早于 v2.2 的 canonical HTTP 全非 `200`、明确 provider 成功/失败和强制转交优先级修复。
+其中 `http-200-success-signal-escalation` 已删除，统计不得沿用为当前验收结论。
+
+## Historical PingAn Policy v2.2 Result
+
+2026-08-11 v2.2 fresh + failure-only resume 输出位于
+`backend/.deer-flow/soc-validation/e2e-ten-pingan-policy-v2.2-20260811/`：
+
+- 10/10 structural/safety acceptance passed；7 `needs_review`、3 `suspicious`，10 个 ReviewQueue、
+  10 个四阶段 decision transition、33 条 `mocked=true` 只读调查证据；
+- 1 条命中确定性 `provider-confirmed-success-escalation`；其余 9 条进入 Policy Skill，3 条形成
+  `llm-policy-skill-advice`，6 条 no-match，其中 2 次 advisor 校验失败后 fail closed；
+- disposition 为 2 `escalated`、1 `unknown`；0 confirmed Memory contributor、0 action
+  authorization/execution、0 real external call；
+- 本 cohort 没有 canonical HTTP 全非 `200`、明确失败或强制 rule code 样本；这些确定性规则的正反例
+  由 `backend/tests/test_soc_tenant_policy.py` 覆盖；
+- 与旧 v2.1 同输入比较位于
+  `backend/.deer-flow/soc-validation/e2e-ten-pingan-policy-v2.2-comparison-20260811/`：10/10 input hash
+  相同，5 条 base verdict 差异是 live-model 重采样；每条自身 base 到 effective 的 verdict/review
+  变化为 0。
+
+第一次在受限网络环境运行产生连接失败，随后 `--resume` 仅重试失败 case；两个模型格式/空输出失败也
+只重试对应 case。没有为完成批次而放宽 Parser、引用或 Grounding 契约。
+
+当前代码已经升级到 `pingan-disposition-v2.3.0`：删除确定性
+`provider-confirmed-success-escalation`，让成功/失陷标签阻止非 `200` 直接忽略后进入 Policy Skill。
+因此本节只能作为 v2.2 历史基线；组件测试已经覆盖 v2.3 交接，完整 v2.3 live 十条尚未重跑。
+
+首轮 Runtime 有 3 条严格输出失败，连续 `--resume` 只重试失败项，最终 10/10 完成；没有通过放宽
+Schema/Grounding 隐藏非法 `E-?`、重复引用、schema 回显或 unsupported field。Policy advisor 的
+fail-closed 记录后续会输出不含敏感内容的阶段码（prompt/model/output/reference），便于定位。
+
 ## Previous Baseline
 
 2026-08-10 automation redesign 之前的 fresh cohort：
@@ -143,9 +184,10 @@ Parser 只允许无安全语义的机械修复并记录 repair log：唯一 path
 这些 finding 是严格契约的真实输出，不通过重复采样或放宽 Grounding 隐藏。当前权威数字始终以
 本地 `SUMMARY.md` 和 `summary.json` 为准。
 
-## Latest Governed Simulation Result
+## Historical Governed Simulation Result
 
-2026-08-11 在不覆盖旧基线的前提下，fresh 输出写入
+以下是 2026-08-11 旧版合成 Automation 验证的历史结果，现已从十条业务入口移除；通用引擎测试仍保留。
+当时 fresh 输出写入
 `backend/.deer-flow/soc-validation/e2e-ten-governed-20260811/`：
 
 - `10/10` structural/safety acceptance passed；`9 suspicious / 1 needs_review`；
@@ -169,9 +211,8 @@ Memory/automation 效果；Grounding 总数 `+30`、rejected `-2`。这些数字
 - `asset.locate` / `security_tag.lookup` 当前使用现有只读模拟 Provider，结果必须保持
   `mocked=true`，不能关闭真实内网接入债务。
 - Lead Agent 只生成可供分析师继续对话的有界上下文；其聊天文本不替代 Runtime 结论。
-- 所有样本的 base Runtime `automation_allowed` 都必须保持 `false`。默认模式不执行响应动作；
-  只有显式启用 governed automation simulation 时，`12-*` 才会增加独立的 mock
-  authorization/execution lineage，且不会封禁、隔离、关单或调用任何真实外部系统。
+- 所有样本的 base Runtime `automation_allowed` 都必须保持 `false`。当前十条业务入口不安装
+  Automation Policy，不产生 action authorization/execution，也不会封禁、隔离、关单或调用真实外部系统。
 - 候选知识只供分析师审核；确认、有效期、适用范围和检索激活继续走现有 Memory/Governed
   Context 服务，不能由这个验证脚本越权完成。
 - 输出含完整内部告警衍生数据，目录权限为 `0700`、文件为 `0600`，且全部 Git 忽略。
