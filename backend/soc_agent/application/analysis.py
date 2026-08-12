@@ -15,6 +15,11 @@ from soc_agent.core import (
     SocTenantPolicyEvaluationService,
 )
 from soc_agent.db import SqlAlchemyAlertRepository
+from soc_agent.integrations.pingan.knowledge import load_pingan_network_direction_profile
+from soc_agent.knowledge import (
+    CompositeAnalysisRequestEnricher,
+    TenantKnowledgeAnalysisRequestEnricher,
+)
 from soc_agent.llm import (
     SocLLMSettings,
     build_configured_analyzer,
@@ -55,13 +60,7 @@ def build_soc_analysis_service(
         settings=resolved_settings,
         action_adapter_registry=action_adapter_registry,
     )
-    analysis_request_enricher = (
-        ConfirmedMemoryAnalysisRequestEnricher(
-            SocMemoryService(record_repository=repository),
-        )
-        if repository is not None
-        else None
-    )
+    analysis_request_enricher = _build_analysis_request_enricher(repository)
     return SocAnalysisService(
         runtime=DeterministicAnalysisRuntime(
             analyzer=build_configured_analyzer(settings=resolved_settings),
@@ -76,6 +75,23 @@ def build_soc_analysis_service(
         normalization_maintenance_monitor=maintenance,
         post_analysis_observers=post_analysis_observers,
     )
+
+
+def _build_analysis_request_enricher(
+    repository: SqlAlchemyAlertRepository | None,
+) -> CompositeAnalysisRequestEnricher:
+    enrichers = [
+        TenantKnowledgeAnalysisRequestEnricher(
+            [load_pingan_network_direction_profile()],
+        )
+    ]
+    if repository is not None:
+        enrichers.append(
+            ConfirmedMemoryAnalysisRequestEnricher(
+                SocMemoryService(record_repository=repository),
+            )
+        )
+    return CompositeAnalysisRequestEnricher(enrichers)
 
 
 def _build_post_analysis_observers(

@@ -547,7 +547,7 @@ def _review_run(
         ),
         "analysis_result_v2_is_complete": (
             analysis is not None
-            and analysis.schema_version == "soc.analysis_result.v3"
+            and analysis.schema_version == "soc.analysis_result.v4"
             and bool(analysis.evidence)
             and bool(analysis.scenario_assessments)
             and len(primary_scenarios) == 1

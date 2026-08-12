@@ -17,7 +17,7 @@ from soc_agent.contracts import (
     AnalysisResult,
 )
 
-ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v10"
+ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v11"
 MAX_ANALYSIS_RESPONSE_CHARS = 100_000
 MAX_STRUCTURED_EVIDENCE_VALUE_CHARS = 4_000
 
@@ -722,6 +722,64 @@ def _normalize_catalog_references(
             if changed:
                 normalized_values[index] = normalized_item
         normalized[collection_name] = normalized_values
+    normalized = _normalize_directional_catalog_references(
+        normalized,
+        evidence_refs=evidence_refs,
+        context_refs=context_refs,
+        evidence_ref_rewrites=evidence_ref_rewrites,
+        repair_log=repair_log,
+    )
+    return normalized
+
+
+def _normalize_directional_catalog_references(
+    data: dict[str, Any],
+    *,
+    evidence_refs: set[str],
+    context_refs: set[str],
+    evidence_ref_rewrites: Mapping[str, str],
+    repair_log: list[dict[str, Any]],
+) -> dict[str, Any]:
+    normalized = dict(data)
+
+    def repair_item(item: Any, path: str) -> Any:
+        if not isinstance(item, Mapping):
+            return item
+        repaired_item = dict(item)
+        for field_name, allowed, rewrites in (
+            ("evidence_refs", evidence_refs, evidence_ref_rewrites),
+            ("context_refs", context_refs, {}),
+        ):
+            references = item.get(field_name)
+            if not isinstance(references, list):
+                continue
+            repaired = [_resolve_reference(reference, allowed=allowed, explicit_rewrites=rewrites) for reference in references]
+            if repaired == references:
+                continue
+            repaired_item[field_name] = repaired
+            repair_log.append(
+                {
+                    "stage": "catalog_reference_normalization",
+                    "field": f"{path}.{field_name}",
+                    "repair": "unique_catalog_reference_expansion",
+                    "original_value": references,
+                    "normalized_value": repaired,
+                }
+            )
+        return repaired_item
+
+    normalized["network_direction"] = repair_item(
+        normalized.get("network_direction"),
+        "network_direction",
+    )
+    raw_adjudication = normalized.get("role_adjudication")
+    if isinstance(raw_adjudication, Mapping):
+        adjudication = dict(raw_adjudication)
+        for collection_name in ("roles", "response_target_proposals"):
+            collection = raw_adjudication.get(collection_name)
+            if isinstance(collection, list):
+                adjudication[collection_name] = [repair_item(item, f"role_adjudication.{collection_name}[{index}]") for index, item in enumerate(collection)]
+        normalized["role_adjudication"] = adjudication
     return normalized
 
 
@@ -775,6 +833,18 @@ def _materialize_referenced_catalog_evidence(
             if not isinstance(references, list):
                 continue
             referenced_refs.extend(reference for reference in references if isinstance(reference, str))
+    network_direction = data.get("network_direction")
+    if isinstance(network_direction, Mapping) and isinstance(network_direction.get("evidence_refs"), list):
+        referenced_refs.extend(reference for reference in network_direction["evidence_refs"] if isinstance(reference, str))
+    role_adjudication = data.get("role_adjudication")
+    if isinstance(role_adjudication, Mapping):
+        for collection_name in ("roles", "response_target_proposals"):
+            collection = role_adjudication.get(collection_name)
+            if not isinstance(collection, list):
+                continue
+            for item in collection:
+                if isinstance(item, Mapping) and isinstance(item.get("evidence_refs"), list):
+                    referenced_refs.extend(reference for reference in item["evidence_refs"] if isinstance(reference, str))
 
     materialized: list[str] = []
     normalized_evidence = list(raw_evidence)
@@ -864,6 +934,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
         "evidence",
         "reasoning",
         "scenario_assessments",
+        "network_direction",
+        "role_adjudication",
         "evidence_gaps",
         "manual_checks",
         "reason",
@@ -885,9 +957,9 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
             stage="schema_validation",
             repair_applied=repair_applied,
         )
-    if data.get("schema_version") != "soc.analysis_result.v3":
+    if data.get("schema_version") != "soc.analysis_result.v4":
         raise LLMOutputParseError(
-            "LLM output schema_version must be 'soc.analysis_result.v3'",
+            "LLM output schema_version must be 'soc.analysis_result.v4'",
             stage="schema_validation",
             repair_applied=repair_applied,
         )
@@ -956,6 +1028,7 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                 stage="schema_validation",
                 repair_applied=repair_applied,
             )
+    _validate_directional_shape(data, repair_applied=repair_applied)
     for field_name in ("evidence_gaps", "manual_checks"):
         values = data.get(field_name)
         if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
@@ -1070,3 +1143,129 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                 stage="schema_validation",
                 repair_applied=repair_applied,
             )
+
+
+def _validate_directional_shape(data: dict[str, Any], *, repair_applied: bool) -> None:
+    network_fields = {
+        "schema_version",
+        "status",
+        "observed_flow",
+        "boundary_direction",
+        "intermediaries",
+        "confidence",
+        "evidence_refs",
+        "reasoning_refs",
+        "context_refs",
+        "rationale",
+        "evidence_gaps",
+    }
+    network = _require_exact_object(
+        data.get("network_direction"),
+        path="network_direction",
+        fields=network_fields,
+        optional_fields={"semantic_direction", "connection_initiator"},
+        repair_applied=repair_applied,
+    )
+    _require_json_number(network.get("confidence"), path="network_direction.confidence", repair_applied=repair_applied)
+    for field_name in ("intermediaries", "evidence_refs", "reasoning_refs", "context_refs", "evidence_gaps"):
+        _require_string_array(network.get(field_name), path=f"network_direction.{field_name}", repair_applied=repair_applied)
+
+    adjudication_fields = {
+        "schema_version",
+        "status",
+        "roles",
+        "response_target_proposals",
+        "conflicts",
+        "evidence_gaps",
+        "rationale",
+    }
+    adjudication = _require_exact_object(
+        data.get("role_adjudication"),
+        path="role_adjudication",
+        fields=adjudication_fields,
+        repair_applied=repair_applied,
+    )
+    for field_name in ("conflicts", "evidence_gaps"):
+        _require_string_array(adjudication.get(field_name), path=f"role_adjudication.{field_name}", repair_applied=repair_applied)
+
+    role_fields = {
+        "role",
+        "entity_type",
+        "value",
+        "status",
+        "confidence",
+        "evidence_refs",
+        "reasoning_refs",
+        "context_refs",
+        "rationale",
+    }
+    roles = adjudication.get("roles")
+    if not isinstance(roles, list):
+        _raise_shape("role_adjudication.roles must be a JSON array", repair_applied)
+    for index, value in enumerate(roles):
+        role = _require_exact_object(value, path=f"role_adjudication.roles[{index}]", fields=role_fields, repair_applied=repair_applied)
+        _require_json_number(role.get("confidence"), path=f"role_adjudication.roles[{index}].confidence", repair_applied=repair_applied)
+        for field_name in ("evidence_refs", "reasoning_refs", "context_refs"):
+            _require_string_array(role.get(field_name), path=f"role_adjudication.roles[{index}].{field_name}", repair_applied=repair_applied)
+
+    proposal_fields = {
+        "proposal_id",
+        "action_kind",
+        "target_type",
+        "target_value",
+        "target_role",
+        "confidence",
+        "evidence_refs",
+        "reasoning_refs",
+        "context_refs",
+        "rationale",
+        "policy_review_required",
+        "automation_allowed",
+    }
+    proposals = adjudication.get("response_target_proposals")
+    if not isinstance(proposals, list):
+        _raise_shape("role_adjudication.response_target_proposals must be a JSON array", repair_applied)
+    for index, value in enumerate(proposals):
+        path = f"role_adjudication.response_target_proposals[{index}]"
+        proposal = _require_exact_object(value, path=path, fields=proposal_fields, repair_applied=repair_applied)
+        _require_json_number(proposal.get("confidence"), path=f"{path}.confidence", repair_applied=repair_applied)
+        for field_name in ("evidence_refs", "reasoning_refs", "context_refs"):
+            _require_string_array(proposal.get(field_name), path=f"{path}.{field_name}", repair_applied=repair_applied)
+        if proposal.get("policy_review_required") is not True or proposal.get("automation_allowed") is not False:
+            _raise_shape(f"{path} must keep policy_review_required=true and automation_allowed=false", repair_applied)
+
+
+def _require_exact_object(
+    value: Any,
+    *,
+    path: str,
+    fields: set[str],
+    optional_fields: set[str] | None = None,
+    repair_applied: bool,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        _raise_shape(f"{path} must be a JSON object", repair_applied)
+    missing = sorted(fields - value.keys())
+    allowed_fields = fields | (optional_fields or set())
+    unknown = sorted(value.keys() - allowed_fields)
+    if missing or unknown:
+        _raise_shape(f"{path} has missing={missing} unsupported={unknown}", repair_applied)
+    return value
+
+
+def _require_string_array(value: Any, *, path: str, repair_applied: bool) -> None:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        _raise_shape(f"{path} must be a JSON string array", repair_applied)
+
+
+def _require_json_number(value: Any, *, path: str, repair_applied: bool) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        _raise_shape(f"{path} must be a JSON number", repair_applied)
+
+
+def _raise_shape(message: str, repair_applied: bool) -> None:
+    raise LLMOutputParseError(
+        f"LLM output {message}",
+        stage="schema_validation",
+        repair_applied=repair_applied,
+    )

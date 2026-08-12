@@ -202,6 +202,7 @@ class SocEventType(StrEnum):
     ANALYSIS_FAILED = "analysis.failed"
     EXTERNAL_DISPOSITION_RECEIVED = "external_disposition.received"
     REVIEW_CORRECTED = "review.corrected"
+    REVIEW_ROLE_CONFIRMED = "review.role_confirmed"
     REVIEW_REQUESTED = "review.requested"
     MEMORY_UPDATED = "memory.updated"
     MEMORY_PATTERN_OBSERVED = "memory_pattern.observed"
@@ -368,6 +369,23 @@ class SocMemoryCandidateSourceType(StrEnum):
     REVIEW_NOTE = "review_note"
     REPEATED_PATTERN = "repeated_pattern"
     EVAL_FIXTURE = "eval_fixture"
+
+
+class MemoryAdmissionStatus(StrEnum):
+    ADMITTED = "admitted"
+    OBSERVED_ONLY = "observed_only"
+
+
+class MemoryAdmissionReasonCode(StrEnum):
+    VERDICT_CHANGED = "verdict_changed"
+    EXPLICIT_LEAD_AGENT_ACCEPTANCE = "explicit_lead_agent_acceptance"
+    EXPLICIT_PROMOTION_REQUESTED = "explicit_promotion_requested"
+    ANALYST_FEEDBACK_PRESENT = "analyst_feedback_present"
+    REUSABLE_ANCHOR_PRESENT = "reusable_anchor_present"
+    WEAK_OR_MISSING_REASON = "weak_or_missing_reason"
+    CONFIRMATION_ONLY = "confirmation_only"
+    NO_HUMAN_PROMOTION_SIGNAL = "no_human_promotion_signal"
+    NO_REUSABLE_ANCHOR = "no_reusable_anchor"
 
 
 class ReviewNoteOrigin(StrEnum):
@@ -1453,6 +1471,23 @@ class SocMemoryCandidateCreateCommand(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class MemoryAdmissionDecision(BaseModel):
+    """Deterministic quality gate applied before a review candidate is created."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_admission_decision.v1"] = "soc.memory_admission_decision.v1"
+    policy_version: Literal["soc.memory_admission_policy.v1"] = "soc.memory_admission_policy.v1"
+    status: MemoryAdmissionStatus
+    source_type: SocMemoryCandidateSourceType
+    candidate_type: SocMemoryCandidateType
+    quality_score: float = Field(ge=0.0, le=1.0)
+    reason_codes: list[MemoryAdmissionReasonCode] = Field(min_length=1)
+    reusable_facets: dict[str, list[str]] = Field(default_factory=dict)
+    command_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_id: str | None = None
+
+
 class SocMemoryCandidateReviewCommand(BaseModel):
     """Command to review one SOC memory candidate without bypassing service audit."""
 
@@ -1588,12 +1623,16 @@ class SocMemoryRetrievalActivationResult(BaseModel):
 class SocMemoryQuery(BaseModel):
     """Retrieval query for confirmed SOC memory records.
 
-    Facets are optional by design. Missing topic, detection key, vendor alias,
-    scenario, entity, or environment facets lower recall/score but must not
-    make retrieval fail.
+    Facets are optional by design. Version 1 retains broad scored retrieval.
+    Version 2 fails closed per record unless a type-appropriate exact anchor
+    matches; an alert without such an anchor simply receives no memory context.
     """
 
-    schema_version: str = "soc.memory_query.v1"
+    schema_version: Literal["soc.memory_query.v2"] = "soc.memory_query.v2"
+    policy_version: Literal[
+        "soc.memory_retrieval_policy.v1",
+        "soc.memory_retrieval_policy.v2",
+    ] = "soc.memory_retrieval_policy.v1"
     memory_types: list[SocMemoryCandidateType] = Field(default_factory=list)
     statuses: list[SocMemoryRecordStatus] = Field(default_factory=lambda: [SocMemoryRecordStatus.CONFIRMED])
     tenant_scope: str | None = None
@@ -1644,6 +1683,8 @@ class SocMemoryMatch(BaseModel):
     score: float = Field(ge=0.0)
     match_reasons: list[str] = Field(default_factory=list)
     matched_facets: dict[str, list[str]] = Field(default_factory=dict)
+    anchor_match_reasons: list[str] = Field(default_factory=list)
+    matched_anchor_facets: dict[str, list[str]] = Field(default_factory=dict)
     token_estimate: int = Field(ge=1)
     content_hash: str
     facets_hash: str
@@ -1666,7 +1707,7 @@ class SocMemoryRetrievalDiff(BaseModel):
 class SocMemoryRetrievalResult(BaseModel):
     """Retrieval result that is safe to inspect before prompt injection is enabled."""
 
-    schema_version: str = "soc.memory_retrieval_result.v1"
+    schema_version: Literal["soc.memory_retrieval_result.v2"] = "soc.memory_retrieval_result.v2"
     policy_version: str = "soc.memory_retrieval_policy.v1"
     query: SocMemoryQuery
     matches: list[SocMemoryMatch] = Field(default_factory=list)
@@ -1677,6 +1718,7 @@ class SocMemoryRetrievalResult(BaseModel):
     skipped_review_overdue: int = Field(default=0, ge=0)
     skipped_status: int = Field(default=0, ge=0)
     skipped_expired: int = Field(default=0, ge=0)
+    skipped_missing_strong_anchor: int = Field(default=0, ge=0)
     skipped_below_min_score: int = Field(default=0, ge=0)
     returned_count: int = Field(default=0, ge=0)
     total_token_estimate: int = Field(default=0, ge=0)
@@ -2622,6 +2664,58 @@ class RoleResolutionStatus(StrEnum):
     UNRESOLVED = "unresolved"
 
 
+class NetworkDirectionAssessmentStatus(StrEnum):
+    """How far the analyzer could reconstruct network direction."""
+
+    NOT_ASSESSED = "not_assessed"
+    OBSERVED = "observed"
+    INFERRED = "inferred"
+    CONFLICTED = "conflicted"
+    INDETERMINATE = "indeterminate"
+
+
+class NetworkBoundaryDirection(StrEnum):
+    """Organization-boundary direction, separate from wire and attacker roles."""
+
+    EXTERNAL_TO_INTERNAL = "external_to_internal"
+    INTERNAL_TO_EXTERNAL = "internal_to_external"
+    INTERNAL_TO_INTERNAL = "internal_to_internal"
+    EXTERNAL_TO_EXTERNAL = "external_to_external"
+    PROXY_MEDIATED = "proxy_mediated"
+    INDETERMINATE = "indeterminate"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class AdjudicatedRoleType(StrEnum):
+    """Open-system security roles that may differ from observed tuple roles."""
+
+    INITIATOR = "initiator"
+    RESPONDER = "responder"
+    ATTACKER = "attacker"
+    VICTIM = "victim"
+    IMPACTED_ASSET = "impacted_asset"
+    PROXY = "proxy"
+    RELAY = "relay"
+    SCANNER = "scanner"
+    C2 = "c2"
+
+
+class AdjudicatedRoleStatus(StrEnum):
+    """Analyzer role state. Human confirmation is deliberately a separate mutation."""
+
+    TENTATIVE = "tentative"
+    RESOLVED_FROM_EVIDENCE = "resolved_from_evidence"
+    CONFLICTED = "conflicted"
+    UNRESOLVED = "unresolved"
+
+
+class RoleAdjudicationStatus(StrEnum):
+    NOT_ASSESSED = "not_assessed"
+    TENTATIVE = "tentative"
+    RESOLVED_FROM_EVIDENCE = "resolved_from_evidence"
+    CONFLICTED = "conflicted"
+
+
 class RoleClaim(BaseModel):
     """One observable or asserted role claim with separate evidence and semantic confidence."""
 
@@ -2669,6 +2763,151 @@ class RoleResolution(BaseModel):
     evidence_gaps: list[str] = Field(default_factory=list)
     manual_checks: list[str] = Field(default_factory=list)
     automation_allowed: bool = False
+
+
+class NetworkDirectionAssessment(BaseModel):
+    """Analyzer assessment of wire, boundary, and semantic direction."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.network_direction_assessment.v1"] = "soc.network_direction_assessment.v1"
+    status: NetworkDirectionAssessmentStatus = NetworkDirectionAssessmentStatus.NOT_ASSESSED
+    observed_flow: Literal["source_to_destination", "multiple_flows", "not_available"] = "not_available"
+    boundary_direction: NetworkBoundaryDirection = NetworkBoundaryDirection.NOT_APPLICABLE
+    semantic_direction: str | None = Field(default=None, min_length=1, max_length=256)
+    connection_initiator: str | None = Field(default=None, min_length=1, max_length=1000)
+    intermediaries: list[str] = Field(default_factory=list, max_length=20)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=20)
+    reasoning_refs: list[str] = Field(default_factory=list, max_length=20)
+    context_refs: list[str] = Field(default_factory=list, max_length=20)
+    rationale: str = Field(default="Not assessed.", min_length=1, max_length=3000)
+    evidence_gaps: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_assessment_references(self) -> NetworkDirectionAssessment:
+        _validate_analysis_reference_lists(
+            evidence_refs=self.evidence_refs,
+            reasoning_refs=self.reasoning_refs,
+            context_refs=self.context_refs,
+            owner="network direction assessment",
+        )
+        if self.status is not NetworkDirectionAssessmentStatus.NOT_ASSESSED and (not self.evidence_refs or not self.reasoning_refs):
+            raise ValueError("assessed network direction requires evidence_refs and reasoning_refs")
+        return self
+
+
+class AdjudicatedRole(BaseModel):
+    """One model-adjudicated semantic role with exact support references."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: AdjudicatedRoleType
+    entity_type: str = Field(min_length=1, max_length=100)
+    value: str = Field(min_length=1, max_length=1000)
+    status: AdjudicatedRoleStatus
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence_refs: list[str] = Field(min_length=1, max_length=20)
+    reasoning_refs: list[str] = Field(min_length=1, max_length=20)
+    context_refs: list[str] = Field(default_factory=list, max_length=20)
+    rationale: str = Field(min_length=1, max_length=3000)
+
+    @model_validator(mode="after")
+    def validate_role_references(self) -> AdjudicatedRole:
+        _validate_analysis_reference_lists(
+            evidence_refs=self.evidence_refs,
+            reasoning_refs=self.reasoning_refs,
+            context_refs=self.context_refs,
+            owner="adjudicated role",
+        )
+        return self
+
+
+class ResponseTargetProposal(BaseModel):
+    """Action-specific target suggestion; policy and authorization remain external."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_id: str = Field(pattern=r"^RT-[0-9]{2}$")
+    action_kind: str = Field(min_length=1, max_length=200)
+    target_type: str = Field(min_length=1, max_length=100)
+    target_value: str = Field(min_length=1, max_length=1000)
+    target_role: AdjudicatedRoleType
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence_refs: list[str] = Field(min_length=1, max_length=20)
+    reasoning_refs: list[str] = Field(min_length=1, max_length=20)
+    context_refs: list[str] = Field(default_factory=list, max_length=20)
+    rationale: str = Field(min_length=1, max_length=3000)
+    policy_review_required: Literal[True] = True
+    automation_allowed: Literal[False] = False
+
+    @model_validator(mode="after")
+    def validate_target_references(self) -> ResponseTargetProposal:
+        _validate_analysis_reference_lists(
+            evidence_refs=self.evidence_refs,
+            reasoning_refs=self.reasoning_refs,
+            context_refs=self.context_refs,
+            owner="response target proposal",
+        )
+        return self
+
+
+class RoleAdjudicationResult(BaseModel):
+    """Semantic role and response-target output from the bounded analyzer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.role_adjudication_result.v1"] = "soc.role_adjudication_result.v1"
+    status: RoleAdjudicationStatus = RoleAdjudicationStatus.NOT_ASSESSED
+    roles: list[AdjudicatedRole] = Field(default_factory=list, max_length=30)
+    response_target_proposals: list[ResponseTargetProposal] = Field(default_factory=list, max_length=20)
+    conflicts: list[str] = Field(default_factory=list, max_length=20)
+    evidence_gaps: list[str] = Field(default_factory=list, max_length=20)
+    rationale: str = Field(default="Not assessed.", min_length=1, max_length=3000)
+
+    @model_validator(mode="after")
+    def validate_adjudication(self) -> RoleAdjudicationResult:
+        if self.status is RoleAdjudicationStatus.NOT_ASSESSED:
+            if self.roles or self.response_target_proposals:
+                raise ValueError("not_assessed role adjudication cannot contain roles or targets")
+            return self
+        if not self.roles:
+            raise ValueError("assessed role adjudication requires at least one role")
+        role_keys = [(item.role, item.entity_type.casefold(), item.value.casefold()) for item in self.roles]
+        if len(role_keys) != len(set(role_keys)):
+            raise ValueError("adjudicated roles must be unique")
+        proposal_ids = [item.proposal_id for item in self.response_target_proposals]
+        if len(proposal_ids) != len(set(proposal_ids)):
+            raise ValueError("response target proposal IDs must be unique")
+        role_keys = {(item.role, item.entity_type.casefold(), item.value.casefold()) for item in self.roles}
+        for proposal in self.response_target_proposals:
+            target_key = (
+                proposal.target_role,
+                proposal.target_type.casefold(),
+                proposal.target_value.casefold(),
+            )
+            if target_key not in role_keys:
+                raise ValueError("each response target proposal must reference an adjudicated role")
+        return self
+
+
+def _validate_analysis_reference_lists(
+    *,
+    evidence_refs: list[str],
+    reasoning_refs: list[str],
+    context_refs: list[str],
+    owner: str,
+) -> None:
+    groups = (
+        (evidence_refs, r"E-[A-F0-9]{12}", "E-* evidence"),
+        (reasoning_refs, r"R-[0-9]{2}", "R-* reasoning"),
+        (context_refs, r"(?:S|A|M|C|T)-[A-F0-9]{12}", "S/A/M/C/T context"),
+    )
+    for values, pattern, label in groups:
+        if len(values) != len(set(values)):
+            raise ValueError(f"{owner} {label} references must be unique")
+        if any(not re.fullmatch(pattern, value) for value in values):
+            raise ValueError(f"{owner} must use valid {label} references")
 
 
 class CanonicalFieldProvenance(BaseModel):
@@ -2806,9 +3045,10 @@ class ExtractedEntities(BaseModel):
 class LLMAnalysisRequest(BaseModel):
     """Bounded input contract for deterministic or configured LLM nodes."""
 
-    schema_version: str = "soc.llm_analysis_request.v3"
+    schema_version: str = "soc.llm_analysis_request.v4"
     alert_id: str
     tenant_id: str | None = None
+    environment: str | None = Field(default=None, max_length=128)
     source: AlertSourceRef = Field(default_factory=AlertSourceRef)
     detection: DetectionRuleRef = Field(default_factory=DetectionRuleRef)
     classification: AlertClassification = Field(default_factory=AlertClassification)
@@ -3302,7 +3542,7 @@ class ConfidenceCalibrationReport(BaseModel):
 
 
 class AnalysisResult(BaseModel):
-    schema_version: Literal["soc.analysis_result.v3"] = "soc.analysis_result.v3"
+    schema_version: Literal["soc.analysis_result.v4"] = "soc.analysis_result.v4"
     verdict: Verdict
     confidence: float = Field(ge=0.0, le=1.0)
     summary: str = Field(min_length=1, max_length=4000)
@@ -3311,6 +3551,12 @@ class AnalysisResult(BaseModel):
     scenario_assessments: list[TriageScenarioAssessment] = Field(
         default_factory=list,
         max_length=10,
+    )
+    network_direction: NetworkDirectionAssessment = Field(
+        default_factory=NetworkDirectionAssessment,
+    )
+    role_adjudication: RoleAdjudicationResult = Field(
+        default_factory=RoleAdjudicationResult,
     )
     evidence_gaps: list[str] = Field(default_factory=list, max_length=20)
     manual_checks: list[str] = Field(default_factory=list, max_length=20)
@@ -3392,6 +3638,17 @@ class AnalysisResult(BaseModel):
             missing_reasoning = sorted(set(candidate.reasoning_refs) - reasoning_ids)
             if missing_evidence or missing_reasoning:
                 raise ValueError(f"knowledge candidate references must resolve inside AnalysisResult; candidate={candidate.candidate_id}, missing_evidence={missing_evidence}, missing_reasoning={missing_reasoning}")
+
+        directional_items: list[Any] = [self.network_direction]
+        directional_items.extend(self.role_adjudication.roles)
+        directional_items.extend(self.role_adjudication.response_target_proposals)
+        for item in directional_items:
+            missing_evidence = sorted(set(item.evidence_refs) - evidence_refs)
+            missing_reasoning = sorted(set(item.reasoning_refs) - reasoning_ids)
+            referenced_reasoning_context = {context_ref for reasoning in self.reasoning if reasoning.reasoning_id in item.reasoning_refs for context_ref in reasoning.context_refs}
+            missing_context = sorted(set(item.context_refs) - referenced_reasoning_context)
+            if missing_evidence or missing_reasoning or missing_context:
+                raise ValueError(f"direction/role references must resolve through AnalysisResult reasoning; missing_evidence={missing_evidence}, missing_reasoning={missing_reasoning}, missing_context={missing_context}")
         return self
 
 
@@ -3434,8 +3691,91 @@ class CorrectionRecord(BaseModel):
     actor: ActorContext
     created_at: datetime = Field(default_factory=utc_now)
     evidence: list[EvidenceItem] = Field(default_factory=list)
-    candidate_knowledge_status: Literal["not_created", "pending_review"] = "not_created"
+    candidate_knowledge_status: Literal["not_created", "observed_only", "pending_review"] = "not_created"
     memory_candidate_id: str | None = None
+    memory_admission: MemoryAdmissionDecision | None = None
+
+
+class HumanConfirmedRole(BaseModel):
+    """Analyst-confirmed semantic role; separate from model adjudication."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: AdjudicatedRoleType
+    entity_type: str = Field(min_length=1, max_length=100)
+    value: str = Field(min_length=1, max_length=1000)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=20)
+    rationale: str = Field(min_length=1, max_length=3000)
+
+    @field_validator("evidence_refs")
+    @classmethod
+    def validate_current_evidence_refs(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("human role evidence_refs must be unique")
+        if any(not re.fullmatch(r"E-[A-F0-9]{12}", value) for value in values):
+            raise ValueError("human role evidence_refs must use E-* references")
+        return values
+
+
+class HumanConfirmedResponseTarget(BaseModel):
+    """Analyst-selected action target; still not action authorization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action_kind: str = Field(min_length=1, max_length=200)
+    target_type: str = Field(min_length=1, max_length=100)
+    target_value: str = Field(min_length=1, max_length=1000)
+    target_role: AdjudicatedRoleType
+    source_proposal_id: str | None = Field(default=None, pattern=r"^RT-[0-9]{2}$")
+    rationale: str = Field(min_length=1, max_length=3000)
+    automation_allowed: Literal[False] = False
+
+
+class RoleAdjudicationConfirmationCommand(BaseModel):
+    """Optimistic-lock command for one human role confirmation revision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(min_length=1, max_length=64)
+    expected_revision: int = Field(default=0, ge=0)
+    roles: list[HumanConfirmedRole] = Field(min_length=1, max_length=30)
+    response_targets: list[HumanConfirmedResponseTarget] = Field(default_factory=list, max_length=20)
+    reason: str = Field(min_length=1, max_length=3000)
+
+    @model_validator(mode="after")
+    def validate_confirmation(self) -> RoleAdjudicationConfirmationCommand:
+        role_keys = [(item.role, item.entity_type.casefold(), item.value.casefold()) for item in self.roles]
+        if len(role_keys) != len(set(role_keys)):
+            raise ValueError("human-confirmed roles must be unique")
+        target_keys = [(item.action_kind.casefold(), item.target_type.casefold(), item.target_value.casefold()) for item in self.response_targets]
+        if len(target_keys) != len(set(target_keys)):
+            raise ValueError("human-confirmed response targets must be unique")
+        known_roles = set(role_keys)
+        for target in self.response_targets:
+            key = (target.target_role, target.target_type.casefold(), target.target_value.casefold())
+            if key not in known_roles:
+                raise ValueError("each confirmed response target must reference a confirmed role in the same command")
+        return self
+
+
+class RoleAdjudicationRevisionRecord(BaseModel):
+    """Append-only before/after lineage for human role confirmation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.role_adjudication_revision.v1"] = "soc.role_adjudication_revision.v1"
+    revision_id: str = Field(default_factory=lambda: f"RAR-{uuid4().hex[:12].upper()}")
+    run_id: str = Field(min_length=1, max_length=64)
+    revision: int = Field(ge=1)
+    previous_revision_id: str | None = None
+    base_model_adjudication_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    previous_effective_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    roles: list[HumanConfirmedRole] = Field(min_length=1, max_length=30)
+    response_targets: list[HumanConfirmedResponseTarget] = Field(default_factory=list, max_length=20)
+    reason: str = Field(min_length=1, max_length=3000)
+    actor: ActorContext
+    created_at: datetime = Field(default_factory=utc_now)
+    automation_allowed: Literal[False] = False
 
 
 class DecisionAuditRecord(BaseModel):
@@ -3608,6 +3948,7 @@ class ReviewNoteCommand(BaseModel):
     domain: SocDomainName | None = None
     finding_id: str | None = None
     confidence: float = Field(default=0.55, ge=0.0, le=1.0)
+    promote_to_memory: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -3630,6 +3971,7 @@ class ReviewNoteResult(BaseModel):
 
     queue_item: ReviewQueueItem
     memory_candidate: SocMemoryCandidate | None = None
+    memory_admission: MemoryAdmissionDecision | None = None
 
 
 class PipelineStepTrace(BaseModel):
@@ -3736,6 +4078,9 @@ class AnalysisRun(BaseModel):
     failure: RuntimeFailure | None = None
     request_journal: AnalysisRequestJournal | None = None
     corrections: list[CorrectionRecord] = Field(default_factory=list)
+    role_adjudication_revisions: list[RoleAdjudicationRevisionRecord] = Field(
+        default_factory=list,
+    )
 
     @model_validator(mode="after")
     def validate_failure_state(self) -> AnalysisRun:

@@ -2,7 +2,7 @@
 
 Status: Active review baseline
 
-Last updated: 2026-08-11
+Last updated: 2026-08-12
 
 Primary audience: product review, architecture review, engineering review, security review
 
@@ -93,6 +93,10 @@ write confirmed memory, grant action authority, or execute side-effect actions b
 | 角色声明 | Role Claim | `RoleClaim` | 区分网络观测、厂商角色断言、场景推导、外部证据和人工确认 |
 | 场景假设 | Scenario Hypothesis | `ScenarioHypothesis` | 反弹 shell、C2、横向移动等带证据的暂定场景，不是最终 verdict |
 | 角色裁决 | Role Resolution | `RoleResolution` | 给出 observed/tentative/conflicted/confirmed/unresolved 状态和暂定值 |
+| 网络方向评估 | Network Direction Assessment | `NetworkDirectionAssessment` | 分开表达 wire flow、组织边界方向和安全语义方向 |
+| 模型角色裁决 | Role Adjudication Result | `RoleAdjudicationResult` | LLM 基于 `E/R/S/A/M/C/T-*` 裁决 attacker、victim、proxy 等开放安全角色 |
+| 响应目标建议 | Response Target Proposal | `ResponseTargetProposal` | 针对具体动作建议目标；永远不是动作授权 |
+| 人工角色修订 | Human Role Revision | `RoleAdjudicationRevisionRecord` | 分析师追加确认的角色/目标版本，不覆盖模型原始输出 |
 | 冲突报告 | Conflict Report | `ConflictReport` | 记录上游字段、加工字段、模型结论之间的冲突 |
 | 受限分析证据 | Bounded Analysis Evidence | `BoundedAnalysisEvidence` | 允许进入模型的限长、带来源证据；默认脱敏，批准环境可显式保留原值，不等于完整 raw payload |
 | Skill 选择上下文 | Skill Context | `SocSkillContext.v2` | 当前选择清单、原因、命中特征、包内 bounded guidance、package/projection hash 与 token budget；不是完整 `SKILL.md` 正文 |
@@ -131,6 +135,8 @@ write confirmed memory, grant action authority, or execute side-effect actions b
 | 处置反馈 | External Disposition | `SocExternalDispositionEvent` | Zeus/老平台/工单系统同步回来的状态和理由 |
 | 候选记忆 | Memory Candidate | `SocMemoryCandidate` | 待复核的经验、事实、模式、反馈 |
 | 确认记忆 | Confirmed Memory | `SocMemoryRecord` | 人类确认后的可检索记忆，默认仍受 retrieval policy 约束 |
+| 记忆准入 | Memory Admission | `MemoryAdmissionDecision` | 在创建候选前判断是否有人工提升信号、可复用锚点和足够理由 |
+| 行为指纹 | Behavior Fingerprint | `behavior_fingerprint` facet | 从场景、进程、协议、方法、技术等稳定组件生成的可回放检索锚点 |
 | 能力卡 | Capability Card | PingAn capability docs | 描述一个业务能力应落到 skill、MCP、adapter、memory 还是 eval |
 
 ---
@@ -330,7 +336,7 @@ flowchart TD
     X --> F["3. fact_reconstruct<br/>RoleClaim + Scenario + Resolution"]
     F --> B["4. build_analysis_input<br/>bounded evidence + coverage"]
     B --> S["5. skill_context<br/>allowlisted Skill-package guidance"]
-    S --> C["6. reference_catalog<br/>governed Memory retrieval + E/S/A/M/C/T freeze"]
+    S --> C["6. reference_catalog<br/>Memory + tenant knowledge + E/S/A/M/C/T freeze"]
     C --> J["📝 Pre-provider Journal<br/>running + bounded metadata"]
     J --> L["7. analyze_stub / analyze_llm<br/>DeerFlow model in explicit mode"]
     L --> V["8. schema_validate<br/>JSON + Pydantic + domain"]
@@ -345,13 +351,13 @@ flowchart TD
 
 `SocCorrelationService`, `SocDomainTriageService`, investigation actions, governed-context matching,
 and the DeerFlow SOC Lead Agent are **not hidden autonomous nodes inside this base Runtime**. Confirmed
-Memory retrieval is the narrow exception: an explicit `AnalysisRequestEnricher` queries
-`SocMemoryService` during `reference_catalog`, before provider journaling, and freezes bounded `M-*`
-context. It does not mutate the base Decision. `SocAutomationService` then runs as a default-off
+Memory retrieval and reviewed tenant-knowledge projection are narrow, read-only enrichments: explicit
+`AnalysisRequestEnricher` instances query `SocMemoryService` and match versioned tenant profiles during
+`reference_catalog`, before provider journaling, then freeze bounded `M-*` and `C-*` context. Neither
+mutates the base Decision. `SocAutomationService` then runs as a default-off
 post-analysis observer, preserving that immutable base result while appending effective-decision,
 disposition, authorization and execution lineage. This keeps one-alert execution replayable while
 allowing richer investigation workflows to evolve.
-independently.
 
 The primary analysis bundle has its own `AnalysisPersistence` transaction. L3 service commands use
 the separate `SocMutationUnitOfWork`: one correction, review close/note, memory review, approval
@@ -782,7 +788,7 @@ Rules:
 
 ### 5.6 Structured Analyzer Result / 结构化 Analyzer 结果
 
-The bounded analyzer emits `soc.analysis_result.v3`. Runtime, not the model, first creates two
+The bounded analyzer emits `soc.analysis_result.v4`. Runtime, not the model, first creates two
 reference catalogs from the exact bounded request:
 
 - `E-*` is one replay-stable current-alert scalar fact, bound to an exact source path, typed value,
@@ -813,8 +819,22 @@ appear literally in the alert, while still making every input fact and governed 
   still requiring a current verdict.
 - `recommended_action` remains a safe routing suggestion, not an executed action.
 
-`soc-analysis-v12` requires the model to select at most 40 exact catalog facts and place all security
-interpretation in `reasoning[]`. `soc-analysis-json-parser-v10` validates the strict v3 schema and
+`AnalysisResult.v4` additionally requires two explicit outputs instead of hiding direction in prose:
+
+- `network_direction_assessment` keeps observed wire flow, organization-boundary direction,
+  semantic direction, initiator, intermediaries, uncertainty and exact support separate.
+- `role_adjudication` represents attacker, victim, impacted asset, initiator/responder, proxy/relay,
+  scanner and C2 roles. It may remain tentative, conflicted or unresolved; source is never globally
+  equated with attacker and destination is never globally equated with victim.
+- `response_target_proposals` are action-specific suggestions with exact references. Their contract
+  fixes `policy_review_required=true` and `automation_allowed=false`; authorization remains a later,
+  independent service decision.
+- An analyst can append a `RoleAdjudicationRevisionRecord` through `SocReviewService`/Gateway. The
+  revision uses optimistic locking, retains the base model adjudication hash and cannot rewrite the
+  model result or authorize an action.
+
+`soc-analysis-v13` requires the model to select at most 40 exact catalog facts and place all security
+interpretation in `reasoning[]`. `soc-analysis-json-parser-v11` validates the strict v4 schema and
 may apply only semantics-free, logged normalization when the relation is already unique: recover an
 `E-*` from an exact path/value tuple, materialize an exact catalog fact cited elsewhere, remove an
 exact duplicate, drop an explicit empty context sentinel, or derive a redundant basis label from an
@@ -937,7 +957,8 @@ mutation-audit boundaries.
 | External system query / 外部系统查询 | MCP or action adapter | Asset ownership, threat-intel reputation, governed security tags |
 | Alert-native endpoint/host evidence / 告警原生终端与主机证据 | Normalizer + bounded evidence | Process tree, command line, login user, host events carried by EDR/HIDS alerts |
 | Governed operational fact / 有治理的运营事实 | Governed context registry + typed source adapter | Exercise participant, approved scanner campaign, maintenance window, asset state |
-| Tenant-specific descriptive fact / 租户描述性事实 | Scoped memory or policy/config | Internal domain meaning, investigation note, special business-system context |
+| Reviewed tenant-static knowledge / 已评审租户静态知识 | Versioned tenant knowledge profile -> bounded `C-*` | Internal network ownership, internal-domain meaning, collection-point caveat |
+| Reusable historical lesson / 可复用历史经验 | Memory admission -> candidate -> confirmed `M-*` | Reviewed direction correction for a recurring behavior |
 | Vendor field mapping / 字段映射 | Normalizer adapter | PingAn `zeusRawLogs[].message` mapping |
 | Repeated operational conclusion / 历史处置经验 | Memory candidate then confirmed memory | This rule often flips attacker/victim direction under condition X |
 | Eval sample / 验证样本 | Eval fixture | Desensitized APT/EDR/HIDS examples |
@@ -1572,7 +1593,9 @@ and confirmed memory text.
 
 ```mermaid
 flowchart TD
-    S1["📝 Source<br/>correction / review note / external reason / domain finding / repeated pattern"] --> C["🧬 SocMemoryCandidate<br/>pending_review"]
+    S1["📝 Source<br/>correction / accepted conclusion / reviewed finding / repeated pattern"] --> A{"🚦 MemoryAdmissionService<br/>human signal + reason + reusable anchor"}
+    A -->|"observed_only"| O["📊 Observation / audit only<br/>no candidate noise"]
+    A -->|"admitted"| C["🧬 SocMemoryCandidate<br/>pending_review"]
     C --> R{"👤 Human review"}
     R -->|"confirm"| M["📖 SocMemoryRecord<br/>confirmed + retrieval disabled"]
     R -->|"reject"| X["🗃️ rejected"]
@@ -1591,9 +1614,15 @@ flowchart TD
 Rules:
 
 - LLM-discovered knowledge is candidate knowledge only.
-- Correction, review note, domain finding, external feedback, and repeated pattern can all create candidates.
+- A workflow signal is not automatically a candidate. `MemoryAdmissionService` first requires an explicit
+  human promotion/acceptance signal, a substantive reason and at least one reusable facet. Same-verdict clicks,
+  ordinary notes, unreviewed domain findings and per-alert model output remain `observed_only`.
+- Candidate and query facets come from the same vendor-neutral builder. Alert/run IDs remain lineage metadata,
+  never retrieval facets; a missing `rule_code` is supported through detection key, scenario, behavior fingerprint,
+  role/entity and other available facets.
 - A Lead Agent answer is not a memory source by itself. PI-03F1 requires an analyst to explicitly accept one
-  stable assistant message in an open ReviewQueue context and provide a reuse reason; the result remains a
+  stable assistant message in an open ReviewQueue context and provide a substantive human reuse reason; model
+  answer length cannot substitute for that reason. The result remains a
   `review_note`-origin `pending_review` candidate. Non-Lead-Agent TUI mode cannot perform this mutation.
 - PI-03F2 provides the authenticated Web/Gateway command. The client sends only queue/thread/message identity
   plus the human reason; Gateway verifies thread ownership and `soc-triage` metadata, resolves the latest
@@ -1631,7 +1660,10 @@ Rules:
 - Retrieval rejects legacy/direct boolean flags without `soc.memory_retrieval_activation_policy.v1`
   metadata, as well as expired activation or overdue review. `soc memory search --baseline-json` exposes
   deterministic before/after match changes for governance review.
-- Confirmed memory retrieval is budgeted and reasoned; it is not dumped blindly into prompts.
+- Confirmed memory retrieval is budgeted and reasoned; it is not dumped blindly into prompts. Fixed Runtime uses
+  `soc.memory_retrieval_policy.v2`: broad database lanes may recall candidates, but each returned record must pass
+  a memory-type-specific exact strong-anchor gate. Environment/source/category may rank or scope a match but cannot
+  be the sole anchor for a detection lesson or benign pattern.
 - Candidate selection is relevance-first across the full eligible corpus through the normalized facet
   index; top-K is a final model-context budget, not a latest-200 database scan.
 - Free-form Memory remains reasoning context. A deterministic effective-decision change requires a
@@ -1658,11 +1690,13 @@ flowchart TB
     DECOMP --> CARD["🧾 Capability cards<br/>能力卡"]
     CARD --> SKILL["🧩 Public SOC Skills<br/>通用研判方法"]
     CARD --> ADAPTER["🔌 PingAn Adapter<br/>字段/证据标准化"]
+    CARD --> KNOWLEDGE["🏢 PingAn Knowledge Profile<br/>reviewed static C-* context"]
     CARD --> MCP["🛠️ Mock or real MCP/Action<br/>资产/威胁情报/标签/EDR"]
     CARD --> MEMORY["🧬 PingAn-scoped Memory Candidate"]
     CARD --> EVAL["🧪 Eval Fixtures<br/>脱敏样本"]
     SKILL --> CORE["🧠 SOC Core"]
     ADAPTER --> CORE
+    KNOWLEDGE --> CORE
     MCP --> CORE
     MEMORY --> CORE
     EVAL --> CORE
@@ -1675,6 +1709,7 @@ Current PingAn docs live under:
 - `.notes/ai_soc/capabilities/pingan/knowledge-decomposition.md`
 - `.notes/ai_soc/capabilities/pingan/capability-cards.md`
 - `.notes/ai_soc/capabilities/pingan/knowledge-candidates.md`
+- `.notes/ai_soc/capabilities/pingan/network-direction-knowledge-migration.md`
 
 Current real-alert Adapter coverage:
 
@@ -1732,7 +1767,8 @@ Current real-alert Adapter coverage:
 | --- | --- | --- |
 | Raw field quirks, `zeusRawLogs[].message` preference | PingAn normalizer adapter | Vendor-specific parsing belongs at edge |
 | General investigation reasoning | `skills/public/soc-*` | Reusable across customers |
-| PingAn internal asset/tag/business knowledge | Scoped memory or config | Not public prompt |
+| Stable reviewed network/domain/collection-point knowledge | Versioned PingAn knowledge profile -> `C-*` | Tenant-scoped, source-linked and bounded; not public prompt or Memory spam |
+| Event-time authorization, exercise participant or maintenance state | Governed Context Fact | Dynamic lifecycle, not static profile or Memory |
 | Remote lookup capability | Mock now, real MCP/action later | External capability boundary |
 | Historical false-positive/true-positive lessons | Memory candidate | Must be reviewed |
 | Desensitized examples | Eval fixtures | Regression tests and replay |
@@ -1926,8 +1962,12 @@ soc demo run all
 # Inspect review context
 soc review context <queue-id> --summary --pretty
 
-# Add analyst note; this creates a pending memory candidate through SocMemoryService
+# Record an ordinary analyst note; it remains observed_only by default
 soc review note <queue-id> --note "..."
+
+# Explicitly submit a reusable note to governed memory review
+soc review note <queue-id> --note "..." --scenario-key reverse_shell \
+  --promote-to-memory
 
 # Review memory candidates
 soc memory list --status pending_review
@@ -2204,6 +2244,9 @@ production labels, operational SLOs, and high-risk response adapters are still u
 | Split provider code-complete from real-provider acceptance | D12-A `mocked=true` cannot satisfy D12-B `mocked=false` internal smoke |
 | Use approval inbox for high-risk actions | Production-safe execution boundary |
 | Use candidate-first memory | Prevent memory pollution |
+| Gate candidate creation through `MemoryAdmissionService` | Do not create one review candidate per alert, click, note, or model finding |
+| Use type-aware strong anchors in Runtime Memory Retrieval v2 | Keep optional facets and ruleless portability without accepting broad same-source memories |
+| Separate wire flow, boundary direction and security roles | Preserve proxy/reverse-connection semantics and avoid `source == attacker` hard-coding |
 | Treat Kafka as ingestion adapter | It is not the product UX itself |
 | Keep PA-12 credential-gated | Mock cannot prove real integration |
 
@@ -2240,6 +2283,7 @@ production labels, operational SLOs, and high-risk response adapters are still u
 - Does it enter `pending_review` first?
 - Is tenant/vendor specificity represented safely?
 - Is retrieval explainable and budgeted?
+- Did candidate creation pass explicit admission, and did Retrieval v2 match a type-appropriate strong anchor?
 - Can the memory be rejected, expired, or deprecated?
 
 ### Governed Context Fact Review / 受治理上下文事实评审
@@ -2266,6 +2310,7 @@ production labels, operational SLOs, and high-risk response adapters are still u
 - Is PingAn-specific parsing in `normalizers/pingan_platform.py` or equivalent adapter?
 - Is general investigation reasoning promoted to public SOC skill only after sanitization?
 - Are PingAn environment facts stored as scoped memory/config, not public prompt?
+- Are stable PingAn network facts versioned as bounded `C-*`, while dynamic authorization remains a governed fact?
 - Are capability cards updated before implementing a new PingAn integration?
 - Does PA-12 use real dev/staging credentials and smoke report, not more mock?
 
@@ -2279,6 +2324,7 @@ production labels, operational SLOs, and high-risk response adapters are still u
 | `.notes/ai_soc/progress.md` | Durable progress ledger and next step |
 | `.notes/reference-index/soc-agent-engineering-contracts.md` | API, protocol, code style, events, tests |
 | `.notes/ai_soc/capabilities/pingan/onboarding.md` | PingAn capability onboarding plan |
+| `.notes/ai_soc/capabilities/pingan/network-direction-knowledge-migration.md` | Old direction Prompt decomposition and role-adjudication contract |
 | `.notes/ai_soc/integrations/mock-and-real-register.md` | Mock vs real integration register |
 | `.notes/ai_soc/integrations/external-disposition-sync.md` | External status/reason sync plan |
 | `.notes/ai_soc/memory/memory-tracking.md` | Memory tracking and retrieval plan |

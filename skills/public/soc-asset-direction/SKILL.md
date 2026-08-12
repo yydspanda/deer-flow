@@ -51,4 +51,4 @@ Return a role assignment summary:
 - For internal-to-internal events, avoid assuming both sides are equally risky; evaluate initiating behavior, target role, authentication, and host context.
 - For outbound callbacks, the internal asset is often affected, while the external endpoint may be IOC or C2; still keep confidence explicit.
 
-When role assignment is unresolved, recommend `needs_review` rather than allowing automated suppression or response.
+When role assignment is unresolved, still state the best current interpretation and any action-specific target candidate with confidence and gaps, but keep it tentative, require review, and never treat the proposal as automated-response authority.

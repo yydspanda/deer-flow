@@ -46,7 +46,7 @@ def _analysis_json(*, trailing_comma: bool = False) -> str:
     evidence_ref = evidence_ref_for("detection.rule_code", "EDR-IOC-001")
     return f"""
     {{
-      "schema_version": "soc.analysis_result.v3",
+      "schema_version": "soc.analysis_result.v4",
       "verdict": "true_positive",
       "confidence": 0.91,
       "summary": "LLM 判断该告警包含高危外联线索。",
@@ -79,6 +79,30 @@ def _analysis_json(*, trailing_comma: bool = False) -> str:
           "competing_explanations": ["授权安全测试"]
         }}
       ],
+      "network_direction": {{
+        "schema_version": "soc.network_direction_assessment.v1",
+        "status": "not_assessed",
+        "observed_flow": "not_available",
+        "boundary_direction": "not_applicable",
+        "semantic_direction": null,
+        "connection_initiator": null,
+        "intermediaries": [],
+        "confidence": 0.0,
+        "evidence_refs": [],
+        "reasoning_refs": [],
+        "context_refs": [],
+        "rationale": "测试响应不包含方向裁决。",
+        "evidence_gaps": []
+      }},
+      "role_adjudication": {{
+        "schema_version": "soc.role_adjudication_result.v1",
+        "status": "not_assessed",
+        "roles": [],
+        "response_target_proposals": [],
+        "conflicts": [],
+        "evidence_gaps": [],
+        "rationale": "测试响应不包含角色裁决。"
+      }},
       "evidence_gaps": ["缺少终端进程与网络连接关联。"],
       "manual_checks": ["查询源主机同时间窗的进程网络连接。"],
       "reason": "存在可解释的高危行为证据，需要升级复核。",

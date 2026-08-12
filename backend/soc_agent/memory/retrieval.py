@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from soc_agent.contracts import (
     AnalysisContextCatalogItem,
@@ -14,9 +14,13 @@ from soc_agent.contracts import (
     SocMemoryRetrievalDiff,
     SocMemoryRetrievalResult,
 )
+from soc_agent.memory.facets import memory_facets_from_analysis_request
 from soc_agent.utils.hashing import stable_hash
 
 logger = logging.getLogger(__name__)
+
+MEMORY_RETRIEVAL_POLICY_V1 = "soc.memory_retrieval_policy.v1"
+MEMORY_RETRIEVAL_POLICY_V2 = "soc.memory_retrieval_policy.v2"
 
 
 class MemoryRetrievalPort(Protocol):
@@ -48,24 +52,17 @@ class ConfirmedMemoryAnalysisRequestEnricher:
         return request.model_copy(update={"context_catalog": _dedupe_context_items([*request.context_catalog, *memory_items])})
 
 
-def memory_query_from_analysis_request(request: LLMAnalysisRequest) -> SocMemoryQuery:
+def memory_query_from_analysis_request(
+    request: LLMAnalysisRequest,
+    *,
+    policy_version: Literal[
+        "soc.memory_retrieval_policy.v1",
+        "soc.memory_retrieval_policy.v2",
+    ] = MEMORY_RETRIEVAL_POLICY_V2,
+) -> SocMemoryQuery:
     """Build a vendor-neutral pre-LLM query from canonical request dimensions."""
 
-    facets: dict[str, list[str]] = {}
-    _add_facet(facets, "source_type", request.source.source_type.value)
-    _add_facet(facets, "source_system", request.source.source_system)
-    _add_facet(facets, "product", request.source.product)
-    _add_facet(facets, "detection_key", request.detection.detection_key)
-    _add_facet(facets, "rule_code", request.detection.rule_code)
-    _add_facet(facets, "rule_name", request.detection.rule_name)
-    _add_facet(facets, "category", request.classification.category)
-    _add_facet(facets, "severity", request.classification.severity)
-    for mention in request.extracted_entities.mentions[:80]:
-        _add_facet(facets, "entity", mention.key)
-    for conflict_type in request.conflict_types:
-        _add_facet(facets, "conflict_type", conflict_type)
-    for skill in request.skill_context.selected_skills:
-        _add_facet(facets, "skill", skill.skill_name)
+    facets = memory_facets_from_analysis_request(request)
 
     text_terms: list[str] = []
     for value in (
@@ -77,6 +74,7 @@ def memory_query_from_analysis_request(request: LLMAnalysisRequest) -> SocMemory
 
     tenant_scope = request.tenant_id or "global"
     return SocMemoryQuery(
+        policy_version=policy_version,
         tenant_scope=tenant_scope,
         tenant_id=request.tenant_id,
         facets=facets,
@@ -86,6 +84,20 @@ def memory_query_from_analysis_request(request: LLMAnalysisRequest) -> SocMemory
         metadata={
             "source": "fixed_runtime_pre_llm",
             "alert_id": request.alert_id,
+            "strong_anchor_keys_present": sorted(
+                set(facets)
+                & {
+                    "behavior_fingerprint",
+                    "detection_key",
+                    "entity",
+                    "integration_name",
+                    "role_entity",
+                    "rule_code",
+                    "scenario_key",
+                    "skill",
+                    "source_system",
+                }
+            ),
         },
     )
 
@@ -123,6 +135,8 @@ def _match_projection(match: SocMemoryMatch) -> dict[str, Any]:
         "score": match.score,
         "match_reasons": match.match_reasons,
         "matched_facets": match.matched_facets,
+        "anchor_match_reasons": match.anchor_match_reasons,
+        "matched_anchor_facets": match.matched_anchor_facets,
         "token_estimate": match.token_estimate,
         "content_hash": match.content_hash,
         "facets_hash": match.facets_hash,
@@ -168,15 +182,6 @@ def _bounded_memory_summary(summary: str, content: str) -> str:
     return combined[:4000]
 
 
-def _add_facet(facets: dict[str, list[str]], key: str, value: str | None) -> None:
-    normalized = str(value).strip() if value is not None else ""
-    if not normalized:
-        return
-    values = facets.setdefault(key, [])
-    if normalized not in values:
-        values.append(normalized)
-
-
 def _memory_text_terms(text: str | None) -> list[str]:
     if not text:
         return []
@@ -205,6 +210,8 @@ def _dedupe_context_items(
 
 __all__ = [
     "ConfirmedMemoryAnalysisRequestEnricher",
+    "MEMORY_RETRIEVAL_POLICY_V1",
+    "MEMORY_RETRIEVAL_POLICY_V2",
     "MemoryRetrievalPort",
     "build_memory_retrieval_diff",
     "memory_query_from_analysis_request",

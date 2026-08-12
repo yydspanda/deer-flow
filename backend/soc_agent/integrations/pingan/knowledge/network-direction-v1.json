@@ -1,0 +1,137 @@
+{
+  "schema_version": "soc.tenant_knowledge_profile.v1",
+  "profile_id": "pingan.network_direction",
+  "version": "1.0.0",
+  "integration_names": [
+    "pingan_legacy_alert_platform"
+  ],
+  "tenant_ids": [],
+  "review_status": "reviewed",
+  "review_ref": "validation/original_works/zeus/utils/asset_extractor.py:_IP_SKILL_PROMPT",
+  "max_projected_items": 10,
+  "max_projected_chars": 10000,
+  "facts": [
+    {
+      "fact_id": "pa.internal-address-space",
+      "kind": "network_scope",
+      "label": "PingAn controlled internal address space",
+      "statement": "For this PingAn integration, a matched address belongs to organization-controlled internal address space. This establishes network ownership only; it does not by itself establish attacker, victim, authorization, or benignness.",
+      "selector": {
+        "cidrs": ["10.0.0.0/8", "30.0.0.0/8", "172.0.0.0/8", "192.168.0.0/16", "215.0.0.0/8"]
+      },
+      "source_ref": "asset_extractor.py:PingAn internal network allocation",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.app-ts-public-assets",
+      "kind": "network_scope",
+      "label": "PingAn APP-TS controlled public addresses",
+      "statement": "The matched public address is a PingAn-controlled APP-TS test asset. Treat it as organization-owned despite public addressing; ownership alone does not prove authorized testing or a benign outcome.",
+      "selector": {
+        "exact_ips": [
+          "101.89.81.55", "101.89.90.49", "101.89.90.83", "120.52.48.249",
+          "123.58.232.249", "140.207.246.183", "183.62.123.184", "183.62.123.185",
+          "183.62.123.186", "183.62.123.187", "183.62.123.188", "183.62.123.189",
+          "211.139.177.184", "211.139.177.185", "211.139.177.186", "211.139.177.187",
+          "211.139.177.188", "211.139.177.189", "43.240.130.203", "43.240.130.210",
+          "61.241.22.184", "61.241.22.185", "61.241.22.186", "61.241.22.187",
+          "61.241.22.188", "61.241.22.189"
+        ]
+      },
+      "source_ref": "asset_extractor.py:APP-TS public address list",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.pafc-ipv6-assets",
+      "kind": "network_scope",
+      "label": "PingAn PAFC controlled IPv6 ranges",
+      "statement": "The matched IPv6 address belongs to a reviewed PingAn PAFC range. This is an ownership fact, not a verdict or role assignment.",
+      "selector": {
+        "cidrs": ["240e:97c:401c:200::f1:0/112", "2408:8756:2cfb:e000::f1:0/112", "2409:8754:3810:e0::f1:0/112"]
+      },
+      "source_ref": "asset_extractor.py:PAFC IPv6 ranges",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.bgp-public-assets",
+      "kind": "network_scope",
+      "label": "PingAn BGP public address range",
+      "statement": "The matched 202.69.x.x address is organization-controlled public infrastructure. Treat it as internally owned while keeping observed traffic direction and security role separate.",
+      "selector": {
+        "cidrs": ["202.69.0.0/16"]
+      },
+      "source_ref": "asset_extractor.py:PingAn BGP public range",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.internal-domain",
+      "kind": "domain_scope",
+      "label": "PingAn internal-only domain suffix",
+      "statement": "A matched *.paic.com.cn host is a PingAn internal-domain signal. It may support an internal traffic interpretation, but reverse proxies can rewrite Host, so never use this fact alone to determine direction or verdict.",
+      "selector": {
+        "domain_suffixes": ["paic.com.cn"]
+      },
+      "source_ref": "asset_extractor.py:internal domain guidance",
+      "priority": 20
+    },
+    {
+      "fact_id": "pa.network-direction-method",
+      "kind": "direction_playbook",
+      "label": "PingAn network direction method",
+      "statement": "Separate the observed wire tuple, organization-boundary direction, and attacker/victim semantics. Use source contract, collection point, ownership, connection behavior, XFF/proxy evidence, and scenario meaning together; ports and vendor direction labels are hints rather than proof.",
+      "selector": {
+        "source_types": ["ndr", "nids", "waf", "f5"]
+      },
+      "source_ref": "asset_extractor.py:direction matrix and collection-point guidance",
+      "priority": 100
+    },
+    {
+      "fact_id": "pa.reverse-connection-role-inversion",
+      "kind": "direction_playbook",
+      "label": "Reverse connection role interpretation",
+      "statement": "For reverse shell, callback, C2, beacon, tunnel, or malicious outbound scenarios, the connection initiator can be the compromised victim and the listener/peer can be attacker infrastructure. Do not equate source with attacker or destination with victim.",
+      "selector": {
+        "source_types": ["ndr", "nids", "edr", "hids"],
+        "text_terms": ["反弹", "回连", "外联", "外连", "c2", "beacon", "callback", "reverse shell", "隧道", "tunnel", "远控"]
+      },
+      "source_ref": "asset_extractor.py:reverse connection scenarios",
+      "priority": 20
+    },
+    {
+      "fact_id": "pa.proxy-cdn-client-chain",
+      "kind": "infrastructure_role",
+      "label": "Proxy or CDN intermediary handling",
+      "statement": "When bounded evidence explicitly identifies CDN/proxy forwarding, the wire source may be an intermediary. Prefer a valid first client address from X-Forwarded-For or an explicit provider client-address field for an attacker candidate, while retaining the intermediary as proxy/relay and requiring exact evidence references.",
+      "selector": {
+        "source_types": ["ndr", "nids", "waf", "f5"],
+        "text_terms": ["x-forwarded-for", "x_forwarded_for", "cdn-src-ip", "bd-raw-host", "x-cdn-src-ip", "qcloud-cdn-src-ip", "via", "x-cache"]
+      },
+      "source_ref": "asset_extractor.py:CDN and XFF handling",
+      "priority": 20
+    },
+    {
+      "fact_id": "pa.f5-snat-half-flow",
+      "kind": "infrastructure_role",
+      "label": "F5 SNAT half-flow caveat",
+      "statement": "At an F5 SNAT backend collection point, direction=out and the visible source/destination describe only the SNAT-to-backend half-flow. Do not infer the original connection direction or attacker from that label alone; preserve F5 as intermediary and report the unresolved upstream leg.",
+      "selector": {
+        "source_types": ["ndr", "nids", "waf", "f5"],
+        "text_terms": ["f5", "snat", "machine_port", "external_port", "一站通f5网关地址池"]
+      },
+      "source_ref": "asset_extractor.py:F5 SNAT collection-point example",
+      "priority": 20
+    },
+    {
+      "fact_id": "pa.frp-direction-caveat",
+      "kind": "direction_playbook",
+      "label": "FRP or tunnel direction caveat",
+      "statement": "For FRP, proxy, and tunnel detections, distinguish the control connection, exposed service connection, and observed half-flow. Infer attacker/victim roles from behavior and ownership rather than a single tuple or port convention.",
+      "selector": {
+        "source_types": ["ndr", "nids", "edr", "hids"],
+        "text_terms": ["frp", "goproxy", "代理工具", "穿透", "隧道", "tunnel"]
+      },
+      "source_ref": "asset_extractor.py:FRP and tunnel examples",
+      "priority": 30
+    }
+  ]
+}

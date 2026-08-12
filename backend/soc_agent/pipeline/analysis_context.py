@@ -136,6 +136,7 @@ def build_llm_analysis_request(
     return LLMAnalysisRequest(
         alert_id=alert.alert_id,
         tenant_id=alert.tenant_id,
+        environment=_string_extension(alert, "environment"),
         source=alert.source,
         detection=alert.detection,
         classification=alert.classification,
@@ -161,6 +162,14 @@ def resolve_skill_context_for_request(request: LLMAnalysisRequest) -> SocSkillCo
     return build_soc_skill_context(skill_resolution)
 
 
+def _string_extension(alert: AlertInput, key: str) -> str | None:
+    value = alert.extensions.get(key)
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 def project_analysis_context(request: LLMAnalysisRequest) -> dict[str, Any]:
     """Return the exact bounded context shared by prompting and grounding."""
 
@@ -168,6 +177,7 @@ def project_analysis_context(request: LLMAnalysisRequest) -> dict[str, Any]:
     context = {
         "schema_version": request.schema_version,
         "alert_id": request.alert_id,
+        "environment": request.environment,
         "source": request.source.model_dump(mode="json", exclude_none=True),
         "detection": request.detection.model_dump(mode="json", exclude_none=True),
         "classification": request.classification.model_dump(mode="json", exclude_none=True),

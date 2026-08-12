@@ -11,11 +11,14 @@ from fastapi import HTTPException
 from app.gateway.routers import soc_review
 from app.gateway.soc_lead_agent_messages import ResolvedSocLeadAgentMessage
 from soc_agent.contracts import (
+    AdjudicatedRoleType,
     AlertSummary,
     AnalysisRun,
     DecisionAuditRecord,
     DecisionConfidenceSource,
     EntrySurface,
+    HumanConfirmedResponseTarget,
+    HumanConfirmedRole,
     InvestigationEvidence,
     ReviewQueueItem,
     ReviewQueueStatus,
@@ -407,6 +410,43 @@ def test_soc_review_api_corrects_run_and_closes_open_item(review_api) -> None:
     assert summary is not None
     assert summary.confidence_source is DecisionConfidenceSource.HUMAN_CONFIRMATION
     assert repository.get_review_item(item.queue_id).status == ReviewQueueStatus.CLOSED
+
+
+def test_soc_review_api_confirms_roles_without_authorizing_action(review_api) -> None:
+    service, repository, item = review_api
+
+    revision = soc_review.confirm_review_run_roles(
+        item.run_id,
+        soc_review.RoleAdjudicationConfirmationRequest(
+            roles=[
+                HumanConfirmedRole(
+                    role=AdjudicatedRoleType.ATTACKER,
+                    entity_type="ip",
+                    value="30.174.29.44",
+                    rationale="Analyst confirmed the semantic attacker role.",
+                )
+            ],
+            response_targets=[
+                HumanConfirmedResponseTarget(
+                    action_kind="network.block_ip",
+                    target_type="ip",
+                    target_value="30.174.29.44",
+                    target_role=AdjudicatedRoleType.ATTACKER,
+                    rationale="Proposed block target requires separate policy authorization.",
+                )
+            ],
+            reason="Analyst reviewed the observed flow and reverse-connection semantics.",
+        ),
+        FakeRequest(user_id="analyst-api"),
+        service=service,
+    )
+
+    assert revision.revision == 1
+    assert revision.actor.actor_id == "analyst-api"
+    assert revision.response_targets[0].automation_allowed is False
+    persisted = repository.get_run(item.run_id)
+    assert persisted is not None
+    assert persisted.role_adjudication_revisions == [revision]
 
 
 @pytest.mark.asyncio

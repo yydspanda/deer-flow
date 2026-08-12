@@ -10,7 +10,7 @@ from typing import Any
 from soc_agent.contracts import LLMAnalysisRequest, Verdict
 from soc_agent.pipeline.analysis_context import project_analysis_context
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v12"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v13"
 MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 
@@ -69,6 +69,13 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
             "Treat field-trust, role candidates, conflict reports, and warnings as first-class evidence.",
             "Keep evidence trust separate from semantic confidence: a faithfully parsed vendor field may still assert the wrong attacker or victim role.",
             "Treat tentative or conflicted role resolutions as provisional and cite their evidence gaps.",
+            "Assess network direction at three separate layers: observed wire flow, organization-boundary direction, and attacker/victim semantic direction.",
+            "Do not equate source with attacker or destination with victim. Reverse connections, C2 callbacks, proxies, relays, CDN, NAT, and F5 SNAT may separate those roles.",
+            "Use network_direction for the direction assessment and role_adjudication for semantic roles. Both must cite selected E-* facts and R-* reasoning from this response.",
+            "A role may be resolved_from_evidence by the analyzer, but that is not human confirmation. Use tentative, conflicted, or unresolved when competing interpretations remain.",
+            "Response target proposals are action-specific suggestions only.",
+            "Propose the victim for host isolation, the attacker/C2 for network blocking, or the relevant account for disablement only when the cited evidence supports that target.",
+            "Every response target must keep policy_review_required=true and automation_allowed=false; policy and authorization are evaluated after Runtime analysis.",
             "Treat upstream or deterministic scenario hypotheses as hints, not truth. Confirm, revise, or reject them from bounded evidence.",
             "Separate current-alert facts from reasoning. evidence[] contains only exact E-* catalog facts; reasoning[] contains interpretation and inference.",
             "Security expertise is expected: you may infer from general security knowledge or reviewed Skill guidance when the inference is explicitly labeled in reasoning.basis.",
@@ -143,7 +150,7 @@ def _user_prompt(context: Mapping[str, Any], response_schema: Mapping[str, Any])
 
 def _analysis_response_schema() -> dict[str, Any]:
     return {
-        "schema_version": "soc.analysis_result.v3",
+        "schema_version": "soc.analysis_result.v4",
         "verdict": f"one of: {', '.join(item.value for item in Verdict)}",
         "confidence": "number from 0.0 to 1.0",
         "summary": "short analyst-facing Chinese summary, non-empty",
@@ -181,6 +188,57 @@ def _analysis_response_schema() -> dict[str, Any]:
                 "competing_explanations": ["plausible benign or alternative explanation; may be empty"],
             }
         ],
+        "network_direction": {
+            "schema_version": "soc.network_direction_assessment.v1",
+            "status": "one of: observed, inferred, conflicted, indeterminate",
+            "observed_flow": "one of: source_to_destination, multiple_flows, not_available",
+            "boundary_direction": "one of: external_to_internal, internal_to_external, internal_to_internal, external_to_external, proxy_mediated, indeterminate, not_applicable",
+            "semantic_direction": "short open-vocabulary semantic direction, or null",
+            "connection_initiator": "entity value when supported, or null",
+            "intermediaries": ["proxy, relay, CDN, F5, NAT, or other intermediary entity values"],
+            "confidence": "number from 0.0 to 1.0",
+            "evidence_refs": ["selected E-* IDs; at least one"],
+            "reasoning_refs": ["R-* IDs; at least one"],
+            "context_refs": ["S/A/M/C/T IDs used by the referenced reasoning, or empty"],
+            "rationale": "why the three direction layers were assigned",
+            "evidence_gaps": ["missing facts that prevent stronger direction resolution"],
+        },
+        "role_adjudication": {
+            "schema_version": "soc.role_adjudication_result.v1",
+            "status": "one of: tentative, resolved_from_evidence, conflicted",
+            "roles": [
+                {
+                    "role": "one of: initiator, responder, attacker, victim, impacted_asset, proxy, relay, scanner, c2",
+                    "entity_type": "ip, domain, host, user, process, file, url, or another explicit type",
+                    "value": "exact entity value supported by evidence",
+                    "status": "one of: tentative, resolved_from_evidence, conflicted, unresolved",
+                    "confidence": "number from 0.0 to 1.0",
+                    "evidence_refs": ["selected E-* IDs"],
+                    "reasoning_refs": ["R-* IDs"],
+                    "context_refs": ["S/A/M/C/T IDs used by the referenced reasoning, or empty"],
+                    "rationale": "role-specific rationale",
+                }
+            ],
+            "response_target_proposals": [
+                {
+                    "proposal_id": "RT-01, RT-02, ...; unique",
+                    "action_kind": "action-specific suggestion such as isolate_host or block_ip",
+                    "target_type": "ip, domain, host, user, process, file, url, or another explicit type",
+                    "target_value": "exact proposed target entity",
+                    "target_role": "one of: initiator, responder, attacker, victim, impacted_asset, proxy, relay, scanner, c2",
+                    "confidence": "number from 0.0 to 1.0",
+                    "evidence_refs": ["selected E-* IDs"],
+                    "reasoning_refs": ["R-* IDs"],
+                    "context_refs": ["S/A/M/C/T IDs used by the referenced reasoning, or empty"],
+                    "rationale": "why this target fits this action",
+                    "policy_review_required": True,
+                    "automation_allowed": False,
+                }
+            ],
+            "conflicts": ["role conflict retained for audit"],
+            "evidence_gaps": ["missing evidence needed to improve role assignment"],
+            "rationale": "overall semantic role adjudication",
+        },
         "evidence_gaps": ["missing evidence that would materially change or strengthen the conclusion"],
         "manual_checks": ["concrete analyst verification step; at least one is required"],
         "reason": "Chinese reasoning summary, non-empty; include uncertainty when conflicts or fallback evidence exist",

@@ -76,8 +76,12 @@ def test_analysis_prompt_handles_missing_evidence_policy() -> None:
     assert "missing evidence input policy" in prompt.context["fact_reconstruction"]["warnings"]
     assert "needs_review" in prompt.system
     assert "knowledge_candidates" in prompt.response_schema
-    assert prompt.response_schema["schema_version"] == "soc.analysis_result.v3"
+    assert prompt.response_schema["schema_version"] == "soc.analysis_result.v4"
     assert "reasoning" in prompt.response_schema
     assert "scenario_assessments" in prompt.response_schema
+    assert "network_direction" in prompt.response_schema
+    assert "role_adjudication" in prompt.response_schema
+    assert "organization-boundary direction" in prompt.system
+    assert "automation_allowed=false" in prompt.system
     assert "evidence_gaps" in prompt.response_schema
     assert "manual_checks" in prompt.response_schema

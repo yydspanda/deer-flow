@@ -98,10 +98,15 @@ flowchart TD
     O --> P["🚫 Execute boundary only<br/>事务化消费 token，不执行生产副作用"]
     O --> P1["🗃️ Mutation Audit<br/>request / resolution / action boundary"]
 
+    I --> Q3["⚖️ Confirm Roles / Targets<br/>人工确认 attacker / victim / response target"]
+    Q3 --> Q4["🗃️ RoleAdjudicationRevisionRecord<br/>append-only revision, no action authority"]
+    Q4 --> G
     I --> Q["🧑‍💻 Correction / Review Note<br/>人工改判、备注或显式采纳结论"]
     J --> Q0["🧠 Lead Agent conclusion<br/>模型输出本身不写记忆"]
     Q0 -->|"analyst accepts + reason"| Q
-    Q --> R["🧠📌 MemoryCandidate<br/>pending_review 候选记忆"]
+    Q --> Q1{"🚦 Memory Admission<br/>人工提升 + 理由 + 可复用锚点"}
+    Q1 -->|"admitted"| R["🧠📌 MemoryCandidate<br/>pending_review 候选记忆"]
+    Q1 -->|"observed_only"| Q2["📊 只保留操作/审计结果<br/>不制造候选噪声"]
     R --> S["✅ SocMemoryRecord<br/>confirmed memory, retrieval gated"]
     S --> G
     S -. "future matching run: optional typed directive" .-> A0
@@ -143,7 +148,11 @@ flowchart TD
    adapter 不能作为 unrestricted DeerFlow/MCP tool 暴露给模型。独立的 post-Runtime automation observer
    可以在 reviewed enforced policy 匹配时直接授权，不要求 Memory；只有显式 execution flag 和注入的
    exact reviewed registry 同时存在时才调用 adapter，并写独立 execution lineage。
-10. 人工 correction、review note、外部处置理由、domain finding 都只能先形成 pending memory candidate。
+9.1 分析师可以独立确认或修订 attacker、victim、proxy 和 action-specific response target。该命令追加
+    `RoleAdjudicationRevisionRecord`，保留模型原始 adjudication hash 和前一版本；它不是 correction、
+    Memory、Approval 或 action authorization。
+10. 人工 correction、review note、外部处置理由、domain finding 先经过统一 Memory Admission；只有明确
+    人工提升/采纳、足够理由和可复用锚点同时成立才形成 pending candidate，其余为 `observed_only`。
     Lead Agent 输出不会自动落记忆；PI-03F1 允许 `--lead-agent` TUI/CLI 在 open ReviewQueue 上由分析师
     明确采纳一条稳定 assistant message 并填写复用理由。PI-03F2 Web/Gateway 只接收 message ID 和理由，
     从 authenticated server-owned 当前 checkpoint 解析 `soc-triage` 最后一条 terminal assistant 原文，
@@ -284,9 +293,9 @@ flowchart TD
     F --> G["3️⃣ fact_reconstruct<br/>重建事实、角色、字段可信度和冲突"]
     G --> H["4️⃣ build_analysis_input<br/>构造 LLMAnalysisRequest"]
     H --> I["5️⃣ skill_context<br/>白名单选择 + Skill-package bounded guidance"]
-    I --> RC["6️⃣ reference_catalog<br/>E-* facts + S/A/M/C/T context"]
+    I --> RC["6️⃣ reference_catalog<br/>Memory Retrieval v2 + tenant knowledge + E/S/A/M/C/T"]
     RC --> PJ["📝 Pre-provider journal<br/>running + bounded metadata"]
-    PJ --> J["7️⃣ analyze_stub / LLM analyzer<br/>E-* facts + R-* reasoning + K-* candidates"]
+    PJ --> J["7️⃣ analyze_stub / LLM analyzer<br/>AnalysisResult.v4 + direction + roles"]
     J -.-> KC["💡 K-* candidate knowledge<br/>只建议、不生效"]
     KC -.-> KR["🧑‍💻 Human review package<br/>Memory / Skill / Adapter / Policy 分流"]
     KR -.-> KX["🚫 No automatic write or decision impact"]
@@ -316,12 +325,12 @@ flowchart TD
 | `normalize` | Convert vendor payload to canonical alert | 把不同供应商、平安 Zeus envelope、EDR/APT/HIDS 原始字段转成统一 `AlertInput`；保留每条 message 的 network/process observation，并用 `SourceFieldSemantic` 阻止供应商占位值进入实体和推理 | `AlertInput`, `NormalizationReport` |
 | `entity_extract` | Extract security entities | 抽取 IP、域名、URL、host、user/UM、process、file、rule_code/rule_name 等实体 | `ExtractedEntities` |
 | `fact_reconstruct` | Rebuild and adjudicate facts | 把厂商字段声明转换为 `RoleClaim`，结合场景假设裁决 source/destination/attacker/victim/impacted asset；只在同一 observation 内判冲突，不把不同请求或不同进程执行压成一条会话；冲突时给暂定结论、证据缺口和核查清单，但不确定 response target | `FactReconstructionResult v2`, `RoleResolution`, `ConflictReport` |
-| `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型；按结构化字段和高价值优先级构造合法 JSON 投影，精确记录 projected/sanitized/omitted path，跨消息保留关键请求和进程证据 | `LLMAnalysisRequest.v3` |
+| `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型；按结构化字段和高价值优先级构造合法 JSON 投影，精确记录 projected/sanitized/omitted path，跨消息保留关键请求和进程证据 | `LLMAnalysisRequest.v4` |
 | `skill_context` | Resolve and project SOC skills | 根据 canonical typed source/entity/conflict 选择 SOC Skills，再从真实 public package 投影受预算约束的 `runtime-guidance.md`；记录选择原因、package/guidance hash 和 token accounting，不注入完整 `SKILL.md` | `SocSkillContext.v2` |
-| `reference_catalog` | Retrieve governed Memory and freeze deterministic references | Runtime 先通过 `ConfirmedMemoryAnalysisRequestEnricher -> SocMemoryService` 用 canonical facets 做 relevance-first 检索，再从同一份模型可见投影生成稳定引用：当前告警原子事实为 `E-*`；Skill/Adapter/Confirmed Memory/Governed Context/Tool Result 分别为 `S/A/M/C/T-*`。SQL facet index 跨完整 eligible corpus 选候选，top-K 只是最终上下文预算；新增供应商字段只要进入通用 bounded projection 就自动进入目录 | `AnalysisEvidenceCatalogItem[]`, `AnalysisContextCatalogItem[]` |
+| `reference_catalog` | Retrieve governed Memory/knowledge and freeze deterministic references | Runtime 通过 `ConfirmedMemoryAnalysisRequestEnricher -> SocMemoryService` 用 vendor-neutral facets 和 v2 type-aware strong-anchor gate 检索，并按 tenant/integration 匹配已评审知识 profile；再从同一模型可见投影生成稳定引用：当前告警原子事实为 `E-*`；Skill/Adapter/Confirmed Memory/Reviewed Context/Tool Result 分别为 `S/A/M/C/T-*`。SQL facet index 跨完整 eligible corpus 选候选，top-K 只是最终上下文预算 | `AnalysisEvidenceCatalogItem[]`, `AnalysisContextCatalogItem[]` |
 | `pre-provider journal` | Commit non-rollbackable call metadata | 在调用 analyzer/provider 前先把同一个 run 以 `running` 落到 `soc_analysis_runs`；只写 request hash/schema、模型、步骤、来源、证据计数、skill、request/trace/actor 和哈希后的幂等键，不写渲染 prompt、provider header/response、credential/token | `AnalysisRequestJournal` |
-| `analyze_stub / LLM analyzer` | Run bounded reasoning | 默认 deterministic stub；显式选择后通过 DeerFlow `create_chat_model` 调用真实模型。`evidence[]` 只复制 `E-*` 原子事实；`R-*` 承载通用安全知识、Skill、Adapter、Memory、运营上下文或工具结果支持的推理；开放场景引用 `E-* + R-*`；`K-*` 仅是待人工审核的知识建议 | `AnalysisNodeOutput`, `AnalysisResult.v3`, `TriageScenarioAssessment.v2` |
-| `schema_validate` | Validate model result | 严格校验 JSON schema、字段类型和 domain rule。只允许可审计、无安全语义的机械修复，例如唯一 path/value 恢复 `E-*`、补出已引用的目录事实、精确去重、从已显式引用的 `S/A/M/C/T-*` 补冗余 basis；歧义引用、冲突值和未知字段拒绝 | `AnalysisResult.v3`, parser repair log |
+| `analyze_stub / LLM analyzer` | Run bounded reasoning | 默认 deterministic stub；显式选择后通过 DeerFlow `create_chat_model` 调用真实模型。`evidence[]` 只复制 `E-*` 原子事实；`R-*` 承载通用安全知识和受治理上下文支持的推理；v4 分开输出 wire/boundary/semantic direction、attacker/victim/proxy 等角色和只建议不授权的 response target；`K-*` 仅是待人工审核的知识建议 | `AnalysisNodeOutput`, `AnalysisResult.v4`, `NetworkDirectionAssessment`, `RoleAdjudicationResult` |
+| `schema_validate` | Validate model result | 严格校验 JSON schema、字段类型、方向/角色引用和 domain rule。只允许可审计、无安全语义的机械修复，例如唯一 path/value 恢复 `E-*`、补出已引用的目录事实、精确去重、从已显式引用的 `S/A/M/C/T-*` 补冗余 basis；歧义引用、冲突值和未知字段拒绝 | `AnalysisResult.v4`, parser repair log |
 | `evidence_grounding` | Ground facts and reasoning references | `soc.analysis_evidence_grounding.v3` 先逐条验证 `E-*` 的 reference、source path 和 typed scalar，再验证每个 `R-*` 的 `E-*` 与 `S/A/M/C/T-*` 引用及 basis。Grounded reasoning 只表示输入引用完整，不表示推理是原始日志字面事实、已校准真值或可直接处置 | `AnalysisEvidenceGroundingReport.v3` |
 | `knowledge candidate review` | Review model-suggested reusable knowledge | `K-*` 必须回指本轮 `E-* + R-*`。生产 Runtime 只把它作为 analysis 的 inert data；验证工具可汇总为人工审核包并建议 `general_skill / tenant_memory / governed_context / provider_requirement / adapter_mapping / tenant_policy / evaluation_fixture / reject_or_verify`，但不会自动写入或激活任何目标 | `K-* pending_review`, validation `knowledge-review/REVIEW.md` |
 | `decide` | Apply deterministic decision policy | `SocDecisionPolicy` 将已校验结果转换成 operational decision；保留 raw confidence 来源、校准状态、证据状态、结构化复核原因和 policy version。当前 stub/LLM 分数均未校准，因此必须复核；高分不能覆盖冲突、schema 降级、关键证据缺口、截断或误报确认 | `Decision` |

@@ -579,13 +579,25 @@ def _build_parser() -> argparse.ArgumentParser:
     review_context.add_argument("--summary", action="store_true", help="Show compact analyst-facing summary")
     review_context.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(review_context)
-    review_note = review_subparsers.add_parser("note", help="Record an analyst review note as pending memory candidate")
+    review_note = review_subparsers.add_parser(
+        "note",
+        help="Record an analyst review note and optionally promote it to memory review",
+    )
     review_note.add_argument("queue_id", help="Review queue id to annotate")
-    review_note.add_argument("--note", required=True, help="Analyst note to capture as candidate memory")
+    review_note.add_argument(
+        "--note",
+        required=True,
+        help="Analyst note to record; admission is reported separately",
+    )
     review_note.add_argument("--scenario-key", help="Optional scenario key this note applies to")
     review_note.add_argument("--domain", choices=[item.value for item in SocDomainName], help="Optional SOC domain this note applies to")
     review_note.add_argument("--finding-id", help="Optional domain finding id this note applies to")
     review_note.add_argument("--confidence", type=float, default=0.55, help="Candidate confidence, 0..1")
+    review_note.add_argument(
+        "--promote-to-memory",
+        action="store_true",
+        help="Explicitly submit a reusable analyst note to the governed memory-review queue",
+    )
     review_note.add_argument("--lead-agent-thread-id", help="Thread containing an explicitly accepted Lead Agent conclusion")
     review_note.add_argument("--lead-agent-message-id", help="Assistant message containing the accepted conclusion")
     review_note.add_argument("--acceptance-reason", help="Why the analyst believes this conclusion is reusable")
@@ -996,6 +1008,11 @@ def _build_parser() -> argparse.ArgumentParser:
     demo_alert.add_argument("--json", dest="json_payload", help="Inline alert JSON object")
     demo_alert.add_argument("--init-db", action="store_true", help="Create SOC tables before running")
     demo_alert.add_argument("--review-note", help="Optional analyst note to capture after the queue item is created")
+    demo_alert.add_argument(
+        "--promote-to-memory",
+        action="store_true",
+        help="Explicitly submit --review-note to the governed memory-review queue",
+    )
     demo_alert.add_argument("--scenario-key", help="Optional scenario key for --review-note")
     demo_alert.add_argument("--domain", choices=[item.value for item in SocDomainName], help="Optional SOC domain for --review-note")
     demo_alert.add_argument("--finding-id", help="Optional domain finding id for --review-note")
@@ -2074,6 +2091,7 @@ def _review_note(args: argparse.Namespace) -> int:
                 domain=SocDomainName(args.domain) if args.domain else None,
                 finding_id=args.finding_id,
                 confidence=args.confidence,
+                promote_to_memory=args.promote_to_memory,
                 metadata=metadata,
             ),
             context=ServiceRequestContext(
@@ -4179,6 +4197,8 @@ def _eval_labels_verify(args: argparse.Namespace) -> int:
 
 def _demo_alert(args: argparse.Namespace) -> int:
     try:
+        if args.promote_to_memory and not args.review_note:
+            raise ValueError("--promote-to-memory requires --review-note")
         payload = _load_payload(args.path, args.json_payload)
         if args.init_db:
             create_soc_tables(_engine_from_args(args))
@@ -4215,6 +4235,7 @@ def _demo_alert(args: argparse.Namespace) -> int:
                         scenario_key=args.scenario_key,
                         domain=SocDomainName(args.domain) if args.domain else None,
                         finding_id=args.finding_id,
+                        promote_to_memory=args.promote_to_memory,
                     ),
                     context=ServiceRequestContext(actor=ActorContext(actor_id="soc-demo", actor_type=ActorType.USER, surface=EntrySurface.CLI, roles=["soc_analyst"])),
                 )

@@ -37,7 +37,7 @@ class _Client:
         evidence_ref = evidence_ref_for("alert_id", "1")
         return json.dumps(
             {
-                "schema_version": "soc.analysis_result.v3",
+                "schema_version": "soc.analysis_result.v4",
                 "verdict": "suspicious",
                 "confidence": 0.78,
                 "summary": "弱口令攻击尝试存在，但尚无账号失陷证据。",
@@ -75,6 +75,30 @@ class _Client:
                         "competing_explanations": ["授权测试或正常登录失败"],
                     }
                 ],
+                "network_direction": {
+                    "schema_version": "soc.network_direction_assessment.v1",
+                    "status": "not_assessed",
+                    "observed_flow": "not_available",
+                    "boundary_direction": "not_applicable",
+                    "semantic_direction": None,
+                    "connection_initiator": None,
+                    "intermediaries": [],
+                    "confidence": 0.0,
+                    "evidence_refs": [],
+                    "reasoning_refs": [],
+                    "context_refs": [],
+                    "rationale": "检查点测试不包含方向裁决。",
+                    "evidence_gaps": [],
+                },
+                "role_adjudication": {
+                    "schema_version": "soc.role_adjudication_result.v1",
+                    "status": "not_assessed",
+                    "roles": [],
+                    "response_target_proposals": [],
+                    "conflicts": [],
+                    "evidence_gaps": [],
+                    "rationale": "检查点测试不包含角色裁决。",
+                },
                 "evidence_gaps": ["缺少认证结果和后续会话行为。"],
                 "manual_checks": ["核对目标账号认证结果和同时间窗会话。"],
                 "reason": "当前只能确认场景与尝试，不能确认账号失陷。",
@@ -133,7 +157,7 @@ def test_analyzer_output_review_validates_live_typed_scenario_contract() -> None
     assert review["acceptance"]["status"] == "passed"
     assert review["acceptance"]["failed_checks"] == []
     assert all(review["acceptance"]["checks"].values())
-    assert review["analysis_result"]["schema_version"] == "soc.analysis_result.v3"
+    assert review["analysis_result"]["schema_version"] == "soc.analysis_result.v4"
     assert review["scenario_review"]["primary_scenario"]["scenario_name"] == (
         "弱口令攻击"
     )

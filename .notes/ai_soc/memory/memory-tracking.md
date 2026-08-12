@@ -1,6 +1,6 @@
 # SOC Memory Tracking
 
-> Updated: 2026-08-11
+> Updated: 2026-08-12
 >
 > 目的：定义 SOC Agent 后续如何沉淀 topic / detection / scenario 级经验，并把 SOC TUI、Kafka daemon、ReviewQueue、Lead Agent 和 domain triage 中的重要结论转成可审计、可确认、可回滚的业务记忆。
 
@@ -31,7 +31,7 @@ Typed memory DB contract
   -> Wiki/OKF export projection later
 ```
 
-当前实现进度：`SocMemoryCandidate` DB/API/CLI/Web/TUI/Lead Agent visibility 已完成；`SocMemoryService.review_candidate()` 已支持 `confirm_candidate`、`confirm`、`reject`、`deprecate`、`expire`；`confirm` 会创建 `SocMemoryRecord(status=confirmed, retrieval_enabled=false)`。`SocMemoryService.find_relevant_records()` 已支持 governed activation、relevance-first candidate selection、score、match reason、token budget、replay diff 和 `InvestigationContext.relevant_memories`。PI-03F1/F2 已把 CLI/TUI/Web 中“分析师明确采纳的 Lead Agent 结论”接到既有 review-note source bridge，并让 Web/Gateway 从服务端当前 checkpoint 核验消息正文；PI-03F3 已把 Kafka/批处理接成 default-off immutable observation + typed aggregate source。固定 Runtime 现在也会在 LLM 调用前，通过 `ConfirmedMemoryAnalysisRequestEnricher` 查询同一 `SocMemoryService`，并把命中的受治理记录投影为 `M-*` context。普通 Memory 文本仍不是 `E-*` 当前告警事实，也没有可执行权限；只有审核人在确认时显式附加的 `SocMemoryDecisionDirective`，通过完整检索与治理条件后，才可在 post-Runtime 层形成带 before/after 的有效研判变更。Memory 永不直接授权动作。
+当前实现进度：`SocMemoryCandidate` DB/API/CLI/Web/TUI/Lead Agent visibility 已完成；`SocMemoryService.review_candidate()` 已支持 `confirm_candidate`、`confirm`、`reject`、`deprecate`、`expire`；`confirm` 会创建 `SocMemoryRecord(status=confirmed, retrieval_enabled=false)`。所有单条工作流来源现在先经过 `MemoryAdmissionService`：只有明确人工提升/采纳、足够理由和可复用 facet 同时成立才建立 `pending_review` candidate，其余保留为 `observed_only`，避免每天一万条告警制造候选噪声。`SocMemoryService.find_relevant_records()` 已支持 governed activation、完整 eligible corpus 多 lane 召回、Retrieval v2 强锚点、score、match reason、token budget、replay diff 和 `InvestigationContext.relevant_memories`。固定 Runtime 在 LLM 调用前，通过 `ConfirmedMemoryAnalysisRequestEnricher` 查询同一 service，并把命中的受治理记录投影为 `M-*` context。普通 Memory 文本仍不是 `E-*` 当前告警事实，也没有可执行权限；只有审核人在确认时显式附加的 `SocMemoryDecisionDirective`，通过完整检索与治理条件后，才可在 post-Runtime 层形成带 before/after 的有效研判变更。Memory 永不直接授权动作。
 
 ## 2. 不是四维硬主键
 
@@ -127,17 +127,23 @@ Typed Memory Record
 | `negative_memory` | 被驳回结论 / 禁止重复建议 | confirmed + retrieval policy 允许后用于抑制 | “不要把 X 类日志云加工字段当攻击方向事实” |
 | `case_memory` | 当前 case 临时上下文 | 只在当前 case 注入 | “本工单已查过 endpoint process tree” |
 
-### 4.1 PingAn Prompt Decomposition Memory
+### 4.1 PingAn Prompt Decomposition
 
-`.notes/ai_soc/capabilities/pingan/source-docs/` 中的历史 prompt 原文不能整体进入 prompt。拆解后，只有通用方法进入 skill；平安环境知识进入 tenant-scoped memory：
+`.notes/ai_soc/capabilities/pingan/source-docs/` 中的历史 Prompt 原文不能整体进入模型，也不能把所有
+平安内容都叫 Memory。拆分规则如下：
 
-| PingAn 内容 | Memory type | 要求 |
+| PingAn 内容 | 目标层 | 要求 |
 |---|---|---|
-| 内部安全工具、内部域名、部门/团队例外 | `environment_fact` | 必须有 `tenant_id=pingan`、来源文档、有效期 |
-| 某规则/场景长期误报模式 | `benign_pattern` 或 `detection_lesson` | 必须带 detection/vendor alias 和 eval evidence |
-| 账号格式、外包账号、管理员账号特征 | `identity_pattern` | 不得当作跨客户通用知识 |
-| 处置倾向、转 BU、封禁/隔离前置条件 | `response_policy_hint` | 只能作为建议；执行仍走 approval/policy |
-| 字段方向不可信、加工字段误导 | `negative_memory` 或 `procedure` | 用于降低错误字段权重 |
+| 通用方向、进程、HTTP 研判方法 | public Skill / `S-*` | 清除平安字段和处置规则，可跨租户复用 |
+| 平安字段、采集点和 provider 语义 | PingAn Adapter / `A-*` | 只解释来源数据，不得自动忽略或转交 |
+| 已评审且相对稳定的网段、内部域名、F5/CDN 语义 | versioned tenant knowledge profile / `C-*` | 有 profile/version/source/review，按当前告警有限投影；无 decision authority |
+| 某规则或行为经人工复核的可复用教训 | `benign_pattern` / `detection_lesson` / `negative_memory` | 先过 Memory Admission，再候选、确认、激活 |
+| 当前安全工具授权、护网参与者、变更窗口 | Governed Context Fact / `C-*` | 有事件时间、范围、有效期、来源和撤销生命周期，不写永久 Memory |
+| 资产、TI、标签、会话查询 | MCP / tool result / `T-*` | 调用结果默认只是调查证据 |
+| 忽略、转交、封禁/隔离条件 | Tenant Policy / Automation Policy | 独立 Decision/authorization lineage，不从 Memory 文本推断 |
+
+方向知识的具体迁移见
+`../capabilities/pingan/network-direction-knowledge-migration.md`。
 
 ## 5. Facets 不是必填项
 
@@ -145,41 +151,31 @@ Typed Memory Record
 
 | Facet | 是否必需 | 说明 |
 |---|---|---|
-| `topics` | 推荐但非硬必需 | 可由 skill/domain resolver 推断，缺失时可从 category/source_type 兜底 |
-| `detection.canonical_key` | 推荐但非硬必需 | canonical key 缺失时使用 source_type、category、rule_name、MITRE、raw fingerprint 生成弱 key |
-| `detection.vendor_aliases` | 可选 | 平安 `rule_code`、Sigma id、EDR signature id 等；只加速和加分 |
-| `scenario` | 推荐 | 结构化 facets 比 opaque hash 更重要；hash 只用于去重 |
-| `entities` | 可选 | 用于 evidence 和 case query，不默认成为长期主粒度 |
-| `environment` | 可选 | tenant、asset zone、BU、environment 等，用于环境事实和过滤 |
+| `detection_key` / `rule_code` | 可选强锚点 | 有则精确匹配；没有时不阻断其他锚点 |
+| `scenario_key` | 可选强锚点 | 来自 fact/model 场景，保持开放词汇 |
+| `behavior_fingerprint` | 可选强锚点 | 至少两个稳定行为组件才生成，不含 alert/run ID |
+| `role_entity` / `entity` | 可选强锚点 | 角色+实体可区分 attacker/victim/host/user 等适用范围 |
+| `skill` / `conflict_type` | 类型相关锚点 | 更适用于 procedure / negative memory |
+| `source_type` / `source_system` / `product` | 范围与排序 | 通常不能单独证明检测经验相关 |
+| `environment` | 范围与排序 | 不能成为 detection lesson/benign pattern 的唯一强锚点 |
 
 ## 6. 新预警如何查记忆
 
-新预警进入后，先从 canonical alert、correlation result、selected skills、domain findings 和 asset context 构造 `SocMemoryQuery`。
+新预警进入后，从同一个 canonical `LLMAnalysisRequest` 构造 `SocMemoryQuery.v2`。它不依赖
+`relatedAlertList`，也不要求 `rule_code` 存在。
 
 ```json
 {
   "memory_types": ["procedure", "detection_lesson", "environment_fact", "negative_memory"],
-  "statuses": ["confirmed"],
-  "topics": ["edr_process_tree_triage"],
-  "detection": {
-    "canonical_key": "edr:suspicious_powershell",
-    "vendor_aliases": {
-      "pingan.rule_code": "EDR-1965810"
-    }
-  },
-  "scenario": {
-    "source_type": "edr",
-    "process_family": "powershell",
-    "parent_process_family": "office",
-    "network_direction": "external"
-  },
-  "entities": {
-    "host": ["endpoint-1"],
-    "user": ["um12345"]
-  },
-  "environment": {
-    "tenant_id": "default",
-    "asset_zone": "office_endpoint"
+  "policy_version": "soc.memory_retrieval_policy.v2",
+  "facets": {
+    "source_type": ["edr"],
+    "detection_key": ["edr:suspicious_powershell"],
+    "scenario_key": ["powershell_execution"],
+    "behavior_component": ["process:powershell.exe", "process:winword.exe"],
+    "behavior_fingerprint": ["<stable-sha256>"],
+    "role_entity": ["impacted_asset:endpoint-1"],
+    "environment": ["prod"]
   },
   "limit": 8
 }
@@ -187,30 +183,24 @@ Typed Memory Record
 
 召回策略：
 
-1. `memory_type/status` 先过滤，只召回允许影响当前任务的记忆。
-2. `topics` 召回同领域经验。
-3. `canonical_key` 召回同检测族经验。
-4. `vendor_aliases` 召回供应商强索引；没有 alias 不影响系统工作。
-5. `scenario` 做 overlap 召回和打分。
-6. `environment` 召回资产/网段/BU/环境事实。
-7. `negative_memory` 单独召回，用于抑制重复错误建议。
+1. 先按 tenant/status/activation/validity/review due 过滤完整 eligible corpus。
+2. SQL exact-facet、text/type 和 scoped fallback 是候选召回 lane，不代表最终相关。
+3. 统一 scorer 记录 overlap 和排序分数。
+4. Retrieval v2 再按 memory type 做强锚点 Gate：例如 detection lesson 必须精确命中
+   detection/scenario/behavior/role/entity 中至少一类；environment/source/category 不能独立放行。
+5. 通过 Gate 后才应用 candidate limit、top-K 和 token budget，并投影 `M-*`。
+6. 所有 match 保存 `anchor_match_reasons` 和 `matched_anchor_facets`，可与 v1 做 replay diff。
 
 打分示意：
 
 ```text
 score =
-  status_weight
-  + memory_type_weight
-  + topic_match
-  + canonical_detection_match
-  + vendor_alias_match
-  + scenario_overlap
-  + environment_match
-  + confidence
-  + evidence_count
-  + hit_count
-  + recency
-  - stale_penalty
+  record_confidence
+  + exact_facet_weights
+  + bounded_text_match
+  + evidence_overlap
+
+return only if type_appropriate_exact_anchor == true
 ```
 
 只取 top K 条进入 prompt / Lead Agent bounded context，并记录 `match_reason`、`score`、`memory_id`、`version` 和 `content_hash`，用于 replay diff。这里的 top K 是**最终投影预算**，不是“只从最新 K/200 条记录中查找”。SQL repository 先通过 `soc_memory_record_facets` 对完整可用 corpus 做 exact facet 候选召回，再做 text/type/fallback 和统一评分；旧而相关的 Memory 不会被大量新但无关的记录淹没。
@@ -229,7 +219,10 @@ canonical LLMAnalysisRequest
   -> prompt + request journal boundary
 ```
 
-- Query 只使用 canonical source、detection、category、severity、entity、conflict 和 selected-skill facets；通用 Runtime 不识别 PingAn 字段别名。
+- Query 只使用 canonical source、detection、category、severity、scenario、entity、resolved role、
+  replay-stable behavior fingerprint、conflict 和 selected-skill facets；通用 Runtime 不识别 PingAn 字段别名。
+- Runtime 默认 `soc.memory_retrieval_policy.v2`。没有 type-appropriate strong anchor 时返回空结果，
+  而不是用“同来源/同环境”宽泛记忆填满上下文。
 - `alert_id` / `run_id` 只进入检索审计 metadata，不作为匹配 facet，避免把“同一告警 ID”误当成经验相关性。
 - `M-*` 只能被 `R-*` reasoning 作为 `confirmed_memory` basis 引用，不能伪装成 `E-*` 当前告警事实。自由文本本身不能改判。
 - 检索异常只产生脱敏 warning，不阻断基础告警分析；没有命中时保持原 Runtime 行为。
@@ -253,17 +246,17 @@ Memory review `confirm` 可以选择附加 `SocMemoryDecisionDirective`，但不
 
 | 来源 | 可生成什么 | 默认状态 | 说明 |
 |---|---|---|---|
-| SOC TUI / ReviewQueue 人工纠正 | detection lesson / negative memory | `pending_review` | 人工改判是候选来源，不直接生成生效记忆 |
-| ReviewQueue note | procedure / detection lesson | `pending_review` | 普通 note 与显式采纳 Lead Agent 结论共用 `SocReviewService.add_note()` |
+| SOC TUI / ReviewQueue 人工纠正 | detection lesson / negative memory | `observed_only` 或 `pending_review` | 只有 verdict 改变、理由充分且有可复用锚点时准入 |
+| ReviewQueue note | procedure / detection lesson | `observed_only` 或 `pending_review` | 普通 note 默认只观察；`promote_to_memory=true` 或采纳 Lead Agent 结论才可准入 |
 | Kafka daemon / batch 稳定重复模式 | repeated pattern candidate | `pending_review` | 必须先通过 typed aggregation policy 和 distinct-source threshold，禁止逐告警写入 |
-| 分析师明确采纳的 Lead Agent 结论 | detection lesson | `pending_review` | LLM 输出本身不是来源；人工 acceptance + queue/thread/message/reason 才能提候选 |
-| Domain triage result | topic/scenario candidate | `pending_review` | APT/EDR/HIDS/F5 finding 稳定后再接 |
+| 分析师明确采纳的 Lead Agent 结论 | detection lesson | `observed_only` 或 `pending_review` | LLM 输出本身不是来源；人工 acceptance + queue/thread/message + 足够详细的人工 reason 才能提候选，模型正文长度不能代替人工理由 |
+| Domain triage result | topic/scenario candidate | `observed_only` 或 `pending_review` | 必须有分析师反馈、充分理由和可复用锚点 |
 | InvestigationEvidence | evidence ref | 不直接是 memory | 可作为候选记忆的证据 |
 
 ### 7.1 PI-03F 来源治理边界
 
-PI-03F 不增加第二套 memory service。人工 note/correction 等来源继续走
-`SocMemoryCandidateSourceBridge -> SocMemoryService.propose_candidate()`；Kafka/批处理先由
+PI-03F 不增加第二套 memory service。人工 note/correction 等来源统一走
+`SocMemoryCandidateSourceBridge -> MemoryAdmissionService -> SocMemoryService.propose_candidate()`；Kafka/批处理先由
 `SocMemoryPatternService` 保存 typed aggregate observation，达到门槛后再调用同一个
 `SocMemoryService.propose_candidate()`。两条路径都不能绕过 pending-review boundary。
 

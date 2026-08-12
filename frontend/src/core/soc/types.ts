@@ -98,6 +98,7 @@ export interface SocAnalysisRun {
   analysis?: Record<string, unknown> | null;
   decision?: Record<string, unknown> | null;
   corrections?: Record<string, unknown>[];
+  role_adjudication_revisions?: Record<string, unknown>[];
 }
 
 export interface SocAlertSummary {
@@ -478,6 +479,9 @@ export interface SocMemoryRetrievalActivationResult {
 
 export interface SocMemoryQuery {
   schema_version?: string;
+  policy_version?:
+    | "soc.memory_retrieval_policy.v1"
+    | "soc.memory_retrieval_policy.v2";
   memory_types?: SocMemoryCandidateType[];
   statuses?: SocMemoryRecordStatus[];
   tenant_scope?: string | null;
@@ -500,6 +504,8 @@ export interface SocMemoryMatch {
   score: number;
   match_reasons: string[];
   matched_facets: Record<string, string[]>;
+  anchor_match_reasons: string[];
+  matched_anchor_facets: Record<string, string[]>;
   token_estimate: number;
   content_hash: string;
   facets_hash: string;
@@ -518,6 +524,7 @@ export interface SocMemoryRetrievalResult {
   skipped_review_overdue: number;
   skipped_status: number;
   skipped_expired: number;
+  skipped_missing_strong_anchor: number;
   skipped_below_min_score: number;
   returned_count: number;
   total_token_estimate: number;
@@ -927,6 +934,20 @@ export interface SocLeadAgentConclusionAcceptanceRequest {
 export interface SocReviewNoteResult {
   queue_item: SocReviewQueueItem;
   memory_candidate?: SocMemoryCandidate | null;
+  memory_admission?: SocMemoryAdmissionDecision | null;
+}
+
+export interface SocMemoryAdmissionDecision {
+  schema_version: "soc.memory_admission_decision.v1";
+  policy_version: "soc.memory_admission_policy.v1";
+  status: "admitted" | "observed_only";
+  source_type: string;
+  candidate_type: SocMemoryCandidateType;
+  quality_score: number;
+  reason_codes: string[];
+  reusable_facets: Record<string, string[]>;
+  command_hash: string;
+  candidate_id?: string | null;
 }
 
 export type SocAgentRiskLevel =

@@ -14,6 +14,7 @@ from .common import ActorContext
 
 class SocMutationOperation(StrEnum):
     REVIEW_CORRECT = "review.correct"
+    REVIEW_ROLE_CONFIRM = "review.role_confirm"
     REVIEW_CLOSE = "review.close"
     REVIEW_NOTE = "review.note"
     MEMORY_REVIEW = "memory.review"

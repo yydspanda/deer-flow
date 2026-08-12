@@ -223,31 +223,49 @@ Current SOC direction:
 - SOC model calls have independent process-local admission controls (`SOC_LLM_MAX_CONCURRENCY`,
   optional requests-per-minute, admission timeout, and `SOC_LLM_CALL_TIMEOUT_SECONDS`). Analyzer evidence is deterministically
   grounded against the exact bounded prompt projection before `SocDecisionPolicy` runs.
-- New live analyzer responses use `soc.analysis_result.v3`. Before the model call, Runtime builds a
+- New live analyzer responses use `soc.analysis_result.v4`. Before the model call, Runtime builds a
   replay-stable current-alert fact catalog (`E-*`) and governed context catalogs: Skill (`S-*`),
   adapter contract (`A-*`), confirmed memory (`M-*`), governed context (`C-*`), and tool result
   (`T-*`). `evidence[]` may contain only exact `E-*` path/value pairs. Security interpretation belongs
   in explicit `R-*` reasoning items with declared basis and references; open-vocabulary scenario
-  assessments cite both `E-*` and `R-*`. `soc-analysis-v12` / `soc-analysis-json-parser-v10` reject
+  assessments cite both `E-*` and `R-*`. `soc-analysis-v13` / `soc-analysis-json-parser-v11` reject
   unresolved or ambiguous references. The parser may perform only auditable mechanical repairs: map
   an exact path/value to its unique `E-*`, materialize a valid cited catalog fact, remove an exact
   duplicate fact/reference, normalize a strict JSON boolean string, remove an explicit empty context
   sentinel, derive the redundant basis label from an already explicit valid `S/A/M/C/T` reference,
   or mark a missing scenario rationale with an explicit non-semantic placeholder when both E/R
   support lists exist. It must not infer security semantics.
+- `AnalysisResult.v4` separates observed wire flow, organization-boundary direction, semantic roles,
+  and action-specific response-target proposals. Never equate source with attacker or destination with
+  victim globally. A proposed target never grants action authority. Human role confirmation is an
+  append-only `RoleAdjudicationRevisionRecord` through `SocReviewService`, not a model-output rewrite.
+- Reviewed tenant-static knowledge is selected through strict versioned profiles and projected as
+  bounded, source-linked `C-*` with no decision authority. Generic method belongs in `S-*`, adapter
+  semantics in `A-*`, confirmed historical experience in `M-*`, live tool results in `T-*`, and
+  disposition/action rules in their separate policy layers. Dynamic authorization, exercise and
+  maintenance facts still use the governed-context fact lifecycle.
 - Persisted Runtime resolves confirmed Memory after Skill selection and before reference-catalog
   finalization/provider journaling. It queries only through `SocMemoryService`, projects at most the
   bounded retrieval result as `M-*`, and treats retrieval failure as non-blocking. Only confirmed,
   explicitly retrieval-enabled, validity-current and review-current records are eligible; alert/run
   IDs are lineage metadata rather than match facets. SQL candidate selection runs independent exact-
   facet and text lanes across the complete eligible corpus, merges them with the scoped fallback, then
-  applies shared scoring and candidate/top-K budgets; it must not regress to latest-N-only retrieval.
+  applies shared scoring and candidate/top-K budgets. Runtime defaults to
+  `soc.memory_retrieval_policy.v2`, which additionally requires a memory-type-specific exact strong
+  anchor before projection; source/environment/category alone cannot admit a detection lesson or benign
+  pattern. It must not regress to latest-N-only retrieval.
   `M-*` is reasoning context, never `E-*`
   current evidence. Free-form Memory has no deterministic decision or action authority. Only a
   human-reviewed `SocMemoryDecisionDirective` attached during candidate confirmation may change the
   post-Runtime effective decision, and only when the exact record version/content/facets hashes, activation, validity,
   review due, minimum score, and required-facet matches all pass. It never directly authorizes an
   action.
+- Single-alert correction, review-note and domain-finding sources must pass `MemoryAdmissionService`
+  before a candidate is created. Admission requires an explicit human promotion/acceptance signal, a
+  substantive reason and a reusable facet; otherwise the result remains `observed_only`. Alert/run IDs
+  are lineage metadata and must never become candidate or query facets. Ordinary notes use the typed
+  `promote_to_memory` flag; accepted Lead Agent conclusions must pass the reason gate using the human
+  `acceptance_reason`, never assistant-message length or free-form metadata.
 - Governed response automation is a separate default-off post-Runtime layer. `SocAutomationService`
   preserves the immutable base `AnalysisRun.decision`, writes an append-only before/after
   `SocDecisionTransitionRecord`, then evaluates a tenant/environment/version/validity-bound

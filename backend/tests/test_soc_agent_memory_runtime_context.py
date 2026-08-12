@@ -136,9 +136,15 @@ def test_memory_query_uses_only_generic_canonical_dimensions() -> None:
     assert query.facets["category"] == ["suspicious_email"]
     assert "alert_id" not in query.facets
     assert "run_id" not in query.facets
+    assert query.policy_version == "soc.memory_retrieval_policy.v2"
     assert query.metadata == {
         "source": "fixed_runtime_pre_llm",
         "alert_id": "ALT-MEMORY-RUNTIME-1",
+        "strong_anchor_keys_present": [
+            "detection_key",
+            "rule_code",
+            "source_system",
+        ],
     }
 
 

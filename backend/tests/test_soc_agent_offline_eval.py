@@ -21,7 +21,7 @@ def _analysis_json(*, verdict: str = "false_positive", trailing_comma: bool = Fa
     evidence_ref = evidence_ref_for("detection.rule_code", "EDR-IOC-001")
     return f"""
     {{
-      "schema_version": "soc.analysis_result.v3",
+      "schema_version": "soc.analysis_result.v4",
       "verdict": "{verdict}",
       "confidence": 0.81,
       "summary": "录制模型认为该告警可以进入复核。",
@@ -54,6 +54,30 @@ def _analysis_json(*, verdict: str = "false_positive", trailing_comma: bool = Fa
           "competing_explanations": []
         }}
       ],
+      "network_direction": {{
+        "schema_version": "soc.network_direction_assessment.v1",
+        "status": "not_assessed",
+        "observed_flow": "not_available",
+        "boundary_direction": "not_applicable",
+        "semantic_direction": null,
+        "connection_initiator": null,
+        "intermediaries": [],
+        "confidence": 0.0,
+        "evidence_refs": [],
+        "reasoning_refs": [],
+        "context_refs": [],
+        "rationale": "离线测试响应不包含方向裁决。",
+        "evidence_gaps": []
+      }},
+      "role_adjudication": {{
+        "schema_version": "soc.role_adjudication_result.v1",
+        "status": "not_assessed",
+        "roles": [],
+        "response_target_proposals": [],
+        "conflicts": [],
+        "evidence_gaps": [],
+        "rationale": "离线测试响应不包含角色裁决。"
+      }},
       "evidence_gaps": ["离线录制响应不包含实时环境上下文。"],
       "manual_checks": ["人工复核录制响应与样本证据是否一致。"],
       "reason": "这是离线评测使用的可重放模型响应。",

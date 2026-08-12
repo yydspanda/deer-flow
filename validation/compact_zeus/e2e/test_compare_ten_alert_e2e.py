@@ -61,7 +61,7 @@ def _report(*, current: bool) -> dict:
                 "lineage": {
                     "input_hash": f"hash-{index}",
                     "model_name": "deepseek-v4-flash",
-                    "prompt_version": "soc-analysis-v12",
+                    "prompt_version": "soc-analysis-v13",
                 },
                 "source": {"source_type": "ndr"},
                 "grounding": {

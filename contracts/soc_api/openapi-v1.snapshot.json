@@ -108,6 +108,9 @@
     ],
     "/api/soc/review/runs/{run_id}/correct": [
       "post"
+    ],
+    "/api/soc/review/runs/{run_id}/role-adjudication/confirm": [
+      "post"
     ]
   }
 }

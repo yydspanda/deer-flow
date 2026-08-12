@@ -27,8 +27,8 @@
 | 当前目标 | 外网产品链已补齐 post-Runtime effective decision 与受治理动作自动化；真实 Provider/infra/quality/telemetry/owner/rollback/cohort enforcement 继续作为独立 Real Integration Debt |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
-| LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v3`，以 `E-*` 原子事实、`R-*` 推理和受治理 `S/A/M/C/T-*` 上下文分离事实与解释 |
-| 当前下一刀 | 在内网为真实抑制/封禁/隔离 adapter 和租户 policy 收集 owner review、rollback 与 fresh label evidence；此前保持默认关闭或 shadow。随后让人工 Approval Grant 与 automatic Authorization 收敛到同一个 external execution service。任何 simulation 都不关闭 `mocked=false` gate。 |
+| LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v4`，以 `E-*` 原子事实、`R-*` 推理和受治理 `S/A/M/C/T-*` 上下文分离事实、知识、角色与解释 |
+| 当前下一刀 | 用固定十告警和人工方向真值 fresh 重跑 `AnalysisResult.v4`，评估 direction/role/target 质量；再补 Web/TUI 人工角色确认表单和 held-out confirmed-memory Retrieval v2 precision/recall。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 阶段交付主线
@@ -41,6 +41,49 @@
 | `AA` | SOC Alpha Completeness Audit | **Done / AA Gate Passed** | 50 项唯一矩阵、13 个 Gap 和 7 个冻结工作包已确认 | AA Gate 已于 2026-07-18 通过 |
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / External Product Complete + Real Debt Open** | 既有 simulation、PI-01F/F2 和 PI-01G 专家子智能体产品链已完成；7 个真实 gate 保持 open | 外网产品完整性缺口已关闭；fresh real evidence、具名 owner approval、cohort enforcement 和可执行 rollback 到位后才能进入 Pilot readiness review |
+
+## 2026-08-12 — Direction/role adjudication, tenant knowledge, and Memory Retrieval v2 completed
+
+- 将旧 Zeus `asset_extractor.py` 与 `security-log-analysis` 的方向经验拆成六层：通用方法 `S-*`、PingAn
+  Adapter 语义 `A-*`、已评审静态租户知识 `C-*`、人工历史经验 `M-*`、实时工具结果 `T-*`、独立
+  Tenant/Automation Policy。新增 strict `TenantKnowledgeProfile.v1` 和 PingAn network-direction profile，
+  只按当前 canonical request 投影命中的网段、域名、反连、CDN/XFF、F5 SNAT、FRP 知识；每项有
+  version/source/review/hash 且 `decision_authority=none`。
+- Analyzer 升级到 `AnalysisResult.v4`、`soc-analysis-v13`、`soc-analysis-json-parser-v11`：新增
+  `NetworkDirectionAssessment`、`RoleAdjudicationResult`、typed attacker/victim/proxy/relay/scanner/C2 和
+  action-specific `ResponseTargetProposal`。wire flow、组织边界和安全角色分开，禁止全局
+  `source == attacker`；所有 assessed 结果必须经过 `E/R/context` reference 校验。
+- 新增 `SocReviewService.confirm_role_adjudication()` 与 Gateway command。分析师通过 expected revision
+  追加确认角色和 response target，保存 base model hash、前一版本、actor/reason；模型原输出不改写，
+  revision 不产生 Memory、Approval 或 action authority。
+- 新增 `MemoryAdmissionService.v1`。correction、review note、domain finding 等单条来源只有同时具备人工
+  promotion/acceptance、充分理由和可复用 facet 才建立 `pending_review` candidate；其他结果明确为
+  `observed_only`，不再每条告警/点击/模型 finding 制造候选。普通 note 只能通过类型化
+  `promote_to_memory=true` 显式提升，不能由自由 metadata 暗示；Lead Agent acceptance 检查人工
+  `acceptance_reason` 的内容强度，不能用模型正文长度代替。
+- Candidate 与 query 统一使用 vendor-neutral facet builder：source/detection/category/environment、开放场景、
+  selected Skill、role entity 和由场景/进程/协议/HTTP/MITRE 组合的 replay-stable behavior fingerprint；
+  alert/run ID 只作 lineage。
+- 固定 Runtime 默认使用 `soc.memory_retrieval_policy.v2`。完整 eligible corpus 的 SQL facet/text/fallback
+  lanes 仍负责 recall，但每条返回记录必须命中 memory-type-specific exact strong anchor；同来源、同环境或
+  category 只能排序/限域，不能单独放行 detection lesson/benign pattern。结果新增 anchor reasons/facets 和
+  `skipped_missing_strong_anchor`。
+- 真实十告警 request + 受控 Memory fixture 回放为 10/10 exact retained、10/10 broad same-source filtered；
+  9/10 生成 behavior fingerprint、7/10 有 scenario facet、5/10 有 role facet。该报告只证明机制，不声明
+  生产 Memory precision/recall；ruleless 单元回归另证实缺 `rule_code/detection_key` 时可用
+  scenario/behavior/role 锚点工作。
+- 详细迁移见 `capabilities/pingan/network-direction-knowledge-migration.md`；下一步是 fresh live-model
+  direction/role 真值评测、Web/TUI 人工角色确认 UI 和 held-out confirmed-memory 质量评测。
+- 本切片完成 focused/component 验证，不冒充完整 SOC release gate：
+  - direction/role/knowledge/Memory/admission/service/router：`178 passed`；
+  - repository/Memory API/Grounding/Decision/Tenant Policy/Governed Context/architecture：`98 passed`
+    （SQLite/Python 3.12 datetime adapter 产生 2 条已知 deprecation warning）；
+  - Checkpoint D 与 E2E comparison validation：`3 passed`；
+  - SOC OpenAPI v1 snapshot：`6 passed`；
+  - frontend `python ../scripts/pnpm.py check`：ESLint + TypeScript 通过；
+  - Retrieval v2 十告警受控报告已重建，CodeGraph `codegraph sync .` 完成且无 pending sync。
+  - 未运行整个 `backend/tests/test_soc_*.py` wildcard；按 `backend/AGENTS.md`，全量 SOC regression
+    留给 milestone/release gate，当前精确命令以本次变更总结为准。
 
 ## 2026-08-11 — PingAn EDR exact/path-family fast ignore implemented
 
@@ -160,7 +203,7 @@
   ReviewQueue 和 Lead Agent bounded context 均在同一目录。
 - Analyzer 契约升级为 `AnalysisResult.v3`：Runtime 为当前告警生成精确 typed `E-*` 事实目录，为
   Skill/Adapter/Confirmed Memory/Governed Context/Tool Result 生成 `S/A/M/C/T-*` 目录；模型只在
-  `R-*` 中表达安全推理。`soc-analysis-v12` / `soc-analysis-json-parser-v10` 只做有日志、无安全语义的
+  `R-*` 中表达安全推理。`soc-analysis-v13` / `soc-analysis-json-parser-v11` 只做有日志、无安全语义的
   唯一关系修复，Grounding v3 分别校验事实 tuple 和推理引用完整性。
 - 最终 fresh 实跑结果：10/10 structural/safety acceptance passed，6 `suspicious`、4 `needs_review`，10/10 进入
   ReviewQueue，10/10 tenant-policy decision，33 条 mock InvestigationEvidence，0 base-run mutation，
@@ -1180,18 +1223,19 @@
 | 1.2 | Correlation quality baseline | Done | 已建 vendor-neutral same-incident / related-but-distinct / unrelated corpus；`soc eval correlation` 输出双任务指标、reason 分布、fan-out、evidence lineage/unrelated exposure，并支持 `--baseline-json` replay diff | scorer/report/fixture 版本显式；当前 8-pair baseline 暴露 retrieval/dedup precision 均约 0.667；`shadow_dedup_allowed=false` |
 | 1.3 | [Correlation label corpus expansion](../archive/ai_soc/deferred/correlation-label-corpus-expansion.md) | Deferred / `PI-03` data-dependent | 从脱敏真实告警准备 analyst-reviewed pairs，覆盖来源、时间窗口、跨规则同事件和同规则不同事件 cohort | 不以 8 条受控 pair 代表生产分布；标签来源/rationale/version 可审计；扩充后再比较 scorer v2，不直接切换生产规则；不阻塞当前 `PI-01` |
 | 2 | External Disposition Sync Contract | Done | 已新增 vendor-neutral event/status/mapping/record/result contract、generic mapper、Zeus mock fixture、`SocExternalDispositionService`、repository protocol、in-memory repository、PostgreSQL persistence、ReviewQueue context API/Web/TUI/Lead Agent visibility；已接 high-trust mapped review/correction 和 pending memory candidate | 不在 core service 写死 Zeus；未知状态/无法定位只保存 unmatched；重复事件幂等；free-text reason 只能进 pending candidate，不能进 confirmed memory |
-| 3 | Memory Tracking Contract | Done for DB/Runtime; Wiki projection deferred | DB-first candidate/review/retrieval governance、source bridges、full-corpus facet index、fixed Runtime `M-*` injection 和 typed effective-decision directive 已完成 | 不再使用四维硬 key；缺 topic/detection/vendor alias/scenario 任意 facet 时仍可工作；每条告警不创建 memory；wiki/OKF 只作为后期 projection |
+| 3 | Memory Tracking Contract | Done for DB/Runtime v2; Wiki projection deferred | DB-first candidate/review/retrieval governance、Memory Admission、shared facet builder、full-corpus facet index、type-aware strong-anchor Retrieval v2、fixed Runtime `M-*` injection 和 typed effective-decision directive 已完成 | 不使用四维硬 key；缺 rule_code/topic/vendor alias 时仍可工作；单条信号先准入且每条告警不创建 memory；wiki/OKF 只作为后期 projection |
 | 3.1 | Memory candidate DB/API/ReviewQueue visibility | Done | 已新增 `soc_memory_candidates`、repository、CLI `soc memory list/get`、Gateway `/api/soc/memory/candidates`、ReviewQueue context/Web/TUI/Lead Agent bounded visibility | candidate 仍为 `pending_review` 且 `runtime_decision_allowed=false`；不注入 prompt，不影响 verdict |
 | 3.2 | Memory candidate review workflow / confirmed-memory boundary | Done | `SocMemoryService`/CLI/Gateway 支持 confirm/reject/deprecate/expire；confirm 可选择附加审核后的 `SocMemoryDecisionDirective` | 默认 record retrieval-disabled；自由文本无改判权限；typed directive 不能从文本推断，override 必须有 required facets |
-| 3.3 | Confirmed memory retrieval policy / unified visibility MVP | Done | `SocMemoryQuery`、full-corpus facet index、score/reason/budget、CLI/API/ReviewQueue/Web/TUI/Lead Agent 和 fixed Runtime `M-*` injection 已接通 | 只返回 governed active records；top-K 是投影预算而非最新-N扫描；普通 `M-*` 只作 reasoning context |
+| 3.3 | Confirmed memory retrieval policy / unified visibility MVP | Done / v2 | `SocMemoryQuery.v2`、full-corpus facet index、score/reason/budget、memory-type exact anchor gate、CLI/API/ReviewQueue/Web/TUI/Lead Agent 和 fixed Runtime `M-*` injection 已接通 | 只返回 governed active + strong-anchor records；top-K 是投影预算而非最新-N扫描；普通 `M-*` 只作 reasoning context |
 | 3.4 | Governed confirmed-memory retrieval activation | Done | `SocMemoryRetrievalActivationCommand` 和 `SocMemoryService.set_retrieval_activation()` 统一 role/reason/expected-version/validity/review/audit 语义；CLI/API/Web/Boss Demo 均复用该入口，search 支持 baseline diff | 直接写布尔值、过期 activation、逾期 review 或无治理 metadata 的 record 均不能进入 bounded retrieval；事务失败不留下 record/audit 半写状态 |
 | 3.5 | Effective decision + governed response automation | Done for code/simulation; real gate open | `SocAutomationService`、strict policy、four lineage records/tables、CLI lineage、Memory directive、no-Memory automatic action、idempotent retry 已实现 | 默认关闭；shadow 不授权；Memory conflict 停止 rule selection；真实 adapter/owner/rollback/labels 未验收前不得启用生产 enforced execution |
 | 4 | Domain Sub-Agent Contract | Done for PA-10 | 已固定 `SocDomainTriageRequest`、`SocDomainTriageResult`、`SocDomainFinding` 结构 | EDR/APT/HIDS 已共用同一 schema；子研判不能直接改 decision 或写 DB |
+| 4.1 | Network direction + role adjudication | Done for contract/runtime; live quality gate next | `AnalysisResult.v4` 输出三层方向、typed security roles 和 action-specific target proposal；PingAn reviewed direction knowledge 通过 bounded `C-*`；人工确认追加 revision | 不把 source/destination 写死为 attacker/victim；模型 target 无动作权限；下一步用人工方向真值评测并补 Web/TUI 确认 UI |
 | 5 | Generic security scenario recognition | Partial | deterministic MVP 已完成：第一批场景包括反弹 shell、webshell、横向移动、命令/代码执行、恶意外联、提权、凭证滥用；未命中内部 taxonomy 但存在上游场景提示时输出 `vendor.unmapped` 候选 finding；已暴露 `SCENARIO_TAXONOMY_VERSION`/keys/snapshot；PingAn domain eval 和 vendor-neutral `soc eval scenarios` 都输出 covered/missing/unmapped 计数，`--baseline-json` 可生成 replay diff | 任何来源的告警都通过统一 `SocDomainTriageResult/Finding` 输出场景化 finding；Evidence Fusion First；未映射厂商场景不阻断研判、不改 verdict、不写 confirmed memory；eval 能作为 replay diff 基线；LLM 后续只能在 bounded context 中识别场景，不能直接改 verdict 或写 confirmed memory |
 | 6 | Main SOC Agent Orchestrator MVP | Done for Phase 2 bridge | 已串起 analyze、skill context、correlation、read-only action evidence、domain triage、review summary，输出 `UnifiedInvestigationReport` | APT/EDR/HIDS demo 能看到主控用了哪些 skill、历史 match/reasons/evidence、route、finding 和 review context |
 | 7 | Web/TUI visible investigation | Done for MVP | 已新增 `UnifiedInvestigationView`、`InvestigationTimelineItem`，`InvestigationContext` 聚合 correlation result、domain triage results、evidence timeline、external feedback、memory candidates 和 relevant memories；Web/TUI/Lead Agent bounded artifact 可见 | 分析师能区分 runtime decision、domain findings、read-only evidence、外部人工反馈、人工 correction、retrieval-enabled memory；视图只读，不改 verdict |
 | 8 | Demo / Eval Script | Done for APT/EDR/HIDS + single-alert MVP | `soc demo run`/`soc demo alert` 保持持久化调查演示；`soc eval pingan-main` 额外验证无 DB 的 current + historical correlation 主编排链 | 可分别演示持久化 Web/TUI context 与 bounded orchestrator report；mock action evidence 明确标记，不冒充真实 PA-12 |
-| 9 | Memory candidate source integration | Done for PI-03F | `SocMemoryCandidateSourceBridge` 已接 correction/domain finding/feedback/review note；PI-03F1/F2 已接人工采纳 Lead Agent message；PI-03F3 以 immutable observation + 24h UTC source-event-time cohort + 5/5 双门槛接 Kafka/batch，只创建一个 frozen pending candidate | 模型输出、每条 alert/finding/offset 均不能直接写 candidate；重复出现不证明 verdict/authorization/impact/action；confirmed/retrieval gate 仍由 `SocMemoryService` 控制 |
+| 9 | Memory candidate source integration | Done for PI-03F + Admission v1 | `SocMemoryCandidateSourceBridge` 已接 correction/domain finding/feedback/review note 并统一经过 Memory Admission；PI-03F1/F2 已接人工采纳 Lead Agent message；PI-03F3 以 immutable observation + 24h UTC source-event-time cohort + 5/5 双门槛接 Kafka/batch，只创建一个 frozen pending candidate | 模型输出、普通点击/note、每条 alert/finding/offset 均不能直接写 candidate；重复出现不证明 verdict/authorization/impact/action；confirmed/retrieval gate 仍由 `SocMemoryService` 控制 |
 | 10 | Normalization maintenance loop | Done for MVP | 持久化 schema baseline、主动 monitor、去重/reopen issue、SocEvent、CLI/API/Web/TUI、Kafka metric 摘要；字段重要性 registry、离线 suggestion、confidence calibration 和 repair domain guard 已落地 | 新 schema/解析降级/关键映射缺口不静默；首次观察不自批 baseline；suggestion 不自动改代码；calibration profile 不自动放行动作 |
 | 11 | DeerFlow-backed live Runtime LLM | Done for MVP | 新增 `DeerFlowLLMChatClient`、`SocLLMSettings`，统一装配 analyze/replay/demo/Kafka；offline eval 和 normalize suggest 支持 live model | 显式选择模型；未知模型 fail-fast；输出过 JSON/schema/domain validation；trace 记录安全 metadata/usage；模型不能执行动作 |
 | 11.1 | Deterministic decision policy / confidence guard | Done for uncalibrated MVP | 新增 `SocDecisionPolicy`，把 raw analyzer score、来源、校准状态、证据状态、结构化 review reasons 和 policy version 分开；mock/failed evidence 不参与 domain/scenario 置信度 | stub/LLM self-report 当前全部进入复核；误报、冲突、schema 降级/不支持、关键证据缺口、截断等 guard 不会被高分覆盖；summary/queue/audit 保留原因 |

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from typing import Protocol
 
 from soc_agent.contracts import (
@@ -10,6 +11,8 @@ from soc_agent.contracts import (
     AnalysisRun,
     CorrectionRecord,
     EntrySurface,
+    MemoryAdmissionDecision,
+    MemoryAdmissionStatus,
     ReviewNoteCommand,
     ReviewNoteOrigin,
     ReviewQueueItem,
@@ -27,6 +30,8 @@ from soc_agent.contracts import (
     SocMemoryTargetArtifact,
     Verdict,
 )
+from soc_agent.memory.admission import MemoryAdmissionService
+from soc_agent.memory.facets import memory_facets_from_analysis_run
 from soc_agent.normalizers import normalize_alert_payload
 
 
@@ -41,11 +46,55 @@ class MemoryCandidateProposer(Protocol):
     ) -> SocMemoryCandidate: ...
 
 
+@dataclass(frozen=True)
+class MemoryAdmissionOutcome:
+    decision: MemoryAdmissionDecision
+    candidate: SocMemoryCandidate | None = None
+
+
 class SocMemoryCandidateSourceBridge:
     """Create candidate memory through SocMemoryService from stable SOC sources."""
 
-    def __init__(self, memory_service: MemoryCandidateProposer) -> None:
+    def __init__(
+        self,
+        memory_service: MemoryCandidateProposer,
+        *,
+        admission_service: MemoryAdmissionService | None = None,
+    ) -> None:
         self._memory_service = memory_service
+        self._admission_service = admission_service or MemoryAdmissionService()
+
+    def admit_command(
+        self,
+        command: SocMemoryCandidateCreateCommand,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> MemoryAdmissionOutcome:
+        decision = self._admission_service.evaluate(command)
+        if decision.status is not MemoryAdmissionStatus.ADMITTED:
+            return MemoryAdmissionOutcome(decision=decision)
+        candidate = self._memory_service.propose_candidate(command, context=context)
+        return MemoryAdmissionOutcome(
+            decision=decision.model_copy(update={"candidate_id": candidate.candidate_id}),
+            candidate=candidate,
+        )
+
+    def admit_from_correction(
+        self,
+        run: AnalysisRun,
+        correction: CorrectionRecord,
+        *,
+        queue_item: ReviewQueueItem | None = None,
+        context: ServiceRequestContext | None = None,
+    ) -> MemoryAdmissionOutcome:
+        return self.admit_command(
+            memory_candidate_command_from_correction(
+                run,
+                correction,
+                queue_item=queue_item,
+            ),
+            context=context,
+        )
 
     def propose_from_correction(
         self,
@@ -54,11 +103,13 @@ class SocMemoryCandidateSourceBridge:
         *,
         queue_item: ReviewQueueItem | None = None,
         context: ServiceRequestContext | None = None,
-    ) -> SocMemoryCandidate:
-        return self._memory_service.propose_candidate(
-            memory_candidate_command_from_correction(run, correction, queue_item=queue_item),
+    ) -> SocMemoryCandidate | None:
+        return self.admit_from_correction(
+            run,
+            correction,
+            queue_item=queue_item,
             context=context,
-        )
+        ).candidate
 
     def propose_from_domain_finding(
         self,
@@ -69,8 +120,8 @@ class SocMemoryCandidateSourceBridge:
         tenant_id: str | None = None,
         analyst_feedback: str | None = None,
         context: ServiceRequestContext | None = None,
-    ) -> SocMemoryCandidate:
-        return self._memory_service.propose_candidate(
+    ) -> SocMemoryCandidate | None:
+        return self.admit_command(
             memory_candidate_command_from_domain_finding(
                 result,
                 finding,
@@ -79,7 +130,7 @@ class SocMemoryCandidateSourceBridge:
                 analyst_feedback=analyst_feedback,
             ),
             context=context,
-        )
+        ).candidate
 
     def propose_from_domain_triage_result(
         self,
@@ -90,7 +141,7 @@ class SocMemoryCandidateSourceBridge:
         analyst_feedback: str | None = None,
         context: ServiceRequestContext | None = None,
     ) -> list[SocMemoryCandidate]:
-        return [
+        candidates = [
             self.propose_from_domain_finding(
                 result,
                 finding,
@@ -101,16 +152,17 @@ class SocMemoryCandidateSourceBridge:
             )
             for finding in result.findings
         ]
+        return [candidate for candidate in candidates if candidate is not None]
 
-    def propose_from_review_note(
+    def admit_from_review_note(
         self,
         run: AnalysisRun,
         command: ReviewNoteCommand,
         *,
         queue_item: ReviewQueueItem,
         context: ServiceRequestContext | None = None,
-    ) -> SocMemoryCandidate:
-        return self._memory_service.propose_candidate(
+    ) -> MemoryAdmissionOutcome:
+        return self.admit_command(
             memory_candidate_command_from_review_note(
                 run,
                 command,
@@ -119,6 +171,21 @@ class SocMemoryCandidateSourceBridge:
             ),
             context=context,
         )
+
+    def propose_from_review_note(
+        self,
+        run: AnalysisRun,
+        command: ReviewNoteCommand,
+        *,
+        queue_item: ReviewQueueItem,
+        context: ServiceRequestContext | None = None,
+    ) -> SocMemoryCandidate | None:
+        return self.admit_from_review_note(
+            run,
+            command,
+            queue_item=queue_item,
+            context=context,
+        ).candidate
 
 
 def memory_candidate_command_from_correction(
@@ -163,7 +230,7 @@ def memory_candidate_command_from_correction(
         idempotency_key=f"memory_candidate:correction:{correction.correction_id}",
         confidence=_correction_confidence(correction),
         facets={
-            **_run_facets(run, alert=alert),
+            **memory_facets_from_analysis_run(run, alert=alert),
             "candidate_source": ["correction"],
             "corrected_verdict": [correction.corrected_verdict.value],
             **({"previous_verdict": [correction.previous_verdict.value]} if correction.previous_verdict is not None else {}),
@@ -233,9 +300,6 @@ def memory_candidate_command_from_domain_finding(
             "handler_id": [result.handler_id],
             "disposition": [finding.disposition.value],
             "severity": [finding.severity.value],
-            "alert_id": [result.alert_id],
-            "run_id": [result.run_id],
-            **({"queue_id": [queue_id]} if queue_id else {}),
             **({"skill": finding.skill_names} if finding.skill_names else {}),
             **({"capability_card": finding.capability_card_refs} if finding.capability_card_refs else {}),
             **({"feedback_source": ["analyst"]} if feedback else {}),
@@ -270,10 +334,9 @@ def memory_candidate_command_from_review_note(
     stable_key = _stable_review_note_key(run, command, queue_item=queue_item)
     evidence_refs = _review_note_evidence_refs(run, command, queue_item=queue_item)
     facets = {
-        **_run_facets(run, alert=alert),
+        **memory_facets_from_analysis_run(run, alert=alert),
         "candidate_source": ["review_note"],
         "review_note_origin": [command.origin.value],
-        "queue_id": [queue_item.queue_id],
         **({"scenario_key": [command.scenario_key]} if command.scenario_key else {}),
         **({"domain": [command.domain.value]} if command.domain is not None else {}),
         **({"finding_id": [command.finding_id]} if command.finding_id else {}),
@@ -297,6 +360,7 @@ def memory_candidate_command_from_review_note(
             metadata={
                 **command.metadata,
                 "origin": command.origin.value,
+                "promote_to_memory": command.promote_to_memory,
                 "scenario_key": command.scenario_key,
                 "domain": command.domain.value if command.domain is not None else None,
                 "finding_id": command.finding_id,
@@ -343,34 +407,6 @@ def _normalized_alert(run: AnalysisRun) -> AlertInput | None:
 
 def _tenant_scope(alert: AlertInput | None) -> str:
     return alert.tenant_id or "global" if alert is not None else "global"
-
-
-def _run_facets(run: AnalysisRun, *, alert: AlertInput | None) -> dict[str, list[str]]:
-    facets: dict[str, list[str]] = {}
-    if alert is not None:
-        _add_facet(facets, "source_type", alert.source.source_type.value)
-        _add_facet(facets, "source_system", alert.source.source_system)
-        _add_facet(facets, "vendor", alert.source.vendor)
-        _add_facet(facets, "product", alert.source.product)
-        _add_facet(facets, "detection_key", alert.detection.detection_key)
-        _add_facet(facets, "rule_code", alert.detection.rule_code)
-        _add_facet(facets, "rule_name", alert.detection.rule_name)
-        _add_facet(facets, "category", alert.classification.category)
-        _add_facet(facets, "severity", alert.classification.severity)
-    elif run.normalization_report is not None:
-        _add_facet(facets, "source_type", run.normalization_report.source_type.value)
-        _add_facet(facets, "source_system", run.normalization_report.source_system)
-
-    _add_facet(facets, "alert_id", run.alert_id)
-    _add_facet(facets, "run_id", run.run_id)
-    if run.entities is not None:
-        for mention in run.entities.mentions[:20]:
-            _add_facet(facets, "entity", mention.key)
-        for value in run.entities.rule_codes:
-            _add_facet(facets, "rule_code", value)
-        for value in run.entities.rule_names:
-            _add_facet(facets, "rule_name", value)
-    return facets
 
 
 def _base_evidence_refs(run: AnalysisRun, *, queue_id: str | None) -> list[str]:
@@ -560,17 +596,6 @@ def _review_note_evidence_refs(
     return refs
 
 
-def _add_facet(facets: dict[str, list[str]], key: str, value: str | None) -> None:
-    if value is None:
-        return
-    normalized = str(value).strip()
-    if not normalized:
-        return
-    values = facets.setdefault(key, [])
-    if normalized not in values:
-        values.append(normalized)
-
-
 def _dedupe(values: list[str]) -> list[str]:
     seen: set[str] = set()
     deduped: list[str] = []
@@ -584,6 +609,7 @@ def _dedupe(values: list[str]) -> list[str]:
 
 
 __all__ = [
+    "MemoryAdmissionOutcome",
     "SocMemoryCandidateSourceBridge",
     "memory_candidate_command_from_correction",
     "memory_candidate_command_from_domain_finding",

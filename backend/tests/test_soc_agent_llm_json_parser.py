@@ -15,7 +15,7 @@ from soc_agent.llm.json_parser import MAX_ANALYSIS_RESPONSE_CHARS
 
 def _valid_payload() -> dict:
     return {
-        "schema_version": "soc.analysis_result.v3",
+        "schema_version": "soc.analysis_result.v4",
         "verdict": "suspicious",
         "confidence": 0.76,
         "summary": "存在可疑横向移动迹象，需要复核。",
@@ -53,6 +53,57 @@ def _valid_payload() -> dict:
                 "competing_explanations": ["授权远程运维"],
             }
         ],
+        "network_direction": {
+            "schema_version": "soc.network_direction_assessment.v1",
+            "status": "indeterminate",
+            "observed_flow": "not_available",
+            "boundary_direction": "not_applicable",
+            "semantic_direction": None,
+            "connection_initiator": None,
+            "intermediaries": [],
+            "confidence": 0.4,
+            "evidence_refs": ["E-A1B2C3D4E5F6"],
+            "reasoning_refs": ["R-01"],
+            "context_refs": [],
+            "rationale": "该样本没有网络流证据。",
+            "evidence_gaps": ["缺少网络连接元组。"],
+        },
+        "role_adjudication": {
+            "schema_version": "soc.role_adjudication_result.v1",
+            "status": "tentative",
+            "roles": [
+                {
+                    "role": "impacted_asset",
+                    "entity_type": "process",
+                    "value": "svchost.exe",
+                    "status": "tentative",
+                    "confidence": 0.6,
+                    "evidence_refs": ["E-A1B2C3D4E5F6"],
+                    "reasoning_refs": ["R-01"],
+                    "context_refs": [],
+                    "rationale": "进程是当前可见的调查对象。",
+                }
+            ],
+            "response_target_proposals": [
+                {
+                    "proposal_id": "RT-01",
+                    "action_kind": "investigate_process",
+                    "target_type": "process",
+                    "target_value": "svchost.exe",
+                    "target_role": "impacted_asset",
+                    "confidence": 0.6,
+                    "evidence_refs": ["E-A1B2C3D4E5F6"],
+                    "reasoning_refs": ["R-01"],
+                    "context_refs": [],
+                    "rationale": "先调查该进程，不表示已经执行响应。",
+                    "policy_review_required": True,
+                    "automation_allowed": False,
+                }
+            ],
+            "conflicts": [],
+            "evidence_gaps": ["缺少目标主机上下文。"],
+            "rationale": "当前只可暂定调查对象。",
+        },
         "evidence_gaps": ["缺少目标主机进程树和登录结果。"],
         "manual_checks": ["查询目标主机同时间窗的登录事件和子进程。"],
         "reason": "检测到远程注册表相关行为，但仍需要资产和历史上下文确认。",
@@ -68,6 +119,102 @@ def test_parse_analysis_result_accepts_strict_json() -> None:
     assert parsed.repair_applied is False
     assert parsed.result.verdict == Verdict.SUSPICIOUS
     assert parsed.result.confidence == 0.76
+
+
+def test_parse_analysis_result_keeps_direction_roles_and_action_specific_targets() -> None:
+    payload = _valid_payload()
+    payload["reasoning"][0]["basis"] = [
+        "current_evidence",
+        "governed_context",
+    ]
+    payload["reasoning"][0]["context_refs"] = ["C-ABCDEF123456"]
+    payload["network_direction"] = {
+        "schema_version": "soc.network_direction_assessment.v1",
+        "status": "inferred",
+        "observed_flow": "source_to_destination",
+        "boundary_direction": "internal_to_internal",
+        "semantic_direction": "victim_to_attacker_reverse_connection",
+        "connection_initiator": "30.116.114.150",
+        "intermediaries": [],
+        "confidence": 0.86,
+        "evidence_refs": ["E-A1B2C3D4E5F6"],
+        "reasoning_refs": ["R-01"],
+        "context_refs": ["C-ABCDEF123456"],
+        "rationale": "反向连接中，线上的发起者可以是受害主机。",
+        "evidence_gaps": [],
+    }
+    payload["role_adjudication"] = {
+        "schema_version": "soc.role_adjudication_result.v1",
+        "status": "resolved_from_evidence",
+        "roles": [
+            {
+                "role": "victim",
+                "entity_type": "ip",
+                "value": "30.116.114.150",
+                "status": "resolved_from_evidence",
+                "confidence": 0.86,
+                "evidence_refs": ["E-A1B2C3D4E5F6"],
+                "reasoning_refs": ["R-01"],
+                "context_refs": ["C-ABCDEF123456"],
+                "rationale": "该实体主动回连，但语义角色为失陷主机。",
+            },
+            {
+                "role": "c2",
+                "entity_type": "ip",
+                "value": "30.174.29.44",
+                "status": "resolved_from_evidence",
+                "confidence": 0.82,
+                "evidence_refs": ["E-A1B2C3D4E5F6"],
+                "reasoning_refs": ["R-01"],
+                "context_refs": ["C-ABCDEF123456"],
+                "rationale": "该实体是反向连接监听端候选。",
+            },
+        ],
+        "response_target_proposals": [
+            {
+                "proposal_id": "RT-01",
+                "action_kind": "isolate_host",
+                "target_type": "ip",
+                "target_value": "30.116.114.150",
+                "target_role": "victim",
+                "confidence": 0.86,
+                "evidence_refs": ["E-A1B2C3D4E5F6"],
+                "reasoning_refs": ["R-01"],
+                "context_refs": ["C-ABCDEF123456"],
+                "rationale": "隔离目标应是失陷主机，而不是可见连接的目的端。",
+                "policy_review_required": True,
+                "automation_allowed": False,
+            }
+        ],
+        "conflicts": [],
+        "evidence_gaps": [],
+        "rationale": "角色与动作目标分开表达。",
+    }
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert parsed.result.network_direction.semantic_direction == "victim_to_attacker_reverse_connection"
+    assert parsed.result.role_adjudication.roles[0].role.value == "victim"
+    target = parsed.result.role_adjudication.response_target_proposals[0]
+    assert target.action_kind == "isolate_host"
+    assert target.target_value == "30.116.114.150"
+    assert target.automation_allowed is False
+
+
+def test_parse_analysis_result_rejects_target_without_matching_role() -> None:
+    payload = _valid_payload()
+    payload["role_adjudication"]["response_target_proposals"][0].update(
+        {
+            "target_role": "attacker",
+            "target_value": "198.51.100.44",
+        }
+    )
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert exc.value.stage == "schema_validation"
+    assert "must reference an adjudicated role" in str(exc.value)
 
 
 def test_parse_analysis_result_strips_think_and_code_fence() -> None:
@@ -101,7 +248,7 @@ def test_parse_analysis_result_repairs_trailing_comma() -> None:
 def test_parse_analysis_result_repairs_unquoted_keys() -> None:
     raw = """
     {
-      schema_version: "soc.analysis_result.v3",
+      schema_version: "soc.analysis_result.v4",
       verdict: suspicious,
       confidence: 0.76,
       summary: "存在可疑横向移动迹象，需要复核。",
@@ -128,6 +275,40 @@ def test_parse_analysis_result_repairs_unquoted_keys() -> None:
         rationale: "进程行为与远程服务使用相符。",
         competing_explanations: ["授权远程运维"]
       }],
+      network_direction: {
+        schema_version: "soc.network_direction_assessment.v1",
+        status: "indeterminate",
+        observed_flow: "not_available",
+        boundary_direction: "not_applicable",
+        semantic_direction: null,
+        connection_initiator: null,
+        intermediaries: [],
+        confidence: 0.4,
+        evidence_refs: ["E-A1B2C3D4E5F6"],
+        reasoning_refs: ["R-01"],
+        context_refs: [],
+        rationale: "该样本没有网络流证据。",
+        evidence_gaps: ["缺少网络连接元组。"]
+      },
+      role_adjudication: {
+        schema_version: "soc.role_adjudication_result.v1",
+        status: "tentative",
+        roles: [{
+          role: "impacted_asset",
+          entity_type: "process",
+          value: "svchost.exe",
+          status: "tentative",
+          confidence: 0.6,
+          evidence_refs: ["E-A1B2C3D4E5F6"],
+          reasoning_refs: ["R-01"],
+          context_refs: [],
+          rationale: "进程是当前可见的调查对象。"
+        }],
+        response_target_proposals: [],
+        conflicts: [],
+        evidence_gaps: ["缺少目标主机上下文。"],
+        rationale: "当前只可暂定调查对象。"
+      },
       evidence_gaps: ["缺少目标主机进程树。"],
       manual_checks: ["查询目标主机同时间窗的进程树。"],
       reason: "检测到远程注册表相关行为，但仍需要资产和历史上下文确认。",
@@ -424,6 +605,9 @@ def test_parse_analysis_result_accepts_bounded_evidence_list_over_twenty_items()
     ]
     payload["reasoning"][0]["evidence_refs"] = ["E-000000000000"]
     payload["scenario_assessments"][0]["evidence_refs"] = ["E-000000000000"]
+    payload["network_direction"]["evidence_refs"] = ["E-000000000000"]
+    payload["role_adjudication"]["roles"][0]["evidence_refs"] = ["E-000000000000"]
+    payload["role_adjudication"]["response_target_proposals"][0]["evidence_refs"] = ["E-000000000000"]
 
     parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
 

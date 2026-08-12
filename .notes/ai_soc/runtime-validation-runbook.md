@@ -203,8 +203,8 @@ Checkpoint D 当前增加：
 |---:|---|---|
 | D5 | `checkpoint-d/step-d5-skill-context` | 选择原因、实际 Skill package、bounded guidance、package/projection hash、token budget；不调用 LLM |
 | D6 | `checkpoint-d/step-d6-skill-route-coverage` | 212 条 typed HTTP/email 路由覆盖、host/asset 误路由、keyword-only 跨来源域误路由、package 投影完整性；离线评测 |
-| D7 | `checkpoint-d/step-d7-analyzer-output` | 真实模型、Prompt/Parser 版本、`AnalysisResult.v3`、`E-*` 事实、`R-*` 推理、开放场景、行为阶段、竞争解释、缺口和核查项；不运行 Grounding/Decision |
-| D8 | `checkpoint-d/step-d8-evidence-grounding` | production source/value Grounding、description sibling-fact leakage、scenario 引用接受/拒绝状态；不运行 Decision |
+| D7 | `checkpoint-d/step-d7-analyzer-output` | 真实模型、Prompt/Parser 版本、`AnalysisResult.v4`、`E-*` 事实、`R-*` 推理、开放场景、三层网络方向、角色裁决、response-target proposal、缺口和核查项；不运行 Grounding/Decision |
+| D8 | `checkpoint-d/step-d8-evidence-grounding` | production `E/R/S/A/M/C/T-*` Grounding，以及 scenario/direction/role/target 引用接受/拒绝状态；不运行 Decision |
 | D9 | `checkpoint-d/step-d9-decision-policy` | production Decision Policy、evidence state、review reasons、automation guard；不运行模型、租户处置或持久化 |
 | D10 | `checkpoint-d/step-d10-cross-source-runtime` | 8 topic / 6 source family 真实模型 representative matrix、完整 9-step Runtime、模型/token provenance、Grounding 质量和 known input gap fail-closed；无人工标签时不评估模型准确率 |
 | D11 | `checkpoint-d/step-d11-full-corpus-runtime` | 212 条 × 2 次 stub Runtime、D0/corpus lineage、九步兼容性、语义哈希稳定性、known gap fail-closed，以及 parser warning/compaction/omission/truncation/high-value gap/conflict/Grounding/Decision 分层统计与验收；仅失败行保存完整 diagnostic |

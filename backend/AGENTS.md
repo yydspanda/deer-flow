@@ -687,14 +687,32 @@ The `soc-triage` profile leaves its model unpinned and therefore inherits the fi
 the Web request or `soc chat tui --lead-agent --model-name NAME` may explicitly override it through
 DeerFlow's existing request-level model resolution.
 
-New live analyzer output uses `soc.analysis_result.v3`. Runtime attaches a deterministic exact-scalar
+New live analyzer output uses `soc.analysis_result.v4`. Runtime attaches a deterministic exact-scalar
 fact catalog (`E-*`) plus governed Skill (`S-*`), adapter-contract (`A-*`), confirmed-memory (`M-*`),
-governed-context (`C-*`), and tool-result (`T-*`) catalogs to `LLMAnalysisRequest.v3`. Model evidence
+governed-context (`C-*`), and tool-result (`T-*`) catalogs to `LLMAnalysisRequest.v4`. Model evidence
 may only copy exact `E-*` reference/path/typed-value tuples. Explicit `R-*` items carry security
 interpretation with declared basis and references, while open-vocabulary scenario assessments cite
-both `E-*` and `R-*`. `soc-analysis-v12` and `soc-analysis-json-parser-v10` reject unresolved or
+both `E-*` and `R-*`. `soc-analysis-v13` and `soc-analysis-json-parser-v11` reject unresolved or
 ambiguous references. Parser repair is limited to auditable, semantics-free normalization of an
 already unique catalog relation; it must never invent an event fact or security conclusion.
+`AnalysisResult.v4` also keeps observed wire flow, organization-boundary direction, semantic roles,
+and action-specific response-target proposals separate. A response target is never an authorization.
+Analyst role confirmation is an append-only `RoleAdjudicationRevisionRecord` through
+`SocReviewService`, not a rewrite of model output.
+
+Reviewed tenant-static knowledge is projected as bounded, source-linked `C-*` through a strict
+`TenantKnowledgeProfile`; generic methods remain `S-*`, adapter semantics `A-*`, confirmed historical
+experience `M-*`, and live tool results `T-*`. Dynamic authorization/exercise/maintenance facts still
+use the governed-context lifecycle rather than the static profile.
+
+Single-alert learning signals pass through `MemoryAdmissionService` before candidate creation.
+Ordinary review notes use the typed `ReviewNoteCommand.promote_to_memory` flag for explicit promotion;
+free-form metadata cannot grant admission. Accepted Lead Agent conclusions measure the analyst's
+`acceptance_reason`, not assistant-message length, when enforcing the substantive-reason gate.
+Runtime memory queries default to `soc.memory_retrieval_policy.v2`: broad SQL lanes may recall a
+record, but a memory-type-specific exact strong anchor is required before it enters bounded context.
+Environment/source/category alone must not admit a detection lesson or benign pattern; alert/run IDs
+remain lineage only.
 
 Persisted SOC Runtime composition injects `ConfirmedMemoryAnalysisRequestEnricher` after Skill
 resolution and before reference-catalog finalization/provider journaling. It builds a vendor-neutral

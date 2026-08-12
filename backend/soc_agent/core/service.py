@@ -57,6 +57,8 @@ from soc_agent.contracts import (
     ReviewQueueItem,
     ReviewQueuePriority,
     ReviewQueueStatus,
+    RoleAdjudicationConfirmationCommand,
+    RoleAdjudicationRevisionRecord,
     SensitiveEvidenceMode,
     ServiceRequestContext,
     SimilarAlertQuery,
@@ -104,8 +106,17 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.core.runtime import analyze_alert, build_analysis_request_for_payload, inspect_alert_normalization
-from soc_agent.memory import MemoryPatternIneligibleError, SocMemoryCandidateSourceBridge
-from soc_agent.memory.scoring import score_memory_record
+from soc_agent.memory import (
+    MemoryAdmissionOutcome,
+    MemoryAdmissionService,
+    MemoryPatternIneligibleError,
+    SocMemoryCandidateSourceBridge,
+    memory_candidate_command_from_review_note,
+)
+from soc_agent.memory.scoring import (
+    evaluate_memory_anchor_gate,
+    score_memory_record,
+)
 from soc_agent.normalizers import load_mapping_config, normalize_alert_payload
 from soc_agent.protocols import (
     AlertRepository,
@@ -139,6 +150,7 @@ from soc_agent.protocols import (
     SocMutationUnitOfWork,
 )
 from soc_agent.skills import SocSkillResolver
+from soc_agent.utils.hashing import stable_hash
 
 from .access_control import require_actor_roles
 from .errors import (
@@ -860,7 +872,7 @@ class SocReviewService:
             confidence_explanation=confidence_explanation,
             actor=request_context.actor,
             evidence=command.evidence,
-            candidate_knowledge_status="pending_review",
+            candidate_knowledge_status="not_created",
         )
         run.corrections.append(record)
         run.decision = Decision(
@@ -889,14 +901,16 @@ class SocReviewService:
                 actor=request_context.actor,
                 reason=f"manual correction: {command.reason}",
             )
-        memory_candidate = self._propose_correction_memory_candidate(
+        memory_outcome = self._admit_correction_memory_candidate(
             run,
             record,
             queue_item=review_item,
             context=request_context,
         )
-        if memory_candidate is not None:
-            record.memory_candidate_id = memory_candidate.candidate_id
+        if memory_outcome is not None:
+            record.memory_admission = memory_outcome.decision
+            record.candidate_knowledge_status = "pending_review" if memory_outcome.candidate is not None else "observed_only"
+            record.memory_candidate_id = memory_outcome.candidate.candidate_id if memory_outcome.candidate is not None else None
             run.corrections[-1] = record
             self._repository.save_run(run)
         if self._audit_repository is not None:
@@ -920,6 +934,8 @@ class SocReviewService:
                     "confidence_policy_version": record.confidence_policy_version,
                     "correction_id": record.correction_id,
                     "memory_candidate_id": record.memory_candidate_id,
+                    "memory_admission_status": (record.memory_admission.status.value if record.memory_admission is not None else None),
+                    "memory_admission_policy_version": (record.memory_admission.policy_version if record.memory_admission is not None else None),
                 },
             )
         )
@@ -938,31 +954,150 @@ class SocReviewService:
                     "confidence_policy_version": record.confidence_policy_version,
                     "candidate_knowledge_status": record.candidate_knowledge_status,
                     "memory_candidate_id": record.memory_candidate_id,
+                    "memory_admission_status": (record.memory_admission.status.value if record.memory_admission is not None else None),
                 },
             )
         )
         return run
 
-    def _propose_correction_memory_candidate(
+    def _admit_correction_memory_candidate(
         self,
         run: AnalysisRun,
         record: CorrectionRecord,
         *,
         queue_item: ReviewQueueItem | None,
         context: ServiceRequestContext,
-    ) -> SocMemoryCandidate | None:
+    ) -> MemoryAdmissionOutcome | None:
         if self._memory_candidate_repository is None:
             return None
         memory_service = SocMemoryService(
             candidate_repository=self._memory_candidate_repository,
             event_sink=self._event_sink,
         )
-        return SocMemoryCandidateSourceBridge(memory_service).propose_from_correction(
+        return SocMemoryCandidateSourceBridge(memory_service).admit_from_correction(
             run,
             record,
             queue_item=queue_item,
             context=context,
         )
+
+    def confirm_role_adjudication(
+        self,
+        command: RoleAdjudicationConfirmationCommand,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> RoleAdjudicationRevisionRecord:
+        """Append one human role/response-target revision without mutating model output."""
+
+        request_context = context or ServiceRequestContext()
+        require_actor_roles(
+            request_context,
+            self.HUMAN_MUTATION_ROLES,
+            operation="confirming alert roles",
+        )
+        if self._mutation_uow is not None and not self._transaction_active:
+            buffered_events = BufferedSocEventSink(self._event_sink)
+            with self._mutation_uow.mutation_transaction() as repository:
+                record = self._transactional_clone(
+                    repository,
+                    event_sink=buffered_events,
+                ).confirm_role_adjudication(command, context=request_context)
+            buffered_events.flush()
+            return record
+        if self._repository is None:
+            raise SocServiceNotImplementedError("confirm_role_adjudication requires an AlertRepository")
+
+        command_payload = command.model_dump(mode="json")
+        existing_audit = self._find_mutation_audit(
+            SocMutationOperation.REVIEW_ROLE_CONFIRM,
+            request_context,
+        )
+        if existing_audit is not None:
+            validate_mutation_retry(
+                existing_audit,
+                command=command_payload,
+                target_type="analysis_run",
+                target_id=command.run_id,
+            )
+            existing_run = self._repository.get_run(command.run_id)
+            if existing_run is None:
+                raise SocServiceConflictError(f"mutation audit {existing_audit.audit_id} references missing run {command.run_id}")
+            record = next(
+                (item for item in existing_run.role_adjudication_revisions if item.revision_id == existing_audit.result_ref),
+                None,
+            )
+            if record is None:
+                raise SocServiceConflictError(f"mutation audit {existing_audit.audit_id} references missing role revision")
+            return record
+
+        run = self._repository.get_run(command.run_id)
+        if run is None:
+            raise SocServiceNotFoundError(f"run {command.run_id} not found")
+        if run.analysis is None:
+            raise SocServiceConflictError(f"run {command.run_id} has no analyzer role result to confirm")
+        current_revision = len(run.role_adjudication_revisions)
+        if command.expected_revision != current_revision:
+            raise SocServiceConflictError(f"role adjudication expected revision {command.expected_revision}, found {current_revision}")
+        previous = run.role_adjudication_revisions[-1] if run.role_adjudication_revisions else None
+        record = RoleAdjudicationRevisionRecord(
+            run_id=run.run_id,
+            revision=current_revision + 1,
+            previous_revision_id=(previous.revision_id if previous is not None else None),
+            base_model_adjudication_hash=stable_hash(run.analysis.role_adjudication.model_dump(mode="json")),
+            previous_effective_hash=(
+                stable_hash(
+                    {
+                        "roles": previous.roles,
+                        "response_targets": previous.response_targets,
+                    }
+                )
+                if previous is not None
+                else None
+            ),
+            roles=command.roles,
+            response_targets=command.response_targets,
+            reason=command.reason,
+            actor=request_context.actor,
+        )
+        run.role_adjudication_revisions.append(record)
+        self._repository.save_run(run)
+        self._append_mutation_audit(
+            build_mutation_audit(
+                operation=SocMutationOperation.REVIEW_ROLE_CONFIRM,
+                target_type="analysis_run",
+                target_id=run.run_id,
+                run_id=run.run_id,
+                alert_id=run.alert_id,
+                context=request_context,
+                reason=command.reason,
+                command=command_payload,
+                result_ref=record.revision_id,
+                payload={
+                    "revision": record.revision,
+                    "base_model_adjudication_hash": record.base_model_adjudication_hash,
+                    "previous_revision_id": record.previous_revision_id,
+                    "role_count": len(record.roles),
+                    "response_target_count": len(record.response_targets),
+                    "automation_allowed": False,
+                },
+            )
+        )
+        self._event_sink.emit(
+            SocEvent(
+                event_type=SocEventType.REVIEW_ROLE_CONFIRMED,
+                request_id=request_context.request_id,
+                run_id=run.run_id,
+                alert_id=run.alert_id,
+                actor=request_context.actor,
+                payload={
+                    "revision_id": record.revision_id,
+                    "revision": record.revision,
+                    "role_count": len(record.roles),
+                    "response_target_count": len(record.response_targets),
+                },
+            )
+        )
+        return record
 
     def list_queue(
         self,
@@ -1082,8 +1217,26 @@ class SocReviewService:
             item = self._review_queue_repository.get_review_item(command.queue_id)
             if item is None:
                 raise SocServiceConflictError(f"mutation audit {existing_audit.audit_id} references missing queue item {command.queue_id}")
-            candidate = self._memory_candidate_repository.get_memory_candidate(existing_audit.result_ref) if existing_audit.result_ref is not None else None
-            return ReviewNoteResult(queue_item=item, memory_candidate=candidate)
+            run = self._repository.get_run(item.run_id)
+            if run is None:
+                raise SocServiceConflictError(f"mutation audit {existing_audit.audit_id} references missing run {item.run_id}")
+            candidate_id = existing_audit.payload.get("candidate_id")
+            candidate = self._memory_candidate_repository.get_memory_candidate(candidate_id) if isinstance(candidate_id, str) else None
+            admission = MemoryAdmissionService().evaluate(
+                memory_candidate_command_from_review_note(
+                    run,
+                    command,
+                    queue_item=item,
+                    source_surface=request_context.actor.surface,
+                )
+            )
+            if candidate is not None:
+                admission = admission.model_copy(update={"candidate_id": candidate.candidate_id})
+            return ReviewNoteResult(
+                queue_item=item,
+                memory_candidate=candidate,
+                memory_admission=admission,
+            )
 
         item = self._review_queue_repository.get_review_item(command.queue_id)
         if item is None:
@@ -1099,12 +1252,13 @@ class SocReviewService:
             candidate_repository=self._memory_candidate_repository,
             event_sink=self._event_sink,
         )
-        candidate = SocMemoryCandidateSourceBridge(memory_service).propose_from_review_note(
+        outcome = SocMemoryCandidateSourceBridge(memory_service).admit_from_review_note(
             run,
             command,
             queue_item=item,
             context=request_context,
         )
+        candidate = outcome.candidate
         self._append_mutation_audit(
             build_mutation_audit(
                 operation=SocMutationOperation.REVIEW_NOTE,
@@ -1116,15 +1270,23 @@ class SocReviewService:
                 context=request_context,
                 reason="analyst review note recorded",
                 command=command_payload,
-                result_ref=candidate.candidate_id,
+                result_ref=(candidate.candidate_id if candidate is not None else f"admission:{outcome.decision.command_hash[:16]}"),
                 payload={
-                    "candidate_id": candidate.candidate_id,
+                    "candidate_id": (candidate.candidate_id if candidate is not None else None),
+                    "memory_admission_status": outcome.decision.status.value,
+                    "memory_admission_policy_version": outcome.decision.policy_version,
+                    "memory_admission_quality_score": outcome.decision.quality_score,
+                    "memory_admission_command_hash": outcome.decision.command_hash,
                     "scenario_key": command.scenario_key,
                     "domain": command.domain.value if command.domain is not None else None,
                 },
             )
         )
-        return ReviewNoteResult(queue_item=item, memory_candidate=candidate)
+        return ReviewNoteResult(
+            queue_item=item,
+            memory_candidate=candidate,
+            memory_admission=outcome.decision,
+        )
 
     def _transactional_clone(
         self,
@@ -1866,6 +2028,7 @@ class SocMemoryService:
         skipped_review_overdue = 0
         skipped_status = 0
         skipped_expired = 0
+        skipped_missing_strong_anchor = 0
         skipped_below_min_score = 0
         now = self._now_provider()
 
@@ -1906,6 +2069,10 @@ class SocMemoryService:
                 continue
 
             score, match_reasons, matched_facets = score_memory_record(record, query)
+            anchor_allowed, anchor_reasons, matched_anchor_facets = evaluate_memory_anchor_gate(record, query, matched_facets)
+            if not anchor_allowed:
+                skipped_missing_strong_anchor += 1
+                continue
             if score < query.min_score:
                 skipped_below_min_score += 1
                 continue
@@ -1918,6 +2085,8 @@ class SocMemoryService:
                     score=score,
                     match_reasons=match_reasons,
                     matched_facets=matched_facets,
+                    anchor_match_reasons=anchor_reasons,
+                    matched_anchor_facets=matched_anchor_facets,
                     token_estimate=token_estimate,
                     content_hash=record.content_hash,
                     facets_hash=record.facets_hash,
@@ -1936,6 +2105,7 @@ class SocMemoryService:
             token_total += match.token_estimate
 
         return SocMemoryRetrievalResult(
+            policy_version=query.policy_version,
             query=query,
             matches=selected_matches,
             total_candidate_count=len(deduped_records),
@@ -1945,6 +2115,7 @@ class SocMemoryService:
             skipped_review_overdue=skipped_review_overdue,
             skipped_status=skipped_status,
             skipped_expired=skipped_expired,
+            skipped_missing_strong_anchor=skipped_missing_strong_anchor,
             skipped_below_min_score=skipped_below_min_score,
             returned_count=len(selected_matches),
             total_token_estimate=token_total,

@@ -877,7 +877,7 @@ def test_review_service_corrects_run_and_emits_event() -> None:
     assert corrected.corrections[0].previous_verdict == Verdict.FALSE_POSITIVE
     assert corrected.corrections[0].confidence_source is DecisionConfidenceSource.HUMAN_CONFIRMATION
     assert corrected.corrections[0].confidence_was_explicit is True
-    assert corrected.corrections[0].candidate_knowledge_status == "pending_review"
+    assert corrected.corrections[0].candidate_knowledge_status == "not_created"
     assert repository.get_run(run.run_id) == corrected
     assert sink.events[0].event_type == SocEventType.REVIEW_CORRECTED
     assert sink.events[0].payload["corrected_verdict"] == "true_positive"
@@ -904,7 +904,7 @@ def test_review_service_correct_writes_decision_audit_record() -> None:
     assert record.previous_verdict == Verdict.FALSE_POSITIVE
     assert record.final_verdict == Verdict.TRUE_POSITIVE
     assert record.correction_id == corrected.corrections[0].correction_id
-    assert record.payload["candidate_knowledge_status"] == "pending_review"
+    assert record.payload["candidate_knowledge_status"] == "not_created"
     assert record.payload["confidence_source"] == "human_confirmation"
     assert record.payload["confidence_is_calibrated"] is False
     assert record.payload["confidence_was_explicit"] is False
@@ -1042,6 +1042,7 @@ def test_review_service_add_note_proposes_pending_memory_candidate_idempotently(
         scenario_key="network.malicious_external_connection",
         domain=SocDomainName.APT,
         confidence=0.72,
+        promote_to_memory=True,
     )
     first = service.add_note(
         command,
@@ -1053,6 +1054,8 @@ def test_review_service_add_note_proposes_pending_memory_candidate_idempotently(
     )
 
     assert first.memory_candidate is not None
+    assert first.memory_admission is not None
+    assert first.memory_admission.status.value == "admitted"
     assert second.memory_candidate is not None
     assert second.memory_candidate.candidate_id == first.memory_candidate.candidate_id
     candidate = first.memory_candidate
@@ -1188,6 +1191,38 @@ def test_review_note_contract_rejects_unconfirmed_or_forged_lead_agent_lineage()
             note="ordinary analyst note",
             source_thread_id="forged-thread",
         )
+
+
+def test_review_service_keeps_ordinary_note_as_observation_only() -> None:
+    repository = InMemoryAlertRepository()
+    review_repository = InMemoryReviewQueueRepository()
+    memory_repository = InMemoryMemoryCandidateRepository()
+    run = SocAnalysisService(
+        repository=repository,
+        review_queue_repository=review_repository,
+    ).analyze(_sample("pingan_legacy_apt.json"))
+    open_item = review_repository.get_open_review_item_by_run(run.run_id)
+    assert open_item is not None
+    service = SocReviewService(
+        repository=repository,
+        review_queue_repository=review_repository,
+        memory_candidate_repository=memory_repository,
+    )
+
+    result = service.add_note(
+        ReviewNoteCommand(
+            queue_id=open_item.queue_id,
+            note="记录当前调查过程，但尚未确认它可以复用于同类告警。",
+            scenario_key="network.direction_review",
+            domain=SocDomainName.APT,
+        ),
+        context=_analyst_context(surface=EntrySurface.TUI),
+    )
+
+    assert result.memory_candidate is None
+    assert result.memory_admission is not None
+    assert result.memory_admission.status.value == "observed_only"
+    assert memory_repository.list_memory_candidates() == []
 
 
 def test_memory_source_bridge_proposes_domain_finding_candidate_idempotently() -> None:

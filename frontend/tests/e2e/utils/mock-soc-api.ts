@@ -298,8 +298,8 @@ function investigationContext(state: MockSocApiState) {
     external_dispositions: [],
     memory_candidates: [memoryCandidate(state)],
     relevant_memories: {
-      schema_version: "soc.memory_retrieval_result.v1",
-      policy_version: "soc.memory_retrieval.v1",
+      schema_version: "soc.memory_retrieval_result.v2",
+      policy_version: "soc.memory_retrieval_policy.v1",
       query: { require_retrieval_enabled: true },
       matches: [],
       total_candidate_count: 1,
@@ -309,6 +309,7 @@ function investigationContext(state: MockSocApiState) {
       skipped_review_overdue: 0,
       skipped_status: 0,
       skipped_expired: 0,
+      skipped_missing_strong_anchor: 0,
       skipped_below_min_score: 0,
       returned_count: 0,
       total_token_estimate: 0,

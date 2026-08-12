@@ -92,6 +92,18 @@ def _seed_review(repository: SqlAlchemyAlertRepository) -> tuple[AnalysisRun, Re
         run_id="RUN-MUTATION-001",
         alert_id="ALERT-MUTATION-001",
         status=AnalysisRunStatus.NEEDS_REVIEW,
+        input_payload={
+            "alert_id": "ALERT-MUTATION-001",
+            "source": {
+                "source_type": "nids",
+                "source_system": "test-nids",
+            },
+            "detection": {
+                "detection_key": "nids:mutation-uow-review",
+                "rule_name": "Mutation UoW review fixture",
+            },
+            "classification": {"category": "network_intrusion"},
+        },
         decision=Decision(
             verdict=Verdict.SUSPICIOUS,
             confidence=0.62,
@@ -171,6 +183,8 @@ def _seed_confirmed_memory(repository: SqlAlchemyAlertRepository) -> SocMemoryRe
         ReviewNoteCommand(
             queue_id=queue_item.queue_id,
             note="Reusable governed retrieval test lesson.",
+            scenario_key="network.mutation_uow_review",
+            promote_to_memory=True,
         ),
         context=_analyst_context("memory-note-seed"),
     )
@@ -253,7 +267,7 @@ def test_correction_fault_after_each_write_rolls_back_entire_command(tmp_path: P
         CorrectionCommand(
             run_id="RUN-MUTATION-001",
             corrected_verdict=Verdict.FALSE_POSITIVE,
-            reason="analyst correction",
+            reason="Analyst corrected the verdict after reviewing reusable evidence.",
         ),
         context=_analyst_context("correct-001"),
     )
@@ -272,7 +286,7 @@ def test_correction_fault_after_each_write_rolls_back_entire_command(tmp_path: P
                 CorrectionCommand(
                     run_id="RUN-MUTATION-001",
                     corrected_verdict=Verdict.FALSE_POSITIVE,
-                    reason="analyst correction",
+                    reason="Analyst corrected the verdict after reviewing reusable evidence.",
                 ),
                 context=_analyst_context("correct-001"),
             )
@@ -393,7 +407,7 @@ def test_correction_and_external_feedback_exact_retries_create_one_logical_resul
     correction = CorrectionCommand(
         run_id="RUN-MUTATION-001",
         corrected_verdict=Verdict.FALSE_POSITIVE,
-        reason="analyst correction",
+        reason="Analyst corrected the verdict after reviewing reusable evidence.",
     )
     context = _analyst_context("correct-idempotent-001")
 
@@ -445,6 +459,7 @@ def test_review_memory_and_approval_mutations_share_secret_safe_audit_chain(tmp_
             queue_id=queue_item.queue_id,
             note="confirmed reusable analyst lesson",
             scenario_key="network.authorized_test",
+            promote_to_memory=True,
         ),
         context=_analyst_context("note-001"),
     )

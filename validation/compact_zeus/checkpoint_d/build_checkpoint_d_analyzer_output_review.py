@@ -84,7 +84,7 @@ def build_analyzer_output_review(
         "prompt_version_matches": node_output.prompt_version == prompt.prompt_version,
         "parser_version_recorded": bool(node_output.parser_version),
         "analysis_schema_is_v3": result_payload.get("schema_version")
-        == "soc.analysis_result.v3",
+        == "soc.analysis_result.v4",
         "evidence_is_non_empty": bool(node_output.analysis.evidence),
         "reasoning_is_non_empty": bool(node_output.analysis.reasoning),
         "scenario_assessment_is_non_empty": bool(assessments),

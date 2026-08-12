@@ -24,6 +24,8 @@ from app.gateway.soc_lead_agent_messages import (
 from soc_agent.contracts import (
     AnalysisRun,
     CorrectionCommand,
+    HumanConfirmedResponseTarget,
+    HumanConfirmedRole,
     InvestigationContext,
     ReviewNoteCommand,
     ReviewNoteOrigin,
@@ -31,6 +33,8 @@ from soc_agent.contracts import (
     ReviewQueueCloseCommand,
     ReviewQueueItem,
     ReviewQueueStatus,
+    RoleAdjudicationConfirmationCommand,
+    RoleAdjudicationRevisionRecord,
     SocDispositionOutcomeApplyResult,
     SocDispositionOutcomeCommand,
     SocDispositionOutcomeReviewKind,
@@ -66,6 +70,20 @@ class ReviewCorrectionRequest(BaseModel):
     verdict: Verdict
     reason: str = Field(min_length=1)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class RoleAdjudicationConfirmationRequest(BaseModel):
+    """Human role revision; model output remains immutable."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(default=0, ge=0)
+    roles: list[HumanConfirmedRole] = Field(min_length=1, max_length=30)
+    response_targets: list[HumanConfirmedResponseTarget] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    reason: str = Field(min_length=1, max_length=3000)
 
 
 class LeadAgentConclusionAcceptanceRequest(BaseModel):
@@ -174,6 +192,42 @@ def correct_review_run(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except SocServiceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post(
+    "/runs/{run_id}/role-adjudication/confirm",
+    response_model=RoleAdjudicationRevisionRecord,
+)
+def confirm_review_run_roles(
+    run_id: str,
+    body: RoleAdjudicationConfirmationRequest,
+    request: Request,
+    service: ReviewServiceDep,
+) -> RoleAdjudicationRevisionRecord:
+    """Record analyst-confirmed roles and proposed response targets."""
+
+    try:
+        return service.confirm_role_adjudication(
+            RoleAdjudicationConfirmationCommand(
+                run_id=run_id,
+                expected_revision=body.expected_revision,
+                roles=body.roles,
+                response_targets=body.response_targets,
+                reason=body.reason,
+            ),
+            context=soc_service_context_from_request(
+                request,
+                include_soc_roles=True,
+            ),
+        )
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

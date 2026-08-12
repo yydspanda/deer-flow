@@ -1230,6 +1230,7 @@ function RelevantMemorySection({
             <span>启用已过期 {result.skipped_activation_expired}</span>
             <span>逾期未复核 {result.skipped_review_overdue}</span>
             <span>状态过滤 {result.skipped_status}</span>
+            <span>强锚点过滤 {result.skipped_missing_strong_anchor}</span>
             <span>低分过滤 {result.skipped_below_min_score}</span>
           </div>
           {matches.length === 0 ? (

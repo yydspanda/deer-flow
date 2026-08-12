@@ -19,6 +19,7 @@ validation/compact_zeus/
 ├── shared/          # 受限 PKL loader 与编码压缩复用工具
 ├── internal_batch/  # 内网 5 -> 50 -> all、可续跑的生产 Runtime 批跑入口
 ├── e2e/             # 固定 10 条完整告警的统一端到端审阅入口
+├── memory/          # Memory Admission/Retrieval 策略的受控对比验证
 ├── policy/          # post-Runtime Tenant Policy 与 PingAn EDR 快速策略验收
 ├── docs/            # 长期设计与审阅说明
 ├── data/            # gitignored 可再生产物

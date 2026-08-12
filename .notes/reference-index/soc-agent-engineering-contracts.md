@@ -1415,7 +1415,9 @@ normalizers/hids.py
   成为 claim source；未选中的 fallback 只供 raw 审计。
 - 冲突裁决必须输出暂定值或 unresolved、支持/反对 claim IDs、语义置信度、证据缺口、人工核查清单和 automation guard；不能一边报告冲突，一边把值伪装成 confirmed。
 - fact layer 的 `automation_allowed` 始终为 false；即使角色由人工确认，也必须再经过 action policy/approval。
-- 事实重建只做 deterministic 规则；LLM 只能读取 fact layer 进行解释、补充候选或提出复核问题，不能绕过该层直接相信上游加工字段。
+- 事实重建只做 deterministic 规则；LLM 只能读取 fact layer 和冻结的 reference catalogs，随后在
+  `RoleAdjudicationResult` 中输出独立的语义角色裁决。它不能绕过 fact layer 直接相信上游加工字段，
+  也不能把模型角色回写成 observed/confirmed telemetry。
 - raw message 存在时，canonical processed fields 默认低可信且不作为主推理输入；raw message
   缺失时 structured fallback 必须保留 fallback warning，并沿用 source policy 的显式 trust。
   PingAn 默认 `low`，仅 exact topic `T_GBD_zeus_data` 为 `high`。
@@ -1592,28 +1594,28 @@ normalizers/hids.py
   - `FactReconstructionResult`。
   - `primary_evidence_path`、`conflict_count`、`conflict_types`、`warnings`。
 - analyzer 输出的 `AnalysisResult.evidence` 必须能引用 fact layer 中的关键不确定性，例如低可信 fallback 和字段冲突。
-- 新 LLM 输出必须使用 `soc.analysis_result.v2`，并显式包含：
+- 新 LLM 输出必须使用 `soc.analysis_result.v4`，并显式包含：
   - open-vocabulary `scenario_assessments`；不得要求场景预先存在于固定 taxonomy。
   - `origin=upstream_hint|inferred|hybrid`、唯一 primary、未校准 scenario confidence。
   - `activity_stage=detection_hit|attempt_observed|effect_observed|impact_confirmed|indeterminate`。
-  - 回指同一 `AnalysisResult.evidence` 的零基 `evidence_indices`。
+  - `NetworkDirectionAssessment`：分别表达 wire flow、boundary direction、semantic direction、initiator、
+    intermediary、证据缺口和 `E/R/context` 引用。
+  - `RoleAdjudicationResult`：typed attacker/victim/impacted/proxy/relay/scanner/C2 等角色和
+    action-specific `ResponseTargetProposal`；目标建议固定 `policy_review_required=true`、
+    `automation_allowed=false`。
   - `competing_explanations`、`evidence_gaps`、非空 `manual_checks`。
 - 上游 `ScenarioHypothesis` 是输入提示，不是 LLM 输出真值。模型可以细化或拒绝它，但必须用 bounded
   evidence 解释；不能把未知场景只埋在自然语言 `reason`。
-- 每个 evidence description 只能解释该项 source/value，不能夹带 sibling-field facts。Parser 负责
-  结构约束；`soc.analysis_evidence_grounding.v2` 额外审计 source/value 和 description：
-  - source/value 落地但 description 引入其他 bounded fact 时，状态必须是
-    `description_context_leakage`，不能算 grounded。
-  - 报告必须同时保留 `matched_context_paths` 与 `foreign_description_context_paths`，只记录路径，
-    不复制额外敏感值。
-  - entity mention 的 synthetic key、显式“不是/不代表/非独立证明”等 disclaimer 不能制造误报。
-  - 精确可见的 `<ENCODED:...:OMITTED>` marker-bearing scalar 只能证明该 source value 存在、
-    encoding shape 和模型边界省略；不能证明隐藏字节、token 有效性/身份/权限、安全结果或私有完整
-    sidecar hash。整段 object-as-string 不能作为 scalar evidence。
-  - `evidence.value` 必须逐字复制最小 scalar leaf，不得自行拼成 `key=value`；同一句需要 IP、端口等
-    多个事实时必须拆为多条 exact-path evidence。
-  - Grounding 不修复模型语义；任何拒绝继续通过既有 Decision Policy 触发 degraded evidence、
-    human review 和 `automation_allowed=false`。
+- Runtime 必须在调用前冻结 replay-stable `E-*` 当前事实目录和 `S/A/M/C/T-*` 上下文目录。模型只在
+  `R-*` 中解释安全语义；每个 `R-*` 必须引用至少一个 `E-*`，依赖外部上下文时还必须引用对应 namespace。
+- `soc-analysis-v13` / `soc-analysis-json-parser-v11` 只允许有日志、无安全语义的机械修复；不得根据文本
+  猜攻击者、受害者、场景、成功状态或上下文来源。
+- `soc.analysis_evidence_grounding.v3` 先逐条校验 `E-*` reference/path/typed scalar，再校验 `R-*` 和
+  `S/A/M/C/T-*` 引用完整性。Grounding 证明引用闭合，不证明模型推理已校准或可以执行动作。
+- 精确可见的 `<ENCODED:...:OMITTED>` marker-bearing scalar 只能证明字段存在、encoding shape 和模型边界
+  省略，不能证明隐藏字节、token 身份/权限、安全结果或私有 sidecar hash。
+- 任何 evidence/reasoning/context 引用失败继续通过 Decision Policy 触发 degraded evidence、human review
+  和 `automation_allowed=false`；Grounding 不修复模型安全语义。
 - deterministic stub 用于 request 结构、trace、replay、golden test 和低成本降级；它不是生产模型质量证明。
 - 真实模型通过 `DeerFlowLLMChatClient` 复用 `deerflow.models.create_chat_model()`；SOC 代码不得再实现一套
   provider SDK、API key 读取或模型 fallback。
@@ -1637,15 +1639,38 @@ normalizers/hids.py
 - admission timeout 只限制等待本地并发名额；call timeout 独立限制一次 provider invocation。后者
   超时必须形成 retryable `analyzer_timeout`，Kafka 不得提交 offset；后台调用可能无法强制中断时，
   executor worker 数仍必须有界，防止超时请求无限创建线程。
-- parser semantic repair 只允许可证明无损的白名单形状转换并记录精确 repair log。目前只允许
-  `verdict: [one_string] -> one_string` 与 `evidence[i].value: [one_scalar] -> one_scalar`；多元素数组、
-  类型猜测和内容拼接必须失败并进入 typed Runtime failure。
-- 新模型响应不得带未声明的顶层或 scenario 字段；不得用字符串 confidence、布尔 evidence index、
-  越界 index、重复场景或零/多个 primary 绕过 `AnalysisResult.v2`。
+- parser semantic repair 只允许当前 `soc-analysis-json-parser-v11` 明确列出的可证明无损关系修复；
+  类型猜测、内容拼接、歧义引用和安全语义补全必须失败并进入 typed Runtime failure。
+- 新模型响应不得带未声明的顶层、scenario、direction 或 role 字段；不得用字符串 confidence、重复
+  reference、无 `E/R` 支撑的 assessed direction/role、重复角色/target 或零/多个 primary 绕过
+  `AnalysisResult.v4`。
 - Prompt compact JSON、模型响应、`AnalysisResult` 文本字段、evidence 数量/值长度、knowledge candidate
   数量/长度都必须有硬上限；超限必须在 Runtime 中形成 typed failure，不能进入 repair 无限消耗。
 - `DeerFlowLLMChatClient` 只可保存 allowlisted response metadata 和 token usage；provider headers、凭证、
   原始 response object 不得进入 `AnalysisRun`。
+
+### Network direction / role adjudication / tenant knowledge 约束
+
+- 方向必须拆成三层：observed wire flow、organization-boundary direction、security semantic roles。
+  禁止在通用 Runtime 建立 `source == attacker` 或 `destination == victim` 的全局等式。
+- `FactReconstructionResult` 继续是 deterministic pre-LLM fact layer；模型最终语义角色必须写入独立
+  `AnalysisResult.role_adjudication`，不得回写或伪装成原始 `RoleResolution`。
+- assessed `NetworkDirectionAssessment` 必须同时有 `E-*` 和 `R-*`；每个 `AdjudicatedRole` 和
+  `ResponseTargetProposal` 必须有 exact `E-*`、`R-*`，使用知识时还要带对应 `S/A/M/C/T-*`。
+- response target 必须绑定具体 `action_kind`。它只是目标提议，不是 tenant disposition、Approval、
+  automatic authorization 或 adapter execution input。
+- 人工确认只能通过 `SocReviewService.confirm_role_adjudication()` 或其 Gateway command 进入。命令要求
+  trusted actor、角色权限、expected revision 和非空理由，结果追加 `RoleAdjudicationRevisionRecord`，
+  保留 base model adjudication hash 和 previous effective hash；不得覆盖模型输出。
+- 人工确认的 response target 必须引用同一命令中确认的角色，且 `automation_allowed=false`。后续动作仍
+  必须通过 Policy/Approval/Authorization/Adapter preflight。
+- 租户静态知识使用严格 `TenantKnowledgeProfile.v1`，只按 canonical current-request selector 匹配并投影
+  bounded、hashed、source-linked `C-*`。profile loader 不执行租户代码；每项固定
+  `decision_authority=none`。
+- 通用方法进 public Skill `S-*`，字段/采集语义进 Adapter `A-*`，人工历史经验进 Memory `M-*`，实时
+  MCP 查询进 `T-*`，运营规则进 Tenant/Automation Policy。不得用一个长租户 Prompt 混合这些权限层。
+- 动态授权测试、护网参与者、变更窗口和当前资产状态不是静态 profile；必须继续走 typed Governed
+  Context Fact 生命周期和事件时间匹配。
 
 ### Mapping config 约束
 
@@ -2509,9 +2534,26 @@ tool permission denial rate
 
 ### 23.2 Memory 检索与改判
 
+- 单条 correction/review note/domain finding 等 workflow signal 必须先经过
+  `MemoryAdmissionService(soc.memory_admission_policy.v1)`。准入至少要求：明确人工 promotion/acceptance、
+  足够理由、一个可复用 facet；未准入返回 `observed_only`，不得创建候选。Kafka/batch repeated pattern
+  继续走独立聚合门槛，但最终仍只创建 pending candidate。
+- 普通 `ReviewNoteCommand` 的显式提升只能使用类型化 `promote_to_memory=true`；不得从自由格式
+  metadata 暗示提升。Lead Agent acceptance 的“足够理由”必须检查人工 `acceptance_reason`，不得用
+  模型回复正文长度代替人工判断。
+- candidate 和 Runtime query 必须复用 `memory/facets.py` 的 vendor-neutral facet 语义。`alert_id/run_id`
+  只能作为 lineage metadata；不得作为 match facet。`rule_code`、environment、scenario、role 和 behavior
+  均可缺失，不能设计成多维联合硬键。
 - SQL repository 必须在完整 eligible corpus 上分别执行 `soc_memory_record_facets` exact-facet lane 和
   text lane，与 scoped fallback 合并后再用共享 scorer 应用 candidate limit 和最终 top-K/token budget。
   禁止恢复“先取最新 200 条再评分”的实现；大量新但宽泛匹配的记录不能遮蔽旧的强相关 Memory。
+- 固定 Runtime 查询必须使用 `soc.memory_retrieval_policy.v2`。多 lane 只负责 recall；每个 record 在返回
+  前必须按 memory type 命中至少一个 exact strong anchor。Detection/benign/response lesson 可用
+  detection key、rule code、scenario、behavior fingerprint、role/entity；procedure/negative memory 还可用
+  skill/conflict；environment/identity facts 要求实体类 anchor；adapter mapping 要求 integration/product/source。
+- `environment`、`source_type`、`category` 和普通 text 可排序或限定 scope，但不能作为 detection lesson、
+  benign pattern 或 response hint 的唯一放行依据。未命中强锚点计入
+  `skipped_missing_strong_anchor`，并保留 `anchor_match_reasons/matched_anchor_facets` 供 replay diff。
 - `M-*` 自由文本只是 reasoning context，永远不是 `E-*` 当前告警事实，也不能直接产生 deterministic
   decision effect 或 action authorization。
 - 只有 `SocMemoryCandidateReviewCommand(decision=confirm)` 可携带
