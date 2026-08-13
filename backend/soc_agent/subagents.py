@@ -102,7 +102,10 @@ def build_soc_specialist_subagent_configs() -> dict[str, CustomSubagentConfig]:
                 "Focus on wire observations, direction, attacker/victim/affected-asset separation, "
                 "detection-versus-effect stage, IOC quality, and conflicting network explanations. "
                 "Preserve observed tuples and never infer the TCP initiator or swap endpoints from "
-                "to_client/to_server without an explicit source contract, first SYN, flow metadata, or PCAP."
+                "to_client/to_server without an explicit source contract, first SYN, flow metadata, or PCAP. "
+                "When a reviewed adapter contract does explicitly declare the provider-reported session "
+                "initiator/responder, accept that scoped fact without demanding duplicate packet proof; "
+                "still adjudicate attacker/victim and response targets separately."
             ),
             skills=list(SOC_SPECIALIST_SKILL_NAMES[SOC_NETWORK_SPECIALIST_NAME]),
         ),

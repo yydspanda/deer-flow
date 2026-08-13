@@ -64,6 +64,46 @@ export interface SocReviewQueueListResponse {
   items: SocReviewQueueItem[];
 }
 
+export interface SocAnalysisRequestJournal {
+  schema_version: string;
+  status: "running" | "completed" | "failed" | "interrupted";
+  action: "analysis" | "replay";
+  request_id: string;
+  trace_id?: string | null;
+  request_hash: string;
+  model_name: string;
+  prompt_version: string;
+  provider_step_name: string;
+  provider_purpose:
+    | "primary_analysis"
+    | "primary_analysis_retry"
+    | "primary_analysis_section_repair"
+    | "role_verification"
+    | "role_verification_retry";
+  parser_version?: string | null;
+  optional_provider: boolean;
+  provider_started_at: string;
+  finalized_at?: string | null;
+  failure_kind?: string | null;
+  failure_retryable?: boolean | null;
+  recovery_run_id?: string | null;
+}
+
+export interface SocAnalysisOutputQuality {
+  schema_version: "soc.analysis_output_quality.v1";
+  status: "accepted" | "repaired" | "degraded" | "deterministic_fallback";
+  accepted_sections: string[];
+  degraded_sections: string[];
+  repair_attempted: boolean;
+  deterministic_fallback_used: boolean;
+  issues: Array<{
+    section: string;
+    stage: string;
+    error_type: string;
+    attempt: number;
+  }>;
+}
+
 export interface SocAnalysisRun {
   run_id: string;
   alert_id: string;
@@ -75,30 +115,41 @@ export interface SocAnalysisRun {
   input_hash?: string | null;
   started_at: string;
   ended_at?: string | null;
-  request_journal?: {
-    schema_version: string;
-    status: "running" | "completed" | "failed" | "interrupted";
-    action: "analysis" | "replay";
-    request_id: string;
-    trace_id?: string | null;
-    request_hash: string;
-    model_name: string;
-    prompt_version: string;
-    provider_step_name: string;
-    provider_started_at: string;
-    finalized_at?: string | null;
-    failure_kind?: string | null;
-    failure_retryable?: boolean | null;
-    recovery_run_id?: string | null;
-  } | null;
+  total_duration_ms?: number | null;
+  request_journal?: SocAnalysisRequestJournal | null;
+  provider_request_journals?: SocAnalysisRequestJournal[];
   entities?: Record<string, unknown> | null;
   normalization_report?: Record<string, unknown> | null;
   extraction_report?: Record<string, unknown> | null;
   fact_reconstruction?: Record<string, unknown> | null;
   analysis?: Record<string, unknown> | null;
+  analysis_output_quality?: SocAnalysisOutputQuality | null;
   decision?: Record<string, unknown> | null;
   corrections?: Record<string, unknown>[];
   role_adjudication_revisions?: Record<string, unknown>[];
+  role_verification_trigger?: {
+    schema_version: string;
+    policy_version: string;
+    triggered: boolean;
+    reasons: string[];
+    claim_count: number;
+    claims_hash: string;
+    minimum_confidence: number;
+  } | null;
+  role_adjudication_verification?: {
+    schema_version: string;
+    status: "confirmed" | "challenged" | "unresolved" | "unavailable";
+    claims: Record<string, unknown>[];
+    claim_reviews: Record<string, unknown>[];
+    primary_model_name: string;
+    verifier_model_name: string;
+    same_model_verification: boolean;
+    prompt_version: string;
+    parser_version: string;
+    failure_kind?: "provider_error" | "output_invalid" | null;
+    warnings: string[];
+    automation_allowed: false;
+  } | null;
 }
 
 export interface SocAlertSummary {

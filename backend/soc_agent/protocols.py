@@ -12,6 +12,8 @@ from soc_agent.contracts import (
     AlertSummary,
     AnalysisEvidenceGroundingReport,
     AnalysisNodeOutput,
+    AnalysisOutputQuality,
+    AnalysisProviderInvocation,
     AnalysisResult,
     AnalysisRun,
     AnalysisRunStatus,
@@ -33,6 +35,9 @@ from soc_agent.contracts import (
     NormalizationSchemaBaseline,
     ReviewQueueItem,
     ReviewQueueStatus,
+    RoleAdjudicationVerificationResult,
+    RoleVerificationNodeOutput,
+    RoleVerificationTriggerDecision,
     ServiceRequestContext,
     SimilarAlertMatch,
     SimilarAlertQuery,
@@ -90,7 +95,10 @@ class AnalysisRuntime(Protocol):
     def analyze(self, payload: Mapping[str, Any]) -> AnalysisRun: ...
 
 
-AnalysisBeforeProviderHook = Callable[[AnalysisRun, LLMAnalysisRequest, str], None]
+AnalysisBeforeProviderHook = Callable[
+    [AnalysisRun, LLMAnalysisRequest, AnalysisProviderInvocation],
+    None,
+]
 AnalysisRequestEnricher = Callable[[LLMAnalysisRequest], LLMAnalysisRequest]
 
 
@@ -115,6 +123,33 @@ class LLMAnalyzer(Protocol):
     def analyze(self, request: LLMAnalysisRequest) -> AnalysisNodeOutput: ...
 
 
+class RoleAdjudicationVerifier(Protocol):
+    """Optional conditional second-pass verifier behind deterministic routing."""
+
+    step_name: str
+    model_name: str
+    prompt_version: str
+    parser_version: str
+    minimum_confidence: float
+
+    def evaluate_trigger(
+        self,
+        analysis: AnalysisResult,
+        *,
+        request: LLMAnalysisRequest,
+        grounding: AnalysisEvidenceGroundingReport,
+    ) -> RoleVerificationTriggerDecision: ...
+
+    def verify(
+        self,
+        request: LLMAnalysisRequest,
+        analysis: AnalysisResult,
+        trigger: RoleVerificationTriggerDecision,
+        *,
+        primary_model_name: str,
+    ) -> RoleVerificationNodeOutput: ...
+
+
 class DecisionPolicy(Protocol):
     """Convert bounded analyzer output into an operational decision."""
 
@@ -125,6 +160,8 @@ class DecisionPolicy(Protocol):
         request: LLMAnalysisRequest,
         grounding: AnalysisEvidenceGroundingReport,
         analyzer_step_name: str,
+        output_quality: AnalysisOutputQuality | None = None,
+        role_verification: RoleAdjudicationVerificationResult | None = None,
     ) -> Decision: ...
 
 

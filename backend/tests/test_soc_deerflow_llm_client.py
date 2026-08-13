@@ -14,11 +14,13 @@ from soc_agent.contracts import SensitiveEvidenceMode
 from soc_agent.llm import (
     DeerFlowLLMChatClient,
     JsonLLMAnalyzer,
+    JsonLLMRoleVerifier,
     LLMChatResponse,
     SocAnalyzerMode,
     SocLLMAdmissionController,
     SocLLMAdmissionError,
     SocLLMSettings,
+    build_configured_analysis_nodes,
     build_configured_analyzer,
     configured_soc_llm_status,
     resolve_soc_model_name,
@@ -43,6 +45,25 @@ class _FakeModel:
                 "headers": {"authorization": "must-not-be-recorded"},
                 "token_usage": {"prompt_tokens": 999},
             },
+        )
+
+
+class _NoUsageFakeModel:
+    def invoke(self, _messages, *, config):
+        assert config["run_name"] == "soc_runtime_analysis"
+        return SimpleNamespace(
+            content="内网模型没有返回 usage",
+            response_metadata={"finish_reason": "stop"},
+        )
+
+
+class _PartialUsageFakeModel:
+    def invoke(self, _messages, *, config):
+        assert config["run_name"] == "soc_runtime_analysis"
+        return SimpleNamespace(
+            content="partial usage",
+            usage_metadata={"input_tokens": 12},
+            response_metadata={"finish_reason": "stop"},
         )
 
 
@@ -93,9 +114,53 @@ def test_deerflow_client_reuses_model_and_bounds_metadata() -> None:
     assert len(model.calls) == 2
     assert model.calls[0][1]["run_name"] == "soc_runtime_analysis"
     assert first.model_name == "provider-model-id"
-    assert first.usage == {"input_tokens": 11, "output_tokens": 7}
-    assert first.metadata == {"finish_reason": "stop", "model_name": "provider-model-id"}
+    assert first.usage == {
+        "input_tokens": 11,
+        "output_tokens": 7,
+        "total_tokens": 18,
+    }
+    assert first.metadata["finish_reason"] == "stop"
+    assert first.metadata["model_name"] == "provider-model-id"
+    assert first.metadata["usage_measurement"]["status"] == "reported"
+    assert first.metadata["provider_duration_ms"] >= 0
+    assert first.metadata["client_total_duration_ms"] >= 0
+    assert "headers" not in first.metadata
     assert second.model_name == "provider-model-id"
+
+
+def test_deerflow_client_estimates_missing_intranet_usage() -> None:
+    client = DeerFlowLLMChatClient(
+        app_config=_FakeConfig("internal-model"),  # type: ignore[arg-type]
+        model_factory=lambda **_kwargs: _NoUsageFakeModel(),
+    )
+
+    response = client.complete(
+        [{"role": "user", "content": "分析这条告警"}],
+        model_name="internal-model",
+    )
+
+    assert response.usage["input_tokens"] > 0
+    assert response.usage["output_tokens"] > 0
+    assert response.usage["total_tokens"] == (response.usage["input_tokens"] + response.usage["output_tokens"])
+    assert response.metadata["usage_measurement"]["status"] == "estimated"
+    assert response.metadata["usage_measurement"]["estimated"] is True
+
+
+def test_deerflow_client_marks_partial_provider_usage_as_mixed() -> None:
+    client = DeerFlowLLMChatClient(
+        app_config=_FakeConfig("internal-model"),  # type: ignore[arg-type]
+        model_factory=lambda **_kwargs: _PartialUsageFakeModel(),
+    )
+
+    response = client.complete(
+        [{"role": "user", "content": "alert"}],
+        model_name="internal-model",
+    )
+
+    assert response.usage["input_tokens"] == 12
+    assert response.usage["output_tokens"] > 0
+    assert response.metadata["usage_measurement"]["status"] == "mixed"
+    assert response.metadata["usage_measurement"]["estimated_fields"] == ["output_tokens"]
 
 
 def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
@@ -110,7 +175,12 @@ def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
             "SOC_LLM_REQUESTS_PER_MINUTE": "20",
             "SOC_LLM_ADMISSION_TIMEOUT_SECONDS": "0.25",
             "SOC_LLM_CALL_TIMEOUT_SECONDS": "30",
+            "SOC_LLM_OUTPUT_RETRY_ATTEMPTS": "0",
+            "SOC_LLM_OUTPUT_FALLBACK_MODEL": "deepseek-v4-pro",
             "SOC_LLM_SENSITIVE_EVIDENCE_MODE": "full",
+            "SOC_ROLE_VERIFIER_ENABLED": "true",
+            "SOC_ROLE_VERIFIER_MODEL": "deepseek-v4-pro",
+            "SOC_ROLE_VERIFIER_MIN_CONFIDENCE": "0.7",
         }
     )
     assert settings.mode is SocAnalyzerMode.LLM
@@ -119,7 +189,12 @@ def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
     assert settings.requests_per_minute == 20
     assert settings.admission_timeout_seconds == 0.25
     assert settings.call_timeout_seconds == 30
+    assert settings.output_retry_attempts == 0
+    assert settings.output_fallback_model_name == "deepseek-v4-pro"
     assert settings.sensitive_evidence_mode is SensitiveEvidenceMode.FULL
+    assert settings.role_verifier_enabled is True
+    assert settings.role_verifier_model_name == "deepseek-v4-pro"
+    assert settings.role_verifier_minimum_confidence == 0.7
 
     with pytest.raises(ValueError, match="SOC_ANALYZER_MODE"):
         SocLLMSettings.from_env({"SOC_ANALYZER_MODE": "automatic"})
@@ -133,6 +208,10 @@ def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
         SocLLMSettings.from_env({"SOC_LLM_CALL_TIMEOUT_SECONDS": "0"})
     with pytest.raises(ValueError, match="SOC_LLM_SENSITIVE_EVIDENCE_MODE"):
         SocLLMSettings.from_env({"SOC_LLM_SENSITIVE_EVIDENCE_MODE": "unsafe"})
+    with pytest.raises(ValueError, match="SOC_LLM_OUTPUT_RETRY_ATTEMPTS"):
+        SocLLMSettings.from_env({"SOC_LLM_OUTPUT_RETRY_ATTEMPTS": "2"})
+    with pytest.raises(ValueError, match="SOC_ROLE_VERIFIER_MIN_CONFIDENCE"):
+        SocLLMSettings.from_env({"SOC_ROLE_VERIFIER_MIN_CONFIDENCE": "1.1"})
 
 
 def test_deerflow_client_enforces_model_call_timeout() -> None:
@@ -194,18 +273,61 @@ def test_configured_analyzer_keeps_stub_default_and_builds_live_analyzer() -> No
     assert analyzer.model_name == "deepseek-v4-pro"
 
 
+def test_configured_analysis_nodes_share_client_and_resolve_optional_verifier() -> None:
+    config = _FakeConfig("deepseek-v4-flash", "deepseek-v4-pro")
+    client = _RecordingClient()
+    analyzer, verifier = build_configured_analysis_nodes(
+        settings=SocLLMSettings(
+            mode=SocAnalyzerMode.LLM,
+            model_name="deepseek-v4-flash",
+            role_verifier_enabled=True,
+            role_verifier_model_name="deepseek-v4-pro",
+            output_fallback_model_name="deepseek-v4-pro",
+            role_verifier_minimum_confidence=0.72,
+        ),
+        app_config=config,  # type: ignore[arg-type]
+        client=client,  # type: ignore[arg-type]
+    )
+
+    assert isinstance(analyzer, JsonLLMAnalyzer)
+    assert isinstance(verifier, JsonLLMRoleVerifier)
+    assert analyzer.model_name == "deepseek-v4-flash"
+    assert analyzer.output_fallback_model_name == "deepseek-v4-pro"
+    assert verifier.model_name == "deepseek-v4-pro"
+    assert verifier.minimum_confidence == 0.72
+    assert analyzer.output_retry_attempts == 1
+    assert verifier.output_retry_attempts == 1
+
+    with pytest.raises(ValueError, match="requires SOC_ANALYZER_MODE=llm"):
+        build_configured_analysis_nodes(
+            settings=SocLLMSettings(role_verifier_enabled=True),
+            app_config=config,  # type: ignore[arg-type]
+        )
+
+
 def test_secret_free_status_lists_configured_models() -> None:
     config = _FakeConfig("deepseek-v4-flash", "deepseek-v4-pro")
     status = configured_soc_llm_status(
-        settings=SocLLMSettings(mode=SocAnalyzerMode.LLM, model_name="deepseek-v4-pro"),
+        settings=SocLLMSettings(
+            mode=SocAnalyzerMode.LLM,
+            model_name="deepseek-v4-flash",
+            role_verifier_enabled=True,
+            role_verifier_model_name="deepseek-v4-pro",
+            output_fallback_model_name="deepseek-v4-pro",
+        ),
         app_config=config,  # type: ignore[arg-type]
     )
 
-    assert status["resolved_model_name"] == "deepseek-v4-pro"
+    assert status["schema_version"] == "soc.llm_runtime_status.v2"
+    assert status["resolved_model_name"] == "deepseek-v4-flash"
     assert status["configured_model_names"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
     assert status["secrets_included"] is False
     assert status["max_concurrency"] == 1
     assert status["call_timeout_seconds"] == 180.0
+    assert status["output_retry_attempts"] == 1
+    assert status["output_fallback_resolved_model_name"] == "deepseek-v4-pro"
+    assert status["role_verifier_enabled"] is True
+    assert status["role_verifier_resolved_model_name"] == "deepseek-v4-pro"
     assert "api_key" not in status
 
 
@@ -214,9 +336,12 @@ def test_cli_analyze_passes_explicit_model_selection_to_runtime(monkeypatch, cap
 
     def fake_build(*, settings):
         captured.append(settings)
-        return StubLLMAnalyzer()
+        return StubLLMAnalyzer(), None
 
-    monkeypatch.setattr("soc_agent.application.analysis.build_configured_analyzer", fake_build)
+    monkeypatch.setattr(
+        "soc_agent.application.analysis.build_configured_analysis_nodes",
+        fake_build,
+    )
 
     exit_code = main(
         [

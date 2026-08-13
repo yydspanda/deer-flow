@@ -36,6 +36,7 @@ class _FakeRun:
             "status": "needs_review",
             "model_name": "stub",
             "prompt_version": "stub",
+            "total_duration_ms": 7,
             "analysis": {
                 "verdict": "unknown",
                 "confidence": 0.45,
@@ -508,6 +509,13 @@ def test_execute_batch_explicitly_runs_persisted_internal_investigation(
     assert record["investigation_workflow"]["base_run_mutated"] is False
     assert record["investigation_shadow_report"]["report_id"] == "ISHR-BATCH-001"
     assert record["investigation_addendum"]["addendum_id"] == "IADD-BATCH-001"
+    assert record["execution"]["runtime_total_duration_ms"] == 7
+    assert record["execution"]["end_to_end_total_duration_ms"] >= 0
+    assert set(record["execution"]["phase_timings_ms"]) == {
+        "analysis_service_duration_ms",
+        "investigation_workflow_duration_ms",
+        "investigation_reporting_duration_ms",
+    }
     assert manifest["summary"]["investigation_shadow"]["evidence_coverage_ratio"] == 1.0
     assert (
         manifest["summary"]["investigation_shadow"][

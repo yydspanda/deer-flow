@@ -181,7 +181,7 @@ def format_report(findings: Sequence[dict[str, object]], base: str) -> str:
             f"No blocking-IO candidates introduced by this change (base: {base}).\n"
             "Note: async reachability is resolved within each file only. If this change\n"
             "adds an async call into a sync helper defined in another file, check that\n"
-            "helper manually (codegraph or git grep) before relying on this empty result."
+            "helper manually (rg or git grep) before relying on this empty result."
         )
     lines = [
         f"Blocking-IO candidates introduced/touched by this change (base: {base}): {len(findings)}",

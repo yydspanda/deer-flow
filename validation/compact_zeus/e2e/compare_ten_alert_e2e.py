@@ -12,11 +12,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-COMPARISON_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_comparison.v1"
+COMPARISON_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_comparison.v2"
 SUPPORTED_REPORT_SCHEMAS = {
     "soc.validation.e2e_ten_alert_report.v1",
     "soc.validation.e2e_ten_alert_report.v2",
     "soc.validation.e2e_ten_alert_report.v3",
+    "soc.validation.e2e_ten_alert_report.v4",
+    "soc.validation.e2e_ten_alert_report.v5",
+    "soc.validation.e2e_ten_alert_report.v6",
+    "soc.validation.e2e_ten_alert_report.v7",
+    "soc.validation.e2e_ten_alert_report.v8",
 }
 
 
@@ -61,6 +66,7 @@ def compare_reports(
         for alert_id in baseline_cases
     ]
     current_summary = _mapping(current.get("summary"))
+    baseline_summary = _mapping(baseline.get("summary"))
     return {
         "schema_version": COMPARISON_SCHEMA_VERSION,
         "generated_at": datetime.now(UTC).isoformat(),
@@ -108,6 +114,17 @@ def compare_reports(
             "quality_status_changed_count": sum(
                 item["quality_status_changed"] for item in case_diffs
             ),
+            "analysis_output_quality_changed_count": sum(
+                item["analysis_output_quality_changed"] for item in case_diffs
+            ),
+            "analysis_output_quality_status_counts": current_summary.get(
+                "analysis_output_quality_status_counts",
+                {},
+            ),
+            "analysis_output_degraded_section_counts": current_summary.get(
+                "analysis_output_degraded_section_counts",
+                {},
+            ),
             "decision_transition_count": current_summary.get(
                 "decision_transition_count",
                 0,
@@ -134,6 +151,137 @@ def compare_reports(
                 "real_external_action_call_count",
                 0,
             ),
+            "role_verifier_configured_case_count": current_summary.get(
+                "role_verifier_configured_case_count",
+                0,
+            ),
+            "role_verifier_triggered_case_count": current_summary.get(
+                "role_verifier_triggered_case_count",
+                0,
+            ),
+            "role_verifier_logical_review_count": current_summary.get(
+                "role_verifier_logical_review_count",
+                0,
+            ),
+            "role_verifier_projected_candidate_claim_count": current_summary.get(
+                "role_verifier_projected_candidate_claim_count",
+                0,
+            ),
+            "role_verifier_atomic_claim_count": current_summary.get(
+                "role_verifier_atomic_claim_count",
+                0,
+            ),
+            "role_verifier_call_count": current_summary.get(
+                "role_verifier_call_count",
+                0,
+            ),
+            "role_verifier_provider_invocation_count": current_summary.get(
+                "role_verifier_provider_invocation_count",
+                0,
+            ),
+            "role_verifier_output_retry_case_count": current_summary.get(
+                "role_verifier_output_retry_case_count",
+                0,
+            ),
+            "role_verifier_usage_incomplete_case_count": current_summary.get(
+                "role_verifier_usage_incomplete_case_count",
+                0,
+            ),
+            "role_verifier_status_counts": current_summary.get(
+                "role_verifier_status_counts",
+                {},
+            ),
+            "role_verifier_claim_status_counts": current_summary.get(
+                "role_verifier_claim_status_counts",
+                {},
+            ),
+            "role_verifier_total_duration_ms": current_summary.get(
+                "role_verifier_total_duration_ms",
+                0,
+            ),
+            "role_verifier_total_usage": current_summary.get(
+                "role_verifier_total_usage",
+                {},
+            ),
+            "tenant_policy_advisor_provider_invocation_count": (
+                current_summary.get(
+                    "tenant_policy_advisor_provider_invocation_count",
+                    0,
+                )
+            ),
+            "tenant_policy_advisor_usage_incomplete_case_count": (
+                current_summary.get(
+                    "tenant_policy_advisor_usage_incomplete_case_count",
+                    0,
+                )
+            ),
+            "tenant_policy_advisor_total_usage": current_summary.get(
+                "tenant_policy_advisor_total_usage",
+                {},
+            ),
+            "model_usage_measurement_status": current_summary.get(
+                "model_usage_measurement_status",
+                "unavailable",
+            ),
+            "model_usage_is_lower_bound": current_summary.get(
+                "model_usage_is_lower_bound",
+                True,
+            ),
+            "model_provider_invocation_count": current_summary.get(
+                "model_provider_invocation_count",
+                0,
+            ),
+            "model_usage_incomplete_case_count": current_summary.get(
+                "model_usage_incomplete_case_count",
+                0,
+            ),
+            "measured_model_total_usage": current_summary.get(
+                "measured_model_total_usage",
+                {},
+            ),
+            "cost_measurement_status": current_summary.get(
+                "cost_measurement_status",
+                "not_measured",
+            ),
+            "quality_measurement_status": current_summary.get(
+                "quality_measurement_status",
+                "unavailable",
+            ),
+            "accuracy_measurement_status": current_summary.get(
+                "accuracy_measurement_status",
+                "not_measured",
+            ),
+            "memory_database_candidate_count": current_summary.get(
+                "memory_database_candidate_count",
+                0,
+            ),
+            "memory_database_record_count": current_summary.get(
+                "memory_database_record_count",
+                0,
+            ),
+            "baseline_runtime_total_duration_ms": baseline_summary.get(
+                "runtime_total_duration_ms",
+                0,
+            ),
+            "current_runtime_total_duration_ms": current_summary.get(
+                "runtime_total_duration_ms",
+                0,
+            ),
+            "runtime_duration_delta_ms": int(
+                current_summary.get("runtime_total_duration_ms") or 0
+            )
+            - int(baseline_summary.get("runtime_total_duration_ms") or 0),
+            "baseline_primary_model_total_usage": baseline_summary.get(
+                "primary_model_total_usage",
+                {},
+            ),
+            "current_primary_model_total_usage": current_summary.get(
+                "primary_model_total_usage",
+                {},
+            ),
+            "review_requirement_changed_count": sum(
+                item["review_requirement_changed"] for item in case_diffs
+            ),
         },
         "cases": case_diffs,
     }
@@ -152,6 +300,10 @@ def _compare_case(
     current_grounding = _mapping(current.get("grounding"))
     automation = _mapping(current.get("automation"))
     tenant_policy = _mapping(current.get("tenant_policy"))
+    baseline_role_verification = _mapping(baseline.get("role_verification"))
+    current_role_verification = _mapping(current.get("role_verification"))
+    baseline_output_quality = _mapping(baseline.get("analysis_output_quality"))
+    current_output_quality = _mapping(current.get("analysis_output_quality"))
     base_verdict_changed = baseline_base.get("verdict") != current_base.get("verdict")
     effective_changed = current_base.get("verdict") != current_effective.get(
         "verdict"
@@ -174,6 +326,21 @@ def _compare_case(
         "current_effective_decision": current_effective,
         "base_verdict_changed": base_verdict_changed,
         "effective_verdict_changed_from_base": effective_changed,
+        "review_requirement_changed": (
+            baseline_base.get("needs_review") != current_base.get("needs_review")
+        ),
+        "baseline_role_verification": baseline_role_verification,
+        "current_role_verification": current_role_verification,
+        "baseline_analysis_output_quality": baseline_output_quality,
+        "current_analysis_output_quality": current_output_quality,
+        "analysis_output_quality_changed": (
+            baseline_output_quality.get("status")
+            != current_output_quality.get("status")
+            or baseline_output_quality.get("degraded_sections")
+            != current_output_quality.get("degraded_sections")
+        ),
+        "baseline_model_calls": _mapping(baseline.get("model_calls")),
+        "current_model_calls": _mapping(current.get("model_calls")),
         "grounding": {
             "baseline_grounded": int(baseline_grounding.get("grounded_count") or 0),
             "current_grounded": int(current_grounding.get("grounded_count") or 0),
@@ -246,9 +413,39 @@ def render_markdown(comparison: Mapping[str, Any]) -> str:
         f"- PingAn tenant policy decisions: `{summary.get('tenant_policy_decision_count')}`",
         f"- Automatic authorizations without Memory: `{summary.get('automatic_authorization_without_memory_count')}`",
         f"- Mocked action executions: `{summary.get('mocked_action_execution_count')}`; real external calls: `{summary.get('real_external_action_call_count')}`",
+        (
+            "- Role verifier: "
+            f"triggered `{summary.get('role_verifier_triggered_case_count')}` / "
+            f"case calls `{summary.get('role_verifier_call_count')}` / "
+            f"provider invocations `{summary.get('role_verifier_provider_invocation_count')}` / "
+            f"retry cases `{summary.get('role_verifier_output_retry_case_count')}` / "
+            f"usage-incomplete cases `{summary.get('role_verifier_usage_incomplete_case_count')}`; "
+            f"statuses `{summary.get('role_verifier_status_counts')}`; "
+            f"claim statuses `{summary.get('role_verifier_claim_status_counts')}`"
+        ),
+        (
+            "- Primary analysis output: "
+            f"statuses `{summary.get('analysis_output_quality_status_counts')}`; "
+            f"degraded sections `{summary.get('analysis_output_degraded_section_counts')}`"
+        ),
+        f"- Review requirement changes: `{summary.get('review_requirement_changed_count')}`",
+        (
+            "- Runtime duration: "
+            f"`{summary.get('baseline_runtime_total_duration_ms')} ms -> "
+            f"{summary.get('current_runtime_total_duration_ms')} ms` "
+            f"(delta `{summary.get('runtime_duration_delta_ms')} ms`)"
+        ),
+        f"- Verifier usage: `{summary.get('role_verifier_total_usage')}`",
+        (
+            "- Measured model usage: "
+            f"`{summary.get('measured_model_total_usage')}` "
+            f"(status={summary.get('model_usage_measurement_status')}, "
+            f"lower_bound={summary.get('model_usage_is_lower_bound')})"
+        ),
+        f"- Cost: `{summary.get('cost_measurement_status')}`",
         "",
-        "| Alert | Source | Old base | New base | Memory stage | PingAn Policy | New effective | Grounded old -> new | Rejected old -> new | Action auth/execution |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Alert | Source | Old base | Verifier | New base | Memory stage | PingAn Policy | New effective | Grounded old -> new | Rejected old -> new | Action auth/execution |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for item in comparison.get("cases") or []:
         if not isinstance(item, Mapping):
@@ -261,6 +458,7 @@ def render_markdown(comparison: Mapping[str, Any]) -> str:
         memory_stage = _mapping(item.get("memory_stage"))
         tenant_stage = _mapping(item.get("tenant_policy_stage"))
         tenant_policy = _mapping(item.get("tenant_policy"))
+        role_verification = _mapping(item.get("current_role_verification"))
         lines.append(
             "| "
             + " | ".join(
@@ -268,6 +466,14 @@ def render_markdown(comparison: Mapping[str, Any]) -> str:
                     _md(item.get("alert_id")),
                     _md(item.get("source_type")),
                     _md(old_base.get("verdict")),
+                    _md(
+                        f"{role_verification.get('status') or 'disabled'}"
+                        + (
+                            f" ({role_verification.get('claim_count')} claims)"
+                            if role_verification.get("triggered")
+                            else ""
+                        )
+                    ),
                     _md(new_base.get("verdict")),
                     _md(memory_stage.get("status") or "none"),
                     _md(
@@ -316,6 +522,8 @@ def render_markdown(comparison: Mapping[str, Any]) -> str:
             "## Interpretation Boundary",
             "",
             "A live LLM may produce a different base verdict or evidence selection on the same input. "
+            "The baseline and verifier-enabled runs each perform their own primary call, so a base "
+            "decision delta is not by itself evidence that the verifier caused the change. "
             "Only `current_effective_decision` changes backed by `SocDecisionTransitionRecord` are "
             "attributed to reviewed Memory or policy processing. Every execution in this comparison "
             "must remain `mocked=true`; it is not real provider acceptance evidence.",

@@ -44,7 +44,7 @@ static detector can see in the changed files*. One residual blind spot
 remains: reachability is same-file only, so a new async caller of a sync
 helper **defined in another file** is invisible to both selections. If your
 diff adds an async call into a helper that lives elsewhere, check that helper
-manually (codegraph or `git grep`) before stopping.
+manually with `rg` (and `git grep` when only tracked files matter) before stopping.
 
 **Mode B — full-repo triage round.** From repo root:
 
@@ -82,7 +82,7 @@ Read the code around each candidate and route it:
   startup-only code) → **NO-ACTION**: record one line of why.
 - **Cross-file caveat**: the scanner's async reachability is same-file only
   (`ASYNC_REACHABLE_SAME_FILE`). If the candidate is a *sync helper*, check for
-  async callers in other files (codegraph or `git grep`) before deciding
+  async callers in other files with `rg` or `git grep` before deciding
   NO-ACTION.
 
 ### Step 2 — Apply the fix, then re-scan (FIX+ANCHOR only)

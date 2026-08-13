@@ -420,19 +420,19 @@ def test_soc_review_api_confirms_roles_without_authorizing_action(review_api) ->
         soc_review.RoleAdjudicationConfirmationRequest(
             roles=[
                 HumanConfirmedRole(
-                    role=AdjudicatedRoleType.ATTACKER,
+                    role=AdjudicatedRoleType.VICTIM,
                     entity_type="ip",
-                    value="30.174.29.44",
-                    rationale="Analyst confirmed the semantic attacker role.",
+                    value="30.116.114.150",
+                    rationale="Analyst confirmed the semantic victim role.",
                 )
             ],
             response_targets=[
                 HumanConfirmedResponseTarget(
-                    action_kind="network.block_ip",
+                    action_kind="endpoint.isolate_host",
                     target_type="ip",
-                    target_value="30.174.29.44",
-                    target_role=AdjudicatedRoleType.ATTACKER,
-                    rationale="Proposed block target requires separate policy authorization.",
+                    target_value="30.116.114.150",
+                    target_role=AdjudicatedRoleType.IMPACTED_ASSET,
+                    rationale="The victim is the impacted asset for this isolation proposal.",
                 )
             ],
             reason="Analyst reviewed the observed flow and reverse-connection semantics.",

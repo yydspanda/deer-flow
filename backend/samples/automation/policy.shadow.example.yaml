@@ -24,7 +24,7 @@ rules:
       prompt_versions:
         - soc-analysis-v12
       decision_policy_versions:
-        - soc.decision_policy.v3
+        - soc.decision_policy.v5
       minimum_confidence: 0.9
       needs_review: false
     disposition: suppressed

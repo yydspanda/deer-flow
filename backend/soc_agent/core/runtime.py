@@ -15,6 +15,8 @@ from soc_agent.contracts import (
     AlertSourceType,
     AnalysisEvidenceGroundingReport,
     AnalysisNodeOutput,
+    AnalysisProviderInvocation,
+    AnalysisProviderPurpose,
     AnalysisRun,
     AnalysisRunStatus,
     Decision,
@@ -28,6 +30,8 @@ from soc_agent.contracts import (
     NormalizationReport,
     PipelineStepStatus,
     PipelineStepTrace,
+    RoleVerificationNodeOutput,
+    RoleVerificationTriggerDecision,
     RuntimeFailure,
     RuntimeFailureKind,
     SensitiveEvidenceMode,
@@ -35,6 +39,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.core.decision_policy import SocDecisionPolicy
 from soc_agent.core.validator import validate_analysis_result
+from soc_agent.llm.role_verifier import unavailable_role_verification
 from soc_agent.normalizers import normalize_alert_payload, normalize_with_mapping
 from soc_agent.pipeline.analysis_context import (
     build_llm_analysis_request,
@@ -46,7 +51,13 @@ from soc_agent.pipeline.evidence_grounding import ground_analysis_evidence
 from soc_agent.pipeline.extractor import extract_entities
 from soc_agent.pipeline.fact_reconstructor import reconstruct_facts
 from soc_agent.pipeline.reference_catalog import finalize_analysis_reference_catalogs
-from soc_agent.protocols import AnalysisBeforeProviderHook, AnalysisRequestEnricher, DecisionPolicy, LLMAnalyzer
+from soc_agent.protocols import (
+    AnalysisBeforeProviderHook,
+    AnalysisRequestEnricher,
+    DecisionPolicy,
+    LLMAnalyzer,
+    RoleAdjudicationVerifier,
+)
 from soc_agent.utils.hashing import stable_hash
 
 
@@ -56,6 +67,10 @@ class SocRuntimeError(RuntimeError):
 
 class SocRuntimeLifecycleError(RuntimeError):
     """Raised when infrastructure fails before the analyzer is invoked."""
+
+
+SOC_RUNTIME_PIPELINE_VERSION = "soc-runtime-v1"
+SOC_RUNTIME_ROLE_VERIFICATION_PIPELINE_VERSION = "soc-runtime-v2"
 
 
 def inspect_alert_normalization(
@@ -103,12 +118,13 @@ def analyze_alert(
     payload: Mapping[str, Any],
     *,
     analyzer: LLMAnalyzer | None = None,
+    role_verifier: RoleAdjudicationVerifier | None = None,
     decision_policy: DecisionPolicy | None = None,
     before_provider: AnalysisBeforeProviderHook | None = None,
     analysis_request_enricher: AnalysisRequestEnricher | None = None,
     sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
 ) -> AnalysisRun:
-    """Analyze one alert through the fixed ten-step pipeline."""
+    """Analyze one alert through the fixed pipeline and optional governed verifier."""
 
     input_payload = _jsonable(payload)
     analysis_node = analyzer or StubLLMAnalyzer()
@@ -116,6 +132,7 @@ def analyze_alert(
     run = AnalysisRun(
         alert_id="unknown",
         status=AnalysisRunStatus.RUNNING,
+        pipeline_version=(SOC_RUNTIME_ROLE_VERIFICATION_PIPELINE_VERSION if role_verifier is not None else SOC_RUNTIME_PIPELINE_VERSION),
         model_name=analysis_node.model_name,
         prompt_version=analysis_node.prompt_version,
         input_payload=input_payload,
@@ -161,17 +178,55 @@ def analyze_alert(
         run.llm_analysis_request = analysis_request
         if before_provider is not None:
             try:
-                before_provider(run, analysis_request, analysis_node.step_name)
+                before_provider(
+                    run,
+                    analysis_request,
+                    AnalysisProviderInvocation(
+                        step_name=analysis_node.step_name,
+                        purpose=AnalysisProviderPurpose.PRIMARY_ANALYSIS,
+                        model_name=analysis_node.model_name,
+                        prompt_version=analysis_node.prompt_version,
+                        parser_version=getattr(analysis_node, "parser_version", None),
+                    ),
+                )
             except Exception as exc:  # noqa: BLE001 - preserve the no-provider-call boundary
                 raise SocRuntimeLifecycleError("failed to persist analysis request journal before provider invocation") from exc
         try:
+            analyze_with_provider_hook = getattr(
+                analysis_node,
+                "analyze_with_provider_hook",
+                None,
+            )
+
+            def invoke_analysis(request: LLMAnalysisRequest):
+                if before_provider is None or not callable(analyze_with_provider_hook):
+                    return analysis_node.analyze(request)
+
+                def persist_retry(invocation: AnalysisProviderInvocation) -> None:
+                    try:
+                        before_provider(run, request, invocation)
+                    except Exception as exc:  # noqa: BLE001 - preserve no-provider-call boundary
+                        raise SocRuntimeLifecycleError("failed to persist analysis retry journal before provider invocation") from exc
+
+                return analyze_with_provider_hook(
+                    request,
+                    before_retry=persist_retry,
+                )
+
             analysis_output = _run_step(
                 run,
                 analysis_node.step_name,
                 analysis_request,
-                analysis_node.analyze,
+                invoke_analysis,
             )
-        except Exception:
+        except Exception as exc:
+            invocation_metadata = getattr(
+                exc,
+                "soc_model_invocation_metadata",
+                {},
+            )
+            if isinstance(invocation_metadata, Mapping):
+                run.steps[-1].metadata.update(invocation_metadata)
             run.steps[-1].metadata.update(
                 {
                     "model_name": analysis_node.model_name,
@@ -182,6 +237,7 @@ def analyze_alert(
             raise
         run.model_name = analysis_output.model_name
         run.prompt_version = analysis_output.prompt_version
+        run.analysis_output_quality = analysis_output.output_quality
         run.analysis = _run_step(run, "schema_validate", analysis_output.analysis, validate_analysis_result)
         run.analysis_evidence_grounding = _run_step(
             run,
@@ -189,6 +245,113 @@ def analyze_alert(
             {"analysis": run.analysis, "analysis_request": analysis_request},
             lambda _: ground_analysis_evidence(run.analysis, analysis_request),
         )
+        if role_verifier is not None:
+            role_verification_trigger = _run_step(
+                run,
+                "role_verification_gate",
+                {
+                    "analysis": run.analysis,
+                    "analysis_request": analysis_request,
+                    "analysis_evidence_grounding": run.analysis_evidence_grounding,
+                },
+                lambda _: role_verifier.evaluate_trigger(
+                    run.analysis,
+                    request=analysis_request,
+                    grounding=run.analysis_evidence_grounding,
+                ),
+            )
+            run.role_verification_trigger = role_verification_trigger
+            if role_verification_trigger.triggered:
+                if before_provider is not None:
+                    try:
+                        before_provider(
+                            run,
+                            analysis_request,
+                            AnalysisProviderInvocation(
+                                step_name=role_verifier.step_name,
+                                purpose=AnalysisProviderPurpose.ROLE_VERIFICATION,
+                                model_name=role_verifier.model_name,
+                                prompt_version=role_verifier.prompt_version,
+                                parser_version=role_verifier.parser_version,
+                                optional=True,
+                            ),
+                        )
+                    except Exception as exc:  # noqa: BLE001 - preserve no-provider-call boundary
+                        raise SocRuntimeLifecycleError("failed to persist role verification journal before provider invocation") from exc
+                try:
+                    verify_with_provider_hook = getattr(
+                        role_verifier,
+                        "verify_with_provider_hook",
+                        None,
+                    )
+
+                    def invoke_role_verifier(_: Any):
+                        if before_provider is None or not callable(verify_with_provider_hook):
+                            return role_verifier.verify(
+                                analysis_request,
+                                run.analysis,
+                                role_verification_trigger,
+                                primary_model_name=run.model_name,
+                            )
+
+                        def persist_retry(
+                            invocation: AnalysisProviderInvocation,
+                        ) -> None:
+                            try:
+                                before_provider(run, analysis_request, invocation)
+                            except Exception as exc:  # noqa: BLE001 - preserve no-provider-call boundary
+                                raise SocRuntimeLifecycleError("failed to persist role verification retry journal before provider invocation") from exc
+
+                        return verify_with_provider_hook(
+                            analysis_request,
+                            run.analysis,
+                            role_verification_trigger,
+                            primary_model_name=run.model_name,
+                            before_retry=persist_retry,
+                        )
+
+                    role_verification_output = _run_step(
+                        run,
+                        role_verifier.step_name,
+                        {
+                            "analysis": run.analysis,
+                            "analysis_request": analysis_request,
+                            "trigger": role_verification_trigger,
+                        },
+                        invoke_role_verifier,
+                    )
+                    run.role_adjudication_verification = role_verification_output.verification
+                except Exception as exc:  # noqa: BLE001 - optional verifier fails closed
+                    verifier_failure = _classify_runtime_failure(
+                        exc,
+                        step_name=role_verifier.step_name,
+                    )
+                    invocation_metadata = getattr(
+                        exc,
+                        "soc_model_invocation_metadata",
+                        {},
+                    )
+                    if isinstance(invocation_metadata, Mapping):
+                        run.steps[-1].metadata.update(invocation_metadata)
+                    run.steps[-1].metadata.update(
+                        {
+                            "optional": True,
+                            "fail_closed": True,
+                            "model_name": role_verifier.model_name,
+                            "prompt_version": role_verifier.prompt_version,
+                            "parser_version": role_verifier.parser_version,
+                            "error_type": type(exc).__name__,
+                            "failure_kind": verifier_failure.kind.value,
+                            "failure_retryable": verifier_failure.retryable,
+                        }
+                    )
+                    run.role_adjudication_verification = unavailable_role_verification(
+                        trigger=role_verification_trigger,
+                        analysis=run.analysis,
+                        primary_model_name=run.model_name,
+                        verifier=role_verifier,
+                        error=exc,
+                    )
         run.decision = _run_step(
             run,
             "decide",
@@ -197,12 +360,15 @@ def analyze_alert(
                 "analysis_request": analysis_request,
                 "analysis_evidence_grounding": run.analysis_evidence_grounding,
                 "analyzer_step_name": analysis_node.step_name,
+                "analysis_output_quality": run.analysis_output_quality,
             },
             lambda _: policy.decide(
                 run.analysis,
                 request=analysis_request,
                 grounding=run.analysis_evidence_grounding,
-                analyzer_step_name=analysis_node.step_name,
+                analyzer_step_name=(analysis_output.effective_analyzer_step_name or analysis_node.step_name),
+                output_quality=run.analysis_output_quality,
+                role_verification=run.role_adjudication_verification,
             ),
         )
         run.status = AnalysisRunStatus.NEEDS_REVIEW if run.decision.needs_review else AnalysisRunStatus.SUCCESS
@@ -213,12 +379,15 @@ def analyze_alert(
         failed_step = run.steps[-1].step_name if run.steps else "runtime"
         run.failure = _classify_runtime_failure(exc, step_name=failed_step)
         if not run.steps or run.steps[-1].status is not PipelineStepStatus.FAILED:
+            failed_at = _utc_now()
             run.steps.append(
                 PipelineStepTrace(
                     step_name="runtime",
                     status=PipelineStepStatus.FAILED,
                     error=run.failure.message,
-                    ended_at=_utc_now(),
+                    started_at=failed_at,
+                    ended_at=failed_at,
+                    duration_ms=0,
                     metadata={
                         "failure_kind": run.failure.kind.value,
                         "retryable": run.failure.retryable,
@@ -236,6 +405,7 @@ def analyze_alert(
             )
     finally:
         run.ended_at = _utc_now()
+        run.total_duration_ms = _duration_ms(run.started_at, run.ended_at)
 
     return run
 
@@ -426,10 +596,32 @@ def _run_step[T](
             {
                 "model_name": output.model_name,
                 "prompt_version": output.prompt_version,
+                "output_quality_status": output.output_quality.status.value,
+                "degraded_sections": [section.value for section in output.output_quality.degraded_sections],
             }
         )
         if output.parser_version is not None:
             trace.metadata["parser_version"] = output.parser_version
+        trace.metadata.update(output.metadata)
+    if isinstance(output, RoleVerificationTriggerDecision):
+        trace.metadata.update(
+            {
+                "triggered": output.triggered,
+                "trigger_reasons": [reason.value for reason in output.reasons],
+                "claim_count": output.claim_count,
+                "claims_hash": output.claims_hash,
+                "policy_version": output.policy_version,
+            }
+        )
+    if isinstance(output, RoleVerificationNodeOutput):
+        trace.metadata.update(
+            {
+                "model_name": output.verification.verifier_model_name,
+                "prompt_version": output.verification.prompt_version,
+                "parser_version": output.verification.parser_version,
+                "verification_status": output.verification.status.value,
+            }
+        )
         trace.metadata.update(output.metadata)
     if isinstance(output, Decision):
         trace.metadata.update(
@@ -477,6 +669,7 @@ def _classify_runtime_failure(exc: Exception, *, step_name: str) -> RuntimeFailu
     error_type = type(exc).__name__
     lowered_type = error_type.lower()
     lowered_message = str(exc).lower()
+    is_model_provider_step = step_name in {"analyze_llm", "verify_roles_llm"}
 
     if step_name == "normalize":
         kind = RuntimeFailureKind.INVALID_INPUT
@@ -484,16 +677,16 @@ def _classify_runtime_failure(exc: Exception, *, step_name: str) -> RuntimeFailu
     elif "promptsize" in lowered_type or "context exceeds" in lowered_message:
         kind = RuntimeFailureKind.INPUT_LIMIT_EXCEEDED
         retryable = False
-    elif step_name == "analyze_llm" and ("admission" in lowered_type or "ratelimit" in lowered_type or "rate_limit" in lowered_type or "capacity" in lowered_type):
+    elif is_model_provider_step and ("admission" in lowered_type or "ratelimit" in lowered_type or "rate_limit" in lowered_type or "capacity" in lowered_type):
         kind = RuntimeFailureKind.ANALYZER_CAPACITY
         retryable = True
-    elif step_name == "analyze_llm" and (isinstance(exc, TimeoutError) or "timeout" in lowered_type):
+    elif is_model_provider_step and (isinstance(exc, TimeoutError) or "timeout" in lowered_type):
         kind = RuntimeFailureKind.ANALYZER_TIMEOUT
         retryable = True
-    elif step_name == "analyze_llm" and hasattr(exc, "stage"):
+    elif is_model_provider_step and hasattr(exc, "stage"):
         kind = RuntimeFailureKind.ANALYZER_OUTPUT_INVALID
         retryable = False
-    elif step_name == "analyze_llm":
+    elif is_model_provider_step:
         kind = RuntimeFailureKind.ANALYZER_UNAVAILABLE
         retryable = True
     elif step_name == "schema_validate":
@@ -519,6 +712,8 @@ def _safe_error_message(exc: Exception, *, step_name: str) -> str:
     error_type = type(exc).__name__
     if step_name == "analyze_llm" and not hasattr(exc, "stage"):
         return f"{error_type} while invoking configured SOC analyzer"
+    if step_name == "verify_roles_llm" and not hasattr(exc, "stage"):
+        return f"{error_type} while invoking configured SOC role verifier"
     message = " ".join(str(exc).split())
     if not message:
         message = "runtime step failed"

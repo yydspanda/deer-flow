@@ -1212,6 +1212,9 @@ def test_pingan_ndr_marks_reviewed_detection_fields_as_upstream_assertions() -> 
     alert = normalize_alert_payload(_payload(message, topic="sec_guard_apt", topic_name="SkyEye APT"))
     semantics = {item["field_path"].split("#", 1)[-1]: item for item in alert.extensions["source_field_semantics"]}
 
+    assert semantics["parsed.sip"]["semantic_type"] == "provider_reported_session_initiator"
+    assert "independent_SYN_or_PCAP_is_not_required" in semantics["parsed.sip"]["meaning"]
+    assert semantics["parsed.dip"]["semantic_type"] == "provider_reported_session_responder"
     assert semantics["parsed.rule_name"]["semantic_type"] == ("provider_detection_rule_name_assertion")
     assert semantics["parsed.attack_type"]["semantic_type"] == ("provider_detection_classification_assertion")
     assert semantics["parsed.host_state"]["semantic_type"] == ("provider_detection_outcome_assertion")

@@ -223,22 +223,73 @@ Current SOC direction:
 - SOC model calls have independent process-local admission controls (`SOC_LLM_MAX_CONCURRENCY`,
   optional requests-per-minute, admission timeout, and `SOC_LLM_CALL_TIMEOUT_SECONDS`). Analyzer evidence is deterministically
   grounded against the exact bounded prompt projection before `SocDecisionPolicy` runs.
+- Fixed-cohort SOC validation reports model use by independent lane: primary analysis, optional role
+  verifier, and tenant-policy advisor. A logical verifier review may contain many atomic `RC-*`
+  claims and may use an additional bounded output-repair provider invocation; these counts must not
+  be conflated. Missing provider usage makes the aggregate a measured lower bound. Monetary cost and
+  model accuracy remain `not_measured` until a reviewed price table and independent human truth labels
+  exist. E2E knowledge-review artifacts are not database Memory and are never auto-promoted.
 - New live analyzer responses use `soc.analysis_result.v4`. Before the model call, Runtime builds a
   replay-stable current-alert fact catalog (`E-*`) and governed context catalogs: Skill (`S-*`),
   adapter contract (`A-*`), confirmed memory (`M-*`), governed context (`C-*`), and tool result
   (`T-*`). `evidence[]` may contain only exact `E-*` path/value pairs. Security interpretation belongs
   in explicit `R-*` reasoning items with declared basis and references; open-vocabulary scenario
-  assessments cite both `E-*` and `R-*`. `soc-analysis-v13` / `soc-analysis-json-parser-v11` reject
+  assessments cite both `E-*` and `R-*`. `soc-analysis-v17` / `soc-analysis-json-parser-v15` reject
   unresolved or ambiguous references. The parser may perform only auditable mechanical repairs: map
   an exact path/value to its unique `E-*`, materialize a valid cited catalog fact, remove an exact
   duplicate fact/reference, normalize a strict JSON boolean string, remove an explicit empty context
   sentinel, derive the redundant basis label from an already explicit valid `S/A/M/C/T` reference,
-  or mark a missing scenario rationale with an explicit non-semantic placeholder when both E/R
-  support lists exist. It must not infer security semantics.
+  mark a missing scenario rationale with an explicit non-semantic placeholder when both E/R support
+  lists exist, or remove an optional response-target proposal whose exact typed entity was not
+  adjudicated. A proposal's action-specific target role may differ from that entity's global semantic
+  role; this never grants action authority.
+  Direction/role objects may directly cite exact request-catalog context IDs without duplicating them
+  in `R-*`; dangling context IDs still fail. It must not infer security semantics.
+  A primary or verifier model node may make at most one separately journaled output-repair call under
+  `SOC_LLM_OUTPUT_RETRY_ATTEMPTS=1`. Primary output is validated as a required core plus independently
+  recoverable scenario, direction, role, and knowledge sections. When the core is valid, repair sends
+  only rejected sections plus the immutable accepted core; a failed section repair retains valid
+  sections, substitutes inert defaults, marks `analysis_output_quality=degraded`, and forces review.
+  An irrecoverable core uses the deterministic stub as an explicit fail-closed result rather than
+  losing the whole alert. Provider transport/capacity failures remain retryable Runtime failures.
+  For primary analysis, `SOC_LLM_OUTPUT_FALLBACK_MODEL` may select a stronger registered repair model.
+  Every repair receives
+  only the invalid candidate or section, validation error, allowed catalogs and response schema, not
+  raw vendor input, and cannot add security facts.
 - `AnalysisResult.v4` separates observed wire flow, organization-boundary direction, semantic roles,
   and action-specific response-target proposals. Never equate source with attacker or destination with
   victim globally. A proposed target never grants action authority. Human role confirmation is an
   append-only `RoleAdjudicationRevisionRecord` through `SocReviewService`, not a model-output rewrite.
+- Trust a source field only within its reviewed adapter-declared meaning. An exact
+  `provider_reported_session_initiator|responder` semantic is sufficient for that scoped upstream
+  session fact without duplicate SYN/PCAP proof, unless the current alert explicitly reports an
+  ambiguous direction, proxy/NAT/forwarding leg, or same-observation contradiction. It never implies
+  attacker/victim identity, compromise, verdict, response target, or action authority. Generic Runtime
+  code must not infer this contract from names such as `source_ip`, `sip`, `src`, or `client_ip`.
+- Conditional second-pass role verification is a default-off Runtime node controlled by
+  `SOC_ROLE_VERIFIER_ENABLED`. Trigger policy v2 reviews only one coherent network-direction claim
+  plus non-placeholder attacker/victim claims. Inferred/tentative state, generic evidence gaps,
+  intermediaries, response-target proposals and confidence alone never trigger a second call;
+  confidence is only diagnostic after a core conflict/indeterminate state, upstream role conflict,
+  or core-reference Grounding failure has already triggered. The narrow
+  `soc-role-verification-v3` Prompt receives at most `RC-ND-01` plus attacker/victim `RC-R-*` claims;
+  the verifier never sees first-pass rationale or confidence. It must independently return
+  `supported|challenged|unresolved` with exact references and an explicit counterevidence assessment.
+  `challenged`, `unresolved`, or provider/parser
+  failure adds a fail-closed Decision review guard under `soc.decision_policy.v5`; confirmation never
+  authorizes an action or removes another review reason. `SOC_ROLE_VERIFIER_MODEL` may select a stronger
+  configured model; otherwise the primary model is reused and that lineage is explicit. Each provider
+  invocation has its own ordered `AnalysisRequestJournal`, while `request_journal` remains the active/
+  latest recovery pointer. A configured verifier run uses `pipeline_version=soc-runtime-v2` even when
+  its gate does not trigger; the default verifier-free pipeline remains `soc-runtime-v1`.
+  The 2026-08-12 fixed ten-alert v2 live baseline triggered 5/10 alerts and sent 14 actual claims in
+  five provider calls, down from the historical v1 10/10 trigger rate. Gate-projected candidates for
+  non-triggered alerts are audit material and must not be counted as reviewed claims. This remains a
+  structural/safety baseline until independent analyst direction/role labels are recorded.
+- Every Runtime step records start/end/duration and `AnalysisRun.total_duration_ms` records fixed-
+  pipeline wall time. Provider-complete token usage is `reported`; missing intranet usage is
+  explicitly `estimated` from visible request/response content, and partial provider usage completed
+  locally is `mixed`. Monetary cost remains unmeasured without a reviewed price table.
 - Reviewed tenant-static knowledge is selected through strict versioned profiles and projected as
   bounded, source-linked `C-*` with no decision authority. Generic method belongs in `S-*`, adapter
   semantics in `A-*`, confirmed historical experience in `M-*`, live tool results in `T-*`, and
@@ -444,7 +495,10 @@ Current SOC direction:
   maliciousness or success by themselves.
 - PingAn NDR/APT mapping lives in `backend/soc_agent/normalizers/pingan_ndr.py`. Every parsed
   `sip/dip` message remains an independent wire observation; HTTP and network-content file metadata
-  remain per-message observations. The reviewed source's `ioc` field is a vendor detection
+  remain per-message observations. Message-first `sip/dip` are respectively the reviewed provider-
+  reported session initiator/responder for that observation; this scoped meaning does not apply to
+  processed sibling fields, EDR endpoint identity, F5/SNAT half-flows, or another vendor merely because
+  it uses similar names. The reviewed source's `ioc` field is a vendor detection
   descriptor, not a typed IOC. `file_name/file_md5` never prove an endpoint write or compromise.
   Reviewed `rule_name`, `attack_type`, `host_state`, and `rule_labels` values are emitted as generic
   provider detection assertions by this adapter. They are trusted upstream assertions when present
@@ -465,7 +519,7 @@ Current SOC direction:
   while `EvidenceCoverageReport` exposes parsed fields that were used, sanitized, omitted, or left
   outside canonical/fact/scenario mappings.
 - `MessageSchemaObservation.recognized` means the outer message parser succeeded; nested decode/repair
-  warnings do not turn the whole message schema into degraded. Under `soc.decision_policy.v3`, encoded
+  warnings do not turn the whole message schema into degraded. Under `soc.decision_policy.v5`, encoded
   compaction alone is informational, routine bounded omission/truncation without a high-value gap is
   at most partial, degraded/unsupported outer schema or high-value/ungrounded evidence is degraded,
   and fact conflicts remain conflicted. The old truncation review reason is historical compatibility.
@@ -785,22 +839,25 @@ search alone. Use this order:
 1. Read the current plan in `.notes/ai_soc/` and the relevant engineering/tooling
    contracts in `.notes/reference-index/`.
 2. Derive the smallest Phase-aligned implementation slice from those docs.
-3. Use CodeGraph after the slice is clear, to verify DeerFlow code locations,
-   reusable APIs, and low-intrusion integration points.
-   Default to CodeGraph and direct source reads for both local and cross-project
-   reference work. Do not run Understand Anything as part of the normal workflow; it is
+3. After the slice is clear, use `rg --files`, `rg`, and direct source reads to verify
+   DeerFlow code locations, reusable APIs, call sites, and low-intrusion integration
+   points. For dynamic registration or runtime wiring, confirm the relationship with
+   focused tests, configuration, or runtime traces rather than relying on static search
+   alone. Use the same source-first approach for cross-project reference work. Do not run
+   Understand Anything as part of the normal workflow; it is
    token-heavy and currently optional. The repository root `.understand-anything` and
    reference-project `.understand-anything` directories are static snapshots only: do
    not update them. Use Understand only when the user explicitly asks for it, and then
-   verify any result with CodeGraph/source before using it as a design fact.
+   verify any result against source and, when relevant, tests or runtime behavior before
+   using it as a design fact.
 4. Implement SOC-specific behavior as incremental modules/adapters first; avoid changing
    upstream DeerFlow core unless a small generic extension point is required.
 5. If the slice changes product direction, runtime pipeline, contract semantics, phase
    scope, or next-step sequencing, update `.notes/ai_soc/soc-agent-solution.md` in the
    same change set; keep `.notes/reference-index/soc-agent-engineering-contracts.md`
    aligned for engineering rules.
-6. After code changes, run `codegraph sync .` from the repo root so the local
-   CodeGraph index includes newly added or edited SOC symbols before the next slice.
+6. After code changes, run verification proportional to the slice: focused tests,
+   formatting/static checks, contract fixtures, and runtime replay where applicable.
 7. Update `.notes/ai_soc/progress.md` after each completed slice with status, changed
    files, verification, and next step.
 
@@ -825,8 +882,8 @@ Progress is not tracked in chat history. The durable task ledger is
 
 ## Reference Projects
 
-Reference projects are read-only. Use CodeGraph and minimal source reads when consulting them;
-do not directly modify files in those projects.
+Reference projects are read-only. Use targeted `rg` searches and minimal source reads when
+consulting them; do not directly modify files in those projects.
 
 | Project | Path | Use |
 | --- | --- | --- |
@@ -837,8 +894,9 @@ do not directly modify files in those projects.
 
 Cross-project rules:
 
-- Prefer CodeGraph for architecture lookup, exact symbol/function/class lookup, callers,
-  callees, and impact analysis.
+- Prefer `rg --files` for inventory and `rg` for exact symbols, registrations, call sites,
+  tests, and configuration. Confirm dynamic callers and impact through focused source
+  reads, tests, or runtime traces.
 - Use Understand Anything only when the user explicitly requests it; treat existing
   `.understand-anything` graphs as static snapshots and do not update them.
 - Consult reference projects only when the current slice needs a design pattern

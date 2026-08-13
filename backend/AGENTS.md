@@ -663,7 +663,7 @@ accepted-baseline drift checks. `LLMAnalysisRequest.evidence_coverage` records p
 sanitization, truncation, omissions, and high-value mapping gaps; prompts receive only its compact
 path-free summary.
 Outer parser success is `recognized` even when a nested allowlisted body has a decode/repair warning;
-the original nested string and typed repair observation remain auditable. `soc.decision_policy.v3`
+the original nested string and typed repair observation remain auditable. `soc.decision_policy.v5`
 treats encoded compaction alone as informational and routine bounded omission/truncation without a
 high-value gap as at most partial. Only degraded/unsupported outer schemas, high-value gaps or
 ungrounded analyzer citations directly degrade evidence; fact conflicts retain `conflicted`.
@@ -692,13 +692,70 @@ fact catalog (`E-*`) plus governed Skill (`S-*`), adapter-contract (`A-*`), conf
 governed-context (`C-*`), and tool-result (`T-*`) catalogs to `LLMAnalysisRequest.v4`. Model evidence
 may only copy exact `E-*` reference/path/typed-value tuples. Explicit `R-*` items carry security
 interpretation with declared basis and references, while open-vocabulary scenario assessments cite
-both `E-*` and `R-*`. `soc-analysis-v13` and `soc-analysis-json-parser-v11` reject unresolved or
+both `E-*` and `R-*`. `soc-analysis-v17` and `soc-analysis-json-parser-v15` reject unresolved or
 ambiguous references. Parser repair is limited to auditable, semantics-free normalization of an
 already unique catalog relation; it must never invent an event fact or security conclusion.
 `AnalysisResult.v4` also keeps observed wire flow, organization-boundary direction, semantic roles,
 and action-specific response-target proposals separate. A response target is never an authorization.
 Analyst role confirmation is an append-only `RoleAdjudicationRevisionRecord` through
 `SocReviewService`, not a rewrite of model output.
+
+Source trust is scoped by reviewed adapter semantics, not by a generic field-name convention. When an
+adapter declares an exact field as `provider_reported_session_initiator` or
+`provider_reported_session_responder`, analyzer/verifier prompts accept that upstream session fact
+without demanding duplicate SYN/flow/PCAP evidence. An explicit direction-unknown marker,
+proxy/NAT/forwarding leg, or same-observation contradiction may still challenge it. The declaration
+never establishes attacker/victim identity, compromise, a response target, or action authority. PingAn
+NDR/APT currently declares message-first `sip/dip` this way; other adapters must opt in explicitly.
+
+The optional `JsonLLMRoleVerifier` runs only after primary schema validation and Grounding, and only
+when `SOC_ROLE_VERIFIER_ENABLED=true` plus deterministic trigger policy v2 fires. The gate reviews one
+coherent network-direction claim and non-placeholder attacker/victim roles only. Inferred/tentative
+state, generic evidence gaps, intermediaries, response-target proposals, and confidence alone never
+trigger. A configured confidence threshold only annotates a trigger already caused by core
+conflict/indeterminate state, upstream role conflict, or a core-reference Grounding failure. The
+`soc-role-verification-v3` Prompt receives at most `RC-ND-01` plus attacker/victim `RC-R-*` claims and
+the original bounded `E/S/A/M/C/T-*` catalogs, but not first-pass prose or confidence. Its strict v1
+parser requires one reference-bound review plus an explicit counterevidence assessment
+per claim. The persisted result is advisory:
+
+Validation reporting treats one triggered alert as one logical verifier review, regardless of how
+many atomic `RC-*` claims it contains. Provider invocation count is separate because one bounded
+contract-correction retry may occur. Primary analysis, role verifier, and tenant-policy advisor usage
+must be reported as separate lanes and as one measured aggregate. Provider-complete usage is
+`reported`; absent intranet usage is explicitly `estimated` from visible request/response content;
+partial provider usage completed locally is `mixed`. A failed call with no visible content remains
+`unavailable` and makes the aggregate a lower bound. Every Runtime step and the fixed Runtime total
+are timed; E2E also records the full analysis/persistence/investigation wall time. Do not calculate monetary cost without a reviewed model price table,
+or accuracy without independent analyst labels. The ten-alert E2E reads existing formal SOC Memory
+but does not promote its `knowledge-review/` files into `soc_memory_candidates` or
+`soc_memory_records`.
+challenged/unresolved/unavailable verification forces review through `soc.decision_policy.v5`, while a
+confirmed result cannot grant action authority or erase another guard. Use `SOC_ROLE_VERIFIER_MODEL`
+for a separately configured stronger model; absence reuses the primary model with explicit lineage.
+Both provider calls are written to ordered `provider_request_journals`; `request_journal` remains the
+active/latest process-loss recovery pointer. Configuring this branch selects `soc-runtime-v2` even
+when its deterministic gate does not trigger; verifier-free runs remain `soc-runtime-v1`.
+The 2026-08-12 fixed ten-alert v2 live baseline triggered 5/10 alerts, reviewed 14 actual claims in
+five provider calls, and left the other five without verifier calls. Report Gate-projected candidate
+claims separately from claims actually sent for review. These figures prove workflow behavior and
+measurement integrity, not role/direction accuracy without independent analyst labels.
+
+Primary analysis and role verification each permit at most one separately journaled contract-repair
+call when `SOC_LLM_OUTPUT_RETRY_ATTEMPTS=1` (the default). Empty output retries the original bounded
+Prompt. Primary output validation treats the required core and the scenario, direction, role, and
+knowledge sections separately. If the core is valid, a narrow `primary_analysis_section_repair` call
+receives only rejected sections, immutable accepted core, validation errors, allowed catalogs, and the
+response schema. Failed section repair retains valid sections with inert defaults and records
+`analysis_output_quality=degraded`; an irrecoverable core records an explicit deterministic-stub
+fallback. Both paths force review instead of discarding the alert. Provider transport, timeout, and
+capacity failures remain retryable Runtime failures. `SOC_LLM_OUTPUT_FALLBACK_MODEL` may select a
+stronger registered model for the single repair call. No repair node may perform fresh analysis or
+receive raw vendor payloads.
+Parser v15 removes an optional response-target proposal only when its exact typed entity was not
+adjudicated. Its action-specific target role may differ from that entity's global semantic role; the
+explicit repair log never synthesizes an entity or changes the verdict. Direction/role direct
+context references need only resolve in the request catalog, not be redundantly copied into `R-*`.
 
 Reviewed tenant-static knowledge is projected as bounded, source-linked `C-*` through a strict
 `TenantKnowledgeProfile`; generic methods remain `S-*`, adapter semantics `A-*`, confirmed historical

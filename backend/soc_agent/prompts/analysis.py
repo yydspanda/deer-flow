@@ -10,7 +10,7 @@ from typing import Any
 from soc_agent.contracts import LLMAnalysisRequest, Verdict
 from soc_agent.pipeline.analysis_context import project_analysis_context
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v13"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v17"
 MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 
@@ -72,8 +72,18 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
             "Assess network direction at three separate layers: observed wire flow, organization-boundary direction, and attacker/victim semantic direction.",
             "Do not equate source with attacker or destination with victim. Reverse connections, C2 callbacks, proxies, relays, CDN, NAT, and F5 SNAT may separate those roles.",
             "Use network_direction for the direction assessment and role_adjudication for semantic roles. Both must cite selected E-* facts and R-* reasoning from this response.",
-            "A role may be resolved_from_evidence by the analyzer, but that is not human confirmation. Use tentative, conflicted, or unresolved when competing interpretations remain.",
+            "Direction, role, and response-target context_refs may directly cite exact S/A/M/C/T items from the supplied context catalog; they do not need to duplicate the context_refs of a referenced R-* item.",
+            (
+                "A role may be resolved_from_evidence by the analyzer, but that is not human confirmation. "
+                "Use tentative or conflicted for a concrete candidate entity; use unresolved with value=null "
+                "only when no concrete entity can be assigned."
+            ),
             "Response target proposals are action-specific suggestions only.",
+            (
+                "Every proposed target entity must exactly match one adjudicated entity by entity type and value. "
+                "The action-specific target_role may differ from that entity's global semantic role; for example, "
+                "a victim host may be the impacted_asset for isolation."
+            ),
             "Propose the victim for host isolation, the attacker/C2 for network blocking, or the relevant account for disablement only when the cited evidence supports that target.",
             "Every response target must keep policy_review_required=true and automation_allowed=false; policy and authorization are evaluated after Runtime analysis.",
             "Treat upstream or deterministic scenario hypotheses as hints, not truth. Confirm, revise, or reject them from bounded evidence.",
@@ -90,6 +100,14 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
             "Use evidence coverage warnings to identify parser degradation, sanitized fields, truncation, and high-value canonical gaps.",
             "Use evidence.highlights as compact, adapter-governed values retained from messages outside the full supplementary-evidence budget; cite a representative highlight path and do not infer omitted sibling fields.",
             "Obey source_field_semantics from the adapter. Fields marked participates_in_reasoning=false are preserved for audit but must not support entities, facts, verdicts, or confidence.",
+            (
+                "Trust an upstream field within the exact meaning declared by its reviewed adapter contract. "
+                "When that contract explicitly identifies a provider-reported session initiator or responder, "
+                "accept that session role without demanding an independent SYN, flow record, or PCAP; require "
+                "those only when the contract is ambiguous or the current alert contains an explicit "
+                "proxy/NAT/forwarding caveat or same-observation contradiction."
+            ),
+            "A provider-reported session initiator is a network-session fact only; it does not by itself establish attacker, victim, compromise, or action authority.",
             (
                 "Treat reviewed provider detection classifications and outcomes declared by source_field_semantics as trusted upstream assertions. "
                 "Cite the exact source value and preserve that upstream origin; do not dismiss them as mere workflow noise or silently recast them as independently observed telemetry."
@@ -199,7 +217,7 @@ def _analysis_response_schema() -> dict[str, Any]:
             "confidence": "number from 0.0 to 1.0",
             "evidence_refs": ["selected E-* IDs; at least one"],
             "reasoning_refs": ["R-* IDs; at least one"],
-            "context_refs": ["S/A/M/C/T IDs used by the referenced reasoning, or empty"],
+            "context_refs": ["exact S/A/M/C/T IDs directly used for this assessment, or empty"],
             "rationale": "why the three direction layers were assigned",
             "evidence_gaps": ["missing facts that prevent stronger direction resolution"],
         },
@@ -210,12 +228,12 @@ def _analysis_response_schema() -> dict[str, Any]:
                 {
                     "role": "one of: initiator, responder, attacker, victim, impacted_asset, proxy, relay, scanner, c2",
                     "entity_type": "ip, domain, host, user, process, file, url, or another explicit type",
-                    "value": "exact entity value supported by evidence",
+                    "value": "exact entity value for tentative/resolved/conflicted; null only when status=unresolved",
                     "status": "one of: tentative, resolved_from_evidence, conflicted, unresolved",
                     "confidence": "number from 0.0 to 1.0",
                     "evidence_refs": ["selected E-* IDs"],
                     "reasoning_refs": ["R-* IDs"],
-                    "context_refs": ["S/A/M/C/T IDs used by the referenced reasoning, or empty"],
+                    "context_refs": ["exact S/A/M/C/T IDs directly used for this role, or empty"],
                     "rationale": "role-specific rationale",
                 }
             ],
@@ -225,11 +243,11 @@ def _analysis_response_schema() -> dict[str, Any]:
                     "action_kind": "action-specific suggestion such as isolate_host or block_ip",
                     "target_type": "ip, domain, host, user, process, file, url, or another explicit type",
                     "target_value": "exact proposed target entity",
-                    "target_role": "one of: initiator, responder, attacker, victim, impacted_asset, proxy, relay, scanner, c2",
+                    "target_role": "action-specific role for this target; one of: initiator, responder, attacker, victim, impacted_asset, proxy, relay, scanner, c2",
                     "confidence": "number from 0.0 to 1.0",
                     "evidence_refs": ["selected E-* IDs"],
                     "reasoning_refs": ["R-* IDs"],
-                    "context_refs": ["S/A/M/C/T IDs used by the referenced reasoning, or empty"],
+                    "context_refs": ["exact S/A/M/C/T IDs directly used for this target proposal, or empty"],
                     "rationale": "why this target fits this action",
                     "policy_review_required": True,
                     "automation_allowed": False,
@@ -256,6 +274,21 @@ def _analysis_response_schema() -> dict[str, Any]:
             }
         ],
     }
+
+
+def analysis_response_schema() -> dict[str, Any]:
+    """Return the public bounded-output schema used by correction prompts."""
+
+    return _analysis_response_schema()
+
+
+__all__ = [
+    "ANALYSIS_PROMPT_VERSION",
+    "AnalysisPrompt",
+    "AnalysisPromptSizeError",
+    "analysis_response_schema",
+    "build_analysis_prompt",
+]
 
 
 def _to_pretty_json(value: Mapping[str, Any]) -> str:

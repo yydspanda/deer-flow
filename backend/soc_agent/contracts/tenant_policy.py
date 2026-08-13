@@ -339,6 +339,17 @@ class TenantPolicyAdvisorProvenance(TenantPolicyModel):
     response_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     repair_applied: bool = False
     usage: dict[str, int | float | str] = Field(default_factory=dict)
+    usage_measurement_status: Literal[
+        "reported",
+        "estimated",
+        "mixed",
+        "unavailable",
+    ] = "unavailable"
+    usage_estimation_method: str | None = Field(default=None, max_length=128)
+    usage_is_estimated: bool = False
+    admission_wait_duration_ms: float | None = Field(default=None, ge=0.0)
+    provider_duration_ms: float | None = Field(default=None, ge=0.0)
+    client_total_duration_ms: float | None = Field(default=None, ge=0.0)
     error_code: str | None = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="after")

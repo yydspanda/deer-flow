@@ -10,7 +10,11 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.llm import ANALYSIS_JSON_PARSER_VERSION, LLMOutputParseError, parse_analysis_result_output
-from soc_agent.llm.json_parser import MAX_ANALYSIS_RESPONSE_CHARS
+from soc_agent.llm.json_parser import (
+    MAX_ANALYSIS_RESPONSE_CHARS,
+    parse_analysis_section_patch_output,
+    recover_analysis_result_output,
+)
 
 
 def _valid_payload() -> dict:
@@ -121,6 +125,79 @@ def test_parse_analysis_result_accepts_strict_json() -> None:
     assert parsed.result.confidence == 0.76
 
 
+def test_parse_analysis_result_accepts_unresolved_role_without_entity_value() -> None:
+    payload = _valid_payload()
+    payload["role_adjudication"]["roles"] = [
+        {
+            "role": "attacker",
+            "entity_type": "ip",
+            "value": None,
+            "status": "unresolved",
+            "confidence": 0.35,
+            "evidence_refs": ["E-A1B2C3D4E5F6"],
+            "reasoning_refs": ["R-01"],
+            "context_refs": [],
+            "rationale": "当前证据无法把攻击者角色绑定到具体 IP。",
+        }
+    ]
+    payload["role_adjudication"]["response_target_proposals"] = []
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    role = parsed.result.role_adjudication.roles[0]
+    assert role.status.value == "unresolved"
+    assert role.value is None
+
+
+def test_parse_analysis_result_rejects_unresolved_role_with_concrete_value() -> None:
+    payload = _valid_payload()
+    payload["role_adjudication"]["roles"][0]["status"] = "unresolved"
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert exc.value.stage == "schema_validation"
+
+
+def test_recover_analysis_result_keeps_core_and_rejects_only_invalid_role_section() -> None:
+    payload = _valid_payload()
+    payload["role_adjudication"]["roles"][0]["status"] = "unresolved"
+
+    recovery = recover_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert recovery is not None
+    assert [section.value for section in recovery.invalid_sections] == ["role_adjudication"]
+    assert recovery.result.verdict == Verdict.SUSPICIOUS
+    assert recovery.result.scenario_assessments
+    assert recovery.result.network_direction.status.value == "indeterminate"
+    assert recovery.result.role_adjudication.status.value == "not_assessed"
+
+
+def test_parse_analysis_section_patch_merges_only_rejected_section() -> None:
+    payload = _valid_payload()
+    payload["role_adjudication"]["roles"][0]["status"] = "unresolved"
+    recovery = recover_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+    assert recovery is not None
+    corrected_role = dict(payload["role_adjudication"])
+    corrected_role["roles"] = [dict(payload["role_adjudication"]["roles"][0])]
+    corrected_role["roles"][0]["value"] = None
+    corrected_role["response_target_proposals"] = []
+
+    parsed = parse_analysis_section_patch_output(
+        json.dumps(
+            {
+                "schema_version": "soc.analysis_section_patch.v1",
+                "sections": {"role_adjudication": corrected_role},
+            },
+            ensure_ascii=False,
+        ),
+        recovery=recovery,
+    )
+
+    assert parsed.result.summary == payload["summary"]
+    assert parsed.result.role_adjudication.roles[0].value is None
+
+
 def test_parse_analysis_result_keeps_direction_roles_and_action_specific_targets() -> None:
     payload = _valid_payload()
     payload["reasoning"][0]["basis"] = [
@@ -191,7 +268,20 @@ def test_parse_analysis_result_keeps_direction_roles_and_action_specific_targets
         "rationale": "角色与动作目标分开表达。",
     }
 
-    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+    context_catalog = [
+        AnalysisContextCatalogItem(
+            context_ref="C-ABCDEF123456",
+            kind="governed_context",
+            label="reviewed network boundary",
+            source_id="context/network-boundary",
+            summary="Reviewed organization-boundary context.",
+        )
+    ]
+
+    parsed = parse_analysis_result_output(
+        json.dumps(payload, ensure_ascii=False),
+        context_catalog=context_catalog,
+    )
 
     assert parsed.result.network_direction.semantic_direction == "victim_to_attacker_reverse_connection"
     assert parsed.result.role_adjudication.roles[0].role.value == "victim"
@@ -201,7 +291,53 @@ def test_parse_analysis_result_keeps_direction_roles_and_action_specific_targets
     assert target.automation_allowed is False
 
 
-def test_parse_analysis_result_rejects_target_without_matching_role() -> None:
+def test_parse_analysis_result_accepts_direct_direction_context_not_repeated_in_reasoning() -> None:
+    payload = _valid_payload()
+    payload["network_direction"]["context_refs"] = ["C-ABCDEF123456"]
+    context_catalog = [
+        AnalysisContextCatalogItem(
+            context_ref="C-ABCDEF123456",
+            kind="governed_context",
+            label="reviewed network boundary",
+            source_id="context/network-boundary",
+            summary="Reviewed organization-boundary context.",
+        )
+    ]
+
+    parsed = parse_analysis_result_output(
+        json.dumps(payload, ensure_ascii=False),
+        context_catalog=context_catalog,
+    )
+
+    assert parsed.result.reasoning[0].context_refs == []
+    assert parsed.result.network_direction.context_refs == ["C-ABCDEF123456"]
+
+
+def test_parse_analysis_result_rejects_unknown_direct_direction_context() -> None:
+    payload = _valid_payload()
+    payload["network_direction"]["context_refs"] = ["C-ABCDEF123456"]
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert exc.value.stage == "reference_validation"
+    assert "C-ABCDEF123456" in str(exc.value)
+
+
+def test_parse_analysis_result_keeps_target_role_that_differs_for_same_entity() -> None:
+    payload = _valid_payload()
+    payload["role_adjudication"]["roles"][0]["role"] = "victim"
+
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    targets = parsed.result.role_adjudication.response_target_proposals
+    assert len(targets) == 1
+    assert parsed.result.role_adjudication.roles[0].role.value == "victim"
+    assert targets[0].target_role.value == "impacted_asset"
+    assert parsed.repair_applied is False
+
+
+def test_parse_analysis_result_drops_target_without_adjudicated_entity() -> None:
     payload = _valid_payload()
     payload["role_adjudication"]["response_target_proposals"][0].update(
         {
@@ -210,11 +346,20 @@ def test_parse_analysis_result_rejects_target_without_matching_role() -> None:
         }
     )
 
-    with pytest.raises(LLMOutputParseError) as exc:
-        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+    parsed = parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
 
-    assert exc.value.stage == "schema_validation"
-    assert "must reference an adjudicated role" in str(exc.value)
+    assert parsed.result.role_adjudication.response_target_proposals == []
+    repair = next(item for item in parsed.repair_log if item["repair"] == "remove_response_targets_without_adjudicated_entities")
+    assert repair["removed"] == [
+        {
+            "index": 0,
+            "proposal_id": "RT-01",
+            "target_role": "attacker",
+            "target_type": "process",
+            "target_value": "198.51.100.44",
+            "reason": "target_entity_not_adjudicated",
+        }
+    ]
 
 
 def test_parse_analysis_result_strips_think_and_code_fence() -> None:

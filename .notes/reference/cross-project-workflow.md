@@ -1,12 +1,12 @@
 # 跨项目参考工作流
 
 > 目标：在需要借鉴其他 Agent 项目时，快速找到可复用设计点，并把结论沉淀到 `reference-index/`。
-> 默认工具链：**CodeGraph + 源码读取**。Understand Anything 不进入日常流程；只有用户明确要求时临时使用。
+> 默认工具链：**`rg` + 最小源码读取 + 必要的测试/运行轨迹**。Understand Anything 不进入日常流程；只有用户明确要求时临时使用。
 
 ## 流程总览
 
 ```text
-① 定义具体问题 → ② 查已有 reference-index → ③ CodeGraph 定位代码 → ④ 读取最小源码 → ⑤ 写参考索引
+① 定义具体问题 → ② 查已有 reference-index → ③ `rg` 定位代码 → ④ 读取最小源码并验证动态链路 → ⑤ 写参考索引
 ```
 
 ## ① 定义问题
@@ -42,45 +42,46 @@
 └── context-compaction-strategy.md
 ```
 
-## ③ CodeGraph 定位代码
+## ③ `rg` 定位代码
 
-优先用 Codex 已配置的 CodeGraph MCP。手动 CLI 只在 MCP 不方便时使用：
+先列出候选文件，再查询符号、注册点、调用点、配置和测试：
 
 ```bash
-codegraph query -p /home/yydspei/projects/claude-code-sourcemap "permission approval tool"
-codegraph context -p /home/yydspei/projects/hermes-agent "agent lifecycle event stream"
-codegraph callers -p /home/yydspei/projects/claude-mem "MemoryManager"
+rg --files /home/yydspei/projects/claude-code-sourcemap
+rg -n "permission|approval|tool" /home/yydspei/projects/claude-code-sourcemap
+rg -n "AgentLifecycle|event_stream|run_with" /home/yydspei/projects/hermes-agent
+rg -n "class MemoryManager|MemoryManager\(" /home/yydspei/projects/claude-mem
 ```
 
 规则：
 
-- 先搜符号/模块，再读代码；不要从项目根目录盲扫。
+- 先用文件名、符号和稳定术语缩小范围，再读代码；不要无目标遍历整个项目。
 - 只读取和问题直接相关的文件/函数。
 - 参考项目只读不改。
-- 如果 CodeGraph 报 `not initialized`，再考虑 `codegraph init <path>`。
-- 本仓库 SOC 代码改动后继续执行 `codegraph sync .`，保证下一刀能查到新符号。
+- 静态搜索不能证明动态注册、依赖注入、MCP/Skill 加载或运行时路由；这些关系必须继续核对配置、测试或运行轨迹。
 
-常用命令：
+常用查询：
 
 | 命令 | 用途 |
 |---|---|
-| `codegraph status -p <path>` | 查看索引状态 |
-| `codegraph sync -p <path>` | 同步索引变化 |
-| `codegraph query -p <path> "keyword"` | 搜索符号/类/函数 |
-| `codegraph context -p <path> "task"` | 为某个问题生成相关上下文 |
-| `codegraph callers -p <path> "Symbol"` | 查谁调用某个符号 |
-| `codegraph callees -p <path> "Symbol"` | 查某个符号调用谁 |
-| `codegraph impact -p <path> "Symbol"` | 分析修改影响面 |
+| `rg --files <path>` | 按文件清单和路径快速定位模块 |
+| `rg -n "class X|def x|function x" <path>` | 查定义和接口 |
+| `rg -n "X\(|\.x\(" <path>` | 查显式调用点 |
+| `rg -n "register|registry|provider|middleware" <path>` | 查注册和装配边界 |
+| `rg -n "X|x" <path-to-tests>` | 查行为契约和回归覆盖 |
+| `git diff -- <paths>` | 检查当前切片的真实影响面 |
 
 ## ④ 读取最小源码
 
-CodeGraph 返回候选文件/符号后，再读取最小必要代码片段确认：
+`rg` 返回候选文件/符号后，再读取最小必要代码片段确认：
 
 - public interface / 类型签名
 - 权限和错误语义
 - 状态流转
 - 审计/日志/恢复机制
 - 测试如何覆盖
+
+遇到插件发现、配置驱动路由、MCP/Skill 加载等动态关系时，再通过聚焦测试、配置解析结果或 Runtime trace 验证；不要从一次文本命中推断完整调用链。
 
 不要复制参考项目代码；只复用设计思想，在本仓库按 SOC Agent 契约重写。
 
@@ -107,7 +108,7 @@ CodeGraph 返回候选文件/符号后，再读取最小必要代码片段确认
 - 项目顶层 `.understand-anything` 是 DeerFlow 全仓静态快照，可作为人工追溯参考，但不再更新。
 - 参考项目的 `.understand-anything` 也按静态快照看待，不再更新。
 - 只有用户明确要求“使用 Understand”时，才临时使用相关 skill。
-- 临时使用后的结论仍必须经过 CodeGraph/源码确认，不能直接把图谱摘要当代码事实。
+- 临时使用后的结论仍必须经过源码以及必要的测试/运行轨迹确认，不能直接把图谱摘要当代码事实。
 
 旧的 Understand-heavy 流程已归档：
 
@@ -118,7 +119,7 @@ CodeGraph 返回候选文件/符号后，再读取最小必要代码片段确认
 ## 三条铁律
 
 1. **问题驱动**：先定义问题，再决定是否查参考项目。
-2. **CodeGraph 优先**：先定位符号和调用关系，再读最小源码。
+2. **源码优先**：先用 `rg` 定位候选，再读最小源码；动态关系必须额外验证。
 3. **查完写索引**：采用点和拒绝点必须进入 `reference-index/`。
 
 ## 参考项目

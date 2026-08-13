@@ -598,7 +598,7 @@ The system must handle vendor differences without turning the core schema into a
     Evidence quality is classified rather than collapsed: encoded-span compaction is informational;
     routine bounded omissions/truncation with no high-value gap produce at most `partial`; an explicit
     degraded/unsupported outer schema, high-value gap, or ungrounded analyzer citation produces
-    `degraded`; fact conflicts retain the stronger `conflicted` state. `soc.decision_policy.v3` no
+    `degraded`; fact conflicts retain the stronger `conflicted` state. `soc.decision_policy.v5` no
     longer emits `truncated_analysis_evidence` for ordinary budget pressure.
     Empty/null source leaves do not create false mapping gaps; a non-empty unknown high-value field
     remains an explicit maintenance issue. The NDR/HIDS corpus audit evaluates each non-empty parsed
@@ -833,13 +833,123 @@ appear literally in the alert, while still making every input fact and governed 
   revision uses optimistic locking, retains the base model adjudication hash and cannot rewrite the
   model result or authorize an action.
 
-`soc-analysis-v13` requires the model to select at most 40 exact catalog facts and place all security
-interpretation in `reasoning[]`. `soc-analysis-json-parser-v11` validates the strict v4 schema and
+方向和角色采用“一次主分析 + 条件式独立复核（conditional adversarial verification）”，而不是固定让
+同一模型无条件重复推理：
+
+- `role_verification_gate` 是 Runtime 掌控的确定性门。只有出现 inferred/conflicted/indeterminate
+  direction、tentative/conflicted/unresolved role、低置信度、证据缺口、中间节点、response target、
+  上游角色冲突或 Grounding 降级时才允许第二次调用；功能默认关闭。
+- Gate 将第一轮方向、角色和目标拆成原子 `RC-ND-* / RC-R-* / RC-T-*`。第二轮只看到这些结构化
+  声明以及原始 bounded `E/S/A/M/C/T-*` 目录，看不到第一轮 rationale 和 confidence，降低锚定与
+  “照抄第一轮”的风险。
+- `soc-role-verification-v3` 要求逐条输出 `supported / challenged / unresolved`，并引用精确 `E-*`
+  及可选受治理上下文；每条还必须填写 `counterevidence_assessment`，说明检查到的最强反证，或明确
+  当前 bounded catalog 中没有反证。它不能输出 verdict、disposition、action authorization 或新告警事实。
+- 第二轮使用相同证据时只是一种独立反证检查，不会凭空补齐 CMDB/TI/EDR 信息。可用
+  `SOC_ROLE_VERIFIER_MODEL` 选择更强的已配置 DeerFlow 模型；未设置时复用主模型，并显式记录
+  `same_model_verification=true`。
+- Adapter 已评审的字段语义属于现有证据契约，不是待第二轮重新取证的猜测。当前 PingAn NDR/APT
+  message-first `sip/dip` 明确表示本 observation 的 provider-reported session initiator/responder；主分析
+  与 verifier 不得只因缺少独立 SYN/PCAP 而否认这一 scoped 会话事实。显式 direction-unknown、
+  proxy/NAT/forwarding leg 或同 observation 冲突仍可挑战它；attacker/victim、compromise 和 response
+  target 继续独立裁决。其他供应商必须由自己的 Adapter 显式声明，通用 Runtime 不按字段名猜测。
+- `confirmed` 只说明该窄检查未发现反证，不能消除其他 review reason，也不能授权处置；
+  `challenged / unresolved / unavailable` 由 `soc.decision_policy.v5` 分别转为 conflicted/degraded
+  证据状态和强制复核。第一轮 `AnalysisResult.v4` 始终保持不可变。
+- 每次 Provider 调用都写独立、有序、无敏感值的 `AnalysisRequestJournal`；兼容字段
+  `request_journal` 指向当前/最后一次调用，用于进程丢失恢复，完整调用序列保存在
+  `provider_request_journals`。
+- 只要配置了 verifier，本轮 `pipeline_version` 就是 `soc-runtime-v2`，即使 gate 最终不触发；没有
+  verifier 的既有固定流水线继续标记 `soc-runtime-v1`，避免评测语料混用两种执行语义。
+
+本地/内网 live 对照评测可显式开启；`SOC_ROLE_VERIFIER_MODEL` 必须是 DeerFlow 已注册模型，省略则
+复用 `SOC_LLM_MODEL`：
+
+```bash
+export SOC_ANALYZER_MODE=llm
+export SOC_ROLE_VERIFIER_ENABLED=true
+export SOC_ROLE_VERIFIER_MODEL=deepseek-v4-pro
+export SOC_ROLE_VERIFIER_MIN_CONFIDENCE=0.35
+```
+
+`soc-analysis-v17` requires the model to select at most 40 exact catalog facts and place all security
+interpretation in `reasoning[]`. `soc-analysis-json-parser-v15` validates the strict v4 schema and
 may apply only semantics-free, logged normalization when the relation is already unique: recover an
 `E-*` from an exact path/value tuple, materialize an exact catalog fact cited elsewhere, remove an
 exact duplicate, drop an explicit empty context sentinel, or derive a redundant basis label from an
-already explicit valid `S/A/M/C/T` reference. Unknown, conflicting, or ambiguous references fail;
-the parser does not rewrite model conclusions.
+already explicit valid `S/A/M/C/T` reference. Direction/role items may cite an exact context catalog
+ID directly without repeating it in `R-*`; unknown references still fail. An optional response-target
+proposal whose exact typed entity was not adjudicated is removed with a repair log rather than
+inventing an entity. The proposal's action-specific target role may differ from that entity's global
+semantic role; neither form grants action authority.
+Unknown, conflicting, or ambiguous references fail; the parser does not rewrite model conclusions.
+
+Primary and verifier nodes may each perform at most one bounded output-repair call under
+`SOC_LLM_OUTPUT_RETRY_ATTEMPTS=1`. Empty output retries the original bounded Prompt; a parsed invalid
+candidate receives only the invalid candidate, validation error, allowed catalogs and response Schema.
+Every retry has a separate provider journal and cannot become an unbounded reflection loop.
+
+Primary analysis now uses a staged acceptance boundary rather than making one imperfect field destroy
+the whole result:
+
+```text
+provider response
+  -> syntax/mechanical repair
+  -> validate required core
+  -> validate scenario / direction / role / knowledge independently
+  -> valid all: accepted|repaired
+  -> optional section invalid: one narrow section-repair call
+       -> success: repaired
+       -> failure: retain accepted core/sections + inert defaults + degraded/review
+  -> core invalid: one bounded full-contract repair
+       -> failure: deterministic stub fallback + degraded/review
+```
+
+`AnalysisRun.analysis_output_quality` records `accepted / repaired / degraded /
+deterministic_fallback`, accepted/degraded sections, sanitized issue type and repair attempt. This is
+Runtime-owned lineage and cannot be supplied by the model. For primary analysis,
+`SOC_LLM_OUTPUT_FALLBACK_MODEL` may use a stronger registered model for that single repair call. A fallback preserves an auditable conclusion
+and queue item; it does not authorize automation. Provider timeout, capacity, authentication and
+transport failures still remain retryable Runtime failures so Kafka/replay semantics are not hidden.
+For role output specifically, `status=unresolved` must use `value=null`; concrete tentative/resolved/
+conflicted roles still require a non-empty typed entity.
+
+The 2026-08-12 fixed ten-alert live comparison is retained as the v1 historical baseline and completed with 10/10 structural acceptance in both
+modes. The primary-only run used 417,348 tokens and about 390 seconds. With
+`deepseek-v4-pro` verification, all 10 alerts triggered: 8 were challenged, 1 unresolved and 1
+unavailable; 31/64 claims were supported, 20 challenged and 13 unresolved. The verifier added at least
+349,938 measured tokens and about 657 seconds. This is not an accuracy claim because independent human
+role/direction labels are still absent. A 100% gate rate is too broad for rollout and must be tuned on
+the labeled cohort before enabling the default-off feature.
+
+Trigger policy v2 narrows this cost boundary to one coherent network-direction claim and
+attacker/victim only. Inferred/tentative status, generic gaps, intermediaries, response targets and a
+confidence threshold alone do not trigger. On the frozen v1 outputs, v2 recalculation selects 3/10
+alerts instead of 10/10; this is an offline gate replay, not a new live-model accuracy result.
+
+The subsequent v2 live run on the same ten input hashes completed with 10/10 structural/safety
+acceptance and triggered 5/10 alerts: `1965794`, `1965802`, `1965935`, `1966442`, and `1980502`.
+Five logical reviews sent 14 actual claims (6 supported, 5 challenged, 3 unresolved) through five
+verifier Provider invocations, consuming 120,929 provider-reported tokens and 93,266 ms. The Gate
+also projected 29 candidate claims across all ten alerts for stable audit hashing; candidates from
+non-triggered alerts were not sent to the verifier and are reported separately. Reverse-shell sample
+`2025642` preserved victim-initiated wire flow with independent attacker/victim semantics and did not
+trigger. One historical first-pass `1966442` run failed closed after emitting null role values; that
+frozen artifact predates the reviewed unresolved-role contract above. A failure-only resume succeeded.
+This remains a structural/safety result rather than
+an accuracy result until independent analyst direction/role labels exist.
+
+The E2E measurement contract separates one alert-level logical verifier review from its atomic
+`RC-*` claims and from actual provider invocations, including a possible bounded contract-correction
+retry. Reports account for primary analysis, role verification, and tenant-policy advice as separate
+LLM lanes. Provider-complete usage is `reported`; absent intranet usage is explicitly `estimated` from
+the exact visible messages and response, and partial provider usage is `mixed`. A failed invocation
+without visible content remains `unavailable` and makes the aggregate a measured lower bound. Runtime
+persists every step duration plus `AnalysisRun.total_duration_ms`, while E2E reports the full
+analysis/persistence/investigation wall time. Monetary cost remains `not_measured` without a reviewed model price table, and quality remains structural and
+safety-only until independent analyst labels support precision/recall/F1. E2E `knowledge-review/`
+artifacts are inert review material, not formal Memory candidates or records; fresh `--replace` runs
+recreate their isolated SQLite database.
 
 Checkpoint D7 uses a real configured model only to prove this output boundary. A structural D7 pass
 does not prove evidence correctness. D8 runs deterministic `soc.analysis_evidence_grounding.v3`:

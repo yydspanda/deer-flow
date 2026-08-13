@@ -515,6 +515,13 @@ def test_policy_skill_failure_records_safe_stage_code() -> None:
 
     assert result.provenance.status is TenantPolicyAdvisorStatus.FAILED_CLOSED
     assert result.provenance.error_code == "reference_validation.ValueError"
+    assert result.provenance.usage == {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "total_tokens": 150,
+    }
+    assert result.provenance.usage_measurement_status == "reported"
+    assert result.provenance.usage_is_estimated is False
     assert result.advice.evaluation_status is TenantPolicyEvaluationStatus.NO_MATCH
 
 

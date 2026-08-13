@@ -193,6 +193,27 @@ def build_ndr_source_field_semantics(
     for parsed in parsed_messages:
         fields = parsed.fields
         base_path = f"{parsed.source_path}#parsed"
+        for alias, semantic_type, meaning in (
+            (
+                "sip",
+                "provider_reported_session_initiator",
+                "reviewed_pingan_NDR_sip_is_the_upstream_reported_session_initiator_for_this_observation;_an_independent_SYN_or_PCAP_is_not_required_unless_the_alert_explicitly_marks_direction_unknown,_proxy/NAT/forwarding,_or_a_same-observation_conflict",
+            ),
+            (
+                "dip",
+                "provider_reported_session_responder",
+                "reviewed_pingan_NDR_dip_is_the_upstream_reported_session_responder_for_this_observation;_this_session_role_does_not_by_itself_assign_attacker_or_victim_semantics",
+            ),
+        ):
+            if _first_str(fields, (alias,)):
+                result.append(
+                    _semantic(
+                        f"{base_path}.{alias}",
+                        semantic_type,
+                        meaning,
+                        entities=True,
+                    )
+                )
         if _first_str(fields, ("host_md5",)):
             result.append(
                 _semantic(

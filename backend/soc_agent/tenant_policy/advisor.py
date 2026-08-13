@@ -19,7 +19,7 @@ from soc_agent.contracts import (
     TenantPolicyAdvisorStatus,
     TenantPolicyEvaluationStatus,
 )
-from soc_agent.llm.analyzer import LLMChatClient, LLMChatResponse
+from soc_agent.llm.analyzer import LLMChatClient, LLMChatResponse, coerce_chat_response
 from soc_agent.prompts.tenant_policy import (
     TENANT_POLICY_ADVISOR_PROMPT_VERSION,
     build_tenant_policy_advisor_prompt,
@@ -63,6 +63,7 @@ class LLMTenantPolicyAdvisor:
         run: AnalysisRun,
     ) -> TenantPolicyAdvisorResult:
         failure_stage = "prompt_build"
+        response: LLMChatResponse | None = None
         prompt_hash = stable_hash(
             {
                 "prompt_version": TENANT_POLICY_ADVISOR_PROMPT_VERSION,
@@ -82,11 +83,13 @@ class LLMTenantPolicyAdvisor:
             )
             prompt_hash = stable_hash({"messages": prompt.messages()})
             failure_stage = "model_call"
-            response = _coerce_chat_response(
+            prompt_messages = prompt.messages()
+            response = coerce_chat_response(
                 self._client.complete(
-                    prompt.messages(),
+                    prompt_messages,
                     model_name=self._model_name,
-                )
+                ),
+                messages=prompt_messages,
             )
             failure_stage = "output_parse"
             advice, repair_applied = _parse_advice(response.content)
@@ -108,6 +111,7 @@ class LLMTenantPolicyAdvisor:
                     response_hash=response_hash,
                     repair_applied=repair_applied,
                     usage=_bounded_usage(response.usage),
+                    **_measurement_provenance(response.metadata),
                 ),
             )
         except Exception as exc:  # noqa: BLE001 - this optional layer must fail closed
@@ -127,6 +131,8 @@ class LLMTenantPolicyAdvisor:
                     skill_version=self._skill_version,
                     skill_source_ref=str(self._skill_path),
                     skill_hash=self._skill_hash,
+                    usage=(_bounded_usage(response.usage) if response is not None else {}),
+                    **_measurement_provenance(response.metadata if response is not None else getattr(exc, "soc_llm_client_measurement", {})),
                     error_code=f"{failure_stage}.{type(exc).__name__}"[:128],
                 ),
             )
@@ -189,10 +195,28 @@ def _skill_identity(content: str) -> tuple[str, str]:
     return name, version
 
 
-def _coerce_chat_response(response: LLMChatResponse | str) -> LLMChatResponse:
-    if isinstance(response, LLMChatResponse):
-        return response
-    return LLMChatResponse(content=response)
+def _measurement_provenance(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    measurement = metadata.get("usage_measurement")
+    if not isinstance(measurement, Mapping):
+        measurement = {}
+    status = str(measurement.get("status") or "unavailable")
+    if status not in {"reported", "estimated", "mixed", "unavailable"}:
+        status = "unavailable"
+    method = measurement.get("method")
+    values: dict[str, Any] = {
+        "usage_measurement_status": status,
+        "usage_estimation_method": (str(method)[:128] if status in {"estimated", "mixed"} and method is not None else None),
+        "usage_is_estimated": status in {"estimated", "mixed"},
+    }
+    for key in (
+        "admission_wait_duration_ms",
+        "provider_duration_ms",
+        "client_total_duration_ms",
+    ):
+        value = metadata.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            values[key] = float(value)
+    return values
 
 
 def _extract_text(content: Any) -> str:

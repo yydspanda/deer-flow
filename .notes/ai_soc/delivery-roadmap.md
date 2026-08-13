@@ -269,7 +269,7 @@ Stage 4 的退出结果是 **Pilot Ready / 可试点**。正式 GA、自动关�
 6. 每个切片都写清 `real / mock / fixture / shadow-only / data-gated`，不允许静默降级。
 7. 代码、测试、演示产物和文档在同一切片更新；不再创建另一份完整路线图。
 8. 研究和参考项目查询必须服务当前 task 的明确决策，不以“继续研究”替代交付。
-9. CodeGraph 在切片明确后用于找复用点；完成代码修改后执行 `codegraph sync .`。
+9. 切片明确后用 `rg` 和最小源码读取找复用点；动态装配关系用聚焦测试、配置或 Runtime trace 验证。
 10. 每次阶段转换都在 `progress.md` 留下 Gate 证据、未完成项去向和下一任务。
 11. 任何 PingAn DEV 依赖先交付显式 simulation implementation + evidence；仿真 gate 通过后产品完成轨可以继续，真实 `mocked=false` gate 进入独立债务轨，不得用它反向阻塞无关产品切片。
 12. 仿真只能覆盖已经冻结的 contract；无稳定 contract 的能力保持 data-gated，不用 mock 猜测。所有报告同时给出 simulation status 和 real-integration status，禁止把两者压成一个 Done。

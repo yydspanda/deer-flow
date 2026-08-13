@@ -14,11 +14,16 @@ from pydantic import ValidationError
 from soc_agent.contracts import (
     AnalysisContextCatalogItem,
     AnalysisEvidenceCatalogItem,
+    AnalysisOutputSection,
     AnalysisResult,
+    RoleVerificationCandidate,
+    RoleVerificationClaim,
 )
 
-ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v11"
+ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v15"
+ROLE_VERIFICATION_JSON_PARSER_VERSION = "soc-role-verification-json-parser-v1"
 MAX_ANALYSIS_RESPONSE_CHARS = 100_000
+MAX_ROLE_VERIFICATION_RESPONSE_CHARS = 80_000
 MAX_STRUCTURED_EVIDENCE_VALUE_CHARS = 4_000
 
 _THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.IGNORECASE | re.DOTALL)
@@ -100,6 +105,50 @@ class ParsedAnalysisResult:
     candidate_text: str = ""
 
 
+@dataclass(frozen=True)
+class AnalysisSectionValidationIssue:
+    """In-memory detail used to repair one rejected model-output section."""
+
+    section: AnalysisOutputSection
+    stage: str
+    error_type: str
+    message: str
+
+
+@dataclass(frozen=True)
+class RecoverableAnalysisResult:
+    """Valid core plus independently accepted optional output sections."""
+
+    result: AnalysisResult
+    accepted_data: dict[str, Any]
+    original_data: dict[str, Any]
+    accepted_sections: tuple[AnalysisOutputSection, ...]
+    invalid_sections: tuple[AnalysisOutputSection, ...]
+    issues: tuple[AnalysisSectionValidationIssue, ...]
+    repair_applied: bool = False
+    repair_log: tuple[dict[str, Any], ...] = ()
+    candidate_text: str = ""
+
+
+@dataclass(frozen=True)
+class _DecodedAnalysisCandidate:
+    data: dict[str, Any]
+    candidate_text: str
+    repair_applied: bool
+    repair_log: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class ParsedRoleVerificationCandidate:
+    """Validated second-pass output plus parser audit metadata."""
+
+    candidate: RoleVerificationCandidate
+    parser_version: str = ROLE_VERIFICATION_JSON_PARSER_VERSION
+    repair_applied: bool = False
+    repair_log: list[dict[str, Any]] = field(default_factory=list)
+    candidate_text: str = ""
+
+
 def parse_analysis_result_output(
     response_content: Any,
     *,
@@ -115,6 +164,157 @@ def parse_analysis_result_output(
     validation before it can enter runtime decision logic.
     """
 
+    decoded = _decode_analysis_candidate(
+        response_content,
+        evidence_catalog=evidence_catalog,
+        context_catalog=context_catalog,
+    )
+    result = _validate_analysis_result_data(
+        decoded.data,
+        repair_applied=decoded.repair_applied,
+    )
+    _validate_directional_context_references(
+        result,
+        context_catalog=context_catalog,
+        repair_applied=decoded.repair_applied,
+    )
+    return ParsedAnalysisResult(
+        result=result,
+        repair_applied=decoded.repair_applied,
+        repair_log=decoded.repair_log,
+        candidate_text=decoded.candidate_text,
+    )
+
+
+def recover_analysis_result_output(
+    response_content: Any,
+    *,
+    evidence_catalog: Sequence[AnalysisEvidenceCatalogItem] = (),
+    context_catalog: Sequence[AnalysisContextCatalogItem] = (),
+) -> RecoverableAnalysisResult | None:
+    """Keep a valid core and validate each optional section independently.
+
+    This function never invents replacement security semantics. A rejected
+    optional section is replaced only by its inert contract default; callers
+    may request one bounded model patch for exactly those sections.
+    """
+
+    decoded = _decode_analysis_candidate(
+        response_content,
+        evidence_catalog=evidence_catalog,
+        context_catalog=context_catalog,
+    )
+    return _recover_analysis_candidate(
+        decoded,
+        context_catalog=context_catalog,
+    )
+
+
+def parse_analysis_section_patch_output(
+    response_content: Any,
+    *,
+    recovery: RecoverableAnalysisResult,
+    evidence_catalog: Sequence[AnalysisEvidenceCatalogItem] = (),
+    context_catalog: Sequence[AnalysisContextCatalogItem] = (),
+) -> ParsedAnalysisResult:
+    """Merge a strict patch for exactly the previously rejected sections."""
+
+    text = _strip_markdown_code_fence(_strip_think_blocks(_extract_text(response_content))).strip()
+    if not text:
+        raise LLMOutputParseError("analysis section patch is empty", stage="extract_text")
+    if len(text) > MAX_ANALYSIS_RESPONSE_CHARS:
+        raise LLMOutputParseError(
+            f"analysis section patch exceeds {MAX_ANALYSIS_RESPONSE_CHARS} characters",
+            stage="output_size",
+        )
+
+    strict = _parse_strict_json_object_for_schema(
+        text,
+        schema_version="soc.analysis_section_patch.v1",
+    )
+    if strict is not None:
+        patch, candidate_text = strict
+        syntactic_repair_log: list[dict[str, Any]] = []
+    else:
+        candidate_text = _extract_repair_candidate(text)
+        repaired = _repair_json_object(candidate_text)
+        patch = repaired.data
+        syntactic_repair_log = repaired.log
+
+    if set(patch) != {"schema_version", "sections"}:
+        raise LLMOutputParseError(
+            "analysis section patch must contain only schema_version and sections",
+            stage="section_patch_validation",
+            repair_applied=bool(syntactic_repair_log),
+        )
+    sections = patch.get("sections")
+    if not isinstance(sections, dict):
+        raise LLMOutputParseError(
+            "analysis section patch sections must be a JSON object",
+            stage="section_patch_validation",
+            repair_applied=bool(syntactic_repair_log),
+        )
+    expected_names = {_ANALYSIS_OPTIONAL_SECTION_FIELDS[section] for section in recovery.invalid_sections}
+    if set(sections) != expected_names:
+        raise LLMOutputParseError(
+            f"analysis section patch must replace exactly these sections: {sorted(expected_names)}",
+            stage="section_patch_validation",
+            repair_applied=bool(syntactic_repair_log),
+        )
+
+    merged = dict(recovery.accepted_data)
+    merged.update(sections)
+    normalized, semantic_repair_log = _normalize_analysis_result_shape(
+        merged,
+        evidence_catalog=evidence_catalog,
+        context_catalog=context_catalog,
+    )
+    repair_log = [*syntactic_repair_log, *semantic_repair_log]
+    result = _validate_analysis_result_data(
+        normalized,
+        repair_applied=True,
+    )
+    _validate_directional_context_references(
+        result,
+        context_catalog=context_catalog,
+        repair_applied=True,
+    )
+    return ParsedAnalysisResult(
+        result=result,
+        repair_applied=True,
+        repair_log=repair_log,
+        candidate_text=candidate_text,
+    )
+
+
+_ANALYSIS_CORE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "verdict",
+        "confidence",
+        "summary",
+        "evidence",
+        "reasoning",
+        "evidence_gaps",
+        "manual_checks",
+        "reason",
+        "recommended_action",
+    }
+)
+_ANALYSIS_OPTIONAL_SECTION_FIELDS = {
+    AnalysisOutputSection.SCENARIO_ASSESSMENTS: "scenario_assessments",
+    AnalysisOutputSection.NETWORK_DIRECTION: "network_direction",
+    AnalysisOutputSection.ROLE_ADJUDICATION: "role_adjudication",
+    AnalysisOutputSection.KNOWLEDGE_CANDIDATES: "knowledge_candidates",
+}
+
+
+def _decode_analysis_candidate(
+    response_content: Any,
+    *,
+    evidence_catalog: Sequence[AnalysisEvidenceCatalogItem],
+    context_catalog: Sequence[AnalysisContextCatalogItem],
+) -> _DecodedAnalysisCandidate:
     text = _strip_markdown_code_fence(_strip_think_blocks(_extract_text(response_content))).strip()
     if not text:
         raise LLMOutputParseError("LLM output is empty", stage="extract_text")
@@ -127,29 +327,219 @@ def parse_analysis_result_output(
     strict = _parse_strict_json_object(text)
     if strict is not None:
         data, candidate_text = strict
-        normalized, semantic_repair_log = _normalize_analysis_result_shape(
-            data,
-            evidence_catalog=evidence_catalog,
-            context_catalog=context_catalog,
+        repaired_data = data
+        syntactic_repair_log: list[dict[str, Any]] = []
+        syntactic_repair_applied = False
+    else:
+        candidate_text = _extract_repair_candidate(text)
+        repaired = _repair_json_object(candidate_text)
+        repaired_data = repaired.data
+        syntactic_repair_log = repaired.log
+        syntactic_repair_applied = True
+
+    normalized, semantic_repair_log = _normalize_analysis_result_shape(
+        repaired_data,
+        evidence_catalog=evidence_catalog,
+        context_catalog=context_catalog,
+    )
+    repair_log = [*syntactic_repair_log, *semantic_repair_log]
+    if syntactic_repair_applied and not syntactic_repair_log:
+        repair_log.insert(
+            0,
+            {
+                "stage": "json_repair",
+                "repair": "json_repair_applied",
+            },
         )
-        return ParsedAnalysisResult(
-            result=_validate_analysis_result_data(normalized, repair_applied=bool(semantic_repair_log)),
-            repair_applied=bool(semantic_repair_log),
-            repair_log=semantic_repair_log,
+    return _DecodedAnalysisCandidate(
+        data=normalized,
+        candidate_text=candidate_text,
+        repair_applied=syntactic_repair_applied or bool(semantic_repair_log),
+        repair_log=repair_log,
+    )
+
+
+def _recover_analysis_candidate(
+    decoded: _DecodedAnalysisCandidate,
+    *,
+    context_catalog: Sequence[AnalysisContextCatalogItem],
+) -> RecoverableAnalysisResult | None:
+    defaults = _analysis_optional_section_defaults()
+    accepted_data = {key: value for key, value in decoded.data.items() if key in _ANALYSIS_CORE_FIELDS}
+    accepted_data.update(defaults)
+    try:
+        core_result = _validate_analysis_result_data(
+            accepted_data,
+            repair_applied=True,
+        )
+        _validate_directional_context_references(
+            core_result,
+            context_catalog=context_catalog,
+            repair_applied=True,
+        )
+    except LLMOutputParseError:
+        return None
+
+    accepted_sections = [AnalysisOutputSection.CORE]
+    invalid_sections: list[AnalysisOutputSection] = []
+    issues: list[AnalysisSectionValidationIssue] = []
+    for section, field_name in _ANALYSIS_OPTIONAL_SECTION_FIELDS.items():
+        if field_name not in decoded.data:
+            invalid_sections.append(section)
+            issues.append(
+                AnalysisSectionValidationIssue(
+                    section=section,
+                    stage="schema_validation",
+                    error_type="MissingAnalysisSection",
+                    message=f"model output omitted required section {field_name}",
+                )
+            )
+            continue
+
+        candidate = dict(accepted_data)
+        candidate[field_name] = decoded.data[field_name]
+        try:
+            result = _validate_analysis_result_data(
+                candidate,
+                repair_applied=True,
+            )
+            _validate_directional_context_references(
+                result,
+                context_catalog=context_catalog,
+                repair_applied=True,
+            )
+        except LLMOutputParseError as exc:
+            invalid_sections.append(section)
+            issues.append(
+                AnalysisSectionValidationIssue(
+                    section=section,
+                    stage=exc.stage,
+                    error_type=type(exc.__cause__ or exc).__name__,
+                    message=str(exc),
+                )
+            )
+            continue
+        accepted_data[field_name] = decoded.data[field_name]
+        accepted_sections.append(section)
+
+    result = _validate_analysis_result_data(
+        accepted_data,
+        repair_applied=True,
+    )
+    _validate_directional_context_references(
+        result,
+        context_catalog=context_catalog,
+        repair_applied=True,
+    )
+    repair_log = list(decoded.repair_log)
+    unknown_fields = sorted(set(decoded.data) - _ANALYSIS_CORE_FIELDS - set(_ANALYSIS_OPTIONAL_SECTION_FIELDS.values()))
+    if unknown_fields:
+        repair_log.append(
+            {
+                "stage": "section_recovery",
+                "repair": "remove_unsupported_top_level_fields",
+                "fields": unknown_fields,
+            }
+        )
+    return RecoverableAnalysisResult(
+        result=result,
+        accepted_data=accepted_data,
+        original_data=decoded.data,
+        accepted_sections=tuple(accepted_sections),
+        invalid_sections=tuple(invalid_sections),
+        issues=tuple(issues),
+        repair_applied=True,
+        repair_log=tuple(repair_log),
+        candidate_text=decoded.candidate_text,
+    )
+
+
+def _analysis_optional_section_defaults() -> dict[str, Any]:
+    return {
+        "scenario_assessments": [],
+        "network_direction": {
+            "schema_version": "soc.network_direction_assessment.v1",
+            "status": "not_assessed",
+            "observed_flow": "not_available",
+            "boundary_direction": "not_applicable",
+            "semantic_direction": None,
+            "connection_initiator": None,
+            "intermediaries": [],
+            "confidence": 0.0,
+            "evidence_refs": [],
+            "reasoning_refs": [],
+            "context_refs": [],
+            "rationale": "Model output section unavailable after validation.",
+            "evidence_gaps": [],
+        },
+        "role_adjudication": {
+            "schema_version": "soc.role_adjudication_result.v1",
+            "status": "not_assessed",
+            "roles": [],
+            "response_target_proposals": [],
+            "conflicts": [],
+            "evidence_gaps": [],
+            "rationale": "Model output section unavailable after validation.",
+        },
+        "knowledge_candidates": [],
+    }
+
+
+def parse_role_verification_output(
+    response_content: Any,
+    *,
+    claims: Sequence[RoleVerificationClaim],
+    evidence_catalog: Sequence[AnalysisEvidenceCatalogItem] = (),
+    context_catalog: Sequence[AnalysisContextCatalogItem] = (),
+) -> ParsedRoleVerificationCandidate:
+    """Parse a narrow verifier response and prove complete catalog coverage."""
+
+    text = _strip_markdown_code_fence(_strip_think_blocks(_extract_text(response_content))).strip()
+    if not text:
+        raise LLMOutputParseError(
+            "role verification output is empty",
+            stage="extract_text",
+            parser_version=ROLE_VERIFICATION_JSON_PARSER_VERSION,
+        )
+    if len(text) > MAX_ROLE_VERIFICATION_RESPONSE_CHARS:
+        raise LLMOutputParseError(
+            f"role verification output exceeds {MAX_ROLE_VERIFICATION_RESPONSE_CHARS} characters",
+            stage="output_size",
+            parser_version=ROLE_VERIFICATION_JSON_PARSER_VERSION,
+        )
+
+    strict = _parse_strict_json_object_for_schema(
+        text,
+        schema_version="soc.role_verification_candidate.v1",
+    )
+    if strict is not None:
+        data, candidate_text = strict
+        return ParsedRoleVerificationCandidate(
+            candidate=_validate_role_verification_candidate(
+                data,
+                claims=claims,
+                evidence_catalog=evidence_catalog,
+                context_catalog=context_catalog,
+                repair_applied=False,
+            ),
             candidate_text=candidate_text,
         )
 
     candidate_text = _extract_repair_candidate(text)
-    repaired = _repair_json_object(candidate_text)
-    normalized, semantic_repair_log = _normalize_analysis_result_shape(
-        repaired.data,
-        evidence_catalog=evidence_catalog,
-        context_catalog=context_catalog,
+    repaired = _repair_json_object(
+        candidate_text,
+        parser_version=ROLE_VERIFICATION_JSON_PARSER_VERSION,
     )
-    return ParsedAnalysisResult(
-        result=_validate_analysis_result_data(normalized, repair_applied=True),
+    return ParsedRoleVerificationCandidate(
+        candidate=_validate_role_verification_candidate(
+            repaired.data,
+            claims=claims,
+            evidence_catalog=evidence_catalog,
+            context_catalog=context_catalog,
+            repair_applied=True,
+        ),
         repair_applied=True,
-        repair_log=[*repaired.log, *semantic_repair_log],
+        repair_log=repaired.log,
         candidate_text=candidate_text,
     )
 
@@ -217,6 +607,23 @@ def _parse_strict_json_object(text: str) -> tuple[dict[str, Any], str] | None:
     return None
 
 
+def _parse_strict_json_object_for_schema(
+    text: str,
+    *,
+    schema_version: str,
+) -> tuple[dict[str, Any], str] | None:
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", text):
+        candidate = text[match.start() :]
+        try:
+            parsed, end = decoder.raw_decode(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and parsed.get("schema_version") == schema_version:
+            return parsed, candidate[:end]
+    return None
+
+
 def _looks_like_analysis_result_object(data: dict[str, Any]) -> bool:
     return {
         "verdict",
@@ -239,7 +646,11 @@ def _extract_repair_candidate(text: str) -> str:
     return text[start : end + 1]
 
 
-def _repair_json_object(candidate_text: str) -> _RepairedJson:
+def _repair_json_object(
+    candidate_text: str,
+    *,
+    parser_version: str = ANALYSIS_JSON_PARSER_VERSION,
+) -> _RepairedJson:
     try:
         repaired, repair_log = repair_json_loads(
             candidate_text,
@@ -250,6 +661,7 @@ def _repair_json_object(candidate_text: str) -> _RepairedJson:
         raise LLMOutputParseError(
             f"LLM output JSON repair failed: {exc}",
             stage="json_repair",
+            parser_version=parser_version,
             repair_applied=True,
         ) from exc
 
@@ -257,11 +669,65 @@ def _repair_json_object(candidate_text: str) -> _RepairedJson:
         raise LLMOutputParseError(
             "LLM output did not repair to a JSON object",
             stage="json_repair",
+            parser_version=parser_version,
             repair_applied=True,
         )
 
     normalized_log = [item for item in repair_log if isinstance(item, dict)] if isinstance(repair_log, list) else []
     return _RepairedJson(data=repaired, log=normalized_log)
+
+
+def _validate_role_verification_candidate(
+    data: dict[str, Any],
+    *,
+    claims: Sequence[RoleVerificationClaim],
+    evidence_catalog: Sequence[AnalysisEvidenceCatalogItem],
+    context_catalog: Sequence[AnalysisContextCatalogItem],
+    repair_applied: bool,
+) -> RoleVerificationCandidate:
+    try:
+        candidate = RoleVerificationCandidate.model_validate(data)
+    except ValidationError as exc:
+        raise LLMOutputParseError(
+            f"role verification output failed schema validation: {exc}",
+            stage="schema_validation",
+            parser_version=ROLE_VERIFICATION_JSON_PARSER_VERSION,
+            repair_applied=repair_applied,
+        ) from exc
+
+    expected_claims = {claim.claim_ref: claim for claim in claims}
+    actual_refs = {review.claim_ref for review in candidate.claim_reviews}
+    if actual_refs != set(expected_claims):
+        raise LLMOutputParseError(
+            f"role verification output must review every RC-* claim exactly once; missing={sorted(set(expected_claims) - actual_refs)}, unexpected={sorted(actual_refs - set(expected_claims))}",
+            stage="claim_coverage",
+            parser_version=ROLE_VERIFICATION_JSON_PARSER_VERSION,
+            repair_applied=repair_applied,
+        )
+
+    evidence_refs = {item.evidence_ref for item in evidence_catalog}
+    context_refs = {item.context_ref for item in context_catalog}
+    for review in candidate.claim_reviews:
+        missing_evidence = sorted((set(review.supporting_evidence_refs) | set(review.contradicting_evidence_refs)) - evidence_refs)
+        missing_context = sorted(set(review.context_refs) - context_refs)
+        if missing_evidence or missing_context:
+            raise LLMOutputParseError(
+                f"role verification output contains unresolved references; claim={review.claim_ref}, missing_evidence={missing_evidence}, missing_context={missing_context}",
+                stage="reference_validation",
+                parser_version=ROLE_VERIFICATION_JSON_PARSER_VERSION,
+                repair_applied=repair_applied,
+            )
+        if review.alternative is not None:
+            expected_keys = set(expected_claims[review.claim_ref].assertion)
+            actual_keys = set(review.alternative.assertion)
+            if actual_keys != expected_keys:
+                raise LLMOutputParseError(
+                    f"role verification alternative must preserve the original claim keys; claim={review.claim_ref}, expected={sorted(expected_keys)}, actual={sorted(actual_keys)}",
+                    stage="alternative_validation",
+                    parser_version=ROLE_VERIFICATION_JSON_PARSER_VERSION,
+                    repair_applied=repair_applied,
+                )
+    return candidate
 
 
 def _normalize_analysis_result_shape(
@@ -429,8 +895,85 @@ def _normalize_analysis_result_shape(
         evidence_catalog=evidence_catalog,
         repair_log=repair_log,
     )
+    normalized = _drop_response_targets_without_adjudicated_entities(
+        normalized,
+        repair_log=repair_log,
+    )
 
     return (normalized, repair_log) if repair_log else (data, [])
+
+
+def _drop_response_targets_without_adjudicated_entities(
+    data: dict[str, Any],
+    *,
+    repair_log: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Drop optional action targets whose entity was never adjudicated.
+
+    A proposal's target role describes why that entity fits the proposed action
+    and may differ from its global semantic role. This repair therefore matches
+    only the exact entity type and value. It never creates or changes a role,
+    target, verdict, or action authority.
+    """
+
+    raw_adjudication = data.get("role_adjudication")
+    if not isinstance(raw_adjudication, Mapping):
+        return data
+    roles = raw_adjudication.get("roles")
+    proposals = raw_adjudication.get("response_target_proposals")
+    if not isinstance(roles, list) or not isinstance(proposals, list):
+        return data
+
+    entity_keys: set[tuple[str, str]] = set()
+    for role in roles:
+        if not isinstance(role, Mapping):
+            continue
+        values = (role.get("entity_type"), role.get("value"))
+        if all(isinstance(value, str) for value in values):
+            entity_keys.add(tuple(value.casefold() for value in values))
+
+    retained: list[Any] = []
+    removed: list[dict[str, Any]] = []
+    for index, proposal in enumerate(proposals):
+        if not isinstance(proposal, Mapping):
+            retained.append(proposal)
+            continue
+        values = (
+            proposal.get("target_type"),
+            proposal.get("target_value"),
+        )
+        if not all(isinstance(value, str) for value in values):
+            retained.append(proposal)
+            continue
+        if tuple(value.casefold() for value in values) in entity_keys:
+            retained.append(proposal)
+            continue
+        removed.append(
+            {
+                "index": index,
+                "proposal_id": proposal.get("proposal_id"),
+                "target_role": proposal.get("target_role"),
+                "target_type": proposal.get("target_type"),
+                "target_value": proposal.get("target_value"),
+                "reason": "target_entity_not_adjudicated",
+            }
+        )
+
+    if not removed:
+        return data
+    normalized_adjudication = dict(raw_adjudication)
+    normalized_adjudication["response_target_proposals"] = retained
+    normalized = dict(data)
+    normalized["role_adjudication"] = normalized_adjudication
+    repair_log.append(
+        {
+            "stage": "schema_normalization",
+            "field": "role_adjudication.response_target_proposals",
+            "repair": "remove_response_targets_without_adjudicated_entities",
+            "removed": removed,
+        }
+    )
+    return normalized
 
 
 def _deduplicate_exact_evidence_items(
@@ -923,6 +1466,27 @@ def _validate_analysis_result_data(data: dict[str, Any], *, repair_applied: bool
             stage="domain_validation",
             repair_applied=repair_applied,
         ) from exc
+
+
+def _validate_directional_context_references(
+    result: AnalysisResult,
+    *,
+    context_catalog: Sequence[AnalysisContextCatalogItem],
+    repair_applied: bool,
+) -> None:
+    """Require every direct direction/role context citation to exist in this request."""
+
+    available = {item.context_ref for item in context_catalog}
+    directional_items: list[Any] = [result.network_direction]
+    directional_items.extend(result.role_adjudication.roles)
+    directional_items.extend(result.role_adjudication.response_target_proposals)
+    missing = sorted({reference for item in directional_items for reference in item.context_refs if reference not in available})
+    if missing:
+        raise LLMOutputParseError(
+            f"direction/role context_refs must resolve in the request context catalog; missing_context={missing}",
+            stage="reference_validation",
+            repair_applied=repair_applied,
+        )
 
 
 def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) -> None:

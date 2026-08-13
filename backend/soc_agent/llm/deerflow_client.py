@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import time
 from collections.abc import Callable, Mapping, Sequence
 from math import isfinite
 from threading import Lock
@@ -14,6 +15,7 @@ from deerflow.config.app_config import AppConfig
 from deerflow.models import create_chat_model
 from soc_agent.llm.admission import SocLLMAdmissionController
 from soc_agent.llm.analyzer import LLMChatResponse
+from soc_agent.llm.usage import resolve_chat_usage
 
 _SAFE_RESPONSE_METADATA_KEYS = (
     "finish_reason",
@@ -72,8 +74,15 @@ class DeerFlowLLMChatClient:
         *,
         model_name: str,
     ) -> LLMChatResponse:
+        client_started = time.monotonic()
         model = self._get_model(model_name)
+        admission_started = time.monotonic()
         with self._admission.admit():
+            admission_wait_duration_ms = round(
+                (time.monotonic() - admission_started) * 1000,
+                3,
+            )
+            provider_started = time.monotonic()
             future = self._executor.submit(
                 model.invoke,
                 [dict(message) for message in messages],
@@ -87,13 +96,61 @@ class DeerFlowLLMChatClient:
                 response = future.result(timeout=self._call_timeout_seconds)
             except concurrent.futures.TimeoutError as exc:
                 future.cancel()
-                raise TimeoutError(f"SOC LLM call exceeded {self._call_timeout_seconds:g} seconds") from exc
+                timeout_error = TimeoutError(f"SOC LLM call exceeded {self._call_timeout_seconds:g} seconds")
+                _attach_client_failure_timing(
+                    timeout_error,
+                    admission_wait_duration_ms=admission_wait_duration_ms,
+                    provider_duration_ms=round(
+                        (time.monotonic() - provider_started) * 1000,
+                        3,
+                    ),
+                    client_total_duration_ms=round(
+                        (time.monotonic() - client_started) * 1000,
+                        3,
+                    ),
+                )
+                raise timeout_error from exc
+            except Exception as exc:
+                _attach_client_failure_timing(
+                    exc,
+                    admission_wait_duration_ms=admission_wait_duration_ms,
+                    provider_duration_ms=round(
+                        (time.monotonic() - provider_started) * 1000,
+                        3,
+                    ),
+                    client_total_duration_ms=round(
+                        (time.monotonic() - client_started) * 1000,
+                        3,
+                    ),
+                )
+                raise
+            provider_duration_ms = round(
+                (time.monotonic() - provider_started) * 1000,
+                3,
+            )
         response_metadata = _mapping(getattr(response, "response_metadata", None))
+        usage, usage_measurement = resolve_chat_usage(
+            messages=messages,
+            response_content=getattr(response, "content", response),
+            provider_usage=_response_usage(response, response_metadata),
+        )
+        bounded_metadata = {key: response_metadata[key] for key in _SAFE_RESPONSE_METADATA_KEYS if key in response_metadata}
+        bounded_metadata.update(
+            {
+                "usage_measurement": usage_measurement,
+                "admission_wait_duration_ms": admission_wait_duration_ms,
+                "provider_duration_ms": provider_duration_ms,
+                "client_total_duration_ms": round(
+                    (time.monotonic() - client_started) * 1000,
+                    3,
+                ),
+            }
+        )
         return LLMChatResponse(
             content=getattr(response, "content", response),
             model_name=_response_model_name(response_metadata) or model_name,
-            usage=_response_usage(response, response_metadata),
-            metadata={key: response_metadata[key] for key in _SAFE_RESPONSE_METADATA_KEYS if key in response_metadata},
+            usage=usage,
+            metadata=bounded_metadata,
         )
 
     def _get_model(self, model_name: str) -> BaseChatModel:
@@ -114,7 +171,11 @@ def _response_usage(response: Any, response_metadata: Mapping[str, Any]) -> dict
     usage = _mapping(getattr(response, "usage_metadata", None))
     if usage:
         return dict(usage)
-    for key in ("token_usage", "usage"):
+    for attribute in ("token_usage", "usage"):
+        candidate = _mapping(getattr(response, attribute, None))
+        if candidate:
+            return dict(candidate)
+    for key in ("token_usage", "usage", "usage_metadata", "usageMetadata"):
         candidate = _mapping(response_metadata.get(key))
         if candidate:
             return dict(candidate)
@@ -131,3 +192,22 @@ def _response_model_name(response_metadata: Mapping[str, Any]) -> str | None:
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _attach_client_failure_timing(
+    error: Exception,
+    *,
+    admission_wait_duration_ms: float,
+    provider_duration_ms: float,
+    client_total_duration_ms: float,
+) -> None:
+    error.soc_llm_client_measurement = {  # type: ignore[attr-defined]
+        "usage_measurement": {
+            "status": "unavailable",
+            "method": None,
+            "estimated": False,
+        },
+        "admission_wait_duration_ms": admission_wait_duration_ms,
+        "provider_duration_ms": provider_duration_ms,
+        "client_total_duration_ms": client_total_duration_ms,
+    }

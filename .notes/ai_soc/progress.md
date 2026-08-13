@@ -8,15 +8,16 @@
 
 1. 先读 `.notes/ai_soc/soc-agent-solution.md` 和相关 `.notes/reference-index/*.md`。
 2. 明确当前任务属于哪个 Phase、解决哪个用户/工程问题。
-3. 再用 CodeGraph / 源码读取查 DeerFlow 代码落点和参考实现：
-   - 局部实现切片优先 CodeGraph，用来定位本仓库符号、调用点和低侵入接入点。
-   - 架构型或跨项目切片也默认使用 CodeGraph + 最小源码读取；参考项目只在本地方案尚未定型时使用，常见触发点是 memory、approval policy、多 Agent、stream/event protocol、context compaction、tool runtime。
+3. 再用 `rg --files`、`rg` 和最小源码读取查 DeerFlow 代码落点和参考实现：
+   - 局部实现切片先定位符号、显式调用点、注册点、测试和低侵入接入点。
+   - 架构型或跨项目切片也使用源码优先流程；参考项目只在本地方案尚未定型时使用，常见触发点是 memory、approval policy、多 Agent、stream/event protocol、context compaction、tool runtime。
+   - MCP/Skill、插件、依赖注入等动态关系需要通过配置、聚焦测试或 Runtime trace 继续确认。
    - 不再把 Understand Anything 放入日常流程；它消耗较高，且 scoped 增量存在路径作用域问题。
    - 项目顶层 `.understand-anything` 和所有参考项目的 `.understand-anything` 只作为静态快照保留，不再更新。
-   - 只有用户明确要求“使用 Understand”时才临时使用；临时结论仍必须经过 CodeGraph/源码确认。
+   - 只有用户明确要求“使用 Understand”时才临时使用；临时结论仍必须经过源码和必要的行为验证。
 4. 优先新增 SOC 独立模块、adapter、schema、CLI/API 入口，不侵入 DeerFlow 上游核心。
 5. 如果切片改变产品方向、runtime pipeline、contract 语义、Phase 边界或下一步顺序，必须同步更新 `.notes/ai_soc/soc-agent-solution.md`；工程规则同步更新 `.notes/reference-index/soc-agent-engineering-contracts.md`。
-6. 代码改动后运行 `codegraph sync .`，确保新增/修改的 SOC 符号进入本地索引。
+6. 代码改动后按风险运行聚焦测试、格式/静态检查、契约 fixture 和必要的 Runtime replay。
 7. 完成后记录改动、验证命令、遗留风险和下一步。
 
 ## 当前状态
@@ -27,9 +28,107 @@
 | 当前目标 | 外网产品链已补齐 post-Runtime effective decision 与受治理动作自动化；真实 Provider/infra/quality/telemetry/owner/rollback/cohort enforcement 继续作为独立 Real Integration Debt |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
-| LLM 策略 | Runtime 固定控制流；LLM 只作为固定节点或 stub，不掌握主流程；新 live 输出使用 `AnalysisResult.v4`，以 `E-*` 原子事实、`R-*` 推理和受治理 `S/A/M/C/T-*` 上下文分离事实、知识、角色与解释 |
-| 当前下一刀 | 用固定十告警和人工方向真值 fresh 重跑 `AnalysisResult.v4`，评估 direction/role/target 质量；再补 Web/TUI 人工角色确认表单和 held-out confirmed-memory Retrieval v2 precision/recall。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
+| LLM 策略 | Runtime 固定控制流；主 LLM 只执行 bounded `AnalysisResult.v4` 节点；默认关闭的条件式 verifier 由确定性 gate 触发，只独立反证 `RC-*` 方向/角色/目标声明，不掌握流程或动作权限 |
+| 当前下一刀 | 条件式角色复核 Gate v2 的同 cohort live 对照已完成：从旧 v1 的 10/10 触发降为 5/10，实际复核 14 个方向/attacker/victim Claim。下一步先给固定 cohort 补独立人工方向/角色真值，重点确认邮件与纯端点场景是否应进入角色复核；之后补 Web/TUI 人工角色确认表单和 held-out confirmed-memory Retrieval v2 precision/recall。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
+
+## 2026-08-13 — Primary LLM output resilience completed
+
+- 主分析升级为 `soc-analysis-v17` / `soc-analysis-json-parser-v15` / `soc.decision_policy.v5`。合法的
+  unresolved role 使用 `value=null`；tentative/resolved/conflicted role 仍要求 concrete entity。
+- Runtime 不再把一个 optional 字段错误当成整条告警失败：required core 与 scenario/direction/role/
+  knowledge 分区校验；core 有效时最多进行一次窄 section repair，失败则保留有效区块并以 inert
+  default 隔离坏区块，标记 degraded/review。core 最终无效时显式写 deterministic stub fallback；
+  Provider timeout/auth/capacity/transport 仍保持 retryable failure。
+- `AnalysisRun.analysis_output_quality` 和 E2E v8 报告现在区分 `accepted / repaired / degraded /
+  deterministic_fallback`，记录 accepted/degraded section、脱敏 issue 和 repair lineage。每次模型纠错
+  继续写独立 provider journal；可选 `SOC_LLM_OUTPUT_FALLBACK_MODEL` 只允许使用已注册 DeerFlow 模型。
+- 固定十告警 live 验证保存在
+  `backend/.deer-flow/soc-validation/e2e-ten-output-resilience-20260813/`：10/10 passed、0 Runtime failed；
+  1 accepted、8 repaired、0 partial-section degraded、1 deterministic fallback。`1965794` 通过
+  `primary_analysis_section_repair` 只修复角色区块；历史失败样本 `1966442` 首轮直接 accepted；
+  `1980502` 首次为空、完整重试仍 schema invalid，最终以 stub + review 留下完整审计。主分析共 15 次
+  Provider invocation、496,588 reported tokens、429,598 ms。结果证明恢复机制工作，不代表模型准确率。
+- 聚焦 parser/analyzer/runtime/persistence/review 回归、E2E builder 测试和前端 TypeScript 检查已通过；
+  下一质量门仍是固定 cohort 的独立人工方向/角色真值，不以结构修复率替代 accuracy。
+
+## 2026-08-12 — CodeGraph removed from active workflow
+
+- CodeGraph 不再是本仓库开发依赖，也不再要求切片后执行索引同步；项目根 `.codegraph/` 已删除。
+- 当前代码定位流程改为 `rg --files`、`rg`、最小源码读取，并用聚焦测试、配置或 Runtime trace
+  验证静态搜索无法证明的动态装配关系。
+- 历史进度和审计中保留当时的 CodeGraph 使用记录，它们是已有验证过程的事实，不代表当前要求。
+
+## 2026-08-12 — Role verifier Gate v2 and portable LLM measurement
+
+- `role_verification_gate.v2` 将第二阶段复核边界收缩到三个核心问题：本次网络方向是否整体自洽、
+  attacker 是否明确且无冲突、victim 是否明确且无冲突。`inferred/tentative`、普通证据缺口、
+  intermediary、response target 和单纯低 confidence 不再独立触发；新请求最多生成 3 个原子 claim。
+- 使用旧十告警冻结产物进行无模型调用的离线 Gate 重算，触发数由 `10/10` 降为 `3/10`：
+  `1965810`、`1965935`、`1966442`。`2025642` 反弹 Shell 样本不再因会话发起方或响应目标进入复核。
+  这只证明 Gate 选择范围已收缩，不等同于新 verifier 模型效果；现有 live 产物保持原样。
+- LLM usage 统一支持 `reported / estimated / mixed / unavailable`。外部 Provider 有 usage 时采用原值；
+  平安内网兼容 OpenAI Chat Completions 但不返回 usage 时，基于本次实际可见 request/response 做
+  可复现估算并明确标记，绝不伪装成 Provider 精确账单。没有经过审核的价格表时，金额成本仍为
+  `not_measured`。
+- Runtime 每个确定性步骤继续记录 `started_at / ended_at / duration_ms`，并新增 run 总耗时；批处理和
+  十告警 E2E 分别记录分析、记忆聚合、调查工作流、报告、主模型、复核模型、策略顾问与端到端总耗时。
+  时间用于定位瓶颈，不替代独立人工真值下的质量指标。
+- 同一固定十条已完成新的 live 运行，产物位于
+  `backend/.deer-flow/soc-validation/e2e-ten-role-verifier-v2-20260812/`：结构/安全链路 10/10
+  passed，Gate 实际触发 5/10（`1965794`、`1965802`、`1965935`、`1966442`、`1980502`），其余
+  5 条没有 verifier Provider 调用。反弹 Shell `2025642` 保持
+  `initiator=30.116.114.150 / attacker=30.174.29.44 / victim=30.116.114.150`，未触发二次复核。
+- 5 次逻辑复核实际发送 14 个 Claim，结果为 6 supported / 5 challenged / 3 unresolved；Gate 为全部
+  10 条稳定投影了 29 个候选 Claim，但未触发样本只保留 hash/计数供审计，不能算作已复核。E2E 报告
+  Schema 升级到 v7 并分开报告 `projected_candidate_claim_count` 与 `atomic_claim_count`。
+- verifier 从旧 v1 的 16 次 Provider invocation、349,938 tokens、656,876 ms 降为 5 次、120,929
+  tokens、93,266 ms；本次 usage 全部由 Provider reported。主模型 live 重采样与 Prompt/Parser 版本也已
+  变化，因此总 Runtime 和 base verdict 差异不能全部归因给 Gate。
+- 历史首轮 `1966442` 因主模型输出两个 `role.value=null`，在一次受控纠错后仍违反当时 Schema，Runtime
+  fail closed；`--resume` 只重试该失败项后完成 10/10。该冻结结果早于 2026-08-13 评审后的
+  `unresolved -> value=null` 契约，不应作为当前 Parser 行为。
+  当前仍无独立人工方向/角色真值，因此 10/10 passed 仅代表结构与安全验收，不是准确率证明。
+
+## 2026-08-12 — Response-target identity contract and E2E measurement corrected (pending validation)
+
+- 定位并修复“可选动作目标没有对应到完全一致角色”的错误约束：旧代码把全局语义角色与动作场景角色
+  一并纳入精确匹配，导致同一实体在 `roles[]=victim`、`isolate_host target_role=impacted_asset` 时被误删。
+  新契约仍要求 `(entity_type, entity_value)` 精确命中已裁决实体，但允许 action-specific `target_role`
+  不同；没有已裁决实体的目标仍删除，repair log 现在保留被删目标的 role/type/value。人工角色确认命令
+  同步采用该边界，且 proposal/revision 仍无动作权限。
+- 主分析 Prompt/Parser 升级为 `soc-analysis-v16` / `soc-analysis-json-parser-v14`，output-repair Prompt
+  升级为 v2；既有 live 产物保留为修复前快照，不回写伪造新结果。
+- 十告警报告 Schema 升级为 v5：明确区分 logical verifier review、atomic claim 和 provider invocation；
+  primary、verifier、tenant-policy advisor 三条 LLM lane 分开统计并合并为 measured usage。任一调用缺
+  usage 时标记 `partial + is_lower_bound=true`；无单价表则金额成本为 `not_measured`，无独立人工真值则
+  accuracy/precision/recall/F1 为 `not_measured`，10/10 pass 只表示结构和安全链路通过。
+- 复核旧 `e2e-ten-role-verifier-20260812` 快照：主分析 429,735、verifier 349,938、tenant-policy advisor
+  308,334 tokens，可见下限合计 1,088,007；39 次 Provider invocation 中，角色复核 `1965810` 与策略
+  顾问 `2025642` 各有一条失败链路缺 usage。后续运行会保留策略顾问在响应已返回、后置校验失败时的
+  usage，避免同类漏账。
+- E2E 现在显式报告隔离 SQLite 中的正式 candidate/record/retrieval-enabled/pattern 数量。当前库三者为
+  0 的根因不是只差一次审核：脚本只生成离线 `knowledge-review/`，从未执行 formal admission/confirm；
+  `--replace` 还会删除输出目录和 `soc-e2e.sqlite`。受控 Memory 效果评测应另行 seed 已审核记录后重跑，
+  不能把每条模型候选自动入库。
+- 已补相邻回归测试代码；遵照本轮要求，尚未执行 pytest、格式化或 live 十告警重跑。聚焦
+  Ruff 静态检查与 `git diff --check` 已通过；现有生成目录仍是修改前证据。
+
+## 2026-08-12 — Upstream session-direction trust boundary corrected (pending validation)
+
+- 根据运营审阅纠正 `2025642` 的 `RC-ND-04` 过度保守行为：不能因为缺少独立 SYN/PCAP，就否认
+  高可信预警源已按已评审契约上报的会话发起端。
+- PingAn NDR/APT Adapter 现在把 message-first `sip/dip` 分别声明为通用
+  `provider_reported_session_initiator/responder`。该语义通过 `A-*` 进入 bounded context；通用 Runtime
+  不识别 PingAn 字段名，其他厂商必须由自己的 Adapter 显式 opt in。
+- 主分析 Prompt 升级为 `soc-analysis-v15`，条件复核 Prompt 升级为
+  `soc-role-verification-v2`；network/APT 与 asset-direction guidance、SOC network specialist 和 PingAn
+  direction knowledge profile 同步采用“上游会话事实可采信、攻击角色和处置目标独立裁决”的边界。
+- 仅在当前告警明确出现 direction unknown、proxy/NAT/forwarding 改变观测 leg，或同 observation
+  冲突时，才允许挑战该会话角色。该契约不把 source 等同 attacker，也不证明失陷或授权动作。
+- 已补相邻回归测试代码，但遵照本轮审阅要求 **尚未运行任何测试、格式化或 live
+  重跑**。现有 `e2e-ten-role-verifier-20260812` 仍是修改前快照，其中 `RC-ND-04=unresolved` 用作之后的
+  新旧对照，不代表修正后的结果。
 
 ## 阶段交付主线
 
@@ -42,6 +141,43 @@
 | `BG` | Close Blocking Gaps | **Done / Alpha Gate Passed** | P0/P1、readiness technical gate、独立评审与具名范围批准已完成 | 2026-07-20 批准进入 Stage 4 integration preparation |
 | `PI` | Real Data & Production Integration | **Current / External Product Complete + Real Debt Open** | 既有 simulation、PI-01F/F2 和 PI-01G 专家子智能体产品链已完成；7 个真实 gate 保持 open | 外网产品完整性缺口已关闭；fresh real evidence、具名 owner approval、cohort enforcement 和可执行 rollback 到位后才能进入 Pilot readiness review |
 
+## 2026-08-12 — Conditional role adjudication verifier implemented
+
+- 新增默认关闭的第二阶段 `JsonLLMRoleVerifier`。确定性 `role_verification_gate.v1` 只根据 typed
+  direction/role/target、confidence、evidence gap、intermediary、上游角色冲突与 Grounding 状态决定是否
+  调用，模型不能自行路由。开关为 `SOC_ROLE_VERIFIER_ENABLED`；可用
+  `SOC_ROLE_VERIFIER_MODEL` 指向另一个已配置模型，缺省复用主模型；阈值由
+  `SOC_ROLE_VERIFIER_MIN_CONFIDENCE` 控制。
+- 第一轮结论被拆成稳定的 `RC-ND-* / RC-R-* / RC-T-*` 原子声明；复核 Prompt 不投影第一轮
+  rationale/confidence，只读取同一冻结的 `E/S/A/M/C/T-*` 目录。严格 Parser 要求每个 claim 恰好返回
+  一次 `supported/challenged/unresolved` 和显式 `counterevidence_assessment`，引用和 alternative key
+  必须闭合；只允许 JSON 机械 repair。
+- `RoleAdjudicationVerificationResult.v1` 保留 primary/verifier model、Prompt/Parser、same-model、claim
+  review 和失败类型。它不改写 `AnalysisResult.v4`：confirmed 不移除其他 guard；challenged、unresolved、
+  unavailable 由 `soc.decision_policy.v4` 分别进入 conflicted/degraded 并强制人工复核；所有状态均无
+  action authority。
+- Provider journaling 从单指针扩展为有序 `provider_request_journals`：主分析和可选 verifier 各保留
+  purpose/model/prompt/parser/status；`request_journal` 继续指向当前/最后一次调用用于 process-loss
+  recovery。第二轮 timeout/parser failure 只把自身 journal 标为 failed，第一轮保持 completed。
+- 配置 verifier 的 run 固定标记 `soc-runtime-v2`（即使 gate no-op），未配置的既有流程继续使用
+  `soc-runtime-v1`，避免 primary-only 与 primary+verification 评测样本混在同一 pipeline 版本。
+- 主分析和复核节点各允许一次独立 journal 的受控输出纠错；纠错只接收无效候选、校验错误、允许目录
+  和响应 Schema。Prompt/Parser 升级到 `soc-analysis-v14` / `soc-analysis-json-parser-v13`：方向/角色
+  可直接引用本次 catalog 的精确 context ID；孤立的可选 response target 被删除并留 repair log，不补造
+  角色或改 verdict。
+- live 十告警对照已经完成。Final primary-only 为 10/10 passed、7 suspicious / 3 needs_review、
+  417,348 tokens、约 390 秒；primary+Pro verifier 为 10/10 passed、10/10 触发，8 challenged、
+  1 unresolved、1 unavailable，64 个 claim 中 31 supported / 20 challenged / 13 unresolved。
+  Verifier 增加可计量 349,938 tokens 和约 657 秒；一次失败纠错没有 usage，因此 token 是下界。
+  `unavailable` 正确 fail closed，保留第一轮并强制 review，不授权动作。
+- 该实验只证明结构、安全、成本和反证可见性，不证明准确率：独立人工方向/角色真值尚未录入；两次
+  live 主模型重采样产生的 2 条 base verdict 差异不能归因给 verifier。当前 gate 100% 触发过宽，禁止
+  按此参数全量启用。产物见 `validation/compact_zeus/e2e/README.md`。
+- 角色 verifier、LLM、Parser、Runtime、Service、Decision、Repository/process-loss、SOC API snapshot、
+  architecture 和 E2E 组合回归 `264 passed`；最终报告字段聚焦回归 `12 passed`；backend Ruff、
+  `git diff --check` 与 frontend ESLint/TypeScript check 通过。完整 `test_soc_*.py` release regression
+  尚未执行；CodeGraph 已重新增量同步。
+
 ## 2026-08-12 — Direction/role adjudication, tenant knowledge, and Memory Retrieval v2 completed
 
 - 将旧 Zeus `asset_extractor.py` 与 `security-log-analysis` 的方向经验拆成六层：通用方法 `S-*`、PingAn
@@ -49,7 +185,7 @@
   Tenant/Automation Policy。新增 strict `TenantKnowledgeProfile.v1` 和 PingAn network-direction profile，
   只按当前 canonical request 投影命中的网段、域名、反连、CDN/XFF、F5 SNAT、FRP 知识；每项有
   version/source/review/hash 且 `decision_authority=none`。
-- Analyzer 升级到 `AnalysisResult.v4`、`soc-analysis-v13`、`soc-analysis-json-parser-v11`：新增
+- Analyzer 当前为 `AnalysisResult.v4`、`soc-analysis-v14`、`soc-analysis-json-parser-v13`：新增
   `NetworkDirectionAssessment`、`RoleAdjudicationResult`、typed attacker/victim/proxy/relay/scanner/C2 和
   action-specific `ResponseTargetProposal`。wire flow、组织边界和安全角色分开，禁止全局
   `source == attacker`；所有 assessed 结果必须经过 `E/R/context` reference 校验。

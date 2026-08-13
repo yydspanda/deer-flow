@@ -554,7 +554,7 @@ def test_analysis_service_writes_decision_audit_record() -> None:
     assert record.input_hash == run.input_hash
     assert record.final_verdict == Verdict.FALSE_POSITIVE
     assert record.payload["step_count"] == len(run.steps)
-    assert record.payload["decision_policy_version"] == "soc.decision_policy.v3"
+    assert record.payload["decision_policy_version"] == "soc.decision_policy.v5"
     assert record.payload["confidence_source"] == "stub_heuristic"
     assert record.payload["confidence_is_calibrated"] is False
     assert record.payload["calibrated_probability"] is None

@@ -73,7 +73,7 @@ from soc_agent.llm import (  # noqa: E402
 from soc_agent.memory import MemoryPatternIneligibleError  # noqa: E402
 
 MANIFEST_SCHEMA_VERSION = "soc.pingan_internal_runtime_batch_manifest.v1"
-ITEM_SCHEMA_VERSION = "soc.pingan_internal_runtime_batch_item.v1"
+ITEM_SCHEMA_VERSION = "soc.pingan_internal_runtime_batch_item.v2"
 RESULTS_SCHEMA_VERSION = "soc.pingan_internal_runtime_batch_results.v1"
 DEFAULT_SOURCE = ROOT / "datas/source/full_alert_2026_month_forth_sample_200.pkl"
 DEFAULT_OUTPUT_ROOT = (
@@ -430,6 +430,7 @@ def _analyze_item(
     memory_pattern_service: Any | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
+    phase_timings: dict[str, float] = {}
     context = ServiceRequestContext(
         actor=ActorContext(
             actor_id="pingan-internal-batch",
@@ -463,6 +464,7 @@ def _analyze_item(
                 )
             }
         )
+    analysis_started = time.monotonic()
     try:
         if retry_of_run_id is None:
             run = analysis_service.analyze(item.payload, context=analysis_context)
@@ -472,12 +474,18 @@ def _analyze_item(
                 context=analysis_context,
             )
     except Exception as exc:  # noqa: BLE001 - one row must not lose the batch
+        phase_timings["analysis_service_duration_ms"] = _elapsed_ms(analysis_started)
         execution = {
             "analyzer_mode": config.analyzer_mode,
             "requested_model_name": config.model_name,
             "persisted": config.persist,
             "investigation_enrichment_enabled": config.investigation_enrichment_enabled,
             "duration_ms": round((time.monotonic() - started) * 1000, 3),
+            "end_to_end_total_duration_ms": round(
+                (time.monotonic() - started) * 1000,
+                3,
+            ),
+            "phase_timings_ms": phase_timings,
             "completed_at": datetime.now(UTC).isoformat(),
         }
         if retry_of_run_id is not None:
@@ -499,6 +507,7 @@ def _analyze_item(
             },
         }
 
+    phase_timings["analysis_service_duration_ms"] = _elapsed_ms(analysis_started)
     run_payload = run.model_dump(mode="json", exclude_none=True)
     run_status = str(run_payload.get("status") or "unknown")
     outcome = "completed" if run_status in _SUCCESS_RUN_STATUSES else "failed"
@@ -512,6 +521,12 @@ def _analyze_item(
             "persisted": config.persist,
             "investigation_enrichment_enabled": config.investigation_enrichment_enabled,
             "duration_ms": round((time.monotonic() - started) * 1000, 3),
+            "end_to_end_total_duration_ms": round(
+                (time.monotonic() - started) * 1000,
+                3,
+            ),
+            "runtime_total_duration_ms": run_payload.get("total_duration_ms"),
+            "phase_timings_ms": phase_timings,
             "completed_at": datetime.now(UTC).isoformat(),
         },
         "summary": _run_summary(run_payload),
@@ -520,6 +535,7 @@ def _analyze_item(
     if retry_of_run_id is not None:
         record["execution"]["analysis_retry_of_run_id"] = retry_of_run_id
     if memory_pattern_service is not None:
+        memory_pattern_started = time.monotonic()
         _observe_batch_memory_pattern(
             record,
             run=run,
@@ -528,12 +544,17 @@ def _analyze_item(
             context=context,
             memory_pattern_service=memory_pattern_service,
         )
+        phase_timings["memory_pattern_duration_ms"] = _elapsed_ms(
+            memory_pattern_started
+        )
     if investigation_service is None or outcome != "completed":
+        _finalize_execution_timing(record, started=started)
         return record
 
     investigation_context = context.model_copy(
         update={"idempotency_key": f"{context.idempotency_key}:investigation"}
     )
+    investigation_started = time.monotonic()
     try:
         workflow_result = investigation_service.execute(
             SocEnrichmentExecutionCommand(
@@ -544,6 +565,9 @@ def _analyze_item(
             context=investigation_context,
         )
     except Exception as exc:  # noqa: BLE001 - preserve the completed base run
+        phase_timings["investigation_workflow_duration_ms"] = _elapsed_ms(
+            investigation_started
+        )
         record["outcome"] = "failed"
         record["summary"]["investigation_status"] = "exception"
         record["error"] = {
@@ -551,11 +575,11 @@ def _analyze_item(
             "error_type": type(exc).__name__,
             "message": _safe_error(exc),
         }
-        record["execution"]["duration_ms"] = round(
-            (time.monotonic() - started) * 1000, 3
-        )
-        record["execution"]["completed_at"] = datetime.now(UTC).isoformat()
+        _finalize_execution_timing(record, started=started)
         return record
+    phase_timings["investigation_workflow_duration_ms"] = _elapsed_ms(
+        investigation_started
+    )
 
     workflow_payload = workflow_result.model_dump(mode="json", exclude_none=True)
     record["investigation_workflow"] = workflow_payload
@@ -564,6 +588,7 @@ def _analyze_item(
         raise ValueError(
             "investigation reporting service is required after workflow execution"
         )
+    reporting_started = time.monotonic()
     try:
         bundle = investigation_reporting_service.get_report_bundle(
             workflow_result.execution.execution_id
@@ -574,17 +599,20 @@ def _analyze_item(
             )
         shadow_report, addendum = bundle
     except Exception as exc:  # noqa: BLE001 - retain D3 state when D4 projection fails
+        phase_timings["investigation_reporting_duration_ms"] = _elapsed_ms(
+            reporting_started
+        )
         record["outcome"] = "failed"
         record["error"] = {
             "stage": "investigation_reporting",
             "error_type": type(exc).__name__,
             "message": _safe_error(exc),
         }
-        record["execution"]["duration_ms"] = round(
-            (time.monotonic() - started) * 1000, 3
-        )
-        record["execution"]["completed_at"] = datetime.now(UTC).isoformat()
+        _finalize_execution_timing(record, started=started)
         return record
+    phase_timings["investigation_reporting_duration_ms"] = _elapsed_ms(
+        reporting_started
+    )
     shadow_payload = shadow_report.model_dump(mode="json", exclude_none=True)
     record["investigation_shadow_report"] = shadow_payload
     record["investigation_addendum"] = addendum.model_dump(
@@ -606,9 +634,24 @@ def _analyze_item(
             ),
             "retryable": workflow_result.execution.retryable,
         }
-    record["execution"]["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
-    record["execution"]["completed_at"] = datetime.now(UTC).isoformat()
+    _finalize_execution_timing(record, started=started)
     return record
+
+
+def _elapsed_ms(started: float) -> float:
+    return round((time.monotonic() - started) * 1000, 3)
+
+
+def _finalize_execution_timing(
+    record: dict[str, Any],
+    *,
+    started: float,
+) -> None:
+    duration_ms = _elapsed_ms(started)
+    execution = record["execution"]
+    execution["duration_ms"] = duration_ms
+    execution["end_to_end_total_duration_ms"] = duration_ms
+    execution["completed_at"] = datetime.now(UTC).isoformat()
 
 
 def _observe_batch_memory_pattern(

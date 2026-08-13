@@ -24,7 +24,6 @@ ARCHIVE_ROOT = "deer-flow-pingan-internal"
 MANIFEST_SCHEMA_VERSION = "soc.pingan_internal_transfer_manifest.v1"
 
 SOURCE_EXCLUDED_PREFIXES = (
-    ".codegraph/",
     ".git/",
     ".history/",
     ".notes/archive/",

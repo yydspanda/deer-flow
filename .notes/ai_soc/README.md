@@ -16,6 +16,7 @@
 | 查看 Alpha Gate 四方评审、具名批准范围与剩余部署门禁 | `alpha-gate-review.md` | `alpha-readiness-package.md` 的 Owner Review |
 | 重跑并逐步审阅 Runtime/LLM/correlation/governance 或 Checkpoint D0-D11 产物 | `runtime-validation-runbook.md` | 本地 `backend/.deer-flow/soc-runtime-validation/` |
 | 用 10 条完整告警从原始输入一直审阅到最终结论 | `validation/compact_zeus/e2e/README.md` | 本地 `backend/.deer-flow/soc-validation/e2e-ten-current/SUMMARY.md` |
+| 审阅模型坏 JSON、局部 Schema 错误、一次纠错和 deterministic fallback 是否可靠 | `validation/compact_zeus/e2e/README.md` 的 `analysis_output_quality` | 本地 `backend/.deer-flow/soc-validation/e2e-ten-output-resilience-20260813/SUMMARY.md` |
 | 审核本轮 LLM 萃取的知识建议并决定落点 | `validation/compact_zeus/e2e/README.md` 的 Authority Boundary | 本地 `backend/.deer-flow/soc-validation/e2e-ten-current/knowledge-review/REVIEW.md` |
 | 判断产品方向和系统设计 | `soc-agent-solution.md` | `delivery-roadmap.md` 的阶段边界 |
 | 向老板/管理层解释为什么 Runtime 控制流程、LLM 只做受控推理 | `boss-demo-v0.1-runbook.md` | `soc-agent-solution.md` 的核心原则 |
@@ -25,6 +26,7 @@
 | 查看平安经验如何进入系统 | `capabilities/pingan/onboarding.md` | `capabilities/pingan/capability-cards.md` |
 | 拆分平安历史 prompt / 经验 / 工具 | `capabilities/pingan/knowledge-decomposition.md` | `memory/memory-tracking.md` |
 | 审阅旧方向 Prompt 如何迁成 `S/A/C/M/T/Policy`，以及 Runtime 如何裁决 attacker/victim | `capabilities/pingan/network-direction-knowledge-migration.md` | `soc-agent-solution.md` Section 5.6 |
+| 审阅主分析后的条件式方向/角色反证、触发条件和失败关闭语义 | `alert-lifecycle-flow.md` 的 `role_verification_gate` | `soc-agent-solution.md` 的 AnalysisResult.v4 / conditional verification 章节 |
 | 审阅同事提供的 PingAn `security-log-analysis` Skill Demo | `capabilities/pingan/security-log-analysis-skill-audit.md` | `capabilities/pingan/onboarding.md` 的 PA-13 |
 | 审阅 PingAn 处置策略来源、200/非200语义、确定性规则与 Policy Skill 分工 | `capabilities/pingan/disposition-policy-extraction.md` | `soc-agent-solution.md` Section 7.4.3 |
 | 重跑 PingAn 租户处置策略与四阶段端到端验证 | `validation/compact_zeus/e2e/README.md` | 本地 `e2e-ten-pingan-policy-current/SUMMARY.md` |

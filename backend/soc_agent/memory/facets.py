@@ -104,7 +104,7 @@ def memory_facets_from_analysis_run(
         for assessment in run.analysis.scenario_assessments:
             _add(facets, "scenario_key", assessment.scenario_key)
         for role in run.analysis.role_adjudication.roles:
-            if role.status in _RESOLVED_MODEL_ROLE_STATUSES:
+            if role.status in _RESOLVED_MODEL_ROLE_STATUSES and role.value is not None:
                 _add(
                     facets,
                     "role_entity",

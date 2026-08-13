@@ -25,9 +25,32 @@ backend/.venv/bin/python \
   validation/compact_zeus/e2e/run_ten_alert_e2e.py
 ```
 
-计划必须显示 10 个固定 ID、`deepseek-v4-flash`、10 次 Runtime 模型调用、最多 10 次
-PingAn Policy Skill 调用和 `simulated_read_only` Provider。精确确定性策略命中的告警不会再调用
-Policy Skill，因此实际总调用数位于 10 到 20 之间。
+计划必须显示 10 个固定 ID、`deepseek-v4-flash`、10 次 Runtime 主模型调用、最多 10 次主模型
+输出纠错、最多 10 次 PingAn Policy Skill 调用和 `simulated_read_only` Provider。精确确定性策略命中
+的告警不会再调用 Policy Skill；默认每个模型节点只允许一次结构纠错，不能把它变成开放式重试循环。
+
+方向/角色的条件式独立复核必须显式开启。下面的命令使用 Flash 主分析、Pro 窄复核，并把两者写进
+不同的 provider journal：
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/e2e/run_ten_alert_e2e.py \
+  --output-root backend/.deer-flow/soc-validation/e2e-ten-role-verifier \
+  --model-name deepseek-v4-flash \
+  --output-retry-attempts 1 \
+  --role-verifier enabled \
+  --role-verifier-model deepseek-v4-pro \
+  --role-verifier-min-confidence 0.35 \
+  --execute \
+  --confirm-live \
+  --confirm-investigation \
+  --replace
+```
+
+Verifier 默认关闭。即使开启，也先执行 v2 确定性 gate；只复核整体网络方向和 attacker/victim。
+`inferred`、`tentative`、一般 evidence gap、intermediary、response target 或低 confidence 单独出现都
+不会调用第二个模型。`--resume` 只用于
+同一配置、同一代码版本的中断续跑或失败项重试，不能把跨 Parser/Prompt 版本的结果包装成 fresh 对照。
 
 ## Execute
 
@@ -67,6 +90,7 @@ backend/.deer-flow/soc-validation/e2e-ten-current/
     ├── 04-bounded-analysis-input.json
     ├── 05-runtime-trace.json
     ├── 06-llm-analysis.json
+    ├── 06a-role-verification.json
     ├── 07-evidence-grounding.json
     ├── 08-decision.json
     ├── 09-investigation.json
@@ -79,6 +103,25 @@ backend/.deer-flow/soc-validation/e2e-ten-current/
 先看 `SUMMARY.md`，再进入一个 `cases/<alert_id>/` 按编号审阅。每个
 `final-conclusion.json` 汇总结构验收、模型结论、Grounding、确定性决策、只读调查证据、
 ReviewQueue 和 Lead Agent 有界上下文。
+
+每个 `05-runtime-trace.json` 保存 `steps[].duration_ms` 和 Runtime 总耗时；每个
+`final-conclusion.json` 还保存 analysis service、Memory pattern、调查 workflow/reporting 和完整 E2E
+总耗时。Token 来源明确分为 `reported`、`estimated`、`mixed`、`unavailable`；内网兼容估算不是账单，
+没有经审核价格表时金额成本仍为 `not_measured`。
+
+主模型结果的健壮性看 `06-llm-analysis.json` 和 `final-conclusion.json` 中的
+`analysis_output_quality`：
+
+- `accepted`：首轮严格通过；
+- `repaired`：经过无语义机械修复或一次有界模型纠错后完整通过；
+- `degraded`：core 和部分区块有效，坏区块以 inert default 隔离，结论可持久化但必须 review；
+- `deterministic_fallback`：模型 core 在一次纠错后仍无效，保留显式 stub 结论并必须 review。
+
+报告同时汇总 rejected section、repair 和 fallback 计数。它们是输出契约可靠性指标，不是告警研判
+准确率；Provider timeout/auth/capacity/transport 仍按 retryable Runtime failure 处理，不会被 fallback 隐藏。
+
+角色复核统计区分 `projected_candidate_claim_count` 与 `atomic_claim_count`：前者是 Gate 为审计稳定投影的
+候选声明，未触发时也可能非零；后者只统计真正发送给 verifier 并完成逻辑复核的声明，不能混用。
 
 `12-effective-decision-and-automation.json` 不能与 `08-decision.json` 混为一谈：后者是不可变的
 base Runtime decision；前者按 `Base -> Memory -> PingAn Policy -> Effective` 保存阶段快照、
@@ -117,7 +160,73 @@ decision 变化分开，不能把一次模型重采样误称为 Memory 或 autom
 Parser 只允许无安全语义的机械修复并记录 repair log：唯一 path/value 恢复 `E-*`、补出已被
 `R-*` 引用的精确目录事实、精确重复引用去重、严格 JSON boolean 字符串转换、删除明确空引用、
 根据已显式引用的 `S/A/M/C/T-*` 补齐对应的冗余 basis，以及在 E/R 引用都存在时用明确占位说明
-标记模型漏写的 scenario rationale。歧义引用、冲突事实和安全语义缺失仍然拒绝。
+标记模型漏写的 scenario rationale。方向/角色可以直接引用本次 context catalog 中的精确
+`S/A/M/C/T-*`，不必在 `R-*` 中机械重复；不存在的引用仍拒绝。可选 response target 的实体类型和值
+必须精确对应一个已裁决实体；动作场景角色可以不同于该实体的全局语义角色。例如同一台主机可以在
+`roles[]` 中是 `victim`，在 `isolate_host` 提议中是 `impacted_asset`。没有已裁决实体的 target 会被
+删除并留下包含角色、类型和值的 repair log；该放宽不改 verdict，也不授予动作权限。歧义引用、冲突
+事实和安全语义缺失仍然拒绝。
+
+当模型输出不合约时，主分析或角色复核节点最多调用一次受控纠错 Prompt。主分析先分别校验 required
+core 与 scenario/direction/role/knowledge 区块；core 有效时只重做坏区块，journal purpose 为
+`primary_analysis_section_repair`。core 无法解析时才使用完整 `primary_analysis_retry`；角色复核使用
+`role_verification_retry`。纠错节点只接收无效候选/区块、校验错误、允许的引用目录和响应 Schema，不
+重新读取原始厂商 payload，也不能引入新安全事实。主分析可通过
+`SOC_LLM_OUTPUT_FALLBACK_MODEL` 为这一次纠错指定更强的已注册模型。
+
+## 2026-08-12 Role Verifier Ten-Alert Result
+
+Gate v2 的新 live 结果位于：
+
+- 当前结果：`backend/.deer-flow/soc-validation/e2e-ten-role-verifier-v2-20260812/`；
+- v1/v2 对照：`backend/.deer-flow/soc-validation/e2e-ten-role-verifier-v1-v2-comparison-20260812/`。
+
+同一输入 hash 的 10 条告警结构/安全验收为 10/10 passed，Gate 从 v1 的 10/10 触发降为 5/10。
+触发项为 `1965794`、`1965802`、`1965935`、`1966442`、`1980502`；五次逻辑复核实际发送 14 个
+Claim，得到 6 supported / 5 challenged / 3 unresolved。其余五条没有 verifier Provider 调用，反弹
+Shell `2025642` 的 victim-initiated wire flow 与 attacker/victim 分离语义得到保留。
+
+报告中的 29 个 `projected_candidate_claim_count` 是全部十条的稳定 Gate 候选投影；只有 14 个
+`atomic_claim_count` 真正进入 verifier。Verifier 消耗为 5 次 Provider invocation、120,929 个
+provider-reported tokens、93,266 ms，且没有 verifier output retry。历史首轮 `1966442` 的主模型输出两个
+null role values，在一次受控主分析纠错后仍失败；该冻结产物早于当前 `unresolved -> value=null` 契约，
+随后 `--resume` 只重试该项并成功。
+
+当前仍没有独立人工方向/角色真值，因此 10/10 passed 只证明结构、持久化和安全门禁；5/10 trigger、
+challenge 和 unresolved 统计都不是 accuracy/precision/recall。邮件 `1965802` 与纯端点样本是否应该
+进入该 verifier，需要在人工标签后再决定，不能为追求更低触发率直接写场景硬编码。
+
+### Historical Gate v1 Baseline
+
+同一固定 cohort 的最终代码实跑结果位于：
+
+- Primary-only：`backend/.deer-flow/soc-validation/e2e-ten-role-primary-final-20260812/`；
+- Primary + verifier：`backend/.deer-flow/soc-validation/e2e-ten-role-verifier-20260812/`；
+- 对照：`backend/.deer-flow/soc-validation/e2e-ten-role-comparison-final-20260812/`。
+
+Verifier run 的结构验收为 10/10，通过六类来源（EDR/HIDS/NDR/NIDS/SIEM/TI）。10 条当前全部命中
+gate：8 `challenged`、1 `unresolved`、1 `unavailable`；64 个原子 claim 为 31 supported、20
+challenged、13 unresolved。`unavailable` case 正确 fail closed：保留第一轮，证据降级并强制 review，
+不让整条 Runtime 失败，也不产生动作权限。
+
+10 个 verifier case 实际产生 16 次 Provider invocation，其中 6 个 case 触发一次结构纠错；1 个
+最终纠错失败 case 没有返回 usage。因此报告中的 verifier token 汇总是已计量下界，不能当作完整账单。
+
+报告区分一次告警级逻辑复核、其中的原子 claim 数，以及真实 Provider invocation 数。Token 统计覆盖
+主分析、角色复核和平安策略顾问三条模型调用链；任何已调用但没有 usage 的链路都会令汇总标记为
+`partial` / `is_lower_bound=true`。仓库没有配置经审核的模型单价表，因此只统计 Token 和耗时，金额成本
+明确为 `not_measured`，不会拿不完整用量估算伪精确费用。
+
+这套 E2E 对 Memory 是 `read_existing_only`：`11-knowledge-candidates.json` 与 `knowledge-review/` 只是
+人工审核包，不会自动写 `soc_memory_candidates` 或 `soc_memory_records`。正式 Memory 必须经过 admission、
+人工确认和独立 retrieval activation；`--replace` 会删除整个输出目录及其中的 `soc-e2e.sqlite`，所以
+fresh run 默认从空 Memory 库开始。
+
+这不是准确率证明：目前没有为这 10 条录入独立人工方向/角色真值。两个 live run 也会分别重采样主
+模型，所以 base verdict 差异不能归因给 verifier。当前最明确的产品结论是 gate 触发率 100% 过宽：
+Verifier 增加 349,938 tokens 和约 657 秒，必须在人工真值评测后收紧触发条件或 claim 预算，不能按
+当前参数直接全量上线。该目录是 v1 历史证据，不会被回写。v2 Gate 在这些冻结输出上的离线重算为
+3/10，分别是 `1965810`、`1965935`、`1966442`；它只说明触发范围收窄，尚不是新的 live 模型质量结果。
 
 ## Previous PingAn Policy Result
 

@@ -13,8 +13,10 @@ from deerflow.config.app_config import AppConfig
 from soc_agent.contracts import SensitiveEvidenceMode
 from soc_agent.llm.analyzer import JsonLLMAnalyzer, LLMChatClient
 from soc_agent.llm.deerflow_client import DeerFlowLLMChatClient
+from soc_agent.llm.role_verifier import JsonLLMRoleVerifier
 from soc_agent.pipeline.analyzer import StubLLMAnalyzer
-from soc_agent.protocols import LLMAnalyzer
+from soc_agent.pipeline.role_verification import DEFAULT_ROLE_VERIFICATION_MIN_CONFIDENCE
+from soc_agent.protocols import LLMAnalyzer, RoleAdjudicationVerifier
 
 
 class SocAnalyzerMode(StrEnum):
@@ -41,7 +43,12 @@ class SocLLMSettings:
     requests_per_minute: int = 0
     admission_timeout_seconds: float = 5.0
     call_timeout_seconds: float = 180.0
+    output_retry_attempts: int = 1
+    output_fallback_model_name: str | None = None
     sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT
+    role_verifier_enabled: bool = False
+    role_verifier_model_name: str | None = None
+    role_verifier_minimum_confidence: float = DEFAULT_ROLE_VERIFICATION_MIN_CONFIDENCE
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> SocLLMSettings:
@@ -55,6 +62,8 @@ class SocLLMSettings:
             raise ValueError("SOC_ANALYZER_MODE must be 'stub' or 'llm'") from exc
 
         model_name = values.get("SOC_LLM_MODEL")
+        output_fallback_model_name = values.get("SOC_LLM_OUTPUT_FALLBACK_MODEL")
+        role_verifier_model_name = values.get("SOC_ROLE_VERIFIER_MODEL")
         try:
             sensitive_evidence_mode = SensitiveEvidenceMode(
                 values.get(
@@ -91,7 +100,28 @@ class SocLLMSettings:
                 name="SOC_LLM_CALL_TIMEOUT_SECONDS",
                 minimum=0.001,
             ),
+            output_retry_attempts=_parse_int(
+                values.get("SOC_LLM_OUTPUT_RETRY_ATTEMPTS", "1"),
+                name="SOC_LLM_OUTPUT_RETRY_ATTEMPTS",
+                minimum=0,
+                maximum=1,
+            ),
+            output_fallback_model_name=(output_fallback_model_name.strip() if output_fallback_model_name and output_fallback_model_name.strip() else None),
             sensitive_evidence_mode=sensitive_evidence_mode,
+            role_verifier_enabled=_parse_bool(
+                values.get("SOC_ROLE_VERIFIER_ENABLED", "false"),
+                name="SOC_ROLE_VERIFIER_ENABLED",
+            ),
+            role_verifier_model_name=(role_verifier_model_name.strip() if role_verifier_model_name and role_verifier_model_name.strip() else None),
+            role_verifier_minimum_confidence=_parse_float(
+                values.get(
+                    "SOC_ROLE_VERIFIER_MIN_CONFIDENCE",
+                    str(DEFAULT_ROLE_VERIFICATION_MIN_CONFIDENCE),
+                ),
+                name="SOC_ROLE_VERIFIER_MIN_CONFIDENCE",
+                minimum=0.0,
+                maximum=1.0,
+            ),
         )
 
     def with_overrides(
@@ -134,12 +164,75 @@ def build_configured_analyzer(
     if resolved.mode is SocAnalyzerMode.STUB:
         return StubLLMAnalyzer()
 
+    config = app_config or get_app_config()
     chat_client, model_name = build_configured_chat_client(
         settings=resolved,
-        app_config=app_config,
+        app_config=config,
         client=client,
     )
-    return JsonLLMAnalyzer(client=chat_client, model_name=model_name)
+    return JsonLLMAnalyzer(
+        client=chat_client,
+        model_name=model_name,
+        output_retry_attempts=resolved.output_retry_attempts,
+        output_fallback_model_name=(
+            resolve_soc_model_name(
+                resolved.output_fallback_model_name,
+                app_config=config,
+            )
+            if resolved.output_fallback_model_name
+            else None
+        ),
+    )
+
+
+def build_configured_analysis_nodes(
+    *,
+    settings: SocLLMSettings | None = None,
+    app_config: AppConfig | None = None,
+    client: LLMChatClient | None = None,
+) -> tuple[LLMAnalyzer, RoleAdjudicationVerifier | None]:
+    """Build primary analyzer and optional verifier with one shared client."""
+
+    resolved = settings or SocLLMSettings.from_env()
+    if resolved.mode is SocAnalyzerMode.STUB:
+        if resolved.role_verifier_enabled:
+            raise ValueError("SOC_ROLE_VERIFIER_ENABLED=true requires SOC_ANALYZER_MODE=llm")
+        return StubLLMAnalyzer(), None
+
+    config = app_config or get_app_config()
+    chat_client, model_name = build_configured_chat_client(
+        settings=resolved,
+        app_config=config,
+        client=client,
+    )
+    analyzer = JsonLLMAnalyzer(
+        client=chat_client,
+        model_name=model_name,
+        output_retry_attempts=resolved.output_retry_attempts,
+        output_fallback_model_name=(
+            resolve_soc_model_name(
+                resolved.output_fallback_model_name,
+                app_config=config,
+            )
+            if resolved.output_fallback_model_name
+            else None
+        ),
+    )
+    if not resolved.role_verifier_enabled:
+        return analyzer, None
+    verifier_model_name = resolve_soc_model_name(
+        resolved.role_verifier_model_name or model_name,
+        app_config=config,
+    )
+    return (
+        analyzer,
+        JsonLLMRoleVerifier(
+            client=chat_client,
+            model_name=verifier_model_name,
+            minimum_confidence=resolved.role_verifier_minimum_confidence,
+            output_retry_attempts=resolved.output_retry_attempts,
+        ),
+    )
 
 
 def build_configured_chat_client(
@@ -178,8 +271,20 @@ def configured_soc_llm_status(
     resolved = settings or SocLLMSettings.from_env()
     config = app_config or get_app_config()
     model_name = resolve_soc_model_name(resolved.model_name, app_config=config) if resolved.mode is SocAnalyzerMode.LLM else resolved.model_name
+    role_verifier_model_name = None
+    output_fallback_model_name = None
+    if resolved.output_fallback_model_name and resolved.mode is SocAnalyzerMode.LLM:
+        output_fallback_model_name = resolve_soc_model_name(
+            resolved.output_fallback_model_name,
+            app_config=config,
+        )
+    if resolved.role_verifier_enabled and resolved.mode is SocAnalyzerMode.LLM:
+        role_verifier_model_name = resolve_soc_model_name(
+            resolved.role_verifier_model_name or model_name,
+            app_config=config,
+        )
     return {
-        "schema_version": "soc.llm_runtime_status.v1",
+        "schema_version": "soc.llm_runtime_status.v2",
         "mode": resolved.mode.value,
         "requested_model_name": resolved.model_name,
         "resolved_model_name": model_name,
@@ -190,7 +295,14 @@ def configured_soc_llm_status(
         "requests_per_minute": resolved.requests_per_minute,
         "admission_timeout_seconds": resolved.admission_timeout_seconds,
         "call_timeout_seconds": resolved.call_timeout_seconds,
+        "output_retry_attempts": resolved.output_retry_attempts,
+        "output_fallback_requested_model_name": resolved.output_fallback_model_name,
+        "output_fallback_resolved_model_name": output_fallback_model_name,
         "sensitive_evidence_mode": resolved.sensitive_evidence_mode.value,
+        "role_verifier_enabled": resolved.role_verifier_enabled,
+        "role_verifier_requested_model_name": resolved.role_verifier_model_name,
+        "role_verifier_resolved_model_name": role_verifier_model_name,
+        "role_verifier_minimum_confidence": resolved.role_verifier_minimum_confidence,
         "secrets_included": False,
     }
 
@@ -204,21 +316,35 @@ def _parse_bool(value: str, *, name: str) -> bool:
     raise ValueError(f"{name} must be a boolean value")
 
 
-def _parse_int(value: str, *, name: str, minimum: int) -> int:
+def _parse_int(
+    value: str,
+    *,
+    name: str,
+    minimum: int,
+    maximum: int | None = None,
+) -> int:
     try:
         parsed = int(value.strip())
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer") from exc
-    if not isfinite(parsed) or parsed < minimum:
-        raise ValueError(f"{name} must be a finite number >= {minimum}")
+    if not isfinite(parsed) or parsed < minimum or (maximum is not None and parsed > maximum):
+        suffix = f" and <= {maximum}" if maximum is not None else ""
+        raise ValueError(f"{name} must be a finite number >= {minimum}{suffix}")
     return parsed
 
 
-def _parse_float(value: str, *, name: str, minimum: float) -> float:
+def _parse_float(
+    value: str,
+    *,
+    name: str,
+    minimum: float,
+    maximum: float | None = None,
+) -> float:
     try:
         parsed = float(value.strip())
     except ValueError as exc:
         raise ValueError(f"{name} must be a number") from exc
-    if not isfinite(parsed) or parsed < minimum:
-        raise ValueError(f"{name} must be a finite number >= {minimum}")
+    if not isfinite(parsed) or parsed < minimum or (maximum is not None and parsed > maximum):
+        suffix = f" and <= {maximum}" if maximum is not None else ""
+        raise ValueError(f"{name} must be a finite number >= {minimum}{suffix}")
     return parsed

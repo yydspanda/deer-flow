@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from soc_agent.contracts import (
     AnalysisEvidenceGroundingReport,
+    AnalysisOutputQuality,
+    AnalysisOutputQualityStatus,
     AnalysisResult,
     Decision,
     DecisionConfidenceSource,
@@ -11,11 +13,13 @@ from soc_agent.contracts import (
     DecisionReviewReason,
     LLMAnalysisRequest,
     MessageSchemaStatus,
+    RoleAdjudicationVerificationResult,
+    RoleVerificationStatus,
     Verdict,
 )
 from soc_agent.core.validator import validate_decision
 
-SOC_DECISION_POLICY_VERSION = "soc.decision_policy.v3"
+SOC_DECISION_POLICY_VERSION = "soc.decision_policy.v5"
 DEFAULT_REVIEW_BELOW = 0.75
 _INFORMATIONAL_WARNING_PREFIXES = ("bounded evidence compacted one or more encoded spans;",)
 
@@ -40,6 +44,8 @@ class SocDecisionPolicy:
         request: LLMAnalysisRequest,
         grounding: AnalysisEvidenceGroundingReport,
         analyzer_step_name: str,
+        output_quality: AnalysisOutputQuality | None = None,
+        role_verification: RoleAdjudicationVerificationResult | None = None,
     ) -> Decision:
         confidence_source = _confidence_source(analyzer_step_name)
         review_reasons = _review_reasons(
@@ -48,6 +54,8 @@ class SocDecisionPolicy:
             grounding=grounding,
             confidence_source=confidence_source,
             review_below=self._review_below,
+            output_quality=output_quality,
+            role_verification=role_verification,
         )
         decision = Decision(
             verdict=analysis.verdict,
@@ -56,7 +64,12 @@ class SocDecisionPolicy:
             confidence_is_calibrated=False,
             calibrated_probability=None,
             calibration_profile_version=None,
-            evidence_state=_evidence_state(request, grounding=grounding),
+            evidence_state=_evidence_state(
+                request,
+                grounding=grounding,
+                output_quality=output_quality,
+                role_verification=role_verification,
+            ),
             suggested_action=analysis.recommended_action,
             needs_review=bool(review_reasons),
             review_reasons=review_reasons,
@@ -82,8 +95,15 @@ def _review_reasons(
     grounding: AnalysisEvidenceGroundingReport,
     confidence_source: DecisionConfidenceSource,
     review_below: float,
+    output_quality: AnalysisOutputQuality | None,
+    role_verification: RoleAdjudicationVerificationResult | None,
 ) -> list[DecisionReviewReason]:
     reasons: list[DecisionReviewReason] = []
+    if output_quality is not None and output_quality.status in {
+        AnalysisOutputQualityStatus.DEGRADED,
+        AnalysisOutputQualityStatus.DETERMINISTIC_FALLBACK,
+    }:
+        reasons.append(DecisionReviewReason.ANALYSIS_OUTPUT_DEGRADED)
     if analysis.verdict is Verdict.FALSE_POSITIVE:
         reasons.append(DecisionReviewReason.FALSE_POSITIVE_REQUIRES_CONFIRMATION)
     if analysis.verdict in {Verdict.SUSPICIOUS, Verdict.UNKNOWN, Verdict.NEEDS_REVIEW}:
@@ -105,6 +125,13 @@ def _review_reasons(
         reasons.append(DecisionReviewReason.UNGROUNDED_ANALYSIS_REASONING)
     if any("outcome-success claim" in warning for warning in grounding.warnings):
         reasons.append(DecisionReviewReason.UNPROVEN_OUTCOME_CLAIM)
+    if role_verification is not None:
+        if role_verification.status is RoleVerificationStatus.CHALLENGED:
+            reasons.append(DecisionReviewReason.ROLE_VERIFICATION_CHALLENGED)
+        elif role_verification.status is RoleVerificationStatus.UNRESOLVED:
+            reasons.append(DecisionReviewReason.ROLE_VERIFICATION_UNRESOLVED)
+        elif role_verification.status is RoleVerificationStatus.UNAVAILABLE:
+            reasons.append(DecisionReviewReason.ROLE_VERIFIER_UNAVAILABLE)
     if analysis.confidence < review_below:
         reasons.append(DecisionReviewReason.RAW_CONFIDENCE_BELOW_THRESHOLD)
     reasons.append(DecisionReviewReason.CONFIDENCE_NOT_CALIBRATED)
@@ -117,12 +144,38 @@ def _evidence_state(
     request: LLMAnalysisRequest,
     *,
     grounding: AnalysisEvidenceGroundingReport,
+    output_quality: AnalysisOutputQuality | None,
+    role_verification: RoleAdjudicationVerificationResult | None,
 ) -> DecisionEvidenceState:
     if request.fact_reconstruction.conflict_reports:
         return DecisionEvidenceState.CONFLICTED
+    if role_verification is not None and role_verification.status is RoleVerificationStatus.CHALLENGED:
+        return DecisionEvidenceState.CONFLICTED
 
     schema_statuses = {item.status for item in request.evidence_coverage.message_schemas}
-    if MessageSchemaStatus.DEGRADED in schema_statuses or MessageSchemaStatus.UNSUPPORTED in schema_statuses or request.evidence_coverage.high_value_gaps or grounding.ungrounded_count or grounding.reasoning_ungrounded_count:
+    if (
+        (
+            output_quality is not None
+            and output_quality.status
+            in {
+                AnalysisOutputQualityStatus.DEGRADED,
+                AnalysisOutputQualityStatus.DETERMINISTIC_FALLBACK,
+            }
+        )
+        or MessageSchemaStatus.DEGRADED in schema_statuses
+        or MessageSchemaStatus.UNSUPPORTED in schema_statuses
+        or request.evidence_coverage.high_value_gaps
+        or grounding.ungrounded_count
+        or grounding.reasoning_ungrounded_count
+        or (
+            role_verification is not None
+            and role_verification.status
+            in {
+                RoleVerificationStatus.UNRESOLVED,
+                RoleVerificationStatus.UNAVAILABLE,
+            }
+        )
+    ):
         return DecisionEvidenceState.DEGRADED
 
     if _has_partial_evidence(request):

@@ -22,7 +22,7 @@ from soc_agent.knowledge import (
 )
 from soc_agent.llm import (
     SocLLMSettings,
-    build_configured_analyzer,
+    build_configured_analysis_nodes,
     build_configured_chat_client,
 )
 from soc_agent.memory import ConfirmedMemoryAnalysisRequestEnricher
@@ -61,9 +61,13 @@ def build_soc_analysis_service(
         action_adapter_registry=action_adapter_registry,
     )
     analysis_request_enricher = _build_analysis_request_enricher(repository)
+    analyzer, role_verifier = build_configured_analysis_nodes(
+        settings=resolved_settings,
+    )
     return SocAnalysisService(
         runtime=DeterministicAnalysisRuntime(
-            analyzer=build_configured_analyzer(settings=resolved_settings),
+            analyzer=analyzer,
+            role_verifier=role_verifier,
             analysis_request_enricher=analysis_request_enricher,
             sensitive_evidence_mode=resolved_settings.sensitive_evidence_mode,
         ),

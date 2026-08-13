@@ -14,6 +14,10 @@ from soc_agent.contracts.authorization import AuthorizationFactRef, Authorizatio
 from soc_agent.contracts.common import ActorContext, EntrySurface
 from soc_agent.contracts.enrichment import SocEnrichmentPlan
 from soc_agent.contracts.investigation_reporting import SocInvestigationAddendum
+from soc_agent.contracts.role_verification import (
+    RoleAdjudicationVerificationResult,
+    RoleVerificationTriggerDecision,
+)
 
 
 def utc_now() -> datetime:
@@ -116,6 +120,10 @@ class DecisionReviewReason(StrEnum):
     UNGROUNDED_ANALYSIS_EVIDENCE = "ungrounded_analysis_evidence"
     UNGROUNDED_ANALYSIS_REASONING = "ungrounded_analysis_reasoning"
     UNPROVEN_OUTCOME_CLAIM = "unproven_outcome_claim"
+    ROLE_VERIFICATION_CHALLENGED = "role_verification_challenged"
+    ROLE_VERIFICATION_UNRESOLVED = "role_verification_unresolved"
+    ROLE_VERIFIER_UNAVAILABLE = "role_verifier_unavailable"
+    ANALYSIS_OUTPUT_DEGRADED = "analysis_output_degraded"
     ANALYSIS_FAILED = "analysis_failed"
 
 
@@ -178,6 +186,25 @@ class AnalysisRunStatus(StrEnum):
     REPLAYED = "replayed"
 
 
+class AnalysisOutputSection(StrEnum):
+    """Independently recoverable sections of one model analysis response."""
+
+    CORE = "core"
+    SCENARIO_ASSESSMENTS = "scenario_assessments"
+    NETWORK_DIRECTION = "network_direction"
+    ROLE_ADJUDICATION = "role_adjudication"
+    KNOWLEDGE_CANDIDATES = "knowledge_candidates"
+
+
+class AnalysisOutputQualityStatus(StrEnum):
+    """Runtime-owned status for the model-output acceptance boundary."""
+
+    ACCEPTED = "accepted"
+    REPAIRED = "repaired"
+    DEGRADED = "degraded"
+    DETERMINISTIC_FALLBACK = "deterministic_fallback"
+
+
 class AnalysisRequestJournalStatus(StrEnum):
     """Durable lifecycle state for the non-rollbackable analyzer call."""
 
@@ -185,6 +212,16 @@ class AnalysisRequestJournalStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
+
+
+class AnalysisProviderPurpose(StrEnum):
+    """Stable purpose of one bounded model-provider invocation."""
+
+    PRIMARY_ANALYSIS = "primary_analysis"
+    PRIMARY_ANALYSIS_RETRY = "primary_analysis_retry"
+    PRIMARY_ANALYSIS_SECTION_REPAIR = "primary_analysis_section_repair"
+    ROLE_VERIFICATION = "role_verification"
+    ROLE_VERIFICATION_RETRY = "role_verification_retry"
 
 
 class PipelineStepStatus(StrEnum):
@@ -2804,7 +2841,7 @@ class AdjudicatedRole(BaseModel):
 
     role: AdjudicatedRoleType
     entity_type: str = Field(min_length=1, max_length=100)
-    value: str = Field(min_length=1, max_length=1000)
+    value: str | None = Field(default=None, min_length=1, max_length=1000)
     status: AdjudicatedRoleStatus
     confidence: float = Field(ge=0.0, le=1.0)
     evidence_refs: list[str] = Field(min_length=1, max_length=20)
@@ -2820,6 +2857,11 @@ class AdjudicatedRole(BaseModel):
             context_refs=self.context_refs,
             owner="adjudicated role",
         )
+        if self.status is AdjudicatedRoleStatus.UNRESOLVED:
+            if self.value is not None:
+                raise ValueError("an unresolved role must not claim a concrete entity value")
+        elif self.value is None:
+            raise ValueError("a tentative, resolved, or conflicted role requires a concrete entity value")
         return self
 
 
@@ -2873,21 +2915,24 @@ class RoleAdjudicationResult(BaseModel):
             return self
         if not self.roles:
             raise ValueError("assessed role adjudication requires at least one role")
-        role_keys = [(item.role, item.entity_type.casefold(), item.value.casefold()) for item in self.roles]
+        role_keys = [
+            (
+                item.role,
+                item.entity_type.casefold(),
+                item.value.casefold() if item.value is not None else None,
+            )
+            for item in self.roles
+        ]
         if len(role_keys) != len(set(role_keys)):
             raise ValueError("adjudicated roles must be unique")
         proposal_ids = [item.proposal_id for item in self.response_target_proposals]
         if len(proposal_ids) != len(set(proposal_ids)):
             raise ValueError("response target proposal IDs must be unique")
-        role_keys = {(item.role, item.entity_type.casefold(), item.value.casefold()) for item in self.roles}
+        entity_keys = {(item.entity_type.casefold(), item.value.casefold()) for item in self.roles if item.value is not None}
         for proposal in self.response_target_proposals:
-            target_key = (
-                proposal.target_role,
-                proposal.target_type.casefold(),
-                proposal.target_value.casefold(),
-            )
-            if target_key not in role_keys:
-                raise ValueError("each response target proposal must reference an adjudicated role")
+            target_key = (proposal.target_type.casefold(), proposal.target_value.casefold())
+            if target_key not in entity_keys:
+                raise ValueError("each response target proposal must reference an adjudicated entity")
         return self
 
 
@@ -3645,10 +3690,8 @@ class AnalysisResult(BaseModel):
         for item in directional_items:
             missing_evidence = sorted(set(item.evidence_refs) - evidence_refs)
             missing_reasoning = sorted(set(item.reasoning_refs) - reasoning_ids)
-            referenced_reasoning_context = {context_ref for reasoning in self.reasoning if reasoning.reasoning_id in item.reasoning_refs for context_ref in reasoning.context_refs}
-            missing_context = sorted(set(item.context_refs) - referenced_reasoning_context)
-            if missing_evidence or missing_reasoning or missing_context:
-                raise ValueError(f"direction/role references must resolve through AnalysisResult reasoning; missing_evidence={missing_evidence}, missing_reasoning={missing_reasoning}, missing_context={missing_context}")
+            if missing_evidence or missing_reasoning:
+                raise ValueError(f"direction/role evidence and reasoning references must resolve inside AnalysisResult; missing_evidence={missing_evidence}, missing_reasoning={missing_reasoning}")
         return self
 
 
@@ -3664,7 +3707,7 @@ class Decision(BaseModel):
     needs_review: bool
     review_reasons: list[DecisionReviewReason] = Field(default_factory=list)
     reason: str
-    policy_version: str = "soc.decision_policy.v3"
+    policy_version: str = "soc.decision_policy.v5"
     confidence_explanation: str | None = None
     automation_allowed: Literal[False] = False
 
@@ -3750,11 +3793,11 @@ class RoleAdjudicationConfirmationCommand(BaseModel):
         target_keys = [(item.action_kind.casefold(), item.target_type.casefold(), item.target_value.casefold()) for item in self.response_targets]
         if len(target_keys) != len(set(target_keys)):
             raise ValueError("human-confirmed response targets must be unique")
-        known_roles = set(role_keys)
+        known_entities = {(item.entity_type.casefold(), item.value.casefold()) for item in self.roles}
         for target in self.response_targets:
-            key = (target.target_role, target.target_type.casefold(), target.target_value.casefold())
-            if key not in known_roles:
-                raise ValueError("each confirmed response target must reference a confirmed role in the same command")
+            key = (target.target_type.casefold(), target.target_value.casefold())
+            if key not in known_entities:
+                raise ValueError("each confirmed response target must reference a confirmed entity in the same command")
         return self
 
 
@@ -3987,6 +4030,63 @@ class PipelineStepTrace(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class AnalysisOutputIssue(BaseModel):
+    """Sanitized, runtime-owned record of one rejected output section."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    section: AnalysisOutputSection
+    stage: str = Field(min_length=1, max_length=128)
+    error_type: str = Field(min_length=1, max_length=256)
+    attempt: int = Field(ge=1, le=3)
+
+
+class AnalysisOutputQuality(BaseModel):
+    """Acceptance lineage for a model result; the model cannot set this object."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.analysis_output_quality.v1"] = "soc.analysis_output_quality.v1"
+    status: AnalysisOutputQualityStatus = AnalysisOutputQualityStatus.ACCEPTED
+    accepted_sections: list[AnalysisOutputSection] = Field(
+        default_factory=lambda: list(AnalysisOutputSection),
+        max_length=len(AnalysisOutputSection),
+    )
+    degraded_sections: list[AnalysisOutputSection] = Field(
+        default_factory=list,
+        max_length=len(AnalysisOutputSection),
+    )
+    repair_attempted: bool = False
+    deterministic_fallback_used: bool = False
+    issues: list[AnalysisOutputIssue] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_section_lineage(self) -> AnalysisOutputQuality:
+        if len(self.accepted_sections) != len(set(self.accepted_sections)):
+            raise ValueError("accepted analysis output sections must be unique")
+        if len(self.degraded_sections) != len(set(self.degraded_sections)):
+            raise ValueError("degraded analysis output sections must be unique")
+        if set(self.accepted_sections) & set(self.degraded_sections):
+            raise ValueError("analysis output sections cannot be both accepted and degraded")
+        if self.status is AnalysisOutputQualityStatus.ACCEPTED:
+            if self.degraded_sections or self.repair_attempted or self.deterministic_fallback_used or self.issues:
+                raise ValueError("accepted analysis output cannot carry repair or degradation lineage")
+        elif self.status is AnalysisOutputQualityStatus.REPAIRED:
+            if not self.repair_attempted or self.degraded_sections or self.deterministic_fallback_used:
+                raise ValueError("repaired analysis output requires a successful repair without degraded sections")
+        elif self.status is AnalysisOutputQualityStatus.DEGRADED:
+            if not self.degraded_sections or self.deterministic_fallback_used:
+                raise ValueError("degraded analysis output requires at least one degraded section")
+            if AnalysisOutputSection.CORE in self.degraded_sections:
+                raise ValueError("a degraded model result cannot retain an invalid core section")
+        elif self.status is AnalysisOutputQualityStatus.DETERMINISTIC_FALLBACK:
+            if not self.deterministic_fallback_used:
+                raise ValueError("deterministic fallback status requires fallback lineage")
+            if self.accepted_sections or set(self.degraded_sections) != set(AnalysisOutputSection):
+                raise ValueError("deterministic fallback must reject every model-output section")
+        return self
+
+
 class AnalysisNodeOutput(BaseModel):
     """Auditable output returned by a bounded SOC analysis node."""
 
@@ -3994,6 +4094,8 @@ class AnalysisNodeOutput(BaseModel):
     model_name: str = Field(min_length=1)
     prompt_version: str = Field(min_length=1)
     parser_version: str | None = None
+    output_quality: AnalysisOutputQuality = Field(default_factory=AnalysisOutputQuality)
+    effective_analyzer_step_name: str | None = Field(default=None, min_length=1, max_length=128)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -4009,14 +4111,16 @@ class RuntimeFailure(BaseModel):
 
 
 class AnalysisRequestJournal(BaseModel):
-    """Bounded metadata persisted immediately before analyzer invocation.
+    """Bounded metadata persisted immediately before one provider invocation.
 
     The journal intentionally stores no rendered prompt, evidence values,
     provider response, headers, credentials, or tokens. ``AnalysisRun`` keeps
     the existing source input snapshot separately for governed replay/audit.
+    ``request_journal`` is the active/latest recovery pointer; the bounded
+    ordered history lives in ``provider_request_journals``.
     """
 
-    schema_version: str = "soc.analysis_request_journal.v1"
+    schema_version: str = "soc.analysis_request_journal.v2"
     status: AnalysisRequestJournalStatus = AnalysisRequestJournalStatus.RUNNING
     action: Literal[AuditAction.ANALYSIS, AuditAction.REPLAY]
     request_id: str = Field(min_length=1, max_length=256)
@@ -4032,6 +4136,9 @@ class AnalysisRequestJournal(BaseModel):
     model_name: str = Field(min_length=1, max_length=256)
     prompt_version: str = Field(min_length=1, max_length=256)
     provider_step_name: str = Field(min_length=1, max_length=128)
+    provider_purpose: AnalysisProviderPurpose = AnalysisProviderPurpose.PRIMARY_ANALYSIS
+    parser_version: str | None = Field(default=None, max_length=256)
+    optional_provider: bool = False
     primary_evidence_present: bool = False
     supplementary_evidence_count: int = Field(default=0, ge=0)
     selected_skills: list[str] = Field(default_factory=list, max_length=50)
@@ -4043,6 +4150,20 @@ class AnalysisRequestJournal(BaseModel):
     recovered_by: ActorContext | None = None
     recovery_reason: str | None = Field(default=None, max_length=1000)
     recovery_run_id: str | None = None
+
+
+class AnalysisProviderInvocation(BaseModel):
+    """Secret-free descriptor supplied to the pre-provider journal hook."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.analysis_provider_invocation.v1"] = "soc.analysis_provider_invocation.v1"
+    step_name: str = Field(min_length=1, max_length=128)
+    purpose: AnalysisProviderPurpose
+    model_name: str = Field(min_length=1, max_length=256)
+    prompt_version: str = Field(min_length=1, max_length=256)
+    parser_version: str | None = Field(default=None, max_length=256)
+    optional: bool = False
 
 
 class AnalysisRunRecoveryCommand(BaseModel):
@@ -4065,6 +4186,7 @@ class AnalysisRun(BaseModel):
     replay_of_run_id: str | None = None
     started_at: datetime = Field(default_factory=utc_now)
     ended_at: datetime | None = None
+    total_duration_ms: int | None = Field(default=None, ge=0)
     steps: list[PipelineStepTrace] = Field(default_factory=list)
     entities: ExtractedEntities | None = None
     normalization_report: NormalizationReport | None = None
@@ -4073,14 +4195,21 @@ class AnalysisRun(BaseModel):
     fact_reconstruction: FactReconstructionResult | None = None
     llm_analysis_request: LLMAnalysisRequest | None = None
     analysis: AnalysisResult | None = None
+    analysis_output_quality: AnalysisOutputQuality | None = None
     analysis_evidence_grounding: AnalysisEvidenceGroundingReport | None = None
     decision: Decision | None = None
     failure: RuntimeFailure | None = None
     request_journal: AnalysisRequestJournal | None = None
+    provider_request_journals: list[AnalysisRequestJournal] = Field(
+        default_factory=list,
+        max_length=8,
+    )
     corrections: list[CorrectionRecord] = Field(default_factory=list)
     role_adjudication_revisions: list[RoleAdjudicationRevisionRecord] = Field(
         default_factory=list,
     )
+    role_verification_trigger: RoleVerificationTriggerDecision | None = None
+    role_adjudication_verification: RoleAdjudicationVerificationResult | None = None
 
     @model_validator(mode="after")
     def validate_failure_state(self) -> AnalysisRun:

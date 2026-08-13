@@ -21,6 +21,7 @@ from soc_agent.contracts import (
     AlertInput,
     AlertSourceType,
     AlertSummary,
+    AnalysisProviderInvocation,
     AnalysisRequestJournal,
     AnalysisRequestJournalStatus,
     AnalysisRun,
@@ -50,6 +51,7 @@ from soc_agent.contracts import (
     NormalizationInspectionResult,
     NormalizationMonitoringResult,
     NormalizationReport,
+    PipelineStepStatus,
     ReviewNoteCommand,
     ReviewNoteOrigin,
     ReviewNoteResult,
@@ -59,6 +61,7 @@ from soc_agent.contracts import (
     ReviewQueueStatus,
     RoleAdjudicationConfirmationCommand,
     RoleAdjudicationRevisionRecord,
+    RuntimeFailureKind,
     SensitiveEvidenceMode,
     ServiceRequestContext,
     SimilarAlertQuery,
@@ -136,6 +139,7 @@ from soc_agent.protocols import (
     NormalizationMaintenanceMonitor,
     PostAnalysisObserver,
     ReviewQueueRepository,
+    RoleAdjudicationVerifier,
     SocActionAdapterRegistryPort,
     SocAgentApprovalGrantRepository,
     SocAgentApprovalRequestRepository,
@@ -181,11 +185,13 @@ class DeterministicAnalysisRuntime:
         self,
         *,
         analyzer: LLMAnalyzer | None = None,
+        role_verifier: RoleAdjudicationVerifier | None = None,
         decision_policy: DecisionPolicy | None = None,
         analysis_request_enricher: AnalysisRequestEnricher | None = None,
         sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT,
     ) -> None:
         self._analyzer = analyzer
+        self._role_verifier = role_verifier
         self._decision_policy = decision_policy
         self._analysis_request_enricher = analysis_request_enricher
         self._sensitive_evidence_mode = sensitive_evidence_mode
@@ -194,6 +200,7 @@ class DeterministicAnalysisRuntime:
         return analyze_alert(
             payload,
             analyzer=self._analyzer,
+            role_verifier=self._role_verifier,
             decision_policy=self._decision_policy,
             analysis_request_enricher=self._analysis_request_enricher,
             sensitive_evidence_mode=self._sensitive_evidence_mode,
@@ -208,6 +215,7 @@ class DeterministicAnalysisRuntime:
         return analyze_alert(
             payload,
             analyzer=self._analyzer,
+            role_verifier=self._role_verifier,
             decision_policy=self._decision_policy,
             before_provider=before_provider,
             analysis_request_enricher=self._analysis_request_enricher,
@@ -321,14 +329,17 @@ class SocAnalysisService:
                 raise SocServiceConflictError(f"run {command.run_id} has not exceeded the {command.stale_after_seconds}s recovery window")
             previous.status = AnalysisRunStatus.INTERRUPTED
             previous.ended_at = now
-            previous.request_journal = journal.model_copy(
-                update={
-                    "status": AnalysisRequestJournalStatus.INTERRUPTED,
-                    "finalized_at": now,
-                    "recovered_at": now,
-                    "recovered_by": recovery_context.actor,
-                    "recovery_reason": command.reason,
-                }
+            _set_active_request_journal(
+                previous,
+                journal.model_copy(
+                    update={
+                        "status": AnalysisRequestJournalStatus.INTERRUPTED,
+                        "finalized_at": now,
+                        "recovered_at": now,
+                        "recovered_by": recovery_context.actor,
+                        "recovery_reason": command.reason,
+                    }
+                ),
             )
             claim_run_recovery = getattr(self._repository, "claim_run_recovery", None)
             if callable(claim_run_recovery):
@@ -339,12 +350,15 @@ class SocAnalysisService:
         elif journal.recovered_at is not None and journal.recovered_at > stale_before:
             raise SocServiceConflictError(f"run {command.run_id} recovery is already in progress")
         else:
-            previous.request_journal = journal.model_copy(
-                update={
-                    "recovered_at": now,
-                    "recovered_by": recovery_context.actor,
-                    "recovery_reason": command.reason,
-                }
+            _set_active_request_journal(
+                previous,
+                journal.model_copy(
+                    update={
+                        "recovered_at": now,
+                        "recovered_by": recovery_context.actor,
+                        "recovery_reason": command.reason,
+                    }
+                ),
             )
             self._repository.save_run(previous)
 
@@ -355,7 +369,10 @@ class SocAnalysisService:
         )
         refreshed = self._repository.get_run(previous.run_id) or previous
         if refreshed.request_journal is not None:
-            refreshed.request_journal = refreshed.request_journal.model_copy(update={"recovery_run_id": recovered.run_id})
+            _set_active_request_journal(
+                refreshed,
+                refreshed.request_journal.model_copy(update={"recovery_run_id": recovered.run_id}),
+            )
             self._repository.save_run(refreshed)
         return recovered
 
@@ -468,16 +485,18 @@ class SocAnalysisService:
         def persist_before_provider(
             run: AnalysisRun,
             request: LLMAnalysisRequest,
-            provider_step_name: str,
+            invocation: AnalysisProviderInvocation,
         ) -> None:
             run.replay_of_run_id = replay_of_run_id
-            run.request_journal = _request_journal_from_analysis_request(
+            _complete_active_request_journal(run)
+            journal = _request_journal_from_analysis_request(
                 run,
                 request,
                 context=context,
                 action=action,
-                provider_step_name=provider_step_name,
+                invocation=invocation,
             )
+            _set_active_request_journal(run, journal)
             self._repository.save_run(run.model_copy(deep=True))
 
         return analyze_journaled(payload, before_provider=persist_before_provider)
@@ -4582,7 +4601,7 @@ def _request_journal_from_analysis_request(
     *,
     context: ServiceRequestContext,
     action: AuditAction,
-    provider_step_name: str,
+    invocation: AnalysisProviderInvocation,
 ) -> AnalysisRequestJournal:
     return AnalysisRequestJournal(
         action=action,
@@ -4596,9 +4615,12 @@ def _request_journal_from_analysis_request(
         source_type=request.source.source_type,
         source_system=request.source.source_system,
         detection_key=request.detection.detection_key,
-        model_name=run.model_name,
-        prompt_version=run.prompt_version,
-        provider_step_name=provider_step_name,
+        model_name=invocation.model_name,
+        prompt_version=invocation.prompt_version,
+        provider_step_name=invocation.step_name,
+        provider_purpose=invocation.purpose,
+        parser_version=invocation.parser_version,
+        optional_provider=invocation.optional,
         primary_evidence_present=request.primary_evidence is not None,
         supplementary_evidence_count=len(request.supplementary_evidence),
         selected_skills=[item.skill_name for item in request.skill_context.selected_skills],
@@ -4609,20 +4631,90 @@ def _finalize_request_journal(run: AnalysisRun) -> None:
     journal = run.request_journal
     if journal is None:
         return
-    if run.status is AnalysisRunStatus.FAILED:
-        status = AnalysisRequestJournalStatus.FAILED
-    elif run.status is AnalysisRunStatus.INTERRUPTED:
+    matching_step = next(
+        (step for step in reversed(run.steps) if step.step_name == journal.provider_step_name),
+        None,
+    )
+    failure_kind = None
+    failure_retryable = None
+    if run.status is AnalysisRunStatus.INTERRUPTED:
         status = AnalysisRequestJournalStatus.INTERRUPTED
+    elif matching_step is not None and matching_step.status is PipelineStepStatus.FAILED:
+        status = AnalysisRequestJournalStatus.FAILED
+        raw_failure_kind = matching_step.metadata.get("failure_kind")
+        if isinstance(raw_failure_kind, str):
+            try:
+                failure_kind = RuntimeFailureKind(raw_failure_kind)
+            except ValueError:
+                failure_kind = RuntimeFailureKind.INTERNAL_ERROR
+        elif run.failure is not None:
+            failure_kind = run.failure.kind
+        else:
+            failure_kind = RuntimeFailureKind.INTERNAL_ERROR
+        raw_retryable = matching_step.metadata.get(
+            "failure_retryable",
+            matching_step.metadata.get("retryable"),
+        )
+        failure_retryable = raw_retryable if isinstance(raw_retryable, bool) else False
+    elif run.status is AnalysisRunStatus.FAILED and run.failure is not None and run.failure.step_name == journal.provider_step_name:
+        status = AnalysisRequestJournalStatus.FAILED
+        failure_kind = run.failure.kind
+        failure_retryable = run.failure.retryable
     else:
         status = AnalysisRequestJournalStatus.COMPLETED
-    run.request_journal = journal.model_copy(
-        update={
-            "status": status,
-            "finalized_at": run.ended_at or _utc_now(),
-            "failure_kind": run.failure.kind if run.failure is not None else None,
-            "failure_retryable": run.failure.retryable if run.failure is not None else None,
-        }
+    _set_active_request_journal(
+        run,
+        journal.model_copy(
+            update={
+                "status": status,
+                "finalized_at": run.ended_at or _utc_now(),
+                "failure_kind": failure_kind,
+                "failure_retryable": failure_retryable,
+            }
+        ),
     )
+
+
+def _complete_active_request_journal(run: AnalysisRun) -> None:
+    journal = run.request_journal
+    if journal is None or journal.status is not AnalysisRequestJournalStatus.RUNNING:
+        return
+    _set_active_request_journal(
+        run,
+        journal.model_copy(
+            update={
+                "status": AnalysisRequestJournalStatus.COMPLETED,
+                "finalized_at": _utc_now(),
+            }
+        ),
+    )
+
+
+def _set_active_request_journal(
+    run: AnalysisRun,
+    journal: AnalysisRequestJournal,
+) -> None:
+    """Update the recovery pointer and its ordered, bounded audit history."""
+
+    journals = list(run.provider_request_journals)
+    identity = (
+        journal.provider_step_name,
+        journal.provider_started_at,
+        journal.request_hash,
+    )
+    for index in range(len(journals) - 1, -1, -1):
+        candidate = journals[index]
+        if (
+            candidate.provider_step_name,
+            candidate.provider_started_at,
+            candidate.request_hash,
+        ) == identity:
+            journals[index] = journal
+            break
+    else:
+        journals.append(journal)
+    run.provider_request_journals = journals[-8:]
+    run.request_journal = journal
 
 
 def _correction_confidence_explanation(

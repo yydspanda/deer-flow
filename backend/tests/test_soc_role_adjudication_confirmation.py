@@ -92,7 +92,7 @@ def _command(run_id: str, *, expected_revision: int = 0) -> RoleAdjudicationConf
                 action_kind="isolate_host",
                 target_type="ip",
                 target_value="10.10.1.25",
-                target_role="victim",
+                target_role="impacted_asset",
                 rationale="Isolation should target the confirmed impacted host.",
             )
         ],
@@ -123,6 +123,7 @@ def test_human_role_confirmation_is_append_only_and_keeps_model_result_immutable
     assert record.revision == 1
     assert record.roles[0].role.value == "victim"
     assert record.response_targets[0].action_kind == "isolate_host"
+    assert record.response_targets[0].target_role.value == "impacted_asset"
     assert record.automation_allowed is False
     assert audits.records[0].operation is SocMutationOperation.REVIEW_ROLE_CONFIRM
 
@@ -145,3 +146,11 @@ def test_human_role_confirmation_rejects_stale_revision() -> None:
             _command(original.run_id),
             context=_context(key="role-confirm-2"),
         )
+
+
+def test_human_role_confirmation_rejects_target_for_unconfirmed_entity() -> None:
+    payload = _command("RUN-1").model_dump(mode="json")
+    payload["response_targets"][0]["target_value"] = "10.10.1.26"
+
+    with pytest.raises(ValueError, match="confirmed entity"):
+        RoleAdjudicationConfirmationCommand.model_validate(payload)
