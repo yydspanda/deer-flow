@@ -29,8 +29,28 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；主 LLM 只执行 bounded `AnalysisResult.v4` 节点；默认关闭的条件式 verifier 由确定性 gate 触发，只独立反证 `RC-*` 方向/角色/目标声明，不掌握流程或动作权限 |
-| 当前下一刀 | `LLMAnalysisRequest.v6` 的输出韧性、跨 Message 压缩和反向连接角色一致性已完成聚焦 live 验证；Parser v18 能隔离坏的可选区块而不追加无价值调用。下一步补独立人工方向/角色真值、Web/TUI 人工角色确认表单和 held-out confirmed-memory Retrieval v2 precision/recall，并用固定 cohort 评估可选区块结构失败率。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
+| 当前下一刀 | `soc-analysis-v21` / `soc.decision_policy.v6` 已明确“可信 detector hit + Runtime 当前裁决 + 独立动作授权”边界，并移除无价值的置信度/标签强制复核。下一步用固定 live cohort 验证 ReviewQueue 降幅与结论完整性，再补独立人工方向/角色真值、Web/TUI 人工角色确认表单和 held-out confirmed-memory Retrieval v2 precision/recall。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
+
+## 2026-08-13 — Detection trust and review boundary tightened
+
+- 主分析升级为 `soc-analysis-v21`：信任配置的上游 rule/detector/model 确实命中并产生告警，信任
+  Adapter 已评审字段在精确语义范围内的 assertion；同时明确 detector hit 不自动等于场景标签正确、
+  攻击成功、业务影响或动作权限。
+- Analyzer 必须在当前 Runtime 内给出场景、网络方向、attacker/victim、attempt/effect/impact stage、
+  verdict 和 recommendation。CMDB/PCAP/TI/endpoint/history/memory 属于可选增强；仅缺少这些内容不能
+  擦除 detector hit、拒绝当前结论或自动产生人工复核。
+- `soc.decision_policy.v6` 不再因为 `suspicious`、`false_positive`、raw confidence 低或 confidence
+  尚未校准而创建 ReviewQueue。只有显式 `unknown|needs_review`、stub、模型输出/Schema 退化、关键证据
+  缺口、事实冲突、Grounding 失败或 role verifier 失败等真实阻塞项强制复核。
+- Domain/scenario finding 继承 Base Decision 的 review 状态：clean decision 使用
+  `continue_policy_evaluation` 且不指定人工队列，只有已有 hard guard 才指向对应 ReviewQueue。Offline
+  eval 同步修正统计：deterministic fallback 保住 Runtime 但不计入 LLM parse/success。
+- Detection Decision 与动作权限继续解耦：Base Runtime 始终 `automation_allowed=false`；受治理的
+  post-Runtime Automation Policy 独立决定是否授权/执行以及是否要求人工审批。
+- 同步收紧 SOC Lead Agent、四类 specialist 和 public triage Skills，移除“缺少第二来源就不下结论”
+  及“所有高风险动作一律人工审批”的旧措辞。待聚焦测试通过后，用固定 live cohort 测量 ReviewQueue
+  降幅；不以本次结构测试替代真实准确率标签。
 
 ## 2026-08-13 — Reverse-connection role coherence tightened and live-validated
 

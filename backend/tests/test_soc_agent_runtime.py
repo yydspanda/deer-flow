@@ -82,7 +82,7 @@ def test_approved_scanner_returns_false_positive_candidate() -> None:
     assert run.decision.confidence_source is DecisionConfidenceSource.STUB_HEURISTIC
     assert run.decision.confidence_is_calibrated is False
     assert run.decision.calibrated_probability is None
-    assert run.decision.review_reasons[0] is DecisionReviewReason.FALSE_POSITIVE_REQUIRES_CONFIRMATION
+    assert run.decision.review_reasons == [DecisionReviewReason.STUB_ANALYZER]
     assert run.decision.automation_allowed is False
     assert run.normalization_report is not None
     assert run.normalization_report.adapter == "generic"
@@ -114,8 +114,7 @@ def test_malicious_ioc_returns_true_positive_candidate() -> None:
     assert run.analysis.verdict == Verdict.TRUE_POSITIVE
     assert run.analysis.confidence >= 0.9
     assert run.decision is not None
-    assert DecisionReviewReason.CONFIDENCE_NOT_CALIBRATED in run.decision.review_reasons
-    assert DecisionReviewReason.STUB_ANALYZER in run.decision.review_reasons
+    assert run.decision.review_reasons == [DecisionReviewReason.STUB_ANALYZER]
 
 
 def test_stub_does_not_emit_empty_command_line_evidence() -> None:
@@ -900,7 +899,7 @@ def test_cli_review_queue_lists_and_closes_items(tmp_path: Path, capsys) -> None
     assert item["status"] == "open"
     assert item["priority"] == "high"
     assert item["reason"] == "uncertain_verdict"
-    assert "confidence_not_calibrated" in item["review_reasons"]
+    assert item["review_reasons"] == ["uncertain_verdict", "stub_analyzer"]
     assert item["rule_code"] == "RPAADM_002635"
 
     assert main(["review", "context", item["queue_id"], "--database-url", database_url]) == 0

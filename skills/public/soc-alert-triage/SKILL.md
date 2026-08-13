@@ -14,11 +14,12 @@ Use this skill for the general SOC triage loop.
 
 ## Operating Rules
 
-- Treat an alert as a hypothesis backed by evidence, not as ground truth.
+- Trust alert admission as detection provenance: the configured upstream rule, detector, or model matched and emitted the alert. Do not demand a second source to prove that hit occurred.
+- Trust reviewed adapter field semantics within their exact declared scope. Separately adjudicate scenario correctness, effect, material impact, disposition, and response authority.
 - Separate facts, inferred facts, conflicts, and missing context.
 - Preserve evidence paths and field names in the explanation.
 - Prefer the SOC runtime's normalized fields, field trust, conflict reports, and review context over raw vendor fields.
-- Do not perform or claim response actions. Propose actions and route high-risk actions through approval.
+- Do not perform or claim response actions. Propose actions and route them through deterministic policy and authorization; use human approval when the active policy requires it.
 - Keep conclusions reviewable: verdict, confidence, evidence, uncertainty, recommended next step.
 
 ## Knowledge Boundary
@@ -29,7 +30,7 @@ Use this skill for the general SOC triage loop.
 
 ## Triage Shape
 
-1. Identify source, rule/detection, severity, and affected entities.
+1. Identify the trusted detection hit, source, rule/detection, severity, and affected entities.
 2. State the strongest evidence and the weakest evidence.
 3. Call out conflicts, especially attacker/victim role conflicts and asset ownership ambiguity.
 4. Decide whether this is likely true positive, false positive, suspicious, unknown, or needs review.
@@ -42,7 +43,7 @@ Before finalizing, answer four questions explicitly:
 3. What legitimate user, administrator, deployment, development, or security-operation context could explain it?
 4. Which missing facts could materially change the verdict?
 
-Do not turn the strongest benign alternative into a false-positive verdict without scoped evidence. Do not turn an incomplete alert into a true-positive verdict merely because its rule name is severe.
+Do not turn the strongest benign alternative into a false-positive verdict without scoped evidence. Do not turn a detector hit into confirmed compromise merely because its rule name is severe. Still give the best current verdict and activity stage; optional enrichment gaps alone are not a reason to return `unknown`, `needs_review`, or no conclusion.
 
 ## Evidence Review Method
 
@@ -67,6 +68,6 @@ Do not let a domain skill close the case by itself. Domain findings feed the SOC
 
 ## Safety Boundary
 
-Never bypass SOC core services, review queue, approval inbox, or audit records. If a user asks for blocking, isolation, account disablement, suppression, rule edits, or production changes, produce an approval-oriented plan rather than claiming execution.
+Never bypass SOC core services, deterministic policy/authorization, or audit records. If a user asks for blocking, isolation, account disablement, suppression, rule edits, or production changes, produce a governed action proposal rather than claiming execution. Human approval applies when the selected policy requires it.
 
-When running under the SOC Lead Agent and a concrete action should enter SOC policy/approval handling, emit only a structured candidate in `<soc_action_proposal>{...}</soc_action_proposal>` with `route`, `action`, `reason`, `payload`, and `confidence`. High-risk proposals enter approval. Read-only proposals such as `asset.lookup` enter the guarded SOC runtime bridge. Do not infer execution from the proposal, and do not claim lookup results until a SOC action result is returned.
+When running under the SOC Lead Agent and a concrete action should enter SOC policy/authorization handling, emit only a structured candidate in `<soc_action_proposal>{...}</soc_action_proposal>` with `route`, `action`, `reason`, `payload`, and `confidence`. High-risk proposals enter the governed authorization layer and may require approval according to policy. Read-only proposals such as `asset.lookup` enter the guarded SOC runtime bridge. Do not infer execution from the proposal, and do not claim lookup results until a SOC action result is returned.

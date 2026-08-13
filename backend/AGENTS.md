@@ -674,7 +674,7 @@ accepted-baseline drift checks. `LLMAnalysisRequest.evidence_coverage` records p
 sanitization, truncation, omissions, and high-value mapping gaps; prompts receive only its compact
 path-free summary.
 Outer parser success is `recognized` even when a nested allowlisted body has a decode/repair warning;
-the original nested string and typed repair observation remain auditable. `soc.decision_policy.v5`
+the original nested string and typed repair observation remain auditable. `soc.decision_policy.v6`
 treats encoded compaction alone as informational and routine bounded omission/truncation without a
 high-value gap as at most partial. Only degraded/unsupported outer schemas, high-value gaps or
 ungrounded analyzer citations directly degrade evidence; fact conflicts retain `conflicted`.
@@ -703,7 +703,7 @@ fact catalog (`E-*`) plus governed Skill (`S-*`), adapter-contract (`A-*`), conf
 governed-context (`C-*`), and tool-result (`T-*`) catalogs to `LLMAnalysisRequest.v6`. Model evidence
 may only copy exact `E-*` reference/path/typed-value tuples. Explicit `R-*` items carry security
 interpretation with declared basis and references, while open-vocabulary scenario assessments cite
-both `E-*` and `R-*`. `soc-analysis-v20` and `soc-analysis-json-parser-v18` reject unresolved or
+both `E-*` and `R-*`. `soc-analysis-v21` and `soc-analysis-json-parser-v18` reject unresolved or
 ambiguous references. Parser repair is limited to auditable, semantics-free normalization: it may
 restore a missing top-level `soc.analysis_model_output.v1` version only when the complete field set
 unambiguously matches the compact model-owned contract, or normalize an already unique catalog
@@ -729,6 +729,17 @@ This check is not detection truth, a verdict override, or action authority. Comp
 provider outcome highlights also retain that trust in the exact `E-*` catalog rather than becoming
 `unknown` solely because the full source message was not selected.
 
+Alert admission itself is trusted detection provenance: the configured upstream rule, detector, or
+model matched and emitted the alert. The analyzer must then produce the best current scenario,
+direction, attacker/victim roles, attempt/effect/impact stage, verdict, and recommendation. Missing
+optional CMDB, PCAP, TI, endpoint, history, or memory enrichment is recorded as a gap but does not by
+itself justify `unknown`, `needs_review`, or ReviewQueue. `soc.decision_policy.v6` reserves review for
+explicit uncertain verdicts and structural blockers: degraded analyzer output/schema, unsupported
+schema, high-value gaps, fact conflicts, Grounding failures, or challenged/unresolved/unavailable role
+verification. A `suspicious` or `false_positive` label, low raw model score, and uncalibrated confidence
+remain audit/measurement data only. Base Runtime never authorizes an action; post-Runtime automation
+policy remains the separate deterministic authorization/execution boundary.
+
 The optional `JsonLLMRoleVerifier` runs only after primary schema validation and Grounding, and only
 when `SOC_ROLE_VERIFIER_ENABLED=true` plus deterministic trigger policy v2 fires. The gate reviews one
 coherent network-direction claim and non-placeholder attacker/victim roles only. Inferred/tentative
@@ -751,7 +762,7 @@ are timed; E2E also records the full analysis/persistence/investigation wall tim
 or accuracy without independent analyst labels. The ten-alert E2E reads existing formal SOC Memory
 but does not promote its `knowledge-review/` files into `soc_memory_candidates` or
 `soc_memory_records`.
-challenged/unresolved/unavailable verification forces review through `soc.decision_policy.v5`, while a
+challenged/unresolved/unavailable verification forces review through `soc.decision_policy.v6`, while a
 confirmed result cannot grant action authority or erase another guard. Use `SOC_ROLE_VERIFIER_MODEL`
 for a separately configured stronger model; absence reuses the primary model with explicit lineage.
 Both provider calls are written to ordered `provider_request_journals`; `request_journal` remains the

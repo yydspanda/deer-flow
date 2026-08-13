@@ -554,11 +554,11 @@ def test_analysis_service_writes_decision_audit_record() -> None:
     assert record.input_hash == run.input_hash
     assert record.final_verdict == Verdict.FALSE_POSITIVE
     assert record.payload["step_count"] == len(run.steps)
-    assert record.payload["decision_policy_version"] == "soc.decision_policy.v5"
+    assert record.payload["decision_policy_version"] == "soc.decision_policy.v6"
     assert record.payload["confidence_source"] == "stub_heuristic"
     assert record.payload["confidence_is_calibrated"] is False
     assert record.payload["calibrated_probability"] is None
-    assert record.payload["review_reasons"][0] == "false_positive_requires_confirmation"
+    assert record.payload["review_reasons"] == ["stub_analyzer"]
 
 
 def test_retryable_failed_analysis_is_not_queued_or_idempotently_reused() -> None:
@@ -657,7 +657,7 @@ def test_analysis_service_writes_alert_summary() -> None:
     assert summary.alert_id == "ALT-SAMPLE-FP-001"
     assert summary.verdict == Verdict.FALSE_POSITIVE
     assert summary.needs_review is True
-    assert summary.review_reasons[0].value == "false_positive_requires_confirmation"
+    assert summary.review_reasons == [DecisionReviewReason.STUB_ANALYZER]
     assert summary.detection_key == "sample-edr:rule_code:edr-scan-001"
     assert "ip:10.0.1.10" in summary.entity_keys
 
@@ -781,12 +781,15 @@ def test_analysis_service_enqueues_review_item_from_summary() -> None:
     assert item.status == ReviewQueueStatus.OPEN
     assert item.priority.value == "high"
     assert item.reason == "uncertain_verdict"
-    assert any(reason.value == "confidence_not_calibrated" for reason in item.review_reasons)
+    assert item.review_reasons == [
+        DecisionReviewReason.UNCERTAIN_VERDICT,
+        DecisionReviewReason.STUB_ANALYZER,
+    ]
     assert item.rule_code == "RPAADM_002635"
     assert "ip:30.180.248.178" in item.entity_keys
 
 
-def test_analysis_service_enqueues_unconfirmed_false_positive() -> None:
+def test_analysis_service_enqueues_stub_false_positive() -> None:
     review_repository = InMemoryReviewQueueRepository()
     run = SocAnalysisService(
         repository=InMemoryAlertRepository(),
@@ -795,9 +798,9 @@ def test_analysis_service_enqueues_unconfirmed_false_positive() -> None:
 
     item = review_repository.get_open_review_item_by_run(run.run_id)
     assert item is not None
-    assert item.reason == "false_positive_requires_confirmation"
+    assert item.reason == "stub_analyzer"
     assert item.verdict is Verdict.FALSE_POSITIVE
-    assert item.review_reasons[0].value == "false_positive_requires_confirmation"
+    assert item.review_reasons == [DecisionReviewReason.STUB_ANALYZER]
 
 
 def test_analysis_service_get_run_requires_repository() -> None:

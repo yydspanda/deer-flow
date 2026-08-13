@@ -191,7 +191,7 @@ def test_json_llm_analyzer_runs_prompt_client_parser_and_runtime_trace() -> None
 
     run = service.analyze(_sample("malicious_ioc.json"))
 
-    assert run.status == AnalysisRunStatus.NEEDS_REVIEW
+    assert run.status == AnalysisRunStatus.SUCCESS
     assert run.analysis is not None
     assert run.analysis.verdict == Verdict.TRUE_POSITIVE
     assert run.analysis.scenario_assessments[0].scenario_name == "恶意外联"
@@ -201,7 +201,7 @@ def test_json_llm_analyzer_runs_prompt_client_parser_and_runtime_trace() -> None
     assert run.decision.confidence_source is DecisionConfidenceSource.LLM_SELF_REPORT
     assert run.decision.confidence_is_calibrated is False
     assert run.decision.calibrated_probability is None
-    assert run.decision.review_reasons == [DecisionReviewReason.CONFIDENCE_NOT_CALIBRATED]
+    assert run.decision.review_reasons == []
     assert run.analysis_evidence_grounding is not None
     assert run.analysis_evidence_grounding.grounded_count == 1
     assert run.analysis_evidence_grounding.ungrounded_count == 0
@@ -231,10 +231,10 @@ def test_json_llm_analyzer_runs_prompt_client_parser_and_runtime_trace() -> None
     assert analyze_step.metadata["selected_skills"]
     assert "candidate_hash" in analyze_step.metadata
     decide_step = next(step for step in run.steps if step.step_name == "decide")
-    assert decide_step.metadata["policy_version"] == "soc.decision_policy.v5"
+    assert decide_step.metadata["policy_version"] == "soc.decision_policy.v6"
     assert decide_step.metadata["confidence_source"] == "llm_self_report"
     assert decide_step.metadata["confidence_is_calibrated"] is False
-    assert decide_step.metadata["review_reasons"] == ["confidence_not_calibrated"]
+    assert decide_step.metadata["review_reasons"] == []
 
 
 def test_json_llm_analyzer_retries_one_invalid_contract_with_bounded_correction() -> None:
@@ -261,7 +261,7 @@ def test_json_llm_analyzer_retries_one_invalid_contract_with_bounded_correction(
         before_provider=lambda _run, _request, invocation: provider_purposes.append(invocation.purpose),
     )
 
-    assert run.status is AnalysisRunStatus.NEEDS_REVIEW
+    assert run.status is AnalysisRunStatus.SUCCESS
     assert provider_purposes == [
         "primary_analysis",
         "primary_analysis_retry",
@@ -299,7 +299,7 @@ def test_json_llm_analyzer_can_use_stronger_model_for_bounded_output_repair() ->
 
     run = DeterministicAnalysisRuntime(analyzer=analyzer).analyze(_sample("malicious_ioc.json"))
 
-    assert run.status is AnalysisRunStatus.NEEDS_REVIEW
+    assert run.status is AnalysisRunStatus.SUCCESS
     assert [model_name for _, model_name in client.calls] == [
         "deepseek-v4-flash",
         "deepseek-v4-pro",

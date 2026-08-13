@@ -36,7 +36,7 @@ Use this skill when bounded evidence contains an email entity or the detection c
 
 ## Safe Boundaries
 
-Read-only parsing, reputation, mailbox-state, and endpoint-context queries may be proposed. Mail deletion, sender blocking, account reset, session revocation, and endpoint containment require policy and approval. Never claim those actions completed without returned action evidence.
+Read-only parsing, reputation, mailbox-state, and endpoint-context queries may be proposed. Mail deletion, sender blocking, account reset, session revocation, and endpoint containment require deterministic policy authorization and may require human approval. Never claim those actions completed without returned action evidence.
 
 ## References
 

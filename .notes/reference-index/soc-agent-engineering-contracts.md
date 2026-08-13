@@ -474,6 +474,10 @@ Domain triage 约束：
 - deterministic scenario taxonomy 必须通过 `soc_agent.domain.scenarios` 暴露稳定 `SCENARIO_TAXONOMY_VERSION`、`scenario_taxonomy_keys()` 和 `scenario_taxonomy_snapshot()`；eval/replay diff 只能消费这些稳定快照，不能读取 `_SCENARIO_RULES` 私有结构。
 - 如果厂商/上游提供了场景提示但内部 deterministic scenario taxonomy 未命中，domain triage 必须输出 `scenario_key=vendor.unmapped` 的低/中置信候选 finding，保留 `vendor_scenarios`、证据缺口和人工核查清单；它不能替代内部已识别场景，不能改 verdict，也不能直接写 confirmed memory。
 - Domain finding 是分析证据，不是 operational verdict。它可以进入 unified investigation report、ReviewQueue/Lead Agent bounded context 和 pending memory candidate source，但不能自动关闭工单或自动确认 memory。分析师对 domain/scenario finding 的反馈只能经 `SocMemoryCandidateSourceBridge` 生成 `pending_review` candidate；feedback 可以进入 candidate content/facets/metadata，但仍不得绕过 `SocMemoryService.review_candidate()`。
+- Domain/scenario finding 不得实现第二套 Review Policy。`run.decision.needs_review=false` 时必须使用
+  `recommended_action=continue_policy_evaluation` 且不填 `recommended_queue`；只有 Base Decision 已有
+  hard guard，或无 Decision 且 run 为 failed/interrupted/needs_review 时，finding 才能指向现有人工队列。
+  taxonomy 未映射、可选 Provider 未配置或普通 evidence gap 本身不能创建复核。
 - `soc eval scenarios PATH` 是 vendor-neutral deterministic scenario eval 入口；它直接消费 alert JSON 文件/目录，输出 taxonomy version、taxonomy keys、covered keys、missing keys、`vendor.unmapped` 计数和 per-sample findings。`--baseline-json` 只生成 replay diff 报告，不自动失败、不写业务库、不生成 memory。
 - domain/scenario eval report 必须输出 taxonomy version、taxonomy keys、covered keys、missing keys 和 `vendor.unmapped` 计数，作为 replay diff 基线；eval 仍只读样本，不写业务库、不生成 confirmed memory。
 
@@ -1527,7 +1531,7 @@ normalizers/hids.py
   `truncated_analysis_evidence` 硬复核原因；degraded/unsupported outer schema、high-value gap 或
   ungrounded analyzer evidence 才进入 `degraded`；fact conflict 优先进入 `conflicted`。
 - `DecisionReviewReason.TRUNCATED_ANALYSIS_EVIDENCE` 仅为历史持久化兼容保留。当前
-  `soc.decision_policy.v5` 不为 routine bounded budget pressure 生成该 reason；关键字段是否丢失必须由
+  `soc.decision_policy.v6` 不为 routine bounded budget pressure 生成该 reason；关键字段是否丢失必须由
   typed `EvidenceFieldImportanceRegistry` / `high_value_gaps` 判断，不能从 `truncated=true` 猜测。
 
 ### Normalization maintenance / 归一化维护约束
@@ -1558,19 +1562,27 @@ normalizers/hids.py
 - `ScenarioHypothesis.confidence` 与 `RoleClaim/RoleResolution.semantic_confidence` 当前是可回放、带版本
   的 deterministic heuristic score；在标注集完成 calibration 前，不得描述成真实概率。
 - `AnalysisResult.confidence` 是 analyzer/LLM 对 verdict 的自评，只可用于展示、排序和离线评测；不能
-  绕过 schema/domain validation、conflict guard、policy、approval 或 human review。
+  绕过 schema/domain validation、conflict guard、policy 或动作授权，也不能清除已存在的 human-review
+  guard。
 - `SocDecisionPolicy` 是 Runtime 中唯一允许把已校验 `AnalysisResult` 转换为 operational `Decision`
   的边界；CLI/API/TUI/Kafka/Lead Agent 不得自行按 confidence 拼 `needs_review`。
 - `Decision` 必须显式携带 `confidence_source`、`confidence_is_calibrated`、可空的
   `calibrated_probability` / `calibration_profile_version`、`evidence_state`、结构化
   `review_reasons` 和 `policy_version`。raw confidence 不得冒充 calibrated probability。
-- 当前 stub heuristic 与 LLM self-report 都未校准，必须包含 `confidence_not_calibrated` 并进入
-  human review。未来只有经过人工标注、离线校准、版本审批和 replay 验证的 profile 才能改变该策略；
-  `soc eval confidence` 的输出不会自动接入 Runtime。
-- `false_positive` 必须要求人工确认。fact conflict、degraded/unsupported outer message schema、
-  high-value evidence gap 和 ungrounded analyzer evidence 等 hard guard 独立于 raw confidence，高分
-  不能清除它们。Routine truncation/omission 只表达 `partial`，encoded compaction 单独存在不改变
-  evidence state。
+- 当前 stub heuristic 与 LLM self-report 都未校准；`confidence_is_calibrated=false` 必须保留，但
+  `soc.decision_policy.v6` 不再仅因未校准或 raw score 低而创建 ReviewQueue。Stub 仍以
+  `stub_analyzer` 进入复核，因为它不是生产推理节点。未来校准 profile 只能通过人工标注、离线校准、
+  版本审批和 replay 验证接入；`soc eval confidence` 的输出不会自动改变 Runtime。
+- `true_positive`、`false_positive`、`suspicious` 都是完整当前结论，不能仅由标签本身生成复核原因；
+  显式 `unknown|needs_review` 才产生 `uncertain_verdict`。fact conflict、degraded/unsupported outer
+  message schema、high-value evidence gap、ungrounded analyzer evidence/reasoning、unsupported outcome
+  claim 和 verifier failure 等 hard guard 独立于 raw confidence，高分不能清除它们。Routine
+  truncation/omission 只表达 `partial`，encoded compaction 单独存在不改变 evidence state。
+- 告警进入 Runtime 代表受配置治理的上游 rule/detector/model 确实命中并产出告警；这是可信的
+  detection provenance。Analyzer 必须在本轮给出当前 scenario、direction、roles、attempt/effect/impact、
+  verdict 与 recommendation。Adapter 已评审字段按精确语义范围可信；缺少 CMDB/PCAP/TI/endpoint/
+  history/memory 等可选增强本身不能擦除命中、阻止当前结论或强制复核。Detection Decision 仍不等于
+  action authority，Base Runtime 固定不授权动作，后置 Automation Policy 独立裁决。
 - memory confidence 只在 confirmed/retrieval-enabled memory 内参与排序；不能让 pending candidate
   自动生效。
 - 不同层的 confidence/trust/status 禁止直接平均、相乘或折算成一个总分。任何聚合都必须先定义
@@ -1578,6 +1590,10 @@ normalizers/hids.py
 - 置信度评测必须分为 `soc eval labels prepare`、人工审阅、`soc eval labels validate`、
   `soc eval confidence` 四步。标签必须绑定 `run_id`、`input_hash`、model/prompt/pipeline version、
   reviewer、reviewed_at 和理由；标签文件不得复制 raw payload。
+- Offline eval 的 `llm_success_count` 只统计模型 core 输出实际通过 Parser 且 Runtime 完成的样本。
+  `deterministic_fallback` 可使 Runtime 以 needs-review 结果继续，但必须 `parse_success=false`、计入
+  `failed_count` 并带 sanitized fallback error，不能冒充模型成功。默认 `stub-replay` 只验证 Parser/
+  Grounding 回放；其模型名和来源必须显式，不能用于生产模型质量声明。
 - `pending_review` 不能参与 calibration；无法确定真实结论的样本应标为 `excluded`，不得把
   `unknown/needs_review` 冒充 accepted ground truth。同一 `input_hash` 的 replay 不能重复计权，
   不同 model/prompt/pipeline scope 不能混入同一个 profile。
@@ -1732,7 +1748,7 @@ normalizers/hids.py
   `E-*`，unresolved 必须有 evidence gap，alternative 必须保持原 claim key 集合；每条必须有非空
   `counterevidence_assessment`，不能用单纯“同意第一轮”代替反证搜索。
 - `RoleAdjudicationVerificationResult` 不得重写 `AnalysisResult.v4`。confirmed 不移除既有复核原因；
-  challenged/unresolved/unavailable 分别使 `soc.decision_policy.v5` 进入 conflicted/degraded 并要求
+  challenged/unresolved/unavailable 分别使 `soc.decision_policy.v6` 进入 conflicted/degraded 并要求
   人工复核。任何复核状态都固定 `automation_allowed=false`。
 - 每个主分析/角色复核 Provider 调用必须分别写入有序、上限为 8 的
   `provider_request_journals`，新记录使用 `soc.analysis_request_journal.v2` 并保存

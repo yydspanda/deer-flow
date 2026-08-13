@@ -17,13 +17,13 @@ Use this skill when asset ownership, attacker/victim role, traffic direction, or
 - Decide what each entity represents: attacker, victim, affected asset, source, destination, proxy, relay, scanner, or suppression target.
 - Prefer raw message and explicitly trusted fields over processed fields when the normalized conflict report says fields disagree.
 - Do not assume `src` means attacker or `dst` means victim. Validate by source type, event meaning, network direction, and business asset ownership.
-- If raw message is missing and only processed fields remain, lower confidence and ask for review.
+- If raw message is missing, use the adapter-selected structured fallback at its declared trust level. Missing raw text alone does not force lower confidence or human review when reviewed structured semantics are sufficient.
 
 ## Knowledge Boundary
 
 - Keep role-assignment principles generic. Do not embed customer-specific source/destination field names, internal network ranges, internal business units, or vendor-specific direction rules as universal truth.
 - Customer-specific direction fixes and environment exceptions belong in tenant memory, field-trust policy, or normalizer tests.
-- If a customer adapter provides role candidates, treat them as evidence with confidence, not as final truth.
+- If a customer adapter declares an exact session or role semantic, accept that scoped fact. Treat broader role candidates as evidence for attacker/victim adjudication rather than silently promoting them beyond the adapter contract.
 
 ## Output
 
@@ -41,7 +41,7 @@ Return a role assignment summary:
 2. Reconstruct the event meaning from source type and behavior: connection attempt, inbound exploit, outbound callback, internal lateral movement, scan, authentication, file/process event, or proxy observation.
 3. Compare raw evidence, normalized entities, adapter role candidates, field trust, conflict report, and read-only asset evidence.
 4. Assign attacker/victim/affected asset/relay/proxy/scanner/response target only when evidence supports it.
-5. Keep role as `unknown` when the same entity has competing meanings or when raw evidence is missing.
+5. Keep role as `unknown` only when a material conflict or missing high-value role fact prevents a defensible assignment; raw-message absence alone is not enough when trusted structured fallback resolves the role.
 
 ## Conflict Handling
 
@@ -51,4 +51,4 @@ Return a role assignment summary:
 - For internal-to-internal events, avoid assuming both sides are equally risky; evaluate initiating behavior, target role, authentication, and host context.
 - For outbound callbacks, the internal asset is often affected, while the external endpoint may be IOC or C2; still keep confidence explicit.
 
-When role assignment is unresolved, still state the best current interpretation and any action-specific target candidate with confidence and gaps, but keep it tentative, require review, and never treat the proposal as automated-response authority.
+When role assignment is unresolved, still state the best current interpretation and any action-specific target candidate with confidence and gaps. An actual unresolved core role may require review, but optional enrichment absence alone does not. Never treat the proposal as automated-response authority.

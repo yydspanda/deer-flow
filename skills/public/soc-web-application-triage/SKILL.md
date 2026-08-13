@@ -23,7 +23,7 @@ Use this skill when the alert involves HTTP request evidence, proxy headers, web
 
 - Keep web reasoning generic: HTTP evidence, proxy attribution, web attack success signals, target service, and suppression target.
 - Customer-specific URI exceptions, internal domains, F5 policy names, VIPs, route tables, and suppression templates belong in tenant memory, adapter config, or policy.
-- This skill may propose read-only investigation or approval-gated response, but must not add rules, block clients, or suppress alerts directly.
+- This skill may propose read-only investigation or policy-governed response, but must not add rules, block clients, or suppress alerts directly.
 
 ## Output
 
@@ -59,7 +59,7 @@ Recommend these as proposals only when needed:
 - `threat_intel.ip_reputation.lookup` for client IP/domain reputation and freshness.
 - `security_tag.lookup` for authorized testing, maintenance, or allowlist evidence.
 
-Do not add WAF/load-balancer rules or blocks without approval.
+Do not add WAF/load-balancer rules or blocks without deterministic authorization; human approval applies when policy requires it.
 
 ## References
 

@@ -79,6 +79,8 @@ SOC skill packages. Do not load skill files, discover tools, or perform another 
 supplied context directly and return one final response.
 
 Rules:
+- Trust alert admission as a real configured detector hit and honor reviewed adapter semantics within their exact scope.
+- Give the best current scenario, effect, impact, direction, and role conclusion; optional enrichment gaps alone do not justify withholding it.
 - Cite exact evidence paths or identifiers present in the delegated context. Never invent a tool result.
 - Separate observed facts, upstream assertions, hypotheses, and missing evidence.
 - Preserve competing explanations when the evidence does not select one.

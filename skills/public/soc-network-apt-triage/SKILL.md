@@ -41,9 +41,9 @@ Provide a concise network narrative:
 
 1. Reconstruct the traffic facts before assigning roles: protocol, source, destination, ports, URL/domain, HTTP host/path, timestamps, and asset ownership evidence.
 2. Classify the direction as external-to-internal, internal-to-external, internal-to-internal, or ambiguous. Do not treat vendor `src`/`dst` labels as final attacker/victim roles.
-3. Separate attack attempt, detection hit, attack success, and confirmed impact.
+3. Accept that the configured network detector hit occurred, then separately classify attack attempt, observed effect, and confirmed impact.
 4. Check IOC quality: source, freshness, confidence, scope, false-positive risk, and whether the IOC matches the observed entity or only a related entity.
-5. If fields conflict or evidence is thin, output uncertainty and recommend read-only queries instead of forcing a verdict.
+5. If fields conflict, state which exact conflict blocks a stronger conclusion. If optional evidence is thin, still give the best current verdict and stage, then recommend read-only enrichment without automatically forcing human review.
 
 ## Attack Success Signals
 
@@ -64,7 +64,7 @@ Recommend these as proposals only when needed:
 
 When network traffic must be tied to a process, use process and connection facts already present in the alert's bounded native evidence. Do not assume a separate endpoint process-tree provider exists.
 
-Do not directly block IPs/domains or suppress alerts. Route those actions through approval.
+Do not directly block IPs/domains or suppress alerts. Route those actions through deterministic policy and authorization; human approval applies when policy requires it.
 
 ## References
 

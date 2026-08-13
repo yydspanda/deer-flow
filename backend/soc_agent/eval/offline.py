@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from soc_agent.contracts import (
+    AnalysisOutputQualityStatus,
     AnalysisRun,
     AnalysisRunStatus,
     DecisionEvidenceState,
@@ -191,6 +192,8 @@ def _sample_result(*, sample_id: str, path: str, stub_run: AnalysisRun, llm_run:
     stub_needs_review = _needs_review(stub_run)
     llm_needs_review = _needs_review(llm_run)
     analyze_step = _find_step(llm_run, "analyze_llm")
+    output_quality = llm_run.analysis_output_quality
+    parse_success = analyze_step is not None and analyze_step.status is PipelineStepStatus.SUCCESS and (output_quality is None or output_quality.status is not AnalysisOutputQualityStatus.DETERMINISTIC_FALLBACK)
     grounding = llm_run.analysis_evidence_grounding
     primary_scenario = next(
         (assessment for assessment in (llm_run.analysis.scenario_assessments if llm_run.analysis is not None else []) if assessment.is_primary),
@@ -219,7 +222,7 @@ def _sample_result(*, sample_id: str, path: str, stub_run: AnalysisRun, llm_run:
         decision_review_reasons=list(llm_run.decision.review_reasons) if llm_run.decision is not None else [],
         scenario_assessment_count=len(llm_run.analysis.scenario_assessments) if llm_run.analysis is not None else 0,
         primary_scenario_key=primary_scenario.scenario_key if primary_scenario is not None else None,
-        parse_success=analyze_step is not None and analyze_step.status is PipelineStepStatus.SUCCESS,
+        parse_success=parse_success,
         repair_applied=bool(analyze_step and analyze_step.metadata.get("repair_applied")),
         parser_version=str(analyze_step.metadata["parser_version"]) if analyze_step and "parser_version" in analyze_step.metadata else None,
         prompt_version=llm_run.prompt_version,
@@ -235,10 +238,18 @@ def _report(results: list[OfflineEvalSampleResult]) -> OfflineEvalReport:
     return OfflineEvalReport(
         sample_count=len(results),
         stub_success_count=sum(result.stub_status in {AnalysisRunStatus.SUCCESS, AnalysisRunStatus.NEEDS_REVIEW} for result in results),
-        llm_success_count=sum(result.llm_status in {AnalysisRunStatus.SUCCESS, AnalysisRunStatus.NEEDS_REVIEW} for result in results),
+        llm_success_count=sum(
+            result.parse_success
+            and result.llm_status
+            in {
+                AnalysisRunStatus.SUCCESS,
+                AnalysisRunStatus.NEEDS_REVIEW,
+            }
+            for result in results
+        ),
         parse_success_count=sum(result.parse_success for result in results),
         repair_count=sum(result.repair_applied for result in results),
-        failed_count=sum(result.llm_status is AnalysisRunStatus.FAILED for result in results),
+        failed_count=sum(result.llm_status is AnalysisRunStatus.FAILED or not result.parse_success for result in results),
         verdict_diff_count=sum(result.verdict_changed for result in results),
         needs_review_diff_count=sum(result.needs_review_changed for result in results),
         llm_needs_review_count=sum(result.llm_needs_review is True for result in results),
@@ -284,4 +295,6 @@ def _run_error(run: AnalysisRun) -> str | None:
     for step in reversed(run.steps):
         if step.error:
             return step.error
+    if run.analysis_output_quality is not None and run.analysis_output_quality.status is AnalysisOutputQualityStatus.DETERMINISTIC_FALLBACK:
+        return "model output was rejected and Runtime used deterministic fallback"
     return None

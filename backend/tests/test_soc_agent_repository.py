@@ -17,6 +17,7 @@ from soc_agent.contracts import (
     CorrectionCommand,
     CorrelationQuery,
     DecisionConfidenceSource,
+    DecisionReviewReason,
     InvestigationEvidence,
     ReviewQueueStatus,
     RuntimeFailureKind,
@@ -523,7 +524,10 @@ def test_sqlalchemy_alert_repository_persists_review_queue_items() -> None:
     assert item.alert_id == "2026494"
     assert item.status == ReviewQueueStatus.OPEN
     assert item.reason == "uncertain_verdict"
-    assert any(reason.value == "confidence_not_calibrated" for reason in item.review_reasons)
+    assert item.review_reasons == [
+        DecisionReviewReason.UNCERTAIN_VERDICT,
+        DecisionReviewReason.STUB_ANALYZER,
+    ]
     assert item.priority.value == "high"
     assert item.rule_code == "RPAADM_002635"
     assert "ip:30.180.248.178" in item.entity_keys

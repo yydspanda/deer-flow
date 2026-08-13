@@ -25,6 +25,12 @@ from soc_agent.domain.scenarios import (
     finding_conclusion as _finding_conclusion,
 )
 from soc_agent.domain.scenarios import (
+    finding_recommended_action as _finding_recommended_action,
+)
+from soc_agent.domain.scenarios import (
+    finding_recommended_queue as _finding_recommended_queue,
+)
+from soc_agent.domain.scenarios import (
     scenario_findings as _scenario_findings,
 )
 
@@ -105,11 +111,11 @@ class _AptDomainTriageHandler:
                 gaps=limitations,
             ),
             current_conclusion=_finding_conclusion(
-                "当前结论：APT/network 告警需要结合原始方向、威胁情报、授权标签和历史反馈复核；不建议仅凭上游攻击方向字段自动处置。",
+                "当前结论：APT/network 告警已结合当前原始方向、威胁情报、授权标签和历史反馈形成 domain finding；可选增强缺失不阻止 Runtime 当前裁决，也不建议仅凭未评审的攻击方向字段自动处置。",
                 risk_level=severity,
                 confidence=confidence,
-                recommended_action="manual_review",
-                recommended_queue="network_review",
+                recommended_action=_finding_recommended_action(request),
+                recommended_queue=_finding_recommended_queue(request, "network_review"),
                 rationale=[
                     "APT/network 告警可能存在攻击方向或角色冲突。",
                     "威胁情报和授权标签只能作为证据输入，不能单独决定 verdict。",
@@ -169,8 +175,8 @@ class _EdrDomainTriageHandler:
                 "当前结论：EDR 告警直接使用原始告警携带的进程、命令行、账号、文件和网络事实，并结合历史相似处置与 memory 判断；不依赖额外进程树查询。",
                 risk_level=severity,
                 confidence=confidence,
-                recommended_action="manual_review",
-                recommended_queue="endpoint_review",
+                recommended_action=_finding_recommended_action(request),
+                recommended_queue=_finding_recommended_queue(request, "endpoint_review"),
                 rationale=[
                     "原始 EDR/HIDS 告警中的进程树和命令行仍是 endpoint 场景的核心证据。",
                     "历史相似处置和 confirmed memory 应作为常规研判输入，而不是工具缺失后的降级替代。",
@@ -181,13 +187,13 @@ class _EdrDomainTriageHandler:
             skill_names=skill_names,
             recommendations=[
                 "Review suspicious parent-child process chain and remote network connections.",
-                "If containment is needed, generate a high-risk action proposal and send it through approval.",
+                "If containment is needed, generate a high-risk action proposal and send it through deterministic policy authorization; require approval only when that policy says so.",
             ],
             limitations=limitations,
             human_checklist=[
                 "确认父进程、子进程、命令行和执行账号是否符合业务预期。",
                 "核对同主机、同用户、同 rule 的历史相似预警处置结论。",
-                "若需要隔离或封禁，先生成高风险处置 proposal 并走审批。",
+                "若需要隔离或封禁，先生成高风险处置 proposal 并进入确定性授权策略；仅在策略要求时走人工审批。",
             ],
             metadata={
                 "attached_investigation_evidence_count": len(attached_evidence),
@@ -233,11 +239,11 @@ class _HidsDomainTriageHandler:
                 gaps=limitations,
             ),
             current_conclusion=_finding_conclusion(
-                "当前结论：HIDS 主机事件直接使用原始告警携带的事件、进程和登录账号，结合维护标签、历史相似处置和 memory 复核；不依赖额外主机上下文查询。",
+                "当前结论：HIDS 主机事件直接使用原始告警携带的事件、进程和登录账号，结合维护标签、历史相似处置和 memory 研判；不依赖额外主机上下文查询。",
                 risk_level=severity,
                 confidence=confidence,
-                recommended_action="manual_review",
-                recommended_queue="host_review",
+                recommended_action=_finding_recommended_action(request),
+                recommended_queue=_finding_recommended_queue(request, "host_review"),
                 rationale=[
                     "HIDS 事件常受授权运维、批处理和主机上下文影响。",
                     "授权标签只能形成 benign candidate，仍需分析师确认后才能沉淀 memory。",
@@ -282,11 +288,11 @@ class _GenericDomainTriageHandler:
                 gaps=["No specific domain handler matched this alert."],
             ),
             current_conclusion=_finding_conclusion(
-                "当前结论：未匹配到专用领域 handler，但仍应基于 raw log、历史相似预警、外部处置反馈和 confirmed memory 给出当前复核结论。",
+                "当前结论：未匹配到专用领域 handler，但仍应基于 raw log、历史相似预警、外部处置反馈和 confirmed memory 给出当前研判结论；handler 缺失本身不创建复核。",
                 risk_level=SocDomainFindingSeverity.INFO,
                 confidence=0.3,
-                recommended_action="manual_review",
-                recommended_queue="soc_review",
+                recommended_action=_finding_recommended_action(request),
+                recommended_queue=_finding_recommended_queue(request, "soc_review"),
                 rationale=["未知来源不代表无法研判；先使用通用证据融合，再决定是否补专用 handler。"],
             ),
             evidence_refs=_merge_refs(

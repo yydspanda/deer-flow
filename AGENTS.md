@@ -240,7 +240,7 @@ Current SOC direction:
   adapter contract (`A-*`), confirmed memory (`M-*`), governed context (`C-*`), and tool result
   (`T-*`). `evidence[]` may contain only exact `E-*` path/value pairs. Security interpretation belongs
   in explicit `R-*` reasoning items with declared basis and references; open-vocabulary scenario
-  assessments cite both `E-*` and `R-*`. `soc-analysis-v20` / `soc-analysis-json-parser-v18` reject
+  assessments cite both `E-*` and `R-*`. `soc-analysis-v21` / `soc-analysis-json-parser-v18` reject
   unresolved or ambiguous references. The parser may perform only auditable mechanical repairs:
   restore a missing top-level `soc.analysis_model_output.v1` version only when the complete field set
   is unambiguously the compact model-owned contract, map
@@ -280,6 +280,17 @@ Current SOC direction:
   ambiguous direction, proxy/NAT/forwarding leg, or same-observation contradiction. It never implies
   attacker/victim identity, compromise, verdict, response target, or action authority. Generic Runtime
   code must not infer this contract from names such as `source_ip`, `sip`, `src`, or `client_ip`.
+- Alert admission is a trusted scoped fact: the configured upstream rule/detector/model matched and
+  emitted the alert. Runtime and the bounded analyzer must still decide the current scenario,
+  direction, semantic roles, attempt/effect/impact stage, verdict and recommendation. Optional
+  CMDB/PCAP/TI/endpoint/history enrichment may improve scope or response targeting, but its absence
+  alone must not erase the detector hit, suppress a current conclusion, or force ReviewQueue.
+  `soc.decision_policy.v6` creates review work only for explicit `unknown|needs_review` conclusions or
+  structural blockers such as degraded output/schema, high-value gaps, fact conflicts, Grounding
+  failures, or failed role verification. `suspicious`, `false_positive`, raw model confidence and
+  uncalibrated confidence are diagnostic values, not standalone review reasons. Base Runtime still
+  sets `automation_allowed=false`; governed post-Runtime policy separately authorizes and executes
+  actions, with human approval only where that policy requires it.
 - Conditional second-pass role verification is a default-off Runtime node controlled by
   `SOC_ROLE_VERIFIER_ENABLED`. Trigger policy v2 reviews only one coherent network-direction claim
   plus non-placeholder attacker/victim claims. Inferred/tentative state, generic evidence gaps,
@@ -290,7 +301,7 @@ Current SOC direction:
   the verifier never sees first-pass rationale or confidence. It must independently return
   `supported|challenged|unresolved` with exact references and an explicit counterevidence assessment.
   `challenged`, `unresolved`, or provider/parser
-  failure adds a fail-closed Decision review guard under `soc.decision_policy.v5`; confirmation never
+  failure adds a fail-closed Decision review guard under `soc.decision_policy.v6`; confirmation never
   authorizes an action or removes another review reason. `SOC_ROLE_VERIFIER_MODEL` may select a stronger
   configured model; otherwise the primary model is reused and that lineage is explicit. Each provider
   invocation has its own ordered `AnalysisRequestJournal`, while `request_journal` remains the active/
@@ -534,7 +545,7 @@ Current SOC direction:
   while `EvidenceCoverageReport` exposes parsed fields that were used, sanitized, omitted, or left
   outside canonical/fact/scenario mappings.
 - `MessageSchemaObservation.recognized` means the outer message parser succeeded; nested decode/repair
-  warnings do not turn the whole message schema into degraded. Under `soc.decision_policy.v5`, encoded
+  warnings do not turn the whole message schema into degraded. Under `soc.decision_policy.v6`, encoded
   compaction alone is informational, routine bounded omission/truncation without a high-value gap is
   at most partial, degraded/unsupported outer schema or high-value/ungrounded evidence is degraded,
   and fact conflicts remain conflicted. The old truncation review reason is historical compatibility.

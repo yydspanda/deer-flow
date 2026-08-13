@@ -9,6 +9,7 @@ from typing import Any
 from soc_agent.contracts import (
     AlertInput,
     AnalysisRun,
+    AnalysisRunStatus,
     SocDomainFinding,
     SocDomainFindingDisposition,
     SocDomainFindingSeverity,
@@ -269,11 +270,11 @@ def scenario_findings(request: SocDomainTriageRequest, domain: SocDomainName) ->
                 _scenario_conclusion_summary(scenario_name, confidence, gaps, request),
                 risk_level=severity,
                 confidence=confidence,
-                recommended_action="manual_review",
-                recommended_queue=str(rule["queue"]),
+                recommended_action=finding_recommended_action(request),
+                recommended_queue=finding_recommended_queue(request, str(rule["queue"])),
                 rationale=[
                     "场景识别来自 raw/canonical alert、历史相似预警、外部反馈、confirmed memory 和可用只读证据的证据融合。",
-                    "该 finding 不是最终 operational verdict；高风险动作仍必须走审批。",
+                    "该 finding 不是最终 operational verdict；高风险动作必须进入确定性授权策略，是否人工审批由策略决定。",
                 ],
             ),
             evidence_refs=_scenario_evidence_refs(request),
@@ -281,7 +282,7 @@ def scenario_findings(request: SocDomainTriageRequest, domain: SocDomainName) ->
             recommendations=[
                 "结合历史相似预警、外部处置理由和 confirmed memory 复核当前场景。",
                 "工具证据缺失时不要中止研判；降低置信度并明确证据缺口。",
-                "如需阻断、隔离或封禁，生成高风险 action proposal 并走审批。",
+                "如需阻断、隔离或封禁，生成高风险 action proposal 并进入确定性授权策略。",
             ],
             limitations=gaps,
             human_checklist=list(rule["checklist"]),
@@ -412,7 +413,7 @@ def _scenario_conclusion_summary(
         history_bits.append(f"{request.metadata['relevant_memory_count']} 条 confirmed memory")
     history = "，".join(history_bits) if history_bits else "当前上下文未命中历史/反馈/memory"
     gap_text = "；证据缺口：" + "、".join(gaps) if gaps else "；关键只读证据已在当前上下文中出现"
-    return f"当前结论：{scenario_name}，置信度 {confidence:.2f}；{history}{gap_text}。建议给出人工复核路径，不允许自动执行高风险处置。"
+    return f"当前结论：{scenario_name}，置信度 {confidence:.2f}；{history}{gap_text}。该 Finding 供 Runtime 与策略层继续裁决，本身不授权高风险处置。"
 
 
 def _scenario_gaps(required_routes: tuple[str, ...], action_routes: list[str]) -> list[str]:
@@ -454,8 +455,11 @@ def _unmapped_vendor_scenario_finding(
             _unmapped_vendor_conclusion_summary(vendor_scenarios, confidence, gaps, request),
             risk_level=SocDomainFindingSeverity.MEDIUM,
             confidence=confidence,
-            recommended_action="manual_review",
-            recommended_queue=_default_review_queue_for_domain(domain),
+            recommended_action=finding_recommended_action(request),
+            recommended_queue=finding_recommended_queue(
+                request,
+                _default_review_queue_for_domain(domain),
+            ),
             rationale=[
                 "上游场景提示只能作为候选线索；未映射到内部 taxonomy 前不能作为最终场景结论。",
                 "仍需结合 raw/canonical alert、历史相似预警、外部反馈、confirmed memory 和只读工具证据给出当前研判。",
@@ -464,7 +468,7 @@ def _unmapped_vendor_scenario_finding(
         evidence_refs=_scenario_evidence_refs(request),
         skill_names=_skill_names(request.skill_context),
         recommendations=[
-            "先按当前 domain handler 的基础 finding 完成人工复核，不因场景未映射而中止研判。",
+            "先按当前 domain handler 的基础 finding 继续研判，不因场景未映射而中止或额外创建复核。",
             "核对上游场景名是否只是厂商分类、规则分类或真实攻击场景。",
             "若该场景反复出现且有稳定处置经验，将其沉淀为 capability card、eval fixture 或 pending memory candidate。",
         ],
@@ -515,7 +519,8 @@ def _unmapped_vendor_conclusion_summary(
         history_bits.append(f"{request.metadata['relevant_memory_count']} 条 confirmed memory")
     history = "，".join(history_bits) if history_bits else "当前上下文未命中历史/反馈/memory"
     gap_text = "；证据缺口：" + "、".join(gaps) if gaps else ""
-    return f"当前结论：上游提示未映射场景 {', '.join(vendor_scenarios[:3])}，置信度 {confidence:.2f}；{history}{gap_text}。建议按基础 domain finding 继续复核，并把该场景作为 taxonomy/memory 候选。"
+    route_text = "进入已有人工复核" if _finding_requires_review(request) else "继续 Runtime/策略裁决，不新增人工复核"
+    return f"当前结论：上游提示未映射场景 {', '.join(vendor_scenarios[:3])}，置信度 {confidence:.2f}；{history}{gap_text}。建议按基础 domain finding {route_text}，并把该场景作为 taxonomy/memory 候选。"
 
 
 def _default_review_queue_for_domain(domain: SocDomainName) -> str:
@@ -526,6 +531,29 @@ def _default_review_queue_for_domain(domain: SocDomainName) -> str:
     if domain == SocDomainName.WAF_F5:
         return "web_review"
     return "soc_review"
+
+
+def _finding_requires_review(request: SocDomainTriageRequest) -> bool:
+    if request.run.decision is not None:
+        return request.run.decision.needs_review
+    return request.run.status in {
+        AnalysisRunStatus.NEEDS_REVIEW,
+        AnalysisRunStatus.FAILED,
+        AnalysisRunStatus.INTERRUPTED,
+    }
+
+
+def finding_recommended_action(request: SocDomainTriageRequest) -> str:
+    if _finding_requires_review(request):
+        return "manual_review"
+    return "continue_policy_evaluation"
+
+
+def finding_recommended_queue(
+    request: SocDomainTriageRequest,
+    queue: str,
+) -> str | None:
+    return queue if _finding_requires_review(request) else None
 
 
 def _used_evidence_sources(request: SocDomainTriageRequest) -> list[str]:
@@ -710,6 +738,8 @@ __all__ = [
     "SCENARIO_TAXONOMY_VERSION",
     "evidence_profile_for_request",
     "finding_conclusion",
+    "finding_recommended_action",
+    "finding_recommended_queue",
     "scenario_findings",
     "scenario_taxonomy_keys",
     "scenario_taxonomy_snapshot",

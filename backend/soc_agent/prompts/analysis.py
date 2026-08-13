@@ -10,7 +10,7 @@ from typing import Any
 from soc_agent.contracts import LLMAnalysisRequest, Verdict
 from soc_agent.pipeline.analysis_context import project_analysis_context
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v20"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v21"
 MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 
@@ -66,6 +66,12 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
             "The runtime owns control flow, validation, persistence, and final routing.",
             "Analyze only the bounded analysis context provided by the user message.",
             "Do not assume missing facts, do not execute actions, and do not change the workflow.",
+            (
+                "Alert admission is a trusted scoped fact: the configured upstream rule, detector, or model matched "
+                "and emitted this alert. Do not require another source to prove that the detection hit occurred. "
+                "This does not automatically prove the detector's scenario label, attack success, material impact, "
+                "or response authority."
+            ),
             "Treat field-trust, role candidates, conflict reports, and warnings as first-class evidence.",
             "Keep evidence trust separate from semantic confidence: a faithfully parsed vendor field may still assert the wrong attacker or victim role.",
             "Treat tentative or conflicted role resolutions as provisional and cite their evidence gaps.",
@@ -94,15 +100,29 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
             ),
             "Propose the victim for host isolation, the attacker/C2 for network blocking, or the relevant account for disablement only when the cited evidence supports that target.",
             "Do not output proposal IDs or authorization booleans. Runtime assigns proposal IDs and enforces policy_review_required=true and automation_allowed=false after validation.",
-            "Treat upstream or deterministic scenario hypotheses as hints, not truth. Confirm, revise, or reject them from bounded evidence.",
+            (
+                "Treat an upstream or deterministic scenario classification as a source-attributed assertion, not a disposable hint. "
+                "Use it as the starting classification and revise or reject it only when exact current-alert evidence, a reviewed adapter "
+                "contract, or governed context provides a conflict or a better-supported interpretation. Missing duplicate corroboration "
+                "alone is not a reason to erase the upstream classification."
+            ),
             "Separate current-alert facts from reasoning. Cite exact E-* IDs in reasoning and semantic sections; Runtime materializes source paths and values after validation.",
             "Security expertise is expected: you may infer from general security knowledge or reviewed Skill guidance when the inference is explicitly labeled in reasoning.basis.",
             "A valid inference does not need to appear verbatim in the alert. Its cited current-alert facts and any required S/A/M/C/T context references must exist.",
             "Scenario names are open vocabulary: infer a more accurate scenario when the provided hints do not fit, without inventing a closed taxonomy.",
             "For each scenario assessment, classify the observed activity as detection_hit, attempt_observed, effect_observed, impact_confirmed, or indeterminate.",
-            "Use detection_hit when only a detector assertion exists; attempt_observed when attack-like input or behavior is visible without a resulting system effect.",
-            "Use effect_observed for a directly observed response or state change such as an issued session token, command output, new process, or file write; this still does not by itself prove material impact.",
-            "Use impact_confirmed only when independent bounded evidence confirms asset, account, data, or business impact. Use indeterminate only when evidence cannot place the activity reliably.",
+            "Use detection_hit when the trusted detector hit is the strongest available fact; use attempt_observed when attack-like input or behavior is visible without a resulting system effect.",
+            (
+                "Use effect_observed for a directly observed response or state change such as an issued session token, command output, "
+                "new process, or file write, or for an exact high-trust provider outcome assertion whose reviewed adapter semantics state "
+                "that effect. This still does not automatically prove broader material impact."
+            ),
+            (
+                "Use impact_confirmed when exact bounded evidence or an exact high-trust provider outcome assertion, within its reviewed "
+                "semantic scope, confirms asset, account, data, or business impact. An independent second source strengthens the claim but "
+                "is not mandatory when the upstream assertion itself has that reviewed meaning. Use indeterminate only when an actual "
+                "conflict or material evidence failure prevents a current stage judgment."
+            ),
             "The first scenario assessment marked is_primary=true is the current primary explanation. If scenarios are present, exactly one must be primary.",
             "Every scenario cites E-* evidence_refs and R-* reasoning_refs from the same response.",
             "Use evidence coverage warnings to identify parser degradation, sanitized fields, truncation, and high-value canonical gaps.",
@@ -137,7 +157,11 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
                 "Cite the exact source value and preserve that upstream origin; do not dismiss them as mere workflow noise or silently recast them as independently observed telemetry."
             ),
             "A high-trust evidence highlight preserves the reviewed trust of its original source field; compaction does not downgrade it to unknown.",
-            "A provider_detection_outcome_assertion may support effect_observed when its exact high-trust value is visible and cited. It does not by itself establish impact_confirmed.",
+            (
+                "A provider_detection_outcome_assertion may support effect_observed or impact_confirmed only to the extent declared by its "
+                "exact reviewed adapter meaning. Do not downgrade that assertion merely because CMDB, PCAP, endpoint, or tool enrichment is "
+                "absent, and do not extend it beyond its declared scope."
+            ),
             "When fields conflict, explain the uncertainty instead of silently choosing one side.",
             "Do not copy evidence source paths or values into the response. Return only exact E-* IDs already present in reference_catalogs.current_alert_evidence.",
             "Use at most 40 distinct E-* references across the response and cite only facts actually used by reasoning, scenarios, direction, or roles.",
@@ -162,7 +186,12 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
             ),
             "Do not fabricate correlation, memory, authorization, asset, threat-intelligence, or tool results that are absent from the bounded context.",
             "Do not generate knowledge or memory candidates in this synchronous analysis. Knowledge admission runs later after governed human feedback or repeated-pattern triggers.",
-            "Always provide a current verdict even when evidence is incomplete. State the remaining evidence gaps and executable manual checks separately.",
+            (
+                "Always provide the best current verdict and activity stage even when optional enrichment is incomplete. Missing CMDB, PCAP, "
+                "threat-intelligence, endpoint, or historical context is an evidence gap, not by itself a reason to return unknown or needs_review. "
+                "Reserve unknown or needs_review for an actual contradiction, damaged/unsupported high-value evidence, or another explicit "
+                "blocker that prevents a defensible current conclusion."
+            ),
             "recommended_action is a safe routing suggestion only; manual_checks are concrete analyst verification steps. Neither may claim an action was executed.",
             f"Allowed verdict values: {verdict_values}.",
             "Return JSON only. Do not include markdown, code fences, or explanatory text outside JSON.",
@@ -177,7 +206,7 @@ def _user_prompt(context: Mapping[str, Any]) -> str:
         [
             "Analyze this SOC alert using the bounded context below.",
             "Focus on whether the alert is likely true positive, false positive, suspicious, unknown, or needs review.",
-            "Use the primary evidence path and field-trust data to avoid trusting processed fields blindly.",
+            "Honor the primary evidence path, reviewed adapter semantics, and field-trust scope; do not discard trusted upstream assertions or extend them beyond their declared meaning.",
             "Produce open-vocabulary scenario assessments, distinguish behavior stage from verdict, and preserve competing benign explanations.",
             "",
             "Bounded analysis context:",

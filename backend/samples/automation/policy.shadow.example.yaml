@@ -22,9 +22,9 @@ rules:
       model_names:
         - deepseek-v4-flash
       prompt_versions:
-        - soc-analysis-v12
+        - soc-analysis-v21
       decision_policy_versions:
-        - soc.decision_policy.v5
+        - soc.decision_policy.v6
       minimum_confidence: 0.9
       needs_review: false
     disposition: suppressed

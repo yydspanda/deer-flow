@@ -17,7 +17,7 @@ Use this skill when the alert depends on endpoint evidence such as process trees
 - Process ancestry, suspicious command-line arguments, script interpreters, LOLBins, dropped files, and network callbacks from endpoint processes.
 - Host and user identity: host name, asset id/group, username, src/dst user, user_id, and enterprise account identifiers.
 - Whether the endpoint is the attacker, victim, relay, or simply a scanner/jump host.
-- Whether proposed response requires analyst approval: isolate host, kill process, quarantine file, disable account.
+- Whether a proposed response needs deterministic authorization and, under the active policy, analyst approval: isolate host, kill process, quarantine file, disable account.
 
 ## Knowledge Boundary
 
@@ -29,8 +29,8 @@ Use this skill when the alert depends on endpoint evidence such as process trees
 
 1. Reconstruct the execution chain: process, parent, ancestors, user, host, path, command line, hash, network connections, and timestamp.
 2. Score each dimension separately: path trust, command-line risk, parent/child plausibility, user privilege, file reputation, persistence behavior, and network callback.
-3. Do not ignore an event solely because the path looks trusted. A trusted path with risky arguments, unusual parent process, or privileged user still requires review.
-4. Treat rule names and vendor detection IDs as aliases for a behavior, not as the behavior itself.
+3. Do not ignore an event solely because the path looks trusted. A trusted path with risky arguments, unusual parent process, or privileged user still requires full behavior adjudication.
+4. Trust that the configured rule or vendor detector hit occurred. Treat its name/ID as detection provenance, then use its reviewed adapter meaning and current behavior evidence to decide effect and impact.
 5. If host context or process ancestry is incomplete, recommend read-only evidence collection instead of inventing context.
 
 ## Endpoint And HIDS Indicators
@@ -43,7 +43,7 @@ Benign or lowering indicators:
 
 - Returned authorization evidence, maintenance evidence, known business process context, expected parent process, expected signer/hash, and analyst-confirmed prior handling.
 
-Keep benign indicators as review context unless policy and evidence explicitly support suppression.
+Keep benign indicators as decision context unless policy and evidence explicitly support suppression.
 
 ## Safe Read-Only Next Queries
 

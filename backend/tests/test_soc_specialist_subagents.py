@@ -64,6 +64,8 @@ def test_soc_specialist_profiles_use_deerflow_native_contracts() -> None:
         assert "cannot change a verdict" in profile.system_prompt
         assert "approved bounded runtime guidance" in profile.system_prompt
         assert "Do not load skill files" in profile.system_prompt
+        assert "real configured detector hit" in profile.system_prompt
+        assert "best current scenario, effect, impact" in profile.system_prompt
 
     assert SOC_NETWORK_APT_TRIAGE_SKILL in profiles[SOC_NETWORK_SPECIALIST_NAME].system_prompt
     assert SOC_ENDPOINT_TRIAGE_SKILL in profiles[SOC_ENDPOINT_SPECIALIST_NAME].system_prompt

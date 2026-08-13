@@ -19,23 +19,17 @@ from soc_agent.contracts import (
 )
 from soc_agent.core.validator import validate_decision
 
-SOC_DECISION_POLICY_VERSION = "soc.decision_policy.v5"
-DEFAULT_REVIEW_BELOW = 0.75
+SOC_DECISION_POLICY_VERSION = "soc.decision_policy.v6"
 _INFORMATIONAL_WARNING_PREFIXES = ("bounded evidence compacted one or more encoded spans;",)
 
 
 class SocDecisionPolicy:
     """Turn analyzer output into a guarded, auditable operational decision.
 
-    Analyzer confidence remains an uncalibrated input. Until a separately
-    approved calibration profile is wired into this policy, it can never
-    suppress human review by itself.
+    Analyzer confidence remains an uncalibrated diagnostic input. Review is
+    driven by explicit uncertainty or structural evidence/output blockers,
+    never by the model's raw score or verdict label alone.
     """
-
-    def __init__(self, *, review_below: float = DEFAULT_REVIEW_BELOW) -> None:
-        if not 0.0 <= review_below <= 1.0:
-            raise ValueError("review_below must be within [0, 1]")
-        self._review_below = review_below
 
     def decide(
         self,
@@ -53,7 +47,6 @@ class SocDecisionPolicy:
             request=request,
             grounding=grounding,
             confidence_source=confidence_source,
-            review_below=self._review_below,
             output_quality=output_quality,
             role_verification=role_verification,
         )
@@ -94,7 +87,6 @@ def _review_reasons(
     request: LLMAnalysisRequest,
     grounding: AnalysisEvidenceGroundingReport,
     confidence_source: DecisionConfidenceSource,
-    review_below: float,
     output_quality: AnalysisOutputQuality | None,
     role_verification: RoleAdjudicationVerificationResult | None,
 ) -> list[DecisionReviewReason]:
@@ -104,9 +96,7 @@ def _review_reasons(
         AnalysisOutputQualityStatus.DETERMINISTIC_FALLBACK,
     }:
         reasons.append(DecisionReviewReason.ANALYSIS_OUTPUT_DEGRADED)
-    if analysis.verdict is Verdict.FALSE_POSITIVE:
-        reasons.append(DecisionReviewReason.FALSE_POSITIVE_REQUIRES_CONFIRMATION)
-    if analysis.verdict in {Verdict.SUSPICIOUS, Verdict.UNKNOWN, Verdict.NEEDS_REVIEW}:
+    if analysis.verdict in {Verdict.UNKNOWN, Verdict.NEEDS_REVIEW}:
         reasons.append(DecisionReviewReason.UNCERTAIN_VERDICT)
 
     if request.fact_reconstruction.conflict_reports:
@@ -132,9 +122,6 @@ def _review_reasons(
             reasons.append(DecisionReviewReason.ROLE_VERIFICATION_UNRESOLVED)
         elif role_verification.status is RoleVerificationStatus.UNAVAILABLE:
             reasons.append(DecisionReviewReason.ROLE_VERIFIER_UNAVAILABLE)
-    if analysis.confidence < review_below:
-        reasons.append(DecisionReviewReason.RAW_CONFIDENCE_BELOW_THRESHOLD)
-    reasons.append(DecisionReviewReason.CONFIDENCE_NOT_CALIBRATED)
     if confidence_source is DecisionConfidenceSource.STUB_HEURISTIC:
         reasons.append(DecisionReviewReason.STUB_ANALYZER)
     return list(dict.fromkeys(reasons))
@@ -192,4 +179,4 @@ def _has_partial_evidence(request: LLMAnalysisRequest) -> bool:
     return any(not warning.startswith(_INFORMATIONAL_WARNING_PREFIXES) for warning in request.warnings)
 
 
-__all__ = ["DEFAULT_REVIEW_BELOW", "SOC_DECISION_POLICY_VERSION", "SocDecisionPolicy"]
+__all__ = ["SOC_DECISION_POLICY_VERSION", "SocDecisionPolicy"]

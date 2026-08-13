@@ -101,7 +101,7 @@ def test_offline_eval_default_replays_stub_result_through_llm_parser() -> None:
     assert report.parse_success_count == 2
     assert report.verdict_diff_count == 0
     assert report.repair_count == 0
-    assert report.llm_needs_review_count == 2
+    assert report.llm_needs_review_count == 0
     assert report.grounded_evidence_count + report.ungrounded_evidence_count > 0
     assert report.scenario_assessment_count == 2
     assert {result.model_name for result in report.results} == {"stub-replay"}
@@ -152,7 +152,7 @@ def test_offline_eval_records_parse_failure_without_crashing_batch() -> None:
     assert report.failed_count == 1
 
     result = report.results[0]
-    assert result.llm_status == AnalysisRunStatus.FAILED
+    assert result.llm_status == AnalysisRunStatus.NEEDS_REVIEW
     assert result.parse_success is False
     assert result.error is not None
 
@@ -214,5 +214,5 @@ def test_cli_eval_offline_outputs_report(capsys) -> None:
     assert data["schema_version"] == "soc.offline_eval_report.v2"
     assert data["sample_count"] == 1
     assert data["parse_success_count"] == 1
-    assert data["llm_needs_review_count"] == 1
+    assert data["llm_needs_review_count"] == 0
     assert "decision_review_reasons" in data["results"][0]

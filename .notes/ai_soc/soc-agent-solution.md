@@ -602,7 +602,7 @@ The system must handle vendor differences without turning the core schema into a
     Evidence quality is classified rather than collapsed: encoded-span compaction is informational;
     routine bounded omissions/truncation with no high-value gap produce at most `partial`; an explicit
     degraded/unsupported outer schema, high-value gap, or ungrounded analyzer citation produces
-    `degraded`; fact conflicts retain the stronger `conflicted` state. `soc.decision_policy.v5` no
+    `degraded`; fact conflicts retain the stronger `conflicted` state. `soc.decision_policy.v6` no
     longer emits `truncated_analysis_evidence` for ordinary budget pressure.
     Empty/null source leaves do not create false mapping gaps; a non-empty unknown high-value field
     remains an explicit maintenance issue. The NDR/HIDS corpus audit evaluates each non-empty parsed
@@ -781,16 +781,38 @@ Rules:
   `is_banned` does not by itself prove exploit execution, command success, file creation, compromise,
   or completed response. A positive outcome claim without outcome-specific evidence forces review as
   `unproven_outcome_claim`; explicit uncertainty such as "cannot confirm success" is not such a claim.
+- Alert admission is trusted detection provenance: the configured upstream rule/detector/model
+  matched and emitted this alert. Runtime and the bounded analyzer must still give the best current
+  scenario, direction, attacker/victim roles, attempt/effect/impact stage, verdict and recommendation.
+  Optional CMDB/PCAP/TI/endpoint/history/memory enrichment improves scope, ownership and response
+  targeting; absence alone does not erase the hit, block a current conclusion or create ReviewQueue.
 - `SocDecisionPolicy` is the only Runtime component allowed to translate validated analysis into a
-  detection `Decision`. The current policy deliberately marks stub and live-LLM confidence as
-  uncalibrated and sends every such decision to human review until a labeled, approved calibration
-  profile is explicitly integrated and replay-tested.
+  detection `Decision`. Under `soc.decision_policy.v6`, raw LLM confidence remains explicitly
+  uncalibrated and is retained for audit/evaluation, but low or uncalibrated confidence is not itself
+  a review blocker. `suspicious` and `false_positive` are complete current conclusions rather than
+  automatic ReviewQueue reasons.
+- Review is reserved for explicit `unknown|needs_review` verdicts and actual reliability blockers:
+  degraded/fallback analyzer output, degraded/unsupported outer schema, high-value evidence gaps,
+  fact conflicts, ungrounded evidence/reasoning, unsupported outcome claims, or
+  challenged/unresolved/unavailable role verification. The deterministic stub remains a review
+  blocker because it is not the production reasoning node.
 - Final lifecycle disposition is a separate deterministic reconciliation boundary. It may consume
   the detection decision plus `AuthorizationMatchResult`, but neither an LLM statement nor a memory
   match may directly close or suppress an alert.
-- False-positive decisions require confirmation even when the raw score is high. Review reasons are
-  structured (`confidence_not_calibrated`, `fact_conflict`, `high_value_evidence_gap`, and so on),
-  persisted in the summary/queue/audit trail, and must not be replaced by one free-text reason.
+- Review reasons remain structured (`fact_conflict`, `high_value_evidence_gap`,
+  `analysis_output_degraded`, and so on), persisted in the summary/queue/audit trail, and must not be
+  replaced by one free-text reason. Historical `confidence_not_calibrated`,
+  `raw_confidence_below_threshold`, and `false_positive_requires_confirmation` enum values remain
+  readable for old records but are not emitted by v6 merely from a score or verdict label.
+- Domain/scenario findings are advisory projections, not a second review policy. When the immutable
+  Base Decision has no review blocker, their `recommended_action` is
+  `continue_policy_evaluation` and `recommended_queue` is empty; when Base Decision already requires
+  review they may point to that existing domain queue. A missing taxonomy mapping, tool result, or
+  optional enrichment must not independently manufacture analyst work.
+- Offline evaluation distinguishes model-output acceptance from Runtime survival. A deterministic
+  fallback keeps the alert pipeline alive and reviewable, but `parse_success=false` and it is excluded
+  from `llm_success_count`; `stub-replay` remains a named parser/replay baseline rather than evidence
+  of production LLM quality.
 - Successful mock evidence is visible for demo and audit only. Mock, denied, or failed action results
   cannot satisfy scenario tool requirements, raise domain/scenario confidence, or change verdict.
 
@@ -862,7 +884,7 @@ appear literally in the alert, while still making every input fact and governed 
   proxy/NAT/forwarding leg 或同 observation 冲突仍可挑战它；attacker/victim、compromise 和 response
   target 继续独立裁决。其他供应商必须由自己的 Adapter 显式声明，通用 Runtime 不按字段名猜测。
 - `confirmed` 只说明该窄检查未发现反证，不能消除其他 review reason，也不能授权处置；
-  `challenged / unresolved / unavailable` 由 `soc.decision_policy.v5` 分别转为 conflicted/degraded
+  `challenged / unresolved / unavailable` 由 `soc.decision_policy.v6` 分别转为 conflicted/degraded
   证据状态和强制复核。第一轮 `AnalysisResult.v4` 始终保持不可变。
 - 每次 Provider 调用都写独立、有序、无敏感值的 `AnalysisRequestJournal`；兼容字段
   `request_journal` 指向当前/最后一次调用，用于进程丢失恢复，完整调用序列保存在
@@ -880,7 +902,7 @@ export SOC_ROLE_VERIFIER_MODEL=deepseek-v4-pro
 export SOC_ROLE_VERIFIER_MIN_CONFIDENCE=0.35
 ```
 
-`soc-analysis-v20` requires the model to select at most 40 exact catalog facts and place all security
+`soc-analysis-v21` requires the model to select at most 40 exact catalog facts and place all security
 interpretation in `reasoning[]`. `soc-analysis-json-parser-v18` validates the strict v4 schema and
 may apply only semantics-free, logged normalization: restore a missing top-level compact-output
 version only when its complete field set is unambiguous; recover an

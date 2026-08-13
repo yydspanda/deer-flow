@@ -53,6 +53,35 @@ def test_domain_triage_preserves_unmapped_vendor_scenario_hint() -> None:
     assert finding.metadata["taxonomy_candidate"] is True
 
 
+def test_domain_finding_does_not_invent_review_for_successful_runtime() -> None:
+    alert = AlertInput(
+        alert_id="ALT-SUCCESSFUL-GENERIC",
+        source=AlertSourceRef(
+            source_type=AlertSourceType.SIEM,
+            vendor="vendor-a",
+        ),
+        detection=DetectionRuleRef(rule_name="Reviewed generic detection"),
+        raw={"message": "reviewed detector event"},
+    )
+    run = AnalysisRun(
+        run_id="RUN-SUCCESSFUL-GENERIC",
+        alert_id=alert.alert_id,
+        status=AnalysisRunStatus.SUCCESS,
+        input_payload=alert.model_dump(mode="json"),
+    )
+
+    result = SocDomainTriageService().triage(
+        SocDomainTriageRequest(
+            run=run,
+            domain=SocDomainName.GENERIC,
+        )
+    )
+
+    assert result.findings
+    assert all(finding.current_conclusion.recommended_action == "continue_policy_evaluation" for finding in result.findings)
+    assert all(finding.current_conclusion.recommended_queue is None for finding in result.findings)
+
+
 def test_domain_triage_uses_internal_scenario_when_keyword_matches() -> None:
     alert = AlertInput(
         alert_id="ALT-REVERSE-SHELL",

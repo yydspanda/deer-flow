@@ -39,8 +39,13 @@ def test_analysis_prompt_uses_bounded_llm_request_for_pingan_apt() -> None:
     assert "does not reveal the hidden bytes" in prompt.system
     assert "provider_detection_outcome_assertion" in prompt.system
     assert "role_coherence" in prompt.system
+    assert "Alert admission is a trusted scoped fact" in prompt.system
+    assert "Do not require another source to prove that the detection hit occurred" in prompt.system
     assert "Missing duplicate PCAP" in prompt.system
     assert "MUST NOT request PCAP" in prompt.system
+    assert "Missing CMDB, PCAP" in prompt.system
+    assert "not by itself a reason to return unknown or needs_review" in prompt.system
+    assert "An independent second source strengthens the claim but is not mandatory" in prompt.system
     assert "Do not copy evidence source paths or values" in prompt.system
     assert "evidence" not in prompt.response_schema
     assert "knowledge_candidates" not in prompt.response_schema
@@ -53,6 +58,7 @@ def test_analysis_prompt_uses_bounded_llm_request_for_pingan_apt() -> None:
     assert prompt.context["skill_context"]["selected_skills"]
     assert prompt.context["skill_context"]["total_token_budget"] > 0
     assert "skill_context" in prompt.user
+    assert "do not discard trusted upstream assertions" in prompt.user
 
 
 def test_analysis_prompt_projects_only_selected_low_trust_structured_fallback() -> None:

@@ -53,6 +53,9 @@ def test_soc_lead_agent_profile_uses_deerflow_custom_agent_shape() -> None:
     assert SOC_ASSET_EXTRACTION_SKILL in profile.skills
     assert "DeerFlow custom agent" in profile.soul
     assert "Do not invent a second SOC agent runtime" in profile.soul
+    assert "real rule/model hit" in profile.soul
+    assert "best current risk, effect, and impact conclusion" in profile.soul
+    assert "deterministic policy authorization" in profile.soul
     assert "asset.locate" in profile.soul
     assert profile.tool_groups is None
 
@@ -274,7 +277,7 @@ def test_skill_context_compacts_selected_skill_metadata() -> None:
     assert endpoint_item.guidance_source == "references/runtime-guidance.md"
     assert endpoint_item.estimated_token_count <= endpoint_item.token_budget
     assert endpoint_item.token_budget == 240
-    assert "Reconstruct endpoint behavior" in endpoint_item.guidance
+    assert "Trust that the configured endpoint detector hit occurred" in endpoint_item.guidance
     assert context.total_token_budget == 240 * len(context.selected_skills)
     assert context.total_estimated_token_count == sum(item.estimated_token_count for item in context.selected_skills)
 
