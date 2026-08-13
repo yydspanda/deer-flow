@@ -1,0 +1,137 @@
+{
+  "schema_version": "soc.validation.e2e_alert_cohort_cases.v1",
+  "cohort_id": "pingan-e2e-twenty-output-contract-v1",
+  "description": "Twenty complete PingAn alerts selected to validate compact model output, Runtime hydration, and bounded retry cost across all observed topics.",
+  "excluded": [
+    {
+      "alert_id": "1965452",
+      "reason": "known_input_gap: upstream NDR evidence is unavailable"
+    },
+    {
+      "alert_id": "1965795",
+      "reason": "known_input_gap: upstream EDR evidence is unavailable"
+    }
+  ],
+  "cases": [
+    {
+      "alert_id": "1965802",
+      "expected_topic": "T_GBD_zeus_data",
+      "expected_source_type": "siem",
+      "purpose": "Trusted structured SIEM fallback and suspicious-email triage"
+    },
+    {
+      "alert_id": "1965794",
+      "expected_topic": "edr-core-xc",
+      "expected_source_type": "edr",
+      "purpose": "Nested EDR process and file reconstruction"
+    },
+    {
+      "alert_id": "1965810",
+      "expected_topic": "leagsoft-edr",
+      "expected_source_type": "edr",
+      "purpose": "Legacy EDR sample and endpoint triage"
+    },
+    {
+      "alert_id": "1966442",
+      "expected_topic": "ptp-nids",
+      "expected_source_type": "nids",
+      "purpose": "NIDS network-session evidence and encoded compaction"
+    },
+    {
+      "alert_id": "1965449",
+      "expected_topic": "sec_guard_apt",
+      "expected_source_type": "ndr",
+      "purpose": "Weak-password web login and Grounding"
+    },
+    {
+      "alert_id": "1971013",
+      "expected_topic": "sec_guard_apt_detail",
+      "expected_source_type": "ndr",
+      "purpose": "Detailed NDR observations and cross-message reconstruction"
+    },
+    {
+      "alert_id": "1965919",
+      "expected_topic": "sec_guard_wb",
+      "expected_source_type": "threat_intel",
+      "purpose": "Threat-intelligence wire observation versus provider role assertions"
+    },
+    {
+      "alert_id": "1965935",
+      "expected_topic": "security_qthids",
+      "expected_source_type": "hids",
+      "purpose": "HIDS process evidence and endpoint scenario triage"
+    },
+    {
+      "alert_id": "2025642",
+      "expected_topic": "sec_guard_apt_detail",
+      "expected_source_type": "ndr",
+      "purpose": "Complete reverse-shell direction and role sample"
+    },
+    {
+      "alert_id": "1980502",
+      "expected_topic": "leagsoft-edr",
+      "expected_source_type": "edr",
+      "purpose": "Complete SAM-dumping endpoint sample"
+    },
+    {
+      "alert_id": "1965891",
+      "expected_topic": "T_GBD_zeus_data",
+      "expected_source_type": "siem",
+      "purpose": "Second structured SIEM fallback shape"
+    },
+    {
+      "alert_id": "1967231",
+      "expected_topic": "edr-core-xc",
+      "expected_source_type": "edr",
+      "purpose": "High-field-count EDR core message"
+    },
+    {
+      "alert_id": "1966874",
+      "expected_topic": "leagsoft-edr",
+      "expected_source_type": "edr",
+      "purpose": "Second legacy EDR message family"
+    },
+    {
+      "alert_id": "1974304",
+      "expected_topic": "ptp-nids",
+      "expected_source_type": "nids",
+      "purpose": "Moderate-size NIDS message projection"
+    },
+    {
+      "alert_id": "1980288",
+      "expected_topic": "ptp-nids",
+      "expected_source_type": "nids",
+      "purpose": "Large NIDS message projection stress case"
+    },
+    {
+      "alert_id": "1967817",
+      "expected_topic": "sec_guard_apt",
+      "expected_source_type": "ndr",
+      "purpose": "NDR sample with damaged nested request payload"
+    },
+    {
+      "alert_id": "1983468",
+      "expected_topic": "sec_guard_apt",
+      "expected_source_type": "ndr",
+      "purpose": "Large NDR evidence projection"
+    },
+    {
+      "alert_id": "1983128",
+      "expected_topic": "sec_guard_apt_detail",
+      "expected_source_type": "ndr",
+      "purpose": "Additional detailed NDR message shape"
+    },
+    {
+      "alert_id": "1973156",
+      "expected_topic": "sec_guard_wb",
+      "expected_source_type": "threat_intel",
+      "purpose": "Second threat-intelligence provider sample"
+    },
+    {
+      "alert_id": "1976810",
+      "expected_topic": "security_qthids",
+      "expected_source_type": "hids",
+      "purpose": "HIDS sample retaining deterministic role conflicts"
+    }
+  ]
+}

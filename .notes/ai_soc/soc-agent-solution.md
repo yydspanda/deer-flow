@@ -489,16 +489,20 @@ The system must handle vendor differences without turning the core schema into a
    not inherit the exception.
 5. The original payload is never replaced: `AlertInput.raw` and `AnalysisRun.input_payload`
    retain every hit log, raw event, message, and platform field for replay and audit.
-6. The first successfully parsed message becomes primary evidence; up to four additional messages
-   become full bounded supplementary evidence. Network, HTTP, file, and process facts remain
-   per-message observations with stable evidence paths; different sessions, HTTP transactions, or
-   process executions are not collapsed into one synthetic conflict. Exact-path
-   `SourceFieldSemantic` entries drive projection priority. High-value values outside the full-message
-   budget enter the generic, size-bounded `BoundedEvidenceHighlight` projection with occurrence count
-   and at most five representative provenance paths. Complete covered paths stay in
-   `EvidenceCoverageReport` rather than consuming Prompt tokens. Sensitive values still obey
-   redacted/full evidence mode. Analysis nodes receive this bounded contract, never the unbounded
-   vendor payload.
+6. The first successfully parsed message remains primary evidence, but supplementary evidence is not
+   selected by a mechanical first-four rule. The vendor-neutral `ObservationCompactor` consumes only
+   canonical network/HTTP/process/file/email observations and produces
+   `EvidenceCompactionReport.v1`: shared stable facts, bounded value-frequency distributions,
+   correlated behavior profiles, occurrence/time ranges, duplicate counts, non-dominant profiles,
+   representative source paths and explicit omission counts. Runtime keeps the dominant profile and
+   rare profiles as at most four full supplementary messages; all other observations remain visible
+   through the compact groups and `BoundedEvidenceHighlight`. A value distribution cannot be
+   recombined into a synthetic event; correlated profiles preserve which varying values occurred
+   together. Network sessions, HTTP transactions and process executions therefore remain distinct
+   audit facts even when their repeated shape is compressed for the model. Exact omission/provenance
+   paths stay in `EvidenceCoverageReport`, while the Prompt receives counts. `AlertInput.raw`, parsed
+   messages, source semantics and complete fact reconstruction are never modified. This mechanism is
+   generic Runtime code; vendor aliases remain confined to the Adapter.
 7. PingAn NIDS maps the observed wire five-tuple (`sip/sport/dip/dport/proto`) into canonical
    source/destination fields and preserves every message as a `NetworkObservationRef`. Sensor
    `alert.source/target` are rule-relative endpoints stored separately on that observation; they are
@@ -679,8 +683,11 @@ flowchart TB
     ADAPTER --> PARSER["🧾 Raw Message Parser<br/>primary + supplementary"]
     PARSER --> CANON["📄 Canonical AlertInput"]
     PARSER --> SCHEMA["🔎 MessageSchemaObservation<br/>status + fingerprint"]
-    PARSER --> BOUNDED["✂️ Bounded Analysis Evidence"]
+    CANON --> COMPACT["🗜️ ObservationCompactor<br/>stable / varying / correlated profiles"]
+    COMPACT --> BOUNDED["✂️ Representative Bounded Evidence<br/>primary + dominant / rare profiles"]
+    PARSER --> BOUNDED
     PARSER --> COVER["📊 EvidenceCoverageReport<br/>used / sanitized / omitted / gap"]
+    COMPACT --> COVER
     SCHEMA --> MONITOR["🛠️ Maintenance Monitor<br/>baseline / drift / coverage"]
     COVER --> MONITOR
     MONITOR --> MAINTDB["🗃️ Baseline + Issue Store"]
@@ -695,6 +702,7 @@ flowchart TB
     BOUNDED --> RUNTIME
     SCHEMA --> RUNTIME
     COVER --> RUNTIME
+    COMPACT --> RUNTIME
     RESOLVE --> RUNTIME
     CONFLICT --> RUNTIME
 ```
@@ -872,9 +880,10 @@ export SOC_ROLE_VERIFIER_MODEL=deepseek-v4-pro
 export SOC_ROLE_VERIFIER_MIN_CONFIDENCE=0.35
 ```
 
-`soc-analysis-v17` requires the model to select at most 40 exact catalog facts and place all security
-interpretation in `reasoning[]`. `soc-analysis-json-parser-v15` validates the strict v4 schema and
-may apply only semantics-free, logged normalization when the relation is already unique: recover an
+`soc-analysis-v19` requires the model to select at most 40 exact catalog facts and place all security
+interpretation in `reasoning[]`. `soc-analysis-json-parser-v17` validates the strict v4 schema and
+may apply only semantics-free, logged normalization: restore a missing top-level compact-output
+version only when its complete field set is unambiguous; recover an
 `E-*` from an exact path/value tuple, materialize an exact catalog fact cited elsewhere, remove an
 exact duplicate, drop an explicit empty context sentinel, or derive a redundant basis label from an
 already explicit valid `S/A/M/C/T` reference. Direction/role items may cite an exact context catalog

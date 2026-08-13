@@ -1114,8 +1114,44 @@ def test_pingan_multiple_messages_are_bounded_as_primary_and_supplementary() -> 
     assert request.primary_evidence is not None
     assert request.primary_evidence.parser_name == "pingan_quoted_kv"
     assert "30.1.1.10" in request.primary_evidence.content
-    assert len(request.supplementary_evidence) == 1
-    assert request.supplementary_evidence[0].source_path.endswith("zeusRawLogs[1].message")
+    assert request.supplementary_evidence == []
+    assert request.evidence_compaction.source_message_count == 2
+    assert request.evidence_compaction.behavior_group_count == 1
+    assert request.evidence_compaction.profile_count == 1
+    assert request.evidence_compaction.duplicate_message_count == 1
+
+
+def test_pingan_compaction_keeps_late_behavior_variant_as_representative() -> None:
+    repeated = 'skyeye|!{"sip":"30.1.1.10","dip":"30.2.2.20","attack_type":"代码执行"}'
+    late_variant = 'skyeye|!{"sip":"30.1.1.10","dip":"30.9.9.90","attack_type":"代码执行"}'
+    payload = _payload(
+        *([repeated] * 9),
+        late_variant,
+        topic="sec_guard_apt",
+        topic_name="SkyEye APT",
+    )
+
+    request = build_analysis_request_for_payload(payload)
+    report = request.evidence_compaction
+
+    assert report.source_message_count == 10
+    assert report.behavior_group_count == 1
+    assert report.profile_count == 2
+    assert report.repeated_shape_message_count == 9
+    assert report.duplicate_message_count == 8
+    assert report.non_dominant_profile_count == 1
+    assert report.high_value_omission_count == 0
+    assert report.groups[0].occurrence_count == 10
+    assert {item.value: item.occurrence_count for variation in report.groups[0].varying_facts if variation.field_path == "network.destination_ip" for item in variation.values} == {
+        "30.2.2.20": 9,
+        "30.9.9.90": 1,
+    }
+    assert [item.source_path for item in request.supplementary_evidence] == ["alert.hitLog[0].zeusRawLogs[9].message"]
+    late_destination_path = "alert.hitLog[0].zeusRawLogs[9].message#parsed.dip"
+    assert late_destination_path in report.represented_field_paths
+    assert late_destination_path in request.evidence_coverage.llm_projected_paths
+    assert late_destination_path not in {item.field_path for item in request.evidence_coverage.omissions}
+    assert any(item.source_path.startswith("evidence_compaction.groups[") and item.value == "30.9.9.90" for item in request.evidence_catalog)
 
 
 def test_pingan_high_value_fields_survive_full_supplementary_message_limit() -> None:
@@ -1254,7 +1290,7 @@ def test_pingan_host_identity_digest_is_not_a_file_hash_or_network_ioc() -> None
     assert alert.entities.file.md5 is None
     assert alert.entities.threat.iocs == []
     semantics = alert.extensions["source_field_semantics"]
-    assert semantics[0]["meaning"] == "host_identity_digest_not_file_hash"
+    assert any(item["meaning"] == "host_identity_digest_not_file_hash" for item in semantics)
 
 
 def test_relative_http_paths_and_filenames_are_not_extracted_as_domains() -> None:

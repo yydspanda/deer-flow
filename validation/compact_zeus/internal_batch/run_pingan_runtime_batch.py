@@ -455,12 +455,25 @@ def _analyze_item(
         if config.persist and config.resume and config.retry_failures
         else None
     )
+    retry_failed_outcome_run_id = (
+        _failed_completed_analysis_run_id(previous_record)
+        if config.persist and config.resume and config.retry_failures
+        else None
+    )
     analysis_context = context
     if retry_of_run_id is not None:
         analysis_context = context.model_copy(
             update={
                 "idempotency_key": (
                     f"{context.idempotency_key}:analysis-retry:{retry_of_run_id}"
+                )
+            }
+        )
+    elif retry_failed_outcome_run_id is not None:
+        analysis_context = context.model_copy(
+            update={
+                "idempotency_key": (
+                    f"{context.idempotency_key}:analysis-retry-outcome:{retry_failed_outcome_run_id}"
                 )
             }
         )
@@ -490,6 +503,8 @@ def _analyze_item(
         }
         if retry_of_run_id is not None:
             execution["analysis_retry_of_run_id"] = retry_of_run_id
+        elif retry_failed_outcome_run_id is not None:
+            execution["analysis_retry_of_run_id"] = retry_failed_outcome_run_id
         return {
             "schema_version": ITEM_SCHEMA_VERSION,
             "outcome": "failed",
@@ -534,6 +549,8 @@ def _analyze_item(
     }
     if retry_of_run_id is not None:
         record["execution"]["analysis_retry_of_run_id"] = retry_of_run_id
+    elif retry_failed_outcome_run_id is not None:
+        record["execution"]["analysis_retry_of_run_id"] = retry_failed_outcome_run_id
     if memory_pattern_service is not None:
         memory_pattern_started = time.monotonic()
         _observe_batch_memory_pattern(
@@ -1127,6 +1144,22 @@ def _failed_analysis_run_id(
     return run_id if isinstance(run_id, str) and run_id else None
 
 
+def _failed_completed_analysis_run_id(
+    previous_record: Mapping[str, Any] | None,
+) -> str | None:
+    """Return a completed base run whose later batch phase failed."""
+
+    if previous_record is None or previous_record.get("outcome") != "failed":
+        return None
+    analysis_run = previous_record.get("analysis_run")
+    if not isinstance(analysis_run, Mapping):
+        return None
+    if analysis_run.get("status") == "failed":
+        return None
+    run_id = analysis_run.get("run_id")
+    return run_id if isinstance(run_id, str) and run_id else None
+
+
 def _validate_resume(
     previous: Mapping[str, Any] | None,
     *,
@@ -1468,8 +1501,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="append",
         default=[],
         help=(
-            "Select one exact alert ID; repeat for an ordered fixed cohort. "
-            "Cannot be combined with --start-index or --limit."
+            "Select one exact alert ID; repeat for an ordered fixed cohort. Cannot be combined with --start-index or --limit."
         ),
     )
     parser.add_argument("--analyzer-mode", choices=["stub", "llm"])
@@ -1525,8 +1557,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--memory-pattern-data-class",
         choices=[item.value for item in MemoryPatternDataClass],
         help=(
-            "Explicitly enable persisted repeated-pattern observations; omitted "
-            "keeps PI-03F3 disabled"
+            "Explicitly enable persisted repeated-pattern observations; omitted keeps PI-03F3 disabled"
         ),
     )
     parser.add_argument(

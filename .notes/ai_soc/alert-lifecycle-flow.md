@@ -291,7 +291,7 @@ flowchart TD
     D --> E["1️⃣ normalize<br/>归一化为 AlertInput"]
     E --> F["2️⃣ entity_extract<br/>抽取 IP / host / user / process / rule"]
     F --> G["3️⃣ fact_reconstruct<br/>重建事实、角色、字段可信度和冲突"]
-    G --> H["4️⃣ build_analysis_input<br/>构造 LLMAnalysisRequest"]
+    G --> H["4️⃣ build_analysis_input<br/>ObservationCompactor + LLMAnalysisRequest.v5"]
     H --> I["5️⃣ skill_context<br/>白名单选择 + Skill-package bounded guidance"]
     I --> RC["6️⃣ reference_catalog<br/>Memory Retrieval v2 + tenant knowledge + E/S/A/M/C/T"]
     RC --> PJ["📝 Pre-provider journal<br/>running + bounded metadata"]
@@ -340,7 +340,7 @@ flowchart TD
 | `normalize` | Convert vendor payload to canonical alert | 把不同供应商、平安 Zeus envelope、EDR/APT/HIDS 原始字段转成统一 `AlertInput`；保留每条 message 的 network/process observation，并用 `SourceFieldSemantic` 阻止供应商占位值进入实体和推理 | `AlertInput`, `NormalizationReport` |
 | `entity_extract` | Extract security entities | 抽取 IP、域名、URL、host、user/UM、process、file、rule_code/rule_name 等实体 | `ExtractedEntities` |
 | `fact_reconstruct` | Rebuild and adjudicate facts | 把厂商字段声明转换为 `RoleClaim`，结合场景假设裁决 source/destination/attacker/victim/impacted asset；只在同一 observation 内判冲突，不把不同请求或不同进程执行压成一条会话；冲突时给暂定结论、证据缺口和核查清单，但不确定 response target | `FactReconstructionResult v2`, `RoleResolution`, `ConflictReport` |
-| `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型；按结构化字段和高价值优先级构造合法 JSON 投影，精确记录 projected/sanitized/omitted path，跨消息保留关键请求和进程证据 | `LLMAnalysisRequest.v4` |
+| `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型；先把全部 typed observations 按行为形状聚合成 stable facts、value distributions 和 correlated profiles，再选择主样本、dominant/rare 代表 Message。完整 raw/parsed/provenance 不变，Prompt 只接收压缩结果和路径计数，异常不会因 first-N 截断丢失 | `LLMAnalysisRequest.v5`, `EvidenceCompactionReport.v1` |
 | `skill_context` | Resolve and project SOC skills | 根据 canonical typed source/entity/conflict 选择 SOC Skills，再从真实 public package 投影受预算约束的 `runtime-guidance.md`；记录选择原因、package/guidance hash 和 token accounting，不注入完整 `SKILL.md` | `SocSkillContext.v2` |
 | `reference_catalog` | Retrieve governed Memory/knowledge and freeze deterministic references | Runtime 通过 `ConfirmedMemoryAnalysisRequestEnricher -> SocMemoryService` 用 vendor-neutral facets 和 v2 type-aware strong-anchor gate 检索，并按 tenant/integration 匹配已评审知识 profile；再从同一模型可见投影生成稳定引用：当前告警原子事实为 `E-*`；Skill/Adapter/Confirmed Memory/Reviewed Context/Tool Result 分别为 `S/A/M/C/T-*`。SQL facet index 跨完整 eligible corpus 选候选，top-K 只是最终上下文预算 | `AnalysisEvidenceCatalogItem[]`, `AnalysisContextCatalogItem[]` |
 | `pre-provider journal` | Commit non-rollbackable call metadata | 每次调用 analyzer/verifier 前先把同一个 run 以 `running` 落到 `soc_analysis_runs`；只写 request hash/schema、purpose、模型、Prompt/Parser、步骤、来源、证据计数、skill、request/trace/actor 和哈希后的幂等键，不写渲染 prompt、provider header/response、credential/token。`provider_request_journals` 保留有序调用序列，`request_journal` 指向当前/最后一次调用用于恢复 | `AnalysisProviderInvocation`, `AnalysisRequestJournal[]` |

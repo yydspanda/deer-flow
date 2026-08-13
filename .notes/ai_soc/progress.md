@@ -29,8 +29,46 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；主 LLM 只执行 bounded `AnalysisResult.v4` 节点；默认关闭的条件式 verifier 由确定性 gate 触发，只独立反证 `RC-*` 方向/角色/目标声明，不掌握流程或动作权限 |
-| 当前下一刀 | 条件式角色复核 Gate v2 的同 cohort live 对照已完成：从旧 v1 的 10/10 触发降为 5/10，实际复核 14 个方向/attacker/victim Claim。下一步先给固定 cohort 补独立人工方向/角色真值，重点确认邮件与纯端点场景是否应进入角色复核；之后补 Web/TUI 人工角色确认表单和 held-out confirmed-memory Retrieval v2 precision/recall。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
+| 当前下一刀 | `LLMAnalysisRequest.v5` 的模型输出韧性与跨 Message 证据压缩已完成离线、组件和固定 20 条 live cohort 验收；共同的 compact-output 顶层版本遗漏也已由 Parser v17 做无语义机械修复并用原 5 条 fallback 定向复测。下一步补独立人工方向/角色真值、Web/TUI 人工角色确认表单和 held-out confirmed-memory Retrieval v2 precision/recall。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
+
+## 2026-08-13 — Cross-message evidence compaction completed and live-validated
+
+- 新增通用 `pipeline/observation_compactor.py` 和 `EvidenceCompactionReport.v1`。压缩器只消费
+  canonical network/HTTP/process/file/email observations，不识别 PingAn 字段名；供应商字段含义继续
+  由各自 Adapter 负责。
+- 完整 `AlertInput.raw`、`AnalysisRun.input_payload`、parsed messages、source semantics、provenance 和
+  fact reconstruction 保持不变。模型侧按 observation shape 汇总 stable facts、value-frequency
+  distributions 和 correlated profiles，记录 occurrence/time range、duplicate/non-dominant profile、
+  representative paths 和 omission 状态。
+- 补充 Message 不再机械取前四条：保留 primary，再从 dominant/rare profiles 选最多四个代表。
+  `9 条重复 + 第 10 条 destination 异常` 的回归样本压为 1 group / 2 profiles，并自动选择第 10 条作为
+  supplementary evidence。独立 value distribution 不允许被重新拼成不存在的事件。
+- `EvidenceCoverageReport` 识别由 typed compaction 表达的 exact source paths；完整 omission path map
+  留在审计数据，Prompt 只保留 reason counts。压缩事实进入 `E-*` catalog，因此 LLM 可以正常引用并由
+  Grounding 校验。
+- 主请求升级为 `LLMAnalysisRequest.v5`，Prompt 升级为 `soc-analysis-v19`。固定 20 条仅离线构建结果：
+  `20/20` 成功、0 Prompt 超限、最大 context `119,983` 字符、平均 `63,590`；此前失败的四条均能构建，
+  `1983128` 只保留 1 条代表 Message，context catalog 从旧产物 123 降为 43。
+- E2E 固定 cohort 报告新增 compaction 聚合和逐条摘要，并修复了报告只接受恰好 10 条的旧判断；当前最多
+  支持 20 条 manifest。
+- 固定 20 条 live cohort 保存在
+  `backend/.deer-flow/soc-validation/e2e-twenty-observation-compaction-20260813/`：20/20 Runtime completed、
+  0 failed、0 ungrounded evidence/reasoning、0 high-value compaction omission、0 unrepresented source；
+  55 条原始 Message 被表达为 21 个 behavior groups / 48 个 correlated profiles，识别 7 条 exact
+  duplicates 和 5 个 non-dominant profiles。此前四条 Prompt/catalog 阻塞样本均完成，`1983128` 的
+  context catalog 从旧产物 123 降为 45。该轮为 3 accepted / 7 repaired / 5 degraded / 5 fallback，
+  28 次 Provider 调用、797,624 reported tokens、984,353.66 ms 端到端总时长。
+- 5 个 fallback 的共同根因是第二次紧凑输出遗漏顶层 `schema_version`，随后被旧协议解析并连带报告
+  `evidence/knowledge_candidates` 缺失，不是五种业务推理失败。`soc-analysis-json-parser-v17` 仅在完整
+  字段集合无歧义匹配 `soc.analysis_model_output.v1` 时恢复版本并记 repair log；旧 v4、部分对象或带
+  Runtime-owned 字段的对象仍 fail closed。
+- 原 5 个 fallback 定向复测保存在
+  `backend/.deer-flow/soc-validation/e2e-five-schema-repair-20260813/`：5/5 completed、0 fallback、
+  0 二次模型调用、2 accepted / 2 local repaired / 1 optional role section degraded；共 5 次 Provider
+  调用、184,488 reported tokens。未重复跑全部 20 条，避免仅为刷新汇总再次消耗约 80 万 token。
+- 最终回归：Backend 相关 Runtime/Parser/Grounding/Memory/Adapter/architecture `196 passed`，Validation
+  builder/internal batch `54 passed`，Ruff、Frontend ESLint 和 TypeScript check 均通过。
 
 ## 2026-08-13 — Primary LLM output resilience completed
 

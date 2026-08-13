@@ -20,7 +20,8 @@ from soc_agent.contracts import (
     RoleVerificationClaim,
 )
 
-ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v15"
+ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v17"
+ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION = "soc.analysis_model_output.v1"
 ROLE_VERIFICATION_JSON_PARSER_VERSION = "soc-role-verification-json-parser-v1"
 MAX_ANALYSIS_RESPONSE_CHARS = 100_000
 MAX_ROLE_VERIFICATION_RESPONSE_CHARS = 80_000
@@ -87,11 +88,15 @@ class LLMOutputParseError(ValueError):
         stage: str,
         parser_version: str = ANALYSIS_JSON_PARSER_VERSION,
         repair_applied: bool = False,
+        field_paths: Sequence[str] = (),
+        issue_codes: Sequence[str] = (),
     ) -> None:
         super().__init__(message)
         self.stage = stage
         self.parser_version = parser_version
         self.repair_applied = repair_applied
+        self.field_paths = tuple(dict.fromkeys(str(path)[:512] for path in field_paths if path))[:20]
+        self.issue_codes = tuple(dict.fromkeys(str(code)[:128] for code in issue_codes if code))[:20]
 
 
 @dataclass(frozen=True)
@@ -102,6 +107,8 @@ class ParsedAnalysisResult:
     parser_version: str = ANALYSIS_JSON_PARSER_VERSION
     repair_applied: bool = False
     repair_log: list[dict[str, Any]] = field(default_factory=list)
+    hydration_log: list[dict[str, Any]] = field(default_factory=list)
+    model_output_schema_version: str = "soc.analysis_result.v4"
     candidate_text: str = ""
 
 
@@ -113,6 +120,8 @@ class AnalysisSectionValidationIssue:
     stage: str
     error_type: str
     message: str
+    field_paths: tuple[str, ...] = ()
+    issue_codes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -127,6 +136,8 @@ class RecoverableAnalysisResult:
     issues: tuple[AnalysisSectionValidationIssue, ...]
     repair_applied: bool = False
     repair_log: tuple[dict[str, Any], ...] = ()
+    hydration_log: tuple[dict[str, Any], ...] = ()
+    model_output_schema_version: str = "soc.analysis_result.v4"
     candidate_text: str = ""
 
 
@@ -136,6 +147,8 @@ class _DecodedAnalysisCandidate:
     candidate_text: str
     repair_applied: bool
     repair_log: list[dict[str, Any]]
+    hydration_log: list[dict[str, Any]]
+    model_output_schema_version: str
 
 
 @dataclass(frozen=True)
@@ -182,6 +195,8 @@ def parse_analysis_result_output(
         result=result,
         repair_applied=decoded.repair_applied,
         repair_log=decoded.repair_log,
+        hydration_log=decoded.hydration_log,
+        model_output_schema_version=decoded.model_output_schema_version,
         candidate_text=decoded.candidate_text,
     )
 
@@ -283,6 +298,8 @@ def parse_analysis_section_patch_output(
         result=result,
         repair_applied=True,
         repair_log=repair_log,
+        hydration_log=list(recovery.hydration_log),
+        model_output_schema_version=recovery.model_output_schema_version,
         candidate_text=candidate_text,
     )
 
@@ -299,13 +316,13 @@ _ANALYSIS_CORE_FIELDS = frozenset(
         "manual_checks",
         "reason",
         "recommended_action",
+        "knowledge_candidates",
     }
 )
 _ANALYSIS_OPTIONAL_SECTION_FIELDS = {
     AnalysisOutputSection.SCENARIO_ASSESSMENTS: "scenario_assessments",
     AnalysisOutputSection.NETWORK_DIRECTION: "network_direction",
     AnalysisOutputSection.ROLE_ADJUDICATION: "role_adjudication",
-    AnalysisOutputSection.KNOWLEDGE_CANDIDATES: "knowledge_candidates",
 }
 
 
@@ -337,12 +354,41 @@ def _decode_analysis_candidate(
         syntactic_repair_log = repaired.log
         syntactic_repair_applied = True
 
+    schema_inference_log: list[dict[str, Any]] = []
+    if _is_unversioned_analysis_model_output(repaired_data):
+        repaired_data = {
+            **repaired_data,
+            "schema_version": ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION,
+        }
+        schema_inference_log.append(
+            {
+                "stage": "model_output_schema_normalization",
+                "repair": "restore_unambiguous_compact_schema_version",
+                "schema_version": ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION,
+            }
+        )
+
+    model_output_schema_version = str(repaired_data.get("schema_version") or "")
+    if model_output_schema_version == ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION:
+        hydrated_data, hydration_log = _hydrate_analysis_model_output(
+            repaired_data,
+            evidence_catalog=evidence_catalog,
+        )
+    else:
+        hydrated_data = repaired_data
+        hydration_log = []
+        model_output_schema_version = "soc.analysis_result.v4"
+
     normalized, semantic_repair_log = _normalize_analysis_result_shape(
-        repaired_data,
+        hydrated_data,
         evidence_catalog=evidence_catalog,
         context_catalog=context_catalog,
     )
-    repair_log = [*syntactic_repair_log, *semantic_repair_log]
+    repair_log = [
+        *syntactic_repair_log,
+        *schema_inference_log,
+        *semantic_repair_log,
+    ]
     if syntactic_repair_applied and not syntactic_repair_log:
         repair_log.insert(
             0,
@@ -354,8 +400,10 @@ def _decode_analysis_candidate(
     return _DecodedAnalysisCandidate(
         data=normalized,
         candidate_text=candidate_text,
-        repair_applied=syntactic_repair_applied or bool(semantic_repair_log),
+        repair_applied=(syntactic_repair_applied or bool(schema_inference_log) or bool(semantic_repair_log)),
         repair_log=repair_log,
+        hydration_log=hydration_log,
+        model_output_schema_version=model_output_schema_version,
     )
 
 
@@ -392,6 +440,8 @@ def _recover_analysis_candidate(
                     stage="schema_validation",
                     error_type="MissingAnalysisSection",
                     message=f"model output omitted required section {field_name}",
+                    field_paths=(field_name,),
+                    issue_codes=("missing",),
                 )
             )
             continue
@@ -416,6 +466,8 @@ def _recover_analysis_candidate(
                     stage=exc.stage,
                     error_type=type(exc.__cause__ or exc).__name__,
                     message=str(exc),
+                    field_paths=tuple(exc.field_paths),
+                    issue_codes=tuple(exc.issue_codes),
                 )
             )
             continue
@@ -424,7 +476,7 @@ def _recover_analysis_candidate(
 
     result = _validate_analysis_result_data(
         accepted_data,
-        repair_applied=True,
+        repair_applied=decoded.repair_applied,
     )
     _validate_directional_context_references(
         result,
@@ -448,8 +500,10 @@ def _recover_analysis_candidate(
         accepted_sections=tuple(accepted_sections),
         invalid_sections=tuple(invalid_sections),
         issues=tuple(issues),
-        repair_applied=True,
+        repair_applied=decoded.repair_applied,
         repair_log=tuple(repair_log),
+        hydration_log=tuple(decoded.hydration_log),
+        model_output_schema_version=decoded.model_output_schema_version,
         candidate_text=decoded.candidate_text,
     )
 
@@ -483,6 +537,201 @@ def _analysis_optional_section_defaults() -> dict[str, Any]:
         },
         "knowledge_candidates": [],
     }
+
+
+_MODEL_OUTPUT_CORE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "verdict",
+        "confidence",
+        "summary",
+        "reasoning",
+        "evidence_gaps",
+        "manual_checks",
+        "reason",
+        "recommended_action",
+    }
+)
+_MODEL_OUTPUT_OPTIONAL_FIELDS = frozenset(
+    {
+        "scenario_assessments",
+        "network_direction",
+        "role_adjudication",
+    }
+)
+_MODEL_OUTPUT_RUNTIME_OWNED_FIELDS = frozenset(
+    {
+        "evidence",
+        "knowledge_candidates",
+    }
+)
+
+
+def _is_unversioned_analysis_model_output(data: Mapping[str, Any]) -> bool:
+    """Recognize only an otherwise complete compact payload missing its version.
+
+    This is a mechanical protocol repair, not a semantic guess. Legacy
+    ``AnalysisResult.v4`` candidates carry Runtime-owned ``evidence`` and
+    ``knowledge_candidates`` fields and therefore cannot enter this path.
+    """
+
+    if "schema_version" in data:
+        return False
+    required_compact_core = _MODEL_OUTPUT_CORE_FIELDS - {"schema_version"}
+    allowed_fields = required_compact_core | _MODEL_OUTPUT_OPTIONAL_FIELDS
+    return required_compact_core <= set(data) and set(data) <= allowed_fields and not (set(data) & _MODEL_OUTPUT_RUNTIME_OWNED_FIELDS)
+
+
+def _hydrate_analysis_model_output(
+    data: dict[str, Any],
+    *,
+    evidence_catalog: Sequence[AnalysisEvidenceCatalogItem],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Build the complete domain result from the compact model-owned payload."""
+
+    allowed_fields = _MODEL_OUTPUT_CORE_FIELDS | _MODEL_OUTPUT_OPTIONAL_FIELDS
+    ignored_runtime_fields = sorted(set(data) & _MODEL_OUTPUT_RUNTIME_OWNED_FIELDS)
+    unknown_fields = sorted(set(data) - allowed_fields - _MODEL_OUTPUT_RUNTIME_OWNED_FIELDS)
+    if unknown_fields:
+        raise LLMOutputParseError(
+            "compact model output contains unsupported fields: " + ", ".join(unknown_fields),
+            stage="model_output_schema_validation",
+            field_paths=unknown_fields,
+            issue_codes=("extra_forbidden",),
+        )
+
+    hydrated = {key: value for key, value in data.items() if key not in _MODEL_OUTPUT_RUNTIME_OWNED_FIELDS}
+    hydrated["schema_version"] = "soc.analysis_result.v4"
+    hydrated["knowledge_candidates"] = []
+
+    reasoning = data.get("reasoning")
+    if isinstance(reasoning, list):
+        hydrated["reasoning"] = [{**dict(item), "schema_version": "soc.analysis_reasoning_item.v1"} if isinstance(item, Mapping) else item for item in reasoning]
+
+    scenarios = data.get("scenario_assessments")
+    if isinstance(scenarios, list):
+        hydrated_scenarios: list[Any] = []
+        for item in scenarios:
+            if not isinstance(item, Mapping):
+                hydrated_scenarios.append(item)
+                continue
+            hydrated_scenarios.append(
+                {
+                    "scenario_key": None,
+                    "competing_explanations": [],
+                    **dict(item),
+                    "schema_version": "soc.triage_scenario_assessment.v2",
+                }
+            )
+        hydrated["scenario_assessments"] = hydrated_scenarios
+
+    network_direction = data.get("network_direction")
+    if isinstance(network_direction, Mapping):
+        hydrated["network_direction"] = {
+            "semantic_direction": None,
+            "connection_initiator": None,
+            "intermediaries": [],
+            "context_refs": [],
+            "evidence_gaps": [],
+            **dict(network_direction),
+            "schema_version": "soc.network_direction_assessment.v1",
+        }
+
+    role_adjudication = data.get("role_adjudication")
+    if isinstance(role_adjudication, Mapping):
+        raw_roles = role_adjudication.get("roles")
+        roles = [{"context_refs": [], **dict(item)} if isinstance(item, Mapping) else item for item in raw_roles] if isinstance(raw_roles, list) else raw_roles
+        raw_proposals = role_adjudication.get("response_target_proposals")
+        proposals: Any = raw_proposals
+        if raw_proposals is None:
+            proposals = []
+        elif isinstance(raw_proposals, list):
+            proposals = [
+                {
+                    "context_refs": [],
+                    **dict(item),
+                    "proposal_id": f"RT-{index:02d}",
+                    "policy_review_required": True,
+                    "automation_allowed": False,
+                }
+                if isinstance(item, Mapping)
+                else item
+                for index, item in enumerate(raw_proposals, start=1)
+            ]
+        hydrated["role_adjudication"] = {
+            "roles": [] if roles is None else roles,
+            "response_target_proposals": proposals,
+            "conflicts": [],
+            "evidence_gaps": [],
+            **{key: value for key, value in role_adjudication.items() if key not in {"roles", "response_target_proposals"}},
+            "schema_version": "soc.role_adjudication_result.v1",
+        }
+
+    references = _referenced_evidence_ids(hydrated)
+    catalog_by_ref = {item.evidence_ref: item for item in evidence_catalog}
+    hydrated["evidence"] = [
+        {
+            "evidence_ref": catalog_by_ref[reference].evidence_ref,
+            "source": catalog_by_ref[reference].source_path,
+            "description": "Runtime-hydrated current-alert catalog fact",
+            "value": catalog_by_ref[reference].value,
+        }
+        for reference in references
+        if reference in catalog_by_ref
+    ]
+    hydration_log = [
+        {
+            "stage": "runtime_hydration",
+            "operation": "materialize_evidence_catalog_references",
+            "reference_count": len(hydrated["evidence"]),
+        },
+        {
+            "stage": "runtime_hydration",
+            "operation": "apply_runtime_owned_contract_fields",
+            "fields": [
+                "schema_version",
+                "evidence",
+                "knowledge_candidates",
+                "nested_schema_versions",
+                "response_target_invariants",
+            ],
+        },
+    ]
+    if ignored_runtime_fields:
+        hydration_log.append(
+            {
+                "stage": "runtime_hydration",
+                "operation": "discard_model_supplied_runtime_owned_fields",
+                "fields": ignored_runtime_fields,
+            }
+        )
+    return hydrated, hydration_log
+
+
+def _referenced_evidence_ids(data: Mapping[str, Any]) -> list[str]:
+    references: list[str] = []
+
+    def add_from(item: Any) -> None:
+        if not isinstance(item, Mapping):
+            return
+        values = item.get("evidence_refs")
+        if isinstance(values, list):
+            references.extend(value for value in values if isinstance(value, str))
+
+    for collection_name in ("reasoning", "scenario_assessments"):
+        collection = data.get(collection_name)
+        if isinstance(collection, list):
+            for item in collection:
+                add_from(item)
+    add_from(data.get("network_direction"))
+    adjudication = data.get("role_adjudication")
+    if isinstance(adjudication, Mapping):
+        for collection_name in ("roles", "response_target_proposals"):
+            collection = adjudication.get(collection_name)
+            if isinstance(collection, list):
+                for item in collection:
+                    add_from(item)
+    return list(dict.fromkeys(references))
 
 
 def parse_role_verification_output(
@@ -625,15 +874,22 @@ def _parse_strict_json_object_for_schema(
 
 
 def _looks_like_analysis_result_object(data: dict[str, Any]) -> bool:
-    return {
+    required = {
         "verdict",
         "confidence",
         "summary",
-        "evidence",
         "reasoning",
         "reason",
         "recommended_action",
-    }.issubset(data)
+    }
+    if not required.issubset(data):
+        return False
+    if data.get("schema_version") in {
+        "soc.analysis_result.v4",
+        ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION,
+    }:
+        return True
+    return _is_unversioned_analysis_model_output(data)
 
 
 def _extract_repair_candidate(text: str) -> str:
@@ -1452,10 +1708,13 @@ def _validate_analysis_result_data(data: dict[str, Any], *, repair_applied: bool
     try:
         result = AnalysisResult.model_validate(data)
     except ValidationError as exc:
+        field_paths, issue_codes = _validation_error_summary(exc)
         raise LLMOutputParseError(
             f"LLM output failed AnalysisResult schema validation: {exc}",
             stage="schema_validation",
             repair_applied=repair_applied,
+            field_paths=field_paths,
+            issue_codes=issue_codes,
         ) from exc
 
     try:
@@ -1466,6 +1725,26 @@ def _validate_analysis_result_data(data: dict[str, Any], *, repair_applied: bool
             stage="domain_validation",
             repair_applied=repair_applied,
         ) from exc
+
+
+def _validation_error_summary(error: ValidationError) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return bounded structural diagnostics without retaining rejected values."""
+
+    field_paths: list[str] = []
+    issue_codes: list[str] = []
+    for issue in error.errors(include_url=False, include_context=False, include_input=False):
+        location = issue.get("loc")
+        if isinstance(location, tuple):
+            path = ".".join(str(part) for part in location)
+            if path:
+                field_paths.append(path)
+        issue_type = issue.get("type")
+        if isinstance(issue_type, str) and issue_type:
+            issue_codes.append(issue_type)
+    return (
+        tuple(dict.fromkeys(field_paths))[:20],
+        tuple(dict.fromkeys(issue_codes))[:20],
+    )
 
 
 def _validate_directional_context_references(
@@ -1513,6 +1792,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
             f"LLM output is missing required fields: {', '.join(missing_fields)}",
             stage="schema_validation",
             repair_applied=repair_applied,
+            field_paths=missing_fields,
+            issue_codes=("missing",),
         )
     unknown_fields = sorted(data.keys() - allowed_fields)
     if unknown_fields:
@@ -1520,12 +1801,16 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
             f"LLM output contains unsupported fields: {', '.join(unknown_fields)}",
             stage="schema_validation",
             repair_applied=repair_applied,
+            field_paths=unknown_fields,
+            issue_codes=("extra_forbidden",),
         )
     if data.get("schema_version") != "soc.analysis_result.v4":
         raise LLMOutputParseError(
             "LLM output schema_version must be 'soc.analysis_result.v4'",
             stage="schema_validation",
             repair_applied=repair_applied,
+            field_paths=("schema_version",),
+            issue_codes=("literal_error",),
         )
     confidence = data.get("confidence")
     if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
@@ -1533,6 +1818,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
             "LLM output confidence must be a JSON number",
             stage="schema_validation",
             repair_applied=repair_applied,
+            field_paths=("confidence",),
+            issue_codes=("number_type",),
         )
     scenario_assessments = data.get("scenario_assessments")
     if not isinstance(scenario_assessments, list):
@@ -1540,6 +1827,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
             "LLM output scenario_assessments must be a JSON array",
             stage="schema_validation",
             repair_applied=repair_applied,
+            field_paths=("scenario_assessments",),
+            issue_codes=("list_type",),
         )
     for index, assessment in enumerate(scenario_assessments):
         if not isinstance(assessment, dict):
@@ -1547,6 +1836,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                 f"LLM output scenario_assessments[{index}] must be a JSON object",
                 stage="schema_validation",
                 repair_applied=repair_applied,
+                field_paths=(f"scenario_assessments.{index}",),
+                issue_codes=("dict_type",),
             )
         allowed_scenario_fields = {
             "schema_version",
@@ -1567,6 +1858,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                 f"LLM output scenario_assessments[{index}] contains unsupported fields: {', '.join(unknown_scenario_fields)}",
                 stage="schema_validation",
                 repair_applied=repair_applied,
+                field_paths=tuple(f"scenario_assessments.{index}.{field}" for field in unknown_scenario_fields),
+                issue_codes=("extra_forbidden",),
             )
         scenario_confidence = assessment.get("confidence")
         if isinstance(scenario_confidence, bool) or not isinstance(
@@ -1577,6 +1870,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                 f"LLM output scenario_assessments[{index}].confidence must be a JSON number",
                 stage="schema_validation",
                 repair_applied=repair_applied,
+                field_paths=(f"scenario_assessments.{index}.confidence",),
+                issue_codes=("number_type",),
             )
         for reference_field in ("evidence_refs", "reasoning_refs"):
             references = assessment.get(reference_field)
@@ -1585,12 +1880,16 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                     f"LLM output scenario_assessments[{index}].{reference_field} must be a non-empty JSON string array",
                     stage="schema_validation",
                     repair_applied=repair_applied,
+                    field_paths=(f"scenario_assessments.{index}.{reference_field}",),
+                    issue_codes=("string_list_type",),
                 )
         if not isinstance(assessment.get("is_primary"), bool):
             raise LLMOutputParseError(
                 f"LLM output scenario_assessments[{index}].is_primary must be a JSON boolean",
                 stage="schema_validation",
                 repair_applied=repair_applied,
+                field_paths=(f"scenario_assessments.{index}.is_primary",),
+                issue_codes=("bool_type",),
             )
     _validate_directional_shape(data, repair_applied=repair_applied)
     for field_name in ("evidence_gaps", "manual_checks"):
@@ -1600,6 +1899,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                 f"LLM output {field_name} must be a JSON string array",
                 stage="schema_validation",
                 repair_applied=repair_applied,
+                field_paths=(field_name,),
+                issue_codes=("string_list_type",),
             )
     evidence = data.get("evidence")
     if not isinstance(evidence, list) or not evidence:
@@ -1607,6 +1908,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
             "LLM output evidence must be a non-empty JSON array",
             stage="schema_validation",
             repair_applied=repair_applied,
+            field_paths=("evidence",),
+            issue_codes=("list_min_length",),
         )
     allowed_evidence_fields = {"evidence_ref", "source", "description", "value"}
     for index, item in enumerate(evidence):
@@ -1615,6 +1918,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                 f"LLM output evidence[{index}] must be a JSON object",
                 stage="schema_validation",
                 repair_applied=repair_applied,
+                field_paths=(f"evidence.{index}",),
+                issue_codes=("dict_type",),
             )
         unknown = sorted(item.keys() - allowed_evidence_fields)
         missing = sorted(allowed_evidence_fields - item.keys())
@@ -1623,6 +1928,15 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                 f"LLM output evidence[{index}] has missing={missing} unsupported={unknown}",
                 stage="schema_validation",
                 repair_applied=repair_applied,
+                field_paths=tuple(f"evidence.{index}.{field}" for field in [*missing, *unknown]),
+                issue_codes=tuple(
+                    code
+                    for fields, code in (
+                        (missing, "missing"),
+                        (unknown, "extra_forbidden"),
+                    )
+                    if fields
+                ),
             )
 
     reasoning = data.get("reasoning")
@@ -1631,6 +1945,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
             "LLM output reasoning must be a non-empty JSON array",
             stage="schema_validation",
             repair_applied=repair_applied,
+            field_paths=("reasoning",),
+            issue_codes=("list_min_length",),
         )
     allowed_reasoning_fields = {
         "schema_version",
@@ -1647,6 +1963,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                 f"LLM output reasoning[{index}] must be a JSON object",
                 stage="schema_validation",
                 repair_applied=repair_applied,
+                field_paths=(f"reasoning.{index}",),
+                issue_codes=("dict_type",),
             )
         unknown = sorted(item.keys() - allowed_reasoning_fields)
         missing = sorted(allowed_reasoning_fields - item.keys())
@@ -1655,6 +1973,15 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                 f"LLM output reasoning[{index}] has missing={missing} unsupported={unknown}",
                 stage="schema_validation",
                 repair_applied=repair_applied,
+                field_paths=tuple(f"reasoning.{index}.{field}" for field in [*missing, *unknown]),
+                issue_codes=tuple(
+                    code
+                    for fields, code in (
+                        (missing, "missing"),
+                        (unknown, "extra_forbidden"),
+                    )
+                    if fields
+                ),
             )
         for reference_field in ("basis", "evidence_refs", "context_refs"):
             references = item.get(reference_field)
@@ -1663,6 +1990,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                     f"LLM output reasoning[{index}].{reference_field} must be a JSON string array",
                     stage="schema_validation",
                     repair_applied=repair_applied,
+                    field_paths=(f"reasoning.{index}.{reference_field}",),
+                    issue_codes=("string_list_type",),
                 )
         reasoning_confidence = item.get("confidence")
         if isinstance(reasoning_confidence, bool) or not isinstance(
@@ -1673,6 +2002,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                 f"LLM output reasoning[{index}].confidence must be a JSON number",
                 stage="schema_validation",
                 repair_applied=repair_applied,
+                field_paths=(f"reasoning.{index}.confidence",),
+                issue_codes=("number_type",),
             )
 
     candidates = data.get("knowledge_candidates")
@@ -1681,6 +2012,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
             "LLM output knowledge_candidates must be a JSON array",
             stage="schema_validation",
             repair_applied=repair_applied,
+            field_paths=("knowledge_candidates",),
+            issue_codes=("list_type",),
         )
     allowed_candidate_fields = {
         "schema_version",
@@ -1698,6 +2031,8 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                 f"LLM output knowledge_candidates[{index}] must be a JSON object",
                 stage="schema_validation",
                 repair_applied=repair_applied,
+                field_paths=(f"knowledge_candidates.{index}",),
+                issue_codes=("dict_type",),
             )
         unknown = sorted(item.keys() - allowed_candidate_fields)
         missing = sorted(allowed_candidate_fields - item.keys())
@@ -1706,6 +2041,15 @@ def _validate_raw_analysis_shape(data: dict[str, Any], *, repair_applied: bool) 
                 f"LLM output knowledge_candidates[{index}] has missing={missing} unsupported={unknown}",
                 stage="schema_validation",
                 repair_applied=repair_applied,
+                field_paths=tuple(f"knowledge_candidates.{index}.{field}" for field in [*missing, *unknown]),
+                issue_codes=tuple(
+                    code
+                    for fields, code in (
+                        (missing, "missing"),
+                        (unknown, "extra_forbidden"),
+                    )
+                    if fields
+                ),
             )
 
 
@@ -1828,8 +2172,25 @@ def _require_json_number(value: Any, *, path: str, repair_applied: bool) -> None
 
 
 def _raise_shape(message: str, repair_applied: bool) -> None:
+    path = message.split(" ", 1)[0]
+    if "missing=" in message:
+        code = "object_fields_invalid"
+    elif "JSON array" in message:
+        code = "list_type"
+    elif "JSON string array" in message:
+        code = "string_list_type"
+    elif "JSON number" in message:
+        code = "number_type"
+    elif "JSON object" in message:
+        code = "dict_type"
+    elif "policy_review_required" in message:
+        code = "runtime_invariant"
+    else:
+        code = "shape_invalid"
     raise LLMOutputParseError(
         f"LLM output {message}",
         stage="schema_validation",
         repair_applied=repair_applied,
+        field_paths=(path,),
+        issue_codes=(code,),
     )

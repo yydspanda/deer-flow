@@ -11,11 +11,11 @@ from validation.compact_zeus.e2e.run_ten_alert_e2e import (
     _execution_environment,
     _grounding_quality_findings,
     _model_usage_measurement,
-    _role_verification_summary,
-    _timing_measurement,
     _role_verification_quality_findings,
+    _role_verification_summary,
     _runtime_step_sequence_complete,
     _runtime_steps_acceptable,
+    _timing_measurement,
     build_batch_command,
     build_paths,
     load_case_manifest,
@@ -133,6 +133,35 @@ def test_plan_can_explicitly_enable_second_pass_role_verifier(
     assert not (tmp_path / "output").exists()
 
 
+def test_plan_can_disable_optional_tenant_policy_advisor(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    source = tmp_path / "source.pkl"
+    source.write_bytes(b"plan-only-does-not-read-source")
+
+    exit_code = main(
+        [
+            "--source",
+            str(source),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--python-executable",
+            str(Path(__file__).resolve().parents[3] / "backend/.venv/bin/python"),
+            "--tenant-policy-advisor",
+            "disabled",
+        ]
+    )
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["tenant_policy_advisor_enabled"] is False
+    assert output["maximum_policy_advisor_call_count"] == 0
+    assert output["maximum_total_live_model_call_count"] == 20
+    assert output["tenant_policy_skill"] is None
+    assert not (tmp_path / "output").exists()
+
+
 def test_plan_exposes_pingan_policy_without_synthetic_automation(
     tmp_path: Path,
     capsys,
@@ -185,6 +214,17 @@ def test_execution_environment_can_pin_role_verifier() -> None:
     assert environment["SOC_ROLE_VERIFIER_ENABLED"] == "true"
     assert environment["SOC_ROLE_VERIFIER_MODEL"] == "deepseek-v4-pro"
     assert environment["SOC_ROLE_VERIFIER_MIN_CONFIDENCE"] == "0.7"
+
+
+def test_execution_environment_can_disable_only_policy_llm_advisor() -> None:
+    environment = _execution_environment(
+        Path("/tmp/python"),
+        tenant_policy_advisor_enabled=False,
+    )
+
+    assert environment["SOC_TENANT_POLICY_ENABLED"] == "true"
+    assert environment["SOC_TENANT_POLICY_ADVISOR_MODE"] == "off"
+    assert "SOC_TENANT_POLICY_SKILL_PATH" not in environment
 
 
 def test_grounding_quality_findings_separate_safety_pass_from_model_quality() -> None:

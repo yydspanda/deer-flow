@@ -101,6 +101,8 @@ export interface SocAnalysisOutputQuality {
     stage: string;
     error_type: string;
     attempt: number;
+    field_paths: string[];
+    issue_codes: string[];
   }>;
 }
 

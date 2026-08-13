@@ -193,7 +193,6 @@ class AnalysisOutputSection(StrEnum):
     SCENARIO_ASSESSMENTS = "scenario_assessments"
     NETWORK_DIRECTION = "network_direction"
     ROLE_ADJUDICATION = "role_adjudication"
-    KNOWLEDGE_CANDIDATES = "knowledge_candidates"
 
 
 class AnalysisOutputQualityStatus(StrEnum):
@@ -2662,6 +2661,105 @@ class BoundedEvidenceHighlight(BaseModel):
     sensitive_evidence_mode: SensitiveEvidenceMode = SensitiveEvidenceMode.REDACT
 
 
+class CompactedObservationFact(BaseModel):
+    """One bounded canonical fact retained in an observation summary."""
+
+    field_path: str = Field(min_length=1, max_length=256)
+    value: str | int | float | bool
+    truncated: bool = False
+
+
+class CompactedObservationValueCount(BaseModel):
+    """Frequency of one value inside a compacted observation group."""
+
+    value: str | int | float | bool
+    occurrence_count: int = Field(ge=1)
+    truncated: bool = False
+
+
+class CompactedObservationVariation(BaseModel):
+    """Bounded value distribution for a field that varied inside a group."""
+
+    field_path: str = Field(min_length=1, max_length=256)
+    distinct_value_count: int = Field(ge=2)
+    values: list[CompactedObservationValueCount] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+    values_truncated: bool = False
+
+
+class CompactedObservationProfile(BaseModel):
+    """A correlated combination of varying facts, not independent marginals."""
+
+    profile_id: str = Field(pattern=r"^OP-[A-F0-9]{12}$")
+    occurrence_count: int = Field(ge=1)
+    representative_source_path: str = Field(min_length=1)
+    varying_facts: list[CompactedObservationFact] = Field(
+        default_factory=list,
+        max_length=40,
+    )
+
+
+class CompactedObservationGroup(BaseModel):
+    """Repeated source messages sharing one canonical observation shape."""
+
+    group_id: str = Field(pattern=r"^OG-[A-F0-9]{12}$")
+    parser_names: list[str] = Field(default_factory=list, max_length=10)
+    observation_kinds: list[str] = Field(default_factory=list, max_length=10)
+    occurrence_count: int = Field(ge=1)
+    source_paths: list[str] = Field(default_factory=list, max_length=100)
+    source_path_count: int = Field(ge=1)
+    source_paths_truncated: bool = False
+    representative_source_path: str = Field(min_length=1)
+    first_seen: str | None = None
+    last_seen: str | None = None
+    stable_facts: list[CompactedObservationFact] = Field(
+        default_factory=list,
+        max_length=80,
+    )
+    varying_facts: list[CompactedObservationVariation] = Field(
+        default_factory=list,
+        max_length=40,
+    )
+    profiles: list[CompactedObservationProfile] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    profile_count: int = Field(ge=1)
+    profiles_truncated: bool = False
+    non_dominant_profile_count: int = Field(default=0, ge=0)
+
+
+class EvidenceCompactionReport(BaseModel):
+    """Audit report for loss-bounded grouping before model analysis."""
+
+    schema_version: Literal["soc.evidence_compaction_report.v1"] = "soc.evidence_compaction_report.v1"
+    strategy_version: Literal["soc.observation_compaction.v1"] = "soc.observation_compaction.v1"
+    raw_payload_retained: bool = True
+    source_message_count: int = Field(default=0, ge=0)
+    typed_observation_count: int = Field(default=0, ge=0)
+    behavior_group_count: int = Field(default=0, ge=0)
+    profile_count: int = Field(default=0, ge=0)
+    repeated_shape_message_count: int = Field(default=0, ge=0)
+    duplicate_message_count: int = Field(default=0, ge=0)
+    non_dominant_profile_count: int = Field(default=0, ge=0)
+    selected_evidence_paths: list[str] = Field(default_factory=list, max_length=5)
+    represented_field_paths: list[str] = Field(
+        default_factory=list,
+        max_length=5000,
+    )
+    represented_field_count: int = Field(default=0, ge=0)
+    represented_source_count: int = Field(default=0, ge=0)
+    unrepresented_source_count: int = Field(default=0, ge=0)
+    high_value_omission_count: int = Field(default=0, ge=0)
+    groups: list[CompactedObservationGroup] = Field(
+        default_factory=list,
+        max_length=100,
+    )
+    warnings: list[str] = Field(default_factory=list)
+
+
 class FieldTrust(BaseModel):
     """Source trust and reasoning eligibility for one fact input path."""
 
@@ -3090,7 +3188,7 @@ class ExtractedEntities(BaseModel):
 class LLMAnalysisRequest(BaseModel):
     """Bounded input contract for deterministic or configured LLM nodes."""
 
-    schema_version: str = "soc.llm_analysis_request.v4"
+    schema_version: str = "soc.llm_analysis_request.v5"
     alert_id: str
     tenant_id: str | None = None
     environment: str | None = Field(default=None, max_length=128)
@@ -3104,6 +3202,9 @@ class LLMAnalysisRequest(BaseModel):
     primary_evidence: BoundedAnalysisEvidence | None = None
     supplementary_evidence: list[BoundedAnalysisEvidence] = Field(default_factory=list)
     evidence_highlights: list[BoundedEvidenceHighlight] = Field(default_factory=list)
+    evidence_compaction: EvidenceCompactionReport = Field(
+        default_factory=EvidenceCompactionReport,
+    )
     evidence_coverage: EvidenceCoverageReport = Field(default_factory=EvidenceCoverageReport)
     source_field_semantics: list[SourceFieldSemantic] = Field(default_factory=list)
     conflict_count: int = Field(default=0, ge=0)
@@ -3112,7 +3213,7 @@ class LLMAnalysisRequest(BaseModel):
     skill_context: SocSkillContext = Field(default_factory=SocSkillContext)
     evidence_catalog: list[AnalysisEvidenceCatalogItem] = Field(
         default_factory=list,
-        max_length=1200,
+        max_length=150,
     )
     context_catalog: list[AnalysisContextCatalogItem] = Field(
         default_factory=list,
@@ -4039,6 +4140,8 @@ class AnalysisOutputIssue(BaseModel):
     stage: str = Field(min_length=1, max_length=128)
     error_type: str = Field(min_length=1, max_length=256)
     attempt: int = Field(ge=1, le=3)
+    field_paths: list[str] = Field(default_factory=list, max_length=20)
+    issue_codes: list[str] = Field(default_factory=list, max_length=20)
 
 
 class AnalysisOutputQuality(BaseModel):

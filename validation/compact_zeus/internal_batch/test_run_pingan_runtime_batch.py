@@ -207,6 +207,22 @@ class _FakeInvestigationService:
         return _FakeInvestigationResult()
 
 
+class _FailingInvestigationService:
+    def execute(self, _command: object, *, context: object) -> _FakeInvestigationResult:
+        assert getattr(context, "idempotency_key").endswith(":investigation")
+        raise RuntimeError("simulated investigation projection failure")
+
+
+class _IdempotencyRecordingService(_FakeService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.idempotency_keys: list[str] = []
+
+    def analyze(self, payload: dict[str, object], *, context: object) -> _FakeRun:
+        self.idempotency_keys.append(str(getattr(context, "idempotency_key")))
+        return super().analyze(payload, context=context)
+
+
 class _FakeProjection:
     def __init__(self, payload: dict[str, object]) -> None:
         self._payload = payload
@@ -528,6 +544,39 @@ def test_execute_batch_explicitly_runs_persisted_internal_investigation(
             "confirmed_memory_write_allowed_count"
         ]
         == 0
+    )
+
+
+def test_resume_uses_fresh_analysis_idempotency_after_later_phase_failure(
+    tmp_path: Path,
+) -> None:
+    frame = _frame([452])
+    items, _ = prepare_batch_items(frame)
+    config = _config(tmp_path, resume=False, enrichment=True)
+
+    first = execute_batch(
+        items,
+        analysis_service=_FakeService(),
+        investigation_service=_FailingInvestigationService(),
+        investigation_reporting_service=_FakeInvestigationReportingService(),
+        config=config,
+        source_row_count=1,
+    )
+    assert first["status"] == "completed_with_failures"
+
+    resumed_service = _IdempotencyRecordingService()
+    resumed = execute_batch(
+        items,
+        analysis_service=resumed_service,
+        investigation_service=_FakeInvestigationService(),
+        investigation_reporting_service=_FakeInvestigationReportingService(),
+        config=replace(config, resume=True),
+        source_row_count=1,
+    )
+
+    assert resumed["status"] == "completed"
+    assert resumed_service.idempotency_keys[0].endswith(
+        ":analysis-retry-outcome:RUN-452"
     )
 
 

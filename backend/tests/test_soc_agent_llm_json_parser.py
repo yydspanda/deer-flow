@@ -116,6 +116,126 @@ def _valid_payload() -> dict:
     }
 
 
+def _compact_payload() -> dict:
+    payload = _valid_payload()
+    payload["schema_version"] = "soc.analysis_model_output.v1"
+    payload.pop("evidence")
+    payload.pop("knowledge_candidates")
+    for item in payload["reasoning"]:
+        item.pop("schema_version")
+    for item in payload["scenario_assessments"]:
+        item.pop("schema_version")
+    payload["network_direction"].pop("schema_version")
+    payload["role_adjudication"].pop("schema_version")
+    for proposal in payload["role_adjudication"]["response_target_proposals"]:
+        proposal.pop("proposal_id")
+        proposal.pop("policy_review_required")
+        proposal.pop("automation_allowed")
+    return payload
+
+
+def test_parse_compact_model_output_hydrates_runtime_owned_fields() -> None:
+    catalog = [
+        AnalysisEvidenceCatalogItem(
+            evidence_ref="E-A1B2C3D4E5F6",
+            source_path="fact_reconstruction",
+            value="svchost.exe",
+            value_type="string",
+            trust_level="high",
+        )
+    ]
+
+    parsed = parse_analysis_result_output(
+        json.dumps(_compact_payload(), ensure_ascii=False),
+        evidence_catalog=catalog,
+    )
+
+    assert parsed.repair_applied is False
+    assert parsed.model_output_schema_version == "soc.analysis_model_output.v1"
+    assert parsed.result.schema_version == "soc.analysis_result.v4"
+    assert parsed.result.evidence[0].model_dump(mode="json") == {
+        "evidence_ref": "E-A1B2C3D4E5F6",
+        "source": "fact_reconstruction",
+        "description": "Runtime-hydrated current-alert catalog fact",
+        "value": "svchost.exe",
+    }
+    assert parsed.result.knowledge_candidates == []
+    proposal = parsed.result.role_adjudication.response_target_proposals[0]
+    assert proposal.proposal_id == "RT-01"
+    assert proposal.policy_review_required is True
+    assert proposal.automation_allowed is False
+    assert parsed.hydration_log[0]["reference_count"] == 1
+
+
+def test_parse_compact_model_output_restores_omitted_top_level_version() -> None:
+    payload = _compact_payload()
+    payload.pop("schema_version")
+    catalog = [
+        AnalysisEvidenceCatalogItem(
+            evidence_ref="E-A1B2C3D4E5F6",
+            source_path="fact_reconstruction",
+            value="svchost.exe",
+            value_type="string",
+            trust_level="high",
+        )
+    ]
+
+    parsed = parse_analysis_result_output(
+        json.dumps(payload, ensure_ascii=False),
+        evidence_catalog=catalog,
+    )
+
+    assert parsed.repair_applied is True
+    assert parsed.model_output_schema_version == "soc.analysis_model_output.v1"
+    assert parsed.result.schema_version == "soc.analysis_result.v4"
+    assert parsed.result.evidence[0].value == "svchost.exe"
+    assert parsed.repair_log[0] == {
+        "stage": "model_output_schema_normalization",
+        "repair": "restore_unambiguous_compact_schema_version",
+        "schema_version": "soc.analysis_model_output.v1",
+    }
+
+
+def test_missing_version_is_not_inferred_for_legacy_runtime_owned_shape() -> None:
+    payload = _valid_payload()
+    payload.pop("schema_version")
+
+    with pytest.raises(LLMOutputParseError) as exc:
+        parse_analysis_result_output(json.dumps(payload, ensure_ascii=False))
+
+    assert exc.value.stage == "schema_validation"
+    assert "schema_version" in exc.value.field_paths
+
+
+def test_compact_output_discards_model_supplied_runtime_owned_fields() -> None:
+    payload = _compact_payload()
+    payload["evidence"] = [{"invented": "must-not-enter-runtime"}]
+    payload["knowledge_candidates"] = [{"invented": "must-not-enter-runtime"}]
+    catalog = [
+        AnalysisEvidenceCatalogItem(
+            evidence_ref="E-A1B2C3D4E5F6",
+            source_path="fact_reconstruction",
+            value="svchost.exe",
+            value_type="string",
+            trust_level="high",
+        )
+    ]
+
+    parsed = parse_analysis_result_output(
+        json.dumps(payload, ensure_ascii=False),
+        evidence_catalog=catalog,
+    )
+
+    assert parsed.repair_applied is False
+    assert parsed.result.evidence[0].value == "svchost.exe"
+    assert parsed.result.knowledge_candidates == []
+    assert parsed.hydration_log[-1] == {
+        "stage": "runtime_hydration",
+        "operation": "discard_model_supplied_runtime_owned_fields",
+        "fields": ["evidence", "knowledge_candidates"],
+    }
+
+
 def test_parse_analysis_result_accepts_strict_json() -> None:
     parsed = parse_analysis_result_output(json.dumps(_valid_payload(), ensure_ascii=False))
 

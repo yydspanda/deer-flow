@@ -144,8 +144,9 @@ contracts
   `zeusRawLogs[]` item. Reasoning exclusion is represented separately and must not lower an otherwise
   high-trust source.
 - All parseable messages are retained. One message is selected as primary evidence and up to four
-  paths are full supplementary evidence; selection and ordering must be deterministic and replayable.
-  Adapter-owned, exact-path high-value values outside that budget may enter bounded
+  paths are full supplementary evidence; supplementary selection uses deterministic canonical
+  observation profiles, never raw source order. The dominant profile and rare profiles receive
+  representative slots before repeated copies. Adapter-owned, exact-path high-value values outside that budget may enter bounded
   `BoundedEvidenceHighlight` records. A grouped highlight retains occurrence count and at most five
   representative paths; complete covered paths stay in `EvidenceCoverageReport`. Highlight paths
   count as model-visible coverage, obey the same sensitive-evidence mode, and cannot contain
@@ -219,10 +220,10 @@ contracts
   reviewed leaf semantics, and each non-empty value must be typed, model-visible through bounded
   evidence/highlight, or explicitly excluded from reasoning. Path-level aggregate counts alone are
   insufficient because they can hide later-message and nested-field omissions.
-- `LLMAnalysisRequest` may include only `BoundedAnalysisEvidence` plus
-  `BoundedEvidenceHighlight`: per-field and total-size bounded, parser/provenance annotated, and
-  separated into primary/supplementary/highlight content. It must not dump the unbounded vendor
-  payload into the prompt.
+- `LLMAnalysisRequest.v5` may include only `BoundedAnalysisEvidence`,
+  `EvidenceCompactionReport`, and `BoundedEvidenceHighlight`: per-field and total-size bounded,
+  parser/provenance annotated, and separated into primary/supplementary/group/profile/highlight
+  content. It must not dump the unbounded vendor payload into the prompt.
 - Long encoding-shaped spans are compacted through
   `soc_agent.pipeline.encoded_context.compact_encoded_spans()` only after sensitive-mode projection
   and before leaf-budget selection. This shared model-boundary rule applies to every selected
@@ -1456,6 +1457,28 @@ normalizers/hids.py
   source field 不足以建立 provenance；若 canonical 值来自平台 metadata，而 message 中的近似字段
   值不同，禁止把该 message 字段伪装成 selected source。
 
+### Cross-message observation compaction / 跨 Message 观测压缩约束
+
+- 通用压缩器只消费 canonical typed observations，不读取或判断 `sip`、`dip`、`detailsN` 等供应商
+  字段名。供应商字段到 typed observation 的映射仍由 Adapter 独占。
+- 压缩只改变模型投影，不改变 `AlertInput.raw`、`AnalysisRun.input_payload`、parsed messages、完整
+  `SourceFieldSemantic`、`CanonicalFieldProvenance`、`RoleClaim` 或 replay 数据。
+- `EvidenceCompactionReport.v1` 必须区分：共享 `stable_facts`、单字段 `varying_facts` 频次和保持字段
+  组合关系的 `profiles`。模型不得把多个独立频次分布重新组合成一个从未发生的事件。
+- 分组 fingerprint 只能使用 canonical observation kind 和字段形状；行为 profile 使用 typed values，
+  但排除时间、observation ID、临时源端口和 PID 等纯实例噪声。任何被截断的长值必须带长度/hash
+  标记，不能伪装成完整值。
+- 代表证据固定为 primary 加 dominant/rare profile representatives，总数不得超过既有 `1+4` full
+  message 预算。后出现的稀有 profile 必须能替换重复副本进入 supplementary evidence，禁止 first-N
+  截断吞掉异常。
+- 报告至少记录 source/typed observation/group/profile/duplicate/non-dominant counts、first/last seen、
+  selected paths、represented/unrepresented sources 和 `high_value_omission_count`。不支持解析且无法被
+  typed summary 表达的未选中变体必须产生 omission/warning，不能静默视为已压缩。
+- `EvidenceCoverageReport.llm_projected_paths` 必须包含被 typed compaction 确实表达的 exact source
+  paths；完整路径留在审计对象，Prompt 只接收计数。压缩后的 scalar facts 必须进入 `E-*` catalog，
+  继续接受相同的 Grounding 校验。
+- `occurrence_count` 只证明重复观测次数，不会提高来源语义正确性、模型置信度或动作权限。
+
 ### Evidence coverage 约束
 
 - `build_analysis_input` 必须生成 `EvidenceCoverageReport`，至少记录 message schema observations、
@@ -1599,6 +1622,7 @@ normalizers/hids.py
   - `ExtractedEntities`。
   - `FactReconstructionResult`。
   - `primary_evidence_path`、`conflict_count`、`conflict_types`、`warnings`。
+  - `EvidenceCompactionReport.v1`，包括 stable/varying/profile 结构和完整性计数。
 - analyzer 输出的 `AnalysisResult.evidence` 必须能引用 fact layer 中的关键不确定性，例如低可信 fallback 和字段冲突。
 - 新 LLM 输出必须使用 `soc.analysis_result.v4`，并显式包含：
   - open-vocabulary `scenario_assessments`；不得要求场景预先存在于固定 taxonomy。
@@ -1614,8 +1638,9 @@ normalizers/hids.py
   evidence 解释；不能把未知场景只埋在自然语言 `reason`。
 - Runtime 必须在调用前冻结 replay-stable `E-*` 当前事实目录和 `S/A/M/C/T-*` 上下文目录。模型只在
   `R-*` 中解释安全语义；每个 `R-*` 必须引用至少一个 `E-*`，依赖外部上下文时还必须引用对应 namespace。
-- `soc-analysis-v17` / `soc-analysis-json-parser-v15` 只允许有日志、无安全语义的机械修复；不得根据文本
-  猜攻击者、受害者、场景、成功状态或上下文来源。
+- `soc-analysis-v19` / `soc-analysis-json-parser-v17` 只允许有日志、无安全语义的机械修复；仅当完整字段
+  集合可无歧义判定为紧凑模型输出时，允许恢复缺失的顶层 `soc.analysis_model_output.v1` 版本；不得根据
+  文本猜攻击者、受害者、场景、成功状态或上下文来源。
 - `soc.analysis_evidence_grounding.v3` 先逐条校验 `E-*` reference/path/typed scalar，再校验 `R-*` 和
   `S/A/M/C/T-*` 引用完整性。Grounding 证明引用闭合，不证明模型推理已校准或可以执行动作。
 - 精确可见的 `<ENCODED:...:OMITTED>` marker-bearing scalar 只能证明字段存在、encoding shape 和模型边界

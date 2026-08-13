@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run and package one chronological ten-alert SOC end-to-end validation."""
+"""Run and package one chronological fixed-cohort SOC end-to-end validation."""
 
 from __future__ import annotations
 
@@ -26,6 +26,12 @@ for import_root in (ROOT, BACKEND_ROOT):
     if str(import_root) not in sys.path:
         sys.path.insert(0, str(import_root))
 
+from validation.compact_zeus.e2e.knowledge_review import (  # noqa: E402
+    compile_case_knowledge_review,
+    compile_knowledge_review_package,
+    render_knowledge_review_markdown,
+)
+
 from soc_agent.context_bridge import (  # noqa: E402
     build_lead_agent_review_context_artifact,
 )
@@ -34,16 +40,14 @@ from soc_agent.db import (  # noqa: E402
     SqlAlchemyAlertRepository,
     to_sync_database_url,
 )
-from validation.compact_zeus.e2e.knowledge_review import (  # noqa: E402
-    compile_case_knowledge_review,
-    compile_knowledge_review_package,
-    render_knowledge_review_markdown,
-)
 
-CASES_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_cases.v1"
-REPORT_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_report.v8"
-CASE_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_case.v8"
-RUN_MANIFEST_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_run.v2"
+CASES_SCHEMA_VERSION = "soc.validation.e2e_alert_cohort_cases.v1"
+LEGACY_CASES_SCHEMA_VERSION = "soc.validation.e2e_ten_alert_cases.v1"
+REPORT_SCHEMA_VERSION = "soc.validation.e2e_alert_cohort_report.v1"
+CASE_SCHEMA_VERSION = "soc.validation.e2e_alert_cohort_case.v1"
+RUN_MANIFEST_SCHEMA_VERSION = "soc.validation.e2e_alert_cohort_run.v1"
+PLAN_SCHEMA_VERSION = "soc.validation.e2e_alert_cohort_plan.v1"
+MAX_CASE_COUNT = 20
 DEFAULT_CASES = Path(__file__).with_name("ten-alert-cases.json")
 DEFAULT_SOURCE = (
     ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
@@ -129,6 +133,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Explicitly disable or enable the conditional second-pass role verifier",
     )
     parser.add_argument(
+        "--tenant-policy-advisor",
+        choices=("disabled", "enabled"),
+        default="enabled",
+        help=(
+            "Disable only the optional tenant-policy LLM advisor; deterministic tenant policy evaluation remains enabled"
+        ),
+    )
+    parser.add_argument(
         "--role-verifier-model",
         help="Verifier model; defaults to --model-name when the verifier is enabled",
     )
@@ -145,7 +157,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--execute",
         action="store_true",
-        help="Execute migrations, ten live LLM calls, and simulated read-only investigation",
+        help="Execute migrations, fixed-cohort live LLM calls, and simulated read-only investigation",
     )
     parser.add_argument("--confirm-live", action="store_true")
     parser.add_argument("--confirm-investigation", action="store_true")
@@ -161,14 +173,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def load_case_manifest(path: Path) -> tuple[dict[str, Any], tuple[CaseSpec, ...]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if (
-        not isinstance(payload, dict)
-        or payload.get("schema_version") != CASES_SCHEMA_VERSION
-    ):
-        raise ValueError("unsupported ten-alert case manifest")
+    if not isinstance(payload, dict) or payload.get("schema_version") not in {
+        CASES_SCHEMA_VERSION,
+        LEGACY_CASES_SCHEMA_VERSION,
+    }:
+        raise ValueError("unsupported fixed-cohort case manifest")
     raw_cases = payload.get("cases")
-    if not isinstance(raw_cases, list) or len(raw_cases) != 10:
-        raise ValueError("ten-alert case manifest must contain exactly 10 cases")
+    if not isinstance(raw_cases, list) or not 1 <= len(raw_cases) <= MAX_CASE_COUNT:
+        raise ValueError(
+            f"fixed-cohort case manifest must contain 1..{MAX_CASE_COUNT} cases"
+        )
     cases = tuple(
         CaseSpec(
             alert_id=_required_text(item, "alert_id"),
@@ -179,14 +193,14 @@ def load_case_manifest(path: Path) -> tuple[dict[str, Any], tuple[CaseSpec, ...]
         for item in raw_cases
         if isinstance(item, Mapping)
     )
-    if len(cases) != 10:
-        raise ValueError("every ten-alert case must be an object")
+    if len(cases) != len(raw_cases):
+        raise ValueError("every fixed-cohort case must be an object")
     alert_ids = [item.alert_id for item in cases]
     duplicates = sorted(
         alert_id for alert_id, count in Counter(alert_ids).items() if count > 1
     )
     if duplicates:
-        raise ValueError("duplicate ten-alert case ids: " + ", ".join(duplicates))
+        raise ValueError("duplicate fixed-cohort case ids: " + ", ".join(duplicates))
     excluded_ids = {
         _required_text(item, "alert_id")
         for item in payload.get("excluded") or []
@@ -374,6 +388,9 @@ def build_dossier(
         if (advisor := _mapping(item.get("advisor"))).get("status")
     )
     automation_items = [_mapping(item.get("automation")) for item in case_results]
+    evidence_compaction_items = [
+        _mapping(item.get("evidence_compaction")) for item in case_results
+    ]
     role_verification_items = [
         _mapping(item.get("role_verification")) for item in case_results
     ]
@@ -414,7 +431,7 @@ def build_dossier(
         "cohort_id": cases_manifest.get("cohort_id"),
         "acceptance_status": (
             "passed"
-            if len(case_results) == 10 and statuses.get("passed") == 10
+            if len(case_results) == len(cases) and statuses.get("passed") == len(cases)
             else "failed"
         ),
         "quality_status": (
@@ -427,18 +444,15 @@ def build_dossier(
             "acceptance_semantics": "structural and safety acceptance; not a model-accuracy claim",
             "investigation": "simulated read-only PingAn MCP providers",
             "tenant_policy": (
-                "default-off PingAn deterministic rules plus bounded LLM policy Skill; "
-                "enabled explicitly for this validation"
+                "default-off PingAn deterministic rules plus bounded LLM policy Skill; enabled explicitly for this validation"
             ),
             "lead_agent": "bounded context projection only; no advisory chat is treated as Runtime truth",
             "knowledge_candidates": "human-review package only; no automatic memory, Skill, adapter, or policy mutation",
             "memory": (
-                "read existing formal Memory only; this validation never promotes "
-                "knowledge-review files into database candidates or records"
+                "read existing formal Memory only; this validation never promotes knowledge-review files into database candidates or records"
             ),
             "governed_automation": (
-                "effective-decision lineage only; no synthetic action policy or "
-                "response adapter is installed"
+                "effective-decision lineage only; no synthetic action policy or response adapter is installed"
             ),
             "mocked_provider_results_are_real_integration_evidence": False,
             "role_verification": (
@@ -494,6 +508,34 @@ def build_dossier(
             ),
             "verdict_counts": dict(sorted(verdicts.items())),
             "source_type_counts": dict(sorted(source_types.items())),
+            "evidence_compaction_source_message_count": sum(
+                int(item.get("source_message_count") or 0)
+                for item in evidence_compaction_items
+            ),
+            "evidence_compaction_behavior_group_count": sum(
+                int(item.get("behavior_group_count") or 0)
+                for item in evidence_compaction_items
+            ),
+            "evidence_compaction_profile_count": sum(
+                int(item.get("profile_count") or 0)
+                for item in evidence_compaction_items
+            ),
+            "evidence_compaction_duplicate_message_count": sum(
+                int(item.get("duplicate_message_count") or 0)
+                for item in evidence_compaction_items
+            ),
+            "evidence_compaction_non_dominant_profile_count": sum(
+                int(item.get("non_dominant_profile_count") or 0)
+                for item in evidence_compaction_items
+            ),
+            "evidence_compaction_high_value_omission_count": sum(
+                int(item.get("high_value_omission_count") or 0)
+                for item in evidence_compaction_items
+            ),
+            "evidence_compaction_unrepresented_source_count": sum(
+                int(item.get("unrepresented_source_count") or 0)
+                for item in evidence_compaction_items
+            ),
             "review_queue_count": sum(
                 _mapping(item.get("review")).get("queue_id") is not None
                 for item in case_results
@@ -842,6 +884,7 @@ def _build_case_dossier(
     labels = _mapping(classification.get("labels"))
     evidence_coverage = _mapping(request.get("evidence_coverage"))
     coverage_counts = _mapping(evidence_coverage.get("counts"))
+    evidence_compaction = _mapping(request.get("evidence_compaction"))
     steps = (
         run_payload.get("steps") if isinstance(run_payload.get("steps"), list) else []
     )
@@ -915,6 +958,10 @@ def _build_case_dossier(
         ),
         "no_high_value_input_gap": int(coverage_counts.get("high_value_gap_count") or 0)
         == 0,
+        "evidence_compaction_complete": (
+            int(evidence_compaction.get("high_value_omission_count") or 0) == 0
+            and int(evidence_compaction.get("unrepresented_source_count") or 0) == 0
+        ),
         "runtime_step_sequence_complete": _runtime_step_sequence_complete(
             step_names,
             role_verifier_enabled=role_verifier_enabled,
@@ -1148,8 +1195,7 @@ def _build_case_dossier(
                 else None
             ),
             "lead_agent_note": (
-                "This is the bounded context available to DeerFlow Lead Agent. "
-                "No advisory chat response is treated as the authoritative Runtime conclusion."
+                "This is the bounded context available to DeerFlow Lead Agent. No advisory chat response is treated as the authoritative Runtime conclusion."
             ),
         },
         "11-knowledge-candidates.json": knowledge_candidate_review,
@@ -1206,6 +1252,7 @@ def _build_case_dossier(
         },
         "role_verification": role_verification,
         "analysis_output_quality": analysis_output_quality,
+        "evidence_compaction": evidence_compaction,
         "model_calls": model_calls,
         "timing": timing,
         "knowledge_candidates": {
@@ -1886,7 +1933,7 @@ def _load_batch_records(batch_dir: Path) -> dict[str, dict[str, Any]]:
 def _render_summary_markdown(report: Mapping[str, Any]) -> str:
     summary = _mapping(report.get("summary"))
     lines = [
-        "# SOC Ten-Alert End-to-End Validation",
+        "# SOC Fixed-Cohort End-to-End Validation",
         "",
         f"- Status: `{report.get('acceptance_status')}`",
         f"- Quality: `{report.get('quality_status')}`",
@@ -1924,9 +1971,7 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
             f"claim statuses={summary.get('role_verifier_claim_status_counts', {})}"
         ),
         (
-            "- Primary analysis output: "
-            f"statuses={summary.get('analysis_output_quality_status_counts', {})}, "
-            f"degraded sections={summary.get('analysis_output_degraded_section_counts', {})}"
+            f"- Primary analysis output: statuses={summary.get('analysis_output_quality_status_counts', {})}, degraded sections={summary.get('analysis_output_degraded_section_counts', {})}"
         ),
         (
             "- Model usage: "
@@ -1939,29 +1984,31 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
             f"incomplete cases={summary.get('model_usage_incomplete_case_count', 0)}"
         ),
         (
-            "- Monetary cost: not measured; no reviewed model-price table is "
-            "configured for this validation"
+            "- Evidence compaction: "
+            f"messages={summary.get('evidence_compaction_source_message_count', 0)}, "
+            f"groups={summary.get('evidence_compaction_behavior_group_count', 0)}, "
+            f"profiles={summary.get('evidence_compaction_profile_count', 0)}, "
+            f"duplicates={summary.get('evidence_compaction_duplicate_message_count', 0)}, "
+            f"non-dominant profiles={summary.get('evidence_compaction_non_dominant_profile_count', 0)}, "
+            f"high-value omissions={summary.get('evidence_compaction_high_value_omission_count', 0)}, "
+            f"unrepresented sources={summary.get('evidence_compaction_unrepresented_source_count', 0)}"
         ),
         (
-            "- Timing: "
-            f"end-to-end total={summary.get('end_to_end_total_duration_ms')} ms, "
-            f"average={summary.get('end_to_end_average_duration_ms')} ms; "
-            "per-step timings remain in each case's 05-runtime-trace.json"
+            "- Monetary cost: not measured; no reviewed model-price table is configured for this validation"
         ),
         (
-            "- Quality boundary: structural/safety only; accuracy is not measured "
-            "without independent analyst labels"
+            f"- Timing: end-to-end total={summary.get('end_to_end_total_duration_ms')} ms, average={summary.get('end_to_end_average_duration_ms')} ms; per-step timings remain in each case's 05-runtime-trace.json"
+        ),
+        (
+            "- Quality boundary: structural/safety only; accuracy is not measured without independent analyst labels"
         ),
         f"- Confirmed Memory contributors: {summary.get('memory_contributor_count', 0)}",
         (
-            "- Formal Memory DB: "
-            f"candidates={summary.get('memory_database_candidate_count', 0)}, "
-            f"records={summary.get('memory_database_record_count', 0)}, "
-            "knowledge-review files are not database Memory"
+            f"- Formal Memory DB: candidates={summary.get('memory_database_candidate_count', 0)}, records={summary.get('memory_database_record_count', 0)}, knowledge-review files are not database Memory"
         ),
         "",
-        "| Alert | Source | Topic | Primary scenario | Role verifier | Base -> Effective | Confidence | Evidence | PingAn policy | Action | Queue | Quality | Status |",
-        "| --- | --- | --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- |",
+        "| Alert | Source | Topic | Primary scenario | Compaction | Role verifier | Base -> Effective | Confidence | Evidence | PingAn policy | Action | Queue | Quality | Status |",
+        "| --- | --- | --- | --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- |",
     ]
     for item in report.get("cases") or []:
         if not isinstance(item, Mapping):
@@ -1977,6 +2024,7 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
         tenant_policy = _mapping(item.get("tenant_policy"))
         role_verification = _mapping(item.get("role_verification"))
         analysis_output_quality = _mapping(item.get("analysis_output_quality"))
+        evidence_compaction = _mapping(item.get("evidence_compaction"))
         tenant_policy_label = tenant_policy.get("selected_rule_id") or (
             f"{tenant_policy.get('decision_source')}:{tenant_policy.get('evaluation_status')}"
         )
@@ -1995,6 +2043,9 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
                     _md(source.get("topic")),
                     _md(scenario.get("scenario_name") or scenario.get("scenario_key")),
                     _md(
+                        f"{evidence_compaction.get('source_message_count', 0)} msg -> {evidence_compaction.get('behavior_group_count', 0)} group / {evidence_compaction.get('profile_count', 0)} profile"
+                    ),
+                    _md(
                         f"{role_verification.get('status')}"
                         + (
                             f" ({role_verification.get('claim_count')} claims)"
@@ -2003,20 +2054,17 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
                         )
                     ),
                     _md(
-                        f"{base_decision.get('verdict') or conclusion.get('verdict')} -> "
-                        f"{effective_decision.get('verdict') or conclusion.get('verdict')}"
+                        f"{base_decision.get('verdict') or conclusion.get('verdict')} -> {effective_decision.get('verdict') or conclusion.get('verdict')}"
                     ),
                     _md(conclusion.get("confidence")),
                     _md(
-                        f"{grounding.get('grounded_count', 0)} grounded / "
-                        f"{grounding.get('ungrounded_count', 0)} rejected"
+                        f"{grounding.get('grounded_count', 0)} grounded / {grounding.get('ungrounded_count', 0)} rejected"
                     ),
                     _md(tenant_policy_label),
                     _md(automation_label),
                     _md(review.get("priority") or "none"),
                     _md(
-                        f"{item.get('quality_status')}/"
-                        f"{analysis_output_quality.get('status') or 'missing'}"
+                        f"{item.get('quality_status')}/{analysis_output_quality.get('status') or 'missing'}"
                     ),
                     _md(item.get("acceptance_status")),
                 ]
@@ -2028,11 +2076,8 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
             "",
             "## Per-alert files",
             "",
-            "Each `cases/<alert_id>/` directory contains `00-ingress.json` through "
-            "`12-effective-decision-and-automation.json`, plus `06a-role-verification.json` "
-            "and `final-conclusion.json`.",
-            "The numbered files are chronological; no separate historical validation directory "
-            "is needed to understand one alert.",
+            "Each `cases/<alert_id>/` directory contains `00-ingress.json` through `12-effective-decision-and-automation.json`, plus `06a-role-verification.json` and `final-conclusion.json`.",
+            "The numbered files are chronological; no separate historical validation directory is needed to understand one alert.",
             "Candidate knowledge is consolidated in `knowledge-review/REVIEW.md`; it remains pending human review and is never written to Memory automatically.",
             "",
         ]
@@ -2043,6 +2088,7 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
 def _execution_environment(
     python_executable: Path,
     *,
+    tenant_policy_advisor_enabled: bool = True,
     role_verifier_enabled: bool = False,
     role_verifier_model_name: str | None = None,
     role_verifier_minimum_confidence: float = DEFAULT_ROLE_VERIFIER_MINIMUM_CONFIDENCE,
@@ -2054,6 +2100,7 @@ def _execution_environment(
         "SOC_AUTOMATION_ENVIRONMENT",
         "SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS",
         "SOC_ROLE_VERIFIER_MODEL",
+        "SOC_TENANT_POLICY_SKILL_PATH",
     ):
         env.pop(key, None)
     env.update(
@@ -2063,8 +2110,9 @@ def _execution_environment(
             "SOC_TENANT_DISPOSITION_POLICY_PATH": str(PINGAN_POLICY),
             "SOC_TENANT_POLICY_ENVIRONMENT": "dev",
             "SOC_TENANT_POLICY_EVENT_TIMEZONE": "Asia/Shanghai",
-            "SOC_TENANT_POLICY_ADVISOR_MODE": "llm",
-            "SOC_TENANT_POLICY_SKILL_PATH": str(PINGAN_POLICY_SKILL),
+            "SOC_TENANT_POLICY_ADVISOR_MODE": (
+                "llm" if tenant_policy_advisor_enabled else "off"
+            ),
             "SOC_PINGAN_ASSET_MCP_PYTHON": str(python_executable),
             "SOC_PINGAN_ASSET_MCP_SERVER": str(
                 BACKEND_ROOT / "scripts/soc_pingan_asset_mcp_server.py"
@@ -2078,6 +2126,8 @@ def _execution_environment(
             "SOC_LLM_OUTPUT_RETRY_ATTEMPTS": str(output_retry_attempts),
         }
     )
+    if tenant_policy_advisor_enabled:
+        env["SOC_TENANT_POLICY_SKILL_PATH"] = str(PINGAN_POLICY_SKILL)
     if role_verifier_enabled and role_verifier_model_name:
         env["SOC_ROLE_VERIFIER_MODEL"] = role_verifier_model_name
     return env
@@ -2113,6 +2163,7 @@ def _write_run_manifest(
     role_verifier_model_name: str | None,
     role_verifier_minimum_confidence: float,
     output_retry_attempts: int,
+    tenant_policy_advisor_enabled: bool,
 ) -> None:
     payload = {
         "schema_version": RUN_MANIFEST_SCHEMA_VERSION,
@@ -2137,9 +2188,17 @@ def _write_run_manifest(
         "tenant_policy_enabled": True,
         "tenant_policy": _display_path(PINGAN_POLICY),
         "tenant_policy_sha256": _sha256_file(PINGAN_POLICY),
-        "tenant_policy_advisor_mode": "llm",
-        "tenant_policy_skill": _display_path(PINGAN_POLICY_SKILL),
-        "tenant_policy_skill_sha256": _sha256_file(PINGAN_POLICY_SKILL),
+        "tenant_policy_advisor_mode": (
+            "llm" if tenant_policy_advisor_enabled else "off"
+        ),
+        "tenant_policy_skill": (
+            _display_path(PINGAN_POLICY_SKILL)
+            if tenant_policy_advisor_enabled
+            else None
+        ),
+        "tenant_policy_skill_sha256": (
+            _sha256_file(PINGAN_POLICY_SKILL) if tenant_policy_advisor_enabled else None
+        ),
         "synthetic_automation_policy_installed": False,
         "real_external_action_call_count": 0,
     }
@@ -2246,6 +2305,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not 0.0 <= args.role_verifier_min_confidence <= 1.0:
             raise ValueError("--role-verifier-min-confidence must be within [0, 1]")
         role_verifier_enabled = args.role_verifier == "enabled"
+        tenant_policy_advisor_enabled = args.tenant_policy_advisor == "enabled"
         role_verifier_model_name = (
             (args.role_verifier_model or args.model_name)
             if role_verifier_enabled
@@ -2266,7 +2326,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(
                 json.dumps(
                     {
-                        "schema_version": "soc.validation.e2e_ten_alert_plan.v1",
+                        "schema_version": PLAN_SCHEMA_VERSION,
                         "source": str(source),
                         "output_root": str(paths.root),
                         "database": str(paths.database),
@@ -2289,7 +2349,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                             if role_verifier_enabled
                             else 0
                         ),
-                        "maximum_policy_advisor_call_count": len(cases),
+                        "tenant_policy_advisor_enabled": (
+                            tenant_policy_advisor_enabled
+                        ),
+                        "maximum_policy_advisor_call_count": (
+                            len(cases) if tenant_policy_advisor_enabled else 0
+                        ),
                         "maximum_total_live_model_call_count": (
                             len(cases)
                             + len(cases) * args.output_retry_attempts
@@ -2299,12 +2364,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                                 if role_verifier_enabled
                                 else 0
                             )
-                            + len(cases)
+                            + (len(cases) if tenant_policy_advisor_enabled else 0)
                         ),
                         "output_retry_attempts": args.output_retry_attempts,
                         "provider_mode": "simulated_read_only",
                         "tenant_policy": _display_path(PINGAN_POLICY),
-                        "tenant_policy_skill": _display_path(PINGAN_POLICY_SKILL),
+                        "tenant_policy_skill": (
+                            _display_path(PINGAN_POLICY_SKILL)
+                            if tenant_policy_advisor_enabled
+                            else None
+                        ),
                         "synthetic_automation_policy_installed": False,
                         "real_external_action_call_count": 0,
                     },
@@ -2317,6 +2386,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _prepare_output(paths, resume=args.resume, replace=args.replace)
         env = _execution_environment(
             python_executable,
+            tenant_policy_advisor_enabled=tenant_policy_advisor_enabled,
             role_verifier_enabled=role_verifier_enabled,
             role_verifier_model_name=role_verifier_model_name,
             role_verifier_minimum_confidence=args.role_verifier_min_confidence,
@@ -2359,6 +2429,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             role_verifier_model_name=role_verifier_model_name,
             role_verifier_minimum_confidence=args.role_verifier_min_confidence,
             output_retry_attempts=args.output_retry_attempts,
+            tenant_policy_advisor_enabled=tenant_policy_advisor_enabled,
         )
         print(
             json.dumps(

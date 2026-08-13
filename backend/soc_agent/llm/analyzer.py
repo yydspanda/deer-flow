@@ -40,14 +40,13 @@ from soc_agent.pipeline.analyzer import (
     STUB_ANALYZER_MODEL_NAME,
     STUB_ANALYZER_PROMPT_VERSION,
     StubLLMAnalyzer,
-    analyze_stub,
+    analyze_output_protocol_fallback,
 )
 from soc_agent.prompts import (
     ANALYSIS_PROMPT_VERSION,
     analysis_response_schema,
     build_analysis_output_repair_prompt,
     build_analysis_prompt,
-    build_analysis_section_output_repair_prompt,
 )
 from soc_agent.utils.hashing import stable_hash
 
@@ -163,43 +162,24 @@ class JsonLLMAnalyzer:
                     issues=(),
                 )
                 retry_kind = "local_section_recovery"
+            elif recovery is not None:
+                parsed = _parsed_from_recovery(recovery)
+                output_quality = _degraded_output_quality(
+                    recovery,
+                    repair_attempted=recovery.repair_applied,
+                )
+                retry_kind = "optional_sections_degraded_without_retry"
             elif self.output_retry_attempts == 0:
                 retry_kind = "retry_disabled"
-                if recovery is not None:
-                    parsed = _parsed_from_recovery(recovery)
-                    output_quality = _degraded_output_quality(
-                        recovery,
-                        repair_attempted=False,
-                    )
-                else:
-                    analysis = analyze_stub(request)
-                    output_quality = _fallback_output_quality(
-                        issues=[_quality_issue(AnalysisOutputSection.CORE, exc, attempt=1)],
-                        repair_attempted=False,
-                    )
-                    effective_analyzer_step_name = "analyze_stub"
+                analysis = analyze_output_protocol_fallback(request)
+                output_quality = _fallback_output_quality(
+                    issues=[_quality_issue(AnalysisOutputSection.CORE, exc, attempt=1)],
+                    repair_attempted=False,
+                )
+                effective_analyzer_step_name = "analyze_stub"
             else:
                 try:
-                    if recovery is not None:
-                        retry_prompt = build_analysis_section_output_repair_prompt(
-                            request,
-                            accepted_analysis=recovery.accepted_data,
-                            invalid_sections=[section.value for section in recovery.invalid_sections],
-                            invalid_section_candidates={section.value: recovery.original_data.get(section.value) for section in recovery.invalid_sections},
-                            validation_issues=[
-                                {
-                                    "section": issue.section.value,
-                                    "stage": issue.stage,
-                                    "error_type": issue.error_type,
-                                    "message": issue.message,
-                                }
-                                for issue in recovery.issues
-                            ],
-                            response_schema=analysis_response_schema(),
-                        )
-                        retry_kind = "section_contract_correction"
-                        retry_purpose = AnalysisProviderPurpose.PRIMARY_ANALYSIS_SECTION_REPAIR
-                    elif exc.stage == "extract_text":
+                    if exc.stage == "extract_text":
                         retry_prompt = prompt
                         retry_kind = "empty_response_retry"
                         retry_purpose = AnalysisProviderPurpose.PRIMARY_ANALYSIS_RETRY
@@ -228,7 +208,7 @@ class JsonLLMAnalyzer:
                             ],
                         )
                     else:
-                        analysis = analyze_stub(request)
+                        analysis = analyze_output_protocol_fallback(request)
                         output_quality = _fallback_output_quality(
                             issues=[
                                 _quality_issue(AnalysisOutputSection.CORE, exc, attempt=1),
@@ -343,7 +323,7 @@ class JsonLLMAnalyzer:
                                 ],
                             )
                         else:
-                            analysis = analyze_stub(request)
+                            analysis = analyze_output_protocol_fallback(request)
                             output_quality = _fallback_output_quality(
                                 issues=[
                                     _quality_issue(AnalysisOutputSection.CORE, exc, attempt=1),
@@ -387,6 +367,8 @@ class JsonLLMAnalyzer:
                     "output_retry_kind": retry_kind,
                     "initial_parse_error_stage": initial_parse_error.stage,
                     "initial_parse_error_type": type(initial_parse_error).__name__,
+                    "initial_parse_error_field_paths": list(initial_parse_error.field_paths),
+                    "initial_parse_error_issue_codes": list(initial_parse_error.issue_codes),
                 }
             )
             if retry_prompt is not None:
@@ -400,10 +382,16 @@ class JsonLLMAnalyzer:
                         "output_repair",
                     ),
                     "retry_parse_error_type": type(retry_parse_error).__name__,
+                    "retry_parse_error_field_paths": list(getattr(retry_parse_error, "field_paths", ())),
+                    "retry_parse_error_issue_codes": list(getattr(retry_parse_error, "issue_codes", ())),
                 }
             )
         if parsed is not None and parsed.repair_log:
             metadata["repair_log"] = parsed.repair_log
+        if parsed is not None:
+            metadata["model_output_schema_version"] = parsed.model_output_schema_version
+            if parsed.hydration_log:
+                metadata["hydration_log"] = parsed.hydration_log
         usage = merge_model_usage(*(item.usage for item in responses))
         if usage:
             metadata["usage"] = usage
@@ -453,8 +441,10 @@ def _parsed_from_recovery(
 ) -> ParsedAnalysisResult:
     return ParsedAnalysisResult(
         result=recovery.result,
-        repair_applied=True,
+        repair_applied=recovery.repair_applied,
         repair_log=list(recovery.repair_log),
+        hydration_log=list(recovery.hydration_log),
+        model_output_schema_version=recovery.model_output_schema_version,
         candidate_text=recovery.candidate_text,
     )
 
@@ -470,6 +460,8 @@ def _quality_issue(
         stage=str(getattr(error, "stage", "output_repair"))[:128],
         error_type=type(error.__cause__ or error).__name__[:256],
         attempt=attempt,
+        field_paths=list(getattr(error, "field_paths", ())),
+        issue_codes=list(getattr(error, "issue_codes", ())),
     )
 
 
@@ -482,6 +474,8 @@ def _quality_issues_from_recovery(
             stage=issue.stage[:128],
             error_type=issue.error_type[:256],
             attempt=1,
+            field_paths=list(issue.field_paths),
+            issue_codes=list(issue.issue_codes),
         )
         for issue in recovery.issues
     ]

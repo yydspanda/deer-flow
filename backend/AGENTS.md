@@ -640,11 +640,21 @@ infer network direction. Upstream `llm_ans`/`llm_score` remain model-derived evi
 is a pipeline identity, and unknown subtypes remain bounded evidence with explicit mapping gaps.
 High-value field checks must inspect the selected structured fallback as well as parsed messages,
 but never combine those views: a successful parsed-message view disables structured fallback.
-`LLMAnalysisRequest` keeps one primary and at most four full supplementary messages; adapter-owned
-exact-path semantics may project overflow values through bounded `BoundedEvidenceHighlight` records.
-Repeated highlights carry an occurrence count and at most five representative paths; complete path
-accounting remains in `EvidenceCoverageReport`. Fields marked `participates_in_reasoning=false` are
-hard-filtered from model projections while remaining raw/auditable.
+`LLMAnalysisRequest.v5` preserves one primary message and selects at most four full supplementary
+messages by deterministic observation profile rather than source order. Before Prompt construction,
+the vendor-neutral `pipeline/observation_compactor.py` groups typed network/HTTP/process/file/email
+observations by canonical shape. `EvidenceCompactionReport` records shared stable facts, bounded value
+frequencies, correlated profiles, occurrence counts, first/last observation time, representative
+source paths, duplicate/non-dominant profile counts, and any high-value omission. Profile selection
+keeps the dominant combination plus rare combinations, so `47` repeated records and one exception do
+not become either 48 Prompt copies or an unsafe first-four truncation. Independent value frequencies
+must never be recombined as a synthetic event; profile tuples preserve their correlation. Complete
+raw input, parsed messages, source semantics, provenance and fact reconstruction remain unchanged for
+audit/replay. Model projection replaces full omission-path maps with reason counts, while exact path
+accounting remains in `EvidenceCoverageReport`. Adapter-owned overflow values still use bounded
+`BoundedEvidenceHighlight` records. Fields marked `participates_in_reasoning=false` are hard-filtered
+from model projections while remaining raw/auditable. Generic compaction consumes only canonical
+observation contracts; vendor field names and meanings stay in their adapters.
 Instance-level audits must match nested leaf names (`_origin.*`, `payload.*`) and verify non-empty
 fields, rather than declaring coverage from aggregate path names alone; any non-empty field without
 a typed consumer or exact semantic must fail the corpus audit.
@@ -689,12 +699,14 @@ DeerFlow's existing request-level model resolution.
 
 New live analyzer output uses `soc.analysis_result.v4`. Runtime attaches a deterministic exact-scalar
 fact catalog (`E-*`) plus governed Skill (`S-*`), adapter-contract (`A-*`), confirmed-memory (`M-*`),
-governed-context (`C-*`), and tool-result (`T-*`) catalogs to `LLMAnalysisRequest.v4`. Model evidence
+governed-context (`C-*`), and tool-result (`T-*`) catalogs to `LLMAnalysisRequest.v5`. Model evidence
 may only copy exact `E-*` reference/path/typed-value tuples. Explicit `R-*` items carry security
 interpretation with declared basis and references, while open-vocabulary scenario assessments cite
-both `E-*` and `R-*`. `soc-analysis-v17` and `soc-analysis-json-parser-v15` reject unresolved or
-ambiguous references. Parser repair is limited to auditable, semantics-free normalization of an
-already unique catalog relation; it must never invent an event fact or security conclusion.
+both `E-*` and `R-*`. `soc-analysis-v19` and `soc-analysis-json-parser-v17` reject unresolved or
+ambiguous references. Parser repair is limited to auditable, semantics-free normalization: it may
+restore a missing top-level `soc.analysis_model_output.v1` version only when the complete field set
+unambiguously matches the compact model-owned contract, or normalize an already unique catalog
+relation; it must never invent an event fact or security conclusion.
 `AnalysisResult.v4` also keeps observed wire flow, organization-boundary direction, semantic roles,
 and action-specific response-target proposals separate. A response target is never an authorization.
 Analyst role confirmation is an append-only `RoleAdjudicationRevisionRecord` through

@@ -15,6 +15,7 @@ from soc_agent.contracts import (
     BoundedAnalysisEvidence,
     BoundedEvidenceHighlight,
     EncodedSpanOmission,
+    EvidenceCompactionReport,
     EvidenceLayer,
     EvidenceTrustLevel,
     ExtractedEntities,
@@ -30,6 +31,9 @@ from soc_agent.pipeline.encoded_context import (
     compact_encoded_spans,
 )
 from soc_agent.pipeline.evidence_coverage import build_evidence_coverage_report
+from soc_agent.pipeline.observation_compactor import (
+    build_evidence_compaction_report,
+)
 from soc_agent.skills import SocSkillResolver, build_soc_skill_context
 
 _PRIMARY_EVIDENCE_MAX_CHARS = 6000
@@ -62,6 +66,8 @@ _SENSITIVE_HEADER_LINE_RE = re.compile(r"(?im)^(?P<name>(?:authorization|proxy-a
 _PROJECTION_MAX_LIST_ITEMS = 100
 _PROJECTION_MAX_STRING_CHARS = 4000
 _PROJECTION_MAX_DEPTH = 16
+_MAX_PROJECTED_PROVENANCE_ITEMS = 40
+_MAX_PROJECTED_ROLE_CLAIMS = 40
 _HIGH_VALUE_EVIDENCE_KEYS = frozenset(
     {
         "access_time",
@@ -109,9 +115,14 @@ def build_llm_analysis_request(
     """Convert runtime state into the only input shape analysis nodes consume."""
 
     conflict_types = sorted({report.conflict_type for report in fact_reconstruction.conflict_reports})
+    evidence_compaction = build_evidence_compaction_report(
+        alert,
+        primary_evidence_path=fact_reconstruction.selected_input_path,
+    )
     primary_evidence, supplementary_evidence = _bounded_evidence(
         alert,
         fact_reconstruction,
+        supplementary_paths=(evidence_compaction.selected_evidence_paths[1:] if evidence_compaction.behavior_group_count else None),
         sensitive_evidence_mode=sensitive_evidence_mode,
     )
     evidence_highlights, highlighted_paths = _build_evidence_highlights(
@@ -127,11 +138,13 @@ def build_llm_analysis_request(
         primary_evidence,
         supplementary_evidence,
         highlighted_paths=highlighted_paths,
+        compacted_paths=evidence_compaction.represented_field_paths,
     )
     warnings = [
         *fact_reconstruction.warnings,
         *entities.warnings,
         *evidence_coverage.warnings,
+        *evidence_compaction.warnings,
     ]
     return LLMAnalysisRequest(
         alert_id=alert.alert_id,
@@ -147,6 +160,7 @@ def build_llm_analysis_request(
         primary_evidence=primary_evidence,
         supplementary_evidence=supplementary_evidence,
         evidence_highlights=evidence_highlights,
+        evidence_compaction=evidence_compaction,
         evidence_coverage=evidence_coverage,
         source_field_semantics=_source_field_semantics(alert),
         conflict_count=len(fact_reconstruction.conflict_reports),
@@ -187,17 +201,61 @@ def project_analysis_context(request: LLMAnalysisRequest) -> dict[str, Any]:
             "primary_evidence_path": request.primary_evidence_path,
             "primary_evidence": (_project_bounded_evidence(request.primary_evidence) if request.primary_evidence is not None else None),
             "supplementary_evidence": [_project_bounded_evidence(item) for item in request.supplementary_evidence],
-            "highlights": [item.model_dump(mode="json", exclude_none=True) for item in request.evidence_highlights],
+            "highlights": [
+                {
+                    "schema_version": item.schema_version,
+                    "semantic_type": item.semantic_type,
+                    "meaning": item.meaning,
+                    "value": item.value,
+                    "occurrence_count": item.occurrence_count,
+                    "truncated": item.truncated,
+                }
+                for item in request.evidence_highlights
+            ],
             "selected_input_path": fact.selected_input_path,
             "selected_input_available": fact.selected_input_available,
             "evidence_policy": fact.evidence_policy.model_dump(mode="json", exclude_none=True) if fact.evidence_policy is not None else None,
             "field_trusts": [item.model_dump(mode="json", exclude_none=True) for item in fact.field_trusts],
             "coverage": _analysis_coverage_context(request),
-            "source_field_semantics": [item.model_dump(mode="json", exclude_none=True) for item in request.source_field_semantics],
+            "adapter_contract_count": sum(item.participates_in_reasoning for item in request.source_field_semantics),
+            "adapter_contract_projection": "reference_catalogs.reasoning_context:A-*",
         },
+        "evidence_compaction": _project_evidence_compaction(
+            request.evidence_compaction,
+        ),
         "fact_reconstruction": {
-            "canonical_field_provenance": [item.model_dump(mode="json", exclude_none=True) for item in fact.canonical_field_provenance],
-            "role_claims": [item.model_dump(mode="json", exclude_none=True) for item in fact.role_claims],
+            "canonical_field_provenance": [
+                {
+                    "canonical_path": item.canonical_path,
+                    "selected_value": item.selected_value,
+                    "selected_from": item.selected_from,
+                    "trust_level": item.trust_level,
+                }
+                for item in sorted(
+                    fact.canonical_field_provenance,
+                    key=lambda item: (
+                        ".observations[" in item.canonical_path,
+                        item.canonical_path,
+                        item.selected_from,
+                    ),
+                )[:_MAX_PROJECTED_PROVENANCE_ITEMS]
+            ],
+            "canonical_field_provenance_count": len(fact.canonical_field_provenance),
+            "canonical_field_provenance_truncated": (len(fact.canonical_field_provenance) > _MAX_PROJECTED_PROVENANCE_ITEMS),
+            "role_claims": [
+                {
+                    "role": item.role,
+                    "value": item.value,
+                    "claim_type": item.claim_type,
+                    "evidence_path": item.evidence_path,
+                    "observation_scope": item.observation_scope,
+                    "evidence_trust": item.evidence_trust,
+                    "semantic_confidence": item.semantic_confidence,
+                }
+                for item in fact.role_claims[:_MAX_PROJECTED_ROLE_CLAIMS]
+            ],
+            "role_claim_count": len(fact.role_claims),
+            "role_claims_truncated": (len(fact.role_claims) > _MAX_PROJECTED_ROLE_CLAIMS),
             "scenario_hypotheses": [
                 {
                     "scenario_type": item.scenario_type,
@@ -274,11 +332,63 @@ def _analysis_coverage_context(request: LLMAnalysisRequest) -> dict[str, Any]:
     }
 
 
+def _project_evidence_compaction(
+    report: EvidenceCompactionReport,
+) -> dict[str, Any]:
+    """Project compact facts while retaining full source paths only in audit data."""
+
+    return {
+        "schema_version": report.schema_version,
+        "strategy_version": report.strategy_version,
+        "raw_payload_retained": report.raw_payload_retained,
+        "source_message_count": report.source_message_count,
+        "typed_observation_count": report.typed_observation_count,
+        "behavior_group_count": report.behavior_group_count,
+        "profile_count": report.profile_count,
+        "repeated_shape_message_count": report.repeated_shape_message_count,
+        "duplicate_message_count": report.duplicate_message_count,
+        "non_dominant_profile_count": report.non_dominant_profile_count,
+        "represented_source_count": report.represented_source_count,
+        "represented_field_count": report.represented_field_count,
+        "unrepresented_source_count": report.unrepresented_source_count,
+        "high_value_omission_count": report.high_value_omission_count,
+        "groups": [
+            {
+                "group_id": group.group_id,
+                "parser_names": group.parser_names,
+                "observation_kinds": group.observation_kinds,
+                "occurrence_count": group.occurrence_count,
+                "representative_source_path": group.representative_source_path,
+                "source_path_count": group.source_path_count,
+                "source_paths_truncated": group.source_paths_truncated,
+                "first_seen": group.first_seen,
+                "last_seen": group.last_seen,
+                "stable_facts": [fact.model_dump(mode="json") for fact in group.stable_facts],
+                "varying_facts": [variation.model_dump(mode="json") for variation in group.varying_facts],
+                "profiles": [profile.model_dump(mode="json") for profile in group.profiles],
+                "profile_count": group.profile_count,
+                "profiles_truncated": group.profiles_truncated,
+                "non_dominant_profile_count": group.non_dominant_profile_count,
+            }
+            for group in report.groups
+        ],
+        "warnings": report.warnings,
+    }
+
+
 def _project_bounded_evidence(
     evidence: BoundedAnalysisEvidence,
 ) -> dict[str, Any]:
     projected = evidence.model_dump(mode="json", exclude_none=True)
     projected.pop("encoded_span_omissions", None)
+    omission_reasons = projected.pop("omission_reasons", {})
+    omission_reason_counts: dict[str, int] = {}
+    for reason in omission_reasons.values():
+        omission_reason_counts[reason] = omission_reason_counts.get(reason, 0) + 1
+    projected["projected_field_count"] = len(projected.pop("projected_field_paths", []))
+    projected["sanitized_field_count"] = len(projected.pop("sanitized_field_paths", []))
+    projected["omitted_field_count"] = len(projected.pop("omitted_field_paths", []))
+    projected["omission_reason_counts"] = omission_reason_counts
     return projected
 
 
@@ -303,6 +413,7 @@ def _bounded_evidence(
     alert: AlertInput,
     fact_reconstruction: FactReconstructionResult,
     *,
+    supplementary_paths: list[str] | None = None,
     sensitive_evidence_mode: SensitiveEvidenceMode,
 ) -> tuple[BoundedAnalysisEvidence | None, list[BoundedAnalysisEvidence]]:
     policy = fact_reconstruction.evidence_policy
@@ -324,7 +435,10 @@ def _bounded_evidence(
         sensitive_evidence_mode=sensitive_evidence_mode,
     )
     supplementary: list[BoundedAnalysisEvidence] = []
-    for path in policy.supplementary_input_paths[:_MAX_SUPPLEMENTARY_EVIDENCE]:
+    candidate_paths = supplementary_paths if supplementary_paths is not None else policy.supplementary_input_paths
+    for path in candidate_paths[:_MAX_SUPPLEMENTARY_EVIDENCE]:
+        if path == policy.selected_input_path:
+            continue
         item = _bounded_evidence_for_path(
             alert,
             path=path,
@@ -357,10 +471,8 @@ def _build_evidence_highlights(
     }
     parsed_by_path = _parsed_messages_by_path(alert)
     groups: dict[tuple[str, str, str, bool], dict[str, Any]] = {}
-    highlighted_paths: list[str] = []
-    total_chars = 0
     for semantic in _source_field_semantics(alert):
-        if not semantic.participates_in_reasoning or semantic.field_path in projected_paths or semantic.field_path in typed_paths:
+        if not semantic.participates_in_reasoning or semantic.field_path in typed_paths:
             continue
         value = _semantic_field_value(parsed_by_path, semantic.field_path)
         bounded = _bounded_highlight_value(
@@ -380,31 +492,42 @@ def _build_evidence_highlights(
         existing = groups.get(key)
         if existing is not None:
             existing["occurrence_count"] += 1
-            highlighted_paths.append(semantic.field_path)
-            if len(existing["evidence_paths"]) < _MAX_HIGHLIGHT_PATHS:
-                existing["evidence_paths"].append(semantic.field_path)
-            else:
-                existing["evidence_paths_truncated"] = True
-            continue
-        item_chars = len(semantic.semantic_type) + len(semantic.meaning) + len(rendered_value)
-        if len(groups) >= _MAX_EVIDENCE_HIGHLIGHTS or total_chars + item_chars > _MAX_HIGHLIGHT_TOTAL_CHARS:
+            existing["all_paths"].append(semantic.field_path)
+            if semantic.field_path not in projected_paths:
+                existing["unprojected_paths"].append(semantic.field_path)
             continue
         groups[key] = {
             "semantic_type": semantic.semantic_type,
             "meaning": semantic.meaning,
             "value": rendered_value,
-            "evidence_paths": [semantic.field_path],
             "occurrence_count": 1,
-            "evidence_paths_truncated": False,
             "truncated": truncated,
             "sensitive_evidence_mode": sensitive_evidence_mode,
+            "all_paths": [semantic.field_path],
+            "unprojected_paths": ([] if semantic.field_path in projected_paths else [semantic.field_path]),
         }
-        highlighted_paths.append(semantic.field_path)
+
+    selected: list[BoundedEvidenceHighlight] = []
+    highlighted_paths: list[str] = []
+    total_chars = 0
+    for candidate in groups.values():
+        if not candidate["unprojected_paths"]:
+            continue
+        item_chars = len(candidate["semantic_type"]) + len(candidate["meaning"]) + len(candidate["value"])
+        if len(selected) >= _MAX_EVIDENCE_HIGHLIGHTS or total_chars + item_chars > _MAX_HIGHLIGHT_TOTAL_CHARS:
+            continue
+        representative_paths = _dedupe(
+            [
+                *candidate.pop("unprojected_paths"),
+                *candidate.pop("all_paths"),
+            ]
+        )
+        candidate["evidence_paths"] = representative_paths[:_MAX_HIGHLIGHT_PATHS]
+        candidate["evidence_paths_truncated"] = len(representative_paths) > _MAX_HIGHLIGHT_PATHS
+        selected.append(BoundedEvidenceHighlight.model_validate(candidate))
+        highlighted_paths.extend(representative_paths)
         total_chars += item_chars
-    return (
-        [BoundedEvidenceHighlight.model_validate(item) for item in groups.values()],
-        highlighted_paths,
-    )
+    return selected, highlighted_paths
 
 
 def _semantic_field_value(

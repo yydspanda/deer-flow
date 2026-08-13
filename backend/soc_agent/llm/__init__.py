@@ -12,6 +12,7 @@ from soc_agent.llm.analyzer import (
 from soc_agent.llm.deerflow_client import DeerFlowLLMChatClient
 from soc_agent.llm.json_parser import (
     ANALYSIS_JSON_PARSER_VERSION,
+    ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION,
     ROLE_VERIFICATION_JSON_PARSER_VERSION,
     LLMOutputParseError,
     ParsedAnalysisResult,
@@ -39,6 +40,7 @@ from soc_agent.llm.settings import (
 
 __all__ = [
     "ANALYSIS_JSON_PARSER_VERSION",
+    "ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION",
     "DeerFlowLLMChatClient",
     "LLM_ANALYZER_STEP_NAME",
     "LLMOutputParseError",

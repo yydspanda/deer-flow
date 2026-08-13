@@ -92,6 +92,7 @@ def build_evidence_coverage_report(
     supplementary: Sequence[BoundedAnalysisEvidence],
     *,
     highlighted_paths: Sequence[str] = (),
+    compacted_paths: Sequence[str] = (),
 ) -> EvidenceCoverageReport:
     """Build an auditable field-path coverage report for one analysis request."""
 
@@ -118,7 +119,8 @@ def build_evidence_coverage_report(
 
     evidence_by_path = {item.source_path: item for item in [primary, *supplementary] if item is not None}
     highlighted_path_set = set(highlighted_paths)
-    projected_paths: list[str] = list(highlighted_path_set)
+    compacted_path_set = set(compacted_paths)
+    projected_paths: list[str] = [*highlighted_path_set, *compacted_path_set]
     sanitized_paths: list[str] = []
     compacted_encoded_paths: list[str] = []
     truncated_evidence_paths: list[str] = []
@@ -127,7 +129,14 @@ def build_evidence_coverage_report(
     for source_path, message_paths in parsed_paths_by_message.items():
         evidence = evidence_by_path.get(source_path)
         if evidence is None:
-            omissions.extend(EvidenceCoverageOmission(field_path=path, reason="message_not_selected_for_bounded_analysis") for path in message_paths)
+            omissions.extend(
+                EvidenceCoverageOmission(
+                    field_path=path,
+                    reason="message_not_selected_for_bounded_analysis",
+                )
+                for path in message_paths
+                if path not in compacted_path_set
+            )
             continue
         projected_paths.extend(evidence.projected_field_paths)
         sanitized_paths.extend(evidence.sanitized_field_paths)
@@ -247,7 +256,8 @@ def build_evidence_coverage_report(
     projected_paths = _sorted_unique(projected_paths)
     sanitized_paths = _sorted_unique(sanitized_paths)
     compacted_encoded_paths = _sorted_unique(compacted_encoded_paths)
-    omissions = [item for item in {(item.field_path, item.reason): item for item in omissions}.values() if item.field_path not in highlighted_path_set]
+    projected_summary_paths = highlighted_path_set | compacted_path_set
+    omissions = [item for item in {(item.field_path, item.reason): item for item in omissions}.values() if item.field_path not in projected_summary_paths]
     return EvidenceCoverageReport(
         message_schemas=message_schemas,
         structured_field_paths=structured_paths,
@@ -274,6 +284,7 @@ def build_evidence_coverage_report(
             "scenario_source_count": len(scenario_paths),
             "llm_projected_count": len(projected_paths),
             "llm_highlighted_count": len(highlighted_path_set),
+            "llm_compacted_observation_field_count": len(compacted_path_set),
             "llm_sanitized_count": len(sanitized_paths),
             "llm_compacted_encoded_count": len(compacted_encoded_paths),
             "llm_truncated_evidence_count": len(_sorted_unique(truncated_evidence_paths)),

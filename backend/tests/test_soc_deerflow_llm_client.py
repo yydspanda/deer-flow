@@ -67,6 +67,17 @@ class _PartialUsageFakeModel:
         )
 
 
+class _EmptyContentReasoningFakeModel:
+    def invoke(self, _messages, *, config):
+        assert config["run_name"] == "soc_runtime_analysis"
+        return SimpleNamespace(
+            content="",
+            additional_kwargs={"reasoning_content": "internal reasoning"},
+            tool_calls=[{"name": "unexpected_tool"}],
+            response_metadata={"finish_reason": "length"},
+        )
+
+
 class _FakeConfig:
     def __init__(self, *names: str) -> None:
         self.models = [SimpleNamespace(name=name) for name in names]
@@ -161,6 +172,28 @@ def test_deerflow_client_marks_partial_provider_usage_as_mixed() -> None:
     assert response.usage["output_tokens"] > 0
     assert response.metadata["usage_measurement"]["status"] == "mixed"
     assert response.metadata["usage_measurement"]["estimated_fields"] == ["output_tokens"]
+
+
+def test_deerflow_client_records_empty_response_shape_without_retaining_text() -> None:
+    client = DeerFlowLLMChatClient(
+        app_config=_FakeConfig("internal-model"),  # type: ignore[arg-type]
+        model_factory=lambda **_kwargs: _EmptyContentReasoningFakeModel(),
+    )
+
+    response = client.complete(
+        [{"role": "user", "content": "alert"}],
+        model_name="internal-model",
+    )
+
+    assert response.content == ""
+    assert response.metadata["finish_reason"] == "length"
+    assert response.metadata["response_content_kind"] == "text"
+    assert response.metadata["response_visible_text_chars"] == 0
+    assert response.metadata["response_visible_text_empty"] is True
+    assert response.metadata["response_reasoning_present"] is True
+    assert response.metadata["response_reasoning_chars"] == len("internal reasoning")
+    assert response.metadata["response_tool_call_count"] == 1
+    assert "internal reasoning" not in json.dumps(response.metadata)
 
 
 def test_soc_llm_settings_are_explicit_and_validate_values() -> None:

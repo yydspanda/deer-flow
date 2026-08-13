@@ -135,6 +135,7 @@ class DeerFlowLLMChatClient:
             provider_usage=_response_usage(response, response_metadata),
         )
         bounded_metadata = {key: response_metadata[key] for key in _SAFE_RESPONSE_METADATA_KEYS if key in response_metadata}
+        bounded_metadata.update(_response_shape_metadata(response))
         bounded_metadata.update(
             {
                 "usage_measurement": usage_measurement,
@@ -188,6 +189,44 @@ def _response_model_name(response_metadata: Mapping[str, Any]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+def _response_shape_metadata(response: Any) -> dict[str, Any]:
+    """Record response shape only, never model text or provider-private values."""
+
+    content = getattr(response, "content", response)
+    visible_chars = 0
+    content_block_count = 0
+    if isinstance(content, str):
+        visible_chars = len(content)
+        content_kind = "text"
+    elif isinstance(content, list):
+        content_kind = "blocks"
+        content_block_count = len(content)
+        for block in content:
+            if isinstance(block, str):
+                visible_chars += len(block)
+            elif isinstance(block, Mapping) and isinstance(block.get("text"), str):
+                visible_chars += len(block["text"])
+    else:
+        content_kind = type(content).__name__
+
+    additional_kwargs = _mapping(getattr(response, "additional_kwargs", None))
+    reasoning = additional_kwargs.get("reasoning_content")
+    if not isinstance(reasoning, str):
+        reasoning = additional_kwargs.get("reasoning")
+    tool_calls = getattr(response, "tool_calls", None)
+    if not isinstance(tool_calls, list):
+        tool_calls = additional_kwargs.get("tool_calls")
+    return {
+        "response_content_kind": content_kind,
+        "response_content_block_count": content_block_count,
+        "response_visible_text_chars": visible_chars,
+        "response_visible_text_empty": visible_chars == 0,
+        "response_reasoning_present": isinstance(reasoning, str) and bool(reasoning),
+        "response_reasoning_chars": len(reasoning) if isinstance(reasoning, str) else 0,
+        "response_tool_call_count": len(tool_calls) if isinstance(tool_calls, list) else 0,
+    }
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

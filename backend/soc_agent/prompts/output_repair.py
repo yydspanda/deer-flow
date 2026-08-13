@@ -10,7 +10,7 @@ from typing import Any
 from soc_agent.contracts import LLMAnalysisRequest, RoleVerificationClaim
 from soc_agent.pipeline.analysis_context import project_analysis_context
 
-ANALYSIS_OUTPUT_REPAIR_PROMPT_VERSION = "soc-analysis-output-repair-v3"
+ANALYSIS_OUTPUT_REPAIR_PROMPT_VERSION = "soc-analysis-output-repair-v4"
 ANALYSIS_SECTION_OUTPUT_REPAIR_PROMPT_VERSION = "soc-analysis-section-output-repair-v1"
 ROLE_VERIFICATION_OUTPUT_REPAIR_PROMPT_VERSION = "soc-role-verification-output-repair-v1"
 MAX_OUTPUT_REPAIR_CANDIDATE_CHARS = 100_000
@@ -56,7 +56,7 @@ def build_analysis_output_repair_prompt(
     }
     return _build_prompt(
         prompt_version=ANALYSIS_OUTPUT_REPAIR_PROMPT_VERSION,
-        object_name="AnalysisResult.v4",
+        object_name="AnalysisModelOutput.v1",
         context=context,
         additional_rules=(
             "Preserve the original verdict, observations, and security reasoning unless the validation error requires a consistency correction.",
@@ -67,7 +67,8 @@ def build_analysis_output_repair_prompt(
                 "proposal only when the target entity itself was not adjudicated."
             ),
             "Every direction or role context_ref must be an exact ID from the supplied S/A/M/C/T context catalog; it need not be repeated in a referenced R-* item.",
-            "Include every required fixed nested schema_version and every required array field.",
+            "Return E-* references only; do not copy catalog source paths or values.",
+            "Do not emit evidence, knowledge_candidates, nested schema_version, proposal_id, policy_review_required, or automation_allowed fields; Runtime owns them.",
         ),
     )
 

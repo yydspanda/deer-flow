@@ -230,12 +230,20 @@ Current SOC direction:
   model accuracy remain `not_measured` until a reviewed price table and independent human truth labels
   exist. E2E knowledge-review artifacts are not database Memory and are never auto-promoted.
 - New live analyzer responses use `soc.analysis_result.v4`. Before the model call, Runtime builds a
+  vendor-neutral `EvidenceCompactionReport` from canonical typed observations. Repeated messages are
+  represented as stable facts, value-frequency distributions, and correlated behavior profiles;
+  dominant and rare profiles choose the bounded full-message representatives. Raw payloads, parsed
+  messages and exact provenance stay unchanged for audit/replay. Never revert this to source-order
+  first-N selection or combine independent value distributions into an invented event.
+  Runtime then builds a
   replay-stable current-alert fact catalog (`E-*`) and governed context catalogs: Skill (`S-*`),
   adapter contract (`A-*`), confirmed memory (`M-*`), governed context (`C-*`), and tool result
   (`T-*`). `evidence[]` may contain only exact `E-*` path/value pairs. Security interpretation belongs
   in explicit `R-*` reasoning items with declared basis and references; open-vocabulary scenario
-  assessments cite both `E-*` and `R-*`. `soc-analysis-v17` / `soc-analysis-json-parser-v15` reject
-  unresolved or ambiguous references. The parser may perform only auditable mechanical repairs: map
+  assessments cite both `E-*` and `R-*`. `soc-analysis-v19` / `soc-analysis-json-parser-v17` reject
+  unresolved or ambiguous references. The parser may perform only auditable mechanical repairs:
+  restore a missing top-level `soc.analysis_model_output.v1` version only when the complete field set
+  is unambiguously the compact model-owned contract, map
   an exact path/value to its unique `E-*`, materialize a valid cited catalog fact, remove an exact
   duplicate fact/reference, normalize a strict JSON boolean string, remove an explicit empty context
   sentinel, derive the redundant basis label from an already explicit valid `S/A/M/C/T` reference,
@@ -462,13 +470,14 @@ Current SOC direction:
   `T_GBD_zeus_data` is the sole current exact-topic exception: its first structured event is
   high-trust fallback evidence; every other PingAn structured fallback defaults to low trust.
   Source type, missing `message`, similar topic names, and topic prefixes do not grant this
-  exception. Preserve the complete original payload for replay/audit. The first parsed message plus
-  at most four full supplementary messages enter bounded evidence; exact-path, adapter-declared
-  high-value fields outside that budget may enter generic `BoundedEvidenceHighlight` records under
-  the same sensitive-evidence mode. Repeated highlights expose at most five representative paths;
-  complete path accounting remains in `EvidenceCoverageReport`. They must never reopen structured
-  fallback. Adapter fields with `participates_in_reasoning=false` are hard-filtered from model
-  projections while remaining in immutable raw/audit evidence.
+  exception. Preserve the complete original payload for replay/audit. The first parsed message stays
+  primary; generic typed-observation compaction selects dominant/rare behavior profiles for at most
+  four full supplementary messages instead of taking the first four by source order. Stable facts,
+  varying-value frequencies, correlated profiles, occurrence counts and omission state enter
+  `EvidenceCompactionReport`; exact-path, adapter-declared high-value overflow may also enter
+  `BoundedEvidenceHighlight`. Complete path accounting remains in `EvidenceCoverageReport`. Neither
+  projection may reopen structured fallback. Adapter fields with `participates_in_reasoning=false`
+  are hard-filtered from model projections while remaining in immutable raw/audit evidence.
 - PingAn normalization preserves trusted generic ingress metadata such as top-level `tenant_id` in
   canonical `AlertInput` and `LLMAnalysisRequest`. Offline batch `--default-tenant-id` may fill only a
   missing tenant; it must reject, not overwrite, a conflicting source tenant.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare two fixed-cohort ten-alert E2E reports without hiding LLM drift."""
+"""Compare two fixed-cohort E2E reports without hiding LLM drift."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ SUPPORTED_REPORT_SCHEMAS = {
     "soc.validation.e2e_ten_alert_report.v6",
     "soc.validation.e2e_ten_alert_report.v7",
     "soc.validation.e2e_ten_alert_report.v8",
+    "soc.validation.e2e_alert_cohort_report.v1",
 }
 
 
@@ -424,23 +425,15 @@ def render_markdown(comparison: Mapping[str, Any]) -> str:
             f"claim statuses `{summary.get('role_verifier_claim_status_counts')}`"
         ),
         (
-            "- Primary analysis output: "
-            f"statuses `{summary.get('analysis_output_quality_status_counts')}`; "
-            f"degraded sections `{summary.get('analysis_output_degraded_section_counts')}`"
+            f"- Primary analysis output: statuses `{summary.get('analysis_output_quality_status_counts')}`; degraded sections `{summary.get('analysis_output_degraded_section_counts')}`"
         ),
         f"- Review requirement changes: `{summary.get('review_requirement_changed_count')}`",
         (
-            "- Runtime duration: "
-            f"`{summary.get('baseline_runtime_total_duration_ms')} ms -> "
-            f"{summary.get('current_runtime_total_duration_ms')} ms` "
-            f"(delta `{summary.get('runtime_duration_delta_ms')} ms`)"
+            f"- Runtime duration: `{summary.get('baseline_runtime_total_duration_ms')} ms -> {summary.get('current_runtime_total_duration_ms')} ms` (delta `{summary.get('runtime_duration_delta_ms')} ms`)"
         ),
         f"- Verifier usage: `{summary.get('role_verifier_total_usage')}`",
         (
-            "- Measured model usage: "
-            f"`{summary.get('measured_model_total_usage')}` "
-            f"(status={summary.get('model_usage_measurement_status')}, "
-            f"lower_bound={summary.get('model_usage_is_lower_bound')})"
+            f"- Measured model usage: `{summary.get('measured_model_total_usage')}` (status={summary.get('model_usage_measurement_status')}, lower_bound={summary.get('model_usage_is_lower_bound')})"
         ),
         f"- Cost: `{summary.get('cost_measurement_status')}`",
         "",
@@ -477,18 +470,14 @@ def render_markdown(comparison: Mapping[str, Any]) -> str:
                     _md(new_base.get("verdict")),
                     _md(memory_stage.get("status") or "none"),
                     _md(
-                        f"{tenant_stage.get('status') or 'none'} / "
-                        f"{tenant_policy.get('decision_source') or 'none'} / "
-                        f"{tenant_policy.get('selected_rule_id') or 'no-match'}"
+                        f"{tenant_stage.get('status') or 'none'} / {tenant_policy.get('decision_source') or 'none'} / {tenant_policy.get('selected_rule_id') or 'no-match'}"
                     ),
                     _md(effective.get("verdict")),
                     _md(
-                        f"{grounding.get('baseline_grounded')} -> "
-                        f"{grounding.get('current_grounded')}"
+                        f"{grounding.get('baseline_grounded')} -> {grounding.get('current_grounded')}"
                     ),
                     _md(
-                        f"{grounding.get('baseline_ungrounded')} -> "
-                        f"{grounding.get('current_ungrounded')}"
+                        f"{grounding.get('baseline_ungrounded')} -> {grounding.get('current_ungrounded')}"
                     ),
                     _md(
                         "auth="

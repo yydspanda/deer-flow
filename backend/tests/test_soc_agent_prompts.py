@@ -38,12 +38,15 @@ def test_analysis_prompt_uses_bounded_llm_request_for_pingan_apt() -> None:
     assert "marker-bearing scalar" in prompt.system
     assert "does not reveal the hidden bytes" in prompt.system
     assert "provider_detection_outcome_assertion" in prompt.system
-    assert "Do not serialize or synthesize arrays" in prompt.system
-    assert "exact scalar paired with that E-* ID" in str(prompt.response_schema)
+    assert "Do not copy evidence source paths or values" in prompt.system
+    assert "evidence" not in prompt.response_schema
+    assert "knowledge_candidates" not in prompt.response_schema
     assert "general_security_knowledge" in prompt.system
-    assert "Each distinct current-alert scalar fact" in prompt.system
+    assert "Runtime materializes source paths and values" in prompt.system
     assert "Return JSON only" in prompt.system
     assert "Bounded analysis context" in prompt.user
+    assert "Required JSON response schema" not in prompt.user
+    assert "soc.analysis_model_output.v1" not in prompt.user
     assert prompt.context["skill_context"]["selected_skills"]
     assert prompt.context["skill_context"]["total_token_budget"] > 0
     assert "skill_context" in prompt.user
@@ -75,8 +78,8 @@ def test_analysis_prompt_handles_missing_evidence_policy() -> None:
     assert prompt.context["evidence"]["evidence_policy"] is None
     assert "missing evidence input policy" in prompt.context["fact_reconstruction"]["warnings"]
     assert "needs_review" in prompt.system
-    assert "knowledge_candidates" in prompt.response_schema
-    assert prompt.response_schema["schema_version"] == "soc.analysis_result.v4"
+    assert "knowledge_candidates" not in prompt.response_schema
+    assert prompt.response_schema["schema_version"] == "soc.analysis_model_output.v1"
     assert "reasoning" in prompt.response_schema
     assert "scenario_assessments" in prompt.response_schema
     assert "network_direction" in prompt.response_schema

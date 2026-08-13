@@ -221,6 +221,39 @@ def analyze_stub(request: LLMAnalysisRequest) -> AnalysisResult:
     )
 
 
+def analyze_output_protocol_fallback(
+    request: LLMAnalysisRequest,
+) -> AnalysisResult:
+    """Return an inert result when a live model response cannot enter the contract."""
+
+    evidence = [
+        evidence_item_from_catalog(
+            request,
+            description="本次模型调用对应的告警标识",
+            preferred_paths=("alert_id",),
+        )
+    ]
+    evidence_ref = _required_evidence_ref(evidence[0])
+    reasoning = AnalysisReasoningItem(
+        reasoning_id="R-01",
+        statement="模型响应为空或未通过结构化输出协议，Runtime 未采纳任何模型业务结论。",
+        basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
+        evidence_refs=[evidence_ref],
+        confidence=0.0,
+    )
+    return AnalysisResult(
+        verdict=Verdict.UNKNOWN,
+        confidence=0.0,
+        summary="模型研判输出不可用，Runtime 已安全降级并保留告警供重试或人工复核。",
+        evidence=evidence,
+        reasoning=[reasoning],
+        evidence_gaps=["缺少一份通过当前结构化输出协议验证的模型研判结果。"],
+        manual_checks=["重试模型分析；若仍失败，基于原始告警和确定性事实目录进行人工研判。"],
+        reason="本次降级由模型输出协议失败触发，不表示原始告警证据不足，也不表示告警低风险。",
+        recommended_action="retry_analysis_or_human_review",
+    )
+
+
 def _context_evidence(request: LLMAnalysisRequest) -> list[EvidenceItem]:
     evidence: list[EvidenceItem] = []
     if request.conflict_count and request.conflict_types:

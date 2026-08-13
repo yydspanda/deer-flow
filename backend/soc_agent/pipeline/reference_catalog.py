@@ -18,8 +18,16 @@ from soc_agent.contracts import (
 from soc_agent.pipeline.analysis_context import project_analysis_context
 from soc_agent.utils.hashing import stable_hash
 
-MAX_ANALYSIS_EVIDENCE_CATALOG_ITEMS = 1200
+MAX_ANALYSIS_EVIDENCE_CATALOG_ITEMS = 150
+MAX_ANALYSIS_CONTEXT_CATALOG_ITEMS = 100
 MAX_CATALOG_SCALAR_CHARS = 4000
+_CONTEXT_KIND_RESERVATIONS = {
+    AnalysisContextReferenceKind.SKILL: 10,
+    AnalysisContextReferenceKind.ADAPTER_CONTRACT: 50,
+    AnalysisContextReferenceKind.CONFIRMED_MEMORY: 15,
+    AnalysisContextReferenceKind.GOVERNED_CONTEXT: 15,
+    AnalysisContextReferenceKind.TOOL_RESULT: 10,
+}
 
 _DIRECT_FACT_PREFIXES = (
     "source.",
@@ -60,6 +68,38 @@ _FACT_RECONSTRUCTION_LEAVES = frozenset(
         "candidate_value",
     }
 )
+_HIGH_VALUE_CATALOG_LEAVES = frozenset(
+    {
+        "access_time",
+        "alarm_sip",
+        "attack_sip",
+        "attack_type",
+        "attacker",
+        "command_line",
+        "destination_ip",
+        "dip",
+        "dport",
+        "event_name",
+        "event_time",
+        "forwarded_chain",
+        "host",
+        "host_name",
+        "host_state",
+        "method",
+        "process_name",
+        "req_body",
+        "rsp_body",
+        "sip",
+        "source_ip",
+        "sport",
+        "status_code",
+        "timestamp",
+        "url",
+        "username",
+        "victim",
+        "x_forwarded_for",
+    }
+)
 
 
 def finalize_analysis_reference_catalogs(
@@ -83,18 +123,21 @@ def finalize_analysis_reference_catalogs(
             AnalysisContextReferenceKind.ADAPTER_CONTRACT,
         }
     ]
-    context_catalog = _dedupe_context_items(
-        [
-            *external_context,
-            *_skill_context_items(request),
-            *_adapter_context_items(request),
-        ]
+    context_catalog = _bound_context_items(
+        _dedupe_context_items(
+            [
+                *external_context,
+                *_skill_context_items(request),
+                *_adapter_context_items(request),
+            ]
+        )
     )
     return request.model_copy(
         update={
             "evidence_catalog": evidence_catalog,
             "context_catalog": context_catalog,
-        }
+        },
+        deep=True,
     )
 
 
@@ -117,9 +160,14 @@ def build_analysis_evidence_catalog(
             continue
         key = (path, _stable_scalar_key(value))
         unique.setdefault(key, (path, value, trust))
-    ordered = sorted(unique.values(), key=lambda item: (item[0], _stable_scalar_key(item[1])))
-    if len(ordered) > MAX_ANALYSIS_EVIDENCE_CATALOG_ITEMS:
-        raise ValueError(f"bounded analysis projection produced {len(ordered)} evidence facts; maximum is {MAX_ANALYSIS_EVIDENCE_CATALOG_ITEMS}")
+    ordered = sorted(
+        unique.values(),
+        key=lambda item: (
+            _evidence_catalog_priority(item[0]),
+            item[0],
+            _stable_scalar_key(item[1]),
+        ),
+    )[:MAX_ANALYSIS_EVIDENCE_CATALOG_ITEMS]
     return [
         AnalysisEvidenceCatalogItem(
             evidence_ref=evidence_ref_for(path, value),
@@ -231,9 +279,14 @@ def _adapter_context_items(
     request: LLMAnalysisRequest,
 ) -> list[AnalysisContextCatalogItem]:
     result: list[AnalysisContextCatalogItem] = []
+    seen_semantics: set[tuple[str, str]] = set()
     for semantic in request.source_field_semantics:
         if not semantic.participates_in_reasoning:
             continue
+        semantic_key = (semantic.semantic_type, semantic.meaning)
+        if semantic_key in seen_semantics:
+            continue
+        seen_semantics.add(semantic_key)
         digest = stable_hash(
             {
                 "kind": "adapter_contract",
@@ -260,7 +313,44 @@ def _dedupe_context_items(
     unique: dict[str, AnalysisContextCatalogItem] = {}
     for item in items:
         unique.setdefault(item.context_ref, item)
-    return sorted(unique.values(), key=lambda item: item.context_ref)
+    kind_priority = {
+        AnalysisContextReferenceKind.SKILL: 0,
+        AnalysisContextReferenceKind.CONFIRMED_MEMORY: 1,
+        AnalysisContextReferenceKind.GOVERNED_CONTEXT: 2,
+        AnalysisContextReferenceKind.TOOL_RESULT: 3,
+        AnalysisContextReferenceKind.ADAPTER_CONTRACT: 4,
+    }
+    return sorted(
+        unique.values(),
+        key=lambda item: (kind_priority[item.kind], item.context_ref),
+    )
+
+
+def _bound_context_items(
+    items: list[AnalysisContextCatalogItem],
+) -> list[AnalysisContextCatalogItem]:
+    if len(items) <= MAX_ANALYSIS_CONTEXT_CATALOG_ITEMS:
+        return items
+
+    selected: list[AnalysisContextCatalogItem] = []
+    selected_refs: set[str] = set()
+    for kind, limit in _CONTEXT_KIND_RESERVATIONS.items():
+        for item in (candidate for candidate in items if candidate.kind is kind):
+            if sum(candidate.kind is kind for candidate in selected) >= limit:
+                break
+            selected.append(item)
+            selected_refs.add(item.context_ref)
+
+    for item in items:
+        if len(selected) >= MAX_ANALYSIS_CONTEXT_CATALOG_ITEMS:
+            break
+        if item.context_ref in selected_refs:
+            continue
+        selected.append(item)
+        selected_refs.add(item.context_ref)
+
+    ordering = {item.context_ref: index for index, item in enumerate(items)}
+    return sorted(selected, key=lambda item: ordering[item.context_ref])
 
 
 def _iter_scalars(value: Any, *, path: str = "") -> Iterator[tuple[str, Any]]:
@@ -296,6 +386,21 @@ def _projection_scalar_allowed(path: str) -> bool:
     if path.startswith("extracted_entities."):
         collection = path.removeprefix("extracted_entities.").split("[", 1)[0]
         return collection in _DIRECT_ENTITY_COLLECTIONS
+    if path.startswith("evidence_compaction.groups["):
+        if leaf in {
+            "occurrence_count",
+            "first_seen",
+            "last_seen",
+        }:
+            return True
+        return leaf == "value" and any(
+            marker in path
+            for marker in (
+                ".stable_facts[",
+                ".varying_facts[",
+                ".profiles[",
+            )
+        )
     if path.startswith("fact_reconstruction."):
         if path == "fact_reconstruction.conflict_count":
             return True
@@ -305,6 +410,42 @@ def _projection_scalar_allowed(path: str) -> bool:
     if path.startswith("evidence.highlights["):
         return leaf == "value"
     return False
+
+
+def _evidence_catalog_priority(path: str) -> int:
+    """Prefer canonical facts and high-value parsed fields under one hard budget."""
+
+    if path == "alert_id":
+        return 0
+    if path.startswith(("source.", "detection.", "classification.")):
+        return 1
+    if path.startswith("canonical_entities.") and ".observations[" not in path:
+        return 2
+    if path.startswith("evidence_compaction.groups["):
+        return 3
+    if path.startswith("evidence.highlights["):
+        return 4
+    if path.startswith("fact_reconstruction.") and any(
+        marker in path
+        for marker in (
+            ".role_claims[",
+            ".role_resolutions[",
+            ".conflict_reports[",
+        )
+    ):
+        return 5
+    if path.startswith("extracted_entities."):
+        return 6
+    leaf = path.rsplit(".", 1)[-1].split("[", 1)[0].casefold()
+    if ("#parsed" in path or "#decoded" in path or "#repaired" in path) and leaf in _HIGH_VALUE_CATALOG_LEAVES:
+        return 7
+    if path.startswith("fact_reconstruction."):
+        return 8
+    if "#parsed" in path or "#decoded" in path or "#repaired" in path:
+        return 9
+    if path.startswith("canonical_entities."):
+        return 10
+    return 11
 
 
 def _trust_for_context_path(

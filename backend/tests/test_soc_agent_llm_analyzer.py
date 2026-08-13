@@ -133,6 +133,38 @@ def _analysis_json(*, trailing_comma: bool = False) -> str:
     """
 
 
+def _compact_analysis_json() -> str:
+    payload = json.loads(_analysis_json())
+    payload["schema_version"] = "soc.analysis_model_output.v1"
+    payload.pop("evidence")
+    payload.pop("knowledge_candidates")
+    for item in payload["reasoning"]:
+        item.pop("schema_version")
+    for item in payload["scenario_assessments"]:
+        item.pop("schema_version")
+    payload["network_direction"].pop("schema_version")
+    payload["role_adjudication"].pop("schema_version")
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def test_json_llm_analyzer_accepts_compact_output_without_retry_or_repair() -> None:
+    client = RecordingChatClient(_compact_analysis_json())
+
+    run = DeterministicAnalysisRuntime(analyzer=JsonLLMAnalyzer(client=client, model_name="soc-model")).analyze(_sample("malicious_ioc.json"))
+
+    assert run.analysis is not None
+    assert run.analysis.verdict is Verdict.TRUE_POSITIVE
+    assert run.analysis.evidence[0].source == "detection.rule_code"
+    assert run.analysis.knowledge_candidates == []
+    assert run.analysis_output_quality is not None
+    assert run.analysis_output_quality.status is AnalysisOutputQualityStatus.ACCEPTED
+    analyze_step = next(step for step in run.steps if step.step_name == LLM_ANALYZER_STEP_NAME)
+    assert analyze_step.metadata["model_output_schema_version"] == "soc.analysis_model_output.v1"
+    assert analyze_step.metadata["output_retry_attempted"] is False
+    assert analyze_step.metadata["hydration_log"][0]["reference_count"] == 1
+    assert len(client.calls) == 1
+
+
 def test_default_optional_analyzer_returns_stub() -> None:
     analyzer = build_optional_llm_analyzer(enabled=False)
 
@@ -241,6 +273,8 @@ def test_json_llm_analyzer_retries_one_invalid_contract_with_bounded_correction(
     assert step.metadata["usage_complete"] is True
     assert step.metadata["output_retry_attempted"] is True
     assert step.metadata["output_retry_kind"] == "contract_correction"
+    assert step.metadata["initial_parse_error_field_paths"] == ["reasoning.0.schema_version"]
+    assert step.metadata["initial_parse_error_issue_codes"] == ["missing"]
     assert step.metadata["usage"] == {
         "input_tokens": 180,
         "output_tokens": 90,
@@ -294,6 +328,9 @@ def test_json_llm_analyzer_output_retry_can_be_disabled() -> None:
     assert run.decision is not None
     assert run.decision.confidence_source is DecisionConfidenceSource.STUB_HEURISTIC
     assert DecisionReviewReason.ANALYSIS_OUTPUT_DEGRADED in run.decision.review_reasons
+    assert run.analysis is not None
+    assert "模型研判输出不可用" in run.analysis.summary
+    assert "不表示原始告警证据不足" in run.analysis.reason
     assert len(client.calls) == 1
 
 
@@ -329,9 +366,11 @@ def test_json_llm_analyzer_failed_correction_retains_bounded_usage() -> None:
         "total_tokens": 210,
     }
     assert step.metadata["output_quality"]["status"] == "deterministic_fallback"
+    assert run.analysis is not None
+    assert run.analysis.recommended_action == "retry_analysis_or_human_review"
 
 
-def test_json_llm_analyzer_repairs_only_invalid_role_section() -> None:
+def test_json_llm_analyzer_degrades_invalid_role_section_without_provider_retry() -> None:
     invalid = json.loads(_analysis_json())
     invalid["role_adjudication"] = {
         "schema_version": "soc.role_adjudication_result.v1",
@@ -354,21 +393,7 @@ def test_json_llm_analyzer_repairs_only_invalid_role_section() -> None:
         "evidence_gaps": ["缺少角色证据。"],
         "rationale": "角色未决。",
     }
-    corrected = dict(invalid["role_adjudication"])
-    corrected["roles"] = [dict(invalid["role_adjudication"]["roles"][0])]
-    corrected["roles"][0]["value"] = None
-    client = SequencedChatClient(
-        [
-            json.dumps(invalid, ensure_ascii=False),
-            json.dumps(
-                {
-                    "schema_version": "soc.analysis_section_patch.v1",
-                    "sections": {"role_adjudication": corrected},
-                },
-                ensure_ascii=False,
-            ),
-        ]
-    )
+    client = SequencedChatClient([json.dumps(invalid, ensure_ascii=False)])
     provider_purposes = []
 
     run = DeterministicAnalysisRuntime(analyzer=JsonLLMAnalyzer(client=client, model_name="soc-model")).analyze_journaled(
@@ -379,14 +404,15 @@ def test_json_llm_analyzer_repairs_only_invalid_role_section() -> None:
     assert run.status is AnalysisRunStatus.NEEDS_REVIEW
     assert run.analysis is not None
     assert run.analysis.verdict is Verdict.TRUE_POSITIVE
-    assert run.analysis.role_adjudication.roles[0].value is None
+    assert run.analysis.role_adjudication.status.value == "not_assessed"
+    assert run.analysis.role_adjudication.roles == []
     assert run.analysis_output_quality is not None
-    assert run.analysis_output_quality.status is AnalysisOutputQualityStatus.REPAIRED
-    assert provider_purposes == [
-        "primary_analysis",
-        "primary_analysis_section_repair",
-    ]
-    assert "optional-section patch" in client.calls[1][0][0]["content"]
+    assert run.analysis_output_quality.status is AnalysisOutputQualityStatus.DEGRADED
+    assert provider_purposes == ["primary_analysis"]
+    assert len(client.calls) == 1
+    analyze_step = next(step for step in run.steps if step.step_name == LLM_ANALYZER_STEP_NAME)
+    assert analyze_step.metadata["output_retry_attempted"] is False
+    assert analyze_step.metadata["output_retry_kind"] == "optional_sections_degraded_without_retry"
 
 
 def test_json_llm_analyzer_keeps_valid_core_when_section_patch_still_fails() -> None:
@@ -412,12 +438,7 @@ def test_json_llm_analyzer_keeps_valid_core_when_section_patch_still_fails() -> 
         "evidence_gaps": ["缺少角色证据。"],
         "rationale": "角色未决。",
     }
-    client = SequencedChatClient(
-        [
-            json.dumps(invalid, ensure_ascii=False),
-            '{"schema_version":"soc.analysis_section_patch.v1","sections":{}}',
-        ]
-    )
+    client = SequencedChatClient([json.dumps(invalid, ensure_ascii=False)])
 
     run = DeterministicAnalysisRuntime(analyzer=JsonLLMAnalyzer(client=client, model_name="soc-model")).analyze(_sample("malicious_ioc.json"))
 
@@ -431,6 +452,7 @@ def test_json_llm_analyzer_keeps_valid_core_when_section_patch_still_fails() -> 
     assert [section.value for section in run.analysis_output_quality.degraded_sections] == ["role_adjudication"]
     assert run.decision is not None
     assert DecisionReviewReason.ANALYSIS_OUTPUT_DEGRADED in run.decision.review_reasons
+    assert len(client.calls) == 1
 
 
 def test_default_runtime_still_uses_stub_analyzer() -> None:
