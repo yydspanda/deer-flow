@@ -22,10 +22,15 @@ from soc_agent.contracts import (
     ParsedRawMessageEvidence,
     RoleClaim,
     RoleClaimType,
+    RoleCoherenceAssessment,
+    RoleCoherenceRelationship,
+    RoleCoherenceRelationshipStatus,
+    RoleCoherenceStatus,
     RoleResolution,
     RoleResolutionStatus,
     ScenarioHypothesis,
     ScenarioSignal,
+    SourceFieldSemantic,
 )
 
 _ROLES = ("source", "destination", "attacker", "victim", "impacted_asset")
@@ -76,12 +81,21 @@ def reconstruct_facts(alert: AlertInput) -> FactReconstructionResult:
     role_claims = _role_claims(alert, policy, warnings)
     scenario_hypotheses = _scenario_hypotheses(alert)
     role_claims = _add_scenario_claims(role_claims, scenario_hypotheses, selected_input_path)
-    role_resolutions = _role_resolutions(role_claims, selected_input_path)
+    role_resolutions = _role_resolutions(
+        role_claims,
+        selected_input_path,
+        _source_field_semantics(alert),
+    )
     conflict_reports = _conflict_reports(
         role_claims,
         role_resolutions,
         scenario_hypotheses,
         selected_input_path,
+    )
+    role_coherence = _role_coherence_assessment(
+        role_claims,
+        role_resolutions,
+        scenario_hypotheses,
     )
     canonical_provenance = _merge_canonical_field_provenance(
         _canonical_field_provenance(alert, role_claims, selected_input_path),
@@ -98,6 +112,7 @@ def reconstruct_facts(alert: AlertInput) -> FactReconstructionResult:
         role_claims=role_claims,
         scenario_hypotheses=scenario_hypotheses,
         role_resolutions=role_resolutions,
+        role_coherence=role_coherence,
         conflict_reports=conflict_reports,
         warnings=_dedupe(warnings),
     )
@@ -353,7 +368,11 @@ def _add_scenario_claims(
     return _dedupe_claims([*claims, *additions])
 
 
-def _role_resolutions(claims: list[RoleClaim], selected_input_path: str | None) -> list[RoleResolution]:
+def _role_resolutions(
+    claims: list[RoleClaim],
+    selected_input_path: str | None,
+    source_field_semantics: Sequence[SourceFieldSemantic],
+) -> list[RoleResolution]:
     resolutions: list[RoleResolution] = []
     for role in _ROLES:
         candidates = _claims_in_selected_observation(
@@ -389,6 +408,11 @@ def _role_resolutions(claims: list[RoleClaim], selected_input_path: str | None) 
             confidence = min(confidence + 0.05, 0.95)
         if contradicting:
             confidence *= 0.75
+        exact_session_role = not contradicting and _has_exact_session_role_contract(
+            role,
+            best,
+            source_field_semantics,
+        )
         resolutions.append(
             RoleResolution(
                 role=role,  # type: ignore[arg-type]
@@ -398,8 +422,8 @@ def _role_resolutions(claims: list[RoleClaim], selected_input_path: str | None) 
                 supporting_claim_ids=[claim.claim_id for claim in supporting],
                 contradicting_claim_ids=[claim.claim_id for claim in contradicting],
                 rationale=("provisional value selected from the strongest claim; contradictory values remain unresolved" if contradicting else "selected from mutually consistent claims"),
-                evidence_gaps=[] if status is RoleResolutionStatus.CONFIRMED else _evidence_gaps(role),
-                manual_checks=[] if status is RoleResolutionStatus.CONFIRMED else _manual_checks(role),
+                evidence_gaps=([] if status is RoleResolutionStatus.CONFIRMED or exact_session_role else _evidence_gaps(role)),
+                manual_checks=([] if status is RoleResolutionStatus.CONFIRMED or exact_session_role else _manual_checks(role)),
                 # Fact confirmation is necessary but never sufficient for an
                 # operational action; policy and approval own that decision.
                 automation_allowed=False,
@@ -489,6 +513,104 @@ def _reverse_connection_conflicts(
             )
         )
     return reports
+
+
+def _role_coherence_assessment(
+    claims: Sequence[RoleClaim],
+    resolutions: Sequence[RoleResolution],
+    hypotheses: Sequence[ScenarioHypothesis],
+) -> RoleCoherenceAssessment:
+    """Evaluate scenario-defined role relationships without deciding alert truth."""
+
+    if not any(item.scenario_type == "reverse_connection" for item in hypotheses):
+        return RoleCoherenceAssessment()
+
+    resolution_by_role = {item.role: item for item in resolutions}
+    claims_by_id = {item.claim_id: item for item in claims}
+    relationships: list[RoleCoherenceRelationship] = []
+    counterevidence_paths: list[str] = []
+    for semantic_role, network_role in (
+        ("attacker", "destination"),
+        ("victim", "source"),
+    ):
+        semantic_resolution = resolution_by_role.get(semantic_role)
+        network_resolution = resolution_by_role.get(network_role)
+        semantic_value = semantic_resolution.selected_value if semantic_resolution is not None else None
+        network_value = network_resolution.selected_value if network_resolution is not None else None
+        if semantic_value is None or network_value is None:
+            status = RoleCoherenceRelationshipStatus.UNAVAILABLE
+        elif any(item.status is RoleResolutionStatus.CONFLICTED for item in (semantic_resolution, network_resolution) if item is not None):
+            status = RoleCoherenceRelationshipStatus.CONFLICTED
+            claim_ids = {claim_id for item in (semantic_resolution, network_resolution) if item is not None for claim_id in (*item.supporting_claim_ids, *item.contradicting_claim_ids)}
+            counterevidence_paths.extend(claims_by_id[claim_id].evidence_path for claim_id in claim_ids if claim_id in claims_by_id)
+        elif semantic_value == network_value:
+            status = RoleCoherenceRelationshipStatus.ALIGNED
+        else:
+            status = RoleCoherenceRelationshipStatus.MISMATCH
+            counterevidence_paths.extend(claim.evidence_path for claim in claims if claim.role in {semantic_role, network_role} and claim.value in {semantic_value, network_value})
+        relationships.append(
+            RoleCoherenceRelationship(
+                semantic_role=semantic_role,  # type: ignore[arg-type]
+                network_role=network_role,  # type: ignore[arg-type]
+                semantic_value=semantic_value,
+                network_value=network_value,
+                status=status,
+            )
+        )
+
+    statuses = {item.status for item in relationships}
+    if statuses.intersection(
+        {
+            RoleCoherenceRelationshipStatus.MISMATCH,
+            RoleCoherenceRelationshipStatus.CONFLICTED,
+        }
+    ):
+        return RoleCoherenceAssessment(
+            scenario_type="reverse_connection",
+            status=RoleCoherenceStatus.CONFLICTED,
+            relationships=relationships,
+            counterevidence_paths=_dedupe(counterevidence_paths),
+            rationale=("At least one attacker/victim relationship contradicts the reverse-connection source/destination mapping."),
+        )
+    if statuses == {RoleCoherenceRelationshipStatus.ALIGNED}:
+        return RoleCoherenceAssessment(
+            scenario_type="reverse_connection",
+            status=RoleCoherenceStatus.COHERENT,
+            relationships=relationships,
+            rationale=("Attacker aligns with the session destination and victim aligns with the session source under the reverse-connection hypothesis."),
+        )
+    return RoleCoherenceAssessment(
+        scenario_type="reverse_connection",
+        relationships=relationships,
+        rationale="One or more roles required for reverse-connection coherence are unavailable.",
+    )
+
+
+def _source_field_semantics(alert: AlertInput) -> list[SourceFieldSemantic]:
+    values = alert.extensions.get("source_field_semantics")
+    if not isinstance(values, list):
+        return []
+    semantics: list[SourceFieldSemantic] = []
+    for value in values:
+        try:
+            semantics.append(SourceFieldSemantic.model_validate(value))
+        except ValidationError:
+            continue
+    return semantics
+
+
+def _has_exact_session_role_contract(
+    role: str,
+    claim: RoleClaim,
+    semantics: Sequence[SourceFieldSemantic],
+) -> bool:
+    semantic_type = {
+        "source": "provider_reported_session_initiator",
+        "destination": "provider_reported_session_responder",
+    }.get(role)
+    if semantic_type is None or claim.evidence_trust is not EvidenceTrustLevel.HIGH:
+        return False
+    return any(item.field_path == claim.evidence_path and item.semantic_type == semantic_type and item.participates_in_reasoning for item in semantics)
 
 
 def _canonical_field_provenance(

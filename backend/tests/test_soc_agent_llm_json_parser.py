@@ -7,6 +7,12 @@ import pytest
 from soc_agent.contracts import (
     AnalysisContextCatalogItem,
     AnalysisEvidenceCatalogItem,
+    FactReconstructionResult,
+    LLMAnalysisRequest,
+    RoleCoherenceAssessment,
+    RoleCoherenceRelationship,
+    RoleCoherenceRelationshipStatus,
+    RoleCoherenceStatus,
     Verdict,
 )
 from soc_agent.llm import ANALYSIS_JSON_PARSER_VERSION, LLMOutputParseError, parse_analysis_result_output
@@ -409,6 +415,84 @@ def test_parse_analysis_result_keeps_direction_roles_and_action_specific_targets
     assert target.action_kind == "isolate_host"
     assert target.target_value == "30.116.114.150"
     assert target.automation_allowed is False
+
+
+def test_parser_rejects_free_form_conflict_when_model_roles_match_coherent_reverse_mapping() -> None:
+    payload = _valid_payload()
+    payload["role_adjudication"] = {
+        "schema_version": "soc.role_adjudication_result.v1",
+        "status": "tentative",
+        "roles": [
+            {
+                "role": "attacker",
+                "entity_type": "ip",
+                "value": "30.174.29.44",
+                "status": "tentative",
+                "confidence": 0.6,
+                "evidence_refs": ["E-A1B2C3D4E5F6"],
+                "reasoning_refs": ["R-01"],
+                "context_refs": [],
+                "rationale": "响应方是攻击端候选。",
+            },
+            {
+                "role": "victim",
+                "entity_type": "ip",
+                "value": "30.116.114.150",
+                "status": "tentative",
+                "confidence": 0.6,
+                "evidence_refs": ["E-A1B2C3D4E5F6"],
+                "reasoning_refs": ["R-01"],
+                "context_refs": [],
+                "rationale": "发起回连的一方是受害端候选。",
+            },
+        ],
+        "response_target_proposals": [],
+        "conflicts": ["攻击者和受害者角色与反弹连接方向冲突。"],
+        "evidence_gaps": ["缺少端点证据。"],
+        "rationale": "角色值与反弹连接关系一致。",
+    }
+    request = LLMAnalysisRequest(
+        alert_id="reverse-shell",
+        fact_reconstruction=FactReconstructionResult(
+            role_coherence=RoleCoherenceAssessment(
+                scenario_type="reverse_connection",
+                status=RoleCoherenceStatus.COHERENT,
+                relationships=[
+                    RoleCoherenceRelationship(
+                        semantic_role="attacker",
+                        network_role="destination",
+                        semantic_value="30.174.29.44",
+                        network_value="30.174.29.44",
+                        status=RoleCoherenceRelationshipStatus.ALIGNED,
+                    ),
+                    RoleCoherenceRelationship(
+                        semantic_role="victim",
+                        network_role="source",
+                        semantic_value="30.116.114.150",
+                        network_value="30.116.114.150",
+                        status=RoleCoherenceRelationshipStatus.ALIGNED,
+                    ),
+                ],
+                rationale="Reverse-connection roles align.",
+            )
+        ),
+    )
+
+    with pytest.raises(LLMOutputParseError) as exc_info:
+        parse_analysis_result_output(
+            json.dumps(payload, ensure_ascii=False),
+            analysis_request=request,
+        )
+
+    assert exc_info.value.stage == "role_coherence_validation"
+    assert exc_info.value.issue_codes == ("unsupported_role_conflict",)
+
+    recovery = recover_analysis_result_output(
+        json.dumps(payload, ensure_ascii=False),
+        analysis_request=request,
+    )
+    assert recovery is not None
+    assert [section.value for section in recovery.invalid_sections] == ["role_adjudication"]
 
 
 def test_parse_analysis_result_accepts_direct_direction_context_not_repeated_in_reasoning() -> None:

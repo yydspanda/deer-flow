@@ -266,6 +266,7 @@ class JsonLLMAnalyzer:
                                 recovery=recovery,
                                 evidence_catalog=request.evidence_catalog,
                                 context_catalog=request.context_catalog,
+                                analysis_request=request,
                             )
                         else:
                             parsed = _parse_analysis_response(
@@ -418,6 +419,7 @@ def _parse_analysis_response(
         response.content,
         evidence_catalog=request.evidence_catalog,
         context_catalog=request.context_catalog,
+        analysis_request=request,
     )
 
 
@@ -431,6 +433,7 @@ def _recover_analysis_response(
             response.content,
             evidence_catalog=request.evidence_catalog,
             context_catalog=request.context_catalog,
+            analysis_request=request,
         )
     except LLMOutputParseError:
         return None

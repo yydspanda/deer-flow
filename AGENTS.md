@@ -240,7 +240,7 @@ Current SOC direction:
   adapter contract (`A-*`), confirmed memory (`M-*`), governed context (`C-*`), and tool result
   (`T-*`). `evidence[]` may contain only exact `E-*` path/value pairs. Security interpretation belongs
   in explicit `R-*` reasoning items with declared basis and references; open-vocabulary scenario
-  assessments cite both `E-*` and `R-*`. `soc-analysis-v19` / `soc-analysis-json-parser-v17` reject
+  assessments cite both `E-*` and `R-*`. `soc-analysis-v20` / `soc-analysis-json-parser-v18` reject
   unresolved or ambiguous references. The parser may perform only auditable mechanical repairs:
   restore a missing top-level `soc.analysis_model_output.v1` version only when the complete field set
   is unambiguously the compact model-owned contract, map
@@ -253,6 +253,12 @@ Current SOC direction:
   role; this never grants action authority.
   Direction/role objects may directly cite exact request-catalog context IDs without duplicating them
   in `R-*`; dangling context IDs still fail. It must not infer security semantics.
+  `LLMAnalysisRequest.v6` also carries Runtime-owned `role_coherence`: a scenario-specific consistency
+  check between semantic roles and observed network roles. A coherent reverse-connection mapping
+  prevents the model from inventing an attacker/victim conflict merely because duplicate PCAP/CMDB/
+  endpoint corroboration is absent; exact contradictory values still produce a conflicted assessment.
+  High-trust message highlights preserve their reviewed source trust when compaction projects them into
+  `E-*`. Neither mechanism proves compromise, changes the verdict, or grants action authority.
   A primary or verifier model node may make at most one separately journaled output-repair call under
   `SOC_LLM_OUTPUT_RETRY_ATTEMPTS=1`. Primary output is validated as a required core plus independently
   recoverable scenario, direction, role, and knowledge sections. When the core is valid, repair sends

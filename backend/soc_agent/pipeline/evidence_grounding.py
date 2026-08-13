@@ -232,6 +232,8 @@ def _has_unproven_outcome_claim(
 def _has_bounded_provider_outcome_assertion(
     request: LLMAnalysisRequest,
 ) -> bool:
+    if any(item.semantic_type == _PROVIDER_OUTCOME_SEMANTIC_TYPE and item.trust_level is EvidenceTrustLevel.HIGH for item in request.evidence_highlights):
+        return True
     evidence_items = [item for item in (request.primary_evidence, *request.supplementary_evidence) if item is not None and item.trust_level is EvidenceTrustLevel.HIGH]
     for semantic in request.source_field_semantics:
         if semantic.semantic_type != _PROVIDER_OUTCOME_SEMANTIC_TYPE or not semantic.participates_in_reasoning:

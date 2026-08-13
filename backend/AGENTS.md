@@ -640,7 +640,7 @@ infer network direction. Upstream `llm_ans`/`llm_score` remain model-derived evi
 is a pipeline identity, and unknown subtypes remain bounded evidence with explicit mapping gaps.
 High-value field checks must inspect the selected structured fallback as well as parsed messages,
 but never combine those views: a successful parsed-message view disables structured fallback.
-`LLMAnalysisRequest.v5` preserves one primary message and selects at most four full supplementary
+`LLMAnalysisRequest.v6` preserves one primary message and selects at most four full supplementary
 messages by deterministic observation profile rather than source order. Before Prompt construction,
 the vendor-neutral `pipeline/observation_compactor.py` groups typed network/HTTP/process/file/email
 observations by canonical shape. `EvidenceCompactionReport` records shared stable facts, bounded value
@@ -652,7 +652,8 @@ must never be recombined as a synthetic event; profile tuples preserve their cor
 raw input, parsed messages, source semantics, provenance and fact reconstruction remain unchanged for
 audit/replay. Model projection replaces full omission-path maps with reason counts, while exact path
 accounting remains in `EvidenceCoverageReport`. Adapter-owned overflow values still use bounded
-`BoundedEvidenceHighlight` records. Fields marked `participates_in_reasoning=false` are hard-filtered
+`BoundedEvidenceHighlight.v3` records and preserve their reviewed source trust. Fields marked
+`participates_in_reasoning=false` are hard-filtered
 from model projections while remaining raw/auditable. Generic compaction consumes only canonical
 observation contracts; vendor field names and meanings stay in their adapters.
 Instance-level audits must match nested leaf names (`_origin.*`, `payload.*`) and verify non-empty
@@ -699,10 +700,10 @@ DeerFlow's existing request-level model resolution.
 
 New live analyzer output uses `soc.analysis_result.v4`. Runtime attaches a deterministic exact-scalar
 fact catalog (`E-*`) plus governed Skill (`S-*`), adapter-contract (`A-*`), confirmed-memory (`M-*`),
-governed-context (`C-*`), and tool-result (`T-*`) catalogs to `LLMAnalysisRequest.v5`. Model evidence
+governed-context (`C-*`), and tool-result (`T-*`) catalogs to `LLMAnalysisRequest.v6`. Model evidence
 may only copy exact `E-*` reference/path/typed-value tuples. Explicit `R-*` items carry security
 interpretation with declared basis and references, while open-vocabulary scenario assessments cite
-both `E-*` and `R-*`. `soc-analysis-v19` and `soc-analysis-json-parser-v17` reject unresolved or
+both `E-*` and `R-*`. `soc-analysis-v20` and `soc-analysis-json-parser-v18` reject unresolved or
 ambiguous references. Parser repair is limited to auditable, semantics-free normalization: it may
 restore a missing top-level `soc.analysis_model_output.v1` version only when the complete field set
 unambiguously matches the compact model-owned contract, or normalize an already unique catalog
@@ -719,6 +720,14 @@ without demanding duplicate SYN/flow/PCAP evidence. An explicit direction-unknow
 proxy/NAT/forwarding leg, or same-observation contradiction may still challenge it. The declaration
 never establishes attacker/victim identity, compromise, a response target, or action authority. PingAn
 NDR/APT currently declares message-first `sip/dip` this way; other adapters must opt in explicitly.
+Fact reconstruction v3 records a separate `role_coherence` assessment for scenario-defined
+relationships. For reverse connections it checks attacker against destination and victim against
+source without equating those roles globally. Exact agreement is `coherent`; a contradictory claim or
+conflicted role resolution remains `conflicted` with source paths. The parser rejects model-written
+role conflicts only when the model's own concrete roles exactly match a coherent Runtime assessment.
+This check is not detection truth, a verdict override, or action authority. Compacted high-trust
+provider outcome highlights also retain that trust in the exact `E-*` catalog rather than becoming
+`unknown` solely because the full source message was not selected.
 
 The optional `JsonLLMRoleVerifier` runs only after primary schema validation and Grounding, and only
 when `SOC_ROLE_VERIFIER_ENABLED=true` plus deterministic trigger policy v2 fires. The gate reviews one

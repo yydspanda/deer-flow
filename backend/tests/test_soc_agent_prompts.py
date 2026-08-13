@@ -38,6 +38,9 @@ def test_analysis_prompt_uses_bounded_llm_request_for_pingan_apt() -> None:
     assert "marker-bearing scalar" in prompt.system
     assert "does not reveal the hidden bytes" in prompt.system
     assert "provider_detection_outcome_assertion" in prompt.system
+    assert "role_coherence" in prompt.system
+    assert "Missing duplicate PCAP" in prompt.system
+    assert "MUST NOT request PCAP" in prompt.system
     assert "Do not copy evidence source paths or values" in prompt.system
     assert "evidence" not in prompt.response_schema
     assert "knowledge_candidates" not in prompt.response_schema

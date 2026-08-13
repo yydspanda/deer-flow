@@ -10,7 +10,7 @@ from typing import Any
 from soc_agent.contracts import LLMAnalysisRequest, Verdict
 from soc_agent.pipeline.analysis_context import project_analysis_context
 
-ANALYSIS_PROMPT_VERSION = "soc-analysis-v19"
+ANALYSIS_PROMPT_VERSION = "soc-analysis-v20"
 MAX_ANALYSIS_CONTEXT_CHARS = 180_000
 
 
@@ -69,6 +69,14 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
             "Treat field-trust, role candidates, conflict reports, and warnings as first-class evidence.",
             "Keep evidence trust separate from semantic confidence: a faithfully parsed vendor field may still assert the wrong attacker or victim role.",
             "Treat tentative or conflicted role resolutions as provisional and cite their evidence gaps.",
+            (
+                "fact_reconstruction.role_coherence is a deterministic consistency check, not a verdict. "
+                "When it is coherent, the listed attacker/victim values already agree with the scenario-defined "
+                "network-role relationship. Do not describe that relationship as a conflict. Challenge it only "
+                "when exact current-alert evidence supplies a contradictory role value or an explicit direction-unknown, "
+                "proxy, NAT, relay, or forwarding fact; cite that counterevidence. Missing duplicate PCAP, endpoint, "
+                "CMDB, or tool corroboration is an evidence gap, not counterevidence."
+            ),
             "Assess network direction at three separate layers: observed wire flow, organization-boundary direction, and attacker/victim semantic direction.",
             "Do not equate source with attacker or destination with victim. Reverse connections, C2 callbacks, proxies, relays, CDN, NAT, and F5 SNAT may separate those roles.",
             "Use network_direction for the direction assessment and role_adjudication for semantic roles. Both must cite selected E-* facts and R-* reasoning from this response.",
@@ -117,11 +125,18 @@ def _system_prompt(response_schema: Mapping[str, Any]) -> str:
                 "those only when the contract is ambiguous or the current alert contains an explicit "
                 "proxy/NAT/forwarding caveat or same-observation contradiction."
             ),
+            (
+                "When that exact contract resolves the session initiator/responder and no explicit caveat exists, "
+                "network_direction.evidence_gaps and role_adjudication.evidence_gaps MUST NOT request PCAP, SYN, "
+                "or flow data merely to reconfirm those two session roles. Such data may still be requested for "
+                "payload, outcome, proxy-path, or attacker/victim validation; state that narrower purpose."
+            ),
             "A provider-reported session initiator is a network-session fact only; it does not by itself establish attacker, victim, compromise, or action authority.",
             (
                 "Treat reviewed provider detection classifications and outcomes declared by source_field_semantics as trusted upstream assertions. "
                 "Cite the exact source value and preserve that upstream origin; do not dismiss them as mere workflow noise or silently recast them as independently observed telemetry."
             ),
+            "A high-trust evidence highlight preserves the reviewed trust of its original source field; compaction does not downgrade it to unknown.",
             "A provider_detection_outcome_assertion may support effect_observed when its exact high-trust value is visible and cited. It does not by itself establish impact_confirmed.",
             "When fields conflict, explain the uncertainty instead of silently choosing one side.",
             "Do not copy evidence source paths or values into the response. Return only exact E-* IDs already present in reference_catalogs.current_alert_evidence.",

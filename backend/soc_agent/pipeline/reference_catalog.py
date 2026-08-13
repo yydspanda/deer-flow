@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator, Mapping
 from typing import Any
 
@@ -457,6 +458,11 @@ def _trust_for_context_path(
     for index, item in enumerate(request.supplementary_evidence):
         if path.startswith(f"evidence.supplementary_evidence[{index}]"):
             return item.trust_level
+    highlight_match = re.match(r"evidence\.highlights\[(\d+)]", path)
+    if highlight_match is not None:
+        index = int(highlight_match.group(1))
+        if index < len(request.evidence_highlights):
+            return request.evidence_highlights[index].trust_level
     return EvidenceTrustLevel.UNKNOWN
 
 

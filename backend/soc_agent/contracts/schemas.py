@@ -2650,10 +2650,11 @@ class BoundedAnalysisEvidence(BaseModel):
 class BoundedEvidenceHighlight(BaseModel):
     """Compact model-visible value retained from evidence outside full-message budgets."""
 
-    schema_version: str = "soc.bounded_evidence_highlight.v2"
+    schema_version: str = "soc.bounded_evidence_highlight.v3"
     semantic_type: str = Field(min_length=1)
     meaning: str = Field(min_length=1)
     value: str = Field(min_length=1, max_length=1000)
+    trust_level: EvidenceTrustLevel = EvidenceTrustLevel.UNKNOWN
     evidence_paths: list[str] = Field(min_length=1, max_length=5)
     occurrence_count: int = Field(default=1, ge=1)
     evidence_paths_truncated: bool = False
@@ -2799,6 +2800,21 @@ class RoleResolutionStatus(StrEnum):
     UNRESOLVED = "unresolved"
 
 
+class RoleCoherenceStatus(StrEnum):
+    """Whether deterministic scenario-role relationships agree with current claims."""
+
+    NOT_ASSESSED = "not_assessed"
+    COHERENT = "coherent"
+    CONFLICTED = "conflicted"
+
+
+class RoleCoherenceRelationshipStatus(StrEnum):
+    ALIGNED = "aligned"
+    MISMATCH = "mismatch"
+    CONFLICTED = "conflicted"
+    UNAVAILABLE = "unavailable"
+
+
 class NetworkDirectionAssessmentStatus(StrEnum):
     """How far the analyzer could reconstruct network direction."""
 
@@ -2898,6 +2914,47 @@ class RoleResolution(BaseModel):
     evidence_gaps: list[str] = Field(default_factory=list)
     manual_checks: list[str] = Field(default_factory=list)
     automation_allowed: bool = False
+
+
+class RoleCoherenceRelationship(BaseModel):
+    """One scenario-defined relationship between a semantic and network role."""
+
+    semantic_role: Literal["attacker", "victim"]
+    network_role: Literal["source", "destination"]
+    semantic_value: str | None = None
+    network_value: str | None = None
+    status: RoleCoherenceRelationshipStatus
+
+
+class RoleCoherenceAssessment(BaseModel):
+    """Deterministic consistency result; it is not a verdict or action authority."""
+
+    schema_version: Literal["soc.role_coherence_assessment.v1"] = "soc.role_coherence_assessment.v1"
+    scenario_type: str | None = Field(default=None, min_length=1)
+    status: RoleCoherenceStatus = RoleCoherenceStatus.NOT_ASSESSED
+    relationships: list[RoleCoherenceRelationship] = Field(default_factory=list, max_length=10)
+    counterevidence_paths: list[str] = Field(default_factory=list, max_length=50)
+    rationale: str = Field(default="No deterministic role relationship was assessed.", min_length=1)
+
+    @model_validator(mode="after")
+    def validate_relationship_status(self) -> RoleCoherenceAssessment:
+        relationship_statuses = {item.status for item in self.relationships}
+        if self.status is RoleCoherenceStatus.COHERENT:
+            if not self.relationships or relationship_statuses != {RoleCoherenceRelationshipStatus.ALIGNED}:
+                raise ValueError("coherent role assessment requires only aligned relationships")
+            if self.counterevidence_paths:
+                raise ValueError("coherent role assessment cannot carry deterministic counterevidence")
+        elif self.status is RoleCoherenceStatus.CONFLICTED:
+            if not relationship_statuses.intersection(
+                {
+                    RoleCoherenceRelationshipStatus.MISMATCH,
+                    RoleCoherenceRelationshipStatus.CONFLICTED,
+                }
+            ):
+                raise ValueError("conflicted role assessment requires a mismatched or conflicted relationship")
+            if not self.counterevidence_paths:
+                raise ValueError("conflicted role assessment requires counterevidence paths")
+        return self
 
 
 class NetworkDirectionAssessment(BaseModel):
@@ -3082,7 +3139,7 @@ class ConflictReport(BaseModel):
 class FactReconstructionResult(BaseModel):
     """Pre-analysis fact layer built from evidence policy and normalized fields."""
 
-    schema_version: str = "soc.fact_reconstruction.v2"
+    schema_version: str = "soc.fact_reconstruction.v3"
     evidence_policy: EvidenceInputPolicy | None = None
     selected_input_path: str | None = None
     selected_input_available: bool = False
@@ -3091,6 +3148,7 @@ class FactReconstructionResult(BaseModel):
     role_claims: list[RoleClaim] = Field(default_factory=list)
     scenario_hypotheses: list[ScenarioHypothesis] = Field(default_factory=list)
     role_resolutions: list[RoleResolution] = Field(default_factory=list)
+    role_coherence: RoleCoherenceAssessment = Field(default_factory=RoleCoherenceAssessment)
     conflict_reports: list[ConflictReport] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -3188,7 +3246,7 @@ class ExtractedEntities(BaseModel):
 class LLMAnalysisRequest(BaseModel):
     """Bounded input contract for deterministic or configured LLM nodes."""
 
-    schema_version: str = "soc.llm_analysis_request.v5"
+    schema_version: str = "soc.llm_analysis_request.v6"
     alert_id: str
     tenant_id: str | None = None
     environment: str | None = Field(default=None, max_length=128)

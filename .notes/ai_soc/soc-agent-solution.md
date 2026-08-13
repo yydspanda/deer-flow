@@ -880,8 +880,8 @@ export SOC_ROLE_VERIFIER_MODEL=deepseek-v4-pro
 export SOC_ROLE_VERIFIER_MIN_CONFIDENCE=0.35
 ```
 
-`soc-analysis-v19` requires the model to select at most 40 exact catalog facts and place all security
-interpretation in `reasoning[]`. `soc-analysis-json-parser-v17` validates the strict v4 schema and
+`soc-analysis-v20` requires the model to select at most 40 exact catalog facts and place all security
+interpretation in `reasoning[]`. `soc-analysis-json-parser-v18` validates the strict v4 schema and
 may apply only semantics-free, logged normalization: restore a missing top-level compact-output
 version only when its complete field set is unambiguous; recover an
 `E-*` from an exact path/value tuple, materialize an exact catalog fact cited elsewhere, remove an
@@ -892,6 +892,17 @@ proposal whose exact typed entity was not adjudicated is removed with a repair l
 inventing an entity. The proposal's action-specific target role may differ from that entity's global
 semantic role; neither form grants action authority.
 Unknown, conflicting, or ambiguous references fail; the parser does not rewrite model conclusions.
+
+`LLMAnalysisRequest.v6` adds `FactReconstructionResult.v3.role_coherence`, a Runtime-owned consistency
+assessment rather than another model opinion. The first generic relationship implemented is reverse
+connection: attacker should align with the observed destination and victim with the observed source.
+Agreement prevents a model from turning missing duplicate PCAP/CMDB/endpoint corroboration into a
+nonexistent role conflict; contradictory source values or already-conflicted role resolutions remain
+explicit counterevidence. Reviewed `provider_reported_session_initiator|responder` contracts also remove
+the generic packet/session evidence gap from those two scoped network roles. This does not confirm
+compromise, suppress legitimate payload/outcome investigation, set a response target, or authorize an
+action. Bounded message highlights now preserve their source `trust_level`, so compaction does not
+silently downgrade a reviewed provider outcome before Grounding.
 
 Primary and verifier nodes may each perform at most one bounded output-repair call under
 `SOC_LLM_OUTPUT_RETRY_ATTEMPTS=1`. Empty output retries the original bounded Prompt; a parsed invalid

@@ -1192,6 +1192,7 @@ def test_pingan_high_value_fields_survive_full_supplementary_message_limit() -> 
     assert len(request.supplementary_evidence) == 4
     highlight = next(item for item in request.evidence_highlights if item.value == "late-high-value-marker")
     assert highlight.semantic_type == "sensor_match_excerpt"
+    assert highlight.trust_level is EvidenceTrustLevel.HIGH
     assert highlight.occurrence_count == 6
     assert len(highlight.evidence_paths) == 5
     assert highlight.evidence_paths_truncated is True
@@ -1199,7 +1200,8 @@ def test_pingan_high_value_fields_survive_full_supplementary_message_limit() -> 
     assert highlighted_paths <= set(request.evidence_coverage.llm_projected_paths)
     assert not highlighted_paths & {item.field_path for item in request.evidence_coverage.omissions}
     projected = project_analysis_context(request)
-    assert projected["evidence"]["highlights"][0]["schema_version"] == ("soc.bounded_evidence_highlight.v2")
+    assert projected["evidence"]["highlights"][0]["schema_version"] == ("soc.bounded_evidence_highlight.v3")
+    assert projected["evidence"]["highlights"][0]["trust_level"] == "high"
 
 
 def test_supplementary_messages_remain_independent_network_observations() -> None:
@@ -1346,15 +1348,40 @@ def test_reverse_shell_resolves_network_and_security_roles_without_false_mismatc
     resolutions = {item.role: item for item in reconstruction.role_resolutions}
     assert resolutions["source"].selected_value == "30.116.114.150"
     assert resolutions["destination"].selected_value == "30.174.29.44"
+    assert resolutions["source"].evidence_gaps == []
+    assert resolutions["source"].manual_checks == []
+    assert resolutions["destination"].evidence_gaps == []
+    assert resolutions["destination"].manual_checks == []
     assert resolutions["attacker"].selected_value == "30.174.29.44"
     assert resolutions["victim"].selected_value == "30.116.114.150"
     assert resolutions["impacted_asset"].selected_value == "30.116.114.150"
+    assert reconstruction.role_coherence.status.value == "coherent"
+    relationships = {(item.semantic_role, item.network_role): item for item in reconstruction.role_coherence.relationships}
+    assert relationships[("attacker", "destination")].status.value == "aligned"
+    assert relationships[("victim", "source")].status.value == "aligned"
     conflict_types = {item.conflict_type for item in reconstruction.conflict_reports}
     assert "attacker_source_mismatch" not in conflict_types
     assert "victim_destination_mismatch" not in conflict_types
     assert "reverse_connection_attacker_destination_mismatch" not in conflict_types
     assert "reverse_connection_victim_source_mismatch" not in conflict_types
     assert resolutions["impacted_asset"].automation_allowed is False
+
+
+def test_reverse_shell_role_coherence_preserves_contradictory_vendor_claims() -> None:
+    message = 'skyeye|!{"rule_name":"发现反弹SHELL行为（Linux）","sip":"30.116.114.150","dip":"30.174.29.44","attacker":"30.116.114.150","victim":"30.174.29.44"}'
+
+    run = SocAnalysisService().analyze(_payload(message, topic="sec_guard_apt", topic_name="SkyEye APT"))
+
+    assert run.fact_reconstruction is not None
+    reconstruction = run.fact_reconstruction
+    resolutions = {item.role: item for item in reconstruction.role_resolutions}
+    assert resolutions["attacker"].status is RoleResolutionStatus.CONFLICTED
+    assert resolutions["victim"].status is RoleResolutionStatus.CONFLICTED
+    assert reconstruction.role_coherence.status.value == "conflicted"
+    assert reconstruction.role_coherence.counterevidence_paths
+    relationships = {(item.semantic_role, item.network_role): item for item in reconstruction.role_coherence.relationships}
+    assert relationships[("attacker", "destination")].status.value == "conflicted"
+    assert relationships[("victim", "source")].status.value == "conflicted"
 
 
 def test_delimited_json_parser_decodes_supported_nested_json_and_http_headers() -> None:

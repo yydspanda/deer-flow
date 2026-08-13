@@ -12,15 +12,19 @@ from json_repair import loads as repair_json_loads
 from pydantic import ValidationError
 
 from soc_agent.contracts import (
+    AdjudicatedRoleStatus,
     AnalysisContextCatalogItem,
     AnalysisEvidenceCatalogItem,
     AnalysisOutputSection,
     AnalysisResult,
+    LLMAnalysisRequest,
+    RoleAdjudicationStatus,
+    RoleCoherenceStatus,
     RoleVerificationCandidate,
     RoleVerificationClaim,
 )
 
-ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v17"
+ANALYSIS_JSON_PARSER_VERSION = "soc-analysis-json-parser-v18"
 ANALYSIS_MODEL_OUTPUT_SCHEMA_VERSION = "soc.analysis_model_output.v1"
 ROLE_VERIFICATION_JSON_PARSER_VERSION = "soc-role-verification-json-parser-v1"
 MAX_ANALYSIS_RESPONSE_CHARS = 100_000
@@ -167,6 +171,7 @@ def parse_analysis_result_output(
     *,
     evidence_catalog: Sequence[AnalysisEvidenceCatalogItem] = (),
     context_catalog: Sequence[AnalysisContextCatalogItem] = (),
+    analysis_request: LLMAnalysisRequest | None = None,
 ) -> ParsedAnalysisResult:
     """Parse LLM content into a domain-validated ``AnalysisResult``.
 
@@ -191,6 +196,11 @@ def parse_analysis_result_output(
         context_catalog=context_catalog,
         repair_applied=decoded.repair_applied,
     )
+    _validate_deterministic_role_coherence(
+        result,
+        analysis_request=analysis_request,
+        repair_applied=decoded.repair_applied,
+    )
     return ParsedAnalysisResult(
         result=result,
         repair_applied=decoded.repair_applied,
@@ -206,6 +216,7 @@ def recover_analysis_result_output(
     *,
     evidence_catalog: Sequence[AnalysisEvidenceCatalogItem] = (),
     context_catalog: Sequence[AnalysisContextCatalogItem] = (),
+    analysis_request: LLMAnalysisRequest | None = None,
 ) -> RecoverableAnalysisResult | None:
     """Keep a valid core and validate each optional section independently.
 
@@ -222,6 +233,7 @@ def recover_analysis_result_output(
     return _recover_analysis_candidate(
         decoded,
         context_catalog=context_catalog,
+        analysis_request=analysis_request,
     )
 
 
@@ -231,6 +243,7 @@ def parse_analysis_section_patch_output(
     recovery: RecoverableAnalysisResult,
     evidence_catalog: Sequence[AnalysisEvidenceCatalogItem] = (),
     context_catalog: Sequence[AnalysisContextCatalogItem] = (),
+    analysis_request: LLMAnalysisRequest | None = None,
 ) -> ParsedAnalysisResult:
     """Merge a strict patch for exactly the previously rejected sections."""
 
@@ -292,6 +305,11 @@ def parse_analysis_section_patch_output(
     _validate_directional_context_references(
         result,
         context_catalog=context_catalog,
+        repair_applied=True,
+    )
+    _validate_deterministic_role_coherence(
+        result,
+        analysis_request=analysis_request,
         repair_applied=True,
     )
     return ParsedAnalysisResult(
@@ -411,6 +429,7 @@ def _recover_analysis_candidate(
     decoded: _DecodedAnalysisCandidate,
     *,
     context_catalog: Sequence[AnalysisContextCatalogItem],
+    analysis_request: LLMAnalysisRequest | None,
 ) -> RecoverableAnalysisResult | None:
     defaults = _analysis_optional_section_defaults()
     accepted_data = {key: value for key, value in decoded.data.items() if key in _ANALYSIS_CORE_FIELDS}
@@ -423,6 +442,11 @@ def _recover_analysis_candidate(
         _validate_directional_context_references(
             core_result,
             context_catalog=context_catalog,
+            repair_applied=True,
+        )
+        _validate_deterministic_role_coherence(
+            core_result,
+            analysis_request=analysis_request,
             repair_applied=True,
         )
     except LLMOutputParseError:
@@ -456,6 +480,11 @@ def _recover_analysis_candidate(
             _validate_directional_context_references(
                 result,
                 context_catalog=context_catalog,
+                repair_applied=True,
+            )
+            _validate_deterministic_role_coherence(
+                result,
+                analysis_request=analysis_request,
                 repair_applied=True,
             )
         except LLMOutputParseError as exc:
@@ -1765,6 +1794,41 @@ def _validate_directional_context_references(
             f"direction/role context_refs must resolve in the request context catalog; missing_context={missing}",
             stage="reference_validation",
             repair_applied=repair_applied,
+        )
+
+
+def _validate_deterministic_role_coherence(
+    result: AnalysisResult,
+    *,
+    analysis_request: LLMAnalysisRequest | None,
+    repair_applied: bool,
+) -> None:
+    """Reject a free-form conflict that contradicts the model's own role values."""
+
+    if analysis_request is None:
+        return
+    coherence = analysis_request.fact_reconstruction.role_coherence
+    if coherence.status is not RoleCoherenceStatus.COHERENT:
+        return
+
+    expected = {item.semantic_role: item.semantic_value for item in coherence.relationships if item.semantic_value is not None}
+    model_roles = {item.role.value: item for item in result.role_adjudication.roles if item.value is not None}
+    if not expected or not all(role in model_roles and model_roles[role].value == value for role, value in expected.items()):
+        return
+    if any(model_roles[role].status is AdjudicatedRoleStatus.CONFLICTED for role in expected):
+        return
+
+    unsupported_conflict = bool(result.role_adjudication.conflicts) or (result.role_adjudication.status is RoleAdjudicationStatus.CONFLICTED)
+    if unsupported_conflict:
+        raise LLMOutputParseError(
+            ("role_adjudication reports a conflict even though its attacker/victim values match the deterministic scenario-role coherence assessment; missing additional corroboration must be reported as an evidence gap"),
+            stage="role_coherence_validation",
+            repair_applied=repair_applied,
+            field_paths=(
+                "role_adjudication.status",
+                "role_adjudication.conflicts",
+            ),
+            issue_codes=("unsupported_role_conflict",),
         )
 
 

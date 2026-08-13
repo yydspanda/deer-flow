@@ -29,8 +29,30 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；主 LLM 只执行 bounded `AnalysisResult.v4` 节点；默认关闭的条件式 verifier 由确定性 gate 触发，只独立反证 `RC-*` 方向/角色/目标声明，不掌握流程或动作权限 |
-| 当前下一刀 | `LLMAnalysisRequest.v5` 的模型输出韧性与跨 Message 证据压缩已完成离线、组件和固定 20 条 live cohort 验收；共同的 compact-output 顶层版本遗漏也已由 Parser v17 做无语义机械修复并用原 5 条 fallback 定向复测。下一步补独立人工方向/角色真值、Web/TUI 人工角色确认表单和 held-out confirmed-memory Retrieval v2 precision/recall。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
+| 当前下一刀 | `LLMAnalysisRequest.v6` 的输出韧性、跨 Message 压缩和反向连接角色一致性已完成聚焦 live 验证；Parser v18 能隔离坏的可选区块而不追加无价值调用。下一步补独立人工方向/角色真值、Web/TUI 人工角色确认表单和 held-out confirmed-memory Retrieval v2 precision/recall，并用固定 cohort 评估可选区块结构失败率。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
+
+## 2026-08-13 — Reverse-connection role coherence tightened and live-validated
+
+- `FactReconstructionResult.v3` / `LLMAnalysisRequest.v6` 新增 Runtime-owned `role_coherence`。首个
+  通用关系只覆盖 `reverse_connection`：attacker 对 destination、victim 对 source；它不把 source
+  全局等同 attacker，也不产生 verdict 或 action authority。相反的供应商角色值、已有 conflicted
+  resolution 和精确来源路径会保留为 counterevidence，避免由场景假设自我证明。
+- `provider_reported_session_initiator|responder` 的高可信 Adapter 契约现在会移除 source/destination
+  自带的泛化“缺少独立 packet/session evidence”；Prompt v20 明确 PCAP 仍可用于载荷、结果、代理链或
+  attacker/victim 验证，但不能仅为重复确认已声明的会话发起方/响应方制造冲突。
+- `BoundedEvidenceHighlight.v3` 保留来源 trust；高可信 `provider_detection_outcome_assertion` 经压缩后
+  进入 `E-*` 仍为 high。Grounding 可识别该投影，不再仅因未选中完整 Message 产生
+  `unproven_outcome_claim`。
+- Parser v18 接收原始 `LLMAnalysisRequest`，当模型 attacker/victim 的具体值与 coherent 关系完全一致
+  时，拒绝无来源的自由文本角色冲突；可选角色区块仍能独立隔离，不能拖垮核心结论。
+- 两条 live v2 产物保存在
+  `backend/.deer-flow/soc-validation/e2e-two-role-tightening-v2-20260813/`：2/2 structural passed，
+  两条均只调用主模型一次，共 66,743 reported tokens、68,076.567 ms E2E。`1983128` 从历史两次
+  Provider 调用/55,864 tokens 的 degraded direction 改为一次调用/33,146 tokens 且完整 accepted；
+  `2025642` 的 Runtime 关系为 coherent、Grounding 12/12、无角色冲突和 outcome warning，模型 verdict
+  为 suspicious(0.78)。其首轮 `role_adjudication.roles[0]` 仍有结构错误，分区恢复在不追加 Provider
+  调用的情况下隔离该可选区块并标记 degraded；这证明韧性边界，不是 accuracy 通过。
 
 ## 2026-08-13 — Cross-message evidence compaction completed and live-validated
 

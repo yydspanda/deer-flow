@@ -10,6 +10,7 @@ from soc_agent.contracts import (
     AnalysisReasoningItem,
     AnalysisResult,
     BoundedAnalysisEvidence,
+    BoundedEvidenceHighlight,
     EncodedSpanOmission,
     EvidenceItem,
     EvidenceLayer,
@@ -289,3 +290,30 @@ def test_grounding_accepts_only_high_trust_bounded_provider_outcome_assertion() 
 
     assert "outcome-success claim" not in " ".join(report.warnings)
     assert "outcome-success claim" in " ".join(low_trust_report.warnings)
+
+
+def test_grounding_preserves_high_trust_provider_outcome_from_compacted_highlight() -> None:
+    request = finalize_analysis_reference_catalogs(
+        _request().model_copy(
+            update={
+                "evidence_highlights": [
+                    BoundedEvidenceHighlight(
+                        semantic_type="provider_detection_outcome_assertion",
+                        meaning="reviewed provider outcome",
+                        value="失陷",
+                        trust_level=EvidenceTrustLevel.HIGH,
+                        evidence_paths=["raw.message#parsed.host_state"],
+                    )
+                ],
+            }
+        )
+    )
+    item = _catalog_item(request, value="失陷")
+
+    report = ground_analysis_evidence(
+        _analysis(_evidence(item), summary="上游检测结果为失陷"),
+        request,
+    )
+
+    assert item.trust_level is EvidenceTrustLevel.HIGH
+    assert "outcome-success claim" not in " ".join(report.warnings)

@@ -184,6 +184,10 @@ business persistence supports PostgreSQL. With local `database.backend: sqlite`,
 commands and Gateway routes automatically use the separate
 `{database.sqlite_dir}/soc_agent_dev.db`; `--database-url` and `SOC_DATABASE_URL`
 remain explicit overrides.
+For network alerts, Runtime keeps observed source/destination separate from semantic
+attacker/victim roles. Reviewed adapters may explicitly declare session initiator/responder
+semantics; reverse-connection role coherence is then checked deterministically before the LLM,
+while contradictory source claims remain visible for review.
 Kafka ingestion, ReviewQueue Web/TUI, governed context, shadow disposition proposals,
 and append-only evaluation outcomes are available; production response side effects
 remain disabled without a reviewed Automation Policy or human grant plus a real adapter.

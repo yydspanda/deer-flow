@@ -207,6 +207,7 @@ def project_analysis_context(request: LLMAnalysisRequest) -> dict[str, Any]:
                     "semantic_type": item.semantic_type,
                     "meaning": item.meaning,
                     "value": item.value,
+                    "trust_level": item.trust_level,
                     "occurrence_count": item.occurrence_count,
                     "truncated": item.truncated,
                 }
@@ -267,6 +268,10 @@ def project_analysis_context(request: LLMAnalysisRequest) -> dict[str, Any]:
                 for item in fact.scenario_hypotheses
             ],
             "role_resolutions": [item.model_dump(mode="json", exclude_none=True) for item in fact.role_resolutions],
+            "role_coherence": fact.role_coherence.model_dump(
+                mode="json",
+                exclude_none=True,
+            ),
             "conflict_count": request.conflict_count,
             "conflict_types": request.conflict_types,
             "conflict_reports": [item.model_dump(mode="json", exclude_none=True) for item in fact.conflict_reports],
@@ -470,7 +475,10 @@ def _build_evidence_highlights(
         *(path for item in fact_reconstruction.scenario_hypotheses for path in item.evidence_paths),
     }
     parsed_by_path = _parsed_messages_by_path(alert)
-    groups: dict[tuple[str, str, str, bool], dict[str, Any]] = {}
+    groups: dict[
+        tuple[str, str, str, EvidenceTrustLevel, bool],
+        dict[str, Any],
+    ] = {}
     for semantic in _source_field_semantics(alert):
         if not semantic.participates_in_reasoning or semantic.field_path in typed_paths:
             continue
@@ -483,10 +491,15 @@ def _build_evidence_highlights(
         if bounded is None:
             continue
         rendered_value, truncated = bounded
+        trust_level = _highlight_trust_level(
+            semantic.field_path,
+            fact_reconstruction,
+        )
         key = (
             semantic.semantic_type,
             semantic.meaning,
             rendered_value,
+            trust_level,
             truncated,
         )
         existing = groups.get(key)
@@ -500,6 +513,7 @@ def _build_evidence_highlights(
             "semantic_type": semantic.semantic_type,
             "meaning": semantic.meaning,
             "value": rendered_value,
+            "trust_level": trust_level,
             "occurrence_count": 1,
             "truncated": truncated,
             "sensitive_evidence_mode": sensitive_evidence_mode,
@@ -528,6 +542,20 @@ def _build_evidence_highlights(
         highlighted_paths.extend(representative_paths)
         total_chars += item_chars
     return selected, highlighted_paths
+
+
+def _highlight_trust_level(
+    field_path: str,
+    fact_reconstruction: FactReconstructionResult,
+) -> EvidenceTrustLevel:
+    source_path = field_path.split("#", 1)[0]
+    field_trust = next(
+        (item for item in fact_reconstruction.field_trusts if item.field_path == source_path and item.participates),
+        None,
+    )
+    if field_trust is None:
+        return EvidenceTrustLevel.UNKNOWN
+    return field_trust.source_trust
 
 
 def _semantic_field_value(
