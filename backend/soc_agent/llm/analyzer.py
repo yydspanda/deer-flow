@@ -607,6 +607,11 @@ def model_invocation_metadata(
             "status": "completed",
             "usage_measurement": measurement,
         }
+        requested_model_name = response_metadata.get("requested_model_name")
+        if isinstance(requested_model_name, str) and requested_model_name:
+            call["requested_model_name"] = requested_model_name
+        if response.model_name:
+            call["response_model_name"] = response.model_name
         for key in (
             "admission_wait_duration_ms",
             "provider_duration_ms",
@@ -615,6 +620,13 @@ def model_invocation_metadata(
             value = response_metadata.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 call[key] = value
+        for key in ("thinking_enabled_requested", "response_reasoning_present"):
+            value = response_metadata.get(key)
+            if isinstance(value, bool):
+                call[key] = value
+        reasoning_chars = response_metadata.get("response_reasoning_chars")
+        if isinstance(reasoning_chars, int) and not isinstance(reasoning_chars, bool):
+            call["response_reasoning_chars"] = reasoning_chars
         calls.append(call)
 
     if isinstance(failed_call_measurement, Mapping) and len(calls) < provider_call_count:
@@ -634,6 +646,12 @@ def model_invocation_metadata(
             "status": "failed",
             "usage_measurement": normalized_measurement,
         }
+        requested_model_name = failed_call_measurement.get("requested_model_name")
+        if isinstance(requested_model_name, str) and requested_model_name:
+            failed_call["requested_model_name"] = requested_model_name
+        thinking_enabled_requested = failed_call_measurement.get("thinking_enabled_requested")
+        if isinstance(thinking_enabled_requested, bool):
+            failed_call["thinking_enabled_requested"] = thinking_enabled_requested
         for key in (
             "admission_wait_duration_ms",
             "provider_duration_ms",

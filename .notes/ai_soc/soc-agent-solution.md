@@ -2134,22 +2134,22 @@ soc automation lineage --run-id <run-id> --database-url "$SOC_DATABASE_URL" --pr
 
 # Chat through DeerFlow-aligned SOC Lead Agent
 soc chat tui --queue-id <queue-id> --lead-agent
-soc chat tui --queue-id <queue-id> --lead-agent --model-name deepseek-v4-pro
+soc chat tui --queue-id <queue-id> --lead-agent --model-name globalai-deepseek-v4-pro
 
 # Process daemon message locally
 soc daemon process --message-json '{"kind":"alert",...}'
 
 # Inspect model resolution without exposing credentials
-soc llm status --analyzer-mode llm --model-name deepseek-v4-flash --pretty
+SOC_LLM_THINKING_ENABLED=false soc llm status --analyzer-mode llm --model-name globalai-deepseek-v4-flash-0731 --pretty
 
 # Run one alert through the real bounded model node
-soc analyze alert.json --analyzer-mode llm --model-name deepseek-v4-flash --pretty
+SOC_LLM_THINKING_ENABLED=false soc analyze alert.json --analyzer-mode llm --model-name globalai-deepseek-v4-flash-0731 --pretty
 
 # Recover a stale running provider call without overwriting the original run
 soc recover RUN_ID --reason "worker exited during provider call" --database-url "$SOC_DATABASE_URL" --pretty
 
 # Compare stub and live model over an offline sample set
-soc eval offline samples/ --live-llm --model-name deepseek-v4-flash --pretty
+SOC_LLM_THINKING_ENABLED=false soc eval offline samples/ --live-llm --model-name globalai-deepseek-v4-flash-0731 --pretty
 
 # Build the local lineage-preserving real-alert validation corpus
 cd ..

@@ -11,6 +11,7 @@ from validation.compact_zeus.e2e.run_ten_alert_e2e import (
     _execution_environment,
     _grounding_quality_findings,
     _model_usage_measurement,
+    _reasoning_provenance_summary,
     _role_verification_quality_findings,
     _role_verification_summary,
     _runtime_step_sequence_complete,
@@ -47,7 +48,10 @@ def test_batch_command_uses_exact_ids_and_production_service_boundaries(
         source=tmp_path / "source.pkl",
         paths=paths,
         cases=cases,
-        model_name="deepseek-v4-flash",
+        model_name="globalai-deepseek-v4-flash-0731",
+        thinking_enabled=True,
+        role_verifier_enabled=True,
+        role_verifier_model_name="globalai-deepseek-v4-pro",
         execute=True,
         resume=False,
     )
@@ -63,6 +67,12 @@ def test_batch_command_uses_exact_ids_and_production_service_boundaries(
     assert "--persist" in command
     assert "--confirm-live" in command
     assert "--confirm-investigation" in command
+    assert command[command.index("--thinking") + 1] == "enabled"
+    assert command[command.index("--role-verifier") + 1] == "enabled"
+    assert (
+        command[command.index("--role-verifier-model") + 1]
+        == "globalai-deepseek-v4-pro"
+    )
     assert "--enrichment-composition" in command
     assert "--enrichment-extensions-config" in command
 
@@ -88,11 +98,14 @@ def test_plan_only_is_read_only_and_exposes_fixed_cohort(
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert output["runtime_live_model_call_count"] == 10
-    assert output["role_verifier_enabled"] is False
-    assert output["maximum_role_verifier_call_count"] == 0
+    assert output["model_name"] == "globalai-deepseek-v4-flash-0731"
+    assert output["thinking_enabled_requested"] is False
+    assert output["role_verifier_enabled"] is True
+    assert output["role_verifier_model_name"] == "globalai-deepseek-v4-pro"
+    assert output["maximum_role_verifier_call_count"] == 10
     assert output["maximum_primary_output_retry_call_count"] == 10
     assert output["maximum_policy_advisor_call_count"] == 10
-    assert output["maximum_total_live_model_call_count"] == 30
+    assert output["maximum_total_live_model_call_count"] == 50
     assert output["provider_mode"] == "simulated_read_only"
     assert output["alert_ids"][-2:] == ["2025642", "1980502"]
     assert "--plan-only" in output["batch_command"]
@@ -157,7 +170,7 @@ def test_plan_can_disable_optional_tenant_policy_advisor(
     output = json.loads(capsys.readouterr().out)
     assert output["tenant_policy_advisor_enabled"] is False
     assert output["maximum_policy_advisor_call_count"] == 0
-    assert output["maximum_total_live_model_call_count"] == 20
+    assert output["maximum_total_live_model_call_count"] == 40
     assert output["tenant_policy_skill"] is None
     assert not (tmp_path / "output").exists()
 
@@ -197,6 +210,7 @@ def test_execution_environment_enables_pingan_policy_skill_only() -> None:
     assert environment["SOC_TENANT_DISPOSITION_POLICY_PATH"] == str(PINGAN_POLICY)
     assert environment["SOC_TENANT_POLICY_ADVISOR_MODE"] == "llm"
     assert environment["SOC_TENANT_POLICY_SKILL_PATH"] == str(PINGAN_POLICY_SKILL)
+    assert environment["SOC_LLM_THINKING_ENABLED"] == "false"
     assert "SOC_AUTOMATION_POLICY_PATH" not in environment
     assert environment["SOC_ROLE_VERIFIER_ENABLED"] == "false"
     assert environment["SOC_LLM_OUTPUT_RETRY_ATTEMPTS"] == "1"
@@ -225,6 +239,37 @@ def test_execution_environment_can_disable_only_policy_llm_advisor() -> None:
     assert environment["SOC_TENANT_POLICY_ENABLED"] == "true"
     assert environment["SOC_TENANT_POLICY_ADVISOR_MODE"] == "off"
     assert "SOC_TENANT_POLICY_SKILL_PATH" not in environment
+
+
+def test_reasoning_provenance_separates_requested_from_observed() -> None:
+    summary = _reasoning_provenance_summary(
+        [
+            {
+                "primary": {
+                    "provider_calls": [
+                        {
+                            "status": "completed",
+                            "thinking_enabled_requested": True,
+                            "response_reasoning_present": True,
+                            "response_reasoning_chars": 120,
+                        },
+                        {
+                            "status": "completed",
+                            "thinking_enabled_requested": True,
+                            "response_reasoning_present": False,
+                            "response_reasoning_chars": 0,
+                        },
+                    ]
+                },
+                "role_verifier": {"provider_calls": []},
+            }
+        ]
+    )
+
+    assert summary["thinking_enabled_requested_count"] == 2
+    assert summary["response_reasoning_observed_count"] == 1
+    assert summary["response_reasoning_absent_count"] == 1
+    assert summary["response_reasoning_total_chars"] == 120
 
 
 def test_grounding_quality_findings_separate_safety_pass_from_model_quality() -> None:

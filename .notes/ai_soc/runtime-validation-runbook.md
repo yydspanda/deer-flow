@@ -109,8 +109,12 @@ flowchart LR
 # 只跑确定性的 Step 01-05
 ./scripts/soc-runtime-validation.sh core
 
-# 调用真实模型，跑 Step 06-09
-SOC_VALIDATION_MODEL=deepseek-v4-flash ./scripts/soc-runtime-validation.sh live
+# 调用真实模型，跑 Step 06-09；主分析使用 GlobalAI Flash，默认关闭 reasoning
+SOC_VALIDATION_MODEL=globalai-deepseek-v4-flash-0731 \
+SOC_LLM_THINKING_ENABLED=false \
+SOC_ROLE_VERIFIER_ENABLED=true \
+SOC_ROLE_VERIFIER_MODEL=globalai-deepseek-v4-pro \
+./scripts/soc-runtime-validation.sh live
 
 # 跑 Step 10-12，不调用外部模型
 ./scripts/soc-runtime-validation.sh evaluations
@@ -122,7 +126,9 @@ SOC_VALIDATION_MODEL=deepseek-v4-flash ./scripts/soc-runtime-validation.sh live
 ./scripts/soc-runtime-validation.sh checkpoint-d
 
 # 在已确认 D5 上调用真实模型并生成 D7 typed Analyzer 产物
-SOC_VALIDATION_MODEL=deepseek-v4-flash ./scripts/soc-runtime-validation.sh checkpoint-d-live
+SOC_VALIDATION_MODEL=globalai-deepseek-v4-flash-0731 \
+SOC_LLM_THINKING_ENABLED=false \
+./scripts/soc-runtime-validation.sh checkpoint-d-live
 
 # 对已保存的 D7 做 deterministic D8 Grounding，不再次调用模型
 ./scripts/soc-runtime-validation.sh checkpoint-d-grounding
@@ -131,7 +137,11 @@ SOC_VALIDATION_MODEL=deepseek-v4-flash ./scripts/soc-runtime-validation.sh check
 ./scripts/soc-runtime-validation.sh checkpoint-d-decision
 
 # 按 topic 选择代表样本并纳入全部 known input gaps，执行 D10 真实模型完整 Runtime 回放
-SOC_VALIDATION_MODEL=deepseek-v4-flash ./scripts/soc-runtime-validation.sh checkpoint-d-cross-source
+SOC_VALIDATION_MODEL=globalai-deepseek-v4-flash-0731 \
+SOC_LLM_THINKING_ENABLED=false \
+SOC_ROLE_VERIFIER_ENABLED=true \
+SOC_ROLE_VERIFIER_MODEL=globalai-deepseek-v4-pro \
+./scripts/soc-runtime-validation.sh checkpoint-d-cross-source
 
 # 全部 212 条各执行两次无模型 Runtime，验证 payload 兼容性与语义稳定性
 ./scripts/soc-runtime-validation.sh checkpoint-d-full-corpus

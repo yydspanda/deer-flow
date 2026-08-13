@@ -36,7 +36,7 @@ backend/.venv/bin/python validation/compact_zeus/checkpoint_d/build_checkpoint_d
 backend/.venv/bin/python validation/compact_zeus/checkpoint_d/build_checkpoint_d_bounded_analysis_input_review.py --alert-id 1965449
 backend/.venv/bin/python validation/compact_zeus/checkpoint_d/build_checkpoint_d_skill_context_review.py --alert-id 1965449
 backend/.venv/bin/python validation/compact_zeus/checkpoint_d/build_checkpoint_d_skill_route_coverage.py
-backend/.venv/bin/python validation/compact_zeus/checkpoint_d/build_checkpoint_d_analyzer_output_review.py --alert-id 1965449 --model-name deepseek-v4-flash
+SOC_LLM_THINKING_ENABLED=false backend/.venv/bin/python validation/compact_zeus/checkpoint_d/build_checkpoint_d_analyzer_output_review.py --alert-id 1965449 --model-name globalai-deepseek-v4-flash-0731
 backend/.venv/bin/python validation/compact_zeus/checkpoint_d/build_checkpoint_d_evidence_grounding_review.py --alert-id 1965449
 ```
 

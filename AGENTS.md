@@ -215,14 +215,19 @@ Current SOC direction:
 - SOC Runtime live analysis reuses DeerFlow `create_chat_model` through `backend/soc_agent/llm/`.
   Select it explicitly with `SOC_ANALYZER_MODE=llm` / `SOC_LLM_MODEL` or CLI
   `--analyzer-mode llm --model-name NAME`; the default remains deterministic for tests and replay.
-  Local live validation uses `deepseek-v4-flash` when `SOC_VALIDATION_MODEL` is unset; saved artifacts
-  retain the model provenance from the run that produced them.
-- The current first configured model is `deepseek-v4-flash`, so unpinned SOC Lead Agent runs inherit
-  Flash. Web requests may select another registered model, and `soc chat tui --lead-agent
+  Local live validation uses `globalai-deepseek-v4-flash-0731` when `SOC_VALIDATION_MODEL` is unset;
+  the fixed-cohort entry disables reasoning by default for relay latency and pins conditional role verification to
+  `globalai-deepseek-v4-pro`. Saved artifacts retain the model and reasoning provenance from the run
+  that produced them; historical artifacts are never relabeled.
+- The current first configured model is `globalai-deepseek-v4-flash-0731`, so unpinned SOC Lead Agent
+  runs inherit GlobalAI Flash. Web requests may select another registered model, and `soc chat tui --lead-agent
   --model-name NAME` provides the same explicit per-run override for the SOC TUI.
 - SOC model calls have independent process-local admission controls (`SOC_LLM_MAX_CONCURRENCY`,
   optional requests-per-minute, admission timeout, and `SOC_LLM_CALL_TIMEOUT_SECONDS`). Analyzer evidence is deterministically
-  grounded against the exact bounded prompt projection before `SocDecisionPolicy` runs.
+  grounded against the exact bounded prompt projection before `SocDecisionPolicy` runs. Reasoning is
+  opt-in at the generic settings layer through `SOC_LLM_THINKING_ENABLED`; model-call metadata records
+  both `thinking_enabled_requested` and whether reasoning content was observable in the provider
+  response, because an intranet-compatible gateway may honor reasoning without returning it.
 - Fixed-cohort SOC validation reports model use by independent lane: primary analysis, optional role
   verifier, and tenant-policy advisor. A logical verifier review may contain many atomic `RC-*`
   claims and may use an additional bounded output-repair provider invocation; these counts must not

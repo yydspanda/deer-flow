@@ -43,7 +43,7 @@ from soc_agent.llm import (  # noqa: E402
 SCHEMA_VERSION = "soc.validation.checkpoint_d.cross_source_runtime_review.v2"
 SAMPLE_SCHEMA_VERSION = "soc.validation.checkpoint_d.cross_source_runtime_sample.v2"
 SELECTION_POLICY_VERSION = "soc.validation.representative_selection.v1"
-DEFAULT_MODEL_NAME = "deepseek-v4-flash"
+DEFAULT_MODEL_NAME = "globalai-deepseek-v4-flash-0731"
 DEFAULT_CORPUS_PATH = (
     ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
 )

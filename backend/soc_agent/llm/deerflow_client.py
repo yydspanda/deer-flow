@@ -99,6 +99,8 @@ class DeerFlowLLMChatClient:
                 timeout_error = TimeoutError(f"SOC LLM call exceeded {self._call_timeout_seconds:g} seconds")
                 _attach_client_failure_timing(
                     timeout_error,
+                    requested_model_name=model_name,
+                    thinking_enabled_requested=self._thinking_enabled,
                     admission_wait_duration_ms=admission_wait_duration_ms,
                     provider_duration_ms=round(
                         (time.monotonic() - provider_started) * 1000,
@@ -113,6 +115,8 @@ class DeerFlowLLMChatClient:
             except Exception as exc:
                 _attach_client_failure_timing(
                     exc,
+                    requested_model_name=model_name,
+                    thinking_enabled_requested=self._thinking_enabled,
                     admission_wait_duration_ms=admission_wait_duration_ms,
                     provider_duration_ms=round(
                         (time.monotonic() - provider_started) * 1000,
@@ -138,6 +142,8 @@ class DeerFlowLLMChatClient:
         bounded_metadata.update(_response_shape_metadata(response))
         bounded_metadata.update(
             {
+                "requested_model_name": model_name,
+                "thinking_enabled_requested": self._thinking_enabled,
                 "usage_measurement": usage_measurement,
                 "admission_wait_duration_ms": admission_wait_duration_ms,
                 "provider_duration_ms": provider_duration_ms,
@@ -236,6 +242,8 @@ def _mapping(value: Any) -> Mapping[str, Any]:
 def _attach_client_failure_timing(
     error: Exception,
     *,
+    requested_model_name: str,
+    thinking_enabled_requested: bool,
     admission_wait_duration_ms: float,
     provider_duration_ms: float,
     client_total_duration_ms: float,
@@ -246,6 +254,8 @@ def _attach_client_failure_timing(
             "method": None,
             "estimated": False,
         },
+        "requested_model_name": requested_model_name,
+        "thinking_enabled_requested": thinking_enabled_requested,
         "admission_wait_duration_ms": admission_wait_duration_ms,
         "provider_duration_ms": provider_duration_ms,
         "client_total_duration_ms": client_total_duration_ms,

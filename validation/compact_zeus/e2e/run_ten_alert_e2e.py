@@ -53,6 +53,8 @@ DEFAULT_SOURCE = (
     ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
 )
 DEFAULT_OUTPUT_ROOT = BACKEND_ROOT / ".deer-flow/soc-validation/e2e-ten-current"
+DEFAULT_PRIMARY_MODEL = "globalai-deepseek-v4-flash-0731"
+DEFAULT_ROLE_VERIFIER_MODEL = "globalai-deepseek-v4-pro"
 RUNTIME_BATCH_RUNNER = (
     ROOT / "validation/compact_zeus/internal_batch/run_pingan_runtime_batch.py"
 )
@@ -118,7 +120,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
-    parser.add_argument("--model-name", default="deepseek-v4-flash")
+    parser.add_argument("--model-name", default=DEFAULT_PRIMARY_MODEL)
+    parser.add_argument(
+        "--thinking",
+        choices=("disabled", "enabled"),
+        default="disabled",
+        help="Request provider reasoning for primary, repair, and verifier model calls",
+    )
     parser.add_argument(
         "--output-retry-attempts",
         type=int,
@@ -129,7 +137,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--role-verifier",
         choices=("disabled", "enabled"),
-        default="disabled",
+        default="enabled",
         help="Explicitly disable or enable the conditional second-pass role verifier",
     )
     parser.add_argument(
@@ -142,7 +150,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--role-verifier-model",
-        help="Verifier model; defaults to --model-name when the verifier is enabled",
+        default=DEFAULT_ROLE_VERIFIER_MODEL,
+        help="Verifier model used when the conditional second pass is triggered",
     )
     parser.add_argument(
         "--role-verifier-min-confidence",
@@ -234,6 +243,9 @@ def build_batch_command(
     paths: E2EPaths,
     cases: Sequence[CaseSpec],
     model_name: str,
+    thinking_enabled: bool,
+    role_verifier_enabled: bool,
+    role_verifier_model_name: str | None,
     execute: bool,
     resume: bool,
 ) -> tuple[str, ...]:
@@ -248,6 +260,10 @@ def build_batch_command(
         "llm",
         "--model-name",
         model_name,
+        "--thinking",
+        "enabled" if thinking_enabled else "disabled",
+        "--role-verifier",
+        "enabled" if role_verifier_enabled else "disabled",
         "--default-tenant-id",
         "pingan",
         "--persist",
@@ -258,6 +274,8 @@ def build_batch_command(
         "--checkpoint-every",
         "1",
     ]
+    if role_verifier_enabled and role_verifier_model_name:
+        command.extend(("--role-verifier-model", role_verifier_model_name))
     for case in cases:
         command.extend(("--alert-id", case.alert_id))
     command.extend(
@@ -291,6 +309,7 @@ def build_dossier(
     cases: Sequence[CaseSpec],
     source: Path,
     model_name: str,
+    thinking_enabled: bool,
     role_verifier_enabled: bool,
     role_verifier_model_name: str | None,
     role_verifier_minimum_confidence: float,
@@ -406,6 +425,7 @@ def build_dossier(
         for section in item.get("degraded_sections") or []
     )
     model_call_items = [_mapping(item.get("model_calls")) for item in case_results]
+    reasoning_provenance = _reasoning_provenance_summary(model_call_items)
     model_usage_measurement = _model_usage_measurement(case_results)
     timing_measurement = _timing_measurement(case_results)
     transition_kinds = Counter(
@@ -467,6 +487,7 @@ def build_dossier(
             "cases_manifest": _display_path(cases_path),
             "cases_sha256": _canonical_sha256(cases_manifest),
             "requested_model_name": model_name,
+            "thinking_enabled_requested": thinking_enabled,
             "role_verifier_enabled": role_verifier_enabled,
             "role_verifier_model_name": role_verifier_model_name,
             "role_verifier_minimum_confidence": role_verifier_minimum_confidence,
@@ -658,6 +679,7 @@ def build_dossier(
                 int(_mapping(item.get("primary")).get("provider_call_count") or 0)
                 for item in model_call_items
             ),
+            "reasoning_provenance": reasoning_provenance,
             "role_verifier_configured_case_count": sum(
                 bool(item.get("configured")) for item in role_verification_items
             ),
@@ -1555,6 +1577,50 @@ def _model_step_call_summary(
     }
 
 
+def _reasoning_provenance_summary(
+    model_call_items: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    calls: list[Mapping[str, Any]] = []
+    for item in model_call_items:
+        for lane in ("primary", "role_verifier"):
+            raw_calls = _mapping(item.get(lane)).get("provider_calls")
+            if isinstance(raw_calls, list):
+                calls.extend(_mapping(call) for call in raw_calls)
+
+    completed = [call for call in calls if call.get("status") == "completed"]
+    observed = [
+        call for call in completed if call.get("response_reasoning_present") is True
+    ]
+    absent = [
+        call for call in completed if call.get("response_reasoning_present") is False
+    ]
+    return {
+        "provider_call_count": len(calls),
+        "completed_call_count": len(completed),
+        "thinking_enabled_requested_count": sum(
+            call.get("thinking_enabled_requested") is True for call in calls
+        ),
+        "thinking_disabled_requested_count": sum(
+            call.get("thinking_enabled_requested") is False for call in calls
+        ),
+        "thinking_request_unreported_count": sum(
+            not isinstance(call.get("thinking_enabled_requested"), bool)
+            for call in calls
+        ),
+        "response_reasoning_observed_count": len(observed),
+        "response_reasoning_absent_count": len(absent),
+        "response_reasoning_unreported_count": len(completed)
+        - len(observed)
+        - len(absent),
+        "response_reasoning_total_chars": sum(
+            int(call.get("response_reasoning_chars") or 0) for call in observed
+        ),
+        "interpretation": (
+            "requested records the client option; observed records only reasoning content exposed by the provider response"
+        ),
+    }
+
+
 def _case_timing_summary(
     *,
     run_payload: Mapping[str, Any],
@@ -2088,6 +2154,7 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
 def _execution_environment(
     python_executable: Path,
     *,
+    thinking_enabled: bool = False,
     tenant_policy_advisor_enabled: bool = True,
     role_verifier_enabled: bool = False,
     role_verifier_model_name: str | None = None,
@@ -2106,6 +2173,7 @@ def _execution_environment(
     env.update(
         {
             "SOC_LLM_SENSITIVE_EVIDENCE_MODE": "full",
+            "SOC_LLM_THINKING_ENABLED": ("true" if thinking_enabled else "false"),
             "SOC_TENANT_POLICY_ENABLED": "true",
             "SOC_TENANT_DISPOSITION_POLICY_PATH": str(PINGAN_POLICY),
             "SOC_TENANT_POLICY_ENVIRONMENT": "dev",
@@ -2157,6 +2225,7 @@ def _write_run_manifest(
     cases_manifest: Mapping[str, Any],
     source: Path,
     model_name: str,
+    thinking_enabled: bool,
     batch_command: Sequence[str],
     report: Mapping[str, Any],
     role_verifier_enabled: bool,
@@ -2173,6 +2242,7 @@ def _write_run_manifest(
         "source_sha256": _sha256_file(source),
         "cases_sha256": _canonical_sha256(cases_manifest),
         "model_name": model_name,
+        "thinking_enabled_requested": thinking_enabled,
         "role_verifier_enabled": role_verifier_enabled,
         "role_verifier_model_name": role_verifier_model_name,
         "role_verifier_minimum_confidence": role_verifier_minimum_confidence,
@@ -2305,6 +2375,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not 0.0 <= args.role_verifier_min_confidence <= 1.0:
             raise ValueError("--role-verifier-min-confidence must be within [0, 1]")
         role_verifier_enabled = args.role_verifier == "enabled"
+        thinking_enabled = args.thinking == "enabled"
         tenant_policy_advisor_enabled = args.tenant_policy_advisor == "enabled"
         role_verifier_model_name = (
             (args.role_verifier_model or args.model_name)
@@ -2319,6 +2390,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             paths=paths,
             cases=cases,
             model_name=args.model_name,
+            thinking_enabled=thinking_enabled,
+            role_verifier_enabled=role_verifier_enabled,
+            role_verifier_model_name=role_verifier_model_name,
             execute=args.execute,
             resume=args.resume,
         )
@@ -2331,6 +2405,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "output_root": str(paths.root),
                         "database": str(paths.database),
                         "model_name": args.model_name,
+                        "thinking_enabled_requested": thinking_enabled,
                         "alert_ids": [case.alert_id for case in cases],
                         "excluded": cases_manifest.get("excluded"),
                         "batch_command": list(batch_command),
@@ -2386,6 +2461,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _prepare_output(paths, resume=args.resume, replace=args.replace)
         env = _execution_environment(
             python_executable,
+            thinking_enabled=thinking_enabled,
             tenant_policy_advisor_enabled=tenant_policy_advisor_enabled,
             role_verifier_enabled=role_verifier_enabled,
             role_verifier_model_name=role_verifier_model_name,
@@ -2413,6 +2489,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             cases=cases,
             source=source,
             model_name=args.model_name,
+            thinking_enabled=thinking_enabled,
             role_verifier_enabled=role_verifier_enabled,
             role_verifier_model_name=role_verifier_model_name,
             role_verifier_minimum_confidence=args.role_verifier_min_confidence,
@@ -2423,6 +2500,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             cases_manifest=cases_manifest,
             source=source,
             model_name=args.model_name,
+            thinking_enabled=thinking_enabled,
             batch_command=batch_command,
             report=report,
             role_verifier_enabled=role_verifier_enabled,

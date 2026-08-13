@@ -129,10 +129,21 @@ class SocLLMSettings:
         *,
         mode: str | SocAnalyzerMode | None = None,
         model_name: str | None = None,
+        thinking_enabled: bool | None = None,
+        role_verifier_enabled: bool | None = None,
+        role_verifier_model_name: str | None = None,
     ) -> SocLLMSettings:
         resolved_mode = SocAnalyzerMode(mode) if mode is not None else self.mode
         resolved_model = model_name.strip() if model_name and model_name.strip() else self.model_name
-        return replace(self, mode=resolved_mode, model_name=resolved_model)
+        resolved_role_verifier_model = role_verifier_model_name.strip() if role_verifier_model_name and role_verifier_model_name.strip() else self.role_verifier_model_name
+        return replace(
+            self,
+            mode=resolved_mode,
+            model_name=resolved_model,
+            thinking_enabled=(thinking_enabled if thinking_enabled is not None else self.thinking_enabled),
+            role_verifier_enabled=(role_verifier_enabled if role_verifier_enabled is not None else self.role_verifier_enabled),
+            role_verifier_model_name=resolved_role_verifier_model,
+        )
 
 
 def resolve_soc_model_name(

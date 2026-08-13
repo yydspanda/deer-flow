@@ -28,9 +28,36 @@
 | 当前目标 | 外网产品链已补齐 post-Runtime effective decision 与受治理动作自动化；真实 Provider/infra/quality/telemetry/owner/rollback/cohort enforcement 继续作为独立 Real Integration Debt |
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
-| LLM 策略 | Runtime 固定控制流；主 LLM 只执行 bounded `AnalysisResult.v4` 节点；默认关闭的条件式 verifier 由确定性 gate 触发，只独立反证 `RC-*` 方向/角色/目标声明，不掌握流程或动作权限 |
+| LLM 策略 | Runtime 固定控制流；主 LLM 只执行 bounded `AnalysisResult.v4` 节点；条件式 verifier 通用/本机默认关闭，固定 cohort 或 live 命令显式开启后由确定性 gate 触发，只独立反证 `RC-*` 方向/角色声明，不掌握流程或动作权限 |
 | 当前下一刀 | `soc-analysis-v21` / `soc.decision_policy.v6` 已明确“可信 detector hit + Runtime 当前裁决 + 独立动作授权”边界，并移除无价值的置信度/标签强制复核。下一步用固定 live cohort 验证 ReviewQueue 降幅与结论完整性，再补独立人工方向/角色真值、Web/TUI 人工角色确认表单和 held-out confirmed-memory Retrieval v2 precision/recall。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
+
+## 2026-08-14 — GlobalAI model and reasoning lineage hardened
+
+- 本机 SOC 主分析与默认固定 cohort 切换为 `globalai-deepseek-v4-flash-0731`，默认关闭 reasoning 以控制
+  GlobalAI 中转延迟；
+  条件式 Role Verifier 选型固定为 `globalai-deepseek-v4-pro`，但通用本机 CLI 保持默认关闭，只有固定
+  cohort 或 live 命令显式开启。官方 DeepSeek Profile 继续保留为可选配置，
+  通用 Runtime 的代码级默认仍为 stub/thinking off，测试与 replay 不会隐式产生外部调用。
+- Runtime batch 与 E2E 命令新增显式 thinking/verifier 参数。运行计划、batch manifest、每条 execution、
+  E2E run manifest 和 summary 均保留请求配置；primary/repair/verifier 的每次 Provider 调用另行保留
+  requested model、thinking 请求值和 provider-visible reasoning shape。
+- `thinking_enabled_requested` 证明客户端向 DeerFlow model factory 请求的推理开关状态；
+  `response_reasoning_present=false` 只表示网关响应未暴露 reasoning 文本，不能反向证明模型未推理。
+  旧固定 cohort 的 `response_reasoning_present=false` 与历史配置一致，不回写为 reasoning-enabled。
+- `2025642` 已完成同模型 reasoning on/off 单次 live 对照，产物位于
+  `backend/.deer-flow/soc-validation/reasoning-comparison-20260814/`。On 响应 2/2 暴露 reasoning，
+  但首轮和一次纠错均未满足输出契约，最终 deterministic fallback；Off 保住 core/scenario，隔离
+  direction/role 后为 degraded suspicious。该结果只验证配置与韧性链路，不构成准确率结论。
+  两组 verifier gate 均未触发，因此报告明确区分“GlobalAI Pro 已配置”与“本样本 Pro 未调用”。
+- 同一 `2025642` bounded Role Verifier 输入已做专项复测。GlobalAI Pro 开启 reasoning 时轻量探测
+  3/3 成功，但完整复核超过 SOC 180 秒上限；关闭 reasoning 后完整复核累计 4/4 成功，耗时分别为
+  26.2、32.9、42.3 和 18.5 秒，未再出现 `503` 或调用超时。2/4 一次调用即满足 JSON 契约，
+  2/4 首轮 schema validation 失败后经唯一一次 contract correction 成功。4/4 均确认
+  attacker/victim；对包含错误 `external_to_external` 子项的复合方向 claim，3/4 正确给出
+  `challenged` 并提出 `internal_to_internal`，1/4 虽在 rationale 中识别该错误，却仍将整体标成
+  `supported`。因此调用稳定性与结构/语义一致性必须分开评估；当前结果不构成 Pro 准确率结论，
+  也不据此自动修改 Runtime 判断规则。
 
 ## 2026-08-13 — PingAn tenant-static knowledge typed selection completed
 

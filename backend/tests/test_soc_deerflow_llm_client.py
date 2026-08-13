@@ -132,6 +132,8 @@ def test_deerflow_client_reuses_model_and_bounds_metadata() -> None:
     }
     assert first.metadata["finish_reason"] == "stop"
     assert first.metadata["model_name"] == "provider-model-id"
+    assert first.metadata["requested_model_name"] == "deepseek-v4-pro"
+    assert first.metadata["thinking_enabled_requested"] is False
     assert first.metadata["usage_measurement"]["status"] == "reported"
     assert first.metadata["provider_duration_ms"] >= 0
     assert first.metadata["client_total_duration_ms"] >= 0
@@ -177,6 +179,7 @@ def test_deerflow_client_marks_partial_provider_usage_as_mixed() -> None:
 def test_deerflow_client_records_empty_response_shape_without_retaining_text() -> None:
     client = DeerFlowLLMChatClient(
         app_config=_FakeConfig("internal-model"),  # type: ignore[arg-type]
+        thinking_enabled=True,
         model_factory=lambda **_kwargs: _EmptyContentReasoningFakeModel(),
     )
 
@@ -192,6 +195,7 @@ def test_deerflow_client_records_empty_response_shape_without_retaining_text() -
     assert response.metadata["response_visible_text_empty"] is True
     assert response.metadata["response_reasoning_present"] is True
     assert response.metadata["response_reasoning_chars"] == len("internal reasoning")
+    assert response.metadata["thinking_enabled_requested"] is True
     assert response.metadata["response_tool_call_count"] == 1
     assert "internal reasoning" not in json.dumps(response.metadata)
 
@@ -228,6 +232,15 @@ def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
     assert settings.role_verifier_enabled is True
     assert settings.role_verifier_model_name == "deepseek-v4-pro"
     assert settings.role_verifier_minimum_confidence == 0.7
+
+    overridden = settings.with_overrides(
+        thinking_enabled=True,
+        role_verifier_enabled=True,
+        role_verifier_model_name="globalai-deepseek-v4-pro",
+    )
+    assert overridden.thinking_enabled is True
+    assert overridden.role_verifier_enabled is True
+    assert overridden.role_verifier_model_name == "globalai-deepseek-v4-pro"
 
     with pytest.raises(ValueError, match="SOC_ANALYZER_MODE"):
         SocLLMSettings.from_env({"SOC_ANALYZER_MODE": "automatic"})

@@ -25,21 +25,23 @@ backend/.venv/bin/python \
   validation/compact_zeus/e2e/run_ten_alert_e2e.py
 ```
 
-计划必须显示 10 个固定 ID、`deepseek-v4-flash`、10 次 Runtime 主模型调用、最多 10 次主模型
-输出纠错、最多 10 次 PingAn Policy Skill 调用和 `simulated_read_only` Provider。精确确定性策略命中
+计划必须显示 10 个固定 ID、`globalai-deepseek-v4-flash-0731` 主模型、reasoning 默认关闭、
+`globalai-deepseek-v4-pro` 条件式角色复核、10 次 Runtime 主模型调用、最多 10 次主模型输出纠错、
+最多 10 次 PingAn Policy Skill 调用和 `simulated_read_only` Provider。精确确定性策略命中
 的告警不会再调用 Policy Skill；默认每个模型节点只允许一次结构纠错，不能把它变成开放式重试循环。
 
-方向/角色的条件式独立复核必须显式开启。下面的命令使用 Flash 主分析、Pro 窄复核，并把两者写进
-不同的 provider journal：
+默认命令使用 GlobalAI Flash 主分析、GlobalAI Pro 条件式窄复核，并关闭 reasoning 以控制中转服务
+延迟；两者写进不同的 provider journal。下面是等价的显式命令：
 
 ```bash
 backend/.venv/bin/python \
   validation/compact_zeus/e2e/run_ten_alert_e2e.py \
   --output-root backend/.deer-flow/soc-validation/e2e-ten-role-verifier \
-  --model-name deepseek-v4-flash \
+  --model-name globalai-deepseek-v4-flash-0731 \
+  --thinking disabled \
   --output-retry-attempts 1 \
   --role-verifier enabled \
-  --role-verifier-model deepseek-v4-pro \
+  --role-verifier-model globalai-deepseek-v4-pro \
   --role-verifier-min-confidence 0.35 \
   --execute \
   --confirm-live \
@@ -47,10 +49,16 @@ backend/.venv/bin/python \
   --replace
 ```
 
-Verifier 默认关闭。即使开启，也先执行 v2 确定性 gate；只复核整体网络方向和 attacker/victim。
+固定 cohort 的 Verifier 默认开启，但仍先执行 v2 确定性 gate；只有 gate 命中才调用 Pro，且只复核
+整体网络方向和 attacker/victim。因此“已配置 Pro”不等于“该告警实际调用了 Pro”。
 `inferred`、`tentative`、一般 evidence gap、intermediary、response target 或低 confidence 单独出现都
 不会调用第二个模型。`--resume` 只用于
 同一配置、同一代码版本的中断续跑或失败项重试，不能把跨 Parser/Prompt 版本的结果包装成 fresh 对照。
+
+`run-manifest.json` 和 `summary.json` 记录 `thinking_enabled_requested`；每次 primary/repair/verifier
+provider call 还记录 `requested_model_name`、`thinking_enabled_requested`、
+`response_reasoning_present` 与 `response_reasoning_chars`。前者证明客户端请求参数，后两者只说明
+网关响应是否暴露 reasoning，不能把“未返回 reasoning 文本”误判为“模型未推理”。
 
 ## Execute
 

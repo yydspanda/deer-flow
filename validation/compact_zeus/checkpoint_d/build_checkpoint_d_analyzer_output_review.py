@@ -37,7 +37,7 @@ DEFAULT_CHECKPOINT_D_ROOT = (
     ROOT / "backend/.deer-flow/soc-runtime-validation/checkpoint-d"
 )
 DEFAULT_ALERT_ID = 1965449
-DEFAULT_MODEL_NAME = "deepseek-v4-flash"
+DEFAULT_MODEL_NAME = "globalai-deepseek-v4-flash-0731"
 _ALLOWED_D5_STATUSES = {"passed", "passed_with_projection_notes"}
 
 
@@ -195,12 +195,16 @@ def _bounded_analyzer_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
         "analyzer",
         "candidate_hash",
         "prompt_hash",
+        "provider_call_count",
+        "provider_calls",
+        "provider_call_measured_duration_ms",
         "repair_applied",
         "repair_log",
         "response_metadata",
         "selected_skills",
         "skill_context_hash",
         "usage",
+        "usage_measurement",
     }
     return {key: value for key, value in metadata.items() if key in allowed}
 

@@ -106,6 +106,9 @@ class BatchExecutionConfig:
     retry_failures: bool
     fail_fast: bool
     checkpoint_every: int
+    thinking_enabled: bool = False
+    role_verifier_enabled: bool = False
+    role_verifier_model_name: str | None = None
     default_tenant_id: str | None = None
     investigation_enrichment_enabled: bool = False
     enrichment_composition_sha256: str | None = None
@@ -491,6 +494,9 @@ def _analyze_item(
         execution = {
             "analyzer_mode": config.analyzer_mode,
             "requested_model_name": config.model_name,
+            "thinking_enabled_requested": config.thinking_enabled,
+            "role_verifier_enabled": config.role_verifier_enabled,
+            "role_verifier_model_name": config.role_verifier_model_name,
             "persisted": config.persist,
             "investigation_enrichment_enabled": config.investigation_enrichment_enabled,
             "duration_ms": round((time.monotonic() - started) * 1000, 3),
@@ -533,6 +539,9 @@ def _analyze_item(
         "execution": {
             "analyzer_mode": config.analyzer_mode,
             "requested_model_name": config.model_name,
+            "thinking_enabled_requested": config.thinking_enabled,
+            "role_verifier_enabled": config.role_verifier_enabled,
+            "role_verifier_model_name": config.role_verifier_model_name,
             "persisted": config.persist,
             "investigation_enrichment_enabled": config.investigation_enrichment_enabled,
             "duration_ms": round((time.monotonic() - started) * 1000, 3),
@@ -836,6 +845,9 @@ def _build_manifest(
         "execution": {
             "analyzer_mode": config.analyzer_mode,
             "model_name": config.model_name,
+            "thinking_enabled_requested": config.thinking_enabled,
+            "role_verifier_enabled": config.role_verifier_enabled,
+            "role_verifier_model_name": config.role_verifier_model_name,
             "sensitive_evidence_mode": config.sensitive_evidence_mode,
             "persist": config.persist,
             "database_kind": config.database_kind,
@@ -1186,6 +1198,18 @@ def _validate_resume(
             config.analyzer_mode,
         ),
         "execution.model_name": (execution.get("model_name"), config.model_name),
+        "execution.thinking_enabled_requested": (
+            execution.get("thinking_enabled_requested", False),
+            config.thinking_enabled,
+        ),
+        "execution.role_verifier_enabled": (
+            execution.get("role_verifier_enabled", False),
+            config.role_verifier_enabled,
+        ),
+        "execution.role_verifier_model_name": (
+            execution.get("role_verifier_model_name"),
+            config.role_verifier_model_name,
+        ),
         "execution.sensitive_evidence_mode": (
             execution.get("sensitive_evidence_mode"),
             config.sensitive_evidence_mode,
@@ -1436,6 +1460,9 @@ def _plan_payload(
         "execution": {
             "analyzer_mode": settings.mode.value,
             "model_name": settings.model_name,
+            "thinking_enabled_requested": settings.thinking_enabled,
+            "role_verifier_enabled": settings.role_verifier_enabled,
+            "role_verifier_model_name": settings.role_verifier_model_name,
             "estimated_model_call_count": len(items)
             if settings.mode is SocAnalyzerMode.LLM
             else 0,
@@ -1506,6 +1533,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--analyzer-mode", choices=["stub", "llm"])
     parser.add_argument("--model-name")
+    parser.add_argument(
+        "--thinking",
+        choices=("enabled", "disabled"),
+        help="Explicitly enable or disable provider reasoning for every SOC model call",
+    )
+    parser.add_argument(
+        "--role-verifier",
+        choices=("enabled", "disabled"),
+        help="Explicitly enable or disable the conditional second-pass role verifier",
+    )
+    parser.add_argument(
+        "--role-verifier-model",
+        help="Registered model used only when the conditional role verifier runs",
+    )
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument(
         "--default-tenant-id",
@@ -1638,6 +1679,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings = SocLLMSettings.from_env().with_overrides(
             mode=args.analyzer_mode,
             model_name=args.model_name,
+            thinking_enabled=(
+                args.thinking == "enabled" if args.thinking is not None else None
+            ),
+            role_verifier_enabled=(
+                args.role_verifier == "enabled"
+                if args.role_verifier is not None
+                else None
+            ),
+            role_verifier_model_name=args.role_verifier_model,
         )
         if settings.mode is SocAnalyzerMode.LLM:
             settings = settings.with_overrides(
@@ -1851,6 +1901,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 retry_failures=not args.skip_existing_failures,
                 fail_fast=args.fail_fast,
                 checkpoint_every=args.checkpoint_every,
+                thinking_enabled=settings.thinking_enabled,
+                role_verifier_enabled=settings.role_verifier_enabled,
+                role_verifier_model_name=settings.role_verifier_model_name,
                 default_tenant_id=default_tenant_id,
                 investigation_enrichment_enabled=investigation_enabled,
                 enrichment_composition_sha256=enrichment_composition_sha256,
