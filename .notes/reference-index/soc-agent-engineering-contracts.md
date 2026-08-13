@@ -539,6 +539,7 @@ PingAn SOC capability onboarding 约束：
 - 经验记忆必须先进入 `pending_review` 或 eval fixture；只有人工确认、版本化和可回滚后才允许作为 confirmed memory 或 active lesson 影响后续判断。
 - `.notes/ai_soc/capabilities/pingan/source-docs/` 中的历史 prompt 原文必须先按 `.notes/ai_soc/capabilities/pingan/knowledge-decomposition.md` 拆解；不得整体复制进 Lead Agent prompt、analysis node prompt 或 public skill。
 - `skills/public/soc-*` 只能包含跨客户通用研判方法；平安内部域名、部门、账号、BU/PA code、路径、白名单、具体 `rule_code`、模板 ID、策略 ID、operateType 等必须进入 tenant memory、adapter mapping、policy/config 或 eval fixture。
+- 已评审且稳定的租户网络、应用、平台和命名约定可进入 versioned `TenantKnowledgeProfile`，仅按 canonical typed selector 投影为 bounded `C-*`。主机前缀、进程名、路径前缀、账号 full-match pattern 和 URI 前缀不得通过 raw evidence 全文包含匹配；同一 selector group 为 OR，不同非空 group 为 AND。每个投影必须保留 profile/fact/version/source/review/hash 且 `decision_authority=none`，应用或产品身份不能直接等价为 benign、authorized、ignore 或 action authority。
 - 平安环境知识进入 memory 时必须带 tenant scope、source doc/section、status、validity 和 evidence refs；默认 `pending_review`，不能直接 confirmed。扫描、渗透测试、运维窗口、自动化服务等“当前是否被授权”的动态事实不得用 memory 代替，必须进入 authorized-activity fact lifecycle。
 - 平安字段名和字段别名只能出现在 adapter/normalizer/mapping tests 或脱敏 fixture 中；core contract、public skill 和 Lead Agent prompt 必须消费 canonical fields。
 - 平安处置经验如果需要外部事实查询，必须先建 read-only MCP/action adapter；如果会改变外部状态，必须是 high-risk/analyst-write action，并经过人工 approval 或明确的服务端 playbook authorization。

@@ -792,7 +792,12 @@ context references need only resolve in the request catalog, not be redundantly 
 Reviewed tenant-static knowledge is projected as bounded, source-linked `C-*` through a strict
 `TenantKnowledgeProfile`; generic methods remain `S-*`, adapter semantics `A-*`, confirmed historical
 experience `M-*`, and live tool results `T-*`. Dynamic authorization/exercise/maintenance facts still
-use the governed-context lifecycle rather than the static profile.
+use the governed-context lifecycle rather than the static profile. Static-profile relevance must prefer
+canonical typed selectors (`host_prefixes`, exact `process_names`, `path_prefixes`, full-match
+`account_patterns`, and `uri_prefixes`) over searching bounded evidence text. Values inside one selector
+group are OR; separate non-empty groups are AND. Tenant profiles may identify an application, platform,
+network, or naming convention, but every projected item keeps `decision_authority=none`; identity alone
+cannot mean benign, authorized, suppressed, or action-approved.
 
 Single-alert learning signals pass through `MemoryAdmissionService` before candidate creation.
 Ordinary review notes use the typed `ReviewNoteCommand.promote_to_memory` flag for explicit promotion;

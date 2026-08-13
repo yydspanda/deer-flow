@@ -1,14 +1,14 @@
 {
   "schema_version": "soc.tenant_knowledge_profile.v1",
   "profile_id": "pingan.network_direction",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "integration_names": [
     "pingan_legacy_alert_platform"
   ],
   "tenant_ids": [],
   "review_status": "reviewed",
-  "review_ref": "validation/original_works/zeus/utils/asset_extractor.py:_IP_SKILL_PROMPT",
-  "max_projected_items": 10,
+  "review_ref": ".notes/ai_soc/capabilities/pingan/tenant-static-knowledge-migration.md#review-2026-08-13",
+  "max_projected_items": 12,
   "max_projected_chars": 10000,
   "facts": [
     {
@@ -17,10 +17,57 @@
       "label": "PingAn controlled internal address space",
       "statement": "For this PingAn integration, a matched address belongs to organization-controlled internal address space. This establishes network ownership only; it does not by itself establish attacker, victim, authorization, or benignness.",
       "selector": {
-        "cidrs": ["10.0.0.0/8", "30.0.0.0/8", "172.0.0.0/8", "192.168.0.0/16", "215.0.0.0/8"]
+        "cidrs": ["10.0.0.0/8", "26.0.0.0/8", "29.0.0.0/8", "30.0.0.0/8", "172.0.0.0/8", "192.168.0.0/16", "215.0.0.0/8"]
       },
-      "source_ref": "asset_extractor.py:PingAn internal network allocation",
+      "source_ref": "security-log-analysis/common/研判公共知识.md:network ranges; operator confirmation 2026-08-13",
       "priority": 10
+    },
+    {
+      "fact_id": "pa.office-address-space",
+      "kind": "network_scope",
+      "label": "PingAn office network address space",
+      "statement": "The matched address belongs to a reviewed PingAn office-network subnet. This refines organization ownership and likely endpoint context only; it does not establish user identity, authorization, benignness, or attacker/victim role.",
+      "selector": {
+        "cidrs": [
+          "10.13.0.0/16", "10.16.0.0/16", "10.18.0.0/16", "10.19.0.0/16",
+          "10.22.0.0/16", "10.23.0.0/16", "10.26.0.0/16", "10.28.0.0/16",
+          "10.38.0.0/16", "10.42.0.0/16", "10.43.0.0/16", "10.46.0.0/16",
+          "10.50.0.0/16", "10.51.0.0/16", "10.52.0.0/16", "10.53.0.0/16",
+          "10.59.0.0/16", "10.63.0.0/16", "10.65.0.0/16", "10.66.0.0/16",
+          "10.67.0.0/16", "10.68.0.0/16", "10.69.0.0/16", "10.71.0.0/16",
+          "10.73.0.0/16", "10.74.0.0/16", "10.75.0.0/16", "10.76.0.0/16",
+          "10.77.0.0/16", "10.78.0.0/16", "10.81.0.0/16", "10.82.0.0/16",
+          "10.83.0.0/16", "10.84.0.0/16", "10.85.0.0/16", "10.86.0.0/16",
+          "10.87.0.0/16", "10.89.0.0/16", "10.90.0.0/16", "10.92.0.0/16",
+          "10.93.0.0/16", "10.94.0.0/16", "10.98.0.0/16", "10.99.0.0/16",
+          "10.100.0.0/16", "10.101.0.0/16", "10.102.0.0/16", "10.103.0.0/16",
+          "10.105.0.0/16", "10.106.0.0/16", "10.107.0.0/16", "10.108.0.0/16",
+          "10.109.0.0/16", "10.110.0.0/16", "10.111.0.0/16", "10.113.0.0/16",
+          "10.114.0.0/16", "10.115.0.0/16", "10.116.0.0/16", "10.117.0.0/16",
+          "10.118.0.0/16", "10.119.0.0/16", "10.121.0.0/16", "10.122.0.0/16",
+          "10.123.0.0/16", "10.124.0.0/16", "10.125.0.0/16", "10.126.0.0/16",
+          "10.127.0.0/16", "10.129.0.0/16", "10.130.0.0/16", "10.131.0.0/16",
+          "10.132.0.0/16", "10.134.0.0/16", "10.135.0.0/16", "10.138.0.0/16",
+          "10.139.0.0/16", "10.140.0.0/16", "10.141.0.0/16", "10.142.0.0/16",
+          "10.143.0.0/16", "10.144.0.0/16", "10.145.0.0/16", "10.146.0.0/16",
+          "10.147.0.0/16", "10.148.0.0/16", "10.149.0.0/16", "10.150.0.0/16",
+          "10.151.0.0/16", "10.152.0.0/16", "10.153.0.0/16", "10.154.0.0/16",
+          "10.155.0.0/16", "10.156.0.0/16", "10.157.0.0/16", "10.158.0.0/16",
+          "10.159.0.0/16", "10.160.0.0/16", "10.161.0.0/16", "10.162.0.0/16",
+          "10.163.0.0/16", "10.164.0.0/16", "10.165.0.0/16", "10.166.0.0/16",
+          "10.167.0.0/16", "10.169.0.0/16", "10.170.0.0/16", "10.171.0.0/16",
+          "10.172.0.0/16", "10.173.0.0/16", "10.174.0.0/16", "10.175.0.0/16",
+          "10.176.0.0/16", "10.177.0.0/16", "10.178.0.0/16", "10.179.0.0/16",
+          "10.180.0.0/16", "10.181.0.0/16", "10.182.0.0/16", "10.183.0.0/16",
+          "10.184.0.0/16", "10.185.0.0/16", "10.186.0.0/16", "10.187.0.0/16",
+          "10.188.0.0/16", "10.189.0.0/16", "10.190.0.0/16", "10.191.0.0/16",
+          "10.192.0.0/16", "10.193.0.0/16", "10.194.0.0/16", "10.195.0.0/16",
+          "10.196.0.0/16", "10.197.0.0/16", "10.198.0.0/16", "10.199.0.0/16",
+          "10.240.0.0/16", "10.244.0.0/16", "10.250.0.0/16"
+        ]
+      },
+      "source_ref": "security-log-analysis/common/研判公共知识.md:Office CIDRs",
+      "priority": 5
     },
     {
       "fact_id": "pa.app-ts-public-assets",
@@ -72,6 +119,17 @@
         "domain_suffixes": ["paic.com.cn"]
       },
       "source_ref": "asset_extractor.py:internal domain guidance",
+      "priority": 20
+    },
+    {
+      "fact_id": "pa.public-corporate-domain-caveat",
+      "kind": "domain_scope",
+      "label": "PingAn public corporate domain caveat",
+      "statement": "A matched *.pingan.com.cn or *.pingan.com host may be reachable from both internal and external networks. The suffix identifies corporate naming context but must not be used as proof that the peer, request, or traffic direction is internal.",
+      "selector": {
+        "domain_suffixes": ["pingan.com.cn", "pingan.com"]
+      },
+      "source_ref": "security-log-analysis/common/研判公共知识.md:domain reachability caveat",
       "priority": 20
     },
     {

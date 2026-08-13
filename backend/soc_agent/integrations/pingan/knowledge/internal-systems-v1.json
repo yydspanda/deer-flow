@@ -1,0 +1,138 @@
+{
+  "schema_version": "soc.tenant_knowledge_profile.v1",
+  "profile_id": "pingan.internal_systems",
+  "version": "1.0.0",
+  "integration_names": [
+    "pingan_legacy_alert_platform"
+  ],
+  "tenant_ids": [],
+  "review_status": "reviewed",
+  "review_ref": ".notes/ai_soc/capabilities/pingan/tenant-static-knowledge-migration.md#review-2026-08-13",
+  "max_projected_items": 12,
+  "max_projected_chars": 12000,
+  "facts": [
+    {
+      "fact_id": "pa.ctx-cloud-desktop-host",
+      "kind": "infrastructure_role",
+      "label": "PingAn CTX cloud desktop host",
+      "statement": "A canonical host name beginning with CTX is a reviewed PingAn cloud-desktop naming signal. It supports endpoint-role interpretation only and does not prove the current user, activity, authorization, or verdict.",
+      "selector": {
+        "host_prefixes": ["CTX"]
+      },
+      "source_ref": "security-log-analysis/common/研判公共知识.md:CTX host prefix",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.happypa-client-process",
+      "kind": "application_identity",
+      "label": "PingAn HappyPA client process",
+      "statement": "The canonical process name unity-happypa.exe is a reviewed identifier for the HappyPA internal messaging client. Process identity is context, not proof that the observed behavior is benign or authorized.",
+      "selector": {
+        "process_names": ["unity-happypa.exe"]
+      },
+      "source_ref": "security-log-analysis/common/研判公共知识.md:HappyPA",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.pamail-client-process",
+      "kind": "application_identity",
+      "label": "PingAn internal mail client process",
+      "statement": "The canonical process name PaMailH5App.exe is a reviewed identifier for the PingAn internal mail client. Process identity alone does not establish that the current child process, command, or network action is safe.",
+      "selector": {
+        "process_names": ["PaMailH5App.exe"]
+      },
+      "source_ref": "security-log-analysis/common/研判公共知识.md:PingAn mail client",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.pamail-install-path",
+      "kind": "application_identity",
+      "label": "PingAn internal mail client installation path",
+      "statement": "A canonical path under C:/Program Files/pingantechmail/B is a reviewed installation-location signal for the PingAn mail client. The path match does not suppress analysis of the actual process behavior.",
+      "selector": {
+        "path_prefixes": ["C:/Program Files/pingantechmail/B"]
+      },
+      "source_ref": "security-log-analysis/common/研判公共知识.md:PingAn mail path",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.askbob-llm-endpoint",
+      "kind": "application_identity",
+      "label": "PingAn AskBob LLM endpoint",
+      "statement": "The canonical HTTP URI under /pws/askbob-gpt is a reviewed identifier for an internal AskBob LLM invocation endpoint. This explains the service identity but does not by itself validate request content or authorization.",
+      "selector": {
+        "uri_prefixes": ["/pws/askbob-gpt"]
+      },
+      "source_ref": "operator confirmation; security-log-analysis/common/研判公共知识.md:AskBob",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.iobs-service-domain",
+      "kind": "application_identity",
+      "label": "PingAn IOBS service domain",
+      "statement": "A canonical host under iobs.pingan.com.cn identifies the reviewed PingAn IOBS service context. Service identity is not a blanket allowlist and does not prove the specific transfer or payload is safe.",
+      "selector": {
+        "domain_suffixes": ["iobs.pingan.com.cn"]
+      },
+      "source_ref": "zeus/prompt/apt_prompts.py and nids_prompts.py:IOBS service",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.codepilot-endpoint",
+      "kind": "application_identity",
+      "label": "PingAn AI code-assistant endpoint",
+      "statement": "A canonical HTTP URI under /code_pilot/api or /copilot/api is a reviewed AI code-assistant endpoint signal. Such requests can legitimately transport source code or SQL-shaped text, but endpoint identity alone is not a false-positive verdict and does not authorize suppression.",
+      "selector": {
+        "uri_prefixes": ["/code_pilot/api", "/copilot/api"]
+      },
+      "source_ref": "security-log-analysis/references/apt&nids/AI代码助手误报.md",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.data-manager-sql-preview-endpoint",
+      "kind": "application_identity",
+      "label": "PingAn data-manager SQL preview endpoint",
+      "statement": "The canonical HTTP URI /data-manager-svc/v1/sqltemplate/preview identifies a reviewed SQL-template preview function. The endpoint identity can explain SQL-shaped input or database output, but current behavior still requires evidence-based analysis and receives no automatic benign disposition.",
+      "selector": {
+        "uri_prefixes": ["/data-manager-svc/v1/sqltemplate/preview"]
+      },
+      "source_ref": "security-log-analysis/common/研判公共知识.md:data-manager-svc",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.palo-query-endpoint",
+      "kind": "application_identity",
+      "label": "PingAn Palo/StarRocks query endpoint",
+      "statement": "The exact internal address 26.6.5.194 together with canonical URI /api/query/internal/ads identifies the reviewed Palo/StarRocks query interface. This is application identity only and does not automatically make a request or response benign.",
+      "selector": {
+        "exact_ips": ["26.6.5.194"],
+        "uri_prefixes": ["/api/query/internal/ads"]
+      },
+      "source_ref": "security-log-analysis/common/研判公共知识.md:Palo/StarRocks",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.ubiops-agent-installation",
+      "kind": "application_identity",
+      "label": "PingAn-reviewed ubiops-agent installation",
+      "statement": "The canonical process ubiops-agent together with a path under /tmp/ubiops-agent or /opt/ubiops-agent identifies the reviewed commercial operations-agent installation context. It is not a blanket allowlist; command behavior and authorization remain separate questions.",
+      "selector": {
+        "process_names": ["ubiops-agent"],
+        "path_prefixes": ["/tmp/ubiops-agent", "/opt/ubiops-agent"]
+      },
+      "source_ref": "security-log-analysis/common/研判公共知识.md:ubiops-agent",
+      "priority": 20
+    },
+    {
+      "fact_id": "pa.domain-account-convention",
+      "kind": "identity_convention",
+      "label": "PingAn domain-account naming convention",
+      "statement": "The matched canonical account follows the reviewed PingAn domain-user naming convention: a letter-based name plus three digits, optionally prefixed EX- for an external worker. This is a format signal only; it does not prove the person's identity, current employment, authorization, or benignness.",
+      "selector": {
+        "account_patterns": ["(?:EX-)?[A-Z]+[0-9]{3}"]
+      },
+      "source_ref": "zeus/prompt/edr_prompts.py:EXTRACT_USER_PROMPT",
+      "priority": 20
+    }
+  ]
+}

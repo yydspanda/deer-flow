@@ -1,6 +1,6 @@
 # PingAn Security Log Analysis Skill Audit
 
-> Updated: 2026-08-10
+> Updated: 2026-08-13
 > Source: `validation/original_works/security-log-analysis/security-log-analysis/`
 > Source ID: `PA-SKILL-DEMO-20260805`
 
@@ -79,7 +79,11 @@ The following candidate groups are discovered but are not automatically activate
 | `dev/stg/test` handling suggestions | PingAn Policy Skill / governed context | environment name remains a hint; no benign/exempt disposition without exact governed confirmation or another reviewed rule |
 | historical APT/EDR/HIDS cases | desensitized labeled eval corpus | analyst truth, rationale, corpus manifest, supersession lineage |
 
-Exact internal values remain in the source material until an operator deliberately onboards them through the corresponding governed service. They are not duplicated into public Skills or this audit.
+A deliberately reviewed static subset is now active through three tenant-scoped Profiles: network/direction,
+platform context, and internal-system identity. The exact accepted facts, typed selectors, superseded topic
+heuristic and rejected broad rules are recorded in `tenant-static-knowledge-migration.md`. Dynamic scanners,
+authorization, maintenance and historical dispositions remain outside these Profiles. None of these values is
+duplicated into public Skills.
 
 ## 6. Rejected Direct Migrations
 

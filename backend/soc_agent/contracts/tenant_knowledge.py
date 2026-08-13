@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Literal
 
@@ -14,6 +15,9 @@ class TenantKnowledgeFactKind(StrEnum):
     NETWORK_SCOPE = "network_scope"
     DOMAIN_SCOPE = "domain_scope"
     INFRASTRUCTURE_ROLE = "infrastructure_role"
+    APPLICATION_IDENTITY = "application_identity"
+    PLATFORM_CONTEXT = "platform_context"
+    IDENTITY_CONVENTION = "identity_convention"
     DIRECTION_PLAYBOOK = "direction_playbook"
     REVIEWED_EXAMPLE = "reviewed_example"
 
@@ -28,6 +32,42 @@ class TenantKnowledgeSelector(BaseModel):
     domain_suffixes: list[str] = Field(default_factory=list, max_length=100)
     text_terms: list[str] = Field(default_factory=list, max_length=100)
     source_types: list[str] = Field(default_factory=list, max_length=30)
+    host_prefixes: list[str] = Field(default_factory=list, max_length=100)
+    process_names: list[str] = Field(default_factory=list, max_length=100)
+    path_prefixes: list[str] = Field(default_factory=list, max_length=100)
+    account_patterns: list[str] = Field(default_factory=list, max_length=100)
+    uri_prefixes: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator(
+        "exact_ips",
+        "cidrs",
+        "domain_suffixes",
+        "text_terms",
+        "source_types",
+        "host_prefixes",
+        "process_names",
+        "path_prefixes",
+        "account_patterns",
+        "uri_prefixes",
+    )
+    @classmethod
+    def normalize_selector_values(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values if value.strip()]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("tenant knowledge selector values must be unique")
+        return normalized
+
+    @field_validator("account_patterns")
+    @classmethod
+    def validate_account_patterns(cls, values: list[str]) -> list[str]:
+        for pattern in values:
+            if len(pattern) > 256:
+                raise ValueError("tenant knowledge account pattern exceeds 256 characters")
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"invalid tenant knowledge account pattern: {pattern!r}") from exc
+        return values
 
     @model_validator(mode="after")
     def require_selector(self) -> TenantKnowledgeSelector:
@@ -38,6 +78,11 @@ class TenantKnowledgeSelector(BaseModel):
                 self.domain_suffixes,
                 self.text_terms,
                 self.source_types,
+                self.host_prefixes,
+                self.process_names,
+                self.path_prefixes,
+                self.account_patterns,
+                self.uri_prefixes,
             )
         ):
             raise ValueError("tenant knowledge selector requires at least one match group")

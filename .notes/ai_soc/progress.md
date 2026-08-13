@@ -32,6 +32,21 @@
 | 当前下一刀 | `soc-analysis-v21` / `soc.decision_policy.v6` 已明确“可信 detector hit + Runtime 当前裁决 + 独立动作授权”边界，并移除无价值的置信度/标签强制复核。下一步用固定 live cohort 验证 ReviewQueue 降幅与结论完整性，再补独立人工方向/角色真值、Web/TUI 人工角色确认表单和 held-out confirmed-memory Retrieval v2 precision/recall。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
+## 2026-08-13 — PingAn tenant-static knowledge typed selection completed
+
+- `TenantKnowledgeSelector` 新增 `host_prefixes`、`process_names`、`path_prefixes`、
+  `account_patterns` 和 `uri_prefixes`。它们只消费 canonical/extracted typed entities；纯 rule/raw text
+  中偶然出现相同字符串不会触发。组内 OR、非空组间 AND，账号 pattern 在 Profile 加载时校验并在
+  canonical account 上 full-match。
+- PingAn Profile 拆为 network/direction、platform context、internal systems 三份并统一注入。
+  `network_direction@1.2.0` 纳入运营确认的 `26/8`、`29/8`、真实自用 `172/8`、办公 `/16`，同时声明
+  `*.pingan.com.cn`/`*.pingan.com` 不能证明内网方向。
+- HIDS Profile 明确 topic 不是 `dev/stg/prd` 环境真值；内部系统 Profile 只识别 CTX、HappyPA、PaMail、
+  AskBob、IOBS、CodePilot、data-manager、Palo、ubiops 和账号格式，不产生 benign/ignore/action authority。
+- 夜间扫描、国内 IP 推定、扫描器永久白名单、环境名直接忽略和旧 Prompt 的宽泛处置规则均拒绝迁移。
+  完整 review authority 与后续准入规则见
+  `capabilities/pingan/tenant-static-knowledge-migration.md`。
+
 ## 2026-08-13 — Detection trust and review boundary tightened
 
 - 主分析升级为 `soc-analysis-v21`：信任配置的上游 rule/detector/model 确实命中并产生告警，信任

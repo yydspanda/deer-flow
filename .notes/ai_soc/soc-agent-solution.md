@@ -1109,7 +1109,7 @@ mutation-audit boundaries.
 | External system query / 外部系统查询 | MCP or action adapter | Asset ownership, threat-intel reputation, governed security tags |
 | Alert-native endpoint/host evidence / 告警原生终端与主机证据 | Normalizer + bounded evidence | Process tree, command line, login user, host events carried by EDR/HIDS alerts |
 | Governed operational fact / 有治理的运营事实 | Governed context registry + typed source adapter | Exercise participant, approved scanner campaign, maintenance window, asset state |
-| Reviewed tenant-static knowledge / 已评审租户静态知识 | Versioned tenant knowledge profile -> bounded `C-*` | Internal network ownership, internal-domain meaning, collection-point caveat |
+| Reviewed tenant-static knowledge / 已评审租户静态知识 | Versioned tenant knowledge profile -> bounded `C-*` | Internal network ownership, application/platform identity, naming convention, collection-point caveat |
 | Reusable historical lesson / 可复用历史经验 | Memory admission -> candidate -> confirmed `M-*` | Reviewed direction correction for a recurring behavior |
 | Vendor field mapping / 字段映射 | Normalizer adapter | PingAn `zeusRawLogs[].message` mapping |
 | Repeated operational conclusion / 历史处置经验 | Memory candidate then confirmed memory | This rule often flips attacker/victim direction under condition X |
@@ -1919,7 +1919,7 @@ Current real-alert Adapter coverage:
 | --- | --- | --- |
 | Raw field quirks, `zeusRawLogs[].message` preference | PingAn normalizer adapter | Vendor-specific parsing belongs at edge |
 | General investigation reasoning | `skills/public/soc-*` | Reusable across customers |
-| Stable reviewed network/domain/collection-point knowledge | Versioned PingAn knowledge profile -> `C-*` | Tenant-scoped, source-linked and bounded; not public prompt or Memory spam |
+| Stable reviewed network/domain/application/platform knowledge | Versioned PingAn knowledge profile -> `C-*` | Canonical typed selectors, tenant scope, source/review lineage and no decision authority; not public prompt or Memory spam |
 | Event-time authorization, exercise participant or maintenance state | Governed Context Fact | Dynamic lifecycle, not static profile or Memory |
 | Remote lookup capability | Mock now, real MCP/action later | External capability boundary |
 | Historical false-positive/true-positive lessons | Memory candidate | Must be reviewed |

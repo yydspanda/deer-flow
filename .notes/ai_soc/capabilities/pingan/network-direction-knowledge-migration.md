@@ -2,7 +2,7 @@
 
 > Status: Implemented baseline, production quality evaluation pending
 >
-> Updated: 2026-08-12
+> Updated: 2026-08-13
 
 本文说明旧 Zeus 方向判断 Prompt、`asset_extractor.py` 和
 `security-log-analysis` 经验如何进入新的通用 SOC Runtime。目标不是照搬旧代码，而是保留其有效的
@@ -60,6 +60,10 @@ Implemented artifacts:
 - `backend/soc_agent/integrations/pingan/knowledge/network-direction-v1.json` stores the reviewed
   PingAn profile. It is selected by `integration_name` or tenant scope and projects only facts whose
   selectors match the current canonical request.
+- Profile `1.2.0` records the operator-confirmed `26/8`, `29/8`, and PingAn-owned `172/8` ranges,
+  distinguishes reviewed office `/16` subnets, and adds the negative caveat that `*.pingan.com.cn`
+  and `*.pingan.com` do not prove an internal traffic direction. The full migration review is
+  `tenant-static-knowledge-migration.md`.
 - `TenantKnowledgeAnalysisRequestEnricher` projects bounded, hashed `C-*` catalog items. It does not
   execute tenant code and every projection records profile/fact/source/review lineage plus
   `decision_authority=none`.
@@ -96,4 +100,3 @@ CDN 场景中 source 可以是中间节点，F5 SNAT 采集点甚至可能只有
 validation、人工修订和 Retrieval v2 强锚点机制。真实模型的方向/角色准确率仍必须使用脱敏、人工确认的
 APT/NDR/EDR/HIDS 样本评测：至少分别覆盖正向攻击、反连、内到外、内到内、CDN/XFF、F5 SNAT、多个
 wire observation 和无法判断。组件通过不能替代这项生产质量 Gate。
-

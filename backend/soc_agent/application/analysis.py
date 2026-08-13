@@ -15,7 +15,7 @@ from soc_agent.core import (
     SocTenantPolicyEvaluationService,
 )
 from soc_agent.db import SqlAlchemyAlertRepository
-from soc_agent.integrations.pingan.knowledge import load_pingan_network_direction_profile
+from soc_agent.integrations.pingan.knowledge import load_pingan_tenant_knowledge_profiles
 from soc_agent.knowledge import (
     CompositeAnalysisRequestEnricher,
     TenantKnowledgeAnalysisRequestEnricher,
@@ -86,7 +86,7 @@ def _build_analysis_request_enricher(
 ) -> CompositeAnalysisRequestEnricher:
     enrichers = [
         TenantKnowledgeAnalysisRequestEnricher(
-            [load_pingan_network_direction_profile()],
+            load_pingan_tenant_knowledge_profiles(),
         )
     ]
     if repository is not None:

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from soc_agent.contracts import (
     AnalysisContextCatalogItem,
@@ -83,6 +85,11 @@ def _matching_facts(
 def _request_signals(request: LLMAnalysisRequest) -> dict[str, Any]:
     ips = set(request.extracted_entities.ips)
     domains = set(request.extracted_entities.domains)
+    hosts = set(request.extracted_entities.hosts)
+    process_names = set(request.extracted_entities.processes)
+    paths: set[str] = set()
+    accounts = set(request.extracted_entities.users)
+    uris = set(request.extracted_entities.urls)
     network = request.canonical_entities.network
     for value in (
         network.source_ip,
@@ -96,6 +103,50 @@ def _request_signals(request: LLMAnalysisRequest) -> dict[str, Any]:
         if observation.destination_ip:
             ips.add(observation.destination_ip)
         ips.update(observation.forwarded_chain)
+    for value in (network.domain, network.url):
+        if value:
+            domains.add(value)
+    if network.url:
+        uris.add(network.url)
+
+    host = request.canonical_entities.host
+    if host.host_name:
+        hosts.add(host.host_name)
+
+    process = request.canonical_entities.process
+    for value in (process.process_name, process.parent_process_name):
+        if value:
+            process_names.add(value)
+    if process.process_path:
+        paths.add(process.process_path)
+    for observation in process.observations:
+        if observation.host_name:
+            hosts.add(observation.host_name)
+        for node in observation.nodes:
+            process_names.add(node.process_name)
+            if node.process_path:
+                paths.add(node.process_path)
+            if node.username:
+                accounts.add(node.username)
+
+    user = request.canonical_entities.user
+    for value in (
+        user.username,
+        user.user_id,
+        user.um_account,
+        user.src_user,
+        user.dst_user,
+    ):
+        if value:
+            accounts.add(value)
+
+    file = request.canonical_entities.file
+    if file.file_path:
+        paths.add(file.file_path)
+    for observation in file.observations:
+        if observation.file_path:
+            paths.add(observation.file_path)
+
     http = request.canonical_entities.http
     for forwarded in [http.x_forwarded_for, *(item.x_forwarded_for for item in http.observations)]:
         if forwarded:
@@ -103,11 +154,20 @@ def _request_signals(request: LLMAnalysisRequest) -> dict[str, Any]:
     for value in (http.host, http.url):
         if value:
             domains.add(value)
+    for value in (http.path, http.url):
+        if value:
+            uris.add(value)
     for observation in http.observations:
         if observation.host:
             domains.add(observation.host)
         if observation.url:
             domains.add(observation.url)
+        for value in (observation.path, observation.url):
+            if value:
+                uris.add(value)
+
+    for value in request.extracted_entities.urls:
+        domains.add(value)
 
     text_parts = [
         request.detection.detection_key,
@@ -124,6 +184,11 @@ def _request_signals(request: LLMAnalysisRequest) -> dict[str, Any]:
     return {
         "ips": {_normalize_ip(value) for value in ips if _normalize_ip(value)},
         "domains": {_normalize_domain(value) for value in domains if _normalize_domain(value)},
+        "hosts": {_normalize_host(value) for value in hosts if _normalize_host(value)},
+        "process_names": {_normalize_process_name(value) for value in process_names if _normalize_process_name(value)},
+        "paths": {_normalize_path(value) for value in paths if _normalize_path(value)},
+        "accounts": {normalized for value in accounts if (normalized := _normalize_account(value))},
+        "uris": {_normalize_uri(value) for value in uris if _normalize_uri(value)},
         "text": "\n".join(str(value) for value in text_parts if value).casefold(),
         "source_type": request.source.source_type.value,
     }
@@ -160,6 +225,36 @@ def _selector_matches(
         if not values:
             return None
         matched["text_terms"] = values[:20]
+    if selector.host_prefixes:
+        prefixes = tuple(value.casefold() for value in selector.host_prefixes)
+        values = sorted(value for value in signals["hosts"] if value.startswith(prefixes))
+        if not values:
+            return None
+        matched["host_prefixes"] = values[:20]
+    if selector.process_names:
+        expected = {_normalize_process_name(value) for value in selector.process_names}
+        values = sorted(signals["process_names"].intersection(expected))
+        if not values:
+            return None
+        matched["process_names"] = values[:20]
+    if selector.path_prefixes:
+        prefixes = [_normalize_path(value) for value in selector.path_prefixes]
+        values = sorted(value for value in signals["paths"] if any(_path_matches_prefix(value, prefix) for prefix in prefixes))
+        if not values:
+            return None
+        matched["path_prefixes"] = values[:20]
+    if selector.account_patterns:
+        patterns = [re.compile(pattern, re.IGNORECASE) for pattern in selector.account_patterns]
+        values = sorted(value for value in signals["accounts"] if any(pattern.fullmatch(value) for pattern in patterns))
+        if not values:
+            return None
+        matched["account_patterns"] = values[:20]
+    if selector.uri_prefixes:
+        prefixes = [_normalize_uri(value) for value in selector.uri_prefixes]
+        values = sorted(value for value in signals["uris"] if any(_uri_matches_prefix(value, prefix) for prefix in prefixes))
+        if not values:
+            return None
+        matched["uri_prefixes"] = values[:20]
     return matched
 
 
@@ -219,6 +314,44 @@ def _normalize_domain(value: str) -> str:
     if "://" in text:
         text = text.split("://", 1)[1]
     return text.split("/", 1)[0].split(":", 1)[0]
+
+
+def _normalize_host(value: str) -> str:
+    return str(value).strip().casefold()[:512]
+
+
+def _normalize_process_name(value: str) -> str:
+    text = str(value).strip().replace("\\", "/")
+    return text.rsplit("/", 1)[-1].casefold()[:512]
+
+
+def _normalize_path(value: str) -> str:
+    text = str(value).strip().replace("\\", "/")
+    while "//" in text:
+        text = text.replace("//", "/")
+    return text.rstrip("/").casefold()[:2000]
+
+
+def _normalize_account(value: str) -> str:
+    return str(value).strip()[:512]
+
+
+def _normalize_uri(value: str) -> str:
+    text = str(value).strip()
+    if not text:
+        return ""
+    parsed = urlsplit(text if "://" in text else f"https://placeholder.invalid/{text.lstrip('/')}")
+    path = parsed.path or "/"
+    return f"/{path.lstrip('/')}"[:2000]
+
+
+def _path_matches_prefix(value: str, prefix: str) -> bool:
+    return bool(prefix) and (value == prefix or value.startswith(f"{prefix}/"))
+
+
+def _uri_matches_prefix(value: str, prefix: str) -> bool:
+    normalized_prefix = prefix.rstrip("/") or "/"
+    return value == normalized_prefix or value.startswith(f"{normalized_prefix}/")
 
 
 def _domain_matches_suffix(domain: str, suffix: str) -> bool:

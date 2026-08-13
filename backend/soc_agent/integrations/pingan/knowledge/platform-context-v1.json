@@ -1,0 +1,37 @@
+{
+  "schema_version": "soc.tenant_knowledge_profile.v1",
+  "profile_id": "pingan.platform_context",
+  "version": "1.0.0",
+  "integration_names": [
+    "pingan_legacy_alert_platform"
+  ],
+  "tenant_ids": [],
+  "review_status": "reviewed",
+  "review_ref": ".notes/ai_soc/capabilities/pingan/tenant-static-knowledge-migration.md#review-2026-08-13",
+  "max_projected_items": 4,
+  "max_projected_chars": 4000,
+  "facts": [
+    {
+      "fact_id": "pa.hids-qingteng-source-context",
+      "kind": "platform_context",
+      "label": "PingAn Qingteng HIDS source context",
+      "statement": "PingAn HIDS alerts in this legacy integration are produced from the Qingteng host-security monitoring context. This identifies the monitoring source only; it does not make the reported behavior benign or prove compromise.",
+      "selector": {
+        "source_types": ["hids"]
+      },
+      "source_ref": "zeus/prompt/hids_prompts.py:HEAD_PART monitoring software",
+      "priority": 10
+    },
+    {
+      "fact_id": "pa.hids-topic-does-not-prove-environment",
+      "kind": "platform_context",
+      "label": "PingAn HIDS topic is not environment truth",
+      "statement": "Do not infer development, staging, or production environment from the PingAn HIDS topic name. Environment requires explicit current-alert or governed asset evidence; in particular, a topic label cannot distinguish staging from development.",
+      "selector": {
+        "source_types": ["hids"]
+      },
+      "source_ref": "operator confirmation 2026-08-13; supersedes legacy topic heuristic",
+      "priority": 5
+    }
+  ]
+}
