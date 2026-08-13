@@ -55,8 +55,9 @@
 - 固定 20 条 live cohort 保存在
   `backend/.deer-flow/soc-validation/e2e-twenty-observation-compaction-20260813/`：20/20 Runtime completed、
   0 failed、0 ungrounded evidence/reasoning、0 high-value compaction omission、0 unrepresented source；
-  55 条原始 Message 被表达为 21 个 behavior groups / 48 个 correlated profiles，识别 7 条 exact
-  duplicates 和 5 个 non-dominant profiles。此前四条 Prompt/catalog 阻塞样本均完成，`1983128` 的
+  55 条原始 Message 被表达为 21 个 behavior groups / 48 个 correlated profiles，识别 7 条忽略时间、
+  临时源端口和 PID 等实例噪声后的可折叠重复观测，以及 5 个 non-dominant profiles。此前四条
+  Prompt/catalog 阻塞样本均完成，`1983128` 的
   context catalog 从旧产物 123 降为 45。该轮为 3 accepted / 7 repaired / 5 degraded / 5 fallback，
   28 次 Provider 调用、797,624 reported tokens、984,353.66 ms 端到端总时长。
 - 5 个 fallback 的共同根因是第二次紧凑输出遗漏顶层 `schema_version`，随后被旧协议解析并连带报告

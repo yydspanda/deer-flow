@@ -346,7 +346,7 @@ def _project_evidence_compaction(
         "behavior_group_count": report.behavior_group_count,
         "profile_count": report.profile_count,
         "repeated_shape_message_count": report.repeated_shape_message_count,
-        "duplicate_message_count": report.duplicate_message_count,
+        "collapsed_repetition_count": report.collapsed_repetition_count,
         "non_dominant_profile_count": report.non_dominant_profile_count,
         "represented_source_count": report.represented_source_count,
         "represented_field_count": report.represented_field_count,

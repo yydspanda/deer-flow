@@ -1118,7 +1118,7 @@ def test_pingan_multiple_messages_are_bounded_as_primary_and_supplementary() -> 
     assert request.evidence_compaction.source_message_count == 2
     assert request.evidence_compaction.behavior_group_count == 1
     assert request.evidence_compaction.profile_count == 1
-    assert request.evidence_compaction.duplicate_message_count == 1
+    assert request.evidence_compaction.collapsed_repetition_count == 1
 
 
 def test_pingan_compaction_keeps_late_behavior_variant_as_representative() -> None:
@@ -1138,7 +1138,7 @@ def test_pingan_compaction_keeps_late_behavior_variant_as_representative() -> No
     assert report.behavior_group_count == 1
     assert report.profile_count == 2
     assert report.repeated_shape_message_count == 9
-    assert report.duplicate_message_count == 8
+    assert report.collapsed_repetition_count == 8
     assert report.non_dominant_profile_count == 1
     assert report.high_value_omission_count == 0
     assert report.groups[0].occurrence_count == 10

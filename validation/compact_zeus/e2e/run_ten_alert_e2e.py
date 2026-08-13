@@ -520,8 +520,8 @@ def build_dossier(
                 int(item.get("profile_count") or 0)
                 for item in evidence_compaction_items
             ),
-            "evidence_compaction_duplicate_message_count": sum(
-                int(item.get("duplicate_message_count") or 0)
+            "evidence_compaction_collapsed_repetition_count": sum(
+                int(item.get("collapsed_repetition_count") or 0)
                 for item in evidence_compaction_items
             ),
             "evidence_compaction_non_dominant_profile_count": sum(
@@ -1988,7 +1988,7 @@ def _render_summary_markdown(report: Mapping[str, Any]) -> str:
             f"messages={summary.get('evidence_compaction_source_message_count', 0)}, "
             f"groups={summary.get('evidence_compaction_behavior_group_count', 0)}, "
             f"profiles={summary.get('evidence_compaction_profile_count', 0)}, "
-            f"duplicates={summary.get('evidence_compaction_duplicate_message_count', 0)}, "
+            f"collapsed repetitions={summary.get('evidence_compaction_collapsed_repetition_count', 0)}, "
             f"non-dominant profiles={summary.get('evidence_compaction_non_dominant_profile_count', 0)}, "
             f"high-value omissions={summary.get('evidence_compaction_high_value_omission_count', 0)}, "
             f"unrepresented sources={summary.get('evidence_compaction_unrepresented_source_count', 0)}"

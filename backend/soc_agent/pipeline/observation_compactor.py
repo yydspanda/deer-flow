@@ -119,7 +119,7 @@ def build_evidence_compaction_report(
     opaque_unselected_count = sum(record.opaque_message_hash is not None and record.source_path not in selected_paths for record in records)
     omitted_item_count += opaque_unselected_count
     profile_count = sum(group.profile_count for group in groups)
-    duplicate_message_count = max(0, len(records) - profile_count)
+    collapsed_repetition_count = max(0, len(records) - profile_count)
     warnings: list[str] = []
     if omitted_item_count:
         warnings.append("observation compaction exceeded a model-facing detail budget; raw input remains available for replay")
@@ -134,7 +134,7 @@ def build_evidence_compaction_report(
         behavior_group_count=len(groups),
         profile_count=profile_count,
         repeated_shape_message_count=max(0, len(records) - len(groups)),
-        duplicate_message_count=duplicate_message_count,
+        collapsed_repetition_count=collapsed_repetition_count,
         non_dominant_profile_count=sum(group.non_dominant_profile_count for group in groups),
         selected_evidence_paths=selected_paths,
         represented_field_paths=represented_field_paths[:5000],

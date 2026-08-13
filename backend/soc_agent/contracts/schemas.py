@@ -2742,7 +2742,7 @@ class EvidenceCompactionReport(BaseModel):
     behavior_group_count: int = Field(default=0, ge=0)
     profile_count: int = Field(default=0, ge=0)
     repeated_shape_message_count: int = Field(default=0, ge=0)
-    duplicate_message_count: int = Field(default=0, ge=0)
+    collapsed_repetition_count: int = Field(default=0, ge=0)
     non_dominant_profile_count: int = Field(default=0, ge=0)
     selected_evidence_paths: list[str] = Field(default_factory=list, max_length=5)
     represented_field_paths: list[str] = Field(

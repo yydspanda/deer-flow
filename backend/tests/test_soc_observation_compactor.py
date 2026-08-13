@@ -48,7 +48,7 @@ def test_compactor_is_vendor_neutral_and_preserves_raw_payload() -> None:
     assert report.typed_observation_count == 5
     assert report.behavior_group_count == 1
     assert report.profile_count == 2
-    assert report.duplicate_message_count == 3
+    assert report.collapsed_repetition_count == 3
     assert report.non_dominant_profile_count == 1
     assert report.selected_evidence_paths == ["events[0]", "events[4]"]
     assert report.high_value_omission_count == 0
