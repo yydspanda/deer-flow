@@ -90,6 +90,15 @@ Skill quality review note:
   tag-neutralized; full raw payloads stay in tool artifacts. See
   [backend/AGENTS.md](backend/AGENTS.md) for the non-activation, SkillScan, and
   `skill-creator` ownership boundaries.
+- `.agents/skills/soc-product-manager/` is the repository-scoped product workflow for
+  SOC feature value, MVP scope, analyst journeys, acceptance criteria, metrics, and
+  roadmap tradeoffs. Keep generic reusable PM skills user-global; keep this SOC overlay
+  in the repository because it depends on project-owned plans and terminology.
+- `.agents/skills/soc-architecture-reviewer/` is the repository-scoped architecture
+  review workflow for SOC boundary changes. Use it for new services, protocols,
+  schemas, persistence, Runtime/Agent control flow, middleware, integrations, or
+  cross-module reliability and authority decisions. It reads current authoritative
+  docs and code on demand; it does not own roadmap status or duplicate architecture facts.
 
 Scheduled-task note:
 - The scheduled-task MVP adds a workspace page at `/workspace/scheduled-tasks` plus a background scheduler service gated by `config.yaml -> scheduler.enabled`.
@@ -228,13 +237,19 @@ Current SOC direction:
   opt-in at the generic settings layer through `SOC_LLM_THINKING_ENABLED`; model-call metadata records
   both `thinking_enabled_requested` and whether reasoning content was observable in the provider
   response, because an intranet-compatible gateway may honor reasoning without returning it.
+  Provider JSON-object mode is separately opt-in through `SOC_LLM_JSON_MODE_ENABLED`; it defaults off
+  for intranet compatibility and every call records `json_mode_requested`. JSON-object mode guarantees
+  neither the complete SOC schema nor semantic validity, so parser/schema/domain validation and the
+  single bounded core-repair path remain mandatory.
 - Fixed-cohort SOC validation reports model use by independent lane: primary analysis, optional role
   verifier, and tenant-policy advisor. A logical verifier review may contain many atomic `RC-*`
   claims and may use an additional bounded output-repair provider invocation; these counts must not
   be conflated. Missing provider usage makes the aggregate a measured lower bound. Monetary cost and
   model accuracy remain `not_measured` until a reviewed price table and independent human truth labels
   exist. E2E knowledge-review artifacts are not database Memory and are never auto-promoted.
-- New live analyzer responses use `soc.analysis_result.v4`. Before the model call, Runtime builds a
+- New live analyzer responses use the compact provider-owned
+  `soc.analysis_model_output.v4`; Runtime hydrates the accepted result into internal
+  `soc.analysis_result.v4`. Before the model call, Runtime builds a
   vendor-neutral `EvidenceCompactionReport` from canonical typed observations. Repeated messages are
   represented as stable facts, value-frequency distributions, and correlated behavior profiles;
   dominant and rare profiles choose the bounded full-message representatives. Raw payloads, parsed
@@ -243,19 +258,36 @@ Current SOC direction:
   Runtime then builds a
   replay-stable current-alert fact catalog (`E-*`) and governed context catalogs: Skill (`S-*`),
   adapter contract (`A-*`), confirmed memory (`M-*`), governed context (`C-*`), and tool result
-  (`T-*`). `evidence[]` may contain only exact `E-*` path/value pairs. Security interpretation belongs
-  in explicit `R-*` reasoning items with declared basis and references; open-vocabulary scenario
-  assessments cite both `E-*` and `R-*`. `soc-analysis-v21` / `soc-analysis-json-parser-v18` reject
-  unresolved or ambiguous references. The parser may perform only auditable mechanical repairs:
-  restore a missing top-level `soc.analysis_model_output.v1` version only when the complete field set
-  is unambiguously the compact model-owned contract, map
+  (`T-*`). The model-owned core returns only verdict/confidence/summary/reason/action plus request-local
+  aliases such as `E-001` and optional `S/A/M/C/T-001`. Runtime restores each alias through the frozen
+  one-to-one map before validation, then materializes exact stable references, path/value evidence and
+  the core reasoning item `R-00`; the model never copies those tuples or their long hash IDs. Stable
+  IDs remain the only persisted/Grounding/replay identity. Exact alias restoration is hydration rather
+  than repair; an unknown alias still fails. Optional detailed
+  reasoning, scenario, direction, role and guidance blocks are independently validated.
+  `reference_catalogs.role_entities` exposes only Runtime-typed canonical/extracted entities; raw
+  vendor field names and ports remain ordinary evidence. `soc-analysis-v34` /
+  `soc-analysis-json-parser-v24` reject unresolved or ambiguous references.
+  The v34 prompt keeps stable trust/method/reference rules in the system message, places bounded alert
+  context before the task, and ends the user message with the exact response shape and final checklist.
+  It requires complete scenario/direction/role section shapes and exact role-catalog alias mapping;
+  it selects exactly one machine-validated complete synthetic example (`network_roles`, `non_network`,
+  or `conflicted`) and records `prompt_example_id`. Example-only `EX-*` references must never enter a
+  model response, and example conclusions are shape-only rather than current evidence. Do not add
+  partial pseudo-examples that omit required fields or inject all examples.
+  The parser may perform only auditable mechanical repairs: restore a missing top-level
+  `soc.analysis_model_output.v4` version only when the complete field set is unambiguously the compact
+  model-owned contract, map
   an exact path/value to its unique `E-*`, materialize a valid cited catalog fact, remove an exact
   duplicate fact/reference, normalize a strict JSON boolean string, remove an explicit empty context
-  sentinel, derive the redundant basis label from an already explicit valid `S/A/M/C/T` reference,
-  mark a missing scenario rationale with an explicit non-semantic placeholder when both E/R support
-  lists exist, or remove an optional response-target proposal whose exact typed entity was not
-  adjudicated. A proposal's action-specific target role may differ from that entity's global semantic
-  role; this never grants action authority.
+  sentinel, normalize a strict decimal confidence string, retain/deduplicate/bound exact
+  catalog-backed core or optional references, use an explicit `scenario_key` as a missing display
+  name, mark missing/invalid model scenario provenance conservatively as `inferred`, materialize a
+  missing optional rationale from that object's already explicit fields, copy an already valid
+  `reason` verbatim into a missing/empty display-only `summary` when it fits the summary bound, derive a role entity only
+  when its cited typed facts collapse to one unique value, or discard one malformed
+  optional item/section without changing the accepted core. A generic event ID is not a
+  typed attacker/victim entity, and ambiguous candidates are never guessed.
   Direction/role objects may directly cite exact request-catalog context IDs without duplicating them
   in `R-*`; dangling context IDs still fail. It must not infer security semantics.
   `LLMAnalysisRequest.v6` also carries Runtime-owned `role_coherence`: a scenario-specific consistency
@@ -265,19 +297,20 @@ Current SOC direction:
   High-trust message highlights preserve their reviewed source trust when compaction projects them into
   `E-*`. Neither mechanism proves compromise, changes the verdict, or grants action authority.
   A primary or verifier model node may make at most one separately journaled output-repair call under
-  `SOC_LLM_OUTPUT_RETRY_ATTEMPTS=1`. Primary output is validated as a required core plus independently
-  recoverable scenario, direction, role, and knowledge sections. When the core is valid, repair sends
-  only rejected sections plus the immutable accepted core; a failed section repair retains valid
-  sections, substitutes inert defaults, marks `analysis_output_quality=degraded`, and forces review.
-  An irrecoverable core uses the deterministic stub as an explicit fail-closed result rather than
-  losing the whole alert. Provider transport/capacity failures remain retryable Runtime failures.
+  `SOC_LLM_OUTPUT_RETRY_ATTEMPTS=1`. A valid primary core is never retried merely because an optional
+  item or section is malformed: Runtime retains valid sections, substitutes inert defaults, records
+  `analysis_output_quality=degraded`, and lets `AnalysisMaterialityReport.v1` block only dependent
+  capabilities. Only an invalid core can consume the bounded repair call; an irrecoverable core uses
+  the deterministic stub as an explicit fail-closed result. Provider transport/capacity failures
+  remain retryable Runtime failures.
   For primary analysis, `SOC_LLM_OUTPUT_FALLBACK_MODEL` may select a stronger registered repair model.
   Every repair receives
   only the invalid candidate or section, validation error, allowed catalogs and response schema, not
   raw vendor input, and cannot add security facts.
-- `AnalysisResult.v4` separates observed wire flow, organization-boundary direction, semantic roles,
-  and action-specific response-target proposals. Never equate source with attacker or destination with
-  victim globally. A proposed target never grants action authority. Human role confirmation is an
+- `AnalysisResult.v4` separates observed wire flow, organization-boundary direction and semantic
+  roles. Runtime derives action-specific targets only from accepted typed roles plus governed policy;
+  the current compact model contract no longer emits response-target proposals. Never equate source with attacker or
+  destination with victim globally. A derived target never grants action authority. Human role confirmation is an
   append-only `RoleAdjudicationRevisionRecord` through `SocReviewService`, not a model-output rewrite.
 - Trust a source field only within its reviewed adapter-declared meaning. An exact
   `provider_reported_session_initiator|responder` semantic is sufficient for that scoped upstream
@@ -290,28 +323,39 @@ Current SOC direction:
   direction, semantic roles, attempt/effect/impact stage, verdict and recommendation. Optional
   CMDB/PCAP/TI/endpoint/history enrichment may improve scope or response targeting, but its absence
   alone must not erase the detector hit, suppress a current conclusion, or force ReviewQueue.
-  `soc.decision_policy.v6` creates review work only for explicit `unknown|needs_review` conclusions or
-  structural blockers such as degraded output/schema, high-value gaps, fact conflicts, Grounding
-  failures, or failed role verification. `suspicious`, `false_positive`, raw model confidence and
+  `soc.analysis_materiality.v1` runs after Grounding/optional role verification and before
+  `soc.decision_policy.v7`. It distinguishes an unusable core, unresolved decision-level conflict,
+  and core-reference failure from optional section defects or target ambiguity. The former create
+  review; the latter preserve the verdict and block only scenario routing, direction, typed targeting,
+  or response execution as applicable. `suspicious`, `false_positive`, raw model confidence and
   uncalibrated confidence are diagnostic values, not standalone review reasons. Base Runtime still
   sets `automation_allowed=false`; governed post-Runtime policy separately authorizes and executes
   actions, with human approval only where that policy requires it.
 - Conditional second-pass role verification is a default-off Runtime node controlled by
-  `SOC_ROLE_VERIFIER_ENABLED`. Trigger policy v2 reviews only one coherent network-direction claim
-  plus non-placeholder attacker/victim claims. Inferred/tentative state, generic evidence gaps,
+  `SOC_ROLE_VERIFIER_ENABLED`. Trigger policy v2 reviews up to four atomic network-direction fields
+  (`observed_flow`, `boundary_direction`, `semantic_direction`, `connection_initiator`) plus
+  non-placeholder attacker/victim claims. Inferred/tentative state, generic evidence gaps,
   intermediaries, response-target proposals and confidence alone never trigger a second call;
   confidence is only diagnostic after a core conflict/indeterminate state, upstream role conflict,
   or core-reference Grounding failure has already triggered. The narrow
-  `soc-role-verification-v3` Prompt receives at most `RC-ND-01` plus attacker/victim `RC-R-*` claims;
-  the verifier never sees first-pass rationale or confidence. It must independently return
-  `supported|challenged|unresolved` with exact references and an explicit counterevidence assessment.
-  `challenged`, `unresolved`, or provider/parser
-  failure adds a fail-closed Decision review guard under `soc.decision_policy.v6`; confirmation never
-  authorizes an action or removes another review reason. `SOC_ROLE_VERIFIER_MODEL` may select a stronger
+  `soc-role-verification-v4` Prompt receives only those `RC-ND-01..04` and attacker/victim `RC-R-*`
+  claims plus a claim-relevant subset of the frozen catalogs; the verifier never sees raw vendor
+  payload, first-pass rationale, or confidence. It must independently return
+  `supported|challenged|unresolved` with polarity-specific exact `E-*` and `S/A/M/C/T-*` references
+  plus an explicit counterevidence assessment. Typed governed `network_scope` may establish matched
+  organization ownership, but provider GeoIP/address-location enrichment cannot override it or prove
+  roles, verdict, or action authority. When both canonical endpoints carry the typed
+  `network_scope_membership=organization_controlled` marker, Runtime exposes an
+  `internal_to_internal` boundary constraint and rejects a verifier status/alternative/reference set
+  that contradicts it; this invariant remains limited to organization-boundary direction.
+  A `challenged` result adds a fail-closed Decision review guard under `soc.decision_policy.v7`.
+  `unresolved` or provider/parser `unavailable` preserves a usable first-pass conclusion but blocks
+  direction and semantic-target capabilities; confirmation never authorizes an action or removes
+  another review reason. `SOC_ROLE_VERIFIER_MODEL` may select a stronger
   configured model; otherwise the primary model is reused and that lineage is explicit. Each provider
   invocation has its own ordered `AnalysisRequestJournal`, while `request_journal` remains the active/
-  latest recovery pointer. A configured verifier run uses `pipeline_version=soc-runtime-v2` even when
-  its gate does not trigger; the default verifier-free pipeline remains `soc-runtime-v1`.
+  latest recovery pointer. A configured verifier run uses `pipeline_version=soc-runtime-v8` even when
+  its gate does not trigger; the default verifier-free pipeline uses `soc-runtime-v7`.
   The 2026-08-12 fixed ten-alert v2 live baseline triggered 5/10 alerts and sent 14 actual claims in
   five provider calls, down from the historical v1 10/10 trigger rate. Gate-projected candidates for
   non-triggered alerts are audit material and must not be counted as reviewed claims. This remains a
@@ -368,8 +412,9 @@ Current SOC direction:
   namespace. A grounded reasoning item proves reference integrity, not that its model inference is
   literal telemetry or automatically correct. An exact visible encoded-omission marker proves only
   field presence, encoding shape and boundary omission; hidden bytes, validity and outcome remain
-  ungrounded. Any evidence or reasoning reference failure keeps the deterministic degraded-review
-  guard. Model-generated `K-*` knowledge candidates are inert review suggestions and must never
+  ungrounded. Grounding does not re-judge whether a supported model inference is semantically correct.
+  `AnalysisMaterialityReport.v1` decides whether a failed reference belongs to the decision core or
+  only to an optional capability. Model-generated `K-*` knowledge candidates are inert review suggestions and must never
   directly write Memory, modify a Skill/adapter/policy, or affect the current decision.
 - Persisted analysis writes run/summary/optional review/audit as one `AnalysisPersistence` transaction.
   Retryable Runtime failures do not commit Kafka offsets or immediately create analyst queue noise;
@@ -550,10 +595,12 @@ Current SOC direction:
   while `EvidenceCoverageReport` exposes parsed fields that were used, sanitized, omitted, or left
   outside canonical/fact/scenario mappings.
 - `MessageSchemaObservation.recognized` means the outer message parser succeeded; nested decode/repair
-  warnings do not turn the whole message schema into degraded. Under `soc.decision_policy.v6`, encoded
+  warnings do not turn the whole message schema into degraded. Under `soc.decision_policy.v7`, encoded
   compaction alone is informational, routine bounded omission/truncation without a high-value gap is
-  at most partial, degraded/unsupported outer schema or high-value/ungrounded evidence is degraded,
-  and fact conflicts remain conflicted. The old truncation review reason is historical compatibility.
+  at most partial, and degraded/unsupported outer schema remains partial unless it creates a high-value
+  gap. Only unusable decision-core references or fallback degrade the whole Decision; only critical
+  unresolved fact conflicts become conflicted. Optional failures remain capability-scoped. The old
+  truncation review reason is historical compatibility.
 - Persisted CLI/Kafka analysis injects `SocNormalizationMaintenanceService` after normal business
   writes. It creates deduplicated baseline/schema/coverage maintenance issues without changing the
   verdict. Baselines require explicit engineer/admin acceptance; mapping suggestions and confidence

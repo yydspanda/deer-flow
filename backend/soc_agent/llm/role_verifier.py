@@ -140,7 +140,7 @@ class JsonLLMRoleVerifier:
         if claims_hash != trigger.claims_hash or len(claims) != trigger.claim_count:
             raise ValueError("role verification claims changed after trigger evaluation")
 
-        prompt = build_role_verification_prompt(request, claims)
+        prompt = build_role_verification_prompt(request, analysis, claims)
         prompt_messages = prompt.messages()
         try:
             response = coerce_chat_response(
@@ -182,11 +182,12 @@ class JsonLLMRoleVerifier:
                 retry_kind = "empty_response_retry"
             else:
                 retry_prompt = build_role_verification_output_repair_prompt(
-                    request,
                     claims,
                     invalid_candidate=response.content,
                     validation_error=exc,
                     response_schema=role_verification_response_schema(),
+                    allowed_reference_catalogs=prompt.context["reference_catalogs"],
+                    runtime_constraints=prompt.context["runtime_constraints"],
                 )
                 retry_kind = "contract_correction"
             if before_retry is not None:
@@ -309,6 +310,7 @@ def _parse_role_verification_response(
         claims=claims,
         evidence_catalog=request.evidence_catalog,
         context_catalog=request.context_catalog,
+        canonical_network=request.canonical_entities.network,
     )
 
 

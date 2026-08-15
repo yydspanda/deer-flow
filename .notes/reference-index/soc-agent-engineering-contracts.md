@@ -242,15 +242,17 @@ contracts
   `AnalysisResult.evidence[].source` must name an approved section, exact projection path, or a
   bounded evidence `source_path#parsed.field.path`; its scalar value must be present under that
   declared bounded source. Every item produces an
-  `AnalysisEvidenceGroundingItem`; any ungrounded item adds
-  `ungrounded_analysis_evidence` to deterministic review reasons.
+  `AnalysisEvidenceGroundingItem`; an ungrounded item adds a deterministic review reason only when it
+  is cited by the decision core. Optional item failure remains auditable and blocks only dependent
+  capabilities through `AnalysisMaterialityReport.v1`.
 - One analyzer evidence item may cite only one exact source path. Composite source strings are
   invalid. Exact bounded `#parsed`, `#decoded`, and `#repaired` paths are separate provenance
   surfaces; descriptions may not introduce facts from uncited sibling paths.
-- HTTP status, tool/API success, workflow/ticket state, `is_blocked`, or `is_banned` is not outcome
-  evidence for exploit execution, command success, file write, compromise, or response completion.
-  Positive outcome language without outcome-specific bounded evidence adds
-  `unproven_outcome_claim`; negated or explicitly uncertain outcome language must not trigger it.
+- HTTP status, tool/API success, workflow/ticket state, `is_blocked`, or `is_banned` must retain the
+  exact scoped meaning declared by its reviewed source/Adapter contract. Generic Grounding code must
+  not infer or reject security outcome semantics from field names or prose keywords; the bounded
+  analyzer decides attempt/effect/impact from cited evidence, while Automation Policy remains the
+  independent action-authority boundary.
 - Parser failure is explicit: preserve raw text, emit a warning, expose only bounded text to the
   analysis node, and keep structured fallback candidates at the trust selected by the source
   policy. PingAn defaults that trust to `low` except for its exact reviewed topic allowlist.
@@ -1528,11 +1530,12 @@ normalizers/hids.py
   provenance-backed canonical/fact/scenario evidence 的合法通用输入不能仅因没有 raw-message
   object 而触发该 gap。
 - Evidence quality 必须分层：`llm_compacted_encoded_paths` 单独存在是正常 Token 优化，不改变
-  `DecisionEvidenceState`；普通 omission/truncation 且无 high-value gap 时最多为 `partial`，不得产生
-  `truncated_analysis_evidence` 硬复核原因；degraded/unsupported outer schema、high-value gap 或
-  ungrounded analyzer evidence 才进入 `degraded`；fact conflict 优先进入 `conflicted`。
+  `DecisionEvidenceState`；普通 omission/truncation 且无 high-value gap、以及可选区块 reference failure
+  时最多为 `partial`，不得产生 `truncated_analysis_evidence` 硬复核原因；high-value gap、decision-core
+  reference failure 或 unusable core 才进入 `degraded`；critical unresolved fact conflict 优先进入
+  `conflicted`。Outer schema degradation 本身进入 maintenance/partial，只有造成 high-value gap 才复核。
 - `DecisionReviewReason.TRUNCATED_ANALYSIS_EVIDENCE` 仅为历史持久化兼容保留。当前
-  `soc.decision_policy.v6` 不为 routine bounded budget pressure 生成该 reason；关键字段是否丢失必须由
+  `soc.decision_policy.v7` 不为 routine bounded budget pressure 生成该 reason；关键字段是否丢失必须由
   typed `EvidenceFieldImportanceRegistry` / `high_value_gaps` 判断，不能从 `truncated=true` 猜测。
 
 ### Normalization maintenance / 归一化维护约束
@@ -1571,14 +1574,15 @@ normalizers/hids.py
   `calibrated_probability` / `calibration_profile_version`、`evidence_state`、结构化
   `review_reasons` 和 `policy_version`。raw confidence 不得冒充 calibrated probability。
 - 当前 stub heuristic 与 LLM self-report 都未校准；`confidence_is_calibrated=false` 必须保留，但
-  `soc.decision_policy.v6` 不再仅因未校准或 raw score 低而创建 ReviewQueue。Stub 仍以
+  `soc.decision_policy.v7` 不再仅因未校准或 raw score 低而创建 ReviewQueue。Stub 仍以
   `stub_analyzer` 进入复核，因为它不是生产推理节点。未来校准 profile 只能通过人工标注、离线校准、
   版本审批和 replay 验证接入；`soc eval confidence` 的输出不会自动改变 Runtime。
 - `true_positive`、`false_positive`、`suspicious` 都是完整当前结论，不能仅由标签本身生成复核原因；
-  显式 `unknown|needs_review` 才产生 `uncertain_verdict`。fact conflict、degraded/unsupported outer
-  message schema、high-value evidence gap、ungrounded analyzer evidence/reasoning、unsupported outcome
-  claim 和 verifier failure 等 hard guard 独立于 raw confidence，高分不能清除它们。Routine
-  truncation/omission 只表达 `partial`，encoded compaction 单独存在不改变 evidence state。
+  显式 `unknown|needs_review` 才产生 `uncertain_verdict`。critical unresolved fact conflict、high-value
+  evidence gap、decision-core reference failure、unusable core、challenged verifier 和 stub 等 hard guard
+  独立于 raw confidence，高分不能清除它们。可选区块损坏、outer schema warning、verifier unresolved/
+  unavailable 和 routine truncation/omission 只表达 `partial` 或 capability block，encoded compaction
+  单独存在不改变 evidence state。
 - 告警进入 Runtime 代表受配置治理的上游 rule/detector/model 确实命中并产出告警；这是可信的
   detection provenance。Analyzer 必须在本轮给出当前 scenario、direction、roles、attempt/effect/impact、
   verdict 与 recommendation。Adapter 已评审字段按精确语义范围可信；缺少 CMDB/PCAP/TI/endpoint/
@@ -1647,23 +1651,42 @@ normalizers/hids.py
   - `activity_stage=detection_hit|attempt_observed|effect_observed|impact_confirmed|indeterminate`。
   - `NetworkDirectionAssessment`：分别表达 wire flow、boundary direction、semantic direction、initiator、
     intermediary、证据缺口和 `E/R/context` 引用。
-  - `RoleAdjudicationResult`：typed attacker/victim/impacted/proxy/relay/scanner/C2 等角色和
-    action-specific `ResponseTargetProposal`；目标建议固定 `policy_review_required=true`、
-    `automation_allowed=false`。
-  - `competing_explanations`、`evidence_gaps`、非空 `manual_checks`。
+  - `RoleAdjudicationResult`：typed attacker/victim/impacted/proxy/relay/scanner/C2 等角色；模型不直接
+    输出 action-specific target，Runtime 只能从已接受 typed role 派生候选目标。
+  - 可选 `competing_explanations`、`evidence_gaps`、`manual_checks`。
 - 上游 `ScenarioHypothesis` 是输入提示，不是 LLM 输出真值。模型可以细化或拒绝它，但必须用 bounded
   evidence 解释；不能把未知场景只埋在自然语言 `reason`。
-- Runtime 必须在调用前冻结 replay-stable `E-*` 当前事实目录和 `S/A/M/C/T-*` 上下文目录。模型只在
-  `R-*` 中解释安全语义；每个 `R-*` 必须引用至少一个 `E-*`，依赖外部上下文时还必须引用对应 namespace。
-- `soc-analysis-v19` / `soc-analysis-json-parser-v17` 只允许有日志、无安全语义的机械修复；仅当完整字段
-  集合可无歧义判定为紧凑模型输出时，允许恢复缺失的顶层 `soc.analysis_model_output.v1` 版本；不得根据
-  文本猜攻击者、受害者、场景、成功状态或上下文来源。
+- Runtime 必须在调用前冻结 replay-stable `E-*` 当前事实目录和 `S/A/M/C/T-*` 上下文目录。Prompt
+  只向模型暴露请求内短别名（`E-001`、`S/A/M/C/T-001` 等）；模型核心返回
+  verdict/confidence/summary/reason/action 及这些短别名。Runtime 必须通过冻结的一一映射恢复稳定 ID，
+  再补全 exact evidence tuple，并生成稳定核心推理 `R-00`。稳定 ID 才能进入 Grounding、持久化和
+  replay；精确别名恢复属于 hydration，不计 repair，未知别名不得模糊匹配。
+- `reference_catalogs.role_entities` 只暴露 Runtime 已类型化的 canonical/extracted 实体；raw vendor
+  字段名、端口、计数器、时间戳和事件 ID 仍只是普通证据，不能因为名字像实体就成为角色目标。
+- `soc-analysis-v34` 将稳定的信任、分析方法和引用规则放在 system message；bounded alert context 位于
+  user message 前部，任务、精确响应结构和 final checklist 位于尾部。scenario/direction/role 使用精确
+  key 契约，角色只能把 `reference_catalogs.role_entities` 中选中项的 `evidence_ref` 复制为
+  `entity_ref`。Prompt Builder 按 `conflicted -> typed network evidence/network source -> non-network` 选择且只注入一个完整、
+  机器校验的 synthetic Golden Demo，并把 `prompt_example_id` 写入 trace；示例专用 `EX-*` 绝不能进入
+  模型输出，示例 verdict/scenario/direction/role/confidence/action 也只能用于 shape guidance，不得复制为
+  当前结论。不得使用缺少必填字段的片段式伪 few-shot，也不得把全部 Demo 常驻每次调用。
+- `soc-analysis-v34` / `soc-analysis-json-parser-v24` 只允许有日志、无安全语义的机械恢复；仅当完整字段
+  集合可无歧义判定为紧凑模型输出时，允许恢复缺失的顶层 `soc.analysis_model_output.v4` 版本。允许把
+  严格十进制 confidence 字符串转为数值；core/optional 引用只能按冻结目录过滤、去重并保持原顺序截到
+  契约上限 20；可用显式 `scenario_key` 补缺失展示名；可用同一可选对象已有字段生成缺失 rationale，
+  缺失/非法 scenario provenance 只能保守记为 `inferred`；当前 compact v4 仅缺失/空 `summary` 时，
+  若已有非空且不超过 4000 字符的 `reason`，可将该字符串原样复制为 display summary 并记录
+  `materialize_summary_from_reason`；或在其 cited typed facts 只收敛到一个唯一
+  实体时补全 role entity。通用事件/
+  alert/finding ID 不是 attacker/victim 实体，多个候选不得猜测；不得根据自然语言新增攻击者、受害者、
+  场景、成功状态或上下文来源。
 - `soc.analysis_evidence_grounding.v3` 先逐条校验 `E-*` reference/path/typed scalar，再校验 `R-*` 和
   `S/A/M/C/T-*` 引用完整性。Grounding 证明引用闭合，不证明模型推理已校准或可以执行动作。
 - 精确可见的 `<ENCODED:...:OMITTED>` marker-bearing scalar 只能证明字段存在、encoding shape 和模型边界
   省略，不能证明隐藏字节、token 身份/权限、安全结果或私有 sidecar hash。
-- 任何 evidence/reasoning/context 引用失败继续通过 Decision Policy 触发 degraded evidence、human review
-  和 `automation_allowed=false`；Grounding 不修复模型安全语义。
+- Grounding 不修复或重新裁判模型安全语义。任何 reference failure 必须进入
+  `AnalysisMaterialityReport.v1`：若命中 `decision_evidence_refs/decision_reasoning_refs` 则阻断 core
+  decision 并复核；若只属于可选区块则保留 verdict，只阻断对应 capability。
 - deterministic stub 用于 request 结构、trace、replay、golden test 和低成本降级；它不是生产模型质量证明。
 - 真实模型通过 `DeerFlowLLMChatClient` 复用 `deerflow.models.create_chat_model()`；SOC 代码不得再实现一套
   provider SDK 或 API key 读取。主分析结构纠错可通过 `SOC_LLM_OUTPUT_FALLBACK_MODEL` 选择另一个
@@ -1681,29 +1704,33 @@ normalizers/hids.py
   - step metadata 不保存完整 prompt、完整 raw LLM output 或完整 vendor payload；需要复盘时通过 replay 输入和版本重新生成。
 - 默认 runtime 必须继续使用 deterministic `StubLLMAnalyzer`；真实 LLM analyzer 只能通过显式 flag/config/client 注入。
 - 统一配置为 `SOC_ANALYZER_MODE=stub|llm`、`SOC_LLM_MODEL`、`SOC_LLM_THINKING_ENABLED`、
+  `SOC_LLM_JSON_MODE_ENABLED`、
   `SOC_LLM_ATTACH_TRACING`、`SOC_LLM_MAX_CONCURRENCY`、`SOC_LLM_REQUESTS_PER_MINUTE`、
   `SOC_LLM_ADMISSION_TIMEOUT_SECONDS`、`SOC_LLM_CALL_TIMEOUT_SECONDS`、
   `SOC_LLM_OUTPUT_RETRY_ATTEMPTS`、`SOC_LLM_OUTPUT_FALLBACK_MODEL`。CLI 可用 `--analyzer-mode` /
   `--model-name` 覆盖；未知模型必须 fail-fast，
   禁止静默换到默认 provider。
+- `SOC_LLM_JSON_MODE_ENABLED` 默认 `false`，只在目标 Provider 已通过能力探测后开启。它只请求合法
+  JSON object，不等于 JSON Schema enforcement；每次成功/失败调用都必须记录
+  `json_mode_requested`，本地 parser/schema/domain validation 与唯一一次 bounded core repair 仍不可省略。
 - 条件式角色复核配置为 `SOC_ROLE_VERIFIER_ENABLED`（默认 `false`）、
   `SOC_ROLE_VERIFIER_MODEL`（缺省复用主模型）和 `SOC_ROLE_VERIFIER_MIN_CONFIDENCE`（`0..1`）。stub
   analyzer 下禁止启用 verifier；未知 verifier model 必须在启动组装时 fail-fast。
 - `SOC_LLM_OUTPUT_RETRY_ATTEMPTS` 只能为 `0|1`，主分析与 verifier 各自最多做一次结构纠错。主分析
-  必须先独立校验 required core 与 `scenario_assessments / network_direction / role_adjudication /
-  knowledge_candidates`。core 有效时，纠错只接收被拒 section、不可变 accepted core、validation error、
-  允许目录和响应 Schema，并写 `primary_analysis_section_repair` journal；不得重做已接受部分。
-  section 纠错失败时保留有效部分、注入无语义 inert default、标记 degraded 并强制 review。core 最终
-  无效时使用 deterministic stub 形成显式 fallback 结果并强制 review；不得把模型坏输出伪装成正常
-  stub。Provider timeout/capacity/auth/transport 仍是 retryable Runtime failure，不得用 stub 隐藏。
-  verifier/full-core 纠错分别写 `role_verification_retry|primary_analysis_retry`，所有路径都不得形成开放式
-  self-reflection loop。
+  必须先独立校验 compact required core 与 `reasoning / scenario_assessments / network_direction /
+  role_adjudication / guidance`。core 有效时，本地保留合法 item/section、丢弃坏 item 或注入 inert
+  default，并标记局部 degraded；不得只为可选区块再次调用 Provider。只有 core 无效时，纠错请求才
+  接收 invalid candidate、validation error、允许目录和响应 Schema，并写 `primary_analysis_retry`
+  journal。core 最终无效时使用 deterministic stub 形成显式 fallback 结果并强制 review；不得把模型
+  坏输出伪装成正常 stub。Provider timeout/capacity/auth/transport 仍是 retryable Runtime failure，不得
+  用 stub 隐藏。verifier/full-core 纠错分别写 `role_verification_retry|primary_analysis_retry`，所有路径
+  都不得形成开放式 self-reflection loop。
 - LLM admission 必须独立于 Kafka worker concurrency，使用进程内 bounded semaphore 和可选 RPM
   预算。准入饱和是 retryable `analyzer_capacity`，不得调用 provider 后再伪装成本地限流。
 - admission timeout 只限制等待本地并发名额；call timeout 独立限制一次 provider invocation。后者
   超时必须形成 retryable `analyzer_timeout`，Kafka 不得提交 offset；后台调用可能无法强制中断时，
   executor worker 数仍必须有界，防止超时请求无限创建线程。
-- parser semantic repair 只允许当前 `soc-analysis-json-parser-v15` 明确列出的可证明无损关系修复；
+- parser semantic repair 只允许当前 `soc-analysis-json-parser-v24` 明确列出的可证明无损关系修复；
   类型猜测、内容拼接、歧义引用和安全语义补全必须被拒。可恢复 optional section 按上述 degraded
   路径处理；required core 无法恢复时按 deterministic fallback 处理。
 - 新模型响应不得带未声明的顶层、scenario、direction 或 role 字段；不得用字符串 confidence、重复
@@ -1714,50 +1741,84 @@ normalizers/hids.py
 - `DeerFlowLLMChatClient` 只可保存 allowlisted response metadata 和 token usage；provider headers、凭证、
   原始 response object 不得进入 `AnalysisRun`。
 
+### Analysis materiality / 局部影响约束
+
+- Runtime 必须在 `evidence_grounding` 和可选 `role_verification` 之后、`decide` 之前执行独立
+  `analysis_materiality` 步骤；结果固定写入 `AnalysisRun.analysis_materiality`、step trace、analysis
+  audit、Lead Agent review context 和固定 cohort 报告。
+- `AnalysisMaterialityReport.v1` 必须分别记录 `core_usable`、`decision_usable`、结构化 review reason、
+  section impact、每个 immutable `ConflictReport` 的 disposition，以及 scenario/direction/source/
+  destination/attacker/victim/impacted-asset/user/response-action capability guard。禁止只保存一个
+  笼统 `degraded=true`。
+- impact 只有 `none / action_only / decision_review`。optional section 缺失或损坏、非 critical 未解决
+  target conflict、verifier unresolved/unavailable 默认属于 capability 级问题；不得擦除已通过 core
+  Grounding 的 verdict，也不得仅因此创建 ReviewQueue。
+- core fallback、core section 损坏、decision core 的 E/R reference failure、critical unresolved current-
+  fact conflict 和 verifier challenged 属于 `decision_review`。Decision review 同时阻断通用 response
+  action，不能被 `needs_review=true` 的租户自动化 override 绕过。
+- `ConflictReport` 是 pre-analysis immutable observation；materiality 只能追加
+  `resolved / accepted_variance / unresolved` disposition 和 resolution source，不得原地删除或改写冲突。
+  已由 FactReconstruction、Runtime 场景语义或 grounded model role adjudication 解决的冲突只保留审计。
+- `SocDecisionPolicy.v7` 只消费 materiality 的 decision-level结果；`SocAutomationService` 必须再次检查
+  对应 capability guard。这样 verdict 可用不等于精确动作目标可用，动作被阻断也不等于整条研判失败。
+
 ### Network direction / role adjudication / tenant knowledge 约束
 
 - 方向必须拆成三层：observed wire flow、organization-boundary direction、security semantic roles。
   禁止在通用 Runtime 建立 `source == attacker` 或 `destination == victim` 的全局等式。
 - `FactReconstructionResult` 继续是 deterministic pre-LLM fact layer；模型最终语义角色必须写入独立
   `AnalysisResult.role_adjudication`，不得回写或伪装成原始 `RoleResolution`。
-- assessed `NetworkDirectionAssessment` 必须同时有 `E-*` 和 `R-*`；每个 `AdjudicatedRole` 和
-  `ResponseTargetProposal` 必须有 exact `E-*`、`R-*`，使用知识时还要带对应 `S/A/M/C/T-*`。
+- assessed `NetworkDirectionAssessment` 必须同时有 `E-*` 和 `R-*`；每个 `AdjudicatedRole` 必须有
+  exact `E-*`、`R-*`，使用知识时还要带对应 `S/A/M/C/T-*`。`R-00` 可作为 top-level core reasoning。
 - `AdjudicatedRole.status=unresolved` 表示当前证据不能把该语义角色绑定到具体实体，必须使用
   `value=null`；`tentative|resolved_from_evidence|resolved_from_context|conflicted` 仍必须携带非空 typed
   entity。不得使用虚构的 `unknown` 字符串绕过实体约束。
-- direction/role/target 的 `context_refs` 只需精确存在于本次 request catalog，不要求在引用的 `R-*`
-  中机械重复；不存在或歧义引用必须拒绝。response target 的 `(target_type, target_value)` 必须对应一个
-  已裁决实体，防止模型凭空发明动作目标；其 action-specific `target_role` 可以与该实体的全局语义角色
-  不同。没有精确实体对应的可选 proposal 由 Parser 删除并完整记录目标三元组/reason，但不得补造实体、
-  改 verdict 或改变 action authority。
-- response target 必须绑定具体 `action_kind`。它只是目标提议，不是 tenant disposition、Approval、
-  automatic authorization 或 adapter execution input。
+- direction/role 的 `context_refs` 只需精确存在于本次 request catalog，不要求在引用的 `R-*` 中机械
+  重复；不存在或歧义引用必须拒绝。Runtime 派生 response target 时必须找到同类型、同值且
+  `resolved_from_evidence` 的 typed role，并同时通过 `AnalysisMaterialityReport.capability_guards`；缺少
+  精确实体或 capability 被阻断时必须 deny，不得回退到松散 host/IP 猜测。
+- 派生 response target 必须绑定具体 `action_kind`。它不是 tenant disposition、Approval、automatic
+  authorization 或 adapter execution input；最终权限仍只来自受治理 Automation Policy。
 - 第二阶段角色复核必须是默认关闭、确定性触发的可选 Runtime 节点；不得由第一轮模型自行决定是否
-  调用。v2 gate 只复核整体网络方向与非占位 attacker/victim；显式 core conflict/indeterminate、
+  调用。v2 gate 只复核最多四个原子网络方向字段与非占位 attacker/victim；显式 core conflict/indeterminate、
   upstream role conflict 或这些核心引用的 Grounding failure 才能触发。`inferred`、`tentative`、一般
   evidence gap、intermediary、response target 和 confidence 单独出现都不能触发；confidence 只能在已
   触发后作为诊断原因。不能按供应商字段名或场景关键词硬编码。
-- 复核输入必须把第一轮结论原子化为稳定 `RC-*` claims；禁止投影第一轮 rationale、reasoning prose
-  或 confidence，避免锚定。复核仍只能读取同一冻结的 `E/S/A/M/C/T-*` catalog；没有新 Provider
-  证据时必须承认它只是独立反证检查，不得宣称完成事实增强。
-- `soc-role-verification-v3` 必须遵守 Adapter 的精确字段语义：已评审的 provider-reported session
+- 复核输入必须把第一轮结论原子化为稳定 `RC-*` claims；`RC-ND-01..04` 分别只承载 observed flow、
+  boundary direction、semantic direction 和 connection initiator 中实际存在的一项。禁止投影第一轮
+  rationale、reasoning prose 或 confidence，避免锚定。复核只读取同一冻结 catalog 中与 claim、核心
+  role 及类型化 network context 相关的子集；没有新 Provider 证据时必须承认它只是独立反证检查，
+  不得宣称完成事实增强。
+- `soc-role-verification-v4` 必须遵守 Adapter 的精确字段语义：已评审的 provider-reported session
   initiator/responder 声明本身就是该会话角色的上游证据，不能只因没有独立 SYN/PCAP 而降为
   unresolved。只有本告警中的 direction-unknown、proxy/NAT/forwarding leg 或同 observation 反证可
   挑战该 scoped claim；攻击者/受害者仍必须独立复核，response target 不属于本节点的复核范围。
-- `RoleVerificationCandidate.v1` 必须完整且仅完整覆盖触发时的 claims。每条只能为
-  `supported|challenged|unresolved`，所有事实/上下文引用必须解析；challenged 必须有 contradicting
-  `E-*`，unresolved 必须有 evidence gap，alternative 必须保持原 claim key 集合；每条必须有非空
-  `counterevidence_assessment`，不能用单纯“同意第一轮”代替反证搜索。
+- 新模型输出 `RoleVerificationCandidate.v2` 必须完整且仅完整覆盖触发时的 claims。每条只能为
+  `supported|challenged|unresolved`，所有事实/上下文引用必须解析并区分 supporting/contradicting
+  极性；challenged 必须有 contradicting `E-*` 或类型化 `S/A/M/C/T-*`，unresolved 必须有 evidence
+  gap，alternative 必须保持原 claim key 集合。每条必须有非空 `counterevidence_assessment`，不能用
+  单纯“同意第一轮”代替反证搜索。v1 仅为已持久化历史记录读取兼容，live parser 不接受 v1 输出。
+- Provider GeoIP/address-location enrichment 只能作为 Adapter 保留的审计字段，不能进入方向复核事实
+  目录，也不能覆盖经审核且匹配当前实体的 `network_scope`。租户私有网段和 GeoIP 已知误标必须留在
+  tenant Profile/Adapter，通用 Runtime 不按 `30/8` 或任何供应商字段名硬编码。
+- `network_scope` Fact 必须显式声明类型化 `network_scope_membership`（当前枚举为
+  `organization_controlled / organization_external / shared_or_ambiguous`），不得靠解析 label/summary
+  推断，其他 Fact kind 禁止携带该字段。两个 canonical endpoint 均被
+  `organization_controlled` 覆盖时，Runtime 可生成只约束
+  organization boundary 的 `internal_to_internal` invariant；它不得外推 attacker/victim、compromise、
+  verdict 或 action authority。Verifier status/alternative/contradicting refs 与该 invariant 矛盾时必须
+  schema-fail 并进入唯一一次受限 correction，不能因自然语言 rationale 写对就接受错误 status。
 - `RoleAdjudicationVerificationResult` 不得重写 `AnalysisResult.v4`。confirmed 不移除既有复核原因；
-  challenged/unresolved/unavailable 分别使 `soc.decision_policy.v6` 进入 conflicted/degraded 并要求
-  人工复核。任何复核状态都固定 `automation_allowed=false`。
+  challenged 使 `soc.decision_policy.v7` 进入 conflicted 并要求人工复核；unresolved/unavailable 保留
+  可用第一轮结论，但由 materiality 阻断 direction/attacker/victim/impacted-asset targeting。任何复核
+  状态都不能直接授权动作。
 - 每个主分析/角色复核 Provider 调用必须分别写入有序、上限为 8 的
   `provider_request_journals`，新记录使用 `soc.analysis_request_journal.v2` 并保存
   purpose/model/prompt/parser/step/status，而不保存 prompt、证据值、
   credential 或 provider response。兼容 `request_journal` 只作为当前/最后一次调用及中断恢复指针；
   新调用开始前，上一条 running journal 必须完成，进程丢失时只能有最后一条保持 running。
-- verifier 被配置时，`AnalysisRun.pipeline_version` 必须固定为 `soc-runtime-v2`，不以本条告警是否触发
-  第二次调用为条件；verifier-free 流程保持 `soc-runtime-v1`。质量评测不得混合两个版本。
+- verifier 被配置时，`AnalysisRun.pipeline_version` 必须固定为 `soc-runtime-v8`，不以本条告警是否触发
+  第二次调用为条件；verifier-free 流程使用 `soc-runtime-v7`。质量评测不得混合两个版本。
 - 固定十告警对照必须报告触发率、claim status、fail-closed、每个 Runtime step、Runtime total、E2E
   total、主/复核调用耗时与 token。2026-08-12 的 10/10 live gate 是 v1 历史基线；v2 在该冻结结果上
   离线重算为 3/10。随后同一输入 hash 的 v2 live 运行实际触发 5/10，完成 5 次逻辑复核、14 个实际
@@ -2317,7 +2378,10 @@ SOC Agent 后续会同时存在 DeerFlow-style lead agent、domain skills、MCP/
 | Node prompt | `soc_agent/prompts/` | 固定 pipeline 节点内的结构化推理，例如 `llm_analyze` | 自主改变主流程、直接调用 MCP/tool、输出未校验自然语言进入决策层 |
 | MCP/tool adapter | `soc_agent/tools/` / DeerFlow MCP bridge | 查询或执行外部能力 | 绕过 policy、审计、人类审批执行高风险动作 |
 
-当前 `soc-analysis-v8` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费 `LLMAnalysisRequest` 和后续受控 skill context，输出必须进入 `AnalysisResult.v2` parser、schema validation、domain validation、evidence grounding，再由 Runtime 决定后续状态。
+当前 `soc-analysis-v34` 是 **analysis node prompt**，不是 SOC Lead Agent 的总控 prompt。它只能消费
+`LLMAnalysisRequest.v6` 和受控 context catalogs，输出 compact `soc.analysis_model_output.v4`；Runtime
+将其 hydration 为 `AnalysisResult.v4`，再依次经过 schema/domain validation、evidence grounding、
+analysis materiality 和 Decision Policy v7。模型不能决定后续状态或动作权限。
 
 当前 `SocSkillResolver` 已作为薄层落地在 `backend/soc_agent/skills.py`，只输出 DeerFlow skill 名称和结构化 reason。后续 `build_soc_skill_context()` 通过 DeerFlow parser 校验真实 public Skill package，并只投影包内受审阅、受预算约束的 `references/runtime-guidance.md`；它不把完整 `SKILL.md` 常驻 Runtime prompt，也不绕过 DeerFlow skill system。当前 DeerFlow 可加载的 SOC domain skills 是：
 

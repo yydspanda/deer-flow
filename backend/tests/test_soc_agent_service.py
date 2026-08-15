@@ -554,7 +554,7 @@ def test_analysis_service_writes_decision_audit_record() -> None:
     assert record.input_hash == run.input_hash
     assert record.final_verdict == Verdict.FALSE_POSITIVE
     assert record.payload["step_count"] == len(run.steps)
-    assert record.payload["decision_policy_version"] == "soc.decision_policy.v6"
+    assert record.payload["decision_policy_version"] == "soc.decision_policy.v7"
     assert record.payload["confidence_source"] == "stub_heuristic"
     assert record.payload["confidence_is_calibrated"] is False
     assert record.payload["calibrated_probability"] is None
@@ -639,6 +639,10 @@ def test_analysis_service_reuses_existing_run_for_same_idempotency_key() -> None
     assert len(review_repository.items) == 1
     assert len(audit_repository.records) == 1
     assert audit_repository.records[0].payload["idempotency_key"] == "kafka:soc.alerts.raw.v1:0:42"
+    assert audit_repository.records[0].payload["analysis_output_quality_status"] == "accepted"
+    assert audit_repository.records[0].payload["analysis_materiality"]["core_usable"] is True
+    assert audit_repository.records[0].payload["analysis_materiality"]["review_required"] is False
+    assert "attacker_targeting" in audit_repository.records[0].payload["analysis_materiality"]["blocked_capabilities"]
     assert sink.events[-1].payload["idempotent_replay"] is True
 
 
@@ -801,6 +805,36 @@ def test_analysis_service_enqueues_stub_false_positive() -> None:
     assert item.reason == "stub_analyzer"
     assert item.verdict is Verdict.FALSE_POSITIVE
     assert item.review_reasons == [DecisionReviewReason.STUB_ANALYZER]
+
+
+def test_analysis_service_does_not_enqueue_suspicious_decision_without_review_reason() -> None:
+    class SuspiciousNoReviewRuntime:
+        def analyze(self, payload: dict) -> AnalysisRun:
+            run = DeterministicAnalysisRuntime().analyze(payload)
+            assert run.analysis is not None
+            assert run.decision is not None
+            run.analysis = run.analysis.model_copy(update={"verdict": Verdict.SUSPICIOUS, "confidence": 0.6})
+            run.decision = run.decision.model_copy(
+                update={
+                    "verdict": Verdict.SUSPICIOUS,
+                    "confidence": 0.6,
+                    "needs_review": False,
+                    "review_reasons": [],
+                }
+            )
+            run.status = AnalysisRunStatus.SUCCESS
+            return run
+
+    review_repository = InMemoryReviewQueueRepository()
+    run = SocAnalysisService(
+        runtime=SuspiciousNoReviewRuntime(),
+        repository=InMemoryAlertRepository(),
+        review_queue_repository=review_repository,
+    ).analyze(_sample("pingan_legacy_apt.json"))
+
+    assert run.decision is not None
+    assert run.decision.needs_review is False
+    assert review_repository.get_open_review_item_by_run(run.run_id) is None
 
 
 def test_analysis_service_get_run_requires_repository() -> None:

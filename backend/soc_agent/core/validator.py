@@ -6,16 +6,22 @@ from soc_agent.contracts import AnalysisResult, Decision
 
 
 def validate_analysis_result(result: AnalysisResult) -> AnalysisResult:
-    """Validate LLM/stub analysis before decision logic consumes it."""
+    """Materialize stable decision support before policy consumes a result."""
 
-    if result.verdict == "false_positive" and result.confidence >= 0.9:
-        if "review" not in result.recommended_action.lower():
-            raise ValueError("high-confidence false positives still require review")
-    if not result.manual_checks:
-        raise ValueError("analysis result must include at least one executable manual check")
-    if not result.scenario_assessments and not result.evidence_gaps:
-        raise ValueError("analysis without a scenario assessment must state at least one evidence gap")
-    return result
+    evidence_refs = list(result.decision_evidence_refs)
+    if not evidence_refs:
+        evidence_refs = list(dict.fromkeys(reference for item in result.reasoning for reference in item.evidence_refs))[:20]
+    reasoning_refs = list(result.decision_reasoning_refs)
+    if not reasoning_refs:
+        reasoning_refs = [item.reasoning_id for item in result.reasoning[:20]]
+    if not evidence_refs or not reasoning_refs:
+        raise ValueError("analysis result requires explicit decision support references")
+    return result.model_copy(
+        update={
+            "decision_evidence_refs": evidence_refs,
+            "decision_reasoning_refs": reasoning_refs,
+        }
+    )
 
 
 def validate_decision(decision: Decision) -> Decision:

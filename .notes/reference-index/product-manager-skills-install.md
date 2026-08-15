@@ -6,7 +6,8 @@
 
 ## Strategy
 
-Install a focused PM toolkit globally, then use `soc-product-manager` as the SOC Agent overlay.
+Install a focused, reusable PM toolkit globally, then use the repository-scoped
+`soc-product-manager` as the SOC Agent overlay.
 
 ## Implicit / Frequent Skills
 
@@ -66,8 +67,12 @@ Use them by explicit `$skill-name` invocation when needed:
 
 ## SOC Overlay
 
-`soc-product-manager` is installed globally from `skills/soc-product-manager/` and should be used with the generic PM skills for SOC Agent work.
+`soc-product-manager` lives at `.agents/skills/soc-product-manager/`. Codex discovers it only
+while working in this repository, and it should be used with the generic global PM skills for
+SOC Agent work. Do not install a second user-global copy: the overlay depends on this project's
+`.notes/ai_soc/` sources and is not a cross-project workflow.
 
 ## Notes
 
-Restart Codex or force reload skills if newly installed skills do not appear.
+Codex normally detects skill changes automatically. Restart Codex if a newly installed or moved
+skill does not appear.

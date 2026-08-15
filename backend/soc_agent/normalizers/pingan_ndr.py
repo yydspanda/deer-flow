@@ -437,21 +437,6 @@ def build_ndr_source_field_semantics(
                 "destination_MAC_is_session_context_and_does_not_confirm_victim_identity",
             ),
             (
-                "sip_addr",
-                "source_address_enrichment",
-                "source_address_enrichment_is_provider_context_not_observed_network_direction",
-            ),
-            (
-                "dip_addr",
-                "destination_address_enrichment",
-                "destination_address_enrichment_is_provider_context_not_victim_confirmation",
-            ),
-            (
-                "attack_addr",
-                "vendor_attack_address_enrichment",
-                "attack_address_enrichment_is_provider_context_not_attacker_identity_proof",
-            ),
-            (
                 "attack_org",
                 "vendor_attack_organization_enrichment",
                 "organization_enrichment_is_provider_context_not_actor_attribution_proof",
@@ -717,6 +702,18 @@ def build_ndr_source_field_semantics(
             }
         )
         excluded_semantics = {
+            "sip_addr": (
+                "provider_geoip_source_enrichment",
+                "provider_GeoIP_enrichment_is_audit_only_and_must_not_determine_organization_boundary_direction_or_security_roles",
+            ),
+            "dip_addr": (
+                "provider_geoip_destination_enrichment",
+                "provider_GeoIP_enrichment_is_audit_only_and_must_not_determine_organization_boundary_direction_or_security_roles",
+            ),
+            "attack_addr": (
+                "provider_geoip_attack_enrichment",
+                "provider_GeoIP_enrichment_is_audit_only_and_must_not_determine_organization_boundary_direction_or_security_roles",
+            ),
             "branch_id": (
                 "source_routing_identifier",
                 "source_branch_identifier_is_traceability_metadata_not_analysis_evidence",

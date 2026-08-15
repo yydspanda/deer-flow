@@ -291,31 +291,30 @@ flowchart TD
     D --> E["1️⃣ normalize<br/>归一化为 AlertInput"]
     E --> F["2️⃣ entity_extract<br/>抽取 IP / host / user / process / rule"]
     F --> G["3️⃣ fact_reconstruct<br/>重建事实、角色、字段可信度和冲突"]
-    G --> H["4️⃣ build_analysis_input<br/>ObservationCompactor + LLMAnalysisRequest.v5"]
+    G --> H["4️⃣ build_analysis_input<br/>ObservationCompactor + LLMAnalysisRequest.v6"]
     H --> I["5️⃣ skill_context<br/>白名单选择 + Skill-package bounded guidance"]
     I --> RC["6️⃣ reference_catalog<br/>Memory Retrieval v2 + tenant knowledge + E/S/A/M/C/T"]
     RC --> PJ["📝 Pre-provider journal<br/>running + bounded metadata"]
-    PJ --> J["7️⃣ analyze_stub / LLM analyzer<br/>AnalysisResult.v4 + direction + roles"]
+    PJ --> J["7️⃣ analyze_stub / LLM analyzer<br/>compact output v4 + short refs → AnalysisResult.v4"]
     J -.-> KC["💡 K-* candidate knowledge<br/>只建议、不生效"]
     KC -.-> KR["🧑‍💻 Human review package<br/>Memory / Skill / Adapter / Policy 分流"]
     KR -.-> KX["🚫 No automatic write or decision impact"]
     J --> K["8️⃣ output_acceptance<br/>syntax + core + independent section validation"]
     K -->|all valid| L["9️⃣ evidence_grounding<br/>校验 E-* 精确事实与 R-* 引用完整性"]
-    K -->|optional section invalid| SR["🩹 One section-repair call<br/>只重做坏区块"]
-    SR -->|valid| L
-    SR -->|still invalid| DG["⚠️ retain valid sections<br/>inert defaults + degraded/review"]
+    K -->|optional item/section invalid| DG["⚠️ local isolation<br/>保留 core + 惰性默认值，不重复调用"]
     DG --> L
     K -->|core invalid| FR["🩹 One full-contract repair"]
     FR -->|valid| L
     FR -->|still invalid| SF["🧰 deterministic stub fallback<br/>explicit degraded/review"]
     SF --> L
     L --> VG{"🔀 10  role_verification_gate<br/>是否需要独立方向/角色反证?"}
-    VG -->|No| M["1️⃣1️⃣ SocDecisionPolicy v5<br/>生成受控 Decision"]
+    VG -->|No| MA["1️⃣1️⃣ AnalysisMateriality v1<br/>decision vs capability impact"]
     VG -->|Yes| VJ["📝 Second provider journal<br/>独立记录 verifier 调用"]
     VJ --> VR["🧠 verify_roles_llm<br/>RC-* supported / challenged / unresolved"]
-    VR --> M
-    VR -->|provider/parser error| VU["⚠️ unavailable<br/>保留主分析 + fail closed"]
-    VU --> M
+    VR --> MA
+    VR -->|provider/parser error| VU["⚠️ unavailable<br/>保留主分析 + 阻断方向/角色动作"]
+    VU --> MA
+    MA --> M["1️⃣2️⃣ SocDecisionPolicy v7<br/>生成受控 Decision"]
 
     M --> N{"needs_review?<br/>是否需要复核"}
     N -->|Yes| O["AnalysisRun.status = needs_review"]
@@ -339,29 +338,31 @@ flowchart TD
 |---|---|---|---|
 | `normalize` | Convert vendor payload to canonical alert | 把不同供应商、平安 Zeus envelope、EDR/APT/HIDS 原始字段转成统一 `AlertInput`；保留每条 message 的 network/process observation，并用 `SourceFieldSemantic` 阻止供应商占位值进入实体和推理 | `AlertInput`, `NormalizationReport` |
 | `entity_extract` | Extract security entities | 抽取 IP、域名、URL、host、user/UM、process、file、rule_code/rule_name 等实体 | `ExtractedEntities` |
-| `fact_reconstruct` | Rebuild and adjudicate facts | 把厂商字段声明转换为 `RoleClaim`，结合场景假设裁决 source/destination/attacker/victim/impacted asset；只在同一 observation 内判冲突，不把不同请求或不同进程执行压成一条会话；冲突时给暂定结论、证据缺口和核查清单，但不确定 response target | `FactReconstructionResult v2`, `RoleResolution`, `ConflictReport` |
-| `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型；先把全部 typed observations 按行为形状聚合成 stable facts、value distributions 和 correlated profiles，再选择主样本、dominant/rare 代表 Message。完整 raw/parsed/provenance 不变，Prompt 只接收压缩结果和路径计数，异常不会因 first-N 截断丢失 | `LLMAnalysisRequest.v5`, `EvidenceCompactionReport.v1` |
+| `fact_reconstruct` | Rebuild and adjudicate facts | 把厂商字段声明转换为 `RoleClaim`，结合场景假设裁决 source/destination/attacker/victim/impacted asset；只在同一 observation 内判冲突，不把不同请求或不同进程执行压成一条会话；冲突时给暂定结论、证据缺口和核查清单，但不确定 response target | `FactReconstructionResult v3`, `RoleResolution`, `ConflictReport` |
+| `build_analysis_input` | Build bounded model input | 不把整包 raw payload 塞给模型；先把全部 typed observations 按行为形状聚合成 stable facts、value distributions 和 correlated profiles，再选择主样本、dominant/rare 代表 Message。完整 raw/parsed/provenance 不变，Prompt 只接收压缩结果和路径计数，异常不会因 first-N 截断丢失 | `LLMAnalysisRequest.v6`, `EvidenceCompactionReport.v1` |
 | `skill_context` | Resolve and project SOC skills | 根据 canonical typed source/entity/conflict 选择 SOC Skills，再从真实 public package 投影受预算约束的 `runtime-guidance.md`；记录选择原因、package/guidance hash 和 token accounting，不注入完整 `SKILL.md` | `SocSkillContext.v2` |
 | `reference_catalog` | Retrieve governed Memory/knowledge and freeze deterministic references | Runtime 通过 `ConfirmedMemoryAnalysisRequestEnricher -> SocMemoryService` 用 vendor-neutral facets 和 v2 type-aware strong-anchor gate 检索，并按 tenant/integration 匹配已评审知识 profile；再从同一模型可见投影生成稳定引用：当前告警原子事实为 `E-*`；Skill/Adapter/Confirmed Memory/Reviewed Context/Tool Result 分别为 `S/A/M/C/T-*`。SQL facet index 跨完整 eligible corpus 选候选，top-K 只是最终上下文预算 | `AnalysisEvidenceCatalogItem[]`, `AnalysisContextCatalogItem[]` |
 | `pre-provider journal` | Commit non-rollbackable call metadata | 每次调用 analyzer/verifier 前先把同一个 run 以 `running` 落到 `soc_analysis_runs`；只写 request hash/schema、purpose、模型、Prompt/Parser、步骤、来源、证据计数、skill、request/trace/actor 和哈希后的幂等键，不写渲染 prompt、provider header/response、credential/token。`provider_request_journals` 保留有序调用序列，`request_journal` 指向当前/最后一次调用用于恢复 | `AnalysisProviderInvocation`, `AnalysisRequestJournal[]` |
-| `analyze_stub / LLM analyzer` | Run bounded reasoning | 默认 deterministic stub；显式选择后通过 DeerFlow `create_chat_model` 调用真实模型。`evidence[]` 只复制 `E-*` 原子事实；`R-*` 承载通用安全知识和受治理上下文支持的推理；v4 分开输出 wire/boundary/semantic direction、attacker/victim/proxy 等角色和只建议不授权的 response target。已评审 Adapter 的 provider-reported session initiator/responder 是 scoped 上游会话事实，不要求重复 SYN/PCAP，但不等于攻击角色或动作依据；`K-*` 仅是待人工审核的知识建议 | `AnalysisNodeOutput`, `AnalysisResult.v4`, `NetworkDirectionAssessment`, `RoleAdjudicationResult` |
-| `output_acceptance` | Validate, repair or safely degrade model output | 先做 JSON/机械修复，再独立校验 required core 与 scenario/direction/role/knowledge。core 有效时只允许一次坏区块纠错；仍失败则保留已接受区块并用无语义默认值隔离坏区块。core 最终无效则显式使用 deterministic stub。两种降级都持久化 `analysis_output_quality`、强制 review，不让局部格式错误丢失整条告警；Provider 连接类错误仍交给 replay/retry | `AnalysisResult.v4`, `AnalysisOutputQuality.v1`, parser repair log |
-| `evidence_grounding` | Ground facts and reasoning references | `soc.analysis_evidence_grounding.v3` 先逐条验证 `E-*` 的 reference、source path 和 typed scalar，再验证每个 `R-*` 的 `E-*` 与 `S/A/M/C/T-*` 引用及 basis。Grounded reasoning 只表示输入引用完整，不表示推理是原始日志字面事实、已校准真值或可直接处置 | `AnalysisEvidenceGroundingReport.v3` |
-| `role_verification_gate` | Decide whether a second pass is justified | 默认关闭；开启后由 Runtime v2 gate 只检查一条整体网络方向 claim 和非占位 attacker/victim claim。只有核心方向冲突/不确定、上游角色冲突或核心引用 Grounding 失败才触发；tentative、普通证据缺口、中间节点、response target 和低 confidence 本身都不触发。模型不能自行路由 | `RoleVerificationTriggerDecision.v1` |
-| `verify_roles_llm` | Independently challenge direction/role/target claims | 将第一轮输出拆成 `RC-ND/R/T-*` 原子声明；第二轮只看原声明及同一冻结的 `E/S/A/M/C/T-*`，不看第一轮 rationale/confidence。逐条返回 `supported/challenged/unresolved`；必须遵守已评审 Adapter 的 scoped 会话语义，不能用“缺 SYN/PCAP”否认 provider-reported initiator/responder，但可根据显式代理、转发或同 observation 反证挑战；不能改 verdict、授权动作或制造新事实。失败写 `unavailable`，保留第一轮结果并 fail closed | `RoleAdjudicationVerificationResult.v1` |
+| `analyze_stub / LLM analyzer` | Run bounded reasoning | 默认 deterministic stub；显式选择后通过 DeerFlow `create_chat_model` 调用真实模型。模型返回 compact v4 核心结论与请求内短引用（如 `E-001`、`C-001`）；Runtime 用冻结映射还原稳定 ID，补全精确 evidence tuple 和稳定 `R-00`，并把可选 direction/role 投影为内部 `AnalysisResult.v4`。已评审 Adapter 的 provider-reported session initiator/responder 是 scoped 上游会话事实，不要求重复 SYN/PCAP，但不等于攻击角色或动作依据；动作目标由 Runtime 从已接受角色派生 | `AnalysisModelCoreOutputV4`, `AnalysisNodeOutput`, `AnalysisResult.v4` |
+| `output_acceptance` | Validate, repair or safely degrade model output | 先做 JSON/机械修复，再独立校验 required core 与 reasoning/scenario/direction/role/guidance。core 有效而可选项损坏时，本地丢弃坏项或隔离坏区块，不再调用模型；core 无效才允许一次受限契约修复，仍失败则显式使用 deterministic stub。所有接受/修复/隔离 lineage 都写入 `analysis_output_quality` | `AnalysisResult.v4`, `AnalysisOutputQuality.v1`, parser repair log |
+| `evidence_grounding` | Ground facts and reasoning references | `soc.analysis_evidence_grounding.v3` 逐条验证 `E-*` reference/source path/typed scalar，再验证 `R-*` 的 `E-*` 与 `S/A/M/C/T-*` 引用及 basis。它只证明引用闭合，不二次裁判模型基于这些事实作出的安全推理 | `AnalysisEvidenceGroundingReport.v3` |
+| `role_verification_gate` | Decide whether a second pass is justified | 默认关闭；开启后由 Runtime v2 gate 只检查最多四个原子方向字段和非占位 attacker/victim claim。只有核心方向冲突/不确定、上游角色冲突或核心引用 Grounding 失败才触发；tentative、普通证据缺口、中间节点、response target 和低 confidence 本身都不触发。模型不能自行路由 | `RoleVerificationTriggerDecision.v1` |
+| `verify_roles_llm` | Independently challenge direction and core role claims | 第一轮方向按 `observed_flow / boundary_direction / semantic_direction / connection_initiator` 拆成 `RC-ND-01..04`，attacker/victim 为 `RC-R-*`；第二轮只看 claim 相关的冻结 `E/S/A/M/C/T-*` 子集与 Runtime typed constraints，不看 raw payload、第一轮 rationale/confidence。逐条返回 `supported/challenged/unresolved` 及有极性的支持/反驳引用；必须遵守 Adapter scoped 会话语义。`challenged` 进入复核，`unresolved/unavailable` 保留第一轮结论但阻断依赖精确方向/角色的动作 | `RoleAdjudicationVerificationResult.v2` |
+| `analysis_materiality` | Scope defects to decisions or capabilities | 汇总 output quality、Grounding、`ConflictReport` 与 role verifier，输出 core/decision 是否可用、冲突是已解决/可接受差异/仅阻断动作/必须复核，以及 scenario/direction/source/destination/attacker/victim/impacted-asset/user/response-action 的独立 capability guard | `AnalysisMaterialityReport.v1` |
 | `knowledge candidate review` | Review model-suggested reusable knowledge | `K-*` 必须回指本轮 `E-* + R-*`。生产 Runtime 只把它作为 analysis 的 inert data；验证工具可汇总为人工审核包并建议 `general_skill / tenant_memory / governed_context / provider_requirement / adapter_mapping / tenant_policy / evaluation_fixture / reject_or_verify`，但不会自动写入或激活任何目标 | `K-* pending_review`, validation `knowledge-review/REVIEW.md` |
-| `decide` | Apply deterministic decision policy | `SocDecisionPolicy.v5` 将已校验结果转换成 operational decision；保留 raw confidence 来源、校准状态、证据状态、输出质量和结构化复核原因。`degraded`/stub fallback 强制复核；Verifier confirmed 不移除其他 guard；challenged 进入 conflicted，unresolved/unavailable 进入 degraded。当前 stub/LLM 分数均未校准，因此高分也不能覆盖冲突、schema 降级、关键证据缺口或误报确认 | `Decision` |
+| `decide` | Apply deterministic decision policy | `SocDecisionPolicy.v7` 将已校验结果转换成 operational decision；只因 `unknown/needs_review`、核心不可用、核心引用失败、关键证据缺口、critical unresolved conflict、challenged verifier 或 stub 进入复核。可选区块损坏和 verifier unresolved/unavailable 不抹掉有效 verdict，只由 capability guard 暂停相关动作 | `Decision` |
 | `normalization_monitor` | Detect parser/mapping maintenance work | 在业务结果已落库后检查基线、新结构、解析降级、关键字段缺口和 evidence truncation；失败只写 warning | `NormalizationMonitoringResult`, `NormalizationMaintenanceIssue` |
 
 ### Decision State / 决策状态
 
 ```mermaid
 flowchart TD
-    A["🧠 AnalysisResult<br/>verdict + raw confidence"] --> B["⚙️ SocDecisionPolicy<br/>确定性策略"]
-    C["🔎 EvidenceCoverage<br/>schema / gap / truncation"] --> B
-    D["⚖️ FactReconstruction<br/>conflicts"] --> B
-    GR["🔗 EvidenceGrounding v3<br/>E-* exact facts + R-* references"] --> B
-    RV["🧭 Role Verification<br/>confirmed / challenged / unresolved / unavailable"] --> B
+    A["🧠 AnalysisResult<br/>verdict + raw confidence"] --> MAT["🧭 AnalysisMateriality v1<br/>decision impact / capability guards"]
+    C["🔎 EvidenceCoverage<br/>schema / gap / truncation"] --> MAT
+    D["⚖️ FactReconstruction<br/>conflicts"] --> MAT
+    GR["🔗 EvidenceGrounding v3<br/>E-* exact facts + R-* references"] --> MAT
+    RV["🧭 Role Verification<br/>confirmed / challenged / unresolved / unavailable"] --> MAT
+    MAT --> B["⚙️ SocDecisionPolicy v7<br/>确定性策略"]
     B --> E["📋 Base Decision<br/>immutable Runtime result"]
     M["✅ Active Memory<br/>ordinary M-* or typed directive"] --> T{"📎 Directive gates pass?"}
     E --> T

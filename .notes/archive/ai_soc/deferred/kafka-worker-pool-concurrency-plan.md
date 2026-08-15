@@ -159,7 +159,7 @@ commit(topic, partition, next_committable_offset)
 | `SOC_KAFKA_PARTITION_ORDERED_COMMIT` | `true` | 必须保持 true；不提供关闭选项 |
 | `SOC_KAFKA_WORKER_SHUTDOWN_TIMEOUT_MS` | `30000` | graceful shutdown 等待 in-flight 完成时间 |
 | `SOC_KAFKA_BACKPRESSURE_SLEEP_MS` | `100` | 队列满时 controller backoff |
-| `SOC_LLM_MAX_CONCURRENT_CALLS` | `1` | LLM 分析节点并发上限，默认保守 |
+| `SOC_LLM_MAX_CONCURRENCY` | `1` | LLM 分析节点独立并发上限，默认保守 |
 
 ## 需要新增的指标
 

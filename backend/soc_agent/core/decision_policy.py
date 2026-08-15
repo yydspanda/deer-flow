@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from soc_agent.contracts import (
     AnalysisEvidenceGroundingReport,
+    AnalysisMaterialityReport,
     AnalysisOutputQuality,
-    AnalysisOutputQualityStatus,
     AnalysisResult,
     Decision,
     DecisionConfidenceSource,
@@ -18,8 +18,9 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.core.validator import validate_decision
+from soc_agent.pipeline.materiality import assess_analysis_materiality
 
-SOC_DECISION_POLICY_VERSION = "soc.decision_policy.v6"
+SOC_DECISION_POLICY_VERSION = "soc.decision_policy.v7"
 _INFORMATIONAL_WARNING_PREFIXES = ("bounded evidence compacted one or more encoded spans;",)
 
 
@@ -40,15 +41,21 @@ class SocDecisionPolicy:
         analyzer_step_name: str,
         output_quality: AnalysisOutputQuality | None = None,
         role_verification: RoleAdjudicationVerificationResult | None = None,
+        materiality: AnalysisMaterialityReport | None = None,
     ) -> Decision:
+        materiality = materiality or assess_analysis_materiality(
+            analysis,
+            request=request,
+            grounding=grounding,
+            output_quality=output_quality,
+            role_verification=role_verification,
+        )
         confidence_source = _confidence_source(analyzer_step_name)
         review_reasons = _review_reasons(
             analysis,
             request=request,
-            grounding=grounding,
             confidence_source=confidence_source,
-            output_quality=output_quality,
-            role_verification=role_verification,
+            materiality=materiality,
         )
         decision = Decision(
             verdict=analysis.verdict,
@@ -62,6 +69,7 @@ class SocDecisionPolicy:
                 grounding=grounding,
                 output_quality=output_quality,
                 role_verification=role_verification,
+                materiality=materiality,
             ),
             suggested_action=analysis.recommended_action,
             needs_review=bool(review_reasons),
@@ -85,43 +93,15 @@ def _review_reasons(
     analysis: AnalysisResult,
     *,
     request: LLMAnalysisRequest,
-    grounding: AnalysisEvidenceGroundingReport,
     confidence_source: DecisionConfidenceSource,
-    output_quality: AnalysisOutputQuality | None,
-    role_verification: RoleAdjudicationVerificationResult | None,
+    materiality: AnalysisMaterialityReport,
 ) -> list[DecisionReviewReason]:
-    reasons: list[DecisionReviewReason] = []
-    if output_quality is not None and output_quality.status in {
-        AnalysisOutputQualityStatus.DEGRADED,
-        AnalysisOutputQualityStatus.DETERMINISTIC_FALLBACK,
-    }:
-        reasons.append(DecisionReviewReason.ANALYSIS_OUTPUT_DEGRADED)
+    reasons: list[DecisionReviewReason] = list(materiality.review_reasons)
     if analysis.verdict in {Verdict.UNKNOWN, Verdict.NEEDS_REVIEW}:
         reasons.append(DecisionReviewReason.UNCERTAIN_VERDICT)
 
-    if request.fact_reconstruction.conflict_reports:
-        reasons.append(DecisionReviewReason.FACT_CONFLICT)
-
-    schema_statuses = {item.status for item in request.evidence_coverage.message_schemas}
-    if MessageSchemaStatus.DEGRADED in schema_statuses:
-        reasons.append(DecisionReviewReason.DEGRADED_MESSAGE_SCHEMA)
-    if MessageSchemaStatus.UNSUPPORTED in schema_statuses:
-        reasons.append(DecisionReviewReason.UNSUPPORTED_MESSAGE_SCHEMA)
     if request.evidence_coverage.high_value_gaps:
         reasons.append(DecisionReviewReason.HIGH_VALUE_EVIDENCE_GAP)
-    if grounding.ungrounded_count:
-        reasons.append(DecisionReviewReason.UNGROUNDED_ANALYSIS_EVIDENCE)
-    if grounding.reasoning_ungrounded_count:
-        reasons.append(DecisionReviewReason.UNGROUNDED_ANALYSIS_REASONING)
-    if any("outcome-success claim" in warning for warning in grounding.warnings):
-        reasons.append(DecisionReviewReason.UNPROVEN_OUTCOME_CLAIM)
-    if role_verification is not None:
-        if role_verification.status is RoleVerificationStatus.CHALLENGED:
-            reasons.append(DecisionReviewReason.ROLE_VERIFICATION_CHALLENGED)
-        elif role_verification.status is RoleVerificationStatus.UNRESOLVED:
-            reasons.append(DecisionReviewReason.ROLE_VERIFICATION_UNRESOLVED)
-        elif role_verification.status is RoleVerificationStatus.UNAVAILABLE:
-            reasons.append(DecisionReviewReason.ROLE_VERIFIER_UNAVAILABLE)
     if confidence_source is DecisionConfidenceSource.STUB_HEURISTIC:
         reasons.append(DecisionReviewReason.STUB_ANALYZER)
     return list(dict.fromkeys(reasons))
@@ -133,39 +113,19 @@ def _evidence_state(
     grounding: AnalysisEvidenceGroundingReport,
     output_quality: AnalysisOutputQuality | None,
     role_verification: RoleAdjudicationVerificationResult | None,
+    materiality: AnalysisMaterialityReport,
 ) -> DecisionEvidenceState:
-    if request.fact_reconstruction.conflict_reports:
+    del grounding, output_quality
+    if DecisionReviewReason.FACT_CONFLICT in materiality.review_reasons:
         return DecisionEvidenceState.CONFLICTED
     if role_verification is not None and role_verification.status is RoleVerificationStatus.CHALLENGED:
         return DecisionEvidenceState.CONFLICTED
 
     schema_statuses = {item.status for item in request.evidence_coverage.message_schemas}
-    if (
-        (
-            output_quality is not None
-            and output_quality.status
-            in {
-                AnalysisOutputQualityStatus.DEGRADED,
-                AnalysisOutputQualityStatus.DETERMINISTIC_FALLBACK,
-            }
-        )
-        or MessageSchemaStatus.DEGRADED in schema_statuses
-        or MessageSchemaStatus.UNSUPPORTED in schema_statuses
-        or request.evidence_coverage.high_value_gaps
-        or grounding.ungrounded_count
-        or grounding.reasoning_ungrounded_count
-        or (
-            role_verification is not None
-            and role_verification.status
-            in {
-                RoleVerificationStatus.UNRESOLVED,
-                RoleVerificationStatus.UNAVAILABLE,
-            }
-        )
-    ):
+    if not materiality.decision_usable or request.evidence_coverage.high_value_gaps:
         return DecisionEvidenceState.DEGRADED
 
-    if _has_partial_evidence(request):
+    if _has_partial_evidence(request) or MessageSchemaStatus.DEGRADED in schema_statuses or MessageSchemaStatus.UNSUPPORTED in schema_statuses:
         return DecisionEvidenceState.PARTIAL
     return DecisionEvidenceState.SUFFICIENT
 

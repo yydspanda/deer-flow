@@ -190,9 +190,11 @@ class AnalysisOutputSection(StrEnum):
     """Independently recoverable sections of one model analysis response."""
 
     CORE = "core"
+    REASONING = "reasoning"
     SCENARIO_ASSESSMENTS = "scenario_assessments"
     NETWORK_DIRECTION = "network_direction"
     ROLE_ADJUDICATION = "role_adjudication"
+    GUIDANCE = "guidance"
 
 
 class AnalysisOutputQualityStatus(StrEnum):
@@ -202,6 +204,46 @@ class AnalysisOutputQualityStatus(StrEnum):
     REPAIRED = "repaired"
     DEGRADED = "degraded"
     DETERMINISTIC_FALLBACK = "deterministic_fallback"
+
+
+class AnalysisMaterialityImpact(StrEnum):
+    """Operational impact of one structural or evidence-quality issue."""
+
+    NONE = "none"
+    ACTION_ONLY = "action_only"
+    DECISION_REVIEW = "decision_review"
+
+
+class AnalysisCapability(StrEnum):
+    """Downstream capability that can be independently guarded."""
+
+    SCENARIO_ROUTING = "scenario_routing"
+    NETWORK_DIRECTION = "network_direction"
+    SOURCE_TARGETING = "source_targeting"
+    DESTINATION_TARGETING = "destination_targeting"
+    ATTACKER_TARGETING = "attacker_targeting"
+    VICTIM_TARGETING = "victim_targeting"
+    IMPACTED_ASSET_TARGETING = "impacted_asset_targeting"
+    USER_TARGETING = "user_targeting"
+    RESPONSE_ACTION = "response_action"
+
+
+class ConflictDispositionStatus(StrEnum):
+    """Post-analysis disposition of one immutable pre-analysis conflict."""
+
+    RESOLVED = "resolved"
+    ACCEPTED_VARIANCE = "accepted_variance"
+    UNRESOLVED = "unresolved"
+
+
+class ConflictResolutionSource(StrEnum):
+    """Authority that explains why a conflict no longer blocks a decision."""
+
+    NONE = "none"
+    FACT_RECONSTRUCTION = "fact_reconstruction"
+    RUNTIME_SEMANTICS = "runtime_semantics"
+    MODEL_ADJUDICATION = "model_adjudication"
+    HUMAN_CONFIRMATION = "human_confirmation"
 
 
 class AnalysisRequestJournalStatus(StrEnum):
@@ -2332,6 +2374,7 @@ class AnalysisEvidenceCatalogItem(BaseModel):
     value_type: Literal["string", "integer", "number", "boolean", "null"]
     trust_level: EvidenceTrustLevel = EvidenceTrustLevel.UNKNOWN
     source_kind: Literal["current_alert"] = "current_alert"
+    entity_type: EntityKind | None = None
 
 
 class AnalysisContextCatalogItem(BaseModel):
@@ -3752,6 +3795,8 @@ class AnalysisResult(BaseModel):
     summary: str = Field(min_length=1, max_length=4000)
     evidence: list[EvidenceItem] = Field(default_factory=list, max_length=40)
     reasoning: list[AnalysisReasoningItem] = Field(min_length=1, max_length=20)
+    decision_evidence_refs: list[str] = Field(default_factory=list, max_length=20)
+    decision_reasoning_refs: list[str] = Field(default_factory=list, max_length=20)
     scenario_assessments: list[TriageScenarioAssessment] = Field(
         default_factory=list,
         max_length=10,
@@ -3827,6 +3872,14 @@ class AnalysisResult(BaseModel):
 
         evidence_refs = {item.evidence_ref for item in self.evidence if item.evidence_ref is not None}
         reasoning_ids = {item.reasoning_id for item in self.reasoning}
+        if len(self.decision_evidence_refs) != len(set(self.decision_evidence_refs)):
+            raise ValueError("decision evidence_refs must be unique")
+        if len(self.decision_reasoning_refs) != len(set(self.decision_reasoning_refs)):
+            raise ValueError("decision reasoning_refs must be unique")
+        invalid_decision_evidence_refs = sorted(set(self.decision_evidence_refs) - evidence_refs)
+        invalid_decision_reasoning_refs = sorted(set(self.decision_reasoning_refs) - reasoning_ids)
+        if invalid_decision_evidence_refs or invalid_decision_reasoning_refs:
+            raise ValueError(f"decision support references must resolve inside AnalysisResult; missing_evidence={invalid_decision_evidence_refs}, missing_reasoning={invalid_decision_reasoning_refs}")
         invalid_reasoning_evidence_refs = sorted({ref for item in self.reasoning for ref in item.evidence_refs if ref not in evidence_refs})
         if invalid_reasoning_evidence_refs:
             raise ValueError(f"reasoning evidence_refs must reference analysis evidence; invalid refs: {invalid_reasoning_evidence_refs}")
@@ -3866,7 +3919,7 @@ class Decision(BaseModel):
     needs_review: bool
     review_reasons: list[DecisionReviewReason] = Field(default_factory=list)
     reason: str
-    policy_version: str = "soc.decision_policy.v6"
+    policy_version: str = "soc.decision_policy.v7"
     confidence_explanation: str | None = None
     automation_allowed: Literal[False] = False
 
@@ -4248,6 +4301,70 @@ class AnalysisOutputQuality(BaseModel):
         return self
 
 
+class AnalysisSectionMateriality(BaseModel):
+    """Runtime-owned impact assessment for one model-output section."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    section: AnalysisOutputSection
+    accepted: bool
+    impact: AnalysisMaterialityImpact = AnalysisMaterialityImpact.NONE
+    reason_codes: list[str] = Field(default_factory=list, max_length=20)
+
+
+class ConflictDisposition(BaseModel):
+    """Append-only interpretation of an immutable pre-analysis conflict."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    conflict_id: str = Field(pattern=r"^CF-[A-F0-9]{12}$")
+    conflict_type: str = Field(min_length=1, max_length=256)
+    status: ConflictDispositionStatus
+    impact: AnalysisMaterialityImpact
+    resolution_source: ConflictResolutionSource = ConflictResolutionSource.NONE
+    rationale: str = Field(min_length=1, max_length=2000)
+
+
+class AnalysisCapabilityGuard(BaseModel):
+    """Explain why one downstream capability is available or blocked."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    capability: AnalysisCapability
+    allowed: bool
+    reason_codes: list[str] = Field(default_factory=list, max_length=20)
+    affected_sections: list[AnalysisOutputSection] = Field(default_factory=list)
+    conflict_ids: list[str] = Field(default_factory=list, max_length=50)
+
+
+class AnalysisMaterialityReport(BaseModel):
+    """Scope structural failures before they affect review or automation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.analysis_materiality.v1"] = "soc.analysis_materiality.v1"
+    core_usable: bool = True
+    decision_usable: bool = True
+    review_required: bool = False
+    review_reasons: list[DecisionReviewReason] = Field(default_factory=list, max_length=20)
+    sections: list[AnalysisSectionMateriality] = Field(default_factory=list)
+    conflict_dispositions: list[ConflictDisposition] = Field(default_factory=list, max_length=100)
+    capability_guards: list[AnalysisCapabilityGuard] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_review_state(self) -> AnalysisMaterialityReport:
+        if self.review_required != bool(self.review_reasons):
+            raise ValueError("materiality review_required must agree with review_reasons")
+        capabilities = [item.capability for item in self.capability_guards]
+        if len(capabilities) != len(set(capabilities)):
+            raise ValueError("materiality capability guards must be unique")
+        sections = [item.section for item in self.sections]
+        if len(sections) != len(set(sections)):
+            raise ValueError("materiality section assessments must be unique")
+        return self
+
+
 class AnalysisNodeOutput(BaseModel):
     """Auditable output returned by a bounded SOC analysis node."""
 
@@ -4339,7 +4456,7 @@ class AnalysisRun(BaseModel):
     run_id: str = Field(default_factory=lambda: f"RUN-{uuid4().hex[:12].upper()}")
     alert_id: str
     status: AnalysisRunStatus
-    pipeline_version: str = "soc-runtime-v1"
+    pipeline_version: str = "soc-runtime-v7"
     model_name: str = "stub"
     prompt_version: str = "stub"
     input_payload: dict[str, Any] | None = None
@@ -4358,6 +4475,7 @@ class AnalysisRun(BaseModel):
     analysis: AnalysisResult | None = None
     analysis_output_quality: AnalysisOutputQuality | None = None
     analysis_evidence_grounding: AnalysisEvidenceGroundingReport | None = None
+    analysis_materiality: AnalysisMaterialityReport | None = None
     decision: Decision | None = None
     failure: RuntimeFailure | None = None
     request_journal: AnalysisRequestJournal | None = None

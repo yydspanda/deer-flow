@@ -4551,12 +4551,6 @@ def _review_reason(summary: AlertSummary) -> str | None:
         return summary.review_reasons[0].value
     if summary.needs_review:
         return "summary.needs_review"
-    if summary.confidence is not None and summary.confidence < 0.75:
-        return "low_confidence"
-    if summary.verdict in {Verdict.UNKNOWN, Verdict.NEEDS_REVIEW, Verdict.SUSPICIOUS}:
-        return "uncertain_verdict"
-    if _severity_level(summary.severity) >= 2:
-        return "high_severity"
     return None
 
 
@@ -4760,6 +4754,18 @@ def _analysis_audit_record(
             "review_reasons": [item.value for item in run.decision.review_reasons] if run.decision is not None else [],
             "evidence_grounded_count": (run.analysis_evidence_grounding.grounded_count if run.analysis_evidence_grounding is not None else None),
             "evidence_ungrounded_count": (run.analysis_evidence_grounding.ungrounded_count if run.analysis_evidence_grounding is not None else None),
+            "analysis_output_quality_status": (run.analysis_output_quality.status.value if run.analysis_output_quality is not None else None),
+            "analysis_materiality": (
+                {
+                    "core_usable": run.analysis_materiality.core_usable,
+                    "decision_usable": run.analysis_materiality.decision_usable,
+                    "review_required": run.analysis_materiality.review_required,
+                    "review_reasons": [item.value for item in run.analysis_materiality.review_reasons],
+                    "blocked_capabilities": [item.capability.value for item in run.analysis_materiality.capability_guards if not item.allowed],
+                }
+                if run.analysis_materiality is not None
+                else None
+            ),
             "failure_kind": run.failure.kind.value if run.failure is not None else None,
             "failure_retryable": run.failure.retryable if run.failure is not None else None,
             "idempotency_key": idempotency_key,

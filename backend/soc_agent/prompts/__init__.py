@@ -3,6 +3,7 @@
 from soc_agent.prompts.analysis import (
     ANALYSIS_PROMPT_VERSION,
     AnalysisPrompt,
+    analysis_output_examples,
     analysis_response_schema,
     build_analysis_prompt,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "ANALYSIS_OUTPUT_REPAIR_PROMPT_VERSION",
     "ANALYSIS_SECTION_OUTPUT_REPAIR_PROMPT_VERSION",
     "AnalysisPrompt",
+    "analysis_output_examples",
     "OutputRepairPrompt",
     "ROLE_VERIFICATION_OUTPUT_REPAIR_PROMPT_VERSION",
     "analysis_response_schema",

@@ -2,7 +2,7 @@
 
 ## Location
 
-`skills/soc-product-manager/`
+`.agents/skills/soc-product-manager/`
 
 ## Purpose
 
@@ -19,4 +19,7 @@ Project-specific product-management skill for the SOC Agent. Use it before turni
 
 ## Notes
 
-The skill is stored in the repository for versioning. To make Codex auto-discover it globally, copy or install it into the active Codex skills directory, for example `~/.codex/skills/soc-product-manager`.
+The skill is stored in the repository and auto-discovered by Codex as a repository-scoped
+workflow. It should not be copied into a user-global skills directory because its source
+documents and decisions are specific to this SOC Agent project. Invoke it explicitly with
+`$soc-product-manager`, or let Codex select it from its description.

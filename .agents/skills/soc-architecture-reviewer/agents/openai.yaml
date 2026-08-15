@@ -1,0 +1,6 @@
+interface:
+  display_name: "SOC Architecture Reviewer"
+  short_description: "Review SOC architecture boundaries and change impacts"
+  default_prompt: "Use $soc-architecture-reviewer to review this SOC architecture change and identify boundary, contract, reliability, and test impacts."
+policy:
+  allow_implicit_invocation: true

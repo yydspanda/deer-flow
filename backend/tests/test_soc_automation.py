@@ -14,13 +14,22 @@ from soc_agent.cli import main
 from soc_agent.contracts import (
     ActorContext,
     ActorType,
+    AdjudicatedRole,
+    AdjudicatedRoleStatus,
+    AdjudicatedRoleType,
     AnalysisContextCatalogItem,
     AnalysisContextReferenceKind,
+    AnalysisReasoningBasis,
+    AnalysisReasoningItem,
     DecisionEvidenceState,
     EntrySurface,
+    EvidenceItem,
+    RoleAdjudicationResult,
+    RoleAdjudicationStatus,
     ServiceRequestContext,
     SocActionAuthorizationDecision,
     SocActionAuthorizationMode,
+    SocActionExecutionStatus,
     SocAgentActionAdapterDescriptor,
     SocAgentActionCommand,
     SocAgentActionResult,
@@ -49,6 +58,8 @@ from soc_agent.core import SocAutomationService
 from soc_agent.core.runtime import analyze_alert
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 from soc_agent.memory import InMemoryMemoryCandidateRepository
+from soc_agent.pipeline.evidence_grounding import ground_analysis_evidence
+from soc_agent.pipeline.materiality import assess_analysis_materiality
 
 NOW = datetime(2026, 8, 11, 8, 0, tzinfo=UTC)
 
@@ -186,6 +197,103 @@ def test_enforced_policy_can_authorize_without_memory() -> None:
     assert replay.idempotent is True
     assert replay.execution == result.execution
     assert adapter.execute_count == 1
+
+
+def test_semantic_action_target_uses_accepted_role_and_materiality_guard() -> None:
+    run = _automation_ready_run()
+    assert run.analysis is not None
+    assert run.llm_analysis_request is not None
+    source_fact = next(item for item in run.llm_analysis_request.evidence_catalog if item.source_path == "canonical_entities.network.source_ip")
+    role_reasoning = AnalysisReasoningItem(
+        reasoning_id="R-02",
+        statement="The accepted role assessment maps this current IP to attacker.",
+        basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
+        evidence_refs=[source_fact.evidence_ref],
+        confidence=0.95,
+    )
+    run.analysis = run.analysis.model_copy(
+        update={
+            "evidence": [
+                *run.analysis.evidence,
+                EvidenceItem(
+                    evidence_ref=source_fact.evidence_ref,
+                    source=source_fact.source_path,
+                    description="Runtime-hydrated current-alert catalog fact",
+                    value=source_fact.value,
+                ),
+            ],
+            "reasoning": [*run.analysis.reasoning, role_reasoning],
+            "role_adjudication": RoleAdjudicationResult(
+                status=RoleAdjudicationStatus.RESOLVED_FROM_EVIDENCE,
+                roles=[
+                    AdjudicatedRole(
+                        role=AdjudicatedRoleType.ATTACKER,
+                        entity_type="ip",
+                        value="203.0.113.10",
+                        status=AdjudicatedRoleStatus.RESOLVED_FROM_EVIDENCE,
+                        confidence=0.95,
+                        evidence_refs=[source_fact.evidence_ref],
+                        reasoning_refs=["R-02"],
+                        rationale="Current evidence supports the attacker role.",
+                    )
+                ],
+                rationale="The attacker role is available for governed targeting.",
+            ),
+        }
+    )
+    run.analysis_evidence_grounding = ground_analysis_evidence(
+        run.analysis,
+        run.llm_analysis_request,
+    )
+    run.analysis_materiality = assess_analysis_materiality(
+        run.analysis,
+        request=run.llm_analysis_request,
+        grounding=run.analysis_evidence_grounding,
+        output_quality=run.analysis_output_quality,
+    )
+    adapter = _ExecutableBlockAdapter()
+    policy = _policy(
+        rules=[
+            SocAutomationRule(
+                rule_id="block-resolved-attacker",
+                name="Block the accepted attacker role",
+                match=SocAutomationRuleMatch(
+                    verdicts=[run.decision.verdict],
+                    evidence_states=[run.decision.evidence_state],
+                    model_names=[run.model_name],
+                    prompt_versions=[run.prompt_version],
+                    decision_policy_versions=[run.decision.policy_version],
+                    minimum_confidence=run.decision.confidence,
+                    needs_review=False,
+                ),
+                action=SocAutomationActionSpec(
+                    route="response.block_ip",
+                    action="response.block_ip",
+                    adapter_id=adapter.descriptor.adapter_id,
+                    target_selector=SocAutomationTargetSelector.ATTACKER_IP,
+                    target_payload_field="ip",
+                    static_payload={"duration_seconds": 3600},
+                ),
+                authorization_mode=SocActionAuthorizationMode.AUTOMATIC_POLICY,
+                rationale="Reviewed policy permits this exact resolved role target.",
+            )
+        ]
+    )
+
+    result = SocAutomationService(
+        repository=InMemorySocAutomationRepository(),
+        policy=policy,
+        environment="dev",
+        action_adapter_registry=SocActionAdapterRegistry([adapter]),
+        execute_authorized_actions=True,
+        now_provider=lambda: NOW,
+    ).evaluate(run, context=_context())
+
+    assert result.authorization is not None
+    assert result.authorization.decision is SocActionAuthorizationDecision.AUTHORIZED
+    assert result.authorization.target_value == "203.0.113.10"
+    assert result.execution is not None
+    assert result.execution.status is SocActionExecutionStatus.SUCCEEDED
 
 
 def test_automatic_policy_rejects_implicit_review_guard_bypass() -> None:

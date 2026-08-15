@@ -60,9 +60,11 @@ Implemented artifacts:
 - `backend/soc_agent/integrations/pingan/knowledge/network-direction-v1.json` stores the reviewed
   PingAn profile. It is selected by `integration_name` or tenant scope and projects only facts whose
   selectors match the current canonical request.
-- Profile `1.2.0` records the operator-confirmed `26/8`, `29/8`, and PingAn-owned `172/8` ranges,
-  distinguishes reviewed office `/16` subnets, and adds the negative caveat that `*.pingan.com.cn`
-  and `*.pingan.com` do not prove an internal traffic direction. The full migration review is
+- Profile `1.3.0` records the operator-confirmed `26/8`, `29/8`, and PingAn-owned `172/8` ranges,
+  distinguishes reviewed office `/16` subnets, adds the negative caveat that `*.pingan.com.cn`
+  and `*.pingan.com` do not prove an internal traffic direction, and records that provider GeoIP
+  enrichment may mislabel `30/8` as a foreign location. GeoIP remains audit-only and cannot override
+  typed network ownership. The full migration review is
   `tenant-static-knowledge-migration.md`.
 - `TenantKnowledgeAnalysisRequestEnricher` projects bounded, hashed `C-*` catalog items. It does not
   execute tenant code and every projection records profile/fact/source/review lineage plus

@@ -123,6 +123,7 @@ class JsonLLMAnalyzer:
     ) -> AnalysisNodeOutput:
         prompt = build_analysis_prompt(request)
         prompt_messages = prompt.messages()
+        prompt_hash = stable_hash({"messages": prompt_messages})
         try:
             response = coerce_chat_response(
                 self._client.complete(
@@ -137,6 +138,8 @@ class JsonLLMAnalyzer:
                 responses=(),
                 provider_call_count=1,
                 output_retry_attempted=False,
+                prompt_example_id=prompt.example_id,
+                prompt_hash=prompt_hash,
             )
             raise
         responses = [response]
@@ -238,6 +241,8 @@ class JsonLLMAnalyzer:
                                 provider_call_count=1,
                                 output_retry_attempted=False,
                                 output_retry_kind=retry_kind,
+                                prompt_example_id=prompt.example_id,
+                                prompt_hash=prompt_hash,
                             )
                             raise
                     try:
@@ -256,6 +261,8 @@ class JsonLLMAnalyzer:
                             provider_call_count=2,
                             output_retry_attempted=True,
                             output_retry_kind=retry_kind,
+                            prompt_example_id=prompt.example_id,
+                            prompt_hash=prompt_hash,
                         )
                         raise
                     responses.append(retry_response)
@@ -349,7 +356,8 @@ class JsonLLMAnalyzer:
         metadata: dict[str, Any] = {
             "analyzer": "json_llm",
             "repair_applied": output_quality.status is not AnalysisOutputQualityStatus.ACCEPTED,
-            "prompt_hash": stable_hash({"messages": prompt.messages()}),
+            "prompt_hash": prompt_hash,
+            "prompt_example_id": prompt.example_id,
             "skill_context_hash": stable_hash(request.skill_context.model_dump(mode="json", exclude_none=True)),
             "selected_skills": [item.skill_name for item in request.skill_context.selected_skills],
             "candidate_hash": stable_hash({"candidate_text": (parsed.candidate_text if parsed is not None else str(response.content)[:100_000])}),
@@ -549,6 +557,8 @@ def attach_failed_model_invocation_metadata(
     provider_call_count: int,
     output_retry_attempted: bool,
     output_retry_kind: str | None = None,
+    prompt_example_id: str | None = None,
+    prompt_hash: str | None = None,
 ) -> None:
     """Attach bounded usage lineage to an exception without retaining output text."""
 
@@ -568,6 +578,10 @@ def attach_failed_model_invocation_metadata(
     }
     if output_retry_kind is not None:
         metadata["output_retry_kind"] = output_retry_kind
+    if prompt_example_id:
+        metadata["prompt_example_id"] = prompt_example_id
+    if prompt_hash:
+        metadata["prompt_hash"] = prompt_hash
     usage = merge_model_usage(*(item.usage for item in responses))
     if usage:
         metadata["usage"] = usage
@@ -620,7 +634,11 @@ def model_invocation_metadata(
             value = response_metadata.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 call[key] = value
-        for key in ("thinking_enabled_requested", "response_reasoning_present"):
+        for key in (
+            "thinking_enabled_requested",
+            "json_mode_requested",
+            "response_reasoning_present",
+        ):
             value = response_metadata.get(key)
             if isinstance(value, bool):
                 call[key] = value
@@ -652,6 +670,9 @@ def model_invocation_metadata(
         thinking_enabled_requested = failed_call_measurement.get("thinking_enabled_requested")
         if isinstance(thinking_enabled_requested, bool):
             failed_call["thinking_enabled_requested"] = thinking_enabled_requested
+        json_mode_requested = failed_call_measurement.get("json_mode_requested")
+        if isinstance(json_mode_requested, bool):
+            failed_call["json_mode_requested"] = json_mode_requested
         for key in (
             "admission_wait_duration_ms",
             "provider_duration_ms",

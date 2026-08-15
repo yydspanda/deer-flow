@@ -237,6 +237,9 @@ def test_review_context_cli_and_lead_agent_include_the_same_sql_backed_addendum(
     assert any(item.kind == "investigation_addendum" for item in context.investigation_view.evidence_timeline)
     assert artifact.investigation_addenda[0]["execution_id"] == result.execution.execution_id
     assert artifact.investigation_addenda[0]["new_conclusion_produced"] is False
+    assert artifact.analysis["analysis_materiality"]["core_usable"] is True
+    assert artifact.analysis["analysis_materiality"]["review_required"] is False
+    assert "attacker_targeting" in {item["capability"] for item in artifact.analysis["analysis_materiality"]["blocked_capabilities"]}
 
     monkeypatch.setattr(soc_cli, "_repository_from_args", lambda _args: repository)
     exit_code = soc_cli.main(["investigation", "report", result.execution.execution_id, "--pretty"])

@@ -58,7 +58,7 @@
 | SOC specialist subagents | DeerFlow 真实 custom-subagent path | `PI-01G` 复用原生 registry/`task`/model/task events；profile 本身 `tools=[]`/`skills=[]`，只接收服务端投影的 bounded case 和已评审 Skill guidance。专家文本是 advisory reasoning，不是 mock tool result，也不是 evidence/verdict。NIDS/EDR `deepseek-v4-flash` smoke 已通过，但其 fake Provider evidence 仍保留 `mocked=true` 且 `provider_acceptance_claimed=false` |
 | GF-01 / AA-01 | deterministic production contracts/services | Fact lifecycle、历史版本选择和 matcher 不是 mock；EX/DP/EV persistence/evaluation 已实现，当前缺口是权威事实来源同步和 governed rollout |
 | External disposition canonical ingress | authenticated application boundary | Gateway route、SQL repository、transactional service、RBAC 和 exact-retry/conflict 语义是真实实现；mock/data-gated 的是 Zeus/ITSM/SOAR source feed、签名和凭证 |
-| PingAn historical software-path catalog | deterministic local compiler + read-only MCP/action | 真实编译旧 XLSX 并精确查询版本化 SQLite；不是 mock，也不是权威 allowlist。输出固定为 investigation-only、decision impact none；源数据缺少人工 reviewer/scope/validity，因此不能用于自动判良、跳过 Runtime 或关闭告警 |
+| PingAn historical software-path catalog | deterministic local compiler + read-only MCP/action | 真实编译旧 XLSX 并精确查询版本化 SQLite；不是 mock，也不是权威 allowlist。catalog/MCP 输出固定为 investigation-only、decision impact none；只有另行显式开启的 server-owned PingAn fast-disposition policy 可以基于 exact/受控 family signal 形成 `ignored`，两条权限边界不得混用 |
 | Alpha acceptance orchestrator | real local/test acceptance code | `scripts/soc-alpha-acceptance.sh` 调真实 CLI/service/SQL/Kafka/browser test 并生成版本化报告；其中 analyzer/provider/browser transport/基础设施性质由报告逐项披露，不因总状态 passed 而变成 production real |
 
 ### 2.2 Runtime heuristic / LLM replacement audit

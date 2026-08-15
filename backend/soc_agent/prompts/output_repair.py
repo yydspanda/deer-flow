@@ -8,11 +8,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from soc_agent.contracts import LLMAnalysisRequest, RoleVerificationClaim
+from soc_agent.model_reference_aliases import (
+    build_model_reference_aliases,
+    project_model_reference_aliases,
+)
 from soc_agent.pipeline.analysis_context import project_analysis_context
 
-ANALYSIS_OUTPUT_REPAIR_PROMPT_VERSION = "soc-analysis-output-repair-v4"
+ANALYSIS_OUTPUT_REPAIR_PROMPT_VERSION = "soc-analysis-output-repair-v7"
 ANALYSIS_SECTION_OUTPUT_REPAIR_PROMPT_VERSION = "soc-analysis-section-output-repair-v1"
-ROLE_VERIFICATION_OUTPUT_REPAIR_PROMPT_VERSION = "soc-role-verification-output-repair-v1"
+ROLE_VERIFICATION_OUTPUT_REPAIR_PROMPT_VERSION = "soc-role-verification-output-repair-v2"
 MAX_OUTPUT_REPAIR_CANDIDATE_CHARS = 100_000
 MAX_OUTPUT_REPAIR_ERROR_CHARS = 4_000
 MAX_OUTPUT_REPAIR_CONTEXT_CHARS = 190_000
@@ -45,7 +49,13 @@ def build_analysis_output_repair_prompt(
 ) -> OutputRepairPrompt:
     """Ask the model to repair structure without receiving raw vendor input."""
 
-    projected = project_analysis_context(request)
+    projected = project_model_reference_aliases(
+        project_analysis_context(request),
+        build_model_reference_aliases(
+            request.evidence_catalog,
+            request.context_catalog,
+        ),
+    )
     context = {
         "schema_version": "soc.analysis_output_repair_request.v1",
         "prompt_version": ANALYSIS_OUTPUT_REPAIR_PROMPT_VERSION,
@@ -56,19 +66,14 @@ def build_analysis_output_repair_prompt(
     }
     return _build_prompt(
         prompt_version=ANALYSIS_OUTPUT_REPAIR_PROMPT_VERSION,
-        object_name="AnalysisModelOutput.v1",
+        object_name="AnalysisModelOutput.v4",
         context=context,
         additional_rules=(
             "Preserve the original verdict, observations, and security reasoning unless the validation error requires a consistency correction.",
-            "For duplicate or invalid references, retain only exact catalog-backed references; never invent a replacement fact.",
-            (
-                "Every response target must exactly match one emitted adjudicated entity by entity type and value. "
-                "Its action-specific target_role may differ from the entity's global semantic role; remove the "
-                "proposal only when the target entity itself was not adjudicated."
-            ),
-            "Every direction or role context_ref must be an exact ID from the supplied S/A/M/C/T context catalog; it need not be repeated in a referenced R-* item.",
-            "Return E-* references only; do not copy catalog source paths or values.",
-            "Do not emit evidence, knowledge_candidates, nested schema_version, proposal_id, policy_review_required, or automation_allowed fields; Runtime owns them.",
+            "For duplicate or invalid references, retain only exact catalog-backed short aliases; never invent a replacement fact.",
+            "Every direction or role context_ref must be an exact S-001/A-001/M-001/C-001/T-001 style alias from the supplied context catalog.",
+            "Return E-001 style aliases only; do not copy catalog source paths or values.",
+            "Do not emit reasoning, reasoning_refs, evidence, knowledge_candidates, response targets, nested schema_version, proposal_id, policy_review_required, or automation_allowed fields; Runtime owns them.",
         ),
     )
 
@@ -97,6 +102,8 @@ def build_analysis_section_output_repair_prompt(
             "summary",
             "evidence",
             "reasoning",
+            "decision_evidence_refs",
+            "decision_reasoning_refs",
             "evidence_gaps",
             "manual_checks",
             "reason",
@@ -132,33 +139,35 @@ def build_analysis_section_output_repair_prompt(
 
 
 def build_role_verification_output_repair_prompt(
-    request: LLMAnalysisRequest,
     claims: Sequence[RoleVerificationClaim],
     *,
     invalid_candidate: Any,
     validation_error: Exception,
     response_schema: Mapping[str, Any],
+    allowed_reference_catalogs: Mapping[str, Any],
+    runtime_constraints: Mapping[str, Any],
 ) -> OutputRepairPrompt:
     """Repair verifier JSON while keeping first-pass claims untrusted."""
 
-    projected = project_analysis_context(request)
     context = {
-        "schema_version": "soc.role_verification_output_repair_request.v1",
+        "schema_version": "soc.role_verification_output_repair_request.v2",
         "prompt_version": ROLE_VERIFICATION_OUTPUT_REPAIR_PROMPT_VERSION,
         "invalid_candidate": _bounded_candidate(invalid_candidate),
         "validation_error": _bounded_error(validation_error),
         "candidate_claims_untrusted": [claim.model_dump(mode="json") for claim in claims],
-        "allowed_reference_catalogs": projected.get("reference_catalogs") or {},
+        "allowed_reference_catalogs": dict(allowed_reference_catalogs),
+        "runtime_constraints": dict(runtime_constraints),
         "required_response_schema": response_schema,
     }
     return _build_prompt(
         prompt_version=ROLE_VERIFICATION_OUTPUT_REPAIR_PROMPT_VERSION,
-        object_name="RoleVerificationCandidate.v1",
+        object_name="RoleVerificationCandidate.v2",
         context=context,
         additional_rules=(
             "Return exactly one review for every supplied RC-* claim and no others.",
             "Do not change an RC-* assertion; only correct its review object.",
             "Use only exact allowed E-* and S/A/M/C/T references.",
+            "Use polarity-specific supporting_context_refs and contradicting_context_refs; do not emit legacy context_refs.",
             "Do not output verdict, confidence, disposition, authorization, or execution fields.",
         ),
     )

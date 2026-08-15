@@ -313,6 +313,7 @@ def test_role_verifier_runtime_sequence_accepts_conditional_call() -> None:
         "analyze_llm",
         "schema_validate",
         "evidence_grounding",
+        "analysis_materiality",
         "decide",
     ]
     assert _runtime_step_sequence_complete(
@@ -321,15 +322,21 @@ def test_role_verifier_runtime_sequence_accepts_conditional_call() -> None:
         triggered=False,
     )
     assert _runtime_step_sequence_complete(
-        [*baseline[:-1], "role_verification_gate", "decide"],
+        [
+            *baseline[:-2],
+            "role_verification_gate",
+            "analysis_materiality",
+            "decide",
+        ],
         role_verifier_enabled=True,
         triggered=False,
     )
     assert _runtime_step_sequence_complete(
         [
-            *baseline[:-1],
+            *baseline[:-2],
             "role_verification_gate",
             "verify_roles_llm",
+            "analysis_materiality",
             "decide",
         ],
         role_verifier_enabled=True,
@@ -343,7 +350,11 @@ def test_optional_role_verifier_failure_is_acceptable_but_reported() -> None:
         {
             "step_name": "verify_roles_llm",
             "status": "failed",
-            "metadata": {"optional": True, "fail_closed": True},
+            "metadata": {
+                "optional": True,
+                "fail_closed": True,
+                "fail_closed_scope": "direction_and_role_capabilities",
+            },
         },
         {"step_name": "decide", "status": "success"},
     ]
@@ -356,7 +367,7 @@ def test_optional_role_verifier_failure_is_acceptable_but_reported() -> None:
 
 def test_role_verifier_summary_separates_projected_from_reviewed_claims() -> None:
     base = {
-        "pipeline_version": "soc-runtime-v2",
+        "pipeline_version": "soc-runtime-v8",
         "role_verification_trigger": {
             "triggered": False,
             "claim_count": 3,

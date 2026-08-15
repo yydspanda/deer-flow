@@ -50,7 +50,7 @@ Palo 条目必须同时命中精确 IP 和 URI。大小写、Windows 路径分�
 
 | Profile | 当前内容 | 版本 |
 |---|---|---|
-| `pingan.network_direction` | 内部/办公/BGP/APP-TS/PAFC 地址、域名边界、反连与代理链路解释 | `1.2.0` |
+| `pingan.network_direction` | 内部/办公/BGP/APP-TS/PAFC 地址、GeoIP 误标边界、域名边界、反连与代理链路解释 | `1.3.0` |
 | `pingan.platform_context` | 青藤 HIDS 来源背景、禁止从 topic 推断环境 | `1.0.0` |
 | `pingan.internal_systems` | CTX、HappyPA、PaMail、AskBob、IOBS、CodePilot、data-manager、Palo、ubiops、账号格式 | `1.0.0` |
 
@@ -67,6 +67,11 @@ Palo 条目必须同时命中精确 IP 和 URI。大小写、Windows 路径分�
   受治理资产证据。
 - `*.pingan.com.cn`、`*.pingan.com` 可内外访问，域名后缀不能证明流量是内网方向。
 - `*.paic.com.cn` 仍是内部域名信号，但代理改写等当前证据可推翻该方向提示。
+- 平安供应商 GeoIP/address-location enrichment 可能把 `30/8` 内网地址标为美国或美国州名；该字段只
+  保留审计，不参与方向/角色推理，且不能覆盖已审核 `network_scope`。
+- 平安五组 `network_scope` Fact 均显式声明并通过通用 metadata 投影
+  `network_scope_membership=organization_controlled`；这是类型化组织归属，不依赖解析英文 statement，
+  也不把平安网段写进通用 Runtime。其他供应商可明确声明 external/shared，而不是被通用层默认成内网。
 
 ## 5. Explicitly Not Migrated / 明确拒绝迁移
 

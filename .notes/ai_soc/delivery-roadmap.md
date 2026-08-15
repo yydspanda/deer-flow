@@ -225,7 +225,7 @@ PI-03 仿真产品轨已完成 A/B/C。每个切片都先用明确的 `simulatio
 | `PI-03A` | Human label foundation / 人工标签基础 | **Done (simulation)**: immutable corpus manifest、reviewer/rationale/provenance/supersede contract；CLI `prepare -> seal -> verify` 已用 5 条 Runtime 产物通过 | `simulation` 始终 `mocked=true`、`real_quality_claim_allowed=false`；没有来源和 reviewer 的标签不得用于质量声明 |
 | `PI-03B` | Runtime/model/correlation evaluation / Runtime、模型与关联评测 | **Done (simulation)**: `soc.quality_evaluation_report.v1` 复用 offline/scenario/correlation/confidence 四条评测链；8 alert、4 synthetic labels 和稳定 replay diff 已通过 | simulation 固定禁止 real-quality/profile/rollout/automation；报告保留 Grounding、taxonomy 和 correlation gap，不把 self-confidence 当概率 |
 | `PI-03C` | Feedback-derived Skill candidates / 反馈型 Skill 候选 | **Done (simulation)**: typed observation、distinct-source threshold、Skill package hash、scenario/failure facet、SQL backlog、RBAC/audit/state machine 和 aggregation replay 已完成 | 4 条 synthetic feedback 生成一个 `mocked=true` pending candidate；不自动编辑、激活或发布 Skill。真实 correction/external reason 到 typed facet 的 server-owned classifier 仍为 Real Integration Debt |
-| `PI-03D` | Tenant knowledge promotion / 租户知识治理升级 | 对路径目录等 candidate knowledge 生成独立 promotion proposal，补 scope/validity/owner 和标签 replay | 默认保持 investigation-only；目录更新本身永不获得 decision impact |
+| `PI-03D` | Tenant knowledge promotion / 租户知识治理升级 | **Closed / superseded**: 未建设通用 candidate promotion 系统；已按明确业务决策使用独立、默认关闭的 PingAn software-path tenant policy，catalog/MCP 本身继续 investigation-only | 不把目录更新自动升级为权威知识；若未来第二类 catalog 需要 decision impact，重新立项而不是复活旧 promotion 草案 |
 | `PI-03E` | Adaptive parser governance / 自适应解析治理 | drift cohort report + candidate bundle；之后才允许 dual-run/replay/approval/canary/rollback | 禁止单告警 LLM 解析和 Runtime 自修改；无稳定 cohort 不启动 |
 | `PI-03F` | Governed memory candidate source completion / 记忆候选来源收口 | **Done**: F1 已完成 CLI/TUI 显式采纳；F2 已完成 authenticated Gateway/Web server-side message resolution；F3 已完成默认关闭的 Kafka/batch typed observation、固定窗口聚合、5/5 双门槛、冻结候选和只读 replay | 禁止逐告警、逐 finding、模型自说自话地写 candidate；所有来源带 typed provenance/idempotency/scope，保持 `pending_review`，confirmed/retrieval 仍需人工治理；重复出现不等于真假、授权、影响或处置结论 |
 
@@ -246,13 +246,14 @@ Stage 4 的退出结果是 **Pilot Ready / 可试点**。正式 GA、自动关�
 
 ## 7. Parking Lot / 后续项
 
-以下事项有价值，但不能插入当前 `PI-01E`：
+以下事项有价值，但不能未经重新排期插入当前 Real Integration 工作轨：
 
+- [Native Agent Tool Call 与可信动作目标绑定](../archive/ai_soc/deferred/native-agent-tool-call-and-target-binding.md)。
 - [Correlation pair corpus expansion 和 scorer v2](../archive/ai_soc/deferred/correlation-label-corpus-expansion.md)。
 - 完整多 Sub Agent 并行自治与跨域攻击尝试。
 - Knowledge RAG、GraphRAG、PageIndex，以及
   [DB memory -> Wiki/OKF projection](../archive/ai_soc/deferred/wiki-okf-memory-projection.md)。
-- Prometheus 全局系统态势和管理驾驶舱。
+- [生产 telemetry、Prometheus 与 SLO](../archive/ai_soc/deferred/production-observability-and-slo.md)。
 - [Adaptive normalization/parser evolution](../archive/ai_soc/deferred/adaptive-normalization-parser-evolution.md)、
   更多 vendor/scenario adapter、自动 skill 优化和长期记忆治理。
 - 高风险 response adapter、补偿事务和自动化 rollout。

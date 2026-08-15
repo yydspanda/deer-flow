@@ -14,6 +14,7 @@ from soc_agent.contracts import (
     LLMAnalysisRequest,
     NetworkEntityRef,
     ProcessEntityRef,
+    TenantKnowledgeFact,
     TenantKnowledgeSelector,
     UserEntityRef,
 )
@@ -58,11 +59,28 @@ def test_pingan_direction_knowledge_projects_only_relevant_context() -> None:
     assert "pa.internal-address-space" in context
     assert "pa.network-direction-method" in context
     assert "pa.reverse-connection-role-inversion" in context
+    assert "pa.internal-geoip-enrichment-caveat" in context
     assert "pa.proxy-cdn-client-chain" not in context
     assert context["pa.internal-address-space"].context_ref.startswith("C-")
     assert context["pa.internal-address-space"].metadata["matched_values"] == {"cidrs": ["30.116.114.150", "30.174.29.44"]}
     assert "10.0.0.0/8" not in context["pa.internal-address-space"].summary
     assert context["pa.internal-address-space"].metadata["decision_authority"] == "none"
+    assert context["pa.internal-address-space"].metadata["network_scope_membership"] == "organization_controlled"
+    assert "must not override" in context["pa.internal-geoip-enrichment-caveat"].summary
+
+
+def test_pingan_geoip_caveat_is_scoped_to_confirmed_30_network() -> None:
+    enricher = TenantKnowledgeAnalysisRequestEnricher([load_pingan_network_direction_profile()])
+    request = _request(
+        canonical_entities=AlertEntitySet(network=NetworkEntityRef(source_ip="26.1.2.3")),
+        extracted_entities=ExtractedEntities(ips=["26.1.2.3"]),
+        rule_name="generic network event",
+    )
+
+    fact_ids = {item.metadata["fact_id"] for item in enricher(request).context_catalog}
+
+    assert "pa.internal-address-space" in fact_ids
+    assert "pa.internal-geoip-enrichment-caveat" not in fact_ids
 
 
 def test_tenant_profile_does_not_leak_into_another_integration() -> None:
@@ -214,3 +232,24 @@ def test_hids_platform_context_rejects_topic_based_environment_inference() -> No
 def test_account_selector_rejects_invalid_regex() -> None:
     with pytest.raises(ValidationError, match="invalid tenant knowledge account pattern"):
         TenantKnowledgeSelector(account_patterns=["["])
+
+
+def test_network_scope_fact_requires_explicit_membership_semantics() -> None:
+    common = {
+        "fact_id": "test.network-scope",
+        "label": "Test scope",
+        "statement": "Typed test scope.",
+        "selector": {"cidrs": ["10.0.0.0/8"]},
+        "source_ref": "test fixture",
+    }
+
+    with pytest.raises(ValidationError, match="require network_scope_membership"):
+        TenantKnowledgeFact.model_validate({**common, "kind": "network_scope"})
+    with pytest.raises(ValidationError, match="other fact kinds forbid it"):
+        TenantKnowledgeFact.model_validate(
+            {
+                **common,
+                "kind": "platform_context",
+                "network_scope_membership": "organization_controlled",
+            }
+        )

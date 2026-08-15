@@ -6,6 +6,9 @@ from collections.abc import Mapping, Sequence
 import pytest
 
 from soc_agent.contracts import (
+    AnalysisContextCatalogItem,
+    AnalysisContextReferenceKind,
+    AnalysisEvidenceCatalogItem,
     AnalysisNodeOutput,
     AnalysisProviderPurpose,
     AnalysisReasoningBasis,
@@ -15,6 +18,7 @@ from soc_agent.contracts import (
     DecisionEvidenceState,
     DecisionReviewReason,
     EvidenceItem,
+    EvidenceTrustLevel,
     LLMAnalysisRequest,
     NetworkBoundaryDirection,
     NetworkDirectionAssessment,
@@ -240,7 +244,7 @@ def _supported_candidate(
 def test_claim_projection_excludes_first_pass_rationale_and_confidence() -> None:
     request, analysis, _ = _request_and_analysis()
     claims = build_role_verification_claims(analysis)
-    prompt = build_role_verification_prompt(request, claims)
+    prompt = build_role_verification_prompt(request, analysis, claims)
 
     assert claims
     assert all("confidence" not in claim.assertion for claim in claims)
@@ -251,6 +255,136 @@ def test_claim_projection_excludes_first_pass_rationale_and_confidence() -> None
     assert "absence of an independent SYN" in prompt.system
     assert "must not by itself make that claim unresolved" in prompt.system
     assert prompt.prompt_version == ROLE_VERIFICATION_PROMPT_VERSION
+
+
+def test_direction_claims_are_atomic_and_stably_named() -> None:
+    _, analysis, _ = _request_and_analysis()
+
+    claims = build_role_verification_claims(analysis)
+
+    direction_claims = [claim for claim in claims if claim.claim_ref.startswith("RC-ND-")]
+    assert [(claim.claim_ref, claim.assertion) for claim in direction_claims] == [
+        ("RC-ND-01", {"observed_flow": "source_to_destination"}),
+        ("RC-ND-02", {"boundary_direction": "internal_to_external"}),
+        ("RC-ND-03", {"semantic_direction": "victim_to_attacker_reverse_connection"}),
+        ("RC-ND-04", {"connection_initiator": "10.20.30.40"}),
+    ]
+
+
+def test_verifier_projection_excludes_geoip_noise_and_keeps_typed_network_scope() -> None:
+    request, analysis, _ = _request_and_analysis()
+    geo = AnalysisEvidenceCatalogItem(
+        evidence_ref="E-AAAAAAAAAAAA",
+        source_path="alert.hitLog[0].zeusRawLogs[0].message#parsed.dip_addr",
+        value="美国--蒙大拿州",
+        value_type="string",
+        trust_level=EvidenceTrustLevel.HIGH,
+    )
+    network_scope = AnalysisContextCatalogItem(
+        context_ref="C-BBBBBBBBBBBB",
+        kind=AnalysisContextReferenceKind.GOVERNED_CONTEXT,
+        label="PingAn internal address space",
+        source_id="pingan.network_direction:pa.internal-address-space",
+        summary="Matched addresses are organization-controlled internal addresses.",
+        metadata={
+            "fact_id": "pa.internal-address-space",
+            "fact_kind": "network_scope",
+            "matched_values": {"cidrs": ["10.20.30.40", "198.51.100.20"]},
+            "network_scope_membership": "organization_controlled",
+            "decision_authority": "none",
+            "review_status": "reviewed",
+        },
+    )
+    request = request.model_copy(
+        update={
+            "evidence_catalog": [*request.evidence_catalog, geo],
+            "context_catalog": [*request.context_catalog, network_scope],
+        }
+    )
+
+    prompt = build_role_verification_prompt(
+        request,
+        analysis,
+        build_role_verification_claims(analysis),
+    )
+
+    evidence_refs = {item["evidence_ref"] for item in prompt.context["reference_catalogs"]["current_alert_evidence"]}
+    context_refs = {item["context_ref"] for item in prompt.context["reference_catalogs"]["reasoning_context"]}
+    assert geo.evidence_ref not in evidence_refs
+    assert network_scope.context_ref in context_refs
+    assert "美国--蒙大拿州" not in json.dumps(prompt.context, ensure_ascii=False)
+    assert prompt.context["projection_summary"]["raw_vendor_payload_included"] is False
+    assert prompt.context["runtime_constraints"]["organization_boundary"]["implied_boundary_direction"] == "internal_to_internal"
+
+
+def test_challenged_claim_can_be_grounded_by_typed_context() -> None:
+    review = RoleVerificationClaimReview(
+        claim_ref="RC-ND-02",
+        status=RoleVerificationClaimStatus.CHALLENGED,
+        contradicting_context_refs=["C-BBBBBBBBBBBB"],
+        rationale="组织边界事实与第一轮边界方向矛盾。",
+        counterevidence_assessment="已核对匹配当前 IP 的 network_scope。",
+    )
+
+    assert review.contradicting_evidence_refs == []
+    assert review.contradicting_context_refs == ["C-BBBBBBBBBBBB"]
+
+
+def test_parser_rejects_boundary_status_that_conflicts_with_typed_scope() -> None:
+    request, analysis, _ = _request_and_analysis()
+    claims = build_role_verification_claims(analysis)
+    network_scope = AnalysisContextCatalogItem(
+        context_ref="C-BBBBBBBBBBBB",
+        kind=AnalysisContextReferenceKind.GOVERNED_CONTEXT,
+        label="Reviewed organization scope",
+        source_id="tenant.network:internal-scope",
+        summary="Both current endpoints are organization-controlled.",
+        metadata={
+            "fact_kind": "network_scope",
+            "matched_values": {"cidrs": ["10.20.30.40", "198.51.100.20"]},
+            "network_scope_membership": "organization_controlled",
+            "decision_authority": "none",
+        },
+    )
+    bad_candidate = _supported_candidate(request, analysis)
+
+    with pytest.raises(
+        LLMOutputParseError,
+        match="contradicts typed organization ownership",
+    ) as error:
+        parse_role_verification_output(
+            bad_candidate.model_dump_json(),
+            claims=claims,
+            evidence_catalog=request.evidence_catalog,
+            context_catalog=[network_scope],
+            canonical_network=request.canonical_entities.network,
+        )
+
+    assert error.value.stage == "semantic_consistency"
+    assert error.value.issue_codes == ("typed_network_scope_boundary_conflict",)
+
+    corrected = bad_candidate.model_dump(mode="json")
+    boundary_review = next(item for item in corrected["claim_reviews"] if item["claim_ref"] == "RC-ND-02")
+    boundary_review.update(
+        {
+            "status": "challenged",
+            "supporting_evidence_refs": [],
+            "contradicting_context_refs": [network_scope.context_ref],
+            "alternative": {"assertion": {"boundary_direction": "internal_to_internal"}},
+            "rationale": "两个端点均为组织受控地址。",
+            "counterevidence_assessment": "类型化网段事实反驳第一轮边界方向。",
+        }
+    )
+
+    parsed = parse_role_verification_output(
+        json.dumps(corrected),
+        claims=claims,
+        evidence_catalog=request.evidence_catalog,
+        context_catalog=[network_scope],
+        canonical_network=request.canonical_entities.network,
+    )
+
+    assert next(item for item in parsed.candidate.claim_reviews if item.claim_ref == "RC-ND-02").status is RoleVerificationClaimStatus.CHALLENGED
 
 
 def test_trigger_reviews_only_core_direction_and_attacker_victim_conflicts() -> None:
@@ -265,6 +399,9 @@ def test_trigger_reviews_only_core_direction_and_attacker_victim_conflicts() -> 
     claims = build_role_verification_claims(analysis)
     assert [claim.claim_ref for claim in claims] == [
         "RC-ND-01",
+        "RC-ND-02",
+        "RC-ND-03",
+        "RC-ND-04",
         "RC-R-01",
         "RC-R-02",
     ]
@@ -613,7 +750,7 @@ def test_runtime_calls_verifier_only_when_triggered_and_journals_both_calls() ->
     )
 
     assert verifier.verify_calls == 1
-    assert run.pipeline_version == "soc-runtime-v2"
+    assert run.pipeline_version == "soc-runtime-v8"
     assert provider_steps == ["analyze_llm", "verify_roles_llm"]
     assert run.role_verification_trigger is not None
     assert run.role_verification_trigger.triggered is True
@@ -629,13 +766,13 @@ def test_runtime_calls_verifier_only_when_triggered_and_journals_both_calls() ->
         role_verifier=clean_verifier,
     )
     assert clean_verifier.verify_calls == 0
-    assert clean_run.pipeline_version == "soc-runtime-v2"
+    assert clean_run.pipeline_version == "soc-runtime-v8"
     assert clean_run.role_verification_trigger is not None
     assert clean_run.role_verification_trigger.triggered is False
     assert clean_run.role_adjudication_verification is None
 
 
-def test_runtime_verifier_failure_preserves_primary_result_and_fails_closed() -> None:
+def test_runtime_verifier_failure_preserves_primary_result_and_blocks_role_actions() -> None:
     verifier = _ConfirmingVerifier(fail=True)
     run = analyze_alert(
         _payload(),
@@ -648,11 +785,25 @@ def test_runtime_verifier_failure_preserves_primary_result_and_fails_closed() ->
     assert run.role_adjudication_verification is not None
     assert run.role_adjudication_verification.status is RoleVerificationStatus.UNAVAILABLE
     assert run.decision is not None
-    assert run.decision.evidence_state is DecisionEvidenceState.DEGRADED
-    assert DecisionReviewReason.ROLE_VERIFIER_UNAVAILABLE in run.decision.review_reasons
+    assert run.decision.evidence_state is DecisionEvidenceState.PARTIAL
+    assert DecisionReviewReason.ROLE_VERIFIER_UNAVAILABLE not in run.decision.review_reasons
+    assert run.decision.needs_review is False
+    assert run.analysis_materiality is not None
+    assert all(
+        not guard.allowed
+        for guard in run.analysis_materiality.capability_guards
+        if guard.capability.value
+        in {
+            "network_direction",
+            "attacker_targeting",
+            "victim_targeting",
+            "impacted_asset_targeting",
+        }
+    )
     verifier_step = next(step for step in run.steps if step.step_name == "verify_roles_llm")
     assert verifier_step.status.value == "failed"
     assert verifier_step.metadata["fail_closed"] is True
+    assert verifier_step.metadata["fail_closed_scope"] == "direction_and_role_capabilities"
 
 
 @pytest.mark.parametrize(
@@ -665,15 +816,15 @@ def test_runtime_verifier_failure_preserves_primary_result_and_fails_closed() ->
         ),
         (
             RoleVerificationStatus.UNRESOLVED,
-            DecisionEvidenceState.DEGRADED,
-            DecisionReviewReason.ROLE_VERIFICATION_UNRESOLVED,
+            DecisionEvidenceState.PARTIAL,
+            None,
         ),
     ],
 )
 def test_verifier_disagreement_adds_fail_closed_decision_guard(
     verification_status: RoleVerificationStatus,
     expected_state: DecisionEvidenceState,
-    expected_reason: DecisionReviewReason,
+    expected_reason: DecisionReviewReason | None,
 ) -> None:
     run = analyze_alert(
         _payload(),
@@ -685,7 +836,10 @@ def test_verifier_disagreement_adds_fail_closed_decision_guard(
     assert run.analysis.verdict is Verdict.SUSPICIOUS
     assert run.decision is not None
     assert run.decision.evidence_state is expected_state
-    assert expected_reason in run.decision.review_reasons
+    if expected_reason is None:
+        assert run.decision.needs_review is False
+    else:
+        assert expected_reason in run.decision.review_reasons
 
 
 class _RunRepository:

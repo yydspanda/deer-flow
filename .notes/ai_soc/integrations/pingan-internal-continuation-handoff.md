@@ -637,7 +637,7 @@ DEV 默认不持久化；需要验证 ReviewQueue/审计/维护问题时，先�
 - [ ] 扩充人工标注的 correlation pair corpus，区分 `same_incident`、`related_distinct`、`unrelated`。
 - [x] `PI-03C` 通用 simulation 已形成可追溯、可回放、人工评审的 `SkillImprovementCandidate`，且不得自动改 Skill。
 - [ ] 真实 external reason/analyst correction 仍需 server-owned classifier 映射目标 Skill/version、scenario 与 failure facet；不得按自由文本自动聚类。
-- [ ] 路径目录等 tenant candidate knowledge 只有在 `PI-03D` 人工标签、scope/validity owner 和 replay gate 通过后才可提出 promotion；默认保持 investigation-only。
+- [x] `PI-03D` 旧通用 promotion 草案已关闭：catalog/MCP 永久保持 investigation-only；业务需要的快速忽略由独立、默认关闭的 PingAn software-path tenant policy 承担，并保留显式开关和 decision lineage。
 - [ ] parser 漂移只有形成稳定 cohort 后才进入 `PI-03E` candidate bundle/dual-run/replay/approval，禁止 Runtime 自修改。
 - [ ] 记录成本、延迟、人工接管率、错误类型和 provider contribution。
 - [ ] 评测通过后只允许进入 shadow review；不得直接开放 auto-close、抑制或高风险动作。

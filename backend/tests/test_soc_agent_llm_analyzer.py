@@ -227,28 +227,120 @@ def test_json_llm_analyzer_runs_prompt_client_parser_and_runtime_trace() -> None
         },
     }
     assert "prompt_hash" in analyze_step.metadata
+    assert analyze_step.metadata["prompt_example_id"]
     assert "skill_context_hash" in analyze_step.metadata
     assert analyze_step.metadata["selected_skills"]
     assert "candidate_hash" in analyze_step.metadata
     decide_step = next(step for step in run.steps if step.step_name == "decide")
-    assert decide_step.metadata["policy_version"] == "soc.decision_policy.v6"
+    assert decide_step.metadata["policy_version"] == "soc.decision_policy.v7"
     assert decide_step.metadata["confidence_source"] == "llm_self_report"
     assert decide_step.metadata["confidence_is_calibrated"] is False
     assert decide_step.metadata["review_reasons"] == []
 
 
+def test_json_llm_analyzer_accepts_minimal_v4_core_without_optional_blocks() -> None:
+    client = RecordingChatClient(
+        json.dumps(
+            {
+                "schema_version": "soc.analysis_model_output.v4",
+                "verdict": "true_positive",
+                "confidence": 0.91,
+                "summary": "规则命中与当前事实支持真实风险结论。",
+                "decision_evidence_refs": ["E-001"],
+                "decision_context_refs": [],
+                "reason": "当前检测规则和告警事实共同支持该结论。",
+                "recommended_action": "continue governed investigation",
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    run = DeterministicAnalysisRuntime(analyzer=JsonLLMAnalyzer(client=client, model_name="soc-model")).analyze(_sample("malicious_ioc.json"))
+
+    assert run.status is AnalysisRunStatus.SUCCESS
+    assert run.analysis is not None
+    assert run.analysis.verdict is Verdict.TRUE_POSITIVE
+    assert run.analysis.decision_reasoning_refs == ["R-00"]
+    assert run.analysis.scenario_assessments == []
+    assert run.analysis_output_quality is not None
+    assert run.analysis_output_quality.status is AnalysisOutputQualityStatus.ACCEPTED
+    assert run.analysis_materiality is not None
+    assert run.analysis_materiality.decision_usable is True
+    assert run.decision is not None
+    assert run.decision.needs_review is False
+    step = next(item for item in run.steps if item.step_name == "analyze_llm")
+    assert step.metadata["model_output_schema_version"] == ("soc.analysis_model_output.v4")
+    assert len(client.calls) == 1
+
+
+def test_json_llm_analyzer_repairs_missing_compact_summary_without_provider_retry() -> None:
+    reason = "当前检测规则和告警事实共同支持该结论。"
+    client = RecordingChatClient(
+        json.dumps(
+            {
+                "schema_version": "soc.analysis_model_output.v4",
+                "verdict": "true_positive",
+                "confidence": 0.91,
+                "decision_evidence_refs": ["E-001"],
+                "decision_context_refs": [],
+                "scenario_assessments": [],
+                "network_direction": {
+                    "status": "not_assessed",
+                    "observed_flow": "not_available",
+                    "boundary_direction": "not_applicable",
+                    "semantic_direction": None,
+                    "connection_initiator_ref": None,
+                    "intermediaries": [],
+                    "confidence": 0.0,
+                    "evidence_refs": [],
+                    "context_refs": [],
+                    "rationale": "当前样本不需要网络方向裁决。",
+                    "evidence_gaps": [],
+                },
+                "role_adjudication": {
+                    "status": "not_assessed",
+                    "roles": [],
+                    "conflicts": [],
+                    "evidence_gaps": [],
+                    "rationale": "当前样本不需要安全角色裁决。",
+                },
+                "evidence_gaps": [],
+                "manual_checks": [],
+                "reason": reason,
+                "recommended_action": "继续受治理调查。",
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    run = DeterministicAnalysisRuntime(analyzer=JsonLLMAnalyzer(client=client, model_name="soc-model")).analyze(_sample("malicious_ioc.json"))
+
+    assert run.status is AnalysisRunStatus.SUCCESS
+    assert run.analysis is not None
+    assert run.analysis.summary == reason
+    assert run.analysis_output_quality is not None
+    assert run.analysis_output_quality.status is AnalysisOutputQualityStatus.REPAIRED
+    assert len(client.calls) == 1
+    step = next(item for item in run.steps if item.step_name == "analyze_llm")
+    assert step.metadata["provider_call_count"] == 1
+    assert step.metadata["output_retry_attempted"] is False
+    assert any(item.get("operation") == "materialize_summary_from_reason" for item in step.metadata["hydration_log"])
+
+
 def test_json_llm_analyzer_retries_one_invalid_contract_with_bounded_correction() -> None:
     invalid = json.loads(_analysis_json())
-    invalid["reasoning"][0].pop("schema_version")
+    invalid.pop("summary")
     client = SequencedChatClient(
         [
             LLMChatResponse(
                 content=json.dumps(invalid),
                 usage={"input_tokens": 100, "output_tokens": 50},
+                metadata={"json_mode_requested": True},
             ),
             LLMChatResponse(
                 content=_analysis_json(),
                 usage={"input_tokens": 80, "output_tokens": 40},
+                metadata={"json_mode_requested": True},
             ),
         ]
     )
@@ -273,8 +365,12 @@ def test_json_llm_analyzer_retries_one_invalid_contract_with_bounded_correction(
     assert step.metadata["usage_complete"] is True
     assert step.metadata["output_retry_attempted"] is True
     assert step.metadata["output_retry_kind"] == "contract_correction"
-    assert step.metadata["initial_parse_error_field_paths"] == ["reasoning.0.schema_version"]
+    assert step.metadata["initial_parse_error_field_paths"] == ["summary"]
     assert step.metadata["initial_parse_error_issue_codes"] == ["missing"]
+    assert [call["json_mode_requested"] for call in step.metadata["provider_calls"]] == [
+        True,
+        True,
+    ]
     assert step.metadata["usage"] == {
         "input_tokens": 180,
         "output_tokens": 90,
@@ -284,7 +380,7 @@ def test_json_llm_analyzer_retries_one_invalid_contract_with_bounded_correction(
 
 def test_json_llm_analyzer_can_use_stronger_model_for_bounded_output_repair() -> None:
     invalid = json.loads(_analysis_json())
-    invalid["reasoning"][0].pop("schema_version")
+    invalid.pop("summary")
     client = SequencedChatClient(
         [
             json.dumps(invalid),
@@ -311,7 +407,7 @@ def test_json_llm_analyzer_can_use_stronger_model_for_bounded_output_repair() ->
 
 def test_json_llm_analyzer_output_retry_can_be_disabled() -> None:
     invalid = json.loads(_analysis_json())
-    invalid["reasoning"][0].pop("schema_version")
+    invalid.pop("summary")
     client = SequencedChatClient([json.dumps(invalid)])
     analyzer = JsonLLMAnalyzer(
         client=client,
@@ -336,7 +432,7 @@ def test_json_llm_analyzer_output_retry_can_be_disabled() -> None:
 
 def test_json_llm_analyzer_failed_correction_retains_bounded_usage() -> None:
     invalid = json.loads(_analysis_json())
-    invalid["reasoning"][0].pop("schema_version")
+    invalid.pop("summary")
     client = SequencedChatClient(
         [
             LLMChatResponse(
@@ -401,7 +497,7 @@ def test_json_llm_analyzer_degrades_invalid_role_section_without_provider_retry(
         before_provider=lambda _run, _request, invocation: provider_purposes.append(invocation.purpose),
     )
 
-    assert run.status is AnalysisRunStatus.NEEDS_REVIEW
+    assert run.status is AnalysisRunStatus.SUCCESS
     assert run.analysis is not None
     assert run.analysis.verdict is Verdict.TRUE_POSITIVE
     assert run.analysis.role_adjudication.status.value == "not_assessed"
@@ -442,7 +538,7 @@ def test_json_llm_analyzer_keeps_valid_core_when_section_patch_still_fails() -> 
 
     run = DeterministicAnalysisRuntime(analyzer=JsonLLMAnalyzer(client=client, model_name="soc-model")).analyze(_sample("malicious_ioc.json"))
 
-    assert run.status is AnalysisRunStatus.NEEDS_REVIEW
+    assert run.status is AnalysisRunStatus.SUCCESS
     assert run.model_name == "soc-model"
     assert run.analysis is not None
     assert run.analysis.verdict is Verdict.TRUE_POSITIVE
@@ -451,7 +547,10 @@ def test_json_llm_analyzer_keeps_valid_core_when_section_patch_still_fails() -> 
     assert run.analysis_output_quality.status is AnalysisOutputQualityStatus.DEGRADED
     assert [section.value for section in run.analysis_output_quality.degraded_sections] == ["role_adjudication"]
     assert run.decision is not None
-    assert DecisionReviewReason.ANALYSIS_OUTPUT_DEGRADED in run.decision.review_reasons
+    assert DecisionReviewReason.ANALYSIS_OUTPUT_DEGRADED not in run.decision.review_reasons
+    assert run.analysis_materiality is not None
+    attacker_guard = next(guard for guard in run.analysis_materiality.capability_guards if guard.capability.value == "attacker_targeting")
+    assert attacker_guard.allowed is False
     assert len(client.calls) == 1
 
 
@@ -470,6 +569,7 @@ def test_default_runtime_still_uses_stub_analyzer() -> None:
         "analyze_stub",
         "schema_validate",
         "evidence_grounding",
+        "analysis_materiality",
         "decide",
     ]
     analyze_step = next(step for step in run.steps if step.step_name == "analyze_stub")
@@ -504,6 +604,8 @@ def test_live_model_failure_keeps_requested_model_in_failed_trace() -> None:
     assert step.status.value == "failed"
     assert step.metadata["model_name"] == "deepseek-v4-pro"
     assert step.metadata["prompt_version"] == ANALYSIS_PROMPT_VERSION
+    assert step.metadata["prompt_example_id"]
+    assert step.metadata["prompt_hash"]
     assert step.error == "TimeoutError while invoking configured SOC analyzer"
     assert run.failure is not None
     assert run.failure.kind.value == "analyzer_timeout"

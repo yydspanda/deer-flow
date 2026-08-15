@@ -18,10 +18,14 @@ from soc_agent.contracts import (
     ActorAuthSource,
     ActorContext,
     ActorType,
+    AdjudicatedRoleStatus,
+    AdjudicatedRoleType,
+    AnalysisCapability,
     AnalysisContextReferenceKind,
     AnalysisRun,
     AnalysisRunStatus,
     EntrySurface,
+    RoleResolutionStatus,
     ServiceRequestContext,
     SocActionAuthorizationDecision,
     SocActionAuthorizationMode,
@@ -657,6 +661,10 @@ class SocAutomationService:
         if self._policy is None:
             raise SocAutomationError("action rule requires an automation policy")
         target = _resolve_action_target(run, rule.action.target_selector)
+        materiality_guard = _action_materiality_guard(
+            run,
+            rule.action.target_selector,
+        )
         descriptor = _find_descriptor(self._registry, rule)
         authorization_decision, reason, risk_level = _authorization_decision(
             self._policy,
@@ -664,6 +672,7 @@ class SocAutomationService:
             replay_of_run_id=run.replay_of_run_id,
             target=target,
             descriptor=descriptor,
+            materiality_guard=materiality_guard,
         )
         command_payload = dict(rule.action.static_payload)
         if target is not None:
@@ -681,6 +690,7 @@ class SocAutomationService:
                 "rule_id": rule.rule_id,
                 "action": rule.action.model_dump(mode="json"),
                 "target": target,
+                "materiality_guard": materiality_guard,
                 "authorization_decision": authorization_decision.value,
                 "policy_version": self._policy.policy_version,
             }
@@ -990,19 +1000,65 @@ def _resolve_action_target(
         SocAutomationTargetSelector.VICTIM_IP,
         SocAutomationTargetSelector.IMPACTED_HOST,
     }:
-        role = {
-            SocAutomationTargetSelector.ATTACKER_IP: "attacker",
-            SocAutomationTargetSelector.VICTIM_IP: "victim",
-            SocAutomationTargetSelector.IMPACTED_HOST: "impacted_asset",
+        role_type = {
+            SocAutomationTargetSelector.ATTACKER_IP: AdjudicatedRoleType.ATTACKER,
+            SocAutomationTargetSelector.VICTIM_IP: AdjudicatedRoleType.VICTIM,
+            SocAutomationTargetSelector.IMPACTED_HOST: AdjudicatedRoleType.IMPACTED_ASSET,
         }[selector]
+        if run.analysis is not None:
+            for role in run.analysis.role_adjudication.roles:
+                if role.role is role_type and role.status is AdjudicatedRoleStatus.RESOLVED_FROM_EVIDENCE and role.value and _role_value_matches_selector(role.entity_type, selector):
+                    return role.value
+        role_name = role_type.value
         for resolution in request.fact_reconstruction.role_resolutions:
-            if resolution.role == role and resolution.selected_value:
+            if resolution.role == role_name and resolution.status is RoleResolutionStatus.CONFIRMED and resolution.selected_value:
                 return resolution.selected_value
-        if selector is SocAutomationTargetSelector.IMPACTED_HOST:
-            return request.canonical_entities.host.host_name or request.canonical_entities.host.host_id or next(iter(request.canonical_entities.host.ip_addresses), None)
         return None
     user = request.canonical_entities.user
     return user.um_account or user.user_id or user.username
+
+
+def _role_value_matches_selector(
+    entity_type: str,
+    selector: SocAutomationTargetSelector,
+) -> bool:
+    if selector is SocAutomationTargetSelector.IMPACTED_HOST:
+        return True
+    return entity_type.strip().casefold() in {
+        "ip",
+        "ip_address",
+        "ipv4",
+        "ipv6",
+    }
+
+
+def _action_materiality_guard(
+    run: AnalysisRun,
+    selector: SocAutomationTargetSelector,
+) -> str | None:
+    report = run.analysis_materiality
+    target_capability = {
+        SocAutomationTargetSelector.SOURCE_IP: AnalysisCapability.SOURCE_TARGETING,
+        SocAutomationTargetSelector.DESTINATION_IP: AnalysisCapability.DESTINATION_TARGETING,
+        SocAutomationTargetSelector.ATTACKER_IP: AnalysisCapability.ATTACKER_TARGETING,
+        SocAutomationTargetSelector.VICTIM_IP: AnalysisCapability.VICTIM_TARGETING,
+        SocAutomationTargetSelector.IMPACTED_HOST: AnalysisCapability.IMPACTED_ASSET_TARGETING,
+        SocAutomationTargetSelector.USER: AnalysisCapability.USER_TARGETING,
+    }.get(selector)
+    if report is None:
+        if target_capability is not None:
+            return "analysis_materiality_missing_for_target"
+        return None
+
+    required = {AnalysisCapability.RESPONSE_ACTION}
+    if target_capability is not None:
+        required.add(target_capability)
+    guard_by_capability = {item.capability: item for item in report.capability_guards}
+    blocked = [guard_by_capability.get(capability) for capability in required if capability not in guard_by_capability or not guard_by_capability[capability].allowed]
+    if not blocked:
+        return None
+    reasons = sorted({reason for item in blocked for reason in (item.reason_codes if item is not None else ["materiality_guard_missing"])})
+    return "materiality_blocked:" + ",".join(reasons or ["unspecified"])
 
 
 def _find_descriptor(
@@ -1024,7 +1080,14 @@ def _authorization_decision(
     replay_of_run_id: str | None,
     target: str | None,
     descriptor: Any | None,
+    materiality_guard: str | None,
 ) -> tuple[SocActionAuthorizationDecision, str, SocAgentRiskLevel]:
+    if materiality_guard is not None:
+        return (
+            SocActionAuthorizationDecision.DENIED,
+            f"Analysis materiality blocked this action capability: {materiality_guard}.",
+            SocAgentRiskLevel.UNKNOWN,
+        )
     if target is None:
         return (
             SocActionAuthorizationDecision.DENIED,

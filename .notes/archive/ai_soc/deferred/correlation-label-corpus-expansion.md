@@ -19,7 +19,8 @@ SOC Correlation 需要区分三类关系：
 - 当前没有获批的真实 pair 数据集和稳定 ground truth。
 - 需要安全分析师提供 label、rationale 和争议复核，不能由模型或代码自行制造真值。
 - 数据脱敏、用途范围、保留周期和 reviewer owner 尚未形成可执行流程。
-- 当前主线是 `PI-01` 真实只读 provider 接入；该工作不能插队，也不阻塞 Runtime 完整性。
+- 现有 8-pair/synthetic corpus 已走通工程和 replay 合同；在真实数据 owner 与 reviewer 到位前继续扩代码
+  不能提高可声明的生产质量，也不阻塞 Runtime 完整性。
 
 ## 未来范围
 
@@ -58,4 +59,3 @@ SOC Correlation 需要区分三类关系：
 - 关键 source/time/rule cohorts 的覆盖和样本缺口可见。
 - 当前 scorer 与候选 scorer 的 precision/recall、fan-out、unrelated exposure 和 replay diff 可比较。
 - 任何候选策略只能先进入 shadow/governed rollout，不能因一次离线报告自动启用抑制。
-

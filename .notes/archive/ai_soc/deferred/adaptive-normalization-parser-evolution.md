@@ -12,7 +12,8 @@ LLM/规则生成 parser、mapping、field-importance 或测试候选，经过 re
 
 ## 为什么现在不做
 
-- 当前 `PI-01` 主线是第一项真实只读 dev/staging provider，不应被自动改 parser 的平台能力打断。
+- 当前 deterministic parser、schema monitor、coverage issue 和离线 suggestion 已能支撑产品流程；继续做
+  自动候选发布不会关闭任何现有 Real Integration Gate。
 - 212 条本地语料能验证兼容性，但不能代表生产格式漂移频率、影响范围或 tenant 分布。
 - 自动生成代码/mapping 没有真实 owner、批准流程、回滚包和 shadow 指标时风险高于收益。
 - 当前每条告警已有 deterministic fallback、原始输入保留和 fail-closed，不依赖该能力才能工作。

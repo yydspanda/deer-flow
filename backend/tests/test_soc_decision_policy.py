@@ -80,7 +80,7 @@ def test_routine_bounded_omission_is_partial_not_degraded() -> None:
 
     assert decision.evidence_state is DecisionEvidenceState.PARTIAL
     assert DecisionReviewReason.TRUNCATED_ANALYSIS_EVIDENCE not in decision.review_reasons
-    assert decision.policy_version == "soc.decision_policy.v6"
+    assert decision.policy_version == "soc.decision_policy.v7"
 
 
 def test_encoded_compaction_alone_is_informational() -> None:

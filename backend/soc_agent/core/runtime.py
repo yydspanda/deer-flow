@@ -14,6 +14,7 @@ from soc_agent.contracts import (
     AlertInput,
     AlertSourceType,
     AnalysisEvidenceGroundingReport,
+    AnalysisMaterialityReport,
     AnalysisNodeOutput,
     AnalysisProviderInvocation,
     AnalysisProviderPurpose,
@@ -50,6 +51,7 @@ from soc_agent.pipeline.evidence_coverage import observe_message_schemas
 from soc_agent.pipeline.evidence_grounding import ground_analysis_evidence
 from soc_agent.pipeline.extractor import extract_entities
 from soc_agent.pipeline.fact_reconstructor import reconstruct_facts
+from soc_agent.pipeline.materiality import assess_analysis_materiality
 from soc_agent.pipeline.reference_catalog import finalize_analysis_reference_catalogs
 from soc_agent.protocols import (
     AnalysisBeforeProviderHook,
@@ -69,8 +71,8 @@ class SocRuntimeLifecycleError(RuntimeError):
     """Raised when infrastructure fails before the analyzer is invoked."""
 
 
-SOC_RUNTIME_PIPELINE_VERSION = "soc-runtime-v1"
-SOC_RUNTIME_ROLE_VERIFICATION_PIPELINE_VERSION = "soc-runtime-v2"
+SOC_RUNTIME_PIPELINE_VERSION = "soc-runtime-v7"
+SOC_RUNTIME_ROLE_VERIFICATION_PIPELINE_VERSION = "soc-runtime-v8"
 
 
 def inspect_alert_normalization(
@@ -337,6 +339,7 @@ def analyze_alert(
                         {
                             "optional": True,
                             "fail_closed": True,
+                            "fail_closed_scope": "direction_and_role_capabilities",
                             "model_name": role_verifier.model_name,
                             "prompt_version": role_verifier.prompt_version,
                             "parser_version": role_verifier.parser_version,
@@ -352,6 +355,24 @@ def analyze_alert(
                         verifier=role_verifier,
                         error=exc,
                     )
+        run.analysis_materiality = _run_step(
+            run,
+            "analysis_materiality",
+            {
+                "analysis": run.analysis,
+                "analysis_request": analysis_request,
+                "analysis_evidence_grounding": run.analysis_evidence_grounding,
+                "analysis_output_quality": run.analysis_output_quality,
+                "role_adjudication_verification": run.role_adjudication_verification,
+            },
+            lambda _: assess_analysis_materiality(
+                run.analysis,
+                request=analysis_request,
+                grounding=run.analysis_evidence_grounding,
+                output_quality=run.analysis_output_quality,
+                role_verification=run.role_adjudication_verification,
+            ),
+        )
         run.decision = _run_step(
             run,
             "decide",
@@ -361,6 +382,7 @@ def analyze_alert(
                 "analysis_evidence_grounding": run.analysis_evidence_grounding,
                 "analyzer_step_name": analysis_node.step_name,
                 "analysis_output_quality": run.analysis_output_quality,
+                "analysis_materiality": run.analysis_materiality,
             },
             lambda _: policy.decide(
                 run.analysis,
@@ -369,6 +391,7 @@ def analyze_alert(
                 analyzer_step_name=(analysis_output.effective_analyzer_step_name or analysis_node.step_name),
                 output_quality=run.analysis_output_quality,
                 role_verification=run.role_adjudication_verification,
+                materiality=run.analysis_materiality,
             ),
         )
         run.status = AnalysisRunStatus.NEEDS_REVIEW if run.decision.needs_review else AnalysisRunStatus.SUCCESS
@@ -589,6 +612,17 @@ def _run_step[T](
                 "ungrounded_count": output.ungrounded_count,
                 "reasoning_grounded_count": output.reasoning_grounded_count,
                 "reasoning_ungrounded_count": output.reasoning_ungrounded_count,
+            }
+        )
+    if isinstance(output, AnalysisMaterialityReport):
+        trace.warnings.extend(output.warnings)
+        trace.metadata.update(
+            {
+                "core_usable": output.core_usable,
+                "decision_usable": output.decision_usable,
+                "review_required": output.review_required,
+                "review_reasons": [reason.value for reason in output.review_reasons],
+                "blocked_capabilities": [guard.capability.value for guard in output.capability_guards if not guard.allowed],
             }
         )
     if isinstance(output, AnalysisNodeOutput):

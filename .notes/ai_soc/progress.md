@@ -29,8 +29,202 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；主 LLM 只执行 bounded `AnalysisResult.v4` 节点；条件式 verifier 通用/本机默认关闭，固定 cohort 或 live 命令显式开启后由确定性 gate 触发，只独立反证 `RC-*` 方向/角色声明，不掌握流程或动作权限 |
-| 当前下一刀 | `soc-analysis-v21` / `soc.decision_policy.v6` 已明确“可信 detector hit + Runtime 当前裁决 + 独立动作授权”边界，并移除无价值的置信度/标签强制复核。下一步用固定 live cohort 验证 ReviewQueue 降幅与结论完整性，再补独立人工方向/角色真值、Web/TUI 人工角色确认表单和 held-out confirmed-memory Retrieval v2 precision/recall。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
+| 当前下一刀 | Prompt v34 的冻结 20 条结构评测与 Role-Verifier + in-sample confirmed-Memory 链路实验已完成。下一步建立独立人工 verdict/scenario/direction/role 真值和 held-out Memory 查询集，测 Retrieval v2 precision/recall、结论稳定性与 verifier failure rate；随后补 Web/TUI 人工角色确认。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
+
+## 2026-08-15 — Role Verifier + confirmed Memory 20-alert experiment
+
+- 同一冻结 20 条、同一 corpus/hash、GlobalAI Flash 主模型、thinking off、GlobalAI Pro Role
+  Verifier 做 A/B：基线不持久化/无 Memory，当前轮持久化到隔离 SQLite 并启用 20 条 confirmed Memory。
+- 原 20 条产物没有 `knowledge_candidates` 且 `persist=false`，因此没有可直接审核的 DB Candidate。按用户
+  明确授权，验证工具把原 20 条 Runtime 结论作为 `simulation/in_sample/eval_fixture`，通过正式
+  `MemoryAdmissionService -> propose -> confirm -> retrieval activation` 写入隔离库；20/20 confirmed、
+  20/20 retrieval-enabled、0 decision directive。该设计只验证链路，不是独立运营真值。
+- 第二轮 20/20 Runtime 完成。每条都召回自身 Memory 且自身分数排名第 1；共选择 79 次、覆盖 20 个唯一
+  record，生产 Retrieval v2 只读重放与冻结 Prompt 投影 20/20 一致。17/20 模型明确引用自身 `M-*`，
+  其中 16/20 在核心 `R-00` 引用；`1965449/1967817/2025642` 收到但未引用。
+- 基线 `19 success + 1 needs_review`，当前 `20 success`；仅 `1967817` 从 true_positive 变 suspicious，
+  但它未引用 Memory，不能归因于 Memory。仅 `1965810` 从 review 变为不 review，但本轮 verifier 是
+  `unavailable`（两次输出均未通过 schema），不是 Memory 证明了角色结论；依赖角色的目标能力仍被封锁。
+- 输出质量从 `18 accepted + 2 repaired` 变为 `15 accepted + 5 repaired`，两轮均 0 fallback。
+  Token 从 626,386 增至 659,895（+33,509，约 +5.35%）；累计 E2E 从 255,174.925 ms 增至
+  294,299.734 ms（+39,124.809 ms）。单次 live 模型有随机性，因此方向/角色文本变化不做因果归因。
+- 可复跑脚本：`validation/compact_zeus/memory/seed_confirmed_memory_from_batch.py` 和
+  `compare_role_memory_batches.py`；本次本地敏感产物位于
+  `backend/.deer-flow/soc-validation/soc-analysis-v34-role-memory-twenty-20260815-r1/`。
+- 验证：Memory seed/comparison + Admission/Retrieval v2/Runtime context 聚焦回归 `14 passed`；相关 Ruff
+  check 通过。下一步必须使用 held-out alerts 与独立人工标签，不能把 same-alert Memory 实验当准确率。
+
+## 2026-08-15 — Prompt v34 selected Golden Demo and summary repair
+
+- Prompt Builder 内置三个完整 synthetic Golden Demo：`network_roles`、`non_network`、`conflicted`；
+  按冲突优先、typed network evidence/network source、non-network 的顺序只选择一个，并在 prompt context 与 analyze trace
+  写入 `prompt_example_id`。示例使用独立 `EX-*` 引用且明确禁止复制，不把三个示例常驻每次调用。
+- 三个 Demo 均包含完整 compact v4 root/scenario/direction/role/guidance 结构。测试会把 `EX-*` 映射到
+  隔离的 typed test catalog，再通过生产 Parser/Pydantic 校验，防止未来契约升级后示例静默过期。
+- Parser 升级为 `soc-analysis-json-parser-v24`：仅对当前 compact v4，在 `summary` 缺失/空、`reason`
+  已非空且不超过 4000 字符时，把 `reason` 字符串原样复制为 display summary，记录
+  `materialize_summary_from_reason`。它不修改 verdict/confidence/reference/action，也不处理错误类型的
+  summary；该情况只记一次本地 `repaired`，不调用第二次 Provider。
+- 对 `1980288` 发起一次 v34 live 请求，但 GlobalAI 仍在模型响应前返回 `APIConnectionError`；该次只
+  证明 retryable Provider failure 边界，不能计入 Demo 效果。失败路径随后也补齐
+  `prompt_example_id/prompt_hash` trace，历史失败产物不回写。
+- 在允许联网的执行环境中用同一 `1980288` 复测成功：GlobalAI Flash、thinking off、
+  JSON mode on、verifier off；`network_roles` Demo 被选中，首轮 `accepted`，1 次 Provider 调用，
+  无 output retry/本地 repair/fallback/degraded，13/13 evidence 与 5/5 reasoning 全部 Grounded。Provider
+  报告 36,239 input + 1,624 output = 37,863 tokens，Provider 约 26.27 秒，Runtime 约 30.38 秒；
+  结论为 `suspicious(0.62)`。但模型在 summary/recommended action/角色 rationale 中把正确
+  typed IP `10.78.80.83` / `10.37.84.94` 误写为带重复 `10` 的文本；结构化方向与角色值仍正确，
+  Grounding 也只证明引用完整性而未检测该文本实体变异。该问题必须在 20 条 A/B 前收口。
+- Prompt/Parser/Analyzer/Runtime/Materiality/Grounding/Role Verifier/DeerFlow client 回归
+  `185 passed`；E2E 与 internal-batch builder `39 passed`；相关 Ruff check 通过。冻结 20 条
+  live v33/v34 A/B 在文本实体一致性边界收口后执行。
+
+## 2026-08-15 — Prompt v33 and provider JSON-object validation
+
+- 主分析 Prompt 升级为 `soc-analysis-v33`：system message 只保留稳定的 authority/trust/method/
+  reference 规则；user message 先放 bounded context，再放 task、analysis order、精确 response shape 和
+  尾部 checklist。scenario/direction/role 均固定 exact keys，角色只复制 typed role catalog 项的
+  `evidence_ref`；没有引入缺失必填字段的片段式伪 few-shot。
+- 反弹 Shell `2025642` 使用 GlobalAI Flash、thinking off、verifier off 重跑：首轮 `accepted`、无 repair/
+  degraded/fallback，`15/15` Grounded；方向和角色保持 initiator/victim/impacted=`30.116.114.150`、
+  responder/attacker=`30.174.29.44`、`internal_to_internal`。
+- 固定 5 条在普通文本 JSON 下为 `2/5` first-pass accepted、`3/5` bounded core repair；最终均成功且
+  无 section degradation。三条首轮失败均为 compact core 字段缺失，不是安全语义修复。
+- GlobalAI 已通过 `response_format={"type":"json_object"}` 能力探测。新增默认关闭的
+  `SOC_LLM_JSON_MODE_ENABLED`，并把 request flag 写入 runtime status、batch manifest、item execution、
+  底层 response metadata 和每次 provider-call 汇总。该模式不等于 JSON Schema enforcement。
+- 对原三条首轮失败样本做 JSON-object mode 定点复测：`1965891`、`1966874` 首轮 accepted；
+  `1980288` 返回合法 JSON 但漏 `summary`，消耗一次 bounded repair 后成功。三条最终均无 degraded/
+  fallback/Grounding reject。该小样本只能证明结构稳定性改善，不能作为模型准确率或总体通过率。
+- 在补齐汇总审计字段后对 `1980288` 再发起两次定点 live 请求，均在模型响应前因 GlobalAI
+  `APIConnectionError` 失败。Runtime 正确记录 `analyzer_unavailable`、`retryable=true`、调用耗时及
+  `json_mode_requested=true`，未用 stub 掩盖 Provider 故障；不把这两次连接失败计入 Prompt 通过率。
+- 聚焦验证：Prompt/Parser/Analyzer/Runtime/Materiality/Grounding/Role Verifier/DeerFlow client
+  `180 passed`；E2E 与 internal-batch builder `39 passed`；相关 Ruff check 通过。
+
+## 2026-08-14 — Five degraded alerts fixed and rerun
+
+- `soc-analysis-v26` / `soc-analysis-json-parser-v23` 新增 vendor-neutral typed role-entity 目录：
+  canonical/extracted host、IP、process、account 等可作为角色实体；raw vendor key、端口、计数器、时间戳
+  和事件 ID 仍是普通证据。PingAn `computername -> canonical host` 继续只存在于 PingAn SIEM Adapter，
+  未写进通用 Runtime。
+- Parser 只做无安全语义的机械恢复：core/optional refs 必须来自冻结目录，保持原顺序去重并限制为 20；
+  缺失 scenario display name 时只可复用模型显式给出的 `scenario_key`；缺失 optional rationale 仍只能由
+  同一对象已有字段生成并计为 `repaired`，不能伪装为模型原生输出。
+- 对原 5 条降级 ID `1965891/1966442/1966874/1974304/1980288` 使用同一 PKL、GlobalAI Flash、thinking
+  off、verifier off、`default_tenant_id=pingan` 重跑：`5/5` success，`1 accepted + 4 repaired`，
+  `0 degraded / 0 fallback / 0 ReviewQueue`，`98/98 Grounded`。`1965891` 产出
+  `host=PBNJ-D0174` impacted asset；`1966442` 不再把端口当角色。
+- 5 条只有 1 个 optional rationale 被本地补齐并留痕。共 7 次 Provider 调用、163,075 reported tokens、
+  97,640 ms Runtime wall time；2 条仍消耗一次 bounded contract
+  correction，因此 section degradation 已闭合，但 first-pass 输出稳定性和成本仍需继续统计，不能宣称
+  模型输出已完全稳定。
+- 审阅产物：
+  `backend/.deer-flow/soc-validation/materiality-v4-alias-five-final-20260814-r9/QUALITY-REPORT.md`。
+- 验证：Parser 单测 `74 passed`；Parser/Analyzer/Reference Catalog/PingAn Message/Runtime 组合回归
+  `173 passed`；相关 Ruff check 通过。
+
+## 2026-08-14 — Frozen 20-alert live structural evaluation
+
+- 从统一 `full_alert_validation_corpus.pkl` 的 212 条完整语料中按冻结 ID 直接选取 20 条，覆盖
+  NDR 6、EDR 5、NIDS 3、SIEM 2、HIDS 2、Threat Intel 2；没有继续使用分散 legacy JSON。
+  本轮使用 `globalai-deepseek-v4-flash-0731`、thinking off、verifier off、单 worker、无持久化、
+  无 MCP/Memory/Automation，并保留源文件和结果 SHA-256。
+- Live 结果为 `20/20` Runtime success、`20/20` core/decision usable、`3 accepted + 12 repaired +
+  5 section-degraded`、`0 deterministic fallback`、`238 grounded / 0 rejected`、`0 ReviewQueue`。
+  18 条结论为 suspicious、2 条为 true_positive；该分布没有独立人工真值，不能作为准确率。
+- 20 条共 21 次 Provider 调用，仅 `1974304` 使用一次 bounded output repair；总计 610,438 个
+  provider-reported tokens。E2E P50 为 11,843.975 ms，P95 为 150,085.029 ms，最大
+  169,836.212 ms；低 Token 样本同样出现超长尾，因此先记录 relay/provider 现象，不直接修改模型。
+- 五条局部降级均保住有效 verdict。`1965891` 的 PingAn Adapter 已生成 canonical host，但模型选择
+  raw parsed `computername` 作为 `entity_ref`；通用 Parser 正确拒绝 vendor alias，缺口在于 Prompt/
+  contract 尚未把角色引用限制到 Runtime-owned typed entity allowlist。`1966442` 的端口角色候选同样
+  被正确拒绝；其余三条验证了 item/section 隔离。所有 attacker/victim/impacted-asset 精确目标因缺少 `resolved_from_evidence` 角色而被
+  capability guard 阻断，这不影响当前结论展示，但阻断依赖这些语义目标的自动动作。
+- 审阅产物位于
+  `backend/.deer-flow/soc-validation/materiality-v4-alias-twenty-20260814-r1/QUALITY-REPORT.md` 和
+  `quality-summary.json`。评测结论是 `Accept with conditions`：先收紧 typed entity reference contract，
+  再设计实体证据确认与语义角色裁决分离的 governed target-authority 契约，不能把 tentative 角色直接升级。
+
+## 2026-08-14 — Request-local aliases and effective five-alert smoke
+
+- 主模型协议升级为 `soc.analysis_model_output.v4`、Prompt `soc-analysis-v25`、Parser
+  `soc-analysis-json-parser-v22`、core repair Prompt `soc-analysis-output-repair-v7`。模型可见目录使用
+  `E-001`、`S/A/M/C/T-001` 等请求内短别名；Runtime 在 schema validation 前通过冻结的一一映射恢复
+  稳定 hash ID。持久化、Grounding 和 replay 仍只认稳定 ID，精确 alias hydration 不算 repair，未知
+  alias 不做相似匹配。
+- 可选区块新增严格本地恢复：十进制 confidence 字符串规范化；只保留 exact catalog-backed 引用；
+  rationale 只能由同一对象的显式字段生成；role entity 只有在 cited typed facts 收敛到一个唯一值时
+  才补全。通用 event/alert/finding ID 不可成为 attacker/victim，多个实体候选绝不猜测。
+- Pipeline 更新为 verifier-free `soc-runtime-v7`、verifier-configured `soc-runtime-v8`；历史产物不回写。
+- 最终有效 5 条代表样本覆盖 NDR、反弹 Shell、SIEM、NIDS、EDR，均使用
+  `globalai-deepseek-v4-flash-0731`、thinking off、verifier off：`5/5` Runtime success，`1 accepted +
+  4 repaired`，`0 degraded / 0 fallback / 0 ReviewQueue / 0 Grounding reject`。共 5 次主模型调用、0 次
+  output-repair 调用、130,322 provider-reported tokens、66,089.272 ms 累计 E2E。汇总见
+  `backend/.deer-flow/soc-validation/materiality-v4-alias-effective-five-20260814/summary.json`。
+- 该结果只证明紧凑契约、引用恢复、局部隔离、Grounding/Materiality/Decision 串联可用；没有独立人工
+  真值，因此不证明 verdict、场景或角色准确率，也没有覆盖 verifier、持久化、MCP、Kafka 或外部动作。
+- 最终代码验证：LLM parser/prompt/analyzer、Runtime、Materiality、Decision、Grounding、Automation 和
+  Role Verifier 组合回归 `175 passed`；根目录 E2E builder `17 passed`；全量 `backend/soc_agent` 与 E2E
+  validation Ruff check/format check 通过，`git diff --check` 通过。该回归不发起模型或外部动作调用。
+
+## 2026-08-14 — Compact model output and materiality-scoped degradation
+
+- 主模型协议升级为 `soc.analysis_model_output.v2`、Prompt `soc-analysis-v23`、Parser
+  `soc-analysis-json-parser-v20`。模型只负责最小可用结论和 exact catalog IDs；Runtime 补全 `E-*`
+  path/value 与稳定核心推理 `R-00`，不再要求模型机械复制整份 `AnalysisResult.v4`。
+- reasoning/scenario/direction/role/guidance 改为可选且独立验收。省略表示 `not_assessed`，不算错误；
+  返回但损坏时按 item/section 本地隔离，保留有效 core，且不再为可选区块触发第二次 Provider 调用。
+  只有 core 无效时才允许一次受限修复，仍失败才进入 deterministic fallback。
+- Runtime 新增固定 `analysis_materiality` 步骤和 `AnalysisMaterialityReport.v1`，位于 Grounding/可选
+  verifier 之后、Decision 之前。它把问题分为 `none / action_only / decision_review`，并分别控制
+  scenario routing、network direction、source/destination/attacker/victim/impacted-asset/user targeting
+  和 response action。
+- `SocDecisionPolicy.v7` 不再因任意 degraded section、普通 conflict、Grounding warning 或 verifier
+  unresolved/unavailable 抹掉有效 verdict。critical unresolved fact conflict、decision core 引用失败、
+  challenged verifier、明确 uncertain verdict 和 fallback 仍 fail closed；所有 decision-level conflict
+  同时阻断 response action，不能被自动化 review override 绕过。
+- Grounding v3 只验证 E/R/context reference integrity，不再用关键词重新判断模型对“攻击成功”等安全
+  语义的解释。Automation 只从已接受 `resolved_from_evidence` typed role 派生语义目标，并再次检查
+  materiality capability guard；Lead Agent context、audit 和固定 cohort 报告均显示该 lineage。
+- Pipeline 版本升级：无 verifier 为 `soc-runtime-v3`，配置 verifier 为 `soc-runtime-v4`；历史产物不
+  回写版本。
+- 已用真实 LLM 重跑反弹 Shell 样本 `2025642`，产物位于
+  `backend/.deer-flow/soc-validation/materiality-v1-live-20260814-r1/`。本次使用
+  `globalai-deepseek-v4-flash-0731`、thinking disabled、role verifier disabled：主模型只调用 1 次，
+  未触发 output retry，34,145 tokens，Runtime 35.191 秒；13/13 evidence 全部 Grounded，core/decision
+  均 usable，结论为 `suspicious`，没有创建强制 ReviewQueue。`analysis_output_quality=repaired` 只记录
+  Runtime 根据显式 `C-*` 引用机械补齐 reasoning basis，没有语义修复、额外模型调用或 degraded section。
+- 与旧 `soc.analysis_model_output.v1` 同一样本基线相比：旧版调用 2 次、53,351 tokens，仍因大对象契约
+  失败而整单 deterministic fallback 为 `unknown + needs_review`；新版调用 1 次、34,145 tokens，并保住
+  可用 verdict。该对比只证明新恢复边界在本样本生效，不代表模型准确率；总体质量必须由固定 20 条
+  cohort 与独立人工真值继续测量。
+
+## 2026-08-14 — Role Verifier atomic direction and PingAn GeoIP boundary
+
+- 复合方向 Claim 已拆为最多四个稳定原子项：`RC-ND-01=observed_flow`、
+  `RC-ND-02=boundary_direction`、`RC-ND-03=semantic_direction`、
+  `RC-ND-04=connection_initiator`。attacker/victim 仍为 `RC-R-*`；一次触发仍只是一轮逻辑复核，
+  不按 Claim 数重复调用模型。
+- Role Verifier 升级到 Prompt v4 / Candidate v2 / Parser v2。第二轮只接收与 Claim、核心角色和类型化
+  网络上下文相关的冻结目录子集，不再看到整个 evidence/context catalog、raw vendor payload、第一轮
+  rationale 或 confidence。支持与反驳分别引用 `supporting_*` / `contradicting_*`；匹配当前实体的
+  `C-* network_scope` 可以反驳错误 boundary，但仍不能证明攻击角色、结论或动作权限。Runtime 从
+  `network_scope_membership=organization_controlled` 生成窄 `runtime_constraints`；若两个 canonical 端点
+  都有类型化归属，模型状态与推理不一致时 Parser 以 `typed_network_scope_boundary_conflict` 拒绝，唯一
+  一次 correction 也只能读取相同窄目录和约束。
+- PingAn NDR/APT 的 `sip_addr/dip_addr/attack_addr` GeoIP/address-location enrichment 保留在原始和
+  parsed 审计数据中，但显式 `participates_in_reasoning=false`，不会进入主模型或 verifier 的 `E-*`
+  目录。`pingan.network_direction@1.3.0` 新增运营确认的 `30/8` GeoIP 误标 caveat；“美国/蒙大拿州”等
+  富化不能覆盖已审核组织归属。
+- 聚焦/组件与架构验证共 `160 passed`。真实 `2025642` 新主分析产物位于
+  `backend/.deer-flow/soc-validation/role-verifier-v4-20260814/`：GeoIP 不再进入 `E-*`，主分析直接得到
+  `internal_to_internal`，但该次 role section 因既有 coherence 约束被隔离，故 gate 未调用 Pro。随后用
+  历史冻结的错误 `external_to_external` 第一轮结果独立验证 v4：`RC-ND-02=challenged` 并给出
+  `internal_to_internal`，其他 5 项均 supported；Pro 共 2 次调用（首轮 schema 错误后一次受限修复），
+  总耗时 47.1 秒、18,902 tokens。精简结果见同目录
+  `frozen-wrong-boundary-verifier-summary.json`。该结果证明本样本契约闭环，不代表总体准确率。
 
 ## 2026-08-14 — GlobalAI model and reasoning lineage hardened
 
@@ -66,7 +260,7 @@
   中偶然出现相同字符串不会触发。组内 OR、非空组间 AND，账号 pattern 在 Profile 加载时校验并在
   canonical account 上 full-match。
 - PingAn Profile 拆为 network/direction、platform context、internal systems 三份并统一注入。
-  `network_direction@1.2.0` 纳入运营确认的 `26/8`、`29/8`、真实自用 `172/8`、办公 `/16`，同时声明
+  当时的 `network_direction@1.2.0` 纳入运营确认的 `26/8`、`29/8`、真实自用 `172/8`、办公 `/16`，同时声明
   `*.pingan.com.cn`/`*.pingan.com` 不能证明内网方向。
 - HIDS Profile 明确 topic 不是 `dev/stg/prd` 环境真值；内部系统 Profile 只识别 CTX、HappyPA、PaMail、
   AskBob、IOBS、CodePilot、data-manager、Palo、ubiops 和账号格式，不产生 benign/ignore/action authority。
@@ -861,7 +1055,8 @@
 - 聚焦 contract/service/SQL/CLI/migration 回归 `9 passed`。真实 analyst correction / external disposition
   reason 仍须由 server-owned classifier 生成目标 Skill/scenario/failure facet；原始 free-text 不自动进入本
   backlog，该接线保留为 Real Integration Debt。
-- 当前产品指针进入 `PI-04B`；`PI-03D/E` 仍按数据门槛 Deferred，不插入薄 Web 切片。
+- 当时产品指针进入 `PI-04B`，`PI-03D/E` 仍按数据门槛 Deferred；后续 `PI-03D` 已由独立 PingAn
+  software-path tenant policy 方案取代，当前状态以本文件顶部台账和 `delivery-roadmap.md` 为准。
 
 ## 2026-08-05 — PI-03B composed simulation quality gate completed
 
@@ -1509,9 +1704,11 @@
 | 11.10 | Sample review campaign inbox | EV-03 Done | 新增 derived reviewer inbox、latest-outcome batch query、Gateway read API 和 Web `抽样复核` view；selected work 回到 EV-02 capture form | manifest 仍是唯一抽样真相；禁止挑样、第二写入口和 mutable campaign table；`auto_close_allowed=false` |
 | W1 | Real dev/staging CMDB/EDR MCP replacement | Waiting | 等 endpoint/凭证后替换本地 fixture，运行 `soc mcp tools/smoke` 并保存 report | 评估 latency、failure、payload/result size、字段裁剪和敏感信息风险 |
 | D1 | [Wiki/OKF export projection](../archive/ai_soc/deferred/wiki-okf-memory-projection.md) | Deferred | DB memory store、retrieval、review workflow 稳定后，再做 DB -> wiki/OKF export | PostgreSQL 仍是 source of truth；wiki 反向修改只能生成 proposal |
-| D2 | Prometheus / operations overview | Partial | normalization 运维页、Gateway bounded metrics 和 Kafka JSONL issue 摘要已完成；全局 Kafka/review/approval/runtime/算力 Prometheus exporter 和态势面板仍后置 | 当前 maintenance issue 可见；全系统运行态势不阻塞 SOC Agent Alpha |
+| D2 | [Production telemetry / Prometheus / SLO](../archive/ai_soc/deferred/production-observability-and-slo.md) | Deferred / real-telemetry-dependent | PI-04A Snapshot CLI/API 与 PI-04B 薄 Web 已完成；仅真实 Kafka/Runtime/LLM/Provider/算力 telemetry、Prometheus、SLO 和告警治理仍后置 | 不重做 Operations Web；真实 baseline、低基数指标、owner 和 runbook 到位后再排期 |
 | D3 | High-risk real execute | Deferred | 等真实 staging adapter、审批策略、补偿和 adapter audit 成熟后再打开 | 生产 execute 前必须有 approval、dry-run、idempotency、回滚/补偿策略 |
 | D4 | [Adaptive normalization/parser evolution](../archive/ai_soc/deferred/adaptive-normalization-parser-evolution.md) | Deferred / production-data-dependent | 按真实 drift cohort 离线生成 parser/mapping/test 候选并治理发布 | 当前 deterministic parser/monitoring 已工作；不得逐告警调用 LLM 或自动改 Runtime |
+| D5 | [Native Agent Tool Call + trusted target binding](../archive/ai_soc/deferred/native-agent-tool-call-and-target-binding.md) | Deferred / architecture hardening | 用 DeerFlow native structured tool 替换 Lead Agent 自定义 marker，并用 frozen-context typed refs 解析动作目标 | 当前 policy/approval 继续有效；在可信目标绑定完成前，不得仅凭模型自由 payload 开放无人值守高风险执行 |
+| D6 | [Kafka worker pool / concurrency](../archive/ai_soc/deferred/kafka-worker-pool-concurrency-plan.md) | Deferred / production-metrics-dependent | commit tracker、worker result 和串行 runner 已完成；真实吞吐证明需要后再实现 bounded controller | poll/commit 仍归 controller；partition 顺序、背压、优雅退出和 LLM/DB 独立限流必须同时验收 |
 
 ## Phase 1 切片计划
 
@@ -4080,7 +4277,8 @@
     - `mcp-adapter-bridge-plan.md`
   - 将当前暂缓项移到 `.notes/archive/ai_soc/deferred/`：
     - `kafka-worker-pool-concurrency-plan.md`
-    - `operations-overview-deferred.md`
+    - `operations-overview-deferred.md`（历史文件；完成 `PI-04A/B` 后，剩余生产遥测债务已迁至
+      `production-observability-and-slo.md`）
   - 将已被主方案/工程契约吸收的背景参考移到 `.notes/archive/ai_soc/reference/`：
     - `normalization-drift-strategy.md`
     - `zeus-alert-flow-and-field-trust.md`

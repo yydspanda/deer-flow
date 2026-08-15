@@ -84,9 +84,10 @@ BASE_RUNTIME_STEPS_BEFORE_DECISION = (
     "analyze_llm",
     "schema_validate",
     "evidence_grounding",
+    "analysis_materiality",
 )
 EXPECTED_RUNTIME_STEPS = (*BASE_RUNTIME_STEPS_BEFORE_DECISION, "decide")
-ROLE_VERIFIER_PIPELINE_VERSION = "soc-runtime-v2"
+ROLE_VERIFIER_PIPELINE_VERSION = "soc-runtime-v8"
 DEFAULT_ROLE_VERIFIER_MINIMUM_CONFIDENCE = 0.35
 
 
@@ -416,6 +417,9 @@ def build_dossier(
     analysis_output_quality_items = [
         _mapping(item.get("analysis_output_quality")) for item in case_results
     ]
+    analysis_materiality_items = [
+        _mapping(item.get("analysis_materiality")) for item in case_results
+    ]
     analysis_output_quality_statuses = Counter(
         str(item.get("status") or "missing") for item in analysis_output_quality_items
     )
@@ -423,6 +427,11 @@ def build_dossier(
         str(section)
         for item in analysis_output_quality_items
         for section in item.get("degraded_sections") or []
+    )
+    blocked_capabilities = Counter(
+        str(capability)
+        for item in analysis_materiality_items
+        for capability in item.get("blocked_capabilities") or []
     )
     model_call_items = [_mapping(item.get("model_calls")) for item in case_results]
     reasoning_provenance = _reasoning_provenance_summary(model_call_items)
@@ -526,6 +535,20 @@ def build_dossier(
             ),
             "analysis_output_degraded_section_counts": dict(
                 sorted(degraded_output_sections.items())
+            ),
+            "analysis_materiality_recorded_count": sum(
+                bool(item) for item in analysis_materiality_items
+            ),
+            "analysis_materiality_decision_unusable_count": sum(
+                item.get("decision_usable") is False
+                for item in analysis_materiality_items
+            ),
+            "analysis_materiality_review_required_count": sum(
+                item.get("review_required") is True
+                for item in analysis_materiality_items
+            ),
+            "analysis_materiality_blocked_capability_counts": dict(
+                sorted(blocked_capabilities.items())
             ),
             "verdict_counts": dict(sorted(verdicts.items())),
             "source_type_counts": dict(sorted(source_types.items())),
@@ -898,6 +921,7 @@ def _build_case_dossier(
     request = _mapping(run_payload.get("llm_analysis_request"))
     analysis = _mapping(run_payload.get("analysis"))
     grounding = _mapping(run_payload.get("analysis_evidence_grounding"))
+    analysis_materiality = _mapping(run_payload.get("analysis_materiality"))
     decision = _mapping(run_payload.get("decision"))
     analysis_output_quality = _mapping(run_payload.get("analysis_output_quality"))
     normalization = _mapping(run_payload.get("normalization_report"))
@@ -998,6 +1022,7 @@ def _build_case_dossier(
             > 0
         ),
         "analysis_output_quality_recorded": bool(analysis_output_quality),
+        "analysis_materiality_recorded": bool(analysis_materiality),
         "role_verifier_configuration_matches": (
             bool(role_verification.get("configured")) == role_verifier_enabled
         ),
@@ -1123,6 +1148,7 @@ def _build_case_dossier(
         "ungrounded_evidence_count": grounding.get("ungrounded_count"),
         "role_verification": role_verification,
         "analysis_output_quality": analysis_output_quality,
+        "analysis_materiality": analysis_materiality,
         "tenant_policy": _policy_conclusion(policy_payloads),
         "investigation": {
             "result_mode": investigation_report.get("required_result_mode"),
@@ -1186,6 +1212,7 @@ def _build_case_dossier(
             "verification": run_payload.get("role_adjudication_verification"),
         },
         "07-evidence-grounding.json": grounding,
+        "07a-analysis-materiality.json": analysis_materiality,
         "08-decision.json": decision,
         "09-investigation.json": {
             "workflow": record.get("investigation_workflow"),
@@ -1274,6 +1301,19 @@ def _build_case_dossier(
         },
         "role_verification": role_verification,
         "analysis_output_quality": analysis_output_quality,
+        "analysis_materiality": {
+            "core_usable": analysis_materiality.get("core_usable"),
+            "decision_usable": analysis_materiality.get("decision_usable"),
+            "review_required": analysis_materiality.get("review_required"),
+            "review_reasons": analysis_materiality.get("review_reasons") or [],
+            "blocked_capabilities": [
+                item.get("capability")
+                for item in analysis_materiality.get("capability_guards") or []
+                if _mapping(item).get("allowed") is False
+            ],
+            "conflict_dispositions": analysis_materiality.get("conflict_dispositions")
+            or [],
+        },
         "evidence_compaction": evidence_compaction,
         "model_calls": model_calls,
         "timing": timing,
@@ -1498,10 +1538,13 @@ def _runtime_step_sequence_complete(
 ) -> bool:
     if not role_verifier_enabled:
         return tuple(step_names) == EXPECTED_RUNTIME_STEPS
-    verifier_steps = [*BASE_RUNTIME_STEPS_BEFORE_DECISION, "role_verification_gate"]
+    verifier_steps = [
+        *BASE_RUNTIME_STEPS_BEFORE_DECISION[:-1],
+        "role_verification_gate",
+    ]
     if triggered:
         verifier_steps.append("verify_roles_llm")
-    verifier_steps.append("decide")
+    verifier_steps.extend(["analysis_materiality", "decide"])
     return tuple(step_names) == tuple(verifier_steps)
 
 

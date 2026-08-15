@@ -121,6 +121,10 @@ class RoleVerificationClaimReview(BaseModel):
     status: RoleVerificationClaimStatus
     supporting_evidence_refs: list[str] = Field(default_factory=list, max_length=20)
     contradicting_evidence_refs: list[str] = Field(default_factory=list, max_length=20)
+    supporting_context_refs: list[str] = Field(default_factory=list, max_length=20)
+    contradicting_context_refs: list[str] = Field(default_factory=list, max_length=20)
+    # Retained only so persisted v1 artifacts remain readable. New model output
+    # uses the polarity-specific context reference fields above.
     context_refs: list[str] = Field(default_factory=list, max_length=20)
     alternative: RoleVerificationAlternative | None = None
     rationale: str = Field(min_length=1, max_length=3000)
@@ -132,6 +136,8 @@ class RoleVerificationClaimReview(BaseModel):
         reference_groups = (
             (self.supporting_evidence_refs, r"E-[A-F0-9]{12}", "supporting evidence"),
             (self.contradicting_evidence_refs, r"E-[A-F0-9]{12}", "contradicting evidence"),
+            (self.supporting_context_refs, r"(?:S|A|M|C|T)-[A-F0-9]{12}", "supporting context"),
+            (self.contradicting_context_refs, r"(?:S|A|M|C|T)-[A-F0-9]{12}", "contradicting context"),
             (self.context_refs, r"(?:S|A|M|C|T)-[A-F0-9]{12}", "context"),
         )
         for values, pattern, label in reference_groups:
@@ -141,10 +147,12 @@ class RoleVerificationClaimReview(BaseModel):
                 raise ValueError(f"role verification {label} references are invalid")
         if set(self.supporting_evidence_refs) & set(self.contradicting_evidence_refs):
             raise ValueError("one E-* fact cannot be both supporting and contradicting for the same claim")
-        if self.status is RoleVerificationClaimStatus.SUPPORTED and not self.supporting_evidence_refs:
-            raise ValueError("supported role verification claim requires supporting evidence")
-        if self.status is RoleVerificationClaimStatus.CHALLENGED and not self.contradicting_evidence_refs:
-            raise ValueError("challenged role verification claim requires contradicting evidence")
+        if set(self.supporting_context_refs) & set(self.contradicting_context_refs):
+            raise ValueError("one context item cannot be both supporting and contradicting for the same claim")
+        if self.status is RoleVerificationClaimStatus.SUPPORTED and not (self.supporting_evidence_refs or self.supporting_context_refs):
+            raise ValueError("supported role verification claim requires supporting evidence or governed context")
+        if self.status is RoleVerificationClaimStatus.CHALLENGED and not (self.contradicting_evidence_refs or self.contradicting_context_refs):
+            raise ValueError("challenged role verification claim requires contradicting evidence or governed context")
         if self.status is RoleVerificationClaimStatus.UNRESOLVED and not self.evidence_gaps:
             raise ValueError("unresolved role verification claim requires an evidence gap")
         if self.status is RoleVerificationClaimStatus.SUPPORTED and self.alternative is not None:
@@ -157,7 +165,10 @@ class RoleVerificationCandidate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["soc.role_verification_candidate.v1"] = "soc.role_verification_candidate.v1"
+    schema_version: Literal[
+        "soc.role_verification_candidate.v1",
+        "soc.role_verification_candidate.v2",
+    ] = "soc.role_verification_candidate.v2"
     claim_reviews: list[RoleVerificationClaimReview] = Field(min_length=1, max_length=80)
 
     @field_validator("claim_reviews")
@@ -174,7 +185,10 @@ class RoleAdjudicationVerificationResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["soc.role_adjudication_verification.v1"] = "soc.role_adjudication_verification.v1"
+    schema_version: Literal[
+        "soc.role_adjudication_verification.v1",
+        "soc.role_adjudication_verification.v2",
+    ] = "soc.role_adjudication_verification.v2"
     status: RoleVerificationStatus
     trigger: RoleVerificationTriggerDecision
     claims: list[RoleVerificationClaim] = Field(min_length=1, max_length=80)

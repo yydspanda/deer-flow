@@ -68,6 +68,8 @@ _PROJECTION_MAX_STRING_CHARS = 4000
 _PROJECTION_MAX_DEPTH = 16
 _MAX_PROJECTED_PROVENANCE_ITEMS = 40
 _MAX_PROJECTED_ROLE_CLAIMS = 40
+_MAX_PROJECTED_ROLE_ENTITIES = 50
+_MAX_MODEL_REFERENCE_ITEMS = 100
 _HIGH_VALUE_EVIDENCE_KEYS = frozenset(
     {
         "access_time",
@@ -288,6 +290,7 @@ def project_analysis_context(request: LLMAnalysisRequest) -> dict[str, Any]:
                 }
                 for item in request.evidence_catalog
             ],
+            "role_entities": _project_role_entities(request),
             "reasoning_context": [
                 {
                     "context_ref": item.context_ref,
@@ -304,6 +307,36 @@ def project_analysis_context(request: LLMAnalysisRequest) -> dict[str, Any]:
     if not isinstance(bounded, dict):
         raise TypeError("analysis context projection must remain an object")
     return bounded
+
+
+def _project_role_entities(request: LLMAnalysisRequest) -> list[dict[str, Any]]:
+    """Expose one preferred E-* reference per Runtime-typed entity value."""
+
+    projected: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in request.evidence_catalog[:_MAX_MODEL_REFERENCE_ITEMS]:
+        if item.entity_type is None:
+            continue
+        key = (
+            item.entity_type.value,
+            item.value_type,
+            json.dumps(item.value, ensure_ascii=False, sort_keys=True),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        projected.append(
+            {
+                "evidence_ref": item.evidence_ref,
+                "entity_type": item.entity_type.value,
+                "value": item.value,
+                "source_path": item.source_path,
+                "trust_level": item.trust_level.value,
+            }
+        )
+        if len(projected) >= _MAX_PROJECTED_ROLE_ENTITIES:
+            break
+    return projected
 
 
 def _analysis_coverage_context(request: LLMAnalysisRequest) -> dict[str, Any]:

@@ -14,50 +14,13 @@ from soc_agent.contracts import (
     AnalysisReasoningBasis,
     AnalysisReasoningGroundingItem,
     AnalysisResult,
-    EvidenceTrustLevel,
     LLMAnalysisRequest,
-    TriageActivityStage,
 )
-from soc_agent.pipeline.analysis_context import project_analysis_context
 
 _ENCODED_OMISSION_MARKER_RE = re.compile(
     r"<ENCODED:[a-z0-9_]+:\d+:sha256=[a-f0-9]{12}:OMITTED>",
     re.IGNORECASE,
 )
-_OUTCOME_CLAIM_RE = re.compile(
-    r"(?:攻击成功|利用成功|成功利用|写入成功|执行成功|已写入|已执行|已入侵|已攻陷|"
-    r"successful(?:ly)?\s+(?:exploit|execut|writ)|confirmed\s+compromise|command\s+executed|file\s+(?:was\s+)?written)",
-    re.IGNORECASE,
-)
-_OUTCOME_NEGATION_TERMS = (
-    "未",
-    "无",
-    "无法",
-    "不能",
-    "是否",
-    "尚未",
-    "没有",
-    "缺少",
-    "缺乏",
-    "不",
-)
-_OUTCOME_ARTIFACT_KEYS = frozenset(
-    {
-        "command_output",
-        "created_file",
-        "execution_result",
-        "file_created",
-        "authentication_result",
-        "callback_observed",
-        "login_result",
-        "persistence_result",
-        "process_id",
-        "shell_output",
-        "write_result",
-    }
-)
-_PROVIDER_OUTCOME_SEMANTIC_TYPE = "provider_detection_outcome_assertion"
-
 _CONTEXT_KIND_BASIS = {
     AnalysisContextReferenceKind.SKILL: AnalysisReasoningBasis.SKILL,
     AnalysisContextReferenceKind.ADAPTER_CONTRACT: AnalysisReasoningBasis.ADAPTER_CONTRACT,
@@ -102,8 +65,6 @@ def ground_analysis_evidence(
         warnings.append(f"{ungrounded_count} analyzer evidence item(s) failed E-* catalog validation")
     if reasoning_ungrounded_count:
         warnings.append(f"{reasoning_ungrounded_count} analyzer reasoning item(s) contain unresolved references")
-    if _has_unproven_outcome_claim(analysis, request):
-        warnings.append("analysis contains an outcome-success claim without an explicit bounded outcome artifact")
     return AnalysisEvidenceGroundingReport(
         total_count=len(items),
         grounded_count=grounded_count,
@@ -205,66 +166,6 @@ def _ground_reasoning_item(
         context_refs=reasoning.context_refs,
         reason=("all reasoning references resolve; inference semantics remain model reasoning, not a literal current-alert fact"),
     )
-
-
-def _has_unproven_outcome_claim(
-    analysis: AnalysisResult,
-    request: LLMAnalysisRequest,
-) -> bool:
-    analysis_text = " ".join(
-        [
-            analysis.summary,
-            analysis.reason,
-            analysis.recommended_action,
-            *(item.statement for item in analysis.reasoning),
-            *(item.rationale for item in analysis.scenario_assessments),
-            *(explanation for item in analysis.scenario_assessments for explanation in item.competing_explanations),
-        ]
-    )
-    claims_confirmed_impact = any(item.activity_stage is TriageActivityStage.IMPACT_CONFIRMED for item in analysis.scenario_assessments)
-    if not claims_confirmed_impact and not _contains_positive_outcome_claim(analysis_text):
-        return False
-    context = project_analysis_context(request)
-    keys = _mapping_keys(context)
-    return not (bool(keys & _OUTCOME_ARTIFACT_KEYS) or _has_bounded_provider_outcome_assertion(request))
-
-
-def _has_bounded_provider_outcome_assertion(
-    request: LLMAnalysisRequest,
-) -> bool:
-    if any(item.semantic_type == _PROVIDER_OUTCOME_SEMANTIC_TYPE and item.trust_level is EvidenceTrustLevel.HIGH for item in request.evidence_highlights):
-        return True
-    evidence_items = [item for item in (request.primary_evidence, *request.supplementary_evidence) if item is not None and item.trust_level is EvidenceTrustLevel.HIGH]
-    for semantic in request.source_field_semantics:
-        if semantic.semantic_type != _PROVIDER_OUTCOME_SEMANTIC_TYPE or not semantic.participates_in_reasoning:
-            continue
-        for evidence in evidence_items:
-            if semantic.field_path in evidence.projected_field_paths and semantic.field_path not in evidence.omitted_field_paths:
-                return True
-    return False
-
-
-def _contains_positive_outcome_claim(value: str) -> bool:
-    for match in _OUTCOME_CLAIM_RE.finditer(value):
-        prefix = value[max(0, match.start() - 12) : match.start()]
-        if any(term in prefix for term in _OUTCOME_NEGATION_TERMS):
-            continue
-        return True
-    return False
-
-
-def _mapping_keys(value: Any) -> set[str]:
-    if isinstance(value, Mapping):
-        keys = {str(key).lower() for key in value}
-        for item in value.values():
-            keys.update(_mapping_keys(item))
-        return keys
-    if isinstance(value, list):
-        keys: set[str] = set()
-        for item in value:
-            keys.update(_mapping_keys(item))
-        return keys
-    return set()
 
 
 def _same_scalar(left: Any, right: Any) -> bool:

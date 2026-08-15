@@ -107,6 +107,7 @@ class BatchExecutionConfig:
     fail_fast: bool
     checkpoint_every: int
     thinking_enabled: bool = False
+    json_mode_enabled: bool = False
     role_verifier_enabled: bool = False
     role_verifier_model_name: str | None = None
     default_tenant_id: str | None = None
@@ -495,6 +496,7 @@ def _analyze_item(
             "analyzer_mode": config.analyzer_mode,
             "requested_model_name": config.model_name,
             "thinking_enabled_requested": config.thinking_enabled,
+            "json_mode_enabled_requested": config.json_mode_enabled,
             "role_verifier_enabled": config.role_verifier_enabled,
             "role_verifier_model_name": config.role_verifier_model_name,
             "persisted": config.persist,
@@ -540,6 +542,7 @@ def _analyze_item(
             "analyzer_mode": config.analyzer_mode,
             "requested_model_name": config.model_name,
             "thinking_enabled_requested": config.thinking_enabled,
+            "json_mode_enabled_requested": config.json_mode_enabled,
             "role_verifier_enabled": config.role_verifier_enabled,
             "role_verifier_model_name": config.role_verifier_model_name,
             "persisted": config.persist,
@@ -846,6 +849,7 @@ def _build_manifest(
             "analyzer_mode": config.analyzer_mode,
             "model_name": config.model_name,
             "thinking_enabled_requested": config.thinking_enabled,
+            "json_mode_enabled_requested": config.json_mode_enabled,
             "role_verifier_enabled": config.role_verifier_enabled,
             "role_verifier_model_name": config.role_verifier_model_name,
             "sensitive_evidence_mode": config.sensitive_evidence_mode,
@@ -1202,6 +1206,10 @@ def _validate_resume(
             execution.get("thinking_enabled_requested", False),
             config.thinking_enabled,
         ),
+        "execution.json_mode_enabled_requested": (
+            execution.get("json_mode_enabled_requested", False),
+            config.json_mode_enabled,
+        ),
         "execution.role_verifier_enabled": (
             execution.get("role_verifier_enabled", False),
             config.role_verifier_enabled,
@@ -1461,6 +1469,7 @@ def _plan_payload(
             "analyzer_mode": settings.mode.value,
             "model_name": settings.model_name,
             "thinking_enabled_requested": settings.thinking_enabled,
+            "json_mode_enabled_requested": settings.json_mode_enabled,
             "role_verifier_enabled": settings.role_verifier_enabled,
             "role_verifier_model_name": settings.role_verifier_model_name,
             "estimated_model_call_count": len(items)
@@ -1902,6 +1911,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 fail_fast=args.fail_fast,
                 checkpoint_every=args.checkpoint_every,
                 thinking_enabled=settings.thinking_enabled,
+                json_mode_enabled=settings.json_mode_enabled,
                 role_verifier_enabled=settings.role_verifier_enabled,
                 role_verifier_model_name=settings.role_verifier_model_name,
                 default_tenant_id=default_tenant_id,

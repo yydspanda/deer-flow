@@ -11,6 +11,7 @@ from soc_agent.contracts import (
     AlertInput,
     AlertSummary,
     AnalysisEvidenceGroundingReport,
+    AnalysisMaterialityReport,
     AnalysisNodeOutput,
     AnalysisOutputQuality,
     AnalysisProviderInvocation,
@@ -162,6 +163,7 @@ class DecisionPolicy(Protocol):
         analyzer_step_name: str,
         output_quality: AnalysisOutputQuality | None = None,
         role_verification: RoleAdjudicationVerificationResult | None = None,
+        materiality: AnalysisMaterialityReport | None = None,
     ) -> Decision: ...
 
 

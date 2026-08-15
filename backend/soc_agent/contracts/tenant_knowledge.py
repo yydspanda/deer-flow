@@ -101,6 +101,20 @@ class TenantKnowledgeFact(BaseModel):
     selector: TenantKnowledgeSelector
     source_ref: str = Field(min_length=1, max_length=512)
     priority: int = Field(default=100, ge=0, le=1000)
+    network_scope_membership: (
+        Literal[
+            "organization_controlled",
+            "organization_external",
+            "shared_or_ambiguous",
+        ]
+        | None
+    ) = None
+
+    @model_validator(mode="after")
+    def validate_network_scope_membership(self) -> TenantKnowledgeFact:
+        if (self.kind is TenantKnowledgeFactKind.NETWORK_SCOPE) != (self.network_scope_membership is not None):
+            raise ValueError("network_scope facts require network_scope_membership and other fact kinds forbid it")
+        return self
 
 
 class TenantKnowledgeProfile(BaseModel):

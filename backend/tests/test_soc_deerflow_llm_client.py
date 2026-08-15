@@ -33,9 +33,11 @@ SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
 class _FakeModel:
     def __init__(self) -> None:
         self.calls: list[tuple[list[dict[str, str]], dict[str, Any]]] = []
+        self.request_kwargs: list[dict[str, Any]] = []
 
-    def invoke(self, messages, *, config):
+    def invoke(self, messages, *, config, **kwargs):
         self.calls.append((messages, config))
+        self.request_kwargs.append(kwargs)
         return SimpleNamespace(
             content='{"verdict":"unknown"}',
             usage_metadata={"input_tokens": 11, "output_tokens": 7},
@@ -134,11 +136,29 @@ def test_deerflow_client_reuses_model_and_bounds_metadata() -> None:
     assert first.metadata["model_name"] == "provider-model-id"
     assert first.metadata["requested_model_name"] == "deepseek-v4-pro"
     assert first.metadata["thinking_enabled_requested"] is False
+    assert first.metadata["json_mode_requested"] is False
     assert first.metadata["usage_measurement"]["status"] == "reported"
     assert first.metadata["provider_duration_ms"] >= 0
     assert first.metadata["client_total_duration_ms"] >= 0
     assert "headers" not in first.metadata
     assert second.model_name == "provider-model-id"
+
+
+def test_deerflow_client_requests_json_mode_only_when_enabled() -> None:
+    model = _FakeModel()
+    client = DeerFlowLLMChatClient(
+        app_config=_FakeConfig("deepseek-v4-flash"),  # type: ignore[arg-type]
+        json_mode_enabled=True,
+        model_factory=lambda **_kwargs: model,
+    )
+
+    response = client.complete(
+        [{"role": "user", "content": "Return JSON"}],
+        model_name="deepseek-v4-flash",
+    )
+
+    assert model.request_kwargs == [{"response_format": {"type": "json_object"}}]
+    assert response.metadata["json_mode_requested"] is True
 
 
 def test_deerflow_client_estimates_missing_intranet_usage() -> None:
@@ -207,6 +227,7 @@ def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
             "SOC_ANALYZER_MODE": "llm",
             "SOC_LLM_MODEL": "deepseek-v4-pro",
             "SOC_LLM_THINKING_ENABLED": "false",
+            "SOC_LLM_JSON_MODE_ENABLED": "true",
             "SOC_LLM_ATTACH_TRACING": "true",
             "SOC_LLM_MAX_CONCURRENCY": "3",
             "SOC_LLM_REQUESTS_PER_MINUTE": "20",
@@ -222,6 +243,7 @@ def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
     )
     assert settings.mode is SocAnalyzerMode.LLM
     assert settings.model_name == "deepseek-v4-pro"
+    assert settings.json_mode_enabled is True
     assert settings.max_concurrency == 3
     assert settings.requests_per_minute == 20
     assert settings.admission_timeout_seconds == 0.25
@@ -246,6 +268,8 @@ def test_soc_llm_settings_are_explicit_and_validate_values() -> None:
         SocLLMSettings.from_env({"SOC_ANALYZER_MODE": "automatic"})
     with pytest.raises(ValueError, match="SOC_LLM_THINKING_ENABLED"):
         SocLLMSettings.from_env({"SOC_LLM_THINKING_ENABLED": "sometimes"})
+    with pytest.raises(ValueError, match="SOC_LLM_JSON_MODE_ENABLED"):
+        SocLLMSettings.from_env({"SOC_LLM_JSON_MODE_ENABLED": "sometimes"})
     with pytest.raises(ValueError, match="SOC_LLM_MAX_CONCURRENCY"):
         SocLLMSettings.from_env({"SOC_LLM_MAX_CONCURRENCY": "0"})
     with pytest.raises(ValueError, match="SOC_LLM_ADMISSION_TIMEOUT_SECONDS"):
@@ -364,7 +388,7 @@ def test_secret_free_status_lists_configured_models() -> None:
         app_config=config,  # type: ignore[arg-type]
     )
 
-    assert status["schema_version"] == "soc.llm_runtime_status.v2"
+    assert status["schema_version"] == "soc.llm_runtime_status.v3"
     assert status["resolved_model_name"] == "deepseek-v4-flash"
     assert status["configured_model_names"] == ["deepseek-v4-flash", "deepseek-v4-pro"]
     assert status["secrets_included"] is False
@@ -374,6 +398,7 @@ def test_secret_free_status_lists_configured_models() -> None:
     assert status["output_fallback_resolved_model_name"] == "deepseek-v4-pro"
     assert status["role_verifier_enabled"] is True
     assert status["role_verifier_resolved_model_name"] == "deepseek-v4-pro"
+    assert status["json_mode_enabled"] is False
     assert "api_key" not in status
 
 

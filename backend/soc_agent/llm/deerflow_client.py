@@ -39,6 +39,7 @@ class DeerFlowLLMChatClient:
         *,
         app_config: AppConfig,
         thinking_enabled: bool = False,
+        json_mode_enabled: bool = False,
         attach_tracing: bool = True,
         run_name: str = "soc_runtime_analysis",
         model_factory: Callable[..., BaseChatModel] = create_chat_model,
@@ -52,6 +53,7 @@ class DeerFlowLLMChatClient:
             raise ValueError("call_timeout_seconds must be a finite positive number")
         self._app_config = app_config
         self._thinking_enabled = thinking_enabled
+        self._json_mode_enabled = json_mode_enabled
         self._attach_tracing = attach_tracing
         self._run_name = run_name
         self._model_factory = model_factory
@@ -83,14 +85,19 @@ class DeerFlowLLMChatClient:
                 3,
             )
             provider_started = time.monotonic()
-            future = self._executor.submit(
-                model.invoke,
-                [dict(message) for message in messages],
-                config={
+            invoke_kwargs: dict[str, Any] = {
+                "config": {
                     "run_name": self._run_name,
                     "tags": ["soc-agent", "soc-runtime", "bounded-analysis"],
                     "metadata": {"soc_model_name": model_name},
-                },
+                }
+            }
+            if self._json_mode_enabled:
+                invoke_kwargs["response_format"] = {"type": "json_object"}
+            future = self._executor.submit(
+                model.invoke,
+                [dict(message) for message in messages],
+                **invoke_kwargs,
             )
             try:
                 response = future.result(timeout=self._call_timeout_seconds)
@@ -101,6 +108,7 @@ class DeerFlowLLMChatClient:
                     timeout_error,
                     requested_model_name=model_name,
                     thinking_enabled_requested=self._thinking_enabled,
+                    json_mode_requested=self._json_mode_enabled,
                     admission_wait_duration_ms=admission_wait_duration_ms,
                     provider_duration_ms=round(
                         (time.monotonic() - provider_started) * 1000,
@@ -117,6 +125,7 @@ class DeerFlowLLMChatClient:
                     exc,
                     requested_model_name=model_name,
                     thinking_enabled_requested=self._thinking_enabled,
+                    json_mode_requested=self._json_mode_enabled,
                     admission_wait_duration_ms=admission_wait_duration_ms,
                     provider_duration_ms=round(
                         (time.monotonic() - provider_started) * 1000,
@@ -144,6 +153,7 @@ class DeerFlowLLMChatClient:
             {
                 "requested_model_name": model_name,
                 "thinking_enabled_requested": self._thinking_enabled,
+                "json_mode_requested": self._json_mode_enabled,
                 "usage_measurement": usage_measurement,
                 "admission_wait_duration_ms": admission_wait_duration_ms,
                 "provider_duration_ms": provider_duration_ms,
@@ -244,6 +254,7 @@ def _attach_client_failure_timing(
     *,
     requested_model_name: str,
     thinking_enabled_requested: bool,
+    json_mode_requested: bool,
     admission_wait_duration_ms: float,
     provider_duration_ms: float,
     client_total_duration_ms: float,
@@ -256,6 +267,7 @@ def _attach_client_failure_timing(
         },
         "requested_model_name": requested_model_name,
         "thinking_enabled_requested": thinking_enabled_requested,
+        "json_mode_requested": json_mode_requested,
         "admission_wait_duration_ms": admission_wait_duration_ms,
         "provider_duration_ms": provider_duration_ms,
         "client_total_duration_ms": client_total_duration_ms,

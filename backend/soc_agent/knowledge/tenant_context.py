@@ -282,6 +282,18 @@ def _fact_context_item(
     }
     projection_hash = stable_hash(projection)
     match_summary = "; ".join(f"{key}={','.join(values)}" for key, values in sorted(matches.items()))
+    metadata = {
+        "profile_id": profile.profile_id,
+        "profile_version": profile.version,
+        "fact_id": fact.fact_id,
+        "fact_kind": fact.kind.value,
+        "source_ref": fact.source_ref,
+        "review_status": profile.review_status,
+        "matched_values": matches,
+        "decision_authority": "none",
+    }
+    if fact.network_scope_membership is not None:
+        metadata["network_scope_membership"] = fact.network_scope_membership
     return AnalysisContextCatalogItem(
         context_ref=f"C-{projection_hash[:12].upper()}",
         kind=AnalysisContextReferenceKind.GOVERNED_CONTEXT,
@@ -289,16 +301,7 @@ def _fact_context_item(
         source_id=f"{profile.profile_id}@{profile.version}:{fact.fact_id}",
         summary=f"{fact.statement}\nCurrent-alert match: {match_summary}"[:4000],
         content_hash=projection_hash,
-        metadata={
-            "profile_id": profile.profile_id,
-            "profile_version": profile.version,
-            "fact_id": fact.fact_id,
-            "fact_kind": fact.kind.value,
-            "source_ref": fact.source_ref,
-            "review_status": profile.review_status,
-            "matched_values": matches,
-            "decision_authority": "none",
-        },
+        metadata=metadata,
     )
 
 

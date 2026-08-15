@@ -101,6 +101,7 @@ def test_approved_scanner_returns_false_positive_candidate() -> None:
         "analyze_stub",
         "schema_validate",
         "evidence_grounding",
+        "analysis_materiality",
         "decide",
     ]
     assert all(step.status.value == "success" for step in run.steps)
@@ -139,7 +140,7 @@ def test_stub_does_not_emit_empty_command_line_evidence() -> None:
     assert run.analysis_evidence_grounding.ungrounded_count == 0
 
 
-def test_decision_policy_preserves_fact_conflict_guard() -> None:
+def test_warning_fact_conflict_is_scoped_to_dependent_capability() -> None:
     payload = _sample("pingan_legacy_apt.json")
     raw_event = payload["alert"]["hitLog"][0]["zeusRawLogs"][0]
     raw_event.pop("sip", None)
@@ -151,9 +152,13 @@ def test_decision_policy_preserves_fact_conflict_guard() -> None:
     assert run.fact_reconstruction is not None
     assert run.fact_reconstruction.conflict_reports
     assert run.decision is not None
-    assert run.decision.evidence_state is DecisionEvidenceState.CONFLICTED
-    assert DecisionReviewReason.FACT_CONFLICT in run.decision.review_reasons
+    assert run.decision.evidence_state is DecisionEvidenceState.PARTIAL
+    assert DecisionReviewReason.FACT_CONFLICT not in run.decision.review_reasons
     assert run.decision.needs_review is True
+    assert run.analysis_materiality is not None
+    assert run.analysis_materiality.conflict_dispositions[0].impact.value == "action_only"
+    direction_guard = next(item for item in run.analysis_materiality.capability_guards if item.capability.value == "network_direction")
+    assert direction_guard.allowed is False
 
 
 def test_low_context_alert_needs_review() -> None:

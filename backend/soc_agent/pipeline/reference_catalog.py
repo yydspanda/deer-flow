@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 from collections.abc import Iterator, Mapping
@@ -12,6 +13,7 @@ from soc_agent.contracts import (
     AnalysisContextReferenceKind,
     AnalysisEvidenceCatalogItem,
     BoundedAnalysisEvidence,
+    EntityKind,
     EvidenceItem,
     EvidenceTrustLevel,
     LLMAnalysisRequest,
@@ -51,6 +53,16 @@ _DIRECT_ENTITY_COLLECTIONS = frozenset(
         "rules",
     }
 )
+_DIRECT_ENTITY_TYPES = {
+    "ips": EntityKind.IP,
+    "domains": EntityKind.DOMAIN,
+    "urls": EntityKind.URL,
+    "emails": EntityKind.EMAIL,
+    "processes": EntityKind.PROCESS,
+    "users": EntityKind.USER,
+    "hosts": EntityKind.HOST,
+    "assets": EntityKind.ASSET,
+}
 _FACT_RECONSTRUCTION_LEAVES = frozenset(
     {
         "canonical_path",
@@ -176,6 +188,7 @@ def build_analysis_evidence_catalog(
             value=value,
             value_type=_value_type(value),
             trust_level=trust,
+            entity_type=_catalog_entity_type(path, value),
         )
         for path, value, trust in ordered
     ]
@@ -464,6 +477,95 @@ def _trust_for_context_path(
         if index < len(request.evidence_highlights):
             return request.evidence_highlights[index].trust_level
     return EvidenceTrustLevel.UNKNOWN
+
+
+def _catalog_entity_type(path: str, value: Any) -> EntityKind | None:
+    """Type only entities exposed through vendor-neutral Runtime contracts.
+
+    Raw vendor field names never establish an entity type. Self-describing scalar
+    forms such as IP addresses may still be typed because their syntax is vendor
+    independent; ambiguous host and process names require a canonical or extracted
+    entity projection first.
+    """
+
+    normalized_path = path.casefold()
+    if normalized_path.startswith("extracted_entities."):
+        collection = normalized_path.removeprefix("extracted_entities.").split("[", 1)[0]
+        return _DIRECT_ENTITY_TYPES.get(collection)
+
+    if normalized_path.startswith("canonical_entities."):
+        relative_path = normalized_path.removeprefix("canonical_entities.")
+        section = relative_path.split(".", 1)[0]
+        leaf = relative_path.rsplit(".", 1)[-1].split("[", 1)[0]
+        if section == "network":
+            if leaf in {
+                "source_ip",
+                "destination_ip",
+                "sensor_source_ip",
+                "sensor_target_ip",
+                "forwarded_chain",
+            }:
+                return EntityKind.IP
+            if leaf == "domain":
+                return EntityKind.DOMAIN
+            if leaf == "url":
+                return EntityKind.URL
+        elif section == "process":
+            if leaf in {"process_name", "parent_process_name"}:
+                return EntityKind.PROCESS
+            if leaf in {"md5", "sha1", "sha256"}:
+                return EntityKind.FILE_HASH
+        elif section == "user":
+            if leaf in {"username", "user_id", "um_account", "src_user", "dst_user"}:
+                return EntityKind.USER
+        elif section == "host":
+            if leaf in {"host_name", "host_id"}:
+                return EntityKind.HOST
+            if leaf in {"asset_id", "asset_group"}:
+                return EntityKind.ASSET
+            if leaf == "ip_addresses":
+                return EntityKind.IP
+        elif section == "file" and leaf in {"md5", "sha1", "sha256"}:
+            return EntityKind.FILE_HASH
+        elif section == "http":
+            if leaf == "host":
+                return EntityKind.DOMAIN
+            if leaf == "url":
+                return EntityKind.URL
+        elif section == "email":
+            if leaf in {"sender_addresses", "recipient_addresses", "cc_addresses"}:
+                return EntityKind.EMAIL
+            if leaf == "links":
+                return EntityKind.URL
+
+    if not (
+        normalized_path.startswith("canonical_entities.")
+        or normalized_path.startswith("extracted_entities.")
+        or normalized_path.startswith("evidence.highlights[")
+        or normalized_path.startswith("fact_reconstruction.role_claims[")
+        or "#parsed" in normalized_path
+        or "#decoded" in normalized_path
+        or "#repaired" in normalized_path
+    ):
+        return None
+    return _self_describing_entity_type(value)
+
+
+def _self_describing_entity_type(value: Any) -> EntityKind | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    try:
+        ipaddress.ip_address(stripped)
+    except ValueError:
+        pass
+    else:
+        return EntityKind.IP
+    if re.fullmatch(r"[^@\s]+@[^@\s]+", stripped):
+        return EntityKind.EMAIL
+    if re.match(r"^[a-z][a-z0-9+.-]*://", stripped, re.IGNORECASE):
+        return EntityKind.URL
+    return None
 
 
 def _catalog_scalar_allowed(value: Any) -> bool:

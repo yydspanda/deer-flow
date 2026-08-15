@@ -213,6 +213,22 @@ def _analysis_payload(context: InvestigationContext) -> dict[str, Any]:
             "reason": run.decision.reason,
             "automation_allowed": run.decision.automation_allowed,
         }
+    if run.analysis_materiality is not None:
+        payload["analysis_materiality"] = {
+            "core_usable": run.analysis_materiality.core_usable,
+            "decision_usable": run.analysis_materiality.decision_usable,
+            "review_required": run.analysis_materiality.review_required,
+            "review_reasons": [item.value for item in run.analysis_materiality.review_reasons],
+            "blocked_capabilities": [
+                {
+                    "capability": item.capability.value,
+                    "reason_codes": item.reason_codes,
+                    "conflict_ids": item.conflict_ids,
+                }
+                for item in run.analysis_materiality.capability_guards
+                if not item.allowed
+            ],
+        }
     return payload
 
 

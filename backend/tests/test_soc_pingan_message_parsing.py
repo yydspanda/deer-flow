@@ -149,6 +149,39 @@ def test_pingan_direct_json_message_uses_complete_json_parser_before_partial_kv(
     assert alert.extensions["evidence_input_policy"]["name"] == "raw_message_first"
 
 
+def test_pingan_geoip_enrichment_is_preserved_for_audit_but_excluded_from_reasoning() -> None:
+    fields = {
+        "sip": "30.116.114.150",
+        "dip": "30.174.29.44",
+        "attack_sip": "30.174.29.44",
+        "sip_addr": "中国",
+        "dip_addr": "美国--蒙大拿州",
+        "attack_addr": "美国--蒙大拿州",
+        "attack_type": "反弹Shell",
+    }
+    payload = _payload(
+        json.dumps(fields, ensure_ascii=False),
+        topic="sec_guard_apt",
+        topic_name="SkyEye APT",
+    )
+
+    alert = normalize_alert_payload(payload)
+    request = build_analysis_request_for_payload(payload)
+
+    parsed = alert.extensions["parsed_raw_messages"][0]["fields"]
+    assert parsed["sip_addr"] == "中国"
+    assert parsed["dip_addr"] == "美国--蒙大拿州"
+    semantics = {item.field_path: item for item in request.source_field_semantics if item.field_path.endswith((".sip_addr", ".dip_addr", ".attack_addr"))}
+    assert len(semantics) == 3
+    assert all(not item.participates_in_reasoning for item in semantics.values())
+    assert all("provider_geoip" in item.semantic_type for item in semantics.values())
+    assert "美国--蒙大拿州" not in {item.value for item in request.evidence_catalog}
+    assert "美国--蒙大拿州" not in json.dumps(
+        project_analysis_context(request),
+        ensure_ascii=False,
+    )
+
+
 def test_pingan_nids_projects_session_http_sensor_and_provenance_without_verdict_inference() -> None:
     fields = {
         "timestamp": "2026-07-14T10:00:00+08:00",

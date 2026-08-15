@@ -193,14 +193,15 @@ def test_grounding_requires_governed_reference_for_skill_reasoning() -> None:
     assert undeclared_report.reasoning_items[0].status is AnalysisEvidenceGroundingStatus.UNSUPPORTED_REFERENCE
 
 
-def test_grounding_flags_success_claim_without_outcome_artifact() -> None:
+def test_grounding_does_not_rejudge_supported_success_inference() -> None:
     request = _request()
     item = _catalog_item(request, path="detection.rule_code", value="EDR-IOC-001")
     analysis = _analysis(_evidence(item), summary="规则命中说明漏洞利用成功")
 
     report = ground_analysis_evidence(analysis, request)
 
-    assert "outcome-success claim" in " ".join(report.warnings)
+    assert report.reasoning_grounded_count == 1
+    assert "outcome-success claim" not in " ".join(report.warnings)
 
 
 def test_grounding_does_not_flag_explicitly_unconfirmed_outcome() -> None:
@@ -213,7 +214,7 @@ def test_grounding_does_not_flag_explicitly_unconfirmed_outcome() -> None:
     assert "outcome-success claim" not in " ".join(report.warnings)
 
 
-def test_grounding_flags_impact_confirmed_stage_without_outcome_artifact() -> None:
+def test_grounding_does_not_rejudge_supported_impact_stage() -> None:
     request = _request()
     item = _catalog_item(request, path="detection.rule_code", value="EDR-IOC-001")
     scenario = TriageScenarioAssessment(
@@ -230,7 +231,8 @@ def test_grounding_flags_impact_confirmed_stage_without_outcome_artifact() -> No
 
     report = ground_analysis_evidence(_analysis(_evidence(item), scenarios=[scenario]), request)
 
-    assert "outcome-success claim" in " ".join(report.warnings)
+    assert report.reasoning_grounded_count == 1
+    assert "outcome-success claim" not in " ".join(report.warnings)
 
 
 def test_grounding_encoded_marker_proves_only_visible_omission() -> None:
@@ -265,7 +267,7 @@ def test_grounding_encoded_marker_proves_only_visible_omission() -> None:
     assert not any(item.value == digest for item in request.evidence_catalog)
 
 
-def test_grounding_accepts_only_high_trust_bounded_provider_outcome_assertion() -> None:
+def test_grounding_validates_refs_independently_of_provider_trust_policy() -> None:
     field_path = "raw.message#parsed.host_state"
     primary = BoundedAnalysisEvidence(
         source_path="raw.message",
@@ -288,8 +290,10 @@ def test_grounding_accepts_only_high_trust_bounded_provider_outcome_assertion() 
     report = ground_analysis_evidence(analysis, request)
     low_trust_report = ground_analysis_evidence(analysis, low_trust_request)
 
-    assert "outcome-success claim" not in " ".join(report.warnings)
-    assert "outcome-success claim" in " ".join(low_trust_report.warnings)
+    assert report.grounded_count == 1
+    assert low_trust_report.grounded_count == 1
+    assert report.warnings == []
+    assert low_trust_report.warnings == []
 
 
 def test_grounding_preserves_high_trust_provider_outcome_from_compacted_highlight() -> None:

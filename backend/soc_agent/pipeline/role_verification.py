@@ -57,20 +57,25 @@ def build_role_verification_claims(
     claims: list[RoleVerificationClaim] = []
     direction = analysis.network_direction
     if _direction_is_reviewable(analysis):
-        direction_assertion = {
-            "observed_flow": direction.observed_flow,
-            "boundary_direction": direction.boundary_direction.value,
-        }
-        if direction.semantic_direction is not None:
-            direction_assertion["semantic_direction"] = direction.semantic_direction
-        if direction.connection_initiator is not None:
-            direction_assertion["connection_initiator"] = direction.connection_initiator
-        claims.append(
+        direction_claims = (
+            ("RC-ND-01", "observed_flow", direction.observed_flow, direction.observed_flow != "not_available"),
+            (
+                "RC-ND-02",
+                "boundary_direction",
+                direction.boundary_direction.value,
+                direction.boundary_direction is not NetworkBoundaryDirection.NOT_APPLICABLE,
+            ),
+            ("RC-ND-03", "semantic_direction", direction.semantic_direction, direction.semantic_direction is not None),
+            ("RC-ND-04", "connection_initiator", direction.connection_initiator, direction.connection_initiator is not None),
+        )
+        claims.extend(
             RoleVerificationClaim(
-                claim_ref="RC-ND-01",
+                claim_ref=claim_ref,
                 claim_type=RoleVerificationClaimType.NETWORK_DIRECTION,
-                assertion=direction_assertion,
+                assertion={field_name: value},
             )
+            for claim_ref, field_name, value, present in direction_claims
+            if present
         )
 
     claims.extend(

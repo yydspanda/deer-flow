@@ -38,6 +38,7 @@ class SocLLMSettings:
     mode: SocAnalyzerMode = SocAnalyzerMode.STUB
     model_name: str | None = None
     thinking_enabled: bool = False
+    json_mode_enabled: bool = False
     attach_tracing: bool = True
     max_concurrency: int = 1
     requests_per_minute: int = 0
@@ -79,6 +80,10 @@ class SocLLMSettings:
             mode=mode,
             model_name=model_name.strip() if model_name and model_name.strip() else None,
             thinking_enabled=_parse_bool(values.get("SOC_LLM_THINKING_ENABLED", "false"), name="SOC_LLM_THINKING_ENABLED"),
+            json_mode_enabled=_parse_bool(
+                values.get("SOC_LLM_JSON_MODE_ENABLED", "false"),
+                name="SOC_LLM_JSON_MODE_ENABLED",
+            ),
             attach_tracing=_parse_bool(values.get("SOC_LLM_ATTACH_TRACING", "true"), name="SOC_LLM_ATTACH_TRACING"),
             max_concurrency=_parse_int(
                 values.get("SOC_LLM_MAX_CONCURRENCY", "1"),
@@ -130,6 +135,7 @@ class SocLLMSettings:
         mode: str | SocAnalyzerMode | None = None,
         model_name: str | None = None,
         thinking_enabled: bool | None = None,
+        json_mode_enabled: bool | None = None,
         role_verifier_enabled: bool | None = None,
         role_verifier_model_name: str | None = None,
     ) -> SocLLMSettings:
@@ -141,6 +147,7 @@ class SocLLMSettings:
             mode=resolved_mode,
             model_name=resolved_model,
             thinking_enabled=(thinking_enabled if thinking_enabled is not None else self.thinking_enabled),
+            json_mode_enabled=(json_mode_enabled if json_mode_enabled is not None else self.json_mode_enabled),
             role_verifier_enabled=(role_verifier_enabled if role_verifier_enabled is not None else self.role_verifier_enabled),
             role_verifier_model_name=resolved_role_verifier_model,
         )
@@ -262,6 +269,7 @@ def build_configured_chat_client(
         or DeerFlowLLMChatClient(
             app_config=config,
             thinking_enabled=resolved.thinking_enabled,
+            json_mode_enabled=resolved.json_mode_enabled,
             attach_tracing=resolved.attach_tracing,
             max_concurrency=resolved.max_concurrency,
             requests_per_minute=resolved.requests_per_minute,
@@ -295,12 +303,13 @@ def configured_soc_llm_status(
             app_config=config,
         )
     return {
-        "schema_version": "soc.llm_runtime_status.v2",
+        "schema_version": "soc.llm_runtime_status.v3",
         "mode": resolved.mode.value,
         "requested_model_name": resolved.model_name,
         "resolved_model_name": model_name,
         "configured_model_names": [model.name for model in config.models],
         "thinking_enabled": resolved.thinking_enabled,
+        "json_mode_enabled": resolved.json_mode_enabled,
         "attach_tracing": resolved.attach_tracing,
         "max_concurrency": resolved.max_concurrency,
         "requests_per_minute": resolved.requests_per_minute,
