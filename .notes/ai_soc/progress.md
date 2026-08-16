@@ -29,10 +29,30 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；主 LLM 只执行 bounded `AnalysisResult.v4` 节点；条件式 verifier 通用/本机默认关闭，固定 cohort 或 live 命令显式开启后由确定性 gate 触发，只独立反证 `RC-*` 方向/角色声明，不掌握流程或动作权限 |
-| 当前下一刀 | PingAn Memory MVP 已完成通用 Kernel、租户 Profile、模式候选、审核激活、Retrieval v2、决策留痕和反馈演化闭环。下一步建立独立人工 verdict/scenario/direction/role 真值和 held-out Memory 查询集，测 pattern lesson 与 Retrieval v2 precision/recall、directive override accuracy、专家审核负担和 verifier failure rate；随后补 Web/TUI 人工角色确认。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
+| 当前下一刀 | PingAn Memory Profile v3 已完成 detector signature、strong/weak behavior、强特征 context-only 和 IP 排名去重，并用 210 条真实语料完成 v1→v3 结构对照。下一步建立独立人工 verdict/scenario/direction/role 真值和 held-out Memory 查询集，测 pattern lesson 与 Retrieval v2 precision/recall、directive override accuracy、专家审核负担和 verifier failure rate；随后补 Web/TUI 人工角色确认。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 2026-08-16 — PingAn SOC Memory Kernel/Profile/Evolution MVP
+
+### Profile v3 / Behavior Fingerprint Audit
+
+- PingAn Memory Profile 升级为 v3。`detection_key` 保留为规则大类；新增基于 canonical rule name、
+  source system 和 product 的 deterministic `detection_signature`。Pattern signature 现在组合
+  detection key/signature/behavior fingerprint，同一 ZEUS rule code 下的不同 detector name 不再进入同一
+  决策 cohort。
+- Profile 将 `protocol:*`、`http_method:*`、generic `scenario:web_attack` 标记为 weak，其余当前 reviewed
+  component 标记为 strong。只有 exact environment + detection key + detector signature + behavior
+  fingerprint + strong classification 的 compound candidate 才是 decision-eligible；weak-only 只能形成
+  `rule_context_only + REVIEW_HINT`。
+- context-only lane 现在还要求 exact detector signature，并至少共享一个 `behavior_component_strong`；仅
+  TCP/UDP/HTTP/HTTP method 重合不再返回 Memory。相同 IP 同时存在于 generic entity 和 typed role entity
+  时移除前者，避免排名重复加权；IP 仍不是 required facet，跨 IP 泛化不变。
+- 新增无 LLM 的 210 条真实 PingAn corpus 对照审计。0 extraction error、0 raw mutation；ambiguous exact
+  cohort `4 -> 0`，context-only alert pair `679 -> 54`，weak-only context pair `561 -> 0`，duplicate IP
+  occurrence `283 -> 0`；仍保留 17 个跨 IP recurrent cohort、覆盖 118 条，其中 12 个结构上满足
+  decision eligibility。该 corpus 没有独立人工真值，因此不声明 precision/recall。
+- Profile v2 typed records 对 v3 query fail closed；不会静默升级或继承旧 directive，必须按 v3 重新聚合、
+  审核和激活。通用 Memory Kernel/Runtime 不读取 PingAn raw 字段，新增特征只由 PingAn Profile 投影。
 
 - PingAn Memory Profile 升级为 v2：同一告警同时具备 canonical `detection_key` 与
   `behavior_fingerprint` 时使用 compound cohort。相同 rule、不同 behavior 不再聚进同一候选，因此可安全

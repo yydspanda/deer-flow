@@ -863,8 +863,9 @@ SOC memory tracking 约束：
   结果状态，不得让基础 Runtime 失败或改变 Kafka commit 语义。
 - `soc.memory_pattern_aggregation.v3` 由 generic kernel 执行固定窗口、质量门和候选生命周期；same-class、
   duplicate occurrence 和 candidate applicability 由 server-owned `SocMemoryProfile` 提供。generic fallback
-  选择最强可用通用维度；PingAn profile v2 在 detection key 与 behavior fingerprint 同时存在时建立
-  compound cohort，detection-only 降为 rule context，behavior-only 作为 ruleless pattern，并拒绝
+  选择最强可用通用维度；PingAn profile v3 使用 detection key + normalized detector signature + behavior
+  fingerprint 建立 compound cohort，detection-only/weak-only 降为 rule context，behavior-only strong
+  pattern 作为 ruleless fallback，并拒绝
   category-only cohort。`rule_code` 不是必填项；禁止在 generic Runtime 中拼接供应商字段。
   aggregation key 必须包含 policy/profile/feature schema、lineage 和固定 window，lineage 必须隔离 tenant、
   environment 与 `simulation|operational` data class。
@@ -2765,15 +2766,21 @@ tool permission denial rate
   均可缺失；generic Memory Kernel 不得规定一个所有厂商必填的多维联合硬键。Tenant Profile 可以基于
   已存在的 canonical facets 定义版本化 compound cohort/applicability，但必须保留 ruleless fallback 和
   context-only/decision-authority 边界。
-- PingAn Profile v2 把稳定 `rule_code`（无 code 时可用稳定 `rule_name`）投影为 canonical
-  `detection_key`，但 detection identity 只表示“同一检测规则”，不得单独复制历史 verdict。不得用
-  `alert_id/run_id` 合成 detection key。`detection_key` 与 deterministic `behavior_fingerprint` 同时存在时，
-  必须使用二者的 compound signature 隔离 cohort；同 rule、不同 behavior、相反结论必须形成独立候选。
+- PingAn Profile v3 把稳定 `rule_code`（无 code 时可用稳定 `rule_name`）投影为 canonical
+  `detection_key`，但该 key 只表示规则大类，不得单独复制历史 verdict。Profile 必须从 canonical
+  rule name 生成版本化 `detection_signature`；不得用 `alert_id/run_id` 合成任一检测身份。
+  `detection_key`、`detection_signature` 与 deterministic `behavior_fingerprint` 同时存在时，必须使用三者的
+  compound signature 隔离 cohort；同 key、不同 detector name 或 behavior、相反结论必须形成独立候选。
   detection-only cohort 只能产生 rule-context `REVIEW_HINT`，service 必须拒绝其 future-match directive；
   behavior-only cohort 仍可服务没有稳定规则身份的告警。二者都缺失时 observation 不准入。
+- PingAn Profile v3 必须把 `protocol:*`、`http_method:*` 和 generic `scenario:web_attack` 标记为 weak
+  behavior；其他当前 reviewed component 投影为 strong。决策型 compound applicability 必须精确匹配
+  environment、detection key、detection signature、behavior fingerprint 和 `behavior_strength=strong`。
+  weak-only compound 最多产生 rule-context candidate，不能附加 future-match directive。
 - `SocMemoryApplicabilitySpec` 可声明严格受限的 context-only lane：compound record 的 exact
-  detection/environment 匹配、exact behavior fingerprint 缺失且至少一个 canonical behavior component
-  重叠时，可以 `partial` 方式进入 `M-*` 推理上下文。该投影必须显式标记
+  detection/signature/environment/strong-class 匹配、exact behavior fingerprint 缺失且至少一个
+  `behavior_component_strong` 重叠时，可以 `partial` 方式进入 `M-*` 推理上下文。协议或 HTTP 方法等
+  weak-only overlap 不得召回。该投影必须显式标记
   `context_only_allowed=true`，在 token 排序中晚于 exact match，并且不得应用
   `SocMemoryDecisionDirective`。没有 component overlap 的同-rule 记录仍为 not applicable。
 - 没有 typed applicability 的 legacy record 最多作为 bounded `M-*` 背景存在，即使历史上携带 directive
@@ -2783,6 +2790,9 @@ tool permission denial rate
   或把候选 optional facet 提升为 required；不得移除强锚点、切换 profile/feature schema、降低阈值、
   扩大值域或扩大 context-only missing/similarity 集。生成或显式提交的 directive 必须包含最终所有
   required facet keys。
+- Profile/feature schema 升级必须 fail closed。PingAn v2 typed records 不得被 v3 query 静默解释、迁移或
+  继承 directive；必须重新聚合、审核和激活。Profile 投影若同一 IP 同时存在于 generic `entity=ip:*` 与
+  typed `role_entity`，只移除重复 generic facet；不得把 IP 变成 required facet，跨 IP 行为泛化必须保留。
 - Memory 的 24h fixed window 只定义重复 observation 的候选聚合范围，不是 Memory 生命周期。当前
   pattern candidate 默认 record validity 为 90 天、review interval 为 30 天；确认时 retrieval activation
   另有显式截止时间和复审周期，且不能超出 record validity。环境是服务端配置的 `dev|stg|prd` 运行

@@ -466,8 +466,9 @@ Current SOC direction:
   `MemoryPatternObservation` rows through `SocMemoryPatternService` and migration
   `0021_memory_pattern_observations`; never create one memory candidate per alert, run, finding, or
   offset. A server-owned `SocMemoryProfileRegistry` chooses same-class, occurrence and applicability
-  semantics from canonical fields; generic fallback remains vendor-neutral, while PingAn prefers
-  a versioned compound of canonical detection key and behavior fingerprint when both exist. A
+  semantics from canonical fields; generic fallback remains vendor-neutral, while PingAn profile v3
+  uses a versioned compound of canonical detection key, normalized detector signature and behavior
+  fingerprint. A
   detection-only PingAn cohort is rule-level context and cannot own a future verdict; behavior-only
   remains the ruleless fallback. PingAn detection keys may derive from stable rule code/name but
   never from alert/run lineage. Cohorts use canonical
@@ -493,8 +494,11 @@ Current SOC direction:
   contradicts an active benign directive disables retrieval through the disable-only safety monitor
   and creates a revision proposal. No feedback edits a confirmed record in place, and Memory never
   grants action authority. A decision-authoritative PingAn compound record requires exact environment,
-  detection key and behavior fingerprint. Same-rule behavior similarity may enter only as explicit
-  `partial/context-only` `M-*` reasoning context when a reviewed canonical behavior component overlaps;
+  detection key, normalized detector signature, strong behavior classification and behavior fingerprint.
+  Protocol, HTTP method and generic `web_attack` components are weak: they remain audit/context facets
+  but cannot make a compound decision-authoritative. Same-rule behavior similarity may enter only as
+  explicit `partial/context-only` `M-*` reasoning context when the detector signature also matches and a
+  reviewed strong canonical behavior component overlaps;
   Automation must reject its directive. Legacy records without typed applicability may remain bounded
   reasoning context, but can never apply a directive; deterministic Memory decisions additionally require
   `decision_impact=detection_decision` and an exact `applicable` projection. Reviewers may narrow applicability by promoting candidate
@@ -503,7 +507,10 @@ Current SOC direction:
   operator-owned environment is bound before Memory query/profile selection; explicit batch/daemon,
   Memory, tenant-policy and automation environment settings must agree. Revision
   proposal accept/reject only resolves the review task; it never mutates or re-enables the old Memory.
-  Migration `0025_memory_evolution` owns this lineage.
+  Migration `0025_memory_evolution` owns this lineage. Profile v2 records fail the v3 profile/schema
+  applicability check and must be re-aggregated and reviewed; they are never silently upgraded. PingAn
+  facet projection also removes a generic `ip:*` entity when the same address already has a typed role
+  entity, preventing duplicate ranking weight without making IP a required match facet.
 - Confirmation creates a retrieval-disabled SOC memory record. Only
   `SocMemoryService.set_retrieval_activation()` may enable/disable retrieval, with
   `soc_memory_reviewer|soc_admin`, trusted auth provenance, reason, expected version, validity/review

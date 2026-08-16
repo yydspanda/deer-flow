@@ -15,8 +15,9 @@
    标准协议，因此以后接其他公司时新增 Profile，不修改通用内核。
 3. 只有重复、结论明确、相互一致且存在强锚点的 cohort 才生成一条候选，运营专家审核的是“模式”，
    不是每天上万条告警。
-4. `detection_key` 只负责识别“同一检测规则”；`detection_key + behavior_fingerprint` 才定义可审核的
-   同类行为。只有 exact behavior scope 可以附加结构化决策指令，rule-only Memory 永远只是背景参考。
+4. `detection_key` 只负责识别规则大类；Profile v3 再从 canonical `rule_name` 生成
+   `detection_signature`。只有 `detection_key + detection_signature + strong behavior_fingerprint`
+   才定义可改判的同类行为，rule-only/weak-only Memory 永远只是背景参考。
 5. 告警处理完成后，只更新本次真正用过的 Memory：一致则增加支持，冲突则记录反证、更新健康度并
    生成修订任务；高可信风险真值反驳 benign Memory 时立即停止检索，避免错误批量扩散。
 6. 所有 Base/Memory/Tenant/Effective Decision、Memory 使用、人工反馈、健康度和修订均可回放。DB 是
@@ -152,10 +153,10 @@ support. PingAn priority is:
 
 ### 5.3 Same reusable alert class
 
-The PingAn profile v2 selects one stable cohort signature:
+The PingAn profile v3 selects one stable cohort signature:
 
-1. when both exist, hash canonical `detection_key + behavior_fingerprint` into a
-   `compound` cohort; the original two facets remain separately auditable;
+1. when available, hash canonical `detection_key + detection_signature + behavior_fingerprint`
+   into a `compound` cohort; the original facets remain separately auditable;
 2. detection only creates a rule-level cohort that can describe recurring outcomes but
    can never own a future deterministic verdict;
 3. behavior only creates a pattern-level cohort for vendors/alerts without stable rule
@@ -166,17 +167,26 @@ An `alert_id` identifies one occurrence and must never be synthesized into
 `detection_key`. Using `zeus:alert:{alert_id}` would make every alert its own class and
 silently disable reuse.
 
+`detection_signature` is a deterministic hash of source/product and the whitespace/case-normalized
+canonical rule name. It is deliberately separate from `detection_key`: PingAn data shows that one
+ZEUS `rule_code` may contain many detector names. Exact rule-name normalization is conservative;
+future governed aliasing may merge reviewed cosmetic aliases, but v3 never guesses that two names
+are equivalent.
+
 The current `behavior_fingerprint` is deterministic and pre-LLM. It reuses canonical
 facts already produced by SOC Runtime and hashes a versioned,
 sorted set of canonical behavior components such as deterministic scenario hypotheses,
 process/parent names, protocol, HTTP method, MITRE techniques and typed behavior mentions.
 IP, UM/account and alert/run IDs are deliberately excluded so the same behavior may match
-across changing entities. Exact fingerprint equality is the boundary for deterministic
-Memory Decision. When the same detection key and at least one reviewed behavior component
-match but the full fingerprint differs, Retrieval may expose the record only as explicit
-`context-only` LLM context; it cannot apply its directive. A completely unrelated behavior
-is not returned. Evaluate component stability on a held-out PingAn corpus and bump the
-feature schema whenever the component policy changes.
+across changing entities. Profile v3 classifies protocol, HTTP method and generic
+`scenario:web_attack` as weak components; process, specific scenario, MITRE technique and typed
+behavior components are strong. A decisive compound requires exact detection key, detector
+signature, behavior fingerprint, environment and `behavior_strength=strong`. When the exact
+detection/signature/environment match but the full fingerprint differs, Retrieval may expose the
+record only as explicit `context-only` LLM context when at least one reviewed strong behavior
+component overlaps; it cannot apply its directive. Protocol-only similarity is not returned.
+Evaluate component stability on a held-out PingAn corpus and bump the feature schema whenever the
+component policy changes.
 
 `category`, `severity`, source type, or a model-only scenario label can help rank or
 explain a match, but they cannot alone create a decisive PingAn lesson. This avoids both
@@ -185,9 +195,13 @@ extremes: a brittle four-dimensional key and an unsafe "all NDR alerts are alike
 Environment is not part of the reusable class identity, but it is a mandatory
 applicability boundary. A `prd` lesson therefore cannot affect `stg`, and vice versa.
 Future decisive PingAn matches require the exact reviewed environment plus every reviewed
-required facet. For a compound record this means both exact `detection_key` and exact
-`behavior_fingerprint`; matching `detection_key` alone is never enough to copy the old
-verdict.
+required facet. For a decisive compound record this means exact `detection_key`,
+`detection_signature`, `behavior_fingerprint`, `behavior_strength` and environment; matching
+`detection_key` alone is never enough to copy the old verdict.
+
+The same IP may appear in both generic `entity=ip:*` and typed `role_entity=attacker|victim|...`.
+PingAn profile projection removes only that duplicate generic IP facet and retains the typed role.
+This prevents duplicate relevance weight; IP remains optional and never blocks cross-IP reuse.
 
 Here `environment` means the server-owned operating lane such as `dev`, `stg` or `prd`.
 It is not inferred from Kafka topic names, IP ranges, or arbitrary vendor fields. Pattern
@@ -286,8 +300,9 @@ A record reaches the model and decision layer only when all gates pass:
 10. score and token budget pass.
 
 The result is projected as `M-*`, never as current-alert `E-*` evidence. One additional,
-strictly bounded lane exists for a compound PingAn record: same detection/environment plus
-an overlapping canonical behavior component may be returned with
+strictly bounded lane exists for a compound PingAn record: same detection key/signature,
+environment and strong behavior classification plus an overlapping
+`behavior_component_strong` may be returned with
 `status=partial, context_only_allowed=true`. Runtime labels that item “仅作相似模式参考”,
 prioritizes exact matches ahead of it, counts it separately, and Automation rejects its
 decision directive. This preserves useful prior experience without turning fuzzy similarity
@@ -449,8 +464,8 @@ only and cannot establish Memory precision or production quality.
 Rollback is retrieval disablement. Raw alerts, Base Decisions, uses, feedback, and prior
 record versions remain available for replay.
 
-Profile v1 records do not silently match Profile v2 queries. They remain auditable but
-must be re-aggregated under the v2 feature schema and reviewed again before receiving v2
+Profile v2 records do not silently match Profile v3 queries. They remain auditable but
+must be re-aggregated under the v3 feature schema and reviewed again before receiving v3
 retrieval or decision authority. A migration must never infer a compound behavior scope
 from an old detection-only record.
 
@@ -492,7 +507,21 @@ PYTHONPATH=.:backend backend/.venv/bin/pytest -q \
   validation/compact_zeus/memory/test_seed_confirmed_memory_from_batch.py \
   validation/compact_zeus/memory/test_compare_role_memory_batches.py \
   validation/compact_zeus/internal_batch/test_run_pingan_runtime_batch.py
+
+# No-LLM structural comparison over the 210-alert PingAn corpus
+backend/.venv/bin/python \
+  validation/compact_zeus/memory/build_behavior_fingerprint_audit.py \
+  --environment prd \
+  --output-dir backend/.deer-flow/soc-validation/behavior-fingerprint-audit-v2
 ```
+
+The 2026-08-16 local structural audit replayed 210 source alerts with zero extraction
+errors and zero raw-payload mutation. Profile v3 reduced ambiguous exact cohorts from
+4 to 0, context-only alert pairs from 679 to 54, weak-only context pairs from 561 to 0,
+and duplicate IP facet occurrences from 283 to 0. It retained 17 recurrent cross-IP
+cohorts covering 118 alerts. Twelve recurrent cohorts were structurally decision-eligible.
+The corpus has no independent analyst labels, so these figures prove contract behavior,
+not production precision or recall.
 
 Current result: `194 passed` for the cross-layer Memory suite, `1 passed` for the real
 migration chain, and `27 passed` for offline validation helpers. These prove wiring,

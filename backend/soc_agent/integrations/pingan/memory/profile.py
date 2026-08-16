@@ -6,6 +6,7 @@ not parse PingAn raw field aliases and it does not change Runtime decisions.
 
 from __future__ import annotations
 
+import ipaddress
 from datetime import UTC, datetime
 
 from soc_agent.contracts import (
@@ -15,7 +16,10 @@ from soc_agent.contracts import (
     MemoryPatternSignature,
     SocMemoryApplicabilitySpec,
 )
-from soc_agent.memory.facets import memory_facets_from_analysis_request
+from soc_agent.memory.facets import (
+    memory_facets_from_analysis_request,
+    memory_facets_from_analysis_run,
+)
 from soc_agent.memory.profiles import SocMemoryProfileIdentity
 from soc_agent.normalizers import normalize_alert_payload
 from soc_agent.utils.hashing import stable_hash
@@ -26,8 +30,8 @@ class PingAnSocMemoryProfile:
 
     identity = SocMemoryProfileIdentity(
         profile_id="pingan.soc",
-        profile_version="2",
-        feature_schema_version="pingan.soc.memory_features.v2",
+        profile_version="3",
+        feature_schema_version="pingan.soc.memory_features.v3",
     )
 
     def matches_request(self, request: LLMAnalysisRequest) -> bool:
@@ -41,7 +45,22 @@ class PingAnSocMemoryProfile:
         # The PingAn Adapter has already converted raw aliases into canonical
         # fields. Keeping the feature vocabulary canonical is what makes the
         # shared retrieval kernel portable.
-        return memory_facets_from_analysis_request(request)
+        return _project_pingan_facets(
+            memory_facets_from_analysis_request(request),
+            request=request,
+        )
+
+    def project_run_facets(
+        self,
+        run: AnalysisRun,
+    ) -> dict[str, list[str]]:
+        request = run.llm_analysis_request
+        if request is None:
+            return memory_facets_from_analysis_run(run)
+        return _project_pingan_facets(
+            memory_facets_from_analysis_run(run),
+            request=request,
+        )
 
     def build_pattern_signature(
         self,
@@ -54,13 +73,15 @@ class PingAnSocMemoryProfile:
             raise ValueError("bounded analysis request is required")
 
         detection_keys = facets.get("detection_key", [])
+        detection_signatures = facets.get("detection_signature", [])
         behavior_fingerprints = facets.get("behavior_fingerprint", [])
         if detection_keys and behavior_fingerprints:
             detection_key = detection_keys[0]
+            detection_signature = detection_signatures[0] if detection_signatures else None
             behavior_fingerprint = behavior_fingerprints[0]
             return MemoryPatternSignature(
                 dimension=MemoryPatternDimension.COMPOUND,
-                value=f"compound:{stable_hash({'detection_key': detection_key, 'behavior_fingerprint': behavior_fingerprint})}",
+                value=f"compound:{stable_hash({'detection_key': detection_key, 'detection_signature': detection_signature, 'behavior_fingerprint': behavior_fingerprint})}",
                 label=f"{request.detection.rule_name or detection_key} + canonical behavior",
                 origin=self.identity.feature_schema_version,
                 facets=facets,
@@ -68,9 +89,10 @@ class PingAnSocMemoryProfile:
 
         if detection_keys:
             value = detection_keys[0]
+            signature = detection_signatures[0] if detection_signatures else None
             return MemoryPatternSignature(
                 dimension=MemoryPatternDimension.DETECTION,
-                value=_bounded_value(value),
+                value=_bounded_value(f"detection:{stable_hash({'detection_key': value, 'detection_signature': signature})}"),
                 label=request.detection.rule_name or value,
                 origin="pingan_adapter:canonical_detection",
                 facets=facets,
@@ -140,12 +162,37 @@ class PingAnSocMemoryProfile:
         consensus_facets: dict[str, list[str]],
         strong_anchor_facets: dict[str, list[str]],
     ) -> SocMemoryApplicabilitySpec | None:
+        detection_key = strong_anchor_facets.get("detection_key")
+        detection_signature = strong_anchor_facets.get("detection_signature")
+        behavior_fingerprint = strong_anchor_facets.get("behavior_fingerprint")
+        behavior_strength = consensus_facets.get("behavior_strength")
+        strong_behavior = behavior_strength == ["strong"]
+
         required: dict[str, list[str]] = {}
-        for key in ("detection_key", "behavior_fingerprint"):
-            values = strong_anchor_facets.get(key)
-            if values:
-                required[key] = list(values)
-        if not required:
+        decision_eligible = False
+        if detection_key and detection_signature and behavior_fingerprint and strong_behavior:
+            required.update(
+                {
+                    "detection_key": list(detection_key),
+                    "detection_signature": list(detection_signature),
+                    "behavior_fingerprint": list(behavior_fingerprint),
+                    "behavior_strength": ["strong"],
+                }
+            )
+            decision_eligible = True
+        elif not detection_key and behavior_fingerprint and strong_behavior:
+            required.update(
+                {
+                    "behavior_fingerprint": list(behavior_fingerprint),
+                    "behavior_strength": ["strong"],
+                }
+            )
+            decision_eligible = True
+        elif detection_key:
+            required["detection_key"] = list(detection_key)
+            if detection_signature:
+                required["detection_signature"] = list(detection_signature)
+        else:
             return None
 
         # PingAn operational conclusions vary materially between DEV/STG/PRD.
@@ -164,16 +211,19 @@ class PingAnSocMemoryProfile:
                 "product",
                 "scenario_key",
                 "behavior_component",
+                "behavior_component_strong",
+                "behavior_component_weak",
+                "behavior_fingerprint",
+                "behavior_strength",
                 "role_entity",
                 "entity",
                 "environment",
             )
             if key not in required and consensus_facets.get(key)
         }
-        is_compound = {"detection_key", "behavior_fingerprint"} <= set(required)
-        context_only_required = ["detection_key", "environment"] if is_compound and optional.get("behavior_component") else []
+        context_only_required = sorted(set(required) - {"behavior_fingerprint"}) if decision_eligible and detection_key and optional.get("behavior_component_strong") else []
         context_only_missing = ["behavior_fingerprint"] if context_only_required else []
-        context_only_similarity = ["behavior_component"] if context_only_required else []
+        context_only_similarity = ["behavior_component_strong"] if context_only_required else []
         return SocMemoryApplicabilitySpec(
             profile_id=self.identity.profile_id,
             profile_version=self.identity.profile_version,
@@ -181,7 +231,14 @@ class PingAnSocMemoryProfile:
             required_facets=required,
             optional_facets=optional,
             minimum_optional_matches=0,
-            minimum_strong_anchor_matches=len(set(required) & {"detection_key", "behavior_fingerprint"}),
+            minimum_strong_anchor_matches=len(
+                set(required)
+                & {
+                    "detection_key",
+                    "detection_signature",
+                    "behavior_fingerprint",
+                }
+            ),
             context_only_required_facet_keys=context_only_required,
             context_only_missing_facet_keys=context_only_missing,
             context_only_similarity_facet_keys=context_only_similarity,
@@ -204,6 +261,90 @@ def _bounded_value(value: str) -> str:
     if len(normalized) <= 256:
         return normalized
     return f"sha256:{stable_hash(normalized)}"
+
+
+def _project_pingan_facets(
+    facets: dict[str, list[str]],
+    *,
+    request: LLMAnalysisRequest,
+) -> dict[str, list[str]]:
+    projected = {key: list(values) for key, values in facets.items()}
+    signature = _detection_signature(request)
+    if signature:
+        _add_facet(projected, "detection_signature", signature)
+
+    components = projected.get("behavior_component", [])
+    strong_components = [value for value in components if _is_strong_behavior_component(value)]
+    weak_components = [value for value in components if not _is_strong_behavior_component(value)]
+    for component in strong_components:
+        _add_facet(projected, "behavior_component_strong", component)
+    for component in weak_components:
+        _add_facet(projected, "behavior_component_weak", component)
+    if components:
+        projected["behavior_strength"] = ["strong" if strong_components else "weak_only"]
+
+    _remove_duplicate_role_ips(projected)
+    return projected
+
+
+def _detection_signature(request: LLMAnalysisRequest) -> str | None:
+    rule_name = " ".join((request.detection.rule_name or "").split()).casefold()
+    if not rule_name:
+        return None
+    return stable_hash(
+        {
+            "schema_version": "pingan.soc.detection_signature.v1",
+            "source_system": (request.source.source_system or "").strip().casefold(),
+            "product": (request.source.product or "").strip().casefold(),
+            "rule_name": rule_name,
+        }
+    )
+
+
+def _is_strong_behavior_component(value: str) -> bool:
+    normalized = value.strip().casefold()
+    if normalized.startswith(("protocol:", "http_method:")):
+        return False
+    return normalized != "scenario:web_attack"
+
+
+def _remove_duplicate_role_ips(facets: dict[str, list[str]]) -> None:
+    role_ips = {ip for value in facets.get("role_entity", []) if (ip := _role_ip(value)) is not None}
+    if not role_ips:
+        return
+    entities = facets.get("entity")
+    if not entities:
+        return
+    retained = [value for value in entities if not (value.strip().casefold().startswith("ip:") and value.partition(":")[2].strip().casefold() in role_ips)]
+    if retained:
+        facets["entity"] = retained
+    else:
+        facets.pop("entity", None)
+
+
+def _role_ip(value: str) -> str | None:
+    _, separator, candidate = value.partition(":")
+    if not separator:
+        return None
+    normalized = candidate.strip().casefold()
+    try:
+        ipaddress.ip_address(normalized)
+    except ValueError:
+        return None
+    return normalized
+
+
+def _add_facet(
+    facets: dict[str, list[str]],
+    key: str,
+    value: str,
+) -> None:
+    normalized = value.strip()
+    if not normalized:
+        return
+    values = facets.setdefault(key, [])
+    if normalized not in values:
+        values.append(normalized)
 
 
 __all__ = ["PingAnSocMemoryProfile"]

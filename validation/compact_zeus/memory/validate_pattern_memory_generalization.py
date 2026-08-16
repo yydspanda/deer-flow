@@ -122,7 +122,7 @@ def validate_pattern_memory_generalization(
         ),
         _variant(
             "same_ips_partial_behavior",
-            "IP 和规则不变，但场景改变；仅 TCP 行为组件重合",
+            "IP 和规则不变，场景改变，但仍共享受治理的强 MITRE 行为组件",
             _change_behavior(
                 base_request,
                 protocol="tcp",
@@ -190,7 +190,9 @@ def validate_pattern_memory_generalization(
                     key: query.facets.get(key, [])
                     for key in (
                         "detection_key",
+                        "detection_signature",
                         "behavior_component",
+                        "behavior_component_strong",
                         "behavior_fingerprint",
                         "environment",
                         "role_entity",

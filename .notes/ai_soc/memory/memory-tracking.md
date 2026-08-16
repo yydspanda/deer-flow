@@ -156,6 +156,7 @@ Typed Memory Record
 | Facet | 是否必需 | 说明 |
 |---|---|---|
 | `detection_key` / `rule_code` | 可选强锚点 | 有则精确匹配；没有时不阻断其他锚点 |
+| `detection_signature` | 租户 Profile 强锚点 | 用于拆分 broad detection key 下的稳定 detector identity；不是所有厂商必填 |
 | `scenario_key` | 可选强锚点 | 来自 fact/model 场景，保持开放词汇 |
 | `behavior_fingerprint` | 可选强锚点 | 至少两个稳定行为组件才生成，不含 alert/run ID |
 | `role_entity` / `entity` | 可选强锚点 | 角色+实体可区分 attacker/victim/host/user 等适用范围 |
@@ -175,6 +176,7 @@ Typed Memory Record
   "facets": {
     "source_type": ["edr"],
     "detection_key": ["edr:suspicious_powershell"],
+    "detection_signature": ["<tenant-profile-sha256>"],
     "scenario_key": ["powershell_execution"],
     "behavior_component": ["process:powershell.exe", "process:winword.exe"],
     "behavior_fingerprint": ["<stable-sha256>"],
@@ -311,8 +313,9 @@ PI-03F3 已完成 Kafka/批处理来源，冻结规则如下：
 - recurrence 不证明 benign/malicious、授权、攻击影响或处置动作，不能改变 Runtime decision、确认记忆、
   启用 retrieval 或执行 action。Kafka/batch sidecar 默认关闭，聚合失败不阻断基础分析。
 - `SocMemoryProfileRegistry` 在 composition root 选择 tenant/source profile。PingAn profile 只消费 canonical
-  Adapter 输出：detection key 与 behavior fingerprint 同时存在时形成 compound cohort；detection-only
-  只能形成 rule-context，behavior-only 保留为 ruleless pattern，category-only 不形成 PingAn cohort；
+  Adapter 输出：Profile v3 使用 detection key + detector signature + behavior fingerprint 形成 compound
+  cohort；只有 strong behavior compound 才可 decision-eligible，detection-only/weak-only 只能形成
+  rule-context，behavior-only strong 保留为 ruleless pattern，category-only 不形成 PingAn cohort；
   同 upstream event/input occurrence 不重复增加 support。
 - 候选和确认记录可携带 `SocMemoryApplicabilitySpec`。Retrieval 在打分/强锚点之后独立核对 profile/version、
   required/optional/excluded facets；只有 `applicable` 才允许 typed directive 参与有效决策。受 Profile

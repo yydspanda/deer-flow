@@ -49,6 +49,23 @@ backend/.venv/bin/python \
   --output-dir backend/.deer-flow/soc-validation/<experiment>/cross-ip-generalization
 ```
 
+`build_behavior_fingerprint_audit.py` replays the production pre-LLM request builder
+over the validated PingAn corpus and compares legacy v1 grouping with PingAn Memory
+Profile v3 without changing Runtime decisions. It reports coverage, per-rule
+fragmentation, exact recurrent and cross-IP cohorts, historical-output divergence,
+duplicate IP ranking facets, and context-only pairs before and after requiring an exact
+`detection_signature` plus shared strong behavior. It also reports a `detection_key` that
+maps to multiple rule names, because such an upstream identity collision makes a legacy
+compound cohort unsafe even when its hash matches. Historical `agent_response` is diagnostic only;
+the corpus has no human ground-truth labels, so this report does not claim accuracy.
+
+```bash
+backend/.venv/bin/python \
+  validation/compact_zeus/memory/build_behavior_fingerprint_audit.py \
+  --environment prd \
+  --output-dir backend/.deer-flow/soc-validation/behavior-fingerprint-audit-v2
+```
+
 `seed_confirmed_memory_from_batch.py` is an explicit same-cohort experiment helper.
 It converts reviewed Runtime batch outputs into one `simulation` / `eval_fixture`
 record per alert, then uses the production Admission, confirmation, and

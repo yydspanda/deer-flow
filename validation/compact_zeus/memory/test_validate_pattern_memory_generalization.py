@@ -24,7 +24,7 @@ from soc_agent.contracts import (
     SocMemoryTargetArtifact,
     Verdict,
 )
-from soc_agent.memory import memory_facets_from_analysis_request
+from soc_agent.application import build_soc_memory_profile_registry
 from soc_agent.utils.hashing import stable_hash
 from validation.compact_zeus.memory.test_simulate_pattern_memory_lifecycle import (
     _base_run,
@@ -85,25 +85,43 @@ def _memory() -> SocMemoryRecord:
     run = _network_run()
     request = run.llm_analysis_request
     assert request is not None
-    facets = memory_facets_from_analysis_request(request)
+    profile = build_soc_memory_profile_registry().resolve_request(request)
+    facets = profile.project_query_facets(request)
     required = {
         key: facets[key]
-        for key in ("detection_key", "behavior_fingerprint", "environment")
+        for key in (
+            "detection_key",
+            "detection_signature",
+            "behavior_fingerprint",
+            "behavior_strength",
+            "environment",
+        )
     }
     applicability = SocMemoryApplicabilitySpec(
         profile_id="pingan.soc",
-        profile_version="2",
-        feature_schema_version="pingan.soc.memory_features.v2",
+        profile_version="3",
+        feature_schema_version="pingan.soc.memory_features.v3",
         required_facets=required,
         optional_facets={
             key: facets[key]
-            for key in ("behavior_component", "role_entity", "entity")
+            for key in (
+                "behavior_component",
+                "behavior_component_strong",
+                "behavior_component_weak",
+                "role_entity",
+                "entity",
+            )
             if facets.get(key)
         },
-        minimum_strong_anchor_matches=2,
-        context_only_required_facet_keys=["detection_key", "environment"],
+        minimum_strong_anchor_matches=3,
+        context_only_required_facet_keys=[
+            "behavior_strength",
+            "detection_key",
+            "detection_signature",
+            "environment",
+        ],
         context_only_missing_facet_keys=["behavior_fingerprint"],
-        context_only_similarity_facet_keys=["behavior_component"],
+        context_only_similarity_facet_keys=["behavior_component_strong"],
     )
     content = "Reviewed reverse-shell pattern."
     return SocMemoryRecord(

@@ -19,6 +19,7 @@ _STRONG_ANCHOR_KEYS_BY_MEMORY_TYPE: dict[SocMemoryCandidateType, frozenset[str]]
             "behavior_fingerprint",
             "conflict_type",
             "detection_key",
+            "detection_signature",
             "rule_code",
             "scenario_key",
             "skill",
@@ -28,6 +29,7 @@ _STRONG_ANCHOR_KEYS_BY_MEMORY_TYPE: dict[SocMemoryCandidateType, frozenset[str]]
         {
             "behavior_fingerprint",
             "detection_key",
+            "detection_signature",
             "entity",
             "role_entity",
             "rule_code",
@@ -38,6 +40,7 @@ _STRONG_ANCHOR_KEYS_BY_MEMORY_TYPE: dict[SocMemoryCandidateType, frozenset[str]]
         {
             "behavior_fingerprint",
             "detection_key",
+            "detection_signature",
             "entity",
             "role_entity",
             "rule_code",
@@ -50,6 +53,7 @@ _STRONG_ANCHOR_KEYS_BY_MEMORY_TYPE: dict[SocMemoryCandidateType, frozenset[str]]
         {
             "behavior_fingerprint",
             "detection_key",
+            "detection_signature",
             "role_entity",
             "rule_code",
             "scenario_key",
@@ -60,6 +64,7 @@ _STRONG_ANCHOR_KEYS_BY_MEMORY_TYPE: dict[SocMemoryCandidateType, frozenset[str]]
             "behavior_fingerprint",
             "conflict_type",
             "detection_key",
+            "detection_signature",
             "rule_code",
             "scenario_key",
             "skill",
@@ -70,6 +75,7 @@ _STRONG_ANCHOR_KEYS_BY_MEMORY_TYPE: dict[SocMemoryCandidateType, frozenset[str]]
         {
             "behavior_fingerprint",
             "detection_key",
+            "detection_signature",
             "rule_code",
             "scenario_key",
         }
@@ -271,7 +277,14 @@ def memory_strong_anchor_keys(
 def memory_facet_weight(key: str) -> float:
     """Return the stable deterministic weight for one normalized facet key."""
 
-    if key in {"behavior_fingerprint", "detection_key", "rule_code", "canonical_detection", "vendor_alias"}:
+    if key in {
+        "behavior_fingerprint",
+        "detection_key",
+        "detection_signature",
+        "rule_code",
+        "canonical_detection",
+        "vendor_alias",
+    }:
         return 4.0
     if key in {"role_entity", "scenario_key"}:
         return 3.5

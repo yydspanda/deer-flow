@@ -851,17 +851,22 @@ canonical Adapter output, owns duplicate occurrence and same-class semantics, an
 profile/version/feature-schema identity on observations, candidates, queries and applicability.
 `SocMemoryApplicabilitySpec` is reviewer-visible machine scope; profile mismatch, required-facet miss,
 exclusion hit or insufficient strong anchor makes a record inapplicable regardless of rank.
-PingAn profile v2 builds a compound cohort when canonical `detection_key` and
-`behavior_fingerprint` both exist. Detection-only cohorts are rule-level reasoning context and must
+PingAn profile v3 builds a compound cohort from canonical `detection_key`, a deterministic signature
+of the canonical rule name, and `behavior_fingerprint`. This prevents one broad PingAn `rule_code`
+from merging different detector names. Detection-only cohorts are rule-level reasoning context and must
 not create a future decision directive; behavior-only remains the ruleless pattern fallback. A
-decision-authoritative compound record requires exact reviewed environment, detection key and
-behavior fingerprint. Same detection/environment with a different fingerprint may be returned only
-as `partial/context-only` when a reviewed canonical `behavior_component` overlaps; exact matches are
+decision-authoritative compound record requires exact reviewed environment, detection key, detector
+signature, strong behavior classification and behavior fingerprint. Protocol, HTTP method and generic
+`web_attack` are weak components. Same detection/signature/environment with a different fingerprint may
+be returned only as `partial/context-only` when a reviewed `behavior_component_strong` overlaps; exact matches are
 ranked first and `SocAutomationService` must reject every context-only directive. Legacy records without
 typed applicability remain non-authoritative context even if they carry an old directive; deterministic
 application also requires `decision_impact=detection_decision` and projection status `applicable`. Reviewers may narrow
 the candidate applicability by promoting an existing optional facet to required, but cannot remove
 anchors, expand values, change profile/schema versions, lower thresholds or widen context-only scope.
+Profile v2 records are not silently reinterpreted by v3 queries; they require re-aggregation and review.
+PingAn projection removes `entity=ip:*` when the same address already appears as a typed `role_entity`,
+so ranking does not double-count one endpoint while cross-IP generalization remains unchanged.
 PingAn `detection_key` may derive from a stable `rule_code` or stable `rule_name`; it must never derive
 from an alert/run ID. When neither rule identity exists, the profile may use its versioned deterministic
 canonical behavior fingerprint or reject the observation as ineligible. Persisted composition binds the operator-owned environment before

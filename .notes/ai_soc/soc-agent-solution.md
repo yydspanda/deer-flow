@@ -136,7 +136,8 @@ write confirmed memory, grant action authority, or execute side-effect actions b
 | 候选记忆 | Memory Candidate | `SocMemoryCandidate` | 待复核的经验、事实、模式、反馈 |
 | 确认记忆 | Confirmed Memory | `SocMemoryRecord` | 人类确认后的可检索记忆，默认仍受 retrieval policy 约束 |
 | 记忆准入 | Memory Admission | `MemoryAdmissionDecision` | 在创建候选前判断是否有人工提升信号、可复用锚点和足够理由 |
-| 行为指纹 | Behavior Fingerprint | `behavior_fingerprint` facet | 从场景、进程、协议、方法、技术等稳定组件生成的可回放检索锚点 |
+| 检测签名 | Detection Signature | `detection_signature` facet | 租户 Profile 从 canonical detector name 生成的版本化签名，用于拆分一个 broad rule code 下的不同检测场景 |
+| 行为指纹 | Behavior Fingerprint | `behavior_fingerprint` facet | 从场景、进程、协议、方法、技术等 canonical 组件生成的可回放检索锚点；Profile 另标 strong/weak，弱特征不能单独产生改判权限 |
 | 能力卡 | Capability Card | PingAn capability docs | 描述一个业务能力应落到 skill、MCP、adapter、memory 还是 eval |
 
 ---

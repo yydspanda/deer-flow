@@ -19,10 +19,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.memory.candidates import InMemoryMemoryCandidateRepository
-from soc_agent.memory.facets import (
-    memory_facets_from_analysis_run,
-    reusable_facet_values,
-)
+from soc_agent.memory.facets import reusable_facet_values
 from soc_agent.memory.profiles import GenericSocMemoryProfile, SocMemoryProfile
 from soc_agent.normalizers import normalize_alert_payload
 from soc_agent.utils.hashing import stable_hash
@@ -147,7 +144,7 @@ def memory_pattern_command_from_run(
     if not tenant_id:
         raise MemoryPatternIneligibleError("memory pattern aggregation requires an explicit tenant_id")
     resolved_profile = profile or GenericSocMemoryProfile()
-    common_facets = _common_facets(run)
+    common_facets = _common_facets(run, profile=resolved_profile)
     # The observation environment is an operator-owned cohort boundary. Keep it
     # in the canonical feature set even when the analyzer request did not carry
     # an environment so tenant profiles can prevent cross-environment reuse.
@@ -239,12 +236,16 @@ def _lesson_from_run(run: AnalysisRun) -> MemoryPatternLessonObservation:
     )
 
 
-def _common_facets(run: AnalysisRun) -> dict[str, list[str]]:
+def _common_facets(
+    run: AnalysisRun,
+    *,
+    profile: SocMemoryProfile,
+) -> dict[str, list[str]]:
     request = run.llm_analysis_request
     if request is None:
         return {}
     return reusable_facet_values(
-        memory_facets_from_analysis_run(run),
+        profile.project_run_facets(run),
         {
             "source_type",
             "source_system",
@@ -252,6 +253,7 @@ def _common_facets(run: AnalysisRun) -> dict[str, list[str]]:
             "product",
             "integration_name",
             "detection_key",
+            "detection_signature",
             "rule_code",
             "rule_name",
             "category",
@@ -259,7 +261,10 @@ def _common_facets(run: AnalysisRun) -> dict[str, list[str]]:
             "environment",
             "scenario_key",
             "behavior_component",
+            "behavior_component_strong",
+            "behavior_component_weak",
             "behavior_fingerprint",
+            "behavior_strength",
             "role_entity",
             "entity",
             "skill",

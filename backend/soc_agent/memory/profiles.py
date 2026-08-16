@@ -20,7 +20,10 @@ from soc_agent.contracts import (
     MemoryPatternSignature,
     SocMemoryApplicabilitySpec,
 )
-from soc_agent.memory.facets import memory_facets_from_analysis_request
+from soc_agent.memory.facets import (
+    memory_facets_from_analysis_request,
+    memory_facets_from_analysis_run,
+)
 from soc_agent.utils.hashing import stable_hash
 
 
@@ -43,6 +46,11 @@ class SocMemoryProfile(Protocol):
     def project_query_facets(
         self,
         request: LLMAnalysisRequest,
+    ) -> dict[str, list[str]]: ...
+
+    def project_run_facets(
+        self,
+        run: AnalysisRun,
     ) -> dict[str, list[str]]: ...
 
     def build_pattern_signature(
@@ -86,6 +94,12 @@ class GenericSocMemoryProfile:
         request: LLMAnalysisRequest,
     ) -> dict[str, list[str]]:
         return memory_facets_from_analysis_request(request)
+
+    def project_run_facets(
+        self,
+        run: AnalysisRun,
+    ) -> dict[str, list[str]]:
+        return memory_facets_from_analysis_run(run)
 
     def build_pattern_signature(
         self,

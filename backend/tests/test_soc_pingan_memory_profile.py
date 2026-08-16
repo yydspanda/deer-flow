@@ -9,6 +9,7 @@ from soc_agent.contracts import (
     ActorContext,
     ActorType,
     AlertClassification,
+    AlertEntitySet,
     AlertSourceRef,
     AlertSourceType,
     AnalysisReasoningBasis,
@@ -17,13 +18,21 @@ from soc_agent.contracts import (
     AnalysisRun,
     AnalysisRunStatus,
     DetectionRuleRef,
+    EntityKind,
+    EntityMention,
     EntrySurface,
     EvidenceItem,
+    ExtractedEntities,
+    FactReconstructionResult,
     LLMAnalysisRequest,
     MemoryPatternAggregationPolicy,
     MemoryPatternDataClass,
     MemoryPatternDimension,
     MemoryPatternSourceType,
+    NetworkEntityRef,
+    RoleResolution,
+    RoleResolutionStatus,
+    ScenarioHypothesis,
     ServiceRequestContext,
     SocMemoryApplicabilitySpec,
     SocMemoryCandidateReviewCommand,
@@ -60,6 +69,8 @@ def _run(
     techniques: list[str] | None = None,
     source_event_id: str | None = None,
     verdict: Verdict = Verdict.FALSE_POSITIVE,
+    network_protocol: str | None = None,
+    scenario_type: str | None = None,
 ) -> AnalysisRun:
     evidence_ref = "E-000000000001"
     analysis = AnalysisResult(
@@ -117,6 +128,23 @@ def _run(
                 severity="high",
                 technique=(["T1059", "T1071"] if techniques is None else techniques),
             ),
+            canonical_entities=AlertEntitySet(
+                network=NetworkEntityRef(protocol=network_protocol),
+            ),
+            fact_reconstruction=FactReconstructionResult(
+                scenario_hypotheses=(
+                    [
+                        ScenarioHypothesis(
+                            scenario_type=scenario_type,
+                            status="confirmed",
+                            confidence=0.9,
+                            rationale="Deterministic test scenario.",
+                        )
+                    ]
+                    if scenario_type
+                    else []
+                )
+            ),
         ),
         analysis=analysis,
     )
@@ -160,7 +188,9 @@ def test_pingan_profile_creates_one_typed_same_class_candidate() -> None:
     assert result.candidate.applicability.profile_id == "pingan.soc"
     assert set(result.candidate.applicability.required_facets) == {
         "behavior_fingerprint",
+        "behavior_strength",
         "detection_key",
+        "detection_signature",
         "environment",
     }
     assert result.candidate.decision_impact is SocMemoryDecisionImpact.DETECTION_DECISION
@@ -204,6 +234,7 @@ def test_pingan_profile_uses_deterministic_behavior_when_rule_identity_is_absent
     assert second_result.candidate.applicability is not None
     assert set(second_result.candidate.applicability.required_facets) == {
         "behavior_fingerprint",
+        "behavior_strength",
         "environment",
     }
     assert second_result.candidate.decision_impact is SocMemoryDecisionImpact.DETECTION_DECISION
@@ -230,8 +261,10 @@ def test_pingan_profile_is_server_selected_for_runtime_query() -> None:
     )
 
     assert query.metadata["memory_profile_id"] == "pingan.soc"
-    assert query.metadata["memory_feature_schema_version"] == ("pingan.soc.memory_features.v2")
+    assert query.metadata["memory_feature_schema_version"] == ("pingan.soc.memory_features.v3")
     assert query.facets["detection_key"] == ["pingan:ndr:reverse-shell"]
+    assert len(query.facets["detection_signature"]) == 1
+    assert query.facets["behavior_strength"] == ["strong"]
 
 
 def test_reviewer_can_confirm_activate_and_authorize_exact_future_matches() -> None:
@@ -428,7 +461,9 @@ def test_reviewer_can_narrow_pattern_decision_scope_with_candidate_facets() -> N
     assert reviewed.memory_record.decision_directive is not None
     assert set(reviewed.memory_record.decision_directive.required_facet_keys) == {
         "behavior_fingerprint",
+        "behavior_strength",
         "detection_key",
+        "detection_signature",
         "environment",
         "source_type",
     }
@@ -583,3 +618,156 @@ def test_same_rule_similar_behavior_is_context_only_until_exact_fingerprint_matc
     assert similar.matches[0].applicability_report.status.value == "partial"
     assert similar.matches[0].applicability_report.context_only_allowed is True
     assert similar.returned_context_only_count == 1
+
+
+def test_same_rule_code_and_behavior_with_different_names_form_separate_cohorts() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    service = _service(repository)
+
+    first_name = "ElasticSearch remote code execution"
+    second_name = "WebLogic deserialization remote code execution"
+    first_observation = _observe(
+        service,
+        _run(1, rule_name=first_name),
+        "batch:1",
+    ).observation
+    first_candidate = _observe(
+        service,
+        _run(2, rule_name=first_name),
+        "batch:2",
+    ).candidate
+    second_observation = _observe(
+        service,
+        _run(3, rule_name=second_name),
+        "batch:3",
+    ).observation
+    second_candidate = _observe(
+        service,
+        _run(4, rule_name=second_name),
+        "batch:4",
+    ).candidate
+
+    assert first_candidate is not None
+    assert second_candidate is not None
+    assert first_observation.signature.value != second_observation.signature.value
+    assert first_observation.signature.facets["detection_signature"] != second_observation.signature.facets["detection_signature"]
+    assert len(repository.list_memory_candidates()) == 2
+
+
+def test_weak_only_behavior_creates_context_candidate_without_decision_authority() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    service = _service(repository)
+    weak = {
+        "techniques": [],
+        "network_protocol": "tcp",
+        "scenario_type": "web_attack",
+    }
+
+    _observe(service, _run(1, **weak), "batch:1")
+    aggregated = _observe(service, _run(2, **weak), "batch:2")
+
+    assert aggregated.candidate is not None
+    assert aggregated.observation.signature.facets["behavior_strength"] == ["weak_only"]
+    assert aggregated.candidate.decision_impact is SocMemoryDecisionImpact.REVIEW_HINT
+    assert aggregated.candidate.metadata["decision_scope"] == "rule_context_only"
+    assert aggregated.candidate.applicability is not None
+    assert set(aggregated.candidate.applicability.required_facets) == {
+        "detection_key",
+        "detection_signature",
+        "environment",
+    }
+
+
+def test_context_only_requires_a_shared_strong_behavior_component() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    pattern_service = _service(repository)
+    _observe(pattern_service, _run(1, techniques=["T1059", "T1071"]), "batch:1")
+    aggregated = _observe(
+        pattern_service,
+        _run(2, techniques=["T1059", "T1071"]),
+        "batch:2",
+    )
+    assert aggregated.candidate is not None
+
+    reviewed_at = _START + timedelta(hours=1)
+    record = (
+        SocMemoryService(
+            candidate_repository=repository,
+            record_repository=repository,
+            mutation_audit_repository=repository,
+            now_provider=lambda: reviewed_at,
+        )
+        .review_candidate(
+            SocMemoryCandidateReviewCommand(
+                candidate_id=aggregated.candidate.candidate_id,
+                decision=SocMemoryCandidateReviewDecision.CONFIRM,
+                reason="Strong behavior overlap is required for partial retrieval.",
+                activate_retrieval=True,
+                activation_valid_until=reviewed_at + timedelta(days=30),
+                activation_review_after_days=7,
+            ),
+            context=ServiceRequestContext(
+                actor=ActorContext(
+                    actor_id="memory-reviewer",
+                    actor_type=ActorType.USER,
+                    surface=EntrySurface.TEST,
+                    roles=["soc_memory_reviewer"],
+                )
+            ),
+        )
+        .memory_record
+    )
+    assert record is not None
+
+    registry = build_soc_memory_profile_registry()
+    unrelated_request = _run(
+        3,
+        techniques=["T1021", "T1047"],
+    ).llm_analysis_request
+    assert unrelated_request is not None
+    query = memory_query_from_analysis_request(
+        unrelated_request,
+        profile=registry.resolve_request(unrelated_request),
+    )
+    result = SocMemoryService(
+        record_repository=repository,
+        now_provider=lambda: reviewed_at,
+    ).find_relevant_records(query)
+
+    assert result.matches == []
+    assert result.skipped_not_applicable == 1
+
+
+def test_pingan_profile_deduplicates_ip_entity_when_role_entity_is_available() -> None:
+    request = _run(1).llm_analysis_request
+    assert request is not None
+    request = request.model_copy(
+        update={
+            "extracted_entities": ExtractedEntities(
+                mentions=[
+                    EntityMention(
+                        kind=EntityKind.IP,
+                        value="30.174.29.44",
+                        key="ip:30.174.29.44",
+                    )
+                ]
+            ),
+            "fact_reconstruction": FactReconstructionResult(
+                role_resolutions=[
+                    RoleResolution(
+                        role="attacker",
+                        status=RoleResolutionStatus.CONFIRMED,
+                        selected_value="30.174.29.44",
+                        semantic_confidence=0.9,
+                        rationale="Reviewed role fact.",
+                    )
+                ]
+            ),
+        }
+    )
+    profile = build_soc_memory_profile_registry().resolve_request(request)
+
+    facets = profile.project_query_facets(request)
+
+    assert facets["role_entity"] == ["attacker:30.174.29.44"]
+    assert "entity" not in facets

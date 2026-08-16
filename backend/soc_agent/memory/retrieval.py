@@ -116,6 +116,7 @@ def memory_query_from_analysis_request(
                 & {
                     "behavior_fingerprint",
                     "detection_key",
+                    "detection_signature",
                     "entity",
                     "integration_name",
                     "role_entity",
