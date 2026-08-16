@@ -34,6 +34,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
@@ -71,6 +72,7 @@ import type {
   SocInvestigationTimelineItem,
   SocMemoryCandidate,
   SocMemoryCandidateReviewDecision,
+  SocMemoryApplicabilitySpec,
   SocMemoryRecord,
   SocMemoryRetrievalActivationAction,
   SocMemoryRetrievalResult,
@@ -115,6 +117,60 @@ interface MemoryRetrievalDraft {
   reason: string;
   validUntil: string;
   reviewAfterDays: string;
+}
+
+interface MemoryCandidateReviewDraft {
+  reason: string;
+  applyToFutureMatches: boolean;
+  confirmedVerdict: SocVerdict;
+  promotedFacetKeys: string[];
+}
+
+function defaultMemoryCandidateReviewDraft(
+  candidate: SocMemoryCandidate,
+): MemoryCandidateReviewDraft {
+  return {
+    reason: "",
+    applyToFutureMatches: false,
+    confirmedVerdict:
+      candidate.candidate_type === "benign_pattern"
+        ? "false_positive"
+        : "true_positive",
+    promotedFacetKeys: [],
+  };
+}
+
+function reviewedMemoryApplicability(
+  candidate: SocMemoryCandidate,
+  draft: MemoryCandidateReviewDraft,
+): SocMemoryApplicabilitySpec | undefined {
+  const base = candidate.applicability;
+  if (!base || draft.promotedFacetKeys.length === 0) return undefined;
+  const promoted = draft.promotedFacetKeys.filter(
+    (key) => base.optional_facets[key] !== undefined,
+  );
+  if (promoted.length === 0) return undefined;
+  const optionalFacets = Object.fromEntries(
+    Object.entries(base.optional_facets).filter(
+      ([key]) => !promoted.includes(key),
+    ),
+  );
+  return {
+    ...base,
+    required_facets: {
+      ...base.required_facets,
+      ...Object.fromEntries(
+        promoted.map((key) => [key, base.optional_facets[key]!]),
+      ),
+    },
+    optional_facets: optionalFacets,
+    context_only_required_facet_keys:
+      base.context_only_required_facet_keys.length > 0
+        ? Array.from(
+            new Set([...base.context_only_required_facet_keys, ...promoted]),
+          ).sort()
+        : [],
+  };
 }
 
 function defaultMemoryRetrievalDraft(): MemoryRetrievalDraft {
@@ -1040,15 +1096,18 @@ function ExternalDispositionSection({
 
 function MemoryCandidateSection({
   candidates,
-  reviewReasons,
+  reviewDrafts,
   isReviewing,
-  onReviewReasonChange,
+  onReviewDraftChange,
   onReview,
 }: {
   candidates: SocMemoryCandidate[];
-  reviewReasons: Record<string, string>;
+  reviewDrafts: Record<string, MemoryCandidateReviewDraft>;
   isReviewing: boolean;
-  onReviewReasonChange: (candidateId: string, reason: string) => void;
+  onReviewDraftChange: (
+    candidate: SocMemoryCandidate,
+    patch: Partial<MemoryCandidateReviewDraft>,
+  ) => void;
   onReview: (
     candidate: SocMemoryCandidate,
     decision: SocMemoryCandidateReviewDecision,
@@ -1069,126 +1128,252 @@ function MemoryCandidateSection({
             当前工单还没有待评审经验。
           </div>
         ) : (
-          candidates.map((candidate) => (
-            <div key={candidate.candidate_id} className="p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">
-                    {candidate.summary}
+          candidates.map((candidate) => {
+            const draft =
+              reviewDrafts[candidate.candidate_id] ??
+              defaultMemoryCandidateReviewDraft(candidate);
+            const applicability = candidate.applicability;
+            const decisionEligible =
+              candidate.decision_impact === "detection_decision" &&
+              applicability !== null &&
+              applicability !== undefined;
+            const editable = ["pending_review", "confirmed_candidate"].includes(
+              candidate.status,
+            );
+            return (
+              <div key={candidate.candidate_id} className="p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium">
+                      {candidate.summary}
+                    </div>
+                    <div className="text-muted-foreground mt-1 text-xs">
+                      {candidateSourceLabel(candidate)} /{" "}
+                      {formatTime(candidate.created_at)}
+                    </div>
                   </div>
-                  <div className="text-muted-foreground mt-1 text-xs">
-                    {candidateSourceLabel(candidate)} /{" "}
-                    {formatTime(candidate.created_at)}
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Badge variant="outline">{candidate.status}</Badge>
+                    <Badge variant="secondary">
+                      {candidate.target_artifact}
+                    </Badge>
+                    <Badge variant="outline">
+                      confidence {formatPercent(candidate.confidence)}
+                    </Badge>
                   </div>
                 </div>
-                <div className="flex flex-wrap justify-end gap-2">
-                  <Badge variant="outline">{candidate.status}</Badge>
-                  <Badge variant="secondary">{candidate.target_artifact}</Badge>
-                  <Badge variant="outline">
-                    confidence {formatPercent(candidate.confidence)}
-                  </Badge>
+                <p className="text-muted-foreground mt-2 text-xs">
+                  {candidate.content}
+                </p>
+                <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                  <span>{candidate.candidate_type}</span>
+                  <span>{candidate.tenant_scope}</span>
+                  {candidate.review_owner ? (
+                    <span>owner: {candidate.review_owner}</span>
+                  ) : null}
+                  {candidate.idempotency_key ? (
+                    <span>idempotency: {candidate.idempotency_key}</span>
+                  ) : null}
+                  <span>runtime: inactive</span>
                 </div>
-              </div>
-              <p className="text-muted-foreground mt-2 text-xs">
-                {candidate.content}
-              </p>
-              <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
-                <span>{candidate.candidate_type}</span>
-                <span>{candidate.tenant_scope}</span>
-                {candidate.review_owner ? (
-                  <span>owner: {candidate.review_owner}</span>
+                {candidate.evidence_refs.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {candidate.evidence_refs.map((ref) => (
+                      <Badge key={ref} variant="outline">
+                        {ref}
+                      </Badge>
+                    ))}
+                  </div>
                 ) : null}
-                {candidate.idempotency_key ? (
-                  <span>idempotency: {candidate.idempotency_key}</span>
+                {candidate.labels.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {candidate.labels.map((label) => (
+                      <Badge key={label} variant="secondary">
+                        {label}
+                      </Badge>
+                    ))}
+                  </div>
                 ) : null}
-                <span>runtime: inactive</span>
+                {applicability ? (
+                  <div className="mt-3 border-t pt-3">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="font-medium">适用范围</span>
+                      <Badge variant="outline">
+                        {applicability.profile_id}@
+                        {applicability.profile_version}
+                      </Badge>
+                      {decisionEligible ? (
+                        <Badge variant="secondary">模式级决策候选</Badge>
+                      ) : (
+                        <Badge variant="outline">规则背景，不改判</Badge>
+                      )}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {Object.entries(applicability.required_facets).map(
+                        ([key, values]) => (
+                          <Badge key={key} variant="outline">
+                            必需 {key}: {values.slice(0, 3).join(", ")}
+                          </Badge>
+                        ),
+                      )}
+                    </div>
+                    {Object.keys(applicability.optional_facets).length > 0 ? (
+                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                        {Object.entries(applicability.optional_facets).map(
+                          ([key, values]) => {
+                            const checked =
+                              draft.promotedFacetKeys.includes(key);
+                            const inputId = `memory-scope-${candidate.candidate_id}-${key}`;
+                            return (
+                              <label
+                                key={key}
+                                htmlFor={inputId}
+                                className="flex min-w-0 items-start gap-2 text-xs"
+                              >
+                                <input
+                                  id={inputId}
+                                  type="checkbox"
+                                  checked={checked}
+                                  disabled={isReviewing || !editable}
+                                  className="mt-0.5 size-4 shrink-0"
+                                  onChange={(event) =>
+                                    onReviewDraftChange(candidate, {
+                                      promotedFacetKeys: event.target.checked
+                                        ? [
+                                            ...draft.promotedFacetKeys.filter(
+                                              (item) => item !== key,
+                                            ),
+                                            key,
+                                          ]
+                                        : draft.promotedFacetKeys.filter(
+                                            (item) => item !== key,
+                                          ),
+                                    })
+                                  }
+                                />
+                                <span className="min-w-0">
+                                  <span className="font-medium">{key}</span>
+                                  <span className="text-muted-foreground ml-1 break-all">
+                                    {values.slice(0, 3).join(", ")}
+                                  </span>
+                                </span>
+                              </label>
+                            );
+                          },
+                        )}
+                      </div>
+                    ) : null}
+                    {decisionEligible ? (
+                      <div className="mt-3 flex flex-wrap items-center gap-3">
+                        <label className="flex items-center gap-2 text-xs font-medium">
+                          <Switch
+                            checked={draft.applyToFutureMatches}
+                            disabled={isReviewing || !editable}
+                            onCheckedChange={(checked) =>
+                              onReviewDraftChange(candidate, {
+                                applyToFutureMatches: checked,
+                              })
+                            }
+                            aria-label="未来精确匹配改判"
+                          />
+                          未来精确匹配改判
+                        </label>
+                        {draft.applyToFutureMatches ? (
+                          <Select
+                            value={draft.confirmedVerdict}
+                            disabled={isReviewing || !editable}
+                            onValueChange={(value) =>
+                              onReviewDraftChange(candidate, {
+                                confirmedVerdict: value as SocVerdict,
+                              })
+                            }
+                          >
+                            <SelectTrigger className="h-8 w-40 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="true_positive">
+                                真实攻击
+                              </SelectItem>
+                              <SelectItem value="suspicious">可疑</SelectItem>
+                              <SelectItem value="false_positive">
+                                误报
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="mt-4 grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
+                  <Input
+                    value={draft.reason}
+                    onChange={(event) =>
+                      onReviewDraftChange(candidate, {
+                        reason: event.target.value,
+                      })
+                    }
+                    placeholder="评审理由"
+                    disabled={isReviewing}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        isReviewing ||
+                        !["pending_review", "confirmed_candidate"].includes(
+                          candidate.status,
+                        ) ||
+                        !draft.reason.trim()
+                      }
+                      onClick={() => onReview(candidate, "confirm")}
+                    >
+                      确认
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        isReviewing ||
+                        !["pending_review", "confirmed_candidate"].includes(
+                          candidate.status,
+                        ) ||
+                        !draft.reason.trim()
+                      }
+                      onClick={() => onReview(candidate, "reject")}
+                    >
+                      驳回
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        isReviewing ||
+                        ![
+                          "pending_review",
+                          "confirmed_candidate",
+                          "confirmed",
+                        ].includes(candidate.status) ||
+                        !draft.reason.trim()
+                      }
+                      onClick={() =>
+                        onReview(
+                          candidate,
+                          candidate.status === "confirmed"
+                            ? "deprecate"
+                            : "expire",
+                        )
+                      }
+                    >
+                      {candidate.status === "confirmed" ? "废弃" : "过期"}
+                    </Button>
+                  </div>
+                </div>
               </div>
-              {candidate.evidence_refs.length > 0 ? (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {candidate.evidence_refs.map((ref) => (
-                    <Badge key={ref} variant="outline">
-                      {ref}
-                    </Badge>
-                  ))}
-                </div>
-              ) : null}
-              {candidate.labels.length > 0 ? (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {candidate.labels.map((label) => (
-                    <Badge key={label} variant="secondary">
-                      {label}
-                    </Badge>
-                  ))}
-                </div>
-              ) : null}
-              <div className="mt-4 grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
-                <Input
-                  value={reviewReasons[candidate.candidate_id] ?? ""}
-                  onChange={(event) =>
-                    onReviewReasonChange(
-                      candidate.candidate_id,
-                      event.target.value,
-                    )
-                  }
-                  placeholder="评审理由"
-                  disabled={isReviewing}
-                />
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={
-                      isReviewing ||
-                      !["pending_review", "confirmed_candidate"].includes(
-                        candidate.status,
-                      ) ||
-                      !reviewReasons[candidate.candidate_id]?.trim()
-                    }
-                    onClick={() => onReview(candidate, "confirm")}
-                  >
-                    确认
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={
-                      isReviewing ||
-                      !["pending_review", "confirmed_candidate"].includes(
-                        candidate.status,
-                      ) ||
-                      !reviewReasons[candidate.candidate_id]?.trim()
-                    }
-                    onClick={() => onReview(candidate, "reject")}
-                  >
-                    驳回
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={
-                      isReviewing ||
-                      ![
-                        "pending_review",
-                        "confirmed_candidate",
-                        "confirmed",
-                      ].includes(candidate.status) ||
-                      !reviewReasons[candidate.candidate_id]?.trim()
-                    }
-                    onClick={() =>
-                      onReview(
-                        candidate,
-                        candidate.status === "confirmed"
-                          ? "deprecate"
-                          : "expire",
-                      )
-                    }
-                  >
-                    {candidate.status === "confirmed" ? "废弃" : "过期"}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </section>
@@ -1231,7 +1416,9 @@ function RelevantMemorySection({
             <span>逾期未复核 {result.skipped_review_overdue}</span>
             <span>状态过滤 {result.skipped_status}</span>
             <span>强锚点过滤 {result.skipped_missing_strong_anchor}</span>
+            <span>适用范围过滤 {result.skipped_not_applicable}</span>
             <span>低分过滤 {result.skipped_below_min_score}</span>
+            <span>仅上下文 {result.returned_context_only_count}</span>
           </div>
           {matches.length === 0 ? (
             <div className="text-muted-foreground p-4 text-sm">
@@ -1256,6 +1443,19 @@ function RelevantMemorySection({
                       {match.record.target_artifact}
                     </Badge>
                     <Badge variant="outline">retrieval-enabled</Badge>
+                    {match.applicability_report ? (
+                      <Badge
+                        variant={
+                          match.applicability_report.context_only_allowed
+                            ? "outline"
+                            : "secondary"
+                        }
+                      >
+                        {match.applicability_report.context_only_allowed
+                          ? "context-only"
+                          : match.applicability_report.status}
+                      </Badge>
+                    ) : null}
                   </div>
                 </div>
                 <p className="text-muted-foreground mt-2 text-xs">
@@ -1547,8 +1747,8 @@ export function SocReviewQueueWorkbench() {
     useState<SocAgentApprovalGrant | null>(null);
   const [approvedActionResult, setApprovedActionResult] =
     useState<SocAgentActionResult | null>(null);
-  const [memoryReviewReasons, setMemoryReviewReasons] = useState<
-    Record<string, string>
+  const [memoryReviewDrafts, setMemoryReviewDrafts] = useState<
+    Record<string, MemoryCandidateReviewDraft>
   >({});
   const [memoryRetrievalDrafts, setMemoryRetrievalDrafts] = useState<
     Record<string, MemoryRetrievalDraft>
@@ -1789,13 +1989,17 @@ export function SocReviewQueueWorkbench() {
     }
   };
 
-  const handleMemoryReviewReasonChange = (
-    candidateId: string,
-    reason: string,
+  const handleMemoryReviewDraftChange = (
+    candidate: SocMemoryCandidate,
+    patch: Partial<MemoryCandidateReviewDraft>,
   ) => {
-    setMemoryReviewReasons((current) => ({
+    setMemoryReviewDrafts((current) => ({
       ...current,
-      [candidateId]: reason,
+      [candidate.candidate_id]: {
+        ...(current[candidate.candidate_id] ??
+          defaultMemoryCandidateReviewDraft(candidate)),
+        ...patch,
+      },
     }));
   };
 
@@ -1803,20 +2007,38 @@ export function SocReviewQueueWorkbench() {
     candidate: SocMemoryCandidate,
     decision: SocMemoryCandidateReviewDecision,
   ) => {
-    const reason = memoryReviewReasons[candidate.candidate_id]?.trim();
+    const draft =
+      memoryReviewDrafts[candidate.candidate_id] ??
+      defaultMemoryCandidateReviewDraft(candidate);
+    const reason = draft.reason.trim();
     if (!reason) {
       toast.error("请填写评审理由");
       return;
     }
+    const narrowedApplicability = reviewedMemoryApplicability(candidate, draft);
     try {
       await reviewMemoryCandidateMutation.mutateAsync({
         candidateId: candidate.candidate_id,
-        request: { decision, reason },
+        request: {
+          decision,
+          reason,
+          ...(decision === "confirm" && narrowedApplicability
+            ? { record_applicability: narrowedApplicability }
+            : {}),
+          ...(decision === "confirm" && draft.applyToFutureMatches
+            ? {
+                apply_to_future_matches: true,
+                confirmed_verdict: draft.confirmedVerdict,
+                clear_review_on_match: true,
+              }
+            : {}),
+        },
       });
-      setMemoryReviewReasons((current) => ({
-        ...current,
-        [candidate.candidate_id]: "",
-      }));
+      setMemoryReviewDrafts((current) => {
+        const next = { ...current };
+        delete next[candidate.candidate_id];
+        return next;
+      });
       toast.success("候选记忆已更新");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "候选记忆评审失败");
@@ -2134,9 +2356,9 @@ export function SocReviewQueueWorkbench() {
 
               <MemoryCandidateSection
                 candidates={context?.memory_candidates ?? []}
-                reviewReasons={memoryReviewReasons}
+                reviewDrafts={memoryReviewDrafts}
                 isReviewing={reviewMemoryCandidateMutation.isPending}
-                onReviewReasonChange={handleMemoryReviewReasonChange}
+                onReviewDraftChange={handleMemoryReviewDraftChange}
                 onReview={(candidate, decision) =>
                   void handleReviewMemoryCandidate(candidate, decision)
                 }

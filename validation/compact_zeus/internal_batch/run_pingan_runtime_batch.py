@@ -44,6 +44,7 @@ from soc_agent.application import (  # noqa: E402
     build_soc_analysis_service,
     build_soc_investigation_reporting_service,
     build_soc_investigation_workflow_service,
+    build_soc_memory_profile_registry,
     load_soc_enrichment_composition_config,
     validate_soc_enrichment_registry,
 )
@@ -76,9 +77,7 @@ MANIFEST_SCHEMA_VERSION = "soc.pingan_internal_runtime_batch_manifest.v1"
 ITEM_SCHEMA_VERSION = "soc.pingan_internal_runtime_batch_item.v2"
 RESULTS_SCHEMA_VERSION = "soc.pingan_internal_runtime_batch_results.v1"
 DEFAULT_SOURCE = ROOT / "datas/source/full_alert_2026_month_forth_sample_200.pkl"
-DEFAULT_OUTPUT_ROOT = (
-    BACKEND_ROOT / ".deer-flow/soc-internal-validation/runtime-batches"
-)
+DEFAULT_OUTPUT_ROOT = BACKEND_ROOT / ".deer-flow/soc-internal-validation/runtime-batches"
 _SUCCESS_RUN_STATUSES = frozenset({"success", "needs_review"})
 
 
@@ -138,9 +137,7 @@ def prepare_batch_items(
         raise ValueError("limit must be >= 1")
     requested_alert_ids = _normalize_requested_alert_ids(alert_ids)
     if requested_alert_ids and (start_index != 0 or limit is not None):
-        raise ValueError(
-            "alert-id selection cannot be combined with start-index or limit"
-        )
+        raise ValueError("alert-id selection cannot be combined with start-index or limit")
     if requested_alert_ids:
         all_items, errors = prepare_batch_items(
             frame,
@@ -153,17 +150,10 @@ def prepare_batch_items(
                 duplicate_source_ids.add(item.alert_id)
             else:
                 by_alert_id[item.alert_id] = item
-        duplicate_requested_ids = sorted(
-            duplicate_source_ids.intersection(requested_alert_ids)
-        )
+        duplicate_requested_ids = sorted(duplicate_source_ids.intersection(requested_alert_ids))
         if duplicate_requested_ids:
-            raise ValueError(
-                "source contains duplicate requested alert ids: "
-                + ", ".join(duplicate_requested_ids)
-            )
-        missing = [
-            alert_id for alert_id in requested_alert_ids if alert_id not in by_alert_id
-        ]
+            raise ValueError("source contains duplicate requested alert ids: " + ", ".join(duplicate_requested_ids))
+        missing = [alert_id for alert_id in requested_alert_ids if alert_id not in by_alert_id]
         if missing:
             raise ValueError("requested alert ids are missing: " + ", ".join(missing))
         return [by_alert_id[alert_id] for alert_id in requested_alert_ids], errors
@@ -182,17 +172,10 @@ def prepare_batch_items(
                 raise TypeError("alert_full_data.alert_data must be an object")
             alert_id = _alert_id(row, wrapper, payload, source_index=source_index)
             payload_dict = dict(payload)
-            source_tenant_id = payload_dict.get("tenant_id") or payload_dict.get(
-                "tenantId"
-            )
+            source_tenant_id = payload_dict.get("tenant_id") or payload_dict.get("tenantId")
             if default_tenant_id is not None:
-                if (
-                    source_tenant_id is not None
-                    and str(source_tenant_id) != default_tenant_id
-                ):
-                    raise ValueError(
-                        f"source tenant_id {source_tenant_id!r} does not match default tenant {default_tenant_id!r}"
-                    )
+                if source_tenant_id is not None and str(source_tenant_id) != default_tenant_id:
+                    raise ValueError(f"source tenant_id {source_tenant_id!r} does not match default tenant {default_tenant_id!r}")
                 if source_tenant_id is None:
                     payload_dict["tenant_id"] = default_tenant_id
             items.append(
@@ -223,9 +206,7 @@ def _normalize_requested_alert_ids(
     normalized = tuple(str(alert_id).strip() for alert_id in alert_ids)
     if any(not alert_id for alert_id in normalized):
         raise ValueError("alert ids must not be blank")
-    duplicates = sorted(
-        alert_id for alert_id, count in Counter(normalized).items() if count > 1
-    )
+    duplicates = sorted(alert_id for alert_id, count in Counter(normalized).items() if count > 1)
     if duplicates:
         raise ValueError("duplicate requested alert ids: " + ", ".join(duplicates))
     return normalized
@@ -248,46 +229,22 @@ def execute_batch(
         if not config.persist:
             raise ValueError("investigation enrichment requires persisted batch runs")
         if investigation_service is None:
-            raise ValueError(
-                "investigation enrichment is enabled but no investigation service was provided"
-            )
+            raise ValueError("investigation enrichment is enabled but no investigation service was provided")
         if investigation_reporting_service is None:
-            raise ValueError(
-                "investigation enrichment is enabled but no investigation reporting service was provided"
-            )
-        if (
-            not config.enrichment_composition_sha256
-            or not config.enrichment_action_config_sha256s
-            or not config.enrichment_extensions_config_sha256
-        ):
-            raise ValueError(
-                "investigation enrichment requires composition, action-config and extensions-config fingerprints"
-            )
-    elif (
-        investigation_service is not None or investigation_reporting_service is not None
-    ):
-        raise ValueError(
-            "investigation services were provided while investigation enrichment is disabled"
-        )
+            raise ValueError("investigation enrichment is enabled but no investigation reporting service was provided")
+        if not config.enrichment_composition_sha256 or not config.enrichment_action_config_sha256s or not config.enrichment_extensions_config_sha256:
+            raise ValueError("investigation enrichment requires composition, action-config and extensions-config fingerprints")
+    elif investigation_service is not None or investigation_reporting_service is not None:
+        raise ValueError("investigation services were provided while investigation enrichment is disabled")
     if config.memory_pattern_enabled:
         if not config.persist:
             raise ValueError("memory pattern aggregation requires persisted batch runs")
         if memory_pattern_service is None:
-            raise ValueError(
-                "memory pattern aggregation is enabled but no service was provided"
-            )
-        if (
-            not config.memory_pattern_environment
-            or not config.memory_pattern_data_class
-            or config.memory_pattern_policy is None
-        ):
-            raise ValueError(
-                "memory pattern aggregation requires environment, data class, and policy"
-            )
+            raise ValueError("memory pattern aggregation is enabled but no service was provided")
+        if not config.memory_pattern_environment or not config.memory_pattern_data_class or config.memory_pattern_policy is None:
+            raise ValueError("memory pattern aggregation requires environment, data class, and policy")
     elif memory_pattern_service is not None:
-        raise ValueError(
-            "memory pattern service was provided while aggregation is disabled"
-        )
+        raise ValueError("memory pattern service was provided while aggregation is disabled")
 
     output_dir = config.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -302,13 +259,9 @@ def execute_batch(
         _validate_resume(previous_manifest, config=config)
         existing = _load_existing_items(items_dir, config=config)
         selected_indexes = {item.source_index for item in items}
-        stale_indexes = sorted(
-            index for index in existing if index not in selected_indexes
-        )
+        stale_indexes = sorted(index for index in existing if index not in selected_indexes)
         if stale_indexes:
-            raise ValueError(
-                "output directory contains item indexes outside this selection; use a new output directory or the original start/limit"
-            )
+            raise ValueError("output directory contains item indexes outside this selection; use a new output directory or the original start/limit")
 
         pending = [
             item
@@ -359,9 +312,7 @@ def execute_batch(
                     stop_after_failure = True
                     break
         else:
-            with ThreadPoolExecutor(
-                max_workers=config.workers, thread_name_prefix="soc-batch"
-            ) as executor:
+            with ThreadPoolExecutor(max_workers=config.workers, thread_name_prefix="soc-batch") as executor:
                 futures: dict[Future[dict[str, Any]], BatchItem] = {
                     executor.submit(
                         _analyze_item,
@@ -396,15 +347,7 @@ def execute_batch(
             selected_count=len(items),
             source_error_count=len(source_errors),
         )
-        final_status = (
-            "interrupted"
-            if stop_after_failure
-            else (
-                "completed_with_failures"
-                if summary["failed_count"] or source_errors
-                else "completed"
-            )
-        )
+        final_status = "interrupted" if stop_after_failure else ("completed_with_failures" if summary["failed_count"] or source_errors else "completed")
         manifest.update(
             {
                 "status": final_status,
@@ -443,9 +386,7 @@ def _analyze_item(
             roles=["soc_batch_runner"],
         ),
         trace_id=f"batch-{config.source_sha256[:12]}-{item.source_index}",
-        idempotency_key=(
-            f"pingan-batch:{config.source_sha256[:16]}:{item.source_index}:{item.payload_sha256[:16]}"
-        ),
+        idempotency_key=(f"pingan-batch:{config.source_sha256[:16]}:{item.source_index}:{item.payload_sha256[:16]}"),
     )
     source = {
         "source_file_sha256": config.source_sha256,
@@ -454,33 +395,13 @@ def _analyze_item(
         "row_sha256": item.row_sha256,
         "payload_sha256": item.payload_sha256,
     }
-    retry_of_run_id = (
-        _failed_analysis_run_id(previous_record)
-        if config.persist and config.resume and config.retry_failures
-        else None
-    )
-    retry_failed_outcome_run_id = (
-        _failed_completed_analysis_run_id(previous_record)
-        if config.persist and config.resume and config.retry_failures
-        else None
-    )
+    retry_of_run_id = _failed_analysis_run_id(previous_record) if config.persist and config.resume and config.retry_failures else None
+    retry_failed_outcome_run_id = _failed_completed_analysis_run_id(previous_record) if config.persist and config.resume and config.retry_failures else None
     analysis_context = context
     if retry_of_run_id is not None:
-        analysis_context = context.model_copy(
-            update={
-                "idempotency_key": (
-                    f"{context.idempotency_key}:analysis-retry:{retry_of_run_id}"
-                )
-            }
-        )
+        analysis_context = context.model_copy(update={"idempotency_key": (f"{context.idempotency_key}:analysis-retry:{retry_of_run_id}")})
     elif retry_failed_outcome_run_id is not None:
-        analysis_context = context.model_copy(
-            update={
-                "idempotency_key": (
-                    f"{context.idempotency_key}:analysis-retry-outcome:{retry_failed_outcome_run_id}"
-                )
-            }
-        )
+        analysis_context = context.model_copy(update={"idempotency_key": (f"{context.idempotency_key}:analysis-retry-outcome:{retry_failed_outcome_run_id}")})
     analysis_started = time.monotonic()
     try:
         if retry_of_run_id is None:
@@ -520,11 +441,7 @@ def _analyze_item(
             "execution": execution,
             "summary": {"runtime_status": "exception"},
             "error": {
-                "stage": (
-                    "analysis_replay"
-                    if retry_of_run_id is not None
-                    else "analysis_runtime"
-                ),
+                "stage": ("analysis_replay" if retry_of_run_id is not None else "analysis_runtime"),
                 "error_type": type(exc).__name__,
                 "message": _safe_error(exc),
             },
@@ -573,16 +490,12 @@ def _analyze_item(
             context=context,
             memory_pattern_service=memory_pattern_service,
         )
-        phase_timings["memory_pattern_duration_ms"] = _elapsed_ms(
-            memory_pattern_started
-        )
+        phase_timings["memory_pattern_duration_ms"] = _elapsed_ms(memory_pattern_started)
     if investigation_service is None or outcome != "completed":
         _finalize_execution_timing(record, started=started)
         return record
 
-    investigation_context = context.model_copy(
-        update={"idempotency_key": f"{context.idempotency_key}:investigation"}
-    )
+    investigation_context = context.model_copy(update={"idempotency_key": f"{context.idempotency_key}:investigation"})
     investigation_started = time.monotonic()
     try:
         workflow_result = investigation_service.execute(
@@ -594,9 +507,7 @@ def _analyze_item(
             context=investigation_context,
         )
     except Exception as exc:  # noqa: BLE001 - preserve the completed base run
-        phase_timings["investigation_workflow_duration_ms"] = _elapsed_ms(
-            investigation_started
-        )
+        phase_timings["investigation_workflow_duration_ms"] = _elapsed_ms(investigation_started)
         record["outcome"] = "failed"
         record["summary"]["investigation_status"] = "exception"
         record["error"] = {
@@ -606,31 +517,21 @@ def _analyze_item(
         }
         _finalize_execution_timing(record, started=started)
         return record
-    phase_timings["investigation_workflow_duration_ms"] = _elapsed_ms(
-        investigation_started
-    )
+    phase_timings["investigation_workflow_duration_ms"] = _elapsed_ms(investigation_started)
 
     workflow_payload = workflow_result.model_dump(mode="json", exclude_none=True)
     record["investigation_workflow"] = workflow_payload
     record["summary"].update(_investigation_summary(workflow_payload))
     if investigation_reporting_service is None:
-        raise ValueError(
-            "investigation reporting service is required after workflow execution"
-        )
+        raise ValueError("investigation reporting service is required after workflow execution")
     reporting_started = time.monotonic()
     try:
-        bundle = investigation_reporting_service.get_report_bundle(
-            workflow_result.execution.execution_id
-        )
+        bundle = investigation_reporting_service.get_report_bundle(workflow_result.execution.execution_id)
         if bundle is None:
-            raise RuntimeError(
-                "persisted investigation could not be projected into a D4 report"
-            )
+            raise RuntimeError("persisted investigation could not be projected into a D4 report")
         shadow_report, addendum = bundle
     except Exception as exc:  # noqa: BLE001 - retain D3 state when D4 projection fails
-        phase_timings["investigation_reporting_duration_ms"] = _elapsed_ms(
-            reporting_started
-        )
+        phase_timings["investigation_reporting_duration_ms"] = _elapsed_ms(reporting_started)
         record["outcome"] = "failed"
         record["error"] = {
             "stage": "investigation_reporting",
@@ -639,14 +540,10 @@ def _analyze_item(
         }
         _finalize_execution_timing(record, started=started)
         return record
-    phase_timings["investigation_reporting_duration_ms"] = _elapsed_ms(
-        reporting_started
-    )
+    phase_timings["investigation_reporting_duration_ms"] = _elapsed_ms(reporting_started)
     shadow_payload = shadow_report.model_dump(mode="json", exclude_none=True)
     record["investigation_shadow_report"] = shadow_payload
-    record["investigation_addendum"] = addendum.model_dump(
-        mode="json", exclude_none=True
-    )
+    record["investigation_addendum"] = addendum.model_dump(mode="json", exclude_none=True)
     record["summary"].update(_investigation_reporting_summary(shadow_payload))
     if workflow_result.execution.status in {
         SocEnrichmentExecutionStatus.RETRYABLE_FAILED,
@@ -655,12 +552,8 @@ def _analyze_item(
         record["outcome"] = "failed"
         record["error"] = {
             "stage": "investigation_workflow",
-            "error_type": workflow_result.execution.last_error_type
-            or "InvestigationWorkflowFailed",
-            "message": workflow_result.execution.last_error
-            or (
-                f"investigation workflow ended as {workflow_result.execution.status.value}"
-            ),
+            "error_type": workflow_result.execution.last_error_type or "InvestigationWorkflowFailed",
+            "message": workflow_result.execution.last_error or (f"investigation workflow ended as {workflow_result.execution.status.value}"),
             "retryable": workflow_result.execution.retryable,
         }
     _finalize_execution_timing(record, started=started)
@@ -694,9 +587,7 @@ def _observe_batch_memory_pattern(
 ) -> None:
     assert config.memory_pattern_environment is not None
     assert config.memory_pattern_data_class is not None
-    transport_ref = (
-        f"batch:{config.source_sha256}:{item.source_index}:{item.payload_sha256}"
-    )
+    transport_ref = f"batch:{config.source_sha256}:{item.source_index}:{item.payload_sha256}"
     try:
         result = memory_pattern_service.observe_run(
             run,
@@ -737,9 +628,7 @@ def _observe_batch_memory_pattern(
             "memory_pattern_support_count": result.support_count,
             "memory_pattern_distinct_source_count": result.distinct_source_count,
             "memory_pattern_threshold_met": result.threshold_met,
-            "memory_pattern_candidate_id": (
-                result.candidate.candidate_id if result.candidate is not None else None
-            ),
+            "memory_pattern_candidate_id": (result.candidate.candidate_id if result.candidate is not None else None),
             "memory_pattern_candidate_created": result.candidate_created,
         }
     )
@@ -784,9 +673,7 @@ def _investigation_summary(result: Mapping[str, Any]) -> dict[str, Any]:
         "investigation_not_found_count": execution.get("not_found_count"),
         "investigation_failed_count": execution.get("failed_count"),
         "investigation_evidence_count": execution.get("evidence_count"),
-        "investigation_provider_invocation_count": result.get(
-            "provider_invocation_count"
-        ),
+        "investigation_provider_invocation_count": result.get("provider_invocation_count"),
         "investigation_idempotent_replay": result.get("idempotent_replay"),
     }
 
@@ -796,9 +683,7 @@ def _investigation_reporting_summary(report: Mapping[str, Any]) -> dict[str, Any
         "investigation_report_id": report.get("report_id"),
         "investigation_retry_count": report.get("retry_count"),
         "investigation_evidence_coverage_ratio": report.get("evidence_coverage_ratio"),
-        "investigation_persisted_evidence_count": report.get(
-            "persisted_evidence_count"
-        ),
+        "investigation_persisted_evidence_count": report.get("persisted_evidence_count"),
         "investigation_missing_evidence_count": report.get("missing_evidence_count"),
         "investigation_attempt_latency_ms_p95": report.get("attempt_latency_ms_p95"),
         "investigation_cost_measurement_status": report.get("cost_measurement_status"),
@@ -863,18 +748,12 @@ def _build_manifest(
             "resumed_completed_count": resumed_count,
             "investigation_enrichment_enabled": config.investigation_enrichment_enabled,
             "enrichment_composition_sha256": config.enrichment_composition_sha256,
-            "enrichment_action_config_sha256s": list(
-                config.enrichment_action_config_sha256s
-            ),
+            "enrichment_action_config_sha256s": list(config.enrichment_action_config_sha256s),
             "enrichment_extensions_config_sha256": config.enrichment_extensions_config_sha256,
             "memory_pattern_enabled": config.memory_pattern_enabled,
             "memory_pattern_environment": config.memory_pattern_environment,
             "memory_pattern_data_class": config.memory_pattern_data_class,
-            "memory_pattern_policy": (
-                config.memory_pattern_policy.model_dump(mode="json")
-                if config.memory_pattern_policy is not None
-                else None
-            ),
+            "memory_pattern_policy": (config.memory_pattern_policy.model_dump(mode="json") if config.memory_pattern_policy is not None else None),
             "fixed_runtime_independently_usable": True,
             "secrets_included": False,
         },
@@ -903,9 +782,7 @@ def _checkpoint_manifest(
     manifest["summary"] = _summarize_records(
         list(records.values()),
         selected_count=int(_mapping(manifest.get("source")).get("selected_count") or 0),
-        source_error_count=int(
-            _mapping(manifest.get("source")).get("source_error_count") or 0
-        ),
+        source_error_count=int(_mapping(manifest.get("source")).get("source_error_count") or 0),
     )
     _write_json_atomic(manifest_path, manifest)
 
@@ -917,24 +794,10 @@ def _summarize_records(
     source_error_count: int,
 ) -> dict[str, Any]:
     outcomes = Counter(str(item.get("outcome") or "unknown") for item in records)
-    runtime_statuses = Counter(
-        str(_mapping(item.get("summary")).get("runtime_status") or "unknown")
-        for item in records
-    )
-    verdicts = Counter(
-        str(_mapping(item.get("summary")).get("verdict") or "unknown")
-        for item in records
-    )
-    investigation_statuses = Counter(
-        str(_mapping(item.get("summary")).get("investigation_status"))
-        for item in records
-        if _mapping(item.get("summary")).get("investigation_status") is not None
-    )
-    investigation_reports = [
-        _mapping(item.get("investigation_shadow_report"))
-        for item in records
-        if _mapping(item.get("investigation_shadow_report"))
-    ]
+    runtime_statuses = Counter(str(_mapping(item.get("summary")).get("runtime_status") or "unknown") for item in records)
+    verdicts = Counter(str(_mapping(item.get("summary")).get("verdict") or "unknown") for item in records)
+    investigation_statuses = Counter(str(_mapping(item.get("summary")).get("investigation_status")) for item in records if _mapping(item.get("summary")).get("investigation_status") is not None)
+    investigation_reports = [_mapping(item.get("investigation_shadow_report")) for item in records if _mapping(item.get("investigation_shadow_report"))]
     investigation_routes = Counter()
     investigation_measurement_gaps = Counter()
     investigation_attempt_latencies: list[float] = []
@@ -947,40 +810,19 @@ def _summarize_records(
             if duration is not None:
                 investigation_attempt_latencies.append(duration)
     for report in investigation_reports:
-        investigation_measurement_gaps.update(
-            str(item) for item in report.get("measurement_gaps") or []
-        )
+        investigation_measurement_gaps.update(str(item) for item in report.get("measurement_gaps") or [])
         for route in report.get("routes") or []:
             route_payload = _mapping(route)
             route_name = str(route_payload.get("route") or "unknown")
-            investigation_routes[route_name] += int(
-                route_payload.get("planned_action_count") or 0
-            )
+            investigation_routes[route_name] += int(route_payload.get("planned_action_count") or 0)
             real_result_count += int(route_payload.get("real_result_count") or 0)
             mock_result_count += int(route_payload.get("mock_result_count") or 0)
-    planned_action_count = sum(
-        int(item.get("planned_action_count") or 0) for item in investigation_reports
-    )
-    persisted_evidence_count = sum(
-        int(item.get("persisted_evidence_count") or 0) for item in investigation_reports
-    )
-    review_count = sum(
-        _mapping(item.get("summary")).get("needs_review") is True for item in records
-    )
-    automation_allowed_count = sum(
-        _mapping(item.get("summary")).get("automation_allowed") is True
-        for item in records
-    )
-    memory_pattern_statuses = Counter(
-        str(_mapping(item.get("summary")).get("memory_pattern_status"))
-        for item in records
-        if _mapping(item.get("summary")).get("memory_pattern_status") is not None
-    )
-    memory_pattern_candidate_ids = {
-        str(value)
-        for item in records
-        if (value := _mapping(item.get("summary")).get("memory_pattern_candidate_id"))
-    }
+    planned_action_count = sum(int(item.get("planned_action_count") or 0) for item in investigation_reports)
+    persisted_evidence_count = sum(int(item.get("persisted_evidence_count") or 0) for item in investigation_reports)
+    review_count = sum(_mapping(item.get("summary")).get("needs_review") is True for item in records)
+    automation_allowed_count = sum(_mapping(item.get("summary")).get("automation_allowed") is True for item in records)
+    memory_pattern_statuses = Counter(str(_mapping(item.get("summary")).get("memory_pattern_status")) for item in records if _mapping(item.get("summary")).get("memory_pattern_status") is not None)
+    memory_pattern_candidate_ids = {str(value) for item in records if (value := _mapping(item.get("summary")).get("memory_pattern_candidate_id"))}
     return {
         "selected_count": selected_count,
         "recorded_count": len(records),
@@ -994,11 +836,7 @@ def _summarize_records(
             "status_counts": dict(sorted(memory_pattern_statuses.items())),
             "candidate_count": len(memory_pattern_candidate_ids),
             "candidate_ids": sorted(memory_pattern_candidate_ids),
-            "candidate_created_count": sum(
-                _mapping(item.get("summary")).get("memory_pattern_candidate_created")
-                is True
-                for item in records
-            ),
+            "candidate_created_count": sum(_mapping(item.get("summary")).get("memory_pattern_candidate_created") is True for item in records),
         },
         "runtime_status_counts": dict(sorted(runtime_statuses.items())),
         "verdict_counts": dict(sorted(verdicts.items())),
@@ -1006,69 +844,26 @@ def _summarize_records(
         "investigation_shadow": {
             "report_count": len(investigation_reports),
             "planned_action_count": planned_action_count,
-            "success_count": sum(
-                int(item.get("success_count") or 0) for item in investigation_reports
-            ),
-            "not_found_count": sum(
-                int(item.get("not_found_count") or 0) for item in investigation_reports
-            ),
-            "failed_count": sum(
-                int(item.get("failed_count") or 0) for item in investigation_reports
-            ),
-            "retry_count": sum(
-                int(item.get("retry_count") or 0) for item in investigation_reports
-            ),
-            "provider_invocation_count": sum(
-                int(item.get("provider_invocation_count") or 0)
-                for item in investigation_reports
-            ),
+            "success_count": sum(int(item.get("success_count") or 0) for item in investigation_reports),
+            "not_found_count": sum(int(item.get("not_found_count") or 0) for item in investigation_reports),
+            "failed_count": sum(int(item.get("failed_count") or 0) for item in investigation_reports),
+            "retry_count": sum(int(item.get("retry_count") or 0) for item in investigation_reports),
+            "provider_invocation_count": sum(int(item.get("provider_invocation_count") or 0) for item in investigation_reports),
             "persisted_evidence_count": persisted_evidence_count,
-            "missing_evidence_count": sum(
-                int(item.get("missing_evidence_count") or 0)
-                for item in investigation_reports
-            ),
-            "evidence_coverage_ratio": (
-                persisted_evidence_count / planned_action_count
-                if planned_action_count
-                else 0.0
-            ),
+            "missing_evidence_count": sum(int(item.get("missing_evidence_count") or 0) for item in investigation_reports),
+            "evidence_coverage_ratio": (persisted_evidence_count / planned_action_count if planned_action_count else 0.0),
             "attempt_latency_sample_count": len(investigation_attempt_latencies),
-            "attempt_latency_ms_p50": _nearest_rank_percentile(
-                investigation_attempt_latencies, 0.50
-            ),
-            "attempt_latency_ms_p95": _nearest_rank_percentile(
-                investigation_attempt_latencies, 0.95
-            ),
+            "attempt_latency_ms_p50": _nearest_rank_percentile(investigation_attempt_latencies, 0.50),
+            "attempt_latency_ms_p95": _nearest_rank_percentile(investigation_attempt_latencies, 0.95),
             "route_planned_action_counts": dict(sorted(investigation_routes.items())),
             "real_result_count": real_result_count,
             "mock_result_count": mock_result_count,
-            "cost_measurement_status_counts": dict(
-                sorted(
-                    Counter(
-                        str(item.get("cost_measurement_status") or "not_measured")
-                        for item in investigation_reports
-                    ).items()
-                )
-            ),
-            "measurement_gap_counts": dict(
-                sorted(investigation_measurement_gaps.items())
-            ),
-            "unauthorized_base_run_mutation_count": sum(
-                item.get("base_run_mutated") is not False
-                for item in investigation_reports
-            ),
-            "auto_close_allowed_count": sum(
-                item.get("auto_close_allowed") is not False
-                for item in investigation_reports
-            ),
-            "confirmed_memory_write_allowed_count": sum(
-                item.get("confirmed_memory_write_allowed") is not False
-                for item in investigation_reports
-            ),
-            "high_risk_actions_allowed_count": sum(
-                item.get("high_risk_actions_allowed") is not False
-                for item in investigation_reports
-            ),
+            "cost_measurement_status_counts": dict(sorted(Counter(str(item.get("cost_measurement_status") or "not_measured") for item in investigation_reports).items())),
+            "measurement_gap_counts": dict(sorted(investigation_measurement_gaps.items())),
+            "unauthorized_base_run_mutation_count": sum(item.get("base_run_mutated") is not False for item in investigation_reports),
+            "auto_close_allowed_count": sum(item.get("auto_close_allowed") is not False for item in investigation_reports),
+            "confirmed_memory_write_allowed_count": sum(item.get("confirmed_memory_write_allowed") is not False for item in investigation_reports),
+            "high_risk_actions_allowed_count": sum(item.get("high_risk_actions_allowed") is not False for item in investigation_reports),
         },
     }
 
@@ -1086,9 +881,7 @@ def _attempt_duration_ms(attempt: Mapping[str, Any]) -> float | None:
     return max(0.0, round((ended - started).total_seconds() * 1000, 3))
 
 
-def _nearest_rank_percentile(
-    values: Sequence[float], percentile: float
-) -> float | None:
+def _nearest_rank_percentile(values: Sequence[float], percentile: float) -> float | None:
     if not values:
         return None
     ordered = sorted(values)
@@ -1105,10 +898,7 @@ def _load_existing_items(
         return records
     for path in sorted(items_dir.glob("*.json")):
         loaded = json.loads(path.read_text(encoding="utf-8"))
-        if (
-            not isinstance(loaded, dict)
-            or loaded.get("schema_version") != ITEM_SCHEMA_VERSION
-        ):
+        if not isinstance(loaded, dict) or loaded.get("schema_version") != ITEM_SCHEMA_VERSION:
             raise ValueError(f"invalid batch item artifact: {path}")
         source = _mapping(loaded.get("source"))
         source_index = source.get("source_index")
@@ -1116,10 +906,7 @@ def _load_existing_items(
             raise ValueError(f"batch item has invalid source_index: {path}")
         if source_index in records:
             raise ValueError(f"duplicate batch source_index {source_index}")
-        if (
-            config is not None
-            and source.get("source_file_sha256") != config.source_sha256
-        ):
+        if config is not None and source.get("source_file_sha256") != config.source_sha256:
             raise ValueError(f"batch item source fingerprint mismatch: {path}")
         records[source_index] = loaded
     return records
@@ -1134,13 +921,8 @@ def _should_skip_existing(
     if existing is None:
         return False
     source = _mapping(existing.get("source"))
-    if (
-        source.get("payload_sha256") != item.payload_sha256
-        or source.get("row_sha256") != item.row_sha256
-    ):
-        raise ValueError(
-            f"resume payload fingerprint mismatch at source_index={item.source_index}"
-        )
+    if source.get("payload_sha256") != item.payload_sha256 or source.get("row_sha256") != item.row_sha256:
+        raise ValueError(f"resume payload fingerprint mismatch at source_index={item.source_index}")
     if existing.get("outcome") == "completed":
         return True
     return not retry_failures
@@ -1186,9 +968,7 @@ def _validate_resume(
             raise ValueError("--resume requires an existing manifest.json")
         return
     if not config.resume:
-        raise ValueError(
-            "output directory already contains a batch; pass --resume or choose a new directory"
-        )
+        raise ValueError("output directory already contains a batch; pass --resume or choose a new directory")
     source = _mapping(previous.get("source"))
     execution = _mapping(previous.get("execution"))
     expected = {
@@ -1261,16 +1041,10 @@ def _validate_resume(
         ),
         "execution.memory_pattern_policy": (
             execution.get("memory_pattern_policy"),
-            (
-                config.memory_pattern_policy.model_dump(mode="json")
-                if config.memory_pattern_policy is not None
-                else None
-            ),
+            (config.memory_pattern_policy.model_dump(mode="json") if config.memory_pattern_policy is not None else None),
         ),
     }
-    mismatches = [
-        name for name, (actual, wanted) in expected.items() if actual != wanted
-    ]
+    mismatches = [name for name, (actual, wanted) in expected.items() if actual != wanted]
     if mismatches:
         raise ValueError(f"resume configuration mismatch: {', '.join(mismatches)}")
 
@@ -1279,10 +1053,7 @@ def _load_previous_manifest(path: Path) -> dict[str, Any] | None:
     if not path.is_file():
         return None
     loaded = json.loads(path.read_text(encoding="utf-8"))
-    if (
-        not isinstance(loaded, dict)
-        or loaded.get("schema_version") != MANIFEST_SCHEMA_VERSION
-    ):
+    if not isinstance(loaded, dict) or loaded.get("schema_version") != MANIFEST_SCHEMA_VERSION:
         raise ValueError("existing batch manifest has an unsupported schema")
     return loaded
 
@@ -1347,9 +1118,7 @@ class _directory_lock:
             raise RuntimeError(f"another batch process holds {self.path}") from exc
         self.handle.seek(0)
         self.handle.truncate()
-        self.handle.write(
-            f"pid={os.getpid()} started_at={datetime.now(UTC).isoformat()}\n"
-        )
+        self.handle.write(f"pid={os.getpid()} started_at={datetime.now(UTC).isoformat()}\n")
         self.handle.flush()
         os.fchmod(self.handle.fileno(), 0o600)
         return None
@@ -1472,9 +1241,7 @@ def _plan_payload(
             "json_mode_enabled_requested": settings.json_mode_enabled,
             "role_verifier_enabled": settings.role_verifier_enabled,
             "role_verifier_model_name": settings.role_verifier_model_name,
-            "estimated_model_call_count": len(items)
-            if settings.mode is SocAnalyzerMode.LLM
-            else 0,
+            "estimated_model_call_count": len(items) if settings.mode is SocAnalyzerMode.LLM else 0,
             "sensitive_evidence_mode": settings.sensitive_evidence_mode.value,
             "persist": persist,
             "database_kind": database_kind,
@@ -1488,11 +1255,7 @@ def _plan_payload(
             "memory_pattern_enabled": memory_pattern_policy is not None,
             "memory_pattern_environment": memory_pattern_environment,
             "memory_pattern_data_class": memory_pattern_data_class,
-            "memory_pattern_policy": (
-                memory_pattern_policy.model_dump(mode="json")
-                if memory_pattern_policy is not None
-                else None
-            ),
+            "memory_pattern_policy": (memory_pattern_policy.model_dump(mode="json") if memory_pattern_policy is not None else None),
             "fixed_runtime_independently_usable": True,
         },
         "recommended_ramp": [5, 50, "all"],
@@ -1506,23 +1269,12 @@ def _validate_live_mcp_tool_inventory(
 ) -> tuple[str, ...]:
     """Fail before any LLM call when a configured MCP tool is unavailable."""
 
-    expected = {
-        (config.mcp.server, config.mcp.tool)
-        for path in action_config_paths
-        for config in load_mcp_action_adapter_configs(path)
-        if config.enabled
-    }
-    available = {
-        (descriptor.server, descriptor.name) for descriptor in provider.list_tools()
-    }
+    expected = {(config.mcp.server, config.mcp.tool) for path in action_config_paths for config in load_mcp_action_adapter_configs(path) if config.enabled}
+    available = {(descriptor.server, descriptor.name) for descriptor in provider.list_tools()}
     missing = sorted(expected - available, key=lambda item: (item[0] or "", item[1]))
     if missing:
-        rendered = ", ".join(
-            f"{server or '<unknown-server>'}/{tool}" for server, tool in missing
-        )
-        raise ValueError(
-            f"live investigation MCP preflight is missing configured tools: {rendered}"
-        )
+        rendered = ", ".join(f"{server or '<unknown-server>'}/{tool}" for server, tool in missing)
+        raise ValueError(f"live investigation MCP preflight is missing configured tools: {rendered}")
     return tuple(sorted(tool for _server, tool in expected))
 
 
@@ -1536,9 +1288,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--alert-id",
         action="append",
         default=[],
-        help=(
-            "Select one exact alert ID; repeat for an ordered fixed cohort. Cannot be combined with --start-index or --limit."
-        ),
+        help=("Select one exact alert ID; repeat for an ordered fixed cohort. Cannot be combined with --start-index or --limit."),
     )
     parser.add_argument("--analyzer-mode", choices=["stub", "llm"])
     parser.add_argument("--model-name")
@@ -1589,9 +1339,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     execution_mode.add_argument(
         "--preflight-investigation",
         action="store_true",
-        help=(
-            "Start configured MCP servers and verify exact server/tool inventory, then exit without calling the LLM or any Provider tool"
-        ),
+        help=("Start configured MCP servers and verify exact server/tool inventory, then exit without calling the LLM or any Provider tool"),
     )
     parser.add_argument(
         "--confirm-live",
@@ -1606,9 +1354,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--memory-pattern-data-class",
         choices=[item.value for item in MemoryPatternDataClass],
-        help=(
-            "Explicitly enable persisted repeated-pattern observations; omitted keeps PI-03F3 disabled"
-        ),
+        help=("Explicitly enable persisted repeated-pattern observations; omitted keeps PI-03F3 disabled"),
     )
     parser.add_argument(
         "--memory-pattern-environment",
@@ -1645,21 +1391,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("workers must be >= 1")
         if args.checkpoint_every < 1:
             raise ValueError("checkpoint_every must be >= 1")
-        default_tenant_id = (
-            args.default_tenant_id.strip() if args.default_tenant_id else None
-        )
+        default_tenant_id = args.default_tenant_id.strip() if args.default_tenant_id else None
         if args.default_tenant_id is not None and not default_tenant_id:
             raise ValueError("--default-tenant-id must not be blank")
         memory_pattern_data_class = args.memory_pattern_data_class
-        memory_pattern_environment = (
-            args.memory_pattern_environment.strip()
-            if args.memory_pattern_environment
-            else None
-        )
+        memory_pattern_environment = args.memory_pattern_environment.strip() if args.memory_pattern_environment else None
         if (memory_pattern_data_class is None) != (memory_pattern_environment is None):
-            raise ValueError(
-                "--memory-pattern-data-class and --memory-pattern-environment must be provided together"
-            )
+            raise ValueError("--memory-pattern-data-class and --memory-pattern-environment must be provided together")
         memory_pattern_policy = (
             MemoryPatternAggregationPolicy(
                 window_seconds=args.memory_pattern_window_seconds,
@@ -1669,11 +1407,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if memory_pattern_data_class is not None
             else None
         )
-        if (
-            memory_pattern_policy is not None
-            and not args.persist
-            and not args.plan_only
-        ):
+        if memory_pattern_policy is not None and not args.persist and not args.plan_only:
             raise ValueError("memory pattern aggregation requires --persist")
         source_sha256 = _sha256_file(source)
         frame = load_dataframe_pickle(source, required_columns={"alert_full_data"})
@@ -1688,83 +1422,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings = SocLLMSettings.from_env().with_overrides(
             mode=args.analyzer_mode,
             model_name=args.model_name,
-            thinking_enabled=(
-                args.thinking == "enabled" if args.thinking is not None else None
-            ),
-            role_verifier_enabled=(
-                args.role_verifier == "enabled"
-                if args.role_verifier is not None
-                else None
-            ),
+            thinking_enabled=(args.thinking == "enabled" if args.thinking is not None else None),
+            role_verifier_enabled=(args.role_verifier == "enabled" if args.role_verifier is not None else None),
             role_verifier_model_name=args.role_verifier_model,
         )
         if settings.mode is SocAnalyzerMode.LLM:
-            settings = settings.with_overrides(
-                model_name=resolve_soc_model_name(settings.model_name)
-            )
-        if (
-            settings.mode is SocAnalyzerMode.LLM
-            and items
-            and not args.plan_only
-            and not args.preflight_investigation
-            and not args.confirm_live
-        ):
+            settings = settings.with_overrides(model_name=resolve_soc_model_name(settings.model_name))
+        if settings.mode is SocAnalyzerMode.LLM and items and not args.plan_only and not args.preflight_investigation and not args.confirm_live:
             raise ValueError("live LLM batch requires --confirm-live")
-        if (
-            settings.mode is SocAnalyzerMode.LLM
-            and args.workers > settings.max_concurrency
-        ):
-            raise ValueError(
-                "workers cannot exceed SOC_LLM_MAX_CONCURRENCY for a live batch"
-            )
+        if settings.mode is SocAnalyzerMode.LLM and args.workers > settings.max_concurrency:
+            raise ValueError("workers cannot exceed SOC_LLM_MAX_CONCURRENCY for a live batch")
 
-        composition_path = (
-            args.enrichment_composition.expanduser().resolve()
-            if args.enrichment_composition is not None
-            else None
-        )
-        action_config_paths = [
-            path.expanduser().resolve() for path in args.enrichment_action_config
-        ]
-        extensions_config_path = (
-            args.enrichment_extensions_config.expanduser().resolve()
-            if args.enrichment_extensions_config is not None
-            else None
-        )
-        investigation_enabled = (
-            composition_path is not None
-            or bool(action_config_paths)
-            or extensions_config_path is not None
-        )
-        if investigation_enabled and (
-            composition_path is None
-            or not action_config_paths
-            or extensions_config_path is None
-        ):
-            raise ValueError(
-                "--enrichment-composition, at least one --enrichment-action-config, and --enrichment-extensions-config must be provided together"
-            )
+        composition_path = args.enrichment_composition.expanduser().resolve() if args.enrichment_composition is not None else None
+        action_config_paths = [path.expanduser().resolve() for path in args.enrichment_action_config]
+        extensions_config_path = args.enrichment_extensions_config.expanduser().resolve() if args.enrichment_extensions_config is not None else None
+        investigation_enabled = composition_path is not None or bool(action_config_paths) or extensions_config_path is not None
+        if investigation_enabled and (composition_path is None or not action_config_paths or extensions_config_path is None):
+            raise ValueError("--enrichment-composition, at least one --enrichment-action-config, and --enrichment-extensions-config must be provided together")
         if args.preflight_investigation and not investigation_enabled:
-            raise ValueError(
-                "--preflight-investigation requires explicit enrichment configuration"
-            )
-        if (
-            investigation_enabled
-            and not args.persist
-            and not args.plan_only
-            and not args.preflight_investigation
-        ):
+            raise ValueError("--preflight-investigation requires explicit enrichment configuration")
+        if investigation_enabled and not args.persist and not args.plan_only and not args.preflight_investigation:
             raise ValueError("investigation enrichment requires --persist")
-        if (
-            investigation_enabled
-            and items
-            and not args.plan_only
-            and not args.preflight_investigation
-            and not args.confirm_investigation
-        ):
-            raise ValueError(
-                "investigation enrichment requires --confirm-investigation"
-            )
+        if investigation_enabled and items and not args.plan_only and not args.preflight_investigation and not args.confirm_investigation:
+            raise ValueError("investigation enrichment requires --confirm-investigation")
         for config_path in [
             *([composition_path] if composition_path is not None else []),
             *action_config_paths,
@@ -1773,17 +1453,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not config_path.is_file():
                 raise ValueError(f"enrichment config does not exist: {config_path}")
 
-        enrichment_composition_sha256 = (
-            _sha256_file(composition_path) if composition_path is not None else None
-        )
-        enrichment_action_config_sha256s = tuple(
-            _sha256_file(path) for path in action_config_paths
-        )
-        enrichment_extensions_config_sha256 = (
-            _sha256_file(extensions_config_path)
-            if extensions_config_path is not None
-            else None
-        )
+        enrichment_composition_sha256 = _sha256_file(composition_path) if composition_path is not None else None
+        enrichment_action_config_sha256s = tuple(_sha256_file(path) for path in action_config_paths)
+        enrichment_extensions_config_sha256 = _sha256_file(extensions_config_path) if extensions_config_path is not None else None
         composition = None
         registry = None
         live_mcp_tool_names: tuple[str, ...] = ()
@@ -1792,9 +1464,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             extensions_config_overridden = True
             composition = load_soc_enrichment_composition_config(composition_path)
             if not composition.enabled:
-                raise ValueError(
-                    "investigation enrichment requires an enabled composition"
-                )
+                raise ValueError("investigation enrichment requires an enabled composition")
             mcp_provider = DeerFlowCachedMcpToolProvider(use_one_shot_invocation=True)
             if not args.plan_only:
                 live_mcp_tool_names = _validate_live_mcp_tool_inventory(
@@ -1813,11 +1483,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("persisted SQLite batch requires --workers 1")
         if args.fail_fast and args.workers != 1:
             raise ValueError("--fail-fast requires --workers 1")
-        output_dir = (
-            args.output_dir.expanduser().resolve()
-            if args.output_dir
-            else _default_output_dir(source_sha256)
-        )
+        output_dir = args.output_dir.expanduser().resolve() if args.output_dir else _default_output_dir(source_sha256)
         plan = _plan_payload(
             source=source,
             source_sha256=source_sha256,
@@ -1852,22 +1518,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 to_sync_database_url(database_url),
                 pool_pre_ping=True,
             )
-            repository = SqlAlchemyAlertRepository(
-                sessionmaker(bind=engine, expire_on_commit=False)
-            )
+            repository = SqlAlchemyAlertRepository(sessionmaker(bind=engine, expire_on_commit=False))
         service = build_soc_analysis_service(
             repository,
             settings=settings,
             action_adapter_registry=registry,
+            memory_environment=memory_pattern_environment,
         )
         investigation_service = None
         investigation_reporting_service = None
         memory_pattern_service = None
         if investigation_enabled:
             if repository is None or composition is None or registry is None:
-                raise ValueError(
-                    "investigation enrichment requires a persisted repository and validated config"
-                )
+                raise ValueError("investigation enrichment requires a persisted repository and validated config")
             investigation_service = build_soc_investigation_workflow_service(
                 composition=composition,
                 action_adapter_registry=registry,
@@ -1882,13 +1545,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if memory_pattern_policy is not None:
             if repository is None:
-                raise ValueError(
-                    "memory pattern aggregation requires a persisted repository"
-                )
+                raise ValueError("memory pattern aggregation requires a persisted repository")
             memory_pattern_service = SocMemoryPatternService(
                 repository=repository,
                 candidate_repository=repository,
                 policy=memory_pattern_policy,
+                profile_registry=build_soc_memory_profile_registry(),
             )
         manifest = execute_batch(
             items,
@@ -1940,9 +1602,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if previous_extensions_config_path is None:
                 os.environ.pop("DEER_FLOW_EXTENSIONS_CONFIG_PATH", None)
             else:
-                os.environ["DEER_FLOW_EXTENSIONS_CONFIG_PATH"] = (
-                    previous_extensions_config_path
-                )
+                os.environ["DEER_FLOW_EXTENSIONS_CONFIG_PATH"] = previous_extensions_config_path
 
 
 if __name__ == "__main__":

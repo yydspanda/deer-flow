@@ -70,6 +70,7 @@ class ReviewCorrectionRequest(BaseModel):
     verdict: Verdict
     reason: str = Field(min_length=1)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    promote_to_memory: bool = False
 
 
 class RoleAdjudicationConfirmationRequest(BaseModel):
@@ -185,6 +186,7 @@ def correct_review_run(
                 corrected_verdict=body.verdict,
                 corrected_confidence=body.confidence,
                 reason=body.reason,
+                promote_to_memory=body.promote_to_memory,
             ),
             context=soc_service_context_from_request(request, include_soc_roles=True),
         )

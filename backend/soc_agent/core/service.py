@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from soc_agent.context_bridge import skill_context_from_investigation_context
@@ -88,12 +88,16 @@ from soc_agent.contracts import (
     SocEnrichmentExecutionTrigger,
     SocEvent,
     SocEventType,
+    SocMemoryApplicabilitySpec,
+    SocMemoryApplicabilityStatus,
     SocMemoryCandidate,
     SocMemoryCandidateCreateCommand,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateReviewResult,
     SocMemoryCandidateStatus,
+    SocMemoryDecisionDirective,
+    SocMemoryDecisionEffect,
     SocMemoryDecisionImpact,
     SocMemoryMatch,
     SocMemoryQuery,
@@ -103,6 +107,7 @@ from soc_agent.contracts import (
     SocMemoryRetrievalActivationCommand,
     SocMemoryRetrievalActivationResult,
     SocMemoryRetrievalResult,
+    SocMemoryReviewEffect,
     SocMutationOperation,
     SocSkillResolution,
     UnifiedInvestigationView,
@@ -114,10 +119,13 @@ from soc_agent.memory import (
     MemoryAdmissionService,
     MemoryPatternIneligibleError,
     SocMemoryCandidateSourceBridge,
+    SocMemoryProfileRegistry,
     memory_candidate_command_from_review_note,
+    memory_query_from_analysis_request,
 )
 from soc_agent.memory.scoring import (
     evaluate_memory_anchor_gate,
+    evaluate_memory_applicability,
     score_memory_record,
 )
 from soc_agent.normalizers import load_mapping_config, normalize_alert_payload
@@ -134,6 +142,8 @@ from soc_agent.protocols import (
     InvestigationEvidenceRepository,
     LLMAnalyzer,
     MemoryCandidateRepository,
+    MemoryEvolutionRepository,
+    MemoryFeedbackObserver,
     MemoryPatternObserver,
     MemoryRecordRepository,
     NormalizationMaintenanceMonitor,
@@ -143,6 +153,7 @@ from soc_agent.protocols import (
     SocActionAdapterRegistryPort,
     SocAgentApprovalGrantRepository,
     SocAgentApprovalRequestRepository,
+    SocAutomationRepository,
     SocDispositionEvaluationRepository,
     SocDispositionProposalRepository,
     SocEnrichmentExecutionRepository,
@@ -764,6 +775,8 @@ class SocReviewService:
         external_disposition_repository: SocExternalDispositionRepository | None = None,
         memory_candidate_repository: MemoryCandidateRepository | None = None,
         memory_record_repository: MemoryRecordRepository | None = None,
+        memory_feedback_observer: MemoryFeedbackObserver | None = None,
+        memory_profile_registry: SocMemoryProfileRegistry | None = None,
         mutation_audit_repository: SocMutationAuditRepository | None = None,
         mutation_uow: SocMutationUnitOfWork | None = None,
         event_sink: SocEventSink | None = None,
@@ -781,6 +794,7 @@ class SocReviewService:
         self._external_disposition_repository = external_disposition_repository
         self._memory_candidate_repository = memory_candidate_repository
         self._memory_record_repository = memory_record_repository
+        self._memory_profile_registry = memory_profile_registry or SocMemoryProfileRegistry()
         self._event_sink = event_sink or NoopEventSink()
         self._mutation_audit_repository = mutation_audit_repository or mutation_audit_repository_from(
             repository,
@@ -793,6 +807,18 @@ class SocReviewService:
             memory_candidate_repository,
         )
         self._transaction_active = _transaction_active
+        self._memory_feedback_observer = memory_feedback_observer
+        if self._memory_feedback_observer is None and self._memory_record_repository is not None and _supports_memory_evolution_repository(repository):
+            from .memory_evolution import SocMemoryEvolutionService
+
+            self._memory_feedback_observer = SocMemoryEvolutionService(
+                repository=cast(MemoryEvolutionRepository, repository),
+                memory_record_repository=self._memory_record_repository,
+                automation_repository=(cast(SocAutomationRepository, repository) if callable(getattr(repository, "list_decision_transitions", None)) else None),
+                mutation_audit_repository=self._mutation_audit_repository,
+                mutation_uow=self._mutation_uow,
+                transaction_active=self._transaction_active,
+            )
 
     def correct(
         self,
@@ -873,6 +899,7 @@ class SocReviewService:
         if run is None:
             raise SocServiceNotFoundError(f"run {command.run_id} not found")
 
+        memory_uses = self._memory_feedback_observer.capture_run_usage(run) if self._memory_feedback_observer is not None else []
         previous_verdict = _current_verdict(run)
         effective_confidence = command.corrected_confidence if command.corrected_confidence is not None else 1.0
         confidence_explanation = _correction_confidence_explanation(
@@ -891,6 +918,8 @@ class SocReviewService:
             confidence_explanation=confidence_explanation,
             actor=request_context.actor,
             evidence=command.evidence,
+            promote_to_memory=command.promote_to_memory,
+            memory_use_ids=[item.use_id for item in memory_uses],
             candidate_knowledge_status="not_created",
         )
         run.corrections.append(record)
@@ -930,8 +959,21 @@ class SocReviewService:
             record.memory_admission = memory_outcome.decision
             record.candidate_knowledge_status = "pending_review" if memory_outcome.candidate is not None else "observed_only"
             record.memory_candidate_id = memory_outcome.candidate.candidate_id if memory_outcome.candidate is not None else None
-            run.corrections[-1] = record
-            self._repository.save_run(run)
+        if self._memory_feedback_observer is not None:
+            feedback = self._memory_feedback_observer.record_correction_feedback(
+                run,
+                record,
+                context=request_context,
+            )
+            record = record.model_copy(
+                update={
+                    "memory_feedback_ids": [item.feedback_id for item in feedback.feedback_events],
+                    "memory_revision_proposal_ids": [item.proposal_id for item in feedback.revision_proposals],
+                    "suspended_memory_ids": feedback.suspended_memory_ids,
+                }
+            )
+        run.corrections[-1] = record
+        self._repository.save_run(run)
         if self._audit_repository is not None:
             self._audit_repository.save_audit_record(_correction_audit_record(run, record))
         self._append_mutation_audit(
@@ -955,6 +997,10 @@ class SocReviewService:
                     "memory_candidate_id": record.memory_candidate_id,
                     "memory_admission_status": (record.memory_admission.status.value if record.memory_admission is not None else None),
                     "memory_admission_policy_version": (record.memory_admission.policy_version if record.memory_admission is not None else None),
+                    "memory_use_ids": record.memory_use_ids,
+                    "memory_feedback_ids": record.memory_feedback_ids,
+                    "memory_revision_proposal_ids": record.memory_revision_proposal_ids,
+                    "suspended_memory_ids": record.suspended_memory_ids,
                 },
             )
         )
@@ -974,6 +1020,9 @@ class SocReviewService:
                     "candidate_knowledge_status": record.candidate_knowledge_status,
                     "memory_candidate_id": record.memory_candidate_id,
                     "memory_admission_status": (record.memory_admission.status.value if record.memory_admission is not None else None),
+                    "memory_feedback_ids": record.memory_feedback_ids,
+                    "memory_revision_proposal_ids": record.memory_revision_proposal_ids,
+                    "suspended_memory_ids": record.suspended_memory_ids,
                 },
             )
         )
@@ -993,7 +1042,10 @@ class SocReviewService:
             candidate_repository=self._memory_candidate_repository,
             event_sink=self._event_sink,
         )
-        return SocMemoryCandidateSourceBridge(memory_service).admit_from_correction(
+        return SocMemoryCandidateSourceBridge(
+            memory_service,
+            profile_registry=self._memory_profile_registry,
+        ).admit_from_correction(
             run,
             record,
             queue_item=queue_item,
@@ -1326,6 +1378,7 @@ class SocReviewService:
             external_disposition_repository=(repository if self._external_disposition_repository is not None else None),
             memory_candidate_repository=(repository if self._memory_candidate_repository is not None else None),
             memory_record_repository=(repository if self._memory_record_repository is not None else None),
+            memory_profile_registry=self._memory_profile_registry,
             mutation_audit_repository=repository,
             mutation_uow=self._mutation_uow,
             event_sink=event_sink,
@@ -1451,7 +1504,12 @@ class SocReviewService:
             correlation_result=correlation_result,
         )
         if self._memory_record_repository is not None:
-            relevant_memories = SocMemoryService(record_repository=self._memory_record_repository).find_relevant_records(_memory_query_from_investigation_context(context))
+            relevant_memories = SocMemoryService(record_repository=self._memory_record_repository).find_relevant_records(
+                _memory_query_from_investigation_context(
+                    context,
+                    profile_registry=self._memory_profile_registry,
+                )
+            )
             context = context.model_copy(update={"relevant_memories": relevant_memories})
         domain_triage_results = _domain_triage_results_for_context(context)
         context = context.model_copy(update={"domain_triage_results": domain_triage_results})
@@ -1462,7 +1520,8 @@ class SocMemoryService:
     """Facts, lessons, and reviewable candidate knowledge service."""
 
     REVIEWER_ROLES = frozenset({"analyst", "soc_analyst", "soc_memory_reviewer", "soc_admin"})
-    RETRIEVAL_GOVERNOR_ROLES = frozenset({"soc_memory_reviewer", "soc_admin"})
+    RETRIEVAL_ENABLE_ROLES = frozenset({"soc_memory_reviewer", "soc_admin"})
+    RETRIEVAL_GOVERNOR_ROLES = frozenset({*RETRIEVAL_ENABLE_ROLES, "soc_memory_safety_monitor"})
 
     def __init__(
         self,
@@ -1523,6 +1582,7 @@ class SocMemoryService:
             idempotency_key=command.idempotency_key,
             confidence=command.confidence,
             facets=command.facets,
+            applicability=command.applicability,
             decision_impact=command.decision_impact,
             review_owner=command.review_owner,
             labels=command.labels,
@@ -1636,20 +1696,51 @@ class SocMemoryService:
             )
         elif command.decision is SocMemoryCandidateReviewDecision.CONFIRM:
             _validate_memory_candidate_transition(candidate.status, command.decision)
-            _validate_memory_decision_directive(candidate, command)
+            _validate_memory_record_applicability(
+                candidate,
+                command.record_applicability,
+            )
+            effective_command = _materialize_memory_review_directive(
+                candidate,
+                command,
+            )
+            _validate_memory_decision_directive(candidate, effective_command)
             if self._record_repository is None:
                 raise SocServiceNotImplementedError("confirming a memory candidate requires a MemoryRecordRepository")
             candidate = self._transition_candidate(
                 candidate,
                 status=SocMemoryCandidateStatus.CONFIRMED,
-                command=command,
+                command=effective_command,
                 actor=request_context.actor,
                 reviewed_at=reviewed_at,
             )
             memory_record = self._record_repository.get_memory_record_by_candidate_id(candidate.candidate_id)
             if memory_record is None:
-                memory_record = _memory_record_from_candidate(candidate, command=command, actor=request_context.actor, created_at=reviewed_at)
+                memory_record = _memory_record_from_candidate(
+                    candidate,
+                    command=effective_command,
+                    actor=request_context.actor,
+                    created_at=reviewed_at,
+                )
                 self._record_repository.save_memory_record(memory_record)
+            if command.activate_retrieval:
+                activation = self.set_retrieval_activation(
+                    SocMemoryRetrievalActivationCommand(
+                        memory_id=memory_record.memory_id,
+                        action=SocMemoryRetrievalActivationAction.ENABLE,
+                        expected_record_version=memory_record.version,
+                        reason=command.reason,
+                        activation_valid_until=command.activation_valid_until,
+                        review_after_days=command.activation_review_after_days,
+                        metadata={
+                            **command.metadata,
+                            "source": "memory_candidate_confirmation",
+                            "candidate_id": candidate.candidate_id,
+                        },
+                    ),
+                    context=request_context,
+                )
+                memory_record = activation.record
         elif command.decision is SocMemoryCandidateReviewDecision.REJECT:
             _validate_memory_candidate_transition(candidate.status, command.decision)
             candidate = self._transition_candidate(
@@ -1838,6 +1929,8 @@ class SocMemoryService:
             self.RETRIEVAL_GOVERNOR_ROLES,
             operation="changing SOC memory retrieval activation",
         )
+        if command.action is SocMemoryRetrievalActivationAction.ENABLE and not self.RETRIEVAL_ENABLE_ROLES.intersection(request_context.actor.roles):
+            raise SocServiceAuthorizationError("enabling SOC memory retrieval requires soc_memory_reviewer or soc_admin")
         if self._mutation_uow is not None and not self._transaction_active:
             buffered_events = BufferedSocEventSink(self._event_sink)
             with self._mutation_uow.mutation_transaction() as repository:
@@ -2048,6 +2141,7 @@ class SocMemoryService:
         skipped_status = 0
         skipped_expired = 0
         skipped_missing_strong_anchor = 0
+        skipped_not_applicable = 0
         skipped_below_min_score = 0
         now = self._now_provider()
 
@@ -2092,6 +2186,18 @@ class SocMemoryService:
             if not anchor_allowed:
                 skipped_missing_strong_anchor += 1
                 continue
+            applicability_report = evaluate_memory_applicability(
+                record,
+                query,
+                matched_facets,
+            )
+            exact_or_legacy = applicability_report.status in {
+                SocMemoryApplicabilityStatus.APPLICABLE,
+                SocMemoryApplicabilityStatus.LEGACY_ANCHOR_ONLY,
+            }
+            if not exact_or_legacy and not (applicability_report.status is SocMemoryApplicabilityStatus.PARTIAL and applicability_report.context_only_allowed):
+                skipped_not_applicable += 1
+                continue
             if score < query.min_score:
                 skipped_below_min_score += 1
                 continue
@@ -2106,6 +2212,7 @@ class SocMemoryService:
                     matched_facets=matched_facets,
                     anchor_match_reasons=anchor_reasons,
                     matched_anchor_facets=matched_anchor_facets,
+                    applicability_report=applicability_report,
                     token_estimate=token_estimate,
                     content_hash=record.content_hash,
                     facets_hash=record.facets_hash,
@@ -2115,7 +2222,15 @@ class SocMemoryService:
 
         selected_matches: list[SocMemoryMatch] = []
         token_total = 0
-        for match in sorted(scored_matches, key=lambda item: (item.score, item.record.updated_at), reverse=True):
+        for match in sorted(
+            scored_matches,
+            key=lambda item: (
+                _memory_applicability_priority(item),
+                item.score,
+                item.record.updated_at,
+            ),
+            reverse=True,
+        ):
             if len(selected_matches) >= query.limit:
                 break
             if token_total + match.token_estimate > query.max_tokens and selected_matches:
@@ -2135,14 +2250,27 @@ class SocMemoryService:
             skipped_status=skipped_status,
             skipped_expired=skipped_expired,
             skipped_missing_strong_anchor=skipped_missing_strong_anchor,
+            skipped_not_applicable=skipped_not_applicable,
             skipped_below_min_score=skipped_below_min_score,
             returned_count=len(selected_matches),
+            returned_context_only_count=sum(item.applicability_report is not None and item.applicability_report.context_only_allowed for item in selected_matches),
             total_token_estimate=token_total,
             max_tokens=query.max_tokens,
         )
 
     def list_facts(self) -> list[Any]:
         raise SocServiceNotImplementedError("list_facts is replaced by find_relevant_records(SocMemoryQuery)")
+
+
+def _memory_applicability_priority(match: SocMemoryMatch) -> int:
+    report = match.applicability_report
+    if report is None:
+        return 1
+    if report.status is SocMemoryApplicabilityStatus.APPLICABLE:
+        return 2
+    if report.status is SocMemoryApplicabilityStatus.LEGACY_ANCHOR_ONLY:
+        return 1
+    return 0
 
 
 def _memory_record_from_candidate(
@@ -2165,6 +2293,7 @@ def _memory_record_from_candidate(
         summary=summary,
         content=content,
         facets=candidate.facets,
+        applicability=command.record_applicability or candidate.applicability,
         evidence_refs=candidate.evidence_refs,
         validity=candidate.validity,
         confidence=candidate.confidence,
@@ -2192,10 +2321,99 @@ def _validate_memory_decision_directive(
     directive = command.decision_directive
     if directive is None:
         return
+    if candidate.decision_impact is not SocMemoryDecisionImpact.DETECTION_DECISION:
+        raise SocServiceError("this memory candidate is context-only and cannot create a future decision directive")
     candidate_keys = {str(key).strip() for key, values in candidate.facets.items() if str(key).strip() and any(str(value).strip() for value in values)}
     missing = sorted(set(directive.required_facet_keys) - candidate_keys)
     if missing:
         raise SocServiceError("memory decision directive requires missing candidate facets: " + ", ".join(missing))
+    applicability = command.record_applicability or candidate.applicability
+    if applicability is None:
+        raise SocServiceError("memory decision directive requires a typed applicability contract")
+    omitted_required = sorted(set(applicability.required_facets) - set(directive.required_facet_keys))
+    if omitted_required:
+        raise SocServiceError("memory decision directive must retain every reviewed required facet: " + ", ".join(omitted_required))
+
+
+def _materialize_memory_review_directive(
+    candidate: SocMemoryCandidate,
+    command: SocMemoryCandidateReviewCommand,
+) -> SocMemoryCandidateReviewCommand:
+    if not command.apply_to_future_matches:
+        return command
+    applicability = command.record_applicability or candidate.applicability
+    if applicability is None:
+        raise SocServiceError("apply_to_future_matches requires a typed candidate applicability contract")
+    if candidate.decision_impact is not SocMemoryDecisionImpact.DETECTION_DECISION:
+        raise SocServiceError("apply_to_future_matches requires a behavior-scoped decision-eligible candidate")
+    assert command.confirmed_verdict is not None
+    directive = SocMemoryDecisionDirective(
+        effect=SocMemoryDecisionEffect.OVERRIDE,
+        target_verdict=command.confirmed_verdict,
+        review_effect=(SocMemoryReviewEffect.CLEAR if command.clear_review_on_match else SocMemoryReviewEffect.PRESERVE),
+        required_facet_keys=sorted(applicability.required_facets),
+        rationale=command.reason,
+    )
+    return command.model_copy(update={"decision_directive": directive})
+
+
+def _validate_memory_record_applicability(
+    candidate: SocMemoryCandidate,
+    reviewed: SocMemoryApplicabilitySpec | None,
+) -> None:
+    if reviewed is None:
+        return
+    base = candidate.applicability
+    if base is None:
+        raise SocServiceError("record_applicability cannot be supplied for a candidate without typed applicability")
+    if (
+        reviewed.profile_id,
+        reviewed.profile_version,
+        reviewed.feature_schema_version,
+    ) != (
+        base.profile_id,
+        base.profile_version,
+        base.feature_schema_version,
+    ):
+        raise SocServiceError("record_applicability must retain the candidate profile and feature schema versions")
+
+    base_required = _normalized_applicability_values(base.required_facets)
+    base_optional = _normalized_applicability_values(base.optional_facets)
+    reviewed_required = _normalized_applicability_values(reviewed.required_facets)
+    reviewed_optional = _normalized_applicability_values(reviewed.optional_facets)
+    missing_required_keys = sorted(set(base_required) - set(reviewed_required))
+    if missing_required_keys:
+        raise SocServiceError("record_applicability cannot remove candidate required facets: " + ", ".join(missing_required_keys))
+    for key, values in reviewed_required.items():
+        allowed_values = base_required.get(key) or base_optional.get(key)
+        if allowed_values is None or not values <= allowed_values:
+            raise SocServiceError(f"record_applicability required facet {key} must narrow candidate facet values")
+    if not set(reviewed_optional) <= set(base_optional):
+        raise SocServiceError("record_applicability optional facets must come from candidate optional facets")
+    for key, values in reviewed_optional.items():
+        if not values <= base_optional[key]:
+            raise SocServiceError(f"record_applicability optional facet {key} must narrow candidate facet values")
+    if reviewed.excluded_facets != base.excluded_facets:
+        raise SocServiceError("record_applicability cannot change candidate exclusions in this review contract")
+    if reviewed.minimum_optional_matches < base.minimum_optional_matches:
+        raise SocServiceError("record_applicability cannot lower the optional match threshold")
+    if reviewed.minimum_strong_anchor_matches < base.minimum_strong_anchor_matches:
+        raise SocServiceError("record_applicability cannot lower the strong-anchor threshold")
+
+    base_context_missing = set(base.context_only_missing_facet_keys)
+    reviewed_context_missing = set(reviewed.context_only_missing_facet_keys)
+    base_context_similarity = set(base.context_only_similarity_facet_keys)
+    reviewed_context_similarity = set(reviewed.context_only_similarity_facet_keys)
+    if not reviewed_context_missing <= base_context_missing:
+        raise SocServiceError("record_applicability cannot widen context-only missing facets")
+    if not reviewed_context_similarity <= base_context_similarity:
+        raise SocServiceError("record_applicability cannot widen context-only similarity facets")
+
+
+def _normalized_applicability_values(
+    facets: dict[str, list[str]],
+) -> dict[str, set[str]]:
+    return {str(key).strip().casefold(): {str(value).strip().casefold() for value in values if str(value).strip()} for key, values in facets.items() if str(key).strip()}
 
 
 def _retrieval_activation_labels(labels: list[str], *, enabled: bool) -> list[str]:
@@ -2205,10 +2423,22 @@ def _retrieval_activation_labels(labels: list[str], *, enabled: bool) -> list[st
     return sorted(result)
 
 
-def _memory_query_from_investigation_context(context: InvestigationContext) -> SocMemoryQuery:
+def _memory_query_from_investigation_context(
+    context: InvestigationContext,
+    *,
+    profile_registry: SocMemoryProfileRegistry,
+) -> SocMemoryQuery:
     facets: dict[str, list[str]] = {}
     text_terms: list[str] = []
     evidence_refs: list[str] = []
+    profile_metadata: dict[str, Any] = {
+        "memory_profile_id": "soc.generic",
+        "memory_profile_version": "1",
+        "memory_feature_schema_version": "soc.memory_features.generic.v1",
+    }
+    policy_version = "soc.memory_retrieval_policy.v2"
+    tenant_scope = context.queue_item.tenant_id or "global"
+    tenant_id = context.queue_item.tenant_id
 
     item = context.queue_item
     _add_memory_query_facet(facets, "source_type", item.source_type.value)
@@ -2240,6 +2470,20 @@ def _memory_query_from_investigation_context(context: InvestigationContext) -> S
 
     request = context.run.llm_analysis_request
     if request is not None:
+        profile = profile_registry.resolve_request(request)
+        canonical_query = memory_query_from_analysis_request(
+            request,
+            profile=profile,
+        )
+        for key, values in canonical_query.facets.items():
+            for value in values:
+                _add_memory_query_facet(facets, key, value)
+        text_terms.extend(canonical_query.text_terms)
+        evidence_refs.extend(canonical_query.evidence_refs)
+        profile_metadata = dict(canonical_query.metadata)
+        policy_version = canonical_query.policy_version
+        tenant_scope = canonical_query.tenant_scope or tenant_scope
+        tenant_id = canonical_query.tenant_id
         for skill in request.skill_context.selected_skills:
             _add_memory_query_facet(facets, "skill", skill.skill_name)
             _add_memory_query_facet(facets, "skill_reason", skill.reason)
@@ -2257,13 +2501,16 @@ def _memory_query_from_investigation_context(context: InvestigationContext) -> S
         _add_memory_query_facet(facets, "target_artifact", candidate.target_artifact.value)
 
     return SocMemoryQuery(
-        tenant_id=item.tenant_id,
+        policy_version=policy_version,
+        tenant_scope=tenant_scope,
+        tenant_id=tenant_id,
         facets=facets,
         text_terms=text_terms,
         evidence_refs=evidence_refs,
         limit=5,
         max_tokens=900,
         metadata={
+            **profile_metadata,
             "source": "investigation_context",
             "queue_id": item.queue_id,
             "run_id": item.run_id,
@@ -4577,6 +4824,20 @@ def _severity_level(value: str | None) -> int:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _supports_memory_evolution_repository(repository: object | None) -> bool:
+    required_methods = (
+        "save_memory_use",
+        "find_memory_use_by_idempotency_key",
+        "list_memory_uses",
+        "save_memory_feedback",
+        "find_memory_feedback_by_idempotency_key",
+        "get_memory_health",
+        "compare_and_set_memory_health",
+        "save_memory_revision_proposal",
+    )
+    return repository is not None and all(callable(getattr(repository, name, None)) for name in required_methods)
 
 
 def _dedupe(values: list[str]) -> list[str]:

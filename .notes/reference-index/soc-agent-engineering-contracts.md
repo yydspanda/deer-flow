@@ -551,14 +551,14 @@ External disposition sync 约束：
 - 外部预警/工单/处置系统的状态和理由同步必须走 vendor-neutral `SocExternalDispositionEvent`，Zeus 只是第一个 adapter；core service 不能出现 Zeus 专属分支。
 - `SocExternalDispositionEvent` schema version 固定为 `soc.external_disposition.v1`，至少包含 `external_system`、`external_case_id`、`external_status`、`updated_at`、`raw_payload_hash`，可选包含 `tenant_id`、`source_event_id`、`source_version`、`external_alert_ref`、`soc_alert_id`、`soc_run_id`、`soc_queue_id`、`external_reason`、`external_tags`、`operator`；多租户部署时 `tenant_id` 必须由认证上下文或 adapter 配置补齐。
 - 外部系统 adapter 只负责认证、解码、字段映射、redaction、幂等键生成和调用 `SocExternalDispositionService`；adapter 不得直接写 repository、不得直接调用 `SocReviewService.correct()`、不得直接写 memory 或 skill。
-- `SocExternalDispositionService` 是外部反馈写入本地 audit、review/correction、external disposition record 和 memory candidate 的唯一 source service 边界。它只有在 server-owned mapping/classifier 已生成完整 typed Skill feedback 时，才允许组合 `SocSkillImprovementService`；原始 reason 不得直接聚类或创建 Skill candidate。
-- 当前 External Disposition Contract MVP 已实现 contract/mapper/service/repository 边界；`SocExternalDispositionService.apply_event()` 对 high-trust、mapped、唯一定位且可映射 verdict 的事件复用 `SocReviewService.correct()` 同步 operational correction / review close。mapped、可定位且带 reason 的事件可以通过注入的 `SocMemoryService.propose_candidate()` 生成 pending memory candidate；低可信只能生成候选不能改判，未知状态、无法定位、无 reason 或非可学习状态不能生成候选。
+- `SocExternalDispositionService` 是外部反馈写入本地 audit、review/correction 和 external disposition record 的唯一 source service 边界。它只有在 server-owned mapping/classifier 已生成完整 typed Skill feedback 时，才允许组合 `SocSkillImprovementService`；原始 reason 不得直接聚类或创建 Skill candidate。
+- 当前 External Disposition Contract MVP 已实现 contract/mapper/service/repository 边界；`SocExternalDispositionService.apply_event()` 对 high-trust、mapped、唯一定位且可映射 verdict 的事件复用 `SocReviewService.correct()` 同步 operational correction / review close。该 correction 会反馈给本次 run 实际使用的 confirmed Memory，但不会为每个外部工单事件创建一条 Memory candidate；需要形成新经验时，必须走显式人工 promotion 或 repeated-pattern quality gate。
 - `soc_external_dispositions` 是当前 `SocExternalDispositionRecord` 的 SOC business store 表；`SqlAlchemyAlertRepository` 实现 `SocExternalDispositionRepository` 方法。生产和本地持久化都必须通过 migration `0009_external_dispositions` 或 `create_soc_tables()` 创建该表。
 - 外部处置历史必须通过 `SocReviewService.get_investigation_context()` 聚合到 `InvestigationContext.external_dispositions`；ReviewQueue API/TUI/Web/Lead Agent bounded context 只能消费该字段，不能直接查 `soc_external_dispositions`。
-- 幂等键固定形态为 `external_disposition:{tenant_id|default}:{external_system}:{external_case_id}:{source_event_id|source_version|updated_at_hash}`；重复 webhook、Kafka offset 回放或 polling 重扫不能重复关闭 review queue、重复改判或重复生成 memory candidate。
+- 幂等键固定形态为 `external_disposition:{tenant_id|default}:{external_system}:{external_case_id}:{source_event_id|source_version|updated_at_hash}`；重复 webhook、Kafka offset 回放或 polling 重扫不能重复关闭 review queue、重复改判或重复生成 Memory feedback。
 - 目标定位顺序必须是明确本地引用优先：`soc_queue_id` -> `soc_run_id` -> `soc_alert_id` -> 已绑定 `external_system + external_case_id` -> 弱关联；弱关联不能唯一命中时只能保存 unmatched record，不得自动改判。
 - 外部状态必须通过可配置 mapping 转换为 canonical status，例如 `closed_true_positive`、`closed_false_positive`、`closed_benign_true_positive`、`suppressed`、`escalated`、`ignored`、`duplicate`、`unknown`；未映射状态只能进入 `unknown/unmatched`，不能自动更新 operational decision。
-- 外部 free-text reason 默认只是 case feedback；只能生成 `SocMemoryCandidate(status=pending_review)` 或 `SkillImprovementCandidate(status=pending_review)`，不得直接成为 confirmed memory、active lesson、active skill 或 prompt 修改。
+- 外部 free-text reason 默认只是 case feedback；它可作为已使用 Memory 的 typed outcome feedback，或经 server-owned classifier 形成 `SkillImprovementCandidate(status=pending_review)`，但不得自动新建 Memory candidate、成为 confirmed memory/active lesson/active skill 或修改 prompt。
 - 外部处置同步必须记录 source surface、operator、mapping version、apply status、target refs、idempotency key 和 audit event，支持 replay diff、撤销和客户审计。
 - Webhook、Kafka、polling 和 manual import 都是 transport adapter；进入 core service 前必须归一成同一 `SocExternalDispositionEvent`，不能为每种 transport 复制业务状态机。
 
@@ -827,7 +827,7 @@ SOC memory tracking 约束：
 - 所有 memory candidate 必须包含 source surface、source run/review/evidence refs、idempotency key、status、confidence、proposed content、facets、evidence refs 和 reviewer/audit fields。
 - 当前已实现 DB-first candidate persistence、confirmed-memory boundary、governed retrieval activation 和 retrieval policy MVP：`SocMemoryService.propose_candidate()` 必须强制写 `pending_review`，并保持 `runtime_decision_allowed=false`；`SocMemoryService.list_candidates()` / `get_candidate()` 是 API/CLI/Web/TUI/Lead Agent 查询候选记忆的 service 边界；`SocMemoryService.review_candidate()` 是 confirm/reject/deprecate/expire 的唯一候选状态机边界；`SocMemoryService.set_retrieval_activation()` 是 confirmed record retrieval enable/disable 的唯一状态迁移边界；`SocMemoryService.find_relevant_records(SocMemoryQuery)` 是 confirmed memory 检索的唯一 service 边界。
 - 候选记忆来源桥接固定在 `soc_agent.memory.sources.SocMemoryCandidateSourceBridge`：新增来源必须先构造 `SocMemoryCandidateCreateCommand`，再经 `SocMemoryService.propose_candidate()` 写入，不得在 Web/TUI/Kafka/Lead Agent/domain handler 内直接拼 repository row。
-- `SocReviewService.correct()` 是 correction -> pending memory candidate 的 service 边界；当注入 `MemoryCandidateRepository` 时，它会把 candidate id 回写到 `CorrectionRecord.memory_candidate_id`、audit payload 和 event payload。外部反馈如果复用 correction 链路，不得再重复创建第二条 correction candidate。
+- `SocReviewService.correct()` 是 correction、Memory outcome feedback 和可选 candidate promotion 的 service 边界。普通 correction 默认 `observed_only`；只有 typed `promote_to_memory=true` 通过 Admission 后才把 candidate id 回写到 `CorrectionRecord`、audit 和 event。外部反馈复用 correction 链路但不携带 promotion，不能逐事件创建 candidate。
 - `SocReviewService.add_note()` 是 ReviewQueue review note -> pending memory candidate 的 service 边界；`soc review note`、Web/TUI note action 和后续 Lead Agent/Kafka note source 都必须通过它或同级 service 方法进入 `SocMemoryCandidateSourceBridge`，不得直接写 `soc_memory_candidates`。Review note source type 固定为 `review_note`，幂等键必须至少覆盖 queue/run/alert/note，并可附加 scenario/domain/finding refs。
 - 分析师采纳 Lead Agent 结论必须是显式 human mutation，不是模型回调或 assistant message 自动写入。当前
   `ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION` 要求 queue、thread、message 和 acceptance reason，保留
@@ -861,18 +861,35 @@ SOC memory tracking 约束：
   `MemoryPatternObservationCreateCommand -> SocMemoryPatternService`：每个 completed Runtime result 最多写
   一条 immutable observation，且 Kafka/batch composition 均默认关闭；sidecar 的 ineligible/error 只进入
   结果状态，不得让基础 Runtime 失败或改变 Kafka commit 语义。
-- `soc.memory_pattern_aggregation.v1` 的 cohort 只能选择一个最强可用 generic dimension：primary
-  scenario -> canonical detection key -> category。`rule_code` 不是必填项；禁止把 topic/rule/scenario/entity
-  拼成供应商绑定联合 key。aggregation key 必须包含 policy、lineage、固定 window，lineage 必须隔离 tenant、
+- `soc.memory_pattern_aggregation.v3` 由 generic kernel 执行固定窗口、质量门和候选生命周期；same-class、
+  duplicate occurrence 和 candidate applicability 由 server-owned `SocMemoryProfile` 提供。generic fallback
+  选择最强可用通用维度；PingAn profile v2 在 detection key 与 behavior fingerprint 同时存在时建立
+  compound cohort，detection-only 降为 rule context，behavior-only 作为 ruleless pattern，并拒绝
+  category-only cohort。`rule_code` 不是必填项；禁止在 generic Runtime 中拼接供应商字段。
+  aggregation key 必须包含 policy/profile/feature schema、lineage 和固定 window，lineage 必须隔离 tenant、
   environment 与 `simulation|operational` data class。
 - fixed window 只能使用从原 Runtime input 重建出的 canonical timezone-aware
   `AlertInput.event.event_time`，不能使用 replay/run started time。缺失或 naive source time 必须
   `skipped_ineligible`，不得在 generic layer 猜测时区。默认 window=86400s、minimum support=5、minimum
-  distinct sources=5，两个门槛同时满足才允许创建一个 candidate。
-- 过门槛后必须通过已有 `SocMemoryService.propose_candidate()` 创建 exactly one frozen
-  `pending_review` repeated-pattern candidate；snapshot 保存 policy/window/scope、observation/source IDs 和
-  evidence-set hash。后续 observation 只能由 replay 报告为 added，candidate 不自动修改或 supersede，
-  supersession 固定 `manual_only`。recurrence 不证明 benign/malicious、authorization、impact 或 action。
+  distinct sources=5；达到 recurrence 门槛后还必须有 minimum conclusive support=5、risk/benign consistency
+  >=0.8，以及至少一个与 candidate type 对应的 consensus exact strong anchor。
+- 每个 v3 observation 必须携带 bounded lesson snapshot，包括 verdict/risk class、review/evidence state、
+  summary/reason/recommendation、primary scenario/stage 与 direction。质量不足、结论冲突、未决过多或缺少
+  strong anchor 的 cohort 只保留 observation 和 reason codes，不得创建 candidate、不得进入专家队列。
+- 通过全部门槛后必须通过已有 `SocMemoryService.propose_candidate()` 创建 exactly one frozen
+  `pending_review` pattern-level candidate；candidate 正文必须包含适用范围、verdict 分布、一致率、代表性
+  结论、少数/未决数量和复核边界，不得复述单个 alert。snapshot 保存 policy/window/scope、observation/source
+  IDs、cohort quality 和 evidence-set hash。后续 observation 只能由 replay 报告为 added，candidate 不自动
+  修改或 supersede，supersession 固定 `manual_only`。
+- Candidate 幂等 identity 必须使用 window-independent lesson fingerprint：policy/lineage、dominant risk class
+  和 consensus strong anchors。后续 fixed window 得到相同 fingerprint 时，只记 reinforcement observation 并
+  指向既有 governed candidate，不得创建新的专家任务；risk class 或 strong-anchor scope 实质变化时才是新的
+  lesson candidate，且仍不得自动 supersede 旧记录。
+- `occurrence_key` 必须在 `(aggregation_key, occurrence_key)` 内唯一。PingAn 优先使用 canonical event ID，
+  然后 exact input hash，再使用 bounded time/entity scope；同一业务事件被重放或重复投递不得增加 support。
+- Pattern candidate 必须携带 profile-owned `SocMemoryApplicabilitySpec`。它包含 profile/version/feature-schema
+  identity 以及 exact required/optional/excluded facets；query 只能由 composition root 选择同一 profile，调用方
+  不得通过请求参数选择 profile。Applicability 与 ranking 独立，非 `applicable` 结果不能触发 typed directive。
 - `soc_memory_pattern_observations` 是 observation store，migration 为
   `0021_memory_pattern_observations`；它不是 confirmed memory 表。`soc memory patterns list|replay` 只能调用
   `SocMemoryPatternService` 做只读 inspection/recomputation，replay 固定
@@ -2720,12 +2737,58 @@ tool permission denial rate
   `MemoryAdmissionService(soc.memory_admission_policy.v1)`。准入至少要求：明确人工 promotion/acceptance、
   足够理由、一个可复用 facet；未准入返回 `observed_only`，不得创建候选。Kafka/batch repeated pattern
   继续走独立聚合门槛，但最终仍只创建 pending candidate。
+- Same-alert Memory validation may deliberately seed one record per alert only when the source/candidate/target are
+  all explicit `eval_fixture`, `decision_impact=none`, data class is `simulation`, the database is isolated, and the
+  command requires an explicit in-sample confirmation flag. Such records validate wiring only and must never be
+  counted as production lessons, Memory quality, generalization evidence, or the expected alert-to-Memory ratio.
+- Operational Kafka/batch learning uses `soc.memory_pattern_aggregation.v3`: one alert may create one immutable
+  observation, but only a repeated, conclusive, >=80% outcome-consistent cohort with a consensus strong anchor may
+  create one pattern-level candidate. Candidate summary/content must state whether the cohort is risk or benign,
+  its verdict distribution, applicability, representative reasons and exceptions; a generic recurrence sentence
+  or copied alert body is insufficient for confirmation.
+- v1/v2 are historical deserialization values,
+  not defaults for new observations. Tenant-specific semantics live behind `SocMemoryProfileRegistry`; generic Core,
+  contracts and persistence must not import PingAn raw aliases.
+- Every projected confirmed Memory must create one idempotent `SocMemoryUseRecord` after effective-decision
+  reconciliation. It freezes exact memory version/content/facets hash, retrieval/applicability result, base/effective
+  verdict and transition effect. Final analyst correction or canonical external disposition creates append-only
+  `SocMemoryFeedbackEvent`; it must not rewrite either the source run or Memory record.
+- `SocMemoryHealthRecord` is a CAS-updated read model derived from uses/feedback. Every high-trust contradiction
+  creates `SocMemoryRevisionProposal`. When the active directive targets benign/false-positive but final high-trust
+  truth is risk, the disable-only `soc_memory_safety_monitor` must disable retrieval immediately; it cannot enable a
+  record. Revision/deprecation remains a reviewer action. Memory still never grants action authority.
 - 普通 `ReviewNoteCommand` 的显式提升只能使用类型化 `promote_to_memory=true`；不得从自由格式
   metadata 暗示提升。Lead Agent acceptance 的“足够理由”必须检查人工 `acceptance_reason`，不得用
   模型回复正文长度代替人工判断。
 - candidate 和 Runtime query 必须复用 `memory/facets.py` 的 vendor-neutral facet 语义。`alert_id/run_id`
   只能作为 lineage metadata；不得作为 match facet。`rule_code`、environment、scenario、role 和 behavior
-  均可缺失，不能设计成多维联合硬键。
+  均可缺失；generic Memory Kernel 不得规定一个所有厂商必填的多维联合硬键。Tenant Profile 可以基于
+  已存在的 canonical facets 定义版本化 compound cohort/applicability，但必须保留 ruleless fallback 和
+  context-only/decision-authority 边界。
+- PingAn Profile v2 把稳定 `rule_code`（无 code 时可用稳定 `rule_name`）投影为 canonical
+  `detection_key`，但 detection identity 只表示“同一检测规则”，不得单独复制历史 verdict。不得用
+  `alert_id/run_id` 合成 detection key。`detection_key` 与 deterministic `behavior_fingerprint` 同时存在时，
+  必须使用二者的 compound signature 隔离 cohort；同 rule、不同 behavior、相反结论必须形成独立候选。
+  detection-only cohort 只能产生 rule-context `REVIEW_HINT`，service 必须拒绝其 future-match directive；
+  behavior-only cohort 仍可服务没有稳定规则身份的告警。二者都缺失时 observation 不准入。
+- `SocMemoryApplicabilitySpec` 可声明严格受限的 context-only lane：compound record 的 exact
+  detection/environment 匹配、exact behavior fingerprint 缺失且至少一个 canonical behavior component
+  重叠时，可以 `partial` 方式进入 `M-*` 推理上下文。该投影必须显式标记
+  `context_only_allowed=true`，在 token 排序中晚于 exact match，并且不得应用
+  `SocMemoryDecisionDirective`。没有 component overlap 的同-rule 记录仍为 not applicable。
+- 没有 typed applicability 的 legacy record 最多作为 bounded `M-*` 背景存在，即使历史上携带 directive
+  也不得改判。确定性 Memory Decision 必须同时满足 record `decision_impact=detection_decision`、typed
+  applicability 和当前 projection `status=applicable`；客户端 metadata 不能恢复该权限。
+- Reviewer 可在 confirm 时通过 `record_applicability` 收窄候选 scope，只能保留/缩小原 required 值域，
+  或把候选 optional facet 提升为 required；不得移除强锚点、切换 profile/feature schema、降低阈值、
+  扩大值域或扩大 context-only missing/similarity 集。生成或显式提交的 directive 必须包含最终所有
+  required facet keys。
+- Memory 的 24h fixed window 只定义重复 observation 的候选聚合范围，不是 Memory 生命周期。当前
+  pattern candidate 默认 record validity 为 90 天、review interval 为 30 天；确认时 retrieval activation
+  另有显式截止时间和复审周期，且不能超出 record validity。环境是服务端配置的 `dev|stg|prd` 运行
+  边界，不从 topic、IP 或供应商自由字段推断。Runtime 在 Profile/query 前绑定显式 batch/daemon
+  environment，或一致的 `SOC_MEMORY_ENVIRONMENT` / tenant-policy / automation environment；冲突配置
+  必须 fail closed。
 - SQL repository 必须在完整 eligible corpus 上分别执行 `soc_memory_record_facets` exact-facet lane 和
   text lane，与 scoped fallback 合并后再用共享 scorer 应用 candidate limit 和最终 top-K/token budget。
   禁止恢复“先取最新 200 条再评分”的实现；大量新但宽泛匹配的记录不能遮蔽旧的强相关 Memory。

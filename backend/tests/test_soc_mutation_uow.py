@@ -268,6 +268,7 @@ def test_correction_fault_after_each_write_rolls_back_entire_command(tmp_path: P
             run_id="RUN-MUTATION-001",
             corrected_verdict=Verdict.FALSE_POSITIVE,
             reason="Analyst corrected the verdict after reviewing reusable evidence.",
+            promote_to_memory=True,
         ),
         context=_analyst_context("correct-001"),
     )
@@ -287,6 +288,7 @@ def test_correction_fault_after_each_write_rolls_back_entire_command(tmp_path: P
                     run_id="RUN-MUTATION-001",
                     corrected_verdict=Verdict.FALSE_POSITIVE,
                     reason="Analyst corrected the verdict after reviewing reusable evidence.",
+                    promote_to_memory=True,
                 ),
                 context=_analyst_context("correct-001"),
             )
@@ -408,6 +410,7 @@ def test_correction_and_external_feedback_exact_retries_create_one_logical_resul
         run_id="RUN-MUTATION-001",
         corrected_verdict=Verdict.FALSE_POSITIVE,
         reason="Analyst corrected the verdict after reviewing reusable evidence.",
+        promote_to_memory=True,
     )
     context = _analyst_context("correct-idempotent-001")
 
@@ -440,7 +443,7 @@ def test_correction_and_external_feedback_exact_retries_create_one_logical_resul
     assert second_external.idempotent is True
     assert second_external.record.disposition_id == first_external.record.disposition_id
     assert len(external_repository.list_external_dispositions()) == 1
-    assert len(external_repository.list_memory_candidates()) == 1
+    assert len(external_repository.list_memory_candidates()) == 0
     assert len(external_repository.list_audit_records("RUN-MUTATION-001")) == 2
     assert len(external_repository.list_mutation_audits()) == 2
 

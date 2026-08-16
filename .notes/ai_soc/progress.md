@@ -29,8 +29,89 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；主 LLM 只执行 bounded `AnalysisResult.v4` 节点；条件式 verifier 通用/本机默认关闭，固定 cohort 或 live 命令显式开启后由确定性 gate 触发，只独立反证 `RC-*` 方向/角色声明，不掌握流程或动作权限 |
-| 当前下一刀 | Prompt v34 的冻结 20 条结构评测与 Role-Verifier + in-sample confirmed-Memory 链路实验已完成。下一步建立独立人工 verdict/scenario/direction/role 真值和 held-out Memory 查询集，测 Retrieval v2 precision/recall、结论稳定性与 verifier failure rate；随后补 Web/TUI 人工角色确认。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
+| 当前下一刀 | PingAn Memory MVP 已完成通用 Kernel、租户 Profile、模式候选、审核激活、Retrieval v2、决策留痕和反馈演化闭环。下一步建立独立人工 verdict/scenario/direction/role 真值和 held-out Memory 查询集，测 pattern lesson 与 Retrieval v2 precision/recall、directive override accuracy、专家审核负担和 verifier failure rate；随后补 Web/TUI 人工角色确认。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
+
+## 2026-08-16 — PingAn SOC Memory Kernel/Profile/Evolution MVP
+
+- PingAn Memory Profile 升级为 v2：同一告警同时具备 canonical `detection_key` 与
+  `behavior_fingerprint` 时使用 compound cohort。相同 rule、不同 behavior 不再聚进同一候选，因此可安全
+  保存相反运营结论；原始 detection/behavior facets 仍分别保留用于解释和检索。
+- detection-only cohort 明确降为 `rule_context_only + REVIEW_HINT`，即使人工确认也不能生成
+  `apply_to_future_matches` directive；behavior-only 或 compound pattern 在通过质量门槛和人工审核后才具有
+  decision eligibility。`rule_code` 因此仍是高价值召回锚点，但不再等同于最终处置结论。
+- `SocMemoryApplicabilitySpec` 新增受限 context-only 语义。同 detection/environment、不同 exact behavior
+  fingerprint 但 canonical behavior component 有交集时，记录可作为 `partial` 的 `M-*` 背景进入 LLM；
+  projection 明示“仅作相似模式参考”，exact match 优先，Automation 拒绝其 directive，并单独统计
+  `returned_context_only_count`。
+- Memory review API/CLI 新增 `record_applicability`：reviewer 可把候选 optional facet 提升为 required 来
+  收窄生效范围；Core Service 拒绝删除原锚点、扩大值域、切换 Profile/schema、降低阈值或扩大
+  context-only fallback。相关回归覆盖 same-rule/different-behavior/opposite-verdict、rule-only directive 拒绝、
+  reviewer scope narrowing、partial context projection 和 automation non-authority。
+- ReviewQueue Web workbench 同步展示 Profile、required/optional applicability 和“规则背景/模式决策”权限；
+  reviewer 可选择把 optional facet 提升为 required，并仅对 decision-eligible pattern 显式授予未来精确匹配
+  directive。前端不能删除原强锚点或扩大后端候选范围。
+- Profile v1 记录不会静默匹配 Profile v2 查询。旧记录继续可审计，但必须按 v2 feature schema 重新聚合并
+  复核；任何迁移都不能从 detection-only 旧记录推断 compound behavior scope 或继承决策权限。没有 typed
+  applicability 的 legacy 记录即使携带旧 directive 也只能作为背景；Automation 同时要求
+  `decision_impact=detection_decision` 和当前 projection `status=applicable`。
+- 业务系统、BU、资产类型、资产环境和网络区域等更完整 applicability 已记录到
+  `.notes/archive/ai_soc/deferred/asset-business-context-memory-applicability.md`；在获得稳定 CMDB contract、
+  canonical taxonomy 和人工标签前，不把这些平安字段写进通用 Memory Kernel。
+- 修正 PingAn canonical detection identity：`detection_key` 只由稳定 `rule_code` 或 `rule_name`
+  产生；二者都缺失时保持 `None`，不再生成会把每个 occurrence 错当成独立告警类别的
+  `zeus:alert:{alert_id}`。此时只有 deterministic canonical `behavior_fingerprint` 足够时才允许进入
+  PingAn pattern cohort，只有 category 则继续不准入。
+- 明确三种时间：默认 24h 是 observation 聚合窗口；候选 record 默认有效 90 天、30 天复审；实际
+  retrieval activation 由审核者另设截止时间和复审周期。因此一到两个月的运营 Memory 生命周期已经
+  受支持，不应通过把聚合窗口扩大到一两个月实现。
+- 修正环境适用性实际接线：Memory retrieval 在 profile/query 前使用 operator-owned environment；batch/
+  daemon 显式环境与 `SOC_MEMORY_ENVIRONMENT`、tenant-policy、automation 环境必须一致，冲突 fail
+  closed。PingAn 告警字段和 topic 无权选择 Memory 环境。
+- 新增完整设计 `.notes/ai_soc/memory/pingan-soc-memory-design.md`，固定“通用 Memory Kernel +
+  PingAn Profile”边界。通用 Runtime 不读取平安 raw 字段；`PingAnSocMemoryProfile` 只消费 canonical
+  Adapter 输出并负责 same occurrence、same reusable class 和 typed applicability。
+- 生产学习不再一告警一 Memory/候选。每条完成告警至多形成一条 immutable observation；同一 occurrence
+  不重复计数，只有 24h cohort 同时达到 5 observations、5 distinct sources、5 conclusive outcomes、
+  >=80% risk/benign consistency 和 strong anchor 才形成一条 pattern-level candidate。
+- PingAn 候选使用 profile-owned compound/detection-only/behavior-only 分级；category-only 不准入。未来
+  decisive match 必须同时满足 exact environment 与候选声明的全部 required anchors，防止 PRD 经验跨到
+  STG，也不依赖每个厂家都有 `rule_code`。
+- 候选确认可显式生成 reviewer-authored `SocMemoryDecisionDirective` 并通过受治理 activation 开启检索。
+  Runtime 保存不可变 Base Decision，post-Runtime 依次记录 Memory/Tenant/Effective Decision；Memory
+  自由文本不能改判，也不能授权封禁、隔离或抑制动作。
+- 每次 `M-*` 投影新增 append-only `SocMemoryUseRecord`。人工 correction 或 canonical external
+  disposition 只对该 run 真正使用过的 Memory 生成 feedback，更新 versioned health；高可信风险真值反驳
+  active benign Memory 时由 disable-only safety monitor 立即暂停 retrieval，并创建 revision proposal。
+- 补齐 revision proposal 的 list/get/accept/reject API 与 CLI。接受 proposal 只承认反证成立，不会修改或
+  重新启用旧 Memory；新版本、缩窄适用范围、弃用和重新激活仍必须走原有审核边界。
+- ReviewQueue/Web/TUI 的 relevant-memory 查询与 Runtime 统一使用 Retrieval v2 和相同 profile、tenant、
+  environment/applicability 语义，避免“页面显示能命中、Runtime 实际不能用”的分叉。
+- migration head 升级为 `0025_memory_evolution`，保存 profile/occurrence、use、feedback、health 和 revision
+  proposal。Wiki/OKF 明确只作为后期 DB 投影，不成为第二个可写事实源。
+- 当前实现证明结构、事务、权限、幂等和 fail-closed 边界；是否真正降低人工量仍需 held-out、人工标注的
+  PingAn 样本测 retrieval precision、候选审核通过率、contradiction/not-applicable rate 和节省工时。
+- 已验证：跨层 Memory/Review/API/automation/architecture 回归 `194 passed`；真实 migration head `1 passed`；离线
+  PingAn batch/Memory helpers `27 passed`；前端 check/typecheck、SOC API unit `27 passed`、ReviewQueue
+  Playwright `4 passed`，以及 changed-file Ruff / `git diff --check` 均通过。
+
+## 2026-08-15 — Pattern-level Memory quality gate replaces per-alert candidates
+
+- 明确纠正 20-alert in-sample 实验的产品语义：`seed_confirmed_memory_from_batch.py` 仍可按显式授权创建
+  20 条同告警记录来验证 Admission/confirm/activation/retrieval wiring，但类型固定为 `eval_fixture`，目标为
+  `eval_fixture`，`decision_impact=none`；它不是生产 Memory 产率或质量证据。
+- 生产 Kafka/batch 路径升级为 `soc.memory_pattern_aggregation.v3`。每条完成告警最多写一条 immutable
+  `MemoryPatternObservation`；默认只有同一模式在 24h 内达到 5 support、5 distinct sources、5 conclusive
+  outcomes、risk/benign consistency >=80%，且具备 consensus strong anchor，才形成一个待审 pattern lesson。
+- v3 observation 保存 bounded conclusion snapshot；cohort candidate 总结适用范围、verdict 分布、一致率、
+  代表性 summary/reason、少数/未决数量和复核边界。低支持、冲突、未决或弱锚点 cohort 不进入专家队列。
+- lesson fingerprint 跨 fixed window 去重；同 lineage、risk class 和 consensus strong anchors 的后续窗口只
+  形成 reinforcement observations 并复用既有候选，风险类别或强锚点实质变化才提出新的人工任务。
+- 新增只读 `build_pattern_memory_review.py`。对现有冻结 20 条运行生产默认门槛：20 条输入中 7 条具有可用
+  timezone-aware source time，形成 7 个不同 singleton cohort，创建 0 个 candidate；另外 13 条因上游 naive
+  event time 按既有 generic contract 跳过。该结果证明当前样本不会再产生 20 条低价值待审 Memory。
+- 验证：memory pattern、Admission/Retrieval v2、同批实验工具和 internal batch bridge 聚焦回归
+  `47 passed`；Ruff 与 `git diff --check` 通过。
 
 ## 2026-08-15 — Role Verifier + confirmed Memory 20-alert experiment
 

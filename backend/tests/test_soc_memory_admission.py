@@ -35,7 +35,7 @@ def _command(
     )
 
 
-def test_changed_verdict_with_reason_and_anchor_is_admitted() -> None:
+def test_changed_verdict_without_explicit_promotion_remains_observed_only() -> None:
     decision = MemoryAdmissionService().evaluate(
         _command(
             source_type=SocMemoryCandidateSourceType.CORRECTION,
@@ -48,9 +48,29 @@ def test_changed_verdict_with_reason_and_anchor_is_admitted() -> None:
         )
     )
 
+    assert decision.status.value == "observed_only"
+    assert "verdict_changed" in {reason.value for reason in decision.reason_codes}
+    assert "no_human_promotion_signal" in {reason.value for reason in decision.reason_codes}
+    assert decision.reusable_facets == {"detection_key": ["nids:reverse-shell"]}
+
+
+def test_explicitly_promoted_correction_with_reason_and_anchor_is_admitted() -> None:
+    decision = MemoryAdmissionService().evaluate(
+        _command(
+            source_type=SocMemoryCandidateSourceType.CORRECTION,
+            source_metadata={
+                "previous_verdict": "unknown",
+                "corrected_verdict": "true_positive",
+                "promote_to_memory": True,
+            },
+            metadata={"correction_reason_length": 48},
+            facets={"detection_key": ["nids:reverse-shell"]},
+        )
+    )
+
     assert decision.status.value == "admitted"
     assert decision.quality_score == 1.0
-    assert decision.reusable_facets == {"detection_key": ["nids:reverse-shell"]}
+    assert "explicit_promotion_requested" in {reason.value for reason in decision.reason_codes}
 
 
 def test_confirmation_only_does_not_create_one_candidate_per_alert() -> None:

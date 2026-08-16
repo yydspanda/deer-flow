@@ -51,6 +51,7 @@ from soc_agent.contracts import (
     SocDispositionTransitionKind,
     SocDispositionTransitionRecord,
     SocMemoryDecisionEffect,
+    SocMemoryDecisionImpact,
     SocMemoryRecord,
     SocMemoryRecordStatus,
     SocMemoryReviewEffect,
@@ -401,6 +402,13 @@ class SocAutomationService:
                 continue
             assert record is not None
             if item.metadata.get("record_content_hash") != record.content_hash or item.metadata.get("record_facets_hash") != record.facets_hash:
+                continue
+            if (
+                record.decision_impact is not SocMemoryDecisionImpact.DETECTION_DECISION
+                or record.applicability is None
+                or item.metadata.get("applicability_status") != "applicable"
+                or item.metadata.get("decision_directive_applicable") is not True
+            ):
                 continue
             directive = record.decision_directive
             if directive is None or float(score) < directive.minimum_match_score:

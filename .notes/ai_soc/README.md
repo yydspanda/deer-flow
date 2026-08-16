@@ -40,7 +40,8 @@
 | 重跑已完成的 PI-05A/B rollout/completion 仿真，或恢复已停放的真实接入验收 | `backend/samples/rollout/README.md` | `delivery-roadmap.md` 的 PI-05 分解；真实接入再看 `integrations/pingan-internal-continuation-handoff.md` |
 | 查看旧 sec-model/ZEUS 状态/safe-path 审计结论 | `integrations/pingan-legacy-source-audit.md` | `integrations/pingan-internal-continuation-handoff.md` |
 | 设计外部工单/处置状态回流 | `integrations/external-disposition-sync.md` | 工程契约 external disposition 章节 |
-| 设计记忆和经验沉淀 | `memory/memory-tracking.md` | `alert-lifecycle-flow.md` 的 memory flow |
+| 设计通用记忆和经验沉淀 | `memory/memory-tracking.md` | `alert-lifecycle-flow.md` 的 memory flow |
+| 审阅 PingAn Memory 的同类关联、候选质量、改判、反馈和失效闭环 | `memory/pingan-soc-memory-design.md` | `governance/decision-disposition-action-automation.md` |
 | 理解 Memory 改判、无 Memory 自动处置和完整动作留痕 | `governance/decision-disposition-action-automation.md` | `soc-agent-solution.md` Section 7.2 / 10 |
 | 管理授权活动、影子处置建议、抽样 outcome 与评测 gate，规划变更窗口与护网身份 | `governance/governed-context-facts.md` | `soc-agent-solution.md` Section 7.4 |
 | 设计 Lead/Sub Agent、skill、MCP 开放配置 | `governance/agent-profile-governance.md` | 工程契约 Profile / Skill / MCP 章节 |
@@ -84,7 +85,8 @@ ai_soc/
 │   ├── pingan-internal-continuation-handoff.md # 内网剩余步骤和命令
 │   └── mock-and-real-register.md      # mock/fixture/真实替换台账
 ├── memory/
-│   └── memory-tracking.md             # DB-first memory 与 retrieval policy
+│   ├── memory-tracking.md             # DB-first generic Memory kernel 与 retrieval policy
+│   └── pingan-soc-memory-design.md     # PingAn profile、模式候选、命中改判与反馈演化
 └── governance/
     ├── agent-profile-governance.md    # Lead/Sub Agent、Skill、MCP 配置治理
     ├── decision-disposition-action-automation.md # 改判、处置、授权、执行和 Memory 影响边界
@@ -111,6 +113,7 @@ ai_soc/
 | `capabilities/pingan/*` | 平安经验、能力卡、专属知识候选、源资料 | 新增/拆分/实现/废弃 PingAn card 或候选时更新 |
 | `integrations/*` | 外部系统接入、mock 与真实替换边界 | 新增 mock、真实 provider、外部反馈协议变化时更新 |
 | `memory/memory-tracking.md` | typed memory、candidate、confirmed memory、retrieval policy | memory contract、状态机、检索、projection 变化时更新 |
+| `memory/pingan-soc-memory-design.md` | PingAn same-class profile、模式候选、适用范围、反馈/健康/修订闭环 | PingAn profile、Memory evolution、审核或失效规则变化时更新 |
 | `governance/decision-disposition-action-automation.md` | base/effective decision、disposition、authorization、execution 的唯一专项说明 | Memory decision directive、automation policy、动作执行或 lineage contract 变化时更新 |
 | `governance/governed-context-facts.md` | typed operational fact、版本、来源、有效期和授权匹配边界 | fact contract、生命周期、matcher 或 disposition policy 变化时更新 |
 | `governance/agent-profile-governance.md` | agent profile、skill、MCP 开放配置治理 | profile 生命周期、权限和用户可配置范围变化时更新 |

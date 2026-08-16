@@ -220,7 +220,7 @@ disposition ingress endpoint。相应 service/CLI 是否足够，由 `AUD-02/AUD
 | `S-17` | `SocAuthorizationEnrichmentService` | persist/replay authorization match attached to run | authorization enrichment table | CLI; ReviewContext projection |
 | `S-18` | `SocDispositionProposalService` | exact authorization + current detection truth -> shadow proposal | enrichment/run/open queue reads; proposal write | CLI; ReviewContext projection |
 | `S-19` | `SocDispositionEvaluationService` | immutable outcomes、deterministic sample、derived inbox、evaluation gate | proposal/enrichment/queue/sample/outcome reads/writes | CLI/API/Web/TUI/external bridge |
-| `S-20` | `SocExternalDispositionService` | vendor-neutral status mapping、target locate、optional correction/candidate/outcome | external disposition plus delegated review/memory/audit/outcome writes | direct tests only; no app ingress |
+| `S-20` | `SocExternalDispositionService` | vendor-neutral status mapping、target locate、optional correction/exact-used-Memory feedback/outcome | external disposition plus delegated review/memory/audit/outcome writes | canonical Gateway ingress exists; real source feed remains data-gated |
 | `S-21` | `SocMainOrchestratorService` | bounded analysis + actions + correlation + domain + report composition | default in-memory; report metadata says no DB/high-risk execute | PingAn main eval/demo |
 
 Service protocols are centralized in `backend/soc_agent/protocols.py`. SQL persistence is implemented by
@@ -302,8 +302,8 @@ active `SocKafkaConsumerRunner` processes one record at a time.
 |---|---|---|---|
 | `J-05A` | list/open review item | none | queue item, run, summary, audit, similar alerts, action evidence, authorization, proposals/outcomes, external feedback, memory |
 | `J-05B` | `close_queue_item` | ReviewQueue `open -> closed`, actor/reason/timestamp | updated queue item |
-| `J-05C` | manual `correct` | append correction to run; replace current operational decision; update summary; close open queue; audit; optional pending candidate | corrected run and refreshed context |
-| `J-05D` | analyst review note | create pending memory candidate only | `ReviewNoteResult`, candidate visible in context |
+| `J-05C` | manual `correct` | append correction to run; replace current operational decision; update summary; close open queue; audit; feedback exact Memory uses; optional explicitly promoted candidate | corrected run, Memory health/revision lineage and refreshed context |
+| `J-05D` | analyst review note | save note; run Memory Admission; create candidate only on explicit promotion/acceptance plus reason/facet gates | `ReviewNoteResult`; admitted candidate may be visible in context |
 | `J-05E` | open InvestigationContext | no write | dynamically computed correlation, domain triage and `UnifiedInvestigationView` |
 
 `InvestigationContext` is assembled in `SocReviewService.get_investigation_context()`. The unified view is a read-only
@@ -349,14 +349,16 @@ the `approved` transition share one transaction and a unique request-to-grant co
 
 | Journey ID | Source | Current wiring | Result |
 |---|---|---|---|
-| `J-08A` | manual correction | automatically wired in `SocReviewService.correct()` | pending candidate linked back to correction/run/queue |
-| `J-08B` | analyst review note | wired in `SocReviewService.add_note()` / `soc review note` | pending candidate |
-| `J-08C` | mapped external disposition reason | wired inside `SocExternalDispositionService` when eligible; trust level is retained in candidate confidence/facets | pending candidate |
+| `J-08A` | manual correction | wired in `SocReviewService.correct()` | correction + exact-used-Memory feedback/health/revision; candidate only with explicit promotion and Admission pass |
+| `J-08B` | analyst review note | wired in `SocReviewService.add_note()` / `soc review note` | note; default `observed_only`, candidate only with typed promotion/acceptance and Admission pass |
+| `J-08C` | mapped external disposition reason | wired inside `SocExternalDispositionService`; trust is retained on external record/feedback | exact-used-Memory feedback/health/revision when applicable; no per-event candidate |
 | `J-08D` | domain finding | bridge/factory and tests exist; no live app caller found | Service-only candidate source |
-| `J-08E` | Lead Agent/Kafka conclusion | no candidate source caller in current app path | no write |
+| `J-08E1` | accepted Lead Agent conclusion | explicit analyst acceptance with substantive reuse reason passes Admission | pending candidate; model output alone writes nothing |
+| `J-08E2` | Kafka/batch completed Runtime result | one immutable observation; profile-owned cohort and v3 quality gate | zero or one pattern-level candidate per reusable lesson, never one per alert |
 | `J-08F` | human reviews candidate | confirm-candidate/confirm/reject/deprecate/expire via service | updated candidate; `confirm` creates memory record |
 | `J-08G` | governed retrieval activation | reviewer/admin submits expected version, reason, validity and review period | atomic record CAS + mutation audit; enable/disable returns the new record version |
 | `J-08H` | InvestigationContext/search | deterministic facet/text scoring with token budget and optional baseline diff | only confirmed, governed-enabled, activation-valid and review-current records returned |
+| `J-08I` | Memory contradiction review | reviewer lists/gets and accepts/rejects a pending revision proposal | proposal state + mutation audit; old Memory remains unchanged and is never auto-reactivated |
 
 New confirmed records are created with `retrieval_enabled=false`. A direct repository/fixture boolean without
 `soc.memory_retrieval_activation_policy.v1` governance metadata is rejected by retrieval. Retrieval does not inject
@@ -393,10 +395,11 @@ flowchart LR
 
 | Journey ID | Current sequence | Writes | Entry status |
 |---|---|---|---|
-| `J-10` | vendor adapter -> canonical event -> status map -> target locate -> persist -> optional correction/candidate/audit/outcome | external disposition always when service configured; delegated writes only under trust/target rules | Service-only; tests and fixture invoke it directly |
+| `J-10` | vendor adapter -> canonical event -> status map -> target locate -> persist -> optional correction/used-Memory feedback/audit/outcome | external disposition always when service configured; delegated writes only under trust/target rules | Canonical Gateway ingress complete; real feed remains data-gated |
 
 High-trust, mapped, uniquely verified targets may call `SocReviewService.correct()`. Unknown/low-trust/unmatched events remain
-recorded feedback without changing the operational verdict. No Gateway/Kafka/CLI application adapter currently calls this service.
+recorded feedback without changing the operational verdict. The canonical Gateway ingress calls this service; a real
+Zeus/ITSM/SOAR authenticated source feed remains data-gated.
 
 ### 6.8 Demo and evaluation composition
 

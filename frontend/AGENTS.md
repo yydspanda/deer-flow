@@ -147,6 +147,14 @@ server explanation when surfaced; never label it as a calibrated probability. A 
 journal is recovery state, not a completed analysis result.
 
 The ReviewQueue memory panel may review candidates and govern retrieval for linked confirmed records.
+Candidate review renders server-owned `SocMemoryApplicabilitySpec` facets. The browser may only narrow
+scope by promoting an existing optional facet to required, and must submit the complete narrowed
+contract back through `record_applicability`; Core Service remains authoritative and rejects widening.
+Only candidates marked `decision_impact=detection_decision` expose the explicit future-match verdict
+control. Detection/rule-context candidates may be confirmed as reasoning context but must not present
+an automatic verdict option. Relevant-memory results render `partial/context_only_allowed` distinctly
+and display `returned_context_only_count`; the browser must never reinterpret a context-only match as
+an applicable directive.
 It must call `updateSocMemoryRetrievalActivation()` / the Gateway retrieval endpoint with the current
 record version, reason, idempotency key and enable validity/review settings. Do not optimistically flip
 `retrieval_enabled` or infer governance eligibility in the browser; refresh server records after the

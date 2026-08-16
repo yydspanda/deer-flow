@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from app.gateway.routers import soc_memory
 from soc_agent.contracts import (
+    SocMemoryApplicabilitySpec,
     SocMemoryCandidateCreateCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateSource,
@@ -22,6 +23,10 @@ from soc_agent.contracts import (
     SocMemoryRecordStatus,
     SocMemoryRetrievalActivationAction,
     SocMemoryReviewEffect,
+    SocMemoryRevisionProposal,
+    SocMemoryRevisionProposalStatus,
+    SocMemoryRevisionReviewDecision,
+    SocMemoryRevisionReviewResult,
     SocMemoryTargetArtifact,
     Verdict,
 )
@@ -164,7 +169,11 @@ def test_soc_memory_api_preserves_reviewed_decision_directive() -> None:
         record_repository=repository,
         mutation_audit_repository=repository,
     )
-    candidate = service.propose_candidate(_memory_candidate_command())
+    candidate = service.propose_candidate(
+        _memory_candidate_command(
+            decision_impact=SocMemoryDecisionImpact.DETECTION_DECISION,
+        )
+    )
     directive = SocMemoryDecisionDirective(
         effect=SocMemoryDecisionEffect.OVERRIDE,
         target_verdict=Verdict.FALSE_POSITIVE,
@@ -179,6 +188,7 @@ def test_soc_memory_api_preserves_reviewed_decision_directive() -> None:
         soc_memory.MemoryCandidateReviewRequest(
             decision=SocMemoryCandidateReviewDecision.CONFIRM,
             reason="Reviewer approved a bounded decision directive.",
+            record_applicability=candidate.applicability,
             decision_directive=directive,
         ),
         request=FakeRequest(),
@@ -187,6 +197,7 @@ def test_soc_memory_api_preserves_reviewed_decision_directive() -> None:
 
     assert result.memory_record is not None
     assert result.memory_record.decision_impact is SocMemoryDecisionImpact.DETECTION_DECISION
+    assert result.memory_record.applicability == candidate.applicability
     assert result.memory_record.decision_directive == directive
 
 
@@ -243,12 +254,79 @@ def test_soc_memory_api_rejects_untrusted_candidate_review() -> None:
     assert service.get_candidate(candidate.candidate_id).status is SocMemoryCandidateStatus.PENDING_REVIEW
 
 
+def test_soc_memory_api_lists_and_reviews_revision_proposals() -> None:
+    proposal = SocMemoryRevisionProposal(
+        proposal_id="MRP-ROUTER-001",
+        idempotency_key="memory-revision:router:001",
+        memory_id="MEM-ROUTER-001",
+        memory_version=2,
+        source_feedback_id="MF-ROUTER-001",
+        reason="A trusted final outcome contradicted this reviewed Memory.",
+    )
+
+    class FakeEvolutionService:
+        def __init__(self) -> None:
+            self.review_context = None
+
+        def list_revision_proposals(self, **_: object) -> list[SocMemoryRevisionProposal]:
+            return [proposal]
+
+        def get_revision_proposal(self, proposal_id: str) -> SocMemoryRevisionProposal:
+            assert proposal_id == proposal.proposal_id
+            return proposal
+
+        def review_revision_proposal(self, command, *, context):
+            self.review_context = context
+            reviewed = proposal.model_copy(
+                update={
+                    "status": SocMemoryRevisionProposalStatus.ACCEPTED,
+                    "reviewed_by": context.actor.actor_id,
+                    "review_reason": command.reason,
+                }
+            )
+            return SocMemoryRevisionReviewResult(
+                proposal=reviewed,
+                previous_status=SocMemoryRevisionProposalStatus.PENDING_REVIEW,
+                decision=command.decision,
+            )
+
+    service = FakeEvolutionService()
+    listed = soc_memory.list_memory_revision_proposals(
+        service=service,
+        memory_id=proposal.memory_id,
+        status=SocMemoryRevisionProposalStatus.PENDING_REVIEW,
+        limit=50,
+    )
+    loaded = soc_memory.get_memory_revision_proposal(
+        proposal.proposal_id,
+        service=service,
+    )
+    reviewed = soc_memory.review_memory_revision_proposal(
+        proposal.proposal_id,
+        soc_memory.MemoryRevisionReviewRequest(
+            decision=SocMemoryRevisionReviewDecision.ACCEPT,
+            reason="Reviewer confirmed the contradiction; keep old Memory suspended.",
+        ),
+        request=FakeRequest(system_role="admin"),
+        service=service,
+    )
+
+    assert listed.items == [proposal]
+    assert loaded == proposal
+    assert reviewed.proposal.status is SocMemoryRevisionProposalStatus.ACCEPTED
+    assert reviewed.memory_record_changed is False
+    assert reviewed.retrieval_reenabled is False
+    assert service.review_context.actor.actor_id == "soc-web-test"
+    assert "soc_admin" in service.review_context.actor.roles
+
+
 def _memory_candidate_command(
     *,
     run_id: str = "RUN-ROUTER-1",
     alert_id: str = "ALT-ROUTER-1",
     queue_id: str = "REV-ROUTER-1",
     idempotency_key: str = "memory:router:1",
+    decision_impact: SocMemoryDecisionImpact = SocMemoryDecisionImpact.REVIEW_HINT,
 ) -> SocMemoryCandidateCreateCommand:
     return SocMemoryCandidateCreateCommand(
         candidate_type=SocMemoryCandidateType.DETECTION_LESSON,
@@ -269,7 +347,17 @@ def _memory_candidate_command(
         idempotency_key=idempotency_key,
         confidence=0.7,
         facets={"tenant": ["pingan"]},
-        decision_impact=SocMemoryDecisionImpact.REVIEW_HINT,
+        applicability=(
+            SocMemoryApplicabilitySpec(
+                profile_id="soc.generic",
+                profile_version="1",
+                feature_schema_version="soc.memory_features.generic.v1",
+                required_facets={"tenant": ["pingan"]},
+            )
+            if decision_impact is SocMemoryDecisionImpact.DETECTION_DECISION
+            else None
+        ),
+        decision_impact=decision_impact,
         review_owner="soc_analyst",
         labels=["candidate-only"],
     )

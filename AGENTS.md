@@ -465,14 +465,45 @@ Current SOC direction:
   PI-03F3 persists opt-in Kafka/batch results as immutable
   `MemoryPatternObservation` rows through `SocMemoryPatternService` and migration
   `0021_memory_pattern_observations`; never create one memory candidate per alert, run, finding, or
-  offset. Cohorts use the strongest available vendor-neutral dimension (primary scenario, canonical
-  detection key, then category), canonical timezone-aware source event time, and strict
-  tenant/environment/`simulation|operational` isolation. The default policy is a fixed 24-hour UTC
-  window with both support and distinct-source thresholds set to 5. Crossing it creates exactly one
-  frozen `pending_review` repeated-pattern candidate; later observations are replay-only and
-  supersession is manual. Missing/naive event time or aggregation failure is reported without failing
-  base Runtime processing. `soc memory patterns list|replay` are read-only operator surfaces;
-  recurrence never changes verdict, enables retrieval, confirms memory, or authorizes an action.
+  offset. A server-owned `SocMemoryProfileRegistry` chooses same-class, occurrence and applicability
+  semantics from canonical fields; generic fallback remains vendor-neutral, while PingAn prefers
+  a versioned compound of canonical detection key and behavior fingerprint when both exist. A
+  detection-only PingAn cohort is rule-level context and cannot own a future verdict; behavior-only
+  remains the ruleless fallback. PingAn detection keys may derive from stable rule code/name but
+  never from alert/run lineage. Cohorts use canonical
+  timezone-aware source event time and strict
+  tenant/environment/`simulation|operational` isolation. Under
+  `soc.memory_pattern_aggregation.v3`, the default fixed 24-hour UTC policy requires 5 observations,
+  5 distinct sources, 5 conclusive outcomes, at least 80% risk/benign consistency, and a consensus
+  strong retrieval anchor. Every alert remains an immutable observation; only a cohort that passes
+  all gates creates one frozen `pending_review` pattern lesson. Conflicted, unresolved, weak-anchor,
+  and low-support cohorts do not enter expert review. Candidate content must summarize applicability,
+  verdict distribution, representative conclusions, and exceptions rather than copy one alert.
+  A stable lesson fingerprint suppresses equivalent candidates across later fixed windows; those
+  windows remain reinforcement observations. A changed risk class or strong-anchor scope is a new
+  reviewable lesson, while supersession remains manual. Later observations are replay-only. Missing/naive event time or
+  aggregation failure is reported without failing base Runtime processing. `soc memory patterns
+  list|replay` are read-only operator surfaces; recurrence never changes verdict, enables retrieval,
+  confirms memory, or authorizes an action.
+- Pattern candidates and confirmed records may carry a typed `SocMemoryApplicabilitySpec`. Retrieval
+  must match the server-selected profile/version/feature schema, required facets, exclusions and
+  strong-anchor threshold before a reviewed directive can affect the effective decision. Every
+  projected `M-*` is retained as `SocMemoryUseRecord`; final analyst correction or canonical external
+  disposition creates append-only feedback and versioned health. A high-trust risk outcome that
+  contradicts an active benign directive disables retrieval through the disable-only safety monitor
+  and creates a revision proposal. No feedback edits a confirmed record in place, and Memory never
+  grants action authority. A decision-authoritative PingAn compound record requires exact environment,
+  detection key and behavior fingerprint. Same-rule behavior similarity may enter only as explicit
+  `partial/context-only` `M-*` reasoning context when a reviewed canonical behavior component overlaps;
+  Automation must reject its directive. Legacy records without typed applicability may remain bounded
+  reasoning context, but can never apply a directive; deterministic Memory decisions additionally require
+  `decision_impact=detection_decision` and an exact `applicable` projection. Reviewers may narrow applicability by promoting candidate
+  optional facets to required, but cannot remove anchors, expand values or widen context-only scope.
+  This prevents PRD lessons from affecting STG by broad source/category similarity. The
+  operator-owned environment is bound before Memory query/profile selection; explicit batch/daemon,
+  Memory, tenant-policy and automation environment settings must agree. Revision
+  proposal accept/reject only resolves the review task; it never mutates or re-enables the old Memory.
+  Migration `0025_memory_evolution` owns this lineage.
 - Confirmation creates a retrieval-disabled SOC memory record. Only
   `SocMemoryService.set_retrieval_activation()` may enable/disable retrieval, with
   `soc_memory_reviewer|soc_admin`, trusted auth provenance, reason, expected version, validity/review

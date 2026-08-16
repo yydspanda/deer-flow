@@ -35,9 +35,13 @@ flowchart TD
     C --> D["⚙️ Fixed Runtime Pipeline<br/>固定流水线 / deterministic control flow"]
     D --> E["🗃️ SOC Business Store<br/>run + summary + queue + decision audit"]
     E -.->|"Kafka / batch explicit opt-in"| MR1["🗃️ MemoryPatternObservation<br/>immutable recurrence source"]
-    MR1 --> MR2{"⚙️ Typed Aggregate Gate<br/>UTC event window + support 5 + distinct 5"}
-    MR2 -->|"below threshold"| MR3["🔎 Retain + replay<br/>不创建候选"]
-    MR2 -->|"first threshold crossing"| R
+    MR1 --> MR2{"⚙️ Recurrence Gate<br/>UTC window + support 5 + distinct 5"}
+    MR2 -->|"below threshold"| MR3["🔎 Retain + replay<br/>只保留观察，不创建候选"]
+    MR2 -->|"threshold met"| MR4{"⚙️ Lesson Quality Gate<br/>5 conclusive + consistency ≥80% + strong anchor"}
+    MR4 -->|"conflicted / weak / unresolved"| MR3
+    MR4 -->|"quality passed"| MR5{"⚙️ Lesson Fingerprint<br/>跨窗口同经验去重"}
+    MR5 -->|"equivalent lesson"| MR3
+    MR5 -->|"new / materially changed"| R
     E -.->|"Explicit opt-in only"| E0["⚙️ SocEnrichmentPlanner<br/>版本化只读调查计划 / default off"]
     E0 --> E1["🗃️ Durable Investigation Ledger<br/>immutable plan + execution + attempts"]
     E1 --> E2["⚙️ Investigation Reporting<br/>只读重建 / no Provider call"]
@@ -161,14 +165,23 @@ flowchart TD
     模型并在 assistant message 保存 exact context provenance。不同 queue 必须新建 thread，artifact 不进入
     checkpoint/history，采纳仍只生成 `pending_review` candidate。Kafka/批处理也不能逐告警写 candidate；
     PI-03F3 只在显式启用时把完成的 run 保存为 immutable observation，以 tenant/environment/data class
-    隔离，按 primary scenario -> canonical detection key -> category 选择一个 cohort 维度，并使用 canonical
-    timezone-aware source event time 的固定 UTC 窗口。默认 24h 内同时达到 5 support + 5 distinct sources
-    才提出一个 frozen `pending_review` repeated-pattern candidate；后续记录仅供 replay，重复本身不证明
-    真假、授权、影响或处置权限。
+    隔离。server-owned Memory Profile 从 canonical 字段选择 cohort 与 occurrence identity：generic fallback
+    保持跨厂商，PingAn 在 detection key 与 behavior fingerprint 同时存在时使用 compound cohort；只有
+    detection 时降为 rule-context，只有 behavior 时保留 ruleless pattern，并拒绝 category-only cohort；
+    同 upstream event/input occurrence 不重复增加 support。随后使用 canonical
+    timezone-aware source event time 的固定 UTC 窗口。`soc.memory_pattern_aggregation.v3` 默认要求 24h 内
+    达到 5 support + 5 distinct sources + 5 conclusive outcomes，并满足 risk/benign consistency >=80% 和
+    consensus strong anchor，才提出一个 frozen `pending_review` pattern lesson。低支持、冲突、未决或弱锚点
+    cohort 只保留 observation，不进入专家队列；候选必须总结适用范围、结论分布、代表性理由和例外，不能
+    复述单条告警。后续记录仅供 replay，重复本身不证明授权、影响或处置权限。
 11. confirmed memory 默认不可检索；只有 memory governor 经 role/reason/version/validity/review/audit
    状态迁移后才可进入 bounded context。普通 `M-*` 不直接改判；若确认时另附审核后的 typed decision
-   directive，且 future match 的 exact version/score/required facets 全部满足，则只追加 effective-decision
+   directive，且 future match 的 exact profile/applicability/version/score/required facets 全部满足，则只追加 effective-decision
    before/after transition，不改写原 Runtime Decision，也不直接授权动作。
+11.1 每次 `M-*` 投影都在 automation reconciliation 后保存 exact Memory use。分析师 correction 或可信
+    Zeus 外部处置结果会回写该次 use 的 support/contradiction feedback 和 versioned health；矛盾生成修订
+    proposal。若 active benign directive 被高可信风险真值反驳，disable-only safety monitor 立即关闭
+    retrieval，防止同一经验继续造成漏报；旧 Memory 不原地改写，动作授权仍走独立 Policy。
 12. 租户运营策略在 Memory 阶段之后形成独立 `TenantPolicyDecision`。精确规则先确定性匹配；仅在
     no-match 且显式启用时，受版本/hash 约束的 policy Skill 才处理组合语义。PingAn 当前确认语义中
     canonical `status=200` 只表示请求成功，单独不升级也不忽略；所有 canonical HTTP 事务均非 `200` 或
@@ -190,7 +203,8 @@ flowchart TD
    `SocAutomationPolicy` 是两条不同合同，不能把 shadow proposal 误当作已授权动作。
 20. correction、close/note、memory review/retrieval activation、approval lifecycle/action boundary 和 external disposition
    都通过 `SocMutationUnitOfWork` 原子写入业务状态与 `soc_mutation_audit_log`；post-Runtime automation
-   使用 migration `0023` 的四类 append-only lineage 表，migration `0024` 增加租户策略和四阶段索引。
+   使用 migration `0023` 的四类 append-only lineage 表，migration `0024` 增加租户策略和四阶段索引；
+   migration `0025` 保存 Memory profile/occurrence、use、feedback、health 与 revision proposal。
    两类审计互补，不能互相替代。
 
 Current governed-context boundary / 当前边界：GF-01 已能通过 `SocGovernedContextService` 和
@@ -766,7 +780,7 @@ flowchart TD
     H -->|Yes| J
 
     J --> K["🗃️ update run / summary / review queue / decision audit"]
-    J --> L["🧠📌 external reason -> MemoryCandidate<br/>pending_review"]
+    J --> L["🧠📌 used-Memory feedback<br/>support / contradiction / health"]
     J --> N{"⚙️ verified target + one proposal?<br/>EV-02 bridge gate"}
     N -->|Yes| O["🗃️ external-source Outcome<br/>via evaluation service"]
     N -->|No| P["🔎 explicit skip reason<br/>no inferred label"]
@@ -786,14 +800,15 @@ External disposition 的意义：
 - command 必须携带 stable `source_event_id`。Gateway 与 core service 同时执行角色边界；exact retry
   返回同一逻辑结果，使用同一语义 identity 提交不同内容会冲突。
 - 外部状态和理由需要回流本系统，保证 ReviewQueue、memory、audit 不脱节。
-- 外部 reason 不能直接成为 confirmed memory。
+- 外部 reason 不逐事件创建 Memory candidate，也不能直接成为 confirmed Memory；它只反馈给该 run
+  实际命中的 Memory。新经验必须由人工显式 promotion 或 repeated-pattern quality gate 提出。
 - 外部 correction 必须复用 `SocReviewService.correct()`，避免两套改判逻辑。
 - 未映射、低可信、无法唯一定位的事件只保存，不改判。
 - EV-02 outcome bridge 还要求唯一 matching proposal，并复用 `SocDispositionEvaluationService`；bridge
   不从 external reason 猜 canonical status，不会覆盖较新的 analyst/replay primary outcome。
 - External correction/queue sync 与 shadow outcome capture 是两条独立审计边界；后者不应用 proposal，
   不改变 ReviewQueue，仍保持 `auto_close_allowed=false`。
-- 同一 external event 产生的 local correction、summary/queue、candidate、external record、eligible
+- 同一 external event 产生的 local correction、summary/queue、used-Memory feedback、external record、eligible
   outcome 和两类 audit 属于一个数据库事务；任一步失败全部回滚，`SocEvent` 只在成功提交后发出。
 
 ## 9. Memory Candidate and Confirmed Memory / 记忆候选与确认记忆
@@ -803,7 +818,7 @@ flowchart TD
     A["🧑‍💻 Correction<br/>人工改判"] --> B["🧠📌 SocMemoryCandidateSourceBridge"]
     C["🧑‍💻 Review Note<br/>soc review note"] --> B
     D["🧩 Domain Finding<br/>场景 finding"] --> B
-    E["🧾 External Reason<br/>外部处置理由"] --> B
+    E["🧾 External Reason<br/>仅反馈给已使用 Memory"] --> EF["❤️ Memory feedback / health"]
     A0["🧠 Lead Agent message<br/>模型输出"] --> A1["🧑‍💻 Explicit acceptance<br/>人工采纳 + reuse reason"]
     A1 --> B
 
@@ -831,17 +846,25 @@ flowchart TD
     R -->|"no / text only"| R0["🧠 reasoning context only"]
     R -->|"yes"| R1["🔁 effective decision transition<br/>before / after"]
     R1 --> R2["🛡️ separate automation policy<br/>Memory itself never authorizes"]
+    R0 --> UR["🧾 SocMemoryUseRecord<br/>exact version / score / applicability"]
+    R1 --> UR
+    EF --> FB["🧾 SocMemoryFeedbackEvent<br/>final verdict + reason + trust"]
+    UR --> FB
+    FB --> MH{"❤️ Memory health<br/>support / contradiction"}
+    MH -->|"supports"| KEEP["✅ keep active"]
+    MH -->|"contradicts"| REV["📝 revision proposal"]
+    REV -->|"active benign -> high-trust risk"| STOP["⛔ disable retrieval immediately"]
 ```
 
 Memory 规则：
 
 | Source | Candidate Type | Default State | Boundary |
 |---|---|---|---|
-| `soc correct` | correction lesson | `pending_review` | 改判会更新 operational decision，但记忆仍需评审 |
+| `soc correct --promote-to-memory` | correction lesson | `pending_review` | 普通改判只反馈/观察；显式提升且通过 Admission 才产生候选 |
 | `soc review note` | analyst observation | `pending_review` | 备注只形成候选记忆，不改 queue status，不改 verdict |
 | accepted Lead Agent conclusion | analyst-owned detection lesson | `pending_review` | CLI/TUI 保存 captured lineage；Web 由 Gateway 从当前 checkpoint 解析原文，客户端不能提交正文 |
 | domain finding | scenario lesson | `pending_review` | finding 可沉淀为经验，但必须显式调用 bridge |
-| external reason | external feedback lesson | `pending_review` | 外部 reason 不能直接 confirmed |
+| external reason | used-Memory outcome feedback | append-only | 不逐事件建候选；support/contradiction 更新 health，危险反证可暂停 retrieval |
 | confirmed candidate | memory record | `confirmed`, `retrieval_enabled=false` | 默认仍不被检索；不能由 repository/demo 直接改布尔值 |
 | governed activation | retrieval state transition | `enabled` or `disabled`, version incremented | 只能经 `SocMemoryService`；enable 必须有角色、理由、有效期、复核期、expected version 和幂等键 |
 | reviewed typed directive | effective decision input | optional on `confirm` | exact version/score/required facets 全部通过才 reinforce/override；自由文本不自动生成，且不授权动作 |

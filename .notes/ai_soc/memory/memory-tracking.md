@@ -33,6 +33,10 @@ Typed memory DB contract
 
 当前实现进度：`SocMemoryCandidate` DB/API/CLI/Web/TUI/Lead Agent visibility 已完成；`SocMemoryService.review_candidate()` 已支持 `confirm_candidate`、`confirm`、`reject`、`deprecate`、`expire`；`confirm` 会创建 `SocMemoryRecord(status=confirmed, retrieval_enabled=false)`。所有单条工作流来源现在先经过 `MemoryAdmissionService`：只有明确人工提升/采纳、足够理由和可复用 facet 同时成立才建立 `pending_review` candidate，其余保留为 `observed_only`，避免每天一万条告警制造候选噪声。`SocMemoryService.find_relevant_records()` 已支持 governed activation、完整 eligible corpus 多 lane 召回、Retrieval v2 强锚点、score、match reason、token budget、replay diff 和 `InvestigationContext.relevant_memories`。固定 Runtime 在 LLM 调用前，通过 `ConfirmedMemoryAnalysisRequestEnricher` 查询同一 service，并把命中的受治理记录投影为 `M-*` context。普通 Memory 文本仍不是 `E-*` 当前告警事实，也没有可执行权限；只有审核人在确认时显式附加的 `SocMemoryDecisionDirective`，通过完整检索与治理条件后，才可在 post-Runtime 层形成带 before/after 的有效研判变更。Memory 永不直接授权动作。
 
+PingAn 的完整 same-class、模式候选、适用范围、命中改判、最终结果反馈、健康度和安全失效设计见
+`pingan-soc-memory-design.md`。实现采用通用 Memory Kernel + `PingAnSocMemoryProfile`，不把平安字段写入
+通用 Runtime。
+
 ## 2. 不是四维硬主键
 
 `rule_code`、`topic`、`detection_key`、`scenario_signature` 都不能被设计成“必须全等命中”的联合主键。任何一个维度在不同公司、不同厂商、不同检测场景下都可能缺失、别名不同或粒度不同。
@@ -248,7 +252,7 @@ Memory review `confirm` 可以选择附加 `SocMemoryDecisionDirective`，但不
 |---|---|---|---|
 | SOC TUI / ReviewQueue 人工纠正 | detection lesson / negative memory | `observed_only` 或 `pending_review` | 只有 verdict 改变、理由充分且有可复用锚点时准入 |
 | ReviewQueue note | procedure / detection lesson | `observed_only` 或 `pending_review` | 普通 note 默认只观察；`promote_to_memory=true` 或采纳 Lead Agent 结论才可准入 |
-| Kafka daemon / batch 稳定重复模式 | repeated pattern candidate | `pending_review` | 必须先通过 typed aggregation policy 和 distinct-source threshold，禁止逐告警写入 |
+| Kafka daemon / batch 稳定重复模式 | pattern lesson candidate | `pending_review` | 每条告警仅留 observation；同模式通过重复度、结论一致性和强锚点门槛后才生成一个候选 |
 | 分析师明确采纳的 Lead Agent 结论 | detection lesson | `observed_only` 或 `pending_review` | LLM 输出本身不是来源；人工 acceptance + queue/thread/message + 足够详细的人工 reason 才能提候选，模型正文长度不能代替人工理由 |
 | Domain triage result | topic/scenario candidate | `observed_only` 或 `pending_review` | 必须有分析师反馈、充分理由和可复用锚点 |
 | InvestigationEvidence | evidence ref | 不直接是 memory | 可作为候选记忆的证据 |
@@ -284,20 +288,35 @@ PI-03F 不增加第二套 memory service。人工 note/correction 等来源统�
 PI-03F3 已完成 Kafka/批处理来源，冻结规则如下：
 
 - 每条完成的 Runtime 结果只写 `MemoryPatternObservation`，单条 alert/run/finding/offset 不能形成候选。
-- 从 primary scenario、canonical detection key、category 中只选择第一个可用维度；`rule_code` 不是必填项，
-  也不使用多维联合硬 key。
+- generic fallback 从 primary scenario、canonical detection key、behavior、category 中选择最强可用维度；
+  `rule_code` 不是必填项，也不在通用 Kernel 规定跨厂商联合硬 key。Tenant Profile 可从 canonical facets
+  定义版本化 compound cohort；PingAn v2 用 detection + behavior 防止同 rule 的相反结论互相覆盖。
 - cohort 严格隔离 tenant、environment 和 `simulation|operational` data class，并按 canonical
   timezone-aware `AlertInput.event.event_time` 落入固定 UTC window。缺失或 naive event time 时跳过聚合，
   不使用 `run.started_at` 伪造历史窗口，也不猜租户时区。
-- policy `soc.memory_pattern_aggregation.v1` 默认 window=24h、minimum support=5、minimum distinct
-  sources=5；两个门槛必须同时满足。
-- 首次过门槛只通过既有 `SocMemoryService.propose_candidate()` 创建一个 frozen `pending_review`
-  repeated-pattern candidate。后续 observation 只进入 replay diff；自动更新和自动 supersession 均禁止，
-  supersession 固定 `manual_only`。
-- evidence-set hash、observation IDs、source IDs、policy/window/scope 均冻结进 candidate metadata；
+- policy `soc.memory_pattern_aggregation.v3` 默认 window=24h、minimum support=5、minimum distinct
+  sources=5、minimum conclusive support=5、risk/benign consistency >=80%，并要求至少一个与候选类型对应的
+  consensus strong retrieval anchor。
+- 每条 v3 observation 保存 bounded lesson snapshot，而不是创建 Memory：verdict/risk class、review/evidence
+  state、summary/reason/recommendation、primary scenario/stage 和 direction。低支持、冲突、未决过多或弱锚点
+  cohort 只保留 observation 与 reason codes，不进入专家队列。
+- 通过全部门槛后只通过既有 `SocMemoryService.propose_candidate()` 创建一个 frozen `pending_review`
+  pattern lesson。候选必须总结适用范围、结论分布、一致率、代表性理由和例外，不得复述单个 alert。后续
+  observation 只进入 replay diff；自动更新和自动 supersession 均禁止，supersession 固定 `manual_only`。
+- lesson fingerprint 由 policy/lineage、dominant risk class 和 consensus strong anchors 构成，不包含 fixed
+  window。后续窗口重复得到相同经验时只作为 reinforcement observation 并复用既有候选，不新增专家任务；
+  风险类别或强锚点范围实质改变时才形成新候选，且不会自动覆盖旧 Memory。
+- evidence-set hash、observation IDs、source IDs、policy/window/scope/cohort quality 均冻结进 candidate metadata；
   `soc memory patterns list|replay` 只读检查 cohort 和快照完整性。
 - recurrence 不证明 benign/malicious、授权、攻击影响或处置动作，不能改变 Runtime decision、确认记忆、
   启用 retrieval 或执行 action。Kafka/batch sidecar 默认关闭，聚合失败不阻断基础分析。
+- `SocMemoryProfileRegistry` 在 composition root 选择 tenant/source profile。PingAn profile 只消费 canonical
+  Adapter 输出：detection key 与 behavior fingerprint 同时存在时形成 compound cohort；detection-only
+  只能形成 rule-context，behavior-only 保留为 ruleless pattern，category-only 不形成 PingAn cohort；
+  同 upstream event/input occurrence 不重复增加 support。
+- 候选和确认记录可携带 `SocMemoryApplicabilitySpec`。Retrieval 在打分/强锚点之后独立核对 profile/version、
+  required/optional/excluded facets；只有 `applicable` 才允许 typed directive 参与有效决策。受 Profile
+  限定的 `partial/context-only` match 可以作为明确降权的 LLM 背景，但 Automation 必须拒绝其 directive。
 
 ## 8. 状态机
 
@@ -321,6 +340,9 @@ stateDiagram-v2
 注入规则：
 
 - `confirmed` record 不会默认注入；只有 `retrieval_enabled=true`、未过期、未超过 review due 且通过 `SocMemoryService.find_relevant_records()` 命中的 record，才可进入 `InvestigationContext.relevant_memories` 或固定 Runtime 的 `M-*` bounded context。若携带 typed directive，还必须通过本节额外 match gate 才能影响 effective decision。
+- 每次实际投影保存 `SocMemoryUseRecord`；人工纠正或外部处置结果保存 `SocMemoryFeedbackEvent`，并按
+  Memory version 更新 `SocMemoryHealthRecord`。高可信风险真值若反驳 active benign directive，会立即关闭
+  retrieval 并建立 `SocMemoryRevisionProposal`；其他矛盾进入 watch/review，不原地篡改旧记录。
 - `confirmed_candidate` 默认不全局注入；可以在当前 TUI/correction 会话内局部引用。
 - `pending_review` 不注入，只展示给分析师确认。
 - `rejected` 不注入，并用于抑制重复错误建议。
@@ -397,7 +419,8 @@ soc memory reconcile
 - **Done / PI-03F3**：daemon 和 internal batch 只在显式配置时启用同一
   `SocMemoryPatternService`；默认行为保持 Runtime-only。
 - 每条 alert/offset 只成为 immutable observation/evidence ref。固定 UTC source-event-time window 达到
-  5 support + 5 distinct sources 后，创建一个 frozen `pending_review` candidate。
+  5 support + 5 distinct sources 后，还需 5 条有效结论、>=80% 风险类别一致性和 consensus strong anchor，
+  才创建一个 frozen `pending_review` pattern lesson；其他 cohort 不占用专家审核时间。
 - 幂等、scope、evidence-set hash、manual-only supersession 和 read-only replay 已落地；migration 为
   `0021_memory_pattern_observations`，运维入口为 `soc memory patterns list|replay`。
 

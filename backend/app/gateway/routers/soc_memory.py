@@ -14,12 +14,14 @@ from app.gateway.soc_dependencies import (
     soc_service_context_from_request,
 )
 from soc_agent.contracts import (
+    SocMemoryApplicabilitySpec,
     SocMemoryCandidate,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateReviewResult,
     SocMemoryCandidateStatus,
     SocMemoryDecisionDirective,
+    SocMemoryLineageReport,
     SocMemoryQuery,
     SocMemoryRecord,
     SocMemoryRecordStatus,
@@ -27,8 +29,16 @@ from soc_agent.contracts import (
     SocMemoryRetrievalActivationCommand,
     SocMemoryRetrievalActivationResult,
     SocMemoryRetrievalResult,
+    SocMemoryRevisionProposal,
+    SocMemoryRevisionProposalStatus,
+    SocMemoryRevisionReviewCommand,
+    SocMemoryRevisionReviewDecision,
+    SocMemoryRevisionReviewResult,
+    Verdict,
 )
 from soc_agent.core import (
+    SocMemoryEvolutionError,
+    SocMemoryEvolutionService,
     SocMemoryService,
     SocServiceAuthorizationError,
     SocServiceConflictError,
@@ -48,12 +58,23 @@ class MemoryRecordListResponse(BaseModel):
     items: list[SocMemoryRecord]
 
 
+class MemoryRevisionProposalListResponse(BaseModel):
+    items: list[SocMemoryRevisionProposal]
+
+
 class MemoryCandidateReviewRequest(BaseModel):
     decision: SocMemoryCandidateReviewDecision
     reason: str = Field(min_length=1)
     record_summary: str | None = None
     record_content: str | None = None
+    record_applicability: SocMemoryApplicabilitySpec | None = None
     decision_directive: SocMemoryDecisionDirective | None = None
+    confirmed_verdict: Verdict | None = None
+    apply_to_future_matches: bool = False
+    clear_review_on_match: bool = False
+    activate_retrieval: bool = False
+    activation_valid_until: datetime | None = None
+    activation_review_after_days: int | None = Field(default=None, ge=1, le=365)
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
@@ -66,6 +87,11 @@ class MemoryRetrievalActivationRequest(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
+class MemoryRevisionReviewRequest(BaseModel):
+    decision: SocMemoryRevisionReviewDecision
+    reason: str = Field(min_length=1, max_length=4000)
+
+
 def get_soc_memory_service(request: Request) -> SocMemoryService:
     injected = getattr(request.app.state, "soc_memory_service", None)
     if injected is not None:
@@ -76,6 +102,26 @@ def get_soc_memory_service(request: Request) -> SocMemoryService:
 
 
 MemoryServiceDep = Annotated[SocMemoryService, Depends(get_soc_memory_service)]
+
+
+def get_soc_memory_evolution_service(request: Request) -> SocMemoryEvolutionService:
+    injected = getattr(request.app.state, "soc_memory_evolution_service", None)
+    if injected is not None:
+        return injected
+    repository = get_or_create_soc_repository(request)
+    return SocMemoryEvolutionService(
+        repository=repository,
+        memory_record_repository=repository,
+        automation_repository=repository,
+        mutation_audit_repository=repository,
+        mutation_uow=repository,
+    )
+
+
+MemoryEvolutionServiceDep = Annotated[
+    SocMemoryEvolutionService,
+    Depends(get_soc_memory_evolution_service),
+]
 
 
 @router.get("/candidates", response_model=MemoryCandidateListResponse)
@@ -132,7 +178,14 @@ def review_memory_candidate(
                 reason=payload.reason,
                 record_summary=payload.record_summary,
                 record_content=payload.record_content,
+                record_applicability=payload.record_applicability,
                 decision_directive=payload.decision_directive,
+                confirmed_verdict=payload.confirmed_verdict,
+                apply_to_future_matches=payload.apply_to_future_matches,
+                clear_review_on_match=payload.clear_review_on_match,
+                activate_retrieval=payload.activate_retrieval,
+                activation_valid_until=payload.activation_valid_until,
+                activation_review_after_days=payload.activation_review_after_days,
                 metadata=payload.metadata,
             ),
             context=soc_service_context_from_request(request, include_soc_roles=True),
@@ -180,6 +233,85 @@ def get_memory_record(memory_id: str, service: MemoryServiceDep) -> SocMemoryRec
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get(
+    "/records/{memory_id}/lineage",
+    response_model=SocMemoryLineageReport,
+)
+def get_memory_lineage(
+    memory_id: str,
+    service: MemoryEvolutionServiceDep,
+) -> SocMemoryLineageReport:
+    try:
+        return service.get_lineage(memory_id)
+    except SocMemoryEvolutionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get(
+    "/revisions",
+    response_model=MemoryRevisionProposalListResponse,
+)
+def list_memory_revision_proposals(
+    service: MemoryEvolutionServiceDep,
+    memory_id: str | None = Query(default=None),
+    status: SocMemoryRevisionProposalStatus | None = Query(default=SocMemoryRevisionProposalStatus.PENDING_REVIEW),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> MemoryRevisionProposalListResponse:
+    return MemoryRevisionProposalListResponse(
+        items=service.list_revision_proposals(
+            memory_id=memory_id,
+            status=status,
+            limit=limit,
+        )
+    )
+
+
+@router.get(
+    "/revisions/{proposal_id}",
+    response_model=SocMemoryRevisionProposal,
+)
+def get_memory_revision_proposal(
+    proposal_id: str,
+    service: MemoryEvolutionServiceDep,
+) -> SocMemoryRevisionProposal:
+    try:
+        return service.get_revision_proposal(proposal_id)
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/revisions/{proposal_id}/review",
+    response_model=SocMemoryRevisionReviewResult,
+)
+def review_memory_revision_proposal(
+    proposal_id: str,
+    payload: MemoryRevisionReviewRequest,
+    request: Request,
+    service: MemoryEvolutionServiceDep,
+) -> SocMemoryRevisionReviewResult:
+    try:
+        return service.review_revision_proposal(
+            SocMemoryRevisionReviewCommand(
+                proposal_id=proposal_id,
+                decision=payload.decision,
+                reason=payload.reason,
+            ),
+            context=soc_service_context_from_request(
+                request,
+                include_soc_roles=True,
+            ),
+        )
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (SocMemoryEvolutionError, SocServiceError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post(

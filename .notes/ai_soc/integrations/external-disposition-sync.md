@@ -1,6 +1,6 @@
 # External Disposition Sync
 
-> Updated: 2026-07-16
+> Updated: 2026-08-15
 >
 > 本文档定义 SOC Agent 与外部预警/工单/处置系统同步人工状态和处置理由的产品与工程边界。Zeus 是第一个接入场景，但协议不能写死 Zeus；未来要能接客户自研 SOC、SIEM/SOAR、ServiceNow、Jira、ITSM 或其他工单系统。
 
@@ -14,7 +14,7 @@
   -> SocExternalDispositionService
   -> audit / review / correction sync
   -> guarded disposition evaluation outcome
-  -> memory candidate
+  -> exact used-Memory feedback / health
   -> skill improvement candidate
 ```
 
@@ -26,7 +26,8 @@
 - Done：通用 field-path mapper，可用 Zeus mock fixture 转成 vendor-neutral event，不在 core 写死 Zeus。
 - Done：`SocExternalDispositionService.apply_event()` + repository protocol + in-memory repository，支持状态映射、目标定位、幂等、unmatched 和 audit。
 - Done：高可信 mapped event 在唯一定位本地 target 后复用 `SocReviewService.correct()`，同步 operational correction 并关闭 review queue；低可信、未知状态、无法定位仍不改判。
-- Done：mapped 且可定位的外部 reason 可通过 `SocMemoryService.propose_candidate()` 生成 `SocMemoryCandidate(status=pending_review)`；未知/无法定位/无 reason 不生成候选。
+- Done：mapped 且可定位的外部最终结论通过同一 correction 链反馈给该 run 实际使用的 confirmed Memory，
+  写 use/feedback/health/revision lineage；不再为每个外部事件创建低价值 Memory candidate。
 - Done：external disposition PostgreSQL persistence、ReviewQueue context API visibility、Web/TUI display、Lead Agent bounded context display。
 - Done：EV-02 guarded bridge。只有 high-trust mapped event、verified target 和唯一 matching shadow proposal
   才通过 `SocDispositionEvaluationService` 写 external-source outcome；apply result/audit/event 暴露 outcome id 或
@@ -41,7 +42,7 @@
 | 同步人工结论 | 分析师在外部系统更新状态和理由后，SOC Agent 能收到并记录 |
 | 保留审计链 | 谁在什么系统、什么时间、把哪个 case 改成什么状态，必须可追踪 |
 | 驱动本地状态 | 可置信映射后更新 ReviewQueue / Correction / operational disposition |
-| 形成学习候选 | 人工理由进入 `SocMemoryCandidate`，必要时生成 skill improvement candidate |
+| 调整既有经验 | 最终结论反馈给该 run 实际命中的 Memory；支持、反驳和失效都可追踪 |
 | 可扩展接入 | Zeus 只是 adapter；核心协议不依赖 Zeus 字段、状态名或 ID 体系 |
 
 ## 3. 非目标
@@ -105,8 +106,8 @@ Webhook / Kafka / Polling / Manual import
 | 层 | 职责 | 禁止 |
 |---|---|---|
 | Adapter | 认证、解码、字段映射、幂等键生成、调用 service | 直接写 repository、直接改 review/correction/memory |
-| Service | schema validation、状态映射、目标定位、审计、状态同步、候选记忆生成 | 写 confirmed memory、修改 skill、执行高风险 action |
-| Repository | 保存 disposition record、audit、memory candidate 等 | 承载业务判断 |
+| Service | schema validation、状态映射、目标定位、审计、状态同步、used-Memory outcome feedback | 写 confirmed memory、修改 skill、执行高风险 action |
+| Repository | 保存 disposition record、audit、Memory feedback/health 等 | 承载业务判断 |
 | Idle jobs | 聚类理由、提出 skill/memory 优化候选 | 自动激活优化 |
 
 ## 6. 幂等与目标定位
@@ -134,7 +135,7 @@ external_disposition:{tenant_id|default}:{external_system}:{external_case_id}:{s
 | `DecisionAuditLog` | 所有合法事件 | 记录来源、幂等键、映射结果、是否应用 |
 | `CorrectionRecord` | 高置信映射且目标唯一 | 把外部人工结论作为 external correction，同步 operational decision |
 | `ReviewQueueItem` close/update | 已映射为 closed 类状态 | 关闭或标记本地待复核项，但保留原始 run |
-| `SocMemoryCandidate` | reason 有复用价值 | 只进入 pending review，不进入 confirmed memory |
+| `SocMemoryFeedbackEvent` | 该 run 实际命中 confirmed Memory 且产生可信最终 verdict | 记录 support/contradiction；危险反证暂停 active benign Memory |
 | `SocDispositionOutcomeRecord` | high-trust mapped + verified target + 唯一 matching proposal + closed queue | 通过 evaluation service 写显式 external-source label；不从 reason 猜 status，不应用 proposal |
 | `SkillImprovementCandidate` | 多次相似 reason 指向 skill 缺陷 | 生成优化候选，不自动改 skill |
 
@@ -143,7 +144,8 @@ external_disposition:{tenant_id|default}:{external_system}:{external_case_id}:{s
 人工 reason 是高价值反馈，但也最容易污染知识库。处理规则：
 
 - 单条 reason 默认只是 case feedback，不是长期知识。
-- 多条相似 reason 命中同一 detection/topic/scenario/facet 后，才建议聚合成 memory candidate。
+- 多条同类 alert 先形成 immutable observations；只有 profile-owned same-class、去重、结论一致性和
+  strong-anchor quality gate 全部通过，才建议聚合成一条 pattern-level Memory candidate。
 - 只有人工确认、版本化、可回滚后，candidate 才能成为 confirmed memory。
 - skill 优化只能生成候选任务：说明受影响 skill、证据样本、失败模式、建议修改点、评测样本。
 - 任何自动聚类或 LLM 总结都必须保留 source event refs，支持回放和撤销。
@@ -156,8 +158,8 @@ external_disposition:{tenant_id|default}:{external_system}:{external_case_id}:{s
 | 2 | Done | `SocExternalDispositionService` + repository protocol | 幂等、状态映射、unmatched、audit 都有测试 |
 | 3 | Done | Zeus adapter mock fixture | 用 fixture 模拟 Zeus 状态/理由更新，不接真实 endpoint |
 | 4 | Done | Review/Correction integration | 高置信外部结论能同步本地 review/correction |
-| 5 | Done | Memory candidate integration | reason 生成 pending candidate，不写 confirmed memory |
-| 6 | Done | External disposition DB/API visibility | external disposition record 和 memory candidate id 能进入 ReviewQueue context |
+| 5 | Done | Memory feedback integration | 不逐事件建候选；对该 run 的 exact used Memory 写反馈、health 和 revision proposal |
+| 6 | Done | External disposition DB/API visibility | external disposition record 和 Memory feedback lineage 可由统一 run/Memory 视图追溯 |
 | 7 | Deferred / `PI-03C` | Skill improvement candidate backlog | 重复 reason/correction 可聚合成可追溯、可回放、只读的待评审优化项；不得自动改 Skill |
 | 8 | Done | Web/TUI visibility | ReviewQueue context 显示外部处置历史和理由 |
 | 9 | Done | EV-02 structured outcome bridge | 符合 gate 的 external event 通过 evaluation service 幂等写 outcome；不覆盖 analyst primary，skip reason 可审计 |
@@ -185,12 +187,12 @@ analyst/external feedback。
 真实接线不能把 `external_reason` 直接送入文本聚类。`SocExternalDispositionService` 或 correction application
 boundary 只有在 server-owned mapping/classifier 已明确目标 Skill/package hash、scenario 和 typed failure facet
 后，才可调用 `SocSkillImprovementService.ingest_feedback()`；否则 reason 继续只保存为 external disposition、
-correction 和 pending memory candidate。该真实 classifier/source wiring 是 Real Integration Debt。
+correction，并反馈给 exact used Memory。该真实 classifier/source wiring 是 Real Integration Debt。
 
 仿真退出门槛已通过：幂等聚合、来源追溯、人工状态机、权限/审计、Skill version linkage 和 aggregation
 replay diff 均有测试。真实退出门槛仍要求 approved feedback contract、server-owned classifier、真实来源样本
-和 Skill 修改后的 behavior replay；在此之前，真实 reason 仍只作为 external disposition 与 memory
-candidate 输入保存。
+和 Skill 修改后的 behavior replay；在此之前，真实 reason 仍只作为 external disposition、correction 与
+exact used-Memory feedback 保存。
 
 ## 10. 市场化扩展要求
 

@@ -12,6 +12,7 @@ from soc_agent.application.enrichment import (
     load_soc_enrichment_composition_config,
     validate_soc_enrichment_registry,
 )
+from soc_agent.application.memory import build_soc_memory_profile_registry
 
 __all__ = [
     "SocEnrichmentCompositionError",
@@ -20,6 +21,7 @@ __all__ = [
     "build_soc_investigation_reporting_service",
     "build_soc_investigation_workflow_service",
     "build_soc_main_orchestrator_service",
+    "build_soc_memory_profile_registry",
     "load_soc_enrichment_composition_config",
     "validate_soc_enrichment_registry",
 ]

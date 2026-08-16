@@ -32,6 +32,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.memory.admission import MemoryAdmissionService
 from soc_agent.memory.facets import memory_facets_from_analysis_run
+from soc_agent.memory.profiles import GenericSocMemoryProfile, SocMemoryProfileRegistry
 from soc_agent.normalizers import normalize_alert_payload
 
 
@@ -60,9 +61,11 @@ class SocMemoryCandidateSourceBridge:
         memory_service: MemoryCandidateProposer,
         *,
         admission_service: MemoryAdmissionService | None = None,
+        profile_registry: SocMemoryProfileRegistry | None = None,
     ) -> None:
         self._memory_service = memory_service
         self._admission_service = admission_service or MemoryAdmissionService()
+        self._profile_registry = profile_registry or SocMemoryProfileRegistry()
 
     def admit_command(
         self,
@@ -92,6 +95,7 @@ class SocMemoryCandidateSourceBridge:
                 run,
                 correction,
                 queue_item=queue_item,
+                profile_registry=self._profile_registry,
             ),
             context=context,
         )
@@ -193,6 +197,7 @@ def memory_candidate_command_from_correction(
     correction: CorrectionRecord,
     *,
     queue_item: ReviewQueueItem | None = None,
+    profile_registry: SocMemoryProfileRegistry | None = None,
 ) -> SocMemoryCandidateCreateCommand:
     """Build a pending candidate from an analyst or external correction."""
 
@@ -204,6 +209,12 @@ def memory_candidate_command_from_correction(
     content = _correction_content(run, correction)
     same_verdict = correction.previous_verdict is correction.corrected_verdict
     summary_prefix = "Review confirmation" if same_verdict else "Correction feedback"
+    facets = memory_facets_from_analysis_run(run, alert=alert)
+    profile = profile_registry.resolve_run(run) if profile_registry is not None else GenericSocMemoryProfile()
+    applicability = profile.build_applicability(
+        consensus_facets=facets,
+        strong_anchor_facets=facets,
+    )
     return SocMemoryCandidateCreateCommand(
         candidate_type=_candidate_type_for_correction(correction.corrected_verdict),
         target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
@@ -223,6 +234,7 @@ def memory_candidate_command_from_correction(
                 "corrected_verdict": correction.corrected_verdict.value,
                 "actor_id": correction.actor.actor_id,
                 "actor_surface": correction.actor.surface.value,
+                "promote_to_memory": correction.promote_to_memory,
             },
         ),
         evidence_refs=_dedupe(evidence_refs),
@@ -230,11 +242,12 @@ def memory_candidate_command_from_correction(
         idempotency_key=f"memory_candidate:correction:{correction.correction_id}",
         confidence=_correction_confidence(correction),
         facets={
-            **memory_facets_from_analysis_run(run, alert=alert),
+            **facets,
             "candidate_source": ["correction"],
             "corrected_verdict": [correction.corrected_verdict.value],
             **({"previous_verdict": [correction.previous_verdict.value]} if correction.previous_verdict is not None else {}),
         },
+        applicability=applicability,
         decision_impact=_decision_impact_for_correction(correction.corrected_verdict),
         review_owner="soc_analyst",
         labels=["correction", "candidate-only", correction.corrected_verdict.value],
@@ -243,6 +256,9 @@ def memory_candidate_command_from_correction(
             "source": "correction",
             "correction_id": correction.correction_id,
             "correction_reason_length": len(correction.reason),
+            "memory_profile_id": profile.identity.profile_id,
+            "memory_profile_version": profile.identity.profile_version,
+            "memory_feature_schema_version": profile.identity.feature_schema_version,
         },
     )
 

@@ -56,9 +56,14 @@ from soc_agent.contracts import (
     SocExternalDispositionRecord,
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
+    SocMemoryFeedbackEvent,
+    SocMemoryHealthRecord,
     SocMemoryQuery,
     SocMemoryRecord,
     SocMemoryRecordStatus,
+    SocMemoryRevisionProposal,
+    SocMemoryRevisionProposalStatus,
+    SocMemoryUseRecord,
     SocMutationAuditRecord,
     SocMutationOperation,
     TenantPolicyDecision,
@@ -83,9 +88,13 @@ from soc_agent.db.models import (
     SocGovernedContextFactRow,
     SocInvestigationEvidenceRow,
     SocMemoryCandidateRow,
+    SocMemoryFeedbackRow,
+    SocMemoryHealthRow,
     SocMemoryPatternObservationRow,
     SocMemoryRecordFacetRow,
     SocMemoryRecordRow,
+    SocMemoryRevisionProposalRow,
+    SocMemoryUseRow,
     SocMutationAuditRow,
     SocNormalizationMaintenanceIssueRow,
     SocNormalizationSchemaBaselineRow,
@@ -1304,6 +1313,15 @@ class SqlAlchemyAlertRepository:
             row = result.scalar_one_or_none()
             return SocMemoryCandidate.model_validate(row.candidate_payload) if row is not None else None
 
+    def find_memory_candidate_by_source_id(
+        self,
+        source_id: str,
+    ) -> SocMemoryCandidate | None:
+        with self._session_factory() as session:
+            result = session.execute(select(SocMemoryCandidateRow).where(SocMemoryCandidateRow.source_id == source_id).order_by(SocMemoryCandidateRow.created_at.desc()).limit(1))
+            row = result.scalar_one_or_none()
+            return SocMemoryCandidate.model_validate(row.candidate_payload) if row is not None else None
+
     def list_memory_candidates(
         self,
         *,
@@ -1488,6 +1506,252 @@ class SqlAlchemyAlertRepository:
                 ),
                 reverse=True,
             )[: query.candidate_limit]
+
+    def save_memory_use(self, record: SocMemoryUseRecord) -> None:
+        payload = record.model_dump(mode="json")
+        with self._session_factory() as session:
+            existing = session.get(SocMemoryUseRow, record.use_id)
+            if existing is not None:
+                if existing.use_payload != payload:
+                    raise ValueError(f"memory use {record.use_id} already exists")
+                return
+            session.add(
+                SocMemoryUseRow(
+                    use_id=record.use_id,
+                    idempotency_key=record.idempotency_key,
+                    memory_id=record.memory_id,
+                    memory_version=record.memory_version,
+                    run_id=record.run_id,
+                    alert_id=record.alert_id,
+                    tenant_id=record.tenant_id,
+                    effect=record.effect.value,
+                    directive_applied=record.directive_applied,
+                    created_at=record.created_at,
+                    use_payload=payload,
+                )
+            )
+            session.commit()
+
+    def find_memory_use_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SocMemoryUseRecord | None:
+        with self._session_factory() as session:
+            row = session.execute(select(SocMemoryUseRow).where(SocMemoryUseRow.idempotency_key == idempotency_key).limit(1)).scalar_one_or_none()
+            return SocMemoryUseRecord.model_validate(row.use_payload) if row is not None else None
+
+    def list_memory_uses(
+        self,
+        *,
+        memory_id: str | None = None,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        limit: int = 500,
+    ) -> list[SocMemoryUseRecord]:
+        with self._session_factory() as session:
+            query = select(SocMemoryUseRow)
+            for name, value in {
+                "memory_id": memory_id,
+                "run_id": run_id,
+                "alert_id": alert_id,
+            }.items():
+                if value is not None:
+                    query = query.where(getattr(SocMemoryUseRow, name) == value)
+            rows = session.execute(query.order_by(SocMemoryUseRow.created_at.desc()).limit(limit)).scalars()
+            return [SocMemoryUseRecord.model_validate(row.use_payload) for row in rows]
+
+    def save_memory_feedback(self, event: SocMemoryFeedbackEvent) -> None:
+        payload = event.model_dump(mode="json")
+        with self._session_factory() as session:
+            existing = session.get(SocMemoryFeedbackRow, event.feedback_id)
+            if existing is not None:
+                if existing.feedback_payload != payload:
+                    raise ValueError(f"memory feedback {event.feedback_id} already exists")
+                return
+            session.add(
+                SocMemoryFeedbackRow(
+                    feedback_id=event.feedback_id,
+                    idempotency_key=event.idempotency_key,
+                    use_id=event.use_id,
+                    memory_id=event.memory_id,
+                    memory_version=event.memory_version,
+                    run_id=event.run_id,
+                    alert_id=event.alert_id,
+                    source=event.source.value,
+                    trust=event.trust.value,
+                    alignment=event.alignment.value,
+                    created_at=event.created_at,
+                    feedback_payload=payload,
+                )
+            )
+            session.commit()
+
+    def find_memory_feedback_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SocMemoryFeedbackEvent | None:
+        with self._session_factory() as session:
+            row = session.execute(select(SocMemoryFeedbackRow).where(SocMemoryFeedbackRow.idempotency_key == idempotency_key).limit(1)).scalar_one_or_none()
+            return SocMemoryFeedbackEvent.model_validate(row.feedback_payload) if row is not None else None
+
+    def list_memory_feedback(
+        self,
+        *,
+        memory_id: str | None = None,
+        run_id: str | None = None,
+        limit: int = 500,
+    ) -> list[SocMemoryFeedbackEvent]:
+        with self._session_factory() as session:
+            query = select(SocMemoryFeedbackRow)
+            if memory_id is not None:
+                query = query.where(SocMemoryFeedbackRow.memory_id == memory_id)
+            if run_id is not None:
+                query = query.where(SocMemoryFeedbackRow.run_id == run_id)
+            rows = session.execute(query.order_by(SocMemoryFeedbackRow.created_at.desc()).limit(limit)).scalars()
+            return [SocMemoryFeedbackEvent.model_validate(row.feedback_payload) for row in rows]
+
+    def get_memory_health(
+        self,
+        memory_id: str,
+        memory_version: int,
+    ) -> SocMemoryHealthRecord | None:
+        with self._session_factory() as session:
+            row = session.get(
+                SocMemoryHealthRow,
+                _memory_health_key(memory_id, memory_version),
+            )
+            return SocMemoryHealthRecord.model_validate(row.health_payload) if row is not None else None
+
+    def compare_and_set_memory_health(
+        self,
+        record: SocMemoryHealthRecord,
+        *,
+        expected_version: int | None,
+    ) -> bool:
+        health_key = _memory_health_key(record.memory_id, record.memory_version)
+        payload = record.model_dump(mode="json")
+        with self._session_factory() as session:
+            if expected_version is None:
+                if session.get(SocMemoryHealthRow, health_key) is not None:
+                    return False
+                session.add(
+                    SocMemoryHealthRow(
+                        health_key=health_key,
+                        memory_id=record.memory_id,
+                        memory_version=record.memory_version,
+                        version=record.version,
+                        status=record.status.value,
+                        updated_at=record.updated_at,
+                        health_payload=payload,
+                    )
+                )
+                try:
+                    session.commit()
+                except IntegrityError:
+                    session.rollback()
+                    return False
+                return True
+            result = session.execute(
+                update(SocMemoryHealthRow)
+                .where(
+                    SocMemoryHealthRow.health_key == health_key,
+                    SocMemoryHealthRow.version == expected_version,
+                )
+                .values(
+                    version=record.version,
+                    status=record.status.value,
+                    updated_at=record.updated_at,
+                    health_payload=payload,
+                )
+            )
+            if result.rowcount != 1:
+                return False
+            session.commit()
+            return True
+
+    def save_memory_revision_proposal(
+        self,
+        proposal: SocMemoryRevisionProposal,
+    ) -> None:
+        payload = proposal.model_dump(mode="json")
+        with self._session_factory() as session:
+            existing = session.get(
+                SocMemoryRevisionProposalRow,
+                proposal.proposal_id,
+            )
+            if existing is not None:
+                if existing.proposal_payload != payload:
+                    raise ValueError(f"memory revision proposal {proposal.proposal_id} already exists")
+                return
+            session.add(
+                SocMemoryRevisionProposalRow(
+                    proposal_id=proposal.proposal_id,
+                    idempotency_key=proposal.idempotency_key,
+                    memory_id=proposal.memory_id,
+                    memory_version=proposal.memory_version,
+                    source_feedback_id=proposal.source_feedback_id,
+                    status=proposal.status.value,
+                    created_at=proposal.created_at,
+                    proposal_payload=payload,
+                )
+            )
+            session.commit()
+
+    def get_memory_revision_proposal(
+        self,
+        proposal_id: str,
+    ) -> SocMemoryRevisionProposal | None:
+        with self._session_factory() as session:
+            row = session.get(SocMemoryRevisionProposalRow, proposal_id)
+            return SocMemoryRevisionProposal.model_validate(row.proposal_payload) if row is not None else None
+
+    def find_memory_revision_proposal_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SocMemoryRevisionProposal | None:
+        with self._session_factory() as session:
+            row = session.execute(select(SocMemoryRevisionProposalRow).where(SocMemoryRevisionProposalRow.idempotency_key == idempotency_key).limit(1)).scalar_one_or_none()
+            return SocMemoryRevisionProposal.model_validate(row.proposal_payload) if row is not None else None
+
+    def list_memory_revision_proposals(
+        self,
+        *,
+        memory_id: str | None = None,
+        status: SocMemoryRevisionProposalStatus | None = None,
+        limit: int = 500,
+    ) -> list[SocMemoryRevisionProposal]:
+        with self._session_factory() as session:
+            query = select(SocMemoryRevisionProposalRow)
+            if memory_id is not None:
+                query = query.where(SocMemoryRevisionProposalRow.memory_id == memory_id)
+            if status is not None:
+                query = query.where(SocMemoryRevisionProposalRow.status == status.value)
+            rows = session.execute(query.order_by(SocMemoryRevisionProposalRow.created_at.desc()).limit(limit)).scalars()
+            return [SocMemoryRevisionProposal.model_validate(row.proposal_payload) for row in rows]
+
+    def compare_and_set_memory_revision_proposal(
+        self,
+        proposal: SocMemoryRevisionProposal,
+        *,
+        expected_status: SocMemoryRevisionProposalStatus,
+    ) -> bool:
+        payload = proposal.model_dump(mode="json")
+        with self._session_factory() as session:
+            result = session.execute(
+                update(SocMemoryRevisionProposalRow)
+                .where(
+                    SocMemoryRevisionProposalRow.proposal_id == proposal.proposal_id,
+                    SocMemoryRevisionProposalRow.status == expected_status.value,
+                )
+                .values(
+                    status=proposal.status.value,
+                    proposal_payload=payload,
+                )
+            )
+            if result.rowcount != 1:
+                return False
+            session.commit()
+            return True
 
     def append_governed_context_fact(
         self,
@@ -1700,7 +1964,7 @@ class SqlAlchemyAlertRepository:
     ) -> MemoryPatternObservation | None:
         with self._session_factory() as session:
             row = session.get(SocMemoryPatternObservationRow, observation_id)
-            return MemoryPatternObservation.model_validate(row.observation_payload) if row is not None else None
+            return _memory_pattern_observation_from_row(row) if row is not None else None
 
     def find_memory_pattern_observation_by_idempotency_key(
         self,
@@ -1708,7 +1972,7 @@ class SqlAlchemyAlertRepository:
     ) -> MemoryPatternObservation | None:
         with self._session_factory() as session:
             row = session.execute(select(SocMemoryPatternObservationRow).where(SocMemoryPatternObservationRow.idempotency_key == idempotency_key).limit(1)).scalar_one_or_none()
-            return MemoryPatternObservation.model_validate(row.observation_payload) if row is not None else None
+            return _memory_pattern_observation_from_row(row) if row is not None else None
 
     def list_memory_pattern_observations(
         self,
@@ -1741,7 +2005,7 @@ class SqlAlchemyAlertRepository:
                     SocMemoryPatternObservationRow.observation_id.asc(),
                 ).limit(limit)
             ).scalars()
-            return [MemoryPatternObservation.model_validate(row.observation_payload) for row in rows]
+            return [_memory_pattern_observation_from_row(row) for row in rows]
 
     def save_skill_feedback_observation(self, observation: SkillFeedbackObservation) -> None:
         payload = observation.model_dump(mode="json")
@@ -2857,6 +3121,25 @@ def _normalization_issue_row_values(issue: NormalizationMaintenanceIssue, payloa
     }
 
 
+def _memory_pattern_observation_from_row(
+    row: SocMemoryPatternObservationRow,
+) -> MemoryPatternObservation:
+    """Hydrate pre-v3 rows without weakening the current write contract."""
+
+    payload = dict(row.observation_payload)
+    payload.setdefault("profile_id", row.profile_id or "soc.generic")
+    payload.setdefault("profile_version", row.profile_version or "1")
+    payload.setdefault(
+        "feature_schema_version",
+        row.feature_schema_version or "soc.memory_features.generic.v1",
+    )
+    payload.setdefault(
+        "occurrence_key",
+        row.occurrence_key or hashlib.sha256((f"legacy-memory-occurrence:{row.aggregation_key}:{row.source_id}").encode()).hexdigest(),
+    )
+    return MemoryPatternObservation.model_validate(payload)
+
+
 def _memory_pattern_observation_row_values(
     observation: MemoryPatternObservation,
     payload: dict,
@@ -2869,6 +3152,10 @@ def _memory_pattern_observation_row_values(
         "tenant_id": observation.tenant_id,
         "environment": observation.environment,
         "data_class": observation.data_class.value,
+        "profile_id": observation.profile_id,
+        "profile_version": observation.profile_version,
+        "feature_schema_version": observation.feature_schema_version,
+        "occurrence_key": observation.occurrence_key,
         "source_type": observation.source.source_type.value,
         "source_id": observation.source.source_id,
         "run_id": observation.source.run_id,
@@ -2882,6 +3169,10 @@ def _memory_pattern_observation_row_values(
         "created_at": observation.created_at,
         "observation_payload": payload,
     }
+
+
+def _memory_health_key(memory_id: str, memory_version: int) -> str:
+    return f"{memory_id}@v{memory_version}"
 
 
 def _skill_feedback_observation_row_values(

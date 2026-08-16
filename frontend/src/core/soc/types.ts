@@ -435,6 +435,55 @@ export interface SocMemoryCandidateValidity {
   notes: string;
 }
 
+export type SocMemoryApplicabilityStatus =
+  | "applicable"
+  | "partial"
+  | "not_applicable"
+  | "legacy_anchor_only";
+
+export interface SocMemoryApplicabilitySpec {
+  schema_version: "soc.memory_applicability.v1";
+  profile_id: string;
+  profile_version: string;
+  feature_schema_version: string;
+  required_facets: Record<string, string[]>;
+  optional_facets: Record<string, string[]>;
+  excluded_facets: Record<string, string[]>;
+  minimum_optional_matches: number;
+  minimum_strong_anchor_matches: number;
+  context_only_required_facet_keys: string[];
+  context_only_missing_facet_keys: string[];
+  context_only_similarity_facet_keys: string[];
+  policy_version: "soc.memory_applicability_policy.v1";
+}
+
+export interface SocMemoryApplicabilityReport {
+  schema_version: "soc.memory_applicability_report.v1";
+  status: SocMemoryApplicabilityStatus;
+  policy_version: string;
+  profile_id?: string | null;
+  profile_version?: string | null;
+  matched_required_facets: Record<string, string[]>;
+  missing_required_facet_keys: string[];
+  matched_optional_facets: Record<string, string[]>;
+  excluded_facet_hits: Record<string, string[]>;
+  matched_strong_anchor_count: number;
+  context_only_allowed: boolean;
+  reason_codes: string[];
+}
+
+export interface SocMemoryDecisionDirective {
+  schema_version: "soc.memory_decision_directive.v1";
+  effect: "reinforce" | "override";
+  target_verdict: SocVerdict;
+  review_effect: "preserve" | "require" | "clear";
+  suggested_action?: string | null;
+  minimum_match_score: number;
+  required_facet_keys: string[];
+  rationale: string;
+  policy_version: "soc.memory_decision_directive_policy.v1";
+}
+
 export interface SocMemoryCandidate {
   schema_version: string;
   candidate_id: string;
@@ -451,6 +500,7 @@ export interface SocMemoryCandidate {
   idempotency_key?: string | null;
   confidence: number;
   facets: Record<string, string[]>;
+  applicability?: SocMemoryApplicabilitySpec | null;
   decision_impact: string;
   runtime_decision_allowed: false;
   review_required: true;
@@ -487,6 +537,8 @@ export interface SocMemoryRecord {
   validity: SocMemoryCandidateValidity;
   confidence: number;
   decision_impact: string;
+  applicability?: SocMemoryApplicabilitySpec | null;
+  decision_directive?: SocMemoryDecisionDirective | null;
   content_hash: string;
   facets_hash: string;
   retrieval_enabled: boolean;
@@ -559,6 +611,7 @@ export interface SocMemoryMatch {
   matched_facets: Record<string, string[]>;
   anchor_match_reasons: string[];
   matched_anchor_facets: Record<string, string[]>;
+  applicability_report?: SocMemoryApplicabilityReport | null;
   token_estimate: number;
   content_hash: string;
   facets_hash: string;
@@ -578,8 +631,10 @@ export interface SocMemoryRetrievalResult {
   skipped_status: number;
   skipped_expired: number;
   skipped_missing_strong_anchor: number;
+  skipped_not_applicable: number;
   skipped_below_min_score: number;
   returned_count: number;
+  returned_context_only_count: number;
   total_token_estimate: number;
   max_tokens: number;
   replay_diff?: SocMemoryRetrievalDiff | null;
@@ -937,6 +992,14 @@ export interface SocMemoryCandidateReviewRequest {
   reason: string;
   record_summary?: string | null;
   record_content?: string | null;
+  record_applicability?: SocMemoryApplicabilitySpec | null;
+  decision_directive?: SocMemoryDecisionDirective | null;
+  confirmed_verdict?: SocVerdict | null;
+  apply_to_future_matches?: boolean;
+  clear_review_on_match?: boolean;
+  activate_retrieval?: boolean;
+  activation_valid_until?: string | null;
+  activation_review_after_days?: number | null;
   metadata?: Record<string, unknown>;
 }
 

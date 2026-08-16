@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from soc_agent.contracts import (
+    SocMemoryApplicabilityReport,
+    SocMemoryApplicabilitySpec,
+    SocMemoryApplicabilityStatus,
     SocMemoryCandidateType,
     SocMemoryQuery,
     SocMemoryRecord,
@@ -145,12 +148,124 @@ def evaluate_memory_anchor_gate(
     if query.policy_version != MEMORY_RETRIEVAL_POLICY_V2:
         return True, ["anchor_gate:legacy_v1_not_required"], {}
 
-    allowed_keys = _STRONG_ANCHOR_KEYS_BY_MEMORY_TYPE[record.memory_type]
+    allowed_keys = memory_strong_anchor_keys(record.memory_type)
     anchors = {key: values for key, values in matched_facets.items() if key in allowed_keys and values}
     if not anchors:
         return False, [f"anchor_gate:missing_for_{record.memory_type.value}"], {}
     reasons = [f"anchor:{key}={','.join(values[:3])}" for key, values in sorted(anchors.items())]
     return True, reasons, anchors
+
+
+def evaluate_memory_applicability(
+    record: SocMemoryRecord,
+    query: SocMemoryQuery,
+    matched_facets: dict[str, list[str]],
+) -> SocMemoryApplicabilityReport:
+    """Evaluate the reviewer-owned exact scope independently of ranking."""
+
+    spec = record.applicability
+    if spec is None:
+        return SocMemoryApplicabilityReport(
+            status=SocMemoryApplicabilityStatus.LEGACY_ANCHOR_ONLY,
+            policy_version="soc.memory_applicability_policy.legacy",
+            matched_strong_anchor_count=len(set(matched_facets) & memory_strong_anchor_keys(record.memory_type)),
+            reason_codes=["legacy_record_without_typed_applicability"],
+        )
+
+    query_profile_id = _metadata_text(query, "memory_profile_id")
+    query_profile_version = _metadata_text(query, "memory_profile_version")
+    query_feature_schema = _metadata_text(
+        query,
+        "memory_feature_schema_version",
+    )
+    profile_reasons: list[str] = []
+    if query_profile_id != spec.profile_id:
+        profile_reasons.append("profile_id_mismatch")
+    if query_profile_version != spec.profile_version:
+        profile_reasons.append("profile_version_mismatch")
+    if query_feature_schema != spec.feature_schema_version:
+        profile_reasons.append("feature_schema_version_mismatch")
+
+    query_facets = normalize_memory_facets(query.facets)
+    matched_required = _facet_overlaps(spec.required_facets, query_facets)
+    missing_required = sorted(set(spec.required_facets) - set(matched_required))
+    matched_optional = _facet_overlaps(spec.optional_facets, query_facets)
+    excluded_hits = _facet_overlaps(spec.excluded_facets, query_facets)
+    matched_strong_count = len(set(memory_strong_anchor_keys(record.memory_type)) & (set(matched_required) | set(matched_optional)))
+    reason_codes = list(profile_reasons)
+    if missing_required:
+        reason_codes.append("required_facets_missing")
+    if len(matched_optional) < spec.minimum_optional_matches:
+        reason_codes.append("optional_facet_threshold_not_met")
+    if excluded_hits:
+        reason_codes.append("excluded_facet_hit")
+    if matched_strong_count < spec.minimum_strong_anchor_matches:
+        reason_codes.append("strong_anchor_threshold_not_met")
+
+    context_only_allowed = _context_only_applicability_satisfied(
+        spec,
+        matched_required=matched_required,
+        missing_required=missing_required,
+        matched_optional=matched_optional,
+        profile_reasons=profile_reasons,
+        excluded_hits=excluded_hits,
+    )
+    if context_only_allowed:
+        reason_codes.append("context_only_similarity_satisfied")
+
+    if not reason_codes:
+        status = SocMemoryApplicabilityStatus.APPLICABLE
+        reason_codes = ["typed_applicability_satisfied"]
+    elif profile_reasons or excluded_hits:
+        status = SocMemoryApplicabilityStatus.NOT_APPLICABLE
+    else:
+        status = SocMemoryApplicabilityStatus.PARTIAL
+    return SocMemoryApplicabilityReport(
+        status=status,
+        policy_version=spec.policy_version,
+        profile_id=spec.profile_id,
+        profile_version=spec.profile_version,
+        matched_required_facets=matched_required,
+        missing_required_facet_keys=missing_required,
+        matched_optional_facets=matched_optional,
+        excluded_facet_hits=excluded_hits,
+        matched_strong_anchor_count=matched_strong_count,
+        context_only_allowed=context_only_allowed,
+        reason_codes=reason_codes,
+    )
+
+
+def _context_only_applicability_satisfied(
+    spec: SocMemoryApplicabilitySpec,
+    *,
+    matched_required: dict[str, list[str]],
+    missing_required: list[str],
+    matched_optional: dict[str, list[str]],
+    profile_reasons: list[str],
+    excluded_hits: dict[str, list[str]],
+) -> bool:
+    if profile_reasons or excluded_hits or not missing_required:
+        return False
+    context_required = set(spec.context_only_required_facet_keys)
+    context_missing = set(spec.context_only_missing_facet_keys)
+    context_similarity = set(spec.context_only_similarity_facet_keys)
+    if not context_required or not context_missing or not context_similarity:
+        return False
+    if not context_required <= set(matched_required):
+        return False
+    if not set(missing_required) <= context_missing:
+        return False
+    if len(matched_optional) < spec.minimum_optional_matches:
+        return False
+    return bool(context_similarity & set(matched_optional))
+
+
+def memory_strong_anchor_keys(
+    memory_type: SocMemoryCandidateType,
+) -> frozenset[str]:
+    """Return the exact facet keys that can admit one memory type."""
+
+    return _STRONG_ANCHOR_KEYS_BY_MEMORY_TYPE[memory_type]
 
 
 def memory_facet_weight(key: str) -> float:
@@ -169,9 +284,33 @@ def memory_facet_weight(key: str) -> float:
     return 1.0
 
 
+def _facet_overlaps(
+    expected: dict[str, list[str]],
+    query_facets: dict[str, set[str]],
+) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for raw_key, raw_values in expected.items():
+        key = str(raw_key).strip().casefold()
+        expected_values = {str(value).strip().casefold() for value in raw_values if str(value).strip()}
+        overlap = sorted(expected_values & query_facets.get(key, set()))
+        if overlap:
+            result[key] = overlap
+    return result
+
+
+def _metadata_text(query: SocMemoryQuery, key: str) -> str | None:
+    value = query.metadata.get(key)
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 __all__ = [
     "evaluate_memory_anchor_gate",
+    "evaluate_memory_applicability",
     "memory_facet_weight",
+    "memory_strong_anchor_keys",
     "normalize_memory_facets",
     "score_memory_record",
 ]

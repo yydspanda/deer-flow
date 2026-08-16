@@ -400,6 +400,111 @@ class SocMemoryReviewEffect(StrEnum):
     CLEAR = "clear"
 
 
+class SocMemoryApplicabilityStatus(StrEnum):
+    """Whether a confirmed lesson is in scope for one current alert."""
+
+    APPLICABLE = "applicable"
+    PARTIAL = "partial"
+    NOT_APPLICABLE = "not_applicable"
+    LEGACY_ANCHOR_ONLY = "legacy_anchor_only"
+
+
+class SocMemoryApplicabilitySpec(BaseModel):
+    """Reviewer-visible, machine-checkable scope for one reusable lesson.
+
+    Values are copied from the reviewed candidate. Runtime evaluates exact
+    canonical facet overlap; free-form memory prose never widens this scope.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_applicability.v1"] = "soc.memory_applicability.v1"
+    profile_id: str = Field(min_length=1, max_length=128)
+    profile_version: str = Field(min_length=1, max_length=128)
+    feature_schema_version: str = Field(min_length=1, max_length=128)
+    required_facets: dict[str, list[str]] = Field(default_factory=dict)
+    optional_facets: dict[str, list[str]] = Field(default_factory=dict)
+    excluded_facets: dict[str, list[str]] = Field(default_factory=dict)
+    minimum_optional_matches: int = Field(default=0, ge=0, le=20)
+    minimum_strong_anchor_matches: int = Field(default=1, ge=1, le=20)
+    context_only_required_facet_keys: list[str] = Field(default_factory=list, max_length=20)
+    context_only_missing_facet_keys: list[str] = Field(default_factory=list, max_length=20)
+    context_only_similarity_facet_keys: list[str] = Field(default_factory=list, max_length=20)
+    policy_version: Literal["soc.memory_applicability_policy.v1"] = "soc.memory_applicability_policy.v1"
+
+    @field_validator("required_facets", "optional_facets", "excluded_facets")
+    @classmethod
+    def normalize_applicability_facets(
+        cls,
+        facets: dict[str, list[str]],
+    ) -> dict[str, list[str]]:
+        normalized: dict[str, list[str]] = {}
+        for raw_key, raw_values in facets.items():
+            key = str(raw_key).strip().casefold()
+            if not key or len(key) > 128:
+                raise ValueError("memory applicability facet keys must be 1-128 characters")
+            values = sorted({str(value).strip() for value in raw_values if str(value).strip()})
+            if not values or any(len(value) > 512 for value in values):
+                raise ValueError("memory applicability facet values must be 1-512 characters")
+            normalized[key] = values[:20]
+        return normalized
+
+    @field_validator(
+        "context_only_required_facet_keys",
+        "context_only_missing_facet_keys",
+        "context_only_similarity_facet_keys",
+    )
+    @classmethod
+    def normalize_context_only_facet_keys(cls, keys: list[str]) -> list[str]:
+        normalized = sorted({str(key).strip().casefold() for key in keys if str(key).strip()})
+        if any(len(key) > 128 for key in normalized):
+            raise ValueError("context-only applicability facet keys must be 1-128 characters")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_applicability_shape(self) -> SocMemoryApplicabilitySpec:
+        overlapping = (set(self.required_facets) & set(self.optional_facets)) | (set(self.required_facets) & set(self.excluded_facets)) | (set(self.optional_facets) & set(self.excluded_facets))
+        if overlapping:
+            raise ValueError("memory applicability facet groups must not overlap: " + ", ".join(sorted(overlapping)))
+        if self.minimum_optional_matches > len(self.optional_facets):
+            raise ValueError("minimum_optional_matches cannot exceed optional facet groups")
+        if not self.required_facets and self.minimum_optional_matches == 0:
+            raise ValueError("memory applicability requires exact required or optional matches")
+        context_required = set(self.context_only_required_facet_keys)
+        context_missing = set(self.context_only_missing_facet_keys)
+        context_similarity = set(self.context_only_similarity_facet_keys)
+        context_groups = (context_required, context_missing, context_similarity)
+        if any(context_groups):
+            if not all(context_groups):
+                raise ValueError("context-only applicability requires required, missing, and similarity facet keys")
+            if context_required & context_missing:
+                raise ValueError("context-only required and missing facet keys must not overlap")
+            if context_required | context_missing != set(self.required_facets):
+                raise ValueError("context-only required and missing facet keys must classify every required facet")
+            if not context_similarity <= set(self.optional_facets):
+                raise ValueError("context-only similarity facet keys must reference optional facets")
+        return self
+
+
+class SocMemoryApplicabilityReport(BaseModel):
+    """Replayable result of applying one reviewed scope to one query."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_applicability_report.v1"] = "soc.memory_applicability_report.v1"
+    status: SocMemoryApplicabilityStatus
+    policy_version: str = Field(min_length=1, max_length=128)
+    profile_id: str | None = Field(default=None, max_length=128)
+    profile_version: str | None = Field(default=None, max_length=128)
+    matched_required_facets: dict[str, list[str]] = Field(default_factory=dict)
+    missing_required_facet_keys: list[str] = Field(default_factory=list)
+    matched_optional_facets: dict[str, list[str]] = Field(default_factory=dict)
+    excluded_facet_hits: dict[str, list[str]] = Field(default_factory=dict)
+    matched_strong_anchor_count: int = Field(default=0, ge=0)
+    context_only_allowed: bool = False
+    reason_codes: list[str] = Field(default_factory=list)
+
+
 class SocMemoryDecisionDirective(BaseModel):
     """Reviewed, machine-readable decision effect carried by confirmed memory.
 
@@ -1543,6 +1648,7 @@ class SocMemoryCandidateCreateCommand(BaseModel):
     idempotency_key: str | None = None
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     facets: dict[str, list[str]] = Field(default_factory=dict)
+    applicability: SocMemoryApplicabilitySpec | None = None
     decision_impact: SocMemoryDecisionImpact = SocMemoryDecisionImpact.NONE
     review_owner: str | None = None
     labels: list[str] = Field(default_factory=list)
@@ -1574,15 +1680,42 @@ class SocMemoryCandidateReviewCommand(BaseModel):
     reason: str = Field(min_length=1)
     record_summary: str | None = None
     record_content: str | None = None
+    record_applicability: SocMemoryApplicabilitySpec | None = None
     decision_directive: SocMemoryDecisionDirective | None = None
+    confirmed_verdict: Verdict | None = None
+    apply_to_future_matches: bool = False
+    clear_review_on_match: bool = False
+    activate_retrieval: bool = False
+    activation_valid_until: datetime | None = None
+    activation_review_after_days: int | None = Field(default=None, ge=1, le=365)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def restrict_decision_directive_to_confirmation(
         self,
     ) -> SocMemoryCandidateReviewCommand:
+        if self.record_applicability is not None and self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
+            raise ValueError("record_applicability is allowed only when confirming a memory candidate")
         if self.decision_directive is not None and self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
             raise ValueError("decision_directive is allowed only when confirming a memory candidate")
+        if self.apply_to_future_matches:
+            if self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
+                raise ValueError("apply_to_future_matches is allowed only when confirming a memory candidate")
+            if self.confirmed_verdict is None:
+                raise ValueError("apply_to_future_matches requires confirmed_verdict")
+            if self.decision_directive is not None:
+                raise ValueError("use either apply_to_future_matches or an explicit decision_directive")
+        elif self.confirmed_verdict is not None or self.clear_review_on_match:
+            raise ValueError("confirmed_verdict and clear_review_on_match require apply_to_future_matches")
+        if self.activate_retrieval:
+            if self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
+                raise ValueError("activate_retrieval is allowed only when confirming a memory candidate")
+            if self.activation_valid_until is None or self.activation_review_after_days is None:
+                raise ValueError("activate_retrieval requires activation_valid_until and activation_review_after_days")
+            if self.activation_valid_until.utcoffset() is None:
+                raise ValueError("activation_valid_until must include a timezone")
+        elif self.activation_valid_until is not None or self.activation_review_after_days is not None:
+            raise ValueError("activation fields require activate_retrieval")
         return self
 
 
@@ -1604,6 +1737,7 @@ class SocMemoryCandidate(BaseModel):
     idempotency_key: str | None = None
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     facets: dict[str, list[str]] = Field(default_factory=dict)
+    applicability: SocMemoryApplicabilitySpec | None = None
     decision_impact: SocMemoryDecisionImpact = SocMemoryDecisionImpact.NONE
     runtime_decision_allowed: Literal[False] = False
     review_required: Literal[True] = True
@@ -1634,6 +1768,7 @@ class SocMemoryRecord(BaseModel):
     summary: str = Field(min_length=1)
     content: str = Field(min_length=1)
     facets: dict[str, list[str]] = Field(default_factory=dict)
+    applicability: SocMemoryApplicabilitySpec | None = None
     evidence_refs: list[str] = Field(min_length=1)
     validity: SocMemoryCandidateValidity
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -1763,6 +1898,7 @@ class SocMemoryMatch(BaseModel):
     matched_facets: dict[str, list[str]] = Field(default_factory=dict)
     anchor_match_reasons: list[str] = Field(default_factory=list)
     matched_anchor_facets: dict[str, list[str]] = Field(default_factory=dict)
+    applicability_report: SocMemoryApplicabilityReport | None = None
     token_estimate: int = Field(ge=1)
     content_hash: str
     facets_hash: str
@@ -1797,8 +1933,10 @@ class SocMemoryRetrievalResult(BaseModel):
     skipped_status: int = Field(default=0, ge=0)
     skipped_expired: int = Field(default=0, ge=0)
     skipped_missing_strong_anchor: int = Field(default=0, ge=0)
+    skipped_not_applicable: int = Field(default=0, ge=0)
     skipped_below_min_score: int = Field(default=0, ge=0)
     returned_count: int = Field(default=0, ge=0)
+    returned_context_only_count: int = Field(default=0, ge=0)
     total_token_estimate: int = Field(default=0, ge=0)
     max_tokens: int = Field(default=1200, ge=100)
     replay_diff: SocMemoryRetrievalDiff | None = None
@@ -2107,8 +2245,9 @@ class DetectionRuleRef(BaseModel):
     """Normalized detection identity.
 
     ``rule_code`` is a strong optional identifier. ``detection_key`` is the
-    runtime-generated fallback key used by memory and lessons when a source does
-    not provide stable rule IDs.
+    adapter-generated canonical identity used by correlation and Memory. It must
+    remain stable across equivalent alerts; alert IDs and run IDs are lineage,
+    not valid detection keys.
     """
 
     rule_code: str | None = None
@@ -3930,6 +4069,7 @@ class CorrectionCommand(BaseModel):
     reason: str = Field(min_length=1)
     corrected_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     evidence: list[EvidenceItem] = Field(default_factory=list)
+    promote_to_memory: bool = False
 
 
 class CorrectionRecord(BaseModel):
@@ -3946,9 +4086,14 @@ class CorrectionRecord(BaseModel):
     actor: ActorContext
     created_at: datetime = Field(default_factory=utc_now)
     evidence: list[EvidenceItem] = Field(default_factory=list)
+    promote_to_memory: bool = False
     candidate_knowledge_status: Literal["not_created", "observed_only", "pending_review"] = "not_created"
     memory_candidate_id: str | None = None
     memory_admission: MemoryAdmissionDecision | None = None
+    memory_use_ids: list[str] = Field(default_factory=list)
+    memory_feedback_ids: list[str] = Field(default_factory=list)
+    memory_revision_proposal_ids: list[str] = Field(default_factory=list)
+    suspended_memory_ids: list[str] = Field(default_factory=list)
 
 
 class HumanConfirmedRole(BaseModel):

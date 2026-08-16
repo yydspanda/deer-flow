@@ -33,6 +33,7 @@ from soc_agent.application import (
     build_soc_analysis_service,
     build_soc_investigation_reporting_service,
     build_soc_investigation_workflow_service,
+    build_soc_memory_profile_registry,
     load_soc_enrichment_composition_config,
 )
 from soc_agent.contracts import (
@@ -81,6 +82,7 @@ from soc_agent.contracts import (
     SocEnrichmentReplayCommand,
     SocEnrichmentWorkflowResult,
     SocEvaluationDataClass,
+    SocMemoryApplicabilitySpec,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateStatus,
@@ -90,6 +92,9 @@ from soc_agent.contracts import (
     SocMemoryRetrievalActivationAction,
     SocMemoryRetrievalActivationCommand,
     SocMemoryRetrievalResult,
+    SocMemoryRevisionProposalStatus,
+    SocMemoryRevisionReviewCommand,
+    SocMemoryRevisionReviewDecision,
     SocOperationalDisposition,
     SocOperationsAvailability,
     SocRolloutRehearsalRequest,
@@ -108,6 +113,7 @@ from soc_agent.core import (
     SocDispositionEvaluationService,
     SocDispositionProposalService,
     SocGovernedContextService,
+    SocMemoryEvolutionService,
     SocMemoryPatternService,
     SocMemoryService,
     SocNormalizationMaintenanceService,
@@ -333,8 +339,14 @@ def main(argv: list[str] | None = None) -> int:
         return _memory_records_list(args)
     if args.command == "memory" and args.memory_command == "records" and args.memory_records_command == "get":
         return _memory_records_get(args)
+    if args.command == "memory" and args.memory_command == "records" and args.memory_records_command == "lineage":
+        return _memory_records_lineage(args)
     if args.command == "memory" and args.memory_command == "records" and args.memory_records_command == "retrieval":
         return _memory_records_retrieval(args)
+    if args.command == "memory" and args.memory_command == "revisions" and args.memory_revisions_command == "list":
+        return _memory_revisions_list(args)
+    if args.command == "memory" and args.memory_command == "revisions" and args.memory_revisions_command == "review":
+        return _memory_revisions_review(args)
     if args.command == "skill-improvement" and args.skill_improvement_command == "ingest":
         return _skill_improvement_ingest(args)
     if args.command == "skill-improvement" and args.skill_improvement_command == "list":
@@ -473,6 +485,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     correct.add_argument("--reason", required=True, help="Analyst correction reason")
     correct.add_argument("--confidence", type=float, default=None, help="Optional corrected confidence, 0..1")
+    correct.add_argument(
+        "--promote-to-memory",
+        action="store_true",
+        help="Explicitly submit this correction as a reusable Memory candidate",
+    )
     correct.add_argument("--actor-id", default="soc-cli", help="Analyst actor id")
     correct.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(correct)
@@ -1074,6 +1091,44 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_review.add_argument("--reason", required=True, help="Human review reason")
     memory_review.add_argument("--record-summary", help="Optional confirmed memory summary override")
     memory_review.add_argument("--record-content", help="Optional confirmed memory content override")
+    memory_applicability_group = memory_review.add_mutually_exclusive_group()
+    memory_applicability_group.add_argument(
+        "--record-applicability",
+        help="Path to a narrowed SocMemoryApplicabilitySpec JSON object",
+    )
+    memory_applicability_group.add_argument(
+        "--record-applicability-json",
+        help="Inline narrowed SocMemoryApplicabilitySpec JSON object",
+    )
+    memory_review.add_argument(
+        "--apply-to-future-matches",
+        action="store_true",
+        help="Attach a reviewed decision directive for exact applicable future matches",
+    )
+    memory_review.add_argument(
+        "--confirmed-verdict",
+        choices=[verdict.value for verdict in Verdict],
+        help="Reviewed verdict used with --apply-to-future-matches",
+    )
+    memory_review.add_argument(
+        "--clear-review-on-match",
+        action="store_true",
+        help="Clear model review only when every Memory applicability gate passes",
+    )
+    memory_review.add_argument(
+        "--activate-retrieval",
+        action="store_true",
+        help="Enable the confirmed Memory in the same governed command",
+    )
+    memory_review.add_argument(
+        "--activation-valid-until",
+        help="Timezone-aware ISO-8601 retrieval validity end",
+    )
+    memory_review.add_argument(
+        "--activation-review-after-days",
+        type=int,
+        help="Days until mandatory retrieval review",
+    )
     memory_directive_group = memory_review.add_mutually_exclusive_group()
     memory_directive_group.add_argument(
         "--decision-directive",
@@ -1126,6 +1181,13 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_records_get.add_argument("memory_id", help="Memory record id to load")
     memory_records_get.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(memory_records_get)
+    memory_records_lineage = memory_records_subparsers.add_parser(
+        "lineage",
+        help="Show uses, outcome feedback, health, and revision proposals",
+    )
+    memory_records_lineage.add_argument("memory_id", help="Memory record id to inspect")
+    memory_records_lineage.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(memory_records_lineage)
     memory_records_retrieval = memory_records_subparsers.add_parser(
         "retrieval",
         help="Apply a governed retrieval enable/disable transition",
@@ -1161,6 +1223,43 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_records_retrieval.add_argument("--actor-id", default="soc-memory-cli", help="Memory governor actor id")
     memory_records_retrieval.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(memory_records_retrieval)
+    memory_revisions = memory_subparsers.add_parser(
+        "revisions",
+        help="Inspect and review Memory contradiction proposals",
+    )
+    memory_revisions_subparsers = memory_revisions.add_subparsers(dest="memory_revisions_command")
+    memory_revisions_list = memory_revisions_subparsers.add_parser(
+        "list",
+        help="List Memory revision proposals",
+    )
+    memory_revisions_list.add_argument("--memory-id")
+    memory_revisions_list.add_argument(
+        "--status",
+        choices=["", *[item.value for item in SocMemoryRevisionProposalStatus]],
+        default=SocMemoryRevisionProposalStatus.PENDING_REVIEW.value,
+        help="Filter by status; use empty string to list all",
+    )
+    memory_revisions_list.add_argument("--limit", type=int, default=50)
+    memory_revisions_list.add_argument("--pretty", action="store_true")
+    _add_database_args(memory_revisions_list)
+    memory_revisions_review = memory_revisions_subparsers.add_parser(
+        "review",
+        help="Accept or reject one contradiction proposal",
+    )
+    memory_revisions_review.add_argument("proposal_id")
+    memory_revisions_review.add_argument(
+        "--decision",
+        required=True,
+        choices=[item.value for item in SocMemoryRevisionReviewDecision],
+    )
+    memory_revisions_review.add_argument("--reason", required=True)
+    memory_revisions_review.add_argument("--idempotency-key", required=True)
+    memory_revisions_review.add_argument(
+        "--actor-id",
+        default="soc-memory-reviewer-cli",
+    )
+    memory_revisions_review.add_argument("--pretty", action="store_true")
+    _add_database_args(memory_revisions_review)
     memory_patterns = memory_subparsers.add_parser(
         "patterns",
         help="Inspect and replay PI-03F3 repeated-pattern observations",
@@ -1765,12 +1864,15 @@ def _correct(args: argparse.Namespace) -> int:
             evidence_repository=repository,
             external_disposition_repository=repository,
             memory_candidate_repository=repository,
+            memory_record_repository=repository,
+            memory_profile_registry=build_soc_memory_profile_registry(),
         ).correct(
             CorrectionCommand(
                 run_id=args.run_id,
                 corrected_verdict=Verdict(args.verdict),
                 corrected_confidence=args.confidence,
                 reason=args.reason,
+                promote_to_memory=args.promote_to_memory,
             ),
             context=_cli_context(args.actor_id, roles=["soc_analyst"]),
         )
@@ -2275,6 +2377,15 @@ def _memory_review(args: argparse.Namespace) -> int:
                     payload_label="memory decision directive",
                 )
             )
+        record_applicability = None
+        if args.record_applicability or args.record_applicability_json:
+            record_applicability = SocMemoryApplicabilitySpec.model_validate(
+                _load_object_input(
+                    args.record_applicability,
+                    args.record_applicability_json,
+                    payload_label="memory record applicability",
+                )
+            )
         result = SocMemoryService(candidate_repository=repository, record_repository=repository).review_candidate(
             SocMemoryCandidateReviewCommand(
                 candidate_id=args.candidate_id,
@@ -2282,14 +2393,21 @@ def _memory_review(args: argparse.Namespace) -> int:
                 reason=args.reason,
                 record_summary=args.record_summary,
                 record_content=args.record_content,
+                record_applicability=record_applicability,
                 decision_directive=decision_directive,
+                confirmed_verdict=(Verdict(args.confirmed_verdict) if args.confirmed_verdict else None),
+                apply_to_future_matches=args.apply_to_future_matches,
+                clear_review_on_match=args.clear_review_on_match,
+                activate_retrieval=args.activate_retrieval,
+                activation_valid_until=args.activation_valid_until,
+                activation_review_after_days=args.activation_review_after_days,
             ),
             context=ServiceRequestContext(
                 actor=ActorContext(
                     actor_id=args.actor_id,
                     actor_type=ActorType.USER,
                     surface=EntrySurface.CLI,
-                    roles=["soc_analyst"],
+                    roles=["soc_analyst", "soc_memory_reviewer"],
                 )
             ),
         )
@@ -2332,6 +2450,7 @@ def _memory_patterns_list(args: argparse.Namespace) -> int:
         observations = SocMemoryPatternService(
             repository=repository,
             candidate_repository=repository,
+            profile_registry=build_soc_memory_profile_registry(),
         ).list_observations(
             aggregation_key=args.aggregation_key,
             lineage_key=args.lineage_key,
@@ -2360,6 +2479,7 @@ def _memory_patterns_replay(args: argparse.Namespace) -> int:
         report = SocMemoryPatternService(
             repository=repository,
             candidate_repository=repository,
+            profile_registry=build_soc_memory_profile_registry(),
         ).replay(args.aggregation_key)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -2430,6 +2550,77 @@ def _memory_records_get(args: argparse.Namespace) -> int:
         return 3
 
     print(record.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _memory_records_lineage(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        report = SocMemoryEvolutionService(
+            repository=repository,
+            memory_record_repository=repository,
+            automation_repository=repository,
+        ).get_lineage(args.memory_id)
+    except (ValueError, SocServiceError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(report.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
+def _memory_revisions_list(args: argparse.Namespace) -> int:
+    if args.limit < 1 or args.limit > 10_000:
+        print("error: --limit must be between 1 and 10000", file=sys.stderr)
+        return 2
+    try:
+        repository = _repository_from_args(args)
+        proposals = SocMemoryEvolutionService(
+            repository=repository,
+            memory_record_repository=repository,
+        ).list_revision_proposals(
+            memory_id=args.memory_id,
+            status=(SocMemoryRevisionProposalStatus(args.status) if args.status else None),
+            limit=args.limit,
+        )
+    except (ValueError, SocServiceError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(
+        json.dumps(
+            [item.model_dump(mode="json", exclude_none=True) for item in proposals],
+            ensure_ascii=False,
+            indent=2 if args.pretty else None,
+        )
+    )
+    return 0
+
+
+def _memory_revisions_review(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        result = SocMemoryEvolutionService(
+            repository=repository,
+            memory_record_repository=repository,
+            mutation_audit_repository=repository,
+            mutation_uow=repository,
+        ).review_revision_proposal(
+            SocMemoryRevisionReviewCommand(
+                proposal_id=args.proposal_id,
+                decision=SocMemoryRevisionReviewDecision(args.decision),
+                reason=args.reason,
+            ),
+            context=_cli_context(
+                args.actor_id,
+                roles=["soc_memory_reviewer"],
+            ).model_copy(update={"idempotency_key": args.idempotency_key}),
+        )
+    except (ValueError, SocServiceError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(result.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
     return 0
 
 
@@ -3866,13 +4057,14 @@ def _rollout_completion(args: argparse.Namespace) -> int:
 
 def _daemon_service_from_args(args: argparse.Namespace) -> SocDaemonService:
     repository = _repository_from_args(args)
+    memory_pattern_service, memory_pattern_environment, memory_pattern_data_class = _memory_pattern_service_from_args(args, repository)
     analysis_service = _analysis_service_for_repository(
         repository,
         settings=_llm_settings_from_args(args),
+        memory_environment=memory_pattern_environment,
     )
     approval_service = SocAgentApprovalService(grant_repository=repository, request_repository=repository)
     investigation_service = _investigation_service_from_args(args, repository)
-    memory_pattern_service, memory_pattern_environment, memory_pattern_data_class = _memory_pattern_service_from_args(args, repository)
     return SocDaemonService(
         analysis_service=analysis_service,
         approval_service=approval_service,
@@ -3911,6 +4103,7 @@ def _memory_pattern_service_from_args(
             repository=repository,
             candidate_repository=repository,
             policy=policy,
+            profile_registry=build_soc_memory_profile_registry(),
         ),
         environment,
         data_class,
@@ -4390,8 +4583,13 @@ def _analysis_service_for_repository(
     repository: SqlAlchemyAlertRepository | None,
     *,
     settings: SocLLMSettings | None = None,
+    memory_environment: str | None = None,
 ) -> SocAnalysisService:
-    return build_soc_analysis_service(repository, settings=settings)
+    return build_soc_analysis_service(
+        repository,
+        settings=settings,
+        memory_environment=memory_environment,
+    )
 
 
 def _llm_settings_from_args(args: argparse.Namespace) -> SocLLMSettings:

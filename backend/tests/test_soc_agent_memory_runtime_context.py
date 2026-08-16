@@ -4,6 +4,9 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
+import soc_agent.application.analysis as analysis_application
 from soc_agent.contracts import (
     ActorContext,
     AlertClassification,
@@ -12,6 +15,8 @@ from soc_agent.contracts import (
     AnalysisContextReferenceKind,
     DetectionRuleRef,
     LLMAnalysisRequest,
+    SocMemoryApplicabilityReport,
+    SocMemoryApplicabilityStatus,
     SocMemoryCandidateSource,
     SocMemoryCandidateSourceType,
     SocMemoryCandidateType,
@@ -32,8 +37,14 @@ SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "alerts"
 
 
 class StaticMemoryRetriever:
-    def __init__(self, record: SocMemoryRecord) -> None:
+    def __init__(
+        self,
+        record: SocMemoryRecord,
+        *,
+        applicability_report: SocMemoryApplicabilityReport | None = None,
+    ) -> None:
         self.record = record
+        self.applicability_report = applicability_report
         self.queries = []
 
     def find_relevant_records(self, query):  # noqa: ANN001, ANN201 - protocol test double
@@ -45,6 +56,7 @@ class StaticMemoryRetriever:
             score=8.5,
             match_reasons=["facet:detection_key=sample:rule"],
             matched_facets={"detection_key": ["sample:rule"]},
+            applicability_report=self.applicability_report,
             token_estimate=40,
             content_hash=self.record.content_hash,
             facets_hash=self.record.facets_hash,
@@ -140,6 +152,9 @@ def test_memory_query_uses_only_generic_canonical_dimensions() -> None:
     assert query.metadata == {
         "source": "fixed_runtime_pre_llm",
         "alert_id": "ALT-MEMORY-RUNTIME-1",
+        "memory_profile_id": "soc.generic",
+        "memory_profile_version": "1",
+        "memory_feature_schema_version": "soc.memory_features.generic.v1",
         "strong_anchor_keys_present": [
             "detection_key",
             "rule_code",
@@ -161,6 +176,57 @@ def test_confirmed_memory_is_projected_as_stable_m_reference() -> None:
     assert item.label == "Confirmed phishing review boundary"
     assert "does not prove a click" in item.summary
     assert retriever.queries[0].require_retrieval_enabled is True
+
+
+def test_context_only_memory_projection_is_explicitly_non_authoritative() -> None:
+    retriever = StaticMemoryRetriever(
+        _record(),
+        applicability_report=SocMemoryApplicabilityReport(
+            status=SocMemoryApplicabilityStatus.PARTIAL,
+            policy_version="soc.memory_applicability_policy.v1",
+            profile_id="pingan.soc",
+            profile_version="2",
+            context_only_allowed=True,
+            reason_codes=["context_only_similarity_satisfied"],
+        ),
+    )
+
+    enriched = ConfirmedMemoryAnalysisRequestEnricher(retriever)(_request())
+    item = enriched.context_catalog[0]
+
+    assert item.metadata["context_only"] is True
+    assert item.metadata["decision_directive_applicable"] is False
+    assert item.summary.startswith("[Context only / 仅作相似模式参考")
+
+
+def test_memory_environment_is_server_owned_before_profile_query() -> None:
+    retriever = StaticMemoryRetriever(_record())
+    source_request = _request().model_copy(update={"environment": "stg"})
+
+    enriched = ConfirmedMemoryAnalysisRequestEnricher(
+        retriever,
+        environment="PRD",
+    )(source_request)
+
+    assert enriched.environment == "prd"
+    assert retriever.queries[0].facets["environment"] == ["prd"]
+
+
+def test_memory_environment_configuration_must_be_consistent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SOC_MEMORY_ENVIRONMENT", "PRD")
+    monkeypatch.setenv("SOC_TENANT_POLICY_ENVIRONMENT", "prd")
+    monkeypatch.setenv("SOC_AUTOMATION_ENVIRONMENT", "prd")
+
+    assert analysis_application._resolve_memory_environment(None) == "prd"
+
+    monkeypatch.setenv("SOC_AUTOMATION_ENVIRONMENT", "stg")
+    with pytest.raises(
+        ValueError,
+        match="memory, tenant-policy and automation environments must match",
+    ):
+        analysis_application._resolve_memory_environment(None)
 
 
 def test_memory_retrieval_failure_is_sanitized_and_non_blocking() -> None:

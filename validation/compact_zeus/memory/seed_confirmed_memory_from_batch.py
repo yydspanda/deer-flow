@@ -140,11 +140,11 @@ def build_candidate_command(
     )
 
     return SocMemoryCandidateCreateCommand(
-        candidate_type=SocMemoryCandidateType.DETECTION_LESSON,
-        target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
+        candidate_type=SocMemoryCandidateType.EVAL_FIXTURE,
+        target_artifact=SocMemoryTargetArtifact.EVAL_FIXTURE,
         summary=(
-            f"{_enum_value(request.source.source_type)} / {rule_label} "
-            f"历史研判：{_enum_value(analysis.verdict)}"
+            f"[EVAL FIXTURE] {_enum_value(request.source.source_type)} / "
+            f"{rule_label}：{_enum_value(analysis.verdict)}"
         ),
         content="\n".join(content_lines),
         tenant_scope=request.tenant_id or "global",
@@ -179,7 +179,7 @@ def build_candidate_command(
         ),
         confidence=0.8,
         facets=facets,
-        decision_impact=SocMemoryDecisionImpact.DETECTION_DECISION,
+        decision_impact=SocMemoryDecisionImpact.NONE,
         review_owner="soc-memory-eval",
         labels=list(_LABELS),
         metadata={

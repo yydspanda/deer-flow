@@ -38,6 +38,15 @@ test.describe("SOC review workbench", () => {
     const memorySection = page.locator("section").filter({
       has: page.getByRole("heading", { name: "候选记忆" }),
     });
+    await expect(memorySection.getByText("模式级决策候选")).toBeVisible();
+    await memorySection
+      .locator("#memory-scope-MC-ALPHA-001-source_type")
+      .check();
+    await memorySection
+      .getByRole("switch", { name: "未来精确匹配改判" })
+      .click();
+    await memorySection.getByRole("combobox").click();
+    await page.getByRole("option", { name: "误报" }).click();
     await memorySection
       .getByPlaceholder("评审理由")
       .fill("Alpha reviewer confirmed the bounded lesson.");
@@ -83,7 +92,20 @@ test.describe("SOC review workbench", () => {
       mutationRequests.find((request) =>
         request.path.endsWith("/MC-ALPHA-001/review"),
       )?.body,
-    ).toMatchObject({ decision: "confirm" });
+    ).toMatchObject({
+      decision: "confirm",
+      apply_to_future_matches: true,
+      confirmed_verdict: "false_positive",
+      clear_review_on_match: true,
+      record_applicability: {
+        required_facets: {
+          source_type: ["nids"],
+          detection_key: ["pingan:ndr:reverse-shell"],
+          behavior_fingerprint: ["behavior-alpha"],
+          environment: ["prd"],
+        },
+      },
+    });
     expect(
       mutationRequests.find((request) =>
         request.path.endsWith("/MEM-ALPHA-001/retrieval"),

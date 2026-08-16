@@ -63,7 +63,19 @@
     "/api/soc/memory/records/{memory_id}": [
       "get"
     ],
+    "/api/soc/memory/records/{memory_id}/lineage": [
+      "get"
+    ],
     "/api/soc/memory/records/{memory_id}/retrieval": [
+      "post"
+    ],
+    "/api/soc/memory/revisions": [
+      "get"
+    ],
+    "/api/soc/memory/revisions/{proposal_id}": [
+      "get"
+    ],
+    "/api/soc/memory/revisions/{proposal_id}/review": [
       "post"
     ],
     "/api/soc/memory/search": [

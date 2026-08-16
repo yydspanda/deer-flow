@@ -10,6 +10,7 @@ from app.gateway.soc_request_context import (
     soc_request_id_from_request,
     soc_trace_id_from_request,
 )
+from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.contracts import (
     ActorAuthSource,
     ActorContext,
@@ -66,6 +67,7 @@ def get_soc_review_service(request: Request) -> SocReviewService:
         external_disposition_repository=repository,
         memory_candidate_repository=repository,
         memory_record_repository=repository,
+        memory_profile_registry=build_soc_memory_profile_registry(),
     )
 
 

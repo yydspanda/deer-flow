@@ -9,15 +9,21 @@ from soc_agent.contracts import (
     AnalysisRun,
     AnalysisRunStatus,
     MemoryPatternDataClass,
-    MemoryPatternDimension,
+    MemoryPatternLessonObservation,
     MemoryPatternObservation,
     MemoryPatternObservationCreateCommand,
-    MemoryPatternSignature,
+    MemoryPatternRiskClass,
     MemoryPatternSourceRef,
     MemoryPatternSourceType,
     SocMemoryCandidate,
+    Verdict,
 )
 from soc_agent.memory.candidates import InMemoryMemoryCandidateRepository
+from soc_agent.memory.facets import (
+    memory_facets_from_analysis_run,
+    reusable_facet_values,
+)
+from soc_agent.memory.profiles import GenericSocMemoryProfile, SocMemoryProfile
 from soc_agent.normalizers import normalize_alert_payload
 from soc_agent.utils.hashing import stable_hash
 
@@ -43,6 +49,7 @@ class InMemoryMemoryPatternRepository(InMemoryMemoryCandidateRepository):
         self._pattern_observations: dict[str, MemoryPatternObservation] = {}
         self._pattern_idempotency: dict[str, str] = {}
         self._pattern_source_identity: dict[tuple[str, str], str] = {}
+        self._pattern_occurrence_identity: dict[tuple[str, str], str] = {}
         for observation in observations:
             self.save_memory_pattern_observation(observation)
 
@@ -61,11 +68,18 @@ class InMemoryMemoryPatternRepository(InMemoryMemoryCandidateRepository):
             if self._pattern_observations[source_observation_id] != observation:
                 raise MemoryPatternRepositoryConflictError("memory pattern aggregation/source identity already exists")
             return
+        occurrence_key = (observation.aggregation_key, observation.occurrence_key)
+        occurrence_observation_id = self._pattern_occurrence_identity.get(occurrence_key)
+        if occurrence_observation_id is not None:
+            if self._pattern_observations[occurrence_observation_id] != observation:
+                raise MemoryPatternRepositoryConflictError("memory pattern aggregation/occurrence identity already exists")
+            return
         if observation.observation_id in self._pattern_observations:
             raise MemoryPatternRepositoryConflictError(f"memory pattern observation {observation.observation_id} already exists")
         self._pattern_observations[observation.observation_id] = observation
         self._pattern_idempotency[observation.idempotency_key] = observation.observation_id
         self._pattern_source_identity[source_key] = observation.observation_id
+        self._pattern_occurrence_identity[occurrence_key] = observation.observation_id
 
     def get_memory_pattern_observation(
         self,
@@ -120,6 +134,7 @@ def memory_pattern_command_from_run(
     environment: str,
     data_class: MemoryPatternDataClass,
     policy_fingerprint: str,
+    profile: SocMemoryProfile | None = None,
 ) -> MemoryPatternObservationCreateCommand:
     """Project one completed Runtime result into a neutral recurrence observation."""
 
@@ -131,7 +146,20 @@ def memory_pattern_command_from_run(
     tenant_id = (request.tenant_id or "").strip()
     if not tenant_id:
         raise MemoryPatternIneligibleError("memory pattern aggregation requires an explicit tenant_id")
-    signature = _signature_from_run(run)
+    resolved_profile = profile or GenericSocMemoryProfile()
+    common_facets = _common_facets(run)
+    # The observation environment is an operator-owned cohort boundary. Keep it
+    # in the canonical feature set even when the analyzer request did not carry
+    # an environment so tenant profiles can prevent cross-environment reuse.
+    common_facets["environment"] = [environment]
+    try:
+        signature = resolved_profile.build_pattern_signature(
+            run,
+            facets=common_facets,
+        )
+    except ValueError as exc:
+        raise MemoryPatternIneligibleError(str(exc)) from exc
+    lesson = _lesson_from_run(run)
     input_identity = run.input_hash or stable_hash({"tenant_id": tenant_id, "alert_id": run.alert_id})
     source_id = stable_hash(
         {
@@ -141,6 +169,12 @@ def memory_pattern_command_from_run(
         }
     )
     observed_at = _source_observed_at(run)
+    occurrence_key = resolved_profile.build_occurrence_key(
+        run,
+        signature=signature,
+        facets=common_facets,
+        observed_at=observed_at,
+    )
     evidence_refs = [f"run:{run.run_id}", f"alert:{run.alert_id}"]
     grounding = run.analysis_evidence_grounding
     if grounding is not None:
@@ -150,6 +184,10 @@ def memory_pattern_command_from_run(
         tenant_id=tenant_id,
         environment=environment,
         data_class=data_class,
+        profile_id=resolved_profile.identity.profile_id,
+        profile_version=resolved_profile.identity.profile_version,
+        feature_schema_version=resolved_profile.identity.feature_schema_version,
+        occurrence_key=occurrence_key,
         source=MemoryPatternSourceRef(
             source_type=source_type,
             source_id=source_id,
@@ -159,6 +197,7 @@ def memory_pattern_command_from_run(
             observed_at=observed_at,
         ),
         signature=signature,
+        lesson=lesson,
         evidence_refs=list(dict.fromkeys(evidence_refs)),
         metadata={
             "pipeline_version": run.pipeline_version,
@@ -166,73 +205,74 @@ def memory_pattern_command_from_run(
             "prompt_version": run.prompt_version,
             "runtime_status": run.status.value,
             "window_time_source": "canonical_alert.event.event_time",
+            "memory_profile_id": resolved_profile.identity.profile_id,
+            "memory_profile_version": resolved_profile.identity.profile_version,
+            "memory_feature_schema_version": resolved_profile.identity.feature_schema_version,
         },
     )
 
 
-def _signature_from_run(run: AnalysisRun) -> MemoryPatternSignature:
-    request = run.llm_analysis_request
-    if request is None:
-        raise MemoryPatternIneligibleError("bounded analysis request is required")
+def _lesson_from_run(run: AnalysisRun) -> MemoryPatternLessonObservation:
+    analysis = run.analysis
+    if analysis is None:
+        raise MemoryPatternIneligibleError("memory pattern aggregation requires a completed analysis conclusion")
+    decision = run.decision
+    verdict = decision.verdict if decision is not None else analysis.verdict
     primary = next(
-        (item for item in (run.analysis.scenario_assessments if run.analysis else []) if item.is_primary),
+        (item for item in analysis.scenario_assessments if item.is_primary),
         None,
     )
-    common_facets = _common_facets(run)
-    if primary is not None:
-        value = _normalize_pattern_value(primary.scenario_key or primary.scenario_name)
-        return MemoryPatternSignature(
-            dimension=MemoryPatternDimension.SCENARIO,
-            value=value,
-            label=primary.scenario_name,
-            origin=f"analysis:{primary.origin.value}",
-            facets={
-                **common_facets,
-                "scenario_origin": [primary.origin.value],
-                "activity_stage": [primary.activity_stage.value],
-            },
-        )
-    if request.detection.detection_key:
-        return MemoryPatternSignature(
-            dimension=MemoryPatternDimension.DETECTION,
-            value=_normalize_pattern_value(request.detection.detection_key),
-            label=request.detection.rule_name or request.detection.detection_key,
-            origin="canonical_detection",
-            facets=common_facets,
-        )
-    if request.classification.category:
-        return MemoryPatternSignature(
-            dimension=MemoryPatternDimension.CATEGORY,
-            value=_normalize_pattern_value(request.classification.category),
-            label=request.classification.category,
-            origin="canonical_category",
-            facets=common_facets,
-        )
-    raise MemoryPatternIneligibleError("Runtime result has no primary scenario, detection key, or category")
+    direction = analysis.network_direction
+    return MemoryPatternLessonObservation(
+        verdict=verdict,
+        risk_class=_risk_class_for_verdict(verdict),
+        needs_review=(decision.needs_review if decision is not None else run.status is AnalysisRunStatus.NEEDS_REVIEW),
+        evidence_state=(decision.evidence_state if decision is not None else None),
+        summary=analysis.summary,
+        reason=analysis.reason,
+        recommended_action=analysis.recommended_action,
+        primary_scenario_key=(primary.scenario_key if primary is not None else None),
+        primary_scenario_name=(primary.scenario_name if primary is not None else None),
+        activity_stage=(primary.activity_stage if primary is not None else None),
+        boundary_direction=(direction.boundary_direction.value if direction is not None else None),
+        semantic_direction=(direction.semantic_direction if direction is not None else None),
+    )
 
 
 def _common_facets(run: AnalysisRun) -> dict[str, list[str]]:
     request = run.llm_analysis_request
     if request is None:
         return {}
-    facets: dict[str, list[str]] = {"source_type": [request.source.source_type.value]}
-    for key, value in (
-        ("source_system", request.source.source_system),
-        ("category", request.classification.category),
-        ("detection_key", request.detection.detection_key),
-    ):
-        if value:
-            facets[key] = [value]
-    return facets
+    return reusable_facet_values(
+        memory_facets_from_analysis_run(run),
+        {
+            "source_type",
+            "source_system",
+            "vendor",
+            "product",
+            "integration_name",
+            "detection_key",
+            "rule_code",
+            "rule_name",
+            "category",
+            "severity",
+            "environment",
+            "scenario_key",
+            "behavior_component",
+            "behavior_fingerprint",
+            "role_entity",
+            "entity",
+            "skill",
+        },
+    )
 
 
-def _normalize_pattern_value(value: str) -> str:
-    normalized = " ".join(value.split()).casefold()
-    if not normalized:
-        raise MemoryPatternIneligibleError("memory pattern value is blank")
-    if len(normalized) <= 256:
-        return normalized
-    return f"sha256:{stable_hash(normalized)}"
+def _risk_class_for_verdict(verdict: Verdict) -> MemoryPatternRiskClass:
+    if verdict in {Verdict.TRUE_POSITIVE, Verdict.SUSPICIOUS}:
+        return MemoryPatternRiskClass.RISK
+    if verdict is Verdict.FALSE_POSITIVE:
+        return MemoryPatternRiskClass.BENIGN
+    return MemoryPatternRiskClass.UNRESOLVED
 
 
 def _source_observed_at(run: AnalysisRun) -> datetime:

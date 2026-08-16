@@ -460,6 +460,98 @@ class SocMemoryRecordFacetRow(SocBase):
     facet_value_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
+class SocMemoryUseRow(SocBase):
+    """Append-only record of one confirmed Memory projected into one run."""
+
+    __tablename__ = "soc_memory_uses"
+    __table_args__ = (
+        Index("ix_soc_memory_uses_memory_created", "memory_id", "created_at"),
+        Index("ix_soc_memory_uses_run_created", "run_id", "created_at"),
+        Index("ix_soc_memory_uses_alert_created", "alert_id", "created_at"),
+    )
+
+    use_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(512), unique=True, index=True, nullable=False)
+    memory_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    memory_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    alert_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    tenant_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    effect: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    directive_applied: Mapped[bool] = mapped_column(Boolean, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    use_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SocMemoryFeedbackRow(SocBase):
+    """Append-only final-outcome feedback for one Memory use."""
+
+    __tablename__ = "soc_memory_feedback"
+    __table_args__ = (
+        Index("ix_soc_memory_feedback_memory_created", "memory_id", "created_at"),
+        Index("ix_soc_memory_feedback_run_created", "run_id", "created_at"),
+        Index("ix_soc_memory_feedback_alignment_created", "alignment", "created_at"),
+    )
+
+    feedback_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(512), unique=True, index=True, nullable=False)
+    use_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    memory_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    memory_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    alert_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    trust: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    alignment: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    feedback_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SocMemoryHealthRow(SocBase):
+    """Versioned current health derived from append-only Memory feedback."""
+
+    __tablename__ = "soc_memory_health"
+    __table_args__ = (
+        UniqueConstraint(
+            "memory_id",
+            "memory_version",
+            name="uq_soc_memory_health_memory_version",
+        ),
+        Index("ix_soc_memory_health_status_updated", "status", "updated_at"),
+    )
+
+    health_key: Mapped[str] = mapped_column(String(160), primary_key=True)
+    memory_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    memory_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    health_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class SocMemoryRevisionProposalRow(SocBase):
+    """Reviewable response to material Memory feedback."""
+
+    __tablename__ = "soc_memory_revision_proposals"
+    __table_args__ = (
+        Index(
+            "ix_soc_memory_revision_memory_status",
+            "memory_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+    proposal_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(512), unique=True, index=True, nullable=False)
+    memory_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    memory_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_feedback_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    proposal_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
 class SocGovernedContextFactRow(SocBase):
     """One immutable version in a governed operational-context fact stream."""
 
@@ -874,6 +966,11 @@ class SocMemoryPatternObservationRow(SocBase):
             "source_id",
             name="uq_soc_memory_pattern_aggregation_source",
         ),
+        UniqueConstraint(
+            "aggregation_key",
+            "occurrence_key",
+            name="uq_soc_memory_pattern_aggregation_occurrence",
+        ),
         Index(
             "ix_soc_memory_pattern_scope_window",
             "tenant_id",
@@ -896,6 +993,10 @@ class SocMemoryPatternObservationRow(SocBase):
     tenant_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
     environment: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
     data_class: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    profile_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    profile_version: Mapped[str | None] = mapped_column(String(128))
+    feature_schema_version: Mapped[str | None] = mapped_column(String(128))
+    occurrence_key: Mapped[str | None] = mapped_column(String(64), index=True)
     source_type: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     source_id: Mapped[str] = mapped_column(String(256), index=True, nullable=False)
     run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)

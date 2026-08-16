@@ -139,7 +139,7 @@ class _FakePatternResult:
 
     def model_dump(self, **_kwargs: object) -> dict[str, object]:
         return {
-            "schema_version": "soc.memory_pattern_aggregation_result.v1",
+            "schema_version": "soc.memory_pattern_aggregation_result.v2",
             "observation": {
                 "observation_id": self.observation.observation_id,
                 "aggregation_key": self.observation.aggregation_key,

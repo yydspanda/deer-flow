@@ -31,6 +31,7 @@ from soc_agent.contracts import (
     SocDaemonMessage,
     SocMemoryCandidateSourceType,
     SocMemoryCandidateStatus,
+    SocMemoryCandidateType,
     TriageActivityStage,
     TriageScenarioAssessment,
     TriageScenarioOrigin,
@@ -65,46 +66,48 @@ def _run(
     detection_key: str | None = "generic:detector:credential-access",
     category: str | None = "credential_access",
     scenario_key: str | None = None,
+    verdict: Verdict = Verdict.SUSPICIOUS,
 ) -> AnalysisRun:
-    analysis = None
+    scenario_assessments = []
     if scenario_key is not None:
-        analysis = AnalysisResult(
-            verdict=Verdict.SUSPICIOUS,
-            confidence=0.7,
-            summary="Repeated endpoint behavior requires review.",
-            evidence=[
-                EvidenceItem(
-                    evidence_ref="E-000000000001",
-                    source="canonical",
-                    description="Observed process",
-                    value="cmd.exe",
-                )
-            ],
-            reasoning=[
-                AnalysisReasoningItem(
-                    reasoning_id="R-01",
-                    statement="The bounded process evidence supports this hypothesis.",
-                    basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
-                    evidence_refs=["E-000000000001"],
-                    confidence=0.7,
-                )
-            ],
-            scenario_assessments=[
-                TriageScenarioAssessment(
-                    scenario_name="Credential access behavior",
-                    scenario_key=scenario_key,
-                    is_primary=True,
-                    origin=TriageScenarioOrigin.INFERRED,
-                    confidence=0.7,
-                    activity_stage=TriageActivityStage.ATTEMPT_OBSERVED,
-                    evidence_refs=["E-000000000001"],
-                    reasoning_refs=["R-01"],
-                    rationale="The bounded process evidence supports this hypothesis.",
-                )
-            ],
-            reason="Bounded test reasoning.",
-            recommended_action="review",
+        scenario_assessments.append(
+            TriageScenarioAssessment(
+                scenario_name="Credential access behavior",
+                scenario_key=scenario_key,
+                is_primary=True,
+                origin=TriageScenarioOrigin.INFERRED,
+                confidence=0.7,
+                activity_stage=TriageActivityStage.ATTEMPT_OBSERVED,
+                evidence_refs=["E-000000000001"],
+                reasoning_refs=["R-01"],
+                rationale="The bounded process evidence supports this hypothesis.",
+            )
         )
+    analysis = AnalysisResult(
+        verdict=verdict,
+        confidence=0.7,
+        summary="Repeated endpoint behavior requires review.",
+        evidence=[
+            EvidenceItem(
+                evidence_ref="E-000000000001",
+                source="canonical",
+                description="Observed process",
+                value="cmd.exe",
+            )
+        ],
+        reasoning=[
+            AnalysisReasoningItem(
+                reasoning_id="R-01",
+                statement="The bounded process evidence supports this hypothesis.",
+                basis=[AnalysisReasoningBasis.CURRENT_EVIDENCE],
+                evidence_refs=["E-000000000001"],
+                confidence=0.7,
+            )
+        ],
+        scenario_assessments=scenario_assessments,
+        reason="Bounded test reasoning.",
+        recommended_action="review",
+    )
     return AnalysisRun(
         run_id=f"RUN-PATTERN-{index:03d}",
         alert_id=f"ALERT-PATTERN-{index:03d}",
@@ -143,6 +146,7 @@ def _service(
         policy=MemoryPatternAggregationPolicy(
             minimum_support=threshold,
             minimum_distinct_sources=threshold,
+            minimum_conclusive_support=threshold,
         ),
     )
 
@@ -182,6 +186,12 @@ def test_distinct_sources_create_one_frozen_pending_candidate() -> None:
     assert third.candidate.status is SocMemoryCandidateStatus.PENDING_REVIEW
     assert third.candidate.source.source_type is SocMemoryCandidateSourceType.REPEATED_PATTERN
     assert third.candidate.runtime_decision_allowed is False
+    assert third.cohort_quality.quality_gate_passed is True
+    assert third.cohort_quality.dominant_risk_class.value == "risk"
+    assert third.candidate.facets["detection_key"] == ["generic:detector:credential-access"]
+    assert "经验结论" in third.candidate.content
+    assert "风险判断：有风险" in third.candidate.content
+    assert "代表性研判" in third.candidate.content
     assert third.candidate.metadata["candidate_snapshot_frozen"] is True
     assert third.candidate.metadata["support_count_at_creation"] == 3
 
@@ -219,6 +229,116 @@ def test_primary_scenario_generalizes_without_rule_code() -> None:
     assert final.candidate_created is True
     assert final.candidate is not None
     assert final.candidate.facets["pattern_dimension"] == ["scenario"]
+
+
+def test_conflicting_outcomes_do_not_create_expert_review_candidate() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    service = _service(repository, threshold=4)
+
+    results = [
+        _observe(
+            service,
+            _run(index, verdict=verdict),
+            transport_ref=f"batch:conflict:{index}",
+        )
+        for index, verdict in enumerate(
+            (
+                Verdict.TRUE_POSITIVE,
+                Verdict.FALSE_POSITIVE,
+                Verdict.SUSPICIOUS,
+                Verdict.FALSE_POSITIVE,
+            ),
+            start=1,
+        )
+    ]
+
+    final = results[-1]
+    assert final.threshold_met is True
+    assert final.cohort_quality.quality_gate_passed is False
+    assert final.cohort_quality.consistency_ratio == 0.5
+    assert "inconsistent_risk_outcomes" in final.cohort_quality.reason_codes
+    assert final.candidate is None
+    assert repository.list_memory_candidates() == []
+
+
+def test_consistent_false_positive_cohort_creates_benign_pattern_lesson() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    service = _service(repository, threshold=3)
+
+    results = [
+        _observe(
+            service,
+            _run(index, verdict=Verdict.FALSE_POSITIVE),
+            transport_ref=f"batch:benign:{index}",
+        )
+        for index in range(1, 4)
+    ]
+
+    candidate = results[-1].candidate
+    assert candidate is not None
+    assert candidate.candidate_type is SocMemoryCandidateType.BENIGN_PATTERN
+    assert "风险判断：无风险/误报模式" in candidate.content
+    assert candidate.decision_impact.value == "review_hint"
+
+
+def test_equivalent_lesson_in_later_window_does_not_create_another_candidate() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    service = _service(repository, threshold=2)
+
+    first_results = [
+        _observe(
+            service,
+            _run(index),
+            transport_ref=f"batch:first-window:{index}",
+        )
+        for index in range(1, 3)
+    ]
+    first_candidate = first_results[-1].candidate
+    assert first_candidate is not None
+
+    second_results = []
+    for index in range(3, 5):
+        run = _run(index)
+        run.input_payload["event_time"] = (_START + timedelta(days=1, minutes=index)).isoformat()
+        second_results.append(
+            _observe(
+                service,
+                run,
+                transport_ref=f"batch:second-window:{index}",
+            )
+        )
+
+    final = second_results[-1]
+    assert final.threshold_met is True
+    assert final.candidate_created is False
+    assert final.candidate_coverage == "equivalent_lesson"
+    assert final.candidate == first_candidate
+    assert "reinforcement observations" in final.note
+    assert len(repository.list_memory_candidates()) == 1
+
+    replay = service.replay(final.observation.aggregation_key)
+    assert replay.candidate_id == first_candidate.candidate_id
+    assert replay.candidate_coverage == "equivalent_lesson"
+    assert replay.candidate_origin_aggregation_key == first_results[-1].observation.aggregation_key
+    assert replay.source_integrity_checked is False
+    assert replay.changed is False
+
+
+def test_completed_run_without_analysis_is_not_a_memory_observation() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    service = _service(repository)
+    run = _run(1)
+    run.analysis = None
+
+    from soc_agent.memory import MemoryPatternIneligibleError
+
+    with pytest.raises(
+        MemoryPatternIneligibleError,
+        match="requires a completed analysis conclusion",
+    ):
+        _observe(service, run, transport_ref="batch:no-analysis")
+
+    assert repository.list_memory_pattern_observations() == []
 
 
 def test_duplicate_alert_across_batch_and_kafka_counts_once() -> None:

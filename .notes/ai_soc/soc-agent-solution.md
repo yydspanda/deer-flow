@@ -1369,7 +1369,7 @@ flowchart LR
     MAP --> EVENT["SocExternalDispositionEvent"]
     EVENT --> TX["🔒 SocMutationUnitOfWork<br/>one external event / one transaction"]
     TX --> REVIEW["ReviewQueue state/reason sync"]
-    TX --> CAND["Memory Candidate<br/>pending_review"]
+    TX --> FEEDBACK["Memory Feedback<br/>only for exact M-* used by this run"]
     TX --> AUDIT["Decision + Mutation Audit"]
     TX --> EXT["ExternalDispositionRecord"]
 ```
@@ -1387,10 +1387,12 @@ Rules:
 - This closes the generic application boundary only. Real Zeus/ITSM/SOAR webhook, Kafka or polling
   feeds still require customer endpoint, authentication/signature, tenant and replay configuration.
 - External reason may update local review state if target resolution is unique and trusted.
-- External reason can generate memory candidates.
-- External reason cannot become confirmed memory without review.
+- External reason does not create one Memory candidate per event. It updates the exact used-Memory
+  feedback/health lineage; new reusable knowledge still requires explicit analyst promotion or the
+  repeated-pattern quality gate.
+- External reason cannot become confirmed Memory directly.
 - Mapping must be configurable per external system.
-- Local correction, summary/queue, candidate, external record, eligible outcome and both audit
+- Local correction, summary/queue, used-Memory feedback, external record, eligible outcome and both audit
   records commit atomically; events are emitted only after commit. An exact retry returns the one
   existing logical result, while reuse of the idempotency key for changed content conflicts.
 
@@ -1846,6 +1848,13 @@ flowchart TD
     CTX --> TD{"📎 Reviewed typed directive<br/>exact version + score + facets?"}
     TD -->|"yes"| TR["🔁 Effective Decision Transition<br/>before / after"]
     TD -->|"no"| RO["🧠 Reasoning context only"]
+    TR --> U["🧾 Memory Use<br/>exact record/version/match/effect"]
+    RO --> U
+    U --> F["👤/🔄 Final Outcome Feedback<br/>analyst correction / external disposition"]
+    F --> H{"❤️ Health + Revision<br/>support or contradiction"}
+    H -->|"supports"| P
+    H -->|"high-trust risk contradicts benign lesson"| SS["⛔ Safety suspension<br/>retrieval disabled + proposal"]
+    H -->|"other contradiction"| RR["📝 Revision proposal<br/>human review"]
     RP -->|"direct flag / expired / overdue / weak"| NO
 ```
 
@@ -1882,13 +1891,32 @@ Rules:
   A manual checkpoint rewrite therefore invalidates conclusion acceptance instead of manufacturing trusted
   middleware lineage; normal server-side graph writes retain the provenance.
 - Kafka/batch records are observations, not memories. PI-03F3 uses
-  `soc.memory_pattern_aggregation.v1`: choose one strongest vendor-neutral dimension (primary scenario,
-  canonical detection key, then category), isolate tenant/environment/`simulation|operational`, and place the
-  canonical timezone-aware source event time in a fixed UTC window. The default 24-hour policy requires both
-  5 observations and 5 distinct alert sources before proposing exactly one frozen `pending_review`
-  repeated-pattern candidate. Missing/naive event time is ineligible; later observations are replay-only and
-  supersession is manual. Never write one candidate per alert/finding, and never treat recurrence as evidence
-  of benignness, maliciousness, authorization, impact, or a permitted action.
+  `soc.memory_pattern_aggregation.v3`: the generic fallback chooses one strongest vendor-neutral dimension;
+  a server-owned tenant profile may define stricter same-class and duplicate-occurrence semantics without
+  changing Runtime. Cohorts isolate tenant/environment/`simulation|operational`, and place the
+  canonical timezone-aware source event time in a fixed UTC window. The default 24-hour policy first requires
+  5 observations and 5 distinct alert sources, then separately requires 5 conclusive outcomes, at least 80%
+  risk/benign consistency, and one consensus strong retrieval anchor before proposing exactly one frozen
+  `pending_review` pattern lesson. Conflicted, unresolved, weak-anchor and low-support cohorts remain observations
+  and do not consume expert review. Missing/naive event time is ineligible; later observations are replay-only and
+  supersession is manual. Never write one candidate per alert/finding.
+- Each v3 observation carries a bounded conclusion snapshot: verdict/risk class, review/evidence state, summary,
+  reason, recommendation, primary scenario/stage and direction. Candidate content is synthesized at cohort level
+  into applicability scope, verdict distribution, consistency, representative conclusions, minority/unresolved
+  counts and review boundaries. It must not be a copy of one alert. Confirmation remains human-governed, but the
+  expert reviews a reusable pattern candidate rather than every source alert.
+- Candidate idempotency uses a stable lesson fingerprint over cohort lineage, dominant risk class and consensus
+  strong anchors. An equivalent lesson in a later fixed window produces reinforcement observations and reuses the
+  existing governed candidate instead of creating another expert task. A changed risk class or strong-anchor scope
+  is a material new lesson; it may create a new candidate, but never auto-supersedes the reviewed record.
+- PingAn uses `PingAnSocMemoryProfile` behind the generic profile protocol. It consumes canonical Adapter output,
+  uses a canonical detection-key + behavior-fingerprint compound when both exist, treats detection-only as
+  non-decisive rule context, retains behavior-only as the ruleless pattern fallback, rejects broad category-only
+  cohorts, and deduplicates one upstream event/input occurrence before support counting. Another tenant can register
+  another profile; generic contracts and persistence do not import PingAn fields.
+- A quality-gated candidate carries `SocMemoryApplicabilitySpec`: profile/version/feature-schema identity, exact
+  required/optional/excluded facets, and strong-anchor threshold. Retrieval evaluates this independently of ranking.
+  A profile mismatch, exclusion hit, or missing required facet cannot produce an effective decision change.
 - Confirmation requires explicit human action through `SocMemoryService`.
 - Confirmation does not make a record retrievable. `SocMemoryService.set_retrieval_activation()` is the
   only enable/disable boundary and requires an authorized memory governor, reason, expected record
@@ -1907,12 +1935,20 @@ Rules:
 - Free-form Memory remains reasoning context. A deterministic effective-decision change requires a
   reviewer-authored `SocMemoryDecisionDirective` and exact version/activation/validity/review/score/facet
   gates. The transition is appended; the original Runtime decision is not rewritten.
+- Every projected `M-*` is persisted as an idempotent `SocMemoryUseRecord` after post-Runtime automation, including
+  exact record/version/hash, score, matched facets, applicability, base/effective verdict and transition effect.
+  Analyst correction or trusted external disposition then creates append-only `SocMemoryFeedbackEvent` records and
+  updates versioned health. A contradiction creates a review proposal; high-trust risk feedback contradicting an
+  active benign directive immediately disables retrieval through a disable-only safety-monitor role. No feedback
+  silently rewrites a confirmed record.
 - Memory never grants action authority. A separate reviewed `SocAutomationPolicy` can authorize the
   current alert with or without Memory, and always records independent authorization/execution lineage.
 - Active operational facts are not confirmed memory. Memory may describe how a scanner or exercise
   team tends to behave, but only governed-context services and typed matchers can determine identity,
   campaign applicability and authorization for a specific event time.
 - Wiki/OKF-style displays can be exported later from DB memory, but DB remains the source of truth.
+- The complete PingAn design, interfaces, rollout and metrics are maintained in
+  `memory/pingan-soc-memory-design.md`.
 
 ---
 

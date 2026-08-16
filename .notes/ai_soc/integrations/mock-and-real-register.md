@@ -120,7 +120,8 @@ adapter/provider/config，并继续将结果作为 `InvestigationEvidence` 回�
 - `SocExternalDispositionEvent`：vendor-neutral 输入事件。
 - `SocExternalDispositionIngressCommand` + `POST /api/soc/external-dispositions`：当前真实的 authenticated canonical application ingress。
 - `SocExternalDispositionAdapterConfig`：把 Zeus/ITSM/SIEM/SOAR payload 映射到 canonical event 的配置。
-- `SocExternalDispositionService.apply_event()`：唯一写入 external disposition record、audit、review/correction、后续 memory candidate 的 service 边界。
+- `SocExternalDispositionService.apply_event()`：唯一写入 external disposition record、audit、review/correction
+  和 exact used-Memory feedback 的 service 边界；不逐外部事件创建 Memory candidate。
 - `SqlAlchemyAlertRepository` + migration `0009`：当前真实持久化；`InMemoryExternalDispositionRepository` 只用于 tests/smoke。
 
 当前未完成的是“真实外部系统 -> canonical command”的 source adapter。真实 feed 接入后仍调用上述

@@ -1509,14 +1509,17 @@ def _parse_request_line(req_header: str) -> dict[str, str]:
     return result
 
 
-def _detection_key(alert: AlertInput) -> str:
+def _detection_key(alert: AlertInput) -> str | None:
     source = alert.source.source_system or alert.source.product or alert.source.source_type.value or "unknown"
     source_part = source.strip().lower().replace(" ", "_")
     if alert.detection.rule_code:
         return f"{source_part}:rule_code:{alert.detection.rule_code.strip().lower().replace(' ', '_')}"
     if alert.detection.rule_name:
         return f"{source_part}:rule_name:{alert.detection.rule_name.strip().lower().replace(' ', '_')}"
-    return f"{source_part}:alert:{alert.alert_id}"
+    # An alert ID identifies one occurrence, not a reusable detector class.
+    # Leave the key absent so the PingAn Memory Profile can use a reviewed
+    # canonical behavior fingerprint or mark the observation ineligible.
+    return None
 
 
 def _first_dict(value: Any) -> dict[str, Any]:

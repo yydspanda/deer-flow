@@ -59,11 +59,16 @@ class MemoryAdmissionService:
             reason_length = int(command.metadata.get("correction_reason_length") or 0)
             human_signal = True
             reason_is_strong = reason_length >= 20
+            explicit = command.source.metadata.get("promote_to_memory") is True
             if previous != corrected:
-                promotion_signal = True
                 reasons.append(MemoryAdmissionReasonCode.VERDICT_CHANGED)
             else:
                 reasons.append(MemoryAdmissionReasonCode.CONFIRMATION_ONLY)
+            promotion_signal = explicit
+            if explicit:
+                reasons.append(MemoryAdmissionReasonCode.EXPLICIT_PROMOTION_REQUESTED)
+            else:
+                reasons.append(MemoryAdmissionReasonCode.NO_HUMAN_PROMOTION_SIGNAL)
         elif source_type is SocMemoryCandidateSourceType.REVIEW_NOTE:
             origin = command.source.metadata.get("origin")
             accepted = origin == "accepted_lead_agent_conclusion"

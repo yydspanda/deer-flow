@@ -23,13 +23,6 @@ from soc_agent.contracts import (
     SocExternalDispositionEvent,
     SocExternalDispositionMappingConfig,
     SocExternalDispositionRecord,
-    SocMemoryCandidateCreateCommand,
-    SocMemoryCandidateSource,
-    SocMemoryCandidateSourceType,
-    SocMemoryCandidateType,
-    SocMemoryCandidateValidity,
-    SocMemoryDecisionImpact,
-    SocMemoryTargetArtifact,
     SocMutationOperation,
     Verdict,
 )
@@ -212,14 +205,9 @@ class SocExternalDispositionService:
                 "correction_applied": correction_id is not None,
             },
         )
-        memory_candidate_id = self._propose_memory_candidate(
-            record,
-            target=target,
-            trust_level=status_mapping.trust_level,
-            apply_status=apply_status,
-            correction_id=correction_id,
-            context=request_context,
-        )
+        # External outcomes are high-value feedback for memories already used by
+        # this run. They do not create one new candidate per ticket event.
+        memory_candidate_id = None
         record = record.model_copy(
             update={
                 "memory_candidate_id": memory_candidate_id,
@@ -437,81 +425,6 @@ class SocExternalDispositionService:
             idempotent=result.idempotent,
         )
 
-    def _propose_memory_candidate(
-        self,
-        record: SocExternalDispositionRecord,
-        *,
-        target: _LocatedExternalDispositionTarget | None,
-        trust_level: str,
-        apply_status: SocExternalDispositionApplyStatus,
-        correction_id: str | None,
-        context: ServiceRequestContext,
-    ) -> str | None:
-        if self._memory_service is None:
-            return None
-        reason = record.event.external_reason.strip() if record.event.external_reason else ""
-        if not reason:
-            return None
-        if apply_status is not SocExternalDispositionApplyStatus.MAPPED or target is None:
-            return None
-        candidate_type = _memory_candidate_type_for_external_status(record.canonical_status)
-        if candidate_type is None:
-            return None
-
-        candidate = self._memory_service.propose_candidate(
-            SocMemoryCandidateCreateCommand(
-                candidate_type=candidate_type,
-                target_artifact=SocMemoryTargetArtifact.TENANT_MEMORY,
-                summary=_external_memory_candidate_summary(record),
-                content=reason,
-                tenant_scope=record.event.tenant_id or "global",
-                tenant_id=record.event.tenant_id,
-                source=SocMemoryCandidateSource(
-                    source_type=SocMemoryCandidateSourceType.EXTERNAL_DISPOSITION,
-                    source_id=record.disposition_id,
-                    run_id=target.run_id,
-                    alert_id=target.alert_id,
-                    queue_id=target.queue_id,
-                    correction_id=correction_id,
-                    metadata={
-                        "external_system": record.event.external_system,
-                        "external_case_id": record.event.external_case_id,
-                        "external_status": record.event.external_status,
-                        "canonical_status": record.canonical_status.value,
-                        "apply_status": apply_status.value,
-                        "mapping_trust_level": trust_level,
-                    },
-                ),
-                evidence_refs=_memory_candidate_evidence_refs(record, target),
-                validity=SocMemoryCandidateValidity(
-                    notes="External disposition reason is operator feedback and must be reviewed before reuse.",
-                ),
-                idempotency_key=f"memory_candidate:{record.idempotency_key}",
-                confidence=_memory_candidate_confidence(trust_level),
-                facets=_memory_candidate_facets(record, trust_level=trust_level, apply_status=apply_status),
-                decision_impact=_memory_candidate_decision_impact(record.canonical_status),
-                review_owner="soc_analyst",
-                labels=[
-                    "external-disposition",
-                    "candidate-only",
-                    record.event.external_system,
-                    record.canonical_status.value,
-                ],
-                metadata={
-                    "external_system": record.event.external_system,
-                    "external_case_id": record.event.external_case_id,
-                    "source_event_id": record.event.source_event_id,
-                    "source_version": record.event.source_version,
-                    "raw_payload_hash": record.event.raw_payload_hash,
-                    "matched_by": record.matched_by,
-                    "correction_id": correction_id,
-                    "runtime_decision_allowed": False,
-                },
-            ),
-            context=context,
-        )
-        return candidate.candidate_id
-
     def _apply_review_correction(
         self,
         event: SocExternalDispositionEvent,
@@ -538,7 +451,11 @@ class SocExternalDispositionService:
             summary_repository=self._summary_repository,
             audit_repository=self._audit_repository,
             review_queue_repository=self._review_queue_repository,
+            memory_record_repository=(self._repository if callable(getattr(self._repository, "get_memory_record", None)) else None),
+            mutation_audit_repository=self._mutation_audit_repository,
+            mutation_uow=self._mutation_uow,
             event_sink=self._event_sink,
+            _transaction_active=self._transaction_active,
         )
         run = review_service.correct_external(
             CorrectionCommand(
@@ -696,76 +613,6 @@ def _verdict_for_external_status(status: SocExternalDispositionCanonicalStatus) 
     if status is SocExternalDispositionCanonicalStatus.CLOSED_BENIGN_TRUE_POSITIVE:
         return Verdict.TRUE_POSITIVE
     return None
-
-
-def _memory_candidate_type_for_external_status(status: SocExternalDispositionCanonicalStatus) -> SocMemoryCandidateType | None:
-    if status in {
-        SocExternalDispositionCanonicalStatus.CLOSED_FALSE_POSITIVE,
-        SocExternalDispositionCanonicalStatus.CLOSED_BENIGN_TRUE_POSITIVE,
-        SocExternalDispositionCanonicalStatus.SUPPRESSED,
-        SocExternalDispositionCanonicalStatus.IGNORED,
-    }:
-        return SocMemoryCandidateType.BENIGN_PATTERN
-    if status in {
-        SocExternalDispositionCanonicalStatus.CLOSED_TRUE_POSITIVE,
-        SocExternalDispositionCanonicalStatus.ESCALATED,
-    }:
-        return SocMemoryCandidateType.DETECTION_LESSON
-    return None
-
-
-def _memory_candidate_decision_impact(status: SocExternalDispositionCanonicalStatus) -> SocMemoryDecisionImpact:
-    if status is SocExternalDispositionCanonicalStatus.SUPPRESSED:
-        return SocMemoryDecisionImpact.SUPPRESSION_HINT
-    return SocMemoryDecisionImpact.REVIEW_HINT
-
-
-def _memory_candidate_confidence(trust_level: str) -> float:
-    if trust_level == "high":
-        return 0.65
-    if trust_level == "medium":
-        return 0.5
-    return 0.35
-
-
-def _external_memory_candidate_summary(record: SocExternalDispositionRecord) -> str:
-    return f"External disposition feedback from {record.event.external_system}: {record.canonical_status.value}"
-
-
-def _memory_candidate_facets(
-    record: SocExternalDispositionRecord,
-    *,
-    trust_level: str,
-    apply_status: SocExternalDispositionApplyStatus,
-) -> dict[str, list[str]]:
-    facets = {
-        "source_type": ["external_disposition"],
-        "external_system": [record.event.external_system],
-        "canonical_status": [record.canonical_status.value],
-        "apply_status": [apply_status.value],
-        "mapping_trust_level": [trust_level],
-    }
-    if record.event.tenant_id:
-        facets["tenant"] = [record.event.tenant_id]
-    if record.target_alert_id:
-        facets["alert_id"] = [record.target_alert_id]
-    if record.target_run_id:
-        facets["run_id"] = [record.target_run_id]
-    return facets
-
-
-def _memory_candidate_evidence_refs(
-    record: SocExternalDispositionRecord,
-    target: _LocatedExternalDispositionTarget,
-) -> list[str]:
-    refs = [f"external_disposition:{record.disposition_id}"]
-    if target.run_id:
-        refs.append(f"run:{target.run_id}")
-    if target.alert_id:
-        refs.append(f"alert:{target.alert_id}")
-    if target.queue_id:
-        refs.append(f"review_queue:{target.queue_id}")
-    return refs
 
 
 def _external_correction_reason(event: SocExternalDispositionEvent, canonical_status: SocExternalDispositionCanonicalStatus) -> str:

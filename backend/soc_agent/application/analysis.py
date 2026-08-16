@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import os
 
+from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.automation import load_soc_automation_policy
 from soc_agent.core import (
     DeterministicAnalysisRuntime,
     SocAnalysisService,
     SocAuthorizedActivityService,
     SocAutomationService,
+    SocMemoryEvolutionService,
     SocMemoryService,
     SocNormalizationMaintenanceService,
     SocTenantPolicyEvaluationService,
@@ -43,6 +45,7 @@ def build_soc_analysis_service(
     *,
     settings: SocLLMSettings | None = None,
     action_adapter_registry: SocActionAdapterRegistryPort | None = None,
+    memory_environment: str | None = None,
 ) -> SocAnalysisService:
     """Build the one analysis service shared by CLI and offline batch entry points."""
 
@@ -60,7 +63,10 @@ def build_soc_analysis_service(
         settings=resolved_settings,
         action_adapter_registry=action_adapter_registry,
     )
-    analysis_request_enricher = _build_analysis_request_enricher(repository)
+    analysis_request_enricher = _build_analysis_request_enricher(
+        repository,
+        memory_environment=_resolve_memory_environment(memory_environment),
+    )
     analyzer, role_verifier = build_configured_analysis_nodes(
         settings=resolved_settings,
     )
@@ -83,6 +89,8 @@ def build_soc_analysis_service(
 
 def _build_analysis_request_enricher(
     repository: SqlAlchemyAlertRepository | None,
+    *,
+    memory_environment: str | None,
 ) -> CompositeAnalysisRequestEnricher:
     enrichers = [
         TenantKnowledgeAnalysisRequestEnricher(
@@ -93,9 +101,27 @@ def _build_analysis_request_enricher(
         enrichers.append(
             ConfirmedMemoryAnalysisRequestEnricher(
                 SocMemoryService(record_repository=repository),
+                profile_registry=build_soc_memory_profile_registry(),
+                environment=memory_environment,
             )
         )
     return CompositeAnalysisRequestEnricher(enrichers)
+
+
+def _resolve_memory_environment(explicit: str | None) -> str | None:
+    candidates = {
+        value.strip().casefold()
+        for value in (
+            explicit,
+            os.environ.get("SOC_MEMORY_ENVIRONMENT"),
+            os.environ.get("SOC_TENANT_POLICY_ENVIRONMENT"),
+            os.environ.get("SOC_AUTOMATION_ENVIRONMENT"),
+        )
+        if value is not None and value.strip()
+    }
+    if len(candidates) > 1:
+        raise ValueError("SOC memory, tenant-policy and automation environments must match")
+    return next(iter(candidates), None)
 
 
 def _build_post_analysis_observers(
@@ -174,15 +200,13 @@ def _build_post_analysis_observers(
         raise ValueError("SOC_PINGAN_SOFTWARE_PATH_FAST_POLICY_ENABLED requires SOC_TENANT_POLICY_ENABLED=true")
 
     automation_path = os.environ.get("SOC_AUTOMATION_POLICY_PATH", "").strip()
-    if automation_path or tenant_policy_enabled:
-        if repository is None:
-            raise ValueError("SOC automation evaluation requires persisted analysis repository")
+    if repository is not None:
         automation_environment = os.environ.get("SOC_AUTOMATION_ENVIRONMENT", "").strip()
         if automation_path and not automation_environment:
             raise ValueError("SOC_AUTOMATION_ENVIRONMENT is required when SOC_AUTOMATION_POLICY_PATH is configured")
         if automation_environment and tenant_environment and automation_environment.casefold() != tenant_environment.casefold():
             raise ValueError("SOC automation and tenant policy environments must match")
-        environment = automation_environment or tenant_environment
+        environment = automation_environment or tenant_environment or "default"
         execute_actions = _strict_env_bool(
             "SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS",
             default=False,
@@ -201,6 +225,17 @@ def _build_post_analysis_observers(
                 execute_authorized_actions=execute_actions,
             )
         )
+        observers.append(
+            SocMemoryEvolutionService(
+                repository=repository,
+                memory_record_repository=repository,
+                automation_repository=repository,
+                mutation_audit_repository=repository,
+                mutation_uow=repository,
+            )
+        )
+    elif automation_path or tenant_policy_enabled:
+        raise ValueError("SOC automation and Memory evolution require persisted analysis repository")
     return tuple(observers)
 
 

@@ -19,6 +19,7 @@ from soc_agent.contracts import (
     AnalysisRun,
     AnalysisRunStatus,
     AuthorizationEnrichmentRecord,
+    CorrectionRecord,
     Decision,
     DecisionAuditRecord,
     GovernedContextFact,
@@ -70,9 +71,15 @@ from soc_agent.contracts import (
     SocExternalDispositionRecord,
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
+    SocMemoryFeedbackEvent,
+    SocMemoryFeedbackResult,
+    SocMemoryHealthRecord,
     SocMemoryQuery,
     SocMemoryRecord,
     SocMemoryRecordStatus,
+    SocMemoryRevisionProposal,
+    SocMemoryRevisionProposalStatus,
+    SocMemoryUseRecord,
     SocMutationAuditRecord,
     SocMutationOperation,
     SocOperationsKafkaSnapshot,
@@ -528,6 +535,11 @@ class MemoryCandidateRepository(Protocol):
 
     def find_memory_candidate_by_idempotency_key(self, idempotency_key: str) -> SocMemoryCandidate | None: ...
 
+    def find_memory_candidate_by_source_id(
+        self,
+        source_id: str,
+    ) -> SocMemoryCandidate | None: ...
+
     def list_memory_candidates(
         self,
         *,
@@ -585,6 +597,98 @@ class MemoryPatternObserver(Protocol):
         data_class: MemoryPatternDataClass,
         context: ServiceRequestContext,
     ) -> MemoryPatternAggregationResult: ...
+
+
+class MemoryEvolutionRepository(Protocol):
+    """Append-only use/feedback plus versioned health persistence."""
+
+    def save_memory_use(self, record: SocMemoryUseRecord) -> None: ...
+
+    def find_memory_use_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SocMemoryUseRecord | None: ...
+
+    def list_memory_uses(
+        self,
+        *,
+        memory_id: str | None = None,
+        run_id: str | None = None,
+        alert_id: str | None = None,
+        limit: int = 500,
+    ) -> list[SocMemoryUseRecord]: ...
+
+    def save_memory_feedback(self, event: SocMemoryFeedbackEvent) -> None: ...
+
+    def find_memory_feedback_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SocMemoryFeedbackEvent | None: ...
+
+    def list_memory_feedback(
+        self,
+        *,
+        memory_id: str | None = None,
+        run_id: str | None = None,
+        limit: int = 500,
+    ) -> list[SocMemoryFeedbackEvent]: ...
+
+    def get_memory_health(
+        self,
+        memory_id: str,
+        memory_version: int,
+    ) -> SocMemoryHealthRecord | None: ...
+
+    def compare_and_set_memory_health(
+        self,
+        record: SocMemoryHealthRecord,
+        *,
+        expected_version: int | None,
+    ) -> bool: ...
+
+    def save_memory_revision_proposal(
+        self,
+        proposal: SocMemoryRevisionProposal,
+    ) -> None: ...
+
+    def get_memory_revision_proposal(
+        self,
+        proposal_id: str,
+    ) -> SocMemoryRevisionProposal | None: ...
+
+    def find_memory_revision_proposal_by_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> SocMemoryRevisionProposal | None: ...
+
+    def list_memory_revision_proposals(
+        self,
+        *,
+        memory_id: str | None = None,
+        status: SocMemoryRevisionProposalStatus | None = None,
+        limit: int = 500,
+    ) -> list[SocMemoryRevisionProposal]: ...
+
+    def compare_and_set_memory_revision_proposal(
+        self,
+        proposal: SocMemoryRevisionProposal,
+        *,
+        expected_status: SocMemoryRevisionProposalStatus,
+    ) -> bool: ...
+
+
+class MemoryFeedbackObserver(Protocol):
+    """Correction bridge implemented by the Memory evolution service."""
+
+    def capture_run_usage(self, run: AnalysisRun) -> list[SocMemoryUseRecord]: ...
+
+    def record_correction_feedback(
+        self,
+        run: AnalysisRun,
+        correction: CorrectionRecord,
+        *,
+        context: ServiceRequestContext,
+    ) -> SocMemoryFeedbackResult: ...
 
 
 class MemoryRecordRepository(Protocol):
@@ -896,6 +1000,7 @@ class SocMutationRepository(
     SocAgentApprovalRequestRepository,
     SocMutationAuditRepository,
     MemoryPatternObservationRepository,
+    MemoryEvolutionRepository,
     SkillImprovementRepository,
     Protocol,
 ):

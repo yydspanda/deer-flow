@@ -38,6 +38,15 @@ class InMemoryMemoryCandidateRepository:
                 return candidate
         return None
 
+    def find_memory_candidate_by_source_id(
+        self,
+        source_id: str,
+    ) -> SocMemoryCandidate | None:
+        for candidate in self._candidates.values():
+            if candidate.source.source_id == source_id:
+                return candidate
+        return None
+
     def list_memory_candidates(
         self,
         *,

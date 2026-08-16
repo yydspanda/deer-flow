@@ -10,7 +10,13 @@ from validation.compact_zeus.memory.seed_confirmed_memory_from_batch import (
     seed_confirmed_memory,
 )
 
-from soc_agent.contracts import AnalysisRun, MemoryAdmissionStatus
+from soc_agent.contracts import (
+    AnalysisRun,
+    MemoryAdmissionStatus,
+    SocMemoryCandidateType,
+    SocMemoryDecisionImpact,
+    SocMemoryTargetArtifact,
+)
 from soc_agent.core import SocAnalysisService, SocMemoryService
 from soc_agent.memory import (
     InMemoryMemoryCandidateRepository,
@@ -44,6 +50,9 @@ def test_build_candidate_uses_shared_reusable_facets_and_explicit_simulation() -
     assert admission.status is MemoryAdmissionStatus.ADMITTED
     assert command.source.metadata["promote_to_memory"] is True
     assert command.metadata["simulation"] is True
+    assert command.candidate_type is SocMemoryCandidateType.EVAL_FIXTURE
+    assert command.target_artifact is SocMemoryTargetArtifact.EVAL_FIXTURE
+    assert command.decision_impact is SocMemoryDecisionImpact.NONE
     assert command.facets["detection_key"]
     assert command.facets["rule_code"]
     assert command.facets["scenario_key"]
@@ -63,7 +72,7 @@ def test_seed_confirms_activates_and_retrieves_matching_record() -> None:
     assert report["confirmed_record_count"] == 1
     assert report["retrieval_enabled_count"] == 1
     assert report["decision_directive_count"] == 0
-    assert report["items"][0]["memory_type"] == "detection_lesson"
+    assert report["items"][0]["memory_type"] == "eval_fixture"
 
     assert run.llm_analysis_request is not None
     result = SocMemoryService(record_repository=repository).find_relevant_records(

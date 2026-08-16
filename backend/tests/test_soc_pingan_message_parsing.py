@@ -61,6 +61,23 @@ def test_pingan_adapter_preserves_trusted_ingress_tenant() -> None:
     assert alert.raw["tenant_id"] == "pingan"
 
 
+def test_pingan_adapter_does_not_use_alert_id_as_detection_key() -> None:
+    payload = _payload(
+        'sensor SyslogClient[1]: 2026-07-14 10:00:00|!sensor|!alarm|!{"sip":"30.1.1.10","dip":"30.2.2.20"}',
+        topic="sec_guard_apt",
+        topic_name="SkyEye APT",
+    )
+    hit_log = payload["alert"]["hitLog"][0]
+    hit_log.pop("ruleCode")
+    hit_log.pop("ruleName")
+
+    alert = normalize_alert_payload(payload)
+
+    assert alert.detection.rule_code is None
+    assert alert.detection.rule_name is None
+    assert alert.detection.detection_key is None
+
+
 def test_pingan_apt_parsed_message_excludes_zeus_structured_fields_from_analysis() -> None:
     message = 'skyeye SyslogClient[1]: 2026-07-14 10:00:00|!sensor|!alarm|!{"attack_type":"代码执行","sip":"30.1.1.10","dip":"30.2.2.20","attacker":"30.2.2.20","victim":"30.1.1.10","severity":8}'
     payload = _payload(

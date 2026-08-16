@@ -103,7 +103,7 @@ The current local/test Alpha can demonstrate and regress:
 - SQL run/summary/review/audit/replay and fail-closed decision guards;
 - ReviewQueue Web/TUI, bounded Lead Agent context, correction and notes;
 - approval request/grant/preflight boundaries without real response side effects;
-- external disposition canonical ingress, idempotency and feedback-to-candidate path;
+- external disposition canonical ingress, idempotency, exact-used-Memory feedback and outcome path;
 - confirmed-memory review and governed read-only retrieval activation;
 - correlation/domain findings and normalization/governance evaluation surfaces.
 

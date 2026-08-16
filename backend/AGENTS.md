@@ -845,6 +845,29 @@ record, but a memory-type-specific exact strong anchor is required before it ent
 Environment/source/category alone must not admit a detection lesson or benign pattern; alert/run IDs
 remain lineage only.
 
+Memory profile composition lives in `soc_agent.application.memory`; generic services depend on
+`SocMemoryProfileRegistry` and must not import tenant fields. `PingAnSocMemoryProfile` consumes only
+canonical Adapter output, owns duplicate occurrence and same-class semantics, and persists its
+profile/version/feature-schema identity on observations, candidates, queries and applicability.
+`SocMemoryApplicabilitySpec` is reviewer-visible machine scope; profile mismatch, required-facet miss,
+exclusion hit or insufficient strong anchor makes a record inapplicable regardless of rank.
+PingAn profile v2 builds a compound cohort when canonical `detection_key` and
+`behavior_fingerprint` both exist. Detection-only cohorts are rule-level reasoning context and must
+not create a future decision directive; behavior-only remains the ruleless pattern fallback. A
+decision-authoritative compound record requires exact reviewed environment, detection key and
+behavior fingerprint. Same detection/environment with a different fingerprint may be returned only
+as `partial/context-only` when a reviewed canonical `behavior_component` overlaps; exact matches are
+ranked first and `SocAutomationService` must reject every context-only directive. Legacy records without
+typed applicability remain non-authoritative context even if they carry an old directive; deterministic
+application also requires `decision_impact=detection_decision` and projection status `applicable`. Reviewers may narrow
+the candidate applicability by promoting an existing optional facet to required, but cannot remove
+anchors, expand values, change profile/schema versions, lower thresholds or widen context-only scope.
+PingAn `detection_key` may derive from a stable `rule_code` or stable `rule_name`; it must never derive
+from an alert/run ID. When neither rule identity exists, the profile may use its versioned deterministic
+canonical behavior fingerprint or reject the observation as ineligible. Persisted composition binds the operator-owned environment before
+Memory profile/query construction; explicit batch/daemon environment and configured Memory,
+tenant-policy and automation environments must agree.
+
 Persisted SOC Runtime composition injects `ConfirmedMemoryAnalysisRequestEnricher` after Skill
 resolution and before reference-catalog finalization/provider journaling. It builds a vendor-neutral
 query from canonical request dimensions and uses `SocMemoryService.find_relevant_records()`; only
@@ -858,6 +881,19 @@ verdict nor action authority. A confirmed record may carry a human-reviewed
 `SocMemoryDecisionDirective`; only exact-version/content/facets-hash, activation-current, validity-current,
 review-current, minimum-score, required-facet matches may apply it to the post-Runtime effective
 decision. Conflicting overrides require review, and no directive directly authorizes an action.
+
+Persisted post-analysis composition runs `SocMemoryEvolutionService` after `SocAutomationService`.
+Each projected `M-*` creates an idempotent append-only use record with exact record/version/hash,
+retrieval/applicability result and Base/Effective transition effect. `SocReviewService.correct()`
+captures uses before mutating the run, then writes final-outcome feedback and versioned health in the
+same mutation transaction. High-trust contradictions create a revision proposal; a risk truth that
+contradicts an active benign directive immediately disables retrieval through
+`soc_memory_safety_monitor`, a disable-only service role. Inspect the complete lineage through
+`GET /api/soc/memory/records/{memory_id}/lineage` or `soc memory records lineage`. Migration `0025`
+owns profile/occurrence columns plus use, feedback, health and revision tables.
+Revision proposals are listed/reviewed through the Memory Core Service, Gateway API or CLI. An
+`accept`/`reject` transition changes only the proposal and its mutation audit; it never rewrites,
+supersedes or re-enables the source Memory record.
 
 Same-cohort Memory validation lives under `validation/compact_zeus/memory/`. The seed helper must
 mark every derived record `simulation` and `in_sample`, use the production Admission/review/activation
@@ -967,13 +1003,28 @@ the acceptance provenance check. Existing operator profiles require
 learning is an explicit default-off sidecar: `SocMemoryPatternService` projects only completed runs
 with a canonical timezone-aware source `event_time`, stores immutable observations in
 `soc_memory_pattern_observations` (migration `0021`), and isolates cohorts by tenant, environment and
-`simulation|operational` data class. A cohort uses exactly one strongest available generic dimension
-(primary scenario, canonical detection key, then category), a fixed 24-hour UTC window, and default
-support/distinct-source thresholds of 5/5. The first threshold crossing creates one frozen
-`pending_review` repeated-pattern candidate through the existing `SocMemoryService`; later observations
-are replay-only, supersession is manual, and recurrence has no decision/retrieval/action authority.
-Missing/naive event time and aggregation failures are observable but non-blocking. Operators inspect
-or deterministically replay cohorts with `soc memory patterns list|replay`.
+`simulation|operational` data class. A server-selected profile owns the cohort signature and duplicate
+occurrence key; the generic fallback remains portable and the PingAn profile requires canonical
+detection or behavior identity. Cohorts use a fixed 24-hour UTC window and
+`soc.memory_pattern_aggregation.v3`. The default gate requires 5 observations, 5 distinct sources,
+5 conclusive outcomes, at least 80% risk/benign consistency, and a consensus strong retrieval anchor.
+Each alert remains an observation; only a cohort that passes all gates creates one frozen
+`pending_review` pattern lesson through the existing `SocMemoryService`. Conflicted, unresolved,
+weak-anchor, and low-support cohorts do not consume expert review. Candidate content must describe
+applicability, verdict distribution, representative conclusions, and exceptions rather than copy one
+alert. A stable fingerprint of lineage, risk class, and consensus strong anchors suppresses equivalent
+candidates across later fixed windows; those windows remain reinforcement observations. Materially
+changed lessons may create a new candidate, but supersession stays manual. Later observations are
+replay-only, and recurrence has no
+decision/retrieval/action authority. Missing/naive event time and aggregation failures are observable
+but non-blocking. Operators inspect or deterministically replay cohorts with
+`soc memory patterns list|replay`.
+The offline `validation/compact_zeus/memory/simulate_pattern_memory_lifecycle.py`
+helper is the canonical isolated `5+1` lifecycle smoke. It must compose the existing
+Pattern, Memory, Retrieval v2, `M-*` projection, and Automation services rather than
+reimplement their rules. Its five reviewed occurrences and held-out sixth event remain
+`simulation` data in a dedicated SQLite database, make no LLM/Provider calls, and cannot
+be presented as model accuracy, production truth, or external-action evidence.
 
 L3 SOC mutations use `core.access_control.require_actor_roles()` inside the service boundary. A caller
 must have a non-anonymous actor, a non-unknown `ActorContext.auth_source`, and a command-specific role;

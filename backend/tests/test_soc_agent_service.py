@@ -13,6 +13,7 @@ from soc_agent.actions.adapters import (
     InMemorySecurityTagLookupActionAdapter,
     SocActionAdapterRegistry,
 )
+from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.contracts import (
     ActorAuthSource,
     ActorContext,
@@ -61,6 +62,7 @@ from soc_agent.contracts import (
     SocEnrichmentExecutionTrigger,
     SocEvent,
     SocEventType,
+    SocMemoryApplicabilitySpec,
     SocMemoryCandidateCreateCommand,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
@@ -99,6 +101,7 @@ from soc_agent.core import (
     SocServiceNotImplementedError,
 )
 from soc_agent.memory import (
+    ConfirmedMemoryAnalysisRequestEnricher,
     InMemoryMemoryCandidateRepository,
     SocMemoryCandidateSourceBridge,
     build_memory_retrieval_diff,
@@ -1032,6 +1035,7 @@ def test_review_service_correct_proposes_pending_memory_candidate() -> None:
             corrected_verdict=Verdict.FALSE_POSITIVE,
             corrected_confidence=0.88,
             reason="Analyst confirmed this EDR activity was authorized maintenance.",
+            promote_to_memory=True,
         ),
         context=_analyst_context(surface=EntrySurface.TUI),
     )
@@ -3084,7 +3088,15 @@ def test_review_context_includes_relevant_memory_result() -> None:
     audit_repository = InMemoryAuditRepository()
     review_repository = InMemoryReviewQueueRepository()
     memory_repository = InMemoryMemoryCandidateRepository()
+    memory_profile_registry = build_soc_memory_profile_registry()
     run = SocAnalysisService(
+        runtime=DeterministicAnalysisRuntime(
+            analysis_request_enricher=ConfirmedMemoryAnalysisRequestEnricher(
+                SocMemoryService(record_repository=memory_repository),
+                profile_registry=memory_profile_registry,
+                environment="prd",
+            )
+        ),
         repository=repository,
         summary_repository=summary_repository,
         audit_repository=audit_repository,
@@ -3092,6 +3104,13 @@ def test_review_context_includes_relevant_memory_result() -> None:
     ).analyze(_sample("pingan_legacy_apt.json"))
     item = review_repository.get_open_review_item_by_run(run.run_id)
     assert item is not None
+    assert run.llm_analysis_request is not None
+    detection_key = run.llm_analysis_request.detection.detection_key
+    assert detection_key is not None
+    memory_profile = memory_profile_registry.resolve_run(run)
+    query_facets = memory_profile.project_query_facets(run.llm_analysis_request)
+    required_facets = {key: query_facets[key] for key in ("detection_key", "behavior_fingerprint", "environment") if query_facets.get(key)}
+    assert {"detection_key", "behavior_fingerprint", "environment"} <= set(required_facets)
 
     now = datetime.now(UTC) + timedelta(seconds=1)
     memory_service = SocMemoryService(
@@ -3115,11 +3134,14 @@ def test_review_context_includes_relevant_memory_result() -> None:
             ),
             evidence_refs=["manual:apt-direction"],
             validity=SocMemoryCandidateValidity(notes="Applies to APT direction reconstruction demos."),
-            facets={
-                "source_type": ["apt"],
-                "rule_code": [item.rule_code or ""],
-                "entity": item.entity_keys,
-            },
+            facets=query_facets,
+            applicability=SocMemoryApplicabilitySpec(
+                profile_id=memory_profile.identity.profile_id,
+                profile_version=memory_profile.identity.profile_version,
+                feature_schema_version=memory_profile.identity.feature_schema_version,
+                required_facets=required_facets,
+                minimum_strong_anchor_matches=2,
+            ),
         )
     )
     confirmed = memory_service.review_candidate(
@@ -3152,10 +3174,14 @@ def test_review_context_includes_relevant_memory_result() -> None:
         audit_repository=audit_repository,
         review_queue_repository=review_repository,
         memory_record_repository=memory_repository,
+        memory_profile_registry=memory_profile_registry,
     ).get_investigation_context(item.queue_id)
 
     assert context.relevant_memories is not None
     assert context.relevant_memories.returned_count == 1
+    applicability = context.relevant_memories.matches[0].applicability_report
+    assert applicability is not None
+    assert applicability.status.value == "applicable"
     assert context.relevant_memories.matches[0].record.summary == "APT direction reconstruction"
     assert context.investigation_view is not None
     assert context.investigation_view.counts["relevant_memories"] == 1

@@ -16,6 +16,7 @@ from soc_agent.contracts import (
     RoleResolution,
     RoleResolutionStatus,
     ScenarioHypothesis,
+    SocMemoryApplicabilitySpec,
     SocMemoryCandidateSource,
     SocMemoryCandidateSourceType,
     SocMemoryCandidateType,
@@ -186,3 +187,45 @@ def test_v2_removes_broad_same_source_matches_but_keeps_ruleless_behavior_match(
         "MEM-BROAD-SOURCE",
         "MEM-OTHER-SCENARIO",
     ]
+
+
+def test_typed_pingan_applicability_requires_exact_profile_and_scope() -> None:
+    query = memory_query_from_analysis_request(_request())
+    fingerprint = query.facets["behavior_fingerprint"][0]
+    applicability = SocMemoryApplicabilitySpec(
+        profile_id="pingan.soc",
+        profile_version="1",
+        feature_schema_version="pingan.soc.memory_features.v1",
+        required_facets={"behavior_fingerprint": [fingerprint]},
+        optional_facets={"environment": ["prd"]},
+        excluded_facets={"source_system": ["untrusted-shadow-source"]},
+    )
+    record = _record(
+        "MEM-PINGAN-TYPED",
+        facets={
+            "behavior_fingerprint": [fingerprint],
+            "environment": ["prd"],
+        },
+    ).model_copy(update={"applicability": applicability})
+    repository = InMemoryMemoryCandidateRepository()
+    repository.save_memory_record(record)
+    service = SocMemoryService(record_repository=repository)
+
+    pingan_query = query.model_copy(
+        update={
+            "metadata": {
+                **query.metadata,
+                "memory_profile_id": "pingan.soc",
+                "memory_profile_version": "1",
+                "memory_feature_schema_version": "pingan.soc.memory_features.v1",
+            }
+        }
+    )
+    applicable = service.find_relevant_records(pingan_query)
+    wrong_profile = service.find_relevant_records(query)
+
+    assert [item.memory_id for item in applicable.matches] == ["MEM-PINGAN-TYPED"]
+    assert applicable.matches[0].applicability_report is not None
+    assert applicable.matches[0].applicability_report.status.value == "applicable"
+    assert wrong_profile.matches == []
+    assert wrong_profile.skipped_not_applicable == 1

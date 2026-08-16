@@ -383,6 +383,10 @@ def test_soc_migration_head_creates_governance_and_approval_lifecycle_schema(tmp
         assert "soc_skill_feedback_observations" in inspect(engine).get_table_names()
         assert "soc_skill_improvement_candidates" in inspect(engine).get_table_names()
         assert "soc_memory_pattern_observations" in inspect(engine).get_table_names()
+        assert "soc_memory_uses" in inspect(engine).get_table_names()
+        assert "soc_memory_feedback" in inspect(engine).get_table_names()
+        assert "soc_memory_health" in inspect(engine).get_table_names()
+        assert "soc_memory_revision_proposals" in inspect(engine).get_table_names()
         assert "soc_tenant_policy_decisions" in inspect(engine).get_table_names()
         assert "soc_memory_record_facets" in inspect(engine).get_table_names()
         assert "soc_decision_transitions" in inspect(engine).get_table_names()
@@ -413,9 +417,18 @@ def test_soc_migration_head_creates_governance_and_approval_lifecycle_schema(tmp
         }.issubset(approval_request_columns)
         approval_grant_constraints = {constraint["name"] for constraint in inspect(engine).get_unique_constraints("soc_approval_grants")}
         assert "uq_soc_approval_grants_request" in approval_grant_constraints
+        memory_pattern_columns = {column["name"] for column in inspect(engine).get_columns("soc_memory_pattern_observations")}
+        assert {
+            "profile_id",
+            "profile_version",
+            "feature_schema_version",
+            "occurrence_key",
+        }.issubset(memory_pattern_columns)
+        memory_pattern_constraints = {constraint["name"] for constraint in inspect(engine).get_unique_constraints("soc_memory_pattern_observations")}
+        assert "uq_soc_memory_pattern_aggregation_occurrence" in memory_pattern_constraints
         with engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM soc_alembic_version")).scalar_one()
-        assert revision == "0024_decision_stages"
+        assert revision == "0025_memory_evolution"
     finally:
         engine.dispose()
 
@@ -502,7 +515,12 @@ def test_governed_context_cli_propose_activate_and_show_history(tmp_path, capsys
     engine.dispose()
     proposal_path = tmp_path / "proposal.json"
     proposal_path.write_text(
-        json.dumps(_create_command().model_dump(mode="json"), ensure_ascii=False),
+        json.dumps(
+            _create_command(
+                valid_until=datetime.now(UTC) + timedelta(days=30),
+            ).model_dump(mode="json"),
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
 

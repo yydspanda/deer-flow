@@ -42,12 +42,14 @@ from soc_agent.contracts import (
     SocAutomationTargetSelector,
     SocDecisionTransitionKind,
     SocDispositionTransitionKind,
+    SocMemoryApplicabilitySpec,
     SocMemoryCandidateSource,
     SocMemoryCandidateSourceType,
     SocMemoryCandidateType,
     SocMemoryCandidateValidity,
     SocMemoryDecisionDirective,
     SocMemoryDecisionEffect,
+    SocMemoryDecisionImpact,
     SocMemoryRecord,
     SocMemoryReviewEffect,
     SocMemoryTargetArtifact,
@@ -547,28 +549,7 @@ def test_explicit_confirmed_memory_directive_changes_effective_decision() -> Non
     record = _active_memory_record()
     memory_repository.save_memory_record(record)
     memory_ref = "M-123456789ABC"
-    run.llm_analysis_request = run.llm_analysis_request.model_copy(
-        update={
-            "context_catalog": [
-                AnalysisContextCatalogItem(
-                    context_ref=memory_ref,
-                    kind=AnalysisContextReferenceKind.CONFIRMED_MEMORY,
-                    label=record.summary,
-                    source_id=f"{record.memory_id}@v{record.version}",
-                    summary=record.content,
-                    content_hash="a" * 64,
-                    metadata={
-                        "memory_id": record.memory_id,
-                        "memory_version": record.version,
-                        "retrieval_score": 9.0,
-                        "matched_facets": {"source_type": ["nids"]},
-                        "record_content_hash": record.content_hash,
-                        "record_facets_hash": record.facets_hash,
-                    },
-                )
-            ]
-        }
-    )
+    run.llm_analysis_request = run.llm_analysis_request.model_copy(update={"context_catalog": [_memory_catalog_item(record, memory_ref)]})
     service = SocAutomationService(
         repository=InMemorySocAutomationRepository(),
         policy=_policy(rules=[]),
@@ -600,6 +581,88 @@ def test_memory_directive_requires_exact_projected_record_hashes() -> None:
             "metadata": {
                 **context_item.metadata,
                 "record_content_hash": f"sha256:{'0' * 64}",
+            }
+        }
+    )
+    run.llm_analysis_request = run.llm_analysis_request.model_copy(update={"context_catalog": [context_item]})
+
+    result = SocAutomationService(
+        repository=InMemorySocAutomationRepository(),
+        policy=_policy(rules=[]),
+        environment="dev",
+        memory_repository=memory_repository,
+        now_provider=lambda: NOW,
+    ).evaluate(run, context=_context())
+
+    assert result.decision_transition.transition_kind is SocDecisionTransitionKind.UNCHANGED
+    assert result.decision_transition.after == result.decision_transition.before
+
+
+def test_context_only_memory_match_cannot_apply_reviewed_decision_directive() -> None:
+    run = _runtime_run()
+    memory_repository = InMemoryMemoryCandidateRepository()
+    record = _active_memory_record().model_copy(
+        update={
+            "applicability": SocMemoryApplicabilitySpec(
+                profile_id="pingan.soc",
+                profile_version="2",
+                feature_schema_version="pingan.soc.memory_features.v2",
+                required_facets={
+                    "detection_key": ["rule-a"],
+                    "behavior_fingerprint": ["behavior-a"],
+                    "environment": ["prd"],
+                },
+                optional_facets={"behavior_component": ["process:cmd.exe"]},
+                minimum_strong_anchor_matches=2,
+                context_only_required_facet_keys=[
+                    "detection_key",
+                    "environment",
+                ],
+                context_only_missing_facet_keys=["behavior_fingerprint"],
+                context_only_similarity_facet_keys=["behavior_component"],
+            )
+        }
+    )
+    memory_repository.save_memory_record(record)
+    context_item = _memory_catalog_item(record, "M-ABCDEF123456")
+    context_item = context_item.model_copy(
+        update={
+            "metadata": {
+                **context_item.metadata,
+                "applicability_status": "partial",
+                "context_only": True,
+                "decision_directive_applicable": False,
+            }
+        }
+    )
+    run.llm_analysis_request = run.llm_analysis_request.model_copy(update={"context_catalog": [context_item]})
+
+    result = SocAutomationService(
+        repository=InMemorySocAutomationRepository(),
+        policy=_policy(rules=[]),
+        environment="dev",
+        memory_repository=memory_repository,
+        now_provider=lambda: NOW,
+    ).evaluate(run, context=_context())
+
+    assert result.decision_transition.transition_kind is SocDecisionTransitionKind.UNCHANGED
+    assert result.decision_transition.after == result.decision_transition.before
+
+
+def test_legacy_memory_without_typed_applicability_cannot_apply_directive() -> None:
+    run = _runtime_run()
+    memory_repository = InMemoryMemoryCandidateRepository()
+    record = _active_memory_record().model_copy(update={"applicability": None})
+    memory_repository.save_memory_record(record)
+    context_item = _memory_catalog_item(record, "M-1E6AC0000001")
+    context_item = context_item.model_copy(
+        update={
+            "metadata": {
+                **context_item.metadata,
+                # Even stale or forged projection metadata cannot restore
+                # deterministic authority to an untyped legacy record.
+                "applicability_status": "applicable",
+                "decision_directive_applicable": True,
             }
         }
     )
@@ -756,7 +819,24 @@ def _active_memory_record() -> SocMemoryRecord:
         ),
         summary="Confirmed NIDS true-positive pattern",
         content=content,
-        facets={"source_type": ["nids"]},
+        facets={
+            "source_type": ["nids"],
+            "detection_key": ["rule-automation-a"],
+            "behavior_fingerprint": ["behavior-automation-a"],
+            "environment": ["dev"],
+        },
+        applicability=SocMemoryApplicabilitySpec(
+            profile_id="test.soc",
+            profile_version="2",
+            feature_schema_version="test.soc.memory_features.v2",
+            required_facets={
+                "detection_key": ["rule-automation-a"],
+                "behavior_fingerprint": ["behavior-automation-a"],
+                "environment": ["dev"],
+            },
+            optional_facets={"source_type": ["nids"]},
+            minimum_strong_anchor_matches=2,
+        ),
         evidence_refs=["review:1"],
         validity=SocMemoryCandidateValidity(
             valid_from=NOW - timedelta(days=1),
@@ -764,13 +844,18 @@ def _active_memory_record() -> SocMemoryRecord:
             notes="Reviewed operational lesson.",
         ),
         confidence=0.95,
+        decision_impact=SocMemoryDecisionImpact.DETECTION_DECISION,
         decision_directive=SocMemoryDecisionDirective(
             effect=SocMemoryDecisionEffect.OVERRIDE,
             target_verdict=Verdict.TRUE_POSITIVE,
             review_effect=SocMemoryReviewEffect.CLEAR,
             suggested_action="apply tenant response policy",
             minimum_match_score=5.0,
-            required_facet_keys=["source_type"],
+            required_facet_keys=[
+                "detection_key",
+                "behavior_fingerprint",
+                "environment",
+            ],
             rationale="An analyst explicitly approved this scoped override.",
         ),
         content_hash=f"sha256:{hashlib.sha256(content.encode()).hexdigest()}",
@@ -796,6 +881,8 @@ def _memory_catalog_item(
     record: SocMemoryRecord,
     context_ref: str,
 ) -> AnalysisContextCatalogItem:
+    matched_facets = record.applicability.required_facets if record.applicability is not None else record.facets
+    applicability_status = "applicable" if record.applicability is not None else "legacy_anchor_only"
     return AnalysisContextCatalogItem(
         context_ref=context_ref,
         kind=AnalysisContextReferenceKind.CONFIRMED_MEMORY,
@@ -807,7 +894,9 @@ def _memory_catalog_item(
             "memory_id": record.memory_id,
             "memory_version": record.version,
             "retrieval_score": 9.0,
-            "matched_facets": {"source_type": ["nids"]},
+            "matched_facets": matched_facets,
+            "applicability_status": applicability_status,
+            "decision_directive_applicable": record.applicability is not None,
             "record_content_hash": record.content_hash,
             "record_facets_hash": record.facets_hash,
         },
