@@ -16,7 +16,7 @@ from app.gateway.soc_dependencies import (
 )
 from soc_agent.application.analysis import build_soc_analysis_service
 from soc_agent.application.memory import build_soc_memory_profile_registry
-from soc_agent.core import SocMemoryPatternService
+from soc_agent.core import SocMemoryPatternService, SocServiceConflictError
 from soc_agent.db import resolve_database_url, to_sync_database_url
 from soc_agent.demo.memory_workbench import (
     MEMORY_WORKBENCH_ENVIRONMENT,
@@ -151,6 +151,8 @@ def process_memory_workbench_alert(
     try:
         return service.process_alert(alert_id, context=context)
     except SocMemoryWorkbenchConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SocMemoryWorkbenchError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -262,3 +262,49 @@ test("links a queue-less Pattern Candidate to standalone memory review", async (
     "/workspace/soc/review?candidate_id=MC-206BBCE75A96",
   );
 });
+
+test("keeps long model status values from overlapping adjacent controls", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const current = state();
+  current.model.model_name =
+    "globalai-deepseek-v4-flash-0731-long-relay-registration";
+  await page.route("**/api/soc/dev/memory-workbench**", async (route) => {
+    await route.fulfill({ json: current });
+  });
+  await page.setViewportSize({ width: 800, height: 900 });
+
+  await page.goto("/workspace/soc/memory-validation");
+
+  const model = page.getByText(current.model.model_name, { exact: true });
+  const thinking = page.getByText("Thinking", { exact: true });
+  const verifier = page.getByText("Role verifier", { exact: true });
+  await expect(model).toBeVisible();
+  await expect(thinking).toBeVisible();
+  await expect(verifier).toBeVisible();
+
+  const boxes = await Promise.all([
+    model.boundingBox(),
+    thinking.boundingBox(),
+    verifier.boundingBox(),
+  ]);
+  expect(boxes.every((box) => box !== null)).toBe(true);
+  for (let left = 0; left < boxes.length; left += 1) {
+    for (let right = left + 1; right < boxes.length; right += 1) {
+      expect(rectanglesOverlap(boxes[left]!, boxes[right]!)).toBe(false);
+    }
+  }
+});
+
+function rectanglesOverlap(
+  first: { x: number; y: number; width: number; height: number },
+  second: { x: number; y: number; width: number; height: number },
+) {
+  return !(
+    first.x + first.width <= second.x ||
+    second.x + second.width <= first.x ||
+    first.y + first.height <= second.y ||
+    second.y + second.height <= first.y
+  );
+}

@@ -10,7 +10,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.gateway.routers import soc_memory_workbench
 from soc_agent.application.memory import build_soc_memory_profile_registry
-from soc_agent.core import SocMemoryPatternService
+from soc_agent.contracts import AnalysisRun, AnalysisRunStatus
+from soc_agent.core import SocMemoryPatternService, SocServiceConflictError
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 from soc_agent.demo.memory_workbench import SocMemoryWorkbenchService
 from soc_agent.llm import SocAnalyzerMode, SocLLMSettings
@@ -125,6 +126,60 @@ def test_workbench_process_endpoint_uses_authenticated_admin_context() -> None:
     assert service.calls == ["1984426"]
     assert result.actor.actor_id == "memory-workbench-test"
     assert result.actor.roles == ["soc_admin"]
+
+
+def test_workbench_process_endpoint_maps_service_conflict_to_http_409() -> None:
+    class _ConflictingWorkbenchService:
+        def process_alert(self, alert_id: str, *, context):
+            raise SocServiceConflictError(f"conflicting observation for {alert_id}")
+
+    with pytest.raises(HTTPException) as exc_info:
+        soc_memory_workbench.process_memory_workbench_alert(
+            "1984426",
+            request=_FakeRequest(system_role="admin"),
+            service=_ConflictingWorkbenchService(),
+        )
+
+    assert exc_info.value.status_code == 409
+
+
+@pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")
+def test_workbench_does_not_surface_runs_from_an_old_profile_generation(
+    tmp_path,
+) -> None:
+    repository = _repository(tmp_path)
+    service = SocMemoryWorkbenchService(
+        repository=repository,
+        analysis_service=SimpleNamespace(),
+        pattern_service=SocMemoryPatternService(
+            repository=repository,
+            candidate_repository=repository,
+            profile_registry=build_soc_memory_profile_registry(),
+        ),
+        source_path=_CORPUS,
+        settings=SocLLMSettings(
+            mode=SocAnalyzerMode.LLM,
+            model_name="fixture-model",
+        ),
+        database_file="soc-workbench.sqlite",
+    )
+    case = service._cases["1984426"]
+    repository.save_run(
+        AnalysisRun(
+            run_id="RUN-OLD-PROFILE",
+            alert_id=case.spec.alert_id,
+            status=AnalysisRunStatus.SUCCESS,
+            input_hash=case.payload_hash,
+        )
+    )
+
+    state = service.get_state()
+
+    first = state.alerts[0]
+    assert state.progress.processed_count == 0
+    assert state.progress.next_alert_id == "1984426"
+    assert first.workflow_state == "ready"
+    assert first.run_id is None
 
 
 def test_workbench_dependency_is_not_exposed_without_explicit_flag(

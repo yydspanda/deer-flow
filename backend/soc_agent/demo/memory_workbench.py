@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from soc_agent.contracts import (
     AnalysisRun,
     AnalysisRunStatus,
+    AuditAction,
     LLMAnalysisRequest,
     MemoryPatternDataClass,
     MemoryPatternSourceType,
@@ -332,14 +333,6 @@ class SocMemoryWorkbenchService:
         self._behavior_components = next(iter(component_sets))
 
     def get_state(self) -> SocMemoryWorkbenchState:
-        runs = self._runs_by_alert()
-        queues_by_run = {
-            item.run_id: item
-            for item in self._repository.list_review_items(
-                status=None,
-                limit=500,
-            )
-        }
         observations = self._repository.list_memory_pattern_observations(
             tenant_id=MEMORY_WORKBENCH_TENANT,
             environment=MEMORY_WORKBENCH_ENVIRONMENT,
@@ -350,6 +343,14 @@ class SocMemoryWorkbenchService:
         profile_identity = PingAnSocMemoryProfile.identity
         observations = [item for item in observations if item.profile_id == profile_identity.profile_id and item.profile_version == profile_identity.profile_version and item.feature_schema_version == profile_identity.feature_schema_version]
         observations_by_alert = {item.source.alert_id: item for item in observations if item.source.alert_id in self._cases}
+        runs = self._runs_by_alert(observations_by_alert)
+        queues_by_run = {
+            item.run_id: item
+            for item in self._repository.list_review_items(
+                status=None,
+                limit=500,
+            )
+        }
         replay_by_key = {item.aggregation_key: self._pattern_service.replay(item.aggregation_key) for item in observations_by_alert.values()}
         candidate = _candidate_for_observations(
             self._repository,
@@ -427,7 +428,7 @@ class SocMemoryWorkbenchService:
         if before.progress.next_alert_id != alert_id:
             raise SocMemoryWorkbenchConflictError(f"alert {alert_id} is locked; next alert is {before.progress.next_alert_id or 'none'}")
 
-        idempotency_key = f"soc-memory-dev:{self._source_sha256[:16]}:{alert_id}:{PingAnSocMemoryProfile.identity.feature_schema_version}"
+        idempotency_key = self._analysis_idempotency_key(alert_id)
         request_context = context.model_copy(update={"idempotency_key": idempotency_key})
         run = self._analysis_service.analyze(
             copy.deepcopy(case.payload),
@@ -458,13 +459,35 @@ class SocMemoryWorkbenchService:
             state=self.get_state(),
         )
 
-    def _runs_by_alert(self) -> dict[str, AnalysisRun]:
+    def _analysis_idempotency_key(self, alert_id: str) -> str:
+        identity = PingAnSocMemoryProfile.identity
+        generation = stable_hash(
+            {
+                "workbench_version": MEMORY_WORKBENCH_VERSION,
+                "profile_id": identity.profile_id,
+                "profile_version": identity.profile_version,
+                "feature_schema_version": identity.feature_schema_version,
+            }
+        )[:16]
+        return f"soc-memory-dev:{self._source_sha256[:16]}:{alert_id}:{generation}"
+
+    def _runs_by_alert(
+        self,
+        observations_by_alert: Mapping[str, Any],
+    ) -> dict[str, AnalysisRun]:
         selected: dict[str, AnalysisRun] = {}
-        for run in self._repository.list_runs(limit=500):
-            case = self._cases.get(run.alert_id)
-            if case is None or run.input_hash != case.payload_hash:
+        for alert_id, case in self._cases.items():
+            audit = self._repository.find_audit_record_by_idempotency_key(
+                self._analysis_idempotency_key(alert_id),
+                action=AuditAction.ANALYSIS.value,
+            )
+            run = self._repository.get_run(audit.run_id) if audit is not None else None
+            if run is None:
+                observation = observations_by_alert.get(alert_id)
+                run = self._repository.get_run(observation.source.run_id) if observation is not None and observation.source.run_id is not None else None
+            if run is None or run.alert_id != alert_id or run.input_hash != case.payload_hash:
                 continue
-            selected.setdefault(run.alert_id, run)
+            selected[alert_id] = run
         return selected
 
     def _alert_view(

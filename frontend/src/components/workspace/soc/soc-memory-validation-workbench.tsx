@@ -664,7 +664,7 @@ export function SocMemoryValidationWorkbench() {
         <WorkflowSummary state={state} />
 
         <section className="border-b px-5 py-4 md:px-7">
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(24rem,0.8fr)] xl:items-center">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-sm font-semibold">
@@ -678,15 +678,25 @@ export function SocMemoryValidationWorkbench() {
                 behavior {state.cohort.behavior_fingerprint}
               </p>
             </div>
-            <div className="text-muted-foreground flex flex-wrap gap-x-5 gap-y-1 text-xs">
-              <span>Model {state.model.model_name ?? "unresolved"}</span>
-              <span>
-                Thinking {state.model.thinking_enabled ? "on" : "off"}
-              </span>
-              <span>
-                Role verifier {state.model.role_verifier_enabled ? "on" : "off"}
-              </span>
-            </div>
+            <dl className="text-muted-foreground grid min-w-0 gap-x-5 gap-y-2 text-xs sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+              <div className="flex min-w-0 items-baseline gap-1.5">
+                <dt className="shrink-0 font-medium text-zinc-700">Model</dt>
+                <dd
+                  className="min-w-0 font-mono break-all"
+                  title={state.model.model_name ?? "unresolved"}
+                >
+                  {state.model.model_name ?? "unresolved"}
+                </dd>
+              </div>
+              <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+                <dt className="font-medium text-zinc-700">Thinking</dt>
+                <dd>{state.model.thinking_enabled ? "on" : "off"}</dd>
+              </div>
+              <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+                <dt className="font-medium text-zinc-700">Role verifier</dt>
+                <dd>{state.model.role_verifier_enabled ? "on" : "off"}</dd>
+              </div>
+            </dl>
           </div>
         </section>
 

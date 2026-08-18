@@ -43,7 +43,12 @@ from soc_agent.core import (
     SocServiceConflictError,
 )
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
-from soc_agent.memory import InMemoryMemoryPatternRepository
+from soc_agent.memory import (
+    GenericSocMemoryProfile,
+    InMemoryMemoryPatternRepository,
+    SocMemoryProfileIdentity,
+    memory_pattern_command_from_run,
+)
 
 _START = datetime(2026, 8, 6, 1, 0, tzinfo=UTC)
 
@@ -448,6 +453,45 @@ def test_idempotency_reuse_with_changed_content_conflicts() -> None:
             MemoryPatternObservationCreateCommand.model_validate(command),
             context=_context(),
         )
+
+
+def test_pattern_idempotency_identity_changes_with_profile_contract() -> None:
+    class _UpgradedGenericProfile(GenericSocMemoryProfile):
+        identity = SocMemoryProfileIdentity(
+            profile_id="soc.generic",
+            profile_version="2",
+            feature_schema_version="soc.memory_features.generic.v2",
+        )
+
+    run = _run(1)
+    common = {
+        "source_type": MemoryPatternSourceType.BATCH_ALERT,
+        "transport_ref": "batch:profile-upgrade:1",
+        "environment": "dev",
+        "data_class": MemoryPatternDataClass.SIMULATION,
+        "policy_fingerprint": "a" * 64,
+    }
+
+    original = memory_pattern_command_from_run(
+        run,
+        profile=GenericSocMemoryProfile(),
+        **common,
+    )
+    original_retry = memory_pattern_command_from_run(
+        run,
+        profile=GenericSocMemoryProfile(),
+        **common,
+    )
+    upgraded = memory_pattern_command_from_run(
+        run,
+        profile=_UpgradedGenericProfile(),
+        **common,
+    )
+
+    assert original.idempotency_key == original_retry.idempotency_key
+    assert original.idempotency_key != upgraded.idempotency_key
+    assert original.feature_schema_version == "soc.memory_features.generic.v1"
+    assert upgraded.feature_schema_version == "soc.memory_features.generic.v2"
 
 
 def test_sql_repository_commits_observation_candidate_and_audit_atomically() -> None:

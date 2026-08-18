@@ -416,8 +416,10 @@ Current SOC direction:
   through the official analysis, Pattern, ReviewQueue, Lesson, retrieval, and decision-lineage
   services. The workbench requires an isolated SQLite database, `dev` Memory/automation
   environments, a real LLM analyzer, an authenticated admin, disabled tenant policy, and disabled
-  external action execution. Do not generalize it into a production ingestion API or move cohort
-  selection/business transitions into React.
+  external action execution. Workbench run selection, progress, and Pattern idempotency must include
+  the active Memory Profile identity; a profile/schema upgrade begins a new validation generation
+  while retaining old runs and observations for audit. Do not generalize it into a production
+  ingestion API or move cohort selection/business transitions into React.
 - Single-alert correction, review-note and domain-finding sources must pass `MemoryAdmissionService`
   before a candidate is created. Admission requires an explicit human promotion/acceptance signal, a
   substantive reason and a reusable facet; otherwise the result remains `observed_only`. Alert/run IDs

@@ -189,7 +189,9 @@ misread as STG or production evidence. `docker-compose.soc-memory-dev.yaml` deli
 DEV acceptance surface with `next dev --webpack`: Next.js 16.2 Turbopack has a confirmed intermittent
 negative component-performance timestamp failure during redirects. Keep that workaround scoped to the
 overlay rather than patching browser `performance`, changing the normal frontend script, or adding
-business-page error suppression.
+business-page error suppression. Treat model names as unbounded registered identifiers in the status
+strip: give the model value a shrinkable/wrapping track and keep Thinking/Role Verifier in independent
+tracks so a long relay alias cannot overlap adjacent status text at narrow desktop widths.
 
 The SOC operations page at `/workspace/soc/operations` is a thin read-only consumer of
 `soc.operations_snapshot.v1` through `core/soc/api.ts` and `useSocOperationsSnapshot()`. It may refresh

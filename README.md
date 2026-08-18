@@ -37,6 +37,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > before the held-out alert is unlocked. After generation, the candidate view keeps all six final Business Lesson
 > sections visible, while clearly separating machine-derived applicability from analyst-owned
 > conclusion, rationale, boundaries, invalidation conditions, and handling guidance. This
+> workbench scopes displayed runs and Pattern progress to the active Memory Profile generation. A
+> profile/schema upgrade therefore starts a fresh validation sequence without deleting historical
+> runs or observations, and Pattern idempotency remains stable only within that profile contract. This
 > acceptance-only Docker overlay runs Next.js dev with
 > its supported webpack path to avoid the confirmed Next.js 16.2 Turbopack negative-performance-mark
 > error during redirects; the repository's normal frontend command remains unchanged.

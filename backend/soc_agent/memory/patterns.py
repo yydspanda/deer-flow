@@ -176,8 +176,20 @@ def memory_pattern_command_from_run(
     grounding = run.analysis_evidence_grounding
     if grounding is not None:
         evidence_refs.extend(f"analysis_evidence:{run.run_id}:{item.evidence_index}" for item in grounding.items if item.status.value == "grounded")
+    profile_identity = resolved_profile.identity
+    observation_request_identity = stable_hash(
+        {
+            "transport_ref": transport_ref,
+            "profile_id": profile_identity.profile_id,
+            "profile_version": profile_identity.profile_version,
+            "feature_schema_version": profile_identity.feature_schema_version,
+        }
+    )
     return MemoryPatternObservationCreateCommand(
-        idempotency_key=(f"memory-pattern:{policy_fingerprint[:16]}:{stable_hash(transport_ref)}"),
+        # A profile upgrade intentionally re-projects the same transport
+        # occurrence. Retries within one profile remain idempotent, while an
+        # old observation can never collide with its new feature contract.
+        idempotency_key=(f"memory-pattern:{policy_fingerprint[:16]}:{observation_request_identity}"),
         tenant_id=tenant_id,
         environment=environment,
         data_class=data_class,
