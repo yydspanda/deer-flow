@@ -214,6 +214,7 @@ def _memory_context_item(
             "context_only": context_only,
             "record_content_hash": match.content_hash,
             "record_facets_hash": match.facets_hash,
+            "business_lesson_schema_version": (record.business_lesson.schema_version if record.business_lesson is not None else None),
             "decision_directive_present": record.decision_directive is not None,
             "decision_directive_applicable": directive_applicable,
         },

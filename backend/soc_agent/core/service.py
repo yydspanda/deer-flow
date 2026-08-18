@@ -122,6 +122,8 @@ from soc_agent.memory import (
     SocMemoryProfileRegistry,
     memory_candidate_command_from_review_note,
     memory_query_from_analysis_request,
+    render_memory_business_lesson,
+    resolve_memory_business_lesson,
 )
 from soc_agent.memory.scoring import (
     evaluate_memory_anchor_gate,
@@ -167,7 +169,7 @@ from soc_agent.protocols import (
 from soc_agent.skills import SocSkillResolver
 from soc_agent.utils.hashing import stable_hash
 
-from .access_control import require_actor_roles
+from .access_control import SOC_MEMORY_REVIEWER_ROLES, require_actor_roles
 from .errors import (
     SocEnrichmentWorkflowError,
     SocServiceAuthorizationError,
@@ -1519,7 +1521,7 @@ class SocReviewService:
 class SocMemoryService:
     """Facts, lessons, and reviewable candidate knowledge service."""
 
-    REVIEWER_ROLES = frozenset({"analyst", "soc_analyst", "soc_memory_reviewer", "soc_admin"})
+    REVIEWER_ROLES = SOC_MEMORY_REVIEWER_ROLES
     RETRIEVAL_ENABLE_ROLES = frozenset({"soc_memory_reviewer", "soc_admin"})
     RETRIEVAL_GOVERNOR_ROLES = frozenset({*RETRIEVAL_ENABLE_ROLES, "soc_memory_safety_monitor"})
 
@@ -1703,6 +1705,21 @@ class SocMemoryService:
             effective_command = _materialize_memory_review_directive(
                 candidate,
                 command,
+            )
+            try:
+                business_lesson, lesson_source = resolve_memory_business_lesson(
+                    effective_command,
+                )
+            except ValueError as exc:
+                raise SocServiceError(str(exc)) from exc
+            effective_command = effective_command.model_copy(
+                update={
+                    "record_lesson": business_lesson,
+                    "metadata": {
+                        **effective_command.metadata,
+                        "business_lesson_source": lesson_source,
+                    },
+                }
             )
             _validate_memory_decision_directive(candidate, effective_command)
             if self._record_repository is None:
@@ -2280,8 +2297,9 @@ def _memory_record_from_candidate(
     actor: ActorContext,
     created_at: datetime,
 ) -> SocMemoryRecord:
-    summary = command.record_summary or candidate.summary
-    content = command.record_content or candidate.content
+    lesson = command.record_lesson
+    summary = lesson.conclusion if lesson is not None else command.record_summary or candidate.summary
+    content = render_memory_business_lesson(lesson) if lesson is not None else command.record_content or candidate.content
     facets_hash = _stable_sha256(candidate.facets)
     return SocMemoryRecord(
         memory_type=candidate.candidate_type,
@@ -2292,6 +2310,7 @@ def _memory_record_from_candidate(
         source=candidate.source,
         summary=summary,
         content=content,
+        business_lesson=lesson,
         facets=candidate.facets,
         applicability=command.record_applicability or candidate.applicability,
         evidence_refs=candidate.evidence_refs,
@@ -2309,6 +2328,7 @@ def _memory_record_from_candidate(
             **candidate.metadata,
             **command.metadata,
             "review_reason": command.reason,
+            "business_lesson_schema_version": (lesson.schema_version if lesson is not None else None),
             "retrieval_enabled": False,
         },
     )

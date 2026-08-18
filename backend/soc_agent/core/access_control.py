@@ -6,6 +6,8 @@ from soc_agent.contracts import ActorAuthSource, ServiceRequestContext
 
 from .errors import SocServiceAuthorizationError
 
+SOC_MEMORY_REVIEWER_ROLES = frozenset({"analyst", "soc_analyst", "soc_memory_reviewer", "soc_admin"})
+
 
 def require_actor_roles(
     context: ServiceRequestContext,
@@ -23,4 +25,4 @@ def require_actor_roles(
         raise SocServiceAuthorizationError(f"{operation} requires one of roles: {allowed}")
 
 
-__all__ = ["require_actor_roles"]
+__all__ = ["SOC_MEMORY_REVIEWER_ROLES", "require_actor_roles"]

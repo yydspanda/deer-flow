@@ -42,6 +42,11 @@ class DeerFlowLLMChatClient:
         json_mode_enabled: bool = False,
         attach_tracing: bool = True,
         run_name: str = "soc_runtime_analysis",
+        trace_tags: Sequence[str] = (
+            "soc-agent",
+            "soc-runtime",
+            "bounded-analysis",
+        ),
         model_factory: Callable[..., BaseChatModel] = create_chat_model,
         admission_controller: SocLLMAdmissionController | None = None,
         max_concurrency: int = 1,
@@ -56,6 +61,7 @@ class DeerFlowLLMChatClient:
         self._json_mode_enabled = json_mode_enabled
         self._attach_tracing = attach_tracing
         self._run_name = run_name
+        self._trace_tags = tuple(str(tag).strip() for tag in trace_tags if str(tag).strip())
         self._model_factory = model_factory
         self._admission = admission_controller or SocLLMAdmissionController(
             max_concurrency=max_concurrency,
@@ -88,7 +94,7 @@ class DeerFlowLLMChatClient:
             invoke_kwargs: dict[str, Any] = {
                 "config": {
                     "run_name": self._run_name,
-                    "tags": ["soc-agent", "soc-runtime", "bounded-analysis"],
+                    "tags": list(self._trace_tags),
                     "metadata": {"soc_model_name": model_name},
                 }
             }

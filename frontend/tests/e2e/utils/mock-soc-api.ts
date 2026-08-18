@@ -4,6 +4,8 @@ const NOW = "2026-07-20T08:00:00Z";
 
 export interface MockSocApiOptions {
   queueStatus?: "open" | "closed";
+  includeQueueItem?: boolean;
+  standaloneMemoryCandidate?: boolean;
 }
 
 export interface MockSocRequest {
@@ -18,6 +20,8 @@ export interface MockSocApiState {
   queueStatus: "open" | "closed";
   candidateStatus: string;
   normalizationStatus: string;
+  includeQueueItem: boolean;
+  standaloneMemoryCandidate: boolean;
 }
 
 function queueItem(state: MockSocApiState) {
@@ -66,10 +70,12 @@ function memoryCandidate(state: MockSocApiState) {
       source_id: "feedback-alpha-001",
       run_id: "RUN-ALPHA-001",
       alert_id: "ALT-ALPHA-001",
-      queue_id: "REV-ALPHA-001",
+      queue_id: state.standaloneMemoryCandidate ? null : "REV-ALPHA-001",
       metadata: {},
     },
-    evidence_refs: ["review_queue:REV-ALPHA-001"],
+    evidence_refs: state.standaloneMemoryCandidate
+      ? ["analysis_run:RUN-ALPHA-001", "alert:ALT-ALPHA-001"]
+      : ["review_queue:REV-ALPHA-001"],
     validity: {
       valid_from: NOW,
       valid_until: null,
@@ -525,6 +531,8 @@ export async function mockSocAPI(
     queueStatus: options.queueStatus ?? "open",
     candidateStatus: "pending_review",
     normalizationStatus: "open",
+    includeQueueItem: options.includeQueueItem ?? true,
+    standaloneMemoryCandidate: options.standaloneMemoryCandidate ?? false,
   };
 
   await page.route("**/api/soc/**", async (route) => {
@@ -550,7 +558,8 @@ export async function mockSocAPI(
     if (method === "GET" && path === "/api/soc/review/items") {
       const requestedStatus = url.searchParams.get("status");
       const items =
-        requestedStatus && requestedStatus !== state.queueStatus
+        !state.includeQueueItem ||
+        (requestedStatus && requestedStatus !== state.queueStatus)
           ? []
           : [queueItem(state)];
       return fulfill(route, { items });
@@ -635,7 +644,98 @@ export async function mockSocAPI(
       });
     }
     if (method === "GET" && path === "/api/soc/memory/records") {
-      return fulfill(route, { items: [memoryRecord(state)] });
+      return fulfill(route, {
+        items:
+          state.candidateStatus === "confirmed" ? [memoryRecord(state)] : [],
+      });
+    }
+    if (method === "GET" && path === "/api/soc/memory/candidates") {
+      const requestedStatus = url.searchParams.get("status");
+      const candidate = memoryCandidate(state);
+      return fulfill(route, {
+        items:
+          requestedStatus && requestedStatus !== candidate.status
+            ? []
+            : [candidate],
+      });
+    }
+    if (
+      method === "GET" &&
+      path === "/api/soc/memory/candidates/MC-ALPHA-001"
+    ) {
+      return fulfill(route, memoryCandidate(state));
+    }
+    if (
+      method === "POST" &&
+      path === "/api/soc/memory/candidates/MC-ALPHA-001/lesson-draft"
+    ) {
+      return fulfill(route, {
+        schema_version: "soc.memory_business_lesson_draft.v1",
+        candidate_id: "MC-ALPHA-001",
+        reviewer_verdict: "false_positive",
+        lesson: {
+          schema_version: "soc.memory_business_lesson.v1",
+          conclusion:
+            "该模式是已确认的内部服务调用，应按审核范围复用误报结论。",
+          business_rationale: [
+            "运营专家已核对当前告警证据和内部服务登记信息。",
+          ],
+          applicability_conditions: [
+            "Required canonical facet detection_key: pingan:ndr:reverse-shell",
+            "Required canonical facet behavior_fingerprint: behavior-alpha",
+            "Required canonical facet environment: prd",
+          ],
+          generalization_boundaries: ["审核范围未约束的源和目的 IP 可以变化。"],
+          invalidation_conditions: [
+            "必需 facet 不匹配或当前证据出现反证时失效。",
+          ],
+          handling_guidance: ["全部适用条件命中时复用误报结论，否则重新研判。"],
+        },
+        supporting_source_refs: ["D-001", "D-002"],
+        rationale_sources: [
+          {
+            schema_version: "soc.memory_business_lesson_draft_rationale.v1",
+            statement: "运营专家已核对当前告警证据和内部服务登记信息。",
+            source_refs: ["D-001", "D-002"],
+          },
+        ],
+        source_catalog: [
+          {
+            schema_version: "soc.memory_lesson_draft_source.v1",
+            source_ref: "D-001",
+            source_kind: "candidate",
+            label: "candidate_summary",
+            value: "Authorized scanner pattern",
+          },
+          {
+            schema_version: "soc.memory_lesson_draft_source.v1",
+            source_ref: "D-002",
+            source_kind: "reviewer_verdict",
+            label: "reviewer_selected_verdict",
+            value: "false_positive",
+          },
+        ],
+        uncertainties: [],
+        provenance: {
+          schema_version: "soc.memory_business_lesson_draft_provenance.v1",
+          generator_id: "bounded-memory-business-lesson-drafter",
+          model_name: "fixture-lesson-model",
+          prompt_version: "soc-memory-business-lesson-draft-v3",
+          prompt_hash: "a".repeat(64),
+          response_hash: "b".repeat(64),
+          repair_applied: false,
+          repair_actions: [],
+          repair_prompt_hash: null,
+          provider_call_count: 1,
+          output_repair_call_count: 0,
+          usage: { input_tokens: 100, output_tokens: 80 },
+          metadata: { thinking_enabled_requested: false },
+        },
+        decision_impact: "none",
+        review_required: true,
+        persistence_performed: false,
+        generated_at: NOW,
+      });
     }
     if (
       method === "POST" &&

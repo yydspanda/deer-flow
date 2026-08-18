@@ -12,6 +12,7 @@ from soc_agent.core import (
     SocDaemonService,
     SocDispositionProposalService,
     SocGovernedContextService,
+    SocMemoryLessonDraftService,
     SocMemoryService,
     SocNormalizationService,
     SocReviewService,
@@ -174,6 +175,7 @@ def test_core_exports_planned_public_services() -> None:
     assert SocReviewService.__name__ == "SocReviewService"
     assert SocNormalizationService.__name__ == "SocNormalizationService"
     assert SocMemoryService.__name__ == "SocMemoryService"
+    assert SocMemoryLessonDraftService.__name__ == "SocMemoryLessonDraftService"
     assert SocDaemonService.__name__ == "SocDaemonService"
     assert SocDispositionProposalService.__name__ == "SocDispositionProposalService"
     assert SocGovernedContextService.__name__ == "SocGovernedContextService"

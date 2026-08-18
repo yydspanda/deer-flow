@@ -21,7 +21,30 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > Agent chat from a queue binds that chat thread to one queue item; every turn receives a fresh,
 > server-built bounded investigation context. The model cannot switch the binding, approve actions,
 > or write active memory. An analyst may explicitly submit the latest grounded response as a
-> pending memory candidate. Install or refresh the profile with
+> pending memory candidate. Granting a confirmed Memory authority over future verdicts additionally
+> requires a complete reviewed Business Lesson (conclusion, rationale, applicability, boundaries,
+> invalidation conditions, and handling guidance); a generic review note is audit metadata only.
+> The ReviewQueue can generate an evidence-referenced AI draft once a quality-gated candidate exists and the
+> reviewer selects the final verdict; an optional one-line business fact improves tenant-specific quality. The six
+> generated sections are read-only by default, explicitly editable, non-persisted, and have no decision or action
+> authority until explicit review.
+> A browser-driven local lifecycle is available for the reviewed 14-alert
+> `GalaxyLab_T1003-SAM-Dumping` cohort. Run `./scripts/soc-memory-dev.sh start`, then open
+> `http://localhost:2026/workspace/soc/memory-validation`. It uses an isolated SQLite database,
+> requires the real LLM analyzer and an administrator login, and keeps tenant policy plus external
+> action execution disabled. The first five alerts build a Pattern Candidate; candidate review,
+> Business Lesson drafting, and retrieval activation continue through the `SOC 复核 > 候选经验` view
+> before the held-out alert is unlocked. After generation, the candidate view keeps all six final Business Lesson
+> sections visible, while clearly separating machine-derived applicability from analyst-owned
+> conclusion, rationale, boundaries, invalidation conditions, and handling guidance. This
+> acceptance-only Docker overlay runs Next.js dev with
+> its supported webpack path to avoid the confirmed Next.js 16.2 Turbopack negative-performance-mark
+> error during redirects; the repository's normal frontend command remains unchanged.
+> PingAn repeated-pattern learning counts one observation per stable ZEUS `alertId|alertCode`: Kafka
+> retries or mutable delivery fields do not add support, while a later alert ID remains a new occurrence
+> even when the same IP and rule fire again. Legacy PingAn timestamps without an explicit offset are
+> interpreted as `Asia/Shanghai` by the adapter and retain that assumption in canonical metadata.
+> Install or refresh the profile with
 > `cd backend && ./.venv/bin/python -m soc_agent.cli agent install-profile --overwrite`. The SOC extension also provides
 > bounded network, endpoint (EDR/HIDS), web, and email specialist profiles through DeerFlow's native
 > subagent registry. Preview their root-config merge with

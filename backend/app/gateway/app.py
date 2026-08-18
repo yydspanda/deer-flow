@@ -35,6 +35,7 @@ from app.gateway.routers import (
     soc_approvals,
     soc_external_dispositions,
     soc_memory,
+    soc_memory_workbench,
     soc_normalization,
     soc_operations,
     soc_review,
@@ -711,6 +712,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # SOC memory candidate API is mounted at /api/soc/memory
     app.include_router(soc_memory.router)
+
+    # Explicitly gated local browser validation for the SOC Memory lifecycle
+    app.include_router(soc_memory_workbench.router)
 
     # SOC approval API is mounted at /api/soc/approvals
     app.include_router(soc_approvals.router)

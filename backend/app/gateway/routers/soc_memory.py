@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.gateway.routers.soc_transport import create_soc_router
 from app.gateway.soc_dependencies import (
@@ -15,6 +15,8 @@ from app.gateway.soc_dependencies import (
 )
 from soc_agent.contracts import (
     SocMemoryApplicabilitySpec,
+    SocMemoryBusinessLesson,
+    SocMemoryBusinessLessonDraft,
     SocMemoryCandidate,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
@@ -39,6 +41,7 @@ from soc_agent.contracts import (
 from soc_agent.core import (
     SocMemoryEvolutionError,
     SocMemoryEvolutionService,
+    SocMemoryLessonDraftService,
     SocMemoryService,
     SocServiceAuthorizationError,
     SocServiceConflictError,
@@ -46,6 +49,7 @@ from soc_agent.core import (
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
 )
+from soc_agent.llm import build_configured_memory_lesson_drafter
 
 router = create_soc_router(prefix="/api/soc/memory", tags=["soc-memory"])
 
@@ -67,6 +71,7 @@ class MemoryCandidateReviewRequest(BaseModel):
     reason: str = Field(min_length=1)
     record_summary: str | None = None
     record_content: str | None = None
+    record_lesson: SocMemoryBusinessLesson | None = None
     record_applicability: SocMemoryApplicabilitySpec | None = None
     decision_directive: SocMemoryDecisionDirective | None = None
     confirmed_verdict: Verdict | None = None
@@ -76,6 +81,25 @@ class MemoryCandidateReviewRequest(BaseModel):
     activation_valid_until: datetime | None = None
     activation_review_after_days: int | None = Field(default=None, ge=1, le=365)
     metadata: dict[str, object] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def require_reviewed_lesson_for_decision_authority(
+        self,
+    ) -> MemoryCandidateReviewRequest:
+        if (self.apply_to_future_matches or self.decision_directive is not None) and self.record_lesson is None:
+            raise ValueError("decision-bearing Memory requires an explicit reviewed record_lesson")
+        return self
+
+
+class MemoryBusinessLessonDraftRequest(BaseModel):
+    reviewer_verdict: Verdict
+    reviewer_context: str | None = Field(default=None, max_length=4000)
+    promoted_facet_keys: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("promoted_facet_keys")
+    @classmethod
+    def normalize_promoted_facet_keys(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
 
 
 class MemoryRetrievalActivationRequest(BaseModel):
@@ -102,6 +126,27 @@ def get_soc_memory_service(request: Request) -> SocMemoryService:
 
 
 MemoryServiceDep = Annotated[SocMemoryService, Depends(get_soc_memory_service)]
+
+
+def get_soc_memory_lesson_draft_service(
+    request: Request,
+) -> SocMemoryLessonDraftService:
+    injected = getattr(request.app.state, "soc_memory_lesson_draft_service", None)
+    if injected is not None:
+        return injected
+    repository = get_or_create_soc_repository(request)
+    service = SocMemoryLessonDraftService(
+        candidate_repository=repository,
+        drafter=build_configured_memory_lesson_drafter(),
+    )
+    request.app.state.soc_memory_lesson_draft_service = service
+    return service
+
+
+MemoryLessonDraftServiceDep = Annotated[
+    SocMemoryLessonDraftService,
+    Depends(get_soc_memory_lesson_draft_service),
+]
 
 
 def get_soc_memory_evolution_service(request: Request) -> SocMemoryEvolutionService:
@@ -178,6 +223,7 @@ def review_memory_candidate(
                 reason=payload.reason,
                 record_summary=payload.record_summary,
                 record_content=payload.record_content,
+                record_lesson=payload.record_lesson,
                 record_applicability=payload.record_applicability,
                 decision_directive=payload.decision_directive,
                 confirmed_verdict=payload.confirmed_verdict,
@@ -198,6 +244,37 @@ def review_memory_candidate(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except SocServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/candidates/{candidate_id}/lesson-draft",
+    response_model=SocMemoryBusinessLessonDraft,
+)
+def draft_memory_business_lesson(
+    candidate_id: str,
+    payload: MemoryBusinessLessonDraftRequest,
+    request: Request,
+    service: MemoryLessonDraftServiceDep,
+) -> SocMemoryBusinessLessonDraft:
+    try:
+        return service.draft_business_lesson(
+            candidate_id,
+            reviewer_verdict=payload.reviewer_verdict,
+            reviewer_context=payload.reviewer_context,
+            promoted_facet_keys=payload.promoted_facet_keys,
+            context=soc_service_context_from_request(
+                request,
+                include_soc_roles=True,
+            ),
+        )
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SocServiceError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get("/records", response_model=MemoryRecordListResponse)

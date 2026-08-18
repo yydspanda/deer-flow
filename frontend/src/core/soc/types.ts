@@ -484,6 +484,75 @@ export interface SocMemoryDecisionDirective {
   policy_version: "soc.memory_decision_directive_policy.v1";
 }
 
+export interface SocMemoryBusinessLesson {
+  schema_version: "soc.memory_business_lesson.v1";
+  conclusion: string;
+  business_rationale: string[];
+  applicability_conditions: string[];
+  generalization_boundaries: string[];
+  invalidation_conditions: string[];
+  handling_guidance: string[];
+}
+
+export interface SocMemoryLessonDraftSource {
+  schema_version: "soc.memory_lesson_draft_source.v1";
+  source_ref: string;
+  source_kind:
+    | "candidate"
+    | "cohort"
+    | "facet"
+    | "applicability"
+    | "lineage"
+    | "reviewer_verdict"
+    | "reviewer_context";
+  label: string;
+  value: string;
+}
+
+export interface SocMemoryBusinessLessonDraftProvenance {
+  schema_version: "soc.memory_business_lesson_draft_provenance.v1";
+  generator_id: string;
+  model_name: string;
+  prompt_version: string;
+  prompt_hash: string;
+  response_hash: string;
+  repair_applied: boolean;
+  repair_actions: string[];
+  repair_prompt_hash?: string | null;
+  provider_call_count: number;
+  output_repair_call_count: number;
+  usage: Record<string, string | number>;
+  metadata: Record<string, string | number | boolean | null>;
+}
+
+export interface SocMemoryBusinessLessonDraftRationale {
+  schema_version: "soc.memory_business_lesson_draft_rationale.v1";
+  statement: string;
+  source_refs: string[];
+}
+
+export interface SocMemoryBusinessLessonDraft {
+  schema_version: "soc.memory_business_lesson_draft.v1";
+  candidate_id: string;
+  reviewer_verdict: SocVerdict;
+  lesson: SocMemoryBusinessLesson;
+  supporting_source_refs: string[];
+  rationale_sources: SocMemoryBusinessLessonDraftRationale[];
+  source_catalog: SocMemoryLessonDraftSource[];
+  uncertainties: string[];
+  provenance: SocMemoryBusinessLessonDraftProvenance;
+  decision_impact: "none";
+  review_required: true;
+  persistence_performed: false;
+  generated_at: string;
+}
+
+export interface SocMemoryBusinessLessonDraftRequest {
+  reviewer_verdict: SocVerdict;
+  reviewer_context?: string | null;
+  promoted_facet_keys?: string[];
+}
+
 export interface SocMemoryCandidate {
   schema_version: string;
   candidate_id: string;
@@ -532,6 +601,7 @@ export interface SocMemoryRecord {
   source: SocMemoryCandidateSource;
   summary: string;
   content: string;
+  business_lesson?: SocMemoryBusinessLesson | null;
   facets: Record<string, string[]>;
   evidence_refs: string[];
   validity: SocMemoryCandidateValidity;
@@ -560,6 +630,161 @@ export interface SocMemoryRecord {
 
 export interface SocMemoryRecordListResponse {
   items: SocMemoryRecord[];
+}
+
+export type SocMemoryWorkbenchPhase =
+  | "construction"
+  | "held_out"
+  | "additional";
+
+export interface SocMemoryWorkbenchDecisionStage {
+  stage: "base" | "memory" | "tenant_policy" | "effective";
+  status: string;
+  verdict: SocVerdict;
+  confidence: number;
+  needs_review: boolean;
+  suggested_action: string;
+  disposition?: string | null;
+  source_id?: string | null;
+  summary: string;
+}
+
+export interface SocMemoryWorkbenchMemoryContext {
+  context_ref: string;
+  label: string;
+  source_id: string;
+  summary: string;
+}
+
+export interface SocMemoryWorkbenchAlert {
+  alert_id: string;
+  phase: SocMemoryWorkbenchPhase;
+  phase_order: number;
+  observed_at: string;
+  endpoint?: string | null;
+  host_name?: string | null;
+  process_names: string[];
+  workflow_state: "locked" | "ready" | "analysis_only" | "completed" | "failed";
+  can_process: boolean;
+  run_id?: string | null;
+  analysis_status?: string | null;
+  model_name?: string | null;
+  prompt_version?: string | null;
+  total_duration_ms?: number | null;
+  output_quality?: string | null;
+  base_verdict?: SocVerdict | null;
+  base_confidence?: number | null;
+  base_needs_review?: boolean | null;
+  effective_verdict?: SocVerdict | null;
+  effective_confidence?: number | null;
+  effective_needs_review?: boolean | null;
+  analysis_summary?: string | null;
+  analysis_reason?: string | null;
+  queue_id?: string | null;
+  observation_id?: string | null;
+  aggregation_key?: string | null;
+  pattern_support_count?: number | null;
+  pattern_distinct_source_count?: number | null;
+  pattern_quality_gate_passed?: boolean | null;
+  pattern_consistency_ratio?: number | null;
+  memory_contexts: SocMemoryWorkbenchMemoryContext[];
+  decision_stages: SocMemoryWorkbenchDecisionStage[];
+}
+
+export interface SocMemoryWorkbenchCandidate {
+  candidate_id: string;
+  status: SocMemoryCandidateStatus;
+  candidate_type: SocMemoryCandidateType;
+  summary: string;
+  support_count: number;
+  distinct_source_count: number;
+  consistency_ratio: number;
+  source_run_id?: string | null;
+  source_alert_id?: string | null;
+  review_queue_id?: string | null;
+  memory_id?: string | null;
+  memory_status?: SocMemoryRecordStatus | null;
+  retrieval_enabled: boolean;
+  decision_directive_ready: boolean;
+  business_lesson_ready: boolean;
+}
+
+export interface SocMemoryWorkbenchState {
+  schema_version: "soc.memory_dev_workbench.v1";
+  safety: {
+    environment: "dev";
+    database_backend: "sqlite";
+    database_file: string;
+    source_data_class: "operational";
+    historical_replay: true;
+    internal_providers: "off_or_mock";
+    tenant_policy: "disabled";
+    external_action_execution: false;
+  };
+  source: {
+    file_name: string;
+    sha256: string;
+    selected_alert_count: 14;
+  };
+  model: {
+    mode: string;
+    model_name?: string | null;
+    thinking_enabled: boolean;
+    role_verifier_enabled: boolean;
+    role_verifier_model_name?: string | null;
+  };
+  cohort: {
+    tenant_id: "pingan";
+    rule_code: "RPAADM_002010";
+    rule_name: "GalaxyLab_T1003-SAM-Dumping";
+    detection_key: "leagsoft-edr:rule_code:rpaadm_002010";
+    behavior_fingerprint: string;
+    behavior_components: string[];
+    construction_target: 5;
+    held_out_target: 1;
+    additional_count: 8;
+  };
+  progress: {
+    processed_count: number;
+    construction_processed: number;
+    construction_target: 5;
+    candidate_state:
+      | "collecting"
+      | "quality_gate_blocked"
+      | "pending_review"
+      | "confirmed_candidate"
+      | "confirmed"
+      | "rejected"
+      | "expired"
+      | "deprecated";
+    memory_state:
+      | "not_created"
+      | "confirmed_inactive"
+      | "confirmed_context_only"
+      | "decision_ready";
+    held_out_unlocked: boolean;
+    held_out_processed: boolean;
+    next_alert_id?: string | null;
+    next_action:
+      | "process_construction"
+      | "review_candidate"
+      | "enable_memory"
+      | "process_held_out"
+      | "process_additional"
+      | "quality_gate_blocked"
+      | "complete";
+  };
+  candidate?: SocMemoryWorkbenchCandidate | null;
+  alerts: SocMemoryWorkbenchAlert[];
+}
+
+export interface SocMemoryWorkbenchProcessResult {
+  schema_version: "soc.memory_dev_workbench_process.v1";
+  alert_id: string;
+  run_id?: string | null;
+  observation_id?: string | null;
+  idempotent: boolean;
+  state: SocMemoryWorkbenchState;
 }
 
 export interface SocMemoryRetrievalActivationRequest {
@@ -992,6 +1217,7 @@ export interface SocMemoryCandidateReviewRequest {
   reason: string;
   record_summary?: string | null;
   record_content?: string | null;
+  record_lesson?: SocMemoryBusinessLesson | null;
   record_applicability?: SocMemoryApplicabilitySpec | null;
   decision_directive?: SocMemoryDecisionDirective | null;
   confirmed_verdict?: SocVerdict | null;

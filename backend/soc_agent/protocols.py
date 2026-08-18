@@ -69,6 +69,7 @@ from soc_agent.contracts import (
     SocEvaluationDataClass,
     SocEvent,
     SocExternalDispositionRecord,
+    SocMemoryBusinessLessonDraft,
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
     SocMemoryFeedbackEvent,
@@ -88,6 +89,7 @@ from soc_agent.contracts import (
     TenantPolicyAdvisorResult,
     TenantPolicyDecision,
     TenantPolicySignalResolution,
+    Verdict,
 )
 
 
@@ -551,6 +553,21 @@ class MemoryCandidateRepository(Protocol):
         queue_id: str | None = None,
         limit: int = 50,
     ) -> list[SocMemoryCandidate]: ...
+
+
+class MemoryBusinessLessonDrafter(Protocol):
+    """Advisory generator for one non-persisted candidate lesson draft."""
+
+    model_name: str
+    prompt_version: str
+
+    def draft(
+        self,
+        candidate: SocMemoryCandidate,
+        *,
+        reviewer_verdict: Verdict,
+        reviewer_context: str | None = None,
+    ) -> SocMemoryBusinessLessonDraft: ...
 
 
 class MemoryPatternObservationRepository(Protocol):

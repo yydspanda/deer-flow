@@ -37,6 +37,7 @@ from soc_agent.contracts import (  # noqa: E402
     MemoryPatternDataClass,
     MemoryPatternSourceType,
     ServiceRequestContext,
+    SocMemoryBusinessLesson,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryDecisionDirective,
@@ -225,6 +226,23 @@ def simulate_pattern_memory_lifecycle(
             candidate_id=candidate.candidate_id,
             decision=SocMemoryCandidateReviewDecision.CONFIRM,
             reason=review_reason,
+            record_lesson=SocMemoryBusinessLesson(
+                conclusion=reviewed_summary,
+                business_rationale=[reviewed_reason],
+                applicability_conditions=[
+                    f"Required canonical facet {key}: {', '.join(values)}"
+                    for key, values in sorted(applicability.required_facets.items())
+                ],
+                generalization_boundaries=[
+                    "Only dimensions outside the reviewed required facets may vary."
+                ],
+                invalidation_conditions=[
+                    "Any required facet mismatch or current-alert counterevidence invalidates this lesson."
+                ],
+                handling_guidance=[
+                    "Apply the reviewed verdict only after every applicability and directive gate passes."
+                ],
+            ),
             decision_directive=SocMemoryDecisionDirective(
                 effect=SocMemoryDecisionEffect.OVERRIDE,
                 target_verdict=confirmed_verdict,

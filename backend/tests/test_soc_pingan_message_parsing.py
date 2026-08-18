@@ -904,10 +904,18 @@ def test_pingan_edr_comma_kv_message_populates_canonical_entities() -> None:
     assert flat_process.nodes[0].process_path == "C:\\Windows\\svchost.exe"
     assert flat_process.nodes[0].command_line == "C:\\Windows\\svchost.exe -s RemoteRegistry"
     assert flat_process.nodes[0].username == "LOCAL SERVICE"
+    assert len(alert.entities.file.observations) == 1
+    flat_target = alert.entities.file.observations[0]
+    assert flat_target.relation.value == "endpoint_action_target"
+    assert flat_target.file_path == "C:\\Windows\\svchost.exe"
+    assert flat_target.evidence_path.endswith("message#parsed.str_suspicious_file")
+    assert flat_target.md5 is None
     assert result.entities.ips == ["10.43.107.39", "30.162.29.85"]
     assert activity_id.upper() not in {item.value for item in result.entities.mentions}
 
     request = build_analysis_request_for_payload(payload)
+    provenance = {item.canonical_path: item for item in request.fact_reconstruction.canonical_field_provenance}
+    assert provenance["entities.file.observations[0].file_path"].selected_from.endswith("message#parsed.str_suspicious_file")
     resolutions = {item.role: item for item in request.fact_reconstruction.role_resolutions}
     assert resolutions["source"].status is RoleResolutionStatus.UNRESOLVED
     assert resolutions["destination"].status is RoleResolutionStatus.UNRESOLVED

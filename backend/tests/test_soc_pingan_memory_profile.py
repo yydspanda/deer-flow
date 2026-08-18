@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -24,17 +25,24 @@ from soc_agent.contracts import (
     EvidenceItem,
     ExtractedEntities,
     FactReconstructionResult,
+    FileEntityRef,
+    FileObservationRef,
+    FileObservationRelation,
+    HostEntityRef,
+    HttpEntityRef,
     LLMAnalysisRequest,
     MemoryPatternAggregationPolicy,
     MemoryPatternDataClass,
     MemoryPatternDimension,
     MemoryPatternSourceType,
     NetworkEntityRef,
+    ProcessEntityRef,
     RoleResolution,
     RoleResolutionStatus,
     ScenarioHypothesis,
     ServiceRequestContext,
     SocMemoryApplicabilitySpec,
+    SocMemoryBusinessLesson,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryDecisionImpact,
@@ -42,10 +50,12 @@ from soc_agent.contracts import (
 )
 from soc_agent.core import SocMemoryPatternService, SocMemoryService, SocServiceError
 from soc_agent.memory import (
+    ConfirmedMemoryAnalysisRequestEnricher,
     InMemoryMemoryPatternRepository,
     MemoryPatternIneligibleError,
     memory_query_from_analysis_request,
 )
+from soc_agent.normalizers.alert import normalize_alert_payload
 
 _START = datetime(2026, 8, 15, 1, 0, tzinfo=UTC)
 
@@ -61,16 +71,37 @@ def _context() -> ServiceRequestContext:
     )
 
 
+def _reviewed_business_lesson(
+    conclusion: str = "运营专家确认该模式在审核范围内可复用于后续同类告警。",
+) -> SocMemoryBusinessLesson:
+    return SocMemoryBusinessLesson(
+        conclusion=conclusion,
+        business_rationale=["运营专家已核对当前模式的检测事实和业务背景。"],
+        applicability_conditions=["必须命中审核后的全部 canonical required facets。"],
+        generalization_boundaries=["只有审核范围未约束的实体值可以变化。"],
+        invalidation_conditions=["必需 facet 缺失或当前证据出现实质反证时失效。"],
+        handling_guidance=["全部适用条件命中后才复用审核结论，否则重新研判。"],
+    )
+
+
 def _run(
     index: int,
     *,
     detection_key: str | None = "pingan:ndr:reverse-shell",
     rule_name: str | None = "Reverse shell detector",
     techniques: list[str] | None = None,
+    source_alert_id: str | None = None,
     source_event_id: str | None = None,
+    include_source_alert_id: bool = True,
     verdict: Verdict = Verdict.FALSE_POSITIVE,
     network_protocol: str | None = None,
     scenario_type: str | None = None,
+    service_url: str | None = None,
+    canonical_entities: AlertEntitySet | None = None,
+    source_type: AlertSourceType = AlertSourceType.NIDS,
+    source_system: str = "zeus",
+    product: str = "ndr",
+    category: str = "command_and_control",
 ) -> AnalysisRun:
     evidence_ref = "E-000000000001"
     analysis = AnalysisResult(
@@ -98,25 +129,52 @@ def _run(
         recommended_action=("ignore" if verdict is Verdict.FALSE_POSITIVE else "contain"),
     )
     alert_id = f"PA-ALERT-{index:03d}"
+    parsed_url = urlsplit(service_url) if service_url else None
+    service_host = parsed_url.hostname if parsed_url is not None else None
+    service_path = parsed_url.path if parsed_url is not None else None
+    mentions = []
+    if service_host:
+        mentions.append(
+            EntityMention(
+                kind=EntityKind.DOMAIN,
+                value=service_host,
+                key=f"domain:{service_host}",
+                role="http_host",
+            )
+        )
+    if service_url:
+        normalized_url = service_url.casefold()
+        mentions.append(
+            EntityMention(
+                kind=EntityKind.URL,
+                value=normalized_url,
+                key=f"url:{normalized_url}",
+                role="http_url",
+            )
+        )
+    input_payload = {
+        "event_time": (_START + timedelta(minutes=index)).isoformat(),
+    }
+    if include_source_alert_id:
+        input_payload["alert_id"] = source_alert_id or alert_id
+    if source_event_id is not None:
+        input_payload["event_id"] = source_event_id
     return AnalysisRun(
         run_id=f"PA-RUN-{index:03d}",
         alert_id=alert_id,
         status=AnalysisRunStatus.SUCCESS,
-        input_payload={
-            "alert_id": source_event_id or alert_id,
-            "event_time": (_START + timedelta(minutes=index)).isoformat(),
-        },
-        input_hash=(f"event:{source_event_id}" if source_event_id is not None else f"{index:064x}"),
+        input_payload=input_payload,
+        input_hash=f"{index:064x}",
         started_at=_START + timedelta(minutes=index),
         llm_analysis_request=LLMAnalysisRequest(
             alert_id=alert_id,
             tenant_id="pingan",
             environment="prd",
             source=AlertSourceRef(
-                source_type=AlertSourceType.NIDS,
-                source_system="zeus",
+                source_type=source_type,
+                source_system=source_system,
                 vendor="pingan",
-                product="ndr",
+                product=product,
                 integration_name="pingan_legacy_alert_platform",
             ),
             detection=DetectionRuleRef(
@@ -124,13 +182,24 @@ def _run(
                 rule_name=rule_name,
             ),
             classification=AlertClassification(
-                category="command_and_control",
+                category=category,
                 severity="high",
                 technique=(["T1059", "T1071"] if techniques is None else techniques),
             ),
-            canonical_entities=AlertEntitySet(
-                network=NetworkEntityRef(protocol=network_protocol),
+            canonical_entities=canonical_entities
+            or AlertEntitySet(
+                network=NetworkEntityRef(
+                    protocol=network_protocol,
+                    domain=service_host,
+                    url=service_url,
+                ),
+                http=HttpEntityRef(
+                    host=service_host,
+                    path=service_path,
+                    url=service_url,
+                ),
             ),
+            extracted_entities=ExtractedEntities(mentions=mentions),
             fact_reconstruction=FactReconstructionResult(
                 scenario_hypotheses=(
                     [
@@ -147,6 +216,57 @@ def _run(
             ),
         ),
         analysis=analysis,
+    )
+
+
+def _windows_update_entities(
+    *,
+    class_id: str,
+    host_name: str,
+    host_ip: str = "10.1.1.1",
+    process_path: str = r"C:\WINDOWS\UUS\amd64\wuaucltcore.exe",
+    module_name: str = "UpdateDeploy.dll",
+    parent_service: str = "wuauserv",
+    target_names: tuple[str, ...] = ("SAM", "SYSTEM"),
+) -> AlertEntitySet:
+    return AlertEntitySet(
+        process=ProcessEntityRef(
+            process_name="services.exe",
+            process_path=process_path,
+            command_line=(f'"{process_path}" /DeploymentHandlerFullPath \\\\?\\C:\\WINDOWS\\UUS\\AMD64\\{module_name} /ClassId {class_id} /RunHandlerComServer'),
+            parent_process_name="svchost.exe",
+            parent_command_line=(f"C:\\Windows\\System32\\svchost.exe -k netsvcs -p -s {parent_service}"),
+        ),
+        file=FileEntityRef(
+            observations=[
+                FileObservationRef(
+                    observation_id=f"target-{index}",
+                    evidence_path=f"message[{index}]#parsed.str_suspicious_file",
+                    relation=FileObservationRelation.ENDPOINT_ACTION_TARGET,
+                    file_path=(rf"C:\$WinREAgent\Scratch\Mount\Windows\System32\config\{name}"),
+                )
+                for index, name in enumerate(target_names)
+            ]
+        ),
+        host=HostEntityRef(host_name=host_name, ip_addresses=[host_ip]),
+    )
+
+
+def _windows_update_run(
+    index: int,
+    *,
+    entities: AlertEntitySet,
+) -> AnalysisRun:
+    return _run(
+        index,
+        detection_key="leagsoft-edr:rule_code:rpaadm_002010",
+        rule_name="GalaxyLab_T1003-SAM-Dumping",
+        techniques=["T1003"],
+        canonical_entities=entities,
+        source_type=AlertSourceType.EDR,
+        source_system="leagsoft-edr",
+        product="联软edr",
+        category="credential_access",
     )
 
 
@@ -198,6 +318,228 @@ def test_pingan_profile_creates_one_typed_same_class_candidate() -> None:
     assert len(repository.list_memory_candidates()) == 1
 
 
+def test_pingan_v4_behavior_fingerprint_generalizes_host_class_id_and_hive_subset() -> None:
+    profile = build_soc_memory_profile_registry().resolve_run(
+        _run(
+            1,
+            canonical_entities=_windows_update_entities(
+                class_id="11111111-1111-1111-1111-111111111111",
+                host_name="ENDPOINT-001",
+                host_ip="10.1.1.10",
+            ),
+        )
+    )
+    first = profile.project_run_facets(
+        _run(
+            1,
+            canonical_entities=_windows_update_entities(
+                class_id="11111111-1111-1111-1111-111111111111",
+                host_name="ENDPOINT-001",
+                host_ip="10.1.1.10",
+            ),
+        )
+    )
+    second = profile.project_run_facets(
+        _run(
+            2,
+            canonical_entities=_windows_update_entities(
+                class_id="22222222-2222-2222-2222-222222222222",
+                host_name="ENDPOINT-999",
+                host_ip="10.9.9.99",
+                target_names=("SYSTEM",),
+            ),
+        )
+    )
+
+    assert profile.identity.profile_version == "4"
+    assert profile.identity.feature_schema_version == "pingan.soc.memory_features.v4"
+    assert first["behavior_fingerprint"] == second["behavior_fingerprint"]
+    assert first["behavior_component_core"] == second["behavior_component_core"]
+    assert {
+        "command_module:updatedeploy.dll",
+        "parent_service:wuauserv",
+        "process_image:wuaucltcore.exe",
+        "process_path:windows/uus/amd64/wuaucltcore.exe",
+        "target_class:windows_protected_registry_hive",
+    } <= set(first["behavior_component_core"])
+    assert {"target_file:sam", "target_file:system"} <= set(first["behavior_component"])
+    assert "target_file:sam" not in second["behavior_component"]
+    assert "target_file:system" in second["behavior_component"]
+
+
+@pytest.mark.parametrize(
+    "changed_entities",
+    [
+        _windows_update_entities(
+            class_id="33333333-3333-3333-3333-333333333333",
+            host_name="ENDPOINT-002",
+            process_path=r"C:\Temp\wuaucltcore.exe",
+        ),
+        _windows_update_entities(
+            class_id="33333333-3333-3333-3333-333333333333",
+            host_name="ENDPOINT-002",
+            module_name="UnknownDeploy.dll",
+        ),
+        _windows_update_entities(
+            class_id="33333333-3333-3333-3333-333333333333",
+            host_name="ENDPOINT-002",
+            parent_service="RemoteRegistry",
+        ),
+    ],
+)
+def test_pingan_v4_behavior_fingerprint_rejects_material_component_changes(
+    changed_entities: AlertEntitySet,
+) -> None:
+    profile = build_soc_memory_profile_registry().resolve_run(_run(1))
+    baseline = profile.project_run_facets(
+        _run(
+            1,
+            canonical_entities=_windows_update_entities(
+                class_id="11111111-1111-1111-1111-111111111111",
+                host_name="ENDPOINT-001",
+            ),
+        )
+    )
+    changed = profile.project_run_facets(
+        _run(
+            2,
+            canonical_entities=changed_entities,
+        )
+    )
+
+    assert baseline["behavior_fingerprint"] != changed["behavior_fingerprint"]
+
+
+def test_pingan_v4_reviewed_endpoint_memory_generalizes_entities_without_generalizing_behavior() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    pattern_service = _service(repository)
+    _observe(
+        pattern_service,
+        _windows_update_run(
+            1,
+            entities=_windows_update_entities(
+                class_id="11111111-1111-1111-1111-111111111111",
+                host_name="ENDPOINT-001",
+                host_ip="10.1.1.10",
+            ),
+        ),
+        "batch:1",
+    )
+    aggregated = _observe(
+        pattern_service,
+        _windows_update_run(
+            2,
+            entities=_windows_update_entities(
+                class_id="22222222-2222-2222-2222-222222222222",
+                host_name="ENDPOINT-002",
+                host_ip="10.2.2.20",
+                target_names=("SYSTEM",),
+            ),
+        ),
+        "batch:2",
+    )
+    assert aggregated.candidate is not None
+
+    reviewed_at = _START + timedelta(hours=1)
+    memory_service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        mutation_audit_repository=repository,
+        now_provider=lambda: reviewed_at,
+    )
+    reviewed = memory_service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=aggregated.candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="运营确认该 Windows Update 行为模式属于可复用的无风险误报。",
+            record_lesson=SocMemoryBusinessLesson(
+                conclusion="Windows Update 的 wuaucltcore.exe 在审核行为范围内读取受保护注册表配置单元，属于无风险误报。",
+                business_rationale=["运营确认 UUS、wuauserv 和 UpdateDeploy.dll 组合是受管 Windows 更新行为。"],
+                applicability_conditions=["检测规则、检测器签名和 Profile v4 core behavior fingerprint 必须全部一致。"],
+                generalization_boundaries=["主机、IP、账号、ClassId 以及 SAM/SYSTEM 子集可以变化。"],
+                invalidation_conditions=["进程路径、命令模块、父服务或目标类型变化时不得沿用该结论。"],
+                handling_guidance=["精确适用时复用 false_positive；否则按当前告警重新研判。"],
+            ),
+            confirmed_verdict=Verdict.FALSE_POSITIVE,
+            apply_to_future_matches=True,
+            clear_review_on_match=True,
+            activate_retrieval=True,
+            activation_valid_until=reviewed_at + timedelta(days=60),
+            activation_review_after_days=30,
+        ),
+        context=ServiceRequestContext(
+            idempotency_key="confirm-pingan-windows-update-v4",
+            actor=ActorContext(
+                actor_id="memory-reviewer",
+                actor_type=ActorType.USER,
+                surface=EntrySurface.TEST,
+                roles=["soc_memory_reviewer"],
+            ),
+        ),
+    )
+    assert reviewed.memory_record is not None
+
+    exact_request = _windows_update_run(
+        3,
+        entities=_windows_update_entities(
+            class_id="33333333-3333-3333-3333-333333333333",
+            host_name="ENDPOINT-999",
+            host_ip="10.9.9.99",
+        ),
+    ).llm_analysis_request
+    changed_request = _windows_update_run(
+        4,
+        entities=_windows_update_entities(
+            class_id="44444444-4444-4444-4444-444444444444",
+            host_name="ENDPOINT-999",
+            host_ip="10.9.9.99",
+            parent_service="RemoteRegistry",
+        ),
+    ).llm_analysis_request
+    assert exact_request is not None
+    assert changed_request is not None
+
+    registry = build_soc_memory_profile_registry()
+    exact = memory_service.find_relevant_records(
+        memory_query_from_analysis_request(
+            exact_request,
+            profile=registry.resolve_request(exact_request),
+        )
+    )
+    changed = memory_service.find_relevant_records(
+        memory_query_from_analysis_request(
+            changed_request,
+            profile=registry.resolve_request(changed_request),
+        )
+    )
+
+    assert [item.memory_id for item in exact.matches] == [reviewed.memory_record.memory_id]
+    assert exact.matches[0].applicability_report is not None
+    assert exact.matches[0].applicability_report.status.value == "applicable"
+
+    enriched_exact = ConfirmedMemoryAnalysisRequestEnricher(
+        memory_service,
+        profile_registry=registry,
+        environment="prd",
+    )(exact_request)
+    memory_context = [item for item in enriched_exact.context_catalog if item.kind.value == "confirmed_memory"]
+    assert len(memory_context) == 1
+    assert memory_context[0].metadata["decision_directive_applicable"] is True
+
+    if changed.matches:
+        assert changed.matches[0].applicability_report is not None
+        assert changed.matches[0].applicability_report.status.value != "applicable"
+        assert changed.matches[0].applicability_report.context_only_allowed is True
+        enriched_changed = ConfirmedMemoryAnalysisRequestEnricher(
+            memory_service,
+            profile_registry=registry,
+            environment="prd",
+        )(changed_request)
+        changed_context = [item for item in enriched_changed.context_catalog if item.kind.value == "confirmed_memory"]
+        assert changed_context
+        assert changed_context[0].metadata["decision_directive_applicable"] is False
+
+
 def test_pingan_profile_rejects_category_only_cohorts() -> None:
     with pytest.raises(
         MemoryPatternIneligibleError,
@@ -242,13 +584,121 @@ def test_pingan_profile_uses_deterministic_behavior_when_rule_identity_is_absent
 
 def test_pingan_profile_deduplicates_one_upstream_occurrence() -> None:
     service = _service(InMemoryMemoryPatternRepository())
-    first = _observe(service, _run(1, source_event_id="ZEUS-EVENT-001"), "batch:1")
-    duplicate = _observe(service, _run(2, source_event_id="ZEUS-EVENT-001"), "batch:2")
+    first = _observe(
+        service,
+        _run(
+            1,
+            source_alert_id="ZEUS-ALERT-001",
+            source_event_id="SENSOR-EVENT-001",
+        ),
+        "batch:1",
+    )
+    duplicate = _observe(
+        service,
+        _run(
+            2,
+            source_alert_id="ZEUS-ALERT-001",
+            source_event_id="SENSOR-EVENT-CHANGED",
+        ),
+        "batch:2",
+    )
 
     assert duplicate.duplicate_occurrence is True
     assert duplicate.observation.observation_id == first.observation.observation_id
     assert duplicate.support_count == 1
     assert duplicate.candidate is None
+
+
+def test_pingan_profile_counts_new_alert_id_as_new_occurrence() -> None:
+    service = _service(InMemoryMemoryPatternRepository())
+    first = _observe(
+        service,
+        _run(
+            1,
+            source_alert_id="ZEUS-ALERT-001",
+            source_event_id="SENSOR-EVENT-SHARED",
+        ),
+        "batch:1",
+    )
+    second = _observe(
+        service,
+        _run(
+            2,
+            source_alert_id="ZEUS-ALERT-002",
+            source_event_id="SENSOR-EVENT-SHARED",
+        ),
+        "batch:2",
+    )
+
+    assert first.support_count == 1
+    assert second.duplicate_occurrence is False
+    assert second.support_count == 2
+
+
+def test_pingan_profile_uses_event_id_when_alert_id_is_missing() -> None:
+    service = _service(InMemoryMemoryPatternRepository())
+    first = _observe(
+        service,
+        _run(
+            1,
+            include_source_alert_id=False,
+            source_event_id="SENSOR-EVENT-001",
+        ),
+        "batch:1",
+    )
+    duplicate = _observe(
+        service,
+        _run(
+            2,
+            include_source_alert_id=False,
+            source_event_id="SENSOR-EVENT-001",
+        ),
+        "batch:2",
+    )
+
+    assert duplicate.duplicate_occurrence is True
+    assert duplicate.observation.observation_id == first.observation.observation_id
+    assert duplicate.support_count == 1
+
+
+def test_pingan_profile_uses_nested_zeus_alert_id_before_payload_hash() -> None:
+    service = _service(InMemoryMemoryPatternRepository())
+    first_run = _run(1, include_source_alert_id=False)
+    first_run.input_payload = {
+        "alert": {
+            "alertId": "2025642",
+            "createAt": "2026-06-16 19:51:14",
+            "hitLog": [],
+        },
+        "delivery_marker": "first",
+    }
+    first_run.input_hash = "a" * 64
+    duplicate_run = _run(2, include_source_alert_id=False)
+    duplicate_run.input_payload = {
+        "alert": {
+            "alertId": "2025642",
+            "createAt": "2026-06-16 19:51:14",
+            "hitLog": [],
+        },
+        "delivery_marker": "changed",
+    }
+    duplicate_run.input_hash = "b" * 64
+
+    normalized = normalize_alert_payload(first_run.input_payload)
+    assert normalized.event.event_time is not None
+    assert normalized.event.event_time.utcoffset() == timedelta(hours=8)
+    assert normalized.extensions["event_time_policy"] == {
+        "naive_timezone": "Asia/Shanghai",
+        "event_time_timezone_assumed": True,
+        "received_at_timezone_assumed": True,
+    }
+
+    first = _observe(service, first_run, "kafka:topic:0:1")
+    duplicate = _observe(service, duplicate_run, "kafka:topic:0:2")
+
+    assert duplicate.duplicate_occurrence is True
+    assert duplicate.observation.observation_id == first.observation.observation_id
+    assert duplicate.support_count == 1
 
 
 def test_pingan_profile_is_server_selected_for_runtime_query() -> None:
@@ -261,7 +711,7 @@ def test_pingan_profile_is_server_selected_for_runtime_query() -> None:
     )
 
     assert query.metadata["memory_profile_id"] == "pingan.soc"
-    assert query.metadata["memory_feature_schema_version"] == ("pingan.soc.memory_features.v3")
+    assert query.metadata["memory_feature_schema_version"] == ("pingan.soc.memory_features.v4")
     assert query.facets["detection_key"] == ["pingan:ndr:reverse-shell"]
     assert len(query.facets["detection_signature"]) == 1
     assert query.facets["behavior_strength"] == ["strong"]
@@ -285,6 +735,7 @@ def test_reviewer_can_confirm_activate_and_authorize_exact_future_matches() -> N
             candidate_id=aggregated.candidate.candidate_id,
             decision=SocMemoryCandidateReviewDecision.CONFIRM,
             reason="Reviewed cohort is reusable for the exact PingAn detector class.",
+            record_lesson=_reviewed_business_lesson("Reviewed cohort is reusable for the exact PingAn detector class."),
             confirmed_verdict=Verdict.FALSE_POSITIVE,
             apply_to_future_matches=True,
             clear_review_on_match=True,
@@ -309,6 +760,148 @@ def test_reviewer_can_confirm_activate_and_authorize_exact_future_matches() -> N
     assert result.memory_record.decision_directive.target_verdict is Verdict.FALSE_POSITIVE
     assert result.memory_record.applicability is not None
     assert result.memory_record.applicability.profile_id == "pingan.soc"
+    assert result.memory_record.business_lesson is not None
+    assert result.memory_record.business_lesson.conclusion == ("Reviewed cohort is reusable for the exact PingAn detector class.")
+    assert "适用条件 / Applicability" in result.memory_record.content
+    assert result.memory_record.metadata["business_lesson_source"] == ("reviewer_supplied")
+
+
+def test_decision_bearing_memory_rejects_missing_explicit_business_lesson() -> None:
+    repository = InMemoryMemoryPatternRepository()
+    pattern_service = _service(repository)
+    _observe(pattern_service, _run(1), "batch:1")
+    aggregated = _observe(pattern_service, _run(2), "batch:2")
+    assert aggregated.candidate is not None
+
+    with pytest.raises(
+        ValueError,
+        match="explicit reviewed record_lesson",
+    ):
+        SocMemoryService(
+            candidate_repository=repository,
+            record_repository=repository,
+        ).review_candidate(
+            SocMemoryCandidateReviewCommand(
+                candidate_id=aggregated.candidate.candidate_id,
+                decision=SocMemoryCandidateReviewDecision.CONFIRM,
+                reason="Reviewed simulation lesson for Reverse connection detector.",
+                confirmed_verdict=Verdict.FALSE_POSITIVE,
+                apply_to_future_matches=True,
+            ),
+            context=ServiceRequestContext(
+                actor=ActorContext(
+                    actor_id="memory-reviewer",
+                    actor_type=ActorType.USER,
+                    surface=EntrySurface.TEST,
+                    roles=["soc_memory_reviewer"],
+                )
+            ),
+        )
+
+    assert repository.get_memory_candidate(aggregated.candidate.candidate_id).status.value == "pending_review"
+
+
+def test_reviewer_persists_askbob_business_lesson_and_exact_service_scope() -> None:
+    askbob_url = "https://paic.com.cn/pws/askbob-gpt"
+    askbob_entity = f"url:{askbob_url}"
+    repository = InMemoryMemoryPatternRepository()
+    pattern_service = _service(repository)
+    _observe(pattern_service, _run(1, service_url=askbob_url), "batch:1")
+    aggregated = _observe(
+        pattern_service,
+        _run(2, service_url=askbob_url),
+        "batch:2",
+    )
+    candidate = aggregated.candidate
+    assert candidate is not None
+    base = candidate.applicability
+    assert base is not None
+    assert askbob_entity in candidate.facets["entity"]
+
+    narrowed = SocMemoryApplicabilitySpec.model_validate(
+        {
+            **base.model_dump(mode="json"),
+            "required_facets": {
+                **base.required_facets,
+                "entity": [askbob_entity],
+            },
+            "optional_facets": {key: values for key, values in base.optional_facets.items() if key != "entity"},
+            "context_only_required_facet_keys": sorted({*base.context_only_required_facet_keys, "entity"}),
+        }
+    )
+    lesson = SocMemoryBusinessLesson(
+        conclusion=("该流量访问平安内部 AskBob LLM 服务，不是真实反弹 Shell。"),
+        business_rationale=["运营专家确认 canonical URL https://paic.com.cn/pws/askbob-gpt 属于内部 LLM 调用。"],
+        applicability_conditions=["相同检测规则、检测器签名、强行为指纹、环境和精确 AskBob URL。"],
+        generalization_boundaries=["源和目的 IP 可以变化；服务身份由精确 canonical URL 约束。"],
+        invalidation_conditions=["URL 缺失或变化，或者当前告警出现真实 Shell、命令执行或恶意载荷反证。"],
+        handling_guidance=["全部必需条件命中时复用 false_positive，否则按当前告警重新研判。"],
+    )
+    reviewed_at = _START + timedelta(hours=1)
+    record = (
+        SocMemoryService(
+            candidate_repository=repository,
+            record_repository=repository,
+            mutation_audit_repository=repository,
+            now_provider=lambda: reviewed_at,
+        )
+        .review_candidate(
+            SocMemoryCandidateReviewCommand(
+                candidate_id=candidate.candidate_id,
+                decision=SocMemoryCandidateReviewDecision.CONFIRM,
+                reason="运营专家确认该精确 AskBob 服务模式可以作为未来误报经验复用。",
+                record_lesson=lesson,
+                record_applicability=narrowed,
+                confirmed_verdict=Verdict.FALSE_POSITIVE,
+                apply_to_future_matches=True,
+                activate_retrieval=True,
+                activation_valid_until=reviewed_at + timedelta(days=60),
+                activation_review_after_days=30,
+            ),
+            context=ServiceRequestContext(
+                actor=ActorContext(
+                    actor_id="memory-reviewer",
+                    actor_type=ActorType.USER,
+                    surface=EntrySurface.TEST,
+                    roles=["soc_memory_reviewer"],
+                )
+            ),
+        )
+        .memory_record
+    )
+    assert record is not None
+    assert record.business_lesson == lesson
+    assert record.summary == lesson.conclusion
+    assert record.applicability == narrowed
+    assert record.metadata["business_lesson_source"] == "reviewer_supplied"
+
+    registry = build_soc_memory_profile_registry()
+    exact_request = _run(3, service_url=askbob_url).llm_analysis_request
+    other_request = _run(
+        4,
+        service_url="https://unreviewed.example/pws/askbob-gpt",
+    ).llm_analysis_request
+    assert exact_request is not None
+    assert other_request is not None
+    service = SocMemoryService(
+        record_repository=repository,
+        now_provider=lambda: reviewed_at,
+    )
+    exact = service.find_relevant_records(
+        memory_query_from_analysis_request(
+            exact_request,
+            profile=registry.resolve_request(exact_request),
+        )
+    )
+    different_service = service.find_relevant_records(
+        memory_query_from_analysis_request(
+            other_request,
+            profile=registry.resolve_request(other_request),
+        )
+    )
+
+    assert [item.memory_id for item in exact.matches] == [record.memory_id]
+    assert different_service.matches == []
 
 
 def test_pingan_profile_requires_the_reviewed_environment_for_retrieval() -> None:
@@ -331,6 +924,7 @@ def test_pingan_profile_requires_the_reviewed_environment_for_retrieval() -> Non
                 candidate_id=aggregated.candidate.candidate_id,
                 decision=SocMemoryCandidateReviewDecision.CONFIRM,
                 reason="The exact detector class is reusable only in the reviewed environment.",
+                record_lesson=_reviewed_business_lesson("The exact detector class is reusable only in the reviewed environment."),
                 confirmed_verdict=Verdict.FALSE_POSITIVE,
                 apply_to_future_matches=True,
                 activate_retrieval=True,
@@ -397,6 +991,7 @@ def test_pingan_detection_only_candidate_is_rule_context_not_decision_authority(
                 candidate_id=aggregated.candidate.candidate_id,
                 decision=SocMemoryCandidateReviewDecision.CONFIRM,
                 reason="Same detector is useful background but not a universal verdict.",
+                record_lesson=_reviewed_business_lesson("Same detector is useful background but not a universal verdict."),
                 confirmed_verdict=Verdict.FALSE_POSITIVE,
                 apply_to_future_matches=True,
             ),
@@ -442,6 +1037,7 @@ def test_reviewer_can_narrow_pattern_decision_scope_with_candidate_facets() -> N
             candidate_id=candidate.candidate_id,
             decision=SocMemoryCandidateReviewDecision.CONFIRM,
             reason="Only the reviewed NIDS pattern owns this future verdict.",
+            record_lesson=_reviewed_business_lesson("Only the reviewed NIDS pattern owns this future verdict."),
             record_applicability=narrowed,
             confirmed_verdict=Verdict.FALSE_POSITIVE,
             apply_to_future_matches=True,
@@ -570,6 +1166,7 @@ def test_same_rule_similar_behavior_is_context_only_until_exact_fingerprint_matc
                 candidate_id=aggregated.candidate.candidate_id,
                 decision=SocMemoryCandidateReviewDecision.CONFIRM,
                 reason="Exact detector and behavior pair is a reviewed benign pattern.",
+                record_lesson=_reviewed_business_lesson("Exact detector and behavior pair is a reviewed benign pattern."),
                 confirmed_verdict=Verdict.FALSE_POSITIVE,
                 apply_to_future_matches=True,
                 activate_retrieval=True,

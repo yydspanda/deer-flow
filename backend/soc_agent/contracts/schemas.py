@@ -505,6 +505,180 @@ class SocMemoryApplicabilityReport(BaseModel):
     reason_codes: list[str] = Field(default_factory=list)
 
 
+class SocMemoryBusinessLesson(BaseModel):
+    """Reviewer-owned reusable knowledge carried by confirmed Memory.
+
+    This is deliberately separate from the machine applicability contract. The
+    prose explains the business conclusion, while ``SocMemoryApplicabilitySpec``
+    decides whether that conclusion is in scope for a current alert.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_business_lesson.v1"] = "soc.memory_business_lesson.v1"
+    conclusion: str = Field(min_length=10, max_length=2000)
+    business_rationale: list[str] = Field(min_length=1, max_length=12)
+    applicability_conditions: list[str] = Field(min_length=1, max_length=20)
+    generalization_boundaries: list[str] = Field(min_length=1, max_length=12)
+    invalidation_conditions: list[str] = Field(min_length=1, max_length=12)
+    handling_guidance: list[str] = Field(min_length=1, max_length=12)
+
+    @field_validator("conclusion")
+    @classmethod
+    def normalize_memory_lesson_conclusion(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if len(normalized) < 10:
+            raise ValueError("memory business lesson conclusion must be substantive")
+        return normalized
+
+    @field_validator(
+        "business_rationale",
+        "applicability_conditions",
+        "generalization_boundaries",
+        "invalidation_conditions",
+        "handling_guidance",
+    )
+    @classmethod
+    def normalize_memory_lesson_items(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(" ".join(str(value).split()) for value in values if str(value).strip()))
+        if not normalized:
+            raise ValueError("memory business lesson sections must not be empty")
+        if any(len(value) < 5 or len(value) > 4000 for value in normalized):
+            raise ValueError("memory business lesson items must be 5-4000 characters")
+        return normalized
+
+
+class SocMemoryLessonDraftSource(BaseModel):
+    """One bounded, reviewable fact supplied to the lesson-drafting model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_lesson_draft_source.v1"] = "soc.memory_lesson_draft_source.v1"
+    source_ref: str = Field(pattern=r"^D-[0-9]{3}$")
+    source_kind: Literal[
+        "candidate",
+        "cohort",
+        "facet",
+        "applicability",
+        "lineage",
+        "reviewer_verdict",
+        "reviewer_context",
+    ]
+    label: str = Field(min_length=1, max_length=256)
+    value: str = Field(min_length=1, max_length=8000)
+
+
+class SocMemoryBusinessLessonDraftProvenance(BaseModel):
+    """Secret-free provider and prompt lineage for one generated draft."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_business_lesson_draft_provenance.v1"] = "soc.memory_business_lesson_draft_provenance.v1"
+    generator_id: str = Field(min_length=1, max_length=128)
+    model_name: str = Field(min_length=1, max_length=256)
+    prompt_version: str = Field(min_length=1, max_length=128)
+    prompt_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    response_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repair_applied: bool = False
+    repair_actions: list[str] = Field(default_factory=list, max_length=20)
+    repair_prompt_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    provider_call_count: int = Field(default=1, ge=1, le=2)
+    output_repair_call_count: int = Field(default=0, ge=0, le=1)
+    usage: dict[str, int | float | str] = Field(default_factory=dict)
+    metadata: dict[str, int | float | str | bool | None] = Field(default_factory=dict)
+
+    @field_validator("repair_actions")
+    @classmethod
+    def normalize_lesson_draft_repair_actions(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+        if any(len(value) > 256 for value in normalized):
+            raise ValueError("lesson draft repair actions must not exceed 256 characters")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_lesson_draft_repair_lineage(self) -> SocMemoryBusinessLessonDraftProvenance:
+        if self.output_repair_call_count > self.provider_call_count - 1:
+            raise ValueError("lesson draft repair calls must be included in provider_call_count")
+        if self.output_repair_call_count and self.repair_prompt_hash is None:
+            raise ValueError("lesson draft repair call requires repair_prompt_hash")
+        if not self.output_repair_call_count and self.repair_prompt_hash is not None:
+            raise ValueError("repair_prompt_hash requires an output repair call")
+        return self
+
+
+class SocMemoryBusinessLessonDraftRationale(BaseModel):
+    """One draft rationale with the exact bounded sources that support it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_business_lesson_draft_rationale.v1"] = "soc.memory_business_lesson_draft_rationale.v1"
+    statement: str = Field(min_length=5, max_length=4000)
+    source_refs: list[str] = Field(min_length=1, max_length=12)
+
+    @field_validator("statement")
+    @classmethod
+    def normalize_lesson_draft_rationale(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if len(normalized) < 5:
+            raise ValueError("lesson draft rationale must be substantive")
+        return normalized
+
+    @field_validator("source_refs")
+    @classmethod
+    def normalize_lesson_draft_rationale_refs(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+        if not normalized or any(not re.fullmatch(r"D-[0-9]{3}", value) for value in normalized):
+            raise ValueError("lesson draft rationale refs must use exact D-001 aliases")
+        return normalized
+
+
+class SocMemoryBusinessLessonDraft(BaseModel):
+    """LLM-authored, non-authoritative draft shown to a human reviewer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_business_lesson_draft.v1"] = "soc.memory_business_lesson_draft.v1"
+    candidate_id: str = Field(min_length=1, max_length=128)
+    reviewer_verdict: Verdict
+    lesson: SocMemoryBusinessLesson
+    supporting_source_refs: list[str] = Field(min_length=1, max_length=40)
+    rationale_sources: list[SocMemoryBusinessLessonDraftRationale] = Field(min_length=1, max_length=12)
+    source_catalog: list[SocMemoryLessonDraftSource] = Field(min_length=1, max_length=80)
+    uncertainties: list[str] = Field(default_factory=list, max_length=12)
+    provenance: SocMemoryBusinessLessonDraftProvenance
+    decision_impact: Literal["none"] = "none"
+    review_required: Literal[True] = True
+    persistence_performed: Literal[False] = False
+    generated_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("supporting_source_refs")
+    @classmethod
+    def normalize_lesson_draft_refs(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+        if not normalized or any(not re.fullmatch(r"D-[0-9]{3}", value) for value in normalized):
+            raise ValueError("lesson draft supporting refs must use exact D-001 aliases")
+        return normalized
+
+    @field_validator("uncertainties")
+    @classmethod
+    def normalize_lesson_draft_uncertainties(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(" ".join(str(value).split()) for value in values if str(value).strip()))
+        if any(len(value) < 5 or len(value) > 2000 for value in normalized):
+            raise ValueError("lesson draft uncertainties must be 5-2000 characters")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_resolved_lesson_draft_refs(self) -> SocMemoryBusinessLessonDraft:
+        catalog_refs = {item.source_ref for item in self.source_catalog}
+        rationale_refs = {source_ref for item in self.rationale_sources for source_ref in item.source_refs}
+        missing = sorted((set(self.supporting_source_refs) | rationale_refs) - catalog_refs)
+        if missing:
+            raise ValueError("lesson draft contains unresolved source refs: " + ", ".join(missing))
+        if not rationale_refs <= set(self.supporting_source_refs):
+            raise ValueError("lesson draft rationale refs must be included in supporting_source_refs")
+        return self
+
+
 class SocMemoryDecisionDirective(BaseModel):
     """Reviewed, machine-readable decision effect carried by confirmed memory.
 
@@ -1680,6 +1854,7 @@ class SocMemoryCandidateReviewCommand(BaseModel):
     reason: str = Field(min_length=1)
     record_summary: str | None = None
     record_content: str | None = None
+    record_lesson: SocMemoryBusinessLesson | None = None
     record_applicability: SocMemoryApplicabilitySpec | None = None
     decision_directive: SocMemoryDecisionDirective | None = None
     confirmed_verdict: Verdict | None = None
@@ -1696,6 +1871,10 @@ class SocMemoryCandidateReviewCommand(BaseModel):
     ) -> SocMemoryCandidateReviewCommand:
         if self.record_applicability is not None and self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
             raise ValueError("record_applicability is allowed only when confirming a memory candidate")
+        if self.record_lesson is not None and self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
+            raise ValueError("record_lesson is allowed only when confirming a memory candidate")
+        if self.record_lesson is not None and (self.record_summary is not None or self.record_content is not None):
+            raise ValueError("record_lesson cannot be combined with record_summary or record_content")
         if self.decision_directive is not None and self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
             raise ValueError("decision_directive is allowed only when confirming a memory candidate")
         if self.apply_to_future_matches:
@@ -1707,6 +1886,8 @@ class SocMemoryCandidateReviewCommand(BaseModel):
                 raise ValueError("use either apply_to_future_matches or an explicit decision_directive")
         elif self.confirmed_verdict is not None or self.clear_review_on_match:
             raise ValueError("confirmed_verdict and clear_review_on_match require apply_to_future_matches")
+        if (self.apply_to_future_matches or self.decision_directive is not None) and self.record_lesson is None:
+            raise ValueError("decision-bearing Memory requires an explicit reviewed record_lesson")
         if self.activate_retrieval:
             if self.decision is not SocMemoryCandidateReviewDecision.CONFIRM:
                 raise ValueError("activate_retrieval is allowed only when confirming a memory candidate")
@@ -1767,6 +1948,7 @@ class SocMemoryRecord(BaseModel):
     source: SocMemoryCandidateSource
     summary: str = Field(min_length=1)
     content: str = Field(min_length=1)
+    business_lesson: SocMemoryBusinessLesson | None = None
     facets: dict[str, list[str]] = Field(default_factory=dict)
     applicability: SocMemoryApplicabilitySpec | None = None
     evidence_refs: list[str] = Field(min_length=1)

@@ -137,7 +137,7 @@ write confirmed memory, grant action authority, or execute side-effect actions b
 | 确认记忆 | Confirmed Memory | `SocMemoryRecord` | 人类确认后的可检索记忆，默认仍受 retrieval policy 约束 |
 | 记忆准入 | Memory Admission | `MemoryAdmissionDecision` | 在创建候选前判断是否有人工提升信号、可复用锚点和足够理由 |
 | 检测签名 | Detection Signature | `detection_signature` facet | 租户 Profile 从 canonical detector name 生成的版本化签名，用于拆分一个 broad rule code 下的不同检测场景 |
-| 行为指纹 | Behavior Fingerprint | `behavior_fingerprint` facet | 从场景、进程、协议、方法、技术等 canonical 组件生成的可回放检索锚点；Profile 另标 strong/weak，弱特征不能单独产生改判权限 |
+| 行为指纹 | Behavior Fingerprint | `behavior_fingerprint` facet | 从 canonical core behavior 生成的可回放检索锚点；PingAn v4 endpoint profile 使用进程镜像/路径、稳定命令模块/开关、父服务和目标类型，排除 IP/主机/账号/随机参数；detail component 仍保留审计，弱特征不能单独产生改判权限 |
 | 能力卡 | Capability Card | PingAn capability docs | 描述一个业务能力应落到 skill、MCP、adapter、memory 还是 eval |
 
 ---
@@ -1837,7 +1837,9 @@ flowchart TD
     S1["📝 Source<br/>correction / accepted conclusion / reviewed finding / repeated pattern"] --> A{"🚦 MemoryAdmissionService<br/>human signal + reason + reusable anchor"}
     A -->|"observed_only"| O["📊 Observation / audit only<br/>no candidate noise"]
     A -->|"admitted"| C["🧬 SocMemoryCandidate<br/>pending_review"]
-    C --> R{"👤 Human review"}
+    C --> V["👤 Reviewer outcome<br/>final verdict + optional business fact"]
+    V --> D["✨ AI Business Lesson draft<br/>bounded D-* refs / no persistence"]
+    D --> R{"👤 Human review<br/>read by default / edit / confirm"}
     R -->|"confirm"| M["📖 SocMemoryRecord<br/>confirmed + retrieval disabled"]
     R -->|"reject"| X["🗃️ rejected"]
     R -->|"expire/deprecate"| E["⏳ expired/deprecated"]
@@ -1913,7 +1915,12 @@ Rules:
 - PingAn uses `PingAnSocMemoryProfile` behind the generic profile protocol. It consumes canonical Adapter output,
   uses a canonical detection-key + behavior-fingerprint compound when both exist, treats detection-only as
   non-decisive rule context, retains behavior-only as the ruleless pattern fallback, rejects broad category-only
-  cohorts, and deduplicates one upstream event/input occurrence before support counting. Another tenant can register
+  cohorts, and deduplicates one upstream occurrence before support counting. Occurrence identity starts with the
+  stable operator-visible ZEUS `alertId|alertCode`, then falls back to canonical sensor event ID, exact input hash,
+  and bounded time/entity scope. The same ZEUS alert remains one observation even when delivery metadata changes;
+  a later alert with the same IP/rule but a different ZEUS alert ID is a new recurrence. PingAn legacy timestamps
+  without an offset are localized by its Adapter as `Asia/Shanghai` with explicit assumption metadata; the generic
+  recurrence kernel continues to require timezone-aware canonical time. Another tenant can register
   another profile; generic contracts and persistence do not import PingAn fields.
 - A quality-gated candidate carries `SocMemoryApplicabilitySpec`: profile/version/feature-schema identity, exact
   required/optional/excluded facets, and strong-anchor threshold. Retrieval evaluates this independently of ranking.
@@ -1933,6 +1940,28 @@ Rules:
   be the sole anchor for a detection lesson or benign pattern.
 - Candidate selection is relevance-first across the full eligible corpus through the normalized facet
   index; top-K is a final model-context budget, not a latest-200 database scan.
+- A confirmed decision-bearing Memory must be understandable without reopening its source alert. The typed
+  `soc.memory_business_lesson.v1` stores conclusion, business rationale, exact applicability, permitted
+  generalization, invalidation/counterevidence conditions, and handling guidance. `SocMemoryService` is the
+  single confirmation boundary: a decision-bearing confirmation must submit an explicit reviewer-owned
+  `record_lesson`. The service validates, renders and persists it; it never promotes a generic review reason or
+  candidate caption into reusable knowledge. The rendered lesson becomes record `summary/content` and therefore
+  the actual bounded `M-*` context. Missing Lesson fails before candidate transition.
+  `SocMemoryLessonDraftService` may assist only after candidate admission. It builds a bounded `D-*` source
+  catalog, invokes the versioned lesson-draft Prompt once on demand, validates exact references, and restores
+  applicability from the machine contract. The resulting draft is editable, non-persisted and authority-free;
+  the reviewer must still submit it through the same confirmation boundary.
+  `record_applicability` may promote an exact canonical candidate facet, such as one reviewed service
+  URL, from optional to required. This narrows tenant Memory through the generic applicability contract;
+  it does not add PingAn raw-field semantics to Runtime.
+- Memory quality is measured through the read-only `soc.memory_heldout_eval_fixture.v1` /
+  `soc.memory_heldout_eval_report.v1` lane. Memory construction alerts and held-out query alerts must be
+  disjoint; each accepted query carries independent analyst verdict/review truth and pairwise labels for every
+  frozen record. The evaluator invokes the same Profile, Retrieval v2, `M-*` projection and post-Runtime
+  decision resolver used by production. It reports retrieval relevance, Profile lesson applicability and
+  actual directive eligibility separately, then compares Base/Effective verdict, review burden and optional
+  scenario/direction/role truth. Pending labels have no accuracy; simulation can prove wiring only and can never
+  authorize rollout or actions.
 - Free-form Memory remains reasoning context. A deterministic effective-decision change requires a
   reviewer-authored `SocMemoryDecisionDirective` and exact version/activation/validity/review/score/facet
   gates. The transition is appended; the original Runtime decision is not rewritten.

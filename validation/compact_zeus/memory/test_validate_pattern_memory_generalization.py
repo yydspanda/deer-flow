@@ -98,14 +98,15 @@ def _memory() -> SocMemoryRecord:
         )
     }
     applicability = SocMemoryApplicabilitySpec(
-        profile_id="pingan.soc",
-        profile_version="3",
-        feature_schema_version="pingan.soc.memory_features.v3",
+        profile_id=profile.identity.profile_id,
+        profile_version=profile.identity.profile_version,
+        feature_schema_version=profile.identity.feature_schema_version,
         required_facets=required,
         optional_facets={
             key: facets[key]
             for key in (
                 "behavior_component",
+                "behavior_component_core",
                 "behavior_component_strong",
                 "behavior_component_weak",
                 "role_entity",

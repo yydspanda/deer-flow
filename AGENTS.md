@@ -385,6 +385,39 @@ Current SOC direction:
   post-Runtime effective decision, and only when the exact record version/content/facets hashes, activation, validity,
   review due, minimum score, and required-facet matches all pass. It never directly authorizes an
   action.
+  Memory quality claims use `soc eval memory prepare|run` and the versioned held-out fixture/report contracts.
+  Source alerts used to construct a Memory must not overlap held-out query alerts; accepted cases require
+  independent analyst truth and pairwise record relevance labels. The read-only evaluator reuses production
+  Profile/Retrieval/Automation services and reports retrieval, Pattern applicability, and directive eligibility
+  separately. Pending or simulation labels cannot establish real quality or rollout authority.
+  New decision-bearing confirmation requires an explicit reviewer-owned
+  `soc.memory_business_lesson.v1` through `SocMemoryService`. It stores conclusion, business rationale, exact
+  applicability, allowed generalization, invalidation conditions, and handling guidance; its rendering owns record
+  summary/content and the resulting `M-*` projection. The service validates and persists `record_lesson`; it never
+  promotes a generic review reason or source-alert caption into reusable business knowledge. Missing Lesson fails
+  closed before candidate transition. Reviewers may narrow
+  existing canonical candidate facets through `record_applicability`; this must not introduce tenant raw fields
+  into generic Runtime.
+  Candidate-level assistance uses `SocMemoryLessonDraftService` and the versioned
+  `soc-memory-business-lesson-draft-v3` Prompt. It calls the model only after candidate admission, requires an
+  authenticated reviewer-selected verdict, projects server-owned candidate/cohort facts as bounded `D-*`, and
+  deterministically restores applicability from the candidate contract. An optional reviewer business fact may
+  explain tenant context; prior candidate/model verdicts remain observations and cannot override the reviewer
+  selection. Reviewer-selected optional facet names may narrow the draft scope, but server code performs
+  that promotion and rejects unknown facets. The compact JSON contract does not require provider JSON-object mode;
+  strict schema/reference validation, literal identifier grounding, deterministic invalidation floors, and at most
+  one separately recorded bounded output-repair call protect the draft boundary. Its output is read-only by default,
+  explicitly editable, and
+  non-persisted (`decision_impact=none`); only the existing
+  explicit review command can turn it into reviewer-owned Memory.
+- Browser-driven repeated-Memory validation is exposed only when
+  `SOC_DEV_MEMORY_WORKBENCH_ENABLED=true`. `/workspace/soc/memory-validation` and
+  `/api/soc/dev/memory-workbench` orchestrate one fixed, server-owned 14-alert historical cohort
+  through the official analysis, Pattern, ReviewQueue, Lesson, retrieval, and decision-lineage
+  services. The workbench requires an isolated SQLite database, `dev` Memory/automation
+  environments, a real LLM analyzer, an authenticated admin, disabled tenant policy, and disabled
+  external action execution. Do not generalize it into a production ingestion API or move cohort
+  selection/business transitions into React.
 - Single-alert correction, review-note and domain-finding sources must pass `MemoryAdmissionService`
   before a candidate is created. Admission requires an explicit human promotion/acceptance signal, a
   substantive reason and a reusable facet; otherwise the result remains `observed_only`. Alert/run IDs
@@ -466,9 +499,17 @@ Current SOC direction:
   `MemoryPatternObservation` rows through `SocMemoryPatternService` and migration
   `0021_memory_pattern_observations`; never create one memory candidate per alert, run, finding, or
   offset. A server-owned `SocMemoryProfileRegistry` chooses same-class, occurrence and applicability
-  semantics from canonical fields; generic fallback remains vendor-neutral, while PingAn profile v3
+  semantics from canonical fields; generic fallback remains vendor-neutral, while PingAn profile v4
   uses a versioned compound of canonical detection key, normalized detector signature and behavior
-  fingerprint. A
+  fingerprint. Its endpoint fingerprint hashes canonical core behavior such as process image/path,
+  stable command module/switch names, parent service and typed target class; exact target filenames
+  remain auditable detail facets. IP, host, account and random command values such as ClassId are
+  excluded. PingAn occurrence identity uses the stable ZEUS `alertId|alertCode` from the original
+  payload first, then canonical sensor event ID, exact input hash and bounded time/entity fallback. A
+  re-delivered ZEUS alert remains one observation even when offset or mutable payload fields change;
+  the same IP/rule with a new ZEUS alert ID is a new occurrence. PingAn legacy timestamps without an
+  offset are typed as `Asia/Shanghai` by the Adapter with an explicit `event_time_policy` assumption;
+  the generic Memory Kernel never guesses a tenant timezone. A
   detection-only PingAn cohort is rule-level context and cannot own a future verdict; behavior-only
   remains the ruleless fallback. PingAn detection keys may derive from stable rule code/name but
   never from alert/run lineage. Cohorts use canonical
@@ -495,6 +536,7 @@ Current SOC direction:
   and creates a revision proposal. No feedback edits a confirmed record in place, and Memory never
   grants action authority. A decision-authoritative PingAn compound record requires exact environment,
   detection key, normalized detector signature, strong behavior classification and behavior fingerprint.
+  Profile v3 records are incompatible with v4 and require re-aggregation and review.
   Protocol, HTTP method and generic `web_attack` components are weak: they remain audit/context facets
   but cannot make a compound decision-authoritative. Same-rule behavior similarity may enter only as
   explicit `partial/context-only` `M-*` reasoning context when the detector signature also matches and a

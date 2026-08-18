@@ -11,11 +11,13 @@ import {
   correctSocReviewRun,
   createSocApprovalGrant,
   dryRunSocApprovedAction,
+  draftSocMemoryBusinessLesson,
   executeSocApprovedAction,
   expireSocApprovalRequest,
   getSocDispositionSampleReviewInbox,
   getSocMemoryCandidate,
   getSocMemoryRecord,
+  getSocMemoryWorkbenchState,
   getSocNormalizationMetrics,
   getSocOperationsSnapshot,
   getSocApprovalRequest,
@@ -27,6 +29,7 @@ import {
   listSocApprovalRequests,
   listSocDispositionSampleCampaigns,
   listSocReviewItems,
+  processSocMemoryWorkbenchAlert,
   recordSocDispositionOutcome,
   rejectSocApprovalRequest,
   reviewSocMemoryCandidate,
@@ -42,6 +45,7 @@ import type {
   SocDispositionOutcomeRecordRequest,
   SocLeadAgentConclusionAcceptanceRequest,
   SocMemoryCandidateReviewRequest,
+  SocMemoryBusinessLessonDraftRequest,
   SocMemoryCandidateStatus,
   SocMemoryQuery,
   SocMemoryRecordStatus,
@@ -145,6 +149,11 @@ export const socMemoryQueryKeys = {
     [...socMemoryQueryKeys.all, "record", memoryId] as const,
   search: (query: SocMemoryQuery | null | undefined) =>
     [...socMemoryQueryKeys.all, "search", query] as const,
+};
+
+export const socMemoryWorkbenchQueryKeys = {
+  all: ["soc-memory-workbench"] as const,
+  state: () => [...socMemoryWorkbenchQueryKeys.all, "state"] as const,
 };
 
 export const socNormalizationQueryKeys = {
@@ -378,6 +387,36 @@ export function useSocOperationsSnapshot() {
   return { snapshot: query.data ?? null, ...query };
 }
 
+export function useSocMemoryWorkbench() {
+  const context = useSocWebRequestContext();
+  const query = useQuery({
+    queryKey: socMemoryWorkbenchQueryKeys.state(),
+    queryFn: () => getSocMemoryWorkbenchState(context),
+    retry: false,
+  });
+  return { state: query.data ?? null, ...query };
+}
+
+export function useProcessSocMemoryWorkbenchAlert() {
+  const context = useSocWebRequestContext();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (alertId: string) =>
+      processSocMemoryWorkbenchAlert(alertId, context),
+    onSuccess: (result) => {
+      queryClient.setQueryData(
+        socMemoryWorkbenchQueryKeys.state(),
+        result.state,
+      );
+      void queryClient.invalidateQueries({ queryKey: socMemoryQueryKeys.all });
+      void queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all });
+      void queryClient.invalidateQueries({
+        queryKey: socOperationsQueryKeys.all,
+      });
+    },
+  });
+}
+
 export function useUpdateSocNormalizationIssue() {
   const context = useSocWebRequestContext();
   const queryClient = useQueryClient();
@@ -405,6 +444,7 @@ export function useSocMemoryCandidates({
   alertId,
   queueId,
   limit = 50,
+  enabled = true,
 }: {
   status?: SocMemoryCandidateStatus | null;
   tenantScope?: string | null;
@@ -413,6 +453,7 @@ export function useSocMemoryCandidates({
   alertId?: string | null;
   queueId?: string | null;
   limit?: number;
+  enabled?: boolean;
 } = {}) {
   const context = useSocWebRequestContext();
   const { data, isLoading, error, refetch, isFetching } = useQuery({
@@ -436,6 +477,7 @@ export function useSocMemoryCandidates({
         limit,
         context,
       }),
+    enabled,
   });
   return { candidates: data ?? [], isLoading, isFetching, error, refetch };
 }
@@ -468,6 +510,19 @@ export function useReviewSocMemoryCandidate() {
         queryKey: socMemoryQueryKeys.candidate(result.candidate.candidate_id),
       });
     },
+  });
+}
+
+export function useDraftSocMemoryBusinessLesson() {
+  const context = useSocWebRequestContext();
+  return useMutation({
+    mutationFn: ({
+      candidateId,
+      request,
+    }: {
+      candidateId: string;
+      request: SocMemoryBusinessLessonDraftRequest;
+    }) => draftSocMemoryBusinessLesson(candidateId, request, context),
   });
 }
 

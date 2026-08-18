@@ -31,6 +31,8 @@ from soc_agent.contracts import (
     SocExternalDispositionCanonicalStatus,
     SocExternalDispositionEvent,
     SocExternalDispositionRecord,
+    SocMemoryApplicabilitySpec,
+    SocMemoryBusinessLesson,
     SocMemoryCandidateCreateCommand,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
@@ -95,6 +97,7 @@ def _repository_memory_candidate_command(
     alert_id: str = "ALT-MEM-1",
     queue_id: str = "REV-MEM-1",
     idempotency_key: str = "memory:repo:run-1",
+    decision_impact: SocMemoryDecisionImpact = SocMemoryDecisionImpact.REVIEW_HINT,
 ) -> SocMemoryCandidateCreateCommand:
     return SocMemoryCandidateCreateCommand(
         candidate_type=SocMemoryCandidateType.BENIGN_PATTERN,
@@ -115,7 +118,17 @@ def _repository_memory_candidate_command(
         idempotency_key=idempotency_key,
         confidence=0.6,
         facets={"tenant": ["pingan"], "domain": ["hids"]},
-        decision_impact=SocMemoryDecisionImpact.REVIEW_HINT,
+        applicability=(
+            SocMemoryApplicabilitySpec(
+                profile_id="soc.generic",
+                profile_version="1",
+                feature_schema_version="soc.memory_features.generic.v1",
+                required_facets={"tenant": ["pingan"]},
+            )
+            if decision_impact is SocMemoryDecisionImpact.DETECTION_DECISION
+            else None
+        ),
+        decision_impact=decision_impact,
         review_owner="soc_analyst",
         labels=["candidate-only"],
     )
@@ -746,6 +759,47 @@ def test_sqlalchemy_memory_candidate_repository_persists_and_filters_candidates(
         )
         is False
     )
+
+
+def test_sqlalchemy_memory_record_round_trips_reviewer_business_lesson() -> None:
+    repository = _repository()
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+    )
+    candidate = service.propose_candidate(
+        _repository_memory_candidate_command(
+            idempotency_key="memory:repo:business-lesson",
+            decision_impact=SocMemoryDecisionImpact.DETECTION_DECISION,
+        )
+    )
+    lesson = SocMemoryBusinessLesson(
+        conclusion="运营专家确认该精确内部服务行为属于可复用的误报模式。",
+        business_rationale=["运营专家已核对当前告警证据和内部服务登记信息。"],
+        applicability_conditions=["必须命中审核后的全部 canonical required facets。"],
+        generalization_boundaries=["审核范围未约束的实体值可以变化。"],
+        invalidation_conditions=["必需 facet 不匹配或当前证据出现反证时失效。"],
+        handling_guidance=["全部适用条件命中时复用误报结论，否则重新研判。"],
+    )
+
+    reviewed = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason=("运营专家确认该精确内部服务行为属于可复用的误报模式。"),
+            record_lesson=lesson,
+            confirmed_verdict=Verdict.FALSE_POSITIVE,
+            apply_to_future_matches=True,
+        ),
+        context=_memory_governor_context(),
+    )
+
+    assert reviewed.memory_record is not None
+    persisted = repository.get_memory_record(reviewed.memory_record.memory_id)
+    assert persisted == reviewed.memory_record
+    assert persisted.business_lesson == lesson
+    assert "处置建议 / Handling guidance" in persisted.content
+    assert persisted.metadata["business_lesson_source"] == "reviewer_supplied"
 
 
 def test_sqlalchemy_memory_candidates_rank_old_exact_match_before_recent_rows() -> None:

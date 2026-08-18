@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from soc_agent.contracts import (
     AlertInput,
@@ -73,6 +75,8 @@ from soc_agent.normalizers.pingan_threat_intel import (
 )
 
 RAW_MESSAGE_FIELD = "message"
+_PINGAN_EVENT_TIMEZONE_NAME = "Asia/Shanghai"
+_PINGAN_EVENT_TIMEZONE = ZoneInfo(_PINGAN_EVENT_TIMEZONE_NAME)
 _PINGAN_TOPIC_SOURCE_TYPES = {
     "ptp-nids": AlertSourceType.NIDS,
     "sec_guard_wb": AlertSourceType.THREAT_INTEL,
@@ -113,6 +117,23 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
     )
     source_system = _first_str(hit_log, ("topic", "topicName")) or _first_str(evidence_event, ("appname", "source"))
     product = _first_str(hit_log, ("topicName",)) or _first_str(evidence_event, ("metadata__product__name",))
+    event_time, event_time_timezone_assumed = _pingan_event_datetime(
+        _first_str(
+            evidence_event,
+            (
+                "t_detect_time",
+                "timeStr",
+                "modeltime",
+                "timestamp",
+                "time",
+                "access_time",
+                "first_access_time",
+                "datatime",
+            ),
+        )
+        or _first_str(alert, ("createAt",))
+    )
+    received_at, received_at_timezone_assumed = _pingan_event_datetime(_first_str(alert, ("createAt",)) or _first_str(evidence_event, ("timestamp", "time")))
 
     canonical = {
         "schema_version": "soc.alert.v1",
@@ -153,21 +174,8 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
         },
         "event": {
             "event_id": _first_str(evidence_event, ("alarm_id", "finding__uid", "str_unique_id", "logcloud_msgid")),
-            "event_time": _first_str(
-                evidence_event,
-                (
-                    "t_detect_time",
-                    "timeStr",
-                    "modeltime",
-                    "timestamp",
-                    "time",
-                    "access_time",
-                    "first_access_time",
-                    "datatime",
-                ),
-            )
-            or _first_str(alert, ("createAt",)),
-            "received_at": _first_str(alert, ("createAt",)) or _first_str(evidence_event, ("timestamp", "time")),
+            "event_time": event_time,
+            "received_at": received_at,
         },
         "classification": {
             "severity": (threat_intel_severity(parsed_fields) if source_type is AlertSourceType.THREAT_INTEL else None)
@@ -226,6 +234,11 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
                 fallback_path=raw_event_path,
             ),
             "analysis_context_coverage": _analysis_context_coverage(original, alert),
+            "event_time_policy": {
+                "naive_timezone": _PINGAN_EVENT_TIMEZONE_NAME,
+                "event_time_timezone_assumed": event_time_timezone_assumed,
+                "received_at_timezone_assumed": received_at_timezone_assumed,
+            },
             "evidence_input_policy": _evidence_input_policy(
                 hit_log_index,
                 raw_event_index,
@@ -251,6 +264,18 @@ def normalize_pingan_platform_payload(payload: Mapping[str, Any]) -> AlertInput:
         normalized.extensions["canonical_field_provenance"] = provenance
     normalized.detection.detection_key = normalized.detection.detection_key or _detection_key(normalized)
     return normalized
+
+
+def _pingan_event_datetime(value: str | None) -> tuple[str | datetime | None, bool]:
+    if value is None:
+        return None, False
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return value, False
+    if parsed.tzinfo is not None and parsed.utcoffset() is not None:
+        return parsed, False
+    return parsed.replace(tzinfo=_PINGAN_EVENT_TIMEZONE), True
 
 
 def _evidence_input_policy(

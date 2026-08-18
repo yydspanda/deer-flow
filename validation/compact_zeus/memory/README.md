@@ -3,6 +3,18 @@
 This directory contains offline, replay-stable validation for memory admission
 and retrieval. It does not call an LLM or an internal PingAn service.
 
+The canonical human-labeled quality lane now lives in `soc_agent.eval.memory` and
+uses the committed sample under `backend/samples/eval/memory/`:
+
+```bash
+cd backend
+.venv/bin/python -m soc_agent.cli eval memory run --pretty
+```
+
+Use `soc eval memory prepare` to freeze reviewed records and disjoint held-out
+Runtime queries before analysts add truth labels. The scripts below remain structural,
+same-cohort, lifecycle, or replay audits; none replaces independent held-out labels.
+
 `simulate_pattern_memory_lifecycle.py` is the complete isolated `5+1` lifecycle
 smoke. It loads one completed Runtime batch item, derives five explicitly marked
 `simulation` occurrences with distinct event identities, and invokes the production
@@ -15,7 +27,9 @@ sixth held-out occurrence to prove exact Memory recall and persisted
 The reviewed outcomes injected into the first five occurrences are test fixtures,
 not model output or independent analyst labels. The SQLite database is created inside
 an empty output directory, all generated records retain `simulation=true`/`mocked=true`,
-no LLM or Provider is called, and no external action policy is configured.
+no LLM or Provider is called, and no external action policy is configured. The simulator
+submits an explicit structured `record_lesson` through the same production review service;
+fixture prose never substitutes for the service validation, rendering, or persistence path.
 
 ```bash
 backend/.venv/bin/python \
@@ -51,7 +65,7 @@ backend/.venv/bin/python \
 
 `build_behavior_fingerprint_audit.py` replays the production pre-LLM request builder
 over the validated PingAn corpus and compares legacy v1 grouping with PingAn Memory
-Profile v3 without changing Runtime decisions. It reports coverage, per-rule
+Profile v4 without changing Runtime decisions. It reports coverage, per-rule
 fragmentation, exact recurrent and cross-IP cohorts, historical-output divergence,
 duplicate IP ranking facets, and context-only pairs before and after requiring an exact
 `detection_signature` plus shared strong behavior. It also reports a `detection_key` that

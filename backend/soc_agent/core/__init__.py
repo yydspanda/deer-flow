@@ -41,6 +41,7 @@ from soc_agent.core.memory_evolution import (
     SocMemoryEvolutionError,
     SocMemoryEvolutionService,
 )
+from soc_agent.core.memory_lesson_drafting import SocMemoryLessonDraftService
 from soc_agent.core.memory_patterns import SocMemoryPatternService
 from soc_agent.core.normalization_maintenance import SocNormalizationMaintenanceService
 from soc_agent.core.operations import SocOperationsService
@@ -113,6 +114,7 @@ __all__ = [
     "SocInvestigationReportingError",
     "SocInvestigationReportingService",
     "SocMemoryService",
+    "SocMemoryLessonDraftService",
     "SocMemoryEvolutionError",
     "SocMemoryEvolutionService",
     "SocMemoryPatternService",

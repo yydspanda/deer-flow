@@ -144,6 +144,28 @@ def test_deerflow_client_reuses_model_and_bounds_metadata() -> None:
     assert second.model_name == "provider-model-id"
 
 
+def test_deerflow_client_accepts_bounded_call_trace_identity() -> None:
+    model = _FakeModel()
+    client = DeerFlowLLMChatClient(
+        app_config=_FakeConfig("deepseek-v4-pro"),  # type: ignore[arg-type]
+        run_name="soc_memory_business_lesson_draft",
+        trace_tags=("soc-agent", "soc-memory", "business-lesson-draft"),
+        model_factory=lambda **_kwargs: model,
+    )
+
+    client.complete(
+        [{"role": "user", "content": "draft"}],
+        model_name="deepseek-v4-pro",
+    )
+
+    assert model.calls[0][1]["run_name"] == "soc_memory_business_lesson_draft"
+    assert model.calls[0][1]["tags"] == [
+        "soc-agent",
+        "soc-memory",
+        "business-lesson-draft",
+    ]
+
+
 def test_deerflow_client_requests_json_mode_only_when_enabled() -> None:
     model = _FakeModel()
     client = DeerFlowLLMChatClient(

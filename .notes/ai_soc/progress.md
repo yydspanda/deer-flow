@@ -29,10 +29,110 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；主 LLM 只执行 bounded `AnalysisResult.v4` 节点；条件式 verifier 通用/本机默认关闭，固定 cohort 或 live 命令显式开启后由确定性 gate 触发，只独立反证 `RC-*` 方向/角色声明，不掌握流程或动作权限 |
-| 当前下一刀 | PingAn Memory Profile v3 已完成 detector signature、strong/weak behavior、强特征 context-only 和 IP 排名去重，并用 210 条真实语料完成 v1→v3 结构对照。下一步建立独立人工 verdict/scenario/direction/role 真值和 held-out Memory 查询集，测 pattern lesson 与 Retrieval v2 precision/recall、directive override accuracy、专家审核负担和 verifier failure rate；随后补 Web/TUI 人工角色确认。真实内网 adapter/owner/rollback gate 保持独立，不被 simulation 关闭。 |
+| 当前下一刀 | 在外网 `DEV` 通过浏览器完成固定 GalaxyLab 14-alert Memory 生命周期：5 条构建 Pattern、SOC 复核工作区的独立候选经验视图审核并启用高质量 Business Lesson、1 条 held-out 验证 Memory 决策、8 条扩展复测。使用独立 SQLite、真实 LLM，关闭平安真实 Provider、租户策略和外部动作；完成后再冻结独立人工真值做 Held-out Memory Eval。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
+## 2026-08-17 — Browser-driven GalaxyLab Memory DEV acceptance
+
+- 新增默认关闭的 `/api/soc/dev/memory-workbench` 与
+  `/workspace/soc/memory-validation`，固定使用已审计的 14 条
+  `GalaxyLab_T1003-SAM-Dumping` 历史告警，不开放任意文件或任意告警执行。
+- 页面只协调正式服务：`SocAnalysisService -> SocMemoryPatternService -> Memory Candidate governance`
+  再进入 `Business Lesson -> retrieval activation -> held-out M-* / Decision lineage`，不新增候选审核、
+  Memory 写入或决策旁路。
+- 顺序固定为 `5 construction -> review/activate -> 1 held-out -> 8 additional`；浏览器不能跳步。
+  原始 PKL 不变，只在复制后的可信入口 payload 补 tenant。
+- 启动入口为 `./scripts/soc-memory-dev.sh start`；数据库固定隔离在
+  `backend/.deer-flow/soc-validation/memory-dev-web/soc-memory-dev.sqlite`。DEV Gate 要求真实 LLM、
+  管理员登录、SQLite、`dev` Memory/automation namespace、tenant policy disabled、external action
+  execution disabled。
+- 该阶段要由用户逐步操作并审阅结果；自动化只验证结构、权限、页面和服务接线，不代替运营结论。
+- 独立候选治理页先要求审核人选择最终 verdict，可选补充一句内部业务事实；AI 再生成完整六项
+  Business Lesson。生成结果默认只读，显式点击编辑才暴露五项文字字段，机器 Applicability 始终不可
+  通过自由文本放宽。
+- 草稿请求把 `reviewer_verdict` 与可选 `reviewer_context` 分开传输；历史 candidate/cohort verdict 只作
+  模型观察，不能覆盖人工选择。选择变化会清空旧草稿，避免把旧结论误确认到新 verdict。
+- 草稿不会自动确认、激活或获得决策权限；确认会保存完整 Lesson，普通审核理由不再冒充业务经验。
+
 ## 2026-08-16 — PingAn SOC Memory Kernel/Profile/Evolution MVP
+
+### ZEUS alert occurrence identity hardening
+
+- 真实样本复核发现 `apt-2025642` 和部分 HIDS 告警规范化后没有 sensor `event_id`；旧优先级会退到
+  整包 `input_hash`，导致同一 ZEUS `alertId` 在可变 payload 字段变化后可能被重复计入 pattern support。
+- `PingAnSocMemoryProfile` 现以原始 payload 中稳定的 `alertId|alertCode` 为第一 occurrence identity，
+  缺失时才使用 canonical sensor event ID、exact input hash 和 bounded time/entity fallback。相同
+  IP/规则但新的 ZEUS alert ID 仍是新的真实 occurrence。
+- 回归同时暴露 legacy `createAt` 常为无 offset 本地时间；PingAn Adapter 现按 `Asia/Shanghai` 类型化，
+  并在 `extensions.event_time_policy` 记录是否采用时区假设，通用 Pattern Kernel 不承担租户时间推断。
+- 新增同 alert ID/不同 event ID 与 input hash 去重、不同 alert ID 独立计数、event ID fallback，以及
+  `apt-2025642` 形态的嵌套 ZEUS payload 回归。生产仍需验证 ZEUS alert ID 不跨事件复用。
+
+### Candidate-level Business Lesson AI draft
+
+- 新增 `soc.memory_business_lesson_draft.v1` 和 `SocMemoryLessonDraftService`。模型调用发生在模式候选
+  通过聚合/质量门槛之后，而不是每条告警之后；生成结果固定不持久化、无 decision/action authority。
+- 新增 `soc-memory-business-lesson-draft-v3` 专用 Prompt。输入是审核人显式选择的 verdict、服务端候选
+  投影的有界 `D-*` 目录和可选 analyst business context，输出是严格的小型 JSON：结论、逐条引用的业务依据、泛化边界、
+  失效条件、处置建议和 uncertainties。适用范围不交给模型，由服务端从
+  `SocMemoryApplicabilitySpec` 确定性补齐；未知引用和 schema 错误拒绝，普通 JSON 语法损坏只允许
+  审计化 `json_repair`。草稿同时保留每条业务依据到精确 `D-*` 来源的映射，供专家逐条核验；
+  不只保留一个无法解释的总引用集合。
+- `supporting_source_refs` 只允许是逐条业务依据引用的有序去重并集，不得复制整个 `D-*` 目录；若模型仅把
+  冗余目录引用塞入该索引，Runtime 会做可审计的机械归一化，不改变 Lesson 的业务内容或引用事实。
+- 真实模型验收后进一步补齐：Prompt 尾部使用完整 JSON Schema；未知非空字段拒绝；URI/域名/规则键
+  必须在 `D-*` 目录中逐字存在；结论不得夹带关单、封禁、隔离或抑制指令。Runtime 确定性补入
+  “必需 facet 不匹配”和“当前出现反证/攻击影响”两条失效底线。专家勾选的 optional facet 只传键名，
+  服务端从候选中确定性收窄，模型无法自定义适用范围。候选级调用允许最多一次有界输出修复，
+  provider call/repair/token 全部记入 provenance，该策略不用于每条告警。
+- Gateway 新增 `POST /api/soc/memory/candidates/{candidate_id}/lesson-draft`，CLI 新增
+  `soc memory draft-lesson --reviewer-verdict ...`，ReviewQueue 新增 `AI 生成 Memory`。草稿默认进入
+  只读审阅，专家可显式编辑并最终确认；现有 `record_lesson`/directive/activation 边界不变。
+- AskBob 回归证明：专家的一句话业务事实可被整理成可独立理解的经验；草稿生成前后候选和 Memory
+  表均不变化，人工确认后才创建正式 record。该能力没有把 PingAn 事实写入通用 Prompt，也没有为
+  固定结构化表单另建 Skill。
+- 验证：Memory Lesson/Router/Repository/PingAn Profile/Held-out Eval/Prompt/LLM Client/架构聚焦回归
+  `102 passed`；changed-file Ruff format/check、前端 ESLint/TypeScript 和 ReviewQueue Playwright 通过。
+  `globalai-deepseek-v4-flash-0731` 在 reasoning/json mode 均关闭的普通 Chat Completion 路径完成
+  3 次 AskBob 真实草稿：3/3 通过 schema/引用/标识符/权限边界，0 repair，0 持久化；共
+  `12,321` input tokens、`1,837` output tokens、`14,158` total tokens，累计 client 耗时约 `14.57s`。
+  产物位于 `backend/.deer-flow/soc-validation/memory-lesson-live-20260816/quality-report.json`。
+  结论是“高质量可审草稿通过”，不是“可自动确认 Memory”；个别措辞仍由专家编辑。
+
+### Held-out Memory Evaluation v1
+
+- 修正上一轮“高质量 Memory 已实现”的范围表述：单纯把 AskBob 文案写入 held-out fixture 只能证明
+  评测形态，不能证明生产确认链路。现已新增通用 `soc.memory_business_lesson.v1`，由
+  `SocMemoryService.review_candidate()` 在 confirmed record 创建前统一校验、渲染并持久化；API/CLI/Web
+  必须提交 reviewer-owned `record_lesson`。决策型 Memory 不再从人工评审理由或模式候选说明自动猜测
+  业务经验；缺失 Lesson 在状态迁移前 fail closed，长短占位理由均不能获得未来改判权。
+- Lesson 独立保存 conclusion、business rationale、applicability、generalization、invalidation 和 handling
+  guidance；渲染后的 `summary/content` 才进入真正的 `M-*` 模型上下文。SQL `record_payload` round-trip、
+  Gateway API、不同服务拒绝和精确 AskBob URL 范围均已走生产服务验证；无新增数据库迁移。
+- 新增只读 `soc eval memory prepare|run`。`prepare` 从冻结的 `AnalysisRun` 与 reviewed Memory export
+  生成 `soc.memory_heldout_eval_fixture.v1` pending fixture；`run` 使用实际 `PingAnSocMemoryProfile`、
+  `SocMemoryService`、`ConfirmedMemoryAnalysisRequestEnricher` 和 `SocAutomationService` 生成
+  `soc.memory_heldout_eval_report.v1`，没有复制一套评测专用匹配/改判算法。
+- 契约强制 Memory 来源告警与 held-out query alert 不重叠。每条 accepted case 必须对所有冻结 Memory
+  标记 `decision_applicable|context_only|unrelated`，并提供独立 reviewer/source/time/reason、最终 verdict、
+  是否应复核及可选 scenario/direction/role 真值；pending label 不产生 accuracy。
+- 指标分为 Retrieval relevance、Profile pattern-lesson applicability、真实 directive eligibility、
+  Base/Effective verdict、override accuracy、scenario/direction/role、review burden 和 verifier failure。
+  “被召回”“可作为模式经验”“决策指令实际生效”不再混成一个命中率。
+- 提交的三条 held-out simulation cases 使用可独立阅读的 AskBob 业务经验，覆盖 exact cross-IP
+  decisive match、同服务但行为变化的 strong-component context-only match，以及同规则/同行为但不同
+  service URL 的拒绝召回；当前 synthetic 指标均按预期通过，且演示一次 review reduction。
+  审核者把 canonical `url:https://paic.com.cn/pws/askbob-gpt` 从候选 optional `entity` 收紧为
+  required facet，IP 仍不进入必需范围，因此既支持跨 IP 泛化，也不会把其他服务误判为 AskBob。
+  其中 verifier `1/1 unavailable` 是故意放入 fixture 的计量样例，不是产品质量结论。
+- simulation 固定 `real_quality_metrics_available=false`、`rollout_authorized=false`。真实质量结论仍等待
+  与 Memory 来源完全独立的脱敏告警和运营专家标签；评测本身不写业务库、不创建 Memory、不授权动作。
+- 验证：Business Lesson/Profile/API/SQL/Eval/生命周期聚焦回归 `62 passed`；Memory 跨层组件与架构
+  回归 `235 passed`；前端 `eslint + tsc` 通过，ReviewQueue Playwright `4 passed`；三案例 simulation
+  eval 完整运行且仍固定 `real_quality_metrics_available=false`、`rollout_authorized=false`。
+  最终验证记录；changed-file Ruff check/format 与前端 TypeScript contract check 通过。
+  最新本地报告保存在 gitignored
+  `backend/.deer-flow/soc-validation/memory-heldout-eval-v1/report.json`。
 
 ### Profile v3 / Behavior Fingerprint Audit
 
@@ -53,6 +153,23 @@
   decision eligibility。该 corpus 没有独立人工真值，因此不声明 precision/recall。
 - Profile v2 typed records 对 v3 query fail closed；不会静默升级或继承旧 directive，必须按 v3 重新聚合、
   审核和激活。通用 Memory Kernel/Runtime 不读取 PingAn raw 字段，新增特征只由 PingAn Profile 投影。
+
+### Profile v4 / Endpoint Behavior Fingerprint
+
+- PingAn EDR Adapter 将平铺 `str_suspicious_file` 转为带精确 provenance 的
+  `endpoint_action_target` file observation；不把语义不确定的伴随 MD5 绑定到目标文件。
+- PingAn Memory Profile v4 从 canonical typed entities 生成 endpoint core/detail 两层组件。GalaxyLab
+  样本的 core 包含 `wuaucltcore.exe`、`windows/uus/amd64` 路径、`UpdateDeploy.dll`、稳定 command
+  switch、`wuauserv` 和 protected-registry-hive target class；`SAM/SYSTEM` 是可审计 detail。
+- IP、host、account、alert/run lineage 和随机 ClassId UUID 不进入 fingerprint。14 条固定真实样本跨主机、
+  账号与 ClassId 收敛为一个 v4 core fingerprint；进程路径、module 或 parent service 变化产生不同
+  fingerprint。v2/v3 record 对 v4 query fail closed，必须重新聚合、审核和激活。
+- 2026-08-17 验收：14/14 真实样本收敛为一个 core fingerprint；其中 13 条保留 `SAM + SYSTEM`
+  detail、1 条只保留 `SYSTEM`，不影响 typed target class。跨主机/跨 IP/跨 ClassId 的完整
+  observation -> candidate -> reviewer lesson -> confirmed Memory -> retrieval/directive 链路通过；路径、
+  command module 或 parent service 变化时 directive 不可用。相关跨层后端回归 `230 passed`、架构边界
+  `12 passed`、离线 v4 评测 `8 passed`、浏览器 Memory Workbench `2 passed`，且 `git diff --check`
+  通过。
 
 - PingAn Memory Profile 升级为 v2：同一告警同时具备 canonical `detection_key` 与
   `behavior_fingerprint` 时使用 compound cohort。相同 rule、不同 behavior 不再聚进同一候选，因此可安全
@@ -111,7 +228,7 @@
   proposal。Wiki/OKF 明确只作为后期 DB 投影，不成为第二个可写事实源。
 - 当前实现证明结构、事务、权限、幂等和 fail-closed 边界；是否真正降低人工量仍需 held-out、人工标注的
   PingAn 样本测 retrieval precision、候选审核通过率、contradiction/not-applicable rate 和节省工时。
-- 已验证：跨层 Memory/Review/API/automation/architecture 回归 `194 passed`；真实 migration head `1 passed`；离线
+- 已验证：跨层 Memory/Review/API/automation/architecture 最新回归 `235 passed`；真实 migration head `1 passed`；离线
   PingAn batch/Memory helpers `27 passed`；前端 check/typecheck、SOC API unit `27 passed`、ReviewQueue
   Playwright `4 passed`，以及 changed-file Ruff / `git diff --check` 均通过。
 

@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from app.gateway.routers import soc_memory
 from soc_agent.contracts import (
     SocMemoryApplicabilitySpec,
+    SocMemoryBusinessLesson,
     SocMemoryCandidateCreateCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateSource,
@@ -182,12 +183,21 @@ def test_soc_memory_api_preserves_reviewed_decision_directive() -> None:
         required_facet_keys=["tenant"],
         rationale="Reviewed tenant-scoped false-positive pattern.",
     )
+    lesson = SocMemoryBusinessLesson(
+        conclusion="Reviewer approved this bounded tenant-scoped false-positive pattern.",
+        business_rationale=["The reviewer verified the candidate evidence and tenant context."],
+        applicability_conditions=["Every reviewed required tenant facet must match."],
+        generalization_boundaries=["Unreviewed optional dimensions may vary but cannot establish a match."],
+        invalidation_conditions=["A required facet mismatch or current counterevidence invalidates the lesson."],
+        handling_guidance=["Apply the reviewed verdict only after all directive gates pass."],
+    )
 
     result = soc_memory.review_memory_candidate(
         candidate.candidate_id,
         soc_memory.MemoryCandidateReviewRequest(
             decision=SocMemoryCandidateReviewDecision.CONFIRM,
             reason="Reviewer approved a bounded decision directive.",
+            record_lesson=lesson,
             record_applicability=candidate.applicability,
             decision_directive=directive,
         ),
@@ -199,6 +209,60 @@ def test_soc_memory_api_preserves_reviewed_decision_directive() -> None:
     assert result.memory_record.decision_impact is SocMemoryDecisionImpact.DETECTION_DECISION
     assert result.memory_record.applicability == candidate.applicability
     assert result.memory_record.decision_directive == directive
+    assert result.memory_record.business_lesson == lesson
+    assert result.memory_record.metadata["business_lesson_source"] == ("reviewer_supplied")
+
+
+def test_soc_memory_api_persists_explicit_business_lesson() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+    )
+    candidate = service.propose_candidate(
+        _memory_candidate_command(
+            idempotency_key="memory:router:explicit-lesson",
+            decision_impact=SocMemoryDecisionImpact.DETECTION_DECISION,
+        )
+    )
+    lesson = SocMemoryBusinessLesson(
+        conclusion="运营确认该精确内部服务调用属于可复用的业务误报模式。",
+        business_rationale=["当前候选证据与内部服务登记信息一致。"],
+        applicability_conditions=["必须命中审核后的全部 canonical required facets。"],
+        generalization_boundaries=["未列为必需的实体可以变化，但不能独立触发改判。"],
+        invalidation_conditions=["必需 facet 缺失或当前证据出现反证时失效。"],
+        handling_guidance=["精确适用时复用误报结论，否则重新研判。"],
+    )
+
+    result = soc_memory.review_memory_candidate(
+        candidate.candidate_id,
+        soc_memory.MemoryCandidateReviewRequest(
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Reviewer supplied a complete reusable business lesson.",
+            record_lesson=lesson,
+            record_applicability=candidate.applicability,
+            confirmed_verdict=Verdict.FALSE_POSITIVE,
+            apply_to_future_matches=True,
+        ),
+        request=FakeRequest(),
+        service=service,
+    )
+
+    assert result.memory_record is not None
+    assert result.memory_record.business_lesson == lesson
+    assert result.memory_record.summary == lesson.conclusion
+    assert "业务依据 / Business rationale" in result.memory_record.content
+    assert result.memory_record.metadata["business_lesson_source"] == ("reviewer_supplied")
+
+
+def test_soc_memory_api_rejects_future_decision_without_business_lesson() -> None:
+    with pytest.raises(ValueError, match="explicit reviewed record_lesson"):
+        soc_memory.MemoryCandidateReviewRequest(
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Reviewed simulation lesson for Reverse connection detector.",
+            confirmed_verdict=Verdict.FALSE_POSITIVE,
+            apply_to_future_matches=True,
+        )
 
 
 def test_soc_memory_api_rejects_analyst_retrieval_activation() -> None:

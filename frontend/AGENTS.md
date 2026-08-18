@@ -155,10 +155,41 @@ control. Detection/rule-context candidates may be confirmed as reasoning context
 an automatic verdict option. Relevant-memory results render `partial/context_only_allowed` distinctly
 and display `returned_context_only_count`; the browser must never reinterpret a context-only match as
 an applicable directive.
+When future-match authority is selected, the workbench must collect a complete
+`soc.memory_business_lesson.v1` (conclusion, rationale, generalization boundary, invalidation condition,
+and handling guidance); applicability prose is projected from the reviewed machine scope. A generic
+review reason is audit metadata and cannot substitute for `record_lesson`.
+The `AI 生成 Memory` command becomes available after the reviewer explicitly selects the final technical verdict;
+reviewer business context remains optional. The selected verdict and optional context are sent separately, and a
+verdict change invalidates any existing browser draft. The generated six-section Lesson is read-only by default;
+only an explicit `编辑` command exposes the five prose fields while applicability remains server-owned. It may show
+model/prompt lineage or uncertainties, but it must not
+enable future-match authority, submit review automatically, persist a draft as confirmed knowledge,
+or reinterpret draft prose as machine applicability. Confirmation still reconstructs
+applicability from the currently reviewed scope. Send `reviewer_verdict`, optional `reviewer_context`, and only the
+selected `promoted_facet_keys` with the draft request; the backend resolves candidate-owned values and rejects unknown keys.
 It must call `updateSocMemoryRetrievalActivation()` / the Gateway retrieval endpoint with the current
 record version, reason, idempotency key and enable validity/review settings. Do not optimistically flip
 `retrieval_enabled` or infer governance eligibility in the browser; refresh server records after the
 mutation. Display policy/review metadata and the retrieval skipped counters returned by the API.
+
+The DEV-only `/workspace/soc/memory-validation` page is an operational client for the fixed
+GalaxyLab Memory lifecycle. It reads a server-owned progression projection and may invoke only the
+next unlocked alert through `core/soc`; React must not load the PKL, construct Pattern observations,
+approve candidates, enable retrieval, or calculate Base/Memory/Tenant/Effective decisions. Candidate
+governance deep-links into the existing SOC review workspace's standalone Memory view with
+`candidate_id`; do not fabricate an alert ReviewQueue item when the source decision does not require
+alert review. The standalone candidate view must first collect the reviewer verdict and optional business fact,
+then show all six Business Lesson sections after generation and before future-match authority is enabled. Applicability is a
+read-only, server-derived section in the editable workflow; do not hide it inside free-form analyst
+prose or imply that a Pattern Candidate is already a confirmed/retrievable Memory. Keep the
+environment, SQLite,
+mock/off Provider, disabled tenant-policy, and disabled-action labels visible so screenshots cannot be
+misread as STG or production evidence. `docker-compose.soc-memory-dev.yaml` deliberately starts this
+DEV acceptance surface with `next dev --webpack`: Next.js 16.2 Turbopack has a confirmed intermittent
+negative component-performance timestamp failure during redirects. Keep that workaround scoped to the
+overlay rather than patching browser `performance`, changing the normal frontend script, or adding
+business-page error suppression.
 
 The SOC operations page at `/workspace/soc/operations` is a thin read-only consumer of
 `soc.operations_snapshot.v1` through `core/soc/api.ts` and `useSocOperationsSnapshot()`. It may refresh

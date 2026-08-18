@@ -7,6 +7,12 @@ from soc_agent.prompts.analysis import (
     analysis_response_schema,
     build_analysis_prompt,
 )
+from soc_agent.prompts.memory_lesson import (
+    MEMORY_LESSON_DRAFT_PROMPT_VERSION,
+    MemoryLessonDraftPrompt,
+    build_memory_lesson_draft_prompt,
+    memory_lesson_draft_response_schema,
+)
 from soc_agent.prompts.output_repair import (
     ANALYSIS_OUTPUT_REPAIR_PROMPT_VERSION,
     ANALYSIS_SECTION_OUTPUT_REPAIR_PROMPT_VERSION,
@@ -29,6 +35,8 @@ __all__ = [
     "ANALYSIS_OUTPUT_REPAIR_PROMPT_VERSION",
     "ANALYSIS_SECTION_OUTPUT_REPAIR_PROMPT_VERSION",
     "AnalysisPrompt",
+    "MEMORY_LESSON_DRAFT_PROMPT_VERSION",
+    "MemoryLessonDraftPrompt",
     "analysis_output_examples",
     "OutputRepairPrompt",
     "ROLE_VERIFICATION_OUTPUT_REPAIR_PROMPT_VERSION",
@@ -39,7 +47,9 @@ __all__ = [
     "RoleVerificationPrompt",
     "RoleVerificationPromptSizeError",
     "build_analysis_prompt",
+    "build_memory_lesson_draft_prompt",
     "build_role_verification_prompt",
     "build_role_verification_output_repair_prompt",
     "role_verification_response_schema",
+    "memory_lesson_draft_response_schema",
 ]

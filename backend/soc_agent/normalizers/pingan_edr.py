@@ -186,7 +186,8 @@ def build_edr_file_observations(
 ) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
     for parsed in parsed_messages:
-        for detail_name, detail in _detail_records(parsed.fields):
+        details = _detail_records(parsed.fields)
+        for detail_name, detail in details:
             action_detail = _as_dict(detail.get("action_detail"))
             file_name = _first_str(action_detail, ("file_name",))
             file_path = _first_str(action_detail, ("file_path",))
@@ -209,6 +210,36 @@ def build_edr_file_observations(
                     }
                 )
             )
+        if details:
+            continue
+
+        target_path = _first_str(parsed.fields, ("str_suspicious_file",))
+        if target_path is None:
+            continue
+        observations.append(
+            _drop_none(
+                {
+                    "observation_id": f"file:{parsed.message_hash[:16]}:target",
+                    "evidence_path": f"{parsed.source_path}#parsed.str_suspicious_file",
+                    "relation": "endpoint_action_target",
+                    "event_time": _first_str(
+                        parsed.header,
+                        ("timestamp", "event_time"),
+                    )
+                    or _first_str(
+                        parsed.fields,
+                        ("timestamp", "time", "access_time", "first_access_time"),
+                    ),
+                    "process_id": _intish(
+                        _first_str(
+                            parsed.fields,
+                            ("process__pid", "str_process_id"),
+                        )
+                    ),
+                    "file_path": target_path,
+                }
+            )
+        )
     return observations
 
 
@@ -692,56 +723,66 @@ def _append_observation_provenance(
             continue
 
         process_item = process_by_evidence.get(f"{parsed.source_path}#parsed")
-        if process_item is None:
-            continue
-        observation_index, observation = process_item
-        for node_index, node in enumerate(observation.nodes):
-            sources = {
-                "process_name": _first_present_path(
-                    parsed.fields,
-                    ("process__name", "str_process_short", "process__file__name"),
-                ),
-                "process_id": _first_present_path(
-                    parsed.fields,
-                    ("process__pid", "str_process_id"),
-                ),
-                "process_path": _first_present_path(
-                    parsed.fields,
-                    ("process__file__path", "str_process_full", "str_suspicious_file"),
-                ),
-                "command_line": _first_present_path(
-                    parsed.fields,
-                    ("process__cmd_line", "str_cmd", "process__ancestor__cmd_line"),
-                ),
-                "username": _first_present_path(
-                    parsed.fields,
-                    ("process__user__name", "str_user_process"),
-                ),
-                "md5": _first_present_path(
-                    parsed.fields,
-                    (
-                        "process__file__hashes__md5",
-                        "str_md5",
-                        "str_suspicious_file_md5",
+        if process_item is not None:
+            observation_index, observation = process_item
+            for node_index, node in enumerate(observation.nodes):
+                sources = {
+                    "process_name": _first_present_path(
+                        parsed.fields,
+                        ("process__name", "str_process_short", "process__file__name"),
                     ),
-                ),
-                "sha256": _first_present_path(
-                    parsed.fields,
-                    (
-                        "process__file__hashes__sha256",
-                        "str_sha256",
-                        "str_suspicious_file_sha256",
+                    "process_id": _first_present_path(
+                        parsed.fields,
+                        ("process__pid", "str_process_id"),
                     ),
-                ),
-            }
-            for field_name, source_path in sources.items():
-                _append_provenance(
-                    provenance,
-                    canonical_path=(f"entities.process.observations[{observation_index}].nodes[{node_index}].{field_name}"),
-                    selected_value=getattr(node, field_name),
-                    parsed=parsed,
-                    source_path=source_path,
-                )
+                    "process_path": _first_present_path(
+                        parsed.fields,
+                        ("process__file__path", "str_process_full", "str_suspicious_file"),
+                    ),
+                    "command_line": _first_present_path(
+                        parsed.fields,
+                        ("process__cmd_line", "str_cmd", "process__ancestor__cmd_line"),
+                    ),
+                    "username": _first_present_path(
+                        parsed.fields,
+                        ("process__user__name", "str_user_process"),
+                    ),
+                    "md5": _first_present_path(
+                        parsed.fields,
+                        (
+                            "process__file__hashes__md5",
+                            "str_md5",
+                            "str_suspicious_file_md5",
+                        ),
+                    ),
+                    "sha256": _first_present_path(
+                        parsed.fields,
+                        (
+                            "process__file__hashes__sha256",
+                            "str_sha256",
+                            "str_suspicious_file_sha256",
+                        ),
+                    ),
+                }
+                for field_name, source_path in sources.items():
+                    _append_provenance(
+                        provenance,
+                        canonical_path=(f"entities.process.observations[{observation_index}].nodes[{node_index}].{field_name}"),
+                        selected_value=getattr(node, field_name),
+                        parsed=parsed,
+                        source_path=source_path,
+                    )
+
+        file_item = file_by_evidence.get(f"{parsed.source_path}#parsed.str_suspicious_file")
+        if file_item is not None:
+            observation_index, observation = file_item
+            _append_provenance(
+                provenance,
+                canonical_path=(f"entities.file.observations[{observation_index}].file_path"),
+                selected_value=observation.file_path,
+                parsed=parsed,
+                source_path="str_suspicious_file",
+            )
 
 
 def _detail_records(

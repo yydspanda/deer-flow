@@ -5,18 +5,21 @@ import {
   AlertTriangleIcon,
   BotIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
   ClipboardCheckIcon,
   CircleIcon,
   FlaskConicalIcon,
   InboxIcon,
   KeyRoundIcon,
   LibraryBigIcon,
+  PencilIcon,
   PlayCircleIcon,
   PowerIcon,
   RefreshCwIcon,
   SearchCheckIcon,
   ShieldAlertIcon,
   ShieldCheckIcon,
+  SparklesIcon,
   WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
@@ -26,6 +29,11 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -46,6 +54,7 @@ import {
   useCorrectSocReviewRun,
   useCreateSocApprovalGrant,
   useDryRunSocApprovedAction,
+  useDraftSocMemoryBusinessLesson,
   useExpireSocApprovalRequest,
   useExecuteSocApprovedAction,
   useRejectSocApprovalRequest,
@@ -54,6 +63,8 @@ import {
   useSocApprovalRequest,
   useSocApprovalRequests,
   useSocMemoryRecords,
+  useSocMemoryCandidate,
+  useSocMemoryCandidates,
   useSocReviewContext,
   useSocReviewItems,
   useUpdateSocMemoryRetrievalActivation,
@@ -73,6 +84,7 @@ import type {
   SocMemoryCandidate,
   SocMemoryCandidateReviewDecision,
   SocMemoryApplicabilitySpec,
+  SocMemoryBusinessLesson,
   SocMemoryRecord,
   SocMemoryRetrievalActivationAction,
   SocMemoryRetrievalResult,
@@ -120,23 +132,36 @@ interface MemoryRetrievalDraft {
 }
 
 interface MemoryCandidateReviewDraft {
-  reason: string;
+  businessContext: string;
   applyToFutureMatches: boolean;
-  confirmedVerdict: SocVerdict;
+  confirmedVerdict: SocVerdict | null;
   promotedFacetKeys: string[];
+  lessonConclusion: string;
+  lessonBusinessRationale: string;
+  lessonGeneralizationBoundary: string;
+  lessonInvalidationCondition: string;
+  lessonHandlingGuidance: string;
+  lessonDraftProvenance: string;
+  lessonDraftUncertainties: string[];
+  lessonEditing: boolean;
 }
 
 function defaultMemoryCandidateReviewDraft(
-  candidate: SocMemoryCandidate,
+  _candidate: SocMemoryCandidate,
 ): MemoryCandidateReviewDraft {
   return {
-    reason: "",
+    businessContext: "",
     applyToFutureMatches: false,
-    confirmedVerdict:
-      candidate.candidate_type === "benign_pattern"
-        ? "false_positive"
-        : "true_positive",
+    confirmedVerdict: null,
     promotedFacetKeys: [],
+    lessonConclusion: "",
+    lessonBusinessRationale: "",
+    lessonGeneralizationBoundary: "",
+    lessonInvalidationCondition: "",
+    lessonHandlingGuidance: "",
+    lessonDraftProvenance: "",
+    lessonDraftUncertainties: [],
+    lessonEditing: false,
   };
 }
 
@@ -170,6 +195,72 @@ function reviewedMemoryApplicability(
             new Set([...base.context_only_required_facet_keys, ...promoted]),
           ).sort()
         : [],
+  };
+}
+
+function reviewedLessonItems(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function hasMemoryLessonDraft(draft: MemoryCandidateReviewDraft) {
+  return [
+    draft.lessonConclusion,
+    draft.lessonBusinessRationale,
+    draft.lessonGeneralizationBoundary,
+    draft.lessonInvalidationCondition,
+    draft.lessonHandlingGuidance,
+  ].some((value) => value.trim().length > 0);
+}
+
+function reviewedMemoryBusinessLesson(
+  draft: MemoryCandidateReviewDraft,
+  applicability: SocMemoryApplicabilitySpec | null | undefined,
+): SocMemoryBusinessLesson | undefined {
+  const conclusion = draft.lessonConclusion.trim();
+  const businessRationale = reviewedLessonItems(draft.lessonBusinessRationale);
+  const generalizationBoundaries = reviewedLessonItems(
+    draft.lessonGeneralizationBoundary,
+  );
+  const invalidationConditions = reviewedLessonItems(
+    draft.lessonInvalidationCondition,
+  );
+  const handlingGuidance = reviewedLessonItems(draft.lessonHandlingGuidance);
+  const applicabilityConditions = applicability
+    ? Object.entries(applicability.required_facets).map(
+        ([key, values]) =>
+          `Required canonical facet ${key}: ${values.join(", ")}`,
+      )
+    : [];
+  if (applicability?.minimum_optional_matches) {
+    applicabilityConditions.push(
+      `At least ${applicability.minimum_optional_matches} reviewed optional facet groups must also match.`,
+    );
+  }
+  if (
+    conclusion.length < 10 ||
+    businessRationale.length === 0 ||
+    businessRationale.some((item) => item.length < 5) ||
+    applicabilityConditions.length === 0 ||
+    generalizationBoundaries.length === 0 ||
+    generalizationBoundaries.some((item) => item.length < 5) ||
+    invalidationConditions.length === 0 ||
+    invalidationConditions.some((item) => item.length < 5) ||
+    handlingGuidance.length === 0 ||
+    handlingGuidance.some((item) => item.length < 5)
+  ) {
+    return undefined;
+  }
+  return {
+    schema_version: "soc.memory_business_lesson.v1",
+    conclusion,
+    business_rationale: businessRationale,
+    applicability_conditions: applicabilityConditions,
+    generalization_boundaries: generalizationBoundaries,
+    invalidation_conditions: invalidationConditions,
+    handling_guidance: handlingGuidance,
   };
 }
 
@@ -268,6 +359,179 @@ function candidateSourceLabel(candidate: SocMemoryCandidate) {
     source.queue_id ? `queue ${source.queue_id}` : null,
   ].filter(Boolean);
   return refs.join(" / ");
+}
+
+function candidateStatusLabel(status: SocMemoryCandidate["status"]) {
+  const labels: Partial<Record<SocMemoryCandidate["status"], string>> = {
+    pending_review: "待审核",
+    confirmed_candidate: "已确认候选",
+    confirmed: "已确认",
+    rejected: "已驳回",
+    expired: "已过期",
+    deprecated: "已停用",
+  };
+  return labels[status] ?? status;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function candidateCohortMetrics(candidate: SocMemoryCandidate) {
+  const cohortQuality = objectRecord(candidate.metadata.cohort_quality);
+  return {
+    supportCount:
+      finiteNumber(candidate.metadata.support_count_at_creation) ??
+      finiteNumber(cohortQuality?.support_count),
+    distinctSourceCount:
+      finiteNumber(candidate.metadata.distinct_source_count_at_creation) ??
+      finiteNumber(cohortQuality?.distinct_source_count),
+    consistencyRatio:
+      finiteNumber(cohortQuality?.consistency_ratio) ?? candidate.confidence,
+    riskClass:
+      typeof cohortQuality?.dominant_risk_class === "string"
+        ? cohortQuality.dominant_risk_class
+        : null,
+  };
+}
+
+function candidateRiskClassLabel(value: string | null) {
+  if (value === "risk") return "有风险候选";
+  if (value === "benign") return "无风险候选";
+  if (value === "mixed") return "结论冲突";
+  return "待人工判断";
+}
+
+function candidateScopeHighlights(candidate: SocMemoryCandidate) {
+  const definitions = [
+    { key: "rule_code", label: "规则" },
+    { key: "product", label: "产品" },
+    { key: "environment", label: "环境" },
+    { key: "behavior_component", label: "行为" },
+  ];
+  return definitions.flatMap(({ key, label }) => {
+    const values = candidate.facets[key] ?? [];
+    return values.length > 0 ? [{ label, values: values.slice(0, 3) }] : [];
+  });
+}
+
+function CandidateMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 border-r border-b px-3 py-2 even:border-r-0 lg:border-b-0 lg:last:border-r-0 lg:even:border-r [&:nth-last-child(-n+2)]:border-b-0">
+      <div className="text-muted-foreground text-xs">{label}</div>
+      <div className="mt-1 truncate text-sm font-medium">{value}</div>
+    </div>
+  );
+}
+
+const MEMORY_LESSON_BLUEPRINT = [
+  {
+    key: "conclusion",
+    order: "01",
+    title: "经验结论",
+    english: "Conclusion",
+    emphasis: "核心判断",
+    description: "说明这个模式的业务含义，以及最终判定有无风险。",
+  },
+  {
+    key: "business_rationale",
+    order: "02",
+    title: "业务依据",
+    english: "Business rationale",
+    emphasis: "事实基础",
+    description: "记录运营专家确认过的事实，解释为什么可以得出该结论。",
+  },
+  {
+    key: "applicability_conditions",
+    order: "03",
+    title: "适用条件",
+    english: "Applicability",
+    emphasis: "匹配开关",
+    description:
+      "决定什么样的新告警有资格命中这条 Memory，由系统从候选范围生成。",
+  },
+  {
+    key: "generalization_boundaries",
+    order: "04",
+    title: "泛化边界",
+    english: "Generalization",
+    emphasis: "允许变化",
+    description: "说明主机、IP、时间或实例等哪些差异不会改变业务结论。",
+  },
+  {
+    key: "invalidation_conditions",
+    order: "05",
+    title: "失效条件",
+    english: "Invalidation",
+    emphasis: "安全边界",
+    description: "列出出现哪些反证或变化后必须停止复用，并重新研判。",
+  },
+  {
+    key: "handling_guidance",
+    order: "06",
+    title: "处置建议",
+    english: "Handling guidance",
+    emphasis: "后续动作",
+    description: "说明精确命中后如何处置；文字本身不直接授予自动执行权限。",
+  },
+] as const;
+
+function MemoryLessonReadView({ lesson }: { lesson: SocMemoryBusinessLesson }) {
+  const values: Record<
+    (typeof MEMORY_LESSON_BLUEPRINT)[number]["key"],
+    string[]
+  > = {
+    conclusion: [lesson.conclusion],
+    business_rationale: lesson.business_rationale,
+    applicability_conditions: lesson.applicability_conditions,
+    generalization_boundaries: lesson.generalization_boundaries,
+    invalidation_conditions: lesson.invalidation_conditions,
+    handling_guidance: lesson.handling_guidance,
+  };
+
+  return (
+    <div className="divide-y border-y">
+      {MEMORY_LESSON_BLUEPRINT.map((item) => (
+        <div
+          key={item.key}
+          className="grid min-w-0 gap-2 py-3 lg:grid-cols-[12rem_minmax(0,1fr)]"
+        >
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-muted-foreground font-mono text-xs">
+                {item.order}
+              </span>
+              <span className="text-xs font-semibold">{item.title}</span>
+              <Badge variant="outline" className="text-[10px]">
+                {item.emphasis}
+              </Badge>
+            </div>
+            <p className="text-muted-foreground mt-1 text-xs">
+              {item.description}
+            </p>
+          </div>
+          {item.key === "conclusion" ? (
+            <p className="text-sm leading-6 break-words">
+              {values[item.key][0]}
+            </p>
+          ) : (
+            <ul className="space-y-1 text-sm leading-6">
+              {values[item.key].map((value) => (
+                <li key={value} className="break-words">
+                  {value}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function timelineKindLabel(kind: SocInvestigationTimelineItem["kind"]) {
@@ -1098,12 +1362,15 @@ function MemoryCandidateSection({
   candidates,
   reviewDrafts,
   isReviewing,
+  isDraftingLesson,
   onReviewDraftChange,
   onReview,
+  onDraftLesson,
 }: {
   candidates: SocMemoryCandidate[];
   reviewDrafts: Record<string, MemoryCandidateReviewDraft>;
   isReviewing: boolean;
+  isDraftingLesson: boolean;
   onReviewDraftChange: (
     candidate: SocMemoryCandidate,
     patch: Partial<MemoryCandidateReviewDraft>,
@@ -1112,6 +1379,7 @@ function MemoryCandidateSection({
     candidate: SocMemoryCandidate,
     decision: SocMemoryCandidateReviewDecision,
   ) => void;
+  onDraftLesson: (candidate: SocMemoryCandidate) => void;
 }) {
   return (
     <section className="rounded-md border">
@@ -1137,200 +1405,462 @@ function MemoryCandidateSection({
               candidate.decision_impact === "detection_decision" &&
               applicability !== null &&
               applicability !== undefined;
+            const narrowedApplicability = reviewedMemoryApplicability(
+              candidate,
+              draft,
+            );
+            const effectiveApplicability =
+              narrowedApplicability ?? applicability;
+            const reviewedLesson = reviewedMemoryBusinessLesson(
+              draft,
+              effectiveApplicability,
+            );
             const editable = ["pending_review", "confirmed_candidate"].includes(
               candidate.status,
             );
+            const cohortMetrics = candidateCohortMetrics(candidate);
+            const scopeHighlights = candidateScopeHighlights(candidate);
+            const hasLessonDraft = hasMemoryLessonDraft(draft);
+            const reviewContextId = `memory-review-context-${candidate.candidate_id}`;
             return (
               <div key={candidate.candidate_id} className="p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 sm:flex-1">
+                    <div className="text-sm font-semibold break-words">
                       {candidate.summary}
                     </div>
                     <div className="text-muted-foreground mt-1 text-xs">
-                      {candidateSourceLabel(candidate)} /{" "}
+                      Candidate {candidate.candidate_id} · 创建于{" "}
                       {formatTime(candidate.created_at)}
                     </div>
                   </div>
-                  <div className="flex flex-wrap justify-end gap-2">
-                    <Badge variant="outline">{candidate.status}</Badge>
-                    <Badge variant="secondary">
-                      {candidate.target_artifact}
-                    </Badge>
+                  <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
                     <Badge variant="outline">
-                      confidence {formatPercent(candidate.confidence)}
+                      {candidateStatusLabel(candidate.status)}
+                    </Badge>
+                    <Badge variant="secondary">
+                      {decisionEligible ? "可形成决策经验" : "仅作分析参考"}
                     </Badge>
                   </div>
                 </div>
-                <p className="text-muted-foreground mt-2 text-xs">
-                  {candidate.content}
-                </p>
-                <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
-                  <span>{candidate.candidate_type}</span>
-                  <span>{candidate.tenant_scope}</span>
-                  {candidate.review_owner ? (
-                    <span>owner: {candidate.review_owner}</span>
-                  ) : null}
-                  {candidate.idempotency_key ? (
-                    <span>idempotency: {candidate.idempotency_key}</span>
-                  ) : null}
-                  <span>runtime: inactive</span>
+
+                <div className="mt-4 grid grid-cols-2 overflow-hidden border lg:grid-cols-4">
+                  <CandidateMetric
+                    label="候选结论"
+                    value={candidateRiskClassLabel(cohortMetrics.riskClass)}
+                  />
+                  <CandidateMetric
+                    label="有效告警"
+                    value={
+                      cohortMetrics.supportCount === null
+                        ? "-"
+                        : `${cohortMetrics.supportCount} 条`
+                    }
+                  />
+                  <CandidateMetric
+                    label="独立来源"
+                    value={
+                      cohortMetrics.distinctSourceCount === null
+                        ? "-"
+                        : `${cohortMetrics.distinctSourceCount} 条`
+                    }
+                  />
+                  <CandidateMetric
+                    label="结论一致率"
+                    value={formatPercent(cohortMetrics.consistencyRatio)}
+                  />
                 </div>
-                {candidate.evidence_refs.length > 0 ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {candidate.evidence_refs.map((ref) => (
-                      <Badge key={ref} variant="outline">
-                        {ref}
-                      </Badge>
-                    ))}
-                  </div>
-                ) : null}
-                {candidate.labels.length > 0 ? (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {candidate.labels.map((label) => (
-                      <Badge key={label} variant="secondary">
-                        {label}
-                      </Badge>
-                    ))}
-                  </div>
-                ) : null}
-                {applicability ? (
-                  <div className="mt-3 border-t pt-3">
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      <span className="font-medium">适用范围</span>
-                      <Badge variant="outline">
-                        {applicability.profile_id}@
-                        {applicability.profile_version}
-                      </Badge>
-                      {decisionEligible ? (
-                        <Badge variant="secondary">模式级决策候选</Badge>
-                      ) : (
-                        <Badge variant="outline">规则背景，不改判</Badge>
-                      )}
-                    </div>
+
+                {scopeHighlights.length > 0 ? (
+                  <div className="mt-4">
+                    <div className="text-xs font-medium">核心匹配条件</div>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {Object.entries(applicability.required_facets).map(
-                        ([key, values]) => (
-                          <Badge key={key} variant="outline">
-                            必需 {key}: {values.slice(0, 3).join(", ")}
-                          </Badge>
-                        ),
-                      )}
+                      {scopeHighlights.map(({ label, values }) => (
+                        <Badge
+                          key={label}
+                          variant="outline"
+                          className="max-w-full text-left break-all whitespace-normal"
+                        >
+                          {label}：{values.join(", ")}
+                        </Badge>
+                      ))}
                     </div>
-                    {Object.keys(applicability.optional_facets).length > 0 ? (
-                      <div className="mt-3 grid gap-2 md:grid-cols-2">
-                        {Object.entries(applicability.optional_facets).map(
-                          ([key, values]) => {
-                            const checked =
-                              draft.promotedFacetKeys.includes(key);
-                            const inputId = `memory-scope-${candidate.candidate_id}-${key}`;
-                            return (
-                              <label
-                                key={key}
-                                htmlFor={inputId}
-                                className="flex min-w-0 items-start gap-2 text-xs"
-                              >
-                                <input
-                                  id={inputId}
-                                  type="checkbox"
-                                  checked={checked}
-                                  disabled={isReviewing || !editable}
-                                  className="mt-0.5 size-4 shrink-0"
-                                  onChange={(event) =>
-                                    onReviewDraftChange(candidate, {
-                                      promotedFacetKeys: event.target.checked
-                                        ? [
-                                            ...draft.promotedFacetKeys.filter(
-                                              (item) => item !== key,
-                                            ),
-                                            key,
-                                          ]
-                                        : draft.promotedFacetKeys.filter(
-                                            (item) => item !== key,
-                                          ),
-                                    })
-                                  }
-                                />
-                                <span className="min-w-0">
-                                  <span className="font-medium">{key}</span>
-                                  <span className="text-muted-foreground ml-1 break-all">
-                                    {values.slice(0, 3).join(", ")}
-                                  </span>
-                                </span>
-                              </label>
-                            );
-                          },
+                  </div>
+                ) : null}
+
+                {applicability ? (
+                  <Collapsible className="mt-4 border-t">
+                    <CollapsibleTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="group h-auto w-full justify-between rounded-none px-0 py-3 text-xs"
+                      >
+                        <span>
+                          高级匹配范围 · {applicability.profile_id}@
+                          {applicability.profile_version}
+                        </span>
+                        <ChevronDownIcon className="size-4 transition-transform group-data-[state=open]:rotate-180" />
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="pb-3">
+                      <p className="text-muted-foreground text-xs">
+                        必需条件全部命中才可能复用；勾选可选条件会进一步收窄范围。
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {Object.entries(applicability.required_facets).map(
+                          ([key, values]) => (
+                            <Badge key={key} variant="outline">
+                              必需 {key}: {values.slice(0, 3).join(", ")}
+                            </Badge>
+                          ),
                         )}
                       </div>
-                    ) : null}
-                    {decisionEligible ? (
-                      <div className="mt-3 flex flex-wrap items-center gap-3">
-                        <label className="flex items-center gap-2 text-xs font-medium">
-                          <Switch
-                            checked={draft.applyToFutureMatches}
-                            disabled={isReviewing || !editable}
-                            onCheckedChange={(checked) =>
-                              onReviewDraftChange(candidate, {
-                                applyToFutureMatches: checked,
-                              })
-                            }
-                            aria-label="未来精确匹配改判"
-                          />
-                          未来精确匹配改判
-                        </label>
-                        {draft.applyToFutureMatches ? (
-                          <Select
-                            value={draft.confirmedVerdict}
-                            disabled={isReviewing || !editable}
-                            onValueChange={(value) =>
-                              onReviewDraftChange(candidate, {
-                                confirmedVerdict: value as SocVerdict,
-                              })
-                            }
-                          >
-                            <SelectTrigger className="h-8 w-40 text-xs">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="true_positive">
-                                真实攻击
-                              </SelectItem>
-                              <SelectItem value="suspicious">可疑</SelectItem>
-                              <SelectItem value="false_positive">
-                                误报
-                              </SelectItem>
-                            </SelectContent>
-                          </Select>
-                        ) : null}
+                      {Object.keys(applicability.optional_facets).length > 0 ? (
+                        <div className="mt-3 grid gap-2 md:grid-cols-2">
+                          {Object.entries(applicability.optional_facets).map(
+                            ([key, values]) => {
+                              const checked =
+                                draft.promotedFacetKeys.includes(key);
+                              const inputId = `memory-scope-${candidate.candidate_id}-${key}`;
+                              return (
+                                <label
+                                  key={key}
+                                  htmlFor={inputId}
+                                  className="flex min-w-0 items-start gap-2 text-xs"
+                                >
+                                  <input
+                                    id={inputId}
+                                    type="checkbox"
+                                    checked={checked}
+                                    disabled={isReviewing || !editable}
+                                    className="mt-0.5 size-4 shrink-0"
+                                    onChange={(event) =>
+                                      onReviewDraftChange(candidate, {
+                                        promotedFacetKeys: event.target.checked
+                                          ? [
+                                              ...draft.promotedFacetKeys.filter(
+                                                (item) => item !== key,
+                                              ),
+                                              key,
+                                            ]
+                                          : draft.promotedFacetKeys.filter(
+                                              (item) => item !== key,
+                                            ),
+                                      })
+                                    }
+                                  />
+                                  <span className="min-w-0">
+                                    <span className="font-medium">{key}</span>
+                                    <span className="text-muted-foreground ml-1 break-all">
+                                      {values.slice(0, 3).join(", ")}
+                                    </span>
+                                  </span>
+                                </label>
+                              );
+                            },
+                          )}
+                        </div>
+                      ) : null}
+                    </CollapsibleContent>
+                  </Collapsible>
+                ) : null}
+
+                <div className="mt-4 border-t pt-4">
+                  <div className="text-sm font-semibold">1. 确认业务判断</div>
+                  <div className="mt-3 grid gap-3 md:grid-cols-[14rem_minmax(0,1fr)]">
+                    <label className="grid content-start gap-1 text-xs font-medium">
+                      最终判断
+                      <Select
+                        value={draft.confirmedVerdict ?? undefined}
+                        disabled={isReviewing || !editable}
+                        onValueChange={(value) =>
+                          onReviewDraftChange(candidate, {
+                            confirmedVerdict: value as SocVerdict,
+                            applyToFutureMatches: false,
+                            lessonConclusion: "",
+                            lessonBusinessRationale: "",
+                            lessonGeneralizationBoundary: "",
+                            lessonInvalidationCondition: "",
+                            lessonHandlingGuidance: "",
+                            lessonDraftProvenance: "",
+                            lessonDraftUncertainties: [],
+                            lessonEditing: false,
+                          })
+                        }
+                      >
+                        <SelectTrigger
+                          className="h-9 w-full text-xs"
+                          aria-label="最终业务判断"
+                        >
+                          <SelectValue placeholder="请选择" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="false_positive">误报</SelectItem>
+                          <SelectItem value="true_positive">
+                            真实攻击
+                          </SelectItem>
+                          <SelectItem value="suspicious">可疑</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </label>
+                    <label
+                      htmlFor={reviewContextId}
+                      className="grid gap-1 text-xs font-medium"
+                    >
+                      业务事实（可选）
+                      <Textarea
+                        id={reviewContextId}
+                        value={draft.businessContext}
+                        onChange={(event) =>
+                          onReviewDraftChange(candidate, {
+                            businessContext: event.target.value,
+                          })
+                        }
+                        placeholder="例如：已确认这是 Windows Update/WinRE 更新流程中的正常行为。"
+                        className="min-h-20 text-xs"
+                        disabled={isReviewing || !editable}
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-3 flex justify-end">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        isReviewing ||
+                        isDraftingLesson ||
+                        !editable ||
+                        draft.confirmedVerdict === null
+                      }
+                      onClick={() => onDraftLesson(candidate)}
+                    >
+                      <SparklesIcon className="size-4" />
+                      {isDraftingLesson
+                        ? "生成中"
+                        : hasLessonDraft
+                          ? "重新生成 Memory"
+                          : "AI 生成 Memory"}
+                    </Button>
+                  </div>
+                </div>
+
+                {hasLessonDraft ? (
+                  <div className="mt-4 border-t pt-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold">
+                          2. 审阅 Business Lesson
+                        </div>
+                        <div className="text-muted-foreground mt-1 text-xs">
+                          {draft.lessonDraftProvenance}
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={isReviewing || !editable}
+                        onClick={() =>
+                          onReviewDraftChange(candidate, {
+                            lessonEditing: !draft.lessonEditing,
+                          })
+                        }
+                      >
+                        <PencilIcon className="size-4" />
+                        {draft.lessonEditing ? "完成编辑" : "编辑"}
+                      </Button>
+                    </div>
+                    {draft.lessonDraftUncertainties.length > 0 ? (
+                      <div className="mt-3 border-y border-amber-300 bg-amber-50 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+                        {draft.lessonDraftUncertainties.join("；")}
                       </div>
                     ) : null}
+                    {draft.lessonEditing || !reviewedLesson ? (
+                      <div className="mt-4 grid gap-3 md:grid-cols-2">
+                        <label className="grid gap-1 text-xs font-medium md:col-span-2">
+                          经验结论
+                          <Textarea
+                            value={draft.lessonConclusion}
+                            disabled={isReviewing || !editable}
+                            className="min-h-16 text-xs"
+                            onChange={(event) =>
+                              onReviewDraftChange(candidate, {
+                                lessonConclusion: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                        <label className="grid gap-1 text-xs font-medium md:col-span-2">
+                          业务依据（每行一条）
+                          <Textarea
+                            value={draft.lessonBusinessRationale}
+                            disabled={isReviewing || !editable}
+                            className="min-h-20 text-xs"
+                            onChange={(event) =>
+                              onReviewDraftChange(candidate, {
+                                lessonBusinessRationale: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                        <div className="grid gap-2 border-y py-3 text-xs md:col-span-2">
+                          <div className="font-medium">
+                            适用条件（系统生成）
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {Object.entries(
+                              effectiveApplicability?.required_facets ?? {},
+                            ).map(([key, values]) => (
+                              <Badge
+                                key={key}
+                                variant="outline"
+                                className="max-w-full break-all whitespace-normal"
+                              >
+                                {key}：{values.slice(0, 3).join(", ")}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                        <label className="grid gap-1 text-xs font-medium">
+                          泛化边界（每行一条）
+                          <Textarea
+                            value={draft.lessonGeneralizationBoundary}
+                            disabled={isReviewing || !editable}
+                            className="min-h-20 text-xs"
+                            onChange={(event) =>
+                              onReviewDraftChange(candidate, {
+                                lessonGeneralizationBoundary:
+                                  event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                        <label className="grid gap-1 text-xs font-medium">
+                          失效条件（每行一条）
+                          <Textarea
+                            value={draft.lessonInvalidationCondition}
+                            disabled={isReviewing || !editable}
+                            className="min-h-20 text-xs"
+                            onChange={(event) =>
+                              onReviewDraftChange(candidate, {
+                                lessonInvalidationCondition: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                        <label className="grid gap-1 text-xs font-medium md:col-span-2">
+                          处置建议（每行一条）
+                          <Textarea
+                            value={draft.lessonHandlingGuidance}
+                            disabled={isReviewing || !editable}
+                            className="min-h-20 text-xs"
+                            onChange={(event) =>
+                              onReviewDraftChange(candidate, {
+                                lessonHandlingGuidance: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                      </div>
+                    ) : (
+                      <div className="mt-4">
+                        <MemoryLessonReadView lesson={reviewedLesson} />
+                      </div>
+                    )}
                   </div>
                 ) : null}
-                <div className="mt-4 grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
-                  <Input
-                    value={draft.reason}
-                    onChange={(event) =>
-                      onReviewDraftChange(candidate, {
-                        reason: event.target.value,
-                      })
-                    }
-                    placeholder="评审理由"
-                    disabled={isReviewing}
-                  />
+
+                {decisionEligible && hasLessonDraft ? (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+                    <div>
+                      <div className="text-sm font-semibold">
+                        3. 设置未来复用
+                      </div>
+                      <p className="text-muted-foreground mt-1 text-xs">
+                        精确命中机器适用范围后，复用本次审核结论。
+                      </p>
+                    </div>
+                    <label className="flex items-center gap-2 text-xs font-medium">
+                      <Switch
+                        checked={draft.applyToFutureMatches}
+                        disabled={
+                          isReviewing ||
+                          !editable ||
+                          reviewedLesson === undefined
+                        }
+                        onCheckedChange={(checked) =>
+                          onReviewDraftChange(candidate, {
+                            applyToFutureMatches: checked,
+                          })
+                        }
+                        aria-label="未来精确匹配改判"
+                      />
+                      用于未来精确匹配
+                    </label>
+                  </div>
+                ) : null}
+
+                <Collapsible className="mt-4 border-t">
+                  <CollapsibleTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="group h-auto w-full justify-between rounded-none px-0 py-3 text-xs"
+                    >
+                      <span>
+                        查看原始候选与审计材料 ·{" "}
+                        {candidate.evidence_refs.length} 条引用
+                      </span>
+                      <ChevronDownIcon className="size-4 transition-transform group-data-[state=open]:rotate-180" />
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="space-y-3 pb-3">
+                    <div className="text-muted-foreground max-h-72 overflow-y-auto border p-3 text-xs whitespace-pre-wrap">
+                      {candidate.content}
+                    </div>
+                    <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                      <span>{candidateSourceLabel(candidate)}</span>
+                      <span>{candidate.candidate_type}</span>
+                      <span>{candidate.tenant_scope}</span>
+                      <span>runtime: inactive</span>
+                      {candidate.review_owner ? (
+                        <span>owner: {candidate.review_owner}</span>
+                      ) : null}
+                    </div>
+                    {candidate.labels.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {candidate.labels.map((label) => (
+                          <Badge key={label} variant="secondary">
+                            {label}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : null}
+                    {candidate.evidence_refs.length > 0 ? (
+                      <div className="text-muted-foreground max-h-40 overflow-y-auto border p-3 font-mono text-xs break-all">
+                        {candidate.evidence_refs.join("\n")}
+                      </div>
+                    ) : null}
+                  </CollapsibleContent>
+                </Collapsible>
+
+                <div className="mt-4 flex flex-wrap justify-end gap-2 border-t pt-4">
                   <div className="flex flex-wrap gap-2">
                     <Button
                       size="sm"
-                      variant="outline"
                       disabled={
                         isReviewing ||
                         !["pending_review", "confirmed_candidate"].includes(
                           candidate.status,
                         ) ||
-                        !draft.reason.trim()
+                        draft.confirmedVerdict === null ||
+                        !reviewedLesson
                       }
                       onClick={() => onReview(candidate, "confirm")}
                     >
-                      确认
+                      确认候选
                     </Button>
                     <Button
                       size="sm"
@@ -1339,8 +1869,7 @@ function MemoryCandidateSection({
                         isReviewing ||
                         !["pending_review", "confirmed_candidate"].includes(
                           candidate.status,
-                        ) ||
-                        !draft.reason.trim()
+                        )
                       }
                       onClick={() => onReview(candidate, "reject")}
                     >
@@ -1355,8 +1884,7 @@ function MemoryCandidateSection({
                           "pending_review",
                           "confirmed_candidate",
                           "confirmed",
-                        ].includes(candidate.status) ||
-                        !draft.reason.trim()
+                        ].includes(candidate.status)
                       }
                       onClick={() =>
                         onReview(
@@ -1719,14 +2247,22 @@ function EmptyDetail() {
   );
 }
 
-export function SocReviewQueueWorkbench() {
-  const [workspaceView, setWorkspaceView] = useState<"queue" | "sample">(
-    "queue",
-  );
+export function SocReviewQueueWorkbench({
+  initialQueueId,
+  initialCandidateId,
+}: {
+  initialQueueId?: string;
+  initialCandidateId?: string;
+}) {
+  const [workspaceView, setWorkspaceView] = useState<
+    "queue" | "memory" | "sample"
+  >(initialCandidateId ? "memory" : "queue");
   const [statusFilter, setStatusFilter] = useState<
     SocReviewQueueStatus | "all"
-  >("open");
-  const [selectedQueueId, setSelectedQueueId] = useState<string | null>(null);
+  >(initialQueueId ? "all" : "open");
+  const [selectedQueueId, setSelectedQueueId] = useState<string | null>(
+    initialQueueId ?? null,
+  );
   const [sampleReviewTarget, setSampleReviewTarget] =
     useState<SocDispositionSampleReviewTarget | null>(null);
   const [closeReason, setCloseReason] = useState("复核完成");
@@ -1779,20 +2315,46 @@ export function SocReviewQueueWorkbench() {
       : null;
   const { context, isLoading: contextLoading } =
     useSocReviewContext(activeQueueId);
+  const {
+    candidate: focusedMemoryCandidate,
+    isLoading: focusedMemoryCandidateLoading,
+    error: focusedMemoryCandidateError,
+  } = useSocMemoryCandidate(initialCandidateId);
+  const {
+    candidates: pendingMemoryCandidates,
+    isLoading: pendingMemoryCandidatesLoading,
+    error: pendingMemoryCandidatesError,
+  } = useSocMemoryCandidates({
+    status: "pending_review",
+    limit: 50,
+    enabled: workspaceView === "memory" && !initialCandidateId,
+  });
+  const standaloneMemoryCandidates = useMemo(
+    () =>
+      focusedMemoryCandidate
+        ? [focusedMemoryCandidate]
+        : pendingMemoryCandidates,
+    [focusedMemoryCandidate, pendingMemoryCandidates],
+  );
+  const activeMemoryCandidates = useMemo(
+    () =>
+      workspaceView === "memory"
+        ? standaloneMemoryCandidates
+        : (context?.memory_candidates ?? []),
+    [context?.memory_candidates, standaloneMemoryCandidates, workspaceView],
+  );
   const { records: confirmedMemoryRecords } = useSocMemoryRecords({
     status: "confirmed",
     limit: 200,
   });
   const relatedMemoryRecords = useMemo(() => {
     const candidateIds = new Set(
-      (context?.memory_candidates ?? []).map(
-        (candidate) => candidate.candidate_id,
-      ),
+      activeMemoryCandidates.map((candidate) => candidate.candidate_id),
     );
     return confirmedMemoryRecords.filter((record) =>
       candidateIds.has(record.source_candidate_id),
     );
-  }, [confirmedMemoryRecords, context?.memory_candidates]);
+  }, [activeMemoryCandidates, confirmedMemoryRecords]);
   const {
     requests: approvalRequests,
     isLoading: approvalRequestsLoading,
@@ -1826,6 +2388,7 @@ export function SocReviewQueueWorkbench() {
   const dryRunApprovedActionMutation = useDryRunSocApprovedAction();
   const executeApprovedActionMutation = useExecuteSocApprovedAction();
   const reviewMemoryCandidateMutation = useReviewSocMemoryCandidate();
+  const draftMemoryLessonMutation = useDraftSocMemoryBusinessLesson();
   const updateMemoryRetrievalMutation = useUpdateSocMemoryRetrievalActivation();
 
   const handleOpenSampleReview = (target: SocDispositionSampleReviewTarget) => {
@@ -2010,12 +2573,25 @@ export function SocReviewQueueWorkbench() {
     const draft =
       memoryReviewDrafts[candidate.candidate_id] ??
       defaultMemoryCandidateReviewDraft(candidate);
-    const reason = draft.reason.trim();
-    if (!reason) {
-      toast.error("请填写评审理由");
+    const reviewerVerdict = draft.confirmedVerdict;
+    const reason =
+      draft.businessContext.trim() ||
+      (decision === "confirm" && reviewerVerdict
+        ? `审核人确认 Business Lesson，最终判断为${verdictLabel(reviewerVerdict)}。`
+        : decision === "reject"
+          ? "审核人驳回该候选，未形成可复用 Memory。"
+          : `审核人执行候选状态变更：${decision}。`);
+    const narrowedApplicability = reviewedMemoryApplicability(candidate, draft);
+    const effectiveApplicability =
+      narrowedApplicability ?? candidate.applicability;
+    const recordLesson = reviewedMemoryBusinessLesson(
+      draft,
+      effectiveApplicability,
+    );
+    if (decision === "confirm" && (!reviewerVerdict || !recordLesson)) {
+      toast.error("请先选择最终判断并生成完整的 Business Lesson");
       return;
     }
-    const narrowedApplicability = reviewedMemoryApplicability(candidate, draft);
     try {
       await reviewMemoryCandidateMutation.mutateAsync({
         candidateId: candidate.candidate_id,
@@ -2025,10 +2601,13 @@ export function SocReviewQueueWorkbench() {
           ...(decision === "confirm" && narrowedApplicability
             ? { record_applicability: narrowedApplicability }
             : {}),
+          ...(decision === "confirm" && recordLesson
+            ? { record_lesson: recordLesson }
+            : {}),
           ...(decision === "confirm" && draft.applyToFutureMatches
             ? {
                 apply_to_future_matches: true,
-                confirmed_verdict: draft.confirmedVerdict,
+                confirmed_verdict: reviewerVerdict,
                 clear_review_on_match: true,
               }
             : {}),
@@ -2042,6 +2621,46 @@ export function SocReviewQueueWorkbench() {
       toast.success("候选记忆已更新");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "候选记忆评审失败");
+    }
+  };
+
+  const handleDraftMemoryBusinessLesson = async (
+    candidate: SocMemoryCandidate,
+  ) => {
+    const current =
+      memoryReviewDrafts[candidate.candidate_id] ??
+      defaultMemoryCandidateReviewDraft(candidate);
+    if (current.confirmedVerdict === null) {
+      toast.error("请先选择最终业务判断");
+      return;
+    }
+    try {
+      const result = await draftMemoryLessonMutation.mutateAsync({
+        candidateId: candidate.candidate_id,
+        request: {
+          reviewer_verdict: current.confirmedVerdict,
+          reviewer_context: current.businessContext.trim() || null,
+          promoted_facet_keys: current.promotedFacetKeys,
+        },
+      });
+      if (result.reviewer_verdict !== current.confirmedVerdict) {
+        throw new Error("AI 草稿与当前审核结论不一致，请重新生成");
+      }
+      const lesson = result.lesson;
+      handleMemoryReviewDraftChange(candidate, {
+        lessonConclusion: lesson.conclusion,
+        lessonBusinessRationale: lesson.business_rationale.join("\n"),
+        lessonGeneralizationBoundary:
+          lesson.generalization_boundaries.join("\n"),
+        lessonInvalidationCondition: lesson.invalidation_conditions.join("\n"),
+        lessonHandlingGuidance: lesson.handling_guidance.join("\n"),
+        lessonDraftProvenance: `${result.provenance.model_name} / ${result.provenance.prompt_version} / calls ${result.provenance.provider_call_count}${result.provenance.output_repair_call_count ? ` / repairs ${result.provenance.output_repair_call_count}` : ""}`,
+        lessonDraftUncertainties: result.uncertainties,
+        lessonEditing: false,
+      });
+      toast.success("AI 经验草稿已生成，请审核后确认");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "AI 经验草稿生成失败");
     }
   };
 
@@ -2104,10 +2723,16 @@ export function SocReviewQueueWorkbench() {
         <div>
           <h1 className="text-xl font-semibold">SOC 复核</h1>
           <p className="text-muted-foreground mt-0.5 text-sm">
-            人工复核告警研判结果，沉淀纠正信号。
+            复核告警研判、候选经验与抽样结果，沉淀可审计的人工结论。
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/workspace/soc/memory-validation">
+              <FlaskConicalIcon className="size-4" />
+              Memory 验证
+            </Link>
+          </Button>
           <Button variant="outline" size="sm" asChild>
             <Link href="/workspace/soc/operations">
               <ActivityIcon className="size-4" />
@@ -2120,12 +2745,16 @@ export function SocReviewQueueWorkbench() {
             size="sm"
             value={workspaceView}
             onValueChange={(value) =>
-              value && setWorkspaceView(value as "queue" | "sample")
+              value && setWorkspaceView(value as "queue" | "memory" | "sample")
             }
           >
             <ToggleGroupItem value="queue" aria-label="告警复核队列">
               <InboxIcon className="size-4" />
               告警队列
+            </ToggleGroupItem>
+            <ToggleGroupItem value="memory" aria-label="候选经验审核">
+              <LibraryBigIcon className="size-4" />
+              候选经验
             </ToggleGroupItem>
             <ToggleGroupItem value="sample" aria-label="抽样复核批次">
               <FlaskConicalIcon className="size-4" />
@@ -2177,6 +2806,87 @@ export function SocReviewQueueWorkbench() {
         <div className="min-h-0 flex-1">
           <SocDispositionSampleInbox onOpenReview={handleOpenSampleReview} />
         </div>
+      ) : null}
+      {workspaceView === "memory" ? (
+        <main className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto flex max-w-6xl flex-col gap-5 p-6">
+            <section className="border px-4 py-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold">
+                    Memory Candidate 治理
+                  </h2>
+                  <p className="text-muted-foreground mt-1 text-sm">
+                    审核跨告警模式经验，不会为无需人工复核的单条告警伪造
+                    ReviewQueue 工单。
+                  </p>
+                </div>
+                {initialCandidateId ? (
+                  <Badge variant="outline">{initialCandidateId}</Badge>
+                ) : (
+                  <Badge variant="secondary">
+                    {standaloneMemoryCandidates.length} pending
+                  </Badge>
+                )}
+              </div>
+            </section>
+
+            {(
+              initialCandidateId
+                ? focusedMemoryCandidateLoading
+                : pendingMemoryCandidatesLoading
+            ) ? (
+              <div className="text-muted-foreground flex min-h-48 items-center justify-center border text-sm">
+                正在加载候选经验...
+              </div>
+            ) : (
+                initialCandidateId
+                  ? focusedMemoryCandidateError
+                  : pendingMemoryCandidatesError
+              ) ? (
+              <div className="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                {(initialCandidateId
+                  ? focusedMemoryCandidateError
+                  : pendingMemoryCandidatesError) instanceof Error
+                  ? (initialCandidateId
+                      ? focusedMemoryCandidateError
+                      : pendingMemoryCandidatesError
+                    )?.message
+                  : "候选经验加载失败"}
+              </div>
+            ) : standaloneMemoryCandidates.length === 0 ? (
+              <div className="text-muted-foreground flex min-h-48 items-center justify-center border text-sm">
+                当前没有待审核的候选经验。
+              </div>
+            ) : (
+              <>
+                <MemoryCandidateSection
+                  candidates={standaloneMemoryCandidates}
+                  reviewDrafts={memoryReviewDrafts}
+                  isReviewing={reviewMemoryCandidateMutation.isPending}
+                  isDraftingLesson={draftMemoryLessonMutation.isPending}
+                  onReviewDraftChange={handleMemoryReviewDraftChange}
+                  onReview={(candidate, decision) =>
+                    void handleReviewMemoryCandidate(candidate, decision)
+                  }
+                  onDraftLesson={(candidate) =>
+                    void handleDraftMemoryBusinessLesson(candidate)
+                  }
+                />
+
+                <MemoryRetrievalActivationSection
+                  records={relatedMemoryRecords}
+                  drafts={memoryRetrievalDrafts}
+                  isUpdating={updateMemoryRetrievalMutation.isPending}
+                  onDraftChange={handleMemoryRetrievalDraftChange}
+                  onAction={(record, action) =>
+                    void handleMemoryRetrievalAction(record, action)
+                  }
+                />
+              </>
+            )}
+          </div>
+        </main>
       ) : null}
       <div
         className={cn(
@@ -2358,9 +3068,13 @@ export function SocReviewQueueWorkbench() {
                 candidates={context?.memory_candidates ?? []}
                 reviewDrafts={memoryReviewDrafts}
                 isReviewing={reviewMemoryCandidateMutation.isPending}
+                isDraftingLesson={draftMemoryLessonMutation.isPending}
                 onReviewDraftChange={handleMemoryReviewDraftChange}
                 onReview={(candidate, decision) =>
                   void handleReviewMemoryCandidate(candidate, decision)
+                }
+                onDraftLesson={(candidate) =>
+                  void handleDraftMemoryBusinessLesson(candidate)
                 }
               />
 

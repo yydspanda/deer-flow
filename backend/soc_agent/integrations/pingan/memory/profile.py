@@ -7,6 +7,8 @@ not parse PingAn raw field aliases and it does not change Runtime decisions.
 from __future__ import annotations
 
 import ipaddress
+import ntpath
+import re
 from datetime import UTC, datetime
 
 from soc_agent.contracts import (
@@ -30,8 +32,8 @@ class PingAnSocMemoryProfile:
 
     identity = SocMemoryProfileIdentity(
         profile_id="pingan.soc",
-        profile_version="3",
-        feature_schema_version="pingan.soc.memory_features.v3",
+        profile_version="4",
+        feature_schema_version="pingan.soc.memory_features.v4",
     )
 
     def matches_request(self, request: LLMAnalysisRequest) -> bool:
@@ -120,8 +122,14 @@ class PingAnSocMemoryProfile:
         facets: dict[str, list[str]],
         observed_at: datetime,
     ) -> str:
+        alert_id = _canonical_alert_id(run)
         event_id = _canonical_event_id(run)
-        if event_id:
+        if alert_id:
+            # The Runtime processes one ZEUS alert as one operational occurrence.
+            # Re-delivery may change transport or other mutable payload fields, but
+            # the operator-visible alert identity remains stable.
+            identity: dict[str, object] = {"alert_id": alert_id}
+        elif event_id:
             identity: dict[str, object] = {"event_id": event_id}
         elif run.input_hash:
             # Exact replays can arrive under another transport offset even
@@ -211,6 +219,7 @@ class PingAnSocMemoryProfile:
                 "product",
                 "scenario_key",
                 "behavior_component",
+                "behavior_component_core",
                 "behavior_component_strong",
                 "behavior_component_weak",
                 "behavior_fingerprint",
@@ -245,6 +254,25 @@ class PingAnSocMemoryProfile:
         )
 
 
+def _canonical_alert_id(run: AnalysisRun) -> str | None:
+    payload = run.input_payload
+    if not isinstance(payload, dict):
+        return None
+
+    alert = payload.get("alert")
+    if isinstance(alert, dict):
+        for key in ("alertId", "alertCode", "alert_id"):
+            value = alert.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+
+    for key in ("alert_id", "alertId"):
+        value = payload.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
 def _canonical_event_id(run: AnalysisRun) -> str | None:
     if run.input_payload is None:
         return None
@@ -273,7 +301,28 @@ def _project_pingan_facets(
     if signature:
         _add_facet(projected, "detection_signature", signature)
 
-    components = projected.get("behavior_component", [])
+    base_components = list(projected.get("behavior_component", []))
+    tenant_components, tenant_core_components = _pingan_canonical_behavior_components(request)
+    for component in tenant_components:
+        _add_facet(projected, "behavior_component", component)
+    components = sorted(projected.get("behavior_component", []))
+    if components:
+        projected["behavior_component"] = components
+    fingerprint_components = sorted(dict.fromkeys([*base_components, *tenant_core_components]))
+    if fingerprint_components:
+        projected["behavior_component_core"] = fingerprint_components
+    if len(fingerprint_components) >= 2:
+        projected["behavior_fingerprint"] = [
+            stable_hash(
+                {
+                    "schema_version": "pingan.soc.memory_behavior_fingerprint.v4",
+                    "components": fingerprint_components,
+                }
+            )
+        ]
+    else:
+        projected.pop("behavior_fingerprint", None)
+
     strong_components = [value for value in components if _is_strong_behavior_component(value)]
     weak_components = [value for value in components if not _is_strong_behavior_component(value)]
     for component in strong_components:
@@ -285,6 +334,111 @@ def _project_pingan_facets(
 
     _remove_duplicate_role_ips(projected)
     return projected
+
+
+def _pingan_canonical_behavior_components(
+    request: LLMAnalysisRequest,
+) -> tuple[list[str], list[str]]:
+    """Project stable endpoint behavior from canonical entities only."""
+
+    entities = request.canonical_entities
+    process = entities.process
+    components: list[str] = []
+    core_components: list[str] = []
+
+    def add_core(value: str) -> None:
+        _append_component(components, value)
+        _append_component(core_components, value)
+
+    process_image = _windows_leaf(process.process_path)
+    if process_image:
+        add_core(f"process_image:{process_image}")
+    process_path = _normalized_windows_path_suffix(process.process_path)
+    if process_path:
+        add_core(f"process_path:{process_path}")
+
+    for module in _command_modules(process.command_line):
+        add_core(f"command_module:{module}")
+    for switch in _command_switches(process.command_line):
+        add_core(f"command_switch:{switch}")
+
+    parent_service = _windows_service_name(process.parent_command_line)
+    if parent_service:
+        add_core(f"parent_service:{parent_service}")
+
+    target_names: set[str] = set()
+    for observation in entities.file.observations:
+        if observation.relation.value != "endpoint_action_target":
+            continue
+        target_name = _windows_leaf(observation.file_path or observation.file_name)
+        if target_name:
+            target_names.add(target_name)
+            _append_component(components, f"target_file:{target_name}")
+    if target_names & {"sam", "security", "system"}:
+        add_core("target_class:windows_protected_registry_hive")
+    return sorted(components), sorted(core_components)
+
+
+def _normalized_windows_path_suffix(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    normalized = ntpath.normpath(value.strip().replace("/", "\\")).casefold()
+    _, suffix = ntpath.splitdrive(normalized)
+    suffix = suffix.lstrip("\\").replace("\\", "/")
+    return suffix if suffix and suffix != "." else None
+
+
+def _windows_leaf(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    leaf = ntpath.basename(value.strip().replace("/", "\\")).casefold()
+    return leaf or None
+
+
+def _command_modules(value: str | None) -> list[str]:
+    if value is None:
+        return []
+    return sorted(
+        {
+            match.group("module").casefold()
+            for match in re.finditer(
+                r"(?i)(?P<module>[a-z0-9_.-]+\.dll)\b",
+                value,
+            )
+        }
+    )
+
+
+def _command_switches(value: str | None) -> list[str]:
+    if value is None:
+        return []
+    return sorted(
+        {
+            match.group("switch").casefold()
+            for match in re.finditer(
+                r"(?:^|\s)/(?P<switch>[a-z][a-z0-9_-]*)\b",
+                value,
+                flags=re.IGNORECASE,
+            )
+        }
+    )
+
+
+def _windows_service_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    match = re.search(
+        r"(?:^|\s)-s\s+(?P<service>[^\s\"']+)",
+        value,
+        flags=re.IGNORECASE,
+    )
+    return match.group("service").casefold() if match else None
+
+
+def _append_component(values: list[str], value: str) -> None:
+    normalized = value.strip().casefold()
+    if normalized and normalized not in values:
+        values.append(normalized)
 
 
 def _detection_signature(request: LLMAnalysisRequest) -> str | None:

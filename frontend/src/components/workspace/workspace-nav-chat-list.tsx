@@ -96,7 +96,7 @@ export function WorkspaceNavChatList() {
         </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton
-            isActive={pathname === "/workspace/soc/operations"}
+            isActive={pathname.startsWith("/workspace/soc")}
             asChild
           >
             <Link

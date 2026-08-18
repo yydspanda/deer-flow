@@ -886,8 +886,12 @@ SOC memory tracking 约束：
   和 consensus strong anchors。后续 fixed window 得到相同 fingerprint 时，只记 reinforcement observation 并
   指向既有 governed candidate，不得创建新的专家任务；risk class 或 strong-anchor scope 实质变化时才是新的
   lesson candidate，且仍不得自动 supersede 旧记录。
-- `occurrence_key` 必须在 `(aggregation_key, occurrence_key)` 内唯一。PingAn 优先使用 canonical event ID，
-  然后 exact input hash，再使用 bounded time/entity scope；同一业务事件被重放或重复投递不得增加 support。
+- `occurrence_key` 必须在 `(aggregation_key, occurrence_key)` 内唯一。PingAn 以原始 payload 中稳定、运营可见的
+  ZEUS `alertId|alertCode` 为第一 occurrence identity；缺失时依次使用 canonical sensor event ID、exact input
+  hash 和 bounded time/entity scope。同一 ZEUS 预警即使 Kafka offset 或可变 payload 字段变化也不得增加
+  support；相同 IP/规则在不同时间生成新的 ZEUS alert ID 时属于新的真实 occurrence。PingAn legacy
+  timestamp 缺少 offset 时由 Adapter 按 `Asia/Shanghai` 类型化并在 `event_time_policy` 留下 assumption，
+  通用 Memory Kernel 仍只接受 timezone-aware canonical event time，不自行猜测租户时区。
 - Pattern candidate 必须携带 profile-owned `SocMemoryApplicabilitySpec`。它包含 profile/version/feature-schema
   identity 以及 exact required/optional/excluded facets；query 只能由 composition root 选择同一 profile，调用方
   不得通过请求参数选择 profile。Applicability 与 ranking 独立，非 `applicable` 结果不能触发 typed directive。
@@ -2648,6 +2652,50 @@ tool permission denial rate
 - 默认未提供 replay response 时，只允许把 stub 结果序列化后再走一遍 LLM parser/runtime 链路，用于 smoke-test 工程路径；不能把该结果解释为真实模型质量。
 - eval report 必须至少包含 parse success、repair count、failed count、verdict diff、needs_review diff、confidence delta。
 - eval 只读样本，不写业务库、不生成 memory、不入 review queue；需要持久化评测历史时另建 eval repository/schema。
+- Memory 使用独立的 `soc.memory_heldout_eval_fixture.v1` / `soc.memory_heldout_eval_report.v1`，但仍遵守
+  相同只读边界。fixture 必须冻结 reviewed record 及其 source alert lineage、held-out request/base decision、
+  prediction snapshot 与独立人工 truth；source alert ID 与 held-out alert ID 不得重叠。
+  `prepare` 可用 operator-owned tenant/environment 补齐请求中的缺失值，但已有值不一致时必须拒绝，不能
+  为了让 Profile 命中而静默改写冻结运行的 scope。
+- 每个 accepted held-out case 必须对全部 frozen Memory 标注
+  `decision_applicable|context_only|unrelated`，并提供 reviewer/source/time/reason。pending case 不得进入
+  accuracy 分母；simulation case 只能使用 simulation truth，且 report 必须固定
+  `real_quality_metrics_available=false`、`rollout_authorized=false`。
+- Memory eval 必须调用生产 `SocMemoryProfile`、`SocMemoryService`、`M-*` enricher 和
+  `SocAutomationService`；禁止复制匹配或 directive 算法。retrieval relevance、Profile lesson
+  applicability 和实际 directive eligibility 必须独立计量，不能把“召回”当作“改判已获准”。
+- 任何携带 decision directive 的 confirmed Memory 必须保存 `soc.memory_business_lesson.v1`；该结构
+  脱离 source alert 仍可独立理解，分别表达业务结论、业务依据、精确适用条件、允许泛化范围、
+  失效/反证条件和处置建议。`SocMemoryService.review_candidate()` 是唯一确认边界：决策型确认必须显式
+  提交 reviewer-owned `record_lesson`；服务只负责契约校验、确定性渲染和持久化，不得从自由文本
+  review reason、candidate caption 或测试夹具猜出业务经验。缺少 Lesson 必须在 candidate 状态迁移前拒绝；
+  `Reviewed simulation lesson for ...` 这类看似够长但没有业务含义的占位语句同样不能获得改判权。
+  Lesson 渲染结果拥有最终 record `summary/content`；禁止同时提交结构化 Lesson 与自由文本覆盖，避免
+  split-brain。审核者可通过
+  `record_applicability` 将候选已有的 canonical optional facet 收紧为 required facet；不得新增候选中
+  不存在的值，也不得把 vendor raw field 名写入通用 Runtime contract。
+- `SocMemoryRecord.business_lesson` 存入已有 JSON `record_payload`，不新增平行表或迁移；旧的无 Lesson
+  record 仍可作为非权威上下文读取，但新决策型确认必须经过上述边界。`M-*` 投影继续读取同一 record，
+  并记录 Lesson schema provenance；评测 fixture 可以提供人工真值输入，但不能绕过生产服务来证明
+  确认、渲染、持久化或检索能力已经实现。
+- 候选级 AI 辅助使用独立的 `soc.memory_business_lesson_draft.v1`，只允许在已有
+  `SocMemoryApplicabilitySpec` 的可评审候选上调用。`SocMemoryLessonDraftService` 从服务端候选构建
+  有界 `D-*` 目录，并要求当前审核人显式选择最终 verdict；历史 candidate/cohort verdict 只是模型观察，
+  不得覆盖该人工选择。模型只能返回业务结论、逐条引用的业务依据、泛化边界、失效条件、处置建议和
+  uncertainties；每条草稿依据必须保留到精确 `D-*` 来源的映射，供审核人逐条核验。机器适用条件由服务端从
+  applicability 确定性补齐。未知引用、超长上下文或 schema
+  不合格必须拒绝，普通 JSON 解析失败只允许记录在 provenance 中的保守 `json_repair`。
+  Provider JSON-object mode 不是前置条件；Prompt 尾部必须提供带 `required`/
+  `additionalProperties=false` 的完整 JSON Schema。草稿中的 URI、域名和 namespaced identifier 必须逐字
+  存在于引用的有界来源目录；结论不得包含处置动作语言。Runtime 必须确定性添加必需 facet 不匹配和
+  当前反证/攻击影响失效底线。专家收窄草稿范围时只提交 candidate optional facet 键名，服务端重建其
+  exact value；任何未知键拒绝。候选级调用可以有最多一次有界 output repair，其 prompt hash、调用数、
+  token 和 repair action 必须记入 draft provenance；该策略不得扩展为每条告警默认重试。
+  草稿固定 `decision_impact=none`、`review_required=true`、`persistence_performed=false`，不得自动确认、
+  激活、改判或授权动作。严格 JSON 是模型输出协议，不要求供应商支持 JSON-object mode；后者仍是
+  可选传输能力。当前使用版本化专用 Prompt，不把租户事实硬编码进 Prompt，也不为固定表单生成另建
+  Skill；租户业务事实必须来自候选/cohort 或当前 reviewer context，并由最终 reviewer 明确确认。页面应
+  默认只读展示完整 Lesson，只有显式编辑才暴露文本输入；Applicability 始终由服务端拥有。
 
 ### Checkpoint D cross-source/full-corpus contract
 
@@ -2742,6 +2790,9 @@ tool permission denial rate
   all explicit `eval_fixture`, `decision_impact=none`, data class is `simulation`, the database is isolated, and the
   command requires an explicit in-sample confirmation flag. Such records validate wiring only and must never be
   counted as production lessons, Memory quality, generalization evidence, or the expected alert-to-Memory ratio.
+- Production-quality claims must use the held-out Memory eval contract. Historical `agent_response` is prediction
+  material, not human truth. A directive override is counted only when the actual post-Runtime transition lists the
+  exact `M-*` Memory contributor; retrieval metadata or `applicable` status alone is insufficient.
 - Operational Kafka/batch learning uses `soc.memory_pattern_aggregation.v3`: one alert may create one immutable
   observation, but only a repeated, conclusive, >=80% outcome-consistent cohort with a consensus strong anchor may
   create one pattern-level candidate. Candidate summary/content must state whether the cohort is risk or benign,
@@ -2766,15 +2817,19 @@ tool permission denial rate
   均可缺失；generic Memory Kernel 不得规定一个所有厂商必填的多维联合硬键。Tenant Profile 可以基于
   已存在的 canonical facets 定义版本化 compound cohort/applicability，但必须保留 ruleless fallback 和
   context-only/decision-authority 边界。
-- PingAn Profile v3 把稳定 `rule_code`（无 code 时可用稳定 `rule_name`）投影为 canonical
+- PingAn Profile v4 把稳定 `rule_code`（无 code 时可用稳定 `rule_name`）投影为 canonical
   `detection_key`，但该 key 只表示规则大类，不得单独复制历史 verdict。Profile 必须从 canonical
   rule name 生成版本化 `detection_signature`；不得用 `alert_id/run_id` 合成任一检测身份。
   `detection_key`、`detection_signature` 与 deterministic `behavior_fingerprint` 同时存在时，必须使用三者的
   compound signature 隔离 cohort；同 key、不同 detector name 或 behavior、相反结论必须形成独立候选。
   detection-only cohort 只能产生 rule-context `REVIEW_HINT`，service 必须拒绝其 future-match directive；
   behavior-only cohort 仍可服务没有稳定规则身份的告警。二者都缺失时 observation 不准入。
-- PingAn Profile v3 必须把 `protocol:*`、`http_method:*` 和 generic `scenario:web_attack` 标记为 weak
-  behavior；其他当前 reviewed component 投影为 strong。决策型 compound applicability 必须精确匹配
+- PingAn Profile v4 必须从 canonical typed entities 生成 core/detail 两层 behavior component。Core 可包含
+  process image/path、稳定 command module/switch 名、parent service 和 typed target class；detail 可保留
+  `target_file:SAM|SYSTEM` 等精确观察。`IP/host/account`、alert/run lineage 和 ClassId 等随机参数不得进入
+  fingerprint。平铺 EDR `str_suspicious_file` 必须先由 PingAn Adapter 转成带 provenance 的
+  `endpoint_action_target`，Profile 不得读取供应商原始别名。Profile 必须把 `protocol:*`、`http_method:*`
+  和 generic `scenario:web_attack` 标记为 weak behavior；其他当前 reviewed component 投影为 strong。决策型 compound applicability 必须精确匹配
   environment、detection key、detection signature、behavior fingerprint 和 `behavior_strength=strong`。
   weak-only compound 最多产生 rule-context candidate，不能附加 future-match directive。
 - `SocMemoryApplicabilitySpec` 可声明严格受限的 context-only lane：compound record 的 exact
@@ -2790,7 +2845,7 @@ tool permission denial rate
   或把候选 optional facet 提升为 required；不得移除强锚点、切换 profile/feature schema、降低阈值、
   扩大值域或扩大 context-only missing/similarity 集。生成或显式提交的 directive 必须包含最终所有
   required facet keys。
-- Profile/feature schema 升级必须 fail closed。PingAn v2 typed records 不得被 v3 query 静默解释、迁移或
+- Profile/feature schema 升级必须 fail closed。PingAn v2/v3 typed records 不得被 v4 query 静默解释、迁移或
   继承 directive；必须重新聚合、审核和激活。Profile 投影若同一 IP 同时存在于 generic `entity=ip:*` 与
   typed `role_entity`，只移除重复 generic facet；不得把 IP 变成 required facet，跨 IP 行为泛化必须保留。
 - Memory 的 24h fixed window 只定义重复 observation 的候选聚合范围，不是 Memory 生命周期。当前

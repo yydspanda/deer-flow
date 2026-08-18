@@ -1,0 +1,35 @@
+# Browser-driven SOC Memory DEV acceptance overlay.
+services:
+  frontend:
+    # Next.js 16.2.x Turbopack can emit an invalid negative component
+    # performance measurement during dev redirects. Keep the normal project
+    # command unchanged; this acceptance-only overlay uses the supported
+    # webpack dev path so browser testing is not interrupted by that tracer.
+    command: >-
+      sh -c "cd frontend &&
+      pnpm install --frozen-lockfile &&
+      pnpm exec next dev --webpack > /app/logs/frontend.log 2>&1"
+    volumes:
+      - ../frontend/package.json:/app/frontend/package.json:ro
+      - ../frontend/pnpm-lock.yaml:/app/frontend/pnpm-lock.yaml:ro
+      - type: volume
+        source: soc-memory-frontend-node-modules-v2
+        target: /app/frontend/node_modules
+        volume:
+          nocopy: true
+    environment:
+      NPM_CONFIG_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+
+  gateway:
+    environment:
+      SOC_DATABASE_URL: sqlite:////app/backend/.deer-flow/soc-validation/memory-dev-web/soc-memory-dev.sqlite
+      SOC_DEV_MEMORY_CORPUS_PATH: /app/project/validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl
+      SOC_DEV_MEMORY_WORKBENCH_ENABLED: "true"
+      SOC_ANALYZER_MODE: llm
+      SOC_MEMORY_ENVIRONMENT: dev
+      SOC_AUTOMATION_ENVIRONMENT: dev
+      SOC_TENANT_POLICY_ENABLED: "false"
+      SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS: "false"
+
+volumes:
+  soc-memory-frontend-node-modules-v2:

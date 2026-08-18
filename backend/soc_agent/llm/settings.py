@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from math import isfinite
@@ -13,6 +13,7 @@ from deerflow.config.app_config import AppConfig
 from soc_agent.contracts import SensitiveEvidenceMode
 from soc_agent.llm.analyzer import JsonLLMAnalyzer, LLMChatClient
 from soc_agent.llm.deerflow_client import DeerFlowLLMChatClient
+from soc_agent.llm.memory_lesson import JsonLLMMemoryLessonDrafter
 from soc_agent.llm.role_verifier import JsonLLMRoleVerifier
 from soc_agent.pipeline.analyzer import StubLLMAnalyzer
 from soc_agent.pipeline.role_verification import DEFAULT_ROLE_VERIFICATION_MIN_CONFIDENCE
@@ -258,6 +259,12 @@ def build_configured_chat_client(
     settings: SocLLMSettings | None = None,
     app_config: AppConfig | None = None,
     client: LLMChatClient | None = None,
+    run_name: str = "soc_runtime_analysis",
+    trace_tags: Sequence[str] = (
+        "soc-agent",
+        "soc-runtime",
+        "bounded-analysis",
+    ),
 ) -> tuple[LLMChatClient, str]:
     """Build a DeerFlow client and resolve its registered model name."""
 
@@ -271,12 +278,41 @@ def build_configured_chat_client(
             thinking_enabled=resolved.thinking_enabled,
             json_mode_enabled=resolved.json_mode_enabled,
             attach_tracing=resolved.attach_tracing,
+            run_name=run_name,
+            trace_tags=trace_tags,
             max_concurrency=resolved.max_concurrency,
             requests_per_minute=resolved.requests_per_minute,
             acquire_timeout_seconds=resolved.admission_timeout_seconds,
             call_timeout_seconds=resolved.call_timeout_seconds,
         ),
         model_name,
+    )
+
+
+def build_configured_memory_lesson_drafter(
+    *,
+    settings: SocLLMSettings | None = None,
+    requested_model_name: str | None = None,
+    app_config: AppConfig | None = None,
+    client: LLMChatClient | None = None,
+) -> JsonLLMMemoryLessonDrafter:
+    """Build the candidate-level lesson drafter from DeerFlow model config."""
+
+    resolved = settings or SocLLMSettings.from_env()
+    configured_name = requested_model_name or os.environ.get("SOC_MEMORY_LESSON_MODEL")
+    if configured_name:
+        resolved = resolved.with_overrides(model_name=configured_name)
+    chat_client, model_name = build_configured_chat_client(
+        settings=resolved,
+        app_config=app_config,
+        client=client,
+        run_name="soc_memory_business_lesson_draft",
+        trace_tags=("soc-agent", "soc-memory", "business-lesson-draft"),
+    )
+    return JsonLLMMemoryLessonDrafter(
+        client=chat_client,
+        model_name=model_name,
+        output_retry_attempts=resolved.output_retry_attempts,
     )
 
 

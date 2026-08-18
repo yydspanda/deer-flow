@@ -166,7 +166,7 @@ flowchart TD
     checkpoint/history，采纳仍只生成 `pending_review` candidate。Kafka/批处理也不能逐告警写 candidate；
     PI-03F3 只在显式启用时把完成的 run 保存为 immutable observation，以 tenant/environment/data class
     隔离。server-owned Memory Profile 从 canonical 字段选择 cohort 与 occurrence identity：generic fallback
-    保持跨厂商，PingAn Profile v3 使用 detection key + detector signature + behavior fingerprint 形成
+    保持跨厂商，PingAn Profile v4 使用 detection key + detector signature + behavior fingerprint 形成
     compound cohort；只有 strong behavior compound 才可 decision-eligible，detection-only/weak-only 降为
     rule-context，behavior-only strong 保留 ruleless pattern，并拒绝 category-only cohort；
     同 upstream event/input occurrence 不重复增加 support。随后使用 canonical

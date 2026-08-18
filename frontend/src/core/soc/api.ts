@@ -18,6 +18,8 @@ import type {
   SocInvestigationContext,
   SocLeadAgentConclusionAcceptanceRequest,
   SocMemoryCandidate,
+  SocMemoryBusinessLessonDraft,
+  SocMemoryBusinessLessonDraftRequest,
   SocMemoryCandidateListResponse,
   SocMemoryCandidateReviewRequest,
   SocMemoryCandidateReviewResult,
@@ -29,6 +31,8 @@ import type {
   SocMemoryRetrievalActivationRequest,
   SocMemoryRetrievalActivationResult,
   SocMemoryRetrievalResult,
+  SocMemoryWorkbenchProcessResult,
+  SocMemoryWorkbenchState,
   SocNormalizationBaselineListResponse,
   SocNormalizationIssueListResponse,
   SocNormalizationIssueStatus,
@@ -150,6 +154,36 @@ export async function getSocOperationsSnapshot(
   return readJson<SocOperationsSnapshot>(
     response,
     "Failed to load SOC operations snapshot",
+  );
+}
+
+export async function getSocMemoryWorkbenchState(
+  context?: SocRequestContext,
+): Promise<SocMemoryWorkbenchState> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/dev/memory-workbench`,
+    { headers: buildSocHeaders(context) },
+  );
+  return readJson<SocMemoryWorkbenchState>(
+    response,
+    "Failed to load SOC Memory DEV workbench",
+  );
+}
+
+export async function processSocMemoryWorkbenchAlert(
+  alertId: string,
+  context?: SocRequestContext,
+): Promise<SocMemoryWorkbenchProcessResult> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/dev/memory-workbench/alerts/${encodeURIComponent(alertId)}/process`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { stateChanging: true }),
+    },
+  );
+  return readJson<SocMemoryWorkbenchProcessResult>(
+    response,
+    "Failed to process SOC Memory DEV alert",
   );
 }
 
@@ -592,6 +626,25 @@ export async function reviewSocMemoryCandidate(
   return readJson<SocMemoryCandidateReviewResult>(
     response,
     "Failed to review SOC memory candidate",
+  );
+}
+
+export async function draftSocMemoryBusinessLesson(
+  candidateId: string,
+  request: SocMemoryBusinessLessonDraftRequest,
+  context?: SocRequestContext,
+): Promise<SocMemoryBusinessLessonDraft> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/candidates/${encodeURIComponent(candidateId)}/lesson-draft`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocMemoryBusinessLessonDraft>(
+    response,
+    "Failed to draft SOC memory Business Lesson",
   );
 }
 

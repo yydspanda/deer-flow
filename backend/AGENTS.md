@@ -851,12 +851,24 @@ canonical Adapter output, owns duplicate occurrence and same-class semantics, an
 profile/version/feature-schema identity on observations, candidates, queries and applicability.
 `SocMemoryApplicabilitySpec` is reviewer-visible machine scope; profile mismatch, required-facet miss,
 exclusion hit or insufficient strong anchor makes a record inapplicable regardless of rank.
-PingAn profile v3 builds a compound cohort from canonical `detection_key`, a deterministic signature
+PingAn occurrence identity starts with the original payload's stable ZEUS `alertId|alertCode`, then
+falls back to canonical sensor event ID, exact input hash and bounded time/entity scope. Re-delivery
+of one ZEUS alert cannot add pattern support merely because its Kafka offset or mutable payload fields
+changed; a new ZEUS alert ID remains a new occurrence even when IP and rule are unchanged.
+Timezone-less PingAn legacy event timestamps are localized to `Asia/Shanghai` in the Adapter and the
+assumption is retained in `extensions.event_time_policy`; generic recurrence services continue to
+reject naive canonical event times rather than infer tenant semantics.
+PingAn profile v4 builds a compound cohort from canonical `detection_key`, a deterministic signature
 of the canonical rule name, and `behavior_fingerprint`. This prevents one broad PingAn `rule_code`
 from merging different detector names. Detection-only cohorts are rule-level reasoning context and must
 not create a future decision directive; behavior-only remains the ruleless pattern fallback. A
 decision-authoritative compound record requires exact reviewed environment, detection key, detector
-signature, strong behavior classification and behavior fingerprint. Protocol, HTTP method and generic
+signature, strong behavior classification and behavior fingerprint. For PingAn endpoint alerts, the
+fingerprint hashes canonical core components including process image/path, stable command module/switch
+names, parent service and a typed target class. Exact target names remain separate detail components;
+host, IP, account and random command values such as ClassId are excluded. Flat EDR
+`str_suspicious_file` values must first become provenance-linked `endpoint_action_target` observations
+inside the PingAn Adapter; the profile never parses that raw alias. Protocol, HTTP method and generic
 `web_attack` are weak components. Same detection/signature/environment with a different fingerprint may
 be returned only as `partial/context-only` when a reviewed `behavior_component_strong` overlaps; exact matches are
 ranked first and `SocAutomationService` must reject every context-only directive. Legacy records without
@@ -864,7 +876,7 @@ typed applicability remain non-authoritative context even if they carry an old d
 application also requires `decision_impact=detection_decision` and projection status `applicable`. Reviewers may narrow
 the candidate applicability by promoting an existing optional facet to required, but cannot remove
 anchors, expand values, change profile/schema versions, lower thresholds or widen context-only scope.
-Profile v2 records are not silently reinterpreted by v3 queries; they require re-aggregation and review.
+Profile v2/v3 records are not silently reinterpreted by v4 queries; they require re-aggregation and review.
 PingAn projection removes `entity=ip:*` when the same address already appears as a typed `role_entity`,
 so ranking does not double-count one endpoint while cross-IP generalization remains unchanged.
 PingAn `detection_key` may derive from a stable `rule_code` or stable `rule_name`; it must never derive
@@ -906,6 +918,45 @@ services, and write only to an isolated database. The comparison helper replays 
 Retrieval v2 selector and distinguishes a record selected into the frozen `M-*` catalog from one
 explicitly cited by accepted model output. Neither same-alert retrieval nor a live output delta is
 accuracy evidence; held-out alerts and independent analyst labels are required for that claim.
+Use `soc eval memory prepare` to freeze reviewed records plus disjoint Runtime queries, then let analysts fill
+the pending truth before `soc eval memory run`. The evaluator is read-only and reuses the production Profile,
+Retrieval v2, context enricher, and post-Runtime decision resolver. Its report keeps retrieval, Pattern lesson
+applicability, and actual directive eligibility separate. Pending or simulation labels never authorize rollout,
+Memory activation, or external actions. The committed sample under `samples/eval/memory/` is wiring evidence only.
+The interactive DEV counterpart is `soc_agent.demo.memory_workbench` plus the explicitly gated
+`/api/soc/dev/memory-workbench` router. It loads only the server-reviewed 14-alert GalaxyLab cohort,
+then calls the same persisted `SocAnalysisService` and `SocMemoryPatternService` used by non-demo
+entry points. It may coordinate progression and project state, but it must not duplicate Runtime,
+candidate review, Business Lesson, retrieval activation, or decision-resolution logic. Enable it
+through `scripts/soc-memory-dev.sh`; its startup contract is real LLM + isolated SQLite + authenticated
+admin + `dev` Memory/automation environments, with tenant policy and external action execution off.
+The original corpus remains immutable; trusted-ingress tenant completion happens only on a copied
+payload. A DEV pass is product-flow evidence, not STG/production or Memory-accuracy evidence.
+Decision-bearing confirmed Memory is reviewer-owned business knowledge, not a source-alert caption.
+`SocMemoryService.review_candidate()` requires explicit `soc.memory_business_lesson.v1` before a decision-bearing
+candidate transition. The reviewer-owned `record_lesson` contains conclusion, rationale, applicability, permitted
+generalization, invalidation conditions, and handling guidance. The service validates, renders, and persists it; a
+free-form review reason remains audit metadata and is never promoted into business knowledge. Missing Lesson fails
+closed. `record_applicability` may narrow an existing canonical candidate facet from
+optional to required, but cannot invent a value or widen the candidate scope. The optional typed field persists in
+the existing record JSON payload, so this contract adds no migration or parallel store.
+`SocMemoryLessonDraftService` is the read-only candidate-level drafting boundary. It uses
+`JsonLLMMemoryLessonDrafter` plus `soc-memory-business-lesson-draft-v3`, requires an authenticated reviewer-selected
+verdict, accepts an optional bounded reviewer business note, and returns `soc.memory_business_lesson_draft.v1` with
+that verdict lineage. Candidate/cohort verdicts are historical model observations and must not replace the reviewer
+selection. The model owns only the lesson prose and exact
+`D-*` citations; server code owns candidate loading, authorization, applicability rendering and all state changes.
+The request may carry only reviewer-selected optional facet names; the service deterministically promotes values
+already present on the candidate and rejects invented scope. Provider JSON-object mode remains optional. The
+versioned prompt carries a complete JSON Schema; parsing rejects non-empty unknown fields and unresolved refs,
+grounds URI/domain/namespaced literals against the `D-*` catalog, and rejects action language in the conclusion.
+Runtime prepends required-facet mismatch and current-counterevidence invalidation floors. At most one bounded
+provider output-repair call is allowed through `SOC_LLM_OUTPUT_RETRY_ATTEMPTS`, with call count, repair prompt hash,
+usage and repair actions retained in draft provenance.
+The draft is not persisted and cannot confirm a candidate, activate retrieval, create a directive, or authorize an
+action. CLI callers must pass `--reviewer-verdict`. Configure its model with `SOC_MEMORY_LESSON_MODEL`; otherwise it inherits the normal configured SOC/model
+resolution. CLI access is `soc memory draft-lesson` and Gateway access is
+`POST /api/soc/memory/candidates/{candidate_id}/lesson-draft`.
 
 Evidence grounding uses `soc.analysis_evidence_grounding.v3`: validate exact `E-*` tuples first, then
 validate `R-*` references and required context namespaces. General security reasoning is valid when

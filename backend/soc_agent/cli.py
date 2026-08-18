@@ -6,6 +6,7 @@ import argparse
 import json
 import signal
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,7 @@ from soc_agent.contracts import (
     SocEnrichmentWorkflowResult,
     SocEvaluationDataClass,
     SocMemoryApplicabilitySpec,
+    SocMemoryBusinessLesson,
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateStatus,
@@ -114,6 +116,7 @@ from soc_agent.core import (
     SocDispositionProposalService,
     SocGovernedContextService,
     SocMemoryEvolutionService,
+    SocMemoryLessonDraftService,
     SocMemoryPatternService,
     SocMemoryService,
     SocNormalizationMaintenanceService,
@@ -154,9 +157,11 @@ from soc_agent.demo import (
 )
 from soc_agent.eval import (
     DEFAULT_CORRELATION_EVAL_FIXTURE,
+    DEFAULT_MEMORY_EVAL_FIXTURE,
     DEFAULT_PINGAN_CAPABILITY_EVAL_DIR,
     build_confidence_label_corpus_manifest,
     build_confidence_label_set,
+    build_memory_eval_fixture,
     build_soc_quality_evaluation_report,
     load_analysis_runs_for_labeling,
     load_confidence_label_corpus_manifest,
@@ -164,6 +169,8 @@ from soc_agent.eval import (
     load_correlation_eval_fixture,
     load_correlation_eval_report,
     load_eval_responses_jsonl,
+    load_memory_eval_fixture,
+    load_memory_records_for_eval,
     load_pingan_capability_eval_fixtures,
     load_scenario_eval_report,
     load_soc_quality_evaluation_report,
@@ -171,6 +178,7 @@ from soc_agent.eval import (
     load_soc_simulation_completion_request,
     run_correlation_eval,
     run_manifest_bound_confidence_calibration,
+    run_memory_eval,
     run_offline_eval,
     run_pingan_capability_eval,
     run_pingan_domain_triage_eval,
@@ -189,6 +197,7 @@ from soc_agent.lead_agent_chat import SocLeadAgentChatService
 from soc_agent.llm import (
     SocLLMSettings,
     build_configured_chat_client,
+    build_configured_memory_lesson_drafter,
     configured_soc_llm_status,
 )
 from soc_agent.memory import build_memory_retrieval_diff
@@ -317,6 +326,10 @@ def main(argv: list[str] | None = None) -> int:
         return _eval_confidence(args)
     if args.command == "eval" and args.eval_command == "quality":
         return _eval_quality(args)
+    if args.command == "eval" and args.eval_command == "memory" and args.eval_memory_command == "prepare":
+        return _eval_memory_prepare(args)
+    if args.command == "eval" and args.eval_command == "memory" and args.eval_memory_command == "run":
+        return _eval_memory_run(args)
     if args.command == "demo" and args.demo_command == "run":
         return _demo_run(args)
     if args.command == "demo" and args.demo_command == "alert":
@@ -327,6 +340,8 @@ def main(argv: list[str] | None = None) -> int:
         return _memory_list(args)
     if args.command == "memory" and args.memory_command == "get":
         return _memory_get(args)
+    if args.command == "memory" and args.memory_command == "draft-lesson":
+        return _memory_draft_lesson(args)
     if args.command == "memory" and args.memory_command == "review":
         return _memory_review(args)
     if args.command == "memory" and args.memory_command == "search":
@@ -1001,6 +1016,67 @@ def _build_parser() -> argparse.ArgumentParser:
     eval_quality.add_argument("--output", help="Optional quality report JSON output path")
     eval_quality.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
 
+    eval_memory = eval_subparsers.add_parser(
+        "memory",
+        help="Prepare and run held-out, human-labeled governed Memory evaluation",
+    )
+    eval_memory_subparsers = eval_memory.add_subparsers(dest="eval_memory_command")
+    eval_memory_prepare = eval_memory_subparsers.add_parser(
+        "prepare",
+        help="Create a pending held-out review fixture from AnalysisRun artifacts",
+    )
+    eval_memory_prepare.add_argument(
+        "path",
+        help="Path to an AnalysisRun JSON file or directory",
+    )
+    eval_memory_prepare.add_argument(
+        "--glob",
+        default="*.json",
+        help="Glob used when PATH is a directory",
+    )
+    eval_memory_prepare.add_argument(
+        "--memory-records",
+        required=True,
+        help="JSON list/export of frozen retrieval-active SocMemoryRecord objects",
+    )
+    eval_memory_prepare.add_argument("--fixture-id")
+    eval_memory_prepare.add_argument(
+        "--description",
+        required=True,
+        help="Purpose and sampling boundary for this held-out fixture",
+    )
+    eval_memory_prepare.add_argument("--tenant-id", required=True)
+    eval_memory_prepare.add_argument("--environment", required=True)
+    eval_memory_prepare.add_argument(
+        "--data-class",
+        required=True,
+        choices=[item.value for item in SocEvaluationDataClass],
+    )
+    eval_memory_prepare.add_argument(
+        "--source-ref",
+        action="append",
+        required=True,
+        help="Stable provenance reference; repeat for multiple sources",
+    )
+    eval_memory_prepare.add_argument(
+        "--evaluated-at",
+        help="Timezone-aware ISO time used to freeze validity/review gates",
+    )
+    eval_memory_prepare.add_argument("--output", help="Optional fixture JSON output path")
+    eval_memory_prepare.add_argument("--pretty", action="store_true")
+    eval_memory_run = eval_memory_subparsers.add_parser(
+        "run",
+        help="Replay Retrieval v2 and Base-to-Memory decisions over a reviewed fixture",
+    )
+    eval_memory_run.add_argument(
+        "path",
+        nargs="?",
+        default=str(DEFAULT_MEMORY_EVAL_FIXTURE),
+        help="Reviewed Memory held-out fixture JSON",
+    )
+    eval_memory_run.add_argument("--output", help="Optional report JSON output path")
+    eval_memory_run.add_argument("--pretty", action="store_true")
+
     demo = subparsers.add_parser("demo", help="SOC persistent demo helpers")
     demo_subparsers = demo.add_subparsers(dest="demo_command")
     demo_run = demo_subparsers.add_parser("run", help="Seed a reviewable SOC investigation demo")
@@ -1080,6 +1156,32 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_get.add_argument("candidate_id", help="Memory candidate id to load")
     memory_get.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
     _add_database_args(memory_get)
+    memory_draft_lesson = memory_subparsers.add_parser(
+        "draft-lesson",
+        help="Generate a review-only Business Lesson draft for one candidate",
+    )
+    memory_draft_lesson.add_argument("candidate_id", help="Memory candidate id to draft")
+    memory_draft_lesson.add_argument(
+        "--reviewer-verdict",
+        required=True,
+        choices=[item.value for item in Verdict],
+        help="Reviewer-selected final technical verdict used to shape the draft",
+    )
+    memory_draft_lesson.add_argument(
+        "--reviewer-context",
+        help="Optional analyst business fact or handling note supplied to the draft model",
+    )
+    memory_draft_lesson.add_argument(
+        "--model-name",
+        help="Override SOC_MEMORY_LESSON_MODEL with a configured DeerFlow model",
+    )
+    memory_draft_lesson.add_argument(
+        "--actor-id",
+        default="soc-memory-reviewer-cli",
+        help="Drafting actor id",
+    )
+    memory_draft_lesson.add_argument("--pretty", action="store_true", help="Pretty-print output JSON")
+    _add_database_args(memory_draft_lesson)
     memory_review = memory_subparsers.add_parser("review", help="Review one SOC memory candidate")
     memory_review.add_argument("candidate_id", help="Memory candidate id to review")
     memory_review.add_argument(
@@ -1091,6 +1193,15 @@ def _build_parser() -> argparse.ArgumentParser:
     memory_review.add_argument("--reason", required=True, help="Human review reason")
     memory_review.add_argument("--record-summary", help="Optional confirmed memory summary override")
     memory_review.add_argument("--record-content", help="Optional confirmed memory content override")
+    memory_lesson_group = memory_review.add_mutually_exclusive_group()
+    memory_lesson_group.add_argument(
+        "--record-lesson",
+        help="Path to a reviewed SocMemoryBusinessLesson JSON object",
+    )
+    memory_lesson_group.add_argument(
+        "--record-lesson-json",
+        help="Inline reviewed SocMemoryBusinessLesson JSON object",
+    )
     memory_applicability_group = memory_review.add_mutually_exclusive_group()
     memory_applicability_group.add_argument(
         "--record-applicability",
@@ -2365,6 +2476,35 @@ def _memory_get(args: argparse.Namespace) -> int:
     return 0
 
 
+def _memory_draft_lesson(args: argparse.Namespace) -> int:
+    try:
+        repository = _repository_from_args(args)
+        drafter = build_configured_memory_lesson_drafter(
+            requested_model_name=args.model_name,
+        )
+        draft = SocMemoryLessonDraftService(
+            candidate_repository=repository,
+            drafter=drafter,
+        ).draft_business_lesson(
+            args.candidate_id,
+            reviewer_verdict=Verdict(args.reviewer_verdict),
+            reviewer_context=args.reviewer_context,
+            context=_cli_context(
+                args.actor_id,
+                roles=["soc_analyst", "soc_memory_reviewer"],
+            ),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except SocServiceError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+
+    print(draft.model_dump_json(indent=2 if args.pretty else None, exclude_none=True))
+    return 0
+
+
 def _memory_review(args: argparse.Namespace) -> int:
     try:
         repository = _repository_from_args(args)
@@ -2386,6 +2526,15 @@ def _memory_review(args: argparse.Namespace) -> int:
                     payload_label="memory record applicability",
                 )
             )
+        record_lesson = None
+        if args.record_lesson or args.record_lesson_json:
+            record_lesson = SocMemoryBusinessLesson.model_validate(
+                _load_object_input(
+                    args.record_lesson,
+                    args.record_lesson_json,
+                    payload_label="memory business lesson",
+                )
+            )
         result = SocMemoryService(candidate_repository=repository, record_repository=repository).review_candidate(
             SocMemoryCandidateReviewCommand(
                 candidate_id=args.candidate_id,
@@ -2393,6 +2542,7 @@ def _memory_review(args: argparse.Namespace) -> int:
                 reason=args.reason,
                 record_summary=args.record_summary,
                 record_content=args.record_content,
+                record_lesson=record_lesson,
                 record_applicability=record_applicability,
                 decision_directive=decision_directive,
                 confirmed_verdict=(Verdict(args.confirmed_verdict) if args.confirmed_verdict else None),
@@ -4330,6 +4480,56 @@ def _eval_quality(args: argparse.Namespace) -> int:
         return 1
     print(rendered)
     return 0 if report.engineering_flow_passed else 1
+
+
+def _eval_memory_prepare(args: argparse.Namespace) -> int:
+    try:
+        runs = load_analysis_runs_for_labeling(args.path, glob_pattern=args.glob)
+        records = load_memory_records_for_eval(args.memory_records)
+        evaluated_at = datetime.fromisoformat(args.evaluated_at) if args.evaluated_at else None
+        fixture = build_memory_eval_fixture(
+            runs,
+            records,
+            fixture_set_id=args.fixture_id,
+            description=args.description,
+            data_class=SocEvaluationDataClass(args.data_class),
+            tenant_id=args.tenant_id,
+            environment=args.environment,
+            source_refs=args.source_ref,
+            evaluated_at=evaluated_at,
+        )
+        rendered = fixture.model_dump_json(
+            indent=2 if args.pretty else None,
+            exclude_none=True,
+        )
+        _write_report(args.output, rendered)
+    except ValueError as exc:
+        print(f"error: Memory eval preparation failed: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: preserve actionable failure
+        print(f"error: Memory eval preparation failed: {exc}", file=sys.stderr)
+        return 1
+    print(rendered)
+    return 0
+
+
+def _eval_memory_run(args: argparse.Namespace) -> int:
+    try:
+        fixture = load_memory_eval_fixture(args.path)
+        report = run_memory_eval(fixture)
+        rendered = report.model_dump_json(
+            indent=2 if args.pretty else None,
+            exclude_none=True,
+        )
+        _write_report(args.output, rendered)
+    except ValueError as exc:
+        print(f"error: Memory eval failed: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: preserve actionable failure
+        print(f"error: Memory eval failed: {exc}", file=sys.stderr)
+        return 1
+    print(rendered)
+    return 0 if report.integrity_passed else 1
 
 
 def _eval_labels_prepare(args: argparse.Namespace) -> int:

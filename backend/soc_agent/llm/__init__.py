@@ -23,6 +23,7 @@ from soc_agent.llm.json_parser import (
     parse_role_verification_output,
     recover_analysis_result_output,
 )
+from soc_agent.llm.memory_lesson import JsonLLMMemoryLessonDrafter
 from soc_agent.llm.role_verifier import (
     ROLE_VERIFIER_STEP_NAME,
     JsonLLMRoleVerifier,
@@ -34,6 +35,7 @@ from soc_agent.llm.settings import (
     build_configured_analysis_nodes,
     build_configured_analyzer,
     build_configured_chat_client,
+    build_configured_memory_lesson_drafter,
     configured_soc_llm_status,
     resolve_soc_model_name,
 )
@@ -46,6 +48,7 @@ __all__ = [
     "LLMOutputParseError",
     "RecoverableAnalysisResult",
     "JsonLLMAnalyzer",
+    "JsonLLMMemoryLessonDrafter",
     "LLMChatClient",
     "LLMChatResponse",
     "JsonLLMRoleVerifier",
@@ -60,6 +63,7 @@ __all__ = [
     "build_configured_analyzer",
     "build_configured_analysis_nodes",
     "build_configured_chat_client",
+    "build_configured_memory_lesson_drafter",
     "build_optional_llm_analyzer",
     "coerce_chat_response",
     "configured_soc_llm_status",

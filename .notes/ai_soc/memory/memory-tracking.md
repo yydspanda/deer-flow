@@ -313,10 +313,13 @@ PI-03F3 已完成 Kafka/批处理来源，冻结规则如下：
 - recurrence 不证明 benign/malicious、授权、攻击影响或处置动作，不能改变 Runtime decision、确认记忆、
   启用 retrieval 或执行 action。Kafka/batch sidecar 默认关闭，聚合失败不阻断基础分析。
 - `SocMemoryProfileRegistry` 在 composition root 选择 tenant/source profile。PingAn profile 只消费 canonical
-  Adapter 输出：Profile v3 使用 detection key + detector signature + behavior fingerprint 形成 compound
+  Adapter 输出：Profile v4 使用 detection key + detector signature + behavior fingerprint 形成 compound
   cohort；只有 strong behavior compound 才可 decision-eligible，detection-only/weak-only 只能形成
   rule-context，behavior-only strong 保留为 ruleless pattern，category-only 不形成 PingAn cohort；
   同 upstream event/input occurrence 不重复增加 support。
+  v4 的 endpoint core fingerprint 仅使用 canonical process image/path、稳定 command module/switch、
+  parent service 和 typed target class；精确 target file 留作 detail。IP、host、account 与 ClassId 等随机值
+  不参与 fingerprint。平铺 EDR target 必须先由 Adapter 生成带 provenance 的 file observation。
 - 候选和确认记录可携带 `SocMemoryApplicabilitySpec`。Retrieval 在打分/强锚点之后独立核对 profile/version、
   required/optional/excluded facets；只有 `applicable` 才允许 typed directive 参与有效决策。受 Profile
   限定的 `partial/context-only` match 可以作为明确降权的 LLM 背景，但 Automation 必须拒绝其 directive。

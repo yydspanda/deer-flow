@@ -6,6 +6,7 @@ import {
   CheckCircle2Icon,
   Clock3Icon,
   DatabaseIcon,
+  FlaskConicalIcon,
   GaugeIcon,
   RefreshCwIcon,
   RadioTowerIcon,
@@ -189,6 +190,12 @@ export function SocOperationsOverview() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/workspace/soc/memory-validation">
+              <FlaskConicalIcon className="size-4" />
+              Memory 验证
+            </Link>
+          </Button>
           <Button variant="outline" size="sm" asChild>
             <Link href="/workspace/soc/review">
               <ShieldCheckIcon className="size-4" />

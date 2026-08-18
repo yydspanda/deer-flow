@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare legacy fingerprint grouping with PingAn Memory Profile v3."""
+"""Compare legacy fingerprint grouping with the current PingAn Memory Profile v4."""
 
 from __future__ import annotations
 
@@ -359,7 +359,7 @@ def build_behavior_fingerprint_audit(
         "findings": findings,
         "errors": [dict(item) for item in errors],
         "claim_boundaries": [
-            "This report compares legacy v1 grouping with PingAn profile v3 facets; running it does not modify Runtime or persisted Memory.",
+            "This report compares legacy v1 grouping with PingAn profile v4 facets; running it does not modify Runtime or persisted Memory.",
             "agent_response is historical model output and is not analyst ground truth.",
             "Historical action divergence is a review-priority signal, not a measured model error.",
             "Structural cross-IP recurrence is not production precision or recall.",
@@ -1009,7 +1009,7 @@ def _write_summary(path: Path, report: Mapping[str, Any]) -> None:
     cohorts = report["cohorts"]
     context_pairs = report["context_only_pairs"]
     lines = [
-        "# Behavior Fingerprint v1 to PingAn Profile v3 Audit",
+        "# Behavior Fingerprint v1 to PingAn Profile v4 Audit",
         "",
         f"- Status: `{report['status']}`",
         f"- Selected alerts: `{metrics['selected_alert_count']}`",
@@ -1022,10 +1022,10 @@ def _write_summary(path: Path, report: Mapping[str, Any]) -> None:
         f"- Candidate-threshold decision-eligible cohorts (>=5): `{metrics['candidate_threshold_decision_eligible_cohort_count']}`",
         f"- High-fragmentation rules: `{metrics['high_fragmentation_rule_count']}`",
         f"- Ambiguous detection identities: `{metrics['ambiguous_rule_identity_group_count']}`",
-        f"- Ambiguous exact cohorts, legacy v1 -> profile v3: `{metrics['legacy_v1_ambiguous_rule_identity_cohort_count']}` -> `{metrics['ambiguous_rule_identity_cohort_count']}`",
+        f"- Ambiguous exact cohorts, legacy v1 -> profile v4: `{metrics['legacy_v1_ambiguous_rule_identity_cohort_count']}` -> `{metrics['ambiguous_rule_identity_cohort_count']}`",
         f"- Low-signal context-only alert pairs: `{metrics['low_signal_only_context_alert_pair_count']}`",
-        f"- Context-only alert pairs, legacy v1 -> profile v3: `{metrics['legacy_v1_context_only_alert_pair_count']}` -> `{metrics['context_only_alert_pair_count']}`",
-        f"- Low-signal context-only alert pairs, legacy v1 -> profile v3: `{metrics['legacy_v1_low_signal_only_context_alert_pair_count']}` -> `{metrics['low_signal_only_context_alert_pair_count']}`",
+        f"- Context-only alert pairs, legacy v1 -> profile v4: `{metrics['legacy_v1_context_only_alert_pair_count']}` -> `{metrics['context_only_alert_pair_count']}`",
+        f"- Low-signal context-only alert pairs, legacy v1 -> profile v4: `{metrics['legacy_v1_low_signal_only_context_alert_pair_count']}` -> `{metrics['low_signal_only_context_alert_pair_count']}`",
         f"- Historical divergent cohorts: `{metrics['historical_action_divergent_cohort_count']}`",
         f"- Human ground-truth labels: `{metrics['ground_truth_label_count']}`",
         "",

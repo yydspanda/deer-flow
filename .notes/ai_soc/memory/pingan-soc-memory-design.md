@@ -15,9 +15,10 @@
    标准协议，因此以后接其他公司时新增 Profile，不修改通用内核。
 3. 只有重复、结论明确、相互一致且存在强锚点的 cohort 才生成一条候选，运营专家审核的是“模式”，
    不是每天上万条告警。
-4. `detection_key` 只负责识别规则大类；Profile v3 再从 canonical `rule_name` 生成
-   `detection_signature`。只有 `detection_key + detection_signature + strong behavior_fingerprint`
-   才定义可改判的同类行为，rule-only/weak-only Memory 永远只是背景参考。
+4. `detection_key` 只负责识别规则大类；Profile v4 再从 canonical `rule_name` 生成
+   `detection_signature`，并从 canonical endpoint entities 生成 core/detail behavior component。
+   只有 `detection_key + detection_signature + strong behavior_fingerprint` 才定义可改判的同类行为，
+   rule-only/weak-only Memory 永远只是背景参考。
 5. 告警处理完成后，只更新本次真正用过的 Memory：一致则增加支持，冲突则记录反证、更新健康度并
    生成修订任务；高可信风险真值反驳 benign Memory 时立即停止检索，避免错误批量扩散。
 6. 所有 Base/Memory/Tenant/Effective Decision、Memory 使用、人工反馈、健康度和修订均可回放。DB 是
@@ -79,7 +80,7 @@ flowchart TD
     C --> G{"🚦 Quality Gate<br/>support + distinct + conclusive<br/>consistency + strong anchor"}
     G -->|fail| O1["🗄️ Observation only<br/>不占专家审核队列"]
     G -->|pass| MC["🧬 Pattern Memory Candidate<br/>模式级高质量候选"]
-    MC --> HR{"👤 Human Review<br/>结论 + 适用范围 + 有效期"}
+    MC --> HR{"👤 Human Review<br/>业务经验 + 适用范围 + 有效期"}
     HR -->|reject| X["🚫 Rejected / 不可检索"]
     HR -->|confirm| MR["📖 Confirmed Record<br/>retrieval disabled"]
     MR --> GA{"🛡️ Governed Activation<br/>reviewer + validity + review due"}
@@ -133,6 +134,36 @@ calls an LLM or Provider. Its SQLite records remain `simulation`/`mocked` eviden
 not establish pattern accuracy, production validity, or action authority. A real quality
 claim still requires distinct operational alerts and independent analyst labels.
 
+### 4.2 Browser-driven DEV validation
+
+The external-machine product-flow acceptance uses a fixed 14-alert real historical cohort while
+keeping every unavailable or dangerous integration outside the decision path:
+
+```text
+5 construction alerts
+  -> Pattern Observation accumulation
+  -> one quality-gated Pattern Candidate
+  -> SOC review / candidate-governance view: AI draft + analyst-edited Business Lesson
+  -> explicit candidate confirmation + retrieval activation
+  -> 1 held-out alert: inspect M-* and Base -> Memory -> Tenant -> Effective
+  -> 8 additional alerts: inspect applicability and non-match behavior
+```
+
+Start it with `./scripts/soc-memory-dev.sh start` and open
+`/workspace/soc/memory-validation`. The command migrates only
+`backend/.deer-flow/soc-validation/memory-dev-web/soc-memory-dev.sqlite`. The Gateway endpoint is
+default-off and requires `SOC_ANALYZER_MODE=llm`, an authenticated admin, explicit `dev` Memory and
+automation environments, SQLite isolation, disabled tenant policy, and disabled external action
+execution. The browser cannot skip a phase. Candidate confirmation, Business Lesson drafting and
+retrieval activation remain official Memory API operations in the SOC review workspace rather than
+workbench shortcuts. Pattern governance does not fabricate an alert ReviewQueue item when the source
+decision itself does not require analyst review.
+
+This is `DEV` evidence even though the 14 inputs are historical operational alerts. Their original
+business fields remain unchanged; `DEV` describes the isolated execution/Memory namespace, not a
+rewrite of the source alert. A successful walkthrough proves product wiring and operator ergonomics,
+not analyst-label accuracy, internal Provider availability, STG readiness, or production action safety.
+
 ## 5. What Counts As The Same Thing
 
 Three identities must not be confused:
@@ -146,14 +177,22 @@ Three identities must not be confused:
 `occurrence_key` prevents retries or duplicate Zeus deliveries from increasing pattern
 support. PingAn priority is:
 
-1. canonical upstream event ID;
-2. exact Runtime `input_hash`;
-3. a bounded five-minute canonical entity/role scope;
-4. run/alert lineage fallback.
+1. stable operator-visible ZEUS `alertId` / `alertCode` from the original payload;
+2. canonical sensor event ID when the ZEUS alert ID is absent;
+3. exact Runtime `input_hash`;
+4. a bounded five-minute canonical entity/role scope;
+5. run/alert lineage fallback.
+
+This makes a re-delivered ZEUS alert idempotent even when mutable payload fields or the
+Kafka offset change. A later alert with the same IP/rule but a different ZEUS alert ID is
+a new operational occurrence and may legitimately reinforce the repeated pattern. The
+PingAn Adapter interprets timezone-less legacy event timestamps as `Asia/Shanghai` and
+records that assumption in `extensions.event_time_policy`; it does not silently let those
+alerts fall out of the recurrence workflow as naive datetimes.
 
 ### 5.3 Same reusable alert class
 
-The PingAn profile v3 selects one stable cohort signature:
+The PingAn profile v4 selects one stable cohort signature:
 
 1. when available, hash canonical `detection_key + detection_signature + behavior_fingerprint`
    into a `compound` cohort; the original facets remain separately auditable;
@@ -170,15 +209,20 @@ silently disable reuse.
 `detection_signature` is a deterministic hash of source/product and the whitespace/case-normalized
 canonical rule name. It is deliberately separate from `detection_key`: PingAn data shows that one
 ZEUS `rule_code` may contain many detector names. Exact rule-name normalization is conservative;
-future governed aliasing may merge reviewed cosmetic aliases, but v3 never guesses that two names
+future governed aliasing may merge reviewed cosmetic aliases, but v4 never guesses that two names
 are equivalent.
 
 The current `behavior_fingerprint` is deterministic and pre-LLM. It reuses canonical
-facts already produced by SOC Runtime and hashes a versioned,
-sorted set of canonical behavior components such as deterministic scenario hypotheses,
-process/parent names, protocol, HTTP method, MITRE techniques and typed behavior mentions.
-IP, UM/account and alert/run IDs are deliberately excluded so the same behavior may match
-across changing entities. Profile v3 classifies protocol, HTTP method and generic
+facts already produced by SOC Runtime and hashes a versioned, sorted set of core behavior
+components. Profile v4 retains the vendor-neutral scenario/process/protocol/MITRE components and,
+for PingAn endpoint evidence, adds canonical process image/path, command module and switch names,
+parent Windows service, and a typed protected-registry-hive target class. Exact target names such as
+`SAM` and `SYSTEM` remain separate auditable detail components rather than splitting a cohort when an
+upstream event reports only one hive. The PingAn EDR Adapter first projects flat
+`str_suspicious_file` values into provenance-linked `endpoint_action_target` observations; the Memory
+Profile never reads that raw alias. IP, host, UM/account, alert/run IDs and random command values such
+as ClassId UUIDs are deliberately excluded so the same behavior may match across changing entities.
+Profile v4 classifies protocol, HTTP method and generic
 `scenario:web_attack` as weak components; process, specific scenario, MITRE technique and typed
 behavior components are strong. A decisive compound requires exact detection key, detector
 signature, behavior fingerprint, environment and `behavior_strength=strong`. When the exact
@@ -187,6 +231,9 @@ record only as explicit `context-only` LLM context when at least one reviewed st
 component overlaps; it cannot apply its directive. Protocol-only similarity is not returned.
 Evaluate component stability on a held-out PingAn corpus and bump the feature schema whenever the
 component policy changes.
+
+Profile v4 is intentionally incompatible with v2/v3. Existing records remain auditable but cannot be
+matched or apply a directive until the source cohort is re-aggregated and reviewed under v4.
 
 `category`, `severity`, source type, or a model-only scenario label can help rank or
 explain a match, but they cannot alone create a decisive PingAn lesson. This avoids both
@@ -256,7 +303,14 @@ overwrites the old record.
 
 Candidate confirmation is one explicit product action. The reviewer may:
 
-- edit the final summary/content;
+- request a candidate-level AI draft through `soc.memory_business_lesson_draft.v1`; the bounded model sees an
+  explicit reviewer-selected verdict, a frozen `D-*` source catalog and an optional analyst business note, while
+  Runtime deterministically supplies the machine applicability prose; prior Runtime/model outcomes remain
+  observations and cannot replace the reviewer selection;
+- for context-only records, edit the final summary/content;
+- for decision-bearing records, explicitly submit `soc.memory_business_lesson.v1` with
+  conclusion, business rationale, applicability conditions, generalization boundaries,
+  invalidation conditions, and handling guidance; a review reason alone is audit metadata;
 - keep the profile-produced applicability, or narrow it by promoting an existing optional
   candidate facet to required; the service rejects removal of strong anchors, larger value
   sets, changed profile/schema versions or widened context-only fallback;
@@ -267,8 +321,18 @@ Candidate confirmation is one explicit product action. The reviewer may:
 
 Convenience input `apply_to_future_matches=true` is materialized into a typed
 `SocMemoryDecisionDirective`. The server never derives this directive from Memory prose.
+The optional drafter may transform candidate/cohort facts and a reviewer note into a complete
+editable Lesson draft, but that draft has `decision_impact=none`, is not persisted, and does
+not become reviewer-owned until the reviewer explicitly submits it as `record_lesson`.
+Missing `record_lesson` still fails before the candidate state transition.
 It is rejected for detection-only/rule-context candidates. A reviewer can still confirm
 and activate those records as useful `M-*` background without granting decision authority.
+
+Drafting uses a dedicated versioned Prompt rather than a Skill. This is a narrow structured
+form-synthesis node with fixed authority and response contracts, not open-ended investigation
+or tenant routing. Tenant facts are never embedded in the generic Prompt: an internal fact such
+as AskBob ownership must already exist in the candidate/cohort context or be supplied as the
+current analyst's draft context, and the final reviewer must verify it.
 
 ```text
 Candidate confirmed
@@ -380,6 +444,8 @@ Migration head: `0025_memory_evolution`.
 | Generic profile protocol/registry | `backend/soc_agent/memory/profiles.py` |
 | PingAn same-occurrence/same-class/applicability rules | `backend/soc_agent/integrations/pingan/memory/profile.py` |
 | Observation and cohort aggregation | `backend/soc_agent/core/memory_patterns.py` |
+| Business Lesson validation/rendering | `backend/soc_agent/memory/lessons.py`, `backend/soc_agent/core/service.py` |
+| Business Lesson AI draft | `backend/soc_agent/prompts/memory_lesson.py`, `backend/soc_agent/llm/memory_lesson.py`, `backend/soc_agent/core/memory_lesson_drafting.py` |
 | Admission/review/activation/retrieval | `backend/soc_agent/core/service.py`, `backend/soc_agent/memory/` |
 | Use/feedback/health/revision workflow | `backend/soc_agent/core/memory_evolution.py` |
 | Application composition | `backend/soc_agent/application/memory.py` |
@@ -391,11 +457,18 @@ Migration head: `0025_memory_evolution`.
 ### CLI
 
 ```bash
+# Generate an editable draft only; this does not confirm or persist Memory
+soc memory draft-lesson CANDIDATE_ID \
+  --reviewer-verdict false_positive \
+  --reviewer-context "该 URL 属于已确认的内部服务，不是真实反连控制端" \
+  --pretty
+
 # Explicitly promote a single analyst correction when it is genuinely reusable
 soc correct RUN_ID --verdict false_positive --reason "..." --promote-to-memory
 
 # Review one pattern candidate, attach a future-match decision, and activate it
 soc memory review CANDIDATE_ID --decision confirm --reason "..." \
+  --record-lesson reviewed-business-lesson.json \
   --apply-to-future-matches --confirmed-verdict false_positive \
   --clear-review-on-match --activate-retrieval \
   --activation-valid-until 2026-09-15T00:00:00+08:00 \
@@ -405,6 +478,7 @@ soc memory review CANDIDATE_ID --decision confirm --reason "..." \
 # The file may promote a candidate optional facet (for example source_type) to required,
 # but may not widen the Profile-produced scope.
 soc memory review CANDIDATE_ID --decision confirm --reason "..." \
+  --record-lesson reviewed-business-lesson.json \
   --record-applicability reviewed-applicability.json
 
 # Inspect exact use, feedback, health, and revision lineage
@@ -440,7 +514,12 @@ The module is useful only if it lowers work without hiding risk. Track:
 | observations / candidate | High; proves no per-alert candidate spam |
 | candidates / reviewed records | Reviewer workload and candidate quality |
 | retrieval precision on held-out alerts | Whether same-class matching is correct |
+| pattern lesson precision / recall | Whether Profile applicability classifies an exact decision lesson correctly |
+| directive eligibility precision / recall | Whether the real post-Runtime resolver accepts the reviewed directive |
 | directive override accuracy | Final outcomes supporting Memory-caused changes |
+| base vs effective verdict accuracy | Whether Memory improves the frozen Runtime result instead of only increasing recall |
+| scenario / direction / role accuracy | Independent quality dimensions; missing labels do not become failures |
+| verifier failure rate | Availability failures among actually triggered verifier calls |
 | contradiction rate by record/version | Staleness or overly broad scope |
 | false-negative safety suspensions | Must be visible and investigated immediately |
 | `not_applicable` rate | Applicability scope quality |
@@ -450,6 +529,20 @@ The module is useful only if it lowers work without hiding risk. Track:
 
 Acceptance requires a held-out, human-labeled PingAn set. In-sample fixtures prove wiring
 only and cannot establish Memory precision or production quality.
+
+The canonical read-only evaluator uses two versioned contracts:
+
+- `soc.memory_heldout_eval_fixture.v1` freezes reviewed records, their source alert lineage,
+  held-out Runtime requests/base decisions, model predictions, and independent analyst truth.
+- `soc.memory_heldout_eval_report.v1` replays the production Profile, Retrieval v2, `M-*`
+  projection, and Base-to-Memory decision resolver. It does not implement a second matching
+  algorithm.
+
+Construction alert IDs and held-out query alert IDs must be disjoint. Every accepted case
+labels every frozen Memory as `decision_applicable`, `context_only`, or `unrelated` and records
+reviewer/source/time/reason. Pending labels produce no accuracy claim. Simulation labels may
+validate the evaluator wiring, but `real_quality_metrics_available=false` and
+`rollout_authorized=false` remain fixed.
 
 ## 13. Rollout
 
@@ -464,10 +557,10 @@ only and cannot establish Memory precision or production quality.
 Rollback is retrieval disablement. Raw alerts, Base Decisions, uses, feedback, and prior
 record versions remain available for replay.
 
-Profile v2 records do not silently match Profile v3 queries. They remain auditable but
-must be re-aggregated under the v3 feature schema and reviewed again before receiving v3
+Profile v2/v3 records do not silently match Profile v4 queries. They remain auditable but
+must be re-aggregated under the v4 feature schema and reviewed again before receiving v4
 retrieval or decision authority. A migration must never infer a compound behavior scope
-from an old detection-only record.
+from an old detection-only or coarser behavior record.
 
 ## 14. Wiki / OKF Boundary
 
@@ -508,6 +601,10 @@ PYTHONPATH=.:backend backend/.venv/bin/pytest -q \
   validation/compact_zeus/memory/test_compare_role_memory_batches.py \
   validation/compact_zeus/internal_batch/test_run_pingan_runtime_batch.py
 
+# Held-out Memory evaluator and its simulation wiring baseline
+backend/.venv/bin/pytest -q backend/tests/test_soc_memory_eval.py
+cd backend && .venv/bin/python -m soc_agent.cli eval memory run --pretty
+
 # No-LLM structural comparison over the 210-alert PingAn corpus
 backend/.venv/bin/python \
   validation/compact_zeus/memory/build_behavior_fingerprint_audit.py \
@@ -523,8 +620,31 @@ cohorts covering 118 alerts. Twelve recurrent cohorts were structurally decision
 The corpus has no independent analyst labels, so these figures prove contract behavior,
 not production precision or recall.
 
-Current result: `194 passed` for the cross-layer Memory suite, `1 passed` for the real
+Current result: `235 passed` for the cross-layer Memory suite, `1 passed` for the real
 migration chain, and `27 passed` for offline validation helpers. These prove wiring,
 state transitions, authorization, idempotency and persistence. They do not replace the
 held-out analyst labels required to claim production retrieval precision or workload
 reduction.
+
+The committed three-case simulation baseline additionally proves exact cross-IP retrieval,
+same-service context-only retrieval, different-service rejection, directive eligibility, and
+Base-to-Memory transition metrics through production services. Its reviewed AskBob lesson requires
+the exact canonical service URL while allowing endpoint IPs to change. Its perfect synthetic scores
+are not PingAn quality evidence. A real pending fixture is prepared with `soc eval memory prepare`;
+only independently reviewed, desensitized held-out cases can set
+`real_quality_metrics_available=true`.
+
+The current Business Lesson/Router/Repository/Profile/Eval/Prompt/LLM-client/architecture focused
+regression is `102 passed`. Each generated rationale retains its exact bounded `D-*` source mapping
+for human review; the formal record still requires explicit confirmation. Frontend `eslint + tsc`
+and the focused ReviewQueue Playwright suite also pass. Exact test counts
+are implementation evidence only; the simulation report remains explicitly non-production quality.
+
+The 2026-08-16 live AskBob draft check used `globalai-deepseek-v4-flash-0731` through ordinary Chat
+Completion with reasoning and provider JSON mode disabled. Three logical drafts used three provider calls,
+required no output repair, performed no persistence, and passed schema, exact-reference, literal-identifier,
+scope and authority validation. Reviewer-selected optional facets were promoted server-side before drafting,
+so the exact AskBob service URI remained required while endpoint IPs could vary. Runtime also prepended the
+required-facet mismatch and current-counterevidence invalidation floors. The saved local report is
+`backend/.deer-flow/soc-validation/memory-lesson-live-20260816/quality-report.json`. This accepts the output
+as an editable reviewer draft, not as automatically confirmed Memory.
