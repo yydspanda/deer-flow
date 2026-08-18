@@ -334,6 +334,7 @@ class SocMemoryCandidateReviewDecision(StrEnum):
     CONFIRM_CANDIDATE = "confirm_candidate"
     CONFIRM = "confirm"
     REJECT = "reject"
+    REOPEN = "reopen"
     DEPRECATE = "deprecate"
     EXPIRE = "expire"
 

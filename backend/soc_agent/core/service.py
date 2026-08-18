@@ -1767,6 +1767,15 @@ class SocMemoryService:
                 actor=request_context.actor,
                 reviewed_at=reviewed_at,
             )
+        elif command.decision is SocMemoryCandidateReviewDecision.REOPEN:
+            _validate_memory_candidate_transition(candidate.status, command.decision)
+            candidate = self._transition_candidate(
+                candidate,
+                status=SocMemoryCandidateStatus.PENDING_REVIEW,
+                command=command,
+                actor=request_context.actor,
+                reviewed_at=reviewed_at,
+            )
         elif command.decision in {SocMemoryCandidateReviewDecision.DEPRECATE, SocMemoryCandidateReviewDecision.EXPIRE}:
             _validate_memory_candidate_transition(candidate.status, command.decision)
             candidate_status = SocMemoryCandidateStatus.EXPIRED if command.decision is SocMemoryCandidateReviewDecision.EXPIRE else SocMemoryCandidateStatus.DEPRECATED
@@ -2587,6 +2596,9 @@ def _validate_memory_candidate_transition(
         SocMemoryCandidateReviewDecision.REJECT: {
             SocMemoryCandidateStatus.PENDING_REVIEW,
             SocMemoryCandidateStatus.CONFIRMED_CANDIDATE,
+            SocMemoryCandidateStatus.REJECTED,
+        },
+        SocMemoryCandidateReviewDecision.REOPEN: {
             SocMemoryCandidateStatus.REJECTED,
         },
         SocMemoryCandidateReviewDecision.DEPRECATE: {

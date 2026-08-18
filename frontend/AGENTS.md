@@ -159,6 +159,10 @@ When future-match authority is selected, the workbench must collect a complete
 `soc.memory_business_lesson.v1` (conclusion, rationale, generalization boundary, invalidation condition,
 and handling guidance); applicability prose is projected from the reviewed machine scope. A generic
 review reason is audit metadata and cannot substitute for `record_lesson`.
+Keep the reviewer-selected alert verdict separate from candidate governance. Label `confirm` as persisting the
+reviewed Memory and `reject` as abandoning only that candidate, never as marking the alert false positive. A
+`rejected` candidate renders an audited `reopen` action; after the server returns it to `pending_review`, the
+verdict, business-fact, and Lesson controls become editable again. Do not unlock them locally before that response.
 The `AI 生成 Memory` command becomes available after the reviewer explicitly selects the final technical verdict;
 reviewer business context remains optional. The selected verdict and optional context are sent separately, and a
 verdict change invalidates any existing browser draft. The generated six-section Lesson is read-only by default;

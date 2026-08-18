@@ -28,6 +28,9 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > reviewer selects the final verdict; an optional one-line business fact improves tenant-specific quality. The six
 > generated sections are read-only by default, explicitly editable, non-persisted, and have no decision or action
 > authority until explicit review.
+> The alert verdict (`误报` / `真实攻击` / `可疑`) is separate from candidate governance: `放弃沉淀此候选`
+> rejects only the reusable Memory candidate. A mistaken rejection can be returned to `pending_review` through the
+> audited `重新打开审核` action; it is never repaired by editing SQLite directly.
 > A browser-driven local lifecycle is available for the reviewed 14-alert
 > `GalaxyLab_T1003-SAM-Dumping` cohort. Run `./scripts/soc-memory-dev.sh start`, then open
 > `http://localhost:2026/workspace/soc/memory-validation`. It uses an isolated SQLite database,

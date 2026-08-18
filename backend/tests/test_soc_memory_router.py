@@ -213,6 +213,40 @@ def test_soc_memory_api_preserves_reviewed_decision_directive() -> None:
     assert result.memory_record.metadata["business_lesson_source"] == ("reviewer_supplied")
 
 
+def test_soc_memory_api_reopens_rejected_candidate() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        mutation_audit_repository=repository,
+    )
+    candidate = service.propose_candidate(_memory_candidate_command())
+    rejected = soc_memory.review_memory_candidate(
+        candidate.candidate_id,
+        soc_memory.MemoryCandidateReviewRequest(
+            decision=SocMemoryCandidateReviewDecision.REJECT,
+            reason="Reviewer declined candidate persistence.",
+        ),
+        request=FakeRequest(),
+        service=service,
+    )
+
+    reopened = soc_memory.review_memory_candidate(
+        candidate.candidate_id,
+        soc_memory.MemoryCandidateReviewRequest(
+            decision=SocMemoryCandidateReviewDecision.REOPEN,
+            reason="Reviewer reopened the candidate.",
+        ),
+        request=FakeRequest(),
+        service=service,
+    )
+
+    assert rejected.candidate.status is SocMemoryCandidateStatus.REJECTED
+    assert reopened.previous_status is SocMemoryCandidateStatus.REJECTED
+    assert reopened.candidate.status is SocMemoryCandidateStatus.PENDING_REVIEW
+    assert reopened.memory_record is None
+
+
 def test_soc_memory_api_persists_explicit_business_lesson() -> None:
     repository = InMemoryMemoryCandidateRepository()
     service = SocMemoryService(

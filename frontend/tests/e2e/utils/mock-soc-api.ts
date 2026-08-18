@@ -6,6 +6,7 @@ export interface MockSocApiOptions {
   queueStatus?: "open" | "closed";
   includeQueueItem?: boolean;
   standaloneMemoryCandidate?: boolean;
+  candidateStatus?: string;
 }
 
 export interface MockSocRequest {
@@ -529,7 +530,7 @@ export async function mockSocAPI(
   const state: MockSocApiState = {
     requests: [],
     queueStatus: options.queueStatus ?? "open",
-    candidateStatus: "pending_review",
+    candidateStatus: options.candidateStatus ?? "pending_review",
     normalizationStatus: "open",
     includeQueueItem: options.includeQueueItem ?? true,
     standaloneMemoryCandidate: options.standaloneMemoryCandidate ?? false,
@@ -741,13 +742,30 @@ export async function mockSocAPI(
       method === "POST" &&
       path === "/api/soc/memory/candidates/MC-ALPHA-001/review"
     ) {
-      state.candidateStatus = "confirmed";
+      const decision =
+        typeof body === "object" && body !== null && "decision" in body
+          ? String(body.decision)
+          : "confirm";
+      const previousStatus = state.candidateStatus;
+      if (decision === "reopen") {
+        state.candidateStatus = "pending_review";
+      } else if (decision === "reject") {
+        state.candidateStatus = "rejected";
+      } else if (decision === "confirm_candidate") {
+        state.candidateStatus = "confirmed_candidate";
+      } else if (decision === "expire") {
+        state.candidateStatus = "expired";
+      } else if (decision === "deprecate") {
+        state.candidateStatus = "deprecated";
+      } else {
+        state.candidateStatus = "confirmed";
+      }
       return fulfill(route, {
         schema_version: "soc.memory_candidate_review_result.v1",
         candidate: memoryCandidate(state),
-        memory_record: memoryRecord(state),
-        previous_status: "pending_review",
-        decision: "confirm",
+        memory_record: decision === "confirm" ? memoryRecord(state) : null,
+        previous_status: previousStatus,
+        decision,
         reviewed_at: NOW,
       });
     }

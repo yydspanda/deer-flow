@@ -382,6 +382,7 @@ export type SocMemoryCandidateReviewDecision =
   | "confirm_candidate"
   | "confirm"
   | "reject"
+  | "reopen"
   | "deprecate"
   | "expire";
 

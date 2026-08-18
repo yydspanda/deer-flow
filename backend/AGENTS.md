@@ -1033,6 +1033,10 @@ the record version plus `SocMutationAuditRecord` atomically. Retrieval rejects d
 expired activations and overdue reviews. Public surfaces are
 `POST /api/soc/memory/records/{memory_id}/retrieval`, `soc memory records retrieval`, and read-only
 `soc memory search --baseline-json` diffing.
+Memory candidate governance uses the `SocMemoryService` state machine. `reject` declines persistence of
+the candidate and is not an alert `false_positive` verdict. A reviewer may recover an accidental rejection only
+through the audited `reopen` transition from `rejected` to `pending_review`; direct repository/SQLite edits and
+reopening `expired` or `deprecated` candidates are outside the contract.
 
 Lead Agent output is not a memory write trigger. `ReviewNoteOrigin.ACCEPTED_LEAD_AGENT_CONCLUSION`
 represents a human-owned `SocReviewService.add_note()` mutation with queue/thread/message/reason

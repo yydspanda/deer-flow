@@ -2795,6 +2795,55 @@ def test_memory_service_rejects_candidate_without_record() -> None:
     assert repository.get_memory_record_by_candidate_id(candidate.candidate_id) is None
 
 
+def test_memory_service_reopens_rejected_candidate_for_review() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        mutation_audit_repository=repository,
+    )
+    candidate = service.propose_candidate(_pingan_memory_candidate_command())
+    rejected = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.REJECT,
+            reason="Reviewer chose not to persist this candidate.",
+        ),
+        context=_analyst_context(request_id="REQ-MEMORY-REJECT"),
+    )
+
+    reopened = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.REOPEN,
+            reason="Reviewer reopened the candidate after correcting the workflow choice.",
+        ),
+        context=_analyst_context(request_id="REQ-MEMORY-REOPEN"),
+    )
+
+    assert rejected.candidate.status is SocMemoryCandidateStatus.REJECTED
+    assert reopened.previous_status is SocMemoryCandidateStatus.REJECTED
+    assert reopened.candidate.status is SocMemoryCandidateStatus.PENDING_REVIEW
+    assert reopened.candidate.review_reason == "Reviewer reopened the candidate after correcting the workflow choice."
+    assert reopened.memory_record is None
+    assert repository.get_memory_record_by_candidate_id(candidate.candidate_id) is None
+    audits = repository.list_mutation_audits(operation=SocMutationOperation.MEMORY_REVIEW)
+    audits_by_decision = {audit.payload["decision"]: audit for audit in audits}
+    assert set(audits_by_decision) == {"reject", "reopen"}
+    assert audits_by_decision["reopen"].payload["previous_status"] == "rejected"
+    assert audits_by_decision["reopen"].payload["status"] == "pending_review"
+
+    with pytest.raises(SocServiceError, match="cannot apply memory review decision reopen"):
+        service.review_candidate(
+            SocMemoryCandidateReviewCommand(
+                candidate_id=candidate.candidate_id,
+                decision=SocMemoryCandidateReviewDecision.REOPEN,
+                reason="An already-open candidate cannot be reopened again.",
+            ),
+            context=_analyst_context(request_id="REQ-MEMORY-REOPEN-AGAIN"),
+        )
+
+
 def test_memory_service_deprecates_confirmed_record() -> None:
     repository = InMemoryMemoryCandidateRepository()
     service = SocMemoryService(candidate_repository=repository, record_repository=repository)

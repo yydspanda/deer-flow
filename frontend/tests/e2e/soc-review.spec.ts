@@ -49,7 +49,10 @@ test.describe("SOC review workbench", () => {
       .getByLabel("业务事实（可选）")
       .fill("Alpha reviewer confirmed the bounded lesson.");
     await expect(
-      memorySection.getByRole("button", { name: "确认候选", exact: true }),
+      memorySection.getByRole("button", {
+        name: "确认并沉淀 Memory",
+        exact: true,
+      }),
     ).toBeDisabled();
     await memorySection.getByRole("button", { name: "AI 生成 Memory" }).click();
     await expect(
@@ -73,7 +76,7 @@ test.describe("SOC review workbench", () => {
       .getByRole("switch", { name: "未来精确匹配改判" })
       .click();
     await memorySection
-      .getByRole("button", { name: "确认候选", exact: true })
+      .getByRole("button", { name: "确认并沉淀 Memory", exact: true })
       .click();
     await expect(page.getByText("候选记忆已更新")).toBeVisible();
 
@@ -295,6 +298,49 @@ test.describe("SOC review workbench", () => {
           document.documentElement.clientWidth,
       ),
     ).resolves.toBe(false);
+  });
+
+  test("reopens a rejected standalone Memory Candidate before editing", async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page, { threads: [] });
+    const state = await mockSocAPI(page, {
+      includeQueueItem: false,
+      standaloneMemoryCandidate: true,
+      candidateStatus: "rejected",
+    });
+
+    await page.goto("/workspace/soc/review?candidate_id=MC-ALPHA-001");
+
+    const candidateSection = page.locator("section").filter({
+      has: page.getByRole("heading", { name: "候选记忆" }),
+    });
+    await expect(candidateSection.getByText("已放弃沉淀")).toBeVisible();
+    await expect(
+      candidateSection.getByRole("combobox", { name: "最终业务判断" }),
+    ).toBeDisabled();
+    await expect(
+      candidateSection.getByLabel("业务事实（可选）"),
+    ).toBeDisabled();
+
+    await candidateSection
+      .getByRole("button", { name: "重新打开审核" })
+      .click();
+
+    await expect(page.getByText("候选已重新打开，可以继续审核")).toBeVisible();
+    await expect(candidateSection.getByText("待审核")).toBeVisible();
+    await expect(
+      candidateSection.getByRole("combobox", { name: "最终业务判断" }),
+    ).toBeEnabled();
+    await expect(candidateSection.getByLabel("业务事实（可选）")).toBeEnabled();
+    expect(
+      state.requests.find((request) =>
+        request.path.endsWith("/MC-ALPHA-001/review"),
+      )?.body,
+    ).toMatchObject({
+      decision: "reopen",
+      reason: "审核人重新打开此前被放弃的候选，返回待审核状态。",
+    });
   });
 
   test("renders normalization drift and writes an explicit maintenance action", async ({

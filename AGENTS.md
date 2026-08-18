@@ -398,6 +398,10 @@ Current SOC direction:
   closed before candidate transition. Reviewers may narrow
   existing canonical candidate facets through `record_applicability`; this must not introduce tenant raw fields
   into generic Runtime.
+  Candidate governance is distinct from the alert verdict. `reject` means "do not persist this Memory candidate",
+  not `false_positive`; only the audited `reopen` transition may return a `rejected` candidate to
+  `pending_review`. It must preserve the prior mutation audit and must not reopen `expired` or `deprecated`
+  candidates or mutate SQLite directly.
   Candidate-level assistance uses `SocMemoryLessonDraftService` and the versioned
   `soc-memory-business-lesson-draft-v3` Prompt. It calls the model only after candidate admission, requires an
   authenticated reviewer-selected verdict, projects server-owned candidate/cohort facts as bounded `D-*`, and

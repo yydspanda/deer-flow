@@ -366,7 +366,7 @@ function candidateStatusLabel(status: SocMemoryCandidate["status"]) {
     pending_review: "待审核",
     confirmed_candidate: "已确认候选",
     confirmed: "已确认",
-    rejected: "已驳回",
+    rejected: "已放弃沉淀",
     expired: "已过期",
     deprecated: "已停用",
   };
@@ -1572,7 +1572,7 @@ function MemoryCandidateSection({
                     <label className="grid content-start gap-1 text-xs font-medium">
                       最终判断
                       <Select
-                        value={draft.confirmedVerdict ?? undefined}
+                        value={draft.confirmedVerdict ?? ""}
                         disabled={isReviewing || !editable}
                         onValueChange={(value) =>
                           onReviewDraftChange(candidate, {
@@ -1848,55 +1848,75 @@ function MemoryCandidateSection({
 
                 <div className="mt-4 flex flex-wrap justify-end gap-2 border-t pt-4">
                   <div className="flex flex-wrap gap-2">
-                    <Button
-                      size="sm"
-                      disabled={
-                        isReviewing ||
-                        !["pending_review", "confirmed_candidate"].includes(
-                          candidate.status,
-                        ) ||
-                        draft.confirmedVerdict === null ||
-                        !reviewedLesson
-                      }
-                      onClick={() => onReview(candidate, "confirm")}
-                    >
-                      确认候选
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={
-                        isReviewing ||
-                        !["pending_review", "confirmed_candidate"].includes(
-                          candidate.status,
-                        )
-                      }
-                      onClick={() => onReview(candidate, "reject")}
-                    >
-                      驳回
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={
-                        isReviewing ||
-                        ![
-                          "pending_review",
-                          "confirmed_candidate",
-                          "confirmed",
-                        ].includes(candidate.status)
-                      }
-                      onClick={() =>
-                        onReview(
-                          candidate,
-                          candidate.status === "confirmed"
-                            ? "deprecate"
-                            : "expire",
-                        )
-                      }
-                    >
-                      {candidate.status === "confirmed" ? "废弃" : "过期"}
-                    </Button>
+                    {candidate.status === "rejected" ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isReviewing}
+                        title="保留原驳回审计，并将候选返回待审核状态"
+                        onClick={() => onReview(candidate, "reopen")}
+                      >
+                        <RefreshCwIcon className="size-4" />
+                        重新打开审核
+                      </Button>
+                    ) : (
+                      <>
+                        <Button
+                          size="sm"
+                          disabled={
+                            isReviewing ||
+                            !["pending_review", "confirmed_candidate"].includes(
+                              candidate.status,
+                            ) ||
+                            draft.confirmedVerdict === null ||
+                            !reviewedLesson
+                          }
+                          onClick={() => onReview(candidate, "confirm")}
+                        >
+                          <CheckCircle2Icon className="size-4" />
+                          确认并沉淀 Memory
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={
+                            isReviewing ||
+                            !["pending_review", "confirmed_candidate"].includes(
+                              candidate.status,
+                            )
+                          }
+                          title="仅放弃这条 Memory 候选，不改变告警的最终判断"
+                          onClick={() => onReview(candidate, "reject")}
+                        >
+                          <XCircleIcon className="size-4" />
+                          放弃沉淀此候选
+                        </Button>
+                      </>
+                    )}
+                    {candidate.status !== "rejected" ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={
+                          isReviewing ||
+                          ![
+                            "pending_review",
+                            "confirmed_candidate",
+                            "confirmed",
+                          ].includes(candidate.status)
+                        }
+                        onClick={() =>
+                          onReview(
+                            candidate,
+                            candidate.status === "confirmed"
+                              ? "deprecate"
+                              : "expire",
+                          )
+                        }
+                      >
+                        {candidate.status === "confirmed" ? "废弃" : "过期"}
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -2575,12 +2595,14 @@ export function SocReviewQueueWorkbench({
       defaultMemoryCandidateReviewDraft(candidate);
     const reviewerVerdict = draft.confirmedVerdict;
     const reason =
-      draft.businessContext.trim() ||
-      (decision === "confirm" && reviewerVerdict
-        ? `审核人确认 Business Lesson，最终判断为${verdictLabel(reviewerVerdict)}。`
-        : decision === "reject"
-          ? "审核人驳回该候选，未形成可复用 Memory。"
-          : `审核人执行候选状态变更：${decision}。`);
+      decision === "reject"
+        ? "审核人决定放弃沉淀该候选，未形成可复用 Memory。"
+        : decision === "reopen"
+          ? "审核人重新打开此前被放弃的候选，返回待审核状态。"
+          : draft.businessContext.trim() ||
+            (decision === "confirm" && reviewerVerdict
+              ? `审核人确认 Business Lesson，最终判断为${verdictLabel(reviewerVerdict)}。`
+              : `审核人执行候选状态变更：${decision}。`);
     const narrowedApplicability = reviewedMemoryApplicability(candidate, draft);
     const effectiveApplicability =
       narrowedApplicability ?? candidate.applicability;
@@ -2618,7 +2640,11 @@ export function SocReviewQueueWorkbench({
         delete next[candidate.candidate_id];
         return next;
       });
-      toast.success("候选记忆已更新");
+      toast.success(
+        decision === "reopen"
+          ? "候选已重新打开，可以继续审核"
+          : "候选记忆已更新",
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "候选记忆评审失败");
     }
