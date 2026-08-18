@@ -191,7 +191,9 @@ negative component-performance timestamp failure during redirects. Keep that wor
 overlay rather than patching browser `performance`, changing the normal frontend script, or adding
 business-page error suppression. Treat model names as unbounded registered identifiers in the status
 strip: give the model value a shrinkable/wrapping track and keep Thinking/Role Verifier in independent
-tracks so a long relay alias cannot overlap adjacent status text at narrow desktop widths.
+tracks so a long relay alias cannot overlap adjacent status text at narrow desktop widths. Render
+cohort behavior components as independently wrapping labels in a full-width row above that status
+strip; never place the complete joined component list in a non-wrapping Badge or beside status text.
 
 The SOC operations page at `/workspace/soc/operations` is a thin read-only consumer of
 `soc.operations_snapshot.v1` through `core/soc/api.ts` and `useSocOperationsSnapshot()`. It may refresh

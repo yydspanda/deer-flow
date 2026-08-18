@@ -664,21 +664,25 @@ export function SocMemoryValidationWorkbench() {
         <WorkflowSummary state={state} />
 
         <section className="border-b px-5 py-4 md:px-7">
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(24rem,0.8fr)] xl:items-center">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-sm font-semibold">
-                  {state.cohort.detection_key}
-                </h2>
-                <Badge variant="outline">
-                  {state.cohort.behavior_components.join(" + ")}
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold break-all">
+              {state.cohort.detection_key}
+            </h2>
+            <div className="mt-2 flex min-w-0 flex-wrap gap-1.5">
+              {state.cohort.behavior_components.map((component) => (
+                <Badge
+                  key={component}
+                  variant="outline"
+                  className="max-w-full shrink rounded-sm font-mono break-all whitespace-normal"
+                >
+                  {component}
                 </Badge>
-              </div>
-              <p className="text-muted-foreground mt-2 truncate font-mono text-xs">
-                behavior {state.cohort.behavior_fingerprint}
-              </p>
+              ))}
             </div>
-            <dl className="text-muted-foreground grid min-w-0 gap-x-5 gap-y-2 text-xs sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+            <p className="text-muted-foreground mt-2 font-mono text-xs break-all">
+              behavior {state.cohort.behavior_fingerprint}
+            </p>
+            <dl className="text-muted-foreground mt-3 grid min-w-0 gap-x-5 gap-y-2 border-t pt-3 text-xs sm:grid-cols-[minmax(0,1fr)_auto_auto]">
               <div className="flex min-w-0 items-baseline gap-1.5">
                 <dt className="shrink-0 font-medium text-zinc-700">Model</dt>
                 <dd

@@ -40,6 +40,8 @@ https://github.com/user-attachments/assets/a8bcadc4-e040-4cf2-8fda-dd768b999c18
 > workbench scopes displayed runs and Pattern progress to the active Memory Profile generation. A
 > profile/schema upgrade therefore starts a fresh validation sequence without deleting historical
 > runs or observations, and Pattern idempotency remains stable only within that profile contract. This
+> page renders each behavior component as an independently wrapping label and keeps model status on a
+> separate row, so long fingerprints or relay model names cannot overlap validation controls. The
 > acceptance-only Docker overlay runs Next.js dev with
 > its supported webpack path to avoid the confirmed Next.js 16.2 Turbopack negative-performance-mark
 > error during redirects; the repository's normal frontend command remains unchanged.

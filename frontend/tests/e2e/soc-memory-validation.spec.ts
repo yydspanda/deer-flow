@@ -263,7 +263,7 @@ test("links a queue-less Pattern Candidate to standalone memory review", async (
   );
 });
 
-test("keeps long model status values from overlapping adjacent controls", async ({
+test("keeps behavior components and model status in non-overlapping tracks", async ({
   page,
 }) => {
   mockLangGraphAPI(page, { threads: [] });
@@ -273,21 +273,28 @@ test("keeps long model status values from overlapping adjacent controls", async 
   await page.route("**/api/soc/dev/memory-workbench**", async (route) => {
     await route.fulfill({ json: current });
   });
-  await page.setViewportSize({ width: 800, height: 900 });
+  await page.setViewportSize({ width: 1280, height: 900 });
 
   await page.goto("/workspace/soc/memory-validation");
 
   const model = page.getByText(current.model.model_name, { exact: true });
   const thinking = page.getByText("Thinking", { exact: true });
   const verifier = page.getByText("Role verifier", { exact: true });
+  const behaviorComponents = current.cohort.behavior_components.map(
+    (component) => page.getByText(component, { exact: true }),
+  );
   await expect(model).toBeVisible();
   await expect(thinking).toBeVisible();
   await expect(verifier).toBeVisible();
+  for (const component of behaviorComponents) {
+    await expect(component).toBeVisible();
+  }
 
   const boxes = await Promise.all([
     model.boundingBox(),
     thinking.boundingBox(),
     verifier.boundingBox(),
+    ...behaviorComponents.map((component) => component.boundingBox()),
   ]);
   expect(boxes.every((box) => box !== null)).toBe(true);
   for (let left = 0; left < boxes.length; left += 1) {
