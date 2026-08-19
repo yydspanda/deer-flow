@@ -26,8 +26,10 @@ from soc_agent.contracts import (
     GovernedContextFactQuery,
     InvestigationEvidence,
     LLMAnalysisRequest,
+    MemoryCenterInventory,
     MemoryPatternAggregationResult,
     MemoryPatternDataClass,
+    MemoryPatternLineageStatsPage,
     MemoryPatternObservation,
     MemoryPatternSourceType,
     NormalizationBaselineStatus,
@@ -554,6 +556,11 @@ class MemoryCandidateRepository(Protocol):
         limit: int = 50,
     ) -> list[SocMemoryCandidate]: ...
 
+    def find_memory_candidates_by_source_ids(
+        self,
+        source_ids: Sequence[str],
+    ) -> list[SocMemoryCandidate]: ...
+
 
 class MemoryBusinessLessonDrafter(Protocol):
     """Advisory generator for one non-persisted candidate lesson draft."""
@@ -598,7 +605,32 @@ class MemoryPatternObservationRepository(Protocol):
         data_class: MemoryPatternDataClass | None = None,
         source_type: MemoryPatternSourceType | None = None,
         limit: int = 500,
+        offset: int = 0,
     ) -> list[MemoryPatternObservation]: ...
+
+
+class MemoryCenterRepository(Protocol):
+    """Query-optimized persistence boundary for the Memory Center read model."""
+
+    def get_memory_center_inventory(self) -> MemoryCenterInventory: ...
+
+    def list_memory_pattern_lineage_stats(
+        self,
+        *,
+        tenant_id: str | None = None,
+        environment: str | None = None,
+        data_class: MemoryPatternDataClass | None = None,
+        profile_id: str | None = None,
+        search: str | None = None,
+        include_terminal_history: bool = True,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> MemoryPatternLineageStatsPage: ...
+
+    def find_memory_candidates_by_lineage_keys(
+        self,
+        lineage_keys: Sequence[str],
+    ) -> list[SocMemoryCandidate]: ...
 
 
 class MemoryPatternObserver(Protocol):
@@ -733,6 +765,11 @@ class MemoryRecordRepository(Protocol):
         source_candidate_id: str | None = None,
         retrieval_enabled: bool | None = None,
         limit: int = 50,
+    ) -> list[SocMemoryRecord]: ...
+
+    def find_memory_records_by_candidate_ids(
+        self,
+        candidate_ids: Sequence[str],
     ) -> list[SocMemoryRecord]: ...
 
     def find_memory_candidate_records(

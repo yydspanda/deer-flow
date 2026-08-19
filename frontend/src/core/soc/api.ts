@@ -8,6 +8,8 @@ import type {
   SocAgentApprovalRequestStatus,
   SocAgentApprovedActionCommand,
   SocAnalysisRun,
+  SocCorpusWorkbenchProcessResult,
+  SocCorpusWorkbenchState,
   SocDispositionOutcomeApplyResult,
   SocDispositionOutcomeRecordRequest,
   SocDispositionSampleManifestListResponse,
@@ -24,6 +26,10 @@ import type {
   SocMemoryCandidateReviewRequest,
   SocMemoryCandidateReviewResult,
   SocMemoryCandidateStatus,
+  SocMemoryCandidateSupersessionRequest,
+  SocMemoryCandidateSupersessionResult,
+  SocMemoryCenterOverview,
+  SocMemoryCenterPatternDetail,
   SocMemoryQuery,
   SocMemoryRecord,
   SocMemoryRecordListResponse,
@@ -184,6 +190,36 @@ export async function processSocMemoryWorkbenchAlert(
   return readJson<SocMemoryWorkbenchProcessResult>(
     response,
     "Failed to process SOC Memory DEV alert",
+  );
+}
+
+export async function getSocCorpusWorkbenchState(
+  context?: SocRequestContext,
+): Promise<SocCorpusWorkbenchState> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/dev/corpus-workbench`,
+    { headers: buildSocHeaders(context) },
+  );
+  return readJson<SocCorpusWorkbenchState>(
+    response,
+    "Failed to load SOC Corpus DEV workbench",
+  );
+}
+
+export async function processSocCorpusWorkbenchAlert(
+  alertId: string,
+  context?: SocRequestContext,
+): Promise<SocCorpusWorkbenchProcessResult> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/dev/corpus-workbench/alerts/${encodeURIComponent(alertId)}/process`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { stateChanging: true }),
+    },
+  );
+  return readJson<SocCorpusWorkbenchProcessResult>(
+    response,
+    "Failed to process SOC Corpus DEV alert",
   );
 }
 
@@ -596,6 +632,75 @@ export async function listSocMemoryCandidates({
   return data.items;
 }
 
+export async function getSocMemoryCenterOverview(
+  {
+    tenantId,
+    environment,
+    dataClass,
+    profileId,
+    search,
+    includeTerminalHistory = false,
+    limit = 50,
+    offset = 0,
+  }: {
+    tenantId?: string | null;
+    environment?: string | null;
+    dataClass?: "simulation" | "operational" | null;
+    profileId?: string | null;
+    search?: string | null;
+    includeTerminalHistory?: boolean;
+    limit?: number;
+    offset?: number;
+  } = {},
+  context?: SocRequestContext,
+): Promise<SocMemoryCenterOverview> {
+  const params = new URLSearchParams();
+  if (tenantId) params.set("tenant_id", tenantId);
+  if (environment) params.set("environment", environment);
+  if (dataClass) params.set("data_class", dataClass);
+  if (profileId) params.set("profile_id", profileId);
+  if (search?.trim()) params.set("search", search.trim());
+  params.set("include_terminal_history", String(includeTerminalHistory));
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/center?${params.toString()}`,
+    { headers: buildSocHeaders(context) },
+  );
+  return readJson<SocMemoryCenterOverview>(
+    response,
+    "Failed to load SOC Memory Center",
+  );
+}
+
+export async function getSocMemoryCenterPattern(
+  lineageKey: string,
+  {
+    includeObservations = false,
+    observationLimit = 20,
+    observationOffset = 0,
+  }: {
+    includeObservations?: boolean;
+    observationLimit?: number;
+    observationOffset?: number;
+  } = {},
+  context?: SocRequestContext,
+): Promise<SocMemoryCenterPatternDetail> {
+  const params = new URLSearchParams({
+    include_observations: String(includeObservations),
+    observation_limit: String(observationLimit),
+    observation_offset: String(observationOffset),
+  });
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/center/patterns/${encodeURIComponent(lineageKey)}?${params.toString()}`,
+    { headers: buildSocHeaders(context) },
+  );
+  return readJson<SocMemoryCenterPatternDetail>(
+    response,
+    "Failed to load SOC Memory pattern",
+  );
+}
+
 export async function getSocMemoryCandidate(
   candidateId: string,
   context?: SocRequestContext,
@@ -626,6 +731,25 @@ export async function reviewSocMemoryCandidate(
   return readJson<SocMemoryCandidateReviewResult>(
     response,
     "Failed to review SOC memory candidate",
+  );
+}
+
+export async function supersedeSocMemoryCandidate(
+  candidateId: string,
+  request: SocMemoryCandidateSupersessionRequest,
+  context?: SocRequestContext,
+): Promise<SocMemoryCandidateSupersessionResult> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/candidates/${encodeURIComponent(candidateId)}/supersession`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true, stateChanging: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocMemoryCandidateSupersessionResult>(
+    response,
+    "Failed to supersede SOC memory candidate",
   );
 }
 

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import pickle
-import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +24,7 @@ from soc_agent.contracts import (
 )
 from soc_agent.core import SocAnalysisService, SocMemoryPatternService
 from soc_agent.db import SqlAlchemyAlertRepository
+from soc_agent.demo.corpus_loader import load_restricted_dataframe_pickle
 from soc_agent.integrations.pingan.memory.profile import PingAnSocMemoryProfile
 from soc_agent.llm import SocLLMSettings
 from soc_agent.normalizers import normalize_alert_payload
@@ -37,26 +36,6 @@ MEMORY_WORKBENCH_TENANT = "pingan"
 MEMORY_WORKBENCH_RULE_CODE = "RPAADM_002010"
 MEMORY_WORKBENCH_RULE_NAME = "GalaxyLab_T1003-SAM-Dumping"
 MEMORY_WORKBENCH_DETECTION_KEY = "leagsoft-edr:rule_code:rpaadm_002010"
-
-_ALLOWED_PICKLE_GLOBALS = {
-    ("pandas", "DataFrame"),
-    ("pandas", "Index"),
-    ("pandas", "RangeIndex"),
-    ("pandas.core.frame", "DataFrame"),
-    ("pandas.core.internals.managers", "BlockManager"),
-    ("pandas._libs.internals", "_unpickle_block"),
-    ("numpy.core.numeric", "_frombuffer"),
-    ("numpy._core.numeric", "_frombuffer"),
-    ("numpy", "dtype"),
-    ("builtins", "slice"),
-    ("numpy.core.multiarray", "_reconstruct"),
-    ("numpy._core.multiarray", "_reconstruct"),
-    ("numpy", "ndarray"),
-    ("collections", "Counter"),
-    ("pandas.core.indexes.base", "_new_Index"),
-    ("pandas.core.indexes.base", "Index"),
-    ("pandas.core.indexes.range", "RangeIndex"),
-}
 
 
 class SocMemoryWorkbenchError(ValueError):
@@ -295,13 +274,6 @@ class SocMemoryWorkbenchProcessResult(BaseModel):
     observation_id: str | None = None
     idempotent: bool
     state: SocMemoryWorkbenchState
-
-
-class _RestrictedDataFrameUnpickler(pickle.Unpickler):
-    def find_class(self, module: str, name: str) -> Any:
-        if (module, name) not in _ALLOWED_PICKLE_GLOBALS:
-            raise pickle.UnpicklingError(f"blocked pickle global: {module}.{name}")
-        return super().find_class(module, name)
 
 
 class SocMemoryWorkbenchService:
@@ -720,18 +692,10 @@ def _progress(
 
 
 def _load_cases(path: Path) -> dict[str, _LoadedCase]:
-    if not path.is_file():
-        raise SocMemoryWorkbenchError(f"configured DEV memory corpus does not exist: {path}")
     try:
-        import pandas as pd
-    except ImportError as exc:
-        raise SocMemoryWorkbenchError("DEV memory workbench requires the backend pingan-dev dependencies") from exc
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        with path.open("rb") as handle:
-            frame = _RestrictedDataFrameUnpickler(handle).load()
-    if not isinstance(frame, pd.DataFrame):
-        raise SocMemoryWorkbenchError(f"expected pandas DataFrame, got {type(frame)!r}")
+        frame = load_restricted_dataframe_pickle(path)
+    except ValueError as exc:
+        raise SocMemoryWorkbenchError(str(exc)) from exc
     required = {"alert_id", "alert_full_data"}
     missing = required.difference(frame.columns)
     if missing:

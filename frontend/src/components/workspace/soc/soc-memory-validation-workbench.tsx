@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ActivityIcon,
   AlertTriangleIcon,
   BrainCircuitIcon,
   CheckCircle2Icon,
@@ -23,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   useProcessSocMemoryWorkbenchAlert,
   useSocMemoryWorkbench,
@@ -218,7 +218,7 @@ function CandidateBand({ state }: { state: SocMemoryWorkbenchState }) {
         {candidate ? (
           <Button size="sm" asChild>
             <Link
-              href={`/workspace/soc/review?candidate_id=${encodeURIComponent(candidate.candidate_id)}`}
+              href={`/workspace/soc/review/memory-candidates/${encodeURIComponent(candidate.candidate_id)}`}
             >
               <ShieldCheckIcon className="size-4" />
               审核 Candidate
@@ -272,7 +272,7 @@ function AlertTable({
               <th className="w-32 px-4 py-2.5 font-medium">状态</th>
               <th className="w-28 px-4 py-2.5 font-medium">Base</th>
               <th className="w-28 px-4 py-2.5 font-medium">Effective</th>
-              <th className="w-28 px-4 py-2.5 font-medium">Pattern</th>
+              <th className="w-28 px-4 py-2.5 font-medium">24h Pattern</th>
               <th className="w-32 px-4 py-2.5 text-right font-medium">操作</th>
             </tr>
           </thead>
@@ -333,16 +333,26 @@ function AlertTable({
                       {verdictLabel(alert.effective_verdict)}
                     </Badge>
                   </td>
-                  <td className="px-4 py-3 tabular-nums">
-                    {typeof alert.pattern_support_count === "number"
-                      ? `${alert.pattern_support_count}/5`
-                      : "-"}
+                  <td
+                    className="px-4 py-3 tabular-nums"
+                    title="同一租户、环境、行为模式及 24 小时窗口内的观察数和独立来源数"
+                  >
+                    {typeof alert.pattern_support_count === "number" ? (
+                      <span className="flex flex-col gap-0.5">
+                        <span>{alert.pattern_support_count} 条</span>
+                        <span className="text-muted-foreground text-xs">
+                          {alert.pattern_distinct_source_count ?? 0} 来源
+                        </span>
+                      </span>
+                    ) : (
+                      "-"
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right">
                     {alert.queue_id && !alert.can_process ? (
                       <Button variant="ghost" size="sm" asChild>
                         <Link
-                          href={`/workspace/soc/review?queue_id=${encodeURIComponent(alert.queue_id)}`}
+                          href={`/workspace/soc/review/alerts?queue_id=${encodeURIComponent(alert.queue_id)}`}
                           onClick={(event) => event.stopPropagation()}
                         >
                           <ExternalLinkIcon className="size-4" />
@@ -416,10 +426,10 @@ function AlertDetail({ alert }: { alert: SocMemoryWorkbenchAlert | null }) {
           </p>
         </div>
         <div className="bg-background px-4 py-3">
-          <p className="text-muted-foreground text-xs">Pattern Quality</p>
+          <p className="text-muted-foreground text-xs">24h Pattern Quality</p>
           <p className="mt-1 text-sm">
-            support {alert.pattern_support_count ?? 0} · distinct{" "}
-            {alert.pattern_distinct_source_count ?? 0}
+            {alert.pattern_support_count ?? 0} 条观察 ·{" "}
+            {alert.pattern_distinct_source_count ?? 0} 个独立来源
           </p>
           <p className="text-muted-foreground mt-1 text-xs">
             consistency {formatPercent(alert.pattern_consistency_ratio)} · gate{" "}
@@ -565,10 +575,16 @@ export function SocMemoryValidationWorkbench() {
 
   if (query.isLoading && !state) {
     return (
-      <div className="space-y-4 p-6" aria-label="正在加载 Memory 验证工作台">
-        <Skeleton className="h-20 w-full rounded-md" />
-        <Skeleton className="h-32 w-full rounded-md" />
-        <Skeleton className="h-96 w-full rounded-md" />
+      <div className="flex size-full min-h-0 flex-col">
+        <SocWorkspaceHeader
+          icon={FlaskConicalIcon}
+          title="DEV · GalaxyLab Memory 闭环"
+          description="GalaxyLab T1003 固定样本的 5+1 治理生命周期"
+        />
+        <div className="space-y-4 p-6" aria-label="正在加载 Memory 验证工作台">
+          <Skeleton className="h-32 w-full rounded-md" />
+          <Skeleton className="h-96 w-full rounded-md" />
+        </div>
       </div>
     );
   }
@@ -576,10 +592,11 @@ export function SocMemoryValidationWorkbench() {
   if (query.error && !state) {
     return (
       <div className="flex size-full min-h-0 flex-col">
-        <header className="flex items-center gap-3 border-b px-5 py-4 md:px-7">
-          <FlaskConicalIcon className="size-5" />
-          <h1 className="text-xl font-semibold">SOC Memory 验证</h1>
-        </header>
+        <SocWorkspaceHeader
+          icon={FlaskConicalIcon}
+          title="DEV · GalaxyLab Memory 闭环"
+          description="GalaxyLab T1003 固定样本的 5+1 治理生命周期"
+        />
         <main className="flex flex-1 items-center justify-center p-6">
           <div className="max-w-xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-900">
             <div className="flex items-start gap-3">
@@ -606,47 +623,40 @@ export function SocMemoryValidationWorkbench() {
 
   return (
     <div className="flex size-full min-h-0 flex-col">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4 md:px-7">
-        <div className="flex items-center gap-3">
-          <FlaskConicalIcon className="size-5" />
-          <div>
-            <h1 className="text-xl font-semibold">SOC Memory 验证</h1>
-            <p className="text-muted-foreground mt-0.5 text-sm">
-              Browser-driven DEV lifecycle
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge
-            variant="outline"
-            className="border-sky-300 bg-sky-50 text-sky-800"
-          >
-            DEV
-          </Badge>
-          <Badge variant="outline">
-            <DatabaseIcon className="size-3.5" />
-            SQLite · {state.safety.database_file}
-          </Badge>
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/workspace/soc/operations">
-              <ActivityIcon className="size-4" />
-              运营观察
-            </Link>
-          </Button>
-          <Button
-            variant="outline"
-            size="icon-sm"
-            onClick={() => void query.refetch()}
-            disabled={query.isFetching || processMutation.isPending}
-            aria-label="刷新 Memory 验证状态"
-            title="刷新 Memory 验证状态"
-          >
-            <RefreshCwIcon
-              className={cn("size-4", query.isFetching && "animate-spin")}
-            />
-          </Button>
-        </div>
-      </header>
+      <SocWorkspaceHeader
+        icon={FlaskConicalIcon}
+        title="DEV · GalaxyLab Memory 闭环"
+        description="GalaxyLab T1003 固定样本的 5+1 治理生命周期"
+        actions={
+          <>
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/workspace/soc/memory">Memory Center</Link>
+            </Button>
+            <Badge
+              variant="outline"
+              className="border-sky-300 bg-sky-50 text-sky-800"
+            >
+              DEV
+            </Badge>
+            <Badge variant="outline">
+              <DatabaseIcon className="size-3.5" />
+              SQLite · {state.safety.database_file}
+            </Badge>
+            <Button
+              variant="outline"
+              size="icon-sm"
+              onClick={() => void query.refetch()}
+              disabled={query.isFetching || processMutation.isPending}
+              aria-label="刷新 Memory 验证状态"
+              title="刷新 Memory 验证状态"
+            >
+              <RefreshCwIcon
+                className={cn("size-4", query.isFetching && "animate-spin")}
+              />
+            </Button>
+          </>
+        }
+      />
 
       <main className="min-h-0 flex-1 overflow-y-auto">
         <section className="flex flex-wrap items-center justify-between gap-3 border-b bg-zinc-50 px-5 py-3 text-xs md:px-7">

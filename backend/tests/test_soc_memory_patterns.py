@@ -47,6 +47,7 @@ from soc_agent.memory import (
     GenericSocMemoryProfile,
     InMemoryMemoryPatternRepository,
     SocMemoryProfileIdentity,
+    SocMemoryProfileRegistry,
     memory_pattern_command_from_run,
 )
 
@@ -199,6 +200,16 @@ def test_distinct_sources_create_one_frozen_pending_candidate() -> None:
     assert "代表性研判" in third.candidate.content
     assert third.candidate.metadata["candidate_snapshot_frozen"] is True
     assert third.candidate.metadata["support_count_at_creation"] == 3
+    assert third.candidate.validity.valid_from == third.candidate.created_at
+    assert third.candidate.validity.valid_until == third.candidate.created_at + timedelta(days=90)
+    assert (
+        third.candidate.source.metadata["window_start"]
+        == _START.replace(
+            hour=0,
+            minute=0,
+        ).isoformat()
+    )
+    assert third.candidate.source.metadata["window_end"] == (_START.replace(hour=0, minute=0) + timedelta(days=1)).isoformat()
 
     fourth = _observe(service, _run(4), transport_ref="batch:4")
     assert fourth.candidate_created is False
@@ -492,6 +503,59 @@ def test_pattern_idempotency_identity_changes_with_profile_contract() -> None:
     assert original.idempotency_key != upgraded.idempotency_key
     assert original.feature_schema_version == "soc.memory_features.generic.v1"
     assert upgraded.feature_schema_version == "soc.memory_features.generic.v2"
+
+
+def test_profile_upgrade_supersedes_same_alert_pending_candidate() -> None:
+    class _UpgradedGenericProfile(GenericSocMemoryProfile):
+        identity = SocMemoryProfileIdentity(
+            profile_id="soc.generic",
+            profile_version="2",
+            feature_schema_version="soc.memory_features.generic.v2",
+        )
+
+    repository = InMemoryMemoryPatternRepository()
+    policy = MemoryPatternAggregationPolicy(
+        minimum_support=2,
+        minimum_distinct_sources=2,
+        minimum_conclusive_support=2,
+    )
+    original_service = SocMemoryPatternService(
+        repository=repository,
+        candidate_repository=repository,
+        policy=policy,
+    )
+    upgraded_service = SocMemoryPatternService(
+        repository=repository,
+        candidate_repository=repository,
+        policy=policy,
+        profile_registry=SocMemoryProfileRegistry(fallback=_UpgradedGenericProfile()),
+    )
+
+    _observe(original_service, _run(1), transport_ref="batch:profile-v1:1")
+    original = _observe(
+        original_service,
+        _run(2),
+        transport_ref="batch:profile-v1:2",
+    ).candidate
+    assert original is not None
+
+    _observe(upgraded_service, _run(1), transport_ref="batch:profile-v2:1")
+    upgraded = _observe(
+        upgraded_service,
+        _run(2),
+        transport_ref="batch:profile-v2:2",
+    ).candidate
+    assert upgraded is not None
+
+    superseded = repository.get_memory_candidate(original.candidate_id)
+    assert superseded is not None
+    assert superseded.status is SocMemoryCandidateStatus.SUPERSEDED
+    assert superseded.superseded_by_candidate_id == upgraded.candidate_id
+    assert superseded.superseded_at is not None
+    persisted_upgraded = repository.get_memory_candidate(upgraded.candidate_id)
+    assert persisted_upgraded is not None
+    assert persisted_upgraded.metadata["supersedes_candidate_ids"] == [original.candidate_id]
+    assert repository.list_memory_candidates(status=SocMemoryCandidateStatus.PENDING_REVIEW) == [persisted_upgraded]
 
 
 def test_sql_repository_commits_observation_candidate_and_audit_atomically() -> None:

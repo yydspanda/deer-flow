@@ -95,7 +95,11 @@ from soc_agent.contracts import (
     SocMemoryCandidateReviewCommand,
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateReviewResult,
+    SocMemoryCandidateSourceType,
     SocMemoryCandidateStatus,
+    SocMemoryCandidateSupersessionCommand,
+    SocMemoryCandidateSupersessionResult,
+    SocMemoryCandidateValidity,
     SocMemoryDecisionDirective,
     SocMemoryDecisionEffect,
     SocMemoryDecisionImpact,
@@ -1524,6 +1528,14 @@ class SocMemoryService:
     REVIEWER_ROLES = SOC_MEMORY_REVIEWER_ROLES
     RETRIEVAL_ENABLE_ROLES = frozenset({"soc_memory_reviewer", "soc_admin"})
     RETRIEVAL_GOVERNOR_ROLES = frozenset({*RETRIEVAL_ENABLE_ROLES, "soc_memory_safety_monitor"})
+    SUPERSESSION_ROLES = frozenset(
+        {
+            "soc_memory_pattern_aggregator",
+            "soc_memory_reviewer",
+            "soc_engineer",
+            "soc_admin",
+        }
+    )
 
     def __init__(
         self,
@@ -1570,6 +1582,9 @@ class SocMemoryService:
                 return existing
 
         source = command.source.model_copy(update={"source_surface": command.source.source_surface or request_context.actor.surface})
+        proposed_at = self._now_provider()
+        if proposed_at.utcoffset() is None:
+            raise SocServiceError("memory service clock must be timezone-aware")
         candidate = SocMemoryCandidate(
             candidate_type=command.candidate_type,
             target_artifact=command.target_artifact,
@@ -1593,6 +1608,8 @@ class SocMemoryService:
                 "request_id": request_context.request_id,
             },
             proposed_by=request_context.actor,
+            created_at=proposed_at,
+            updated_at=proposed_at,
         )
         self._candidate_repository.save_memory_candidate(candidate)
         self._event_sink.emit(
@@ -1624,6 +1641,152 @@ class SocMemoryService:
         if candidate is None:
             raise SocServiceNotFoundError(f"memory candidate {candidate_id} not found")
         return candidate
+
+    def supersede_candidate(
+        self,
+        command: SocMemoryCandidateSupersessionCommand,
+        *,
+        context: ServiceRequestContext | None = None,
+    ) -> SocMemoryCandidateSupersessionResult:
+        """Retire one stale profile candidate while preserving both lineages."""
+
+        request_context = context or ServiceRequestContext()
+        require_actor_roles(
+            request_context,
+            self.SUPERSESSION_ROLES,
+            operation="superseding a stale memory profile candidate",
+        )
+        if self._mutation_uow is not None and not self._transaction_active:
+            buffered_events = BufferedSocEventSink(self._event_sink)
+            with self._mutation_uow.mutation_transaction() as repository:
+                result = SocMemoryService(
+                    candidate_repository=repository,
+                    record_repository=repository,
+                    mutation_audit_repository=repository,
+                    mutation_uow=self._mutation_uow,
+                    event_sink=buffered_events,
+                    now_provider=self._now_provider,
+                    _transaction_active=True,
+                ).supersede_candidate(command, context=request_context)
+            buffered_events.flush()
+            return result
+        if self._candidate_repository is None:
+            raise SocServiceNotImplementedError("supersede_candidate requires a MemoryCandidateRepository")
+
+        command_payload = command.model_dump(mode="json")
+        existing_audit = (
+            self._mutation_audit_repository.find_mutation_audit_by_idempotency_key(
+                SocMutationOperation.MEMORY_CANDIDATE_SUPERSEDE,
+                mutation_idempotency_key(request_context),
+            )
+            if self._mutation_audit_repository is not None
+            else None
+        )
+        if existing_audit is not None:
+            validate_mutation_retry(
+                existing_audit,
+                command=command_payload,
+                target_type="memory_candidate",
+                target_id=command.candidate_id,
+            )
+            candidate = self.get_candidate(command.candidate_id)
+            successor = self.get_candidate(command.successor_candidate_id)
+            return SocMemoryCandidateSupersessionResult(
+                candidate=candidate,
+                successor=successor,
+                previous_status=SocMemoryCandidateStatus(str(existing_audit.payload["previous_status"])),
+                basis=command.basis,
+                superseded_at=candidate.superseded_at or existing_audit.occurred_at,
+            )
+
+        candidate = self.get_candidate(command.candidate_id)
+        successor = self.get_candidate(command.successor_candidate_id)
+        if candidate.status is SocMemoryCandidateStatus.SUPERSEDED and candidate.superseded_by_candidate_id == successor.candidate_id:
+            return SocMemoryCandidateSupersessionResult(
+                candidate=candidate,
+                successor=successor,
+                previous_status=SocMemoryCandidateStatus.SUPERSEDED,
+                basis=command.basis,
+                superseded_at=candidate.superseded_at or candidate.updated_at,
+            )
+        _validate_memory_candidate_supersession(candidate, successor)
+
+        previous_status = candidate.status
+        superseded_at = self._now_provider()
+        if superseded_at.utcoffset() is None:
+            raise SocServiceError("memory service clock must be timezone-aware")
+        candidate = candidate.model_copy(
+            update={
+                "status": SocMemoryCandidateStatus.SUPERSEDED,
+                "superseded_by_candidate_id": successor.candidate_id,
+                "superseded_at": superseded_at,
+                "supersession_reason": command.reason,
+                "updated_at": superseded_at,
+                "metadata": {
+                    **candidate.metadata,
+                    "supersession_basis": command.basis,
+                    "superseded_by_profile": _memory_candidate_profile_identity(successor),
+                },
+            }
+        )
+        supersedes = [str(item) for item in successor.metadata.get("supersedes_candidate_ids", []) if isinstance(item, str)]
+        if candidate.candidate_id not in supersedes:
+            supersedes.append(candidate.candidate_id)
+        successor = successor.model_copy(
+            update={
+                "updated_at": superseded_at,
+                "metadata": {
+                    **successor.metadata,
+                    "supersedes_candidate_ids": sorted(set(supersedes)),
+                },
+            }
+        )
+        self._candidate_repository.save_memory_candidate(candidate)
+        self._candidate_repository.save_memory_candidate(successor)
+        if self._mutation_audit_repository is not None:
+            self._mutation_audit_repository.append_mutation_audit(
+                build_mutation_audit(
+                    operation=SocMutationOperation.MEMORY_CANDIDATE_SUPERSEDE,
+                    target_type="memory_candidate",
+                    target_id=candidate.candidate_id,
+                    run_id=candidate.source.run_id,
+                    alert_id=candidate.source.alert_id,
+                    queue_id=candidate.source.queue_id,
+                    context=request_context,
+                    reason=command.reason,
+                    command=command_payload,
+                    result_ref=successor.candidate_id,
+                    payload={
+                        "previous_status": previous_status.value,
+                        "status": candidate.status.value,
+                        "successor_candidate_id": successor.candidate_id,
+                        "basis": command.basis,
+                    },
+                )
+            )
+        self._event_sink.emit(
+            SocEvent(
+                event_type=SocEventType.MEMORY_UPDATED,
+                request_id=request_context.request_id,
+                run_id=candidate.source.run_id,
+                alert_id=candidate.source.alert_id,
+                actor=request_context.actor,
+                payload={
+                    "operation": "memory_candidate.superseded",
+                    "candidate_id": candidate.candidate_id,
+                    "candidate_status": candidate.status.value,
+                    "successor_candidate_id": successor.candidate_id,
+                    "basis": command.basis,
+                },
+            )
+        )
+        return SocMemoryCandidateSupersessionResult(
+            candidate=candidate,
+            successor=successor,
+            previous_status=previous_status,
+            basis=command.basis,
+            superseded_at=superseded_at,
+        )
 
     def review_candidate(
         self,
@@ -1684,7 +1847,9 @@ class SocMemoryService:
 
         candidate = self.get_candidate(command.candidate_id)
         previous_status = candidate.status
-        reviewed_at = datetime.now(UTC)
+        reviewed_at = self._now_provider()
+        if reviewed_at.utcoffset() is None:
+            raise SocServiceError("memory service clock must be timezone-aware")
         memory_record: SocMemoryRecord | None = None
 
         if command.decision is SocMemoryCandidateReviewDecision.CONFIRM_CANDIDATE:
@@ -2015,6 +2180,8 @@ class SocMemoryService:
             raise SocServiceError("memory service clock must be timezone-aware")
         previous_version = record.version
         previous_enabled = record.retrieval_enabled
+        record_validity = record.validity
+        validity_repair: dict[str, Any] | None = None
         if command.action is SocMemoryRetrievalActivationAction.ENABLE:
             if record.status is not SocMemoryRecordStatus.CONFIRMED:
                 raise SocServiceError(f"cannot enable retrieval for memory in status {record.status.value}")
@@ -2023,7 +2190,10 @@ class SocMemoryService:
             if record.validity.valid_from > now:
                 raise SocServiceError("cannot enable retrieval before the memory validity window starts")
             if record.validity.valid_until is not None and record.validity.valid_until <= now:
-                raise SocServiceError("cannot enable retrieval for expired memory")
+                repaired = _repair_legacy_pattern_record_validity(record, now=now)
+                if repaired is None:
+                    raise SocServiceError("cannot enable retrieval for expired memory")
+                record_validity, validity_repair = repaired
 
             activation_valid_until = command.activation_valid_until
             review_after_days = command.review_after_days
@@ -2031,7 +2201,7 @@ class SocMemoryService:
                 raise SocServiceError("enable requires activation validity and review scheduling")
             if activation_valid_until <= now:
                 raise SocServiceError("activation_valid_until must be in the future")
-            if record.validity.valid_until is not None and activation_valid_until > record.validity.valid_until:
+            if record_validity.valid_until is not None and activation_valid_until > record_validity.valid_until:
                 raise SocServiceError("retrieval activation cannot outlive the confirmed memory validity window")
             review_due_at = now + timedelta(days=review_after_days)
             if review_due_at > activation_valid_until:
@@ -2047,6 +2217,7 @@ class SocMemoryService:
         updated_record = record.model_copy(
             update={
                 "version": previous_version + 1,
+                "validity": record_validity,
                 "retrieval_enabled": retrieval_enabled,
                 "retrieval_policy_version": command.policy_version,
                 "retrieval_valid_until": activation_valid_until,
@@ -2055,11 +2226,15 @@ class SocMemoryService:
                 "retrieval_updated_at": now,
                 "retrieval_reason": command.reason,
                 "updated_at": now,
-                "labels": _retrieval_activation_labels(record.labels, enabled=retrieval_enabled),
+                "labels": _retrieval_activation_labels(
+                    (sorted(set(record.labels + ["legacy-validity-repaired"])) if validity_repair is not None else record.labels),
+                    enabled=retrieval_enabled,
+                ),
                 "metadata": {
                     **record.metadata,
                     **command.metadata,
                     "retrieval_enabled": retrieval_enabled,
+                    **({"legacy_pattern_validity_repair": validity_repair} if validity_repair is not None else {}),
                 },
             }
         )
@@ -2089,6 +2264,11 @@ class SocMemoryService:
                 "policy_version": command.policy_version,
                 "retrieval_valid_until": updated_record.retrieval_valid_until,
                 "retrieval_review_due_at": updated_record.retrieval_review_due_at,
+                "legacy_pattern_validity_repair_policy": (validity_repair["policy_version"] if validity_repair is not None else None),
+                "previous_record_valid_from": (validity_repair["previous_validity"]["valid_from"] if validity_repair is not None else None),
+                "previous_record_valid_until": (validity_repair["previous_validity"]["valid_until"] if validity_repair is not None else None),
+                "record_valid_from": updated_record.validity.valid_from,
+                "record_valid_until": updated_record.validity.valid_until,
             },
         )
         self._mutation_audit_repository.append_mutation_audit(audit_record)
@@ -2108,6 +2288,7 @@ class SocMemoryService:
                     "retrieval_enabled": updated_record.retrieval_enabled,
                     "policy_version": command.policy_version,
                     "audit_id": audit_record.audit_id,
+                    "legacy_pattern_validity_repaired": validity_repair is not None,
                 },
             )
         )
@@ -2310,6 +2491,10 @@ def _memory_record_from_candidate(
     summary = lesson.conclusion if lesson is not None else command.record_summary or candidate.summary
     content = render_memory_business_lesson(lesson) if lesson is not None else command.record_content or candidate.content
     facets_hash = _stable_sha256(candidate.facets)
+    record_validity, validity_metadata = _confirmed_memory_validity(
+        candidate,
+        confirmed_at=created_at,
+    )
     return SocMemoryRecord(
         memory_type=candidate.candidate_type,
         target_artifact=candidate.target_artifact,
@@ -2323,7 +2508,7 @@ def _memory_record_from_candidate(
         facets=candidate.facets,
         applicability=command.record_applicability or candidate.applicability,
         evidence_refs=candidate.evidence_refs,
-        validity=candidate.validity,
+        validity=record_validity,
         confidence=candidate.confidence,
         decision_impact=(SocMemoryDecisionImpact.DETECTION_DECISION if command.decision_directive is not None else candidate.decision_impact),
         decision_directive=command.decision_directive,
@@ -2339,8 +2524,53 @@ def _memory_record_from_candidate(
             "review_reason": command.reason,
             "business_lesson_schema_version": (lesson.schema_version if lesson is not None else None),
             "retrieval_enabled": False,
+            **validity_metadata,
         },
     )
+
+
+def _confirmed_memory_validity(
+    candidate: SocMemoryCandidate,
+    *,
+    confirmed_at: datetime,
+) -> tuple[SocMemoryCandidateValidity, dict[str, Any]]:
+    if candidate.source.source_type is not SocMemoryCandidateSourceType.REPEATED_PATTERN:
+        return candidate.validity, {}
+    validity = SocMemoryCandidateValidity(
+        valid_from=confirmed_at,
+        valid_until=confirmed_at + timedelta(days=90),
+        review_after_days=candidate.validity.review_after_days or 30,
+        notes=("Confirmed repeated-pattern knowledge is valid from analyst confirmation; the source evidence window remains in source metadata."),
+    )
+    return validity, {
+        "record_validity_policy": "soc.memory_pattern_record_validity.v1",
+        "candidate_validity_at_confirmation": candidate.validity.model_dump(mode="json"),
+    }
+
+
+def _repair_legacy_pattern_record_validity(
+    record: SocMemoryRecord,
+    *,
+    now: datetime,
+) -> tuple[SocMemoryCandidateValidity, dict[str, Any]] | None:
+    """Repair only records that were already expired when legacy code created them."""
+
+    valid_until = record.validity.valid_until
+    if record.source.source_type is not SocMemoryCandidateSourceType.REPEATED_PATTERN or valid_until is None or valid_until > record.created_at:
+        return None
+    repaired = SocMemoryCandidateValidity(
+        valid_from=now,
+        valid_until=now + timedelta(days=90),
+        review_after_days=record.validity.review_after_days or 30,
+        notes=("Legacy repeated-pattern validity was repaired during governed retrieval activation; the historical evidence window remains in source metadata."),
+    )
+    return repaired, {
+        "policy_version": "soc.memory_pattern_legacy_validity_repair.v1",
+        "reason": "historical evidence time was incorrectly used as the record governance window",
+        "repaired_at": now.isoformat(),
+        "previous_validity": record.validity.model_dump(mode="json"),
+        "repaired_validity": repaired.model_dump(mode="json"),
+    }
 
 
 def _validate_memory_decision_directive(
@@ -2614,6 +2844,66 @@ def _validate_memory_candidate_transition(
     }
     if status not in allowed[decision]:
         raise SocServiceError(f"cannot apply memory review decision {decision.value} to candidate in status {status.value}")
+
+
+def _memory_candidate_profile_identity(
+    candidate: SocMemoryCandidate,
+) -> dict[str, str] | None:
+    applicability = candidate.applicability
+    if applicability is not None:
+        return {
+            "profile_id": applicability.profile_id,
+            "profile_version": applicability.profile_version,
+            "feature_schema_version": applicability.feature_schema_version,
+        }
+    values = {
+        "profile_id": candidate.metadata.get("memory_profile_id"),
+        "profile_version": candidate.metadata.get("memory_profile_version"),
+        "feature_schema_version": candidate.metadata.get("memory_feature_schema_version"),
+    }
+    if not all(isinstance(value, str) and value for value in values.values()):
+        return None
+    return cast(dict[str, str], values)
+
+
+def _validate_memory_candidate_supersession(
+    candidate: SocMemoryCandidate,
+    successor: SocMemoryCandidate,
+) -> None:
+    if candidate.candidate_id == successor.candidate_id:
+        raise SocServiceError("a memory candidate cannot supersede itself")
+    if candidate.status not in {
+        SocMemoryCandidateStatus.PENDING_REVIEW,
+        SocMemoryCandidateStatus.CONFIRMED_CANDIDATE,
+    }:
+        raise SocServiceError("only pending or confirmed-candidate profile work may be superseded")
+    if successor.status not in {
+        SocMemoryCandidateStatus.PENDING_REVIEW,
+        SocMemoryCandidateStatus.CONFIRMED_CANDIDATE,
+        SocMemoryCandidateStatus.CONFIRMED,
+    }:
+        raise SocServiceError("the successor memory candidate is not active")
+    if candidate.source.source_type is not SocMemoryCandidateSourceType.REPEATED_PATTERN or successor.source.source_type is not SocMemoryCandidateSourceType.REPEATED_PATTERN:
+        raise SocServiceError("profile supersession is limited to repeated-pattern candidates")
+    if candidate.tenant_scope != successor.tenant_scope or candidate.tenant_id != successor.tenant_id:
+        raise SocServiceError("profile supersession requires the same tenant scope")
+    if not candidate.source.alert_id or candidate.source.alert_id != successor.source.alert_id:
+        raise SocServiceError("automatic profile supersession requires the same source alert")
+    candidate_profile = _memory_candidate_profile_identity(candidate)
+    successor_profile = _memory_candidate_profile_identity(successor)
+    if candidate_profile is None or successor_profile is None:
+        raise SocServiceError("profile supersession requires typed profile identity on both candidates")
+    if candidate_profile["profile_id"] != successor_profile["profile_id"]:
+        raise SocServiceError("profile supersession requires the same profile id")
+    if candidate_profile == successor_profile:
+        raise SocServiceError("profile supersession requires a changed profile or feature schema version")
+    for key in ("environment", "data_class"):
+        candidate_value = candidate.source.metadata.get(key)
+        successor_value = successor.source.metadata.get(key)
+        if isinstance(candidate_value, str) and isinstance(successor_value, str) and candidate_value != successor_value:
+            raise SocServiceError(f"profile supersession requires the same {key} boundary")
+    if successor.created_at < candidate.created_at:
+        raise SocServiceError("profile supersession requires a newer successor candidate")
 
 
 def _stable_sha256(value: Any) -> str:

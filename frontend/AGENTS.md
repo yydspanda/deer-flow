@@ -177,7 +177,7 @@ record version, reason, idempotency key and enable validity/review settings. Do 
 `retrieval_enabled` or infer governance eligibility in the browser; refresh server records after the
 mutation. Display policy/review metadata and the retrieval skipped counters returned by the API.
 
-The DEV-only `/workspace/soc/memory-validation` page is an operational client for the fixed
+The DEV-only `/workspace/soc/dev/memory-validation/galaxylab` page is an operational client for the fixed
 GalaxyLab Memory lifecycle. It reads a server-owned progression projection and may invoke only the
 next unlocked alert through `core/soc`; React must not load the PKL, construct Pattern observations,
 approve candidates, enable retrieval, or calculate Base/Memory/Tenant/Effective decisions. Candidate
@@ -190,10 +190,57 @@ prose or imply that a Pattern Candidate is already a confirmed/retrievable Memor
 environment, SQLite,
 mock/off Provider, disabled tenant-policy, and disabled-action labels visible so screenshots cannot be
 misread as STG or production evidence. `docker-compose.soc-memory-dev.yaml` deliberately starts this
+workflow against isolated local infrastructure. The table's `24h Pattern` value is the absolute
+observation count plus distinct-source count for that alert's fixed aggregation window; never render it
+as `x/5`. The construction threshold belongs to the separate candidate/progress quality gate and a
+cohort can legitimately exceed it.
+The formal `/workspace/soc/memory` page is the operational Memory Center. It consumes only the
+server-owned lineage read model from `/api/soc/memory/center` and
+`/api/soc/memory/center/patterns/{lineage_key}`. One row represents one stable pattern across all fixed
+24-hour aggregation windows; show total observations, distinct sources, window count, frozen candidate
+snapshot and later reinforcement separately. Do not split a Sliver-style `6 + 1 + 1` recurrence into
+three primary rows or aggregate it in React. Fixed GalaxyLab remains a visibly DEV-only local tool
+linked from the Memory Center, never a global operational destination.
+The Memory Center root is list-first: it must not auto-select the first Pattern or request its detail.
+The explicit Pattern route first requests governance summary with `include_observations=false`;
+source-alert summaries are a separate operator action, fetched in bounded 20-row pages. Do not attach
+all related alert analyses to navigation or treat rendering truncation as transport pagination.
+Terminal candidate-only history is server-filtered by default. The explicit `历史审计` control must
+re-query with `include_terminal_history=true`; do not hide already-paginated rows only in React.
+Review navigation is route-owned: alerts use `/workspace/soc/review/alerts`, Memory Candidate governance
+uses `/workspace/soc/review/memory-candidates[/candidate_id]`, and sampled quality review uses
+`/workspace/soc/review/samples`. A candidate deep-link must never manufacture or select an alert queue
+item merely to reuse the review screen. The candidate governance index is an all-status inventory by
+default, not a pending-only inbox: confirmed, rejected, superseded, expired, and deprecated candidates
+remain discoverable for audit. The dedicated detail route must show the proposed candidate content and
+evidence lineage without a disclosure click. Only editable candidate states render the review workflow;
+terminal or confirmed states render their governance history, and a confirmed candidate renders the
+persisted six-part Business Lesson from its related Memory record instead of an empty disabled form.
+SOC route queries must be enabled only for their active surface. Candidate inventory must not fetch
+ReviewQueue, Approval Inbox, or Memory records; a candidate detail may query records only by its
+`source_candidate_id`. Short navigation `staleTime` is allowed because every SOC mutation invalidates
+the owning query namespace; it must not replace mutation-driven invalidation.
+The separate DEV-only `/workspace/soc/corpus-validation` page is the manual full-corpus explorer. It
+consumes only `/api/soc/dev/corpus-workbench`, defaults to the server-classified `candidate_window`
+subset, and keeps long-term same-class count, fixed 24-hour structural count, persisted Pattern count,
+and confirmed Memory hits as separate columns. React may search, filter, paginate, select, and invoke
+one alert, but it must not load the PKL, derive fingerprints/groups, decide readiness, construct a
+candidate, or infer a Memory match. The detailed result must retain Base -> Effective decision lineage
+and distinguish an `M-*` context hit from an applied reviewed directive.
+All `/workspace/soc/*` operational pages use `SocWorkspaceHeader` as their shared second-level
+navigation. Keep cross-page destinations stable there; page headers may expose only local actions such
+as filters and refresh. DEV validation entries must remain visibly labeled, while fixture/cohort names
+such as GalaxyLab belong in page context rather than global navigation.
 DEV acceptance surface with `next dev --webpack`: Next.js 16.2 Turbopack has a confirmed intermittent
 negative component-performance timestamp failure during redirects. Keep that workaround scoped to the
 overlay rather than patching browser `performance`, changing the normal frontend script, or adding
-business-page error suppression. Treat model names as unbounded registered identifiers in the status
+business-page error suppression. `scripts/soc-memory-dev.sh start|rebuild` precompiles every common
+SOC route because webpack development mode compiles route chunks on first request; keep dynamic
+Pattern/Candidate warm-up paths and route timings in that SOC-only script rather than changing the
+normal DeerFlow dev command. The SOC overlay keeps Watchpack polling for Docker Desktop compatibility
+but raises its default interval to 15 seconds, and disables Watchfiles' WSL-forced polling when native
+backend events are available. Operators may tune these independently with
+`SOC_MEMORY_DEV_WATCHPACK_POLLING` and `SOC_MEMORY_DEV_WATCHFILES_FORCE_POLLING`. Treat model names as unbounded registered identifiers in the status
 strip: give the model value a shrinkable/wrapping track and keep Thinking/Role Verifier in independent
 tracks so a long relay alias cannot overlap adjacent status text at narrow desktop widths. Render
 cohort behavior components as independently wrapping labels in a full-width row above that status

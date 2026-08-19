@@ -2776,6 +2776,175 @@ def test_memory_service_confirms_candidate_into_retrieval_disabled_record() -> N
     assert event_sink.events[-1].payload["memory_id"] == result.memory_record.memory_id
 
 
+def test_repeated_pattern_confirmation_starts_record_validity_at_review_time() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    reviewed_at = datetime(2026, 8, 18, 4, 0, tzinfo=UTC)
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        now_provider=lambda: reviewed_at,
+    )
+    base = _pingan_memory_candidate_command()
+    candidate = service.propose_candidate(
+        base.model_copy(
+            update={
+                "source": base.source.model_copy(
+                    update={
+                        "source_type": SocMemoryCandidateSourceType.REPEATED_PATTERN,
+                        "source_id": "memory_pattern:historical-cohort",
+                    }
+                ),
+                "validity": SocMemoryCandidateValidity(
+                    valid_from=datetime(2026, 4, 27, tzinfo=UTC),
+                    valid_until=datetime(2026, 7, 27, tzinfo=UTC),
+                    review_after_days=30,
+                    notes="Legacy historical evidence window.",
+                ),
+                "idempotency_key": "memory:pattern:historical-cohort",
+            }
+        )
+    )
+
+    result = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Analyst reviewed the historical cohort today.",
+        ),
+        context=_analyst_context(),
+    )
+
+    assert result.memory_record is not None
+    assert result.memory_record.validity.valid_from == reviewed_at
+    assert result.memory_record.validity.valid_until == reviewed_at + timedelta(days=90)
+    assert result.memory_record.metadata["record_validity_policy"] == "soc.memory_pattern_record_validity.v1"
+    assert result.memory_record.metadata["candidate_validity_at_confirmation"]["valid_until"] == "2026-07-27T00:00:00Z"
+
+
+def test_retrieval_activation_repairs_only_legacy_pattern_born_expired() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    now = datetime(2026, 8, 18, 5, 0, tzinfo=UTC)
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        mutation_audit_repository=repository,
+        now_provider=lambda: now,
+    )
+    base = _pingan_memory_candidate_command()
+    candidate = service.propose_candidate(
+        base.model_copy(
+            update={
+                "source": base.source.model_copy(
+                    update={
+                        "source_type": SocMemoryCandidateSourceType.REPEATED_PATTERN,
+                        "source_id": "memory_pattern:legacy-born-expired",
+                    }
+                ),
+                "idempotency_key": "memory:pattern:legacy-born-expired",
+            }
+        )
+    )
+    confirmed = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Create a legacy compatibility fixture.",
+        ),
+        context=_analyst_context(),
+    )
+    assert confirmed.memory_record is not None
+    legacy_record = confirmed.memory_record.model_copy(
+        update={
+            "validity": SocMemoryCandidateValidity(
+                valid_from=datetime(2026, 4, 27, tzinfo=UTC),
+                valid_until=datetime(2026, 7, 27, tzinfo=UTC),
+                review_after_days=30,
+                notes="Legacy code copied the historical evidence window.",
+            )
+        }
+    )
+    repository.save_memory_record(legacy_record)
+
+    result = service.set_retrieval_activation(
+        SocMemoryRetrievalActivationCommand(
+            memory_id=legacy_record.memory_id,
+            action=SocMemoryRetrievalActivationAction.ENABLE,
+            expected_record_version=legacy_record.version,
+            reason="Reviewer approved retrieval after correcting legacy validity provenance.",
+            activation_valid_until=now + timedelta(days=60),
+            review_after_days=30,
+        ),
+        context=_memory_governor_context(
+            request_id="REQ-MEMORY-LEGACY-VALIDITY-REPAIR",
+            idempotency_key="memory-retrieval:legacy-validity-repair",
+        ),
+    )
+
+    assert result.record.retrieval_enabled is True
+    assert result.record.validity.valid_from == now
+    assert result.record.validity.valid_until == now + timedelta(days=90)
+    assert "legacy-validity-repaired" in result.record.labels
+    repair = result.record.metadata["legacy_pattern_validity_repair"]
+    assert repair["policy_version"] == "soc.memory_pattern_legacy_validity_repair.v1"
+    assert repair["previous_validity"]["valid_until"] == "2026-07-27T00:00:00Z"
+    audit = repository.list_mutation_audits(
+        operation=SocMutationOperation.MEMORY_RETRIEVAL_ACTIVATION,
+    )[-1]
+    assert audit.payload["legacy_pattern_validity_repair_policy"] == "soc.memory_pattern_legacy_validity_repair.v1"
+    assert audit.payload["previous_record_valid_until"] == "2026-07-27T00:00:00Z"
+    assert audit.payload["record_valid_until"] == str(now + timedelta(days=90))
+
+
+def test_retrieval_activation_still_rejects_normally_expired_memory() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    now = datetime(2026, 8, 18, 6, 0, tzinfo=UTC)
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        mutation_audit_repository=repository,
+        now_provider=lambda: now,
+    )
+    base = _pingan_memory_candidate_command()
+    candidate = service.propose_candidate(
+        base.model_copy(
+            update={
+                "validity": SocMemoryCandidateValidity(
+                    valid_from=datetime(2026, 4, 27, tzinfo=UTC),
+                    valid_until=datetime(2026, 7, 27, tzinfo=UTC),
+                    review_after_days=30,
+                    notes="A genuinely expired non-pattern knowledge window.",
+                ),
+                "idempotency_key": "memory:non-pattern:expired",
+            }
+        )
+    )
+    confirmed = service.review_candidate(
+        SocMemoryCandidateReviewCommand(
+            candidate_id=candidate.candidate_id,
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="Create an expired non-pattern fixture.",
+        ),
+        context=_analyst_context(),
+    )
+    assert confirmed.memory_record is not None
+
+    with pytest.raises(SocServiceError, match="cannot enable retrieval for expired memory"):
+        service.set_retrieval_activation(
+            SocMemoryRetrievalActivationCommand(
+                memory_id=confirmed.memory_record.memory_id,
+                action=SocMemoryRetrievalActivationAction.ENABLE,
+                expected_record_version=confirmed.memory_record.version,
+                reason="Expired knowledge must not be silently renewed.",
+                activation_valid_until=now + timedelta(days=30),
+                review_after_days=10,
+            ),
+            context=_memory_governor_context(
+                request_id="REQ-MEMORY-NORMAL-EXPIRY",
+                idempotency_key="memory-retrieval:normal-expiry",
+            ),
+        )
+
+
 def test_memory_service_rejects_candidate_without_record() -> None:
     repository = InMemoryMemoryCandidateRepository()
     service = SocMemoryService(candidate_repository=repository, record_repository=repository)

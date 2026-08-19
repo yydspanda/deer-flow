@@ -932,6 +932,34 @@ through `scripts/soc-memory-dev.sh`; its startup contract is real LLM + isolated
 admin + `dev` Memory/automation environments, with tenant policy and external action execution off.
 The original corpus remains immutable; trusted-ingress tenant completion happens only on a copied
 payload. A DEV pass is product-flow evidence, not STG/production or Memory-accuracy evidence.
+The operational Memory Center is separate from both DEV workbenches. `SocMemoryCenterService` and
+`/api/soc/memory/center` build a read-only inventory from persisted repositories. List and detail are
+grouped by stable Pattern `lineage_key`, not one fixed-window `aggregation_key`, so recurrence across
+multiple 24-hour candidate windows remains one operator-visible pattern. Counts must distinguish total
+observations, distinct source alerts, aggregation windows, the frozen candidate snapshot, and later
+reinforcement. Candidate and record state remain owned by `SocMemoryService`; the read model cannot
+confirm, activate, renew, or rewrite them.
+Pattern detail supports an explicit summary-only read: `include_observations=false` must preserve
+lineage/candidate/record totals while skipping the observation repository query. Operational UI uses
+that mode first and requests observations separately in bounded pages; direct service callers retain
+the full-detail default for compatibility.
+The overview defaults `include_terminal_history=false`; terminal candidate-only lineages remain counted
+and retrievable through the explicit history query, but cannot consume active-list pagination. Direct
+pattern detail remains available for audit.
+Profile/schema upgrades preserve history. A pending or `confirmed_candidate` repeated-pattern
+candidate may transition to `superseded` only through the typed same-tenant/same-alert/same-Profile
+service command and mutation audit when a newer Profile candidate exists. Confirmed Memory records
+are never implicitly superseded. New-candidate creation may invoke that exact reconciliation for the
+same source alert; existing data requires the same explicit service/API command, never direct SQL.
+The adjacent `soc_agent.demo.corpus_workbench` and `/api/soc/dev/corpus-workbench` surface keep the
+fixed lifecycle unchanged while exposing the server-owned 210-alert PingAn PKL for manual DEV replay.
+It must reuse `SocAnalysisService`, `SocMemoryPatternService`, confirmed-Memory retrieval, and decision
+lineage from the same isolated SQLite database. The API never accepts a client-selected path or raw
+payload, and the browser receives only canonical inventory and persisted result projections. Corpus
+readiness is structural: long-term exact-group size and fixed 24-hour window size are reported
+separately; only a strong fingerprint window with at least five alerts is marked `candidate_window`,
+and that label does not claim model consistency, candidate creation, Memory accuracy, or rollout
+authority. Enable it separately with `SOC_DEV_CORPUS_WORKBENCH_ENABLED=true`.
 Decision-bearing confirmed Memory is reviewer-owned business knowledge, not a source-alert caption.
 `SocMemoryService.review_candidate()` requires explicit `soc.memory_business_lesson.v1` before a decision-bearing
 candidate transition. The reviewer-owned `record_lesson` contains conclusion, rationale, applicability, permitted
@@ -1079,6 +1107,13 @@ replay-only, and recurrence has no
 decision/retrieval/action authority. Missing/naive event time and aggregation failures are observable
 but non-blocking. Operators inspect or deterministically replay cohorts with
 `soc memory patterns list|replay`.
+The fixed cohort's `window_start/window_end` remain immutable source metadata and must not be reused as
+candidate or record governance validity. Pattern candidate validity begins when the candidate is
+proposed; confirmation gives the repeated-pattern record a fresh bounded 90-day validity window.
+`set_retrieval_activation()` may apply `soc.memory_pattern_legacy_validity_repair.v1` only to a
+repeated-pattern record whose validity had already ended by its own `created_at`; the versioned record
+metadata and mutation audit retain the previous and repaired windows. A normally expired Memory still
+fails closed and requires an explicit future renewal design.
 The offline `validation/compact_zeus/memory/simulate_pattern_memory_lifecycle.py`
 helper is the canonical isolated `5+1` lifecycle smoke. It must compose the existing
 Pattern, Memory, Retrieval v2, `M-*` projection, and Automation services rather than

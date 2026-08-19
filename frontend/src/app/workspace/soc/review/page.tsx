@@ -1,4 +1,4 @@
-import { SocReviewQueueWorkbench } from "@/components/workspace/soc/soc-review-queue-workbench";
+import { redirect } from "next/navigation";
 
 export default async function SocReviewQueuePage({
   searchParams,
@@ -15,10 +15,14 @@ export default async function SocReviewQueuePage({
   const candidateId = Array.isArray(params.candidate_id)
     ? params.candidate_id[0]
     : params.candidate_id;
-  return (
-    <SocReviewQueueWorkbench
-      initialQueueId={queueId}
-      initialCandidateId={candidateId}
-    />
+  if (candidateId) {
+    redirect(
+      `/workspace/soc/review/memory-candidates/${encodeURIComponent(candidateId)}`,
+    );
+  }
+  redirect(
+    queueId
+      ? `/workspace/soc/review/alerts?queue_id=${encodeURIComponent(queueId)}`
+      : "/workspace/soc/review/alerts",
   );
 }

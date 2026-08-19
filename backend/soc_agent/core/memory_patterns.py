@@ -30,6 +30,8 @@ from soc_agent.contracts import (
     SocMemoryCandidateCreateCommand,
     SocMemoryCandidateSource,
     SocMemoryCandidateSourceType,
+    SocMemoryCandidateStatus,
+    SocMemoryCandidateSupersessionCommand,
     SocMemoryCandidateType,
     SocMemoryCandidateValidity,
     SocMemoryDecisionImpact,
@@ -59,6 +61,7 @@ from .service import (
     NoopEventSink,
     SocMemoryService,
     SocServiceConflictError,
+    SocServiceError,
     SocServiceNotFoundError,
     SocServiceNotImplementedError,
 )
@@ -486,11 +489,15 @@ class SocMemoryPatternService:
             raise SocServiceNotImplementedError("repeated-pattern threshold requires a MemoryCandidateRepository")
         snapshot = observations
         profile = self._profile_for_observation(snapshot[0])
+        proposed_at = self._now_provider()
+        if proposed_at.utcoffset() is None:
+            raise SocServiceConflictError("memory pattern clock must be timezone-aware")
         command = _candidate_command(
             snapshot,
             policy=self._policy,
             cohort_quality=cohort_quality,
             profile=profile,
+            proposed_at=proposed_at,
         )
         first = snapshot[0]
         context = ServiceRequestContext(
@@ -498,10 +505,59 @@ class SocMemoryPatternService:
             trace_id=f"memory-pattern:{first.aggregation_key[:16]}",
             idempotency_key=command.idempotency_key,
         )
-        return SocMemoryService(
+        memory_service = SocMemoryService(
             candidate_repository=self._candidate_repository,
+            mutation_audit_repository=self._mutation_audit_repository,
             event_sink=self._event_sink,
-        ).propose_candidate(command, context=context)
+            now_provider=lambda: proposed_at,
+            _transaction_active=self._transaction_active,
+        )
+        candidate = memory_service.propose_candidate(command, context=context)
+        self._supersede_same_alert_profile_candidates(
+            candidate,
+            service=memory_service,
+            context=context,
+        )
+        return self._candidate_repository.get_memory_candidate(candidate.candidate_id) or candidate
+
+    def _supersede_same_alert_profile_candidates(
+        self,
+        successor: SocMemoryCandidate,
+        *,
+        service: SocMemoryService,
+        context: ServiceRequestContext,
+    ) -> None:
+        """Reconcile only unambiguous same-alert profile upgrades."""
+
+        alert_id = successor.source.alert_id
+        if not alert_id or self._candidate_repository is None:
+            return
+        predecessors = self._candidate_repository.list_memory_candidates(
+            alert_id=alert_id,
+            limit=200,
+        )
+        for predecessor in predecessors:
+            if predecessor.candidate_id == successor.candidate_id:
+                continue
+            if predecessor.status not in {
+                SocMemoryCandidateStatus.PENDING_REVIEW,
+                SocMemoryCandidateStatus.CONFIRMED_CANDIDATE,
+            }:
+                continue
+            supersession_context = context.model_copy(update={"idempotency_key": (f"memory-profile-supersession:{predecessor.candidate_id}:{successor.candidate_id}")})
+            try:
+                service.supersede_candidate(
+                    SocMemoryCandidateSupersessionCommand(
+                        candidate_id=predecessor.candidate_id,
+                        successor_candidate_id=successor.candidate_id,
+                        reason=("A newer candidate for the same source alert was created under an updated Memory profile contract."),
+                    ),
+                    context=supersession_context,
+                )
+            except SocServiceError:
+                # A shared alert ID is only a discovery hint. The typed service
+                # validator rejects unrelated tenant/profile/scope candidates.
+                continue
 
     def _profile_for_observation(
         self,
@@ -782,6 +838,7 @@ def _candidate_command(
     policy: MemoryPatternAggregationPolicy,
     cohort_quality: MemoryPatternCohortQuality,
     profile: SocMemoryProfile,
+    proposed_at: datetime,
 ) -> SocMemoryCandidateCreateCommand:
     first = observations[0]
     representatives = [item for observation_id in cohort_quality.representative_observation_ids for item in observations if item.observation_id == observation_id][: policy.maximum_representative_sources]
@@ -846,10 +903,10 @@ def _candidate_command(
         ),
         evidence_refs=evidence_refs,
         validity=SocMemoryCandidateValidity(
-            valid_from=first.window_start,
-            valid_until=first.window_end + timedelta(days=90),
+            valid_from=proposed_at,
+            valid_until=proposed_at + timedelta(days=90),
             review_after_days=30,
-            notes=("Repeated occurrence is candidate-only evidence; an analyst must review the cohort before confirmation or retrieval activation."),
+            notes=("Candidate governance validity starts when the repeated pattern is proposed; the historical evidence window remains in source metadata."),
         ),
         idempotency_key=_candidate_idempotency_key(lesson_fingerprint),
         confidence=cohort_quality.consistency_ratio,

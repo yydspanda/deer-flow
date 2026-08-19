@@ -2,20 +2,26 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
 from soc_agent.contracts import (
     AnalysisRun,
     AnalysisRunStatus,
+    MemoryCenterInventory,
+    MemoryCenterProfileInventory,
     MemoryPatternDataClass,
     MemoryPatternLessonObservation,
+    MemoryPatternLineageStats,
+    MemoryPatternLineageStatsPage,
     MemoryPatternObservation,
     MemoryPatternObservationCreateCommand,
     MemoryPatternRiskClass,
     MemoryPatternSourceRef,
     MemoryPatternSourceType,
     SocMemoryCandidate,
+    SocMemoryCandidateStatus,
     Verdict,
 )
 from soc_agent.memory.candidates import InMemoryMemoryCandidateRepository
@@ -103,6 +109,7 @@ class InMemoryMemoryPatternRepository(InMemoryMemoryCandidateRepository):
         data_class: MemoryPatternDataClass | None = None,
         source_type: MemoryPatternSourceType | None = None,
         limit: int = 500,
+        offset: int = 0,
     ) -> list[MemoryPatternObservation]:
         observations = list(self._pattern_observations.values())
         if aggregation_key is not None:
@@ -120,7 +127,117 @@ class InMemoryMemoryPatternRepository(InMemoryMemoryCandidateRepository):
         return sorted(
             observations,
             key=lambda item: (item.source.observed_at, item.observation_id),
-        )[:limit]
+        )[offset : offset + limit]
+
+    def get_memory_center_inventory(self) -> MemoryCenterInventory:
+        observations = list(self._pattern_observations.values())
+        profile_patterns: dict[tuple[str, str, str], set[str]] = {}
+        profile_windows: dict[tuple[str, str, str], set[str]] = {}
+        profile_observations: Counter[tuple[str, str, str]] = Counter()
+        for item in observations:
+            profile_key = (
+                item.profile_id,
+                item.profile_version,
+                item.feature_schema_version,
+            )
+            profile_patterns.setdefault(profile_key, set()).add(item.lineage_key)
+            profile_windows.setdefault(profile_key, set()).add(item.aggregation_key)
+            profile_observations[profile_key] += 1
+        return MemoryCenterInventory(
+            pattern_count=len({item.lineage_key for item in observations}),
+            aggregation_window_count=len({item.aggregation_key for item in observations}),
+            observation_count=len(observations),
+            candidate_status_counts=dict(Counter(item.status.value for item in self._candidates.values())),
+            record_status_counts=dict(Counter(item.status.value for item in self._records.values())),
+            retrieval_enabled_record_count=sum(item.retrieval_enabled for item in self._records.values()),
+            profile_inventory=[
+                MemoryCenterProfileInventory(
+                    profile_id=key[0],
+                    profile_version=key[1],
+                    feature_schema_version=key[2],
+                    pattern_count=len(profile_patterns[key]),
+                    aggregation_window_count=len(profile_windows[key]),
+                    observation_count=profile_observations[key],
+                )
+                for key in sorted(profile_patterns)
+            ],
+        )
+
+    def list_memory_pattern_lineage_stats(
+        self,
+        *,
+        tenant_id: str | None = None,
+        environment: str | None = None,
+        data_class: MemoryPatternDataClass | None = None,
+        profile_id: str | None = None,
+        search: str | None = None,
+        include_terminal_history: bool = True,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> MemoryPatternLineageStatsPage:
+        groups: dict[str, list[MemoryPatternObservation]] = {}
+        normalized_search = (search or "").strip().casefold()
+        terminal_lineage_keys = set() if include_terminal_history else self._terminal_memory_pattern_lineage_keys()
+        for item in self._pattern_observations.values():
+            if item.lineage_key in terminal_lineage_keys:
+                continue
+            if tenant_id is not None and item.tenant_id != tenant_id:
+                continue
+            if environment is not None and item.environment != environment:
+                continue
+            if data_class is not None and item.data_class is not data_class:
+                continue
+            if profile_id is not None and item.profile_id != profile_id:
+                continue
+            if (
+                normalized_search
+                and normalized_search
+                not in " ".join(
+                    (
+                        item.lineage_key,
+                        item.signature.value,
+                        item.signature.label,
+                        item.source.alert_id,
+                        item.profile_id,
+                    )
+                ).casefold()
+            ):
+                continue
+            groups.setdefault(item.lineage_key, []).append(item)
+        stats = [_memory_pattern_lineage_stats(items) for items in groups.values()]
+        stats.sort(
+            key=lambda item: (item.last_observed_at, item.lineage_key),
+            reverse=True,
+        )
+        return MemoryPatternLineageStatsPage(
+            items=stats[offset : offset + limit],
+            total=len(stats),
+            limit=limit,
+            offset=offset,
+        )
+
+    def _terminal_memory_pattern_lineage_keys(self) -> set[str]:
+        active_statuses = {
+            SocMemoryCandidateStatus.PENDING_REVIEW,
+            SocMemoryCandidateStatus.CONFIRMED_CANDIDATE,
+            SocMemoryCandidateStatus.CONFIRMED,
+        }
+        candidates_by_lineage = {lineage_key: self.find_memory_candidates_by_lineage_keys([lineage_key]) for lineage_key in {item.lineage_key for item in self._pattern_observations.values()}}
+        record_candidate_ids = {record.source_candidate_id for record in self._records.values()}
+        return {lineage_key for lineage_key, candidates in candidates_by_lineage.items() if candidates and not any(candidate.status in active_statuses or candidate.candidate_id in record_candidate_ids for candidate in candidates)}
+
+    def find_memory_candidates_by_lineage_keys(
+        self,
+        lineage_keys: Iterable[str],
+    ) -> list[SocMemoryCandidate]:
+        selected = set(lineage_keys)
+        aggregation_keys = {item.aggregation_key for item in self._pattern_observations.values() if item.lineage_key in selected}
+        source_ids = {f"memory_pattern:{item}" for item in aggregation_keys}
+        return sorted(
+            (item for item in self._candidates.values() if item.source.source_id in source_ids),
+            key=lambda item: (item.created_at, item.candidate_id),
+            reverse=True,
+        )
 
 
 def memory_pattern_command_from_run(
@@ -305,6 +422,35 @@ def _source_observed_at(run: AnalysisRun) -> datetime:
     if event_time.tzinfo is None or event_time.utcoffset() is None:
         raise MemoryPatternIneligibleError("canonical alert event_time must be timezone-aware")
     return event_time.astimezone(UTC)
+
+
+def _memory_pattern_lineage_stats(
+    observations: list[MemoryPatternObservation],
+) -> MemoryPatternLineageStats:
+    ordered = sorted(
+        observations,
+        key=lambda item: (item.source.observed_at, item.observation_id),
+    )
+    first = ordered[0]
+    return MemoryPatternLineageStats(
+        lineage_key=first.lineage_key,
+        tenant_id=first.tenant_id,
+        environment=first.environment,
+        data_class=first.data_class,
+        profile_id=first.profile_id,
+        profile_version=first.profile_version,
+        feature_schema_version=first.feature_schema_version,
+        pattern_dimension=first.signature.dimension.value,
+        pattern_value=first.signature.value,
+        pattern_label=first.signature.label,
+        support_count=len(ordered),
+        distinct_source_count=len({item.source.source_id for item in ordered}),
+        aggregation_window_count=len({item.aggregation_key for item in ordered}),
+        first_observed_at=ordered[0].source.observed_at,
+        last_observed_at=ordered[-1].source.observed_at,
+        first_window_start=min(item.window_start for item in ordered),
+        last_window_end=max(item.window_end for item in ordered),
+    )
 
 
 __all__ = [

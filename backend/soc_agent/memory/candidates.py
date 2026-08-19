@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 from soc_agent.contracts import (
     SocMemoryCandidate,
@@ -75,6 +75,17 @@ class InMemoryMemoryCandidateRepository:
             items = [item for item in items if any(getattr(item.source, key) == value for key, value in active_source_filters.items())]
         return sorted(items, key=lambda item: item.created_at, reverse=True)[:limit]
 
+    def find_memory_candidates_by_source_ids(
+        self,
+        source_ids: Sequence[str],
+    ) -> list[SocMemoryCandidate]:
+        requested = set(source_ids)
+        return sorted(
+            [item for item in self._candidates.values() if item.source.source_id in requested],
+            key=lambda item: item.created_at,
+            reverse=True,
+        )
+
     def save_memory_record(self, record: SocMemoryRecord) -> None:
         self._records[record.memory_id] = record
 
@@ -121,6 +132,17 @@ class InMemoryMemoryCandidateRepository:
         if retrieval_enabled is not None:
             items = [item for item in items if item.retrieval_enabled is retrieval_enabled]
         return sorted(items, key=lambda item: item.updated_at, reverse=True)[:limit]
+
+    def find_memory_records_by_candidate_ids(
+        self,
+        candidate_ids: Sequence[str],
+    ) -> list[SocMemoryRecord]:
+        requested = set(candidate_ids)
+        return sorted(
+            [item for item in self._records.values() if item.source_candidate_id in requested],
+            key=lambda item: item.updated_at,
+            reverse=True,
+        )
 
     def find_memory_candidate_records(
         self,

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import Integer, and_, delete, func, or_, select, update
+from sqlalchemy import Integer, and_, case, delete, func, literal, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -23,7 +23,11 @@ from soc_agent.contracts import (
     GovernedContextFact,
     GovernedContextFactQuery,
     InvestigationEvidence,
+    MemoryCenterInventory,
+    MemoryCenterProfileInventory,
     MemoryPatternDataClass,
+    MemoryPatternLineageStats,
+    MemoryPatternLineageStatsPage,
     MemoryPatternObservation,
     MemoryPatternSourceType,
     NormalizationBaselineStatus,
@@ -1354,6 +1358,17 @@ class SqlAlchemyAlertRepository:
             result = session.execute(query.order_by(SocMemoryCandidateRow.created_at.desc()).limit(limit))
             return [SocMemoryCandidate.model_validate(row.candidate_payload) for row in result.scalars()]
 
+    def find_memory_candidates_by_source_ids(
+        self,
+        source_ids: Sequence[str],
+    ) -> list[SocMemoryCandidate]:
+        requested = sorted({item for item in source_ids if item})
+        if not requested:
+            return []
+        with self._session_factory() as session:
+            rows = session.execute(select(SocMemoryCandidateRow).where(SocMemoryCandidateRow.source_id.in_(requested)).order_by(SocMemoryCandidateRow.created_at.desc())).scalars()
+            return [SocMemoryCandidate.model_validate(row.candidate_payload) for row in rows]
+
     def save_memory_record(self, record: SocMemoryRecord) -> None:
         payload = record.model_dump(mode="json")
         with self._session_factory() as session:
@@ -1426,6 +1441,17 @@ class SqlAlchemyAlertRepository:
                 query = query.where(SocMemoryRecordRow.retrieval_enabled == retrieval_enabled)
             result = session.execute(query.order_by(SocMemoryRecordRow.updated_at.desc()).limit(limit))
             return [SocMemoryRecord.model_validate(row.record_payload) for row in result.scalars()]
+
+    def find_memory_records_by_candidate_ids(
+        self,
+        candidate_ids: Sequence[str],
+    ) -> list[SocMemoryRecord]:
+        requested = sorted({item for item in candidate_ids if item})
+        if not requested:
+            return []
+        with self._session_factory() as session:
+            rows = session.execute(select(SocMemoryRecordRow).where(SocMemoryRecordRow.source_candidate_id.in_(requested)).order_by(SocMemoryRecordRow.updated_at.desc())).scalars()
+            return [SocMemoryRecord.model_validate(row.record_payload) for row in rows]
 
     def find_memory_candidate_records(
         self,
@@ -1984,6 +2010,7 @@ class SqlAlchemyAlertRepository:
         data_class: MemoryPatternDataClass | None = None,
         source_type: MemoryPatternSourceType | None = None,
         limit: int = 500,
+        offset: int = 0,
     ) -> list[MemoryPatternObservation]:
         with self._session_factory() as session:
             query = select(SocMemoryPatternObservationRow)
@@ -2003,9 +2030,247 @@ class SqlAlchemyAlertRepository:
                 query.order_by(
                     SocMemoryPatternObservationRow.observed_at.asc(),
                     SocMemoryPatternObservationRow.observation_id.asc(),
-                ).limit(limit)
+                )
+                .offset(offset)
+                .limit(limit)
             ).scalars()
             return [_memory_pattern_observation_from_row(row) for row in rows]
+
+    def get_memory_center_inventory(self) -> MemoryCenterInventory:
+        with self._session_factory() as session:
+            observation_count = int(session.scalar(select(func.count()).select_from(SocMemoryPatternObservationRow)) or 0)
+            pattern_count = int(session.scalar(select(func.count(func.distinct(SocMemoryPatternObservationRow.lineage_key)))) or 0)
+            aggregation_window_count = int(session.scalar(select(func.count(func.distinct(SocMemoryPatternObservationRow.aggregation_key)))) or 0)
+            candidate_status_counts = {
+                str(status): int(count)
+                for status, count in session.execute(
+                    select(
+                        SocMemoryCandidateRow.status,
+                        func.count(SocMemoryCandidateRow.candidate_id),
+                    ).group_by(SocMemoryCandidateRow.status)
+                )
+            }
+            record_status_counts = {
+                str(status): int(count)
+                for status, count in session.execute(
+                    select(
+                        SocMemoryRecordRow.status,
+                        func.count(SocMemoryRecordRow.memory_id),
+                    ).group_by(SocMemoryRecordRow.status)
+                )
+            }
+            retrieval_enabled_record_count = int(session.scalar(select(func.count(SocMemoryRecordRow.memory_id)).where(SocMemoryRecordRow.retrieval_enabled.is_(True))) or 0)
+            profile_inventory = [
+                MemoryCenterProfileInventory(
+                    profile_id=profile_id or "soc.generic",
+                    profile_version=profile_version or "1",
+                    feature_schema_version=(feature_schema_version or "soc.memory_features.generic.v1"),
+                    pattern_count=int(patterns),
+                    aggregation_window_count=int(windows),
+                    observation_count=int(observations),
+                )
+                for (
+                    profile_id,
+                    profile_version,
+                    feature_schema_version,
+                    patterns,
+                    windows,
+                    observations,
+                ) in session.execute(
+                    select(
+                        SocMemoryPatternObservationRow.profile_id,
+                        SocMemoryPatternObservationRow.profile_version,
+                        SocMemoryPatternObservationRow.feature_schema_version,
+                        func.count(func.distinct(SocMemoryPatternObservationRow.lineage_key)),
+                        func.count(func.distinct(SocMemoryPatternObservationRow.aggregation_key)),
+                        func.count(SocMemoryPatternObservationRow.observation_id),
+                    ).group_by(
+                        SocMemoryPatternObservationRow.profile_id,
+                        SocMemoryPatternObservationRow.profile_version,
+                        SocMemoryPatternObservationRow.feature_schema_version,
+                    )
+                )
+            ]
+            return MemoryCenterInventory(
+                pattern_count=pattern_count,
+                aggregation_window_count=aggregation_window_count,
+                observation_count=observation_count,
+                candidate_status_counts=candidate_status_counts,
+                record_status_counts=record_status_counts,
+                retrieval_enabled_record_count=retrieval_enabled_record_count,
+                profile_inventory=profile_inventory,
+            )
+
+    def list_memory_pattern_lineage_stats(
+        self,
+        *,
+        tenant_id: str | None = None,
+        environment: str | None = None,
+        data_class: MemoryPatternDataClass | None = None,
+        profile_id: str | None = None,
+        search: str | None = None,
+        include_terminal_history: bool = True,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> MemoryPatternLineageStatsPage:
+        filters = []
+        if tenant_id is not None:
+            filters.append(SocMemoryPatternObservationRow.tenant_id == tenant_id)
+        if environment is not None:
+            filters.append(SocMemoryPatternObservationRow.environment == environment)
+        if data_class is not None:
+            filters.append(SocMemoryPatternObservationRow.data_class == data_class.value)
+        if profile_id is not None:
+            filters.append(SocMemoryPatternObservationRow.profile_id == profile_id)
+        normalized_search = (search or "").strip().casefold()
+        if normalized_search:
+            filters.append(
+                or_(
+                    func.lower(SocMemoryPatternObservationRow.aggregation_key).contains(normalized_search),
+                    func.lower(SocMemoryPatternObservationRow.lineage_key).contains(normalized_search),
+                    func.lower(SocMemoryPatternObservationRow.pattern_value).contains(normalized_search),
+                    func.lower(SocMemoryPatternObservationRow.alert_id).contains(normalized_search),
+                    func.lower(SocMemoryPatternObservationRow.observation_payload["signature"]["label"].as_string()).contains(normalized_search),
+                    func.lower(SocMemoryPatternObservationRow.profile_id).contains(normalized_search),
+                )
+            )
+        if not include_terminal_history:
+            candidate_lineages = (
+                select(
+                    SocMemoryPatternObservationRow.lineage_key.label("lineage_key"),
+                    SocMemoryCandidateRow.candidate_id.label("candidate_id"),
+                    SocMemoryCandidateRow.status.label("candidate_status"),
+                )
+                .join(
+                    SocMemoryCandidateRow,
+                    SocMemoryCandidateRow.source_id == literal("memory_pattern:") + SocMemoryPatternObservationRow.aggregation_key,
+                )
+                .distinct()
+                .subquery()
+            )
+            terminal_lineages = (
+                select(candidate_lineages.c.lineage_key)
+                .outerjoin(
+                    SocMemoryRecordRow,
+                    SocMemoryRecordRow.source_candidate_id == candidate_lineages.c.candidate_id,
+                )
+                .group_by(candidate_lineages.c.lineage_key)
+                .having(
+                    and_(
+                        func.sum(
+                            case(
+                                (
+                                    candidate_lineages.c.candidate_status.in_(
+                                        (
+                                            SocMemoryCandidateStatus.PENDING_REVIEW.value,
+                                            SocMemoryCandidateStatus.CONFIRMED_CANDIDATE.value,
+                                            SocMemoryCandidateStatus.CONFIRMED.value,
+                                        )
+                                    ),
+                                    1,
+                                ),
+                                else_=0,
+                            )
+                        )
+                        == 0,
+                        func.count(SocMemoryRecordRow.memory_id) == 0,
+                    )
+                )
+            )
+            filters.append(SocMemoryPatternObservationRow.lineage_key.not_in(terminal_lineages))
+
+        grouped_keys = select(SocMemoryPatternObservationRow.lineage_key).where(*filters).group_by(SocMemoryPatternObservationRow.lineage_key).subquery()
+        statement = (
+            select(
+                SocMemoryPatternObservationRow.lineage_key,
+                SocMemoryPatternObservationRow.tenant_id,
+                SocMemoryPatternObservationRow.environment,
+                SocMemoryPatternObservationRow.data_class,
+                SocMemoryPatternObservationRow.profile_id,
+                SocMemoryPatternObservationRow.profile_version,
+                SocMemoryPatternObservationRow.feature_schema_version,
+                SocMemoryPatternObservationRow.pattern_dimension,
+                SocMemoryPatternObservationRow.pattern_value,
+                func.min(SocMemoryPatternObservationRow.observation_payload["signature"]["label"].as_string()).label("pattern_label"),
+                func.count(SocMemoryPatternObservationRow.observation_id).label("support_count"),
+                func.count(func.distinct(SocMemoryPatternObservationRow.source_id)).label("distinct_source_count"),
+                func.count(func.distinct(SocMemoryPatternObservationRow.aggregation_key)).label("aggregation_window_count"),
+                func.min(SocMemoryPatternObservationRow.observed_at).label("first_observed_at"),
+                func.max(SocMemoryPatternObservationRow.observed_at).label("last_observed_at"),
+                func.min(SocMemoryPatternObservationRow.window_start).label("first_window_start"),
+                func.max(SocMemoryPatternObservationRow.window_end).label("last_window_end"),
+            )
+            .where(*filters)
+            .group_by(
+                SocMemoryPatternObservationRow.lineage_key,
+                SocMemoryPatternObservationRow.tenant_id,
+                SocMemoryPatternObservationRow.environment,
+                SocMemoryPatternObservationRow.data_class,
+                SocMemoryPatternObservationRow.profile_id,
+                SocMemoryPatternObservationRow.profile_version,
+                SocMemoryPatternObservationRow.feature_schema_version,
+                SocMemoryPatternObservationRow.pattern_dimension,
+                SocMemoryPatternObservationRow.pattern_value,
+            )
+            .order_by(
+                func.max(SocMemoryPatternObservationRow.observed_at).desc(),
+                SocMemoryPatternObservationRow.lineage_key.asc(),
+            )
+            .offset(offset)
+            .limit(limit)
+        )
+        with self._session_factory() as session:
+            total = int(session.scalar(select(func.count()).select_from(grouped_keys)) or 0)
+            items = [
+                MemoryPatternLineageStats(
+                    lineage_key=row.lineage_key,
+                    tenant_id=row.tenant_id,
+                    environment=row.environment,
+                    data_class=MemoryPatternDataClass(row.data_class),
+                    profile_id=row.profile_id or "soc.generic",
+                    profile_version=row.profile_version or "1",
+                    feature_schema_version=(row.feature_schema_version or "soc.memory_features.generic.v1"),
+                    pattern_dimension=row.pattern_dimension,
+                    pattern_value=row.pattern_value,
+                    pattern_label=row.pattern_label or row.pattern_value,
+                    support_count=int(row.support_count),
+                    distinct_source_count=int(row.distinct_source_count),
+                    aggregation_window_count=int(row.aggregation_window_count),
+                    first_observed_at=_as_aware_utc(row.first_observed_at),
+                    last_observed_at=_as_aware_utc(row.last_observed_at),
+                    first_window_start=_as_aware_utc(row.first_window_start),
+                    last_window_end=_as_aware_utc(row.last_window_end),
+                )
+                for row in session.execute(statement)
+            ]
+        return MemoryPatternLineageStatsPage(
+            items=items,
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+
+    def find_memory_candidates_by_lineage_keys(
+        self,
+        lineage_keys: Sequence[str],
+    ) -> list[SocMemoryCandidate]:
+        normalized = list(dict.fromkeys(lineage_keys))
+        if not normalized:
+            return []
+        with self._session_factory() as session:
+            aggregation_keys = list(session.scalars(select(SocMemoryPatternObservationRow.aggregation_key).where(SocMemoryPatternObservationRow.lineage_key.in_(normalized)).distinct()))
+            if not aggregation_keys:
+                return []
+            source_ids = [f"memory_pattern:{item}" for item in aggregation_keys]
+            rows = session.execute(
+                select(SocMemoryCandidateRow)
+                .where(SocMemoryCandidateRow.source_id.in_(source_ids))
+                .order_by(
+                    SocMemoryCandidateRow.created_at.desc(),
+                    SocMemoryCandidateRow.candidate_id.asc(),
+                )
+            ).scalars()
+            return [SocMemoryCandidate.model_validate(row.candidate_payload) for row in rows]
 
     def save_skill_feedback_observation(self, observation: SkillFeedbackObservation) -> None:
         payload = observation.model_dump(mode="json")
@@ -3169,6 +3434,12 @@ def _memory_pattern_observation_row_values(
         "created_at": observation.created_at,
         "observation_payload": payload,
     }
+
+
+def _as_aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _memory_health_key(memory_id: str, memory_version: int) -> str:

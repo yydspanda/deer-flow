@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { useAuth } from "@/core/auth/AuthProvider";
 
 import {
+  SocApiError,
   acceptSocLeadAgentConclusion,
   closeSocReviewItem,
   correctSocReviewRun,
@@ -14,8 +15,11 @@ import {
   draftSocMemoryBusinessLesson,
   executeSocApprovedAction,
   expireSocApprovalRequest,
+  getSocCorpusWorkbenchState,
   getSocDispositionSampleReviewInbox,
   getSocMemoryCandidate,
+  getSocMemoryCenterOverview,
+  getSocMemoryCenterPattern,
   getSocMemoryRecord,
   getSocMemoryWorkbenchState,
   getSocNormalizationMetrics,
@@ -30,10 +34,12 @@ import {
   listSocDispositionSampleCampaigns,
   listSocReviewItems,
   processSocMemoryWorkbenchAlert,
+  processSocCorpusWorkbenchAlert,
   recordSocDispositionOutcome,
   rejectSocApprovalRequest,
   reviewSocMemoryCandidate,
   searchSocMemoryRecords,
+  supersedeSocMemoryCandidate,
   updateSocMemoryRetrievalActivation,
   updateSocNormalizationIssue,
 } from "./api";
@@ -47,6 +53,7 @@ import type {
   SocMemoryCandidateReviewRequest,
   SocMemoryBusinessLessonDraftRequest,
   SocMemoryCandidateStatus,
+  SocMemoryCandidateSupersessionRequest,
   SocMemoryQuery,
   SocMemoryRecordStatus,
   SocMemoryRetrievalActivationRequest,
@@ -57,6 +64,9 @@ import type {
   SocReviewCorrectionRequest,
   SocReviewQueueStatus,
 } from "./types";
+
+// Mutations invalidate their owner namespaces; this window only avoids route-switch refetch churn.
+const SOC_NAVIGATION_STALE_TIME_MS = 30_000;
 
 export const socReviewQueryKeys = {
   all: ["soc-review"] as const,
@@ -120,6 +130,22 @@ export const socMemoryQueryKeys = {
     ] as const,
   candidate: (candidateId: string | null | undefined) =>
     [...socMemoryQueryKeys.all, "candidate", candidateId] as const,
+  center: (filters: Record<string, unknown>) =>
+    [...socMemoryQueryKeys.all, "center", filters] as const,
+  centerPattern: (
+    lineageKey: string | null | undefined,
+    includeObservations: boolean,
+    observationLimit: number,
+    observationOffset: number,
+  ) =>
+    [
+      ...socMemoryQueryKeys.all,
+      "center-pattern",
+      lineageKey,
+      includeObservations,
+      observationLimit,
+      observationOffset,
+    ] as const,
   records: ({
     status,
     tenantScope,
@@ -156,6 +182,11 @@ export const socMemoryWorkbenchQueryKeys = {
   state: () => [...socMemoryWorkbenchQueryKeys.all, "state"] as const,
 };
 
+export const socCorpusWorkbenchQueryKeys = {
+  all: ["soc-corpus-workbench"] as const,
+  state: () => [...socCorpusWorkbenchQueryKeys.all, "state"] as const,
+};
+
 export const socNormalizationQueryKeys = {
   all: ["soc-normalization"] as const,
   issues: (status: SocNormalizationIssueStatus | null, limit: number) =>
@@ -183,14 +214,18 @@ function useSocWebRequestContext(): SocRequestContext {
 export function useSocReviewItems({
   status = "open",
   limit = 50,
+  enabled = true,
 }: {
   status?: SocReviewQueueStatus | null;
   limit?: number;
+  enabled?: boolean;
 } = {}) {
   const context = useSocWebRequestContext();
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: socReviewQueryKeys.items(status, limit),
     queryFn: () => listSocReviewItems({ status, limit, context }),
+    enabled,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { items: data ?? [], isLoading, isFetching, error, refetch };
 }
@@ -201,6 +236,7 @@ export function useSocReviewContext(queueId: string | null | undefined) {
     queryKey: socReviewQueryKeys.context(queueId),
     queryFn: () => getSocReviewContext(queueId!, context),
     enabled: !!queueId,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { context: data ?? null, isLoading, isFetching, error };
 }
@@ -210,6 +246,7 @@ export function useSocDispositionSampleCampaigns({ limit = 50 } = {}) {
   const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: socReviewQueryKeys.sampleCampaigns(limit),
     queryFn: () => listSocDispositionSampleCampaigns({ limit, context }),
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return {
     campaigns: data?.items ?? [],
@@ -235,6 +272,7 @@ export function useSocDispositionSampleReviewInbox(
         context,
       }),
     enabled: !!sampleId,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return {
     inbox: data ?? null,
@@ -320,14 +358,18 @@ export function useRecordSocDispositionOutcome() {
 export function useSocApprovalRequests({
   status = "pending",
   limit = 50,
+  enabled = true,
 }: {
   status?: "pending" | null;
   limit?: number;
+  enabled?: boolean;
 } = {}) {
   const context = useSocWebRequestContext();
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: socApprovalQueryKeys.requests(status, limit),
     queryFn: () => listSocApprovalRequests({ status, limit, context }),
+    enabled,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { requests: data ?? [], isLoading, isFetching, error, refetch };
 }
@@ -340,6 +382,7 @@ export function useSocApprovalRequest(
     queryKey: socApprovalQueryKeys.request(approvalRequestId),
     queryFn: () => getSocApprovalRequest(approvalRequestId!, context),
     enabled: !!approvalRequestId,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { request: data ?? null, isLoading, isFetching, error };
 }
@@ -355,6 +398,7 @@ export function useSocNormalizationIssues({
   const query = useQuery({
     queryKey: socNormalizationQueryKeys.issues(status, limit),
     queryFn: () => listSocNormalizationIssues({ status, limit, context }),
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { issues: query.data ?? [], ...query };
 }
@@ -364,6 +408,7 @@ export function useSocNormalizationBaselines() {
   const query = useQuery({
     queryKey: socNormalizationQueryKeys.baselines(),
     queryFn: () => listSocNormalizationBaselines(context),
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { baselines: query.data ?? [], ...query };
 }
@@ -373,6 +418,7 @@ export function useSocNormalizationMetrics() {
   const query = useQuery({
     queryKey: socNormalizationQueryKeys.metrics(),
     queryFn: () => getSocNormalizationMetrics(context),
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { metrics: query.data ?? null, ...query };
 }
@@ -383,6 +429,7 @@ export function useSocOperationsSnapshot() {
     queryKey: socOperationsQueryKeys.snapshot(),
     queryFn: () => getSocOperationsSnapshot(context),
     refetchInterval: 30_000,
+    staleTime: 15_000,
   });
   return { snapshot: query.data ?? null, ...query };
 }
@@ -393,6 +440,7 @@ export function useSocMemoryWorkbench() {
     queryKey: socMemoryWorkbenchQueryKeys.state(),
     queryFn: () => getSocMemoryWorkbenchState(context),
     retry: false,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { state: query.data ?? null, ...query };
 }
@@ -406,6 +454,37 @@ export function useProcessSocMemoryWorkbenchAlert() {
     onSuccess: (result) => {
       queryClient.setQueryData(
         socMemoryWorkbenchQueryKeys.state(),
+        result.state,
+      );
+      void queryClient.invalidateQueries({ queryKey: socMemoryQueryKeys.all });
+      void queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all });
+      void queryClient.invalidateQueries({
+        queryKey: socOperationsQueryKeys.all,
+      });
+    },
+  });
+}
+
+export function useSocCorpusWorkbench() {
+  const context = useSocWebRequestContext();
+  const query = useQuery({
+    queryKey: socCorpusWorkbenchQueryKeys.state(),
+    queryFn: () => getSocCorpusWorkbenchState(context),
+    retry: false,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
+  });
+  return { state: query.data ?? null, ...query };
+}
+
+export function useProcessSocCorpusWorkbenchAlert() {
+  const context = useSocWebRequestContext();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (alertId: string) =>
+      processSocCorpusWorkbenchAlert(alertId, context),
+    onSuccess: (result) => {
+      queryClient.setQueryData(
+        socCorpusWorkbenchQueryKeys.state(),
         result.state,
       );
       void queryClient.invalidateQueries({ queryKey: socMemoryQueryKeys.all });
@@ -478,6 +557,7 @@ export function useSocMemoryCandidates({
         context,
       }),
     enabled,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { candidates: data ?? [], isLoading, isFetching, error, refetch };
 }
@@ -488,8 +568,79 @@ export function useSocMemoryCandidate(candidateId: string | null | undefined) {
     queryKey: socMemoryQueryKeys.candidate(candidateId),
     queryFn: () => getSocMemoryCandidate(candidateId!, context),
     enabled: !!candidateId,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { candidate: data ?? null, isLoading, isFetching, error };
+}
+
+export function useSocMemoryCenterOverview({
+  tenantId,
+  environment,
+  dataClass,
+  profileId,
+  search,
+  includeTerminalHistory = false,
+  limit = 50,
+  offset = 0,
+}: {
+  tenantId?: string | null;
+  environment?: string | null;
+  dataClass?: "simulation" | "operational" | null;
+  profileId?: string | null;
+  search?: string | null;
+  includeTerminalHistory?: boolean;
+  limit?: number;
+  offset?: number;
+} = {}) {
+  const context = useSocWebRequestContext();
+  const filters = {
+    tenantId,
+    environment,
+    dataClass,
+    profileId,
+    search,
+    includeTerminalHistory,
+    limit,
+    offset,
+  };
+  const { data, isLoading, error, refetch, isFetching } = useQuery({
+    queryKey: socMemoryQueryKeys.center(filters),
+    queryFn: () => getSocMemoryCenterOverview(filters, context),
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
+  });
+  return { overview: data ?? null, isLoading, isFetching, error, refetch };
+}
+
+export function useSocMemoryCenterPattern(
+  lineageKey: string | null | undefined,
+  {
+    includeObservations = false,
+    observationLimit = 20,
+    observationOffset = 0,
+  }: {
+    includeObservations?: boolean;
+    observationLimit?: number;
+    observationOffset?: number;
+  } = {},
+) {
+  const context = useSocWebRequestContext();
+  const { data, isLoading, error, refetch, isFetching } = useQuery({
+    queryKey: socMemoryQueryKeys.centerPattern(
+      lineageKey,
+      includeObservations,
+      observationLimit,
+      observationOffset,
+    ),
+    queryFn: () =>
+      getSocMemoryCenterPattern(
+        lineageKey!,
+        { includeObservations, observationLimit, observationOffset },
+        context,
+      ),
+    enabled: !!lineageKey,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
+  });
+  return { detail: data ?? null, isLoading, isFetching, error, refetch };
 }
 
 export function useReviewSocMemoryCandidate() {
@@ -509,6 +660,24 @@ export function useReviewSocMemoryCandidate() {
       void queryClient.invalidateQueries({
         queryKey: socMemoryQueryKeys.candidate(result.candidate.candidate_id),
       });
+    },
+  });
+}
+
+export function useSupersedeSocMemoryCandidate() {
+  const context = useSocWebRequestContext();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      candidateId,
+      request,
+    }: {
+      candidateId: string;
+      request: SocMemoryCandidateSupersessionRequest;
+    }) => supersedeSocMemoryCandidate(candidateId, request, context),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: socMemoryQueryKeys.all });
+      void queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all });
     },
   });
 }
@@ -533,6 +702,7 @@ export function useSocMemoryRecords({
   sourceCandidateId,
   retrievalEnabled,
   limit = 50,
+  enabled = true,
 }: {
   status?: SocMemoryRecordStatus | null;
   tenantScope?: string | null;
@@ -540,6 +710,7 @@ export function useSocMemoryRecords({
   sourceCandidateId?: string | null;
   retrievalEnabled?: boolean | null;
   limit?: number;
+  enabled?: boolean;
 } = {}) {
   const context = useSocWebRequestContext();
   const { data, isLoading, error, refetch, isFetching } = useQuery({
@@ -561,6 +732,8 @@ export function useSocMemoryRecords({
         limit,
         context,
       }),
+    enabled,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { records: data ?? [], isLoading, isFetching, error, refetch };
 }
@@ -571,6 +744,7 @@ export function useSocMemorySearch(query: SocMemoryQuery | null | undefined) {
     queryKey: socMemoryQueryKeys.search(query),
     queryFn: () => searchSocMemoryRecords(query!, context),
     enabled: !!query,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { result: data ?? null, isLoading, isFetching, error, refetch };
 }
@@ -581,6 +755,7 @@ export function useSocMemoryRecord(memoryId: string | null | undefined) {
     queryKey: socMemoryQueryKeys.record(memoryId),
     queryFn: () => getSocMemoryRecord(memoryId!, context),
     enabled: !!memoryId,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { record: data ?? null, isLoading, isFetching, error };
 }
@@ -599,6 +774,14 @@ export function useUpdateSocMemoryRetrievalActivation() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: socMemoryQueryKeys.all });
       void queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all });
+    },
+    onError: async (error) => {
+      if (error instanceof SocApiError && error.status === 409) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: socMemoryQueryKeys.all }),
+          queryClient.invalidateQueries({ queryKey: socReviewQueryKeys.all }),
+        ]);
+      }
     },
   });
 }

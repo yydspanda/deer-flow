@@ -375,6 +375,7 @@ export type SocMemoryCandidateStatus =
   | "confirmed_candidate"
   | "confirmed"
   | "rejected"
+  | "superseded"
   | "deprecated"
   | "expired";
 
@@ -578,6 +579,9 @@ export interface SocMemoryCandidate {
   reviewed_by?: SocActorContext | null;
   reviewed_at?: string | null;
   review_reason?: string | null;
+  superseded_by_candidate_id?: string | null;
+  superseded_at?: string | null;
+  supersession_reason?: string | null;
   labels: string[];
   metadata: Record<string, unknown>;
   proposed_by?: SocActorContext | null;
@@ -631,6 +635,153 @@ export interface SocMemoryRecord {
 
 export interface SocMemoryRecordListResponse {
   items: SocMemoryRecord[];
+}
+
+export type SocMemoryProfileState = "current" | "legacy" | "unregistered";
+
+export type SocMemoryPatternLifecycleState =
+  | "collecting"
+  | "candidate_pending"
+  | "candidate_intermediate"
+  | "memory_inactive"
+  | "memory_active"
+  | "terminal_history";
+
+export interface SocMemoryCenterCandidateRef {
+  candidate_id: string;
+  status: SocMemoryCandidateStatus;
+  summary: string;
+  support_count_at_creation: number;
+  distinct_source_count_at_creation: number;
+  superseded_by_candidate_id?: string | null;
+}
+
+export interface SocMemoryCenterRecordRef {
+  memory_id: string;
+  version: number;
+  status: SocMemoryRecordStatus;
+  summary: string;
+  retrieval_enabled: boolean;
+  retrieval_valid_until?: string | null;
+  retrieval_review_due_at?: string | null;
+}
+
+export interface SocMemoryCenterPatternSummary {
+  schema_version: "soc.memory_center_pattern.v1";
+  lineage_key: string;
+  tenant_id: string;
+  environment: string;
+  data_class: "simulation" | "operational";
+  pattern_dimension: string;
+  pattern_value: string;
+  pattern_label: string;
+  profile_id: string;
+  profile_version: string;
+  feature_schema_version: string;
+  current_profile_version?: string | null;
+  current_feature_schema_version?: string | null;
+  profile_state: SocMemoryProfileState;
+  lifecycle_state: SocMemoryPatternLifecycleState;
+  attention_reasons: string[];
+  support_count: number;
+  distinct_source_count: number;
+  aggregation_window_count: number;
+  candidate_snapshot_count: number;
+  reinforcement_count: number;
+  first_observed_at: string;
+  last_observed_at: string;
+  first_window_start: string;
+  last_window_end: string;
+  candidate?: SocMemoryCenterCandidateRef | null;
+  memory_record?: SocMemoryCenterRecordRef | null;
+}
+
+export interface SocMemoryCenterMetrics {
+  pattern_count: number;
+  aggregation_window_count: number;
+  observation_count: number;
+  pending_candidate_count: number;
+  confirmed_memory_count: number;
+  retrieval_enabled_memory_count: number;
+  superseded_candidate_count: number;
+  legacy_profile_pattern_count: number;
+  unregistered_profile_pattern_count: number;
+}
+
+export interface SocMemoryCenterOverview {
+  schema_version: "soc.memory_center_overview.v1";
+  metrics: SocMemoryCenterMetrics;
+  items: SocMemoryCenterPatternSummary[];
+  terminal_history_count: number;
+  total: number;
+  limit: number;
+  offset: number;
+  generated_at: string;
+}
+
+export interface SocMemoryPatternObservation {
+  schema_version: string;
+  observation_id: string;
+  aggregation_key: string;
+  lineage_key: string;
+  tenant_id: string;
+  environment: string;
+  data_class: "simulation" | "operational";
+  profile_id: string;
+  profile_version: string;
+  feature_schema_version: string;
+  source: {
+    source_type: string;
+    source_id: string;
+    transport_ref: string;
+    run_id: string;
+    alert_id: string;
+    observed_at: string;
+  };
+  signature: {
+    dimension: string;
+    value: string;
+    label: string;
+    origin: string;
+    facets: Record<string, string[]>;
+  };
+  lesson?: {
+    verdict: SocVerdict;
+    risk_class: "risk" | "benign" | "unresolved";
+    needs_review: boolean;
+    summary: string;
+    reason: string;
+    recommended_action: string;
+  } | null;
+  window_start: string;
+  window_end: string;
+  created_at: string;
+}
+
+export interface SocMemoryCenterPatternDetail {
+  schema_version: "soc.memory_center_pattern_detail.v1";
+  pattern: SocMemoryCenterPatternSummary;
+  candidates: SocMemoryCandidate[];
+  memory_records: SocMemoryRecord[];
+  observations: SocMemoryPatternObservation[];
+  observation_total: number;
+  observation_limit: number;
+  observation_offset: number;
+  suggested_successor_candidate_id?: string | null;
+}
+
+export interface SocMemoryCandidateSupersessionRequest {
+  successor_candidate_id: string;
+  reason: string;
+}
+
+export interface SocMemoryCandidateSupersessionResult {
+  schema_version: "soc.memory_candidate_supersession_result.v1";
+  candidate: SocMemoryCandidate;
+  successor: SocMemoryCandidate;
+  previous_status: SocMemoryCandidateStatus;
+  basis: "profile_upgrade_same_source_alert";
+  superseded_at: string;
 }
 
 export type SocMemoryWorkbenchPhase =
@@ -756,6 +907,7 @@ export interface SocMemoryWorkbenchState {
       | "confirmed_candidate"
       | "confirmed"
       | "rejected"
+      | "superseded"
       | "expired"
       | "deprecated";
     memory_state:
@@ -786,6 +938,160 @@ export interface SocMemoryWorkbenchProcessResult {
   observation_id?: string | null;
   idempotent: boolean;
   state: SocMemoryWorkbenchState;
+}
+
+export type SocCorpusWorkbenchReadiness =
+  | "candidate_window"
+  | "recurrent_strong"
+  | "singleton_strong"
+  | "recurrent_context_only"
+  | "context_only_singleton"
+  | "fingerprint_missing";
+
+export interface SocCorpusWorkbenchMemoryContext {
+  context_ref: string;
+  label: string;
+  source_id: string;
+  summary: string;
+}
+
+export interface SocCorpusWorkbenchDecisionStage {
+  stage: "base" | "memory" | "tenant_policy" | "effective";
+  status: string;
+  verdict: SocVerdict;
+  confidence: number;
+  needs_review: boolean;
+  suggested_action: string;
+  disposition?: string | null;
+  source_id?: string | null;
+  summary: string;
+}
+
+export interface SocCorpusWorkbenchAlert {
+  alert_id: string;
+  source_index: number;
+  observed_at: string;
+  topic?: string | null;
+  source_type: string;
+  source_system?: string | null;
+  product?: string | null;
+  detection_key?: string | null;
+  rule_code?: string | null;
+  rule_name?: string | null;
+  category?: string | null;
+  severity?: string | null;
+  endpoint?: string | null;
+  host_name?: string | null;
+  process_names: string[];
+  behavior_fingerprint?: string | null;
+  behavior_components: string[];
+  behavior_strength?: string | null;
+  decision_eligible: boolean;
+  readiness: SocCorpusWorkbenchReadiness;
+  group_id: string;
+  group_alert_count: number;
+  window_alert_count: number;
+  window_start: string;
+  window_end: string;
+  workflow_state: "ready" | "analysis_only" | "completed" | "failed";
+  can_process: boolean;
+  run_id?: string | null;
+  analysis_status?: string | null;
+  model_name?: string | null;
+  prompt_version?: string | null;
+  total_duration_ms?: number | null;
+  output_quality?: string | null;
+  failure_kind?: string | null;
+  failure_message?: string | null;
+  base_verdict?: SocVerdict | null;
+  base_confidence?: number | null;
+  base_needs_review?: boolean | null;
+  effective_verdict?: SocVerdict | null;
+  effective_confidence?: number | null;
+  effective_needs_review?: boolean | null;
+  analysis_summary?: string | null;
+  analysis_reason?: string | null;
+  queue_id?: string | null;
+  observation_id?: string | null;
+  aggregation_key?: string | null;
+  pattern_support_count?: number | null;
+  pattern_distinct_source_count?: number | null;
+  pattern_quality_gate_passed?: boolean | null;
+  pattern_consistency_ratio?: number | null;
+  candidate_id?: string | null;
+  candidate_status?: string | null;
+  memory_id?: string | null;
+  memory_status?: string | null;
+  memory_contexts: SocCorpusWorkbenchMemoryContext[];
+  memory_directive_applied: boolean;
+  memory_effect?: string | null;
+  decision_stages: SocCorpusWorkbenchDecisionStage[];
+}
+
+export interface SocCorpusWorkbenchGroup {
+  group_id: string;
+  source_type: string;
+  detection_key?: string | null;
+  rule_code?: string | null;
+  rule_name?: string | null;
+  behavior_fingerprint?: string | null;
+  behavior_components: string[];
+  decision_eligible: boolean;
+  alert_count: number;
+  window_count: number;
+  max_window_alert_count: number;
+  candidate_window_count: number;
+  processed_count: number;
+  memory_hit_count: number;
+}
+
+export interface SocCorpusWorkbenchState {
+  schema_version: "soc.corpus_dev_workbench.v1";
+  safety: {
+    environment: "dev";
+    database_backend: "sqlite";
+    database_file: string;
+    source_data_class: "operational";
+    historical_replay: true;
+    internal_providers: "off_or_mock";
+    tenant_policy: "disabled";
+    external_action_execution: false;
+  };
+  source: {
+    file_name: string;
+    sha256: string;
+    alert_count: number;
+  };
+  model: {
+    mode: string;
+    model_name?: string | null;
+    thinking_enabled: boolean;
+    role_verifier_enabled: boolean;
+    role_verifier_model_name?: string | null;
+  };
+  readiness: {
+    total_alert_count: number;
+    fingerprint_coverage_count: number;
+    decision_eligible_alert_count: number;
+    recurrent_group_count: number;
+    recurrent_alert_count: number;
+    candidate_window_group_count: number;
+    candidate_window_alert_count: number;
+    processed_count: number;
+    failed_count: number;
+    memory_hit_alert_count: number;
+  };
+  groups: SocCorpusWorkbenchGroup[];
+  alerts: SocCorpusWorkbenchAlert[];
+}
+
+export interface SocCorpusWorkbenchProcessResult {
+  schema_version: "soc.corpus_dev_workbench_process.v1";
+  alert_id: string;
+  run_id?: string | null;
+  observation_id?: string | null;
+  idempotent: boolean;
+  state: SocCorpusWorkbenchState;
 }
 
 export interface SocMemoryRetrievalActivationRequest {

@@ -1,5 +1,5 @@
-import { SocMemoryValidationWorkbench } from "@/components/workspace/soc/soc-memory-validation-workbench";
+import { redirect } from "next/navigation";
 
 export default function SocMemoryValidationPage() {
-  return <SocMemoryValidationWorkbench />;
+  redirect("/workspace/soc/memory");
 }

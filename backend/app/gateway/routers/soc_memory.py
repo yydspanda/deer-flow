@@ -13,7 +13,9 @@ from app.gateway.soc_dependencies import (
     get_or_create_soc_repository,
     soc_service_context_from_request,
 )
+from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.contracts import (
+    MemoryPatternDataClass,
     SocMemoryApplicabilitySpec,
     SocMemoryBusinessLesson,
     SocMemoryBusinessLessonDraft,
@@ -22,6 +24,10 @@ from soc_agent.contracts import (
     SocMemoryCandidateReviewDecision,
     SocMemoryCandidateReviewResult,
     SocMemoryCandidateStatus,
+    SocMemoryCandidateSupersessionCommand,
+    SocMemoryCandidateSupersessionResult,
+    SocMemoryCenterOverview,
+    SocMemoryCenterPatternDetail,
     SocMemoryDecisionDirective,
     SocMemoryLineageReport,
     SocMemoryQuery,
@@ -39,6 +45,7 @@ from soc_agent.contracts import (
     Verdict,
 )
 from soc_agent.core import (
+    SocMemoryCenterService,
     SocMemoryEvolutionError,
     SocMemoryEvolutionService,
     SocMemoryLessonDraftService,
@@ -116,6 +123,11 @@ class MemoryRevisionReviewRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=4000)
 
 
+class MemoryCandidateSupersessionRequest(BaseModel):
+    successor_candidate_id: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
 def get_soc_memory_service(request: Request) -> SocMemoryService:
     injected = getattr(request.app.state, "soc_memory_service", None)
     if injected is not None:
@@ -126,6 +138,26 @@ def get_soc_memory_service(request: Request) -> SocMemoryService:
 
 
 MemoryServiceDep = Annotated[SocMemoryService, Depends(get_soc_memory_service)]
+
+
+def get_soc_memory_center_service(request: Request) -> SocMemoryCenterService:
+    injected = getattr(request.app.state, "soc_memory_center_service", None)
+    if injected is not None:
+        return injected
+    repository = get_or_create_soc_repository(request)
+    return SocMemoryCenterService(
+        center_repository=repository,
+        observation_repository=repository,
+        candidate_repository=repository,
+        record_repository=repository,
+        profile_registry=build_soc_memory_profile_registry(),
+    )
+
+
+MemoryCenterServiceDep = Annotated[
+    SocMemoryCenterService,
+    Depends(get_soc_memory_center_service),
+]
 
 
 def get_soc_memory_lesson_draft_service(
@@ -196,6 +228,57 @@ def list_memory_candidates(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.get("/center", response_model=SocMemoryCenterOverview)
+def get_memory_center_overview(
+    service: MemoryCenterServiceDep,
+    tenant_id: str | None = Query(default=None),
+    environment: str | None = Query(default=None),
+    data_class: MemoryPatternDataClass | None = Query(default=None),
+    profile_id: str | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=256),
+    include_terminal_history: bool = Query(default=False),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> SocMemoryCenterOverview:
+    try:
+        return service.overview(
+            tenant_id=tenant_id,
+            environment=environment,
+            data_class=data_class,
+            profile_id=profile_id,
+            search=search,
+            include_terminal_history=include_terminal_history,
+            limit=limit,
+            offset=offset,
+        )
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get(
+    "/center/patterns/{lineage_key}",
+    response_model=SocMemoryCenterPatternDetail,
+)
+def get_memory_center_pattern(
+    lineage_key: str,
+    service: MemoryCenterServiceDep,
+    include_observations: bool = Query(default=True),
+    observation_limit: int = Query(default=100, ge=1, le=500),
+    observation_offset: int = Query(default=0, ge=0),
+) -> SocMemoryCenterPatternDetail:
+    try:
+        return service.pattern_detail(
+            lineage_key,
+            include_observations=include_observations,
+            observation_limit=observation_limit,
+            observation_offset=observation_offset,
+        )
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.get("/candidates/{candidate_id}", response_model=SocMemoryCandidate)
 def get_memory_candidate(candidate_id: str, service: MemoryServiceDep) -> SocMemoryCandidate:
     try:
@@ -240,6 +323,40 @@ def review_memory_candidate(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except SocServiceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SocServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/candidates/{candidate_id}/supersession",
+    response_model=SocMemoryCandidateSupersessionResult,
+)
+def supersede_memory_candidate(
+    candidate_id: str,
+    payload: MemoryCandidateSupersessionRequest,
+    request: Request,
+    service: MemoryServiceDep,
+) -> SocMemoryCandidateSupersessionResult:
+    try:
+        return service.supersede_candidate(
+            SocMemoryCandidateSupersessionCommand(
+                candidate_id=candidate_id,
+                successor_candidate_id=payload.successor_candidate_id,
+                reason=payload.reason,
+            ),
+            context=soc_service_context_from_request(
+                request,
+                include_soc_roles=True,
+            ),
+        )
+    except SocServiceAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except SocServiceError as exc:

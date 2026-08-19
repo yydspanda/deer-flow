@@ -415,7 +415,7 @@ Current SOC direction:
   non-persisted (`decision_impact=none`); only the existing
   explicit review command can turn it into reviewer-owned Memory.
 - Browser-driven repeated-Memory validation is exposed only when
-  `SOC_DEV_MEMORY_WORKBENCH_ENABLED=true`. `/workspace/soc/memory-validation` and
+  `SOC_DEV_MEMORY_WORKBENCH_ENABLED=true`. `/workspace/soc/dev/memory-validation/galaxylab` and
   `/api/soc/dev/memory-workbench` orchestrate one fixed, server-owned 14-alert historical cohort
   through the official analysis, Pattern, ReviewQueue, Lesson, retrieval, and decision-lineage
   services. The workbench requires an isolated SQLite database, `dev` Memory/automation
@@ -424,6 +424,27 @@ Current SOC direction:
   the active Memory Profile identity; a profile/schema upgrade begins a new validation generation
   while retaining old runs and observations for audit. Do not generalize it into a production
   ingestion API or move cohort selection/business transitions into React.
+- The production-shaped `/workspace/soc/memory` Memory Center is a query-only operational inventory,
+  not another fixture workbench. Its primary object is the stable `lineage_key` pattern across fixed
+  24-hour candidate windows: for example, one 8-alert pattern spread across `6 + 1 + 1` windows is one
+  list item with 8 observations and 3 windows. The detail retains every immutable observation and
+  exposes the frozen candidate snapshot separately from later reinforcement. `/api/soc/memory/center`
+  and `/api/soc/memory/center/patterns/{lineage_key}` own this projection; React must not aggregate it.
+  Terminal candidate history is excluded by the server by default and exposed only through the explicit
+  history-audit query toggle, so historical Profiles cannot consume active-list pagination or look actionable.
+  Candidate governance lives under `/workspace/soc/review/memory-candidates[/candidate_id]`, while
+  alert and sample review use their own `/review/alerts` and `/review/samples` routes.
+  A Profile/schema upgrade never silently rewrites a confirmed Memory. A pending or intermediate
+  repeated-pattern candidate may be marked `superseded` only through `SocMemoryService`, and only by a
+  newer same-tenant, same-source-alert candidate for the same Profile ID; preserve both candidates and
+  the mutation audit.
+- Manual full-corpus DEV replay is a separate surface gated by
+  `SOC_DEV_CORPUS_WORKBENCH_ENABLED=true`: `/workspace/soc/corpus-validation` and
+  `/api/soc/dev/corpus-workbench`. It reads only a server-owned PKL path and reuses the same persisted
+  Runtime, Pattern, Memory, review, and decision services in isolated SQLite. Its long-term group and
+  fixed 24-hour readiness labels are structural validation hints, not model accuracy, candidate
+  quality, production ingestion, or action authority; the client may filter and invoke one alert but
+  never sends raw payloads or computes grouping/Memory applicability.
 - Single-alert correction, review-note and domain-finding sources must pass `MemoryAdmissionService`
   before a candidate is created. Admission requires an explicit human promotion/acceptance signal, a
   substantive reason and a reusable facet; otherwise the result remains `observed_only`. Alert/run IDs
@@ -527,6 +548,12 @@ Current SOC direction:
   all gates creates one frozen `pending_review` pattern lesson. Conflicted, unresolved, weak-anchor,
   and low-support cohorts do not enter expert review. Candidate content must summarize applicability,
   verdict distribution, representative conclusions, and exceptions rather than copy one alert.
+  The 24-hour cohort window is source evidence, not knowledge validity: preserve it as
+  `source.metadata.window_start/window_end`; candidate governance validity starts at proposal, and a
+  confirmed repeated-pattern record receives a fresh bounded 90-day window from human confirmation.
+  Retrieval activation may repair an older repeated-pattern record only when it was already expired
+  at record creation, with the old/new validity written to record metadata and mutation audit. It must
+  never silently renew a normally expired record.
   A stable lesson fingerprint suppresses equivalent candidates across later fixed windows; those
   windows remain reinforcement observations. A changed risk class or strong-anchor scope is a new
   reviewable lesson, while supersession remains manual. Later observations are replay-only. Missing/naive event time or

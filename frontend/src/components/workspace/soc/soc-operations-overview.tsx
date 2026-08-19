@@ -6,18 +6,15 @@ import {
   CheckCircle2Icon,
   Clock3Icon,
   DatabaseIcon,
-  FlaskConicalIcon,
   GaugeIcon,
   RefreshCwIcon,
   RadioTowerIcon,
-  ShieldCheckIcon,
-  WrenchIcon,
 } from "lucide-react";
-import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import { useSocOperationsSnapshot } from "@/core/soc";
 import type {
   SocOperationsAvailability,
@@ -179,35 +176,11 @@ export function SocOperationsOverview() {
 
   return (
     <div className="flex size-full min-h-0 flex-col">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4 md:px-7">
-        <div className="flex items-center gap-3">
-          <ActivityIcon className="size-5" />
-          <div>
-            <h1 className="text-xl font-semibold">SOC 运营观察</h1>
-            <p className="text-muted-foreground mt-0.5 text-sm">
-              Operations overview
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/workspace/soc/memory-validation">
-              <FlaskConicalIcon className="size-4" />
-              Memory 验证
-            </Link>
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/workspace/soc/review">
-              <ShieldCheckIcon className="size-4" />
-              告警复核
-            </Link>
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/workspace/soc/normalization">
-              <WrenchIcon className="size-4" />
-              归一化
-            </Link>
-          </Button>
+      <SocWorkspaceHeader
+        icon={ActivityIcon}
+        title="SOC 运营总览"
+        description="运行状态、处理负载与治理信号"
+        actions={
           <Button
             variant="outline"
             size="icon-sm"
@@ -220,8 +193,8 @@ export function SocOperationsOverview() {
               className={cn("size-4", query.isFetching && "animate-spin")}
             />
           </Button>
-        </div>
-      </header>
+        }
+      />
 
       <main
         data-testid="soc-operations-scroll"

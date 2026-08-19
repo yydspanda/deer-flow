@@ -247,6 +247,60 @@ def test_soc_memory_api_reopens_rejected_candidate() -> None:
     assert reopened.memory_record is None
 
 
+def test_soc_memory_api_supersedes_same_alert_profile_candidate() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(
+        candidate_repository=repository,
+        mutation_audit_repository=repository,
+    )
+    original_command = _memory_candidate_command(
+        idempotency_key="memory:router:profile-v1",
+        decision_impact=SocMemoryDecisionImpact.DETECTION_DECISION,
+    )
+    assert original_command.applicability is not None
+    original_command = original_command.model_copy(
+        update={
+            "source": original_command.source.model_copy(
+                update={
+                    "source_type": SocMemoryCandidateSourceType.REPEATED_PATTERN,
+                    "metadata": {
+                        "environment": "dev",
+                        "data_class": "simulation",
+                    },
+                }
+            )
+        }
+    )
+    original = service.propose_candidate(original_command)
+    upgraded_command = original_command.model_copy(
+        update={
+            "idempotency_key": "memory:router:profile-v2",
+            "source": original_command.source.model_copy(update={"source_id": "router-memory-test-v2"}),
+            "applicability": original_command.applicability.model_copy(
+                update={
+                    "profile_version": "2",
+                    "feature_schema_version": "soc.memory_features.generic.v2",
+                }
+            ),
+        }
+    )
+    successor = service.propose_candidate(upgraded_command)
+
+    result = soc_memory.supersede_memory_candidate(
+        original.candidate_id,
+        soc_memory.MemoryCandidateSupersessionRequest(
+            successor_candidate_id=successor.candidate_id,
+            reason="Profile v2 replaces the same-alert v1 review candidate.",
+        ),
+        request=FakeRequest(system_role="admin"),
+        service=service,
+    )
+
+    assert result.candidate.status is SocMemoryCandidateStatus.SUPERSEDED
+    assert result.candidate.superseded_by_candidate_id == successor.candidate_id
+    assert result.successor.metadata["supersedes_candidate_ids"] == [original.candidate_id]
+
+
 def test_soc_memory_api_persists_explicit_business_lesson() -> None:
     repository = InMemoryMemoryCandidateRepository()
     service = SocMemoryService(

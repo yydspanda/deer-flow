@@ -37,6 +37,7 @@ from soc_agent.core.investigation_workflow import (
     SocEnrichmentWorkflowPersistenceError,
     SocInvestigationWorkflowService,
 )
+from soc_agent.core.memory_center import SocMemoryCenterService
 from soc_agent.core.memory_evolution import (
     SocMemoryEvolutionError,
     SocMemoryEvolutionService,
@@ -115,6 +116,7 @@ __all__ = [
     "SocInvestigationReportingService",
     "SocMemoryService",
     "SocMemoryLessonDraftService",
+    "SocMemoryCenterService",
     "SocMemoryEvolutionError",
     "SocMemoryEvolutionService",
     "SocMemoryPatternService",

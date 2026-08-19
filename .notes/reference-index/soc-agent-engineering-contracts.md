@@ -2849,11 +2849,33 @@ tool permission denial rate
   继承 directive；必须重新聚合、审核和激活。Profile 投影若同一 IP 同时存在于 generic `entity=ip:*` 与
   typed `role_entity`，只移除重复 generic facet；不得把 IP 变成 required facet，跨 IP 行为泛化必须保留。
 - Memory 的 24h fixed window 只定义重复 observation 的候选聚合范围，不是 Memory 生命周期。当前
-  pattern candidate 默认 record validity 为 90 天、review interval 为 30 天；确认时 retrieval activation
-  另有显式截止时间和复审周期，且不能超出 record validity。环境是服务端配置的 `dev|stg|prd` 运行
+  `window_start/window_end` 只保存在 source metadata；pattern candidate 的 90 天治理有效期从候选生成
+  时开始，人工确认后 repeated-pattern record 再从确认时间获得独立的 90 天有效期，review interval
+  默认 30 天。确认时 retrieval activation 另有显式截止时间和复审周期，且不能超出 record validity。
+  旧实现产生的 repeated-pattern record 只有在 `valid_until <= created_at`、即“记录创建时已经过期”时，
+  才可由 `set_retrieval_activation()` 在同一版本迁移和 mutation audit 中执行一次
+  `soc.memory_pattern_legacy_validity_repair.v1`；正常生命周期到期的 Memory 仍必须 fail closed，禁止
+  借 activation 静默续期。环境是服务端配置的 `dev|stg|prd` 运行
   边界，不从 topic、IP 或供应商自由字段推断。Runtime 在 Profile/query 前绑定显式 batch/daemon
   environment，或一致的 `SOC_MEMORY_ENVIRONMENT` / tenant-policy / automation environment；冲突配置
   必须 fail closed。
+- 正式 Memory Center 的一级对象是跨 fixed window 稳定的 `lineage_key` Pattern，不是
+  `aggregation_key` cohort。列表/搜索/详情必须由 Repository + Core Service 生成：分别显示 lineage
+  observation 总数、distinct source 数、24h window 数、candidate 冻结快照数和后续 reinforcement 数。
+  例如同一 Sliver 模式跨窗口形成 `6 + 1 + 1` 时，运营视图必须显示 1 个 Pattern、8 条 observation、
+  3 个 window；原始 observation 和 window lineage 仍完整保留用于 replay/audit。
+- Memory Center 默认查询必须在 Repository 层排除 `terminal_history` candidate-only lineage，并返回当前
+  筛选条件下的历史数量；显式 `include_terminal_history=true` 才参与列表分页。禁止先分页再由 React
+  隐藏历史项，否则历史数据会挤占活跃 Pattern 页面。历史详情仍可通过稳定 lineage 直接审计。
+- Memory Center 根页面不得自动选中第一条 Pattern，也不得把第一条 Pattern 的关联告警研判绑定到导航
+  请求。Pattern 详情先用 `include_observations=false` 获取治理摘要；source observations 由运营人员
+  显式加载并按 20 条分页。审核中心各 route 只允许启动本视图需要的 Query，Candidate 列表不得旁路加载
+  ReviewQueue、Approval Inbox 或全部 Memory records；详情只按 `source_candidate_id` 查询关联记录。
+- Profile/schema 升级不得直接删除旧候选或重写 confirmed Memory。只有仍处于 `pending_review` /
+  `confirmed_candidate` 的 repeated-pattern candidate，才可通过 typed supersession command 转为
+  `superseded`；必须验证 same tenant、same source alert、same Profile ID、新版本/新 schema 与 newer
+  successor，并原子保存 successor link、mutation audit 和 process event。confirmed record 继续按显式
+  revalidation/deprecation 流程处理。
 - SQL repository 必须在完整 eligible corpus 上分别执行 `soc_memory_record_facets` exact-facet lane 和
   text lane，与 scoped fallback 合并后再用共享 scorer 应用 candidate limit 和最终 top-K/token budget。
   禁止恢复“先取最新 200 条再评分”的实现；大量新但宽泛匹配的记录不能遮蔽旧的强相关 Memory。

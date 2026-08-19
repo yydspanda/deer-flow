@@ -12,7 +12,9 @@ test.describe("SOC review workbench", () => {
 
     await page.goto("/workspace/soc/review");
 
-    await expect(page.getByRole("heading", { name: "SOC 复核" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "SOC 审核中心" }),
+    ).toBeVisible();
     await expect(
       page.getByText("Reverse shell activity").first(),
     ).toBeVisible();
@@ -81,7 +83,9 @@ test.describe("SOC review workbench", () => {
     await expect(page.getByText("候选记忆已更新")).toBeVisible();
 
     const retrievalSection = page.locator("section").filter({
-      has: page.getByRole("heading", { name: "确认记忆检索治理" }),
+      has: page.getByRole("heading", {
+        name: "已沉淀 Memory / 检索治理",
+      }),
     });
     await retrievalSection
       .getByLabel("治理理由")
@@ -213,6 +217,45 @@ test.describe("SOC review workbench", () => {
     expect(request?.idempotencyKey).toBeTruthy();
   });
 
+  test("lists every Memory Candidate status before opening governance detail", async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page, { threads: [] });
+    const state = await mockSocAPI(page, {
+      includeQueueItem: false,
+      standaloneMemoryCandidate: true,
+      candidateStatus: "confirmed",
+    });
+
+    await page.goto("/workspace/soc/review/memory-candidates");
+
+    await expect(
+      page.getByRole("heading", { name: "Candidate 治理台账" }),
+    ).toBeVisible();
+    await expect(page.getByLabel("候选状态")).toContainText("全部状态");
+    await expect(page.getByText("Authorized scanner pattern")).toBeVisible();
+    await expect(
+      page.getByText(
+        "Confirm the change window before suppressing this pattern.",
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "查看治理详情" }),
+    ).toHaveAttribute(
+      "href",
+      "/workspace/soc/review/memory-candidates/MC-ALPHA-001",
+    );
+    expect(
+      state.requests.filter((request) =>
+        [
+          "/api/soc/review/items",
+          "/api/soc/memory/records",
+          "/api/soc/approvals/requests",
+        ].includes(request.path),
+      ),
+    ).toEqual([]);
+  });
+
   test("opens a standalone Memory Candidate without fabricating a ReviewQueue item", async ({
     page,
   }) => {
@@ -224,7 +267,9 @@ test.describe("SOC review workbench", () => {
 
     await page.goto("/workspace/soc/review?candidate_id=MC-ALPHA-001");
 
-    await expect(page.getByRole("heading", { name: "SOC 复核" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "SOC 审核中心" }),
+    ).toBeVisible();
     await expect(
       page.getByRole("radio", { name: "候选经验审核" }),
     ).toBeChecked();
@@ -236,6 +281,16 @@ test.describe("SOC review workbench", () => {
       page.getByText("Authorized scanner pattern", { exact: true }),
     ).toBeVisible();
     await expect(page.getByText("候选记忆")).toBeVisible();
+    await expect(
+      page.getByRole("heading", {
+        name: "本次审核对象 / Candidate Proposal",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        "Confirm the change window before suppressing this pattern.",
+      ),
+    ).toBeVisible();
     const candidateSection = page.locator("section").filter({
       has: page.getByRole("heading", { name: "候选记忆" }),
     });
@@ -300,6 +355,56 @@ test.describe("SOC review workbench", () => {
     ).resolves.toBe(false);
   });
 
+  test("shows the reviewed Business Lesson instead of an empty form for a confirmed Candidate", async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page, { threads: [] });
+    const state = await mockSocAPI(page, {
+      includeQueueItem: false,
+      standaloneMemoryCandidate: true,
+      candidateStatus: "confirmed",
+    });
+
+    await page.goto("/workspace/soc/review/memory-candidates/MC-ALPHA-001");
+
+    await expect(
+      page.getByRole("heading", {
+        name: "本次审核对象 / Candidate Proposal",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        "Confirm the change window before suppressing this pattern.",
+      ),
+    ).toBeVisible();
+    await expect(page.getByText("当前治理状态")).toBeVisible();
+    await expect(
+      page.getByRole("heading", {
+        name: "已沉淀 Memory / 检索治理",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        "该模式是已确认的内部服务调用，应按审核范围复用误报结论。",
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("combobox", { name: "最终业务判断" }),
+    ).toHaveCount(0);
+    expect(
+      state.requests.filter((request) =>
+        ["/api/soc/review/items", "/api/soc/approvals/requests"].includes(
+          request.path,
+        ),
+      ),
+    ).toEqual([]);
+    expect(
+      state.requests.filter(
+        (request) => request.path === "/api/soc/memory/records",
+      ),
+    ).toHaveLength(1);
+  });
+
   test("reopens a rejected standalone Memory Candidate before editing", async ({
     page,
   }) => {
@@ -315,13 +420,15 @@ test.describe("SOC review workbench", () => {
     const candidateSection = page.locator("section").filter({
       has: page.getByRole("heading", { name: "候选记忆" }),
     });
-    await expect(candidateSection.getByText("已放弃沉淀")).toBeVisible();
+    await expect(
+      candidateSection.getByText("已放弃沉淀").first(),
+    ).toBeVisible();
     await expect(
       candidateSection.getByRole("combobox", { name: "最终业务判断" }),
-    ).toBeDisabled();
-    await expect(
-      candidateSection.getByLabel("业务事实（可选）"),
-    ).toBeDisabled();
+    ).toHaveCount(0);
+    await expect(candidateSection.getByLabel("业务事实（可选）")).toHaveCount(
+      0,
+    );
 
     await candidateSection
       .getByRole("button", { name: "重新打开审核" })
@@ -383,7 +490,7 @@ test.describe("SOC review workbench", () => {
     await page.goto("/workspace/soc/operations");
 
     await expect(
-      page.getByRole("heading", { name: "SOC 运营观察" }),
+      page.getByRole("heading", { name: "SOC 运营总览" }),
     ).toBeVisible();
     await expect(page.getByTestId("operations-data-nature")).toContainText(
       "SQLite 本地或仿真证据",
@@ -426,7 +533,7 @@ test.describe("SOC review workbench", () => {
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(
-      page.getByRole("heading", { name: "SOC 运营观察" }),
+      page.getByRole("heading", { name: "SOC 运营总览" }),
     ).toBeVisible();
     await expect(horizontalOverflow()).resolves.toEqual({
       document: false,

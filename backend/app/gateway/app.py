@@ -33,6 +33,7 @@ from app.gateway.routers import (
     scheduled_tasks,
     skills,
     soc_approvals,
+    soc_corpus_workbench,
     soc_external_dispositions,
     soc_memory,
     soc_memory_workbench,
@@ -715,6 +716,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Explicitly gated local browser validation for the SOC Memory lifecycle
     app.include_router(soc_memory_workbench.router)
+
+    # Explicitly gated local browser exploration for the complete SOC corpus
+    app.include_router(soc_corpus_workbench.router)
 
     # SOC approval API is mounted at /api/soc/approvals
     app.include_router(soc_approvals.router)

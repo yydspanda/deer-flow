@@ -1,11 +1,11 @@
 "use client";
 
 import {
-  ActivityIcon,
   AlertTriangleIcon,
   BotIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
+  ChevronRightIcon,
   ClipboardCheckIcon,
   CircleIcon,
   FlaskConicalIcon,
@@ -20,7 +20,6 @@ import {
   ShieldAlertIcon,
   ShieldCheckIcon,
   SparklesIcon,
-  WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -49,7 +48,9 @@ import {
   SocDispositionSampleInbox,
   type SocDispositionSampleReviewTarget,
 } from "@/components/workspace/soc/soc-disposition-sample-inbox";
+import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
+  SocApiError,
   useCloseSocReviewItem,
   useCorrectSocReviewRun,
   useCreateSocApprovalGrant,
@@ -102,6 +103,20 @@ const STATUS_OPTIONS: { value: SocReviewQueueStatus | "all"; label: string }[] =
     { value: "closed", label: "已关闭" },
     { value: "all", label: "全部" },
   ];
+
+const MEMORY_CANDIDATE_STATUS_OPTIONS: {
+  value: SocMemoryCandidate["status"] | "all";
+  label: string;
+}[] = [
+  { value: "all", label: "全部状态" },
+  { value: "pending_review", label: "待审核" },
+  { value: "confirmed_candidate", label: "已确认候选" },
+  { value: "confirmed", label: "已确认" },
+  { value: "rejected", label: "已放弃沉淀" },
+  { value: "superseded", label: "已被替代" },
+  { value: "expired", label: "已过期" },
+  { value: "deprecated", label: "已停用" },
+];
 
 const VERDICT_OPTIONS: { value: SocVerdict; label: string }[] = [
   { value: "true_positive", label: "真实攻击" },
@@ -264,9 +279,21 @@ function reviewedMemoryBusinessLesson(
   };
 }
 
-function defaultMemoryRetrievalDraft(): MemoryRetrievalDraft {
+function defaultMemoryRetrievalDraft(
+  record?: SocMemoryRecord,
+): MemoryRetrievalDraft {
   const validUntil = new Date();
   validUntil.setDate(validUntil.getDate() + 90);
+  const recordValidUntil = record?.validity.valid_until
+    ? new Date(record.validity.valid_until)
+    : null;
+  if (
+    recordValidUntil &&
+    recordValidUntil.getTime() > Date.now() &&
+    recordValidUntil.getTime() < validUntil.getTime()
+  ) {
+    validUntil.setTime(recordValidUntil.getTime());
+  }
   return {
     reason: "",
     validUntil: validUntil.toISOString().slice(0, 16),
@@ -367,6 +394,7 @@ function candidateStatusLabel(status: SocMemoryCandidate["status"]) {
     confirmed_candidate: "已确认候选",
     confirmed: "已确认",
     rejected: "已放弃沉淀",
+    superseded: "已被替代",
     expired: "已过期",
     deprecated: "已停用",
   };
@@ -1358,6 +1386,194 @@ function ExternalDispositionSection({
   );
 }
 
+function MemoryCandidateInventory({
+  candidates,
+  status,
+  isFetching,
+  onStatusChange,
+  onRefresh,
+}: {
+  candidates: SocMemoryCandidate[];
+  status: SocMemoryCandidate["status"] | "all";
+  isFetching: boolean;
+  onStatusChange: (status: SocMemoryCandidate["status"] | "all") => void;
+  onRefresh: () => void;
+}) {
+  return (
+    <section className="rounded-md border">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+        <div>
+          <h3 className="text-sm font-semibold">Candidate 治理台账</h3>
+          <p className="text-muted-foreground mt-1 text-xs">
+            待审、已确认和历史候选都保留在这里；打开详情查看完整审核对象和治理结果。
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Select value={status} onValueChange={onStatusChange}>
+            <SelectTrigger size="sm" className="w-36" aria-label="候选状态">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MEMORY_CANDIDATE_STATUS_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            title="刷新候选台账"
+            aria-label="刷新候选台账"
+            disabled={isFetching}
+            onClick={onRefresh}
+          >
+            <RefreshCwIcon
+              className={cn("size-4", isFetching && "animate-spin")}
+            />
+          </Button>
+        </div>
+      </div>
+      <div className="divide-y">
+        {candidates.length === 0 ? (
+          <div className="text-muted-foreground flex min-h-40 items-center justify-center p-4 text-sm">
+            当前筛选条件下没有候选经验。
+          </div>
+        ) : (
+          candidates.map((candidate) => (
+            <div
+              key={candidate.candidate_id}
+              className="grid min-w-0 gap-3 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center"
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">
+                    {candidateStatusLabel(candidate.status)}
+                  </Badge>
+                  <span className="text-muted-foreground font-mono text-xs break-all">
+                    {candidate.candidate_id}
+                  </span>
+                </div>
+                <div className="mt-2 text-sm font-semibold break-words">
+                  {candidate.summary}
+                </div>
+                <p className="text-muted-foreground mt-1 line-clamp-2 text-sm leading-6 whitespace-pre-wrap">
+                  {candidate.content}
+                </p>
+                <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                  <span>{candidateSourceLabel(candidate)}</span>
+                  <span>{candidate.evidence_refs.length} 条证据引用</span>
+                  <span>更新于 {formatTime(candidate.updated_at)}</span>
+                </div>
+              </div>
+              <Button size="sm" variant="outline" asChild>
+                <Link
+                  href={`/workspace/soc/review/memory-candidates/${candidate.candidate_id}`}
+                >
+                  {["pending_review", "confirmed_candidate"].includes(
+                    candidate.status,
+                  )
+                    ? "开始审核"
+                    : "查看治理详情"}
+                  <ChevronRightIcon className="size-4" />
+                </Link>
+              </Button>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function MemoryCandidateProposal({
+  candidate,
+}: {
+  candidate: SocMemoryCandidate;
+}) {
+  return (
+    <div className="mt-4 border-y py-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h4 className="text-sm font-semibold">
+            本次审核对象 / Candidate Proposal
+          </h4>
+          <p className="text-muted-foreground mt-1 text-xs">
+            下面是系统提议沉淀的经验正文；审核的是这段内容及其适用范围，不是重新审核整条告警。
+          </p>
+        </div>
+        <Badge variant="outline">{candidate.evidence_refs.length} 条引用</Badge>
+      </div>
+      <div className="bg-muted/40 mt-3 max-h-96 overflow-y-auto border p-3 text-sm leading-6 break-words whitespace-pre-wrap">
+        {candidate.content}
+      </div>
+      <div className="text-muted-foreground mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+        <span>{candidateSourceLabel(candidate)}</span>
+        <span>类型：{candidate.candidate_type}</span>
+        <span>租户范围：{candidate.tenant_scope}</span>
+        <span>有效起始：{formatTime(candidate.validity.valid_from)}</span>
+        {candidate.validity.valid_until ? (
+          <span>有效截止：{formatTime(candidate.validity.valid_until)}</span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function MemoryCandidateGovernanceStatus({
+  candidate,
+}: {
+  candidate: SocMemoryCandidate;
+}) {
+  const descriptions: Partial<Record<SocMemoryCandidate["status"], string>> = {
+    confirmed:
+      "该候选已完成审核并沉淀为 Memory。审核后的完整 Business Lesson 在下方展示。",
+    rejected:
+      "该候选已被审核人放弃沉淀。候选正文和历史审计仍保留，可显式重新打开审核。",
+    superseded: "该候选已被更新版本替代，仅作为历史审计记录保留。",
+    expired: "该候选已过有效期，仅作为历史审计记录保留。",
+    deprecated: "该候选已停用，不再参与后续 Memory 治理。",
+  };
+  return (
+    <div className="bg-muted/30 mt-4 border-y px-3 py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="outline">
+          {candidateStatusLabel(candidate.status)}
+        </Badge>
+        <span className="text-sm font-medium">当前治理状态</span>
+      </div>
+      <p className="text-muted-foreground mt-2 text-sm leading-6">
+        {descriptions[candidate.status] ?? "该候选当前不可编辑。"}
+      </p>
+      <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+        {candidate.reviewed_by ? (
+          <span>审核人：{candidate.reviewed_by.actor_id}</span>
+        ) : null}
+        {candidate.reviewed_at ? (
+          <span>审核时间：{formatTime(candidate.reviewed_at)}</span>
+        ) : null}
+        {candidate.review_reason ? (
+          <span className="break-words">
+            审核理由：{candidate.review_reason}
+          </span>
+        ) : null}
+      </div>
+      {candidate.superseded_by_candidate_id ? (
+        <Button className="mt-3" size="sm" variant="outline" asChild>
+          <Link
+            href={`/workspace/soc/review/memory-candidates/${candidate.superseded_by_candidate_id}`}
+          >
+            查看替代候选
+            <ChevronRightIcon className="size-4" />
+          </Link>
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function MemoryCandidateSection({
   candidates,
   reviewDrafts,
@@ -1443,6 +1659,8 @@ function MemoryCandidateSection({
                     </Badge>
                   </div>
                 </div>
+
+                <MemoryCandidateProposal candidate={candidate} />
 
                 <div className="mt-4 grid grid-cols-2 overflow-hidden border lg:grid-cols-4">
                   <CandidateMetric
@@ -1566,241 +1784,252 @@ function MemoryCandidateSection({
                   </Collapsible>
                 ) : null}
 
-                <div className="mt-4 border-t pt-4">
-                  <div className="text-sm font-semibold">1. 确认业务判断</div>
-                  <div className="mt-3 grid gap-3 md:grid-cols-[14rem_minmax(0,1fr)]">
-                    <label className="grid content-start gap-1 text-xs font-medium">
-                      最终判断
-                      <Select
-                        value={draft.confirmedVerdict ?? ""}
-                        disabled={isReviewing || !editable}
-                        onValueChange={(value) =>
-                          onReviewDraftChange(candidate, {
-                            confirmedVerdict: value as SocVerdict,
-                            applyToFutureMatches: false,
-                            lessonConclusion: "",
-                            lessonBusinessRationale: "",
-                            lessonGeneralizationBoundary: "",
-                            lessonInvalidationCondition: "",
-                            lessonHandlingGuidance: "",
-                            lessonDraftProvenance: "",
-                            lessonDraftUncertainties: [],
-                            lessonEditing: false,
-                          })
-                        }
-                      >
-                        <SelectTrigger
-                          className="h-9 w-full text-xs"
-                          aria-label="最终业务判断"
-                        >
-                          <SelectValue placeholder="请选择" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="false_positive">误报</SelectItem>
-                          <SelectItem value="true_positive">
-                            真实攻击
-                          </SelectItem>
-                          <SelectItem value="suspicious">可疑</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </label>
-                    <label
-                      htmlFor={reviewContextId}
-                      className="grid gap-1 text-xs font-medium"
-                    >
-                      业务事实（可选）
-                      <Textarea
-                        id={reviewContextId}
-                        value={draft.businessContext}
-                        onChange={(event) =>
-                          onReviewDraftChange(candidate, {
-                            businessContext: event.target.value,
-                          })
-                        }
-                        placeholder="例如：已确认这是 Windows Update/WinRE 更新流程中的正常行为。"
-                        className="min-h-20 text-xs"
-                        disabled={isReviewing || !editable}
-                      />
-                    </label>
-                  </div>
-                  <div className="mt-3 flex justify-end">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={
-                        isReviewing ||
-                        isDraftingLesson ||
-                        !editable ||
-                        draft.confirmedVerdict === null
-                      }
-                      onClick={() => onDraftLesson(candidate)}
-                    >
-                      <SparklesIcon className="size-4" />
-                      {isDraftingLesson
-                        ? "生成中"
-                        : hasLessonDraft
-                          ? "重新生成 Memory"
-                          : "AI 生成 Memory"}
-                    </Button>
-                  </div>
-                </div>
-
-                {hasLessonDraft ? (
-                  <div className="mt-4 border-t pt-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-semibold">
-                          2. 审阅 Business Lesson
-                        </div>
-                        <div className="text-muted-foreground mt-1 text-xs">
-                          {draft.lessonDraftProvenance}
-                        </div>
+                {editable ? (
+                  <>
+                    <div className="mt-4 border-t pt-4">
+                      <div className="text-sm font-semibold">
+                        1. 确认业务判断
                       </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={isReviewing || !editable}
-                        onClick={() =>
-                          onReviewDraftChange(candidate, {
-                            lessonEditing: !draft.lessonEditing,
-                          })
-                        }
-                      >
-                        <PencilIcon className="size-4" />
-                        {draft.lessonEditing ? "完成编辑" : "编辑"}
-                      </Button>
+                      <div className="mt-3 grid gap-3 md:grid-cols-[14rem_minmax(0,1fr)]">
+                        <label className="grid content-start gap-1 text-xs font-medium">
+                          最终判断
+                          <Select
+                            value={draft.confirmedVerdict ?? ""}
+                            disabled={isReviewing || !editable}
+                            onValueChange={(value) =>
+                              onReviewDraftChange(candidate, {
+                                confirmedVerdict: value as SocVerdict,
+                                applyToFutureMatches: false,
+                                lessonConclusion: "",
+                                lessonBusinessRationale: "",
+                                lessonGeneralizationBoundary: "",
+                                lessonInvalidationCondition: "",
+                                lessonHandlingGuidance: "",
+                                lessonDraftProvenance: "",
+                                lessonDraftUncertainties: [],
+                                lessonEditing: false,
+                              })
+                            }
+                          >
+                            <SelectTrigger
+                              className="h-9 w-full text-xs"
+                              aria-label="最终业务判断"
+                            >
+                              <SelectValue placeholder="请选择" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="false_positive">
+                                误报
+                              </SelectItem>
+                              <SelectItem value="true_positive">
+                                真实攻击
+                              </SelectItem>
+                              <SelectItem value="suspicious">可疑</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </label>
+                        <label
+                          htmlFor={reviewContextId}
+                          className="grid gap-1 text-xs font-medium"
+                        >
+                          业务事实（可选）
+                          <Textarea
+                            id={reviewContextId}
+                            value={draft.businessContext}
+                            onChange={(event) =>
+                              onReviewDraftChange(candidate, {
+                                businessContext: event.target.value,
+                              })
+                            }
+                            placeholder="例如：已确认这是 Windows Update/WinRE 更新流程中的正常行为。"
+                            className="min-h-20 text-xs"
+                            disabled={isReviewing || !editable}
+                          />
+                        </label>
+                      </div>
+                      <div className="mt-3 flex justify-end">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={
+                            isReviewing ||
+                            isDraftingLesson ||
+                            !editable ||
+                            draft.confirmedVerdict === null
+                          }
+                          onClick={() => onDraftLesson(candidate)}
+                        >
+                          <SparklesIcon className="size-4" />
+                          {isDraftingLesson
+                            ? "生成中"
+                            : hasLessonDraft
+                              ? "重新生成 Memory"
+                              : "AI 生成 Memory"}
+                        </Button>
+                      </div>
                     </div>
-                    {draft.lessonDraftUncertainties.length > 0 ? (
-                      <div className="mt-3 border-y border-amber-300 bg-amber-50 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
-                        {draft.lessonDraftUncertainties.join("；")}
+
+                    {hasLessonDraft ? (
+                      <div className="mt-4 border-t pt-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-semibold">
+                              2. 审阅 Business Lesson
+                            </div>
+                            <div className="text-muted-foreground mt-1 text-xs">
+                              {draft.lessonDraftProvenance}
+                            </div>
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={isReviewing || !editable}
+                            onClick={() =>
+                              onReviewDraftChange(candidate, {
+                                lessonEditing: !draft.lessonEditing,
+                              })
+                            }
+                          >
+                            <PencilIcon className="size-4" />
+                            {draft.lessonEditing ? "完成编辑" : "编辑"}
+                          </Button>
+                        </div>
+                        {draft.lessonDraftUncertainties.length > 0 ? (
+                          <div className="mt-3 border-y border-amber-300 bg-amber-50 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+                            {draft.lessonDraftUncertainties.join("；")}
+                          </div>
+                        ) : null}
+                        {draft.lessonEditing || !reviewedLesson ? (
+                          <div className="mt-4 grid gap-3 md:grid-cols-2">
+                            <label className="grid gap-1 text-xs font-medium md:col-span-2">
+                              经验结论
+                              <Textarea
+                                value={draft.lessonConclusion}
+                                disabled={isReviewing || !editable}
+                                className="min-h-16 text-xs"
+                                onChange={(event) =>
+                                  onReviewDraftChange(candidate, {
+                                    lessonConclusion: event.target.value,
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="grid gap-1 text-xs font-medium md:col-span-2">
+                              业务依据（每行一条）
+                              <Textarea
+                                value={draft.lessonBusinessRationale}
+                                disabled={isReviewing || !editable}
+                                className="min-h-20 text-xs"
+                                onChange={(event) =>
+                                  onReviewDraftChange(candidate, {
+                                    lessonBusinessRationale: event.target.value,
+                                  })
+                                }
+                              />
+                            </label>
+                            <div className="grid gap-2 border-y py-3 text-xs md:col-span-2">
+                              <div className="font-medium">
+                                适用条件（系统生成）
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {Object.entries(
+                                  effectiveApplicability?.required_facets ?? {},
+                                ).map(([key, values]) => (
+                                  <Badge
+                                    key={key}
+                                    variant="outline"
+                                    className="max-w-full break-all whitespace-normal"
+                                  >
+                                    {key}：{values.slice(0, 3).join(", ")}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                            <label className="grid gap-1 text-xs font-medium">
+                              泛化边界（每行一条）
+                              <Textarea
+                                value={draft.lessonGeneralizationBoundary}
+                                disabled={isReviewing || !editable}
+                                className="min-h-20 text-xs"
+                                onChange={(event) =>
+                                  onReviewDraftChange(candidate, {
+                                    lessonGeneralizationBoundary:
+                                      event.target.value,
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="grid gap-1 text-xs font-medium">
+                              失效条件（每行一条）
+                              <Textarea
+                                value={draft.lessonInvalidationCondition}
+                                disabled={isReviewing || !editable}
+                                className="min-h-20 text-xs"
+                                onChange={(event) =>
+                                  onReviewDraftChange(candidate, {
+                                    lessonInvalidationCondition:
+                                      event.target.value,
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="grid gap-1 text-xs font-medium md:col-span-2">
+                              处置建议（每行一条）
+                              <Textarea
+                                value={draft.lessonHandlingGuidance}
+                                disabled={isReviewing || !editable}
+                                className="min-h-20 text-xs"
+                                onChange={(event) =>
+                                  onReviewDraftChange(candidate, {
+                                    lessonHandlingGuidance: event.target.value,
+                                  })
+                                }
+                              />
+                            </label>
+                          </div>
+                        ) : (
+                          <div className="mt-4">
+                            <MemoryLessonReadView lesson={reviewedLesson} />
+                          </div>
+                        )}
                       </div>
                     ) : null}
-                    {draft.lessonEditing || !reviewedLesson ? (
-                      <div className="mt-4 grid gap-3 md:grid-cols-2">
-                        <label className="grid gap-1 text-xs font-medium md:col-span-2">
-                          经验结论
-                          <Textarea
-                            value={draft.lessonConclusion}
-                            disabled={isReviewing || !editable}
-                            className="min-h-16 text-xs"
-                            onChange={(event) =>
-                              onReviewDraftChange(candidate, {
-                                lessonConclusion: event.target.value,
-                              })
-                            }
-                          />
-                        </label>
-                        <label className="grid gap-1 text-xs font-medium md:col-span-2">
-                          业务依据（每行一条）
-                          <Textarea
-                            value={draft.lessonBusinessRationale}
-                            disabled={isReviewing || !editable}
-                            className="min-h-20 text-xs"
-                            onChange={(event) =>
-                              onReviewDraftChange(candidate, {
-                                lessonBusinessRationale: event.target.value,
-                              })
-                            }
-                          />
-                        </label>
-                        <div className="grid gap-2 border-y py-3 text-xs md:col-span-2">
-                          <div className="font-medium">
-                            适用条件（系统生成）
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            {Object.entries(
-                              effectiveApplicability?.required_facets ?? {},
-                            ).map(([key, values]) => (
-                              <Badge
-                                key={key}
-                                variant="outline"
-                                className="max-w-full break-all whitespace-normal"
-                              >
-                                {key}：{values.slice(0, 3).join(", ")}
-                              </Badge>
-                            ))}
-                          </div>
-                        </div>
-                        <label className="grid gap-1 text-xs font-medium">
-                          泛化边界（每行一条）
-                          <Textarea
-                            value={draft.lessonGeneralizationBoundary}
-                            disabled={isReviewing || !editable}
-                            className="min-h-20 text-xs"
-                            onChange={(event) =>
-                              onReviewDraftChange(candidate, {
-                                lessonGeneralizationBoundary:
-                                  event.target.value,
-                              })
-                            }
-                          />
-                        </label>
-                        <label className="grid gap-1 text-xs font-medium">
-                          失效条件（每行一条）
-                          <Textarea
-                            value={draft.lessonInvalidationCondition}
-                            disabled={isReviewing || !editable}
-                            className="min-h-20 text-xs"
-                            onChange={(event) =>
-                              onReviewDraftChange(candidate, {
-                                lessonInvalidationCondition: event.target.value,
-                              })
-                            }
-                          />
-                        </label>
-                        <label className="grid gap-1 text-xs font-medium md:col-span-2">
-                          处置建议（每行一条）
-                          <Textarea
-                            value={draft.lessonHandlingGuidance}
-                            disabled={isReviewing || !editable}
-                            className="min-h-20 text-xs"
-                            onChange={(event) =>
-                              onReviewDraftChange(candidate, {
-                                lessonHandlingGuidance: event.target.value,
-                              })
-                            }
-                          />
-                        </label>
-                      </div>
-                    ) : (
-                      <div className="mt-4">
-                        <MemoryLessonReadView lesson={reviewedLesson} />
-                      </div>
-                    )}
-                  </div>
-                ) : null}
 
-                {decisionEligible && hasLessonDraft ? (
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
-                    <div>
-                      <div className="text-sm font-semibold">
-                        3. 设置未来复用
+                    {decisionEligible && hasLessonDraft ? (
+                      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+                        <div>
+                          <div className="text-sm font-semibold">
+                            3. 设置未来复用
+                          </div>
+                          <p className="text-muted-foreground mt-1 text-xs">
+                            精确命中机器适用范围后，复用本次审核结论。
+                          </p>
+                        </div>
+                        <label className="flex items-center gap-2 text-xs font-medium">
+                          <Switch
+                            checked={draft.applyToFutureMatches}
+                            disabled={
+                              isReviewing ||
+                              !editable ||
+                              reviewedLesson === undefined
+                            }
+                            onCheckedChange={(checked) =>
+                              onReviewDraftChange(candidate, {
+                                applyToFutureMatches: checked,
+                              })
+                            }
+                            aria-label="未来精确匹配改判"
+                          />
+                          用于未来精确匹配
+                        </label>
                       </div>
-                      <p className="text-muted-foreground mt-1 text-xs">
-                        精确命中机器适用范围后，复用本次审核结论。
-                      </p>
-                    </div>
-                    <label className="flex items-center gap-2 text-xs font-medium">
-                      <Switch
-                        checked={draft.applyToFutureMatches}
-                        disabled={
-                          isReviewing ||
-                          !editable ||
-                          reviewedLesson === undefined
-                        }
-                        onCheckedChange={(checked) =>
-                          onReviewDraftChange(candidate, {
-                            applyToFutureMatches: checked,
-                          })
-                        }
-                        aria-label="未来精确匹配改判"
-                      />
-                      用于未来精确匹配
-                    </label>
-                  </div>
-                ) : null}
+                    ) : null}
+                  </>
+                ) : (
+                  <MemoryCandidateGovernanceStatus candidate={candidate} />
+                )}
 
                 <Collapsible className="mt-4 border-t">
                   <CollapsibleTrigger asChild>
@@ -1810,16 +2039,13 @@ function MemoryCandidateSection({
                       className="group h-auto w-full justify-between rounded-none px-0 py-3 text-xs"
                     >
                       <span>
-                        查看原始候选与审计材料 ·{" "}
+                        查看证据引用与审计字段 ·{" "}
                         {candidate.evidence_refs.length} 条引用
                       </span>
                       <ChevronDownIcon className="size-4 transition-transform group-data-[state=open]:rotate-180" />
                     </Button>
                   </CollapsibleTrigger>
                   <CollapsibleContent className="space-y-3 pb-3">
-                    <div className="text-muted-foreground max-h-72 overflow-y-auto border p-3 text-xs whitespace-pre-wrap">
-                      {candidate.content}
-                    </div>
                     <div className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 text-xs">
                       <span>{candidateSourceLabel(candidate)}</span>
                       <span>{candidate.candidate_type}</span>
@@ -1859,15 +2085,12 @@ function MemoryCandidateSection({
                         <RefreshCwIcon className="size-4" />
                         重新打开审核
                       </Button>
-                    ) : (
+                    ) : editable ? (
                       <>
                         <Button
                           size="sm"
                           disabled={
                             isReviewing ||
-                            !["pending_review", "confirmed_candidate"].includes(
-                              candidate.status,
-                            ) ||
                             draft.confirmedVerdict === null ||
                             !reviewedLesson
                           }
@@ -1879,42 +2102,30 @@ function MemoryCandidateSection({
                         <Button
                           size="sm"
                           variant="outline"
-                          disabled={
-                            isReviewing ||
-                            !["pending_review", "confirmed_candidate"].includes(
-                              candidate.status,
-                            )
-                          }
+                          disabled={isReviewing}
                           title="仅放弃这条 Memory 候选，不改变告警的最终判断"
                           onClick={() => onReview(candidate, "reject")}
                         >
                           <XCircleIcon className="size-4" />
                           放弃沉淀此候选
                         </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={isReviewing}
+                          onClick={() => onReview(candidate, "expire")}
+                        >
+                          过期
+                        </Button>
                       </>
-                    )}
-                    {candidate.status !== "rejected" ? (
+                    ) : candidate.status === "confirmed" ? (
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={
-                          isReviewing ||
-                          ![
-                            "pending_review",
-                            "confirmed_candidate",
-                            "confirmed",
-                          ].includes(candidate.status)
-                        }
-                        onClick={() =>
-                          onReview(
-                            candidate,
-                            candidate.status === "confirmed"
-                              ? "deprecate"
-                              : "expire",
-                          )
-                        }
+                        disabled={isReviewing}
+                        onClick={() => onReview(candidate, "deprecate")}
                       >
-                        {candidate.status === "confirmed" ? "废弃" : "过期"}
+                        停用候选与关联 Memory
                       </Button>
                     ) : null}
                   </div>
@@ -2042,7 +2253,7 @@ function MemoryRetrievalActivationSection({
   drafts: Record<string, MemoryRetrievalDraft>;
   isUpdating: boolean;
   onDraftChange: (
-    memoryId: string,
+    record: SocMemoryRecord,
     field: keyof MemoryRetrievalDraft,
     value: string,
   ) => void;
@@ -2056,7 +2267,7 @@ function MemoryRetrievalActivationSection({
       <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
         <div className="flex items-center gap-2">
           <LibraryBigIcon className="text-muted-foreground size-4" />
-          <h3 className="text-sm font-semibold">确认记忆检索治理</h3>
+          <h3 className="text-sm font-semibold">已沉淀 Memory / 检索治理</h3>
         </div>
         <Badge variant="secondary">{records.length}</Badge>
       </div>
@@ -2068,7 +2279,7 @@ function MemoryRetrievalActivationSection({
         ) : (
           records.map((record) => {
             const draft =
-              drafts[record.memory_id] ?? defaultMemoryRetrievalDraft();
+              drafts[record.memory_id] ?? defaultMemoryRetrievalDraft(record);
             const nextAction: SocMemoryRetrievalActivationAction =
               record.retrieval_enabled ? "disable" : "enable";
             const reviewAfterDays = Number(draft.reviewAfterDays);
@@ -2077,6 +2288,7 @@ function MemoryRetrievalActivationSection({
               (!draft.validUntil ||
                 !Number.isInteger(reviewAfterDays) ||
                 reviewAfterDays < 1);
+            const retrievalMutable = record.status === "confirmed";
             return (
               <div key={record.memory_id} className="p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2102,65 +2314,85 @@ function MemoryRetrievalActivationSection({
                     </Badge>
                   </div>
                 </div>
-                <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_12rem_8rem_auto] lg:items-end">
-                  <label className="grid gap-1 text-xs">
-                    <span className="text-muted-foreground">治理理由</span>
-                    <Input
-                      value={draft.reason}
-                      onChange={(event) =>
-                        onDraftChange(
-                          record.memory_id,
-                          "reason",
-                          event.target.value,
-                        )
-                      }
-                      disabled={isUpdating}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-xs">
-                    <span className="text-muted-foreground">有效至</span>
-                    <Input
-                      type="datetime-local"
-                      value={draft.validUntil}
-                      onChange={(event) =>
-                        onDraftChange(
-                          record.memory_id,
-                          "validUntil",
-                          event.target.value,
-                        )
-                      }
-                      disabled={isUpdating || nextAction === "disable"}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-xs">
-                    <span className="text-muted-foreground">复核天数</span>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={365}
-                      value={draft.reviewAfterDays}
-                      onChange={(event) =>
-                        onDraftChange(
-                          record.memory_id,
-                          "reviewAfterDays",
-                          event.target.value,
-                        )
-                      }
-                      disabled={isUpdating || nextAction === "disable"}
-                    />
-                  </label>
-                  <Button
-                    size="sm"
-                    variant={nextAction === "enable" ? "default" : "outline"}
-                    disabled={
-                      isUpdating || !draft.reason.trim() || invalidEnable
-                    }
-                    onClick={() => onAction(record, nextAction)}
-                  >
-                    <PowerIcon className="size-4" />
-                    {nextAction === "enable" ? "启用检索" : "停用检索"}
-                  </Button>
+                <div className="mt-4">
+                  {record.business_lesson ? (
+                    <MemoryLessonReadView lesson={record.business_lesson} />
+                  ) : (
+                    <div className="border-y py-3">
+                      <div className="text-xs font-semibold">
+                        已确认经验正文
+                      </div>
+                      <p className="text-muted-foreground mt-2 text-sm leading-6 whitespace-pre-wrap">
+                        {record.content}
+                      </p>
+                      <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                        该历史记录没有结构化 Business
+                        Lesson，请在下次复核时补齐。
+                      </p>
+                    </div>
+                  )}
                 </div>
+                {retrievalMutable ? (
+                  <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_12rem_8rem_auto] lg:items-end">
+                    <label className="grid gap-1 text-xs">
+                      <span className="text-muted-foreground">治理理由</span>
+                      <Input
+                        value={draft.reason}
+                        onChange={(event) =>
+                          onDraftChange(record, "reason", event.target.value)
+                        }
+                        disabled={isUpdating}
+                      />
+                    </label>
+                    <label className="grid gap-1 text-xs">
+                      <span className="text-muted-foreground">有效至</span>
+                      <Input
+                        type="datetime-local"
+                        value={draft.validUntil}
+                        onChange={(event) =>
+                          onDraftChange(
+                            record,
+                            "validUntil",
+                            event.target.value,
+                          )
+                        }
+                        disabled={isUpdating || nextAction === "disable"}
+                      />
+                    </label>
+                    <label className="grid gap-1 text-xs">
+                      <span className="text-muted-foreground">复核天数</span>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={365}
+                        value={draft.reviewAfterDays}
+                        onChange={(event) =>
+                          onDraftChange(
+                            record,
+                            "reviewAfterDays",
+                            event.target.value,
+                          )
+                        }
+                        disabled={isUpdating || nextAction === "disable"}
+                      />
+                    </label>
+                    <Button
+                      size="sm"
+                      variant={nextAction === "enable" ? "default" : "outline"}
+                      disabled={
+                        isUpdating || !draft.reason.trim() || invalidEnable
+                      }
+                      onClick={() => onAction(record, nextAction)}
+                    >
+                      <PowerIcon className="size-4" />
+                      {nextAction === "enable" ? "启用检索" : "停用检索"}
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="text-muted-foreground mt-4 border-y py-3 text-xs">
+                    历史 Memory 为只读状态，不能修改检索开关。
+                  </div>
+                )}
                 {record.retrieval_updated_at ? (
                   <div className="text-muted-foreground mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs">
                     <span>{record.retrieval_policy_version}</span>
@@ -2270,16 +2502,20 @@ function EmptyDetail() {
 export function SocReviewQueueWorkbench({
   initialQueueId,
   initialCandidateId,
+  initialView,
 }: {
   initialQueueId?: string;
   initialCandidateId?: string;
+  initialView?: "queue" | "memory" | "sample";
 }) {
   const [workspaceView, setWorkspaceView] = useState<
     "queue" | "memory" | "sample"
-  >(initialCandidateId ? "memory" : "queue");
+  >(initialView ?? (initialCandidateId ? "memory" : "queue"));
   const [statusFilter, setStatusFilter] = useState<
     SocReviewQueueStatus | "all"
   >(initialQueueId ? "all" : "open");
+  const [memoryCandidateStatusFilter, setMemoryCandidateStatusFilter] =
+    useState<SocMemoryCandidate["status"] | "all">("all");
   const [selectedQueueId, setSelectedQueueId] = useState<string | null>(
     initialQueueId ?? null,
   );
@@ -2314,6 +2550,7 @@ export function SocReviewQueueWorkbench({
   const { items, isLoading, isFetching, error, refetch } = useSocReviewItems({
     status,
     limit: 50,
+    enabled: workspaceView === "queue",
   });
   const selectedItem = useMemo(
     () => items.find((item) => item.queue_id === selectedQueueId) ?? null,
@@ -2326,7 +2563,9 @@ export function SocReviewQueueWorkbench({
   const fallbackSelectedItem =
     selectedItem ?? selectedSampleItem ?? items[0] ?? null;
   const activeQueueId =
-    selectedItem?.queue_id ?? fallbackSelectedItem?.queue_id;
+    workspaceView === "queue"
+      ? (selectedItem?.queue_id ?? fallbackSelectedItem?.queue_id)
+      : undefined;
   const activeSampleReviewTarget =
     sampleReviewTarget &&
     sampleReviewTarget.queueItem.queue_id === activeQueueId &&
@@ -2341,11 +2580,16 @@ export function SocReviewQueueWorkbench({
     error: focusedMemoryCandidateError,
   } = useSocMemoryCandidate(initialCandidateId);
   const {
-    candidates: pendingMemoryCandidates,
-    isLoading: pendingMemoryCandidatesLoading,
-    error: pendingMemoryCandidatesError,
+    candidates: listedMemoryCandidates,
+    isLoading: listedMemoryCandidatesLoading,
+    isFetching: listedMemoryCandidatesFetching,
+    error: listedMemoryCandidatesError,
+    refetch: refetchListedMemoryCandidates,
   } = useSocMemoryCandidates({
-    status: "pending_review",
+    status:
+      memoryCandidateStatusFilter === "all"
+        ? null
+        : memoryCandidateStatusFilter,
     limit: 50,
     enabled: workspaceView === "memory" && !initialCandidateId,
   });
@@ -2353,8 +2597,8 @@ export function SocReviewQueueWorkbench({
     () =>
       focusedMemoryCandidate
         ? [focusedMemoryCandidate]
-        : pendingMemoryCandidates,
-    [focusedMemoryCandidate, pendingMemoryCandidates],
+        : listedMemoryCandidates,
+    [focusedMemoryCandidate, listedMemoryCandidates],
   );
   const activeMemoryCandidates = useMemo(
     () =>
@@ -2363,25 +2607,34 @@ export function SocReviewQueueWorkbench({
         : (context?.memory_candidates ?? []),
     [context?.memory_candidates, standaloneMemoryCandidates, workspaceView],
   );
-  const { records: confirmedMemoryRecords } = useSocMemoryRecords({
-    status: "confirmed",
-    limit: 200,
+  const { records: memoryRecords } = useSocMemoryRecords({
+    status: null,
+    sourceCandidateId:
+      workspaceView === "memory" ? initialCandidateId : undefined,
+    limit: workspaceView === "memory" ? 20 : 200,
+    enabled:
+      workspaceView === "queue" ||
+      (workspaceView === "memory" && !!initialCandidateId),
   });
   const relatedMemoryRecords = useMemo(() => {
     const candidateIds = new Set(
       activeMemoryCandidates.map((candidate) => candidate.candidate_id),
     );
-    return confirmedMemoryRecords.filter((record) =>
+    return memoryRecords.filter((record) =>
       candidateIds.has(record.source_candidate_id),
     );
-  }, [activeMemoryCandidates, confirmedMemoryRecords]);
+  }, [activeMemoryCandidates, memoryRecords]);
   const {
     requests: approvalRequests,
     isLoading: approvalRequestsLoading,
     isFetching: approvalRequestsFetching,
     error: approvalRequestsError,
     refetch: refetchApprovalRequests,
-  } = useSocApprovalRequests({ status: "pending", limit: 50 });
+  } = useSocApprovalRequests({
+    status: "pending",
+    limit: 50,
+    enabled: workspaceView === "queue",
+  });
   const fallbackSelectedApprovalRequest = useMemo(
     () =>
       approvalRequests.find(
@@ -2397,7 +2650,9 @@ export function SocReviewQueueWorkbench({
   const {
     request: selectedApprovalRequest,
     isLoading: approvalRequestLoading,
-  } = useSocApprovalRequest(activeApprovalRequestId);
+  } = useSocApprovalRequest(
+    workspaceView === "queue" ? activeApprovalRequestId : null,
+  );
   const activeApprovalRequest =
     selectedApprovalRequest ?? fallbackSelectedApprovalRequest;
   const closeMutation = useCloseSocReviewItem();
@@ -2691,14 +2946,14 @@ export function SocReviewQueueWorkbench({
   };
 
   const handleMemoryRetrievalDraftChange = (
-    memoryId: string,
+    record: SocMemoryRecord,
     field: keyof MemoryRetrievalDraft,
     value: string,
   ) => {
     setMemoryRetrievalDrafts((current) => ({
       ...current,
-      [memoryId]: {
-        ...(current[memoryId] ?? defaultMemoryRetrievalDraft()),
+      [record.memory_id]: {
+        ...(current[record.memory_id] ?? defaultMemoryRetrievalDraft(record)),
         [field]: value,
       },
     }));
@@ -2709,7 +2964,8 @@ export function SocReviewQueueWorkbench({
     action: SocMemoryRetrievalActivationAction,
   ) => {
     const draft =
-      memoryRetrievalDrafts[record.memory_id] ?? defaultMemoryRetrievalDraft();
+      memoryRetrievalDrafts[record.memory_id] ??
+      defaultMemoryRetrievalDraft(record);
     const reason = draft.reason.trim();
     if (!reason) {
       toast.error("请填写治理理由");
@@ -2733,100 +2989,98 @@ export function SocReviewQueueWorkbench({
             : {}),
         },
       });
-      setMemoryRetrievalDrafts((current) => ({
-        ...current,
-        [record.memory_id]: defaultMemoryRetrievalDraft(),
-      }));
+      setMemoryRetrievalDrafts((current) => {
+        const next = { ...current };
+        delete next[record.memory_id];
+        return next;
+      });
       toast.success(enabling ? "确认记忆检索已启用" : "确认记忆检索已停用");
     } catch (err) {
+      if (err instanceof SocApiError && err.status === 409) {
+        setMemoryRetrievalDrafts((current) => {
+          const next = { ...current };
+          delete next[record.memory_id];
+          return next;
+        });
+        toast.info("Memory 已被更新，页面已同步到最新版本");
+        return;
+      }
       toast.error(err instanceof Error ? err.message : "记忆检索状态更新失败");
     }
   };
 
   return (
     <div className="flex size-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-6 py-4">
-        <div>
-          <h1 className="text-xl font-semibold">SOC 复核</h1>
-          <p className="text-muted-foreground mt-0.5 text-sm">
-            复核告警研判、候选经验与抽样结果，沉淀可审计的人工结论。
-          </p>
-        </div>
-        <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/workspace/soc/memory-validation">
-              <FlaskConicalIcon className="size-4" />
-              Memory 验证
-            </Link>
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/workspace/soc/operations">
-              <ActivityIcon className="size-4" />
-              运营观察
-            </Link>
-          </Button>
-          <ToggleGroup
-            type="single"
-            variant="outline"
-            size="sm"
-            value={workspaceView}
-            onValueChange={(value) =>
-              value && setWorkspaceView(value as "queue" | "memory" | "sample")
-            }
-          >
-            <ToggleGroupItem value="queue" aria-label="告警复核队列">
-              <InboxIcon className="size-4" />
-              告警队列
-            </ToggleGroupItem>
-            <ToggleGroupItem value="memory" aria-label="候选经验审核">
-              <LibraryBigIcon className="size-4" />
-              候选经验
-            </ToggleGroupItem>
-            <ToggleGroupItem value="sample" aria-label="抽样复核批次">
-              <FlaskConicalIcon className="size-4" />
-              抽样复核
-            </ToggleGroupItem>
-          </ToggleGroup>
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/workspace/soc/normalization">
-              <WrenchIcon className="size-4" />
-              归一化运维
-            </Link>
-          </Button>
-          {workspaceView === "queue" ? (
-            <>
-              <Select
-                value={statusFilter}
-                onValueChange={(value) =>
-                  setStatusFilter(value as SocReviewQueueStatus | "all")
-                }
-              >
-                <SelectTrigger size="sm" className="w-28">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {STATUS_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void refetch()}
-                disabled={isFetching}
-              >
-                <RefreshCwIcon
-                  className={cn("size-4", isFetching && "animate-spin")}
-                />
-                刷新
-              </Button>
-            </>
-          ) : null}
-        </div>
-      </div>
+      <SocWorkspaceHeader
+        icon={ShieldCheckIcon}
+        title="SOC 审核中心"
+        description="分别处理告警结论、Memory Candidate 与抽样质量审核"
+        actions={
+          <>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              value={workspaceView}
+              onValueChange={(value) =>
+                value &&
+                setWorkspaceView(value as "queue" | "memory" | "sample")
+              }
+            >
+              <ToggleGroupItem value="queue" aria-label="告警复核队列" asChild>
+                <Link href="/workspace/soc/review/alerts">
+                  <InboxIcon className="size-4" />
+                  告警队列
+                </Link>
+              </ToggleGroupItem>
+              <ToggleGroupItem value="memory" aria-label="候选经验审核" asChild>
+                <Link href="/workspace/soc/review/memory-candidates">
+                  <LibraryBigIcon className="size-4" />
+                  候选经验
+                </Link>
+              </ToggleGroupItem>
+              <ToggleGroupItem value="sample" aria-label="抽样复核批次" asChild>
+                <Link href="/workspace/soc/review/samples">
+                  <FlaskConicalIcon className="size-4" />
+                  抽样复核
+                </Link>
+              </ToggleGroupItem>
+            </ToggleGroup>
+            {workspaceView === "queue" ? (
+              <>
+                <Select
+                  value={statusFilter}
+                  onValueChange={(value) =>
+                    setStatusFilter(value as SocReviewQueueStatus | "all")
+                  }
+                >
+                  <SelectTrigger size="sm" className="w-28">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {STATUS_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void refetch()}
+                  disabled={isFetching}
+                >
+                  <RefreshCwIcon
+                    className={cn("size-4", isFetching && "animate-spin")}
+                  />
+                  刷新
+                </Button>
+              </>
+            ) : null}
+          </>
+        }
+      />
 
       {workspaceView === "sample" ? (
         <div className="min-h-0 flex-1">
@@ -2851,7 +3105,7 @@ export function SocReviewQueueWorkbench({
                   <Badge variant="outline">{initialCandidateId}</Badge>
                 ) : (
                   <Badge variant="secondary">
-                    {standaloneMemoryCandidates.length} pending
+                    {standaloneMemoryCandidates.length} 条候选
                   </Badge>
                 )}
               </div>
@@ -2860,7 +3114,7 @@ export function SocReviewQueueWorkbench({
             {(
               initialCandidateId
                 ? focusedMemoryCandidateLoading
-                : pendingMemoryCandidatesLoading
+                : listedMemoryCandidatesLoading
             ) ? (
               <div className="text-muted-foreground flex min-h-48 items-center justify-center border text-sm">
                 正在加载候选经验...
@@ -2868,21 +3122,29 @@ export function SocReviewQueueWorkbench({
             ) : (
                 initialCandidateId
                   ? focusedMemoryCandidateError
-                  : pendingMemoryCandidatesError
+                  : listedMemoryCandidatesError
               ) ? (
               <div className="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
                 {(initialCandidateId
                   ? focusedMemoryCandidateError
-                  : pendingMemoryCandidatesError) instanceof Error
+                  : listedMemoryCandidatesError) instanceof Error
                   ? (initialCandidateId
                       ? focusedMemoryCandidateError
-                      : pendingMemoryCandidatesError
+                      : listedMemoryCandidatesError
                     )?.message
                   : "候选经验加载失败"}
               </div>
+            ) : !initialCandidateId ? (
+              <MemoryCandidateInventory
+                candidates={standaloneMemoryCandidates}
+                status={memoryCandidateStatusFilter}
+                isFetching={listedMemoryCandidatesFetching}
+                onStatusChange={setMemoryCandidateStatusFilter}
+                onRefresh={() => void refetchListedMemoryCandidates()}
+              />
             ) : standaloneMemoryCandidates.length === 0 ? (
               <div className="text-muted-foreground flex min-h-48 items-center justify-center border text-sm">
-                当前没有待审核的候选经验。
+                未找到该候选经验。
               </div>
             ) : (
               <>

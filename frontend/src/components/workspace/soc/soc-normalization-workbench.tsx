@@ -2,15 +2,12 @@
 
 import {
   AlertTriangleIcon,
-  ActivityIcon,
   BanIcon,
   CheckCircle2Icon,
   EyeIcon,
   RefreshCwIcon,
-  ShieldCheckIcon,
   WrenchIcon,
 } from "lucide-react";
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -24,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { SocWorkspaceHeader } from "@/components/workspace/soc/soc-workspace-header";
 import {
   useSocNormalizationBaselines,
   useSocNormalizationIssues,
@@ -141,59 +139,46 @@ export function SocNormalizationWorkbench() {
   const metrics = metricsQuery.metrics;
   return (
     <div className="flex size-full min-h-0 flex-col">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b px-6 py-4">
-        <div className="flex items-center gap-3">
-          <WrenchIcon className="size-5" />
-          <div>
-            <h1 className="text-xl font-semibold">归一化运维</h1>
-            <p className="text-muted-foreground mt-0.5 text-sm">
-              Normalization maintenance
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/workspace/soc/operations">
-              <ActivityIcon className="size-4" />
-              运营观察
-            </Link>
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/workspace/soc/review">
-              <ShieldCheckIcon className="size-4" />
-              告警复核
-            </Link>
-          </Button>
-          <Select
-            value={status}
-            onValueChange={(value) =>
-              setStatus(value as SocNormalizationIssueStatus | "all")
-            }
-          >
-            <SelectTrigger size="sm" className="w-28">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {STATUS_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            size="icon-sm"
-            onClick={() => void refresh()}
-            disabled={issueQuery.isFetching}
-            title="刷新"
-          >
-            <RefreshCwIcon
-              className={cn("size-4", issueQuery.isFetching && "animate-spin")}
-            />
-          </Button>
-        </div>
-      </header>
+      <SocWorkspaceHeader
+        icon={WrenchIcon}
+        title="归一化运维"
+        description="Schema 漂移、解析降级与字段覆盖维护"
+        actions={
+          <>
+            <Select
+              value={status}
+              onValueChange={(value) =>
+                setStatus(value as SocNormalizationIssueStatus | "all")
+              }
+            >
+              <SelectTrigger size="sm" className="w-28">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {STATUS_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="icon-sm"
+              onClick={() => void refresh()}
+              disabled={issueQuery.isFetching}
+              title="刷新"
+            >
+              <RefreshCwIcon
+                className={cn(
+                  "size-4",
+                  issueQuery.isFetching && "animate-spin",
+                )}
+              />
+            </Button>
+          </>
+        }
+      />
 
       <div className="grid grid-cols-2 border-b sm:grid-cols-4">
         <div className="border-r px-5 py-3">

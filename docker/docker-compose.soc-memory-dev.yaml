@@ -19,12 +19,21 @@ services:
           nocopy: true
     environment:
       NPM_CONFIG_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+      # Docker Desktop/WSL can drop bind-mount events, so keep polling but at a
+      # lower cadence than Watchpack's ~5 second boolean default.
+      WATCHPACK_POLLING: ${SOC_MEMORY_DEV_WATCHPACK_POLLING:-15000}
 
   gateway:
     environment:
+      # watchfiles enables polling automatically under WSL. The SOC validation
+      # stack uses native bind-mount events by default to avoid a permanently
+      # busy reload supervisor; set this override to true if events are lost.
+      WATCHFILES_FORCE_POLLING: ${SOC_MEMORY_DEV_WATCHFILES_FORCE_POLLING:-false}
       SOC_DATABASE_URL: sqlite:////app/backend/.deer-flow/soc-validation/memory-dev-web/soc-memory-dev.sqlite
       SOC_DEV_MEMORY_CORPUS_PATH: /app/project/validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl
       SOC_DEV_MEMORY_WORKBENCH_ENABLED: "true"
+      SOC_DEV_CORPUS_WORKBENCH_PATH: /app/project/datas/source/full_alert_2026_month_forth_sample_200.pkl
+      SOC_DEV_CORPUS_WORKBENCH_ENABLED: "true"
       SOC_ANALYZER_MODE: llm
       SOC_MEMORY_ENVIRONMENT: dev
       SOC_AUTOMATION_ENVIRONMENT: dev

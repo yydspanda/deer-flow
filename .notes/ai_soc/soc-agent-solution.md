@@ -1861,6 +1861,35 @@ flowchart TD
     RP -->|"direct flag / expired / overdue / weak"| NO
 ```
 
+### 10.3 Memory Center / 运营视图
+
+正式 Memory Center 与固定 GalaxyLab DEV 工作台是两个产品面：
+
+- `/workspace/soc/memory` 展示数据库中的所有实际 Pattern、Candidate、Memory 和 Profile 状态。
+- `/workspace/soc/dev/memory-validation/galaxylab` 只用于固定 14 条样本的开发验收。
+- `/workspace/soc/review/memory-candidates[/candidate_id]` 是候选经验的专用审核入口；告警与抽样审核
+  分别使用 `/review/alerts` 和 `/review/samples`。
+
+候选治理首页默认是全状态审计台账，不是只显示 `pending_review` 的收件箱。详情页必须直接展示“本次
+审核对象”正文、来源和证据引用；只有可编辑状态展示审核表单，已确认状态展示关联 Memory 中持久化的
+六段 `Business Lesson`，被拒绝、替代、过期或停用的候选展示只读治理历史及合法后续动作。
+
+Memory Center 以稳定 `lineage_key` 作为一级对象，24h `aggregation_key` 只是候选生成窗口。一个模式
+跨三个窗口出现 `6 + 1 + 1` 次时，页面展示一个 8 条 observation、3 个 window 的 Pattern；候选创建时
+冻结的 5 条与后续 3 条 reinforcement 分开显示，所有原始 observation 仍可审计和 replay。这样既不会
+让固定 Demo 冒充生产 Memory，也不会把长期重复模式按日期切碎。
+
+页面采用 list-first + lazy detail：进入 Memory Center 只加载 Pattern 台账，不自动打开第一条；进入
+具体 Pattern 先加载治理摘要，关联告警与研判摘要由用户显式展开，每页最多 20 条。候选、告警、抽样
+三个审核 route 只加载当前视图所需数据，短时导航缓存由 mutation invalidation 保证一致性。
+
+正式列表默认只显示可操作或仍在聚合的 Pattern；纯候选历史终态由服务端排除，页面通过“历史审计”
+显式重新查询。该过滤发生在分页前，旧 Profile 不会挤占活跃列表，但稳定 lineage 详情和审计记录仍保留。
+
+Profile/schema 升级保留审计历史。旧的待审/中间态候选只有在存在 same tenant、same source alert、
+same Profile ID 的更新版本候选时，才能通过 `SocMemoryService` 转为 `superseded`；禁止 React 或 SQL
+直接改状态。已经确认的 Memory 不自动改写、启用或失效，必须进入显式 revalidation/deprecation 流程。
+
 Rules:
 
 - LLM-discovered knowledge is candidate knowledge only.

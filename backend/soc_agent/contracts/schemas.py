@@ -326,6 +326,7 @@ class SocMemoryCandidateStatus(StrEnum):
     CONFIRMED_CANDIDATE = "confirmed_candidate"
     CONFIRMED = "confirmed"
     REJECTED = "rejected"
+    SUPERSEDED = "superseded"
     DEPRECATED = "deprecated"
     EXPIRED = "expired"
 
@@ -1927,11 +1928,39 @@ class SocMemoryCandidate(BaseModel):
     reviewed_by: ActorContext | None = None
     reviewed_at: datetime | None = None
     review_reason: str | None = None
+    superseded_by_candidate_id: str | None = Field(default=None, max_length=64)
+    superseded_at: datetime | None = None
+    supersession_reason: str | None = Field(default=None, max_length=2000)
     labels: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     proposed_by: ActorContext | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class SocMemoryCandidateSupersessionCommand(BaseModel):
+    """Replace one stale profile candidate without deleting its audit history."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_candidate_supersession_command.v1"] = "soc.memory_candidate_supersession_command.v1"
+    candidate_id: str = Field(min_length=1, max_length=64)
+    successor_candidate_id: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=2000)
+    basis: Literal["profile_upgrade_same_source_alert"] = "profile_upgrade_same_source_alert"
+
+
+class SocMemoryCandidateSupersessionResult(BaseModel):
+    """Auditable result of one profile-candidate supersession transition."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_candidate_supersession_result.v1"] = "soc.memory_candidate_supersession_result.v1"
+    candidate: SocMemoryCandidate
+    successor: SocMemoryCandidate
+    previous_status: SocMemoryCandidateStatus
+    basis: Literal["profile_upgrade_same_source_alert"]
+    superseded_at: datetime = Field(default_factory=utc_now)
 
 
 class SocMemoryRecord(BaseModel):

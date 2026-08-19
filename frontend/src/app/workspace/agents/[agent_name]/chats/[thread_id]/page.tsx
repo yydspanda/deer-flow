@@ -377,7 +377,7 @@ export default function AgentChatPage() {
                 {reviewQueueId && (
                   <Tooltip content={`返回复核队列 ${reviewQueueId}`}>
                     <Button asChild size="sm" variant="ghost">
-                      <Link href="/workspace/soc/review">
+                      <Link href="/workspace/soc/review/alerts">
                         <InboxIcon />
                         <span className="hidden max-w-36 truncate sm:inline">
                           {reviewQueueId}

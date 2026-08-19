@@ -220,10 +220,10 @@ test("runs the first DEV cohort alert through the browser workflow", async ({
     await route.fulfill({ json: current });
   });
 
-  await page.goto("/workspace/soc/memory-validation");
+  await page.goto("/workspace/soc/dev/memory-validation/galaxylab");
 
   await expect(
-    page.getByRole("heading", { name: "SOC Memory 验证" }),
+    page.getByRole("heading", { name: "DEV · GalaxyLab Memory 闭环" }),
   ).toBeVisible();
   await expect(
     page.getByText("真实历史样本 · operational replay"),
@@ -249,7 +249,7 @@ test("links a queue-less Pattern Candidate to standalone memory review", async (
     await route.fulfill({ json: candidateReadyState() });
   });
 
-  await page.goto("/workspace/soc/memory-validation");
+  await page.goto("/workspace/soc/dev/memory-validation/galaxylab");
 
   await expect(page.getByText("5/14 processed")).toBeVisible();
   await expect(
@@ -259,8 +259,31 @@ test("links a queue-less Pattern Candidate to standalone memory review", async (
     page.getByRole("link", { name: /审核 Candidate/ }),
   ).toHaveAttribute(
     "href",
-    "/workspace/soc/review?candidate_id=MC-206BBCE75A96",
+    "/workspace/soc/review/memory-candidates/MC-206BBCE75A96",
   );
+});
+
+test("shows absolute 24h Pattern counts without a threshold denominator", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  const current = candidateReadyState();
+  current.alerts[5] = {
+    ...current.alerts[5]!,
+    workflow_state: "completed",
+    pattern_support_count: 6,
+    pattern_distinct_source_count: 6,
+  };
+  await page.route("**/api/soc/dev/memory-workbench**", async (route) => {
+    await route.fulfill({ json: current });
+  });
+
+  await page.goto("/workspace/soc/dev/memory-validation/galaxylab");
+
+  const row = page.getByRole("row").filter({ hasText: "1984919" });
+  await expect(row.getByText("6 条", { exact: true })).toBeVisible();
+  await expect(row.getByText("6 来源", { exact: true })).toBeVisible();
+  await expect(row.getByText("6/5", { exact: true })).toHaveCount(0);
 });
 
 test("keeps behavior components and model status in non-overlapping tracks", async ({
@@ -275,7 +298,7 @@ test("keeps behavior components and model status in non-overlapping tracks", asy
   });
   await page.setViewportSize({ width: 1280, height: 900 });
 
-  await page.goto("/workspace/soc/memory-validation");
+  await page.goto("/workspace/soc/dev/memory-validation/galaxylab");
 
   const model = page.getByText(current.model.model_name, { exact: true });
   const thinking = page.getByText("Thinking", { exact: true });
