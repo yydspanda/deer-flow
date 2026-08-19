@@ -29,7 +29,7 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；主 LLM 只执行 bounded `AnalysisResult.v4` 节点；条件式 verifier 通用/本机默认关闭，固定 cohort 或 live 命令显式开启后由确定性 gate 触发，只独立反证 `RC-*` 方向/角色声明，不掌握流程或动作权限 |
-| 当前下一刀 | 生成当前 clean commit 的 PingAn Apple Silicon Host DEV 迁移包；内网在 `/Users/zhangjianming627/deer-flow` 运行无 Docker `check -> install -> start`，再恢复 D12-B/PI-01 真实 Provider 验证。 |
+| 当前下一刀 | 将最新 clean-commit source/private 迁移包复制到内网；在 `/Users/zhangjianming627/deer-flow` 运行无 Docker `check -> install -> start`，再恢复 D12-B/PI-01 真实 Provider 验证。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
 ## 2026-08-19 — PingAn Apple Silicon native Host DEV handoff
@@ -45,9 +45,13 @@
   安装的 Python `3.12.7`，不再作为当前 Mac 的首选路径。
 - 迁移构建预检发现冻结清单仍引用已删除的 `tenant-disposition-v1.json`；已改为当前权威
   `tenant-disposition-v2.json`，并增加“清单所有文件必须真实存在”的回归。
-- 聚焦测试 `28 passed`，Ruff 与 `git diff --check` 通过。dirty 开发态 source archive 完成
+- 聚焦测试 `32 passed`，Ruff 与 `git diff --check` 通过。dirty 开发态 source archive 完成
   `2,914/2,914` 文件哈希、manifest 和路径安全校验，新 Host DEV 驱动与 v2 策略在包内，私有配置、
   PKL、SQLite 未进入源码包；该归档明确 `final_handoff_eligible=false`，只用于正式 clean build 前验包。
+- clean-commit source/private archive 已完成独立 inspect 与叠加解包验证：两个 manifest 均有效、路径安全，
+  source `2,914/2,914`、private `6/6` 文件哈希通过，私有文件在解包后均为 `0600`；精确文件名、大小和
+  SHA-256 仍只以 Git-ignored 的同 timestamp `transfer-report-*.json` 为准。完成本条台账提交后必须再做
+  一次 clean rebuild，内网只接收最终 report 对应的归档。
 
 ## 2026-08-17 — Browser-driven GalaxyLab Memory DEV acceptance
 
