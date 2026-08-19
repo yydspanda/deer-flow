@@ -4,7 +4,7 @@
 # Stage 3 (runtime): clean image without compiler toolchain for production
 
 # UV source image (override for restricted networks that cannot reach ghcr.io)
-ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.7.20
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.1
 FROM ${UV_IMAGE} AS uv-source
 
 # ── Stage 1: Builder ──────────────────────────────────────────────────────────
@@ -28,6 +28,7 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
 # Install build tools + Node.js (build-essential needed for native Python extensions)
 RUN apt-get update && apt-get install -y \
     curl \
+    git \
     build-essential \
     gnupg \
     ca-certificates \
@@ -52,26 +53,25 @@ WORKDIR /app
 # Copy backend source code
 COPY backend ./backend
 
-# Install dependencies with cache mount.
-# Accepts comma- or whitespace-separated names from UV_EXTRAS and installs one
-# validated --extra flag per name.
+# Install dependencies with cache mount
+# `redis` is always installed because Docker Compose defaults the stream bridge
+# to Redis (DEER_FLOW_STREAM_BRIDGE_REDIS_URL); it is an optional extra elsewhere
+# so slim non-Docker installs do not pull it.
+# When UV_EXTRAS is set (comma- or whitespace-separated), installs optional dependencies.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    set -eu; \
-    EXTRAS_FLAGS=""; \
-    if [ -n "${UV_EXTRAS:-}" ]; then \
-      for raw in $(printf '%s' "$UV_EXTRAS" | tr ',' ' '); do \
-        [ -z "$raw" ] && continue; \
-        case "$raw" in \
-          [!A-Za-z]* | *[!A-Za-z0-9_-]*) \
-            echo "[build] UV_EXTRAS entry '$raw' is invalid (must match [A-Za-z][A-Za-z0-9_-]*)" >&2; \
-            exit 1; \
-            ;; \
+    sh -c 'cd backend && \
+    set -f; \
+    extras_flags=""; \
+    for extra in $(printf "%s" "$UV_EXTRAS" | tr "," " "); do \
+        case "$extra" in \
+            [!A-Za-z]* | *[!A-Za-z0-9_-]*) \
+                echo "UV_EXTRAS entry $extra is invalid (must match [A-Za-z][A-Za-z0-9_-]*)" >&2; \
+                exit 1; \
+                ;; \
         esac; \
-        EXTRAS_FLAGS="$EXTRAS_FLAGS --extra $raw"; \
-      done; \
-    fi; \
-    cd backend; \
-    UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} uv sync --all-packages $EXTRAS_FLAGS
+        extras_flags="$extras_flags --extra $extra"; \
+    done; \
+    UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} uv sync --locked --extra redis $extras_flags'
 
 # UTF-8 locale prevents UnicodeEncodeError on Chinese/emoji content in minimal
 # containers where locale configuration may be missing and the default encoding is not UTF-8.
@@ -89,7 +89,7 @@ COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
 
 EXPOSE 8001
 
-CMD ["sh", "-c", "cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001"]
+CMD ["sh", "-c", "cd backend && PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001"]
 
 # ── Stage 3: Runtime ──────────────────────────────────────────────────────────
 # Clean image without build-essential — reduces size (~200 MB) and attack surface.
