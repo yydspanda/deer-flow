@@ -98,13 +98,21 @@ python3.12 scripts/soc_pingan_macos_host_dev.py install
 python3.12 scripts/soc_pingan_macos_host_dev.py start
 ```
 
-The native `install` command intentionally runs `uv sync --locked` with the scoped
-PingAn index. A fresh Mac does not need a pre-populated uv cache: `--locked` verifies
-that `backend/uv.lock` remains unchanged while allowing missing locked artifacts to be
-downloaded from the approved internal mirror. It must not run the offline lock check
+The native `install` command keeps the canonical PyPI-authored `backend/uv.lock`
+unchanged. It uses `uv export --frozen` to derive exact versions and hashes, then
+`uv pip sync --require-hashes` to download those artifacts from the scoped PingAn
+mirror. Local workspace packages are installed separately as editable packages with
+dependency resolution disabled. This split is intentional: changing the configured
+registry changes uv's source identity, so a direct `uv sync --locked` can demand a
+re-lock even when Python and every version remain unchanged, while `uv sync --frozen`
+would follow the public artifact URLs embedded in the canonical lock.
+
+A fresh Mac therefore does not need a pre-populated uv cache and must not rewrite or
+accept changes to `backend/uv.lock`. It also must not run the offline lock check
 (`uv lock --check --offline`); that command requires every package, including
 `langchain-openviking==0.1.0`, to already exist in the local cache and belongs only to
-the separately verified offline-bundle path.
+the separately verified offline-bundle path. The generated hash-locked requirements
+and their digest are retained under `backend/.deer-flow/internal-host-dev/` for audit.
 
 The start command sources `.env.soc-dev.local`, selects
 `config.pingan-dev.local`, sets `NEXT_TELEMETRY_DISABLED=1`, and delegates to the

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -21,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 FRONTEND = ROOT / "frontend"
 RUNTIME_DIR = BACKEND / ".deer-flow" / "internal-host-dev"
+LOCKED_REQUIREMENTS = RUNTIME_DIR / "backend-requirements.lock.txt"
 UV_INDEX_PROFILE = BACKEND / "samples" / "pingan_dev" / "uv-index.env.example"
 LOCAL_ENV = ROOT / ".env.soc-dev.local"
 LOCAL_CONFIG = ROOT / "config.pingan-dev.local"
@@ -89,18 +91,65 @@ def normalize_internal_npm_registry(value: str) -> str:
 def build_install_commands(
     *, root: Path = ROOT, python_executable: str
 ) -> tuple[tuple[Path, list[str]], ...]:
+    backend = root / "backend"
+    runtime_dir = backend / ".deer-flow" / "internal-host-dev"
+    locked_requirements = runtime_dir / "backend-requirements.lock.txt"
+    virtualenv = backend / ".venv"
+    virtualenv_python = virtualenv / "bin" / "python"
     return (
         (
-            root / "backend",
+            backend,
             [
                 "uv",
-                "sync",
-                "--locked",
+                "export",
+                "--frozen",
                 "--all-packages",
                 "--extra",
                 "pingan-dev",
+                "--no-emit-workspace",
+                "--no-header",
+                "--format",
+                "requirements.txt",
+                "--output-file",
+                str(locked_requirements),
+            ],
+        ),
+        (
+            backend,
+            [
+                "uv",
+                "venv",
+                "--clear",
                 "--python",
                 python_executable,
+                str(virtualenv),
+            ],
+        ),
+        (
+            backend,
+            [
+                "uv",
+                "pip",
+                "sync",
+                "--python",
+                str(virtualenv_python),
+                "--require-hashes",
+                str(locked_requirements),
+            ],
+        ),
+        (
+            backend,
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                str(virtualenv_python),
+                "--no-deps",
+                "--editable",
+                str(backend / "packages" / "extension-api"),
+                "--editable",
+                str(backend / "packages" / "harness"),
             ],
         ),
         (
@@ -205,10 +254,19 @@ def install_dependencies(*, python_executable: str) -> dict[str, Any]:
     env["NEXT_TELEMETRY_DISABLED"] = "1"
     env["DO_NOT_TRACK"] = "1"
 
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    RUNTIME_DIR.chmod(0o700)
+    lock_hash_before = _sha256_file(BACKEND / "uv.lock")
     for cwd, command in build_install_commands(
         python_executable=report["paths"]["python"]
     ):
         subprocess.run(command, cwd=cwd, env=env, check=True)
+        if command[:2] == ["uv", "export"]:
+            _validate_locked_requirements(LOCKED_REQUIREMENTS)
+
+    lock_hash_after = _sha256_file(BACKEND / "uv.lock")
+    if lock_hash_after != lock_hash_before:
+        raise HostDevError("native Host DEV install changed backend/uv.lock")
 
     _capture(
         [
@@ -231,7 +289,10 @@ def install_dependencies(*, python_executable: str) -> dict[str, Any]:
         env=env,
     )
     report["install"] = {
-        "backend_lock_mode": "locked",
+        "backend_lock_mode": "frozen_export_hash_sync",
+        "backend_lock_sha256": lock_hash_after,
+        "backend_requirements_sha256": _sha256_file(LOCKED_REQUIREMENTS),
+        "backend_lock_changed": False,
         "backend_dependency_source": "approved_internal_registry",
         "backend_cache_prerequisite": False,
         "backend_extra": "pingan-dev",
@@ -361,6 +422,30 @@ def _read_export_profile(path: Path) -> dict[str, str]:
         value = raw_value.strip().strip('"').strip("'")
         values[name.strip()] = value
     return values
+
+
+def _validate_locked_requirements(path: Path) -> None:
+    content = path.read_text(encoding="utf-8")
+    if not content.strip():
+        raise HostDevError("locked requirements export is empty")
+    if re.search(r"(?:https?|git\+https?)://", content, flags=re.IGNORECASE):
+        raise HostDevError(
+            "locked requirements contains a direct network URL; internal mirror "
+            "installation cannot safely rewrite that source"
+        )
+    if re.search(r"(?m)^\s*-e\s+", content):
+        raise HostDevError(
+            "locked requirements unexpectedly contains a local editable package"
+        )
+    path.chmod(0o600)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _write_report(report: dict[str, Any]) -> Path:

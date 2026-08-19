@@ -7,6 +7,7 @@ import pytest
 
 from scripts.soc_pingan_macos_host_dev import (
     HostDevError,
+    _validate_locked_requirements,
     build_install_commands,
     build_start_command,
     build_start_environment,
@@ -69,20 +70,61 @@ def test_expected_pnpm_version_reads_package_manager_pin(tmp_path: Path) -> None
     assert expected_pnpm_version(tmp_path) == "10.26.2"
 
 
-def test_install_plan_is_locked_native_and_docker_free(tmp_path: Path) -> None:
+def test_install_plan_uses_frozen_hash_export_and_internal_mirror(
+    tmp_path: Path,
+) -> None:
     commands = build_install_commands(
         root=tmp_path,
         python_executable="/opt/python3.12",
     )
 
     flattened = [part for _, command in commands for part in command]
-    assert "--locked" in flattened
+    assert "export" in flattened
+    assert "--frozen" in flattened
+    assert "--no-emit-workspace" in flattened
+    assert "pip" in flattened
+    assert "sync" in flattened
+    assert "--require-hashes" in flattened
+    assert "--no-deps" in flattened
+    assert "--editable" in flattened
     assert "--frozen-lockfile" in flattened
     assert "pingan-dev" in flattened
     assert "/opt/python3.12" in flattened
+    assert "--locked" not in flattened
     assert "--offline" not in flattened
     assert all(command[:2] != ["uv", "lock"] for _, command in commands)
+    assert all(command[:2] != ["uv", "sync"] for _, command in commands)
     assert all("docker" not in part.lower() for part in flattened)
+
+
+def test_locked_requirements_accepts_pinned_hashes(tmp_path: Path) -> None:
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(
+        "example==1.2.3 --hash=sha256:" + "a" * 64 + "\n",
+        encoding="utf-8",
+    )
+
+    _validate_locked_requirements(requirements)
+
+    assert requirements.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "example @ https://packages.example.invalid/example.whl\n",
+        "-e ./packages/harness\n",
+        "\n",
+    ],
+)
+def test_locked_requirements_rejects_non_mirror_inputs(
+    tmp_path: Path, content: str
+) -> None:
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(content, encoding="utf-8")
+
+    with pytest.raises(HostDevError):
+        _validate_locked_requirements(requirements)
 
 
 def test_start_plan_skips_install_and_disables_network_side_effects() -> None:

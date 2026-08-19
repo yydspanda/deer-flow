@@ -37,13 +37,15 @@
 - 新增 `scripts/soc_pingan_macos_host_dev.py`，在不改 DeerFlow 通用启动器的前提下提供
   `check / install / start / stop`。目标是已准备 Python `3.12.7`、uv、Node `24`、仓库固定 pnpm、
   nginx `1.23` 和基础系统工具的 Apple Silicon Mac；路径从 checkout 动态解析，不写死用户目录。
-- `install` 只允许已配置的平安 PyPI/NPM 源，使用 `uv sync --locked --all-packages --extra pingan-dev`
-  和 `pnpm install --frozen-lockfile`；已知公共 NPM registry fail closed。`start` 固定
+- `install` 只允许已配置的平安 PyPI/NPM 源。backend 从 canonical `uv.lock` 执行 frozen export，使用
+  exact version/hash requirements 经内部镜像同步，再以 no-deps editable 安装 workspace；安装前后锁文件
+  hash 必须相同。frontend 使用 `pnpm install --frozen-lockfile`；已知公共 NPM registry fail closed。`start` 固定
   `--skip-install`、`UV_OFFLINE=1`、`NEXT_TELEMETRY_DISABLED=1`，复用原 Gateway/Next.js/nginx host
   launcher、SQLite 与 `LocalSandboxProvider`，不要求 Docker，也不创建第二套 Runtime。
-- 修复新 Mac 首装在访问内部 PyPI 前错误执行 `uv lock --check --offline` 的边界。原生 Host DEV 不要求
-  预热 uv cache，`uv sync --locked` 同时承担锁文件不变校验和内部镜像安装；完整离线 cache 仅属于独立
-  offline-bundle fallback。`langchain-openviking==0.1.0` 是 Harness 的正常锁定依赖，不是平安私包。
+- 修复新 Mac 首装在访问内部 PyPI 前错误执行 `uv lock --check --offline`，以及 direct `uv sync --locked`
+  因 PyPI 与内部镜像 source identity 不同要求重锁的边界。原生 Host DEV 不要求预热 uv cache，也不改写
+  canonical lock；完整离线 cache 仅属于独立 offline-bundle fallback。
+  `langchain-openviking==0.1.0` 是 Harness 的正常锁定依赖，不是平安私包。
 - 原 CPython `3.12.3` + uv + lock-cache 离线包继续作为没有可用 Python/内部源时的备用，不覆盖用户已
   安装的 Python `3.12.7`，不再作为当前 Mac 的首选路径。
 - 迁移构建预检发现冻结清单仍引用已删除的 `tenant-disposition-v1.json`；已改为当前权威

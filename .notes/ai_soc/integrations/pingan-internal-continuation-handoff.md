@@ -145,10 +145,13 @@ stat -f '%Lp %N' .env.soc-dev.local config.pingan-dev.local \
   datas/source/full_alert_2026_month_forth_sample_200.pkl
 ```
 
-原生 Host DEV 首次安装只访问已批准的平安 PyPI/NPM 源，并直接执行 `uv sync --locked`；新 Mac 不要求
-预先具备 uv 包缓存，`--locked` 会拒绝改写 `backend/uv.lock`。不要在这条路径前运行
-`uv lock --check --offline`，否则任一未缓存依赖（例如 `langchain-openviking==0.1.0`）都会在访问内部源前
-失败。备用离线安装才依赖随包校验过的完整 uv cache，并且不访问任何软件源。后续确需在
+原生 Host DEV 首次安装只访问已批准的平安 PyPI/NPM 源。canonical `backend/uv.lock` 记录的是公网
+PyPI source identity，不能因为镜像 URL 不同就在内网接受重锁。驱动使用 `uv export --frozen` 从原锁生成
+精确版本 + SHA-256 requirements，再用 `uv pip sync --require-hashes` 从平安镜像安装；本地 workspace
+随后以 `--no-deps --editable` 安装。安装前后会核对原锁 hash，发生任何变化立即失败。新 Mac 不要求
+预先具备 uv 包缓存。不要在这条路径前运行 `uv lock --check --offline`，否则任一未缓存依赖（例如
+`langchain-openviking==0.1.0`）都会在访问内部源前失败。备用离线安装才依赖随包校验过的完整 uv cache，
+并且不访问任何软件源。后续确需在
 平安内网解析新增依赖时，本项目使用 `uv` 而不是 Poetry；只对该次维护命令 source
 `backend/samples/pingan_dev/uv-index.env.example`。不要把 PingAn HTTP index 写进根 `pyproject.toml`，
 也不要未经评审提交含内网 registry 的 `uv.lock`。
