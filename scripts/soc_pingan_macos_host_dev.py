@@ -94,15 +94,6 @@ def build_install_commands(
             root / "backend",
             [
                 "uv",
-                "lock",
-                "--check",
-                "--offline",
-            ],
-        ),
-        (
-            root / "backend",
-            [
-                "uv",
                 "sync",
                 "--locked",
                 "--all-packages",
@@ -241,6 +232,8 @@ def install_dependencies(*, python_executable: str) -> dict[str, Any]:
     )
     report["install"] = {
         "backend_lock_mode": "locked",
+        "backend_dependency_source": "approved_internal_registry",
+        "backend_cache_prerequisite": False,
         "backend_extra": "pingan-dev",
         "frontend_lock_mode": "frozen-lockfile",
         "public_network_required": False,

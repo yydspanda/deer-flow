@@ -17,8 +17,9 @@ redacted there.
   reviewed PingAn operational policy. It preserves Runtime detection truth;
   enforced rules may change effective disposition/review but cannot authorize an
   external action.
-- `uv-index.env.example`: optional PingAn-intranet uv index for later dependency
-  maintenance; it is not used by the offline first install.
+- `uv-index.env.example`: scoped PingAn-intranet uv index used by the native
+  Host DEV one-time locked install and later explicit dependency maintenance;
+  it is not used by the separate offline-bundle fallback.
 - `extensions.example.json`: one DeerFlow MCP profile that registers all four
   PingAn read-only tools. It contains environment references, not credentials.
 - `d12b-test-cases.example.yaml`: value-free seven-case D12-B matrix. Copy it
@@ -96,6 +97,14 @@ python3.12 scripts/soc_pingan_macos_host_dev.py check
 python3.12 scripts/soc_pingan_macos_host_dev.py install
 python3.12 scripts/soc_pingan_macos_host_dev.py start
 ```
+
+The native `install` command intentionally runs `uv sync --locked` with the scoped
+PingAn index. A fresh Mac does not need a pre-populated uv cache: `--locked` verifies
+that `backend/uv.lock` remains unchanged while allowing missing locked artifacts to be
+downloaded from the approved internal mirror. It must not run the offline lock check
+(`uv lock --check --offline`); that command requires every package, including
+`langchain-openviking==0.1.0`, to already exist in the local cache and belongs only to
+the separately verified offline-bundle path.
 
 The start command sources `.env.soc-dev.local`, selects
 `config.pingan-dev.local`, sets `NEXT_TELEMETRY_DISABLED=1`, and delegates to the

@@ -80,6 +80,8 @@ def test_install_plan_is_locked_native_and_docker_free(tmp_path: Path) -> None:
     assert "--frozen-lockfile" in flattened
     assert "pingan-dev" in flattened
     assert "/opt/python3.12" in flattened
+    assert "--offline" not in flattened
+    assert all(command[:2] != ["uv", "lock"] for _, command in commands)
     assert all("docker" not in part.lower() for part in flattened)
 
 
