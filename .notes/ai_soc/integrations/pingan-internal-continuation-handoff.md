@@ -93,8 +93,8 @@ backend/.venv/bin/python scripts/build_pingan_macos_offline_bundle.py --inspect 
   backend/.deer-flow/internal-transfer/deer-flow-pingan-macos-arm64-offline-<timestamp>.tar.gz
 ```
 
-内网 Mac 先叠加源码与私有配置，再安装离线 backend toolchain。默认 checkout 为当前用户的
-`$HOME/deer-flow`；对当前开发者它自然解析到已确认路径，对其他同事无需修改脚本或配置：
+内网 Mac 先叠加源码与私有配置。默认 checkout 为当前用户的 `$HOME/deer-flow`；对当前开发者它自然
+解析到 `/Users/zhangjianming627/deer-flow`，对其他同事无需修改脚本或配置：
 
 ```bash
 TRANSFER_ROOT="$HOME/soc-transfer"
@@ -103,6 +103,29 @@ mkdir -p "$TRANSFER_ROOT"
 tar -xzf /approved/path/deer-flow-pingan-source-<timestamp>.tar.gz -C "$TRANSFER_ROOT"
 tar -xzf /approved/path/deer-flow-pingan-private-overlay-<timestamp>.tar.gz -C "$TRANSFER_ROOT"
 mv "$TRANSFER_ROOT/deer-flow-pingan-internal" "$TARGET_REPO"
+cd "$TARGET_REPO"
+```
+
+当前已准备 Python `3.12.7`、uv、Node `24`、pnpm 内网源和 nginx `1.23` 的 Mac 使用原生、无 Docker
+Host DEV 路径。它验证内部 registry，执行一次锁定安装，后续固定跳过依赖同步并关闭 Next.js 遥测：
+
+```bash
+cd "$TARGET_REPO"
+python3.12 scripts/soc_pingan_macos_host_dev.py check
+python3.12 scripts/soc_pingan_macos_host_dev.py install
+python3.12 scripts/soc_pingan_macos_host_dev.py start
+```
+
+停止服务：
+
+```bash
+python3.12 scripts/soc_pingan_macos_host_dev.py stop
+```
+
+只有目标 Mac 缺少可用 Python/uv 或内部 Python 源时，才安装备用离线 toolchain：
+
+```bash
+cd "$TRANSFER_ROOT"
 
 mkdir -p "$TRANSFER_ROOT/toolchain"
 tar -xzf /approved/path/deer-flow-pingan-macos-arm64-offline-<timestamp>.tar.gz \
@@ -111,15 +134,21 @@ tar -xzf /approved/path/deer-flow-pingan-macos-arm64-offline-<timestamp>.tar.gz 
   "$TARGET_REPO"
 
 cd "$TARGET_REPO"
+```
+
+无论选择哪条依赖路径，最后都动态解析 checkout、加载私有环境并检查文件权限：
+
+```bash
 eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
 source ./.env.soc-dev.local
 stat -f '%Lp %N' .env.soc-dev.local config.pingan-dev.local \
   datas/source/full_alert_2026_month_forth_sample_200.pkl
 ```
 
-首次安装不访问任何软件源。后续确需在平安内网解析新增依赖时，本项目使用 `uv` 而不是 Poetry；只对该次
-维护命令 source `backend/samples/pingan_dev/uv-index.env.example`。不要把 PingAn HTTP index 写进根
-`pyproject.toml`，也不要未经评审提交含内网 registry 的 `uv.lock`。
+原生 Host DEV 首次安装只访问已批准的平安 PyPI/NPM 源；备用离线安装不访问任何软件源。后续确需在
+平安内网解析新增依赖时，本项目使用 `uv` 而不是 Poetry；只对该次维护命令 source
+`backend/samples/pingan_dev/uv-index.env.example`。不要把 PingAn HTTP index 写进根 `pyproject.toml`，
+也不要未经评审提交含内网 registry 的 `uv.lock`。
 
 两个 archive 在外网均为 `0600`；私有覆盖包内的文件也强制为 `0600`。源码包和私有包保留独立 manifest/README，叠加解压不会相互覆盖。先核对 `transfer-report` 中的 SHA-256，再删除或隔离中转副本。
 独立源码包有意排除 `.git/`，所以以上 Mac 解包流程使用 `stat` 验证私有文件权限，输出应以 `600`

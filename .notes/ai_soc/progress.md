@@ -29,8 +29,25 @@
 | 上游策略 | DeerFlow fork 内增量开发，默认不修改上游核心代码 |
 | 数据库策略 | 生产/准生产目标仍为 PostgreSQL；当前 DEV/仿真统一使用独立本地 SOC SQLite，不收集 PostgreSQL 参数 |
 | LLM 策略 | Runtime 固定控制流；主 LLM 只执行 bounded `AnalysisResult.v4` 节点；条件式 verifier 通用/本机默认关闭，固定 cohort 或 live 命令显式开启后由确定性 gate 触发，只独立反证 `RC-*` 方向/角色声明，不掌握流程或动作权限 |
-| 当前下一刀 | 在外网 `DEV` 通过浏览器完成固定 GalaxyLab 14-alert Memory 生命周期：5 条构建 Pattern、SOC 复核工作区的独立候选经验视图审核并启用高质量 Business Lesson、1 条 held-out 验证 Memory 决策、8 条扩展复测。使用独立 SQLite、真实 LLM，关闭平安真实 Provider、租户策略和外部动作；完成后再冻结独立人工真值做 Held-out Memory Eval。 |
+| 当前下一刀 | 生成当前 clean commit 的 PingAn Apple Silicon Host DEV 迁移包；内网在 `/Users/zhangjianming627/deer-flow` 运行无 Docker `check -> install -> start`，再恢复 D12-B/PI-01 真实 Provider 验证。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
+
+## 2026-08-19 — PingAn Apple Silicon native Host DEV handoff
+
+- 新增 `scripts/soc_pingan_macos_host_dev.py`，在不改 DeerFlow 通用启动器的前提下提供
+  `check / install / start / stop`。目标是已准备 Python `3.12.7`、uv、Node `24`、仓库固定 pnpm、
+  nginx `1.23` 和基础系统工具的 Apple Silicon Mac；路径从 checkout 动态解析，不写死用户目录。
+- `install` 只允许已配置的平安 PyPI/NPM 源，使用 `uv sync --locked --all-packages --extra pingan-dev`
+  和 `pnpm install --frozen-lockfile`；已知公共 NPM registry fail closed。`start` 固定
+  `--skip-install`、`UV_OFFLINE=1`、`NEXT_TELEMETRY_DISABLED=1`，复用原 Gateway/Next.js/nginx host
+  launcher、SQLite 与 `LocalSandboxProvider`，不要求 Docker，也不创建第二套 Runtime。
+- 原 CPython `3.12.3` + uv + lock-cache 离线包继续作为没有可用 Python/内部源时的备用，不覆盖用户已
+  安装的 Python `3.12.7`，不再作为当前 Mac 的首选路径。
+- 迁移构建预检发现冻结清单仍引用已删除的 `tenant-disposition-v1.json`；已改为当前权威
+  `tenant-disposition-v2.json`，并增加“清单所有文件必须真实存在”的回归。
+- 聚焦测试 `28 passed`，Ruff 与 `git diff --check` 通过。dirty 开发态 source archive 完成
+  `2,914/2,914` 文件哈希、manifest 和路径安全校验，新 Host DEV 驱动与 v2 策略在包内，私有配置、
+  PKL、SQLite 未进入源码包；该归档明确 `final_handoff_eligible=false`，只用于正式 clean build 前验包。
 
 ## 2026-08-17 — Browser-driven GalaxyLab Memory DEV acceptance
 

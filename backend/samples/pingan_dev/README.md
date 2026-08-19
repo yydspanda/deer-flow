@@ -76,10 +76,51 @@ safe-path-family coverage. One unknown path, `other_paths`-only match, invalid
 path, path-budget overflow, or hash conflict disables the aggregate signal and
 returns the alert to normal triage.
 
-## Offline backend installation
+## Native no-Docker Host DEV
 
-The internal Mac does not need a preinstalled Python 3.12 or access to public
-PyPI. Transfer the separately generated
+Use this path when the internal Apple Silicon Mac already provides:
+
+- Python `3.12+` (`3.12.7` is accepted);
+- `uv` with the approved PingAn PyPI profile;
+- Node.js `22+`, the repository-pinned pnpm, and an approved internal NPM registry;
+- nginx `1.23+`; and
+- `git`, `make`, `curl`, `tar`, `shasum`, and `lsof`.
+
+The checked-in driver validates those prerequisites without inspecting or requiring
+Docker. It installs the locked backend and frontend dependencies from the configured
+internal registries, records a local mode-`0600` report, and starts the normal Gateway,
+Next.js frontend, and nginx directly on the Mac:
+
+```bash
+python3.12 scripts/soc_pingan_macos_host_dev.py check
+python3.12 scripts/soc_pingan_macos_host_dev.py install
+python3.12 scripts/soc_pingan_macos_host_dev.py start
+```
+
+The start command sources `.env.soc-dev.local`, selects
+`config.pingan-dev.local`, sets `NEXT_TELEMETRY_DISABLED=1`, and delegates to the
+normal host launcher with `--skip-install`. It therefore does not run `uv sync`
+or `pnpm install` on each restart. Stop it with:
+
+```bash
+python3.12 scripts/soc_pingan_macos_host_dev.py stop
+```
+
+The install report is written to:
+
+```text
+backend/.deer-flow/internal-host-dev/install-report.json
+```
+
+This DEV profile deliberately uses `LocalSandboxProvider`. Agent shell commands run
+on the trusted developer Mac, so this mode is not a multi-user or production sandbox.
+The application profile must keep public search/tools disabled and register only
+approved internal MCP/services when public egress is unavailable.
+
+## Offline backend installation fallback
+
+Use this fallback only when the internal Mac does not have a usable Python/uv or
+approved internal Python package registry. Transfer the separately generated
 `deer-flow-pingan-macos-arm64-offline-<timestamp>.tar.gz` beside the source and
 private-overlay archives. After the source has been extracted to the final
 checkout path, install the project-owned toolchain:
@@ -106,13 +147,12 @@ It uses bundled CPython `3.12.3`, bundled `uv`, and `backend/uv.lock` in strict
 offline mode. It does not use `sudo`, change the system Python, or modify the
 separate `$HOME/sec_know_model/.venv`.
 
-### Optional PingAn package index
+### PingAn package indexes
 
 The current backend uses `uv`, not Poetry, so do not add a
-`[[tool.poetry.source]]` block to `backend/pyproject.toml`. The verified offline
-bundle remains the required first-install path. If a later dependency change
-must be resolved inside the trusted intranet, explicitly source the scoped uv
-profile for that maintenance command only:
+`[[tool.poetry.source]]` block to `backend/pyproject.toml`. Native Host DEV loads
+the scoped PingAn uv profile during its one-time install. For a manual maintenance
+command, explicitly source the same profile:
 
 ```bash
 source backend/samples/pingan_dev/uv-index.env.example
@@ -122,8 +162,9 @@ It maps the internal repository to `UV_DEFAULT_INDEX` and scopes the required
 plain-HTTP exception with `UV_INSECURE_HOST=maven.paic.com.cn:8445`. Do not make
 that index the tracked repository default: it would break external builds and
 could rewrite `backend/uv.lock` with an intranet-only registry. Review any lock
-change before commit and rebuild the offline bundle whenever the accepted lock
-changes.
+change before commit. The configured pnpm registry must likewise be an approved
+internal registry; the Host DEV check rejects known public NPM registries. Rebuild
+the offline bundle whenever the accepted lock changes if the fallback path is used.
 
 ## Local setup
 

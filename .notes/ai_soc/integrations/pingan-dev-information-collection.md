@@ -27,7 +27,8 @@ composition/extensions，真实值只通过环境变量注入，不再现场增�
 - [x] `root_config`、LOCAL/DEV 环境选择和本地 OpenAI-compatible model endpoint 已从源代码确认。
 - [x] ZEUS signer 已提取为本项目内的无旧依赖实现，不再要求 import 整个 `util.util_tools`。
 - [x] Agent Platform wire contract 已从旧源码提取到本项目自包含 HTTP client，不再 import 旧项目的 `run_workflow`。
-- [x] Apple Silicon 的 CPython `3.12.3`、`uv` 和锁定依赖已打成无公网、无管理员权限的独立离线包。
+- [x] 当前内网 Apple Silicon Mac 已准备 Python `3.12.7`、uv、Node `24`、pnpm 内网源与 nginx `1.23`，
+  可使用无 Docker Host DEV；CPython `3.12.3` 离线工具链保留为备用。
 - [x] 已提供固定无业务数据的 LiteLLM `chat.completions` smoke；报告不保存 key、响应 ID 或模型原文。
 - [ ] 在内网启动 `sec_know_model` 后执行 LiteLLM smoke，并保存 `outcome=passed` 的 `0600` 报告。
 - [x] Agent Platform 的 `YHSYS` PRD URL、credential 与固定 `message.by=WANGWENBIN520` 已从旧源码确认；迁移器只把 secret 写入 Git-ignored `0600` env，真实调用仍需显式 PRD confirmation 和 `--confirm-live`。
@@ -88,7 +89,15 @@ config.pingan-dev.local               # Git ignored; real values allowed
 
 ### 3.2 Offline Python toolchain / 离线 Python 工具链
 
-内网机器无需预装 Python `3.12.3`，也无需公司 PyPI：
+当前已准备好系统工具的内网 Mac 优先执行：
+
+```bash
+python3.12 scripts/soc_pingan_macos_host_dev.py check
+python3.12 scripts/soc_pingan_macos_host_dev.py install
+```
+
+该路径只访问已批准的平安 PyPI/NPM 源，不需要 Docker。若另一台内网机器没有 Python/uv 或可用内部源，
+仍可使用独立离线包，无需预装 Python `3.12.3` 或访问公司 PyPI：
 
 - 外网构建 `deer-flow-pingan-macos-arm64-offline-<timestamp>.tar.gz`。
 - 包内固定 Apple Silicon CPython `3.12.3`、`uv` 和当前 `backend/uv.lock` 的 `pingan-dev` 依赖缓存。

@@ -124,7 +124,7 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/integrations/pingan/asset_location.py",
     "backend/soc_agent/integrations/pingan/legacy_workflow_profile.py",
     "backend/soc_agent/integrations/pingan/litellm_smoke.py",
-    "backend/soc_agent/integrations/pingan/policies/tenant-disposition-v1.json",
+    "backend/soc_agent/integrations/pingan/policies/tenant-disposition-v2.json",
     "backend/soc_agent/integrations/pingan/security_tag.py",
     "backend/soc_agent/integrations/pingan/threat_intel.py",
     "backend/soc_agent/contracts/tenant_policy.py",
@@ -134,7 +134,9 @@ REQUIRED_HANDOFF_SOURCE_PATHS = (
     "backend/soc_agent/db/migrations/versions/0022_tenant_policy_decisions.py",
     "scripts/build_pingan_macos_offline_bundle.py",
     "scripts/build_pingan_internal_transfer.py",
+    "scripts/soc_pingan_macos_host_dev.py",
     "scripts/test_build_pingan_macos_offline_bundle.py",
+    "scripts/test_soc_pingan_macos_host_dev.py",
     "validation/compact_zeus/internal_batch/README.md",
     "validation/compact_zeus/internal_batch/evaluate_pingan_shadow.py",
     "validation/compact_zeus/internal_batch/run_pingan_internal_shadow.py",
@@ -644,16 +646,26 @@ archive into the same parent directory. Read:
 - `validation/compact_zeus/internal_batch/README.md`
 - `validation/compact_zeus/e2e/README.md`
 
-Install backend dependencies with the separately transferred Apple Silicon
-offline toolchain bundle. No public network or system Python 3.12 is required:
+On an internal Mac that already has Python 3.12+, uv, Node 22+, the pinned pnpm,
+and nginx, use the native no-Docker Host DEV driver. It installs from the approved
+internal package registries and starts without repeating dependency resolution:
+
+```bash
+python3.12 scripts/soc_pingan_macos_host_dev.py check
+python3.12 scripts/soc_pingan_macos_host_dev.py install
+python3.12 scripts/soc_pingan_macos_host_dev.py start
+```
+
+The separately transferred Apple Silicon offline toolchain remains a fallback
+for a Mac without a usable Python/uv or internal Python package registry:
 
 ```bash
 tar -xzf deer-flow-pingan-macos-arm64-offline-<timestamp>.tar.gz
 deer-flow-pingan-macos-arm64-offline/install-offline.sh /absolute/path/to/deer-flow
 ```
 
-Do not run an online `uv sync` inside the restricted network. The authoritative
-commands and package verification steps are in
+Do not use a public Python or NPM registry inside the restricted network. The
+authoritative commands and package verification steps are in
 `.notes/ai_soc/integrations/pingan-internal-continuation-handoff.md`.
 """
 

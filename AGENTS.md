@@ -241,3 +241,10 @@ The authoritative design, execution ledger, and engineering contracts are
 control flow; LLMs handle bounded uncertainty; human or governed policy owns authority.
 Do not change DeerFlow core for SOC behavior unless a small generic extension point is
 required and covered by upstream-facing tests.
+
+PingAn internal Apple Silicon DEV uses `scripts/soc_pingan_macos_host_dev.py` when the
+host already provides Python `3.12+`, uv, Node `22+`, the repository-pinned pnpm, nginx
+`1.23+`, and approved PingAn PyPI/NPM registries. It delegates to the normal host launcher
+with dependency sync skipped, Next.js telemetry disabled, local SQLite, and
+`LocalSandboxProvider`; Docker is not required. The separate CPython `3.12.3` offline
+bundle remains a fallback rather than a second Runtime path.

@@ -54,6 +54,15 @@ def test_transfer_freeze_accepts_complete_handoff_inventory() -> None:
     )
 
 
+def test_required_handoff_inventory_exists_in_current_repo() -> None:
+    root = Path(__file__).resolve().parents[1]
+    missing = [
+        item for item in REQUIRED_HANDOFF_SOURCE_PATHS if not (root / item).is_file()
+    ]
+
+    assert missing == []
+
+
 def test_private_overlay_config_accepts_current_dynamic_profile(tmp_path: Path) -> None:
     _write_private_profiles(tmp_path)
 

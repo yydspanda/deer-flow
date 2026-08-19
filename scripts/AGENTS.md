@@ -6,6 +6,13 @@ synchronized environment with `uv run --no-sync`. Production Compose probes
 Gateway `/health`, and `deploy.sh` waits for all services before reporting
 success; failures print Compose status and recent Gateway logs.
 
+PingAn internal Apple Silicon development uses
+`scripts/soc_pingan_macos_host_dev.py` as a tenant-specific wrapper around the
+same host launcher. `install` may use only the configured PingAn PyPI/NPM
+registries; `start` must retain `--skip-install`, disable Next.js telemetry, and
+use `LocalSandboxProvider`. It must not add Docker as a prerequisite, hard-code a
+developer home path, or create a second Gateway/frontend/nginx implementation.
+
 ## Backend Static Analysis Commands
 
 The root `detect-thread-boundaries` target statically inventories execution
