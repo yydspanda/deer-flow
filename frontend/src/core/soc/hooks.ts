@@ -23,6 +23,7 @@ import {
   getSocMemoryCandidate,
   getSocMemoryCenterOverview,
   getSocMemoryCenterPattern,
+  getSocMemoryLineage,
   getSocMemoryRecord,
   getSocMemoryWorkbenchState,
   getSocNormalizationMetrics,
@@ -30,6 +31,7 @@ import {
   getSocApprovalRequest,
   getSocReviewContext,
   listSocMemoryCandidates,
+  listSocMemoryRecordInventory,
   listSocMemoryRecords,
   listSocNormalizationBaselines,
   listSocNormalizationIssues,
@@ -44,6 +46,7 @@ import {
   reviewSocMemoryCandidate,
   searchSocMemoryRecords,
   supersedeSocMemoryCandidate,
+  testSocMemoryRecordMatch,
   updateSocMemoryRetrievalActivation,
   updateSocNormalizationIssue,
 } from "./api";
@@ -59,6 +62,8 @@ import type {
   SocMemoryCandidateStatus,
   SocMemoryCandidateSupersessionRequest,
   SocMemoryQuery,
+  SocMemoryRecord,
+  SocMemoryRecordMatchTestRequest,
   SocMemoryRecordStatus,
   SocMemoryRevisionCandidateCreateRequest,
   SocMemoryRetrievalActivationRequest,
@@ -179,6 +184,10 @@ export const socMemoryQueryKeys = {
     ] as const,
   record: (memoryId: string | null | undefined) =>
     [...socMemoryQueryKeys.all, "record", memoryId] as const,
+  lineage: (memoryId: string | null | undefined) =>
+    [...socMemoryQueryKeys.all, "lineage", memoryId] as const,
+  inventory: (filters: Record<string, unknown>) =>
+    [...socMemoryQueryKeys.all, "inventory", filters] as const,
   search: (query: SocMemoryQuery | null | undefined) =>
     [...socMemoryQueryKeys.all, "search", query] as const,
 };
@@ -829,6 +838,81 @@ export function useSocMemoryRecord(memoryId: string | null | undefined) {
     staleTime: SOC_NAVIGATION_STALE_TIME_MS,
   });
   return { record: data ?? null, isLoading, isFetching, error };
+}
+
+export function useSocMemoryLineage(memoryId: string | null | undefined) {
+  const context = useSocWebRequestContext();
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
+    queryKey: socMemoryQueryKeys.lineage(memoryId),
+    queryFn: () => getSocMemoryLineage(memoryId!, context),
+    enabled: !!memoryId,
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
+  });
+  return {
+    lineage: data ?? null,
+    isLoading,
+    isFetching,
+    error,
+    refetch,
+  };
+}
+
+export function useSocMemoryRecordInventory({
+  status = null,
+  memoryType,
+  tenantScope,
+  tenantId,
+  retrievalEnabled,
+  search,
+  limit = 50,
+  offset = 0,
+}: {
+  status?: SocMemoryRecordStatus | null;
+  memoryType?: SocMemoryRecord["memory_type"] | null;
+  tenantScope?: string | null;
+  tenantId?: string | null;
+  retrievalEnabled?: boolean | null;
+  search?: string | null;
+  limit?: number;
+  offset?: number;
+} = {}) {
+  const context = useSocWebRequestContext();
+  const filters = {
+    status,
+    memoryType,
+    tenantScope,
+    tenantId,
+    retrievalEnabled,
+    search,
+    limit,
+    offset,
+  };
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
+    queryKey: socMemoryQueryKeys.inventory(filters),
+    queryFn: () => listSocMemoryRecordInventory({ ...filters, context }),
+    staleTime: SOC_NAVIGATION_STALE_TIME_MS,
+  });
+  return {
+    page: data ?? null,
+    records: data?.items ?? [],
+    isLoading,
+    isFetching,
+    error,
+    refetch,
+  };
+}
+
+export function useTestSocMemoryRecordMatch() {
+  const context = useSocWebRequestContext();
+  return useMutation({
+    mutationFn: ({
+      memoryId,
+      request,
+    }: {
+      memoryId: string;
+      request: SocMemoryRecordMatchTestRequest;
+    }) => testSocMemoryRecordMatch(memoryId, request, context),
+  });
 }
 
 export function useCreateSocMemoryRevisionCandidate() {

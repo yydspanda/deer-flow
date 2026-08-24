@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import Integer, and_, case, delete, func, literal, or_, select, update
+from sqlalchemy import Integer, Text, and_, case, delete, func, literal, or_, select, update
+from sqlalchemy import cast as sa_cast
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -61,6 +62,7 @@ from soc_agent.contracts import (
     SocMemoryCandidate,
     SocMemoryCandidateSourceType,
     SocMemoryCandidateStatus,
+    SocMemoryCandidateType,
     SocMemoryFeedbackEvent,
     SocMemoryHealthRecord,
     SocMemoryQuery,
@@ -1446,25 +1448,61 @@ class SqlAlchemyAlertRepository:
         self,
         *,
         status: SocMemoryRecordStatus | None = None,
+        memory_type: SocMemoryCandidateType | None = None,
         tenant_scope: str | None = None,
         tenant_id: str | None = None,
         source_candidate_id: str | None = None,
+        source_run_id: str | None = None,
+        source_alert_id: str | None = None,
         retrieval_enabled: bool | None = None,
+        search: str | None = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[SocMemoryRecord]:
         with self._session_factory() as session:
             query = select(SocMemoryRecordRow)
             if status is not None:
                 query = query.where(SocMemoryRecordRow.status == status.value)
+            if memory_type is not None:
+                query = query.where(SocMemoryRecordRow.memory_type == memory_type.value)
             if tenant_scope is not None:
                 query = query.where(SocMemoryRecordRow.tenant_scope == tenant_scope)
             if tenant_id is not None:
                 query = query.where(SocMemoryRecordRow.tenant_id == tenant_id)
             if source_candidate_id is not None:
                 query = query.where(SocMemoryRecordRow.source_candidate_id == source_candidate_id)
+            if source_run_id is not None:
+                query = query.where(SocMemoryRecordRow.source_run_id == source_run_id)
+            if source_alert_id is not None:
+                query = query.where(SocMemoryRecordRow.source_alert_id == source_alert_id)
             if retrieval_enabled is not None:
                 query = query.where(SocMemoryRecordRow.retrieval_enabled == retrieval_enabled)
-            result = session.execute(query.order_by(SocMemoryRecordRow.updated_at.desc()).limit(limit))
+            if search is not None and search.strip():
+                pattern = f"%{search.strip()}%"
+                facet_match = (
+                    select(SocMemoryRecordFacetRow.facet_id)
+                    .where(
+                        SocMemoryRecordFacetRow.memory_id == SocMemoryRecordRow.memory_id,
+                        or_(
+                            SocMemoryRecordFacetRow.facet_key.ilike(pattern),
+                            SocMemoryRecordFacetRow.facet_value.ilike(pattern),
+                        ),
+                    )
+                    .exists()
+                )
+                query = query.where(
+                    or_(
+                        SocMemoryRecordRow.memory_id.ilike(pattern),
+                        SocMemoryRecordRow.source_candidate_id.ilike(pattern),
+                        SocMemoryRecordRow.source_run_id.ilike(pattern),
+                        SocMemoryRecordRow.source_alert_id.ilike(pattern),
+                        SocMemoryRecordRow.summary.ilike(pattern),
+                        SocMemoryRecordRow.content.ilike(pattern),
+                        sa_cast(SocMemoryRecordRow.record_payload, Text).ilike(pattern),
+                        facet_match,
+                    )
+                )
+            result = session.execute(query.order_by(SocMemoryRecordRow.updated_at.desc()).offset(offset).limit(limit))
             return [SocMemoryRecord.model_validate(row.record_payload) for row in result.scalars()]
 
     def find_memory_records_by_candidate_ids(

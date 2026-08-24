@@ -9,6 +9,7 @@ import {
   ChevronRightIcon,
   ClipboardCheckIcon,
   CircleIcon,
+  FilePenLineIcon,
   FlaskConicalIcon,
   InboxIcon,
   KeyRoundIcon,
@@ -2626,6 +2627,14 @@ function MemoryRetrievalActivationSection({
                         ? "精确匹配后可参与结论"
                         : "仅供模型参考"}
                     </Badge>
+                    <Button size="sm" variant="outline" asChild>
+                      <Link
+                        href={`/workspace/soc/memory/records/${encodeURIComponent(record.memory_id)}`}
+                      >
+                        <FilePenLineIcon className="size-4" />
+                        查看 / 修订 Memory
+                      </Link>
+                    </Button>
                   </div>
                 </div>
                 <p className="text-muted-foreground mt-2 text-xs leading-5">

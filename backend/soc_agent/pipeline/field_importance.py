@@ -79,7 +79,7 @@ class EvidenceFieldImportanceRegistry:
                     continue
                 target_value = target_cache.setdefault(
                     rule.expected_target,
-                    _resolve_model_path(alert, rule.expected_target),
+                    _resolve_expected_target(alert, rule.expected_target),
                 )
                 if _has_value(target_value):
                     continue
@@ -155,6 +155,25 @@ def _resolve_model_path(value: Any, path: str) -> Any:
         if current is None:
             return None
     return current
+
+
+def _resolve_expected_target(value: Any, path: str) -> Any:
+    direct_value = _resolve_model_path(value, path)
+    if _has_value(direct_value):
+        return direct_value
+
+    parent_path, separator, field_name = path.rpartition(".")
+    if not separator:
+        return direct_value
+    parent = _resolve_model_path(value, parent_path)
+    observations = parent.get("observations") if isinstance(parent, Mapping) else getattr(parent, "observations", None)
+    if not isinstance(observations, Sequence) or isinstance(observations, (str, bytes)):
+        return direct_value
+    for observation in observations:
+        candidate = observation.get(field_name) if isinstance(observation, Mapping) else getattr(observation, field_name, None)
+        if _has_value(candidate):
+            return candidate
+    return direct_value
 
 
 def _resolve_payload_path(payload: Mapping[str, Any], path: str) -> Any:

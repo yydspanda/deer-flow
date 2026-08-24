@@ -18,6 +18,7 @@ import {
   dryRunSocApprovedAction,
   expireSocApprovalRequest,
   executeSocApprovedAction,
+  getSocMemoryLineage,
   getSocApprovalRequest,
   getSocDispositionSampleReviewInbox,
   getSocNormalizationMetrics,
@@ -26,6 +27,7 @@ import {
   listSocApprovalRequests,
   listSocDispositionSampleCampaigns,
   listSocMemoryCandidates,
+  listSocMemoryRecordInventory,
   listSocMemoryRecords,
   listSocNormalizationBaselines,
   listSocNormalizationIssues,
@@ -34,6 +36,7 @@ import {
   rejectSocApprovalRequest,
   reviewSocMemoryCandidate,
   searchSocMemoryRecords,
+  testSocMemoryRecordMatch,
   updateSocMemoryRetrievalActivation,
   updateSocNormalizationIssue,
 } from "@/core/soc/api";
@@ -653,7 +656,53 @@ describe("SOC memory API", () => {
     );
     expect(mockedFetch).toHaveBeenNthCalledWith(
       2,
-      "/api/soc/memory/records?status=confirmed&tenant_scope=tenant&tenant_id=tenant-1&source_candidate_id=MC-1&retrieval_enabled=true&limit=10",
+      "/api/soc/memory/records?status=confirmed&tenant_scope=tenant&tenant_id=tenant-1&source_candidate_id=MC-1&retrieval_enabled=true&limit=10&offset=0",
+    );
+  });
+
+  test("searches the operator Memory inventory with pagination", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, {
+        items: [],
+        limit: 50,
+        offset: 50,
+        has_more: false,
+      }),
+    );
+
+    await listSocMemoryRecordInventory({
+      status: null,
+      sourceAlertId: "2448168",
+      search: "OpenVPN T1190",
+      retrievalEnabled: false,
+      limit: 50,
+      offset: 50,
+    });
+
+    expect(mockedFetch).toHaveBeenCalledWith(
+      "/api/soc/memory/records?source_alert_id=2448168&retrieval_enabled=false&search=OpenVPN+T1190&limit=50&offset=50",
+    );
+  });
+
+  test("loads lineage and runs a read-only Memory match test", async () => {
+    mockedFetch
+      .mockResolvedValueOnce(jsonResponse(200, { record: {}, uses: [] }))
+      .mockResolvedValueOnce(jsonResponse(200, { matched: false }));
+
+    await getSocMemoryLineage("MEM/1");
+    await testSocMemoryRecordMatch("MEM/1", { alert_id: "2448168" });
+
+    expect(mockedFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/soc/memory/records/MEM%2F1/lineage",
+    );
+    expect(mockedFetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/soc/memory/records/MEM%2F1/match-test",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ alert_id: "2448168" }),
+      }),
     );
   });
 

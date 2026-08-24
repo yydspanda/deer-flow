@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Sequence
 
 from soc_agent.contracts import (
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
+    SocMemoryCandidateType,
     SocMemoryQuery,
     SocMemoryRecord,
     SocMemoryRecordStatus,
@@ -126,24 +128,47 @@ class InMemoryMemoryCandidateRepository:
         self,
         *,
         status: SocMemoryRecordStatus | None = None,
+        memory_type: SocMemoryCandidateType | None = None,
         tenant_scope: str | None = None,
         tenant_id: str | None = None,
         source_candidate_id: str | None = None,
+        source_run_id: str | None = None,
+        source_alert_id: str | None = None,
         retrieval_enabled: bool | None = None,
+        search: str | None = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[SocMemoryRecord]:
         items = list(self._records.values())
         if status is not None:
             items = [item for item in items if item.status == status]
+        if memory_type is not None:
+            items = [item for item in items if item.memory_type == memory_type]
         if tenant_scope is not None:
             items = [item for item in items if item.tenant_scope == tenant_scope]
         if tenant_id is not None:
             items = [item for item in items if item.tenant_id == tenant_id]
         if source_candidate_id is not None:
             items = [item for item in items if item.source_candidate_id == source_candidate_id]
+        if source_run_id is not None:
+            items = [item for item in items if item.source.run_id == source_run_id]
+        if source_alert_id is not None:
+            items = [item for item in items if item.source.alert_id == source_alert_id]
         if retrieval_enabled is not None:
             items = [item for item in items if item.retrieval_enabled is retrieval_enabled]
-        return sorted(items, key=lambda item: item.updated_at, reverse=True)[:limit]
+        if search is not None and search.strip():
+            needle = search.strip().casefold()
+            items = [
+                item
+                for item in items
+                if needle
+                in json.dumps(
+                    item.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).casefold()
+            ]
+        return sorted(items, key=lambda item: item.updated_at, reverse=True)[offset : offset + limit]
 
     def find_memory_records_by_candidate_ids(
         self,

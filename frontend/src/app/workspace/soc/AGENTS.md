@@ -89,11 +89,19 @@ Runtime decisions, construct Memory, or infer action authority.
   must explain that old retrieval is suspended immediately, current/historical verdicts
   are not rewritten, and the existing Candidate review flow owns the replacement
   Business Lesson and applicability. React must never edit a confirmed record in place.
+  The Memory record detail may also start an `operator_direct` revision without a source
+  use. It must identify that provenance explicitly and never fabricate a run/use pair.
   A rejected revision leaves the predecessor disabled and must not expose the generic
-  `reopen` action; direct the analyst to create a fresh revision from a later exact use.
+  `reopen` action; direct the analyst to create a fresh governed revision.
 - Memory Center is list-first and consumes only the server lineage read model. One row is
   one stable Pattern across windows; observations, distinct sources, window count,
   frozen candidate snapshot, and later reinforcement remain separate values.
+- Keep Pattern inventory and confirmed Memory record inventory distinct. `/memory`
+  manages Pattern lineages; `/memory/records` searches actual `MEM-*` records by IDs,
+  lesson text, source lineage, and facets. Record detail owns Business Lesson,
+  applicability, retrieval activation, usage history, read-only match diagnostics, and
+  versioned revision entry. A confirmed Candidate/alert action must link to this record
+  detail rather than presenting a terminal Candidate as still awaiting review.
 
 ## DEV Validation Surfaces
 

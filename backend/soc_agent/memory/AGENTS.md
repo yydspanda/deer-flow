@@ -104,13 +104,15 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
 - New analyst outcomes may reinforce, contradict, or propose a revision to an existing
   Memory. Keep observations and proposals append-only; do not mutate an old lesson or
   silently re-enable a deprecated/expired record.
-- When an analyst discovers a bad Memory from a run that actually used it, the only
-  manual correction entry is `SocMemoryService.propose_revision_candidate()`. The
-  command must carry the current record version, exact source run, typed issue, reason,
-  authenticated actor, and idempotency key. The service verifies the persisted
-  `SocMemoryUseRecord`, then atomically suspends retrieval and creates one
-  `memory_revision` candidate with immutable predecessor/use lineage.
-- An `applicability_too_broad` revision must reload that exact source `AnalysisRun` and
+- `SocMemoryService.propose_revision_candidate()` is the only manual correction
+  boundary and supports two explicit provenance modes. `observed_use` carries an exact
+  source run and must verify the persisted `SocMemoryUseRecord` plus content/facet
+  hashes. `operator_direct` starts from the Memory inventory without inventing a use;
+  it freezes the current predecessor version/hashes and retains the predecessor's
+  source run/alert when available. Both modes require typed issue, substantive reason,
+  authenticated actor, idempotency key, and expected record version, then atomically
+  suspend retrieval and create one `memory_revision` candidate.
+- An `applicability_too_broad` revision must reload the traceable source `AnalysisRun` and
   rebuild facets/applicability through the current resolved Profile. Copying the predecessor
   scope would preserve the bug and is forbidden. If the run or sufficient canonical scope is
   unavailable, fail closed and leave the predecessor unchanged.
@@ -125,13 +127,18 @@ the Memory sections of `.notes/ai_soc/soc-agent-solution.md` before changing it.
   reject attempts to re-enable it. Rejecting or expiring the revision closes that flag
   but leaves the predecessor disabled; an explicit activation mutation is required.
   Rejected revision candidates cannot be reopened with stale lineage. Start a new
-  revision from a persisted exact Memory use instead.
+  revision through a later exact Memory use or a new authenticated inventory review.
 - Contradiction opens governed review and may suspend retrieval according to policy.
   A revision creates explicit supersession/version lineage so later analysis can show
   which Memory changed what decision and why.
 - Pattern windows, candidate snapshots, later reinforcement, and distinct-source counts
   are separate persisted concepts. UI aggregation is a projection, not the source of
   truth.
+- Operator inventory search is not Runtime retrieval. The record list may search Memory,
+  Alert, Run, Candidate, Business Lesson, and typed facet fields, while
+  `SocMemoryService.find_relevant_records()` remains the only production retrieval
+  policy. A record match test evaluates one persisted run through that same retrieval
+  gate in an isolated read-only projection; it must not call the LLM or write state.
 
 ## Evaluation And DEV Surfaces
 

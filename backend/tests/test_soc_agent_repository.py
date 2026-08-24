@@ -737,6 +737,10 @@ def test_sqlalchemy_memory_candidate_repository_persists_and_filters_candidates(
     assert repository.list_memory_records(status=SocMemoryRecordStatus.CONFIRMED) == [review.memory_record]
     assert repository.list_memory_records(tenant_scope="pingan") == [review.memory_record]
     assert repository.list_memory_records(source_candidate_id=candidate.candidate_id) == [review.memory_record]
+    assert repository.list_memory_records(source_alert_id="ALT-MEM-1") == [review.memory_record]
+    assert repository.list_memory_records(search="ALT-MEM-1") == [review.memory_record]
+    assert repository.list_memory_records(search="pingan") == [review.memory_record]
+    assert repository.list_memory_records(search="does-not-exist") == []
     assert repository.list_memory_records(retrieval_enabled=True) == []
     activation = service.set_retrieval_activation(
         SocMemoryRetrievalActivationCommand(

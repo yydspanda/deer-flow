@@ -217,6 +217,12 @@ export function SocMemoryCenter({
         description="管理重复模式、待审经验、确认 Memory 与 Profile 演进"
         actions={
           <>
+            <Button size="sm" variant="outline" asChild>
+              <Link href="/workspace/soc/memory/records">
+                <DatabaseIcon className="size-4" />
+                Memory 台账
+              </Link>
+            </Button>
             <Button size="sm" asChild>
               <Link href="/workspace/soc/review/memory-candidates">
                 <ShieldCheckIcon className="size-4" />
@@ -467,7 +473,17 @@ export function SocMemoryCenter({
                           </Badge>
                         </div>
                       </div>
-                      {detail.pattern.candidate ? (
+                      {detail.pattern.memory_record ? (
+                        <Button size="sm" asChild>
+                          <Link
+                            href={`/workspace/soc/memory/records/${encodeURIComponent(detail.pattern.memory_record.memory_id)}`}
+                          >
+                            <DatabaseIcon className="size-4" />
+                            查看 / 修订 Memory
+                            <ChevronRightIcon className="size-4" />
+                          </Link>
+                        </Button>
+                      ) : detail.pattern.candidate ? (
                         <Button
                           variant={
                             ["pending_review", "confirmed_candidate"].includes(

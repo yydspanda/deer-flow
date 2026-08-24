@@ -27,12 +27,15 @@ from soc_agent.contracts import (
     SocMemoryCandidateStatus,
     SocMemoryCandidateSupersessionCommand,
     SocMemoryCandidateSupersessionResult,
+    SocMemoryCandidateType,
     SocMemoryCenterOverview,
     SocMemoryCenterPatternDetail,
     SocMemoryDecisionDirective,
     SocMemoryLineageReport,
     SocMemoryQuery,
     SocMemoryRecord,
+    SocMemoryRecordMatchTestCommand,
+    SocMemoryRecordMatchTestResult,
     SocMemoryRecordStatus,
     SocMemoryRetrievalActivationAction,
     SocMemoryRetrievalActivationCommand,
@@ -74,6 +77,9 @@ class MemoryCandidateListResponse(BaseModel):
 
 class MemoryRecordListResponse(BaseModel):
     items: list[SocMemoryRecord]
+    limit: int
+    offset: int
+    has_more: bool
 
 
 class MemoryRevisionProposalListResponse(BaseModel):
@@ -162,9 +168,22 @@ class MemoryRevisionCandidateCreateRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
     expected_record_version: int = Field(ge=1)
-    source_run_id: str = Field(min_length=1, max_length=64)
+    source_run_id: str | None = Field(default=None, min_length=1, max_length=64)
     issue_type: SocMemoryRevisionIssueType
     reason: str = Field(min_length=10, max_length=4000)
+
+
+class MemoryRecordMatchTestRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    run_id: str | None = Field(default=None, min_length=1, max_length=64)
+    alert_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def require_one_run_locator(self) -> MemoryRecordMatchTestRequest:
+        if (self.run_id is None) == (self.alert_id is None):
+            raise ValueError("provide exactly one of run_id or alert_id")
+        return self
 
 
 class MemoryCandidateSupersessionRequest(BaseModel):
@@ -487,22 +506,36 @@ def draft_memory_business_lesson(
 def list_memory_records(
     service: MemoryServiceDep,
     status: SocMemoryRecordStatus | None = Query(default=SocMemoryRecordStatus.CONFIRMED),
+    memory_type: SocMemoryCandidateType | None = Query(default=None),
     tenant_scope: str | None = Query(default=None),
     tenant_id: str | None = Query(default=None),
     source_candidate_id: str | None = Query(default=None),
+    source_run_id: str | None = Query(default=None),
+    source_alert_id: str | None = Query(default=None),
     retrieval_enabled: bool | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=500),
     limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ) -> MemoryRecordListResponse:
     try:
+        records = service.list_records(
+            status=status,
+            memory_type=memory_type,
+            tenant_scope=tenant_scope,
+            tenant_id=tenant_id,
+            source_candidate_id=source_candidate_id,
+            source_run_id=source_run_id,
+            source_alert_id=source_alert_id,
+            retrieval_enabled=retrieval_enabled,
+            search=search,
+            limit=limit + 1,
+            offset=offset,
+        )
         return MemoryRecordListResponse(
-            items=service.list_records(
-                status=status,
-                tenant_scope=tenant_scope,
-                tenant_id=tenant_id,
-                source_candidate_id=source_candidate_id,
-                retrieval_enabled=retrieval_enabled,
-                limit=limit,
-            )
+            items=records[:limit],
+            limit=limit,
+            offset=offset,
+            has_more=len(records) > limit,
         )
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -514,6 +547,31 @@ def get_memory_record(memory_id: str, service: MemoryServiceDep) -> SocMemoryRec
         return service.get_record(memory_id)
     except SocServiceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceNotImplementedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post(
+    "/records/{memory_id}/match-test",
+    response_model=SocMemoryRecordMatchTestResult,
+)
+def test_memory_record_match(
+    memory_id: str,
+    payload: MemoryRecordMatchTestRequest,
+    service: MemoryServiceDep,
+) -> SocMemoryRecordMatchTestResult:
+    try:
+        return service.test_record_match(
+            SocMemoryRecordMatchTestCommand(
+                memory_id=memory_id,
+                run_id=payload.run_id,
+                alert_id=payload.alert_id,
+            )
+        )
+    except SocServiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SocServiceConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SocServiceNotImplementedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

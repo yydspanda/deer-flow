@@ -32,6 +32,38 @@
 | 当前下一刀 | 将最新 clean-commit source/private 迁移包复制到内网；在 `/Users/zhangjianming627/deer-flow` 运行无 Docker `check -> install -> start`，再恢复 D12-B/PI-01 真实 Provider 验证。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
+## 2026-08-25 — Memory governance completion and evidence-gap correction
+
+- Confirmed Memory 现有独立可搜索台账、详情、使用历史、召回治理、只读 match test 和版本化修订入口；
+  `operator_direct` 修订不再伪造后续 Memory use，仍保留 predecessor hash/version、CAS 和待审 Candidate
+  边界。
+- Evidence Coverage 修正 canonical aggregate 与 typed `observations[]` 的等价覆盖判断。某条 Message 的
+  高价值 HTTP 字段已进入 observation 时不再误报为 unmapped gap，也不会把多条独立会话拼成虚假的
+  顶层 HTTP 对象；真实冻结 Run `2491043` 重算后 `high_value_gaps=[]`。
+- `analysis.evidence_gaps` / `analysis.manual_checks` 作为未来 selected-case SOC Lead Agent 的调查目标与
+  候选方法已登记到 Deferred；当前不修改 Runtime/Agent/Enrichment Planner，也不允许自由文本直接
+  驱动 MCP。
+- 验证：Memory、Evidence Coverage、PingAn parsing、Decision Policy 与架构聚焦回归 `127 passed`；
+  内网迁移构建器、macOS Host DEV、PingAn profile/smoke/path 专项回归 `70 passed`；前端本轮既有
+  ESLint/TypeScript、Rstest `1031 passed` 和 Playwright 修订/台账路径继续通过。
+
+## 2026-08-24 — Memory record inventory and operator-direct revision
+
+- 新增正式 `/workspace/soc/memory/records` 台账与 `MEM-*` 详情页。Operator inventory 可搜索
+  Memory/Alert/Run/Candidate ID、Business Lesson、Rule/场景/CVE/服务及 typed facets，并按 record 与
+  retrieval 状态分页筛选；Pattern Center 继续只管理模式聚合，两类对象不再混用。
+- 详情页统一展示六段 Business Lesson、typed applicability、来源/hash lineage、召回治理和
+  `SocMemoryUseRecord` 历史。已确认 Candidate 与语料告警不再显示“立即审核”，而是跳转“查看/修订
+  Memory”；终态 Candidate 页面也提供 record 详情入口。
+- `SocMemoryService.propose_revision_candidate()` 新增显式 `operator_direct` provenance。运营人员可从台账
+  主动创建修订，不要求伪造后续 Memory use；Service 冻结当前 predecessor version/content/facets hash，
+  CAS 暂停旧 retrieval，并创建普通待审 revision Candidate。原 `observed_use` 路径继续严格核验 exact
+  use/run/hash；`applicability_too_broad` 两种入口都必须有可回放 source run 并由当前 Profile 重建范围。
+- 新增 read-only Match Test：按 Alert ID 或 Run ID 读取持久化 LLM request，在隔离单-record repository 中
+  复用生产 Retrieval v2 全部门禁，返回命中、score、facet 与排除原因；不调用模型、不写状态。
+- 验证：后端 Memory revision/router/repository 聚焦回归 `60 passed`；前端 ESLint/TypeScript 通过，
+  Rstest `1031 passed`；Playwright 覆盖 exact-use 与 operator-direct 两种修订入口。
+
 ## 2026-08-24 — Corpus DEV interactive execution and versioned rerun
 
 - 全量语料工作台升级为 `soc.corpus_dev_workbench.v3` 的交互探索模式：列表仍按 canonical event time

@@ -1919,18 +1919,21 @@ PingAn raw field aliases to generic Runtime or grants disposition/action authori
 
 ### 10.3 Memory Center / 运营视图
 
-#### Used-Memory Correction / 已使用记忆纠错
+#### Governed Memory Revision / 受治理记忆修订
 
-当运营人员跑完一条告警，发现本次命中的确认 Memory 有问题时，不允许回到数据库或 Memory Center
-直接覆盖正文。产品提供从告警结果中 `M-*` 记录直达的“纠正此 Memory”工作流：
+确认 Memory 永远不能在数据库或页面中原地覆盖。产品提供两种进入同一个版本化修订服务的入口：运营
+人员可从本次告警使用过的 `M-*` 进入，也可在 Memory 台账中主动检查后直接发起；后者必须明确记录为
+`operator_direct`，不能伪造一条 `SocMemoryUseRecord`。
 
 ```mermaid
 flowchart LR
-    A["🚨 Alert Run<br/>本次已使用 MEM-X vN"] --> F["🚩 Flag issue<br/>结论错误 / 范围过宽 / 经验不完整"]
-    F --> V{"🔐 Service validation<br/>actor + idempotency + expected version<br/>exact SocMemoryUseRecord + hashes"}
+    A["🚨 Alert Run<br/>本次已使用 MEM-X vN"] --> F["🚩 observed_use<br/>实际 Use + Run + Alert"]
+    O["📚 Memory Inventory<br/>运营主动检查 MEM-X"] --> D["🧑‍💼 operator_direct<br/>当前 Record + 原始 source lineage"]
+    F --> V{"🔐 Service validation<br/>actor + idempotency + expected version<br/>typed issue + hashes"}
+    D --> V
     V -->|invalid| X["⛔ Reject / Conflict<br/>不改任何状态"]
     V -->|valid| S["⏸️ Suspend predecessor<br/>CAS 关闭旧 Memory retrieval"]
-    S --> C["🧬 Revision Candidate<br/>保存旧 Memory、Use、Run、Alert 血缘"]
+    S --> C["🧬 Revision Candidate<br/>保存 origin、旧 Memory 及可用的 Use/Run/Alert 血缘"]
     C --> Q{"范围过宽?"}
     Q -->|yes| P["🧩 Current Tenant Profile<br/>从 exact source Run 重算 facets + applicability"]
     Q -->|no| K["📸 Predecessor scope snapshot"]
@@ -1943,13 +1946,13 @@ flowchart LR
 ```
 
 该流程只修订未来可复用经验，不回写当前告警的 Base/Memory/Effective Decision，也不删除过去受该
-Memory 影响的运行。每次修订都能回答：哪条告警发现问题、当时用了哪个精确版本、谁暂停了旧经验、
-新 Candidate 如何审核、最终由哪个 Memory 替代。入口 API 为
+Memory 影响的运行。每次修订都能回答：是实际命中还是运营主动检查发现、基于哪个精确版本、谁暂停了
+旧经验、新 Candidate 如何审核、最终由哪个 Memory 替代。入口 API 为
 `POST /api/soc/memory/records/{memory_id}/revision-candidates`；确认替代仍走统一
 `SocMemoryService.review_candidate()`，不会产生第二套审核实现。修订待审期间通用 retrieval activation
 不能重新打开旧版本；驳回或过期只结束 `revision_pending`，不会自动恢复旧经验。修订候选也不能沿用过期
-lineage 重新打开，必须从一次真实 Memory 命中重新发起。同一 Memory 同时只能有一个开放修订，第二个
-并行请求直接返回 conflict。
+lineage 重新打开，必须重新发起受治理修订。同一 Memory 同时只能有一个开放修订，第二个并行请求直接
+返回 conflict。
 
 `applicability_too_broad` 不是“复制旧 Memory 再改一句说明”。Service 必须加载发现误命中的 exact
 `AnalysisRun`，由当前 tenant Profile 重新投影 canonical behavior facets 和 typed applicability；Run
@@ -1959,7 +1962,10 @@ lineage 重新打开，必须从一次真实 Memory 命中重新发起。同一 
 
 正式 Memory Center 与固定 GalaxyLab DEV 工作台是两个产品面：
 
-- `/workspace/soc/memory` 展示数据库中的所有实际 Pattern、Candidate、Memory 和 Profile 状态。
+- `/workspace/soc/memory` 展示数据库中的实际 Pattern lineage、Candidate 和 Profile 演进状态。
+- `/workspace/soc/memory/records` 是确认 Memory 台账，可按 Memory/Alert/Run/Candidate ID、Rule、场景、
+  Business Lesson、CVE、服务和 typed facets 搜索；详情集中展示匹配范围、召回治理、Use/Feedback lineage
+  与版本化修订入口。
 - `/workspace/soc/dev/memory-validation/galaxylab` 只用于固定 14 条样本的开发验收。
 - `/workspace/soc/review/memory-candidates[/candidate_id]` 是候选经验的专用审核入口；告警与抽样审核
   分别使用 `/review/alerts` 和 `/review/samples`。
@@ -1977,6 +1983,11 @@ generic 默认 24h，PingAn Profile v6 默认 30d。一个模式
 页面采用 list-first + lazy detail：进入 Memory Center 只加载 Pattern 台账，不自动打开第一条；进入
 具体 Pattern 先加载治理摘要，关联告警与研判摘要由用户显式展开，每页最多 20 条。候选、告警、抽样
 三个审核 route 只加载当前视图所需数据，短时导航缓存由 mutation invalidation 保证一致性。
+
+Memory 台账使用独立 operator inventory query，不复用 Runtime 的相关性搜索语义。记录详情可用 Alert ID
+或 Run ID 做只读 Match Test：系统读取当次已持久化 `LLMAnalysisRequest`，通过生产相同的 Profile、强锚点、
+applicability、activation、validity 和 score gate 只测试指定 Memory；不调用 LLM、不写 DB、不改变任何
+Decision。该诊断用于解释“为什么命中/没命中”，不能绕过正式 Runtime。
 
 正式列表默认只显示可操作或仍在聚合的 Pattern；纯候选历史终态由服务端排除，页面通过“历史审计”
 显式重新查询。该过滤发生在分页前，旧 Profile 不会挤占活跃列表，但稳定 lineage 详情和审计记录仍保留。

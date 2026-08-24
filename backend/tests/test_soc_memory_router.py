@@ -81,6 +81,15 @@ class FakeMemoryRevisionService:
         )
 
 
+class FakeMemoryMatchTestService:
+    def __init__(self) -> None:
+        self.commands: list[object] = []
+
+    def test_record_match(self, command: object) -> object:
+        self.commands.append(command)
+        return SimpleNamespace(memory_id=getattr(command, "memory_id"))
+
+
 def test_soc_memory_api_lists_candidates_by_review_filters() -> None:
     repository = InMemoryMemoryCandidateRepository()
     service = SocMemoryService(candidate_repository=repository)
@@ -198,6 +207,43 @@ def test_soc_memory_api_creates_revision_candidate_from_exact_run() -> None:
     assert "soc_admin" in context.actor.roles
 
 
+def test_soc_memory_api_allows_operator_direct_revision() -> None:
+    service = FakeMemoryRevisionService()
+
+    soc_memory.create_memory_revision_candidate(
+        "MEM-DIRECT-1",
+        soc_memory.MemoryRevisionCandidateCreateRequest(
+            expected_record_version=2,
+            issue_type=SocMemoryRevisionIssueType.LESSON_INCOMPLETE,
+            reason="运营人员直接从 Memory 台账发现经验缺少适用边界，发起版本化修订。",
+        ),
+        request=FakeRequest(
+            system_role="admin",
+            idempotency_key="memory-revision:create:router:direct",
+        ),
+        service=service,
+    )
+
+    command, _ = service.calls[0]
+    assert command.memory_id == "MEM-DIRECT-1"
+    assert command.source_run_id is None
+
+
+def test_soc_memory_api_tests_record_match_by_alert_id() -> None:
+    service = FakeMemoryMatchTestService()
+
+    result = soc_memory.test_memory_record_match(
+        "MEM-MATCH-1",
+        soc_memory.MemoryRecordMatchTestRequest(alert_id="ALT-MATCH-1"),
+        service=service,
+    )
+
+    assert result.memory_id == "MEM-MATCH-1"
+    command = service.commands[0]
+    assert command.alert_id == "ALT-MATCH-1"
+    assert command.run_id is None
+
+
 def test_soc_memory_api_requires_idempotency_key_for_revision_candidate() -> None:
     service = FakeMemoryRevisionService()
 
@@ -244,13 +290,19 @@ def test_soc_memory_api_reviews_candidate_and_lists_record() -> None:
     records = soc_memory.list_memory_records(
         service=service,
         status=SocMemoryRecordStatus.CONFIRMED,
+        memory_type=None,
         tenant_scope="pingan",
         tenant_id=None,
         source_candidate_id=candidate.candidate_id,
+        source_run_id=None,
+        source_alert_id=None,
         retrieval_enabled=None,
+        search=None,
         limit=50,
+        offset=0,
     )
     assert records.items == [result.memory_record]
+    assert records.has_more is False
     assert soc_memory.get_memory_record(result.memory_record.memory_id, service=service) == result.memory_record
 
     disabled_search = soc_memory.search_memory_records(
@@ -281,6 +333,45 @@ def test_soc_memory_api_reviews_candidate_and_lists_record() -> None:
     )
     assert enabled_search.returned_count == 1
     assert enabled_search.matches[0].memory_id == result.memory_record.memory_id
+
+
+def test_soc_memory_api_searches_confirmed_record_inventory() -> None:
+    repository = InMemoryMemoryCandidateRepository()
+    service = SocMemoryService(
+        candidate_repository=repository,
+        record_repository=repository,
+        mutation_audit_repository=repository,
+    )
+    candidate = service.propose_candidate(_memory_candidate_command())
+    confirmed = soc_memory.review_memory_candidate(
+        candidate.candidate_id,
+        soc_memory.MemoryCandidateReviewRequest(
+            decision=SocMemoryCandidateReviewDecision.CONFIRM,
+            reason="确认该经验用于 Memory inventory 搜索测试。",
+        ),
+        request=FakeRequest(),
+        service=service,
+    )
+    assert confirmed.memory_record is not None
+
+    response = soc_memory.list_memory_records(
+        service=service,
+        status=None,
+        memory_type=None,
+        tenant_scope=None,
+        tenant_id=None,
+        source_candidate_id=None,
+        source_run_id=None,
+        source_alert_id=None,
+        retrieval_enabled=None,
+        search="ALT-ROUTER-1",
+        limit=20,
+        offset=0,
+    )
+
+    assert response.items == [confirmed.memory_record]
+    assert response.offset == 0
+    assert response.limit == 20
 
 
 def test_soc_memory_api_preserves_reviewed_decision_directive() -> None:

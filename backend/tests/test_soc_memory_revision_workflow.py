@@ -37,6 +37,7 @@ from soc_agent.contracts import (
     SocMemoryCandidateType,
     SocMemoryCandidateValidity,
     SocMemoryDecisionImpact,
+    SocMemoryRecordMatchTestCommand,
     SocMemoryRecordStatus,
     SocMemoryRetrievalActivationAction,
     SocMemoryRetrievalActivationCommand,
@@ -64,6 +65,14 @@ class RevisionRepository(InMemoryMemoryCandidateRepository):
 
     def get_run(self, run_id: str) -> AnalysisRun | None:
         return self._runs.get(run_id)
+
+    def list_runs_by_alert_id(
+        self,
+        alert_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[AnalysisRun]:
+        return [run for run in self._runs.values() if run.alert_id == alert_id][:limit]
 
     def save_memory_use(self, record: SocMemoryUseRecord) -> None:
         self._uses.append(record)
@@ -347,6 +356,54 @@ def test_manual_revision_suspends_old_memory_and_creates_review_candidate() -> N
     assert result.candidate.source.source_type is SocMemoryCandidateSourceType.MEMORY_REVISION
     assert "旧版 Business Lesson" in result.candidate.content
     assert service.get_candidate(old_candidate_id).status is SocMemoryCandidateStatus.CONFIRMED
+
+
+def test_operator_can_propose_revision_without_a_later_memory_use() -> None:
+    """The Memory inventory is also a valid governed correction surface."""
+
+    now = datetime(2026, 8, 21, 9, 30, tzinfo=UTC)
+    repository = RevisionRepository()
+    service, _, memory_id = _active_memory_fixture(repository, now=now)
+    predecessor = service.get_record(memory_id)
+
+    result = service.propose_revision_candidate(
+        SocMemoryRevisionCandidateCreateCommand(
+            memory_id=memory_id,
+            expected_record_version=predecessor.version,
+            issue_type=SocMemoryRevisionIssueType.LESSON_INCOMPLETE,
+            reason="运营人员在 Memory 台账中发现 Business Lesson 缺少适用边界，需要直接发起版本化修订。",
+        ),
+        context=_reviewer_context(key="memory-revision:create:operator-direct"),
+    )
+
+    assert result.predecessor_record.retrieval_enabled is False
+    assert result.candidate.revision_lineage is not None
+    assert result.candidate.revision_lineage.revision_origin == "operator_direct"
+    assert result.candidate.revision_lineage.source_memory_use_id is None
+    assert result.candidate.revision_lineage.source_run_id == predecessor.source.run_id
+    assert result.candidate.revision_lineage.source_alert_id == predecessor.source.alert_id
+    assert result.candidate.metadata["revision_origin"] == "operator_direct"
+
+
+def test_operator_can_diagnose_one_memory_against_a_persisted_alert_run() -> None:
+    now = datetime(2026, 8, 21, 9, 45, tzinfo=UTC)
+    repository = RevisionRepository()
+    service, _, memory_id = _active_memory_fixture(repository, now=now)
+
+    result = service.test_record_match(
+        SocMemoryRecordMatchTestCommand(
+            memory_id=memory_id,
+            alert_id="ALERT-WRONG-MEMORY",
+        )
+    )
+
+    assert result.record.memory_id == memory_id
+    assert result.run_id == "RUN-WRONG-MEMORY"
+    assert result.alert_id == "ALERT-WRONG-MEMORY"
+    assert result.profile_id == "pingan.soc"
+    assert result.retrieval.query.metadata["target_memory_id"] == memory_id
+    assert result.matched is False
+    assert "missing_strong_anchor" in result.exclusion_reasons
 
 
 def test_confirmed_revision_supersedes_old_memory_without_overwriting_history() -> None:

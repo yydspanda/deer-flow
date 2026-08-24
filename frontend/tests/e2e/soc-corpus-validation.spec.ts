@@ -835,3 +835,115 @@ test("opens a used Memory correction and creates a governed revision candidate",
     "/workspace/soc/review/memory-candidates/MC-REVISION-1",
   );
 });
+
+test("creates an operator-direct revision from the Memory inventory", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  let revisionRequest: Record<string, unknown> | null = null;
+  await page.route("**/api/soc/memory/records/MEM-GALAXY**", async (route) => {
+    if (route.request().method() === "POST") {
+      revisionRequest = route.request().postDataJSON() as Record<
+        string,
+        unknown
+      >;
+      await route.fulfill({
+        json: {
+          schema_version: "soc.memory_revision_candidate_create_result.v1",
+          candidate: { candidate_id: "MC-DIRECT-REVISION-1" },
+          predecessor_record: {
+            ...activeMemoryRecord(),
+            version: 3,
+            retrieval_enabled: false,
+          },
+          previous_record_version: 2,
+          previous_retrieval_enabled: true,
+          audit_id: "SMA-DIRECT-REVISION-1",
+          created_at: "2026-08-21T08:00:00Z",
+        },
+      });
+      return;
+    }
+    await route.fulfill({ json: activeMemoryRecord() });
+  });
+
+  await page.goto("/workspace/soc/memory/records/MEM-GALAXY/revise");
+  await expect(page.getByText("运营人员直接修订")).toBeVisible();
+  await page.getByRole("radio", { name: "经验不完整" }).click();
+  await page
+    .getByLabel("2. 说明本次发现的业务事实或反证")
+    .fill(
+      "运营人员发现该经验遗漏了明确的适用边界，需要创建新版本补充后再启用。",
+    );
+  await page
+    .getByRole("button", { name: "暂停旧 Memory 并创建修订候选" })
+    .click();
+
+  await expect.poll(() => revisionRequest).not.toBeNull();
+  expect(revisionRequest).toEqual({
+    expected_record_version: 2,
+    issue_type: "lesson_incomplete",
+    reason:
+      "运营人员发现该经验遗漏了明确的适用边界，需要创建新版本补充后再启用。",
+  });
+  await expect(page).toHaveURL(
+    "/workspace/soc/review/memory-candidates/MC-DIRECT-REVISION-1",
+  );
+});
+
+test("searches confirmed Memory records and opens their usage history", async ({
+  page,
+}) => {
+  mockLangGraphAPI(page, { threads: [] });
+  await page.route("**/api/soc/memory/records?**", async (route) => {
+    await route.fulfill({
+      json: {
+        items: [activeMemoryRecord()],
+        limit: 50,
+        offset: 0,
+        has_more: false,
+      },
+    });
+  });
+  await page.route(
+    "**/api/soc/memory/records/MEM-GALAXY/lineage",
+    async (route) => {
+      await route.fulfill({
+        json: {
+          schema_version: "soc.memory_lineage_report.v1",
+          record: activeMemoryRecord(),
+          uses: [
+            {
+              schema_version: "soc.memory_use.v1",
+              use_id: "MU-GALAXY-1",
+              memory_id: "MEM-GALAXY",
+              memory_version: 2,
+              run_id: "RUN-LATER-1",
+              alert_id: "1984426",
+              base_verdict: "suspicious",
+              effective_verdict: "false_positive",
+              effect: "overridden",
+              directive_applied: true,
+              created_at: "2026-08-02T00:00:00Z",
+            },
+          ],
+          feedback: [],
+          health: [],
+          revision_proposals: [],
+        },
+      });
+    },
+  );
+
+  await page.goto("/workspace/soc/memory/records");
+  await page.getByLabel("搜索 Memory 台账").fill("MEM-GALAXY Windows 更新");
+  await page.getByTitle("搜索").click();
+  await expect(page.getByText("Windows 更新部署正常行为")).toBeVisible();
+  await page.getByText("Windows 更新部署正常行为").click();
+  await expect(page).toHaveURL("/workspace/soc/memory/records/MEM-GALAXY");
+  await expect(
+    page.getByText("该行为属于已确认的 Windows 更新部署活动。"),
+  ).toBeVisible();
+  await expect(page.getByText("Alert 1984426")).toBeVisible();
+  await expect(page.getByText("改变最终结论")).toBeVisible();
+});

@@ -371,6 +371,11 @@ class SocMemoryRevisionIssueType(StrEnum):
     LESSON_INCOMPLETE = "lesson_incomplete"
 
 
+class SocMemoryRevisionOrigin(StrEnum):
+    OBSERVED_USE = "observed_use"
+    OPERATOR_DIRECT = "operator_direct"
+
+
 SOC_MEMORY_RETRIEVAL_ACTIVATION_POLICY_VERSION = "soc.memory_retrieval_activation_policy.v1"
 
 
@@ -1873,9 +1878,10 @@ class SocMemoryRevisionLineage(BaseModel):
     predecessor_content_hash: str = Field(min_length=1, max_length=128)
     predecessor_facets_hash: str = Field(min_length=1, max_length=128)
     suspended_record_version: int = Field(ge=1)
-    source_memory_use_id: str = Field(min_length=1, max_length=64)
-    source_run_id: str = Field(min_length=1, max_length=64)
-    source_alert_id: str = Field(min_length=1, max_length=128)
+    revision_origin: SocMemoryRevisionOrigin = SocMemoryRevisionOrigin.OBSERVED_USE
+    source_memory_use_id: str | None = Field(default=None, min_length=1, max_length=64)
+    source_run_id: str | None = Field(default=None, min_length=1, max_length=64)
+    source_alert_id: str | None = Field(default=None, min_length=1, max_length=128)
     issue_type: SocMemoryRevisionIssueType
     reason: str = Field(min_length=10, max_length=4000)
     requested_at: datetime = Field(default_factory=utc_now)
@@ -1887,6 +1893,12 @@ class SocMemoryRevisionLineage(BaseModel):
         if len(normalized) < 10:
             raise ValueError("memory revision reason must be substantive")
         return normalized
+
+    @model_validator(mode="after")
+    def require_observed_use_lineage(self) -> SocMemoryRevisionLineage:
+        if self.revision_origin is SocMemoryRevisionOrigin.OBSERVED_USE and (self.source_memory_use_id is None or self.source_run_id is None or self.source_alert_id is None):
+            raise ValueError("observed-use memory revision requires use, run, and alert lineage")
+        return self
 
 
 class SocMemoryCandidateCreateCommand(BaseModel):
@@ -1913,14 +1925,14 @@ class SocMemoryCandidateCreateCommand(BaseModel):
 
 
 class SocMemoryRevisionCandidateCreateCommand(BaseModel):
-    """Create a governed successor candidate from one exact Memory use."""
+    """Create a governed successor from an exact use or direct operator review."""
 
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["soc.memory_revision_candidate_create_command.v1"] = "soc.memory_revision_candidate_create_command.v1"
     memory_id: str = Field(min_length=1, max_length=64)
     expected_record_version: int = Field(ge=1)
-    source_run_id: str = Field(min_length=1, max_length=64)
+    source_run_id: str | None = Field(default=None, min_length=1, max_length=64)
     issue_type: SocMemoryRevisionIssueType
     reason: str = Field(min_length=10, max_length=4000)
 
@@ -2274,6 +2286,41 @@ class SocMemoryRetrievalResult(BaseModel):
     max_tokens: int = Field(default=1200, ge=100)
     replay_diff: SocMemoryRetrievalDiff | None = None
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class SocMemoryRecordMatchTestCommand(BaseModel):
+    """Read-only diagnostic for one Memory against one persisted analysis run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_record_match_test_command.v1"] = "soc.memory_record_match_test_command.v1"
+    memory_id: str = Field(min_length=1, max_length=64)
+    run_id: str | None = Field(default=None, min_length=1, max_length=64)
+    alert_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def require_one_run_locator(self) -> SocMemoryRecordMatchTestCommand:
+        if (self.run_id is None) == (self.alert_id is None):
+            raise ValueError("provide exactly one of run_id or alert_id")
+        return self
+
+
+class SocMemoryRecordMatchTestResult(BaseModel):
+    """Replayable result of evaluating one Memory with production retrieval gates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["soc.memory_record_match_test_result.v1"] = "soc.memory_record_match_test_result.v1"
+    record: SocMemoryRecord
+    run_id: str = Field(min_length=1, max_length=64)
+    alert_id: str = Field(min_length=1, max_length=128)
+    profile_id: str = Field(min_length=1, max_length=128)
+    profile_version: str = Field(min_length=1, max_length=64)
+    matched: bool
+    match: SocMemoryMatch | None = None
+    exclusion_reasons: list[str] = Field(default_factory=list)
+    retrieval: SocMemoryRetrievalResult
+    tested_at: datetime = Field(default_factory=utc_now)
 
 
 class SocMemoryCandidateReviewResult(BaseModel):

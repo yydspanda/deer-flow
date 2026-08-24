@@ -33,8 +33,11 @@ import type {
   SocMemoryCenterOverview,
   SocMemoryCenterPatternDetail,
   SocMemoryQuery,
+  SocMemoryLineageReport,
   SocMemoryRecord,
   SocMemoryRecordListResponse,
+  SocMemoryRecordMatchTestRequest,
+  SocMemoryRecordMatchTestResult,
   SocMemoryRecordStatus,
   SocMemoryRevisionCandidateCreateRequest,
   SocMemoryRevisionCandidateCreateResult,
@@ -825,26 +828,39 @@ export async function draftSocMemoryBusinessLesson(
   );
 }
 
-export async function listSocMemoryRecords({
+export async function listSocMemoryRecordInventory({
   status = "confirmed",
+  memoryType,
   tenantScope,
   tenantId,
   sourceCandidateId,
+  sourceRunId,
+  sourceAlertId,
   retrievalEnabled,
+  search,
   limit = 50,
+  offset = 0,
   context,
 }: {
   status?: SocMemoryRecordStatus | null;
+  memoryType?: SocMemoryRecord["memory_type"] | null;
   tenantScope?: string | null;
   tenantId?: string | null;
   sourceCandidateId?: string | null;
+  sourceRunId?: string | null;
+  sourceAlertId?: string | null;
   retrievalEnabled?: boolean | null;
+  search?: string | null;
   limit?: number;
+  offset?: number;
   context?: SocRequestContext;
-} = {}): Promise<SocMemoryRecord[]> {
+} = {}): Promise<SocMemoryRecordListResponse> {
   const params = new URLSearchParams();
   if (status !== null) {
     params.set("status", status);
+  }
+  if (memoryType) {
+    params.set("memory_type", memoryType);
   }
   if (tenantScope) {
     params.set("tenant_scope", tenantScope);
@@ -855,20 +871,35 @@ export async function listSocMemoryRecords({
   if (sourceCandidateId) {
     params.set("source_candidate_id", sourceCandidateId);
   }
+  if (sourceRunId) {
+    params.set("source_run_id", sourceRunId);
+  }
+  if (sourceAlertId) {
+    params.set("source_alert_id", sourceAlertId);
+  }
   if (retrievalEnabled !== undefined && retrievalEnabled !== null) {
     params.set("retrieval_enabled", String(retrievalEnabled));
   }
+  if (search?.trim()) {
+    params.set("search", search.trim());
+  }
   params.set("limit", String(limit));
+  params.set("offset", String(offset));
 
   const url = `${getBackendBaseURL()}/api/soc/memory/records?${params.toString()}`;
   const response = context
     ? await fetch(url, { headers: buildSocHeaders(context) })
     : await fetch(url);
-  const data = await readJson<SocMemoryRecordListResponse>(
+  return readJson<SocMemoryRecordListResponse>(
     response,
     "Failed to load SOC memory records",
   );
-  return data.items;
+}
+
+export async function listSocMemoryRecords(
+  options: Parameters<typeof listSocMemoryRecordInventory>[0] = {},
+): Promise<SocMemoryRecord[]> {
+  return (await listSocMemoryRecordInventory(options)).items;
 }
 
 export async function searchSocMemoryRecords(
@@ -897,6 +928,39 @@ export async function getSocMemoryRecord(
   return readJson<SocMemoryRecord>(
     response,
     "Failed to load SOC memory record",
+  );
+}
+
+export async function getSocMemoryLineage(
+  memoryId: string,
+  context?: SocRequestContext,
+): Promise<SocMemoryLineageReport> {
+  const url = `${getBackendBaseURL()}/api/soc/memory/records/${encodeURIComponent(memoryId)}/lineage`;
+  const response = context
+    ? await fetch(url, { headers: buildSocHeaders(context) })
+    : await fetch(url);
+  return readJson<SocMemoryLineageReport>(
+    response,
+    "Failed to load SOC memory lineage",
+  );
+}
+
+export async function testSocMemoryRecordMatch(
+  memoryId: string,
+  request: SocMemoryRecordMatchTestRequest,
+  context?: SocRequestContext,
+): Promise<SocMemoryRecordMatchTestResult> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/soc/memory/records/${encodeURIComponent(memoryId)}/match-test`,
+    {
+      method: "POST",
+      headers: buildSocHeaders(context, { json: true }),
+      body: JSON.stringify(request),
+    },
+  );
+  return readJson<SocMemoryRecordMatchTestResult>(
+    response,
+    "Failed to test SOC memory match",
   );
 }
 

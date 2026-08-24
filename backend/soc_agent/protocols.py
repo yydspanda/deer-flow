@@ -74,6 +74,7 @@ from soc_agent.contracts import (
     SocMemoryBusinessLessonDraft,
     SocMemoryCandidate,
     SocMemoryCandidateStatus,
+    SocMemoryCandidateType,
     SocMemoryFeedbackEvent,
     SocMemoryFeedbackResult,
     SocMemoryHealthRecord,
@@ -773,11 +774,16 @@ class MemoryRecordRepository(Protocol):
         self,
         *,
         status: SocMemoryRecordStatus | None = None,
+        memory_type: SocMemoryCandidateType | None = None,
         tenant_scope: str | None = None,
         tenant_id: str | None = None,
         source_candidate_id: str | None = None,
+        source_run_id: str | None = None,
+        source_alert_id: str | None = None,
         retrieval_enabled: bool | None = None,
+        search: str | None = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[SocMemoryRecord]: ...
 
     def find_memory_records_by_candidate_ids(

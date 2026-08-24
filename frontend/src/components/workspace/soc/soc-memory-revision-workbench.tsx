@@ -82,18 +82,17 @@ export function SocMemoryRevisionWorkbench({
   const selectedIssue = ISSUE_OPTIONS.find((item) => item.value === issueType);
   const canSubmit =
     record !== null &&
-    sourceRunId !== null &&
     reason.trim().length >= 10 &&
     !revisionMutation.isPending;
 
   const handleSubmit = async () => {
-    if (!record || !sourceRunId || !canSubmit) return;
+    if (!record || !canSubmit) return;
     try {
       const result = await revisionMutation.mutateAsync({
         memoryId: record.memory_id,
         request: {
           expected_record_version: record.version,
-          source_run_id: sourceRunId,
+          ...(sourceRunId ? { source_run_id: sourceRunId } : {}),
           issue_type: issueType,
           reason: reason.trim(),
         },
@@ -115,9 +114,15 @@ export function SocMemoryRevisionWorkbench({
         description="暂停错误经验，创建可审核的新版本"
         actions={
           <Button size="sm" variant="outline" asChild>
-            <Link href="/workspace/soc/corpus-validation">
+            <Link
+              href={
+                sourceRunId
+                  ? "/workspace/soc/corpus-validation"
+                  : `/workspace/soc/memory/records/${encodeURIComponent(memoryId)}`
+              }
+            >
               <ArrowLeftIcon className="size-4" />
-              返回语料验证
+              {sourceRunId ? "返回语料验证" : "返回 Memory 详情"}
             </Link>
           </Button>
         }
@@ -201,12 +206,13 @@ export function SocMemoryRevisionWorkbench({
               </section>
 
               {!sourceRunId ? (
-                <Alert variant="destructive" className="rounded-md">
-                  <AlertTriangleIcon />
-                  <AlertTitle>缺少来源运行</AlertTitle>
+                <Alert className="rounded-md">
+                  <BookOpenCheckIcon />
+                  <AlertTitle>运营人员直接修订</AlertTitle>
                   <AlertDescription>
-                    必须从实际召回过这条 Memory
-                    的告警结果进入，系统才能验证纠错关系。
+                    本次修订由 Memory 台账直接发起，系统会使用旧 Memory
+                    的来源与哈希作为审计依据。若选择“范围过宽”，仍需存在可回放的来源
+                    Run。
                   </AlertDescription>
                 </Alert>
               ) : null}

@@ -560,6 +560,8 @@ export type SocMemoryRevisionIssueType =
   | "applicability_too_broad"
   | "lesson_incomplete";
 
+export type SocMemoryRevisionOrigin = "observed_use" | "operator_direct";
+
 export interface SocMemoryRevisionLineage {
   schema_version: "soc.memory_revision_lineage.v1";
   predecessor_memory_id: string;
@@ -567,9 +569,10 @@ export interface SocMemoryRevisionLineage {
   predecessor_content_hash: string;
   predecessor_facets_hash: string;
   suspended_record_version: number;
-  source_memory_use_id: string;
-  source_run_id: string;
-  source_alert_id: string;
+  revision_origin: SocMemoryRevisionOrigin;
+  source_memory_use_id?: string | null;
+  source_run_id?: string | null;
+  source_alert_id?: string | null;
   issue_type: SocMemoryRevisionIssueType;
   reason: string;
   requested_at: string;
@@ -577,7 +580,7 @@ export interface SocMemoryRevisionLineage {
 
 export interface SocMemoryRevisionCandidateCreateRequest {
   expected_record_version: number;
-  source_run_id: string;
+  source_run_id?: string | null;
   issue_type: SocMemoryRevisionIssueType;
   reason: string;
 }
@@ -677,6 +680,119 @@ export interface SocMemoryRevisionCandidateCreateResult {
 
 export interface SocMemoryRecordListResponse {
   items: SocMemoryRecord[];
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
+export type SocMemoryUseEffect =
+  | "context_only"
+  | "reinforced"
+  | "overridden"
+  | "conflicted";
+
+export interface SocMemoryUseRecord {
+  schema_version: "soc.memory_use.v1";
+  use_id: string;
+  idempotency_key: string;
+  memory_id: string;
+  memory_version: number;
+  memory_content_hash: string;
+  memory_facets_hash: string;
+  run_id: string;
+  alert_id: string;
+  tenant_id?: string | null;
+  context_ref: string;
+  retrieval_policy_version: string;
+  retrieval_score: number;
+  matched_facets: Record<string, string[]>;
+  applicability_report: SocMemoryApplicabilityReport;
+  base_verdict: SocVerdict;
+  effective_verdict: SocVerdict;
+  effect: SocMemoryUseEffect;
+  directive_applied: boolean;
+  decision_transition_id?: string | null;
+  created_at: string;
+}
+
+export interface SocMemoryFeedbackEvent {
+  schema_version: "soc.memory_feedback.v1";
+  feedback_id: string;
+  use_id: string;
+  memory_id: string;
+  memory_version: number;
+  run_id: string;
+  alert_id: string;
+  source: string;
+  trust: string;
+  final_verdict: SocVerdict;
+  memory_target_verdict?: SocVerdict | null;
+  alignment: string;
+  reason: string;
+  source_ref: string;
+  actor_id: string;
+  created_at: string;
+}
+
+export interface SocMemoryHealthRecord {
+  schema_version: "soc.memory_health.v1";
+  memory_id: string;
+  memory_version: number;
+  version: number;
+  status: "healthy" | "watch" | "suspended";
+  use_count: number;
+  support_count: number;
+  contradiction_count: number;
+  not_applicable_count: number;
+  unknown_count: number;
+  last_use_at?: string | null;
+  last_feedback_at?: string | null;
+  suspension_reason?: string | null;
+  updated_at: string;
+}
+
+export interface SocMemoryRevisionProposal {
+  schema_version: "soc.memory_revision_proposal.v1";
+  proposal_id: string;
+  memory_id: string;
+  memory_version: number;
+  source_feedback_id: string;
+  status: "pending_review" | "accepted" | "rejected";
+  reason: string;
+  proposed_excluded_facets: Record<string, string[]>;
+  proposed_target_verdict?: SocVerdict | null;
+  created_at: string;
+  reviewed_at?: string | null;
+  reviewed_by?: string | null;
+  review_reason?: string | null;
+}
+
+export interface SocMemoryLineageReport {
+  schema_version: "soc.memory_lineage_report.v1";
+  record: SocMemoryRecord;
+  uses: SocMemoryUseRecord[];
+  feedback: SocMemoryFeedbackEvent[];
+  health: SocMemoryHealthRecord[];
+  revision_proposals: SocMemoryRevisionProposal[];
+}
+
+export interface SocMemoryRecordMatchTestRequest {
+  run_id?: string | null;
+  alert_id?: string | null;
+}
+
+export interface SocMemoryRecordMatchTestResult {
+  schema_version: "soc.memory_record_match_test_result.v1";
+  record: SocMemoryRecord;
+  run_id: string;
+  alert_id: string;
+  profile_id: string;
+  profile_version: string;
+  matched: boolean;
+  match?: SocMemoryMatch | null;
+  exclusion_reasons: string[];
+  retrieval: SocMemoryRetrievalResult;
+  tested_at: string;
 }
 
 export type SocMemoryProfileState = "current" | "legacy" | "unregistered";

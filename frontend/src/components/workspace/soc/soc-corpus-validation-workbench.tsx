@@ -738,7 +738,32 @@ function AlertDetail({
         </div>
       ) : null}
 
-      {candidateId ? (
+      {alert.memory_id ? (
+        <div
+          className="flex flex-wrap items-center justify-between gap-4 border-b border-emerald-300 bg-emerald-50 px-5 py-4 text-emerald-950 md:px-7"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex min-w-0 items-start gap-3">
+            <DatabaseIcon className="mt-0.5 size-5 shrink-0" />
+            <div className="min-w-0">
+              <p className="font-semibold">Memory 已确认</p>
+              <p className="mt-1 text-sm">
+                {alert.memory_id} · {alert.memory_status ?? "confirmed"}
+                。可查看 Business Lesson、使用历史，或发起版本化修订。
+              </p>
+            </div>
+          </div>
+          <Button size="sm" asChild>
+            <Link
+              href={`/workspace/soc/memory/records/${encodeURIComponent(alert.memory_id)}`}
+            >
+              查看 / 修订 Memory
+              <ExternalLinkIcon className="size-3.5" />
+            </Link>
+          </Button>
+        </div>
+      ) : candidateId ? (
         <div
           className="flex flex-wrap items-center justify-between gap-4 border-b border-sky-300 bg-sky-50 px-5 py-4 text-sky-950 md:px-7"
           role="status"
