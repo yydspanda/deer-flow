@@ -19,7 +19,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT_DIR = ROOT / "backend/.deer-flow/internal-transfer"
+TRANSFER_ROOT = ROOT / "backend/.deer-flow/internal-transfer"
+DEFAULT_OUTPUT_DIR = TRANSFER_ROOT / "READY-TO-TRANSFER"
+TRANSFER_RUNBOOK_NAME = "PINGAN-INTERNAL-MAC-RUNBOOK.md"
 ARCHIVE_ROOT = "deer-flow-pingan-internal"
 MANIFEST_SCHEMA_VERSION = "soc.pingan_internal_transfer_manifest.v1"
 
@@ -53,6 +55,12 @@ PRIVATE_OVERLAY_PATHS = (
     "config.pingan-dev.local",
     "validation/original_works/raw_program/Deepseek_Qwen_32B_EDR_Analysis_Ignored_Paths_Sup (1).xlsx",
     "datas/source/full_alert_2026_month_forth_sample_200.pkl",
+    "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl",
+    "validation/compact_zeus/data/corpus/full_alert_validation_corpus.manifest.json",
+    "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl",
+    "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.manifest.json",
+    "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-index.json",
+    "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite",
     "backend/.deer-flow/pingan-context/software-path-catalog.sqlite",
     "backend/.deer-flow/pingan-context/software-path-catalog.build-report.json",
 )
@@ -253,11 +261,23 @@ def build_transfer_archives(
             private_manifest,
         )
 
+    report_path = output_dir / f"transfer-report-{timestamp}.json"
+    runbook_path = output_dir / TRANSFER_RUNBOOK_NAME
+    _write_private_text(
+        runbook_path,
+        _transfer_runbook(
+            timestamp=timestamp,
+            git_info=git_info,
+            archives=archives,
+            report_name=report_path.name,
+        ),
+    )
     report = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "created_at": datetime.now(UTC).isoformat(),
         "output_directory": str(output_dir),
         "archives": archives,
+        "runbook": _sidecar_result(runbook_path),
         "source_worktree_dirty": git_info["worktree_dirty"],
         "required_source_file_count": len(REQUIRED_HANDOFF_SOURCE_PATHS),
         "required_source_inventory_complete": True,
@@ -265,7 +285,6 @@ def build_transfer_archives(
         "final_handoff_eligible": not git_info["worktree_dirty"],
         "secrets_in_console_output": False,
     }
-    report_path = output_dir / f"transfer-report-{timestamp}.json"
     _write_private_json(report_path, report)
     report["report_path"] = str(report_path)
     return report
@@ -460,6 +479,14 @@ def _archive_result(path: Path, manifest: MappingLike) -> dict[str, Any]:
     }
 
 
+def _sidecar_result(path: Path) -> dict[str, Any]:
+    return {
+        "path": str(path),
+        "sha256": _sha256_file(path),
+        "size_bytes": path.stat().st_size,
+    }
+
+
 def _source_path_excluded(relative: str) -> bool:
     return any(relative.startswith(prefix) for prefix in SOURCE_EXCLUDED_PREFIXES)
 
@@ -517,12 +544,16 @@ def _add_bytes(
 
 
 def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
+    _write_private_text(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+    )
+
+
+def _write_private_text(path: Path, content: str) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     try:
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        temporary.write_text(content, encoding="utf-8")
         temporary.chmod(0o600)
         os.replace(temporary, path)
         path.chmod(0o600)
@@ -621,6 +652,225 @@ def _is_unresolved_private_value(value: str) -> bool:
         or (normalized.startswith("<") and normalized.endswith(">"))
         or normalized.lower() in {"changeme", "todo", "replace-me"}
     )
+
+
+def _transfer_runbook(
+    *,
+    timestamp: str,
+    git_info: dict[str, Any],
+    archives: dict[str, Any],
+    report_name: str,
+) -> str:
+    source = archives["source"]
+    private = archives.get("private_overlay")
+    source_name = Path(str(source["path"])).name
+    source_sha = str(source["sha256"])
+    if private is None:
+        private_name = "<private-overlay-not-built>"
+        private_sha = "<unavailable>"
+        private_notice = (
+            "This build does not contain the private overlay. It can be inspected as a "
+            "source-only development snapshot, but it is not a complete PingAn DEV handoff."
+        )
+    else:
+        private_name = Path(str(private["path"])).name
+        private_sha = str(private["sha256"])
+        private_notice = (
+            "The private overlay contains local configuration, credentials, private alert "
+            "corpora, the workbench index/payload store, and the reviewed EDR path catalog. "
+            "Keep the directory inside the approved environment."
+        )
+    return f"""# PingAn Internal Mac DEV Runbook / 平安内网 Mac DEV 操作手册
+
+> Built: `{timestamp}`
+> Source commit: `{git_info["commit"]}` (`{git_info["branch"]}`)
+> Target: Apple Silicon macOS, Python `3.12+`, no Docker
+> Install path: `$HOME/deer-flow`
+
+本手册由 `scripts/build_pingan_internal_transfer.py` 随包生成。文件名、commit 和
+SHA-256 与本次交付一致，不需要额外 nginx/LAN hotfix。
+
+## 1. Package Identity / 包身份
+
+`READY-TO-TRANSFER` 应只保留本次交付的以下文件：
+
+```text
+{source_name}
+{private_name}
+{report_name}
+{TRANSFER_RUNBOOK_NAME}
+```
+
+SHA-256：
+
+```text
+{source_sha}  {source_name}
+{private_sha}  {private_name}
+```
+
+{private_notice}
+
+## 2. Verify / 传输后校验
+
+```bash
+export TRANSFER_DIR="$HOME/READY-TO-TRANSFER"
+cd "$TRANSFER_DIR"
+
+shasum -a 256 \
+  "{source_name}" \
+  "{private_name}"
+```
+
+输出必须与第 1 节完全一致。随后检查 report：
+
+```bash
+cat "{report_name}"
+```
+
+必须看到 `source_worktree_dirty=false`、`final_handoff_eligible=true` 和
+`required_source_inventory_complete=true`。
+
+## 3. Clean Install / 全新安装
+
+以下命令会替换当前用户的 `$HOME/deer-flow`：
+
+```bash
+export TARGET_REPO="$HOME/deer-flow"
+export STAGE_DIR="$TRANSFER_DIR/extract"
+
+[ "$TARGET_REPO" = "$HOME/deer-flow" ] || exit 1
+rm -rf "$TARGET_REPO" "$STAGE_DIR"
+mkdir -p "$STAGE_DIR"
+
+tar -xzf "$TRANSFER_DIR/{source_name}" -C "$STAGE_DIR"
+tar -xzf "$TRANSFER_DIR/{private_name}" -C "$STAGE_DIR"
+mv "$STAGE_DIR/deer-flow-pingan-internal" "$TARGET_REPO"
+cd "$TARGET_REPO"
+
+chmod 600 .env.soc-dev.local config.pingan-dev.local
+```
+
+本次私有包同时包含：
+
+```text
+datas/source/full_alert_2026_month_forth_sample_200.pkl
+validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl
+validation/compact_zeus/data/corpus/full_alert_validation_corpus.manifest.json
+validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl
+validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.manifest.json
+validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-index.json
+validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite
+```
+
+因此语料 Workbench 不需要在内网重新生成 4343 条索引。
+
+## 4. Host Check And Install / 主机检查与依赖安装
+
+前置要求：Apple Silicon macOS、Python `3.12+`、uv、Node `22+`、项目固定的
+pnpm、nginx `1.23+`，以及已配置的平安 PyPI/pnpm 镜像。
+
+```bash
+cd "$TARGET_REPO"
+python3.12 scripts/soc_pingan_macos_host_dev.py check
+python3.12 scripts/soc_pingan_macos_host_dev.py install
+```
+
+安装器使用冻结 lock、内部镜像和独立 `backend/.venv`。不要执行 `uv lock`，
+也不要让 pnpm/Python 访问公网。
+
+初始化 SOC SQLite：
+
+```bash
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
+source ./.env.soc-dev.local
+unset SOC_DATABASE_URL
+
+(
+  cd backend
+  .venv/bin/python -m soc_agent.cli db upgrade
+)
+```
+
+DeerFlow 与 SOC 分别使用 `deerflow.db` 和 `soc_agent_dev.db`，不得合并。
+
+## 5. Internal Model / 内网模型
+
+在 `$HOME/sec_know_model` 的独立终端按现有顺序启动：
+
+```bash
+bash ./start_proxy_.sh
+bash ./local_run.sh
+./.venv/bin/python ./run.py
+```
+
+确认 LiteLLM `4001` 可用后执行：
+
+```bash
+cd "$TARGET_REPO"
+eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
+source ./.env.soc-dev.local
+
+backend/.venv/bin/python backend/scripts/soc_pingan_litellm_smoke.py \
+  --confirm-live \
+  --report-path backend/.deer-flow/soc-internal-validation/model/litellm-smoke.json
+```
+
+报告必须为 `outcome=passed`、`passed=true`。
+
+## 6. Start Web / 启动 Web
+
+```bash
+cd "$TARGET_REPO"
+python3.12 scripts/soc_pingan_macos_host_dev.py start --daemon
+```
+
+Host DEV 驱动会启用隔离 SQLite、LLM analyzer 和两个 SOC DEV Workbench，关闭
+Tenant Policy 与真实外部动作执行，并自动发现内网地址配置 Next.js/HMR。仅本机
+使用时加 `--local-only`。
+
+```bash
+curl -fsS http://localhost:2026/health
+```
+
+首次打开 `http://localhost:2026` 会进入 `/setup`，由操作者创建管理员账号。
+常用页面：
+
+```text
+http://localhost:2026/workspace/soc/operations
+http://localhost:2026/workspace/soc/review
+http://localhost:2026/workspace/soc/memory
+http://localhost:2026/workspace/soc/corpus-validation
+```
+
+停止：
+
+```bash
+python3.12 scripts/soc_pingan_macos_host_dev.py stop
+```
+
+## 7. Real Integration Follow-up / 真实验收顺序
+
+```text
+D12-B preflight
+  -> ZEUS asset direct smoke
+  -> MCP asset.locate smoke
+  -> InvestigationEvidence 回读
+  -> TI / Security Tag 真实只读 smoke
+  -> 5 条真实告警
+  -> 50 条 resume
+  -> 200 / 5000+ 条 shadow
+```
+
+详细命令以解压后的以下文档为准：
+
+```text
+.notes/ai_soc/integrations/pingan-internal-continuation-handoff.md
+backend/samples/pingan_dev/README.md
+validation/compact_zeus/internal_batch/README.md
+```
+
+不要把凭证、原始内部告警、Memory 数据库或完整 Provider 响应传回外网。
+"""
 
 
 def _source_readme(timestamp: str, *, worktree_dirty: bool) -> str:

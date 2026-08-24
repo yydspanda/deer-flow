@@ -7938,3 +7938,19 @@
   非 Startup/非 `.lnk` 对象。所有命中仍为 `C-*`、`decision_authority=none`。
 - 其余无代表语料、动态授权或历史 case outcome 继续留在 Matrix 的 `no_representative_corpus`、
   `governed_dynamic` 或 `memory_or_eval` 状态，不因本次确认一并激活。
+
+### 2026-08-24 — PingAn Internal Mac transfer bundle v2
+
+- `build_pingan_internal_transfer.py` 的默认交付目录收敛为唯一
+  `backend/.deer-flow/internal-transfer/READY-TO-TRANSFER/`，并随每次 clean-commit 构建自动生成
+  `PINGAN-INTERNAL-MAC-RUNBOOK.md`。Runbook 固化当次 commit、archive 文件名和 SHA-256，避免继续
+  维护旧时间戳、手工 hash 或独立 nginx/LAN hotfix。
+- Private overlay 除原有本地配置、200 条兼容性 PKL、EDR XLSX 和路径目录外，新增 212 条 canonical
+  Memory DEV corpus，以及 4343 条 DAMS 合并语料的 PKL、manifest、Workbench index 和 payload SQLite；
+  内网无需重新扫描 1.2GB PKL 构建前端索引。
+- PingAn macOS Host DEV 启动器在加载私有环境后显式启用隔离的 Memory/Corpus Workbench，固定 Memory
+  与 Automation 环境为 `dev`，并关闭 Tenant Policy 和真实外部动作执行；启动前 fail closed 检查两套
+  corpus 与两个 Workbench sidecar，避免再次出现 disabled、environment mismatch 或 stale-index 错误。
+- 当前目标 Mac 已具备 Python `3.12.7`、uv 和批准的内部 PyPI/pnpm 镜像，本次 READY 清单只包含
+  source/private/report/runbook；不重新生成离线 Python toolchain。专项回归 `45 passed`，Ruff check
+  通过；最终 archive 的 manifest/digest/clean-worktree gate 在提交后构建阶段单独验收。

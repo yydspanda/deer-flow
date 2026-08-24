@@ -8,12 +8,15 @@ import pytest
 from scripts.build_pingan_internal_transfer import (
     ARCHIVE_ROOT,
     PRIVATE_ENV_REQUIRED_KEYS,
+    PRIVATE_OVERLAY_PATHS,
     REQUIRED_HANDOFF_SOURCE_PATHS,
+    TRANSFER_RUNBOOK_NAME,
     _archive_manifest,
     _assert_private_overlay_config_ready,
     _assert_required_handoff_sources,
     _assert_source_freeze_allowed,
     _assert_source_path_safe,
+    _transfer_runbook,
     _write_archive,
     inspect_archive,
 )
@@ -61,6 +64,43 @@ def test_required_handoff_inventory_exists_in_current_repo() -> None:
     ]
 
     assert missing == []
+
+
+def test_private_overlay_contains_current_workbench_corpus_and_sidecars() -> None:
+    paths = set(PRIVATE_OVERLAY_PATHS)
+
+    assert {
+        "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl",
+        "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl",
+        "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.manifest.json",
+        "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-index.json",
+        "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite",
+    } <= paths
+
+
+def test_transfer_runbook_uses_exact_archive_identity_without_hotfix() -> None:
+    runbook = _transfer_runbook(
+        timestamp="20260824T000000Z",
+        git_info={"commit": "abc123", "branch": "yyds-dev"},
+        archives={
+            "source": {
+                "path": "/tmp/deer-flow-pingan-source-20260824T000000Z.tar.gz",
+                "sha256": "source-sha",
+            },
+            "private_overlay": {
+                "path": "/tmp/deer-flow-pingan-private-overlay-20260824T000000Z.tar.gz",
+                "sha256": "private-sha",
+            },
+        },
+        report_name="transfer-report-20260824T000000Z.json",
+    )
+
+    assert "abc123" in runbook
+    assert "source-sha" in runbook
+    assert "private-sha" in runbook
+    assert TRANSFER_RUNBOOK_NAME in runbook
+    assert "full_alert_dams_labeled_merged.workbench-payloads.sqlite" in runbook
+    assert "不需要额外 nginx/LAN hotfix" in runbook
 
 
 def test_private_overlay_config_accepts_current_dynamic_profile(tmp_path: Path) -> None:

@@ -1,7 +1,7 @@
 # PingAn SOC Internal Continuation Handoff / 平安内网续作交接单
 
 > Type: temporary transfer artifact / 临时复制交接文件
-> Reconciled: 2026-08-10
+> Reconciled: 2026-08-24
 > Status: `Real Integration Debt / parked`; this is no longer the current product-development pointer
 > Resume action: when approved PingAn DEV is available, inject environment secrets/cases, pass live MCP inventory, and run fresh paired `internal_real` stage 5
 
@@ -38,7 +38,6 @@ backend/.venv/bin/python \
   backend/scripts/soc_pingan_prepare_legacy_workflow_profile.py --apply
 git status --short
 python3 scripts/build_pingan_internal_transfer.py --include-private-overlay
-backend/.venv/bin/python scripts/build_pingan_macos_offline_bundle.py
 ```
 
 第一条命令只静态解析旧源码并更新 `0600` 的 Git-ignored env；输出必须是
@@ -53,12 +52,17 @@ commit。`--allow-dirty` 只供开发阶段临时验包；该报告会明确
 的关键变量都存在且不是占位值。未先执行 profile preparer 的旧 `.env.soc-dev.local` 会被明确拒绝，
 这是预期保护，不是打包器故障。
 
-两个脚本会在 Git-ignored 的 `backend/.deer-flow/internal-transfer/` 中生成四类文件：
+构建器会在 Git-ignored 的
+`backend/.deer-flow/internal-transfer/READY-TO-TRANSFER/` 中生成本次交付的四类文件：
 
 - `deer-flow-pingan-source-*.tar.gz`：当前 clean commit 对应的 tracked 源码；明确排除凭证、PKL、XLSX、SQLite、Git 元数据、虚拟环境和生成物。
-- `deer-flow-pingan-private-overlay-*.tar.gz`：仅包含 `.env.soc-dev.local`、`config.pingan-dev.local`、当前 PKL、历史 EDR XLSX 及其已编译路径目录；只能走获批的内部传输通道。
+- `deer-flow-pingan-private-overlay-*.tar.gz`：包含 `.env.soc-dev.local`、`config.pingan-dev.local`、200 条兼容性 PKL、212 条 canonical Memory DEV corpus、4343 条 DAMS 合并语料及其 manifest/index/payload store、历史 EDR XLSX 及其已编译路径目录；只能走获批的内部传输通道。
 - `transfer-report-*.json`：两个包的 SHA-256、大小、文件数、Git commit/branch/dirty 状态；不含 secret 内容。
-- `deer-flow-pingan-macos-arm64-offline-*.tar.gz` 与同 timestamp report：项目私有 CPython `3.12.3`、`uv` 和当前 `backend/uv.lock --extra pingan-dev` 的 macOS arm64 离线缓存。目标机器无需公网、公司 PyPI、管理员权限或预装 Python 3.12。
+- `PINGAN-INTERNAL-MAC-RUNBOOK.md`：由构建器自动生成，固化本次 commit、准确文件名、SHA-256、安装/启动/验收命令；不再手工维护时间戳，也不再携带独立 nginx/LAN hotfix。
+
+当前目标 Mac 已具备 Python `3.12.7`、uv 和批准的内部包镜像，因此本次交付不再生成
+`deer-flow-pingan-macos-arm64-offline-*`。旧离线工具链脚本只保留为未来无 Python/无内部镜像机器的
+兜底能力，不属于本次 `READY-TO-TRANSFER` 清单。
 
 构建前还会核对冻结的关键源码入口，覆盖 PingAn DEV profile、D12-B、TI、Security Tag、
 external/internal shadow、paired evaluator、RID 台账和交接文档。任一入口缺失都会 fail closed，不生成
@@ -86,11 +90,9 @@ PYTHONPATH=. backend/.venv/bin/pytest -q \
 
 ```bash
 python3 scripts/build_pingan_internal_transfer.py --inspect \
-  backend/.deer-flow/internal-transfer/deer-flow-pingan-source-<timestamp>.tar.gz
+  backend/.deer-flow/internal-transfer/READY-TO-TRANSFER/deer-flow-pingan-source-<timestamp>.tar.gz
 python3 scripts/build_pingan_internal_transfer.py --inspect \
-  backend/.deer-flow/internal-transfer/deer-flow-pingan-private-overlay-<timestamp>.tar.gz
-backend/.venv/bin/python scripts/build_pingan_macos_offline_bundle.py --inspect \
-  backend/.deer-flow/internal-transfer/deer-flow-pingan-macos-arm64-offline-<timestamp>.tar.gz
+  backend/.deer-flow/internal-transfer/READY-TO-TRANSFER/deer-flow-pingan-private-overlay-<timestamp>.tar.gz
 ```
 
 内网 Mac 先叠加源码与私有配置。默认 checkout 为当前用户的 `$HOME/deer-flow`；对当前开发者它自然
@@ -122,37 +124,30 @@ python3.12 scripts/soc_pingan_macos_host_dev.py start
 python3.12 scripts/soc_pingan_macos_host_dev.py stop
 ```
 
-只有目标 Mac 缺少可用 Python/uv 或内部 Python 源时，才安装备用离线 toolchain：
-
-```bash
-cd "$TRANSFER_ROOT"
-
-mkdir -p "$TRANSFER_ROOT/toolchain"
-tar -xzf /approved/path/deer-flow-pingan-macos-arm64-offline-<timestamp>.tar.gz \
-  -C "$TRANSFER_ROOT/toolchain"
-"$TRANSFER_ROOT/toolchain/deer-flow-pingan-macos-arm64-offline/install-offline.sh" \
-  "$TARGET_REPO"
-
-cd "$TARGET_REPO"
-```
-
-无论选择哪条依赖路径，最后都动态解析 checkout、加载私有环境并检查文件权限：
+安装完成后动态解析 checkout、加载私有环境并检查文件权限与语料 sidecar：
 
 ```bash
 eval "$(backend/.venv/bin/python backend/scripts/soc_pingan_local_paths.py --shell)"
 source ./.env.soc-dev.local
 stat -f '%Lp %N' .env.soc-dev.local config.pingan-dev.local \
-  datas/source/full_alert_2026_month_forth_sample_200.pkl
+  datas/source/full_alert_2026_month_forth_sample_200.pkl \
+  validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl \
+  validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl \
+  validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-index.json \
+  validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.workbench-payloads.sqlite
 ```
+
+原生 Host DEV 启动器会显式启用隔离 SQLite 下的 Memory/Corpus DEV Workbench，固定
+`SOC_MEMORY_ENVIRONMENT=dev`、`SOC_AUTOMATION_ENVIRONMENT=dev`，同时关闭租户处置和真实外部动作执行；
+因此内网无需再手工追加这些环境变量，也不会出现 Workbench disabled/environment mismatch。
 
 原生 Host DEV 首次安装只访问已批准的平安 PyPI/NPM 源。canonical `backend/uv.lock` 记录的是公网
 PyPI source identity，不能因为镜像 URL 不同就在内网接受重锁。驱动使用 `uv export --frozen` 从原锁生成
 精确版本 + SHA-256 requirements，再用 `uv pip sync --require-hashes` 从平安镜像安装；本地 workspace
 随后以 `--no-deps --editable` 安装。安装前后会核对原锁 hash，发生任何变化立即失败。新 Mac 不要求
 预先具备 uv 包缓存。不要在这条路径前运行 `uv lock --check --offline`，否则任一未缓存依赖（例如
-`langchain-openviking==0.1.0`）都会在访问内部源前失败。备用离线安装才依赖随包校验过的完整 uv cache，
-并且不访问任何软件源。后续确需在
-平安内网解析新增依赖时，本项目使用 `uv` 而不是 Poetry；只对该次维护命令 source
+`langchain-openviking==0.1.0`）都会在访问内部源前失败。后续确需在平安内网解析新增依赖时，
+本项目使用 `uv` 而不是 Poetry；只对该次维护命令 source
 `backend/samples/pingan_dev/uv-index.env.example`。不要把 PingAn HTTP index 写进根 `pyproject.toml`，
 也不要未经评审提交含内网 registry 的 `uv.lock`。
 

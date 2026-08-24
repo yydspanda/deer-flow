@@ -28,6 +28,14 @@ UV_INDEX_PROFILE = BACKEND / "samples" / "pingan_dev" / "uv-index.env.example"
 LOCAL_ENV = ROOT / ".env.soc-dev.local"
 LOCAL_CONFIG = ROOT / "config.pingan-dev.local"
 LOCAL_NGINX_CONFIG = ROOT / "docker" / "nginx" / "nginx.local.conf"
+DEV_MEMORY_CORPUS = (
+    ROOT / "validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"
+)
+DEV_CORPUS = (
+    ROOT / "validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl"
+)
+DEV_CORPUS_INDEX = DEV_CORPUS.with_suffix(".workbench-index.json")
+DEV_CORPUS_PAYLOAD_STORE = DEV_CORPUS.with_suffix(".workbench-payloads.sqlite")
 
 MIN_PYTHON = (3, 12)
 MIN_NODE_MAJOR = 22
@@ -308,7 +316,15 @@ def install_dependencies(*, python_executable: str) -> dict[str, Any]:
 def validate_runtime_files() -> None:
     missing = [
         str(path.relative_to(ROOT))
-        for path in (LOCAL_ENV, LOCAL_CONFIG, LOCAL_NGINX_CONFIG)
+        for path in (
+            LOCAL_ENV,
+            LOCAL_CONFIG,
+            LOCAL_NGINX_CONFIG,
+            DEV_MEMORY_CORPUS,
+            DEV_CORPUS,
+            DEV_CORPUS_INDEX,
+            DEV_CORPUS_PAYLOAD_STORE,
+        )
         if not path.is_file()
     ]
     if missing:
@@ -382,6 +398,14 @@ def build_start_command(*, daemon: bool) -> list[str]:
         "/bin/bash",
         "-c",
         'set -a; source "$SOC_HOST_DEV_ROOT/.env.soc-dev.local"; set +a; '
+        "export SOC_DEV_MEMORY_WORKBENCH_ENABLED=true; "
+        "export SOC_DEV_CORPUS_WORKBENCH_ENABLED=true; "
+        'export SOC_DEV_MEMORY_CORPUS_PATH="$SOC_HOST_DEV_ROOT/validation/compact_zeus/data/corpus/full_alert_validation_corpus.pkl"; '
+        'export SOC_DEV_CORPUS_WORKBENCH_PATH="$SOC_HOST_DEV_ROOT/validation/compact_zeus/data/corpus/full_alert_dams_labeled_merged.pkl"; '
+        "export SOC_MEMORY_ENVIRONMENT=dev; "
+        "export SOC_AUTOMATION_ENVIRONMENT=dev; "
+        "export SOC_TENANT_POLICY_ENABLED=false; "
+        "export SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=false; "
         'if [[ "${SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE+x}" == x ]]; then '
         'export DEER_FLOW_DEV_ALLOWED_ORIGINS="$SOC_HOST_DEV_ALLOWED_ORIGINS_OVERRIDE"; '
         "fi; "

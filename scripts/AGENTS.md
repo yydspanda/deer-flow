@@ -10,8 +10,12 @@ PingAn internal Apple Silicon development uses
 `scripts/soc_pingan_macos_host_dev.py` as a tenant-specific wrapper around the
 same host launcher. `install` may use only the configured PingAn PyPI/NPM
 registries; `start` must retain `--skip-install`, disable Next.js telemetry, and
-use `LocalSandboxProvider`. It must not add Docker as a prerequisite, hard-code a
-developer home path, or create a second Gateway/frontend/nginx implementation.
+use `LocalSandboxProvider`. The DEV wrapper owns the explicit safety profile for
+the Memory/Corpus workbenches: isolated SQLite, `dev` Memory/automation scope,
+tenant policy disabled, and external action execution disabled. It must validate
+the canonical Memory corpus plus the merged corpus/index/payload store before
+starting. It must not add Docker as a prerequisite, hard-code a developer home
+path, or create a second Gateway/frontend/nginx implementation.
 
 ## Backend Static Analysis Commands
 

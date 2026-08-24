@@ -142,6 +142,14 @@ def test_start_plan_skips_install_and_disables_network_side_effects() -> None:
     assert environment["NEXT_TELEMETRY_DISABLED"] == "1"
     assert environment["DO_NOT_TRACK"] == "1"
     assert environment["UV_OFFLINE"] == "1"
+    assert "export SOC_DEV_MEMORY_WORKBENCH_ENABLED=true" in command[2]
+    assert "export SOC_DEV_CORPUS_WORKBENCH_ENABLED=true" in command[2]
+    assert "full_alert_validation_corpus.pkl" in command[2]
+    assert "full_alert_dams_labeled_merged.pkl" in command[2]
+    assert "export SOC_MEMORY_ENVIRONMENT=dev" in command[2]
+    assert "export SOC_AUTOMATION_ENVIRONMENT=dev" in command[2]
+    assert "export SOC_TENANT_POLICY_ENABLED=false" in command[2]
+    assert "export SOC_AUTOMATION_EXECUTE_AUTHORIZED_ACTIONS=false" in command[2]
 
 
 def test_start_plan_applies_explicit_lan_origin_after_private_env() -> None:
