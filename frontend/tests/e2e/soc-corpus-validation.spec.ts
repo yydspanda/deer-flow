@@ -34,7 +34,7 @@ function corpusState(processed = false) {
     window_start: "2026-04-27T00:00:00Z",
     window_end: "2026-04-28T00:00:00Z",
     workflow_state: processed ? "completed" : "ready",
-    can_process: !processed,
+    can_process: true,
     blocked_by_alert_id: null,
     run_id: processed ? "RUN-CORPUS-1" : null,
     analysis_status: processed ? "success" : null,
@@ -182,7 +182,7 @@ function corpusState(processed = false) {
     effective_projection_basis: null,
   };
   return {
-    schema_version: "soc.corpus_dev_workbench.v2",
+    schema_version: "soc.corpus_dev_workbench.v3",
     safety: {
       environment: "dev",
       database_backend: "sqlite",
@@ -194,7 +194,11 @@ function corpusState(processed = false) {
       external_action_execution: false,
       memory_scope: "dev-corpus-eval",
       pattern_window_days: 30,
-      replay_order: "canonical_event_time_asc_within_memory_group",
+      execution_mode: "interactive_exploration",
+      chronology_enforced: false,
+      rerun_enabled: true,
+      causal_evaluation_allowed: false,
+      replay_order: "operator_selected",
       label_visibility: "hidden_until_runtime_decision",
     },
     source: {
@@ -541,6 +545,7 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
 }) => {
   mockLangGraphAPI(page, { threads: [] });
   let current = corpusState();
+  let processCalls = 0;
   let promotionRequestBody: unknown;
   await page.route("**/api/soc/dev/corpus-workbench**", async (route) => {
     if (route.request().url().endsWith("/audit")) {
@@ -554,14 +559,18 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
       return;
     }
     if (route.request().method() === "POST") {
+      processCalls += 1;
       current = corpusState(true);
       await route.fulfill({
         json: {
-          schema_version: "soc.corpus_dev_workbench_process.v2",
+          schema_version: "soc.corpus_dev_workbench_process.v3",
           alert_id: "1984426",
-          run_id: "RUN-CORPUS-1",
+          run_id: `RUN-CORPUS-${processCalls}`,
           observation_id: "MPO-CORPUS-1",
-          idempotent: false,
+          idempotent: processCalls > 1,
+          execution_mode: processCalls > 1 ? "rerun" : "initial",
+          replay_of_run_id: processCalls > 1 ? "RUN-CORPUS-1" : null,
+          pattern_observation_reused: processCalls > 1,
           state: current,
         },
       });
@@ -644,6 +653,12 @@ test("filters the corpus by Memory readiness and runs one alert", async ({
     page.getByRole("heading", { name: "运行轨迹 / Runtime Trace" }),
   ).toBeInViewport();
   await expect(page.getByText(/总 Token:/)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "重新运行", exact: true }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "重新运行", exact: true }).click();
+  await expect.poll(() => processCalls).toBe(2);
+  await expect(page.getByText("本次已创建新的 Runtime Run")).toBeVisible();
 
   await page.getByRole("button", { name: "打开完整审计" }).click();
   await expect(
@@ -708,11 +723,14 @@ test("announces a newly generated Pattern Candidate in the current alert", async
       current = corpusStateWithPatternCandidate();
       await route.fulfill({
         json: {
-          schema_version: "soc.corpus_dev_workbench_process.v2",
+          schema_version: "soc.corpus_dev_workbench_process.v3",
           alert_id: "1984426",
           run_id: "RUN-CORPUS-1",
           observation_id: "MPO-CORPUS-1",
           idempotent: false,
+          execution_mode: "initial",
+          replay_of_run_id: null,
+          pattern_observation_reused: false,
           state: current,
         },
       });

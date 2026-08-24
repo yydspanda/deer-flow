@@ -1148,10 +1148,16 @@ export interface SocCorpusWorkbenchAlert {
   window_alert_count: number;
   window_start: string;
   window_end: string;
-  workflow_state: "ready" | "analysis_only" | "completed" | "failed";
+  workflow_state:
+    | "ready"
+    | "running"
+    | "analysis_only"
+    | "completed"
+    | "failed";
   can_process: boolean;
   blocked_by_alert_id?: string | null;
   run_id?: string | null;
+  replay_of_run_id?: string | null;
   analysis_status?: string | null;
   model_name?: string | null;
   prompt_version?: string | null;
@@ -1218,7 +1224,7 @@ export interface SocCorpusWorkbenchGroup {
 }
 
 export interface SocCorpusWorkbenchState {
-  schema_version: "soc.corpus_dev_workbench.v2";
+  schema_version: "soc.corpus_dev_workbench.v3";
   safety: {
     environment: "dev";
     database_backend: "sqlite";
@@ -1230,7 +1236,11 @@ export interface SocCorpusWorkbenchState {
     external_action_execution: false;
     memory_scope: string;
     pattern_window_days: number;
-    replay_order: "canonical_event_time_asc_within_memory_group";
+    execution_mode: "interactive_exploration";
+    chronology_enforced: false;
+    rerun_enabled: true;
+    causal_evaluation_allowed: false;
+    replay_order: "operator_selected";
     label_visibility: "hidden_until_runtime_decision";
   };
   source: {
@@ -1287,10 +1297,13 @@ export interface SocCorpusWorkbenchState {
 }
 
 export interface SocCorpusWorkbenchProcessResult {
-  schema_version: "soc.corpus_dev_workbench_process.v2";
+  schema_version: "soc.corpus_dev_workbench_process.v3";
   alert_id: string;
   run_id?: string | null;
+  replay_of_run_id?: string | null;
   observation_id?: string | null;
+  execution_mode: "initial" | "rerun" | "pattern_resume";
+  pattern_observation_reused: boolean;
   idempotent: boolean;
   state: SocCorpusWorkbenchState;
 }

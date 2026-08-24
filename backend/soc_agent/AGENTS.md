@@ -78,9 +78,14 @@ file for SOC code. The authoritative product and engineering documents are:
   `AnalysisRun` records. Audit projections for older runs must mark that artifact partial
   and may show a clearly named projection from the frozen analysis request; they must not
   silently re-normalize old raw data with current Adapter code.
-- Historical replay uses canonical timezone-aware event time, never source row order or
-  alert ID as chronology. Within one Memory cohort, process the earliest unobserved alert
-  first so a later sample cannot create context for an earlier event. Tenant workflow
+- Strict batch/evaluation replay uses canonical timezone-aware event time, never source
+  row order or alert ID as chronology. Within one Memory cohort it processes the earliest
+  unobserved alert first so a later sample cannot create context for an earlier event.
+  The explicitly labeled corpus DEV interactive workbench is different: it allows
+  operator-selected order and versioned Runtime reruns for product exploration, must set
+  `causal_evaluation_allowed=false`, and must not present its Effective Decision metrics
+  as time-causal evaluation. A rerun creates a new `AnalysisRun` with replay lineage but
+  does not add another Pattern observation for the same source alert. Tenant workflow
   labels remain outside model input, are revealed only after the Runtime decision, and
   may measure operational agreement only when their timestamp follows the alert.
 - Pattern aggregation uses fixed UTC windows. The generic Memory Profile defaults to 24

@@ -10,6 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.gateway.routers import soc_corpus_workbench
+from soc_agent.application.analysis import build_soc_analysis_service
 from soc_agent.application.memory import build_soc_memory_profile_registry
 from soc_agent.contracts import (
     ActorAuthSource,
@@ -34,6 +35,7 @@ from soc_agent.contracts import (
 from soc_agent.core import SocAnalysisService, SocMemoryPatternService, SocMemoryService
 from soc_agent.db import SqlAlchemyAlertRepository, create_soc_tables
 from soc_agent.demo.corpus_workbench import (
+    CORPUS_WORKBENCH_ENVIRONMENT,
     SocCorpusWorkbenchService,
     _compare_operational_label,
     _project_operational_outcome,
@@ -124,12 +126,83 @@ def test_corpus_workbench_projects_all_real_alerts_and_memory_readiness(
     assert [item.sequence_number for item in state.alerts] == list(range(1, len(state.alerts) + 1))
     assert [item.observed_at for item in state.alerts] == sorted(item.observed_at for item in state.alerts)
     galaxy_alerts = [item for item in state.alerts if item.group_id == galaxy.group_id]
-    assert sum(item.can_process for item in galaxy_alerts) == 1
-    assert galaxy_alerts[0].can_process is True
-    assert all(item.blocked_by_alert_id == galaxy_alerts[0].alert_id for item in galaxy_alerts[1:])
+    assert all(item.can_process for item in galaxy_alerts)
+    assert all(item.blocked_by_alert_id is None for item in galaxy_alerts)
+    assert state.safety.execution_mode == "interactive_exploration"
+    assert state.safety.chronology_enforced is False
+    assert state.safety.rerun_enabled is True
+    assert state.safety.causal_evaluation_allowed is False
     serialized = state.model_dump_json()
     assert "zeusRawLogs" not in serialized
     assert "raw_message" not in serialized
+
+
+@pytest.mark.skipif(not _CORPUS.is_file(), reason="local PingAn corpus unavailable")
+def test_corpus_workbench_reruns_one_alert_without_duplicate_pattern_support(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    settings = SocLLMSettings(mode=SocAnalyzerMode.STUB)
+    pattern_service = SocMemoryPatternService(
+        repository=repository,
+        candidate_repository=repository,
+        profile_registry=build_soc_memory_profile_registry(),
+    )
+    service = SocCorpusWorkbenchService(
+        repository=repository,
+        analysis_service=build_soc_analysis_service(
+            repository,
+            settings=settings,
+            runtime_environment=CORPUS_WORKBENCH_ENVIRONMENT,
+        ),
+        pattern_service=pattern_service,
+        source_path=_CORPUS,
+        settings=settings,
+        database_file="soc-corpus-workbench.sqlite",
+    )
+    alert_id = next(iter(service._cases))
+    actor = ActorContext(
+        actor_id="corpus-test",
+        surface=EntrySurface.WEB,
+        roles=["soc_admin"],
+        auth_source=ActorAuthSource.SESSION,
+    )
+
+    first = service.process_alert(
+        alert_id,
+        context=ServiceRequestContext(
+            actor=actor,
+            idempotency_key="corpus-first-run",
+        ),
+    )
+    rerun = service.process_alert(
+        alert_id,
+        context=ServiceRequestContext(
+            actor=actor,
+            idempotency_key="corpus-explicit-rerun",
+        ),
+    )
+    rerun_retry = service.process_alert(
+        alert_id,
+        context=ServiceRequestContext(
+            actor=actor,
+            idempotency_key="corpus-explicit-rerun",
+        ),
+    )
+
+    assert first.execution_mode == "initial"
+    assert rerun.execution_mode == "rerun"
+    assert rerun.replay_of_run_id == first.run_id
+    assert rerun.run_id != first.run_id
+    assert rerun.observation_id == first.observation_id
+    assert rerun.pattern_observation_reused is True
+    assert rerun_retry.run_id == rerun.run_id
+    assert len(repository.list_runs_by_alert_id(alert_id, limit=20)) == 2
+    projected = next(item for item in rerun.state.alerts if item.alert_id == alert_id)
+    assert projected.run_id == rerun.run_id
+    assert projected.replay_of_run_id == first.run_id
+    assert projected.pattern_support_count == 1
+    assert projected.can_process is True
 
 
 def test_operational_projection_keeps_detection_and_disposition_separate() -> None:

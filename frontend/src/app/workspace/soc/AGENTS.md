@@ -101,11 +101,15 @@ Runtime decisions, construct Memory, or infer action authority.
   may search, filter, paginate, select, and invoke one alert; it must not load PKL files,
   derive fingerprints, decide readiness, construct Patterns, approve candidates, or
   calculate Base/Memory/Tenant/Effective decisions.
-- Corpus replay order and label comparison are server-owned. Render alerts by the
-  canonical sequence returned by the API; do not reorder them by readiness, ID, or
-  vendor export position. Historical disposition labels stay hidden per alert until a
-  Runtime decision exists, and are displayed as operational outcomes rather than
-  independent detection truth.
+- Corpus execution mode, ordering metadata, rerun eligibility, and label comparison are
+  server-owned. Render alerts by the canonical display sequence returned by the API; do
+  not reorder them by readiness, ID, or vendor export position. In
+  `interactive_exploration`, any non-running alert may be selected and a completed alert
+  exposes an explicit rerun command; show that reruns create a new Runtime Run, reuse the
+  same source Pattern observation, and are not valid time-causal evaluation. Strict
+  chronological evaluation remains a separate batch/eval path. Historical disposition
+  labels stay hidden per alert until a Runtime decision exists, and are displayed as
+  operational outcomes rather than independent detection truth.
 - Corpus filter and selected-alert continuity may be retained in tab-scoped browser
   storage, but never persisted as business state. When a processed alert creates a
   Pattern Candidate, keep the current page visible and render a persistent review link;

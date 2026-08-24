@@ -585,13 +585,11 @@ function AlertDetail({
   execution,
   executionLoading,
   patternWindowDays,
-  onSelectAlert,
 }: {
   alert: SocCorpusWorkbenchAlert | null;
   execution: SocCorpusWorkbenchExecution | null;
   executionLoading: boolean;
   patternWindowDays: number;
-  onSelectAlert: (alertId: string) => void;
 }) {
   const promoteMutation = usePromoteSocRunToMemory();
   const [promotionOpen, setPromotionOpen] = useState(false);
@@ -787,6 +785,14 @@ function AlertDetail({
             {formatDuration(alert.total_duration_ms)} ·{" "}
             {alert.output_quality ?? "-"}
           </p>
+          {alert.replay_of_run_id ? (
+            <p
+              className="text-muted-foreground mt-1 truncate font-mono text-xs"
+              title={alert.replay_of_run_id}
+            >
+              Replay of {alert.replay_of_run_id}
+            </p>
+          ) : null}
         </div>
         <div className="border-r px-5 py-4">
           <p className="text-muted-foreground text-xs">Observed Pattern</p>
@@ -890,20 +896,6 @@ function AlertDetail({
         <div className="border-b bg-sky-50 px-5 py-3 text-sm md:px-7">
           <span className="font-medium">历史处置依据：</span>
           {alert.operational_label_reason}
-        </div>
-      ) : null}
-
-      {alert.blocked_by_alert_id ? (
-        <div className="border-b border-amber-200 bg-amber-50 px-5 py-3 text-sm text-amber-900 md:px-7">
-          为防止未来 Memory 泄漏，请先运行同类组中时间更早的 Alert{" "}
-          <button
-            type="button"
-            className="font-mono font-medium underline underline-offset-2"
-            onClick={() => onSelectAlert(alert.blocked_by_alert_id ?? "")}
-          >
-            {alert.blocked_by_alert_id}
-          </button>
-          。
         </div>
       ) : null}
 
@@ -1243,7 +1235,13 @@ export function SocCorpusValidationWorkbench() {
       );
       const generatedCandidateId = updatedAlert?.candidate_id;
       setUnprocessedOnly(false);
-      if (
+      if (result.execution_mode === "rerun") {
+        toast.success("重新运行完成", {
+          description:
+            "本次已创建新的 Runtime Run；同一原始告警不会重复增加 Pattern 支持数。",
+          duration: 10_000,
+        });
+      } else if (
         generatedCandidateId &&
         generatedCandidateId !== previousCandidateId
       ) {
@@ -1265,17 +1263,6 @@ export function SocCorpusValidationWorkbench() {
         detailRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
       });
     }
-  };
-
-  const handleSelectAlert = (alertId: string) => {
-    setSearch(alertId);
-    setReadiness("all");
-    setComparison("all");
-    setSourceType("all");
-    setGroupId("all");
-    setUnprocessedOnly(false);
-    setSelectedAlertId(alertId);
-    setPage(0);
   };
 
   if (query.isLoading && !state) {
@@ -1359,7 +1346,10 @@ export function SocCorpusValidationWorkbench() {
       <main className="min-h-0 flex-1 overflow-y-auto">
         <section className="flex flex-wrap items-center justify-between gap-3 border-b bg-zinc-50 px-5 py-3 text-xs md:px-7">
           <div className="flex flex-wrap gap-x-5 gap-y-2">
-            <span>历史 PKL · operational replay</span>
+            <span className="font-medium text-amber-800">
+              交互测试 · 任意顺序 / 可重新运行
+            </span>
+            <span>历史 PKL · exploratory replay</span>
             <span>内部 Provider · off/mock</span>
             <span>Tenant Policy · disabled</span>
             <span>外部动作 · disabled</span>
@@ -1537,7 +1527,7 @@ export function SocCorpusValidationWorkbench() {
             <table className="w-full min-w-[1320px] table-fixed text-left text-sm">
               <thead className="bg-zinc-50 text-xs">
                 <tr>
-                  <th className="w-32 px-4 py-2.5 font-medium">顺序 / Alert</th>
+                  <th className="w-32 px-4 py-2.5 font-medium">序号 / Alert</th>
                   <th className="w-36 px-4 py-2.5 font-medium">时间 / 来源</th>
                   <th className="w-72 px-4 py-2.5 font-medium">规则</th>
                   <th className="w-40 px-4 py-2.5 font-medium">结构适配</th>
@@ -1681,17 +1671,13 @@ export function SocCorpusValidationWorkbench() {
                       <td className="px-4 py-3 text-right">
                         <Button
                           size="sm"
-                          variant={
-                            alert.workflow_state === "completed"
-                              ? "ghost"
-                              : "outline"
-                          }
+                          variant="outline"
                           disabled={
                             !alert.can_process || processMutation.isPending
                           }
                           title={
-                            alert.blocked_by_alert_id
-                              ? `请先运行时间更早的 Alert ${alert.blocked_by_alert_id}`
+                            alert.workflow_state === "completed"
+                              ? "创建新的 Runtime Run；不会重复累计同一告警的 Pattern 支持数"
                               : undefined
                           }
                           onClick={(event) => {
@@ -1701,18 +1687,22 @@ export function SocCorpusValidationWorkbench() {
                         >
                           {processing ? (
                             <RefreshCwIcon className="size-4 animate-spin" />
+                          ) : alert.workflow_state === "running" ? (
+                            <RefreshCwIcon className="size-4 animate-spin" />
                           ) : alert.workflow_state === "failed" ? (
                             <RotateCcwIcon className="size-4" />
                           ) : alert.workflow_state === "completed" ? (
-                            <CheckCircle2Icon className="size-4" />
+                            <RotateCcwIcon className="size-4" />
                           ) : (
                             <PlayIcon className="size-4" />
                           )}
                           {alert.workflow_state === "completed"
-                            ? "已完成"
-                            : alert.workflow_state === "failed"
-                              ? "重试"
-                              : "运行"}
+                            ? "重新运行"
+                            : alert.workflow_state === "running"
+                              ? "运行中"
+                              : alert.workflow_state === "failed"
+                                ? "重试"
+                                : "运行"}
                         </Button>
                       </td>
                     </tr>
@@ -1763,15 +1753,15 @@ export function SocCorpusValidationWorkbench() {
             execution={executionQuery.execution}
             executionLoading={executionQuery.isLoading}
             patternWindowDays={state.safety.pattern_window_days}
-            onSelectAlert={handleSelectAlert}
           />
         </div>
 
         <section className="text-muted-foreground flex flex-wrap items-center gap-x-5 gap-y-2 border-t bg-zinc-50 px-5 py-3 text-xs md:px-7">
           <span className="flex items-center gap-1.5">
             <Clock3Icon className="size-3.5" />
-            事件时间升序 · 同类组禁止未来 Memory 泄漏
+            列表按事件时间展示 · 点击顺序不受限制
           </span>
+          <span>交互结果不用于时间因果评测</span>
           <span>Pattern 聚合窗口 {state.safety.pattern_window_days}d</span>
           <span>模型 {state.model.model_name ?? "-"}</span>
           <span>Thinking {state.model.thinking_enabled ? "on" : "off"}</span>

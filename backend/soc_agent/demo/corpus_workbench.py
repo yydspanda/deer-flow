@@ -46,7 +46,7 @@ from soc_agent.prompts.analysis import (
 )
 from soc_agent.utils.hashing import stable_hash
 
-CORPUS_WORKBENCH_VERSION = "soc.corpus_dev_workbench.v2"
+CORPUS_WORKBENCH_VERSION = "soc.corpus_dev_workbench.v3"
 CORPUS_WORKBENCH_INDEX_VERSION = "soc.corpus_workbench_index.v3"
 CORPUS_WORKBENCH_PAYLOAD_STORE_VERSION = "soc.corpus_workbench_payload_store.v1"
 CORPUS_WORKBENCH_ENVIRONMENT = "dev-corpus-eval"
@@ -162,7 +162,11 @@ class SocCorpusWorkbenchSafety(BaseModel):
         default=round(_WINDOW_SECONDS / 86_400, 2),
         gt=0,
     )
-    replay_order: Literal["canonical_event_time_asc_within_memory_group"] = "canonical_event_time_asc_within_memory_group"
+    execution_mode: Literal["interactive_exploration"] = "interactive_exploration"
+    chronology_enforced: Literal[False] = False
+    rerun_enabled: Literal[True] = True
+    causal_evaluation_allowed: Literal[False] = False
+    replay_order: Literal["operator_selected"] = "operator_selected"
     label_visibility: Literal["hidden_until_runtime_decision"] = "hidden_until_runtime_decision"
 
 
@@ -403,10 +407,17 @@ class SocCorpusWorkbenchAlert(BaseModel):
     window_alert_count: int
     window_start: str
     window_end: str
-    workflow_state: Literal["ready", "analysis_only", "completed", "failed"]
+    workflow_state: Literal[
+        "ready",
+        "running",
+        "analysis_only",
+        "completed",
+        "failed",
+    ]
     can_process: bool
     blocked_by_alert_id: str | None = None
     run_id: str | None = None
+    replay_of_run_id: str | None = None
     analysis_status: str | None = None
     model_name: str | None = None
     prompt_version: str | None = None
@@ -458,7 +469,7 @@ class SocCorpusWorkbenchAlert(BaseModel):
 class SocCorpusWorkbenchState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["soc.corpus_dev_workbench.v2"] = "soc.corpus_dev_workbench.v2"
+    schema_version: Literal["soc.corpus_dev_workbench.v3"] = "soc.corpus_dev_workbench.v3"
     safety: SocCorpusWorkbenchSafety
     source: SocCorpusWorkbenchSource
     model: SocCorpusWorkbenchModelConfig
@@ -471,10 +482,13 @@ class SocCorpusWorkbenchState(BaseModel):
 class SocCorpusWorkbenchProcessResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["soc.corpus_dev_workbench_process.v2"] = "soc.corpus_dev_workbench_process.v2"
+    schema_version: Literal["soc.corpus_dev_workbench_process.v3"] = "soc.corpus_dev_workbench_process.v3"
     alert_id: str
     run_id: str | None = None
+    replay_of_run_id: str | None = None
     observation_id: str | None = None
+    execution_mode: Literal["initial", "rerun", "pattern_resume"]
+    pattern_observation_reused: bool = False
     idempotent: bool
     state: SocCorpusWorkbenchState
 
@@ -532,10 +546,6 @@ class SocCorpusWorkbenchService:
         memory_uses_by_run: dict[str, list[Any]] = defaultdict(list)
         for item in self._repository.list_memory_uses(limit=10_000):
             memory_uses_by_run[item.run_id].append(item)
-        processable, blockers = _chronological_processability(
-            self._cases.values(),
-            observations_by_alert,
-        )
         alerts = [
             self._alert_view(
                 case,
@@ -548,8 +558,8 @@ class SocCorpusWorkbenchService:
                 candidate_by_source=candidate_by_source,
                 manual_candidate_by_run=manual_candidate_by_run,
                 record_by_candidate=record_by_candidate,
-                can_process=case.alert_id in processable,
-                blocked_by_alert_id=blockers.get(case.alert_id),
+                can_process=(runs.get(case.alert_id) is None or runs[case.alert_id].status is not AnalysisRunStatus.RUNNING),
+                blocked_by_alert_id=None,
             )
             for case in self._cases.values()
         ]
@@ -598,28 +608,54 @@ class SocCorpusWorkbenchService:
             raise SocCorpusWorkbenchError("the DEV corpus workbench requires the soc_admin role")
         before = self.get_state()
         current = next(item for item in before.alerts if item.alert_id == alert_id)
-        if current.observation_id is not None:
-            return SocCorpusWorkbenchProcessResult(
-                alert_id=alert_id,
-                run_id=current.run_id,
-                observation_id=current.observation_id,
-                idempotent=True,
-                state=before,
-            )
         if not current.can_process:
-            blocker = current.blocked_by_alert_id or "an earlier alert"
-            raise SocCorpusWorkbenchError(f"alert {alert_id} is blocked by earlier same-pattern alert {blocker}; historical Memory replay must follow canonical event time")
+            raise SocCorpusWorkbenchError(f"alert {alert_id} already has a running Runtime execution")
 
-        request_context = context.model_copy(update={"idempotency_key": self._analysis_idempotency_key(alert_id)})
-        run = self._analysis_service.analyze(
-            copy.deepcopy(self._payload_for_case(case)),
-            context=request_context,
-        )
+        if current.run_id is None:
+            execution_mode: Literal["initial", "rerun", "pattern_resume"] = "initial"
+            request_context = context.model_copy(update={"idempotency_key": self._analysis_idempotency_key(alert_id)})
+            run = self._analysis_service.analyze(
+                copy.deepcopy(self._payload_for_case(case)),
+                context=request_context,
+            )
+        elif current.workflow_state == "analysis_only":
+            execution_mode = "pattern_resume"
+            request_context = context
+            run = self._repository.get_run(current.run_id)
+            if run is None:
+                raise SocCorpusWorkbenchError(f"alert {alert_id} Runtime run {current.run_id} no longer exists")
+        else:
+            execution_mode = "rerun"
+            request_context = context.model_copy(
+                update={
+                    "idempotency_key": self._rerun_idempotency_key(
+                        alert_id,
+                        context=context,
+                    )
+                }
+            )
+            run = self._analysis_service.replay(
+                current.run_id,
+                context=request_context,
+            )
         if run.status is AnalysisRunStatus.FAILED:
             return SocCorpusWorkbenchProcessResult(
                 alert_id=alert_id,
                 run_id=run.run_id,
+                replay_of_run_id=run.replay_of_run_id,
+                execution_mode=execution_mode,
                 idempotent=False,
+                state=self.get_state(),
+            )
+        if execution_mode == "rerun" and current.observation_id is not None:
+            return SocCorpusWorkbenchProcessResult(
+                alert_id=alert_id,
+                run_id=run.run_id,
+                replay_of_run_id=run.replay_of_run_id,
+                observation_id=current.observation_id,
+                execution_mode=execution_mode,
+                pattern_observation_reused=True,
+                idempotent=True,
                 state=self.get_state(),
             )
         aggregation = self._pattern_service.observe_run(
@@ -633,7 +669,10 @@ class SocCorpusWorkbenchService:
         return SocCorpusWorkbenchProcessResult(
             alert_id=alert_id,
             run_id=run.run_id,
+            replay_of_run_id=run.replay_of_run_id,
             observation_id=aggregation.observation.observation_id,
+            execution_mode=execution_mode,
+            pattern_observation_reused=aggregation.idempotent,
             idempotent=aggregation.idempotent,
             state=self.get_state(),
         )
@@ -773,6 +812,22 @@ class SocCorpusWorkbenchService:
         )[:16]
         return f"soc-corpus-dev:{self._source_sha256[:16]}:{alert_id}:{generation}"
 
+    def _rerun_idempotency_key(
+        self,
+        alert_id: str,
+        *,
+        context: ServiceRequestContext,
+    ) -> str:
+        request_identity = context.idempotency_key or context.request_id
+        request_hash = stable_hash(
+            {
+                "source_sha256": self._source_sha256,
+                "alert_id": alert_id,
+                "request_identity": request_identity,
+            }
+        )[:24]
+        return f"soc-corpus-dev-rerun:{alert_id}:{request_hash}"
+
     def _observations_by_alert(self) -> dict[str, Any]:
         identity = PingAnSocMemoryProfile.identity
         observations = self._repository.list_memory_pattern_observations(
@@ -861,10 +916,18 @@ class SocCorpusWorkbenchService:
                 )
                 for item in transition.stages
             ]
-        if observation is not None:
-            workflow_state: Literal["ready", "analysis_only", "completed", "failed"] = "completed"
+        if run is not None and run.status is AnalysisRunStatus.RUNNING:
+            workflow_state: Literal[
+                "ready",
+                "running",
+                "analysis_only",
+                "completed",
+                "failed",
+            ] = "running"
         elif run is not None and run.status is AnalysisRunStatus.FAILED:
             workflow_state = "failed"
+        elif observation is not None:
+            workflow_state = "completed"
         elif run is not None:
             workflow_state = "analysis_only"
         else:
@@ -921,6 +984,7 @@ class SocCorpusWorkbenchService:
             can_process=can_process,
             blocked_by_alert_id=blocked_by_alert_id,
             run_id=(run.run_id if run is not None else None),
+            replay_of_run_id=(run.replay_of_run_id if run is not None else None),
             analysis_status=(run.status.value if run is not None else None),
             model_name=(run.model_name if run is not None else None),
             prompt_version=(run.prompt_version if run is not None else None),
@@ -2355,37 +2419,6 @@ def _case_readiness(
     if group_alert_count >= 2:
         return "recurrent_context_only"
     return "context_only_singleton"
-
-
-def _chronological_processability(
-    cases: Any,
-    observations_by_alert: Mapping[str, Any],
-) -> tuple[set[str], dict[str, str]]:
-    """Permit only the earliest unprocessed alert in each Memory cohort."""
-
-    grouped: dict[str, list[_CorpusCase]] = defaultdict(list)
-    for item in cases:
-        grouped[item.group_id].append(item)
-    processable: set[str] = set()
-    blockers: dict[str, str] = {}
-    for items in grouped.values():
-        first_unprocessed: str | None = None
-        for item in sorted(
-            items,
-            key=lambda case: (
-                case.observed_at_value.astimezone(UTC),
-                _alert_id_sort_key(case.alert_id),
-                case.source_index,
-            ),
-        ):
-            if item.alert_id in observations_by_alert:
-                continue
-            if first_unprocessed is None:
-                first_unprocessed = item.alert_id
-                processable.add(item.alert_id)
-            else:
-                blockers[item.alert_id] = first_unprocessed
-    return processable, blockers
 
 
 def _project_operational_outcome(

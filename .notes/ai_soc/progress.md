@@ -32,6 +32,22 @@
 | 当前下一刀 | 将最新 clean-commit source/private 迁移包复制到内网；在 `/Users/zhangjianming627/deer-flow` 运行无 Docker `check -> install -> start`，再恢复 D12-B/PI-01 真实 Provider 验证。 |
 | 唯一路线 | `delivery-roadmap.md`：`BD -> AA -> BG -> PI`；未通过当前 Stage Gate 不切换阶段 |
 
+## 2026-08-24 — Corpus DEV interactive execution and versioned rerun
+
+- 全量语料工作台升级为 `soc.corpus_dev_workbench.v3` 的交互探索模式：列表仍按 canonical event time
+  展示，但同类组不再限制点击顺序，任意非运行中告警均可执行。页面和服务端固定声明
+  `causal_evaluation_allowed=false`；严格时间顺序和防未来 Memory 泄漏仍由独立 batch/eval 路径负责。
+- 已完成告警的操作改为“重新运行”。后端通过正式 `SocAnalysisService.replay()` 新建带
+  `replay_of_run_id` 的 `AnalysisRun`，保留每次模型结果、Decision 和审计 lineage，不覆盖旧 Run。
+- 同一原始告警重跑不会增加 Pattern 支持数：已有当前 Profile Observation 时直接复用其
+  `observation_id`；首次成功或先前仅完成分析时才补 Pattern 写入。请求级幂等键保证网络重试不会误建
+  第三个 Run；运行中的告警继续拒绝并发重跑。
+- 前端显式显示“交互测试 · 任意顺序 / 可重新运行”和“交互结果不用于时间因果评测”；完成态按钮可再次
+  点击，成功后提示新 Run 已创建且 Pattern 未重复计数，详情保留 replay lineage。
+- 验证：`test_soc_corpus_workbench.py` 为 `10 passed`，SOC architecture 为 `12 passed`；后端 Ruff、前端 TypeScript 和 ESLint 通过；
+  `soc-corpus-validation.spec.ts` Chromium E2E 为 `3 passed`，覆盖初次运行、重新运行、新 Candidate 和
+  Memory 修订入口。
+
 ## 2026-08-21 — PingAn Memory network-pattern precision and readable applicability
 
 - 通用 canonical Memory feature schema 升级到 v2：从归一化 network entity 投影 destination
